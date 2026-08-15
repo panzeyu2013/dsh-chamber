@@ -1,0 +1,419 @@
+/* Chamber settings shell (replaces the official SettingsRoot registration):
+   sidebar-foot trigger + centered modal panel with the OFFICIAL panel
+   geometry (figma 501:29904/501:29947) — 188px nav rail + content column,
+   mask/panel tokens, nav cell vocabulary — plus the server dropdown on the
+   rail, the fixed chamber-global connections nav entry, and the embedded
+   connections section view. Every color resolves through a `--dsw-alias-*`
+   token. Deviation from the official shell geometry: the nav rail scrolls
+   (overflow-y) with an 8px bottom pad so the last entry clears the panel's
+   24px corner radius. */
+
+/* ---- sidebar trigger (official chrome rhythm) ---- */
+
+.trigger {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% + 8px);
+  height: 34px;
+  margin: 4px -4px 4px;
+  padding: 6px 2px 6px 10px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.trigger:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/* Rail trigger: the same 36x36 circle box as the other rail controls. */
+.trigger.rail {
+  width: 36px;
+  height: 36px;
+  margin: 8px 0 10px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.triggerLabel {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* ---- modal layer (official geometry) ---- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mask {
+  position: absolute;
+  inset: 0;
+  background: var(--dsw-alias-bg-mask-1);
+  backdrop-filter: var(--dsw-mask-blur);
+}
+
+.panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 800px;
+  height: min(800px, calc(100vh - 48px));
+  max-width: calc(100vw - 48px);
+  border-radius: 24px;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-shadow-lv3);
+  /* Elevated surface: the scrollbar thumb takes the l2 elevation tokens. */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+/* ---- nav rail: title + server dropdown + sections ---- */
+
+.nav {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 188px;
+  padding: 22px 12px 8px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.navTitle {
+  padding: 0 12px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.navList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Separates the selected server's sections from the chamber-global
+   connections entry. */
+.navDivider {
+  flex: none;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.navCell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 9px 16px 9px 12px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+}
+
+.navCell:hover {
+  background: var(--dsw-specific-sidebar-nav-item-hover);
+}
+
+.navCell.active {
+  background: var(--dsw-specific-sidebar-nav-item-active);
+}
+
+.navIcon {
+  flex: none;
+}
+
+.navLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---- server dropdown ---- */
+
+.dropdown {
+  position: relative;
+  width: 164px;
+}
+
+.dropdownTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-3);
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  transition: border-color .16s, background .16s;
+}
+
+.dropdownTrigger:hover {
+  border-color: var(--dsw-alias-border-l3);
+}
+
+.dropdownTrigger:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+.dropdownValue {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-weight: 600;
+}
+
+.dropdownArrow {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dropdownList {
+  position: absolute;
+  z-index: 100;
+  top: calc(100% + 4px);
+  left: 0;
+  /* content-box min-width would overflow the trigger by its padding;
+     border-box keeps the list exactly as wide as the trigger (official
+     Menu.module.css does the same). */
+  box-sizing: border-box;
+  min-width: 100%;
+  display: flex;
+  flex-direction: column;
+  /* In-panel list (not portal): a fixed cap keeps the tail reachable inside
+     the settings panel's own scroll area for realistic rosters (~12 rows). */
+  max-height: 360px;
+  max-width: 360px;
+  overflow-y: auto;
+  padding: 4px;
+  /* Official Menu float border (transparent hairline in light mode). */
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  box-shadow: var(--dsw-shadow-lv3);
+  /* Elevated-surface scrollbar rebind (official convention). */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+  /* Dense menu rows: continuous hover fill like the official Menu (no
+     item-to-item gaps). */
+  gap: 0;
+}
+
+.dropdownItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.dropdownItemName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdownItem:hover:not(:disabled),
+.dropdownItem:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+  /* The fill IS the keyboard focus indicator (brand outline would double it). */
+  outline: none;
+}
+
+.dropdownItem:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: not-allowed;
+}
+
+.selected:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  font-weight: 600;
+}
+
+.selectedCheck {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Connection-state dot: green = connected, red = not connected (remote rows
+   are disabled while red; the local row stays selectable). */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.dotOk {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.dotErr {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+.current {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---- content column ---- */
+
+.content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  height: 54px;
+  padding: 20px 14px 8px 10px;
+  box-sizing: border-box;
+}
+
+.actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 28px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--dsw-alias-label-primary);
+}
+
+.close:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.options {
+  flex: 1;
+  min-height: 0;
+  padding: 0 24px 24px;
+  overflow-y: auto;
+}
+
+.placeholder {
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Server-switch intermediate state: the content column switches to a
+   dedicated loading view IMMEDIATELY (honest signal, no stale-content wait
+   on slow targets); the per-server child ctx cache makes repeat switches
+   instant (no intermediate at all). The wrapper fade (keyed per server)
+   replays on each server switch, smoothing the swap. */
+.contentFade {
+  animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
+}
+
+@keyframes contentFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.loadingView {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 64px 0;
+}
+
+.loadingSpinner {
+  color: var(--dsw-alias-label-tertiary);
+  animation: contentSpin 1s linear infinite;
+}
+
+@keyframes contentSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contentFade,
+  .loadingSpinner {
+    animation: none;
+  }
+}
+
+/* Visually-hidden text seat (close button accessible name). */
+.hiddenLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

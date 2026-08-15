@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "packages/control-plane/src/**/*.ts",
+    "packages/control-plane/test/**/*.ts",
+    "packages/cli/src/**/*.ts",
+    "packages/renderer/src/**/*.ts",
+    "packages/renderer/src/**/*.tsx",
+    "packages/desktop/main.ts",
+    "packages/desktop/preload.cts",
+    "packages/desktop/transport-provider.ts",
+    "packages/desktop/transport-manager.ts",
+    "packages/desktop/transport-manager.test.ts",
+    "packages/desktop/ssh-provider.ts",
+    "packages/desktop/ssh-provider.test.ts",
+    "packages/desktop/ssh-config.ts",
+    "packages/desktop/ssh-config.test.ts"
+  ],
+  "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
+}

@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnp
+
+# Build outputs
+dist/
+dist-ssr/
+release/
+build/
+*.tgz
+
+# Local runtime state (control-plane data, audit log, dsh host state)
+data/
+*.pid
+audit.log
+
+# Local env
+.env
+.env.local
+.npmrc
+
+# Reference checkouts (symlinks to local repos, not part of this repo)
+ref-dsh
+ref-upstream
+
+# Harness workspace symlinks (point into the external dsh source checkout —
+# like ref-dsh/ref-upstream, these local links are never committed)
+vendor/
+
+# Bundled dsh copy inside the desktop package (produced by bundle:dsh, external repo content)
+packages/desktop/vendor/
+
+# Renderer tooling caches and generated code
+packages/renderer/.cache/
+packages/renderer/src/generated/
+
+# Agent memory
+.graymatter/
+
+# Logs
+logs
+*.log
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+npm-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+Thumbs.db
+
+# Temporary files
+.tmp/
+/tmp/
+*.local
+*.swp

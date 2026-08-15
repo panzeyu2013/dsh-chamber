@@ -1,0 +1,28 @@
+name: Feature request
+description: 建议一项改进
+title: "[Feature Request] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: 希望新增/改变什么？
+      description: 你想做什么 + 希望发生什么。
+      placeholder: |
+        我想 …
+
+        如果 dsh-chamber 能 … 就好了
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 额外背景（可选）
+      description: 链接、截图、约束等。
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围自检（可选）
+      description: dsh 宿主/插件生态或宿主 web-app 是否已覆盖该能力？若已覆盖，说明为何需要控制面参与（透传/索引之外）。

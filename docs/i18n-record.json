@@ -1,0 +1,16 @@
+{
+  "files": {
+    "README.md": {
+      "en": "fbcb79dd47ccb9b7c9f4996769906dd3c297b12fefb794748349ae7d76a3de4c",
+      "zh": "fcec9a0825a01ee283d26e9da72d08bd032b3c80d041b139aaac1d8e150dd7b1"
+    },
+    "AGENTS.md": {
+      "en": "dc1494032196adc804f10704f8a1c65e2ba7b82a67a38556dcb8d289b3a4e012",
+      "zh": "724c44471023b620530436282805958d351bb5d2553e5448b3a2541fbadc43ea"
+    },
+    "CONTRIBUTING.md": {
+      "en": "9020aa397c4660f3416be74e44551fb65881e432e5322ef019730583d1ecb436",
+      "zh": "5a683aabe5099cd71f4c94b7cfc62909dd24d9936a4c63e2487d87e1aa2f8242"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# Upstream dsh (deepseek-harness) commit pinned for the build-time vendor tree
+# (vendor/harness-packages/@deepseek-ai) — read by scripts/ensure-harness-vendor.mjs.
+# Keep in sync with pnpm-lock.yaml: bumping this without regenerating the lockfile
+# makes `pnpm install --frozen-lockfile` fail (intended reproducibility guard).
+# Per-run override: DSH_CHAMBER_HARNESS_COMMIT.
+47f943859bef60e4160492346772ded9b24f765a

@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Validation chain only — no desktop packaging (fast).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+      # Bootstrap the vendor symlink tree BEFORE pnpm install: pnpm captures the
+      # workspace snapshot before preinstall runs, so the links must already
+      # exist for the install to resolve the full @deepseek-ai/* workspace.
+      # The managed snapshot (vendor/harness-checkout) is cached by pin; on a
+      # cache hit the bootstrap reuses it, on a miss it downloads from codeload.
+      - name: Cache pinned harness snapshot
+        uses: actions/cache@v4
+        with:
+          path: vendor/harness-checkout
+          key: harness-${{ hashFiles('harness.commit') }}
+      - name: Bootstrap vendor tree
+        run: node scripts/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Type check (tsc)
+        run: pnpm run typecheck
+      - name: i18n pair consistency
+        run: pnpm run verify:i18n
+      - name: Control-plane unit tests
+        run: |
+          node packages/control-plane/test/protocol.ts
+          node packages/control-plane/test/storage.ts
+          node packages/control-plane/test/m1-dsh-client.ts
+          node packages/control-plane/test/host-logs.ts
+          node packages/control-plane/test/manager-api.ts
+          node packages/control-plane/test/instance-proxy.ts
+      - name: Desktop unit tests (transport / ssh)
+        run: pnpm run test:desktop
+      - name: Client plugin type checks (sidebar / connections / settings-bridge)
+        run: |
+          pnpm run typecheck:sidebar
+          pnpm run typecheck:connections
+          pnpm run typecheck:settings-bridge
+      - name: Client plugin unit tests (sidebar / settings-bridge)
+        run: |
+          pnpm run test:sidebar
+          pnpm run test:settings-bridge
+      - name: Smoke test
+        run: pnpm run smoke
+      - name: Renderer build
+        run: pnpm run build:renderer
+
+  # macOS desktop packaging; smoke then runs against the freshly bundled dsh
+  # runtime (real SMOKE PASS instead of the ubuntu job's SKIP).
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - name: Cache pinned harness snapshot
+        uses: actions/cache@v4
+        with:
+          path: vendor/harness-checkout
+          key: harness-${{ hashFiles('harness.commit') }}
+      - name: Bootstrap vendor tree
+        run: node scripts/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Package macOS app
+        run: pnpm run dist:desktop:mac
+        env:
+          DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.6
+      - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
+        # No Apple Developer ID / notarization secrets are configured; the
+        # afterPack hook ad-hoc signs the bundle so the code signature is
+        # structurally valid (without it, macOS rejects the quarantined
+        # download as "damaged"). Verify the parts that must be right
+        # regardless: the .app bundle exists, its signature verifies, the
+        # darwin dsh runtime is baked in (extraResources vendor), and
+        # artifacts were made.
+        run: |
+          set -euo pipefail
+          APP_DIR=$(find packages/desktop/release -maxdepth 2 -name "*.app" -type d | head -n 1)
+          test -n "$APP_DIR"
+          echo "app bundle: $APP_DIR"
+          codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+          RUNTIME="$APP_DIR/Contents/Resources/vendor/dsh"
+          test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
+          node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('darwin-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
+          test -n "$(ls packages/desktop/release/*.dmg 2>/dev/null | head -n 1)"
+      - name: Smoke test (bundled dsh runtime)
+        run: pnpm run smoke
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-chamber-macos
+          path: packages/desktop/release/*.dmg
+          if-no-files-found: error
+
+  # Windows desktop packaging. Must run on a Windows runner: bundle:dsh bakes
+  # the host platform's dsh runtime (win32-x64 here) into vendor/dsh — a
+  # macOS-produced bundle would ship darwin binaries inside the Windows app.
+  # windows-2022, not windows-latest: the node-gyp stack does not detect the
+  # VS 18 toolchain that windows-latest ships (same finding as OpenChamber) —
+  # bundle:dsh builds node-pty natively on this runner. x64 only.
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - name: Cache pinned harness snapshot
+        uses: actions/cache@v4
+        with:
+          path: vendor/harness-checkout
+          key: harness-${{ hashFiles('harness.commit') }}
+      - name: Bootstrap vendor tree
+        run: node scripts/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Package Windows app
+        run: pnpm run dist:desktop:win
+        env:
+          DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.6
+      - name: Verify packaged Windows app (OpenChamber-style, unsigned)
+        # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
+        # and that the win32 dsh runtime made it into the unpacked app.
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p 'process.platform + "-" + process.arch')" = "win32-x64"
+          test -d packages/desktop/release/win-unpacked
+          RUNTIME=packages/desktop/release/win-unpacked/resources/vendor/dsh
+          test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
+          node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('win32-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
+          test -n "$(ls packages/desktop/release/*.exe packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-chamber-windows
+          path: |
+            packages/desktop/release/*.exe
+            packages/desktop/release/*.zip
+            packages/desktop/release/*.blockmap
+          if-no-files-found: error

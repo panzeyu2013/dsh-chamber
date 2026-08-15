@@ -1,0 +1,205 @@
+name: Release
+
+# Tag-triggered (v*) or manual (workflow_dispatch) multi-platform desktop
+# release, modeled on OpenChamber's release.yml: an ubuntu job creates a
+# draft GitHub Release first, per-platform jobs upload their artifacts into
+# it, and a finalize job flips the draft to public. macOS builds on native
+# arm64 + x64 runners (each runner's bundle:dsh bakes that platform's dsh
+# runtime); Windows builds on windows-2022 (windows-latest's VS 18 toolchain
+# is not detected correctly by the node-gyp stack — same finding as
+# OpenChamber). No Apple Developer ID / notarization secrets are configured:
+# the macOS app is ad-hoc signed by the afterPack hook (structurally valid
+# signature, so no "app is damaged" on Gatekeeper-relaxed systems; a default
+# Gatekeeper still requires right-click/open or "allow anywhere"), the
+# Windows exe goes out unsigned. Each platform ships only its installer —
+# no zip/blockmap sidecars.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run (skip publishing)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.6
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        env:
+          RELEASE_INPUT_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          if [[ -n "$RELEASE_INPUT_VERSION" ]]; then
+            echo "version=$RELEASE_INPUT_VERSION" >> "$GITHUB_OUTPUT"
+          elif [[ "$RELEASE_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (draft)
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          draft: true
+          generate_release_notes: true
+          name: dsh-chamber v${{ steps.get_version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Public GitHub-hosted macOS runner labels only (OpenChamber 踩坑：
+          # 非公开标签 macos-26 / macos-15-intel 会找不到 runner 而失败)。
+          # arm64 → macos-14（公开 arm64 标签）；x64 → macos-13（公开 x64 标签）。
+          - runner: macos-14
+            arch: arm64
+            platform: darwin-arm64
+          - runner: macos-13
+            arch: x64
+            platform: darwin-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - name: Cache pinned harness snapshot
+        uses: actions/cache@v4
+        with:
+          path: vendor/harness-checkout
+          key: harness-${{ hashFiles('harness.commit') }}
+      - name: Bootstrap vendor tree
+        run: node scripts/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and package macOS app
+        # electron-builder runs the afterPack hook
+        # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
+        # signs the bundle before the dmg is built (no Apple signing /
+        # notarization secrets are configured).
+        run: |
+          pnpm run build:desktop
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --${{ matrix.arch }} --publish=never
+
+      - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
+        # No Apple Developer ID / notarization secrets are configured; the
+        # afterPack hook ad-hoc signs the bundle so the code signature is
+        # structurally valid (without it, macOS rejects the quarantined
+        # download as "damaged"). Verify the parts that must be right
+        # regardless: the .app bundle exists, its signature verifies, the
+        # darwin dsh runtime is baked in (extraResources vendor), and
+        # artifacts were made.
+        run: |
+          set -euo pipefail
+          APP_DIR=$(find packages/desktop/release -maxdepth 2 -name "*.app" -type d | head -n 1)
+          test -n "$APP_DIR"
+          echo "app bundle: $APP_DIR"
+          codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+          RUNTIME="$APP_DIR/Contents/Resources/vendor/dsh"
+          test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
+          node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('darwin-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
+          test -n "$(ls packages/desktop/release/*.dmg 2>/dev/null | head -n 1)"
+
+      - name: Upload macOS artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.create-release.outputs.version }}
+          files: packages/desktop/release/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    needs: create-release
+    # windows-2022, not windows-latest: the node-gyp stack does not detect the
+    # VS 18 toolchain that windows-latest ships (same finding as OpenChamber).
+    # x64 only — bundle:dsh bakes native modules (node-pty etc.) for the host
+    # platform; arm64 would need an arm64 runner, not cross-compilation.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - name: Cache pinned harness snapshot
+        uses: actions/cache@v4
+        with:
+          path: vendor/harness-checkout
+          key: harness-${{ hashFiles('harness.commit') }}
+      - name: Bootstrap vendor tree
+        run: node scripts/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build and package Windows app
+        shell: bash
+        run: |
+          pnpm run build:desktop
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
+
+      - name: Verify packaged Windows app (OpenChamber-style, unsigned)
+        # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
+        # and that the win32 dsh runtime made it into the unpacked app.
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p 'process.platform + "-" + process.arch')" = "win32-x64"
+          test -d packages/desktop/release/win-unpacked
+          RUNTIME=packages/desktop/release/win-unpacked/resources/vendor/dsh
+          test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
+          node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('win32-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
+          test -n "$(ls packages/desktop/release/*.exe 2>/dev/null | head -n 1)"
+
+      - name: Upload Windows artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.create-release.outputs.version }}
+          files: packages/desktop/release/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  finalize-release:
+    needs: [create-release, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release (flip draft to public)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.create-release.outputs.version }}
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

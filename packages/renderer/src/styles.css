@@ -1,0 +1,321 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --panel: #161a22;
+  --panel-2: #1b2029;
+  --border: #262c38;
+  --text: #e6e9ef;
+  --muted: #8b94a7;
+  --accent: #4f8cff;
+  --accent-dim: #2b4a80;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --gray: #6e7681;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    'PingFang SC',
+    'Microsoft YaHei',
+    'Noto Sans CJK SC',
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ---------- 应用骨架（纯 dsh UI：N-ctx 实例视图全屏） ---------- */
+
+.app {
+  position: relative;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ---------- 实例视图（每实例一个 dsh shell） ---------- */
+
+.instance-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* 与 dsh 主题同底色：骨架屏/切换过渡的底层永远不是"黑"，加载与切换观感
+     跟随实例主题（主题 token 未加载时回退 chamber 暗色）。 */
+  background: var(--dsw-alias-bg-base, var(--bg));
+}
+
+/* 隐藏视图（非活动且已 settle）：即时隐藏——visibility+opacity+pointer-events
+   让整棵 dsh shell 脱离渲染与命中测试，同时 .instance-shell 用
+   content-visibility:hidden 跳过 style/layout/paint 并缓存渲染状态（空闲成本
+   ≈零、尺寸不变使 vendor 内 ResizeObserver 不触发）。reveal 时内容未变只
+   paint；隐藏期间仍在流式的 shell（活跃会话的 DOM 变更使缓存失效）付一次
+   增量重排——由 View Transition 的旧视图快照遮盖（view-transition.ts），
+   无黑帧；不支持 content-visibility 的浏览器自动降级为保留 layout 的
+   visibility 方案。 */
+.instance-view.instance-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.instance-view.instance-hidden .instance-shell {
+  content-visibility: hidden;
+}
+
+/* 后台 boot 的视图（空闲预热 / 切换后仍在加载）：仅 visibility 隐藏——
+   保留完整 style/layout（dsh 虚拟列表等依赖测量与 IntersectionObserver 的
+   机制在 boot 期间正常工作；content-visibility 会跳过这些）。boot 是一次性
+   成本；settle 后转入 instance-hidden（渲染缓存态）。 */
+.instance-view.instance-pending {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.instance-shell {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: block;
+}
+
+/* ---------- 骨架屏（加载中间态，NN/g skeleton 模式，设计 05 §4） ----------
+   盖在 shell 之上（shell 内部 dsh 启动页被骨架完全覆盖，无需 opacity 隐藏
+   技巧）；结构模仿 dsh 布局（图标 rail + 侧边栏列表 + 主区），背景跟随
+   主题——旧视图 → 骨架 → 真实内容的两次 View Transition 都是同底色平滑
+   过渡。 */
+
+.instance-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--dsw-alias-bg-base, var(--bg));
+}
+
+.instance-loading-frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.instance-loading-rail {
+  /* 官方折叠 rail 宽（layout columns.ts SIDEBAR_COLLAPSED = 56）。 */
+  width: 56px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0;
+  border-right: 1px solid var(--dsw-alias-border-l1, var(--border));
+}
+
+.instance-loading-rail .instance-loading-block {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.instance-loading-sidebar {
+  /* rail(56) + sidebar(224) = 280 = 官方侧栏默认宽（SIDEBAR_DEFAULT）——
+     骨架屏主区左缘与真实展开态侧栏（280px）严格对齐，settle 换入真实
+     shell 时对话区不跳动；rail 取官方折叠宽（56），各自对齐官方几何。 */
+  width: 224px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 14px;
+  border-right: 1px solid var(--dsw-alias-border-l1, var(--border));
+}
+
+.instance-loading-sidebar .instance-loading-block {
+  height: 14px;
+  border-radius: 4px;
+}
+
+.instance-loading-sidebar .instance-loading-block:nth-child(3n) {
+  width: 76%;
+}
+
+.instance-loading-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+}
+
+.instance-loading-block {
+  /* dsh 主题的暗色值为深灰；token 未加载时的回退也应是暗色（骨架屏盖在
+     chamber 暗色底上，亮色块会突兀闪烁）。 */
+  background: var(--dsw-alias-bg-module-platform, var(--panel-2));
+  animation: instance-loading-pulse 1.2s ease-in-out infinite;
+}
+
+.instance-loading-spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--dsw-alias-border-l2, var(--border));
+  border-top-color: var(--dsw-alias-brand-primary, var(--accent));
+  animation: instance-loading-spin 0.8s linear infinite;
+}
+
+.instance-loading-title {
+  font-size: 14px;
+  color: var(--dsw-alias-label-primary, var(--text));
+}
+
+.instance-loading-hint {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary, var(--muted));
+}
+
+@keyframes instance-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes instance-loading-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+/* ---------- 实例失败态（骨架屏之后出现，同底色） ---------- */
+
+.instance-fatal {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--dsw-alias-bg-base, var(--bg));
+}
+
+/* ---------- 动效偏好 ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .instance-loading-block,
+  .instance-loading-spinner {
+    animation: none;
+  }
+}
+
+/* ---------- 按钮 ---------- */
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn:hover:not(:disabled) {
+  background: #222834;
+  border-color: #333b4a;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent);
+}
+
+/* ---------- 通用 ---------- */
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+}
+
+/* ---------- 致命错误 / 空态 ---------- */
+
+.fatal {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+}
+
+.fatal-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* 覆盖式致命屏：视图保持挂载（会话保活 + 无僵尸 ctx），控制面不可达时
+   盖在上层遮断命中测试。 */
+.fatal-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+}
+
+.fatal-message {
+  color: var(--red);
+  font-size: 13px;
+  max-width: 640px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.pane-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  min-height: 200px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.pane-empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}

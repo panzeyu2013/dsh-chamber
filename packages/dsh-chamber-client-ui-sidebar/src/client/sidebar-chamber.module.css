@@ -1,0 +1,759 @@
+/* chamber multi-source session list (design 05 §2): source groups with
+   connection-status dots/spinners at the header's right (green ready, red
+   error/stopped, gray idle/unknown, spinner while connecting/starting/
+   restarting/degraded — the reconnect cycle folds into one stable "trying"
+   state; the phase text lives on hover only; status is icon-only, no status
+   text; remote headers clickable to switch the active N-ctx view; hovering the
+   header swaps the status slot for the search + add-workspace `+` cluster,
+   exactly like the session rows' hover swap), workspace groups and session
+   rows under a connected source (the synthetic ungrouped bucket renders as
+   a muted workspace group with sessions only; groups fold via a header
+   chevron and carry a session count at the right — hover swaps the count
+   for the `+`/kebab actions; session rows nest a tight tree level under
+   their workspace header), color dots (remote sources carry a stable
+   per-source accent; the local source uses the default), the
+   channel-reported current-session row highlight (official selected tint)
+   and its workspace-group accent-chevron marker (any source, 06 §4),
+   per-session state indicators in a fixed trailing slot (normal = empty;
+   running/pending = the official dsh ongoing blue ring; completed-but-unread
+   = a persistent blue dot — the slot is NOT a server-identity marker, 06
+   §4.3), no relative-time cells (sessions show no "x前" text), per-source
+   search capsule + results (06 §1), HTML5 drag markers (session
+   rows and workspace groups, 2px rule, 06 §2.2), hover icon actions
+   (workspace header: `+` new-session + three-dot kebab menu with
+   rename/delete; session row: three-dot kebab menu with rename + a
+   dedicated archive button), inline rename, the snapshot-fetch error line
+   and inline failure text. Rides the official shell geometry (SidebarRoot
+   column, fold states); this sheet owns only the region content. */
+
+/* chamber (06 §1.2): per-source search icon in the source header. */
+.searchButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  padding: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.searchButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The capsule row beneath the source header: input + clear button. The
+   bordered capsule matches the official expanded-search geometry, with the
+   official Input focus treatment (brand border while the input is focused). */
+.searchCapsule {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 6px 6px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.searchCapsule:focus-within {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  padding: 3px 0;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  outline: none;
+}
+
+.searchInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.searchClear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.searchClear:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Search results replace the workspace list while a query is active: title,
+   subtle workspace context and snippet per row, then status lines. */
+.searchResults {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.searchResultRow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.searchResultRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.searchResultTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.searchResultRow:hover .searchResultTitle {
+  color: var(--dsw-alias-label-primary);
+}
+
+.searchResultWorkspace,
+.searchResultSnippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.searchStatus {
+  padding: 2px 4px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Content-search failure banner (06 §1.2). */
+.searchWarning {
+  margin: 2px 4px 4px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-error-primary);
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* chamber (06 §2.2): drag insert markers — a 2px rule at the row boundary,
+   absolutely positioned so it neither resembles a row border nor changes
+   layout. The hovered rows of the same account carry the marker classes. */
+.sessionRow.dropBefore,
+.sessionRow.dropAfter,
+.workspaceGroup.dropBefore,
+.workspaceGroup.dropAfter {
+  position: relative;
+}
+
+.sessionRow.dropBefore::before,
+.sessionRow.dropAfter::after,
+.workspaceGroup.dropBefore::before,
+.workspaceGroup.dropAfter::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 4px;
+  height: 2px;
+  background: var(--dsw-alias-state-business-primary);
+  pointer-events: none;
+}
+
+.sessionRow.dropBefore::before {
+  top: -2px;
+}
+
+.sessionRow.dropAfter::after {
+  bottom: -2px;
+}
+
+.workspaceGroup.dropBefore::before {
+  top: -5px;
+}
+
+.workspaceGroup.dropAfter::after {
+  bottom: -5px;
+}
+
+/* The first workspace insertion boundary (06 §2.2): a top indicator inside
+   the workspace list while the marker on the first real group is suppressed
+   (the group's ::before would double the line). */
+.listTopDropIndicator {
+  position: absolute;
+  z-index: 1;
+  top: -5px;
+  left: 0;
+  right: 4px;
+  height: 2px;
+  background: var(--dsw-alias-state-business-primary);
+  pointer-events: none;
+}
+
+/* chamber (06 §4.3, revised 2026-08): per-session STATE indicators — this
+   slot is NOT a server-identity marker (the source header dot owns
+   identity). It sits at the row's RIGHT edge (trailing the hover actions,
+   never replaced by them). Fixed 10px slot (always laid out, empty for the
+   normal state) so row right edges stay aligned across states. Running
+   renders the official StateDot ongoing ring; completed-but-unread renders a
+   persistent dot. Pending interactions (approval / plan-review / question)
+   widen the slot to 14px and render a distinguishable icon badge INSTEAD of
+   the running ring — a session waiting for the user must be recognizable at
+   a glance (question `?`, plan-review checklist, approval warning triangle;
+   the ask-user state is the plan's motivating case). Colors stay on the dsh
+   state tokens: question/plan-review = business (info blue), approval = warn
+   (amber) — the 06 §4.3 "all-blue" unification is intentionally revised for
+   pending rows. */
+.sessionStateSlot {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+}
+
+/* Pending rows carry the 14px interaction icon instead of the 10px ring. */
+.sessionStateSlotPending {
+  width: 14px;
+  height: 14px;
+}
+
+.statePendingQuestion {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.statePendingPlan {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.statePendingApproval {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.stateCompleted {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-static-deepseek-450);
+}
+
+.chamberList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 12px 0;
+  box-sizing: border-box;
+}
+
+.sourceGroup {
+  margin-bottom: 10px;
+}
+
+.sourceHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.sourceHeader:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Remote source headers are clickable (switch the active N-ctx view). */
+.sourceHeaderClickable {
+  cursor: pointer;
+}
+
+/* Active source (the instance this ctx belongs to): visual emphasis, still
+   in the same shared list as every other source (05 §2.1). The left inset
+   rides the per-element --dsh-source-accent (set inline from the source
+   accent), falling back to ink for the local source. */
+.sourceActive {
+  background: var(--dsw-alias-interactive-bg-hover);
+  box-shadow: inset 2px 0 0 var(--dsh-source-accent, var(--dsw-alias-label-primary));
+}
+
+/* Current-session workspace group marker: the fold chevron takes the source
+   accent (mirroring the official folderActive brand-colored folder icon) —
+   no background, so the group can never fuse with the current-session row
+   below it. The rule itself lives after .foldToggle:hover (see there). */
+
+/* Source identity dot: the local source renders the default secondary ink
+   directly (no derived accent); remote sources carry their stable hue via
+   the inline --dsh-source-accent-driven background. */
+.sourceDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-secondary);
+}
+
+.sourceLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+/* Connection status: a dot (or a spinner while connecting/starting/
+   restarting/degraded — the reconnect cycle folds into one stable "trying"
+   state). No text is ever rendered — the phase label lives on the
+   hover/aria attributes (tooltip). */
+.sourceStatus {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.statusDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-caption);
+}
+
+.statusOk {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.statusErr {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+.statusIdle {
+  background: var(--dsw-alias-label-caption);
+}
+
+.statusSpinner {
+  color: var(--dsw-alias-label-secondary);
+  animation: statusSpin 1s linear infinite;
+}
+
+@keyframes statusSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* Source-header right cluster (search + add-workspace `+`): NOT rendered at
+   rest (display:none — zero layout space, so the connection status really
+   sits at the header's right end). Hovering the header swaps the cluster IN
+   and the status OUT — a true replacement. While a search capsule is open
+   the cluster stays shown (.sourceActionsVisible) so the icon can collapse
+   it; the status stays out then too. */
+.sourceActions {
+  flex: none;
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.sourceActionsVisible {
+  display: inline-flex;
+}
+
+.sourceHeader:hover .sourceActions {
+  display: inline-flex;
+}
+
+.sourceHeader:hover .sourceStatus,
+.sourceHeader:has(.sourceActionsVisible) .sourceStatus {
+  display: none;
+}
+
+.workspaceList {
+  position: relative;
+  margin-left: 10px;
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  padding-left: 6px;
+}
+
+.workspaceGroup {
+  margin: 4px 0;
+}
+
+.workspaceHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  /* 2px vertical margin: keeps the hover/selected tints from fusing into
+     one blob with the adjacent session row (the row right below) or the
+     header above — the tinted rectangles must stay separated. The dense
+     3px padding stays — chamber multi-source density is a deliberate
+     choice (05 §2). */
+  margin: 2px 0;
+  border-radius: 8px;
+}
+
+.workspaceHeader:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Workspace group fold toggle: a right chevron that points down while the
+   group is expanded and rotates back to the right when folded. */
+.foldToggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-caption);
+  cursor: pointer;
+  transform: rotate(90deg);
+  transition: transform 150ms;
+}
+
+.foldToggle:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The group containing the current session's accent chevron marker: the
+   accent outranks both the base caption ink and the hover bump (declared
+   after, equal specificity). */
+.groupContainsCurrent .foldToggle {
+  color: var(--dsh-source-accent, var(--dsw-alias-label-primary));
+}
+
+.foldToggleFolded {
+  transform: rotate(0deg);
+}
+
+/* Session count badge: small tertiary pill, shown only when sessions exist.
+   Sits at the workspace header's right end at rest (the actions take no
+   space until shown); on hover / open-menu its slot is taken by the row
+   actions (+ / kebab) — a true swap. */
+.workspaceCount {
+  flex: none;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.workspaceTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sessionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Session rows nest under their workspace header: the workspace title
+     starts at 24px (4 padding + 16 chevron + 4 gap), the session state slot
+     at 26px — a tight 18px title step (vs the workspace title) keeps the
+     tree readable without eating the row width. 8px matches the workspace
+     headers, the dense 3px padding stays — chamber multi-source density is
+     a deliberate choice (05 §2). */
+  padding: 3px 4px 3px 26px;
+  /* 2px vertical margin separates adjacent rows so the persistent
+     current-session tint (.sessionActive) and a neighbor's hover tint can
+     never fuse into one continuous rectangle. */
+  margin: 2px 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.sessionRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.sessionTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 13/18: official rows run 14px, but chamber multi-source density is a
+     deliberate compromise — 13px keeps rows traceable in one shared list. */
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sessionRow:hover .sessionTitle {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The current ctx's current session (05 §2.2): the official dsh
+   selected-row treatment — `.sessionRow.selected` is the light
+   interactive-bg-hover tint only: no inset shadow, no darker active tone,
+   no title emphasis. The persistent tint (vs the transient hover) plus the
+   group's accent chevron keep the open session traceable. */
+.sessionActive {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Hover swap (official pattern): the row actions replace the trailing state
+   slot when they show — handled by the .rowActions rules above. The session
+   relative-time cell no longer exists (sessions show no "x前" text). */
+
+@media (prefers-reduced-motion: reduce) {
+  .statusSpinner {
+    animation: none;
+  }
+  .foldToggle {
+    transition: none;
+  }
+}
+
+/* Hover-swap actions: NOT rendered at rest (display:none — zero layout
+   space, so the state icon really sits at the row end). Hovering the row
+   (or keeping a kebab menu open, .rowActionsVisible) swaps them IN while
+   the trailing state slot and the session-time slot are swapped OUT — a
+   true replacement, not a fade-over-an-invisible-gap. */
+.rowActions {
+  flex: none;
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.rowActionsVisible {
+  display: inline-flex;
+}
+
+.workspaceHeader:hover .rowActions,
+.sessionRow:hover .rowActions {
+  display: inline-flex;
+}
+
+/* The row/header state indicators swap OUT while the actions are in: on
+   hover, or while a kebab menu keeps them visible. */
+.sessionRow:hover .sessionStateSlot,
+.sessionRow:has(.rowActionsVisible) .sessionStateSlot {
+  display: none;
+}
+
+.workspaceHeader:hover .workspaceCount,
+.workspaceHeader:has(.rowActionsVisible) .workspaceCount {
+  display: none;
+}
+
+/* Icon action button (the `+`, the three-dot kebab trigger, the archive
+   button): 20px hit area around the 14px glyph. The full reset (appearance/
+   outline/line-height/font-size) kills every UA chrome artifact — Safari's
+   button chrome and the click-focus ring must never draw a frame around the
+   button; the grid centering pins the glyph to the exact center regardless
+   of glyph metrics. Hover is color-only (no box) — the row hover already
+   carries the background. */
+.actionIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 0;
+  font-size: 0;
+  cursor: pointer;
+}
+
+.actionIcon > svg {
+  display: block;
+}
+
+.actionIcon:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.actionIcon:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/* The primitives ellipsis glyph is a horizontal triple-dot row; the kebab
+   semantics call for vertical dots — a 90° rotation does the same shape.
+   transform-box/origin pin the rotation to the glyph's own center so no
+   engine quirk can shift the dots off-center. */
+.verticalDots {
+  transform: rotate(90deg);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.actionButton {
+  border: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.actionButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.inlineForm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+}
+
+.inlineInput {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: var(--dsw-specific-sidebar-fill);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Inline failure text: hover-action errors surface here, never silently. */
+.rowError {
+  margin: 2px 4px 4px 20px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-error-primary);
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Session-scoped inline rename / error lines nest with the session rows
+   (26px, matching .sessionRow's left padding against the workspace list).
+   Declared AFTER .inlineForm/.rowError so the left padding overrides their
+   shorthand/margin for session-level UI. */
+.sessionNested {
+  padding-left: 26px;
+}
+
+/* Region error boundary fallback (05 §2): an unexpected render error shows
+   here instead of taking the shell down; the text surfaces the root cause. */
+.boundaryError {
+  padding: 4px 6px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-error-primary);
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Snapshot-fetch failure (05 §2.3): the fetch error text replaces the
+   workspace list instead of masquerading as an empty workspace set. */
+.aggregateError {
+  margin: 2px 4px 4px 20px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-error-primary);
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Synthetic ungrouped bucket: visually secondary — muted header ink and no
+   hover emphasis; the group carries sessions only (no workspace actions). */
+.ungroupedGroup .workspaceTitle {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.ungroupedGroup .workspaceHeader:hover {
+  background: transparent;
+}
+
+/* Add-workspace affordance: a `+` icon button in the SOURCE header (next to
+   the search), not a list row — workspace creation is source-level, so the
+   `+` sits with the source controls. The label lives on hover/aria. */
+.addWorkspace {
+  flex: none;
+}
+
+.empty {
+  padding: 4px 6px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Rail state: source color dots only (05 §2.1 — codex-style compact rail). */
+.railDots {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.railDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-secondary);
+}
+
+/* Active-source ring rides the per-element --dsh-source-accent (remote hue;
+   local falls back to ink) — consistent with the source/session insets. */
+.railDotActive {
+  box-shadow: 0 0 0 2px var(--dsh-source-accent, var(--dsw-alias-label-primary));
+}

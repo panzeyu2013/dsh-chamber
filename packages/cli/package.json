@@ -1,0 +1,13 @@
+{
+  "name": "@dsh-chamber/cli",
+  "version": "0.1.0",
+  "description": "dsh-chamber control-plane CLI: serve/status/connections/host logs",
+  "type": "module",
+  "bin": {
+    "dsh-chamber": "./src/index.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@dsh-chamber/control-plane": "workspace:^"
+  }
+}

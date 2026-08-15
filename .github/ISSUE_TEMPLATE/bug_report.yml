@@ -1,0 +1,39 @@
+name: Bug report
+description: 报告一个问题
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 哪里出问题了？最好有复现步骤。
+      description: 实际发生了什么，期望是什么。
+      placeholder: "期望 … 实际 …"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: 在哪个端发生？
+      options:
+        - Web / PWA
+        - Desktop (Electron)
+        - CLI
+        - Control-plane API (REST/SSE)
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本（若已知）
+      placeholder: "e.g. 0.1.0"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志（可选）
+      description: 相关控制面日志或审计输出。
+      render: shell

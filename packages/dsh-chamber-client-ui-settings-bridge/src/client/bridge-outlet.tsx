@@ -1,0 +1,278 @@
+/**
+ * Bridge outlet: a minimal re-implementation of the official slot render
+ * pipeline (dsh-client-web-react/src/scoped-slots.tsx) covering exactly the
+ * root-scope LIST slots the child settings context declares
+ * (settings.section / settings.general.item / settings.plugins.tab /
+ * settings.plugin.item). The official renderer is boot-root-anchored
+ * (`renderRoot('root')` requires the sessions/workspaces services the child
+ * context deliberately omits), so the bridge renders entries itself: same
+ * kit synthesis (t seat / useStore+actions / renderSlot binding / standard
+ * hooks), same inject face normalization, same ledger-version subscription.
+ * Scope kinds other than root+list render empty by design (no session scope
+ * exists in a bridged settings surface).
+ */
+import { Component, useMemo, useSyncExternalStore, type FC, type ReactNode } from 'react'
+import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
+import type {
+  HostObservable, LocaleFace, RenderOpts, SnapshotSelectorHook, StoredEntry, StoreInstanceLike, Translate,
+} from '@deepseek-ai/dsh-client-ui-slots'
+import type { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+
+/** Type-erased component props share (mirror of the official render boundary). */
+type InjectedProps = Record<string, unknown>
+
+/**
+ * Per-source selector-hook cache (mirror of the official observableHook):
+ * the official components call `useStore(s => s.active)` etc. with SELECTORS,
+ * so the bare hook must be bindSnapshotSelector (useSyncExternalStoreWith-
+ * Selector), not a whole-snapshot uSES. Cached per source for identity
+ * stability (official session-provider.tsx observableHook).
+ */
+const hookCache = new WeakMap<HostObservable<unknown>, unknown>()
+
+function bridgeObservableHook<T>(source: HostObservable<T>): SnapshotSelectorHook<T> {
+  let hook = hookCache.get(source as HostObservable<unknown>)
+  if (hook === undefined) {
+    hook = bindSnapshotSelector(source)
+    hookCache.set(source as HostObservable<unknown>, hook)
+  }
+  return hook as SnapshotSelectorHook<T>
+}
+
+/** Standard-hook stubs: bridged settings sections never read session/workspace state. */
+const EMPTY_SNAPSHOT: Record<string, never> = {}
+const EMPTY_OBSERVABLE: HostObservable<unknown> = {
+  getSnapshot: () => EMPTY_SNAPSHOT,
+  subscribe: () => () => {},
+}
+const emptyObservableHook = bridgeObservableHook(EMPTY_OBSERVABLE)
+
+const noopSubscribe = (): (() => void) => () => {}
+
+/** Store-instance cache, root scope: one instance per registered handle. */
+const storeInstances = new WeakMap<StoredEntry, StoreInstanceLike>()
+
+function storeOf(entry: StoredEntry): StoreInstanceLike | undefined {
+  if (entry.store === undefined) return undefined
+  let instance = storeInstances.get(entry)
+  if (instance === undefined) {
+    instance = entry.store.create()
+    storeInstances.set(entry, instance)
+  }
+  return instance
+}
+
+/** t-seat cache per (face, namespace, revision): locale switches mint fresh references. */
+const localeSeatCache = new WeakMap<LocaleFace, Map<string, { revision: number; t: Translate }>>()
+
+function localeSeat(face: LocaleFace, ns: string): Translate {
+  let perNs = localeSeatCache.get(face)
+  if (perNs === undefined) {
+    perNs = new Map()
+    localeSeatCache.set(face, perNs)
+  }
+  const revision = face.getSnapshot().revision
+  const cached = perNs.get(ns)
+  if (cached !== undefined && cached.revision === revision) return cached.t
+  const bound = face.bind(ns)
+  const t: Translate = (key, params) => bound(key, params)
+  perNs.set(ns, { revision, t })
+  return t
+}
+
+/** Per-face subscription closures (cached by face identity — no churn per render). */
+const localeSubscriptionCache = new WeakMap<LocaleFace, {
+  subscribe: (fn: () => void) => () => void
+  getRevision: () => number
+}>()
+
+function localeSubscription(face: LocaleFace): { subscribe: (fn: () => void) => () => void; getRevision: () => number } {
+  let cached = localeSubscriptionCache.get(face)
+  if (cached === undefined) {
+    cached = {
+      subscribe: fn => face.subscribe(fn),
+      getRevision: () => face.getSnapshot().revision,
+    }
+    localeSubscriptionCache.set(face, cached)
+  }
+  return cached
+}
+
+/** Subscribe an outlet to the locale face revision (0 while none is installed). */
+export function useLocaleRevision(face: LocaleFace | undefined): number {
+  const subscription = face !== undefined ? localeSubscription(face) : undefined
+  return useSyncExternalStore(
+    subscription?.subscribe ?? noopSubscribe,
+    subscription?.getRevision ?? (() => 0),
+  )
+}
+
+/** Normalize an entry-owned inject face: `hooks` sources become `use<Name>` selector hooks. */
+function bindInjectHooks(face: InjectedProps): InjectedProps {
+  const sources = face['hooks']
+  if (sources === undefined) return face
+  const { hooks: _hooks, ...rest } = face
+  const bound: InjectedProps = rest
+  for (const [name, source] of Object.entries(sources as Record<string, HostObservable<unknown>>)) {
+    const hookName = `use${name[0]?.toUpperCase() ?? ''}${name.slice(1)}`
+    bound[hookName] = bridgeObservableHook(source)
+  }
+  return bound
+}
+
+/** Run one root-scope entry's inject factory with the baked store actions. */
+function runInject(entry: StoredEntry, actions: object | undefined): InjectedProps {
+  const inject = entry.inject
+  if (inject === undefined) return {}
+  const face = (inject as (...args: unknown[]) => InjectedProps)(actions)
+  return bindInjectHooks(face)
+}
+
+/** Per-entry inject cache (identity-stable per registration, mirrors the official cache axis). */
+const rootInjectCache = new WeakMap<StoredEntry, InjectedProps>()
+
+function cachedRootInject(entry: StoredEntry, actions: object | undefined): InjectedProps {
+  let props = rootInjectCache.get(entry)
+  if (props === undefined) {
+    props = runInject(entry, actions)
+    rootInjectCache.set(entry, props)
+  }
+  return props
+}
+
+/** renderSlot binding for an entry's declared children (authorization checks, then an outlet). */
+function boundRenderSlot(
+  slots: SlotRegistry,
+  locale: LocaleFace | undefined,
+  entry: StoredEntry,
+): (key: string, owner: object, opts?: RenderOpts) => ReactNode {
+  return (key, owner, opts) => {
+    const declared = entry.children?.[key]
+    if (declared === undefined) {
+      throw new BridgeAssemblyError(`bridge: slot '${key}' is not declared by this entry's children`)
+    }
+    if (declared.kind !== 'list') {
+      throw new BridgeAssemblyError(`bridge: slot '${key}' is declared '${declared.kind}', not 'list' — unsupported by the bridge outlet`)
+    }
+    if (declared.scope !== 'root') {
+      throw new BridgeAssemblyError(`bridge: slot '${key}' is declared scope '${declared.scope}', not 'root' — the bridge outlet has no session scope`)
+    }
+    return (
+      <BridgeOutlet
+        slots={slots}
+        locale={locale}
+        slotKey={key}
+        ownerProps={owner}
+        opts={opts}
+      />
+    )
+  }
+}
+
+/** Render one root-scope entry: standard kit + t seat + store pair + renderSlot + inject + owner. */
+function renderEntry(
+  slots: SlotRegistry,
+  locale: LocaleFace | undefined,
+  entry: StoredEntry,
+  ownerProps: object,
+): ReactNode {
+  const Comp = entry.component as FC<InjectedProps>
+  const kit: InjectedProps = {
+    useSessions: emptyObservableHook,
+    useWorkspaces: emptyObservableHook,
+  }
+  if (entry.locale !== undefined) {
+    if (locale === undefined) {
+      throw new BridgeAssemblyError(`bridge: entry declares locale namespace '${entry.locale}' but no locale face is installed`)
+    }
+    kit['t'] = localeSeat(locale, entry.locale)
+  }
+  const store = storeOf(entry)
+  const actions = store?.actions
+  if (store !== undefined) {
+    kit['useStore'] = bridgeObservableHook(store)
+    kit['actions'] = store.actions
+  }
+  if (entry.children !== undefined) {
+    kit['renderSlot'] = boundRenderSlot(slots, locale, entry)
+  }
+  const injected = cachedRootInject(entry, actions)
+  return <Comp {...kit} {...injected} {...ownerProps} />
+}
+
+/** Bridge assembly failure (mirror of the official SlotAssemblyError): miswired surfaces must fail loud, not degrade. */
+export class BridgeAssemblyError extends Error {}
+
+/**
+ * One entry crash must not take down its siblings (mirror of the official
+ * boundary). Assembly failures (missing locale face, undeclared children)
+ * rethrow — a miswired shell must fail loud; ordinary render/inject crashes
+ * are contained: the cell renders an addressable crash face (same shape as
+ * the official `<div data-slot-error>`) so a silent blank never passes for
+ * an empty section.
+ */
+class BridgeEntryBoundary extends Component<{ slotKey: string; children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false }
+  static getDerivedStateFromError(error: unknown): { failed: boolean } {
+    if (error instanceof BridgeAssemblyError) throw error
+    return { failed: true }
+  }
+  override componentDidCatch(error: unknown): void {
+    console.error('bridge settings entry crashed:', error)
+  }
+  override render(): ReactNode {
+    if (this.state.failed) return <div data-slot-error={this.props.slotKey} />
+    return this.props.children
+  }
+}
+
+/** Entry-identity React keys (mirror of the official entryKeyOf): remount fresh on winner changes. */
+let nextEntryKey = 0
+const entryKeys = new WeakMap<StoredEntry, number>()
+
+function entryKeyOf(entry: StoredEntry): number {
+  let key = entryKeys.get(entry)
+  if (key === undefined) {
+    key = nextEntryKey++
+    entryKeys.set(entry, key)
+  }
+  return key
+}
+
+/**
+ * Render one root-scope LIST slot from a child settings context: ledger
+ * version subscription + locale revision + entries (shadowing winners) in
+ * order, `only` id filter for the nav→section dispatch. Subscribe/getVersion
+ * closures are memoized per (slots, slotKey) — no resubscribe churn on
+ * unrelated re-renders (official per-face cache pattern).
+ */
+export function BridgeOutlet({
+  slots, locale, slotKey, ownerProps, opts,
+}: {
+  slots: SlotRegistry
+  locale: LocaleFace | undefined
+  slotKey: string
+  ownerProps: object
+  opts?: RenderOpts
+}) {
+  const version = useSyncExternalStore(
+    useMemo(() => (fn: () => void) => slots.subscribe(slotKey, fn), [slots, slotKey]),
+    useMemo(() => () => slots.getVersion(slotKey), [slots, slotKey]),
+  )
+  void version
+  useLocaleRevision(locale)
+  const spec = slots.spec(slotKey)
+  if (spec === undefined || spec.kind !== 'list' || spec.scope !== 'root') return null
+  let entries = [...slots.entriesOfSlot(slotKey)].sort((a, b) => (a.options.order ?? 0) - (b.options.order ?? 0))
+  if (opts?.only !== undefined) entries = entries.filter(entry => entry.options.id === opts.only)
+  if (entries.length === 0) return <>{opts?.fallback ?? null}</>
+  return (
+    <>
+      {entries.map(entry => (
+        <BridgeEntryBoundary key={entryKeyOf(entry)} slotKey={slotKey}>
+          {renderEntry(slots, locale, entry, ownerProps)}
+        </BridgeEntryBoundary>
+      ))}
+    </>
+  )
+}

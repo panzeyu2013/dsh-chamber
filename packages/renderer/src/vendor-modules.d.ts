@@ -1,0 +1,260 @@
+/**
+ * Ambient typing for the dsh workspace packages the renderer bundles
+ * (design 05 §2: workspace source compiled by vite via resolve aliases, see
+ * vite.config.mjs). The vendor packages are excluded from the repository
+ * typecheck (root tsconfig excludes vendor/), and their built type outputs do
+ * not exist in the source-only vendor tree, so each specifier the renderer
+ * imports is declared loosely here. The chamber-owned copies
+ * (dsh-client-connection / dsh-client-web / dsh-chamber-client-ui-sidebar) are
+ * typechecked by their own package projects; the renderer still consumes
+ * their named types loosely here (cordis Context, AppWebEntry, chamber
+ * bridge).
+ */
+
+declare module '@deepseek-ai/cordis' {
+  /** Loose minimal shape, mirroring the cordis src/context.ts interface+class merge. */
+  interface Context {
+    plugin(...args: any[]): this
+    inject(...args: any[]): this
+    on(...args: any[]): this
+    emit(...args: any[]): unknown
+    get(...args: any[]): unknown
+    provide(...args: any[]): unknown
+    /** chamber v1: per-instance sessions runtime face (loose mirror of dsh-client-runtime ISessions). */
+    sessions: {
+      open(id: string): void
+      list: { getSnapshot(): { byId?: Record<string, unknown> } }
+    }
+  }
+  class Context {
+    constructor()
+    static is(value: unknown): value is Context
+  }
+}
+
+declare module '@deepseek-ai/dsh-client-web' {
+  /** Module transport hook (boot.tsx BootSeams, Pick<ClientModuleSystemOptions, 'loadBundle'>). */
+  export interface BootSeams {
+    loadBundle?: (url: string) => Promise<void>
+  }
+  /** The web shell kernel consumed by shell.ts (boot.tsx). */
+  export class AppWebEntry {
+    constructor(el: HTMLElement, seams?: BootSeams)
+    run(): Promise<unknown>
+    dispose(): void
+    /** chamber patch: settled runtime context (boot.tsx accessor; session opens ride ctx.sessions). */
+    runtimeCtx: Context
+  }
+}
+
+declare module '@deepseek-ai/dsh-client-connection/client'
+declare module '@deepseek-ai/dsh-client-runtime/client'
+declare module '@deepseek-ai/dsh-client-locale/client'
+declare module '@deepseek-ai/dsh-client-modules/client'
+declare module '@deepseek-ai/dsh-typert-registry/client'
+declare module '@deepseek-ai/dsh-api-gateway/client'
+declare module '@deepseek-ai/dsh-api-remotes/client'
+
+declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
+declare module '@deepseek-ai/dsh-client-ui-commands/client'
+declare module '@deepseek-ai/dsh-client-ui-conversation/client'
+declare module '@deepseek-ai/dsh-client-ui-deliverables/client'
+declare module '@deepseek-ai/dsh-client-ui-directory-picker-browse/client'
+declare module '@deepseek-ai/dsh-client-ui-goal/client'
+declare module '@deepseek-ai/dsh-client-ui-input-trigger/client'
+declare module '@deepseek-ai/dsh-client-ui-jobs/client'
+declare module '@deepseek-ai/dsh-client-ui-layout/client'
+declare module '@deepseek-ai/dsh-client-ui-message-feedback/client'
+declare module '@deepseek-ai/dsh-client-ui-model-selection/client'
+declare module '@deepseek-ai/dsh-client-ui-permission-presets/client'
+declare module '@deepseek-ai/dsh-client-ui-plan/client'
+declare module '@deepseek-ai/dsh-client-ui-settings/client'
+declare module '@deepseek-ai/dsh-client-ui-settings-general/client'
+declare module '@deepseek-ai/dsh-client-ui-settings-models/client'
+declare module '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
+declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+declare module '@deepseek-ai/dsh-client-ui-sidebar/client'
+declare module '@deepseek-ai/dsh-client-ui-skill/client'
+declare module '@deepseek-ai/dsh-client-ui-subagent/client'
+declare module '@deepseek-ai/dsh-client-ui-theme/client'
+declare module '@deepseek-ai/dsh-client-ui-tool/client'
+declare module '@deepseek-ai/dsh-client-ui-trajectory/client'
+declare module '@deepseek-ai/dsh-client-ui-user-questions/client'
+declare module '@deepseek-ai/dsh-client-ui-workflow-run/client'
+declare module '@deepseek-ai/dsh-client-ui-workspace/client'
+
+/**
+ * The chamber self-built sidebar plugin (packages/dsh-chamber-client-ui-sidebar, 05
+ * §2): registers the layout 'sidebar' slot shell whose region renders the
+ * multi-source session list. The renderer only plugs it into the per-instance
+ * boot graph; loose face.
+ */
+declare module '@dsh-chamber/dsh-client-ui-sidebar/client' {
+  export const inject: string[]
+  export function apply(ctx: any): void
+}
+
+/**
+ * The chamber self-built connections settings section plugin
+ * (packages/dsh-chamber-client-ui-settings-connections, 05 §5): registers the
+ * 'settings.section' entry id 'connections' — local instance card + remote
+ * host management. The renderer only plugs it into the per-instance boot
+ * graph; loose face.
+ */
+declare module '@dsh-chamber/dsh-client-ui-settings-connections/client' {
+  export const inject: string[]
+  export function apply(ctx: any): void
+}
+
+/**
+ * The chamber self-built settings shell plugin
+ * (packages/dsh-chamber-client-ui-settings-bridge): registers the 'sidebar.settings'
+ * entry id 'chamber-shell' at priority -1, shadowing the official
+ * SettingsRoot — a server dropdown over the selected instance's official
+ * settings sections, plus the fixed chamber-global connections entry. The
+ * renderer only plugs it into the per-instance boot graph; loose face.
+ */
+declare module '@dsh-chamber/dsh-client-ui-settings-bridge/client' {
+  export const inject: string[]
+  export function apply(ctx: any): void
+}
+
+/**
+ * The chamber shared faces (packages/dsh-chamber-client-ui-sidebar/src/shared, 05
+ * §2/§3): the per-instance unary wire client (migrated from the former
+ * renderer src/instance-api.ts) and the chamberBridge singleton. Loose mirror
+ * of the real exports; the chamber App layer (App.tsx) and the sidebar plugin
+ * consume this single copy.
+ */
+declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
+  export interface WorkspaceRow {
+    workspaceId: string
+    path: string
+    title: string
+    sessionIds: string[]
+    createdAt: string
+    updatedAt: string
+  }
+  export interface SessionRow {
+    sessionId: string
+    updatedAt: number
+    running: boolean
+    blank: boolean
+    origin?: 'subagent'
+    cwd?: string
+    title?: string
+    parentSessionId?: string
+  }
+  export interface InstanceSnapshot {
+    workspaces: WorkspaceRow[]
+    sessions: SessionRow[]
+    archivedSessionIds: string[]
+  }
+  export type InstanceAggregateState = 'ok' | 'error' | 'not-connected'
+  export interface InstanceAggregate extends InstanceSnapshot {
+    state: InstanceAggregateState
+    error: string | null
+  }
+  export function emptyAggregate(state: InstanceAggregateState, error?: string | null): InstanceAggregate
+  export function getInstanceClient(instanceId: string): unknown
+  export function fetchInstanceSnapshot(client: unknown): Promise<InstanceSnapshot>
+  export function isInstanceUnavailable(err: unknown): boolean
+  export function createSession(client: unknown, workspaceId: string): Promise<string>
+  export function renameSession(client: unknown, sessionId: string, title: string): Promise<void>
+  export function archiveSession(client: unknown, sessionId: string): Promise<void>
+  export function createWorkspace(client: unknown, path: string): Promise<void>
+  export function renameWorkspace(client: unknown, workspaceId: string, title: string): Promise<void>
+  export function deleteWorkspace(client: unknown, workspaceId: string): Promise<void>
+  export interface SearchRow {
+    sessionId: string
+    snippet: string
+  }
+  export function searchSessions(
+    client: unknown,
+    query: string,
+    signal: AbortSignal,
+  ): Promise<{ items: SearchRow[]; hasMore: boolean }>
+  export function insertSessionBefore(
+    client: unknown,
+    workspaceId: string,
+    sessionId: string,
+    beforeSessionId?: string,
+  ): Promise<void>
+  export function insertWorkspaceBefore(
+    client: unknown,
+    workspaceId: string,
+    beforeWorkspaceId?: string,
+  ): Promise<void>
+  export interface ChamberServerWorkspace {
+    id: string
+    title: string
+    ungrouped?: boolean
+    sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
+  }
+  export interface InstanceRuntimeReport {
+    current?: string
+    sessions: Record<string, { completed?: boolean; pending?: 'approval' | 'plan-review' | 'question' }>
+  }
+  export interface ChamberServerAggregate {
+    id: string
+    kind: 'local' | 'ssh'
+    label: string
+    connected: boolean
+    phase: string
+    workspaces: ChamberServerWorkspace[]
+    aggregateError?: string
+    runtime?: InstanceRuntimeReport
+    updatedAt: number
+  }
+  export interface OpenSessionRequest {
+    sourceId: string
+    sessionId: string
+  }
+  export const UNGROUPED_WORKSPACE_ID: string
+  export function deriveServerWorkspaces(
+    snapshot: InstanceSnapshot,
+    ungroupedTitle: string,
+    currentSessionId?: string,
+  ): ChamberServerWorkspace[]
+  export function sanitizeSearchQuery(query: string): string
+  export function reconciledSessionOrder(stored: readonly string[], wireIds: readonly string[]): string[]
+  export function projectRuntimeFacts(
+    snapshot: {
+      current?: string
+      byId?: Record<string, { completed?: boolean; pendingInteraction?: 'approval' | 'plan-review' | 'question' }>
+    },
+  ): InstanceRuntimeReport
+  export interface ChamberSidebarViewPrefs {
+    v: 1
+    folded: Record<string, boolean>
+    ungroupedOrder: Record<string, string[]>
+  }
+  export interface StorageLike {
+    getItem(key: string): string | null
+    setItem(key: string, value: string): void
+  }
+  export const VIEW_PREFS_KEY: string
+  export function loadViewPrefs(storage?: StorageLike): ChamberSidebarViewPrefs
+  export function saveViewPrefs(prefs: ChamberSidebarViewPrefs, storage?: StorageLike): void
+  export const chamberBridge: {
+    getServers(): ChamberServerAggregate[]
+    subscribe(listener: () => void): () => void
+    publish(servers: ChamberServerAggregate[]): void
+    requestOpenSession(sourceId: string, sessionId: string): void
+    onOpenSession(listener: (request: OpenSessionRequest) => void): () => void
+    requestRefresh(sourceId: string): void
+    onRefresh(listener: (sourceId: string) => void): () => void
+    requestActivateSource(sourceId: string): void
+    onActivateSource(listener: (sourceId: string) => void): () => void
+    reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void
+    clearInstanceRuntime(sourceId: string): void
+    onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined) => void): () => void
+  }
+}
+
+/** window.__DSH_BASE_PATH__ (chamber per-instance knob; see shell.ts). */
+declare global {
+  interface Window {
+    __DSH_BASE_PATH__?: string
+  }
+}

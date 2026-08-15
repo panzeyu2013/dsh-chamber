@@ -1,0 +1,558 @@
+/* Chamber connections settings section (design 05 §5) in the settings-panel
+   design language: the Agent-presets card grid vocabulary (section column,
+   group headings, cards with a bordered foot, dashed creator entry) plus
+   mono log blocks. Every color resolves through a `--dsw-alias-*` token;
+   the scrollbar indirection follows the ui-theme convention. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.intro {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Group-to-group breathing room: the section's 12px gap plus 20px reads the
+   two blocks as separate pages (32px total). */
+.group + .group {
+  margin-top: 20px;
+}
+
+.groupHead {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---- local instance card ---- */
+
+.localCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  transition: border-color .16s, background .16s;
+}
+
+.localHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.localName {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.localMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.localActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mono {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* ---- status badges ---- */
+
+.badge {
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+  font-weight: 500;
+  border: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.badgeOk {
+  border-color: transparent;
+  background: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.badgeBad {
+  border-color: transparent;
+  background: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+/* ---- remote host cards ---- */
+
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  transition: border-color .16s, background .16s;
+}
+
+.card:hover {
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cardName {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.cardHost {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.cardId {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.serviceLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.connectButton {
+  width: 100%;
+}
+
+.cardFoot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-top: 6px;
+  margin-top: 4px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.footSpacer {
+  flex: 1;
+}
+
+/* Icon-only actions: the label rides `title`-style data-tip so the row stays
+   quiet until someone reaches for it (the Agent-presets vocabulary). */
+.iconButton {
+  position: relative;
+  appearance: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 6px;
+  background: none;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+}
+
+.iconButton:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
+.iconButton::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-bg-layer-3);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+
+.iconButton:hover::after,
+.iconButton:focus-visible::after {
+  opacity: 1;
+}
+
+.iconDanger:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* The dashed add entry, after the card grid: it reads as a place a host
+   will appear, not a command. */
+.creatorButton {
+  box-sizing: border-box;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  border: 1px dashed var(--dsw-alias-border-l3);
+  border-radius: 12px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.creatorButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.creatorButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dim {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* ---- log blocks (host logs + per-instance ring buffer) ---- */
+
+.logArea {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.logHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.logToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 8px 4px 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.logToggle:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.logChevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform .15s ease;
+}
+
+.logChevronOpen {
+  transform: rotate(180deg);
+}
+
+.logTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.logHint {
+  font-size: 11px;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.logBox {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.logLine {
+  display: flex;
+  gap: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.logTs {
+  flex: none;
+  color: var(--dsw-alias-label-dimmed);
+  user-select: none;
+}
+
+.logText {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.logStderr {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.logWarn {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+/* ---- dialogs ---- */
+
+.dialog {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 48px);
+}
+
+.dialogContent {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.deleteDialog {
+  width: min(480px, 100%);
+}
+
+.deleteConfirm:not(:disabled) {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.deleteConfirm:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
+.dialogFields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.fieldLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.clearPassword {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.clearPassword:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.input {
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.input::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- ~/.ssh/config discovery picker (add-host form) ---- */
+
+.configPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.configHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.configList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.configItem {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--dsw-alias-label-primary);
+}
+
+.configItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.configAlias {
+  flex: none;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 500;
+}
+
+.configMeta {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow-wrap: anywhere;
+}

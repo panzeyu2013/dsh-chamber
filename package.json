@@ -1,0 +1,47 @@
+{
+  "name": "dsh-chamber",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "dsh",
+    "agent",
+    "control-plane",
+    "multi-host",
+    "connection-manager"
+  ],
+  "scripts": {
+    "preinstall": "node scripts/ensure-harness-vendor.mjs",
+    "postinstall": "node scripts/ensure-electron.mjs",
+    "dev:control-plane": "node packages/control-plane/src/standalone.ts",
+    "build:renderer": "pnpm --filter @dsh-chamber/renderer run build",
+    "build:desktop": "pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run build:control-plane && pnpm --filter @dsh-chamber/desktop run build:preload && pnpm --filter @dsh-chamber/desktop run bundle:dsh",
+    "dist:desktop": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist",
+    "dist:desktop:mac": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:mac",
+    "dist:desktop:win": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:win",
+    "dev:desktop": "pnpm --filter @dsh-chamber/desktop run dev",
+    "dev:build": "pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run dev",
+    "cli": "node packages/cli/src/index.ts",
+    "smoke": "node packages/control-plane/test/smoke.ts",
+    "verify:i18n": "node scripts/verify-i18n.mjs",
+    "gen:notices": "node scripts/gen-third-party-notices.mjs",
+    "typecheck": "tsc --noEmit",
+    "typecheck:connections": "tsc -p packages/dsh-chamber-client-ui-settings-connections/tsconfig.json --noEmit",
+    "typecheck:sidebar": "tsc -p packages/dsh-chamber-client-ui-sidebar/tsconfig.json --noEmit",
+    "typecheck:settings-bridge": "tsc -p packages/dsh-chamber-client-ui-settings-bridge/tsconfig.json --noEmit",
+    "test:desktop": "node packages/desktop/transport-manager.test.ts && node packages/desktop/ssh-provider.test.ts && node packages/desktop/ssh-config.test.ts",
+    "test:sidebar": "node packages/dsh-chamber-client-ui-sidebar/test/derive.ts && node packages/dsh-chamber-client-ui-sidebar/test/view-prefs.ts",
+    "test:settings-bridge": "node packages/dsh-chamber-client-ui-settings-bridge/test/busy-enter-policy.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/permission-controller.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@types/ws": "^8.18.1",
+    "node-pty": "^1.1.0",
+    "typescript": "^7.0.2"
+  }
+}

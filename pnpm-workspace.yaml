@@ -1,0 +1,38 @@
+packages:
+  - "packages/*"
+  - "vendor/harness-packages/@deepseek-ai/*"
+
+# pnpm 11 默认拦截依赖构建脚本；白名单放行本仓库安装树中的合法构建：
+# electron/electron-builder（二进制下载）、esbuild/@parcel/watcher（vite 依赖原生安装）。
+allowBuilds:
+  electron: true
+  electron-builder: true
+  esbuild: true
+  "@parcel/watcher": true
+  # Windows 打包辅助（macOS 上其下载脚本无害）
+  electron-winstaller: true
+  # 工作区成员 dsh-subprocess-local 自身的 postinstall（恢复 node-pty
+  # spawn-helper 可执行位）不受 allowBuilds 约束——pnpm 对 workspace 项目
+  # 自身脚本在全新安装时无条件执行，其 node-pty 解析失败由
+  # scripts/ensure-harness-vendor.mjs 的快照解析 shim 兜底（解析成功后为
+  # 无害 no-op）。此处否认的是它作为"依赖节点"的构建（成员间 workspace:
+  # 引用时的防御），同时避免 pnpm 报 ignored builds。运行时用 bundle:dsh
+  # 的发布包、不构建上游源码，该脚本非必需。
+  "@deepseek-ai/dsh-subprocess-local": false
+  # 原生模块（经工作区 linked 包引入）：chamber 树不构建/不执行它们——运行时
+  # 由 bundle:dsh 的独立安装树自带（见 packages/desktop/scripts/bundle-dsh.mjs
+  # 的 ALLOW_BUILDS 评审清单）。显式否认，避免 pnpm 报 ignored builds。
+  # node-pty 同时作为根 devDependency 提升到根 node_modules（见 package.json），
+  # 仅作 dsh-subprocess-local postinstall 的 import.meta.resolve 解析目标
+  # （配合 ensure-harness-vendor.mjs 的快照解析 shim）；构建仍否认——本树
+  # 不需要其原生二进制。
+  "node-pty": false
+  "koffi": false
+  "protobufjs": false
+  "@google/genai": false
+
+# app-builder-lib 26.15.3 声明 @electron/get@^3.0.0，但 3.0.0 缺少其代码引用的
+# ElectronDownloadCacheMode 导出（3.1.0 才有）；锁文件在 3.1.0 发布前生成，
+# pnpm 不会在满足范围内重解析，故显式钉住。electron 自身依赖的 v5 不受影响。
+overrides:
+  "@electron/get@^3.0.0": "3.1.0"

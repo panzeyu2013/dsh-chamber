@@ -1,0 +1,79 @@
+{
+  "name": "@dsh-chamber/desktop",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "main.ts",
+  "scripts": {
+    "dev": "node ./scripts/electron-dev.mjs",
+    "bundle:dsh": "node scripts/bundle-dsh.mjs",
+    "build:control-plane": "node scripts/build-control-plane.mjs",
+    "build:preload": "node scripts/build-preload.mjs",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win --x64"
+  },
+  "dependencies": {
+    "@dsh-chamber/control-plane": "workspace:^"
+  },
+  "devDependencies": {
+    "electron": "43.4.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.dshchamber.desktop",
+    "productName": "dsh-chamber",
+    "afterPack": "./scripts/after-pack-adhoc-sign.mjs",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.ts",
+      "preload.cts",
+      "transport-provider.ts",
+      "transport-manager.ts",
+      "ssh-provider.ts",
+      "ssh-config.ts",
+      "dist/**/*",
+      "package.json",
+      "!node_modules/@dsh-chamber/control-plane/**",
+      "!vendor/**",
+      "!scripts/**",
+      "!README.md"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor",
+        "to": "vendor"
+      }
+    ],
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "differentialPackage": false
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ]
+    }
+  }
+}

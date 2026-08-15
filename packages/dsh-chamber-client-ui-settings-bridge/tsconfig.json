@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "lib/types",
+    "paths": {
+      "@dsh-chamber/dsh-client-ui-sidebar/shared": [
+        "./src/ambient/chamber-bridge.d.ts"
+      ],
+      "@dsh-chamber/dsh-client-ui-settings-connections/src/client/ConnectionsSection.tsx": [
+        "./src/ambient/connections-section.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "test"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/vendor/**",
+    "../dsh-chamber-client-ui-sidebar"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist",
+    "declaration": false,
+    "sourceMap": false,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["preload.cts"]
+}

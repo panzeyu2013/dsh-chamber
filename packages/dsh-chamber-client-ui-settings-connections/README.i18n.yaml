@@ -1,0 +1,9 @@
+# Bilingual-pair consistency record: the sha-256 file content hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal
+# authority; after editing either side, bring the other along and update both
+# hashes here (manually verified with `shasum -a 256`).
+# Chamber package (design 05 §5): created on 2026-08-15 with the 1a spec
+# sweep — descriptions of the self-built connections settings section
+# (zh = key source).
+README.md: a400c4ee87adc21f4bb5672086be2c1489e71d2d9a66db5328d8f78e7be463bd
+README.zh.md: ab811e1d2ec4f19e607767177e2c6b3424af6948115379a903aa3f56205777cb

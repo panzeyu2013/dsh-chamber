@@ -1,0 +1,19 @@
+# Normalize all text files to LF in the repository, regardless of the
+# contributor's OS or git config. Prevents whole-file CRLF commits from
+# Windows environments.
+* text=auto eol=lf
+
+# Windows scripts must keep CRLF on checkout.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.zip binary
