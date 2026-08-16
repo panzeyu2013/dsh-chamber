@@ -69,6 +69,28 @@
 
 以下为 2026-08 仓库评审发现问题的修复（均已含测试或构建验证）：
 
+- **浏览器来源边界**：管理 API/实例 HTTP 在路由前校验 loopback Host 与
+  Origin，WS 在 upgrade 转发前复用同一判定（403 `origin_forbidden`）；
+  不再把“无 CORS 响应头”误当成 simple POST/WS 防线，并拒绝同源 DNS
+  rebinding Host。回归测试覆盖恶意 `text/plain` POST 无副作用、恶意 WS 在
+  代理前拒绝与非 loopback Host。
+- **Electron IPC sender/导航边界**：全部 `dsh-chamber:info` / `desktop_ssh_*`
+  handler 校验当前主窗口 mainFrame + 精确控制面 origin；窗口禁止 popup，
+  `will-navigate` / `will-redirect` 禁止跨 origin。纯信任谓词含单测；
+  preload 引导期 `dsh-chamber:info` 短重试（≤10×50ms）消化 mainFrame URL
+  提交前的时序拒绝，不弱化门禁。
+- **catalog 持久化失败传播**：JSON store 改为同步 write-through，写盘失败
+  回滚内存并抛 `json_store_persist_failed`（接口注释明确同步 throw 语义）；
+  catalog 行读取返回 clone、更新走不可变事务，消除“内存成功/磁盘失败”假
+  成功。单测覆盖 store 与同步 catalog 调用的失败回滚。
+- **排队会话打开结果闭环**：shell 未 boot 时的 open 保存原 Promise，只有
+  runtime dispatch 成功才 resolve；dispatch/boot/dispose/68s 超时均 reject
+  （dispatch 同步 throw 也显式 reject，绝不悬挂），不再提前成功后仅
+  console 报错。纯队列单测覆盖成功、失败、同步 throw、释放与超时。
+- **桌面应用图标**：`packages/desktop/resources/`（icns/ico/icons）接入
+  mac/win/linux 打包图标；`resources/icon.png` 经 extraResources 映射进
+  `process.resourcesPath/icon.png`，打包态托盘图标落位（原先仅兜底跳过）。
+
 - **反代上游超时（设计 03 §3.3 的 504 落地）**：`instance-proxy.ts` 增加
   `UPSTREAM_TIMEOUT_MS`（10s，可注入）——上游静默（响应头等不到 / 非 SSE
   body 停顿）→ 显式 504 `upstream_timeout` + abort，不再无限挂住请求；

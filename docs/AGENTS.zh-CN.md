@@ -65,7 +65,7 @@ dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web
 ## 验证
 
 - 以 `package.json` 脚本为命令事实源（用 `pnpm run` 运行）。
-- 单测（与 CI 同一套）：控制面 `node packages/control-plane/test/protocol.ts`、`storage.ts`、`m1-dsh-client.ts`、`host-logs.ts`、`manager-api.ts`、`instance-proxy.ts`；桌面 `pnpm run test:desktop`（transport-manager / ssh-provider / ssh-config）；客户端插件 `pnpm run test:sidebar` + `pnpm run test:settings-bridge`。
+- 单测（与 CI 同一套）：控制面 `node packages/control-plane/test/protocol.ts`、`storage.ts`、`m1-dsh-client.ts`、`host-logs.ts`、`manager-api.ts`、`instance-proxy.ts`；桌面 `pnpm run test:desktop`（transport-manager / ssh-provider / ssh-config / renderer-trust）；renderer shell `pnpm run test:renderer-shell`；客户端插件 `pnpm run test:sidebar` + `pnpm run test:settings-bridge`。
 - 客户端插件类型检查：`pnpm run typecheck:sidebar`、`typecheck:connections`、`typecheck:settings-bridge`（根 `typecheck` 程序**不包含**自研插件——ambient `declare module` 条目将其遮蔽）。
 - 集成：`pnpm run smoke`（dsh 未安装时自动 SKIP——正常）。
 - 前端：`pnpm run build:renderer` 必须成功（vite 构建 dsh workspace 源码）。

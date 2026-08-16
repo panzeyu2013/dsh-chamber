@@ -67,7 +67,7 @@ Read the matching design and progress documents before changing a module:
 ## Validation
 
 - Use `package.json` scripts as the command source of truth (run with `pnpm run`).
-- Unit tests (the exact set CI runs): control-plane `node packages/control-plane/test/protocol.ts`, `storage.ts`, `m1-dsh-client.ts`, `host-logs.ts`, `manager-api.ts`, `instance-proxy.ts`; desktop `pnpm run test:desktop` (transport-manager / ssh-provider / ssh-config); client plugins `pnpm run test:sidebar` + `pnpm run test:settings-bridge`.
+- Unit tests (the exact set CI runs): control-plane `node packages/control-plane/test/protocol.ts`, `storage.ts`, `m1-dsh-client.ts`, `host-logs.ts`, `manager-api.ts`, `instance-proxy.ts`; desktop `pnpm run test:desktop` (transport-manager / ssh-provider / ssh-config / renderer-trust); renderer shell `pnpm run test:renderer-shell`; client plugins `pnpm run test:sidebar` + `pnpm run test:settings-bridge`.
 - Client plugin type checks: `pnpm run typecheck:sidebar`, `typecheck:connections`, `typecheck:settings-bridge` (the root `typecheck` program does NOT include the self-built plugins — ambient `declare module` entries shadow them).
 - Integration: `pnpm run smoke` (auto-SKIPs when dsh is not installed — normal).
 - Frontend: `pnpm run build:renderer` must succeed (vite build over the dsh workspace source).

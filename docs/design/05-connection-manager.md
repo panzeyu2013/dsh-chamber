@@ -210,8 +210,10 @@ export const chamberBridge: {
   不支持 content-visibility 的浏览器降级为保留 layout 的 visibility 方案
   （同样无闪烁）（styles.css `.instance-view.instance-hidden`）。
 - `openInstanceSession(sourceId, sessionId)`（shell.ts）：boot 未就绪先入队，
-  settle 后经 `AppWebEntry.runtimeCtx.sessions`（拷贝包 seam，§6）分发打开；
-  每实例 boot 串行（`__DSH_BASE_PATH__` 窗口旋钮在 boot 期间独占）。
+  原调用 Promise 保持 pending；settle 后经 `AppWebEntry.runtimeCtx.sessions`
+  （拷贝包 seam，§6）分发，只有 runtime 接受才 resolve，dispatch/boot/dispose/
+  68s 总等待超时均 reject；每实例 boot 串行（`__DSH_BASE_PATH__` 窗口旋钮在
+  boot 期间独占）。
 - 当前来源判定：chamber-entry 在每次 boot 时注入 `ctx.chamberInstanceId`
   （与 `__DSH_BASE_PATH__` 同节奏的模块级变量；注入经
   `renderer/src/chamber-knob.ts`——shell.ts 在 boot 期间
@@ -312,7 +314,7 @@ export const chamberBridge: {
 ### 7.4 IPC（preload 白名单，不变）
 
 - `dsh-chamber:info`；`desktop_ssh_instances_get/set`（spec 含 kind/sshPort 与
-  serviceName）、`desktop_ssh_set_password`（内存级密码，§8）、
+  serviceName）、`desktop_ssh_set_password`（主进程内存 + 0600 明文文件兜底，§8）、
   `desktop_ssh_config_list`（`~/.ssh/config` 非秘密投影）、
   `desktop_ssh_connect/disconnect/status/logs/logs_clear`、
   `desktop_ssh_start_service/stop_service/is_active`（systemctl，serviceName
@@ -320,6 +322,11 @@ export const chamberBridge: {
   即时投影）、`desktop_ssh_instances_changed` 推送（注册表增删改后即时
   重拉 roster；renderer 另有 30s 轮询兜底）。
 - 传输 URL 永不进 renderer；renderer 只见 localPort/phase 投影（含 `kind`）。
+- 所有 `dsh-chamber:info` / `desktop_ssh_*` invoke 必须同时满足：sender 是当前
+  主窗口 WebContents、senderFrame 是其 mainFrame、frame URL 精确属于当前
+  控制面 origin；否则抛 `ipc_sender_forbidden`。窗口拒绝新窗口，并在
+  `will-navigate` / `will-redirect` 阶段阻断离开控制面 origin，防止 preload
+  主机能力暴露给被导航页面。
 
 ### 7.5 本地实例
 
@@ -384,8 +391,9 @@ export const chamberBridge: {
   IPC 门禁处**显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
   通用路径。
 - systemctl 以参数数组 spawn（无 shell 拼接）+ serviceName 白名单；
-- 控制面 HTTP 监听仅 loopback——v1 无认证边界，不变量靠监听面与 CORS
-  （仅回环 origin + 显式 allowlist）维持。
+- 控制面 HTTP 监听仅 loopback——v1 无认证边界，不变量靠监听面与 HTTP/WS
+  来源门禁（Host 仅 loopback authority；Origin 仅回环、`null` + 显式
+  allowlist；非法来源在副作用/转发前 403）维持。
 
 ## 9. 分期
 

@@ -68,8 +68,9 @@
   `dshPort` 在就绪后写入；控制面在文件里只持久化 `label / accentColor`
   （用户可改项），运行态字段以内存 / PlaneHandle 为准（01 §6 原则 4：
   宿主事实只服务、不背书）。
-- **原子写**：串行变更队列 + `tmp + fsync + rename`；损坏 → 大声失败
-  （绝不冒充空行）并从备份恢复（04 §6 同一协议）。
+- **原子写**：同步 write-through 事务 + `tmp + fsync + rename`；只有写盘成功
+  才发布新内存文档，失败回滚并向调用者抛错；损坏 → 大声失败（绝不冒充
+  空行）并从备份恢复（04 §6 同一协议）。
 
 #### 2.1.1 CRUD 语义（管理面端点全表见 04 §3.2）
 
@@ -108,7 +109,8 @@
   **隧道 URL 永不进 renderer**——renderer 只见 localPort / phase 投影
   （05 §7.4）。
 - **IPC 白名单**（renderer ↔ main，preload 限定）：
-  `desktop_ssh_instances_get/set`、`desktop_ssh_set_password`（内存级密码，
+  `desktop_ssh_instances_get/set`、`desktop_ssh_set_password`（主进程内存 +
+  0600 明文文件兜底，
   05 §8 例外）、`desktop_ssh_config_list`（`~/.ssh/config`
   自动发现，非秘密投影：alias/hostName/user/port；IdentityFile/ProxyCommand/
   凭据绝不进 renderer）、`desktop_ssh_connect/disconnect/status/
@@ -163,10 +165,13 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 
 ### 3.2 可达性（v1 无认证边界）
 
-- v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 与管理面 `/api/*` 一律**匿名
-  可达**（HTTP 与 WS upgrade 同一语义）——暴露面不变量靠控制面监听仅
-  loopback（127.0.0.1）+ CORS（仅回环 origin 与显式 allowlist）维持
-  （05 §8 / 04 D2）；
+- v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 与管理面 `/api/*` 对获准来源
+  **匿名可达**；控制面在任何 HTTP 路由/副作用前、以及 WS upgrade 转发前
+  校验 Host（必须为 loopback authority）与 Origin（仅回环 origin、`null` 与
+  显式 allowlist），非法来源统一 403 `origin_forbidden`；Host 门禁覆盖浏览器
+  同源 DNS rebinding 读。不能只省略 CORS 响应头：那会阻止读取，却挡不住
+  simple request 副作用；WS 本身也不受浏览器 CORS 响应处理约束。暴露面同时
+  保持 loopback（127.0.0.1）监听（05 §8 / 04 D2）；
 - 静态壳（`/`、dist、`/assets/*`、`/manifest.json`）匿名加载，无敏感面；
 - 不再有认证/审计中间件（`/api/auth/*`、`/api/audit` 随 v1 收敛整体移除）。
 

@@ -44,8 +44,11 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 
 - v1 收敛移除全部认证/审计面（`/api/auth/*`、`/api/passkeys*`、`/api/audit`
   及 cookie/bearer 门禁）——管理面 `/api/*` 与反代面 `/api/i/*` 一律匿名；
-- 暴露面不变量：控制面 HTTP 仅监听 loopback（127.0.0.1），跨源访问受
-  CORS（仅回环 origin + 显式 `corsOrigins` allowlist）约束（05 §8）。
+- 暴露面不变量：控制面 HTTP 仅监听 loopback（127.0.0.1）；API/upgrade 的
+  Host 必须是 loopback authority（拒绝 DNS rebinding），HTTP 在路由与
+  body/副作用前、WS 在 upgrade 转发前再执行同一 Origin 门禁（仅回环 origin、
+  `null` + 显式 `corsOrigins` allowlist），非法来源 403 `origin_forbidden`。
+  响应不带 CORS 头本身不是写操作防线。
 
 ### D3 · 连接唯一：catalog 单行（local）
 
@@ -140,6 +143,7 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 | `connection_invalid_input` | 400 | label / accentColor 校验失败 |
 | `connection_not_found` | 404 | GET 无连接行 |
 | `connection_busy` | 409 | restarting 等过渡态中拒绝停止 |
+| `origin_forbidden` | 403 | HTTP/WS 的浏览器 Origin 不在本机/显式 allowlist |
 | `invalid_argument` | 400 | host-logs 参数非法 |
 | `not_found` | 404 | host-logs 无托管记录/日志文件；未知路径 |
 | `internal` | 500 | 兜底（脱敏消息） |
@@ -162,11 +166,13 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 ### 4.2 错误码（v1 无门禁）
 
-> v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 匿名可达（仅 loopback 监听，
-> 03 §3.2 / 05 §8），不再有 401 认证失败面。
+> v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 对获准来源匿名可达（仅
+> loopback 监听 + HTTP/WS 来源门禁，03 §3.2 / 05 §8），不再有 401 认证
+> 失败面。
 
 | 情形 | 结果 |
 |---|---|
+| Origin 非回环、非 `null` 且不在 allowlist | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
 | 实例 phase != ready（无隧道 / 未就绪） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
 | 上游连接拒绝 / 超时 | 502 / 504 `{error, code:'upstream_failed'}`（脱敏） |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
@@ -224,9 +230,10 @@ interface WebBootGraph {
 | JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, label, host, user, remotePort, serviceName}` | 桌面主进程（03 §2.2） |
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
-- **原子写协议**（connections.json）：单条串行化队列 + `tmp + fsync +
-  rename`；损坏 → 回退备份并进入显式 recovery 态，绝不冒充空行
-  （03 §2.1 同款）。
+- **原子写协议**（connections.json）：同步 write-through + `tmp + fsync +
+  rename`；成功后才发布内存状态，失败回滚并抛出
+  `json_store_persist_failed`，任何 catalog/API 调用都不得回报成功；损坏 →
+  回退备份并进入显式 recovery 态，绝不冒充空行（03 §2.1 同款）。
 - **v2/v1 存储删除项**：`project-catalog.json`、`connection-profiles.json`、
   `project-session-bindings.json`、`jwt-secret`、`ui-passkeys.json` 及 SQLite
   的 sessions / interactions / goals / scheduled_tasks / session_folders /

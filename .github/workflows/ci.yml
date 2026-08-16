@@ -45,6 +45,8 @@ jobs:
           node packages/control-plane/test/instance-proxy.ts
       - name: Desktop unit tests (transport / ssh)
         run: pnpm run test:desktop
+      - name: Renderer shell unit tests
+        run: pnpm run test:renderer-shell
       - name: Client plugin type checks (sidebar / connections / settings-bridge)
         run: |
           pnpm run typecheck:sidebar
