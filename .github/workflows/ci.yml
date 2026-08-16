@@ -59,8 +59,11 @@ jobs:
       - name: Renderer build
         run: pnpm run build:renderer
 
-  # macOS desktop packaging; smoke then runs against the freshly bundled dsh
-  # runtime (real SMOKE PASS instead of the ubuntu job's SKIP).
+  # macOS desktop packaging. v1 ships arm64 only: macos-latest is an Apple
+  # Silicon runner and macos-13, the last public Intel x64 runner, was retired
+  # by GitHub (see release.yml for the same decision). Smoke then runs against
+  # the freshly bundled dsh runtime (real SMOKE PASS instead of the ubuntu
+  # job's SKIP).
   build-macos:
     runs-on: macos-latest
     steps:

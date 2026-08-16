@@ -1,12 +1,13 @@
 name: Release
 
-# Tag-triggered (v*) or manual (workflow_dispatch) multi-platform desktop
-# release, modeled on OpenChamber's release.yml: an ubuntu job creates a
-# draft GitHub Release first, per-platform jobs upload their artifacts into
-# it, and a finalize job flips the draft to public. macOS builds on native
-# arm64 + x64 runners (each runner's bundle:dsh bakes that platform's dsh
-# runtime); Windows builds on windows-2022 (windows-latest's VS 18 toolchain
-# is not detected correctly by the node-gyp stack — same finding as
+# Tag-triggered (v*) or manual (workflow_dispatch) desktop release, modeled
+# on OpenChamber's release.yml: an ubuntu job creates a draft GitHub Release
+# first, per-platform jobs upload their artifacts into it, and a finalize job
+# flips the draft to public. macOS v1 ships arm64 ONLY: macos-13, the last
+# public Intel x64 runner, was retired by GitHub — its matrix leg stuck
+# queued forever in every v0.1.0 run (Intel Macs are unsupported in v1, see
+# STATUS.md). Windows builds on windows-2022 (windows-latest's VS 18
+# toolchain is not detected correctly by the node-gyp stack — same finding as
 # OpenChamber). No Apple Developer ID / notarization secrets are configured:
 # the macOS app is ad-hoc signed by the afterPack hook (structurally valid
 # signature, so no "app is damaged" on Gatekeeper-relaxed systems; a default
@@ -71,20 +72,12 @@ jobs:
 
   build-macos:
     needs: create-release
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Public GitHub-hosted macOS runner labels only (OpenChamber 踩坑：
-          # 非公开标签 macos-26 / macos-15-intel 会找不到 runner 而失败)。
-          # arm64 → macos-14（公开 arm64 标签）；x64 → macos-13（公开 x64 标签）。
-          - runner: macos-14
-            arch: arm64
-            platform: darwin-arm64
-          - runner: macos-13
-            arch: x64
-            platform: darwin-x64
+    # Public arm64 runner label only (OpenChamber 踩坑：非公开标签
+    # macos-26 / macos-15-intel 会找不到 runner 而失败)。v1 ships arm64 only:
+    # macos-13, the last public x64 runner, is retired, and bundle:dsh bakes
+    # the host platform's dsh runtime, so x64 cannot be cross-built on an
+    # arm64 runner without Rosetta toolchain work (deferred, see STATUS.md).
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -103,14 +96,14 @@ jobs:
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
 
-      - name: Build and package macOS app
+      - name: Build and package macOS app (arm64)
         # electron-builder runs the afterPack hook
         # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
         # signs the bundle before the dmg is built (no Apple signing /
         # notarization secrets are configured).
         run: |
           pnpm run build:desktop
-          pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --${{ matrix.arch }} --publish=never
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=never
 
       - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
         # No Apple Developer ID / notarization secrets are configured; the

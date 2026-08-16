@@ -160,7 +160,7 @@ The packaged app lands in `packages/desktop/release/` (electron-builder `directo
 ### 7 · CI and releases
 
 - `.github/workflows/ci.yml` runs on every push/PR: validation chain (frozen install → typecheck → i18n → control-plane unit tests → smoke → renderer build) plus per-platform desktop packaging sanity checks (macOS `dist:desktop:mac` + real smoke; Windows `dist:desktop:win` on `windows-2022`).
-- `.github/workflows/release.yml` creates the distributable release: push a `v*` tag (or run it manually with a version + optional dry-run). It creates a draft GitHub Release, builds macOS arm64 + x64 on native runners and Windows x64 on `windows-2022`, uploads the artifacts into the draft, then flips it to public.
+- `.github/workflows/release.yml` creates the distributable release: push a `v*` tag (or run it manually with a version + optional dry-run). It creates a draft GitHub Release, builds macOS arm64 (v1 ships Apple Silicon only — the last public Intel x64 runner, macos-13, was retired by GitHub; see `docs/progress/STATUS.md`) and Windows x64 on `windows-2022`, uploads the artifacts into the draft, then flips it to public.
 - Both workflows bootstrap the vendored dsh source tree from the pinned `harness.commit` before install (see section 2).
 
 ## Server-side deployment

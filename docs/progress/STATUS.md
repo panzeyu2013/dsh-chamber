@@ -111,6 +111,14 @@
   --strict` 防回归。已本地端到端验证：钩子产物
   `Identifier=com.dshchamber.desktop`、`_CodeSignature/CodeResources` 存在、
   verify 通过。治本仍为 Developer ID + 公证（secrets 未配置）。
+- **macOS v1 仅 arm64（2026-08-16）**：GitHub 退役最后一个公开 Intel
+  runner `macos-13` 后，release.yml 的 x64 矩阵腿在 v0.1.0 全部 5 次运行中
+  均排队等不到 runner（finalize 因 needs 不满足从未触发，release 为手动
+  发布；资产只有 arm64 DMG + Windows exe）。决策：**v1 放弃 macOS x64**，
+  release.yml 移除矩阵改为单一 `macos-14` arm64 构建（ci.yml 本就只出
+  arm64），Intel Mac 暂不支持（README 中英已注明）。恢复 x64 的路径（未
+  排期）：自托管 Intel runner；或 arm64 runner 上 Rosetta 交叉构建
+  （bundle:dsh 的 darwin-x64 原生模块需在 Rosetta 下编译，可行性未验证）。
 
 ## 范围决策与剩余偏差（不做 / 推迟 / 移出）
 
