@@ -351,7 +351,7 @@ Environment=DSH_PERMISSION_MODE=workspace-write
 # 行的远程 darwin/win32 或有显示会话的 linux 宿主会解析 native，此时
 # host.listDirectory 返回 directory-picker-unavailable、新建工作区对话框
 # 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。
-Environment=SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0
+Environment="SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0"
 NoNewPrivileges=true
 PrivateTmp=true
 
