@@ -28,6 +28,7 @@
  */
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage } from 'electron';
+import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +39,7 @@ import type { TransportManager } from './transport-manager.ts';
 import { sshProvider } from './ssh-provider.ts';
 import { configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
+import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 
 // Main-process safety net: a stray stream/socket error (e.g. an ECONNRESET
 // from a peer that went away mid-request) must never wedge startup behind a
@@ -225,13 +227,24 @@ if (!gotTheLock) {
     // Capture the non-null control plane before registering closures over it
     // (the handler runs later, after startup).
     const cp = controlPlane;
-    ipcMain.handle('dsh-chamber:info', () => ({
+    const rendererOrigin = `http://127.0.0.1:${cp.port}`;
+    const trustedIpc = (handler: (...args: any[]) => any) =>
+      (event: IpcMainInvokeEvent, ...args: any[]) => {
+        const win = mainWindow;
+        if (win === null || win.isDestroyed() || !isTrustedIpcSender(event, win.webContents, rendererOrigin)) {
+          const error = new Error('forbidden IPC sender') as Error & { code?: string };
+          error.code = 'ipc_sender_forbidden';
+          throw error;
+        }
+        return handler(...args);
+      };
+    ipcMain.handle('dsh-chamber:info', trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
       dshWorkspace,
       dshVersion: readDshVersion(dshWorkspace),
       dshHome: path.join(app.getPath('userData'), 'dsh-home'),
       version,
-    }));
+    })));
 
     maybeCreateTray(controlPlane);
 
@@ -295,8 +308,8 @@ if (!gotTheLock) {
       }
     });
 
-    ipcMain.handle('desktop_ssh_instances_get', () => sm.listInstances());
-    ipcMain.handle('desktop_ssh_instances_set', (_event, instances) => {
+    ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => sm.listInstances()));
+    ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
       const before = new Set(sm.listInstances().map(instance => instance.id));
       const saved = sm.saveInstances(instances);
       // A removed instance's in-memory password dies with its registry entry
@@ -311,7 +324,7 @@ if (!gotTheLock) {
         mainWindow.webContents.send('desktop_ssh_instances_changed');
       }
       return saved;
-    });
+    }));
     // Password auth (design 05 §8, plaintext-file fallback): the password is
     // held in MAIN-PROCESS memory and mirrored to <userData>/ssh-passwords.json
     // (0600, atomic write, loaded at startup) so password-only hosts
@@ -321,7 +334,7 @@ if (!gotTheLock) {
     // entry). The IPC is the platform gate: Win32-OpenSSH askpass support is
     // not reliable, so Windows refuses password auth loudly (keys/agent
     // remain the universal path) instead of silently failing at connect time.
-    ipcMain.handle('desktop_ssh_set_password', (_event, { id, password }) => {
+    ipcMain.handle('desktop_ssh_set_password', trustedIpc(({ id, password }) => {
       if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
         return { error: 'invalid or unknown instance id' };
       }
@@ -330,32 +343,32 @@ if (!gotTheLock) {
       }
       setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
       return { ok: true };
-    });
+    }));
     // ~/.ssh/config discovery (design 05 §5): non-secret host projections
     // only (alias/hostName/user/port) — keys/proxies/credentials never leave
     // the main process.
-    ipcMain.handle('desktop_ssh_config_list', () => discoverSshConfigHosts());
-    ipcMain.handle('desktop_ssh_connect', (_event, { id }) => sm.connect(id));
-    ipcMain.handle('desktop_ssh_disconnect', (_event, { id }) => {
+    ipcMain.handle('desktop_ssh_config_list', trustedIpc(() => discoverSshConfigHosts()));
+    ipcMain.handle('desktop_ssh_connect', trustedIpc(({ id }) => sm.connect(id)));
+    ipcMain.handle('desktop_ssh_disconnect', trustedIpc(({ id }) => {
       sm.disconnect(id);
       return sm.status(id);
-    });
-    ipcMain.handle('desktop_ssh_status', (_event, { id }) => sm.status(id));
-    ipcMain.handle('desktop_ssh_logs', (_event, { id }) => sm.logs(id));
-    ipcMain.handle('desktop_ssh_logs_clear', (_event, { id }) => sm.clearLogs(id));
+    }));
+    ipcMain.handle('desktop_ssh_status', trustedIpc(({ id }) => sm.status(id)));
+    ipcMain.handle('desktop_ssh_logs', trustedIpc(({ id }) => sm.logs(id)));
+    ipcMain.handle('desktop_ssh_logs_clear', trustedIpc(({ id }) => sm.clearLogs(id)));
     // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
     // status projection on success (serviceActive included), {error} on
     // failure — loud, never a silent empty success, never an unhandled
     // rejection.
-    ipcMain.handle('desktop_ssh_start_service', (_event, { id }) =>
+    ipcMain.handle('desktop_ssh_start_service', trustedIpc(({ id }) =>
       sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
-    );
-    ipcMain.handle('desktop_ssh_stop_service', (_event, { id }) =>
+    ));
+    ipcMain.handle('desktop_ssh_stop_service', trustedIpc(({ id }) =>
       sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
-    );
-    ipcMain.handle('desktop_ssh_is_active', (_event, { id }) =>
+    ));
+    ipcMain.handle('desktop_ssh_is_active', trustedIpc(({ id }) =>
       sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
-    );
+    ));
 
     mainWindow = new BrowserWindow({
       width: 1280,
@@ -378,6 +391,16 @@ if (!gotTheLock) {
     // page-title-updated，不 preventDefault 则原生标题栏仍会跟随会话切换。
     mainWindow.on('page-title-updated', (event) => {
       event.preventDefault();
+    });
+    // The preload exposes host-impacting IPC. Keep it confined to the exact
+    // control-plane document: deny popups and cancel cross-origin navigation
+    // or redirects before another page can receive the same preload bridge.
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+      if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
+    });
+    mainWindow.webContents.on('will-redirect', (event, url) => {
+      if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
     });
     mainWindow.on('closed', () => {
       mainWindow = null;

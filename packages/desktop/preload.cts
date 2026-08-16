@@ -17,8 +17,9 @@ export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
   instances_set(instances: SshInstanceInput[]): Promise<SshInstanceSpec[]>
   /**
-   * Store the SSH password for one instance in main-process memory ONLY
-   * (design 05 §8): never persisted, never logged; '' / null clears it.
+   * Forward the SSH password to the main process, which holds it in memory
+   * and mirrors it to the documented 0600 password store (design 05 §8).
+   * The value is never returned or logged; '' / null clears it.
    * Resolves {ok:true} or {error} (unknown id / platform not supported).
    */
   set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
@@ -90,7 +91,35 @@ function desktopSshApi(): DesktopSshSurface {
   };
 }
 
-ipcRenderer.invoke('dsh-chamber:info').then(
+/**
+ * Fetch the app-info payload for the bridge. The main-process IPC sender
+ * fence (design 05 §7.4) may reject a bootstrap invoke fired before the main
+ * frame has committed its trusted URL (senderFrame/URL timing during initial
+ * load). Retry briefly so the bridge never starts from null info; the fence
+ * still guards every actual request, and the null fallback below remains the
+ * last resort.
+ */
+const INFO_RETRY_MS = 50;
+const INFO_MAX_ATTEMPTS = 10;
+
+function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    const attempt = () => {
+      ipcRenderer.invoke('dsh-chamber:info').then(resolve, (err: unknown) => {
+        if (attempts < INFO_MAX_ATTEMPTS) {
+          attempts += 1;
+          setTimeout(attempt, INFO_RETRY_MS);
+        } else {
+          reject(err);
+        }
+      });
+    };
+    attempt();
+  });
+}
+
+requestAppInfo().then(
   (info: Partial<DshChamberBridge>) => {
     contextBridge.exposeInMainWorld('dshChamber', {
       controlPlaneUrl: info?.controlPlaneUrl,

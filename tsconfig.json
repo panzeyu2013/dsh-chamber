@@ -31,7 +31,9 @@
     "packages/desktop/ssh-provider.ts",
     "packages/desktop/ssh-provider.test.ts",
     "packages/desktop/ssh-config.ts",
-    "packages/desktop/ssh-config.test.ts"
+    "packages/desktop/ssh-config.test.ts",
+    "packages/desktop/renderer-trust.ts",
+    "packages/desktop/renderer-trust.test.ts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }
