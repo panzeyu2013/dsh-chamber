@@ -214,6 +214,10 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
    Environment=DSH_HOME=/var/lib/dsh/dsh-home
    Environment=DSH_TELEMETRY_DISABLED=1
    Environment=DSH_PERMISSION_MODE=workspace-write
+   # Pin the in-app directory browser for chamber's remote deployment. Without
+   # this SSH marker, a Linux host with a display session may resolve the
+   # directory picker to native and make remote workspace selection unusable.
+   Environment="SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0"
    NoNewPrivileges=true
    PrivateTmp=true
 

@@ -207,6 +207,9 @@ pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——d
    Environment=DSH_HOME=/var/lib/dsh/dsh-home
    Environment=DSH_TELEMETRY_DISABLED=1
    Environment=DSH_PERMISSION_MODE=workspace-write
+   # 固定 chamber 远程部署使用应用内目录浏览器。缺少这个 SSH 标记时，带显示
+   # 会话的 Linux 宿主可能把目录选择器解析为 native，导致远程工作区无法选择。
+   Environment="SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0"
    NoNewPrivileges=true
    PrivateTmp=true
 
