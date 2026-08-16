@@ -114,6 +114,31 @@ pnpm run build:renderer                       # 渲染层构建成功
 - 错误处理与命名与邻近代码保持一致。
 - 不做无关重构，保持 diff 聚焦。
 
+## Commit 提交信息
+
+提交遵循 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 约定：
+
+```
+type(scope): subject
+```
+
+- **type（类型）**——取以下之一：`feat`（新功能）、`fix`（缺陷修复）、`chore`（构建/工具/维护）、`docs`、`refactor`、`test`、`ci`、`perf`、`style`（仅格式调整）、`revert`。
+- **scope（范围）**——可选，但建议写受影响的包或领域：`control-plane`、`renderer`、`desktop`、`sidebar`、`settings-bridge`、`cli`、`ci`、`docs`、`packaging`。
+- **subject（主题）**——祈使语气、句末不加句号、≤ 72 字符（用 "fix"，不用 "fixed"；用 "add"，不用 "adds"）。
+- **body（正文）**——改动非自明时，空一行后说明**做了什么、为什么**；适用时引用相关设计/进度文档或 issue 编号。
+- **破坏性变更**——在 type/scope 后加 `!`（如 `feat(desktop)!: ...`）或加 `BREAKING CHANGE:` 脚注，并在正文说明迁移影响。
+
+示例：
+
+```
+feat(control-plane): add per-instance health endpoint
+fix(desktop): await tunnel dispose before quit
+chore(ci): ad-hoc sign the macOS app in the afterPack hook
+docs: document the commit message convention
+```
+
+一次提交只做一件逻辑变更，保持 diff 聚焦；捆绑无关改动的提交应拆分。
+
 ## 范围纪律
 
 - 凡 dsh 宿主、插件生态或复用的 dsh 前端已提供的能力，控制面只做**接入或服务，绝不重造**。

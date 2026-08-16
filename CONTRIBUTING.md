@@ -116,6 +116,31 @@ For changes that touch runtime, auth, protocol, or desktop-shell behavior, add o
 - Keep error handling and naming consistent with neighboring code.
 - No unrelated refactors; keep diffs focused.
 
+## Commit Messages
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+type(scope): subject
+```
+
+- **type** — one of: `feat` (new capability), `fix` (bug fix), `chore` (build/tooling/maintenance), `docs`, `refactor`, `test`, `ci`, `perf`, `style` (formatting only), `revert`.
+- **scope** — optional, but prefer the affected package or area: `control-plane`, `renderer`, `desktop`, `sidebar`, `settings-bridge`, `cli`, `ci`, `docs`, `packaging`.
+- **subject** — imperative mood, no trailing period, ≤ 72 characters ("fix", not "fixed"; "add", not "adds").
+- **body** — when the change is not self-evident, explain the *what* and *why* after a blank line; reference the relevant design/progress document or issue where applicable.
+- **breaking changes** — append `!` after type/scope (e.g. `feat(desktop)!: ...`) or add a `BREAKING CHANGE:` footer, and describe the migration impact in the body.
+
+Examples:
+
+```
+feat(control-plane): add per-instance health endpoint
+fix(desktop): await tunnel dispose before quit
+chore(ci): ad-hoc sign the macOS app in the afterPack hook
+docs: document the commit message convention
+```
+
+One logical change per commit; keep diffs focused. Commits bundling unrelated changes should be split.
+
 ## Scope Discipline
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is **attached or served, never re-implemented**.
