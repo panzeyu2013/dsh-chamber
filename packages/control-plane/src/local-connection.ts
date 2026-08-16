@@ -233,15 +233,18 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
 
   /** Set machine state, persist the connection row, and log. */
   function setState(next: ConnectionState, nextError: string | null = null) {
-    state = next
-    error = nextError
     const row = catalog.getConnection('local')
     if (row !== null) {
       row.status = next
       row.dshPort = dshPort
       row.error = nextError ?? undefined
+      // Catalog is synchronous write-through: publish the live machine state
+      // only after its row commit succeeds. A disk failure therefore leaves
+      // both authorities on the previous transition and propagates loudly.
       catalog.upsertConnection(row)
     }
+    state = next
+    error = nextError
     logger.log(`local connection → ${next}${nextError ? `: ${nextError}` : ''}`)
     // Managed-host rolling log (design 02 §3.8): the host itself stays
     // silent on stdio in the web profile, so lifecycle transitions are the

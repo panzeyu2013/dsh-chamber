@@ -4,11 +4,10 @@
  *
  * Protocol, verbatim from the design:
  *
- * 1. All changes run through a single serialized promise queue (read-modify-
- *    write can never interleave; the shared .tmp path never has two writers).
- *    In-memory applies are atomic within the calling tick — that atomicity is
- *    what lets the catalog expose its synchronous row API on top — while every
- *    disk write and every queued read (getSnapshot) is serialized on the chain.
+ * 1. Mutations are synchronous write-through transactions (read-modify-write
+ *    runs to completion in one JS turn, so the shared .tmp path never has two
+ *    writers). State is published only with a successful disk write; a failed
+ *    persist restores the previous in-memory document and throws to the caller.
  * 2. Backup-first persist: write .bak (writeFileSync + fsync) → write .tmp
  *    (writeFileSync + fsync) → rename onto the main file. If the main write
  *    fails, the backup holds the new document and recovery can take it.
@@ -120,7 +119,18 @@ export interface JsonStoreStatus {
   lastPersistSucceededAt: number | null
 }
 
-/** The store surface returned by createJsonStore(). */
+/**
+ * The store surface returned by createJsonStore().
+ *
+ * Failure semantics: every persistence failure throws synchronously
+ * (JsonStorePersistError) — including from the promise-returning members
+ * mutate/mutateIfMatch/persist, which are plain (non-async) functions that
+ * also throw before returning their promise. Callers must therefore use
+ * try/catch or `await` inside a try block; a bare `.catch()` chain misses
+ * the synchronous throw. mutate/mutateIfMatch additionally roll the
+ * in-memory document back before throwing, so a failed mutation is never
+ * partially applied.
+ */
 export interface JsonStore {
   load(): JsonStoreDocument
   getDoc(): JsonStoreDocument
@@ -152,6 +162,16 @@ export class JsonStoreRevisionConflictError extends Error {
   }
 }
 
+/** A mutation could not be durably committed and was rolled back in memory. */
+export class JsonStorePersistError extends Error {
+  code = 'json_store_persist_failed'
+
+  constructor(filePath: string, cause: unknown) {
+    super(`failed to persist ${filePath}`, { cause })
+    this.name = 'JsonStorePersistError'
+  }
+}
+
 /**
  * Create a JSON document store.
  * @param options - {filePath, logger, initial, onLoadValidate}.
@@ -180,8 +200,6 @@ export function createJsonStore({
 
   /** The in-memory document; null until loaded (reads fall back to a fresh initial clone). */
   let state: JsonStoreDocument | null = null
-  /** Single promise chain serializing every persist and queued read. */
-  let queue: Promise<void> = Promise.resolve()
   /** Diagnostics: timestamp of the last persist where both files were written. */
   let lastPersistSucceededAt: number | null = null
   /** Explicit recovery state: null (healthy) | {source, dropped}. */
@@ -196,13 +214,6 @@ export function createJsonStore({
   /** The initial document, deep-copied so repeated loads never share state. */
   function cloneInitial(): JsonStoreDocument {
     return structuredClone(initial)
-  }
-
-  /** Run `task` on the serialized chain; the chain survives task failures. */
-  function enqueue<T>(task: () => T): Promise<T> {
-    const run = queue.then(task)
-    queue = run.then(() => undefined, () => undefined)
-    return run
   }
 
   /** writeFileSync + fsync: open 'w', write, fsync, close. */
@@ -238,10 +249,10 @@ export function createJsonStore({
    * lastPersistSucceededAt and recoveryState are only touched when both
    * writes succeeded. `options.backupDoc` overrides the backup content (used
    * by in-place migrations, so the backup holds the pre-migration document).
-   * @returns true on success; failures are logged, never thrown — the backup
-   *   holds the document for the next recovery.
+   * Failures are logged and thrown. Callers must never report a mutation as
+   * successful when the durable commit failed.
    */
-  function persistSync(doc: JsonStoreDocument, options: JsonStorePersistOptions = {}): boolean {
+  function persistSync(doc: JsonStoreDocument, options: JsonStorePersistOptions = {}): void {
     try {
       mkdirSync(dirname(filePath), { recursive: true })
       const text = `${JSON.stringify(doc, undefined, 2)}\n`
@@ -253,10 +264,9 @@ export function createJsonStore({
       renameSync(tmpPath, filePath)
       lastPersistSucceededAt = Date.now()
       recoveryState = null
-      return true
     } catch (error) {
       warn(`json-store: failed to persist ${filePath}: ${String(error)}`)
-      return false
+      throw new JsonStorePersistError(filePath, error)
     }
   }
 
@@ -281,9 +291,7 @@ export function createJsonStore({
     if (mainResult !== null) {
       const { doc, dropped: droppedCounts, migrated, backupDoc } = mainResult
       if (migrated) {
-        if (!persistSync(doc, { backupDoc: backupDoc ?? readParsed(filePath) })) {
-          throw new Error(`migration of ${filePath} failed to persist`)
-        }
+        persistSync(doc, { backupDoc: backupDoc ?? readParsed(filePath) })
       }
       return {
         doc,
@@ -326,7 +334,9 @@ export function createJsonStore({
    * concurrent callers can never interleave.
    */
   function apply(mutator: JsonStoreMutator): JsonStoreMutateResult {
-    const doc: JsonStoreDocument = state ?? cloneInitial()
+    // Mutators work on a clone: an in-place mutator cannot corrupt the live
+    // document before the write-through transaction commits.
+    const doc: JsonStoreDocument = structuredClone(state ?? cloneInitial())
     const result = mutator(doc)
     if (!result.changed) return result
     result.next.revision = (doc.revision ?? 0) + 1
@@ -356,24 +366,29 @@ export function createJsonStore({
       return state ?? cloneInitial()
     },
 
-    /** Deep-cloned snapshot through the serialized queue (never the internal doc). */
+    /** Deep-cloned snapshot (never the internal document). */
     getSnapshot() {
-      return enqueue(() => structuredClone(state ?? cloneInitial()))
+      return Promise.resolve(structuredClone(state ?? cloneInitial()))
     },
 
     /**
      * Apply a mutation. The mutator receives the current document and returns
      * {next, changed}; a changed mutation bumps revision by one, swaps the
-     * in-memory document synchronously, and enqueues a backup-first persist.
-     * Resolves with {next, changed} after the persist (if any) finished.
+     * in-memory document, then commits it with a synchronous backup-first
+     * write. A failed write restores the prior state and throws synchronously,
+     * so even legacy synchronous catalog callers cannot ignore the failure.
      */
     mutate(mutator: JsonStoreMutator): Promise<JsonStoreMutateResult> {
+      const previous = state
       const result = apply(mutator)
       if (!result.changed) return Promise.resolve(result)
-      return enqueue(() => {
+      try {
         persistSync(result.next)
-        return result
-      })
+      } catch (error) {
+        state = previous
+        throw error
+      }
+      return Promise.resolve(result)
     },
 
     /**
@@ -391,21 +406,30 @@ export function createJsonStore({
       if (expectedRevision !== undefined && doc.revision !== expectedRevision) {
         return Promise.reject(new JsonStoreRevisionConflictError(expectedRevision, doc.revision))
       }
+      const previous = state
       const result = apply(mutator)
       if (!result.changed) return Promise.resolve(result)
-      return enqueue(() => {
+      try {
         persistSync(result.next)
-        return result
-      })
+      } catch (error) {
+        state = previous
+        throw error
+      }
+      return Promise.resolve(result)
     },
 
     /**
-     * Queue a backup-first persist. `doc` defaults to the current document;
+     * Run a backup-first persist. `doc` defaults to the current document;
      * `options.backupDoc` overrides the .bak content (migrations).
      * @returns a promise resolving with whether both files were written.
      */
     persist(doc: JsonStoreDocument = state ?? cloneInitial(), options: JsonStorePersistOptions = {}): Promise<boolean> {
-      return enqueue(() => persistSync(doc, options))
+      try {
+        persistSync(doc, options)
+        return Promise.resolve(true)
+      } catch (error) {
+        return Promise.reject(error)
+      }
     },
 
     /** Diagnostics projection: loaded/revision/recovery/dropped/persist time. */

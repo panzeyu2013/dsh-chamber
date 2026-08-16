@@ -5,7 +5,7 @@
  * from .bak with an explicit recovery state, double corruption throwing
  * (never a fake-empty), revision increments, If-Match conflicts, legacy
  * (schemaVersion-less) in-place migration, dropped-row counting, and the
- * serialized mutation queue (parallel mutations never interleave).
+ * write-through mutation serialization (parallel call sites never lose updates).
  */
 
 import { test } from 'node:test'
@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createJsonStore, JsonStoreRevisionConflictError } from '../src/json-store.ts'
+import { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../src/json-store.ts'
 import { createCatalog, CATALOG_BACKUP_FILE, CATALOG_FILE } from '../src/catalog.ts'
 import type { CatalogConnectionRow } from '../src/catalog.ts'
 
@@ -41,6 +41,40 @@ test('persist is backup-first: a mutation leaves a valid main and a valid .bak',
   assert.deepEqual(backup, main)
   assert.ok((store.getStatus().lastPersistSucceededAt ?? 0) > 0)
   assert.equal(store.getStatus().recoveryState, null)
+})
+
+test('a failed mutation persist throws and rolls the in-memory document back', t => {
+  const dir = tempDir(t)
+  const blocker = join(dir, 'not-a-directory')
+  writeFileSync(blocker, 'block')
+  const warnings: unknown[] = []
+  const store = createJsonStore({
+    filePath: join(blocker, 'doc.json'),
+    logger: { warn: warning => warnings.push(warning) },
+    initial: { revision: 0, items: [] },
+  })
+  store.load()
+  assert.throws(
+    () => store.mutate((doc: any) => ({ next: { ...doc, items: ['lost'] }, changed: true })),
+    JsonStorePersistError,
+  )
+  assert.deepEqual(store.getDoc(), { revision: 0, items: [] })
+  assert.equal(store.getStatus().lastPersistSucceededAt, null)
+  assert.equal(warnings.length, 1)
+})
+
+test('catalog synchronous row APIs propagate persist failure and keep no phantom row', t => {
+  const dir = tempDir(t)
+  const catalog = createCatalog({ stateDir: dir, logger: silentLogger })
+  catalog.load()
+  rmSync(dir, { recursive: true, force: true })
+  writeFileSync(dir, 'block')
+  assert.throws(
+    () => catalog.upsertConnection({ connectionId: 'local', kind: 'local', status: 'starting' }),
+    JsonStorePersistError,
+  )
+  assert.equal(catalog.getConnection('local'), null)
+  assert.equal(catalog.snapshotHealth().revision, 0)
 })
 
 test('a fresh dir loads the initial document with no recovery state', t => {
@@ -162,7 +196,7 @@ test('invalid rows are dropped with counts surfaced in the recovery state', t =>
   assert.equal(health.recoveryState!.dropped.connections, 4)
 })
 
-test('serialized queue: 50 parallel mutations do not interleave or lose updates', async t => {
+test('write-through transactions: 50 parallel callers do not interleave or lose updates', async t => {
   const dir = tempDir(t)
   const path = join(dir, 'doc.json')
   const store = createJsonStore({ filePath: path, logger: silentLogger, initial: { revision: 0, counter: 0 } })

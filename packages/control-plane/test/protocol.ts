@@ -295,6 +295,27 @@ test('a spawn failure is fail-loud: state lands on error and start() rejects', a
   assert.match(connection.getError() ?? '', /port occupied/)
 })
 
+test('a catalog write failure prevents publishing the next lifecycle state', async () => {
+  let spawns = 0
+  const connection = createLocalConnection({
+    stateDir: '/tmp/none',
+    dshHome: '/tmp/none',
+    dshWorkspacePath: '/tmp/none',
+    catalog: {
+      getConnection: () => ({ connectionId: 'local', status: 'stopped' }),
+      upsertConnection: () => { throw new Error('catalog disk unavailable') },
+    },
+    logger: quietLogger,
+    deps: {
+      spawnDsh: async () => { spawns += 1; return mockSpawn() },
+      describeCapabilities: mockDescribe().describeCapabilities,
+    },
+  })
+  await assert.rejects(connection.start(), /catalog disk unavailable/)
+  assert.equal(connection.getState(), 'stopped')
+  assert.equal(spawns, 0)
+})
+
 test('health failures count into degraded; success resets; threshold triggers a restart', async () => {
   const describe = mockDescribe()
   const connection = createLocalConnection({

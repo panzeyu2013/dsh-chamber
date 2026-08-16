@@ -4,9 +4,9 @@
  * The catalog is the control plane's durable view of what it manages: the
  * local dsh instance — exactly one connection row with connectionId 'local'
  * (design 03 §2.1). Persisted at <stateDir>/catalog.json on top of
- * json-store.ts — the storage protocol from design 04 §6 / 03 §2.1: a
- * serialized mutation queue, backup-first atomic writes (.bak → .tmp+fsync →
- * rename), revision + If-Match (409), an explicit recovery state, and
+ * json-store.ts — the storage protocol from design 04 §6 / 03 §2.1:
+ * synchronous write-through mutations, backup-first atomic writes (.bak →
+ * .tmp+fsync → rename), revision + If-Match (409), an explicit recovery state, and
  * "corrupt is never a fake-empty". A schemaVersion-less file is treated as
  * v1 and migrated in place to v2 at load, with the original v1 document
  * preserved as the .bak (the backup-first protocol handles the ordering).
@@ -19,8 +19,9 @@
  * dshPort are runtime projections written by the host-management layer
  * (03 §2.1: runtime facts are never authoritative in the file).
  *
- * All row APIs stay synchronous (the in-memory apply is atomic within the
- * calling tick; the disk write is enqueued on the store's serialized queue).
+ * All row APIs stay synchronous and write-through: they return only after the
+ * atomic disk commit succeeds; failure rolls the in-memory document back and
+ * throws to the lifecycle/API caller.
  */
 
 import { join } from 'node:path'
@@ -238,8 +239,7 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
     onLoadValidate: validateAndMigrate,
   })
 
-  /** The live document; methods read rows from it (live references, so the
-   * existing in-place row mutation pattern keeps working). */
+  /** Internal live document. Public row readers return clones. */
   function doc(): CatalogDocument {
     return store.getDoc() as unknown as CatalogDocument
   }
@@ -260,28 +260,28 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
 
   /** One connection row by id; null when absent. */
   function getConnection(connectionId: string): CatalogConnectionRow | null {
-    return doc().connections.find(row => row.connectionId === connectionId) ?? null
+    const row = doc().connections.find(candidate => candidate.connectionId === connectionId)
+    return row === undefined ? null : structuredClone(row)
   }
 
   /** All connection rows in registration order. */
   function listConnections(): CatalogConnectionRow[] {
-    return doc().connections
+    return structuredClone(doc().connections)
   }
 
   /**
-   * Insert or update one connection row (replacing its mutable status
-   * fields in place, preserving registration order). Always persists, even
-   * when the row is the same reference already in the document — callers
-   * mutate live rows in place before calling.
+   * Insert or replace one connection row while preserving registration order.
+   * The input is cloned so callers can never mutate the live document before
+   * the write-through transaction commits.
    */
   function upsertConnection(row: CatalogConnectionRow): CatalogConnectionRow {
+    const replacement = structuredClone(row)
     mutateDoc(doc => {
-      const existing = doc.connections.find(candidate => candidate.connectionId === row.connectionId)
-      if (existing === undefined) {
-        return { next: { ...doc, connections: [...doc.connections, row] }, changed: true }
-      }
-      Object.assign(existing, row)
-      return { next: doc, changed: true }
+      const index = doc.connections.findIndex(candidate => candidate.connectionId === row.connectionId)
+      const connections = [...doc.connections]
+      if (index === -1) connections.push(replacement)
+      else connections[index] = replacement
+      return { next: { ...doc, connections }, changed: true }
     })
     return getConnection(row.connectionId) ?? row
   }
@@ -323,8 +323,9 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
     if (getConnection(connectionId) === null) return null
     let changed = false
     mutateDoc(doc => {
-      const target = doc.connections.find(candidate => candidate.connectionId === connectionId)
-      if (target === undefined) return { next: doc, changed: false }
+      const index = doc.connections.findIndex(candidate => candidate.connectionId === connectionId)
+      if (index === -1) return { next: doc, changed: false }
+      const target = { ...doc.connections[index] }
       for (const [key, value] of Object.entries(fields)) {
         if (value === undefined) {
           if (key in target) {
@@ -336,7 +337,10 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
           changed = true
         }
       }
-      return { next: doc, changed }
+      if (!changed) return { next: doc, changed: false }
+      const connections = [...doc.connections]
+      connections[index] = target
+      return { next: { ...doc, connections }, changed: true }
     })
     return { row: getConnection(connectionId), updated: changed }
   }
