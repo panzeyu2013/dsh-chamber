@@ -436,10 +436,25 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         // WS upgrade dispatcher (design 03 §3.1/§3.2): the instance proxy
         // handles /api/i/<id>/api/events.mux|host — explicit rejections
         // only, never a silent drop.
-        server.on('upgrade', (req, socket, head) => void instanceProxy.handleUpgrade(req as never, socket as never, head).catch((error: unknown) => {
-          logger.error(`upgrade handler failure: ${String(error)}`)
-          socket.destroy()
-        }))
+        server.on('upgrade', (req, socket, head) => {
+          // WebSocket ignores browser CORS response handling. Apply the same
+          // origin fence before the proxy replaces Host and strips browser
+          // markers; otherwise the upstream sees a trusted loopback request.
+          if (!api.getCorsHeaders(req as ApiRequest).allowed) {
+            socket.end(
+              'HTTP/1.1 403 Forbidden\r\n'
+              + 'Content-Type: application/json\r\n'
+              + 'Connection: close\r\n'
+              + '\r\n'
+              + '{"error":"request origin is not allowed","code":"origin_forbidden"}',
+            )
+            return
+          }
+          void instanceProxy.handleUpgrade(req as never, socket as never, head).catch((error: unknown) => {
+            logger.error(`upgrade handler failure: ${String(error)}`)
+            socket.destroy()
+          })
+        })
         server.once('error', reject)
         server.listen(port, host, () => {
           const address = server!.address()

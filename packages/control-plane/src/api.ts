@@ -28,12 +28,13 @@
  * session business belongs to the dsh frontend runtime, consumed through the
  * instance proxy.
  *
- * CORS (loopback-only + explicit allowlist — the only cross-origin control
- * in v1): cross-origin requests are
+ * Browser-origin fence (loopback-only + explicit allowlist — the only
+ * cross-origin control in v1): cross-origin requests are
  * allowed only from loopback origins (127.0.0.1/localhost/::1 — the web dev
  * server and same-machine surfaces), from the Electron file:// shell
  * (Origin: null), and from the configured `corsOrigins` allowlist; every
- * other origin gets no CORS headers (the browser blocks the read). Unknown
+ * other origin is rejected with 403 before routing (blocking reads and
+ * simple-request side effects). Unknown
  * paths answer 404 {error:'not_found'}; a body that is not JSON answers 400
  * {error:'bad_request'}.
  */
@@ -150,12 +151,23 @@ export interface ApiSurface {
 /**
  * The per-request CORS decision: {allowed, headers?}. Same-origin/CLI requests
  * (no Origin) need no CORS headers at all; allowed cross-origin requests get
- * the reflected origin + credentials; disallowed origins get neither (the
- * browser blocks the response body — the actual enforcement).
+ * the reflected origin + credentials; disallowed origins get neither and
+ * are rejected by handle() before routing.
  * @param req - the request carrying the Origin header.
  * @param allowlist - configured explicit origins (deps.corsOrigins).
  */
 function corsFor(req: ApiRequest, allowlist: string[]) {
+  // Bind the browser-visible authority to this loopback service as well as
+  // the initiator Origin. A DNS-rebound page is same-origin from the
+  // browser's perspective and may omit Origin on reads, but its Host still
+  // names the attacker's domain and cannot be forged by page script.
+  const host = req.headers.host
+  if (typeof host !== 'string') return { allowed: false }
+  try {
+    if (!LOOPBACK_HOSTNAMES.has(new URL(`http://${host}`).hostname)) return { allowed: false }
+  } catch {
+    return { allowed: false }
+  }
   const origin = req.headers.origin
   if (origin === undefined) return { allowed: true }
   // A single Origin value in practice; a malformed multi-value header is
@@ -425,7 +437,16 @@ export function createApi(deps: ApiDeps) {
   async function handle(req: ApiRequest, res: ApiResponse) {
     const url = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`)
     const segments = url.pathname.split('/').filter(Boolean)
-    res._corsHeaders = corsHeaders(req).headers
+    const cors = corsHeaders(req)
+    res._corsHeaders = cors.headers
+    // Missing CORS response headers only prevents a hostile page from
+    // reading the result; it does not stop a safelisted POST from mutating
+    // the anonymous loopback API. Enforce the decision before routing/body
+    // handling so it is a trust boundary rather than a presentation hint.
+    if (!cors.allowed) {
+      jsonError(res, 403, { code: 'origin_forbidden', message: 'request origin is not allowed' })
+      return
+    }
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         ...res._corsHeaders,

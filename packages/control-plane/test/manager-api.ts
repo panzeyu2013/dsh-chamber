@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { connect } from 'node:net'
 import { createControlPlane } from '../src/index.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 
@@ -67,6 +68,43 @@ const postJson = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 })
 
+function rawUpgrade(port: number, origin: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1')
+    let response = ''
+    socket.setEncoding('utf8')
+    socket.on('connect', () => {
+      socket.write(
+        'GET /api/i/local/api/events.mux HTTP/1.1\r\n'
+        + `Host: 127.0.0.1:${port}\r\n`
+        + `Origin: ${origin}\r\n`
+        + 'Connection: Upgrade\r\n'
+        + 'Upgrade: websocket\r\n'
+        + 'Sec-WebSocket-Key: dGVzdC1rZXk=\r\n'
+        + 'Sec-WebSocket-Version: 13\r\n'
+        + '\r\n',
+      )
+    })
+    socket.on('data', chunk => { response += chunk })
+    socket.on('end', () => resolve(response))
+    socket.on('error', reject)
+  })
+}
+
+function rawHttp(port: number, host: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1')
+    let response = ''
+    socket.setEncoding('utf8')
+    socket.on('connect', () => {
+      socket.write(`GET /api/connections HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`)
+    })
+    socket.on('data', chunk => { response += chunk })
+    socket.on('end', () => resolve(response))
+    socket.on('error', reject)
+  })
+}
+
 test('health + connections: idempotent create, ready projection, no double spawn', async () => {
   const holder = await makePlane()
   try {
@@ -113,6 +151,31 @@ test('POST kind gate: only local; non-local answers 400 connection_kind_unsuppor
     const badLabel = await fetchJson(holder.base, '/api/connections', postJson({ kind: 'local', label: '' }))
     assert.equal(badLabel.status, 400)
     assert.equal(badLabel.body.code, 'connection_invalid_input')
+    assert.equal(holder.wire.spawns, 0)
+  } finally {
+    await holder.plane.stop()
+    rmSync(holder.stateDir, { recursive: true, force: true })
+  }
+})
+
+test('browser-origin fence rejects hostile simple POST and WebSocket before side effects/proxying', async () => {
+  const holder = await makePlane()
+  try {
+    const rejected = await fetchJson(holder.base, '/api/connections', {
+      method: 'POST',
+      headers: { origin: 'https://evil.example', 'content-type': 'text/plain' },
+      body: JSON.stringify({ kind: 'local' }),
+    })
+    assert.equal(rejected.status, 403)
+    assert.equal(rejected.body.code, 'origin_forbidden')
+    assert.equal(holder.wire.spawns, 0)
+
+    const upgrade = await rawUpgrade(holder.plane.port!, 'https://evil.example')
+    assert.match(upgrade, /^HTTP\/1\.1 403 Forbidden/)
+    assert.match(upgrade, /origin_forbidden/)
+    const rebound = await rawHttp(holder.plane.port!, 'attacker.example')
+    assert.match(rebound, /^HTTP\/1\.1 403 Forbidden/)
+    assert.match(rebound, /origin_forbidden/)
     assert.equal(holder.wire.spawns, 0)
   } finally {
     await holder.plane.stop()
