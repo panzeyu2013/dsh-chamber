@@ -107,6 +107,21 @@
   错误态，不再永久停留在转圈（06 §1 fail-loud 语义）。
 - **workspace 组头拖拽尾随点击修复**：组头 `dragstart` 同样武装
   `suppressClickRef`（06 §2.2 守卫清单完整化）。
+- **侧边栏悬停光标闪烁修复（session/workspace/source 行高固定 + 组内指针一致）**：
+  会话行操作（kebab+归档）、workspace 组头操作、来源头操作都是「悬停真替换」——
+  行/头为内容自适应高度时，悬停换入 20px 图标使行高 24→26px（来源头 26→28px）
+  发生布局位移；在打包 Electron 43 下引擎对移动中指针的 :hover 命中会落后于
+  光标下的实际元素 1–3px（实测复现：行顶出现「指针已入行但 :hover 未激活」的
+  滞后带，操作图标延迟弹出、行边界随相邻行悬停而漂移，光标在行边界不停
+  pointer↔default 切换）。修复分两层：① `.sessionRow`/`.workspaceHeader`
+  固定 26px、`.sourceHeader` 固定 28px（border-box，与官方 ui-workspace 固定
+  行高同模式），悬停换入换出不再改变布局；② `.workspaceGroup` 加
+  `cursor: pointer`（行间 2px margin 命中该容器，否则扫描列表时每行边界都会
+  闪回箭头指针；`.workspaceHeader` 非可点击，显式 `cursor: auto` 保留原样）。
+  复现页在 Electron 43 下实测：滞后带 2–3px → 0–1px（仅剩行顶边界像素，
+  位于图标区之上）、行高恒定、图标列扫描会话行区域（含行间隙）全程
+  pointer（仅来源头非操作区/列表底缘为 auto）、图标中心悬停抖动 0 次
+  切换。纯 CSS 改动，无逻辑/契约变化；恢复态仅行/头在静止时高 2px。
 - **boot 队列超时护栏（renderer）**：`shell.ts` 单个 boot 超过 `BOOT_TIMEOUT_MS`
   （60s）不再阻塞后续实例的 boot（链放行，迟到 settle 仍正常注册视图、会话
   保活）；旋钮清理改为按值守卫（迟到 settle 不误删后续 boot 的旋钮）。

@@ -281,6 +281,14 @@
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
+  /* FIXED height (28px = 4px pad + 20px actions + 4px pad, border-box): the
+     hover swap (status slot -> search/`+` cluster, 16px -> 20px content)
+     must not change the header height — a content-sized header grows 2px on
+     hover, and that layout shift under the moving pointer makes the engine's
+     :hover hit-test diverge from the element under the cursor (Electron 43:
+     cursor flicker + icons popping in/out; same pattern as .sessionRow). */
+  box-sizing: border-box;
+  height: 28px;
   border-radius: 8px;
 }
 
@@ -406,6 +414,15 @@
 
 .workspaceGroup {
   margin: 4px 0;
+  /* POINTER across the group: the 2px row/header margins hit-test to this
+     container (not to the rows), so without a cursor here the pointer would
+     flip to the default arrow at every row boundary while scanning the
+     session list — paired with the pre-fix row-height shift this read as
+     continuous cursor toggling (see .sessionRow). Rows and their gaps now
+     share one pointer affordance, like the packed official ui-workspace
+     rows. Non-interactive children that must keep the arrow set their own
+     cursor (e.g. .workspaceHeader below). */
+  cursor: pointer;
 }
 
 .workspaceHeader {
@@ -413,6 +430,15 @@
   align-items: center;
   gap: 4px;
   padding: 3px 4px;
+  /* FIXED height (26px = 3px pad + 20px actions + 3px pad, border-box): the
+     hover swap (count -> `+`/kebab actions, 16px -> 20px content) must not
+     change the header height — see .sessionRow for the layout-shift/flicker
+     rationale. */
+  box-sizing: border-box;
+  height: 26px;
+  /* The workspace header itself is not clickable (fold/actions live in their
+     own buttons); restore the arrow under the .workspaceGroup pointer. */
+  cursor: auto;
   /* 2px vertical margin: keeps the hover/selected tints from fusing into
      one blob with the adjacent session row (the row right below) or the
      header above — the tinted rectangles must stay separated. The dense
@@ -499,6 +525,19 @@
      headers, the dense 3px padding stays — chamber multi-source density is
      a deliberate choice (05 §2). */
   padding: 3px 4px 3px 26px;
+  /* FIXED height (26px = 3px pad + 20px actions + 3px pad, border-box): the
+     hover swap (state slot -> kebab/archive actions, 10/18px -> 20px
+     content) must NOT change the row height. A content-sized row grows
+     2px on hover (24 -> 26); under a moving pointer the engine hit-tests
+     the row's hover against a stale frame while the element under the
+     cursor is already re-laid-out, so the row's :hover activates 1-3px
+     late — the actions pop in/out as the pointer crosses each row and the
+     cursor toggles at the shifting row boundaries (reproduced in the
+     packaged Electron 43; the official ui-workspace rows use the same
+     fixed-height pattern). The 2px growth is absorbed by the fixed box:
+     rest and hover render pixel-identical apart from the swap itself. */
+  box-sizing: border-box;
+  height: 26px;
   /* 2px vertical margin separates adjacent rows so the persistent
      current-session tint (.sessionActive) and a neighbor's hover tint can
      never fuse into one continuous rectangle. */
