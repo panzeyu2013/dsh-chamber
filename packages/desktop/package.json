@@ -33,6 +33,7 @@
       "transport-manager.ts",
       "ssh-provider.ts",
       "ssh-config.ts",
+      "renderer-trust.ts",
       "dist/**/*",
       "package.json",
       "!node_modules/@dsh-chamber/control-plane/**",
@@ -44,6 +45,10 @@
       {
         "from": "vendor",
         "to": "vendor"
+      },
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
       }
     ],
     "electronDownload": {
@@ -54,6 +59,7 @@
       "zh-CN"
     ],
     "mac": {
+      "icon": "resources/icon.icns",
       "target": [
         "dmg"
       ],
@@ -63,6 +69,7 @@
       "writeUpdateInfo": false
     },
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         "nsis"
       ]
@@ -71,6 +78,7 @@
       "differentialPackage": false
     },
     "linux": {
+      "icon": "resources/icons",
       "target": [
         "dir"
       ]
