@@ -22,6 +22,7 @@
 import { AppWebEntry } from '@deepseek-ai/dsh-client-web'
 
 import { getChamberInstanceId, setChamberInstanceId } from './chamber-knob.ts'
+import { PendingOpenQueue } from './pending-open-queue.ts'
 
 const CHAMBER_BOOT = '@dsh-chamber/app'
 
@@ -38,6 +39,7 @@ const OPEN_RETRY_MS = 400
  * guarded to never clobber a later boot's knob.
  */
 const BOOT_TIMEOUT_MS = 60_000
+const QUEUED_OPEN_TIMEOUT_MS = BOOT_TIMEOUT_MS + OPEN_WAIT_MS
 
 /** Same-origin module-script loader (ESM chunks; the stock loader uses classic scripts). */
 function loadModuleBundle(url: string): Promise<void> {
@@ -92,8 +94,8 @@ const cancelledBoots = new Map<string, number>()
 /** The live AppWebEntry handle per booted instance (unmount on window teardown). */
 const entries = new Map<string, { entry: AppWebEntry; dispose(): void }>()
 
-/** Session opens requested before the instance shell booted (flushed on settle). */
-const pendingOpens = new Map<string, string[]>()
+/** Session opens requested before boot; their original promises settle on dispatch. */
+const pendingOpens = new PendingOpenQueue(QUEUED_OPEN_TIMEOUT_MS)
 
 export function shellStateIdle(instanceId: string, basePath: string): ShellState {
   return { instanceId, basePath, booted: false, booting: false, error: null }
@@ -198,34 +200,21 @@ function withBootTimeout(promise: Promise<ShellState>): Promise<void> {
 export function openInstanceSession(instanceId: string, sessionId: string): Promise<void> {
   const holder = entries.get(instanceId)
   if (holder !== undefined) return dispatchOpen(holder.entry, sessionId)
-  const queued = pendingOpens.get(instanceId) ?? []
-  queued.push(sessionId)
-  pendingOpens.set(instanceId, queued)
-  return Promise.resolve()
+  return pendingOpens.enqueue(instanceId, sessionId)
 }
 
 /** Boot settled: dispatch every queued open for this instance. */
 function flushPendingOpens(instanceId: string): void {
-  const queued = pendingOpens.get(instanceId)
-  if (queued === undefined || queued.length === 0) return
-  pendingOpens.delete(instanceId)
   const holder = entries.get(instanceId)
   if (holder === undefined) return
-  for (const sessionId of queued) {
-    // 成功路径也要响亮：分发可能超时/运行时拒绝，静默吞掉等于无声丢请求
-    // （与 rejectPendingOpens 的响亮丢弃一致）。
-    void dispatchOpen(holder.entry, sessionId).catch((error) => {
-      console.error(`[shell] instance ${instanceId} queued session open (${sessionId}) failed after settle:`, error)
-    })
-  }
+  pendingOpens.flush(instanceId, sessionId => dispatchOpen(holder.entry, sessionId))
 }
 
 /** Boot failed: the queued opens can never dispatch — drop them loud. */
 function rejectPendingOpens(instanceId: string, message: string): void {
-  const queued = pendingOpens.get(instanceId)
-  if (queued === undefined || queued.length === 0) return
-  pendingOpens.delete(instanceId)
-  console.error(`[shell] instance ${instanceId} failed to boot; ${queued.length} queued session open(s) dropped: ${message}`)
+  const error = new Error(`实例 ${instanceId} 无法打开会话：${message}`)
+  const count = pendingOpens.reject(instanceId, error)
+  if (count > 0) console.error(`[shell] instance ${instanceId} failed to boot; ${count} queued session open(s) dropped: ${message}`)
 }
 
 /**
@@ -316,6 +305,7 @@ export function disposeAllShells(): void {
   for (const [instanceId, gen] of bootGenerations) {
     cancelledBoots.set(instanceId, gen)
   }
+  pendingOpens.rejectAll(new Error('全部实例 shell 已释放，排队的会话未打开'))
 }
 
 /** The boot-graph row id this page's manifest must carry (gen-boot-manifest.mjs). */
