@@ -1,8 +1,11 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "lib/types"
+    "paths": {
+      "@deepseek-ai/dsh-client-modules/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/index.ts"],
+      "@deepseek-ai/dsh-client-runtime/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-runtime/src/client/index.ts"],
+      "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"]
+    }
   },
   "include": [
     "src"

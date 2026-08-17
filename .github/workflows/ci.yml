@@ -47,11 +47,12 @@ jobs:
         run: pnpm run test:desktop
       - name: Renderer shell unit tests
         run: pnpm run test:renderer-shell
-      - name: Client plugin type checks (sidebar / connections / settings-bridge)
+      - name: Client plugin type checks (sidebar / connections / settings-bridge / client-web)
         run: |
           pnpm run typecheck:sidebar
           pnpm run typecheck:connections
           pnpm run typecheck:settings-bridge
+          pnpm run typecheck:client-web
       - name: Client plugin unit tests (sidebar / settings-bridge)
         run: |
           pnpm run test:sidebar
