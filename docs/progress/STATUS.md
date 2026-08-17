@@ -59,8 +59,10 @@
   Developer ID 签名，自动安装硬阻塞）；UX = 提示后下载 → 退出时安装。设计稿已
   写入 `docs/todo/11-todo-auto-update.md`；**实现未排期**（M1–M3 分期见 11 §9）。
 - **设计未决**（见 02 §5 / 04 §7）：starting port 偏移、trusted-host
-  自定义 Host、restart-exhausted 手动恢复入口、多控制面 `$DSH_HOME` 冲突、
+  自定义 Host、多控制面 `$DSH_HOME` 冲突、
   响应头白名单双处同步、`__DSH_BOOT__` 随 dsh 版本漂移。
+  （`restart-exhausted 手动恢复入口` 已随 2026-08 重连修订闭合：见下「两段式
+  重连」。）
 - **外部编辑风险**：`packages/desktop/`（transport-manager / ssh-provider /
   ssh-config / main.ts）存在未提交的进行中改动，其间的 typecheck/测试
   结果可能波动（已多次观测 0↔2↔25 错误波动；最近一次 typecheck 0 错误）。
@@ -96,6 +98,21 @@
   （Electron Helper .ips ×5）——崩溃全部静默、无恢复路径。验证：
   `typecheck` 0 错误、`test:desktop` 90 用例全绿；**未实启验证**（用户运行
   中的实例不便打扰，实启回归待下次发布前复验）。
+
+- **两段式重连修订（2026-08，用户报告「状态修复后不再发起连接 / 点击
+  另一个 server 也不触发重连」）**：`transport-manager.ts` 的快速重试突发
+  （至多 5 次 ≈31s）耗尽后原落 error 永不再试——瞬时故障是时变的，「放弃」
+  不应是永久状态。修复：突发耗尽后 error 态**不停摆**，进入慢速周期重探
+  （`SLOW_RETRY_MS` 默认 60s，一次全新隧道尝试，无上限；手动
+  connect/disconnect 取消在途重探；终态失败（认证/spawn/确定性验证）
+  仍 failTerminal 绝不自动重试）。配套 renderer `App.tsx`
+  `ensureRemoteConnected`：点击/打开 error/degraded 来源即时 connect
+  （慢速重探是自动兜底，点击是即时加速；idle 手动断开不触碰）。侧边栏
+  红点语义不变（error 诚实呈现），设置页 logSummary 注明周期重试。
+  验证：`test:desktop` 94 用例全绿（新增慢速重探恢复 / 手动断开取消 /
+  终态不重试 / 耗尽清理 4 用例）、`typecheck` 0 错误、`build:renderer` 通过；
+  **未实机**（隧道断连→修复→自动恢复的端到端实机回归待下次发布前复验）。
+  契约文档同步：03 §2.2 / 05 §7.6 / desktop README。
 
 - **侧边栏每来源搜索状态共享化修复（06 §1.2 修订，2026-08）**：搜索状态
   （胶囊/查询/结果）与防抖 job 此前是 per-shell 组件状态——可见侧边栏随

@@ -233,6 +233,12 @@ export default function App() {
   const liveServerIds = useMemo(() => new Set(servers.map(server => server.id)), [servers])
   liveServerIdsRef.current = liveServerIds
 
+  // 隧道相位镜像（按原始注册表 id 键控，onStatusChanged 推送的 payload.id）：
+  // ensureRemoteConnected 经它读最新相位而不进依赖——selectView/openSession 的
+  // 身份保持稳定（本文件既有 ref 镜像纪律），相位变化不重建这些回调。
+  const remoteStatusRef = useRef(remoteStatus)
+  remoteStatusRef.current = remoteStatus
+
   // 切换意图镜像：activeViewRef = 已落地的当前视图（渲染期镜像），
   // pendingViewRef = 在途/顺延中的最新切换意图（过渡链 apply 前有效）。
   // selectView 的早期返回必须查镜像而非闭包：过渡在途时 UI 仍显示旧视图，
@@ -595,11 +601,12 @@ export default function App() {
   /**
    * 注册表远程实例自动连接（05 §3）：只对**本渲染会话首次见到的**实例 id
    * connect——应用启动装载 / 设置页新增都在下一个注册表轮询周期内生效，
-   * 不依赖本地实例。绝不重复 connect 已见过的 id：connect 对 connecting/
-   * ready 幂等，但对 degraded（会清零退避计数重启重试周期）与 error（终态，
-   * 需用户处置）有副作用，且会 30s 后把用户手动断开的实例重新拉起——「仅
-   * 新 id」同时守住有界重试、终态语义与手动断开。id 随注册表删除移出，
-   * 重新添加即再次自动连接。
+   * 不依赖本地实例。绝不重复 connect 已见过的 id：否则该轮询会把用户手动
+   * 断开的实例重新拉起（30s 后）——「仅新 id」守住手动断开语义。error/
+   * degraded 的**自动恢复**不在这里（那是 transport-manager 的慢速重探 +
+   * 下方 ensureRemoteConnected 的用户点击即时重连——两者都尊重手动断开：
+   * 慢速重探被 disconnect 取消，点击重连只对 error/degraded 生效、不触碰
+   * idle）。id 随注册表删除移出，重新添加即再次自动连接。
    */
   const knownRemoteIdsRef = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -620,6 +627,29 @@ export default function App() {
     }
   }, [remoteInstances])
 
+  /**
+   * 用户意图即时重连（2026-08）：点击/打开一个远程来源 = 「现在就想要这个
+   * server」。侧边栏点击来源头只做视图切换（requestActivateSource →
+   * selectView），从不触发隧道 connect——error（快速重试耗尽，transport-
+   * manager 已进入慢速周期重探）与 degraded（重试在途）的来源需要点击即
+   * 立刻再试一次，不等慢速重探周期（该周期是自动兜底，这里是即时加速 +
+   * 用户能动性）。idle（手动断开）绝不触碰——保持手动断开语义，设置页
+   * Connect 是显式恢复路径；requiresUserAction 终态同样放行（用户显式意图
+   * 与设置页 Connect 同语义，connect() 会重置该标志）。connect 对
+   * connecting/ready 幂等，故重复点击无副作用。
+   */
+  const ensureRemoteConnected = useCallback((viewId: string) => {
+    if (viewId === LOCAL_INSTANCE_ID) return
+    const ssh = window.dshChamber?.desktopSsh
+    if (ssh === undefined) return
+    const rawId = viewId.slice('ssh-'.length)
+    const phase = remoteStatusRef.current[rawId]?.phase
+    if (phase !== 'error' && phase !== 'degraded') return
+    void ssh.connect(rawId).catch(err => {
+      console.error(`[renderer] click-to-reconnect ${rawId} failed:`, err)
+    })
+  }, [])
+
   /** 视图切换（设计 05 §4）：经 View Transition 包装（view-transition.ts）——
    * 旧视图静态快照保持到新视图渲染就绪，随后短 crossfade；reveal 重排期间
    * 无黑帧；prefers-reduced-motion/不支持时降级即时切换。未就绪目标视图
@@ -631,6 +661,9 @@ export default function App() {
    * boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。local 常驻。
    */
   const selectView = useCallback((viewId: string) => {
+    // 用户点击 = 意图使用该来源：error/degraded 隧道立即再试（慢速重探的
+    // 即时加速；idle 手动断开不触碰——见 ensureRemoteConnected）。
+    ensureRemoteConnected(viewId)
     if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) return
     // 镜像查重（非闭包）：在途/顺延中的同一意图直接跳过；已落地视图只有在
     // 无在途意图时才跳过——过渡在途时 UI 仍显示旧视图，点击旧视图 = 撤销
@@ -654,7 +687,7 @@ export default function App() {
       setActiveView(viewId)
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
     })
-  }, [])
+  }, [ensureRemoteConnected])
 
   /** 服务器显示名（骨架屏文案；缺失回落 instanceId）。 */
   const serverLabels = useMemo(() => {
@@ -738,6 +771,8 @@ export default function App() {
 
   /** 打开某来源的会话：切到该来源 shell（未挂载先挂载）并分发到运行时。 */
   const openSession = useCallback(async (instanceId: string, sessionId: string) => {
+    // 用户要在这个来源上工作：error/degraded 隧道立即再试（同上）。
+    ensureRemoteConnected(instanceId)
     // 与 selectView 同款注册表守卫：来源已删除时拒绝入队——否则 open 会
     // 挂进 pendingOpens 永不分发（视图不再挂载，dispose 已执行），留死键。
     if (instanceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(instanceId)) {
@@ -749,7 +784,7 @@ export default function App() {
     } catch (err) {
       throw new Error(`打开会话失败：${errorMessage(err)}`)
     }
-  }, [selectView])
+  }, [selectView, ensureRemoteConnected])
 
   /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消；单向通道，失败仅 console.error。 */
   useEffect(() => {

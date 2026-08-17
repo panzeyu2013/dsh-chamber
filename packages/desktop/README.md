@@ -7,7 +7,7 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 - `main.ts` — Electron 主进程：单窗口单 frame（`loadURL` 控制面 origin）、`createControlPlane`、transport-manager + ssh provider、IPC
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
 - `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 传输 argv / stderr 分类 / 可选 exec；direct-endpoint 直连模式）
-- `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 有界 jitter 退避重连 + 环形日志 + 子进程监督 + 非秘密投影
+- `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 两段式重连（快速有界 jitter 退避突发 + 慢速周期重探）+ 环形日志 + 子进程监督 + 非秘密投影
 - `ssh-provider.ts` — v1 唯一 provider：SSH 隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec（start/stop/is-active）
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` 编译为 JS（`dist/control-plane/`，见下）
@@ -85,7 +85,7 @@ pnpm run dist:desktop
 
 - **来源无关运行时**：`TransportProvider` 接口定义来源边界（v1 仅 `ssh`；tailscale/remote-tunnel 等新来源 = 新 provider + kind 注册，运行时与 UI 零改动）。`buildStartArgs` 缺省 = **direct endpoint 模式**（无子进程，运行时探测 `probeTarget()`、暴露 `endpointUrl()`，如 tailnet 直连宿主）。
 - **SSH 隧道**：`ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort> <user@host>`——SSH 层保活（半死连接由 ssh 自身约 90s 判定退出并喂给重连机，探活同时保活 NAT 映射）；`remotePort` = 远端 127.0.0.1 上 dsh web 监听端口（隧道目标）；`sshPort`（可选）= SSH 守护端口（null = 不传 `-p`，走 ssh 默认 22 / config Port，systemd exec 同理）；localPort 由 `net listen(0)` 分配；**就绪 = 本地端口可 TCP 连接 + dsh 身份握手通过**（`verifyUp`：`host.describe` 信封探测，5s 总超时 + 1MiB 响应上限——目标端口上是非 dsh 服务时显式报错/降级，**绝不呈现已连接**，与本地就绪判据同源 02 §3.2）。握手失败时按 dsh 特征签名分类提示：目标若携带 connection 插件的 426 臂或 apiProxy 的 SSE 臂（GET /api/events.mux），判为「dsh 版本过老/不兼容——请升级远端 dsh」；无任何 dsh 特征时保持「不是 dsh 实例」的通用文案（绝不无证据猜测）。
-- **phase 机**：`idle → connecting → ready ⇄ degraded → error`，有界**半开 jitter** 指数退避重连（保留下界 0.5×、上界 1×，多实例/唤醒后错峰）；认证失败置 `requiresUserAction`，**终态不自动重试**（用户须修复凭据/host key）。**确定性验证失败免重试**：`verifyUp` 结果带 `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 第一次失败即 error 终态（requiresUserAction，重试无法改变应答）；仅连接错误/超时等瞬时失败走退避重连。子进程监督 per-child：SIGTERM → 宽限后 SIGKILL。
+- **phase 机**：`idle → connecting → ready ⇄ degraded → error`，**两段式重连**：快速**半开 jitter** 指数退避突发（保留下界 0.5×、上界 1×，多实例/唤醒后错峰；至多 5 次 ≈31s）+ 突发耗尽后落 error（诚实红态）但进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限——瞬时故障是时变的，「放弃」绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）。认证失败置 `requiresUserAction`，**终态不自动重试**（用户须修复凭据/host key）。**确定性验证失败免重试**：`verifyUp` 结果带 `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 第一次失败即 error 终态（requiresUserAction，重试无法改变应答）；仅连接错误/超时等瞬时失败走重连。子进程监督 per-child：SIGTERM → 宽限后 SIGKILL。
 - **远端 systemd exec**：`ssh user@host systemctl start|stop|is-active <serviceName>`——参数数组 spawn（**无 shell**），serviceName 先过白名单 `^[a-zA-Z0-9_.-]+$` 再执行（注入防护）；有界超时（`execTimeoutMs`，默认 15s）；失败写入实例环形日志并作为错误结果返回（响亮，绝不吞掉）；认证失败复用 `AUTH_FAILURE_PATTERNS`，只经结果错误显式返回（**不写隧道终态**）。结果按需写入状态投影的 `serviceActive`（不轮询）。`systemctl` 默认目标为远端 system 级 unit 管理器。
 - stderr 按行缓冲后脱敏 + 终态认证判定（跨 chunk 不绕过）；每实例环形日志（约 200 行）。
 - **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写、启动加载——密码主机重启后自动连接可用；不记日志/不进注册表/损坏保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 0600 askpass 助手（`buildAskpassScript`，提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。

@@ -18,12 +18,16 @@
  *   (buildStartArgs → null: no child, the runtime probes
  *   provider.probeTarget() and exposes provider.endpointUrl()).
  * - Phase machine: idle → connecting → ready ⇄ degraded → error, with
- *   bounded jittered exponential backoff (retryBaseMs * 2^n, half-open
- *   jitter, capped) and a requiresUserAction flag on provider-classified
- *   terminal failures (authentication/host-key, spawn failure, and
- *   DETERMINISTIC endpoint verification failures — a destination that
- *   answered the identity probe but proved not to be a compatible dsh:
- *   never auto-retried, retrying could not change the answer).
+ *   TWO-TIER retry: a fast burst of bounded jittered exponential backoff
+ *   (retryBaseMs * 2^n, half-open jitter, capped) followed — when the burst
+ *   is exhausted — by an indefinite SLOW re-probe (one fresh attempt per
+ *   slowRetryMs). Transient conditions are time-dependent, so error is never
+ *   a permanent give-up: a recovered condition is picked up automatically
+ *   (manual connect()/disconnect() cancels the probe). A requiresUserAction
+ *   flag marks provider-classified TERMINAL failures (authentication/host-key,
+ *   spawn failure, and DETERMINISTIC endpoint verification failures — a
+ *   destination that answered the identity probe but proved not to be a
+ *   compatible dsh: never auto-retried, retrying could not change the answer).
  * - Provider exec channel (ssh: remote systemd, ssh-provider.ts) — loud,
  *   never auto-retried, never writes the tunnel's terminal classification.
  * - Per-instance ring-buffer logs (~200 lines), non-secret status
@@ -74,7 +78,7 @@ export const READY_TIMEOUT_MS = 10_000
 /** Poll interval while waiting for the transport to come up. */
 export const PROBE_INTERVAL_MS = 100
 
-/** Bounded reconnect attempts before the machine lands on error. */
+/** Fast reconnect attempts before the machine lands on error. */
 export const MAX_RETRY_ATTEMPTS = 5
 
 /** Reconnect backoff floor. */
@@ -82,6 +86,17 @@ export const RETRY_BASE_MS = 1_000
 
 /** Reconnect backoff ceiling. */
 export const RETRY_MAX_MS = 30_000
+
+/**
+ * Slow re-probe cadence after the FAST retry burst is exhausted: the machine
+ * lands on error (honest red state) but keeps ONE fresh transport attempt per
+ * slowRetryMs indefinitely — transient conditions (network outage, remote
+ * restart, the remote service coming up) are TIME-DEPENDENT, so "gave up"
+ * must never be a permanent state. Terminal failures never reach this path
+ * (failTerminal stops them), and a manual connect()/disconnect() cancels the
+ * probe. Success lands ready and resets the counters.
+ */
+export const SLOW_RETRY_MS = 60_000
 
 /**
  * Retry backoff with half-open jitter (AWS exponential-backoff-and-jitter
@@ -106,6 +121,13 @@ export interface TransportManagerOptions {
   maxRetryAttempts?: number
   retryBaseMs?: number
   retryMaxMs?: number
+  /**
+   * Slow re-probe cadence after the fast retry burst is exhausted (default
+   * SLOW_RETRY_MS): one fresh transport attempt per slowRetryMs, indefinite —
+   * a transient failure never becomes a permanent give-up (only terminal
+   * failures stop retrying, and they never reach this path).
+   */
+  slowRetryMs?: number
   disconnectGraceMs?: number
   ringBufferLimit?: number
   /** Provider exec timeout (ssh: systemctl; default 15s). */
@@ -250,6 +272,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   const maxRetryAttempts = options.maxRetryAttempts ?? MAX_RETRY_ATTEMPTS
   const retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS
   const retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS
+  const slowRetryMs = options.slowRetryMs ?? SLOW_RETRY_MS
   const disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS
   const ringBufferLimit = options.ringBufferLimit ?? RING_BUFFER_LIMIT
   const execTimeoutMs = options.execTimeoutMs ?? 15_000
@@ -395,14 +418,41 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
    * Bounded reconnect scheduling: land on degraded, then start a fresh
    * transport after a jittered exponential backoff (retryBaseMs * 2^(n-1)
    * with half-open jitter, capped). The attempt bound (maxRetryAttempts)
-   * makes the recovery bounded; a fresh connect() resets the counter.
+   * bounds the FAST burst; a fresh connect() resets the counter.
+   *
+   * When the burst is exhausted the machine lands on error but keeps an
+   * indefinite SLOW re-probe (one fresh transport attempt per slowRetryMs):
+   * transient conditions are time-dependent, so a recovered condition must be
+   * picked up automatically without user action. Only TERMINAL failures stop
+   * retrying — they never reach here (failTerminal). A manual connect()/
+   * disconnect() cancels the pending probe (reconnectTimer is shared).
    */
   function scheduleReconnect(id: string, reason: string) {
     const state = ensureState(id)
     if (state.reconnectTimer !== null) return
     if (state.retryAttempt >= maxRetryAttempts) {
-      transition(id, 'error', `transport failed: max retry attempts exceeded (${reason})`)
-      appendLog(state, 'error', `max retry attempts exceeded (${reason})`)
+      // 与快速路径同款清理：耗尽可能经 ready-loop 超时 / 验证失败路径到达，
+      // 彼时子进程还活着——不留僵尸隧道与过期 localPort 投影（下个慢速重探
+      // 的 startTransport 也会 SIGTERM 它，但 60s 窗口不该由错误态背负）。
+      stopReadyLoop(state)
+      if (state.child !== null) {
+        signalChild(state.child, 'SIGTERM')
+        armKillEscalation(state, state.child)
+      }
+      state.child = null
+      state.localPort = null
+      transition(id, 'error', `transport failed: max retry attempts exceeded (${reason}); retrying periodically`)
+      appendLog(state, 'error', `max retry attempts exceeded (${reason}); slow re-probe in ${slowRetryMs}ms`)
+      // The phase stays error (honest red state — the probe is background
+      // recovery, never a permanent spinner); each fire runs ONE fresh
+      // attempt through the normal machine (startTransport), and success
+      // lands ready and resets the counters. requiresUserAction stays false:
+      // this is not a user-action failure.
+      state.reconnectTimer = setTimeout(() => {
+        state.reconnectTimer = null
+        void startTransport(id).catch(error => warn(`transport-manager: slow re-probe rejected: ${String(error)}`))
+      }, slowRetryMs)
+      state.reconnectTimer.unref?.()
       return
     }
     stopReadyLoop(state)

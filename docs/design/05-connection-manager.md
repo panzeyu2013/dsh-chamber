@@ -32,7 +32,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         ├─ 本地实例托管：spawn/健康状态机/reaper/host-logs
         └─ 管理 REST：/health、/api/connections(local)、/api/host/logs
         桌面主进程（main.ts）
-        ├─ transport-manager：通用传输运行时（phase 机 / 有界 jitter 退避重连 /
+        ├─ transport-manager：通用传输运行时（phase 机 / 两段式重连 —
+        │    快速有界 jitter 退避突发 + 慢速周期重探 /
         │    环形日志 / 非秘密投影 / 子进程监督 SIGTERM→SIGKILL）
         ├─ TransportProvider 接口（transport-provider.ts）：来源无关契约 —
         │    spec 校验 / 传输进程 argv（或 direct-endpoint 直连模式）/
@@ -359,14 +360,16 @@ export const chamberBridge: {
   置 ready 前验证远端真是 dsh——ssh 实现为 `host.describe` 信封探测，
   与本地 02 §3.2 同判据，非 dsh 服务端口绝不呈现已连接）、可选 `exec`
   （远程服务通道）。
-- `transport-manager.ts` 是通用运行时：phase 机 / 有界半开 jitter 退避 /
+- `transport-manager.ts` 是通用运行时：phase 机 / **两段式重连**（快速有界
+  半开 jitter 退避突发 + 突发耗尽后的**慢速周期重探**——瞬时故障是时变的，
+  error 绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）/
   环形日志 / 非秘密投影与推送 / 子进程监督（SIGTERM→SIGKILL per-child）/
   注册表（kind 迁移、重复 id 首胜丢弃）/ 就绪探测（隧道端口或直连端点 +
   端点身份验证）。**确定性验证失败免重试**：`verifyUp` 结果带
   `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非
   200、错误信封、版本过老/不兼容）→ 第一次失败即落 error 终态
-  （requiresUserAction），绝不空耗有界重试周期（重试无法改变应答）；
-  仅瞬时失败（连接错误、超时）走退避重连。
+  （requiresUserAction），绝不空耗重试周期（重试无法改变应答）；
+  仅瞬时失败（连接错误、超时）走重连。
 - `ssh-provider.ts` 是 v1 唯一实现：`ssh -N -o ServerAliveInterval=30 -o
   ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort>`
   隧道 + systemctl exec；认证特征/脱敏/白名单全在 provider 内。

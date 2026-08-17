@@ -465,6 +465,100 @@ test('bounded retry: repeated pre-ready exits exhaust attempts and land on error
   assert.equal(spawnCalls.length, maxRetryAttempts + 1)
 })
 
+test('slow re-probe: burst exhaustion lands on error but keeps retrying and recovers on its own', async t => {
+  const maxRetryAttempts = 3
+  const { manager, children, spawnCalls, setProbe } = makeManager(t, {
+    options: { maxRetryAttempts, slowRetryMs: 40 },
+  })
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  for (let attempt = 0; attempt <= maxRetryAttempts; attempt += 1) {
+    await waitFor(() => spawnCalls.length === attempt + 1, 3000, `spawn ${attempt + 1}`)
+    children[attempt].simulateExit(1)
+    if (attempt === maxRetryAttempts) {
+      await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'error after the last retry')
+    } else {
+      await waitFor(() => manager.status('s1')!.phase === 'degraded', 3000, `degraded after attempt ${attempt + 1}`)
+    }
+  }
+  const status = manager.status('s1')!
+  assert.equal(status.retryAttempt, maxRetryAttempts)
+  assert.equal(status.requiresUserAction, false, 'burst exhaustion is not a user-action failure')
+  assert.ok(status.logSummary.includes('retrying periodically'), 'the projection announces the slow re-probe')
+  assert.ok(manager.logs('s1').some(entry => entry.message.includes('slow re-probe')), 'the slow re-probe is logged')
+  // 静默期：快速突发已耗尽，错误态下不再立即重试（慢速重探尚未到点）。
+  await sleep(15)
+  assert.equal(spawnCalls.length, maxRetryAttempts + 1, 'no fast retries after error')
+  // 慢速重探：底层条件修复后无需用户操作自动恢复。
+  setProbe(true)
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'the slow re-probe reconnects to ready')
+  assert.ok(spawnCalls.length >= maxRetryAttempts + 2, 'the slow re-probe started a fresh transport')
+  assert.equal(manager.status('s1')!.retryAttempt, 0, 'success resets the retry counter')
+})
+
+test('burst exhaustion via the ready-timeout path cleans up the live child and port', async t => {
+  // maxRetryAttempts=1: the FIRST ready-timeout schedules the fast reconnect,
+  // the SECOND (child still alive) exhausts the burst — the exhaustion branch
+  // must stop the live tunnel and clear the stale port, then the slow re-probe
+  // must still work from the cleaned state.
+  const { manager, children, spawnCalls, setProbe } = makeManager(t, {
+    options: { maxRetryAttempts: 1, slowRetryMs: 30 },
+  })
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  await waitFor(() => manager.status('s1')!.phase === 'degraded', 3000, 'first deadline → degraded')
+  await waitFor(() => spawnCalls.length === 2, 3000, 'fast reconnect spawn')
+  await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'error after burst exhaustion')
+  assert.ok(children[1].killCalls.includes('SIGTERM'), 'the live child is SIGTERMed at exhaustion')
+  assert.equal(manager.status('s1')!.localPort, null, 'no stale localPort in the error projection')
+  // The slow re-probe still recovers from the cleaned state.
+  setProbe(true)
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'slow re-probe recovers after cleanup')
+})
+
+test('manual disconnect cancels the slow re-probe (no auto-reconnect while idle)', async t => {
+  const maxRetryAttempts = 3
+  const { manager, children, spawnCalls, setProbe } = makeManager(t, {
+    options: { maxRetryAttempts, slowRetryMs: 20 },
+  })
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  for (let attempt = 0; attempt <= maxRetryAttempts; attempt += 1) {
+    await waitFor(() => spawnCalls.length === attempt + 1, 3000, `spawn ${attempt + 1}`)
+    children[attempt].simulateExit(1)
+    if (attempt === maxRetryAttempts) {
+      await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'error after the last retry')
+    } else {
+      await waitFor(() => manager.status('s1')!.phase === 'degraded', 3000, `degraded after attempt ${attempt + 1}`)
+    }
+  }
+  manager.disconnect('s1')
+  assert.equal(manager.status('s1')!.phase, 'idle')
+  setProbe(true) // even if the condition clears, the manual disconnect must win
+  await sleep(80) // well past several slowRetryMs
+  assert.equal(spawnCalls.length, maxRetryAttempts + 1, 'disconnect cancels the slow re-probe forever')
+})
+
+test('a terminal failure never arms the slow re-probe', async t => {
+  const { manager, children, spawnCalls, setProbe } = makeManager(t, {
+    options: { slowRetryMs: 20 },
+  })
+  // probe=false keeps the ready loop iterating (re-checking authFailed each
+  // turn); with probe=true the machine would race to ready before the auth
+  // line lands (ready-loop auth re-checks are in-flight-only).
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  children[0].stderrWrite('Permission denied (publickey).\n')
+  await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'terminal auth error')
+  assert.equal(manager.status('s1')!.requiresUserAction, true)
+  await sleep(60) // well past slowRetryMs — no probe may fire for a terminal failure
+  assert.equal(spawnCalls.length, 1, 'no auto-retry after a terminal failure')
+})
+
 test('an endpoint that accepts TCP but fails the identity verification is never ready', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {
     verifyProbe: async () => ({ ok: false, detail: 'the destination is not a dsh instance' }),
