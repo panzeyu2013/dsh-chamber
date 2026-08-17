@@ -13,6 +13,8 @@
 | 2 | [server-drag-sort.md](server-drag-sort.md) | server 之间的拖拽排序 | 想法，未设计 / 未排期 |
 | 3 | [08-todo-git-worktree-plugin.md](08-todo-git-worktree-plugin.md) | Git worktree 独立插件 | 设计定稿，实现未排期（2026-08-16 自 `docs/design/` 移入；"08" 编号沿用历史引用） |
 | 4 | [09-todo-client-plugin-runtime-loading.md](09-todo-client-plugin-runtime-loading.md) | dsh 客户端插件运行时加载（每实例合并宿主 boot 图） | 设计定稿，实现未排期（2026-08） |
+| 5 | [10-todo-event-driven-aggregation.md](10-todo-event-driven-aggregation.md) | 侧边栏聚合改事件驱动（各来源 ctx 推投影取代 10s 轮询） | 设计待评审，实现未排期（2026-08） |
+| 6 | [11-todo-auto-update.md](11-todo-auto-update.md) | 桌面端自动更新 + 通道灰度（win 全自动 / mac 检测+提示手动下载；dsh-chamber 自身升级） | 设计定稿，实现未排期（2026-08） |
 
 ## 纪律
 

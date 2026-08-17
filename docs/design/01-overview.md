@@ -79,6 +79,8 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 07 | [07-models-params.md](07-models-params.md) | 推迟（设计定稿，待上游解锁） | 模型额外参数 + 默认推理等级：链路事实、上游阻塞点、更新复查清单、实现蓝本 |
 | 08 | [../todo/08-todo-git-worktree-plugin.md](../todo/08-todo-git-worktree-plugin.md) | todo（设计定稿，实现未排期；2026-08-16 移至 docs/todo/） | git worktree 独立插件：范围决策（01 §4 修订）+ 形态/座位/数据流/执行层/分期 |
 | 09 | [../todo/09-todo-client-plugin-runtime-loading.md](../todo/09-todo-client-plugin-runtime-loading.md) | todo（设计定稿，实现未排期；2026-08） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图 + 信任边界/分期 |
+| 10 | [../todo/10-todo-event-driven-aggregation.md](../todo/10-todo-event-driven-aggregation.md) | todo（设计待评审，实现未排期；2026-08） | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（轮询降级为未挂载来源兜底）+ 05 §3 契约修订/风险/分期 |
+| 11 | [../todo/11-todo-auto-update.md](../todo/11-todo-auto-update.md) | todo（设计定稿，实现未排期；2026-08） | 桌面端自动更新 + 通道灰度（dsh-chamber 自身）：win electron-updater 全自动 / mac 检测+提示手动下载、beta → stable 通道、release.yml 产物改造 |
 
 ---
 

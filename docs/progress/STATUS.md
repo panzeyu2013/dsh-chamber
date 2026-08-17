@@ -49,6 +49,15 @@
   前端 `__DSH_BOOT__` 清单构建期写死单 entry（`gen-boot-manifest.mjs`），官方
   机制（`dsh-client-modules` 组合图 + `/plugins/<id>/client.js` + 反代透传）完整
   保留但无人消费；功能型（宿主侧）插件可经 profile `cordis.patch.yml` 正常安装。
+- **侧边栏聚合改事件驱动（设计 10，2026-08 记录）**：10s REST 聚合轮询改为各
+  来源 ctx 经 chamberBridge 推送投影（轮询降级为未挂载来源兜底）；动机/机制/
+  契约影响（05 §3）/风险/分期见 `docs/todo/10-todo-event-driven-aggregation.md`；
+  **实现未排期**——改动 05 §3 契约，需评审确认。
+- **桌面端自动更新 + 通道灰度（设计 11，2026-08 记录）**：dsh-chamber 自身
+  升级能力（升级目标不是远端 dsh）——方案讨论收敛：feed = GitHub Releases；
+  灰度 = 通道模型 beta → stable；macOS 降级为「检测 + 提示手动下载」（不投入
+  Developer ID 签名，自动安装硬阻塞）；UX = 提示后下载 → 退出时安装。设计稿已
+  写入 `docs/todo/11-todo-auto-update.md`；**实现未排期**（M1–M3 分期见 11 §9）。
 - **设计未决**（见 02 §5 / 04 §7）：starting port 偏移、trusted-host
   自定义 Host、restart-exhausted 手动恢复入口、多控制面 `$DSH_HOME` 冲突、
   响应头白名单双处同步、`__DSH_BOOT__` 随 dsh 版本漂移。
@@ -246,6 +255,40 @@
   arm64），Intel Mac 暂不支持（README 中英已注明）。恢复 x64 的路径（未
   排期）：自托管 Intel runner；或 arm64 runner 上 Rosetta 交叉构建
   （bundle:dsh 的 darwin-x64 原生模块需在 Rosetta 下编译，可行性未验证）。
+
+### 2026-08 性能排查（INP 232ms / 长时间运行卡顿）
+
+排查结论：① 会话列表**不虚拟化**（vendor ChatView 渲染全部节点，长会话
+DOM/内存无界增长）；② N-ctx 常驻 + **shell 销毁不停止 cordis ctx**（chamber
+泄漏本体）；③ 10s 聚合轮询无条件 publish → 每 shell 侧边栏全量重渲染（放大
+因素）。其中②③为 chamber 可改，已落地如下（②③含测试/构建验证；会话行 CSS 为纯样式注入）：
+
+- **shell 销毁时拆除 cordis ctx（修泄漏本体）**：`AppWebEntry.dispose()`
+  （`packages/dsh-client-web/src/boot.tsx`）在 `root.unmount()` 之后停止该 ctx
+  的全部 loader entry 纤维（`entry.fiber.dispose()`，级联运行所有插件 effect
+  teardown——连接循环 stop、sidebar 退订、`clearInstanceRuntime` 等）。此前
+  移除实例只卸载 React DOM，僵尸 shell 的 2 条 WS + 无限重连（退避上限 10s、
+  每次重试 `console.warn`）+ 全部 store/会话数据 + 桥订阅永久存活；`runtimeReports`
+  模块级记录因 teardown 不执行而永久泄漏。拆除为幂等 + fire-and-forget（重加
+  实例 boot 全新 ctx）；类型经 `as unknown as` 收口。验证：`build:renderer` 绿。
+- **publish 签名闸 + identity-preserving 状态（消除 10s 全量重渲染）**：
+  `shared/derive.ts` 新增 `instanceSnapshotSignature`/`runtimeReportSignature`/
+  `serversProjectionSignature`（纯函数，单测覆盖）；`App.tsx` 的
+  `refreshAggregate`/`onRuntimeReport` 内容未变即复用旧 state 对象，publish 前
+  以投影签名去重（排除无人消费的 `server.updatedAt`）；`SidebarRoot` 订阅同款
+  去重作纵深（对齐设置桥 `subscribeServers` 既有模式）。效果：10s 轮询/状态推送
+  不再触发 N×侧边栏全量重渲染。验证：`test:sidebar`（derive.ts）48 用例（含 5 个
+  新签名用例）/ `typecheck:sidebar` / `typecheck:settings-bridge` / `typecheck`
+  （renderer）/ `build:renderer` 全绿。
+- **会话行 `content-visibility` 注入（缓解长会话 INP）**：`styles.css` 对 vendor
+  会话行（`[data-chat-flow-key]`——vendor 契约锚点，升级 harness.commit 时若该
+  属性改名，规则静默失效（安全降级但收益消失无信号），需留意）注入
+  `content-visibility:auto` + `contain-intrinsic-size:auto 320px`（前置固定 320px
+  兜底行，防不支持 `auto <length>` 的旧 Chromium 高度塌缩）——视口外行跳过
+  style/layout/paint。纯 CSS，不减少 DOM/内存（上游虚拟化是根治，见 todo 10 §6
+  记录的上游诉求）；若实测底部跟随/滚动锚定回归，优先调整估算值或收窄选择器。
+- **结构性项（记录待办，未实现）**：事件驱动聚合取代 10s 轮询（todo 10）；
+  会话虚拟化 / 单前端多适配器（上游诉求，见 todo 10 §6，chamber 不可改）。
 
 ## 范围决策与剩余偏差（不做 / 推迟 / 移出）
 
