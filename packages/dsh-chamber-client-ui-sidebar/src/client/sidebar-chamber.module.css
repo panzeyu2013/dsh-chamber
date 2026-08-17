@@ -101,11 +101,25 @@
 }
 
 /* Search results replace the workspace list while a query is active: title,
-   subtle workspace context and snippet per row, then status lines. */
+   subtle workspace context and snippet per row, then status lines. The
+   heading row carries the row's state slot inline with the title (official
+   SearchResultItem heading). */
 .searchResults {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.searchResultHeading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.searchResultHeading .searchResultTitle {
+  flex: 1;
+  min-width: 0;
 }
 
 .searchResultRow {
@@ -115,6 +129,23 @@
   padding: 3px 4px;
   border-radius: 6px;
   cursor: pointer;
+  /* P2-8: the row is a <button role="treeitem"> (keyboard-activatable like
+     the official SearchResultItem); strip UA button chrome so it renders
+     exactly like the former div row. */
+  box-sizing: border-box;
+  margin: 0;
+  border: none;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.searchResultRow:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
 }
 
 .searchResultRow:hover {
@@ -262,6 +293,46 @@
   height: 6px;
   border-radius: 50%;
   background: var(--dsw-static-deepseek-450);
+}
+
+/* Hover cards (official HoverCard port): the vendor primitive portals
+   the card to document.body with its own surface (#2C2C2E in both themes —
+   figma value, not a theme token); these classes style only the card CONTENT
+   (copy follows the official Rows.module.css hover-card treatment). */
+.hoverContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hoverTitle {
+  font-size: 14px;
+  line-height: 20px;
+  color: #FFFFFF;
+  overflow-wrap: break-word;
+}
+
+.hoverPath {
+  font-size: 12px;
+  line-height: 16px;
+  color: #CFD3D6;
+  word-break: break-all;
+}
+
+.hoverTime {
+  font-size: 12px;
+  line-height: 16px;
+  color: #CFD3D6;
+}
+
+.hoverStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 20px;
+  color: #ADB2B8;
 }
 
 .chamberList {
@@ -656,6 +727,13 @@
 
 .actionIcon:hover {
   color: var(--dsw-alias-label-primary);
+}
+
+/* P2-5: 排序按钮的 pressed（updated）态——品牌色 + 浅底，视觉可辨
+   （aria-pressed 之外的可感知样式；hover 保持文字色变化）。 */
+.actionIcon[aria-pressed='true'] {
+  color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
 }
 
 .actionIcon:focus-visible {

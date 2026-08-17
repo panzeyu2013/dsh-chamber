@@ -369,6 +369,23 @@ export async function createSession(client: InstanceApiClient, workspaceId: stri
   return sessionId
 }
 
+/**
+ * sessions.fork，返回子会话 id（atSeq 省略 = 源最后完成的回合为 cut，与官方
+ * ui-workspace forkSession 的 cut 规则一致）。wire payload 仅收
+ * { sessionId, atSeq? }——官方运行时客户端的 increaseTitle 便捷标志（fork
+ * 成功后对子会话做标题递增 rename）不是 wire 字段，宿主 schema 剥离未知键；
+ * chamber 在 SidebarRoot.onForkSession 里自行实现该递增（shared/derive.ts
+ * increasedForkTitle，逐字移植官方 runtime service，P1-4）。
+ */
+export async function forkSession(client: InstanceApiClient, sessionId: string): Promise<string> {
+  const result = await callAndThrow(client, () => client.sessions.fork({ sessionId }))
+  const childId = result?.result?.value?.sessionId
+  if (typeof childId !== 'string' || childId === '') {
+    throw new Error('instance-session-fork: 实例未返回子会话 id')
+  }
+  return childId
+}
+
 export async function renameSession(client: InstanceApiClient, sessionId: string, title: string): Promise<void> {
   await callAndThrow(client, () => client.sessions.rename({ sessionId, title }))
 }

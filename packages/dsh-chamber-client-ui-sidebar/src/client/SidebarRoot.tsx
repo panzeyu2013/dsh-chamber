@@ -104,21 +104,22 @@ import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState,
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-client-connection/client'
 import {
-  BrandWordmark, FishLogo, IconArchiveOutline20, IconChecklistOutline14, IconChevronRightOutline14,
-  IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16, IconLoadingOutline16,
-  IconNewChatOutline16, IconPanelLeftOutline16, IconPlusOutline16, IconQuestionOutline14,
+  BrandWordmark, FishLogo, HoverCard, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14,
+  IconChevronRightOutline14, IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16, IconLoadingOutline16,
+  IconNewChatOutline16, IconPanelLeftOutline16, IconPersonalizationOutline16, IconPlusOutline16, IconQuestionOutline14,
   IconSearchOutline16, IconTrashOutline16, IconWarningOutline16, Menu, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  reconciledSessionOrder, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS,
+  deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
+  sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, sortWorkspaceSessions,
 } from '../shared/derive.ts'
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
-  getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
-  renameSession, renameWorkspace, searchSessions, type SearchRow,
+  forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
+  renameSession, renameWorkspace, searchSessions, type InstanceSnapshot, type SearchRow,
 } from '../shared/instance-api.ts'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
 import {
@@ -176,6 +177,38 @@ function sourceAccentStyle(server: ChamberServerAggregate): { '--dsh-source-acce
 
 /** Connection-status visual kind: dot colors plus the connecting spinner. */
 type SourceStatusKind = 'ok' | 'busy' | 'err' | 'idle'
+
+/**
+ * Rebuild an InstanceSnapshot-shaped view of ONE source aggregate for the
+ * LOCAL search matcher (06 §1.2 render-side merge). The render layer only
+ * has the ChamberServerAggregate projection — no raw InstanceSnapshot, no
+ * archivedSessionIds — so the snapshot is rebuilt from the VISIBLE rows:
+ * every projected session is already post-filter (subagent-origin /
+ * archived / blank-non-current rows never enter the projection), therefore
+ * the archived filter gets the EMPTY set (nothing archived can be matched
+ * here). Wire paths/createdAt are absent from the projection and irrelevant
+ * to title/workspace-label substring matching — empty strings.
+ */
+function projectionToLocalSearchSnapshot(server: ChamberServerAggregate): InstanceSnapshot {
+  return {
+    workspaces: server.workspaces.map(workspace => ({
+      workspaceId: workspace.id,
+      path: '',
+      title: workspace.title,
+      sessionIds: workspace.sessions.map(session => session.id),
+      createdAt: '',
+      updatedAt: '',
+    })),
+    sessions: server.workspaces.flatMap(workspace => workspace.sessions.map(session => ({
+      sessionId: session.id,
+      running: session.running === true,
+      blank: session.blank === true,
+      ...(session.updatedAt === undefined ? {} : { updatedAt: session.updatedAt }),
+      ...(session.title === '' ? {} : { title: session.title }),
+    }))),
+    archivedSessionIds: [],
+  }
+}
 
 /**
  * Map the projected phase (local /health status; remote tunnel phase) to a
@@ -423,14 +456,43 @@ export function SidebarRoot({
     })
   }
 
+  // chamber (06 §3.1): per-source session sort toggle (manual ↔ updated). The
+  // choice lives in the shared view prefs (`orderBy` keyed by sourceId,
+  // default manual); a click cycles to the other mode. P2-5: 切换即丢弃该来源
+  // 的全部会话级 override——updated 模式下拖拽的 override 无 wire 背书、永远
+  // 不会被确认，若不随模式切换清掉，切回 manual 后它会成为永久孤儿 override
+  // （显示序脱离 wire 序且不自愈）；manual 模式下尚未被投影确认的乐观序同样
+  // 随切换作废（wire 序或 updated 排序接管，提交本身不受影响）。
+  const toggleSessionSort = (server: ChamberServerAggregate): void => {
+    const next = viewPrefs.orderBy?.[server.id] === 'updated' ? 'manual' : 'updated'
+    updateViewPrefs(prev => ({ ...prev, orderBy: { ...prev.orderBy, [server.id]: next } }))
+    const prefix = `${server.id}/`
+    setSessionOrderOverride(prev => {
+      const hasAny = Object.keys(prev).some(key => key.startsWith(prefix))
+      if (!hasAny) return prev
+      const nextOverrides: Record<string, string[]> = {}
+      for (const [key, override] of Object.entries(prev)) {
+        if (key.startsWith(prefix)) continue
+        nextOverrides[key] = override
+      }
+      return nextOverrides
+    })
+  }
+
   // chamber (06 §2.2): transient optimistic order overrides, applied at
   // render over the projection while the wire commit is in flight. Cleared
   // PER KEY against each fresh projection — never wholesale: a poll that has
-  // not yet seen the commit must not flash the optimistic order back (the
-  // pull model self-heals on the confirming pull, 06 §5). A key drops when
-  // its workspace vanished, the projection order now equals the override
-  // (commit confirmed), or the membership differs (a row was deleted
-  // meanwhile); it survives while only the ORDER differs (stale poll data).
+  // not yet seen the commit must not flash the optimistic order back (a
+  // manual-mode override drops only when the confirming pull proves the
+  // commit). A key drops when its workspace vanished, the projection order
+  // now equals the override (commit confirmed), or the membership differs
+  // (a row was deleted meanwhile); it survives while only the ORDER differs
+  // (stale poll data). updated 模式的拖拽 override 是瞬态（P2-5）：拖拽只落
+  // override、不提交 wire，wire 永远无法确认它——下一次**内容变化**的投影
+  // （servers state 变化）即丢（下方 updated 分支；App publish 签名闸下内容
+  // 不变的轮询不改变 servers state、effect 不重跑，故精确语义是"内容变化的
+  // 投影"），不再有旧注释的"自愈"一说；否则该工作区会永久用 override 序
+  // 绕过 updated 排序。
   const [sessionOrderOverride, setSessionOrderOverride] = useState<Record<string, string[]>>({})
   const [workspaceOrderOverride, setWorkspaceOrderOverride] = useState<Record<string, string[]>>({})
   useEffect(() => {
@@ -445,6 +507,13 @@ export function SidebarRoot({
           ? undefined
           : server.workspaces.find(candidate => candidate.id === key.slice(slash + 1))
         const wireIds = workspace === undefined ? undefined : workspace.sessions.map(session => session.id)
+        // P2-5: updated 模式（含拖拽后才切到 updated 的来源）的 override 直接
+        // 丢弃——不提交 wire 的 override 永远等不到确认，等确认只会让该工作区
+        // 永久脱离 updated 排序。manual 模式仍按 wire 确认核对。
+        if (server !== undefined && (viewPrefs.orderBy?.[server.id] ?? 'manual') === 'updated') {
+          changed = true
+          continue
+        }
         const orderEqual = wireIds !== undefined
           && wireIds.length === override.length
           && wireIds.every((id, index) => override[index] === id)
@@ -535,6 +604,47 @@ export function SidebarRoot({
   const suppressClickRef = useRef(false)
   useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null)
 
+  // chamber (06, P2-11): double-click rename. A row's single click is DELAYED
+  // ~350ms (DOUBLE_CLICK_WINDOW_MS; raised from 250ms — the old threshold was
+  // too aggressive: a slow double click / trackpad tap was misjudged as a
+  // second click and jumped into inline rename) — a second click within the
+  // window cancels the pending action and enters inline rename; the timer
+  // expiring fires the action. ONE shared pending slot (keyed by the target
+  // session id, holding the clicked row's DOM node): rows are many, the
+  // pending count is at most one, and a fresh click always supersedes an
+  // older pending. Cancellation is document-wide (P2-11): a click anywhere
+  // OUTSIDE the pending row (not the row, not its inner buttons) drops the
+  // pending — the session never opens after the user has moved their
+  // attention elsewhere; row-internal buttons (kebab/archive) clear it in
+  // their own handlers (stopPropagation + clearPendingClick). suppressClickRef
+  // is honored on the way in AND in the timer callback — a drag-end trailing
+  // click never arms, and a drag started between click and expiry never opens.
+  const DOUBLE_CLICK_WINDOW_MS = 350
+  const pendingClickRef = useRef<{ key: string; timer: number; row: HTMLElement | null } | null>(null)
+  const clearPendingClick = (): void => {
+    if (pendingClickRef.current === null) return
+    window.clearTimeout(pendingClickRef.current.timer)
+    pendingClickRef.current = null
+  }
+  useEffect(() => () => {
+    if (pendingClickRef.current !== null) window.clearTimeout(pendingClickRef.current.timer)
+  }, [])
+  // P2-11: pending 期间的行外点击取消。点击发生在 pending 行内部时不动
+  // （行内按钮已自行 clearPendingClick；行本身再次点击由行 onClick 的双击
+  // 逻辑接管——行 onClick 先于 document 监听触发，pending 已被消费/替换）。
+  // 点击行外任意位置即取消 pending，绝不延迟弹出被用户放弃的会话。
+  useEffect(() => {
+    const onDocumentClick = (event: MouseEvent): void => {
+      const pending = pendingClickRef.current
+      if (pending === null) return
+      if (!(event.target instanceof Node)) return
+      if (pending.row !== null && pending.row.contains(event.target)) return
+      clearPendingClick()
+    }
+    document.addEventListener('click', onDocumentClick)
+    return () => { document.removeEventListener('click', onDocumentClick) }
+  }, [])
+
   // Hover-action state: the inline rename target, the per-row failure text,
   // the open kebab menus (keyed by workspace/session), and the add-workspace
   // directory-browser dialog (target source + whether the workspace.create
@@ -570,6 +680,37 @@ export function SidebarRoot({
 
   const openSession = (serverId: string, sessionId: string): void => {
     chamberBridge.requestOpenSession(serverId, sessionId)
+  }
+
+  /** chamber (06): localized hover-card relative time ("刚刚"/"5分钟前" zh; "now"/"5min ago" en). */
+  const hoverTimeLabel = (updatedAt: number, now: number): string => {
+    const { unit, n } = relativeTimeBucket(updatedAt, now)
+    return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
+  }
+
+  // chamber (06): fork a session at its last completed turn, refresh, and
+  // open the child — the official row-menu fork→open flow (设计 06 §0 原判
+  // 「回合尾部 forkAt 覆盖、侧边栏不做」本轮契约反转：行内 kebab 增加分叉入口).
+  // P1-4: wire session.fork 只收 { sessionId, atSeq? }（increaseTitle 非 wire
+  // 字段），子会话标题 = 源标题；chamber 侧按官方 runtime service 移植的
+  // increasedForkTitle 在 fork 成功后对子会话做标题递增 rename（经该来源
+  // unary client）。递增失败非致命：fork 已成功、子会话已创建并打开（下方
+  // requestRefresh/requestOpenSession 照常执行），仅标题不递增——inline
+  // rowErrors 不阻断（runAction 只吃 fork 自身的失败）。
+  const onForkSession = (server: ChamberServerAggregate, session: { id: string; title: string }): void => {
+    runAction(`${server.id}/session/${session.id}/fork`, async () => {
+      const client = getInstanceClient(server.id)
+      const childId = await forkSession(client, session.id)
+      if (session.title !== '') {
+        try {
+          await renameSession(client, childId, increasedForkTitle(session.title))
+        } catch {
+          // 非致命：fork 已成功，仅子会话标题不递增。
+        }
+      }
+      chamberBridge.requestRefresh(server.id)
+      chamberBridge.requestOpenSession(server.id, childId)
+    })
   }
 
   const onNewSession = (server: ChamberServerAggregate, workspaceId: string): void => {
@@ -724,6 +865,12 @@ export function SidebarRoot({
       return
     }
     setSessionOrderOverride(prev => ({ ...prev, [`${server.id}/${workspace.id}`]: nextOrder }))
+    // updated 模式拖拽对齐官方（ui-workspace commitSessionDrag 在
+    // orderBy==='updated' 时只写本地序、跳过 insertSessionBefore）：只落乐观
+    // override，不提交 wire、不 requestRefresh——wire 序由 updated 排序接管；
+    // 该 override 是瞬态（P2-5）：下一次投影到达（servers 变化）时由清理
+    // effect 直接丢弃（wire 永远无法确认它，旧注释的"自愈"不成立）。
+    if (viewPrefs.orderBy?.[server.id] === 'updated') return
     runAction(`${server.id}/session-drag/${activeDrag.sessionId}`, async () => {
       try {
         await insertSessionBefore(getInstanceClient(server.id), workspace.id, activeDrag.sessionId, anchor)
@@ -824,7 +971,10 @@ export function SidebarRoot({
       return t(runningSubagents === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other', { n: runningSubagents })
     }
     if (facts?.completed === true) return t('status.completed')
-    if (session.running === true) return t('status.running')
+    // P2-9: 实时通道优先（06 §4.3「实时通道为真」）——channel 的 running 位
+    // （每会话全量投影）胜过 10s 聚合轮询位，轮询可能滞后一个周期。
+    const running = facts?.running ?? session.running
+    if (running === true) return t('status.running')
     return undefined
   }
   /** Pending-interaction kind of the row, or undefined when not pending. */
@@ -834,7 +984,9 @@ export function SidebarRoot({
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
     const runningSubagents = facts?.runningSubagents ?? 0
-    if (pending === undefined && runningSubagents === 0 && facts?.completed !== true && session.running !== true) return null
+    // P2-9: 实时通道优先（06 §4.3）——channel running 位胜过轮询位。
+    const running = facts?.running ?? session.running
+    if (pending === undefined && runningSubagents === 0 && facts?.completed !== true && running !== true) return null
     if (pending === 'approval') {
       return <IconWarningOutline16 className={cc.statePendingApproval} />
     }
@@ -854,6 +1006,9 @@ export function SidebarRoot({
     }
     return <StateDot state="ongoing" size={10} />
   }
+
+  // chamber (06): hover-card relative times share one render-time clock.
+  const now = Date.now()
 
   return (
     <div
@@ -930,6 +1085,24 @@ export function SidebarRoot({
               const currentRemote = search !== undefined && search.query === query
                 ? search
                 : { query, status: 'loading' as const, items: [] as SearchRow[], hasMore: false }
+              // chamber (06 §1.2 render-side merge): merge the source
+              // aggregate's LOCAL metadata matches (title/workspace-label
+              // substring over the visible projection) with the remote
+              // content-search page — the official deriveSearchResults port.
+              // P1-2: 远程腿按可见集过滤——投影已过滤 subagent/archived/
+              // blank-non-current，"在投影里"即"可见"（官方对 content 腿逐条
+              // sessionVisible，tree.ts L370-373）；空集（断连/未就绪）时
+              // mergeSearchResults 降级为不过滤。
+              const visibleIds = new Set<string>()
+              for (const workspace of server.workspaces) {
+                for (const session of workspace.sessions) visibleIds.add(session.id)
+              }
+              const merged = mergeSearchResults(
+                deriveLocalSearchMatches(projectionToLocalSearchSnapshot(server), query),
+                currentRemote,
+                SESSION_SEARCH_RESULT_LIMIT,
+                visibleIds,
+              )
               // chamber (06 §4): the current-session highlight is channel-based
               // — no direct store subscription — and single-selection: only the
               // source owning THIS visible ctx (the active view's shell) renders
@@ -980,17 +1153,23 @@ export function SidebarRoot({
               }
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
+                const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
+                // 会话级 override（拖拽乐观序）优先于 updated 排序——用户拖拽
+                // 意图永远第一（06 §3.1）；updated 模式下 override 是瞬态（下次
+                // 内容变化的投影即丢，P2-5），无 override 且 orderBy==='updated'
+                // 时按 updatedAt 倒序。未分组桶顺序解析抽为纯函数
+                // orderUngroupedSessions（P2-9，updated 按 recency 无视存储序、
+                // manual 用存储序——与真实工作区 updated 行为一致，updated 排序
+                // 接管一切）。
                 if (workspace.ungrouped === true) {
-                  const stored = viewPrefs.ungroupedOrder[server.id]
-                  if (stored === undefined) return wire
-                  const order = reconciledSessionOrder(stored, wire.map(session => session.id))
-                  const byId = new Map(wire.map(session => [session.id, session]))
-                  return order.flatMap(id => { const session = byId.get(id); return session === undefined ? [] : [session] })
+                  return orderUngroupedSessions(wire, viewPrefs.ungroupedOrder[server.id], orderBy)
                 }
                 const override = sessionOrderOverride[`${server.id}/${workspace.id}`]
-                if (override === undefined) return wire
-                const byId = new Map(wire.map(session => [session.id, session]))
-                return override.flatMap(id => { const session = byId.get(id); return session === undefined ? [] : [session] })
+                if (override !== undefined) {
+                  const byId = new Map(wire.map(session => [session.id, session]))
+                  return override.flatMap(id => { const session = byId.get(id); return session === undefined ? [] : [session] })
+                }
+                return orderBy === 'updated' ? sortWorkspaceSessions(wire, orderBy) : wire
               }
               // Search-result titles resolve from the source aggregate (title
               // may lag the latest snapshot by one poll — accepted, 06 §1.2).
@@ -1005,8 +1184,20 @@ export function SidebarRoot({
                 }
                 return { title: t('list.unnamed'), workspaceLabel: undefined }
               }
+              // P2-9: 搜索结果行的 running 位来自投影（mergeSearchResults 的
+              // visibleIds 过滤保证命中行一定在投影内，查得到即用投影位；查
+              // 不到——防御——回落 false）。通道实时位由 sessionStateDot/
+              // sessionStateLabel 内部 facts.running 优先接管。
+              const projectedRunning = (sessionId: string): boolean => {
+                for (const workspace of server.workspaces) {
+                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
+                  if (session === undefined) continue
+                  return session.running === true
+                }
+                return false
+              }
               return (
-              <section key={server.id} className={cc.sourceGroup}>
+              <section key={server.id} className={cc.sourceGroup} role="group" aria-label={server.label}>
                 <header
                   className={clsx(
                     cc.sourceHeader,
@@ -1068,6 +1259,27 @@ export function SidebarRoot({
                   <span
                     className={clsx(cc.sourceActions, search?.expanded === true && cc.sourceActionsVisible)}
                   >
+                    {/* chamber (06 §3.1): per-source session sort toggle
+                        (manual ↔ updated). The cycle lives in the shared view
+                        prefs; aria-pressed carries the updated state. The
+                        title shows the CURRENT mode (P2-5 — the pressed state
+                        is also styled visibly in CSS). */}
+                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
+                      <button
+                        type="button"
+                        className={cc.actionIcon}
+                        aria-label={t('action.sort')}
+                        aria-pressed={viewPrefs.orderBy?.[server.id] === 'updated'}
+                        title={`${t('action.sort')} · ${t(viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual')}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (suppressClickRef.current) return
+                          toggleSessionSort(server)
+                        }}
+                      >
+                        <IconPersonalizationOutline16 size={14} />
+                      </button>
+                    )}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <button
                         type="button"
@@ -1138,55 +1350,103 @@ export function SidebarRoot({
                       type="button"
                       className={cc.searchClear}
                       aria-label={t('search.clear')}
-                      onClick={() => clearSearch(server.id)}
+                      onClick={() => {
+                        // P2-7: 拖拽尾随 click 守卫——dragend 后的合成 click
+                        // 落在清除钮上不得清掉在途搜索（守卫控件清单补齐）。
+                        if (suppressClickRef.current) return
+                        clearSearch(server.id)
+                      }}
                     >
                       <IconCloseOutline16 size={12} />
                     </button>
                   </div>
                 )}
                 {server.connected ? (
-                  <div className={cc.workspaceList}>
+                  <div
+                    className={cc.workspaceList}
+                    // The browse list is one tree (official .list role="tree");
+                    // an active query replaces it with the search-results tree
+                    // (own role below), and the fetch-error branch renders no
+                    // tree at all.
+                    role={query === '' && server.aggregateError === undefined ? 'tree' : undefined}
+                  >
                     {query !== '' ? (
                       // chamber (06 §1.2): an active query replaces the whole
                       // workspace list (header/status stay; fold and the
                       // add-workspace affordance are hidden while searching).
-                      // The results branch outranks the snapshot-fetch error:
-                      // an open search keeps showing results even when a later
-                      // pull fails (the error line stays in the gap below).
-                      <div className={cc.searchResults} role="list" aria-label={t('search.results.aria')}>
-                        {currentRemote.items.map((item) => {
-                          const resolved = searchRowLabel(item.sessionId)
-                          return (
-                            <div
-                              key={item.sessionId}
-                              className={cc.searchResultRow}
-                              onClick={() => openSession(server.id, item.sessionId)}
-                            >
-                              <span className={cc.searchResultTitle}>{resolved.title}</span>
-                              {resolved.workspaceLabel !== undefined && (
-                                <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
-                              )}
-                              {item.snippet !== '' && (
-                                <span className={cc.searchResultSnippet}>{item.snippet}</span>
-                              )}
+                      // The results branch outranks the snapshot-fetch error
+                      // (06 §1.2): an open search keeps showing results even
+                      // when a later pull fails — the aggregateError line
+                      // renders BELOW the results (P2-7), so a content-search
+                      // failure still shows the local metadata hits, with the
+                      // error banner below them.
+                      <>
+                        <div className={cc.searchResults} role="tree" aria-label={t('search.results.aria')}>
+                          {merged.items.map((item) => {
+                            const resolved = searchRowLabel(item.sessionId)
+                            // P2-9: 搜索行传投影 running 位（查不到回落
+                            // false）；通道实时位由 sessionStateDot/Label 内部
+                            // facts.running 优先接管。
+                            const running = projectedRunning(item.sessionId)
+                            const stateDot = sessionStateDot(server, { id: item.sessionId, running })
+                            const stateLabel = sessionStateLabel(server, { id: item.sessionId, running })
+                            return (
+                              // P2-8: 行是 <button role="treeitem">（官方
+                              // SearchResultItem 同款）——键盘可激活（Enter/
+                              // 空格）；状态槽恒渲染（空态占位，标题对齐，
+                              // 官方 slot 同款）。
+                              <button
+                                type="button"
+                                key={item.sessionId}
+                                className={cc.searchResultRow}
+                                role="treeitem"
+                                aria-selected={item.sessionId === currentId}
+                                onClick={() => openSession(server.id, item.sessionId)}
+                              >
+                                <span className={cc.searchResultHeading}>
+                                  <span
+                                    className={clsx(cc.sessionStateSlot, sessionStatePending(server, { id: item.sessionId }) !== undefined && cc.sessionStateSlotPending)}
+                                    title={stateLabel}
+                                    aria-label={stateLabel}
+                                    // P2-8: 空态不注册 live region（官方仅在有
+                                    // 状态时放隐藏标签）——role 条件化避免 SR 噪音。
+                                    role={stateDot !== null ? 'status' : undefined}
+                                  >
+                                    {stateDot}
+                                  </span>
+                                  <span className={cc.searchResultTitle}>{resolved.title}</span>
+                                </span>
+                                {resolved.workspaceLabel !== undefined && (
+                                  <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
+                                )}
+                                {item.snippet !== '' && (
+                                  <span className={cc.searchResultSnippet}>{item.snippet}</span>
+                                )}
+                              </button>
+                            )
+                          })}
+                          {currentRemote.status === 'loading' && (
+                            <div className={cc.searchStatus} role="status">{t('search.pending')}</div>
+                          )}
+                          {currentRemote.status === 'error' && (
+                            <div className={cc.searchWarning} role="status">{t('search.unavailable')}</div>
+                          )}
+                          {currentRemote.status !== 'loading' && merged.items.length === 0 && (
+                            <div className={cc.empty}>{t('search.noMatches')}</div>
+                          )}
+                          {merged.hasMore && (
+                            <div className={cc.searchStatus}>
+                              {t('search.hasMore', { n: SESSION_SEARCH_RESULT_LIMIT })}
                             </div>
-                          )
-                        })}
-                        {currentRemote.status === 'loading' && (
-                          <div className={cc.searchStatus} role="status">{t('search.pending')}</div>
+                          )}
+                        </div>
+                        {/* P2-7: 搜索进行中（query!==''）也在结果下方渲染
+                            aggregateError——结果优先，错误行在下面，与顶部
+                            注释声称的行为一致。 */}
+                        {server.aggregateError !== undefined && (
+                          <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
                         )}
-                        {currentRemote.status === 'error' && (
-                          <div className={cc.searchWarning} role="status">{t('search.unavailable')}</div>
-                        )}
-                        {currentRemote.status === 'ready' && currentRemote.items.length === 0 && (
-                          <div className={cc.empty}>{t('search.noMatches')}</div>
-                        )}
-                        {currentRemote.status === 'ready' && currentRemote.hasMore && (
-                          <div className={cc.searchStatus}>
-                            {t('search.hasMore', { n: SESSION_SEARCH_RESULT_LIMIT })}
-                          </div>
-                        )}
-                      </div>
+                      </>
                     ) : server.aggregateError !== undefined ? (
                       <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
                     ) : (
@@ -1211,41 +1471,34 @@ export function SidebarRoot({
                           const workspaceError = rowErrors[`${server.id}/workspace/${workspace.id}/new`]
                             ?? rowErrors[`${server.id}/workspace/${workspace.id}/rename`]
                             ?? rowErrors[`${server.id}/workspace/${workspace.id}/delete`]
-                          return (
-                          <div
-                            key={workspace.id}
-                            className={clsx(
-                              cc.workspaceGroup,
-                              workspace.ungrouped && cc.ungroupedGroup,
-                              marker === 'before' && cc.dropBefore,
-                              marker === 'after' && cc.dropAfter,
-                            )}
-                            onDragOver={workspace.ungrouped === true || workspaceDrag === null
-                              || workspaceDrag.sourceId !== server.id
-                              ? undefined
-                              : (event) => {
-                                event.preventDefault()
-                                event.dataTransfer.dropEffect = 'move'
-                                const half = rowHalf(event)
-                                setWorkspaceDrag(current => current === null
-                                  ? current
-                                  : { ...current, over: { id: workspace.id, half } })
-                              }}
-                            onDrop={workspace.ungrouped === true || workspaceDrag === null
-                              || workspaceDrag.sourceId !== server.id
-                              ? undefined
-                              : (event) => {
-                                event.preventDefault()
-                                if (workspaceDrag === null) return
-                                commitWorkspaceDrag(server, workspaceDrag, { id: workspace.id, half: rowHalf(event) })
-                              }}
-                          >
+                          // chamber (06): the workspace header row (hoisted
+                          // so real workspaces wrap it in a HoverCard; the
+                          // ungrouped bucket has no backing workspace, hence no
+                          // card). Double click enters inline rename (the
+                          // ungrouped bucket has no rename; a click on the inner
+                          // buttons never triggers it). Single clicks need no
+                          // delay — the header itself is not clickable (fold
+                          // lives on the chevron button).
+                          const workspaceHeader = (
                             <div
                               className={clsx(
                                 cc.workspaceHeader,
                                 sessions.some(session => session.id === currentId) && cc.groupContainsCurrent,
                               )}
+                              role="treeitem"
+                              aria-expanded={!folded}
                               draggable={workspace.ungrouped !== true}
+                              onDoubleClick={(event) => {
+                                if (suppressClickRef.current) return
+                                if (menuOpen[workspaceKey] === true || workspace.ungrouped === true) return
+                                if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return
+                                setRenaming({
+                                  sourceId: server.id,
+                                  kind: 'workspace',
+                                  id: workspace.id,
+                                  value: workspace.title,
+                                })
+                              }}
                               onDragStart={workspace.ungrouped === true
                                 ? undefined
                                 : (event) => {
@@ -1270,6 +1523,12 @@ export function SidebarRoot({
                                     setWorkspaceDrag(null)
                                   }
                                   workspaceDropCommitted.current = false
+                                  // P1-1: 镜像会话行复位——拖拽结束后一个 tick
+                                  // 清掉抑制位，否则本次 workspace 头拖拽后的
+                                  // 尾随 click 会永久短路来源切换/排序/加工作区/
+                                  // 搜索/折叠/新建/kebab/归档/会话打开（唯一复位
+                                  // 在会话行 onDragEnd，workspace 头漏了）。
+                                  window.setTimeout(() => { suppressClickRef.current = false }, 0)
                                 }}
                             >
                               <button
@@ -1278,6 +1537,7 @@ export function SidebarRoot({
                                 aria-label={folded ? t('workspace.expand') : t('workspace.collapse')}
                                 onClick={() => {
                                   if (suppressClickRef.current) return
+                                  clearPendingClick()
                                   toggleWorkspaceFold(server.id, workspace.id)
                                 }}
                               >
@@ -1301,6 +1561,7 @@ export function SidebarRoot({
                                     title={t('action.newSession')}
                                     onClick={() => {
                                       if (suppressClickRef.current) return
+                                      clearPendingClick()
                                       onNewSession(server, workspace.id)
                                     }}
                                   >
@@ -1348,6 +1609,7 @@ export function SidebarRoot({
                                         onClick={(event) => {
                                           event.stopPropagation()
                                           if (suppressClickRef.current) return
+                                          clearPendingClick()
                                           toggleMenu(workspaceKey)
                                         }}
                                       >
@@ -1358,6 +1620,53 @@ export function SidebarRoot({
                                 </span>
                               )}
                             </div>
+                            )
+                            return (
+                            <div
+                              key={workspace.id}
+                              className={clsx(
+                                cc.workspaceGroup,
+                                workspace.ungrouped && cc.ungroupedGroup,
+                                marker === 'before' && cc.dropBefore,
+                                marker === 'after' && cc.dropAfter,
+                              )}
+                              role="group"
+                              onDragOver={workspace.ungrouped === true || workspaceDrag === null
+                                || workspaceDrag.sourceId !== server.id
+                                ? undefined
+                                : (event) => {
+                                  event.preventDefault()
+                                  event.dataTransfer.dropEffect = 'move'
+                                  const half = rowHalf(event)
+                                  setWorkspaceDrag(current => current === null
+                                    ? current
+                                    : { ...current, over: { id: workspace.id, half } })
+                                }}
+                              onDrop={workspace.ungrouped === true || workspaceDrag === null
+                                || workspaceDrag.sourceId !== server.id
+                                ? undefined
+                                : (event) => {
+                                  event.preventDefault()
+                                  if (workspaceDrag === null) return
+                                  commitWorkspaceDrag(server, workspaceDrag, { id: workspace.id, half: rowHalf(event) })
+                                }}
+                            >
+                              {workspace.ungrouped === true ? (
+                                workspaceHeader
+                              ) : (
+                                <HoverCard
+                                  anchor={workspaceHeader}
+                                  content={(
+                                    <div className={cc.hoverContent}>
+                                      <div className={cc.hoverTitle}>{workspace.title}</div>
+                                      {sessions.length > 0 && (
+                                        <div className={cc.hoverTime}>{t('hover.sessionCount', { n: sessions.length })}</div>
+                                      )}
+                                    </div>
+                                  )}
+                                  disabled={menuOpen[workspaceKey] === true || workspaceDrag !== null || sessionDrag !== null}
+                                />
+                              )}
                             {!folded && (
                             <>
                               {renaming !== null && renaming.sourceId === server.id
@@ -1374,130 +1683,214 @@ export function SidebarRoot({
                                 const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
                                 const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/archive`]
-                                return (
-                                <Fragment key={session.id}>
-                                  {renaming !== null && renaming.sourceId === server.id
-                                  && renaming.kind === 'session' && renaming.id === session.id ? (
-                                    renameForm(server.id, 'session', session.id, session.title, true)
-                                  ) : (
-                                    <div
-                                      className={clsx(
-                                        cc.sessionRow,
-                                        session.id === currentId && cc.sessionActive,
-                                        sessionMarker(session.id) === 'before' && cc.dropBefore,
-                                        sessionMarker(session.id) === 'after' && cc.dropAfter,
-                                      )}
-                                      draggable
-                                      onDragStart={(event) => {
-                                        event.dataTransfer.effectAllowed = 'move'
-                                        event.dataTransfer.setData('text/plain', session.id)
-                                        suppressClickRef.current = true
-                                        sessionDropCommitted.current = false
-                                        setSessionDrag({ sourceId: server.id, accountKey: workspace.id, sessionId: session.id, over: null })
+                                  ?? rowErrors[`${server.id}/session/${session.id}/fork`]
+                                // chamber (06, P2-11): the session row (hoisted so
+                                // the HoverCard can wrap it). The single click is
+                                // DELAYED ~350ms (DOUBLE_CLICK_WINDOW_MS) — a
+                                // second click within the window cancels the
+                                // pending open and enters inline rename
+                                // (double-click rename); the timer expiring opens
+                                // the session. suppressClickRef (drag-end trailing
+                                // click) is honored on the way in and in the timer
+                                // callback; clicks outside the pending row cancel
+                                // it (document listener, P2-11).
+                                const sessionRow = (
+                                  <div
+                                    className={clsx(
+                                      cc.sessionRow,
+                                      session.id === currentId && cc.sessionActive,
+                                      sessionMarker(session.id) === 'before' && cc.dropBefore,
+                                      sessionMarker(session.id) === 'after' && cc.dropAfter,
+                                    )}
+                                    role="treeitem"
+                                    aria-selected={session.id === currentId}
+                                    draggable
+                                    onDragStart={(event) => {
+                                      event.dataTransfer.effectAllowed = 'move'
+                                      event.dataTransfer.setData('text/plain', session.id)
+                                      suppressClickRef.current = true
+                                      sessionDropCommitted.current = false
+                                      setSessionDrag({ sourceId: server.id, accountKey: workspace.id, sessionId: session.id, over: null })
+                                    }}
+                                    onDragEnd={() => {
+                                      if (sessionDrag !== null && sessionDrag.over !== null) {
+                                        commitSessionDrag(server, sessionDrag, sessionDrag.over)
+                                      } else {
+                                        setSessionDrag(null)
+                                      }
+                                      sessionDropCommitted.current = false
+                                      window.setTimeout(() => { suppressClickRef.current = false }, 0)
+                                    }}
+                                    onDragOver={!activeSessionDrag
+                                      ? undefined
+                                      : (event) => {
+                                        event.preventDefault()
+                                        event.dataTransfer.dropEffect = 'move'
+                                        const half = rowHalf(event)
+                                        setSessionDrag(current => current === null
+                                          ? current
+                                          : { ...current, over: { id: session.id, half } })
                                       }}
-                                      onDragEnd={() => {
-                                        if (sessionDrag !== null && sessionDrag.over !== null) {
-                                          commitSessionDrag(server, sessionDrag, sessionDrag.over)
-                                        } else {
-                                          setSessionDrag(null)
-                                        }
-                                        sessionDropCommitted.current = false
-                                        window.setTimeout(() => { suppressClickRef.current = false }, 0)
+                                    onDrop={!activeSessionDrag
+                                      ? undefined
+                                      : (event) => {
+                                        event.preventDefault()
+                                        if (sessionDrag === null) return
+                                        commitSessionDrag(server, sessionDrag, { id: session.id, half: rowHalf(event) })
                                       }}
-                                      onDragOver={!activeSessionDrag
-                                        ? undefined
-                                        : (event) => {
-                                          event.preventDefault()
-                                          event.dataTransfer.dropEffect = 'move'
-                                          const half = rowHalf(event)
-                                          setSessionDrag(current => current === null
-                                            ? current
-                                            : { ...current, over: { id: session.id, half } })
-                                        }}
-                                      onDrop={!activeSessionDrag
-                                        ? undefined
-                                        : (event) => {
-                                          event.preventDefault()
-                                          if (sessionDrag === null) return
-                                          commitSessionDrag(server, sessionDrag, { id: session.id, half: rowHalf(event) })
-                                        }}
-                                      onClick={() => {
-                                        if (suppressClickRef.current) return
-                                        openSession(server.id, session.id)
-                                      }}
+                                    onClick={(event) => {
+                                      if (suppressClickRef.current) return
+                                      // 菜单展开 / 本行重命名进行中：忽略整次点击
+                                      //（不 arm、不开会话）。
+                                      if (menuOpen[sessionKey] === true || (renaming !== null
+                                        && renaming.sourceId === server.id && renaming.kind === 'session' && renaming.id === session.id)) return
+                                      const pending = pendingClickRef.current
+                                      if (pending !== null && pending.key === session.id) {
+                                        clearPendingClick()
+                                        setRenaming({
+                                          sourceId: server.id,
+                                          kind: 'session',
+                                          id: session.id,
+                                          value: session.title,
+                                        })
+                                        return
+                                      }
+                                      if (pending !== null) clearPendingClick()
+                                      pendingClickRef.current = {
+                                        key: session.id,
+                                        // P2-11: 记录被点击的行 DOM，document 级
+                                        // 行外点击监听据此判断"行外"。
+                                        row: event.currentTarget,
+                                        timer: window.setTimeout(() => {
+                                          pendingClickRef.current = null
+                                          if (suppressClickRef.current) return
+                                          openSession(server.id, session.id)
+                                        }, DOUBLE_CLICK_WINDOW_MS),
+                                      }
+                                    }}
+                                  >
+                                    <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : (session.title || t('list.unnamed'))}</span>
+                                    {/* P2-10: blank（新建）行是临时占位——内容
+                                        不存在，kebab（含 fork）/归档都作用于
+                                        不存在的内容，隐藏整簇（官方 Rows.tsx
+                                        `!row.blank && <rowActions>` L436-462）。 */}
+                                    {session.blank !== true && (
+                                    <span
+                                      className={clsx(cc.rowActions, menuOpen[sessionKey] === true && cc.rowActionsVisible)}
+                                      onClick={(event) => event.stopPropagation()}
                                     >
-                                      <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : (session.title || t('list.unnamed'))}</span>
-                                      <span
-                                        className={clsx(cc.rowActions, menuOpen[sessionKey] === true && cc.rowActionsVisible)}
-                                        onClick={(event) => event.stopPropagation()}
-                                      >
-                                        <Menu
-                                          compact
-                                          portal
-                                          align="end"
-                                          open={menuOpen[sessionKey] === true}
-                                          onClose={() => closeMenu(sessionKey)}
-                                          onSelect={() => {
-                                            closeMenu(sessionKey)
+                                      <Menu
+                                        compact
+                                        portal
+                                        align="end"
+                                        open={menuOpen[sessionKey] === true}
+                                        onClose={() => closeMenu(sessionKey)}
+                                        onSelect={(id: string) => {
+                                          closeMenu(sessionKey)
+                                          if (id === 'rename') {
                                             setRenaming({
                                               sourceId: server.id,
                                               kind: 'session',
                                               id: session.id,
                                               value: session.title,
                                             })
-                                          }}
-                                          items={[
-                                            {
-                                              id: 'rename',
-                                              label: t('action.rename'),
-                                              icon: <IconEditOutline16 size={14} />,
-                                            },
-                                          ]}
-                                          anchor={(
-                                            <button
-                                              type="button"
-                                              className={cc.actionIcon}
-                                              aria-label={t('action.menu')}
-                                              aria-haspopup="menu"
-                                              aria-expanded={menuOpen[sessionKey] === true}
-                                              onClick={(event) => {
-                                                event.stopPropagation()
-                                                if (suppressClickRef.current) return
-                                                toggleMenu(sessionKey)
-                                              }}
-                                            >
-                                              <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
-                                            </button>
-                                          )}
-                                        />
-                                        <button
-                                          type="button"
-                                          className={cc.actionIcon}
-                                          aria-label={t('action.archive')}
-                                          title={t('action.archive')}
-                                          onClick={() => {
-                                            if (suppressClickRef.current) return
-                                            onArchiveSession(server, session.id, session.blank === true ? t('session.new') : session.title)
-                                          }}
-                                        >
-                                          <IconArchiveOutline20 size={14} />
-                                        </button>
-                                      </span>
-                                      {/* Trailing state slot: the ring/dot at the
-                                          row's right edge. On hover the row action
-                                          cluster (kebab + archive) swaps in and this
-                                          slot swaps out (CSS hover replace, 06 §4.3
-                                          /§7) — the slot is a true replace, no
-                                          placeholder. */}
-                                      <span
-                                        className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
-                                        title={sessionStateLabel(server, session)}
-                                        aria-label={sessionStateLabel(server, session)}
-                                        role="status"
+                                          } else if (id === 'fork') {
+                                            onForkSession(server, session)
+                                          }
+                                        }}
+                                        items={[
+                                          {
+                                            id: 'rename',
+                                            label: t('action.rename'),
+                                            icon: <IconEditOutline16 size={14} />,
+                                          },
+                                          {
+                                            id: 'fork',
+                                            label: t('menu.fork'),
+                                            icon: <IconBranchOutline16 size={14} />,
+                                          },
+                                        ]}
+                                        anchor={(
+                                          <button
+                                            type="button"
+                                            className={cc.actionIcon}
+                                            aria-label={t('action.menu')}
+                                            aria-haspopup="menu"
+                                            aria-expanded={menuOpen[sessionKey] === true}
+                                            onClick={(event) => {
+                                              event.stopPropagation()
+                                              if (suppressClickRef.current) return
+                                              clearPendingClick()
+                                              toggleMenu(sessionKey)
+                                            }}
+                                          >
+                                            <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
+                                          </button>
+                                        )}
+                                      />
+                                      <button
+                                        type="button"
+                                        className={cc.actionIcon}
+                                        aria-label={t('action.archive')}
+                                        title={t('action.archive')}
+                                        onClick={() => {
+                                          if (suppressClickRef.current) return
+                                          clearPendingClick()
+                                          onArchiveSession(server, session.id, session.blank === true ? t('session.new') : session.title)
+                                        }}
                                       >
-                                        {sessionStateDot(server, session)}
-                                      </span>
-                                    </div>
+                                        <IconArchiveOutline20 size={14} />
+                                      </button>
+                                    </span>
+                                    )}
+                                    {/* Trailing state slot: the ring/dot at the
+                                        row's right edge. On hover the row action
+                                        cluster (kebab + archive) swaps in and this
+                                        slot swaps out (CSS hover replace, 06 §4.3
+                                        /§7) — the slot is a true replace, no
+                                        placeholder. role is conditional so an
+                                        empty (no-state) slot does not register a
+                                        live region (P2-8 consistency: same rule
+                                        as the search-result rows). */}
+                                    <span
+                                      className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
+                                      title={sessionStateLabel(server, session)}
+                                      aria-label={sessionStateLabel(server, session)}
+                                      role={sessionStateDot(server, session) !== null ? 'status' : undefined}
+                                    >
+                                      {sessionStateDot(server, session)}
+                                    </span>
+                                  </div>
+                                )
+                                return (
+                                <Fragment key={session.id}>
+                                  {renaming !== null && renaming.sourceId === server.id
+                                  && renaming.kind === 'session' && renaming.id === session.id ? (
+                                    renameForm(server.id, 'session', session.id, session.title, true)
+                                  ) : (
+                                    <HoverCard
+                                      anchor={sessionRow}
+                                      content={(
+                                        <div className={cc.hoverContent}>
+                                          <div className={cc.hoverTitle}>{session.blank === true ? t('session.new') : (session.title || t('list.unnamed'))}</div>
+                                          {session.blank !== true && session.updatedAt !== undefined && session.updatedAt > 0 && (
+                                            <div className={cc.hoverTime}>{hoverTimeLabel(session.updatedAt, now)}</div>
+                                          )}
+                                          {sessionStateLabel(server, session) !== undefined && (
+                                            <div className={cc.hoverStatus}>
+                                              <span className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}>
+                                                {sessionStateDot(server, session)}
+                                              </span>
+                                              <span>{sessionStateLabel(server, session)}</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                      disabled={menuOpen[sessionKey] === true || sessionDrag !== null || workspaceDrag !== null}
+                                      copyText={session.blank === true ? undefined : (session.title || t('list.unnamed'))}
+                                      copyLabel={t('action.copy')}
+                                      copiedLabel={t('hover.copied')}
+                                    />
                                   )}
                                   {sessionDragError !== undefined && (
                                     <div className={clsx(cc.rowError, cc.sessionNested)} role="alert">{sessionDragError}</div>

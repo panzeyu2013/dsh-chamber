@@ -10,6 +10,7 @@
  */
 import { chamberBridge } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
+import type { SessionOrderBy } from './derive.ts'
 
 assertSingletonModule('view-prefs')
 
@@ -19,6 +20,18 @@ export interface ChamberSidebarViewPrefs {
   folded: Record<string, boolean>
   /** key: sourceId */
   ungroupedOrder: Record<string, string[]>
+  /**
+   * Per-source session ordering preference (design 06 §3.1 orderBy): key =
+   * sourceId ('local', 'ssh-<id>'), value = SessionOrderBy. OPTIONAL — kept
+   * so old persisted payloads (and any external literal constructor) stay
+   * valid without a version bump (v stays 1: re-seeding on a version change
+   * would drop folded/ungroupedOrder for data written by a mixed fleet).
+   * Sanitization falls back to {} when the field is missing or holds illegal
+   * values, and the write-time prune drops entries of sources that were seen
+   * this session and vanished from the projection (same rule as
+   * ungroupedOrder).
+   */
+  orderBy?: Record<string, SessionOrderBy>
   /**
    * Internal bookkeeping (not user-facing): source ids observed in a
    * projection during THIS page session. The write-time prune only drops
@@ -50,7 +63,7 @@ export const VIEW_PREFS_KEY = 'dsh-chamber.sidebar.v1'
  * post-reset cache (2026-08 audit nit).
  */
 function defaults(): ChamberSidebarViewPrefs {
-  return { v: 1, folded: {}, ungroupedOrder: {}, seenSources: [] }
+  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -72,12 +85,20 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       if (Array.isArray(value)) ungroupedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
     }
   }
+  // orderBy：缺失或含非法值（不是 'manual'/'updated'）的条目一律丢弃；
+  // 旧数据（无该字段）回退空对象——v 保持 1，不因新增字段重播种。
+  const orderBy: Record<string, SessionOrderBy> = {}
+  if (isPlainObject(raw.orderBy)) {
+    for (const [key, value] of Object.entries(raw.orderBy)) {
+      if (value === 'manual' || value === 'updated') orderBy[key] = value
+    }
+  }
   // seenSources 保留 raw 里的数组值（写入路径经 sanitize 时须携带会话内
   // 簿记）；「绝不从存储恢复」由 loadViewPrefs 在载入后归零保证（见下）。
   const seenSources = Array.isArray(raw.seenSources)
     ? raw.seenSources.filter((entry): entry is string => typeof entry === 'string')
     : []
-  return { v: 1, folded, ungroupedOrder, seenSources }
+  return { v: 1, folded, ungroupedOrder, orderBy, seenSources }
 }
 
 /**
@@ -192,6 +213,7 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
     sourceId !== undefined && !inProjection.has(sourceId) && seenSources.has(sourceId)
   const folded = { ...prefs.folded }
   const ungroupedOrder = { ...prefs.ungroupedOrder }
+  const orderBy = { ...prefs.orderBy }
   let changed = false
   for (const key of Object.keys(folded)) {
     const slash = key.indexOf('/')
@@ -207,10 +229,18 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
       changed = true
     }
   }
+  // orderBy 与 ungroupedOrder 同为 sourceId 键：本会话见过、现已消失的来源
+  // 其排序偏好一并裁剪；断连来源的偏好保留（重连后仍按原偏好渲染）。
+  for (const sourceId of Object.keys(orderBy)) {
+    if (knownGone(sourceId)) {
+      delete orderBy[sourceId]
+      changed = true
+    }
+  }
   if (!changed && prefs.seenSources.length === seen.length && prefs.seenSources.every((id, i) => id === seen[i])) {
     return prefs
   }
-  return { v: 1, folded, ungroupedOrder, seenSources: seen }
+  return { v: 1, folded, ungroupedOrder, orderBy, seenSources: seen }
 }
 
 /**

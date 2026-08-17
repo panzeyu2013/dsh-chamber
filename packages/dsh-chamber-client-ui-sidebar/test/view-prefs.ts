@@ -38,7 +38,7 @@ class MemoryStorage implements StorageLike {
 }
 
 function defaults(): ChamberSidebarViewPrefs {
-  return { v: 1, folded: {}, ungroupedOrder: {}, seenSources: [] }
+  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] }
 }
 
 test('loadViewPrefs returns defaults when the key is missing', () => {
@@ -51,6 +51,7 @@ test('save then load round-trips the prefs', () => {
     v: 1,
     folded: { 'local/w1': true, 'ssh-a/w2': false },
     ungroupedOrder: { local: ['s3', 's1', 's2'], 'ssh-a': [] },
+    orderBy: { local: 'updated', 'ssh-a': 'manual' },
     // seenSources is SESSION-ONLY memory: it is never persisted, so a
     // round-trip through storage always lands back on [].
     seenSources: [],
@@ -103,6 +104,7 @@ test('loadViewPrefs sanitizes malformed entries leniently and keeps valid ones',
     v: 1,
     folded: { good: true },
     ungroupedOrder: { local: ['s1', 's2'], empty: [] },
+    orderBy: {},
     seenSources: [],
   })
 })
@@ -110,7 +112,7 @@ test('loadViewPrefs sanitizes malformed entries leniently and keeps valid ones',
 test('loadViewPrefs falls back to defaults when a top-level section is the wrong type', () => {
   const storage = new MemoryStorage()
   storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: 'x', ungroupedOrder: 7 }))
-  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, seenSources: [] })
+  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] })
 })
 
 test('default fallbacks are fresh objects — an in-place mutation of one load cannot pollute later loads', () => {
@@ -121,9 +123,9 @@ test('default fallbacks are fresh objects — an in-place mutation of one load c
   const first = loadViewPrefs(storage) // missing key → defaults
   first.folded['polluted/w'] = true
   first.ungroupedOrder['polluted'] = ['s1']
-  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, seenSources: [] })
+  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] })
   storage.setItem(VIEW_PREFS_KEY, '{corrupt') // corrupt JSON → defaults
-  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, seenSources: [] })
+  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] })
 })
 
 test('saveViewPrefs never throws when setItem throws', () => {
@@ -133,7 +135,7 @@ test('saveViewPrefs never throws when setItem throws', () => {
       throw new Error('quota exceeded')
     },
   }
-  assert.doesNotThrow(() => saveViewPrefs({ v: 1, folded: { a: true }, ungroupedOrder: {}, seenSources: [] }, throwing))
+  assert.doesNotThrow(() => saveViewPrefs({ v: 1, folded: { a: true }, ungroupedOrder: {}, orderBy: {}, seenSources: [] }, throwing))
 })
 
 test('loadViewPrefs never throws when getItem throws', () => {
@@ -156,7 +158,7 @@ test('a storage-like whose getItem and setItem both throw never propagates (load
     },
   }
   assert.deepEqual(loadViewPrefs(throwing), defaults())
-  assert.doesNotThrow(() => saveViewPrefs({ v: 1, folded: { a: true }, ungroupedOrder: {}, seenSources: [] }, throwing))
+  assert.doesNotThrow(() => saveViewPrefs({ v: 1, folded: { a: true }, ungroupedOrder: {}, orderBy: {}, seenSources: [] }, throwing))
 })
 
 test('a throwing localStorage accessor degrades to defaults / no-op when no storage is passed', () => {
@@ -169,7 +171,7 @@ test('a throwing localStorage accessor degrades to defaults / no-op when no stor
       },
     })
     assert.deepEqual(loadViewPrefs(undefined), defaults())
-    assert.doesNotThrow(() => saveViewPrefs({ v: 1, folded: { a: true }, ungroupedOrder: {}, seenSources: [] }, undefined))
+    assert.doesNotThrow(() => saveViewPrefs({ v: 1, folded: { a: true }, ungroupedOrder: {}, orderBy: {}, seenSources: [] }, undefined))
   } finally {
     if (original === undefined) {
       delete (globalThis as Record<string, unknown>).localStorage
@@ -204,11 +206,13 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   __resetViewPrefsForTests()
   // Seed the prefs this test asserts on (self-contained — must not depend on
   // another test's writes): present-connected (local), present-disconnected
-  // (ssh-b), never-seen (ssh-a, ghost) keys, plus ungrouped orders.
+  // (ssh-b), never-seen (ssh-a, ghost) keys, plus ungrouped orders and
+  // per-source orderBy preferences.
   updateViewPrefs(prev => ({
     ...prev,
     folded: { 'local/w1': true, 'local/w3': true, 'ssh-a/w2': true, 'ghost/w': true },
     ungroupedOrder: { local: ['s1'], 'ssh-b': ['s2'], ghost: ['s3'] },
+    orderBy: { local: 'updated', 'ssh-b': 'updated', ghost: 'manual' },
   }))
   // Empty projection (nothing published yet): updateViewPrefs leaves the
   // prefs untouched — a transiently unready projection must never wipe them.
@@ -255,6 +259,9 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   assert.deepEqual(after.ungroupedOrder['local'], ['s1'])
   assert.deepEqual(after.ungroupedOrder['ssh-b'], ['s2'])
   assert.deepEqual(after.ungroupedOrder['ghost'], ['s3']) // never seen → kept (safe)
+  // orderBy follows the same source-keyed rules: present sources keep it,
+  // never-seen ghosts keep it.
+  assert.deepEqual(after.orderBy, { local: 'updated', 'ssh-b': 'updated', ghost: 'manual' })
   // seenSources records only the sources observed in THIS session's projection.
   assert.deepEqual(after.seenSources, ['local', 'ssh-b'])
 
@@ -275,6 +282,9 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   const pruned = getViewPrefs()
   assert.equal(pruned.folded['ssh-b/w9'], undefined) // seen then vanished → pruned
   assert.deepEqual(pruned.ungroupedOrder['ssh-b'], undefined) // ungrouped order pruned too
+  assert.equal(pruned.orderBy?.['ssh-b'], undefined) // orderBy pruned too
+  assert.equal(pruned.orderBy?.['ghost'], 'manual')  // never seen → still safe
+  assert.equal(pruned.orderBy?.['local'], 'updated') // present source keeps its preference
   assert.equal(pruned.folded['ghost/w'], true)       // never seen → still safe
   assert.equal(pruned.folded['local/w1'], true)
   assert.equal(pruned.folded['local/w4'], true)
@@ -333,4 +343,66 @@ test('a fresh session under a local-only projection never prunes unloaded remote
   // either (only seen-then-vanished sources are).
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w3': true } }))
   assert.equal(getViewPrefs().folded['ssh-x/w'], true)
+})
+
+// ---- orderBy preference (design 06 §3.1; v stays 1 — no re-seed on old data) ----
+
+test('loadViewPrefs sanitizes orderBy: legal values kept, illegal entries dropped', () => {
+  const storage = new MemoryStorage()
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({
+    v: 1,
+    folded: {},
+    ungroupedOrder: {},
+    orderBy: {
+      local: 'updated',
+      'ssh-a': 'manual',
+      'ssh-b': 'ascending',   // illegal — dropped
+      'ssh-c': 42,            // illegal — dropped
+      'ssh-d': null,          // illegal — dropped
+    },
+  }))
+  const loaded = loadViewPrefs(storage)
+  assert.deepEqual(loaded.orderBy, { local: 'updated', 'ssh-a': 'manual' })
+  // The rest of the prefs survives the sanitize.
+  assert.equal(loaded.v, 1)
+  assert.deepEqual(loaded.folded, {})
+  assert.deepEqual(loaded.ungroupedOrder, {})
+})
+
+test('loadViewPrefs falls back to {} orderBy for old data written without the field (v stays 1)', () => {
+  // Old-version payload: no orderBy key at all. It must NOT re-seed to
+  // defaults (which would drop folded/ungroupedOrder) — orderBy just lands on
+  // the empty fallback while the rest survives.
+  const storage = new MemoryStorage()
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({
+    v: 1,
+    folded: { 'local/w1': true },
+    ungroupedOrder: { local: ['s1', 's2'] },
+  }))
+  const loaded = loadViewPrefs(storage)
+  assert.deepEqual(loaded.orderBy, {})
+  assert.equal(loaded.folded['local/w1'], true)
+  assert.deepEqual(loaded.ungroupedOrder['local'], ['s1', 's2'])
+})
+
+test('loadViewPrefs falls back to {} orderBy when the field is the wrong type', () => {
+  const storage = new MemoryStorage()
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, orderBy: 'updated' }))
+  assert.deepEqual(loadViewPrefs(storage).orderBy, {})
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, orderBy: ['updated'] }))
+  assert.deepEqual(loadViewPrefs(storage).orderBy, {})
+})
+
+test('orderBy persists through save/load and the shared store keeps it on unrelated writes', () => {
+  __resetViewPrefsForTests()
+  updateViewPrefs(prev => ({ ...prev, orderBy: { local: 'updated', 'ssh-a': 'manual' } }))
+  assert.deepEqual(getViewPrefs().orderBy, { local: 'updated', 'ssh-a': 'manual' })
+  // A later unrelated write (fold) must not drop orderBy — the mutator's
+  // spread keeps it, and sanitize re-validates the same values.
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  assert.deepEqual(getViewPrefs().orderBy, { local: 'updated', 'ssh-a': 'manual' })
+  // updateViewPrefs re-sanitizes on every write: replacing orderBy with an
+  // illegal value must land on the empty fallback, not persist the garbage.
+  updateViewPrefs(prev => ({ ...prev, orderBy: { 'ssh-b': 'ascending' as never } }))
+  assert.deepEqual(getViewPrefs().orderBy, {})
 })

@@ -59,14 +59,14 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   文字、无状态文案）→ 该来源的
   workspace（组头）→ session 行（**嵌套缩进**于 workspace 之下）。未连接
   来源只显示分组头 + 状态点（无会话数据）。
-- 会话行带**运行指示点**与**相对时间**（wire `sessions.list.running` /
-  `updatedAt`；相对时间按官方 relativeTime 分桶规则分桶、UI 本地化）。
+- 会话行带**运行指示点**（相对时间列不显示——见 06 §4.3，2026-08 确认
+  暂不回归）。
 - **当前来源的当前会话行高亮**（含所在 workspace 组着色）：当前会话 id 经
   运行时事实通道（`server.runtime?.current`，06 §4）——每个来源自己的 ctx
   上报自身 `sessions.list` 快照投影，任意来源均可达，组件不订阅任何 store。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）：折叠态持久化于
-  localStorage 视图偏好（`dsh-chamber.sidebar.v1`，06 §3——mount 读一次、
-  变化写回，跨 ctx 实时联动不做）。
+  localStorage 视图偏好（`dsh-chamber.sidebar.v1`，06 §3——共享实时存储，
+  跨 ctx 实时联动）。
 - 不属任何 workspace 的游离会话落在来源末位合成的"未分组"桶（仅会话行，
   无 workspace 操作）；subagent 来源的子会话不进入导航列表；blank 会话按
   官方 `(!blank || current)` 规则——**活动来源的当前空白"新会话"行进入
@@ -99,6 +99,10 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   服务器路径）。
 - 悬停操作与新建工作区成功后，经 chamberBridge.requestRefresh(sourceId)
   立即重拉该来源聚合（v1 轮询 + 操作后刷新）。
+- **v1 交互面扩展（2026-08，详见 06）**：来源头 hover 操作簇新增**会话排序
+  切换**（manual↔updated 循环，06 §3.1）；workspace 头/会话行**双击重命名**
+  （会话行延迟单击二击取消，06 §2.2）；workspace 头/会话行悬停显示**信息
+  卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
 - New Session → 当前活动来源新建会话。
 
 ### 2.3 数据纪律
@@ -144,7 +148,12 @@ interface ChamberServerAggregate {
 interface OpenSessionRequest { sourceId: string; sessionId: string }
 interface InstanceRuntimeReport {
   current?: string                // 当前会话 id（06 §4.3 全局单选高亮）
-  sessions: Record<string, { completed?: boolean; pending?: 'approval'|'plan-review'|'question' }>
+  sessions: Record<string, {
+    running?: boolean             // 实时 running 位（App 完成蓝点边沿推导）
+    completed?: boolean
+    pending?: 'approval'|'plan-review'|'question'
+    runningSubagents?: number     // 运行中子 agent 计数（>0 稀疏；06 §4.5）
+  }>
 }
 export const chamberBridge: {
   getServers(): ChamberServerAggregate[]
@@ -411,9 +420,9 @@ export const chamberBridge: {
 ## 9. 分期
 
 - 已落地范围：P1 基线（§2/§3）、P2 连接设备页（§5）、侧边栏完善三轮（06 §1-§7）。
-- **已覆盖（调研确认，侧边栏不做）**：fork 会话——官方 conversation
-  回合尾部分支动作（ui-conversation turn-tail `forkAt`）在 chamber
-  boot 图内常驻可用；侧边栏行内 fork 仅是 UI 覆盖缺口，非功能缺口。
+- **已实现（2026-08）**：fork 会话——官方 conversation 回合尾部分支动作
+  （turn-tail `forkAt`）常驻可用；侧边栏会话行 kebab 菜单亦提供行内 fork
+  （wire `sessions.fork`，对齐官方 ui-workspace）。
 - **推迟（维持不排期）**：flat 单列表模式（与"仅按来源分类"呈现原则有
   张力）；当前空白会话"新会话"行（§2.1 已声明空白会话不入列表）。
 - 不做（v1）：跨来源移动会话、单 store 真融合（fork runtime）、会话实时

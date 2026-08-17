@@ -10,7 +10,7 @@
  *
  * No React, no DOM — plain-node unit-testable (see test/derive.ts).
  */
-import type { InstanceSnapshot } from './instance-api.ts'
+import type { InstanceSnapshot, SearchRow } from './instance-api.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
 
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
@@ -381,18 +381,180 @@ export function relativeTimeBucket(updatedAt: number, now: number): RelativeTime
 }
 
 /**
- * Recency comparator: newest first, sessionId ascending as the deterministic
+ * Recency comparator core: newest first, key ascending as the deterministic
  * tiebreak. A missing wire updatedAt sorts as 0 (behavior identical to the
  * pre-optional coercion of absent wire values to 0).
  */
+function compareRecency(aKey: string, aAt: number | undefined, bKey: string, bAt: number | undefined): number {
+  const atA = aAt ?? 0
+  const atB = bAt ?? 0
+  if (atB !== atA) return atB - atA
+  return aKey < bKey ? -1 : 1
+}
+
+/** Recency comparator for wire session rows (sessionId-keyed). */
 function byRecency(
   a: { sessionId: string; updatedAt?: number },
   b: { sessionId: string; updatedAt?: number },
 ): number {
-  const atA = a.updatedAt ?? 0
-  const atB = b.updatedAt ?? 0
-  if (atB !== atA) return atB - atA
-  return a.sessionId < b.sessionId ? -1 : 1
+  return compareRecency(a.sessionId, a.updatedAt, b.sessionId, b.updatedAt)
+}
+
+/** Per-workspace session ordering preference (design 06 §3.1 orderBy). */
+export type SessionOrderBy = 'manual' | 'updated'
+
+/**
+ * Sort one workspace's sessions by the per-source ordering preference
+ * (design 06 §3.1): manual = the given order as-is (wire membership order, or
+ * an override the caller already applied via reconciledSessionOrder); updated =
+ * recency descending with the byRecency tiebreak (missing updatedAt sorts as
+ * 0). PURE — always returns a fresh array, never mutates the input.
+ */
+export function sortWorkspaceSessions<T extends { id: string; updatedAt?: number }>(
+  sessions: readonly T[],
+  orderBy: SessionOrderBy,
+): T[] {
+  if (orderBy === 'updated') {
+    return [...sessions].sort((a, b) => compareRecency(a.id, a.updatedAt, b.id, b.updatedAt))
+  }
+  return [...sessions]
+}
+
+/**
+ * Ungrouped-bucket order resolution (P2-9 extracted, PURE): updated mode sorts
+ * by recency (ignoring the stored order — updated ordering takes over, same as
+ * real workspaces); manual mode uses the stored order via reconciledSessionOrder
+ * (stored ids first, unknown ids appended in wire order), and returns the wire
+ * order as-is when no stored order exists.
+ */
+export function orderUngroupedSessions<T extends { id: string; updatedAt?: number }>(
+  wire: readonly T[],
+  stored: readonly string[] | undefined,
+  orderBy: SessionOrderBy,
+): T[] {
+  if (orderBy === 'updated') return sortWorkspaceSessions(wire, orderBy)
+  if (stored === undefined) return [...wire]
+  const order = reconciledSessionOrder(stored, wire.map(session => session.id))
+  const byId = new Map(wire.map(session => [session.id, session]))
+  return order.flatMap(id => { const session = byId.get(id); return session === undefined ? [] : [session] })
+}
+
+/**
+ * Local-metadata search hits (design 06 §1.1 local leg, aligned with the
+ * official ui-workspace deriveSearchResults local segment): a session matches
+ * when its title OR the title of a workspace it belongs to contains the query
+ * substring (case-insensitive). Blank / archived / subagent-origin rows never
+ * match. A session whose own title is missing cannot hit on title, but a
+ * workspace-title hit still counts. Hits are recency-ordered (byRecency).
+ * @param snapshot - the per-instance aggregate (workspaces/sessions/archived).
+ * @param query - caller text; trimmed here defensively, empty → [].
+ * @returns local rows with an empty snippet (the remote merge overlays the
+ *   content snippet when the same session also hits remotely).
+ */
+export function deriveLocalSearchMatches(snapshot: InstanceSnapshot, query: string): SearchRow[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return []
+  const archived = new Set(snapshot.archivedSessionIds)
+  const workspaceTitleBySession = new Map<string, string>()
+  for (const workspace of snapshot.workspaces) {
+    for (const sessionId of workspace.sessionIds) {
+      if (!workspaceTitleBySession.has(sessionId)) workspaceTitleBySession.set(sessionId, workspace.title)
+    }
+  }
+  const matches: { sessionId: string; updatedAt?: number }[] = []
+  for (const session of snapshot.sessions) {
+    if (session.origin === 'subagent' || session.blank || archived.has(session.sessionId)) continue
+    const title = session.title
+    const workspaceTitle = workspaceTitleBySession.get(session.sessionId)
+    const titleHit = title !== undefined && title.toLowerCase().includes(q)
+    const workspaceHit = workspaceTitle !== undefined && workspaceTitle.toLowerCase().includes(q)
+    if (!titleHit && !workspaceHit) continue
+    matches.push(session)
+  }
+  matches.sort(byRecency)
+  return matches.map(session => ({ sessionId: session.sessionId, snippet: '' }))
+}
+
+/**
+ * Merge local metadata hits with the remote content-search page (design
+ * 06 §1.1, aligned with the official deriveSearchResults merge): local rows
+ * lead in their recency order, then remote rows not already covered by a
+ * local hit keep the backend order; duplicate sessionIds (within either leg
+ * or across both) collapse to one row, and a locally-hit session that also
+ * matched remotely carries the remote snippet. hasMore = remote hasMore OR
+ * the merged result exceeds the limit.
+ *
+ * P1-2 (visible-set filter): the remote leg is filtered against the caller's
+ * visible-session set before merging — the local leg already only matches
+ * projected rows (subagent / archived / blank-non-current never enter the
+ * projection), so without the same filter on the remote leg, content-search
+ * hits for hidden sessions would sneak into the results. The official
+ * deriveSearchResults applies sessionVisible() to every content item (tree.ts
+ * L370-373); the projection IS the chamber's visibility authority, so "in
+ * the projection" == "visible". An EMPTY visible set (source disconnected /
+ * projection not yet ready) degrades to no filtering — never wipe out all
+ * remote hits because the projection is temporarily absent.
+ * @param local - deriveLocalSearchMatches output (recency-ordered).
+ * @param remote - the wire searchSessions page.
+ * @param limit - protocol-owned maximum merged row count.
+ * @param visibleIds - ids of sessions visible in the projection (the union of
+ *   every workspace's session ids); remote items outside it are dropped.
+ *   Empty set = projection not ready → no filtering.
+ */
+export function mergeSearchResults(
+  local: readonly SearchRow[],
+  remote: { items: readonly SearchRow[]; hasMore: boolean },
+  limit: number,
+  visibleIds: ReadonlySet<string>,
+): { items: SearchRow[]; hasMore: boolean } {
+  // 可见集为空（断连/投影未就绪）时降级：不按可见集过滤，保留全部远程命中。
+  const filterRemote = visibleIds.size > 0
+  const remoteBySession = new Map<string, string>()
+  for (const item of remote.items) {
+    if (filterRemote && !visibleIds.has(item.sessionId)) continue
+    if (!remoteBySession.has(item.sessionId)) remoteBySession.set(item.sessionId, item.snippet)
+  }
+  const ordered: SearchRow[] = []
+  const included = new Set<string>()
+  const include = (row: SearchRow): void => {
+    if (included.has(row.sessionId)) return
+    included.add(row.sessionId)
+    const snippet = remoteBySession.get(row.sessionId)
+    ordered.push(snippet === undefined ? row : { sessionId: row.sessionId, snippet })
+  }
+  for (const row of local) include(row)
+  for (const row of remote.items) {
+    if (filterRemote && !visibleIds.has(row.sessionId)) continue
+    include(row)
+  }
+  return {
+    items: ordered.slice(0, limit),
+    hasMore: remote.hasMore || ordered.length > limit,
+  }
+}
+
+/**
+ * Fork-child title increment (P1-4). VERBATIM port of the official dsh client
+ * runtime's `increasedForkTitle` (vendor
+ * dsh-client-runtime/src/client/sessions/service.ts L184-194): the wire
+ * `session.fork` accepts only `{ sessionId, atSeq? }` — the official
+ * `increaseTitle` flag is a client-side convenience (fork succeeds, then the
+ * child is renamed) — so the chamber implements the same increment itself:
+ * a trailing half-width or full-width parenthesized number increments
+ * (BigInt, no precision loss), any other title starts at ` (1)`.
+ * @param title - the source session's durable title.
+ * @returns the title to assign to the fork child.
+ */
+export function increasedForkTitle(title: string): string {
+  const ascii = /^(.*?)\((\d+)\)$/u.exec(title)
+  if (ascii?.[1] !== undefined && ascii[2] !== undefined) {
+    return `${ascii[1]}(${BigInt(ascii[2]) + 1n})`
+  }
+  const fullWidth = /^(.*?)（(\d+)）$/u.exec(title)
+  if (fullWidth?.[1] !== undefined && fullWidth[2] !== undefined) {
+    return `${fullWidth[1]}（${BigInt(fullWidth[2]) + 1n}）`
+  }
+  return `${title} (1)`
 }
 
 /**

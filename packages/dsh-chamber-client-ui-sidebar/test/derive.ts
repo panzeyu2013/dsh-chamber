@@ -9,9 +9,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  deriveLocalSearchMatches,
   deriveServerWorkspaces,
+  increasedForkTitle,
   instanceSnapshotSignature,
   mergeRuntimeFacts,
+  mergeSearchResults,
+  orderUngroupedSessions,
   projectRuntimeFacts,
   reconcileCompletedFacts,
   reconciledSessionOrder,
@@ -19,10 +23,11 @@ import {
   runtimeReportSignature,
   sanitizeSearchQuery,
   serversProjectionSignature,
+  sortWorkspaceSessions,
   SEARCH_QUERY_MAX_CODE_UNITS,
   UNGROUPED_WORKSPACE_ID,
 } from '../src/shared/derive.ts'
-import type { InstanceSnapshot, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
+import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
 import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/shared/aggregate-store.ts'
 
 function session(
@@ -711,4 +716,393 @@ test('serversProjectionSignature JSON-encodes titles: user-controlled separators
       }],
     })]),
   )
+})
+
+// ---- sortWorkspaceSessions (design 06 §3.1 orderBy) ----
+
+test('sortWorkspaceSessions manual keeps the given (wire/override) order', () => {
+  const sessions = [
+    { id: 'c', updatedAt: 300 },
+    { id: 'a', updatedAt: 100 },
+    { id: 'b', updatedAt: 200 },
+  ]
+  const out = sortWorkspaceSessions(sessions, 'manual')
+  assert.deepEqual(out, sessions)
+  // PURE: a fresh array, the input untouched.
+  assert.notEqual(out, sessions)
+})
+
+test('sortWorkspaceSessions updated sorts by updatedAt descending', () => {
+  const out = sortWorkspaceSessions(
+    [
+      { id: 'a', updatedAt: 100 },
+      { id: 'b', updatedAt: 300 },
+      { id: 'c', updatedAt: 200 },
+    ],
+    'updated',
+  )
+  assert.deepEqual(out.map(x => x.id), ['b', 'c', 'a'])
+})
+
+test('sortWorkspaceSessions updated treats a missing updatedAt as 0 (sorts last)', () => {
+  const out = sortWorkspaceSessions(
+    [
+      { id: 'old', updatedAt: 5 },
+      { id: 'unknown1' },
+      { id: 'unknown2' },
+    ],
+    'updated',
+  )
+  assert.deepEqual(out.map(x => x.id), ['old', 'unknown1', 'unknown2'])
+})
+
+test('sortWorkspaceSessions updated breaks equal updatedAt ties by id ascending', () => {
+  const out = sortWorkspaceSessions(
+    [
+      { id: 'z', updatedAt: 100 },
+      { id: 'a', updatedAt: 100 },
+      { id: 'm', updatedAt: 100 },
+    ],
+    'updated',
+  )
+  assert.deepEqual(out.map(x => x.id), ['a', 'm', 'z'])
+})
+
+test('sortWorkspaceSessions manual never mutates and survives repeated calls', () => {
+  const sessions = [{ id: 'b' }, { id: 'a' }]
+  assert.deepEqual(sortWorkspaceSessions(sessions, 'manual'), sessions)
+  assert.deepEqual(sessions, [{ id: 'b' }, { id: 'a' }])
+})
+
+// ---- orderUngroupedSessions (P2-9 extraction, design 06 §3.1) ----
+
+test('orderUngroupedSessions updated sorts by recency ignoring the stored order', () => {
+  const wire = [
+    { id: 'old', updatedAt: 5 },
+    { id: 'new', updatedAt: 100 },
+    { id: 'mid', updatedAt: 50 },
+  ]
+  const out = orderUngroupedSessions(wire, ['mid', 'old', 'new'], 'updated')
+  assert.deepEqual(out.map(x => x.id), ['new', 'mid', 'old'])
+})
+
+test('orderUngroupedSessions updated treats a missing updatedAt as 0 (sorts last)', () => {
+  const wire = [
+    { id: 'unknown' },
+    { id: 'known', updatedAt: 10 },
+  ]
+  const out = orderUngroupedSessions(wire, ['unknown', 'known'], 'updated')
+  assert.deepEqual(out.map(x => x.id), ['known', 'unknown'])
+})
+
+test('orderUngroupedSessions manual uses the stored order with wire-id appends', () => {
+  const wire = [
+    { id: 'a' },
+    { id: 'b' },
+    { id: 'c' },
+  ]
+  const out = orderUngroupedSessions(wire, ['c', 'a'], 'manual')
+  assert.deepEqual(out.map(x => x.id), ['c', 'a', 'b'])
+})
+
+test('orderUngroupedSessions manual skips stored ids unknown to the wire', () => {
+  const wire = [
+    { id: 'a' },
+    { id: 'b' },
+  ]
+  const out = orderUngroupedSessions(wire, ['ghost', 'b', 'a'], 'manual')
+  assert.deepEqual(out.map(x => x.id), ['b', 'a'])
+})
+
+test('orderUngroupedSessions manual with no stored order returns the wire order copy', () => {
+  const wire = [{ id: 'b' }, { id: 'a' }]
+  const out = orderUngroupedSessions(wire, undefined, 'manual')
+  assert.deepEqual(out.map(x => x.id), ['b', 'a'])
+  assert.notEqual(out, wire)
+})
+
+// ---- deriveLocalSearchMatches (design 06 §1.1 local leg) ----
+
+test('deriveLocalSearchMatches hits session titles case-insensitively', () => {
+  const result = deriveLocalSearchMatches(
+    snapshot(
+      [workspace('w1', 'Work', ['a', 'b'])],
+      [session('a', 10, { title: 'DeepSeek R1' }), session('b', 20, { title: 'other' })],
+    ),
+    'deepseek',
+  )
+  assert.deepEqual(result, [{ sessionId: 'a', snippet: '' }])
+})
+
+test('deriveLocalSearchMatches hits workspace titles (a session with no title still matches)', () => {
+  const result = deriveLocalSearchMatches(
+    snapshot(
+      [workspace('w1', 'Alpha Project', ['a']), workspace('w2', 'Other', ['b'])],
+      [session('a', 10), session('b', 20, { title: 'Other' })],
+    ),
+    'alpha',
+  )
+  // Session a has NO title (missing titles never hit on title), but its
+  // workspace title hit still counts; b sits in a non-matching workspace.
+  assert.deepEqual(result, [{ sessionId: 'a', snippet: '' }])
+})
+
+test('deriveLocalSearchMatches matches either leg independently', () => {
+  const result = deriveLocalSearchMatches(
+    snapshot(
+      [workspace('w1', 'Work', ['a']), workspace('w2', 'Docs', ['b'])],
+      [session('a', 10, { title: 'Notes' }), session('b', 20, { title: 'no-match' })],
+    ),
+    'docs',
+  )
+  assert.deepEqual(result, [{ sessionId: 'b', snippet: '' }])
+})
+
+test('deriveLocalSearchMatches excludes blank, archived and subagent sessions', () => {
+  const result = deriveLocalSearchMatches(
+    {
+      workspaces: [workspace('w1', 'Match', ['hit', 'blank-hit', 'archived-hit', 'sub-hit'])],
+      sessions: [
+        session('hit', 10, { title: 'match me' }),
+        session('blank-hit', 20, { title: 'match me', blank: true }),
+        session('archived-hit', 30, { title: 'match me' }),
+        session('sub-hit', 40, { title: 'match me', origin: 'subagent' }),
+      ],
+      archivedSessionIds: ['archived-hit'],
+    },
+    'match',
+  )
+  assert.deepEqual(result, [{ sessionId: 'hit', snippet: '' }])
+})
+
+test('deriveLocalSearchMatches orders hits by recency with the id tiebreak', () => {
+  const result = deriveLocalSearchMatches(
+    snapshot(
+      [workspace('w1', 'Work', ['a', 'b', 'c'])],
+      [
+        session('a', 100, { title: 'hit' }),
+        session('b', 300, { title: 'hit' }),
+        session('c', 300, { title: 'hit' }),
+      ],
+    ),
+    'hit',
+  )
+  assert.deepEqual(result.map(row => row.sessionId), ['b', 'c', 'a'])
+})
+
+test('deriveLocalSearchMatches returns [] for an empty query (defensive trim)', () => {
+  const result = deriveLocalSearchMatches(
+    snapshot([workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'hit' })]),
+    '   ',
+  )
+  assert.deepEqual(result, [])
+})
+
+test('deriveLocalSearchMatches returns [] when nothing matches', () => {
+  const result = deriveLocalSearchMatches(
+    snapshot([workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'hit' })]),
+    'zzz',
+  )
+  assert.deepEqual(result, [])
+})
+
+// ---- mergeSearchResults (design 06 §1.1 merge; P1-2 visible-set filter) ----
+
+// The pre-filter tests simulate a projection where every row is visible.
+const ALL_VISIBLE = new Set(['l1', 'l2', 'l3', 'r1', 'r2', 'both', 'x', 'y'])
+
+test('mergeSearchResults leads with local hits then appends remote-only rows', () => {
+  const local: SearchRow[] = [
+    { sessionId: 'l1', snippet: '' },
+    { sessionId: 'l2', snippet: '' },
+  ]
+  const remote = {
+    items: [
+      { sessionId: 'r1', snippet: 'remote one' },
+      { sessionId: 'r2', snippet: 'remote two' },
+    ],
+    hasMore: false,
+  }
+  const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE)
+  assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2', 'r1', 'r2'])
+  assert.equal(merged.hasMore, false)
+})
+
+test('mergeSearchResults adopts the remote snippet for sessions hit in both legs', () => {
+  const local: SearchRow[] = [
+    { sessionId: 'l1', snippet: '' },
+    { sessionId: 'both', snippet: '' },
+  ]
+  const remote = {
+    items: [
+      { sessionId: 'both', snippet: 'content snippet' },
+      { sessionId: 'r1', snippet: 'remote one' },
+    ],
+    hasMore: false,
+  }
+  const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE)
+  assert.deepEqual(merged.items, [
+    { sessionId: 'l1', snippet: '' },
+    { sessionId: 'both', snippet: 'content snippet' },
+    { sessionId: 'r1', snippet: 'remote one' },
+  ])
+})
+
+test('mergeSearchResults dedupes sessionIds within the remote leg', () => {
+  const remote = {
+    items: [
+      { sessionId: 'x', snippet: 'first' },
+      { sessionId: 'x', snippet: 'second' },
+      { sessionId: 'y', snippet: 'other' },
+    ],
+    hasMore: false,
+  }
+  const merged = mergeSearchResults([], remote, 20, ALL_VISIBLE)
+  assert.deepEqual(merged.items, [
+    { sessionId: 'x', snippet: 'first' },
+    { sessionId: 'y', snippet: 'other' },
+  ])
+})
+
+test('mergeSearchResults sets hasMore from the remote hint', () => {
+  const merged = mergeSearchResults(
+    [],
+    { items: [{ sessionId: 'x', snippet: '' }], hasMore: true },
+    20,
+    ALL_VISIBLE,
+  )
+  assert.equal(merged.hasMore, true)
+})
+
+test('mergeSearchResults sets hasMore when the merged result exceeds the limit', () => {
+  const merged = mergeSearchResults(
+    [
+      { sessionId: 'l1', snippet: '' },
+      { sessionId: 'l2', snippet: '' },
+    ],
+    { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false },
+    2,
+    ALL_VISIBLE,
+  )
+  assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2'])
+  assert.equal(merged.hasMore, true) // 3 merged rows > limit 2
+})
+
+test('mergeSearchResults bounds the items to the limit', () => {
+  const merged = mergeSearchResults(
+    [
+      { sessionId: 'l1', snippet: '' },
+      { sessionId: 'l2', snippet: '' },
+      { sessionId: 'l3', snippet: '' },
+    ],
+    { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false },
+    2,
+    ALL_VISIBLE,
+  )
+  assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2'])
+})
+
+// ---- P1-2: remote hits are filtered by the visible set ----
+
+test('mergeSearchResults drops remote hits outside the visible set (archived/subagent/blank 混入)', () => {
+  const remote = {
+    items: [
+      { sessionId: 'visible-hit', snippet: 'kept' },
+      { sessionId: 'archived-hit', snippet: 'dropped' },
+      { sessionId: 'subagent-hit', snippet: 'dropped' },
+      { sessionId: 'blank-hit', snippet: 'dropped' },
+    ],
+    hasMore: false,
+  }
+  const merged = mergeSearchResults([], remote, 20, new Set(['visible-hit']))
+  assert.deepEqual(merged.items, [{ sessionId: 'visible-hit', snippet: 'kept' }])
+  assert.equal(merged.hasMore, false)
+})
+
+test('mergeSearchResults keeps visible remote hits and adopts their snippet for local hits', () => {
+  const local: SearchRow[] = [{ sessionId: 'both', snippet: '' }]
+  const remote = {
+    items: [
+      { sessionId: 'both', snippet: 'content snippet' },
+      { sessionId: 'visible-only', snippet: 'remote snippet' },
+      { sessionId: 'hidden', snippet: 'dropped' },
+    ],
+    hasMore: false,
+  }
+  const merged = mergeSearchResults(local, remote, 20, new Set(['both', 'visible-only']))
+  assert.deepEqual(merged.items, [
+    { sessionId: 'both', snippet: 'content snippet' },
+    { sessionId: 'visible-only', snippet: 'remote snippet' },
+  ])
+})
+
+test('mergeSearchResults keeps remote hits when the visible set is empty (projection not ready)', () => {
+  // 断连/投影未就绪：可见集为空必须降级为不过滤——绝不能误杀全部远程命中。
+  const remote = {
+    items: [
+      { sessionId: 'x', snippet: 'kept' },
+      { sessionId: 'y', snippet: 'also kept' },
+    ],
+    hasMore: false,
+  }
+  const merged = mergeSearchResults([], remote, 20, new Set())
+  assert.deepEqual(merged.items, [
+    { sessionId: 'x', snippet: 'kept' },
+    { sessionId: 'y', snippet: 'also kept' },
+  ])
+})
+
+test('mergeSearchResults hasMore reflects the post-filter merged result', () => {
+  // 被过滤掉的远程行既不出现、也不计入 limit 溢出判断。
+  const filtered = mergeSearchResults(
+    [],
+    {
+      items: [
+        { sessionId: 'visible', snippet: 'kept' },
+        { sessionId: 'hidden', snippet: 'dropped' },
+      ],
+      hasMore: false,
+    },
+    1,
+    new Set(['visible']),
+  )
+  assert.deepEqual(filtered.items, [{ sessionId: 'visible', snippet: 'kept' }])
+  assert.equal(filtered.hasMore, false) // 1 merged row ≤ limit 1
+  // 后端 hasMore 提示基于过滤后的列表保留（官方 content.hasMore 公式）。
+  const hinted = mergeSearchResults(
+    [],
+    { items: [{ sessionId: 'visible', snippet: '' }], hasMore: true },
+    20,
+    new Set(['visible']),
+  )
+  assert.equal(hinted.hasMore, true)
+})
+
+// ---- increasedForkTitle (P1-4, official runtime service port) ----
+
+test('increasedForkTitle starts an unnumbered title at (1)', () => {
+  assert.equal(increasedForkTitle('DeepSeek R1'), 'DeepSeek R1 (1)')
+  assert.equal(increasedForkTitle(''), ' (1)')
+})
+
+test('increasedForkTitle increments a trailing half-width parenthesized number', () => {
+  assert.equal(increasedForkTitle('DeepSeek R1 (1)'), 'DeepSeek R1 (2)')
+  assert.equal(increasedForkTitle('a (9)'), 'a (10)')
+  assert.equal(increasedForkTitle('a (0)'), 'a (1)')
+})
+
+test('increasedForkTitle increments a trailing full-width parenthesized number', () => {
+  assert.equal(increasedForkTitle('研究（3）'), '研究（4）')
+  assert.equal(increasedForkTitle('计划（1）'), '计划（2）')
+})
+
+test('increasedForkTitle appends (1) when the trailing parenthesis is not numeric', () => {
+  assert.equal(increasedForkTitle('a (x)'), 'a (x) (1)')
+  assert.equal(increasedForkTitle('a (1b)'), 'a (1b) (1)')
+  assert.equal(increasedForkTitle('a 1'), 'a 1 (1)')
+  assert.equal(increasedForkTitle('a（x）'), 'a（x） (1)')
+})
+
+test('increasedForkTitle increments without precision loss (BigInt)', () => {
+  assert.equal(increasedForkTitle(`huge (${'9'.repeat(40)})`), `huge (1${'0'.repeat(40)})`)
 })

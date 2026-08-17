@@ -309,6 +309,26 @@ DOM/内存无界增长）；② N-ctx 常驻 + **shell 销毁不停止 cordis ct
 - **结构性项（记录待办，未实现）**：事件驱动聚合取代 10s 轮询（todo 10）；
   会话虚拟化 / 单前端多适配器（上游诉求，见 todo 10 §6，chamber 不可改）。
 
+- **侧边栏行内 fork 实现（2026-08）**：会话行 kebab 菜单新增「分叉会话」——
+  `sessions.fork`（+ increaseTitle）→ requestRefresh + 打开子会话，对齐官方
+  ui-workspace；wire 方法已有、无需发明协议；官方 turn-tail `forkAt` 保留
+  并存（推翻「侧边栏不做 fork」）。06 §0 范围表 / 05 §9 决策同步更新。
+- **相对时间列决策确认（2026-08）**：维持移除、暂不回归——多来源密度 +
+  行尾状态槽取代时间列；06 §4.3 已记录决策，05 §2.1 残留文案已修正（删除
+  相对时间描述）。
+- **侧边栏增强批次（2026-08）**：会话排序切换（每来源 `orderBy`
+  manual↔updated，来源头 hover 簇循环切换；updated 模式按 updatedAt 降序
+  渲染、拖拽只写瞬态 override 不落 wire）、搜索本地元数据匹配（标题/
+  workspace 标题子串 + 远程内容命中合并，本地优先、去重补 snippet）、行内
+  fork + 子会话标题递增（对齐官方 increasedForkTitle，rename 失败非致命）、
+  workspace 头/会话行 hover 信息卡、搜索结果状态点（pending >
+  runningSubagents > completed）、双击重命名（workspace 头/会话行）、a11y
+  （tree/group/treeitem 语义）。同轮 review 修复：suppressClickRef workspace
+  拖拽复位、远程搜索可见集过滤（投影外 archived/subagent/blank 不进入
+  结果）、updated 拖拽 override 瞬态化（下个投影即丢）、未分组桶 updated
+  按 recency 排序（无视 stored 序）、blank 行隐藏操作簇（kebab/fork/归档）。
+  06 §0-§3/§4.3/§7 已同步。
+
 ## 范围决策与剩余偏差（不做 / 推迟 / 移出）
 
 - **移出项**（P3 硬纪律，永不回流）：认证/审计（密码/Passkey/会话
@@ -317,9 +337,14 @@ DOM/内存无界增长）；② N-ctx 常驻 + **shell 销毁不停止 cordis ct
   绑定、walkthrough、notifications、cron、文件夹/笔记、
   web 预览、MCP、目标/终端等宿主 UI 职责面（处置映射见 01 §4；git/GitHub
   例外：插件化，见 01 §4 / 设计 08）。
-- **已覆盖（侧边栏不做）**：fork 会话——官方 conversation 回合尾部分支
-  动作（ui-conversation turn-tail `forkAt`）在 boot 图内常驻可用，侧边栏
-  行内 fork 仅 UI 覆盖缺口。
+- **已实现（2026-08）**：fork 会话——官方 conversation 回合尾部分支动作
+  （turn-tail `forkAt`）常驻可用；侧边栏会话行 kebab 菜单新增行内 fork
+  （wire `sessions.fork`，对齐官方 ui-workspace）。
+- **默认排序 manual（2026-08 决策，06 §3.1）**：每来源会话排序偏好默认
+  `manual`（保持既有 wire 序呈现），与官方默认 `updated` 不同——有意取舍：
+  多来源列表下 wire 序即用户/宿主排好的序，且 v1 不实现官方活动提升
+  （promotion）语义；`orderBy[sourceId]` 持久化于 `dsh-chamber.sidebar.v1`
+  （v 保持 1，旧数据无键即全 manual，不重播种）。
 - **推迟**：flat 单列表模式（与"仅按来源分类"呈现原则张力）。
 - **已实现（2026-08 修订）**：当前空白"新会话"行——活动来源的当前空白
   会话按官方 `(!blank || current)` 规则投影为 New Session 行（仅活动来源

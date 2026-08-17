@@ -1,20 +1,22 @@
 # 06 · 侧边栏增强（第三轮：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道）
 
 > 本设计将 05 §9 中 1/3/5/6/7 项落地为 v1 形态；第 2 项（fork）
-> 经调研确认已被官方 conversation 回合尾部分支动作（ui-conversation turn-tail
-> forkAt）覆盖，侧边栏不做；第 4 项（flat）与第 8 项（当前空白会话"新会话"
-> 行）维持推迟。本文档 + 05 为实现契约。
+> 已由官方 conversation 回合尾部分支动作（ui-conversation turn-tail
+> forkAt）覆盖（会话内），且 2026-08 起侧边栏会话行菜单也提供行内 fork
+> （wire `sessions.fork`，对齐官方 ui-workspace；两者并存，turn-tail 保留）；
+> 第 4 项（flat）与第 8 项（当前空白会话"新会话"行）维持推迟。
+> 本文档 + 05 为实现契约。
 
 ## 0. 范围与来源
 
 | 项 | 特性 | 状态 |
 |---|---|---|
-| 1 | 会话搜索（每来源） | 已落地 |
-| 3 | 会话/workspace 拖拽排序（来源内） | 已落地 |
+| 1 | 会话搜索（每来源） | 已落地（2026-08 扩展：本地元数据匹配 + 远程内容命中合并，本地优先、远程按投影可见集过滤） |
+| 3 | 会话/workspace 拖拽排序（来源内） | 已落地（2026-08：会话排序切换 manual↔updated；updated 下拖拽只写瞬态 override 不落 wire） |
 | 5 | 视图偏好 localStorage 持久化 | 已落地 |
 | 6 | 完成/待交互状态点（dot） | 已落地 |
 | 7 | 跨来源当前会话高亮 | 已落地 |
-| 2 | fork 会话 | **已覆盖**：官方 conversation 回合尾部分支（ui-conversation turn-tail，`forkAt(atSeq, increaseTitle)` → `sessions.fork` → 打开子会话），chamber boot 图内常驻；侧边栏行内不做 |
+| 2 | fork 会话 | **已实现（侧边栏行内，2026-08）**：会话行 kebab 菜单分叉会话（`sessions.fork` + increaseTitle → 打开子会话，对齐官方 ui-workspace；fork 成功后子会话标题递增 rename（对齐官方 increasedForkTitle，rename 失败非致命——子会话仍创建并打开）；官方 turn-tail `forkAt` 仍常驻可用，两者并存） |
 | 4 | flat 单列表模式 | 推迟：与 05 §2.1"仅按来源分类"呈现原则张力 |
 | 8 | 当前空白会话"新会话"行 | 推迟：05 §2.1 已声明空白会话不入列表 |
 
@@ -33,6 +35,14 @@
   再导出）；`hasMore` 提示用户缩小范围；AbortSignal 必传（30s 超时合并）。
 - 标题/workspace 标签**不上 wire**——由客户端从该来源的聚合快照解析
   （投影已携带 per-session title；workspace 标题或未分组标签兜底）。
+- **本地元数据匹配（2026-08 扩展）**：本地腿对投影**可见集**做标题/所属
+  workspace 标题**子串匹配**（大小写不敏感；archived/subagent/blank 行不
+  进入投影故不可能命中），命中按 recency 排序（纯函数
+  `deriveLocalSearchMatches`）；远程腿 = wire `sessions.search` 内容命中，
+  **按投影可见集过滤**（投影之外的 archived/subagent/blank 会话不进入
+  结果，对齐官方 deriveSearchResults）。合并（`mergeSearchResults`）：本地
+  优先（保持 recency 序）→ 远程未覆盖行按后端序追加，跨腿/腿内去重；同
+  会话双命中补远程 snippet（本地行 snippet 为空）。
 - 生成的 unary client 已含 `client.sessions.search({query}, signal)`
   （dsh-host-apiproxy fetch/client.ts），无需发明 wire。
 
@@ -55,8 +65,11 @@
   为空时收起（官方语义）。断连来源的搜索状态被裁剪（重连从干净收起态开始）。
 - **结果渲染**：query 非空时该来源的 `workspaceList` 整体替换为结果列表
   （来源头与状态保留；折叠入口隐藏）。行 = 标题（聚合解析，
-  缺失兜底"未命名会话"）+ snippet 行；点击 → `chamberBridge.requestOpenSession`。
-  状态行：loading → `search.pending`；error → `search.unavailable` 横幅；
+  缺失兜底"未命名会话"）+ 所属 workspace 标签（本地命中行）+ snippet 行
+  （远程内容命中携带，同会话双命中时补入）；点击 →
+  `chamberBridge.requestOpenSession`。
+  状态行：loading → `search.pending`；error → `search.unavailable` 横幅
+   （**本地命中仍显示**——内容搜索失败不吞本地元数据命中）；
   空 → `search.noMatches`；`hasMore` → `search.hasMore`（n=20 取常量）。
 - **取舍**：聚合拉取失败（`aggregateError`）的来源隐藏搜索入口（标题无法
   解析，且与"错误行替换列表"一致）；结果标题可能滞后于最新快照
@@ -107,6 +120,17 @@
 - **边界**：拖到折叠组无目标行（自然无 marker）；轮询刷新中途拖拽
   （状态引用 id 不引用下标，行仍存在则有效）；touch/键盘排序不支持
   （官方亦然，注明已知限制）。
+- **会话排序模式（2026-08）**：每来源排序偏好 manual（默认）| updated
+  （§3.1 `orderBy`，来源头 hover 操作簇排序按钮循环切换）。updated 模式
+  真实工作区按 updatedAt 降序渲染（有会话级拖拽 override 时 override
+  优先——用户拖拽意图第一）；**updated 模式下会话拖拽只写瞬态 override、
+  不提交 wire、不 requestRefresh，override 在下一次投影到达即丢弃**（对齐
+  官方「updated 排序时拖拽不落 wire」但简化官方 account+promotion——chamber
+  不实现 promotion）；未分组桶 updated 模式按 recency 排序（无视 stored 序）。
+- **双击重命名（2026-08）**：workspace 头直接 dblclick 进入行内重命名
+  （头本身不可点击，无延迟）；会话行单击延迟 ~250ms 打开（实现放宽至
+  ~350ms），窗口内二击取消打开、进入行内重命名；kebab 菜单 rename 保留
+  为 a11y 兜底；外部点击取消 pending 定时器。
 
 ### 2.3 代码落点
 
@@ -126,8 +150,15 @@
   ```ts
   { v: 1,
     folded: Record<`${sourceId}/${workspaceId}`, boolean>,
-    ungroupedOrder: Record<sourceId, string[]> }
+    ungroupedOrder: Record<sourceId, string[]>,
+    orderBy: Record<sourceId, 'manual' | 'updated'> }
   ```
+- **orderBy（2026-08 新增）**：每来源会话排序偏好 `'manual' | 'updated'`，
+  默认 `manual`；v 保持 1 兼容旧数据（旧数据无此键即视为全 manual，不重
+  播种），sanitize 丢弃非法值。**默认值决策（2026-08）**：默认 `manual`
+  （保持既有 wire 序呈现），与官方默认 `updated` 不同——有意取舍：多来源
+  列表下 wire 序即用户/宿主排好的序，且 v1 不实现官方活动提升（promotion）
+  语义。
 - `shared/view-prefs.ts`：`loadViewPrefs()`/`saveViewPrefs(prefs)`，
   JSON 解析/写入 try/catch 兜底（非致命）、版本号不匹配即弃用重播种
   （官方 persist 引擎纪律）；纯函数，可单测。
@@ -261,7 +292,10 @@ onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | und
   显示（`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出
   状态槽）。
 - **不再显示相对时间**：session 行不渲染"xx 前"时间单元格（`time.*`
-  locale 键移除；`relativeTimeBucket` 纯函数保留为共享工具）。
+  locale 键**保留供 hover 卡相对时间使用**；`relativeTimeBucket` 纯函数
+  保留为共享工具）。
+  2026-08 确认：相对时间列**暂不回归**，维持移除（多来源密度 + 行尾状态槽
+  取代时间列）；若未来回归需同步修订 05 §2.1 的残留文案。
 - **当前会话高亮 = 全局单选（2026-08 修订）**：`server.runtime?.current`
   命中即高亮，但仅限**拥有当前可见 ctx 的来源**（渲染侧
   `server.id === chamberInstanceId` 门控）——各来源壳内"切换前最后一个"
@@ -281,6 +315,10 @@ onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | und
   （官方同快照无错位，其顺序 running > subagents > completed；我们
   completed/runningSubagents 皆为实时通道、running 为轮询，故实时事实
   整体前置）。
+- **搜索结果行状态点（2026-08）**：结果行无 wire running 位（仅通道事实
+   + 投影解析）——状态槽渲染优先级同树行（pending 徽标 > runningSubagents
+   环 > completed 点 > running 环；通道实时位优先，投影 running 位仅兜底）；
+   槽**恒占位**保持标题对齐。
 
 ### 4.4 代码落点
 
@@ -406,6 +444,17 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   展开期间该行操作保持可见（`.rowActionsVisible`）。行内图标按钮全量
   reset（`appearance:none`/`outline:none`/grid 居中，focus-visible 用
   brand 自绘环）——无 UA 外框、无偏移。
+- **悬停卡片（2026-08）**：workspace 头与真实会话行悬停显示官方
+  `HoverCard` 移植卡片——workspace 卡 = 标题 + 会话数（投影无
+  path/createdAt 故省略）；会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制
+  标题按钮（blank 行不显示时间）。disabled = 菜单打开或拖拽中
+  （`menuOpen`/`sessionDrag`/`workspaceDrag` 任一成立即禁用）。
+- **a11y（2026-08）**：来源分组 `role="group"`、列表 `role="tree"`、
+  workspace 头 `role="treeitem"` + `aria-expanded`、会话行 `role="treeitem"`
+  + `aria-selected`、搜索结果行 `button` + `role="treeitem"`；来源头
+  （非当前来源）`role="button"` 可键盘激活（Enter/Space 切换视图）。
+- **blank 行（2026-08）**：当前空白"新会话"行隐藏操作簇（kebab/分叉/归档，
+  对齐官方 `!row.blank &&` 门控）——空白行无重命名/分叉/归档语义。
 - **会话状态指示（2026-08 修订）**：固定 10px 行尾状态槽——常态空、
   运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = 持久蓝圆点；
   **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角，见 §4.3），

@@ -107,6 +107,18 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconQuestionOutline14: (props: any) => ReactElement | null
   export const IconChecklistOutline14: (props: any) => ReactElement | null
   export const IconWarningOutline16: (props: any) => ReactElement | null
+  /** Session fork (row menu, 06 §7): IconBranchOutline16 glyph. */
+  export const IconBranchOutline16: (props: any) => ReactElement | null
+  /** Per-source session sort toggle (06 §7): IconPersonalizationOutline16 glyph. */
+  export const IconPersonalizationOutline16: (props: any) => ReactElement | null
+  /**
+   * Delayed hover-preview card portaled to document.body (06 §7, official
+   * ui-primitives HoverCard): `anchor` renders in place, `content` floats in
+   * the card on hover dwell; `disabled` suppresses/close it; optional
+   * copyText/copyLabel/copiedLabel make the card an activation-copy affordance.
+   * Loose face (the vendor shape is the source of truth).
+   */
+  export const HoverCard: (props: any) => ReactElement | null
   /** Official dsh state dot: done/warning/ongoing/error (loose face). */
   export const StateDot: (props: any) => ReactElement | null
   /** Row action menu entry (row + optional icon/danger; loose face). */
