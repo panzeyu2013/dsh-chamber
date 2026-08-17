@@ -77,7 +77,9 @@ export class AppWebEntry {
   private readonly settled = createSignal(false)
   private readonly error = createSignal<string | undefined>(undefined)
   // Assigned by run() before any private method or settled-gated closure reads them.
-  private ctx!: Context
+  // Optional (not definite-assigned): dispose() nulls it, and reads must handle
+  // the pre-run / post-dispose state.
+  private ctx: Context | undefined
   private modules!: ClientModuleSystem
   private manifest!: BootManifest
   private root: Root | undefined
@@ -142,7 +144,7 @@ export class AppWebEntry {
         status={this.status}
         error={this.error}
         renderApp={() => {
-          const shell = this.ctx.get('appShell')
+          const shell = this.ctx?.get('appShell')
           // Unreachable after a clean settle (the app-shell entry is in every graph).
           if (shell === undefined) throw new Error('web boot: appShell service missing after settled')
           return shell.renderApp()
@@ -166,9 +168,18 @@ export class AppWebEntry {
     }
   }
 
-  /** Unmount the shell (loading page or settled UI). */
+  /** Unmount the shell (loading page or settled UI) and stop its runtime ctx. */
   dispose(): void {
     this.root?.unmount()
+    this.root = undefined
+    const ctx = this.ctx
+    // Drop the handle so a second dispose is a no-op and late runtimeCtx
+    // reads observe a dead context.
+    this.ctx = undefined
+    if (ctx === undefined) return
+    void teardownCordisCtx(ctx).catch((error) => {
+      console.error('[web-shell] ctx teardown failed:', error)
+    })
   }
 
   /**
@@ -177,9 +188,11 @@ export class AppWebEntry {
    * Public read handle on the settled runtime context: the chamber shell
    * dispatches per-instance session opens through `ctx.sessions` (the
    * dsh-client-runtime ISessions face) after boot settlement. Private `ctx`
-   * has no other consumer; a getter keeps the seam explicit.
+   * has no other consumer; a getter keeps the seam explicit. The handle is
+   * `undefined` once dispose() ran (the ctx is torn down) — callers must
+   * guard with `?.` (shell.ts dispatchOpen does).
    */
-  get runtimeCtx(): Context {
+  get runtimeCtx(): Context | undefined {
     return this.ctx
   }
 
@@ -195,7 +208,7 @@ export class AppWebEntry {
 
   /** Plugin face: mount the Loader, inject the `internal` contract, adopt modules, create the graph entries, settle, sweep. */
   private async runPluginBoot(prefetching: Promise<void>): Promise<void> {
-    const ctx = this.ctx
+    const ctx = this.ctx!
     await ctx.plugin(Loader)
     const loader = ctx.loader
     // Inject the module system BEFORE any entry exists: tree.import falls back
@@ -250,7 +263,7 @@ export class AppWebEntry {
    * timeout, so this sweep is the fail-loud compensation).
    */
   private assertEntriesActive(): void {
-    const ctx = this.ctx
+    const ctx = this.ctx!
     const failures: string[] = []
     for (const entry of ctx.loader.entries()) {
       const name = entry.options.name
@@ -269,6 +282,38 @@ export class AppWebEntry {
     }
     if (failures.length > 0) {
       throw new Error(`web boot: ${String(failures.length)} entr${failures.length === 1 ? 'y' : 'ies'} did not activate\n${failures.join('\n')}`)
+    }
+  }
+}
+
+/**
+ * ## chamber patch (dsh-chamber connection manager, design 05 §4)
+ *
+ * Stop every loader entry fiber of one shell's ctx, cascading all plugin
+ * effect teardowns (cordis fiber._unload runs the fiber's collected
+ * disposers, and child plugin fibers register their disposers on the parent
+ * fiber — so the whole plugin subtree under each entry unloads recursively).
+ * This releases what root unmount alone never would: the connection stream
+ * loop (two WebSockets + the infinite reconnect/backoff loop — its stop
+ * handle is a ctx.effect teardown in dsh-client-runtime), the session /
+ * conversation stores, and the chamber sidebar / runtime-facts producers
+ * (which unsubscribe and clear the bridge's module-level report entry). A
+ * shell reaped without this would keep its WS streams, reconnect timers,
+ * store data and bridge subscriptions alive forever.
+ *
+ * Fire-and-forget: nothing depends on the teardown settling; a re-added
+ * instance boots a fresh ctx. Failure of one entry's dispose is logged and
+ * the rest still tear down.
+ */
+async function teardownCordisCtx(ctx: Context): Promise<void> {
+  const loader = ctx.loader
+  if (loader === undefined) return
+  for (const entry of loader.entries()) {
+    if (entry.fiber === undefined) continue
+    try {
+      await entry.fiber.dispose()
+    } catch (error) {
+      console.error('[web-shell] entry dispose threw:', error)
     }
   }
 }
