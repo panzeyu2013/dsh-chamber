@@ -31,6 +31,8 @@ declare module '@deepseek-ai/dsh-client-connection/client' {
     [key: string]: any
     protected doFetch(input: URL, init?: RequestInit): Promise<Response>
   }
+  /** Wire search page bound (dsh-host-apiproxy session-search.ts re-export, design 06 §1.1). */
+  export const SESSION_SEARCH_RESULT_LIMIT: number
 }
 
 declare module '@deepseek-ai/dsh-client-runtime/client' {
@@ -50,6 +52,18 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
   export type SessionListState = any
   /** Workspace id brand (slots contract). */
   export type WorkspaceId = string
+  /** Vendor subagent-lineage aggregation (06 §4.5, running-subagent ring). */
+  export interface SubagentDescendantSummary {
+    count: number
+    runningCount: number
+  }
+  export function indexSubagentDescendants(
+    summaries: Readonly<Record<string, {
+      origin?: 'subagent'
+      parentId?: string
+      running?: boolean
+    }>>,
+  ): ReadonlyMap<string, SubagentDescendantSummary>
 }
 
 declare module '@deepseek-ai/dsh-client-locale/client' {

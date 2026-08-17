@@ -33,7 +33,7 @@
     "typecheck:sidebar": "tsc -p packages/dsh-chamber-client-ui-sidebar/tsconfig.json --noEmit",
     "typecheck:settings-bridge": "tsc -p packages/dsh-chamber-client-ui-settings-bridge/tsconfig.json --noEmit",
     "test:desktop": "node packages/desktop/transport-manager.test.ts && node packages/desktop/ssh-provider.test.ts && node packages/desktop/ssh-config.test.ts && node packages/desktop/renderer-trust.test.ts",
-    "test:sidebar": "node packages/dsh-chamber-client-ui-sidebar/test/derive.ts && node packages/dsh-chamber-client-ui-sidebar/test/view-prefs.ts",
+    "test:sidebar": "node packages/dsh-chamber-client-ui-sidebar/test/derive.ts && node packages/dsh-chamber-client-ui-sidebar/test/view-prefs.ts && node packages/dsh-chamber-client-ui-sidebar/test/search-state.ts",
     "test:settings-bridge": "node packages/dsh-chamber-client-ui-settings-bridge/test/busy-enter-policy.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/permission-controller.ts",
     "test:renderer-shell": "node packages/renderer/src/pending-open-queue.test.ts"
   },

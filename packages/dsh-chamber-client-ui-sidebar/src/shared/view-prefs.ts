@@ -1,18 +1,39 @@
 /**
  * Sidebar view preferences persisted in page-wide localStorage under one
- * versioned key (design 06 §3). All instance ctxs share the value; writes are
- * idempotent and last-writer-wins is harmless. Every read/write is guarded —
+ * versioned key (design 06 §3). All instance ctxs share ONE live in-memory
+ * store (see getViewPrefs/subscribeViewPrefs/updateViewPrefs below); writes
+ * persist + notify every subscriber. Every read/write is guarded —
  * corrupt JSON, a version mismatch or a wrong shape falls back to defaults,
  * and storage failures never throw. The default storage is resolved lazily
  * inside the call (never in a default-argument), so an accessor that throws
  * on opaque origins / sandboxed webviews degrades to defaults / no-op.
  */
+import { chamberBridge } from './aggregate-store.ts'
+import { assertSingletonModule } from './singleton.ts'
+
+assertSingletonModule('view-prefs')
+
 export interface ChamberSidebarViewPrefs {
   v: 1
   /** key: `${sourceId}/${workspaceId}` */
   folded: Record<string, boolean>
   /** key: sourceId */
   ungroupedOrder: Record<string, string[]>
+  /**
+   * Internal bookkeeping (not user-facing): source ids observed in a
+   * projection during THIS page session. The write-time prune only drops
+   * keys whose source was SEEN (this session) and is now absent —
+   * distinguishing "source deleted" (prune) from "projection not fully
+   * loaded yet" (keep; the roster arrives after the local-only projection,
+   * which must never wipe ssh sources' prefs). SESSION-ONLY memory: never
+   * restored from storage — a persisted roster from a previous session would
+   * make the FIRST write after restart prune against a still-unready
+   * projection and permanently wipe remote prefs in the startup window (the
+   * exact loss safe-pruning exists to prevent). Sources deleted in an
+   * earlier session without any write this session leave harmless ghost keys
+   * (the renderer's reconciledSessionOrder skips unknown ids).
+   */
+  seenSources: string[]
 }
 
 export interface StorageLike {
@@ -22,7 +43,15 @@ export interface StorageLike {
 
 export const VIEW_PREFS_KEY = 'dsh-chamber.sidebar.v1'
 
-const DEFAULTS: ChamberSidebarViewPrefs = { v: 1, folded: {}, ungroupedOrder: {} }
+/**
+ * Fresh default prefs — every fallback gets its OWN nested objects. A shared
+ * module-level default object would let one caller's in-place mutation of a
+ * returned prefs value permanently pollute every later default load and every
+ * post-reset cache (2026-08 audit nit).
+ */
+function defaults(): ChamberSidebarViewPrefs {
+  return { v: 1, folded: {}, ungroupedOrder: {}, seenSources: [] }
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -30,7 +59,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 /** Lenient structural validation: drop malformed entries, keep valid ones. */
 function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
-  if (!isPlainObject(raw) || raw.v !== 1) return { ...DEFAULTS }
+  if (!isPlainObject(raw) || raw.v !== 1) return defaults()
   const folded: Record<string, boolean> = {}
   if (isPlainObject(raw.folded)) {
     for (const [key, value] of Object.entries(raw.folded)) {
@@ -43,16 +72,22 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       if (Array.isArray(value)) ungroupedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
     }
   }
-  return { v: 1, folded, ungroupedOrder }
+  // seenSources 保留 raw 里的数组值（写入路径经 sanitize 时须携带会话内
+  // 簿记）；「绝不从存储恢复」由 loadViewPrefs 在载入后归零保证（见下）。
+  const seenSources = Array.isArray(raw.seenSources)
+    ? raw.seenSources.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  return { v: 1, folded, ungroupedOrder, seenSources }
 }
 
 /**
  * Resolve the default page storage lazily; returns null when the accessor
- * itself throws (opaque origins, blocked storage, sandboxed webviews).
+ * itself throws or yields a falsy value (opaque origins, blocked storage,
+ * sandboxed webviews, non-browser runs).
  */
 function safeLocalStorage(): StorageLike | null {
   try {
-    return globalThis.localStorage
+    return globalThis.localStorage ?? null
   } catch {
     return null
   }
@@ -61,16 +96,23 @@ function safeLocalStorage(): StorageLike | null {
 /** Read + sanitize the persisted prefs; never throws. */
 export function loadViewPrefs(storage?: StorageLike): ChamberSidebarViewPrefs {
   const store = storage ?? safeLocalStorage()
-  if (store === null) return { ...DEFAULTS }
+  if (store == null) return defaults()
   let raw: unknown
   try {
     const text = store.getItem(VIEW_PREFS_KEY)
-    if (text === null) return { ...DEFAULTS }
+    if (text === null) return defaults()
     raw = JSON.parse(text)
   } catch {
-    return { ...DEFAULTS }
+    return defaults()
   }
-  return sanitizePrefs(raw)
+  const prefs = sanitizePrefs(raw)
+  // seenSources 是**会话内内存簿记**——载入时一律从空集开始（持久化的
+  // seenSources 来自上一会话；恢复它会让重启后首个写周期在 roster 未到、
+  // 投影仅 local 的启动窗口把远程来源误判为「已删除」而永久抹掉其偏好，
+  // 2026-08 复查修复）。首个写周期因此不裁剪任何键（安全）；源真正删除
+  // 后、本会话内再有写入时才被裁。
+  prefs.seenSources = []
+  return prefs
 }
 
 /** Persist the prefs; never throws (storage failure is non-fatal). */
@@ -82,4 +124,126 @@ export function saveViewPrefs(prefs: ChamberSidebarViewPrefs, storage?: StorageL
   } catch {
     // non-fatal
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shared live store (design 06 §3, 2026-08 — cross-ctx live sync).
+//
+// Every instance ctx's sidebar previously kept its OWN in-memory copy, read
+// once at mount and written back with a merge — a fold toggle in source A's
+// sidebar was invisible in source B's sidebar until a refresh, and B's next
+// write could resurrect A's stale fold value (the merge assumed the local copy
+// was newer than the persisted value, which is false after another ctx wrote).
+// The store below is the SINGLE source of truth shared by every ctx's sidebar
+// (this module rides the vite shared chunk, same instance across all boots):
+// reads/writes go through one cache, writes persist and notify every
+// subscriber, so toggles propagate live to all sources. localStorage stays the
+// durable backing (reloads pick the latest state); the sanitized load and
+// non-throwing storage fallbacks are unchanged.
+// ---------------------------------------------------------------------------
+
+type ViewPrefsListener = () => void
+const listeners = new Set<ViewPrefsListener>()
+let cache: ChamberSidebarViewPrefs | null = null
+
+/** The shared prefs (lazily loaded + cached for the page lifetime). */
+export function getViewPrefs(): ChamberSidebarViewPrefs {
+  if (cache === null) cache = loadViewPrefs()
+  return cache
+}
+
+/** Subscribe to shared-prefs changes (any ctx's write); returns the unsubscribe. */
+export function subscribeViewPrefs(listener: ViewPrefsListener): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+/**
+ * Prune stale entries against the CURRENT projection. SAFE rules only:
+ * - an empty projection (not yet published, or nothing configured) is left
+ *   untouched — user prefs must never be wiped against a transiently unready
+ *   projection;
+ * - keys are pruned only when their source was SEEN in an earlier projection
+ *   of THIS session (seenSources — session-only memory, never restored from
+ *   storage) and is absent from the current one — distinguishing "source
+ *   deleted" from "projection not fully loaded yet". This matters because
+ *   deriveServers always pushes `local` (servers.length is never 0 in the
+ *   app), and the roster arrives AFTER the local-only projection: pruning on
+ *   mere absence — or on a previous session's roster — would wipe every ssh
+ *   source's prefs during the startup window (2026-08 复查修复：seenSources
+ *   不得持久化);
+ * - a disconnected source keeps its folds and ungrouped order (they return on
+ *   reconnect; the renderer's reconciledSessionOrder already skips unknown
+ *   ids).
+ */
+function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
+  const servers = chamberBridge.getServers()
+  if (servers.length === 0) return prefs
+  const projectionIds = servers.map(server => server.id)
+  const inProjection = new Set(projectionIds)
+  // 本次投影见过的来源记入 seenSources（部分投影窗口内也照记——它们真正
+  // 消失后才可能被裁，绝不会在「尚未加载」的窗口被误裁）。
+  const seenSources = new Set(prefs.seenSources)
+  for (const id of projectionIds) seenSources.add(id)
+  const seen = [...seenSources]
+  const knownGone = (sourceId: string | undefined): boolean =>
+    sourceId !== undefined && !inProjection.has(sourceId) && seenSources.has(sourceId)
+  const folded = { ...prefs.folded }
+  const ungroupedOrder = { ...prefs.ungroupedOrder }
+  let changed = false
+  for (const key of Object.keys(folded)) {
+    const slash = key.indexOf('/')
+    const sourceId = slash === -1 ? undefined : key.slice(0, slash)
+    if (knownGone(sourceId)) {
+      delete folded[key]
+      changed = true
+    }
+  }
+  for (const sourceId of Object.keys(ungroupedOrder)) {
+    if (knownGone(sourceId)) {
+      delete ungroupedOrder[sourceId]
+      changed = true
+    }
+  }
+  if (!changed && prefs.seenSources.length === seen.length && prefs.seenSources.every((id, i) => id === seen[i])) {
+    return prefs
+  }
+  return { v: 1, folded, ungroupedOrder, seenSources: seen }
+}
+
+/**
+ * Write through the shared store: apply the mutator to the CURRENT shared
+ * prefs, prune against the projection, persist (re-sanitized so the stored
+ * shape is always the validated one), and notify every subscriber. A throwing
+ * subscriber must not starve the others. The cache stores the SANITIZED
+ * output — the mutator never gets to alias the live cached object into the
+ * store, and an in-place-mutating mutator cannot corrupt the persisted shape.
+ */
+export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => ChamberSidebarViewPrefs): void {
+  const next = prunePrefs(mutator(getViewPrefs()))
+  cache = sanitizePrefs(next)
+  saveViewPrefs(cache)
+  for (const listener of [...listeners]) {
+    try {
+      listener()
+    } catch (error) {
+      console.error('[dsh-chamber] view-prefs subscriber threw:', error)
+    }
+  }
+}
+
+/**
+ * Test-only: reset the shared store (cache + subscribers) AND the projection
+ * (prunePrefs' input — chamberBridge.getServers()) for isolation. Without the
+ * projection reset, a test's "first write sees an empty projection" assumption
+ * would depend on declaration order (any earlier publish would make it a
+ * non-empty-projection write and the assertions fail loudly — not a false
+ * green, but not a self-contained isolation contract).
+ */
+export function __resetViewPrefsForTests(): void {
+  cache = null
+  listeners.clear()
+  chamberBridge.publish([])
 }

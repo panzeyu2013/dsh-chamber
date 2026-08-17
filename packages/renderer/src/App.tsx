@@ -29,6 +29,8 @@ import {
   fetchInstanceSnapshot,
   getInstanceClient,
   isInstanceUnavailable,
+  mergeRuntimeFacts,
+  reconcileCompletedFacts,
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
@@ -81,6 +83,7 @@ function deriveServers(
   remoteStatus: Record<string, SshStatusProjection>,
   aggregates: Record<string, InstanceAggregate>,
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
+  completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
@@ -112,10 +115,14 @@ function deriveServers(
       workspaces,
       updatedAt: now,
     }
-    // 运行时事实只在 connected 时附加（断连态不应携带事实，避免死状态翻转）
+    // 运行时事实只在 connected 时附加（断连态不应携带事实，避免死状态翻转）。
+    // App 自持的完成未读点（completedBySource）与通道上报并集：蓝点以 App
+    // 派生的 running→idle 边沿为准（它无视后台来源 shell 的陈旧 selected），
+    // vendor 的 completed 作兜底保留。合并为纯函数 mergeRuntimeFacts（shared/
+    // derive.ts，单测覆盖）。
     if (connected) {
-      const runtime = runtimeFacts[id]
-      if (runtime !== undefined) entry.runtime = runtime
+      const merged = mergeRuntimeFacts(runtimeFacts[id], completedBySource[id])
+      if (merged !== undefined) entry.runtime = merged
     }
     if (aggregate !== undefined && aggregate.state === 'error') {
       entry.aggregateError = aggregate.error ?? '未知错误'
@@ -188,12 +195,20 @@ export default function App() {
   const [aggregates, setAggregates] = useState<Record<string, InstanceAggregate>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
+  // chamber (06 §4.1, 2026-08)：App 自持的「完成未读」蓝点（completedBySource）
+  // 与边沿记忆（prevRunningRef）。蓝点不依赖各来源 shell 的 selected——后台
+  // 来源的陈旧 selected 会让 vendor 提醒错误压制「完成但未读」——而是由 App
+  // 从上报里的实时 running 位自行推导 running→idle 边沿，以 App 已知的
+  // 「谁在阅读」（activeView + 各来源 current）判定武装/解除。插件侧保持
+  // 无状态（纯投影），避免在每 ctx 复制一套状态机。
+  const [completedBySource, setCompletedBySource] = useState<Record<string, Record<string, boolean>>>({})
+  const prevRunningRef = useRef<Record<string, Record<string, boolean>>>({})
 
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, activeView),
-    [health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, activeView],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView),
+    [health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView],
   )
   useEffect(() => {
     chamberBridge.publish(servers)
@@ -268,6 +283,21 @@ export default function App() {
       }
       return changed ? next : prev
     })
+    setCompletedBySource(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const id of Object.keys(next)) {
+        if (!servers.some(server => server.id === id)) {
+          delete next[id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+    // prevRunning 是 ref：同步裁剪，随注册表收敛（重加同名 id 由刷新重建）。
+    for (const id of Object.keys(prevRunningRef.current)) {
+      if (!servers.some(server => server.id === id)) delete prevRunningRef.current[id]
+    }
     setRemoteStatus(prev => {
       // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
       // 与 servers 的 ssh-<id> 前缀 id 不同——按前缀剥离还原再比较。
@@ -722,7 +752,8 @@ export default function App() {
     })
   }, [refreshAggregate])
 
-  /** 每来源 ctx 的运行时事实上报（06 §4）：report 覆盖、clear 删除；无需额外依赖（set 稳定）。 */
+  /** 每来源 ctx 的运行时事实上报（06 §4）：report 覆盖、clear 删除；同时
+   *  对账该来源的「完成未读」蓝点（completedBySource）。无需额外依赖。 */
   useEffect(() => {
     return chamberBridge.onRuntimeReport((sourceId, report) => {
       setRuntimeFacts(prev => {
@@ -734,8 +765,63 @@ export default function App() {
         }
         return { ...prev, [sourceId]: report }
       })
+      if (report === undefined) {
+        // shell 卸载（来源移除）：清掉该来源的边沿记忆与蓝点。
+        delete prevRunningRef.current[sourceId]
+        setCompletedBySource(prev => {
+          if (prev[sourceId] === undefined) return prev
+          const next = { ...prev }
+          delete next[sourceId]
+          return next
+        })
+        return
+      }
+      // 蓝点对账（规则与 vendor 提醒同构，但「正在阅读」取 App 侧事实——
+      // 活动视图的 current 会话，而非各来源自己可能陈旧的 selected；纯函数
+      // 见 shared/derive.ts reconcileCompletedFacts）。边沿记忆 ref 在本
+      // handler 同步推进（幂等），蓝点 state 在函数式 updater 里按序组合
+      // ——同来源两次上报落在同一渲染周期也不会互相覆盖丢蓝点。每份上报
+      // 各自捕获 prevRunning 快照，保证 updater 与自己的上报正确配对。
+      const prevRunningSnapshot = prevRunningRef.current[sourceId] ?? {}
+      const nextRunning: Record<string, boolean> = {}
+      for (const [sessionId, row] of Object.entries(report.sessions)) {
+        nextRunning[sessionId] = row?.running === true
+      }
+      prevRunningRef.current[sourceId] = nextRunning
+      // 活动来源的 current 会话 = 正在阅读；后台来源无阅读者（undefined）。
+      const readingCurrent = sourceId === activeViewRef.current ? report.current : undefined
+      setCompletedBySource(prev => {
+        const result = reconcileCompletedFacts({
+          sessions: report.sessions,
+          nextRunning,
+          prevRunning: prevRunningSnapshot,
+          prevCompleted: prev[sourceId] ?? {},
+          readingCurrent,
+        })
+        if (!result.changed) return prev
+        return { ...prev, [sourceId]: result.completed }
+      })
     })
   }, [])
+
+  /** chamber (06 §4.1)：切到某来源时，其 current 会话立即视为已读——清除
+   *  后台期间武装的蓝点（阅读解除在 reconcile 里按上报做，这里兜底「激活但
+   *  无新上报」的路径，如点击来源头不打开会话）。 */
+  const prevActiveViewRef = useRef(activeView)
+  useEffect(() => {
+    const previous = prevActiveViewRef.current
+    prevActiveViewRef.current = activeView
+    if (previous === activeView) return
+    const current = runtimeFacts[activeView]?.current
+    if (current === undefined) return
+    setCompletedBySource(prev => {
+      const sourceCompleted = prev[activeView]
+      if (sourceCompleted === undefined || sourceCompleted[current] !== true) return prev
+      const nextCompleted = { ...sourceCompleted }
+      delete nextCompleted[current]
+      return { ...prev, [activeView]: nextCompleted }
+    })
+  }, [activeView])
 
   // 控制面失联 = 覆盖式致命屏（视图保持挂载、恢复即续会话，05 §4）。判定：
   // 健康错误**持续**存在超过宽容窗才呈现——首帧（health 从未拉到）立即呈现；

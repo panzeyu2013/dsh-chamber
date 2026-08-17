@@ -23,9 +23,9 @@ place of the official ui-sidebar (which stays untouched in
   of the workspace list — never masquerading as "no workspaces". Disconnected
   sources render header + status icon only (dot/spinner, phase on
   hover/aria, no status text); all disconnected → empty hint.
-- Live sessions carry a running dot + relative-time cell
-  (`sessions.list.running`/`updatedAt`, official relativeTime bucketing,
-  localized). State-dot priority and the current-session highlight
+- Live sessions carry a running dot (`sessions.list.running`); no relative
+  time cell is rendered (06 §4.3 — `relativeTimeBucket` stays as a shared
+  tool only). State-dot priority and the current-session highlight
   (single-selection) are described under "Chamber third round (design 06)"
   below.
 - Workspace groups fold via the header chevron (session-count badge); fold
@@ -60,22 +60,34 @@ place of the official ui-sidebar (which stays untouched in
 
 - Per-source session search (wide only): the source header opens a capsule
   input; queries run over that source's unary `sessions.search` after a
-  250 ms debounce with abort on change/blur — result rows (title + snippet)
-  replace the workspace list while a query is active.
+  250 ms debounce with a 30 s caller timeout (a changed query supersedes the
+  in-flight job; Escape / the clear button / outside-click with an empty
+  query collapse the capsule — a non-empty query survives blur by design,
+  official semantics) — result rows (title + snippet) replace the workspace
+  list while a query is active.
 - In-source drag ordering: session rows (real workspaces and the ungrouped
   bucket) and real workspace group headers reorder via HTML5 DnD within
   their own source only (cross-source drops are blocked in code). Real
   workspaces commit through the wire (`insertSessionBefore`/`insertBefore`)
   with a transient optimistic order override that self-heals on the next
   pull; the ungrouped order persists in view prefs.
-- View-preference persistence: fold state and ungrouped order live under one
-  localStorage key (`dsh-chamber.sidebar.v1`, `shared/view-prefs.ts`), read
-  on mount, written back on change.
+- View-preference persistence (06 §3, 2026-08 revision): fold state and the
+  ungrouped order live in ONE shared live store under one localStorage key
+  (`dsh-chamber.sidebar.v1`, `shared/view-prefs.ts`) — a single vite-shared
+  in-memory instance across every ctx's sidebar (`getViewPrefs`/
+  `subscribeViewPrefs`/`updateViewPrefs`), writes persist + notify every
+  subscriber, so a fold toggle in ANY source's sidebar propagates live to all
+  sources (no per-ctx stale copy, no write-back resurrecting another ctx's
+  newer state); writes prune only sources seen-then-vanished this session
+  (`seenSources` is session-only memory, never restored from storage — the
+  startup window can never wipe remote prefs).
 - Runtime-fact status indicators ride the runtime-facts channel: pending
   interactions render distinguishable icon badges (question `?`, plan-review
-  checklist, approval warning triangle — priority over the running pulse,
-  then completed dots); each source's own ctx reports its
-  `sessions.list` projection through `chamberBridge.reportInstanceRuntime`,
+  checklist, approval warning triangle — priority over the live
+  running-subagent ring, the completed dots, then the polled running pulse);
+  each source's own ctx reports its
+  `sessions.list` projection (including the vendor lineage index's running
+  subagent count per parent) through `chamberBridge.reportInstanceRuntime`,
   the App layer merges it into `server.runtime`, and this shell renders the
   indicators for every source without subscribing to any store. The
   current-session

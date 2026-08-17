@@ -10,6 +10,9 @@
  * The synthetic trailing ungrouped bucket carries `ungrouped: true` and the
  * shared UNGROUPED_WORKSPACE_ID as its id.
  */
+import { assertSingletonModule } from './singleton.ts'
+
+assertSingletonModule('aggregate-store')
 export interface ChamberServerWorkspace {
   id: string
   title: string
@@ -42,15 +45,32 @@ export interface OpenSessionRequest {
 
 /**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
- * own ctx (design 06 §4): current session id plus per-session completion /
- * pending-interaction dots. Only sessions carrying at least one fact appear
- * in `sessions`. Attached to ChamberServerAggregate.runtime as a separate
- * channel — never polled by the App layer.
+ * own ctx (design 06 §4): current session id plus per-session live rows. The
+ * plugin is a STATELESS projection of the source's session-list snapshot —
+ * every listed session carries its live `running` bit (the App layer derives
+ * the completed-but-unread dot from running→idle edges itself, see App.tsx),
+ * completed/pending ride the vendor armed state as sparse extras, and
+ * `runningSubagents` carries the vendor lineage index's RUNNING subagent
+ * descendant count per parent (06 §4.5 — a parent whose round ended while
+ * background subagents still work must not render its completed dot; the
+ * renderer shows the subagent-live ring instead). Attached to
+ * ChamberServerAggregate.runtime as a separate channel — never polled by the
+ * App layer.
  */
 export interface InstanceRuntimeReport {
   current?: string
-  /** Only sessions that have at least one fact; value may carry completed and/or pending. */
-  sessions: Record<string, { completed?: boolean; pending?: 'approval' | 'plan-review' | 'question' }>
+  /**
+   * Every listed session (edge memory for the App's completed-dot
+   * derivation), carrying the live running bit; completed/pending appear only
+   * when the vendor runtime armed them, runningSubagents only when non-zero.
+   */
+  sessions: Record<string, {
+    running?: boolean
+    completed?: boolean
+    pending?: 'approval' | 'plan-review' | 'question'
+    /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
+    runningSubagents?: number
+  }>
 }
 
 type Listener = () => void

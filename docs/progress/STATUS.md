@@ -69,6 +69,96 @@
 
 以下为 2026-08 仓库评审发现问题的修复（均已含测试或构建验证）：
 
+- **侧边栏每来源搜索状态共享化修复（06 §1.2 修订，2026-08）**：搜索状态
+  （胶囊/查询/结果）与防抖 job 此前是 per-shell 组件状态——可见侧边栏随
+  活动视图换 shell，A 里发起的对 B 的搜索在激活 B 后消失；且若简单共享
+  状态会让 N 个 shell 各自对同一查询重复发起 job。修复：`shared/
+  search-state.ts` 共享控制器（单一所有者：状态 + job/timer/AbortController
+  全部进模块单例），组件只镜像渲染与持有 DOM ref；P2-6 语义原样保留
+  （单来源击键不打扰其他来源在途搜索、30s 超时与「被替换」区分），断连
+  来源状态裁剪不变。单测覆盖 expand/collapse/clear/setQuery 转换、
+  通知幂等与断连裁剪；typecheck:sidebar / test:sidebar / build:renderer
+  已绿。
+
+- **侧边栏折叠/未分组序跨 ctx 实时联动修复（06 §3 修订，2026-08）**：
+  视图偏好此前是每 ctx 一份内存副本（mount 读一次 + 变化时合并写回），
+  在实例 A 展开的 workspace 切到实例 B 后仍显示折叠（06 §5 曾接受
+  「刷新生效」）；且 B 任意一次写回会把 A 刚展开的键用陈旧值**复活**。
+  修复：`shared/view-prefs.ts` 新增共享实时存储（`getViewPrefs`/
+  `subscribeViewPrefs`/`updateViewPrefs`——模块级单例缓存，vite shared
+  chunk 下所有 ctx 的侧边栏共享同一实例；写透 localStorage + 通知全部
+  订阅者），任一来源的折叠/未分组序变更实时反映到所有来源。裁剪规则
+  收紧为**安全裁剪**：空投影不裁剪（未就绪投影绝不抹用户偏好）、只裁
+  「来源已从投影消失」的键（断连来源的偏好保留、重连恢复）——顺带消除
+  原「mount 时按未就绪投影全量裁剪」与「断连来源折叠被裁」两个潜伏
+  隐患。单测覆盖存储单例/通知/裁剪规则；typecheck:sidebar /
+  test:sidebar / build:renderer 已绿。
+
+- **侧边栏远程完成未读蓝点缺失修复（06 §4 修订，2026-08）**：`completed`
+  蓝点此前只由各来源已挂载 ctx 的 vendor 提醒产生——后台来源 shell 的
+  `selected` 保持「最后打开」会话不随活动视图切换更新，该会话后续完成被
+  误判为「正在阅读」而永久压制蓝点（远程来源最常见）；且渲染时聚合
+  `running`（10s 轮询）可瞬时/长时间滞后，让运行环压制蓝点。修复：
+  （1）**蓝点状态机上移到 App 层**——上报端（sidebar 插件）退化为无状态
+  投影（`current` + 每会话实时 `running` 位 + vendor 已武装
+  `completed`/`pending`）；App 自持 `completedBySource` + `prevRunning`，
+  从上报里的实时 running 位推导 running→idle 边沿武装蓝点，「正在阅读」
+  取 App 侧事实（活动视图的 current 会话），解除规则与 vendor 同构
+  （重跑/移除/阅读）；不再依赖各来源 shell 的 selected，也不碰任何来源
+  的 selection（无竞态、会话保活不受影响）。对账为纯函数
+  `reconcileCompletedFacts`（shared/derive.ts），App 在函数式 updater 内
+  调用并各自捕获 prevRunning 快照——同来源两次上报落同一渲染周期时按序
+  组合不丢蓝点（复查修复）；（2）`sessionStateDot`/`sessionStateLabel`
+  改为 pending 徽标 > completed 点 > running 环（实时通道为真，聚合 stale
+  不再压制）。单测覆盖 `projectRuntimeFacts` 全量 running 投影与
+  `reconcileCompletedFacts` 武装/解除/阅读/移除/组合规则；typecheck:sidebar
+  / test:sidebar / build:renderer 已绿。残留（记录于 06 §5）：完成发生在
+  来源 shell 首次观察之前（预热窗口）仍无蓝点；App 侧蓝点跨断连保留
+  （断连期间完成的会话重连后仍武装）。
+
+- **侧边栏后台子 agent 运行中蓝点误亮修复（06 §4.5 新增，2026-08）**：
+  父会话的 running 位只反映「agent 回合进行中」——subagent 工具后台模式
+  （run_in_background: true / continuable 默认）下工具立即返回、父回合先
+  结束（running=false），子 agent 继续在后台工作；官方 sessionStatuses
+  把「有运行中子 agent」（runningSubagentCount > 0）排在 node.completed
+  之前，而我们的状态链此前没有 subagent 信号——后台模式下完成蓝点在子
+  agent 仍在干活时提前亮起。修复：（1）插件在 vendor 边界复用纯函数
+  `indexSubagentDescendants(snapshot.byId)`，把每父会话的 runningCount
+  （>0 稀疏）经 `projectRuntimeFacts` 参数注入并入事实通道
+  （`InstanceRuntimeReport.sessions[].runningSubagents`，官方 tree.ts 的
+  `runningSubagentCount` 同一算法同一输入，语义不可能漂移；shared 层保持
+  纯、import 图不引入未构建 vendor 包）；（2）渲染优先级改为 pending
+  徽标 > runningSubagents 运行环 > completed 点 > running 环——子 agent
+  存活期间绝无完成蓝点，全部结束后蓝点正常浮现（App 的
+  completedBySource 状态机无需改动：蓝点在子 agent 运行期间保持武装但被
+  渲染压制，与官方「completed 保持武装、subagents 分支优先呈现」同构）；
+  tooltip/aria 新增 `status.subagentsRunning.one/other`（官方 copy）。
+  单测覆盖 `projectRuntimeFacts` 的 runningSubagents 稀疏投影（无图/零值
+  省略、与 completed/pending 共存）；typecheck / typecheck:sidebar /
+  test:sidebar / build:renderer / verify:i18n 已绿。残留（记录于 06 §4.5）：
+  one-shot 前台等待窗口单点只显示子 agent 计数文案（官方为「运行中」主
+  标签 + 计数次标签），圆环同形，仅 tooltip 单值取舍。
+
+- **view-prefs 安全裁剪启动窗口误删修复（2026-08 复查，双 subagent 审计
+  驱动）**：`seenSources` 此前持久化到 localStorage——重启后首个写周期
+  （roster 未到、投影仅 local）会把上一会话见过、当前尚未加载的远程来源
+  误判为「已删除」而**永久抹掉**其折叠/未分组序偏好（正是安全裁剪要防的
+  场景）。修复：seenSources 改为**会话内内存簿记**，载入时一律归零（写入
+  路径仍经 sanitize 携带内存值）；上一会话删除、本会话未写过的来源残留
+  ghost 键（渲染侧跳过未知 id，接受）。同轮修复：`updateViewPrefs` 缓存
+  改存 sanitize 输出（mutator 不得把活缓存对象别名进 store）；侧边栏
+  `tsconfig` 纳入 test（修复被类型检查暴露的两处测试缺 `seenSources` 与
+  断言签名收窄问题）；`client/index.ts` 结构签名过滤 subagent 起源行
+  （子 agent 生灭不再触发无节流聚合重拉）；`mergeRuntimeFacts` 抽为纯函数
+  （App deriveServers 合并逻辑获得单测）；search-state 测试改期限轮询
+  （消除 350ms 定长 sleep 的抖动余量）并新增失败→error / 被替换→静默 /
+  断连中止在途 job 覆盖；view-prefs 测试补 `__resetViewPrefsForTests`
+  隔离（安全裁剪测试可独立运行）与 ungroupedOrder/seenSources 断言；
+  ambient 修正 `SessionRow.updatedAt` 可选并补齐真实导出；为 seenSources
+  会话内簿记与 defaults 新鲜对象补守卫测试（删除修复即测试失败）。单测
+  （43+16+7）与 typecheck（含 test）/ typecheck:sidebar / build:renderer /
+  verify:i18n 全绿。
+
 - **浏览器来源边界**：管理 API/实例 HTTP 在路由前校验 loopback Host 与
   Origin，WS 在 upgrade 转发前复用同一判定（403 `origin_forbidden`）；
   不再把“无 CORS 响应头”误当成 simple POST/WS 防线，并拒绝同源 DNS

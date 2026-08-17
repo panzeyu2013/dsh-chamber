@@ -137,7 +137,8 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   }
   export interface SessionRow {
     sessionId: string
-    updatedAt: number
+    /** Optional: the wire omits it when absent (never coerced to 0, which would render "54y ago"). */
+    updatedAt?: number
     running: boolean
     blank: boolean
     origin?: 'subagent'
@@ -193,7 +194,12 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   }
   export interface InstanceRuntimeReport {
     current?: string
-    sessions: Record<string, { completed?: boolean; pending?: 'approval' | 'plan-review' | 'question' }>
+    sessions: Record<string, {
+      running?: boolean
+      completed?: boolean
+      pending?: 'approval' | 'plan-review' | 'question'
+      runningSubagents?: number
+    }>
   }
   export interface ChamberServerAggregate {
     id: string
@@ -221,13 +227,55 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export function projectRuntimeFacts(
     snapshot: {
       current?: string
-      byId?: Record<string, { completed?: boolean; pendingInteraction?: 'approval' | 'plan-review' | 'question' }>
+      byId?: Record<string, {
+        running?: boolean
+        completed?: boolean
+        pendingInteraction?: 'approval' | 'plan-review' | 'question'
+      }>
     },
+    subagentRunning?: ReadonlyMap<string, number>,
   ): InstanceRuntimeReport
+  export function reconcileCompletedFacts(params: {
+    sessions: Record<string, { running?: boolean }>
+    nextRunning: Record<string, boolean>
+    prevRunning: Record<string, boolean>
+    prevCompleted: Record<string, boolean>
+    readingCurrent: string | undefined
+  }): { completed: Record<string, boolean>; changed: boolean }
+  export function mergeRuntimeFacts(
+    runtime: InstanceRuntimeReport | undefined,
+    completedBySource: Record<string, boolean> | undefined,
+  ): InstanceRuntimeReport | undefined
+  export const SEARCH_QUERY_MAX_CODE_UNITS: number
+  export interface RelativeTimeBucket {
+    unit: 'now' | 'minutes' | 'hours' | 'days' | 'months' | 'years'
+    n: number
+  }
+  export function relativeTimeBucket(updatedAt: number, now: number): RelativeTimeBucket
+  export interface DirectoryEntryRow {
+    name: string
+    path: string
+    hidden: boolean
+  }
+  export interface DirectoryListingRow {
+    path: string
+    home: string
+    crumbs: DirectoryEntryRow[]
+    entries: DirectoryEntryRow[]
+    truncated: boolean
+  }
+  export function listHostDirectory(
+    client: unknown,
+    path: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<DirectoryListingRow>
+  export function createHostDirectory(client: unknown, path: string, name: string): Promise<string>
+  export function __resetViewPrefsForTests(): void
   export interface ChamberSidebarViewPrefs {
     v: 1
     folded: Record<string, boolean>
     ungroupedOrder: Record<string, string[]>
+    seenSources: string[]
   }
   export interface StorageLike {
     getItem(key: string): string | null
@@ -236,6 +284,28 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export const VIEW_PREFS_KEY: string
   export function loadViewPrefs(storage?: StorageLike): ChamberSidebarViewPrefs
   export function saveViewPrefs(prefs: ChamberSidebarViewPrefs, storage?: StorageLike): void
+  export function getViewPrefs(): ChamberSidebarViewPrefs
+  export function subscribeViewPrefs(listener: () => void): () => void
+  export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => ChamberSidebarViewPrefs): void
+  export interface SourceSearchState {
+    expanded: boolean
+    query: string
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    items: { sessionId: string; snippet: string }[]
+    hasMore: boolean
+  }
+  export function getSearchStates(): ReadonlyMap<string, SourceSearchState>
+  export function subscribeSearch(listener: () => void): () => void
+  export function expandSearch(sourceId: string): void
+  export function collapseSearch(sourceId: string): void
+  export function setSearchQuery(sourceId: string, query: string): void
+  export function clearSearch(sourceId: string): void
+  export type SearchFetcher = (
+    sourceId: string,
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<{ items: { sessionId: string; snippet: string }[]; hasMore: boolean }>
+  export function setSearchFetcher(fetcher: SearchFetcher): void
   export const chamberBridge: {
     getServers(): ChamberServerAggregate[]
     subscribe(listener: () => void): () => void

@@ -10,7 +10,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   deriveServerWorkspaces,
+  mergeRuntimeFacts,
   projectRuntimeFacts,
+  reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
   sanitizeSearchQuery,
@@ -317,23 +319,23 @@ test('reconciledSessionOrder skips stored ids unknown to the wire', () => {
   assert.deepEqual(reconciledSessionOrder(['z'], ['a']), ['a'])
 })
 
-test('projectRuntimeFacts passes current through and includes only fact-carrying sessions', () => {
+test('projectRuntimeFacts passes current through and emits every session with its live running bit', () => {
   const report = projectRuntimeFacts({
     current: 's1',
     byId: {
-      s1: { completed: true },
-      s2: { pendingInteraction: 'approval' },
-      s3: { completed: false, pendingInteraction: 'question' },
-      s4: { completed: false },
-      s5: {},
+      s1: { running: true, completed: true },
+      s2: { running: false, pendingInteraction: 'approval' },
+      s3: { running: true, pendingInteraction: 'question' },
+      s4: { running: false },
     },
   })
   assert.deepEqual(report, {
     current: 's1',
     sessions: {
-      s1: { completed: true },
-      s2: { pending: 'approval' },
-      s3: { pending: 'question' },
+      s1: { running: true, completed: true },
+      s2: { running: false, pending: 'approval' },
+      s3: { running: true, pending: 'question' },
+      s4: { running: false },
     },
   })
 })
@@ -341,15 +343,15 @@ test('projectRuntimeFacts passes current through and includes only fact-carrying
 test('projectRuntimeFacts maps every pendingInteraction kind and keeps completed alongside pending', () => {
   const report = projectRuntimeFacts({
     byId: {
-      a: { pendingInteraction: 'plan-review' },
-      b: { pendingInteraction: 'question' },
-      c: { completed: true, pendingInteraction: 'approval' },
+      a: { running: false, pendingInteraction: 'plan-review' },
+      b: { running: false, pendingInteraction: 'question' },
+      c: { running: true, completed: true, pendingInteraction: 'approval' },
     },
   })
   assert.deepEqual(report.sessions, {
-    a: { pending: 'plan-review' },
-    b: { pending: 'question' },
-    c: { completed: true, pending: 'approval' },
+    a: { running: false, pending: 'plan-review' },
+    b: { running: false, pending: 'question' },
+    c: { running: true, completed: true, pending: 'approval' },
   })
   assert.equal(report.current, undefined)
 })
@@ -357,4 +359,182 @@ test('projectRuntimeFacts maps every pendingInteraction kind and keeps completed
 test('projectRuntimeFacts returns empty sessions for an empty snapshot', () => {
   assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
   assert.deepEqual(projectRuntimeFacts({ current: 's1' }), { current: 's1', sessions: {} })
+})
+
+test('projectRuntimeFacts treats missing running bits as false (the App edge memory uses === true)', () => {
+  const report = projectRuntimeFacts({
+    byId: {
+      a: {},
+      b: { running: undefined },
+      c: { completed: false },
+    },
+  })
+  assert.deepEqual(report.sessions, {
+    a: { running: false },
+    b: { running: false },
+    c: { running: false },
+  })
+})
+
+test('projectRuntimeFacts attaches running subagent counts (sparse, vendor lineage semantics)', () => {
+  const subagentRunning = new Map<string, number>([
+    ['parent1', 2],
+    ['parent2', 1],
+  ])
+  const report = projectRuntimeFacts({
+    current: 'parent1',
+    byId: {
+      parent1: { running: false },
+      parent2: { running: true },
+      plain: { running: false },
+    },
+  }, subagentRunning)
+  assert.deepEqual(report, {
+    current: 'parent1',
+    sessions: {
+      parent1: { running: false, runningSubagents: 2 },
+      parent2: { running: true, runningSubagents: 1 },
+      plain: { running: false },
+    },
+  })
+})
+
+test('projectRuntimeFacts omits runningSubagents without the lineage map or for zero counts', () => {
+  const noMap = projectRuntimeFacts({ byId: { a: { running: false } } })
+  assert.deepEqual(noMap.sessions.a, { running: false })
+  const zero = projectRuntimeFacts({ byId: { a: { running: false } } }, new Map([['a', 0]]))
+  assert.deepEqual(zero.sessions.a, { running: false })
+  // The count coexists with the sparse completed/pending extras.
+  const combined = projectRuntimeFacts(
+    { byId: { a: { running: false, completed: true, pendingInteraction: 'approval' } } },
+    new Map([['a', 3]]),
+  )
+  assert.deepEqual(combined.sessions.a, { running: false, completed: true, pending: 'approval', runningSubagents: 3 })
+})
+
+// ---- mergeRuntimeFacts (the App's deriveServers runtime union, 06 §4.2) ----
+
+test('mergeRuntimeFacts returns undefined with no report and no armed dots', () => {
+  assert.equal(mergeRuntimeFacts(undefined, undefined), undefined)
+  assert.equal(mergeRuntimeFacts(undefined, {}), undefined)
+  assert.equal(mergeRuntimeFacts(undefined, { x: false }), undefined) // armed=false ignored
+})
+
+test('mergeRuntimeFacts passes the report through when no App dots are armed', () => {
+  const runtime = {
+    current: 's1',
+    sessions: {
+      s1: { running: true },
+      s2: { running: false, completed: true, runningSubagents: 2 },
+    },
+  }
+  assert.deepEqual(mergeRuntimeFacts(runtime, undefined), runtime)
+  assert.deepEqual(mergeRuntimeFacts(runtime, {}), runtime)
+})
+
+test('mergeRuntimeFacts overlays App-armed dots onto the report rows, preserving live extras', () => {
+  const merged = mergeRuntimeFacts(
+    {
+      current: 's1',
+      sessions: {
+        s1: { running: false },
+        s2: { running: false, pending: 'question', runningSubagents: 1 },
+      },
+    },
+    { s1: true, s3: true, s4: false },
+  )
+  assert.deepEqual(merged, {
+    current: 's1',
+    sessions: {
+      s1: { running: false, completed: true },              // armed dot overlaid
+      s2: { running: false, pending: 'question', runningSubagents: 1 }, // untouched
+      s3: { completed: true },                              // armed dot for a session absent from the report
+    },
+  })
+})
+
+test('mergeRuntimeFacts attaches a bare report (empty sessions) even without armed dots', () => {
+  assert.deepEqual(mergeRuntimeFacts({ current: 's1', sessions: {} }, undefined), { current: 's1', sessions: {} })
+})
+
+// ---- reconcileCompletedFacts (the App-owned completed-dot state machine) ----
+
+function reconcile(
+  prevCompleted: Record<string, boolean>,
+  prevRunning: Record<string, boolean>,
+  sessions: Record<string, { running?: boolean }>,
+  readingCurrent: string | undefined,
+): { completed: Record<string, boolean>; changed: boolean; running: Record<string, boolean> } {
+  const nextRunning: Record<string, boolean> = {}
+  for (const [id, row] of Object.entries(sessions)) nextRunning[id] = row?.running === true
+  const result = reconcileCompletedFacts({ sessions, nextRunning, prevRunning, prevCompleted, readingCurrent })
+  return { ...result, running: nextRunning }
+}
+
+test('reconcile arms a running→idle edge of a background session (the vendor stale-selection gap)', () => {
+  const out = reconcile({}, { x: true }, { x: { running: false } }, undefined)
+  assert.deepEqual(out.completed, { x: true })
+  assert.equal(out.changed, true)
+})
+
+test('reconcile never arms for a session being read (the active view current)', () => {
+  const out = reconcile({}, { x: true }, { x: { running: false } }, 'x')
+  assert.deepEqual(out.completed, {})
+  assert.equal(out.changed, false)
+})
+
+test('reconcile arms other sessions while one is being read', () => {
+  const out = reconcile({}, { x: true, y: true }, { x: { running: false }, y: { running: false } }, 'x')
+  assert.deepEqual(out.completed, { y: true })
+})
+
+test('reconcile first observation only records the running bit (no edge yet)', () => {
+  const out = reconcile({}, {}, { x: { running: false } }, undefined)
+  assert.deepEqual(out.completed, {})
+  assert.equal(out.changed, false)
+})
+
+test('reconcile keeps an armed dot across later idle reports (no re-edge, no re-run)', () => {
+  const out = reconcile({ x: true }, { x: false }, { x: { running: false } }, undefined)
+  assert.deepEqual(out.completed, { x: true })
+  assert.equal(out.changed, false)
+})
+
+test('reconcile returns the prevCompleted identity when nothing changes', () => {
+  const prev = { x: true }
+  const out = reconcile(prev, { x: false }, { x: { running: false } }, undefined)
+  assert.equal(out.completed, prev)
+})
+
+test('reconcile disarms on re-run', () => {
+  const out = reconcile({ x: true }, { x: false }, { x: { running: true } }, undefined)
+  assert.deepEqual(out.completed, {})
+  assert.equal(out.changed, true)
+})
+
+test('reconcile disarms when the user starts reading the armed session (active view current)', () => {
+  const out = reconcile({ x: true }, { x: false }, { x: { running: false } }, 'x')
+  assert.deepEqual(out.completed, {})
+  assert.equal(out.changed, true)
+})
+
+test('reconcile drops the armed dot and the edge memory when the session leaves the list', () => {
+  const out = reconcile({ x: true }, { x: false }, {}, undefined)
+  assert.deepEqual(out.completed, {})
+  assert.equal(out.changed, true)
+  assert.deepEqual(out.running, {})
+})
+
+test('reconcile composes across reports without losing earlier arms (the batched-updater race)', () => {
+  // Report A: x finishes (arms). Report B: y finishes (arms). Both apply to
+  // the same base — the functional-updater composition must keep both.
+  const stepA = reconcile({}, { x: true }, { x: { running: false }, y: { running: false } }, undefined)
+  assert.deepEqual(stepA.completed, { x: true })
+  const stepB = reconcile(stepA.completed, { x: false, y: true }, { x: { running: false }, y: { running: false } }, undefined)
+  assert.deepEqual(stepB.completed, { x: true, y: true })
+})
+
+test('reconcile keeps sibling arms when one session re-runs', () => {
+  const out = reconcile({ x: true, y: true }, { x: false, y: false }, { x: { running: true }, y: { running: false } }, undefined)
+  assert.deepEqual(out.completed, { y: true })
 })

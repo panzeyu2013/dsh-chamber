@@ -45,6 +45,7 @@ export {
   RpcId,
   AbstractApiClient,
   transportError,
+  SESSION_SEARCH_RESULT_LIMIT,
 } from './api.ts'
 
 // Connection loop types are public through ConnectionHandle.start; the

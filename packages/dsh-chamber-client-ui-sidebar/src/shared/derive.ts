@@ -63,27 +63,148 @@ export function reconciledSessionOrder(stored: readonly string[], wireIds: reado
 }
 
 /**
+ * One reconcile step of the App-owned "completed but unread" dot state
+ * machine (design 06 §4.2). PURE — the App layer calls it inside a functional
+ * state updater so batched reports compose without losing earlier arms.
+ *
+ * Rules mirror the vendor reminder, except "being read" is the ACTIVE view's
+ * current session (the App's fact) instead of this ctx's possibly-stale
+ * `selected`:
+ * - arm: a running→idle edge (prevRunning true → now false) of a session the
+ *   user is not reading right now (a background source has no reader, so
+ *   every completion arms — the exact case the vendor's stale selection
+ *   suppresses);
+ * - disarm: the session re-runs (running true), leaves the list, or the user
+ *   starts reading it (it becomes the active view's current session).
+ *
+ * @param sessions - the report's per-session rows (live running bits).
+ * @param nextRunning - caller-computed pass-through of the new running bits
+ *   (used for the leave-the-list sweep; the caller keeps its own ref in sync).
+ * @param prevRunning - the source's last-observed running bits (per-report
+ *   snapshot — never the shared ref, so batched updaters stay correctly
+ *   paired with their own report).
+ * @param prevCompleted - the source's armed set before this report.
+ * @param readingCurrent - the session being read right now: the ACTIVE view's
+ *   current session, or undefined for background sources (nothing is read).
+ * @returns the next armed set (identity when unchanged) and whether it changed.
+ */
+export function reconcileCompletedFacts(params: {
+  sessions: Record<string, { running?: boolean }>
+  nextRunning: Record<string, boolean>
+  prevRunning: Record<string, boolean>
+  prevCompleted: Record<string, boolean>
+  readingCurrent: string | undefined
+}): { completed: Record<string, boolean>; changed: boolean } {
+  const next = { ...params.prevCompleted }
+  let changed = false
+  for (const [sessionId, row] of Object.entries(params.sessions)) {
+    if (row?.running === true) {
+      // Re-run disarms (vendor same rule).
+      if (next[sessionId] === true) {
+        delete next[sessionId]
+        changed = true
+      }
+      continue
+    }
+    // running → idle edge: arm unless the session is being read right now.
+    if (params.prevRunning[sessionId] === true && sessionId !== params.readingCurrent && next[sessionId] !== true) {
+      next[sessionId] = true
+      changed = true
+    }
+    // Reading disarms: the active view's current session is on screen.
+    if (sessionId === params.readingCurrent && next[sessionId] === true) {
+      delete next[sessionId]
+      changed = true
+    }
+  }
+  // Sessions that left the list: drop their armed dots and edge memory.
+  for (const sessionId of Object.keys(params.prevRunning)) {
+    if (params.nextRunning[sessionId] !== undefined) continue
+    if (next[sessionId] === true) {
+      delete next[sessionId]
+      changed = true
+    }
+  }
+  return { completed: changed ? next : params.prevCompleted, changed }
+}
+
+/**
  * Project one ctx's sessions snapshot into the chamber runtime-facts report
- * (design 06 §4.2). Only session ids carrying at least one fact (completed or
- * a defined pendingInteraction) appear; completed === false alone is not a
- * fact. The loose snapshot param avoids importing runtime store types.
+ * (design 06 §4.2). STATELESS pass-through: every listed session carries its
+ * live `running` bit (the App layer derives the completed-but-unread dot from
+ * running→idle edges itself — it owns the active view and every open request,
+ * so it is the single place that knows what "being read" means), while
+ * `completed`/`pending` ride the vendor runtime's armed state as sparse
+ * extras. `subagentRunning` (the vendor lineage index's RUNNING descendant
+ * count per parent, 06 §4.5) is INJECTED by the plugin — this module stays a
+ * pure controller with no unbuilt vendor package in its import graph (the
+ * renderer shell bundle rides this module through the shared chunk), and the
+ * plugin reuses the vendor's `indexSubagentDescendants` verbatim so the
+ * aggregation semantics never drift. The loose snapshot param avoids
+ * importing runtime store types.
  */
 export function projectRuntimeFacts(
   snapshot: {
     current?: string
-    byId?: Record<string, { completed?: boolean; pendingInteraction?: 'approval' | 'plan-review' | 'question' }>
+    byId?: Record<string, {
+      running?: boolean
+      completed?: boolean
+      pendingInteraction?: 'approval' | 'plan-review' | 'question'
+    }>
   },
+  subagentRunning?: ReadonlyMap<string, number>,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
-    const row: { completed?: boolean; pending?: 'approval' | 'plan-review' | 'question' } = {}
+    const row: {
+      running?: boolean
+      completed?: boolean
+      pending?: 'approval' | 'plan-review' | 'question'
+      runningSubagents?: number
+    } = {
+      running: facts?.running === true,
+    }
     if (facts?.completed === true) row.completed = true
     if (facts?.pendingInteraction !== undefined) row.pending = facts.pendingInteraction
-    if (row.completed !== undefined || row.pending !== undefined) sessions[id] = row
+    const runningSubagents = subagentRunning?.get(id) ?? 0
+    if (runningSubagents > 0) row.runningSubagents = runningSubagents
+    sessions[id] = row
   }
   const report: InstanceRuntimeReport = { sessions }
   if (snapshot.current !== undefined) report.current = snapshot.current
   return report
+}
+
+/**
+ * Merge one source's live runtime-facts report with the App-owned
+ * completed-but-unread dots (design 06 §4.2): the UNION of the channel's
+ * vendor-armed completed rows and the App-derived dots (the App's
+ * running→idle edge state machine is authoritative for background sources;
+ * the vendor's completed stays as a fallback), preserving the current
+ * session and every other live row (running / pending / runningSubagents).
+ * PURE — extracted so the App's deriveServers merge is unit-testable.
+ * Returns undefined when there is nothing to attach (no report and no armed
+ * dots); the caller attaches runtime only for CONNECTED sources, so a
+ * not-connected source never carries facts.
+ */
+export function mergeRuntimeFacts(
+  runtime: InstanceRuntimeReport | undefined,
+  completedBySource: Record<string, boolean> | undefined,
+): InstanceRuntimeReport | undefined {
+  const chamberCompleted = completedBySource
+  const hasArmed = chamberCompleted !== undefined && Object.values(chamberCompleted).some(value => value === true)
+  if (runtime === undefined && !hasArmed) {
+    return undefined
+  }
+  const sessions: InstanceRuntimeReport['sessions'] = { ...(runtime?.sessions ?? {}) }
+  if (chamberCompleted !== undefined) {
+    for (const [sessionId, armed] of Object.entries(chamberCompleted)) {
+      if (armed !== true) continue
+      const row = sessions[sessionId] ?? {}
+      sessions[sessionId] = { ...row, completed: true }
+    }
+  }
+  return { current: runtime?.current, sessions }
 }
 
 /**

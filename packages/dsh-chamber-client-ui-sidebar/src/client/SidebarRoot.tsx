@@ -57,9 +57,12 @@
  * detailed logSummary)); with every source disconnected the list appends
  * the empty hint under the groups. The rail
  * renders the source color dots. Workspace groups fold/unfold via a header
- * chevron toggle; fold state persists in localStorage (view prefs, 06 §3 —
- * read once on mount, written back on change with a fresh merge against
- * other ctxs' writes plus stale-entry pruning, no cross-ctx live sync).
+ * chevron toggle; fold state + ungrouped order live in ONE shared live store
+ * (view prefs, 06 §3, 2026-08 revision: getViewPrefs/subscribeViewPrefs/
+ * updateViewPrefs — single vite-shared instance across every ctx's sidebar,
+ * write-through localStorage + notify, cross-ctx LIVE sync; a fold toggle in
+ * any source's sidebar propagates to all sources immediately, no per-ctx
+ * stale copy, no write-back resurrecting another ctx's newer state).
  *
  * Chamber third round (06): per-source session search (wide only, 06 §1) —
  * the source header carries a search icon (hidden for disconnected sources
@@ -99,6 +102,7 @@
  */
 import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import clsx from 'clsx'
+import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-client-connection/client'
 import {
   BrandWordmark, FishLogo, IconArchiveOutline20, IconChecklistOutline14, IconChevronRightOutline14,
   IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16, IconLoadingOutline16,
@@ -117,9 +121,18 @@ import {
   renameSession, renameWorkspace, searchSessions, type SearchRow,
 } from '../shared/instance-api.ts'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
-import { loadViewPrefs, saveViewPrefs, type ChamberSidebarViewPrefs } from '../shared/view-prefs.ts'
+import {
+  clearSearch, collapseSearch, expandSearch, getSearchStates, setSearchFetcher, setSearchQuery, subscribeSearch,
+  type SourceSearchState,
+} from '../shared/search-state.ts'
+import { getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs } from '../shared/view-prefs.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
+
+// Wire the shared search controller's wire fetch once at module scope (the
+// controller stays a pure, plain-node-testable state machine; instance-api's
+// unary client is browser/vite-only).
+setSearchFetcher((sourceId, query, signal) => searchSessions(getInstanceClient(sourceId), query, signal))
 
 /** Wide-content unmount delay; matches the 150ms wide-content fade-out. */
 const COLLAPSE_SETTLE_MS = 150
@@ -132,17 +145,11 @@ const COLLAPSE_SETTLE_MS = 150
  */
 const SCROLLBAR_LINGER_MS = 2000
 
-/** Pause between the latest keystroke and a Host content-search request (06 §1.2). */
-const SEARCH_DEBOUNCE_MS = 250
-
-/** Caller-side search deadline (06 §1.1 — the wire merges its own 30s). */
-const SEARCH_TIMEOUT_MS = 30_000
-
 /**
- * Wire search-result page bound (dsh-host-apiproxy session-search.ts) —
- * only the hasMore copy renders it; the wire caps the actual page.
+ * Wire search-result page bound — SESSION_SEARCH_RESULT_LIMIT comes from the
+ * wire re-export (dsh-host-apiproxy session-search.ts, design 06 §1.1); only
+ * the hasMore copy renders it; the wire caps the actual page.
  */
-const SESSION_SEARCH_RESULT_LIMIT = 20
 
 /** Stable per-source accent: deterministic hue hash of the source id (05 §2). */
 function sourceHue(sourceId: string): number {
@@ -253,14 +260,6 @@ interface WorkspaceDragState {
   sourceId: string
   workspaceId: string
   over: { id: string; half: 'before' | 'after' } | null
-}
-
-/** One source's debounced remote search page (06 §1.2). */
-interface RemoteSearchState {
-  query: string
-  status: 'idle' | 'loading' | 'ready' | 'error'
-  items: SearchRow[]
-  hasMore: boolean
 }
 
 /**
@@ -382,49 +381,20 @@ export function SidebarRoot({
   const [servers, setServers] = useState<ChamberServerAggregate[]>(() => chamberBridge.getServers())
   useEffect(() => chamberBridge.subscribe(() => { setServers(chamberBridge.getServers()) }), [])
 
-  // chamber (06 §3): view preferences (folded workspace groups + the
-  // ungrouped session order) persist under one localStorage key. Read once on
-  // mount; every change writes back. No cross-ctx live propagation — a
-  // refresh/reopen picks the latest write (06 §5). The write re-reads and
-  // MERGES with whatever other ctxs persisted meanwhile (a stale snapshot
-  // must not drop unrelated keys) and prunes entries against the CURRENT
-  // projection (fold keys whose workspace vanished, ungrouped ids the source
-  // no longer holds) — the projection, not the prefs, decides existence.
-  const [viewPrefs, setViewPrefs] = useState<ChamberSidebarViewPrefs>(() => loadViewPrefs())
-  useEffect(() => {
-    const fresh = loadViewPrefs()
-    const folded = { ...fresh.folded, ...viewPrefs.folded }
-    const ungroupedOrder = { ...fresh.ungroupedOrder, ...viewPrefs.ungroupedOrder }
-    const liveFoldKeys = new Set<string>()
-    const liveSessionIds = new Map<string, Set<string>>()
-    for (const server of chamberBridge.getServers()) {
-      const universe = new Set<string>()
-      for (const workspace of server.workspaces) {
-        if (workspace.ungrouped !== true) liveFoldKeys.add(`${server.id}/${workspace.id}`)
-        for (const session of workspace.sessions) universe.add(session.id)
-      }
-      liveSessionIds.set(server.id, universe)
-    }
-    for (const key of Object.keys(folded)) {
-      if (!liveFoldKeys.has(key)) delete folded[key]
-    }
-    for (const [sourceId, ids] of Object.entries(ungroupedOrder)) {
-      const universe = liveSessionIds.get(sourceId)
-      if (universe === undefined) {
-        delete ungroupedOrder[sourceId]
-        continue
-      }
-      const pruned = ids.filter(id => universe.has(id))
-      if (pruned.length === ids.length) continue
-      if (pruned.length === 0) delete ungroupedOrder[sourceId]
-      else ungroupedOrder[sourceId] = pruned
-    }
-    saveViewPrefs({ v: 1, folded, ungroupedOrder })
-  }, [viewPrefs])
+  // chamber (06 §3, 2026-08 — cross-ctx live sync): view preferences (folded
+  // workspace groups + the ungrouped session order) live in ONE shared
+  // in-memory store (shared/view-prefs.ts) backed by localStorage. Every ctx's
+  // sidebar reads the same store instance (vite shared chunk), so a fold
+  // toggle in ANY source's sidebar propagates live to every other source's
+  // sidebar — no per-ctx stale copy, no write-back resurrecting another ctx's
+  // newer state. Writes persist + notify all subscribers; this component just
+  // mirrors the store into local state for rendering.
+  const [viewPrefs, setViewPrefs] = useState<ChamberSidebarViewPrefs>(() => getViewPrefs())
+  useEffect(() => subscribeViewPrefs(() => { setViewPrefs(getViewPrefs()) }), [])
 
   const toggleWorkspaceFold = (serverId: string, workspaceId: string): void => {
     const key = `${serverId}/${workspaceId}`
-    setViewPrefs((prev) => {
+    updateViewPrefs((prev) => {
       const folded = { ...prev.folded }
       if (folded[key] === true) delete folded[key]
       else folded[key] = true
@@ -492,34 +462,20 @@ export function SidebarRoot({
     })
   }, [servers])
 
-  // chamber (06 §1.2): per-source search state (wide only — the region is
-  // the only place the capsule can render). The query outlives collapse of
-  // the sidebar itself, but is dropped when the capsule collapses.
-  const [searchExpanded, setSearchExpanded] = useState<Record<string, boolean>>({})
-  const [searchQuery, setSearchQuery] = useState<Record<string, string>>({})
-  const [searchRemote, setSearchRemote] = useState<Record<string, RemoteSearchState>>({})
+  // chamber (06 §1.2, 2026-08 — cross-ctx live sync): per-source search state
+  // (capsule/query/results) AND the debounced fetch jobs live in ONE shared
+  // controller (shared/search-state.ts) — the same instance every ctx's
+  // sidebar sees through the vite shared chunk. A search started in ANY
+  // source's sidebar survives view switches (the visible sidebar changes
+  // shell, the shared state does not); a single owner arms the jobs, so
+  // shells never duplicate fetches. This component only mirrors the state for
+  // rendering and owns the DOM refs (capsule root / input / button for
+  // outside-click containment + focus).
+  const [searchState, setSearchState] = useState<ReadonlyMap<string, SourceSearchState>>(() => getSearchStates())
+  useEffect(() => subscribeSearch(() => { setSearchState(getSearchStates()) }), [])
   const searchRoots = useRef<Record<string, HTMLDivElement | null>>({})
   const searchInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const searchButtons = useRef<Record<string, HTMLButtonElement | null>>({})
-
-  // chamber (R3): a disconnected source drops its per-source search state, so
-  // a reconnect starts from a clean collapsed capsule instead of re-expanding
-  // and re-searching with the stale query. The prune is identity-preserving
-  // (returns prev when nothing changes), so the push-driven projection
-  // updates never churn the state.
-  useEffect(() => {
-    const gone = servers.filter((server) => !server.connected).map((server) => server.id)
-    if (gone.length === 0) return
-    const prune = <T,>(state: Record<string, T>): Record<string, T> => {
-      if (gone.every((id) => state[id] === undefined)) return state
-      const next = { ...state }
-      for (const id of gone) delete next[id]
-      return next
-    }
-    setSearchExpanded(prune)
-    setSearchQuery(prune)
-    setSearchRemote(prune)
-  }, [servers])
 
   // Outside-click closes an expanded capsule only while its query is empty
   // (official semantics): a non-empty query must not silently drop the
@@ -531,119 +487,19 @@ export function SidebarRoot({
     const onClick = (event: MouseEvent): void => {
       if (!(event.target instanceof Node)) return
       for (const server of servers) {
-        if (searchExpanded[server.id] !== true) continue
+        const state = searchState.get(server.id)
+        if (state === undefined || state.expanded !== true) continue
         const root = searchRoots.current[server.id]
         if (root !== null && root !== undefined && root.contains(event.target)) continue
         const button = searchButtons.current[server.id]
         if (button !== null && button !== undefined && button.contains(event.target)) continue
-        if (sanitizeSearchQuery(searchQuery[server.id] ?? '') !== '') continue
-        setSearchExpanded((prev) => {
-          if (prev[server.id] !== true) return prev
-          const next = { ...prev }
-          delete next[server.id]
-          return next
-        })
+        if (sanitizeSearchQuery(state.query) !== '') continue
+        collapseSearch(server.id)
       }
     }
     document.addEventListener('click', onClick)
     return () => { document.removeEventListener('click', onClick) }
-  }, [wide, servers, searchExpanded, searchQuery])
-
-  // Debounced per-source remote search: a stable job key (source id + query,
-  // only for expanded connected sources with a non-empty query) drives one
-  // effect so sibling keystrokes debounce together while polls do not
-  // restart in-flight searches. In-flight jobs live in a per-source registry
-  // ref: a keystroke in ONE source must not abort or restart another
-  // source's in-flight search (re-arm guard, P2-6) — the effect only
-  // re-creates a job when its query changed, and jobs for sources that are
-  // no longer expanded/connected/query-carrying are aborted and reset to
-  // idle. Empty/not-expanded sources reset to idle.
-  const searchJobsKey = servers
-    .filter(server => server.connected && searchExpanded[server.id] === true)
-    .map(server => `${server.id}\u0000${sanitizeSearchQuery(searchQuery[server.id] ?? '')}`)
-    .filter(pair => !pair.endsWith('\u0000'))
-    .join('|')
-  const searchJobsRef = useRef<Record<string, {
-    query: string
-    timer: number
-    timeout: number
-    controller: AbortController
-  }>>({})
-  useEffect(() => {
-    const jobs = searchJobsRef.current
-    // Wanted jobs for THIS render: expanded + connected + non-empty query.
-    const wanted = new Map<string, string>()
-    for (const server of servers) {
-      if (!server.connected) continue
-      const query = sanitizeSearchQuery(searchQuery[server.id] ?? '')
-      if (searchExpanded[server.id] !== true || query === '') continue
-      wanted.set(server.id, query)
-    }
-    // Abort jobs that are no longer wanted (collapsed, disconnected, emptied
-    // or re-queried) and reset their idle state — the CHANGED source only.
-    for (const [sourceId, job] of Object.entries(jobs)) {
-      if (wanted.get(sourceId) === job.query) continue
-      window.clearTimeout(job.timer)
-      window.clearTimeout(job.timeout)
-      job.controller.abort()
-      delete jobs[sourceId]
-      if (!wanted.has(sourceId)) {
-        setSearchRemote((prev) => {
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        })
-      }
-    }
-    // Arm jobs for new queries only — an existing same-query job is left in
-    // flight (its own completion updates the state; re-creating it here
-    // would abort and restart every other source's search on each keystroke).
-    for (const [sourceId, query] of wanted) {
-      if (jobs[sourceId] !== undefined) continue
-      const controller = new AbortController()
-      setSearchRemote((prev) => ({
-        ...prev,
-        [sourceId]: { query, status: 'loading', items: [], hasMore: false },
-      }))
-      const timer = window.setTimeout(() => {
-        searchSessions(getInstanceClient(sourceId), query, controller.signal)
-          .then((result) => {
-            if (controller.signal.aborted) return
-            setSearchRemote((prev) => ({
-              ...prev,
-              [sourceId]: { query, status: 'ready', items: result.items, hasMore: result.hasMore },
-            }))
-          })
-          .catch(() => {
-            // 30s 调用方超时（SEARCH_TIMEOUT_MS）会 abort：若本 job 仍持有该
-            // controller（未被新查询替换/删除），这是「超时」而非「被取消」——
-            // 必须落 error 态，绝不永久停留在 search.pending（P2-6 竞态修复）。
-            // 被替换/收起的 job（jobs[sourceId] 已换新 controller 或已删除）
-            // 则静默退出，其状态由新 job/清理接管。
-            if (controller.signal.aborted && jobs[sourceId]?.controller !== controller) return
-            setSearchRemote((prev) => ({
-              ...prev,
-              [sourceId]: { query, status: 'error', items: [], hasMore: false },
-            }))
-          })
-      }, SEARCH_DEBOUNCE_MS)
-      const timeout = window.setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS)
-      jobs[sourceId] = { query, timer, timeout, controller }
-    }
-    return () => {
-      // Cleanup on the next run / unmount: abort the jobs whose query this
-      // run no longer wants (the changed sources) — registry entries for
-      // untouched sources survive, keeping their in-flight searches alive.
-      for (const [sourceId, job] of Object.entries(jobs)) {
-        if (wanted.get(sourceId) === job.query) continue
-        window.clearTimeout(job.timer)
-        window.clearTimeout(job.timeout)
-        job.controller.abort()
-        delete jobs[sourceId]
-      }
-    }
-  }, [searchJobsKey])
+  }, [wide, servers, searchState])
 
   // chamber (06 §2.2): in-source drag state. Cross-source drops are
   // structurally impossible — every target handler is gated on the drag's
@@ -843,7 +699,7 @@ export function SidebarRoot({
     const insertAt = anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor)
     nextOrder.splice(insertAt === -1 ? nextOrder.length : insertAt, 0, activeDrag.sessionId)
     if (workspace.ungrouped === true) {
-      setViewPrefs(prev => ({ ...prev, ungroupedOrder: { ...prev.ungroupedOrder, [server.id]: nextOrder } }))
+      updateViewPrefs(prev => ({ ...prev, ungroupedOrder: { ...prev.ungroupedOrder, [server.id]: nextOrder } }))
       return
     }
     setSessionOrderOverride(prev => ({ ...prev, [`${server.id}/${workspace.id}`]: nextOrder }))
@@ -915,6 +771,25 @@ export function SidebarRoot({
   // `?`, plan-review checklist, approval warning triangle; the ask-user state
   // is the plan's motivating case). The caller wraps the result in the fixed
   // 10px slot so titles stay aligned (pending rows widen the slot to 14px).
+  // Priority (both functions below): pending > runningSubagents > completed
+  // > running — live channel facts first (pending interaction, subagent
+  // liveness, completion), the 10s-polled running bit last (see the inline
+  // comments for the channel-truth rationale).
+  // 2026-08 (remote completed-dot fix): `completed` comes from the LIVE
+  // runtime channel while `running` comes from the 10s aggregate poll — the
+  // two can disagree right after a completion (the aggregate lags up to a
+  // poll cycle, longer when its pulls fail). The completed dot is the
+  // channel truth (the vendor disarms the reminder while running), so it
+  // outranks a stale running ring; the ring shows only when no completion
+  // fact exists. 2026-08 (running-subagent fix, 06 §4.5): the official
+  // sessionStatuses renders a session whose round ended but whose BACKGROUND
+  // subagents still work as ONGOING (runningSubagentCount outranks
+  // node.completed) — a parent's own running bit goes false the moment its
+  // round returns, so the App-armed completed dot would light up blue while
+  // the children are still at work. `runningSubagents` (live channel, vendor
+  // lineage index) therefore outranks the completed dot AND the stale polled
+  // running ring — live facts (pending > runningSubagents > completed) beat
+  // the 10s poll, the established channel-truth rule.
   const sessionStateLabel = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): string | undefined => {
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
@@ -923,8 +798,12 @@ export function SidebarRoot({
         : pending === 'plan-review' ? t('status.planReview')
         : t('status.waitingAnswer')
     }
-    if (session.running === true) return t('status.running')
+    const runningSubagents = facts?.runningSubagents ?? 0
+    if (runningSubagents > 0) {
+      return t(runningSubagents === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other', { n: runningSubagents })
+    }
     if (facts?.completed === true) return t('status.completed')
+    if (session.running === true) return t('status.running')
     return undefined
   }
   /** Pending-interaction kind of the row, or undefined when not pending. */
@@ -933,7 +812,8 @@ export function SidebarRoot({
   const sessionStateDot = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): ReactNode => {
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
-    if (pending === undefined && session.running !== true && facts?.completed !== true) return null
+    const runningSubagents = facts?.runningSubagents ?? 0
+    if (pending === undefined && runningSubagents === 0 && facts?.completed !== true && session.running !== true) return null
     if (pending === 'approval') {
       return <IconWarningOutline16 className={cc.statePendingApproval} />
     }
@@ -943,10 +823,15 @@ export function SidebarRoot({
     if (pending === 'question') {
       return <IconQuestionOutline14 className={cc.statePendingQuestion} />
     }
-    if (session.running === true) {
+    if (runningSubagents > 0) {
+      // 后台子 agent 存活：父回合虽已结束，会话仍处工作中（官方语义——
+      // 子 agent 计数压过父 completed），绝不让蓝色完成点在此阶段亮起。
       return <StateDot state="ongoing" size={10} />
     }
-    return <span className={cc.stateCompleted} />
+    if (facts?.completed === true) {
+      return <span className={cc.stateCompleted} />
+    }
+    return <StateDot state="ongoing" size={10} />
   }
 
   return (
@@ -1015,10 +900,14 @@ export function SidebarRoot({
         {wide ? (
           <div className={cc.chamberList}>
             {servers.map((server) => {
-              const query = sanitizeSearchQuery(searchQuery[server.id] ?? '')
-              const remote = searchRemote[server.id]
-              const currentRemote = remote !== undefined && remote.query === query
-                ? remote
+              // chamber (06 §1.2): per-source search read from the shared
+              // controller (survives view switches). The state's query is the
+              // sanitized current value by construction; the loading fallback
+              // covers the expand-without-query render pass defensively.
+              const search = searchState.get(server.id)
+              const query = sanitizeSearchQuery(search?.query ?? '')
+              const currentRemote = search !== undefined && search.query === query
+                ? search
                 : { query, status: 'loading' as const, items: [] as SearchRow[], hasMore: false }
               // chamber (06 §4): the current-session highlight is channel-based
               // — no direct store subscription — and single-selection: only the
@@ -1156,9 +1045,9 @@ export function SidebarRoot({
                       capsule is open the cluster stays visible
                       (.sourceActionsVisible) so the icon can collapse it. */}
                   <span
-                    className={clsx(cc.sourceActions, searchExpanded[server.id] === true && cc.sourceActionsVisible)}
+                    className={clsx(cc.sourceActions, search?.expanded === true && cc.sourceActionsVisible)}
                   >
-                    {server.connected && (server.aggregateError === undefined || searchExpanded[server.id] === true) && (
+                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <button
                         type="button"
                         className={clsx(cc.actionIcon, cc.addWorkspace)}
@@ -1173,32 +1062,27 @@ export function SidebarRoot({
                         <IconPlusOutline16 size={14} />
                       </button>
                     )}
-                    {server.connected && (server.aggregateError === undefined || searchExpanded[server.id] === true) && (
+                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <button
                         type="button"
                         className={cc.searchButton}
                         aria-label={t('search.sessions.aria')}
-                        aria-expanded={searchExpanded[server.id] === true}
+                        aria-expanded={search?.expanded === true}
                         ref={(node) => { searchButtons.current[server.id] = node }}
                         onClick={(event) => {
                           event.stopPropagation()
                           if (suppressClickRef.current) return
-                          if (searchExpanded[server.id] === true) {
+                          if (search?.expanded === true) {
                             // Toggle: an open capsule's icon collapses it (empty
                             // query) or just blurs the input (a non-empty query
                             // must not silently drop the in-progress filter).
                             if (query === '') {
-                              setSearchExpanded(prev => {
-                                if (prev[server.id] !== true) return prev
-                                const next = { ...prev }
-                                delete next[server.id]
-                                return next
-                              })
+                              collapseSearch(server.id)
                             } else {
                               searchInputs.current[server.id]?.blur()
                             }
                           } else {
-                            setSearchExpanded(prev => ({ ...prev, [server.id]: true }))
+                            expandSearch(server.id)
                             searchInputs.current[server.id]?.focus()
                           }
                         }}
@@ -1210,7 +1094,7 @@ export function SidebarRoot({
                 </header>
                 {/* chamber (06 §1.2): the search capsule row beneath the header.
                     Escape clears and collapses; the clear button does the same. */}
-                {searchExpanded[server.id] === true && (
+                {search?.expanded === true && (
                   <div
                     ref={(node) => { searchRoots.current[server.id] = node }}
                     className={cc.searchCapsule}
@@ -1221,23 +1105,19 @@ export function SidebarRoot({
                       type="text"
                       maxLength={SEARCH_QUERY_MAX_CODE_UNITS}
                       placeholder={t('search.placeholder')}
-                      value={searchQuery[server.id] ?? ''}
+                      value={search?.query ?? ''}
                       autoFocus
-                      onChange={(event) => setSearchQuery(prev => ({ ...prev, [server.id]: sanitizeSearchQuery(event.target.value) }))}
+                      onChange={(event) => setSearchQuery(server.id, event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key !== 'Escape') return
-                        setSearchQuery((prev) => { const next = { ...prev }; delete next[server.id]; return next })
-                        setSearchExpanded((prev) => { const next = { ...prev }; delete next[server.id]; return next })
+                        clearSearch(server.id)
                       }}
                     />
                     <button
                       type="button"
                       className={cc.searchClear}
                       aria-label={t('search.clear')}
-                      onClick={() => {
-                        setSearchQuery((prev) => { const next = { ...prev }; delete next[server.id]; return next })
-                        setSearchExpanded((prev) => { const next = { ...prev }; delete next[server.id]; return next })
-                      }}
+                      onClick={() => clearSearch(server.id)}
                     >
                       <IconCloseOutline16 size={12} />
                     </button>
@@ -1583,9 +1463,11 @@ export function SidebarRoot({
                                         </button>
                                       </span>
                                       {/* Trailing state slot: the ring/dot at the
-                                          row's right edge — never replaced by the
-                                          hover actions (those take the time cell's
-                                          place). */}
+                                          row's right edge. On hover the row action
+                                          cluster (kebab + archive) swaps in and this
+                                          slot swaps out (CSS hover replace, 06 §4.3
+                                          /§7) — the slot is a true replace, no
+                                          placeholder. */}
                                       <span
                                         className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
                                         title={sessionStateLabel(server, session)}

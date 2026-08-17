@@ -40,14 +40,19 @@
 
 - **位置**：每来源分组头内搜索图标按钮（`sourceHeader` 内、状态徽标旁），
   点击展开为头下新行（胶囊式 input + 清除按钮），wide 态专属（rail 不做）。
-- **状态**（SidebarRoot 内按 sourceId 分键）：
-  `searchExpanded: Record<sourceId, boolean>`、
-  `searchQuery: Record<sourceId, string>`、
-  `searchRemote: Record<sourceId, { query, status: 'idle'|'loading'|'ready'|'error', items, hasMore }>`。
+- **状态（2026-08 修订——共享控制器）**：每来源搜索状态与防抖 job 整体
+  移入 `shared/search-state.ts` 共享单例（vite shared chunk，所有 ctx 的
+  侧边栏同一实例）——`expandSearch`/`collapseSearch`/`setSearchQuery`/
+  `clearSearch`/`getSearchStates`/`subscribeSearch`；组件只镜像渲染 + 持有
+  DOM ref（outside-click 包含判定与 focus）。取代早前「按 sourceId 分键的
+  per-shell state + 组件内 job effect」：任一来源侧边栏发起的搜索在视图
+  切换后仍存活（可见侧边栏换 shell，共享状态不换）；job 单一所有者，杜绝
+  N 个 shell 对同一查询重复发起/互相中止（P2-6 语义原样保留：单来源击键
+  不打扰其他来源在途搜索、30s 超时与「被替换」区分）。
 - **流程**：输入 → sanitize（去 `\0`、500 UTF-16 截断、trim）→ 空则回 idle；
   非空则建 `AbortController` → 250ms 防抖 → `searchSessions(client, query, signal)`
   → 未中止则提交 ready/error。Escape 清空并收起；outside-click 仅在 query
-  为空时收起（官方语义）。
+  为空时收起（官方语义）。断连来源的搜索状态被裁剪（重连从干净收起态开始）。
 - **结果渲染**：query 非空时该来源的 `workspaceList` 整体替换为结果列表
   （来源头与状态保留；折叠入口隐藏）。行 = 标题（聚合解析，
   缺失兜底"未命名会话"）+ snippet 行；点击 → `chamberBridge.requestOpenSession`。
@@ -117,29 +122,42 @@
 ### 3.1 存储形状
 
 - 单键 `dsh-chamber.sidebar.v1`（整页共享 localStorage；所有实例 ctx 共读
-  共写，值幂等，last-writer-wins 无害）：
+  共写）：
   ```ts
   { v: 1,
     folded: Record<`${sourceId}/${workspaceId}`, boolean>,
     ungroupedOrder: Record<sourceId, string[]> }
   ```
-- 新建 `shared/view-prefs.ts`：`loadViewPrefs()`/`saveViewPrefs(prefs)`，
+- `shared/view-prefs.ts`：`loadViewPrefs()`/`saveViewPrefs(prefs)`，
   JSON 解析/写入 try/catch 兜底（非致命）、版本号不匹配即弃用重播种
   （官方 persist 引擎纪律）；纯函数，可单测。
-- 折叠状态改为：mount 时读取一次 + 变化时写回（现 `folded` 会话级
-  state 键形不变，仅加持久化）；跨 ctx 实时联动**不做**（刷新/重开
-  生效即可，注明）。
+- **共享实时存储（2026-08 修订，跨 ctx 实时联动）**：在读写函数之上新增
+  `getViewPrefs()`/`subscribeViewPrefs()`/`updateViewPrefs()`——模块级
+  单例缓存（vite shared chunk，所有 ctx 的侧边栏共享同一实例）+ 写透
+  localStorage + 通知全部订阅者。折叠/未分组序在**任一来源**的侧边栏里
+  变更即实时反映到**所有来源**的侧边栏，不再有每 ctx 陈旧副本、不再有
+  「B 写回时把 A 的新状态覆盖成旧值」的复活问题。**取代**早前「mount 读
+  一次 + 变化时合并写回、跨 ctx 不联动」模型（§5 已知取舍相应删除）。
+- 裁剪规则（写入时）：**空投影不裁剪**（未就绪投影绝不抹掉用户偏好）；
+  只裁**本会话内见过、现已从投影消失**的来源键（断连来源的折叠/未分组
+  序保留，重连后恢复——渲染侧 `reconciledSessionOrder` 本就跳过未知 id）。
+  **seenSources 为会话内内存簿记（2026-08 复查修复），绝不从存储恢复**：
+  持久化它会令重启后首个写周期（roster 未到、投影仅 local）把上一会话
+  见过、当前尚未加载的远程来源误判为「已删除」而永久抹掉其偏好——正是
+  本机制要防的启动窗口数据丢失；上一会话删除、本会话未写过的来源残留
+  ghost 键（渲染侧跳过未知 id，体积可忽略，接受）。
 
 ### 3.2 未分组序
 
-- `ungroupedOrder[sourceId]` 由 §2 拖拽提交写入；渲染期 `reconciledSessionOrder`
-  应用（stored 优先 + 新游离按 recency 追加）；下次聚合拉取时按成员
-  修剪（跳未知 id）。
+- `ungroupedOrder[sourceId]` 由 §2 拖拽提交写入（经 `updateViewPrefs`）；
+  渲染期 `reconciledSessionOrder` 应用（stored 优先 + 新游离按 recency
+  追加）；未知 id 由渲染侧跳过。
 
 ### 3.3 代码落点
 
-- `shared/view-prefs.ts`（新）+ `shared/index.ts` 再导出；`SidebarRoot.tsx`
-  读写；`test/view-prefs.ts` 或并入 derive 测试（node:test 风格）。
+- `shared/view-prefs.ts` + `shared/index.ts` 再导出；`SidebarRoot.tsx`
+  经 `getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs` 读写；
+  `test/view-prefs.ts` 覆盖存储单例/通知/裁剪（node:test 风格）。
 
 ## 4. 运行时事实通道（完成/待交互点 + 跨来源当前会话高亮）
 
@@ -150,13 +168,37 @@
   `updatedAt`；快照含 `current?: string`（当前会话 id）。
 - 每个实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，
   即每个来源都有一个可订阅自身运行时的事实生产者。
+- **插件 = 无状态投影（2026-08 修订，远程完成未读蓝点修复）**：上报端只做
+  快照直通——`current` + 每个列出会话的实时 `running` 位 + vendor 已武装的
+  `completed`/`pending`，**不自持任何状态**。官方 `completed` 提醒只在
+  「运行→空闲」边沿且会话**非本 ctx selected** 时武装，后台来源 shell 的
+  selected 保持「最后打开」不随活动视图切换更新，会把后续完成误判为
+  「正在阅读」而永久压制蓝点——因此**蓝点的武装/解除整体上移到 App 层**
+  （它拥有活动视图与全部 open 请求，是唯一知道「谁在阅读什么」的地方），
+  由 App 从上报里的实时 running 位自行推导 running→idle 边沿（规则与
+  vendor 提醒同构，仅把「正在阅读」从「本 ctx selected」替换为「活动视图
+  的 current 会话」）。App 侧状态机见 §4.2；插件侧无重复状态、不碰任何
+  来源的 selection（无竞态、会话保活不受影响）。
+- **运行中子 agent 计数（2026-08 修订）**：除 running/completed/pending
+   外，插件另上报每父会话的 `runningSubagents`——vendor 纯函数
+   `indexSubagentDescendants(byId)` 的 runningCount（经不间断 subagent 起源
+   链统计的后代 running 数，官方 ui-workspace tree 的
+   `runningSubagentCount` 同一算法）。动机与语义见 §4.5：父会话的 running
+   位只反映「agent 回合进行中」，后台子 agent 存活时父回合已结束
+   （running=false），子 agent 仍在工作——没有这条计数，完成蓝点会在子
+   agent 干活时提前亮起。
 
 ### 4.2 通道 API（chamberBridge 扩展）
 
 ```ts
 export interface InstanceRuntimeReport {
   current?: string
-  sessions: Record<sessionId, { completed?: boolean; pending?: 'approval'|'plan-review'|'question' }>
+  sessions: Record<sessionId, {
+    running?: boolean
+    completed?: boolean
+    pending?: 'approval'|'plan-review'|'question'
+    runningSubagents?: number
+  }>
 }
 reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void
 clearInstanceRuntime(sourceId: string): void
@@ -165,20 +207,39 @@ onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | und
 
 - 每 ctx 插件 apply 内新增 effect：订阅 `ctx.sessions.list`，订阅后立即
   上报一次当前快照（zustand subscribe 不即时触发），其后每次变更上报
-  投影（`{ current, sessions: { id: { completed, pending } } }`）；
-  effect 清理时 `clearInstanceRuntime`。
-- App 侧：`runtimeFacts: Record<sourceId, InstanceRuntimeReport | undefined>`
-  state；`deriveServers` 合并为 `ChamberServerAggregate.runtime?`（仅附加，
-  不覆盖 polled 字段）；`pollAggregates` 的 not-connected 分支清空该来源
-  事实（断连即清，含 completed——generation 级事实本应随断连失效）。
+  投影（`{ current, sessions: { id: { running, completed?, pending?,
+  runningSubagents? } } }`，每个列出会话都有 running 行；runningSubagents
+  仅 >0 时出现——vendor `indexSubagentDescendants` 的 runningCount，插件在
+  vendor 边界直接复用该纯函数，见 §4.5）；effect 清理时
+  `clearInstanceRuntime`。
+- App 侧：`runtimeFacts` state；**`completedBySource` state + `prevRunning`
+  ref——App 自持的完成未读蓝点状态机**（06 §4.1）：每次上报对账——
+  - 武装：running→idle 边沿，且该会话不是活动视图的 current（后台来源
+    无阅读者，全部武装——正是 vendor 陈旧 selected 会漏掉的那一个）；
+  - 解除：重新运行（running=true）、会话从列表消失、或用户开始阅读
+    （该来源为活动视图且会话为其 current；视图切换生效时另有一处 effect
+    兜底「激活但无新上报」路径，如点击来源头不打开会话）。
+  - `deriveServers` 把 `completedBySource` 与上报里的 vendor `completed`
+    取并集合并进 `ChamberServerAggregate.runtime?`（仅附加，不覆盖 polled
+    字段）；`pollAggregates` 的 not-connected 分支清空该来源**上报事实**
+    （断连即清，generation 级事实随断连失效）；App 自持的蓝点与边沿记忆
+    跨断连保留——重连后重新挂载，且能捕获断连期间完成的会话（prevRunning
+    持有断连前 running=true）。
+- 对账逻辑是**纯函数** `shared/derive.ts reconcileCompletedFacts`（单测见
+  `test/derive.ts`）：App 在 `setCompletedBySource` 的函数式 updater 里调用
+  它，且每份上报各自捕获 `prevRunning` 快照——同来源两次上报落在同一渲染
+  周期时按序组合，不会互相覆盖丢蓝点（2026-08 复查修复）。
 
 ### 4.3 UI 语义（状态指示）
 
 - 行尾为**固定 10px 状态槽**（非常驻身份点——来源身份由来源头圆点承担）：
-  - 常态（不运行、未完成）：空槽，不显示任何图标（槽保留宽度，
-    行右缘跨行对齐）；
+  - 常态（不运行、未完成、无子 agent）：空槽，不显示任何图标（槽保留
+    宽度，行右缘跨行对齐）；
   - 运行中：官方 `StateDot` **ongoing 圆环**
     （`--dsw-static-deepseek-450` 蓝色 chase ring）；
+  - **子 agent 运行中（2026-08 修订）**：同一 ongoing 圆环，tooltip/aria
+    显示「N 个子代理运行中」——父回合已结束但后台子 agent 仍在工作时
+    会话依旧"进行中"，**绝不在这个阶段亮起完成蓝点**（§4.5）；
   - 运行结束未读（completed）：**长显示圆点**（持久蓝色点，tooltip
     "已完成"）。
   - **待交互（pending，2026-08 修订）**：不再与运行中同形——槽加宽至
@@ -209,21 +270,86 @@ onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | und
   高亮" → 本轮收敛为全局单选；通道机制不变——组件不再直连 store，
   订阅逻辑在插件 apply 上报端；boot 首帧无上报前不高亮，随首次上报
   补齐。跨来源的 pending/completed 状态点不受影响，仍全来源呈现。）
+- **状态点优先级（2026-08 修订，双通道错位时取实时通道为真）**：
+  **pending 徽标 > runningSubagents 运行环 > completed 点 > running 环**。
+  completed 事实来自实时通道，`running` 来自 10s 聚合轮询——完成瞬间聚合
+  可能仍带 running=true（≤一个轮询周期，聚合拉取失败时更久），旧渲染会让
+  运行环压制蓝点；2026-08 再修订：runningSubagents（实时通道）同样压过
+  陈旧 running 环与 completed 点（vendor 自身保证 completed 与 running
+  互斥，此顺序只在双通道瞬时错位时生效，取实时通道为真）。官方
+  sessionStatuses 的「有运行中子 agent 就显示 ongoing」语义因此原样对齐
+  （官方同快照无错位，其顺序 running > subagents > completed；我们
+  completed/runningSubagents 皆为实时通道、running 为轮询，故实时事实
+  整体前置）。
 
 ### 4.4 代码落点
 
-- `shared/aggregate-store.ts`（通道 + `ChamberServerAggregate.runtime?`）、
-  `client/index.ts`（订阅与上报）、`App.tsx`（state + 合并 + 清理）、
-  `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮）、
-  `locales.ts`（`status.waitingApproval/planReview/waitingAnswer/completed`）。
+- `shared/aggregate-store.ts`（通道 + `ChamberServerAggregate.runtime?` +
+  `runningSubagents` 行字段）、`client/index.ts`（订阅与无状态上报 +
+  `indexSubagentDescendants` 注入）、`App.tsx`（runtimeFacts +
+  completedBySource 对账 + 合并 + 清理 + 激活兜底；runningSubagents 随
+  事实行透传，状态机无需感知）、
+  `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
+  runningSubagents 分支）、`locales.ts`
+  （`status.waitingApproval/planReview/waitingAnswer/completed` +
+  `status.subagentsRunning.one/other`）。
+
+### 4.5 运行中子 agent（runningSubagents 圆环，2026-08 修复）
+
+**问题**：agent 状态是二元的——`status = phase.kind === 'idle' |
+'maintenance' ? 'idle' : 'running'`，driver 在工具调用 await 期间不释放
+running 相位；会话 running 位 = agent.status === 'running'。subagent 工具
+两种运行模式：**one-shot（默认，前台等待）**——父回合在 await 子 agent，
+父 running 位保持 true；**后台（run_in_background: true / continuable
+默认）**——工具立即返回，父回合先结束（running=false），子 agent 继续
+在后台工作。官方 `completed` 提醒在父 running→idle 边沿武装
+（manager.ts syncCompletedNotifications），官方 UI 的 sessionStatuses 把
+「有运行中子 agent」（runningSubagentCount > 0）排在 node.completed 之前
+——官方保证「子 agent 在跑就显示 ongoing」，即使父会话自身已 completed。
+
+**我们的缺口**：侧边栏状态链此前只有 pending > completed > running 三档，
+没有任何 subagent 信号——后台模式下父回合结束即武装完成蓝点，子 agent
+仍在干活时蓝点就亮了（且会一直保持到用户阅读或父再次运行）。
+
+**修复**：
+- 插件（vendor 边界）在每次快照投影时调用 vendor 纯函数
+  `indexSubagentDescendants(snapshot.byId)`，把每父会话的 runningCount
+  （>0 稀疏）并入事实通道——与官方 tree.ts 的 `runningSubagentCount`
+  同一算法同一输入，语义不可能漂移；`shared/derive.ts projectRuntimeFacts`
+  保持纯（计数经参数注入，import 图不引入未构建 vendor 包）。
+- 渲染优先级改为 **pending 徽标 > runningSubagents 运行环 > completed 点
+  > running 环**：子 agent 存活期间绝无完成蓝点（对齐官方
+  sessionStatuses）；子 agent 全部结束后蓝点正常浮现（App 的
+  completedBySource 边沿状态机无需改动——蓝点在子 agent 运行期间保持
+  武装但被渲染压制，与官方「completed 保持武装、subagents 分支优先
+  呈现」完全同构）。
+- tooltip/aria：`status.subagentsRunning.one/other`
+  （官方 copy：`{n} 个子代理运行中` / `{n} subagent(s) running`）。
+
+**残留（记录）**：父回合与子 agent 同活的短暂前台窗口（one-shot
+await 中），我们单点只显示子 agent 计数文案，官方同快照显示
+「运行中」主标签 + 计数次标签——圆环同形，仅 tooltip 文案单值取舍；
+聚合轮询陈旧（≤一个轮询周期）时 running 环与子 agent 环瞬时同形，
+取实时通道为真。
 
 ## 5. 已知取舍与开放项（已决）
 
 - 跨实例 `dsh.sessions.current` localStorage 共享键（last-writer-wins）：
   接受——镜像运行时既有行为，通道原样携带。
+- **完成发生在来源 shell 首次观察之前仍无蓝点（2026-08 记录）**：App 侧
+  蓝点与 vendor 提醒同受「首次观察只记录 running 位」规则——来源 shell
+  尚未挂载（预热排队中/首次打开前）期间的完成边沿两者都看不到。空闲预热
+  保证连接后尽快挂载，该窗口为「实例就绪 → shell boot 完成」；活动来源
+  的完成即时可见（预热/打开必先挂载）。不做轮询级完成推导（10s 粒度会
+  漏掉更短任务，且与「running 点 wire 权威、completed 仅通道提供」契约
+  冲突）。
+- **App 侧蓝点跨断连保留（2026-08）**：上报事实（runtimeFacts）断连即清
+  （generation 级），App 自持的 completedBySource/prevRunning 跨断连保留
+  ——断连期间完成的会话在重连后仍正确武装（prevRunning 持有断连前
+  running=true，重连基线 running=false 触发边沿）；侧边栏断连时本就无行
+  可显示，蓝点不闪烁。
 - 结果标题滞后 / 聚合错误源隐藏搜索 / rail 无搜索：接受（§1.2）。
 - 拖拽无 touch/键盘：已知限制（官方亦然，Electron 桌面）。
-- 折叠与未分组序不跨 ctx 实时联动：刷新生效，接受。
 - 拖拽乐观重排不设回滚：pull 模型自愈 + inline 错误，接受。
 
 ## 6. 验证计划
