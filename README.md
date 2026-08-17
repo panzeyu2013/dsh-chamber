@@ -179,7 +179,13 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
    which node  # record the node bin dir (nvm-managed, not in systemd's PATH) for the PATH line below
    ```
 
-3. **Persist it with systemd** — create `/etc/systemd/system/dsh.service`:
+3. **Persist it with systemd** — two options, both running dsh as a
+   non-root user with every file in that user's own home. dsh defaults to
+   `$HOME/.dsh`, so no `DSH_HOME` setup is needed at all.
+
+   **Option A — system unit (recommended).** Create
+   `/etc/systemd/system/dsh.service` (root is needed only to install the
+   unit):
 
    ```ini
    [Unit]
@@ -188,17 +194,16 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
 
    [Service]
    Type=simple
-   # Runs as root (simplest setup). For the hardened option, create a
-   # dedicated non-root service account instead and own DSH_HOME to it:
-   #   sudo useradd --system --home /var/lib/dsh/dsh-home dsh
-   #   sudo chown -R dsh:dsh /var/lib/dsh/dsh-home
-   # and set `User=dsh` / `Group=dsh` below.
-   # The web profile serves the dsh API + frontend on loopback only. --port
-   # and --trusted-host always agree (127.0.0.1:<P>): the browser trust fence
-   # admits the Host header the chamber tunnel forwards (`dsh web` is the
-   # hard alias of `--profile web`). Replace <DSH_PATH> with the path from
-   # `which dsh` above — npm global installs put it under the user's npm
-   # prefix (e.g. /usr/local/bin/dsh), not /usr/bin.
+   # Run dsh as the login user you SSH in as (replace <YOUR_USER>). dsh then
+   # writes everything to that user's own home (~/.dsh by default) — no
+   # mkdir/chown, no root-owned files. The web profile serves the dsh API +
+   # frontend on loopback only. --port and --trusted-host always agree
+   # (127.0.0.1:<P>): the browser trust fence admits the Host header the
+   # chamber tunnel forwards (`dsh web` is the hard alias of
+   # `--profile web`). Replace <DSH_PATH> with the path from `which dsh`
+   # above — npm global installs put it under the user's npm prefix
+   # (e.g. /usr/local/bin/dsh), not /usr/bin.
+   User=<YOUR_USER>
    ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
    Restart=on-failure
    RestartSec=3
@@ -206,12 +211,10 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
    # default PATH does not include nvm's node → the service crash-loops with
    # status=127 ("/usr/bin/env: 'node': No such file or directory"). Replace
    # <NODE_BIN> with the dir of `which node` above (e.g.
-   # /root/.nvm/versions/node/v22.22.3/bin). Note: Environment= is a literal
-   # whole-line assignment (no append-to-existing-PATH syntax) and ExecStart
-   # does no variable expansion — write the full absolute paths.
+   # /home/<YOUR_USER>/.nvm/versions/node/v22.22.3/bin). Note: Environment=
+   # is a literal whole-line assignment (no append-to-existing-PATH syntax)
+   # and ExecStart does no variable expansion — write the full absolute paths.
    Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-   # The server shape uses a dedicated DSH_HOME (design 02 §5.6):
-   Environment=DSH_HOME=/var/lib/dsh/dsh-home
    Environment=DSH_TELEMETRY_DISABLED=1
    Environment=DSH_PERMISSION_MODE=workspace-write
    NoNewPrivileges=true
@@ -227,9 +230,76 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
    sudo systemctl status dsh
    ```
 
-   If it crash-loops, check the logs — a `status=127` + `/usr/bin/env: 'node': No such file or directory` means the PATH line above doesn't include the actual node bin dir.
+   **Option B — per-user unit (no root at all).** If you have no root on
+   the server (or don't want to ask for it), systemd user units persist dsh
+   just as well. Create `~/.config/systemd/user/dsh.service` — the same
+   unit without the `User=` line (it runs as you), with
+   `WantedBy=default.target`:
 
-   Loopback binding (`--host 127.0.0.1`) is deliberate: the chamber desktop reaches the instance through its SSH tunnel, so no extra attack surface is exposed. Only if you want to hit port 30800 directly from other machines (bypassing the chamber tunnel) would you change to `--host 0.0.0.0` — and then you must add real authentication (the v1 instance is anonymous) or front it with a reverse proxy instead.
+   ```ini
+   [Unit]
+   Description=dsh web profile (remote instance)
+   After=network.target
+
+   [Service]
+   Type=simple
+   ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
+   Restart=on-failure
+   RestartSec=3
+   Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+   Environment=DSH_TELEMETRY_DISABLED=1
+   Environment=DSH_PERMISSION_MODE=workspace-write
+   NoNewPrivileges=true
+   PrivateTmp=true
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable --now dsh
+   systemctl --user status dsh
+   # survive logout and boot — one-time, needs root (or a polkit grant):
+   sudo loginctl enable-linger <your-user>
+   ```
+
+   Creating and managing a `--user` unit needs no root, but without
+   **linger** the user manager (and your service) stops at logout;
+   `loginctl enable-linger` makes it start at boot and keep running.
+
+   **Ownership rule.** dsh writes everything to the home of the user the
+   unit runs as (`~/.dsh` by default) — that user simply needs a real home
+   directory. No mkdir, no chown, and the "root-owned files my user can't
+   read" problem cannot occur. Three ways to pick that user:
+
+   - **Your login user** (Option A): `User=<your-user>`, the home is
+     already yours.
+   - **A dedicated service account** (hardened): create one with a home —
+     `sudo useradd --system --create-home dsh` (note: `useradd --system`
+     does not create the home unless `--create-home` is given) — and set
+     `User=dsh` / `Group=dsh`; dsh then uses that account's own `~/.dsh`.
+   - **Root**: possible but **not recommended** — dsh writes to
+     `/root/.dsh`, owned by root and unreadable by your user.
+
+   **Caveat for Option B**: the chamber desktop's systemd start/stop
+   buttons drive the **system** manager (`systemctl ...` without `--user`,
+   design 02 §3.9), so they won't see a user unit — manage it with
+   `systemctl --user` on the server instead. The tunnel/connection itself
+   is unaffected (linger keeps the instance up). If you want the desktop's
+   buttons to work, use Option A.
+
+   If it crash-loops, check the logs (`journalctl -u dsh`, or
+   `journalctl --user -u dsh` for a user unit) — a `status=127` +
+   `/usr/bin/env: 'node': No such file or directory` means the PATH line
+   above doesn't include the actual node bin dir.
+
+   Loopback binding (`--host 127.0.0.1`) is deliberate: the chamber desktop
+   reaches the instance through its SSH tunnel, so no extra attack surface
+   is exposed. Only if you want to hit port 30800 directly from other
+   machines (bypassing the chamber tunnel) would you change to
+   `--host 0.0.0.0` — and then you must add real authentication (the v1
+   instance is anonymous) or front it with a reverse proxy instead.
 
 4. **Connect from the chamber desktop** — in the connections settings page, add the remote host (label / host / user / SSH port / the dsh port (default 30800) / service name `dsh`). The desktop then owns the rest: `ssh -N -L` tunnel plus `systemctl start|stop|is-active dsh` (service name whitelist `^[a-zA-Z0-9_.-]+$`). The unit shape follows design 02 §3.9; the instance contract is 03 §2.2.
 

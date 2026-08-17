@@ -174,7 +174,12 @@ pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——d
    which node  # 记下 node bin 目录（nvm 托管，systemd 的 PATH 里没有）供下方 PATH 行使用
    ```
 
-3. **用 systemd 持久化** — 创建 `/etc/systemd/system/dsh.service`：
+3. **用 systemd 持久化** — 两种形态任选，dsh 都以非 root 用户身份运行，
+   所有文件都落在该用户自己的家目录。dsh 默认 `$HOME/.dsh`，因此完全
+   不需要设置 DSH_HOME。
+
+   **形态 A —— 系统单元（推荐）。** 创建 `/etc/systemd/system/dsh.service`
+   （root 只在安装单元时用一次）：
 
    ```ini
    [Unit]
@@ -183,28 +188,25 @@ pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——d
 
    [Service]
    Type=simple
-   # 默认以 root 运行（最简配置）。更安全的选项是改用专用非 root 服务账号，
-   # 并把 DSH_HOME 归属给它：
-   #   sudo useradd --system --home /var/lib/dsh/dsh-home dsh
-   #   sudo chown -R dsh:dsh /var/lib/dsh/dsh-home
-   # 然后在此处加上 `User=dsh` / `Group=dsh`。
-   # web profile 仅在 loopback 提供 dsh API + 前端。--port 与 --trusted-host
-   # 恒一致（127.0.0.1:<P>）：浏览器信任栅栏只认 chamber 隧道转发来的
-   # Host 头（`dsh web` 是 `--profile web` 的硬别名，两者等价）。
-   # 将 <DSH_PATH> 换成上面 `which dsh` 的路径 —— npm 全局安装位于用户的
-   # npm prefix 下（如 /usr/local/bin/dsh），不是 /usr/bin。
+   # 以你 SSH 登录的用户身份运行 dsh（把 <你的用户名> 换成实际账号）。
+   # dsh 会把所有文件写到该用户自己的家目录（默认 ~/.dsh）——不需要
+   # mkdir/chown，也不会有 root 属主文件。web profile 仅在 loopback 提供
+   # dsh API + 前端。--port 与 --trusted-host 恒一致（127.0.0.1:<P>）：
+   # 浏览器信任栅栏只认 chamber 隧道转发来的 Host 头（`dsh web` 是
+   # `--profile web` 的硬别名，两者等价）。将 <DSH_PATH> 换成上面
+   # `which dsh` 的路径 —— npm 全局安装位于用户的 npm prefix 下
+   # （如 /usr/local/bin/dsh），不是 /usr/bin。
+   User=<你的用户名>
    ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
    Restart=on-failure
    RestartSec=3
    # dsh 是 node 脚本（shebang 为 `#!/usr/bin/env node`），而 systemd 默认
    # PATH 不含 nvm 的 node → 服务会以 status=127 崩溃重启（日志：
    # "/usr/bin/env: 'node': No such file or directory"）。将 <NODE_BIN> 换成
-   # 上面 `which node` 的目录（如 /root/.nvm/versions/node/v22.22.3/bin）。
+   # 上面 `which node` 的目录（如 /home/<你的用户名>/.nvm/versions/node/v22.22.3/bin）。
    # 注意：Environment= 是整行字面赋值、完全覆盖旧值，没有"追加到已有 PATH"
    # 的语法，ExecStart 内也不做变量展开——必须写全绝对路径。
    Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-   # 服务器形态使用独立 DSH_HOME（设计 02 §5.6）：
-   Environment=DSH_HOME=/var/lib/dsh/dsh-home
    Environment=DSH_TELEMETRY_DISABLED=1
    Environment=DSH_PERMISSION_MODE=workspace-write
    NoNewPrivileges=true
@@ -220,13 +222,68 @@ pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——d
    sudo systemctl status dsh
    ```
 
-   若服务崩溃重启，先看日志：`status=127` + `/usr/bin/env: 'node': No such file or directory`
-   说明上面的 PATH 行没包含实际的 node bin 目录。
+   **形态 B —— 用户单元（完全无需 root）。** 服务器上没有 root（或不想
+   申请）时，systemd 用户单元同样能持久化 dsh。创建
+   `~/.config/systemd/user/dsh.service`——单元形状相同，只是没有
+   `User=` 行（以你自己身份运行），`WantedBy=default.target`：
 
-   `--host 127.0.0.1`（loopback 绑定）是刻意为之：chamber 桌面经自身 SSH 隧道
-   访问实例，不额外暴露攻击面。只有想从其他机器直接访问 30800（绕过 chamber
-   隧道）时才需改成 `--host 0.0.0.0`——且必须配套真实鉴权（v1 实例是匿名的），
-   或改用反向代理前置。
+   ```ini
+   [Unit]
+   Description=dsh web profile (remote instance)
+   After=network.target
+
+   [Service]
+   Type=simple
+   ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
+   Restart=on-failure
+   RestartSec=3
+   Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+   Environment=DSH_TELEMETRY_DISABLED=1
+   Environment=DSH_PERMISSION_MODE=workspace-write
+   NoNewPrivileges=true
+   PrivateTmp=true
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable --now dsh
+   systemctl --user status dsh
+   # 登出后与开机后仍然存活——一次性操作，需要 root（或 polkit 授权）：
+   sudo loginctl enable-linger <你的用户名>
+   ```
+
+   创建和管理 `--user` 单元不需要 root；但**没有 linger 时**，用户管理器
+   （连同你的服务）会在登出时停止。`loginctl enable-linger` 让它在开机时
+   启动、登出后继续运行。
+
+   **归属规则。** dsh 把所有文件写到单元运行用户自己的家目录（默认
+   `~/.dsh`）——该用户只需要有真实的家目录即可。不需要 mkdir、不需要
+   chown，"root 写的文件我的用户读不了"的问题根本不会出现。运行账号三选一：
+
+   - **你的登录用户**（形态 A）：`User=<你的用户名>`，家目录本就是你的。
+   - **专用服务账号**（更安全）：建号时带上家目录——
+     `sudo useradd --system --create-home dsh`（注意：`useradd --system`
+     默认**不创建**家目录，必须加 `--create-home`）——然后设
+     `User=dsh` / `Group=dsh`，dsh 使用该账号自己的 `~/.dsh`。
+   - **root**：可行但**不推荐**——dsh 会写到 `/root/.dsh`，归 root 所有，
+     你的用户不可读。
+
+   **形态 B 的注意点**：chamber 桌面的 systemd 起停按钮驱动的是**系统**
+   管理器（`systemctl ...` 不带 `--user`，设计 02 §3.9），看不到用户单元——
+   请在服务器上改用 `systemctl --user` 管理。隧道/连接本身不受影响
+   （linger 保证实例常驻）。若希望桌面按钮可用，请用形态 A。
+
+   若服务崩溃重启，先看日志（`journalctl -u dsh`；用户单元用
+   `journalctl --user -u dsh`）：`status=127` + `/usr/bin/env: 'node': No
+   such file or directory` 说明上面的 PATH 行没包含实际的 node bin 目录。
+
+   `--host 127.0.0.1`（loopback 绑定）是刻意为之：chamber 桌面经自身 SSH
+   隧道访问实例，不额外暴露攻击面。只有想从其他机器直接访问 30800（绕过
+   chamber 隧道）时才需改成 `--host 0.0.0.0`——且必须配套真实鉴权（v1
+   实例是匿名的），或改用反向代理前置。
 
 4. **从 chamber 桌面接入** — 在连接设置页添加远程主机（label / host / user / SSH 端口 / dsh 端口（默认 30800）/ 服务名 `dsh`）。其余由桌面接管：`ssh -N -L` 隧道 + `systemctl start|stop|is-active dsh`（服务名白名单 `^[a-zA-Z0-9_.-]+$`）。单元形态遵循设计 02 §3.9，实例契约见 03 §2.2。
 

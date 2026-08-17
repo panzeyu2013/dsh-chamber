@@ -327,14 +327,15 @@ After=network.target
 
 [Service]
 Type=simple
-# 专用非 root 服务账号（示例）：
+# 专用非 root 服务账号（示例；建号须带家目录，见下方「目录归属」）。
+# dsh 默认把 home 放在运行账号自己的 ~/.dsh，无需设置 DSH_HOME。
 User=dsh
 Group=dsh
 # --port 与 --trusted-host 恒一致（127.0.0.1:<P>）：浏览器信任栅栏只认
 # chamber 隧道转发来的 Host 头（`dsh web` 是 `--profile web` 的硬别名）。
 # 将 <DSH_PATH> 换成远程机上 `which dsh` 的路径 —— npm 全局
 # 安装在用户 npm prefix 下（如 /usr/local/bin/dsh），不是 /usr/bin。
-ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 3080 --trusted-host 127.0.0.1:3080
+ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
 Restart=on-failure
 RestartSec=3
 # dsh 是 node 脚本（shebang `#!/usr/bin/env node`），systemd 默认 PATH 不含
@@ -342,8 +343,6 @@ RestartSec=3
 # file or directory"）。将 <NODE_BIN> 换成 `which node` 的目录。注意
 # Environment= 是整行字面赋值（无追加语法），ExecStart 无变量展开——写全路径。
 Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# 服务器部署形态建议独立 DSH_HOME（§5.6）：
-Environment=DSH_HOME=/var/lib/dsh/dsh-home
 Environment=DSH_TELEMETRY_DISABLED=1
 Environment=DSH_PERMISSION_MODE=workspace-write
 # 目录选择交互 pin（与本地 spawn 同款，05 §4）：directory-picker-auto 在
@@ -358,6 +357,21 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 ```
+
+目录归属与无 root 形态（2026-08 重审，与 README「服务器端部署」一致）：
+
+- **归属不变量**：dsh 默认把 home 放在运行账号自己的家目录（`~/.dsh`，
+  即 `${DSH_HOME:-$HOME/.dsh}`）——**无需设置 `DSH_HOME`**，也不再有
+  `/var/lib` 路径与 root 属主问题。单元运行账号（示例 `dsh`）只需有真实
+  家目录：建号用 `sudo useradd --system --create-home dsh`
+  （`useradd --system` 默认**不创建**家目录，必须加 `--create-home`）。
+  以 root 运行则写到 `/root/.dsh`（归 root，不推荐）。
+- **无 root 形态**：服务器无 root 时改用 systemd 用户单元
+  （`~/.config/systemd/user/dsh.service` + `systemctl --user` 管理，
+  `loginctl enable-linger` 一次性启用保证开机自启与登出存活）。注意
+  ssh-provider 的 systemd exec 恒为系统管理器（无 `--user`），用户单元
+  对 chamber 桌面起停按钮不可见——实例靠 linger 常驻、隧道照常，管理走
+  服务器端 `systemctl --user`。
 
 编排语义：
 
@@ -407,5 +421,12 @@ WantedBy=multi-user.target
 6. **`$DSH_HOME` 与多用户冲突**：宿主 `DSH_HOME` 固定为
    `<stateDir>/dsh-home`（§3.2.1），多控制面实例共享同一 stateDir 时才
    共享该 home——会话 JSONL 追加式多写安全，settings 为 last-writer-wins
-   文档由 dsh `settings-conflict` 仲裁；不同 stateDir 的实例互不相干；
-   服务器远程形态建议独立 `DSH_HOME`（§3.9 的 `Environment=` 行）。
+   文档由 dsh `settings-conflict` 仲裁；不同 stateDir 的实例互不相干。
+   **服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**（2026-08 重审）：
+   远程实例以单元运行账号的身份直启 dsh，home 即该账号自己的 `~/.dsh`——
+   dsh 本就是「一账号一 home、多 profile 共存」的模型
+   （`$DSH_HOME/profiles/<name>`），web profile 与同账号其他 profile
+   共享 home 是上游支持的常态（settings 仲裁同前）。独立 home 的诉求
+   只存在于控制面托管宿主（stateDir 生命周期/可移植性，§3.1），不适用于
+   systemd 直启形态；若确有「同账号多 profile 必须互不共享配置」的罕见
+   诉求，仍可显式 `Environment=DSH_HOME=...` 隔离。

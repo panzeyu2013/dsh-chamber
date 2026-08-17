@@ -95,7 +95,7 @@
   "host": "192.0.2.10",        // 文档保留网段占位（RFC 5737）
   "user": "root",
   "sshPort": 2222,               // SSH 守护端口（null = ssh 默认 22 / config Port）
-  "remotePort": 3080,            // 远程 dsh web profile 端口（02 §3.9 部署参考）
+  "remotePort": 30800,           // 远程 dsh web profile 端口（02 §3.9 部署参考）
   "serviceName": "dsh-chamber"   // 远程 systemd 单元名（exec 目标）
 }
 ```
