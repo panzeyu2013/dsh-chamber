@@ -113,7 +113,7 @@ import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  reconciledSessionOrder, sanitizeSearchQuery, SEARCH_QUERY_MAX_CODE_UNITS,
+  reconciledSessionOrder, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS,
 } from '../shared/derive.ts'
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
@@ -377,9 +377,30 @@ export function SidebarRoot({
   }, [pointerInside])
 
   // chamber: the multi-source projection (05 §3) — the App layer publishes
-  // it on its poll cycle; this shell just subscribes and re-renders.
+  // it on its poll cycle (now signature-gated, see App.tsx); this shell just
+  // subscribes and re-renders. Defense in depth: the subscription re-checks
+  // the render-relevant signature before setState, so even an ungated
+  // publisher can never make this list re-render on unchanged content
+  // (mirrors the settings bridge's subscribeServers dedupe).
+  //
+  // The dedupe baseline is the CURRENTLY RENDERED state (mirrored in a ref,
+  // not getServers()): a publish landing in the window between useState's
+  // initializer and this effect's subscribe would otherwise be treated as
+  // "already seen" (its signature would match the post-publish getServers())
+  // and the list would stay stale forever — the App's publish gate never
+  // re-emits unchanged content, so there would be no later self-heal.
+  // Comparing against the rendered state makes that first mid-window publish
+  // apply, while identical content stays a no-op.
   const [servers, setServers] = useState<ChamberServerAggregate[]>(() => chamberBridge.getServers())
-  useEffect(() => chamberBridge.subscribe(() => { setServers(chamberBridge.getServers()) }), [])
+  const serversRef = useRef(servers)
+  serversRef.current = servers
+  useEffect(() => {
+    return chamberBridge.subscribe(() => {
+      const next = chamberBridge.getServers()
+      if (serversProjectionSignature(next) === serversProjectionSignature(serversRef.current)) return
+      setServers(next)
+    })
+  }, [])
 
   // chamber (06 §3, 2026-08 — cross-ctx live sync): view preferences (folded
   // workspace groups + the ungrouped session order) live in ONE shared

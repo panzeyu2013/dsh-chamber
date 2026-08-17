@@ -10,16 +10,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   deriveServerWorkspaces,
+  instanceSnapshotSignature,
   mergeRuntimeFacts,
   projectRuntimeFacts,
   reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
+  runtimeReportSignature,
   sanitizeSearchQuery,
+  serversProjectionSignature,
   SEARCH_QUERY_MAX_CODE_UNITS,
   UNGROUPED_WORKSPACE_ID,
 } from '../src/shared/derive.ts'
 import type { InstanceSnapshot, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
+import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/shared/aggregate-store.ts'
 
 function session(
   id: string,
@@ -537,4 +541,174 @@ test('reconcile composes across reports without losing earlier arms (the batched
 test('reconcile keeps sibling arms when one session re-runs', () => {
   const out = reconcile({ x: true, y: true }, { x: false, y: false }, { x: { running: true }, y: { running: false } }, undefined)
   assert.deepEqual(out.completed, { y: true })
+})
+
+// ---- content signatures (2026-08 perf pass: identity-preserving state) ----
+
+test('instanceSnapshotSignature is stable for identical content and differs on any row change', () => {
+  const base = snapshot(
+    [workspace('w1', 'Work', ['a', 'b'])],
+    [session('a', 1, { title: 'A' }), session('b', 2, { running: true })],
+  )
+  const same = snapshot(
+    [workspace('w1', 'Work', ['a', 'b'])],
+    [session('a', 1, { title: 'A' }), session('b', 2, { running: true })],
+  )
+  assert.equal(instanceSnapshotSignature(base), instanceSnapshotSignature(same))
+  // A fresh object with the same content is byte-identical — this is exactly
+  // the 10s-poll no-change case the App layer must not turn into a re-render.
+  const rerun = snapshot(
+    [workspace('w1', 'Work', ['a', 'b'])],
+    [session('a', 1, { title: 'A' }), session('b', 2, { running: true })],
+  )
+  assert.equal(instanceSnapshotSignature(base), instanceSnapshotSignature(rerun))
+  // Any render-relevant change flips the signature.
+  assert.notEqual(instanceSnapshotSignature(base), instanceSnapshotSignature(
+    snapshot([workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'A' }), session('b', 2, { running: true })]),
+  ))
+  assert.notEqual(instanceSnapshotSignature(base), instanceSnapshotSignature(
+    snapshot([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1, { title: 'A' }), session('b', 2, { running: false })]),
+  ))
+  assert.notEqual(instanceSnapshotSignature(base), instanceSnapshotSignature(
+    snapshot([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1, { title: 'A' }), session('b', 3, { running: true })]),
+  ))
+})
+
+test('runtimeReportSignature distinguishes undefined, content, running bits and subagent counts', () => {
+  const a: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
+  const b: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
+  assert.equal(runtimeReportSignature(a), runtimeReportSignature(b))
+  assert.equal(runtimeReportSignature(undefined), '')
+  assert.notEqual(runtimeReportSignature(undefined), runtimeReportSignature(a))
+  // Running bits matter (the App completed-dot reconciliation reads them).
+  assert.notEqual(runtimeReportSignature(a), runtimeReportSignature({ current: 's1', sessions: { s1: { running: false }, s2: { completed: true } } }))
+  // Insertion order must not matter (the producer emits map order).
+  assert.equal(
+    runtimeReportSignature({ current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }),
+    runtimeReportSignature({ current: 's1', sessions: { s2: { completed: true }, s1: { running: true } } }),
+  )
+  // Subagent counts are part of the signature (sparse, but visible as rings).
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { p: { running: false } } }),
+    runtimeReportSignature({ sessions: { p: { running: false, runningSubagents: 2 } } }),
+  )
+})
+
+test('runtimeReportSignature onlyIds restricts the signature to the given session subset', () => {
+  const a: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
+  // A hidden session (absent from onlyIds) flipping its facts does not change
+  // the restricted signature — this is what keeps hidden rows (subagent /
+  // archived / blank-non-current) from re-rendering the projection.
+  assert.equal(
+    runtimeReportSignature(a, new Set(['s1'])),
+    runtimeReportSignature(
+      { current: 's1', sessions: { s1: { running: true }, s2: { completed: true, running: true } } },
+      new Set(['s1']),
+    ),
+  )
+  // Different visible subsets yield different signatures.
+  assert.notEqual(runtimeReportSignature(a, new Set(['s1'])), runtimeReportSignature(a, new Set(['s2'])))
+  // Without onlyIds the full report is compared (the App's runtimeFacts identity).
+  assert.notEqual(
+    runtimeReportSignature(a),
+    runtimeReportSignature({ current: 's1', sessions: { s1: { running: true }, s2: { completed: true, running: true } } }),
+  )
+})
+
+function server(id: string, overrides: Partial<ChamberServerAggregate> = {}): ChamberServerAggregate {
+  return {
+    id,
+    kind: id === 'local' ? 'local' : 'ssh',
+    label: id,
+    connected: true,
+    phase: 'ready',
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', running: false, updatedAt: 1 }] }],
+    updatedAt: 0,
+    ...overrides,
+  }
+}
+
+test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks every rendered field', () => {
+  const a = [server('local'), server('ssh-r1')]
+  const b = [server('local', { updatedAt: 123456789 }), server('ssh-r1', { updatedAt: 987654321 })]
+  assert.equal(serversProjectionSignature(a), serversProjectionSignature(b))
+  // Session-level updatedAt is excluded too: the sidebar renders no time cell,
+  // and the recency sort's only visible effect is the row ORDER (captured
+  // positionally). A session's last-activity tick must not re-render the list.
+  assert.equal(
+    serversProjectionSignature(a),
+    serversProjectionSignature([
+      server('local'),
+      server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', running: false, updatedAt: 999 }] }] }),
+    ]),
+  )
+  // Runtime facts of sessions NOT visible in the projection (subagent-origin /
+  // archived / blank-non-current rows) never re-render the list.
+  assert.equal(
+    serversProjectionSignature(a),
+    serversProjectionSignature([
+      server('local'),
+      server('ssh-r1', { runtime: { sessions: { hidden: { running: true } } } }),
+    ]),
+  )
+  // A visible session's fact change still flips the signature.
+  assert.notEqual(
+    serversProjectionSignature(a),
+    serversProjectionSignature([
+      server('local'),
+      server('ssh-r1', { runtime: { sessions: { s1: { running: true } } } }),
+    ]),
+  )
+  // Connection / phase / workspaces / runtime changes all flip it.
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { connected: false }), server('ssh-r1')]))
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { phase: 'starting' }), server('ssh-r1')]))
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([
+    server('local'),
+    server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', running: true, updatedAt: 1 }] }] }),
+  ]))
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([
+    server('local'),
+    server('ssh-r1', { runtime: { current: 's1', sessions: { s1: { completed: true } } } }),
+  ]))
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { aggregateError: 'boom' }), server('ssh-r1')]))
+  // Order of servers matters (source groups are ordered).
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('ssh-r1'), server('local')]))
+})
+
+test('serversProjectionSignature JSON-encodes titles: user-controlled separators cannot forge equality', () => {
+  // Two DISTINCT projections whose titles contain the delimiters a joined
+  // encoding would have used — JSON escaping keeps them apart (a collision
+  // here would make the publish gate silently skip a real change).
+  const twoRows = [server('local', {
+    workspaces: [{
+      id: 'w1',
+      title: 'Work',
+      sessions: [
+        { id: 's1', title: 'a', running: false },
+        { id: 's2', title: 'b', running: false },
+      ],
+    }],
+  })]
+  const forgedSingleRow = [server('local', {
+    workspaces: [{
+      id: 'w1',
+      title: 'Work',
+      sessions: [{ id: 's1', title: 'a,0:0,0,s2:b', running: false }],
+    }],
+  })]
+  assert.notEqual(serversProjectionSignature(twoRows), serversProjectionSignature(forgedSingleRow))
+  // Identical content on fresh objects still yields identical signatures.
+  assert.equal(
+    serversProjectionSignature(twoRows),
+    serversProjectionSignature([server('local', {
+      workspaces: [{
+        id: 'w1',
+        title: 'Work',
+        sessions: [
+          { id: 's1', title: 'a', running: false },
+          { id: 's2', title: 'b', running: false },
+        ],
+      }],
+    })]),
+  )
 })

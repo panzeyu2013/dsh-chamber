@@ -11,7 +11,7 @@
  * No React, no DOM — plain-node unit-testable (see test/derive.ts).
  */
 import type { InstanceSnapshot } from './instance-api.ts'
-import type { ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
+import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
 
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
 export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
@@ -205,6 +205,132 @@ export function mergeRuntimeFacts(
     }
   }
   return { current: runtime?.current, sessions }
+}
+
+/**
+ * Content signature of one instance snapshot (workspaces + sessions +
+ * archived ids). Used by the App layer to keep aggregate state
+ * identity-preserving: a poll whose rows are byte-identical must NOT mint a
+ * new state object — that would re-derive servers, re-publish the chamber
+ * bridge and re-render every shell's sidebar every 10s (design 05 §3
+ * perf pass, 2026-08). Key order is fixed (the wire row constructors in
+ * instance-api.ts build fields in a stable order), so JSON.stringify is
+ * deterministic across polls.
+ */
+export function instanceSnapshotSignature(
+  snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds'>,
+): string {
+  return JSON.stringify({
+    w: snapshot.workspaces.map(w => ({
+      id: w.workspaceId,
+      path: w.path,
+      title: w.title,
+      createdAt: w.createdAt,
+      updatedAt: w.updatedAt,
+      s: w.sessionIds,
+    })),
+    s: snapshot.sessions.map(row => ({
+      id: row.sessionId,
+      at: row.updatedAt,
+      r: row.running,
+      b: row.blank,
+      o: row.origin,
+      t: row.title,
+      c: row.cwd,
+      p: row.parentSessionId,
+    })),
+    a: snapshot.archivedSessionIds,
+  })
+}
+
+/**
+ * Content signature of one runtime-facts report (current + per-session
+ * facts). Every listed session carries its live `running` bit (the App's
+ * completed-dot edge memory), with `completed`/`pending`/`runningSubagents`
+ * as sparse extras — all part of the equality decision, since they drive the
+ * sidebar's dots/rings and the App's dot state machine.
+ *
+ * `onlyIds` optionally restricts the signature to a subset of session ids:
+ * the projection signature (serversProjectionSignature) passes the set of
+ * sessions actually rendered by the sidebar, so a hidden session (subagent-
+ * origin / archived / blank-non-current) flipping its running/completed bits
+ * does NOT re-render the list. The App's runtimeFacts identity check (B3)
+ * calls without it — the state must track the full report, while the
+ * completed-dot reconciliation runs on every report regardless.
+ */
+export function runtimeReportSignature(
+  report: InstanceRuntimeReport | undefined,
+  onlyIds?: ReadonlySet<string>,
+): string {
+  if (report === undefined) return ''
+  const current = report.current ?? ''
+  const rows = Object.entries(report.sessions)
+    .filter(([id]) => onlyIds === undefined || onlyIds.has(id))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([id, facts]) =>
+      `${id}:${facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}`)
+  // A report whose only rows were filtered out (no visible session, no
+  // current) contributes nothing to the projection signature — it must be
+  // indistinguishable from "no runtime attached".
+  if (rows.length === 0 && current === '') return ''
+  return `${current}|${rows.join(',')}`
+}
+
+/**
+ * Render-relevant projection signature of the merged multi-source projection.
+ * Covers everything the sidebar (and the settings bridge) actually renders —
+ * and nothing else:
+ * - session rows carry id/title/running/blank only. `updatedAt` is NOT part
+ *   of it: the sidebar renders no time cell, and the only visible effect of
+ *   updatedAt (the ungrouped bucket's byRecency sort) is already materialized
+ *   as the projection's row ORDER, captured positionally. A future time cell
+ *   must re-add it here. (The aggregate-level instanceSnapshotSignature keeps
+ *   updatedAt — it is the byRecency data source.)
+ * - the runtime portion is restricted to sessions visible in the projection
+ *   (hidden sessions' facts never re-render the list).
+ * The App layer gates chamberBridge.publish on this signature — a poll tick
+ * whose rendered content did not change must not re-render every shell's
+ * sidebar; the sidebar subscription re-checks it as defense in depth
+ * (mirrors the settings bridge's subscribeServers dedupe).
+ */
+export function serversProjectionSignature(servers: readonly ChamberServerAggregate[]): string {
+  // JSON encoding (not delimiter concatenation): titles/labels are
+  // user-controlled text (sidebar renameSession) and may contain any
+  // separator — a joined string would let two different projections produce
+  // the same signature, and the publish gate would silently skip a real
+  // change. Same rationale as instanceSnapshotSignature.
+  return JSON.stringify(servers.map(server => {
+    const visibleSessionIds = new Set<string>()
+    for (const workspace of server.workspaces) {
+      for (const session of workspace.sessions) visibleSessionIds.add(session.id)
+    }
+    // The runtime signature string is collision-free within its domain
+    // (machine-generated session ids, fixed enum values, numeric counts);
+    // embedding it as a JSON string value is unambiguous. A report whose
+    // rows were all filtered out (no visible session, no current) is
+    // normalized to null — indistinguishable from "no runtime attached".
+    const runtime = server.runtime === undefined ? '' : runtimeReportSignature(server.runtime, visibleSessionIds)
+    return {
+      id: server.id,
+      kind: server.kind,
+      label: server.label,
+      connected: server.connected,
+      phase: server.phase,
+      aggregateError: server.aggregateError ?? null,
+      runtime: runtime === '' ? null : runtime,
+      workspaces: server.workspaces.map(w => ({
+        id: w.id,
+        title: w.title,
+        ungrouped: w.ungrouped === true,
+        sessions: w.sessions.map(x => ({
+          id: x.id,
+          title: x.title,
+          running: x.running === true,
+          blank: x.blank === true,
+        })),
+      })),
+    }
+  }))
 }
 
 /**

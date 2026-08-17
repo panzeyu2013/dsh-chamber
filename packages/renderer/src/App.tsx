@@ -28,9 +28,12 @@ import {
   emptyAggregate,
   fetchInstanceSnapshot,
   getInstanceClient,
+  instanceSnapshotSignature,
   isInstanceUnavailable,
   mergeRuntimeFacts,
   reconcileCompletedFacts,
+  runtimeReportSignature,
+  serversProjectionSignature,
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
@@ -210,7 +213,16 @@ export default function App() {
     () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView),
     [health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView],
   )
+  // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
+  // 时都会重建（含 10s 聚合轮询、30s 注册表轮询、状态推送的恒新对象），但
+  // 只有**渲染相关内容**变化才值得通知订阅方——否则每个 shell 的侧边栏都会
+  // 每 10s 全量重渲染。签名排除无人消费的 server.updatedAt 时间戳。设置桥的
+  // subscribeServers 早已做了同类去重（本闸是对 publish 源头的收口）。
+  const lastServersSignatureRef = useRef('')
   useEffect(() => {
+    const signature = serversProjectionSignature(servers)
+    if (signature === lastServersSignatureRef.current) return
+    lastServersSignatureRef.current = signature
     chamberBridge.publish(servers)
   }, [servers])
 
@@ -373,7 +385,18 @@ export default function App() {
     try {
       const snapshot = await fetchInstanceSnapshot(getInstanceClient(instanceId))
       if (aggregateSeqRef.current[instanceId] !== seq) return
-      setAggregates(prev => ({ ...prev, [instanceId]: { state: 'ok', ...snapshot, error: null } }))
+      // identity-preserving：快照内容未变（10s 轮询的常态）则复用旧 state 对象
+      // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
+      // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
+      // 是权威失败事实，不能因"看起来没变"而吞掉）。
+      setAggregates(prev => {
+        const current = prev[instanceId]
+        if (current !== undefined && current.state === 'ok'
+          && instanceSnapshotSignature(current) === instanceSnapshotSignature(snapshot)) {
+          return prev
+        }
+        return { ...prev, [instanceId]: { state: 'ok', ...snapshot, error: null } }
+      })
     } catch (err) {
       if (aggregateSeqRef.current[instanceId] !== seq) return
       setAggregates(prev => ({ ...prev, [instanceId]: emptyAggregate('error', errorMessage(err)) }))
@@ -762,6 +785,13 @@ export default function App() {
           const next = { ...prev }
           delete next[sourceId]
           return next
+        }
+        // identity-preserving：同内容上报（store 通知但事实未变的常态）不换
+        // state 对象——否则每次上报都触发 servers 重新派生与 publish（2026-08
+        // perf pass）。
+        const current = prev[sourceId]
+        if (current !== undefined && runtimeReportSignature(current) === runtimeReportSignature(report)) {
+          return prev
         }
         return { ...prev, [sourceId]: report }
       })

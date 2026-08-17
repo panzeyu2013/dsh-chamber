@@ -42,8 +42,8 @@ declare module '@deepseek-ai/dsh-client-web' {
     constructor(el: HTMLElement, seams?: BootSeams)
     run(): Promise<unknown>
     dispose(): void
-    /** chamber patch: settled runtime context (boot.tsx accessor; session opens ride ctx.sessions). */
-    runtimeCtx: Context
+    /** chamber patch: settled runtime context (boot.tsx accessor; session opens ride ctx.sessions; undefined after dispose). */
+    runtimeCtx: Context | undefined
   }
 }
 
@@ -246,6 +246,14 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     runtime: InstanceRuntimeReport | undefined,
     completedBySource: Record<string, boolean> | undefined,
   ): InstanceRuntimeReport | undefined
+  export function instanceSnapshotSignature(
+    snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds'>,
+  ): string
+  export function runtimeReportSignature(
+    report: InstanceRuntimeReport | undefined,
+    onlyIds?: ReadonlySet<string>,
+  ): string
+  export function serversProjectionSignature(servers: readonly ChamberServerAggregate[]): string
   export const SEARCH_QUERY_MAX_CODE_UNITS: number
   export interface RelativeTimeBucket {
     unit: 'now' | 'minutes' | 'hours' | 'days' | 'months' | 'years'
