@@ -319,3 +319,19 @@ body {
   font-weight: 600;
   color: var(--text);
 }
+
+/* ---------- 会话行渲染挂起（2026-08 perf pass，缓解长会话 INP） ----------
+   目标：vendor 会话流的每一行（ChatNodeSeat 的 .flowItem，携带稳定的
+   data-chat-flow-key 属性；行内是工具结果/代码块等高成本子树）。
+   content-visibility:auto 让视口外的行跳过 style/layout/paint；auto 关键字
+   记录每行最近一次实际渲染尺寸、fallback 为 320px 估算，避免滚动条长度与
+   底部跟随大幅跳动。仅缓解渲染成本——不减少 DOM 数量与内存（那是上游
+   虚拟化的职责）。若实测底部跟随/滚动锚定有回归，优先调整估算值或缩小
+   选择器范围（如只命中 tool 结果行），规则本身是纯 CSS、可随时回退。 */
+[data-chat-flow-key] {
+  content-visibility: auto;
+  /* Chromium <106 不支持 `auto <length>`（Electron 43 不可达）：固定值兜底，
+     避免仅第一条生效时跳过行高度为 0 导致 scrollHeight 塌缩。 */
+  contain-intrinsic-size: 320px;
+  contain-intrinsic-size: auto 320px;
+}
