@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { existsSync, rmSync, mkdirSync, renameSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, renameSync, writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pruneRuntimeArtifacts } from './prune-runtime.mjs';
 
 /**
  * 将 dsh 官方发布包 @deepseek-ai/dsh 安装为本地运行时（方案 B）。
@@ -112,61 +113,22 @@ function run(args, what) {
 }
 
 /**
- * 清理运行期不需要的内容（安装期/构建期产物）：
- * - node-pty 的构建源料（deps/third_party/src/scripts/typings/binding.gyp）
- *   与异平台预编译归档：node-pty@1.1 的运行时二进制**只随包自带**于
- *   prebuilds/<platform>/pty.node（无 build/Release），loader 按
- *   build/Release → build/Debug → prebuilds/<platform> 顺序加载——因此保留
- *   当前平台的 prebuilds 子目录，只删其余平台（darwin-x64/win32/linux…）
- * - mistralai / openai 的 TS 源码、示例、测试（运行时只用编译产物 esm|lib）
- * - 全树 *.d.ts / *.d.cts / *.d.mts / *.map（类型声明与源码映射，运行期零使用）
- * 版本无关：按 .pnpm 顶层目录名模式查找，找不到（版本重构）时静默跳过，
- * 正确性由安装后的冒烟检查兜底。
+ * 封装运行期（含布局选择）：
+ * - `--config.node-linker=hoisted`：以 pnpm 扁平布局安装（npm 式，无
+ *   .pnpm store、无符号链接）。这是 Windows 安装体验的关键：isolated 布局
+ *   的符号链接在打包时会被展开成实体副本，NSIS 安装器要逐文件解压
+ *   92,070 个条目 / ~1.1GB（实测）；hoisted 布局只有 ~3.3 万真实文件、
+ *   无重复展开，解压负担降为约 1/3（dsh 官方发行即 npm 全局安装，扁平布局
+ *   是 dsh 已验证的运行形态；控制面冒烟对 hoisted 树实测通过）。
+ * 裁剪实现见 ./prune-runtime.mjs（独立模块，可对任意目录直接验证）；
+ * 安装后 `node bin.js --version` 冒烟检查兜底裁剪正确性。
  */
-function pruneRuntimeArtifacts() {
-  const pnpmDir = path.join(work, 'node_modules', '.pnpm')
-  const byPrefix = (prefix) => readdirSync(pnpmDir).filter((name) => name.startsWith(prefix))
-
-  for (const dir of byPrefix('node-pty@')) {
-    const pkg = path.join(pnpmDir, dir, 'node_modules', 'node-pty')
-    for (const sub of ['deps', 'third_party', 'src', 'scripts', 'typings', 'binding.gyp']) {
-      rmSync(path.join(pkg, sub), { recursive: true, force: true })
-    }
-    const prebuilds = path.join(pkg, 'prebuilds')
-    if (existsSync(prebuilds)) {
-      const current = `${process.platform}-${process.arch}`
-      for (const entry of readdirSync(prebuilds)) {
-        if (entry !== current) rmSync(path.join(prebuilds, entry), { recursive: true, force: true })
-      }
-    }
-  }
-  for (const dir of byPrefix('@mistralai+mistralai@')) {
-    const pkg = path.join(pnpmDir, dir, 'node_modules', '@mistralai', 'mistralai')
-    for (const sub of ['src', 'examples', 'tests']) rmSync(path.join(pkg, sub), { recursive: true, force: true })
-  }
-  for (const dir of byPrefix('openai@')) {
-    const pkg = path.join(pnpmDir, dir, 'node_modules', 'openai')
-    for (const sub of ['src', 'examples', 'tests']) rmSync(path.join(pkg, sub), { recursive: true, force: true })
-  }
-
-  let removed = 0
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name)
-      if (entry.isDirectory()) {
-        walk(full)
-      } else if (/\.d\.(ts|cts|mts)$/.test(entry.name) || entry.name.endsWith('.map')) {
-        rmSync(full, { force: true })
-        removed += 1
-      }
-    }
-  }
-  walk(work)
-  console.log(`[bundle-dsh] 清理运行期不需要内容：${removed} 个类型/映射文件 + node-pty/mistralai/openai 构建产物`)
-}
-
-run([...resolvePnpmCommand(), 'add', `@deepseek-ai/dsh@${VERSION}`], `pnpm add @deepseek-ai/dsh@${VERSION} …`);
-pruneRuntimeArtifacts();
+run(
+  [...resolvePnpmCommand(), 'add', `@deepseek-ai/dsh@${VERSION}`, '--config.node-linker=hoisted'],
+  `pnpm add @deepseek-ai/dsh@${VERSION}（hoisted 布局）…`,
+);
+const pruned = pruneRuntimeArtifacts(work);
+console.log(`[bundle-dsh] 清理运行期不需要内容：${pruned.removedFiles} 个文件（含 ${pruned.removedDirs} 个整目录）+ node-pty/mistralai/openai 构建产物`);
 
 const binPath = path.join(work, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 if (!existsSync(binPath)) {

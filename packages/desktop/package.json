@@ -75,7 +75,8 @@
       ]
     },
     "nsis": {
-      "differentialPackage": false
+      "differentialPackage": false,
+      "useZip": true
     },
     "linux": {
       "icon": "resources/icons",

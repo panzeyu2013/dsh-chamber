@@ -157,6 +157,18 @@ pnpm run dist:desktop:win    # same chain, but run on Windows — the dsh runtim
 
 The packaged app lands in `packages/desktop/release/` (electron-builder `directories.output`): macOS produces `dsh-chamber-<version>-<arch>.dmg`; Windows produces the NSIS installer (`.exe`). Artifacts go out **unsigned** — no Apple signing/notarization or Windows code-signing certificates are configured.
 
+> **Windows 安装卡在“正在安装”界面/进度条来回反复的排障**
+>
+> 安装器内置的 dsh 运行时文件数较多，Windows Defender 实时防护会对每个新建文件
+> 扫描，把解压拖到几十分钟；文件被锁时安装器还会进入“解压→拷贝失败→整体重解压”
+> 的重试循环（进度条走满→清零→重走、任务管理器持续写盘），看起来就像永远卡死。
+> 打包侧已做修复（zip 单趟直解 + hoisted 扁平布局 + 运行时裁剪，见
+> `docs/progress/STATUS.md`）。若仍遇到卡住：
+>
+> 1. 安装前**关闭旧版 dsh-chamber**；若此前有过失败/中断的安装，先在“设置 → 应用 → 已安装的应用”里卸载残留版本（残留的旧卸载器会让新安装器卡在“等待旧版本卸载”的重试循环里）。
+> 2. 安装期间为安装器与安装目录（默认 `%LOCALAPPDATA%\Programs\dsh-chamber`）临时添加 **Windows 安全中心 → 病毒和威胁防护 → 排除项**（或临时关闭实时防护，装完恢复）——这是“卡死”最快的解药。
+> 3. 安装完成后可移除排除项。
+
 ### 7 · CI and releases
 
 - `.github/workflows/ci.yml` runs on every push/PR: validation chain (frozen install → typecheck → i18n → control-plane unit tests → smoke → renderer build) plus per-platform desktop packaging sanity checks (macOS `dist:desktop:mac` + real smoke; Windows `dist:desktop:win` on `windows-2022`).
