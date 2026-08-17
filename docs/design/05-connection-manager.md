@@ -395,6 +395,19 @@ export const chamberBridge: {
   来源门禁（Host 仅 loopback authority；Origin 仅回环、`null` + 显式
   allowlist；非法来源在副作用/转发前 403）维持。
 
+### 7.7 窗口生命周期与崩溃恢复（2026-08-17 落地）
+
+- **单窗口可重建**：窗口被关闭（macOS 红色按钮）后应用保持运行（darwin 的
+  `window-all-closed` 不退出）；`app.on('activate')`（Dock 图标点击）、
+  `second-instance`、托盘「显示窗口」统一走 `showMainWindow()`——窗口不存在
+  时按控制面 origin 重建（`createMainWindow`；启动期加载失败仍为大声失败 +
+  退出，重建路径只记录不退出）。
+- **渲染进程有界自动恢复**：`render-process-gone`（clean-exit 除外）或 15s
+  无响应 → 60s 窗口内至多重载 3 次，超出显示错误框停止自动恢复——绝不静默
+  白屏；会话数据在实例侧，重载后前端自动重连恢复。
+- **崩溃留痕**：`crashReporter`（`uploadToServer:false`）落盘
+  `<userData>/Crashpad`；GPU/Utility 异常退出经 `child-process-gone` 记日志。
+
 ## 9. 分期
 
 - 已落地范围：P1 基线（§2/§3）、P2 连接设备页（§5）、侧边栏完善三轮（06 §1-§7）。

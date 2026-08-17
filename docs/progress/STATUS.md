@@ -78,6 +78,23 @@
 
 以下为 2026-08 仓库评审发现问题的修复（均已含测试或构建验证）：
 
+- **桌面窗口生命周期与崩溃恢复（2026-08-17，用户报告「前端消失后点 Dock
+  图标回不来」）**：`packages/desktop/main.ts` 三处补齐——① macOS
+  `app.on('activate')`（Dock 图标点击）+ `second-instance`/托盘「显示窗口」
+  统一走 `showMainWindow()`：窗口被关闭后（darwin 的 `window-all-closed`
+  不退出应用）按控制面 origin **重建窗口**（`createMainWindow` 启动/重建
+  共用），不再出现无窗常驻、点任何入口都无反应；② 渲染进程有界自动恢复
+  （`installRendererRecovery`）：`render-process-gone`（clean-exit 除外）
+  或 15s 无响应 → 60s 窗口内至多重载 3 次，超出大声失败（错误框一次），
+  绝不静默白屏；③ 诊断留痕：`crashReporter` 本地落盘
+  （`uploadToServer:false` → `<userData>/Crashpad`）+ GPU/Utility
+  `child-process-gone` 日志。排查依据：2026-08-14 22:40 打包版**主进程**
+  SIGTRAP 崩溃（`DiagnosticReports/Retired/dsh-chamber-2026-08-14-224045.ips`，
+  V8 CHECK in CrBrowserMain）与 2026-08-16 23:17 dev 实例启动即崩溃
+  （Electron Helper .ips ×5）——崩溃全部静默、无恢复路径。验证：
+  `typecheck` 0 错误、`test:desktop` 90 用例全绿；**未实启验证**（用户运行
+  中的实例不便打扰，实启回归待下次发布前复验）。
+
 - **侧边栏每来源搜索状态共享化修复（06 §1.2 修订，2026-08）**：搜索状态
   （胶囊/查询/结果）与防抖 job 此前是 per-shell 组件状态——可见侧边栏随
   活动视图换 shell，A 里发起的对 B 的搜索在激活 B 后消失；且若简单共享

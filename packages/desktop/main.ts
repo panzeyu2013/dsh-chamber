@@ -27,7 +27,7 @@
  * - Tray (packaged only, defensive), single-instance lock.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import path from 'node:path';
@@ -51,6 +51,26 @@ process.on('uncaughtException', (error) => {
 });
 process.on('unhandledRejection', (reason) => {
   console.error('[dsh-chamber] unhandled rejection:', reason instanceof Error ? reason.stack : String(reason));
+});
+
+// 本地崩溃记录（不上传）：主/渲染/GPU 等进程崩溃时由 Crashpad 落盘到
+// <userData>/Crashpad——崩溃是静默的，没有本地记录就只能靠系统
+// DiagnosticReports 事后考古"前端消失/白屏"类问题。uploadToServer=false
+// 时 submitURL 可省略（仅上传时使用）。
+crashReporter.start({
+  productName: 'dsh-chamber',
+  companyName: 'dsh-chamber',
+  uploadToServer: false,
+});
+
+// 诊断留痕：GPU/Utility 等子进程异常退出（渲染进程由窗口级
+// render-process-gone 恢复逻辑覆盖，不在此重复记录）。
+app.on('child-process-gone', (_event, details) => {
+  if (details.type === 'GPU' || details.type === 'Utility') {
+    console.error(
+      `[dsh-chamber] 子进程退出：type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name ?? ''}`,
+    );
+  }
 });
 
 const pkgDir = path.dirname(fileURLToPath(import.meta.url));
@@ -106,6 +126,9 @@ let mainWindow: BrowserWindow | null = null;
 let controlPlane: PlaneHandle | null = null;
 let transportManager: TransportManager | null = null;
 let tray: Tray | null = null;
+// 当前窗口 URL（控制面 origin，控制面启动后赋值）。窗口被关闭后可据此
+// 重建（macOS activate 路径）——没有它，窗口一旦关闭应用就永久无窗。
+let mainWindowUrl: string | null = null;
 
 /**
  * Minimal tray（桌面一体形态的最小托盘：状态 tooltip + 显示/退出菜单）: status
@@ -138,13 +161,7 @@ function maybeCreateTray(cp: PlaneHandle) {
       Menu.buildFromTemplate([
         {
           label: '显示窗口',
-          click: () => {
-            if (mainWindow !== null && !mainWindow.isDestroyed()) {
-              if (mainWindow.isMinimized()) mainWindow.restore();
-              mainWindow.show();
-              mainWindow.focus();
-            }
-          },
+          click: () => showMainWindow(),
         },
         { type: 'separator' },
         // Quit goes through the existing will-quit → cp.stop() path.
@@ -158,16 +175,155 @@ function maybeCreateTray(cp: PlaneHandle) {
   }
 }
 
+/**
+ * 显示/恢复主窗口；窗口已不存在（被关闭）时按控制面 origin 重建。Dock
+ * 图标点击（macOS activate）、二次启动（second-instance）与托盘菜单共用
+ * 这一条恢复路径——没有重建分支时，窗口一旦关闭应用就以无窗口状态常驻，
+ * 点任何入口都毫无反应。
+ */
+function showMainWindow(): void {
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  if (mainWindowUrl !== null) createMainWindow(mainWindowUrl, false);
+}
+
+/**
+ * 渲染进程崩溃/卡死恢复（有界自动重载）：`render-process-gone` 或长时间
+ * 无响应 → 60s 窗口内至多重载 3 次，超出即大声失败（错误框一次，绝不静默
+ * 白屏）。正常退出（clean-exit，如用户关窗）不重载。
+ */
+function installRendererRecovery(win: BrowserWindow): void {
+  let reloadCount = 0;
+  let reloadWindowStart = 0;
+  // 首次加载完成标志：dsh 前端 boot（加载数十个插件模块）期间渲染进程
+  // 主线程长时间忙碌是合法的，unresponsive 只在"已成功加载过"之后才触发
+  // 重载，避免打断正常启动。
+  let loadedOnce = false;
+  const reload = () => {
+    const now = Date.now();
+    if (now - reloadWindowStart > 60_000) {
+      reloadWindowStart = now;
+      reloadCount = 0;
+    }
+    reloadCount += 1;
+    if (reloadCount <= 3) {
+      console.warn(`[dsh-chamber] 渲染进程异常，尝试重载 (${reloadCount}/3)`);
+      win.webContents.reload();
+    } else {
+      console.error('[dsh-chamber] 渲染进程反复异常退出，停止自动恢复');
+      dialog.showErrorBox('dsh-chamber 前端异常', '前端渲染进程反复崩溃，已停止自动恢复。请重新启动应用。');
+    }
+  };
+  win.webContents.on('did-finish-load', () => {
+    loadedOnce = true;
+  });
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (details.reason === 'clean-exit') return; // 用户关窗等正常退出
+    console.error(
+      `[dsh-chamber] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}`,
+    );
+    // 稍候重载，避开崩溃拆除期（崩溃后立即 reload 偶发与拆除竞争）。
+    setTimeout(() => {
+      if (!win.isDestroyed()) reload();
+    }, 500);
+  });
+  let unresponsiveTimer: NodeJS.Timeout | null = null;
+  win.webContents.on('unresponsive', () => {
+    if (!loadedOnce) {
+      console.warn('[dsh-chamber] 渲染进程无响应（首次加载中，仅记录不重载）');
+      return;
+    }
+    console.warn('[dsh-chamber] 渲染进程无响应，15s 内未恢复将重载');
+    unresponsiveTimer = setTimeout(() => {
+      if (!win.isDestroyed()) reload();
+    }, 15_000);
+  });
+  win.webContents.on('responsive', () => {
+    if (unresponsiveTimer !== null) {
+      clearTimeout(unresponsiveTimer);
+      unresponsiveTimer = null;
+    }
+  });
+  win.on('closed', () => {
+    if (unresponsiveTimer !== null) clearTimeout(unresponsiveTimer);
+  });
+}
+
+/**
+ * 创建主窗口（单 frame，控制面 origin）。启动期与 activate 重建共用：
+ * fatalOnLoadFailure=true（启动期）时加载失败 = 大声失败 + 退出；重建路径
+ * 只记录不退出（应用仍可再点图标重建）。
+ */
+function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): BrowserWindow {
+  const url = `${rendererOrigin}/`;
+  mainWindowUrl = url;
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    // 固定窗口标题：官方 dsh 前端（DocumentTitle.tsx）会把当前会话名
+    // 投影到 document.title——若不拦截 page-title-updated，原生标题栏会
+    // 随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
+    title: 'dsh-chamber',
+    webPreferences: {
+      // 沙箱 preload 以纯 CJS 执行（无 TS 类型擦除），统一加载编译产物
+      // dist/preload.cjs（build:preload 生成）；缺省回退源码仅为兜底。
+      preload: existsSync(path.join(pkgDir, 'dist', 'preload.cjs'))
+        ? path.join(pkgDir, 'dist', 'preload.cjs')
+        : path.join(pkgDir, 'preload.cts'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  mainWindow = win;
+  // 冻结窗口标题（与上方 title 配套）：document.title 的每次变化都会触发
+  // page-title-updated，不 preventDefault 则原生标题栏仍会跟随会话切换。
+  win.on('page-title-updated', (event) => {
+    event.preventDefault();
+  });
+  // The preload exposes host-impacting IPC. Keep it confined to the exact
+  // control-plane document: deny popups and cancel cross-origin navigation
+  // or redirects before another page can receive the same preload bridge.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
+  });
+  win.webContents.on('will-redirect', (event, url) => {
+    if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
+  });
+  installRendererRecovery(win);
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
+  void win.loadURL(url).catch((loadError) => {
+    const detail = loadError instanceof Error ? (loadError.stack ?? loadError.message) : String(loadError);
+    if (fatalOnLoadFailure) {
+      dialog.showErrorBox('dsh-chamber 启动失败', `前端加载失败：\n${detail}`);
+      void controlPlane?.stop().catch(err => console.error('[dsh-chamber] 控制面停止失败：', err));
+      app.exit(1);
+    } else {
+      console.error('[dsh-chamber] 重建窗口加载失败：', detail);
+    }
+  });
+  return win;
+}
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    showMainWindow();
+  });
+
+  // macOS：Dock 图标点击触发 activate。没有此处理时，窗口一旦关闭
+  // （window-all-closed 在 darwin 不退出），应用以无窗口状态常驻，点
+  // 图标毫无反应——"前端消失后点图标回不来"的根源。
+  app.on('activate', () => {
+    showMainWindow();
   });
 
   app.on('window-all-closed', () => {
@@ -370,41 +526,6 @@ if (!gotTheLock) {
       sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
     ));
 
-    mainWindow = new BrowserWindow({
-      width: 1280,
-      height: 800,
-      // 固定窗口标题：官方 dsh 前端（DocumentTitle.tsx）会把当前会话名
-      // 投影到 document.title——若不拦截 page-title-updated，原生标题栏会
-      // 随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
-      title: 'dsh-chamber',
-      webPreferences: {
-        // 沙箱 preload 以纯 CJS 执行（无 TS 类型擦除），统一加载编译产物
-        // dist/preload.cjs（build:preload 生成）；缺省回退源码仅为兜底。
-        preload: existsSync(path.join(pkgDir, 'dist', 'preload.cjs'))
-          ? path.join(pkgDir, 'dist', 'preload.cjs')
-          : path.join(pkgDir, 'preload.cts'),
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-    // 冻结窗口标题（与上方 title 配套）：document.title 的每次变化都会触发
-    // page-title-updated，不 preventDefault 则原生标题栏仍会跟随会话切换。
-    mainWindow.on('page-title-updated', (event) => {
-      event.preventDefault();
-    });
-    // The preload exposes host-impacting IPC. Keep it confined to the exact
-    // control-plane document: deny popups and cancel cross-origin navigation
-    // or redirects before another page can receive the same preload bridge.
-    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    mainWindow.webContents.on('will-navigate', (event, url) => {
-      if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
-    });
-    mainWindow.webContents.on('will-redirect', (event, url) => {
-      if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
-    });
-    mainWindow.on('closed', () => {
-      mainWindow = null;
-    });
     // Single frame, single origin: the control plane serves the built dsh
     // frontend (design 05 §1) — no local file loads. A load failure is a
     // loud startup failure (dialog + exit), never a silently broken window;
@@ -418,13 +539,8 @@ if (!gotTheLock) {
     void cp.startLocal().catch(err => {
       console.error('[dsh-chamber] 本地实例预启动失败（renderer 仍会尝试）：', err);
     });
-    try {
-      await mainWindow.loadURL(`http://127.0.0.1:${cp.port}/`);
-    } catch (loadError) {
-      const detail = loadError instanceof Error ? (loadError.stack ?? loadError.message) : String(loadError);
-      dialog.showErrorBox('dsh-chamber 启动失败', `前端加载失败：\n${detail}`);
-      await cp.stop().catch(err => console.error('[dsh-chamber] 控制面停止失败：', err));
-      app.exit(1);
-    }
+    // 启动期创建主窗口：加载失败 = 大声失败 + 退出（createMainWindow 内）；
+    // activate/托盘/second-instance 恢复路径共用同一创建函数。
+    createMainWindow(rendererOrigin, true);
   });
 }
