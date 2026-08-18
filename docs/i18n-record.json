@@ -1,16 +1,16 @@
 {
   "files": {
-    "README.md": {
-      "en": "a14f3cf4b9eea2b625ff99faa4be03f99e042b89418fcc9bc53765a1527eb5a0",
-      "zh": "506b14235074a67aacbc77a9237936d29862b1fb6b9223b49c5782067d1ccc23"
-    },
     "AGENTS.md": {
-      "en": "313cb8d07959ff19fdb24839e341ea1badd47abc936f819b0142167a8f3af22d",
-      "zh": "d787599bf01de28cb67c2d0cd6880d46a0c6a6b78165988e7776ab982b6ed8a9"
+      "en": "9bfdbde7c33f3ac7b9df8f4aba00fede1b0372a32b2194dff8135132a252cf4a",
+      "zh": "0cd7c67ac5bb8563fcb22c450b5dc33fc9c0f13ac6f163876bd5fe2b72b19b41"
     },
     "CONTRIBUTING.md": {
-      "en": "263d719c0f6d4e1d605ffa992129c28557441bb33d5e832d5e2722297860b121",
-      "zh": "658e8671eb437720da2b8899f6a31749cbb8a74bc18cd4108b063e3f044f4969"
+      "en": "7f280dc38ae9438d83daabdd40f4e2e9ae8fc3f23d8262180f993423aff189c2",
+      "zh": "334dbe2addd69581fae5e83d150c77ece3d795ee4e6d4e8c3c545b2f4cef2040"
+    },
+    "docs/README.en-US.md": {
+      "en": "6bedddf292335c90c9b56e7976f60528b93ad45938c071b52b1ef0d5fedcb0d8",
+      "zh": "89bef243b0e0741deb205fcd8270c1f1c2d4290fa437cf03c0d83630a4af3c5c"
     }
   }
 }

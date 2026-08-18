@@ -24,6 +24,9 @@ packages/
                     N-ctx 编排、启动图清单）
   dsh-chamber-client-ui-sidebar/  自研侧边栏插件（多来源会话导航 + chamberBridge；
                     替换官方 ui-sidebar 注册）
+  dsh-chamber-client-ui-layout/   自研 ui-layout 壳 fork（layout store 替换：
+                    经侧边栏共享 view-prefs store 持久化 sidebarWidth；
+                    替换官方 ui-layout 注册）
   dsh-chamber-client-ui-settings-connections/
                     自研连接设置插件（本地实例卡 + 远程主机 CRUD/连接/
                     systemd/日志，settings.section）

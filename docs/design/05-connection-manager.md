@@ -102,8 +102,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   立即重拉该来源聚合（v1 轮询 + 操作后刷新）。
 - **v1 交互面扩展（2026-08，详见 06）**：来源头 hover 操作簇新增**会话排序
   切换**（manual↔updated 循环，06 §3.1）；workspace 头/会话行**双击重命名**
-  （会话行延迟单击二击取消，06 §2.2）；workspace 头/会话行悬停显示**信息
-  卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
+  （会话行单击立即打开、二次点击进入重命名，06 §2.2）；workspace 头/会话行
+  悬停显示**信息卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
 - New Session → 当前活动来源新建会话。
 
 ### 2.3 数据纪律
@@ -270,7 +270,7 @@ export const chamberBridge: {
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研插件包 3 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研插件包 4 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。
@@ -290,10 +290,14 @@ export const chamberBridge: {
   - `packages/dsh-chamber-client-ui-settings-bridge/`——自研设置壳插件（§5 同款
     讨论，`sidebar.settings` 槽 priority -1 shadow 官方 SettingsRoot，
     服务器下拉 + 子 ctx 官方 settings 子集渲染）。
+  - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber
+    fork（仅替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
+    播种/回写，钳位 [264,420]，覆盖 id；替换官方 ui-layout 注册，见设计 06）。
 - 前端入口复用 `packages/renderer/`：vite 构建时把 workspace 包 alias 到源码；
   `chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
-  gateway→remotes→runtime→locale→theme→layout→**chamber 侧边栏（替换官方）**→
-  settings×4→conversation→…→全量 ui-*）。
+  gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换
+  官方注册）**→**chamber 侧边栏（替换官方）**→settings×4→conversation→…→
+  全量 ui-*）。
 - **启动图清单 = 单 entry + 每实例宿主图额外 entry（设计 09）**：
   - 页面清单 `__DSH_BOOT__` = `{rev, entries:[{id, url, rev, immediately?}]}`
     （wire 契约以 vendor `dsh-client-modules/src/client/manifest.ts` 为权威）；
@@ -461,6 +465,6 @@ export const chamberBridge: {
   （turn-tail `forkAt`）常驻可用；侧边栏会话行 kebab 菜单亦提供行内 fork
   （wire `sessions.fork`，对齐官方 ui-workspace）。
 - **推迟（维持不排期）**：flat 单列表模式（与"仅按来源分类"呈现原则有
-  张力）；当前空白会话"新会话"行（§2.1 已声明空白会话不入列表）。
+  张力）。
 - 不做（v1）：跨来源移动会话、单 store 真融合（fork runtime）、会话实时
   推送同步、远程实例管理 UI 外壳。

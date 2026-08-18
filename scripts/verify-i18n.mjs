@@ -12,7 +12,10 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)))
 const PAIRS = [
-  ['README.md', 'docs/README.zh-CN.md'],
+  // 2026: Chinese promoted to primary (user decision) — README.md is now the
+  // Chinese primary; English demoted to docs/README.en-US.md (secondary).
+  // Positional order stays EN first, ZH second.
+  ['docs/README.en-US.md', 'README.md'],
   ['AGENTS.md', 'docs/AGENTS.zh-CN.md'],
   ['CONTRIBUTING.md', 'docs/CONTRIBUTING.zh-CN.md'],
 ]

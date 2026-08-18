@@ -1,162 +1,158 @@
-# dsh-chamber
+# dsh-chamber（中文说明）
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-brightgreen)]()
 
-**The local desktop connection manager for [dsh](https://github.com/deepseek-ai/deepseek-harness).**
+**[dsh](https://github.com/deepseek-ai/deepseek-harness) 的本地桌面连接管理器。**
 
-## User interface
+## 用户界面
 
-![dsh-chamber user interface](assets/page.png)
+![dsh-chamber 用户主界面](assets/page.png)
 
-*Main user interface — a single window with the dsh-native sidebar listing every source's sessions/workspaces, and the pure-dsh shell of the active instance.*
+*用户主界面——单窗口，dsh 原生侧边栏平等列出各来源（本地 + 远程实例）的 session/workspace，主区为活动实例的纯 dsh shell。*
 
-dsh-chamber hosts the local dsh instance (web profile) and attaches dsh instances on remote servers over SSH tunnels. The UI is the **dsh official frontend, source-reused and self-built** — a single window with a single frame, where multiple instances coexist as N-ctx shells and their sessions/workspaces are navigated uniformly in the dsh-native sidebar (first screen = the local instance's full dsh shell, pure dsh UI). The control plane owns connection management, per-instance same-origin reverse proxying, and static frontend serving (v1 has no authentication/audit surface).
+dsh-chamber 托管本地 dsh 实例（web profile），并经 SSH 隧道接入远程服务器上的 dsh 实例。界面 = **dsh 官方前端源码复用自建**——单窗口单 frame，多实例以 N-ctx shell 共存，**各来源的 session/workspace 在 dsh 原生侧边栏内统一导航**（首屏 = 本地实例的完整 dsh shell，纯 dsh UI）。控制面负责连接管理、每实例同源反代与静态前端服务（**v1 无认证/审计面**）。
 
 > [!WARNING]
-> **Developer preview (v0.1)** — the protocol and API are iterating rapidly; expect breaking changes.
+> **开发者预览（v0.1）**——协议与 API 正在快速迭代，将存在破坏性变更。
 
-> Chinese: [docs/README.zh-CN.md](docs/README.zh-CN.md) · Design entry: [docs/design/01-overview.md](docs/design/01-overview.md) · Surface/architecture contract: [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) · Progress: [docs/progress/STATUS.md](docs/progress/STATUS.md)
+> English: [docs/README.en-US.md](docs/README.en-US.md) · 设计文档入口 [docs/design/01-overview.md](docs/design/01-overview.md) · 表面/架构契约 [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) · 模块进度 [docs/progress/STATUS.md](docs/progress/STATUS.md)
 
-## What is dsh-chamber?
+## dsh-chamber 是什么？
 
-dsh harness is built around an *everything-is-a-plugin* philosophy: model adapters, tool registry, session logs, agent loop, and the official Web UI itself are host plugins. Goals, jobs, terminals, schedule, settings, and plugin inventory are all native host capabilities — including the frontend that hosts them.
+dsh harness 的设计哲学是**一切皆插件**：模型适配器、工具注册表、会话日志、agent loop、官方 Web UI 本身都是宿主插件；goals、jobs、terminals、schedule、settings、pluginInventory 等均为宿主原生能力——承载这一切的官方前端也不例外。
 
-dsh-chamber therefore does **not** re-implement those domains and does **not** write a second UI. It only does the five things a host plugin structurally *cannot* do:
+因此 dsh-chamber **不做**这些领域的第二套实现，也**不写**第二套界面。它只承担宿主插件**结构性做不到**的五件事：
 
-| # | Core responsibility | Why a plugin can't do it |
+| # | 核心职责 | 为什么插件做不到 |
 |---|---|---|
-| 1 | **Local host hosting** — web-profile spawn, readiness, reaper, health, logs | "Managing dsh itself" is the chicken-and-egg problem: a plugin dies with its host process |
-| 2 | **Frontend hosting & per-instance reverse proxy** | the dsh frontend requires same-origin `/api` + WS (`location.origin` is hardcoded); cross-instance same-origin access can only be served by a host-side server (v1 has no auth boundary — instances are anonymously reachable on loopback only) |
-| 3 | **Remote instance access** — SSH tunnels + systemd start/stop | cross-server connection orchestration can only live outside the server |
-| 4 | **Management REST** — connection CRUD, health, logs | the manager's own surface |
-| 5 | **Multi-source session navigation** — one dsh-native sidebar listing the sessions/workspaces of every source equally | the official dsh sidebar only knows its own connection; a navigation layer treating local and remote sources as equal citizens must be supplied by the chamber side (self-built sidebar plugin + bridge layer) |
+| 1 | **本地宿主托管**：web profile spawn/就绪/reaper/健康/日志 | "管理 dsh 自己"是鸡生蛋问题：插件随宿主进程一起死 |
+| 2 | **前端宿主与每实例反代** | dsh 前端要求同源 `/api` + WS（`location.origin` 硬编码）；跨实例同源访问只能由宿主服务端提供（v1 无认证边界——实例匿名可达，仅 loopback 监听） |
+| 3 | **远程实例接入**：SSH 隧道 + systemd 起停 | 跨服务器的连接编排只能存在于服务器之外 |
+| 4 | **管理 REST**：连接 CRUD、健康、日志 | 管理器自己的面 |
+| 5 | **多来源会话统一导航** — 一个 dsh 原生侧边栏平等列出各来源的 session/workspace | 官方 dsh 侧边栏只认识本连接；"本地+远程同等公民"的导航层必须由 chamber 侧提供（自研侧边栏插件 + 桥接层） |
 
-**Session business is entirely the dsh frontend runtime's job** (each instance gets a complete dsh shell, coexisting as N-ctx): the control plane consumes no host frames, builds no session index, and participates in no chat/approval.
+**会话业务完全由 dsh 前端 runtime 承担**（每个实例一个完整 dsh shell，N-ctx 共存）：控制面不消费任何宿主帧、不建会话索引、不参与聊天/审批。
 
-## Features
+## 特性
 
-- **dsh official frontend, source-reused and self-built** — one window, one frame, one origin; the only dsh source changes are the five chamber packages: the in-repo copies `packages/dsh-client-connection` (connection-client base-path patch) and `packages/dsh-client-web` (boot.tsx N-ctx module-table sharing seam + `runtimeCtx` getter), and the self-built `packages/dsh-chamber-client-ui-sidebar` (replacing the official ui-sidebar registration — see 05 §6), `packages/dsh-chamber-client-ui-settings-connections` and `packages/dsh-chamber-client-ui-settings-bridge` (the connections settings page and its settings shell — see 05 §5)
-- **N-ctx multi-instance** — multiple dsh shells coexist in one window (one AppWebEntry per instance, each with its own cordis context and full ui-* tree); the chamber sidebar switches the active context
-- **Multi-source sidebar navigation** — sessions/workspaces of every source (local + remote instances) are listed equally in the dsh-native sidebar, grouped by source with a color badge per remote source; the first screen is the local instance's full dsh shell (pure dsh UI, no chamber shell)
-- **Chamber bridge host** — entry-level React (v1): first screen = the local instance's full dsh shell (pure dsh UI, no chamber shell); the App host auto-starts the local instance, auto-connects the registry's remote instances, publishes the chamberBridge projection and dispatches open-session requests; multi-source navigation itself is rendered by the self-built sidebar plugin; the former `chamber-auth` login plugin was removed with the v1 auth/audit removal
-- **Local host hosting** — web-profile spawn, readiness, reaper, health state machine, host logs
-- **Per-instance same-origin reverse proxy** — `/api/i/<id>/*` HTTP/WS/SSE passthrough for local and tunneled instances, anonymously reachable on loopback only (no tunnel → explicit 503)
-- **Remote instances** — the desktop transport runtime (`transport-manager` + the `ssh` provider, `TransportProvider` interface open to future sources): SSH tunnels (`ssh -N -o ServerAlive… -L`) plus remote systemd `start`/`stop`/`is-active` with a serviceName whitelist; optional per-host password auth (design 05 §8) via `desktop_ssh_set_password` + an ephemeral askpass helper (see Security)
-- **Management REST** — `/health`, `/api/connections`, `/api/host/logs`, plus static frontend serving with the `__DSH_BOOT__` boot manifest
+- **dsh 官方前端源码复用自建** — 单窗口、单 frame、单 origin；唯一允许的 dsh 源码修改是六个 chamber 包：仓库内拷贝 `packages/dsh-client-connection`（连接客户端 base 路径补丁）与 `packages/dsh-client-web`（boot.tsx N-ctx 模块表共享 seam + `runtimeCtx` getter），以及自研的 `packages/dsh-chamber-client-ui-sidebar`（替换官方 ui-sidebar 注册，见 05 §6）、`packages/dsh-chamber-client-ui-settings-connections` 与 `packages/dsh-chamber-client-ui-settings-bridge`（连接设置页及其设置壳，见 05 §5）、`packages/dsh-chamber-client-ui-layout`（官方 ui-layout 壳插件的 chamber fork：仅替换 layout store——把 `sidebarWidth` 持久化进侧边栏共享 view-prefs store；替换官方 ui-layout 注册，见设计 06）
+- **N-ctx 多实例** — 多个 dsh shell 共存于一个窗口（每实例一个 AppWebEntry，独立 cordis ctx、全量 ui-* 树）；chamber 侧栏切换活动 ctx
+- **侧边栏多来源导航** — 各来源（本地 + 远程实例）的 session/workspace 在 dsh 原生侧边栏内平等呈现，仅按来源分组（远程来源以颜色徽标标注）；首屏 = 本地实例的完整 dsh shell（纯 dsh UI，无 chamber 外壳）
+- **chamber 桥接宿主** — v1 为 entry 级 React：首屏 = 本地实例的完整 dsh shell（纯 dsh UI，无 chamber 外壳）；App 宿主负责本地实例 auto-start、注册表远程实例 auto-connect、chamberBridge 投影发布与会话打开分发；多来源导航本身由自研侧边栏插件渲染；原 `chamber-auth` 登录插件随 v1 认证/审计移除
+- **本地宿主托管** — web profile spawn、就绪、reaper、健康状态机、宿主日志
+- **每实例同源反代** — `/api/i/<id>/*` HTTP/WS/SSE 透传（本地与隧道实例），匿名可达（仅 loopback；无隧道 → 明确 503）
+- **远程实例** — 桌面传输运行时（`transport-manager` + `ssh` provider，`TransportProvider` 接口可扩展未来来源）：SSH 隧道（`ssh -N -o ServerAlive… -L`）+ 远端 systemd `start`/`stop`/`is-active`（serviceName 白名单校验）；可选的主机密码认证（设计 05 §8）：`desktop_ssh_set_password` + 临时 askpass 助手注入（见「安全」）
+- **管理 REST** — `/health`、`/api/connections`、`/api/host/logs`，另有 `__DSH_BOOT__` 启动图清单的静态前端服务
 
-## Architecture
+## 架构
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│ Electron window (single frame, loadURL the control-plane origin)      │
-│ └─ dsh official frontend (source-reused)                              │
-│     ├─ self-built sidebar plugin: multi-source session navigation +  │
-│     │    chamberBridge in the dsh-native sidebar                     │
-│     ├─ bridge host (entry-level React): first screen = the local     │
-│     │    instance's pure dsh shell                                    │
-│     └─ N-ctx: one dsh shell per instance, same-origin via            │
-│          /api/i/<id>/*                                               │
+│ Electron 窗口（单 frame，loadURL 控制面 origin）                        │
+│ └─ dsh 官方前端（源码复用）                                             │
+│     ├─ 自研侧边栏插件：dsh 原生侧边栏内多来源会话导航 + chamberBridge     │
+│     ├─ 桥接宿主（entry 级 React）：首屏 = 本地实例纯 dsh shell           │
+│     └─ N-ctx：每实例一个 dsh shell，经 /api/i/<id>/* 同源访问            │
 ├───────────────────────────────────────────────────────────────────────┤
-│ Control plane (127.0.0.1:17500)                                      │
-│  ├─ management REST: /health · /api/connections · /api/host/logs     │
-│  ├─ per-instance reverse proxy: /api/i/local/* → local dsh (web      │
-│  │    profile)                                                       │
-│  │            /api/i/ssh-<id>/* → tunnel localPort                   │
-│  │            (v1 anonymous, loopback-only)                          │
-│  ├─ local instance hosting (spawn/health/reaper)                     │
-│  └─ static frontend serving (dist + __DSH_BOOT__ manifest)           │
+│ 控制面（127.0.0.1:17500）                                               │
+│  ├─ 管理 REST：/health · /api/connections · /api/host/logs              │
+│  ├─ 每实例反代：/api/i/local/* → 本地 dsh（web profile）                 │
+│  │              /api/i/ssh-<id>/* → 隧道 localPort                      │
+│  │              （v1 匿名可达，仅 loopback 监听）                        │
+│  ├─ 本地实例托管（spawn/健康/reaper）                                    │
+│  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）                             │
 ├───────────────────────────────────────────────────────────────────────┤
-│ Desktop main process (desktop)                                       │
-│  ├─ transport-manager + ssh provider (TransportProvider interface)   │
-│  │    ssh -N -o ServerAlive… -L tunnel +                             │
-│  │    systemctl start/stop/is-active                                 │
-│  ├─ instance registry: <userData>/ssh-instances.json                 │
-│  └─ IPC (preload whitelist): dsh-chamber:info · desktop_ssh_*        │
+│ 桌面主进程（desktop）                                                   │
+│  ├─ transport-manager + ssh provider（TransportProvider 接口）          │
+│  │    ssh -N -o ServerAlive… -L 隧道 + systemctl start/stop/is-active    │
+│  ├─ 实例注册表：<userData>/ssh-instances.json                           │
+│  └─ IPC（preload 白名单）：dsh-chamber:info · desktop_ssh_*             │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-| Package | Role |
+| 包 | 职责 |
 |---|---|
-| `packages/control-plane` | Connection-manager core: web-profile host hosting, management REST, per-instance reverse proxy, static frontend serving |
-| `packages/renderer` | The self-built dsh frontend (source reuse): entry build, pure-dsh first screen bridge host (auto-start/auto-connect, chamberBridge), N-ctx orchestration, boot manifest |
-| `packages/desktop` | Electron shell: single frame, transport-manager + `ssh` transport provider (tunnels + systemd exec), instance registry, IPC |
-| `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
-| `packages/dsh-client-connection` | Copied dsh source: the connection client with the base-path patch |
-| `packages/dsh-client-web` | Copied dsh source: the web shell with the boot.tsx N-ctx module-table sharing seam |
-| `packages/dsh-chamber-client-ui-sidebar` | Self-built (copied ui-sidebar structure): the chamber sidebar plugin replacing the official ui-sidebar registration (see 05 §6) |
-| `packages/dsh-chamber-client-ui-settings-connections` | Self-built: the connections settings plugin (local instance card + remote host CRUD/connect/systemd/logs, settings.section, dsh design tokens — see 05 §5) |
-| `packages/dsh-chamber-client-ui-settings-bridge` | Self-built: the settings shell plugin shadowing the official SettingsRoot registration (sidebar.settings at priority −1) — a server dropdown over the selected instance's official settings sections plus the fixed chamber-global connections nav entry (see 05 §5) |
-| `packages/dsh-host-client-graph` | Self-built host-side package (not a client plugin): Remote `clientGraph/graph` exposing the host's composed client-plugin boot graph read-only (design 09); seeded into the local web profile via `--patch` by the control plane |
+| `packages/control-plane` | 连接管理器核心：web profile 宿主托管、管理 REST、每实例反代、静态前端服务 |
+| `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主（auto-start/auto-connect、chamberBridge）、N-ctx 编排、启动图清单 |
+| `packages/desktop` | Electron 壳：单 frame、transport-manager + `ssh` transport provider（隧道 + systemd exec）、实例注册表、IPC |
+| `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
+| `packages/dsh-client-connection` | 拷贝的 dsh 源码：连接客户端 + base 路径补丁 |
+| `packages/dsh-client-web` | 拷贝的 dsh 源码：web shell + boot.tsx N-ctx 共享 seam |
+| `packages/dsh-chamber-client-ui-sidebar` | 自研（拷贝 ui-sidebar 结构改造）：chamber 侧边栏插件，替换官方 ui-sidebar 注册（见 05 §6） |
+| `packages/dsh-chamber-client-ui-settings-connections` | 自研：连接设置插件（本地实例卡 + 远程主机 CRUD/连接/systemd/日志，settings.section、dsh 设计 token，见 05 §5） |
+| `packages/dsh-chamber-client-ui-settings-bridge` | 自研：设置壳插件，以 priority −1 shadow 官方 SettingsRoot 注册（sidebar.settings）——所选实例官方设置分区上的服务器下拉 + 固定的 chamber 全局连接导航项（见 05 §5） |
+| `packages/dsh-chamber-client-ui-layout` | 自研（官方 ui-layout 壳插件的 chamber fork）：仅替换 layout store——`sidebarWidth` 经侧边栏共享 view-prefs store 播种/回写（钳位 [264,420]），替换官方 ui-layout 注册（见设计 06） |
+| `packages/dsh-host-client-graph` | 自研宿主侧包（非客户端插件）：Remote `clientGraph/graph` 只读暴露宿主组合的客户端插件 boot 图（设计 09）；控制面经 `--patch` seed 进本地 web profile |
 
-## Quick start
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
-- Node.js 22+ (LTS recommended; sources are TypeScript run natively via Node's type stripping, see `.nvmrc`)
-- pnpm ≥ 11 (the package manager; lockfile `pnpm-lock.yaml`)
+- Node.js 22+（推荐 LTS；源码为 TypeScript，经 Node 原生类型擦除直接运行，见 `.nvmrc`）
+- pnpm ≥ 11（包管理器；锁文件 `pnpm-lock.yaml`）
 - git
-- macOS for `dist:desktop:mac` (dmg/zip)
-- A dsh host installation is optional — it is only needed for the integration smoke test, which auto-skips when dsh is absent
+- macOS（`dist:desktop:mac` 打包 dmg/zip 需要）
+- dsh 宿主安装为可选——只在集成冒烟测试时需要，未安装时自动 SKIP
 
-### 1 · Clone
+### 1 · 克隆
 
 ```bash
 git clone <REPO-URL>
 cd dsh-chamber
 ```
 
-### 2 · dsh source tree (automatic via preinstall)
+### 2 · dsh 源码树（preinstall 自动引导）
 
-`vendor/harness-packages` is a gitignored directory of symlinks, one per dsh package — each symlink is named after the package and points into a [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) source tree. It is never committed, and it must exist **before** `pnpm install`, because `pnpm-workspace.yaml` resolves the unmodified dsh packages through it. `scripts/ensure-harness-vendor.mjs` bootstraps it; on a fresh clone run it explicitly **before** `pnpm install` (pnpm captures the workspace snapshot before `preinstall` runs, so the link step alone is not enough there):
+`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立：`pnpm-workspace.yaml` 经它解析未修改的 dsh 包。`scripts/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次（pnpm 在 `preinstall` 之前就捕获工作区快照，仅靠 preinstall 不够）：
 
 ```bash
 node scripts/ensure-harness-vendor.mjs
 pnpm install
 ```
 
-The script resolves the tree in this order:
+脚本按以下顺序解析源码树：
 
-1. `DSH_CHAMBER_HARNESS_ROOT` env var, if set — use that checkout as-is;
-2. `vendor/harness-checkout` — a managed snapshot previously downloaded by the script (reused when its `.harness-pin` marker matches the pinned commit);
-3. a sibling checkout at `<repo>/../deepseek-harness` (zero-network local dev; warns if its HEAD differs from the pin);
-4. otherwise download the pinned commit snapshot from codeload (pinned in `harness.commit`, overridable with `DSH_CHAMBER_HARNESS_COMMIT`).
+1. `DSH_CHAMBER_HARNESS_ROOT` 环境变量——直接使用该检出；
+2. `vendor/harness-checkout`——本脚本先前下载的受管快照（其 `.harness-pin` marker 与固定提交一致时复用）；
+3. 兄弟检出 `<repo>/../deepseek-harness`（零网络本地开发；HEAD 与固定提交不一致时警告）；
+4. 否则从 codeload 按固定提交下载快照（固定于 `harness.commit`，可用 `DSH_CHAMBER_HARNESS_COMMIT` 覆盖）。
 
-The two excluded packages (`dsh-client-connection`, `dsh-client-web`) are in-repo copies we modify — they live in `packages/` and shadow the workspace entries; the other three modified sources are self-built: `packages/dsh-chamber-client-ui-sidebar` (see 05 §6), `packages/dsh-chamber-client-ui-settings-connections` and `packages/dsh-chamber-client-ui-settings-bridge` (see 05 §5).
+被排除的两个包（`dsh-client-connection`、`dsh-client-web`）是仓库内的拷贝包——它们位于 `packages/`，遮蔽 workspace 条目；其余四个被修改的源码均为自研：`packages/dsh-chamber-client-ui-sidebar`（见 05 §6）、`packages/dsh-chamber-client-ui-settings-connections` 与 `packages/dsh-chamber-client-ui-settings-bridge`（见 05 §5），以及 `packages/dsh-chamber-client-ui-layout`（ui-layout 壳 fork——`sidebarWidth` 经侧边栏共享 view-prefs store 持久化，见设计 06）。
 
-### 3 · Install
+### 3 · 安装
 
 ```bash
 pnpm install
 ```
 
-The root `.npmrc` is a gitignored local convenience that may point the Electron binary download at the npmmirror mirror; without it, Electron downloads from the official source. The packaging-time mirror is committed in `packages/desktop/package.json` (`electronDownload.mirror`).
+根目录 `.npmrc` 是 gitignored 的本地便利配置，可将 Electron 二进制下载指向 npmmirror 镜像；没有它则从官方源下载。打包期的镜像已在 `packages/desktop/package.json`（`electronDownload.mirror`）提交。
 
-### 4 · Bundle the dsh runtime
+### 4 · 封装 dsh 运行时
 
-The desktop needs the official `@deepseek-ai/dsh` release bundled into `packages/desktop/vendor/dsh` (the control plane's default dsh workspace, after an optional `ref-dsh` source symlink):
-
-```bash
-pnpm --filter @dsh-chamber/desktop run bundle:dsh   # pin a version with DSH_CHAMBER_DSH_VERSION
-```
-
-`bundle:dsh` is also run automatically by `build:desktop` / `dist:desktop:mac` — you can skip this step and go straight to run or package.
-
-### 5 · Run
+桌面需要将官方 `@deepseek-ai/dsh` 发布包封装进 `packages/desktop/vendor/dsh`（控制面的默认 dsh workspace，优先于可选的 `ref-dsh` 源码符号链接）：
 
 ```bash
-pnpm run dev:control-plane   # control plane only — http://127.0.0.1:17500 (management REST + static frontend)
-pnpm run dev:desktop         # the full window: control plane + dsh frontend + desktop shell
+pnpm --filter @dsh-chamber/desktop run bundle:dsh   # 用 DSH_CHAMBER_DSH_VERSION 固定版本
 ```
 
-### 6 · Package the app
+`bundle:dsh` 也会由 `build:desktop` / `dist:desktop:mac` 自动执行——可直接跳到运行或打包步骤。
+
+### 5 · 运行
+
+```bash
+pnpm run dev:control-plane   # 仅控制面——http://127.0.0.1:17500（管理 REST + 静态前端）
+pnpm run dev:desktop         # 完整窗口：控制面 + dsh 前端 + 桌面壳
+```
+
+### 6 · 打包应用
 
 ```bash
 pnpm run dist:desktop:mac    # build:renderer → build:control-plane → build:preload → bundle:dsh → electron-builder
-pnpm run dist:desktop:win    # same chain, but run on Windows — the dsh runtime bundle is host-platform-specific
+pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——dsh 运行时封装按平台区分
 ```
 
-The packaged app lands in `packages/desktop/release/` (electron-builder `directories.output`): macOS produces `dsh-chamber-<version>-<arch>.dmg`; Windows produces the NSIS installer (`.exe`). Artifacts go out **unsigned** — no Apple signing/notarization or Windows code-signing certificates are configured.
+打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）：macOS 产出 `dsh-chamber-<version>-<arch>.dmg`；Windows 产出 NSIS 安装器（`.exe`）。产物**未签名**——未配置 Apple 签名/公证或 Windows 代码签名证书。
 
 > **Windows 安装卡在“正在安装”界面/进度条来回反复的排障**
 >
@@ -170,35 +166,34 @@ The packaged app lands in `packages/desktop/release/` (electron-builder `directo
 > 2. 安装期间为安装器与安装目录（默认 `%LOCALAPPDATA%\Programs\dsh-chamber`）临时添加 **Windows 安全中心 → 病毒和威胁防护 → 排除项**（或临时关闭实时防护，装完恢复）——这是“卡死”最快的解药。
 > 3. 安装完成后可移除排除项。
 
-### 7 · CI and releases
+### 7 · CI 与发布
 
-- `.github/workflows/ci.yml` runs on every push/PR: validation chain (frozen install → typecheck → i18n → control-plane unit tests → smoke → renderer build) plus per-platform desktop packaging sanity checks (macOS `dist:desktop:mac` + real smoke; Windows `dist:desktop:win` on `windows-2022`).
-- `.github/workflows/release.yml` creates the distributable release: push a `v*` tag (or run it manually with a version + optional dry-run). It creates a draft GitHub Release, builds macOS arm64 (v1 ships Apple Silicon only — the last public Intel x64 runner, macos-13, was retired by GitHub; see `docs/progress/STATUS.md`) and Windows x64 on `windows-2022`, uploads the artifacts into the draft, then flips it to public.
-- Both workflows bootstrap the vendored dsh source tree from the pinned `harness.commit` before install (see section 2).
+- `.github/workflows/ci.yml`：每次 push/PR 运行——验证链（frozen install → typecheck → i18n → 控制面单测 → smoke → renderer 构建）+ 各平台桌面打包 sanity（macOS `dist:desktop:mac` + 真实 smoke；Windows `dist:desktop:win`，`windows-2022`）。
+- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon——最后一个公开 Intel x64 runner `macos-13` 已被 GitHub 退役，见 `docs/progress/STATUS.md`）、在 `windows-2022` 上构建 Windows x64，产物上传进 draft 后翻转公开发布。
+- 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树（见第 2 节）。
 
-## Server-side deployment
+## 服务器端部署
 
-### Remote dsh instance (systemd)
+### 远程 dsh 实例（systemd）
 
-The remote server only runs dsh's API-facing web profile on loopback — no web frontend is needed there: the UI comes from the locally reused frontend through the `/api/i/ssh-<id>/*` tunnel.
+远程服务器只需在 loopback 上运行 dsh 的 API 面 web profile——那里无需 web 前端：UI 来自本地复用的前端，经 `/api/i/ssh-<id>/*` 隧道访问。
 
-1. **Requirements** — Linux with systemd, Node.js 22+, and SSH access from the machine running the chamber desktop (key-based: the desktop's transport runtime drives `systemctl` over the SSH channel).
-2. **Install dsh** (official distribution):
+1. **环境要求** — 装有 systemd 的 Linux、Node.js 22+、运行 chamber 桌面的机器对该服务器的 SSH 访问（密钥认证：桌面传输运行时经 SSH 通道驱动 `systemctl`）。
+2. **安装 dsh**（官方发行）：
 
    ```bash
    npm install -g @deepseek-ai/dsh
    dsh --version
-   which dsh   # record the install path (npm-global, not /usr/bin) for ExecStart below
-   which node  # record the node bin dir (nvm-managed, not in systemd's PATH) for the PATH line below
+   which dsh   # 记下安装路径（npm 全局，不在 /usr/bin）供下方 ExecStart 使用
+   which node  # 记下 node bin 目录（nvm 托管，systemd 的 PATH 里没有）供下方 PATH 行使用
    ```
 
-3. **Persist it with systemd** — two options, both running dsh as a
-   non-root user with every file in that user's own home. dsh defaults to
-   `$HOME/.dsh`, so no `DSH_HOME` setup is needed at all.
+3. **用 systemd 持久化** — 两种形态任选，dsh 都以非 root 用户身份运行，
+   所有文件都落在该用户自己的家目录。dsh 默认 `$HOME/.dsh`，因此完全
+   不需要设置 DSH_HOME。
 
-   **Option A — system unit (recommended).** Create
-   `/etc/systemd/system/dsh.service` (root is needed only to install the
-   unit):
+   **形态 A —— 系统单元（推荐）。** 创建 `/etc/systemd/system/dsh.service`
+   （root 只在安装单元时用一次）：
 
    ```ini
    [Unit]
@@ -207,26 +202,24 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
 
    [Service]
    Type=simple
-   # Run dsh as the login user you SSH in as (replace <YOUR_USER>). dsh then
-   # writes everything to that user's own home (~/.dsh by default) — no
-   # mkdir/chown, no root-owned files. The web profile serves the dsh API +
-   # frontend on loopback only. --port and --trusted-host always agree
-   # (127.0.0.1:<P>): the browser trust fence admits the Host header the
-   # chamber tunnel forwards (`dsh web` is the hard alias of
-   # `--profile web`). Replace <DSH_PATH> with the path from `which dsh`
-   # above — npm global installs put it under the user's npm prefix
-   # (e.g. /usr/local/bin/dsh), not /usr/bin.
-   User=<YOUR_USER>
+   # 以你 SSH 登录的用户身份运行 dsh（把 <你的用户名> 换成实际账号）。
+   # dsh 会把所有文件写到该用户自己的家目录（默认 ~/.dsh）——不需要
+   # mkdir/chown，也不会有 root 属主文件。web profile 仅在 loopback 提供
+   # dsh API + 前端。--port 与 --trusted-host 恒一致（127.0.0.1:<P>）：
+   # 浏览器信任栅栏只认 chamber 隧道转发来的 Host 头（`dsh web` 是
+   # `--profile web` 的硬别名，两者等价）。将 <DSH_PATH> 换成上面
+   # `which dsh` 的路径 —— npm 全局安装位于用户的 npm prefix 下
+   # （如 /usr/local/bin/dsh），不是 /usr/bin。
+   User=<你的用户名>
    ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
    Restart=on-failure
    RestartSec=3
-   # dsh is a node script (shebang `#!/usr/bin/env node`), and systemd's
-   # default PATH does not include nvm's node → the service crash-loops with
-   # status=127 ("/usr/bin/env: 'node': No such file or directory"). Replace
-   # <NODE_BIN> with the dir of `which node` above (e.g.
-   # /home/<YOUR_USER>/.nvm/versions/node/v22.22.3/bin). Note: Environment=
-   # is a literal whole-line assignment (no append-to-existing-PATH syntax)
-   # and ExecStart does no variable expansion — write the full absolute paths.
+   # dsh 是 node 脚本（shebang 为 `#!/usr/bin/env node`），而 systemd 默认
+   # PATH 不含 nvm 的 node → 服务会以 status=127 崩溃重启（日志：
+   # "/usr/bin/env: 'node': No such file or directory"）。将 <NODE_BIN> 换成
+   # 上面 `which node` 的目录（如 /home/<你的用户名>/.nvm/versions/node/v22.22.3/bin）。
+   # 注意：Environment= 是整行字面赋值、完全覆盖旧值，没有"追加到已有 PATH"
+   # 的语法，ExecStart 内也不做变量展开——必须写全绝对路径。
    Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
    Environment=DSH_TELEMETRY_DISABLED=1
    Environment=DSH_PERMISSION_MODE=workspace-write
@@ -243,11 +236,10 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
    sudo systemctl status dsh
    ```
 
-   **Option B — per-user unit (no root at all).** If you have no root on
-   the server (or don't want to ask for it), systemd user units persist dsh
-   just as well. Create `~/.config/systemd/user/dsh.service` — the same
-   unit without the `User=` line (it runs as you), with
-   `WantedBy=default.target`:
+   **形态 B —— 用户单元（完全无需 root）。** 服务器上没有 root（或不想
+   申请）时，systemd 用户单元同样能持久化 dsh。创建
+   `~/.config/systemd/user/dsh.service`——单元形状相同，只是没有
+   `User=` 行（以你自己身份运行），`WantedBy=default.target`：
 
    ```ini
    [Unit]
@@ -273,139 +265,130 @@ The remote server only runs dsh's API-facing web profile on loopback — no web 
    systemctl --user daemon-reload
    systemctl --user enable --now dsh
    systemctl --user status dsh
-   # survive logout and boot — one-time, needs root (or a polkit grant):
-   sudo loginctl enable-linger <your-user>
+   # 登出后与开机后仍然存活——一次性操作，需要 root（或 polkit 授权）：
+   sudo loginctl enable-linger <你的用户名>
    ```
 
-   Creating and managing a `--user` unit needs no root, but without
-   **linger** the user manager (and your service) stops at logout;
-   `loginctl enable-linger` makes it start at boot and keep running.
+   创建和管理 `--user` 单元不需要 root；但**没有 linger 时**，用户管理器
+   （连同你的服务）会在登出时停止。`loginctl enable-linger` 让它在开机时
+   启动、登出后继续运行。
 
-   **Ownership rule.** dsh writes everything to the home of the user the
-   unit runs as (`~/.dsh` by default) — that user simply needs a real home
-   directory. No mkdir, no chown, and the "root-owned files my user can't
-   read" problem cannot occur. Three ways to pick that user:
+   **归属规则。** dsh 把所有文件写到单元运行用户自己的家目录（默认
+   `~/.dsh`）——该用户只需要有真实的家目录即可。不需要 mkdir、不需要
+   chown，"root 写的文件我的用户读不了"的问题根本不会出现。运行账号三选一：
 
-   - **Your login user** (Option A): `User=<your-user>`, the home is
-     already yours.
-   - **A dedicated service account** (hardened): create one with a home —
-     `sudo useradd --system --create-home dsh` (note: `useradd --system`
-     does not create the home unless `--create-home` is given) — and set
-     `User=dsh` / `Group=dsh`; dsh then uses that account's own `~/.dsh`.
-   - **Root**: possible but **not recommended** — dsh writes to
-     `/root/.dsh`, owned by root and unreadable by your user.
+   - **你的登录用户**（形态 A）：`User=<你的用户名>`，家目录本就是你的。
+   - **专用服务账号**（更安全）：建号时带上家目录——
+     `sudo useradd --system --create-home dsh`（注意：`useradd --system`
+     默认**不创建**家目录，必须加 `--create-home`）——然后设
+     `User=dsh` / `Group=dsh`，dsh 使用该账号自己的 `~/.dsh`。
+   - **root**：可行但**不推荐**——dsh 会写到 `/root/.dsh`，归 root 所有，
+     你的用户不可读。
 
-   **Caveat for Option B**: the chamber desktop's systemd start/stop
-   buttons drive the **system** manager (`systemctl ...` without `--user`,
-   design 02 §3.9), so they won't see a user unit — manage it with
-   `systemctl --user` on the server instead. The tunnel/connection itself
-   is unaffected (linger keeps the instance up). If you want the desktop's
-   buttons to work, use Option A.
+   **形态 B 的注意点**：chamber 桌面的 systemd 起停按钮驱动的是**系统**
+   管理器（`systemctl ...` 不带 `--user`，设计 02 §3.9），看不到用户单元——
+   请在服务器上改用 `systemctl --user` 管理。隧道/连接本身不受影响
+   （linger 保证实例常驻）。若希望桌面按钮可用，请用形态 A。
 
-   If it crash-loops, check the logs (`journalctl -u dsh`, or
-   `journalctl --user -u dsh` for a user unit) — a `status=127` +
-   `/usr/bin/env: 'node': No such file or directory` means the PATH line
-   above doesn't include the actual node bin dir.
+   若服务崩溃重启，先看日志（`journalctl -u dsh`；用户单元用
+   `journalctl --user -u dsh`）：`status=127` + `/usr/bin/env: 'node': No
+   such file or directory` 说明上面的 PATH 行没包含实际的 node bin 目录。
 
-   Loopback binding (`--host 127.0.0.1`) is deliberate: the chamber desktop
-   reaches the instance through its SSH tunnel, so no extra attack surface
-   is exposed. Only if you want to hit port 30800 directly from other
-   machines (bypassing the chamber tunnel) would you change to
-   `--host 0.0.0.0` — and then you must add real authentication (the v1
-   instance is anonymous) or front it with a reverse proxy instead.
+   `--host 127.0.0.1`（loopback 绑定）是刻意为之：chamber 桌面经自身 SSH
+   隧道访问实例，不额外暴露攻击面。只有想从其他机器直接访问 30800（绕过
+   chamber 隧道）时才需改成 `--host 0.0.0.0`——且必须配套真实鉴权（v1
+   实例是匿名的），或改用反向代理前置。
 
-4. **Connect from the chamber desktop** — in the connections settings page, add the remote host (label / host / user / SSH port / the dsh port (default 30800) / service name `dsh`). The desktop then owns the rest: `ssh -N -L` tunnel plus `systemctl start|stop|is-active dsh` (service name whitelist `^[a-zA-Z0-9_.-]+$`). The unit shape follows design 02 §3.9; the instance contract is 03 §2.2.
+4. **从 chamber 桌面接入** — 在连接设置页添加远程主机（label / host / user / SSH 端口 / dsh 端口（默认 30800）/ 服务名 `dsh`）。其余由桌面接管：`ssh -N -L` 隧道 + `systemctl start|stop|is-active dsh`（服务名白名单 `^[a-zA-Z0-9_.-]+$`）。单元形态遵循设计 02 §3.9，实例契约见 03 §2.2。
 
-## Scripts
+## 脚本
 
-| Script | Description |
+| 脚本 | 说明 |
 |---|---|
-| `pnpm run typecheck` | strict `tsc --noEmit` (0 errors expected) |
-| `pnpm run smoke` | integration smoke — auto-SKIPs when dsh is not installed (normal) |
-| `pnpm run build:renderer` | build the dsh-frontend bundle (vite over the dsh workspace source) |
-| `pnpm run build:desktop` | renderer + control-plane compile + dsh bundling |
-| `pnpm run dist:desktop:mac` | package the macOS app (dmg + zip) |
-| `pnpm run dist:desktop:win` | package the Windows app (nsis + zip; run on Windows — the dsh runtime bundle is platform-specific) |
-| `pnpm run verify:i18n` | fail when an EN ↔ ZH pair drifts; re-record with `-- --write` |
-| `pnpm run gen:notices` | regenerate THIRD_PARTY_NOTICES.md from the installed dependency tree |
-| `pnpm run cli -- <args>` | the in-repo CLI thin shell (serve/status/connections/host logs) |
+| `pnpm run typecheck` | strict `tsc --noEmit`（预期 0 错误） |
+| `pnpm run smoke` | 集成冒烟——dsh 未安装时自动 SKIP（正常） |
+| `pnpm run build:renderer` | 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码） |
+| `pnpm run build:desktop` | renderer + 控制面编译 + dsh 封装 |
+| `pnpm run dist:desktop:mac` | 打包 macOS 应用（dmg + zip） |
+| `pnpm run dist:desktop:win` | 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分） |
+| `pnpm run verify:i18n` | EN ↔ 中文对漂移时报错；同步后用 `-- --write` 重新记录 |
+| `pnpm run gen:notices` | 按已安装依赖树重新生成 THIRD_PARTY_NOTICES.md |
+| `pnpm run cli -- <args>` | 仓库内 CLI 薄壳（serve/status/connections/host logs） |
 
-## Security
+## 安全
 
-- **No auth boundary in v1** — the control plane listens on loopback only (127.0.0.1); every `/api/*` route and the per-instance proxy are anonymous, with CORS limited to loopback origins plus an explicit allowlist
-- **Tunnel URLs and SSH material stay out of the renderer** — the renderer only ever sees non-secret projections (phase/localPort), never the tunnel URL or SSH credentials; logs carry no tunnel/SSH material either. The one sanctioned exception ([design 05 §8](docs/design/05-connection-manager.md)) is an optional per-host SSH password: transient form input, held in the main process, mirrored to `<userData>/ssh-passwords.json` (0600, atomic write) and fed to system ssh via an ephemeral 0600 askpass helper — never on the command line, never in the registry or logs, never back to the renderer; gated off on Windows in v1.
-- **systemctl exec uses argument-array spawn** (no shell) with a serviceName whitelist (`^[a-zA-Z0-9_.-]+$`)
+- **v1 无认证边界** — 控制面仅监听 loopback（127.0.0.1）；全部 `/api/*` 路由与每实例反代匿名可达，CORS 仅限回环 origin + 显式 allowlist
+- **隧道 URL 与 SSH 材料不进 renderer** — renderer 只见到非秘密投影（phase/localPort），永远看不到隧道 URL 或 SSH 凭据；日志同样不含隧道/SSH 材料。唯一许可例外（[设计 05 §8](docs/design/05-connection-manager.md)）：可选的主机 SSH 密码——表单瞬时输入、主进程内存持有、镜像到 `<userData>/ssh-passwords.json`（0600、原子写）、经临时 0600 askpass 助手注入系统 ssh——永不上命令行、永不进注册表/日志、永不回传 renderer；Windows v1 门禁关闭
+- **systemctl 用参数数组 spawn**（无 shell）+ serviceName 白名单（`^[a-zA-Z0-9_.-]+$`）
 
-## FAQ
+## 常见问题
 
-- **Why does `pnpm run smoke` print SKIP?** — the smoke test needs a dsh installation; when none is found it prints SKIP and exits 0. This is expected, not a failure.
-- **What does a remote instance need?** — a dsh instance with an API-facing profile and SSH access. No web frontend needs to be installed on the remote server: the UI comes from the locally reused frontend through the `/api/i/ssh-<id>/*` tunnel.
-- **How do agent presets / profiles work across instances?** — per instance, authoritative. Each instance's `settings`/`credentials`/`llm`/`agentPreset` planes live only on that instance (local = this machine, remote = the remote server). Every read/write goes through the `/api/i/<id>/*` proxy to that instance's own API: the preset picker on the new-session screen lists the roster of the instance the session will live on, and the choice is applied there. There is no cross-source profile matching or merging — edit a remote preset by switching to that source's shell and opening its Settings → Agent presets.
-- **Where does the frontend come from?** — the dsh official frontend, source-reused and self-built; the dsh source changes are limited to the five chamber packages (connection base-path patch, web N-ctx seam, and the self-built sidebar / connections settings / settings-bridge plugins), so every instance keeps its native UI.
+- **`pnpm run smoke` 为什么打印 SKIP？** — 冒烟测试需要 dsh 安装；找不到时打印 SKIP 并以 0 退出。这属正常，不是失败。
+- **远程实例需要什么？** — 一个 API 面 profile 的 dsh 实例 + SSH 访问。远程服务器无需安装 web 前端：UI 来自本地复用的前端，经 `/api/i/ssh-<id>/*` 隧道访问。
+- **agent preset / profile 在各实例间怎么工作？** — 按实例权威。每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只存在于该实例一侧（本地 = 本机，远程 = 远端服务器）。所有读写都经 `/api/i/<id>/*` 反代落到该实例自己的 API——新会话界面的 preset 选择器列出的是该 session 所属实例的 roster，选择也写回该实例。不存在跨来源的 profile 匹配/融合；编辑远程预设 = 切到该来源的 shell，在其 设置 → Agent presets 页操作。
+- **前端从哪来？** — dsh 官方前端源码复用自建；dsh 源码改动仅限六个 chamber 包（connection base 路径补丁、web N-ctx seam，以及自研侧边栏/连接设置/设置壳/ui-layout 壳插件），每个实例保持原生 UI。
 
-## Repository structure
+## 仓库结构
 
 ```
 packages/
-  control-plane/            control plane: host hosting, management REST,
-                            per-instance reverse proxy, static frontend serving
-  renderer/                 self-built dsh frontend (source reuse + bridge host + N-ctx)
-  desktop/                  Electron shell: single frame, transport-manager + ssh provider, instance registry, IPC
-  cli/                      CLI thin shell
-  dsh-client-connection/    modified dsh source #1 (base-path patch)
-  dsh-client-web/           modified dsh source #2 (boot.tsx N-ctx seam)
-  dsh-chamber-client-ui-sidebar/    self-built sidebar plugin: multi-source session
-                            navigation + chamberBridge (copied ui-sidebar
-                            structure, replaces the official ui-sidebar
-                            registration — 05 §6)
+  control-plane/            控制面：宿主托管、管理 REST、
+                            每实例反代、静态前端服务
+  renderer/                 自建 dsh 前端（源码复用 + 桥接宿主 + N-ctx）
+  desktop/                  Electron 壳：单 frame、transport-manager + ssh provider、实例注册表、IPC
+  cli/                      CLI 薄壳
+  dsh-client-connection/    被修改的 dsh 源码 #1（base 路径补丁）
+  dsh-client-web/           被修改的 dsh 源码 #2（boot.tsx N-ctx seam）
+  dsh-chamber-client-ui-sidebar/    自研侧边栏插件：多来源会话导航 + chamberBridge
+                            （拷贝 ui-sidebar 结构改造，替换官方 ui-sidebar
+                            注册——05 §6）
+  dsh-chamber-client-ui-layout/     自研 ui-layout 壳 fork：仅替换 layout store——
+                            经侧边栏共享 view-prefs store 持久化 sidebarWidth
+                            （替换官方 ui-layout 注册——设计 06）
   dsh-chamber-client-ui-settings-connections/
-                            self-built connections settings plugin (05 §5)
+                            自研连接设置插件（05 §5）
   dsh-chamber-client-ui-settings-bridge/
-                            self-built settings shell plugin: shadows the official
-                            SettingsRoot registration, server dropdown over the
-                            selected instance's official settings sections (05 §5)
-  dsh-host-client-graph/    self-built host-side package: Remote clientGraph/graph
-                            exposing the host's client-plugin boot graph
-                            read-only (design 09; seeded into the local web
-                            profile by the control plane — not a client plugin)
+                            自研设置壳插件：shadow 官方 SettingsRoot 注册，
+                            所选实例官方设置分区上的服务器下拉（05 §5）
+  dsh-host-client-graph/    自研宿主侧 host 包：Remote clientGraph/graph
+                            只读暴露宿主客户端插件 boot 图（设计 09，非
+                            客户端插件；控制面 seed 进本地 web profile）
 docs/
-  design/                   design documents (01 is the entry point; 05 is the
-                            surface/architecture contract (v1); the v2-era
-                            thin-shell docs, old 05/10, removed with v4)
-  todo/                     unimplemented feature ideas (one file per item,
-                            see todo/README.md)
-  progress/                 STATUS.md — the only progress overview
+  design/                   设计文档（01 为入口；05 为表面/架构契约（v1）；
+                             v2 时代薄壳文档（旧 05/10）随 v4 收口移除）
+  todo/                     未实现功能想法（每条一个文件，见 todo/README.md）
+  progress/                 STATUS.md——唯一进度总览
 vendor/
-  harness-packages/         @deepseek-ai/* symlink tree into the dsh source
-                            (bootstrapped by preinstall, pinned in harness.commit)
-  harness-checkout/         managed dsh snapshot (download fallback, gitignored)
+  harness-packages/         @deepseek-ai/* 符号链接树，指向 dsh 源码
+                            （preinstall 引导，固定于 harness.commit）
+  harness-checkout/         受管 dsh 快照（下载兜底，gitignored）
 ```
 
-## Documentation
+## 文档
 
-| Document | Purpose |
+| 文档 | 用途 |
 |---|---|
-| [docs/design/01-overview.md](docs/design/01-overview.md) | Design entry point: consolidation principles, scope, removal map |
-| [docs/design/02-host-management-deployment.md](docs/design/02-host-management-deployment.md) | Host management & deployment (web profile) |
-| [docs/design/03-connections-proxy.md](docs/design/03-connections-proxy.md) | Connections & per-instance proxy |
-| [docs/design/04-control-plane-api-data.md](docs/design/04-control-plane-api-data.md) | Management API & data model |
-| [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) | Surface & architecture contract (v1) |
-| [docs/design/06-sidebar-enhancements.md](docs/design/06-sidebar-enhancements.md) | Sidebar enhancements (search / drag-sort / view persistence / runtime facts) |
-| [docs/design/07-models-params.md](docs/design/07-models-params.md) | Model extra params & default reasoning level (deferred, awaiting upstream) |
-| [docs/design/09-client-plugin-runtime-loading.md](docs/design/09-client-plugin-runtime-loading.md) | dsh client-plugin runtime loading (implemented, 2026-08 plan A; moved in from docs/todo/) |
-| [docs/todo/08-todo-git-worktree-plugin.md](docs/todo/08-todo-git-worktree-plugin.md) | Git worktree plugin (design finalized, implementation not scheduled; moved to docs/todo/) |
-| [docs/progress/STATUS.md](docs/progress/STATUS.md) | Completion status, deviations & validation record |
-| [docs/README.zh-CN.md](docs/README.zh-CN.md) | Chinese README |
+| [docs/design/01-overview.md](docs/design/01-overview.md) | 设计入口：收拢原则、范围、移除映射 |
+| [docs/design/02-host-management-deployment.md](docs/design/02-host-management-deployment.md) | 宿主托管与部署（web profile） |
+| [docs/design/03-connections-proxy.md](docs/design/03-connections-proxy.md) | 连接与每实例反代 |
+| [docs/design/04-control-plane-api-data.md](docs/design/04-control-plane-api-data.md) | 管理 API 与数据模型 |
+| [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) | 表面与架构契约（v1） |
+| [docs/design/06-sidebar-enhancements.md](docs/design/06-sidebar-enhancements.md) | 侧边栏增强（搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道） |
+| [docs/design/07-models-params.md](docs/design/07-models-params.md) | 模型额外参数与默认推理等级（推迟项，等待上游） |
+| [docs/design/09-client-plugin-runtime-loading.md](docs/design/09-client-plugin-runtime-loading.md) | dsh 客户端插件运行时加载（已实现，2026-08 方案 A；自 docs/todo/ 移入） |
+| [docs/todo/08-todo-git-worktree-plugin.md](docs/todo/08-todo-git-worktree-plugin.md) | Git worktree 插件（设计定稿，实现未排期；已移至 docs/todo/） |
+| [docs/progress/STATUS.md](docs/progress/STATUS.md) | 完成状态、剩余偏差与验证记录 |
+| [README.en-US.md](docs/README.en-US.md) | English README |
 
-## Related projects
+## 相关项目
 
-- [deepseek-harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) — the managed host
-- [OpenChamber](https://github.com/openchamber/openchamber) — the multi-instance session model that inspired dsh-chamber's N-ctx design and its name; thanks for the inspiration!
+- [deepseek-harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) — 被管理的宿主
+- [OpenChamber](https://github.com/openchamber/openchamber) — dsh-chamber 的 N-ctx 多实例设计与命名灵感来源，感谢启发！
 
-## Contributing
+## 贡献
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and contribution guidelines. Development rules live in [AGENTS.md](./AGENTS.md).
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。开发约束见 [AGENTS.md](AGENTS.md)。
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT — 见 [LICENSE](LICENSE)。

@@ -16,6 +16,15 @@ chamber 自研**设置壳**插件（2026-08 设计讨论）：以低于官方 Se
   settings-connections 分区。
 - 配置事实留在目标宿主：无 chamber 侧持久化、无新控制面 API。
 
+## keyed 插槽与全量隔离（2026-08）
+
+- bridge 出口支持 root+keyed（`settings.plugin.item`，entryKey 分发 +
+  fallback，镜像官方 scoped-slots 契约）。
+- 所有桥接出口（本地专属 `settings.action` 与选中实例 `settings.section`
+  内容出口）在 child-ctx → host 接缝的 `<BridgeEntryBoundary containAll>` 内
+  全量隔离——子 ctx 内容永不整体 abdicate 到官方 SettingsRoot（壳自持装配
+  错误仍 fail loud）。
+
 ## i18n
 
 持有 `dsh-chamber.settings.bridge` 字典命名空间（zh 键源；

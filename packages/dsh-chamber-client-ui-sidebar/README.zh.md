@@ -14,8 +14,10 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   徽标，当前来源高亮）→ workspace 组 → session 行。远程来源按来源 id 派生
   稳定 accent 色（hue 哈希）；本地来源用默认色。rail 渲染来源色点。
 - 不属任何 workspace 的游离会话落在来源末位合成的一个**未分组**桶（仅
-  session 行，无 workspace 操作）；blank 与 subagent 来源的子会话不进入
-  导航列表（`shared/derive.ts`）。
+  session 行，无 workspace 操作）；**blank 行在它们仍是该来源当前会话期间
+  （以 "New Session" 呈现）以及失去 current 后 450ms ghost 宽限期内会进入
+  列表**（06 §2.2 / 05 §2.1）；subagent 来源的子会话不进入导航列表
+  （`shared/derive.ts`）。
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
   空态提示。

@@ -24,6 +24,7 @@ dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web
 - `packages/dsh-client-connection` — 官方连接客户端的仓库内拷贝 + base 路径补丁（遮蔽 vendor workspace 条目）。
 - `packages/dsh-client-web` — 官方 web shell 的仓库内拷贝 + boot.tsx N-ctx 模块表共享 seam（含每实例 `extraRows` boot 行合并，design 09 模块 D）+ runtimeCtx getter（遮蔽 vendor workspace 条目）。
 - `packages/dsh-chamber-client-ui-sidebar` — 自研侧边栏插件（拷贝 ui-sidebar 结构改造）：多来源会话导航 + chamberBridge（`shared/aggregate-store.ts` + 每实例 unary 客户端 `shared/instance-api.ts`），替换官方 ui-sidebar 注册（见 05 §6）。
+- `packages/dsh-chamber-client-ui-layout` — 自研 ui-layout 壳 fork（设计 06）：仅替换 layout store——把 `sidebarWidth` 持久化进侧边栏共享 view-prefs store；替换官方 ui-layout 注册。
 - `packages/dsh-chamber-client-ui-settings-connections` — 自研连接设置插件：本地实例卡 + 远程主机 CRUD/连接/systemd/日志（settings.section、dsh 设计 token，见 05 §5）。
 - `packages/dsh-chamber-client-ui-settings-bridge` — 自研设置壳插件：以 priority -1 shadow 官方 SettingsRoot 注册（sidebar.settings）——服务器下拉 + 所选实例官方设置分区（子 cordis ctx 桥接）+ 固定的 chamber 全局连接导航项（05 §5 同源设计讨论 2026-08）。
 - `packages/desktop` — Electron 壳：单 frame（`loadURL` 控制面 origin）、transport-manager（通用传输运行时；`transport-provider.ts` 接口 + `ssh-provider.ts` 的 ssh provider——隧道 + systemd exec，v1 kind `ssh`）、实例注册表（`<userData>/ssh-instances.json`）、IPC。
@@ -37,7 +38,7 @@ dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web
 - 不得修改外部仓库。`vendor/harness-packages` 是指向 dsh 源码 checkout 的只读符号链接树——由 root `preinstall`（`scripts/ensure-harness-vendor.mjs`）按固定提交（`harness.commit`，可用 `DSH_CHAMBER_HARNESS_ROOT` / `DSH_CHAMBER_HARNESS_COMMIT` 覆盖；兄弟目录 `../deepseek-harness` 存在时优先使用，零网络）自动引导；`ref-dsh` 与 `ref-upstream` 仅为本地参考符号链接，**永不提交**。
 - 除非用户明确要求，不得运行 git 或 GitHub 命令。
 - 包管理器为 **pnpm**（`pnpm install`；脚本定义在 `package.json`——用 `pnpm run` 执行）。未经明确要求不得新增运行时依赖（当前集合：`ws`、`@simplewebauthn/server`、React/Vite、Electron、以及 dsh client workspace 包）。TypeScript 工具链（`typescript`、`@types/*`）为许可的 devDependency 集合。
-- 唯一可修改的 dsh 源码是我们的 chamber 包：仓库内拷贝 `packages/dsh-client-connection`（base 路径补丁）与 `packages/dsh-client-web`（boot.tsx N-ctx 模块表共享 seam，含 `extraRows`，+ runtimeCtx getter），自研的 `packages/dsh-chamber-client-ui-sidebar`（替换官方 ui-sidebar 注册，见 05 §6）、`packages/dsh-chamber-client-ui-settings-connections` 与 `packages/dsh-chamber-client-ui-settings-bridge`（见 05 §5），以及 `packages/dsh-host-client-graph`（design 09 模块 A——chamber 自有宿主网关，无 vendor 面）；`vendor/harness-packages` 下的一切均为未触碰的上游源码。
+- 唯一可修改的 dsh 源码是我们的 chamber 包：仓库内拷贝 `packages/dsh-client-connection`（base 路径补丁）与 `packages/dsh-client-web`（boot.tsx N-ctx 模块表共享 seam，含 `extraRows`，+ runtimeCtx getter），自研的 `packages/dsh-chamber-client-ui-sidebar`（替换官方 ui-sidebar 注册，见 05 §6）、`packages/dsh-chamber-client-ui-settings-connections` 与 `packages/dsh-chamber-client-ui-settings-bridge`（见 05 §5）、`packages/dsh-chamber-client-ui-layout`（替换官方 ui-layout 注册，见设计 06），以及 `packages/dsh-host-client-graph`（design 09 模块 A——chamber 自有宿主网关，无 vendor 面）；`vendor/harness-packages` 下的一切均为未触碰的上游源码。
 - 隧道 URL 与**私密 SSH 材料**（凭据、私钥、代理配置）永不进 renderer/日志/持久层——只进**非秘密元数据投影**（host/user/端口、localPort/phase）；控制面监听仅 loopback。**许可例外**（05 §8，2026-08；**明文文件兜底**——用户决策）：可选的主机 SSH 密码在连接表单中瞬时收集、经 IPC 转发；主进程内存持有并镜像到 `<userData>/ssh-passwords.json`（0600、原子写、启动时加载，密码主机重启后自动连接可用）——永不进注册表、永不记日志、永不回传 renderer；经临时 0600 askpass 助手注入 ssh（传输停止即删）；实例删除或显式清除时丢弃条目。无可靠 askpass 支持的平台（v1 的 Windows）在 IPC 门禁处拒绝密码认证。
 - 改动保持最小，保留无关的未提交改动。
 - 安全与正确性要在核心/运行时逻辑中落实，而非仅靠 UI 隐藏或提示。
@@ -66,8 +67,8 @@ dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web
 ## 验证
 
 - 以 `package.json` 脚本为命令事实源（用 `pnpm run` 运行）。
-- 单测（与 CI 同一套）：控制面 `node packages/control-plane/test/protocol.ts`、`storage.ts`、`m1-dsh-client.ts`、`host-logs.ts`、`manager-api.ts`、`instance-proxy.ts`、`host-graph-seed.ts`；桌面 `pnpm run test:desktop`（transport-manager / ssh-provider / ssh-config / renderer-trust / plugin-sync）；renderer shell `pnpm run test:renderer-shell`；客户端插件 `pnpm run test:sidebar` + `pnpm run test:settings-bridge` + `pnpm run test:connections`（settings-connections 的 `plugin-diff`）。
-- 客户端插件类型检查：`pnpm run typecheck:sidebar`、`typecheck:connections`、`typecheck:settings-bridge`（根 `typecheck` 程序**不包含**自研插件——ambient `declare module` 条目将其遮蔽）；宿主包 `pnpm run typecheck:host-graph`（chamber host-graph 包同样在根 `typecheck` 程序之外——其自身 tsconfig 映射 `@deepseek-ai/*` vendor 源码）。
+- 单测（与 CI 同一套）：控制面 `node packages/control-plane/test/protocol.ts`、`storage.ts`、`m1-dsh-client.ts`、`host-logs.ts`、`manager-api.ts`、`instance-proxy.ts`、`static-serving.ts`、`host-graph-seed.ts`；桌面 `pnpm run test:desktop`（transport-manager / ssh-provider / ssh-config / renderer-trust / plugin-sync）；renderer shell `pnpm run test:renderer-shell`；客户端插件 `pnpm run test:sidebar` + `pnpm run test:settings-bridge` + `pnpm run test:connections`（settings-connections 的 `plugin-diff`）。
+- 客户端插件类型检查：`pnpm run typecheck:sidebar`、`typecheck:layout`、`typecheck:connections`、`typecheck:settings-bridge`（根 `typecheck` 程序**不包含**自研插件——ambient `declare module` 条目将其遮蔽）；宿主包 `pnpm run typecheck:host-graph`（chamber host-graph 包同样在根 `typecheck` 程序之外——其自身 tsconfig 映射 `@deepseek-ai/*` vendor 源码）。
 - 集成：`pnpm run smoke`（dsh 未安装时自动 SKIP——正常）。
 - 前端：`pnpm run build:renderer` 必须成功（vite 构建 dsh workspace 源码）。
 - 打包：`pnpm run dist:desktop:mac`。

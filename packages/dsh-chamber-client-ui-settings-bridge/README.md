@@ -20,6 +20,16 @@ the ledger and its `settings.*` children declarations remain valid.
 - Config facts stay on the target host: no chamber-side persistence, no new
   control-plane API.
 
+## Keyed slots & containment (2026-08)
+
+- The bridge outlet supports root+keyed slots (`settings.plugin.item`,
+  entryKey dispatch + fallback, mirroring the official scoped-slots contract).
+- Every bridged outlet (the local-only `settings.action` and the
+  selected-instance `settings.section` content outlet) is contained in the
+  child-ctx → host seam by `<BridgeEntryBoundary containAll>` — child content
+  never abdicates wholesale to the official SettingsRoot (bridge-owned
+  assembly errors still fail loud).
+
 ## i18n
 
 Owns the `dsh-chamber.settings.bridge` dictionary namespace (zh key source;

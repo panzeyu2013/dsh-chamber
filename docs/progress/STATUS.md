@@ -22,7 +22,10 @@
   「注入」按钮），远程注入不再是无知修改；远端 seed 已接入连接就绪时的自动注入
   （设计 09 遗留 1 接线，幂等 hash-skip，主进程日志 + UI 实时探测，手动按钮为失败
   重试路径）；注入结果同时写入实例环形缓冲日志（transport-manager 新增公开
-  `appendLog`，连接设置页的远端日志面板可见）。剩余：本地 `dsh plugin`/`pnpm pack`
+  `appendLog`，连接设置页的远端日志面板可见）。installed 语义本地/远端一致：两文件
+  定义（package.json + dist/index.js，SEED_FILES）；ENOENT 在原始 stderr 上分类
+  （`.ssh*` 命名的 remoteDshHome 不再因整行脱敏而把"文件不存在"误判为 ssh 故障）。
+  剩余：本地 `dsh plugin`/`pnpm pack`
   依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
 - **客户端插件运行时加载（设计 09，已实现）**：设计见
   `docs/design/09-client-plugin-runtime-loading.md`。遗留：图通道失败仅 console.error
@@ -38,6 +41,16 @@
 
 ## 范围决策与剩余偏差（不做 / 推迟 / 移出）
 
+- **chamber 合成包懒加载（LCP/perf pass P4，2026-08）**：非首屏 ui-* 家族（commands、
+  input-trigger、jobs、goal、skill、tool、trajectory、workflow-run、deliverables、subagent、
+  message-feedback、plan、user-questions、agent-preset、permission-presets）在
+  chamber-entry.ts 中改为动态 `import()` 并按 fire-and-forget 注册：`apply` 同步注册首屏
+  家族后立即返回（entry 根 fiber ACTIVE，boot 的 loader.await + assertEntriesActive 通过），
+  迟注册的子 fiber 不阻塞首屏（cordis inject-waiting + reflect 通知驱动已渲染 UI 渐进出现
+  迟到的槽位/服务）。契约边界：apply 返回 thenable 会被 `_execute` await（fiber.ts
+  `_execute`），因此 apply 必须保持同步返回；sweep 只检查 loader entry 根 fiber，不含子
+  fiber。首块 chamber bundle 934KB → 605KB（gzip 175.6KB）；settings-bridge 的
+  agent-preset settings 段改为装配子 ctx 时动态导入。设计/验证细节见 chamber-entry.ts 头注。
 - **移出项**（P3 硬纪律，永不回流）：认证/审计（密码/Passkey/会话 cookie/client token/
   限流/审计 SQLite）、控制面薄壳聊天/会话列表/审批弹窗、控制面会话运行时/统一索引/
   交互管线、连接注入适配器/broker/绑定、walkthrough、notifications、cron、文件夹/笔记、
@@ -45,6 +58,36 @@
   见 01 §4 / 设计 08）。
 - **默认排序 manual（06 §3.1）**：每来源会话排序默认 `manual`（保持 wire 序），与官方
   默认 `updated` 不同——有意取舍；`orderBy[sourceId]` 持久化于 `dsh-chamber.sidebar.v1`。
+- **侧边栏交互对齐 OpenChamber（2026-08）**：会话行单击**立即打开**（零延迟），350ms 内
+  同会话第二次点击进入内联改名——`shared/pending-click.ts` 全局 pending 单例（跨 N-ctx
+  shell 共享，替代原"延迟单击"模型；05 §2.2 / 06 §2.2 已同步）。**2026-08 review
+  加固**：任何 stopPropagation 控件（含来源头排序/加工作区/搜索）自行 clearPendingClick；
+  空白"新建会话"行双击被 blank 门控（不进内联改名）；空白行离开 current 后 450ms ghost
+  宽限（`derive.ts armBlankGhost`/`sessionVisible` + `.sessionGhost` 非交互占位）——双击
+  窗口内列表不位移，杜绝二次点击误开下方另一会话。跨 shell 滚动位置锚点
+  同步（`renderer/src/sidebar-scroll-sync.ts`，App selectView 接线）。**第三波 review
+   加固（2026-08）**：ghost 行另带 `data-chamber-ghost`，滚动锚点捕获跳过之（仅 arming
+   shell 渲染该行，入站 shell 没有——锚到 ghost 会空转到 8s 截止）；恢复在入站 shell 仍
+   `content-visibility:hidden` 时按 `checkVisibility` 门控重试（首个尝试在过渡 apply
+   回调内、视图翻可见之前，退化 rect 会让一次性落位错位），模块级 generation 取消被取代的
+   重试链（快速 A→B→A→B 不再并发多条 8s 链）；`derive.ts` 注册共享单例守卫
+   （`blankGhostUntil` 跨 bundle 共享态，防打包漂移静默分裂）；rename 表单 stopPropagation
+   同步 `clearPendingClick`（闭合 pending-click 不变式）；工作区头计数排除 ghost（宽限内
+   不再 +1）；ghost 过期条目读时惰性清扫 + 定时器触发后裁剪。侧栏宽度全局化：
+  新 chamber 自持包 `@dsh-chamber/dsh-client-ui-layout`（ui-layout fork，仅替换 store 层：
+  从 view-prefs 播种/回写），`sidebarWidth` 持久化于 `dsh-chamber.sidebar.v1`（[264,420]
+  钳位），官方 ui-layout bundle 保持 covered（one-declarer 规则）。
+- **设置桥 keyed 插槽（2026-08）**：bridge-outlet 现支持 root+keyed（`settings.plugin.item`，
+  镜像官方 scoped-slots 契约，entryKey 分发 + fallback），修复 Plugins 页黑屏；所有桥接出口
+  （本地专属 `settings.action` + 选中实例 `settings.section` 内容出口）在 child-ctx → host
+  接缝 `<BridgeEntryBoundary containAll>` 内全量隔离（含 BridgeAssemblyError）——子 ctx 内容
+  永不整体 abdicate 到官方 SettingsRoot，壳自持装配错误仍 fail loud。**会话装配自动重试
+  （W2 补）**：选中实例 mid-boot/restart 的 not-ready 突发会使子 ctx 装配瞬时失败，壳现以有界
+  退避（1s/2s/4s/8s，最多 5 次尝试、~15s 等待封顶）自动重试同一装配路径（`mount-retry.ts`），
+  面板保持打开也能自愈，不再只能靠重新点击/连接切换/重开恢复；成功/卸载/关面板/切换选中即清
+  账并清定时器。**部署注意**：PRE-fix 状态下已 abdicate 到官方 SettingsRoot 的设置壳需对本地
+  实例/应用**重启一次**方可恢复（vendor one-shot retirement——槽系统不再重试已退役的壳注册；
+  全新启动不受影响）。
 - **推迟**：flat 单列表模式（与「仅按来源分类」呈现原则张力）。
 - **06 §4.3 修订（方案 A）**：pending 状态会话行尾渲染可辨识图标徽标（question/plan-review/
   approval），运行中仍为蓝色 ongoing 环。

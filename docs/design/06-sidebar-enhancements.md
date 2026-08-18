@@ -4,7 +4,7 @@
 > 已由官方 conversation 回合尾部分支动作（ui-conversation turn-tail
 > forkAt）覆盖（会话内），且 2026-08 起侧边栏会话行菜单也提供行内 fork
 > （wire `sessions.fork`，对齐官方 ui-workspace；两者并存，turn-tail 保留）；
-> 第 4 项（flat）与第 8 项（当前空白会话"新会话"行）维持推迟。
+> 第 4 项（flat）维持推迟。
 > 本文档 + 05 为实现契约。
 
 ## 0. 范围与来源
@@ -18,7 +18,6 @@
 | 7 | 跨来源当前会话高亮 | 已落地 |
 | 2 | fork 会话 | **已实现（侧边栏行内，2026-08）**：会话行 kebab 菜单分叉会话（`sessions.fork` + increaseTitle → 打开子会话，对齐官方 ui-workspace；fork 成功后子会话标题递增 rename（对齐官方 increasedForkTitle，rename 失败非致命——子会话仍创建并打开）；官方 turn-tail `forkAt` 仍常驻可用，两者并存） |
 | 4 | flat 单列表模式 | 推迟：与 05 §2.1"仅按来源分类"呈现原则张力 |
-| 8 | 当前空白会话"新会话"行 | 推迟：05 §2.1 已声明空白会话不入列表 |
 
 约束沿 05 §2.2/§9：不发明协议（只用 wire 既有方法）、不做跨来源移动
 （拖拽按来源在代码层阻断）、运行时事实只经通道投影（控制面/App 不持有
@@ -128,9 +127,30 @@
   官方「updated 排序时拖拽不落 wire」但简化官方 account+promotion——chamber
   不实现 promotion）；未分组桶 updated 模式按 recency 排序（无视 stored 序）。
 - **双击重命名（2026-08）**：workspace 头直接 dblclick 进入行内重命名
-  （头本身不可点击，无延迟）；会话行单击延迟 ~250ms 打开（实现放宽至
-  ~350ms），窗口内二击取消打开、进入行内重命名；kebab 菜单 rename 保留
-  为 a11y 兜底；外部点击取消 pending 定时器。
+  （头本身不可点击，无延迟）；**会话行单击立即打开（零延迟，2026-08
+  修订，对齐 OpenChamber 的 immediate-open 模型）**，双击重命名由
+  同会话 350ms 内的二次点击判定（全局 pending 槽，按 sessionId 键控，
+  跨 N-ctx shell 共享——跨来源双击时可见 shell 在两次点击之间切换，
+  逐树 ref 会看不到第一次点击）；误判的双击只造成幂等重开、绝不误入
+  重命名；kebab 菜单 rename 保留为 a11y 兜底；外部点击取消 pending。
+  **2026-08 review 修订**：
+  - **任何 stopPropagation 控件必须自己 clearPendingClick**（折叠/新建/
+    kebab/归档 + 来源头排序/加工作区/搜索）——React 的 stopPropagation
+    同时停掉原生事件，document 级监听看不到这些点击，残留的 pending 会
+    让窗口内下一次同会话点击误入重命名。
+  - **空白"新建会话"行不参与双击重命名**（P2-10 同款 `blank` 门控）——
+    占位行无内容可改名，双击不得进入内联重命名（否则把暂存会话的改名
+    写到 wire 上）。
+  - **blank 行 ghost 槽（双击误中修复）**：双击空白行下方的真实会话时，
+    click1 打开会话 → 空白行失去 current 立即消失 → 其下所有行在 350ms
+    窗口内上移 ~30px → click2 落在目标行**下方**的那一行上，误开别的会话。
+    修复：过渡点击（打开真实会话的 click）同步 arm 该空白行的 ghost 槽
+    （`derive.ts armBlankGhost`，`BLANK_GHOST_GRACE_MS = 450` > 350ms），
+    App 重派生时 `sessionVisible` 让该行在宽限期内留在投影里；侧边栏把
+    它渲染为**非交互占位**（`visibility:hidden`，保留 26px 布局位），并在
+    同一截止点（本地时钟 + 一次性定时器）停止渲染——即便 App 下个轮询
+    周期才重派生，隐形空位也不会残留。宽限期后行才消失/列表才可位移，
+    已安全越过双击窗口。
 
 ### 2.3 代码落点
 
@@ -151,8 +171,16 @@
   { v: 1,
     folded: Record<`${sourceId}/${workspaceId}`, boolean>,
     ungroupedOrder: Record<sourceId, string[]>,
-    orderBy: Record<sourceId, 'manual' | 'updated'> }
+    orderBy: Record<sourceId, 'manual' | 'updated'>,
+    sidebarWidth: number }
   ```
+- **sidebarWidth（2026-08，ui-layout fork）**：`packages/dsh-chamber-client-ui-layout`
+  （官方 ui-layout 壳插件的 chamber fork，仅替换 layout store）把侧栏宽度经本
+  store 播种/回写——`init` 从 `getViewPrefs().sidebarWidth` 播种（钳位 vendor
+  `[SIDEBAR_MIN, SIDEBAR_MAX]` 拖拽范围 [264,420]，从未拖过时回退
+  `SIDEBAR_DEFAULT`），每次拖拽 `setSidebar` 经 `updateViewPrefs` 写回（同键
+  `dsh-chamber.sidebar.v1`），所有 live boot 的 store 订阅并即时采纳；替换官方
+  ui-layout 注册（见 05 §6）。
 - **orderBy（2026-08 新增）**：每来源会话排序偏好 `'manual' | 'updated'`，
   默认 `manual`；v 保持 1 兼容旧数据（旧数据无此键即视为全 manual，不重
   播种），sanitize 丢弃非法值。**默认值决策（2026-08）**：默认 `manual`
@@ -472,7 +500,11 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   + `aria-selected`、搜索结果行 `button` + `role="treeitem"`；来源头
   （非当前来源）`role="button"` 可键盘激活（Enter/Space 切换视图）。
 - **blank 行（2026-08）**：当前空白"新会话"行隐藏操作簇（kebab/分叉/归档，
-  对齐官方 `!row.blank &&` 门控）——空白行无重命名/分叉/归档语义。
+  对齐官方 `!row.blank &&` 门控）——空白行无重命名/分叉/归档语义。**2026-08
+  review 补充**：双击同样被 `blank` 门控（不进入内联重命名，见 §2.2）；离开
+  current 后的宽限期（450ms）内该行以 ghost 占位渲染（`visibility:hidden`
+  非交互、保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`），双击
+  窗口内列表绝不位移。
 - **会话状态指示（2026-08 修订）**：固定 10px 行尾状态槽——常态空、
   运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = 持久蓝圆点；
   **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角，见 §4.3），

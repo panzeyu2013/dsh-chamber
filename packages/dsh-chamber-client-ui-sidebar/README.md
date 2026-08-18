@@ -16,7 +16,9 @@ place of the official ui-sidebar (which stays untouched in
   highlighted); remote sources carry a stable accent derived from the source
   id (hue hash), local keeps the default dot; the rail renders the source color dots.
 - Sessions outside every workspace trail in one synthetic ungrouped bucket at
-  the source's end (sessions only, no workspace actions); blank and
+  the source's end (sessions only, no workspace actions); blank rows DO surface
+  while they are the source's current session (rendered as "New Session") and
+  during the 450 ms ghost grace after they lose it (06 §2.2 / 05 §2.1);
   subagent-origin sessions never surface in the navigation list
   (`shared/derive.ts`).
 - A connected source whose snapshot fetch failed shows the error text instead

@@ -25,6 +25,9 @@ packages/
   dsh-chamber-client-ui-sidebar/  Self-built sidebar plugin (multi-source session
                     navigation + chamberBridge; replaces the official
                     ui-sidebar registration)
+  dsh-chamber-client-ui-layout/   Self-built ui-layout shell fork (layout-store
+                    replacement persisting sidebarWidth via the sidebar's shared
+                    view-prefs store; replaces the official ui-layout registration)
   dsh-chamber-client-ui-settings-connections/
                     Self-built connections settings plugin (local instance card
                     + remote host CRUD/connect/systemd/logs, settings.section)
