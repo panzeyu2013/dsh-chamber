@@ -33,7 +33,7 @@ import {
   PLUGIN_SPEC_PATTERN,
   PLUGIN_NAME_PATTERN,
 } from './plugin-sync.ts'
-import type { ExecFn, ExecResult, StatusFn, RemoteSpec } from './plugin-sync.ts'
+import type { ExecFn, ExecResult, StatusFn, RemoteSpec, TransportRunPayload } from './plugin-sync.ts'
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'dsh-plugin-sync-'))
@@ -206,8 +206,9 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
   const home = join(base, 'home')
   const profileDir = writeLocalProfile(home, {}, [])
   const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
-  mkdirSync(moduleADir, { recursive: true })
+  mkdirSync(join(moduleADir, 'dist'), { recursive: true })
   writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-host-client-graph"}')
+  writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
@@ -222,6 +223,22 @@ test('localPluginList: chamber host-graph state — absent = not injected (hones
   assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false } })
 })
 
+test('localPluginList: chamber host-graph state — package.json alone is a half-injected module A (installed:false)', () => {
+  // The LOCAL `installed` uses the same TWO-file definition as the remote
+  // probe and the seed writer (SEED_FILES / HOST_GRAPH_SEED_FILES): a
+  // package.json without dist/index.js must report 未注入, never "done".
+  const base = tempDir()
+  const home = join(base, 'home')
+  const profileDir = writeLocalProfile(home, {}, [])
+  const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
+  mkdirSync(moduleADir, { recursive: true })
+  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-host-client-graph"}')
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
+
+  const manifest = localPluginList(home)
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true } })
+})
+
 // ============================================================================
 // remotePluginList
 // ============================================================================
@@ -232,6 +249,9 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) {
         return ok(JSON.stringify({ dependencies: { foo: '^1.0.0' }, dsh: { profile: { bundles: ['foo'] } } }))
+      }
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+        return ok('export const graph = 1\n')
       }
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
         return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
@@ -281,6 +301,7 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
       // initProfile template: comments + empty list → the seed would rewrite it.
       if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
@@ -310,6 +331,79 @@ test('remotePluginList: chamber probe ssh failure is loud, never a silent "not i
   if (result.ok) {
     assert.equal(result.manifest.chamber.ok, false)
     assert.ok(result.manifest.chamber.ok === false && /host-graph probe failed/.test(result.manifest.chamber.error))
+  }
+})
+
+test('remotePluginList: chamber probe — package.json present but dist/index.js missing = NOT installed (two-file definition)', async () => {
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      // dist/index.js genuinely missing: a package.json alone is a
+      // half-installed module A (the boot row could not resolve).
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+        return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      }
+      if (path.endsWith('/cordis.patch.yml')) {
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true } })
+  }
+})
+
+test('remotePluginList: chamber probe ssh failure on dist/index.js is loud, never a silent "not injected"', async () => {
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+        return err('the ssh exec could not reach the host (exit 255)')
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.equal(result.manifest.chamber.ok, false)
+    assert.ok(result.manifest.chamber.ok === false && /host-graph probe failed/.test(result.manifest.chamber.error))
+  }
+})
+
+test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redaction still classifies as absent (never a loud probe error)', async () => {
+  // The ssh provider replaces a `.ssh*`-home ENOENT line with the redacted
+  // summary and re-attaches the marker — the error text a fixed provider
+  // yields for e.g. remoteDshHome=/root/.ssh-custom. The orchestration must
+  // still read "file absent" (installed:false), not a loud probe failure, so
+  // the UI shows 未注入 instead of an error.
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) {
+        return err('run command failed (exit 1): cat: [ssh material redacted]: No such file or directory')
+      }
+      if (path.includes('@dsh-chamber/dsh-host-client-graph')) {
+        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
+      }
+      if (path.endsWith('/cordis.patch.yml')) {
+        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: '/root/.ssh-custom' })
+  assert.ok(result.ok, 'a redacted ENOENT is a probe miss, not a loud probe failure')
+  if (result.ok) {
+    assert.equal(result.manifest.profileExists, false)
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false } })
   }
 })
 
@@ -659,6 +753,7 @@ function makeSeedExec(overrides: {
   seedFiles?: Map<string, Buffer>
   patchContent?: string | null
   failWrite?: (path: string) => string | null
+  failSeedCat?: (path: string) => string | null
 } = {}) {
   const calls: string[] = []
   const written: Array<{ path: string; bytes: Buffer }> = []
@@ -667,6 +762,10 @@ function makeSeedExec(overrides: {
       const path = payload.argv?.[0]
       calls.push(`cat:${path}`)
       if (path !== undefined && path.startsWith('~/.dsh/profiles/node_modules/@dsh-chamber/')) {
+        if (overrides.failSeedCat !== undefined) {
+          const message = overrides.failSeedCat(path)
+          if (message !== null) return err(message)
+        }
         const bytes = overrides.seedFiles?.get(path)
         if (bytes !== undefined) return okBytes(bytes)
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
@@ -756,6 +855,7 @@ test('seedRemoteHostGraph: an uninitialized remote profile (patch ENOENT) fails 
   const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, sourceDir)
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /not initialized/)
+  assert.equal(remote.written.length, 0, 'the patch probe runs FIRST — no package files are left behind by the fail-loud path')
 })
 
 test('seedRemoteHostGraph: a seed write failure fails loud and never reaches the patch', async () => {
@@ -769,6 +869,48 @@ test('seedRemoteHostGraph: a seed write failure fails loud and never reaches the
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /write-file failed for dist\/index\.js/)
   assert.ok(!remote.written.some(entry => entry.path === '~/.dsh/profiles/web/cordis.patch.yml'), 'no patch without the package files')
+})
+
+test('seedRemoteHostGraph: a NON-ENOENT seed-file cat failure fails loud WITHOUT attempting the write', async () => {
+  const root = tempDir()
+  const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
+  const remote = makeSeedExec({
+    patchContent: TEMPLATE,
+    // The FIRST seed-file probe (package.json) dies with an ssh failure —
+    // not an ENOENT — so the seed must fail loud before any write, exactly
+    // like the patch probe's discipline (never mask a dead ssh behind a
+    // misleading "write-file failed").
+    failSeedCat: path => (path.endsWith('/package.json') ? 'the ssh exec could not reach the host (exit 255)' : null),
+  })
+  const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, sourceDir)
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /host-graph seed read package\.json failed/)
+  assert.equal(remote.written.length, 0, 'no write is attempted after a non-ENOENT read-back failure')
+  assert.ok(!remote.calls.some(call => call.startsWith('write:')), 'the failing cat is never papered over by a write')
+})
+
+test('seedRemoteHostGraph: every probe cat is marked quiet (expected ENOENT on a first seed)', async () => {
+  const root = tempDir()
+  const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
+  const payloads: TransportRunPayload[] = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (payload !== undefined) payloads.push(payload)
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path === '~/.dsh/profiles/web/cordis.patch.yml') return ok(TEMPLATE)
+      return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+    }
+    if (action === 'run' && payload?.op === 'write-file') return ok()
+    return ok()
+  }
+  const result = await seedRemoteHostGraph(exec, SEED_SPEC, sourceDir)
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  const probes = payloads.filter(p => p.op === 'exec' && p.command === 'cat')
+  assert.equal(probes.length, 3, 'two seed-file probes + the patch probe')
+  assert.ok(probes.every(p => p.quiet === true), 'every probe cat carries quiet: true')
+  // A write-file is never quiet: a failed write is a real error, always loud.
+  assert.ok(payloads.filter(p => p.op === 'write-file').every(p => p.quiet !== true), 'write-file payloads are never quiet')
 })
 
 // ============================================================================

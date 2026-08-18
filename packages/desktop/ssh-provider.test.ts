@@ -478,6 +478,107 @@ test('run: a non-zero exit carries the REDACTED remote stderr text (ENOENT → p
   }
 })
 
+test('run: a non-quiet failure is logged at ERROR level (loud by default)', async () => {
+  const remote = makeRemoteHost()
+  const logs: Array<{ level: string; message: string }> = []
+  const deps = runDeps(remote.spawnFn)
+  deps.log = (level, message) => { logs.push({ level, message }) }
+  const result = await sshProvider.exec!(spec('wf7'), 'run', deps, {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/web/package.json'],
+  })
+  assert.equal(result.ok, false)
+  assert.ok(
+    logs.some(entry => entry.level === 'error' && entry.message.startsWith('run command failed')),
+    'the ERROR log line is present for a non-quiet failure',
+  )
+})
+
+test('run: a QUIET failure keeps the ENOENT error text but suppresses the ERROR log and the stderr INFO echo', async () => {
+  const remote = makeRemoteHost()
+  const logs: Array<{ level: string; message: string }> = []
+  const deps = runDeps(remote.spawnFn)
+  deps.log = (level, message) => { logs.push({ level, message }) }
+  const result = await sshProvider.exec!(spec('wf8'), 'run', deps, {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'],
+    quiet: true,
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /run command failed \(exit 1\)/)
+    assert.match(result.error, /No such file or directory/, 'the ENOENT stderr text still rides the run error')
+  }
+  assert.ok(
+    !logs.some(entry => entry.level === 'error' && entry.message.startsWith('run command failed')),
+    'no ERROR log for a quiet expected failure',
+  )
+  assert.ok(
+    !logs.some(entry => entry.message.includes('No such file or directory')),
+    'no raw-stderr INFO echo for a quiet run',
+  )
+})
+
+test('run: a QUIET ENOENT probe under a `.ssh`-named home stays ENOENT-classified (redacted display still hides the path)', async () => {
+  // A whitelist-valid remoteDshHome like /root/.ssh-custom (design 13 §7.2)
+  // makes redactSshStderr replace the whole ENOENT line with the redacted
+  // summary — the absent-file signal must survive (classified on the RAW
+  // stderr), so the plugin-sync caller still reads "file absent", never a
+  // loud ssh failure — while the display text still hides the path.
+  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
+    const child = new FakeRunChild()
+    setImmediate(() => {
+      child.stderrWrite('cat: /root/.ssh-custom/profiles/web/package.json: No such file or directory\n')
+      child.simulateExit(1)
+    })
+    return child
+  }
+  const result = await sshProvider.exec!(specWithHome('wf9', '/root/.ssh-custom'), 'run', runDeps(spawnFn), {
+    op: 'exec',
+    command: 'cat',
+    argv: ['/root/.ssh-custom/profiles/web/package.json'],
+    quiet: true,
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /No such file or directory/, 'the ENOENT classification survives the `.ssh*` whole-line redaction')
+    assert.ok(!result.error.includes('.ssh-custom'), 'the `.ssh`-named home path never rides the error')
+    assert.ok(!result.error.includes('/root/'), 'no path material rides the error')
+    assert.ok(result.error.includes('[ssh material redacted]'), 'the redacted summary is what is displayed')
+  }
+})
+
+test('run: a QUIET exec with an auth failure stays LOUD (ERROR log + authentication-failure result)', async () => {
+  // quiet suppresses EXPECTED failures only (ENOENT probes) — an auth failure
+  // is never expected, so it must still log the ERROR line and return the
+  // authentication-failure result, never a generic quieted failure.
+  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
+    const child = new FakeRunChild()
+    setImmediate(() => {
+      child.stderrWrite('Permission denied (publickey).\n')
+      child.simulateExit(255)
+    })
+    return child
+  }
+  const logs: Array<{ level: string; message: string }> = []
+  const deps = runDeps(spawnFn)
+  deps.log = (level, message) => { logs.push({ level, message }) }
+  const result = await sshProvider.exec!(spec('wf10'), 'run', deps, {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/web/package.json'],
+    quiet: true,
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, 'authentication failure — requires user action')
+  assert.ok(
+    logs.some(entry => entry.level === 'error' && entry.message.includes('authentication failure detected')),
+    'quiet never silences an auth failure — the ERROR line is still logged',
+  )
+})
+
 test('run: private material in stderr is redacted from the failure detail', async () => {
   const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
     const child = new FakeRunChild()

@@ -147,13 +147,26 @@ export const AUTH_FAILURE_PATTERNS: RegExp[] = [
 ]
 
 /**
+ * A remote `cat` failure that means "the file does not exist" (vs an ssh
+ * failure). Classified on the RAW stderr line (never the redacted view):
+ * redactSshStderr replaces an entire line carrying a `.ssh*`-named home path
+ * (design 13 §7.2 allows `~/.ssh`-style remoteDshHome segments), and the
+ * absent-file signal must survive that redaction so a genuinely-missing file
+ * is never misclassified as a loud ssh failure. Shared with plugin-sync.ts
+ * (single source of truth for the caller-side error-text test AND the
+ * provider-side raw-line classification).
+ */
+export const ENOENT_PATTERN = /(no such file or directory|ENOENT|cat: .*no such file)/i
+
+/**
  * Redact private material from ssh stderr before it enters the ring buffer
  * (design 05 §8: logs never carry SSH material). ssh emits prompt lines such
  * as `Enter passphrase for key '/Users/x/.ssh/id_ed25519':` and key-path
  * diagnostics (`Load key "...": invalid format`, `Offering public key: ...`)
  * which would leak key locations into renderer-visible logs; matching lines
- * are replaced with a fixed summary. Auth-pattern detection still runs on
- * the original text.
+ * are replaced with a fixed summary. Auth and ENOENT classification both run
+ * on the original text (classifyStderr), so a redacted line never loses the
+ * caller's absent-file (ENOENT) signal.
  */
 export function redactSshStderr(text: string): string {
   // `host key:` only counts when a path follows (algorithm/fingerprint lines
@@ -622,8 +635,13 @@ export const sshProvider: TransportProvider = {
 
   classifyStderr(line: string) {
     const log = redactSshStderr(line).trimEnd()
+    // Both classifications run on the RAW line, never the redacted view:
+    // redaction (a `.ssh*`-named home path, design 13 §7.2) replaces the
+    // whole line, and the signals the `run` channel relies on — terminal
+    // auth (→ loud result) and ENOENT (→ absent file) — must survive it.
     const terminalAuth = AUTH_FAILURE_PATTERNS.some(pattern => pattern.test(line))
-    return { log, terminalAuth }
+    const enoent = ENOENT_PATTERN.test(line)
+    return { log, terminalAuth, enoent }
   },
 
   /**
@@ -901,7 +919,7 @@ function spawnRemote(
   spec: TransportInstanceSpec,
   remoteArgv: string[],
   deps: TransportExecDeps,
-  opts: { stdin?: string; captureStdout?: boolean },
+  opts: { stdin?: string; captureStdout?: boolean; quiet?: boolean },
 ): Promise<TransportExecResult> {
   const timeoutMs = deps.runTimeoutMs ?? 120_000
   const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
@@ -910,6 +928,7 @@ function spawnRemote(
     let settled = false
     let timedOut = false
     let authFailed = false
+    let enoentDetected = false
     let timer: ReturnType<typeof setTimeout> | null = null
     let killTimer: ReturnType<typeof setTimeout> | null = null
     const stdoutChunks: Buffer[] = []
@@ -954,14 +973,18 @@ function spawnRemote(
       const lines = stderrPending.split(/\r?\n/)
       stderrPending = lines.pop() ?? ''
       for (const line of lines) {
-        const { log, terminalAuth } = sshProvider.classifyStderr(line)
+        const { log, terminalAuth, enoent } = sshProvider.classifyStderr(line)
         if (log === '') continue
         stderrLines.push(log)
-        deps.log('info', log)
+        // Quiet runs (expected-failure probes): the redacted stderr still
+        // rides the failure detail, but the raw INFO echo is suppressed so
+        // an expected ENOENT probe cannot pollute the instance log panel.
+        if (opts.quiet !== true) deps.log('info', log)
         if (terminalAuth) {
           authFailed = true
           deps.log('error', 'authentication failure detected (requires user action)')
         }
+        if (enoent) enoentDetected = true
       }
     }
     if (child.stdout !== null) {
@@ -984,10 +1007,23 @@ function spawnRemote(
       if (code !== 0) {
         // Run-class failures carry the redacted remote stderr text — the
         // `cat` ENOENT signal (`profile not initialized`, design 13 §4.3) among
-        // others — bounded so a chatty remote never bloats the error.
-        const detail = stderrLines.join(' | ').slice(0, RUN_STDERR_DETAIL_MAX_CHARS)
+        // others — bounded so a chatty remote never bloats the error. A QUIET
+        // run (an expected-failure probe, e.g. the first-seed `cat` ENOENT) is
+        // still an `ok:false` with the same error text — the caller's ENOENT
+        // classification keeps working — but the ERROR-level log is skipped:
+        // an expected probe failure must not pollute the instance log panel.
+        let detail = stderrLines.join(' | ').slice(0, RUN_STDERR_DETAIL_MAX_CHARS)
+        // ENOENT is classified on the RAW stderr; a redacted detail may have
+        // lost the signal (a `.ssh*`-named home path, design 13 §7.2, makes
+        // redactSshStderr replace the whole line). Re-attach the marker so
+        // the caller's ENOENT_PATTERN contract keeps classifying an absent
+        // file as absent — never as a loud ssh failure — while the display
+        // text still hides the path.
+        if (enoentDetected && !ENOENT_PATTERN.test(detail)) {
+          detail = detail === '' ? 'No such file or directory' : `${detail}: No such file or directory`
+        }
         const suffix = detail === '' ? '' : `: ${detail}`
-        deps.log('error', `run command failed (exit ${code ?? exitSignal})${suffix}`)
+        if (opts.quiet !== true) deps.log('error', `run command failed (exit ${code ?? exitSignal})${suffix}`)
         finish({ ok: false, error: `run command failed (exit ${code ?? exitSignal})${suffix}` })
         return
       }
@@ -1028,7 +1064,7 @@ async function runRemoteExec(
       deps.log('error', `refused run exec: command/argv not whitelisted ${JSON.stringify(payload.command)} ${JSON.stringify(payload.argv)}`)
       return Promise.resolve({ ok: false, error: 'invalid run command or arguments (whitelist refused)' })
     }
-    return spawnRemote(spec, argv, deps, { captureStdout: true })
+    return spawnRemote(spec, argv, deps, { captureStdout: true, quiet: payload.quiet === true })
   }
   if (payload.op === 'write-file') {
     const target = resolveWriteTarget(spec, payload.path)
@@ -1059,9 +1095,9 @@ async function runRemoteExec(
     }
     const dir = dirname(target)
     const remoteCmd = dir === '.' || dir === '/' ? `base64 -d > ${target}` : `mkdir -p ${dir} && base64 -d > ${target}`
-    const written = await spawnRemote(spec, [remoteCmd], deps, { stdin: payload.contentBase64 })
+    const written = await spawnRemote(spec, [remoteCmd], deps, { stdin: payload.contentBase64, quiet: payload.quiet === true })
     if (!written.ok) return written
-    const readBack = await spawnRemote(spec, ['cat', target], deps, { captureStdout: true })
+    const readBack = await spawnRemote(spec, ['cat', target], deps, { captureStdout: true, quiet: payload.quiet === true })
     if (!readBack.ok) return readBack
     // Byte-domain verification: `stdout` is the lossy UTF-8 view of the
     // captured bytes (binary content would be corrupted by replacement chars

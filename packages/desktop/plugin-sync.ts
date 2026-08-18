@@ -36,7 +36,11 @@ import { homedir, tmpdir } from 'node:os'
 // orchestration-side二次校验 and the exec-side argv whitelist share one source
 // of truth and can never drift. Importing ssh-provider only pulls these pure
 // regex constants (no electron, no transport runtime side effects).
-import { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
+// ENOENT_PATTERN ("absent remote file" classification) is shared the same way:
+// ssh-provider classifies the RAW stderr line against it (redaction can hide a
+// `.ssh*`-named home path), so the provider-side classification and this
+// caller-side error-text test can never drift apart.
+import { ENOENT_PATTERN, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 
@@ -55,6 +59,13 @@ export interface TransportRunPayload {
   path?: string
   contentBase64?: string
   sha256?: string
+  /**
+   * True = a non-zero exit is EXPECTED (a first-seed probe of a file that
+   * does not exist yet, design 13 §4.6): the ssh provider suppresses the
+   * "run command failed" ERROR log and the raw-stderr INFO echo, while the
+   * `ok:false` error text (ENOENT classification) still rides the result.
+   */
+  quiet?: boolean
 }
 
 /** The non-secret status surface `applyPlugins` needs for the ready recheck. */
@@ -83,11 +94,9 @@ export interface RemoteSpec {
 }
 
 // ============================================================================
-// Whitelists (design 13 §7.2 — contract C): re-exported from ssh-provider.ts.
+// Whitelists (design 13 §7.2 — contract C): re-exported from ssh-provider.ts;
+// ENOENT_PATTERN is likewise imported from there (see the import note above).
 // ============================================================================
-
-/** A remote `cat` failure that means "the file does not exist" (vs ssh failure). */
-const ENOENT_PATTERN = /(no such file or directory|ENOENT|cat: .*no such file)/i
 
 // ============================================================================
 // Path / value helpers
@@ -97,6 +106,16 @@ export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
 export const CLIENT_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
 export const CLIENT_GRAPH_INSERT_ID = 'client-graph'
+
+/**
+ * The two module-A seed files (design 09 module A / design 13 §4.6): the
+ * install-level flat fallback carries package.json + dist/index.js — the same
+ * set the local seed (control-plane host-graph-seed.ts HOST_GRAPH_SEED_FILES),
+ * the remote seed writer and BOTH installed probes agree on. `installed`
+ * means BOTH files are present; a package.json alone is a half-injected
+ * module A (the boot row could not resolve) and must not report "installed".
+ */
+const SEED_FILES = ['package.json', 'dist/index.js'] as const
 
 /**
  * The local `--patch` overlay filename (design 09 方案 A, module B). The
@@ -109,7 +128,8 @@ export const CLIENT_GRAPH_INSERT_ID = 'client-graph'
  */
 const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
 
-function remoteHome(remoteDshHome: string | null): string {
+/** Resolve the effective remote dsh home (`~/.dsh` when not configured). */
+export function remoteHome(remoteDshHome: string | null): string {
   return remoteDshHome === null || remoteDshHome === undefined || remoteDshHome === ''
     ? DEFAULT_REMOTE_DSH_HOME
     : remoteDshHome
@@ -422,7 +442,13 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
     chamber: {
       ok: true,
       hostGraph: {
-        installed: existsSync(join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME, 'package.json')),
+        // installed = BOTH seed files present — the same two-file definition
+        // as the remote probe and the seed writer (SEED_FILES, control-plane
+        // host-graph-seed.ts HOST_GRAPH_SEED_FILES): a package.json without
+        // dist/index.js is a half-injected module A (the boot row could not
+        // resolve) and must report 未注入, never "done".
+        installed: SEED_FILES.every(relative =>
+          existsSync(join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME, relative))),
         patched: existsSync(join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)),
       },
     },
@@ -467,27 +493,43 @@ export async function remotePluginList(exec: ExecFn, spec: RemoteSpec): Promise<
 
 /**
  * Read-only probe of the chamber-injected host-graph state on a remote
- * instance (design 09 module A+B): module A's package.json at the install-level
- * flat fallback (`<home>/profiles/node_modules/…`, the layer seedRemoteHostGraph
- * writes and `dsh plugin` pnpm relinks never prune) + the profile's
- * cordis.patch.yml insert (reusing computeCordisPatchUpdate's dedup rules).
- * Two extra `cat` round-trips; ENOENT = not injected (never an error); any
- * other ssh failure is a loud probe error — never a silent "not injected".
+ * instance (design 09 module A+B): module A's TWO seed files (package.json +
+ * dist/index.js — the same SEED_FILES set seedRemoteHostGraph writes) at the
+ * install-level flat fallback (`<home>/profiles/node_modules/…`, the layer
+ * seedRemoteHostGraph writes and `dsh plugin` pnpm relinks never prune) +
+ * the profile's cordis.patch.yml insert (reusing computeCordisPatchUpdate's
+ * dedup rules). Three extra `cat` round-trips, all marked quiet (their ENOENT
+ * on a not-yet-seeded instance is expected, never a log-panel error); ENOENT =
+ * that file not injected (never an error); any other ssh failure is a loud
+ * probe error — never a silent "not injected". `installed` requires BOTH
+ * files: a package.json without dist/index.js is a half-installed module A
+ * (the boot row could not resolve) and must not report "installed".
  */
 async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec): Promise<ChamberInjectionState> {
   const home = remoteHome(spec.remoteDshHome)
   const pkgPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/package.json`
-  const pkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [pkgPath] })
-  let installed: boolean
+  const indexPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/dist/index.js`
+  const pkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [pkgPath], quiet: true })
+  let pkgInstalled: boolean
   if (pkgRes.ok) {
-    installed = true
+    pkgInstalled = true
   } else if (ENOENT_PATTERN.test(pkgRes.error)) {
-    installed = false
+    pkgInstalled = false
   } else {
     return { ok: false, error: `host-graph probe failed: ${pkgRes.error}` }
   }
+  const indexRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [indexPath], quiet: true })
+  let indexInstalled: boolean
+  if (indexRes.ok) {
+    indexInstalled = true
+  } else if (ENOENT_PATTERN.test(indexRes.error)) {
+    indexInstalled = false
+  } else {
+    return { ok: false, error: `host-graph probe failed: ${indexRes.error}` }
+  }
+  const installed = pkgInstalled && indexInstalled
 
-  const patchRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [remotePatchPath(spec.remoteDshHome)] })
+  const patchRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [remotePatchPath(spec.remoteDshHome)], quiet: true })
   let patched = false
   if (patchRes.ok) {
     const update = computeCordisPatchUpdate(patchRes.stdout ?? '')
@@ -692,8 +734,6 @@ export const CLIENT_GRAPH_INSERT = `- insert:
       name: '@dsh-chamber/dsh-host-client-graph'
 `
 
-const SEED_FILES = ['package.json', 'dist/index.js'] as const
-
 export type CordisPatchUpdate =
   | { write: false }
   | { write: true; content: string }
@@ -744,18 +784,25 @@ export type SeedRemoteResult = { ok: true; wrote: boolean; patched: boolean } | 
 
 /**
  * Seed module A (`@dsh-chamber/dsh-host-client-graph`) onto a remote instance
- * (design 13 §4.6): write-file package.json + dist/index.js into the install-level
- * flat fallback `<remoteDshHome>/profiles/node_modules/@dsh-chamber/...` (not
- * the profile node_modules — that is managed by pnpm and re-linked on every
- * `dsh plugin` op), then ensure cordis.patch.yml carries the client-graph insert
- * (cat read-back dedup, append merge, non-list fail-loud). Hash-identical files
- * are skipped (byte-domain comparison). The patch step is GATED on the package
- * files having been written: an absent module A source is "not shipped" — the
- * LOCAL seed's graceful-skip invariant (control-plane host-graph-seed.ts) — so
- * the seed returns `{wrote:false, patched:false}` WITHOUT touching the patch
- * (an insert referencing a package that does not exist on the remote would
- * break its host boot). A source that exists but is missing a declared file
- * fails loudly.
+ * (design 13 §4.6): ensure cordis.patch.yml carries the client-graph insert
+ * (cat read-back dedup, append merge, non-list fail-loud), then write-file
+ * package.json + dist/index.js into the install-level flat fallback
+ * `<remoteDshHome>/profiles/node_modules/@dsh-chamber/...` (not the profile
+ * node_modules — that is managed by pnpm and re-linked on every `dsh plugin`
+ * op). The PATCH IS PROBED FIRST: an uninitialized remote profile (the patch
+ * `cat` ENOENTs) or an unmergeable patch fails loud BEFORE any package file is
+ * written — a failed seed never leaves half-injected state (package files
+ * present, boot insert missing). The patch WRITE stays gated on the package
+ * files having been written (an insert referencing a package that does not
+ * exist on the remote would break its host boot). Hash-identical files are
+ * skipped (byte-domain comparison). The probe cats are marked `quiet`: on a
+ * first seed the files genuinely do not exist (ENOENT by design) — the
+ * expected failures are returned to the caller (ENOENT classification keeps
+ * working) but never logged as instance-panel errors. An absent module A
+ * source is "not shipped" — the LOCAL seed's graceful-skip invariant
+ * (control-plane host-graph-seed.ts) — so the seed returns
+ * `{wrote:false, patched:false}` WITHOUT touching the patch. A source that
+ * exists but is missing a declared file fails loudly.
  */
 export async function seedRemoteHostGraph(
   exec: ExecFn,
@@ -771,6 +818,25 @@ export async function seedRemoteHostGraph(
     return { ok: true, wrote: false, patched: false }
   }
 
+  // Patch probe FIRST (fail-fast, design 13 §4.6): the cordis.patch.yml
+  // `cat` is the uninitialized-profile signal — a missing profile dir makes
+  // it ENOENT, and computeCordisPatchUpdate(null) turns that into the loud
+  // "remote profile is not initialized" error. Probing before any package
+  // write means the fail-loud path never leaves partial package files behind.
+  // The probe is quiet: its ENOENT is expected on a first seed.
+  const patchPath = remotePatchPath(spec.remoteDshHome)
+  const patchProbe = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [patchPath], quiet: true })
+  let existing: string | null
+  if (patchProbe.ok) {
+    existing = patchProbe.stdout ?? ''
+  } else if (ENOENT_PATTERN.test(patchProbe.error)) {
+    existing = null
+  } else {
+    return { ok: false, error: `host-graph seed read cordis.patch.yml failed: ${patchProbe.error}` }
+  }
+  const update = computeCordisPatchUpdate(existing)
+  if ('error' in update) return { ok: false, error: update.error }
+
   let wrote = false
   for (const relative of SEED_FILES) {
     const source = join(moduleASourceDir, relative)
@@ -782,10 +848,24 @@ export async function seedRemoteHostGraph(
     const remotePath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/${relative}`
     // Hash-skip: a cat read-back whose bytes match skips the write — the
     // comparison is byte-domain (stdoutBytes), so binary seed files never
-    // false-mismatch through the lossy UTF-8 view.
-    const catRes = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [remotePath] })
-    if (catRes.ok && sha256hex(catRes.stdoutBytes ?? Buffer.from(catRes.stdout ?? '', 'utf8')) === localSha256) {
-      continue
+    // false-mismatch through the lossy UTF-8 view. The probe cat is quiet:
+    // on a first seed the file genuinely does not exist (ENOENT by design).
+    const catRes = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [remotePath], quiet: true })
+    if (catRes.ok) {
+      // Hash-skip: a cat read-back whose bytes match skips the write — the
+      // comparison is byte-domain (stdoutBytes), so binary seed files never
+      // false-mismatch through the lossy UTF-8 view. A hash MISMATCH on an
+      // ok read-back (content drift) still falls through to the write.
+      if (sha256hex(catRes.stdoutBytes ?? Buffer.from(catRes.stdout ?? '', 'utf8')) === localSha256) {
+        continue
+      }
+    } else if (!ENOENT_PATTERN.test(catRes.error)) {
+      // ENOENT = genuinely absent → write below (same discipline as the patch
+      // probe above). ANY other ssh failure is loud — attempting a write that
+      // will also fail would mask the real cause behind a misleading
+      // "write-file failed" error. The probe cat is quiet: on a first seed the
+      // file genuinely does not exist (ENOENT by design).
+      return { ok: false, error: `host-graph seed read ${relative} failed: ${catRes.error}` }
     }
     const writeRes = await exec(id, 'run', {
       op: 'write-file',
@@ -797,19 +877,9 @@ export async function seedRemoteHostGraph(
     wrote = true
   }
 
-  // Ensure cordis.patch.yml carries the insert (cat read-back → dedup/append/fail-loud).
-  const patchPath = remotePatchPath(spec.remoteDshHome)
-  const catRes = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [patchPath] })
-  let existing: string | null
-  if (catRes.ok) {
-    existing = catRes.stdout ?? ''
-  } else if (ENOENT_PATTERN.test(catRes.error)) {
-    existing = null
-  } else {
-    return { ok: false, error: `host-graph seed read cordis.patch.yml failed: ${catRes.error}` }
-  }
-  const update = computeCordisPatchUpdate(existing)
-  if ('error' in update) return { ok: false, error: update.error }
+  // Ensure cordis.patch.yml carries the insert — the WRITE stays AFTER the
+  // package files (never a dangling insert referencing a package that does
+  // not exist on the remote). The probe above already validated the merge.
   let patched = false
   if (update.write) {
     const bytes = Buffer.from(update.content, 'utf8')

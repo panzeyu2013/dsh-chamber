@@ -1303,7 +1303,7 @@ const fakeEndpointProvider: TransportProvider = {
   // no buildStartArgs → direct endpoint mode
   probeTarget: spec => ({ host: 'fake.local', port: spec.remotePort }),
   endpointUrl: spec => `http://fake.local:${spec.remotePort}`,
-  classifyStderr: line => ({ log: line, terminalAuth: false }),
+  classifyStderr: line => ({ log: line, terminalAuth: false, enoent: false }),
   // no exec → exec returns an explicit unsupported error
 }
 
@@ -1423,7 +1423,7 @@ const fakeEnvProvider: TransportProvider = {
   },
   buildStartArgs: (spec, localPort) => ['-N', '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, spec.host],
   buildStartEnv: spec => ({ SSH_ASKPASS: `/tmp/askpass-${spec.id}`, SSH_ASKPASS_REQUIRE: 'force' }),
-  classifyStderr: line => ({ log: line, terminalAuth: false }),
+  classifyStderr: line => ({ log: line, terminalAuth: false, enoent: false }),
 }
 
 test('a provider buildStartEnv is merged over process.env for the transport spawn', async t => {

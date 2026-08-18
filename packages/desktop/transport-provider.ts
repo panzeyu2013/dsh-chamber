@@ -171,6 +171,13 @@ export interface StderrClassification {
   log: string
   /** True = terminal auth/host-key failure: never auto-retried, requiresUserAction. */
   terminalAuth: boolean
+  /**
+   * True = the RAW line is an "absent file" signal (remote `cat` ENOENT).
+   * Classified on the UNREDACTED text — redaction can replace the whole line
+   * (a `.ssh*`-named remote home path, design 13 §7.2), which would erase the
+   * signal the `run` caller's ENOENT classification relies on.
+   */
+  enoent: boolean
 }
 
 /** Remote-service exec channel action (ssh: systemctl start|stop|restart|is-active;
@@ -193,6 +200,15 @@ export interface TransportRunPayload {
   contentBase64?: string
   /** op='write-file': expected SHA-256 hex of the decoded content (verified after write). */
   sha256?: string
+  /**
+   * True = a non-zero exit is EXPECTED (a first-seed probe of a file that
+   * does not exist yet, design 13 §4.6): the failure is still returned as
+   * `ok:false` with the same error text (callers' ENOENT classification
+   * keeps working), but the ERROR-level "run command failed" log and the
+   * raw-stderr INFO echo are suppressed — an expected probe failure must
+   * not pollute the instance log panel. Auth failures are NEVER silenced.
+   */
+  quiet?: boolean
 }
 
 /** Dependencies the runtime hands to TransportProvider.exec. */

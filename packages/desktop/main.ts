@@ -40,7 +40,7 @@ import { sshProvider } from './ssh-provider.ts';
 import { configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
-import { applyPlugins, localPluginList, materializeAndAdd, remotePluginList, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
+import { applyPlugins, CLIENT_GRAPH_PACKAGE_NAME, localPluginList, materializeAndAdd, remoteHome, remotePluginList, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
 import type { ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 
 // Main-process safety net: a stray stream/socket error (e.g. an ECONNRESET
@@ -282,6 +282,8 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    // 首帧前的窗口底色：与 dsh 前端深色主题一致，消除白屏闪烁。
+    backgroundColor: '#0f1115',
     // 固定窗口标题：官方 dsh 前端（DocumentTitle.tsx）会把当前会话名
     // 投影到 document.title——若不拦截 page-title-updated，原生标题栏会
     // 随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
@@ -502,6 +504,12 @@ if (!gotTheLock) {
       if (instance === undefined) return null;
       return { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null };
     };
+    // The remote install-level flat fallback dir the seed writes module A into
+    // (design 13 §4.6): same path derivation as the plugin-sync seed/probe
+    // (remoteHome semantics + CLIENT_GRAPH_PACKAGE_NAME) — the 注入完成 log
+    // states exactly where the files landed.
+    const remoteHostGraphPackageDir = (spec: RemoteSpec): string =>
+      `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}`;
     sm.onStatusChanged((id, status) => {
       // Ready transport → per-instance reverse proxy (design 05 §7.1):
       // register the instance transport while it is ready, unregister the
@@ -543,7 +551,7 @@ if (!gotTheLock) {
             if (result.ok) {
               const message = `host-graph seeded onto ${id} (wrote=${result.wrote}, patched=${result.patched})`;
               console.log(`[dsh-chamber] ${message}`);
-              sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}，boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+              sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}（${remoteHostGraphPackageDir(spec)}），boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
             } else {
               console.warn(`[dsh-chamber] host-graph seed failed for ${id}: ${result.error}`);
               sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
@@ -720,7 +728,7 @@ if (!gotTheLock) {
       // Surface the outcome in the instance's ring-buffer log (the connections
       // UI log panel) — the injection is never a silent modification.
       if (result.ok) {
-        sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}，boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+        sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}（${remoteHostGraphPackageDir(spec)}），boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
       } else {
         sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
       }
