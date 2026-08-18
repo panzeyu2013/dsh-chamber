@@ -341,6 +341,18 @@
   overflow-y: auto;
   padding: 2px 8px 12px 0;
   box-sizing: border-box;
+  /* POINTER (2026-08 review, NIT): the list bottom and the gaps between
+     source groups / rows fell back to the arrow while every row/header is
+     pointer — under a moving pointer the cursor flipped arrow↔pointer at
+     those boundaries (same pattern the fixed-height row rules document).
+     The whole list is a navigation surface, so the container carries the
+     pointer too, matching the pointer-everywhere discipline (.sourceHeader).
+     Accepted tradeoff: the transient empty/error/status TEXT lines (no
+     workspaces / disconnected / aggregate error / search status) also show
+     the pointer even though they are not interactive — brief, static,
+     visually inert; a text-cursor here would be worse (the list is not a
+     text-editing surface). */
+  cursor: pointer;
 }
 
 .sourceGroup {
@@ -361,13 +373,24 @@
   box-sizing: border-box;
   height: 28px;
   border-radius: 8px;
+  /* POINTER (2026-08): the ACTIVE (local) source header's single click is a
+     no-op (onClick only switches for non-active sources), but it is still a
+     hover-interactive control surface — hovering reveals the search /
+     add-workspace / sort cluster, all real buttons — and the arrow here
+     made the cursor flip arrow↔pointer at every source header while
+     scanning (remote headers are .sourceHeaderClickable pointer). One
+     pointer affordance across the whole list, matching the official
+     ui-workspace pointer-everywhere surface (design 05 §2). */
+  cursor: pointer;
 }
 
 .sourceHeader:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* Remote source headers are clickable (switch the active N-ctx view). */
+/* Remote source headers are clickable (switch the active N-ctx view); the
+   cursor is now uniform across all headers (see .sourceHeader) — this rule
+   is kept for the clickable semantics it documents. */
 .sourceHeaderClickable {
   cursor: pointer;
 }
@@ -491,8 +514,7 @@
      session list — paired with the pre-fix row-height shift this read as
      continuous cursor toggling (see .sessionRow). Rows and their gaps now
      share one pointer affordance, like the packed official ui-workspace
-     rows. Non-interactive children that must keep the arrow set their own
-     cursor (e.g. .workspaceHeader below). */
+     rows. */
   cursor: pointer;
 }
 
@@ -507,9 +529,16 @@
      rationale. */
   box-sizing: border-box;
   height: 26px;
-  /* The workspace header itself is not clickable (fold/actions live in their
-     own buttons); restore the arrow under the .workspaceGroup pointer. */
-  cursor: auto;
+  /* POINTER (2026-08): the header is not itself clickable (fold/actions live
+     in their own buttons; a single click on the header does nothing — rename
+     is the double click, the `+`/kebab are the hover actions), but the arrow
+     it previously restored under the .workspaceGroup pointer made the cursor
+     flip arrow↔pointer at every workspace header while scanning the list.
+     The official ui-workspace rows are pointer everywhere; the header is a
+     hover-interactive control surface (hover tint + revealed action
+     cluster + fold chevron), so the pointer affordance wins for scan
+     consistency (design 05 §2 parity with the official surface). */
+  cursor: pointer;
   /* 2px vertical margin: keeps the hover/selected tints from fusing into
      one blob with the adjacent session row (the row right below) or the
      header above — the tinted rectangles must stay separated. The dense
@@ -619,6 +648,19 @@
 
 .sessionRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* 2026-08 review (ghost slot, design 06 §2.2): a blank "new session" row
+   that just stopped being the source's current session keeps its layout slot
+   for BLANK_GHOST_GRACE_MS so the list cannot shift inside the 350ms
+   double-click-to-rename window (click2 would otherwise hit the row that was
+   BELOW the target and open a different session). visibility:hidden preserves
+   the fixed 26px row box but renders nothing and is not pointer-targetable —
+   the row is a pure layout placeholder, non-interactive, excluded from the
+   a11y tree; the component also stops rendering it once the local grace
+   clock passes, so the invisible gap cannot linger until the next poll. */
+.sessionGhost {
+  visibility: hidden;
 }
 
 .sessionTitle {

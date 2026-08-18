@@ -113,8 +113,9 @@ import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
-  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, sortWorkspaceSessions,
+  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults, orderUngroupedSessions,
+  reconciledSessionOrder, relativeTimeBucket, runningRingVisible, sanitizeSearchQuery, serversProjectionSignature,
+  SEARCH_QUERY_MAX_CODE_UNITS, sortWorkspaceSessions,
 } from '../shared/derive.ts'
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
@@ -127,6 +128,7 @@ import {
   type SourceSearchState,
 } from '../shared/search-state.ts'
 import { getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs } from '../shared/view-prefs.ts'
+import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
@@ -392,11 +394,29 @@ export function SidebarRoot({
   // here, and the bars would stay drawn over a column nobody is pointing at.
   // The element's own leave stays as the one signal geometry cannot give: a
   // pointer that leaves the window emits no further moves.
+  //
+  // The box is measured into a CACHED ref, never per pointermove: each
+  // getBoundingClientRect() is a forced synchronous layout read, and the
+  // pointer stream delivers far more events than the box changes. The column's
+  // rect only changes on collapse/expand (width prop / collapsed flag — the
+  // effect re-runs and re-measures) and window resize (a rAF-throttled
+  // re-measure refreshes it at most once per frame while the pointer moves,
+  // one frame of staleness is invisible to a 2s linger timer).
+  const columnRect = useRef<DOMRect | null>(null)
   useEffect(() => {
     if (!pointerInside) return
+    const measure = (): void => {
+      raf = 0
+      columnRect.current = column.current?.getBoundingClientRect() ?? null
+    }
+    let raf = 0
+    measure()
     const onMove = (event: PointerEvent): void => {
-      const rect = column.current?.getBoundingClientRect()
-      if (rect === undefined) return
+      // Throttle the re-measure to one per frame; the decision below uses the
+      // cached rect (at most one frame stale — imperceptible for a 2s linger).
+      if (raf === 0) raf = requestAnimationFrame(measure)
+      const rect = columnRect.current
+      if (rect === null) return
       const inside = event.clientX >= rect.left && event.clientX < rect.right
         && event.clientY >= rect.top && event.clientY < rect.bottom
       if (inside) cancelLinger()
@@ -404,10 +424,11 @@ export function SidebarRoot({
     }
     document.addEventListener('pointermove', onMove)
     return () => {
+      if (raf !== 0) cancelAnimationFrame(raf)
       document.removeEventListener('pointermove', onMove)
       cancelLinger()
     }
-  }, [pointerInside])
+  }, [pointerInside, width, collapsed])
 
   // chamber: the multi-source projection (05 §3) — the App layer publishes
   // it on its poll cycle (now signature-gated, see App.tsx); this shell just
@@ -604,41 +625,63 @@ export function SidebarRoot({
   const suppressClickRef = useRef(false)
   useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null)
 
-  // chamber (06, P2-11): double-click rename. A row's single click is DELAYED
-  // ~350ms (DOUBLE_CLICK_WINDOW_MS; raised from 250ms — the old threshold was
-  // too aggressive: a slow double click / trackpad tap was misjudged as a
-  // second click and jumped into inline rename) — a second click within the
-  // window cancels the pending action and enters inline rename; the timer
-  // expiring fires the action. ONE shared pending slot (keyed by the target
-  // session id, holding the clicked row's DOM node): rows are many, the
-  // pending count is at most one, and a fresh click always supersedes an
-  // older pending. Cancellation is document-wide (P2-11): a click anywhere
-  // OUTSIDE the pending row (not the row, not its inner buttons) drops the
-  // pending — the session never opens after the user has moved their
-  // attention elsewhere; row-internal buttons (kebab/archive) clear it in
-  // their own handlers (stopPropagation + clearPendingClick). suppressClickRef
-  // is honored on the way in AND in the timer callback — a drag-end trailing
-  // click never arms, and a drag started between click and expiry never opens.
-  const DOUBLE_CLICK_WINDOW_MS = 350
-  const pendingClickRef = useRef<{ key: string; timer: number; row: HTMLElement | null } | null>(null)
-  const clearPendingClick = (): void => {
-    if (pendingClickRef.current === null) return
-    window.clearTimeout(pendingClickRef.current.timer)
-    pendingClickRef.current = null
-  }
-  useEffect(() => () => {
-    if (pendingClickRef.current !== null) window.clearTimeout(pendingClickRef.current.timer)
+  // chamber (2026-08 review fix, design 06 §2.2): blank-row GHOST slot — the
+  // local grace clock that bounds how long a departed blank "new session" row
+  // keeps its (invisible) layout slot. The App's projection holds the ghost
+  // for BLANK_GHOST_GRACE_MS (derive.ts armBlankGhost/sessionVisible) so the
+  // list cannot shift inside the 350ms double-click window; this component
+  // mirrors the same expiry and stops RENDERING the ghost when it passes —
+  // the App may not re-derive for another poll cycle and the invisible
+  // placeholder must not linger. A one-shot timer per arming bumps the tick
+  // so the render re-evaluates the expiries (armings are rare: only a click
+  // on a real session while a blank row is current).
+  const ghostExpiry = useRef<Map<string, number>>(new Map())
+  const ghostTimers = useRef<number[]>([])
+  const [, setGhostTick] = useState(0)
+  useEffect(() => {
+    const timers = ghostTimers.current
+    return () => { for (const timer of timers) window.clearTimeout(timer) }
   }, [])
-  // P2-11: pending 期间的行外点击取消。点击发生在 pending 行内部时不动
-  // （行内按钮已自行 clearPendingClick；行本身再次点击由行 onClick 的双击
-  // 逻辑接管——行 onClick 先于 document 监听触发，pending 已被消费/替换）。
-  // 点击行外任意位置即取消 pending，绝不延迟弹出被用户放弃的会话。
+
+  // chamber (06, P2-11 — 2026-08 revision, aligned with OpenChamber): the
+  // session row's single click now opens the session IMMEDIATELY (zero delay)
+  // and double-click-to-rename is detected by click timestamps on the SAME
+  // session id — no timer ever delays an open. OpenChamber (the external
+  // project this N-ctx design drew from, SessionNodeItem.tsx) opens on the
+  // single click and renames on the second click of a double click; this shell
+  // keeps a DOUBLE_CLICK_WINDOW_MS window but only as a RENAME guard: the
+  // pending is a module-global { sessionId, at } slot, the second click within
+  // the window on the same session enters inline rename, and every other click
+  // opens right away. openSession is idempotent, so a misjudged slow second
+  // click only re-opens (no-op) and can NEVER accidentally rename — strictly
+  // safer than the old delayed-open model, where a misjudged double click
+  // cancelled the pending open and renamed.
+  //
+  // The pending lives in a MODULE-level singleton (shared/pending-click.ts,
+  // vite shared chunk) shared by every N-ctx shell: each server boot mounts
+  // its own SidebarRoot React tree, and a CROSS-SOURCE double-click (click1 on
+  // a row of a non-active server switches the visible shell BETWEEN click1 and
+  // click2) would land click2 in a DIFFERENT tree — a per-tree ref would never
+  // see click1 and the second click would re-open instead of renaming. Keyed
+  // by sessionId (NOT a DOM node): session rows render data-session-id, and
+  // the outside-click cancellation matches that attribute via closest(), so it
+  // works even when the pending row lives in another shell's DOM.
+  //
+  // The document-wide click listener only guards the rename window (no
+  // "pending open" exists anymore): a click anywhere OUTSIDE the pending row
+  // drops the pending — the row's own onClick runs before this listener and
+  // consumes/replaces the pending itself, so only outside clicks reach here.
+  // suppressClickRef (drag-end trailing click) is honored on the way in;
+  // row-internal buttons (fold toggle / new-session / kebabs / archive) AND
+  // the source-header action buttons (sort / add-workspace / search) clear
+  // the pending in their own handlers (stopPropagation + clearPendingClick) —
+  // React's stopPropagation also stops the native event, so the document
+  // listener never sees those clicks and a surviving pending would make a
+  // later click on the same session spuriously enter rename.
   useEffect(() => {
     const onDocumentClick = (event: MouseEvent): void => {
-      const pending = pendingClickRef.current
-      if (pending === null) return
       if (!(event.target instanceof Node)) return
-      if (pending.row !== null && pending.row.contains(event.target)) return
+      if (isClickInsidePendingRow(event.target)) return
       clearPendingClick()
     }
     document.addEventListener('click', onDocumentClick)
@@ -680,6 +723,42 @@ export function SidebarRoot({
 
   const openSession = (serverId: string, sessionId: string): void => {
     chamberBridge.requestOpenSession(serverId, sessionId)
+  }
+
+  /**
+   * chamber (2026-08 review fix, design 06 §2.2): arm the blank-row GHOST
+   * slot. Called SYNCHRONOUSLY in a session-row onClick BEFORE the open —
+   * opening any real session moves the active source's current away from its
+   * blank "new session" row (or a cross-source click switches the view, which
+   * also un-currents it), and the App re-derives on the runtime-facts report
+   * a moment later. The ghost keeps the departed blank row in the projection
+   * for BLANK_GHOST_GRACE_MS, so the rows below never shift inside the
+   * double-click window and the second click still lands on the target row.
+   * The local expiry (ghostExpiry) bounds the RENDER side at the same
+   * deadline; the one-shot timer closes the invisible gap even if the App
+   * does not re-derive until the next poll cycle.
+   */
+  const armBlankGhostForClick = (): void => {
+    // Only the ACTIVE source can currently hold a blank provisional row (the
+    // App passes current only for the active view, 06 §4.3 single-selection).
+    const active = servers.find(server => server.id === chamberInstanceId)
+    if (active === undefined) return
+    const current = active.runtime?.current
+    if (current === undefined) return
+    const isBlankCurrent = active.workspaces.some(workspace =>
+      workspace.sessions.some(session => session.id === current && session.blank === true))
+    if (!isBlankCurrent) return
+    armBlankGhost(current)
+    ghostExpiry.current.set(current, Date.now() + BLANK_GHOST_GRACE_MS)
+    // chamber (third-wave review, R2-1#5): the one-shot timer is trimmed from
+    // the ref after it fires, so repeated armings (rare, but each timer
+    // outlives the 450ms grace) cannot grow ghostTimers unboundedly.
+    const timerId = window.setTimeout(() => {
+      setGhostTick(tick => tick + 1)
+      const index = ghostTimers.current.indexOf(timerId)
+      if (index >= 0) ghostTimers.current.splice(index, 1)
+    }, BLANK_GHOST_GRACE_MS)
+    ghostTimers.current.push(timerId)
   }
 
   /** chamber (06): localized hover-card relative time ("刚刚"/"5分钟前" zh; "now"/"5min ago" en). */
@@ -755,7 +834,15 @@ export function SidebarRoot({
   const renameForm = (sourceId: string, kind: RenameTarget['kind'], id: string, placeholder: string, nested = false) => (
     <form
       className={clsx(cc.inlineForm, nested && cc.sessionNested)}
-      onClick={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        // chamber (third-wave review, W1#3): stopPropagation also stops the
+        // native event, so the document-level pending-click canceller never
+        // sees this click — every propagation-stopping control must clear the
+        // pending itself (pending-click.ts INVARIANT). Harmless today (the
+        // pending is consumed before the form opens) but closes the foot-gun.
+        event.stopPropagation()
+        clearPendingClick()
+      }}
       onSubmit={(event) => { event.preventDefault(); commitRename() }}
     >
       <input
@@ -1085,8 +1172,13 @@ export function SidebarRoot({
           take the shell (or the app) down. */}
       <div className={css.regionArea}>
         <ChamberListBoundary>
+        {/* chamber (2026-08 scroll sync): the scroll container carries
+            data-chamber-sidebar-scroll + each row data-chamber-row so the
+            renderer's sidebar-scroll-sync can anchor the outgoing shell's
+            scroll and restore the same rows at the same screen position in
+            the incoming shell on N-ctx view switch. */}
         {wide ? (
-          <div className={cc.chamberList}>
+          <div className={cc.chamberList} data-chamber-sidebar-scroll="">
             {servers.map((server) => {
               // chamber (06 §1.2): per-source search read from the shared
               // controller (survives view switches). The state's query is the
@@ -1121,6 +1213,15 @@ export function SidebarRoot({
               // its current-session highlight; the other sources' last-opened
               // sessions stay unhighlighted (one global selection marker).
               const currentId = server.id === chamberInstanceId ? server.runtime?.current : undefined
+              // chamber (third-wave review, R2-1#4): the row-render ghost
+              // predicate hoisted so the workspace header count reuses the
+              // SAME rule — a ghost is a blank "New Session" row that stopped
+              // being current (the projection still carries it as an invisible
+              // layout slot during BLANK_GHOST_GRACE_MS, see derive.ts
+              // armBlankGhost/sessionVisible). Single source of truth: the
+              // count must not drift from what the rows render.
+              const isGhostSession = (session: ChamberServerWorkspace['sessions'][number]): boolean =>
+                session.blank === true && session.id !== currentId
               // chamber (06 §2.2): real workspaces render in wire order unless
               // a transient drag override exists; the ungrouped bucket trails.
               const orderedWorkspaces = (() => {
@@ -1217,6 +1318,7 @@ export function SidebarRoot({
                     server.id === chamberInstanceId && cc.sourceActive,
                     server.id !== chamberInstanceId && cc.sourceHeaderClickable,
                   )}
+                  data-chamber-row={server.id}
                   style={sourceAccentStyle(server)}
                   title={server.id === chamberInstanceId ? undefined : t('list.activate')}
                   role={server.id === chamberInstanceId ? undefined : 'button'}
@@ -1287,6 +1389,12 @@ export function SidebarRoot({
                         onClick={(event) => {
                           event.stopPropagation()
                           if (suppressClickRef.current) return
+                          // stopPropagation also stops the NATIVE event, so the
+                          // document-level pending-click listener never sees this
+                          // click — clear the pending here like every other
+                          // row-internal button (else a pending survives and a
+                          // later click on the same session spuriously renames).
+                          clearPendingClick()
                           toggleSessionSort(server)
                         }}
                       >
@@ -1302,6 +1410,7 @@ export function SidebarRoot({
                         onClick={(event) => {
                           event.stopPropagation()
                           if (suppressClickRef.current) return
+                          clearPendingClick()
                           setAddingWorkspace(server.id)
                         }}
                       >
@@ -1318,6 +1427,7 @@ export function SidebarRoot({
                         onClick={(event) => {
                           event.stopPropagation()
                           if (suppressClickRef.current) return
+                          clearPendingClick()
                           if (search?.expanded === true) {
                             // Toggle: an open capsule's icon collapses it (empty
                             // query) or just blurs the input (a non-empty query
@@ -1472,6 +1582,15 @@ export function SidebarRoot({
                           const workspaceKey = `${server.id}/${workspace.id}`
                           const folded = viewPrefs.folded[workspaceKey] === true
                           const sessions = sessionsOf(workspace)
+                          // chamber (third-wave review, R2-1#4): sessionsOf
+                          // includes the projection's departed blank GHOST
+                          // row, so the header count would be +1 for up to
+                          // BLANK_GHOST_GRACE_MS. Count only non-ghost
+                          // sessions (the same predicate the rows use).
+                          const visibleSessionCount = sessions.reduce(
+                            (count, session) => count + (isGhostSession(session) ? 0 : 1),
+                            0,
+                          )
                           const marker = workspaceDragMarker(workspace)
                           const activeSessionDrag = sessionDrag !== null
                             && sessionDrag.sourceId === server.id
@@ -1499,6 +1618,7 @@ export function SidebarRoot({
                                 cc.workspaceHeader,
                                 sessions.some(session => session.id === currentId) && cc.groupContainsCurrent,
                               )}
+                              data-chamber-row={workspaceKey}
                               role="treeitem"
                               aria-expanded={!folded}
                               draggable={workspace.ungrouped !== true}
@@ -1560,8 +1680,8 @@ export function SidebarRoot({
                               <span className={cc.workspaceTitle}>
                                 {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
                               </span>
-                              {sessions.length > 0 && (
-                                <span className={cc.workspaceCount}>{sessions.length}</span>
+                              {visibleSessionCount > 0 && (
+                                <span className={cc.workspaceCount}>{visibleSessionCount}</span>
                               )}
                               {!workspace.ungrouped && (
                                 <span
@@ -1698,34 +1818,59 @@ export function SidebarRoot({
                                 const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/archive`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/fork`]
-                                // chamber (06, P2-11): the session row (hoisted so
-                                // the HoverCard can wrap it). The single click is
-                                // DELAYED ~350ms (DOUBLE_CLICK_WINDOW_MS) — a
-                                // second click within the window cancels the
-                                // pending open and enters inline rename
-                                // (double-click rename); the timer expiring opens
-                                // the session. suppressClickRef (drag-end trailing
-                                // click) is honored on the way in and in the timer
-                                // callback; clicks outside the pending row cancel
-                                // it (document listener, P2-11).
+                                // chamber (2026-08 review fix, design 06 §2.2):
+                                // a blank row the projection still carries after
+                                // it stopped being current is a GHOST — the App
+                                // holds it for BLANK_GHOST_GRACE_MS so the list
+                                // cannot shift inside the double-click window.
+                                // The local expiry bounds the RENDER side: once
+                                // the grace passes, the invisible placeholder is
+                                // dropped even if the App has not re-derived yet
+                                // (the next publish drops it from the projection
+                                // for good — the row is invisible either way, so
+                                // skipping it never shows a stale row).
+                                const ghost = isGhostSession(session)
+                                const ghostLive = ghost && (ghostExpiry.current.get(session.id) ?? 0) > Date.now()
+                                if (ghost && !ghostLive) return null
+                                // chamber (06, P2-11 — 2026-08): the session row
+                                // (hoisted so the HoverCard can wrap it). The
+                                // single click opens IMMEDIATELY — no
+                                // double-click-window delay (OpenChamber
+                                // model); the module-global pending click
+                                // (shared/pending-click.ts, keyed by
+                                // sessionId) only guards the SECOND click
+                                // within DOUBLE_CLICK_WINDOW_MS on the SAME
+                                // session, which enters inline rename.
+                                // suppressClickRef (drag-end trailing click)
+                                // is honored on the way in; a click outside
+                                // the pending row cancels it (document
+                                // listener, P2-11). The row renders
+                                // data-session-id so the outside-click
+                                // containment check works across shells.
                                 const sessionRow = (
                                   <div
                                     className={clsx(
                                       cc.sessionRow,
+                                      ghost && cc.sessionGhost,
                                       session.id === currentId && cc.sessionActive,
                                       sessionMarker(session.id) === 'before' && cc.dropBefore,
                                       sessionMarker(session.id) === 'after' && cc.dropAfter,
                                     )}
                                     role="treeitem"
                                     aria-selected={session.id === currentId}
-                                    draggable
-                                    onDragStart={(event) => {
-                                      event.dataTransfer.effectAllowed = 'move'
-                                      event.dataTransfer.setData('text/plain', session.id)
-                                      suppressClickRef.current = true
-                                      sessionDropCommitted.current = false
-                                      setSessionDrag({ sourceId: server.id, accountKey: workspace.id, sessionId: session.id, over: null })
-                                    }}
+                                    data-session-id={session.id}
+                                    data-chamber-row={sessionKey}
+                                    data-chamber-ghost={ghost ? '' : undefined}
+                                    draggable={!ghost}
+                                    onDragStart={ghost
+                                      ? undefined
+                                      : (event) => {
+                                        event.dataTransfer.effectAllowed = 'move'
+                                        event.dataTransfer.setData('text/plain', session.id)
+                                        suppressClickRef.current = true
+                                        sessionDropCommitted.current = false
+                                        setSessionDrag({ sourceId: server.id, accountKey: workspace.id, sessionId: session.id, over: null })
+                                      }}
                                     onDragEnd={() => {
                                       if (sessionDrag !== null && sessionDrag.over !== null) {
                                         commitSessionDrag(server, sessionDrag, sessionDrag.over)
@@ -1752,15 +1897,35 @@ export function SidebarRoot({
                                         if (sessionDrag === null) return
                                         commitSessionDrag(server, sessionDrag, { id: session.id, half: rowHalf(event) })
                                       }}
-                                    onClick={(event) => {
+                                    onClick={() => {
                                       if (suppressClickRef.current) return
+                                      // A ghost row is a non-interactive layout
+                                      // placeholder (visibility:hidden — clicks
+                                      // never reach it); guard defensively.
+                                      if (ghost) return
                                       // 菜单展开 / 本行重命名进行中：忽略整次点击
                                       //（不 arm、不开会话）。
                                       if (menuOpen[sessionKey] === true || (renaming !== null
                                         && renaming.sourceId === server.id && renaming.kind === 'session' && renaming.id === session.id)) return
-                                      const pending = pendingClickRef.current
-                                      if (pending !== null && pending.key === session.id) {
-                                        clearPendingClick()
+                                      // chamber (06, P2-11 — 2026-08): single
+                                      // click opens IMMEDIATELY — zero delay
+                                      // (OpenChamber model). The module-global
+                                      // pending (keyed by sessionId) only
+                                      // answers "is this the SECOND click of a
+                                      // double click on the same session within
+                                      // DOUBLE_CLICK_WINDOW_MS" — that one
+                                      // enters inline rename; any other click
+                                      // records the pending and opens right
+                                      // away. openSession is idempotent, so a
+                                      // misjudged slow second click just
+                                      // re-opens (no-op) and can NEVER
+                                      // accidentally rename.
+                                      if (noteSessionRowClick(session.id)) {
+                                        // P2-10 同款 blank 门控（2026-08
+                                        // review）：空白"新建会话"占位行无内容可
+                                        // 改名——双击不得进入内联重命名（否则会
+                                        // 把暂存会话的改名写到 wire 上）。
+                                        if (session.blank === true) return
                                         setRenaming({
                                           sourceId: server.id,
                                           kind: 'session',
@@ -1769,18 +1934,13 @@ export function SidebarRoot({
                                         })
                                         return
                                       }
-                                      if (pending !== null) clearPendingClick()
-                                      pendingClickRef.current = {
-                                        key: session.id,
-                                        // P2-11: 记录被点击的行 DOM，document 级
-                                        // 行外点击监听据此判断"行外"。
-                                        row: event.currentTarget,
-                                        timer: window.setTimeout(() => {
-                                          pendingClickRef.current = null
-                                          if (suppressClickRef.current) return
-                                          openSession(server.id, session.id)
-                                        }, DOUBLE_CLICK_WINDOW_MS),
-                                      }
+                                      // 2026-08 review（ghost slot）：打开任何
+                                      // 真实会话都会把活动来源的 current 从空白
+                                      // 行切走，App 随后重派生——同步先 arm ghost
+                                      // 槽占住该行的布局位，列表在 350ms 双击窗口
+                                      // 内不位移，第二次点击仍落在目标行上。
+                                      armBlankGhostForClick()
+                                      openSession(server.id, session.id)
                                     }}
                                   >
                                     <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : (session.title || t('list.unnamed'))}</span>

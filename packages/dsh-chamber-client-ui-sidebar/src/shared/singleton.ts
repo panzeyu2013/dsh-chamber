@@ -9,11 +9,16 @@
  * fixed — with no diagnostic. This guard registers each singleton module in a
  * Symbol.for-keyed GLOBAL registry (Symbol.for is shared across module
  * instances in the same realm, so even a duplicated module copy hits the same
- * registry) and fails loudly on a second instantiation.
+ * registry) and reports a second instantiation as a DIAGNOSTIC (console.error).
+ *
+ * The guard is diagnostic only: it cannot fix the drift (the two copies are
+ * already live and the shared state already diverged) — it exists so the
+ * failure surfaces in the console instead of silently degrading every cross-ctx
+ * feature. Bundling drift must be fixed in the build config.
  */
 const REGISTRY = Symbol.for('dsh-chamber.singleton.instances')
 
-/** Register one shared module; warns loudly if it was already instantiated. */
+/** Register one shared module; reports a duplicate instantiation (diagnostic only — it cannot fix drift). */
 export function assertSingletonModule(name: string): void {
   // vite dev HMR re-evaluates modules WITHOUT a page reload — the
   // Symbol.for registry survives HMR, so a hot-replaced module would log a

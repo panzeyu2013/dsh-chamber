@@ -9,6 +9,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  armBlankGhost,
+  BLANK_GHOST_GRACE_MS,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
   increasedForkTitle,
@@ -27,6 +29,7 @@ import {
   sortWorkspaceSessions,
   SEARCH_QUERY_MAX_CODE_UNITS,
   UNGROUPED_WORKSPACE_ID,
+  __resetBlankGhostsForTests,
 } from '../src/shared/derive.ts'
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
 import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/shared/aggregate-store.ts'
@@ -118,6 +121,118 @@ test('a non-current blank session stays hidden even when another blank session i
     'b2',
   )
   assert.deepEqual(result[0].sessions, [{ id: 'b2', title: '', running: false, updatedAt: 2, blank: true }])
+})
+
+// ---- blank-row ghost slot (2026-08 review: double-click mis-target fix) ----
+
+test('a departed blank session keeps its layout slot (ghost) while the grace is live', () => {
+  __resetBlankGhostsForTests()
+  // The sidebar arms the ghost SYNCHRONOUSLY at the transition click (t=1000)
+  // — the click that opens real session `a` while blank `b` is current. The
+  // App re-derives a moment later with current='a'; within the grace the
+  // departed blank row STAYS in the projection (a non-interactive ghost) so
+  // every row below keeps its position inside the 350ms double-click window.
+  armBlankGhost('b', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a', 'b'])],
+      [session('a', 1), session('b', 2, { blank: true })],
+    ),
+    '',
+    'a',
+    1000 + BLANK_GHOST_GRACE_MS - 1,
+  )
+  assert.deepEqual(result[0].sessions, [
+    { id: 'a', title: '', running: false, updatedAt: 1 },
+    { id: 'b', title: '', running: false, updatedAt: 2, blank: true },
+  ])
+})
+
+test('the ghost grace expires at BLANK_GHOST_GRACE_MS: the departed blank row then hides', () => {
+  __resetBlankGhostsForTests()
+  armBlankGhost('b', 1000)
+  // Boundary is exclusive (expiry > now): exactly BLANK_GHOST_GRACE_MS later
+  // the ghost is gone and the list may shift — safely after the window.
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a', 'b'])],
+      [session('a', 1), session('b', 2, { blank: true })],
+    ),
+    '',
+    'a',
+    1000 + BLANK_GHOST_GRACE_MS,
+  )
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+})
+
+test('a departed blank row hides immediately when no ghost was armed (pre-grace behavior)', () => {
+  __resetBlankGhostsForTests()
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a', 'b'])],
+      [session('a', 1), session('b', 2, { blank: true })],
+    ),
+    '',
+    'a',
+  )
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+})
+
+test('the ghost also holds a departed blank stray in the ungrouped bucket', () => {
+  __resetBlankGhostsForTests()
+  armBlankGhost('blank', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('blank', 300, { blank: true })],
+    ),
+    '',
+    'a',
+    1200,
+  )
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1].sessions, [{ id: 'blank', title: '', running: false, updatedAt: 300, blank: true }])
+})
+
+test('arming the ghost never surfaces a NON-blank session (the map only affects blank rows)', () => {
+  __resetBlankGhostsForTests()
+  armBlankGhost('a', 1000) // `a` is a real session — the arm must be ignored
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a', 'b'])],
+      [session('a', 1), session('b', 2, { blank: true })],
+    ),
+    '',
+    'b',
+    1200,
+  )
+  // Real sessions are always visible regardless of the map; the current blank
+  // stays visible through the currentness rule.
+  assert.deepEqual(result[0].sessions, [
+    { id: 'a', title: '', running: false, updatedAt: 1 },
+    { id: 'b', title: '', running: false, updatedAt: 2, blank: true },
+  ])
+})
+
+test('a refreshed arm extends the ghost (a later real transition wins over an earlier stale arm)', () => {
+  __resetBlankGhostsForTests()
+  // A click on the blank row itself armed a stale ghost at t=1000 (expires
+  // t=1450); the real transition click at t=2000 re-arms with a fresh expiry.
+  armBlankGhost('b', 1000)
+  armBlankGhost('b', 2000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a', 'b'])],
+      [session('a', 1), session('b', 2, { blank: true })],
+    ),
+    '',
+    'a',
+    2100, // inside the FRESH grace, past the stale one
+  )
+  assert.deepEqual(result[0].sessions, [
+    { id: 'a', title: '', running: false, updatedAt: 1 },
+    { id: 'b', title: '', running: false, updatedAt: 2, blank: true },
+  ])
 })
 
 test('subagent sessions are hidden from workspaces and from the ungrouped bucket', () => {
@@ -1149,4 +1264,22 @@ test('increasedForkTitle appends (1) when the trailing parenthesis is not numeri
 
 test('increasedForkTitle increments without precision loss (BigInt)', () => {
   assert.equal(increasedForkTitle(`huge (${'9'.repeat(40)})`), `huge (1${'0'.repeat(40)})`)
+})
+
+// ---- singleton guard (third-wave review, R2-1#2) ----
+
+test('importing derive registers exactly one entry in the shared-singleton registry', () => {
+  // derive.ts calls assertSingletonModule('derive') at module scope; the
+  // module is evaluated ONCE per process (node module cache) and derives only
+  // from singleton.ts at runtime (the other imports are type-only), so a
+  // fresh test process must find exactly this one entry registered — proving
+  // the guard does not break node tests. A bundling drift that duplicated the
+  // module would instead log the diagnostic and silently split the
+  // cross-boundary ghost-slot state (armBlankGhost in the sidebar bundle vs
+  // sessionVisible in the App's derive).
+  const registry = (globalThis as unknown as Record<symbol, Record<string, boolean>>)[
+    Symbol.for('dsh-chamber.singleton.instances')
+  ]
+  assert.ok(registry !== undefined, 'the singleton registry must exist after importing derive.ts')
+  assert.deepEqual(Object.keys(registry), ['derive'])
 })

@@ -8,10 +8,29 @@
  * membership order, and sessions outside every workspace trail in one
  * synthetic ungrouped bucket.
  *
+ * ONE deliberate mutable exception (2026-08 review fix, design 06 §2.2): the
+ * module-level blank-row GHOST grace map. It is written only by
+ * `armBlankGhost` (called by the sidebar synchronously when a click moves the
+ * current away from a blank row) and read only by `sessionVisible`, which
+ * also lazily SWEEPS expired entries on read (third-wave, R2-1#3) so the map
+ * cannot accumulate across armings without a derive in between — the derive
+ * functions stay deterministic for a given (snapshot, current, now) triple,
+ * and tests inject `now` so the grace behavior is fully unit-tested.
+ *
  * No React, no DOM — plain-node unit-testable (see test/derive.ts).
  */
 import type { InstanceSnapshot, SearchRow } from './instance-api.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
+import { assertSingletonModule } from './singleton.ts'
+
+// chamber (third-wave review, R2-1#2): `blankGhostUntil` below is
+// CROSS-BOUNDARY shared state — armed by the sidebar bundle (armBlankGhost,
+// at the transition click) and read by the App's derive (sessionVisible) —
+// and relies on the vite shared chunk for single-instance. Register the
+// module in the singleton registry (mirrors pending-click.ts) so a bundling
+// drift that duplicates the module surfaces as a console diagnostic instead
+// of silently splitting the ghost-slot state per shell.
+assertSingletonModule('derive')
 
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
 export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
@@ -371,23 +390,88 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
 }
 
 /**
+ * How long a departed blank "new session" row keeps its layout slot as a
+ * non-interactive GHOST (design 06 §2.2, 2026-08 review fix). Without it, a
+ * double click on a real session below the blank row mis-targets: click1
+ * opens the session, the blank row stops being current and disappears, every
+ * row below shifts up ~30px, and click2 (within DOUBLE_CLICK_WINDOW_MS) hits
+ * the row that was BELOW the target — opening a DIFFERENT session instead of
+ * renaming. The grace must exceed the 350ms double-click window; 450ms covers
+ * it plus the App's re-derive latency.
+ */
+export const BLANK_GHOST_GRACE_MS = 450
+
+/**
+ * Module-level ghost grace map: departed blank sessionId -> expiry epoch-ms.
+ * Written by `armBlankGhost` (the sidebar, at the transition click) and read
+ * by `sessionVisible` during the App's derive — the blank row keeps its slot
+ * in the projection (and therefore in the sidebar's list) until the grace
+ * expires, so the list never shifts inside the double-click window. The App
+ * drops the row on its next derive after expiry; the sidebar additionally
+ * stops RENDERING the ghost at the same expiry (its own clock), so the
+ * invisible placeholder cannot linger until the next poll cycle. Expired
+ * entries are lazily swept on WRITE (armBlankGhost) and on READ
+ * (sessionVisible, third-wave R2-1#3) — the map is bounded either way.
+ */
+const blankGhostUntil = new Map<string, number>()
+
+/**
+ * Arm (or refresh) the ghost-slot grace for a blank session that just stopped
+ * being the source's current session. The sidebar calls this SYNCHRONOUSLY in
+ * a session-row onClick, BEFORE requesting the open that transitions current
+ * away from the blank row — the App's re-derive (a moment later, on the
+ * runtime-facts report) then consults the grace via `sessionVisible` and keeps
+ * the row. Refreshing overwrites the expiry, so a later real transition always
+ * wins over an earlier stale arm (e.g. an earlier click on the blank row
+ * itself). Lazy sweep drops expired entries (bounded: at most one blank row
+ * per source).
+ * @param now - epoch-ms; injected in tests, Date.now() in the app.
+ */
+export function armBlankGhost(sessionId: string, now = Date.now()): void {
+  for (const [id, expiry] of blankGhostUntil) {
+    if (expiry <= now) blankGhostUntil.delete(id)
+  }
+  blankGhostUntil.set(sessionId, now + BLANK_GHOST_GRACE_MS)
+}
+
+/** Test-only: clear the ghost grace map (node tests share the module instance). */
+export function __resetBlankGhostsForTests(): void {
+  blankGhostUntil.clear()
+}
+
+/**
  * Navigation visibility: subagent-origin and archived rows are always hidden;
  * blank rows follow the official rule (!blank || current) — a blank "new
  * session" provisional row shows only while it is the source's CURRENT
- * session (the one being viewed). The App layer passes the current session
- * id only for the ACTIVE source (see App.tsx deriveServers), so no other
- * source's provisional blank row ever enters the projection (design 06 §4.3
- * single-selection discipline: current-session visuals belong to the visible
- * source alone).
+ * session (the one being viewed) — plus the ghost-slot exception: a blank row
+ * that stopped being current within the last BLANK_GHOST_GRACE_MS stays
+ * visible (non-interactively, see SidebarRoot) so the list cannot shift
+ * inside the double-click-to-rename window. The App layer passes the current
+ * session id only for the ACTIVE source (see App.tsx deriveServers), so no
+ * other source's provisional blank row ever enters the projection (design 06
+ * §4.3 single-selection discipline: current-session visuals belong to the
+ * visible source alone).
+ * @param now - epoch-ms; the caller injects its derive clock (testable).
  */
 function sessionVisible(
   session: { sessionId: string; blank: boolean; origin?: 'subagent' },
   currentSessionId: string | undefined,
   archived: ReadonlySet<string>,
+  now: number,
 ): boolean {
+  // chamber (third-wave, R2-1#3): lazy SWEEP on read — an expired ghost entry
+  // is dropped the first time a derive consults it (armBlankGhost also sweeps
+  // on write). Deleting an expired entry cannot change any derive result (the
+  // expiry predicate would have failed anyway), and the currentness branch
+  // below keeps a CURRENT blank row visible regardless of the map. At most one
+  // blank row per source can be ghosted, so this stays O(1).
+  const ghostExpiry = blankGhostUntil.get(session.sessionId)
+  if (ghostExpiry !== undefined && ghostExpiry <= now) blankGhostUntil.delete(session.sessionId)
   return session.origin !== 'subagent'
     && !archived.has(session.sessionId)
-    && (!session.blank || session.sessionId === currentSessionId)
+    && (!session.blank
+      || session.sessionId === currentSessionId
+      || (ghostExpiry ?? 0) > now)
 }
 
 /**
@@ -602,6 +686,9 @@ export function increasedForkTitle(title: string): string {
  * @param currentSessionId - the source's current session id (from the
  *   per-ctx runtime-facts channel), or undefined for non-active sources.
  *   Blank rows surface only when they carry this id (see sessionVisible).
+ * @param now - epoch-ms of this derive (injected for tests; the App passes
+ *   nothing and Date.now() applies). The ghost-slot grace is measured against
+ *   this clock, so a derive with an injected `now` is fully deterministic.
  * @returns real workspaces in wire order (visible members in sessionIds order),
  *   plus one synthetic trailing ungrouped group when visible stray sessions
  *   exist; [] for an empty snapshot.
@@ -610,6 +697,7 @@ export function deriveServerWorkspaces(
   snapshot: InstanceSnapshot,
   ungroupedTitle: string,
   currentSessionId?: string,
+  now = Date.now(),
 ): ChamberServerWorkspace[] {
   const sessionsById = new Map(snapshot.sessions.map(session => [session.sessionId, session]))
   const archivedIds = new Set(snapshot.archivedSessionIds)
@@ -621,7 +709,7 @@ export function deriveServerWorkspaces(
       const session = sessionsById.get(sessionId)
       if (session === undefined) continue
       accounted.add(sessionId)
-      if (!sessionVisible(session, currentSessionId, archivedIds)) continue
+      if (!sessionVisible(session, currentSessionId, archivedIds, now)) continue
       sessions.push({
         id: sessionId,
         title: session.title ?? '',
@@ -635,7 +723,7 @@ export function deriveServerWorkspaces(
     workspaces.push({ id: workspace.workspaceId, title: workspace.title, sessions })
   }
   const stray = snapshot.sessions
-    .filter(session => !accounted.has(session.sessionId) && sessionVisible(session, currentSessionId, archivedIds))
+    .filter(session => !accounted.has(session.sessionId) && sessionVisible(session, currentSessionId, archivedIds, now))
     .sort(byRecency)
   if (stray.length > 0) {
     workspaces.push({
