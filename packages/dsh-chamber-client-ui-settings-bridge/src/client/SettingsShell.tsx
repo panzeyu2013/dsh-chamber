@@ -33,7 +33,10 @@ import {
 import {
   mountBridgeSession, sectionRows, type BridgeSession,
 } from './bridge-context.ts'
-import { BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
+import {
+  nextMountRetryDelayMs,
+} from './mount-retry.ts'
+import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import css from './SettingsShell.module.css'
 
 /** Registration-side business face for the chamber settings shell. */
@@ -60,6 +63,19 @@ const LOCAL_INSTANCE_ID = 'local'
  * server, so it lives OUTSIDE the child-context section ids.
  */
 const CONNECTIONS_SECTION_ID = '__connections'
+
+/**
+ * Per-selection session-mount retry ledger: `failures` counts consecutive
+ * child-ctx mount rejections for selection `id` (0 = none; '' = no
+ * selection). The id binding gives a selection switch (or panel reopen) a
+ * FRESH budget even when the previous server burned its attempts; the
+ * schedule itself lives in mount-retry.ts (bounded backoff, ~15s worst-case
+ * wait, fail-loud at the bound).
+ */
+interface MountRetryLedger {
+  id: string
+  failures: number
+}
 
 /** Nav glyph by section id; unknown ids fall back to the settings gear (official mirror). */
 function navIcon(id: string): ReactNode {
@@ -344,14 +360,24 @@ function SettingsPanel({
               {/* The official open-document action ("打开配置文件") is a
                   HOST-MACHINE file operation (native opener): it renders for
                   the LOCAL instance only and is suppressed for remote
-                  servers (the config there lives on the remote machine). */}
+                  servers (the config there lives on the remote machine).
+                  The whole outlet is wrapped in an ALL-CONTAINING entry
+                  boundary (containAll) — this is the child-ctx → host seam:
+                  ANY failure in this bridged surface (entry render, outlet
+                  frame, or a BridgeAssemblyError from child-ctx content) is
+                  contained to a `<div data-slot-error="settings.action">`
+                  and can never abdicate the entire `sidebar.settings` entry
+                  (which would fall the shell back to the official
+                  SettingsRoot with no server dropdown). */}
               {selectedId === LOCAL_INSTANCE_ID && selectedSession !== undefined && (
-                <BridgeOutlet
-                  slots={selectedSession.slots}
-                  locale={selectedSession.locale}
-                  slotKey="settings.action"
-                  ownerProps={{}}
-                />
+                <BridgeEntryBoundary containAll slotKey="settings.action">
+                  <BridgeOutlet
+                    slots={selectedSession.slots}
+                    locale={selectedSession.locale}
+                    slotKey="settings.action"
+                    ownerProps={{}}
+                  />
+                </BridgeEntryBoundary>
               )}
             </div>
             <button ref={closeButton} type="button" className={css.close} onClick={onClose}>
@@ -383,13 +409,23 @@ function SettingsPanel({
               ) : (
                 active !== undefined && (
                   <div key={selectedId} className={css.contentFade}>
-                    <BridgeOutlet
-                      slots={sessions[selectedId].slots}
-                      locale={sessions[selectedId].locale}
-                      slotKey="settings.section"
-                      ownerProps={{ close: onClose }}
-                      opts={{ only: active }}
-                    />
+                    {/* Child-ctx → host seam: the selected server's official
+                        section content. containAll keeps EVERY child-ctx
+                        failure (an ordinary render crash or a
+                        BridgeAssemblyError from the bridged entries — e.g.
+                        renderSlot for an undeclared slot, a missing locale
+                        face) inside a `<div data-slot-error="settings.section">`;
+                        it can never escape to abdicate the chamber-owned
+                        shell (falling back to the official SettingsRoot). */}
+                    <BridgeEntryBoundary containAll slotKey="settings.section">
+                      <BridgeOutlet
+                        slots={sessions[selectedId].slots}
+                        locale={sessions[selectedId].locale}
+                        slotKey="settings.section"
+                        ownerProps={{ close: onClose }}
+                        opts={{ only: active }}
+                      />
+                    </BridgeEntryBoundary>
                   </div>
                 )
               )
@@ -433,6 +469,10 @@ export function SettingsShell(props: SettingsShellProps) {
   const sessionsRef = useRef<Record<string, BridgeSession>>({})
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [retryNonce, setRetryNonce] = useState(0)
+  // Auto-retry ledger for the CURRENT selection's session mount (bounded
+  // backoff — see MountRetryLedger / mount-retry.ts). Bumping the state
+  // re-runs the mount effect, which re-attempts the SAME mount path.
+  const [mountRetry, setMountRetry] = useState<MountRetryLedger>({ id: '', failures: 0 })
 
   useEffect(() => subscribeServers(() => setServers(getServers())), [])
 
@@ -470,15 +510,22 @@ export function SettingsShell(props: SettingsShellProps) {
   useEffect(() => {
     if (!open || selectedId === undefined) {
       // Panel closed (or the selection is being re-anchored): release every
-      // child ctx and clear the projection-facing state.
+      // child ctx and clear the projection-facing state. The retry ledger
+      // resets too — a reopen is a fresh context (no-op when already reset).
       releaseAllSessions()
       setSessions({})
       setSessionError(null)
+      setMountRetry(current => current.id === selectedId && current.failures === 0
+        ? current
+        : { id: selectedId ?? '', failures: 0 })
       return
     }
     if (!selectedConnected) {
       // The SELECTED target became unreachable: release only its session —
-      // other servers' cached sessions survive a tunnel blip.
+      // other servers' cached sessions survive a tunnel blip. The retry
+      // ledger resets too: a connection transition is a fresh context, so an
+      // exhausted budget from before the blip must not suppress retries
+      // after the tunnel is back.
       const dropped = sessionsRef.current[selectedId]
       if (dropped !== undefined) {
         const next = { ...sessionsRef.current }
@@ -488,16 +535,26 @@ export function SettingsShell(props: SettingsShellProps) {
         void dropped.dispose().catch(() => {})
       }
       setSessionError(null)
+      setMountRetry(current => current.id === selectedId && current.failures === 0
+        ? current
+        : { id: selectedId, failures: 0 })
       return
     }
     // Already mounted for this selection: nothing to do (cache hit) — but
     // clear any error left by a PREVIOUS server's failed mount so the
-    // cached content is never shadowed by a foreign error.
+    // cached content is never shadowed by a foreign error. The ledger resets
+    // as well (content is live again: any later failure starts fresh).
     if (sessionsRef.current[selectedId] !== undefined) {
       setSessionError(null)
+      setMountRetry(current => current.id === selectedId && current.failures === 0
+        ? current
+        : { id: selectedId, failures: 0 })
       return
     }
     let cancelled = false
+    // Explicit DOM timer id: `ReturnType<typeof window.setTimeout>` picks the
+    // node global overload via the `Window & typeof globalThis` intersection.
+    let retryTimer: number | undefined
     setSessionError(null)
     mountBridgeSession(selectedId).then((mounted) => {
       if (cancelled) {
@@ -506,11 +563,44 @@ export function SettingsShell(props: SettingsShellProps) {
       }
       sessionsRef.current = { ...sessionsRef.current, [selectedId]: mounted }
       setSessions(sessionsRef.current)
+      // Mount succeeded: reset the retry ledger (no-op when already reset) —
+      // a LATER failure starts a fresh budget instead of inheriting this
+      // one's burned attempts.
+      setMountRetry(current => current.id === selectedId && current.failures === 0
+        ? current
+        : { id: selectedId, failures: 0 })
     }).catch((error: unknown) => {
-      if (!cancelled) setSessionError(errorMessage(error))
+      if (cancelled) return
+      setSessionError(errorMessage(error))
+      // Bounded-backoff auto-retry of the SAME mount path (issue 6 彻底修复,
+      // W2 residual gap P2): a transient not-ready burst (the selected host
+      // mid-boot/restart) can reject the child-ctx mount, and the error
+      // state had NO auto-recovery while the panel stayed open (only
+      // re-click / connection transition / reopen recovered) — which could
+      // strand the settings content in error. Retry with a capped schedule
+      // (1s, 2s, 4s, 8s — ~15s worst-case wait; see mount-retry.ts for the
+      // rationale) so the content recovers by itself once the target is
+      // ready. The budget is per-selection and bounded (MOUNT_RETRY_ATTEMPTS
+      // total attempts), so a genuinely dead target still fails loud. Every
+      // exit path — success, unmount, panel close, selection change,
+      // connection transition — clears the pending timer (cleanup below).
+      const failures = mountRetry.id === selectedId ? mountRetry.failures + 1 : 1
+      const delay = nextMountRetryDelayMs(failures)
+      if (delay !== null) {
+        retryTimer = window.setTimeout(() => {
+          // Bump the ledger (always a fresh object, so the effect re-runs)
+          // → the SAME mount path is re-attempted. The ledger read in the
+          // NEXT catch is this bumped value, so the backoff advances
+          // 1s → 2s → 4s → 8s across consecutive failures.
+          if (!cancelled) setMountRetry({ id: selectedId, failures })
+        }, delay)
+      }
     })
-    return () => { cancelled = true }
-  }, [open, selectedId, selectedConnected, retryNonce, releaseAllSessions])
+    return () => {
+      cancelled = true
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+    }
+  }, [open, selectedId, selectedConnected, retryNonce, mountRetry, releaseAllSessions])
 
   const selectServer = useCallback((id: string, connected: boolean, isLocal: boolean) => {
     // Remote rows are disabled in the dropdown while not connected; local is
@@ -518,7 +608,10 @@ export function SettingsShell(props: SettingsShellProps) {
     if (!connected && !isLocal) return
     if (id === selectedId && sessionError !== null) {
       // Retry path: bump the nonce so the mount effect re-runs without
-      // flashing an undefined selection (no noServers frame).
+      // flashing an undefined selection (no noServers frame). The retry
+      // ledger resets too — a user-initiated retry restarts the auto-retry
+      // budget (no-op when already reset).
+      setMountRetry(current => current.id === id && current.failures === 0 ? current : { id, failures: 0 })
       setRetryNonce(nonce => nonce + 1)
       return
     }

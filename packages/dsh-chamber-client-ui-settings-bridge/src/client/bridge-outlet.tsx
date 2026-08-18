@@ -1,15 +1,20 @@
 /**
  * Bridge outlet: a minimal re-implementation of the official slot render
  * pipeline (dsh-client-web-react/src/scoped-slots.tsx) covering exactly the
- * root-scope LIST slots the child settings context declares
- * (settings.section / settings.general.item / settings.plugins.tab /
- * settings.plugin.item). The official renderer is boot-root-anchored
+ * root-scope LIST and KEYED slots the child settings context declares
+ * (settings.section / settings.general.item / settings.plugins.tab list;
+ * settings.plugin.item keyed). The official renderer is boot-root-anchored
  * (`renderRoot('root')` requires the sessions/workspaces services the child
  * context deliberately omits), so the bridge renders entries itself: same
  * kit synthesis (t seat / useStore+actions / renderSlot binding / standard
  * hooks), same inject face normalization, same ledger-version subscription.
- * Scope kinds other than root+list render empty by design (no session scope
- * exists in a bridged settings surface).
+ * Scope kinds other than root+list/keyed throw BridgeAssemblyError (no
+ * session scope exists in a bridged settings surface) — a miswired surface
+ * must fail loud, never render empty by design. That fail-loud policy is
+ * scoped to the chamber's OWN wiring: the settings shell wraps every
+ * bridged outlet in `<BridgeEntryBoundary containAll>` (see the boundary
+ * below) so a child-ctx assembly error is contained at the host seam and
+ * can never abdicate the chamber-owned shell.
  */
 import { Component, useMemo, useSyncExternalStore, type FC, type ReactNode } from 'react'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
@@ -151,8 +156,8 @@ function boundRenderSlot(
     if (declared === undefined) {
       throw new BridgeAssemblyError(`bridge: slot '${key}' is not declared by this entry's children`)
     }
-    if (declared.kind !== 'list') {
-      throw new BridgeAssemblyError(`bridge: slot '${key}' is declared '${declared.kind}', not 'list' — unsupported by the bridge outlet`)
+    if (declared.kind !== 'list' && declared.kind !== 'keyed') {
+      throw new BridgeAssemblyError(`bridge: slot '${key}' is declared '${declared.kind}', not 'list' or 'keyed' — unsupported by the bridge outlet`)
     }
     if (declared.scope !== 'root') {
       throw new BridgeAssemblyError(`bridge: slot '${key}' is declared scope '${declared.scope}', not 'root' — the bridge outlet has no session scope`)
@@ -206,22 +211,56 @@ export class BridgeAssemblyError extends Error {}
 /**
  * One entry crash must not take down its siblings (mirror of the official
  * boundary). Assembly failures (missing locale face, undeclared children)
- * rethrow — a miswired shell must fail loud; ordinary render/inject crashes
- * are contained: the cell renders an addressable crash face (same shape as
- * the official `<div data-slot-error>`) so a silent blank never passes for
- * an empty section.
+ * rethrow by default — a miswired shell must fail loud; ordinary
+ * render/inject crashes are contained: the cell renders an addressable
+ * crash face (same shape as the official `<div data-slot-error>`) so a
+ * silent blank never passes for an empty section.
+ *
+ * `containAll` flips the policy for the child-ctx → host seam: the chamber
+ * settings shell wraps every top-level `BridgeOutlet` it renders in
+ * `<BridgeEntryBoundary containAll slotKey="…">` so NO child-ctx error —
+ * assembly or ordinary — can escape the shell. The bridged content is a
+ * DIFFERENT author (the official settings plugins running in the child
+ * context): one misbehaving entry (an entry calling renderSlot for an
+ * undeclared slot, a missing locale face, …) must never be able to abdicate
+ * the chamber-owned `sidebar.settings` shell to the hosting boot's
+ * boundary, which would permanently fall the entry back to the official
+ * SettingsRoot (no server dropdown). The chamber's OWN shell wiring stays
+ * fail-loud: a BridgeAssemblyError raised by shell code (outside the
+ * bridged outlets) still escapes.
+ *
+ * React invokes `getDerivedStateFromError` as a STATIC — no instance props
+ * are reachable there — so the mode cannot be decided inside it. The caught
+ * error is carried through the boundary state instead and `render()` (an
+ * instance method) makes the call: containAll → crash face for EVERY error;
+ * default → a BridgeAssemblyError rethrows from render, which propagates to
+ * the next boundary up — the same escape as a getDerivedStateFromError
+ * throw, keeping the per-entry default fail-loud.
  */
-class BridgeEntryBoundary extends Component<{ slotKey: string; children: ReactNode }, { failed: boolean }> {
-  override state = { failed: false }
-  static getDerivedStateFromError(error: unknown): { failed: boolean } {
-    if (error instanceof BridgeAssemblyError) throw error
-    return { failed: true }
+export class BridgeEntryBoundary extends Component<
+  { slotKey: string; containAll?: boolean; children: ReactNode },
+  { failed: boolean; error: unknown }
+> {
+  override state: { failed: boolean; error: unknown } = { failed: false, error: null }
+  static getDerivedStateFromError(error: unknown): { failed: boolean; error: unknown } {
+    // Static (no props): the error rides the state and render() applies the
+    // mode — see the class doc above.
+    return { failed: true, error }
   }
   override componentDidCatch(error: unknown): void {
     console.error('bridge settings entry crashed:', error)
   }
   override render(): ReactNode {
-    if (this.state.failed) return <div data-slot-error={this.props.slotKey} />
+    if (this.state.failed) {
+      // containAll (child-ctx → host seam): contain EVERYTHING — the crash
+      // face renders and the chamber shell survives. Default (per-entry):
+      // BridgeAssemblyError rethrows so a miswired surface fails loud; the
+      // throw from render propagates to the next boundary up.
+      if (this.props.containAll !== true && this.state.error instanceof BridgeAssemblyError) {
+        throw this.state.error
+      }
+      return <div data-slot-error={this.props.slotKey} />
+    }
     return this.props.children
   }
 }
@@ -240,11 +279,13 @@ function entryKeyOf(entry: StoredEntry): number {
 }
 
 /**
- * Render one root-scope LIST slot from a child settings context: ledger
- * version subscription + locale revision + entries (shadowing winners) in
- * order, `only` id filter for the nav→section dispatch. Subscribe/getVersion
- * closures are memoized per (slots, slotKey) — no resubscribe churn on
- * unrelated re-renders (official per-face cache pattern).
+ * Render one root-scope LIST or KEYED slot from a child settings context:
+ * ledger version subscription + locale revision + entries (shadowing
+ * winners) in order, `only` id filter for the nav→section dispatch. KEYED
+ * slots dispatch the single entry whose `options.key` matches
+ * `opts.entryKey`, else the fallback. Subscribe/getVersion closures are
+ * memoized per (slots, slotKey) — no resubscribe churn on unrelated
+ * re-renders (official per-face cache pattern).
  */
 export function BridgeOutlet({
   slots, locale, slotKey, ownerProps, opts,
@@ -262,7 +303,20 @@ export function BridgeOutlet({
   void version
   useLocaleRevision(locale)
   const spec = slots.spec(slotKey)
-  if (spec === undefined || spec.kind !== 'list' || spec.scope !== 'root') return null
+  if (spec === undefined || (spec.kind !== 'list' && spec.kind !== 'keyed') || spec.scope !== 'root') return null
+  if (spec.kind === 'keyed') {
+    // One card per key (official keyed dispatch): the entry registered with
+    // the requested key renders through the boundary. A miss is natural
+    // empty — the chamber bridge has no shadowing, so the official
+    // occupied-but-absent deadCell corner collapses to the fallback branch.
+    const entry = [...slots.entriesOfSlot(slotKey)].find(e => e.options.key === opts?.entryKey)
+    if (!entry) return <>{opts?.fallback ?? null}</>
+    return (
+      <BridgeEntryBoundary key={entryKeyOf(entry)} slotKey={slotKey}>
+        {renderEntry(slots, locale, entry, ownerProps)}
+      </BridgeEntryBoundary>
+    )
+  }
   let entries = [...slots.entriesOfSlot(slotKey)].sort((a, b) => (a.options.order ?? 0) - (b.options.order ?? 0))
   if (opts?.only !== undefined) entries = entries.filter(entry => entry.options.id === opts.only)
   if (entries.length === 0) return <>{opts?.fallback ?? null}</>
