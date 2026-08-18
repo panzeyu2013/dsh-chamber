@@ -166,5 +166,3 @@ interface ChamberServerAggregate {
 
 - 单测：`deriveArchivedRows`（归档行按 workspace 归属/未分组、blank/subagent
   排除、签名计入）、搜索命中归档、桥契约类型。
-- 实机：归档 → 出现在已归档视图 → 打开/重命名/搜索命中；断连来源归档桶随
-  聚合生命周期；C 落地后恢复/删除端到端（含当前会话被删除的 selection 回退）。

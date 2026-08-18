@@ -6,16 +6,8 @@
 
 ## 未完成 / 待执行
 
-- **SSH 密码认证（05 §8 例外，已落地）**：仍待实机——错误密码终态、重启后自动连接；
-  Windows 门禁（`sshPasswordSupported()` 为 false 时 IPC 显式拒绝）需实机确认
-  Win32-OpenSSH 行为（全局「Windows 首版暂缓」）。未做（可选）：一键免密引导、系统钥匙串。
-- **侧边栏 pending 交互徽标（06 §4.3 修订，方案 A）实机验证**：静态检查（sidebar
-  typecheck / build:renderer / verify:i18n）已绿，运行时呈现待实机。
-- **设置壳交互与 GUI 内手动操作待实机**：壳交互（下拉 roving、nav 投影、连接导航、
-  懒装配时序）与 GUI 内手动操作待实机；bridge-rows 两行读写落盘待实机（单测覆盖控制器
-  状态机，实机验证 describe/mutate wire）。
-- **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径——无 Windows 设备，维持
-  「未验证」；Unix 为契约目标。
+- **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
+- **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径；Unix 为契约目标。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化透传、
   host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游解锁（07 §3/§4）。
 - **Git Worktree 插件（设计 08）**：范围决策已定稿（git/GitHub 插件化——不进控制面/
@@ -24,22 +16,25 @@
 - **远程实例插件管理 / 一键应用本地插件清单 + 可视化添加（设计 13）**：**M1–M4 已落地**
   （exec `restart`/`run`/`write-file` + §7.2 白名单、`remoteDshHome` 贯穿 schema/投影/
   IPC/双 ambient 类型、`plugin-sync.ts` 编排、10 个 IPC 通道、前端
-  PluginSyncModal/PluginAddView/plugin-diff）。剩余：**M5 实机端到端未做**（真实远端
-  apply → restart 生效 → pluginInventory 可见）；本地 `dsh plugin`/`pnpm pack` 依赖本机
-  pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
+  PluginSyncModal/PluginAddView/plugin-diff）。**chamber 内建注入可见化（2026-08）**：
+  插件管理 UI（远端同步视图 + 本地列表视图）新增 chamber 内建组件行
+  （`@dsh-chamber/dsh-host-client-graph` 的 installed/patched 状态；远端未注入时提供
+  「注入」按钮），远程注入不再是无知修改；远端 seed 已接入连接就绪时的自动注入
+  （设计 09 遗留 1 接线，幂等 hash-skip，主进程日志 + UI 实时探测，手动按钮为失败
+  重试路径）；注入结果同时写入实例环形缓冲日志（transport-manager 新增公开
+  `appendLog`，连接设置页的远端日志面板可见）。剩余：本地 `dsh plugin`/`pnpm pack`
+  依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
 - **客户端插件运行时加载（设计 09，已实现）**：设计见
-  `docs/design/09-client-plugin-runtime-loading.md`。遗留：远程实例 seed 实机 E2E（随
-  设计 13 M5）、打包态 seed 实机复验、第三方 `dsh.client` 插件完整 UI 实机、图通道失败
-  仅 console.error 无 UI 信号（可观测性待补）。
+  `docs/design/09-client-plugin-runtime-loading.md`。遗留：图通道失败仅 console.error
+  无 UI 信号（可观测性待补）。
 - **侧边栏聚合改事件驱动（设计 10）**：实现未排期——改动 05 §3 契约，需评审确认；详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
-- **桌面端自动更新 + 通道灰度（设计 11）**：实现未排期；详见
+- **桌面端更新提示（设计 11，无弹窗、低打扰：settings 部分展示，用户确认后下载、退出时安装，双平台一致）**：实现未排期；详见
   `docs/todo/11-todo-auto-update.md`。
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游 wire 根治）；
   实现未排期；详见 `docs/todo/12-todo-archived-sessions.md`。
 - **设计未决**（02 §5 / 04 §7）：starting port 偏移、trusted-host 自定义 Host、多控制面
   `$DSH_HOME` 冲突、响应头白名单双处同步、`__DSH_BOOT__` 随 dsh 版本漂移。
-- **外部编辑风险**：`packages/desktop/` 存在未提交的进行中改动，typecheck/测试结果可能波动。
 
 ## 范围决策与剩余偏差（不做 / 推迟 / 移出）
 
@@ -64,3 +59,8 @@
   后续插件化。
 - **窗口标题冻结（桌面壳故意偏差）**：桌面壳冻结原生标题栏为 `dsh-chamber`（单 frame 品牌
   恒定），会话名仍在应用内呈现。
+- **dev 实例隔离（dev 契约，2026-08）**：`electron-dev.mjs` 以独立 `--user-data-dir`
+  （`packages/desktop/.dev-user-data`）+ dev 控制面端口 17520（`DSH_CHAMBER_CP_PORT`
+  覆盖）启动，并清除继承的 `ELECTRON_RUN_AS_NODE`——dev 与运行中的打包版实例
+  （同一应用名 `@dsh-chamber/desktop` → 同 userData/单实例锁、占 17500）可共存；
+  打包版默认端口/数据路径不变。

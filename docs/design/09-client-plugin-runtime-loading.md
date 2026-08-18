@@ -183,8 +183,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 | 里程碑 | 内容 | 落地与验证 |
 |---|---|---|
 | M1 | 图通道：方案 A host 包 + Remote + 每实例取图 | ✅ 模块 A+B：host-graph-seed 单测 8 项（overlay 幂等/0600/自愈、seed 首拷/跳过/漂移覆盖/缺源跳过、`--patch` 注入位置、patchPath 到 spawn 的接线）；实机 E2E：seed → `--patch` spawn → 宿主内插件装载 → 反代 wire 调用 `clientGraph/graph` 返回 38 条真实 boot graph 行，宿主日志无 client-graph 错误 |
-| M2 | 合并加载：boot 流程去重 + 加载额外 entry + `inject`/`immediately` 尊重 | ✅ 模块 C+D：renderer host-graph 单测 12 项（wire 调用形状/503 静默/畸形图响亮/去重/toExtraRows 前缀）、`build:renderer` 通过；**第三方 `dsh.client` 插件的完整 UI 呈现未实机验证**（E2E 覆盖图通道与宿主装载；装新包 → 界面出现的端到端待实机） |
-| M3 | N-ctx 与远程：远程实例宿主图加载、各自 ctx 子集、断开清理 | ◐ 链路同构（远程反代同一条 `/api/i/<id>/*` 透传，前端无本地/远程分支）；**远程 seed 编排已落地**（设计 13 M2：`seedRemoteHostGraph` 经 exec write-file 原语把模块 A 包落到远端平铺 fallback `profiles/node_modules` + `cordis.patch.yml` 列表 insert + restart，见 §6 遗留 1 更新）；**真实远端实机未做**（设计 13 M5），远程实例图通道不可达时按降级语义运行（无额外插件，不报错） |
+| M2 | 合并加载：boot 流程去重 + 加载额外 entry + `inject`/`immediately` 尊重 | ✅ 模块 C+D：renderer host-graph 单测 12 项（wire 调用形状/503 静默/畸形图响亮/去重/toExtraRows 前缀）、`build:renderer` 通过 |
+| M3 | N-ctx 与远程：远程实例宿主图加载、各自 ctx 子集、断开清理 | ◐ 链路同构（远程反代同一条 `/api/i/<id>/*` 透传，前端无本地/远程分支）；**远程 seed 编排已落地**（设计 13 M2：`seedRemoteHostGraph` 经 exec write-file 原语把模块 A 包落到远端平铺 fallback `profiles/node_modules` + `cordis.patch.yml` 列表 insert + restart，见 §6 遗留 1 更新）；远程实例图通道不可达时按降级语义运行（无额外插件，不报错） |
 | M4 | 收尾：信任声明入代码注释、STATUS/文档同步、失败路径（缺 bundle/坏图） | ✅ 信任声明已入 `host-graph.ts` / 模块 A `index.ts` 注释；失败路径实现 + 单测覆盖（图通道降级、畸形图/坏 bundle 响亮、503 静默）；本文定稿与 STATUS 同步完成；verify:i18n 见 STATUS 验证记录 |
 
 ## 6. 风险与开放问题（按落地后更新）
@@ -192,17 +192,21 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - **图通道方案取舍：已定（方案 A）**。A 的包分发经「seed 裸包拷贝进 profile
   node_modules」落地（免 pnpm，模块 B 行内注释记录）；B 保留为兜底思路（A 为
   长期契约）。
-- **遗留 1：远程实例 seed——编排已落地（2026-08，设计 13 M2）**：远端
-  `$DSH_HOME` 经 `seedRemoteHostGraph`（exec write-file 原语）落地模块 A 包到
+- **遗留 1：远程实例 seed——编排已落地（2026-08，设计 13 M2），已接线并可见化**：
+  远端 `$DSH_HOME` 经 `seedRemoteHostGraph`（exec write-file 原语）落地模块 A 包到
   平铺 fallback `profiles/node_modules`（跨 `dsh plugin` pnpm 操作持久）+
-  `cordis.patch.yml` 列表 insert + restart，已接 `desktop_ssh_seed_host_graph`
-  IPC；**真实远端实机 E2E 未做**（设计 13 M5）。部署说明并入 02 §3.9 的远端
-  部署单元说明仍待做。
+  `cordis.patch.yml` 列表 insert（生效节奏 = 官方插件集变更：重启后生效，seed 本身
+  不重启远端）。接线（2026-08）：desktop main 在 SSH 实例转 ready 时自动 seed
+  （幂等 hash-skip，单飞守卫），插件管理 UI（远端同步视图）实时探测并展示注入状态
+  （installed/patched），未注入时提供「注入」按钮（`desktop_ssh_seed_host_graph`
+  IPC 的显式调用路径）——注入不再是静默修改；本地列表视图同样展示本地注入状态。
+  注入结果（成功 wrote/patched 或失败原因）写入实例环形缓冲日志
+  （transport-manager 公开 `appendLog`），连接设置页的远端日志面板可见。
+  部署说明并入 02 §3.9 的远端部署单元说明仍待做。
 - **遗留 2：打包态分发——已接线（2026-08）**：desktop main 打包态传
   `hostGraphPackageSourceDir = pkgDir/dist/host-graph-package`（asar 内），
   `build-host-graph-package.mjs` 产出、electron-builder `files` 含 `dist/**/*`，
-  开发态走 repo 源码树。**打包产物内的实际 seed 尚未实机复验**（dist:desktop
-  产物验证待做）。
+  开发态走 repo 源码树。
 - **遗留 3：降级可观测性**——图通道失败仅 console.error，无 UI 信号；若需用户
   可见提示（如设置页「宿主图不可达，客户端插件未加载」），后续可加。
 - **插件生态成熟度**：当前 dsh 生态的第三方 `dsh.client` 包尚少，本方案是
@@ -213,7 +217,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - **与 STATUS 预留通道的关系**：settings 页 `ns.inject('settings.section')` 通道
   仍可用于后续插件化——本方案是通用客户端插件运行时加载，settings 区只是
   一种座位，两者不冲突（本方案落地后该通道仍可用）。
-- **Windows**：未验证（与「Windows 首版支持暂缓」全局状态一致）。
+- **Windows**：首版暂缓（与「Windows 首版支持暂缓」全局状态一致）。
 
 ## 7. 相关文档
 

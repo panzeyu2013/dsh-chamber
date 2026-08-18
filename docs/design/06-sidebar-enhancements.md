@@ -417,9 +417,6 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   （并入 `test/derive.ts` 或新增 test 文件，node:test 风格）。
 - `pnpm run typecheck`、`pnpm run build:renderer`、`pnpm run verify:i18n`
   全绿；control-plane 套件不回退。
-- 实机：拖拽持久化跨重启（真实 workspace 序经 wire、未分组序经
-  localStorage）；搜索命中/abort/错误横幅；另一来源会话运行/完成/
-  待交互点在本地来源的侧边栏正确呈现（真机 SSH 隧道验证）。
 
 ## 7. 样式定稿（设计）
 
