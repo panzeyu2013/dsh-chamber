@@ -624,9 +624,16 @@
 
 .pluginChamberTitle {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The shared .dim uses label-tertiary (3.7:1 light — below WCAG AA), so scope
+   the hint under the title to label-secondary too; the shared class is left
+   untouched for loading/empty states. */
+.pluginChamberTitle .dim {
+  color: var(--dsw-alias-label-secondary);
 }
 
 .pluginChamberRow {
@@ -645,7 +652,9 @@
   padding: 1px 8px;
   font: inherit;
   font-size: 11px;
-  color: var(--dsw-alias-state-primary-label);
+  /* no color: inherit ambient row text — the block is intentionally muted, and
+     --dsw-alias-state-primary-label is undefined in the theme (silently
+     dropped); brand-primary is never used as text color in this plugin */
   cursor: pointer;
 }
 

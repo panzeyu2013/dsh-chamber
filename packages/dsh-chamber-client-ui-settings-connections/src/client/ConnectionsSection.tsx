@@ -740,8 +740,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             <button
               type="button"
               className={css.iconButton}
-              data-tip={t('logsRefresh')}
-              aria-label={t('logsRefresh')}
+              data-tip={t('localRefresh')}
+              aria-label={t('localRefresh')}
               onClick={() => { void loadLocal() }}
             >
               <IconRefreshOutline16 />
