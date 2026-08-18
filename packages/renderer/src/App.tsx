@@ -40,6 +40,7 @@ import {
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { openInstanceSession, disposeAllShells, disposeInstanceShell } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
+import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
 import InstanceView from './components/InstanceView.tsx'
@@ -672,6 +673,14 @@ export default function App() {
     // 不被残留意图误吞。
     if (viewId === pendingViewRef.current) return
     if (pendingViewRef.current === null && viewId === activeViewRef.current) return
+    // chamber (2026-08 scroll sync): anchor the outgoing shell's sidebar
+    // scroll BEFORE the switch; the incoming shell's stale scrollTop would
+    // otherwise make the whole sidebar jump (each N-ctx shell owns its own
+    // .chamberList scrollTop). restoreSidebarScroll runs after the apply —
+    // it retries until the incoming shell's container mounts (booting /
+    // collapsed-to-rail) and anchors the same rows at the same screen
+    // position (sidebar-scroll-sync.ts).
+    const scrollAnchor = captureSidebarScrollAnchor(activeViewRef.current)
     pendingViewRef.current = viewId
     runViewTransition(() => {
       if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) {
@@ -686,6 +695,7 @@ export default function App() {
       if (pendingViewRef.current === viewId) pendingViewRef.current = null
       setActiveView(viewId)
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
+      if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
     })
   }, [ensureRemoteConnected])
 
