@@ -35,7 +35,7 @@ permissions:
   contents: write
 
 env:
-  DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.6
+  DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.7
 
 jobs:
   create-release:

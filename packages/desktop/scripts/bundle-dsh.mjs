@@ -14,7 +14,7 @@ import { pruneRuntimeArtifacts } from './prune-runtime.mjs';
  *
  * 版本策略：
  *   - 默认 `latest`（每次构建取 npm 最新发布版）
- *   - 环境变量 DSH_CHAMBER_DSH_VERSION 可固定版本（如 0.1.0-rc.6）做可复现构建
+ *   - 环境变量 DSH_CHAMBER_DSH_VERSION 可固定版本（如 0.1.0-rc.7）做可复现构建
  *   - 封装完成后 vendor/dsh/package.json 记录实际解析到的精确版本
  *     （dependencies["@deepseek-ai/dsh"]），可复现重建；--force 刷新到最新。
  *

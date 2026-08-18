@@ -33,10 +33,14 @@
     "noUnusedParameters": false,
     "paths": {
       "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"],
-      // @standard-schema/spec (cordis/schemastery dependency, used type-only) is
-      // not linked anywhere in the chamber workspace — only the pnpm virtual
-      // store carries it. Its version is pinned by the lockfile (1.1.0), so
-      // this path is stable across installs; it exists after any `pnpm install`.
+      // @standard-schema/spec (cordis/schemastery dependency, used type-only
+      // via `import type`) is not installed as a dependency of the vendor
+      // workspace members — they are symlinks into the external harness
+      // checkout, so pnpm never links their registry deps into this tree. It
+      // is therefore declared as a devDependency of this package (types-only,
+      // no runtime surface): that puts it in the pnpm virtual store at the
+      // stable path below (version pinned by the lockfile, 1.1.0), so the
+      // mapping exists after any `pnpm install`.
       "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"]
     }
   },

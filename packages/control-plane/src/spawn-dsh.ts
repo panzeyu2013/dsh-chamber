@@ -41,8 +41,8 @@
  *  so every instance — local and remote alike — uses the same in-app
  *  directory dialog (design 05 §4; the OS chooser is never surfaced to
  *  chamber users). Only directory-picker-auto reads SSH_CONNECTION in the
- *  dsh source (verified against the pinned harness commit 47f9438… and the
- *  vendored web-app artifact, 0.1.0-rc.6), so the pin has no other effect.
+ *  dsh source (verified against the pinned harness commit 99f6f02… and the
+ *  vendored web-app artifact, 0.1.0-rc.7), so the pin has no other effect.
  *  A pid
  *  record per design 02 §3.4.1 (pid/ownerPid/ownerInstanceId/port/binary/
  *  profile:'web'/source/startedAt) is atomically written under
