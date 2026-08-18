@@ -139,6 +139,16 @@ export function bootInstanceShell(
   bootGenerations.set(instanceId, gen)
   const before: ShellState = { instanceId, basePath, booted: false, booting: true, error: null }
   onState(before)
+  // 提前启动宿主启动图 fetch（LCP/perf pass，design 09 module C）：collectExtraRows
+  // 只读 basePath 参数、完全不碰 __DSH_BASE_PATH__ 旋钮（见下注释），所以可以在
+  // 排进串行链之前就开始——与排在前面的 boot（前一实例的 AppWebEntry.run()，最坏
+  // 占满 BOOT_TIMEOUT_MS）以及 App 自身的启动工作重叠，而不是在拿到链槽后才发起
+  // 网络往返。任务体仍在构造 entry 之前 await 它（extraRows-before-create 顺序不变：
+  // factory 必须在 loader.create 物化 entries 之前注册进共享模块表）。排队的等待期
+  // 内若提前失败（extra bundle 加载失败），先挂一个 no-op catch 防止 unhandledrejection
+  // 冒泡——任务体 await 同一 promise 并照旧走 fail-loud 路径。
+  const extraRowsPromise = collectExtraRows(instanceId, basePath, { loadModuleBundle })
+  void extraRowsPromise.catch(() => undefined)
   const task = bootChain.then(async () => {
     const win = window as Window & { __DSH_BASE_PATH__?: string }
     let staleEntry: AppWebEntry | undefined
@@ -149,7 +159,7 @@ export function bootInstanceShell(
       // bundles completes BEFORE entry creation so every factory is registered
       // in the shared module table when loader.create materializes entries
       // (boot.tsx runPluginBoot — the factories branch).
-      const extraRows = await collectExtraRows(instanceId, basePath, { loadModuleBundle })
+      const extraRows = await extraRowsPromise
       // 旋钮设置纳入 try（任何一步抛错都必须落成终态错误 settle，且 finally
       // 保证旋钮清除——若在 try 之外抛出，任务 promise 拒绝且永无 settle，
       // 视图骨架屏与预热队列会卡死），并放在 collectExtraRows 之后：图 fetch

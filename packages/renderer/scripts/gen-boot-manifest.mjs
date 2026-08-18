@@ -67,9 +67,19 @@ const bundlePath = fileURLToPath(new URL(`../../desktop/dist/${bundleFile}`, imp
 if (!existsSync(bundlePath)) fail(`chamber bundle missing (${bundleFile})`)
 const bundleRev = shortHash(readFileSync(bundlePath))
 
+/**
+ * The manifest-row url AND the modulepreload href are ONE address, built here
+ * in a single place: root-relative `/${bundleFile}?rev=${bundleRev}`. The
+ * preload must reuse this exact value — never a relative `./` form — so that
+ * the boot graph's script fetch resolves to the same resource under any
+ * mount point (origin root today, a sub-path in the future) and reuses the
+ * preloaded fetch. Keep the two in lockstep; they must never diverge.
+ */
+const bundleUrl = `/${bundleFile}?rev=${bundleRev}`
+
 const entries = [{
   id: CHAMBER_ID,
-  url: `/${bundleFile}?rev=${bundleRev}`,
+  url: bundleUrl,
   rev: bundleRev,
   immediately: true,
 }]
@@ -85,13 +95,50 @@ console.log(`  rev=${graph.rev} entry=${CHAMBER_ID} url=${entries[0].url}`)
 // The chamber bundle is an unlinked entry: link its CSS into index.html.
 const cssAssets = (chamberRow.css ?? []).filter((css) => typeof css === 'string')
 let html = readFileSync(INDEX_HTML, 'utf8')
+
+// Preload the chamber bundle (LCP perf pass): a <link rel="modulepreload"> in
+// <head> starts the 933KB bundle fetch during HTML parse, overlapping the
+// ~1.8MB renderer-entry eval that precedes the boot chain. The href carries
+// the SAME absolute address as the manifest row url (`bundleUrl` above — the
+// two are built from one value and must stay identical): URL resolution of
+// both against the document origin then yields the same resource, so the
+// boot graph's script fetch (loadModuleBundle) reuses the preloaded
+// resource — one network fetch, not two, under any mount point. The asset is
+// immutable-cached by the control plane, so a relaunch serves it from the
+// Electron HTTP cache.
+const preload = `<link rel="modulepreload" crossorigin href="${bundleUrl}" />`
+// In-place rewrite, never accumulate: drop any stale chamber preload line
+// (older builds emitted a relative `./` href that only resolved like the
+// boot fetch at origin root — a sub-path mount would double-fetch) so the
+// head holds at most one preload — the canonical absolute href below. The
+// dedupe guard keeps repeated runs a silent no-op.
+html = html
+  .split('\n')
+  .filter((line) => !line.includes(`href="./${bundleFile}?rev=${bundleRev}"`))
+  .join('\n')
+if (!html.includes(preload)) {
+  html = html.includes('</head>')
+    ? html.replace('</head>', `  ${preload}\n  </head>`)
+    : `${html}\n${preload}`
+  console.log(`gen-boot-manifest: preloaded chamber bundle ${bundleUrl}`)
+}
+
 for (const css of cssAssets) {
   const href = `./${css}`
-  if (html.includes(href)) continue
   const link = `<link rel="stylesheet" href="${href}" />`
-  html = html.includes('</head>')
-    ? html.replace('</head>', `${link}\n  </head>`)
-    : `${html}\n${link}`
-  console.log(`gen-boot-manifest: linked chamber css ${href}`)
+  // Same one-link rule as the preload: drop any existing chamber CSS line
+  // (older builds inserted it at the wrong indent) and insert the canonical
+  // form at the consistent head indent — log only when something changed.
+  const next = html
+    .split('\n')
+    .filter((line) => !line.includes(`href="${href}"`))
+    .join('\n')
+  const inserted = next.includes('</head>')
+    ? next.replace('</head>', `  ${link}\n  </head>`)
+    : `${next}\n${link}`
+  if (inserted !== html) {
+    html = inserted
+    console.log(`gen-boot-manifest: linked chamber css ${href}`)
+  }
 }
 writeFileSync(INDEX_HTML, html)

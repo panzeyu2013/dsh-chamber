@@ -21,6 +21,44 @@
  * > an entry-level React implementation in the shell entry (main.tsx) — the
  * > wire crosser is the shared chamberBridge + the per-boot instance knob
  * > (see chamber-knob.ts).
+ *
+ * ## First-screen / deferred split (LCP perf pass, P4)
+ *
+ * The boot settle (`loader.await()` + `assertEntriesActive()`, boot.tsx) only
+ * requires every loader ENTRY fiber ACTIVE — for this composite that is the
+ * entry's own root fiber, which is ACTIVE as soon as `apply` returns (a sync
+ * function, not a thenable). Child ui-* fibers registered through
+ * `ctx.plugin()` are NOT part of the sweep, so they may be registered AFTER
+ * the settle — the boot does not wait for them (fiber activation is driven by
+ * inject-waiting + reflect notifications, and the settled UI re-renders
+ * reactively as late-registered slots/services appear).
+ *
+ * To shrink the JS that must evaluate before the settled UI paints, the
+ * NON-first-screen ui-* families are split into separate vite chunks via
+ * dynamic `import()` and registered fire-and-forget at the end of `apply`
+ * (never awaited): the fetch starts right away, overlapping the settle and
+ * first paint, while the entry — and therefore the whole boot — settles with
+ * only the first-screen families evaluated. The deferred families register
+ * their slots/services moments later; the already-painted UI picks them up
+ * through the slot store's reactivity (progressive enhancement, not a
+ * blocking dependency).
+ *
+ * The split is safe ONLY because no first-screen family requires a deferred
+ * service at its apply root (verified against the inject lists): the deferred
+ * set (commands, input-trigger, jobs, goal, skill, tool, trajectory,
+ * workflow-run, deliverables, subagent, message-feedback, plan,
+ * user-questions, agent-preset, permission-presets) all inject first-screen
+ * services (connection/sessions/slots/locale/remote/…); the only
+ * sync→deferred edge is ui-model-selection's `commandUi` inject, which it
+ * declares inside a nested `ctx.inject` (a /model command contribution) — the
+ * composer model seat renders without it. `input-trigger`'s service
+ * (`inputTriggers`) is injected only by deferred families (commands, skill,
+ * subagent), and ui-conversation's imports from it are type-only.
+ *
+ * Maintenance: when adding a ui-* family, decide first-screen (synchronous
+ * static import — hero, composer, settings shell, navigation) vs deferred
+ * (feature UI only reachable after the first paint). Keep `chamber-covered.ts`
+ * in lockstep either way.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -34,6 +72,8 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+// ── First-screen families: statically imported, evaluated with the entry
+// ── chunk, registered synchronously inside apply (see module header).
 import * as ConnectionPlugin from '@deepseek-ai/dsh-client-connection/client'
 import * as TypertRegistry from '@deepseek-ai/dsh-typert-registry/client'
 import * as ApiGateway from '@deepseek-ai/dsh-api-gateway/client'
@@ -41,7 +81,12 @@ import * as ApiRemotes from '@deepseek-ai/dsh-api-remotes/client'
 import * as Runtime from '@deepseek-ai/dsh-client-runtime/client'
 import * as Locale from '@deepseek-ai/dsh-client-locale/client'
 import * as UiTheme from '@deepseek-ai/dsh-client-ui-theme/client'
-import * as UiLayout from '@deepseek-ai/dsh-client-ui-layout/client'
+// chamber (design 06): the chamber-owned ui-layout fork replaces the official
+// layout — the official bundle must never load on the same ctx (a second
+// 'root' registration at priority 0 throws the one-declarer rule; the id
+// stays covered in chamber-covered.ts). The fork shares + persists the
+// sidebar width across every shell boot.
+import * as UiLayout from '@dsh-chamber/dsh-client-ui-layout/client'
 import * as UiSidebar from '@dsh-chamber/dsh-client-ui-sidebar/client'
 import * as UiSettings from '@deepseek-ai/dsh-client-ui-settings/client'
 import * as UiSettingsGeneral from '@deepseek-ai/dsh-client-ui-settings-general/client'
@@ -49,22 +94,8 @@ import * as UiSettingsModels from '@deepseek-ai/dsh-client-ui-settings-models/cl
 import * as UiSettingsPlugins from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import * as UiSettingsPluginInventory from '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
 import * as UiConversation from '@deepseek-ai/dsh-client-ui-conversation/client'
-import * as UiCommands from '@deepseek-ai/dsh-client-ui-commands/client'
-import * as UiInputTrigger from '@deepseek-ai/dsh-client-ui-input-trigger/client'
-import * as UiJobs from '@deepseek-ai/dsh-client-ui-jobs/client'
-import * as UiGoal from '@deepseek-ai/dsh-client-ui-goal/client'
 import * as UiWorkspace from '@deepseek-ai/dsh-client-ui-workspace/client'
 import * as UiModelSelection from '@deepseek-ai/dsh-client-ui-model-selection/client'
-import * as UiMessageFeedback from '@deepseek-ai/dsh-client-ui-message-feedback/client'
-import * as UiPlan from '@deepseek-ai/dsh-client-ui-plan/client'
-import * as UiSkill from '@deepseek-ai/dsh-client-ui-skill/client'
-import * as UiSubagent from '@deepseek-ai/dsh-client-ui-subagent/client'
-import * as UiTool from '@deepseek-ai/dsh-client-ui-tool/client'
-import * as UiTrajectory from '@deepseek-ai/dsh-client-ui-trajectory/client'
-import * as UiUserQuestions from '@deepseek-ai/dsh-client-ui-user-questions/client'
-import * as UiWorkflowRun from '@deepseek-ai/dsh-client-ui-workflow-run/client'
-import * as UiAgentPreset from '@deepseek-ai/dsh-client-ui-agent-preset/client'
-import * as UiDeliverables from '@deepseek-ai/dsh-client-ui-deliverables/client'
 // Directory picking: the official web-app roster mounts exactly ONE surface
 // (dsh-host-directory-picker-auto resolves native|browse per deployment and
 // mounts that pair; the web-app cordis.patch.yml never carries both). Both
@@ -81,9 +112,71 @@ import * as UiDeliverables from '@deepseek-ai/dsh-client-ui-deliverables/client'
 // the sidebar's add-workspace dialog share the same in-app directory browser
 // (design 05 §4; the OS chooser is never surfaced to chamber users).
 import * as UiDirectoryPickerBrowse from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client'
-import * as UiPermissionPresets from '@deepseek-ai/dsh-client-ui-permission-presets/client'
 import * as UiSettingsConnections from '@dsh-chamber/dsh-client-ui-settings-connections/client'
 import * as UiSettingsBridge from '@dsh-chamber/dsh-client-ui-settings-bridge/client'
+
+// ── Deferred families (see module header): dynamic-import chunks, fetched
+// ── and registered after the boot settles. Each `import()` resolves to the
+// ── same module-namespace shape the static imports above use, so the
+// ── registrations below typecheck identically to the synchronous ones.
+
+/**
+ * Register the non-first-screen ui-* families once their chunks arrive.
+ * Fire-and-forget from apply: never awaited, so the entry (and the boot's
+ * settle/sweep) does not wait for any of this. Failures (chunk load error,
+ * or a registration racing the shell's teardown) are logged loud — the
+ * settled UI simply misses that family, it never takes the boot down.
+ */
+async function registerDeferred(ctx: Context): Promise<void> {
+  const [
+    commands,
+    inputTrigger,
+    jobs,
+    goal,
+    skill,
+    tool,
+    trajectory,
+    workflowRun,
+    deliverables,
+    subagent,
+    messageFeedback,
+    plan,
+    userQuestions,
+    agentPreset,
+    permissionPresets,
+  ] = await Promise.all([
+    import('@deepseek-ai/dsh-client-ui-commands/client'),
+    import('@deepseek-ai/dsh-client-ui-input-trigger/client'),
+    import('@deepseek-ai/dsh-client-ui-jobs/client'),
+    import('@deepseek-ai/dsh-client-ui-goal/client'),
+    import('@deepseek-ai/dsh-client-ui-skill/client'),
+    import('@deepseek-ai/dsh-client-ui-tool/client'),
+    import('@deepseek-ai/dsh-client-ui-trajectory/client'),
+    import('@deepseek-ai/dsh-client-ui-workflow-run/client'),
+    import('@deepseek-ai/dsh-client-ui-deliverables/client'),
+    import('@deepseek-ai/dsh-client-ui-subagent/client'),
+    import('@deepseek-ai/dsh-client-ui-message-feedback/client'),
+    import('@deepseek-ai/dsh-client-ui-plan/client'),
+    import('@deepseek-ai/dsh-client-ui-user-questions/client'),
+    import('@deepseek-ai/dsh-client-ui-agent-preset/client'),
+    import('@deepseek-ai/dsh-client-ui-permission-presets/client'),
+  ])
+  ctx.plugin(commands)
+  ctx.plugin(inputTrigger)
+  ctx.plugin(jobs)
+  ctx.plugin(goal)
+  ctx.plugin(skill)
+  ctx.plugin(tool)
+  ctx.plugin(trajectory)
+  ctx.plugin(workflowRun)
+  ctx.plugin(deliverables)
+  ctx.plugin(subagent)
+  ctx.plugin(messageFeedback)
+  ctx.plugin(plan)
+  ctx.plugin(userQuestions)
+  ctx.plugin(agentPreset)
+  ctx.plugin(permissionPresets)
+}
 
 /**
  * The boot-graph entry ids this composite covers (design 09, module C) — the
@@ -106,6 +199,10 @@ export const inject: string[] = []
  * Assemble the complete dsh client plugin tree on the per-instance ctx.
  * Sub-plugin fibers wait on their inject sets, so registration order carries
  * no activation semantics; the core assembly is listed first for readability.
+ *
+ * The first-screen families are registered synchronously; the deferred
+ * families are kicked off (not awaited) so the entry settles — and the boot
+ * paints — without their eval (see module header).
  */
 export function apply(ctx: Context): void {
   // chamber patch (05 §4): the per-boot instance id, set by shell.ts through
@@ -128,22 +225,8 @@ export function apply(ctx: Context): void {
   ctx.plugin(UiSettingsPlugins)
   ctx.plugin(UiSettingsPluginInventory)
   ctx.plugin(UiConversation)
-  ctx.plugin(UiCommands)
-  ctx.plugin(UiInputTrigger)
-  ctx.plugin(UiJobs)
-  ctx.plugin(UiGoal)
   ctx.plugin(UiWorkspace)
   ctx.plugin(UiModelSelection)
-  ctx.plugin(UiMessageFeedback)
-  ctx.plugin(UiPlan)
-  ctx.plugin(UiSkill)
-  ctx.plugin(UiSubagent)
-  ctx.plugin(UiTool)
-  ctx.plugin(UiTrajectory)
-  ctx.plugin(UiUserQuestions)
-  ctx.plugin(UiWorkflowRun)
-  ctx.plugin(UiAgentPreset)
-  ctx.plugin(UiDeliverables)
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
@@ -152,9 +235,14 @@ export function apply(ctx: Context): void {
     throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
   }
   ctx.plugin(UiDirectoryPickerBrowse)
-  ctx.plugin(UiPermissionPresets)
   ctx.plugin(UiSettingsConnections)
   ctx.plugin(UiSettingsBridge)
+  // Deferred families: fetch their chunks in the background and register them
+  // once loaded — never awaited (the entry must settle with only the
+  // first-screen families evaluated; see module header).
+  void registerDeferred(ctx).catch((error) => {
+    console.error('[chamber-entry] deferred plugin registration failed:', error)
+  })
 }
 
 /** The module-table handoff shape (wire contract, dsh-client-modules). */

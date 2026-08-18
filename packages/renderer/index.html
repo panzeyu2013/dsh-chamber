@@ -4,9 +4,74 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dsh-chamber</title>
+    <!-- 启动骨架屏关键 CSS（LCP 优化，2026-08）：首帧在 HTML 解析时即可绘制，
+         不依赖 227KB 的 chamber CSS 与 1.8MB 的 JS eval。骨架用独立的 dsh-boot-*
+         命名空间：chamber CSS 无同名规则，全量样式加载后不会覆盖大字号品牌块
+         （否则 .instance-loading-title 的 14px 会压掉 40px 品牌字）。React
+         createRoot 首次 render 会清空 #root 的既有子节点，mount 时骨架被
+         InstanceView 的同视觉语言骨架无缝替换——不会出现双骨架/FOUC。 -->
+    <style>
+      html, body, #root { height: 100%; margin: 0; }
+      body {
+        background: #0f1115;
+        color: #e6e9ef;
+        font-family: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+      }
+      .dsh-boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0f1115;
+      }
+      .dsh-boot-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        padding: 24px;
+        text-align: center;
+      }
+      .dsh-boot-spinner {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: 2px solid #262c38;
+        border-top-color: #4f8cff;
+        animation: dsh-boot-spin 0.8s linear infinite;
+      }
+      .dsh-boot-brand {
+        font-size: 40px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        line-height: 1.15;
+        color: #e6e9ef;
+      }
+      .dsh-boot-hint {
+        font-size: 13px;
+        color: #8b94a7;
+      }
+      @keyframes dsh-boot-spin {
+        to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .dsh-boot-spinner { animation: none; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- 静态首帧骨架（LCP 元素 = 40px 品牌字块）：HTML 解析即绘制，React
+           mount 时被替换清除。 -->
+      <div class="dsh-boot" aria-busy="true">
+        <div class="dsh-boot-inner">
+          <div class="dsh-boot-spinner" aria-hidden="true"></div>
+          <div class="dsh-boot-brand">dsh-chamber</div>
+          <div class="dsh-boot-hint">正在启动…</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

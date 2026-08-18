@@ -26,7 +26,6 @@ import * as UiSettingsGeneral from '@deepseek-ai/dsh-client-ui-settings-general/
 import * as UiSettingsModels from '@deepseek-ai/dsh-client-ui-settings-models/client'
 import * as UiSettingsPlugins from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import * as UiSettingsPluginInventory from '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
-import * as UiAgentPreset from '@deepseek-ai/dsh-client-ui-agent-preset/client'
 import * as LocalePlugin from '@deepseek-ai/dsh-client-locale/client'
 import * as UiTheme from '@deepseek-ai/dsh-client-ui-theme/client'
 import * as BridgeRows from './bridge-rows/index.ts'
@@ -98,7 +97,6 @@ const SETTINGS_PLUGINS: readonly SettingsPlugin[] = [
   UiSettingsModels,
   UiSettingsPlugins,
   UiSettingsPluginInventory,
-  UiAgentPreset,
   BridgeRows,
 ]
 
@@ -205,10 +203,19 @@ export async function mountBridgeSession(instanceId: string): Promise<BridgeSess
     // plugin's inject waits on (the official api-gateway provides it via
     // $mount; the stub provides it directly).
     ctx.provide('remote.pluginInventory', pluginInventoryFace(api))
+    // The agent-preset settings section is not first-screen (LCP/perf pass,
+    // P4): its bundle is a lazy vite chunk of the chamber build, fetched here
+    // — at settings-page mount, well after the boot settled — instead of
+    // being statically imported into the boot first chunk. Same section, same
+    // mount path; only the chunk timing changes.
+    const plugins = [
+      ...SETTINGS_PLUGINS,
+      await import('@deepseek-ai/dsh-client-ui-agent-preset/client'),
+    ] as readonly SettingsPlugin[]
     const fibers = [
       ctx.plugin(DECLARATION_PLUGIN),
       ctx.plugin(SlotRegistry),
-      ...SETTINGS_PLUGINS.map(plugin => ctx.plugin(plugin)),
+      ...plugins.map(plugin => ctx.plugin(plugin)),
     ] as readonly { state: number; await(): Promise<unknown> }[]
     await waitForActive(fibers)
     return {
