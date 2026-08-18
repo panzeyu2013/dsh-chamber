@@ -610,6 +610,54 @@
   color: var(--dsw-alias-state-warn-label);
 }
 
+/* Chamber-injected component row (design 09 module A+B): a muted, clearly
+   non-actionable info block so the injection is never a silent modification. */
+.pluginChamber {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.pluginChamberTitle {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.pluginChamberRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.chamberSeedButton {
+  appearance: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: none;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--dsw-alias-state-primary-label);
+  cursor: pointer;
+}
+
+.chamberSeedButton:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.chamberSeedButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .pluginToolbar {
   display: flex;
   flex-wrap: wrap;

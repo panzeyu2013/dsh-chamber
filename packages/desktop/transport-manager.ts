@@ -171,6 +171,9 @@ export interface TransportManager {
   readyUrl(id: string): string | null
   logs(id: string): TransportLogEntry[]
   clearLogs(id: string): boolean
+  /** Append one line to an instance's ring buffer from OUTSIDE the transport
+   *  runtime (plugin-sync seed outcomes, …). Returns false for an unknown id. */
+  appendLog(id: string, level: TransportLogEntry['level'], message: string): boolean
   /** Provider exec channel (ssh: remote systemd start/stop/restart/is-active; run = whitelisted remote command, design 13 §4.1). */
   exec(id: string, action: TransportExecAction, payload?: TransportRunPayload): Promise<TransportExecResult>
   onStatusChanged(listener: StatusChangedListener): () => void
@@ -326,7 +329,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     return state
   }
 
-  function appendLog(state: InstanceState, level: TransportLogEntry['level'], message: string) {
+  function appendLogInternal(state: InstanceState, level: TransportLogEntry['level'], message: string) {
     state.logs.push({ ts: Date.now(), level, message })
     if (state.logs.length > ringBufferLimit) {
       state.logs.splice(0, state.logs.length - ringBufferLimit)
@@ -415,7 +418,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     state.retryAttempt = 0
     state.requiresUserAction = true
     transition(id, 'error', message)
-    appendLog(state, 'error', message)
+    appendLogInternal(state, 'error', message)
   }
 
   /**
@@ -446,7 +449,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       state.child = null
       state.localPort = null
       transition(id, 'error', `transport failed: max retry attempts exceeded (${reason}); retrying periodically`)
-      appendLog(state, 'error', `max retry attempts exceeded (${reason}); slow re-probe in ${slowRetryMs}ms`)
+      appendLogInternal(state, 'error', `max retry attempts exceeded (${reason}); slow re-probe in ${slowRetryMs}ms`)
       // The phase stays error (honest red state — the probe is background
       // recovery, never a permanent spinner); each fire runs ONE fresh
       // attempt through the normal machine (startTransport), and success
@@ -477,7 +480,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       warn(`transport-manager: injected random threw: ${String(randomError)}`)
       backoff = Math.min(retryBaseMs * 2 ** (state.retryAttempt - 1), retryMaxMs)
     }
-    appendLog(state, 'warn', `reconnect in ${backoff}ms (attempt ${state.retryAttempt}/${maxRetryAttempts}): ${reason}`)
+    appendLogInternal(state, 'warn', `reconnect in ${backoff}ms (attempt ${state.retryAttempt}/${maxRetryAttempts}): ${reason}`)
     transition(id, 'degraded', reason)
     state.reconnectTimer = setTimeout(() => {
       state.reconnectTimer = null
@@ -509,7 +512,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     state.child = null
     state.childExited = true
     log(`transport-manager: ${id} transport process exited (${code ?? signal})`)
-    appendLog(state, 'warn', `transport process exited (${code ?? signal})`)
+    appendLogInternal(state, 'warn', `transport process exited (${code ?? signal})`)
     if (state.phase === 'idle' || state.phase === 'error') return
     if (state.authFailed || state.requiresUserAction) {
       failTerminal(id, 'authentication failed — requires user action')
@@ -566,7 +569,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
         localPort = await doAllocate()
       } catch (allocateError) {
         transition(id, 'error', `failed to allocate a local port: ${String(allocateError)}`)
-        appendLog(state, 'error', `port allocation failed: ${String(allocateError)}`)
+        appendLogInternal(state, 'error', `port allocation failed: ${String(allocateError)}`)
         return
       }
       // disconnect()/failTerminal/restart may have landed while the port was
@@ -584,7 +587,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
         // connecting with no child and no recovery machinery.
         warn(`transport-manager: provider.buildStartArgs threw: ${String(buildError)}`)
         transition(id, 'error', `provider build failed: ${String(buildError)}`)
-        appendLog(state, 'error', `provider buildStartArgs threw: ${String(buildError)}`)
+        appendLogInternal(state, 'error', `provider buildStartArgs threw: ${String(buildError)}`)
         return
       }
     }
@@ -603,7 +606,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
         // connecting (no child, no recovery) — loud error instead.
         warn(`transport-manager: provider.probeTarget threw: ${String(probeError)}`)
         transition(id, 'error', `provider probeTarget threw: ${String(probeError)}`)
-        appendLog(state, 'error', `provider probeTarget threw: ${String(probeError)}`)
+        appendLogInternal(state, 'error', `provider probeTarget threw: ${String(probeError)}`)
         return null
       }
     })()
@@ -625,7 +628,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
         } catch (envError) {
           warn(`transport-manager: provider.buildStartEnv threw: ${String(envError)}`)
           transition(id, 'error', `provider buildStartEnv threw: ${String(envError)}`)
-          appendLog(state, 'error', `provider buildStartEnv threw: ${String(envError)}`)
+          appendLogInternal(state, 'error', `provider buildStartEnv threw: ${String(envError)}`)
           return
         }
       }
@@ -649,7 +652,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       if (child.stdout !== null) {
         child.stdout.on('data', chunk => {
           if (state.child !== child) return
-          appendLog(state, 'info', String(chunk).trimEnd())
+          appendLogInternal(state, 'info', String(chunk).trimEnd())
         })
       }
       // Line-buffered stderr (per child): provider classification (redaction
@@ -676,10 +679,10 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
             continue
           }
           if (logLine === '') continue
-          appendLog(state, 'info', logLine)
+          appendLogInternal(state, 'info', logLine)
           if (terminalAuth) {
             state.authFailed = true
-            appendLog(state, 'error', 'authentication failure detected (requires user action)')
+            appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
           }
         }
       }
@@ -700,7 +703,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
         // user action. Guarded: a REPLACED child's late spawn-error must
         // never failTerminal the fresh transport.
         if (state.child !== child) return
-        appendLog(state, 'error', `transport spawn error: ${String(error)}`)
+        appendLogInternal(state, 'error', `transport spawn error: ${String(error)}`)
         state.requiresUserAction = true
         failTerminal(id, `failed to spawn transport: ${String(error)}`)
       })
@@ -740,7 +743,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
             if (state.authFailed) return failTerminal(id, 'authentication failed — requires user action')
             if (!verification.ok) {
               const reason = verification.detail ?? 'the endpoint is not a dsh instance'
-              appendLog(state, 'warn', reason)
+              appendLogInternal(state, 'warn', reason)
               // A DETERMINISTIC verification failure (the destination
               // answered the probe and proved it is not a compatible dsh —
               // wrong version / wrong protocol / a non-dsh service) is
@@ -757,12 +760,12 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
             state.retryAttempt = 0
             state.requiresUserAction = false
             transition(id, 'ready', 'endpoint is reachable')
-            appendLog(state, 'info', `endpoint reachable: ${spec.host}:${probeTarget.port}`)
+            appendLogInternal(state, 'info', `endpoint reachable: ${spec.host}:${probeTarget.port}`)
           } else if (!state.childExited && state.child !== null) {
             state.retryAttempt = 0
             state.requiresUserAction = false
             transition(id, 'ready', 'transport is up')
-            appendLog(state, 'info', `transport ready on 127.0.0.1:${localPort}`)
+            appendLogInternal(state, 'info', `transport ready on 127.0.0.1:${localPort}`)
           }
           return
         }
@@ -771,7 +774,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
           // must stay terminal — never fall through to a reconnect.
           if (state.authFailed) return failTerminal(id, 'authentication failed — requires user action')
           if (state.childExited) return
-          appendLog(state, 'warn', `transport did not come up within ${readyTimeoutMs}ms`)
+          appendLogInternal(state, 'warn', `transport did not come up within ${readyTimeoutMs}ms`)
           return scheduleReconnect(id, 'transport did not come up in time')
         }
         await sleep(probeIntervalMs)
@@ -803,7 +806,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
         execTimeoutMs,
         runTimeoutMs: runExecTimeoutMs,
         disconnectGraceMs,
-        log: (level, message) => appendLog(state, level, message),
+        log: (level, message) => appendLogInternal(state, level, message),
         setProjection: (execId, key, value) => {
           if (key === 'serviceActive') {
             state.serviceActive = value
@@ -990,7 +993,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     state.retryAttempt = 0
     state.requiresUserAction = false
     transition(id, 'idle', 'disconnected')
-    appendLog(state, 'info', 'disconnected')
+    appendLogInternal(state, 'info', 'disconnected')
   }
 
   /**
@@ -1047,6 +1050,15 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     return true
   }
 
+  /** Append one line from outside the runtime (plugin-sync seed outcomes, …):
+   *  same ring-buffer semantics as the internal appendLog; unknown id → false. */
+  function appendLog(id: string, level: TransportLogEntry['level'], message: string): boolean {
+    const state = states.get(id)
+    if (state === undefined) return false
+    appendLogInternal(state, level, message)
+    return true
+  }
+
   /** Subscribe to status changes: listener(instanceId, statusProjection). */
   function onStatusChanged(listener: StatusChangedListener): () => void {
     bus.on('status-changed', listener)
@@ -1092,6 +1104,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     readyUrl,
     logs,
     clearLogs,
+    appendLog,
     exec,
     onStatusChanged,
     dispose,

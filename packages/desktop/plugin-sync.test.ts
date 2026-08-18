@@ -20,6 +20,7 @@ import {
   classifyDependencyValue,
   classifyLocalDependency,
   classifySpec,
+  CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
   localPluginList,
   materializeAbsolutePath,
@@ -197,19 +198,60 @@ test('localPluginList: throws on a missing profile manifest', () => {
   assert.throws(() => localPluginList(tempDir()), /cannot read local profile manifest/)
 })
 
+test('localPluginList: chamber host-graph state — installed + patched', () => {
+  // Nest the dsh home under a base dir so the `--patch` overlay (which lives
+  // BESIDE the home: dirname(home)/dsh-chamber-graph.patch.yml) stays inside
+  // the temp sandbox.
+  const base = tempDir()
+  const home = join(base, 'home')
+  const profileDir = writeLocalProfile(home, {}, [])
+  const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
+  mkdirSync(moduleADir, { recursive: true })
+  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-host-client-graph"}')
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
+
+  const manifest = localPluginList(home)
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true } })
+})
+
+test('localPluginList: chamber host-graph state — absent = not injected (honest, never "done")', () => {
+  const base = tempDir()
+  const home = join(base, 'home')
+  writeLocalProfile(home, {}, [])
+  const manifest = localPluginList(home)
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false } })
+})
+
 // ============================================================================
 // remotePluginList
 // ============================================================================
 
 test('remotePluginList: parses dependencies + bundles from cat output', async () => {
-  const exec: ExecFn = async () => ok(JSON.stringify({
-    dependencies: { foo: '^1.0.0' },
-    dsh: { profile: { bundles: ['foo'] } },
-  }))
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) {
+        return ok(JSON.stringify({ dependencies: { foo: '^1.0.0' }, dsh: { profile: { bundles: ['foo'] } } }))
+      }
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      }
+      if (path.endsWith('/cordis.patch.yml')) {
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.deepEqual(result, {
     ok: true,
-    manifest: { dependencies: { foo: '^1.0.0' }, bundles: ['foo'], profileExists: true, error: undefined },
+    manifest: {
+      dependencies: { foo: '^1.0.0' },
+      bundles: ['foo'],
+      profileExists: true,
+      error: undefined,
+      chamber: { ok: true, hostGraph: { installed: true, patched: true } },
+    },
   })
 })
 
@@ -217,13 +259,58 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
   const enoent: ExecFn = async () => err('cat: /home/u/.dsh/profiles/web/package.json: No such file or directory')
   assert.deepEqual(
     await remotePluginList(enoent, { id: 's1', remoteDshHome: null }),
-    { ok: true, manifest: { dependencies: {}, bundles: [], profileExists: false } },
+    {
+      ok: true,
+      manifest: {
+        dependencies: {},
+        bundles: [],
+        profileExists: false,
+        chamber: { ok: true, hostGraph: { installed: false, patched: false } },
+      },
+    },
   )
   const sshDown: ExecFn = async () => err('the ssh exec could not reach the host (exit 255)')
   assert.deepEqual(
     await remotePluginList(sshDown, { id: 's1', remoteDshHome: null }),
     { ok: false, error: 'the ssh exec could not reach the host (exit 255)' },
   )
+})
+
+test('remotePluginList: chamber probe — installed but the boot-layer insert missing (half-injected)', async () => {
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      // initProfile template: comments + empty list → the seed would rewrite it.
+      if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false } })
+  }
+})
+
+test('remotePluginList: chamber probe ssh failure is loud, never a silent "not injected"', async () => {
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
+        return err('the ssh exec could not reach the host (exit 255)')
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.equal(result.manifest.chamber.ok, false)
+    assert.ok(result.manifest.chamber.ok === false && /host-graph probe failed/.test(result.manifest.chamber.error))
+  }
 })
 
 // ============================================================================

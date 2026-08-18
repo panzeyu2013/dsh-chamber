@@ -30,7 +30,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 // Canonical whitelists (design 13 §7.2) — reused from ssh-provider.ts so the
 // orchestration-side二次校验 and the exec-side argv whitelist share one source
@@ -97,6 +97,17 @@ export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
 export const CLIENT_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
 export const CLIENT_GRAPH_INSERT_ID = 'client-graph'
+
+/**
+ * The local `--patch` overlay filename (design 09 方案 A, module B). The
+ * single source of truth is `packages/control-plane/src/host-graph-seed.ts`
+ * (`HOST_GRAPH_PATCH_FILENAME`) — the desktop mirrors the constant here
+ * because plugin-sync.ts is a self-contained pure module that must not import
+ * the control-plane package (DI-only contract A). The overlay lives next to
+ * the dsh home (`<stateDir>/dsh-chamber-graph.patch.yml` where the managed
+ * dsh home is `<stateDir>/dsh-home`), so `dirname(localDshHome)` locates it.
+ */
+const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
 
 function remoteHome(remoteDshHome: string | null): string {
   return remoteDshHome === null || remoteDshHome === undefined || remoteDshHome === ''
@@ -215,11 +226,39 @@ export function classifyDependencyValue(spec: string): SpecClass {
 // Manifest types (contract B)
 // ============================================================================
 
+/**
+ * Chamber-injected host-graph state (design 09 方案 A, module A+B; surfaced so
+ * the injection is never a silent modification — the plugin management UI
+ * shows it verbatim):
+ * - `installed` — module A's package files are present in the profile
+ *   (local: `<home>/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph`,
+ *   seeded per-spawn by the control plane; remote: the install-level flat
+ *   fallback `<home>/profiles/node_modules/…`, seeded by seedRemoteHostGraph).
+ * - `patched` — the boot layer carries the client-graph insert (local: the
+ *   `--patch` overlay file; remote: the profile's cordis.patch.yml).
+ * Both must hold for the row to actually resolve at boot — one without the
+ * other is a half-injected state the UI renders distinctly, never "done".
+ */
+export interface ChamberHostGraphState {
+  installed: boolean
+  patched: boolean
+}
+
+/** Probe outcome: `ok:false` = the instance's injection state could not be
+ *  read (remote ssh exec failure / unparseable patch) — loud, never a silent
+ *  "not injected". */
+export type ChamberInjectionState =
+  | { ok: true; hostGraph: ChamberHostGraphState }
+  | { ok: false; error: string }
+
 export interface RemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
   profileExists: boolean
   error?: string
+  /** Chamber-injected component state (design 09) probed over the wire —
+   *  read-only cats, never a write. */
+  chamber: ChamberInjectionState
 }
 
 export interface UnsyncableEntry {
@@ -236,6 +275,8 @@ export interface LocalPluginManifest {
    *  uses (design 13 §4.5 ④). */
   bundleLines: string[]
   unsyncable: UnsyncableEntry[]
+  /** Chamber-injected component state (design 09): always readable locally. */
+  chamber: ChamberInjectionState
 }
 
 export interface PluginApplyResult {
@@ -368,7 +409,24 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
     const cls = classifyDependencyValue(spec)
     if (cls.kind === 'unsyncable') unsyncable.push({ name, reason: cls.reason })
   }
-  return { dependencies, bundles, clientLines, bundleLines, unsyncable }
+  return {
+    dependencies,
+    bundles,
+    clientLines,
+    bundleLines,
+    unsyncable,
+    // Chamber-injected host-graph (design 09 module B): module A's package in
+    // the profile node_modules + the `--patch` overlay beside the dsh home.
+    // Both must be present for the client-graph row to resolve at boot — the
+    // UI renders the half-injected state distinctly, never as "done".
+    chamber: {
+      ok: true,
+      hostGraph: {
+        installed: existsSync(join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME, 'package.json')),
+        patched: existsSync(join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)),
+      },
+    },
+  }
 }
 
 /** Read `<profile>/node_modules/<name>/package.json`; null when absent/unreadable. */
@@ -390,7 +448,7 @@ export async function remotePluginList(exec: ExecFn, spec: RemoteSpec): Promise<
   if (!result.ok) {
     // ENOENT = the remote profile is not initialized (not a fatal ssh error).
     if (ENOENT_PATTERN.test(result.error)) {
-      return { ok: true, manifest: { dependencies: {}, bundles: [], profileExists: false } }
+      return { ok: true, manifest: { dependencies: {}, bundles: [], profileExists: false, chamber: await probeRemoteChamber(exec, spec) } }
     }
     return { ok: false, error: result.error }
   }
@@ -402,8 +460,44 @@ export async function remotePluginList(exec: ExecFn, spec: RemoteSpec): Promise<
       bundles: parsed.bundles,
       profileExists: true,
       error: parsed.error,
+      chamber: await probeRemoteChamber(exec, spec),
     },
   }
+}
+
+/**
+ * Read-only probe of the chamber-injected host-graph state on a remote
+ * instance (design 09 module A+B): module A's package.json at the install-level
+ * flat fallback (`<home>/profiles/node_modules/…`, the layer seedRemoteHostGraph
+ * writes and `dsh plugin` pnpm relinks never prune) + the profile's
+ * cordis.patch.yml insert (reusing computeCordisPatchUpdate's dedup rules).
+ * Two extra `cat` round-trips; ENOENT = not injected (never an error); any
+ * other ssh failure is a loud probe error — never a silent "not injected".
+ */
+async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec): Promise<ChamberInjectionState> {
+  const home = remoteHome(spec.remoteDshHome)
+  const pkgPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/package.json`
+  const pkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [pkgPath] })
+  let installed: boolean
+  if (pkgRes.ok) {
+    installed = true
+  } else if (ENOENT_PATTERN.test(pkgRes.error)) {
+    installed = false
+  } else {
+    return { ok: false, error: `host-graph probe failed: ${pkgRes.error}` }
+  }
+
+  const patchRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [remotePatchPath(spec.remoteDshHome)] })
+  let patched = false
+  if (patchRes.ok) {
+    const update = computeCordisPatchUpdate(patchRes.stdout ?? '')
+    if ('error' in update) return { ok: false, error: update.error }
+    patched = update.write === false
+  } else if (!ENOENT_PATTERN.test(patchRes.error)) {
+    return { ok: false, error: `host-graph probe failed: ${patchRes.error}` }
+  }
+
+  return { ok: true, hostGraph: { installed, patched } }
 }
 
 // ============================================================================

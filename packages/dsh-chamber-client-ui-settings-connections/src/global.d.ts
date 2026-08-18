@@ -76,6 +76,22 @@ export interface SshStatusChangedPayload {
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
 export type SshExecIpcResult = SshStatusProjection | { error: string }
 
+/** Chamber-injected host-graph state (design 09 方案 A, module A+B): module A
+ *  package present in the profile + the boot layer carrying the client-graph
+ *  insert (local: the `--patch` overlay; remote: the profile's cordis.patch.yml).
+ *  Both must hold for the row to resolve at boot; the plugin UI renders the
+ *  half-injected state distinctly — the injection is never a silent modification. */
+export interface ChamberHostGraphState {
+  installed: boolean
+  patched: boolean
+}
+
+/** Probe outcome: ok:false = the injection state could not be read (remote ssh
+ *  exec failure / unparseable patch) — loud, never a silent "not injected". */
+export type ChamberInjectionState =
+  | { ok: true; hostGraph: ChamberHostGraphState }
+  | { ok: false; error: string }
+
 /** Remote plugin manifest projection (design 13 §4.3): the remote profile
  *  package.json dependencies + the active bundle layer. profileExists=false
  *  means the remote profile is not yet initialized (first `dsh plugin add`
@@ -85,6 +101,8 @@ export interface RemotePluginManifest {
   bundles: string[]
   profileExists: boolean
   error?: string
+  /** Chamber-injected component state (design 09), probed over the wire. */
+  chamber: ChamberInjectionState
 }
 
 /** Local plugin manifest projection (design 13 §4.3): the local profile
@@ -98,6 +116,8 @@ export interface LocalPluginManifest {
   /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
   bundleLines: string[]
   unsyncable: { name: string; reason: string }[]
+  /** Chamber-injected component state (design 09), always readable locally. */
+  chamber: ChamberInjectionState
 }
 
 /** One failed plugin_apply entry (single-item isolation; never blocks others). */

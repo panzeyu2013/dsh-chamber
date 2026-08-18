@@ -956,6 +956,20 @@ test('status/logs for unknown instances are null/empty; default ring limit is 20
   assert.equal(RING_BUFFER_LIMIT, 200)
 })
 
+test('appendLog: external callers (plugin-sync seed outcomes) land in the ring buffer', async t => {
+  const { manager, setProbe } = makeManager(t)
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready')
+
+  assert.equal(manager.appendLog('s1', 'info', 'chamber host-graph 注入完成'), true)
+  assert.equal(manager.appendLog('s1', 'error', 'chamber host-graph 注入失败：boom'), true)
+  assert.equal(manager.appendLog('nope', 'info', 'unknown id'), false)
+  const lines = manager.logs('s1')
+  assert.ok(lines.some(entry => entry.level === 'info' && entry.message.includes('注入完成')))
+  assert.ok(lines.some(entry => entry.level === 'error' && entry.message.includes('注入失败：boom')))
+})
+
 test('onStatusChanged pushes non-secret projections and unsubscribe works', async t => {
   const { manager, setProbe } = makeManager(t)
   const seen: Array<{ id: string } & StatusWithNoUrlLeak> = []

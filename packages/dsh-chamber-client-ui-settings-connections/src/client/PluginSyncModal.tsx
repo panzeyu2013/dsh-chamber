@@ -18,7 +18,7 @@ import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { LocalPluginManifest, PluginApplyFailure, PluginApplyResult, RemotePluginManifest, SshInstanceSpec } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
-import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd } from './control-plane.ts'
+import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd, seedHostGraph } from './control-plane.ts'
 import {
   computePluginDiff, defaultChecked, isDifferenceRow, materializeLocalDir, rowAddArg,
   type PluginDiff, type PluginRow, type PluginRowKind,
@@ -30,6 +30,11 @@ type PluginPhase = 'loading' | 'error' | 'ready' | 'applying' | 'done'
 type PluginTab = 'sync' | 'list' | 'add'
 type CategoryFilter = 'all' | 'bundle' | 'plain' | 'client'
 type StatusFilter = 'diff' | 'all'
+
+/** The chamber-injected host package surfaced as a non-actionable info row
+ *  (design 09 方案 A, module A) — the single source of truth for the name is
+ *  plugin-sync.ts CLIENT_GRAPH_PACKAGE_NAME. */
+const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-host-client-graph'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -90,6 +95,10 @@ export function PluginSyncModal({ t, spec, onClose }: {
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [confirmApply, setConfirmApply] = useState(false)
   const applyingRef = useRef(false)
+
+  // ---- chamber-injected host-graph (design 09): manual seed fallback ----
+  const [seedBusy, setSeedBusy] = useState(false)
+  const [seedError, setSeedError] = useState<string | null>(null)
 
   // ---- filters ----
   const [query, setQuery] = useState('')
@@ -185,6 +194,26 @@ export function PluginSyncModal({ t, spec, onClose }: {
       setPhase('error')
     }
   }, [isRemote, spec])
+
+  /** Manual host-graph seed fallback (design 09 module B): writes module A
+   *  onto the remote + ensures the cordis.patch.yml insert, then re-probes.
+   *  The ready-time auto-seed normally covers this (main process); the button
+   *  is the visible retry path for the failure/half-injected states — the
+   *  injection is never a silent modification. */
+  const doSeedHostGraph = useCallback(async (): Promise<void> => {
+    if (!isRemote || spec === null || seedBusy) return
+    setSeedBusy(true)
+    setSeedError(null)
+    try {
+      const res = await seedHostGraph(spec.id)
+      if (!res.ok) setSeedError(res.error)
+    } catch (err) {
+      setSeedError(errorMessage(err))
+    } finally {
+      setSeedBusy(false)
+      await loadSync()
+    }
+  }, [isRemote, spec, seedBusy, loadSync])
 
   useEffect(() => {
     if (isRemote) void loadSync()
@@ -454,68 +483,133 @@ export function PluginSyncModal({ t, spec, onClose }: {
     return renderTable()
   }
 
+  /**
+   * The chamber-injected component row (design 09 module A+B): shown in BOTH
+   * the sync and the local-list views so the injection is never a silent
+   * modification — the local side (auto-seeded by the control plane per
+   * spawn) and the remote side (auto-seeded by the desktop at ready; manual
+   * 注入 button as the visible retry for failure/half-injected states).
+   */
+  function renderChamberBlock(): ReactNode {
+    // Local side: the sync view (remote) fills localManifest, the local list
+    // view fills localList — same LocalPluginManifest shape, one source.
+    const localCh = (isRemote ? localManifest : localList)?.chamber
+    const remoteCh = isRemote ? remoteManifest?.chamber : undefined
+    const localInjected = localCh?.ok === true && localCh.hostGraph.installed && localCh.hostGraph.patched
+    let remoteLabel: ReactNode
+    let remoteOk = true
+    if (remoteCh === undefined) {
+      remoteLabel = '—'
+    } else if (!remoteCh.ok) {
+      remoteOk = false
+      remoteLabel = <span className={css.error}>{t('chamberRemoteUnknown')}</span>
+    } else if (remoteCh.hostGraph.installed && remoteCh.hostGraph.patched) {
+      remoteLabel = t('chamberRemoteInjected')
+    } else if (remoteCh.hostGraph.installed) {
+      remoteLabel = t('chamberRemotePartial')
+    } else {
+      remoteLabel = t('chamberRemoteNotInjected')
+    }
+    const remoteNeedsSeed = isRemote && remoteCh !== undefined && (!remoteCh.ok || !(remoteCh.hostGraph.installed && remoteCh.hostGraph.patched))
+    return (
+      <div className={css.pluginChamber}>
+        <p className={css.pluginChamberTitle}>
+          {t('chamberInjectedTitle')}
+          <span className={css.dim}> · {t('chamberInjectedHint')}</span>
+        </p>
+        <div className={css.pluginChamberRow}>
+          <code className={css.pluginName}>{HOST_GRAPH_PACKAGE}</code>
+          <span className={css.pluginCellSpec}>
+            {localInjected ? t('chamberLocalInjected') : t('chamberLocalNotInjected')}
+            {isRemote ? <span> · {remoteLabel}</span> : null}
+          </span>
+          {remoteNeedsSeed
+            ? (
+              <button
+                type="button"
+                className={css.chamberSeedButton}
+                disabled={seedBusy}
+                onClick={() => { void doSeedHostGraph() }}
+              >
+                {seedBusy ? t('chamberSeeding') : t('chamberSeed')}
+              </button>
+            )
+            : null}
+        </div>
+        {seedError !== null ? <p className={css.error} role="alert">{t('chamberSeedFailed')}{seedError}</p> : null}
+        {!remoteOk && remoteCh !== undefined && !remoteCh.ok ? <p className={css.error} role="alert">{remoteCh.error}</p> : null}
+      </div>
+    )
+  }
+
   function renderTable(): ReactNode {
     if (diff === null) return null
     const total = diff.rows.length
-    if (total === 0) return <p className={css.dim}>{t('pluginsNoPlugins')}</p>
     const differenceCount = diff.rows.filter(row => isDifferenceRow(row.kind)).length
     const hasLocal = Object.keys(localManifest?.dependencies ?? {}).length > 0
 
     return (
       <div className={css.pluginStack}>
+        {renderChamberBlock()}
         {profileNotInit ? <p className={css.pluginBanner}>{t('pluginsProfileNotInitialized')}</p> : null}
-        {!hasLocal ? <p className={css.hint}>{t('pluginsNoLocalPlugins')}</p> : null}
-        {differenceCount === 0 ? <p className={css.dim}>{t('pluginsNoDiff')}</p> : null}
-
-        <div className={css.pluginToolbar}>
-          <input
-            className={clsx(css.input, css.pluginSearchInput)}
-            value={query}
-            spellCheck={false}
-            placeholder={t('pluginsSearchPlaceholder')}
-            onChange={event => { setQuery(event.target.value) }}
-          />
-          <div className={css.pluginFilterGroup}>
-            <span className={css.pluginFilterLabel}>{t('pluginsCatAll')}</span>
-            {(['all', 'bundle', 'plain', 'client'] as const).map(c => (
-              <button
-                key={c}
-                type="button"
-                className={clsx(css.pluginPill, category === c && css.pluginPillActive)}
-                onClick={() => { setCategory(c) }}
-              >
-                {c === 'all' ? t('pluginsFilterAll') : t(categoryLabel(c))}
-              </button>
-            ))}
-          </div>
-          <div className={css.pluginFilterGroup}>
-            <span className={css.pluginFilterLabel}>{t('pluginsFilterDiff')}</span>
-            {(['diff', 'all'] as const).map(s => (
-              <button
-                key={s}
-                type="button"
-                className={clsx(css.pluginPill, status === s && css.pluginPillActive)}
-                onClick={() => { setStatus(s) }}
-              >
-                {t(s === 'diff' ? 'pluginsFilterDiff' : 'pluginsFilterAll')}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {visibleRows.length === 0
-          ? <p className={css.dim}>{t('pluginsNoPlugins')}</p>
+        {total === 0
+          ? <p className={css.dim}>{t('pluginsNoThirdParty')}</p>
           : (
-            <div className={css.pluginRows}>
-              <div className={clsx(css.pluginRow, css.pluginRowHead)}>
-                <span className={css.pluginCellName}>{t('pluginsColName')}</span>
-                <span className={css.pluginCellCat}>{t('pluginsColCategory')}</span>
-                <span className={css.pluginCellKind}>{t('pluginsColStatus')}</span>
-                <span className={css.pluginCellSpec}>{t('pluginsLocalCol')}</span>
-                <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
+            <>
+              {!hasLocal ? <p className={css.hint}>{t('pluginsNoLocalPlugins')}</p> : null}
+              {differenceCount === 0 ? <p className={css.dim}>{t('pluginsNoDiff')}</p> : null}
+
+              <div className={css.pluginToolbar}>
+                <input
+                  className={clsx(css.input, css.pluginSearchInput)}
+                  value={query}
+                  spellCheck={false}
+                  placeholder={t('pluginsSearchPlaceholder')}
+                  onChange={event => { setQuery(event.target.value) }}
+                />
+                <div className={css.pluginFilterGroup}>
+                  <span className={css.pluginFilterLabel}>{t('pluginsCatAll')}</span>
+                  {(['all', 'bundle', 'plain', 'client'] as const).map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={clsx(css.pluginPill, category === c && css.pluginPillActive)}
+                      onClick={() => { setCategory(c) }}
+                    >
+                      {c === 'all' ? t('pluginsFilterAll') : t(categoryLabel(c))}
+                    </button>
+                  ))}
+                </div>
+                <div className={css.pluginFilterGroup}>
+                  <span className={css.pluginFilterLabel}>{t('pluginsFilterDiff')}</span>
+                  {(['diff', 'all'] as const).map(s => (
+                    <button
+                      key={s}
+                      type="button"
+                      className={clsx(css.pluginPill, status === s && css.pluginPillActive)}
+                      onClick={() => { setStatus(s) }}
+                    >
+                      {t(s === 'diff' ? 'pluginsFilterDiff' : 'pluginsFilterAll')}
+                    </button>
+                  ))}
+                </div>
               </div>
-              {visibleRows.map(row => renderRow(row))}
-            </div>
+
+              {visibleRows.length === 0
+                ? <p className={css.dim}>{t('pluginsNoMatch')}</p>
+                : (
+                  <div className={css.pluginRows}>
+                    <div className={clsx(css.pluginRow, css.pluginRowHead)}>
+                      <span className={css.pluginCellName}>{t('pluginsColName')}</span>
+                      <span className={css.pluginCellCat}>{t('pluginsColCategory')}</span>
+                      <span className={css.pluginCellKind}>{t('pluginsColStatus')}</span>
+                      <span className={css.pluginCellSpec}>{t('pluginsLocalCol')}</span>
+                      <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
+                    </div>
+                    {visibleRows.map(row => renderRow(row))}
+                  </div>
+                )}
+            </>
           )}
       </div>
     )
@@ -616,10 +710,16 @@ export function PluginSyncModal({ t, spec, onClose }: {
     if (localList === null) return null
     const deps = Object.entries(localList.dependencies)
     if (deps.length === 0 && localList.unsyncable.length === 0) {
-      return <p className={css.dim}>{t('pluginsNoLocalPlugins')}</p>
+      return (
+        <div className={css.pluginStack}>
+          {renderChamberBlock()}
+          <p className={css.dim}>{t('pluginsNoLocalPlugins')}</p>
+        </div>
+      )
     }
     return (
       <div className={css.pluginStack}>
+        {renderChamberBlock()}
         {localRemoveError !== null ? <p className={css.error} role="alert">{localRemoveError}</p> : null}
         <div className={css.pluginRows}>
           <div className={clsx(css.pluginRow, css.pluginRowLocal, css.pluginRowHead)}>

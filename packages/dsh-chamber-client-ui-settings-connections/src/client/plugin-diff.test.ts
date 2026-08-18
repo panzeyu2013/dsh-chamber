@@ -25,7 +25,9 @@ function local(
   unsyncable: { name: string; reason: string }[] = [],
   bundleLines: string[] = [],
 ): LocalPluginManifest {
-  return { dependencies, bundles, clientLines, bundleLines, unsyncable }
+  // chamber is orthogonal to the diff — the fixtures use a neutral not-injected
+  // state; computePluginDiff never reads it.
+  return { dependencies, bundles, clientLines, bundleLines, unsyncable, chamber: { ok: true, hostGraph: { installed: false, patched: false } } }
 }
 
 function remote(
@@ -34,7 +36,13 @@ function remote(
   profileExists = true,
   error?: string,
 ): RemotePluginManifest {
-  return { dependencies, bundles, profileExists, ...(error === undefined ? {} : { error }) }
+  return {
+    dependencies,
+    bundles,
+    profileExists,
+    ...(error === undefined ? {} : { error }),
+    chamber: { ok: true, hostGraph: { installed: false, patched: false } },
+  }
 }
 
 function byKind(result: ReturnType<typeof computePluginDiff>, kind: PluginRowKind): string[] {

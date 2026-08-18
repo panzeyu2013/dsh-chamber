@@ -55,6 +55,22 @@ process.on('unhandledRejection', (reason) => {
   console.error('[dsh-chamber] unhandled rejection:', reason instanceof Error ? reason.stack : String(reason));
 });
 
+// Control-plane port (design 05 §3.3): the packaged app keeps the documented
+// default 17500; the dev launcher (electron-dev.mjs) runs with an isolated
+// user-data dir, so its control plane must also avoid the packaged app's port
+// — dev defaults to 17520 and can be overridden with DSH_CHAMBER_CP_PORT. The
+// renderer origin is derived from the actually bound port at runtime
+// (controlPlane.port), so nothing else hardcodes the address.
+function resolveControlPlanePort(): number {
+  const fromEnv = process.env.DSH_CHAMBER_CP_PORT;
+  if (fromEnv !== undefined && fromEnv !== '') {
+    const parsed = Number(fromEnv);
+    if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
+    console.error(`[dsh-chamber] 忽略非法 DSH_CHAMBER_CP_PORT="${fromEnv}"（须为 1–65535 整数），使用默认端口`);
+  }
+  return process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 17520 : 17500;
+}
+
 // 本地崩溃记录（不上传）：主/渲染/GPU 等进程崩溃时由 Crashpad 落盘到
 // <userData>/Crashpad——崩溃是静默的，没有本地记录就只能靠系统
 // DiagnosticReports 事后考古"前端消失/白屏"类问题。uploadToServer=false
@@ -357,7 +373,10 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     try {
+      const controlPlanePort = resolveControlPlanePort();
+      console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${process.env.DSH_CHAMBER_CP_PORT ? 'DSH_CHAMBER_CP_PORT 覆盖' : process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 'dev 默认' : '打包默认'}）`);
       controlPlane = createControlPlane({
+        port: controlPlanePort,
         stateDir: path.join(app.getPath('userData'), 'state'),
         // null and undefined fall through the option's ?? chain identically.
         dshWorkspacePath: dshWorkspace as string | undefined,
@@ -464,6 +483,11 @@ if (!gotTheLock) {
     // matches the runtime status(id) projection directly.
     const execTransport = sm.exec as unknown as ExecFn;
     const statusTransport: StatusFn = (id) => sm.status(id);
+    // In-flight guard for the ready-time remote host-graph seed (design 09 §6
+    // 遗留 1): a Set of instance ids whose seed is currently running — pure
+    // concurrency guard, not a "seeded" flag (the seed is idempotent, so
+    // reconnects re-run a cheap content-hash no-op instead).
+    const hostGraphSeeding = new Set<string>();
     // The authoritative local dsh home is <userData>/state/dsh-home (the real
     // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
     const localDshHome = path.join(app.getPath('userData'), 'state', 'dsh-home');
@@ -491,6 +515,47 @@ if (!gotTheLock) {
         } else {
           cp.unregisterInstanceTransport(`${status.kind}:${id}`);
         }
+      }
+      // Remote host-graph seed (design 09 §6 遗留 1 wiring, 2026-08): when an
+      // SSH instance comes ready, seed module A onto it once per process run.
+      // NOT silent — the plugin management UI probes the live state and shows
+      // the injection block verbatim (installed/patched), and the seed result
+      // is logged here; a failure is retried on the next ready (the seed is
+      // idempotent, content-hash skip). Idempotency also makes the guard a
+      // pure in-flight Set: reconnects re-run a cheap no-op seed instead of
+      // tracking a persisted "seeded" flag that could drift from the remote.
+      if (status.kind === 'ssh' && status.phase === 'ready' && !hostGraphSeeding.has(id)) {
+        hostGraphSeeding.add(id);
+        void (async () => {
+          try {
+            // Module A not shipped (dev before build / broken packaging) is a
+            // graceful skip, never a fake "already in sync" (seedRemoteHostGraph
+            // would report ok with wrote=false — honest only if we state the
+            // reason; the UI probe independently shows 未注入 either way).
+            if (!existsSync(moduleASourceDir)) {
+              console.log(`[dsh-chamber] host-graph seed skipped for ${id}: module A not shipped (${moduleASourceDir} missing)`);
+              sm.appendLog(id, 'info', 'chamber host-graph 未注入：模块 A 未打包（构建缺失），本地实例可正常使用，远端客户端插件图不可用');
+              return;
+            }
+            const spec = findRemoteSpec(id);
+            if (spec === null) return;
+            const result = await seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
+            if (result.ok) {
+              const message = `host-graph seeded onto ${id} (wrote=${result.wrote}, patched=${result.patched})`;
+              console.log(`[dsh-chamber] ${message}`);
+              sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}，boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+            } else {
+              console.warn(`[dsh-chamber] host-graph seed failed for ${id}: ${result.error}`);
+              sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
+            }
+          } catch (err) {
+            const message = `host-graph seed error for ${id}: ${String(err)}`;
+            console.warn(`[dsh-chamber] ${message}`);
+            sm.appendLog(id, 'error', `chamber host-graph 注入异常：${String(err)}`);
+          } finally {
+            hostGraphSeeding.delete(id);
+          }
+        })();
       }
       if (mainWindow !== null && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('desktop_ssh_status_changed', { id, status });
@@ -645,7 +710,21 @@ if (!gotTheLock) {
     ipcMain.handle('desktop_ssh_seed_host_graph', trustedIpc(async ({ id }) => {
       const spec = findRemoteSpec(id);
       if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      return seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
+      // Not shipped is a loud error on the MANUAL path (the button must never
+      // look like it succeeded while writing nothing) — the auto path skips
+      // with an info log instead.
+      if (!existsSync(moduleASourceDir)) {
+        return { ok: false, error: '模块 A 未打包（host-graph seed 源缺失），无法注入——请先构建 host-graph 包' };
+      }
+      const result = await seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
+      // Surface the outcome in the instance's ring-buffer log (the connections
+      // UI log panel) — the injection is never a silent modification.
+      if (result.ok) {
+        sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}，boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+      } else {
+        sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
+      }
+      return result;
     }));
     // materialize_add (sync view): the dir is resolved from the LOCAL manifest's
     // absolute file:/link: spec (renderer-side materializeLocalDir). Main bounds
