@@ -103,6 +103,17 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/client' {
 }
 
 /**
+ * The chamber-owned ui-layout fork (packages/dsh-chamber-client-ui-layout,
+ * design 06): replaces the official layout's 'root' registration so the
+ * sidebar width preference is shared across every shell boot and persisted.
+ * The renderer only plugs it into the per-instance boot graph; loose face.
+ */
+declare module '@dsh-chamber/dsh-client-ui-layout/client' {
+  export const inject: string[]
+  export function apply(ctx: any): void
+}
+
+/**
  * The chamber self-built connections settings section plugin
  * (packages/dsh-chamber-client-ui-settings-connections, 05 §5): registers the
  * 'settings.section' entry id 'connections' — local instance card + remote
@@ -292,6 +303,8 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     folded: Record<string, boolean>
     ungroupedOrder: Record<string, string[]>
     seenSources: string[]
+    /** Page-wide sidebar width preference in px (design 06 ui-layout fork); absent = never dragged. */
+    sidebarWidth?: number
   }
   export interface StorageLike {
     getItem(key: string): string | null

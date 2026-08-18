@@ -58,6 +58,27 @@ importers:
         specifier: ^26.0.12
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)(supports-color@9.4.0)
 
+  packages/dsh-chamber-client-ui-layout:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/cordis
+      '@deepseek-ai/dsh-client-runtime':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-runtime
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
+      '@deepseek-ai/dsh-client-ui-theme':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-theme
+      '@dsh-chamber/dsh-client-ui-sidebar':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-ui-sidebar
+      react:
+        specifier: ^19.0.0
+        version: 19.2.8
+
   packages/dsh-chamber-client-ui-settings-bridge:
     dependencies:
       '@deepseek-ai/cordis':

@@ -1,0 +1,45 @@
+{
+  "name": "@dsh-chamber/dsh-client-ui-layout",
+  "description": "Minimal chamber-owned fork of the official @deepseek-ai/dsh-client-ui-layout shell plugin (design 06): replaces ONLY the layout STORE so the sidebar width preference is shared across every N-ctx shell boot and persisted across restarts. The frame itself (AppFrame, service, theme presenter, columns) is imported from the vendor source via deep subpaths — the fork never re-implements the shell.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./src/client/index.ts",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "bundle": "tsdown",
+    "watch": "tsdown --watch"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-client-runtime": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-theme": "workspace:^",
+    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^",
+    "react": "^19.0.0"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts"
+  ]
+}

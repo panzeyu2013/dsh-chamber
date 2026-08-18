@@ -43,7 +43,7 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-runtime',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-theme',
-  '@deepseek-ai/dsh-client-ui-layout',
+  '@dsh-chamber/dsh-client-ui-layout',
   '@dsh-chamber/dsh-client-ui-sidebar',
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-ui-settings-general',
@@ -76,5 +76,11 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@dsh-chamber/dsh-client-ui-settings-bridge',
   // ── page-own rows (see header comment) ──
   '@deepseek-ai/dsh-client-ui-sidebar',
+  // The official layout registration the chamber ui-layout fork REPLACES
+  // (design 06): the composite registers the fork into 'root', so loading
+  // the official bundle would register a second 'root' entry — a duplicate
+  // declaration of the same slot at the same priority, rejected by the
+  // one-declarer rule (ui-slots index.ts:800-803).
+  '@deepseek-ai/dsh-client-ui-layout',
   '@deepseek-ai/dsh-client-modules',
 ]

@@ -406,3 +406,82 @@ test('orderBy persists through save/load and the shared store keeps it on unrela
   updateViewPrefs(prev => ({ ...prev, orderBy: { 'ssh-b': 'ascending' as never } }))
   assert.deepEqual(getViewPrefs().orderBy, {})
 })
+
+// ---- sidebarWidth preference (chamber ui-layout fork, 2026-09; v stays 1 — no re-seed on old data) ----
+
+test('sidebarWidth round-trips through save/load', () => {
+  const storage = new MemoryStorage()
+  const prefs: ChamberSidebarViewPrefs = {
+    v: 1,
+    folded: { 'local/w1': true },
+    ungroupedOrder: { local: ['s1'] },
+    orderBy: {},
+    sidebarWidth: 360,
+    seenSources: [],
+  }
+  saveViewPrefs(prefs, storage)
+  assert.deepEqual(loadViewPrefs(storage), prefs)
+  assert.equal(storage.peek(VIEW_PREFS_KEY), JSON.stringify(prefs))
+})
+
+test('loadViewPrefs clamps sidebarWidth into the vendor drag range and rounds it', () => {
+  const storage = new MemoryStorage()
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, sidebarWidth: 500 }))
+  assert.equal(loadViewPrefs(storage).sidebarWidth, 420) // above SIDEBAR_MAX → clamped
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, sidebarWidth: 100 }))
+  assert.equal(loadViewPrefs(storage).sidebarWidth, 264) // below SIDEBAR_MIN → clamped
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, sidebarWidth: 280.4 }))
+  assert.equal(loadViewPrefs(storage).sidebarWidth, 280) // rounded like the vendor clampWidth
+})
+
+test('loadViewPrefs drops illegal sidebarWidth values and keeps the rest of the prefs', () => {
+  const storage = new MemoryStorage()
+  for (const bad of ['360', NaN, Infinity, -Infinity, null]) {
+    storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: { 'local/w1': true }, ungroupedOrder: {}, sidebarWidth: bad }))
+    const loaded = loadViewPrefs(storage)
+    assert.equal(loaded.sidebarWidth, undefined, `sidebarWidth ${String(bad)} must be dropped`)
+    assert.equal(loaded.folded['local/w1'], true) // the rest of the prefs survives
+  }
+  // Finite out-of-range numbers are NOT dropped — they clamp like the vendor
+  // clampWidth (any px clamps into [264, 420]; 0 means "closed" in the layout
+  // store, but the width PREFERENCE only records an open drag, so a corrupt 0
+  // clamps up to the floor instead of persisting "closed").
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, sidebarWidth: 0 }))
+  assert.equal(loadViewPrefs(storage).sidebarWidth, 264)
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, sidebarWidth: -5 }))
+  assert.equal(loadViewPrefs(storage).sidebarWidth, 264)
+})
+
+test('loadViewPrefs keeps old payloads without sidebarWidth valid (v stays 1 — no re-seed)', () => {
+  const storage = new MemoryStorage()
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: { 'local/w1': true }, ungroupedOrder: { local: ['s1'] } }))
+  const loaded = loadViewPrefs(storage)
+  assert.equal(loaded.sidebarWidth, undefined) // absent = never dragged → layout boots at SIDEBAR_DEFAULT
+  assert.equal(loaded.folded['local/w1'], true) // no re-seed — the rest survives
+  assert.deepEqual(loaded.ungroupedOrder['local'], ['s1'])
+})
+
+test('sidebarWidth survives the write-time prune rebuild and unrelated writes', () => {
+  __resetViewPrefsForTests()
+  // The FIRST write of a session adds a seen source and rebuilds the prefs
+  // object (prunePrefs' reconstructed branch); the rebuild must carry
+  // sidebarWidth — a fixed-field reconstruction would have dropped it.
+  updateViewPrefs(prev => ({ ...prev, folded: { 'ghost/w': true }, sidebarWidth: 340 }))
+  chamberBridge.publish([
+    {
+      id: 'local',
+      kind: 'local',
+      label: 'L',
+      connected: true,
+      phase: 'ready',
+      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
+      updatedAt: 0,
+    },
+  ])
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  assert.equal(getViewPrefs().sidebarWidth, 340)
+  // A later unrelated write (fold) keeps it too — spread carries it and
+  // sanitize re-validates the same value.
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
+  assert.equal(getViewPrefs().sidebarWidth, 340)
+})

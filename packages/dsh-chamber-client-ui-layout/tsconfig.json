@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "lib/types",
+    "paths": {
+      "@dsh-chamber/dsh-client-ui-sidebar/shared": [
+        "./src/ambient/chamber-view-prefs.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/vendor/**",
+    "../dsh-chamber-client-ui-sidebar"
+  ]
+}

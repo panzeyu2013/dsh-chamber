@@ -33,6 +33,22 @@ export interface ChamberSidebarViewPrefs {
    */
   orderBy?: Record<string, SessionOrderBy>
   /**
+   * Page-wide sidebar width preference in px (design 06, chamber ui-layout
+   * fork — 2026-08): the chamber layout store persists every drag (clamped
+   * into the vendor [SIDEBAR_MIN, SIDEBAR_MAX] drag range, columns.ts) here,
+   * and EVERY boot's layout store seeds from it — so dragging the resizer in
+   * one shell is reflected in every other shell live, and the width survives
+   * restarts (the vendor store is a per-boot unpersisted preference). The
+   * sidebar (the only 'sidebar' slot occupant) is closed when its store
+   * value is 0; the width PREFERENCE only ever records an OPEN drag — every
+   * finite value clamps into [SIDEBAR_MIN, SIDEBAR_MAX] (a corrupt 0 clamps
+   * up to the floor, never persists "closed"). OPTIONAL —
+   * absent = never dragged (boots fall back to SIDEBAR_DEFAULT); kept so old
+   * persisted payloads stay valid without a version bump (same rule as
+   * orderBy).
+   */
+  sidebarWidth?: number
+  /**
    * Internal bookkeeping (not user-facing): source ids observed in a
    * projection during THIS page session. The write-time prune only drops
    * keys whose source was SEEN (this session) and is now absent —
@@ -93,12 +109,30 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       if (value === 'manual' || value === 'updated') orderBy[key] = value
     }
   }
+  // sidebarWidth：仅接受有限数值，钳到厂商侧边栏拖动范围 [264, 420]（即
+  // @deepseek-ai/dsh-client-ui-layout columns.ts 的 SIDEBAR_MIN/SIDEBAR_MAX
+  // 契约固定点，含与 vendor clampWidth 一致的取整）；非数值/非有限值
+  // （NaN、Infinity、字符串等）一律丢弃，回退 SIDEBAR_DEFAULT。越界数值不
+  // 丢弃而是钳制（与 vendor clampWidth 一致：0 也钳到下限 264——宽度偏好只
+  // 记录「打开的拖动宽度」，「折叠」是 store 自己的 0 状态，不会持久化）。
+  // v 保持 1：旧数据无该字段，不因新增字段重播种。
+  let sidebarWidth: number | undefined
+  if (typeof raw.sidebarWidth === 'number' && Number.isFinite(raw.sidebarWidth)) {
+    sidebarWidth = Math.min(420, Math.max(264, Math.round(raw.sidebarWidth)))
+  }
   // seenSources 保留 raw 里的数组值（写入路径经 sanitize 时须携带会话内
   // 簿记）；「绝不从存储恢复」由 loadViewPrefs 在载入后归零保证（见下）。
   const seenSources = Array.isArray(raw.seenSources)
     ? raw.seenSources.filter((entry): entry is string => typeof entry === 'string')
     : []
-  return { v: 1, folded, ungroupedOrder, orderBy, seenSources }
+  return {
+    v: 1,
+    folded,
+    ungroupedOrder,
+    orderBy,
+    ...(sidebarWidth !== undefined ? { sidebarWidth } : {}),
+    seenSources,
+  }
 }
 
 /**
@@ -240,7 +274,10 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   if (!changed && prefs.seenSources.length === seen.length && prefs.seenSources.every((id, i) => id === seen[i])) {
     return prefs
   }
-  return { v: 1, folded, ungroupedOrder, orderBy, seenSources: seen }
+  // The rebuild reconstructs from a fixed field list — carry sidebarWidth
+  // (and any other optional field) explicitly so a write that prunes or
+  // records a seen source never drops the persisted width preference.
+  return { v: 1, folded, ungroupedOrder, orderBy, sidebarWidth: prefs.sidebarWidth, seenSources: seen }
 }
 
 /**

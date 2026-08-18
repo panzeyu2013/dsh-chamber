@@ -119,6 +119,12 @@ function deepseekSource() {
         if (sub.startsWith('api/')) return pickReal(`${srcdir}${sub}.ts`)
         return undefined
       }
+      // Vendor `./src/*` deep subpaths (the canonical export-map form the
+      // chamber ui-layout fork imports, e.g.
+      // `@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx`): the
+      // specifier already names the src/ directory, so strip the redundant
+      // prefix before joining the source tree.
+      if (sub.startsWith('src/')) return pickReal(`${srcdir}${sub.slice(4)}`)
       return pickReal(
         `${srcdir}${sub}/index.ts`,
         `${srcdir}${sub}.ts`,
@@ -219,6 +225,13 @@ export default defineConfig({
       { find: /^@dsh-chamber\/dsh-client-ui-sidebar$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/index.ts') },
       { find: /^@dsh-chamber\/dsh-client-ui-sidebar\/client$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/client/index.ts') },
       { find: /^@dsh-chamber\/dsh-client-ui-sidebar\/shared$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/shared/index.ts') },
+      // The chamber-owned ui-layout fork (design 06) resolves to source the
+      // same way: it replaces the official layout in the boot graph, and its
+      // client imports the vendor frame through `@deepseek-ai/.../src/*` deep
+      // subpaths (deepseekSource resolves those). The renderer imports only
+      // /client; the bare spec maps to the host no-op entry for completeness.
+      { find: /^@dsh-chamber\/dsh-client-ui-layout$/, replacement: src('../dsh-chamber-client-ui-layout/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-client-ui-layout\/client$/, replacement: src('../dsh-chamber-client-ui-layout/src/client/index.ts') },
       // The chamber self-built connections settings section plugin (design
       // 05 §5) resolves to source the same way.
       { find: /^@dsh-chamber\/dsh-client-ui-settings-connections$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/index.ts') },
