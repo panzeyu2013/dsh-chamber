@@ -29,6 +29,7 @@ import { homedir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { gzipSync } from 'node:zlib'
 import { createCatalog } from './catalog.ts'
 import { createLocalConnection } from './local-connection.ts'
 import type { LocalConnectionDeps } from './local-connection.ts'
@@ -373,6 +374,69 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     '.map': 'application/json; charset=utf-8',
   }
 
+  /**
+   * Static types gzip'd on the fly (text-like payloads where gzip helps —
+   * html/css/js/map/json/svg; woff2 rides along for literal compliance, it is
+   * already brotli-compressed so gzip gains nothing but costs ~nothing on a
+   * loopback server, and each file is compressed once per relaunch). Binary
+   * image formats are excluded (already compressed; gzip would waste CPU).
+   */
+  const COMPRESSIBLE_TYPES = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.map', '.woff2'])
+
+  /**
+   * Tiny on-the-fly gzip cache keyed by path+mtime (LCP perf pass): immutable
+   * hash-named assets under /assets/ are gzipped once per build — the default
+   * Electron session keeps a disk HTTP cache, so the immutable policy below
+   * serves those assets from cache across relaunches and the server re-encodes
+   * one only when a request actually misses that cache; the path+mtime key
+   * makes that a single gzipSync per file per server lifetime. FIFO cap
+   * bounds memory (each entry is one compressed asset). index.html is NOT
+   * served through this cache: its content is re-injected with __DSH_BOOT__
+   * per request (manifest rev can change without index.html's mtime moving),
+   * so it is gzipped per request from the in-memory (already-injected) buffer
+   * instead.
+   */
+  const GZIP_CACHE_MAX = 64
+  const gzipCache = new Map<string, Buffer>()
+  function gzipCached(path: string): Buffer {
+    const stat = statSync(path)
+    const key = `${path}:${stat.mtimeMs}:${stat.size}`
+    const hit = gzipCache.get(key)
+    if (hit !== undefined) return hit
+    const compressed = gzipSync(readFileSync(path))
+    if (gzipCache.size >= GZIP_CACHE_MAX) {
+      const oldest = gzipCache.keys().next().value
+      if (oldest !== undefined) gzipCache.delete(oldest)
+    }
+    gzipCache.set(key, compressed)
+    return compressed
+  }
+
+  /**
+   * Whether the request's Accept-Encoding accepts gzip (RFC 9110 q-value
+   * aware): a bare `gzip` (or `gzip;q=0.5`) accepts it, `gzip;q=0` explicitly
+   * refuses it, and anything else (deflate/br-only, identity, absent) does not
+   * accept it.
+   */
+  function acceptsGzip(req: ApiRequest): boolean {
+    const header = req.headers['accept-encoding']
+    if (typeof header !== 'string') return false
+    for (const part of header.split(',')) {
+      const [token, ...params] = part.split(';').map(s => s.trim().toLowerCase())
+      if (token !== 'gzip') continue
+      let quality = 1
+      for (const param of params) {
+        const match = /^q=([0-9.]+)$/.exec(param)
+        if (match !== null) {
+          const parsed = Number(match[1])
+          if (Number.isFinite(parsed)) quality = parsed
+        }
+      }
+      return quality > 0
+    }
+    return false
+  }
+
   /** Resolve a static path inside webDistDir; null on any escape. */
   function resolveStatic(filePath: string): string | null {
     const resolved = resolve(webDistDir as string, `.${filePath}`)
@@ -435,16 +499,52 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         if (text.includes('</head>')) data = Buffer.from(text.replace('</head>', `${script}</head>`))
         else data = Buffer.from(`${text}${script}`)
       }
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', ...(res._corsHeaders ?? {}) })
-    } else {
-      res.writeHead(200, { 'content-type': type, ...(res._corsHeaders ?? {}) })
     }
+    const headers: Record<string, string> = { 'content-type': type, ...(res._corsHeaders ?? {}) }
+    // Cache policy (LCP perf pass): hash-named build assets under /assets/
+    // are immutable — one year, no revalidation, so a relaunch serves them
+    // from the Electron HTTP cache instead of re-fetching ~2.75MB. index.html
+    // keeps no-cache (the __DSH_BOOT__ manifest moves every build). Other
+    // paths (e.g. /manifest.json) keep their previous no-header behavior.
+    if (candidate === '/index.html') {
+      headers['cache-control'] = 'no-cache'
+    } else if (candidate.startsWith('/assets/')) {
+      headers['cache-control'] = 'public, max-age=31536000, immutable'
+    }
+    // On-the-fly gzip for text-like types (only when the client accepts it).
+    // Vary is set for every compressible response (gzip or not) so the HTTP
+    // cache never serves a negotiated variant to a mismatched client.
+    const compressible = COMPRESSIBLE_TYPES.has(extname(candidate).toLowerCase())
+    if (compressible) headers['vary'] = 'accept-encoding'
+    if (compressible && acceptsGzip(req)) {
+      try {
+        headers['content-encoding'] = 'gzip'
+        data = candidate === '/index.html' ? gzipSync(data) : gzipCached(path)
+      } catch (gzipError) {
+        // Rare file race (the asset vanished between read and gzip) or a
+        // corrupt asset: serve the already-read bytes identity-compressed
+        // rather than crash the plane — the frontend still loads, just
+        // without gzip. The outer handler catch below is the last-resort
+        // 500 for anything else that throws in the static path.
+        logger.warn(`static gzip failed for ${candidate}: ${String(gzipError)}`)
+        delete headers['content-encoding']
+      }
+    }
+    // Explicit Content-Length: keeps static responses non-chunked and gives
+    // HEAD requests a real length (the immutable-cache client relies on it).
+    headers['content-length'] = String(data.length)
+    res.writeHead(200, headers)
     res.end(data)
   }
 
   function jsonStaticError(res: ApiResponse, status: number, code: string) {
     const body = JSON.stringify({ error: code, code })
-    res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...(res._corsHeaders ?? {}) })
+    res.writeHead(status, {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(body),
+      'cache-control': 'no-store',
+      ...(res._corsHeaders ?? {}),
+    })
     res.end(body)
   }
 
@@ -517,7 +617,20 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             return
           }
           if (webDistDir !== undefined) {
-            serveStatic(req as ApiRequest, res as ApiResponse, url.pathname)
+            try {
+              serveStatic(req as ApiRequest, res as ApiResponse, url.pathname)
+            } catch (staticError) {
+              // A throw in the static path (beyond the gzip race guarded
+              // inside serveStatic) must answer 500, never crash the plane
+              // child process — same pattern as the api.handle catch above.
+              logger.error(`static handler failure: ${String(staticError)}`)
+              if (!res.headersSent) {
+                res.writeHead(500, { 'content-type': 'application/json' })
+                res.end('{"error":"internal"}')
+              } else {
+                res.end()
+              }
+            }
             return
           }
           res.writeHead(404, { 'content-type': 'application/json' })
