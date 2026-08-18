@@ -12,6 +12,16 @@ const DIST_INDEX = path.join(desktopDir, 'dist', 'index.html');
 const forceBuild = process.argv.includes('--build');
 const require = createRequire(import.meta.url);
 
+// Dev-mode isolation: the dev instance must coexist with a running packaged
+// dsh-chamber. The packaged app and a raw `electron .` share the same app
+// identity (name "@dsh-chamber/desktop" → same userData), so a plain dev
+// launch collides on the single-instance lock and on the default control-plane
+// port 17500. The dev launcher therefore runs with its own user-data dir
+// (own lock, state, registry, passwords — the packaged app's live state is
+// never touched) and main.ts falls back to a dev control-plane port (17520,
+// overridable via DSH_CHAMBER_CP_PORT) instead of 17500.
+const DEV_USER_DATA_DIR = path.join(desktopDir, '.dev-user-data');
+
 function fail(message) {
   console.error(`[electron:dev] ${message}`);
   process.exit(1);
@@ -70,9 +80,20 @@ try {
   fail('electron 包不可解析（二进制缺失？）。请重跑 pnpm install 或 node scripts/ensure-electron.mjs');
 }
 
-const electron = spawn(electronExecutable, ['.'], {
+// The child env must never force Electron into node mode: a parent environment
+// carrying ELECTRON_RUN_AS_NODE=1 (e.g. a shell launched from a
+// node-in-electron runtime) would make the electron binary run as plain node —
+// the main process would then resolve 'electron' to the npm launcher package
+// and die on `import { app, BrowserWindow } from 'electron'`. The dev launcher
+// always wants a real Electron app.
+const childEnv = { ...process.env, DSH_CHAMBER_ELECTRON_DEV: '1' };
+delete childEnv.ELECTRON_RUN_AS_NODE;
+
+console.log(`[electron:dev] dev 隔离：user-data=${DEV_USER_DATA_DIR}（与打包版实例互不冲突；控制面端口见 main.ts 的 dev 默认值，可经 DSH_CHAMBER_CP_PORT 覆盖）`);
+
+const electron = spawn(electronExecutable, [`--user-data-dir=${DEV_USER_DATA_DIR}`, '.'], {
   cwd: desktopDir,
-  env: { ...process.env, DSH_CHAMBER_ELECTRON_DEV: '1' },
+  env: childEnv,
   stdio: 'inherit',
   detached: process.platform !== 'win32',
 });

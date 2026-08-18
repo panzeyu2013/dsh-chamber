@@ -79,7 +79,7 @@ pnpm run dist:desktop
 
 ### 控制面
 
-`createControlPlane({ stateDir: <userData>/state, dshWorkspacePath })`：`stateDir` 固定为 `app.getPath('userData')/state`；`dshWorkspacePath` 为 dsh 工作区解析结果（打包态 `<resources>/vendor/dsh`；开发态环境变量 `DSH_CHAMBER_DSH_PATH` → `<repoRoot>/ref-dsh` → `<pkg>/vendor/dsh`；找不到时为 null，控制面内部回退到默认解析）。port 默认 17500、host 默认 127.0.0.1，start 后经 `controlPlane.port` 读取实际绑定端口。
+`createControlPlane({ stateDir: <userData>/state, dshWorkspacePath })`：`stateDir` 固定为 `app.getPath('userData')/state`；`dshWorkspacePath` 为 dsh 工作区解析结果（打包态 `<resources>/vendor/dsh`；开发态环境变量 `DSH_CHAMBER_DSH_PATH` → `<repoRoot>/ref-dsh` → `<pkg>/vendor/dsh`；找不到时为 null，控制面内部回退到默认解析）。port 默认 17500、host 默认 127.0.0.1，start 后经 `controlPlane.port` 读取实际绑定端口。**dev 隔离**：`electron-dev.mjs` 以独立 `--user-data-dir`（`packages/desktop/.dev-user-data`，gitignored）启动，且 dev 模式控制面端口回落为 17520（`DSH_CHAMBER_CP_PORT` 可覆盖）——与运行中的打包版实例（共享同一应用名 `@dsh-chamber/desktop` → 同一 userData 与单实例锁、占用 17500）互不冲突；dev 的注册表/密码/状态独立存放，绝不触碰打包版线上数据。
 
 ### transport-manager + ssh provider（transport-provider.ts / transport-manager.ts / ssh-provider.ts）
 

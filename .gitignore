@@ -37,6 +37,11 @@ vendor/
 # Bundled dsh copy inside the desktop package (produced by bundle:dsh, external repo content)
 packages/desktop/vendor/
 
+# Dev-mode isolated app data (electron-dev.mjs --user-data-dir: own instance
+# lock / state / registry / passwords, so dev coexists with a running packaged
+# dsh-chamber instead of sharing its live userData)
+packages/desktop/.dev-user-data/
+
 # Renderer tooling caches and generated code
 packages/renderer/.cache/
 packages/renderer/src/generated/
