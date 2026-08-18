@@ -37,11 +37,25 @@ import { runReaper } from './reaper.ts'
 import { createInstanceProxy } from './instance-proxy.ts'
 import { ensureInstanceId } from './instance-id.ts'
 import { hostLogs } from './host-logs.ts'
+import { buildPatchOverlay, ensureHostGraphPackage, HOST_GRAPH_PACKAGE_NAME } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest, ApiResponse } from './api.ts'
 
 /** Default control-plane state root when DSH_CHAMBER_STATE is unset. */
 export const DEFAULT_STATE_DIR = join(homedir(), '.dsh-chamber')
+
+/** This package's repo root (<repo>/packages/control-plane/src → <repo>). */
+const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
+
+/**
+ * Default module-A host package source dir (design 09 方案 A, module B): the
+ * chamber host package whose dist/index.js + package.json the plane seeds
+ * into the local profile so the spawned host exposes the boot graph. Dev and
+ * CI layouts ship it at <repo>/packages/dsh-host-client-graph; packaged
+ * runtimes pass the bundled location through ControlPlaneOptions (an absent
+ * source is skipped, never an error).
+ */
+export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-host-client-graph')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -51,10 +65,9 @@ export const DEFAULT_STATE_DIR = join(homedir(), '.dsh-chamber')
  * (main.ts passes null explicitly in that case).
  */
 export function defaultDshWorkspacePath() {
-  const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
-  const refDsh = join(repoRoot, 'ref-dsh')
+  const refDsh = join(REPO_ROOT, 'ref-dsh')
   if (existsSync(refDsh)) return refDsh
-  const vendorDsh = join(repoRoot, 'packages', 'desktop', 'vendor', 'dsh')
+  const vendorDsh = join(REPO_ROOT, 'packages', 'desktop', 'vendor', 'dsh')
   if (existsSync(vendorDsh)) return vendorDsh
   return refDsh
 }
@@ -95,6 +108,15 @@ export interface ControlPlaneOptions {
   corsOrigins?: string[]
   /** Injectable local-connection wire deps (test seams: fake spawn/describe). */
   localConnectionDeps?: LocalConnectionDeps
+  /**
+   * Module-A host package source dir (design 09 方案 A, module B): the package
+   * seeded into the local profile so the spawned host resolves the
+   * client-graph row. Defaults to <repo>/packages/dsh-host-client-graph;
+   * packaged runtimes pass the bundled location. An absent source — or a
+   * source without its built dist/index.js artifact (module A not built in
+   * this runtime) — is skipped (nothing to seed), never an error.
+   */
+  hostGraphPackageSourceDir?: string
 }
 
 /** The assembled control-plane handle returned by createControlPlane. */
@@ -132,6 +154,21 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // The console default satisfies every module's logger option ({log,warn,error}).
   const logger = (options.logger ?? console) as Logger
 
+  // Module-A host package source (design 09 module B); may be absent — the seed
+  // skips it gracefully and the plane keeps working without the host graph.
+  const hostGraphPackageSourceDir = options.hostGraphPackageSourceDir ?? DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR
+  // The seed gate is the BUILT artifact (dist/index.js), not the package
+  // directory: the dir exists in any checkout of this repo, while the esbuild
+  // output is the shipped artifact — committed via the .gitignore negation
+  // (design 09 §3.5), so a fresh clone HAS it and absence here means module A
+  // is not built/bundled in this runtime (packaged desktop without the bundle).
+  // MISSING is skipped gracefully (v4 base command line, no overlay); a
+  // PRESENT-but-damaged artifact is NOT skipped — it is seeded and the host
+  // boot fails loud if the overlay row cannot resolve (shipped-but-broken
+  // module A is a packaging bug: fail-loud on purpose; ensureHostGraphPackage
+  // throws on a missing declared file rather than silently skipping).
+  const hostGraphArtifact = join(hostGraphPackageSourceDir, 'dist', 'index.js')
+
   // The state root must exist before any persisted module constructs.
   mkdirSync(stateDir, { recursive: true })
 
@@ -151,10 +188,43 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // §3): the stream also snapshots on subscribe, so no transition is missed.
   const healthListeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
 
+  /**
+   * Idempotent host-graph seed, resolved at every spawn (design 09 module B).
+   * The local connection resolves this thunk at spawn time — initial spawns
+   * and restarts alike — so a seed that a profile-internal pnpm operation
+   * pruned is re-seeded right before the next spawn. The seeded package is
+   * extraneous to the web profile's dependency graph (it is not declared in
+   * profiles/web/package.json), and `dsh plugin add/remove` (chamber M4's
+   * runLocalDshPlugin included) re-links profile node_modules, which prunes
+   * such packages: without the per-spawn re-seed the next instance restart
+   * would boot with a --patch row that cannot resolve and fail loudly, the
+   * only self-heal being a desktop-app restart (plane start()). Both this
+   * thunk and the plane's start() initial run are idempotent (content-hash
+   * skip in ensureHostGraphPackage, content-compare in buildPatchOverlay), so
+   * they never conflict. Returns the --patch overlay path, or null when
+   * module A's built artifact is absent (v4 baseline command line, nothing
+   * to mount). Failure semantics: a seed throw on the initial-spawn path
+   * lands the instance in error state (next plane start() retries); on the
+   * restart path it rides the connection's existing bounded backoff loop and
+   * ends in restart-exhausted — the same fail-loud surface as any spawn
+   * failure (a broken shipped module A is a packaging bug, never silent).
+   */
+  function resolveHostGraphPatch(): string | null {
+    if (!existsSync(hostGraphArtifact)) return null
+    if (ensureHostGraphPackage(dshHome, hostGraphPackageSourceDir)) {
+      logger.log(`host-graph: seeded ${HOST_GRAPH_PACKAGE_NAME} into the local web profile`)
+    }
+    return buildPatchOverlay(stateDir)
+  }
+
   // The managed local connection adapter (design 02): spawn/health/reaper
   // owner; readiness = TCP + host.describe inside spawn-dsh.
   const local = createLocalConnection({
     stateDir, dshHome, dshWorkspacePath, catalog, logger,
+    // patchPath is a thunk: the seed may land after construction (the plane's
+    // start()), and resolving it per spawn (restarts included) re-runs the
+    // idempotent seed, self-healing a pruned one (see resolveHostGraphPatch).
+    options: { patchPath: resolveHostGraphPatch },
     deps: options.localConnectionDeps,
   })
   // Health-events push fan-out (05 §3): the connection's lifecycle
@@ -388,6 +458,26 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // explicit settings choice always wins from then on.
       if (seedDshHomeDefaults(dshHome)) {
         logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
+      }
+      // Host-graph seed (design 09 方案 A, module B): distribute the chamber
+      // host package into the local profile (idempotent, content-hash skip)
+      // and materialize the --patch overlay that mounts it. The initial run
+      // here is for early exposure (logs + fail-loud on a broken module A);
+      // the spawn-time thunk re-runs the same idempotent seed before every
+      // spawn, restarts included — a seed pruned by a profile-internal pnpm
+      // operation self-heals on the next spawn, not only at plane start.
+      // dist/index.js is a COMMITTED artifact (design 09 §3.5, .gitignore
+      // negation), so a fresh clone has it; the gate only skips when the
+      // artifact is genuinely absent (module A not built/bundled in this
+      // runtime) or damaged — the overlay is gated on the artifact because a
+      // --patch overlay whose inserted row cannot resolve fails the host boot
+      // loudly (dsh-app-boot loadOverlayPatches): an absent module A must
+      // leave the spawn command line exactly the v4 base. A pre-existing
+      // running local instance is unaffected until its next restart — the
+      // overlay applies at host boot, the official plugin-set-change cadence.
+      const hostGraphPatch = resolveHostGraphPatch()
+      if (hostGraphPatch === null) {
+        logger.log(`host-graph: host package build artifact ${hostGraphArtifact} not present; seed skipped (module A not built)`)
       }
       if (webDistDir !== undefined) {
         try {

@@ -18,7 +18,8 @@
     "postinstall": "node scripts/ensure-electron.mjs",
     "dev:control-plane": "node packages/control-plane/src/standalone.ts",
     "build:renderer": "pnpm --filter @dsh-chamber/renderer run build",
-    "build:desktop": "pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run build:control-plane && pnpm --filter @dsh-chamber/desktop run build:preload && pnpm --filter @dsh-chamber/desktop run bundle:dsh",
+    "build:host-graph": "pnpm --filter @dsh-chamber/dsh-host-client-graph run build",
+    "build:desktop": "pnpm run build:host-graph && pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run build:control-plane && pnpm --filter @dsh-chamber/desktop run build:host-graph-package && pnpm --filter @dsh-chamber/desktop run build:preload && pnpm --filter @dsh-chamber/desktop run bundle:dsh",
     "dist:desktop": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist",
     "dist:desktop:mac": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:mac",
     "dist:desktop:win": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:win",
@@ -33,10 +34,12 @@
     "typecheck:sidebar": "tsc -p packages/dsh-chamber-client-ui-sidebar/tsconfig.json --noEmit",
     "typecheck:settings-bridge": "tsc -p packages/dsh-chamber-client-ui-settings-bridge/tsconfig.json --noEmit",
     "typecheck:client-web": "node scripts/typecheck-client-web.mjs",
-    "test:desktop": "node packages/desktop/transport-manager.test.ts && node packages/desktop/ssh-provider.test.ts && node packages/desktop/ssh-config.test.ts && node packages/desktop/renderer-trust.test.ts",
+    "typecheck:host-graph": "pnpm --filter @dsh-chamber/dsh-host-client-graph run typecheck",
+    "test:desktop": "node packages/desktop/transport-manager.test.ts && node packages/desktop/ssh-provider.test.ts && node packages/desktop/ssh-config.test.ts && node packages/desktop/renderer-trust.test.ts && node packages/desktop/plugin-sync.test.ts",
     "test:sidebar": "node packages/dsh-chamber-client-ui-sidebar/test/derive.ts && node packages/dsh-chamber-client-ui-sidebar/test/view-prefs.ts && node packages/dsh-chamber-client-ui-sidebar/test/search-state.ts",
     "test:settings-bridge": "node packages/dsh-chamber-client-ui-settings-bridge/test/busy-enter-policy.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/permission-controller.ts",
-    "test:renderer-shell": "node packages/renderer/src/pending-open-queue.test.ts"
+    "test:connections": "node packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-diff.test.ts",
+    "test:renderer-shell": "node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/host-graph.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

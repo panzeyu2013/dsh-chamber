@@ -45,7 +45,7 @@
  */
 
 import type { SpawnOptions } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -59,6 +59,7 @@ import type {
   TransportInstanceSpec,
   TransportProbeEndpoint,
   TransportProvider,
+  TransportRunPayload,
   TransportVerifyResult,
 } from './transport-provider.ts'
 
@@ -83,6 +84,54 @@ export const SSH_USER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
  * injection). Anything else is refused before a process is spawned.
  */
 export const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9_.-]+$/
+
+/**
+ * Remote dsh home whitelist (design 13 §7.2): `~/.dsh` or an absolute path,
+ * `~` only at word start, no spaces/metachars — shell-safe on the ssh command
+ * line and in a `DSH_HOME=<path>` environment prefix. Each path segment is
+ * additionally guarded against exactly `.` / `..` (a `..` segment would let a
+ * crafted remoteDshHome escape the intended home subtree into user-writable
+ * locations when seed write-file builds its targets under it).
+ */
+export const REMOTE_DSH_HOME_PATTERN = /^~?(?:\/(?!\.{1,2}(?:\/|$))[a-zA-Z0-9._-]+)+$/
+
+/**
+ * Package spec whitelist (design 13 §7.2): registry name (+ optional scope)
+ * with an optional `@version` (exact / `^`range / `~`range / dist-tag). The
+ * character class is deliberately shell-safe — NO `| < > *` space quotes `$`
+ * `; & ( )` backtick — because ssh hands the argument to the REMOTE shell
+ * verbatim. Ranges (`>=1.2.3 <2`), `||`, wildcards, `npm:` aliases, `git+` /
+ * URL specs and `file:`/`link:`/relative paths are all REFUSED here (they are
+ * injection surface, or are materialized via a separate path, design 13 §4.6).
+ */
+export const PLUGIN_SPEC_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*(@(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]*|latest|next))?$/
+
+/** Name-only form for `dsh plugin remove <name>`. */
+export const PLUGIN_NAME_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+
+/**
+ * The materialize-add `file:` spec whitelist (design 13 §4.6 / §7.2): only the
+ * ABSOLUTE form of the materialized-tarball stable dir may reach the remote
+ * `dsh plugin add` command — `<remote-home>/.dsh-chamber/plugins/<name>-<hash>.tgz`.
+ * The path is constrained to the `.dsh-chamber/plugins/` subtree (the same
+ * fixed surface resolveWriteTarget allows writes into), shell-safe, and the
+ * argv is only ever constructed by the main-process materialize orchestration
+ * (the renderer has no channel that forwards a `file:` spec to a remote
+ * `run` — applyPlugins re-validates against PLUGIN_SPEC_PATTERN, which
+ * refuses `file:`). `~` is never accepted here: a word-middle `~` is not
+ * expanded by the remote shell/pnpm, so the absolute form is mandatory.
+ */
+export const MATERIALIZE_FILE_SPEC_PATTERN = /^file:\/([a-zA-Z0-9._-]+\/)*\.dsh-chamber\/plugins\/[a-zA-Z0-9._-]+\.tgz$/
+
+/**
+ * write-file content cap (design 13 §4.1: 50MiB suggested): bounds both the
+ * base64 payload decoded in the main process and the materialize/seed
+ * orchestration payloads that flow through write-file.
+ */
+export const WRITE_FILE_MAX_BYTES = 50 * 1024 * 1024
+
+/** Bound of the redacted stderr detail attached to failed `run` errors. */
+const RUN_STDERR_DETAIL_MAX_CHARS = 2048
 
 /**
  * stderr lines that mean the transport cannot come up without user action
@@ -324,6 +373,8 @@ function isValidInstance(instance: unknown, kind: TransportProvider['kind']): in
       || (typeof record.sshPort === 'number' && Number.isInteger(record.sshPort)
         && record.sshPort >= 1 && record.sshPort <= 65535))
     && (record.serviceName === undefined || record.serviceName === null || typeof record.serviceName === 'string')
+    && (record.remoteDshHome === undefined || record.remoteDshHome === null
+      || (typeof record.remoteDshHome === 'string' && REMOTE_DSH_HOME_PATTERN.test(record.remoteDshHome)))
     && (record.kind === undefined || record.kind === null || record.kind === kind)
 }
 
@@ -533,6 +584,7 @@ export const sshProvider: TransportProvider = {
       sshPort: record.sshPort === undefined || record.sshPort === null ? null : (record.sshPort as number),
       remotePort: record.remotePort as number,
       serviceName: record.serviceName === undefined || record.serviceName === null ? null : (record.serviceName as string),
+      remoteDshHome: record.remoteDshHome === undefined || record.remoteDshHome === null ? null : (record.remoteDshHome as string),
     }
   },
 
@@ -584,8 +636,8 @@ export const sshProvider: TransportProvider = {
     return verifyDshEndpoint(endpoint)
   },
 
-  exec(spec: TransportInstanceSpec, action: TransportExecAction, deps: TransportExecDeps): Promise<TransportExecResult> {
-    return runExec(spec, action, deps)
+  exec(spec: TransportInstanceSpec, action: TransportExecAction, deps: TransportExecDeps, payload?: TransportRunPayload): Promise<TransportExecResult> {
+    return runExec(spec, action, deps, payload)
   },
 }
 
@@ -609,7 +661,9 @@ function runExec(
   spec: TransportInstanceSpec,
   action: TransportExecAction,
   deps: TransportExecDeps,
+  payload?: TransportRunPayload,
 ): Promise<TransportExecResult> {
+  if (action === 'run') return runRemoteExec(spec, payload, deps)
   if (spec.serviceName === null) {
     return Promise.resolve({ ok: false, error: 'no systemd service configured for this instance' })
   }
@@ -703,6 +757,10 @@ function runExec(
         if (action === 'is-active') {
           deps.setProjection(spec.id, 'serviceActive', true)
           deps.log('info', `systemctl is-active ${spec.serviceName}: active`)
+        } else if (action === 'restart') {
+          // restart: honest "restarted" — never touches serviceActive (the
+          // unit's prior state is unchanged; restart does not define it).
+          deps.log('info', `systemctl restart ${spec.serviceName}: exit 0`)
         } else {
           deps.setProjection(spec.id, 'serviceActive', action === 'start')
           deps.log('info', `systemctl ${action} ${spec.serviceName}: exit 0`)
@@ -751,6 +809,271 @@ function runExec(
       finish({ ok: false, error: `systemctl ${action} failed (exit ${code ?? exitSignal})` })
     })
   })
+}
+
+/**
+ * Build the ssh argv (everything after `ssh`) for a `run` exec, or null when
+ * the command/argv fail the design 13 §7.2 whitelist (refused BEFORE spawn).
+ * ssh concatenates these into one string for the REMOTE shell, so every
+ * argument must be shell-safe.
+ */
+export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: TransportRunPayload): string[] | null {
+  const argv = payload.argv
+  if (!Array.isArray(argv)) return null
+  const prefix = spec.remoteDshHome !== null ? [`DSH_HOME=${spec.remoteDshHome}`] : []
+  if (payload.command === 'dsh') {
+    // argv = ['plugin', '--profile', 'web', 'add'|'remove', <spec>]
+    if (argv.length !== 5 || argv[0] !== 'plugin' || argv[1] !== '--profile' || argv[2] !== 'web') return null
+    if (argv[3] !== 'add' && argv[3] !== 'remove') return null
+    const specArg = argv[4]
+    if (typeof specArg !== 'string') return null
+    // `add` accepts the registry spec (design 13 §7.2) OR the main-process
+    // materialize `file:` absolute-tarball form (design 13 §4.6,
+    // MATERIALIZE_FILE_SPEC_PATTERN — renderer input can never reach this
+    // branch: applyPlugins re-validates against PLUGIN_SPEC_PATTERN, which
+    // refuses `file:`); `remove` is name-only.
+    const ok = argv[3] === 'add'
+      ? PLUGIN_SPEC_PATTERN.test(specArg) || MATERIALIZE_FILE_SPEC_PATTERN.test(specArg)
+      : PLUGIN_NAME_PATTERN.test(specArg)
+    if (!ok) return null
+    return [...prefix, 'dsh', ...argv]
+  }
+  if (payload.command === 'cat') {
+    if (argv.length !== 1 || typeof argv[0] !== 'string') return null
+    const home = spec.remoteDshHome ?? '~/.dsh'
+    // Whitelisted cat targets: the profile manifest + patch file, plus the
+    // CONVERGED seed subtree `<home>/profiles/node_modules/@dsh-chamber/<pkg>/<file>`
+    // — the same fixed surface resolveWriteTarget allows writes into, needed
+    // by the seed hash-skip read-back (design 13 §4.6). No wildcards, no
+    // `.`/`..` traversal (shared SEED_RELATIVE_PATTERN).
+    const seedPrefix = `${home}/profiles/node_modules/@dsh-chamber/`
+    const isSeedRead = argv[0].startsWith(seedPrefix)
+      && argv[0].length > seedPrefix.length
+      && SEED_RELATIVE_PATTERN.test(argv[0].slice(seedPrefix.length))
+    if (argv[0] !== `${home}/profiles/web/package.json` && argv[0] !== `${home}/profiles/web/cordis.patch.yml` && !isSeedRead) return null
+    return [...prefix, 'cat', argv[0]]
+  }
+  if (payload.command === 'printf') {
+    // Remote `$HOME` lookup for the materialize `file:` absolute path (todo
+    // 13 §4.6): a FIXED argv — `printf %s $HOME` — constructed here in the
+    // main process only (never renderer input). `$HOME` is a literal the
+    // REMOTE shell expands; the captured stdout is the remote user's home.
+    // (`$` is normally refused on the command line; this single fixed
+    // constant is the sanctioned exception, gated by the exact argv match.)
+    if (argv.length !== 2 || argv[0] !== '%s' || argv[1] !== '$HOME') return null
+    return ['printf', '%s', '$HOME']
+  }
+  return null
+}
+
+/**
+ * A seed-subtree RELATIVE path (`@dsh-chamber/<pkg>/<file>` — the prefix is
+ * stripped before this check): one or more `/`-joined segments, each starting
+ * with an alphanumeric. Rejects `.`/`..` traversal segments and any other
+ * empty/dot segment — shared by the write-file target whitelist and the cat
+ * seed read-back whitelist so the seed surface stays converged on both sides.
+ */
+const SEED_RELATIVE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$/
+
+/**
+ * Validate a write-file target against the fixed prefixes (design 13 §7.2):
+ * the materialized-tarball dir, the seed dir, or the profile patch file.
+ * Returns the target (with `~` left for the remote shell to expand) or null.
+ */
+export function resolveWriteTarget(spec: TransportInstanceSpec, path: string | undefined): string | null {
+  if (typeof path !== 'string' || path === '') return null
+  const home = spec.remoteDshHome ?? '~/.dsh'
+  if (/^~\/\.dsh-chamber\/plugins\/[a-zA-Z0-9._-]+\.tgz$/.test(path)) return path
+  const seedPrefix = `${home}/profiles/node_modules/@dsh-chamber/`
+  if (path.startsWith(seedPrefix) && path.length > seedPrefix.length && SEED_RELATIVE_PATTERN.test(path.slice(seedPrefix.length))) return path
+  if (path === `${home}/profiles/web/cordis.patch.yml`) return path
+  return null
+}
+
+/**
+ * Spawn one short-lived `ssh` run (design 13 §4.1) and drive it to completion:
+ * bounded `run` timeout (SIGTERM → SIGKILL), stderr redaction + auth
+ * classification, optional stdin write (write-file) and optional stdout
+ * capture (`cat` → file content). Never auto-retried, never touches the
+ * tunnel's terminal classification.
+ */
+function spawnRemote(
+  spec: TransportInstanceSpec,
+  remoteArgv: string[],
+  deps: TransportExecDeps,
+  opts: { stdin?: string; captureStdout?: boolean },
+): Promise<TransportExecResult> {
+  const timeoutMs = deps.runTimeoutMs ?? 120_000
+  const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
+  const args = spec.sshPort === null ? [target, ...remoteArgv] : ['-p', String(spec.sshPort), target, ...remoteArgv]
+  return new Promise(resolve => {
+    let settled = false
+    let timedOut = false
+    let authFailed = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let killTimer: ReturnType<typeof setTimeout> | null = null
+    const stdoutChunks: Buffer[] = []
+    const finish = (result: TransportExecResult) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) { clearTimeout(timer); timer = null }
+      if (killTimer !== null) { clearTimeout(killTimer); killTimer = null }
+      resolve(result)
+    }
+    let child: SpawnedProcess
+    const spawnOptions: SpawnOptions = { stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'] }
+    const authEnv = sshAuthEnv(spec)
+    if (authEnv !== null) spawnOptions.env = { ...process.env, ...authEnv }
+    try {
+      child = deps.spawnFn('ssh', args, spawnOptions)
+    } catch (spawnError) {
+      deps.log('error', `failed to spawn ssh for run: ${String(spawnError)}`)
+      finish({ ok: false, error: `failed to spawn ssh: ${String(spawnError)}` })
+      return
+    }
+    if (opts.stdin !== undefined && child.stdin !== null) {
+      child.stdin.write(opts.stdin)
+      child.stdin.end()
+    }
+    timer = setTimeout(() => {
+      timedOut = true
+      deps.log('error', `run timed out after ${timeoutMs}ms`)
+      signalChild(child, 'SIGTERM')
+      finish({ ok: false, error: `run timed out after ${timeoutMs}ms` })
+      killTimer = setTimeout(() => signalChild(child, 'SIGKILL'), deps.disconnectGraceMs)
+      killTimer.unref?.()
+    }, timeoutMs)
+    timer.unref?.()
+    let stderrPending = ''
+    // Redacted stderr lines collected for the failure detail (never raw —
+    // classifyStderr already applies redactSshStderr, so no key/password
+    // material can ride the error string).
+    const stderrLines: string[] = []
+    const processStderr = (text: string) => {
+      stderrPending += text
+      const lines = stderrPending.split(/\r?\n/)
+      stderrPending = lines.pop() ?? ''
+      for (const line of lines) {
+        const { log, terminalAuth } = sshProvider.classifyStderr(line)
+        if (log === '') continue
+        stderrLines.push(log)
+        deps.log('info', log)
+        if (terminalAuth) {
+          authFailed = true
+          deps.log('error', 'authentication failure detected (requires user action)')
+        }
+      }
+    }
+    if (child.stdout !== null) {
+      child.stdout.on('data', chunk => { if (opts.captureStdout === true) stdoutChunks.push(chunk) })
+    }
+    if (child.stderr !== null) {
+      child.stderr.on('data', chunk => processStderr(String(chunk)))
+    }
+    child.on('error', error => {
+      deps.log('error', `ssh spawn error for run: ${String(error)}`)
+      finish({ ok: false, error: `failed to spawn ssh: ${String(error)}` })
+    })
+    child.on('exit', (code, exitSignal) => {
+      if (timedOut || settled) return
+      processStderr('\n')
+      if (authFailed) {
+        finish({ ok: false, error: 'authentication failure — requires user action' })
+        return
+      }
+      if (code !== 0) {
+        // Run-class failures carry the redacted remote stderr text — the
+        // `cat` ENOENT signal (`profile not initialized`, design 13 §4.3) among
+        // others — bounded so a chatty remote never bloats the error.
+        const detail = stderrLines.join(' | ').slice(0, RUN_STDERR_DETAIL_MAX_CHARS)
+        const suffix = detail === '' ? '' : `: ${detail}`
+        deps.log('error', `run command failed (exit ${code ?? exitSignal})${suffix}`)
+        finish({ ok: false, error: `run command failed (exit ${code ?? exitSignal})${suffix}` })
+        return
+      }
+      const projection = deps.projection(spec.id)
+      if (projection === null) {
+        finish({ ok: false, error: 'ssh instance not found' })
+        return
+      }
+      // Keep the RAW captured bytes alongside the UTF-8 view: binary stdout
+      // (a `.tgz` read-back) is lossy through `toString('utf8')` (U+FFFD
+      // replacement chars), so byte-domain consumers hash `stdoutBytes`.
+      const stdoutBytes = opts.captureStdout === true ? Buffer.concat(stdoutChunks) : undefined
+      finish({
+        ok: true,
+        status: projection,
+        stdout: stdoutBytes !== undefined ? stdoutBytes.toString('utf8') : undefined,
+        stdoutBytes,
+      })
+    })
+  })
+}
+
+/**
+ * The `run` exec dispatcher (design 13 §4.1): `exec` runs a whitelisted
+ * remote command; `write-file` streams base64 content over ssh stdin to
+ * `mkdir -p <dir> && base64 -d > <path>` and verifies SHA-256 by reading the
+ * file back over `cat` (no platform-specific sha256sum).
+ */
+async function runRemoteExec(
+  spec: TransportInstanceSpec,
+  payload: TransportRunPayload | undefined,
+  deps: TransportExecDeps,
+): Promise<TransportExecResult> {
+  if (payload === undefined) return Promise.resolve({ ok: false, error: 'run exec requires a payload' })
+  if (payload.op === 'exec') {
+    const argv = buildRemoteExecArgv(spec, payload)
+    if (argv === null) {
+      deps.log('error', `refused run exec: command/argv not whitelisted ${JSON.stringify(payload.command)} ${JSON.stringify(payload.argv)}`)
+      return Promise.resolve({ ok: false, error: 'invalid run command or arguments (whitelist refused)' })
+    }
+    return spawnRemote(spec, argv, deps, { captureStdout: true })
+  }
+  if (payload.op === 'write-file') {
+    const target = resolveWriteTarget(spec, payload.path)
+    if (target === null) {
+      deps.log('error', `refused write-file: target not whitelisted ${JSON.stringify(payload.path)}`)
+      return Promise.resolve({ ok: false, error: 'write-file target not allowed' })
+    }
+    if (typeof payload.contentBase64 !== 'string' || typeof payload.sha256 !== 'string') {
+      return Promise.resolve({ ok: false, error: 'write-file requires contentBase64 and sha256' })
+    }
+    // Size cap (design 13 §4.1: 50MiB suggested) — bounds the decoded payload
+    // before any write, covering the seed and materialize orchestration
+    // payloads that flow through write-file. Refused loudly, never truncated.
+    // Pre-check the base64 length so an oversized payload is refused BEFORE
+    // allocating its decoded buffer (base64 of N bytes is ≤ ⌈N/3⌉·4 chars).
+    const maxBase64Len = Math.ceil(WRITE_FILE_MAX_BYTES / 3) * 4 + 4
+    if (payload.contentBase64.length > maxBase64Len) {
+      deps.log('error', `refused write-file: content exceeds the ${WRITE_FILE_MAX_BYTES}-byte limit`)
+      return Promise.resolve({ ok: false, error: `write-file content exceeds the ${WRITE_FILE_MAX_BYTES}-byte limit` })
+    }
+    const raw = Buffer.from(payload.contentBase64, 'base64')
+    if (raw.length > WRITE_FILE_MAX_BYTES) {
+      deps.log('error', `refused write-file: content exceeds the ${WRITE_FILE_MAX_BYTES}-byte limit`)
+      return Promise.resolve({ ok: false, error: `write-file content exceeds the ${WRITE_FILE_MAX_BYTES}-byte limit` })
+    }
+    if (createHash('sha256').update(raw).digest('hex') !== payload.sha256.toLowerCase()) {
+      return Promise.resolve({ ok: false, error: 'write-file content does not match sha256' })
+    }
+    const dir = dirname(target)
+    const remoteCmd = dir === '.' || dir === '/' ? `base64 -d > ${target}` : `mkdir -p ${dir} && base64 -d > ${target}`
+    const written = await spawnRemote(spec, [remoteCmd], deps, { stdin: payload.contentBase64 })
+    if (!written.ok) return written
+    const readBack = await spawnRemote(spec, ['cat', target], deps, { captureStdout: true })
+    if (!readBack.ok) return readBack
+    // Byte-domain verification: `stdout` is the lossy UTF-8 view of the
+    // captured bytes (binary content would be corrupted by replacement chars
+    // and the hash would never match), so the hash is computed over the RAW
+    // captured bytes (`stdoutBytes`).
+    const readBackBytes = readBack.stdoutBytes ?? Buffer.from(readBack.stdout ?? '', 'utf8')
+    if (createHash('sha256').update(readBackBytes).digest('hex') !== payload.sha256.toLowerCase()) {
+      return { ok: false, error: 'write-file verification failed: remote SHA-256 mismatch' }
+    }
+    return readBack
+  }
+  return Promise.resolve({ ok: false, error: 'unknown run payload op' })
 }
 
 /** Best-effort kill (no-op when the process is already gone). */

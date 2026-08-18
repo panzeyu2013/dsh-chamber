@@ -72,7 +72,14 @@ export type DescribeCapabilitiesFn = (
 
 /** Injectable connection-adapter dependencies (test seams for the wire). */
 export interface LocalConnectionDeps {
-  spawnDsh?: (options: { stateDir: string; dshHome: string; dshWorkspacePath: string; logger: Logger }) => Promise<SpawnedDsh>
+  spawnDsh?: (options: {
+    stateDir: string
+    dshHome: string
+    dshWorkspacePath: string
+    logger: Logger
+    /** Optional `--patch` overlay for the dsh launcher (design 09 module B); null/absent when none. */
+    patchPath?: string | null
+  }) => Promise<SpawnedDsh>
   describeCapabilities?: DescribeCapabilitiesFn
 }
 
@@ -87,6 +94,13 @@ export interface LocalConnectionOptions {
   restartBackoffCeilMs?: number
   restartWindowMs?: number
   maxRestartsInWindow?: number
+  /**
+   * Optional host-graph patch overlay passed to every spawn as `--patch`
+   * (design 09 module B). A function is resolved at spawn time: the seed runs
+   * in the plane's start(), after the connection is constructed, so a thunk
+   * lets every spawn — initial and restarts — read the then-current path.
+   */
+  patchPath?: string | (() => string | null)
 }
 
 /** The connection row returned by start(). */
@@ -173,6 +187,16 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   const maxRestartsInWindow = options.maxRestartsInWindow ?? MAX_RESTARTS_IN_WINDOW
   const spawnDshFn = (deps.spawnDsh ?? spawnDsh) as NonNullable<LocalConnectionDeps['spawnDsh']>
   const describeCapabilities = deps.describeCapabilities ?? describeCapabilitiesFn
+
+  /**
+   * Resolve the `--patch` overlay path at spawn time (design 09 module B). The
+   * thunk form is resolved lazily so the plane's start() seed — which lands
+   * after this connection is constructed — is visible to every spawn.
+   */
+  function resolvePatchPath(): string | null {
+    const value = options.patchPath
+    return typeof value === 'function' ? value() : value ?? null
+  }
 
   let state: ConnectionState = 'stopped'
   let error: string | null = null
@@ -414,7 +438,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
         try {
           if (child !== null && child.child.exitCode === null) await child.stop()
           child = null
-          const spawned = await spawnDshFn({ stateDir, dshHome, dshWorkspacePath, logger })
+          const spawned = await spawnDshFn({ stateDir, dshHome, dshWorkspacePath, logger, patchPath: resolvePatchPath() })
           if (stopping || epoch !== restartEpoch) {
             await spawned.stop()
             return
@@ -478,7 +502,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
       healthResultCache = null
       setState('starting')
       try {
-        const spawned = await spawnDshFn({ stateDir, dshHome, dshWorkspacePath, logger })
+        const spawned = await spawnDshFn({ stateDir, dshHome, dshWorkspacePath, logger, patchPath: resolvePatchPath() })
         if (stopping) {
           await spawned.stop()
           return catalog.getConnection('local')

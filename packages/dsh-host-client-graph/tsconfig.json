@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    // The vendor workspace packages publish no lib/ artifacts (their package.json
+    // `types` point at an unbuilt lib/types/*.d.ts), so standalone tsc cannot
+    // resolve @deepseek-ai/* — map them to the vendored sources instead, the same
+    // source-level resolution the harness repo itself uses (tsconfig.base.json
+    // paths). The wildcard covers every package this graph reaches: cordis,
+    // cosmokit, schemastery, cordis-plugin-loader, dsh-invariants,
+    // dsh-host-webserver, dsh-typert-protocol, dsh-client-modules — all ship a
+    // src/index.ts entry.
+    //
+    // The relaxations below mirror the harness per-package tsconfigs (cordis /
+    // cosmokit / schemastery / loader each disable these flags that their own
+    // source does not satisfy; the harness base enables them). Module A's own
+    // code is fully explicit, so relaxing them only silences vendor-source
+    // noise — the check still catches real type errors in src/index.ts.
+    "noImplicitAny": false,
+    "noImplicitThis": false,
+    "strictFunctionTypes": false,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "noImplicitOverride": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "paths": {
+      "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"],
+      // @standard-schema/spec (cordis/schemastery dependency, used type-only) is
+      // not linked anywhere in the chamber workspace — only the pnpm virtual
+      // store carries it. Its version is pinned by the lockfile (1.1.0), so
+      // this path is stable across installs; it exists after any `pnpm install`.
+      "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

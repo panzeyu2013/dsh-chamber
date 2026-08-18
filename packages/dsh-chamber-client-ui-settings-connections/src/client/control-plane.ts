@@ -8,6 +8,11 @@
  * value is non-secret: tunnel URLs and SSH material never cross this module.
  */
 
+import type {
+  LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
+  SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshSeedHostGraphResult,
+} from '../global.d.ts'
+
 export interface ApiErrorBody {
   error?: string
   code?: string
@@ -157,4 +162,80 @@ export const cp = {
     if (typeof offset === 'number' && Number.isFinite(offset)) params.push(`offset=${offset}`)
     return request(params.length === 0 ? '/api/host/logs' : `/api/host/logs?${params.join('&')}`)
   },
+}
+
+/**
+ * Plugin-management IPC wrappers (design 13 §4.3/§4.5/§5.8). These ride the
+ * desktop SSH surface (window.dshChamber.desktopSsh.*) — the main process is
+ * the only authority for exec/whitelisting/materialization; the renderer only
+ * computes the view (plugin-diff.ts) and forwards explicit user intents.
+ * The bridge is exposed asynchronously after dsh-chamber:info; a null surface
+ * is a loud error (never a silent no-op), matching ConnectionsSection's guard.
+ */
+
+/** The desktop SSH surface, or a loud throw when the bridge is not yet up. */
+function desktopSsh() {
+  const surface = window.dshChamber?.desktopSsh
+  if (surface == null) throw new Error('桌面端 SSH 面不可用（desktopSsh 未就绪）')
+  return surface
+}
+
+export type LocalPluginListResult = { ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }
+export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }
+export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: false; error: string }
+export type NpmSearchResult = { ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }
+
+/** Local plugin manifest (main reads the authoritative local profile path). */
+export function localPluginList(): Promise<LocalPluginListResult> {
+  return desktopSsh().local_plugin_list()
+}
+
+/** Remote plugin manifest (cat → parse → projection). */
+export function pluginList(id: string): Promise<RemotePluginListResult> {
+  return desktopSsh().plugin_list(id)
+}
+
+/** Apply plugin add/remove for one remote instance (main re-validates every spec). */
+export function pluginApply(id: string, input: PluginApplyInput): Promise<PluginApplyResult2> {
+  return desktopSsh().plugin_apply(id, input)
+}
+
+/** npm registry search (main-side, non-secret projection). */
+export function npmSearch(query: string): Promise<NpmSearchResult> {
+  return desktopSsh().npm_search(query)
+}
+
+/** systemd restart for one remote instance (exit-code honest). */
+export function restartService(id: string): Promise<SshExecIpcResult> {
+  return desktopSsh().restart_service(id)
+}
+
+/** Seed module A onto a remote instance (09 遗留 1). */
+export function seedHostGraph(id: string): Promise<SshSeedHostGraphResult> {
+  return desktopSsh().seed_host_graph(id)
+}
+
+/** Pack a local plugin dir (resolved from the local manifest) and install it remotely. */
+export function pluginMaterializeAdd(id: string, dir: string): Promise<SshMaterializeResult> {
+  return desktopSsh().plugin_materialize_add(id, dir)
+}
+
+/** Pack a user-picked local plugin dir and install it remotely (pick-only). */
+export function pluginMaterializeAddPick(id: string): Promise<SshMaterializeResult> {
+  return desktopSsh().plugin_materialize_add_pick(id)
+}
+
+/** Install a spec into the LOCAL dsh profile. */
+export function localPluginAdd(spec: string): Promise<SshLocalPluginExecIpcResult> {
+  return desktopSsh().local_plugin_add(spec)
+}
+
+/** Pick a local folder and install it into the LOCAL dsh profile (pick-only). */
+export function localPluginAddFile(): Promise<SshLocalPluginExecIpcResult> {
+  return desktopSsh().local_plugin_add_file()
+}
+
+/** Remove a plugin from the LOCAL dsh profile. */
+export function localPluginRemove(name: string): Promise<SshLocalPluginExecIpcResult> {
+  return desktopSsh().local_plugin_remove(name)
 }

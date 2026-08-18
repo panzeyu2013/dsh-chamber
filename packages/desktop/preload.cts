@@ -33,6 +33,30 @@ export interface DesktopSshSurface {
   start_service(id: string): Promise<SshExecIpcResult>
   stop_service(id: string): Promise<SshExecIpcResult>
   is_active(id: string): Promise<SshExecIpcResult>
+  /** Restart the remote systemd service (design 13 M2): fresh projection or {error}. */
+  restart_service(id: string): Promise<SshExecIpcResult>
+  /** Read the remote instance's plugin manifest (design 13 §4.3). */
+  plugin_list(id: string): Promise<SshRemotePluginListResult>
+  /** Apply a plugin-set change to a remote instance (design 13 §4.3/§4.5). */
+  plugin_apply(id: string, input: SshPluginApplyInput): Promise<SshPluginApplyIpcResult>
+  /** Read the LOCAL instance's plugin manifest (design 13 §4.3). */
+  local_plugin_list(): Promise<SshLocalPluginListResult>
+  /** Best-effort npm registry search (main-process fetch; design 13 §5.8). */
+  npm_search(query: string): Promise<SshNpmSearchResult>
+  /** Seed module A onto a remote instance (design 13 §4.6, 09 遗留 1). */
+  seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
+  /** Pack a local plugin dir (resolved from the local manifest spec) and install
+   *  it remotely (design 13 §4.6 sync view). */
+  plugin_materialize_add(id: string, dir: string): Promise<SshMaterializeResult>
+  /** Pack a user-PICKED local plugin dir and install it remotely (pick-only; the
+   *  main process opens the folder picker, no renderer-supplied path, design 13 §5.8). */
+  plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
+  /** Install a spec into the LOCAL dsh profile (design 13 §5.1). */
+  local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
+  /** Pick a local folder and install it into the LOCAL dsh profile (pick-only). */
+  local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
+  /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
+  local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
   onInstancesChanged(callback: () => void): () => void
@@ -46,6 +70,83 @@ export interface SshStatusChangedPayload {
 
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
 export type SshExecIpcResult = SshStatusProjection | { error: string }
+
+/** Remote plugin manifest projection (design 13 §4.3). */
+export interface SshRemotePluginManifest {
+  dependencies: Record<string, string>
+  bundles: string[]
+  profileExists: boolean
+  error?: string
+}
+export type SshRemotePluginListResult =
+  | { ok: true; manifest: SshRemotePluginManifest }
+  | { ok: false; error: string }
+
+/** Local plugin manifest projection (design 13 §4.3). */
+export interface SshLocalPluginManifest {
+  dependencies: Record<string, string>
+  bundles: string[]
+  clientLines: string[]
+  /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
+  bundleLines: string[]
+  unsyncable: { name: string; reason: string }[]
+}
+export type SshLocalPluginListResult =
+  | { ok: true; manifest: SshLocalPluginManifest }
+  | { ok: false; error: string }
+
+/** Apply outcome (design 13 §4.5). */
+export interface SshPluginApplyResult {
+  applied: number
+  skipped: number
+  failed: { spec: string; error: string }[]
+  restarted: boolean
+  deferred: boolean
+  verified: boolean
+  ready: boolean | null
+  /** When ready is null because the instance was not connected before restart
+   *  (readiness not re-checked), this explains why. */
+  readyNote?: string
+}
+export type SshPluginApplyIpcResult =
+  | { ok: true; result: SshPluginApplyResult }
+  | { ok: false; error: string }
+
+/** Apply input (renderer → main; main re-validates every spec, design 13 §7.2). */
+export interface SshPluginApplyInput {
+  add: string[]
+  remove: string[]
+  restart?: boolean
+}
+
+/** Best-effort npm search package projection (design 13 §5.8). */
+export interface SshNpmSearchPackage {
+  name: string
+  version: string
+  description?: string
+}
+export type SshNpmSearchResult =
+  | { ok: true; packages: SshNpmSearchPackage[] }
+  | { ok: false; error: string }
+
+/** Host-graph seed outcome (design 13 §4.6). */
+export type SshSeedHostGraphResult =
+  | { ok: true; wrote: boolean; patched: boolean }
+  | { ok: false; error: string }
+
+/** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed
+ *  the folder picker (a silent no-op, not an error). */
+export type SshMaterializeResult =
+  | { ok: true; spec: string; remotePath: string }
+  | { ok: true; cancelled: true }
+  | { ok: false; error: string }
+
+/** Local `dsh plugin` exec outcome (design 13 §5.1). `cancelled` = the user
+ *  dismissed the folder picker on the `local_plugin_add_file` path. */
+export type SshLocalPluginExecIpcResult =
+  | { ok: true }
+  | { ok: true; cancelled: true }
+  | { ok: false; error: string }
 
 /** The full bridge: app info fields + the ssh surface. */
 export interface DshChamberBridge {
@@ -76,6 +177,17 @@ function desktopSshApi(): DesktopSshSurface {
     start_service: id => ipcRenderer.invoke('desktop_ssh_start_service', { id }),
     stop_service: id => ipcRenderer.invoke('desktop_ssh_stop_service', { id }),
     is_active: id => ipcRenderer.invoke('desktop_ssh_is_active', { id }),
+    restart_service: id => ipcRenderer.invoke('desktop_ssh_restart_service', { id }),
+    plugin_list: id => ipcRenderer.invoke('desktop_ssh_plugin_list', { id }),
+    plugin_apply: (id, input) => ipcRenderer.invoke('desktop_ssh_plugin_apply', { id, add: input.add, remove: input.remove, restart: input.restart }),
+    local_plugin_list: () => ipcRenderer.invoke('desktop_local_plugin_list'),
+    npm_search: query => ipcRenderer.invoke('desktop_npm_search', { query }),
+    seed_host_graph: id => ipcRenderer.invoke('desktop_ssh_seed_host_graph', { id }),
+    plugin_materialize_add: (id, dir) => ipcRenderer.invoke('desktop_ssh_plugin_materialize_add', { id, dir }),
+    plugin_materialize_add_pick: id => ipcRenderer.invoke('desktop_ssh_plugin_materialize_add_pick', { id }),
+    local_plugin_add: spec => ipcRenderer.invoke('desktop_local_plugin_add', { spec }),
+    local_plugin_add_file: () => ipcRenderer.invoke('desktop_local_plugin_add_file'),
+    local_plugin_remove: name => ipcRenderer.invoke('desktop_local_plugin_remove', { name }),
     onStatusChanged: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event: IpcRendererEvent, payload: SshStatusChangedPayload) => callback(payload);

@@ -96,7 +96,9 @@
   "user": "root",
   "sshPort": 2222,               // SSH 守护端口（null = ssh 默认 22 / config Port）
   "remotePort": 30800,           // 远程 dsh web profile 端口（02 §3.9 部署参考）
-  "serviceName": "dsh-chamber"   // 远程 systemd 单元名（exec 目标）
+  "serviceName": "dsh-chamber",  // 远程 systemd 单元名（exec 目标）
+  "remoteDshHome": null          // 远端 dsh home（$DSH_HOME），插件同步/seed 的远端路径基准
+                                 // （null = ssh 默认 home；白名单见 13 §7.2，2026-08 新增）
 }
 ```
 

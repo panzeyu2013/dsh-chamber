@@ -64,6 +64,7 @@ import type {
   TransportPhase,
   TransportProbeEndpoint,
   TransportProvider,
+  TransportRunPayload,
   TransportStatusProjection,
   TransportVerifyResult,
 } from './transport-provider.ts'
@@ -132,6 +133,8 @@ export interface TransportManagerOptions {
   ringBufferLimit?: number
   /** Provider exec timeout (ssh: systemctl; default 15s). */
   execTimeoutMs?: number
+  /** Provider `run` exec timeout (ssh: dsh plugin/write-file; default 120s — pnpm hits the registry). */
+  runExecTimeoutMs?: number
 }
 
 /** createTransportManager dependencies (provider/spawn/probe/allocator injectable). */
@@ -168,8 +171,8 @@ export interface TransportManager {
   readyUrl(id: string): string | null
   logs(id: string): TransportLogEntry[]
   clearLogs(id: string): boolean
-  /** Provider exec channel (ssh: remote systemd start/stop/is-active). */
-  exec(id: string, action: TransportExecAction): Promise<TransportExecResult>
+  /** Provider exec channel (ssh: remote systemd start/stop/restart/is-active; run = whitelisted remote command, design 13 §4.1). */
+  exec(id: string, action: TransportExecAction, payload?: TransportRunPayload): Promise<TransportExecResult>
   onStatusChanged(listener: StatusChangedListener): () => void
   dispose(): void
   /** dispose() + wait for every SIGKILL escalation to resolve (app quit). */
@@ -276,6 +279,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   const disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS
   const ringBufferLimit = options.ringBufferLimit ?? RING_BUFFER_LIMIT
   const execTimeoutMs = options.execTimeoutMs ?? 15_000
+  const runExecTimeoutMs = options.runExecTimeoutMs ?? 120_000
   // Explicit annotation: `spawnFn ?? default` would otherwise infer a UNION
   // of call signatures (SpawnedProcess | ChildProcess), making `child.on`
   // uncallable at the call sites.
@@ -776,7 +780,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   }
 
   /** Provider exec channel (ssh: one remote systemd exec). */
-  function exec(id: string, action: TransportExecAction): Promise<TransportExecResult> {
+  function exec(id: string, action: TransportExecAction, payload?: TransportRunPayload): Promise<TransportExecResult> {
     const spec = instances.get(id)
     if (spec === undefined) {
       return Promise.resolve({ ok: false, error: 'ssh instance not found' })
@@ -797,6 +801,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       return provider.exec(spec, action, {
         spawnFn: trackedSpawn,
         execTimeoutMs,
+        runTimeoutMs: runExecTimeoutMs,
         disconnectGraceMs,
         log: (level, message) => appendLog(state, level, message),
         setProjection: (execId, key, value) => {
@@ -806,7 +811,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
           }
         },
         projection: execId => status(execId),
-      })
+      }, payload)
     } catch (execError) {
       // A throwing provider must never surface as a sync rejection through
       // the IPC layer — loud error result instead.
@@ -1007,6 +1012,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       retryAttempt: state.retryAttempt,
       requiresUserAction: state.requiresUserAction,
       serviceActive: state.serviceActive,
+      remoteDshHome: spec.remoteDshHome,
       logSummary: state.logSummary,
     }
   }

@@ -87,6 +87,7 @@ dsh-chamber therefore does **not** re-implement those domains and does **not** w
 | `packages/dsh-chamber-client-ui-sidebar` | Self-built (copied ui-sidebar structure): the chamber sidebar plugin replacing the official ui-sidebar registration (see 05 §6) |
 | `packages/dsh-chamber-client-ui-settings-connections` | Self-built: the connections settings plugin (local instance card + remote host CRUD/connect/systemd/logs, settings.section, dsh design tokens — see 05 §5) |
 | `packages/dsh-chamber-client-ui-settings-bridge` | Self-built: the settings shell plugin shadowing the official SettingsRoot registration (sidebar.settings at priority −1) — a server dropdown over the selected instance's official settings sections plus the fixed chamber-global connections nav entry (see 05 §5) |
+| `packages/dsh-host-client-graph` | Self-built host-side package (not a client plugin): Remote `clientGraph/graph` exposing the host's composed client-plugin boot graph read-only (design 09); seeded into the local web profile via `--patch` by the control plane |
 
 ## Quick start
 
@@ -363,6 +364,10 @@ packages/
                             self-built settings shell plugin: shadows the official
                             SettingsRoot registration, server dropdown over the
                             selected instance's official settings sections (05 §5)
+  dsh-host-client-graph/    self-built host-side package: Remote clientGraph/graph
+                            exposing the host's client-plugin boot graph
+                            read-only (design 09; seeded into the local web
+                            profile by the control plane — not a client plugin)
 docs/
   design/                   design documents (01 is the entry point; 05 is the
                             surface/architecture contract (v1); the v2-era
@@ -387,8 +392,8 @@ vendor/
 | [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) | Surface & architecture contract (v1) |
 | [docs/design/06-sidebar-enhancements.md](docs/design/06-sidebar-enhancements.md) | Sidebar enhancements (search / drag-sort / view persistence / runtime facts) |
 | [docs/design/07-models-params.md](docs/design/07-models-params.md) | Model extra params & default reasoning level (deferred, awaiting upstream) |
+| [docs/design/09-client-plugin-runtime-loading.md](docs/design/09-client-plugin-runtime-loading.md) | dsh client-plugin runtime loading (implemented, 2026-08 plan A; moved in from docs/todo/) |
 | [docs/todo/08-todo-git-worktree-plugin.md](docs/todo/08-todo-git-worktree-plugin.md) | Git worktree plugin (design finalized, implementation not scheduled; moved to docs/todo/) |
-| [docs/todo/09-todo-client-plugin-runtime-loading.md](docs/todo/09-todo-client-plugin-runtime-loading.md) | dsh client-plugin runtime loading (design finalized, implementation not scheduled) |
 | [docs/progress/STATUS.md](docs/progress/STATUS.md) | Completion status, deviations & validation record |
 | [docs/README.zh-CN.md](docs/README.zh-CN.md) | Chinese README |
 

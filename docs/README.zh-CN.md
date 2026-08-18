@@ -345,6 +345,9 @@ packages/
   dsh-chamber-client-ui-settings-bridge/
                             自研设置壳插件：shadow 官方 SettingsRoot 注册，
                             所选实例官方设置分区上的服务器下拉（05 §5）
+  dsh-host-client-graph/    自研宿主侧 host 包：Remote clientGraph/graph
+                            只读暴露宿主客户端插件 boot 图（设计 09，非
+                            客户端插件；控制面 seed 进本地 web profile）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1）；
                              v2 时代薄壳文档（旧 05/10）随 v4 收口移除）
@@ -367,8 +370,8 @@ vendor/
 | [design/05-connection-manager.md](design/05-connection-manager.md) | 表面与架构契约（v1） |
 | [design/06-sidebar-enhancements.md](design/06-sidebar-enhancements.md) | 侧边栏增强（搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道） |
 | [design/07-models-params.md](design/07-models-params.md) | 模型额外参数与默认推理等级（推迟项，等待上游） |
+| [design/09-client-plugin-runtime-loading.md](design/09-client-plugin-runtime-loading.md) | dsh 客户端插件运行时加载（已实现，2026-08 方案 A；自 docs/todo/ 移入） |
 | [todo/08-todo-git-worktree-plugin.md](todo/08-todo-git-worktree-plugin.md) | Git worktree 插件（设计定稿，实现未排期；已移至 docs/todo/） |
-| [todo/09-todo-client-plugin-runtime-loading.md](todo/09-todo-client-plugin-runtime-loading.md) | dsh 客户端插件运行时加载（设计定稿，实现未排期） |
 | [progress/STATUS.md](progress/STATUS.md) | 完成状态、剩余偏差与验证记录 |
 | [README.md](../README.md) | English README |
 

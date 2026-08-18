@@ -41,6 +41,7 @@ import type {
 } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
+import { PluginSyncModal } from './PluginSyncModal.tsx'
 import css from './ConnectionsSection.module.css'
 
 /** Registration-side business face for the connections section. */
@@ -78,10 +79,11 @@ interface HostDraft {
   sshPort: string
   remotePort: string
   serviceName: string
+  remoteDshHome: string
   password: string
 }
 
-const EMPTY_DRAFT: HostDraft = { id: '', label: '', host: '', user: '', sshPort: '', remotePort: '30800', serviceName: '', password: '' }
+const EMPTY_DRAFT: HostDraft = { id: '', label: '', host: '', user: '', sshPort: '', remotePort: '30800', serviceName: '', remoteDshHome: '', password: '' }
 
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
 function slugifyAlias(alias: string): string {
@@ -178,6 +180,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [remoteLogsError, setRemoteLogsError] = useState<string | null>(null)
   const [logsBusy, setLogsBusy] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  /** 插件管理对话框：'local' = 本地实例，否则为远程主机 spec。 */
+  const [pluginFor, setPluginFor] = useState<SshInstanceSpec | 'local' | null>(null)
 
   const clearOpError = useCallback((id: string): void => {
     setOpError(prev => {
@@ -495,6 +499,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       sshPort: spec.sshPort === null ? '' : String(spec.sshPort),
       remotePort: String(spec.remotePort),
       serviceName: spec.serviceName ?? '',
+      remoteDshHome: spec.remoteDshHome ?? '',
       // The stored password lives in main-process memory only and is never
       // exposed back to the renderer — the field always starts empty.
       password: '',
@@ -559,6 +564,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     if (sshPort !== null && (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535)) errors.sshPort = t('validationPortRange')
     const serviceName = value.serviceName.trim()
     if (serviceName !== '' && !/^[a-zA-Z0-9_.-]+$/.test(serviceName)) errors.serviceName = t('validationServiceNameInvalid')
+    const remoteDshHome = value.remoteDshHome.trim()
+    if (remoteDshHome !== '' && !/^~?\/[a-zA-Z0-9._/-]+$/.test(remoteDshHome)) errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
     return errors
   }, [editing, instances, t])
 
@@ -580,6 +587,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       if (draft.user.trim() !== '') input.user = draft.user.trim()
       if (draft.sshPort.trim() !== '') input.sshPort = Number(draft.sshPort)
       if (draft.serviceName.trim() !== '') input.serviceName = draft.serviceName.trim()
+      if (draft.remoteDshHome.trim() !== '') input.remoteDshHome = draft.remoteDshHome.trim()
       const next = editing === 'new'
         ? [...instances, input]
         : instances.map(instance => instance.id === editing.id ? { ...input, id: instance.id } : instance)
@@ -723,6 +731,15 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             <button
               type="button"
               className={css.iconButton}
+              data-tip={t('pluginsOpen')}
+              aria-label={t('pluginsOpen')}
+              onClick={() => { setPluginFor('local') }}
+            >
+              <IconChecklistOutline14 />
+            </button>
+            <button
+              type="button"
+              className={css.iconButton}
               data-tip={t('logsRefresh')}
               aria-label={t('logsRefresh')}
               onClick={() => { void loadLocal() }}
@@ -836,6 +853,16 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       {connected ? t('disconnect') : phase === 'connecting' ? t('phaseConnecting') : t('connect')}
                     </Button>
                     <div className={css.cardFoot}>
+                      <button
+                        type="button"
+                        className={css.iconButton}
+                        disabled={specBusy}
+                        data-tip={t('pluginsOpen')}
+                        aria-label={`${t('pluginsOpen')}: ${spec.label}`}
+                        onClick={() => { setPluginFor(spec) }}
+                      >
+                        <IconChecklistOutline14 />
+                      </button>
                       <span className={css.footSpacer} />
                       <button
                         type="button"
@@ -1090,6 +1117,17 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                   onChange={event => { setDraft({ ...draft, serviceName: event.target.value }) }}
                 />
               </label>
+              <label className={css.field}>
+                <span className={css.fieldLabel}>{t('fieldRemoteDshHome')}</span>
+                <input
+                  className={css.input}
+                  value={draft.remoteDshHome}
+                  spellCheck={false}
+                  placeholder={t('fieldRemoteDshHomePlaceholder')}
+                  onChange={event => { setDraft({ ...draft, remoteDshHome: event.target.value }) }}
+                />
+                {fieldErrors.remoteDshHome === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remoteDshHome}</span>}
+              </label>
               {formError === null ? null : <p className={css.error} role="alert">{formError}</p>}
             </div>
           )}
@@ -1159,6 +1197,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               </div>
             )}
       </Modal>
+
+      {pluginFor !== null
+        ? <PluginSyncModal
+            t={t}
+            spec={pluginFor === 'local' ? null : pluginFor}
+            onClose={() => { setPluginFor(null) }}
+          />
+        : null}
     </div>
   )
 }

@@ -210,8 +210,13 @@ interface WebBootGraph {
 
   - parseBootManifest 消费该 wire 并派生两个视图：`modules[]`（模块表
     预取视图）与 `plugins[]`（entry 组合视图）；chamber chrome 与 dsh
-    原生 ui-* 插件的组合图在宿主侧（v4 单条目：`@dsh-chamber/app`
+    原生 ui-* 插件的组合图在宿主侧（v4 单 entry：`@dsh-chamber/app`
     chamber composite bundle，自注册进 `window.__ModuleLoader__`）；
+    **每实例宿主图额外 entry 另取（设计 09）**：页面清单之外，boot 时前端经
+    反代（`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-host-client-graph`
+    的 Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
+    `CHAMBER_COVERED_IDS` 去重（复合已覆盖 + 页面自有 id），预加载剩余 bundle
+    并经 boot.tsx `extraRows` seam 合并进 boot rows——详见设计 09 §3.5；
   - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`
     （gen-boot-manifest 按 `assets/chamber-*.js` 模式定位产物；vendor
     自身的默认路径 `/plugins/<id>/client.js` 仅为参考——wire 只要求
@@ -248,5 +253,5 @@ interface WebBootGraph {
 1. **反代响应头白名单演进**：上游若引入新必需响应头，需同步 03 §3.4 与
    本文 §4.3（一处契约两处表述，变更必须两处一致）。
 2. **`__DSH_BOOT__` 与 dsh 版本漂移**：manifest 形状随 dsh parseBootManifest
-   契约（vendor 源码为准）维护；构建链变更见 05 §2（pnpm + 符号链接 +
+   契约（vendor 源码为准）维护；构建链变更见 05 §6（pnpm + 符号链接 +
    `assets/chamber-*.js` 产物）。

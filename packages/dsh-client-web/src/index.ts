@@ -7,7 +7,7 @@
  * @module @deepseek-ai/dsh-client-web
  */
 
-export { AppWebEntry, type BootSeams } from './boot.tsx'
+export { AppWebEntry, type BootSeams, type AppWebEntryOptions } from './boot.tsx'
 export { AppRoot, type AppRootProps } from './AppRoot.tsx'
 export { buildRenderApp, type AssemblyDeps } from './app.tsx'
 export { DocumentTitle, type DocumentTitleProps } from './DocumentTitle.tsx'

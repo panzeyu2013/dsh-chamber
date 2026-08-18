@@ -114,7 +114,7 @@ import type { SidebarKey } from './locales.ts'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
   deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
-  sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, sortWorkspaceSessions,
+  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, sortWorkspaceSessions,
 } from '../shared/derive.ts'
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
@@ -941,8 +941,10 @@ export function SidebarRoot({
   // 10px slot so titles stay aligned (pending rows widen the slot to 14px).
   // Priority (both functions below): pending > runningSubagents > completed
   // > running — live channel facts first (pending interaction, subagent
-  // liveness, completion), the 10s-polled running bit last (see the inline
-  // comments for the channel-truth rationale).
+  // liveness, completion), the running ring last and WIRE-AUTHORITATIVE
+  // (06 §4.3「running 点保留（wire 权威）」: the running bit comes from the
+  // 10s aggregate poll, never from the runtime-facts channel — the poll is a
+  // fresh HTTP round trip each tick, independent of the shell's WebSocket).
   // 2026-08 (remote completed-dot fix): `completed` comes from the LIVE
   // runtime channel while `running` comes from the 10s aggregate poll — the
   // two can disagree right after a completion (the aggregate lags up to a
@@ -971,9 +973,17 @@ export function SidebarRoot({
       return t(runningSubagents === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other', { n: runningSubagents })
     }
     if (facts?.completed === true) return t('status.completed')
-    // P2-9: 实时通道优先（06 §4.3「实时通道为真」）——channel 的 running 位
-    // （每会话全量投影）胜过 10s 聚合轮询位，轮询可能滞后一个周期。
-    const running = facts?.running ?? session.running
+    // 2026-08 修订:运行环 = **轮询位（wire 权威）**,通道的 running 位完全
+    // 不参与渲染——runningRingVisible 显式接收通道位但忽略它(契约可测)。
+    // 原因:运行时事实通道的保鲜度依赖 shell 的 WebSocket,而整条链路没有
+    // WS 心跳——静默失效的流永远不会被检测/重连,通道会永久停在断线前的
+    // 报告;此时 10s HTTP 聚合轮询（每次都是新连接、独立于 WS）仍返回宿主
+    // 权威的 running:true,通道优先会让侧边栏对「实际在运行的会话」永远不
+    // 显示运行环（2026-08 用户报告「发送后不显示运行中,重进桌面端才发现
+    // 已在运行」）；OR 合并反向亦然——通道陈旧 true 会把已结束的会话误报
+    // 为运行中。运行环只信轮询位:漏报与误报同时消除,代价仅是运行开始的
+    // 环延迟 ≤ 一个轮询周期（对话视图的运行指示是即时的,无感）。
+    const running = runningRingVisible(facts?.running, session.running)
     if (running === true) return t('status.running')
     return undefined
   }
@@ -984,8 +994,10 @@ export function SidebarRoot({
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
     const runningSubagents = facts?.runningSubagents ?? 0
-    // P2-9: 实时通道优先（06 §4.3）——channel running 位胜过轮询位。
-    const running = facts?.running ?? session.running
+    // 2026-08 修订:运行环只信轮询位（wire 权威,runningRingVisible,见
+    // sessionStateLabel 注释）——通道 running 不参与渲染,陈旧通道既不能
+    // 遮蔽权威 true、也不能误报 false。
+    const running = runningRingVisible(facts?.running, session.running)
     if (pending === undefined && runningSubagents === 0 && facts?.completed !== true && running !== true) return null
     if (pending === 'approval') {
       return <IconWarningOutline16 className={cc.statePendingApproval} />
@@ -1184,10 +1196,11 @@ export function SidebarRoot({
                 }
                 return { title: t('list.unnamed'), workspaceLabel: undefined }
               }
-              // P2-9: 搜索结果行的 running 位来自投影（mergeSearchResults 的
-              // visibleIds 过滤保证命中行一定在投影内，查得到即用投影位；查
-              // 不到——防御——回落 false）。通道实时位由 sessionStateDot/
-              // sessionStateLabel 内部 facts.running 优先接管。
+              // 2026-08 修订:搜索结果行的 running 位来自投影（mergeSearchResults
+              // 的 visibleIds 过滤保证命中行一定在投影内，查得到即用投影位；查
+              // 不到——防御——回落 false）。通道 running 不参与渲染（运行环
+              // wire 权威,见 sessionStateLabel 注释）——sessionStateDot/Label
+              // 直接使用此投影位。
               const projectedRunning = (sessionId: string): boolean => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
@@ -1384,9 +1397,10 @@ export function SidebarRoot({
                         <div className={cc.searchResults} role="tree" aria-label={t('search.results.aria')}>
                           {merged.items.map((item) => {
                             const resolved = searchRowLabel(item.sessionId)
-                            // P2-9: 搜索行传投影 running 位（查不到回落
-                            // false）；通道实时位由 sessionStateDot/Label 内部
-                            // facts.running 优先接管。
+                            // 2026-08 修订:搜索行传投影 running 位（查不到回落
+                            // false）；运行环 wire 权威——sessionStateDot/Label
+                            // 直接使用此位,通道 running 不参与渲染（见
+                            // sessionStateLabel 注释）。
                             const running = projectedRunning(item.sessionId)
                             const stateDot = sessionStateDot(server, { id: item.sessionId, running })
                             const stateLabel = sessionStateLabel(server, { id: item.sessionId, running })

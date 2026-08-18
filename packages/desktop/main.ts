@@ -29,8 +29,8 @@
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
-import { existsSync, readFileSync, renameSync } from 'node:fs';
-import path from 'node:path';
+import { existsSync, readFileSync, renameSync, statSync } from 'node:fs';
+import path, { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { createTransportManager } from './transport-manager.ts';
@@ -40,6 +40,8 @@ import { sshProvider } from './ssh-provider.ts';
 import { configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { applyPlugins, localPluginList, materializeAndAdd, remotePluginList, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
+import type { ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 
 // Main-process safety net: a stray stream/socket error (e.g. an ECONNRESET
 // from a peer that went away mid-request) must never wedge startup behind a
@@ -362,6 +364,14 @@ if (!gotTheLock) {
         // The built dsh frontend (renderer vite output) served by the control
         // plane (design 05 §3.3): <pkg>/dist in dev and packaged (asar) alike.
         webDistDir: path.join(pkgDir, 'dist'),
+        // Host-graph package source (design 09 §3.5): the control plane seeds
+        // it into the local web profile at start. Dev reads the source tree;
+        // the packaged app uses the copy bundled into dist/ by
+        // build-host-graph-package.mjs (inside the asar). Missing → the seed
+        // degrades gracefully (no --patch overlay, v4 baseline spawn).
+        hostGraphPackageSourceDir: app.isPackaged
+          ? path.join(pkgDir, 'dist', 'host-graph-package')
+          : path.join(repoRoot, 'packages', 'dsh-host-client-graph'),
       });
       await controlPlane.start();
     } catch (err) {
@@ -445,6 +455,29 @@ if (!gotTheLock) {
     // Capture the non-null manager before registering closures over it (the
     // ipc handlers run later, after startup).
     const sm = transportManager;
+    // Plugin-sync dependency injection (design 13 M2+M3, contract A): the
+    // orchestration in plugin-sync.ts is decoupled from the transport runtime,
+    // so it is adapted here onto transport-manager.exec(id, action, payload?).
+    // plugin-sync re-declares the exec/status contract locally (no transport
+    // import); the `as unknown as ExecFn` cast bridges that contract onto the
+    // transport manager's structurally-identical runtime surface. `status`
+    // matches the runtime status(id) projection directly.
+    const execTransport = sm.exec as unknown as ExecFn;
+    const statusTransport: StatusFn = (id) => sm.status(id);
+    // The authoritative local dsh home is <userData>/state/dsh-home (the real
+    // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
+    const localDshHome = path.join(app.getPath('userData'), 'state', 'dsh-home');
+    // Module A package source for the remote host-graph seed (design 13 §4.6):
+    // the packaged app bundles it under dist/host-graph-package (build-host-graph-package.mjs),
+    // dev reads the repo source tree — same resolution as the control-plane seed.
+    const moduleASourceDir = app.isPackaged
+      ? path.join(pkgDir, 'dist', 'host-graph-package')
+      : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
+    const findRemoteSpec = (id: string): RemoteSpec | null => {
+      const instance = sm.listInstances().find((entry) => entry.id === id);
+      if (instance === undefined) return null;
+      return { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null };
+    };
     sm.onStatusChanged((id, status) => {
       // Ready transport → per-instance reverse proxy (design 05 §7.1):
       // register the instance transport while it is ready, unregister the
@@ -525,6 +558,139 @@ if (!gotTheLock) {
     ipcMain.handle('desktop_ssh_is_active', trustedIpc(({ id }) =>
       sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
     ));
+    // Plugin management surface (design 13 M2+M3, contract B): restart the remote
+    // service, read the remote/local plugin manifests, apply a plugin-set change,
+    // and best-effort npm search (main-process fetch; the renderer stays on
+    // 127.0.0.1). All handlers go through the trustedIpc fence and resolve loud
+    // {error} / {ok:...} shapes — never a silent empty success, never an
+    // unhandled rejection. renderer-supplied specs are re-validated inside
+    // applyPlugins (defense in depth).
+    ipcMain.handle('desktop_ssh_restart_service', trustedIpc(({ id }) =>
+      execTransport(id, 'restart').then(result =>
+        (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
+      ).catch(err => ({ error: `exec failed: ${String(err)}` })),
+    ));
+    ipcMain.handle('desktop_ssh_plugin_list', trustedIpc(async ({ id }) => {
+      const spec = findRemoteSpec(id);
+      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      return remotePluginList(execTransport, spec);
+    }));
+    ipcMain.handle('desktop_ssh_plugin_apply', trustedIpc(async ({ id, add, remove, restart }) => {
+      const spec = findRemoteSpec(id);
+      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      // A non-boolean `restart` (e.g. the string 'false') must never be
+      // treated as truthy and trigger an unwanted restart — refused here
+      // before any exec (applyPlugins re-checks too, defense in depth).
+      if (restart !== undefined && typeof restart !== 'boolean') {
+        return { ok: false, error: 'restart must be a boolean' };
+      }
+      // Known bundle packages for the §4.5 ④ bundles assertion (design 13):
+      // the LOCAL manifest's bundle-declaring dependency names. When the
+      // local profile is unreadable there is no local source to sync from,
+      // so the bundles half of the assertion is skipped (dependencies
+      // membership is still asserted); never a silent wrong assertion.
+      let knownBundles: string[] | undefined;
+      try {
+        knownBundles = localPluginList(localDshHome).bundleLines;
+      } catch (localError) {
+        console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
+        knownBundles = undefined;
+      }
+      return applyPlugins(execTransport, statusTransport, spec, { add, remove, restart }, { knownBundles });
+    }));
+    ipcMain.handle('desktop_local_plugin_list', trustedIpc(() => {
+      try {
+        return { ok: true, manifest: localPluginList(localDshHome) };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+    ipcMain.handle('desktop_npm_search', trustedIpc(async ({ query }) => {
+      if (typeof query !== 'string' || query.trim() === '') return { ok: false, error: 'empty search query' };
+      const text = query.trim();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
+      timer.unref?.();
+      try {
+        const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) return { ok: false, error: `npm search failed (HTTP ${response.status})` };
+        const data = (await response.json()) as { objects?: Array<{ package?: { name?: unknown; version?: unknown; description?: unknown } }> };
+        const objects = Array.isArray(data.objects) ? data.objects : [];
+        const packages = objects
+          .map(entry => entry.package)
+          .filter((pkg): pkg is { name: string; version: unknown; description: unknown } => pkg !== undefined && typeof pkg.name === 'string')
+          .map(pkg => ({
+            name: pkg.name,
+            version: typeof pkg.version === 'string' ? pkg.version : '',
+            ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
+          }));
+        return { ok: true, packages };
+      } catch (error) {
+        return { ok: false, error: `npm search failed: ${String(error)}` };
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+
+    // Host-graph seed + materialize + local plugin exec (design 13 M4): the M2
+    // orchestration functions that were implemented but not yet wired. Seed
+    // installs module A onto the remote (09 遗留 1); materialize packs a local
+    // plugin dir and installs it remotely — the ADD view goes through
+    // materialize_add_pick (folder picker in MAIN, pick-only), the sync view
+    // through materialize_add (dir resolved from the local manifest, validated
+    // here as absolute + directory); local add/remove run `dsh plugin` against
+    // the LOCAL dsh home (05 §5.1).
+    ipcMain.handle('desktop_ssh_seed_host_graph', trustedIpc(async ({ id }) => {
+      const spec = findRemoteSpec(id);
+      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      return seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
+    }));
+    // materialize_add (sync view): the dir is resolved from the LOCAL manifest's
+    // absolute file:/link: spec (renderer-side materializeLocalDir). Main bounds
+    // it to an absolute, existing directory — loud failure, never a silent no-op.
+    ipcMain.handle('desktop_ssh_plugin_materialize_add', trustedIpc(async ({ id, dir }) => {
+      const spec = findRemoteSpec(id);
+      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      if (typeof dir !== 'string' || dir === '') return { ok: false, error: 'empty plugin directory' };
+      if (!isAbsolute(dir)) return { ok: false, error: 'plugin directory must be absolute' };
+      try {
+        if (!statSync(dir).isDirectory()) return { ok: false, error: 'plugin path is not a directory' };
+      } catch (error) {
+        return { ok: false, error: `plugin directory unreadable: ${String(error)}` };
+      }
+      return materializeAndAdd(execTransport, spec, dir);
+    }));
+    // materialize_add_pick (add view): PICK-ONLY — the folder picker runs here in
+    // the main process, so a compromised renderer can never drive the pack surface
+    // to an arbitrary local directory (design 13 §5.8 hardening).
+    ipcMain.handle('desktop_ssh_plugin_materialize_add_pick', trustedIpc(async ({ id }) => {
+      const spec = findRemoteSpec(id);
+      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
+      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+      if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
+      return materializeAndAdd(execTransport, spec, picked.filePaths[0]);
+    }));
+    ipcMain.handle('desktop_local_plugin_add_file', trustedIpc(async () => {
+      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
+      if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
+      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+      if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
+      const result = runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
+      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+    }));
+    ipcMain.handle('desktop_local_plugin_add', trustedIpc(({ spec: specArg }) => {
+      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
+      const result = runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
+      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+    }));
+    ipcMain.handle('desktop_local_plugin_remove', trustedIpc(({ name }) => {
+      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
+      const result = runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
+      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
+    }));
 
     // Single frame, single origin: the control plane serves the built dsh
     // frontend (design 05 §1) — no local file loads. A load failure is a

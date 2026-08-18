@@ -2,10 +2,19 @@
  * Web-profile dsh spawn + process lifecycle for the control plane.
  *
  * v4 (connection-manager shape, design 02 §3.1): the local host is dsh's
- * built-in web profile — no slim-profile directory, no patch layer, no glue
- * plugin. The command line is:
+ * built-in web profile — no slim-profile directory, no glue plugin. The base
+ * command line is:
  *
  *   dsh --profile web --host 127.0.0.1 --port <P> --trusted-host 127.0.0.1:<P>
+ *
+ * An optional chamber-owned `--patch <path>` overlay (design 09 方案 A module B,
+ * host-graph-seed.ts) is inserted right after `--profile web` when the plane
+ * has seeded one: it mounts the chamber host package that exposes the host
+ * boot graph (`clientModules.graph()`), the channel the chamber frontend uses
+ * to load extra client plugins at runtime. The flag must precede the web
+ * app's own flags (--host/--port/--trusted-host) — the dsh launcher passes
+ * everything after its recognized flags through to the booted app verbatim
+ * (@deepseek-ai/dsh args.ts).
  *
  * The browser trust fence (--trusted-host) admits requests whose Host header
  * is the instance's own 127.0.0.1:<P> — exactly what the per-instance reverse
@@ -65,9 +74,14 @@ export const LISTEN_WAIT_MS = 90_000
 
 /** The fixed web-profile flag set (design 02 §3.1/§3.5); --trusted-host and
  * --port always agree (127.0.0.1:<P>) so the trust fence and the forwarded
- * Host header never diverge. */
-export function webProfileArgs(port: number): string[] {
-  return ['--profile', 'web', '--host', '127.0.0.1', '--port', String(port), '--trusted-host', `127.0.0.1:${port}`]
+ * Host header never diverge. When `patchPath` is non-empty, `--patch <path>`
+ * (the dsh launcher's repeatable overlay flag) is inserted right after
+ * `--profile web` — it must precede the web app's own flags, which the
+ * launcher passes through verbatim (see the module header). */
+export function webProfileArgs(port: number, patchPath?: string): string[] {
+  const base = ['--profile', 'web', '--host', '127.0.0.1', '--port', String(port), '--trusted-host', `127.0.0.1:${port}`]
+  if (patchPath === undefined || patchPath === '') return base
+  return ['--profile', 'web', '--patch', patchPath, '--host', '127.0.0.1', '--port', String(port), '--trusted-host', `127.0.0.1:${port}`]
 }
 
 /**
@@ -137,10 +151,12 @@ function readInstanceId(stateDir: string): string | null {
  * workspaces run the ref-dsh source tree — the tsx fallback is dev-only).
  * The web-profile flags ride the entry either way (design 02 §3.1).
  * @param dshWorkspacePath - the dsh installation root (cwd of the spawned process).
+ * @param port - the port the host is asked to serve.
+ * @param patchPath - optional `--patch` overlay (design 09 module B); null/absent when none.
  * @returns {args} node arguments to spawn.
  */
-function resolveDshEntry(dshWorkspacePath: string, port: number): { args: string[] } {
-  const profileFlags = webProfileArgs(port)
+function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: string | null): { args: string[] } {
+  const profileFlags = webProfileArgs(port, patchPath ?? undefined)
   const installed = join(dshWorkspacePath, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   if (existsSync(installed)) {
     return { args: [installed, ...profileFlags] }
@@ -164,6 +180,8 @@ interface SpawnAttemptOptions {
   dshWorkspacePath: string
   port: number
   logger: Logger
+  /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
+  patchPath?: string | null
   signal?: AbortSignal
 }
 
@@ -238,14 +256,14 @@ interface SpawnAttemptResult {
   baseUrl: string
 }
 
-async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, signal }: SpawnAttemptOptions): Promise<SpawnAttemptResult> {
+async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, patchPath, signal }: SpawnAttemptOptions): Promise<SpawnAttemptResult> {
   const baseUrl = `http://127.0.0.1:${port}`
   const log = (line: string) => logger.log(`[dsh:${port}] ${line}`)
   // Per-port rolling log (design 02 §3.8 / host-logs.ts): stdout/stderr go
   // to the control-plane log AND to <stateDir>/host-logs/<port>.log (JSONL)
   // so GET /api/host/logs can serve the recent lines without re-spawning.
   const hostLog = createHostLogWriter(stateDir, port)
-  const entry = resolveDshEntry(dshWorkspacePath, port)
+  const entry = resolveDshEntry(dshWorkspacePath, port, patchPath)
   // The node executable is resolved, never assumed on PATH: the control
   // plane may run inside the Electron main process, where a GUI-launched
   // app has a minimal PATH (design 02 §3.1 — resolveNodeExecutable).
@@ -400,6 +418,8 @@ export interface SpawnDshOptions {
   dshHome: string
   dshWorkspacePath: string
   logger: Logger
+  /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
+  patchPath?: string | null
   signal?: AbortSignal
 }
 
@@ -413,10 +433,11 @@ export interface SpawnedHost {
 
 /**
  * Spawn a ready dsh host on a free port from BASE_DHSPORT upward.
- * @param options - {stateDir, dshHome, dshWorkspacePath, logger, signal}.
+ * @param options - {stateDir, dshHome, dshWorkspacePath, logger, patchPath?,
+ *   signal}.
  * @returns {child, port, baseUrl, stop()}.
  */
-export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, signal }: SpawnDshOptions): Promise<SpawnedHost> {
+export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, patchPath, signal }: SpawnDshOptions): Promise<SpawnedHost> {
   let lastError: unknown
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
     const port = BASE_DHSPORT + attempt
@@ -433,7 +454,7 @@ export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, si
       continue
     }
     try {
-      const spawned = await spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, signal })
+      const spawned = await spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, patchPath, signal })
       return {
         ...spawned,
         stop: async () => {

@@ -85,6 +85,17 @@ import * as UiPermissionPresets from '@deepseek-ai/dsh-client-ui-permission-pres
 import * as UiSettingsConnections from '@dsh-chamber/dsh-client-ui-settings-connections/client'
 import * as UiSettingsBridge from '@dsh-chamber/dsh-client-ui-settings-bridge/client'
 
+/**
+ * The boot-graph entry ids this composite covers (design 09, module C) — the
+ * dedupe set the per-instance host-graph merge filters against (shell.ts →
+ * host-graph.ts). Re-exported from the leaf module `chamber-covered.ts` (the
+ * constant is DEFINED there): shell.ts must import it without pulling this
+ * bundle's top-level module-table handoff into the main chunk — same pattern
+ * as chamber-knob.ts (see its header comment). Maintenance: keep the two
+ * lists in lockstep (see chamber-covered.ts header).
+ */
+export { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+
 /** The boot-graph row id this bundle registers under (must match dist/manifest.json). */
 export const CHAMBER_APP_ID = '@dsh-chamber/app'
 

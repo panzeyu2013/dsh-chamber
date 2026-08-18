@@ -10,24 +10,31 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import type { SpawnOptions } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildAskpassScript,
+  buildRemoteExecArgv,
   configureSshPasswordStore,
   createAskpassHelper,
   disposeSshAuth,
   getSshPassword,
+  resolveWriteTarget,
   setSshPassword,
   sshAuthEnv,
   sshPasswordSupported,
+  sshProvider,
+  WRITE_FILE_MAX_BYTES,
 } from './ssh-provider.ts'
-import type { TransportInstanceSpec } from './transport-provider.ts'
+import type { TransportExecDeps, TransportInstanceSpec, TransportStatusProjection, SpawnedProcess } from './transport-provider.ts'
 
 /** A minimal valid ssh spec for provider-surface tests. */
 function spec(id: string): TransportInstanceSpec {
-  return { id, label: 'h', kind: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null }
+  return { id, label: 'h', kind: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome: null }
 }
 
 test('buildAskpassScript escapes single quotes and keeps password/passphrase prompts apart from host-key confirmations', () => {
@@ -153,5 +160,341 @@ test('a corrupt password file is preserved as *.corrupt and fails loud, never si
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// --- design 13 §7.2 exec whitelist tests (M1) ---
+
+function specWithHome(id: string, remoteDshHome: string): TransportInstanceSpec {
+  return { id, label: 'h', kind: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome }
+}
+
+test('buildRemoteExecArgv accepts a whitelisted dsh plugin add/remove', () => {
+  assert.deepEqual(
+    buildRemoteExecArgv(spec('w1'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', '@scope/name@^1.2.3'] }),
+    ['dsh', 'plugin', '--profile', 'web', 'add', '@scope/name@^1.2.3'],
+  )
+  assert.deepEqual(
+    buildRemoteExecArgv(spec('w1'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'remove', 'name'] }),
+    ['dsh', 'plugin', '--profile', 'web', 'remove', 'name'],
+  )
+})
+
+test('buildRemoteExecArgv prepends DSH_HOME when remoteDshHome is set', () => {
+  assert.deepEqual(
+    buildRemoteExecArgv(specWithHome('w2', '/opt/dsh'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'name@1.2.3'] }),
+    ['DSH_HOME=/opt/dsh', 'dsh', 'plugin', '--profile', 'web', 'add', 'name@1.2.3'],
+  )
+})
+
+test('buildRemoteExecArgv refuses injection / non-registry specs', () => {
+  const bad = [
+    '-oProxyCommand=x',
+    'name;rm -rf /',
+    'name|cat /etc/passwd',
+    'name>out',
+    'name<in',
+    'name*',
+    "name'$(x)'",
+    'git+https://github.com/a/b',
+    'file:../pkg',
+    'name@>=1.0.0 <2.0.0',
+    'name@1.2.3 || 2.0.0',
+    'npm:alias@1.0.0',
+  ]
+  for (const s of bad) {
+    assert.equal(buildRemoteExecArgv(spec('w3'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', s] }), null, `refuses ${JSON.stringify(s)}`)
+  }
+})
+
+test('buildRemoteExecArgv refuses wrong dsh argv structure', () => {
+  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'update', 'name'] }), null, 'refuses non-whitelisted action')
+  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add'] }), null, 'refuses missing spec')
+  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['other', '--profile', 'web', 'add', 'name'] }), null, 'refuses wrong subcommand')
+  assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'remove', 'name@1.2.3'] }), null, 'remove refuses @version')
+})
+
+test('buildRemoteExecArgv allows only the two whitelisted cat paths', () => {
+  assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json'] }), ['cat', '~/.dsh/profiles/web/package.json'])
+  assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/cordis.patch.yml'] }), ['cat', '~/.dsh/profiles/web/cordis.patch.yml'])
+  assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['/etc/passwd'] }), null, 'refuses arbitrary cat path')
+  assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json', 'extra'] }), null, 'refuses extra argv')
+})
+
+test('resolveWriteTarget allows the three prefixes and rejects traversal', () => {
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/pkg-abc123.tgz'), '~/.dsh-chamber/plugins/pkg-abc123.tgz')
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json')
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/web/cordis.patch.yml'), '~/.dsh/profiles/web/cordis.patch.yml')
+  assert.equal(resolveWriteTarget(spec('w6'), '/etc/passwd'), null, 'refuses arbitrary path')
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/../evil.tgz'), null, 'refuses dot-dot')
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/web/package.json'), null, 'refuses non-whitelisted profile file')
+})
+
+test('resolveWriteTarget honors a custom remoteDshHome', () => {
+  assert.equal(resolveWriteTarget(specWithHome('w7', '/opt/dsh'), '/opt/dsh/profiles/web/cordis.patch.yml'), '/opt/dsh/profiles/web/cordis.patch.yml')
+  assert.equal(resolveWriteTarget(specWithHome('w7', '/opt/dsh'), '~/.dsh/profiles/web/cordis.patch.yml'), null, 'default-home path rejected when a custom home is set')
+})
+
+test('resolveWriteTarget rejects traversal inside the seed subtree (shared SEED_RELATIVE_PATTERN)', () => {
+  const seed = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'
+  assert.equal(resolveWriteTarget(spec('w7b'), seed), seed)
+  assert.equal(
+    resolveWriteTarget(spec('w7b'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/../../etc/passwd'),
+    null,
+    'dot-dot escapes the seed subtree',
+  )
+  assert.equal(
+    resolveWriteTarget(spec('w7b'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/./package.json'),
+    null,
+    'self-segment is refused too',
+  )
+})
+
+test('buildRemoteExecArgv accepts the fixed printf $HOME lookup (materialize remote-home resolution)', () => {
+  assert.deepEqual(
+    buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['%s', '$HOME'] }),
+    ['printf', '%s', '$HOME'],
+  )
+  assert.equal(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['%s', 'HOME'] }), null, 'refuses any argv other than the fixed form')
+  assert.equal(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['$HOME', '%s'] }), null)
+})
+
+test('buildRemoteExecArgv allows the converged seed-subtree cat read (seed hash-skip)', () => {
+  const seedPkg = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'
+  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedPkg] }), ['cat', seedPkg])
+  const seedDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/dist/index.js'
+  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedDist] }), ['cat', seedDist])
+  assert.equal(
+    buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/node_modules/other/pkg.json'] }),
+    null,
+    'outside the seed subtree refused',
+  )
+  assert.equal(
+    buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/node_modules/@dsh-chamber/../../etc/passwd'] }),
+    null,
+    'traversal beyond the seed subtree refused',
+  )
+})
+
+test('buildRemoteExecArgv accepts the materialize file: add spec, constrained to the materialize dir', () => {
+  const ok = buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/pkg-a1b2c3d4.tgz'] })
+  assert.deepEqual(ok, ['dsh', 'plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/pkg-a1b2c3d4.tgz'])
+  // the normalized scoped-name filename form
+  assert.ok(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/scope-name-a1b2.tgz'] }) !== null)
+  // everything else stays refused — plain registry add must still pass untouched
+  assert.ok(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'] }) !== null)
+  assert.equal(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/etc/passwd'] }), null, 'absolute path outside the materialize dir refused')
+  assert.equal(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:~/x.tgz'] }), null, '~ mid-word never accepted')
+  assert.equal(buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/tmp/evil.tgz'] }), null, 'outside .dsh-chamber/plugins refused')
+})
+
+// ============================================================================
+// write-file flow (design 13 §4.1) — through the real provider surface
+// ============================================================================
+
+/** A fake ssh child whose stdin writes are recorded (base64 payloads). */
+class FakeRunChild extends EventEmitter implements SpawnedProcess {
+  stdout = new EventEmitter()
+  stderr = new EventEmitter()
+  stdin: { write(chunk: string | Buffer): unknown; end(): unknown }
+  stdinWrites: Buffer[] = []
+  killCalls: string[] = []
+  constructor() {
+    super()
+    this.stdin = {
+      write: (chunk) => { this.stdinWrites.push(Buffer.from(chunk)); return true },
+      end: () => {},
+    }
+  }
+  kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    this.killCalls.push(signal)
+    return true
+  }
+  simulateExit(code: number | null = 0, signal: NodeJS.Signals | null = null) {
+    this.emit('exit', code, signal)
+  }
+  stdoutWrite(text: string | Buffer) {
+    this.stdout.emit('data', Buffer.from(text))
+  }
+  stderrWrite(text: string) {
+    this.stderr.emit('data', Buffer.from(text))
+  }
+}
+
+/** Minimal TransportExecDeps driving the provider's `run` channel. */
+function runDeps(spawnFn: TransportExecDeps['spawnFn']): TransportExecDeps {
+  const projection: TransportStatusProjection = {
+    kind: 'ssh', phase: 'idle', localPort: null, sshPort: null, remotePort: 3080,
+    retryAttempt: 0, requiresUserAction: false, serviceActive: null, remoteDshHome: null,
+    logSummary: '',
+  }
+  return {
+    spawnFn,
+    execTimeoutMs: 5_000,
+    runTimeoutMs: 5_000,
+    disconnectGraceMs: 100,
+    log: () => {},
+    setProjection: () => {},
+    projection: () => projection,
+  }
+}
+
+/**
+ * A fake remote host for the `run` channel: records every spawn and answers
+ * write-file (`mkdir -p … && base64 -d > …` — decodes the recorded stdin),
+ * `cat` (serves the file bytes / ENOENT), `printf %s $HOME` and `dsh`
+ * automatically on the next tick. `tamper` overrides the bytes `cat` serves
+ * for a path (verification-mismatch tests).
+ */
+function makeRemoteHost(home = '/home/u') {
+  const files = new Map<string, Buffer>()
+  const tamper = new Map<string, Buffer>()
+  const spawns: Array<{ command: string; args: string[]; child: FakeRunChild }> = []
+  const spawnFn = (command: string, args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
+    const child = new FakeRunChild()
+    const record = { command, args: [...args], child }
+    spawns.push(record)
+    setImmediate(() => handleRemote(record))
+    return child
+  }
+  function handleRemote(record: { command: string; args: string[]; child: FakeRunChild }) {
+    // ssh args: [target, ...remoteArgv] or ['-p', <port>, target, ...remoteArgv]
+    const remoteArgv = record.args[0] === '-p' ? record.args.slice(3) : record.args.slice(1)
+    const child = record.child
+    const joined = remoteArgv.join(' ')
+    if (joined.startsWith('mkdir -p ') && joined.includes(' && base64 -d > ')) {
+      const target = joined.slice(joined.lastIndexOf('> ') + 2)
+      const base64 = child.stdinWrites.map(bytes => bytes.toString('utf8')).join('')
+      files.set(target, Buffer.from(base64, 'base64'))
+      child.simulateExit(0)
+      return
+    }
+    if (remoteArgv[0] === 'cat') {
+      const path = remoteArgv[1] as string
+      const bytes = tamper.get(path) ?? files.get(path)
+      if (bytes === undefined) {
+        child.stderrWrite(`cat: ${path}: No such file or directory\n`)
+        child.simulateExit(1)
+      } else {
+        child.stdoutWrite(bytes)
+        child.simulateExit(0)
+      }
+      return
+    }
+    if (remoteArgv[0] === 'printf' && remoteArgv[1] === '%s' && remoteArgv[2] === '$HOME') {
+      child.stdoutWrite(home)
+      child.simulateExit(0)
+      return
+    }
+    if (remoteArgv[0] === 'dsh') {
+      child.simulateExit(0)
+      return
+    }
+    child.stderrWrite(`unknown remote command: ${joined}\n`)
+    child.simulateExit(1)
+  }
+  return { spawns, files, tamper, spawnFn }
+}
+
+test('write-file: streams base64 over ssh stdin and verifies the read-back in the BYTE domain', async () => {
+  const remote = makeRemoteHost()
+  // Binary content with invalid UTF-8 sequences: the lossy `toString('utf8')`
+  // view must NOT be what the hash is computed over (the pre-fix code hashed
+  // the string, so this content always failed with U+FFFD corruption).
+  const content = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfe, 0x81, 0x82, 0x00, 0x01])
+  const sha256 = createHash('sha256').update(content).digest('hex')
+  const result = await sshProvider.exec!(spec('wf1'), 'run', runDeps(remote.spawnFn), {
+    op: 'write-file',
+    path: '~/.dsh-chamber/plugins/pkg-abc123.tgz',
+    contentBase64: content.toString('base64'),
+    sha256,
+  })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  // The fake host stored the decoded bytes verbatim; the write command was a
+  // single fixed `mkdir -p … && base64 -d > …` shell template.
+  assert.ok(remote.files.get('~/.dsh-chamber/plugins/pkg-abc123.tgz')!.equals(content))
+  assert.equal(remote.spawns.length, 2, 'one write spawn + one cat read-back spawn')
+  assert.ok(remote.spawns[0].args[1].startsWith('mkdir -p ~/.dsh-chamber/plugins && base64 -d > '))
+  // The raw captured bytes ride the result; the string view is lossy (U+FFFD)
+  // for binary content — proving the byte-domain verification path.
+  assert.ok(result.stdoutBytes !== undefined && result.stdoutBytes.equals(content))
+  assert.ok(result.stdout!.includes('\uFFFD'), 'the UTF-8 view is lossy for binary content')
+})
+
+test('write-file: a tampered read-back fails loud (never a fake success)', async () => {
+  const remote = makeRemoteHost()
+  const content = Buffer.from('hello')
+  const path = '~/.dsh-chamber/plugins/pkg-abc123.tgz'
+  remote.tamper.set(path, Buffer.from('tampered'))
+  const result = await sshProvider.exec!(spec('wf2'), 'run', runDeps(remote.spawnFn), {
+    op: 'write-file',
+    path,
+    contentBase64: content.toString('base64'),
+    sha256: createHash('sha256').update(content).digest('hex'),
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /verification failed: remote SHA-256 mismatch/)
+})
+
+test('write-file: a payload sha256 mismatch is refused before any spawn', async () => {
+  const remote = makeRemoteHost()
+  const result = await sshProvider.exec!(spec('wf3'), 'run', runDeps(remote.spawnFn), {
+    op: 'write-file',
+    path: '~/.dsh-chamber/plugins/pkg-abc123.tgz',
+    contentBase64: Buffer.from('hello').toString('base64'),
+    sha256: '0'.repeat(64),
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /content does not match sha256/)
+  assert.equal(remote.spawns.length, 0)
+})
+
+test('write-file: content over the 50MiB cap is refused before any spawn', async () => {
+  const remote = makeRemoteHost()
+  const big = Buffer.alloc(WRITE_FILE_MAX_BYTES + 1, 0x61)
+  const result = await sshProvider.exec!(spec('wf4'), 'run', runDeps(remote.spawnFn), {
+    op: 'write-file',
+    path: '~/.dsh-chamber/plugins/pkg-abc123.tgz',
+    contentBase64: big.toString('base64'),
+    sha256: createHash('sha256').update(big).digest('hex'),
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /exceeds the .*byte limit/)
+  assert.equal(remote.spawns.length, 0, 'no ssh process may spawn for an oversized write')
+})
+
+test('run: a non-zero exit carries the REDACTED remote stderr text (ENOENT → profile not initialized)', async () => {
+  const remote = makeRemoteHost()
+  const result = await sshProvider.exec!(spec('wf5'), 'run', runDeps(remote.spawnFn), {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/web/package.json'],
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /run command failed \(exit 1\)/)
+    assert.match(result.error, /No such file or directory/, 'the ENOENT stderr text rides the run error')
+  }
+})
+
+test('run: private material in stderr is redacted from the failure detail', async () => {
+  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
+    const child = new FakeRunChild()
+    setImmediate(() => {
+      child.stderrWrite('Load key "/Users/alice/.ssh/id_ed25519": invalid format\n')
+      child.simulateExit(1)
+    })
+    return child
+  }
+  const result = await sshProvider.exec!(spec('wf6'), 'run', runDeps(spawnFn), {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/web/package.json'],
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.ok(!result.error.includes('/Users/alice/.ssh'), 'the key path never rides the error')
+    assert.match(result.error, /\[ssh material redacted\]/)
   }
 })

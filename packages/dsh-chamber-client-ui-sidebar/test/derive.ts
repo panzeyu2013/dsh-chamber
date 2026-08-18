@@ -20,6 +20,7 @@ import {
   reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
+  runningRingVisible,
   runtimeReportSignature,
   sanitizeSearchQuery,
   serversProjectionSignature,
@@ -599,6 +600,35 @@ test('runtimeReportSignature distinguishes undefined, content, running bits and 
   )
 })
 
+test('runningRingVisible is poll-only: the channel running bit never renders the ring', () => {
+  // 轮询权威:只要轮询位 true,无论通道如何,都显示运行环。
+  assert.equal(runningRingVisible(false, true), true)
+  assert.equal(runningRingVisible(true, true), true)
+  assert.equal(runningRingVisible(undefined, true), true)
+  // 通道不参与渲染:通道 true 而轮询 false 时不显示——陈旧通道不得伪造
+  // 运行环(2026-08 误报窗口),代价是运行开始的环延迟 ≤ 一个轮询周期。
+  assert.equal(runningRingVisible(true, false), false)
+  assert.equal(runningRingVisible(true, undefined), false)
+  assert.equal(runningRingVisible(false, false), false)
+  assert.equal(runningRingVisible(undefined, undefined), false)
+})
+
+test('runtimeReportSignature includeRunning=false drops the running bit (projection path only)', () => {
+  const runningA: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true } } }
+  const runningB: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: false } } }
+  // Default (App runtimeFacts identity + completed-dot state machine): the
+  // running bit stays in the signature — the reconciliation reads it.
+  assert.notEqual(runtimeReportSignature(runningA), runtimeReportSignature(runningB))
+  // Projection path (serversProjectionSignature): a channel-only running flip
+  // is ignored — the ring is poll-driven, nothing rendered changes.
+  assert.equal(runtimeReportSignature(runningA, undefined, false), runtimeReportSignature(runningB, undefined, false))
+  // Rendered facts (completed) still matter in the projection path.
+  assert.notEqual(
+    runtimeReportSignature({ current: 's1', sessions: { s1: { completed: true } } }, undefined, false),
+    runtimeReportSignature({ current: 's1', sessions: { s1: {} } }, undefined, false),
+  )
+})
+
 test('runtimeReportSignature onlyIds restricts the signature to the given session subset', () => {
   const a: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
   // A hidden session (absent from onlyIds) flipping its facts does not change
@@ -656,12 +686,26 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
       server('ssh-r1', { runtime: { sessions: { hidden: { running: true } } } }),
     ]),
   )
-  // A visible session's fact change still flips the signature.
+  // A visible session's CHANNEL running flip does NOT re-render the sidebar
+  // (2026-08 fix): the ring is poll-driven (runningRingVisible), so the
+  // projection signature excludes the channel running bit — a report whose
+  // only change is the running bit yields the same signature.
+  assert.equal(
+    serversProjectionSignature([
+      server('local'),
+      server('ssh-r1', { runtime: { sessions: { s1: { running: true } } } }),
+    ]),
+    serversProjectionSignature([
+      server('local'),
+      server('ssh-r1', { runtime: { sessions: { s1: { running: false } } } }),
+    ]),
+  )
+  // A visible session's RENDERED fact change still flips the signature.
   assert.notEqual(
     serversProjectionSignature(a),
     serversProjectionSignature([
       server('local'),
-      server('ssh-r1', { runtime: { sessions: { s1: { running: true } } } }),
+      server('ssh-r1', { runtime: { sessions: { s1: { completed: true } } } }),
     ]),
   )
   // Connection / phase / workspaces / runtime changes all flip it.

@@ -43,7 +43,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import * as ModulesClient from '@deepseek-ai/dsh-client-modules/client'
 import {
   ClientModuleSystem, parseBootManifest,
-  type BootManifest, type ClientModuleSystemOptions, type DshWindow,
+  type BootManifest, type BootModuleRow, type ClientModuleSystemOptions, type DshWindow,
 } from '@deepseek-ai/dsh-client-modules/client'
 import * as AppShell from './app-shell.ts'
 import { APP_SHELL_ID } from './app-shell.ts'
@@ -54,6 +54,27 @@ import './base.css'
 
 /** Module transport hook the shell passes through (jsdom tests replace the <script> path). */
 export type BootSeams = Pick<ClientModuleSystemOptions, 'loadBundle'>
+
+/**
+ * AppWebEntry construction options: the module-transport seams plus the
+ * chamber patch's per-instance extra boot rows. Backward compatible with the
+ * bare `BootSeams` callers used to pass (extraRows is optional).
+ */
+export interface AppWebEntryOptions extends BootSeams {
+  /**
+   * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
+   *
+   * Extra client-plugin rows from THIS instance's host boot graph
+   * (per-instance: local and remote hosts compose different plugin sets —
+   * design 09). The chamber shell pre-loads these bundles before constructing
+   * the entry, so their factories are already registered on the shared module
+   * table via `window.__ModuleLoader__.load`; this seam only merges their ids
+   * into the boot rows, it never fetches them (the modules view / graphRows
+   * has no row for them), and it does not prefetch them (the chamber side
+   * pre-loads the whole extra set uniformly).
+   */
+  extraRows?: BootModuleRow[]
+}
 
 /**
  * The modules package's own graph row id. The kernel adopts that entry
@@ -73,6 +94,7 @@ const MODULES_ID = '@deepseek-ai/dsh-client-modules'
 export class AppWebEntry {
   private readonly el: HTMLElement
   private readonly seams: BootSeams | undefined
+  private readonly extraRows: BootModuleRow[] | undefined
   private readonly status = createLoaderStatusStore()
   private readonly settled = createSignal(false)
   private readonly error = createSignal<string | undefined>(undefined)
@@ -87,11 +109,15 @@ export class AppWebEntry {
   /**
    * Hold the mount point; all work happens in {@link run}.
    * @param el - mount point (the app's #root).
-   * @param seams - Optional module transport overrides for test environments.
+   * @param options - Optional construction options: module transport overrides
+   *   for test environments plus the chamber patch's per-instance extra boot
+   *   rows (bundles already pre-loaded by the chamber shell — see
+   *   {@link AppWebEntryOptions.extraRows}).
    */
-  constructor(el: HTMLElement, seams?: BootSeams) {
+  constructor(el: HTMLElement, options?: AppWebEntryOptions) {
     this.el = el
-    this.seams = seams
+    this.seams = options
+    this.extraRows = options?.extraRows
   }
 
   /**
@@ -235,7 +261,20 @@ export class AppWebEntry {
     // its wrapper apply reads the kernel slot and provides ctx.modules (the
     // provide lives on the plugin face; see MODULES_ID for why the row loop
     // must then skip it).
-    const rows = [MODULES_ID, ...this.manifest.plugins.map(row => row.id).filter(id => id !== MODULES_ID), APP_SHELL_ID]
+    const rows = [
+      MODULES_ID,
+      ...this.manifest.plugins.map(row => row.id).filter(id => id !== MODULES_ID),
+      // chamber patch (design 05 §3.6 / design 09): the per-instance extra
+      // client-plugin rows from the host boot graph. Their bundles were
+      // already executed by the chamber shell, so the factories are registered
+      // on the shared module table — loader.create resolves them through
+      // internal.import's factories branch without a graph row (the modules
+      // view / graphRows has no entry for them; duplicate-registration
+      // protection is __ModuleLoader__.load's own check). No prefetch here:
+      // the chamber side pre-loads the whole extra set uniformly.
+      ...(this.extraRows?.map(row => row.id) ?? []),
+      APP_SHELL_ID,
+    ]
     // Entry creation order carries no semantics (fiber inject waiting owns
     // activation order); creating concurrently lets non-prefetched bundle
     // loads parallelize. The app-shell assembly entry is appended by the

@@ -37,9 +37,17 @@ declare module '@deepseek-ai/dsh-client-web' {
   export interface BootSeams {
     loadBundle?: (url: string) => Promise<void>
   }
+  /**
+   * chamber patch (05 §3.6 / design 09): mirror of boot.tsx AppWebEntryOptions —
+   * per-instance extra host-graph client-plugin rows (bundles pre-loaded by
+   * the chamber shell; ids only merged into the boot rows here).
+   */
+  export interface AppWebEntryOptions extends BootSeams {
+    extraRows?: { id: string; url: string; rev: string }[]
+  }
   /** The web shell kernel consumed by shell.ts (boot.tsx). */
   export class AppWebEntry {
-    constructor(el: HTMLElement, seams?: BootSeams)
+    constructor(el: HTMLElement, options?: AppWebEntryOptions)
     run(): Promise<unknown>
     dispose(): void
     /** chamber patch: settled runtime context (boot.tsx accessor; session opens ride ctx.sessions; undefined after dispose). */

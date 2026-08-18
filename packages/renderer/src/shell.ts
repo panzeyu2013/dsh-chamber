@@ -22,6 +22,7 @@
 import { AppWebEntry } from '@deepseek-ai/dsh-client-web'
 
 import { getChamberInstanceId, setChamberInstanceId } from './chamber-knob.ts'
+import { collectExtraRows } from './host-graph.ts'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 
 const CHAMBER_BOOT = '@dsh-chamber/app'
@@ -47,17 +48,38 @@ function loadModuleBundle(url: string): Promise<void> {
     const el = document.createElement('script')
     el.type = 'module'
     el.src = url
-    el.addEventListener('load', () => {
+    let done = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // One finish path (load / error / timeout) wins; the loser is a no-op.
+    const finish = (action: () => void): void => {
+      if (done) return
+      done = true
+      if (timer !== undefined) clearTimeout(timer)
       el.remove()
-      resolve()
-    }, { once: true })
+      action()
+    }
+    // A hung bundle (server stalls, never fires load/error) must not keep this
+    // instance's boot pending forever — fail loud at the same order of
+    // magnitude as the graph fetch (host-graph.ts GRAPH_TIMEOUT_MS); the
+    // rejection runs through the same fail-loud boot path as a load error.
+    // Known boundary: el.remove() does not cancel the in-flight module fetch —
+    // a bundle delivered after the timeout still executes and registers its
+    // factory; a later retry boot that re-preloads the same URL would then hit
+    // the duplicate-registration sink and fail loud. Low probability (stall +
+    // late delivery + manual retry), loud either way; documented, not fixed.
+    timer = setTimeout(() => {
+      finish(() => reject(new Error(`dsh-chamber: bundle script ${url} timed out after ${BUNDLE_LOAD_TIMEOUT_MS}ms`)))
+    }, BUNDLE_LOAD_TIMEOUT_MS)
+    el.addEventListener('load', () => finish(resolve), { once: true })
     el.addEventListener('error', () => {
-      el.remove()
-      reject(new Error(`dsh-chamber: bundle script ${url} failed to load`))
+      finish(() => reject(new Error(`dsh-chamber: bundle script ${url} failed to load`)))
     }, { once: true })
     document.head.append(el)
   })
 }
+
+/** How long one extra-bundle script load may take before it fails loud (parallel to GRAPH_TIMEOUT_MS). */
+const BUNDLE_LOAD_TIMEOUT_MS = 30_000
 
 /** Per-instance shell lifecycle. */
 export interface ShellState {
@@ -121,14 +143,23 @@ export function bootInstanceShell(
     const win = window as Window & { __DSH_BASE_PATH__?: string }
     let staleEntry: AppWebEntry | undefined
     try {
-      // 旋钮设置纳入 try：任何一步抛错都必须落成终态错误 settle（视图不
-      // 悬挂、预热链推进、opens 响亮拒绝），且 finally 保证旋钮清除——
-      // 若在 try 之外抛出，任务 promise 拒绝且永无 settle，视图骨架屏与
-      // 预热队列会卡死，残留旋钮还会污染后续 boot。
+      // Host boot-graph merge (design 09, module C): the composite covers the
+      // whole official shell; client plugins installed into the instance's
+      // profile arrive as rows the composite does not cover. Preloading their
+      // bundles completes BEFORE entry creation so every factory is registered
+      // in the shared module table when loader.create materializes entries
+      // (boot.tsx runPluginBoot — the factories branch).
+      const extraRows = await collectExtraRows(instanceId, basePath, { loadModuleBundle })
+      // 旋钮设置纳入 try（任何一步抛错都必须落成终态错误 settle，且 finally
+      // 保证旋钮清除——若在 try 之外抛出，任务 promise 拒绝且永无 settle，
+      // 视图骨架屏与预热队列会卡死），并放在 collectExtraRows 之后：图 fetch
+      // 与 bundle 预加载完全不读旋钮（basePath 是参数），放后面收窄旋钮窗口
+      // ——boot 超时队列放行、后续实例覆盖旋钮后，迟到的 entry.run() 读到的
+      // 仍是本次实例的旋钮值（跨实例污染窗口收窄）。
       win.__DSH_BASE_PATH__ = basePath
       // The sidebar plugin reads the knob while this boot materializes (05 §4).
       setChamberInstanceId(instanceId)
-      const entry = new AppWebEntry(el, { loadBundle: loadModuleBundle })
+      const entry = new AppWebEntry(el, { loadBundle: loadModuleBundle, extraRows })
       staleEntry = entry
       await entry.run()
       if ((cancelledBoots.get(instanceId) ?? 0) >= gen) {

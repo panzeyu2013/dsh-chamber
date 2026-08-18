@@ -315,10 +315,31 @@ onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | und
   （官方同快照无错位，其顺序 running > subagents > completed；我们
   completed/runningSubagents 皆为实时通道、running 为轮询，故实时事实
   整体前置）。
-- **搜索结果行状态点（2026-08）**：结果行无 wire running 位（仅通道事实
-   + 投影解析）——状态槽渲染优先级同树行（pending 徽标 > runningSubagents
-   环 > completed 点 > running 环；通道实时位优先，投影 running 位仅兜底）；
-   槽**恒占位**保持标题对齐。
+- **运行环 wire 权威（2026-08 修复，`runningRingVisible`）**：运行环**只取
+  10s 聚合轮询的 running 位**，通道 running 位完全不参与渲染（契约原文
+  「running 点保留（wire 权威），completed/pending 仅通道提供」；P2-9 的
+  「通道优先」是偏离，已回退）。原因：通道保鲜度依赖 shell 的 WebSocket，
+  整条链路无 WS 心跳——静默失效的流永远不会被检测/重连，通道永久停在断线
+  前报告；通道优先（`facts?.running ?? session.running`）会让陈旧 false
+  遮蔽轮询权威 true（用户报告「发送后不显示运行中，重进桌面端才发现已在
+  运行」），OR 合并反向亦然（陈旧 true 误报运行中）。**取舍（接受）**：
+  (a) 运行开始环延迟 ≤ 一个轮询周期（对话视图的运行指示即时，无感）；
+  (b) 重新运行瞬间出现 ≤10s 空槽——完成蓝点随通道 running=true 即时解除
+  （App 状态机），运行环要等下一轮询才出现；(c) 通道 running 翻转不再触发
+  publish/侧边栏重渲染（投影签名排除该位，`runtimeReportSignature
+  includeRunning=false`）——运行环更新完全由轮询位驱动。
+  通道 running 位仍保留在 `InstanceRuntimeReport` 中，供 App 完成蓝点
+  状态机（`reconcileCompletedFacts`）推导 running→idle 边沿（App 内部
+  逻辑，非侧边栏渲染）。
+- **搜索结果行状态点（2026-08 修订）**：结果行经投影解析 running 位
+  （搜索命中会话必在投影可见集内，查得到即用投影位；查不到回落 false）——
+  状态槽渲染优先级同树行（pending 徽标 > runningSubagents 环 > completed
+  点 > running 环）；**running 环 wire 权威（与树行一致）：只取投影位，
+  通道 running 不参与渲染**（`runningRingVisible`——通道保鲜度依赖 shell
+  的 WebSocket、链路无心跳，陈旧通道参与会导致漏报/误报，见上）。
+  已知窗口（接受）：聚合拉取失败期间树行整体消失（错误横幅替代），搜索
+  结果行保留但运行环随投影为空回落 false——纯 cosmetic 的瞬时窗口；
+  槽**恒占位**保持标题对齐。
 
 ### 4.4 代码落点
 

@@ -21,6 +21,11 @@ export interface SshInstanceSpec {
   /** The remote dsh web profile port on 127.0.0.1 (the tunnel destination). */
   remotePort: number
   serviceName: string | null
+  /**
+   * Remote DSH_HOME (design 13 §4.2); null = default ~/.dsh. Optional input,
+   * whitelisted `^~?/[a-zA-Z0-9._/-]+$` on the main side.
+   */
+  remoteDshHome: string | null
 }
 
 /** Instance spec as accepted on save (kind/user/sshPort/serviceName are optional inputs). */
@@ -34,6 +39,8 @@ export interface SshInstanceInput {
   sshPort?: number | null
   remotePort: number
   serviceName?: string | null
+  /** Remote DSH_HOME; omitted/legacy entries default to ~/.dsh. */
+  remoteDshHome?: string | null
 }
 
 /** The non-secret status projection (design 05 §8): never a transport URL. */
@@ -44,6 +51,8 @@ export interface SshStatusProjection {
   localPort: number | null
   sshPort: number | null
   remotePort: number
+  /** Configured remote dsh home ($DSH_HOME); null = ssh default. */
+  remoteDshHome: string | null
   retryAttempt: number
   requiresUserAction: boolean
   /** Last known systemd activation state; null when not yet queried. */
@@ -67,6 +76,69 @@ export interface SshStatusChangedPayload {
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
 export type SshExecIpcResult = SshStatusProjection | { error: string }
 
+/** Remote plugin manifest projection (design 13 §4.3): the remote profile
+ *  package.json dependencies + the active bundle layer. profileExists=false
+ *  means the remote profile is not yet initialized (first `dsh plugin add`
+ *  creates it); error is the loud reason when cat/parse failed. */
+export interface RemotePluginManifest {
+  dependencies: Record<string, string>
+  bundles: string[]
+  profileExists: boolean
+  error?: string
+}
+
+/** Local plugin manifest projection (design 13 §4.3): the local profile
+ *  dependencies + bundle/client classification (main reads each dep's
+ *  manifest) + the unsyncable set (workspace:/git+/URL/range/alias — refused
+ *  for direct pass, §7.2). */
+export interface LocalPluginManifest {
+  dependencies: Record<string, string>
+  bundles: string[]
+  clientLines: string[]
+  /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
+  bundleLines: string[]
+  unsyncable: { name: string; reason: string }[]
+}
+
+/** One failed plugin_apply entry (single-item isolation; never blocks others). */
+export interface PluginApplyFailure {
+  spec: string
+  error: string
+}
+
+/** plugin_apply result projection (design 13 §4.5): the honest outcome. */
+export interface PluginApplyResult {
+  applied: number
+  skipped: number
+  failed: PluginApplyFailure[]
+  /** Whether a restart was executed and reported success. */
+  restarted: boolean
+  /** User chose "install only, don't restart" (restart === false). */
+  deferred: boolean
+  /** package.json assertion result (false = fail-loud, no rollback). */
+  verified: boolean
+  /** Post-restart readiness re-check; null = no restart attempted. */
+  ready: boolean | null
+  /** When ready is null because the instance was not connected before restart
+   *  (readiness not re-checked), this explains why — the result view displays
+   *  it verbatim when restarted && ready === null. */
+  readyNote?: string
+}
+
+/** plugin_apply input (renderer → main; main re-validates every spec, §7.2). */
+export interface PluginApplyInput {
+  add: string[]
+  remove: string[]
+  restart?: boolean
+}
+
+/** One npm registry search hit (non-secret projection). */
+export interface NpmSearchPackage {
+  name: string
+  version: string
+  description?: string
+}
+
 /** One discovered ~/.ssh/config host — non-secret projection only. */
 export interface SshConfigHost {
   alias: string
@@ -79,6 +151,26 @@ export interface SshConfigHost {
 export type SshConfigDiscovery =
   | { hosts: SshConfigHost[] }
   | { error: string }
+
+/** Host-graph seed outcome (design 13 §4.6): wrote = a module A file was written,
+ *  patched = cordis.patch.yml gained the insert line. */
+export type SshSeedHostGraphResult =
+  | { ok: true; wrote: boolean; patched: boolean }
+  | { ok: false; error: string }
+
+/** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed
+ *  the folder picker (a silent no-op, not an error). */
+export type SshMaterializeResult =
+  | { ok: true; spec: string; remotePath: string }
+  | { ok: true; cancelled: true }
+  | { ok: false; error: string }
+
+/** Local `dsh plugin` exec outcome (design 13 §5.1). `cancelled` = the user
+ *  dismissed the folder picker on the `local_plugin_add_file` path. */
+export type SshLocalPluginExecIpcResult =
+  | { ok: true }
+  | { ok: true; cancelled: true }
+  | { ok: false; error: string }
 
 /**
  * The desktop_ssh_* IPC surface (design 05 §3.3) — non-secret only. The
@@ -104,6 +196,30 @@ export interface DesktopSshSurface {
   start_service(id: string): Promise<SshExecIpcResult>
   stop_service(id: string): Promise<SshExecIpcResult>
   is_active(id: string): Promise<SshExecIpcResult>
+  /** systemd restart (design 13 §4.1): exit-code honest, never silent. */
+  restart_service(id: string): Promise<SshExecIpcResult>
+  /** Remote plugin manifest (design 13 §4.3): cat → parse → projection. */
+  plugin_list(id: string): Promise<{ ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }>
+  /** Apply plugin add/remove (design 13 §4.5): main re-validates, execs serially,
+   *  restarts (unless deferred), asserts, and re-checks readiness. */
+  plugin_apply(id: string, input: PluginApplyInput): Promise<{ ok: true; result: PluginApplyResult } | { ok: false; error: string }>
+  /** Local plugin manifest (design 13 §4.3): main reads the authoritative local
+   *  profile path (never dsh-chamber:info.dshHome). */
+  local_plugin_list(): Promise<{ ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }>
+  /** npm registry search (design 13 §5.8): main-side, non-secret projection. */
+  npm_search(query: string): Promise<{ ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }>
+  /** Seed module A onto a remote instance (design 13 §4.6, 09 遗留 1). */
+  seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
+  /** Pack a local plugin dir and install it remotely (design 13 §4.6). */
+  plugin_materialize_add(id: string, dir: string): Promise<SshMaterializeResult>
+  /** Pick a local folder in MAIN and materialize it remotely (pick-only). */
+  plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
+  /** Install a spec into the LOCAL dsh profile (design 13 §5.1). */
+  local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
+  /** Pick a local folder and install it into the LOCAL dsh profile (pick-only). */
+  local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
+  /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
+  local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
   onInstancesChanged(callback: () => void): () => void

@@ -556,3 +556,340 @@
   color: var(--dsw-alias-label-tertiary);
   overflow-wrap: anywhere;
 }
+
+/* ---- plugin management dialog (todo 13 §5) ---- */
+
+.pluginTabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.pluginTab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.pluginTab:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.pluginTab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pluginTabActive {
+  color: var(--dsw-alias-label-primary);
+  border-bottom-color: var(--dsw-alias-brand-primary);
+}
+
+.pluginStack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pluginBanner {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  font-size: 12px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.pluginToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.pluginSearchInput {
+  flex: 1;
+  min-width: 160px;
+}
+
+.pluginFilterGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pluginFilterLabel {
+  font-size: 11px;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.pluginPill {
+  appearance: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: none;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.pluginPill:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.pluginPillActive {
+  border-color: transparent;
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.pluginPillActive:hover {
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.pluginRows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.pluginRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-3);
+  position: relative;
+  flex-wrap: wrap;
+}
+
+/* Local-list rows: name / category / spec / remove-action (no diff columns). */
+.pluginRowLocal {
+  grid-template-columns: minmax(180px, 1.4fr) auto minmax(0, 1fr) auto;
+}
+
+.pluginRowHead {
+  border: 0;
+  background: none;
+  padding-top: 4px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.pluginRowGray {
+  opacity: 0.55;
+}
+
+.pluginCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pluginCellName {
+  min-width: 0;
+}
+
+.pluginCellCat {
+  flex: none;
+}
+
+.pluginCellKind {
+  flex: none;
+}
+
+.pluginCellSpec {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pluginName {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.pluginSpec {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.pluginArrow {
+  flex: none;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.pluginKind {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.pluginKindUnsync {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.pluginKindBadge {
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+  border: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pluginKindBundle {
+  border-color: transparent;
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.pluginKindClient {
+  border-color: transparent;
+  background: var(--dsw-alias-state-warn-primary);
+  color: var(--dsw-alias-bg-layer-3);
+}
+
+.pluginKindPlain {
+  border-color: transparent;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.pluginCheckbox {
+  flex: none;
+  margin: 0;
+}
+
+.pluginRisk {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.pluginSummary {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.pluginWarn {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.pluginFailedList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pluginFailedItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.pluginDeferRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+/* ---- plugin add view (todo 13 §5.8) ---- */
+
+.pluginAdd {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pluginAddActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pluginSearch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pluginSearchRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pluginHits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.pluginHit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.pluginHitVersion {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.pluginFolder {
+  padding-top: 8px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}

@@ -294,10 +294,27 @@ export const chamberBridge: {
   `chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→layout→**chamber 侧边栏（替换官方）**→
   settings×4→conversation→…→全量 ui-*）。
-- **启动图清单**：`__DSH_BOOT__` = `{rev, entries:[{id, url, rev, immediately?}]}`
-  （wire 契约以 vendor `dsh-client-modules/src/client/manifest.ts` 为权威）；
-  bundle = vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`。构建链 =
-  gen-typert-remotes → vite build → gen-boot-manifest。
+- **启动图清单 = 单 entry + 每实例宿主图额外 entry（设计 09）**：
+  - 页面清单 `__DSH_BOOT__` = `{rev, entries:[{id, url, rev, immediately?}]}`
+    （wire 契约以 vendor `dsh-client-modules/src/client/manifest.ts` 为权威）；
+    构建期写死**单 entry**（`@dsh-chamber/app` chamber composite bundle），
+    bundle = vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`。构建链 =
+    gen-typert-remotes → vite build → gen-boot-manifest。
+  - **每实例宿主图额外 entry（设计 09，2026-08 落地）**：boot 时前端经反代
+    （`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-host-client-graph` 的
+    Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
+    `CHAMBER_COVERED_IDS`（`packages/renderer/src/chamber-covered.ts`：复合已覆盖
+    + 页面自有 id）去重，预加载剩余 bundle
+    （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.tsx `extraRows` seam
+    合并进 boot rows（详见设计 09）。
+  - **host 包与 seed（设计 09 方案 A）**：host 包 `packages/dsh-host-client-graph`
+    （esbuild 产物 `dist/index.js`，`@deepseek-ai/*` 保持 external）；控制面
+    `host-graph-seed.ts` 把该包幂等 seed 进
+    `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/` 并
+    物化 `--patch` overlay（`<stateDir>/dsh-chamber-graph.patch.yml`，insert
+    client-graph 行），每次 spawn 注入 `--patch`
+    （`webProfileArgs(port, patchPath?)`）；模块 A 产物缺失时优雅跳过
+    （打包态/未构建不报错、不注 overlay）。
 
 ## 7. 控制面 / 桌面契约（沿用，无认证面）
 
@@ -321,16 +338,24 @@ export const chamberBridge: {
 `ssh:<id>` → `http://127.0.0.1:<隧道 localPort>`）；`webDistDir?` 静态服务
 （`/`、`/assets/*`、`/manifest.json`、index.html 注入 `__DSH_BOOT__`）。
 
-### 7.4 IPC（preload 白名单，不变）
+### 7.4 IPC（preload 白名单；2026-08 扩展插件编排面，设计 13）
 
-- `dsh-chamber:info`；`desktop_ssh_instances_get/set`（spec 含 kind/sshPort 与
-  serviceName）、`desktop_ssh_set_password`（主进程内存 + 0600 明文文件兜底，§8）、
-  `desktop_ssh_config_list`（`~/.ssh/config` 非秘密投影）、
+- `dsh-chamber:info`；`desktop_ssh_instances_get/set`（spec 含 kind/sshPort、
+  serviceName 与 remoteDshHome）、`desktop_ssh_set_password`（主进程内存 + 0600
+  明文文件兜底，§8）、`desktop_ssh_config_list`（`~/.ssh/config` 非秘密投影）、
   `desktop_ssh_connect/disconnect/status/logs/logs_clear`、
-  `desktop_ssh_start_service/stop_service/is_active`（systemctl，serviceName
-  白名单 `^[a-zA-Z0-9_.-]+$`）；`desktop_ssh_status_changed` 推送（隧道相位
-  即时投影）、`desktop_ssh_instances_changed` 推送（注册表增删改后即时
-  重拉 roster；renderer 另有 30s 轮询兜底）。
+  `desktop_ssh_start_service/stop_service/is_active/restart_service`（systemctl，
+  serviceName 白名单 `^[a-zA-Z0-9_.-]+$`）；
+- 插件同步面（设计 13，远端 dsh plugin 编排经 provider exec 通道，spec 白名单
+  见 13 §7.2）：`desktop_ssh_plugin_list/plugin_apply`（add/remove/restart，
+  restart 需布尔值）、`desktop_local_plugin_list/add/remove`（本地实例插件）、
+  `desktop_npm_search`（npm 搜索，best-effort）、`desktop_ssh_seed_host_graph`
+  （远端 seed 模块 A 宿主包）、`desktop_ssh_plugin_materialize_add`
+  （本地路径包物化：pack → ssh 传输 → 远端 `add file:`）、`desktop_pick_directory`
+  （主进程目录选择）；
+- `desktop_ssh_status_changed` 推送（隧道相位即时投影）、
+  `desktop_ssh_instances_changed` 推送（注册表增删改后即时重拉 roster；
+  renderer 另有 30s 轮询兜底）。
 - 传输 URL 永不进 renderer；renderer 只见 localPort/phase 投影（含 `kind`）。
 - 所有 `dsh-chamber:info` / `desktop_ssh_*` invoke 必须同时满足：sender 是当前
   主窗口 WebContents、senderFrame 是其 mainFrame、frame URL 精确属于当前
@@ -373,6 +398,15 @@ export const chamberBridge: {
 - `ssh-provider.ts` 是 v1 唯一实现：`ssh -N -o ServerAliveInterval=30 -o
   ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort>`
   隧道 + systemctl exec；认证特征/脱敏/白名单全在 provider 内。
+- **exec 通道（2026-08 扩展，设计 13）**：`TransportExecPayload.op` 为
+  `'exec'`（systemctl `start/stop/is-active/restart`、远端命令 `run`——命令名
+  白名单 `dsh|cat|printf|base64|mkdir` + argv/路径白名单 + shell 元字符拒绝，
+  见 13 §7.2）或 `'write-file'`（stdin base64 流式写 + **字节域** SHA-256 回读
+  校验 + 目标前缀白名单 + **50MiB 大小上限**）。成功结果同时携带 stdout
+  （UTF-8 视图）与 stdoutBytes（原始 Buffer）——二进制内容校验在字节域进行。
+  plugin-sync 编排（apply/seed/materialize）全部经此通道，spec 在主进程二次
+  白名单校验（applyPlugins + buildRemoteExecArgv）；materialize 的 `add file:`
+  走独立的目录约束白名单分支（仅物化目录内绝对路径）。
 - 新来源接入 = 新 provider + kind 注册；运行时与 UI 按 `kind` 分支即接。
   注意存量耦合点：反代路径映射（/api/i/<segment>/*，instance-proxy 目前
   硬编码 `ssh-<id>` 段）与 renderer 侧 base-path 构造（dsh-client-connection

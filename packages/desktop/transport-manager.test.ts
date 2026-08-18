@@ -44,6 +44,7 @@ type StatusWithNoUrlLeak = TransportStatusProjection & { localUrl?: unknown }
 class FakeChild extends EventEmitter implements SpawnedProcess {
   stdout: EventEmitter
   stderr: EventEmitter
+  stdin: { write(chunk: string | Buffer): unknown; end(): unknown } | null
   killCalls: string[]
   exitCode: number | null
   signalCode: NodeJS.Signals | null
@@ -52,6 +53,7 @@ class FakeChild extends EventEmitter implements SpawnedProcess {
     super()
     this.stdout = new EventEmitter()
     this.stderr = new EventEmitter()
+    this.stdin = { write: () => true, end: () => {} }
     this.killCalls = []
     this.exitCode = null
     this.signalCode = null
@@ -1121,6 +1123,59 @@ test('exec for an unknown instance is an explicit error; exec never touches the 
   assert.equal(children[0].killCalls.length, 0)
 })
 
+test('exec run: the run payload passes through to the provider and captures stdout', async t => {
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const resultPromise = manager.exec('s2', 'run', {
+    op: 'exec',
+    command: 'dsh',
+    argv: ['plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'],
+  })
+  assert.equal(spawnCalls.length, 1)
+  assert.equal(spawnCalls[0].command, 'ssh')
+  assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'dsh', 'plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'])
+  spawnCalls[0].child.stdout.emit('data', Buffer.from('packed'))
+  spawnCalls[0].child.simulateExit(0)
+  const result = await resultPromise
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.equal(result.stdout, 'packed', 'the captured remote stdout rides the result')
+    assert.ok(result.stdoutBytes !== undefined && result.stdoutBytes.equals(Buffer.from('packed')), 'raw stdout bytes ride the result')
+  }
+})
+
+test('exec run: a whitelist-refused payload never spawns a process', async t => {
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const result = await manager.exec('s2', 'run', {
+    op: 'exec',
+    command: 'dsh',
+    argv: ['plugin', '--profile', 'web', 'add', 'name; rm -rf /'],
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /whitelist/)
+  assert.equal(spawnCalls.length, 0, 'no ssh process may spawn for a refused run payload')
+})
+
+test('exec run: the write-file payload drives the provider flow (stdin write + byte-domain read-back)', async t => {
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const resultPromise = manager.exec('s2', 'run', {
+    op: 'write-file',
+    path: '~/.dsh-chamber/plugins/pkg-a1b2.tgz',
+    contentBase64: Buffer.from('hello').toString('base64'),
+    sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+  })
+  assert.equal(spawnCalls.length, 1)
+  assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'mkdir -p ~/.dsh-chamber/plugins && base64 -d > ~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
+  spawnCalls[0].child.simulateExit(0)
+  await waitFor(() => spawnCalls.length === 2)
+  assert.deepEqual(spawnCalls[1].args, ['bob@lab.example.com', 'cat', '~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
+  // The read-back carries the exact original bytes — the provider hashes the
+  // RAW captured bytes, so a binary-safe verification is exercised here.
+  spawnCalls[1].child.stdout.emit('data', Buffer.from('hello'))
+  spawnCalls[1].child.simulateExit(0)
+  const result = await resultPromise
+  assert.equal(result.ok, true)
+})
+
 test('legacy persisted instances without serviceName/sshPort migrate to null', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -1228,6 +1283,7 @@ const fakeEndpointProvider: TransportProvider = {
       sshPort: null,
       remotePort: record.remotePort,
       serviceName: null,
+      remoteDshHome: null,
     }
   },
   // no buildStartArgs → direct endpoint mode
@@ -1348,6 +1404,7 @@ const fakeEnvProvider: TransportProvider = {
       sshPort: null,
       remotePort: record.remotePort,
       serviceName: null,
+      remoteDshHome: null,
     }
   },
   buildStartArgs: (spec, localPort) => ['-N', '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, spec.host],

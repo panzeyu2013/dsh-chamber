@@ -53,6 +53,8 @@ export interface TransportInstanceInput {
   /** The remote dsh web profile port on the host (the tunnel / direct endpoint destination). */
   remotePort: number
   serviceName?: string | null
+  /** Remote dsh home (design 13 §4.2); `~/.dsh` or an absolute path, null = remote default `~/.dsh`. Non-secret. */
+  remoteDshHome?: string | null
 }
 
 /** Normalized non-secret instance spec as held by the registry. */
@@ -68,6 +70,8 @@ export interface TransportInstanceSpec {
   remotePort: number
   /** Remote systemd unit name; null = the instance's start/stop is not managed. */
   serviceName: string | null
+  /** Remote dsh home (design 13 §4.2); normalized `~/.dsh` or absolute path, null = default `~/.dsh`. Non-secret. */
+  remoteDshHome: string | null
 }
 
 /**
@@ -90,6 +94,8 @@ export interface TransportStatusProjection {
    * (on-demand writes only — no polling).
    */
   serviceActive: boolean | null
+  /** Remote dsh home (non-secret metadata, design 13 §4.2). */
+  remoteDshHome: string | null
   logSummary: string
 }
 
@@ -97,9 +103,15 @@ export interface TransportStatusProjection {
  * Remote-service exec outcome (ssh: systemctl): ok carries the fresh status
  * projection (serviceActive included), failure carries an error string.
  * Never thrown.
+ *
+ * `run`-channel captures: `stdout` is the UTF-8-decoded view of the remote
+ * stdout (lossy for binary content — replacement chars), and `stdoutBytes`
+ * is the RAW captured bytes for byte-domain consumers (write-file SHA-256
+ * verification, design 13 §4.1). Both are only present when the exec requested
+ * stdout capture.
  */
 export type TransportExecResult =
-  | { ok: true; status: TransportStatusProjection }
+  | { ok: true; status: TransportStatusProjection; stdout?: string; stdoutBytes?: Buffer }
   | { ok: false; error: string }
 
 /** One ring-buffer log line. */
@@ -114,6 +126,7 @@ export interface TransportLogEntry {
  * node:child_process ChildProcess and by the tests' fake.
  */
 export interface SpawnedProcess {
+  stdin: { write(chunk: string | Buffer): unknown; end(): unknown } | null
   stdout: { on(event: 'data', listener: (chunk: Buffer) => void): unknown } | null
   stderr: { on(event: 'data', listener: (chunk: Buffer) => void): unknown } | null
   on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
@@ -160,13 +173,34 @@ export interface StderrClassification {
   terminalAuth: boolean
 }
 
-/** Remote-service exec channel action (ssh: systemctl start|stop|is-active). */
-export type TransportExecAction = 'start' | 'stop' | 'is-active'
+/** Remote-service exec channel action (ssh: systemctl start|stop|restart|is-active;
+ *  `run` = a whitelisted remote command, design 13 §4.1). */
+export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
+
+/**
+ * The `run` action payload (design 13 §4.1): either a whitelisted remote
+ * command (`exec`) or a file write over ssh stdin (`write-file`).
+ */
+export interface TransportRunPayload {
+  op: 'exec' | 'write-file'
+  /** op='exec': remote command name (whitelisted). */
+  command?: 'dsh' | 'cat' | 'base64' | 'mkdir' | 'printf'
+  /** op='exec': argv after the command name (whitelisted per command). */
+  argv?: string[]
+  /** op='write-file': target path (whitelisted prefixes, design 13 §7.2). */
+  path?: string
+  /** op='write-file': file bytes, base64-encoded (no shell quoting needed). */
+  contentBase64?: string
+  /** op='write-file': expected SHA-256 hex of the decoded content (verified after write). */
+  sha256?: string
+}
 
 /** Dependencies the runtime hands to TransportProvider.exec. */
 export interface TransportExecDeps {
   spawnFn(command: string, args: readonly string[], options: import('node:child_process').SpawnOptions): SpawnedProcess
   execTimeoutMs: number
+  /** Independent timeout for the `run` channel (pnpm add hits the registry; default 120s). */
+  runTimeoutMs?: number
   disconnectGraceMs: number
   log(level: TransportLogEntry['level'], message: string): void
   /** Write one provider-owned projection field (ssh: serviceActive) and broadcast. */
@@ -232,6 +266,7 @@ export interface TransportProvider {
     spec: TransportInstanceSpec,
     action: TransportExecAction,
     deps: TransportExecDeps,
+    payload?: TransportRunPayload,
   ): Promise<TransportExecResult>
 }
 

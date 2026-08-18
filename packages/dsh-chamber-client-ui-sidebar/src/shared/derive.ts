@@ -244,11 +244,34 @@ export function instanceSnapshotSignature(
 }
 
 /**
+ * Sidebar running-ring visibility (design 06 §4.3「running 点保留（wire
+ * 权威）」, 2026-08 fix): the ring shows ONLY from the 10s-polled wire bit;
+ * the channel's running bit is deliberately IGNORED — `channelRunning` is
+ * accepted so the contract is testable (a future maintainer cannot silently
+ * reintroduce channel participation without the regression test failing).
+ *
+ * Why: the runtime-facts channel is only as fresh as the shell's WebSocket,
+ * and the stack has no WS heartbeat anywhere (host webserver / browser
+ * carrier / control-plane splice) — a silently stale stream is never detected
+ * and never reconnects, so the channel permanently holds its last pre-death
+ * report. Channel-first (`facts?.running ?? session.running`) let that stale
+ * `false` SHADOW the poll's authoritative `true` (reported 2026-08: "sent a
+ * message, UI showed no running, re-entering revealed it had been running");
+ * an OR merge (`poll || channel`) would instead let a stale `true` forge a
+ * running ring after the run already finished. The poll is a fresh HTTP
+ * round trip each tick, independent of the WebSocket — the only honest
+ * authority. Cost: the ring appears up to one poll cycle late at run start
+ * (the conversation view's own running indicator is immediate).
+ */
+export function runningRingVisible(channelRunning: boolean | undefined, polledRunning: boolean | undefined): boolean {
+  return polledRunning === true
+}
+
+/**
  * Content signature of one runtime-facts report (current + per-session
  * facts). Every listed session carries its live `running` bit (the App's
  * completed-dot edge memory), with `completed`/`pending`/`runningSubagents`
- * as sparse extras — all part of the equality decision, since they drive the
- * sidebar's dots/rings and the App's dot state machine.
+ * as sparse extras.
  *
  * `onlyIds` optionally restricts the signature to a subset of session ids:
  * the projection signature (serversProjectionSignature) passes the set of
@@ -257,10 +280,21 @@ export function instanceSnapshotSignature(
  * does NOT re-render the list. The App's runtimeFacts identity check (B3)
  * calls without it — the state must track the full report, while the
  * completed-dot reconciliation runs on every report regardless.
+ *
+ * `includeRunning` separates the two consumers (2026-08, sidebar running-ring
+ * fix): the App's runtimeFacts identity + completed-dot state machine read
+ * the report's running bits and must keep them in the signature (default
+ * true); the PROJECTION signature (serversProjectionSignature) passes false —
+ * the sidebar renders the running ring from the polled wire bit
+ * (06 §4.3「running 点保留（wire 权威）」, runningRingVisible), so a
+ * channel-only running flip must NOT re-publish/re-render the sidebar (its
+ * rendered content — ring, dots, pending badges, current highlight — is
+ * unchanged).
  */
 export function runtimeReportSignature(
   report: InstanceRuntimeReport | undefined,
   onlyIds?: ReadonlySet<string>,
+  includeRunning = true,
 ): string {
   if (report === undefined) return ''
   const current = report.current ?? ''
@@ -268,7 +302,7 @@ export function runtimeReportSignature(
     .filter(([id]) => onlyIds === undefined || onlyIds.has(id))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, facts]) =>
-      `${id}:${facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}`)
+      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}`)
   // A report whose only rows were filtered out (no visible session, no
   // current) contributes nothing to the projection signature — it must be
   // indistinguishable from "no runtime attached".
@@ -309,7 +343,10 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
     // embedding it as a JSON string value is unambiguous. A report whose
     // rows were all filtered out (no visible session, no current) is
     // normalized to null — indistinguishable from "no runtime attached".
-    const runtime = server.runtime === undefined ? '' : runtimeReportSignature(server.runtime, visibleSessionIds)
+    // includeRunning=false (2026-08): the sidebar renders the running ring
+    // from the POLLED wire bit (runningRingVisible), never from the channel,
+    // so a channel-only running flip must not re-publish the projection.
+    const runtime = server.runtime === undefined ? '' : runtimeReportSignature(server.runtime, visibleSessionIds, false)
     return {
       id: server.id,
       kind: server.kind,
