@@ -41,8 +41,14 @@
   `require("@deepseek-ai/dsh-client-runtime/client")`，默认 web profile 的
   `dsh-session-log-export` 行实机触发 boot 失败）——chamber-entry.ts 现为每个首屏
   静态导入的覆盖包注册模块表 factory（返回复合 bundle 内联命名空间，require 边与
-  ctx 服务同实例），COVERED_FACTORIES 与 CHAMBER_COVERED_IDS 执行期断言锁步
-  （详见设计 09 §3.2）。
+  ctx 服务同实例），`COVERED_FACTORIES` 与 `CHAMBER_COVERED_FACTORY_IDS`
+  （chamber-covered.ts leaf 契约）精确一致断言 + `CHAMBER_COVERED_IDS` 覆盖断言 +
+  CI 锁步单测（host-graph.test.ts：每个工厂 id 必被覆盖）。**首启竞态修复
+  （2026-08，05 §4）**：模块表经 boot.tsx 幂等 `ensureWebModuleSystem` 在
+  collectExtraRows 预加载之前装好（首个带额外行的 boot 不再让官方 bundle 在
+  sink 安装前求值）；shell.ts bootError 分支经测试 loader + fixture 单测覆盖
+  （`shell.test.ts`，`--import scripts/test-shell-register.mjs`）。
+  详见设计 09 §3.2。
 - **侧边栏聚合改事件驱动（设计 10）**：实现未排期——改动 05 §3 契约，需评审确认；详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
 - **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程

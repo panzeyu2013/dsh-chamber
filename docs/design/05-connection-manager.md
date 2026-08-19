@@ -212,8 +212,24 @@ export const chamberBridge: {
   （`.instance-loading`：rail + sidebar + 主区占位块 + 转圈与服务器名文案，
   `--dsw-alias-*` 主题 token 底色，z-index 盖住 shell 内 dsh 启动页——不再
   需要 opacity 隐藏技巧），settle 后第二次 View Transition 换入真实内容
-  （失败则失败报告 + 重试；`bootInstanceShell` 的 settle 态经 `.then(setShell)`
-  落地，重试 UI 真实可用）。ready 远程实例**空闲预热**：按序一次一个后台
+  （失败则 chamber 覆盖层呈现 + 重试 + 服务器切换，见下；`bootInstanceShell` 的 settle 态经 `.then(setShell)`
+  落地）。**失败呈现修订（2026-08）**：
+   失败不再由各 InstanceView 自绘（旧 `.instance-fatal`，仅有重试、无导航），
+   而是由 App 在活动视图上统一渲染 `.fatal-overlay` 覆盖层——失败报告 +
+   重试（`retryToken` 递增 → InstanceView 复位重 boot）+ **服务器切换行**
+   （`.fatal-servers`：chamber 级逃生通道，不依赖任何 shell 挂载）。原因：
+   boot 失败 = 该视图的 dsh shell 从未挂载，而侧边栏（多来源导航）在 shell
+   内——若不提供 chamber 级覆盖层，用户会被失败报告困在当前视图（只能整页
+   刷新），违反「一个实体的失败不得抹除/阻断无关健康实体」不变量。dsh 壳
+   内自绘的失败页（`AppWebEntry` 加载页的 fail-loud 报告）也统一经
+   `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见的失败态
+   （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**首启竞态修复
+   （2026-08，05 §4）**：模块表（`window.__DSH_MODULES__` + `__ModuleLoader__`
+   sink）经 boot.tsx 导出的幂等 `ensureWebModuleSystem` 在**任何 bundle 脚本
+   执行前**装好（shell.ts 在 collectExtraRows 预加载之前调用，run() 经同一
+   helper 收编）——旧顺序下首个带额外行的 boot 会让官方 bundle 在 sink 安装
+   前求值、顶层交接抛错，boot 以难懂的 "cannot resolve" 失败。
+   ready 远程实例**空闲预热**：按序一次一个后台
   boot（`instance-pending` 态仅 visibility 隐藏、保留 layout——vendor
   测量/IntersectionObserver 在 boot 期间正常），settle 推进下一个，使多数
   首次切换在点击时已就绪；预热与用户触发 boot 共享 shell.ts 串行队列。

@@ -4,7 +4,7 @@ import {
   collectExtraRows, dedupeHostEntries, fetchHostGraph, toExtraRows,
   type ExtraModuleRow, type HostGraphRow,
 } from './host-graph.ts'
-import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 
 const row = (id: string, over: Partial<HostGraphRow> = {}): HostGraphRow => ({
   id,
@@ -317,5 +317,22 @@ test('CHAMBER_COVERED_IDS: no duplicates and every id is a legal package name', 
   const pkgName = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/
   for (const id of CHAMBER_COVERED_IDS) {
     assert.match(id, pkgName, `covered id ${JSON.stringify(id)} is not a legal package name`)
+  }
+})
+
+test('CHAMBER_COVERED_FACTORY_IDS: no duplicates, legal names, and every factory id is covered (union-table lockstep)', () => {
+  // The composite registers a module-table factory per first-screen family
+  // (chamber-entry.ts COVERED_FACTORIES, design 09 §3.2). Every such id MUST be
+  // in the covered dedupe set: an uncovered id would execute its official
+  // bundle as an extra row and double-register against the composite's own
+  // factory (chamber-entry asserts the map matches this list exactly at boot —
+  // this CI check covers the list against the dedupe set).
+  assert.equal(new Set(CHAMBER_COVERED_FACTORY_IDS).size, CHAMBER_COVERED_FACTORY_IDS.length)
+  assert.ok(CHAMBER_COVERED_FACTORY_IDS.length > 0, 'factory id contract must not be empty')
+  const covered = new Set(CHAMBER_COVERED_IDS)
+  const pkgName = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/
+  for (const id of CHAMBER_COVERED_FACTORY_IDS) {
+    assert.match(id, pkgName, `factory id ${JSON.stringify(id)} is not a legal package name`)
+    assert.ok(covered.has(id), `factory id ${JSON.stringify(id)} is missing from CHAMBER_COVERED_IDS — add it there (a non-covered factory id would double-register)`)
   }
 })

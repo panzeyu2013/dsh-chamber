@@ -45,6 +45,14 @@ declare module '@deepseek-ai/dsh-client-web' {
   export interface AppWebEntryOptions extends BootSeams {
     extraRows?: { id: string; url: string; rev: string }[]
   }
+  /**
+   * chamber patch (2026-08 first-boot race fix, 05 §4): install-or-reuse the
+   * page-level module system (window.__DSH_MODULES__ + the __ModuleLoader__
+   * registration sink). shell.ts calls this BEFORE preloading any host-graph
+   * bundle so the extra bundles' scripts always evaluate against an installed
+   * sink; idempotent, run() adopts the same instance.
+   */
+  export function ensureWebModuleSystem(seams?: BootSeams): unknown
   /** The web shell kernel consumed by shell.ts (boot.tsx). */
   export class AppWebEntry {
     constructor(el: HTMLElement, options?: AppWebEntryOptions)
@@ -52,6 +60,8 @@ declare module '@deepseek-ai/dsh-client-web' {
     dispose(): void
     /** chamber patch: settled runtime context (boot.tsx accessor; session opens ride ctx.sessions; undefined after dispose). */
     runtimeCtx: Context | undefined
+    /** chamber patch (2026-08, 05 §4 失败呈现修订): boot failure report — run() resolves on boot-chain failures by design (the dsh loading page renders the in-shell report), but the chamber shell must see it to present its own per-instance fallback; undefined while loading or after a clean settle. */
+    bootError: string | undefined
   }
 }
 

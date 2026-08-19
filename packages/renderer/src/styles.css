@@ -202,19 +202,9 @@ body {
   50% { opacity: 1; }
 }
 
-/* ---------- 实例失败态（骨架屏之后出现，同底色） ---------- */
-
-.instance-fatal {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: var(--dsw-alias-bg-base, var(--bg));
-}
+/* 注：实例失败态不再有 .instance-fatal——失败呈现（报告 + 重试 + 服务器
+   切换）由 App 在活动视图上统一渲染为 .fatal-overlay 覆盖层（05 §4 失败
+   呈现修订），InstanceView 只负责骨架屏与 shell 生命周期。 */
 
 /* ---------- 动效偏好 ---------- */
 
@@ -300,6 +290,18 @@ body {
   max-width: 640px;
   text-align: center;
   overflow-wrap: anywhere;
+}
+
+/* 实例失败覆盖层的服务器切换行（05 §4 失败呈现修订）：boot 失败时侧边栏
+   （在 shell 内）不可用，这里提供 chamber 级逃生通道——切换不依赖任何
+   shell 已挂载。 */
+.fatal-servers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
 }
 
 .pane-empty {

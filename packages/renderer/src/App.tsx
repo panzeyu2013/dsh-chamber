@@ -38,7 +38,7 @@ import {
   type InstanceAggregate,
   type InstanceRuntimeReport,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
-import { openInstanceSession, disposeAllShells, disposeInstanceShell } from './shell.ts'
+import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import { errorMessage } from './status.ts'
@@ -195,6 +195,12 @@ export default function App() {
   // 视图：'local' | 'ssh-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
+  // chamber (2026-08 失败呈现修订, 05 §4)：每视图 shell 终态（InstanceView
+  // 经 onStateChange 上报）——活动视图 boot 失败时由 App 渲染统一失败覆盖层
+  // （失败报告 + 重试 + 服务器切换）。retryTokens 驱动 InstanceView 的重试
+  // 重 boot（令牌递增 → 视图复位 → 重新启动 shell）。
+  const [shellStates, setShellStates] = useState<Record<string, ShellState>>({})
+  const [retryTokens, setRetryTokens] = useState<Record<string, number>>({})
   // 每实例 workspace/session 聚合（实例 API 轮询结果；控制面不持有会话事实）
   const [aggregates, setAggregates] = useState<Record<string, InstanceAggregate>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
@@ -270,6 +276,18 @@ export default function App() {
       setMountedViews(prev => {
         const next = prev.filter(id => live.has(id))
         return next.length === prev.length ? prev : next
+      })
+      // 视图已回收：失败覆盖层状态与重试令牌随视图收敛（重加同名 id 由新
+      // boot 重建）。
+      setShellStates(prev => {
+        const next = { ...prev }
+        for (const id of removed) delete next[id]
+        return next
+      })
+      setRetryTokens(prev => {
+        const next = { ...prev }
+        for (const id of removed) delete next[id]
+        return next
       })
     }
     setActiveView(prev => {
@@ -569,9 +587,17 @@ export default function App() {
     const unsubscribeInstances = ssh.onInstancesChanged(() => {
       void refreshRemotes()
     })
+    // OS 唤醒分发（design 14 D4）：主进程 push system-resume → 本页面所有
+    // dsh 前端连接（N-ctx 单页共享 window）立即重连——dsh-client-connection
+    // 的 chamber 补丁监听 window 'dsh-chamber:system-resume' 事件。桥与
+    // desktopSsh 同一批 expose，desktopSsh 存在则 systemResume 必存在。
+    const unsubscribeResume = window.dshChamber?.systemResume?.onResume(() => {
+      window.dispatchEvent(new Event('dsh-chamber:system-resume'))
+    })
     return () => {
       unsubscribe()
       unsubscribeInstances()
+      unsubscribeResume?.()
     }
   }, [sshBridgeReady, refreshRemotes])
 
@@ -767,6 +793,11 @@ export default function App() {
     drainPrewarm()
   }, [drainPrewarm])
 
+  /** Shell 终态上报（InstanceView onStateChange）：失败覆盖层读取活动视图的 error。 */
+  const handleShellState = useCallback((instanceId: string, state: ShellState) => {
+    setShellStates(prev => (prev[instanceId] === state ? prev : { ...prev, [instanceId]: state }))
+  }, [])
+
   useEffect(() => {
     const eligible = prewarmEligibleRef.current
     prewarmQueueRef.current = prewarmQueueRef.current.filter(id => eligible.has(id))
@@ -914,6 +945,11 @@ export default function App() {
     healthError !== null &&
     (health === null || (healthErrorAt !== null && Date.now() - healthErrorAt >= HEALTH_ERROR_GRACE_MS))
 
+  // 活动视图的 shell 失败报告（05 §4 失败呈现修订）：boot 失败 settle 后由
+  // InstanceView 上报终态；只有失败态（error 非空）触发覆盖层——booting/
+  // 成功态由骨架屏/真实 UI 呈现。
+  const activeShellError = shellStates[activeView]?.error ?? null
+
   return (
     <ErrorBoundary>
       <div className="app">
@@ -928,8 +964,55 @@ export default function App() {
             active={activeView === viewId}
             label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? '本地实例' : viewId)}
             onSettled={handleInstanceSettled}
+            onStateChange={handleShellState}
+            retryToken={retryTokens[viewId]}
           />
         ))}
+        {/* chamber (2026-08 失败呈现修订, 05 §4)：活动视图 boot 失败 = 该视图
+            的 dsh shell 从未挂载——导航（侧边栏在 shell 内）随之不可用，若不
+            提供逃生通道，用户会被失败报告困在当前视图（只能整页刷新）。
+            覆盖层 = 失败报告 + 重试 + 服务器切换：失败以 chamber 层呈现，
+            绝不阻断切换/重试（正确性不变量：一个实体的失败不得抹除/阻断
+            无关的健康实体）。仅活动视图渲染；非活动视图失败在激活时呈现。
+            控制面不可达（controlUnreachable）是更高层的全局条件，渲染在其
+            之上（下方 JSX 顺序在后）。 */}
+        {activeShellError !== null && (
+          <div className="fatal fatal-overlay">
+            <div role="alert">
+              <div className="fatal-title">实例启动失败</div>
+              <div className="fatal-message">{activeShellError}</div>
+            </div>
+            <button
+              className="btn primary"
+              onClick={() => {
+                // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试
+                // （与 selectView 同语义——boot 失败若由隧道故障引起，不重连
+                // 则重试只会再次失败）。
+                ensureRemoteConnected(activeView)
+                setRetryTokens(prev => ({ ...prev, [activeView]: (prev[activeView] ?? 0) + 1 }))
+              }}
+            >
+              重试
+            </button>
+            {servers.length > 1 && (
+              <div className="fatal-servers">
+                <span className="muted small">切换到其他服务器：</span>
+                {servers.map(server => (
+                  server.id === activeView ? null : (
+                    <button
+                      key={server.id}
+                      className="btn"
+                      onClick={() => selectView(server.id)}
+                    >
+                      {/* 空 label 回退 id，避免出现无标签的切换按钮 */}
+                      {server.label !== '' ? server.label : server.id}
+                    </button>
+                  )
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {controlUnreachable && (
           <div className="fatal fatal-overlay">
             <div className="fatal-title">无法连接控制面</div>

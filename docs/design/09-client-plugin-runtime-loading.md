@@ -84,6 +84,39 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   `ui-*` 包（`chamber-entry.ts` 静态注册），宿主图里这些 id **跳过**，只加载
   chamber 复合未覆盖的新 entry（用户新装包）。去重集 = `CHAMBER_COVERED_IDS`
   （`packages/renderer/src/chamber-covered.ts`，见 §3.5）。
+- **覆盖集也是模块表的 factory 提供方（2026-08 修复）**：被跳过的覆盖行不是
+  "不存在"，而是由复合 bundle 替代——共享模块表对 fetch bundle 的**同步 require
+  边**只有 seed → statics → 已物化缓存（loadCache）→ 已注册 factory 一条解析路径
+  （client-modules system.ts），官方图靠"每行一个 row-factory"回答这些边；chamber 把覆盖行的
+  bundle 换成了复合 bundle，就必须由复合 bundle 注册这些 factory，否则覆盖
+  包的 require 边落空。首个实机案例：官方工具链的 store-engine 豁免
+  （upstream tsdown.client.ts `RUNTIME_STORE_EXEMPTION`）使每个值导入
+  `createSnapshotStore` 的 client bundle 都会 emit
+  `require("@deepseek-ai/dsh-client-runtime/client")`——runtime 是覆盖行，而
+  默认 web profile 的 `dsh-session-log-export`（非覆盖的额外行）正是这种
+  bundle，boot 在物化其 factory 时响亮失败。修复：chamber-entry.ts 在 bundle
+  执行时（早于任何 entry 物化）为**每个首屏静态导入的覆盖包**注册一个
+  factory，返回复合 bundle 内联的同一命名空间（require 边与 ctx 服务同实例）。
+  deferred 家族不注册（其 chunk 在 settle 后才到；官方也只保证 immediately
+  层级的同步 require，且 purity gate 本就禁止值导入 ui-* 包）；page-own 覆盖
+  id（modules、被 chamber 替换的官方 sidebar/layout 注册）无命名空间、不是
+  合法 require 目标。维护纪律（2026-08 加固）：首屏工厂 id 以
+  `CHAMBER_COVERED_FACTORY_IDS`（chamber-covered.ts 的 leaf 契约）为可测试
+  面——CI 单测断言每个 id ∈ `CHAMBER_COVERED_IDS`（host-graph.test.ts），
+  chamber-entry 执行期断言 `COVERED_FACTORIES` 与该列表**精确一致**且每个
+  id 均被覆盖（漏加即 fail-loud——漏加的 id 会以额外行执行官方 bundle，与
+  复合 factory 重复注册；map 与列表漂移同理）。
+- **首启竞态修复（2026-08，05 §4）**：额外 bundle 的脚本在**加载时即执行**
+  并自注册 factory（script load 事件在求值后触发），注册 sink
+  （`window.__ModuleLoader__`）必须先于任何 bundle 脚本存在。旧顺序（预加载
+  → `AppWebEntry.run()` 才装表）下，页面**首个**带额外行的 boot 会让脚本在
+  sink 安装前求值——官方 bundle 的无守卫顶层交接抛错、factory 永未注册、
+  boot 以难懂的 "cannot resolve" 失败（实践中被宿主就绪时序掩盖：首 boot
+  通常 503 降级装表，之后的 boot 才带额外行）。修复：boot.tsx 导出幂等的
+  `ensureWebModuleSystem`（首次装表 + 注册 statics，其后复用），shell.ts 在
+  `collectExtraRows` 预加载**之前**调用它；`AppWebEntry.run()` 经同一 helper
+  收编（N-ctx 复用分支成为唯一路径）。manifest 缺失/畸形时跳过额外预加载
+  （无 sink 不执行任何 bundle），boot 照常以同一错误响亮失败。
 - 加载：`ClientModuleSystem.load('/api/i/<id>/plugins/<pkg>/client.js')` —— browser
   half 本就支持任意 entry 的加载/物化/缓存/依赖边；bundle 自注册进共享模块表
   （N-ctx seam 已存在），与官方 shell 加载方式一致。`?rev=` 沿用宿主图（缓存锚），
@@ -150,6 +183,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   与 `@deepseek-ai/dsh-client-modules`（shell 内核自行收编该 entry，二次 provide
   `modules` 冲突）。独立成模块（chamber-entry.ts 仅 re-export）是为避免 shell.ts
   把 chamber-entry 的模块表交接拉进主 chunk（同 chamber-knob.ts 模式）。
+  与 §3.2 的 union-table 修复锁步：chamber-entry.ts 的 `COVERED_FACTORIES`
+  （首屏静态导入族的模块表 factory 注册）中每个 id 必须在覆盖集内（执行期断言）。
 - **extraRows seam（模块 D）**：`AppWebEntryOptions.extraRows`（`boot.tsx`，可选、
   向后兼容）——chamber 侧已把额外 bundle 预加载完毕（bundle 执行时经
   `window.__ModuleLoader__.load({id, factory})` 自注册进共享模块表），seam 只把其

@@ -19,10 +19,10 @@
 
 
 
-import { AppWebEntry } from '@deepseek-ai/dsh-client-web'
+import { AppWebEntry, ensureWebModuleSystem } from '@deepseek-ai/dsh-client-web'
 
 import { getChamberInstanceId, setChamberInstanceId } from './chamber-knob.ts'
-import { collectExtraRows } from './host-graph.ts'
+import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 
 const CHAMBER_BOOT = '@dsh-chamber/app'
@@ -89,7 +89,11 @@ export interface ShellState {
   booted: boolean
   /** Boot is in flight (queued behind earlier instances). */
   booting: boolean
-  /** Boot rejection (missing/malformed boot manifest only; failures resolve in-page). */
+  /**
+   * Boot failure report: run() rejection (missing/malformed boot manifest, …),
+   * or a resolved-but-failed boot surfaced via AppWebEntry.bootError (05 §4
+   * failure-presentation revision) — null on a clean settle.
+   */
   error: string | null
 }
 
@@ -139,6 +143,21 @@ export function bootInstanceShell(
   bootGenerations.set(instanceId, gen)
   const before: ShellState = { instanceId, basePath, booted: false, booting: true, error: null }
   onState(before)
+  // 首启竞态修复（2026-08，05 §4）：任何 bundle 脚本执行前必须装好页面级
+  // 模块表（window.__DSH_MODULES__ + __ModuleLoader__ 注册 sink）——额外
+  // bundle 的脚本在加载时即执行并自注册 factory，sink 不存在则官方 bundle
+  // 的无守卫顶层交接直接抛错、factory 永未注册，boot 以难懂的 "cannot
+  // resolve" 失败（旧顺序：collectExtraRows 预加载 → run() 才装表，首个带
+  // 额外行的 boot 必踩）。ensureWebModuleSystem 幂等（首次装、其后复用），
+  // run() 也经同一 helper 收编，绝不重复注册 statics。manifest 缺失/畸形时
+  // 此处即抛——跳过额外预加载（无 sink 不执行任何 bundle），boot 照常在
+  // run() 以同一错误响亮失败（失败覆盖层 + 重试）。
+  let moduleSystemError: string | null = null
+  try {
+    ensureWebModuleSystem({ loadBundle: loadModuleBundle })
+  } catch (reason) {
+    moduleSystemError = reason instanceof Error ? reason.message : String(reason)
+  }
   // 提前启动宿主启动图 fetch（LCP/perf pass，design 09 module C）：collectExtraRows
   // 只读 basePath 参数、完全不碰 __DSH_BASE_PATH__ 旋钮（见下注释），所以可以在
   // 排进串行链之前就开始——与排在前面的 boot（前一实例的 AppWebEntry.run()，最坏
@@ -147,7 +166,9 @@ export function bootInstanceShell(
   // factory 必须在 loader.create 物化 entries 之前注册进共享模块表）。排队的等待期
   // 内若提前失败（extra bundle 加载失败），先挂一个 no-op catch 防止 unhandledrejection
   // 冒泡——任务体 await 同一 promise 并照旧走 fail-loud 路径。
-  const extraRowsPromise = collectExtraRows(instanceId, basePath, { loadModuleBundle })
+  const extraRowsPromise = moduleSystemError === null
+    ? collectExtraRows(instanceId, basePath, { loadModuleBundle })
+    : Promise.resolve<ExtraModuleRow[]>([])
   void extraRowsPromise.catch(() => undefined)
   const task = bootChain.then(async () => {
     const win = window as Window & { __DSH_BASE_PATH__?: string }
@@ -182,6 +203,21 @@ export function bootInstanceShell(
         // 机会——同样走响亮丢弃路径，避免静默丢失 + pendingOpens 死键累积。
         rejectPendingOpens(instanceId, 'shell disposed (instance left ready)')
         return { instanceId, basePath, booted: false, booting: false, error: 'shell disposed (instance left ready)' } satisfies ShellState
+      }
+      // chamber (2026-08 failure-presentation revision, 05 §4): run() RESOLVES
+      // on boot-chain failures by design (the dsh loading page renders the
+      // in-shell report — fail loud, never a silent partial UI), but the
+      // chamber must see the failure to show its own per-instance fallback
+      // (retry + server switching) instead of a dead-end report trapping the
+      // active view. Treat a resolved-but-failed boot as a failure here: the
+      // failed entry is disposed (unmounts the in-shell report root, so a
+      // retry re-boots the container cleanly) and the error is projected like
+      // a run() rejection.
+      const bootFailure = entry.bootError
+      if (bootFailure !== undefined) {
+        entry.dispose()
+        rejectPendingOpens(instanceId, bootFailure)
+        return { instanceId, basePath, booted: false, booting: false, error: bootFailure } satisfies ShellState
       }
       entries.set(instanceId, { entry, dispose: () => entry.dispose() })
       // 注册成功即清掉本实例的旧阈值：boot 队列 FIFO，所有代 <= 阈值的 boot

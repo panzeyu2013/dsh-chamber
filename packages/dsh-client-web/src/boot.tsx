@@ -140,28 +140,12 @@ export class AppWebEntry {
    */
   async run(): Promise<void> {
     this.manifest = parseBootManifest((globalThis as DshWindow).__DSH_BOOT__)
-
-    const win = globalThis as DshWindow
-    const shared = win.__DSH_MODULES__
-    if (shared !== undefined) {
-      // chamber patch: reuse the page-level module system (sequential boots —
-      // the manifest is identical across instances).
-      this.modules = shared
-    } else {
-      this.modules = new ClientModuleSystem({
-        modules: this.manifest.modules, staticModules: getStaticModules(), ...this.seams,
-      })
-      // The app-shell assembly is the only shell-own module: every other graph
-      // row is a plugin bundle arriving through fetch.
-      this.modules.registerStatic(APP_SHELL_ID, AppShell)
-      // Adoption handoff, supply side: register the modules
-      // package's own client half under its bare package name (= graph row id
-      // = entry name — a suffixed key would miss the statics branch and
-      // trigger a real fetch), and put the instance on the kernel slot the
-      // wrapper's apply reads to provide ctx.modules.
-      this.modules.registerStatic(MODULES_ID, ModulesClient)
-      win.__DSH_MODULES__ = this.modules
-    }
+    // chamber patch (design 05 §4): install-or-reuse the page-level module
+    // system. The chamber shell installs it BEFORE preloading any host-graph
+    // bundle (ensureWebModuleSystem — first-boot race fix), so run() must
+    // adopt the parked instance instead of re-installing; the reuse branch
+    // also skips the duplicate static registrations (they throw on repeats).
+    this.modules = ensureWebModuleSystem(this.seams)
 
     this.root = createRoot(this.el)
     this.root.render(
@@ -220,6 +204,22 @@ export class AppWebEntry {
    */
   get runtimeCtx(): Context | undefined {
     return this.ctx
+  }
+
+  /**
+   * ## chamber patch (dsh-chamber connection manager, design 05 §4)
+   *
+   * The boot failure report (undefined while loading or after a clean settle).
+   * run() resolves on boot-chain failures by design — the loading page stays
+   * up and renders the in-shell report (the fail-loud surface the kernel
+   * owns) — but the chamber shell must SEE the failure to present its own
+   * per-instance fallback (retry + server switching) instead of the dead-end
+   * in-shell report trapping the active view. Public read handle, same
+   * pattern as runtimeCtx; valid once run() settled (the report is set before
+   * run() resolves).
+   */
+  get bootError(): string | undefined {
+    return this.error.getSnapshot()
   }
 
   /** Prefetch the immediately tier (factory registration only; failures defer to the import path). */
@@ -323,6 +323,49 @@ export class AppWebEntry {
       throw new Error(`web boot: ${String(failures.length)} entr${failures.length === 1 ? 'y' : 'ies'} did not activate\n${failures.join('\n')}`)
     }
   }
+}
+
+/**
+ * ## chamber patch (dsh-chamber connection manager, design 05 §4 /
+ * first-boot race fix, 2026-08)
+ *
+ * Install the page-level module system — `window.__DSH_MODULES__` plus the
+ * `window.__ModuleLoader__` registration sink — on first call; reuse the
+ * parked instance afterwards (idempotent; {@link AppWebEntry.run} adopts the
+ * same instance via this helper, so the N-ctx reuse branch is the only path
+ * the chamber shell exercises).
+ *
+ * The chamber shell (shell.ts bootInstanceShell) calls this BEFORE preloading
+ * any host-graph bundle: an extra bundle's script EVALUATES at load (the
+ * script load event fires after evaluation) and its top level registers the
+ * factory through the sink — so the sink must exist first. The old order
+ * (preload → run() install) let a first-ever boot's extra scripts evaluate
+ * before the sink existed; the official bundles' unguarded top-level handoff
+ * (`window.__ModuleLoader__.load(...)`) threw, the factory was never
+ * registered, and the boot failed with a confusing "cannot resolve". This
+ * helper also owns the static registrations (app-shell assembly + the modules
+ * package client half) so a pre-install and run() never disagree.
+ */
+export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
+  const win = globalThis as DshWindow
+  const shared = win.__DSH_MODULES__
+  if (shared !== undefined) return shared
+  const modules = new ClientModuleSystem({
+    modules: parseBootManifest(win.__DSH_BOOT__).modules,
+    staticModules: getStaticModules(),
+    ...seams,
+  })
+  // The app-shell assembly is the only shell-own module: every other graph
+  // row is a plugin bundle arriving through fetch.
+  modules.registerStatic(APP_SHELL_ID, AppShell)
+  // Adoption handoff, supply side: register the modules package's own client
+  // half under its bare package name (= graph row id = entry name — a
+  // suffixed key would miss the statics branch and trigger a real fetch), and
+  // put the instance on the kernel slot the wrapper's apply reads to provide
+  // ctx.modules.
+  modules.registerStatic(MODULES_ID, ModulesClient)
+  win.__DSH_MODULES__ = modules
+  return modules
 }
 
 /**

@@ -59,10 +59,31 @@
  * static import — hero, composer, settings shell, navigation) vs deferred
  * (feature UI only reachable after the first paint). Keep `chamber-covered.ts`
  * in lockstep either way.
+ *
+ * ## Module-table factories for the covered set (design 09 union table)
+ *
+ * The composite is also the module-table PROVIDER for every covered package:
+ * the shared module table (client-modules system.ts) resolves a fetched
+ * bundle's synchronous `require` edges through seed → statics → loadCache →
+ * registered factories — and the official graph answers each edge with the
+ * target package's own row-factory. The chamber merge DROPS the covered rows
+ * (the composite replaces their bundles), so their factories must be
+ * registered here or a covered require edge misses: the documented snapshot-
+ * store exemption (`RUNTIME_STORE_EXEMPTION`, upstream tsdown.client.ts) makes
+ * every client bundle that value-imports the store engine emit
+ * `require("@deepseek-ai/dsh-client-runtime/client")` — runtime is
+ * composite-covered, and the default web profile's `dsh-session-log-export`
+ * row (an extra row the composite does not cover) is exactly such a bundle.
+ * The covered-factory registration below (one per statically-imported
+ * first-screen family, at bundle execution — before any loader entry
+ * materializes) completes the union table. The map↔list lockstep is enforced
+ * in apply() (assertCoveredFactoryLockstep — fails THIS entry loudly on drift)
+ * plus the CI test. See the COVERED_FACTORIES block.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 
+import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import { getChamberInstanceId } from './chamber-knob.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -196,6 +217,52 @@ export const CHAMBER_APP_ID = '@dsh-chamber/app'
 export const inject: string[] = []
 
 /**
+ * Union-table lockstep guard (design 09 §3.2): COVERED_FACTORIES must match
+ * CHAMBER_COVERED_FACTORY_IDS exactly, and every id must be covered — a
+ * non-covered id would execute its official bundle as an extra row and
+ * double-register against the composite's own factory.
+ *
+ * Runs inside apply() — the composite's OWN entry — so a drift fails THIS
+ * entry loudly and is attributed correctly (assertEntriesActive reports
+ * "@dsh-chamber/app: failed"; the specific message lands in the console via
+ * cordis's apply-error log). A top-level check would be muffled: a composite
+ * top-level throw is swallowed by prefetchImmediateTier's catch and the drift
+ * would surface as a misleading extra-bundle "import failed" instead. Runs on
+ * every boot (apply runs per ctx); O(n) over ~20 ids, negligible.
+ *
+ * The CI lockstep test (host-graph.test.ts) covers the declared↔covered
+ * direction; this covers the map↔declared direction (chamber-entry cannot be
+ * imported by the node test runner — its namespaces resolve to source).
+ */
+function assertCoveredFactoryLockstep(): void {
+  const mapIds = COVERED_FACTORIES.map(([id]) => id)
+  const unique = new Set(mapIds)
+  if (unique.size !== mapIds.length) {
+    throw new Error('chamber-entry: COVERED_FACTORIES contains a duplicate id')
+  }
+  const declared = new Set(CHAMBER_COVERED_FACTORY_IDS)
+  if (unique.size !== declared.size) {
+    throw new Error(
+      `chamber-entry: COVERED_FACTORIES (${unique.size} ids) must match CHAMBER_COVERED_FACTORY_IDS `
+      + `(${declared.size} ids) exactly — add/remove the same ids in both (see chamber-covered.ts)`,
+    )
+  }
+  for (const id of unique) {
+    if (!declared.has(id)) {
+      throw new Error(
+        `chamber-entry: covered factory "${id}" is not in CHAMBER_COVERED_FACTORY_IDS — add it there (or remove it here)`,
+      )
+    }
+    if (!CHAMBER_COVERED_IDS.includes(id)) {
+      throw new Error(
+        `chamber-entry: covered factory "${id}" is not in CHAMBER_COVERED_IDS — add it there (or remove it here); `
+        + 'a non-covered id would double-register against the host-graph row',
+      )
+    }
+  }
+}
+
+/**
  * Assemble the complete dsh client plugin tree on the per-instance ctx.
  * Sub-plugin fibers wait on their inject sets, so registration order carries
  * no activation semantics; the core assembly is listed first for readability.
@@ -205,6 +272,9 @@ export const inject: string[] = []
  * paints — without their eval (see module header).
  */
 export function apply(ctx: Context): void {
+  // Union-table lockstep guard FIRST (see assertCoveredFactoryLockstep): a
+  // COVERED_FACTORIES drift must fail this entry before any plugin registers.
+  assertCoveredFactoryLockstep()
   // chamber patch (05 §4): the per-boot instance id, set by shell.ts through
   // the chamber knob for the duration of the boot — the sidebar plugin reads
   // it to highlight the current source. Declared via ctx.provide: cordis
@@ -251,6 +321,73 @@ interface ClientPluginHandoff {
   factory: (require: (spec: string) => unknown) => Record<string, unknown>
 }
 
+/**
+ * Wrap a bundled first-screen namespace as a module-table factory: every
+ * materialization returns the SAME object the composite mounts on the ctx —
+ * the require edge and the ctx services share one instance (union table,
+ * design 09 §3.2). The factory signature's `require` is unused: the namespace
+ * is fully bundled, nothing is resolved lazily.
+ */
+const coveredFactory = (exports: unknown): ClientPluginHandoff['factory'] => () => exports as Record<string, unknown>
+
+/**
+ * Module-table factories for the composite-covered packages (module header,
+ * "Module-table factories for the covered set"): one per statically-imported
+ * first-screen family — exactly the namespaces present the moment this bundle
+ * executes. Registered at bundle execution (see the loop below), so every
+ * synchronous require an extra host-graph bundle can emit resolves before any
+ * loader entry materializes.
+ *
+ * Deliberately NOT included:
+ * - the deferred families (commands, …): their chunks load after the boot
+ *   settles; the official graph only guarantees the immediately tier for
+ *   synchronous requires, and the client-bundle purity gate (upstream
+ *   tsdown.client.ts) forbids value imports of ui-* packages anyway;
+ * - page-own covered ids (`@deepseek-ai/dsh-client-modules`, the official
+ *   `dsh-client-ui-sidebar` / `dsh-client-ui-layout` registrations the chamber
+ *   replaces): the composite has no namespace for them and they are not
+ *   legitimate require targets.
+ *
+ * Maintenance: every id here MUST stay in `CHAMBER_COVERED_IDS` (a non-covered
+ * id would double-register against the host-graph row's own bundle); keep the
+ * map in lockstep with the first-screen import list, `CHAMBER_COVERED_FACTORY_IDS`
+ * and `chamber-covered.ts` — drift is enforced by apply-time
+ * `assertCoveredFactoryLockstep` plus the CI lockstep test (host-graph.test.ts).
+ *
+ * Known boundaries (documented, accepted):
+ * - the composite bundle is NOT re-execution-safe: the sanctioned dev HMR
+ *   reload of `@dsh-chamber/app` (invalidate → prefetch re-executes the
+ *   bundle) would re-run this registration loop and hit the duplicate-factory
+ *   sink on the covered ids. Dev-only (the web profile has no hmr client
+ *   channel); the reload fails loud and degrades per the hmr failure policy.
+ * - the "before any loader entry materializes" guarantee assumes the composite
+ *   prefetch succeeds; if it fails (swallowed), the composite is re-fetched
+ *   during entry creation concurrently with extra entries — an extra requiring
+ *   a covered id can then miss the table and fail loud (self-heals on retry).
+ */
+const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPluginHandoff['factory']]> = [
+  ['@deepseek-ai/dsh-client-connection', coveredFactory(ConnectionPlugin)],
+  ['@deepseek-ai/dsh-typert-registry', coveredFactory(TypertRegistry)],
+  ['@deepseek-ai/dsh-api-gateway', coveredFactory(ApiGateway)],
+  ['@deepseek-ai/dsh-api-remotes', coveredFactory(ApiRemotes)],
+  ['@deepseek-ai/dsh-client-runtime', coveredFactory(Runtime)],
+  ['@deepseek-ai/dsh-client-locale', coveredFactory(Locale)],
+  ['@deepseek-ai/dsh-client-ui-theme', coveredFactory(UiTheme)],
+  ['@dsh-chamber/dsh-client-ui-layout', coveredFactory(UiLayout)],
+  ['@dsh-chamber/dsh-client-ui-sidebar', coveredFactory(UiSidebar)],
+  ['@deepseek-ai/dsh-client-ui-settings', coveredFactory(UiSettings)],
+  ['@deepseek-ai/dsh-client-ui-settings-general', coveredFactory(UiSettingsGeneral)],
+  ['@deepseek-ai/dsh-client-ui-settings-models', coveredFactory(UiSettingsModels)],
+  ['@deepseek-ai/dsh-client-ui-settings-plugins', coveredFactory(UiSettingsPlugins)],
+  ['@deepseek-ai/dsh-client-ui-settings-plugin-inventory', coveredFactory(UiSettingsPluginInventory)],
+  ['@deepseek-ai/dsh-client-ui-conversation', coveredFactory(UiConversation)],
+  ['@deepseek-ai/dsh-client-ui-workspace', coveredFactory(UiWorkspace)],
+  ['@deepseek-ai/dsh-client-ui-model-selection', coveredFactory(UiModelSelection)],
+  ['@deepseek-ai/dsh-client-ui-directory-picker-browse', coveredFactory(UiDirectoryPickerBrowse)],
+  ['@dsh-chamber/dsh-client-ui-settings-connections', coveredFactory(UiSettingsConnections)],
+  ['@dsh-chamber/dsh-client-ui-settings-bridge', coveredFactory(UiSettingsBridge)],
+]
+
 /** Factory-form self-registration: body runs once, at materialization. */
 const factory: ClientPluginHandoff['factory'] = () => ({ inject, apply })
 
@@ -261,3 +398,13 @@ if (win.__ModuleLoader__ === undefined) {
   throw new Error('chamber-entry: window.__ModuleLoader__ is not installed (bundle loaded before the boot kernel)')
 }
 win.__ModuleLoader__.load({ id: CHAMBER_APP_ID, factory })
+
+// Union-table completion: register the covered packages' factories (module
+// header). Registration is self-consistent even if the map drifted (each id
+// pairs with its own namespace, and no id can collide — covered ids are never
+// preloaded as extra rows); the map↔list lockstep is enforced in apply()
+// (assertCoveredFactoryLockstep) so a drift fails THIS entry loudly instead
+// of surfacing as a misleading extra-bundle "import failed".
+for (const [id, covered] of COVERED_FACTORIES) {
+  win.__ModuleLoader__.load({ id, factory: covered })
+}

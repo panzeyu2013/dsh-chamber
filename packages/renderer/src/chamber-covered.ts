@@ -24,6 +24,12 @@
  * extra ids are harmless (a covered id absent from a host graph is never
  * filtered).
  *
+ * Lockstep with the union-table factories (chamber-entry.ts COVERED_FACTORIES,
+ * design 09 §3.2): every first-screen family the composite statically imports
+ * registers a module-table factory under its package id — the id must be
+ * covered here, or the composite's own factory registration collides with the
+ * host-graph row's bundle (fail-loud assert at chamber-entry execution).
+ *
  * `@deepseek-ai/cordis` is intentionally absent: it is a type-only import in
  * chamber-entry.ts, never a registered client plugin, and the host graph
  * cannot carry a row for it.
@@ -83,4 +89,43 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // one-declarer rule (ui-slots index.ts:800-803).
   '@deepseek-ai/dsh-client-ui-layout',
   '@deepseek-ai/dsh-client-modules',
+]
+
+/**
+ * The first-screen families the chamber composite bundle statically imports
+ * and registers a module-table factory for (design 09 §3.2 union table,
+ * chamber-entry.ts COVERED_FACTORIES). This leaf list is the TESTABLE contract
+ * behind the map (chamber-entry cannot be imported by the node test runner —
+ * its namespaces resolve to source), kept in the covered module so the CI
+ * lockstep test can assert every factory id is covered:
+ *
+ *   every id here ∈ CHAMBER_COVERED_IDS (else the composite's own factory
+ *   registration collides with the host-graph row's bundle — double register);
+ *   chamber-entry asserts the map matches this list EXACTLY at execution.
+ *
+ * Maintenance: adding a first-screen family = one import + one map row in
+ * chamber-entry.ts + one id here + one id in CHAMBER_COVERED_IDS (the header
+ * discipline), in the same batch.
+ */
+export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
+  '@deepseek-ai/dsh-client-connection',
+  '@deepseek-ai/dsh-typert-registry',
+  '@deepseek-ai/dsh-api-gateway',
+  '@deepseek-ai/dsh-api-remotes',
+  '@deepseek-ai/dsh-client-runtime',
+  '@deepseek-ai/dsh-client-locale',
+  '@deepseek-ai/dsh-client-ui-theme',
+  '@dsh-chamber/dsh-client-ui-layout',
+  '@dsh-chamber/dsh-client-ui-sidebar',
+  '@deepseek-ai/dsh-client-ui-settings',
+  '@deepseek-ai/dsh-client-ui-settings-general',
+  '@deepseek-ai/dsh-client-ui-settings-models',
+  '@deepseek-ai/dsh-client-ui-settings-plugins',
+  '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
+  '@deepseek-ai/dsh-client-ui-conversation',
+  '@deepseek-ai/dsh-client-ui-workspace',
+  '@deepseek-ai/dsh-client-ui-model-selection',
+  '@deepseek-ai/dsh-client-ui-directory-picker-browse',
+  '@dsh-chamber/dsh-client-ui-settings-connections',
+  '@dsh-chamber/dsh-client-ui-settings-bridge',
 ]
