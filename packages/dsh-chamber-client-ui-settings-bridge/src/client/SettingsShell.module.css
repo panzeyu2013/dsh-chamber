@@ -417,3 +417,75 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* ---- chamber-global「更新」section (design 11): low-key, no emphasis ---- */
+
+.updateSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+}
+
+.updateRow {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.updateActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.updateActionRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.updateButton {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 26px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.updateButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.updateButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.updateLink {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.updateLink:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Status transitions (checking → available → downloading → downloaded) are
+   announced to screen readers via this aria-live wrapper. A plain block
+   (NOT display:contents — Chromium does not expose display:contents elements
+   in the accessibility tree, which would make the live region inert). */
+.updateStatus {
+  display: block;
+}

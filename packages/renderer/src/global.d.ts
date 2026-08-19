@@ -255,7 +255,35 @@ export type SshLocalPluginExecIpcResult =
   | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
-/** The full bridge: app info fields + the ssh surface. */
+/**
+ * The desktop update surface (design 11) — non-secret only: versions,
+ * channel, a release-page URL, a short error text. Mirrors
+ * packages/desktop/preload.cts structurally (interface merging).
+ */
+export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'
+
+/** Non-secret update state projection (design 11 §3.2). */
+export interface UpdateState {
+  phase: UpdatePhase
+  currentVersion: string
+  latestVersion: string | null
+  channel: 'stable' | 'beta'
+  downloadPercent: number | null
+  releaseUrl: string | null
+  installBlockedReason: string | null
+  error: string | null
+}
+
+/** window.dshChamber.update — query / subscribe / user-confirmed download. */
+export interface UpdateSurface {
+  state(): Promise<UpdateState>
+  download(): Promise<{ ok: true } | { ok: false; error: string }>
+  onChanged(callback: (state: UpdateState) => void): () => void
+  /** Open a release page in the system browser (main-process allowlisted). */
+  openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
+}
+
+/** The full bridge: app info fields + the ssh surface + the update surface. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshWorkspace: string | null
@@ -263,6 +291,7 @@ export interface DshChamberBridge {
   dshHome: string | null
   version: string | null
   desktopSsh: DesktopSshSurface
+  update: UpdateSurface
 }
 
 declare global {

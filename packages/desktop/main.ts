@@ -27,7 +27,7 @@
  * - Tray (packaged only, defensive), single-instance lock.
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import path, { isAbsolute } from 'node:path';
@@ -40,6 +40,7 @@ import { sshProvider } from './ssh-provider.ts';
 import { configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { createUpdateController } from './updater.ts';
 import { applyPlugins, CLIENT_GRAPH_PACKAGE_NAME, localPluginList, materializeAndAdd, remoteHome, remotePluginList, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
 import type { ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 
@@ -137,6 +138,22 @@ function readDshVersion(workspace: string | null): string | null {
     return manifest.dependencies?.['@deepseek-ai/dsh'] ?? null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
+ * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
+ * startsWith string check) so scheme/host/path-root are pinned exactly.
+ */
+function isAllowedReleaseUrl(raw: unknown): boolean {
+  if (typeof raw !== 'string') return false;
+  try {
+    const url = new URL(raw);
+    return url.origin === 'https://github.com'
+      && url.pathname.startsWith('/panzeyu2013/dsh-chamber/');
+  } catch {
+    return false;
   }
 }
 
@@ -778,6 +795,43 @@ if (!gotTheLock) {
       const result = runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
     }));
+
+    // Update controller (design 11): silent check on a startup delay + 6h
+    // interval; autoDownload=false — checking never downloads, the download
+    // starts ONLY when the user clicks「更新」in the settings update section
+    // (dsh-chamber:update-download). Install is deferred to quit
+    // (autoInstallOnAppQuit): no dialog, no mid-session interruption. The
+    // state projection is non-secret only (versions / channel / release URL /
+    // short error text) and every failure is silent (main-process log), never
+    // blocking startup — the settings section renders the honest state.
+    const updater = createUpdateController({
+      version,
+      logger: {
+        log: (...args) => console.log('[updater]', ...args),
+        warn: (...args) => console.warn('[updater]', ...args),
+        error: (...args) => console.error('[updater]', ...args),
+      },
+    });
+    updater.subscribe((updateState) => {
+      if (mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('dsh-chamber:update-state-changed', updateState);
+      }
+    });
+    ipcMain.handle('dsh-chamber:update-state', trustedIpc(() => updater.state()));
+    ipcMain.handle('dsh-chamber:update-download', trustedIpc(() => updater.download()));
+    // The settings update section's「前往下载页」link: popups are denied and
+    // navigation is pinned to the control-plane origin, so opening a release
+    // page must go through the main process. Strict allowlist — parsed, not
+    // prefix-string matched: only this repo's GitHub pages can ever be opened
+    // (never an arbitrary URL, subdomain, userinfo or path-root trick).
+    ipcMain.handle('dsh-chamber:open-release', trustedIpc(({ url }) => {
+      if (!isAllowedReleaseUrl(url)) {
+        return { ok: false, error: 'url not allowed' };
+      }
+      void shell.openExternal(url).catch(err => console.error('[dsh-chamber] 打开下载页失败：', err));
+      return { ok: true };
+    }));
+    updater.start();
 
     // Single frame, single origin: the control plane serves the built dsh
     // frontend (design 05 §1) — no local file loads. A load failure is a

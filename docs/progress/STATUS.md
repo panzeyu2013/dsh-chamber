@@ -32,8 +32,15 @@
   无 UI 信号（可观测性待补）。
 - **侧边栏聚合改事件驱动（设计 10）**：实现未排期——改动 05 §3 契约，需评审确认；详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
-- **桌面端更新提示（设计 11，无弹窗、低打扰：settings 部分展示，用户确认后下载、退出时安装，双平台一致）**：实现未排期；详见
-  `docs/todo/11-todo-auto-update.md`。
+- **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程
+  `updater.ts`（electron-updater，autoDownload=false + 退出时安装 + 静默失败日志 +
+  mac 安装腿 `installBlockedReason` 探测）、preload `update` IPC 面、settings 壳
+  chamber 全局「更新」入口（`__update` + `UpdateSection`，zh/en）、desktop build
+  配置（publish/mac zip/differentialPackage）、release.yml 双 leg 更新产物
+  （`--publish=always` + GH_TOKEN；channel 由版本 prerelease 后缀推导）、
+  `DSH_CHAMBER_UPDATE_CHANNEL=beta`。设计见 `docs/design/11-auto-update.md`
+  （2026-08 自 docs/todo/ 移入）。剩余：mac 安装腿需 Developer ID 签名（未配置 →
+  settings 响亮提示手动安装）、release CI 上传路径实测、双平台实机检查/下载/退出安装。
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游 wire 根治）；
   实现未排期；详见 `docs/todo/12-todo-archived-sessions.md`。
 - **设计未决**（02 §5 / 04 §7）：starting port 偏移、trusted-host 自定义 Host、多控制面

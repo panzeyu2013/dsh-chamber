@@ -245,6 +245,31 @@ export interface DesktopSshSurface {
   onInstancesChanged(callback: () => void): () => void
 }
 
+/** Update lifecycle phase (design 11 §3.2). `up-to-date` = a check ran and
+ *  found nothing newer (distinct from `idle`, which means not checked yet). */
+export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'
+
+/** Non-secret update state projection (design 11 §3.2). */
+export interface UpdateState {
+  phase: UpdatePhase
+  currentVersion: string
+  latestVersion: string | null
+  channel: 'stable' | 'beta'
+  downloadPercent: number | null
+  releaseUrl: string | null
+  installBlockedReason: string | null
+  error: string | null
+}
+
+/** window.dshChamber.update — query / subscribe / user-confirmed download. */
+export interface UpdateSurface {
+  state(): Promise<UpdateState>
+  download(): Promise<{ ok: true } | { ok: false; error: string }>
+  onChanged(callback: (state: UpdateState) => void): () => void
+  /** Open a release page in the system browser (main-process allowlisted). */
+  openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
+}
+
 declare global {
   /**
    * Structurally mirrors renderer/src/global.d.ts's DshChamberBridge so the
@@ -259,6 +284,7 @@ declare global {
       dshHome: string | null
       version: string | null
       desktopSsh: DesktopSshSurface
+      update: UpdateSurface
     }
   }
 }

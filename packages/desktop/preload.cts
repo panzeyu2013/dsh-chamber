@@ -1,6 +1,7 @@
 import type { IpcRendererEvent } from 'electron';
 import type { SshInstanceInput, SshInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
+import type { UpdateState } from './updater.ts';
 
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -148,7 +149,22 @@ export type SshLocalPluginExecIpcResult =
   | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
-/** The full bridge: app info fields + the ssh surface. */
+/**
+ * The dsh-chamber update surface (design 11) — non-secret only: versions,
+ * channel, a release-page URL, a short error text. state() resolves the
+ * current snapshot; onChanged subscribes to the main-process push and
+ * returns an unsubscribe; download() is the user-confirmed download action
+ * (the「更新」button) — checking itself never downloads (autoDownload=false).
+ */
+export interface UpdateSurface {
+  state(): Promise<UpdateState>
+  download(): Promise<{ ok: true } | { ok: false; error: string }>
+  onChanged(callback: (state: UpdateState) => void): () => void
+  /** Open a release page in the system browser (main-process allowlisted). */
+  openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
+}
+
+/** The full bridge: app info fields + the ssh surface + the update surface. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshWorkspace: string | null
@@ -156,6 +172,7 @@ export interface DshChamberBridge {
   dshHome: string | null
   version: string | null
   desktopSsh: DesktopSshSurface
+  update: UpdateSurface
 }
 
 /**
@@ -204,6 +221,25 @@ function desktopSshApi(): DesktopSshSurface {
 }
 
 /**
+ * The dsh-chamber:update-* IPC surface (design 11) — non-secret only.
+ * onStateChanged subscribes to the main-process push and returns an
+ * unsubscribe; download() is the user-confirmed download action.
+ */
+function updateApi(): UpdateSurface {
+  return {
+    state: () => ipcRenderer.invoke('dsh-chamber:update-state'),
+    download: () => ipcRenderer.invoke('dsh-chamber:update-download'),
+    openReleasePage: url => ipcRenderer.invoke('dsh-chamber:open-release', { url }),
+    onChanged: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, state: UpdateState) => callback(state);
+      ipcRenderer.on('dsh-chamber:update-state-changed', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:update-state-changed', listener);
+    },
+  };
+}
+
+/**
  * Fetch the app-info payload for the bridge. The main-process IPC sender
  * fence (design 05 §7.4) may reject a bootstrap invoke fired before the main
  * frame has committed its trusted URL (senderFrame/URL timing during initial
@@ -240,6 +276,7 @@ requestAppInfo().then(
       dshHome: info?.dshHome,
       version: info?.version,
       desktopSsh: desktopSshApi(),
+      update: updateApi(),
     });
   },
   (err: unknown) => {
@@ -251,6 +288,7 @@ requestAppInfo().then(
       dshHome: null,
       version: null,
       desktopSsh: desktopSshApi(),
+      update: updateApi(),
     });
   },
 );

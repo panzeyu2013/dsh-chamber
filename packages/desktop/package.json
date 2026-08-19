@@ -14,7 +14,8 @@
     "dist:win": "electron-builder --win --x64"
   },
   "dependencies": {
-    "@dsh-chamber/control-plane": "workspace:^"
+    "@dsh-chamber/control-plane": "workspace:^",
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "electron": "43.4.0",
@@ -30,6 +31,7 @@
     "files": [
       "main.ts",
       "preload.cts",
+      "updater.ts",
       "transport-provider.ts",
       "transport-manager.ts",
       "ssh-provider.ts",
@@ -63,7 +65,8 @@
     "mac": {
       "icon": "resources/icon.icns",
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ],
       "category": "public.app-category.developer-tools"
     },
@@ -77,9 +80,16 @@
       ]
     },
     "nsis": {
-      "differentialPackage": false,
+      "differentialPackage": true,
       "useZip": true
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "panzeyu2013",
+        "repo": "dsh-chamber"
+      }
+    ],
     "linux": {
       "icon": "resources/icons",
       "target": [

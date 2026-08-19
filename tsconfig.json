@@ -25,6 +25,7 @@
     "packages/renderer/src/**/*.tsx",
     "packages/desktop/main.ts",
     "packages/desktop/preload.cts",
+    "packages/desktop/updater.ts",
     "packages/desktop/transport-provider.ts",
     "packages/desktop/transport-manager.ts",
     "packages/desktop/transport-manager.test.ts",

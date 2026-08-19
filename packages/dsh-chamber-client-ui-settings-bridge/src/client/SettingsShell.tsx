@@ -22,11 +22,12 @@ import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent
 import clsx from 'clsx'
 import {
   IconAgentPresetOutline16, IconCloseOutline16, IconDataOutline16, IconLinkOutline16,
-  IconLoadingOutline16, IconPersonalizationOutline16, IconSettingsOutline14, IconSettingsOutline16,
+  IconLoadingOutline16, IconPersonalizationOutline16, IconRefreshOutline16, IconSettingsOutline14, IconSettingsOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/src/client/ConnectionsSection.tsx'
+import { UpdateSection } from './UpdateSection.tsx'
 import {
   getServers, subscribeServers, type BridgeServerRow,
 } from './bridge-servers.ts'
@@ -41,8 +42,8 @@ import css from './SettingsShell.module.css'
 
 /** Registration-side business face for the chamber settings shell. */
 export interface SettingsShellInjected {
-  /** Bound translate over the shell's own dictionary namespace. */
-  t: (key: SettingsBridgeKey) => string
+  /** Bound translate over the shell's own dictionary namespace ({param} interpolation supported). */
+  t: (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
   /** Bound translate over the connections section's dictionary ('dsh-chamber.settings.connections'). */
   connectionsT: (key: string) => string
   /** The hosting boot's instance id ('local' | 'ssh-<id>'), when known. */
@@ -63,6 +64,13 @@ const LOCAL_INSTANCE_ID = 'local'
  * server, so it lives OUTSIDE the child-context section ids.
  */
 const CONNECTIONS_SECTION_ID = '__connections'
+
+/**
+ * The fixed update nav id (design 11): the app-level update status is
+ * chamber-global (one desktop app, not any server's config) — the second
+ * fixed entry below the divider, independent of the selected server.
+ */
+const UPDATE_SECTION_ID = '__update'
 
 /**
  * Per-selection session-mount retry ledger: `failures` counts consecutive
@@ -265,7 +273,7 @@ function SettingsPanel({
   onClose: () => void
   onSelectServer: (id: string, connected: boolean, isLocal: boolean) => void
   chamberInstanceId: string | undefined
-  t: (key: SettingsBridgeKey) => string
+  t: (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
   connectionsT: (key: string) => string
 }) {
   const titleId = useId()
@@ -307,10 +315,13 @@ function SettingsPanel({
     [selectedSession, sectionVersion, localeRevision],
   )
   // Active falls back to the first row when a section left the ledger; the
-  // connections id is global and stays valid regardless of the server.
+  // chamber-global ids (connections / update) stay valid regardless of the
+  // selected server.
   const active = activeId === CONNECTIONS_SECTION_ID
     ? CONNECTIONS_SECTION_ID
-    : activeId !== undefined && rows.some(row => row.id === activeId) ? activeId : rows[0]?.id
+    : activeId === UPDATE_SECTION_ID
+      ? UPDATE_SECTION_ID
+      : activeId !== undefined && rows.some(row => row.id === activeId) ? activeId : rows[0]?.id
   const selected = servers.find(server => server.id === selectedId)
 
   return (
@@ -352,6 +363,16 @@ function SettingsPanel({
               <IconLinkOutline16 className={css.navIcon} size={16} />
               <span className={css.navLabel}>{t('connectionsNav')}</span>
             </button>
+            <button
+              key={UPDATE_SECTION_ID}
+              type="button"
+              className={clsx(css.navCell, active === UPDATE_SECTION_ID && css.active)}
+              aria-current={active === UPDATE_SECTION_ID ? 'true' : undefined}
+              onClick={() => onSelectSection(UPDATE_SECTION_ID)}
+            >
+              <IconRefreshOutline16 className={css.navIcon} size={16} />
+              <span className={css.navLabel}>{t('updateNav')}</span>
+            </button>
           </div>
         </nav>
         <div className={css.content}>
@@ -390,6 +411,10 @@ function SettingsPanel({
               /* Chamber-global connection management: independent of the
                  selected server (never refetched on server switch). */
               <ConnectionsSection t={connectionsT} />
+            ) : active === UPDATE_SECTION_ID ? (
+              /* Chamber-global update status (design 11): app-level, low-key,
+                 independent of the selected server. */
+              <UpdateSection t={t} />
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (

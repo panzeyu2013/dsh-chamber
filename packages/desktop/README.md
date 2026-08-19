@@ -4,7 +4,8 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 
 ## 目录
 
-- `main.ts` — Electron 主进程：单窗口单 frame（`loadURL` 控制面 origin）、`createControlPlane`、transport-manager + ssh provider、IPC
+- `main.ts` — Electron 主进程：单窗口单 frame（`loadURL` 控制面 origin）、`createControlPlane`、transport-manager + ssh provider、IPC、更新控制器接线（updater.ts）
+- `updater.ts` — 更新控制器（设计 11）：electron-updater（github provider）静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
 - `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 传输 argv / stderr 分类 / 可选 exec；direct-endpoint 直连模式）
 - `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 两段式重连（快速有界 jitter 退避突发 + 慢速周期重探）+ 环形日志 + 子进程监督 + 非秘密投影
@@ -65,10 +66,11 @@ pnpm run dist:desktop
 
 ### electron-builder 配置要点（packages/desktop/package.json 的 `build` 键）
 
-- `files` 只收 main.ts/preload.cts/transport-provider.ts/transport-manager.ts/ssh-provider.ts/ssh-config.ts/dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经 `extraResources`（`from: "vendor", to: "vendor"`）拷入 `Contents/Resources/vendor/dsh`。
+- `files` 只收 main.ts/preload.cts/updater.ts/transport-provider.ts/transport-manager.ts/ssh-provider.ts/ssh-config.ts/renderer-trust.ts/plugin-sync.ts/package.json/dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经 `extraResources`（`from: "vendor", to: "vendor"`）拷入 `Contents/Resources/vendor/dsh`。
 - 注意：electron-builder 硬编码过滤**拷贝树根目录的 node_modules**，因此不能直接 `from: "vendor/dsh"`；上移一层用 `from: "vendor"` 后 node_modules 成为子树、可被完整拷贝（含 pnpm 内部符号链接）。
 - `electronLanguages: ["en-US", "zh-CN"]` 裁剪 locales。
-- macOS 产物未签名/未公证（本地自用可直接运行；分发给他人需自行签名 + 公证）。
+- **更新 feed（设计 11 §6）**：`publish` 配 github provider（owner/repo）；mac target 增加 `zip`（electron-updater mac 需要 zip，dmg 保留首装）；`nsis.differentialPackage: true`（win 差分 blockmap）；channel 由 electron-builder 从版本 semver prerelease 后缀自动推导（`0.2.0` → latest.yml，`0.2.0-beta.1` → beta.yml）——`--publish=never` 不生成 update-info yml，发布必须走 `--publish`（release.yml 以 GH_TOKEN 执行）。
+- macOS 产物未签名/未公证（本地自用可直接运行；分发给他人需自行签名 + 公证）——**macOS 自动安装（退出时安装）硬依赖 Developer ID 签名**（Squirrel.Mac），未配置时更新停留在「已下载」并在 settings 响亮提示手动安装（设计 11 §3.1）。
 
 ## 主进程
 
@@ -119,10 +121,14 @@ pnpm run dist:desktop
 | `desktop_ssh_status` | invoke | 非秘密状态投影 `{kind, phase, localPort, sshPort, remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}` |
 | `desktop_ssh_logs` / `desktop_ssh_logs_clear` | invoke | 环形日志读取/清空 |
 | `desktop_ssh_start_service` / `stop_service` / `is_active` | invoke | 远端 systemctl 起停/查询 |
+| `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影 |
+| `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作：触发后台下载（`autoDownload=false`，不点击永不下载）；`{ok}` 或 `{error}` |
+| `dsh-chamber:open-release` | invoke | 「前往下载页」：经主进程 `shell.openExternal` 打开，仅允许本仓库 GitHub 页（严格白名单） |
+| `dsh-chamber:update-state-changed` | 主进程推送 | 更新状态变化（检查/下载/就绪/失败），renderer 订阅刷新 settings「更新」部分 |
 | `desktop_ssh_status_changed` | 主进程推送 | 状态变化事件 `{id, status}` |
 | `desktop_ssh_instances_changed` | 主进程推送 | 注册表增删改后触发（renderer 重拉 roster；另有 30s 轮询兜底） |
 
-preload 暴露 `window.dshChamber = {controlPlaneUrl, dshWorkspace, dshVersion, dshHome, version, desktopSsh}`。
+preload 暴露 `window.dshChamber = {controlPlaneUrl, dshWorkspace, dshVersion, dshHome, version, desktopSsh, update}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
 
 ### 退出 / 单实例 / 错误处理
 

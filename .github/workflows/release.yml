@@ -2,18 +2,27 @@ name: Release
 
 # Tag-triggered (v*) or manual (workflow_dispatch) desktop release, modeled
 # on OpenChamber's release.yml: an ubuntu job creates a draft GitHub Release
-# first, per-platform jobs upload their artifacts into it, and a finalize job
-# flips the draft to public. macOS v1 ships arm64 ONLY: macos-13, the last
-# public Intel x64 runner, was retired by GitHub — its matrix leg stuck
-# queued forever in every v0.1.0 run (Intel Macs are unsupported in v1, see
-# STATUS.md). Windows builds on windows-2022 (windows-latest's VS 18
-# toolchain is not detected correctly by the node-gyp stack — same finding as
-# OpenChamber). No Apple Developer ID / notarization secrets are configured:
-# the macOS app is ad-hoc signed by the afterPack hook (structurally valid
-# signature, so no "app is damaged" on Gatekeeper-relaxed systems; a default
-# Gatekeeper still requires right-click/open or "allow anywhere"), the
-# Windows exe goes out unsigned. Each platform ships only its installer —
-# no zip/blockmap sidecars.
+# first, per-platform jobs build and PUBLISH their artifacts into it
+# (electron-builder --publish with GH_TOKEN — this is what generates and
+# uploads the update feed, see below), and a finalize job flips the draft to
+# public. Since design 11 (desktop auto-update) each platform also ships its
+# UPDATE FEED: Windows uploads the NSIS exe + blockmap + latest.yml (beta.yml
+# for beta), macOS uploads the dmg + zip + latest-mac.yml (beta-mac.yml for
+# beta) — the feed files electron-updater's github provider consumes. The
+# channel is derived by electron-builder from the VERSION's semver prerelease
+# tag (0.2.0 → latest.yml; 0.2.0-beta.1 → beta.yml); a beta release is
+# additionally created as a GitHub prerelease. macOS v1 ships arm64 ONLY:
+# macos-13, the last public Intel x64 runner, was retired by GitHub — its
+# matrix leg stuck queued forever in every v0.1.0 run (Intel Macs are
+# unsupported in v1, see STATUS.md). Windows builds on windows-2022
+# (windows-latest's VS 18 toolchain is not detected correctly by the node-gyp
+# stack — same finding as OpenChamber). No Apple Developer ID / notarization
+# secrets are configured: the macOS app is ad-hoc signed by the afterPack hook
+# (structurally valid signature, so no "app is damaged" on Gatekeeper-relaxed
+# systems; a default Gatekeeper still requires right-click/open or "allow
+# anywhere"), the Windows exe goes out unsigned — its auto-install proceeds
+# with a SmartScreen warning (documented tradeoff, design 11 §7); the macOS
+# INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
 
 on:
   push:
@@ -22,11 +31,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.1.0)'
+        description: 'Version to release — MUST equal packages/desktop/package.json version (and the sibling chamber packages). Beta = a semver prerelease suffix (e.g. 0.2.0-beta.1): electron-builder derives the beta.yml/beta-mac.yml feed from it and the release is marked prerelease.'
         required: true
         type: string
       dry_run:
-        description: 'Dry run (skip publishing)'
+        description: 'Dry run (skip publishing — build-only; note: an empty draft release is still created)'
         required: false
         default: false
         type: boolean
@@ -59,12 +68,35 @@ jobs:
             echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Assert version matches package.json
+        # electron-builder uploads to tag v<BUILT version> (from
+        # packages/desktop/package.json), and the softprops draft above uses
+        # tag v<workflow version> — a mismatch would silently redirect every
+        # artifact to a phantom v<package.json version> draft and finalize an
+        # EMPTY release. Fail fast: the developer bumps the chamber packages
+        # (design 11 §8: root/desktop/control-plane/renderer/cli) before
+        # releasing, so the input version must equal the desktop version.
+        run: |
+          PKG_VERSION=$(node -p "require('./packages/desktop/package.json').version")
+          VERSION="${{ steps.get_version.outputs.version }}"
+          if [[ "$VERSION" != "$PKG_VERSION" ]]; then
+            echo "::error::release version ${VERSION} != desktop package.json version ${PKG_VERSION} — bump packages/desktop/package.json (and the sibling chamber packages) to match before releasing"
+            exit 1
+          fi
+          echo "release version ${VERSION} matches package.json ✓"
+
       - name: Create GitHub Release (draft)
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
           draft: true
+          # Prerelease derived from the VERSION's semver prerelease suffix
+          # (v0.2.0-beta.1 → prerelease). Deriving from the workflow input
+          # would be empty on tag-push and could publish a beta feed to a
+          # non-prerelease release — which stable clients would then treat as
+          # the latest and 404 on latest.yml.
+          prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
           generate_release_notes: true
           name: dsh-chamber v${{ steps.get_version.outputs.version }}
         env:
@@ -100,10 +132,17 @@ jobs:
         # electron-builder runs the afterPack hook
         # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
         # signs the bundle before the dmg is built (no Apple signing /
-        # notarization secrets are configured).
+        # notarization secrets are configured). publish=always (unless
+        # dry_run) uploads every artifact into the draft release created
+        # above — INCLUDING the update feed (zip + latest-mac.yml /
+        # beta-mac.yml) that electron-updater consumes (design 11 §6):
+        # update-info files are only generated when a publish policy other
+        # than "never" is active.
         run: |
           pnpm run build:desktop
-          pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=never
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
         # No Apple Developer ID / notarization secrets are configured; the
@@ -112,7 +151,8 @@ jobs:
         # download as "damaged"). Verify the parts that must be right
         # regardless: the .app bundle exists, its signature verifies, the
         # darwin dsh runtime is baked in (extraResources vendor), and
-        # artifacts were made.
+        # artifacts — including the update feed (zip + channel yml) when not
+        # dry-running — were made.
         run: |
           set -euo pipefail
           APP_DIR=$(find packages/desktop/release -maxdepth 2 -name "*.app" -type d | head -n 1)
@@ -123,14 +163,10 @@ jobs:
           test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('darwin-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.dmg 2>/dev/null | head -n 1)"
-
-      - name: Upload macOS artifacts to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.create-release.outputs.version }}
-          files: packages/desktop/release/*.dmg
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            test -n "$(ls packages/desktop/release/*.zip 2>/dev/null | head -n 1)"
+            test -n "$(ls packages/desktop/release/*-mac.yml 2>/dev/null | head -n 1)"
+          fi
 
   build-windows:
     needs: create-release
@@ -161,11 +197,15 @@ jobs:
         shell: bash
         run: |
           pnpm run build:desktop
-          pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify packaged Windows app (OpenChamber-style, unsigned)
         # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
-        # and that the win32 dsh runtime made it into the unpacked app.
+        # and that the win32 dsh runtime made it into the unpacked app. When
+        # not dry-running, also assert the UPDATE FEED (design 11 §6): the
+        # NSIS blockmap + channel yml electron-updater consumes.
         shell: bash
         run: |
           set -euo pipefail
@@ -175,14 +215,10 @@ jobs:
           test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('win32-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.exe 2>/dev/null | head -n 1)"
-
-      - name: Upload Windows artifacts to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.create-release.outputs.version }}
-          files: packages/desktop/release/*.exe
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            test -n "$(ls packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
+            test -f packages/desktop/release/latest.yml -o -f packages/desktop/release/beta.yml
+          fi
 
   finalize-release:
     needs: [create-release, build-macos, build-windows]
