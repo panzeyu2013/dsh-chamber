@@ -33,6 +33,31 @@ export interface ChamberSidebarViewPrefs {
    */
   orderBy?: Record<string, SessionOrderBy>
   /**
+   * Updated-mode session order accounts (design 06 §3.1, 2026-08 alignment
+   * with the official ui-workspace sessionOrderByAccount): key =
+   * `${sourceId}/${workspaceId}` — real workspaces AND the synthetic
+   * ungrouped bucket (its id is UNGROUPED_WORKSPACE_ID). Each account holds
+   * the updated-mode display baseline: seeded from the wire order on the
+   * first observation, mutated by in-mode drags (persisted locally, no wire
+   * commit — official「updated 下拖拽只落 account」) and by the activity
+   * promotion (`nextUpdatedOrder`). manual mode ignores it (wire/stored
+   * orders take over). OPTIONAL — absent for sources that never entered
+   * updated mode; pruned by the same safe source-vanished rule as
+   * orderBy/ungroupedOrder.
+   */
+  updatedOrder?: Record<string, string[]>
+  /**
+   * Updated-mode activity bookkeeping (2026-08 alignment, official
+   * sessionUpdatedAtByAccount): key = the same `${sourceId}/${workspaceId}`
+   * account key, value = sessionId → last observed updatedAt. The promotion
+   * derives from it ("updated since the last observation → pinned to top");
+   * the sidebar's setOrderBy clears a source's entries when entering
+   * updated, which makes the next derivation do ONE full recency sort
+   * (official switchedToUpdated). Written together with updatedOrder by the
+   * derivation effect. OPTIONAL; pruned with the account keys.
+   */
+  sessionUpdatedAtByAccount?: Record<string, Record<string, number>>
+  /**
    * Page-wide sidebar width preference in px (design 06, chamber ui-layout
    * fork — 2026-08): the chamber layout store persists every drag (clamped
    * into the vendor [SIDEBAR_MIN, SIDEBAR_MAX] drag range, columns.ts) here,
@@ -79,7 +104,7 @@ export const VIEW_PREFS_KEY = 'dsh-chamber.sidebar.v1'
  * post-reset cache (2026-08 audit nit).
  */
 function defaults(): ChamberSidebarViewPrefs {
-  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] }
+  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -109,6 +134,27 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       if (value === 'manual' || value === 'updated') orderBy[key] = value
     }
   }
+  // updatedOrder：account 键（`${sourceId}/${workspaceId}`）→ string[]；
+  // 非法条目（非数组/含非字符串）丢弃，与 ungroupedOrder 同规则。
+  const updatedOrder: Record<string, string[]> = {}
+  if (isPlainObject(raw.updatedOrder)) {
+    for (const [key, value] of Object.entries(raw.updatedOrder)) {
+      if (Array.isArray(value)) updatedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
+    }
+  }
+  // sessionUpdatedAtByAccount：account 键 → sessionId → 有限数值时间戳；
+  // 嵌套层逐级校验，非法条目丢弃。
+  const sessionUpdatedAtByAccount: Record<string, Record<string, number>> = {}
+  if (isPlainObject(raw.sessionUpdatedAtByAccount)) {
+    for (const [key, value] of Object.entries(raw.sessionUpdatedAtByAccount)) {
+      if (!isPlainObject(value)) continue
+      const timestamps: Record<string, number> = {}
+      for (const [id, at] of Object.entries(value)) {
+        if (typeof at === 'number' && Number.isFinite(at)) timestamps[id] = at
+      }
+      sessionUpdatedAtByAccount[key] = timestamps
+    }
+  }
   // sidebarWidth：仅接受有限数值，钳到厂商侧边栏拖动范围 [264, 420]（即
   // @deepseek-ai/dsh-client-ui-layout columns.ts 的 SIDEBAR_MIN/SIDEBAR_MAX
   // 契约固定点，含与 vendor clampWidth 一致的取整）；非数值/非有限值
@@ -130,6 +176,8 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
     folded,
     ungroupedOrder,
     orderBy,
+    updatedOrder,
+    sessionUpdatedAtByAccount,
     ...(sidebarWidth !== undefined ? { sidebarWidth } : {}),
     seenSources,
   }
@@ -248,6 +296,8 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   const folded = { ...prefs.folded }
   const ungroupedOrder = { ...prefs.ungroupedOrder }
   const orderBy = { ...prefs.orderBy }
+  const updatedOrder = { ...prefs.updatedOrder }
+  const sessionUpdatedAtByAccount = { ...prefs.sessionUpdatedAtByAccount }
   let changed = false
   for (const key of Object.keys(folded)) {
     const slash = key.indexOf('/')
@@ -271,13 +321,61 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
       changed = true
     }
   }
+  // updatedOrder / sessionUpdatedAtByAccount 与 folded 同为
+  // `${sourceId}/${workspaceId}` 键：同样只裁「本会话见过、现已消失」的来源；
+  // 断连来源的更新模式序/簿记保留（重连后 promotion 继续，不重播种）。
+  for (const key of Object.keys(updatedOrder)) {
+    const slash = key.indexOf('/')
+    const sourceId = slash === -1 ? undefined : key.slice(0, slash)
+    if (knownGone(sourceId)) {
+      delete updatedOrder[key]
+      changed = true
+    }
+  }
+  for (const key of Object.keys(sessionUpdatedAtByAccount)) {
+    const slash = key.indexOf('/')
+    const sourceId = slash === -1 ? undefined : key.slice(0, slash)
+    if (knownGone(sourceId)) {
+      delete sessionUpdatedAtByAccount[key]
+      changed = true
+    }
+  }
   if (!changed && prefs.seenSources.length === seen.length && prefs.seenSources.every((id, i) => id === seen[i])) {
     return prefs
   }
   // The rebuild reconstructs from a fixed field list — carry sidebarWidth
   // (and any other optional field) explicitly so a write that prunes or
   // records a seen source never drops the persisted width preference.
-  return { v: 1, folded, ungroupedOrder, orderBy, sidebarWidth: prefs.sidebarWidth, seenSources: seen }
+  return {
+    v: 1, folded, ungroupedOrder, orderBy, updatedOrder, sessionUpdatedAtByAccount,
+    sidebarWidth: prefs.sidebarWidth, seenSources: seen,
+  }
+}
+
+/**
+ * Drop one source's activity-bookkeeping entries (updated-mode promotion
+ * bookkeeping, keyed `${sourceId}/…`). PURE — returns the SAME reference when
+ * nothing was removed (the caller can skip the write) and `undefined` for an
+ * absent map. Used by the sidebar's setOrderBy on entering updated mode so the
+ * next derivation does ONE full recency sort (official switchedToUpdated)
+ * while the retained updatedOrder accounts are re-sorted, not re-seeded.
+ */
+export function clearSourceBookkeeping(
+  bookkeeping: Readonly<Record<string, Record<string, number>>> | undefined,
+  sourceId: string,
+): Record<string, Record<string, number>> | undefined {
+  if (bookkeeping === undefined) return undefined
+  const prefix = `${sourceId}/`
+  let touched = false
+  const next: Record<string, Record<string, number>> = {}
+  for (const [key, value] of Object.entries(bookkeeping)) {
+    if (key.startsWith(prefix)) {
+      touched = true
+      continue
+    }
+    next[key] = value
+  }
+  return touched ? next : bookkeeping
 }
 
 /**

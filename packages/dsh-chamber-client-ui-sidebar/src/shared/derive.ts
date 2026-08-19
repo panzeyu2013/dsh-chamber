@@ -333,12 +333,12 @@ export function runtimeReportSignature(
  * Render-relevant projection signature of the merged multi-source projection.
  * Covers everything the sidebar (and the settings bridge) actually renders —
  * and nothing else:
- * - session rows carry id/title/running/blank only. `updatedAt` is NOT part
- *   of it: the sidebar renders no time cell, and the only visible effect of
- *   updatedAt (the ungrouped bucket's byRecency sort) is already materialized
- *   as the projection's row ORDER, captured positionally. A future time cell
- *   must re-add it here. (The aggregate-level instanceSnapshotSignature keeps
- *   updatedAt — it is the byRecency data source.)
+ * - session rows carry id/title/running/blank/updatedAt. `updatedAt` IS part
+ *   of it since the 2026-08 updated-mode alignment (updated = manual order +
+ *   activity promotion, design 06 §3.1): a session's last-activity tick
+ *   re-publishes the projection, and the sidebar's per-account derivation
+ *   promotes the session — a pure recency re-sort is NOT materialized into
+ *   the row order anymore, so the old exclusion rationale no longer holds.
  * - the runtime portion is restricted to sessions visible in the projection
  *   (hidden sessions' facts never re-render the list).
  * The App layer gates chamberBridge.publish on this signature — a poll tick
@@ -383,6 +383,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           title: x.title,
           running: x.running === true,
           blank: x.blank === true,
+          // 2026-08: render-relevant since updated = manual + activity
+          // promotion (the ordering derives from it in the sidebar).
+          updatedAt: x.updatedAt ?? null,
         })),
       })),
     }
@@ -525,35 +528,95 @@ function byRecency(
 export type SessionOrderBy = 'manual' | 'updated'
 
 /**
- * Sort one workspace's sessions by the per-source ordering preference
- * (design 06 §3.1): manual = the given order as-is (wire membership order, or
- * an override the caller already applied via reconciledSessionOrder); updated =
- * recency descending with the byRecency tiebreak (missing updatedAt sorts as
- * 0). PURE — always returns a fresh array, never mutates the input.
+ * Recency-sort an id array by the sessions' updatedAt (newest first, id
+ * ascending tiebreak; missing updatedAt sorts as 0). PURE.
  */
-export function sortWorkspaceSessions<T extends { id: string; updatedAt?: number }>(
-  sessions: readonly T[],
-  orderBy: SessionOrderBy,
-): T[] {
-  if (orderBy === 'updated') {
-    return [...sessions].sort((a, b) => compareRecency(a.id, a.updatedAt, b.id, b.updatedAt))
-  }
-  return [...sessions]
+function sortIdsByRecency<T extends { id: string; updatedAt?: number }>(
+  ids: readonly string[],
+  byId: ReadonlyMap<string, T>,
+): string[] {
+  return [...ids].sort((a, b) => compareRecency(a, byId.get(a)?.updatedAt, b, byId.get(b)?.updatedAt))
 }
 
 /**
- * Ungrouped-bucket order resolution (P2-9 extracted, PURE): updated mode sorts
- * by recency (ignoring the stored order — updated ordering takes over, same as
- * real workspaces); manual mode uses the stored order via reconciledSessionOrder
- * (stored ids first, unknown ids appended in wire order), and returns the wire
- * order as-is when no stored order exists.
+ * One session order account's next updated-mode derivation — the official
+ * ui-workspace `nextSessionOrderAccount` port (design 06 §3.1, 2026-08 C档
+ * alignment: updated = manual order + activity promotion, no longer a pure
+ * recency re-sort). For a given wire membership the account keeps a stored
+ * order (`updatedOrder[accountKey]`) plus last-observed timestamps
+ * (`sessionUpdatedAtByAccount[accountKey]`), both written back together:
+ *
+ * - baseline = stored order reconciled with the current membership (stored
+ *   ids first, new wire ids appended in wire order), or the wire order when
+ *   the account has never been observed;
+ * - NO bookkeeping yet (first observation, or the user just switched into
+ *   updated — the menu action clears the source's bookkeeping, the official
+ *   `switchedToUpdated` trigger): ONE full recency sort;
+ * - otherwise PROMOTE the sessions whose updatedAt increased since the last
+ *   observation (or was never observed) to the top, recency-sorted among
+ *   themselves, keeping every other session in baseline order — a promoted
+ *   session stays pinned at its promoted position until a newer promotion or
+ *   a manual drag supersedes it (official behavior, persisted through the
+ *   account order).
+ *
+ * PURE. `changed` = the stored order or the timestamps differ from the given
+ * stored state (the caller persists both together, diff-guarded).
+ */
+export function nextUpdatedOrder<T extends { id: string; updatedAt?: number }>({
+  sessionIds,
+  stored,
+  previousUpdatedAt,
+  byId,
+}: {
+  sessionIds: readonly string[]
+  stored: readonly string[] | undefined
+  previousUpdatedAt: Readonly<Record<string, number>> | undefined
+  byId: ReadonlyMap<string, T>
+}): { order: string[]; updatedAt: Record<string, number>; changed: boolean } {
+  const baseline = stored === undefined
+    ? [...sessionIds]
+    : reconciledSessionOrder(stored, sessionIds)
+  let order = baseline
+  if (previousUpdatedAt === undefined) {
+    // First observation / just switched in: full recency sort (official
+    // `previousOrder === undefined || switchedToUpdated`).
+    order = sortIdsByRecency(baseline, byId)
+  } else {
+    const promoted = sessionIds
+      .filter((id) => {
+        const session = byId.get(id)
+        const previous = previousUpdatedAt[id]
+        return session !== undefined && (previous === undefined || (session.updatedAt ?? 0) > previous)
+      })
+    if (promoted.length > 0) {
+      const promotedSet = new Set(sortIdsByRecency(promoted, byId))
+      order = [...promotedSet, ...baseline.filter(id => !promotedSet.has(id))]
+    }
+  }
+  const updatedAt: Record<string, number> = {}
+  for (const id of sessionIds) {
+    const session = byId.get(id)
+    if (session !== undefined && session.updatedAt !== undefined) updatedAt[id] = session.updatedAt
+  }
+  const orderChanged = stored === undefined
+    || order.length !== stored.length
+    || order.some((id, index) => id !== stored[index])
+  const timestampsChanged = previousUpdatedAt === undefined
+    || Object.keys(updatedAt).length !== Object.keys(previousUpdatedAt).length
+    || Object.entries(updatedAt).some(([id, timestamp]) => previousUpdatedAt[id] !== timestamp)
+  return { order, updatedAt, changed: orderChanged || timestampsChanged }
+}
+
+/**
+ * Ungrouped-bucket order resolution (P2-9 extracted, PURE, MANUAL mode only —
+ * updated mode goes through the unified account path, `nextUpdatedOrder`):
+ * stored ids first via reconciledSessionOrder, unknown ids appended in wire
+ * order; the wire order copy when no stored order exists.
  */
 export function orderUngroupedSessions<T extends { id: string; updatedAt?: number }>(
   wire: readonly T[],
   stored: readonly string[] | undefined,
-  orderBy: SessionOrderBy,
 ): T[] {
-  if (orderBy === 'updated') return sortWorkspaceSessions(wire, orderBy)
   if (stored === undefined) return [...wire]
   const order = reconciledSessionOrder(stored, wire.map(session => session.id))
   const byId = new Map(wire.map(session => [session.id, session]))

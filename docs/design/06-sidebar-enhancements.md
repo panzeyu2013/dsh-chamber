@@ -119,13 +119,32 @@
 - **边界**：拖到折叠组无目标行（自然无 marker）；轮询刷新中途拖拽
   （状态引用 id 不引用下标，行仍存在则有效）；touch/键盘排序不支持
   （官方亦然，注明已知限制）。
-- **会话排序模式（2026-08）**：每来源排序偏好 manual（默认）| updated
-  （§3.1 `orderBy`，来源头 hover 操作簇排序按钮循环切换）。updated 模式
-  真实工作区按 updatedAt 降序渲染（有会话级拖拽 override 时 override
-  优先——用户拖拽意图第一）；**updated 模式下会话拖拽只写瞬态 override、
-  不提交 wire、不 requestRefresh，override 在下一次投影到达即丢弃**（对齐
-  官方「updated 排序时拖拽不落 wire」但简化官方 account+promotion——chamber
-  不实现 promotion）；未分组桶 updated 模式按 recency 排序（无视 stored 序）。
+- **会话排序模式（2026-08，C档对齐官方）**：每来源排序偏好 manual（默认）|
+  updated（§3.1 `orderBy`，来源头 hover 操作簇排序按钮打开**显式菜单**——官方
+  ViewOptionsMenu 模式，勾选标记当前模式，取代早期盲切循环）。**updated =
+  手动序 + 活动置顶（官方 ui-workspace nextSessionOrderAccount 语义，2026-08
+  起不再是最初的"纯 recency 重排"）**：
+  - 每个 account（真实 workspace 与未分组桶各一，键 `${sourceId}/${workspaceId}`）
+    持有持久化活动序（`updatedOrder`）与上次观测时间戳簿记
+    （`sessionUpdatedAtByAccount`），由侧边栏推导 effect 一起写回（diff 守卫，
+    跨 shell 收敛）；
+  - 首次观测 / 切回 updated（菜单动作清簿记 = 官方 switchedToUpdated）：整列
+    一次 recency 排序；此后只把**自上次观测以来 updatedAt 增长的会话**置顶
+    （互相 recency 排序），其余保持手动序——置顶会话被钉住（persisted account
+    序）直到更新的活动或手动拖拽取代；
+  - updated 模式下会话拖拽只写 account 序（共享 view-prefs 持久化，不提交
+    wire、不 requestRefresh——官方「updated 排序时拖拽不落 wire」，promotion
+    叠加其上）；未分组桶 updated 模式同样走 account 路径（manual 的
+    `ungroupedOrder` 不受污染）。
+    **有意的偏差（对齐声明的边界，2026-08 review 明确）**：切回 manual 时
+    updated 模式下的拖拽位置**不保留**——manual 渲染 = override ?? wire，
+    account 序被忽略，重新进入 updated 会整列 recency 重排。官方两种模式都
+    渲染 account 序、拖拽跨模式保留；chamber 坚持 manual 的 wire 权威
+    （P2-5 / AGENTS.md 宿主事实权威原则），故 updated 模式是**活动视图**而
+    非持久的手动排布层。
+  - 投影签名（`serversProjectionSignature`）**纳入会话 updatedAt**——会话活动
+    时间戳变化会重发布投影，推导 effect 才能及时置顶（旧签名排除它是因为排序
+    已物化为行序；2026-08 起排序由 account 推导驱动，排除理由不再成立）。
 - **双击重命名（2026-08）**：workspace 头直接 dblclick 进入行内重命名
   （头本身不可点击，无延迟）；**会话行单击立即打开（零延迟，2026-08
   修订，对齐 OpenChamber 的 immediate-open 模型）**，双击重命名由
@@ -172,8 +191,16 @@
     folded: Record<`${sourceId}/${workspaceId}`, boolean>,
     ungroupedOrder: Record<sourceId, string[]>,
     orderBy: Record<sourceId, 'manual' | 'updated'>,
+    updatedOrder: Record<`${sourceId}/${workspaceId}`, string[]>,
+    sessionUpdatedAtByAccount: Record<`${sourceId}/${workspaceId}`, Record<sessionId, number>>,
     sidebarWidth: number }
   ```
+- **updatedOrder / sessionUpdatedAtByAccount（2026-08 C档新增）**：updated 排序
+  模式的活动序 account 与簿记（见 §2「会话排序模式」）。键与 folded 同为
+  `${sourceId}/${workspaceId}`（未分组桶的 workspaceId 即
+  `UNGROUPED_WORKSPACE_ID`），剪裁规则同 folded（本会话见过、现已消失的来源
+  才裁）。manual 模式不读这两个字段；v 保持 1，旧数据无字段即视为从未进入
+  updated。
 - **sidebarWidth（2026-08，ui-layout fork）**：`packages/dsh-chamber-client-ui-layout`
   （官方 ui-layout 壳插件的 chamber fork，仅替换 layout store）把侧栏宽度经本
   store 播种/回写——`init` 从 `getViewPrefs().sidebarWidth` 播种（钳位 vendor
@@ -185,8 +212,9 @@
   默认 `manual`；v 保持 1 兼容旧数据（旧数据无此键即视为全 manual，不重
   播种），sanitize 丢弃非法值。**默认值决策（2026-08）**：默认 `manual`
   （保持既有 wire 序呈现），与官方默认 `updated` 不同——有意取舍：多来源
-  列表下 wire 序即用户/宿主排好的序，且 v1 不实现官方活动提升（promotion）
-  语义。
+  列表下 wire 序即用户/宿主排好的序。**2026-08 C档修订**：v1 已实现官方
+  活动提升（promotion）语义（updated = 手动序 + 活动置顶，§2），"不实现
+  promotion"的旧理由不再成立；默认值仍取 manual（wire 序第一）。
 - `shared/view-prefs.ts`：`loadViewPrefs()`/`saveViewPrefs(prefs)`，
   JSON 解析/写入 try/catch 兜底（非致命）、版本号不匹配即弃用重播种
   （官方 persist 引擎纪律）；纯函数，可单测。

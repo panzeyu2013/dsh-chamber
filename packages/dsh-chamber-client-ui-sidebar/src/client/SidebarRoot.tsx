@@ -32,7 +32,7 @@
  * are TRUE replacements: the actions take no layout space at rest
  * (display:none), so the state icon really sits at the end; hovering swaps
  * the state slot for the kebab+archive actions (source header: status ↔
- * search+`+`; workspace header: count ↔ `+`+kebab). Hover actions are
+ * sort menu + search+`+`; workspace header: count ↔ `+`+kebab). Hover actions are
  * icon-based: a
  * workspace header carries a `+`
  * (new session) and a three-dot kebab menu (rename/delete); a session row
@@ -113,9 +113,9 @@ import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults, orderUngroupedSessions,
-  reconciledSessionOrder, relativeTimeBucket, runningRingVisible, sanitizeSearchQuery, serversProjectionSignature,
-  SEARCH_QUERY_MAX_CODE_UNITS, sortWorkspaceSessions,
+  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults, nextUpdatedOrder,
+  orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket, runningRingVisible, sanitizeSearchQuery,
+  serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, type SessionOrderBy,
 } from '../shared/derive.ts'
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
@@ -127,7 +127,9 @@ import {
   clearSearch, collapseSearch, expandSearch, getSearchStates, setSearchFetcher, setSearchQuery, subscribeSearch,
   type SourceSearchState,
 } from '../shared/search-state.ts'
-import { getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs } from '../shared/view-prefs.ts'
+import {
+  clearSourceBookkeeping, getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
+} from '../shared/view-prefs.ts'
 import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
@@ -285,6 +287,15 @@ interface SessionDragState {
   sourceId: string
   /** Workspace id, or the ungrouped bucket id for the source-local loose-session account. */
   accountKey: string
+  /**
+   * Whether the row's workspace is the synthetic ungrouped bucket. Carried in
+   * the drag state (not re-derived from the id) so commitSessionDrag resolves
+   * the workspace by id + flag — a real workspace whose wire id ever equaled
+   * UNGROUPED_WORKSPACE_ID could otherwise hijack a bucket drag's anchor and
+   * route it to a wrong-workspace wire mutation (impossible with the pinned
+   * UUID host, kept as a cheap landmine guard).
+   */
+  ungrouped: boolean
   sessionId: string
   /** Row the marker sits on and which half (insert above/below it). */
   over: { id: string; half: 'before' | 'after' } | null
@@ -477,16 +488,27 @@ export function SidebarRoot({
     })
   }
 
-  // chamber (06 §3.1): per-source session sort toggle (manual ↔ updated). The
-  // choice lives in the shared view prefs (`orderBy` keyed by sourceId,
-  // default manual); a click cycles to the other mode. P2-5: 切换即丢弃该来源
-  // 的全部会话级 override——updated 模式下拖拽的 override 无 wire 背书、永远
-  // 不会被确认，若不随模式切换清掉，切回 manual 后它会成为永久孤儿 override
-  // （显示序脱离 wire 序且不自愈）；manual 模式下尚未被投影确认的乐观序同样
-  // 随切换作废（wire 序或 updated 排序接管，提交本身不受影响）。
-  const toggleSessionSort = (server: ChamberServerAggregate): void => {
-    const next = viewPrefs.orderBy?.[server.id] === 'updated' ? 'manual' : 'updated'
-    updateViewPrefs(prev => ({ ...prev, orderBy: { ...prev.orderBy, [server.id]: next } }))
+  // chamber (06 §3.1, 2026-08 C档 alignment): explicit per-source sort
+  // selection through the source-header menu (official ViewOptionsMenu
+  // pattern — no more blind cycling). The choice lives in the shared view
+  // prefs (`orderBy` keyed by sourceId, default manual). Entering updated
+  // clears the source's activity BOOKKEEPING (sessionUpdatedAtByAccount) so
+  // the derivation effect below does ONE full recency sort (official
+  // switchedToUpdated) while keeping the existing updatedOrder accounts
+  // (re-entry re-sorts them). The source's transient session-order overrides
+  // are dropped either way (P2-5 hygiene): entering updated renders the
+  // account order — an in-flight manual wire commit is only reflected if it
+  // lands before the next projection; entering manual restores wire order.
+  const setOrderBy = (server: ChamberServerAggregate, mode: SessionOrderBy): void => {
+    if ((viewPrefs.orderBy?.[server.id] ?? 'manual') === mode) return
+    updateViewPrefs(prev => {
+      const orderBy = { ...prev.orderBy, [server.id]: mode }
+      if (mode !== 'updated') return { ...prev, orderBy }
+      const cleared = clearSourceBookkeeping(prev.sessionUpdatedAtByAccount, server.id)
+      return cleared === prev.sessionUpdatedAtByAccount
+        ? { ...prev, orderBy }
+        : { ...prev, orderBy, sessionUpdatedAtByAccount: cleared }
+    })
     const prefix = `${server.id}/`
     setSessionOrderOverride(prev => {
       const hasAny = Object.keys(prev).some(key => key.startsWith(prefix))
@@ -508,12 +530,11 @@ export function SidebarRoot({
   // commit). A key drops when its workspace vanished, the projection order
   // now equals the override (commit confirmed), or the membership differs
   // (a row was deleted meanwhile); it survives while only the ORDER differs
-  // (stale poll data). updated 模式的拖拽 override 是瞬态（P2-5）：拖拽只落
-  // override、不提交 wire，wire 永远无法确认它——下一次**内容变化**的投影
-  // （servers state 变化）即丢（下方 updated 分支；App publish 签名闸下内容
-  // 不变的轮询不改变 servers state、effect 不重跑，故精确语义是"内容变化的
-  // 投影"），不再有旧注释的"自愈"一说；否则该工作区会永久用 override 序
-  // 绕过 updated 排序。
+  // (stale poll data). 2026-08 C档: overrides are MANUAL-mode only now —
+  // updated-mode drags write the shared updatedOrder account (见
+  // commitSessionDrag) instead, so this map never carries an unconfirmable
+  // entry; the updated-branch drop below stays as hygiene for a source
+  // switched to updated while an override was still in flight.
   const [sessionOrderOverride, setSessionOrderOverride] = useState<Record<string, string[]>>({})
   const [workspaceOrderOverride, setWorkspaceOrderOverride] = useState<Record<string, string[]>>({})
   useEffect(() => {
@@ -528,9 +549,12 @@ export function SidebarRoot({
           ? undefined
           : server.workspaces.find(candidate => candidate.id === key.slice(slash + 1))
         const wireIds = workspace === undefined ? undefined : workspace.sessions.map(session => session.id)
-        // P2-5: updated 模式（含拖拽后才切到 updated 的来源）的 override 直接
-        // 丢弃——不提交 wire 的 override 永远等不到确认，等确认只会让该工作区
-        // 永久脱离 updated 排序。manual 模式仍按 wire 确认核对。
+        // 2026-08 C档 hygiene: an override left over from a source that has
+        // since switched to updated is dropped — updated mode renders the
+        // account order, never this map (setOrderBy drops the source's
+        // in-flight overrides at switch time; an override's wire commit is
+        // only reflected if it lands before the next projection). manual
+        // mode still reconciles against the wire confirmation.
         if (server !== undefined && (viewPrefs.orderBy?.[server.id] ?? 'manual') === 'updated') {
           changed = true
           continue
@@ -572,6 +596,62 @@ export function SidebarRoot({
       return changed ? next : prev
     })
   }, [servers])
+
+  // chamber (06 §3.1, 2026-08 C档 alignment — updated = manual + activity
+  // promotion): per-account updated-mode order derivation, the official
+  // ui-workspace nextSessionOrderAccount port. Runs on every projection /
+  // view-prefs change and writes the promoted account orders + activity
+  // bookkeeping through the SHARED view-prefs store, diff-guarded: an
+  // unchanged account never triggers a notify → re-render → effect loop, and
+  // every shell converges on the same accounts. The recency-sort trigger
+  // (no bookkeeping) = first observation OR the user just picked 最近更新 in
+  // the sort menu (setOrderBy clears the source's bookkeeping — official
+  // switchedToUpdated). Real workspaces AND the ungrouped bucket are one
+  // account each (`${server.id}/${workspace.id}`; the bucket's id is
+  // UNGROUPED_WORKSPACE_ID), so the bucket's updated-mode drags and
+  // promotions persist in updatedOrder instead of the manual ungroupedOrder.
+  //
+  // The derivation reads the LIVE shared store (getViewPrefs — the same cache
+  // updateViewPrefs mutates), NOT this render's viewPrefs snapshot: the
+  // effect can flush after a drag commit or another shell's setOrderBy
+  // landed, and a stale-snapshot derivation would silently overwrite the
+  // fresher account — a just-committed updated-mode drag, or a cleared
+  // bookkeeping (which must not be re-added, or the one-time recency sort on
+  // switching to updated would be skipped).
+  useEffect(() => {
+    const current = getViewPrefs()
+    const pendingOrder: Record<string, string[]> = {}
+    const pendingTimestamps: Record<string, Record<string, number>> = {}
+    for (const server of servers) {
+      if (current.orderBy?.[server.id] !== 'updated') continue
+      for (const workspace of server.workspaces) {
+        const sessionIds = workspace.sessions.map(session => session.id)
+        if (sessionIds.length === 0) continue
+        const accountKey = `${server.id}/${workspace.id}`
+        const next = nextUpdatedOrder({
+          sessionIds,
+          stored: current.updatedOrder?.[accountKey],
+          previousUpdatedAt: current.sessionUpdatedAtByAccount?.[accountKey],
+          byId: new Map(workspace.sessions.map(session => [session.id, session])),
+        })
+        if (!next.changed) continue
+        pendingOrder[accountKey] = next.order
+        pendingTimestamps[accountKey] = next.updatedAt
+      }
+    }
+    if (Object.keys(pendingOrder).length === 0 && Object.keys(pendingTimestamps).length === 0) return
+    // Merge into prev (not the render snapshot) so a concurrent write from
+    // another shell on a key we did not touch is never clobbered.
+    updateViewPrefs(prev => ({
+      ...prev,
+      ...(Object.keys(pendingOrder).length > 0
+        ? { updatedOrder: { ...prev.updatedOrder, ...pendingOrder } }
+        : {}),
+      ...(Object.keys(pendingTimestamps).length > 0
+        ? { sessionUpdatedAtByAccount: { ...prev.sessionUpdatedAtByAccount, ...pendingTimestamps } }
+        : {}),
+    }))
+  }, [servers, viewPrefs])
 
   // chamber (06 §1.2, 2026-08 — cross-ctx live sync): per-source search state
   // (capsule/query/results) AND the debounced fetch jobs live in ONE shared
@@ -706,6 +786,27 @@ export function SidebarRoot({
       return next
     })
   }
+  // Sort menu open state — DEDICATED (sourceId | null) instead of a
+  // `menuOpen` key: a `${sourceId}/…`-shaped key would collide with a real
+  // workspace's key (workspace ids are wire directory names — one could be
+  // literally `sort`), cross-opening the workspace kebab and the sort menu.
+  // A separate state also allows only ONE sort menu across sources.
+  const [sortMenuOpen, setSortMenuOpen] = useState<string | null>(null)
+  // Close the sort menu when its source can no longer render the anchor
+  // (disconnect, or a snapshot-fetch error with no open search capsule) —
+  // otherwise the state leaks and the menu pops open unprompted on reconnect.
+  useEffect(() => {
+    if (sortMenuOpen === null) return
+    const server = servers.find(candidate => candidate.id === sortMenuOpen)
+    if (server === undefined) {
+      setSortMenuOpen(null)
+      return
+    }
+    const search = searchState.get(sortMenuOpen)
+    if (!server.connected || (server.aggregateError !== undefined && search?.expanded !== true)) {
+      setSortMenuOpen(null)
+    }
+  }, [servers, sortMenuOpen, searchState])
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
 
@@ -920,9 +1021,13 @@ export function SidebarRoot({
   }, [])
 
   // chamber (06 §2.2): session-row drag commit. The anchor resolves from the
-  // CURRENT rendered order (override-first), never the projection; ungrouped
-  // commits persist locally through view prefs, real workspaces commit over
-  // the wire with an optimistic override that the next pull replaces.
+  // CURRENT rendered order (mode-aware: updated = the shared updated-order
+  // account; manual = override-first), never the projection. Commit writes:
+  // updated mode persists the drag into the account order (shared view-prefs,
+  // NO wire — official「updated 下拖拽只落 account」, promotions stack on
+  // top); manual mode persists the ungrouped bucket through view prefs and
+  // real workspaces over the wire with an optimistic override that the next
+  // pull replaces.
   const commitSessionDrag = (
     server: ChamberServerAggregate,
     activeDrag: SessionDragState,
@@ -931,12 +1036,24 @@ export function SidebarRoot({
     if (sessionDropCommitted.current) return
     sessionDropCommitted.current = true
     setSessionDrag(null)
-    const workspace = server.workspaces.find(candidate => candidate.id === activeDrag.accountKey)
+    // Resolve by id AND the drag's ungrouped flag (see SessionDragState):
+    // a real workspace whose wire id ever equaled UNGROUPED_WORKSPACE_ID must
+    // not hijack a bucket drag's anchor into a wrong-workspace wire mutation.
+    const workspace = server.workspaces.find(candidate =>
+      candidate.id === activeDrag.accountKey && (candidate.ungrouped === true) === activeDrag.ungrouped)
     if (workspace === undefined) return
+    const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
     const wireIds = workspace.sessions.map(session => session.id)
-    const renderedOrder = workspace.ungrouped === true
-      ? reconciledSessionOrder(viewPrefs.ungroupedOrder[server.id] ?? [], wireIds)
-      : sessionOrderOverride[`${server.id}/${workspace.id}`] ?? wireIds
+    const accountKey = `${server.id}/${workspace.id}`
+    // Updated branch reads the LIVE store (like the derivation effect, not
+    // this render's viewPrefs snapshot): a promotion write can land between
+    // this render and the drop, and stale anchor math would then clobber the
+    // un-rendered promotion on the same account key.
+    const renderedOrder = orderBy === 'updated'
+      ? reconciledSessionOrder(getViewPrefs().updatedOrder?.[accountKey] ?? [], wireIds)
+      : workspace.ungrouped === true
+        ? reconciledSessionOrder(viewPrefs.ungroupedOrder[server.id] ?? [], wireIds)
+        : sessionOrderOverride[accountKey] ?? wireIds
     const targetIndex = renderedOrder.findIndex(id => id === over.id)
     if (targetIndex === -1) return
     const anchor = over.half === 'before' ? over.id : renderedOrder[targetIndex + 1]
@@ -947,17 +1064,18 @@ export function SidebarRoot({
     const nextOrder = renderedOrder.filter(id => id !== activeDrag.sessionId)
     const insertAt = anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor)
     nextOrder.splice(insertAt === -1 ? nextOrder.length : insertAt, 0, activeDrag.sessionId)
+    if (orderBy === 'updated') {
+      // Updated mode: the drag mutates the account order (shared + persisted,
+      // the ungrouped bucket included), no wire commit — the wire order is
+      // the manual baseline, the promotion re-applies on top.
+      updateViewPrefs(prev => ({ ...prev, updatedOrder: { ...prev.updatedOrder, [accountKey]: nextOrder } }))
+      return
+    }
     if (workspace.ungrouped === true) {
       updateViewPrefs(prev => ({ ...prev, ungroupedOrder: { ...prev.ungroupedOrder, [server.id]: nextOrder } }))
       return
     }
-    setSessionOrderOverride(prev => ({ ...prev, [`${server.id}/${workspace.id}`]: nextOrder }))
-    // updated 模式拖拽对齐官方（ui-workspace commitSessionDrag 在
-    // orderBy==='updated' 时只写本地序、跳过 insertSessionBefore）：只落乐观
-    // override，不提交 wire、不 requestRefresh——wire 序由 updated 排序接管；
-    // 该 override 是瞬态（P2-5）：下一次投影到达（servers 变化）时由清理
-    // effect 直接丢弃（wire 永远无法确认它，旧注释的"自愈"不成立）。
-    if (viewPrefs.orderBy?.[server.id] === 'updated') return
+    setSessionOrderOverride(prev => ({ ...prev, [accountKey]: nextOrder }))
     runAction(`${server.id}/session-drag/${activeDrag.sessionId}`, async () => {
       try {
         await insertSessionBefore(getInstanceClient(server.id), workspace.id, activeDrag.sessionId, anchor)
@@ -967,7 +1085,7 @@ export function SidebarRoot({
         // optimistic override immediately, the projection shows wire truth.
         setSessionOrderOverride(prev => {
           const next = { ...prev }
-          delete next[`${server.id}/${workspace.id}`]
+          delete next[accountKey]
           return next
         })
         throw error
@@ -1267,22 +1385,32 @@ export function SidebarRoot({
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
                 const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
-                // 会话级 override（拖拽乐观序）优先于 updated 排序——用户拖拽
-                // 意图永远第一（06 §3.1）；updated 模式下 override 是瞬态（下次
-                // 内容变化的投影即丢，P2-5），无 override 且 orderBy==='updated'
-                // 时按 updatedAt 倒序。未分组桶顺序解析抽为纯函数
-                // orderUngroupedSessions（P2-9，updated 按 recency 无视存储序、
-                // manual 用存储序——与真实工作区 updated 行为一致，updated 排序
-                // 接管一切）。
+                // 2026-08 C档（对齐官方）：updated = 手动序 + 活动置顶。渲染序
+                // 直接取共享的 updated-order account（推导 effect 已把 seeding/
+                // recency sort/promotion 写回，见上）；account 尚不存在时（切换
+                // 后首帧、effect 尚未落盘）回退 wire 序。**重入 updated**（account
+                // 已保留、簿记刚被清）时首帧渲染保留的旧 account 序，effect 的
+                // 整列 recency 排序下一帧才落——与官方同构（render-then-sort），
+                // 菜单关闭动画内不可感知。manual 模式：未分组桶用存储序（P2-9），
+                // 真实工作区 override（拖拽乐观序）优先于 wire 序。
+                if (orderBy === 'updated') {
+                  const stored = viewPrefs.updatedOrder?.[`${server.id}/${workspace.id}`]
+                  if (stored === undefined) return wire
+                  const byId = new Map(wire.map(session => [session.id, session]))
+                  return reconciledSessionOrder(stored, wire.map(session => session.id)).flatMap(id => {
+                    const session = byId.get(id)
+                    return session === undefined ? [] : [session]
+                  })
+                }
                 if (workspace.ungrouped === true) {
-                  return orderUngroupedSessions(wire, viewPrefs.ungroupedOrder[server.id], orderBy)
+                  return orderUngroupedSessions(wire, viewPrefs.ungroupedOrder[server.id])
                 }
                 const override = sessionOrderOverride[`${server.id}/${workspace.id}`]
                 if (override !== undefined) {
                   const byId = new Map(wire.map(session => [session.id, session]))
                   return override.flatMap(id => { const session = byId.get(id); return session === undefined ? [] : [session] })
                 }
-                return orderBy === 'updated' ? sortWorkspaceSessions(wire, orderBy) : wire
+                return wire
               }
               // Search-result titles resolve from the source aggregate (title
               // may lag the latest snapshot by one poll — accepted, 06 §1.2).
@@ -1364,42 +1492,70 @@ export function SidebarRoot({
                       />
                     )}
                   </span>
-                  {/* chamber: header actions (add-workspace `+` + per-source
-                      search) are hover-revealed like the session rows'
-                      actions: at rest the connection status occupies the
-                      right side; hovering the header swaps in the icon
-                      cluster (visibility swap, no reflow). While a search
-                      capsule is open the cluster stays visible
-                      (.sourceActionsVisible) so the icon can collapse it. */}
+                  {/* chamber: header actions (sort menu + add-workspace `+` +
+                      per-source search) are hover-revealed like the session
+                      rows' actions: at rest the connection status occupies the
+                      right side; hovering the header swaps in the icon cluster
+                      (visibility swap, no reflow). While a search capsule is
+                      open OR the sort menu is open the cluster stays visible
+                      (.sourceActionsVisible) so the icon can collapse/close. */}
                   <span
-                    className={clsx(cc.sourceActions, search?.expanded === true && cc.sourceActionsVisible)}
+                    className={clsx(
+                      cc.sourceActions,
+                      (search?.expanded === true || sortMenuOpen === server.id) && cc.sourceActionsVisible,
+                    )}
                   >
-                    {/* chamber (06 §3.1): per-source session sort toggle
-                        (manual ↔ updated). The cycle lives in the shared view
-                        prefs; aria-pressed carries the updated state. The
-                        title shows the CURRENT mode (P2-5 — the pressed state
-                        is also styled visibly in CSS). */}
+                    {/* chamber (06 §3.1, 2026-08 C档 alignment): per-source
+                        session sort MENU (official ViewOptionsMenu pattern —
+                        replaces the blind manual↔updated cycle). The menu
+                        shows both options with a checkmark on the current one
+                        (selectedIds), so the active order is visible the
+                        moment it opens; the title + aria-label + sortActive
+                        tint carry the current mode at rest (hover-revealed).
+                        Selecting a mode goes through setOrderBy (switch
+                        bookkeeping + P2-5 override drop). */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <button
-                        type="button"
-                        className={cc.actionIcon}
-                        aria-label={t('action.sort')}
-                        aria-pressed={viewPrefs.orderBy?.[server.id] === 'updated'}
-                        title={`${t('action.sort')} · ${t(viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual')}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (suppressClickRef.current) return
-                          // stopPropagation also stops the NATIVE event, so the
-                          // document-level pending-click listener never sees this
-                          // click — clear the pending here like every other
-                          // row-internal button (else a pending survives and a
-                          // later click on the same session spuriously renames).
-                          clearPendingClick()
-                          toggleSessionSort(server)
+                      <Menu
+                        compact
+                        portal
+                        align="end"
+                        open={sortMenuOpen === server.id}
+                        onClose={() => { setSortMenuOpen(null) }}
+                        onSelect={(id: string) => {
+                          setSortMenuOpen(null)
+                          if (id === 'manual' || id === 'updated') setOrderBy(server, id)
                         }}
-                      >
-                        <IconPersonalizationOutline16 size={14} />
-                      </button>
+                        items={[
+                          { type: 'label' as const, id: 'sort-label', text: t('orderBy.label') },
+                          { id: 'manual', label: t('orderBy.manual') },
+                          { id: 'updated', label: t('orderBy.updated') },
+                        ]}
+                        selectedIds={[viewPrefs.orderBy?.[server.id] ?? 'manual']}
+                        anchor={(
+                          <button
+                            type="button"
+                            className={clsx(cc.actionIcon, viewPrefs.orderBy?.[server.id] === 'updated' && cc.sortActive)}
+                            aria-label={`${t('action.sort')} · ${t(viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual')}`}
+                            aria-haspopup="menu"
+                            aria-expanded={sortMenuOpen === server.id}
+                            title={`${t('action.sort')} · ${t(viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual')}`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (suppressClickRef.current) return
+                              // stopPropagation also stops the NATIVE event, so
+                              // the document-level pending-click listener never
+                              // sees this click — clear the pending here like
+                              // every other row-internal button (else a pending
+                              // survives and a later click on the same session
+                              // spuriously renames).
+                              clearPendingClick()
+                              setSortMenuOpen(prev => (prev === server.id ? null : server.id))
+                            }}
+                          >
+                            <IconPersonalizationOutline16 size={14} />
+                          </button>
+                        )}
+                      />
                     )}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <button
@@ -1869,7 +2025,13 @@ export function SidebarRoot({
                                         event.dataTransfer.setData('text/plain', session.id)
                                         suppressClickRef.current = true
                                         sessionDropCommitted.current = false
-                                        setSessionDrag({ sourceId: server.id, accountKey: workspace.id, sessionId: session.id, over: null })
+                                        setSessionDrag({
+                                          sourceId: server.id,
+                                          accountKey: workspace.id,
+                                          ungrouped: workspace.ungrouped === true,
+                                          sessionId: session.id,
+                                          over: null,
+                                        })
                                       }}
                                     onDragEnd={() => {
                                       if (sessionDrag !== null && sessionDrag.over !== null) {

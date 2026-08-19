@@ -29,7 +29,13 @@
   依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
 - **客户端插件运行时加载（设计 09，已实现）**：设计见
   `docs/design/09-client-plugin-runtime-loading.md`。遗留：图通道失败仅 console.error
-  无 UI 信号（可观测性待补）。
+  无 UI 信号（可观测性待补）。**union-table 补全（2026-08）**：覆盖包缺失模块表
+  factory 导致额外 bundle 的同步 require 边落空（官方 store-engine 豁免
+  `require("@deepseek-ai/dsh-client-runtime/client")`，默认 web profile 的
+  `dsh-session-log-export` 行实机触发 boot 失败）——chamber-entry.ts 现为每个首屏
+  静态导入的覆盖包注册模块表 factory（返回复合 bundle 内联命名空间，require 边与
+  ctx 服务同实例），COVERED_FACTORIES 与 CHAMBER_COVERED_IDS 执行期断言锁步
+  （详见设计 09 §3.2）。
 - **侧边栏聚合改事件驱动（设计 10）**：实现未排期——改动 05 §3 契约，需评审确认；详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
 - **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程
@@ -43,6 +49,16 @@
   settings 响亮提示手动安装）、release CI 上传路径实测、双平台实机检查/下载/退出安装。
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游 wire 根治）；
   实现未排期；详见 `docs/todo/12-todo-archived-sessions.md`。
+- **睡眠/后台常驻（设计 14，设计待评审）**：关窗行为可设（`windowCloseBehavior`：
+  托盘 / 退出，hide 不杀进程，控制面/隧道/dsh 实例继续运行）+ 登录自启可设
+  （`launchAtLogin`，mac/linux，win 门控）+ 退出确认 + 唤醒即时重连（powerMonitor
+  resume）+ 防休眠（默认关）；OpenChamber 桌面端实现已调研（本地源码），设计见
+  `docs/todo/14-todo-sleep-background.md`；实现未排期。
+- **Chamber 设置呈现（设计 15，设计待评审；2026-08 范围缩减）**：v1 平铺形态——
+  settings 壳固定入口扩为 连接/更新/通用（`__general` 为设计 14 设置落点）；
+  两级分组、插件提级、新插件包、关于页**推迟不做**；chamber 全局设置仍统一走
+  主进程 `chamber-settings.json`（非秘密），与实例配置平面严格分离；设计见
+  `docs/todo/15-todo-chamber-settings-page.md`；实现未排期。
 - **设计未决**（02 §5 / 04 §7）：starting port 偏移、trusted-host 自定义 Host、多控制面
   `$DSH_HOME` 冲突、响应头白名单双处同步、`__DSH_BOOT__` 随 dsh 版本漂移。
 
@@ -65,6 +81,11 @@
   见 01 §4 / 设计 08）。
 - **默认排序 manual（06 §3.1）**：每来源会话排序默认 `manual`（保持 wire 序），与官方
   默认 `updated` 不同——有意取舍；`orderBy[sourceId]` 持久化于 `dsh-chamber.sidebar.v1`。
+  **2026-08 C档对齐**：排序按钮改为显式菜单（官方 ViewOptionsMenu 模式，勾选当前项）；
+  `updated` 实现官方 **手动序 + 活动置顶** 语义（`nextUpdatedOrder` account 推导：首次
+  观测/切回整列 recency 排序一次，此后仅置顶自上次观测以来更新的会话，置顶经
+  `updatedOrder`/`sessionUpdatedAtByAccount` 持久化；updated 下拖拽只写共享 account 序、
+  不落 wire）；`serversProjectionSignature` 纳入会话 `updatedAt` 以驱动置顶重发布。
 - **侧边栏交互对齐 OpenChamber（2026-08）**：会话行单击**立即打开**（零延迟），350ms 内
   同会话第二次点击进入内联改名——`shared/pending-click.ts` 全局 pending 单例（跨 N-ctx
   shell 共享，替代原"延迟单击"模型；05 §2.2 / 06 §2.2 已同步）。**2026-08 review
@@ -103,6 +124,13 @@
 - **设置壳偏差**：未连接实例不装配子 ctx（配置在目标机器上，物理不可达）；stub remote 无
   WS 失效流；设置壳不渲染官方 SettingsRoot；子 ctx 懒装配；下拉列表 in-panel 定位（超长
   roster 尾部可能被裁剪）；chrome 跟随宿主 locale、子 ctx 跟随目标实例 locale。
+- **实例失败呈现修订（2026-08，05 §4）**：boot 失败不再由各 InstanceView 自绘（旧
+  `.instance-fatal` 只有重试、无导航——失败视图的 shell 从未挂载、侧边栏不可用，用户被
+  困在当前视图只能整页刷新），改由 App 在活动视图上统一渲染 `.fatal-overlay` 覆盖层：
+  失败报告 + 重试（`retryToken` 递增 → InstanceView 复位重 boot）+ 服务器切换行
+  （`.fatal-servers`，chamber 级逃生通道，不依赖任何 shell 挂载）。dsh 壳内 fail-loud
+  报告统一经 `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见失败态（shell.ts
+  失败分支 dispose entry，重试干净重 boot）。
 - **v1 实现形态（代码内声明，与 05 契约无实质偏差）**：自研侧边栏 + 纯 dsh 首屏即基线；
   renderer entry 级 React 面仅剩纯 dsh 桥接宿主；当前来源判定经 knob 注入；拷贝包 `tests/`
   未拷贝；`chamber-auth` 随认证移除；settings 页 `ns.inject('settings.section')` 通道可用于

@@ -473,12 +473,13 @@
   to { transform: rotate(360deg); }
 }
 
-/* Source-header right cluster (search + add-workspace `+`): NOT rendered at
-   rest (display:none — zero layout space, so the connection status really
-   sits at the header's right end). Hovering the header swaps the cluster IN
-   and the status OUT — a true replacement. While a search capsule is open
-   the cluster stays shown (.sourceActionsVisible) so the icon can collapse
-   it; the status stays out then too. */
+/* Source-header right cluster (sort menu + search + add-workspace `+`): NOT
+   rendered at rest (display:none — zero layout space, so the connection
+   status really sits at the header's right end). Hovering the header swaps
+   the cluster IN and the status OUT — a true replacement. While a search
+   capsule is open OR the sort menu is open the cluster stays shown
+   (.sourceActionsVisible) so the icon can collapse/close it; the status
+   stays out then too. */
 .sourceActions {
   flex: none;
   display: none;
@@ -771,9 +772,11 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* P2-5: 排序按钮的 pressed（updated）态——品牌色 + 浅底，视觉可辨
-   （aria-pressed 之外的可感知样式；hover 保持文字色变化）。 */
-.actionIcon[aria-pressed='true'] {
+/* P2-5: 排序按钮的 updated（按更新时间）态——品牌色 + 浅底，视觉可辨
+   （菜单勾选之外的可感知样式；hover 保持文字色变化）。2026-08: 按钮改为
+   菜单入口（aria-pressed 换成 .sortActive 状态类——菜单按钮的 pressed
+   语义由菜单内勾选承担）。 */
+.actionIcon.sortActive {
   color: var(--dsw-alias-brand-primary);
   background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
 }

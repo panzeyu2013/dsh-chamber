@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   __resetViewPrefsForTests,
+  clearSourceBookkeeping,
   getViewPrefs,
   loadViewPrefs,
   saveViewPrefs,
@@ -38,7 +39,7 @@ class MemoryStorage implements StorageLike {
 }
 
 function defaults(): ChamberSidebarViewPrefs {
-  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] }
+  return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
 }
 
 test('loadViewPrefs returns defaults when the key is missing', () => {
@@ -52,6 +53,8 @@ test('save then load round-trips the prefs', () => {
     folded: { 'local/w1': true, 'ssh-a/w2': false },
     ungroupedOrder: { local: ['s3', 's1', 's2'], 'ssh-a': [] },
     orderBy: { local: 'updated', 'ssh-a': 'manual' },
+    updatedOrder: { 'local/w1': ['s3', 's1', 's2'], 'ssh-a/__ungrouped__': ['x'] },
+    sessionUpdatedAtByAccount: { 'local/w1': { s1: 100, s2: 200 } },
     // seenSources is SESSION-ONLY memory: it is never persisted, so a
     // round-trip through storage always lands back on [].
     seenSources: [],
@@ -97,6 +100,16 @@ test('loadViewPrefs sanitizes malformed entries leniently and keeps valid ones',
         broken: 'not-an-array',
         empty: [],
       },
+      updatedOrder: {
+        'local/w1': ['s1', 's2'],
+        'local/w2': 'not-an-array',
+        'local/w3': [1, 's3', null],
+      },
+      sessionUpdatedAtByAccount: {
+        'local/w1': { s1: 100, s2: 200, bad: 'x' },
+        'local/w2': 'not-an-object',
+        'local/w3': { s3: NaN, s4: Infinity, s5: -1 },
+      },
       extra: 'ignored',
     }),
   )
@@ -105,6 +118,8 @@ test('loadViewPrefs sanitizes malformed entries leniently and keeps valid ones',
     folded: { good: true },
     ungroupedOrder: { local: ['s1', 's2'], empty: [] },
     orderBy: {},
+    updatedOrder: { 'local/w1': ['s1', 's2'], 'local/w3': ['s3'] },
+    sessionUpdatedAtByAccount: { 'local/w1': { s1: 100, s2: 200 }, 'local/w3': { s5: -1 } },
     seenSources: [],
   })
 })
@@ -112,7 +127,7 @@ test('loadViewPrefs sanitizes malformed entries leniently and keeps valid ones',
 test('loadViewPrefs falls back to defaults when a top-level section is the wrong type', () => {
   const storage = new MemoryStorage()
   storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: 'x', ungroupedOrder: 7 }))
-  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] })
+  assert.deepEqual(loadViewPrefs(storage), defaults())
 })
 
 test('default fallbacks are fresh objects — an in-place mutation of one load cannot pollute later loads', () => {
@@ -123,9 +138,11 @@ test('default fallbacks are fresh objects — an in-place mutation of one load c
   const first = loadViewPrefs(storage) // missing key → defaults
   first.folded['polluted/w'] = true
   first.ungroupedOrder['polluted'] = ['s1']
-  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] })
+  first.updatedOrder!['polluted/w'] = ['s1']
+  first.sessionUpdatedAtByAccount!['polluted/w'] = { s1: 1 }
+  assert.deepEqual(loadViewPrefs(storage), defaults())
   storage.setItem(VIEW_PREFS_KEY, '{corrupt') // corrupt JSON → defaults
-  assert.deepEqual(loadViewPrefs(storage), { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, seenSources: [] })
+  assert.deepEqual(loadViewPrefs(storage), defaults())
 })
 
 test('saveViewPrefs never throws when setItem throws', () => {
@@ -206,13 +223,25 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   __resetViewPrefsForTests()
   // Seed the prefs this test asserts on (self-contained — must not depend on
   // another test's writes): present-connected (local), present-disconnected
-  // (ssh-b), never-seen (ssh-a, ghost) keys, plus ungrouped orders and
-  // per-source orderBy preferences.
+  // (ssh-b), never-seen (ssh-a, ghost) keys, plus ungrouped orders,
+  // per-source orderBy preferences, updated-mode account orders and the
+  // activity bookkeeping.
   updateViewPrefs(prev => ({
     ...prev,
     folded: { 'local/w1': true, 'local/w3': true, 'ssh-a/w2': true, 'ghost/w': true },
     ungroupedOrder: { local: ['s1'], 'ssh-b': ['s2'], ghost: ['s3'] },
     orderBy: { local: 'updated', 'ssh-b': 'updated', ghost: 'manual' },
+    updatedOrder: {
+      'local/w1': ['s1'],
+      'ssh-b/w9': ['s2'],
+      'ghost/w': ['s3'],
+      'ssh-a/w2': ['s4'],
+    },
+    sessionUpdatedAtByAccount: {
+      'local/w1': { s1: 100 },
+      'ssh-b/w9': { s2: 200 },
+      'ghost/w': { s3: 300 },
+    },
   }))
   // Empty projection (nothing published yet): updateViewPrefs leaves the
   // prefs untouched — a transiently unready projection must never wipe them.
@@ -262,6 +291,13 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   // orderBy follows the same source-keyed rules: present sources keep it,
   // never-seen ghosts keep it.
   assert.deepEqual(after.orderBy, { local: 'updated', 'ssh-b': 'updated', ghost: 'manual' })
+  // updated-mode account orders / bookkeeping follow the same source-keyed
+  // rules (keys are `${sourceId}/…`): present + never-seen keep their keys.
+  assert.deepEqual(after.updatedOrder?.['local/w1'], ['s1'])
+  assert.deepEqual(after.updatedOrder?.['ssh-b/w9'], ['s2'])
+  assert.deepEqual(after.updatedOrder?.['ghost/w'], ['s3'])
+  assert.deepEqual(after.updatedOrder?.['ssh-a/w2'], ['s4'])
+  assert.deepEqual(after.sessionUpdatedAtByAccount?.['local/w1'], { s1: 100 })
   // seenSources records only the sources observed in THIS session's projection.
   assert.deepEqual(after.seenSources, ['local', 'ssh-b'])
 
@@ -289,6 +325,13 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   assert.equal(pruned.folded['local/w1'], true)
   assert.equal(pruned.folded['local/w4'], true)
   assert.deepEqual(pruned.ungroupedOrder['local'], ['s1']) // present source keeps its order
+  // updated-mode accounts/bookkeeping prune with the source: ssh-b vanished,
+  // local keeps its account, never-seen ghosts keep theirs.
+  assert.equal(pruned.updatedOrder?.['ssh-b/w9'], undefined)
+  assert.equal(pruned.sessionUpdatedAtByAccount?.['ssh-b/w9'], undefined)
+  assert.deepEqual(pruned.updatedOrder?.['local/w1'], ['s1'])
+  assert.deepEqual(pruned.updatedOrder?.['ghost/w'], ['s3'])
+  assert.deepEqual(pruned.sessionUpdatedAtByAccount?.['local/w1'], { s1: 100 })
   // seenSources keeps the full session history (ssh-b stays known — its keys
   // are already gone; a later re-add of ssh-b would prune on its next absence).
   assert.deepEqual(pruned.seenSources, ['local', 'ssh-b'])
@@ -407,6 +450,24 @@ test('orderBy persists through save/load and the shared store keeps it on unrela
   assert.deepEqual(getViewPrefs().orderBy, {})
 })
 
+// ---- clearSourceBookkeeping (setOrderBy entering-updated clear, 2026-08 C档) ----
+
+test('clearSourceBookkeeping removes only the target source keys, keeps the rest, no-op on undefined', () => {
+  assert.equal(clearSourceBookkeeping(undefined, 'local'), undefined)
+  const bookkeeping = {
+    'local/w1': { s1: 1 },
+    'ssh-a/w1': { s2: 2 },
+    'ssh-a/w2': { s3: 3 },
+  }
+  const cleared = clearSourceBookkeeping(bookkeeping, 'ssh-a')
+  assert.deepEqual(cleared, { 'local/w1': { s1: 1 } })
+  assert.notEqual(cleared, bookkeeping) // a new object only when something was removed
+  // Nothing left to clear → the SAME reference back (callers skip the write).
+  assert.equal(clearSourceBookkeeping(cleared, 'ssh-a'), cleared)
+  // Clearing everything yields an empty map, not undefined.
+  assert.deepEqual(clearSourceBookkeeping({ 'local/w1': { s1: 1 } }, 'local'), {})
+})
+
 // ---- sidebarWidth preference (chamber ui-layout fork, 2026-09; v stays 1 — no re-seed on old data) ----
 
 test('sidebarWidth round-trips through save/load', () => {
@@ -416,6 +477,8 @@ test('sidebarWidth round-trips through save/load', () => {
     folded: { 'local/w1': true },
     ungroupedOrder: { local: ['s1'] },
     orderBy: {},
+    updatedOrder: {},
+    sessionUpdatedAtByAccount: {},
     sidebarWidth: 360,
     seenSources: [],
   }
