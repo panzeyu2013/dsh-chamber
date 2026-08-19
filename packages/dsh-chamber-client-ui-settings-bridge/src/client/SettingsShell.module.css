@@ -96,6 +96,7 @@
   flex: none;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   gap: 18px;
   width: 188px;
   padding: 22px 12px 8px;
@@ -211,22 +212,18 @@
 }
 
 .dropdownList {
-  position: absolute;
-  z-index: 100;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
+  z-index: 1200;
   /* content-box min-width would overflow the trigger by its padding;
      border-box keeps the list exactly as wide as the trigger (official
      Menu.module.css does the same). */
   box-sizing: border-box;
-  min-width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  /* In-panel list (not portal): a fixed cap keeps the tail reachable inside
-     the settings panel's own scroll area for realistic rosters (~12 rows). */
-  max-height: 360px;
-  max-width: 360px;
-  overflow-y: auto;
+  overflow: hidden;
+  /* Body-portal list: inline geometry is viewport-clamped by server-selector. */
+  max-width: none;
   padding: 4px;
   /* Official Menu float border (transparent hairline in light mode). */
   border: 1px solid var(--dsw-alias-border-inverted);
@@ -241,11 +238,46 @@
   gap: 0;
 }
 
+.dropdownSearch {
+  box-sizing: border-box;
+  width: 100%;
+  height: 34px;
+  margin-bottom: 4px;
+  padding: 6px 9px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  outline: none;
+}
+
+.dropdownSearch:focus {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.dropdownItems {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.dropdownEmpty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
 .dropdownItem {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   padding: 7px 10px;
   border: none;
   border-radius: 8px;
@@ -263,19 +295,14 @@
   white-space: nowrap;
 }
 
-.dropdownItem:hover:not(:disabled),
+.dropdownItem:hover,
 .dropdownItem:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover);
   /* The fill IS the keyboard focus indicator (brand outline would double it). */
   outline: none;
 }
 
-.dropdownItem:disabled {
-  color: var(--dsw-alias-label-tertiary);
-  cursor: not-allowed;
-}
-
-.selected:not(:disabled) {
+.selected {
   background: var(--dsw-alias-interactive-bg-hover);
   font-weight: 600;
 }
@@ -287,8 +314,8 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* Connection-state dot: green = connected, red = not connected (remote rows
-   are disabled while red; the local row stays selectable). */
+/* Connection-state dot: green = connected, red = not connected. Both remain
+   selectable; the content column explains an unreachable target. */
 .dot {
   width: 8px;
   height: 8px;
@@ -305,6 +332,12 @@
 }
 
 .current {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.connectionState {
   flex: none;
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
@@ -364,9 +397,56 @@
   overflow-y: auto;
 }
 
+.pluginDiagnostic {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.pluginDiagnostic span {
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.pluginDiagnosticOk {
+  color: var(--dsw-alias-state-success-primary);
+  background: var(--dsw-alias-state-success-bg, transparent);
+}
+
+.pluginDiagnosticProblem {
+  color: var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-state-error-bg, transparent);
+}
+
 .placeholder {
   font-size: 13px;
   color: var(--dsw-alias-label-tertiary);
+}
+
+.unavailableView {
+  padding-top: 12px;
+}
+
+.inlineAction {
+  margin-top: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  font: inherit;
+}
+
+.inlineAction:hover,
+.inlineAction:focus-visible {
+  border-color: var(--dsw-alias-brand-primary);
 }
 
 /* Server-switch intermediate state: the content column switches to a

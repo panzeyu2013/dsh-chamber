@@ -6,8 +6,8 @@
  * never compiled here; at runtime vite's shared chunk keeps one instance.
  *
  * MIRROR WARNING: keep in sync with the REAL ChamberServerAggregate /
- * chamberBridge members (aggregate-store.ts) — this package only reads
- * id/kind/label/connected/phase, so those members alone are mirrored.
+ * chamberBridge members (aggregate-store.ts) — this package reads roster
+ * identity/connectivity plus the client-plugin diagnostic projection.
  */
 
 /** One server row as published by the renderer App layer. */
@@ -21,6 +21,12 @@ export interface ChamberServerAggregate {
   /** Status text (ready/connecting/… projection). */
   phase: string
   hint?: string
+  pluginDiagnostic?: {
+    state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
+    message?: string
+    pluginId?: string
+    updatedAt: number
+  }
   updatedAt: number
 }
 

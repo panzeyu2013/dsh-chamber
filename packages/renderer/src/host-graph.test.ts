@@ -117,6 +117,75 @@ test('fetchHostGraph: business failure (result.ok false) throws with the host er
   }
 })
 
+test('collectExtraRows: an RPC missing-method message reports not-injected even with a generic code', async () => {
+  const stub = stubFetch(200, {
+    rpcId: 'r1',
+    result: { ok: false, error: { code: 'rpc_failed', message: 'unknown method clientGraph/graph' } },
+  })
+  const consoleCapture = captureConsoleError()
+  let diagnostic: { state: string } | undefined
+  try {
+    assert.deepEqual(await collectExtraRows('legacy-rpc', '/api/i/legacy-rpc', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    }), [])
+    assert.equal(diagnostic?.state, 'not-injected')
+  } finally {
+    stub.restore()
+    consoleCapture.restore()
+  }
+})
+
+test('collectExtraRows: concurrent consumers await one shared bundle load', async () => {
+  const id = '@scope/concurrent-shared-load'
+  const stub = stubFetch(200, envelope([row(id)]))
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let loads = 0
+  const loadModuleBundle = async (): Promise<void> => {
+    loads += 1
+    await gate
+  }
+  try {
+    const first = collectExtraRows('concurrent-a', '/api/i/local', { loadModuleBundle })
+    const second = collectExtraRows('concurrent-b', '/api/i/ssh-b', { loadModuleBundle })
+    let secondSettled = false
+    void second.finally(() => { secondSettled = true })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(loads, 1)
+    assert.equal(secondSettled, false, 'a duplicate consumer must wait until the shared bundle is actually loaded')
+    release()
+    await Promise.all([first, second])
+    assert.equal(loads, 1)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: a shared concurrent rejection fails every waiter and remains retryable', async () => {
+  const id = '@scope/concurrent-shared-failure'
+  const stub = stubFetch(200, envelope([row(id)]))
+  let loads = 0
+  let shouldFail = true
+  const loadModuleBundle = async (): Promise<void> => {
+    loads += 1
+    if (shouldFail) throw new Error('shared load failed')
+  }
+  try {
+    const results = await Promise.allSettled([
+      collectExtraRows('failure-a', '/api/i/local', { loadModuleBundle }),
+      collectExtraRows('failure-b', '/api/i/ssh-b', { loadModuleBundle }),
+    ])
+    assert.equal(loads, 1)
+    assert.ok(results.every(result => result.status === 'rejected'))
+    shouldFail = false
+    await collectExtraRows('failure-retry', '/api/i/local', { loadModuleBundle })
+    assert.equal(loads, 2)
+  } finally {
+    stub.restore()
+  }
+})
+
 test('fetchHostGraph: malformed envelope/rows throw loud (never silently merged)', async () => {
   const cases: { status: number; body: unknown; match: RegExp }[] = [
     { status: 200, body: 'not-json', match: /envelope 不是合法 JSON/ },
@@ -190,11 +259,32 @@ test('collectExtraRows: graph channel failure degrades to [] with a console.erro
   const stub = stubFetch(200, new Error('network down'))
   const consoleCapture = captureConsoleError()
   try {
-    const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async () => {} })
+    let diagnostic: { state: string } | undefined
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
     assert.deepEqual(rows, [])
     assert.equal(consoleCapture.messages.length, 1)
     assert.match(consoleCapture.messages[0], /instance local host boot-graph fetch failed/)
     assert.match(consoleCapture.messages[0], /network down/)
+    assert.equal(diagnostic?.state, 'graph-unreachable')
+  } finally {
+    stub.restore()
+    consoleCapture.restore()
+  }
+})
+
+test('collectExtraRows: a missing graph endpoint reports not-injected', async () => {
+  const stub = stubFetch(404, {})
+  const consoleCapture = captureConsoleError()
+  let diagnostic: { state: string } | undefined
+  try {
+    assert.deepEqual(await collectExtraRows('legacy', '/api/i/legacy', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    }), [])
+    assert.equal(diagnostic?.state, 'not-injected')
   } finally {
     stub.restore()
     consoleCapture.restore()
@@ -239,14 +329,38 @@ test('collectExtraRows: a failing bundle load rejects loud (never degrades)', as
   const stub = stubFetch(200, envelope([row('@scope/bad-plugin')]))
   const loaded: string[] = []
   try {
+    let diagnostic: { state: string } | undefined
     await assert.rejects(
       collectExtraRows('local', '/api/i/local', { loadModuleBundle: async url => {
         loaded.push(url)
         throw new Error(`bundle ${url} exploded`)
-      } }),
+      }, reportDiagnostic: (_sourceId, next) => { diagnostic = next } }),
       /bundle .* exploded/,
     )
     assert.deepEqual(loaded, ['/api/i/local/plugins/@scope/bad-plugin/client.js?rev=abc123'])
+    assert.equal(diagnostic?.state, 'bundle-load-failed')
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: a cross-instance plugin revision conflict requires restart', async () => {
+  const id = '@scope/revision-conflict-test'
+  let stub = stubFetch(200, envelope([row(id, { rev: 'rev-one' })]))
+  try {
+    await collectExtraRows('revision-source-one', '/api/i/local', { loadModuleBundle: async () => {} })
+  } finally {
+    stub.restore()
+  }
+  stub = stubFetch(200, envelope([row(id, { rev: 'rev-two' })]))
+  try {
+    let diagnostic: { state: string; pluginId?: string } | undefined
+    await collectExtraRows('revision-source-two', '/api/i/ssh-two', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
+    assert.equal(diagnostic?.state, 'restart-required')
+    assert.equal(diagnostic?.pluginId, id)
   } finally {
     stub.restore()
   }
@@ -276,7 +390,7 @@ test('collectExtraRows: a failed preload is NOT marked — a retry re-triggers t
   }
 })
 
-test('collectExtraRows: same id at a different rev is first-rev-wins (later boot reuses the preloaded factory)', async () => {
+test('collectExtraRows: same id at a different rev reuses the loaded factory and reports restart-required', async () => {
   // Boot 1 preloads revA.
   const stubA = stubFetch(200, envelope([row('@scope/rev-plugin', { rev: 'revA', url: '/plugins/@scope/rev-plugin/client.js?rev=revA' })]))
   const loaded: string[] = []
@@ -290,9 +404,14 @@ test('collectExtraRows: same id at a different rev is first-rev-wins (later boot
   // merged row still surfaces revB (the id wins, the rev is informational).
   const stubB = stubFetch(200, envelope([row('@scope/rev-plugin', { rev: 'revB', url: '/plugins/@scope/rev-plugin/client.js?rev=revB' })]))
   try {
-    const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async url => { loaded.push(url) } })
+    let diagnostic: { state: string } | undefined
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async url => { loaded.push(url) },
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
     assert.deepEqual(rows, [{ id: '@scope/rev-plugin', url: '/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revB', rev: 'revB' }])
     assert.deepEqual(loaded, ['/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revA'])
+    assert.equal(diagnostic?.state, 'restart-required')
   } finally {
     stubB.restore()
   }

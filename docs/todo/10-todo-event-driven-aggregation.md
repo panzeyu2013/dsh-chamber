@@ -1,18 +1,19 @@
-# 10 · 侧边栏聚合改事件驱动（todo：设计待评审，实现未排期）
+# 10 · 侧边栏聚合改事件驱动（已实现，2026-08）
 
-> **状态：todo**——2026-08 前端性能排查（INP 232ms / 长时间运行变卡）后记录的
+> **状态：已实现**——2026-08 前端性能排查（INP 232ms / 长时间运行变卡）后记录的
 > **设计级改进**：把 App 层的 10s REST 聚合轮询改为**各来源 ctx 经 chamberBridge
 > 推送投影**（轮询退化为未挂载来源的兜底）。本文记录动机、机制、契约影响、风险与
-> 分期。**实现未排期**——改动 05 §3 数据契约，需评审确认后实施。
+> 分期。最终实现严格限于 chamber 自有包：复用每个 ctx 已有 store/host-frame 链，
+> **没有修改 vendor 或上游 dsh，也没有新增远端推送协议**。
 >
 > 背景性能修复（**已实现**，见 `docs/progress/STATUS.md` 代码收敛）：shell 销毁时
 > cordis ctx 拆除（防僵尸 shell 泄漏）、publish 签名闸 + identity-preserving 状态
 > （消除 10s 轮询触发的 N×侧边栏全量重渲染）、会话行 `content-visibility` 注入
-> （缓解长会话 INP）。本文是**下一步结构性改进**，不是那批修复的一部分。
+> （缓解长会话 INP）。本文记录随后已完成的结构性改进。
 
 ## 1. 动机：10s 轮询是结构性开销
 
-现状（05 §3 契约）：App 层（`packages/renderer/src/App.tsx`）每 10s 对每个 ready
+改造前现状（05 §3 旧契约）：App 层（`packages/renderer/src/App.tsx`）每 10s 对每个 ready
 实例拉一次 `workspace.list` + `sessions.list`（经 `fetchInstanceSnapshot`），把
 结果投影进 `chamberBridge` publish；每个已挂载 shell 的侧边栏插件订阅同一桥。
 
@@ -30,21 +31,23 @@
 
 通道基建 = **06 §4 已实现的 `reportInstanceRuntime` 模式**（每来源插件
 `inject` 订阅 `sessions.list` → 投影 → chamberBridge → App 层
-`aggregate-store.ts`），本方案是**同一通道的扩展**（把事实投影通道推广为
-全量快照通道 `reportInstanceSnapshot`），不重新描述插件订阅机制：
+`aggregate-store.ts`）。本次落地沿用并扩展同一通道：侧边栏插件（每来源 shell 各一份，
+`inject` 含 `sessions`/`workspaces`）同时订阅 `sessions.list` 与 `workspaces.list`，
+把事实投影通道推广为全量快照通道 `reportInstanceSnapshot`，不另造订阅机制：
 
 1. **`packages/dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts`**：新增
-   通道 `reportInstanceSnapshot(sourceId, snapshot)` / `onInstanceSnapshot(listener)`
-   ——镜像既有 `reportInstanceRuntime` 模式（写入方 = 各来源插件，消费方 = App 层）。
+   generation-safe `registerInstanceSnapshotProducer(sourceId)` / `onInstanceSnapshot(listener)`
+   通道——旧 shell 的迟到 cleanup 不会清除同 id 新 shell 的快照。
 2. **`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`** `sync()`：除
-   runtime facts 外，把 `ctx.sessions.list`（+ 按需补订阅 `ctx.workspaces`）的投影
-   （复用 `deriveServerWorkspaces`）经新通道上报；**结构签名**（id 集合 + blank +
-   workspace 成员序）未变时不上报（沿用现有签名纪律，防子 agent 生灭高频抖动）。
+   runtime facts 外，把两个 store 经纯函数 `projectInstanceSnapshot` 投影；只有两份
+   reconnect baseline 都 ready 才上报，否则撤回快照并恢复兜底。完整内容签名未变
+   时不上报，subagent 行不进入导航快照。
 3. **`packages/renderer/src/App.tsx`**：
-   - 新增 `snapshots` state 合并各来源上报（identity-preserving，复用
+   - 合并各来源上报（identity-preserving，复用
      `instanceSnapshotSignature`；publish 继续走 `serversProjectionSignature` 闸）；
-   - `pollAggregates` 改为**仅对未挂载来源**（未 boot/预热未完成的来源）兜底轮询
-     ——stale-while-revalidate 语义，挂载即切换推通道；
+   - `pollAggregates` 仅对**无完整生产者**来源（未挂载或重连基线不完整）30s 兜底；
+     全部 ready 来源已有生产者时不创建聚合定时器；
+   - 每次推送先递增来源序号，使较旧的在途 unary resolve/reject 均不能覆盖新快照；
    - `onRefresh` 通道保留（动作成功后的即时拉取仍可直接走一次 unary，语义不变）。
 
 ## 3. 契约影响（05 §3 需修订）
@@ -68,17 +71,17 @@
 - **多来源同时上报**：同渲染周期多份上报经函数式 updater 组合（沿用
   `reconcileCompletedFacts` 的配对纪律），签名闸保证最终只 publish 一次。
 
-## 5. 分期
+## 5. 落地结果
 
-- M1：aggregate-store 新通道 + 插件侧投影上报（纯增量，不动轮询）；
-- M2：App 合并推投影 + 轮询降级为未挂载来源兜底（契约修订，05 §3）；
-- M3：验证与压测（多来源 + 子 agent 高频场景下的 publish 次数、侧边栏重渲染次数、
-  网络请求数对比）。
+- M1：generation-safe snapshot producer + sessions/workspaces 双 store 完整投影；
+- M2：App 合并推投影，旧 pull 失效，30s 兜底只覆盖无完整生产者来源；
+- M3：子 agent 行从导航快照排除，同内容签名去重；
+- M4：来源状态变化、重连基线失效/恢复、动作后单次刷新均保留；
+- M5：纯函数/生产者代际单测、05 契约与 STATUS 同步。
 
-## 6. 上游诉求（chamber 不可改，记录待提交上游）
+## 6. 非依赖的上游长期方向（本方案不实施、不要求）
 
-性能排查（2026-08）确认的两个**结构性**瓶颈在 vendor（上游 dsh 前端）侧，chamber
-只能缓解（见 `docs/progress/STATUS.md`「2026-08 性能排查」）：
+以下仅是独立观察，不属于本修复范围，也不是前置条件；chamber 保持上游纯净：
 
 1. **会话列表虚拟化**：`dsh-client-ui-conversation` 的 ChatView 全量渲染
    `order.map(...)` 全部节点（`ChatView.tsx:382`），长会话 DOM/内存无界增长。
@@ -88,4 +91,3 @@
 2. **单前端多数据适配器**：N-ctx 是「N × 完整 dsh 前端」常驻（各自身 cordis ctx、
    双 WS、store、DOM），成本随来源数线性放大。上游若能提供「单前端运行时 +
    每来源数据适配器」，可消除该结构成本——属于上游架构级变更，非 chamber 可改。
-

@@ -37,6 +37,8 @@ import {
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
+  type InstanceSnapshot,
+  type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
@@ -45,7 +47,8 @@ import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
 import InstanceView from './components/InstanceView.tsx'
 
-const AGGREGATE_POLL_MS = 10000
+/** Only unmounted/not-yet-reporting ready sources need this safety net. */
+const AGGREGATE_FALLBACK_POLL_MS = 30_000
 /** 连接行（label/dshPort）低频轮询：状态本身走推送，行字段极少变化。 */
 const CONNECTIONS_POLL_MS = 30_000
 
@@ -89,6 +92,7 @@ function deriveServers(
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
   completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
+  pluginDiagnostics: Record<string, PluginGraphDiagnostic | undefined>,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const now = Date.now()
@@ -102,14 +106,14 @@ function deriveServers(
       : (remoteStatus[statusKey]?.phase ?? 'idle')
     let workspaces: ChamberServerAggregate['workspaces'] = []
     const aggregate = aggregates[id]
-    if (aggregate !== undefined && aggregate.state === 'ok') {
+    const connected = instanceConnected(kind, health, remoteStatus, statusKey)
+    if (connected && aggregate !== undefined && aggregate.state === 'ok') {
       // 当前会话事实只给活动来源：blank（新建未首发的）会话行只在正在查看的
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
       // 空"新建会话"行。其他来源 blank 行照旧不进入导航列表。
       const current = id === activeViewId ? runtimeFacts[id]?.current : undefined
       workspaces = deriveServerWorkspaces(aggregate, '', current)
     }
-    const connected = instanceConnected(kind, health, remoteStatus, statusKey)
     const entry: ChamberServerAggregate = {
       id,
       kind,
@@ -131,6 +135,7 @@ function deriveServers(
     if (aggregate !== undefined && aggregate.state === 'error') {
       entry.aggregateError = aggregate.error ?? '未知错误'
     }
+    if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
     servers.push(entry)
   }
   push('local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例')
@@ -201,8 +206,18 @@ export default function App() {
   // 重 boot（令牌递增 → 视图复位 → 重新启动 shell）。
   const [shellStates, setShellStates] = useState<Record<string, ShellState>>({})
   const [retryTokens, setRetryTokens] = useState<Record<string, number>>({})
-  // 每实例 workspace/session 聚合（实例 API 轮询结果；控制面不持有会话事实）
+  // 每实例 workspace/session 聚合（已挂载 ctx 推送 + 未挂载 unary 兜底；控制面不持有会话事实）
   const [aggregates, setAggregates] = useState<Record<string, InstanceAggregate>>({})
+  // Complete snapshots reported by mounted ctx stores. A source appears here
+  // only while both reconnect baselines are ready; those sources require no
+  // periodic unary aggregation. Unmounted/incomplete sources retain the
+  // bounded fallback below.
+  const [snapshotSources, setSnapshotSources] = useState<Record<string, true>>({})
+  // Event callbacks and fallback polls may interleave before React commits the
+  // state update above. Keep a synchronous ownership mirror so a producer's
+  // first snapshot immediately suppresses any later unary pull in that window.
+  const snapshotSourcesRef = useRef<Record<string, true>>({})
+  const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
   // chamber (06 §4.1, 2026-08)：App 自持的「完成未读」蓝点（completedBySource）
@@ -217,13 +232,13 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView),
-    [health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView, pluginDiagnostics),
+    [health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView, pluginDiagnostics],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
-  // 时都会重建（含 10s 聚合轮询、30s 注册表轮询、状态推送的恒新对象），但
+  // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
   // 只有**渲染相关内容**变化才值得通知订阅方——否则每个 shell 的侧边栏都会
-  // 每 10s 全量重渲染。签名排除无人消费的 server.updatedAt 时间戳。设置桥的
+  // 周期性兜底触发全量重渲染。签名排除无人消费的 server.updatedAt 时间戳。设置桥的
   // subscribeServers 早已做了同类去重（本闸是对 publish 源头的收口）。
   const lastServersSignatureRef = useRef('')
   useEffect(() => {
@@ -272,7 +287,10 @@ export default function App() {
     // 被回收的 id 再统一处置；setMountedViews 保持 identity-preserving。
     const removed = mountedViews.filter(id => !live.has(id))
     if (removed.length > 0) {
-      for (const id of removed) disposeInstanceShell(id)
+      for (const id of removed) {
+        disposeInstanceShell(id)
+        chamberBridge.clearPluginDiagnostic(id)
+      }
       setMountedViews(prev => {
         const next = prev.filter(id => live.has(id))
         return next.length === prev.length ? prev : next
@@ -310,6 +328,31 @@ export default function App() {
       return changed ? next : prev
     })
     setRuntimeFacts(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const id of Object.keys(next)) {
+        if (!servers.some(server => server.id === id)) {
+          delete next[id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+    setSnapshotSources(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const id of Object.keys(next)) {
+        if (!servers.some(server => server.id === id)) {
+          delete next[id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+    for (const id of Object.keys(snapshotSourcesRef.current)) {
+      if (!servers.some(server => server.id === id)) delete snapshotSourcesRef.current[id]
+    }
+    setPluginDiagnostics(prev => {
       const next = { ...prev }
       let changed = false
       for (const id of Object.keys(next)) {
@@ -400,8 +443,7 @@ export default function App() {
    * 拉取一个实例的 workspace/session 快照（失败落 error 态，由轮询重试）。
    * 每次调用按实例取序并递增；resolve/reject 时仅当捕获的序号仍是最新才
    * 落 state——避免慢轮询在拖拽提交后的即时刷新之后落地、用旧序覆盖新序
-   * （拖拽 commit 前的轮询快照可能晚于 refresh 拉取到达，造成至多 10s 的
-   * 陈旧排序）。
+   * （拖拽 commit 前的兜底快照可能晚于 refresh 拉取到达，造成陈旧排序）。
    */
   const aggregateSeqRef = useRef<Record<string, number>>({})
   const refreshAggregate = useCallback(async (instanceId: string) => {
@@ -410,7 +452,7 @@ export default function App() {
     try {
       const snapshot = await fetchInstanceSnapshot(getInstanceClient(instanceId))
       if (aggregateSeqRef.current[instanceId] !== seq) return
-      // identity-preserving：快照内容未变（10s 轮询的常态）则复用旧 state 对象
+      // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
       // 是权威失败事实，不能因"看起来没变"而吞掉）。
@@ -448,7 +490,9 @@ export default function App() {
         notReady.push(`ssh-${instance.id}`)
       }
     }
-    for (const entry of ready) void refreshAggregate(entry.id)
+    for (const entry of ready) {
+      if (snapshotSourcesRef.current[entry.id] !== true) void refreshAggregate(entry.id)
+    }
     if (notReady.length > 0) {
       setAggregates(prev => {
         let changed = false
@@ -485,12 +529,35 @@ export default function App() {
     pollAggregatesRef.current = pollAggregates
   })
 
-  // 连接事实（health / 隧道相位 / 注册表）变化即重估聚合，不等下一个 10s
+  // 连接事实（health / 隧道相位 / 注册表）或快照生产者变化即重估聚合，
   // tick：ready↔degraded 转换瞬间的错误行在下一次状态推送后立即被
   // not-connected/正常数据替换，不残留到轮询周期。
   useEffect(() => {
     pollAggregatesRef.current()
-  }, [health, remoteStatus, remoteInstances])
+  }, [health, remoteStatus, remoteInstances, snapshotSources])
+
+  const fallbackAggregateKey = useMemo(() => {
+    const ids: string[] = []
+    if (instanceConnected('local', health, remoteStatus, LOCAL_INSTANCE_ID)
+      && snapshotSources[LOCAL_INSTANCE_ID] !== true) ids.push(LOCAL_INSTANCE_ID)
+    for (const instance of remoteInstances) {
+      const id = `ssh-${instance.id}`
+      if (instanceConnected('ssh', health, remoteStatus, instance.id)
+        && snapshotSources[id] !== true) ids.push(id)
+    }
+    return ids.sort().join('\u0000')
+  }, [health, remoteStatus, remoteInstances, snapshotSources])
+
+  // No timer exists once every ready source has a mounted complete producer.
+  // Hidden-to-tray therefore causes no session/workspace polling for the
+  // normal mounted fleet; only unmounted/incomplete sources use this 30s net.
+  useEffect(() => {
+    if (fallbackAggregateKey === '') return
+    const timer = setInterval(() => {
+      pollAggregatesRef.current()
+    }, AGGREGATE_FALLBACK_POLL_MS)
+    return () => { clearInterval(timer) }
+  }, [fallbackAggregateKey])
 
   useEffect(() => {
     let cancelled = false
@@ -537,18 +604,12 @@ export default function App() {
       void refreshRemotes()
     }, CONNECTIONS_POLL_MS)
 
-    const aggregateTimer = setInterval(() => {
-      if (cancelled) return
-      pollAggregatesRef.current()
-    }, AGGREGATE_POLL_MS)
-
     window.addEventListener('beforeunload', disposeAllShells)
 
     return () => {
       cancelled = true
       clearInterval(connectionsTimer)
       clearInterval(remotesTimer)
-      clearInterval(aggregateTimer)
       healthEvents.close()
       window.removeEventListener('beforeunload', disposeAllShells)
     }
@@ -850,9 +911,57 @@ export default function App() {
   /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。 */
   useEffect(() => {
     return chamberBridge.onRefresh((sourceId) => {
+      // Mounted complete producers observe the same host-store mutation and
+      // publish it directly. Pull only for unmounted/incomplete sources.
+      if (snapshotSourcesRef.current[sourceId] === true) return
       void refreshAggregate(sourceId)
     })
   }, [refreshAggregate])
+
+  /**
+   * Mounted source ctxs publish the same complete snapshot shape as the unary
+   * fallback. A push invalidates any older in-flight pull before committing;
+   * an incomplete/reconnecting producer withdraws its snapshot and the
+   * immediate fallback reevaluation above takes over.
+   */
+  useEffect(() => {
+    return chamberBridge.onInstanceSnapshot((sourceId, snapshot: InstanceSnapshot | undefined) => {
+      aggregateSeqRef.current[sourceId] = (aggregateSeqRef.current[sourceId] ?? 0) + 1
+      if (snapshot === undefined) delete snapshotSourcesRef.current[sourceId]
+      else snapshotSourcesRef.current[sourceId] = true
+      setSnapshotSources(prev => {
+        if (snapshot === undefined) {
+          if (prev[sourceId] === undefined) return prev
+          const next = { ...prev }
+          delete next[sourceId]
+          return next
+        }
+        if (prev[sourceId] === true) return prev
+        return { ...prev, [sourceId]: true }
+      })
+      if (snapshot === undefined) return
+      setAggregates(prev => {
+        const current = prev[sourceId]
+        if (current !== undefined && current.state === 'ok'
+          && instanceSnapshotSignature(current) === instanceSnapshotSignature(snapshot)) return prev
+        return { ...prev, [sourceId]: { state: 'ok', ...snapshot, error: null } }
+      })
+    })
+  }, [])
+
+  useEffect(() => {
+    return chamberBridge.onPluginDiagnostic((sourceId, diagnostic) => {
+      setPluginDiagnostics(prev => {
+        if (diagnostic === undefined) {
+          if (prev[sourceId] === undefined) return prev
+          const next = { ...prev }
+          delete next[sourceId]
+          return next
+        }
+        return { ...prev, [sourceId]: diagnostic }
+      })
+    })
+  }, [])
 
   /** 每来源 ctx 的运行时事实上报（06 §4）：report 覆盖、clear 删除；同时
    *  对账该来源的「完成未读」蓝点（completedBySource）。无需额外依赖。 */

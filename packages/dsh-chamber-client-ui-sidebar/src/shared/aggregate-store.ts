@@ -10,6 +10,7 @@
  * The synthetic trailing ungrouped bucket carries `ungrouped: true` and the
  * shared UNGROUPED_WORKSPACE_ID as its id.
  */
+import type { InstanceSnapshot } from './instance-api.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('aggregate-store')
@@ -35,6 +36,22 @@ export interface ChamberServerAggregate {
   aggregateError?: string
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
+  /** Renderer-local client-plugin boot health for this source. */
+  pluginDiagnostic?: PluginGraphDiagnostic
+  updatedAt: number
+}
+
+export type PluginGraphDiagnosticState =
+  | 'ok'
+  | 'not-injected'
+  | 'graph-unreachable'
+  | 'bundle-load-failed'
+  | 'restart-required'
+
+export interface PluginGraphDiagnostic {
+  state: PluginGraphDiagnosticState
+  message?: string
+  pluginId?: string
   updatedAt: number
 }
 
@@ -78,14 +95,22 @@ type OpenListener = (request: OpenSessionRequest) => void
 type RefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
 type RuntimeReportListener = (sourceId: string, report: InstanceRuntimeReport | undefined) => void
+type SnapshotReportListener = (sourceId: string, snapshot: InstanceSnapshot | undefined) => void
+type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void
 
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
 const refreshListeners = new Set<RefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
+const snapshotReportListeners = new Set<SnapshotReportListener>()
+const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
 let servers: ChamberServerAggregate[] = []
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
+const instanceSnapshots: Record<string, InstanceSnapshot> = {}
+const snapshotProducerTokens: Record<string, number> = {}
+const pluginDiagnostics: Record<string, PluginGraphDiagnostic> = {}
+let nextSnapshotProducerToken = 0
 
 export const chamberBridge = {
   /** Latest published projection (non-authoritative; renderer-owned store). */
@@ -120,7 +145,7 @@ export const chamberBridge = {
     }
   },
 
-  /** Sidebar call after a successful action: ask the App layer to re-pull the source snapshot. */
+  /** Sidebar call after an action: unmounted/incomplete sources ask App for one pull; mounted stores push. */
   requestRefresh(sourceId: string): void {
     for (const listener of [...refreshListeners]) listener(sourceId)
   },
@@ -164,6 +189,79 @@ export const chamberBridge = {
     runtimeReportListeners.add(listener)
     return () => {
       runtimeReportListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Register the snapshot producer owned by one mounted instance ctx. The
+   * token makes teardown generation-safe: a late cleanup from an old shell
+   * cannot clear a newer shell's report for the same source.
+   */
+  registerInstanceSnapshotProducer(sourceId: string): {
+    report: (snapshot: InstanceSnapshot | undefined) => void
+    clear: () => void
+  } {
+    const token = ++nextSnapshotProducerToken
+    snapshotProducerTokens[sourceId] = token
+    if (instanceSnapshots[sourceId] !== undefined) {
+      delete instanceSnapshots[sourceId]
+      for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined)
+    }
+    return {
+      report(snapshot): void {
+        if (snapshotProducerTokens[sourceId] !== token) return
+        if (snapshot === undefined) {
+          if (instanceSnapshots[sourceId] === undefined) return
+          delete instanceSnapshots[sourceId]
+        } else {
+          instanceSnapshots[sourceId] = snapshot
+        }
+        for (const listener of [...snapshotReportListeners]) listener(sourceId, snapshot)
+      },
+      clear(): void {
+        if (snapshotProducerTokens[sourceId] !== token) return
+        delete snapshotProducerTokens[sourceId]
+        if (instanceSnapshots[sourceId] === undefined) return
+        delete instanceSnapshots[sourceId]
+        for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined)
+      },
+    }
+  },
+
+  /** Current complete reports, used only as renderer-local attachment state. */
+  getInstanceSnapshots(): Readonly<Record<string, InstanceSnapshot>> {
+    return instanceSnapshots
+  },
+
+  /** Subscribe and synchronously replay all complete reports. */
+  onInstanceSnapshot(listener: SnapshotReportListener): () => void {
+    snapshotReportListeners.add(listener)
+    for (const [sourceId, snapshot] of Object.entries(instanceSnapshots)) listener(sourceId, snapshot)
+    return () => {
+      snapshotReportListeners.delete(listener)
+    }
+  },
+
+  reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void {
+    pluginDiagnostics[sourceId] = diagnostic
+    for (const listener of [...pluginDiagnosticListeners]) listener(sourceId, diagnostic)
+  },
+
+  clearPluginDiagnostic(sourceId: string): void {
+    if (pluginDiagnostics[sourceId] === undefined) return
+    delete pluginDiagnostics[sourceId]
+    for (const listener of [...pluginDiagnosticListeners]) listener(sourceId, undefined)
+  },
+
+  getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>> {
+    return pluginDiagnostics
+  },
+
+  onPluginDiagnostic(listener: PluginDiagnosticListener): () => void {
+    pluginDiagnosticListeners.add(listener)
+    for (const [sourceId, diagnostic] of Object.entries(pluginDiagnostics)) listener(sourceId, diagnostic)
+    return () => {
+      pluginDiagnosticListeners.delete(listener)
     }
   },
 }

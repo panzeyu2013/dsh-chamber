@@ -18,11 +18,21 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const FIXTURE_URL = pathToFileURL(
   fileURLToPath(new URL('../packages/renderer/test-fixtures/dsh-client-web.mjs', import.meta.url)),
 ).href
+const CHAMBER_BRIDGE_URL = pathToFileURL(
+  fileURLToPath(new URL('../packages/dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts', import.meta.url)),
+).href
 
 /** @type {import('node:module').ResolveHook} */
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === '@deepseek-ai/dsh-client-web') {
     return { url: FIXTURE_URL, shortCircuit: true }
+  }
+  // shell.ts only consumes chamberBridge. Resolve directly to its source
+  // module instead of the package's shared barrel: the barrel also links the
+  // source-only dsh connection/runtime packages that this isolated Node test
+  // intentionally does not install or execute.
+  if (specifier === '@dsh-chamber/dsh-client-ui-sidebar/shared') {
+    return { url: CHAMBER_BRIDGE_URL, shortCircuit: true }
   }
   return nextResolve(specifier, context)
 }

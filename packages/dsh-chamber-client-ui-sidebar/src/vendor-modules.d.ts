@@ -50,6 +50,8 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
   }
   /** Session list state (runtime facts report). */
   export type SessionListState = any
+  /** Workspace list state (complete snapshot projection). */
+  export type WorkspaceListState = any
   /** Workspace id brand (slots contract). */
   export type WorkspaceId = string
   /** Vendor subagent-lineage aggregation (06 §4.5, running-subagent ring). */

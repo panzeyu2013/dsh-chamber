@@ -4,8 +4,8 @@
  * official shell is shadowed, not conflicted). The sidebar-foot trigger plus
  * the centered modal panel keep the official panel geometry (figma
  * 501:29947), but the nav rail is re-aimed: a SERVER dropdown on top
- * (local default; remote rows colored by connection state — green
- * selectable, red disabled) over the SELECTED server's official settings
+ * (local default; searchable portal, all rows selectable, connection state
+ * colored green/red) over the SELECTED server's official settings
  * sections, and the options column renders that server's official section
  * content through the child cordis context bridge (bridge-context.ts). The
  * chamber-global connections surface is a FIXED nav entry below a divider —
@@ -17,8 +17,9 @@
  * are self-built); every section's config fact still lives on the selected
  * instance's host machine.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
   IconAgentPresetOutline16, IconCloseOutline16, IconDataOutline16, IconLinkOutline16,
@@ -45,6 +46,7 @@ import {
 } from './mount-retry.ts'
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import css from './SettingsShell.module.css'
+import { filterServerRows, serverDropdownPlacement } from './server-selector.ts'
 
 /** Registration-side business face for the chamber settings shell. */
 export interface SettingsShellInjected {
@@ -63,6 +65,17 @@ export type SettingsShellProps =
 
 /** The local instance id (always selectable, even while its host is not ready). */
 const LOCAL_INSTANCE_ID = 'local'
+
+function pluginDiagnosticText(
+  state: NonNullable<BridgeServerRow['pluginDiagnostic']>['state'],
+  t: (key: SettingsBridgeKey) => string,
+): string {
+  if (state === 'ok') return t('pluginDiagnosticOk')
+  if (state === 'not-injected') return t('pluginDiagnosticNotInjected')
+  if (state === 'graph-unreachable') return t('pluginDiagnosticGraphUnreachable')
+  if (state === 'bundle-load-failed') return t('pluginDiagnosticBundleFailed')
+  return t('pluginDiagnosticRestartRequired')
+}
 
 /**
  * Per-selection session-mount retry ledger: `failures` counts consecutive
@@ -106,12 +119,10 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * The server dropdown: local first and always selectable; remote rows are
- * colored by connection state (green = connected/selectable, red = not
- * connected/disabled). Menu semantics mirror the official ModelSelect:
- * trigger aria-haspopup/expanded/controls, menuitemradio rows with
- * aria-checked, outside-pointerdown and Escape to close, arrow-key roving,
- * focus returns to the trigger on close.
+ * Searchable server combobox: rendered through a body portal so a long roster
+ * cannot be clipped by the settings panel. Offline rows remain selectable and
+ * lead to the explicit unavailable placeholder. The popup flips/clamps to the
+ * viewport and keeps listbox keyboard/outside-click/focus-return semantics.
  */
 function ServerDropdown({
   servers, selectedId, chamberInstanceId, t, onSelect,
@@ -120,21 +131,44 @@ function ServerDropdown({
   selectedId: string | undefined
   chamberInstanceId: string | undefined
   t: (key: SettingsBridgeKey) => string
-  onSelect: (id: string, connected: boolean, isLocal: boolean) => void
+  onSelect: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [position, setPosition] = useState({ top: 0, left: 0, width: 280, maxHeight: 360 })
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const popupRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const menuId = useId()
   const selected = servers.find(server => server.id === selectedId)
+  const filteredServers = filterServerRows(servers, query)
 
   const close = useCallback((restoreFocus: boolean) => {
     setOpen(false)
+    setQuery('')
     if (restoreFocus) {
       queueMicrotask(() => triggerRef.current?.focus())
     }
   }, [])
+
+  const updatePosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (rect === undefined) return
+    setPosition(serverDropdownPlacement(rect, { width: window.innerWidth, height: window.innerHeight }))
+  }, [])
+
+  // Measure before paint so the body portal never flashes at (0, 0).
+  useLayoutEffect(() => {
+    if (!open) return
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [open, updatePosition])
 
   // Outside pointerdown closes. NOTE: Escape/arrow handling lives on the
   // root div's React onKeyDown (below), NOT on a document listener — the
@@ -143,16 +177,17 @@ function ServerDropdown({
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: PointerEvent): void => {
-      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) {
-        setOpen(false)
+      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)
+        && !popupRef.current?.contains(event.target as Node)) {
+        close(false)
       }
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [open])
+  }, [open, close])
 
   const rove = (direction: 1 | -1): void => {
-    const items = listRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]:not(:disabled)') ?? []
+    const items = listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? []
     if (items.length === 0) return
     const current = Array.from(items).findIndex(item => item === document.activeElement)
     const next = current === -1
@@ -187,7 +222,7 @@ function ServerDropdown({
   const onRootBlur = (event: ReactFocusEvent): void => {
     if (!open) return
     const next = event.relatedTarget
-    if (next === null || !rootRef.current?.contains(next as Node)) {
+    if (next === null || (!rootRef.current?.contains(next as Node) && !popupRef.current?.contains(next as Node))) {
       close(false)
     }
   }
@@ -198,48 +233,63 @@ function ServerDropdown({
         ref={triggerRef}
         type="button"
         className={css.dropdownTrigger}
-        aria-label={t('serverDropdownLabel')}
-        aria-haspopup="menu"
+        aria-label={`${t('serverDropdownLabel')}: ${selected?.label ?? t('noServers')}, ${selected?.connected === true ? t('serverConnected') : t('serverOffline')}`}
+        aria-haspopup="listbox"
         aria-expanded={open && servers.length > 0}
         aria-controls={open && servers.length > 0 ? menuId : undefined}
-        onClick={() => setOpen(opened => !opened)}
+        onClick={() => {
+          if (open) close(false)
+          else {
+            setQuery('')
+            setOpen(true)
+          }
+        }}
       >
         <span className={clsx(css.dot, selected?.connected === true ? css.dotOk : css.dotErr)} />
         <span className={css.dropdownValue}>{selected?.label ?? t('noServers')}</span>
         <span className={css.dropdownArrow} aria-hidden="true">▾</span>
       </button>
-      {open && servers.length > 0 && (
+      {open && servers.length > 0 ? (createPortal(
         <div
-          id={menuId}
-          ref={listRef}
-          role="menu"
+          ref={popupRef}
           className={css.dropdownList}
+          style={{ top: position.top, left: position.left, width: position.width, maxHeight: position.maxHeight }}
         >
-          {servers.map(server => {
-            const isLocal = server.id === LOCAL_INSTANCE_ID
-            const disabled = !isLocal && !server.connected
+          <input
+            className={css.dropdownSearch}
+            value={query}
+            placeholder={t('serverSearchPlaceholder')}
+            aria-label={t('serverSearchLabel')}
+            onChange={event => setQuery(event.target.value)}
+            autoFocus
+          />
+          <div id={menuId} ref={listRef} role="listbox" className={css.dropdownItems} aria-label={t('serverDropdownLabel')}>
+          {filteredServers.map(server => {
             return (
               <button
                 key={server.id}
                 type="button"
-                role="menuitemradio"
-                aria-checked={selectedId === server.id}
-                disabled={disabled}
+                role="option"
+                aria-selected={selectedId === server.id}
+                aria-label={`${server.label}, ${server.connected ? t('serverConnected') : t('serverOffline')}${server.id === chamberInstanceId ? `, ${t('current')}` : ''}`}
                 className={clsx(css.dropdownItem, selectedId === server.id && css.selected)}
                 onClick={() => {
-                  onSelect(server.id, server.connected, isLocal)
+                  onSelect(server.id)
                   close(true)
                 }}
               >
                 <span className={clsx(css.dot, server.connected ? css.dotOk : css.dotErr)} />
                 <span className={css.dropdownItemName}>{server.label}</span>
+                <span className={css.connectionState}>{server.connected ? t('serverConnected') : t('serverOffline')}</span>
                 {server.id === chamberInstanceId && <span className={css.current}>{t('current')}</span>}
                 {selectedId === server.id && <span className={css.selectedCheck} aria-hidden="true">✓</span>}
               </button>
             )
           })}
+          </div>
+          {filteredServers.length === 0 && <p role="status" className={css.dropdownEmpty}>{t('serverSearchEmpty')}</p>}
         </div>
-      )}
+      , document.body) as unknown as ReactNode) : null}
     </div>
   )
 }
@@ -258,7 +308,7 @@ function SettingsPanel({
   activeId: string | undefined
   onSelectSection: (id: string) => void
   onClose: () => void
-  onSelectServer: (id: string, connected: boolean, isLocal: boolean) => void
+  onSelectServer: (id: string) => void
   chamberInstanceId: string | undefined
   t: (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
   connectionsT: (key: string) => string
@@ -389,6 +439,19 @@ function SettingsPanel({
             </button>
           </div>
           <div className={css.options}>
+            {active === 'plugins' && selected?.pluginDiagnostic !== undefined && (
+              <div
+                className={clsx(
+                  css.pluginDiagnostic,
+                  selected.pluginDiagnostic.state === 'ok' ? css.pluginDiagnosticOk : css.pluginDiagnosticProblem,
+                )}
+                role="status"
+              >
+                <strong>{t('pluginDiagnosticLabel')}：{pluginDiagnosticText(selected.pluginDiagnostic.state, t)}</strong>
+                {selected.pluginDiagnostic.pluginId !== undefined && <span>{selected.pluginDiagnostic.pluginId}</span>}
+                {selected.pluginDiagnostic.message !== undefined && <span>{selected.pluginDiagnostic.message}</span>}
+              </div>
+            )}
             {active === CONNECTIONS_SECTION_ID ? (
               /* Chamber-global connection management: independent of the
                  selected server (never refetched on server switch). */
@@ -403,9 +466,14 @@ function SettingsPanel({
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (
-              <p className={css.placeholder}>
-                {selected.id === LOCAL_INSTANCE_ID ? t('localNotReady') : t('targetUnavailable')}
-              </p>
+              <div className={css.unavailableView}>
+                <p className={css.placeholder}>
+                  {selected.id === LOCAL_INSTANCE_ID ? t('localNotReady') : t('targetUnavailable')}
+                </p>
+                <button type="button" className={css.inlineAction} onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}>
+                  {t('manageConnections')}
+                </button>
+              </div>
             ) : sessionError !== null ? (
               <p className={css.placeholder}>{sessionError}</p>
             ) : sessions[selectedId] !== undefined ? (
@@ -612,10 +680,9 @@ export function SettingsShell(props: SettingsShellProps) {
     }
   }, [open, selectedId, selectedConnected, retryNonce, mountRetry, releaseAllSessions])
 
-  const selectServer = useCallback((id: string, connected: boolean, isLocal: boolean) => {
-    // Remote rows are disabled in the dropdown while not connected; local is
-    // always selectable (its placeholder covers the not-ready host).
-    if (!connected && !isLocal) return
+  const selectServer = useCallback((id: string) => {
+    // Offline rows remain selectable: the content column owns the explicit
+    // unavailable placeholder and the route to connection management.
     if (id === selectedId && sessionError !== null) {
       // Retry path: bump the nonce so the mount effect re-runs without
       // flashing an undefined selection (no noServers frame). The retry

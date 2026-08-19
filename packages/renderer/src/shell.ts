@@ -23,6 +23,7 @@ import { AppWebEntry, ensureWebModuleSystem } from '@deepseek-ai/dsh-client-web'
 
 import { getChamberInstanceId, setChamberInstanceId } from './chamber-knob.ts'
 import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
+import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 
 const CHAMBER_BOOT = '@dsh-chamber/app'
@@ -167,7 +168,17 @@ export function bootInstanceShell(
   // 内若提前失败（extra bundle 加载失败），先挂一个 no-op catch 防止 unhandledrejection
   // 冒泡——任务体 await 同一 promise 并照旧走 fail-loud 路径。
   const extraRowsPromise = moduleSystemError === null
-    ? collectExtraRows(instanceId, basePath, { loadModuleBundle })
+    ? collectExtraRows(instanceId, basePath, {
+        loadModuleBundle,
+        // A retry starts its graph request before the previous queued boot has
+        // necessarily settled. Only the current, non-cancelled generation may
+        // publish: otherwise an old slow failure can overwrite a newer ok.
+        reportDiagnostic: (sourceId, diagnostic) => {
+          if (bootGenerations.get(instanceId) !== gen) return
+          if ((cancelledBoots.get(instanceId) ?? 0) >= gen) return
+          chamberBridge.reportPluginDiagnostic(sourceId, diagnostic)
+        },
+      })
     : Promise.resolve<ExtraModuleRow[]>([])
   void extraRowsPromise.catch(() => undefined)
   const task = bootChain.then(async () => {

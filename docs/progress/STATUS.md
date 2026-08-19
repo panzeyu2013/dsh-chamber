@@ -42,8 +42,10 @@
   （Modal 自带头部 X/Escape/遮罩关闭，loading/error/done 只留 retry/refresh，
   ready 保留 cancel+apply）。
 - **客户端插件运行时加载（设计 09，已实现）**：设计见
-  `docs/design/09-client-plugin-runtime-loading.md`。遗留：图通道失败仅 console.error
-  无 UI 信号（可观测性待补）。**union-table 补全（2026-08）**：覆盖包缺失模块表
+  `docs/design/09-client-plugin-runtime-loading.md`。**诊断闭环（2026-08）**：图通道
+  404/方法缺失、一般不可达、bundle 加载失败、跨实例同插件 rev 冲突分别投影为
+  未注入/图通道不可达/bundle 加载失败/需要重启；成功为正常。来源标题显示异常标记，
+  Plugins 设置页显示详细状态与原因。**union-table 补全（2026-08）**：覆盖包缺失模块表
   factory 导致额外 bundle 的同步 require 边落空（官方 store-engine 豁免
   `require("@deepseek-ai/dsh-client-runtime/client")`，默认 web profile 的
   `dsh-session-log-export` 行实机触发 boot 失败）——chamber-entry.ts 现为每个首屏
@@ -117,7 +119,12 @@
   test:sidebar 131 / test:settings-bridge 32 / test:connections 17 /
   build:renderer / verify:i18n；rc.8 后端实机验证同前条无头记录（当时工作区基线
   为 rc.7 99f6f02f，已随 rc.8 baseline 对齐 4371cb7 推进，此处为历史记录）。
-- **侧边栏聚合改事件驱动（设计 10）**：实现未排期——改动 05 §3 契约，需评审确认；详见
+- **侧边栏聚合改事件驱动（设计 10，已实现）**：已挂载 ctx 从自身
+  `sessions.list` + `workspaces.list` 上报完整快照（本地/SSH 远端同路，复用既有
+  host-frame/WS 链，不改上游 dsh）；旧 pull 由来源序号失效。仅无完整生产者的 ready
+  来源保留 30s unary 兜底，完整生产者也同步抑制动作后的补拉取，全部 ready 来源已挂载时
+  无聚合定时器。插件额外 bundle 的跨实例并发预加载共享同一 Promise（所有等待者同成败，
+  失败清标可重试），不再把“加载中”误判成“已加载”。详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
 - **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程
   `updater.ts`（electron-updater，autoDownload=false + 退出时安装 + 静默失败日志 +
@@ -247,6 +254,19 @@
    插件 4 typecheck、test:desktop 186、test:sidebar 131、test:settings-bridge
    28、test:connections 17、static-serving 6、test:renderer-shell 5、
    build:renderer、build:preload、verify:i18n、frozen-lockfile 全绿）。
+   **2026-08 M1–M5（事件聚合/插件诊断/长 roster）复验**：根 typecheck、
+   typecheck:sidebar、typecheck:settings-bridge、侧边栏 133、设置桥 31、host-graph 26、
+   renderer shell 5、build:renderer、verify:i18n 全绿；两轮 review 另修复 bundle 并发等待、
+   推送/补拉取竞态、shell 测试解析镜像，以及 roster 纵向布局/ARIA/窄视口边界。依赖按
+   frozen lockfile 装配（Electron postinstall 下载未作为本轮验证前置，最终依赖装配使用
+   `--ignore-scripts`）。
+   **第三轮全量 review（2026-08）**：修复 settings roster 去重遗漏 `pluginId` / 分隔符
+   碰撞、旧 boot 迟到诊断覆盖新一代、触发器关闭未清搜索词；新增诊断 generation 与
+   roster 签名单测。全矩阵复验：根 + sidebar/layout/connections/settings-bridge/client-web/
+   host-graph typecheck；control-plane、desktop 186、sidebar 133、settings-bridge 33、
+   connections 17、host-graph 26、renderer shell 6 全绿；renderer production build
+   （1091 modules）、control-plane/preload/host-graph-package 编译、verify:i18n 全绿。
+   smoke 因本工作树无 dsh 安装按契约 SKIP；mac 打包未执行（同一缺失前置）。
    记录在案（NIT，非阻塞）：updatedOrder/sessionUpdatedAtByAccount 只按来源
    不按 workspace 修剪（官方 retainAccountKeys 逐 workspace；有界、渲染不可
    见，契约变更留后续）；settings-store/update-store 未加 singleton 守卫
@@ -322,8 +342,10 @@
 - **不做（v1）**：跨来源移动会话、单 store 真融合（fork runtime）、会话实时推送同步、
   远程实例管理 UI 外壳。
 - **设置壳偏差**：未连接实例不装配子 ctx（配置在目标机器上，物理不可达）；stub remote 无
-  WS 失效流；设置壳不渲染官方 SettingsRoot；子 ctx 懒装配；下拉列表 in-panel 定位（超长
-  roster 尾部可能被裁剪）；chrome 跟随宿主 locale、子 ctx 跟随目标实例 locale。
+  WS 失效流；设置壳不渲染官方 SettingsRoot；子 ctx 懒装配；服务器选择器使用 body portal
+  + viewport 翻转/钳位（含窄视口缩放）+ 名称/实例 ID 搜索，超长 roster 内部纵向滚动；
+  在线/离线状态同时使用文字与色点，搜索输入位于 listbox 外；离线远端仍可选并显示
+  明确不可达占位与“前往连接管理”动作；chrome 跟随宿主 locale、子 ctx 跟随目标实例 locale。
 - **实例失败呈现修订（2026-08，05 §4）**：boot 失败不再由各 InstanceView 自绘（旧
   `.instance-fatal` 只有重试、无导航——失败视图的 shell 从未挂载、侧边栏不可用，用户被
   困在当前视图只能整页刷新），改由 App 在活动视图上统一渲染 `.fatal-overlay` 覆盖层：

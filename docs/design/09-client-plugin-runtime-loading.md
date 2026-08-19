@@ -191,13 +191,16 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   id 合并进 boot rows（`loader.create` 经 `ClientModuleSystem.import()` 的 factories
   分支命中，无需 graph row），不 prefetch/不 fetch（chamber 侧统一预加载整个额外
   集合）。共享模块表拒绝重复 factory（system.ts 的 `__ModuleLoader__.load` sink），
-  页面级一次加载保证由 host-graph.ts 的 `preloadedExtraBundles` Set 显式维护
-  （成功后才标记：失败不标记 → 重试可重新预加载；同 id 异 rev 先到先得）。
-- **失败降级语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 /
-  行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error（复合 bundle 仍
+  页面级一次加载保证由 host-graph.ts 的 `preloadedExtraBundles` Map 显式维护
+  （成功后才标记：失败不标记 → 重试可重新预加载；同 id 异 rev 先到先得并
+  上报 `restart-required`，用户不再面对静默版本复用）。
+- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 /
+  行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，同时经 renderer-local
+  chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 =
+  `graph-unreachable`；复合 bundle 仍
   提供完整官方壳，仅丢失 profile 新装的插件；畸形图响亮报错——错图是 boot 危害，
   不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默（图通道不可达
-  时的语义 = "本实例无额外插件"）。额外 **bundle 加载**失败**不降级**——响亮失败、
+  时不会伪装成“本实例无额外插件”）。额外 **bundle 加载**失败**不降级**——响亮失败、
   该实例 boot 报错呈现（坏插件绝不静默消失，§4 fail-loud）。**分层表述（2026-08
   精度修订）**："加载"由 chamber 预加载层负责（host-graph.ts `collectExtraRows`
   的 `loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败）；预加载成功后内核
@@ -214,6 +217,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   ≠ 壳版本"时新/旧核心行与壳不兼容是**正常条件**（特性缺席），不是损坏（§4
   fail-loud 保留给 manifest 行/app-shell 装配的损坏，以及额外 bundle 的加载失败——
   预加载层，传输/缺失才是损坏信号；boot 内核层对额外行只区分 materialize/apply）。
+  诊断状态统一为：成功 `ok`，host gateway 未注入 `not-injected`，图通道失败
+  `graph-unreachable`，额外 bundle 加载失败 `bundle-load-failed`，同 id 异 rev
+  `restart-required`。来源标题只显示异常标记，设置的 Plugins 页显示状态、插件 id
+  与原因。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
 
@@ -286,8 +293,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   `hostGraphPackageSourceDir = pkgDir/dist/host-graph-package`（asar 内），
   `build-host-graph-package.mjs` 产出、electron-builder `files` 含 `dist/**/*`，
   开发态走 repo 源码树。
-- **遗留 3：降级可观测性**——图通道失败仅 console.error，无 UI 信号；若需用户
-  可见提示（如设置页「宿主图不可达，客户端插件未加载」），后续可加。
+- **遗留 3（已完成，2026-08）**：图通道失败、bundle 失败与版本冲突均有 UI 诊断；
+  来源标题显示异常标记，Plugins 设置页显示五态与详细原因。
 - **插件生态成熟度**：当前 dsh 生态的第三方 `dsh.client` 包尚少，本方案是
   "机制先备"。
 - **与 05 契约的关系：已修订（2026-08，本文定稿同批）**——05 §2/§6 与 04 §5 的

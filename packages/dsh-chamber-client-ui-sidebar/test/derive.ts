@@ -20,6 +20,7 @@ import {
   nextUpdatedOrder,
   orderUngroupedSessions,
   projectRuntimeFacts,
+  projectInstanceSnapshot,
   reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
@@ -56,6 +57,32 @@ function workspace(workspaceId: string, title: string, sessionIds: string[] = []
 function snapshot(workspaces: WorkspaceRow[], sessions: SessionRow[]): InstanceSnapshot {
   return { workspaces, sessions, archivedSessionIds: [] }
 }
+
+test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx rows', () => {
+  const workspaceState = {
+    items: [workspace('w1', 'Work', ['s1', 'sub'])],
+    archivedSessionIds: ['old'],
+    baselinesReady: true,
+    state: 'idle',
+    phase: 'ready',
+  }
+  const sessionState = {
+    ids: ['s1', 'sub'],
+    phase: 'ready',
+    byId: {
+      s1: { id: 's1', title: 'One', cwd: '/w1', running: true, blank: false, updatedAt: 42 },
+      sub: { id: 'sub', origin: 'subagent' as const, running: true, blank: false },
+    },
+  }
+  assert.deepEqual(projectInstanceSnapshot(workspaceState, sessionState), {
+    workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
+    sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
+    archivedSessionIds: ['old'],
+  })
+  assert.equal(projectInstanceSnapshot({ ...workspaceState, baselinesReady: false }, sessionState), undefined)
+  assert.equal(projectInstanceSnapshot({ ...workspaceState, state: 'error' }, sessionState), undefined)
+  assert.equal(projectInstanceSnapshot(workspaceState, { ...sessionState, phase: 'pending' }), undefined)
+})
 
 test('blank sessions are hidden from workspaces and from the ungrouped bucket when not current', () => {
   const result = deriveServerWorkspaces(

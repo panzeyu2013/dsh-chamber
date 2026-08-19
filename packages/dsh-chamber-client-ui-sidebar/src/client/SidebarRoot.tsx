@@ -964,9 +964,9 @@ export function SidebarRoot({
   // / host.createDirectory — the browse capability every managed host
   // serves). The browse calls are useCallback-stabilized: the vendor dialog
   // resets its whole navigation on every change of its `navigate` closure,
-  // and this shell re-renders on every chamberBridge publish (status pushes
-  // + the 10s aggregate poll), so an inline arrow would wipe the user's
-  // browsing every poll. A
+  // and this shell re-renders on chamberBridge publishes (status/snapshot
+  // pushes + fallback refreshes), so an inline arrow would wipe the user's
+  // browsing on refresh. A
   // confirmed path commits workspace.create against that source; failures
   // close the dialog and surface inline (never hidden behind the modal
   // mask), never silently.
@@ -1145,26 +1145,17 @@ export function SidebarRoot({
   // is the plan's motivating case). The caller wraps the result in the fixed
   // 10px slot so titles stay aligned (pending rows widen the slot to 14px).
   // Priority (both functions below): pending > runningSubagents > completed
-  // > running — live channel facts first (pending interaction, subagent
-  // liveness, completion), the running ring last and WIRE-AUTHORITATIVE
-  // (06 §4.3「running 点保留（wire 权威）」: the running bit comes from the
-  // 10s aggregate poll, never from the runtime-facts channel — the poll is a
-  // fresh HTTP round trip each tick, independent of the shell's WebSocket).
-  // 2026-08 (remote completed-dot fix): `completed` comes from the LIVE
-  // runtime channel while `running` comes from the 10s aggregate poll — the
-  // two can disagree right after a completion (the aggregate lags up to a
-  // poll cycle, longer when its pulls fail). The completed dot is the
-  // channel truth (the vendor disarms the reminder while running), so it
-  // outranks a stale running ring; the ring shows only when no completion
-  // fact exists. 2026-08 (running-subagent fix, 06 §4.5): the official
+  // > running — interaction/subagent/completion facts first, the aggregate
+  // snapshot's running ring last. Both reports derive from the mounted ctx's
+  // same sessions store but can land one React commit apart; the priority
+  // prevents that transient skew from hiding a user-relevant state.
+  // 2026-08 (running-subagent fix, 06 §4.5): the official
   // sessionStatuses renders a session whose round ended but whose BACKGROUND
   // subagents still work as ONGOING (runningSubagentCount outranks
   // node.completed) — a parent's own running bit goes false the moment its
   // round returns, so the App-armed completed dot would light up blue while
   // the children are still at work. `runningSubagents` (live channel, vendor
-  // lineage index) therefore outranks the completed dot AND the stale polled
-  // running ring — live facts (pending > runningSubagents > completed) beat
-  // the 10s poll, the established channel-truth rule.
+  // lineage index) therefore outranks the completed dot and running ring.
   const sessionStateLabel = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): string | undefined => {
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
@@ -1178,16 +1169,9 @@ export function SidebarRoot({
       return t(runningSubagents === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other', { n: runningSubagents })
     }
     if (facts?.completed === true) return t('status.completed')
-    // 2026-08 修订:运行环 = **轮询位（wire 权威）**,通道的 running 位完全
-    // 不参与渲染——runningRingVisible 显式接收通道位但忽略它(契约可测)。
-    // 原因:运行时事实通道的保鲜度依赖 shell 的 WebSocket,而整条链路没有
-    // WS 心跳——静默失效的流永远不会被检测/重连,通道会永久停在断线前的
-    // 报告;此时 10s HTTP 聚合轮询（每次都是新连接、独立于 WS）仍返回宿主
-    // 权威的 running:true,通道优先会让侧边栏对「实际在运行的会话」永远不
-    // 显示运行环（2026-08 用户报告「发送后不显示运行中,重进桌面端才发现
-    // 已在运行」）；OR 合并反向亦然——通道陈旧 true 会把已结束的会话误报
-    // 为运行中。运行环只信轮询位:漏报与误报同时消除,代价仅是运行开始的
-    // 环延迟 ≤ 一个轮询周期（对话视图的运行指示是即时的,无感）。
+    // 运行环只信完整聚合 snapshot 的 running 字段；runtime facts 不参与
+    // OR/优先级合并，避免同一渲染事实出现双权威。已挂载来源的 snapshot 由
+    // ctx store 在 host-frame 事件上即时上报，未挂载来源走 30s unary 兜底。
     const running = runningRingVisible(facts?.running, session.running)
     if (running === true) return t('status.running')
     return undefined
@@ -1199,9 +1183,7 @@ export function SidebarRoot({
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
     const runningSubagents = facts?.runningSubagents ?? 0
-    // 2026-08 修订:运行环只信轮询位（wire 权威,runningRingVisible,见
-    // sessionStateLabel 注释）——通道 running 不参与渲染,陈旧通道既不能
-    // 遮蔽权威 true、也不能误报 false。
+    // 运行环只信完整 snapshot（runningRingVisible，见 sessionStateLabel）。
     const running = runningRingVisible(facts?.running, session.running)
     if (pending === undefined && runningSubagents === 0 && facts?.completed !== true && running !== true) return null
     if (pending === 'approval') {
@@ -1471,6 +1453,14 @@ export function SidebarRoot({
                     style={sourceDotStyle(server)}
                   />
                   <span className={cc.sourceLabel}>{server.label}</span>
+                  {server.pluginDiagnostic !== undefined && server.pluginDiagnostic.state !== 'ok' && (
+                    <span
+                      className={cc.pluginDiagnosticBadge}
+                      title={t('status.pluginsAbnormal')}
+                      aria-label={t('status.pluginsAbnormal')}
+                      role="status"
+                    >!</span>
+                  )}
                   {/* chamber: connection status as a dot/spinner — the phase
                       text is never rendered, only carried on hover/aria. */}
                   <span

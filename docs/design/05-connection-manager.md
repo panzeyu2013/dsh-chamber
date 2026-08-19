@@ -113,16 +113,15 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   unary：workspace.list / sessions.list 等），控制面不建会话索引、不消费宿主帧。
 - 连接状态 = 非秘密投影（本地：控制面 /health；远程：desktopSsh status 推送），
   永不用持久化/推断值冒充。
-- 数据节奏：**状态走推送**（本地 /health 由 health-events EventSource 驱动，
-  零轮询；远程隧道相位走 onStatusChanged，注册表增删走 onInstancesChanged +
-  30s 轮询兜底），聚合走 10s 轮询 + 操作后即时刷新；连接行字段 30s 低频
-  轮询兜底。
-- 聚合即时刷新触发器（2026-08 补充）：除侧边栏自身 wire 动作
-  （requestRefresh）外，每 ctx 的侧边栏插件订阅自身 sessions.list，当列表
-  结构签名变化（id 集合增删、任一会话 blank 标志翻转）时 requestRefresh
-  该来源——壳内新建会话（New Session 按钮、startSession 等 ctx 内入口）与
-  首条消息后 blank→real 翻转不再等 10s 轮询；running/completed/pending/
-  current 变化不触发（事实通道与高亮已覆盖）。
+- 数据节奏：**状态与已挂载来源聚合均走现有事件链**。本地 `/health` 由
+  health-events EventSource 驱动；远程隧道相位走 onStatusChanged；每个已挂载
+  ctx 订阅自己的 `sessions.list` + `workspaces.list`，两份 reconnect baseline
+  ready 后经 chamberBridge 上报完整快照。远端 ctx 的 host frames 仍经既有 SSH
+  隧道/实例反代 WebSocket 到达，**不增加协议、不修改上游 dsh**。
+- 只有未挂载或 reconnect baseline 不完整的 ready 来源使用 30s unary 兜底；所有
+  ready 来源都有完整生产者时不创建聚合定时器。连接/生产者状态变化立即重估，
+  用户动作的 `requestRefresh` 只对无完整生产者来源单次拉取；已挂载完整生产者由同一
+  host-store 变更直接推送，避免动作成功后再补 RPC。推快照按来源序号使较旧在途 pull 失效。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
@@ -145,6 +144,7 @@ interface ChamberServerAggregate {
   workspaces: ChamberServerWorkspace[]
   aggregateError?: string         // 最近一次聚合拉取错误文本；缺失 = 正常/未连接
   runtime?: InstanceRuntimeReport // 该来源自身 ctx 上报的运行时事实（06 §4，仅附加、不轮询）
+  pluginDiagnostic?: PluginGraphDiagnostic // 客户端插件图/额外 bundle 的用户可见诊断
   updatedAt: number
 }
 interface OpenSessionRequest { sourceId: string; sessionId: string }
@@ -170,22 +170,31 @@ export const chamberBridge: {
   reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void  // 每 ctx 插件写入（06 §4.2）
   clearInstanceRuntime(sourceId: string): void                                  // 插件 effect 清理/断连即清（06 §4.2）
   onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined) => void): () => void  // App 层订阅
+  registerInstanceSnapshotProducer(sourceId: string): { // 每个已挂载 ctx 一代生产者
+    report(snapshot: InstanceSnapshot | undefined): void // undefined = baseline 不完整，恢复兜底
+    clear(): void                                         // generation-safe teardown
+  }
+  onInstanceSnapshot(listener: (sourceId: string, snapshot: InstanceSnapshot | undefined) => void): () => void
+  reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void
+  onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
 }
 ```
 
 **App 层（renderer main entry）写入职责**：
 - 启动即 auto-start 本地实例（连接行不存在则 `POST /api/connections`）；
   按注册表 auto-connect 远程实例（`desktopSsh.connect`）。
-- 状态合并发布：控制面 `/health`（health-events 推送流 + 30s 行轮询兜底）+
+- 状态合并发布：控制面 `/health`（health-events 推送流）+
   `/api/connections`（30s）+ desktopSsh status 推送（onStatusChanged）+
-  各已连接来源的 `workspace.list`/`sessions.list`（instance-api unary，
-  10s 轮询 + 操作后刷新）→ `chamberBridge.publish`；拉取失败的来源带
-  `aggregateError` 文本发布。
+  已挂载 ctx 的完整快照上报；仅无完整生产者的 ready 来源 30s unary 兜底 →
+  `chamberBridge.publish`。拉取失败的来源带 `aggregateError` 文本发布。
 - 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）。
 - 订阅 `onActivateSource` → 仅切换活动来源视图（不打开会话）。
-- 订阅 `onRefresh` → 对该来源立即重拉聚合（操作后刷新，不等轮询）。
+- 订阅 `onRefresh` → 仅无完整生产者的来源立即重拉；已挂载完整生产者由同一
+  host-store 变更直接推送，避免操作后重复 RPC。
 - 订阅 `onRuntimeReport` → 把各来源的运行时事实合并进 `server.runtime`
   （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。
+- 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
+  失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与插件设置页详情。
 
 ## 4. N-ctx 与切换（沿用，机制不变）
 
@@ -197,6 +206,8 @@ export const chamberBridge: {
   造成三面不匹配（侧边栏分组头仍可激活一个立即被回收的视图）。boot
   排队/在途时被删除的实例在 settle 时拆掉新 entry（cancelledBoots，绝不
   遗留僵尸 ctx）；被回收的视图若是当前视图则回落到 local（常驻）。
+  插件图诊断同样受 boot generation 门控：已取消/已被重试取代的旧 boot
+  即使迟到完成 graph 请求，也不能覆盖新一代的诊断。
 - **切换实现（修正：即时隐藏 + View Transition + 骨架屏，content-visibility）**：
   非活动视图用 `visibility:hidden + opacity:0 + pointer-events:none` 即时隐藏，
   且 `.instance-shell` 同时置 `content-visibility:hidden`——跳过整棵 shell 的

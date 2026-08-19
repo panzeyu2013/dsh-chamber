@@ -30,6 +30,15 @@
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 
+export type PluginGraphDiagnosticState =
+  | 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
+export interface PluginGraphDiagnostic {
+  state: PluginGraphDiagnosticState
+  message?: string
+  pluginId?: string
+  updatedAt: number
+}
+
 /** One composed client entry row of the host boot graph (mirror of WebBootEntry).
  *  rc.8 adds `external?: string[]` to WebBootEntry; this mirror deliberately
  *  omits it — the chamber merge preloads every kept row wholesale (the shared
@@ -74,6 +83,16 @@ function wrapGraphError(error: unknown): Error {
   return new Error(`宿主启动图不可达：${message}`)
 }
 
+class HostGraphChannelError extends Error {
+  readonly diagnosticState: Extract<PluginGraphDiagnosticState, 'not-injected' | 'graph-unreachable'>
+
+  constructor(diagnosticState: Extract<PluginGraphDiagnosticState, 'not-injected' | 'graph-unreachable'>, message: string) {
+    super(message)
+    this.name = 'HostGraphChannelError'
+    this.diagnosticState = diagnosticState
+  }
+}
+
 /**
  * Fetch the instance's host boot graph over the reverse proxy (Remote
  * `clientGraph/graph`). Resolves to the composed `entries` rows, or null when
@@ -115,7 +134,8 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
     if (body?.code === 'instance_unavailable') return null
   }
   if (!response.ok) {
-    throw wrapGraphError(new Error(`HTTP ${response.status}`))
+    const state = response.status === 404 ? 'not-injected' : 'graph-unreachable'
+    throw new HostGraphChannelError(state, `宿主启动图不可达：HTTP ${response.status}`)
   }
   let envelope: HostGraphEnvelope
   try {
@@ -128,7 +148,11 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
   }
   if (envelope.result.ok !== true) {
     const hostError = envelope.result.error?.message ?? envelope.result.error?.code ?? 'unknown'
-    throw new Error(`宿主启动图：graph 调用失败：${hostError}`)
+    const classification = `${envelope.result.error?.code ?? ''} ${envelope.result.error?.message ?? ''}`
+    const state = /not.?found|unknown.?method|method.+(?:missing|unknown|unsupported)/i.test(classification)
+      ? 'not-injected'
+      : 'graph-unreachable'
+    throw new HostGraphChannelError(state, `宿主启动图：graph 调用失败：${hostError}`)
   }
   const value = envelope.result.value
   if (typeof value !== 'object' || value === null || !Array.isArray((value as Record<string, unknown>).entries)) {
@@ -186,29 +210,45 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
 /**
  * Extra host-graph bundles already preloaded for this page, keyed by entry id
  * (page-level, shared across instances — the shell boot queue is serialized,
- * but the Set keeps the once-only rule explicit and safe against any future
+ * but the Map keeps the once-only rule explicit and records the loaded rev
  * parallel path). The shared module table refuses a duplicate factory
  * registration (the `__ModuleLoader__.load` sink throws on a repeat —
  * system.ts), so one id must never execute its bundle twice on a page.
  *
- * The mark is written BEFORE the load (so concurrent/duplicate ids in one
- * batch execute the bundle only once) and DELETED on failure — net effect:
- * only a successful load stays marked. A failed preload must not be treated
+ * The in-flight promise is published BEFORE the load (so concurrent/duplicate
+ * ids await the same execution instead of merely observing a premature
+ * "loaded" mark) and DELETED on failure — net effect: only a successful load
+ * stays marked. A failed preload must not be treated
  * as done — the module system does NOT re-fetch extra bundles on its own (an
  * extra row has no boot-graph row; a later system.ts import() would throw
  * "cannot resolve"), so a permanent mark would strand the plugin for the rest
  * of the page lifetime. A failed load instead fails THIS instance's boot loud
  * (design 09 §4 fail-loud) and a retry boot re-preloads the bundle.
  *
- * Keyed by id only — first-rev-wins, by design (union-table model, design 09
- * §3.2): when two instances run the same plugin at different revs, the factory
- * the FIRST boot preloaded is silently reused by the later boot.
+ * Keyed by id — first-rev-wins (union-table model, design 09 §3.2). A later
+ * instance carrying another rev reuses the loaded factory but gets an explicit
+ * restart-required diagnostic.
  */
-const preloadedExtraBundles = new Set<string>()
+interface PreloadedExtraBundle {
+  rev: string
+  load: Promise<void>
+}
+
+const preloadedExtraBundles = new Map<string, PreloadedExtraBundle>()
+
+function reportDiagnostic(
+  instanceId: string,
+  state: PluginGraphDiagnosticState,
+  extra: { message?: string; pluginId?: string } = {},
+  listener?: CollectExtraRowsDeps['reportDiagnostic'],
+): void {
+  listener?.(instanceId, { state, ...extra, updatedAt: Date.now() })
+}
 
 /** The shell-owned bundle loader, injected so pure-node tests can stub it (shell.ts owns the DOM). */
 export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
+  reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
 }
 
 /**
@@ -238,22 +278,54 @@ export async function collectExtraRows(
     entries = await fetchHostGraph(basePath)
   } catch (error) {
     console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, error)
+    reportDiagnostic(
+      instanceId,
+      error instanceof HostGraphChannelError ? error.diagnosticState : 'graph-unreachable',
+      { message: error instanceof Error ? error.message : String(error) },
+      deps.reportDiagnostic,
+    )
     return []
   }
   if (entries === null) return []
   const rows = toExtraRows(dedupeHostEntries(entries, CHAMBER_COVERED_IDS), basePath)
+  let restartConflict: ExtraModuleRow | undefined
   await Promise.all(rows.map(async (row) => {
-    if (preloadedExtraBundles.has(row.id)) return
-    preloadedExtraBundles.add(row.id)
+    let loaded = preloadedExtraBundles.get(row.id)
+    if (loaded !== undefined) {
+      if (loaded.rev !== row.rev) restartConflict ??= row
+    } else {
+      // Promise.resolve().then also normalizes a synchronously throwing test /
+      // alternate loader into the same shared rejected promise.
+      loaded = {
+        rev: row.rev,
+        load: Promise.resolve().then(() => deps.loadModuleBundle(row.url)),
+      }
+      preloadedExtraBundles.set(row.id, loaded)
+    }
     try {
-      await deps.loadModuleBundle(row.url)
+      await loaded.load
     } catch (error) {
-      // 预加载失败不永久标记（见 Set 注释：模块系统不会自取 extra bundle，
+      // 预加载失败不永久标记（见 Map 注释：模块系统不会自取 extra bundle，
       // 永久标记会把该插件在本页面永久卡死）——删除标记后重抛，本次 boot
       // 响亮失败，重试 boot 会重新预加载。
-      preloadedExtraBundles.delete(row.id)
+      // Only the owner still installed in the map may clear it. This guards a
+      // retry installed after a rejection from being deleted by a later catch
+      // in another waiter of the old promise.
+      if (preloadedExtraBundles.get(row.id) === loaded) preloadedExtraBundles.delete(row.id)
+      reportDiagnostic(instanceId, 'bundle-load-failed', {
+        pluginId: row.id,
+        message: error instanceof Error ? error.message : String(error),
+      }, deps.reportDiagnostic)
       throw error
     }
   }))
+  if (restartConflict !== undefined) {
+    reportDiagnostic(instanceId, 'restart-required', {
+      pluginId: restartConflict.id,
+      message: `页面已加载 ${restartConflict.id} 的另一版本，重启应用后才能切换`,
+    }, deps.reportDiagnostic)
+  } else {
+    reportDiagnostic(instanceId, 'ok', {}, deps.reportDiagnostic)
+  }
   return rows
 }

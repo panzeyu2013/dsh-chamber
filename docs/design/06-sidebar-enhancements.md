@@ -74,8 +74,8 @@
    （**本地命中仍显示**——内容搜索失败不吞本地元数据命中）；
   空 → `search.noMatches`；`hasMore` → `search.hasMore`（n=20 取常量）。
 - **取舍**：聚合拉取失败（`aggregateError`）的来源隐藏搜索入口（标题无法
-  解析，且与"错误行替换列表"一致）；结果标题可能滞后于最新快照
-  （10s 轮询窗口内新建会话显示兜底名，下轮轮询修正，可接受）。
+  解析，且与"错误行替换列表"一致）；已挂载来源标题随 store 事件即时更新；仅未挂载或
+  reconnect baseline 不完整的来源可能在 30s 兜底窗口内暂显兜底名。
 
 ### 1.3 代码落点
 
@@ -358,41 +358,31 @@
   高亮" → 本轮收敛为全局单选；通道机制不变——组件不再直连 store，
   订阅逻辑在插件 apply 上报端；boot 首帧无上报前不高亮，随首次上报
   补齐。跨来源的 pending/completed 状态点不受影响，仍全来源呈现。）
-- **状态点优先级（2026-08 修订，双通道错位时取实时通道为真）**：
+- **状态点优先级（2026-08 修订）**：
   **pending 徽标 > runningSubagents 运行环 > completed 点 > running 环**。
-  completed 事实来自实时通道，`running` 来自 10s 聚合轮询——完成瞬间聚合
-  可能仍带 running=true（≤一个轮询周期，聚合拉取失败时更久），旧渲染会让
-  运行环压制蓝点；2026-08 再修订：runningSubagents（实时通道）同样压过
-  陈旧 running 环与 completed 点（vendor 自身保证 completed 与 running
-  互斥，此顺序只在双通道瞬时错位时生效，取实时通道为真）。官方
+  completed/pending/runningSubagents 来自 runtime facts，`running` 来自完整
+  aggregate snapshot；两者均由已挂载 ctx 的同一 sessions store 事件驱动，
+  但独立 bridge state 可能相差一个 React commit。runningSubagents 同样压过
+  running 环与 completed 点（vendor 自身保证 completed 与 running 互斥）。官方
   sessionStatuses 的「有运行中子 agent 就显示 ongoing」语义因此原样对齐
-  （官方同快照无错位，其顺序 running > subagents > completed；我们
-  completed/runningSubagents 皆为实时通道、running 为轮询，故实时事实
-  整体前置）。
-- **运行环 wire 权威（2026-08 修复，`runningRingVisible`）**：运行环**只取
-  10s 聚合轮询的 running 位**，通道 running 位完全不参与渲染（契约原文
-  「running 点保留（wire 权威），completed/pending 仅通道提供」；P2-9 的
-  「通道优先」是偏离，已回退）。原因：通道保鲜度依赖 shell 的 WebSocket，
-  整条链路无 WS 心跳——静默失效的流永远不会被检测/重连，通道永久停在断线
-  前报告；通道优先（`facts?.running ?? session.running`）会让陈旧 false
-  遮蔽轮询权威 true（用户报告「发送后不显示运行中，重进桌面端才发现已在
-  运行」），OR 合并反向亦然（陈旧 true 误报运行中）。**取舍（接受）**：
-  (a) 运行开始环延迟 ≤ 一个轮询周期（对话视图的运行指示即时，无感）；
-  (b) 重新运行瞬间出现 ≤10s 空槽——完成蓝点随通道 running=true 即时解除
-  （App 状态机），运行环要等下一轮询才出现；(c) 通道 running 翻转不再触发
-  publish/侧边栏重渲染（投影签名排除该位，`runtimeReportSignature
-  includeRunning=false`）——运行环更新完全由轮询位驱动。
+  （官方同快照无错位，其顺序 running > subagents > completed；chamber 为避免
+  瞬时双通道错位把用户需处理状态压掉，将交互/子 agent/完成事实前置）。
+- **运行环 snapshot 单一权威（`runningRingVisible`）**：运行环只取完整
+  aggregate snapshot 的 running 位，runtime facts 的 running 位不参与渲染。
+  已挂载来源的 snapshot 由自身 ctx store 在 host-frame 事件上即时上报；未挂载或
+  reconnect baseline 未完成的 ready 来源走 30s unary 兜底。两条字段不做 OR/优先
+  合并，避免同一渲染事实出现双权威。`runtimeReportSignature(includeRunning=false)`
+  继续保证 runtime 通道的 running-only 变化不重复驱动同一环渲染。
   通道 running 位仍保留在 `InstanceRuntimeReport` 中，供 App 完成蓝点
   状态机（`reconcileCompletedFacts`）推导 running→idle 边沿（App 内部
   逻辑，非侧边栏渲染）。
 - **搜索结果行状态点（2026-08 修订）**：结果行经投影解析 running 位
   （搜索命中会话必在投影可见集内，查得到即用投影位；查不到回落 false）——
   状态槽渲染优先级同树行（pending 徽标 > runningSubagents 环 > completed
-  点 > running 环）；**running 环 wire 权威（与树行一致）：只取投影位，
-  通道 running 不参与渲染**（`runningRingVisible`——通道保鲜度依赖 shell
-  的 WebSocket、链路无心跳，陈旧通道参与会导致漏报/误报，见上）。
-  已知窗口（接受）：聚合拉取失败期间树行整体消失（错误横幅替代），搜索
-  结果行保留但运行环随投影为空回落 false——纯 cosmetic 的瞬时窗口；
+  点 > running 环）；**running 环 snapshot 权威（与树行一致）：只取投影位，
+  runtime facts 的 running 不参与渲染**（`runningRingVisible`，单一权威见上）。
+  已知窗口（接受）：未挂载来源的兜底拉取失败期间树行整体消失（错误横幅替代），
+  搜索结果行保留但运行环随投影为空回落 false——纯 cosmetic 的瞬时窗口；
   槽**恒占位**保持标题对齐。
 
 ### 4.4 代码落点

@@ -16,6 +16,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { chamberBridge } from '../../dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts'
 
 // Test knobs — same module instance shell.ts sees (the loader maps the bare
 // specifier to this URL; the relative import resolves to the same file).
@@ -24,7 +25,7 @@ import {
   __testSetBootError, __testSetModuleSystemError, __testSetRunError,
 } from '../test-fixtures/dsh-client-web.mjs'
 
-const { bootInstanceShell } = await import('./shell.ts')
+const { bootInstanceShell, disposeInstanceShell } = await import('./shell.ts')
 
 // ── Plumbing ───────────────────────────────────────────────────────────────
 
@@ -156,6 +157,51 @@ test('bootInstanceShell: a module-system install failure skips the host-graph ch
     __testSetRunError(undefined)
     __testResetEventLog()
     restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugin diagnostic', async () => {
+  const sourceId = 'test-diagnostic-generation-7'
+  const originalFetch = globalThis.fetch
+  const originalConsoleError = console.error
+  const restoreWindow = stubWindow()
+  let releaseFirst!: () => void
+  let calls = 0
+  globalThis.fetch = (() => {
+    calls += 1
+    if (calls === 1) {
+      return new Promise<Response>(resolve => {
+        releaseFirst = () => resolve(new Response('{}', { status: 404 }))
+      })
+    }
+    return Promise.resolve(new Response(JSON.stringify({
+      rpcId: 'retry', result: { ok: true, value: { entries: [] } },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+  }) as typeof fetch
+  console.error = () => {}
+  __testSetBootError(undefined)
+  __testSetRunError(undefined)
+  __testSetModuleSystemError(undefined)
+  const states: string[] = []
+  const unsubscribe = chamberBridge.onPluginDiagnostic((id, diagnostic) => {
+    if (id === sourceId && diagnostic !== undefined) states.push(diagnostic.state)
+  })
+  try {
+    const first = bootInstanceShell(sourceId, `/api/i/${sourceId}`, {} as HTMLElement, () => {})
+    disposeInstanceShell(sourceId)
+    const retry = bootInstanceShell(sourceId, `/api/i/${sourceId}`, {} as HTMLElement, () => {})
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.deepEqual(states, ['ok'])
+    releaseFirst()
+    await Promise.all([first, retry])
+    assert.deepEqual(states, ['ok'], 'the cancelled slow boot must not publish its late not-injected state')
+  } finally {
+    unsubscribe()
+    chamberBridge.clearPluginDiagnostic(sourceId)
+    disposeInstanceShell(sourceId)
+    globalThis.fetch = originalFetch
+    console.error = originalConsoleError
     restoreWindow()
   }
 })

@@ -242,6 +242,13 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
       runningSubagents?: number
     }>
   }
+  export type PluginGraphDiagnosticState = 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
+  export interface PluginGraphDiagnostic {
+    state: PluginGraphDiagnosticState
+    message?: string
+    pluginId?: string
+    updatedAt: number
+  }
   export interface ChamberServerAggregate {
     id: string
     kind: 'local' | 'ssh'
@@ -251,6 +258,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     workspaces: ChamberServerWorkspace[]
     aggregateError?: string
     runtime?: InstanceRuntimeReport
+    pluginDiagnostic?: PluginGraphDiagnostic
     updatedAt: number
   }
   export interface OpenSessionRequest {
@@ -370,6 +378,11 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void
     clearInstanceRuntime(sourceId: string): void
     onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined) => void): () => void
+    onInstanceSnapshot(listener: (sourceId: string, snapshot: InstanceSnapshot | undefined) => void): () => void
+    reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void
+    clearPluginDiagnostic(sourceId: string): void
+    getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
+    onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
   }
 }
 

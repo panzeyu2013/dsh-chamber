@@ -195,6 +195,72 @@ export function projectRuntimeFacts(
 }
 
 /**
+ * Project the two already-live ctx stores into the same chamber snapshot shape
+ * as the unary fallback. `undefined` means that either reconnect baseline is
+ * incomplete; callers must invalidate the push snapshot and let the bounded
+ * fallback pull take over. Subagent rows are deliberately excluded because
+ * chamber navigation never renders them.
+ */
+export function projectInstanceSnapshot(
+  workspaces: {
+    items?: readonly {
+      workspaceId: string
+      path: string
+      title: string
+      sessionIds: readonly string[]
+      createdAt: string
+      updatedAt: string
+    }[]
+    archivedSessionIds?: readonly string[]
+    baselinesReady?: boolean
+    state?: string
+    phase?: string
+  },
+  sessions: {
+    ids?: readonly string[]
+    byId?: Record<string, {
+      id: string
+      title?: string
+      cwd?: string
+      parentId?: string
+      origin?: 'subagent'
+      running?: boolean
+      blank?: boolean
+      updatedAt?: number
+    }>
+    phase?: string
+  },
+): InstanceSnapshot | undefined {
+  if (workspaces.baselinesReady !== true || workspaces.state === 'error'
+    || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
+  const byId = sessions.byId ?? {}
+  return {
+    workspaces: (workspaces.items ?? []).map(item => ({
+      workspaceId: String(item.workspaceId),
+      path: item.path,
+      title: item.title,
+      sessionIds: item.sessionIds.map(String),
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    })),
+    sessions: (sessions.ids ?? []).flatMap(id => {
+      const row = byId[id]
+      if (row === undefined || row.origin === 'subagent') return []
+      return [{
+        sessionId: String(row.id),
+        ...(typeof row.updatedAt === 'number' ? { updatedAt: row.updatedAt } : {}),
+        running: row.running === true,
+        blank: row.blank === true,
+        ...(row.cwd !== undefined ? { cwd: row.cwd } : {}),
+        ...(row.title !== undefined ? { title: row.title } : {}),
+        ...(row.parentId !== undefined ? { parentSessionId: String(row.parentId) } : {}),
+      }]
+    }),
+    archivedSessionIds: (workspaces.archivedSessionIds ?? []).map(String),
+  }
+}
+
+/**
  * Merge one source's live runtime-facts report with the App-owned
  * completed-but-unread dots (design 06 §4.2): the UNION of the channel's
  * vendor-armed completed rows and the App-derived dots (the App's
@@ -229,12 +295,12 @@ export function mergeRuntimeFacts(
 /**
  * Content signature of one instance snapshot (workspaces + sessions +
  * archived ids). Used by the App layer to keep aggregate state
- * identity-preserving: a poll whose rows are byte-identical must NOT mint a
+ * identity-preserving: an update whose rows are byte-identical must NOT mint a
  * new state object — that would re-derive servers, re-publish the chamber
- * bridge and re-render every shell's sidebar every 10s (design 05 §3
+ * bridge and re-render every shell's sidebar on every fallback tick (design 05 §3
  * perf pass, 2026-08). Key order is fixed (the wire row constructors in
  * instance-api.ts build fields in a stable order), so JSON.stringify is
- * deterministic across polls.
+ * deterministic across updates.
  */
 export function instanceSnapshotSignature(
   snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds'>,
@@ -263,24 +329,16 @@ export function instanceSnapshotSignature(
 }
 
 /**
- * Sidebar running-ring visibility (design 06 §4.3「running 点保留（wire
- * 权威）」, 2026-08 fix): the ring shows ONLY from the 10s-polled wire bit;
+ * Sidebar running-ring visibility (design 06 §4.3「running 点保留（snapshot
+ * 权威）」): the ring shows ONLY from the complete aggregate snapshot field;
  * the channel's running bit is deliberately IGNORED — `channelRunning` is
  * accepted so the contract is testable (a future maintainer cannot silently
  * reintroduce channel participation without the regression test failing).
  *
- * Why: the runtime-facts channel is only as fresh as the shell's WebSocket,
- * and the stack has no WS heartbeat anywhere (host webserver / browser
- * carrier / control-plane splice) — a silently stale stream is never detected
- * and never reconnects, so the channel permanently holds its last pre-death
- * report. Channel-first (`facts?.running ?? session.running`) let that stale
- * `false` SHADOW the poll's authoritative `true` (reported 2026-08: "sent a
- * message, UI showed no running, re-entering revealed it had been running");
- * an OR merge (`poll || channel`) would instead let a stale `true` forge a
- * running ring after the run already finished. The poll is a fresh HTTP
- * round trip each tick, independent of the WebSocket — the only honest
- * authority. Cost: the ring appears up to one poll cycle late at run start
- * (the conversation view's own running indicator is immediate).
+ * Runtime facts and the structural snapshot are deliberately not OR/precedence
+ * merged: one rendered field has one authority. Mounted sources update the
+ * snapshot from their ctx store on the same host-frame event; unmounted or
+ * reconnecting sources use the bounded unary fallback.
  */
 export function runningRingVisible(channelRunning: boolean | undefined, polledRunning: boolean | undefined): boolean {
   return polledRunning === true
@@ -373,6 +431,11 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       connected: server.connected,
       phase: server.phase,
       aggregateError: server.aggregateError ?? null,
+      pluginDiagnostic: server.pluginDiagnostic === undefined ? null : {
+        state: server.pluginDiagnostic.state,
+        message: server.pluginDiagnostic.message ?? null,
+        pluginId: server.pluginDiagnostic.pluginId ?? null,
+      },
       runtime: runtime === '' ? null : runtime,
       workspaces: server.workspaces.map(w => ({
         id: w.id,
