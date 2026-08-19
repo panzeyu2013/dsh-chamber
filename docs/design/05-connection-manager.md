@@ -366,6 +366,12 @@ export const chamberBridge: {
   `desktop_ssh_connect/disconnect/status/logs/logs_clear`、
   `desktop_ssh_start_service/stop_service/is_active/restart_service`（systemctl，
   serviceName 白名单 `^[a-zA-Z0-9_.-]+$`）；
+- chamber 设置面（设计 14 D7，chamber 全局运行设置，非秘密）：
+  `dsh-chamber:settings-get`（查询当前设置 + 平台能力门控）、
+  `dsh-chamber:settings-set`（应用并持久化 `<userData>/chamber-settings.json`，
+  失败 loud `{error}`，绝不落半个设置）、推送 `dsh-chamber:settings-changed`、
+  推送 `dsh-chamber:system-resume`（OS 唤醒，载荷 `{timestamp}`，渲染端立即
+  重连——设计 14 D4）；
 - 插件同步面（设计 13，远端 dsh plugin 编排经 provider exec 通道，spec 白名单
   见 13 §7.2）：`desktop_ssh_plugin_list/plugin_apply`（add/remove/restart，
   restart 需布尔值）、`desktop_local_plugin_list/add/remove`（本地实例插件）、

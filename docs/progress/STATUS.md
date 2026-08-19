@@ -62,16 +62,53 @@
   settings 响亮提示手动安装）、release CI 上传路径实测、双平台实机检查/下载/退出安装。
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游 wire 根治）；
   实现未排期；详见 `docs/todo/12-todo-archived-sessions.md`。
-- **睡眠/后台常驻（设计 14，设计待评审）**：关窗行为可设（`windowCloseBehavior`：
-  托盘 / 退出，hide 不杀进程，控制面/隧道/dsh 实例继续运行）+ 登录自启可设
-  （`launchAtLogin`，mac/linux，win 门控）+ 退出确认 + 唤醒即时重连（powerMonitor
-  resume）+ 防休眠（默认关）；OpenChamber 桌面端实现已调研（本地源码），设计见
-  `docs/todo/14-todo-sleep-background.md`；实现未排期。
-- **Chamber 设置呈现（设计 15，设计待评审；2026-08 范围缩减）**：v1 平铺形态——
-  settings 壳固定入口扩为 连接/更新/通用（`__general` 为设计 14 设置落点）；
-  两级分组、插件提级、新插件包、关于页**推迟不做**；chamber 全局设置仍统一走
-  主进程 `chamber-settings.json`（非秘密），与实例配置平面严格分离；设计见
-  `docs/todo/15-todo-chamber-settings-page.md`；实现未排期。
+- **睡眠/后台常驻（设计 14，v1 范围已实现，2026-08）**：关窗行为可设
+  （`windowCloseBehavior`：托盘 / 退出，hide 不杀进程，控制面/隧道/dsh 实例继续
+  运行，**托盘可用门控**——dev/无托盘回退关窗即退）+ 登录自启可设（`launchAtLogin`，
+  mac `setLoginItemSettings` / linux XDG autostart，win 门控）+ 退出确认（活动
+  隧道/本地实例投影，**更新已下载时豁免** + 单飞）+ 唤醒即时重连（powerMonitor
+  resume → `system-resume` 推送 + 主进程对 error/degraded 即时重探，绝不触碰
+  idle）+ 防休眠（`powerSaveBlocker`，默认关）+ `chamber-settings.json` 主进程
+  存储（0600 原子写、损坏 *.corrupt 保留、非秘密）+ `backgroundThrottling: false`
+  （隐藏窗口不节流）。渲染侧：App 层分发 window `dsh-chamber:system-resume` 事件，
+  dsh-client-connection chamber 补丁（stop+start 立即重连）。实现：`chamber-settings.ts`
+  （纯逻辑）+ `main.ts`/`preload.cts`；验证：根 typecheck ✓、`test:desktop`（含新增
+  12 用例）✓、`build:preload` ✓。设计见 `docs/todo/14-todo-sleep-background.md`。
+   **2026-08 review 轮修复（3 subagent 独立审查 + 独立验证）**：P0 退出时序——
+   退出确认移至 `before-quit`（原在 will-quit 内置位 `quitRequested` 过晚，
+   hide-to-tray 默认下 Cmd+Q/托盘退出被 close 吞掉、确认与更新退出安装不可达；
+   取消不丢窗口）；P0 重连竞态——`ConnectionController` 加 loop epoch 守卫
+   （stop()+start() 同步重启不再产生双并发 pump loop/重复 onConnected，chamber
+   patch 标注）；P1 打包——electron-builder `files` 补 `chamber-settings.ts`；
+   P2：`localRunning` 口径放宽（含 starting/restarting）、确认框重入拦截、
+   lastResume 已发送即清、持久化失败回滚副作用、`__general` 导航解析抽纯函数
+   `nav-active.ts` + 3 用例、GeneralView 桥未水合禁用控件 + 错误行 aria-live、
+   文档通道名 `dsh-chamber:settings-*` 同步（设计 14/15/05 §7.4）。修复后全量
+   复验 ✓（typecheck / 双测试套件 / build:preload / build:renderer / verify:i18n）。
+   **2026-08 review 轮 2（渲染层审查）**：P0 竞态修复经**真实仓库文件复现验证**
+   （/tmp/race-verify.mts 重放 B 场景 A：stop()+start() 后 `delta=1` 干净重连、
+   无残留 loop/重复 onConnected）；P2 补齐——`SYSTEM_RESUME_EVENT` 共享常量
+   （dsh-client-connection 导出，App.tsx 字面量以注释锁定同步；renderer tsconfig
+   无法解析该包深路径导出，故不跨包 import）、GeneralView radio 组 useId 命名 +
+   `role="group"`/aria-labelledby、桥未水合禁用已含。复验 ✓（typecheck /
+   test:settings-bridge / build:renderer / verify:i18n 全绿）。
+   **2026-08 review 轮 3（终审，3 subagent）**：结论可发布；修复 2 条 P1——
+   ① `behavior='quit'` + X 关窗（非 darwin）取消确认后窗口已销毁 → 取消/对话框
+   失败分支检测 `mainWindow` 销毁即 `showMainWindow()` 重建（不再无窗滞留）；
+   ② `reconnectStaleTransports` 跳过 `requiresUserAction=true` 终态实例（05 §7.6
+   「确定性验证失败免重试」，唤醒不再对认证失败等重复 spawn）。P2 顺手修：
+   before-quit `preventDefault` 移至风险计算后（意外异常不吞退出）、
+   `applySettingsPatch` 副作用包 try + best-effort 回滚、托盘注释与 resume 补丁
+   注释表述修正。复验 7/7 ✓（typecheck / 双测试套件 / build:preload /
+   build:renderer / verify:i18n）。
+- **Chamber 设置呈现（设计 15，v1 范围已实现，2026-08；范围缩减）**：v1 平铺形态——
+  settings 壳固定入口扩为 连接/通用/更新（新增 `__general` 固定入口 + `GeneralView`：
+  关窗行为 / 登录自启 / 保持唤醒 / 退出确认说明，zh/en i18n）；两级分组、插件提级、
+  新插件包、关于页**推迟不做**；chamber 全局设置统一走主进程 `chamber-settings.json`
+  （`dsh-chamber:settings-get/set` + `settings-changed` 推送，非秘密），与实例配置
+  平面严格分离（01 §2 P2）。验证：根 typecheck ✓、`typecheck:settings-bridge` ✓、
+  `test:settings-bridge` ✓、`build:renderer` ✓、`verify:i18n` ✓。设计见
+  `docs/todo/15-todo-chamber-settings-page.md`。
 - **设计未决**（02 §5 / 04 §7）：starting port 偏移、trusted-host 自定义 Host、多控制面
   `$DSH_HOME` 冲突、响应头白名单双处同步、`__DSH_BOOT__` 随 dsh 版本漂移。
 

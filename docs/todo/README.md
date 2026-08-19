@@ -14,6 +14,8 @@
 | 3 | [08-todo-git-worktree-plugin.md](08-todo-git-worktree-plugin.md) | Git worktree 独立插件 | 设计定稿，实现未排期（2026-08-16 自 `docs/design/` 移入；"08" 编号沿用历史引用） |
 | 4 | [10-todo-event-driven-aggregation.md](10-todo-event-driven-aggregation.md) | 侧边栏聚合改事件驱动（各来源 ctx 推投影取代 10s 轮询） | 设计待评审，实现未排期（2026-08） |
 | 5 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） | 设计待评审，实现未排期（2026-08） |
+| 6 | [14-todo-sleep-background.md](14-todo-sleep-background.md) | 睡眠/后台常驻（关窗行为可设：托盘/退出、登录自启可设、唤醒即时重连、防休眠、退出保护；OpenChamber 移植） | **v1 范围已实现（2026-08）**：`chamber-settings.ts` + main/preload 接线 + 设置壳 `__general`；验证全绿（typecheck / test:desktop / build:preload）；设计定稿与移入 design 待后续 |
+| 7 | [15-todo-chamber-settings-page.md](15-todo-chamber-settings-page.md) | Chamber 设置呈现（v1 平铺形态：固定入口连接/通用/更新；两级分组、插件提级、新包、关于页推迟不做） | **v1 范围已实现（2026-08）**：`__general` + `GeneralView` + zh/en；验证全绿（typecheck / test:settings-bridge / build:renderer / verify:i18n） |
 
 ## 纪律
 
