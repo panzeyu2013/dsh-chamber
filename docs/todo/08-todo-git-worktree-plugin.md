@@ -3,7 +3,7 @@
 > **状态：todo**——范围决策已定稿（2026-08-16），本文为设计契约草案，实现
 > 未排期（分期见 §8）。范围修订：`01-overview.md` §4 将 git/GitHub 由移出项
 > 改写为**插件化**（不进控制面/本体，允许 chamber 强制打包的客户端插件形态），
-> AGENTS.md / AGENTS.zh-CN.md / `docs/progress/STATUS.md` 已同步。
+> AGENTS.md / `docs/progress/STATUS.md` 已同步。
 >
 > 2026-08-16：本文档自 `docs/design/` 移入 `docs/todo/`（未实现功能记录区），
 > "08" 编号沿用历史引用（AGENTS / 01-overview / STATUS 中的"设计 08"）。

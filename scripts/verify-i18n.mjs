@@ -12,12 +12,13 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)))
 const PAIRS = [
-  // 2026: Chinese promoted to primary (user decision) — README.md is now the
-  // Chinese primary; English demoted to docs/README.en-US.md (secondary).
-  // Positional order stays EN first, ZH second.
+  // 2026: Chinese promoted to primary (user decision) — every top-level doc
+  // is the Chinese primary; English mirrors live under docs/ as *.en-US.md
+  // (secondary). AGENTS.md is English-only (user decision, 2026-08) and has
+  // no bilingual pair. Positional order stays EN first, ZH second.
   ['docs/README.en-US.md', 'README.md'],
-  ['AGENTS.md', 'docs/AGENTS.zh-CN.md'],
-  ['CONTRIBUTING.md', 'docs/CONTRIBUTING.zh-CN.md'],
+  ['docs/CONTRIBUTING.en-US.md', 'CONTRIBUTING.md'],
+  ['docs/CHANGELOG.en-US.md', 'CHANGELOG.md'],
 ]
 const RECORD_FILE = 'docs/i18n-record.json'
 

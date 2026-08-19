@@ -1,129 +1,75 @@
-# Changelog
+# Changelog（变更日志）
 
-All notable changes to dsh-chamber are documented in this file.
+本文件记录 dsh-chamber 的全部重要变更。
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+本项目遵循[语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
-Release artifacts and per-release notes also live on the GitHub Releases page
-(`https://github.com/panzeyu2013/dsh-chamber/releases`).
+发布产物与各版本的发布说明同时发布在 GitHub Releases 页面
+（`https://github.com/panzeyu2013/dsh-chamber/releases`）。
+
+> English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 ## [0.1.2] - 2026-08-19
 
-### Added
+### 新增
 
-- **Desktop auto-update (design 11)** — silent update checks (startup delay +
-  6h interval), a low-key Settings「更新」section, download only after explicit
-  user confirmation, install on quit. Update feed shipped for both platforms
-  (`latest.yml` / `latest-mac.yml`; beta channel via a semver prerelease
-  version). macOS install leg reports honestly when a Developer ID signature
-  is absent (manual-install hint, never a fake success).
-- **Sleep / background persistence (design 14)** — configurable close behavior
-  (hide to tray while dsh keeps running, or quit, with a quit confirmation
-  when active tunnels or the local instance would be stopped), launch at login
-  (mac/linux), immediate reconnect on OS wake (no heartbeat watchdog wait),
-  keep-awake toggle. Settings persist in the main-process
-  `chamber-settings.json` (0600, atomic, corrupt-file preserved).
-- **Chamber settings page (design 15, v1 flat form)** — fixed Settings-shell
-  entries Connections / General / Update; chamber-global settings kept strictly
-  separate from per-instance config planes.
-- **First-paint performance (P4)** — static skeleton + critical CSS in the
-  served HTML, parallel boot, host-graph fetch overlapped with the boot chain,
-  non-first-screen ui-* families split into lazy chunks (entry chunk 934KB →
-  650KB), absolute modulepreload matching the manifest URL, on-the-fly gzip +
-  immutable caching for `/assets/*` in the control plane.
-- **Sidebar UX batch** — single click opens a session immediately with
-  double-click rename; sidebar width persisted across shells and restarts via
-  a chamber ui-layout fork; sidebar scroll position preserved across N-ctx
-  server switches; explicit sort menu with official updated-order semantics
-  (manual order + activity promotion).
-- **Host-graph visibility** — the chamber-injected host package row shows the
-  module A version and a live-effect tri-state (已生效 / 重启后生效 / 未知)
-  probed over the tunnel RPC.
-- **Boot hardening** — union-table completion for covered packages,
-  chamber-level failure overlay (report + retry + server switching),
-  first-boot module-system race fix.
+- **桌面自动更新（设计 11）** —— 静默更新检查（启动延迟 + 6 小时周期）、设置页低调的「更新」分区、仅在用户明确确认后下载、退出时安装。双平台更新源已随发布提供（`latest.yml` / `latest-mac.yml`；beta 频道经 semver 预发布版本）。macOS 安装环节在缺少 Developer ID 签名时如实提示（给出手动安装指引，绝不假报成功）。
+- **睡眠/后台常驻（设计 14）** —— 关窗行为可配置（隐藏到托盘让 dsh 继续运行，或退出；退出前若会停掉活动隧道或本地实例则先确认）、登录自启（mac/linux）、OS 唤醒即时重连（不等心跳 watchdog）、保持唤醒开关。设置持久化于主进程 `chamber-settings.json`（0600、原子写、损坏文件保留）。
+- **Chamber 设置页（设计 15，v1 平铺表单）** —— 设置壳固定入口 Connections / General / Update；chamber 全局设置与实例配置平面严格分离。
+- **首屏性能（P4）** —— 服务 HTML 中的静态骨架 + 关键 CSS、并行 boot、host-graph 拉取与 boot 链重叠、非首屏 ui-* 系列拆为懒加载 chunk（入口 chunk 934KB → 650KB）、与清单 URL 匹配的绝对 modulepreload、控制面 `/assets/*` 即时 gzip + 不可变缓存。
+- **侧边栏 UX 批量改进** —— 单击立即打开会话、双击重命名；经 chamber ui-layout fork 跨 shell 与重启持久化侧边栏宽度；N-ctx 切换服务器时保留侧边栏滚动位置；显式排序菜单 + 官方 updated-order 语义（手动顺序 + 活动提升）。
+- **Host-graph 可见性** —— chamber 注入的宿主包行展示模块 A 版本与实时生效三态（已生效 / 重启后生效 / 未知），经隧道 RPC 探测。
+- **Boot 加固** —— covered 包的联合表补全、chamber 级失败遮罩（报告 + 重试 + 切换服务器）、首次启动模块系统竞态修复。
 
-### Fixed
+### 修复
 
-- macOS: `windowCloseBehavior='quit'` now actually quits (previously left the
-  app windowless forever on darwin); wake re-probe no longer spawns transports
-  during quit teardown.
-- `isAllowedReleaseUrl` rejects percent-encoded path traversal and userinfo —
-  the allowlist can no longer be pointed at an arbitrary github.com path.
-- Updater: a periodic re-check can no longer clobber the `downloaded` state
-  while a download is in flight; error-text path redaction covers any POSIX
-  absolute path.
-- Sidebar: the two rowActions wrapper spans now pair `stopPropagation` with
-  `clearPendingClick` (a stray pending could spuriously enter rename).
-- Remote plugin-list refresh no longer writes ERROR log lines for
-  uninitialized remote profiles (quiet manifest probe).
-- Settings-bridge keyed-slot support (Plugins page no longer abdicates the
-  chamber shell); child-ctx errors contained at the host seam.
-- Connections settings: chamber-block legibility restored; refresh actions
-  distinguished.
-- Renderer/sidebar scroll sync excludes ghost rows; sort derivation converges
-  without write loops.
+- macOS：`windowCloseBehavior='quit'` 现在真正退出（此前在 darwin 上会永远停留在无窗口状态）；唤醒重探不再在退出拆除期间生成传输。
+- `isAllowedReleaseUrl` 拒绝百分号编码的路径穿越与 userinfo —— 白名单不再能被指向任意 github.com 路径。
+- 更新器：下载进行中时周期重检不再覆盖 `downloaded` 状态；错误文本路径脱敏覆盖任意 POSIX 绝对路径。
+- 侧边栏：两个 rowActions 包裹 span 现在把 `stopPropagation` 与 `clearPendingClick` 配对（残留的 pending 可能误入重命名）。
+- 远程插件列表刷新不再为未初始化的远程 profile 写 ERROR 日志（静默 manifest 探测）。
+- 设置壳 keyed-slot 支持（插件页不再弃置 chamber 壳）；子 ctx 错误在宿主 seam 处收口。
+- 连接设置：chamber-block 可读性恢复；刷新操作区分开。
+- 渲染层/侧边栏滚动同步排除 ghost 行；排序推导收敛不再写循环。
 
-### Changed
+### 变更
 
-- **macOS release builds now target macOS 26** (`macos-latest` runner) —
-  macos-14 is deprecated (2026-07) and unsupported by 2026-11.
-- Release engineering: version assert covers all 6 chamber packages;
-  concurrency guard on the release workflow; CI packaging runs with an
-  explicit `--publish=never` (electron-builder 26 implicitly publishes in CI
-  environments otherwise).
-- **No `.blockmap` sidecars in releases** — Windows `nsis.differentialPackage`
-  back to `false`; the mac zip's hardcoded `.zip.blockmap` is dropped from the
-  draft before finalize. Feeds never reference blockmaps, so updates fall back
-  to full downloads (functionality unchanged).
-- Chinese README promoted to primary (`docs/README.en-US.md` mirror).
+- **macOS 发布构建现在面向 macOS 26**（`macos-latest` runner）—— macos-14 已弃用（2026-07）且到 2026-11 不再受支持。
+- 发布工程：版本断言覆盖全部 6 个 chamber 包；发布 workflow 并发守卫；CI 打包显式 `--publish=never`（否则 electron-builder 26 在 CI 环境中隐式发布）。
+- **发布产物不再附带 `.blockmap`** —— Windows `nsis.differentialPackage` 恢复为 `false`；mac zip 硬编码的 `.zip.blockmap` 在 finalize 前从 draft 移除。更新源永不引用 blockmap，更新回退为全量下载（功能不变）。
+- 中文 README 提升为主版本（`docs/README.en-US.md` 镜像）。
 
 ## [0.1.1] - 2026-08-18
 
-### Added
+### 新增
 
-- Chamber host-graph injection surfaced in plugin management (local/remote
-  seed wiring, `--patch` overlay, install-level fallback).
-- Client plugin runtime loading (design 09): per-instance host-graph merge,
-  extra-entry preloading, covered-set dedupe.
-- Remote plugin management over the SSH exec channel (list / add / remove /
-  restart, spec whitelist).
-- Multi-source sidebar enhancement batch (workspace grouping, info cards,
-  running-subagent indicators, cross-ctx live sync).
-- Trusted IPC + navigation fencing to the control-plane main frame;
-  non-loopback HTTP/WS origin rejection.
-- Windows single-pass lean installer; app/tray icons; packaged dev-instance
-  isolation.
+- Chamber host-graph 注入在插件管理中可见（本地/远程 seed 接线、`--patch` 覆盖、安装级回退）。
+- 客户端插件运行时加载（设计 09）：每实例 host-graph 合并、额外 entry 预加载、covered 集去重。
+- 经 SSH exec 通道的远程插件管理（list / add / remove / restart、spec 白名单）。
+- 多来源侧边栏增强批次（workspace 分组、信息卡、运行中 subagent 指示、跨 ctx 实时同步）。
+- 可信 IPC + 导航围栏到控制面主 frame；拒绝非 loopback 的 HTTP/WS origin。
+- Windows 单趟精简安装器；应用/托盘图标；打包 dev 实例隔离。
 
-### Fixed
+### 修复
 
-- Transient tunnel failures retried via a slow re-probe; renderer crash
-  window recovery; N-ctx cordis ctx teardown on dispose; queued session opens
-  kept pending until runtime accepts; cursor flicker over row actions;
-  chamberBridge publish gated on projection signature (identity-preserving
-  aggregate state).
+- 瞬时隧道失败经慢速重探重试；渲染层崩溃窗口恢复；N-ctx cordis ctx 在 dispose 时拆除；排队中的会话打开保持 pending 直到 runtime 接受；行操作上光标闪烁；chamberBridge 发布以投影签名门禁（保持身份一致的聚合状态）。
 
-### Changed
+### 变更
 
-- dsh 0.1.0-rc.7 integrated (harness pin + CI bundle pin + lockfile sync).
-- macOS x64 CI builds dropped for v1 (arm64 only).
-- Auto-update redesigned as a quiet settings-based flow (design 11 scoping).
+- 集成 dsh 0.1.0-rc.7（harness 固定 + CI bundle 固定 + lockfile 同步）。
+- v1 放弃 macOS x64 CI 构建（仅 arm64）。
+- 自动更新重设计为低调的设置流（设计 11 范围）。
 
 ## [0.1.0] - 2026-08-15
 
-Initial release — local desktop connection manager for dsh:
+初始发布 —— dsh 的本地桌面连接管理器：
 
-- Control-plane connection core: web-profile host hosting, management REST
-  (`/health`, `/api/connections`, `/api/host/logs`), per-instance same-origin
-  reverse proxy, static frontend serving.
-- Self-built renderer (source-reused dsh official frontend): N-ctx
-  multi-instance, chamber sidebar / connections settings / settings-bridge
-  client plugins.
-- SSH transport (tunnels + remote systemd), instance registry, Electron
-  single-frame shell, CLI.
+- 控制面连接核心：web profile 宿主托管、管理 REST（`/health`、`/api/connections`、`/api/host/logs`）、每实例同源反代、静态前端服务。
+- 自建渲染层（dsh 官方前端源码复用）：N-ctx 多实例、chamber 侧边栏 / 连接设置 / 设置壳客户端插件。
+- SSH 传输（隧道 + 远端 systemd）、实例注册表、Electron 单 frame 壳、CLI。
 
-v1 scope: no authentication/audit surface (loopback-only control plane).
+v1 范围：无认证/审计面（仅 loopback 控制面）。
 
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1

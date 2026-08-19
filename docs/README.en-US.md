@@ -412,7 +412,7 @@ vendor/
 
 ## Contributing
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup and contribution guidelines. Development rules live in [AGENTS.md](../AGENTS.md).
+See [CONTRIBUTING.en-US.md](CONTRIBUTING.en-US.md) for setup and contribution guidelines. Development rules live in [AGENTS.md](../AGENTS.md).
 
 ## License
 

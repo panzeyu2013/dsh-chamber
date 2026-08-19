@@ -1,9 +1,10 @@
-# 第三方声明（Third-Party Notices）
+# Third-Party Notices
 
-dsh-chamber 重新分发以下第三方包。每个包的完整许可证文本位于其自身的
-`node_modules` 下的 `LICENSE` 文件中。经 `npm run gen:notices` 生成。
+dsh-chamber redistributes the following third-party packages. The full license
+text of each package lives in its own `LICENSE` file under `node_modules`.
+Generated with `npm run gen:notices`.
 
-| 包 | 版本 | 许可证 |
+| Package | Version | License |
 |---|---|---|
 | `@babel/code-frame` | 7.29.7 | MIT |
 | `@babel/compat-data` | 7.29.7 | MIT |

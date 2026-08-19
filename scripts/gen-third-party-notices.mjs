@@ -33,14 +33,18 @@ function scan(dir) {
   if (!existsSync(dir)) return
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith('.')) continue
+    // pnpm links installed packages into node_modules as symlinks — follow
+    // them, otherwise every package is skipped and the table comes out empty.
+    const isDir = entry.isDirectory() || entry.isSymbolicLink()
     if (entry.name.startsWith('@')) {
       const scoped = join(dir, entry.name)
+      if (!isDir) continue
       for (const sub of readdirSync(scoped, { withFileTypes: true })) {
-        if (sub.isDirectory()) record(join(scoped, sub.name, 'package.json'))
+        if (sub.isDirectory() || sub.isSymbolicLink()) record(join(scoped, sub.name, 'package.json'))
       }
       continue
     }
-    if (entry.isDirectory()) record(join(dir, entry.name, 'package.json'))
+    if (isDir) record(join(dir, entry.name, 'package.json'))
   }
 }
 
@@ -52,7 +56,17 @@ const rows = [...found.entries()]
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([name, { version, license }]) => `| \`${name}\` | ${version} | ${license} |`)
 
-const body = `# Third-Party Notices
+const bodyZh = `# 第三方声明（Third-Party Notices）
+
+dsh-chamber 重新分发以下第三方包。每个包的完整许可证文本位于其自身的
+\`node_modules\` 下的 \`LICENSE\` 文件中。经 \`npm run gen:notices\` 生成。
+
+| 包 | 版本 | 许可证 |
+|---|---|---|
+${rows.join('\n')}
+`
+
+const bodyEn = `# Third-Party Notices
 
 dsh-chamber redistributes the following third-party packages. The full license
 text of each package lives in its own \`LICENSE\` file under \`node_modules\`.
@@ -63,5 +77,7 @@ Generated with \`npm run gen:notices\`.
 ${rows.join('\n')}
 `
 
-writeFileSync(OUT, body)
-console.log(`wrote ${OUT} (${found.size} packages)`)
+const EN_OUT = join(ROOT, 'docs/THIRD_PARTY_NOTICES.en-US.md')
+writeFileSync(OUT, bodyZh)
+writeFileSync(EN_OUT, bodyEn)
+console.log(`wrote ${OUT} + ${EN_OUT} (${found.size} packages)`)
