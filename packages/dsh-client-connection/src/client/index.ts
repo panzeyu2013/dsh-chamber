@@ -61,6 +61,15 @@ export interface HostDescriptionSource {
   subscribe(listener: () => void): () => void
 }
 
+/**
+ * chamber patch (design 14 D4): the window event the chamber shell dispatches
+ * on OS wake-from-sleep (the App layer re-broadcasts the main-process
+ * `system-resume` IPC push as this window event). SINGLE canonical definition —
+ * the renderer App layer imports it from here so the two sides can never
+ * drift apart (a drift would silently break the immediate-reconnect chain).
+ */
+export const SYSTEM_RESUME_EVENT = 'dsh-chamber:system-resume'
+
 /** Required services (none — this is the wire root). */
 export const inject: string[] = []
 
@@ -151,9 +160,30 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
           sinks.onStateChange?.(state)
         },
       }, config ?? {})
+      // chamber patch (design 14 D4): OS wake-from-sleep → the chamber shell
+      // dispatches a window SYSTEM_RESUME_EVENT (App layer); restart the loop
+      // immediately instead of waiting for the heartbeat watchdog / backoff.
+      // stop()+start() is the controller's own public restart semantics
+      // (made atomic-safe by the loop-epoch guard in connection.ts). The
+      // listener is registered here (loop owned) and removed by the returned
+      // stop handle — once stopped, the event is simply never observed.
+      const onSystemResume = (): void => {
+        try {
+          controller.stop()
+          controller.start()
+        } catch (error) {
+          console.warn('[web-runtime] system-resume reconnect failed:', error)
+        }
+      }
+      if (typeof window !== 'undefined') {
+        window.addEventListener(SYSTEM_RESUME_EVENT, onSystemResume)
+      }
       controller.start()
       return {
         stop: () => {
+          if (typeof window !== 'undefined') {
+            window.removeEventListener(SYSTEM_RESUME_EVENT, onSystemResume)
+          }
           controller.stop()
           publishDescription(undefined)
         },

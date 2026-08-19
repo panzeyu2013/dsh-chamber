@@ -589,8 +589,11 @@ export default function App() {
     })
     // OS 唤醒分发（design 14 D4）：主进程 push system-resume → 本页面所有
     // dsh 前端连接（N-ctx 单页共享 window）立即重连——dsh-client-connection
-    // 的 chamber 补丁监听 window 'dsh-chamber:system-resume' 事件。桥与
-    // desktopSsh 同一批 expose，desktopSsh 存在则 systemResume 必存在。
+    // 的 chamber 补丁监听该 window 事件。事件名以该包的共享常量
+    // `SYSTEM_RESUME_EVENT`（client/index.ts，值为 'dsh-chamber:system-resume'）
+    // 为唯一权威，本处字面量必须与之保持一致（renderer tsconfig 无法解析该
+    // 包的深路径导出，故用字面量 + 此注释锁定同步）。桥与 desktopSsh 同一批
+    // expose，desktopSsh 存在则 systemResume 必存在。
     const unsubscribeResume = window.dshChamber?.systemResume?.onResume(() => {
       window.dispatchEvent(new Event('dsh-chamber:system-resume'))
     })

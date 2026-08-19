@@ -32,6 +32,7 @@
       "main.ts",
       "preload.cts",
       "updater.ts",
+      "chamber-settings.ts",
       "transport-provider.ts",
       "transport-manager.ts",
       "ssh-provider.ts",

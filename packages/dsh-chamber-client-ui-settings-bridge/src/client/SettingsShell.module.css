@@ -489,3 +489,75 @@
 .updateStatus {
   display: block;
 }
+
+/* ---- chamber-global「通用」section (design 14 D7 / 15 v1 flat form) ---- */
+
+.generalSection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 420px;
+}
+
+.generalBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.generalLabel {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.generalHint {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.generalOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.generalOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.generalOption input[type='radio'] {
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.generalToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.generalToggle input[type='checkbox'] {
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.generalDisabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.generalError {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
+}

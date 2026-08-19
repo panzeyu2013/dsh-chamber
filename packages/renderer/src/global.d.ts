@@ -288,7 +288,48 @@ export interface UpdateSurface {
   openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
-/** The full bridge: app info fields + the ssh surface + the update surface. */
+/**
+ * The dsh-chamber settings surface (design 14 D7) — chamber-GLOBAL runtime
+ * settings owned by the main process (<userData>/chamber-settings.json),
+ * non-secret only. Mirrors packages/desktop/preload.cts structurally
+ * (interface merging requires identical shapes).
+ */
+
+/** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
+export type WindowCloseBehavior = 'hide-to-tray' | 'quit'
+
+/** Chamber-global runtime settings (design 14 v1 scope). */
+export interface ChamberSettings {
+  windowCloseBehavior: WindowCloseBehavior
+  /** Login autostart (design 14 D6): mac/linux; win gated off in v1. */
+  launchAtLogin: boolean
+  /** prevent-app-suspension (design 14 D5); default off. */
+  keepAwake: boolean
+}
+
+/** Non-secret status projection: current settings + platform capability gates. */
+export interface ChamberSettingsStatus {
+  settings: ChamberSettings
+  supported: {
+    /** false on win32 (v1 gate). */
+    launchAtLogin: boolean
+    /** false when no tray recovery surface exists (dev); macOS always safe. */
+    closeToTray: boolean
+  }
+}
+
+export interface SettingsSurface {
+  get(): Promise<ChamberSettingsStatus>
+  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string }>
+  onChanged(callback: (status: ChamberSettingsStatus) => void): () => void
+}
+
+/** OS wake-from-sleep notification (design 14 D4): reconnect immediately. */
+export interface SystemResumeSurface {
+  onResume(callback: (payload: { timestamp: number }) => void): () => void
+}
+
+/** The full bridge: app info + ssh + update + chamber settings + system resume. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshWorkspace: string | null
@@ -297,6 +338,8 @@ export interface DshChamberBridge {
   version: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
+  settings: SettingsSurface
+  systemResume: SystemResumeSurface
 }
 
 declare global {

@@ -28,6 +28,14 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/src/client/ConnectionsSection.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
+import { GeneralView } from './GeneralView.tsx'
+import {
+  CONNECTIONS_SECTION_ID,
+  GENERAL_SECTION_ID,
+  UPDATE_SECTION_ID,
+  resolveActiveSection,
+  type SectionNavRow,
+} from './nav-active.ts'
 import {
   getServers, subscribeServers, type BridgeServerRow,
 } from './bridge-servers.ts'
@@ -57,20 +65,6 @@ export type SettingsShellProps =
 
 /** The local instance id (always selectable, even while its host is not ready). */
 const LOCAL_INSTANCE_ID = 'local'
-
-/**
- * The fixed connections nav id: connection management is a chamber-global
- * surface (create/delete connections) — it never follows the selected
- * server, so it lives OUTSIDE the child-context section ids.
- */
-const CONNECTIONS_SECTION_ID = '__connections'
-
-/**
- * The fixed update nav id (design 11): the app-level update status is
- * chamber-global (one desktop app, not any server's config) — the second
- * fixed entry below the divider, independent of the selected server.
- */
-const UPDATE_SECTION_ID = '__update'
 
 /**
  * Per-selection session-mount retry ledger: `failures` counts consecutive
@@ -252,14 +246,9 @@ function ServerDropdown({
   )
 }
 
-/** One nav row of the SELECTED server's settings sections (child ctx ledger projection). */
-interface SectionNavRow {
-  id: string
-  order: number
-  label: string
-}
-
-/** The modal panel: mask + panel; nav rail (server dropdown + sections) + options column. */
+/**
+ * The modal panel: mask + panel; nav rail (server dropdown + sections) + options column.
+ */
 function SettingsPanel({
   servers, selectedId, sessions, sessionError, activeId, onSelectSection, onClose,
   onSelectServer, chamberInstanceId, t, connectionsT,
@@ -314,14 +303,9 @@ function SettingsPanel({
     () => (selectedSession === undefined ? [] : sectionRows(selectedSession.slots)),
     [selectedSession, sectionVersion, localeRevision],
   )
-  // Active falls back to the first row when a section left the ledger; the
-  // chamber-global ids (connections / update) stay valid regardless of the
-  // selected server.
-  const active = activeId === CONNECTIONS_SECTION_ID
-    ? CONNECTIONS_SECTION_ID
-    : activeId === UPDATE_SECTION_ID
-      ? UPDATE_SECTION_ID
-      : activeId !== undefined && rows.some(row => row.id === activeId) ? activeId : rows[0]?.id
+  // Active resolution (nav-active.ts): chamber-global fixed ids win; a
+  // server-section id that left the ledger falls back to the first row.
+  const active = resolveActiveSection(activeId, rows)
   const selected = servers.find(server => server.id === selectedId)
 
   return (
@@ -362,6 +346,16 @@ function SettingsPanel({
             >
               <IconLinkOutline16 className={css.navIcon} size={16} />
               <span className={css.navLabel}>{t('connectionsNav')}</span>
+            </button>
+            <button
+              key={GENERAL_SECTION_ID}
+              type="button"
+              className={clsx(css.navCell, active === GENERAL_SECTION_ID && css.active)}
+              aria-current={active === GENERAL_SECTION_ID ? 'true' : undefined}
+              onClick={() => onSelectSection(GENERAL_SECTION_ID)}
+            >
+              <IconSettingsOutline16 className={css.navIcon} size={16} />
+              <span className={css.navLabel}>{t('generalNav')}</span>
             </button>
             <button
               key={UPDATE_SECTION_ID}
@@ -415,6 +409,12 @@ function SettingsPanel({
               /* Chamber-global update status (design 11): app-level, low-key,
                  independent of the selected server. */
               <UpdateSection t={t} />
+            ) : active === GENERAL_SECTION_ID ? (
+              /* Chamber-global runtime settings (design 14 D7): close-window
+                 behavior / launch at login / keep awake / quit confirmation —
+                 reads the main-process chamber-settings.json, independent of
+                 the selected server. */
+              <GeneralView t={t} />
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (

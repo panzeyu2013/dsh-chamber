@@ -78,6 +78,13 @@ export class ConnectionController {
   private running = false
   private lastState: ConnectionState | null = null
   private readonly config: Required<ConnectionConfig>
+  // chamber patch (design 14 D4): loop epoch. stop() bumps it so an in-flight
+  // loop invocation from a PREVIOUS start() can never survive a synchronous
+  // stop()+start() restart: the official `isRunning()` check alone is racy —
+  // start() re-sets `running` before the old loop reaches its post-`failed`
+  // check, which would spawn a second concurrent pump loop (double streams,
+  // duplicated onConnected resync, leaked generations).
+  private loopEpoch = 0
 
   constructor(
     private readonly api: IApiClient,
@@ -97,6 +104,9 @@ export class ConnectionController {
   /** Stop the loop and abort the current generation's streams. */
   stop(): void {
     this.running = false
+    // chamber patch (design 14 D4): invalidate any in-flight loop invocation
+    // (see loopEpoch) so a later start() can never be overtaken by it.
+    this.loopEpoch += 1
     this.current?.abort()
     this.current = null
   }
@@ -118,7 +128,11 @@ export class ConnectionController {
   }
 
   private async loop(): Promise<void> {
-    while (this.running) {
+    // chamber patch (design 14 D4): this loop invocation is tied to the epoch
+    // captured at entry — a stop() (which bumps loopEpoch) retires it even if
+    // a subsequent start() re-set `running`.
+    const epoch = this.loopEpoch
+    while (this.running && epoch === this.loopEpoch) {
       const gen = ++this.generation
       const ac = new AbortController()
       this.current = ac
@@ -172,7 +186,9 @@ export class ConnectionController {
       }
 
       await failed
-      if (!this.isRunning()) return
+      // chamber patch (design 14 D4): epoch guard — a stop()+start() restart
+      // retires this loop here instead of falling through into a second pump.
+      if (!this.isRunning() || epoch !== this.loopEpoch) return
       this.emitState('reconnecting')
       this.attempt += 1
       console.warn(`[web-runtime] connection lost, retry #${this.attempt}`)

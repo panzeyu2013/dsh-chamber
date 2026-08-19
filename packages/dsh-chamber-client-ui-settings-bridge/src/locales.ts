@@ -7,6 +7,7 @@ export const zh = {
   serverDropdownLabel: '选择服务器',
   connectionsNav: '连接',
   updateNav: '更新',
+  generalNav: '通用',
   noServers: '暂无可管理的实例。请在「连接」中启动本地实例或注册远程主机。',
   loadingServers: '正在加载实例…',
   targetUnavailable: '该实例当前不可达，其配置存储在该实例的宿主机器上，建立连接后可编辑。',
@@ -29,6 +30,16 @@ export const zh = {
   updateDownloadFailed: '更新下载失败',
   updateCheckFailed: '无法检查更新',
   updateReleaseLink: '前往下载页',
+  generalCloseBehavior: '关闭窗口时',
+  generalCloseBehaviorHide: '隐藏到托盘（dsh 继续运行）',
+  generalCloseBehaviorQuit: '退出应用',
+  generalCloseBehaviorUnavailable: '当前无托盘可用，隐藏窗口后将无法恢复',
+  generalLaunchAtLogin: '登录时自动启动',
+  generalKeepAwake: '保持唤醒（防止系统休眠）',
+  generalQuitConfirm: '退出确认',
+  generalQuitConfirmHint: '有远程隧道或本地 dsh 实例运行时，退出前会先确认；更新已下载时自动豁免',
+  generalUnavailable: '当前平台不支持',
+  generalSaveFailed: '保存失败：{error}',
 }
 
 /** English dictionary (key-set must match `zh` exactly). */
@@ -38,6 +49,7 @@ export const en: Record<keyof typeof zh, string> = {
   serverDropdownLabel: 'Choose server',
   connectionsNav: 'Connections',
   updateNav: 'Update',
+  generalNav: 'General',
   noServers: 'Nothing to manage yet. Start the local instance or register a remote host in Connections.',
   loadingServers: 'Loading instances…',
   targetUnavailable: 'This instance is not reachable right now. Its config lives on the instance host machine; connect first to edit.',
@@ -60,6 +72,16 @@ export const en: Record<keyof typeof zh, string> = {
   updateDownloadFailed: 'Update download failed',
   updateCheckFailed: 'Unable to check for updates',
   updateReleaseLink: 'Go to download page',
+  generalCloseBehavior: 'When closing the window',
+  generalCloseBehaviorHide: 'Hide to tray (dsh keeps running)',
+  generalCloseBehaviorQuit: 'Quit the app',
+  generalCloseBehaviorUnavailable: 'No tray is available; a hidden window could not be recovered',
+  generalLaunchAtLogin: 'Launch at login',
+  generalKeepAwake: 'Keep awake (prevent system sleep)',
+  generalQuitConfirm: 'Quit confirmation',
+  generalQuitConfirmHint: 'Quitting is confirmed first while remote tunnels or the local dsh instance are running; a downloaded update installs without a prompt',
+  generalUnavailable: 'Not supported on this platform',
+  generalSaveFailed: 'Save failed: {error}',
 }
 
 /** Dictionary key set for the settings bridge namespace. */

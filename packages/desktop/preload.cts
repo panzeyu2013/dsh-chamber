@@ -164,7 +164,50 @@ export interface UpdateSurface {
   openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
-/** The full bridge: app info fields + the ssh surface + the update surface. */
+/**
+ * The dsh-chamber settings surface (design 14 D7) — chamber-GLOBAL runtime
+ * settings owned by the main process (<userData>/chamber-settings.json),
+ * non-secret only. get() resolves the current projection (settings +
+ * platform capability gates); set() applies + persists + pushes; onChanged
+ * subscribes to the main-process push and returns an unsubscribe.
+ */
+
+/** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
+export type WindowCloseBehavior = 'hide-to-tray' | 'quit'
+
+/** Chamber-global runtime settings (design 14 v1 scope). */
+export interface ChamberSettings {
+  windowCloseBehavior: WindowCloseBehavior
+  /** Login autostart (design 14 D6): mac/linux; win gated off in v1. */
+  launchAtLogin: boolean
+  /** prevent-app-suspension (design 14 D5); default off. */
+  keepAwake: boolean
+}
+
+/** Non-secret status projection: current settings + platform capability gates. */
+export interface ChamberSettingsStatus {
+  settings: ChamberSettings
+  supported: {
+    /** false on win32 (v1 gate). */
+    launchAtLogin: boolean
+    /** false when no tray recovery surface exists (dev); macOS always safe. */
+    closeToTray: boolean
+  }
+}
+
+export interface SettingsSurface {
+  get(): Promise<ChamberSettingsStatus>
+  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string }>
+  onChanged(callback: (status: ChamberSettingsStatus) => void): () => void
+}
+
+/** OS wake-from-sleep notification (design 14 D4): the renderer reconnects
+ *  immediately instead of waiting for the heartbeat watchdog. */
+export interface SystemResumeSurface {
+  onResume(callback: (payload: { timestamp: number }) => void): () => void
+}
+
+/** The full bridge: app info + ssh + update + chamber settings + system resume. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshWorkspace: string | null
@@ -173,6 +216,8 @@ export interface DshChamberBridge {
   version: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
+  settings: SettingsSurface
+  systemResume: SystemResumeSurface
 }
 
 /**
@@ -240,6 +285,36 @@ function updateApi(): UpdateSurface {
 }
 
 /**
+ * The dsh-chamber:settings-* IPC surface (design 14 D7) — chamber-global,
+ * non-secret only. onChanged subscribes to the main-process push and returns
+ * an unsubscribe.
+ */
+function settingsApi(): SettingsSurface {
+  return {
+    get: () => ipcRenderer.invoke('dsh-chamber:settings-get'),
+    set: patch => ipcRenderer.invoke('dsh-chamber:settings-set', { patch }),
+    onChanged: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, status: ChamberSettingsStatus) => callback(status);
+      ipcRenderer.on('dsh-chamber:settings-changed', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:settings-changed', listener);
+    },
+  };
+}
+
+/** The dsh-chamber:system-resume push surface (design 14 D4). */
+function systemResumeApi(): SystemResumeSurface {
+  return {
+    onResume: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, payload: { timestamp: number }) => callback(payload);
+      ipcRenderer.on('dsh-chamber:system-resume', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:system-resume', listener);
+    },
+  };
+}
+
+/**
  * Fetch the app-info payload for the bridge. The main-process IPC sender
  * fence (design 05 §7.4) may reject a bootstrap invoke fired before the main
  * frame has committed its trusted URL (senderFrame/URL timing during initial
@@ -277,6 +352,8 @@ requestAppInfo().then(
       version: info?.version,
       desktopSsh: desktopSshApi(),
       update: updateApi(),
+      settings: settingsApi(),
+      systemResume: systemResumeApi(),
     });
   },
   (err: unknown) => {
@@ -289,6 +366,8 @@ requestAppInfo().then(
       version: null,
       desktopSsh: desktopSshApi(),
       update: updateApi(),
+      settings: settingsApi(),
+      systemResume: systemResumeApi(),
     });
   },
 );

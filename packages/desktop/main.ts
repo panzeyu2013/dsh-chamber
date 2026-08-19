@@ -27,9 +27,10 @@
  * - Tray (packaged only, defensive), single-instance lock.
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
-import { existsSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path, { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
@@ -43,6 +44,16 @@ import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { createUpdateController } from './updater.ts';
 import { applyPlugins, CLIENT_GRAPH_PACKAGE_NAME, localPluginList, materializeAndAdd, remoteHome, remotePluginList, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
 import type { ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
+import {
+  DEFAULT_CHAMBER_SETTINGS,
+  computeQuitRisk,
+  computeSupported,
+  readSettingsFile,
+  shouldHideToTray,
+  validatePatch,
+  writeSettingsFile,
+} from './chamber-settings.ts';
+import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
 
 // Main-process safety net: a stray stream/socket error (e.g. an ECONNRESET
 // from a peer that went away mid-request) must never wedge startup behind a
@@ -165,6 +176,30 @@ let tray: Tray | null = null;
 // 重建（macOS activate 路径）——没有它，窗口一旦关闭应用就永久无窗。
 let mainWindowUrl: string | null = null;
 
+// Chamber settings (design 14 D7, v1 scope): loaded at startup from
+// <userData>/chamber-settings.json, mutated via dsh-chamber:settings-set. The
+// side effects (keep-awake / login autostart / close behavior) are applied
+// here in the main process — never in any instance's dsh home (01 §2 P2).
+let chamberSettings: ChamberSettings = { ...DEFAULT_CHAMBER_SETTINGS };
+let keepAwakeBlockerId: number | null = null;
+// 最近一次 OS 唤醒时间戳：无窗口常驻（托盘态）期间 held，窗口 show 时补发。
+let lastResume: number | null = null;
+// Quit state machine (design 14 D2): quitRequested 置位后关窗不再 hide（真正
+// 退出在途）；quitConfirmed 表示退出已获确认/豁免；confirmingQuit 是确认
+// 对话框单飞闸（防连点/双路径重复弹窗）。
+let quitRequested = false;
+let quitConfirmed = false;
+let confirmingQuit = false;
+// 本地实例「运行中/在途」状态（design 14 D2）：进程存活（ready/degraded）或
+// spawn/重启在途（starting/restarting）——退出会中断它们，需确认。stopped /
+// error / restart-exhausted 无进程可中断，不触发确认。
+const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
+// Update controller ref (created in whenReady): the quit-confirmation exemption
+// (design 14 D2) reads its state at will-quit time.
+let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
+/** Chamber 设置文件路径（design 14 D7）：<userData>/chamber-settings.json。 */
+const chamberSettingsFile = (): string => path.join(app.getPath('userData'), 'chamber-settings.json');
+
 /**
  * Minimal tray（桌面一体形态的最小托盘：状态 tooltip + 显示/退出菜单）: status
  * tooltip + show/quit menu. Defensive by construction — only created when
@@ -199,7 +234,8 @@ function maybeCreateTray(cp: PlaneHandle) {
           click: () => showMainWindow(),
         },
         { type: 'separator' },
-        // Quit goes through the existing will-quit → cp.stop() path.
+        // Quit goes through before-quit (confirmation / update exemption) →
+        // will-quit cleanup (disposeAsync + cp.stop()) path.
         { label: '退出 dsh-chamber', click: () => app.quit() },
       ]),
     );
@@ -224,6 +260,137 @@ function showMainWindow(): void {
     return;
   }
   if (mainWindowUrl !== null) createMainWindow(mainWindowUrl, false);
+}
+
+/** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控。 */
+function chamberSettingsStatus(): ChamberSettingsStatus {
+  return {
+    settings: chamberSettings,
+    supported: computeSupported(process.platform, tray !== null),
+  };
+}
+
+/** 设置变更推送（主窗口存活时；无窗口常驻期间由下次查询兜底）。 */
+function pushSettingsChanged(): void {
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('dsh-chamber:settings-changed', chamberSettingsStatus());
+  }
+}
+
+/** keep-awake（design 14 D5）：powerSaveBlocker prevent-app-suspension。 */
+function setKeepAwakeActive(enabled: boolean): void {
+  const current = keepAwakeBlockerId;
+  const isActive = current !== null && powerSaveBlocker.isStarted(current);
+  if (enabled) {
+    if (!isActive) {
+      keepAwakeBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    }
+    return;
+  }
+  if (isActive && current !== null) {
+    powerSaveBlocker.stop(current);
+    keepAwakeBlockerId = null;
+  }
+}
+
+/**
+ * 登录自启（design 14 D6）：macOS setLoginItemSettings；Linux XDG autostart
+ * （手写最小 .desktop）；Windows v1 门控（supported=false，调用方不得持久化）。
+ * 失败 loud 返回 {error}，绝不静默假成功。
+ */
+function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error: string } {
+  if (process.platform === 'win32') {
+    return { ok: false, error: 'not supported on this platform' };
+  }
+  try {
+    if (process.platform === 'darwin') {
+      app.setLoginItemSettings({ openAtLogin: enabled });
+      return { ok: true };
+    }
+    const autostartDir = path.join(os.homedir(), '.config', 'autostart');
+    const desktopFile = path.join(autostartDir, 'dsh-chamber.desktop');
+    if (enabled) {
+      mkdirSync(autostartDir, { recursive: true });
+      writeFileSync(
+        desktopFile,
+        '[Desktop Entry]\nType=Application\nName=dsh-chamber\n' +
+          `Exec="${process.execPath}"\nX-GNOME-Autostart-enabled=true\n`,
+        { mode: 0o600 },
+      );
+    } else {
+      rmSync(desktopFile, { force: true });
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * 应用一个已校验的设置 patch（design 14 D7）：先应用副作用（keep-awake /
+ * 登录自启），**全部成功并持久化成功后才更新 holder**——任何失败 loud 返回
+ * {error} 并回滚已应用的副作用（绝不落半个设置、绝不内存与磁盘不一致）。
+ * windowCloseBehavior 无副作用（影响未来的 close 事件）。
+ */
+function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { ok: false; error: string } {
+  const next: ChamberSettings = { ...chamberSettings, ...patch };
+  // 副作用应用包 try：powerSaveBlocker / 登录自启意外抛异常时 loud 失败并
+  // best-effort 回滚 keepAwake，绝不带病继续（绝不落半个设置）。
+  try {
+    if (patch.keepAwake !== undefined) setKeepAwakeActive(patch.keepAwake);
+    if (patch.launchAtLogin !== undefined) {
+      const result = applyLaunchAtLogin(patch.launchAtLogin);
+      if (!result.ok) {
+        // 副作用失败：回滚已应用的 keepAwake（保持原状），绝不持久化。
+        if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
+        return result;
+      }
+    }
+  } catch (error) {
+    console.error('[dsh-chamber] 应用 chamber 设置副作用失败：', error);
+    try {
+      if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
+    } catch {
+      // 回滚失败也 loud 已记日志，不再叠加异常。
+    }
+    return { ok: false, error: 'settings apply failed' };
+  }
+  try {
+    writeSettingsFile(chamberSettingsFile(), next);
+  } catch (error) {
+    console.error('[dsh-chamber] 写入 chamber 设置失败：', error);
+    // 持久化失败：回滚已应用的副作用，holder 保持旧值——内存/磁盘/实际行为一致。
+    if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
+    if (patch.launchAtLogin !== undefined) {
+      const rollback = applyLaunchAtLogin(chamberSettings.launchAtLogin);
+      if (!rollback.ok) console.error(`[dsh-chamber] 登录自启回滚失败：${rollback.error}`);
+    }
+    return { ok: false, error: 'settings persist failed' };
+  }
+  chamberSettings = next;
+  return { ok: true };
+}
+
+/**
+ * OS 唤醒即时重探（design 14 D4，主进程侧）：只触碰瞬时失败的实例——
+ * phase=error/degraded 且 **非终态**（requiresUserAction=false；认证失败/
+ * verifyUp 终态等确定性错误绝不自动重试，05 §7.6 纪律）；**绝不触碰 idle**
+ * （保持手动断开语义）。connect() 对 connecting/ready 幂等，重复唤醒无副作用。
+ */
+function reconnectStaleTransports(): void {
+  const sm = transportManager;
+  if (sm === null) return;
+  for (const instance of sm.listInstances()) {
+    const status = sm.status(instance.id);
+    if (status === null) continue;
+    if (status.phase !== 'error' && status.phase !== 'degraded') continue;
+    if (status.requiresUserAction === true) continue;
+    try {
+      sm.connect(instance.id);
+    } catch (error) {
+      console.warn(`[dsh-chamber] 唤醒重探 ${instance.id} 失败：`, error);
+    }
+  }
 }
 
 /**
@@ -313,6 +480,10 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
         : path.join(pkgDir, 'preload.cts'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 隐藏到托盘后渲染进程计时器不被 Chromium 节流（design 14 D1）：唤醒
+      // 「立即重连」依赖 SSE 心跳/重连计时器，节流会把它拖慢到 ~1 次/秒。
+      // 单窗口 + 控制面 origin + 无第三方内容，安全。
+      backgroundThrottling: false,
     },
   });
   mainWindow = win;
@@ -334,6 +505,25 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   installRendererRecovery(win);
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
+  });
+  // 关窗到托盘（design 14 D1）：设置 = hide-to-tray 且存在恢复入口（win/linux
+  // 需托盘；macOS Dock 常驻）且非真正退出在途 → hide（不 destroy），控制面/
+  // 传输层/dsh 子进程继续运行。托盘缺失时回退现状（关窗即退，受 D2 确认保护）
+  // ——绝不允许窗口被隐藏后无任何恢复入口。
+  win.on('close', (event) => {
+    const recoveryAvailable = process.platform === 'darwin' || tray !== null;
+    if (shouldHideToTray(chamberSettings.windowCloseBehavior, recoveryAvailable, quitRequested)) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+  // 无窗口常驻（托盘态）期间的唤醒事件由主进程 held（lastResume），窗口
+  // 恢复可见时一次性补发（design 14 D4）。
+  win.on('show', () => {
+    if (lastResume !== null) {
+      win.webContents.send('dsh-chamber:system-resume', { timestamp: lastResume });
+      lastResume = null;
+    }
   });
   void win.loadURL(url).catch((loadError) => {
     const detail = loadError instanceof Error ? (loadError.stack ?? loadError.message) : String(loadError);
@@ -367,7 +557,81 @@ if (!gotTheLock) {
     if (process.platform !== 'darwin') app.quit();
   });
 
+  // 退出确认（design 14 D2）在 **before-quit**（窗口关闭前）拦截：显式退出
+  // （Cmd+Q / 托盘退出 / Dock 退出 / 设置=quit 的关窗）先确认；更新已下载
+  // 待装（设计 11 autoInstallOnAppQuit，用户已确认过「更新」）时豁免。
+  // 关键时序：close-to-tray 的 close 处理器靠 quitRequested 区分「退出在途」
+  // vs「普通关窗」——而 will-quit 要等所有窗口关闭后才触发，在 will-quit 内置
+  // 位为时已晚（close 先 hide+preventDefault 会把退出吞掉）。before-quit 先
+  // 置位/拦截：确认后重触发才放行；取消时窗口从未关闭（拦截在先），不丢窗口。
+  app.on('before-quit', (event) => {
+    if (quitConfirmed) return; // 已确认/豁免：放行（重入）
+    const cp = controlPlane;
+    if (cp === null) return; // 控制面未就绪：无可保护内容，放行
+    if (confirmingQuit) {
+      event.preventDefault(); // 确认框已打开：忽略重入（单飞）
+      return;
+    }
+    const updateState = updateController?.state();
+    const updateDownloadReady = updateState !== undefined
+      && updateState.phase === 'downloaded'
+      && updateState.installBlockedReason === null;
+    const smAtQuit = transportManager;
+    const remoteReadyCount = smAtQuit === null
+      ? 0
+      : smAtQuit.listInstances().filter(instance => smAtQuit.status(instance.id)?.phase === 'ready').length;
+    const localRunning = LOCAL_RUNNING_STATES.has(cp.connectionState);
+    const risk = computeQuitRisk({ remoteReadyCount, localRunning, updateDownloadReady });
+    if (!risk.needsConfirm) {
+      // 无风险或更新安装豁免：标记退出在途并重触发（quitConfirmed 早退放行）。
+      quitRequested = true;
+      quitConfirmed = true;
+      app.quit();
+      return;
+    }
+    // 需确认：**在关窗前**拦截（preventDefault 只在此路径调用——风险计算在
+    // 前，意外异常不会静默吞掉退出）。
+    event.preventDefault();
+    confirmingQuit = true;
+    const detail = `退出将停止${risk.reasons.join('与')}。确定退出？`;
+    dialog.showMessageBox({
+      type: 'warning',
+      title: '退出 dsh-chamber？',
+      message: '退出 dsh-chamber？',
+      detail,
+      buttons: ['退出', '取消'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    }).then(({ response }) => {
+      confirmingQuit = false;
+      if (response === 0) {
+        quitRequested = true;
+        quitConfirmed = true;
+        app.quit();
+        return;
+      }
+      // 取消：quitRequested 保持 false。app.quit() 发起的退出在关窗前被拦截、
+      // 窗口未关闭；但 X 关窗路径（windowCloseBehavior='quit'）窗口已先销毁
+      // （window-all-closed → app.quit()），取消后重建——绝不让应用以无窗
+      // 状态滞留（恢复入口不应只剩托盘/二次启动）。
+      if (mainWindow === null || mainWindow.isDestroyed()) {
+        showMainWindow();
+      }
+    }).catch(error => {
+      confirmingQuit = false;
+      console.error('[dsh-chamber] 退出确认对话框失败，取消退出：', error);
+      if (mainWindow === null || mainWindow.isDestroyed()) {
+        showMainWindow();
+      }
+    });
+  });
+
   app.on('will-quit', (event) => {
+    // 真正退出在途（窗口已全部关闭）：close 分支不再 hide；keep-awake 停止
+    // （design 14 D5）。确认/豁免已在 before-quit 完成，这里只剩清理。
+    quitRequested = true;
+    setKeepAwakeActive(false);
     if (!controlPlane) return;
     event.preventDefault();
     // Kill any live tunnels / in-flight execs before the control plane stops
@@ -449,6 +713,43 @@ if (!gotTheLock) {
       dshHome: path.join(app.getPath('userData'), 'dsh-home'),
       version,
     })));
+
+    // Chamber settings（design 14 D7）：启动加载 + 应用副作用（keep-awake /
+    // 登录自启 reconcile）；损坏 loud（*.corrupt 保留），绝不静默假默认。
+    const settingsLoad = readSettingsFile(chamberSettingsFile());
+    if (settingsLoad.notice !== null) console.error(`[dsh-chamber] ${settingsLoad.notice}`);
+    chamberSettings = settingsLoad.settings;
+    setKeepAwakeActive(chamberSettings.keepAwake);
+    if (process.platform !== 'win32') {
+      const loginItemResult = applyLaunchAtLogin(chamberSettings.launchAtLogin);
+      if (!loginItemResult.ok) {
+        console.warn(`[dsh-chamber] 登录自启 reconcile 失败：${loginItemResult.error}`);
+      }
+    }
+
+    // Chamber settings IPC 面：get 查询 / set 应用并持久化 / 变更推送。全部走
+    // trustedIpc 围栏；失败 loud {error}，绝不静默假成功。
+    ipcMain.handle('dsh-chamber:settings-get', trustedIpc(() => chamberSettingsStatus()));
+    ipcMain.handle('dsh-chamber:settings-set', trustedIpc(({ patch }) => {
+      const validated = validatePatch(patch);
+      if (!validated.ok) return { error: validated.error };
+      const applied = applySettingsPatch(validated.patch);
+      if (!applied.ok) return applied;
+      pushSettingsChanged();
+      return chamberSettingsStatus();
+    }));
+
+    // OS 唤醒即时重探 + 推送（design 14 D4）：主进程对 error/degraded 实例
+    // 立即重探（绝不触碰 idle），并向渲染端 push（dsh 前端连接立即重连）。
+    powerMonitor.on('resume', () => {
+      lastResume = Date.now();
+      if (mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('dsh-chamber:system-resume', { timestamp: lastResume });
+        // 窗口存活（含隐藏）已即时收到：清空 held 值，避免 hide→show 补发过期事件。
+        lastResume = null;
+      }
+      reconnectStaleTransports();
+    });
 
     maybeCreateTray(controlPlane);
 
@@ -830,6 +1131,9 @@ if (!gotTheLock) {
         error: (...args) => console.error('[updater]', ...args),
       },
     });
+    // Module-level ref so will-quit can read the update state for the quit-
+    // confirmation exemption (design 14 D2).
+    updateController = updater;
     updater.subscribe((updateState) => {
       if (mainWindow !== null && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('dsh-chamber:update-state-changed', updateState);
