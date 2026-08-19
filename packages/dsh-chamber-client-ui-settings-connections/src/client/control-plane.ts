@@ -215,9 +215,9 @@ export function seedHostGraph(id: string): Promise<SshSeedHostGraphResult> {
   return desktopSsh().seed_host_graph(id)
 }
 
-/** Pack a local plugin dir (resolved from the local manifest) and install it remotely. */
-export function pluginMaterializeAdd(id: string, dir: string): Promise<SshMaterializeResult> {
-  return desktopSsh().plugin_materialize_add(id, dir)
+/** Ask MAIN to resolve a named local-manifest dependency and install it remotely. */
+export function pluginMaterializeAdd(id: string, name: string): Promise<SshMaterializeResult> {
+  return desktopSsh().plugin_materialize_add(id, name)
 }
 
 /** Pack a user-picked local plugin dir and install it remotely (pick-only). */

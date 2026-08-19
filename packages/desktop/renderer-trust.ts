@@ -13,22 +13,28 @@ export interface IpcSenderLike {
   senderFrame?: RendererFrameLike | null
 }
 
-/** Only documents served by this exact control-plane origin are app pages. */
+/**
+ * Only the fixed chamber shell document is privileged. The control-plane
+ * origin also serves untrusted instance responses under /api/i/<id>/*; origin
+ * equality alone would let a proxied remote HTML document inherit preload.
+ */
 export function isTrustedRendererUrl(url: string, controlPlaneOrigin: string): boolean {
   try {
     const actual = new URL(url)
     const expected = new URL(controlPlaneOrigin)
     return (expected.protocol === 'http:' || expected.protocol === 'https:')
       && actual.origin === expected.origin
+      && actual.pathname === '/'
+      && actual.search === ''
   } catch {
     return false
   }
 }
 
 /**
- * IPC is accepted only from the current main window's main frame and exact
- * control-plane origin. Checking the URL alone is insufficient: a child or
- * stale WebContents could otherwise reuse the same origin.
+ * IPC is accepted only from the current main window's main frame and fixed
+ * chamber shell document. Checking the origin alone is insufficient: a child,
+ * stale WebContents, or /api/i/* remote document could otherwise reuse it.
  */
 export function isTrustedIpcSender(
   event: IpcSenderLike,

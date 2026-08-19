@@ -88,7 +88,7 @@ pnpm install
 桌面需要将官方 `@deepseek-ai/dsh` 发布包封装进 `packages/desktop/vendor/dsh`（控制面的默认 dsh workspace，优先于可选的 `ref-dsh` 源码符号链接）：
 
 ```bash
-pnpm --filter @dsh-chamber/desktop run bundle:dsh   # 用 DSH_CHAMBER_DSH_VERSION 固定版本
+pnpm --filter @dsh-chamber/desktop run bundle:dsh   # 默认精确 pin；覆盖也必须是精确 semver
 ```
 
 `bundle:dsh` 也会由 `build:desktop` / `dist:desktop:mac` 自动执行——可直接跳到运行或打包步骤。
@@ -109,7 +109,7 @@ pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
 pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分）
 ```
 
-打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。产物**未签名**——未配置 Apple 签名/公证或 Windows 代码签名证书。
+打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。普通 CI/dry-run 可为 ad-hoc/未签名构建；公开 release 必须具备 macOS Developer ID + 公证及 Windows Authenticode，并在发布前通过产物验签，否则 fail-closed 不公开。
 
 > Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
 

@@ -42,6 +42,7 @@ import type {
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
+import { saveHostWithPassword } from './save-host.ts'
 import css from './ConnectionsSection.module.css'
 
 /** Registration-side business face for the connections section. */
@@ -500,8 +501,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       remotePort: String(spec.remotePort),
       serviceName: spec.serviceName ?? '',
       remoteDshHome: spec.remoteDshHome ?? '',
-      // The stored password lives in main-process memory only and is never
-      // exposed back to the renderer — the field always starts empty.
+      // The stored password is never exposed back to the renderer — the
+      // field always starts empty.
       password: '',
     })
     setFieldErrors({})
@@ -510,7 +511,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     setConfigError(null)
   }, [])
 
-  /** 清除该主机在主进程内存中的密码（改用密钥/ssh-agent）。 */
+  /** 清除该主机在主进程内存与 owner-only 镜像中的密码（改用密钥/ssh-agent）。 */
   const clearPassword = useCallback(async (): Promise<void> => {
     const bridge = ssh()
     if (bridge === null || editing === null || editing === 'new') return
@@ -591,8 +592,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       const next = editing === 'new'
         ? [...instances, input]
         : instances.map(instance => instance.id === editing.id ? { ...input, id: instance.id } : instance)
-      const saved = await bridge.instances_set(next)
-      setInstances(saved)
       // Password auth (design 05 §8): forward the form's TRANSIENT password
       // to the main process (held there in memory + plaintext mirror for
       // restart auto-connect; never in the registry above, never logged).
@@ -602,12 +601,18 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // (e.g. unsupported platform) keeps the form open with the error so
       // the user sees why.
       const savedId = editing === 'new' ? input.id : editing.id
-      if (draft.password !== '') {
-        const passwordResult = await bridge.set_password(savedId, draft.password)
-        if ('error' in passwordResult) {
-          setFormError(passwordResult.error)
-          return
+      const result = await saveHostWithPassword(bridge, instances, next, savedId, draft.password)
+      setInstances(result.instances)
+      if (!result.ok) {
+        setFormError(result.error)
+        // If rollback genuinely failed, turn a newly-created row into an edit
+        // target so retry cannot submit a duplicate id. The password field
+        // remains in the current draft for an explicit retry.
+        if (result.metadataCommitted && editing === 'new') {
+          const committed = result.instances.find(instance => instance.id === savedId)
+          if (committed !== undefined) setEditing(committed)
         }
+        return
       }
       setEditing(null)
       setDraft(null)

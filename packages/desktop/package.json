@@ -48,8 +48,8 @@
     ],
     "extraResources": [
       {
-        "from": "vendor",
-        "to": "vendor"
+        "from": "vendor/dsh",
+        "to": "vendor/dsh"
       },
       {
         "from": "resources/icon.png",
@@ -65,6 +65,23 @@
     ],
     "mac": {
       "icon": "resources/icon.icns",
+      "notarize": true,
+      "extendInfo": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true,
+          "NSExceptionDomains": {
+            "127.0.0.1": {
+              "NSIncludesSubdomains": false,
+              "NSTemporaryExceptionAllowsInsecureHTTPLoads": true
+            },
+            "localhost": {
+              "NSIncludesSubdomains": false,
+              "NSTemporaryExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        }
+      },
       "target": [
         "dmg",
         "zip"

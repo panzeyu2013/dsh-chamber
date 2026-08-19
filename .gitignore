@@ -32,10 +32,15 @@ ref-upstream
 
 # Harness workspace symlinks (point into the external dsh source checkout —
 # like ref-dsh/ref-upstream, these local links are never committed)
-vendor/
+/vendor/
 
-# Bundled dsh copy inside the desktop package (produced by bundle:dsh, external repo content)
-packages/desktop/vendor/
+# Bundled dsh copy inside the desktop package (produced by bundle:dsh, external
+# repo content). Keep only its independently frozen dependency graph in Git;
+# every installed/runtime artifact remains generated and ignored.
+packages/desktop/vendor/*
+!packages/desktop/vendor/dsh/
+packages/desktop/vendor/dsh/*
+!packages/desktop/vendor/dsh/pnpm-lock.yaml
 
 # Dev-mode isolated app data (electron-dev.mjs --user-data-dir: own instance
 # lock / state / registry / passwords, so dev coexists with a running packaged

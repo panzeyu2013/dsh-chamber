@@ -31,6 +31,7 @@ import {
   instanceSnapshotSignature,
   isInstanceUnavailable,
   mergeRuntimeFacts,
+  releaseInstanceClient,
   reconcileCompletedFacts,
   runtimeReportSignature,
   serversProjectionSignature,
@@ -46,6 +47,8 @@ import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
 import InstanceView from './components/InstanceView.tsx'
 
 const AGGREGATE_POLL_MS = 10000
+const AGGREGATE_POLL_CONCURRENCY = 4
+const MAX_PREWARMED_REMOTE_VIEWS = 3
 /** 连接行（label/dshPort）低频轮询：状态本身走推送，行字段极少变化。 */
 const CONNECTIONS_POLL_MS = 30_000
 
@@ -195,6 +198,10 @@ export default function App() {
   // 视图：'local' | 'ssh-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
+  // Views mounted only by background prewarm. User selection removes the id
+  // from this set, freeing one of the three idle-prewarm slots while keeping
+  // the user-opened N-ctx shell resident.
+  const autoPrewarmedRef = useRef<Set<string>>(new Set())
   // chamber (2026-08 失败呈现修订, 05 §4)：每视图 shell 终态（InstanceView
   // 经 onStateChange 上报）——活动视图 boot 失败时由 App 渲染统一失败覆盖层
   // （失败报告 + 重试 + 服务器切换）。retryTokens 驱动 InstanceView 的重试
@@ -272,7 +279,11 @@ export default function App() {
     // 被回收的 id 再统一处置；setMountedViews 保持 identity-preserving。
     const removed = mountedViews.filter(id => !live.has(id))
     if (removed.length > 0) {
-      for (const id of removed) disposeInstanceShell(id)
+      for (const id of removed) {
+        autoPrewarmedRef.current.delete(id)
+        disposeInstanceShell(id)
+        releaseInstanceClient(id)
+      }
       setMountedViews(prev => {
         const next = prev.filter(id => live.has(id))
         return next.length === prev.length ? prev : next
@@ -404,6 +415,7 @@ export default function App() {
    * 陈旧排序）。
    */
   const aggregateSeqRef = useRef<Record<string, number>>({})
+  const aggregatePollRunningRef = useRef(false)
   const refreshAggregate = useCallback(async (instanceId: string) => {
     const seq = (aggregateSeqRef.current[instanceId] ?? 0) + 1
     aggregateSeqRef.current[instanceId] = seq
@@ -448,7 +460,27 @@ export default function App() {
         notReady.push(`ssh-${instance.id}`)
       }
     }
-    for (const entry of ready) void refreshAggregate(entry.id)
+    // One bounded polling wave at a time. Manual refreshes still use the
+    // sequence guard independently, while periodic waves cannot create an
+    // N-instance request burst or overlap the next tick.
+    if (!aggregatePollRunningRef.current && ready.length > 0) {
+      aggregatePollRunningRef.current = true
+      void (async () => {
+        let cursor = 0
+        const worker = async () => {
+          while (cursor < ready.length) {
+            const entry = ready[cursor]
+            cursor += 1
+            await refreshAggregate(entry.id)
+          }
+        }
+        try {
+          await Promise.all(Array.from({ length: Math.min(AGGREGATE_POLL_CONCURRENCY, ready.length) }, () => worker()))
+        } finally {
+          aggregatePollRunningRef.current = false
+        }
+      })()
+    }
     if (notReady.length > 0) {
       setAggregates(prev => {
         let changed = false
@@ -695,6 +727,7 @@ export default function App() {
     // 即时加速；idle 手动断开不触碰——见 ensureRemoteConnected）。
     ensureRemoteConnected(viewId)
     if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) return
+    autoPrewarmedRef.current.delete(viewId)
     // 镜像查重（非闭包）：在途/顺延中的同一意图直接跳过；已落地视图只有在
     // 无在途意图时才跳过——过渡在途时 UI 仍显示旧视图，点击旧视图 = 撤销
     // 意图（最后一次意图胜出，view-transition.ts），不能按当前态误丢。
@@ -766,13 +799,17 @@ export default function App() {
    */
   const prewarmEligibleRef = useRef<Set<string>>(new Set())
   const prewarmEligible = useMemo(() => {
-    const eligible = new Set(
-      remoteInstances
-        .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
-        .map(instance => `ssh-${instance.id}`),
-    )
-    for (const id of mountedViews) eligible.delete(id)
-    return eligible
+    const liveRemoteIds = new Set(remoteInstances.map(instance => `ssh-${instance.id}`))
+    for (const id of autoPrewarmedRef.current) {
+      if (!liveRemoteIds.has(id)) autoPrewarmedRef.current.delete(id)
+    }
+    const remaining = Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
+    const eligible = remoteInstances
+      .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
+      .map(instance => `ssh-${instance.id}`)
+      .filter(id => !mountedViews.includes(id))
+      .slice(0, remaining)
+    return new Set(eligible)
   }, [remoteInstances, remoteStatus, mountedViews])
   prewarmEligibleRef.current = prewarmEligible
 
@@ -785,6 +822,7 @@ export default function App() {
     } while (next !== undefined && !prewarmEligibleRef.current.has(next))
     if (next === undefined) return
     prewarmInflightRef.current = next
+    autoPrewarmedRef.current.add(next)
     setMountedViews(prev => (prev.includes(next) ? prev : [...prev, next]))
   }, [])
 

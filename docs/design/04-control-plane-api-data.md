@@ -46,8 +46,9 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
   及 cookie/bearer 门禁）——管理面 `/api/*` 与反代面 `/api/i/*` 一律匿名；
 - 暴露面不变量：控制面 HTTP 仅监听 loopback（127.0.0.1）；API/upgrade 的
   Host 必须是 loopback authority（拒绝 DNS rebinding），HTTP 在路由与
-  body/副作用前、WS 在 upgrade 转发前再执行同一 Origin 门禁（仅回环 origin、
-  `null` + 显式 `corsOrigins` allowlist），非法来源 403 `origin_forbidden`。
+  body/副作用前、WS 在 upgrade 转发前再执行同一 Origin 门禁（当前 Host
+  精确同源或显式 `corsOrigins` allowlist；其他回环端口与 `null` 均拒绝），
+  非法来源 403 `origin_forbidden`。
   响应不带 CORS 头本身不是写操作防线。
 
 ### D3 · 连接唯一：catalog 单行（local）
@@ -172,7 +173,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 | 情形 | 结果 |
 |---|---|
-| Origin 非回环、非 `null` 且不在 allowlist | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
+| Origin 非当前 Host 精确同源且不在显式 allowlist（包括 `null` 或其他回环端口） | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
 | 实例 phase != ready（无隧道 / 未就绪） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
 | 上游连接拒绝 / 超时 | 502 / 504 `{error, code:'upstream_failed'}`（脱敏） |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |

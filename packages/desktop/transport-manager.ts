@@ -54,6 +54,7 @@ import type { SpawnOptions } from 'node:child_process'
 import net from 'node:net'
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -841,6 +842,11 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       wrapped.code = 'ssh_instances_corrupt'
       throw wrapped
     }
+    if (parsed.length > MAX_TRANSPORT_INSTANCES) {
+      const wrapped: CodedError = new Error(`ssh-instances file exceeds the ${MAX_TRANSPORT_INSTANCES}-instance limit`)
+      wrapped.code = 'ssh_instances_too_many'
+      throw wrapped
+    }
     const dropped: unknown[] = []
     const seenIds = new Set<string>()
     let duplicates = 0
@@ -879,6 +885,11 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     if (!Array.isArray(next)) {
       const error: CodedError = new Error('instances must be an array')
       error.code = 'ssh_instances_invalid'
+      throw error
+    }
+    if (next.length > MAX_TRANSPORT_INSTANCES) {
+      const error: CodedError = new Error(`instances exceed the ${MAX_TRANSPORT_INSTANCES}-instance limit`)
+      error.code = 'ssh_instances_too_many'
       throw error
     }
     const kept: TransportInstanceSpec[] = []

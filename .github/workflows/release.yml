@@ -22,13 +22,12 @@ name: Release
 # unsupported by 2026-11, so the mac leg runs on macos-latest (= macOS 26,
 # arm64 — the 2026-08 v0.1.2 release decision). Windows builds on windows-2022
 # (windows-latest's VS 18 toolchain is not detected correctly by the node-gyp
-# stack — same finding as OpenChamber). No Apple Developer ID / notarization
-# secrets are configured: the macOS app is ad-hoc signed by the afterPack hook
-# (structurally valid signature, so no "app is damaged" on Gatekeeper-relaxed
-# systems; a default Gatekeeper still requires right-click/open or "allow
-# anywhere"), the Windows exe goes out unsigned — its auto-install proceeds
-# with a SmartScreen warning (documented tradeoff, design 11 §7); the macOS
-# INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
+# stack — same finding as OpenChamber). Public publication is fail-closed:
+# macOS requires Developer ID signing plus Apple notarization credentials and
+# verifies the signature, Gatekeeper assessment and stapled ticket; Windows
+# requires Authenticode credentials and verifies the emitted installer. A
+# dry-run may still produce local unsigned/ad-hoc artifacts for build testing,
+# but those artifacts are never finalized as a public release.
 
 on:
   push:
@@ -47,7 +46,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 # A same-tag double run (re-dispatch / tag re-push while a run is in flight)
 # would interleave two drafts/uploads on the same tag — cancel the older run
@@ -63,6 +62,8 @@ env:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.get_version.outputs.version }}
       # softprops/action-gh-release exposes the created release id — finalize
@@ -71,7 +72,7 @@ jobs:
       # bare `gh api` failure used to be swallowed (2026-08 postmortem).
       release_id: ${{ steps.create_release.outputs.id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Get version
         id: get_version
@@ -136,6 +137,25 @@ jobs:
           echo "$SECTION" > /tmp/release-body.md
           echo "extracted $(wc -l < /tmp/release-body.md) lines for [${VERSION}]"
 
+      # This check must precede every mutation of GitHub release state. In
+      # particular, never delete an existing same-tag release and only then
+      # discover that the replacement cannot be signed or notarized.
+      - name: Fail closed before mutating public-release state
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+        run: |
+          set -euo pipefail
+          test -n "$MAC_CSC_LINK"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+          test -n "$WIN_CSC_LINK"
+
       - name: Delete any existing release for this tag
         # 2026-08 postmortem (body_path not applied — softprops log:
         # "Using release <old> for tag v0.1.2 instead of duplicate draft <new>
@@ -168,7 +188,7 @@ jobs:
 
       - name: Create GitHub Release (draft)
         id: create_release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
           draft: true
@@ -185,6 +205,8 @@ jobs:
 
   build-macos:
     needs: create-release
+    permissions:
+      contents: write
     # Public arm64 runner label only (OpenChamber 踩坑：非公开标签
     # macos-26 / macos-15-intel 会找不到 runner 而失败)。v1 ships arm64 only:
     # macos-13, the last public x64 runner, is retired; macos-14 is deprecated
@@ -195,16 +217,16 @@ jobs:
     # (deferred, see STATUS.md).
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
-          version: 11
-      - uses: actions/setup-node@v4
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: lts/*
           cache: pnpm
       - name: Cache pinned harness snapshot
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: vendor/harness-checkout
           key: harness-${{ hashFiles('harness.commit') }}
@@ -212,11 +234,24 @@ jobs:
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
 
+      - name: Require Apple signing and notarization credentials for publication
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$CSC_LINK"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+
       - name: Build and package macOS app (arm64)
-        # electron-builder runs the afterPack hook
-        # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
-        # signs the bundle before the dmg is built (no Apple signing /
-        # notarization secrets are configured). publish=always (unless
+        # electron-builder runs the afterPack structural ad-hoc fallback first; when
+        # publication credentials are present its normal signing/notarization stages
+        # replace that fallback with the release identity. publish=always (unless
         # dry_run) uploads every artifact into the draft release created
         # above — INCLUDING the update feed (zip + latest-mac.yml /
         # beta-mac.yml) that electron-updater consumes (design 11 §6):
@@ -227,16 +262,15 @@ jobs:
           pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
-        # No Apple Developer ID / notarization secrets are configured; the
-        # afterPack hook ad-hoc signs the bundle so the code signature is
-        # structurally valid (without it, macOS rejects the quarantined
-        # download as "damaged"). Verify the parts that must be right
-        # regardless: the .app bundle exists, its signature verifies, the
-        # darwin dsh runtime is baked in (extraResources vendor), and
-        # artifacts — including the update feed (zip + channel yml) when not
-        # dry-running — were made.
+      - name: Verify packaged macOS app and public-release identity
+        # Every build must be structurally valid. A public build additionally
+        # proves Developer ID identity, Gatekeeper acceptance and stapling.
         run: |
           set -euo pipefail
           APP_DIR=$(find packages/desktop/release -maxdepth 2 -name "*.app" -type d | head -n 1)
@@ -248,34 +282,47 @@ jobs:
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('darwin-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.dmg 2>/dev/null | head -n 1)"
           if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -q 'Authority=Developer ID Application:'
+            spctl --assess --type execute --verbose=2 "$APP_DIR"
+            xcrun stapler validate "$APP_DIR"
             test -n "$(ls packages/desktop/release/*.zip 2>/dev/null | head -n 1)"
             test -n "$(ls packages/desktop/release/*-mac.yml 2>/dev/null | head -n 1)"
           fi
 
   build-windows:
     needs: create-release
+    permissions:
+      contents: write
     # windows-2022, not windows-latest: the node-gyp stack does not detect the
     # VS 18 toolchain that windows-latest ships (same finding as OpenChamber).
     # x64 only — bundle:dsh bakes native modules (node-pty etc.) for the host
     # platform; arm64 would need an arm64 runner, not cross-compilation.
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
-          version: 11
-      - uses: actions/setup-node@v4
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: lts/*
           cache: pnpm
       - name: Cache pinned harness snapshot
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: vendor/harness-checkout
           key: harness-${{ hashFiles('harness.commit') }}
       - name: Bootstrap vendor tree
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
+
+      - name: Require Windows Authenticode credentials for publication
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CSC_LINK)) { throw 'WIN_CSC_LINK is required for a public release' }
 
       - name: Build and package Windows app
         shell: bash
@@ -284,8 +331,10 @@ jobs:
           pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
-      - name: Verify packaged Windows app (OpenChamber-style, unsigned)
+      - name: Verify packaged Windows app and public-release identity
         # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
         # and that the win32 dsh runtime made it into the unpacked app. When
         # not dry-running, also assert the UPDATE FEED (design 11 §6): the
@@ -302,6 +351,7 @@ jobs:
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('win32-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.exe 2>/dev/null | head -n 1)"
           if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            powershell -NoProfile -Command '$exe = Get-ChildItem "packages/desktop/release/*.exe" | Select-Object -First 1; $sig = Get-AuthenticodeSignature $exe.FullName; if ($sig.Status -ne "Valid") { throw "invalid Authenticode signature: $($sig.Status)" }'
             test -z "$(ls packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
             test -f packages/desktop/release/latest.yml -o -f packages/desktop/release/beta.yml
           fi
@@ -309,6 +359,8 @@ jobs:
   finalize-release:
     needs: [create-release, build-macos, build-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Drop mac zip.blockmap assets from the draft release
         # 2026-08 (v0.1.2 postmortem): electron-builder hardcodes the mac zip
@@ -349,7 +401,7 @@ jobs:
 
       - name: Publish release (flip draft to public)
         if: ${{ github.event.inputs.dry_run != 'true' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: v${{ needs.create-release.outputs.version }}
           draft: false

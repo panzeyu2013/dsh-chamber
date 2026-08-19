@@ -46,9 +46,9 @@ export interface DesktopSshSurface {
   npm_search(query: string): Promise<SshNpmSearchResult>
   /** Seed module A onto a remote instance (design 13 §4.6, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
-  /** Pack a local plugin dir (resolved from the local manifest spec) and install
-   *  it remotely (design 13 §4.6 sync view). */
-  plugin_materialize_add(id: string, dir: string): Promise<SshMaterializeResult>
+  /** Pack a named local-manifest dependency and install it remotely. Main
+   *  resolves the directory; renderer paths are never accepted. */
+  plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
   /** Pack a user-PICKED local plugin dir and install it remotely (pick-only; the
    *  main process opens the folder picker, no renderer-supplied path, design 13 §5.8). */
   plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
@@ -217,9 +217,7 @@ export interface SystemResumeSurface {
 /** The full bridge: app info + ssh + update + chamber settings + system resume. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
-  dshWorkspace: string | null
   dshVersion: string | null
-  dshHome: string | null
   version: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
@@ -252,7 +250,7 @@ function desktopSshApi(): DesktopSshSurface {
     local_plugin_list: () => ipcRenderer.invoke('desktop_local_plugin_list'),
     npm_search: query => ipcRenderer.invoke('desktop_npm_search', { query }),
     seed_host_graph: id => ipcRenderer.invoke('desktop_ssh_seed_host_graph', { id }),
-    plugin_materialize_add: (id, dir) => ipcRenderer.invoke('desktop_ssh_plugin_materialize_add', { id, dir }),
+    plugin_materialize_add: (id, name) => ipcRenderer.invoke('desktop_ssh_plugin_materialize_add', { id, name }),
     plugin_materialize_add_pick: id => ipcRenderer.invoke('desktop_ssh_plugin_materialize_add_pick', { id }),
     local_plugin_add: spec => ipcRenderer.invoke('desktop_local_plugin_add', { spec }),
     local_plugin_add_file: () => ipcRenderer.invoke('desktop_local_plugin_add_file'),
@@ -354,9 +352,7 @@ requestAppInfo().then(
   (info: Partial<DshChamberBridge>) => {
     contextBridge.exposeInMainWorld('dshChamber', {
       controlPlaneUrl: info?.controlPlaneUrl,
-      dshWorkspace: info?.dshWorkspace,
       dshVersion: info?.dshVersion,
-      dshHome: info?.dshHome,
       version: info?.version,
       desktopSsh: desktopSshApi(),
       update: updateApi(),
@@ -368,9 +364,7 @@ requestAppInfo().then(
     console.error('[dsh-chamber] 获取应用信息失败：', err);
     contextBridge.exposeInMainWorld('dshChamber', {
       controlPlaneUrl: null,
-      dshWorkspace: null,
       dshVersion: null,
-      dshHome: null,
       version: null,
       desktopSsh: desktopSshApi(),
       update: updateApi(),

@@ -4,8 +4,12 @@ import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts'
 
 const origin = 'http://127.0.0.1:17500'
 
-test('renderer URL trust is exact-origin and rejects lookalikes/non-http URLs', () => {
-  assert.equal(isTrustedRendererUrl(`${origin}/settings?tab=connections`, origin), true)
+test('renderer URL trust is the exact shell document, not the whole control-plane origin', () => {
+  assert.equal(isTrustedRendererUrl(`${origin}/`, origin), true)
+  assert.equal(isTrustedRendererUrl(`${origin}/#settings`, origin), true)
+  assert.equal(isTrustedRendererUrl(`${origin}/settings?tab=connections`, origin), false)
+  assert.equal(isTrustedRendererUrl(`${origin}/?next=/`, origin), false)
+  assert.equal(isTrustedRendererUrl(`${origin}/api/i/ssh-evil/landing.html`, origin), false)
   assert.equal(isTrustedRendererUrl('http://127.0.0.1:17501/', origin), false)
   assert.equal(isTrustedRendererUrl('http://127.0.0.1.evil.example:17500/', origin), false)
   assert.equal(isTrustedRendererUrl('https://evil.example/', origin), false)

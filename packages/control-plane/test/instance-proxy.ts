@@ -171,6 +171,7 @@ test('parseInstancePath maps local and ssh-<id> and strips the prefix', () => {
   assert.deepEqual(parseInstancePath('/api/i/ssh-srv-7/api/events.host?x=1'), { id: 'ssh-srv-7', rest: '/api/events.host', search: '?x=1' })
   assert.deepEqual(parseInstancePath('/api/i/local'), { id: 'local', rest: '/', search: '' })
   assert.equal(parseInstancePath('/api/i/ssh-/x'), null)
+  assert.equal(parseInstancePath(`/api/i/ssh-${'x'.repeat(65)}/x`), null)
   assert.equal(parseInstancePath('/api/i/other/api/session.list'), null)
   assert.equal(parseInstancePath('/api/projects/p1/runtime/api/session.list'), null)
   assert.equal(parseInstancePath('/api/i'), null)
@@ -196,6 +197,29 @@ test('local mapping: prefix stripped, forwarded to the derived baseUrl with the 
   assert.equal(call.options.method, 'POST')
   assert.equal((call.options.headers as Record<string, string>).host, '127.0.0.1:17510')
   assert.equal(call.body.join(''), '{"rpcId":"r1","method":"session.list"}')
+})
+
+test('request convergence strips framing and proxy headers, then emits the accepted body length', async () => {
+  const { proxy, upstream } = makeProxy({ state: 'ready', port: 17510 })
+  const res = fakeResponse()
+  await proxy.handleHttp(
+    fakeRequest('/api/i/local/api/upload', 'POST', {
+      'content-length': '999',
+      connection: 'keep-alive',
+      expect: '100-continue',
+      'proxy-authenticate': 'secret',
+      te: 'trailers',
+      trailer: 'x-secret',
+    }, 'abc'),
+    res,
+  )
+  const headers = upstream.calls[0].options.headers as Record<string, string>
+  assert.equal(headers['content-length'], '3')
+  assert.equal(headers.connection, undefined)
+  assert.equal(headers.expect, undefined)
+  assert.equal(headers['proxy-authenticate'], undefined)
+  assert.equal(headers.te, undefined)
+  assert.equal(headers.trailer, undefined)
 })
 
 test('ssh-<id> mapping: registered transport baseUrl wins; unregistered answers 503', async () => {
@@ -472,6 +496,33 @@ test('registerTransport validates connectionId/baseUrl fail-loud', () => {
   assert.throws(() => proxy.registerTransport('', 'http://127.0.0.1:1'), TypeError)
   assert.throws(() => proxy.registerTransport('ssh:x', 'not-a-url'), TypeError)
   assert.throws(() => proxy.registerTransport('ssh:x', 'file:///etc/passwd'), TypeError)
+  assert.throws(() => proxy.registerTransport('ssh:x', 'http://example.com:8080'), /loopback/)
+  assert.throws(() => proxy.registerTransport('ssh:x', 'http://127.0.0.1:8080/path'), /loopback/)
+})
+
+test('upgrade response forwards only WebSocket handshake headers', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    upgrade: {
+      status: 101,
+      headers: {
+        upgrade: 'websocket',
+        connection: 'Upgrade',
+        'sec-websocket-accept': 'accepted',
+        'set-cookie': 'secret=remote',
+        'x-upstream-secret': 'nope',
+      },
+    },
+  }))
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+  })
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), socket, Buffer.alloc(0))
+  assert.match(socket.written, /sec-websocket-accept: accepted/i)
+  assert.doesNotMatch(socket.written, /set-cookie|x-upstream-secret/i)
 })
 
 // ---------------------------------------------------------------------------
@@ -507,6 +558,104 @@ test('http: a responding upstream stays unaffected by the timeout guard', async 
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
   await sleep(80)
   assert.equal(res.status, 200) // fast upstream: timeout guard cleared, no 504
+})
+
+test('http: concurrent request budget rejects excess work before opening another upstream', async () => {
+  const upstream = fakeHttpRequest(() => undefined)
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+    maxConcurrentHttpRequests: 1,
+    upstreamTimeoutMs: 30,
+  })
+  const first = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), first)
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
+  const second = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), second)
+  assert.equal(second.status, 503)
+  assert.match(second.body, /resource_exhausted/)
+  assert.equal(upstream.calls.length, 1)
+  await sleep(50)
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
+})
+
+test('http: a stalled client upload releases its body and request budgets with 408', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: {}, body: 'unexpected' },
+  }))
+  const emitter = new EventEmitter()
+  let iteratorReturned = false
+  const stalled = Object.assign(emitter, {
+    url: '/api/i/local/api/upload',
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream' },
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => new Promise<IteratorResult<Buffer>>(() => {}),
+        return: async () => {
+          iteratorReturned = true
+          return { done: true, value: undefined }
+        },
+      }
+    },
+  }) as unknown as ProxyRequest
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+    clientBodyIdleTimeoutMs: 30,
+  })
+  const response = fakeResponse()
+  await proxy.handleHttp(stalled, response)
+  assert.equal(response.status, 408)
+  assert.match(response.body, /request_timeout/)
+  assert.equal(upstream.calls.length, 0)
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
+  assert.equal(proxy.getDiagnostics().bufferedRequestBytes, 0)
+  assert.equal(iteratorReturned, true)
+})
+
+test('http: non-SSE timeout is idle-based and re-arms on every body chunk', async () => {
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      const res = new EventEmitter() as any
+      res.statusCode = 200
+      res.headers = { 'content-type': 'application/json' }
+      res.destroy = () => {}
+      res.pause = () => {}
+      res.resume = () => {}
+      req.emit('response', res)
+      let count = 0
+      const interval = setInterval(() => {
+        count += 1
+        res.emit('data', Buffer.from('x'))
+        if (count === 4) {
+          clearInterval(interval)
+          res.emit('end')
+        }
+      }, 20)
+    }
+    return req
+  }
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: fn,
+    upstreamTimeoutMs: 35,
+  })
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/slow', 'GET'), response)
+  await sleep(110)
+  assert.equal(response.status, 200)
+  assert.equal(response.body, 'xxxx')
+  assert.equal(proxy.getDiagnostics().failures, 0)
 })
 
 test('upgrade: a WebSocket handshake that never completes → explicit 504 on the socket', async () => {

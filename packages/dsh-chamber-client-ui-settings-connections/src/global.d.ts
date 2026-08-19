@@ -206,8 +206,8 @@ export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
   instances_set(instances: SshInstanceInput[]): Promise<SshInstanceSpec[]>
   /**
-   * Store the SSH password for one instance in main-process memory ONLY
-   * (design 05 §8): never persisted, never logged; '' / null clears it.
+   * Store the SSH password in main-process memory plus the owner-only
+   * plaintext fallback (design 05 §8); never logged; '' / null clears it.
    * Resolves {ok:true} or {error} (unknown id / platform not supported).
    */
   set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
@@ -235,8 +235,8 @@ export interface DesktopSshSurface {
   npm_search(query: string): Promise<{ ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }>
   /** Seed module A onto a remote instance (design 13 §4.6, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
-  /** Pack a local plugin dir and install it remotely (design 13 §4.6). */
-  plugin_materialize_add(id: string, dir: string): Promise<SshMaterializeResult>
+  /** Materialize a named dependency; MAIN resolves its authoritative path. */
+  plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
   /** Pick a local folder in MAIN and materialize it remotely (pick-only). */
   plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
   /** Install a spec into the LOCAL dsh profile (design 13 §5.1). */
@@ -329,9 +329,7 @@ declare global {
   interface Window {
     dshChamber?: {
       controlPlaneUrl: string | null
-      dshWorkspace: string | null
       dshVersion: string | null
-      dshHome: string | null
       version: string | null
       desktopSsh: DesktopSshSurface
       update: UpdateSurface

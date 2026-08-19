@@ -22,6 +22,10 @@
 // before the dmg target is built, so the DMG carries the signed app. If a
 // real identity is configured later, electron-builder's sign step runs after
 // this hook and replaces the ad-hoc signature — safe to keep unconditional.
+// The same stage also corrects electron-builder's generated ATS default:
+// chamber needs plaintext HTTP only for its loopback control plane, never a
+// process-wide NSAllowsArbitraryLoads grant. This must happen before signing
+// because Info.plist is a sealed resource.
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -30,6 +34,24 @@ export default async function afterPackAdhocSign(context) {
   if (context.electronPlatformName !== 'darwin') return;
   const appName = context.packager.appInfo.productFilename;
   const appPath = path.join(context.appOutDir, `${appName}.app`);
+  const infoPlist = path.join(appPath, 'Contents', 'Info.plist');
+  execFileSync('/usr/libexec/PlistBuddy', [
+    '-c',
+    'Set :NSAppTransportSecurity:NSAllowsArbitraryLoads false',
+    infoPlist,
+  ], { stdio: 'inherit' });
+  const arbitraryLoads = execFileSync('plutil', [
+    '-extract',
+    'NSAppTransportSecurity.NSAllowsArbitraryLoads',
+    'raw',
+    '-o',
+    '-',
+    infoPlist,
+  ], { encoding: 'utf8' }).trim();
+  if (arbitraryLoads !== 'false') {
+    throw new Error(`failed to disable NSAllowsArbitraryLoads (got ${JSON.stringify(arbitraryLoads)})`);
+  }
+  console.log('[after-pack-adhoc-sign] ATS restricted to declared loopback exceptions');
   console.log(`[after-pack-adhoc-sign] ad-hoc signing ${appPath}`);
   execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
   execFileSync('codesign', ['--verify', '--deep', '--strict', appPath], { stdio: 'inherit' });

@@ -18,7 +18,7 @@
  * Only the sidebar width is shared/persisted: details, narrow and the
  * narrowExpanded override stay per-boot transient (the vendor contract).
  */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-runtime/client'
+import { defineStore, type EngineStoreHandle, type EngineStoreInstance } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   clampWidth, DETAILS_DEFAULT, DETAILS_MAX, DETAILS_MIN,
   SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN,
@@ -45,6 +45,33 @@ type LayoutActions = {
   setNarrow: (draft: LayoutState, narrow: boolean) => void
   openDetails: (draft: LayoutState) => void
   closeDetails: (draft: LayoutState) => void
+}
+
+type LayoutInstance = EngineStoreInstance<LayoutState, LayoutActions>
+const layoutInstances = new Set<WeakRef<LayoutInstance>>()
+let viewPrefsSubscriptionInstalled = false
+
+/** One page-lifetime listener fans out through weak references to live stores. */
+function trackLayoutInstance(instance: LayoutInstance): void {
+  layoutInstances.add(new WeakRef(instance))
+  if (viewPrefsSubscriptionInstalled) return
+  viewPrefsSubscriptionInstalled = true
+  subscribeViewPrefs(() => {
+    queueMicrotask(() => {
+      const width = getViewPrefs().sidebarWidth
+      if (width === undefined) return
+      for (const ref of layoutInstances) {
+        const currentInstance = ref.deref()
+        if (currentInstance === undefined) {
+          layoutInstances.delete(ref)
+          continue
+        }
+        const current = currentInstance.getSnapshot().sidebar
+        if (current === 0 || current === width) continue
+        currentInstance.store.update((d) => { d.sidebar = width })
+      }
+    })
+  })
 }
 
 /**
@@ -149,26 +176,13 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
   //   drags over the same width, terminate here — no write loops);
   // - the adoption write itself never calls updateViewPrefs, so it cannot
   //   re-trigger this subscription.
-  // Retention is per-instance and page-lifetime: the framework never disposes
-  // store instances ("engine stores need no explicit dispose", runtime
-  // slots.ts), so listeners are never unsubscribed — a shell that goes away
-  // leaves a zombie listener behind, and there is no teardown hook to clean
-  // it up (the framework offers none). Bounded and inert: one listener per
-  // ever-booted shell (each boot mints its own handle and create() resolves
-  // once for the root scope), each pinning only its own small instance
-  // closure.
+  // The framework has no store-instance dispose hook. A single module-level
+  // listener therefore fans out through WeakRefs: released shells are not
+  // retained, and dead refs are pruned on the next preference update.
   const baseCreate = handle.create
   handle.create = (scopeKey?: string) => {
     const instance = baseCreate(scopeKey)
-    subscribeViewPrefs(() => {
-      queueMicrotask(() => {
-        const width = getViewPrefs().sidebarWidth
-        if (width === undefined) return
-        const current = instance.getSnapshot().sidebar
-        if (current === 0 || current === width) return
-        instance.store.update((d) => { d.sidebar = width })
-      })
-    })
+    trackLayoutInstance(instance)
     return instance
   }
   return handle

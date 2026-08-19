@@ -46,6 +46,12 @@ export const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024
 /** Response body cap for non-SSE responses (design 03 §3.4). */
 export const MAX_RESPONSE_BODY_BYTES = 100 * 1024 * 1024
 
+/** Process-wide budgets: bound memory, sockets and pending handshakes. */
+export const MAX_BUFFERED_REQUEST_BYTES = 100 * 1024 * 1024
+export const MAX_CONCURRENT_HTTP_REQUESTS = 64
+export const MAX_CONCURRENT_WS_STREAMS = 64
+export const MAX_PENDING_WS_HANDSHAKES = 16
+
 /**
  * Upstream timeout (design 03 §3.3: "上游连接拒绝 / 超时 → 502 / 504"):
  * how long an upstream may take to answer headers, and — for non-SSE
@@ -56,6 +62,9 @@ export const MAX_RESPONSE_BODY_BYTES = 100 * 1024 * 1024
  * indefinitely.
  */
 export const UPSTREAM_TIMEOUT_MS = 10_000
+
+/** Maximum silence between client request-body chunks. */
+export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
 
 /** Response headers converged through to the browser (03 §3.4 / 04 §4.3). */
 export const RESPONSE_HEADER_WHITELIST = new Set([
@@ -73,17 +82,33 @@ export const WS_STREAM_PATHS = new Set(['/api/events.mux', '/api/events.host'])
 /** Hop-by-hop and credential headers never forwarded upstream. */
 const STRIPPED_REQUEST_HEADERS = new Set([
   'connection',
+  'content-length',
+  'expect',
   'keep-alive',
-  'transfer-encoding',
-  'upgrade',
-  'proxy-connection',
   'host',
   'cookie',
   'authorization',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+])
+
+/** Only headers required to complete a WebSocket 101 may cross downstream. */
+const WS_RESPONSE_HEADER_WHITELIST = new Set([
+  'upgrade',
+  'connection',
+  'sec-websocket-accept',
+  'sec-websocket-protocol',
+  'sec-websocket-extensions',
 ])
 
 const STATUS_TEXT: Record<number, string> = {
   404: 'Not Found',
+  408: 'Request Timeout',
   413: 'Payload Too Large',
   502: 'Bad Gateway',
   503: 'Service Unavailable',
@@ -136,6 +161,9 @@ export interface InstanceProxyDiagnostics {
   requests: number
   failures: number
   activeStreams: number
+  activeHttpRequests: number
+  pendingUpgrades: number
+  bufferedRequestBytes: number
   transports: number
 }
 
@@ -150,6 +178,12 @@ export interface InstanceProxyDeps {
   httpRequest?: typeof httpRequest
   /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS; tests inject small values). */
   upstreamTimeoutMs?: number
+  /** Client upload idle timeout in ms (tests inject small values). */
+  clientBodyIdleTimeoutMs?: number
+  maxConcurrentHttpRequests?: number
+  maxConcurrentWsStreams?: number
+  maxPendingWsHandshakes?: number
+  maxBufferedRequestBytes?: number
 }
 
 /** The instance-proxy surface. */
@@ -164,7 +198,7 @@ export interface InstanceProxy {
 /** Whether an id is a valid /api/i/<id> segment ('local' or 'ssh-<id>'). */
 export function parseInstanceId(id: string): 'local' | 'ssh' | null {
   if (id === 'local') return 'local'
-  if (id.startsWith('ssh-') && id.length > 'ssh-'.length) return 'ssh'
+  if (/^ssh-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'ssh'
   return null
 }
 
@@ -188,14 +222,41 @@ export function parseInstancePath(raw: string): InstancePath | null {
  * 'body_too_large'} when the cap is exceeded (design 03 §3.4 — explicit
  * 413, never a silent truncation).
  */
-export async function readBody(req: ProxyRequest, cap: number): Promise<Buffer> {
+export async function readBody(req: ProxyRequest, cap: number, idleTimeoutMs = CLIENT_BODY_IDLE_TIMEOUT_MS): Promise<Buffer> {
   const chunks: Buffer[] = []
   let size = 0
-  for await (const chunk of req) {
+  const iterator = req[Symbol.asyncIterator]()
+  while (true) {
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const next = iterator.next()
+    let result: IteratorResult<Buffer>
+    try {
+      result = await Promise.race([
+        next,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            const error: Error & { code?: string } = new Error(`request body idle for ${idleTimeoutMs}ms`)
+            error.code = 'request_timeout'
+            reject(error)
+          }, idleTimeoutMs)
+        }),
+      ])
+    } catch (error) {
+      // Cancel the underlying IncomingMessage iterator as well as our wait;
+      // otherwise a slow client may keep the socket/request parser alive
+      // after the proxy already returned 408.
+      void iterator.return?.()
+      throw error
+    } finally {
+      if (timeout !== null) clearTimeout(timeout)
+    }
+    if (result.done) break
+    const chunk = result.value
     size += chunk.length
     if (size > cap) {
       const error: Error & { code?: string } = new Error(`request body exceeds ${cap} bytes`)
       error.code = 'body_too_large'
+      void iterator.return?.()
       throw error
     }
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
@@ -231,11 +292,19 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const { logger, getLocalState, getLocalDshPort } = deps
   const request = deps.httpRequest ?? httpRequest
   const upstreamTimeoutMs = deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS
+  const clientBodyIdleTimeoutMs = deps.clientBodyIdleTimeoutMs ?? CLIENT_BODY_IDLE_TIMEOUT_MS
+  const maxConcurrentHttpRequests = deps.maxConcurrentHttpRequests ?? MAX_CONCURRENT_HTTP_REQUESTS
+  const maxConcurrentWsStreams = deps.maxConcurrentWsStreams ?? MAX_CONCURRENT_WS_STREAMS
+  const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
+  const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
   /** connectionId ('ssh:<id>') → tunnel baseUrl (desktop main-process
    * registration, design 05 §3.3). Local is never registered — its baseUrl
    * is derived from the managed dshPort. */
   const transports = new Map<string, string>()
   const counters = { requests: 0, failures: 0, activeStreams: 0 }
+  let activeHttpRequests = 0
+  let pendingUpgrades = 0
+  let bufferedRequestBytes = 0
 
   /** Resolve the forward target; returns null + writes the error response
    * when the instance is unknown/unavailable (loud, never silent). */
@@ -316,19 +385,46 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   }
 
   /** Forward an HTTP request: prefix-stripped path, method/body/query kept. */
-  async function forwardHttp(req: ProxyRequest, res: ProxyResponse, parsed: InstancePath, baseUrl: string): Promise<void> {
+  async function forwardHttp(req: ProxyRequest, res: ProxyResponse, parsed: InstancePath, baseUrl: string, releaseRequest: () => void): Promise<void> {
     const target = new URL(`${baseUrl}${parsed.rest}${parsed.search}`)
     const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
     const hasBody = !(method === 'GET' || method === 'HEAD')
     let body: Buffer | null = null
     if (hasBody) {
-      try {
-        body = await readBody(req, MAX_REQUEST_BODY_BYTES)
-      } catch (bodyError) {
+      const rawLength = Array.isArray(req.headers['content-length']) ? req.headers['content-length'][0] : req.headers['content-length']
+      const declared = rawLength === undefined ? NaN : Number(rawLength)
+      if (Number.isFinite(declared) && declared > MAX_REQUEST_BODY_BYTES) {
         counters.failures += 1
+        releaseRequest()
         writeError(res, 413, 'body_too_large', 'request body exceeds the 50MiB cap')
         return
       }
+      // Unknown/chunked bodies reserve the full per-request cap. A valid
+      // Content-Length reserves its exact byte count; Node's parser enforces
+      // that framing, so a caller cannot smuggle additional body bytes.
+      const reservation = Number.isFinite(declared) && declared >= 0 ? declared : MAX_REQUEST_BODY_BYTES
+      if (bufferedRequestBytes + reservation > maxBufferedRequestBytes) {
+        counters.failures += 1
+        releaseRequest()
+        writeError(res, 503, 'resource_exhausted', 'proxy request-body budget is exhausted')
+        return
+      }
+      bufferedRequestBytes += reservation
+      try {
+        body = await readBody(req, MAX_REQUEST_BODY_BYTES, clientBodyIdleTimeoutMs)
+      } catch (bodyError) {
+        bufferedRequestBytes = Math.max(0, bufferedRequestBytes - reservation)
+        counters.failures += 1
+        releaseRequest()
+        const code = (bodyError as Error & { code?: string }).code
+        if (code === 'request_timeout') {
+          writeError(res, 408, 'request_timeout', 'request body upload timed out')
+        } else {
+          writeError(res, 413, 'body_too_large', 'request body exceeds the 50MiB cap')
+        }
+        return
+      }
+      bufferedRequestBytes = Math.max(0, bufferedRequestBytes - reservation)
     }
     const headers: Record<string, string> = { host: target.host }
     for (const [name, value] of Object.entries(req.headers)) {
@@ -349,11 +445,18 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       headers[name] = Array.isArray(value) ? value.join(', ') : value
     }
+    // Forward the bytes we actually accepted, never an untrusted client
+    // declaration. This also normalizes chunked uploads into a bounded body.
+    if (body !== null) headers['content-length'] = String(body.length)
     const controller = new AbortController()
-    const onClientClose = () => controller.abort()
+    const onClientClose = () => {
+      controller.abort()
+      releaseRequest()
+    }
     req.on('close', onClientClose)
     const timeoutAbort = (): void => {
       controller.abort()
+      releaseRequest()
       if (!res.headersSent) writeError(res, 504, 'upstream_timeout', 'upstream request timed out')
       else res.destroy()
     }
@@ -370,11 +473,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       method,
       headers,
       signal: controller.signal,
-      ...(source !== null ? { 'content-length': String(source.size) } : {}),
     })
     upstream.on('error', upstreamError => {
       clearTimeoutGuards()
       const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
+      releaseRequest()
       if (abort) return
       counters.failures += 1
       logger.log(`instance-proxy: upstream ${parsed.id} request failed: ${String(upstreamError)}`)
@@ -392,6 +495,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       const declaredBytes = typeof declaredLength === 'string' ? Number(declaredLength) : NaN
       if (!isSse && Number.isFinite(declaredBytes) && declaredBytes > MAX_RESPONSE_BODY_BYTES) {
         upstreamRes.destroy()
+        releaseRequest()
         counters.failures += 1
         writeError(res, 413, 'body_too_large', 'upstream response exceeds the 100MiB cap')
         return
@@ -409,12 +513,19 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (!isSse) clearUpstreamTimeout = armUpstreamTimeout(parsed, timeoutAbort)
       let received = 0
       upstreamRes.on('data', (chunk: Buffer) => {
+        // This is an IDLE timeout, not a total-duration deadline. Every body
+        // chunk proves progress and starts a fresh idle window.
+        if (!isSse) {
+          clearUpstreamTimeout()
+          clearUpstreamTimeout = armUpstreamTimeout(parsed, timeoutAbort)
+        }
         received += chunk.length
         if (!isSse && received > MAX_RESPONSE_BODY_BYTES) {
           // Explicit overflow: abort the upstream stream, never a silent
           // truncation (design 03 §3.4).
           upstreamRes.destroy()
           controller.abort()
+          releaseRequest()
           counters.failures += 1
           if (!res.headersSent) writeError(res, 413, 'body_too_large', 'upstream response exceeds the 100MiB cap')
           else res.destroy()
@@ -427,6 +538,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       })
       upstreamRes.on('error', () => {
         clearTimeoutGuards()
+        releaseRequest()
         counters.failures += 1
         res.destroy()
       })
@@ -436,9 +548,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       // a dead response (same teardown family as the upgrade splice).
       res.on('error', () => {
         controller.abort()
+        releaseRequest()
       })
       upstreamRes.on('end', () => {
         clearTimeoutGuards()
+        releaseRequest()
         req.removeListener('close', onClientClose)
         res.end()
       })
@@ -448,7 +562,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   }
 
   /** Forward a WS upgrade to the instance (events.mux / events.host). */
-  async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer, parsed: InstancePath, baseUrl: string): Promise<void> {
+  async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer, parsed: InstancePath, baseUrl: string, releaseHandshake: () => void): Promise<void> {
     // The upstream request stays on http(s) — node's http.request performs
     // the upgrade handshake internally (it never accepts a ws: URL).
     const wsTarget = new URL(`${baseUrl}${parsed.rest}${parsed.search}`)
@@ -462,6 +576,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     const controller = new AbortController()
     const onClientClose = () => {
       controller.abort()
+      releaseHandshake()
     }
     req.on('close', onClientClose)
     // The upgrade handshake must complete within upstreamTimeoutMs; once the
@@ -469,6 +584,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     // (a live WebSocket is long-lived by nature).
     const clearUpgradeTimeout = armUpstreamTimeout(parsed, () => {
       controller.abort()
+      releaseHandshake()
       rejectUpgrade(socket, 504, 'upstream_timeout', 'upstream WebSocket upgrade timed out')
     })
     const upstream = request(wsTarget, {
@@ -478,6 +594,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     })
     upstream.on('error', upstreamError => {
       clearUpgradeTimeout()
+      releaseHandshake()
       const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
       if (abort) return
       counters.failures += 1
@@ -492,6 +609,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     // reject the client upgrade explicitly instead.
     upstream.on('response', (upstreamRes: IncomingMessage) => {
       clearUpgradeTimeout()
+      releaseHandshake()
       counters.failures += 1
       logger.log(`instance-proxy: upstream ${parsed.id} upgrade answered non-101 (${upstreamRes.statusCode ?? '?'}); rejecting`)
       upstreamRes.on('error', () => {})
@@ -501,6 +619,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     })
     upstream.on('upgrade', (upstreamRes: IncomingMessage, upstreamSocket: Duplex, upstreamHead: Buffer) => {
       clearUpgradeTimeout()
+      releaseHandshake()
       req.removeListener('close', onClientClose)
       counters.activeStreams += 1
       let tornDown = false
@@ -528,6 +647,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       upstreamSocket.on('close', tearDown)
       const wireHeaders: string[] = [`HTTP/1.1 ${upstreamRes.statusCode ?? 101} Switching Protocols`]
       for (const [name, value] of Object.entries(upstreamRes.headers)) {
+        if (!WS_RESPONSE_HEADER_WHITELIST.has(name.toLowerCase())) continue
         if (value === undefined) continue
         const values = Array.isArray(value) ? value : [value]
         for (const entry of values) wireHeaders.push(`${name}: ${entry}`)
@@ -561,12 +681,32 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       counters.requests += 1
+      if (activeHttpRequests >= maxConcurrentHttpRequests) {
+        counters.failures += 1
+        writeError(res, 503, 'resource_exhausted', 'too many concurrent proxy requests')
+        return
+      }
       const target = resolveTarget(parsed.id, res)
       if (target === null) {
         counters.failures += 1
         return
       }
-      await forwardHttp(req, res, parsed, target.baseUrl)
+      activeHttpRequests += 1
+      let released = false
+      const releaseRequest = () => {
+        if (released) return
+        released = true
+        activeHttpRequests = Math.max(0, activeHttpRequests - 1)
+      }
+      try {
+        await forwardHttp(req, res, parsed, target.baseUrl, releaseRequest)
+      } catch (error) {
+        releaseRequest()
+        counters.failures += 1
+        logger.warn(`instance-proxy: request setup failed: ${String(error)}`)
+        if (!res.headersSent) writeError(res, 502, 'upstream_failed', 'upstream request failed')
+        else res.destroy()
+      }
     },
 
     /**
@@ -591,13 +731,32 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       counters.requests += 1
+      if (counters.activeStreams >= maxConcurrentWsStreams || pendingUpgrades >= maxPendingWsHandshakes) {
+        counters.failures += 1
+        rejectUpgrade(socket, 503, 'resource_exhausted', 'too many active proxy streams')
+        return
+      }
       const target = resolveTarget(parsed.id, null)
       if (target === null) {
         counters.failures += 1
         rejectUpgrade(socket, 503, 'instance_unavailable', 'no tunnel is available for this instance')
         return
       }
-      await forwardUpgrade(req, socket, head, parsed, target.baseUrl)
+      pendingUpgrades += 1
+      let released = false
+      const releaseHandshake = () => {
+        if (released) return
+        released = true
+        pendingUpgrades = Math.max(0, pendingUpgrades - 1)
+      }
+      try {
+        await forwardUpgrade(req, socket, head, parsed, target.baseUrl, releaseHandshake)
+      } catch (error) {
+        releaseHandshake()
+        counters.failures += 1
+        logger.warn(`instance-proxy: upgrade setup failed: ${String(error)}`)
+        rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket setup failed')
+      }
     },
 
     /**
@@ -619,6 +778,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (target.protocol !== 'http:' && target.protocol !== 'https:') {
         throw new TypeError('registerInstanceTransport: baseUrl must be an http(s) URL')
       }
+      if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)
+        || target.username !== '' || target.password !== '' || target.pathname !== '/'
+        || target.search !== '' || target.hash !== '') {
+        throw new TypeError('registerInstanceTransport: baseUrl must be a loopback origin')
+      }
       transports.set(connectionId, baseUrl)
       logger.log(`instance-proxy: transport registered ${connectionId} -> ${target.host}`)
     },
@@ -636,6 +800,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         requests: counters.requests,
         failures: counters.failures,
         activeStreams: counters.activeStreams,
+        activeHttpRequests,
+        pendingUpgrades,
+        bufferedRequestBytes,
         transports: transports.size,
       }
     },

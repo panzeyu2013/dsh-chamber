@@ -1,7 +1,7 @@
 /**
  * ssh provider password-auth unit tests (design 05 §8): the in-memory
  * password store, the ephemeral askpass helper script (single-quote
- * escaping, host-key `yes` answers, 0600 file, dispose cleanup) and the
+ * escaping, host-key refusal, 0600 file, dispose cleanup) and the
  * buildStartEnv surface that wires the password into the ssh spawn without
  * a TTY or the command line. Pure-Node, no real ssh host: the helper's
  * behavior is verified by actually executing it against ssh-style prompts.
@@ -13,13 +13,14 @@ import { spawnSync } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildAskpassScript,
   buildRemoteExecArgv,
   configureSshPasswordStore,
+  cleanupStaleAskpassHelpers,
   createAskpassHelper,
   disposeSshAuth,
   getSshPassword,
@@ -28,6 +29,7 @@ import {
   sshAuthEnv,
   sshPasswordSupported,
   sshProvider,
+  MAX_SSH_PASSWORD_CHARS,
   WRITE_FILE_MAX_BYTES,
 } from './ssh-provider.ts'
 import type { TransportExecDeps, TransportInstanceSpec, TransportStatusProjection, SpawnedProcess } from './transport-provider.ts'
@@ -42,18 +44,18 @@ test('buildAskpassScript escapes single quotes and keeps password/passphrase pro
   // The password must be embedded sh-safely: every ' becomes '\'' so the
   // literal value survives the shell.
   assert.ok(script.includes(`printf '%s\\n' 'it'\\''s-a-pass'\\''word'`), 'single quotes are escaped for sh')
-  // The host-key confirmation branch must answer yes, never the password.
+  // The host-key confirmation branch must refuse, never reveal the password.
   assert.ok(script.includes('*"yes/no"*'), 'host-key yes/no prompts are matched')
-  assert.ok(script.includes('echo yes'), 'host-key prompts answer yes')
+  assert.ok(script.includes('echo no'), 'host-key prompts answer no')
   assert.ok(!script.includes("it's-a-pass"), 'the raw password never appears in the host-key branch')
 })
 
-test('the askpass helper answers host-key prompts with yes and password prompts with the password', () => {
+test('the askpass helper refuses host-key prompts and answers password prompts with the password', () => {
   const path = createAskpassHelper('t-askpass-1', "s3cr't")
   try {
     const hostKey = spawnSync('sh', [path, 'Are you sure you want to continue connecting (yes/no/[fingerprint])?'], { encoding: 'utf8' })
     assert.equal(hostKey.status, 0)
-    assert.equal(hostKey.stdout.trim(), 'yes', 'host-key confirmation answers yes')
+    assert.equal(hostKey.stdout.trim(), 'no', 'host-key confirmation is refused')
     const password = spawnSync('sh', [path, "user@h.example.com's password:"], { encoding: 'utf8' })
     assert.equal(password.status, 0)
     assert.equal(password.stdout, "s3cr't\n", 'password prompt answers the stored password (line-terminated)')
@@ -69,6 +71,16 @@ test('the askpass helper answers host-key prompts with yes and password prompts 
 test('createAskpassHelper refuses instance ids outside the registry whitelist', () => {
   assert.throws(() => createAskpassHelper('bad/id', 'pw'), /invalid instance id/)
   assert.throws(() => createAskpassHelper('../escape', 'pw'), /invalid instance id/)
+})
+
+test('startup cleanup preserves helpers owned by this live process', () => {
+  const path = createAskpassHelper('t-live-owner', 'pw')
+  try {
+    assert.equal(cleanupStaleAskpassHelpers(), null)
+    assert.equal(existsSync(path), true)
+  } finally {
+    rmSync(path, { force: true })
+  }
 })
 
 test('setSshPassword/getSshPassword round-trip and clear (empty string and null both clear)', () => {
@@ -148,6 +160,22 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
   }
 })
 
+test('password persistence tightens a pre-existing plaintext tmp file before replacing the store', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const file = join(dir, 'ssh-passwords.json')
+  const tmp = `${file}.tmp`
+  try {
+    configureSshPasswordStore(file)
+    writeFileSync(tmp, 'stale plaintext')
+    chmodSync(tmp, 0o644)
+    setSshPassword('t-mode', 'pw')
+    assert.equal(statSync(file).mode & 0o777, 0o600, 'renamed password file is owner-only even when tmp existed as 0644')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('a corrupt password file is preserved as *.corrupt and fails loud, never silent-empty', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -161,6 +189,56 @@ test('a corrupt password file is preserved as *.corrupt and fails loud, never si
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('a syntactically valid password file with an invalid schema is preserved and rejected', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    writeFileSync(file, JSON.stringify({ schemaVersion: 1, passwords: { local: 'pw', 'bad/id': 'pw', valid: 42 } }))
+    const notice = configureSshPasswordStore(file)
+    assert.ok(notice !== null && notice.includes('invalid password file'), 'invalid schema reports loudly')
+    assert.ok(existsSync(`${file}.corrupt`), 'invalid file is preserved for forensics')
+    assert.equal(getSshPassword('valid'), null, 'no partial entries are published')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('password persistence failure rolls back memory and removes the plaintext tmp file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    configureSshPasswordStore(file)
+    setSshPassword('t-rollback', 'old')
+    // Replacing the target file with a directory makes the final atomic rename
+    // fail after the tmp payload was written, deterministically across CI.
+    rmSync(file)
+    mkdirSync(file)
+    assert.throws(() => setSshPassword('t-rollback', 'new'))
+    assert.equal(getSshPassword('t-rollback'), 'old', 'failed update does not publish new memory state')
+    assert.equal(existsSync(`${file}.tmp`), false, 'failed update leaves no extra plaintext tmp')
+    assert.throws(() => setSshPassword('t-rollback', null))
+    assert.equal(getSshPassword('t-rollback'), 'old', 'failed clear does not erase live auth state')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('setSshPassword refuses reserved and non-whitelisted ids', () => {
+  assert.throws(() => setSshPassword('local', 'pw'), /invalid instance id/)
+  assert.throws(() => setSshPassword('../escape', 'pw'), /invalid instance id/)
+})
+
+test('password and instance metadata limits are enforced in the provider', () => {
+  assert.throws(() => setSshPassword('t-too-long', 'x'.repeat(MAX_SSH_PASSWORD_CHARS + 1)), /longer/)
+  assert.equal(sshProvider.validateSpec({ id: 'x'.repeat(65), label: 'h', host: 'h', remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'x'.repeat(129), host: 'h', remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'x'.repeat(254), remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080, serviceName: 'x'.repeat(256) }), null)
+  assert.ok(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080 }) !== null)
 })
 
 // --- design 13 §7.2 exec whitelist tests (M1) ---
@@ -358,8 +436,10 @@ function makeRemoteHost(home = '/home/u') {
     return child
   }
   function handleRemote(record: { command: string; args: string[]; child: FakeRunChild }) {
-    // ssh args: [target, ...remoteArgv] or ['-p', <port>, target, ...remoteArgv]
-    const remoteArgv = record.args[0] === '-p' ? record.args.slice(3) : record.args.slice(1)
+    // ssh args always begin with strict host-key checking, followed by an
+    // optional port, target, and the whitelisted remote argv.
+    const afterHostKey = record.args.slice(2)
+    const remoteArgv = afterHostKey[0] === '-p' ? afterHostKey.slice(3) : afterHostKey.slice(1)
     const child = record.child
     const joined = remoteArgv.join(' ')
     if (joined.startsWith('mkdir -p ') && joined.includes(' && base64 -d > ')) {
@@ -415,7 +495,7 @@ test('write-file: streams base64 over ssh stdin and verifies the read-back in th
   // single fixed `mkdir -p … && base64 -d > …` shell template.
   assert.ok(remote.files.get('~/.dsh-chamber/plugins/pkg-abc123.tgz')!.equals(content))
   assert.equal(remote.spawns.length, 2, 'one write spawn + one cat read-back spawn')
-  assert.ok(remote.spawns[0].args[1].startsWith('mkdir -p ~/.dsh-chamber/plugins && base64 -d > '))
+  assert.ok(remote.spawns[0].args[3].startsWith('mkdir -p ~/.dsh-chamber/plugins && base64 -d > '))
   // The raw captured bytes ride the result; the string view is lossy (U+FFFD)
   // for binary content — proving the byte-domain verification path.
   assert.ok(result.stdoutBytes !== undefined && result.stdoutBytes.equals(content))

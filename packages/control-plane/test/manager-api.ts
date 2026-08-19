@@ -32,13 +32,14 @@ function fakeWire() {
   return { spawnDsh, describeCapabilities, get spawns() { return spawns } }
 }
 
-async function makePlane(stateDirOverride?: string) {
+async function makePlane(stateDirOverride?: string, corsOrigins: string[] = []) {
   const stateDir = stateDirOverride ?? mkdtempSync(join(tmpdir(), 'dsh-chamber-manager-'))
   const wire = fakeWire()
   const plane = createControlPlane({
     port: 0,
     stateDir,
     logger: silentLogger,
+    corsOrigins,
     localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
   })
   try {
@@ -170,13 +171,48 @@ test('browser-origin fence rejects hostile simple POST and WebSocket before side
     assert.equal(rejected.body.code, 'origin_forbidden')
     assert.equal(holder.wire.spawns, 0)
 
+    const opaque = await fetchJson(holder.base, '/api/connections', {
+      method: 'POST',
+      headers: { origin: 'null', 'content-type': 'text/plain' },
+      body: JSON.stringify({ kind: 'local' }),
+    })
+    assert.equal(opaque.status, 403)
+    assert.equal(opaque.body.code, 'origin_forbidden')
+    assert.equal(holder.wire.spawns, 0, 'opaque origin is rejected before side effects')
+
     const upgrade = await rawUpgrade(holder.plane.port!, 'https://evil.example')
     assert.match(upgrade, /^HTTP\/1\.1 403 Forbidden/)
     assert.match(upgrade, /origin_forbidden/)
+    const opaqueUpgrade = await rawUpgrade(holder.plane.port!, 'null')
+    assert.match(opaqueUpgrade, /^HTTP\/1\.1 403 Forbidden/)
+    assert.match(opaqueUpgrade, /origin_forbidden/)
+    const otherLoopback = await rawUpgrade(holder.plane.port!, 'http://127.0.0.1:5173')
+    assert.match(otherLoopback, /^HTTP\/1\.1 403 Forbidden/)
+    assert.match(otherLoopback, /origin_forbidden/)
+    const sameOrigin = await rawUpgrade(holder.plane.port!, `http://127.0.0.1:${holder.plane.port}`)
+    assert.doesNotMatch(sameOrigin, /^HTTP\/1\.1 403 Forbidden/)
+    const originWithPath = await rawUpgrade(holder.plane.port!, `http://127.0.0.1:${holder.plane.port}/spoof`)
+    assert.match(originWithPath, /^HTTP\/1\.1 403 Forbidden/)
     const rebound = await rawHttp(holder.plane.port!, 'attacker.example')
     assert.match(rebound, /^HTTP\/1\.1 403 Forbidden/)
     assert.match(rebound, /origin_forbidden/)
+    const hostWithUserInfo = await rawHttp(holder.plane.port!, `attacker@127.0.0.1:${holder.plane.port}`)
+    assert.match(hostWithUserInfo, /^HTTP\/1\.1 403 Forbidden/)
     assert.equal(holder.wire.spawns, 0)
+  } finally {
+    await holder.plane.stop()
+    rmSync(holder.stateDir, { recursive: true, force: true })
+  }
+})
+
+test('browser-origin fence admits only explicitly allowlisted cross-origin development servers', async () => {
+  const allowedOrigin = 'http://127.0.0.1:5173'
+  const holder = await makePlane(undefined, [allowedOrigin])
+  try {
+    const allowed = await fetchJson(holder.base, '/health', {
+      headers: { origin: allowedOrigin },
+    })
+    assert.equal(allowed.status, 200)
   } finally {
     await holder.plane.stop()
     rmSync(holder.stateDir, { recursive: true, force: true })

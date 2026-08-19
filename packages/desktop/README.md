@@ -51,12 +51,13 @@ pnpm run dist:desktop
 
 ### bundle-dsh：dsh 运行时封装（scripts/bundle-dsh.mjs）
 
-- **dsh 运行时 = 官方发布包**：脚本用 `pnpm add @deepseek-ai/dsh`（默认 `@latest`；`DSH_CHAMBER_DSH_VERSION` 可固定版本做可复现构建；`--force` 刷新到最新）。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
-- 本机无 pnpm 或版本 <11 时自动 `npx --yes pnpm@11` 兜底，无需预装。
-- pnpm 11 两个坑（bundle-dsh 已处理）：① 默认拦截依赖构建脚本 → 生成的 `pnpm-workspace.yaml` 用 `allowBuilds` 白名单放行 node-pty/koffi/protobufjs/@google/genai/@deepseek-ai/dsh-subprocess-local（原生模块）；② 默认发布年龄策略会过滤新发布版本（`@latest` 会解析到旧版）→ `minimumReleaseAge: 0`。
+- **dsh 运行时 = 官方发布包**：脚本用 `pnpm add @deepseek-ai/dsh@0.1.0-rc.7`（默认精确 pin；`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
+- 构建工具固定为 `pnpm@11.21.0`；PATH 不匹配时自动以
+  `npx --yes pnpm@11.21.0` 兜底，不解析浮动 major tag。
+- pnpm 11 两个坑（bundle-dsh 已处理）：① 默认拦截依赖构建脚本 → 生成的 `pnpm-workspace.yaml` 用 `allowBuilds` 白名单放行 node-pty/koffi/protobufjs/@google/genai/@deepseek-ai/dsh-subprocess-local（原生模块）；② 默认发布年龄策略可能过滤指定版本 → 临时 workspace 使用 `minimumReleaseAge: 0`，但输入仍必须是精确 semver，不引入浮动解析。
 - **安装后清理运行期不需要的内容**（`pruneRuntimeArtifacts`）：node-pty 的构建源料（deps/third_party/src/scripts/typings/binding.gyp）与**异平台**预编译归档——运行时按 build/Release → build/Debug → `prebuilds/<platform>` 顺序加载，因此**保留当前平台的 prebuilds 子目录**，只删其余平台；mistralai/openai 的 TS 源码/示例/测试；全树 `*.d.ts`/`*.d.cts`/`*.d.mts`/`*.map`。正确性由安装后冒烟兜底。
 - 控制面 spawn 入口统一为 `<node> <workspace>/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web`（`resolveDshEntry` + `resolveNodeExecutable`，spawn-dsh.ts）。node 可执行不假设在 PATH 上：Electron 主进程内用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（另前置 `--expose-internals`，dsh loader 需要），纯 node 环境用 `process.execPath`，兜底 PATH 搜索——打包 App 从 Finder 启动时 PATH 极简，裸 `spawn('node')` 会 ENOENT。
-- 封装完成后 `vendor/dsh/package.json` 记录实际解析到的精确版本（`dependencies["@deepseek-ai/dsh"]`）与封装平台（`dsh.platform`）；已封装且**平台一致**时再次 bundle 跳过（跨平台复用会打进错误平台的原生二进制，自动重封装），`--force` 刷新到最新。
+- 封装完成后 `vendor/dsh/package.json` 记录实际解析到的精确版本（`dependencies["@deepseek-ai/dsh"]`）与封装平台（`dsh.platform`）；已封装且**平台一致**时再次 bundle 跳过（跨平台复用会打进错误平台的原生二进制，自动重封装），`--force` 刷新当前 pin。重新封装期间保留 last-known-good 目录；只有安装、裁剪、版本核验与 smoke 全部通过后才交换目录，交换失败自动回滚，进程中断后的下次运行会恢复备份。
 
 ### build:control-plane：打包态控制面编译（scripts/build-control-plane.mjs）
 
@@ -66,11 +67,12 @@ pnpm run dist:desktop
 
 ### electron-builder 配置要点（packages/desktop/package.json 的 `build` 键）
 
-- `files` 只收 main.ts/preload.cts/updater.ts/transport-provider.ts/transport-manager.ts/ssh-provider.ts/ssh-config.ts/renderer-trust.ts/plugin-sync.ts/package.json/dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经 `extraResources`（`from: "vendor", to: "vendor"`）拷入 `Contents/Resources/vendor/dsh`。
-- 注意：electron-builder 硬编码过滤**拷贝树根目录的 node_modules**，因此不能直接 `from: "vendor/dsh"`；上移一层用 `from: "vendor"` 后 node_modules 成为子树、可被完整拷贝（含 pnpm 内部符号链接）。
+- `files` 只收主进程/预加载/transport/settings/plugin-sync 源文件、package.json 与 dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经精确的 `extraResources`（`from: "vendor/dsh", to: "vendor/dsh"`）拷入 `Contents/Resources/vendor/dsh`，暂存树和交换备份不会进入产物。
 - `electronLanguages: ["en-US", "zh-CN"]` 裁剪 locales。
-- **更新 feed（设计 11 §6）**：`publish` 配 github provider（owner/repo）；mac target 增加 `zip`（electron-updater mac 需要 zip，dmg 保留首装）；`nsis.differentialPackage: true`（win 差分 blockmap）；channel 由 electron-builder 从版本 semver prerelease 后缀自动推导（`0.2.0` → latest.yml，`0.2.0-beta.1` → beta.yml）——`--publish=never` 不生成 update-info yml，发布必须走 `--publish`（release.yml 以 GH_TOKEN 执行）。
-- macOS 产物未签名/未公证（本地自用可直接运行；分发给他人需自行签名 + 公证）——**macOS 自动安装（退出时安装）硬依赖 Developer ID 签名**（Squirrel.Mac），未配置时更新停留在「已下载」并在 settings 响亮提示手动安装（设计 11 §3.1）。
+- **更新 feed（设计 11 §6）**：`publish` 配 github provider（owner/repo）；mac target 增加 `zip`（electron-updater mac 需要 zip，dmg 保留首装）；`nsis.differentialPackage: false`（Windows 不生成/发布 exe blockmap，更新回退完整下载）；channel 由 electron-builder 从版本 semver prerelease 后缀自动推导（`0.2.0` → latest.yml，`0.2.0-beta.1` → beta.yml）——`--publish=never` 不生成 update-info yml，发布必须走 `--publish`（release.yml 以 GH_TOKEN 执行）。
+- CI 普通构建/dry-run 可生成 ad-hoc/未签名产物；**公开 release fail-closed**：macOS
+  必须 Developer ID + 公证并通过 Gatekeeper/stapler 验证，Windows 必须 Authenticode
+  验签，缺凭据或验签失败均不 finalize（设计 11 §7）。
 
 ## 主进程
 
@@ -90,7 +92,7 @@ pnpm run dist:desktop
 - **phase 机**：`idle → connecting → ready ⇄ degraded → error`，**两段式重连**：快速**半开 jitter** 指数退避突发（保留下界 0.5×、上界 1×，多实例/唤醒后错峰；至多 5 次 ≈31s）+ 突发耗尽后落 error（诚实红态）但进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限——瞬时故障是时变的，「放弃」绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）。认证失败置 `requiresUserAction`，**终态不自动重试**（用户须修复凭据/host key）。**确定性验证失败免重试**：`verifyUp` 结果带 `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 第一次失败即 error 终态（requiresUserAction，重试无法改变应答）；仅连接错误/超时等瞬时失败走重连。子进程监督 per-child：SIGTERM → 宽限后 SIGKILL。
 - **远端 systemd exec**：`ssh user@host systemctl start|stop|is-active <serviceName>`——参数数组 spawn（**无 shell**），serviceName 先过白名单 `^[a-zA-Z0-9_.-]+$` 再执行（注入防护）；有界超时（`execTimeoutMs`，默认 15s）；失败写入实例环形日志并作为错误结果返回（响亮，绝不吞掉）；认证失败复用 `AUTH_FAILURE_PATTERNS`，只经结果错误显式返回（**不写隧道终态**）。结果按需写入状态投影的 `serviceActive`（不轮询）。`systemctl` 默认目标为远端 system 级 unit 管理器。
 - stderr 按行缓冲后脱敏 + 终态认证判定（跨 chunk 不绕过）；每实例环形日志（约 200 行）。
-- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写、启动加载——密码主机重启后自动连接可用；不记日志/不进注册表/损坏保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 0600 askpass 助手（`buildAskpassScript`，提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
+- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 0600 askpass 助手注入系统 ssh——**永不上命令行**。全部 ssh 调用强制 `StrictHostKeyChecking=yes`，助手遇主机密钥确认回答 `no`；首次连接须先在可信通道核对 fingerprint 并写入 `known_hosts`，绝不静默接受。新增/编辑主机时若密码保存失败，设置页补偿回滚元数据；回滚 IPC 异常时重新读取权威注册表，避免把半提交的新主机再次按新增提交。`disposeAuth` 在断开/删除/退出时删除助手；`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
 
 ### 实例注册表
 
@@ -111,7 +113,7 @@ pnpm run dist:desktop
 
 | 通道 | 方向 | 说明 |
 |---|---|---|
-| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshWorkspace, dshVersion, dshHome, version}` |
+| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version}`（不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
 | `desktop_ssh_instances_set` | invoke | 持久化新实例集（原子写） |
 | `desktop_ssh_set_password` | invoke | SSH 密码（05 §8 例外）：内存 + `ssh-passwords.json` 明文镜像（0600 原子写），`{id, password}`，'' / null 清除；未知 id 或平台不支持 → `{error}` |
@@ -128,7 +130,7 @@ pnpm run dist:desktop
 | `desktop_ssh_status_changed` | 主进程推送 | 状态变化事件 `{id, status}` |
 | `desktop_ssh_instances_changed` | 主进程推送 | 注册表增删改后触发（renderer 重拉 roster；另有 30s 轮询兜底） |
 
-preload 暴露 `window.dshChamber = {controlPlaneUrl, dshWorkspace, dshVersion, dshHome, version, desktopSsh, update}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
+preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, desktopSsh, update}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
 
 ### 退出 / 单实例 / 错误处理
 
@@ -141,7 +143,7 @@ preload 暴露 `window.dshChamber = {controlPlaneUrl, dshWorkspace, dshVersion, 
 
 - **传输 URL 只在主进程**：`readyUrl()` 仅限内部使用，永不经过 `status()` 或 IPC 面；renderer 只见 phase/localPort 投影，自行用 localPort 构造访问 URL。
 - **systemctl 无 shell 拼接**：参数数组 spawn；serviceName 白名单先校验后执行。
-- **凭据不出主进程**：默认 ssh key/agent 认证；可选密码**只存主进程内存**（05 §8 例外，见上），经临时 0600 askpass 助手注入——永不上命令行；日志只含主机名/端口，不含任何凭据材料；ssh stderr 按行脱敏（跨 chunk 不绕过）。
+- **凭据不出主进程**：默认 ssh key/agent 认证；可选密码存于**主进程内存 + 05 §8 明确允许的 owner-only 明文镜像**（见上），经临时 0600 askpass 助手注入——永不上命令行；日志只含主机名/端口，不含任何凭据材料；ssh stderr 按行脱敏（跨 chunk 不绕过）。
 
 ## 桌面环境验收清单
 
