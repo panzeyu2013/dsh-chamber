@@ -93,10 +93,19 @@ function releaseUrlFor(version: string): string {
  * Redact absolute paths (e.g. the updater cache dir, which electron-updater
  * embeds in some error messages) from the error text that rides the renderer
  * projection — the projection stays path-free (design 11 §7 non-secret
- * contract); the full detail stays in the main-process log.
+ * contract); the full detail stays in the main-process log. Covers Windows
+ * drive paths and POSIX absolute paths rooted at any component (2026-08
+ * review: broadened from the fixed root list — /opt, /usr/local, /Library,
+ * /run, /root etc. all carry path material too). The POSIX branch uses a
+ * lookbehind so a URL's `//host/...` (the non-secret feed/release URL) is
+ * NOT mangled — only real path tokens are redacted; the Windows branch
+ * rejects `x://` (a scheme, e.g. `https://` — the drive letter is followed
+ * by TWO slashes) so URLs survive it too.
  */
 function sanitizeErrorText(message: string): string {
-  return message.replace(/(?:[A-Za-z]:[\\/]|\/(?:Users|home|var|tmp|Applications|private))[^\s]*/g, '[path]')
+  return message
+    .replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, '[path]')
+    .replace(/(?<![:/])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, '[path]')
 }
 
 /**
@@ -223,8 +232,16 @@ export function createUpdateController(options: UpdateControllerOptions): Update
   })
 
   let checking = false
+  // 2026-08 review fix: a download in flight keeps phase `available` until the
+  // first progress event (or `downloaded` on completion) — a periodic re-check
+  // started in that window would pass the phase gate below and, resolving
+  // after the download, clobber `downloaded` back to `available`/`up-to-date`
+  // (losing the settings「已下载，退出时安装」row AND the before-quit
+  // exemption while electron-updater still installs on quit). The flag makes
+  // the download exclusion explicit and covers the whole in-flight window.
+  let downloadInFlight = false
   async function checkNow(): Promise<void> {
-    if (checking) return
+    if (checking || downloadInFlight) return
     // The「已下载，退出时安装」state is final for this version, and an
     // in-flight download is mid-transition — a periodic re-check must not
     // clobber either back to `available`.
@@ -281,6 +298,15 @@ export function createUpdateController(options: UpdateControllerOptions): Update
       if (state.installBlockedReason !== null) {
         return { ok: false, error: 'automatic installation blocked on this platform' }
       }
+      // Controller-level single-flight (2026-08 review): a double click within
+      // the pre-progress window would otherwise start two downloads (phase is
+      // still `available` until the first progress event). electron-updater
+      // dedupes via its internal downloadPromise, but the controller must not
+      // rely on that — the flag also feeds the checkNow() exclusion above.
+      if (downloadInFlight) {
+        return { ok: false, error: 'download already in progress' }
+      }
+      downloadInFlight = true
       try {
         await autoUpdater.downloadUpdate()
         return { ok: true }
@@ -289,6 +315,8 @@ export function createUpdateController(options: UpdateControllerOptions): Update
         logger.warn('[updater] download failed:', message)
         setState({ phase: 'error', error: sanitizeErrorText(message) })
         return { ok: false, error: sanitizeErrorText(message) }
+      } finally {
+        downloadInFlight = false
       }
     },
   }

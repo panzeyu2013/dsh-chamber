@@ -275,6 +275,45 @@ export interface UpdateSurface {
   openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
+/** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
+export type WindowCloseBehavior = 'hide-to-tray' | 'quit'
+
+/** Chamber-global runtime settings (design 14 v1 scope) — structural mirror of
+ *  renderer/src/global.d.ts (merge must stay shape-identical). */
+export interface ChamberSettings {
+  windowCloseBehavior: WindowCloseBehavior
+  /** Login autostart (design 14 D6): mac/linux; win gated off in v1. */
+  launchAtLogin: boolean
+  /** prevent-app-suspension (design 14 D5); default off. */
+  keepAwake: boolean
+}
+
+/** Non-secret status projection: current settings + platform capability gates. */
+export interface ChamberSettingsStatus {
+  settings: ChamberSettings
+  supported: {
+    /** false on win32 (v1 gate). */
+    launchAtLogin: boolean
+    /** false when no tray recovery surface exists (dev); macOS always safe. */
+    closeToTray: boolean
+  }
+}
+
+/** Chamber-global runtime settings (design 14 D7) — non-secret projection,
+ *  structural mirror of renderer/src/global.d.ts (2026-08 review: the mirror
+ *  drifted when the settings/systemResume surfaces were added — kept in
+ *  lockstep so the merge stays clean if this package joins the root typecheck). */
+export interface SettingsSurface {
+  get(): Promise<ChamberSettingsStatus>
+  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string }>
+  onChanged(callback: (status: ChamberSettingsStatus) => void): () => void
+}
+
+/** OS wake-from-sleep notification (design 14 D4): reconnect immediately. */
+export interface SystemResumeSurface {
+  onResume(callback: (payload: { timestamp: number }) => void): () => void
+}
+
 declare global {
   /**
    * Structurally mirrors renderer/src/global.d.ts's DshChamberBridge so the
@@ -290,6 +329,8 @@ declare global {
       version: string | null
       desktopSsh: DesktopSshSurface
       update: UpdateSurface
+      settings: SettingsSurface
+      systemResume: SystemResumeSurface
     }
   }
 }

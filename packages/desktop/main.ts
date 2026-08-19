@@ -156,13 +156,26 @@ function readDshVersion(workspace: string | null): string | null {
  * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
  * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
  * startsWith string check) so scheme/host/path-root are pinned exactly.
+ *
+ * Two extra defenses (2026-08 review):
+ * - `new URL` does NOT decode percent-encoded path segments, so an encoded
+ *   `..%2f..%2f` traversal would pass a raw pathname prefix check yet land on
+ *   an arbitrary github.com path (the browser decodes on request). Decode the
+ *   pathname and re-normalize through a fresh URL before the prefix check.
+ * - userinfo (`https://user:pass@github.com/...`) is ignored by `origin`;
+ *   reject any non-empty username/password so the allowlist can never be
+ *   pointed at a credentialed github.com URL.
  */
 function isAllowedReleaseUrl(raw: unknown): boolean {
   if (typeof raw !== 'string') return false;
   try {
     const url = new URL(raw);
-    return url.origin === 'https://github.com'
-      && url.pathname.startsWith('/panzeyu2013/dsh-chamber/');
+    if (url.origin !== 'https://github.com') return false;
+    if (url.username !== '' || url.password !== '') return false;
+    // Decode + re-normalize the pathname: an encoded traversal then normalizes
+    // like a literal one and fails the prefix check instead of escaping it.
+    const normalized = new URL(`https://github.com${decodeURIComponent(url.pathname)}`).pathname;
+    return normalized.startsWith('/panzeyu2013/dsh-chamber/');
   } catch {
     return false;
   }
@@ -378,6 +391,10 @@ function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { o
  * （保持手动断开语义）。connect() 对 connecting/ready 幂等，重复唤醒无副作用。
  */
 function reconnectStaleTransports(): void {
+  // 2026-08 review NIT：退出在途（will-quit 的 disposeAsync 已开始）时 OS
+  // 唤醒不得再 spawn 新传输——否则可能在 dispose 完成后留下孤儿 ssh 子进程
+  // （SIGKILL 升级计时器 unref 后随退出丢失）。
+  if (quitRequested) return;
   const sm = transportManager;
   if (sm === null) return;
   for (const instance of sm.listInstances()) {
@@ -554,7 +571,11 @@ if (!gotTheLock) {
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    // macOS 默认常驻（Dock 恢复入口，activate 重建窗口）——但设置 = quit 的
+    // 关窗路径（design 14 D1）用户意图是退出：此时 darwin 也必须走
+    // app.quit()，经 before-quit 的 D2 确认（取消时窗口由取消分支重建，绝不
+    // 无窗滞留）。非 darwin 恒退出。
+    if (process.platform !== 'darwin' || chamberSettings.windowCloseBehavior === 'quit') app.quit();
   });
 
   // 退出确认（design 14 D2）在 **before-quit**（窗口关闭前）拦截：显式退出

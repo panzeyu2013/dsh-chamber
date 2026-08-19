@@ -123,6 +123,12 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
   '@deepseek-ai/dsh-client-ui-conversation',
+  // commands + input-trigger are first-screen covered factories (2026-08
+  // review fix): ui-model-selection's root inject requires commandUi from
+  // commands, commands requires inputTriggers from input-trigger — the three
+  // move as one (chamber-entry.ts import comments).
+  '@deepseek-ai/dsh-client-ui-commands',
+  '@deepseek-ai/dsh-client-ui-input-trigger',
   '@deepseek-ai/dsh-client-ui-workspace',
   '@deepseek-ai/dsh-client-ui-model-selection',
   '@deepseek-ai/dsh-client-ui-directory-picker-browse',

@@ -513,7 +513,13 @@ function readDependencyManifest(profileDir: string, name: string): unknown {
 
 export async function remotePluginList(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe }): Promise<RemotePluginListResult> {
   const path = remoteManifestPath(spec.remoteDshHome)
-  const result = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [path] })
+  // Quiet (2026-08 review fix): on an uninitialized remote profile the
+  // manifest cat ENOENTs — an EXPECTED probe failure that must not write an
+  // ERROR "run command failed" line into the instance log panel, exactly the
+  // pollution the quiet flag exists to prevent (same rule as the chamber
+  // probe cats below). ENOENT classification still rides the result; a
+  // genuine ssh failure stays loud.
+  const result = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [path], quiet: true })
   if (!result.ok) {
     // ENOENT = the remote profile is not initialized (not a fatal ssh error).
     if (ENOENT_PATTERN.test(result.error)) {

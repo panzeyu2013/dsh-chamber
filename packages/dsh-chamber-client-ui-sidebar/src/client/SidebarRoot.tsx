@@ -1842,7 +1842,18 @@ export function SidebarRoot({
                               {!workspace.ungrouped && (
                                 <span
                                   className={clsx(cc.rowActions, menuOpen[workspaceKey] === true && cc.rowActionsVisible)}
-                                  onClick={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    // INVARIANT (pending-click.ts header): any
+                                    // control that stops propagation MUST clear
+                                    // the pending itself (2026-08 review fix) —
+                                    // stopPropagation stops the native event, so
+                                    // the document-level listener never sees it,
+                                    // and a surviving pending would make a later
+                                    // click on the same session spuriously enter
+                                    // rename.
+                                    event.stopPropagation()
+                                    clearPendingClick()
+                                  }}
                                 >
                                   <button
                                     type="button"
@@ -2113,7 +2124,14 @@ export function SidebarRoot({
                                     {session.blank !== true && (
                                     <span
                                       className={clsx(cc.rowActions, menuOpen[sessionKey] === true && cc.rowActionsVisible)}
-                                      onClick={(event) => event.stopPropagation()}
+                                      onClick={(event) => {
+                                        // INVARIANT (pending-click.ts header):
+                                        // stopPropagation must be paired with
+                                        // clearPendingClick (2026-08 review fix)
+                                        // — see the workspace rowActions note.
+                                        event.stopPropagation()
+                                        clearPendingClick()
+                                      }}
                                     >
                                       <Menu
                                         compact

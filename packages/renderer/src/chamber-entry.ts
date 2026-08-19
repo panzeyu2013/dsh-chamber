@@ -45,20 +45,31 @@
  *
  * The split is safe ONLY because no first-screen family requires a deferred
  * service at its apply root (verified against the inject lists): the deferred
- * set (commands, input-trigger, jobs, goal, skill, tool, trajectory,
- * workflow-run, deliverables, subagent, message-feedback, plan,
- * user-questions, agent-preset, permission-presets) all inject first-screen
- * services (connection/sessions/slots/locale/remote/…); the only
- * sync→deferred edge is ui-model-selection's `commandUi` inject, which it
- * declares inside a nested `ctx.inject` (a /model command contribution) — the
- * composer model seat renders without it. `input-trigger`'s service
- * (`inputTriggers`) is injected only by deferred families (commands, skill,
- * subagent), and ui-conversation's imports from it are type-only.
+ * set (jobs, goal, skill, tool, trajectory, workflow-run, deliverables,
+ * subagent, message-feedback, plan, user-questions, agent-preset,
+ * permission-presets) all inject first-screen services
+ * (connection/sessions/slots/locale/remote/…). Two families that WOULD have
+ * violated the invariant are kept FIRST-SCREEN by construction (2026-08
+ * review fix — the vendor `inject` list is the authority, and it carries the
+ * edge at the ROOT, not in a nested inject as the original comment claimed):
+ * - `dsh-client-ui-model-selection` root-injects `commandUi` (vendor
+ *   src/client/index.ts:100), provided only by `dsh-client-ui-commands` — the
+ *   whole model-selection apply, INCLUDING the composer model seat (nested
+ *   `ctx.inject(['slots','modelDirectories'])`), is gated on it. Commands is
+ *   therefore first-screen; if its chunk ever failed, the model seat would
+ *   disappear with only a console.error (no UI signal) — unacceptable for a
+ *   first-screen seat.
+ * - `dsh-client-ui-commands` root-injects `inputTriggers`, provided only by
+ *   `dsh-client-ui-input-trigger` — input-trigger moves with it.
+ * (skill/subagent also inject `inputTriggers`, but they are themselves
+ * deferred, so that edge is deferred→deferred and harmless.)
  *
  * Maintenance: when adding a ui-* family, decide first-screen (synchronous
  * static import — hero, composer, settings shell, navigation) vs deferred
- * (feature UI only reachable after the first paint). Keep `chamber-covered.ts`
- * in lockstep either way.
+ * (feature UI only reachable after the first paint); BEFORE deferring a
+ * family, grep the vendor `inject` lists for any first-screen family that
+ * root-injects one of its services — such a family must stay first-screen.
+ * Keep `chamber-covered.ts` in lockstep either way.
  *
  * ## Module-table factories for the covered set (design 09 union table)
  *
@@ -115,6 +126,16 @@ import * as UiSettingsModels from '@deepseek-ai/dsh-client-ui-settings-models/cl
 import * as UiSettingsPlugins from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import * as UiSettingsPluginInventory from '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
 import * as UiConversation from '@deepseek-ai/dsh-client-ui-conversation/client'
+// commands + input-trigger are FIRST-SCREEN (2026-08 review fix, see module
+// header): ui-model-selection's ROOT inject list carries `commandUi`
+// (vendor src/client/index.ts:100), provided only by ui-commands — so the
+// whole model-selection apply (incl. the composer model seat) is gated on
+// it. Leaving commands deferred would push the model seat past the deferred
+// chunk load (and lose it entirely if that chunk fails). commands' own root
+// inject requires `inputTriggers`, provided only by input-trigger — the two
+// move together.
+import * as UiCommands from '@deepseek-ai/dsh-client-ui-commands/client'
+import * as UiInputTrigger from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import * as UiWorkspace from '@deepseek-ai/dsh-client-ui-workspace/client'
 import * as UiModelSelection from '@deepseek-ai/dsh-client-ui-model-selection/client'
 // Directory picking: the official web-app roster mounts exactly ONE surface
@@ -150,8 +171,6 @@ import * as UiSettingsBridge from '@dsh-chamber/dsh-client-ui-settings-bridge/cl
  */
 async function registerDeferred(ctx: Context): Promise<void> {
   const [
-    commands,
-    inputTrigger,
     jobs,
     goal,
     skill,
@@ -166,8 +185,6 @@ async function registerDeferred(ctx: Context): Promise<void> {
     agentPreset,
     permissionPresets,
   ] = await Promise.all([
-    import('@deepseek-ai/dsh-client-ui-commands/client'),
-    import('@deepseek-ai/dsh-client-ui-input-trigger/client'),
     import('@deepseek-ai/dsh-client-ui-jobs/client'),
     import('@deepseek-ai/dsh-client-ui-goal/client'),
     import('@deepseek-ai/dsh-client-ui-skill/client'),
@@ -182,8 +199,6 @@ async function registerDeferred(ctx: Context): Promise<void> {
     import('@deepseek-ai/dsh-client-ui-agent-preset/client'),
     import('@deepseek-ai/dsh-client-ui-permission-presets/client'),
   ])
-  ctx.plugin(commands)
-  ctx.plugin(inputTrigger)
   ctx.plugin(jobs)
   ctx.plugin(goal)
   ctx.plugin(skill)
@@ -295,6 +310,11 @@ export function apply(ctx: Context): void {
   ctx.plugin(UiSettingsPlugins)
   ctx.plugin(UiSettingsPluginInventory)
   ctx.plugin(UiConversation)
+  // First-screen (2026-08 review fix): ui-model-selection's root inject
+  // requires `commandUi` (commands) and commands requires `inputTriggers`
+  // (input-trigger) — see the import comments above.
+  ctx.plugin(UiCommands)
+  ctx.plugin(UiInputTrigger)
   ctx.plugin(UiWorkspace)
   ctx.plugin(UiModelSelection)
   // Directory-picker surface: the `browse` face for every instance (see the
@@ -339,7 +359,7 @@ const coveredFactory = (exports: unknown): ClientPluginHandoff['factory'] => () 
  * loader entry materializes.
  *
  * Deliberately NOT included:
- * - the deferred families (commands, …): their chunks load after the boot
+ * - the deferred families (jobs, goal, …): their chunks load after the boot
  *   settles; the official graph only guarantees the immediately tier for
  *   synchronous requires, and the client-bundle purity gate (upstream
  *   tsdown.client.ts) forbids value imports of ui-* packages anyway;
@@ -381,6 +401,8 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-settings-plugins', coveredFactory(UiSettingsPlugins)],
   ['@deepseek-ai/dsh-client-ui-settings-plugin-inventory', coveredFactory(UiSettingsPluginInventory)],
   ['@deepseek-ai/dsh-client-ui-conversation', coveredFactory(UiConversation)],
+  ['@deepseek-ai/dsh-client-ui-commands', coveredFactory(UiCommands)],
+  ['@deepseek-ai/dsh-client-ui-input-trigger', coveredFactory(UiInputTrigger)],
   ['@deepseek-ai/dsh-client-ui-workspace', coveredFactory(UiWorkspace)],
   ['@deepseek-ai/dsh-client-ui-model-selection', coveredFactory(UiModelSelection)],
   ['@deepseek-ai/dsh-client-ui-directory-picker-browse', coveredFactory(UiDirectoryPickerBrowse)],
