@@ -7,6 +7,9 @@
 > 第 4 项（flat）维持推迟。
 > 本文档 + 05 为实现契约。
 
+> **状态：已实现（2026-08）**——实现记录与验证见 `docs/progress/STATUS.md`
+> （design 06 条目）；未落地项（flat）维持推迟。
+
 ## 0. 范围与来源
 
 | 项 | 特性 | 状态 |
@@ -170,6 +173,12 @@
     同一截止点（本地时钟 + 一次性定时器）停止渲染——即便 App 下个轮询
     周期才重派生，隐形空位也不会残留。宽限期后行才消失/列表才可位移，
     已安全越过双击窗口。
+  - **跨 shell 滚动锚点同步（2026-08，`renderer/src/sidebar-scroll-sync.ts`，
+    App selectView 接线）**：切换来源（N-ctx）时恢复该来源上次的侧边栏滚动
+    位置；ghost 行带 `data-chamber-ghost`，锚点捕获跳过之（仅 arming shell
+    渲染该行，入站 shell 没有——锚到 ghost 会空转到 8s 截止）；入站 shell
+    在 `content-visibility:hidden` 时按 `checkVisibility` 门控重试，模块级
+    generation 取消被取代的重试链。
 
 ### 2.3 代码落点
 
@@ -277,20 +286,9 @@
 
 ### 4.2 通道 API（chamberBridge 扩展）
 
-```ts
-export interface InstanceRuntimeReport {
-  current?: string
-  sessions: Record<sessionId, {
-    running?: boolean
-    completed?: boolean
-    pending?: 'approval'|'plan-review'|'question'
-    runningSubagents?: number
-  }>
-}
-reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void
-clearInstanceRuntime(sourceId: string): void
-onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined) => void): () => void
-```
+> 接口定义（`InstanceRuntimeReport` / `reportInstanceRuntime` /
+> `clearInstanceRuntime` / `onRuntimeReport`）以 **05 §3** 为权威（v1 契约），
+> 本节只描述**上报时机与对账规则**（不再重复 TS 定义）。
 
 - 每 ctx 插件 apply 内新增 effect：订阅 `ctx.sessions.list`，订阅后立即
   上报一次当前快照（zustand subscribe 不即时触发），其后每次变更上报
@@ -499,13 +497,10 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   调用方 abort；per-source 任务隔离（一个来源击键不重启其他来源在途搜索）；
   结果分支优先于 aggregateError；`maxLength` 取共享常量
   `SEARCH_QUERY_MAX_CODE_UNITS`。
-- **未连接来源呈现**：搜索入口按 `connected` 门控；状态徽标 = 色点/转圈
-  （ready 绿点、error/stopped 红点、idle/unknown 灰点、
-  connecting/starting/restarting/degraded 统一转圈——重试周期折叠为一个
-  稳定「重连中」态，主界面绝不因每次重试尝试在转圈/色点间闪烁；相位文本
-  只在 hover/aria，无恒显文字、无状态文案——状态一律纯图标，原因/细节在
-  连接设置页；状态槽居来源头右端，hover 时被搜索/`+` 簇替换显示）；全部
-  断开时保留各来源分组、空态提示为列表底部一行；
+- **未连接来源呈现**：搜索入口按 `connected` 门控；**状态徽标语义（色点/转圈
+  枚举、重试折叠为稳定「重连中」态、相位文本仅在 hover/aria）见 05 §2.1**，
+  本节不再重复；06 增量：状态槽居来源头右端、hover 时被搜索/`+` 簇替换
+  显示；全部断开时保留各来源分组、空态提示为列表底部一行；
   断连即清空该来源搜索状态（重连从干净状态开始）。
 - **行内操作（图标化 + 悬停替换）**：workspace 组头 = `+`（新建会话）+
   三点竖排 kebab 菜单（重命名/删除，`Menu` primitive portal 模式），
@@ -530,13 +525,13 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 - **blank 行（2026-08）**：当前空白"新会话"行隐藏操作簇（kebab/分叉/归档，
   对齐官方 `!row.blank &&` 门控）——空白行无重命名/分叉/归档语义。**2026-08
   review 补充**：双击同样被 `blank` 门控（不进入内联重命名，见 §2.2）；离开
-  current 后的宽限期（450ms）内该行以 ghost 占位渲染（`visibility:hidden`
-  非交互、保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`），双击
+  current 后的 450ms 宽限期 ghost 占位机制见 §2.2（`visibility:hidden`
+  非交互、保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`）——双击
   窗口内列表绝不位移。
 - **会话状态指示（2026-08 修订）**：固定 10px 行尾状态槽——常态空、
   运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = 持久蓝圆点；
-  **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角，见 §4.3），
-  配色 business（蓝）/warn（琥珀）两级；运行与 completed 颜色一律
+  **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角）——几何与配色
+  契约见 §4.3，本节只定稿 token：运行与 completed 颜色一律
   `--dsw-static-deepseek-450`，pending 徽标用
   `--dsw-alias-state-{business,warn}-primary`（不再有 green/red 状态色）；
   状态槽非身份标记（来源身份由来源头圆点承担）。

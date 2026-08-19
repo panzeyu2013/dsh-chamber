@@ -1,15 +1,15 @@
-# 04 · 控制面 API 与数据模型（v4 详细设计）
+# 04 · 控制面 API 与数据模型（v1 定稿）
 
 > v2 薄壳 API 面（sessions / projects / project-sessions / interactions / events
 > SSE / config / external / runtime 透传族）**全部删除**——这些业务由 dsh
 > 前端 runtime 经每实例反代消费（03 §3），控制面不再持有。
-> v4 控制面 API 面 = **管理 REST**（health / connections / host logs）+
+> v1 控制面 API 面 = **管理 REST**（health / connections / host logs）+
 > **每实例反代**（契约与 03 §3 共享，本文 §4 给 HTTP 形状）+ **前端服务**
 > （静态 dist + `__DSH_BOOT__` 启动图清单）。
 > **[v1 收敛（2026-08-14）]** 认证/审计面（`/api/auth/*`、`/api/passkeys*`、
 > `/api/audit`）随模块整体移除——v1 无认证边界，全部端点匿名可达（仅
 > loopback 监听，05 §8 安全不变量）。
-> 权威契约：`05-connection-manager.md` §3；连接模型见
+> 权威契约：`05-connection-manager.md` §7（控制面/桌面契约）；连接模型见
 > `03-connections-proxy.md`。
 
 ---
@@ -61,7 +61,7 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 - 控制面在 `/` 服务 dsh 官方前端构建产物（dist/）并注入启动图清单
   （§5）；静态壳匿名加载。
 
-### D5 · 反代 = 与 04 共享定义
+### D5 · 反代 = 与 03 共享定义
 
 - 契约定义于 03 §3；本文 §4 只补 HTTP 形状（路径 / 方法 / 错误码），
   两处引用同一语义，变更须同步（03 §4）。
@@ -90,7 +90,7 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 500 { "error": "internal" }   // 控制面自身异常
 ```
 
-- `dsh.status` ∈ 03 七态（stopped / starting / ready / degraded /
+- `dsh.status` ∈ 02 §3.5 七态（stopped / starting / ready / degraded /
   restarting / restart-exhausted / error）；`port` 为 0 时即未就绪；
   `error` 仅在非 ready 时出现（原因摘要，脱敏）。
 
@@ -159,7 +159,7 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 
 ```
 挂载：/api/i/<id>/*      id ∈ {local, ssh-<sshInstanceId>}
-任意方法（GET/POST/PATCH/DELETE/…）全量透传，无方法白名单（05 §7.1）
+任意方法（GET/POST/PATCH/DELETE/…）全量透传，无方法白名单（05 §1）
 WS upgrade：/api/i/<id>/api/events.mux | events.host（剥前缀 → 实例 /api/…）
 SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 ```
@@ -212,11 +212,11 @@ interface WebBootGraph {
     预取视图）与 `plugins[]`（entry 组合视图）；chamber chrome 与 dsh
     原生 ui-* 插件的组合图在宿主侧（v4 单 entry：`@dsh-chamber/app`
     chamber composite bundle，自注册进 `window.__ModuleLoader__`）；
-    **每实例宿主图额外 entry 另取（设计 09）**：页面清单之外，boot 时前端经
-    反代（`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-host-client-graph`
+    **每实例宿主图额外 entry 另取（设计 09）**：boot 时前端经反代
+    （`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-host-client-graph`
     的 Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
-    `CHAMBER_COVERED_IDS` 去重（复合已覆盖 + 页面自有 id），预加载剩余 bundle
-    并经 boot.tsx `extraRows` seam 合并进 boot rows——详见设计 09 §3.5；
+    `CHAMBER_COVERED_IDS` 去重并预加载剩余 bundle、经 boot.tsx `extraRows`
+    seam 合并进 boot rows——机制与构建链详见 05 §6 / 设计 09 §3.5；
   - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`
     （gen-boot-manifest 按 `assets/chamber-*.js` 模式定位产物；vendor
     自身的默认路径 `/plugins/<id>/client.js` 仅为参考——wire 只要求
@@ -232,7 +232,7 @@ interface WebBootGraph {
 | 载体 | 路径 | 内容 | 权威方 |
 |---|---|---|---|
 | JSON 单行 | `$XDG_STATE_HOME/dsh-chamber/connections.json` | `{schemaVersion, connection: {id:'local', label, accentColor}}`（status / dshPort 为运行态投影） | 控制面（03 §2.1） |
-| JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, label, host, user, remotePort, serviceName}` | 桌面主进程（03 §2.2） |
+| JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, label, kind, host, user, sshPort, remotePort, serviceName, remoteDshHome}`（schema 以 03 §2.2 为准） | 桌面主进程（03 §2.2） |
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
 - **原子写协议**（connections.json）：同步 write-through + `tmp + fsync +

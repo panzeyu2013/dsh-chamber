@@ -28,10 +28,10 @@
 
 ## 2. 机制：各来源 ctx 推投影，轮询降级为兜底
 
-侧边栏插件（每来源 shell 各一份，`inject` 已含 `sessions`/`workspaces`）**已经**
-是 `sessions.list` 的活订阅者（`client/index.ts` 的 `sync()` 订阅了 list store；
-workspaces 数据目前来自 App 层 10s 轮询投影，插件侧尚未订阅——本方案的接入点）。
-方案是把工作区/会话投影也走这条现成通道：
+通道基建 = **06 §4 已实现的 `reportInstanceRuntime` 模式**（每来源插件
+`inject` 订阅 `sessions.list` → 投影 → chamberBridge → App 层
+`aggregate-store.ts`），本方案是**同一通道的扩展**（把事实投影通道推广为
+全量快照通道 `reportInstanceSnapshot`），不重新描述插件订阅机制：
 
 1. **`packages/dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts`**：新增
    通道 `reportInstanceSnapshot(sourceId, snapshot)` / `onInstanceSnapshot(listener)`

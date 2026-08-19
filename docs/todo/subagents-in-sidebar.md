@@ -11,7 +11,11 @@
 ## 现状对照
 
 - 侧边栏 = 每来源分组 + workspace / 未分组桶 + session 行（06 定稿）；行尾
-  状态槽只表达 running / completed / pending（06 §4.3）。
+  状态槽表达 running / completed / pending，且 **06 §4.5（2026-08）已实现
+  `runningSubagents` 计数徽标**（会话行尾「N 个子代理运行中」圆环 + tooltip，
+  经运行时事实通道上报）——本 todo 的"计数 / 状态徽标"解读已被覆盖。
+- **剩余开放范围**（06 未做）：会话行下**嵌套子层级**（subagent 行缩进显示
+  子代理自身的状态/会话）与**层级折叠 / 截断**、跨会话总览视图。
 - **宿主覆盖情况需调研**：在 vendored dsh 包中未检索到 `subagent` 命名的
   事实面（wire / store / UI）。需要先确认宿主前端是否以其他命名（如 agents /
   children / 会话详情 unary）暴露该事实；若宿主无此面，按 08 的先例评估

@@ -39,7 +39,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         │    spec 校验 / 传输进程 argv（或 direct-endpoint 直连模式）/
         │    stderr 分类与脱敏 / 可选 exec 通道；v1 仅实现 `ssh` provider
         │    （ssh-provider.ts：ssh -N -o ServerAlive… -L 隧道 + systemd exec）
-        ├─ 实例注册表：<userData>/ssh-instances.json {id,label,kind,host,user,remotePort,serviceName}
+        ├─ 实例注册表：<userData>/ssh-instances.json {id,label,kind,host,user,sshPort,remotePort,serviceName,remoteDshHome}（schema 以 03 §2.2 为准）
         └─ IPC（preload 白名单）
         远程服务器：dsh（API 面 profile，无需 web 前端）+ systemd + SSH
 ```
@@ -101,7 +101,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 悬停操作与新建工作区成功后，经 chamberBridge.requestRefresh(sourceId)
   立即重拉该来源聚合（v1 轮询 + 操作后刷新）。
 - **v1 交互面扩展（2026-08，详见 06）**：来源头 hover 操作簇新增**会话排序
-  切换**（manual↔updated 循环，06 §3.1）；workspace 头/会话行**双击重命名**
+  切换**（显式排序菜单——官方 ViewOptionsMenu 模式，勾选标记当前模式，
+  取代早期盲切循环，06 §2.2）；workspace 头/会话行**双击重命名**
   （会话行单击立即打开、二次点击进入重命名，06 §2.2）；workspace 头/会话行
   悬停显示**信息卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
 - New Session → 当前活动来源新建会话。
@@ -246,7 +247,7 @@ export const chamberBridge: {
   `setChamberInstanceId`，chamber-entry `apply()` 读入）。
 - 目录选择面统一为应用内浏览对话框（browse）：**所有实例一律注册
   `UiDirectoryPickerBrowse`**，与宿主能力恒一致——本地宿主经 spawn 环境
-  pin `SSH_CONNECTION`（02 §3.2.1）令其 directory-picker-auto 解析
+  pin `SSH_CONNECTION`（02 §3.1）令其 directory-picker-auto 解析
   `browse`（服务 `host.listDirectory`/`host.createDirectory`）；远程宿主
   按 02 §3.9 部署（单元含同款 pin；headless linux 服务器无显示会话，
   缺行也天然 browse）；OS 原生选择器（native）对 chamber 用户永不出现，
@@ -412,15 +413,14 @@ export const chamberBridge: {
   与本地 02 §3.2 同判据，非 dsh 服务端口绝不呈现已连接）、可选 `exec`
   （远程服务通道）。
 - `transport-manager.ts` 是通用运行时：phase 机 / **两段式重连**（快速有界
-  半开 jitter 退避突发 + 突发耗尽后的**慢速周期重探**——瞬时故障是时变的，
+  半开 jitter 退避突发 + 突发耗尽后的慢速周期重探——瞬时故障是时变的，
   error 绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）/
   环形日志 / 非秘密投影与推送 / 子进程监督（SIGTERM→SIGKILL per-child）/
   注册表（kind 迁移、重复 id 首胜丢弃）/ 就绪探测（隧道端口或直连端点 +
-  端点身份验证）。**确定性验证失败免重试**：`verifyUp` 结果带
-  `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非
-  200、错误信封、版本过老/不兼容）→ 第一次失败即落 error 终态
-  （requiresUserAction），绝不空耗重试周期（重试无法改变应答）；
-  仅瞬时失败（连接错误、超时）走重连。
+  端点身份验证）。就绪判据（TCP + dsh 身份握手）、两段式重连与 `verifyUp`
+  **确定性验证失败免重试**（`terminal` 分类——目标应答了探测但证明不是
+  兼容 dsh → 第一次失败即落 error 终态，仅瞬时失败走重连）的机制细节见
+  03 §2.2。
 - `ssh-provider.ts` 是 v1 唯一实现：`ssh -N -o ServerAliveInterval=30 -o
   ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort>`
   隧道 + systemctl exec；认证特征/脱敏/白名单全在 provider 内。
@@ -439,6 +439,19 @@ export const chamberBridge: {
   base-path patch）对新 kind 需要同步扩展。
   边界：tailscale 等网络层身份引入的是网络层访问控制，不构成 dsh 应用层
   认证面（v1 无认证边界不变）。
+
+### 7.7 窗口生命周期与崩溃恢复（2026-08-17 落地）
+
+- **单窗口可重建**：窗口被关闭（macOS 红色按钮）后应用保持运行（darwin 的
+  `window-all-closed` 不退出）；`app.on('activate')`（Dock 图标点击）、
+  `second-instance`、托盘「显示窗口」统一走 `showMainWindow()`——窗口不存在
+  时按控制面 origin 重建（`createMainWindow`；启动期加载失败仍为大声失败 +
+  退出，重建路径只记录不退出）。
+- **渲染进程有界自动恢复**：`render-process-gone`（clean-exit 除外）或 15s
+  无响应 → 60s 窗口内至多重载 3 次，超出显示错误框停止自动恢复——绝不静默
+  白屏；会话数据在实例侧，重载后前端自动重连恢复。
+- **崩溃留痕**：`crashReporter`（`uploadToServer:false`）落盘
+  `<userData>/Crashpad`；GPU/Utility 异常退出经 `child-process-gone` 记日志。
 
 ## 8. 安全不变量（沿用 AGENTS.md）
 
@@ -466,19 +479,6 @@ export const chamberBridge: {
 - 控制面 HTTP 监听仅 loopback——v1 无认证边界，不变量靠监听面与 HTTP/WS
   来源门禁（Host 仅 loopback authority；Origin 仅回环、`null` + 显式
   allowlist；非法来源在副作用/转发前 403）维持。
-
-### 7.7 窗口生命周期与崩溃恢复（2026-08-17 落地）
-
-- **单窗口可重建**：窗口被关闭（macOS 红色按钮）后应用保持运行（darwin 的
-  `window-all-closed` 不退出）；`app.on('activate')`（Dock 图标点击）、
-  `second-instance`、托盘「显示窗口」统一走 `showMainWindow()`——窗口不存在
-  时按控制面 origin 重建（`createMainWindow`；启动期加载失败仍为大声失败 +
-  退出，重建路径只记录不退出）。
-- **渲染进程有界自动恢复**：`render-process-gone`（clean-exit 除外）或 15s
-  无响应 → 60s 窗口内至多重载 3 次，超出显示错误框停止自动恢复——绝不静默
-  白屏；会话数据在实例侧，重载后前端自动重连恢复。
-- **崩溃留痕**：`crashReporter`（`uploadToServer:false`）落盘
-  `<userData>/Crashpad`；GPU/Utility 异常退出经 `child-process-gone` 记日志。
 
 ## 9. 分期
 

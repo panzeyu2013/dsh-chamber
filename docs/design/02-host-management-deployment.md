@@ -252,8 +252,9 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    │                    └─失败/退出──────────────┼──┼───────────────────► ready
    │                                            │  └──fail(N)┐
    │                                            └─────restarting──────┐
-   └──── graceful stop / 不可恢复 ─────────────────────────────────────┘
+   └──── graceful stop ────────────────────────────────────────────────┘
                                   └─ kill → 端口释放 → respawn → starting
+   spawn 失败 ──► error（fail-loud）──start() 重试──► starting
 ```
 
 | 态 | 含义 | 进入 | 离开 |
@@ -264,7 +265,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 | `degraded` | 失败计数 ≥1 且 < 阈值，仍在服务 | 失败 | 任意成功（清零）→ `ready`；阈值 → `restarting` |
 | `restarting` | 单飞行重启中 | fail(N) / 进程死亡 | 重启成功 → `starting`；耗尽 → `restart-exhausted` |
 | `restart-exhausted` | 停止自动重启，等待人工 | 窗口内重启次数超限 | 人工介入（幂等启动 / 停止） |
-| `shutting-down` | 优雅停止中 | 停止命令 | 进程确认退出 → `stopped` |
+| `error` | spawn 启动失败（fail-loud，不静默） | spawn 失败 / 不可恢复 | `start()` 重试 → `starting`；或停止 → `stopped` |
 
 探测（两通道共享一个计数，§2.4）：
 
@@ -283,7 +284,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 
 ```
 1. 单飞行守卫（currentRestartPromise 去重，并发触发共享同一重启）；
-   shutting-down 直接返回
+   停止过程（优雅停止进行中）直接返回
 2. 终止：进程组 SIGTERM（dsh profile-boot 对 SIGTERM 优雅退出，exit 0）
    → 2.5s 未退 → SIGKILL；确认退出后才 unregisterManagedProcess
 3. 端口释放等待：固定端口场景下新宿主仍用同端口——旧进程死透才能复用
@@ -303,7 +304,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 - **崩溃路径**：控制面被 SIGKILL → 宿主成为孤儿 → 下次启动 reaper 回收
   （§3.4）——`detached: true` 保证宿主不连带，孤儿回收保证不泄漏；
 - **会话数据不丢**：dsh 侧 JSONL 持久化在 `$DSH_HOME/sessions`，重启后由
-  前端 runtime 经会话基线完整恢复（控制面不持有任何会话权威——01 §6 原则 4）。
+  前端 runtime 经会话基线完整恢复（控制面不持有任何会话权威——01 §5 原则 4）。
 
 ### 3.8 host-logs 滚动日志
 
@@ -413,13 +414,12 @@ WantedBy=multi-user.target
 3. **trusted-host 与反代 Host 头**：`--trusted-host 127.0.0.1:<port>` 对应
    反代转发时的 Host 头（转发保持实例自身 host:port，不改写）；若未来引入
    自定义 Host 场景需同步扩展 trusted-host 集（05 §7.5 固定形态）。
-4. **restart-exhausted 后的恢复策略**：重试入口 = 连接 API（POST
-   /api/connections 幂等启动）或桌面设置页操作；自动重启计数由一次成功就绪
-   清零（成功即重置）。
+4. **restart-exhausted 后的恢复策略**：重试入口与计数重置见 §3.6（连接 API
+   幂等启动或桌面设置页操作；一次成功就绪即清零）。
 5. **host-logs 容量**：RING_BUFFER 行数/字节上限取桌面场景经验值（如
    500 行），滚动丢弃；长期留存/导出不在范围。
 6. **`$DSH_HOME` 与多用户冲突**：宿主 `DSH_HOME` 固定为
-   `<stateDir>/dsh-home`（§3.2.1），多控制面实例共享同一 stateDir 时才
+   `<stateDir>/dsh-home`（§3.1），多控制面实例共享同一 stateDir 时才
    共享该 home——会话 JSONL 追加式多写安全，settings 为 last-writer-wins
    文档由 dsh `settings-conflict` 仲裁；不同 stateDir 的实例互不相干。
    **服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**（2026-08 重审）：

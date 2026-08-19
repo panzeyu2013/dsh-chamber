@@ -73,7 +73,7 @@
   （隐藏窗口不节流）。渲染侧：App 层分发 window `dsh-chamber:system-resume` 事件，
   dsh-client-connection chamber 补丁（stop+start 立即重连）。实现：`chamber-settings.ts`
   （纯逻辑）+ `main.ts`/`preload.cts`；验证：根 typecheck ✓、`test:desktop`（含新增
-  12 用例）✓、`build:preload` ✓。设计见 `docs/todo/14-todo-sleep-background.md`。
+  12 用例）✓、`build:preload` ✓。设计见 `docs/design/14-sleep-background.md`。
    **2026-08 review 轮修复（3 subagent 独立审查 + 独立验证）**：P0 退出时序——
    退出确认移至 `before-quit`（原在 will-quit 内置位 `quitRequested` 过晚，
    hide-to-tray 默认下 Cmd+Q/托盘退出被 close 吞掉、确认与更新退出安装不可达；
@@ -138,7 +138,7 @@
   （`dsh-chamber:settings-get/set` + `settings-changed` 推送，非秘密），与实例配置
   平面严格分离（01 §2 P2）。验证：根 typecheck ✓、`typecheck:settings-bridge` ✓、
   `test:settings-bridge` ✓、`build:renderer` ✓、`verify:i18n` ✓。设计见
-  `docs/todo/15-todo-chamber-settings-page.md`。
+  `docs/design/15-chamber-settings-page.md`。
 - **设计未决**（02 §5 / 04 §7）：starting port 偏移、trusted-host 自定义 Host、多控制面
   `$DSH_HOME` 冲突、响应头白名单双处同步、`__DSH_BOOT__` 随 dsh 版本漂移。
 
@@ -169,25 +169,14 @@
   观测/切回整列 recency 排序一次，此后仅置顶自上次观测以来更新的会话，置顶经
   `updatedOrder`/`sessionUpdatedAtByAccount` 持久化；updated 下拖拽只写共享 account 序、
   不落 wire）；`serversProjectionSignature` 纳入会话 `updatedAt` 以驱动置顶重发布。
-- **侧边栏交互对齐 OpenChamber（2026-08）**：会话行单击**立即打开**（零延迟），350ms 内
-  同会话第二次点击进入内联改名——`shared/pending-click.ts` 全局 pending 单例（跨 N-ctx
-  shell 共享，替代原"延迟单击"模型；05 §2.2 / 06 §2.2 已同步）。**2026-08 review
-  加固**：任何 stopPropagation 控件（含来源头排序/加工作区/搜索）自行 clearPendingClick；
-  空白"新建会话"行双击被 blank 门控（不进内联改名）；空白行离开 current 后 450ms ghost
-  宽限（`derive.ts armBlankGhost`/`sessionVisible` + `.sessionGhost` 非交互占位）——双击
-  窗口内列表不位移，杜绝二次点击误开下方另一会话。跨 shell 滚动位置锚点
-  同步（`renderer/src/sidebar-scroll-sync.ts`，App selectView 接线）。**第三波 review
-   加固（2026-08）**：ghost 行另带 `data-chamber-ghost`，滚动锚点捕获跳过之（仅 arming
-   shell 渲染该行，入站 shell 没有——锚到 ghost 会空转到 8s 截止）；恢复在入站 shell 仍
-   `content-visibility:hidden` 时按 `checkVisibility` 门控重试（首个尝试在过渡 apply
-   回调内、视图翻可见之前，退化 rect 会让一次性落位错位），模块级 generation 取消被取代的
-   重试链（快速 A→B→A→B 不再并发多条 8s 链）；`derive.ts` 注册共享单例守卫
-   （`blankGhostUntil` 跨 bundle 共享态，防打包漂移静默分裂）；rename 表单 stopPropagation
-   同步 `clearPendingClick`（闭合 pending-click 不变式）；工作区头计数排除 ghost（宽限内
-   不再 +1）；ghost 过期条目读时惰性清扫 + 定时器触发后裁剪。侧栏宽度全局化：
-  新 chamber 自持包 `@dsh-chamber/dsh-client-ui-layout`（ui-layout fork，仅替换 store 层：
-  从 view-prefs 播种/回写），`sidebarWidth` 持久化于 `dsh-chamber.sidebar.v1`（[264,420]
-  钳位），官方 ui-layout bundle 保持 covered（one-declarer 规则）。
+- **侧边栏交互对齐 OpenChamber（2026-08，已落地）**：会话行单击立即打开、
+  350ms 内同会话第二次点击进入内联改名（`shared/pending-click.ts` 全局
+  pending 单例，跨 N-ctx 共享）、blank 门控 + 450ms ghost 宽限、跨 shell
+  滚动锚点同步（`renderer/src/sidebar-scroll-sync.ts`）、侧栏宽度全局化
+  （ui-layout fork，`sidebarWidth` 持久化于 `dsh-chamber.sidebar.v1`，
+  [264,420] 钳位）。交互细节与加固（stopPropagation 配对、ghost 守卫、
+  checkVisibility 重试等）见 `docs/design/06-sidebar-enhancements.md`
+  §2.2 / §3.1——不再在 STATUS 复述。
 - **设置桥 keyed 插槽（2026-08）**：bridge-outlet 现支持 root+keyed（`settings.plugin.item`，
   镜像官方 scoped-slots 契约，entryKey 分发 + fallback），修复 Plugins 页黑屏；所有桥接出口
   （本地专属 `settings.action` + 选中实例 `settings.section` 内容出口）在 child-ctx → host

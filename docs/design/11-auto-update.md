@@ -5,7 +5,7 @@
 > （`electron-updater` github provider，`autoDownload=false`、`autoInstallOnAppQuit`、
 > 状态机、静默失败日志）
 > + preload IPC（`dsh-chamber:update-state` 查询/推送、`update-download`、`open-release`）；
-> **M2** settings 壳新增 chamber 全局「更新」入口（`__update`，与 `__connections` 并列）
+> **M2** settings 壳新增 chamber 全局「更新」入口（`__update`，chamber 全局固定入口区，结构见设计 15）
 > + 低调 `UpdateSection` 组件（zh/en 文案，`verify:i18n` 通过）；**M3** desktop build
 > 配置（`publish` github provider、mac 增加 `zip` target）+ `DSH_CHAMBER_UPDATE_CHANNEL=beta`
 > + release.yml 双 leg 更新产物（win：exe+`latest.yml`/`beta.yml`；mac：dmg+zip+
@@ -94,11 +94,12 @@
   downloading → downloaded / error；`up-to-date` = 已检查且无新版，区别于未检查的
   idle）→ 经 preload IPC（`dsh-chamber:update-state` invoke 查询 + `update-state-changed`
   push）→ settings 壳渲染。
-- **挂载位置**：settings 壳（`packages/dsh-chamber-client-ui-settings-bridge`）既有的
-  「chamber 全局固定导航入口」模式——`SettingsShell.tsx` 中 `__connections`（divider 之
-  下固定 entry + 嵌入组件，不随所选服务器变化）。「更新」部分 = 同一 divider 块下的
-  **第二个 chamber 全局固定入口** `__update`，内容为 `UpdateSection` 组件
-  （`update-store.ts` 模块单例订阅，N-ctx 共享）。内容小、只读一个 IPC 状态 → 无需
+- **挂载位置**：settings 壳（`packages/dsh-chamber-client-ui-settings-bridge`）
+  既有的「chamber 全局固定导航入口」模式——固定入口区结构（`__connections` /
+  `__update` / `__general`，divider 之下的固定 entry + 嵌入组件，不随所选
+  服务器变化）以**设计 15** 为权威，本节不重复。「更新」部分 = 该区的
+  `__update` 入口，内容为 `UpdateSection` 组件（`update-store.ts` 模块单例
+  订阅，N-ctx 共享）。内容小、只读一个 IPC 状态 → 无需
   新插件包，直接扩展 settings 壳。
 - **部分内容（低调状态行，不显眼）**：
   - 当前版本 vX（主进程投影 `currentVersion`，`dsh-chamber:info.version` 兜底）；

@@ -1,4 +1,4 @@
-# 03 · 连接模型与每实例通用反代（v4 详细设计）
+# 03 · 连接模型与每实例通用反代（v1 定稿）
 
 > 连接模型与每实例通用反代（v1 定稿，2026-08-14）：**连接模型**（本地 =
 > 控制面 catalog 单行；远程 = 桌面主进程注册表）+ **每实例通用反代**
@@ -66,7 +66,7 @@
   无 kind 分支、无 projects 子表——"本地实例"就是唯一一行。
 - **status / dshPort 是投影**：status 派生自 PlaneHandle（02 §3.5 七态），
   `dshPort` 在就绪后写入；控制面在文件里只持久化 `label / accentColor`
-  （用户可改项），运行态字段以内存 / PlaneHandle 为准（01 §6 原则 4：
+  （用户可改项），运行态字段以内存 / PlaneHandle 为准（01 §5 原则 4：
   宿主事实只服务、不背书）。
 - **原子写**：同步 write-through 事务 + `tmp + fsync + rename`；只有写盘成功
   才发布新内存文档，失败回滚并向调用者抛错；损坏 → 大声失败（绝不冒充
@@ -74,12 +74,10 @@
 
 #### 2.1.1 CRUD 语义（管理面端点全表见 04 §3.2）
 
-| 操作 | 端点 | 语义 |
-|---|---|---|
-| 读 | `GET /api/connections` | 连接行投影（status / dshPort / label / accentColor） |
-| 启动 | `POST /api/connections` `{kind:'local'}` | **幂等启动**：`stopped` → spawn（02）；`starting/ready/…` → 200 返回既有状态；`kind ≠ 'local'` → 400（远程实例不在此面） |
-| 改 | `PATCH /api/connections/local` | 仅 label / accentColor |
-| 停 | `DELETE /api/connections/local` | 优雅停止实例（02 §3.7）；行保留 |
+模型视角：`local` 恒存在、不可删除（`DELETE` = 优雅停止实例，02 §3.7，
+行保留）；`POST /api/connections` 仅接受 `kind:'local'`（幂等启动，远程实例
+不在此面）；`PATCH` 只改 `label / accentColor`；`status / dshPort` 是运行态
+投影。端点、请求/响应与幂等细节以 04 §3.2 为准。
 
 ### 2.2 远程实例：桌面主进程注册表（ssh-instances.json）
 
@@ -91,12 +89,13 @@
 ```jsonc
 {
   "id": "ssh-inst-7",            // 反代 id = ssh-<id>
+  "kind": "ssh",                 // provider kind（缺失/旧条目按注册表默认 kind 归一）
   "label": "home-server",
   "host": "192.0.2.10",        // 文档保留网段占位（RFC 5737）
   "user": "root",
   "sshPort": 2222,               // SSH 守护端口（null = ssh 默认 22 / config Port）
   "remotePort": 30800,           // 远程 dsh web profile 端口（02 §3.9 部署参考）
-  "serviceName": "dsh-chamber",  // 远程 systemd 单元名（exec 目标）
+  "serviceName": "dsh-chamber",  // 远程 systemd 单元名（exec 目标；null = 不托管起停）
   "remoteDshHome": null          // 远端 dsh home（$DSH_HOME），插件同步/seed 的远端路径基准
                                  // （null = ssh 默认 home；白名单见 13 §7.2，2026-08 新增）
 }
@@ -110,14 +109,12 @@
   （idle / connecting / ready / degraded / error）；
   **隧道 URL 永不进 renderer**——renderer 只见 localPort / phase 投影
   （05 §7.4）。
-- **IPC 白名单**（renderer ↔ main，preload 限定）：
-  `desktop_ssh_instances_get/set`、`desktop_ssh_set_password`（主进程内存 +
-  0600 明文文件兜底，
-  05 §8 例外）、`desktop_ssh_config_list`（`~/.ssh/config`
-  自动发现，非秘密投影：alias/hostName/user/port；IdentityFile/ProxyCommand/
-  凭据绝不进 renderer）、`desktop_ssh_connect/disconnect/status/
-  logs/logs_clear`、`desktop_ssh_start_service/stop_service/is_active`
-  （05 §7.4）。
+- **IPC 白名单**（renderer ↔ main，preload 限定）：全集见 05 §7.4（2026-08
+  已扩展插件编排面 `desktop_ssh_plugin_*`、`restart_service`、
+  `seed_host_graph`、`status_changed` 等，不再在此枚举）。要点：
+  `desktop_ssh_set_password`（主进程内存 + 0600 明文文件兜底，05 §8 例外）、
+  `desktop_ssh_config_list`（`~/.ssh/config` 自动发现，非秘密投影：
+  alias/hostName/user/port；IdentityFile/ProxyCommand/凭据绝不进 renderer）。
 - **liveness 纪律**（AGENTS.md 正确性不变量）：隧道 / 服务事实只来自
   "隧道相位 + systemd is-active"的实时判定，从不持久化"已连接"状态。
 - **就绪 = 隧道 TCP + dsh 身份握手**：TCP accept 只证明目标端口上有服务
@@ -155,7 +152,7 @@
 ### 3.1 挂载与路径映射
 
 - 控制面挂载 `/api/i/<id>` 前缀；`id ∈ {local, ssh-<sshInstanceId>}`。
-- **HTTP 全量透传**：任意方法（**无方法白名单**——05 §7.1），保持
+- **HTTP 全量透传**：任意方法（**无方法白名单**——05 §1），保持
   method/body/headers；**WS upgrade** 直通（`events.mux` / `events.host`
   双下行流）；**SSE 直通**（`text/event-stream` 响应不缓冲、不逐条解析、
   不重封装）。
@@ -177,28 +174,25 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 ### 3.2 可达性（v1 无认证边界）
 
 - v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 与管理面 `/api/*` 对获准来源
-  **匿名可达**；控制面在任何 HTTP 路由/副作用前、以及 WS upgrade 转发前
-  校验 Host（必须为 loopback authority）与 Origin（仅回环 origin、`null` 与
-  显式 allowlist），非法来源统一 403 `origin_forbidden`；Host 门禁覆盖浏览器
-  同源 DNS rebinding 读。不能只省略 CORS 响应头：那会阻止读取，却挡不住
-  simple request 副作用；WS 本身也不受浏览器 CORS 响应处理约束。暴露面同时
-  保持 loopback（127.0.0.1）监听（05 §8 / 04 D2）；
-- 静态壳（`/`、dist、`/assets/*`、`/manifest.json`）匿名加载，无敏感面；
+  **匿名可达**。来源门禁（Host 必须为 loopback authority、Origin 仅回环 /
+  `null` + 显式 allowlist、非法来源统一 403 `origin_forbidden`）与暴露面
+  不变量（loopback-only 监听）的完整定义见 **04 D2**（管理面 + 反代面统一
+  适用；05 §8 安全不变量）。反代面要点：Host 门禁覆盖浏览器同源 DNS
+  rebinding 读；静态壳（`/`、dist、`/assets/*`、`/manifest.json`）匿名加载，
+  无敏感面。
 - 不再有认证/审计中间件（`/api/auth/*`、`/api/audit` 随 v1 收敛整体移除）。
 
 ### 3.3 失败语义（fail-loud）
 
-| 情形 | 结果 |
-|---|---|
-| 实例无隧道 / 未就绪（phase != ready） | **503** 明确错误（code `instance_unavailable`）——无隧道绝不像"空成功"（AGENTS.md 代理诚实） |
-| 上游连接拒绝 / 超时 | 502 / 504 显式错误（脱敏，不泄上游 host:port） |
-| 实例 id 未知 | 404 |
+原则：实例传输失败**绝不伪装成空成功**——无隧道/未就绪 → **503**（code
+`instance_unavailable`）；上游连接拒绝/超时 → 502 / 504 显式错误（脱敏，
+不泄上游 host:port）；实例 id 未知 → 404。错误码与响应形状的完整表见
+**04 §4.2**（本文不再枚举）。
 
 ### 3.4 响应收敛与体积上限
 
-- **响应头白名单**（收敛上游头，防 hop-by-hop / 凭据泄露）：
-  `content-type`、`cache-control`、`x-next-cursor`、`x-ratelimit-*`；
-  其余上游头不直通（WS upgrade 101 所需头除外）。
+- **响应头白名单**（收敛上游头，防 hop-by-hop / 凭据泄露）：完整列表见
+  **04 §4.3**（WS upgrade 101 所需头除外）。
 - **体积上限**：请求体 ≤ 50MiB、响应体 ≤ 100MiB（沿用 v2 runtime-proxy
   语义；超限 → 413 / 取消上游流，显式而非截断静默）。
 - 写路径背压（Node 双流适配，`res.write === false → waitForDrain`）；
@@ -211,8 +205,8 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 - `05-connection-manager.md`：架构契约（路径 / PlaneHandle / IPC / 补丁面）
   ——本文是其"连接模型 + 反代"的细化；
 - `04-control-plane-api-data.md`：管理 REST 全表（含 connections CRUD）与
-  反代的 HTTP 形状——**本文 §3 与 04 §4 共享同一反代契约定义**（04 §4
-  给出请求/响应与错误码细节，两处引用同一语义，变更须同步）；
+  反代的 HTTP 形状——**04 §4 是反代错误码与响应头白名单的权威**（03 §3
+  只保留原则并指向之，不再枚举具体码表/头列表）；
 - `02-host-management-deployment.md`：local 实例进程托管（本文只引用其
   状态投影与端口语义）；
 - `05-connection-manager.md` §8：安全不变量（loopback-only、隧道 URL 与
