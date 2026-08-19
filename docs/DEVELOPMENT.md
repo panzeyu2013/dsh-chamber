@@ -1,0 +1,178 @@
+# dsh-chamber 开发文档（Development）
+
+> 面向**开发者**：本文件涵盖架构总览、环境搭建、运行、构建/打包、CI/发布与仓库结构。
+> 用户使用见 [README.md](../README.md)，贡献流程见 [CONTRIBUTING.md](../CONTRIBUTING.md)，
+> 常驻仓库规则见 [AGENTS.md](../AGENTS.md)，设计权威见 [docs/design/01-overview.md](design/01-overview.md)。
+
+> English: [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md)
+
+## 1. 架构总览
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│ Electron 窗口（单 frame，loadURL 控制面 origin）                        │
+│ └─ dsh 官方前端（源码复用）                                             │
+│     ├─ 自研侧边栏插件：dsh 原生侧边栏内多来源会话导航 + chamberBridge     │
+│     ├─ 桥接宿主（entry 级 React）：首屏 = 本地实例纯 dsh shell           │
+│     └─ N-ctx：每实例一个 dsh shell，经 /api/i/<id>/* 同源访问            │
+├───────────────────────────────────────────────────────────────────────┤
+│ 控制面（127.0.0.1:17500）                                               │
+│  ├─ 管理 REST：/health · /api/connections · /api/host/logs              │
+│  ├─ 每实例反代：/api/i/local/* → 本地 dsh（web profile）                 │
+│  │              /api/i/ssh-<id>/* → 隧道 localPort                      │
+│  │              （v1 匿名可达，仅 loopback 监听）                        │
+│  ├─ 本地实例托管（spawn/健康/reaper）                                    │
+│  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）                             │
+├───────────────────────────────────────────────────────────────────────┤
+│ 桌面主进程（desktop）                                                   │
+│  ├─ transport-manager + ssh provider（TransportProvider 接口）          │
+│  │    ssh -N -o ServerAlive… -L 隧道 + systemctl start/stop/is-active    │
+│  ├─ 实例注册表：<userData>/ssh-instances.json                           │
+│  └─ IPC（preload 白名单）：dsh-chamber:info · desktop_ssh_*             │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**一句话**：控制面（连接管理器核心）负责连接管理、每实例同源反代与静态前端服务；渲染层是 dsh 官方前端源码复用自建（单窗口单 frame，多实例以 N-ctx 共存）；桌面壳经 SSH 隧道接入远程实例。
+
+**设计权威**在 `docs/design/`（01 为入口，05 为 v1 表面/架构契约），**包职责明细与约束**在 `AGENTS.md`「Runtime Boundaries」——本文件只做一行级导航，不重复细节。
+
+| 包 | 职责（一行） |
+|---|---|
+| `packages/control-plane` | 连接管理器核心：web profile 宿主托管、管理 REST、每实例反代、静态前端服务 |
+| `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主、N-ctx 编排、启动图清单 |
+| `packages/desktop` | Electron 壳：单 frame、transport-manager + ssh provider（隧道 + systemd）、实例注册表、IPC |
+| `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
+| `packages/dsh-client-connection` | 官方连接客户端仓库内拷贝 + base 路径补丁 |
+| `packages/dsh-client-web` | 官方 web shell 仓库内拷贝 + boot.tsx N-ctx 模块表共享 seam |
+| `packages/dsh-chamber-client-ui-sidebar` | 自研侧边栏插件：多来源会话导航 + chamberBridge（替换官方 ui-sidebar 注册） |
+| `packages/dsh-chamber-client-ui-settings-connections` | 自研连接设置插件（本地实例卡 + 远程主机 CRUD/连接/systemd/日志） |
+| `packages/dsh-chamber-client-ui-settings-bridge` | 自研设置壳插件（shadow 官方 SettingsRoot 注册，服务器下拉 + 固定连接导航项） |
+| `packages/dsh-chamber-client-ui-layout` | 自研 ui-layout 壳 fork（layout store 替换，持久化 sidebarWidth） |
+| `packages/dsh-host-client-graph` | 宿主侧包：经 Typert Remote 只读暴露实例的客户端插件 boot 图 |
+
+## 2. 环境搭建
+
+### 2.1 要求
+
+- Node.js 22+（推荐 LTS；源码为 TypeScript，经 Node 原生类型擦除直接运行，见 `.nvmrc`）
+- pnpm ≥ 11（包管理器；锁文件 `pnpm-lock.yaml`）
+- git
+- macOS（`dist:desktop:mac` 打包 dmg/zip 需要）
+- dsh 宿主安装为可选——只在集成冒烟测试时需要，未安装时自动 SKIP
+
+### 2.2 克隆与安装
+
+```bash
+git clone <REPO-URL>
+cd dsh-chamber
+```
+
+`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次：
+
+```bash
+node scripts/ensure-harness-vendor.mjs
+pnpm install
+```
+
+脚本按以下顺序解析源码树：
+
+1. `DSH_CHAMBER_HARNESS_ROOT` 环境变量——直接使用该检出；
+2. `vendor/harness-checkout`——先前下载的受管快照（`.harness-pin` marker 与固定提交一致时复用）；
+3. 兄弟检出 `<repo>/../deepseek-harness`（零网络本地开发；HEAD 与固定提交不一致时警告）；
+4. 否则从 codeload 按固定提交下载快照（固定于 `harness.commit`，可用 `DSH_CHAMBER_HARNESS_COMMIT` 覆盖）。
+
+根目录 `.npmrc` 是 gitignored 的本地便利配置，可将 Electron 二进制下载指向 npmmirror 镜像；没有它则从官方源下载。打包期的镜像已提交在 `packages/desktop/package.json`（`electronDownload.mirror`）。
+
+### 2.3 封装 dsh 运行时
+
+桌面需要将官方 `@deepseek-ai/dsh` 发布包封装进 `packages/desktop/vendor/dsh`（控制面的默认 dsh workspace，优先于可选的 `ref-dsh` 源码符号链接）：
+
+```bash
+pnpm --filter @dsh-chamber/desktop run bundle:dsh   # 用 DSH_CHAMBER_DSH_VERSION 固定版本
+```
+
+`bundle:dsh` 也会由 `build:desktop` / `dist:desktop:mac` 自动执行——可直接跳到运行或打包步骤。
+
+## 3. 运行
+
+```bash
+pnpm run dev:control-plane   # 仅控制面——http://127.0.0.1:17500（管理 REST + 静态前端）
+pnpm run dev:desktop         # 完整窗口：控制面 + dsh 前端 + 桌面壳
+```
+
+## 4. 构建与打包
+
+```bash
+pnpm run build:renderer      # 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码）
+pnpm run build:desktop       # host-graph → renderer → 控制面 → preload → bundle:dsh
+pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
+pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分）
+```
+
+打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。产物**未签名**——未配置 Apple 签名/公证或 Windows 代码签名证书。
+
+> Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
+
+## 5. CI 与发布
+
+- `.github/workflows/ci.yml`：每次 push/PR 运行——验证链（frozen install → typecheck → i18n → 控制面单测 → smoke → renderer 构建）+ 各平台桌面打包 sanity（macOS `dist:desktop:mac` + 真实 smoke；Windows `dist:desktop:win`，`windows-2022`）。
+- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖全部 6 个 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。
+- 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
+
+## 6. 仓库结构
+
+```
+packages/
+  control-plane/            控制面：宿主托管、管理 REST、
+                            每实例反代、静态前端服务
+  renderer/                 自建 dsh 前端（源码复用 + 桥接宿主 + N-ctx）
+  desktop/                  Electron 壳：单 frame、transport-manager + ssh provider、实例注册表、IPC
+  cli/                      CLI 薄壳
+  dsh-client-connection/    被修改的 dsh 源码 #1（base 路径补丁）
+  dsh-client-web/           被修改的 dsh 源码 #2（boot.tsx N-ctx seam）
+  dsh-chamber-client-ui-sidebar/    自研侧边栏插件：多来源会话导航 + chamberBridge
+  dsh-chamber-client-ui-layout/     自研 ui-layout 壳 fork（持久化 sidebarWidth）
+  dsh-chamber-client-ui-settings-connections/
+                            自研连接设置插件
+  dsh-chamber-client-ui-settings-bridge/
+                            自研设置壳插件
+  dsh-host-client-graph/    自研宿主侧 host 包（只读暴露客户端插件 boot 图）
+docs/
+  design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
+  todo/                     未实现功能想法（每条一个文件，见 todo/README.md）
+  progress/                 STATUS.md——唯一进度总览
+  *.en-US.md                各根文档的英文镜像
+vendor/
+  harness-packages/         @deepseek-ai/* 符号链接树，指向 dsh 源码
+                            （preinstall 引导，固定于 harness.commit）
+  harness-checkout/         受管 dsh 快照（下载兜底，gitignored）
+```
+
+## 7. 脚本
+
+| 脚本 | 说明 |
+|---|---|
+| `pnpm run dev:control-plane` | 启动控制面（管理 REST + 静态前端），端口 17500 |
+| `pnpm run dev:desktop` | Electron 壳：完整窗口（控制面 + dsh 前端 + 桌面壳） |
+| `pnpm run build:renderer` | 构建 dsh 前端 bundle |
+| `pnpm run build:host-graph` | 构建 host-graph 包（esbuild） |
+| `pnpm run build:desktop` | host-graph + renderer + 控制面编译 + preload + dsh 封装 |
+| `pnpm run dist:desktop:mac` | 打包 macOS 应用（dmg + zip） |
+| `pnpm run dist:desktop:win` | 打包 Windows 应用（nsis + zip；须在 Windows 上运行） |
+| `pnpm run cli -- <args>` | 仓库内 CLI 薄壳（serve/status/connections/host logs） |
+| `pnpm run verify:i18n` | EN ↔ 中文对漂移时报错（同步后用 `-- --write` 重新记录） |
+| `pnpm run gen:notices` | 按已安装依赖树重新生成 THIRD_PARTY_NOTICES.md（根中文 + docs/ 英文镜像） |
+
+测试命令见 [CONTRIBUTING.md](../CONTRIBUTING.md)「测试」与「提交前验证」。
+
+## 8. 文档导航
+
+| 文档 | 用途 |
+|---|---|
+| [README.md](../README.md) | 用户使用（功能/安装/部署/FAQ） |
+| 本文件 `docs/DEVELOPMENT.md` | 开发：架构/构建/打包/CI/发布 |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | 贡献流程（测试/Commit/PR 契约） |
+| [AGENTS.md](../AGENTS.md) | 常驻仓库规则（包边界/约束/验证清单） |
+| [CHANGELOG.md](../CHANGELOG.md) | 版本变更记录 |
+| [docs/design/01-overview.md](design/01-overview.md) | 设计入口与收拢原则 |
+| [docs/progress/STATUS.md](progress/STATUS.md) | 进度总览（唯一进度记录） |

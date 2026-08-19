@@ -1,65 +1,22 @@
 # Contributing to dsh-chamber
 
-Thank you for contributing! dsh-chamber is the local desktop **connection manager** for dsh: the local dsh instance (web profile) is hosted by the control plane, remote instances attach over SSH tunnels, and the UI is the dsh official frontend, source-reused and self-built. This guide covers setup, development, validation, and what a good pull request looks like.
+Thank you for contributing! dsh-chamber is the local desktop **connection manager** for dsh: the local dsh instance (web profile) is hosted by the control plane, remote instances attach over SSH tunnels, and the UI is the dsh official frontend, source-reused and self-built. This guide covers the contribution process, validation, and what a good pull request looks like.
 
 > 中文版: [CONTRIBUTING.md](../CONTRIBUTING.md)
 
-## Getting Started
+## Development Environment
+
+Environment setup (requirements, clone, vendor bootstrap, `pnpm install`, `bundle:dsh`), running, build/packaging, CI/releases, and repository layout live in the **development docs [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md)**. Quick start:
 
 ```bash
 git clone <REPO-URL>
 cd dsh-chamber
+node scripts/ensure-harness-vendor.mjs   # must run before pnpm install
 pnpm install
+pnpm run dev:desktop                     # full window (control plane + dsh frontend + desktop shell)
 ```
 
-Requirements: Node.js 22+ (LTS recommended, see `.nvmrc`). The repository uses pnpm workspaces; `vendor/harness-packages` is a read-only symlink into the external dsh source checkout (see the README install notes).
-
-## Repository Structure
-
-```
-packages/
-  control-plane/    Control-plane core (web-profile host hosting,
-                    management REST, per-instance reverse proxy, frontend serving)
-  renderer/         Self-built dsh frontend (source reuse: pure-dsh first
-                    screen bridge host + N-ctx orchestration, boot manifest)
-  dsh-chamber-client-ui-sidebar/  Self-built sidebar plugin (multi-source session
-                    navigation + chamberBridge; replaces the official
-                    ui-sidebar registration)
-  dsh-chamber-client-ui-layout/   Self-built ui-layout shell fork (layout-store
-                    replacement persisting sidebarWidth via the sidebar's shared
-                    view-prefs store; replaces the official ui-layout registration)
-  dsh-chamber-client-ui-settings-connections/
-                    Self-built connections settings plugin (local instance card
-                    + remote host CRUD/connect/systemd/logs, settings.section)
-  dsh-chamber-client-ui-settings-bridge/
-                    Self-built settings shell plugin (shadows the official
-                    SettingsRoot registration; server dropdown over the selected
-                    instance's official settings sections)
-  desktop/          Electron shell (single frame, transport-manager + ssh provider, instance registry, IPC)
-  cli/              CLI thin shell
-docs/
-  design/           Design documents (01-overview.md is the entry point;
-                    05-connection-manager.md is the surface/architecture contract)
-  progress/         Module status (STATUS.md is the overview)
-```
-
-## Development Scripts
-
-Run from the repository root unless a section says otherwise.
-
-| Script | Description |
-|---|---|
-| `pnpm run dev:control-plane` | Start the control plane (management REST + static frontend) on port 17500 |
-| `pnpm run dev:desktop` | Electron shell: full window (control plane + dsh frontend + desktop shell) |
-| `pnpm run build:renderer` | Build the dsh-frontend bundle |
-| `pnpm run build:desktop` | renderer build + control-plane compile + dsh runtime bundling |
-| `pnpm run dist:desktop:mac` | Package the macOS app (dmg + zip) |
-| `pnpm run cli -- --help` | CLI thin shell |
-| `pnpm run smoke` | Control-plane integration smoke |
-| `pnpm run typecheck` | Strict `tsc --noEmit` (0 errors) |
-| `pnpm run verify:i18n` | Fail when an EN ↔ ZH pair drifts (re-record with `-- --write`) |
-
-### Testing
+## Testing
 
 Unit tests run directly with node (the project currently has no test framework):
 
@@ -82,13 +39,6 @@ pnpm run test:settings-bridge  # settings shell policy unit tests
 ```
 
 `pnpm run smoke` prints SKIP and exits 0 when dsh is not installed; this is expected, not a failure.
-
-### Desktop Shell
-
-```bash
-pnpm --prefix packages/desktop run bundle:dsh   # install the official @deepseek-ai/dsh release into vendor/dsh
-pnpm run dev:desktop
-```
 
 ## Before Submitting
 
@@ -156,7 +106,7 @@ Pull requests are review handoffs, not just diffs. A reviewer must be able to un
 
 Before opening a pull request:
 
-1. Read [`AGENTS.md`](./AGENTS.md) and the relevant design/progress documents (`docs/design/01-overview.md` is the entry point).
+1. Read [`AGENTS.md`](../AGENTS.md) and the relevant design/progress documents (`docs/design/01-overview.md` is the entry point).
 2. Keep the change focused. Separate unrelated cleanup or refactors.
 3. Run the validation required by the change, not only the broad commands above.
 4. Complete the pull request template with concrete, current evidence for the final PR HEAD.
@@ -185,4 +135,4 @@ You can still help:
 
 ## Questions?
 
-Open an [issue](https://github.com/<YOUR-ORG>/dsh-chamber/issues) or read the design docs in [`docs/design/`](docs/design/).
+Open an [issue](https://github.com/<YOUR-ORG>/dsh-chamber/issues) or read the design docs in [`docs/design/`](design/).

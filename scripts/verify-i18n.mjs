@@ -17,6 +17,7 @@ const PAIRS = [
   // (secondary). AGENTS.md is English-only (user decision, 2026-08) and has
   // no bilingual pair. Positional order stays EN first, ZH second.
   ['docs/README.en-US.md', 'README.md'],
+  ['docs/DEVELOPMENT.en-US.md', 'docs/DEVELOPMENT.md'],
   ['docs/CONTRIBUTING.en-US.md', 'CONTRIBUTING.md'],
   ['docs/CHANGELOG.en-US.md', 'CHANGELOG.md'],
 ]

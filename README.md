@@ -11,169 +11,42 @@
 
 *用户主界面——单窗口，dsh 原生侧边栏平等列出各来源（本地 + 远程实例）的 session/workspace，主区为活动实例的纯 dsh shell。*
 
-dsh-chamber 托管本地 dsh 实例（web profile），并经 SSH 隧道接入远程服务器上的 dsh 实例。界面 = **dsh 官方前端源码复用自建**——单窗口单 frame，多实例以 N-ctx shell 共存，**各来源的 session/workspace 在 dsh 原生侧边栏内统一导航**（首屏 = 本地实例的完整 dsh shell，纯 dsh UI）。控制面负责连接管理、每实例同源反代与静态前端服务（**v1 无认证/审计面**）。
-
 > [!WARNING]
 > **开发者预览（v0.1）**——协议与 API 正在快速迭代，将存在破坏性变更。
 
-> English: [docs/README.en-US.md](docs/README.en-US.md) · 设计文档入口 [docs/design/01-overview.md](docs/design/01-overview.md) · 表面/架构契约 [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) · 模块进度 [docs/progress/STATUS.md](docs/progress/STATUS.md)
-
-## dsh-chamber 是什么？
-
-dsh harness 的设计哲学是**一切皆插件**：模型适配器、工具注册表、会话日志、agent loop、官方 Web UI 本身都是宿主插件；goals、jobs、terminals、schedule、settings、pluginInventory 等均为宿主原生能力——承载这一切的官方前端也不例外。
-
-因此 dsh-chamber **不做**这些领域的第二套实现，也**不写**第二套界面。它只承担宿主插件**结构性做不到**的五件事：
-
-| # | 核心职责 | 为什么插件做不到 |
-|---|---|---|
-| 1 | **本地宿主托管**：web profile spawn/就绪/reaper/健康/日志 | "管理 dsh 自己"是鸡生蛋问题：插件随宿主进程一起死 |
-| 2 | **前端宿主与每实例反代** | dsh 前端要求同源 `/api` + WS（`location.origin` 硬编码）；跨实例同源访问只能由宿主服务端提供（v1 无认证边界——实例匿名可达，仅 loopback 监听） |
-| 3 | **远程实例接入**：SSH 隧道 + systemd 起停 | 跨服务器的连接编排只能存在于服务器之外 |
-| 4 | **管理 REST**：连接 CRUD、健康、日志 | 管理器自己的面 |
-| 5 | **多来源会话统一导航** — 一个 dsh 原生侧边栏平等列出各来源的 session/workspace | 官方 dsh 侧边栏只认识本连接；"本地+远程同等公民"的导航层必须由 chamber 侧提供（自研侧边栏插件 + 桥接层） |
-
-**会话业务完全由 dsh 前端 runtime 承担**（每个实例一个完整 dsh shell，N-ctx 共存）：控制面不消费任何宿主帧、不建会话索引、不参与聊天/审批。
-
-## 特性
-
-- **dsh 官方前端源码复用自建** — 单窗口、单 frame、单 origin；唯一允许的 dsh 源码修改是六个 chamber 包：仓库内拷贝 `packages/dsh-client-connection`（连接客户端 base 路径补丁）与 `packages/dsh-client-web`（boot.tsx N-ctx 模块表共享 seam + `runtimeCtx` getter），以及自研的 `packages/dsh-chamber-client-ui-sidebar`（替换官方 ui-sidebar 注册，见 05 §6）、`packages/dsh-chamber-client-ui-settings-connections` 与 `packages/dsh-chamber-client-ui-settings-bridge`（连接设置页及其设置壳，见 05 §5）、`packages/dsh-chamber-client-ui-layout`（官方 ui-layout 壳插件的 chamber fork：仅替换 layout store——把 `sidebarWidth` 持久化进侧边栏共享 view-prefs store；替换官方 ui-layout 注册，见设计 06）
-- **N-ctx 多实例** — 多个 dsh shell 共存于一个窗口（每实例一个 AppWebEntry，独立 cordis ctx、全量 ui-* 树）；chamber 侧栏切换活动 ctx
-- **侧边栏多来源导航** — 各来源（本地 + 远程实例）的 session/workspace 在 dsh 原生侧边栏内平等呈现，仅按来源分组（远程来源以颜色徽标标注）；首屏 = 本地实例的完整 dsh shell（纯 dsh UI，无 chamber 外壳）
-- **chamber 桥接宿主** — v1 为 entry 级 React：首屏 = 本地实例的完整 dsh shell（纯 dsh UI，无 chamber 外壳）；App 宿主负责本地实例 auto-start、注册表远程实例 auto-connect、chamberBridge 投影发布与会话打开分发；多来源导航本身由自研侧边栏插件渲染；原 `chamber-auth` 登录插件随 v1 认证/审计移除
-- **本地宿主托管** — web profile spawn、就绪、reaper、健康状态机、宿主日志
-- **每实例同源反代** — `/api/i/<id>/*` HTTP/WS/SSE 透传（本地与隧道实例），匿名可达（仅 loopback；无隧道 → 明确 503）
-- **远程实例** — 桌面传输运行时（`transport-manager` + `ssh` provider，`TransportProvider` 接口可扩展未来来源）：SSH 隧道（`ssh -N -o ServerAlive… -L`）+ 远端 systemd `start`/`stop`/`is-active`（serviceName 白名单校验）；可选的主机密码认证（设计 05 §8）：`desktop_ssh_set_password` + 临时 askpass 助手注入（见「安全」）
-- **管理 REST** — `/health`、`/api/connections`、`/api/host/logs`，另有 `__DSH_BOOT__` 启动图清单的静态前端服务
-- **桌面端更新提示（设计 11）** — 内置更新检查（静默，启动延迟 + 6h 周期），设置页「更新」部分展示新版本并**用户确认后下载、退出时安装**（无弹窗低打扰）；自动更新仅替换应用本体，`userData`（注册表/状态/密码存储）天然保留；macOS 自动安装依赖 Developer ID 签名（未配置时响亮提示手动安装）
-- **睡眠/后台常驻（设计 14）** — 关窗行为可设（隐藏到托盘继续运行 / 退出，退出前对活动隧道与本地实例确认）；登录自启（mac/linux）；OS 唤醒即时重连（SSE 心跳不等 watchdog）；保持唤醒开关；设置持久化于主进程 `chamber-settings.json`
-- **Chamber 设置页（设计 15，v1 平铺）** — 设置壳固定入口：连接 / 通用 / 更新（chamber 全局设置与实例配置平面严格分离）
-
-## 架构
-
-```
-┌───────────────────────────────────────────────────────────────────────┐
-│ Electron 窗口（单 frame，loadURL 控制面 origin）                        │
-│ └─ dsh 官方前端（源码复用）                                             │
-│     ├─ 自研侧边栏插件：dsh 原生侧边栏内多来源会话导航 + chamberBridge     │
-│     ├─ 桥接宿主（entry 级 React）：首屏 = 本地实例纯 dsh shell           │
-│     └─ N-ctx：每实例一个 dsh shell，经 /api/i/<id>/* 同源访问            │
-├───────────────────────────────────────────────────────────────────────┤
-│ 控制面（127.0.0.1:17500）                                               │
-│  ├─ 管理 REST：/health · /api/connections · /api/host/logs              │
-│  ├─ 每实例反代：/api/i/local/* → 本地 dsh（web profile）                 │
-│  │              /api/i/ssh-<id>/* → 隧道 localPort                      │
-│  │              （v1 匿名可达，仅 loopback 监听）                        │
-│  ├─ 本地实例托管（spawn/健康/reaper）                                    │
-│  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）                             │
-├───────────────────────────────────────────────────────────────────────┤
-│ 桌面主进程（desktop）                                                   │
-│  ├─ transport-manager + ssh provider（TransportProvider 接口）          │
-│  │    ssh -N -o ServerAlive… -L 隧道 + systemctl start/stop/is-active    │
-│  ├─ 实例注册表：<userData>/ssh-instances.json                           │
-│  └─ IPC（preload 白名单）：dsh-chamber:info · desktop_ssh_*             │
-└───────────────────────────────────────────────────────────────────────┘
-```
-
-| 包 | 职责 |
-|---|---|
-| `packages/control-plane` | 连接管理器核心：web profile 宿主托管、管理 REST、每实例反代、静态前端服务 |
-| `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主（auto-start/auto-connect、chamberBridge）、N-ctx 编排、启动图清单 |
-| `packages/desktop` | Electron 壳：单 frame、transport-manager + `ssh` transport provider（隧道 + systemd exec）、实例注册表、IPC |
-| `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
-| `packages/dsh-client-connection` | 拷贝的 dsh 源码：连接客户端 + base 路径补丁 |
-| `packages/dsh-client-web` | 拷贝的 dsh 源码：web shell + boot.tsx N-ctx 共享 seam |
-| `packages/dsh-chamber-client-ui-sidebar` | 自研（拷贝 ui-sidebar 结构改造）：chamber 侧边栏插件，替换官方 ui-sidebar 注册（见 05 §6） |
-| `packages/dsh-chamber-client-ui-settings-connections` | 自研：连接设置插件（本地实例卡 + 远程主机 CRUD/连接/systemd/日志，settings.section、dsh 设计 token，见 05 §5） |
-| `packages/dsh-chamber-client-ui-settings-bridge` | 自研：设置壳插件，以 priority −1 shadow 官方 SettingsRoot 注册（sidebar.settings）——所选实例官方设置分区上的服务器下拉 + 固定的 chamber 全局连接导航项（见 05 §5） |
-| `packages/dsh-chamber-client-ui-layout` | 自研（官方 ui-layout 壳插件的 chamber fork）：仅替换 layout store——`sidebarWidth` 经侧边栏共享 view-prefs store 播种/回写（钳位 [264,420]），替换官方 ui-layout 注册（见设计 06） |
-| `packages/dsh-host-client-graph` | 自研宿主侧包（非客户端插件）：Remote `clientGraph/graph` 只读暴露宿主组合的客户端插件 boot 图（设计 09）；控制面经 `--patch` seed 进本地 web profile |
+> English: [docs/README.en-US.md](docs/README.en-US.md) · 开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · 设计入口 [docs/design/01-overview.md](docs/design/01-overview.md) · 进度 [docs/progress/STATUS.md](docs/progress/STATUS.md)
 
 ## 快速开始
 
-### 环境要求
+### 1 · 下载安装
 
-- Node.js 22+（推荐 LTS；源码为 TypeScript，经 Node 原生类型擦除直接运行，见 `.nvmrc`）
-- pnpm ≥ 11（包管理器；锁文件 `pnpm-lock.yaml`）
-- git
-- macOS（`dist:desktop:mac` 打包 dmg/zip 需要）
-- dsh 宿主安装为可选——只在集成冒烟测试时需要，未安装时自动 SKIP
+从 [GitHub Releases](https://github.com/panzeyu2013/dsh-chamber/releases) 下载对应平台的安装包：
 
-### 1 · 克隆
+- **macOS**：`dsh-chamber-<version>-<arch>.dmg`
+- **Windows**：NSIS 安装器（`.exe`）——安装慢/卡"正在安装"的排障见「常见问题」
 
-```bash
-git clone <REPO-URL>
-cd dsh-chamber
-```
+### 2 · 打开应用
 
-### 2 · dsh 源码树（preinstall 自动引导）
+启动后**本地 dsh 实例自动托管**（web profile 自动启动/守护/健康检查），首屏即本地实例的完整 dsh 界面。
 
-`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立：`pnpm-workspace.yaml` 经它解析未修改的 dsh 包。`scripts/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次（pnpm 在 `preinstall` 之前就捕获工作区快照，仅靠 preinstall 不够）：
+### 3 · 添加远程主机
 
-```bash
-node scripts/ensure-harness-vendor.mjs
-pnpm install
-```
+「设置 → 连接」添加远程主机：label / host / user / SSH 端口 / dsh 端口（默认 `30800`）/ 服务名（默认 `dsh`）。其余由应用接管：自动建立 SSH 隧道 + 管理远端 systemd 服务（启动/停止/状态）。远程服务器端部署见「服务器端部署」。
 
-脚本按以下顺序解析源码树：
+### 4 · 从源码运行？
 
-1. `DSH_CHAMBER_HARNESS_ROOT` 环境变量——直接使用该检出；
-2. `vendor/harness-checkout`——本脚本先前下载的受管快照（其 `.harness-pin` marker 与固定提交一致时复用）；
-3. 兄弟检出 `<repo>/../deepseek-harness`（零网络本地开发；HEAD 与固定提交不一致时警告）；
-4. 否则从 codeload 按固定提交下载快照（固定于 `harness.commit`，可用 `DSH_CHAMBER_HARNESS_COMMIT` 覆盖）。
+见开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
-被排除的两个包（`dsh-client-connection`、`dsh-client-web`）是仓库内的拷贝包——它们位于 `packages/`，遮蔽 workspace 条目；其余四个被修改的源码均为自研：`packages/dsh-chamber-client-ui-sidebar`（见 05 §6）、`packages/dsh-chamber-client-ui-settings-connections` 与 `packages/dsh-chamber-client-ui-settings-bridge`（见 05 §5），以及 `packages/dsh-chamber-client-ui-layout`（ui-layout 壳 fork——`sidebarWidth` 经侧边栏共享 view-prefs store 持久化，见设计 06）。
+## 功能特性
 
-### 3 · 安装
-
-```bash
-pnpm install
-```
-
-根目录 `.npmrc` 是 gitignored 的本地便利配置，可将 Electron 二进制下载指向 npmmirror 镜像；没有它则从官方源下载。打包期的镜像已在 `packages/desktop/package.json`（`electronDownload.mirror`）提交。
-
-### 4 · 封装 dsh 运行时
-
-桌面需要将官方 `@deepseek-ai/dsh` 发布包封装进 `packages/desktop/vendor/dsh`（控制面的默认 dsh workspace，优先于可选的 `ref-dsh` 源码符号链接）：
-
-```bash
-pnpm --filter @dsh-chamber/desktop run bundle:dsh   # 用 DSH_CHAMBER_DSH_VERSION 固定版本
-```
-
-`bundle:dsh` 也会由 `build:desktop` / `dist:desktop:mac` 自动执行——可直接跳到运行或打包步骤。
-
-### 5 · 运行
-
-```bash
-pnpm run dev:control-plane   # 仅控制面——http://127.0.0.1:17500（管理 REST + 静态前端）
-pnpm run dev:desktop         # 完整窗口：控制面 + dsh 前端 + 桌面壳
-```
-
-### 6 · 打包应用
-
-```bash
-pnpm run dist:desktop:mac    # build:renderer → build:control-plane → build:preload → bundle:dsh → electron-builder
-pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——dsh 运行时封装按平台区分
-```
-
-打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）：macOS 产出 `dsh-chamber-<version>-<arch>.dmg`；Windows 产出 NSIS 安装器（`.exe`）。产物**未签名**——未配置 Apple 签名/公证或 Windows 代码签名证书。
-
-> **Windows 安装卡在“正在安装”界面/进度条来回反复的排障**
->
-> 安装器内置的 dsh 运行时文件数较多，Windows Defender 实时防护会对每个新建文件
-> 扫描，把解压拖到几十分钟；文件被锁时安装器还会进入“解压→拷贝失败→整体重解压”
-> 的重试循环（进度条走满→清零→重走、任务管理器持续写盘），看起来就像永远卡死。
-> 打包侧已做修复（zip 单趟直解 + hoisted 扁平布局 + 运行时裁剪，见
-> `docs/progress/STATUS.md`）。若仍遇到卡住：
->
-> 1. 安装前**关闭旧版 dsh-chamber**；若此前有过失败/中断的安装，先在“设置 → 应用 → 已安装的应用”里卸载残留版本（残留的旧卸载器会让新安装器卡在“等待旧版本卸载”的重试循环里）。
-> 2. 安装期间为安装器与安装目录（默认 `%LOCALAPPDATA%\Programs\dsh-chamber`）临时添加 **Windows 安全中心 → 病毒和威胁防护 → 排除项**（或临时关闭实时防护，装完恢复）——这是“卡死”最快的解药。
-> 3. 安装完成后可移除排除项。
-
-### 7 · CI 与发布
-
-- `.github/workflows/ci.yml`：每次 push/PR 运行——验证链（frozen install → typecheck → i18n → 控制面单测 → smoke → renderer 构建）+ 各平台桌面打包 sanity（macOS `dist:desktop:mac` + 真实 smoke；Windows `dist:desktop:win`，`windows-2022`）。
-- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon——最后一个公开 Intel x64 runner `macos-13` 已被 GitHub 退役，见 `docs/progress/STATUS.md`）、在 `windows-2022` 上构建 Windows x64，产物上传进 draft 后翻转公开发布。
-- 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树（见第 2 节）。
+- **本地 dsh 一键托管** — 打开即用：本地实例自动启动、就绪检测、守护/回收、健康状态与宿主日志；首屏就是本地实例的完整 dsh 界面
+- **远程实例 SSH 接入** — 连接设置页添加主机后，自动建立 SSH 隧道并管理远端 systemd 服务；支持可选的主机密码认证（安全存储，见「安全」）
+- **统一侧边栏多来源导航** — 本地 + 远程各实例的 session/workspace 在同一个 dsh 原生侧边栏内平等列出、按来源分组（远程来源带颜色徽标）；单击打开会话、双击重命名
+- **多实例并行（N-ctx）** — 一个窗口内多个 dsh shell 共存，随时切换活动实例
+- **桌面端更新** — 静默检查新版本，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
+- **睡眠/后台常驻** — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（mac/linux）；OS 唤醒即时重连；保持唤醒开关
+- **Chamber 设置页** — 设置壳固定入口：连接 / 通用 / 更新；chamber 全局设置与各实例配置严格分离
+- **安全与隐私** — 控制面仅监听 loopback（127.0.0.1）；SSH 密码 0600 权限存储、经临时 askpass 助手注入，永不进日志/注册表/界面
 
 ## 服务器端部署
 
@@ -304,20 +177,6 @@ pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——d
 
 4. **从 chamber 桌面接入** — 在连接设置页添加远程主机（label / host / user / SSH 端口 / dsh 端口（默认 30800）/ 服务名 `dsh`）。其余由桌面接管：`ssh -N -L` 隧道 + `systemctl start|stop|is-active dsh`（服务名白名单 `^[a-zA-Z0-9_.-]+$`）。单元形态遵循设计 02 §3.9，实例契约见 03 §2.2。
 
-## 脚本
-
-| 脚本 | 说明 |
-|---|---|
-| `pnpm run typecheck` | strict `tsc --noEmit`（预期 0 错误） |
-| `pnpm run smoke` | 集成冒烟——dsh 未安装时自动 SKIP（正常） |
-| `pnpm run build:renderer` | 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码） |
-| `pnpm run build:desktop` | renderer + 控制面编译 + dsh 封装 |
-| `pnpm run dist:desktop:mac` | 打包 macOS 应用（dmg + zip） |
-| `pnpm run dist:desktop:win` | 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分） |
-| `pnpm run verify:i18n` | EN ↔ 中文对漂移时报错；同步后用 `-- --write` 重新记录 |
-| `pnpm run gen:notices` | 按已安装依赖树重新生成 THIRD_PARTY_NOTICES.md |
-| `pnpm run cli -- <args>` | 仓库内 CLI 薄壳（serve/status/connections/host logs） |
-
 ## 安全
 
 - **v1 无认证边界** — 控制面仅监听 loopback（127.0.0.1）；全部 `/api/*` 路由与每实例反代匿名可达，CORS 仅限回环 origin + 显式 allowlist
@@ -329,59 +188,31 @@ pnpm run dist:desktop:win    # 同一条链，但须在 Windows 上运行——d
 - **`pnpm run smoke` 为什么打印 SKIP？** — 冒烟测试需要 dsh 安装；找不到时打印 SKIP 并以 0 退出。这属正常，不是失败。
 - **远程实例需要什么？** — 一个 API 面 profile 的 dsh 实例 + SSH 访问。远程服务器无需安装 web 前端：UI 来自本地复用的前端，经 `/api/i/ssh-<id>/*` 隧道访问。
 - **agent preset / profile 在各实例间怎么工作？** — 按实例权威。每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只存在于该实例一侧（本地 = 本机，远程 = 远端服务器）。所有读写都经 `/api/i/<id>/*` 反代落到该实例自己的 API——新会话界面的 preset 选择器列出的是该 session 所属实例的 roster，选择也写回该实例。不存在跨来源的 profile 匹配/融合；编辑远程预设 = 切到该来源的 shell，在其 设置 → Agent presets 页操作。
-- **前端从哪来？** — dsh 官方前端源码复用自建；dsh 源码改动仅限六个 chamber 包（connection base 路径补丁、web N-ctx seam，以及自研侧边栏/连接设置/设置壳/ui-layout 壳插件），每个实例保持原生 UI。
+- **前端从哪来？** — dsh 官方前端源码复用自建；每个实例保持原生 UI。
 
-## 仓库结构
-
-```
-packages/
-  control-plane/            控制面：宿主托管、管理 REST、
-                            每实例反代、静态前端服务
-  renderer/                 自建 dsh 前端（源码复用 + 桥接宿主 + N-ctx）
-  desktop/                  Electron 壳：单 frame、transport-manager + ssh provider、实例注册表、IPC
-  cli/                      CLI 薄壳
-  dsh-client-connection/    被修改的 dsh 源码 #1（base 路径补丁）
-  dsh-client-web/           被修改的 dsh 源码 #2（boot.tsx N-ctx seam）
-  dsh-chamber-client-ui-sidebar/    自研侧边栏插件：多来源会话导航 + chamberBridge
-                            （拷贝 ui-sidebar 结构改造，替换官方 ui-sidebar
-                            注册——05 §6）
-  dsh-chamber-client-ui-layout/     自研 ui-layout 壳 fork：仅替换 layout store——
-                            经侧边栏共享 view-prefs store 持久化 sidebarWidth
-                            （替换官方 ui-layout 注册——设计 06）
-  dsh-chamber-client-ui-settings-connections/
-                            自研连接设置插件（05 §5）
-  dsh-chamber-client-ui-settings-bridge/
-                            自研设置壳插件：shadow 官方 SettingsRoot 注册，
-                            所选实例官方设置分区上的服务器下拉（05 §5）
-  dsh-host-client-graph/    自研宿主侧 host 包：Remote clientGraph/graph
-                            只读暴露宿主客户端插件 boot 图（设计 09，非
-                            客户端插件；控制面 seed 进本地 web profile）
-docs/
-  design/                   设计文档（01 为入口；05 为表面/架构契约（v1）；
-                             v2 时代薄壳文档（旧 05/10）随 v4 收口移除）
-  todo/                     未实现功能想法（每条一个文件，见 todo/README.md）
-  progress/                 STATUS.md——唯一进度总览
-vendor/
-  harness-packages/         @deepseek-ai/* 符号链接树，指向 dsh 源码
-                            （preinstall 引导，固定于 harness.commit）
-  harness-checkout/         受管 dsh 快照（下载兜底，gitignored）
-```
+> **Windows 安装卡在"正在安装"界面/进度条来回反复的排障**
+>
+> 安装器内置的 dsh 运行时文件数较多，Windows Defender 实时防护会对每个新建文件
+> 扫描，把解压拖到几十分钟；文件被锁时安装器还会进入"解压→拷贝失败→整体重解压"
+> 的重试循环（进度条走满→清零→重走、任务管理器持续写盘），看起来就像永远卡死。
+> 打包侧已做修复（zip 单趟直解 + hoisted 扁平布局 + 运行时裁剪）。若仍遇到卡住：
+>
+> 1. 安装前**关闭旧版 dsh-chamber**；若此前有过失败/中断的安装，先在"设置 → 应用 → 已安装的应用"里卸载残留版本（残留的旧卸载器会让新安装器卡在"等待旧版本卸载"的重试循环里）。
+> 2. 安装期间为安装器与安装目录（默认 `%LOCALAPPDATA%\Programs\dsh-chamber`）临时添加 **Windows 安全中心 → 病毒和威胁防护 → 排除项**（或临时关闭实时防护，装完恢复）——这是"卡死"最快的解药。
+> 3. 安装完成后可移除排除项。
 
 ## 文档
 
 | 文档 | 用途 |
 |---|---|
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发文档：架构总览/环境搭建/构建打包/CI 发布/仓库结构 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南（测试/Commit/PR 契约） |
+| [AGENTS.md](AGENTS.md) | 开发约束（常驻仓库规则） |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 | [docs/design/01-overview.md](docs/design/01-overview.md) | 设计入口：收拢原则、范围、移除映射 |
-| [docs/design/02-host-management-deployment.md](docs/design/02-host-management-deployment.md) | 宿主托管与部署（web profile） |
-| [docs/design/03-connections-proxy.md](docs/design/03-connections-proxy.md) | 连接与每实例反代 |
-| [docs/design/04-control-plane-api-data.md](docs/design/04-control-plane-api-data.md) | 管理 API 与数据模型 |
-| [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) | 表面与架构契约（v1） |
-| [docs/design/06-sidebar-enhancements.md](docs/design/06-sidebar-enhancements.md) | 侧边栏增强（搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道） |
-| [docs/design/07-models-params.md](docs/design/07-models-params.md) | 模型额外参数与默认推理等级（推迟项，等待上游） |
-| [docs/design/09-client-plugin-runtime-loading.md](docs/design/09-client-plugin-runtime-loading.md) | dsh 客户端插件运行时加载（已实现，2026-08 方案 A；自 docs/todo/ 移入） |
-| [docs/todo/08-todo-git-worktree-plugin.md](docs/todo/08-todo-git-worktree-plugin.md) | Git worktree 插件（设计定稿，实现未排期；已移至 docs/todo/） |
+| [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) | 表面/架构契约（v1） |
 | [docs/progress/STATUS.md](docs/progress/STATUS.md) | 完成状态、剩余偏差与验证记录 |
-| [README.en-US.md](docs/README.en-US.md) | English README |
+| [docs/README.en-US.md](docs/README.en-US.md) | English README |
 
 ## 相关项目
 
@@ -390,7 +221,7 @@ vendor/
 
 ## 贡献
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。开发约束见 [AGENTS.md](AGENTS.md)。
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。开发约束见 [AGENTS.md](AGENTS.md)，开发环境与构建见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
 
 ## License
 

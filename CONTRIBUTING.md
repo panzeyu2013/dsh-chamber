@@ -1,63 +1,22 @@
 # 参与 dsh-chamber 贡献
 
-感谢你参与贡献！dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web profile）由控制面托管，远程实例经 SSH 隧道接入，界面 = dsh 官方前端源码复用自建。本指南涵盖环境搭建、开发、验证，以及一份合格的 PR 长什么样。
+感谢你参与贡献！dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web profile）由控制面托管，远程实例经 SSH 隧道接入，界面 = dsh 官方前端源码复用自建。本指南涵盖贡献流程、验证与一份合格的 PR 长什么样。
 
 > English: [docs/CONTRIBUTING.en-US.md](docs/CONTRIBUTING.en-US.md)
 
-## 环境搭建
+## 开发环境
+
+环境搭建（要求、clone、vendor 引导、`pnpm install`、`bundle:dsh`）、运行、构建/打包、CI/发布与仓库结构见**开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**。快速入场：
 
 ```bash
 git clone <REPO-URL>
 cd dsh-chamber
+node scripts/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
 pnpm install
+pnpm run dev:desktop                     # 完整窗口（控制面 + dsh 前端 + 桌面壳）
 ```
 
-要求：Node.js 22+（推荐 LTS，见 `.nvmrc`）。本仓库使用 pnpm workspaces；`vendor/harness-packages` 是指向外部 dsh 源码 checkout 的只读符号链接（见 README 安装说明）。
-
-## 仓库结构
-
-```
-packages/
-  control-plane/    控制面核心（web profile 宿主托管、
-                    管理 REST、每实例反代、前端服务）
-  renderer/         自建 dsh 前端（源码复用：纯 dsh 首屏桥接宿主 +
-                    N-ctx 编排、启动图清单）
-  dsh-chamber-client-ui-sidebar/  自研侧边栏插件（多来源会话导航 + chamberBridge；
-                    替换官方 ui-sidebar 注册）
-  dsh-chamber-client-ui-layout/   自研 ui-layout 壳 fork（layout store 替换：
-                    经侧边栏共享 view-prefs store 持久化 sidebarWidth；
-                    替换官方 ui-layout 注册）
-  dsh-chamber-client-ui-settings-connections/
-                    自研连接设置插件（本地实例卡 + 远程主机 CRUD/连接/
-                    systemd/日志，settings.section）
-  dsh-chamber-client-ui-settings-bridge/
-                    自研设置壳插件（shadow 官方 SettingsRoot 注册；所选实例
-                    官方设置分区上的服务器下拉）
-  desktop/          Electron 壳（单 frame、transport-manager + ssh provider、实例注册表、IPC）
-  cli/              CLI 薄壳
-docs/
-  design/           设计文档（01-overview.md 为入口；
-                    05-connection-manager.md 为表面/架构契约）
-  progress/         模块完成状态（STATUS.md 为总览）
-```
-
-## 开发脚本
-
-除非另有说明，均在仓库根目录运行。
-
-| 脚本 | 说明 |
-|---|---|
-| `pnpm run dev:control-plane` | 启动控制面（管理 REST + 静态前端），端口 17500 |
-| `pnpm run dev:desktop` | Electron 壳：完整窗口（控制面 + dsh 前端 + 桌面壳） |
-| `pnpm run build:renderer` | 构建 dsh 前端 bundle |
-| `pnpm run build:desktop` | renderer 构建 + 控制面编译 + dsh 运行时封装 |
-| `pnpm run dist:desktop:mac` | 打包 macOS 应用（dmg + zip） |
-| `pnpm run cli -- --help` | CLI 薄壳 |
-| `pnpm run smoke` | 控制面集成冒烟 |
-| `pnpm run typecheck` | Strict `tsc --noEmit`（0 错误） |
-| `pnpm run verify:i18n` | EN ↔ 中文对漂移时报错（同步后用 `-- --write` 重新记录） |
-
-### 测试
+## 测试
 
 单测直接以 node 运行（当前无测试框架）：
 
@@ -80,13 +39,6 @@ pnpm run test:settings-bridge  # 设置壳策略单测
 ```
 
 `pnpm run smoke` 在未安装 dsh 时打印 SKIP 并退出 0，属正常而非失败。
-
-### 桌面壳
-
-```bash
-pnpm --prefix packages/desktop run bundle:dsh   # 将官方 @deepseek-ai/dsh 发布包安装到 vendor/dsh
-pnpm run dev:desktop
-```
 
 ## 提交前验证
 
