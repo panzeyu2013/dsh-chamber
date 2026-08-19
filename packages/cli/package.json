@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "dsh-chamber control-plane CLI: serve/status/connections/host logs",
   "type": "module",
   "bin": {

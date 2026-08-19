@@ -44,6 +44,9 @@ dsh harness 的设计哲学是**一切皆插件**：模型适配器、工具注�
 - **每实例同源反代** — `/api/i/<id>/*` HTTP/WS/SSE 透传（本地与隧道实例），匿名可达（仅 loopback；无隧道 → 明确 503）
 - **远程实例** — 桌面传输运行时（`transport-manager` + `ssh` provider，`TransportProvider` 接口可扩展未来来源）：SSH 隧道（`ssh -N -o ServerAlive… -L`）+ 远端 systemd `start`/`stop`/`is-active`（serviceName 白名单校验）；可选的主机密码认证（设计 05 §8）：`desktop_ssh_set_password` + 临时 askpass 助手注入（见「安全」）
 - **管理 REST** — `/health`、`/api/connections`、`/api/host/logs`，另有 `__DSH_BOOT__` 启动图清单的静态前端服务
+- **桌面端更新提示（设计 11）** — 内置更新检查（静默，启动延迟 + 6h 周期），设置页「更新」部分展示新版本并**用户确认后下载、退出时安装**（无弹窗低打扰）；自动更新仅替换应用本体，`userData`（注册表/状态/密码存储）天然保留；macOS 自动安装依赖 Developer ID 签名（未配置时响亮提示手动安装）
+- **睡眠/后台常驻（设计 14）** — 关窗行为可设（隐藏到托盘继续运行 / 退出，退出前对活动隧道与本地实例确认）；登录自启（mac/linux）；OS 唤醒即时重连（SSE 心跳不等 watchdog）；保持唤醒开关；设置持久化于主进程 `chamber-settings.json`
+- **Chamber 设置页（设计 15，v1 平铺）** — 设置壳固定入口：连接 / 通用 / 更新（chamber 全局设置与实例配置平面严格分离）
 
 ## 架构
 

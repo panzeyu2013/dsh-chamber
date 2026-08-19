@@ -6,8 +6,6 @@ dsh-chamber is the local desktop **connection manager** for dsh: the local dsh i
 
 This file contains only always-on repository rules and routing. Detailed design lives in `docs/design/`, progress in `docs/progress/`, and unimplemented feature ideas in `docs/todo/`.
 
-> 中文版见 [docs/AGENTS.zh-CN.md](docs/AGENTS.zh-CN.md)
-
 ## Instruction Order
 
 These steps are mandatory. Before editing, you **MUST**:

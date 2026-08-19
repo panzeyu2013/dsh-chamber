@@ -1,0 +1,130 @@
+# Changelog
+
+All notable changes to dsh-chamber are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Release artifacts and per-release notes also live on the GitHub Releases page
+(`https://github.com/panzeyu2013/dsh-chamber/releases`).
+
+## [0.1.2] - 2026-08-19
+
+### Added
+
+- **Desktop auto-update (design 11)** — silent update checks (startup delay +
+  6h interval), a low-key Settings「更新」section, download only after explicit
+  user confirmation, install on quit. Update feed shipped for both platforms
+  (`latest.yml` / `latest-mac.yml`; beta channel via a semver prerelease
+  version). macOS install leg reports honestly when a Developer ID signature
+  is absent (manual-install hint, never a fake success).
+- **Sleep / background persistence (design 14)** — configurable close behavior
+  (hide to tray while dsh keeps running, or quit, with a quit confirmation
+  when active tunnels or the local instance would be stopped), launch at login
+  (mac/linux), immediate reconnect on OS wake (no heartbeat watchdog wait),
+  keep-awake toggle. Settings persist in the main-process
+  `chamber-settings.json` (0600, atomic, corrupt-file preserved).
+- **Chamber settings page (design 15, v1 flat form)** — fixed Settings-shell
+  entries Connections / General / Update; chamber-global settings kept strictly
+  separate from per-instance config planes.
+- **First-paint performance (P4)** — static skeleton + critical CSS in the
+  served HTML, parallel boot, host-graph fetch overlapped with the boot chain,
+  non-first-screen ui-* families split into lazy chunks (entry chunk 934KB →
+  650KB), absolute modulepreload matching the manifest URL, on-the-fly gzip +
+  immutable caching for `/assets/*` in the control plane.
+- **Sidebar UX batch** — single click opens a session immediately with
+  double-click rename; sidebar width persisted across shells and restarts via
+  a chamber ui-layout fork; sidebar scroll position preserved across N-ctx
+  server switches; explicit sort menu with official updated-order semantics
+  (manual order + activity promotion).
+- **Host-graph visibility** — the chamber-injected host package row shows the
+  module A version and a live-effect tri-state (已生效 / 重启后生效 / 未知)
+  probed over the tunnel RPC.
+- **Boot hardening** — union-table completion for covered packages,
+  chamber-level failure overlay (report + retry + server switching),
+  first-boot module-system race fix.
+
+### Fixed
+
+- macOS: `windowCloseBehavior='quit'` now actually quits (previously left the
+  app windowless forever on darwin); wake re-probe no longer spawns transports
+  during quit teardown.
+- `isAllowedReleaseUrl` rejects percent-encoded path traversal and userinfo —
+  the allowlist can no longer be pointed at an arbitrary github.com path.
+- Updater: a periodic re-check can no longer clobber the `downloaded` state
+  while a download is in flight; error-text path redaction covers any POSIX
+  absolute path.
+- Sidebar: the two rowActions wrapper spans now pair `stopPropagation` with
+  `clearPendingClick` (a stray pending could spuriously enter rename).
+- Remote plugin-list refresh no longer writes ERROR log lines for
+  uninitialized remote profiles (quiet manifest probe).
+- Settings-bridge keyed-slot support (Plugins page no longer abdicates the
+  chamber shell); child-ctx errors contained at the host seam.
+- Connections settings: chamber-block legibility restored; refresh actions
+  distinguished.
+- Renderer/sidebar scroll sync excludes ghost rows; sort derivation converges
+  without write loops.
+
+### Changed
+
+- **macOS release builds now target macOS 26** (`macos-latest` runner) —
+  macos-14 is deprecated (2026-07) and unsupported by 2026-11.
+- Release engineering: version assert covers all 6 chamber packages;
+  concurrency guard on the release workflow; CI packaging runs with an
+  explicit `--publish=never` (electron-builder 26 implicitly publishes in CI
+  environments otherwise).
+- **No `.blockmap` sidecars in releases** — Windows `nsis.differentialPackage`
+  back to `false`; the mac zip's hardcoded `.zip.blockmap` is dropped from the
+  draft before finalize. Feeds never reference blockmaps, so updates fall back
+  to full downloads (functionality unchanged).
+- Chinese README promoted to primary (`docs/README.en-US.md` mirror).
+
+## [0.1.1] - 2026-08-18
+
+### Added
+
+- Chamber host-graph injection surfaced in plugin management (local/remote
+  seed wiring, `--patch` overlay, install-level fallback).
+- Client plugin runtime loading (design 09): per-instance host-graph merge,
+  extra-entry preloading, covered-set dedupe.
+- Remote plugin management over the SSH exec channel (list / add / remove /
+  restart, spec whitelist).
+- Multi-source sidebar enhancement batch (workspace grouping, info cards,
+  running-subagent indicators, cross-ctx live sync).
+- Trusted IPC + navigation fencing to the control-plane main frame;
+  non-loopback HTTP/WS origin rejection.
+- Windows single-pass lean installer; app/tray icons; packaged dev-instance
+  isolation.
+
+### Fixed
+
+- Transient tunnel failures retried via a slow re-probe; renderer crash
+  window recovery; N-ctx cordis ctx teardown on dispose; queued session opens
+  kept pending until runtime accepts; cursor flicker over row actions;
+  chamberBridge publish gated on projection signature (identity-preserving
+  aggregate state).
+
+### Changed
+
+- dsh 0.1.0-rc.7 integrated (harness pin + CI bundle pin + lockfile sync).
+- macOS x64 CI builds dropped for v1 (arm64 only).
+- Auto-update redesigned as a quiet settings-based flow (design 11 scoping).
+
+## [0.1.0] - 2026-08-15
+
+Initial release — local desktop connection manager for dsh:
+
+- Control-plane connection core: web-profile host hosting, management REST
+  (`/health`, `/api/connections`, `/api/host/logs`), per-instance same-origin
+  reverse proxy, static frontend serving.
+- Self-built renderer (source-reused dsh official frontend): N-ctx
+  multi-instance, chamber sidebar / connections settings / settings-bridge
+  client plugins.
+- SSH transport (tunnels + remote systemd), instance registry, Electron
+  single-frame shell, CLI.
+
+v1 scope: no authentication/audit surface (loopback-only control plane).
+
+[0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
+[0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1
+[0.1.0]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.0

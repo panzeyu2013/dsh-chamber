@@ -44,6 +44,9 @@ dsh-chamber therefore does **not** re-implement those domains and does **not** w
 - **Per-instance same-origin reverse proxy** — `/api/i/<id>/*` HTTP/WS/SSE passthrough for local and tunneled instances, anonymously reachable on loopback only (no tunnel → explicit 503)
 - **Remote instances** — the desktop transport runtime (`transport-manager` + the `ssh` provider, `TransportProvider` interface open to future sources): SSH tunnels (`ssh -N -o ServerAlive… -L`) plus remote systemd `start`/`stop`/`is-active` with a serviceName whitelist; optional per-host password auth (design 05 §8) via `desktop_ssh_set_password` + an ephemeral askpass helper (see Security)
 - **Management REST** — `/health`, `/api/connections`, `/api/host/logs`, plus static frontend serving with the `__DSH_BOOT__` boot manifest
+- **In-app update (design 11)** — built-in update checks (silent: startup delay + 6h interval), a Settings「Update」section showing the new version with **download only after user confirmation, install on quit** (low-key, no popups); auto-update replaces the app body only — `userData` (registry/state/password store) is preserved; the macOS install leg requires a Developer ID signature (loud manual-install hint when absent)
+- **Sleep / background persistence (design 14)** — configurable close behavior (hide to tray and keep running / quit, with a confirmation when active tunnels or the local instance would be stopped), launch-at-login (mac/linux), immediate reconnect on OS wake (no waiting for the heartbeat watchdog), keep-awake toggle; settings persist in the main-process `chamber-settings.json`
+- **Chamber settings page (design 15, v1 flat form)** — fixed Settings-shell entries: Connections / General / Update (chamber-global settings kept strictly separate from per-instance config planes)
 
 ## Architecture
 

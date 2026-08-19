@@ -101,6 +101,36 @@
    `applySettingsPatch` 副作用包 try + best-effort 回滚、托盘注释与 resume 补丁
    注释表述修正。复验 7/7 ✓（typecheck / 双测试套件 / build:preload /
    build:renderer / verify:i18n）。
+   **2026-08 v0.1.2 release review（5 subagent 分区审查 + 独立验证）**：结论
+   可发 v0.1.2；修复——① macOS `windowCloseBehavior='quit'` 关窗不退出
+   （window-all-closed 在 darwin 不 quit → 无窗常驻、D2 确认不可达；现 quit
+   设置下 darwin 也走 app.quit()，取消分支重建窗口）；② `isAllowedReleaseUrl`
+   编码穿越绕过白名单（`..%2f`/`%2e%2e%2f` 经 decode 归一化后拒绝 +
+   userinfo 拒绝）；③ updater 下载在途与 6h 周期复查竞态（downloadInFlight
+   闸：复查不再把 `downloaded` 打回 `available`，丢失「已下载，退出时安装」
+   与退出豁免）；④ `sanitizeErrorText` 路径脱敏扩展至任意 POSIX 根（/opt、
+   /usr/local、/Library、/run、/root…，URL 保留）；⑤ chamber-entry 懒加载
+   契约修订——vendor ui-model-selection 的 ROOT inject 含 `commandUi`（由
+   commands 提供，commands 又依赖 input-trigger 的 `inputTriggers`），原头注
+   声称"嵌套 inject 不阻塞"不成立：commands + input-trigger 移回首屏静态组
+   （模型座位不再等 deferred chunk，chunk 失败也不丢模型选择器），头注契约
+   重写 + COVERED_FACTORIES 锁步；⑥ 侧边栏 rowActions 两个 stopPropagation
+   未配对 `clearPendingClick()`（pending-click INVARIANT，误触进入重命名）；
+   ⑦ remotePluginList 的 manifest cat 补 `quiet`（未初始化远端 profile 不再
+   污染日志面板）。发布准备：6 包版本一致 bump 0.1.1 → 0.1.2（根/desktop/
+   control-plane/renderer/cli/dsh-host-client-graph——host-graph 补入设计 11
+   §8 版本集），release.yml 断言扩至全部 6 包 + concurrency 守卫；README 特
+   性列表补 11/14/15 用户面；connections `global.d.ts` 声明镜像补
+   settings/systemResume（接口合并契约）。复验 ✓（根 typecheck、
+   插件 4 typecheck、test:desktop 186、test:sidebar 131、test:settings-bridge
+   28、test:connections 17、static-serving 6、test:renderer-shell 5、
+   build:renderer、build:preload、verify:i18n、frozen-lockfile 全绿）。
+   记录在案（NIT，非阻塞）：updatedOrder/sessionUpdatedAtByAccount 只按来源
+   不按 workspace 修剪（官方 retainAccountKeys 逐 workspace；有界、渲染不可
+   见，契约变更留后续）；settings-store/update-store 未加 singleton 守卫
+   （需跨包导出 + ambient 镜像，为诊断引入耦合不划算）；GeneralView 保存无
+   在途闸（主进程串行 + 推送收敛）；web 构建无桥时 hydration 重试链空转
+   （有界 2s）。
 - **Chamber 设置呈现（设计 15，v1 范围已实现，2026-08；范围缩减）**：v1 平铺形态——
   settings 壳固定入口扩为 连接/通用/更新（新增 `__general` 固定入口 + `GeneralView`：
   关窗行为 / 登录自启 / 保持唤醒 / 退出确认说明，zh/en i18n）；两级分组、插件提级、
@@ -114,15 +144,18 @@
 
 ## 范围决策与剩余偏差（不做 / 推迟 / 移出）
 
-- **chamber 合成包懒加载（LCP/perf pass P4，2026-08）**：非首屏 ui-* 家族（commands、
-  input-trigger、jobs、goal、skill、tool、trajectory、workflow-run、deliverables、subagent、
-  message-feedback、plan、user-questions、agent-preset、permission-presets）在
-  chamber-entry.ts 中改为动态 `import()` 并按 fire-and-forget 注册：`apply` 同步注册首屏
+- **chamber 合成包懒加载（LCP/perf pass P4，2026-08）**：非首屏 ui-* 家族（jobs、
+  goal、skill、tool、trajectory、workflow-run、deliverables、subagent、
+  message-feedback、plan、user-questions、agent-preset、permission-presets；2026-08
+  v0.1.2 review 后 commands/input-trigger 移回首屏——见 design 11 §8 旁的 review
+  记录）在 chamber-entry.ts 中改为动态 `import()` 并按 fire-and-forget 注册：
+  `apply` 同步注册首屏
   家族后立即返回（entry 根 fiber ACTIVE，boot 的 loader.await + assertEntriesActive 通过），
   迟注册的子 fiber 不阻塞首屏（cordis inject-waiting + reflect 通知驱动已渲染 UI 渐进出现
   迟到的槽位/服务）。契约边界：apply 返回 thenable 会被 `_execute` await（fiber.ts
   `_execute`），因此 apply 必须保持同步返回；sweep 只检查 loader entry 根 fiber，不含子
-  fiber。首块 chamber bundle 934KB → 605KB（gzip 175.6KB）；settings-bridge 的
+  fiber。首块 chamber bundle 934KB → 650KB（gzip 188KB；commands/input-trigger 于
+  v0.1.2 review 移回首屏后 +44KB）；settings-bridge 的
   agent-preset settings 段改为装配子 ctx 时动态导入。设计/验证细节见 chamber-entry.ts 头注。
 - **移出项**（P3 硬纪律，永不回流）：认证/审计（密码/Passkey/会话 cookie/client token/
   限流/审计 SQLite）、控制面薄壳聊天/会话列表/审批弹窗、控制面会话运行时/统一索引/

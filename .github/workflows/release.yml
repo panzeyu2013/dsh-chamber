@@ -6,15 +6,21 @@ name: Release
 # (electron-builder --publish with GH_TOKEN — this is what generates and
 # uploads the update feed, see below), and a finalize job flips the draft to
 # public. Since design 11 (desktop auto-update) each platform also ships its
-# UPDATE FEED: Windows uploads the NSIS exe + blockmap + latest.yml (beta.yml
-# for beta), macOS uploads the dmg + zip + latest-mac.yml (beta-mac.yml for
-# beta) — the feed files electron-updater's github provider consumes. The
-# channel is derived by electron-builder from the VERSION's semver prerelease
-# tag (0.2.0 → latest.yml; 0.2.0-beta.1 → beta.yml); a beta release is
-# additionally created as a GitHub prerelease. macOS v1 ships arm64 ONLY:
+# UPDATE FEED: Windows uploads the NSIS exe + latest.yml (beta.yml for beta),
+# macOS uploads the dmg + zip + latest-mac.yml (beta-mac.yml for beta) — the
+# feed files electron-updater's github provider consumes. The channel is
+# derived by electron-builder from the VERSION's semver prerelease tag
+# (0.2.0 → latest.yml; 0.2.0-beta.1 → beta.yml); a beta release is
+# additionally created as a GitHub prerelease. NO .blockmap sidecars ship
+# (2026-08 decision): Windows has differentialPackage=false (no exe.blockmap)
+# and the mac zip's hardcoded .zip.blockmap is deleted from the draft release
+# before finalize — the feeds never reference blockmaps, so updates fall back
+# to full downloads. macOS v1 ships arm64 ONLY:
 # macos-13, the last public Intel x64 runner, was retired by GitHub — its
 # matrix leg stuck queued forever in every v0.1.0 run (Intel Macs are
-# unsupported in v1, see STATUS.md). Windows builds on windows-2022
+# unsupported in v1, see STATUS.md); macos-14 is deprecated (2026-07) and
+# unsupported by 2026-11, so the mac leg runs on macos-latest (= macOS 26,
+# arm64 — the 2026-08 v0.1.2 release decision). Windows builds on windows-2022
 # (windows-latest's VS 18 toolchain is not detected correctly by the node-gyp
 # stack — same finding as OpenChamber). No Apple Developer ID / notarization
 # secrets are configured: the macOS app is ad-hoc signed by the afterPack hook
@@ -43,6 +49,14 @@ on:
 permissions:
   contents: write
 
+# A same-tag double run (re-dispatch / tag re-push while a run is in flight)
+# would interleave two drafts/uploads on the same tag — cancel the older run
+# so the tag always has exactly one coherent draft→finalize sequence
+# (2026-08 review NIT).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.7
 
@@ -51,6 +65,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      # softprops/action-gh-release exposes the created release id — finalize
+      # uses it (not a tag lookup) to enumerate/delete assets, because the
+      # tags/{tag} endpoint does not reliably resolve a DRAFT release and a
+      # bare `gh api` failure used to be swallowed (2026-08 postmortem).
+      release_id: ${{ steps.create_release.outputs.id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,16 +93,78 @@ jobs:
         # tag v<workflow version> — a mismatch would silently redirect every
         # artifact to a phantom v<package.json version> draft and finalize an
         # EMPTY release. Fail fast: the developer bumps the chamber packages
-        # (design 11 §8: root/desktop/control-plane/renderer/cli) before
-        # releasing, so the input version must equal the desktop version.
+        # (design 11 §8: root/desktop/control-plane/renderer/cli +
+        # dsh-host-client-graph — 6 packages in the v0.1.2 release set) before
+        # releasing, so the input version must equal EVERY package's version.
+        # (2026-08 review: extended from desktop-only so a partial bump of the
+        # siblings fails the run instead of shipping a version-skewed app.)
         run: |
-          PKG_VERSION=$(node -p "require('./packages/desktop/package.json').version")
           VERSION="${{ steps.get_version.outputs.version }}"
-          if [[ "$VERSION" != "$PKG_VERSION" ]]; then
-            echo "::error::release version ${VERSION} != desktop package.json version ${PKG_VERSION} — bump packages/desktop/package.json (and the sibling chamber packages) to match before releasing"
+          for PKG in \
+            ./package.json \
+            ./packages/desktop/package.json \
+            ./packages/control-plane/package.json \
+            ./packages/renderer/package.json \
+            ./packages/cli/package.json \
+            ./packages/dsh-host-client-graph/package.json; do
+            PKG_VERSION=$(node -p "require('${PKG}').version")
+            if [[ "$VERSION" != "$PKG_VERSION" ]]; then
+              echo "::error::release version ${VERSION} != ${PKG} version ${PKG_VERSION} — bump all 6 chamber packages (root/desktop/control-plane/renderer/cli/dsh-host-client-graph) to match before releasing"
+              exit 1
+            fi
+          done
+          echo "release version ${VERSION} matches all 6 chamber packages ✓"
+
+      - name: Extract CHANGELOG section for the release body
+        # The release page must show OUR changelog entry (CHANGELOG.md), not
+        # GitHub's auto-generated commit list (generate_release_notes) — the
+        # user-facing release record lives in the repo file. Extract the
+        # matching "## [<version>]" section (Keep a Changelog format); a
+        # missing section fails loudly (never publish with an empty body).
+        id: changelog_body
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          SECTION=$(awk '
+            $0 ~ /^## \['"$VERSION"'\]/ { found=1; print; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md)
+          if [[ -z "$SECTION" ]]; then
+            echo "::error::CHANGELOG.md has no section for [${VERSION}] — add one before releasing"
             exit 1
           fi
-          echo "release version ${VERSION} matches package.json ✓"
+          echo "$SECTION" > /tmp/release-body.md
+          echo "extracted $(wc -l < /tmp/release-body.md) lines for [${VERSION}]"
+
+      - name: Delete any existing release for this tag
+        # 2026-08 postmortem (body_path not applied — softprops log:
+        # "Using release <old> for tag v0.1.2 instead of duplicate draft <new>
+        # / Removing duplicate draft"): deleting a GIT TAG does NOT delete the
+        # GitHub RELEASE — the release record survives DETACHED (the
+        # tags/{tag} endpoint then 404s even though the release still exists,
+        # and re-pushing the tag makes softprops FIND the old release and
+        # UPDATE it, discarding the freshly-created draft that carried our
+        # CHANGELOG body). So we must enumerate ALL releases and delete by
+        # tag_name — the list endpoint sees detached releases — not resolve
+        # via tags/{tag}. Missing release is fine (nothing to do); any gh api
+        # error fails loud. Skipped on dry_run (build-only).
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.get_version.outputs.version }}"
+          EXISTING_IDS=$(gh api \
+            "repos/${{ github.repository }}/releases" \
+            --jq '.[] | select(.tag_name == "v'"${VERSION}"'") | .id')
+          if [[ -z "$EXISTING_IDS" ]]; then
+            echo "no existing release for v${VERSION} — fresh draft will be created"
+            exit 0
+          fi
+          for EXISTING_ID in $EXISTING_IDS; do
+            gh api -X DELETE "repos/${{ github.repository }}/releases/${EXISTING_ID}" >/dev/null
+            echo "deleted existing release ${EXISTING_ID} for v${VERSION} (will create fresh)"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub Release (draft)
         id: create_release
@@ -97,7 +178,7 @@ jobs:
           # non-prerelease release — which stable clients would then treat as
           # the latest and 404 on latest.yml.
           prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
-          generate_release_notes: true
+          body_path: /tmp/release-body.md
           name: dsh-chamber v${{ steps.get_version.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -106,10 +187,13 @@ jobs:
     needs: create-release
     # Public arm64 runner label only (OpenChamber 踩坑：非公开标签
     # macos-26 / macos-15-intel 会找不到 runner 而失败)。v1 ships arm64 only:
-    # macos-13, the last public x64 runner, is retired, and bundle:dsh bakes
-    # the host platform's dsh runtime, so x64 cannot be cross-built on an
-    # arm64 runner without Rosetta toolchain work (deferred, see STATUS.md).
-    runs-on: macos-14
+    # macos-13, the last public x64 runner, is retired; macos-14 is deprecated
+    # (2026-07) and fully unsupported by 2026-11, so the mac leg builds on
+    # macos-latest (= macOS 26, arm64; 2026-08 v0.1.2 按 macOS 26 发布的
+    # 决定)。bundle:dsh bakes the host platform's dsh runtime, so x64 cannot
+    # be cross-built on an arm64 runner without Rosetta toolchain work
+    # (deferred, see STATUS.md).
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -205,7 +289,9 @@ jobs:
         # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
         # and that the win32 dsh runtime made it into the unpacked app. When
         # not dry-running, also assert the UPDATE FEED (design 11 §6): the
-        # NSIS blockmap + channel yml electron-updater consumes.
+        # channel yml electron-updater consumes. NO .blockmap is expected
+        # (2026-08: differentialPackage=false — the feed never references a
+        # blockmap, updates fall back to full downloads).
         shell: bash
         run: |
           set -euo pipefail
@@ -216,7 +302,7 @@ jobs:
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('win32-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.exe 2>/dev/null | head -n 1)"
           if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
-            test -n "$(ls packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
+            test -z "$(ls packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
             test -f packages/desktop/release/latest.yml -o -f packages/desktop/release/beta.yml
           fi
 
@@ -224,6 +310,43 @@ jobs:
     needs: [create-release, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
+      - name: Drop mac zip.blockmap assets from the draft release
+        # 2026-08 (v0.1.2 postmortem): electron-builder hardcodes the mac zip
+        # target's isWriteUpdateInfo=true (MacPackager.createTargets), so the
+        # mac leg always uploads a .zip.blockmap sidecar. The feeds never
+        # reference it (latest-mac.yml carries only zip sha512/size/url), so
+        # it is deleted from the DRAFT before finalize — releases ship without
+        # any .blockmap (Windows has differentialPackage=false already). The
+        # blockmap is harmless-but-extra; deleting keeps the artifact list
+        # minimal and matches the v0.1.1 release shape.
+        #
+        # Resolved by RELEASE ID from create-release (not tags/{tag} — that
+        # endpoint does not reliably resolve a draft). FAILS LOUD on any gh
+        # api error (the first version swallowed failures with `|| true`,
+        # leaving the blockmap in the published release).
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_ID="${{ needs.create-release.outputs.release_id }}"
+          if [[ -z "$RELEASE_ID" ]]; then
+            echo "::error::create-release did not expose a release id — cannot clean blockmap assets"
+            exit 1
+          fi
+          ASSET_IDS=$(gh api \
+            "repos/${{ github.repository }}/releases/$RELEASE_ID/assets" \
+            --jq '.[] | select(.name | endswith(".blockmap")) | .id')
+          if [[ -z "$ASSET_IDS" ]]; then
+            echo "no .blockmap assets in draft release — nothing to drop"
+            exit 0
+          fi
+          for ASSET_ID in $ASSET_IDS; do
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$ASSET_ID" >/dev/null
+            echo "dropped .blockmap asset $ASSET_ID"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish release (flip draft to public)
         if: ${{ github.event.inputs.dry_run != 'true' }}
         uses: softprops/action-gh-release@v2

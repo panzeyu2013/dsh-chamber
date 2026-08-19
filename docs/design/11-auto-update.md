@@ -7,9 +7,12 @@
 > + preload IPC（`dsh-chamber:update-state` 查询/推送、`update-download`、`open-release`）；
 > **M2** settings 壳新增 chamber 全局「更新」入口（`__update`，与 `__connections` 并列）
 > + 低调 `UpdateSection` 组件（zh/en 文案，`verify:i18n` 通过）；**M3** desktop build
-> 配置（`publish` github provider、mac 增加 `zip` target、`nsis.differentialPackage:
-> true`）+ `DSH_CHAMBER_UPDATE_CHANNEL=beta` + release.yml 双 leg 更新产物（win：
-> exe+blockmap+`latest.yml`/`beta.yml`；mac：dmg+zip+`latest-mac.yml`/`beta-mac.yml`）。
+> 配置（`publish` github provider、mac 增加 `zip` target）+ `DSH_CHAMBER_UPDATE_CHANNEL=beta`
+> + release.yml 双 leg 更新产物（win：exe+`latest.yml`/`beta.yml`；mac：dmg+zip+
+> `latest-mac.yml`/`beta-mac.yml`）。**2026-08 v0.1.2 修订**：不发布 `.blockmap`
+> 侧车——Windows `nsis.differentialPackage: false`（不生成 exe.blockmap，差分退化
+> 为全量下载，feed 不引用 blockmap 故功能无损），mac zip 的硬编码 `.zip.blockmap`
+> 在 finalize 翻转 draft 前经 GitHub API 删除。
 >
 > 需求来源：升级目标是 **dsh-chamber 自身**（Electron 桌面应用），**不是**远端 dsh
 > 实例。本设计为其引入「后台**静默**检查 → settings 低调提示 → **用户明确确认后**
@@ -142,9 +145,15 @@
 ## 6. 发布流程与构建产物（已实现）
 
 - **双平台都需要 feed 产物**（electron-updater 消费）：
-  - `packages/desktop/package.json`：`electron-updater` 依赖；`nsis.differentialPackage:
-    true`（win 差分）；mac target 增加 `zip`（electron-updater mac 需要 zip，dmg 保留
-    首装）；`publish` 块（github provider，owner=`panzeyu2013`，repo=`dsh-chamber`）。
+  - `packages/desktop/package.json`：`electron-updater` 依赖；mac target 增加 `zip`
+    （electron-updater mac 需要 zip，dmg 保留首装）；`publish` 块（github provider，
+    owner=`panzeyu2013`，repo=`dsh-chamber`）。**2026-08 v0.1.2 修订**：
+    `nsis.differentialPackage: false` **且 `nsis.useZip: false`**——v0.1.2 初版改为
+    true/true 会让 CI/发布产出 `exe.blockmap` 侧车，但 feed 从不引用 blockmap，差分
+    只省带宽不省功能；且 `differentialPackage: false + useZip: true` 会让 NSIS 内部
+    从 7z(LZMA) 退化为 zip，exe 从 ~123MB 膨胀到 ~169MB（NsisTarget format 选择：
+    `!isBuildDifferentialAware && useZip ? "zip" : "7z"`）。统一不发 blockmap 且保持
+    7z 高压缩（win 配置关闭 + mac 在 finalize 前删 asset）。
   - **实现发现**：`--publish=never` **不生成** update-info yml（app-builder-lib
     PublishManager 仅在 `isPublish` 时执行 `createUpdateInfoTasks`）——发布必须走
     `--publish`。
@@ -152,14 +161,17 @@
   - build 步骤改 `--publish=always`（`GH_TOKEN`）——electron-builder 把全部产物
     **包括 feed 文件**上传进 create-release 创建的 draft release（softprops 上传步骤
     移除；create-release 建 draft + finalize 翻转公开的流程不变）；
-  - win leg 产物：`*.exe` + `*.blockmap` + `latest.yml` / `beta.yml`；
+  - win leg 产物：`*.exe` + `latest.yml` / `beta.yml`（**无 blockmap**，2026-08）；
   - mac leg 产物：`*.dmg` + `*.zip` + `latest-mac.yml` / `beta-mac.yml`；
   - workflow_dispatch 的 `version` 输入必须等于 `packages/desktop/package.json`
     版本（create-release 先断言，防 electron-builder 上传到幻影 v<package.json>
     draft 而 finalize 空 release）；draft 的 `prerelease` 由版本 prerelease 后缀
     推导；`dry_run` 时回退 `--publish=never`（build-only 检查；create-release 仍会
     建一个空 draft——与既有行为一致，已在 workflow 输入描述注明）；
-  - CI 验证步骤新增：非 dry-run 时断言 zip/blockmap/channel yml 存在。
+  - CI 验证步骤新增：非 dry-run 时断言 channel yml 存在、**无** blockmap 产物；
+  - finalize 前新增清理步骤：经 GitHub API 删除 draft release 里的
+    `*.zip.blockmap`（mac zip 的 blockmap 由 electron-builder 硬编码生成，无配置
+    开关；feed 不引用它，删除后 mac 更新退化为全量下载 zip）。
 - **macOS 签名前置**：自动安装依赖 Developer ID 签名 + 公证（Squirrel.Mac 硬
   前提）——未配置时 mac 安装腿阻塞（§3.1；settings 响亮提示手动安装，**不做**手动
   安装的 UX 分支）。
@@ -182,10 +194,16 @@
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于 5 包（根/desktop/control-plane/renderer/cli），发版时**一致
-  bump**（semver 比较；`main.ts` 读 desktop package.json 的 version 并经
-  `dsh-chamber:info` 透传渲染层、注入更新控制器）。4 个插件包版本跟随 vendored dsh，
-  **不动**。
+- chamber 版本分布于 6 包（根/desktop/control-plane/renderer/cli/
+  dsh-host-client-graph——host-graph 是 chamber 自有宿主包，其版本随 chamber
+  发版且经插件管理 UI 展示，2026-08 review 补入 §8），发版时**一致 bump**
+  （semver 比较；`main.ts` 读 desktop package.json 的 version 并经
+  `dsh-chamber:info` 透传渲染层、注入更新控制器；release.yml 断言全部 6 包
+  与发布版本一致）。4 个客户端插件包（sidebar/connections/settings-bridge/
+  layout）**不随 chamber 发版移动**——保持各自 fork 时的版本（sidebar/
+  connections/settings-bridge 为 0.1.0-rc.5，layout 为 0.1.0；vendored dsh
+  源为 0.1.0-rc.7，插件版本从不与 dsh 源逐位对齐，也从不参与任何比较/
+  展示，故无需跟随；2026-08 review 澄清措辞）。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、`ssh-passwords.json`）
   天然保留。未来若改变注册表/状态格式 → 首启迁移（幂等、失败响亮不冒充成功）。
 - 升级不要求升级远端 dsh；与旧版本 chamber 的远端实例握手兼容（`verifyUp`）。
@@ -223,9 +241,9 @@
   `update-store.ts`（模块单例，bridge 异步暴露有界重试）+ zh/en 文案 +
   `SettingsShell.module.css` 样式。
 - **M3（通道与发布）**：`DSH_CHAMBER_UPDATE_CHANNEL=beta`；desktop build 配置
-  （`publish`、mac zip、`differentialPackage: true`、files 收 `updater.ts`）；
-  release.yml 双 leg 改造（`--publish=always` + GH_TOKEN、版本一致性守卫、
-  prerelease 由版本推导、feed 产物断言）。
+  （`publish`、mac zip、files 收 `updater.ts`；`differentialPackage` 于 v0.1.2
+  修订为 `false`，见 §6）；release.yml 双 leg 改造（`--publish=always` + GH_TOKEN、
+  版本一致性守卫、prerelease 由版本推导、feed 产物断言 + blockmap 清理）。
 
 **验证（2026-08）**：根 `typecheck`（desktop main/preload/updater + renderer）✓；
 `typecheck:settings-bridge` ✓；`build:preload`（preload.cts → dist/preload.cjs）✓；

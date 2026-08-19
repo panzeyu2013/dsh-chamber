@@ -68,11 +68,20 @@ jobs:
       - name: Renderer build
         run: pnpm run build:renderer
 
-  # macOS desktop packaging. v1 ships arm64 only: macos-latest is an Apple
-  # Silicon runner and macos-13, the last public Intel x64 runner, was retired
-  # by GitHub (see release.yml for the same decision). Smoke then runs against
-  # the freshly bundled dsh runtime (real SMOKE PASS instead of the ubuntu
-  # job's SKIP).
+  # macOS desktop packaging. v1 ships arm64 only: macos-latest is now macOS 26
+  # (Apple Silicon); macos-13, the last public Intel x64 runner, and macos-14
+  # (deprecated 2026-07, unsupported 2026-11) are both retired/retiring (see
+  # release.yml for the same decision). Smoke then runs against the freshly
+  # bundled dsh runtime (real SMOKE PASS instead of the ubuntu job's SKIP).
+  #
+  # --publish=never is MANDATORY (2026-08 v0.1.2 CI failure postmortem): the
+  # desktop build config carries a github `publish` block (design 11 — the
+  # auto-update feed), and electron-builder 26 IMPLICITLY triggers
+  # publish="onTagOrDraft" when it detects a CI environment and no explicit
+  # --publish flag (PublishManager.js, disabled in v27). CI's read-only
+  # GITHUB_TOKEN then makes the packaging step fail with 401/403. CI only
+  # BUILDS — publishing happens exclusively in release.yml (--publish=always
+  # + GH_TOKEN).
   build-macos:
     runs-on: macos-latest
     steps:
@@ -93,7 +102,7 @@ jobs:
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Package macOS app
-        run: pnpm run dist:desktop:mac
+        run: pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --publish=never
         env:
           DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.7
       - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
@@ -129,6 +138,9 @@ jobs:
   # windows-2022, not windows-latest: the node-gyp stack does not detect the
   # VS 18 toolchain that windows-latest ships (same finding as OpenChamber) —
   # bundle:dsh builds node-pty natively on this runner. x64 only.
+  # --publish=never: same mandatory rule as the mac leg (see the mac comment —
+  # the github publish block makes electron-builder 26 implicitly publish in
+  # CI without an explicit flag; CI only builds).
   build-windows:
     runs-on: windows-2022
     steps:
@@ -149,7 +161,7 @@ jobs:
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Package Windows app
-        run: pnpm run dist:desktop:win
+        run: pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
         env:
           DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.7
       - name: Verify packaged Windows app (OpenChamber-style, unsigned)
