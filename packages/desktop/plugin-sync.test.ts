@@ -212,7 +212,7 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null } })
 })
 
 test('localPluginList: chamber host-graph state — absent = not injected (honest, never "done")', () => {
@@ -220,7 +220,7 @@ test('localPluginList: chamber host-graph state — absent = not injected (hones
   const home = join(base, 'home')
   writeLocalProfile(home, {}, [])
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } })
 })
 
 test('localPluginList: chamber host-graph state — package.json alone is a half-injected module A (installed:false)', () => {
@@ -236,7 +236,25 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null } })
+})
+
+test('localPluginList: chamber host-graph version is read from the seeded module A manifest', () => {
+  const base = tempDir()
+  const home = join(base, 'home')
+  const profileDir = writeLocalProfile(home, {}, [])
+  const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
+  mkdirSync(join(moduleADir, 'dist'), { recursive: true })
+  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.1"}')
+  writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
+
+  const manifest = localPluginList(home)
+  assert.ok(manifest.chamber.ok)
+  if (manifest.chamber.ok) {
+    assert.equal(manifest.chamber.hostGraph.version, '0.1.1', 'the seeded package version is projected')
+    assert.equal(manifest.chamber.hostGraph.live, null, 'local side has no separate liveness probe')
+  }
 })
 
 // ============================================================================
@@ -270,7 +288,7 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       bundles: ['foo'],
       profileExists: true,
       error: undefined,
-      chamber: { ok: true, hostGraph: { installed: true, patched: true } },
+      chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null } },
     },
   })
 })
@@ -285,7 +303,7 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
         dependencies: {},
         bundles: [],
         profileExists: false,
-        chamber: { ok: true, hostGraph: { installed: false, patched: false } },
+        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } },
       },
     },
   )
@@ -311,7 +329,7 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false, version: null, live: null } })
   }
 })
 
@@ -354,7 +372,7 @@ test('remotePluginList: chamber probe — package.json present but dist/index.js
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null } })
   }
 })
 
@@ -403,8 +421,90 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
   assert.ok(result.ok, 'a redacted ENOENT is a probe miss, not a loud probe failure')
   if (result.ok) {
     assert.equal(result.manifest.profileExists, false)
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } })
   }
+})
+
+test('remotePluginList: chamber probe parses module A version and reports live-effect via liveProbe', async () => {
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.1"}')
+      }
+      if (path.endsWith('/cordis.patch.yml')) {
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  // live = true → the RUNNING instance has loaded the module (已生效).
+  const live = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
+  assert.ok(live.ok)
+  if (live.ok) {
+    assert.deepEqual(live.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.1', live: true } })
+  }
+  // live = false → injected but restart still pending (重启后生效).
+  const pending = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => false })
+  assert.ok(pending.ok)
+  if (pending.ok) {
+    assert.deepEqual(pending.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.1', live: false } })
+  }
+  // live = null → the desktop could not classify (no ready tunnel): the UI
+  // renders 生效状态未知 — never a guessed claim.
+  const unknown = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => null })
+  assert.ok(unknown.ok)
+  if (unknown.ok) {
+    assert.deepEqual(unknown.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.1', live: null } })
+  }
+  // A version-less seeded package.json → version:null (never a guessed one).
+  const versionless: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      if (path.endsWith('/cordis.patch.yml')) {
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const noVersion = await remotePluginList(versionless, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
+  assert.ok(noVersion.ok)
+  if (noVersion.ok) {
+    assert.equal(noVersion.manifest.chamber.ok, true)
+    if (noVersion.manifest.chamber.ok) assert.equal(noVersion.manifest.chamber.hostGraph.version, null)
+  }
+})
+
+test('remotePluginList: liveProbe is NOT consulted when the injection is half-present (cannot be live by definition)', async () => {
+  let probed = false
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.1"}')
+      // dist/index.js missing → installed:false.
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+        return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      }
+      if (path.endsWith('/cordis.patch.yml')) {
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
+    liveProbe: async () => { probed = true; return true },
+  })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: '0.1.1', live: null } })
+  }
+  assert.equal(probed, false, 'a half-injected module is never "live" — the probe is skipped')
 })
 
 // ============================================================================

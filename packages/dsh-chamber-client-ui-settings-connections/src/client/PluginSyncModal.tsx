@@ -496,6 +496,13 @@ export function PluginSyncModal({ t, spec, onClose }: {
     const localCh = (isRemote ? localManifest : localList)?.chamber
     const remoteCh = isRemote ? remoteManifest?.chamber : undefined
     const localInjected = localCh?.ok === true && localCh.hostGraph.installed && localCh.hostGraph.patched
+    // Module A's own version (design 09): the local projection is the source
+    // of truth when readable (the seed copies the same packaged module A to
+    // both sides); fall back to the remote projection only when the local
+    // manifest is unavailable. null → no version chip (never a guessed one).
+    const version = localCh?.ok === true
+      ? localCh.hostGraph.version
+      : remoteCh?.ok === true ? remoteCh.hostGraph.version : null
     let remoteLabel: ReactNode
     let remoteOk = true
     if (remoteCh === undefined) {
@@ -504,7 +511,15 @@ export function PluginSyncModal({ t, spec, onClose }: {
       remoteOk = false
       remoteLabel = <span className={css.error}>{t('chamberRemoteUnknown')}</span>
     } else if (remoteCh.hostGraph.installed && remoteCh.hostGraph.patched) {
-      remoteLabel = t('chamberRemoteInjected')
+      // Live-effect tri-state (design 09 module A liveness): the desktop's
+      // tunnel RPC probe answers whether the RUNNING instance has actually
+      // loaded the module — live → 已生效; probed not-loaded → 重启后生效;
+      // unprobed/unclassifiable → 生效状态未知. Never a constant claim.
+      remoteLabel = remoteCh.hostGraph.live === true
+        ? t('chamberRemoteLive')
+        : remoteCh.hostGraph.live === false
+          ? t('chamberRemoteInjected')
+          : t('chamberRemoteInjectedUnknown')
     } else if (remoteCh.hostGraph.installed) {
       remoteLabel = t('chamberRemotePartial')
     } else {
@@ -519,6 +534,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
         </p>
         <div className={css.pluginChamberRow}>
           <code className={css.pluginName}>{HOST_GRAPH_PACKAGE}</code>
+          {version !== null ? <span className={css.dim}> · v{version}</span> : null}
           <span className={css.pluginCellSpec}>
             {localInjected ? t('chamberLocalInjected') : t('chamberLocalNotInjected')}
             {isRemote ? <span> · {remoteLabel}</span> : null}

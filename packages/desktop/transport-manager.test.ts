@@ -29,7 +29,7 @@ import type { SpawnOptions } from 'node:child_process'
 import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
 import type { TransportManagerOptions } from './transport-manager.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
-import { sshProvider, verifyDshEndpoint, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
+import { sshProvider, verifyDshEndpoint, probeClientGraphLive, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -787,6 +787,62 @@ test('verifyDshEndpoint keeps the generic message when no dsh signature exists',
     assert.ok(!(result.detail ?? '').includes('upgrade the remote dsh'), 'no positive dsh evidence → no version claim')
     assert.equal(result.terminal, true, 'an HTTP answer that is not a dsh handshake is deterministic: retrying cannot change it')
   }
+})
+
+test('probeClientGraphLive classifies the running instance: live / not-live / unknown', async t => {
+  // ok:true server-response → the remote resolved clientGraph/graph: live.
+  const live = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    let body = ''
+    req.on('data', chunk => { body += chunk })
+    req.on('end', () => {
+      const envelope = JSON.parse(body) as { rpcId?: unknown }
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { rev: 'x', entries: [] } } }))
+    })
+  })
+  await new Promise<void>(resolve => live.listen(0, '127.0.0.1', resolve))
+  const livePort = (live.address() as AddressInfo).port
+  t.after(() => { live.close() })
+  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: livePort }), 'live')
+
+  // ok:false server-response (the gateway answered but the method is not
+  // resolvable — the running instance booted before the injection) →
+  // not-live: injected but restart pending, never a guessed claim.
+  const stale = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    let body = ''
+    req.on('data', chunk => { body += chunk })
+    req.on('end', () => {
+      const envelope = JSON.parse(body) as { rpcId?: unknown }
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'method_not_found' } } }))
+    })
+  })
+  await new Promise<void>(resolve => stale.listen(0, '127.0.0.1', resolve))
+  const stalePort = (stale.address() as AddressInfo).port
+  t.after(() => { stale.close() })
+  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: stalePort }), 'not-live')
+
+  // A 404 / no envelope / silent endpoint → unknown (never a claimed state).
+  const missing = createServer((_req, res) => { res.writeHead(404); res.end() })
+  await new Promise<void>(resolve => missing.listen(0, '127.0.0.1', resolve))
+  const missingPort = (missing.address() as AddressInfo).port
+  t.after(() => { missing.close() })
+  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: missingPort }), 'unknown')
+
+  const wrong = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ hello: 'world' }))
+  })
+  await new Promise<void>(resolve => wrong.listen(0, '127.0.0.1', resolve))
+  const wrongPort = (wrong.address() as AddressInfo).port
+  t.after(() => { wrong.close() })
+  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: wrongPort }), 'unknown')
+
+  const silent = createServer(() => { /* never answer */ })
+  await new Promise<void>(resolve => silent.listen(0, '127.0.0.1', resolve))
+  const silentPort = (silent.address() as AddressInfo).port
+  t.after(() => { silent.close() })
+  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: silentPort }, 50), 'unknown', 'a silent endpoint times out instead of hanging')
 })
 
 test('jitteredBackoffMs keeps the half-open jitter bounds [0.5x, 1x)', () => {

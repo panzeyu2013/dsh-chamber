@@ -262,6 +262,23 @@ export function classifyDependencyValue(spec: string): SpecClass {
 export interface ChamberHostGraphState {
   installed: boolean
   patched: boolean
+  /** Module A's own package version (read from the seeded package.json —
+   *  local: the profile node_modules copy; remote: the install-level flat
+   *  fallback, whose manifest the probe already cats). null when not
+   *  installed or the manifest is unreadable/version-less — never a guessed
+   *  default. */
+  version: string | null
+  /**
+   * Live-effect state of the RUNNING instance (design 09 module A liveness):
+   * true = the instance's clientGraph/graph remote answered the RPC probe
+   * (module A is loaded in the running process); false = injected but not
+   * loaded yet (a restart is pending); null = not probed (local side / no
+   * ready tunnel / the probe could not classify). The LOCAL side stays null
+   * by design — the local instance IS the chamber page, whose own boot
+   * already proves the graph channel (or degrades with the acknowledged
+   * module-C observability gap); only the remote side has a separate probe.
+   */
+  live: boolean | null
 }
 
 /** Probe outcome: `ok:false` = the instance's injection state could not be
@@ -350,6 +367,25 @@ function readStringArray(record: Record<string, unknown>, path: string[]): strin
   }
   if (!Array.isArray(current)) return []
   return current.filter((item): item is string => typeof item === 'string')
+}
+
+/** Read the `version` string from a JSON package-manifest text; null when
+ *  unreadable or version-less — never a guessed default. */
+function parsePackageVersion(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as { version?: unknown }
+    return typeof parsed?.version === 'string' && parsed.version !== '' ? parsed.version : null
+  } catch {
+    return null
+  }
+}
+
+/** Read the `version` string from an already-parsed package manifest; null
+ *  when absent/unreadable. */
+function readManifestVersion(pkg: unknown): string | null {
+  if (pkg === null || typeof pkg !== 'object' || Array.isArray(pkg)) return null
+  const version = (pkg as Record<string, unknown>).version
+  return typeof version === 'string' && version !== '' ? version : null
 }
 
 /**
@@ -450,6 +486,13 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
         installed: SEED_FILES.every(relative =>
           existsSync(join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME, relative))),
         patched: existsSync(join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)),
+        // Module A's own version from the seeded manifest (null when absent).
+        version: readManifestVersion(readDependencyManifest(profileDir, CLIENT_GRAPH_PACKAGE_NAME)),
+        // Local side: the local instance IS the chamber page — its own boot
+        // proves the graph channel (or degrades with the acknowledged module-C
+        // observability gap). No separate liveness probe; the remote side
+        // carries one (probeRemoteChamber liveProbe).
+        live: null,
       },
     },
   }
@@ -468,13 +511,13 @@ function readDependencyManifest(profileDir: string, name: string): unknown {
 // 2. remotePluginList
 // ============================================================================
 
-export async function remotePluginList(exec: ExecFn, spec: RemoteSpec): Promise<RemotePluginListResult> {
+export async function remotePluginList(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe }): Promise<RemotePluginListResult> {
   const path = remoteManifestPath(spec.remoteDshHome)
   const result = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [path] })
   if (!result.ok) {
     // ENOENT = the remote profile is not initialized (not a fatal ssh error).
     if (ENOENT_PATTERN.test(result.error)) {
-      return { ok: true, manifest: { dependencies: {}, bundles: [], profileExists: false, chamber: await probeRemoteChamber(exec, spec) } }
+      return { ok: true, manifest: { dependencies: {}, bundles: [], profileExists: false, chamber: await probeRemoteChamber(exec, spec, opts) } }
     }
     return { ok: false, error: result.error }
   }
@@ -486,10 +529,18 @@ export async function remotePluginList(exec: ExecFn, spec: RemoteSpec): Promise<
       bundles: parsed.bundles,
       profileExists: true,
       error: parsed.error,
-      chamber: await probeRemoteChamber(exec, spec),
+      chamber: await probeRemoteChamber(exec, spec, opts),
     },
   }
 }
+
+/**
+ * Live-effect probe of the running instance (design 09 module A): true = the
+ * instance's clientGraph/graph remote answered (module A loaded), false =
+ * injected but restart pending, null = unknown/unprobed. The desktop main
+ * adapts probeClientGraphLive (ssh-provider.ts) onto this shape.
+ */
+export type LiveProbe = () => Promise<boolean | null>
 
 /**
  * Read-only probe of the chamber-injected host-graph state on a remote
@@ -504,15 +555,23 @@ export async function remotePluginList(exec: ExecFn, spec: RemoteSpec): Promise<
  * probe error — never a silent "not injected". `installed` requires BOTH
  * files: a package.json without dist/index.js is a half-installed module A
  * (the boot row could not resolve) and must not report "installed".
+ *
+ * Additionally parses module A's own VERSION from the package.json it already
+ * cats, and — when a `liveProbe` is supplied (the desktop main's tunnel RPC
+ * probe) — reports whether the RUNNING instance has actually loaded the
+ * module (live tri-state), so the plugin UI can distinguish "已生效" from
+ * "重启后生效" instead of a constant claim.
  */
-async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec): Promise<ChamberInjectionState> {
+async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe }): Promise<ChamberInjectionState> {
   const home = remoteHome(spec.remoteDshHome)
   const pkgPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/package.json`
   const indexPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/dist/index.js`
   const pkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [pkgPath], quiet: true })
   let pkgInstalled: boolean
+  let version: string | null = null
   if (pkgRes.ok) {
     pkgInstalled = true
+    version = parsePackageVersion(pkgRes.stdout ?? '')
   } else if (ENOENT_PATTERN.test(pkgRes.error)) {
     pkgInstalled = false
   } else {
@@ -539,7 +598,14 @@ async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec): Promise<Chamb
     return { ok: false, error: `host-graph probe failed: ${patchRes.error}` }
   }
 
-  return { ok: true, hostGraph: { installed, patched } }
+  // Liveness only when BOTH halves are present AND a probe was supplied: a
+  // half-injected module cannot be live by definition; without a ready tunnel
+  // the desktop cannot reach the instance's RPC (null = honest "not probed").
+  const live = installed && patched && opts?.liveProbe !== undefined
+    ? await opts.liveProbe()
+    : null
+
+  return { ok: true, hostGraph: { installed, patched, version, live } }
 }
 
 // ============================================================================

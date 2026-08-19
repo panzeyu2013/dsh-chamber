@@ -196,6 +196,13 @@ export const VERIFY_UP_TIMEOUT_MS = 5_000
  * a host.describe reply; bounded memory on a misbehaving endpoint). */
 export const VERIFY_UP_MAX_BODY_BYTES = 1024 * 1024
 
+/** Timeout of the one-shot client-graph liveness probe (probeClientGraphLive). */
+export const CLIENT_GRAPH_PROBE_TIMEOUT_MS = 5_000
+
+/** Response-body cap of the client-graph liveness probe (an oversized answer
+ *  is not a graph RPC envelope; bounded memory on a misbehaving endpoint). */
+export const CLIENT_GRAPH_PROBE_MAX_BODY_BYTES = 1024 * 1024
+
 /** Timeout of the secondary dsh-signature probe (GET /api/events.mux). */
 export const VERIFY_UP_SIGNATURE_TIMEOUT_MS = 2_000
 
@@ -359,6 +366,105 @@ export function verifyDshEndpoint(
     timer.unref?.()
     req.on('error', () => done(false, 'the destination did not answer the dsh identity probe'))
     req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'host.describe', payload: {} }))
+  })
+}
+
+/**
+ * Live-effect probe of the chamber host gateway (design 09 module A): POST the
+ * `clientGraph/graph` RPC — the exact wire call the renderer's module C boot
+ * merge performs (renderer/src/host-graph.ts) — directly to the tunnel
+ * endpoint. This answers the plugin-management UI's "已生效 vs 重启后生效"
+ * question: whether the RUNNING remote dsh instance has actually loaded the
+ * seeded `@dsh-chamber/dsh-host-client-graph` module (file presence alone —
+ * the `installed`/`patched` probe — cannot distinguish "booted after the
+ * injection" from "restart still pending").
+ *
+ * Same discipline as verifyDshEndpoint: a destination that ANSWERED the probe
+ * is classified deterministically; a destination that did not answer (or an
+ * unreadable/garbage body) is 'unknown' — never a guessed claim.
+ *
+ * Classification (honest, three states):
+ *   'live'     — server-response envelope with result.ok === true: the remote
+ *                resolved clientGraph/graph; module A is loaded in the running
+ *                process.
+ *   'not-live' — a server-response envelope with result.ok !== true (the
+ *                gateway answered but the method is not resolvable — the
+ *                running instance booted before the injection): injected, but
+ *                a restart is required for it to take effect.
+ *   'unknown'  — anything else (non-200, malformed/missing envelope, timeout,
+ *                connection failure, oversized body): the probe cannot
+ *                classify — never 'live'/'not-live' from a non-answer.
+ */
+export function probeClientGraphLive(
+  endpoint: { host: string; port: number },
+  timeoutMs = CLIENT_GRAPH_PROBE_TIMEOUT_MS,
+  maxBodyBytes = CLIENT_GRAPH_PROBE_MAX_BODY_BYTES,
+): Promise<'live' | 'not-live' | 'unknown'> {
+  return new Promise(resolve => {
+    const url = `http://${endpoint.host}:${endpoint.port}/api/clientGraph/graph`
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const done = (result: 'live' | 'not-live' | 'unknown') => {
+      if (settled) return
+      settled = true
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      req.destroy()
+      resolve(result)
+    }
+    const rpcId = randomUUID()
+    const req = httpRequest(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    }, res => {
+      // A premature close after our destroy must never escape as an
+      // uncaught error (main-process safety discipline).
+      res.on('error', () => {})
+      if (res.statusCode !== 200) {
+        res.resume()
+        done('unknown')
+        return
+      }
+      const chunks: Buffer[] = []
+      let size = 0
+      res.on('data', chunk => {
+        if (settled) return
+        size += chunk.length
+        if (size > maxBodyBytes) {
+          // Oversized body: not a graph envelope — unclassifiable, never a
+          // claimed 'live'/'not-live'.
+          done('unknown')
+          return
+        }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        let envelope: { type?: unknown; rpcId?: unknown; result?: { ok?: unknown } } | null = null
+        try {
+          envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        } catch {
+          envelope = null
+        }
+        // Any well-formed server-response envelope is a deterministic answer:
+        // ok:true → the remote resolved the method; anything else (error
+        // envelope for an unresolved method) → not loaded yet.
+        if (envelope?.type === 'server-response'
+          && envelope.rpcId === rpcId
+          && typeof envelope.result === 'object' && envelope.result !== null) {
+          done(envelope.result.ok === true ? 'live' : 'not-live')
+          return
+        }
+        done('unknown')
+      })
+    })
+    // TOTAL deadline, not the socket-idle timeout: an endpoint that answers
+    // slowly must never hang the probe.
+    timer = setTimeout(() => done('unknown'), timeoutMs)
+    timer.unref?.()
+    req.on('error', () => done('unknown'))
+    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'clientGraph/graph', payload: { args: {} } }))
   })
 }
 

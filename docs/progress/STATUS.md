@@ -25,6 +25,13 @@
   `appendLog`，连接设置页的远端日志面板可见）。installed 语义本地/远端一致：两文件
   定义（package.json + dist/index.js，SEED_FILES）；ENOENT 在原始 stderr 上分类
   （`.ssh*` 命名的 remoteDshHome 不再因整行脱敏而把"文件不存在"误判为 ssh 故障）。
+  **chamber 内建注入可见化增强（2026-08）**：chamber 行现在显示模块 A 包版本号
+  （本地/远端均解析 seeded package.json，远端复用探测已抓回的 manifest，零额外
+  往返）；远端生效状态经主进程隧道 RPC 探测（`probeClientGraphLive`，POST
+  `clientGraph/graph`——renderer module C 同款只读调用，复用 verifyUp 探测纪律：
+  应答才分类）区分三态——「已注入并已生效」/「已注入（重启后生效）」/「生效状态
+  未知」（无 ready 隧道或探测不可分类时），不再永久声称"重启后生效"；本地侧按
+  设计不单独探测（本地实例即 chamber 页面，boot 自身证明图通道）。
   剩余：本地 `dsh plugin`/`pnpm pack`
   依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
 - **客户端插件运行时加载（设计 09，已实现）**：设计见

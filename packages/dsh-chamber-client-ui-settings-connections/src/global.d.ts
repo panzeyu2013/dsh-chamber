@@ -80,10 +80,15 @@ export type SshExecIpcResult = SshStatusProjection | { error: string }
  *  package present in the profile + the boot layer carrying the client-graph
  *  insert (local: the `--patch` overlay; remote: the profile's cordis.patch.yml).
  *  Both must hold for the row to resolve at boot; the plugin UI renders the
- *  half-injected state distinctly — the injection is never a silent modification. */
+ *  half-injected state distinctly — the injection is never a silent modification.
+ *  `version` = module A's own package version (null when not installed);
+ *  `live` = whether the RUNNING remote instance has loaded the module (true) /
+ *  restart still pending (false) / not probed (null; local side stays null). */
 export interface ChamberHostGraphState {
   installed: boolean
   patched: boolean
+  version: string | null
+  live: boolean | null
 }
 
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh

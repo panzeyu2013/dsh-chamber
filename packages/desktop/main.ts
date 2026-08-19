@@ -36,7 +36,7 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { createTransportManager } from './transport-manager.ts';
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
-import { sshProvider } from './ssh-provider.ts';
+import { sshProvider, probeClientGraphLive } from './ssh-provider.ts';
 import { configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
@@ -502,6 +502,24 @@ if (!gotTheLock) {
     // matches the runtime status(id) projection directly.
     const execTransport = sm.exec as unknown as ExecFn;
     const statusTransport: StatusFn = (id) => sm.status(id);
+    // Live-effect probe for the chamber host-graph state (design 09 module A):
+    // adapts probeClientGraphLive (ssh-provider.ts, tunnel RPC) onto
+    // plugin-sync's LiveProbe shape. `readyUrl` is main-process only (never
+    // the renderer); no ready tunnel → null = "not probed" (the plugin UI then
+    // renders 生效状态未知 instead of a guessed claim).
+    const liveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
+      const url = sm.readyUrl(id);
+      if (url === null) return Promise.resolve(null);
+      try {
+        const parsed = new URL(url);
+        const port = parsed.port === '' ? null : Number(parsed.port);
+        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
+        return probeClientGraphLive({ host: parsed.hostname, port }).then(result =>
+          result === 'live' ? true : result === 'not-live' ? false : null);
+      } catch {
+        return Promise.resolve(null);
+      }
+    };
     // In-flight guard for the ready-time remote host-graph seed (design 09 §6
     // 遗留 1): a Set of instance ids whose seed is currently running — pure
     // concurrency guard, not a "seeded" flag (the seed is idempotent, so
@@ -663,7 +681,7 @@ if (!gotTheLock) {
     ipcMain.handle('desktop_ssh_plugin_list', trustedIpc(async ({ id }) => {
       const spec = findRemoteSpec(id);
       if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      return remotePluginList(execTransport, spec);
+      return remotePluginList(execTransport, spec, { liveProbe: liveProbeFor(id) });
     }));
     ipcMain.handle('desktop_ssh_plugin_apply', trustedIpc(async ({ id, add, remove, restart }) => {
       const spec = findRemoteSpec(id);
