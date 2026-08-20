@@ -106,10 +106,11 @@
   注入，见设计 09 §4。
   **v0.1.3 发布前 review（2026-08-20）**：容错判定规则提取为 React-free 纯函数
   模块（`dsh-client-web/src/boot-tolerance.ts`：sweep 逐行裁决 + renderer 安装
-  裁决），boot.tsx/app-shell.ts 接入同一规则，新增 `pnpm run test:client-web`
+  裁决；当时的 boot.tsx/app-shell.ts 接入同一规则，rc.8 对齐后随 boot.ts 迁移），
+  新增 `pnpm run test:client-web`
   单测 9 项（含失败报告字符串逐字断言，防重构改规则）并入 CI 与 AGENTS.md 验证
-  清单；app-shell 采纳后端 renderer 的运行中生命周期尾门（行 fiber 卸载清
-  `slots._renderer`）注释在案；容错日志措辞对齐实际失败类型（materialize 而非
+  清单；当时的 app-shell 采纳后端 renderer 的运行中生命周期尾门（行 fiber
+  卸载清 `slots._renderer`，rc.8 对齐后该职责随 ui-renderer 行迁出）注释在案；容错日志措辞对齐实际失败类型（materialize 而非
   load）；manifest 预加载去重过滤补 `?rev=` 残留形式；设计 09 §3.3 失败降级语义
   按层表述（加载失败响亮归预加载层，apply 失败降级归 boot 内核层）。复验 ✓
   （typecheck / typecheck:client-web / test:client-web 9 / test:renderer-shell 5 /
@@ -331,8 +332,8 @@
   报告统一经 `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见失败态（shell.ts
   失败分支 dispose entry，重试干净重 boot）。
 - **v1 实现形态（代码内声明，与 05 契约无实质偏差）**：自研侧边栏 + 纯 dsh 首屏即基线；
-  renderer entry 级 React 面仅剩纯 dsh 桥接宿主；当前来源判定经 knob 注入；拷贝包 `tests/`
-  未拷贝；`chamber-auth` 随认证移除；settings 页 `ns.inject('settings.section')` 通道可用于
+  renderer entry 级 React 面仅剩纯 dsh 桥接宿主；当前来源判定经 knob 注入；拷贝包
+  `tests/` 为上游 vitest spec 惰性拷贝（chamber 侧验证走各自 node:test 门）；`chamber-auth` 随认证移除；settings 页 `ns.inject('settings.section')` 通道可用于
   后续插件化。
 - **窗口标题冻结（桌面壳故意偏差）**：桌面壳冻结原生标题栏为 `dsh-chamber`（单 frame 品牌
   恒定），会话名仍在应用内呈现。

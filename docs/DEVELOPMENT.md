@@ -43,7 +43,7 @@
 | `packages/desktop` | Electron 壳：单 frame、transport-manager + ssh provider（隧道 + systemd）、实例注册表、IPC |
 | `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
 | `packages/dsh-client-connection` | 官方连接客户端仓库内拷贝 + base 路径补丁 |
-| `packages/dsh-client-web` | 官方 web shell 仓库内拷贝 + boot.tsx N-ctx 模块表共享 seam |
+| `packages/dsh-client-web` | 官方 web shell 仓库内拷贝 + boot.ts N-ctx 模块表共享 seam |
 | `packages/dsh-chamber-client-ui-sidebar` | 自研侧边栏插件：多来源会话导航 + chamberBridge（替换官方 ui-sidebar 注册） |
 | `packages/dsh-chamber-client-ui-settings-connections` | 自研连接设置插件（本地实例卡 + 远程主机 CRUD/连接/systemd/日志） |
 | `packages/dsh-chamber-client-ui-settings-bridge` | 自研设置壳插件（shadow 官方 SettingsRoot 注册，服务器下拉 + 固定连接导航项） |

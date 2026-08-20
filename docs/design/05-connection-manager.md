@@ -294,7 +294,7 @@ export const chamberBridge: {
 - 拷贝补丁包（保持官方包名 `@deepseek-ai/*`，遮蔽 vendor workspace 条目）：
   - `packages/dsh-client-connection/`——base 路径参数化补丁（`resolveInstanceBasePath`：
     显式参数 → `window.__DSH_BASE_PATH__` → 默认 `/api`）；
-  - `packages/dsh-client-web/`——`boot.tsx` N-ctx 模块表共享 seam + 公开
+  - `packages/dsh-client-web/`——`boot.ts` N-ctx 模块表共享 seam + 公开
     `runtimeCtx` getter（实例 shell 打开会话的 seam）。
 - 自研插件包（`@dsh-chamber/*` 前缀，替换/扩展官方插件注册）：
   - `packages/dsh-chamber-client-ui-sidebar/`——**chamber 自研侧边栏插件**（包名
@@ -326,7 +326,7 @@ export const chamberBridge: {
     Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
     `CHAMBER_COVERED_IDS`（`packages/renderer/src/chamber-covered.ts`：复合已覆盖
     + 页面自有 id）去重，预加载剩余 bundle
-    （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.tsx `extraRows` seam
+    （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.ts `extraRows` seam
     合并进 boot rows（详见设计 09）。
   - **host 包与 seed（设计 09 方案 A）**：host 包 `packages/dsh-host-client-graph`
     （esbuild 产物 `dist/index.js`，`@deepseek-ai/*` 保持 external）；控制面

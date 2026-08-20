@@ -58,7 +58,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.7
+  DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.8
 
 jobs:
   create-release:

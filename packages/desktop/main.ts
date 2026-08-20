@@ -496,9 +496,9 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     height: 800,
     // 首帧前的窗口底色：与 dsh 前端深色主题一致，消除白屏闪烁。
     backgroundColor: '#0f1115',
-    // 固定窗口标题：官方 dsh 前端（DocumentTitle.tsx）会把当前会话名
-    // 投影到 document.title——若不拦截 page-title-updated，原生标题栏会
-    // 随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
+    // 固定窗口标题：官方 dsh 前端（rc.8 起标题投影在 ui-renderer 行内）
+    // 会把当前会话名投影到 document.title——若不拦截 page-title-updated，
+    // 原生标题栏会随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
     title: 'dsh-chamber',
     webPreferences: {
       // 沙箱 preload 以纯 CJS 执行（无 TS 类型擦除），统一加载编译产物

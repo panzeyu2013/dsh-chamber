@@ -215,7 +215,7 @@ interface WebBootGraph {
     **每实例宿主图额外 entry 另取（设计 09）**：boot 时前端经反代
     （`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-host-client-graph`
     的 Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
-    `CHAMBER_COVERED_IDS` 去重并预加载剩余 bundle、经 boot.tsx `extraRows`
+    `CHAMBER_COVERED_IDS` 去重并预加载剩余 bundle、经 boot.ts `extraRows`
     seam 合并进 boot rows——机制与构建链详见 05 §6 / 设计 09 §3.5；
   - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`
     （gen-boot-manifest 按 `assets/chamber-*.js` 模式定位产物；vendor

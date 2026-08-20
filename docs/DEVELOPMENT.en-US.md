@@ -48,7 +48,7 @@
 | `packages/desktop` | Electron shell: single frame, transport-manager + ssh provider (tunnels + systemd), instance registry, IPC |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
 | `packages/dsh-client-connection` | In-repo copy of the official connection client + base-path patch |
-| `packages/dsh-client-web` | In-repo copy of the official web shell + boot.tsx N-ctx module-table sharing seam |
+| `packages/dsh-client-web` | In-repo copy of the official web shell + boot.ts N-ctx module-table sharing seam |
 | `packages/dsh-chamber-client-ui-sidebar` | Self-built sidebar plugin: multi-source session navigation + chamberBridge (replaces the official ui-sidebar registration) |
 | `packages/dsh-chamber-client-ui-settings-connections` | Self-built connections settings plugin (local instance card + remote host CRUD/connect/systemd/logs) |
 | `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell plugin (shadows the official SettingsRoot registration; server dropdown + fixed connections nav entry) |

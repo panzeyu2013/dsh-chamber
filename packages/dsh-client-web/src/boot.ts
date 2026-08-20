@@ -102,6 +102,12 @@ const MODULES_ID = '@deepseek-ai/dsh-client-modules'
  * shell-static, registered on the shared module table in
  * {@link ensureWebModuleSystem}, and this entry is created by the kernel so
  * the boot mounts through the `uiRenderer` service its apply provides.
+ *
+ * boot-tolerance.ts's `classifyRendererInstallError` (the rc.7-era "second
+ * renderer install → adopt" rule) deliberately does NOT apply here: the
+ * kernel is the ONLY installer and its create/sweep path treats a failed
+ * ui-renderer row as a fatal kernel-row failure (assertEntriesActive) — the
+ * rule stays as a pinned decision rule for a future non-kernel installer.
  */
 const UI_RENDERER_ID = '@deepseek-ai/dsh-client-ui-renderer'
 

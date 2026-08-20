@@ -30,7 +30,11 @@
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 
-/** One composed client entry row of the host boot graph (mirror of WebBootEntry). */
+/** One composed client entry row of the host boot graph (mirror of WebBootEntry).
+ *  rc.8 adds `external?: string[]` to WebBootEntry; this mirror deliberately
+ *  omits it — the chamber merge preloads every kept row wholesale (the shared
+ *  module-table factory branch covers cross-row require edges, boot.ts), so
+ *  the field carries no meaning here and is dropped at parse (line ~151). */
 export interface HostGraphRow {
   /** Entry name == package name (module-table key). */
   id: string

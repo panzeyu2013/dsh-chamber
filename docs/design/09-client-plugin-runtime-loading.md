@@ -139,7 +139,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 | 面 | 改动（已落地） |
 |---|---|
 | `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`/`preloadedExtraBundles`，AppWebEntry 构造前预加载额外 bundle，loadModuleBundle 依赖注入可测）+ `chamber-covered.ts`（去重集） |
-| `packages/dsh-client-web`（拷贝包） | `boot.tsx` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |
+| `packages/dsh-client-web`（拷贝包） | `boot.ts` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |
 | 方案 A 附加 | 新 host 包 `packages/dsh-host-client-graph`（Remote `clientGraph/graph` 暴露图）+ 控制面 `host-graph-seed.ts`（seed 模块 A 包进 profile + 物化 `--patch` overlay，`packages/control-plane`） |
 | 官方/宿主/vendor | 零改动 |
 
@@ -185,7 +185,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   把 chamber-entry 的模块表交接拉进主 chunk（同 chamber-knob.ts 模式）。
   与 §3.2 的 union-table 修复锁步：chamber-entry.ts 的 `COVERED_FACTORIES`
   （首屏静态导入族的模块表 factory 注册）中每个 id 必须在覆盖集内（执行期断言）。
-- **extraRows seam（模块 D）**：`AppWebEntryOptions.extraRows`（`boot.tsx`，可选、
+- **extraRows seam（模块 D）**：`AppWebEntryOptions.extraRows`（`boot.ts`，可选、
   向后兼容）——chamber 侧已把额外 bundle 预加载完毕（bundle 执行时经
   `window.__ModuleLoader__.load({id, factory})` 自注册进共享模块表），seam 只把其
   id 合并进 boot rows（`loader.create` 经 `ClientModuleSystem.import()` 的 factories
@@ -209,7 +209,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   `dsh-client-ui-attachment` 静态注册、rc.8 后端新增其 client half 后 seed 遮蔽
   factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务——
   rc.8 把 slot-renderer 安装移出壳进了 `ui-renderer` 行）→ **降级不致命**：
-  console.error + status 'failed'，shell 照常 boot（boot.tsx 对 extraRows 逐行
+  console.error + status 'failed'，shell 照常 boot（boot.ts 对 extraRows 逐行
   容错 + sweep 排除）。理由：复合 bundle 固定一个 dsh client 版本，"后端 dsh 版本
   ≠ 壳版本"时新/旧核心行与壳不兼容是**正常条件**（特性缺席），不是损坏（§4
   fail-loud 保留给 manifest 行/app-shell 装配的损坏，以及额外 bundle 的加载失败——
