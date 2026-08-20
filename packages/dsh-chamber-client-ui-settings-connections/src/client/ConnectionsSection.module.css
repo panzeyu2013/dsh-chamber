@@ -413,6 +413,13 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* Modal content portals to document.body, whose color in the renderer base
+     styles is the near-white dark-scheme --text (#e6e9ef) — the dsh theme
+     paints the dialog white in light mode but never overrides body color, so
+     any text without an explicit --dsw-alias-* token would vanish on the
+     white dialog. Anchor the modal content color to the theme label token;
+     elements with explicit tokens (labels, dims, errors) keep theirs. */
+  color: var(--dsw-alias-label-primary);
 }
 
 .deleteDialog {

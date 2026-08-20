@@ -152,7 +152,13 @@ export function PluginSyncModal({ t, spec, onClose }: {
     }
   }, [localRemoveTarget, localRemoveBusy, loadLocalList])
 
-  const loadSync = useCallback(async (): Promise<void> => {
+  /**
+   * Reload the sync projection. `keepChecked` preserves the user's checked
+   * rows (a seed 注入 re-probe must not silently reset the selection — the
+   * chamber row is not part of the third-party diff, so the checked set stays
+   * valid across it; only rows that actually left the diff are dropped).
+   */
+  const loadSync = useCallback(async (keepChecked = false): Promise<void> => {
     if (!isRemote || spec === null) return
     setPhase('loading')
     setLoadError(null)
@@ -185,7 +191,12 @@ export function PluginSyncModal({ t, spec, onClose }: {
       setProfileNotInit(!remoteRes.manifest.profileExists)
       const d = computePluginDiff(localRes.manifest, remoteRes.manifest)
       setDiff(d)
-      setChecked(new Set(d.rows.filter(row => defaultChecked(row.kind)).map(row => row.name)))
+      if (keepChecked) {
+        const rows = new Set(d.rows.map(row => row.name))
+        setChecked(prev => new Set([...prev].filter(name => rows.has(name))))
+      } else {
+        setChecked(new Set(d.rows.filter(row => defaultChecked(row.kind)).map(row => row.name)))
+      }
       setResult(null)
       setResultError(null)
       setPhase('ready')
@@ -199,9 +210,11 @@ export function PluginSyncModal({ t, spec, onClose }: {
    *  onto the remote + ensures the cordis.patch.yml insert, then re-probes.
    *  The ready-time auto-seed normally covers this (main process); the button
    *  is the visible retry path for the failure/half-injected states — the
-   *  injection is never a silent modification. */
+   *  injection is never a silent modification. Gated against a concurrent
+   *  apply (both mutate the remote profile via the main process). */
   const doSeedHostGraph = useCallback(async (): Promise<void> => {
     if (!isRemote || spec === null || seedBusy) return
+    if (applyingRef.current) return
     setSeedBusy(true)
     setSeedError(null)
     try {
@@ -211,7 +224,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
       setSeedError(errorMessage(err))
     } finally {
       setSeedBusy(false)
-      await loadSync()
+      await loadSync(true)
     }
   }, [isRemote, spec, seedBusy, loadSync])
 
@@ -237,6 +250,9 @@ export function PluginSyncModal({ t, spec, onClose }: {
 
   const doApply = useCallback(async (): Promise<void> => {
     if (!isRemote || spec === null || diff === null || applyingRef.current) return
+    // A seed 注入 in flight mutates the same remote profile (module A files +
+    // cordis.patch.yml) — never apply while it is mid-write (2026-08 review).
+    if (seedBusy) return
     const sel = diff.rows.filter(row => checked.has(row.name))
     const materializeRows = sel.filter(row => row.kind === 'materialize')
     const add = sel
@@ -300,7 +316,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
       setRestart(true)
       setPhase('done')
     }
-  }, [isRemote, spec, diff, checked, restart, t])
+  }, [isRemote, spec, diff, checked, restart, seedBusy, t])
 
   const onApplyClick = useCallback((): void => {
     if (applyingRef.current) return
@@ -322,8 +338,14 @@ export function PluginSyncModal({ t, spec, onClose }: {
 
   const close = useCallback((): void => {
     if (applyingRef.current) return
+    // While a nested confirm modal (remove / apply / local-remove) is open,
+    // the primitives Modal registers its own document-level Escape listener —
+    // without this gate one Escape would ALSO close this main modal (its
+    // listener runs too), discarding the user's checked selection (2026-08
+    // review). The nested modals close themselves via their own onClose.
+    if (confirmRemove || confirmApply || localRemoveTarget !== null) return
     onClose()
-  }, [onClose])
+  }, [onClose, confirmRemove, confirmApply, localRemoveTarget])
 
   const title = `${t('pluginsTitle')} · ${spec === null ? t('localTitle') : spec.label}`
   const applying = phase === 'applying'
@@ -338,32 +360,27 @@ export function PluginSyncModal({ t, spec, onClose }: {
 
   const footer = ((): ReactNode => {
     if (phase === 'loading') {
-      return <Button variant="outline" disabled onClick={close}>{t('close')}</Button>
+      // No footer. The primitives Modal always renders a working header close
+      // (plus Escape / mask click → onClose), so a footer close would be
+      // redundant — and on the LOCAL instance `phase` stays 'loading' forever
+      // (loadSync only runs for remote), which previously left a DEAD disabled
+      // 「关闭」button. The X closes in every phase.
+      return undefined
     }
     if (phase === 'error') {
-      return (
-        <>
-          <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync() }}>{t('pluginsRetry')}</Button>
-          <Button variant="outline" onClick={close}>{t('close')}</Button>
-        </>
-      )
+      return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync() }}>{t('pluginsRetry')}</Button>
     }
     if (phase === 'applying') {
       return <Button variant="outline" disabled>{t('saving')}</Button>
     }
     if (phase === 'done') {
-      return (
-        <>
-          <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync() }}>{t('pluginsRefresh')}</Button>
-          <Button variant="outline" onClick={close}>{t('close')}</Button>
-        </>
-      )
+      return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync() }}>{t('pluginsRefresh')}</Button>
     }
     // ready
     return (
       <>
         <Button variant="outline" onClick={close}>{t('cancel')}</Button>
-        <Button variant="primary" disabled={changeCount === 0} onClick={onApplyClick}>
+        <Button variant="primary" disabled={changeCount === 0 || seedBusy} onClick={onApplyClick}>
           {t('pluginsApply')} {changeCount > 0 ? `${changeCount}` : ''}
         </Button>
       </>
@@ -722,7 +739,19 @@ export function PluginSyncModal({ t, spec, onClose }: {
 
   function renderLocalList(): ReactNode {
     if (localLoading) return <p className={css.dim}>{t('loading')}</p>
-    if (localListError !== null) return <p className={css.error} role="alert">{localListError}</p>
+    if (localListError !== null) {
+      // The local list never leaves phase 'loading' (loadSync runs for remote
+      // only), so the footer stays empty here — a visible retry is the only
+      // recovery short of reopening the modal (2026-08 review).
+      return (
+        <div className={css.pluginStack}>
+          <p className={css.error} role="alert">{localListError}</p>
+          <div>
+            <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadLocalList() }}>{t('pluginsRetry')}</Button>
+          </div>
+        </div>
+      )
+    }
     if (localList === null) return null
     const deps = Object.entries(localList.dependencies)
     if (deps.length === 0 && localList.unsyncable.length === 0) {
