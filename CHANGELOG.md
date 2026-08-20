@@ -12,6 +12,19 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **Git Worktree 独立插件（设计 08）** —— 新增实例内
+  `@dsh-chamber/dsh-host-git-worktree` Remote 与首屏静态
+  `@dsh-chamber/dsh-client-ui-git`：30 秒单飞拓扑、`sidebar.git` 座位、创建
+  worktree/workspace/session 补偿事务，以及 Git-first/workspace-delete 可重试删除。
+  Git 与 workspace 权威同进程/同用户；主工作树、dirty、locked、运行中目标硬拒绝，
+  全程不归档、不 force、不删分支，也不开放 fetch/pull/push 等网络 Git 动词；创建
+  checkout 仍遵从该用户已配置的仓库 filter（例如 Git LFS，可能访问网络），并在确认
+  界面明示。host-graph 与 Git host 包使用同一 overlay；本地 profile 和远程
+  ready-time seed 均先完整预检两个包，再逐文件写入并一次合并 overlay（不是跨文件
+  原子事务，失败会响亮并在下次 ready 幂等重试）。
+
 ### 变更
 
 - **全量对齐 dsh rc.8 baseline（设计 09 §4）** —— `harness.commit` →

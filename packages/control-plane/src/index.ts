@@ -38,7 +38,15 @@ import { runReaper } from './reaper.ts'
 import { createInstanceProxy } from './instance-proxy.ts'
 import { ensureInstanceId } from './instance-id.ts'
 import { hostLogs } from './host-logs.ts'
-import { buildPatchOverlay, ensureHostGraphPackage, HOST_GRAPH_PACKAGE_NAME } from './host-graph-seed.ts'
+import {
+  buildPatchOverlay,
+  ensureHostPackage,
+  missingHostPackageInserts,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GIT_WORKTREE_PACKAGE_NAME,
+  HOST_GRAPH_INSERT,
+  HOST_GRAPH_PACKAGE_NAME,
+} from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest, ApiResponse } from './api.ts'
 
@@ -57,6 +65,9 @@ const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
  * source is skipped, never an error).
  */
 export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-host-client-graph')
+
+/** Default source for the chamber in-host Git worktree service package. */
+export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-host-git-worktree')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -118,6 +129,11 @@ export interface ControlPlaneOptions {
    * this runtime) — is skipped (nothing to seed), never an error.
    */
   hostGraphPackageSourceDir?: string
+  /**
+   * Chamber in-host Git worktree package source. It follows the same built-
+   * artifact gate and profile seed lifecycle as hostGraphPackageSourceDir.
+   */
+  hostGitWorktreePackageSourceDir?: string
 }
 
 /** The assembled control-plane handle returned by createControlPlane. */
@@ -163,6 +179,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // Module-A host package source (design 09 module B); may be absent — the seed
   // skips it gracefully and the plane keeps working without the host graph.
   const hostGraphPackageSourceDir = options.hostGraphPackageSourceDir ?? DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR
+  const hostGitWorktreePackageSourceDir = options.hostGitWorktreePackageSourceDir
+    ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
   // The seed gate is the BUILT artifact (dist/index.js), not the package
   // directory: the dir exists in any checkout of this repo, while the esbuild
   // output is the shipped artifact — committed via the .gitignore negation
@@ -174,6 +192,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // module A is a packaging bug: fail-loud on purpose; ensureHostGraphPackage
   // throws on a missing declared file rather than silently skipping).
   const hostGraphArtifact = join(hostGraphPackageSourceDir, 'dist', 'index.js')
+  const hostGitWorktreeArtifact = join(hostGitWorktreePackageSourceDir, 'dist', 'index.js')
 
   // The state root must exist before any persisted module constructs.
   mkdirSync(stateDir, { recursive: true })
@@ -216,11 +235,46 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * failure (a broken shipped module A is a packaging bug, never silent).
    */
   function resolveHostGraphPatch(): string | null {
-    if (!existsSync(hostGraphArtifact)) return null
-    if (ensureHostGraphPackage(dshHome, hostGraphPackageSourceDir)) {
-      logger.log(`host-graph: seeded ${HOST_GRAPH_PACKAGE_NAME} into the local web profile`)
+    const available = [
+      {
+        label: 'host-graph',
+        sourceDir: hostGraphPackageSourceDir,
+        artifact: hostGraphArtifact,
+        insert: HOST_GRAPH_INSERT,
+        packageName: HOST_GRAPH_PACKAGE_NAME,
+      },
+      {
+        label: 'git-worktree',
+        sourceDir: hostGitWorktreePackageSourceDir,
+        artifact: hostGitWorktreeArtifact,
+        insert: HOST_GIT_WORKTREE_INSERT,
+        packageName: HOST_GIT_WORKTREE_PACKAGE_NAME,
+      },
+    ].filter(entry => existsSync(entry.artifact))
+
+    if (available.length === 0) return null
+    // Preflight every declared package before writing any of them. A damaged
+    // second artifact must not leave the first package partially refreshed.
+    for (const entry of available) {
+      const manifest = join(entry.sourceDir, 'package.json')
+      if (!existsSync(manifest)) {
+        throw new Error(`${entry.label}: built host package is missing ${manifest}`)
+      }
     }
-    return buildPatchOverlay(stateDir)
+    // Loader identities are global across the profile patch and this
+    // external overlay. Reuse an exact user-owned row, but fail before any
+    // package write when an id/name is duplicated or bound differently.
+    const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
+    const overlayInserts = missingHostPackageInserts(
+      existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null,
+      available.map(entry => entry.insert),
+    )
+    for (const entry of available) {
+      if (ensureHostPackage(dshHome, entry.packageName, entry.sourceDir)) {
+        logger.log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
+      }
+    }
+    return overlayInserts.length === 0 ? null : buildPatchOverlay(stateDir, overlayInserts)
   }
 
   // The managed local connection adapter (design 02): spawn/health/reaper
@@ -580,9 +634,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // leave the spawn command line exactly the v4 base. A pre-existing
       // running local instance is unaffected until its next restart — the
       // overlay applies at host boot, the official plugin-set-change cadence.
-      const hostGraphPatch = resolveHostGraphPatch()
-      if (hostGraphPatch === null) {
+      resolveHostGraphPatch()
+      if (!existsSync(hostGraphArtifact)) {
         logger.log(`host-graph: host package build artifact ${hostGraphArtifact} not present; seed skipped (module A not built)`)
+      }
+      if (!existsSync(hostGitWorktreeArtifact)) {
+        logger.log(`git-worktree: host package build artifact ${hostGitWorktreeArtifact} not present; seed skipped (package not built)`)
       }
       if (webDistDir !== undefined) {
         try {

@@ -12,6 +12,23 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Added
+
+- **Independent Git worktree plugin (design 08)** — adds the in-instance
+  `@dsh-chamber/dsh-host-git-worktree` Remote and the first-screen static
+  `@dsh-chamber/dsh-client-ui-git`: 30-second single-flight topology,
+  a `sidebar.git` seat, a compensating worktree/workspace/session create saga,
+  and retryable Git-first/workspace-delete removal. Git runs beside the
+  workspace authority under the same process user; main, dirty, locked, and
+  running targets are hard-rejected, with no archive, force, branch deletion,
+  or network Git verbs such as fetch, pull, or push. Creation checkout still
+  honors repository filters configured by that user (for example Git LFS,
+  which may access the network), and the confirmation UI says so explicitly.
+  The host-graph and Git host packages share one overlay. Local-profile and
+  remote ready-time seeds preflight both packages before per-file writes, then
+  merge the overlay once; this is not a cross-file transaction, so failures
+  stay loud and retry idempotently on the next ready transition.
+
 ### Changed
 
 - **Full dsh rc.8 baseline alignment (design 09 §4)** — `harness.commit` →

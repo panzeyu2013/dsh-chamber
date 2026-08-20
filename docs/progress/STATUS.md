@@ -10,9 +10,13 @@
 - **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径；Unix 为契约目标。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化透传、
   host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游解锁（07 §3/§4）。
-- **Git Worktree 插件（设计 08）**：范围决策已定稿（git/GitHub 插件化——不进控制面/
-  本体，允许 chamber 强制打包的客户端插件形态），设计稿见
-  `docs/todo/08-todo-git-worktree-plugin.md`；实现未排期。
+- **Git Worktree 插件（设计 08，v1 已落地，2026-08-20）**：原 todo 经实施前审计
+  收敛并移入 `docs/design/08-git-worktree-plugin.md`。M0–M3 已形成纵向闭环：实例内
+  host Remote（与 workspace 权威同用户/文件系统）、`sidebar.git` 客户端插件、30 秒
+  单飞拓扑、worktree → workspace → session 补偿型创建，以及不归档/不 force/不删分支
+  的 Git-first 可重试删除；本地与远程复用双 host-package seed/单一 overlay。自动化门禁
+  覆盖领域 wire、失败恢复、安全守卫、静态 entry 锁步与分发；M4 尚余真实远程 Linux +
+  Git 仓库的端到端验收（含首次 ready-time seed 后重启生效、Git LFS/filter 提示边界）。
 - **远程实例插件管理 / 一键应用本地插件清单 + 可视化添加（设计 13）**：**M1–M4 已落地**
   （exec `restart`/`run`/`write-file` + §7.2 白名单、`remoteDshHome` 贯穿 schema/投影/
   IPC/双 ambient 类型、`plugin-sync.ts` 编排、10 个 IPC 通道、前端
@@ -91,8 +95,12 @@
   11 会剪除 vendor importer 记录；本仓已切到仓库内受管快照，
   `pnpm install --frozen-lockfile` 通过）。桌面本地宿主同步升 rc.8
   （`DSH_CHAMBER_DSH_VERSION=0.1.0-rc.8` `bundle:dsh`）。验证：
-  `test:client-web`（9）、`test:renderer-shell`（29）、`test:settings-bridge`、
+  `test:client-web`（9）、`test:renderer-shell`（33）、`test:settings-bridge`、
   `typecheck:*` 全套、根 `typecheck`、`build:renderer`、控制面 8 套测试全部通过。
+  **rc.8 Remote 汇编生成锁步（2026-08-20）**：renderer 的 Typert 生成集合不再
+  手抄 5 个包，改从官方 `dsh-api-remotes/client` value imports 推导并校验标准
+  `./remote` 发布契约；当前 7 项（补齐 file/session reference）有独立快照锁步
+  3 用例，`build:renderer` 已复验通过，vendor 零改动。
   **rc.8 commands wire 兼容桥（已随 rc.8 baseline 对齐移除，2026-08）**：rc.8
   宿主 `commands.execute` Typert Remote 新增必填 `images` 参数（上游
   8d9fee19f9 起），rc.7 形状客户端缺该参数 → rc.8 宿主拒绝/崩溃 → 经

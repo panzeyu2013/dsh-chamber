@@ -27,6 +27,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * multi-source session list instead (05 §2) and never calls this hole.
      */
     'sidebar.workspaces': { kind: 'single'; scope: 'root'; owner: SidebarSectionOwnerProps }
+    /** Chamber-bundled Git worktree section between navigation and the foot. */
+    'sidebar.git': { kind: 'single'; scope: 'root'; owner: SidebarGitOwnerProps }
     /**
      * The settings seat at the sidebar foot. Declared by this package's
      * 'sidebar' entry; ui-settings registers its trigger row + modal panel.
@@ -58,6 +60,12 @@ export interface SidebarSectionOwnerProps {
  */
 export interface SidebarSettingsOwnerProps {
   /** Whether the sidebar renders wide content (false = 56px rail). */
+  wide: boolean
+}
+
+/** Owner share of the optional chamber Git worktree section. */
+export interface SidebarGitOwnerProps {
+  /** Whether the sidebar renders wide content; the occupant hides on the rail. */
   wide: boolean
 }
 
@@ -104,5 +112,5 @@ export type SidebarRootInjected = {
  */
 export type SidebarRootComponentProps =
   PropsRuntime<'sidebar'>
-  & PropsRenderSlots<'sidebar.workspaces' | 'sidebar.settings' | 'sidebar.footer.action'>
+  & PropsRenderSlots<'sidebar.workspaces' | 'sidebar.git' | 'sidebar.settings' | 'sidebar.footer.action'>
   & SidebarRootInjected & PropsLocale<'sidebar'>

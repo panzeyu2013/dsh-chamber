@@ -27,14 +27,19 @@ node packages/control-plane/test/m1-dsh-client.ts  # describe/health 客户端�
 node packages/control-plane/test/host-logs.ts      # 宿主日志环形缓冲
 node packages/control-plane/test/manager-api.ts    # 管理 REST（/health、/api/connections）
 node packages/control-plane/test/instance-proxy.ts # 每实例反代（HTTP/WS/SSE、503）
+node packages/control-plane/test/static-serving.ts # 首屏静态服务与 boot manifest
+node packages/control-plane/test/host-graph-seed.ts # chamber host 包 seed/overlay
 pnpm run smoke                                      # 集成冒烟
 ```
 
-这六个控制面测试文件正是 CI `test` job 执行的那套（见 `.github/workflows/ci.yml`），连同桌面传输层测试（`packages/desktop/transport-manager.test.ts`、`ssh-provider.test.ts`、`ssh-config.test.ts`）与客户端插件测试一起——与 CI 同一套，经根脚本驱动：
+这八个控制面测试文件正是 CI `test` job 执行的那套（见 `.github/workflows/ci.yml`），连同桌面传输层、renderer shell 与客户端/host 插件测试一起——与 CI 同一套，经根脚本驱动：
 
 ```bash
 pnpm run test:desktop        # 桌面传输/ssh 单测
+pnpm run test:renderer-shell # 复合 entry / host graph 锁步
 pnpm run test:sidebar        # 侧边栏 derive/view-prefs 单测
+pnpm run test:git            # Git worktree 客户端/事务单测
+pnpm run test:host-git       # 实例内 Git host core 单测
 pnpm run test:settings-bridge  # 设置壳策略单测
 ```
 
@@ -44,7 +49,10 @@ pnpm run test:settings-bridge  # 设置壳策略单测
 
 ```bash
 pnpm run typecheck                            # tsc --noEmit（0 错误）
+pnpm run typecheck:host-graph
+pnpm run typecheck:host-git
 pnpm run typecheck:sidebar                    # 客户端插件类型检查
+pnpm run typecheck:git
 pnpm run typecheck:connections
 pnpm run typecheck:settings-bridge
 node packages/control-plane/test/protocol.ts  # 聚焦单测（见上方"测试"节）
@@ -53,8 +61,13 @@ node packages/control-plane/test/m1-dsh-client.ts
 node packages/control-plane/test/host-logs.ts
 node packages/control-plane/test/manager-api.ts
 node packages/control-plane/test/instance-proxy.ts
+node packages/control-plane/test/static-serving.ts
+node packages/control-plane/test/host-graph-seed.ts
 pnpm run test:desktop                         # 桌面传输/ssh 单测
+pnpm run test:renderer-shell                  # renderer shell/覆盖表锁步
 pnpm run test:sidebar                         # 侧边栏单测
+pnpm run test:git                             # Git 客户端单测
+pnpm run test:host-git                        # Git host 单测
 pnpm run test:settings-bridge                 # 设置壳单测
 pnpm run smoke                                # PASS（或 SKIP，属正常）
 pnpm run build:renderer                       # 渲染层构建成功
@@ -97,7 +110,7 @@ docs: document the commit message convention
 ## 范围纪律
 
 - 凡 dsh 宿主、插件生态或复用的 dsh 前端已提供的能力，控制面只做**接入或服务，绝不重造**。
-- 被移出范围的域（git/GitHub 执行、walkthrough、通知中心、终端渲染/输入、web 预览、MCP、薄壳聊天 UI、控制面会话运行时等）**以任何形式不得回流**。
+- 被移出范围的域（walkthrough、通知中心、终端渲染/输入、web 预览、MCP、薄壳聊天 UI、控制面会话运行时等）**以任何形式不得回流**。唯一例外是设计 08 已定稿的 Git worktree 插件：只能是 chamber 强制打包的 client 插件 + 实例内领域限定 host Remote，绝不能回流为控制面/Desktop 的 Git 执行面。
 - 任何新领域功能提案先回答：dsh 原生、插件生态或宿主 web 前端是否已覆盖？有 → 不开发。
 
 ## Pull Requests

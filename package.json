@@ -19,7 +19,9 @@
     "dev:control-plane": "node packages/control-plane/src/standalone.ts",
     "build:renderer": "pnpm --filter @dsh-chamber/renderer run build",
     "build:host-graph": "pnpm --filter @dsh-chamber/dsh-host-client-graph run build",
-    "build:desktop": "pnpm run build:host-graph && pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run build:control-plane && pnpm --filter @dsh-chamber/desktop run build:host-graph-package && pnpm --filter @dsh-chamber/desktop run build:preload && pnpm --filter @dsh-chamber/desktop run bundle:dsh",
+    "build:host-git": "pnpm --filter @dsh-chamber/dsh-host-git-worktree run build",
+    "build:host-packages": "pnpm run build:host-graph && pnpm run build:host-git",
+    "build:desktop": "pnpm run build:host-packages && pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run build:control-plane && pnpm --filter @dsh-chamber/desktop run build:host-graph-package && pnpm --filter @dsh-chamber/desktop run build:preload && pnpm --filter @dsh-chamber/desktop run bundle:dsh",
     "dist:desktop": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist",
     "dist:desktop:mac": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:mac",
     "dist:desktop:win": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:win",
@@ -36,12 +38,16 @@
     "typecheck:settings-bridge": "tsc -p packages/dsh-chamber-client-ui-settings-bridge/tsconfig.json --noEmit",
     "typecheck:client-web": "node scripts/typecheck-client-web.mjs",
     "typecheck:host-graph": "pnpm --filter @dsh-chamber/dsh-host-client-graph run typecheck",
+    "typecheck:git": "tsc -p packages/dsh-chamber-client-ui-git/tsconfig.json --noEmit",
+    "typecheck:host-git": "pnpm --filter @dsh-chamber/dsh-host-git-worktree run typecheck",
     "test:desktop": "node packages/desktop/transport-manager.test.ts && node packages/desktop/ssh-provider.test.ts && node packages/desktop/ssh-config.test.ts && node packages/desktop/renderer-trust.test.ts && node packages/desktop/plugin-sync.test.ts && node packages/desktop/chamber-settings.test.ts",
     "test:sidebar": "node packages/dsh-chamber-client-ui-sidebar/test/derive.ts && node packages/dsh-chamber-client-ui-sidebar/test/view-prefs.ts && node packages/dsh-chamber-client-ui-sidebar/test/search-state.ts && node packages/dsh-chamber-client-ui-sidebar/test/pending-click.ts",
     "test:settings-bridge": "node packages/dsh-chamber-client-ui-settings-bridge/test/busy-enter-policy.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/permission-controller.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/mount-retry.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/nav-active.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/update-gate.ts",
     "test:connections": "node packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-diff.test.ts",
     "test:client-web": "node packages/dsh-client-web/tests/boot-tolerance.test.ts",
-    "test:renderer-shell": "node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/host-graph.test.ts && node --import ./scripts/test-shell-register.mjs packages/renderer/src/shell.test.ts"
+    "test:git": "pnpm --filter @dsh-chamber/dsh-client-ui-git run test",
+    "test:host-git": "pnpm --filter @dsh-chamber/dsh-host-git-worktree run test",
+    "test:renderer-shell": "node packages/renderer/scripts/typert-remote-contract.test.mjs && node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/host-graph.test.ts && node --import ./scripts/test-shell-register.mjs packages/renderer/src/shell.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

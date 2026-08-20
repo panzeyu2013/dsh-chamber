@@ -1,10 +1,11 @@
-# 13 · 远程实例插件管理（远程 dsh plugin 编排；已实现，2026-08）
+# 13 · 远程实例插件管理（远程 dsh plugin 编排；已实现，2026-08；设计 08 双包 seed 更新 2026-08-20）
 
 > **状态：已实现（2026-08，M1–M4 落地）**——实现记录与验证见
 > `docs/progress/STATUS.md`（设计 13 条目）。本文档补全此前散落于
 > 05 §7.4/§7.6、03 §2.2 与 STATUS 中的契约实体，成为该面的设计权威。
 > 范围纪律：只做**编排**（远端 dsh plugin CLI 经 exec 通道驱动），不重造
-> dsh 宿主插件系统本身。
+> dsh 宿主插件系统本身。设计 08 增加的 Git 执行仍在远端 dsh 实例内；本设计
+> 只负责把 chamber 自带的 host package 分发过去，绝不增加 `ssh ... git ...`。
 
 ## 1. 动机与范围
 
@@ -14,6 +15,8 @@
 - 一键应用本地插件清单 + 可视化添加：npm 搜索（best-effort）与本地路径包
   物化（`add file:`）。
 - 本地实例插件走控制面侧（`desktop_local_plugin_*`），与远程同 UI 但不同通道。
+- chamber 自带 host package 的远端 ready-time 分发：host-graph 与 Git
+  worktree 两包共用一个严格 seed 算法；这不是远端 Git 执行面。
 
 ## 2. 通道：provider exec
 
@@ -31,21 +34,46 @@
 - `apply`：add / remove / restart（restart 需布尔值）；spec 在主进程二次
   白名单校验（`applyPlugins` + `buildRemoteExecArgv`）——renderer 提供
   **绝不信任**。
-- `seed`（设计 09 遗留 1 接线）：`seedRemoteHostGraph` 经 exec `write-file`
-  原语把模块 A 包（`@dsh-chamber/dsh-host-client-graph`）落到远端平铺
-  fallback `profiles/node_modules` + `cordis.patch.yml` 列表 insert + restart；
-  幂等 hash-skip；接入连接就绪时的自动注入（主进程日志 + UI 实时探测，手动
-  按钮为失败重试路径）。
+- `seed`（设计 08/09 接线）：`seedRemoteChamberHostPackages` 经现有受限
+  `cat/write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的两个包
+  `@dsh-chamber/dsh-host-client-graph`（loader id `client-graph`）与
+  `@dsh-chamber/dsh-host-git-worktree`（loader id `git-worktree`）落到远端
+  install-level fallback `profiles/node_modules`，再合并 web profile 的
+  `cordis.patch.yml`。`seedRemoteHostGraph` 保留为旧手动 IPC 的单包兼容 wrapper。
 - `materialize`：本地路径包物化（pack → ssh 传输 → 远端 `add file:`）；
   `add file:` 走独立目录约束白名单分支（仅物化目录内绝对路径）。
+
+双包 seed 的顺序与失败语义固定：
+
+1. 先在本机预检所有可用包的 `package.json + dist/index.js`；第二包损坏时远端
+   零调用。未构建的包被排除，也绝不产生悬空 loader row。
+2. 第一条远端调用只读
+   `<remoteDshHome>/profiles/web/cordis.patch.yml`；文件缺失（profile 未初始化）
+   或不是可安全追加的顶层 YAML list 时，在任何远端写入前 fail-loud。
+3. 对两包全部目标文件先做 quiet `cat` 与字节域 hash 比较；任一非 ENOENT
+   读取失败发生在第一笔写入之前。随后只写缺失/漂移文件到
+   `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`。
+4. 包文件全部成功后，才对 patch 做**一次**合并写。去重必须在同一 loader row
+   内精确匹配 id/name pair，不能把两条交叉 row 误判为已存在；用户已有顶层
+   list 保留，只追加缺失的 chamber rows。
+5. SSH transport 每次进入 `ready` 都在 instance 单飞守卫下重跑该幂等流程；
+   重连是廉价 hash-skip，不持久化可能漂移的 “seeded” 标记。自动 seed **不替
+   用户重启远端 dsh**：已运行实例须重启后才装载新增 row，日志明确标注
+   “重启后生效”。
+
+该通道只复制 chamber 自有构建产物。Git worktree RPC/校验/子进程全部由远端
+实例加载后的 `@dsh-chamber/dsh-host-git-worktree` 执行（设计 08），Desktop
+既不接收 Git argv，也不读 Git topology。
 
 ## 4. 数据与投影
 
 ### 4.1 远端插件清单
 
-`desktop_ssh_plugin_list` → 远端 `dsh plugin --profile web list` 解析；
-installed 语义本地/远端一致：**两文件定义**（package.json + dist/index.js，
-`SEED_FILES`）。
+`desktop_ssh_plugin_list` → 远端 `dsh plugin --profile web list` 解析。现有
+`chamber.hostGraph.installed` 投影的本地/远端语义保持**两文件定义**
+（package.json + dist/index.js，`SEED_FILES`）；设计 08 没有把 Git host 包塞进
+普通插件 manifest schema。Git 客户端以每实例 `gitWorktree` Remote 的实际应答
+判定执行面是否可用，缺包/未重启必须显式报错而不是显示空仓库。
 
 ### 4.2 remoteDshHome（远端 dsh home 路径基准）
 
@@ -77,6 +105,10 @@ installed 语义本地/远端一致：**两文件定义**（package.json + dist/
   （本地实例即 chamber 页面，boot 自身证明图通道）。
 - 注入结果写入实例环形缓冲日志（transport-manager `appendLog`，连接设置页
   远端日志面板可见）。
+- Git worktree 客户端是 renderer 复合 entry 的首屏 covered package；它不复用
+  host-graph 的 installed 投影冒充自身状态，而是按来源调用 `gitWorktree`
+  Remote。缺包或尚未重启生效时保留明确的来源错误；ready-time 注入日志说明
+  “重启后生效”，不得把 RPC 不可达渲染成空仓库。
 
 ## 7. 安全
 
@@ -88,7 +120,8 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
 ### 7.2 白名单（权威）
 
 - 远端命令名：`dsh|cat|printf|base64|mkdir`；argv/路径白名单 + shell 元字符
-  拒绝（无 shell 拼接，参数数组 spawn）；
+  拒绝。OpenSSH 的远端命令最终仍由远端 shell 解释，因此安全性来自固定命令
+  形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全边界；
 - 服务名：`^[a-zA-Z0-9_.-]+$`（systemctl 目标）；
 - remoteDshHome：白名单 + shell 安全值（null = 远端默认 `~/.dsh`）；
 - `write-file` 目标前缀白名单 + 50MiB 大小上限。
@@ -104,5 +137,8 @@ UTF-8 文本视图。
   remoteDshHome 贯穿、plugin-sync 编排、10 个 IPC 通道、前端
   PluginSyncModal/PluginAddView/plugin-diff、chamber 内建注入可见化 +
   生效三态。
+- **设计 08 扩展已落地（2026-08-20）**：通用双 host-package seed、精确
+  id/name pair merge、ready-time 单飞注入与 packaged 双包复制；未改变
+  TransportExecAction/run 形状或普通插件 manifest schema。
 - **剩余**：本地 `dsh plugin` / `pnpm pack` 依赖本机 pnpm
   （`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。

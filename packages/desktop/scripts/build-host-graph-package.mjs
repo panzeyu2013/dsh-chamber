@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * build-host-graph-package.mjs — 把 @dsh-chamber/dsh-host-client-graph 的
- * 可分发形态（package.json + 已构建的 dist/index.js）拷贝进
- * desktop/dist/host-graph-package/，供打包态（asar 内）控制面 seed 使用。
+ * build-host-graph-package.mjs — 把 chamber 自带的两个 host 包的可分发
+ * 形态（package.json + 已构建 dist/）拷贝进 desktop/dist/，供打包态
+ * 控制面/SSH seed 使用。脚本名保留，避免破坏现有 build 调用方。
  *
  * 背景（设计 09 §3.5）：控制面 seed 时把 host 包分发进本地 profile 的
  * node_modules，并把 --patch overlay 注入 spawn 命令。开发态直接从源码树
@@ -16,26 +16,42 @@ import { fileURLToPath } from 'node:url'
 
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = join(desktopDir, '..', '..')
-const srcDir = join(repoRoot, 'packages', 'dsh-host-client-graph')
-const outDir = join(desktopDir, 'dist', 'host-graph-package')
+const packages = [
+  {
+    label: 'host-graph',
+    sourceDir: join(repoRoot, 'packages', 'dsh-host-client-graph'),
+    outDir: join(desktopDir, 'dist', 'host-graph-package'),
+  },
+  {
+    label: 'git-worktree',
+    sourceDir: join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree'),
+    outDir: join(desktopDir, 'dist', 'host-git-worktree-package'),
+  },
+]
 
-const artifact = join(srcDir, 'dist', 'index.js')
-if (!existsSync(artifact)) {
-  console.error(
-    `[build-host-graph-package] 缺少 host-graph 构建产物：${artifact}\n`
-    + '请先执行 pnpm run build:host-graph（或 pnpm --filter @dsh-chamber/dsh-host-client-graph run build）',
-  )
-  process.exit(1)
+// Preflight both packages before replacing either output. A missing second
+// artifact therefore cannot publish a mixed old/new host package set.
+for (const entry of packages) {
+  const artifact = join(entry.sourceDir, 'dist', 'index.js')
+  const manifest = join(entry.sourceDir, 'package.json')
+  if (!existsSync(artifact) || !existsSync(manifest)) {
+    console.error(
+      `[build-host-graph-package] 缺少 ${entry.label} 构建产物：${!existsSync(artifact) ? artifact : manifest}\n`
+      + '请先构建全部 chamber host packages',
+    )
+    process.exit(1)
+  }
 }
 
-// 原子替换：先把完整产物写进 .tmp（旧的 .tmp 先清），再删旧目录、rename 入位。
-// 任一时刻读取者看到的是旧产物或完整新产物，绝不会是半拷状态（与
-// build:control-plane 同节奏；cpSync 中途失败只会留下 .tmp，不影响已发布的 dist）。
-const tmpDir = `${outDir}.tmp`
-rmSync(tmpDir, { recursive: true, force: true })
-mkdirSync(tmpDir, { recursive: true })
-cpSync(join(srcDir, 'package.json'), join(tmpDir, 'package.json'))
-cpSync(join(srcDir, 'dist'), join(tmpDir, 'dist'), { recursive: true })
-rmSync(outDir, { recursive: true, force: true })
-renameSync(tmpDir, outDir)
-console.log('[build-host-graph-package] host-graph package -> dist/host-graph-package/')
+for (const entry of packages) {
+  // 原子替换：先把完整产物写进 .tmp，再 rename 入位；读取者只会看到旧
+  // 产物或完整新产物，不会看到半拷目录。
+  const tmpDir = `${entry.outDir}.tmp`
+  rmSync(tmpDir, { recursive: true, force: true })
+  mkdirSync(tmpDir, { recursive: true })
+  cpSync(join(entry.sourceDir, 'package.json'), join(tmpDir, 'package.json'))
+  cpSync(join(entry.sourceDir, 'dist'), join(tmpDir, 'dist'), { recursive: true })
+  rmSync(entry.outDir, { recursive: true, force: true })
+  renameSync(tmpDir, entry.outDir)
+  console.log(`[build-host-graph-package] ${entry.label} package -> ${entry.outDir}/`)
+}

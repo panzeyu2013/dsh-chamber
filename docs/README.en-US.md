@@ -42,6 +42,7 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Local dsh hosting, one click** — works out of the box: the local instance auto-starts with readiness/health/logs; the first screen is the local instance's full dsh UI
 - **Remote instances over SSH** — add a host in the connections settings and the app sets up an SSH tunnel and manages the remote systemd service; optional password auth (stored securely, see Security)
 - **Unified multi-source sidebar navigation** — sessions/workspaces from every source (local + remote instances) are listed equally in the dsh-native sidebar, grouped by source (remote sources carry a colored badge); single click opens a session, double click renames
+- **Git worktree lifecycle** — a bundled, independent chamber plugin shows per-instance repository topology in the sidebar and closes the worktree → workspace → session create flow; deletion is a retryable Git-first transaction that rejects main, dirty, locked, or running targets, never archives sessions, never forces, and never deletes branches
 - **Multiple instances in parallel (N-ctx)** — several dsh shells coexist in one window; switch the active instance at any time
 - **Desktop updates** — silent version checks, a low-key Settings "Update" section, download only after confirmation, install on quit
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
@@ -189,6 +190,7 @@ The remote server only needs the dsh API-side web profile on loopback — no web
 - **v1 has no auth boundary** — the control plane listens on loopback only (127.0.0.1); all `/api/*` routes and the per-instance proxy are anonymously reachable, CORS restricted to loopback origins + an explicit allowlist
 - **Tunnel URLs and SSH material never reach the renderer** — the renderer only sees non-secret projections (phase/localPort), never tunnel URLs or SSH credentials; logs are equally free of tunnel/SSH material. The one sanctioned exception ([design 05 §8](design/05-connection-manager.md)): an optional per-host SSH password — entered transiently in the form, held in main-process memory, mirrored to `<userData>/ssh-passwords.json` (0600, atomic write), injected into system ssh via an ephemeral 0600 askpass helper — never on the command line, never in the registry/logs, never back to the renderer; gated off on Windows in v1
 - **systemctl is spawned with an argument array** (no shell) + serviceName allowlist (`^[a-zA-Z0-9_.-]+$`)
+- **Git is not relayed through Desktop/SSH commands** — the Git host plugin runs inside each dsh instance process, under the same OS user and filesystem as the workspace authority; it exposes only fixed worktree-domain operations with `shell:false` and bounded output/time, and provides no network Git verbs such as fetch, pull, or push. Checkout during creation still honors repository filters configured by that OS user (for example Git LFS, which may access the network); the confirmation UI states this trusted boundary explicitly
 
 ## FAQ
 

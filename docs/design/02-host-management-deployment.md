@@ -1,15 +1,18 @@
 # 02 · 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态
 
-> 本地 dsh 宿主进程的托管与部署形态（v1 定稿，2026-08-14）：
+> 本地 dsh 宿主进程的托管与部署形态（v1 定稿 2026-08-14；设计 08/09
+> host-package seed 接线更新 2026-08-20）：
 >
 > - **profile 改用 dsh 内置 web profile**：`dsh --profile web --host 127.0.0.1
->   --port <port> --trusted-host 127.0.0.1:<port>`——不再生成 profile 目录 /
->   patch 层 / glue 插件，端口不再随机分配，改为固定端口 + 占用重试（port+1）。
+>   --port <port> --trusted-host 127.0.0.1:<port>`——不再生成/维护自建 profile
+>   目录、业务 patch stack 或 glue 插件，端口不再随机分配，改为固定端口 +
+>   占用重试（port+1）。唯一例外是设计 08/09 的**宿主包 loader overlay**：它只
+>   把 chamber 自带的两个 host 包挂入官方 web profile，不接管宿主组装权威（§2.6）。
 > - **保留沿用**：spawn 生命周期、端口占用重试、pid 记录
 >   （ownerPid/ownerInstanceId/port/binary/profile/source/startedAt）、
 >   instance-id 仲裁、readiness（TCP + `host.describe`）、健康七态状态机、
 >   reaper、host-logs 滚动日志、systemd 单元（部署形态，远程实例参考）、优雅停止。
-> - **删除**：slim profile 生成与维护、glue 插件、补丁层 HMR 分类与
+> - **删除**：slim profile 生成与维护、glue 插件、旧业务补丁层 HMR 分类与
 >   `POST /api/config/reload`、external 接管 / claim、部署五形态（收为
 >   桌面一体一形态）、README 快速连接承诺。
 >
@@ -28,14 +31,16 @@
 2. 宿主进程生命周期完全由控制面管辖：spawn（detached）→ 就绪探测 → 健康
    监控 → 失败重启（带背压）→ 优雅关闭；控制面崩溃后遗留的孤儿宿主可被
    安全回收；
-3. 宿主侧配置/设置变更由 dsh 原生机制自行处理（web profile 自带配置平面），
-   控制面不介入（§1.3 边界）；
+3. 用户的宿主配置/设置变更由 dsh 原生机制自行处理（web profile 自带配置
+   平面），控制面不介入；chamber 自带 host 包的 loader 附着仅走 §2.6 的
+   独立、确定性 seed，不成为配置权威；
 4. 明确部署形态（桌面一体）与 systemd 单元（远程实例的部署参考形态）。
 
 ### 1.2 范围
 
 - **in**：local 实例的托管（spawn / 就绪 / 健康 / 重启 / 回收 / 仲裁）、
-  pid 记录、host-logs 滚动日志、systemd 单元、优雅停止。
+  pid 记录、host-logs 滚动日志、systemd 单元、优雅停止；chamber 自带 host
+  包的确定性分发与 loader overlay（§2.6）。
 - **out**：会话/目标/终端等宿主能力（宿主原生，前端经每实例反代消费，
   03 §3）；dsh 连接协议（wire 以 vendor dsh-host-apiproxy 为权威，控制面仅用
   describe/健康探活面）；认证/审计
@@ -51,6 +56,9 @@
   是安全底线。
 - **诚实失败**：端口占用、启动超时、探测失败一律显式报错（fail-loud），
   绝不静默降级。
+- **只附着，不下沉业务**：控制面可复制 chamber 自带 host 包并挂 loader row，
+  但不解析其业务数据，也不执行 Git；Git worktree 事实与命令始终属于实例内
+  `@dsh-chamber/dsh-host-git-worktree`（设计 08）。
 
 ---
 
@@ -130,6 +138,34 @@ dsh 自身 wire / vendor 源码为权威），
   `dshPort` 已属于另一活着的托管记录 → 按 P+1 继续重试或报告冲突，**不杀
   进程**（先注册先托管）。
 
+### 2.6 两个 chamber host 包的 seed 与单一 loader overlay（设计 08/09）
+
+官方 web profile 仍是宿主组装权威；chamber 只追加两个自身拥有、边界明确的
+host package：
+
+| loader id | package | 实例内职责 |
+|---|---|---|
+| `client-graph` | `@dsh-chamber/dsh-host-client-graph` | 只读暴露该实例的 client module boot graph |
+| `git-worktree` | `@dsh-chamber/dsh-host-git-worktree` | 在该实例进程/用户/文件系统内执行受限 Git worktree 领域操作（设计 08） |
+
+本地托管实例的接线如下：
+
+1. `createControlPlane` 分别接收 `hostGraphPackageSourceDir` 与
+   `hostGitWorktreePackageSourceDir`；只有该源的 `dist/index.js` 实际存在时，
+   才把 `package.json + dist/index.js` 以内容 hash 幂等复制到
+   `<DSH_HOME>/profiles/web/node_modules/@dsh-chamber/<package>/`。
+2. 控制面只生成**一个** `<stateDir>/dsh-chamber-graph.patch.yml`。其 `insert`
+   列表只含本次确有构建产物的 package row：两包俱全则两行，只构建一包则
+   只有对应一行；两包都缺时不传 `--patch`，保持原生 web profile 基线。
+3. 复制在 overlay 写入之前完成；已声明构建产物却缺少另一必需文件属于打包
+   损坏，启动 fail-loud。文件与 overlay 都原子写入并保持 0600。
+4. seed thunk 在**每次 spawn（含自动重启）之前**重新求值。`dsh plugin`
+   导致 pnpm 重链并裁掉 extraneous host 包后，下一次 spawn 会自动补回；overlay
+   也按当时实际可用产物重建，不留下悬空 row。
+
+这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`
+或 `gitWorktree` 的领域结果，只做受控文件分发与 loader 挂载。
+
 ---
 
 ## 3. 详细设计
@@ -137,8 +173,12 @@ dsh 自身 wire / vendor 源码为权威），
 ### 3.1 spawn（detached）与启动命令
 
 ```
-dsh --profile web --host 127.0.0.1 --port <P> --trusted-host 127.0.0.1:<P>
+dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
+  --host 127.0.0.1 --port <P> --trusted-host 127.0.0.1:<P>
 ```
+
+`--patch` 仅在 §2.6 至少一个 host 包产物可用时出现，并位于 web flags 之前；
+它只携带 chamber-owned host rows，不改变官方 web profile 的其它组合层。
 
 - `spawn(..., { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env })`
   （Unix）——独立进程组，宿主可活过父进程崩溃；Windows 退化见 §5。
@@ -388,6 +428,12 @@ WantedBy=multi-user.target
   无追加语法、无变量展开）；
 - **绑定面**：恒 `--host 127.0.0.1`（loopback）——chamber 隧道是唯一入口，
   不额外暴露面；绕过隧道直连（0.0.0.0）须配套鉴权（v1 实例匿名）或反代前置。
+- **远端 chamber host 包**：SSH transport 进入 `ready` 后，桌面主进程调用
+  `seedRemoteChamberHostPackages`，把本次实际已构建的 host-graph + Git worktree
+  两包写到 `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`，并对
+  `<remoteDshHome>/profiles/web/cordis.patch.yml` 做一次合并写。它复用受限
+  `cat/write-file` 通道，仅做分发，**不经 SSH 执行 Git**；已运行的远端 dsh
+  需重启后才加载新 row，完整原子顺序、去重与失败语义见设计 13 §3。
 
 ---
 
@@ -401,6 +447,7 @@ WantedBy=multi-user.target
 | 孤儿回收安全模型 | 参考实现 `managed-process-registry.js`（记录在案 → 重验 → owner 死才杀） | 移植 + 改造：命令串含 `--profile web`、lsof 端口归属校验（§3.4） |
 | 健康监控 / 重启 / 背压 | 参考实现 `lifecycle.js`（共享失败计数、节流、单飞行重启、端口释放） | 探活载荷换 `host.describe`；删"忙会话宽限"（§2.4/§3.5） |
 | 优雅退出 | dsh profile-boot（SIGTERM dispose） | SIGTERM 进程组 → SIGKILL 兜底（§3.7） |
+| chamber host 包附着 | `@dsh-chamber/dsh-host-client-graph` + `@dsh-chamber/dsh-host-git-worktree` | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git 业务（§2.6） |
 
 ---
 

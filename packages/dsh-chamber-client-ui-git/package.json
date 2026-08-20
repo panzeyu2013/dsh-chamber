@@ -1,0 +1,47 @@
+{
+  "name": "@dsh-chamber/dsh-client-ui-git",
+  "description": "Chamber-bundled Git worktree client plugin: per-instance topology and safe create/remove lifecycle in the official sidebar shell",
+  "version": "0.1.3",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./src/client/index.ts",
+    "./shared": "./src/shared/index.ts",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node test/git-api.ts && node ../dsh-chamber-client-ui-sidebar/test/instance-mutation-values.ts && node test/snapshot-facts.ts && node test/saga.ts && node test/slot-contract.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-client-locale": "workspace:^",
+    "@deepseek-ai/dsh-client-runtime": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "react": "^19.0.0"
+  }
+}

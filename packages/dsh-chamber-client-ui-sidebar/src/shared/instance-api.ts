@@ -17,6 +17,11 @@
  */
 import { AbstractApiClient } from '@deepseek-ai/dsh-client-connection/client'
 import { DirectoryBrowseError } from '@deepseek-ai/dsh-client-runtime/client'
+import {
+  decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
+} from './instance-mutation-values.ts'
+import { InstanceRpcError } from './instance-rpc-error.ts'
+export { InstanceRpcError } from './instance-rpc-error.ts'
 
 /** One workspace row (WorkspaceView wire shape). */
 export interface WorkspaceRow {
@@ -133,9 +138,13 @@ function resultError(result: any): Error | null {
   if (rpcResult?.ok === true) return null
   const error = rpcResult?.error
   if (error !== undefined && typeof error === 'object') {
-    return new Error(`${String(error.code ?? 'unknown')}: ${String(error.message ?? '未知错误')}`)
+    return new InstanceRpcError(
+      String(error.code ?? 'unknown'),
+      String(error.message ?? '未知错误'),
+      error.details,
+    )
   }
-  return new Error('实例返回未知错误')
+  return new InstanceRpcError('unknown', '实例返回未知错误')
 }
 
 /**
@@ -359,14 +368,20 @@ export async function insertWorkspaceBefore(
   await callAndThrow(client, () => client.workspace.insertBefore(payload))
 }
 
-/** session.create under a workspace; returns the published session id. */
-export async function createSession(client: InstanceApiClient, workspaceId: string): Promise<string> {
-  const result = await callAndThrow(client, () => client.sessions.create({ workspaceId }))
-  const sessionId = result?.result?.value?.sessionId
-  if (typeof sessionId !== 'string' || sessionId === '') {
-    throw new Error('instance-session-create: 实例未返回会话 id')
-  }
-  return sessionId
+/**
+ * session.create under a workspace; returns the published session id. A
+ * caller-supplied id makes multi-step sagas retryable without minting a second
+ * session after an ambiguous response.
+ */
+export async function createSession(
+  client: InstanceApiClient,
+  workspaceId: string,
+  sessionId?: string,
+): Promise<string> {
+  const payload: { workspaceId: string; sessionId?: string } = { workspaceId }
+  if (sessionId !== undefined) payload.sessionId = sessionId
+  const result = await callAndThrow(client, () => client.sessions.create(payload))
+  return decodeSessionCreateValue(result?.result?.value, sessionId)
 }
 
 /**
@@ -394,8 +409,16 @@ export async function archiveSession(client: InstanceApiClient, sessionId: strin
   await callAndThrow(client, () => client.workspace.archiveSession({ sessionId }))
 }
 
-export async function createWorkspace(client: InstanceApiClient, path: string): Promise<void> {
-  await callAndThrow(client, () => client.workspace.create({ path }))
+export interface CreateWorkspaceResult {
+  workspaceId: string
+  path: string
+  /** False means the host reused the workspace already registered at `path`. */
+  created: boolean
+}
+
+export async function createWorkspace(client: InstanceApiClient, path: string): Promise<CreateWorkspaceResult> {
+  const result = await callAndThrow(client, () => client.workspace.create({ path }))
+  return decodeWorkspaceCreateValue(result?.result?.value, path)
 }
 
 export async function renameWorkspace(client: InstanceApiClient, workspaceId: string, title: string): Promise<void> {
@@ -403,5 +426,6 @@ export async function renameWorkspace(client: InstanceApiClient, workspaceId: st
 }
 
 export async function deleteWorkspace(client: InstanceApiClient, workspaceId: string): Promise<void> {
-  await callAndThrow(client, () => client.workspace.delete({ workspaceId }))
+  const result = await callAndThrow(client, () => client.workspace.delete({ workspaceId }))
+  decodeWorkspaceDeleteValue(result?.result?.value)
 }

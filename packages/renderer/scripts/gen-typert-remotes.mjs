@@ -28,6 +28,7 @@ import { createRequire } from 'node:module'
 import { cpSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { assertRemotePackageContract, remotePackagesFromAssembly } from './typert-remote-contract.mjs'
 
 const requireFromRenderer = createRequire(fileURLToPath(new URL('../package.json', import.meta.url)))
 // esbuild is vite's transitive dependency — resolve it through vite's tree.
@@ -44,14 +45,19 @@ const OUT_ROOT = fileURLToPath(new URL('../src/generated/typert/', import.meta.u
 const BUNDLE = join(CACHE, 'typescript/lib/typert-generator.cjs')
 const HOST_CONFIG = join(CACHE, 'host-tsconfig.json')
 
-/** Packages whose client assembly imports the `/remote` subpath (the artifacts we emit). */
-const REMOTE_PACKAGES = [
-  '@deepseek-ai/dsh-commands',
-  '@deepseek-ai/dsh-goal',
-  '@deepseek-ai/dsh-cordis-host-runner',
-  '@deepseek-ai/dsh-host-plugin-inventory',
-  '@deepseek-ai/dsh-message-feedback',
-]
+/**
+ * dsh-api-remotes/client is the authoritative runtime assembly. Derive its
+ * value-imported contributions instead of duplicating an rc-specific list:
+ * rc.8 added file/session reference Remotes, and a stale five-item copy made
+ * Vite fail only after the generator had reported success.
+ */
+const REMOTE_ASSEMBLY_ENTRY = join(VENDOR, 'dsh-api-remotes/src/client/index.ts')
+const REMOTE_PACKAGES = remotePackagesFromAssembly(readFileSync(REMOTE_ASSEMBLY_ENTRY, 'utf8'))
+for (const packageName of REMOTE_PACKAGES) {
+  const packageDir = packageName.slice('@deepseek-ai/'.length)
+  const manifest = JSON.parse(readFileSync(join(VENDOR, packageDir, 'package.json'), 'utf8'))
+  assertRemotePackageContract(packageName, manifest)
+}
 
 function isFile(path) {
   try {

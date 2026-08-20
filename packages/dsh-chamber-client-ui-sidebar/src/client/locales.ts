@@ -63,6 +63,7 @@ export const zh = {
   'workspace.expand': '展开',
   'workspace.collapse': '收起',
   'list.activate': '切换到该实例',
+  'git.errorBoundary': 'Git 工作树区域加载失败。请重试或重启应用。',
 } satisfies Record<string, string>
 
 /** The sidebar namespace key union. */
@@ -131,4 +132,5 @@ export const en = {
   'workspace.expand': 'Expand',
   'workspace.collapse': 'Collapse',
   'list.activate': 'Switch to this instance',
+  'git.errorBoundary': 'The Git worktree section failed to load. Retry or restart the app.',
 } satisfies Record<SidebarKey, string>

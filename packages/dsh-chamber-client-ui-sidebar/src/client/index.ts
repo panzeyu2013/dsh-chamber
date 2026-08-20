@@ -12,7 +12,7 @@ import { projectRuntimeFacts } from '../shared/derive.ts'
 
 export type {
   SidebarFooterActionOwnerProps, SidebarRootComponentProps, SidebarRootInjected,
-  SidebarSectionOwnerProps, SidebarSettingsOwnerProps,
+  SidebarGitOwnerProps, SidebarSectionOwnerProps, SidebarSettingsOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
 
@@ -59,6 +59,7 @@ export function apply(ctx: ClientContext): void {
       locale: NS,
       children: {
         'sidebar.workspaces': { kind: 'single', scope: 'root' },
+        'sidebar.git': { kind: 'single', scope: 'root' },
         'sidebar.settings': { kind: 'single', scope: 'root' },
         'sidebar.footer.action': { kind: 'list', scope: 'root' },
       },
