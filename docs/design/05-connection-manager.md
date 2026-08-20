@@ -504,7 +504,11 @@ export const chamberBridge: {
   或显式开发 allowlist，其他 localhost 端口也默认拒绝；`null` 一律拒绝；
   非法来源在副作用/转发前 403）维持；所有 HTTP 响应统一
   设置 CSP（`__DSH_BOOT__` 内联脚本使用逐响应随机 nonce，不开放 script
-  `unsafe-inline`）、`nosniff`、`DENY` frame、no-referrer 与 COOP 安全头。
+  `unsafe-inline`；`script-src` 开放 `unsafe-eval`——官方 dsh module loader
+  （vendored `@deepseek-ai/loader`）对 boot manifest `__jsExpr` 配置求值依赖
+  `new Function(…eval…)`，缺它渲染层主包在模块求值期即抛 EvalError、静态骨架
+  永不进入 React，2026-08-20 实机排查）、`nosniff`、`DENY` frame、no-referrer
+  与 COOP 安全头。
 
 ## 9. 分期
 

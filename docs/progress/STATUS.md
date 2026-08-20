@@ -333,7 +333,10 @@
   agent-preset settings 段改为装配子 ctx 时动态导入。设计/验证细节见 chamber-entry.ts 头注。
 - **本机信任边界加固（2026-08）**：匿名 loopback 控制面在 HTTP 路由与 WS
   upgrade 前同时校验 loopback Host 与来源；不透明 `Origin: null` 一律拒绝，静态/API/
-  代理响应统一带 CSP（内联 boot 脚本逐响应 nonce，script 不开放 unsafe-inline）、
+  代理响应统一带 CSP（内联 boot 脚本逐响应 nonce，script 不开放 unsafe-inline，
+  但开放 `unsafe-eval`——官方 dsh module loader 对 boot manifest 的 `__jsExpr`
+  配置求值用 `new Function('ctx','expr',…eval…)`，缺它渲染层主包直接 EvalError、
+  骨架屏永不进入 React；2026-08-20 实机排查）、
   COOP、no-referrer、nosniff 与 frame deny，Electron renderer 显式启用 sandbox。
   askpass 助手保持原「主机密钥确认 → yes」首次连接语义（无 StrictHostKeyChecking
   强制）；密码镜像使用 write-through 持久化语义并强制 owner-only 权限。

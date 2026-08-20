@@ -220,7 +220,10 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     assert.match(html.headers['content-security-policy'] ?? '', /default-src 'self'/)
     assert.match(html.headers['content-security-policy'] ?? '', /frame-ancestors 'none'/)
     assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /script-src[^;]*'unsafe-inline'/)
-    assert.match(html.headers['content-security-policy'] ?? '', /script-src 'self' 'nonce-[A-Za-z0-9+/=]+'/)
+    // 'unsafe-eval' is required by the official dsh module loader (boot-manifest
+    // `__jsExpr` config evaluation); every inline script still needs the nonce.
+    assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'unsafe-eval'/)
+    assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'nonce-[A-Za-z0-9+/=]+'/)
     assert.equal(html.headers['cross-origin-opener-policy'], 'same-origin')
     assert.equal(html.headers['referrer-policy'], 'no-referrer')
     assert.equal(html.headers['x-content-type-options'], 'nosniff')
@@ -244,7 +247,7 @@ test('static: __DSH_BOOT__ injection lands in index.html before </head> (identit
     assert.match(html.headers['content-type'] ?? '', /text\/html/)
     const text = html.body.toString('utf8')
     assert.ok(text.includes('<div id="root"></div>'), 'the fixture index.html body is served')
-    const nonce = /script-src 'self' 'nonce-([^']+)'/.exec(html.headers['content-security-policy'] ?? '')?.[1]
+    const nonce = /script-src[^;]*'nonce-([^']+)'/.exec(html.headers['content-security-policy'] ?? '')?.[1]
     assert.ok(nonce !== undefined, 'the response CSP carries a script nonce')
     const startMarker = `<script nonce="${nonce}">window.__DSH_BOOT__=`
     const endMarker = ';</script></head>'

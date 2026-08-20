@@ -633,9 +633,16 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           }
           const cspNonce = randomBytes(18).toString('base64')
           ;(res as ApiResponse)._cspNonce = cspNonce
+          // script-src keeps 'unsafe-inline' closed (every inline script must
+          // carry the per-response nonce) but MUST open 'unsafe-eval': the
+          // official dsh module loader (vendored @deepseek-ai/loader, config
+          // utils) evaluates boot-manifest `__jsExpr` config via
+          // `new Function('ctx','expr', 'with (ctx) { return eval(expr) }')`
+          // at module evaluation time — without 'unsafe-eval' the renderer
+          // bundle dies with an EvalError and the skeleton never boots.
           res.setHeader(
             'content-security-policy',
-            `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
+            `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
           )
           const url = new URL(req.url ?? '/', 'http://localhost')
           const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
