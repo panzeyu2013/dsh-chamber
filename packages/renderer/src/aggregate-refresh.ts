@@ -18,3 +18,18 @@ export function planAggregateRefreshes(
   )
   return { refreshSourceIds, nextReady }
 }
+
+/**
+ * Staleness predicate for the aggregate watchdog (the fallback net for a
+ * mounted producer whose push channel silently died). A source is stale when
+ * it never pushed a snapshot or its last push is older than the threshold —
+ * recency is the only liveness signal the App has, since the unary client
+ * does not expose per-source connection state.
+ */
+export function isSnapshotStale(
+  lastSnapshotAt: number | undefined,
+  now: number,
+  stalenessMs: number,
+): boolean {
+  return lastSnapshotAt === undefined || now - lastSnapshotAt > stalenessMs
+}

@@ -44,12 +44,16 @@ import {
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
-import { planAggregateRefreshes } from './aggregate-refresh.ts'
+import { isSnapshotStale, planAggregateRefreshes } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
 import InstanceView from './components/InstanceView.tsx'
 
-/** Only unmounted/not-yet-reporting ready sources need this safety net. */
+/**
+ * Staleness watchdog cadence for aggregate snapshots. Also the staleness
+ * threshold: a ready source whose last PUSHED snapshot is older than this is
+ * presumed to have a dead push channel and is re-pulled from the authority.
+ */
 const AGGREGATE_FALLBACK_POLL_MS = 30_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
@@ -80,6 +84,28 @@ function instanceConnected(
   }
   const phase = remoteStatus[instanceId]?.phase
   return phase === 'ready'
+}
+
+/**
+ * The ready/not-ready partition of all known sources, driven solely by the
+ * authoritative transport state. Shared by the edge-triggered aggregate poll
+ * and the staleness watchdog.
+ */
+function collectReadySourceIds(
+  health: HealthResponse | null,
+  remoteStatus: Record<string, SshStatusProjection>,
+  remoteInstances: SshInstanceSpec[],
+): { ready: string[]; notReady: string[] } {
+  const ready: string[] = []
+  const notReady: string[] = []
+  if (instanceConnected('local', health, remoteStatus, LOCAL_INSTANCE_ID)) ready.push(LOCAL_INSTANCE_ID)
+  else notReady.push(LOCAL_INSTANCE_ID)
+  for (const instance of remoteInstances) {
+    const id = `ssh-${instance.id}`
+    if (instanceConnected('ssh', health, remoteStatus, instance.id)) ready.push(id)
+    else notReady.push(id)
+  }
+  return { ready, notReady }
 }
 
 /**
@@ -227,6 +253,11 @@ export default function App() {
   // state update above. Keep a synchronous ownership mirror so a producer's
   // first snapshot immediately suppresses any later unary pull in that window.
   const snapshotSourcesRef = useRef<Record<string, true>>({})
+  // Last PUSHED-snapshot timestamp per source (ms epoch; absent = never). The
+  // staleness watchdog uses recency as its only liveness signal — the unary
+  // client exposes no per-source connection state, and a silently dead push
+  // channel never fires the producer withdrawal (aggregate-store clear()).
+  const snapshotAtRef = useRef<Record<string, number>>({})
   // Synchronous connection-generation edge memory. A mounted producer may
   // suppress an identical post-reconnect snapshot, while the App has already
   // replaced its aggregate with not-connected; one authoritative pull on each
@@ -492,52 +523,43 @@ export default function App() {
     }
   }, [refreshHealth])
 
+  /**
+   * Run a bounded refresh wave: at most AGGREGATE_POLL_CONCURRENCY concurrent
+   * pulls, one wave at a time. Shared by the edge-triggered poll and the
+   * staleness watchdog so neither can burst N pulls or overlap each other.
+   */
+  const runBoundedAggregateWave = useCallback((sourceIds: string[]) => {
+    if (sourceIds.length === 0 || aggregatePollRunningRef.current) return
+    aggregatePollRunningRef.current = true
+    void (async () => {
+      let cursor = 0
+      const worker = async () => {
+        while (cursor < sourceIds.length) {
+          const sourceId = sourceIds[cursor]
+          cursor += 1
+          await refreshAggregate(sourceId)
+        }
+      }
+      try {
+        await Promise.all(Array.from({ length: Math.min(AGGREGATE_POLL_CONCURRENCY, sourceIds.length) }, () => worker()))
+      } finally {
+        aggregatePollRunningRef.current = false
+      }
+    })()
+  }, [refreshAggregate])
+
   /** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected（不显示陈旧数据）。 */
   const pollAggregates = useCallback(() => {
-    const ready: { kind: 'local' | 'ssh'; id: string }[] = []
-    const notReady: string[] = []
-    if (instanceConnected('local', health, remoteStatus, LOCAL_INSTANCE_ID)) {
-      ready.push({ kind: 'local', id: LOCAL_INSTANCE_ID })
-    } else {
-      notReady.push(LOCAL_INSTANCE_ID)
-    }
-    for (const instance of remoteInstances) {
-      if (instanceConnected('ssh', health, remoteStatus, instance.id)) {
-        ready.push({ kind: 'ssh', id: `ssh-${instance.id}` })
-      } else {
-        notReady.push(`ssh-${instance.id}`)
-      }
-    }
+    const { ready, notReady } = collectReadySourceIds(health, remoteStatus, remoteInstances)
     const refreshPlan = planAggregateRefreshes(
-      ready.map(entry => entry.id),
+      ready,
       readyAggregateSourcesRef.current,
       snapshotSourcesRef.current,
     )
     // Commit the observed generation synchronously before starting pulls: an
     // overlapping health/status callback must not mint duplicate reconnect pulls.
     readyAggregateSourcesRef.current = refreshPlan.nextReady
-    // Run the edge-triggered refresh set as one bounded wave at a time (max
-    // AGGREGATE_POLL_CONCURRENCY concurrent pulls; never overlap the next
-    // tick). Manual refreshes still use the sequence guard independently.
-    if (!aggregatePollRunningRef.current && refreshPlan.refreshSourceIds.length > 0) {
-      aggregatePollRunningRef.current = true
-      const sourceIds = refreshPlan.refreshSourceIds
-      void (async () => {
-        let cursor = 0
-        const worker = async () => {
-          while (cursor < sourceIds.length) {
-            const sourceId = sourceIds[cursor]
-            cursor += 1
-            await refreshAggregate(sourceId)
-          }
-        }
-        try {
-          await Promise.all(Array.from({ length: Math.min(AGGREGATE_POLL_CONCURRENCY, sourceIds.length) }, () => worker()))
-        } finally {
-          aggregatePollRunningRef.current = false
-        }
-      })()
-    }
+    runBoundedAggregateWave(refreshPlan.refreshSourceIds)
     if (notReady.length > 0) {
       // A pull started in the dying generation must never restore an `ok`
       // aggregate after the authoritative transport state became not-ready.
@@ -572,7 +594,7 @@ export default function App() {
         return changed ? next : prev
       })
     }
-  }, [health, remoteStatus, remoteInstances, refreshAggregate])
+  }, [health, remoteStatus, remoteInstances, refreshAggregate, runBoundedAggregateWave])
 
   const pollAggregatesRef = useRef<() => void>(() => undefined)
   useEffect(() => {
@@ -586,28 +608,22 @@ export default function App() {
     pollAggregatesRef.current()
   }, [health, remoteStatus, remoteInstances, snapshotSources])
 
-  const fallbackAggregateKey = useMemo(() => {
-    const ids: string[] = []
-    if (instanceConnected('local', health, remoteStatus, LOCAL_INSTANCE_ID)
-      && snapshotSources[LOCAL_INSTANCE_ID] !== true) ids.push(LOCAL_INSTANCE_ID)
-    for (const instance of remoteInstances) {
-      const id = `ssh-${instance.id}`
-      if (instanceConnected('ssh', health, remoteStatus, instance.id)
-        && snapshotSources[id] !== true) ids.push(id)
-    }
-    return ids.sort().join('\u0000')
-  }, [health, remoteStatus, remoteInstances, snapshotSources])
-
-  // No timer exists once every ready source has a mounted complete producer.
-  // Hidden-to-tray therefore causes no session/workspace polling for the
-  // normal mounted fleet; only unmounted/incomplete sources use this 30s net.
+  // Staleness watchdog: the edge logic above only pulls newly-ready or
+  // never-pushed sources, so a mounted producer whose push channel silently
+  // dies (no withdrawal — aggregate-store clear() never fires) would leave
+  // its aggregate stale forever. Every tick, pull any ready source whose
+  // last PUSHED snapshot is older than the threshold. Actively pushing
+  // sources are never pulled; the bounded wave keeps quiet-fleet cost at a
+  // handful of loopback requests per minute and the signature dedup keeps
+  // unchanged state churn-free.
   useEffect(() => {
-    if (fallbackAggregateKey === '') return
     const timer = setInterval(() => {
-      pollAggregatesRef.current()
+      const staleIds = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
+        .filter(id => isSnapshotStale(snapshotAtRef.current[id], Date.now(), AGGREGATE_FALLBACK_POLL_MS))
+      if (staleIds.length > 0) runBoundedAggregateWave(staleIds)
     }, AGGREGATE_FALLBACK_POLL_MS)
     return () => { clearInterval(timer) }
-  }, [fallbackAggregateKey])
+  }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
 
   useEffect(() => {
     let cancelled = false
@@ -967,9 +983,11 @@ export default function App() {
   /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。 */
   useEffect(() => {
     return chamberBridge.onRefresh((sourceId) => {
-      // Mounted complete producers observe the same host-store mutation and
-      // publish it directly. Pull only for unmounted/incomplete sources.
-      if (snapshotSourcesRef.current[sourceId] === true) return
+      // A live complete producer publishes the mutation directly, so a fresh
+      // source needs no pull. A source whose push is silent past the
+      // staleness threshold (or that never pushed) is pulled — manual refresh
+      // must also heal a once-pushed producer whose channel died.
+      if (!isSnapshotStale(snapshotAtRef.current[sourceId], Date.now(), AGGREGATE_FALLBACK_POLL_MS)) return
       void refreshAggregate(sourceId)
     })
   }, [refreshAggregate])
@@ -983,8 +1001,13 @@ export default function App() {
   useEffect(() => {
     return chamberBridge.onInstanceSnapshot((sourceId, snapshot: InstanceSnapshot | undefined) => {
       aggregateSeqRef.current[sourceId] = (aggregateSeqRef.current[sourceId] ?? 0) + 1
-      if (snapshot === undefined) delete snapshotSourcesRef.current[sourceId]
-      else snapshotSourcesRef.current[sourceId] = true
+      if (snapshot === undefined) {
+        delete snapshotSourcesRef.current[sourceId]
+        delete snapshotAtRef.current[sourceId]
+      } else {
+        snapshotSourcesRef.current[sourceId] = true
+        snapshotAtRef.current[sourceId] = Date.now()
+      }
       setSnapshotSources(prev => {
         if (snapshot === undefined) {
           if (prev[sourceId] === undefined) return prev

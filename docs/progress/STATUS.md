@@ -132,6 +132,12 @@
   RPC。插件额外 bundle 的跨实例并发预加载共享同一 Promise（所有等待者同成败，
   失败清标可重试），不再把“加载中”误判成“已加载”。详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
+- **聚合陈旧度看门狗（2026-08，兜底补强）**：事件驱动语义下，若某已挂载生产者的
+  push 通道**静默死亡**（无 teardown/无 withdraw），边沿逻辑与 30s 兜底都不会再拉该源，
+  聚合将永久陈旧。修复：每 30s 检查各 ready 来源**最后推送快照的时间戳**（unary 客户端
+  不暴露连接状态，快照新鲜度是唯一活跃信号），超过阈值即用有界波（≤4 并发、单波互斥）
+  从权威源重拉；活跃推送的来源永不被打扰，手动刷新同样只跳过新鲜来源。配合签名去重，
+  安静但健康的来源每 30s 至多一次无状态变更的轻量拉取。
 - **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程
   `updater.ts`（electron-updater，autoDownload=false + 退出时安装 + 静默失败日志 +
   mac 安装腿 `installBlockedReason` 探测）、preload `update` IPC 面、settings 壳

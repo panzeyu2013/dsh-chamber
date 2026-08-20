@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { planAggregateRefreshes } from './aggregate-refresh.ts'
+import { isSnapshotStale, planAggregateRefreshes } from './aggregate-refresh.ts'
 
 test('a stable ready source with a complete producer needs no unary refresh', () => {
   const plan = planAggregateRefreshes(['local'], new Set(['local']), { local: true })
@@ -31,4 +31,17 @@ test('each source is planned independently across mixed connection generations',
     { local: true, 'ssh-a': true, 'ssh-b': true },
   )
   assert.deepEqual(plan.refreshSourceIds, ['ssh-b'])
+})
+
+test('isSnapshotStale: never-pushed sources are stale (unmounted / dead push)', () => {
+  assert.equal(isSnapshotStale(undefined, 1_000, 30_000), true)
+})
+
+test('isSnapshotStale: a recent push is fresh even when the producer is quiet', () => {
+  assert.equal(isSnapshotStale(1_000, 30_000, 30_000), false)
+  assert.equal(isSnapshotStale(1_000, 30_999, 30_000), false)
+})
+
+test('isSnapshotStale: silence past the threshold is stale (push channel presumed dead)', () => {
+  assert.equal(isSnapshotStale(1_000, 31_001, 30_000), true)
 })
