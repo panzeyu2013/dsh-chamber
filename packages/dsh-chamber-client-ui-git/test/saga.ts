@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  GitSagaError, recoveryForFailure, runCreateSaga, runRemoveSaga, runRollbackRecovery,
-  runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
+  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runRemoveSaga,
+  runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from '../src/shared/saga.ts'
 import {
   decodeCreateValue, decodeRemoveValue, decodeRollbackCreateValue, isAmbiguousGitRpcFailure,
@@ -428,4 +428,75 @@ test('workspace-delete recovery never deletes the registry when terminal replay 
     /worktree-reappeared/,
   )
   assert.equal(deleteCalls, 0)
+})
+
+test('adopt-only saga orders workspace -> preallocated session and reuses an existing workspace', async () => {
+  const calls: string[] = []
+  const result = await runAdoptSessionSaga({
+    workspaceCreate: async path => { calls.push(`workspace:${path}`); return { workspaceId: 'ws-existing', path, created: false } },
+    sessionCreate: async (workspaceId, sessionId) => { calls.push(`session:${workspaceId}:${sessionId}`); return sessionId },
+  }, '/existing-wt', 'session-fixed')
+  assert.deepEqual(calls, ['workspace:/existing-wt', 'session:ws-existing:session-fixed'])
+  assert.deepEqual(result, { sessionId: 'session-fixed', workspaceId: 'ws-existing', path: '/existing-wt' })
+})
+
+test('adopt-only workspace failure keeps session-adopt recovery and never calls session', async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    runAdoptSessionSaga({
+      workspaceCreate: async () => { calls.push('workspace'); throw Object.assign(new Error('transport down'), { code: 'offline' }) },
+      sessionCreate: async () => { calls.push('session'); return 'session-fixed' },
+    }, '/existing-wt', 'session-fixed'),
+    (error: unknown) => {
+      assert.ok(error instanceof GitSagaError)
+      assert.equal(error.recovery?.kind, 'session-adopt')
+      const recovery = error.recovery as Extract<GitRecovery, { kind: 'session-adopt' }>
+      assert.equal(recovery.path, '/existing-wt')
+      assert.equal(recovery.sessionId, 'session-fixed')
+      return true
+    },
+  )
+  assert.deepEqual(calls, ['workspace'])
+})
+
+test('adopt-only session failure retains session-create recovery with the same preallocated id', async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    runAdoptSessionSaga({
+      workspaceCreate: async path => { calls.push('workspace'); return { workspaceId: 'ws-2', path, created: false } },
+      sessionCreate: async () => { calls.push('session'); throw Object.assign(new Error('busy'), { code: 'agent-busy' }) },
+    }, '/existing-wt', 'session-fixed'),
+    (error: unknown) => {
+      assert.ok(error instanceof GitSagaError)
+      assert.equal(error.recovery?.kind, 'session-create')
+      const recovery = error.recovery as Extract<GitRecovery, { kind: 'session-create' }>
+      assert.equal(recovery.workspaceId, 'ws-2')
+      assert.equal(recovery.path, '/existing-wt')
+      assert.equal(recovery.sessionId, 'session-fixed')
+      return true
+    },
+  )
+  assert.deepEqual(calls, ['workspace', 'session'])
+})
+
+test('adopt-only correlation mismatch never calls session', async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    runAdoptSessionSaga({
+      workspaceCreate: async () => { calls.push('workspace'); return { workspaceId: 'ws-2', path: '/OTHER-PATH', created: false } },
+      sessionCreate: async () => { calls.push('session'); return 'session-fixed' },
+    }, '/existing-wt', 'session-fixed'),
+    /不匹配/,
+  )
+  assert.deepEqual(calls, ['workspace'])
+})
+
+test('session-adopt recovery reuses workspace-adopt execution and commits the same session id', async () => {
+  const calls: string[] = []
+  const result = await runWorkspaceAdoptRecovery({
+    workspaceCreate: async path => { calls.push(`workspace:${path}`); return { workspaceId: 'ws-adopted', path, created: false } },
+    sessionCreate: async (workspaceId, sessionId) => { calls.push(`session:${workspaceId}:${sessionId}`); return sessionId },
+  }, { kind: 'session-adopt', path: '/existing-wt', sessionId: 'session-fixed', message: 'retry' })
+  assert.deepEqual(calls, ['workspace:/existing-wt', 'session:ws-adopted:session-fixed'])
+  assert.equal(result.sessionId, 'session-fixed')
 })

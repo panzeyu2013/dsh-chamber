@@ -14,8 +14,8 @@ import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure } from './git-api.ts'
 import { findWorktree, removeBlockReason } from './git-facts.ts'
 import {
-  GitSagaError, recoveryForFailure, runCreateSaga, runRemoveSaga, runRollbackRecovery,
-  runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
+  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runRemoveSaga,
+  runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
 import type {
   GitBusyState, GitRecovery, GitSourceError, GitSourceState, PreviewCreateInput, PreviewCreateResult,
@@ -243,6 +243,37 @@ export async function createFromPreview(sourceId: string, preview: PreviewCreate
   ))
 }
 
+/**
+ * Create a new session in an EXISTING worktree (adopt-only, no Git mutation).
+ * The workspace at `path` is registered or reused via workspace.create, then a
+ * preallocated session is committed. On failure the same session id is reused.
+ */
+export async function createSessionHere(sourceId: string, path: string): Promise<string> {
+  const operationId = nextId('adopt')
+  const sessionId = nextId('session')
+  return runBusy(sourceId, { kind: 'adopt-session', operationId }, async () => {
+    const fresh = await refreshSource(sourceId, true)
+    if (fresh.snapshot === undefined || fresh.sourceError !== undefined) {
+      throw new Error(fresh.sourceError?.message ?? '无法取得最新 Git 工作树事实')
+    }
+    const known = fresh.snapshot.repos.some(repo => repo.worktrees.some(worktree => worktree.path === path))
+    if (!known) throw new Error('目标工作树不在当前来源拓扑中')
+    try {
+      const result = await runAdoptSessionSaga({
+        workspaceCreate: targetPath => createWorkspace(getInstanceClient(sourceId), targetPath),
+        sessionCreate: (workspaceId, id) => createSession(getInstanceClient(sourceId), workspaceId, id),
+      }, path, sessionId)
+      setRecovery(sourceId, undefined)
+      finishMutation(sourceId)
+      requestOpenSession(sourceId, result.sessionId)
+      return result.sessionId
+    } catch (error) {
+      if (error instanceof GitSagaError) setRecovery(sourceId, recoveryForFailure(error))
+      throw error
+    }
+  })
+}
+
 export interface RemoveTarget {
   repoId: string
   worktreeId: string
@@ -347,7 +378,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
           ),
         }, recovery)
         if (result.committed) requestOpenSession(sourceId, result.sessionId)
-      } else if (recovery.kind === 'workspace-adopt') {
+      } else if (recovery.kind === 'workspace-adopt' || recovery.kind === 'session-adopt') {
         const result = await runWorkspaceAdoptRecovery({
           workspaceCreate: path => createWorkspace(getInstanceClient(sourceId), path),
           sessionCreate: (workspaceId, sessionId) => createSession(getInstanceClient(sourceId), workspaceId, sessionId),

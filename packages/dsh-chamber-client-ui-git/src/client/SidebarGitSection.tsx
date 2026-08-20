@@ -6,7 +6,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import {
-  clearActionError, createFromPreview, gitCoordinator, previewCreate,
+  clearActionError, createFromPreview, createSessionHere, gitCoordinator, previewCreate,
   refreshSource, removeWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
 import { createSourceOptions, removeBlockReason, shortHead } from '../shared/git-facts.ts'
@@ -39,6 +39,7 @@ function busyLabel(kind: GitBusyKind, t: SidebarGitInjected['t']): string {
   if (kind === 'preview') return t('busyPreview')
   if (kind === 'create') return t('busyCreate')
   if (kind === 'remove') return t('busyRemove')
+  if (kind === 'adopt-session') return t('busyAdoptSession')
   return t('busyRecovery')
 }
 
@@ -46,6 +47,7 @@ function recoveryLabel(recovery: GitRecovery, t: SidebarGitInjected['t']): strin
   if (recovery.kind === 'git-create') return t('recoveryGitCreate')
   if (recovery.kind === 'rollback-create') return t('recoveryRollback')
   if (recovery.kind === 'workspace-adopt') return t('recoveryWorkspaceAdopt')
+  if (recovery.kind === 'session-adopt') return t('recoverySessionAdopt')
   if (recovery.kind === 'session-create') return t('recoverySession')
   if (recovery.kind === 'git-remove') return t('recoveryGitRemove')
   return t('recoveryWorkspaceDelete')
@@ -61,7 +63,7 @@ function blockLabel(reason: ReturnType<typeof removeBlockReason>, t: SidebarGitI
 }
 
 function WorktreeRow({
-  repoId, worktree, currentSessionId, busy, t, onRemove,
+  repoId, worktree, currentSessionId, busy, t, onRemove, onNewSession,
 }: {
   repoId: string
   worktree: GitWorktreeInfo
@@ -69,6 +71,7 @@ function WorktreeRow({
   busy: boolean
   t: SidebarGitInjected['t']
   onRemove: (target: RemoveViewTarget) => void
+  onNewSession: (worktree: GitWorktreeInfo) => void
 }): ReactNode {
   const blocked = removeBlockReason(worktree, currentSessionId)
   const blockedLabel = blockLabel(blocked, t)
@@ -81,6 +84,16 @@ function WorktreeRow({
           <span>{worktree.branch ?? t('detached')}</span>
         </span>
         <code className={css.head}>{shortHead(worktree.head)}</code>
+        <button
+          type="button"
+          className={css.iconButton}
+          disabled={busy}
+          aria-label={t('newSessionHere')}
+          title={t('newSessionHere')}
+          onClick={() => onNewSession(worktree)}
+        >
+          <IconPlusOutline16 size={14} />
+        </button>
         {canOfferRemove && (
           <button
             type="button"
@@ -213,6 +226,14 @@ export function SidebarGitSection({ wide, chamberInstanceId, t }: SidebarGitSect
     }
   }
 
+  const runNewSession = async (worktree: GitWorktreeInfo): Promise<void> => {
+    try {
+      await createSessionHere(chamberInstanceId, worktree.path)
+    } catch {
+      // The coordinator owns the page-wide actionable error/recovery state.
+    }
+  }
+
   const snapshot = source.snapshot
   const sourceError = source.sourceError ?? snapshot?.sourceError
   const formReady = sourceWorkspaceId !== '' && basenameDraft.trim() !== '' && branchName.trim() !== ''
@@ -295,6 +316,7 @@ export function SidebarGitSection({ wide, chamberInstanceId, t }: SidebarGitSect
                         busy={actionLocked}
                         t={t}
                         onRemove={setRemoveTarget}
+                        onNewSession={worktree => { void runNewSession(worktree) }}
                       />
                     ))}
                   </ul>

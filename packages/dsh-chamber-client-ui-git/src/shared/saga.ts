@@ -220,7 +220,7 @@ export interface WorkspaceAdoptRecoveryDeps {
 /** Forward-only recovery when Git provenance cannot safely authorize rollback. */
 export async function runWorkspaceAdoptRecovery(
   deps: WorkspaceAdoptRecoveryDeps,
-  recovery: Extract<GitRecovery, { kind: 'workspace-adopt' }>,
+  recovery: Extract<GitRecovery, { kind: 'workspace-adopt' | 'session-adopt' }>,
 ): Promise<{ sessionId: string }> {
   let workspace: { workspaceId: string; path: string; created: boolean }
   try {
@@ -241,6 +241,48 @@ export async function runWorkspaceAdoptRecovery(
     }, true)
   }
   return { sessionId: recovery.sessionId }
+}
+
+export interface AdoptSessionSagaDeps {
+  workspaceCreate(path: string): Promise<{ workspaceId: string; path: string; created: boolean }>
+  sessionCreate(workspaceId: string, sessionId: string): Promise<string>
+}
+
+/**
+ * Session-only adoption of an EXISTING worktree (no Git mutation): register or
+ * reuse the workspace at `path`, then commit a preallocated session. Once
+ * session.create is attempted nothing is compensated (no session-delete wire);
+ * the caller retries the same preallocated session id.
+ */
+export async function runAdoptSessionSaga(
+  deps: AdoptSessionSagaDeps,
+  path: string,
+  sessionId: string,
+): Promise<{ sessionId: string; workspaceId: string; path: string }> {
+  let workspace: { workspaceId: string; path: string; created: boolean }
+  try {
+    workspace = await deps.workspaceCreate(path)
+    assertWorkspaceCorrelation(workspace, path)
+  } catch (workspaceError) {
+    throw new GitSagaError(workspaceError, {
+      kind: 'session-adopt',
+      path,
+      sessionId,
+      message: errorText(workspaceError),
+    }, true)
+  }
+  try {
+    await createExactSession(deps.sessionCreate, workspace.workspaceId, sessionId)
+  } catch (sessionError) {
+    throw new GitSagaError(sessionError, {
+      kind: 'session-create',
+      workspaceId: workspace.workspaceId,
+      path: workspace.path,
+      sessionId,
+      message: errorText(sessionError),
+    }, true)
+  }
+  return { sessionId, workspaceId: workspace.workspaceId, path: workspace.path }
 }
 
 export interface RemoveSagaDeps {

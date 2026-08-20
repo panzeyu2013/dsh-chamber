@@ -123,7 +123,7 @@ export interface RemoveWorktreeResult {
   branchPreserved: true
 }
 
-export type GitBusyKind = 'preview' | 'create' | 'remove' | 'recovery'
+export type GitBusyKind = 'preview' | 'create' | 'remove' | 'recovery' | 'adopt-session'
 
 export interface GitBusyState {
   kind: GitBusyKind
@@ -165,6 +165,13 @@ export type GitRecovery =
   | {
       kind: 'session-create'
       workspaceId: string
+      path: string
+      sessionId: string
+      message: string
+    }
+  | {
+      /** Session-only adoption of an existing worktree; no Git mutation ran. */
+      kind: 'session-adopt'
       path: string
       sessionId: string
       message: string
