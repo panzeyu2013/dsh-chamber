@@ -17,6 +17,12 @@
   的 Git-first 可重试删除；本地与远程复用双 host-package seed/单一 overlay。自动化门禁
   覆盖领域 wire、失败恢复、安全守卫、静态 entry 锁步与分发；M4 尚余真实远程 Linux +
   Git 仓库的端到端验收（含首次 ready-time seed 后重启生效、Git LFS/filter 提示边界）。
+  **合并后扩展（2026-08-20，design 08 §10）**：① 已有 worktree 作为新会话目标
+  （只读采纳式 saga，无 Git mutation）；② 会话↔worktree 附着状态模型（host 快照
+  status/headState/attention 分类 + 侧栏徽标 + unhealthy 删除阻断）；③ 删除级联
+  语义对齐（parentSessionId 闭包递归枚举直接+子会话，文案明示保留并转未分组，
+  可选先归档整棵会话树，归档失败即中止）。`test:git` 31→47、`test:host-git`
+  42→48，typecheck/构建/回归全绿。
 - **远程实例插件管理 / 一键应用本地插件清单 + 可视化添加（设计 13）**：**M1–M4 已落地**
   （exec `restart`/`run`/`write-file` + §7.2 白名单、`remoteDshHome` 贯穿 schema/投影/
   IPC/双 ambient 类型、`plugin-sync.ts` 编排、10 个 IPC 通道、前端

@@ -216,3 +216,32 @@ fresh-preflight -> git-removing -> git-removed
 | M4 | N-ctx/断连/局部失败/无 Git/打包回归与远程实机验收 |
 
 v1 明确不做 commit/diff/stash/fetch/push/PR，也不新增任意 Git 终端。
+
+## 10. 落地扩展（2026-08-20，主分支合并后）
+
+M0–M3 合并进 main 后追加的三处能力（对齐 OpenChamber 的会话↔worktree 深度，
+未改变 §9 的范围排除）：
+
+1. **已有 worktree 作为新会话目标（§4/§5 扩展）**：每个工作树行（含主 checkout）
+   提供「在此新建会话」——只读采纳式 saga（`runAdoptSessionSaga`）：无 Git
+   mutation，`workspace.create` 注册/复用路径后以预分配 id 提交会话，session
+   尝试后永不补偿（无 session-delete wire）；失败沿用同 id 重试，恢复类型
+   `session-adopt`。UI 对不健康工作树（`status !== 'ready'`）禁用该入口。
+2. **会话↔worktree 附着状态模型（§3 snapshot 扩展）**：快照每行新增
+   `status`（ready/missing/invalid/not-a-repo：路径缺失、status 报
+   "not a git repository"、其它 status 失败）、`headState`
+   （branch/detached/unborn：unborn = porcelain 全零 HEAD + branch ref）、
+   `attention`（从工作树 git-dir 的 MERGE_HEAD/REBASE_HEAD/rebase-*、
+   CHERRY_PICK_HEAD/REVERT_HEAD/BISECT_LOG 探测，经注入的 fs 抽象，
+   尽力而为）。客户端解码强制校验新字段（对旧 host 包 fail-closed）；
+   侧栏呈现健康/HEAD/attention/「当前会话」徽标；删除守卫新增
+   `unhealthy` 阻断；`canTargetSession` 门控新会话入口。
+3. **删除级联语义对齐（§6 扩展，不改无归档默认）**：删除确认时递归枚举
+   （`collectSessionClosure`：`parentSessionId` 闭包，环安全）直接 + 全部子
+   会话并显式呈现；文案明示「会话保留并转未分组，不删除」。提供「先归档
+   （含子会话）」选项：归档在**任何 Git mutation 之前**执行，任一归档失败
+   即中止且不删除任何工作树（显式报错，可重试）。
+
+验证：`test:git`（31→47 用例）、`test:host-git`（42→48 用例）、
+`typecheck:git`/`typecheck:host-git`、`build:renderer`、sidebar/renderer-shell
+回归全部通过；host 产物 `dist/index.js` 已重建并提交。

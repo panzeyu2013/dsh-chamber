@@ -28,6 +28,19 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   remote ready-time seeds preflight both packages before per-file writes, then
   merge the overlay once; this is not a cross-file transaction, so failures
   stay loud and retry idempotently on the next ready transition.
+- **Three Git worktree plugin extensions (post-merge, 2026-08-20)** — ① every
+  worktree row gains "new session here": session-only adoption of an EXISTING
+  worktree (no Git mutation; workspace reuse/registration + a preallocated
+  session id, never compensated once session.create is attempted); ② a
+  session-worktree attachment state model: the host snapshot classifies each
+  row as ready/missing/invalid/not-a-repo, branch/detached/unborn HEAD, and
+  in-progress Git operations (merge/rebase/cherry-pick/revert/bisect, probed
+  from the worktree git dir); the sidebar shows health/HEAD/attention/current
+  badges and blocks removal of unhealthy worktrees; ③ aligned removal cascade:
+  the confirmation recursively enumerates (parentSessionId closure) direct +
+  all subsessions, states that sessions are kept as Ungrouped and never
+  deleted, and offers archiving the whole session tree first (any archive
+  failure aborts with nothing removed).
 - **In-app "Check for updates" button and update settings section** (design 11
   revision) — the settings General section gains `UpdateSection`, letting the
   user trigger an explicit update check (same path as the startup/periodic

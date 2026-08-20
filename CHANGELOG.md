@@ -24,6 +24,15 @@
   界面明示。host-graph 与 Git host 包使用同一 overlay；本地 profile 和远程
   ready-time seed 均先完整预检两个包，再逐文件写入并一次合并 overlay（不是跨文件
   原子事务，失败会响亮并在下次 ready 幂等重试）。
+- **Git Worktree 插件三处扩展（2026-08-20 合并后）** —— ① 每个工作树行新增
+  「在此新建会话」：对**已有工作树**做只读采纳式会话创建（无 Git mutation；
+  workspace 复用/注册 + 预分配会话 id，session 尝试后永不补偿）；② 会话↔工作树
+  附着状态模型：host 快照按行分类 `ready/missing/invalid/not-a-repo`、
+  `branch/detached/unborn` HEAD 与进行中 Git 操作（merge/rebase/cherry-pick/
+  revert/bisect，从工作树 git-dir 探测），侧栏呈现健康/HEAD/attention/当前会话
+  徽标，删除对不健康工作树显式阻断；③ 删除级联语义对齐：删除确认时递归枚举
+  （`parentSessionId` 闭包）直接 + 全部子会话，文案明示「会话保留并转未分组，
+  不删除」，并可选先归档整棵会话树（归档失败即中止，不删任何工作树）。
 - **「检查更新」按钮与更新设置段**（design 11 修订）——设置「通用」段并入
   `UpdateSection`，用户可显式触发更新检查（与启动/周期静默检查同一条路径，
   从不自动下载）；`update-gate` 相位门 + 单测。
