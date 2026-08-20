@@ -63,6 +63,36 @@ export function canTargetSession(worktree: GitWorktreeInfo): boolean {
   return worktree.status === 'ready'
 }
 
+/**
+ * Session closure over `parentSessionId`: the roots plus every session
+ * transitively parented under them (cycle-safe, order stable). Used to
+ * enumerate the full session tree a worktree removal would orphan.
+ */
+export function collectSessionClosure(
+  sessions: ReadonlyArray<{ readonly sessionId: string; readonly parentSessionId?: string }>,
+  roots: ReadonlyArray<string>,
+): string[] {
+  const byParent = new Map<string, string[]>()
+  for (const session of sessions) {
+    if (session.parentSessionId === undefined) continue
+    const siblings = byParent.get(session.parentSessionId)
+    if (siblings === undefined) byParent.set(session.parentSessionId, [session.sessionId])
+    else siblings.push(session.sessionId)
+  }
+  const seen = new Set<string>(roots)
+  const queue = [...roots]
+  while (queue.length > 0) {
+    const parent = queue.shift()!
+    for (const child of byParent.get(parent) ?? []) {
+      if (!seen.has(child)) {
+        seen.add(child)
+        queue.push(child)
+      }
+    }
+  }
+  return [...seen]
+}
+
 /** Stable short head for compact sidebar rows. */
 export function shortHead(head: string): string {
   return head.length > 8 ? head.slice(0, 8) : head

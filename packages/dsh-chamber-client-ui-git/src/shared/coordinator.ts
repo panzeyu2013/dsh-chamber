@@ -7,12 +7,13 @@
  * by switching shells, and recovery remains visible after a view switch.
  */
 import {
-  chamberBridge, createSession, createWorkspace, deleteWorkspace, getInstanceClient, InstanceRpcError,
+  archiveSession, chamberBridge, createSession, createWorkspace, deleteWorkspace,
+  fetchInstanceSnapshot, getInstanceClient, InstanceRpcError,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure } from './git-api.ts'
-import { findWorktree, removeBlockReason } from './git-facts.ts'
+import { collectSessionClosure, findWorktree, removeBlockReason } from './git-facts.ts'
 import {
   GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runRemoveSaga,
   runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
@@ -315,7 +316,11 @@ async function performRemoveSaga(
 }
 
 /** Git-first safe remove; workspace-delete failure becomes explicit recovery. */
-export async function removeWorktree(sourceId: string, target: RemoveTarget): Promise<void> {
+export async function removeWorktree(
+  sourceId: string,
+  target: RemoveTarget,
+  options: { archiveSessions?: boolean } = {},
+): Promise<void> {
   const operationId = nextId('remove')
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
     const fresh = await refreshSource(sourceId, true)
@@ -331,10 +336,32 @@ export async function removeWorktree(sourceId: string, target: RemoveTarget): Pr
     if (blocked === 'running') throw new Error('该工作树仍有运行中的会话')
     if (blocked === 'current') throw new Error('该工作树包含当前正在查看的会话')
     if (blocked === 'locked') throw new Error('已锁定的工作树不能删除')
+    if (blocked === 'unhealthy') throw new Error('工作树不可用（目录缺失/无效/非 Git 仓库），不能删除')
     if (blocked === 'dirty') throw new Error('有未提交改动的工作树不能删除')
     if (blocked === 'status-unknown') throw new Error('无法确认工作树是否干净，不能删除')
     const workspaceId = found.worktree.workspaceId
     if (workspaceId === null) throw new Error('工作树缺少 workspace id')
+
+    // Optional soft-archive of the whole session tree BEFORE any Git mutation.
+    // A failure aborts with nothing removed; the closure enumerates direct
+    // workspace members plus every session transitively parented under them.
+    const directSessionIds = found.worktree.sessionIds
+    if (options.archiveSessions === true && directSessionIds.length > 0) {
+      let sessionSnapshot
+      try {
+        sessionSnapshot = await fetchInstanceSnapshot(getInstanceClient(sourceId))
+      } catch (error) {
+        throw new Error(`无法读取会话列表以归档：${errorText(error)}`)
+      }
+      const toArchive = collectSessionClosure(sessionSnapshot.sessions, directSessionIds)
+      for (const sessionId of toArchive) {
+        try {
+          await archiveSession(getInstanceClient(sourceId), sessionId)
+        } catch (error) {
+          throw new Error(`归档会话 ${sessionId} 失败：${errorText(error)}；未删除任何工作树`)
+        }
+      }
+    }
 
     await performRemoveSaga(sourceId, {
       operationId,

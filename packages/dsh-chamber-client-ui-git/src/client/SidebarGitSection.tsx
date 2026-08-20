@@ -4,12 +4,14 @@ import {
   Button, IconBranchOutline16, IconLoadingOutline16, IconPlusOutline16,
   IconRefreshOutline16, IconTrashOutline16, Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { chamberBridge, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import {
   clearActionError, createFromPreview, createSessionHere, gitCoordinator, previewCreate,
   refreshSource, removeWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
-import { canTargetSession, createSourceOptions, removeBlockReason, shortHead } from '../shared/git-facts.ts'
+import {
+  canTargetSession, collectSessionClosure, createSourceOptions, removeBlockReason, shortHead,
+} from '../shared/git-facts.ts'
 import type {
   GitBranchSpec, GitBusyKind, GitRecovery, GitWorktreeInfo, PreviewCreateResult,
 } from '../shared/types.ts'
@@ -28,6 +30,12 @@ interface RemoveViewTarget {
   worktreeId: string
   path: string
   branch: string | null
+  sessionIds: string[]
+}
+
+interface RemoveSessionFacts {
+  direct: number
+  closure: number
 }
 
 function basename(path: string): string {
@@ -113,6 +121,7 @@ function WorktreeRow({
             title={blockedLabel ?? t('remove')}
             onClick={() => onRemove({
               repoId, worktreeId: worktree.worktreeId, path: worktree.path, branch: worktree.branch,
+              sessionIds: worktree.sessionIds,
             })}
           >
             <IconTrashOutline16 size={14} />
@@ -165,6 +174,9 @@ export function SidebarGitSection({ wide, chamberInstanceId, t }: SidebarGitSect
   const [preview, setPreview] = useState<PreviewCreateResult | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [removeTarget, setRemoveTarget] = useState<RemoveViewTarget | null>(null)
+  const [sessionFacts, setSessionFacts] = useState<RemoveSessionFacts | null>(null)
+  const [sessionFactsError, setSessionFactsError] = useState<string | null>(null)
+  const [archiveSessions, setArchiveSessions] = useState(false)
 
   const options = useMemo(
     () => source?.snapshot === undefined ? [] : createSourceOptions(source.snapshot),
@@ -182,6 +194,28 @@ export function SidebarGitSection({ wide, chamberInstanceId, t }: SidebarGitSect
       setPreview(null)
     }
   }, [createOpen, options, sourceWorkspaceId])
+
+  // Remove dialog: enumerate the full session tree (direct + transitive
+  // subsessions) the removal would orphan, for explicit confirmation copy.
+  useEffect(() => {
+    setArchiveSessions(false)
+    setSessionFacts(null)
+    setSessionFactsError(null)
+    if (removeTarget === null || chamberInstanceId === undefined) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
+        if (cancelled) return
+        const closure = collectSessionClosure(snapshot.sessions, removeTarget.sessionIds)
+        setSessionFacts({ direct: removeTarget.sessionIds.length, closure: closure.length })
+      } catch (error) {
+        if (cancelled) return
+        setSessionFactsError(error instanceof Error ? error.message : String(error))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [removeTarget, chamberInstanceId])
 
   if (!wide) return null
   if (chamberInstanceId === undefined || source === undefined) return null
@@ -240,7 +274,7 @@ export function SidebarGitSection({ wide, chamberInstanceId, t }: SidebarGitSect
   const runRemove = async (): Promise<void> => {
     if (removeTarget === null) return
     try {
-      await removeWorktree(chamberInstanceId, removeTarget)
+      await removeWorktree(chamberInstanceId, removeTarget, { archiveSessions })
       setRemoveTarget(null)
     } catch {
       // The coordinator owns the page-wide actionable error/recovery state.
@@ -415,6 +449,22 @@ export function SidebarGitSection({ wide, chamberInstanceId, t }: SidebarGitSect
           <div className={css.removeFacts}>
             <code>{removeTarget.path}</code>
             <span>{removeTarget.branch ?? t('detached')}</span>
+            {sessionFacts !== null && sessionFacts.closure > 0 && (
+              <span className={css.removeSessions}>
+                {t('removeSessions')} {sessionFacts.direct}
+                {sessionFacts.closure > sessionFacts.direct && `（${t('removeSubsessions')} ${sessionFacts.closure - sessionFacts.direct}）`}
+              </span>
+            )}
+            {sessionFactsError !== null && <span className={css.formError} role="alert">{sessionFactsError}</span>}
+            <label className={css.archiveToggle}>
+              <input
+                type="checkbox"
+                checked={archiveSessions}
+                disabled={actionLocked}
+                onChange={event => setArchiveSessions(event.target.checked)}
+              />
+              <span>{t('archiveSessionsLabel')}</span>
+            </label>
           </div>
         )}
       </Modal>

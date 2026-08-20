@@ -354,3 +354,19 @@
 .removeFacts span {
   color: var(--dsw-alias-label-secondary);
 }
+
+.removeSessions {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.archiveToggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.45;
+}

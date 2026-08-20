@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canTargetSession, createSourceOptions, findWorktree, removeBlockReason } from '../src/shared/git-facts.ts'
+import { canTargetSession, collectSessionClosure, createSourceOptions, findWorktree, removeBlockReason } from '../src/shared/git-facts.ts'
 import { GitActionLedger } from '../src/shared/action-ledger.ts'
 import { SerializedRefreshes } from '../src/shared/refresh-flight.ts'
 import { normalizeGitSnapshot } from '../src/shared/snapshot.ts'
@@ -150,4 +150,23 @@ test('concurrent forced refresh waiters coalesce into one serialized successor',
   assert.deepEqual(await Promise.all([forcedA, forcedB]), ['fresh', 'fresh'])
   assert.equal(fetches, 2)
   assert.deepEqual(writes, ['old', 'fresh'])
+})
+
+test('session closure enumerates direct + transitive subsessions, cycle-safe and excluding unrelated sessions', () => {
+  const sessions = [
+    { sessionId: 'root-a' },
+    { sessionId: 'sub-a1', parentSessionId: 'root-a' },
+    { sessionId: 'sub-a2', parentSessionId: 'sub-a1' },
+    { sessionId: 'root-b' },
+    { sessionId: 'sub-b1', parentSessionId: 'root-b' },
+    { sessionId: 'unrelated' },
+    // Cycle: c1 <-> c2 must terminate.
+    { sessionId: 'c1', parentSessionId: 'c2' },
+    { sessionId: 'c2', parentSessionId: 'c1' },
+  ]
+  const closure = collectSessionClosure(sessions, ['root-a', 'c1'])
+  assert.deepEqual(closure, ['root-a', 'c1', 'sub-a1', 'c2', 'sub-a2'])
+  assert.equal(collectSessionClosure(sessions, ['root-b']).length, 2)
+  assert.equal(collectSessionClosure(sessions, ['missing-root']).length, 1)
+  assert.equal(collectSessionClosure([], ['root-a']).length, 1)
 })
