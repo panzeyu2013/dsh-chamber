@@ -22,17 +22,15 @@ import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent
 import clsx from 'clsx'
 import {
   IconAgentPresetOutline16, IconCloseOutline16, IconDataOutline16, IconLinkOutline16,
-  IconLoadingOutline16, IconPersonalizationOutline16, IconRefreshOutline16, IconSettingsOutline14, IconSettingsOutline16,
+  IconLoadingOutline16, IconPersonalizationOutline16, IconSettingsOutline14, IconSettingsOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/src/client/ConnectionsSection.tsx'
-import { UpdateSection } from './UpdateSection.tsx'
 import { GeneralView } from './GeneralView.tsx'
 import {
   CONNECTIONS_SECTION_ID,
   GENERAL_SECTION_ID,
-  UPDATE_SECTION_ID,
   resolveActiveSection,
   type SectionNavRow,
 } from './nav-active.ts'
@@ -357,16 +355,6 @@ function SettingsPanel({
               <IconSettingsOutline16 className={css.navIcon} size={16} />
               <span className={css.navLabel}>{t('generalNav')}</span>
             </button>
-            <button
-              key={UPDATE_SECTION_ID}
-              type="button"
-              className={clsx(css.navCell, active === UPDATE_SECTION_ID && css.active)}
-              aria-current={active === UPDATE_SECTION_ID ? 'true' : undefined}
-              onClick={() => onSelectSection(UPDATE_SECTION_ID)}
-            >
-              <IconRefreshOutline16 className={css.navIcon} size={16} />
-              <span className={css.navLabel}>{t('updateNav')}</span>
-            </button>
           </div>
         </nav>
         <div className={css.content}>
@@ -405,15 +393,12 @@ function SettingsPanel({
               /* Chamber-global connection management: independent of the
                  selected server (never refetched on server switch). */
               <ConnectionsSection t={connectionsT} />
-            ) : active === UPDATE_SECTION_ID ? (
-              /* Chamber-global update status (design 11): app-level, low-key,
-                 independent of the selected server. */
-              <UpdateSection t={t} />
             ) : active === GENERAL_SECTION_ID ? (
-              /* Chamber-global runtime settings (design 14 D7): close-window
-                 behavior / launch at login / keep awake / quit confirmation —
-                 reads the main-process chamber-settings.json, independent of
-                 the selected server. */
+              /* Chamber-global runtime settings (design 14 D7 / design 15):
+                 close-window behavior / launch at login / keep awake / quit
+                 confirmation — reads the main-process chamber-settings.json,
+                 independent of the selected server. The update status (design
+                 11) lives inside this section too. */
               <GeneralView t={t} />
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>

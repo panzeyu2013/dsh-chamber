@@ -396,3 +396,60 @@ test('health-events: a disconnected client unsubscribes and others keep streamin
     rmSync(holder.stateDir, { recursive: true, force: true })
   }
 })
+
+test('DELETE during an in-flight start does not resurrect the connection (2026-08 review: stop-race guard)', async () => {
+  // A slow spawn (resolves only on demand) + a stop issued mid-spawn: the
+  // epoch guard in startImpl must tear the late spawn down, NOT adopt it —
+  // otherwise quitting during a pre-spawn leaves a detached dsh orphan that
+  // resurrects the connection state after stop() returned.
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-stoprace-'))
+  // Object property (not a captured let): TS 7 narrows closure-mutated `let`
+  // bindings to `never`, making the release call untypeable.
+  const spawnControl: { release: (() => void) | null } = { release: null }
+  let teardownCount = 0
+  const wire = {
+    spawnDsh: async (): Promise<SpawnedDsh> => {
+      await new Promise<void>(resolve => { spawnControl.release = resolve })
+      return {
+        child: { on: () => {}, exitCode: null },
+        port: 17510,
+        stop: async () => { teardownCount += 1 },
+      }
+    },
+    describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+  }
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
+  })
+  try {
+    await plane.start()
+    const base = `http://127.0.0.1:${plane.port}`
+    // Start in flight (spawn pending).
+    const startP = fetch(`${base}/api/connections`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'local' }),
+    })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    // Stop while the spawn is still pending.
+    const del = await fetch(`${base}/api/connections/local`, { method: 'DELETE' })
+    assert.equal(del.status, 200)
+    const mid = await fetchJson(base, '/api/connections')
+    assert.equal(mid.body.connection.status, 'stopped')
+    // Let the pending spawn resolve — the guard must tear it down, not adopt.
+    spawnControl.release!()
+    await startP
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const after = await fetchJson(base, '/api/connections')
+    assert.equal(after.body.connection.status, 'stopped', 'late spawn must not resurrect the connection')
+    assert.equal(teardownCount, 1, 'the late spawn must be torn down, not leaked')
+  } finally {
+    const release = spawnControl.release
+    if (release !== null) release()
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})

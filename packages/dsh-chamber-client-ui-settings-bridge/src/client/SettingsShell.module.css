@@ -418,96 +418,65 @@
   white-space: nowrap;
 }
 
-/* ---- chamber-global「更新」section (design 11): low-key, no emphasis ---- */
-
-.updateSection {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 420px;
-}
-
-.updateRow {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.updateActions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.updateActionRow {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.updateButton {
-  flex: none;
-  height: 28px;
-  padding: 0 12px;
-  box-sizing: border-box;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  background: var(--dsw-alias-interactive-bg);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 26px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.updateButton:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.updateButton:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.updateLink {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-tertiary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-
-.updateLink:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-/* Status transitions (checking → available → downloading → downloaded) are
-   announced to screen readers via this aria-live wrapper. A plain block
-   (NOT display:contents — Chromium does not expose display:contents elements
-   in the accessibility tree, which would make the live region inert). */
-.updateStatus {
-  display: block;
-}
-
-/* ---- chamber-global「通用」section (design 14 D7 / 15 v1 flat form) ---- */
+/* ---- chamber-global「通用」section (design 14 D7 / 15 v1 flat form) ----
+   Settings-panel design language, OpenChamber-style control groups: section
+   title + intro, group headings (the connections-section groupHead
+   vocabulary), flat rows with label + hint, capsule buttons; every color
+   resolves through a `--dsw-alias-*` token. */
 
 .generalSection {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 420px;
+  gap: 12px;
+  max-width: 720px;
+  color: var(--dsw-alias-label-primary);
 }
 
-.generalBlock {
+.generalTitle {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.generalIntro {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* One control group: group heading + its flat rows. */
+.generalGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* In-section group heading (same vocabulary as the connections section's
+   groupHead): quiet uppercase caption, not a competing title. */
+.generalGroupTitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* One setting row (checkbox/toggle or a labeled field): label + hint. */
+.generalRow {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.generalLabel {
-  font-size: 13px;
-  line-height: 20px;
+.generalFieldLabel {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
   color: var(--dsw-alias-label-primary);
 }
 
@@ -557,7 +526,131 @@
 }
 
 .generalError {
+  margin: 0;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-state-error-primary);
+}
+
+/* ---- chamber-global「更新」group (design 11, merged into 通用) ----
+   Flat rows under the shared group-heading vocabulary: current version +
+   「检查更新」on one line, the phase status line(s) below. Content stays
+   LOW-KEY: plain status rows, no badges or banners. */
+
+.updateSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.updateHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The version line: label left, the check action right (OpenChamber
+   field-row pattern). */
+.updateVersionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.updateRow {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* One phase status line: text flexes to the left, actions sit right. */
+.updateStatusLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.updateStatusText {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Secondary dense capsule (row-actions size). */
+.updateButton {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.updateButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.updateButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Primary dense capsule: the user-confirmed download action. */
+.updatePrimaryButton {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 14px;
+  background: var(--dsw-alias-button-primary-fill);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.updatePrimaryButton:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.updatePrimaryButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.updateLink {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.updateLink:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Status transitions (checking → available → downloading → downloaded) are
+   announced to screen readers via this aria-live wrapper. A plain block
+   (NOT display:contents — Chromium does not expose display:contents elements
+   in the accessibility tree, which would make the live region inert). */
+.updateStatus {
+  display: block;
 }

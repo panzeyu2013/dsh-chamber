@@ -3,16 +3,14 @@
  *
  * The nav rail has two groups: the SELECTED server's official sections
  * (child-ctx ledger rows) and the fixed chamber-GLOBAL entries below the
- * divider (connections / general / update). The fixed ids stay valid
- * regardless of the selected server; a server-section id that left the
- * ledger falls back to the first row.
+ * divider (connections / general — the update status lives inside the
+ * General section, design 11). The fixed ids stay valid regardless of the
+ * selected server; a server-section id that left the ledger falls back to
+ * the first row.
  */
 
 /** The fixed connections nav id (design 05 §5): chamber-global connection management. */
 export const CONNECTIONS_SECTION_ID = '__connections'
-
-/** The fixed update nav id (design 11): chamber-global app update status. */
-export const UPDATE_SECTION_ID = '__update'
 
 /** The fixed general nav id (design 14 D7 / 15): chamber-global runtime settings. */
 export const GENERAL_SECTION_ID = '__general'
@@ -33,7 +31,6 @@ export function resolveActiveSection(
   rows: readonly SectionNavRow[],
 ): string | undefined {
   if (activeId === CONNECTIONS_SECTION_ID) return CONNECTIONS_SECTION_ID
-  if (activeId === UPDATE_SECTION_ID) return UPDATE_SECTION_ID
   if (activeId === GENERAL_SECTION_ID) return GENERAL_SECTION_ID
   return activeId !== undefined && rows.some(row => row.id === activeId) ? activeId : rows[0]?.id
 }

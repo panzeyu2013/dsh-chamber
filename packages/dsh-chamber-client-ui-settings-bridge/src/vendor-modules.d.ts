@@ -187,7 +187,6 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     size?: number
     className?: string
   }
-  export function IconRefreshOutline16(props?: IconProps): ReactNode
   export function IconCloseOutline16(props?: IconProps): ReactNode
   export function IconLoadingOutline16(props?: IconProps): ReactNode
   export function IconSettingsOutline14(props?: IconProps): ReactNode

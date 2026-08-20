@@ -126,6 +126,11 @@ export interface PlaneHandle {
   stop(): Promise<void>
   readonly port: number | null
   readonly connectionState: string
+  /**
+   * Whether a real dsh process is currently alive under the local connection
+   * (state-string independent — see local-connection hasLiveProcess).
+   */
+  readonly localProcessAlive: boolean
   readonly instanceId: string
   registerInstanceTransport(connectionId: string, baseUrl: string): void
   unregisterInstanceTransport(connectionId: string): void
@@ -673,8 +678,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       await local.stop()
       if (server !== null) {
         const srv = server
-        await new Promise(resolve => srv.close(resolve))
         server = null
+        // Node's server.close() waits for every active connection to end — a
+        // lingering renderer SSE/WS/proxy connection (e.g. after a crashed
+        // local host left the page mid-reconnect) would otherwise hang the
+        // close forever and strand the desktop app in a half-exited state.
+        // Force-close the connections first so close() resolves promptly.
+        srv.closeAllConnections?.()
+        await new Promise(resolve => srv.close(resolve))
       }
     },
 
@@ -686,6 +697,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     /** The dsh connection state: the design-03 seven-state machine. */
     get connectionState() {
       return local.getState()
+    },
+
+    /** Whether the local dsh process is actually alive (see hasLiveProcess). */
+    get localProcessAlive() {
+      return local.hasLiveProcess()
     },
 
     /**

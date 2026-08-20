@@ -34,6 +34,13 @@
   设计不单独探测（本地实例即 chamber 页面，boot 自身证明图通道）。
   剩余：本地 `dsh plugin`/`pnpm pack`
   依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
+  **2026-08 插件 Modal 两处修复**：① 浅色主题下 Modal 内容（portal 到 body）未显式
+  设色的文本继承 renderer 基样式的近白 body color（`--text:#e6e9ef`）→ 白底白字——
+  `.dialogContent` 锚定 `color: var(--dsw-alias-label-primary)`（`.pluginName`/
+  `.pluginCellSpec`/`.pluginChamberRow` 等全部随之修复）；② 本地实例 `phase` 恒为
+  `loading` → footer「关闭」按钮恒 disabled 的死控件——footer 关闭按钮全部移除
+  （Modal 自带头部 X/Escape/遮罩关闭，loading/error/done 只留 retry/refresh，
+  ready 保留 cancel+apply）。
 - **客户端插件运行时加载（设计 09，已实现）**：设计见
   `docs/design/09-client-plugin-runtime-loading.md`。遗留：图通道失败仅 console.error
   无 UI 信号（可观测性待补）。**union-table 补全（2026-08）**：覆盖包缺失模块表
@@ -102,15 +109,22 @@
   配置（publish/mac zip/differentialPackage）、release.yml 双 leg 更新产物
   （`--publish=always` + GH_TOKEN；channel 由版本 prerelease 后缀推导）、
   `DSH_CHAMBER_UPDATE_CHANNEL=beta`。设计见 `docs/design/11-auto-update.md`
-  （2026-08 自 docs/todo/ 移入）。剩余：mac 安装腿需 Developer ID 签名（未配置 →
-  settings 响亮提示手动安装）、release CI 上传路径实测、双平台实机检查/下载/退出安装。
+  （2026-08 自 docs/todo/ 移入）。**2026-08 修订（用户拍板）**：`__update` 固定
+  入口并入「通用」段（`GeneralView` 底部 `UpdateSection` 控制组，样式对齐官方设置段
+  控制组/胶囊词汇），新增「检查更新」按钮（`dsh-chamber:update-check` →
+  `updater.checkNow()`，与周期静默检查同一条 `runCheck()` 路径，linux 显式拒绝；
+  `update-gate.ts` 相位门 + 纯逻辑测试）。剩余：mac 安装腿需 Developer ID 签名
+  （未配置 → settings 响亮提示手动安装）、release CI 上传路径实测、双平台实机
+  检查/下载/退出安装。
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游 wire 根治）；
   实现未排期；详见 `docs/todo/12-todo-archived-sessions.md`。
 - **睡眠/后台常驻（设计 14，v1 范围已实现，2026-08）**：关窗行为可设
   （`windowCloseBehavior`：托盘 / 退出，hide 不杀进程，控制面/隧道/dsh 实例继续
   运行，**托盘可用门控**——dev/无托盘回退关窗即退）+ 登录自启可设（`launchAtLogin`，
-  mac `setLoginItemSettings` / linux XDG autostart，win 门控）+ 退出确认（活动
-  隧道/本地实例投影，**更新已下载时豁免** + 单飞）+ 唤醒即时重连（powerMonitor
+  mac `setLoginItemSettings` / linux XDG autostart，win 门控）+ 退出确认
+  （`quitConfirmation` 可设开关，**2026-08 修订（用户拍板）**：仅本地实例运行中
+  时确认——远程隧道不影响关闭，`computeQuitRisk` 弃 remoteReadyCount；**更新已下载
+  时豁免** + 单飞）+ 唤醒即时重连（powerMonitor
   resume → `system-resume` 推送 + 主进程对 error/degraded 即时重探，绝不触碰
   idle）+ 防休眠（`powerSaveBlocker`，默认关）+ `chamber-settings.json` 主进程
   存储（0600 原子写、损坏 *.corrupt 保留、非秘密）+ `backgroundThrottling: false`
@@ -145,6 +159,53 @@
    `applySettingsPatch` 副作用包 try + best-effort 回滚、托盘注释与 resume 补丁
    注释表述修正。复验 7/7 ✓（typecheck / 双测试套件 / build:preload /
    build:renderer / verify:i18n）。
+   **2026-08 退出不彻底实机排查（dev:build + CDP/信号触发关闭流程）**：
+   优雅退出（app.quit() 路径，CDP Browser.close 等价 Cmd+Q）资源回收干净
+   （主进程 code=0，控制面/本地 dsh/ssh 隧道全部无残留）；**强停（SIGTERM/
+   job_kill）路径主进程直接终止、不走 will-quit 清理 → detached 的本地 dsh
+   实例残留占端口**（机器上 67995@17511、75891@17512 即历史孤儿实证）。修复：
+   主进程监听 SIGTERM/SIGINT → 置位 quitConfirmed 后 app.quit()（信号本身即
+   明确退出意图，跳过确认框），will-quit 完整回收。实机复验：进程组 SIGTERM
+   与 dev launcher job_kill 两条路径均 `dsh process exited (0)` →
+   `local connection → stopped` → `electron 已退出（code 0）`，端口/隧道零残留。
+   **2026-08 实测修正**：macOS Electron 43 主进程的 `process.on('SIGTERM')`
+   **不触发**（Chromium 消费信号走自身默认优雅退出，同样触发 before-quit →
+   will-quit，资源回收完整）——上述"干净退出"实际由 Electron 默认行为 +
+   quitConfirmation=false 测试设置共同呈现；handler 保留为 linux/win 平台兜底；
+   macOS 信号场景（quitConfirmation=true 且本地实例在跑）会走正常确认框等待
+   用户（非卡死）。
+   **2026-08 退出误弹确认实机排查（dev:build + CDP/端口占位触发）**：确认判定
+   改「状态机 running **且实际有存活进程**」（`localProcessAlive`，控制面新增
+   `hasLiveProcess`）——restart 序列里 `restarting` 期间新进程尚未 spawn
+   （backoff 1s→60s）、死亡进程在下次探活前滞留 ready/degraded，状态字符串不是
+   存活事实，此前"本地明明没有实例在运行"也会误弹确认。同时修复**退出半滞留**：
+   `cp.stop()` 的 `server.close()` 在残留连接（页面 SSE/WS/代理，如本地宿主崩溃
+   后页面重连中）上挂起 → 主进程"窗口已关、进程仍在"；stop 增加
+   `closeAllConnections()` 强制断开 + will-quit 清理 15s 超时强制 `app.exit()`
+   兜底。实机复验：杀 dsh + 占满候选端口 → 状态 restarting 无进程 → 退出 code=0
+   不弹确认（修复前 HUNG）；实例 ready（有进程）→ 仍弹确认（不过度）。
+   **2026-08 review 轮（3 subagent 分区审查：桌面退出生命周期 / 设置桥前端与
+   更新链路 / 连接插件 Modal；全部 P0=0）**。修复 P1：① 控制面 `startImpl`
+   spawn 后置检查只信 `stopping`（stop() finally 复位）→ stop 在途 spawn 竞态
+   "复活"、退出留孤儿 dsh——改 epoch 守卫（对齐 triggerRestart）+ manager-api
+   回归测试「DELETE during in-flight start」；② `onChildExit` 无 `startPromise`
+   守卫 → startImpl 拆旧 child 的 exit 触发伪 restart、双 spawn 泄漏——加守卫；
+   ③ connections 镜像 `UpdateSurface` 缺 `check()`（接口合并漂移，两路交叉
+   确认）——补行；④ 插件 Modal 嵌套子 Modal 时 Escape 连主 Modal 一起关
+   （primitives Modal 各实例都注册 document keydown）——`close` 门补子 Modal
+   状态；⑤ seed 注入与 apply 可并发 + seed 后 loadSync 重置勾选——`doApply`
+   加 seedBusy 门、apply 按钮 disabled、seed 后保留勾选（keepChecked）；
+   ⑥ linux「检查更新」死键（主进程拒绝未镜像到 UI）——`updateCheckPlatformBlocked`
+   + 测试；⑦ 本地列表失败无重试入口——error 分支加 retry 按钮。修复 P2：
+   before-quit 无风险路径 `app.quit()` 重入改 return、确认框取消分支加
+   `!quitRequested` 守卫（SIGTERM 退出在途不重建窗口）、`showMessageBox` 包
+   try/catch（失败必复位 confirmingQuit，防退不出）、15s 超时日志补「更新安装
+   被跳过」、`starting` 装饰性条目注释、死 CSS `.updateActions/.updateActionRow`
+   删除、quitConfirmation 未水合按默认 true 占位。遗留（记录在案）：apply 卡死
+   无出口（需 main abort 支持）、update-store `state()` reject 水合边界（概率
+   极低）、GeneralView save busy 闪烁（无正确性影响）。复验 ✓（根 typecheck、
+   插件 2 typecheck、test:desktop、test:settings-bridge、test:connections、
+   控制面 8 测试 + 新增 stop-race 回归、build:renderer、verify:i18n 全绿）。
    **2026-08 v0.1.2 release review（5 subagent 分区审查 + 独立验证）**：结论
    可发 v0.1.2；修复——① macOS `windowCloseBehavior='quit'` 关窗不退出
    （window-all-closed 在 darwin 不 quit → 无窗常驻、D2 确认不可达；现 quit
@@ -176,13 +237,19 @@
    在途闸（主进程串行 + 推送收敛）；web 构建无桥时 hydration 重试链空转
    （有界 2s）。
 - **Chamber 设置呈现（设计 15，v1 范围已实现，2026-08；范围缩减）**：v1 平铺形态——
-  settings 壳固定入口扩为 连接/通用/更新（新增 `__general` 固定入口 + `GeneralView`：
-  关窗行为 / 登录自启 / 保持唤醒 / 退出确认说明，zh/en i18n）；两级分组、插件提级、
-  新插件包、关于页**推迟不做**；chamber 全局设置统一走主进程 `chamber-settings.json`
+  settings 壳固定入口扩为 连接/通用（`__connections` / `__general` + `GeneralView`：
+  关窗行为 / 登录自启 / 保持唤醒 / 退出确认，zh/en i18n）；**2026-08 修订 1**：
+  更新并入「通用」段（原 `__update` 固定入口移除，`UpdateSection` + 「检查更新」
+  按钮）；**2026-08 修订 2（用户拍板）**：`__general` 按 OpenChamber 式控制组组织
+  （启动与关闭 / 运行 / 更新，组标题 + 平铺行，替换描边卡片），「退出确认」由只读
+  说明改为可设开关（`quitConfirmation`，默认开，仅本地实例运行中时确认）；两级分组、
+  插件提级、新插件包、关于页**推迟不做**；chamber 全局设置统一走主进程
+  `chamber-settings.json`
   （`dsh-chamber:settings-get/set` + `settings-changed` 推送，非秘密），与实例配置
   平面严格分离（01 §2 P2）。验证：根 typecheck ✓、`typecheck:settings-bridge` ✓、
-  `test:settings-bridge` ✓、`build:renderer` ✓、`verify:i18n` ✓。设计见
-  `docs/design/15-chamber-settings-page.md`。
+  `test:settings-bridge`（5 文件 31 用例）✓、`test:desktop`（chamber-settings 13 用例
+  更新）✓、`build:renderer` ✓、`verify:i18n` ✓。
+  设计见 `docs/design/15-chamber-settings-page.md`。
 - **设计未决**（02 §5 / 04 §7）：starting port 偏移、trusted-host 自定义 Host、多控制面
   `$DSH_HOME` 冲突、响应头白名单双处同步、`__DSH_BOOT__` 随 dsh 版本漂移。
 

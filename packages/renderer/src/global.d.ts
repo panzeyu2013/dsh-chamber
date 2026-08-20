@@ -279,9 +279,11 @@ export interface UpdateState {
   error: string | null
 }
 
-/** window.dshChamber.update — query / subscribe / user-confirmed download. */
+/** window.dshChamber.update — query / subscribe / user-initiated check / user-confirmed download. */
 export interface UpdateSurface {
   state(): Promise<UpdateState>
+  /** User-initiated check (the「检查更新」button) — never downloads. */
+  check(): Promise<{ ok: true } | { ok: false; error: string }>
   download(): Promise<{ ok: true } | { ok: false; error: string }>
   onChanged(callback: (state: UpdateState) => void): () => void
   /** Open a release page in the system browser (main-process allowlisted). */
@@ -305,6 +307,9 @@ export interface ChamberSettings {
   launchAtLogin: boolean
   /** prevent-app-suspension (design 14 D5); default off. */
   keepAwake: boolean
+  /** Quit confirmation (design 14 D2): confirm only while the local dsh
+   *  instance runs; remote tunnels never prompt. Default on. */
+  quitConfirmation: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */

@@ -27,18 +27,18 @@ test('normalizeSettings: defaults for null / non-object', () => {
 });
 
 test('normalizeSettings: accepts valid fields, rejects bad values, ignores unknown keys', () => {
-  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, futureKey: 42 });
-  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true });
+  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, futureKey: 42 });
+  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false });
   // Bad enum / non-boolean values fall back to defaults silently (normalize is
   // the persistence read path; loud validation lives in validatePatch).
-  const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1 });
+  const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1, quitConfirmation: 'yes' });
   assert.deepEqual(bad, DEFAULT_CHAMBER_SETTINGS);
 });
 
 test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
   const file = path.join(dir, 'chamber-settings.json');
-  const settings = { windowCloseBehavior: 'quit' as const, launchAtLogin: true, keepAwake: true };
+  const settings = { windowCloseBehavior: 'quit' as const, launchAtLogin: true, keepAwake: true, quitConfirmation: false };
   writeSettingsFile(file, settings);
   const read = readSettingsFile(file);
   assert.equal(read.notice, null);
@@ -90,20 +90,23 @@ test('shouldHideToTray: needs behavior + recovery surface + no quit in flight', 
   assert.equal(shouldHideToTray('quit', true, false), false);
 });
 
-test('computeQuitRisk: remote tunnels + local instance trigger confirm', () => {
-  const both = computeQuitRisk({ remoteReadyCount: 2, localRunning: true, updateDownloadReady: false });
-  assert.equal(both.needsConfirm, true);
-  assert.deepEqual(both.reasons, ['2 条远程隧道活动', '本地 dsh 实例运行中']);
-  const none = computeQuitRisk({ remoteReadyCount: 0, localRunning: false, updateDownloadReady: false });
+test('computeQuitRisk: only a running local instance triggers confirm (2026-08: remote tunnels never prompt)', () => {
+  const local = computeQuitRisk({ quitConfirmation: true, localRunning: true, updateDownloadReady: false });
+  assert.equal(local.needsConfirm, true);
+  assert.deepEqual(local.reasons, ['正在运行的本地 dsh 实例']);
+  const none = computeQuitRisk({ quitConfirmation: true, localRunning: false, updateDownloadReady: false });
   assert.equal(none.needsConfirm, false);
   assert.deepEqual(none.reasons, []);
-  const remoteOnly = computeQuitRisk({ remoteReadyCount: 1, localRunning: false, updateDownloadReady: false });
-  assert.equal(remoteOnly.needsConfirm, true);
-  assert.deepEqual(remoteOnly.reasons, ['1 条远程隧道活动']);
+});
+
+test('computeQuitRisk: quitConfirmation off never confirms', () => {
+  const off = computeQuitRisk({ quitConfirmation: false, localRunning: true, updateDownloadReady: false });
+  assert.equal(off.needsConfirm, false);
+  assert.deepEqual(off.reasons, []);
 });
 
 test('computeQuitRisk: downloaded update exempts confirmation (design 14 D2)', () => {
-  const risk = computeQuitRisk({ remoteReadyCount: 5, localRunning: true, updateDownloadReady: true });
+  const risk = computeQuitRisk({ quitConfirmation: true, localRunning: true, updateDownloadReady: true });
   assert.equal(risk.needsConfirm, false);
   assert.deepEqual(risk.reasons, []);
 });
@@ -120,7 +123,7 @@ test('validatePatch: rejects unknown keys and bad types loudly', () => {
 });
 
 test('validatePatch: accepts known partial patches', () => {
-  const ok = validatePatch({ windowCloseBehavior: 'quit', keepAwake: true });
+  const ok = validatePatch({ windowCloseBehavior: 'quit', keepAwake: true, quitConfirmation: false });
   assert.ok(ok.ok);
-  if (ok.ok) assert.deepEqual(ok.patch, { windowCloseBehavior: 'quit', keepAwake: true });
+  if (ok.ok) assert.deepEqual(ok.patch, { windowCloseBehavior: 'quit', keepAwake: true, quitConfirmation: false });
 });

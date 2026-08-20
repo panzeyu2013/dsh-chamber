@@ -1,13 +1,18 @@
 /**
  * Chamber-global「通用」section (design 14 D7 / design 15 v1 flat form) — the
- * settings shell's `__general` fixed entry content.
+ * settings shell's `__general` fixed entry content. Organized in OpenChamber-
+ * style control groups (group headings + flat rows), styled with the settings
+ * panel's design language (`--dsw-alias-*` tokens).
  *
- * Rows (all chamber-GLOBAL, owned by the main process chamber-settings.json,
+ * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
- * - 关闭窗口行为 (windowCloseBehavior): hide-to-tray (dsh keeps running) / quit;
- * - 登录自启 (launchAtLogin): mac/linux; disabled with a note on win (v1 gate);
- * - 保持唤醒 (keepAwake): prevent-app-suspension, default off;
- * - 退出确认: read-only hint (design 14 D2 — active tunnels / local instance).
+ * - 启动与关闭: 关闭窗口行为 (windowCloseBehavior: hide-to-tray / quit);
+ *   登录自启 (launchAtLogin, mac/linux; win gated off);
+ * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
+ *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
+ *   never prompt; update-downloaded exempt);
+ * - 更新 (design 11, merged into General): current version +「检查更新」+
+ *   low-key status (UpdateSection).
  *
  * Every mutation goes through the main-process settings IPC (settings-store);
  * failures surface LOUDLY (never a silent fake success). The closeToTray gate
@@ -18,15 +23,17 @@ import { useCallback, useId, useState, useSyncExternalStore } from 'react'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
+import { UpdateSection } from './UpdateSection.tsx'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported). */
 type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
 /**
- * One checkbox-style toggle row: a native checkbox (accent-color token, no
- * custom widget — low-key per the shell's no-emphasis convention), disabled
- * with an explanatory hint when the platform gate denies the capability.
+ * One checkbox-style toggle row (OpenChamber SettingsCheckboxRow pattern): a
+ * native checkbox (accent-color token, no custom widget), the label beside it
+ * and an explanatory hint below; disabled with a hint when a platform gate
+ * denies the capability.
  */
 function ToggleRow({
   label, hint, checked, disabled, onChange, busy, t,
@@ -40,7 +47,7 @@ function ToggleRow({
   t: GeneralTranslate
 }) {
   return (
-    <div className={css.generalBlock}>
+    <div className={css.generalRow}>
       <label className={`${css.generalToggle} ${disabled === true ? css.generalDisabled : ''}`}>
         <input
           type="checkbox"
@@ -89,57 +96,80 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
 
   return (
     <div className={css.generalSection}>
-      <div className={css.generalBlock}>
-        <p className={css.generalLabel} id={closeBehaviorLabel}>{t('generalCloseBehavior')}</p>
-        <div className={css.generalOptions} role="group" aria-labelledby={closeBehaviorLabel}>
-          <label className={`${css.generalOption} ${supported?.closeToTray === false ? css.generalDisabled : ''}`}>
-            <input
-              type="radio"
-              name={closeBehaviorGroup}
-              checked={settings?.windowCloseBehavior === 'hide-to-tray'}
-              disabled={!hydrated || supported?.closeToTray === false || busy}
-              onChange={() => save({ windowCloseBehavior: 'hide-to-tray' })}
-            />
-            <span>{t('generalCloseBehaviorHide')}</span>
-          </label>
-          <label className={css.generalOption}>
-            <input
-              type="radio"
-              name={closeBehaviorGroup}
-              checked={settings?.windowCloseBehavior === 'quit'}
-              disabled={!hydrated || busy}
-              onChange={() => save({ windowCloseBehavior: 'quit' })}
-            />
-            <span>{t('generalCloseBehaviorQuit')}</span>
-          </label>
+      <h2 className={css.generalTitle}>{t('generalTitle')}</h2>
+      <p className={css.generalIntro}>{t('generalIntro')}</p>
+
+      <div className={css.generalGroup}>
+        <h3 className={css.generalGroupTitle}>{t('generalGroupLifecycle')}</h3>
+
+        <div className={css.generalRow}>
+          <span className={css.generalFieldLabel} id={closeBehaviorLabel}>{t('generalCloseBehavior')}</span>
+          <div className={css.generalOptions} role="group" aria-labelledby={closeBehaviorLabel}>
+            <label className={`${css.generalOption} ${supported?.closeToTray === false ? css.generalDisabled : ''}`}>
+              <input
+                type="radio"
+                name={closeBehaviorGroup}
+                checked={settings?.windowCloseBehavior === 'hide-to-tray'}
+                disabled={!hydrated || supported?.closeToTray === false || busy}
+                onChange={() => save({ windowCloseBehavior: 'hide-to-tray' })}
+              />
+              <span>{t('generalCloseBehaviorHide')}</span>
+            </label>
+            <label className={css.generalOption}>
+              <input
+                type="radio"
+                name={closeBehaviorGroup}
+                checked={settings?.windowCloseBehavior === 'quit'}
+                disabled={!hydrated || busy}
+                onChange={() => save({ windowCloseBehavior: 'quit' })}
+              />
+              <span>{t('generalCloseBehaviorQuit')}</span>
+            </label>
+          </div>
+          {supported?.closeToTray === false && (
+            <p className={css.generalHint}>{t('generalCloseBehaviorUnavailable')}</p>
+          )}
         </div>
-        {supported?.closeToTray === false && (
-          <p className={css.generalHint}>{t('generalCloseBehaviorUnavailable')}</p>
-        )}
+
+        <ToggleRow
+          t={t}
+          label={t('generalLaunchAtLogin')}
+          checked={settings?.launchAtLogin === true}
+          disabled={!hydrated || supported?.launchAtLogin === false}
+          busy={busy}
+          onChange={(next) => save({ launchAtLogin: next })}
+        />
       </div>
 
-      <ToggleRow
-        t={t}
-        label={t('generalLaunchAtLogin')}
-        checked={settings?.launchAtLogin === true}
-        disabled={!hydrated || supported?.launchAtLogin === false}
-        busy={busy}
-        onChange={(next) => save({ launchAtLogin: next })}
-      />
+      <div className={css.generalGroup}>
+        <h3 className={css.generalGroupTitle}>{t('generalGroupRuntime')}</h3>
 
-      <ToggleRow
-        t={t}
-        label={t('generalKeepAwake')}
-        checked={settings?.keepAwake === true}
-        disabled={!hydrated}
-        busy={busy}
-        onChange={(next) => save({ keepAwake: next })}
-      />
+        <ToggleRow
+          t={t}
+          label={t('generalKeepAwake')}
+          checked={settings?.keepAwake === true}
+          disabled={!hydrated}
+          busy={busy}
+          onChange={(next) => save({ keepAwake: next })}
+        />
 
-      <div className={css.generalBlock}>
-        <p className={css.generalLabel}>{t('generalQuitConfirm')}</p>
-        <p className={css.generalHint}>{t('generalQuitConfirmHint')}</p>
+        {/* 退出确认（2026-08 修订）：可设置开关；仅本地实例运行中时确认，
+            远程连接不影响关闭；更新已下载时豁免。未水合时按默认值 true
+            渲染（`!== false`），与「绝不假 off」的占位纪律一致。 */}
+        <ToggleRow
+          t={t}
+          label={t('generalQuitConfirm')}
+          hint={t('generalQuitConfirmHint')}
+          checked={settings?.quitConfirmation !== false}
+          disabled={!hydrated}
+          busy={busy}
+          onChange={(next) => save({ quitConfirmation: next })}
+        />
       </div>
+
+      {/* Chamber-global update status (design 11): merged into the General
+          section — the dedicated __update nav entry was folded in here. */}
+      <UpdateSection t={t} />
 
       {saveError !== null && (
         <p className={css.generalError} aria-live="polite">{t('generalSaveFailed', { error: saveError })}</p>

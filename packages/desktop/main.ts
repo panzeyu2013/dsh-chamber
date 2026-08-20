@@ -203,10 +203,21 @@ let lastResume: number | null = null;
 let quitRequested = false;
 let quitConfirmed = false;
 let confirmingQuit = false;
-// 本地实例「运行中/在途」状态（design 14 D2）：进程存活（ready/degraded）或
-// spawn/重启在途（starting/restarting）——退出会中断它们，需确认。stopped /
-// error / restart-exhausted 无进程可中断，不触发确认。
+// 本地实例「运行中/在途」状态（design 14 D2，2026-08 修订）：进程存活
+// （ready/degraded）或 spawn/重启在途（starting/restarting）——退出会中断
+// 它们，需确认。stopped / error / restart-exhausted 无进程可中断，不触发
+// 确认。**2026-08 二次修订**：状态字符串不是存活事实——restart 序列里
+// `restarting` 期间新进程可能尚未 spawn（backoff 1s→60s），死亡进程在下次
+// 探活前也可能滞留在 ready/degraded；退出确认必须同时要求**实际有存活进程**
+// （localProcessAlive），否则"本地明明没有实例在运行"也会误弹确认。注意
+// `starting` 全程 child 尚未赋值（spawn 解析后才挂到连接上），hasLiveProcess()
+// 恒为 false，配合 AND 门实际不参与确认——spawn 在途由控制面的 epoch/stopping
+// 守卫在 stop() 时终止（绝不孤儿化），故「无进程则不确认」是安全的。
 const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
+
+/** 退出清理（will-quit：transport dispose + 控制面 stop）的最长等待；超时强制
+ *  退出，防「窗口已关、主进程永久滞留」的半退出态（2026-08 实机排查）。 */
+const QUIT_CLEANUP_TIMEOUT_MS = 15_000;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
@@ -563,6 +574,25 @@ if (!gotTheLock) {
     showMainWindow();
   });
 
+  // 终止信号（终端 Ctrl+C / Activity Monitor「退出」/ 进程管理器 SIGTERM）：
+  // 转 app.quit() 优雅路径——will-quit 会先回收传输层/控制面/本地 dsh 实例，
+  // 而不是让 Electron 直接终止，把 detached 的 dsh 子进程留成孤儿。
+  // **2026-08 实机验证**：macOS Electron 43 主进程的 `process.on('SIGTERM')`
+  // **不触发**——Chromium 消费信号并走自身的默认优雅退出（同样触发
+  // before-quit → will-quit，资源回收完整）；本 handler 在 macOS 上是死代码，
+  // 保留作为 linux/win 等 process.on 生效平台的兜底。信号场景（macOS）因此走
+  // 正常退出确认（quitConfirmation=true 且本地实例在跑时会弹确认框，等待用户
+  // 确认后走 will-quit 清理——不是卡死）。信号本身是明确的退出意图，handler
+  // 触发时跳过确认框（quitConfirmed 提前置位）。
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+      if (quitRequested) return;
+      quitRequested = true;
+      quitConfirmed = true;
+      app.quit();
+    });
+  }
+
   // macOS：Dock 图标点击触发 activate。没有此处理时，窗口一旦关闭
   // （window-all-closed 在 darwin 不退出），应用以无窗口状态常驻，点
   // 图标毫无反应——"前端消失后点图标回不来"的根源。
@@ -578,14 +608,17 @@ if (!gotTheLock) {
     if (process.platform !== 'darwin' || chamberSettings.windowCloseBehavior === 'quit') app.quit();
   });
 
-  // 退出确认（design 14 D2）在 **before-quit**（窗口关闭前）拦截：显式退出
-  // （Cmd+Q / 托盘退出 / Dock 退出 / 设置=quit 的关窗）先确认；更新已下载
-  // 待装（设计 11 autoInstallOnAppQuit，用户已确认过「更新」）时豁免。
+  // 退出确认（design 14 D2，2026-08 修订）在 **before-quit**（窗口关闭前）拦截：
+  // 显式退出（Cmd+Q / 托盘退出 / Dock 退出 / 设置=quit 的关窗）仅在「退出确认
+  // 开关开启 且 本地 dsh 实例运行中」时先确认（远程隧道不影响关闭，用户拍板）；
+  // 更新已下载待装（设计 11 autoInstallOnAppQuit，用户已确认过「更新」）时豁免。
   // 关键时序：close-to-tray 的 close 处理器靠 quitRequested 区分「退出在途」
   // vs「普通关窗」——而 will-quit 要等所有窗口关闭后才触发，在 will-quit 内置
   // 位为时已晚（close 先 hide+preventDefault 会把退出吞掉）。before-quit 先
   // 置位/拦截：确认后重触发才放行；取消时窗口从未关闭（拦截在先），不丢窗口。
-  app.on('before-quit', (event) => {
+  // async handler：preventDefault 在第一个 await 前同步执行（Electron 不等待
+  // handler 的 promise）；await 仅用于把确认框的同步/异步失败统一进 try/catch。
+  app.on('before-quit', async (event) => {
     if (quitConfirmed) return; // 已确认/豁免：放行（重入）
     const cp = controlPlane;
     if (cp === null) return; // 控制面未就绪：无可保护内容，放行
@@ -597,17 +630,22 @@ if (!gotTheLock) {
     const updateDownloadReady = updateState !== undefined
       && updateState.phase === 'downloaded'
       && updateState.installBlockedReason === null;
-    const smAtQuit = transportManager;
-    const remoteReadyCount = smAtQuit === null
-      ? 0
-      : smAtQuit.listInstances().filter(instance => smAtQuit.status(instance.id)?.phase === 'ready').length;
-    const localRunning = LOCAL_RUNNING_STATES.has(cp.connectionState);
-    const risk = computeQuitRisk({ remoteReadyCount, localRunning, updateDownloadReady });
+    // 2026-08 修订：远程隧道不影响关闭（用户拍板）——风险只看本地实例；退出
+    // 确认开关（quitConfirmation）关闭时永不确认。2026-08 二次修订：状态机
+    // 显示 running 还不够——必须实际有存活进程（restart backoff / 死亡未探活
+    // 期间状态机可能误报 running）。
+    const localRunning = LOCAL_RUNNING_STATES.has(cp.connectionState) && cp.localProcessAlive;
+    const risk = computeQuitRisk({
+      quitConfirmation: chamberSettings.quitConfirmation,
+      localRunning,
+      updateDownloadReady,
+    });
     if (!risk.needsConfirm) {
-      // 无风险或更新安装豁免：标记退出在途并重触发（quitConfirmed 早退放行）。
+      // 无风险或更新安装豁免：置位后直接 return 放行本次退出（未 preventDefault，
+      // 退出继续走 will-quit）——不在此处再调 app.quit() 重入（2026-08 review：
+      // 重入虽被 quitConfirmed 早退兜住，但属不必要的退出重入）。
       quitRequested = true;
       quitConfirmed = true;
-      app.quit();
       return;
     }
     // 需确认：**在关窗前**拦截（preventDefault 只在此路径调用——风险计算在
@@ -615,37 +653,43 @@ if (!gotTheLock) {
     event.preventDefault();
     confirmingQuit = true;
     const detail = `退出将停止${risk.reasons.join('与')}。确定退出？`;
-    dialog.showMessageBox({
-      type: 'warning',
-      title: '退出 dsh-chamber？',
-      message: '退出 dsh-chamber？',
-      detail,
-      buttons: ['退出', '取消'],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
-    }).then(({ response }) => {
-      confirmingQuit = false;
-      if (response === 0) {
-        quitRequested = true;
-        quitConfirmed = true;
-        app.quit();
-        return;
-      }
-      // 取消：quitRequested 保持 false。app.quit() 发起的退出在关窗前被拦截、
-      // 窗口未关闭；但 X 关窗路径（windowCloseBehavior='quit'）窗口已先销毁
-      // （window-all-closed → app.quit()），取消后重建——绝不让应用以无窗
-      // 状态滞留（恢复入口不应只剩托盘/二次启动）。
-      if (mainWindow === null || mainWindow.isDestroyed()) {
-        showMainWindow();
-      }
-    }).catch(error => {
+    try {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: '退出 dsh-chamber？',
+        message: '退出 dsh-chamber？',
+        detail,
+        buttons: ['退出', '取消'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      }).then(({ response }) => {
+        confirmingQuit = false;
+        if (response === 0) {
+          quitRequested = true;
+          quitConfirmed = true;
+          app.quit();
+          return;
+        }
+        // 取消：quitRequested 保持 false。app.quit() 发起的退出在关窗前被拦截、
+        // 窗口未关闭；但 X 关窗路径（windowCloseBehavior='quit'）窗口已先销毁
+        // （window-all-closed → app.quit()），取消后重建——绝不让应用以无窗
+        // 状态滞留（恢复入口不应只剩托盘/二次启动）。SIGTERM 已置位
+        // quitRequested 的退出在途（窗口已关、清理进行中）则**不**重建——
+        // 取消对已确认的退出无效力，重建只会闪烁（2026-08 review）。
+        if (!quitRequested && (mainWindow === null || mainWindow.isDestroyed())) {
+          showMainWindow();
+        }
+      });
+    } catch (error) {
+      // showMessageBox 同步/异步失败都必须复位 confirmingQuit，否则后续所有
+      // before-quit 都被单飞闸拦死、应用再也退不出（2026-08 review）。
       confirmingQuit = false;
       console.error('[dsh-chamber] 退出确认对话框失败，取消退出：', error);
       if (mainWindow === null || mainWindow.isDestroyed()) {
         showMainWindow();
       }
-    });
+    }
   });
 
   app.on('will-quit', (event) => {
@@ -661,6 +705,16 @@ if (!gotTheLock) {
     // escalation: without the wait, app.quit() can exit within the 2s grace
     // and a SIGTERM-ignoring ssh child would be orphaned (escalation timers
     // are unref'd — quitting loses them).
+    // 2026-08 兜底：清理链（disposeAsync / cp.stop → server.close）若挂起
+    // （例如残留连接使 server.close 不回调），主进程会永久滞留成"窗口已关、
+    // 进程仍在"的半退出态——超时后强制退出，绝不无期限滞留。
+    const cleanupTimer = setTimeout(() => {
+      // 超时强制退出走 app.exit()：quit 事件不会触发，electron-updater 的
+      // autoInstallOnAppQuit 也不执行——即使「已下载」豁免放行了退出，更新
+      // 安装也会被跳过（接受的取舍，如实记录）。
+      console.error('[dsh-chamber] 退出清理超时，强制退出（可能有子进程残留，已下载更新不会安装）');
+      app.exit(1);
+    }, QUIT_CLEANUP_TIMEOUT_MS);
     void (async () => {
       try {
         await transportManager?.disposeAsync();
@@ -671,7 +725,10 @@ if (!gotTheLock) {
       controlPlane = null;
       cp.stop()
         .catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err))
-        .finally(() => app.quit());
+        .finally(() => {
+          clearTimeout(cleanupTimer);
+          app.quit();
+        });
     })();
   });
 
@@ -1139,7 +1196,9 @@ if (!gotTheLock) {
     // Update controller (design 11): silent check on a startup delay + 6h
     // interval; autoDownload=false — checking never downloads, the download
     // starts ONLY when the user clicks「更新」in the settings update section
-    // (dsh-chamber:update-download). Install is deferred to quit
+    // (dsh-chamber:update-download). The user can also check manually from
+    // that section (dsh-chamber:update-check — the same silent check path,
+    // still no download). Install is deferred to quit
     // (autoInstallOnAppQuit): no dialog, no mid-session interruption. The
     // state projection is non-secret only (versions / channel / release URL /
     // short error text) and every failure is silent (main-process log), never
@@ -1161,6 +1220,7 @@ if (!gotTheLock) {
       }
     });
     ipcMain.handle('dsh-chamber:update-state', trustedIpc(() => updater.state()));
+    ipcMain.handle('dsh-chamber:update-check', trustedIpc(() => updater.checkNow()));
     ipcMain.handle('dsh-chamber:update-download', trustedIpc(() => updater.download()));
     // The settings update section's「前往下载页」link: popups are denied and
     // navigation is pinned to the control-plane origin, so opening a release

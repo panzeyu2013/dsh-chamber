@@ -24,6 +24,9 @@ export interface ChamberSettings {
   launchAtLogin: boolean
   /** prevent-app-suspension (design 14 D5); default off. */
   keepAwake: boolean
+  /** Quit confirmation (design 14 D2, 2026-08 修订): confirm before quitting
+   *  while the LOCAL dsh instance is running; remote tunnels never prompt. */
+  quitConfirmation: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -42,12 +45,14 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
   windowCloseBehavior: 'hide-to-tray',
   launchAtLogin: false,
   keepAwake: false,
+  quitConfirmation: true,
 };
 
 const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'windowCloseBehavior',
   'launchAtLogin',
   'keepAwake',
+  'quitConfirmation',
 ];
 
 /** Validate and normalize an unknown settings payload; unknown keys ignored. */
@@ -60,6 +65,7 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   }
   if (typeof record.launchAtLogin === 'boolean') base.launchAtLogin = record.launchAtLogin;
   if (typeof record.keepAwake === 'boolean') base.keepAwake = record.keepAwake;
+  if (typeof record.quitConfirmation === 'boolean') base.quitConfirmation = record.quitConfirmation;
   return base;
 }
 
@@ -140,21 +146,22 @@ export function shouldHideToTray(
 }
 
 /**
- * Quit-risk projection (design 14 D2): confirm before quitting when active
- * remote tunnels or the local dsh instance would be stopped — EXCEPT when a
- * downloaded update is ready to install on quit (design 11 autoInstallOnAppQuit:
- * the user already confirmed「更新」and was told「退出时安装」— never block it
- * with a second dialog).
+ * Quit-risk projection (design 14 D2, 2026-08 修订): confirm before quitting
+ * only while the LOCAL dsh instance is running (remote tunnels never prompt —
+ * user decision) — EXCEPT when the user turned the confirmation off, or a
+ * downloaded update is ready to install on quit (design 11
+ * autoInstallOnAppQuit: the user already confirmed「更新」and was told「退出时
+ * 安装」— never block it with a second dialog).
  */
 export function computeQuitRisk(input: {
-  remoteReadyCount: number
+  quitConfirmation: boolean
   localRunning: boolean
   updateDownloadReady: boolean
 }): { needsConfirm: boolean; reasons: string[] } {
   if (input.updateDownloadReady) return { needsConfirm: false, reasons: [] };
+  if (!input.quitConfirmation) return { needsConfirm: false, reasons: [] };
   const reasons: string[] = [];
-  if (input.remoteReadyCount > 0) reasons.push(`${input.remoteReadyCount} 条远程隧道活动`);
-  if (input.localRunning) reasons.push('本地 dsh 实例运行中');
+  if (input.localRunning) reasons.push('正在运行的本地 dsh 实例');
   return { needsConfirm: reasons.length > 0, reasons };
 }
 

@@ -122,9 +122,11 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 ### D2 退出确认（quitRisk 投影）
 
-- 退出前若存在**活动隧道**（transport 状态 phase=ready）或**本地实例运行中**
-  （控制面 `/api/connections` 有 local 条目）→ `dialog.showMessageBox` 确认：
-  「退出将停止本地 dsh 实例与 N 条远程隧道」。确认后走既有退出路径。
+- **2026-08 修订（用户拍板）**：远程隧道**不影响关闭**——风险只看**本地实例**；
+  且退出确认成为**可设置开关** `quitConfirmation`（默认开；关 → 永不确认）。
+- 开关开启且**本地实例运行中**（控制面 `/api/connections` 有 local 条目，含
+  starting/restarting 在途态）→ `dialog.showMessageBox` 确认：「退出将停止正在
+  运行的本地 dsh 实例」。确认后走既有退出路径。
 - 对齐 OpenChamber quitRisk；这是**唯一允许的退出确认对话框**，与设计 11
   「更新无弹窗」纪律不冲突（更新提示仍不弹窗）。
 - **豁免：更新安装退出不确认**——updater 状态为 `downloaded` 且未

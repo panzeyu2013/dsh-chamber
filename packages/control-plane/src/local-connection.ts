@@ -118,6 +118,11 @@ export interface LocalConnection {
   getError(): string | null
   getConsecutiveFailures(): number
   getHostDescribe(): any
+  /**
+   * Whether a real dsh process is currently alive under this connection
+   * (state-string independent — the liveness fact for quit-risk decisions).
+   */
+  hasLiveProcess(): boolean
   start(): Promise<ConnectionRow | null>
   stop(): Promise<void>
   /**
@@ -468,12 +473,18 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
    * The child exit listener: a dead dsh must not stay ready. Process death
    * skips the failure counter and goes straight into the restart sequence
    * (design 02 §3.5.2 进程死亡分支); during an in-flight restart the sequence
-   * itself is driving the teardown, so nothing else is scheduled.
+   * itself is driving the teardown, so nothing else is scheduled. A start()
+   * in flight also suppresses the pseudo-restart: startImpl tears down the
+   * previous child (`await child.stop()`) while `startPromise` is set, and
+   * that exit event must not schedule a second spawn alongside the one
+   * startImpl is about to perform — it would race the start's spawn and leak
+   * a detached dsh process (2026-08 review).
    */
   function onChildExit(code: number | null, sig: string | null): void {
     logger.log(`dsh process exited (${code ?? sig})`)
     if (stopping) return
     if (restartPromise !== null) return
+    if (startPromise !== null) return
     if (state === 'ready' || state === 'starting' || state === 'degraded') {
       void triggerRestart(`dsh process exited (${code ?? sig})`)
     }
@@ -490,6 +501,15 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
       if (stopping) throw new Error('connection is stopping')
       if (state === 'ready') return catalog.getConnection('local')
       epoch += 1
+      // The epoch captured at entry, not the mutable `stopping` flag: stop()
+      // resets `stopping` in its finally WITHOUT waiting for this in-flight
+      // spawn (it never awaits startPromise), so a post-spawn check on
+      // `stopping` alone would let the spawn land AFTER stop() returned and
+      // resurrect the connection — leaving a detached dsh orphan on quit.
+      // The epoch guard (same as triggerRestart) survives that: stop()
+      // bumped the epoch, so a late-resolving spawn is torn down instead of
+      // adopted. (2026-08 review)
+      const startEpoch = epoch
       if (restartPromise !== null) await restartPromise
       if (child !== null && child.child.exitCode === null) {
         await child.stop()
@@ -503,7 +523,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
       setState('starting')
       try {
         const spawned = await spawnDshFn({ stateDir, dshHome, dshWorkspacePath, logger, patchPath: resolvePatchPath() })
-        if (stopping) {
+        if (stopping || epoch !== startEpoch) {
           await spawned.stop()
           return catalog.getConnection('local')
         }
@@ -539,6 +559,19 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     /** The dsh port this connection serves; null while stopped. */
     getDshPort(): number | null {
       return dshPort
+    },
+
+    /**
+     * Whether a real dsh process is currently alive under this connection.
+     * The machine state alone is NOT a liveness fact: during a restart
+     * sequence the state is 'restarting' while the new process has not been
+     * spawned yet (backoff 1s→60s), and a dead child can linger on
+     * 'ready'/'degraded' until the next health probe notices. Quit-risk and
+     * similar "something would be interrupted" decisions must key on this,
+     * not on the state string.
+     */
+    hasLiveProcess(): boolean {
+      return child !== null && child.child.exitCode === null
     },
 
     /** Current error detail; null when healthy. */
