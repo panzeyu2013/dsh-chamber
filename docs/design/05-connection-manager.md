@@ -472,7 +472,8 @@ export const chamberBridge: {
   新增/编辑主机若密码写入失败，设置页补偿回滚本次元数据保存；回滚 IPC
   异常时重新读取权威注册表并按真实状态保留编辑态，避免重复新增；
   永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
-  exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 0600 askpass 助手（`<tmp>/
+  exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH
+  直接执行该脚本；`<tmp>/
   dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即删；启动清理仅删除
   已退出进程或旧格式遗留，绝不误删并行 dev/打包实例的助手）把密码喂给系统 ssh
   ——**永不上命令行**；所有 ssh 调用强制 `StrictHostKeyChecking=yes`，助手

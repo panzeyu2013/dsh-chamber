@@ -299,8 +299,9 @@
   并核验 package name。控制面 Origin 收紧为当前 Host 精确同源或显式 allowlist；
   代理加入 HTTP/WS/SSE/请求体预算、慢上传和上游空闲超时，实例、密码、插件等输入
   均有限额；慢上传失败会取消请求 iterator，重建请求会剥离原始 framing/proxy 头。
-  插件子进程改为异步、有界输出和超时终止；askpass 目录固定 0700，助手名
-  带 owner PID。聚合轮询并发限制为 4、后台预热远端限制为 3，删除实例会释放 client，
+  插件子进程改为异步、有界输出和超时终止；askpass 目录与助手均为 owner-only
+  0700（助手由 OpenSSH 直接执行），助手名带 owner PID。聚合轮询并发限制为 4、
+  后台预热远端限制为 3，删除实例会释放 client，
   布局共享订阅改为单监听 + WeakRef。boot manifest JSON 做 script-context 转义，WS 101
   只透传握手白名单头，transport 只接受 loopback origin，HTTP server 增加连接与超时
   上限；macOS Developer ID 探测完成前更新下载保持 fail-closed。Actions 固定完整 commit

@@ -1,7 +1,7 @@
 /**
  * ssh provider password-auth unit tests (design 05 §8): the in-memory
  * password store, the ephemeral askpass helper script (single-quote
- * escaping, host-key refusal, 0600 file, dispose cleanup) and the
+ * escaping, host-key refusal, directly executable 0700 file, dispose cleanup) and the
  * buildStartEnv surface that wires the password into the ssh spawn without
  * a TTY or the command line. Pure-Node, no real ssh host: the helper's
  * behavior is verified by actually executing it against ssh-style prompts.
@@ -51,18 +51,25 @@ test('buildAskpassScript escapes single quotes and keeps password/passphrase pro
 })
 
 test('the askpass helper refuses host-key prompts and answers password prompts with the password', () => {
-  const path = createAskpassHelper('t-askpass-1', "s3cr't")
+  // A restrictive umask must not strip the execute bit OpenSSH requires.
+  const previousUmask = process.umask(0o177)
+  let path: string
   try {
-    const hostKey = spawnSync('sh', [path, 'Are you sure you want to continue connecting (yes/no/[fingerprint])?'], { encoding: 'utf8' })
+    path = createAskpassHelper('t-askpass-1', "s3cr't")
+  } finally {
+    process.umask(previousUmask)
+  }
+  try {
+    const hostKey = spawnSync(path, ['Are you sure you want to continue connecting (yes/no/[fingerprint])?'], { encoding: 'utf8' })
     assert.equal(hostKey.status, 0)
     assert.equal(hostKey.stdout.trim(), 'no', 'host-key confirmation is refused')
-    const password = spawnSync('sh', [path, "user@h.example.com's password:"], { encoding: 'utf8' })
+    const password = spawnSync(path, ["user@h.example.com's password:"], { encoding: 'utf8' })
     assert.equal(password.status, 0)
     assert.equal(password.stdout, "s3cr't\n", 'password prompt answers the stored password (line-terminated)')
-    const passphrase = spawnSync('sh', [path, "Enter passphrase for key '/Users/x/.ssh/id_ed25519':"], { encoding: 'utf8' })
+    const passphrase = spawnSync(path, ["Enter passphrase for key '/Users/x/.ssh/id_ed25519':"], { encoding: 'utf8' })
     assert.equal(passphrase.stdout, "s3cr't\n", 'key passphrase prompts reuse the stored password')
-    // The helper file is 0600 (owner-only).
-    assert.equal(statSync(path).mode & 0o777, 0o600, 'helper is 0600')
+    // OpenSSH runs SSH_ASKPASS directly: it must be executable but stay owner-only.
+    assert.equal(statSync(path).mode & 0o777, 0o700, 'helper is executable and owner-only')
   } finally {
     rmSync(path, { force: true })
   }

@@ -36,7 +36,7 @@
  *   registry, logs, or any renderer payload beyond the transient input. The
  *   tunnel and systemd exec channels deliver it to the system `ssh` binary
  *   via an ephemeral askpass helper (SSH_ASKPASS_REQUIRE=force — no TTY and
- *   no command line involvement; the helper is a 0600 sh script that refuses
+ *   no command line involvement; the helper is a 0700 sh script that refuses
  *   host-key confirmations and answers password/passphrase prompts with the
  *   stored value, deleted on transport stop). Every ssh invocation also sets
  *   StrictHostKeyChecking=yes: users must verify/trust a key out of band before
@@ -528,7 +528,7 @@ const passwords = new Map<string, string>()
  * platform without persistence). Configured once at startup. */
 let passwordFile: string | null = null
 
-/** id → path of the live ephemeral askpass helper (0600, deleted on dispose). */
+/** id → path of the live ephemeral askpass helper (0700, deleted on dispose). */
 const askpassHelpers = new Map<string, string>()
 
 /** Never silently trust a first-seen or changed SSH host key. */
@@ -665,7 +665,7 @@ export function buildAskpassScript(password: string): string {
   const escaped = password.replace(/'/g, `'\\''`)
   return [
     '#!/bin/sh',
-    '# dsh-chamber ssh password helper (ephemeral, 0600, deleted on transport stop)',
+    '# dsh-chamber ssh password helper (ephemeral, 0700, deleted on transport stop)',
     'case "$1" in',
     '  *"yes/no"*|*"fingerprint"*|*"authenticity"*|*"continue connecting"*)',
     '    echo no',
@@ -692,8 +692,19 @@ export function createAskpassHelper(id: string, password: string): string {
   // Include the owner PID so startup cleanup can distinguish crash leftovers
   // from a simultaneously running dev/packaged chamber process.
   const path = join(dir, `askpass-${id}.pid-${process.pid}.${randomUUID()}.sh`)
-  writeFileSync(path, buildAskpassScript(password), { mode: 0o600 })
-  return path
+  try {
+    // Keep a partially written helper non-executable, then publish it as an
+    // owner-only executable. The explicit chmod also defeats a restrictive
+    // process umask that would otherwise strip the owner execute bit.
+    writeFileSync(path, buildAskpassScript(password), { mode: 0o600 })
+    chmodSync(path, 0o700)
+    return path
+  } catch (error) {
+    // Never strand an untracked password-bearing helper after a failed write
+    // or chmod; callers cannot dispose a path that was never returned.
+    rmSync(path, { force: true })
+    throw error
+  }
 }
 
 /** Remove password-bearing helpers left by a hard crash before transports start. */
