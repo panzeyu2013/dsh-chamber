@@ -43,6 +43,7 @@ import {
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
+import { planAggregateRefreshes } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
 import InstanceView from './components/InstanceView.tsx'
@@ -209,14 +210,20 @@ export default function App() {
   // 每实例 workspace/session 聚合（已挂载 ctx 推送 + 未挂载 unary 兜底；控制面不持有会话事实）
   const [aggregates, setAggregates] = useState<Record<string, InstanceAggregate>>({})
   // Complete snapshots reported by mounted ctx stores. A source appears here
-  // only while both reconnect baselines are ready; those sources require no
-  // periodic unary aggregation. Unmounted/incomplete sources retain the
-  // bounded fallback below.
+  // only while both reconnect baselines are idle + ready; loading/error
+  // withdraws ownership so an identical recovered baseline is re-published.
+  // Complete sources require no periodic unary aggregation; unmounted/
+  // incomplete sources retain the bounded fallback below.
   const [snapshotSources, setSnapshotSources] = useState<Record<string, true>>({})
   // Event callbacks and fallback polls may interleave before React commits the
   // state update above. Keep a synchronous ownership mirror so a producer's
   // first snapshot immediately suppresses any later unary pull in that window.
   const snapshotSourcesRef = useRef<Record<string, true>>({})
+  // Synchronous connection-generation edge memory. A mounted producer may
+  // suppress an identical post-reconnect snapshot, while the App has already
+  // replaced its aggregate with not-connected; one authoritative pull on each
+  // not-ready -> ready edge closes that gap without restoring periodic RPCs.
+  const readyAggregateSourcesRef = useRef<Set<string>>(new Set())
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
@@ -474,7 +481,7 @@ export default function App() {
     }
   }, [refreshHealth])
 
-  /** 轮询就绪实例的聚合；未就绪实例落 not-connected（不显示陈旧数据）。 */
+  /** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected（不显示陈旧数据）。 */
   const pollAggregates = useCallback(() => {
     const ready: { kind: 'local' | 'ssh'; id: string }[] = []
     const notReady: string[] = []
@@ -490,10 +497,21 @@ export default function App() {
         notReady.push(`ssh-${instance.id}`)
       }
     }
-    for (const entry of ready) {
-      if (snapshotSourcesRef.current[entry.id] !== true) void refreshAggregate(entry.id)
-    }
+    const refreshPlan = planAggregateRefreshes(
+      ready.map(entry => entry.id),
+      readyAggregateSourcesRef.current,
+      snapshotSourcesRef.current,
+    )
+    // Commit the observed generation synchronously before starting pulls: an
+    // overlapping health/status callback must not mint duplicate reconnect pulls.
+    readyAggregateSourcesRef.current = refreshPlan.nextReady
+    for (const sourceId of refreshPlan.refreshSourceIds) void refreshAggregate(sourceId)
     if (notReady.length > 0) {
+      // A pull started in the dying generation must never restore an `ok`
+      // aggregate after the authoritative transport state became not-ready.
+      for (const id of notReady) {
+        aggregateSeqRef.current[id] = (aggregateSeqRef.current[id] ?? 0) + 1
+      }
       setAggregates(prev => {
         let changed = false
         const next = { ...prev }
@@ -940,6 +958,11 @@ export default function App() {
         return { ...prev, [sourceId]: true }
       })
       if (snapshot === undefined) return
+      // A mounted ctx can deliver a late store notification after its
+      // transport generation died. Keep producer ownership, but never let
+      // that notification overwrite the authoritative not-connected row;
+      // the next ready edge performs one unary refresh.
+      if (!readyAggregateSourcesRef.current.has(sourceId)) return
       setAggregates(prev => {
         const current = prev[sourceId]
         if (current !== undefined && current.state === 'ok'

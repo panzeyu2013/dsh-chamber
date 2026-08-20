@@ -40,13 +40,16 @@
    通道——旧 shell 的迟到 cleanup 不会清除同 id 新 shell 的快照。
 2. **`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`** `sync()`：除
    runtime facts 外，把两个 store 经纯函数 `projectInstanceSnapshot` 投影；只有两份
-   reconnect baseline 都 ready 才上报，否则撤回快照并恢复兜底。完整内容签名未变
-   时不上报，subagent 行不进入导航快照。
+   reconnect baseline 都 idle + ready 才上报；loading/error 即撤回快照、清内容签名
+   并恢复兜底，所以相同内容的成功 reconnect baseline 也会重新上报。稳定代完整内容
+   签名未变时不上报，subagent 行不进入导航快照。
 3. **`packages/renderer/src/App.tsx`**：
    - 合并各来源上报（identity-preserving，复用
      `instanceSnapshotSignature`；publish 继续走 `serversProjectionSignature` 闸）；
    - `pollAggregates` 仅对**无完整生产者**来源（未挂载或重连基线不完整）30s 兜底；
      全部 ready 来源已有生产者时不创建聚合定时器；
+   - 每个来源 not-ready → ready 的连接代边沿强制一次 unary；即使生产者因内容签名
+     未变而不重复上报，也能恢复断线时被清空的 App 聚合，稳定 ready 代仍为零轮询；
    - 每次推送先递增来源序号，使较旧的在途 unary resolve/reject 均不能覆盖新快照；
    - `onRefresh` 通道保留（动作成功后的即时拉取仍可直接走一次 unary，语义不变）。
 

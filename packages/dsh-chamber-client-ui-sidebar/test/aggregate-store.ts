@@ -9,7 +9,7 @@ const snapshot = (id: string): InstanceSnapshot => ({
   archivedSessionIds: [],
 })
 
-test('snapshot producers replay complete state and old generations cannot clear newer reports', () => {
+test('snapshot producers replay complete state, re-report after withdrawal, and ignore old-generation cleanup', () => {
   const events: string[] = []
   const first = chamberBridge.registerInstanceSnapshotProducer('source-test')
   first.report(snapshot('one'))
@@ -26,6 +26,12 @@ test('snapshot producers replay complete state and old generations cannot clear 
   second.report(undefined)
   assert.equal(chamberBridge.getInstanceSnapshots()['source-test'], undefined)
   assert.deepEqual(events, ['source-test:one', 'source-test:clear', 'source-test:two', 'source-test:clear'])
+  // Reconnect baseline may be byte-for-byte identical. Once loading withdrew
+  // the old report, the recovered generation must be publishable again.
+  second.report(snapshot('two'))
+  assert.equal(chamberBridge.getInstanceSnapshots()['source-test']?.sessions[0]?.sessionId, 'two')
+  assert.deepEqual(events, ['source-test:one', 'source-test:clear', 'source-test:two', 'source-test:clear', 'source-test:two'])
   second.clear()
+  assert.equal(chamberBridge.getInstanceSnapshots()['source-test'], undefined)
   unsubscribe()
 })

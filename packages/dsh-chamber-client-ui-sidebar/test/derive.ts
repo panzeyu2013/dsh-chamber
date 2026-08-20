@@ -68,6 +68,7 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
   }
   const sessionState = {
     ids: ['s1', 'sub'],
+    state: 'idle',
     phase: 'ready',
     byId: {
       s1: { id: 's1', title: 'One', cwd: '/w1', running: true, blank: false, updatedAt: 42 },
@@ -80,8 +81,24 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     archivedSessionIds: ['old'],
   })
   assert.equal(projectInstanceSnapshot({ ...workspaceState, baselinesReady: false }, sessionState), undefined)
+  assert.equal(projectInstanceSnapshot({ ...workspaceState, state: 'loading' }, sessionState), undefined)
   assert.equal(projectInstanceSnapshot({ ...workspaceState, state: 'error' }, sessionState), undefined)
+  assert.equal(projectInstanceSnapshot(workspaceState, { ...sessionState, state: 'loading' }), undefined)
+  assert.equal(projectInstanceSnapshot(workspaceState, { ...sessionState, state: 'error' }), undefined)
   assert.equal(projectInstanceSnapshot(workspaceState, { ...sessionState, phase: 'pending' }), undefined)
+
+  // Upstream phases are sticky across reconnect. A loading projection must
+  // withdraw the old report so the same-content idle baseline can be emitted
+  // again after the producer resets its signature.
+  assert.equal(projectInstanceSnapshot(
+    { ...workspaceState, state: 'loading' },
+    { ...sessionState, state: 'loading' },
+  ), undefined)
+  assert.deepEqual(projectInstanceSnapshot(workspaceState, sessionState), {
+    workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
+    sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
+    archivedSessionIds: ['old'],
+  })
 })
 
 test('blank sessions are hidden from workspaces and from the ungrouped bucket when not current', () => {

@@ -123,7 +123,9 @@
   `sessions.list` + `workspaces.list` 上报完整快照（本地/SSH 远端同路，复用既有
   host-frame/WS 链，不改上游 dsh）；旧 pull 由来源序号失效。仅无完整生产者的 ready
   来源保留 30s unary 兜底，完整生产者也同步抑制动作后的补拉取，全部 ready 来源已挂载时
-  无聚合定时器。插件额外 bundle 的跨实例并发预加载共享同一 Promise（所有等待者同成败，
+  无聚合定时器；每来源 not-ready → ready 连接代固定执行一次权威 unary，修复生产者对
+  同内容重连快照去重后 App 聚合停留 `not-connected` 的空列表缺口，稳定 ready 代不增加
+  RPC。插件额外 bundle 的跨实例并发预加载共享同一 Promise（所有等待者同成败，
   失败清标可重试），不再把“加载中”误判成“已加载”。详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
 - **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程
@@ -267,6 +269,19 @@
    connections 17、host-graph 26、renderer shell 6 全绿；renderer production build
    （1091 modules）、control-plane/preload/host-graph-package 编译、verify:i18n 全绿。
    smoke 因本工作树无 dsh 安装按契约 SKIP；mac 打包未执行（同一缺失前置）。
+   **最终合并审查重连缺口修复（2026-08）**：App 为每来源维护同步 ready 代集合，
+   not-ready 时使该代在途 pull 失效并拒绝迟到生产者快照覆盖断连态；not-ready → ready
+   时即使完整生产者仍挂载也固定补一次权威 unary，随后稳定代恢复零 RPC。新增纯状态机
+   回归覆盖本地/SSH 独立代、无生产者兜底、同内容断线重连只补拉一次。复验 ✓（根 +
+   sidebar typecheck、renderer shell 全套含新增 4 测试、renderer production build
+   1093 modules、verify:i18n）。
+   **重连恢复二次审查修复（2026-08）**：补齐上游 arrival `phase` 首次成功后保持 ready
+   的语义——完整快照现在同时要求 workspace/session activity state 均为 idle；任一
+   loading/error 立即撤回并清生产者签名，保证 ready 边沿 unary 瞬时失败后，相同内容的
+   成功 baseline 仍会重发并清除错误态。新增两轴 loading/error + sticky-phase 同内容恢复
+   回归；全程仅改 chamber 投影，不改上游 dsh。复验 ✓（根 + sidebar typecheck、sidebar
+   133、renderer shell 39、renderer production build 1093 modules、verify:i18n；同轮修复前
+   control-plane / desktop / settings / connections / client-web 全矩阵亦全绿）。
    记录在案（NIT，非阻塞）：updatedOrder/sessionUpdatedAtByAccount 只按来源
    不按 workspace 修剪（官方 retainAccountKeys 逐 workspace；有界、渲染不可
    见，契约变更留后续）；settings-store/update-store 未加 singleton 守卫

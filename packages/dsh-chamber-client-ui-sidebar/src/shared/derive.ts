@@ -228,11 +228,18 @@ export function projectInstanceSnapshot(
       blank?: boolean
       updatedAt?: number
     }>
+    state?: string
     phase?: string
   },
 ): InstanceSnapshot | undefined {
-  if (workspaces.baselinesReady !== true || workspaces.state === 'error'
-    || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
+  // Both arrival phases are sticky after their first success in the upstream
+  // runtime. The activity states are therefore part of completeness: during a
+  // reconnect they step to loading/error while phase remains ready. Withdrawing
+  // here clears the producer's content signature, so an identical recovered
+  // baseline is emitted again instead of being suppressed forever.
+  if (workspaces.baselinesReady !== true || workspaces.state !== 'idle'
+    || workspaces.phase !== 'ready' || sessions.state !== 'idle'
+    || sessions.phase !== 'ready') return undefined
   const byId = sessions.byId ?? {}
   return {
     workspaces: (workspaces.items ?? []).map(item => ({

@@ -116,12 +116,17 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 数据节奏：**状态与已挂载来源聚合均走现有事件链**。本地 `/health` 由
   health-events EventSource 驱动；远程隧道相位走 onStatusChanged；每个已挂载
   ctx 订阅自己的 `sessions.list` + `workspaces.list`，两份 reconnect baseline
-  ready 后经 chamberBridge 上报完整快照。远端 ctx 的 host frames 仍经既有 SSH
-  隧道/实例反代 WebSocket 到达，**不增加协议、不修改上游 dsh**。
+  均为 idle + ready 后经 chamberBridge 上报完整快照；任一 store 进入 loading/error
+  即撤回旧快照并清除内容签名，使同内容 reconnect baseline 也重新上报。远端 ctx
+  的 host frames 仍经既有 SSH 隧道/实例反代 WebSocket 到达，**不增加协议、不修改上游 dsh**。
 - 只有未挂载或 reconnect baseline 不完整的 ready 来源使用 30s unary 兜底；所有
   ready 来源都有完整生产者时不创建聚合定时器。连接/生产者状态变化立即重估，
   用户动作的 `requestRefresh` 只对无完整生产者来源单次拉取；已挂载完整生产者由同一
-  host-store 变更直接推送，避免动作成功后再补 RPC。推快照按来源序号使较旧在途 pull 失效。
+  host-store 变更直接推送，避免动作成功后再补 RPC。每个来源的 not-ready → ready
+  连接代边沿固定执行一次 unary：生产者会对同内容快照去重，而 App 在断线时已清空
+  聚合，该单次权威拉取保证“内容未变”的重连也恢复列表；稳定 ready 代仍为零轮询。
+  若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
+  error。推快照按来源序号使较旧在途 pull 失效。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
@@ -186,7 +191,8 @@ export const chamberBridge: {
 - 状态合并发布：控制面 `/health`（health-events 推送流）+
   `/api/connections`（30s）+ desktopSsh status 推送（onStatusChanged）+
   已挂载 ctx 的完整快照上报；仅无完整生产者的 ready 来源 30s unary 兜底 →
-  `chamberBridge.publish`。拉取失败的来源带 `aggregateError` 文本发布。
+  `chamberBridge.publish`；另在每个 not-ready → ready 连接代边沿执行一次 unary，
+  收敛生产者同内容去重后的聚合空窗。拉取失败的来源带 `aggregateError` 文本发布。
 - 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）。
 - 订阅 `onActivateSource` → 仅切换活动来源视图（不打开会话）。
 - 订阅 `onRefresh` → 仅无完整生产者的来源立即重拉；已挂载完整生产者由同一
