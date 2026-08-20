@@ -46,6 +46,8 @@ import type { Logger } from './types.ts'
 /** Body read cap for POST payloads (10 MiB; the instance proxy has its own 50MiB cap). */
 const MAX_BODY_BYTES = 10 * 1024 * 1024
 const MAX_HEALTH_EVENT_STREAMS = 32
+/** Per-client frames retained while its SSE socket is backpressured. */
+const MAX_HEALTH_EVENT_PENDING_FRAMES = 32
 
 /** Hostnames treated as loopback for CORS (any port). */
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
@@ -278,9 +280,10 @@ export function createApi(deps: ApiDeps) {
           activeHealthEventStreams += 1
           // SSE push channel (design 05 §3): current snapshot first, then
           // every machine transition; keepalive keeps the stream alive
-          // through idle browsers; any write failure or client close tears
-          // the subscription down (a write on a dead socket must never
-          // escape into the state machine).
+          // through idle browsers. Backpressure is bounded per client and
+          // drained in order; write failures, overflow, or client close tear
+          // the subscription down (a slow/dead socket must never escape into
+          // the state machine or grow memory without bound).
           res.writeHead(200, {
             'content-type': 'text/event-stream',
             'cache-control': 'no-store',
@@ -288,17 +291,58 @@ export function createApi(deps: ApiDeps) {
             ...(res._corsHeaders ?? {}),
           })
           let tornDown = false
+          let backpressured = false
           let keepalive: ReturnType<typeof setInterval> | null = null
           let unsubscribe: (() => void) | null = null
+          const pendingFrames: string[] = []
+          const releaseSubscription = () => {
+            const release = unsubscribe
+            unsubscribe = null
+            try {
+              release?.()
+            } catch { /* subscriber cleanup is isolated from stream cleanup */ }
+          }
           const teardown = () => {
             if (tornDown) return
             tornDown = true
             activeHealthEventStreams = Math.max(0, activeHealthEventStreams - 1)
             if (keepalive !== null) clearInterval(keepalive)
-            unsubscribe?.()
+            pendingFrames.length = 0
+            res.removeListener('drain', flushPending)
+            req.removeListener('close', teardown)
+            releaseSubscription()
             try {
               res.end()
             } catch { /* already gone */ }
+          }
+          const writeFrame = (frame: string) => {
+            if (tornDown) return
+            if (backpressured) {
+              if (pendingFrames.length >= MAX_HEALTH_EVENT_PENDING_FRAMES) {
+                teardown()
+              } else {
+                pendingFrames.push(frame)
+              }
+              return
+            }
+            try {
+              // Node accepted this frame even when write() returns false; do
+              // not enqueue it twice. Pause only subsequent frames until the
+              // socket drains.
+              if (!res.write(frame)) {
+                backpressured = true
+                res.once('drain', flushPending)
+              }
+            } catch {
+              teardown()
+            }
+          }
+          function flushPending() {
+            if (tornDown) return
+            backpressured = false
+            while (!tornDown && !backpressured && pendingFrames.length > 0) {
+              writeFrame(pendingFrames.shift()!)
+            }
           }
           const send = (snapshot: { status: string; port: number | null; error: string | null }) => {
             if (tornDown) return
@@ -306,23 +350,29 @@ export function createApi(deps: ApiDeps) {
               ok: true,
               dsh: { status: snapshot.status, port: snapshot.port ?? 0, error: snapshot.error ?? undefined },
             }
-            try {
-              if (!res.write(`data: ${JSON.stringify(payload)}\n\n`)) teardown()
-            } catch {
-              teardown()
-            }
+            writeFrame(`data: ${JSON.stringify(payload)}\n\n`)
           }
+          req.on('close', teardown)
           const health = deps.getHealth()
           send({ status: health.dsh.status, port: health.dsh.port, error: health.dsh.error ?? null })
-          unsubscribe = deps.subscribeHealthEvents!(send)
+          if (tornDown) return
+          try {
+            unsubscribe = deps.subscribeHealthEvents!(send)
+          } catch {
+            teardown()
+            return
+          }
+          // A custom subscription seam may synchronously close the request.
+          // Do not strand a listener when teardown ran before assignment.
+          if (tornDown) {
+            releaseSubscription()
+            return
+          }
           keepalive = setInterval(() => {
-            try {
-              if (!tornDown && !res.write(': keepalive\n\n')) teardown()
-            } catch {
-              teardown()
-            }
+            // A keepalive has no state value and must not consume the bounded
+            // queue while real state frames are waiting for drain.
+            if (!tornDown && !backpressured) writeFrame(': keepalive\n\n')
           }, 20_000)
-          req.on('close', teardown)
         }
       }
       if (a === 'connections') {

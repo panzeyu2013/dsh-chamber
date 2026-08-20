@@ -299,6 +299,8 @@
   并核验 package name。控制面 Origin 收紧为当前 Host 精确同源或显式 allowlist；
   代理加入 HTTP/WS/SSE/请求体预算、慢上传和上游空闲超时，实例、密码、插件等输入
   均有限额；慢上传失败会取消请求 iterator，重建请求会剥离原始 framing/proxy 头。
+  管理面 health-events SSE 将 `write() === false` 作为背压而非断连处理：每客户端
+  至多排队 32 个状态帧、`drain` 后按序刷新，溢出/异常/断连统一释放订阅与监听器。
   插件子进程改为异步、有界输出和超时终止；askpass 目录与助手均为 owner-only
   0700（助手由 OpenSSH 直接执行），助手名带 owner PID。聚合轮询并发限制为 4、
   后台预热远端限制为 3，删除实例会释放 client，
