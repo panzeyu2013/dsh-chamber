@@ -78,8 +78,8 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 05 | [05-connection-manager.md](05-connection-manager.md) | 现行（表面/架构，v1 权威） | 多来源会话统一导航、侧边栏插件、桥接层、N-ctx、控制面/桌面契约（§7）、安全不变量（§8） |
 | 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（已实现，2026-08） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道 |
 | 07 | [07-models-params.md](07-models-params.md) | 推迟（设计定稿，待上游解锁） | 模型额外参数 + 默认推理等级：链路事实、上游阻塞点、更新复查清单、实现蓝本 |
-| 08 | [../todo/08-todo-git-worktree-plugin.md](../todo/08-todo-git-worktree-plugin.md) | todo（设计定稿，实现未排期；2026-08-16 移至 docs/todo/） | git worktree 独立插件：范围决策（01 §4 修订）+ 形态/座位/数据流/执行层/分期 |
-| 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行（已实现，2026-08 方案 A；自 docs/todo/ 移入） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.tsx extraRows seam）+ 信任边界/分期 |
+| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（v1 实现，2026-08-20 自 docs/todo/ 移入） | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.git` 座位 + 安全创建/无归档删除 saga |
+| 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行（已实现，2026-08 方案 A；自 docs/todo/ 移入） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 信任边界/分期 |
 | 10 | [../todo/10-todo-event-driven-aggregation.md](../todo/10-todo-event-driven-aggregation.md) | 已实现（2026-08；历史设计记录仍在 todo/） | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）+ 05 §3 契约修订；不改上游 dsh |
 | 11 | [11-auto-update.md](11-auto-update.md) | 现行（已实现，2026-08；自 docs/todo/ 移入） | 桌面端更新提示（dsh-chamber 自身，无弹窗、低打扰）：settings chamber 全局「更新」部分 + 静默检查、用户确认后下载、退出时安装（win/mac 一致，mac 安装腿需 Developer ID）、beta → stable 通道 |
 | 12 | [../todo/12-todo-archived-sessions.md](../todo/12-todo-archived-sessions.md) | todo（设计待评审，实现未排期；2026-08） | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） |
@@ -105,8 +105,8 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 
 > **例外（2026-08-16）**：git/GitHub 行经本节修订为插件化，是上表唯一例外
 > （"不得以'后续版本'名义回到 backlog"仅约束其余行）。插件形态仍受 §5 原则
-> 约束：控制面不建立 git 索引、不消费宿主会话，git 事实只来自各实例宿主/桌面
-> 执行层（设计 08 §5/§6）。
+> 约束：控制面不建立 git 索引、不消费宿主会话，git 事实与执行只来自各实例内的
+> chamber host plugin；Desktop 仅分发该包，不运行 Git（设计 08 §2/§5/§6）。
 
 ---
 

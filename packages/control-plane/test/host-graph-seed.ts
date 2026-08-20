@@ -23,7 +23,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildPatchOverlay,
+  ensureHostPackage,
   ensureHostGraphPackage,
+  missingHostPackageInserts,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GIT_WORKTREE_PACKAGE_NAME,
+  HOST_GRAPH_INSERT,
   HOST_GRAPH_PACKAGE_NAME,
   HOST_GRAPH_PATCH_FILENAME,
 } from '../src/host-graph-seed.ts'
@@ -52,6 +57,13 @@ const silentLogger = { log() {}, warn() {}, error() {} }
 const EXPECTED_OVERLAY = `- insert:
     - id: client-graph
       name: '@dsh-chamber/dsh-host-client-graph'
+`
+
+const EXPECTED_BOTH_OVERLAY = `- insert:
+    - id: client-graph
+      name: '@dsh-chamber/dsh-host-client-graph'
+    - id: git-worktree
+      name: '@dsh-chamber/dsh-host-git-worktree'
 `
 
 function tempDir(t: any) {
@@ -89,6 +101,105 @@ test('buildPatchOverlay self-heals a drifted overlay back to the canonical conte
   writeFileSync(path, '- insert: []\n', { mode: 0o600 })
   buildPatchOverlay(dir)
   assert.equal(readFileSync(path, 'utf8'), EXPECTED_OVERLAY)
+})
+
+test('buildPatchOverlay renders exactly the available host package rows', t => {
+  const dir = tempDir(t)
+  const path = buildPatchOverlay(dir, [HOST_GRAPH_INSERT, HOST_GIT_WORKTREE_INSERT])
+  assert.equal(readFileSync(path, 'utf8'), EXPECTED_BOTH_OVERLAY)
+  buildPatchOverlay(dir, [HOST_GIT_WORKTREE_INSERT])
+  const gitOnly = readFileSync(path, 'utf8')
+  assert.ok(gitOnly.includes('id: git-worktree'))
+  assert.ok(!gitOnly.includes('id: client-graph'), 'an unavailable package never leaves a dangling row')
+})
+
+test('missingHostPackageInserts reuses one exact profile row and returns only missing rows', () => {
+  const profile = `- insert:
+    - id: client-graph
+      name: '${HOST_GRAPH_PACKAGE_NAME}'
+`
+  assert.deepEqual(
+    missingHostPackageInserts(profile, [HOST_GRAPH_INSERT, HOST_GIT_WORKTREE_INSERT]),
+    [HOST_GIT_WORKTREE_INSERT],
+  )
+})
+
+test('missingHostPackageInserts rejects a loader id bound to another package', () => {
+  const profile = `- insert:
+    - id: git-worktree
+      name: '@dsh-chamber/not-the-git-service'
+`
+  assert.throws(
+    () => missingHostPackageInserts(profile, [HOST_GIT_WORKTREE_INSERT]),
+    /already bound to a different package/,
+  )
+})
+
+test('missingHostPackageInserts rejects a chamber package mounted under another id', () => {
+  const profile = `- insert:
+    - id: another-git-service
+      name: '${HOST_GIT_WORKTREE_PACKAGE_NAME}'
+`
+  assert.throws(
+    () => missingHostPackageInserts(profile, [HOST_GIT_WORKTREE_INSERT]),
+    /already mounted under a different loader id/,
+  )
+})
+
+test('missingHostPackageInserts rejects duplicate exact loader identities', () => {
+  const profile = `- insert:
+    - id: git-worktree
+      name: '${HOST_GIT_WORKTREE_PACKAGE_NAME}'
+    - id: git-worktree
+      name: '${HOST_GIT_WORKTREE_PACKAGE_NAME}'
+`
+  assert.throws(
+    () => missingHostPackageInserts(profile, [HOST_GIT_WORKTREE_INSERT]),
+    /duplicate loader identity/,
+  )
+})
+
+test('missingHostPackageInserts never pairs id/name across name-first sibling rows', () => {
+  const crossed = `- insert:
+    - id: git-worktree
+      name: '@example/not-chamber'
+    - name: '${HOST_GIT_WORKTREE_PACKAGE_NAME}'
+      id: another-git-service
+`
+  assert.throws(
+    () => missingHostPackageInserts(crossed, [HOST_GIT_WORKTREE_INSERT]),
+    /already bound|already mounted|duplicate loader identity/,
+  )
+})
+
+test('missingHostPackageInserts accepts an exact name-first row', () => {
+  const profile = `- insert:
+    - name: '${HOST_GIT_WORKTREE_PACKAGE_NAME}'
+      id: git-worktree
+`
+  assert.deepEqual(missingHostPackageInserts(profile, [HOST_GIT_WORKTREE_INSERT]), [])
+})
+
+test('missingHostPackageInserts does not use a nested config name to complete a loader row', () => {
+  const nested = `- insert:
+    - id: git-worktree
+      name: '@example/not-chamber'
+      config:
+        name: '${HOST_GIT_WORKTREE_PACKAGE_NAME}'
+`
+  assert.throws(
+    () => missingHostPackageInserts(nested, [HOST_GIT_WORKTREE_INSERT]),
+    /already bound|duplicate loader identity/,
+  )
+})
+
+test('missingHostPackageInserts keeps crossed inline-flow mappings separate', () => {
+  const crossed = `- insert: [{ id: git-worktree, name: '@example/not-chamber' }, { id: other, name: '${HOST_GIT_WORKTREE_PACKAGE_NAME}' }]
+`
+  assert.throws(
+    () => missingHostPackageInserts(crossed, [HOST_GIT_WORKTREE_INSERT]),
+    /already bound|already mounted|duplicate loader identity/,
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -136,6 +247,19 @@ test('ensureHostGraphPackage returns false without touching the profile when the
   const dshHome = tempDir(t)
   assert.equal(ensureHostGraphPackage(dshHome, join(dshHome, 'no-such-package')), false)
   assert.equal(existsSync(seedTarget(dshHome)), false)
+})
+
+test('ensureHostPackage reuses the seed path for the Git worktree host package', t => {
+  const dshHome = tempDir(t)
+  const source = tempDir(t)
+  mkdirSync(join(source, 'dist'), { recursive: true })
+  writeFileSync(join(source, 'package.json'), JSON.stringify({ name: HOST_GIT_WORKTREE_PACKAGE_NAME }))
+  writeFileSync(join(source, 'dist', 'index.js'), 'export default {}\n')
+  assert.equal(ensureHostPackage(dshHome, HOST_GIT_WORKTREE_PACKAGE_NAME, source), true)
+  assert.equal(
+    readFileSync(join(dshHome, 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+    'export default {}\n',
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -280,6 +404,7 @@ test('createControlPlane.start() seeds the host package and materializes the ove
     port: 0,
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: source,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     logger: silentLogger,
   })
   try {
@@ -296,6 +421,78 @@ test('createControlPlane.start() seeds the host package and materializes the ove
   }
 })
 
+test('createControlPlane.start() seeds both host packages behind one merged overlay', async t => {
+  const dir = tempDir(t)
+  const graphSource = stageSource(t, 'export const graph = 1\n')
+  const gitSource = tempDir(t)
+  mkdirSync(join(gitSource, 'dist'), { recursive: true })
+  writeFileSync(join(gitSource, 'package.json'), JSON.stringify({ name: HOST_GIT_WORKTREE_PACKAGE_NAME }))
+  writeFileSync(join(gitSource, 'dist', 'index.js'), 'export const git = 1\n')
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: graphSource,
+    hostGitWorktreePackageSourceDir: gitSource,
+    logger: silentLogger,
+  })
+  try {
+    await plane.start()
+    assert.equal(readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8'), EXPECTED_BOTH_OVERLAY)
+    assert.equal(
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+      'export const git = 1\n',
+    )
+  } finally {
+    await plane.stop()
+  }
+})
+
+test('createControlPlane.start() reuses an exact user profile row without a duplicate overlay', async t => {
+  const dir = tempDir(t)
+  const source = stageSource(t, 'export const graph = 1\n')
+  const profileDir = join(dir, 'dsh-home', 'profiles', 'web')
+  mkdirSync(profileDir, { recursive: true })
+  writeFileSync(join(profileDir, 'cordis.patch.yml'), `- insert:\n    - id: client-graph\n      name: '${HOST_GRAPH_PACKAGE_NAME}'\n`)
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: source,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    logger: silentLogger,
+  })
+  try {
+    await plane.start()
+    assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false)
+    assert.equal(
+      readFileSync(join(seedTarget(join(dir, 'dsh-home')), 'dist', 'index.js'), 'utf8'),
+      'export const graph = 1\n',
+    )
+  } finally {
+    await plane.stop()
+  }
+})
+
+test('createControlPlane.start() rejects a profile loader collision before package writes', async t => {
+  const dir = tempDir(t)
+  const source = stageSource(t, 'export const graph = 1\n')
+  const profileDir = join(dir, 'dsh-home', 'profiles', 'web')
+  mkdirSync(profileDir, { recursive: true })
+  writeFileSync(join(profileDir, 'cordis.patch.yml'), `- insert:\n    - id: client-graph\n      name: '@dsh-chamber/not-client-graph'\n`)
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: source,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    logger: silentLogger,
+  })
+  await assert.rejects(() => plane.start(), /already bound to a different package/)
+  assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false)
+  await plane.stop()
+})
+
 test('createControlPlane.start() keeps the v4 baseline when dist/index.js is absent', async t => {
   const dir = tempDir(t)
   // A fake source dir that EXISTS but has no built artifact — the gate is the
@@ -308,6 +505,7 @@ test('createControlPlane.start() keeps the v4 baseline when dist/index.js is abs
     port: 0,
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: source,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     logger: silentLogger,
   })
   try {
@@ -331,10 +529,10 @@ test('ensureHostGraphPackage throws when the source exists but a declared file i
   const distOnly = tempDir(t)
   mkdirSync(join(distOnly, 'dist'), { recursive: true })
   writeFileSync(join(distOnly, 'dist', 'index.js'), 'export const v = 1\n')
-  assert.throws(() => ensureHostGraphPackage(dshHome, distOnly), /missing in module A package/)
+  assert.throws(() => ensureHostGraphPackage(dshHome, distOnly), /missing in package/)
   // package.json present but dist/index.js missing — the same fail-loud
   // contract on the other declared file.
   const manifestOnly = tempDir(t)
   writeFileSync(join(manifestOnly, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME, version: '0.0.0', main: 'dist/index.js' }) + '\n')
-  assert.throws(() => ensureHostGraphPackage(dshHome, manifestOnly), /missing in module A package/)
+  assert.throws(() => ensureHostGraphPackage(dshHome, manifestOnly), /missing in package/)
 })

@@ -4,7 +4,7 @@
 > （原 设计 09）。本文记录「chamber 前端**运行时加载 dsh 客户端插件**
 > （`dsh.client` 行）」的设计与最终实现形态：官方客户端插件机制在 chamber
 > 底下的**断点定位**、**每实例合并宿主 boot 图**的方案对比（A/B）、信任边界、
-> 分期与落地记录。与 todo 08（git worktree 插件，**构建期强制打包**的 chamber
+> 分期与落地记录。与设计 08（git worktree 插件，**构建期强制打包**的 chamber
 > 客户端插件）互补：08 走编译期打包，本文走**运行期加载**（第三方/自研
 > `dsh.client` 包，装进 profile 后前端按实例加载，不重新构建 chamber 前端）。
 > 落地记录与剩余偏差以 `docs/progress/STATUS.md` 为准（唯一进度记录）。
@@ -194,6 +194,14 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   页面级一次加载保证由 host-graph.ts 的 `preloadedExtraBundles` Map 显式维护
   （成功后才标记：失败不标记 → 重试可重新预加载；同 id 异 rev 先到先得并
   上报 `restart-required`，用户不再面对静默版本复用）。
+- **构建期 generated Remote seam（renderer glue）**：复合壳源码复用官方
+  `dsh-api-remotes/client`，但受管 vendor 只有源码、没有上游 tsdown 生成的
+  `lib/typert.remote-client.js`。`gen-typert-remotes.mjs` 因而以该官方 client
+  汇编的 **value import 集合为唯一选择源**，逐包校验上游标准 `./remote`
+  exports/files 契约，再把 Host face 产物写入 chamber-owned
+  `renderer/src/generated/typert/`；Vite 的通用 `/remote` resolver 只消费这些产物。
+  rc.8 当前 7 个 contribution（含 file/session reference）由独立锁步测试固定，
+  避免手抄包表滞后后到 Rollup 阶段才报缺模块；vendor 始终只读。
 - **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 /
   行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，同时经 renderer-local
   chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 =
@@ -311,5 +319,5 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - `docs/design/05-connection-manager.md` §6（前端复合 bundle、启动图清单、N-ctx
   seam、host 包与 seed；单 entry 表述已修订）
 - `docs/design/04-control-plane-api-data.md` §5（`__DSH_BOOT__` 单条目表述已修订）
-- `docs/todo/08-todo-git-worktree-plugin.md`（构建期打包形态，与本方案互补）
+- `docs/design/08-git-worktree-plugin.md`（构建期打包的客户端行 + 实例内 host 包，与本方案互补）
 - `docs/progress/STATUS.md`（唯一进度记录；本方案落地记录与遗留）

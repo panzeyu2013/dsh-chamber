@@ -95,7 +95,7 @@ jobs:
         # artifact to a phantom v<package.json version> draft and finalize an
         # EMPTY release. Fail fast: the developer bumps the chamber packages
         # (design 11 §8: root/desktop/control-plane/renderer/cli +
-        # dsh-host-client-graph — 6 packages in the v0.1.2 release set) before
+        # dsh-host-client-graph + dsh-host-git-worktree — 7 packages) before
         # releasing, so the input version must equal EVERY package's version.
         # (2026-08 review: extended from desktop-only so a partial bump of the
         # siblings fails the run instead of shipping a version-skewed app.)
@@ -107,14 +107,15 @@ jobs:
             ./packages/control-plane/package.json \
             ./packages/renderer/package.json \
             ./packages/cli/package.json \
-            ./packages/dsh-host-client-graph/package.json; do
+            ./packages/dsh-host-client-graph/package.json \
+            ./packages/dsh-chamber-host-git-worktree/package.json; do
             PKG_VERSION=$(node -p "require('${PKG}').version")
             if [[ "$VERSION" != "$PKG_VERSION" ]]; then
-              echo "::error::release version ${VERSION} != ${PKG} version ${PKG_VERSION} — bump all 6 chamber packages (root/desktop/control-plane/renderer/cli/dsh-host-client-graph) to match before releasing"
+              echo "::error::release version ${VERSION} != ${PKG} version ${PKG_VERSION} — bump all 7 chamber packages (root/desktop/control-plane/renderer/cli/dsh-host-client-graph/dsh-host-git-worktree) to match before releasing"
               exit 1
             fi
           done
-          echo "release version ${VERSION} matches all 6 chamber packages ✓"
+          echo "release version ${VERSION} matches all 7 chamber packages ✓"
 
       - name: Extract CHANGELOG section for the release body
         # The release page must show OUR changelog entry (CHANGELOG.md), not

@@ -225,6 +225,12 @@ export default defineConfig({
       { find: /^@dsh-chamber\/dsh-client-ui-sidebar$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/index.ts') },
       { find: /^@dsh-chamber\/dsh-client-ui-sidebar\/client$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/client/index.ts') },
       { find: /^@dsh-chamber\/dsh-client-ui-sidebar\/shared$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/shared/index.ts') },
+      // Chamber Git worktree occupant: static first-screen client + shared
+      // coordinator/API helpers. It depends on the sidebar's neutral shared
+      // bridge, never on an App-owned Git aggregate.
+      { find: /^@dsh-chamber\/dsh-client-ui-git$/, replacement: src('../dsh-chamber-client-ui-git/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-client-ui-git\/client$/, replacement: src('../dsh-chamber-client-ui-git/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-client-ui-git\/shared$/, replacement: src('../dsh-chamber-client-ui-git/src/shared/index.ts') },
       // The chamber-owned ui-layout fork (design 06) resolves to source the
       // same way: it replaces the official layout in the boot graph, and its
       // client imports the vendor frame through `@deepseek-ai/.../src/*` deep

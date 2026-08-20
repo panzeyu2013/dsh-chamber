@@ -13,6 +13,7 @@
 │ Electron 窗口（单 frame，loadURL 控制面 origin）                        │
 │ └─ dsh 官方前端（源码复用）                                             │
 │     ├─ 自研侧边栏插件：dsh 原生侧边栏内多来源会话导航 + chamberBridge     │
+│     ├─ Git worktree 客户端插件：实例内拓扑 + 安全创建/删除 saga           │
 │     ├─ 桥接宿主（entry 级 React）：首屏 = 本地实例纯 dsh shell           │
 │     └─ N-ctx：每实例一个 dsh shell，经 /api/i/<id>/* 同源访问            │
 ├───────────────────────────────────────────────────────────────────────┤
@@ -21,12 +22,13 @@
 │  ├─ 每实例反代：/api/i/local/* → 本地 dsh（web profile）                 │
 │  │              /api/i/ssh-<id>/* → 隧道 localPort                      │
 │  │              （v1 匿名可达，仅 loopback 监听）                        │
-│  ├─ 本地实例托管（spawn/健康/reaper）                                    │
+│  ├─ 本地实例托管（spawn/健康/reaper）+ 双 host 包 seed/单一 overlay       │
 │  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）                             │
 ├───────────────────────────────────────────────────────────────────────┤
 │ 桌面主进程（desktop）                                                   │
 │  ├─ transport-manager + ssh provider（TransportProvider 接口）          │
 │  │    ssh -N -o ServerAlive… -L 隧道 + systemctl start/stop/is-active    │
+│  ├─ 远端 ready-time 双 host 包分发（不经 SSH 执行 Git）                  │
 │  ├─ 实例注册表：<userData>/ssh-instances.json                           │
 │  └─ IPC（preload 白名单）：dsh-chamber:info · desktop_ssh_*             │
 └───────────────────────────────────────────────────────────────────────┘
@@ -34,13 +36,16 @@
 
 **一句话**：控制面（连接管理器核心）负责连接管理、每实例同源反代与静态前端服务；渲染层是 dsh 官方前端源码复用自建（单窗口单 frame，多实例以 N-ctx 共存）；桌面壳经 SSH 隧道接入远程实例。
 
+Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插件配对；
+控制面/桌面只分发 host 包和挂 loader row，不解析 Git 事实，也不经 SSH 执行 Git。
+
 **设计权威**在 `docs/design/`（01 为入口，05 为 v1 表面/架构契约），**包职责明细与约束**在 `AGENTS.md`「Runtime Boundaries」——本文件只做一行级导航，不重复细节。
 
 | 包 | 职责（一行） |
 |---|---|
-| `packages/control-plane` | 连接管理器核心：web profile 宿主托管、管理 REST、每实例反代、静态前端服务 |
+| `packages/control-plane` | 连接管理器核心：web profile 宿主托管、双 host 包本地 seed/overlay、管理 REST、每实例反代、静态前端服务 |
 | `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主、N-ctx 编排、启动图清单 |
-| `packages/desktop` | Electron 壳：单 frame、transport-manager + ssh provider（隧道 + systemd）、实例注册表、IPC |
+| `packages/desktop` | Electron 壳：单 frame、transport-manager + ssh provider（隧道 + systemd）、远端 ready-time host 包分发、实例注册表、IPC |
 | `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
 | `packages/dsh-client-connection` | 官方连接客户端仓库内拷贝 + base 路径补丁 |
 | `packages/dsh-client-web` | 官方 web shell 仓库内拷贝 + boot.ts N-ctx 模块表共享 seam |
@@ -49,6 +54,8 @@
 | `packages/dsh-chamber-client-ui-settings-bridge` | 自研设置壳插件（shadow 官方 SettingsRoot 注册，服务器下拉 + 固定连接导航项） |
 | `packages/dsh-chamber-client-ui-layout` | 自研 ui-layout 壳 fork（layout store 替换，持久化 sidebarWidth） |
 | `packages/dsh-host-client-graph` | 宿主侧包：经 Typert Remote 只读暴露实例的客户端插件 boot 图 |
+| `packages/dsh-chamber-client-ui-git` | chamber 内建 Git worktree 客户端：sidebar 座位、每实例拓扑、创建/删除 saga；不直接执行 Git |
+| `packages/dsh-chamber-host-git-worktree` | 实例内 host 包：按 workspace/agent 权威校验并执行受限、本地-only Git worktree 生命周期 |
 
 ## 2. 环境搭建
 
@@ -103,20 +110,26 @@ pnpm run dev:desktop         # 完整窗口：控制面 + dsh 前端 + 桌面壳
 ## 4. 构建与打包
 
 ```bash
+pnpm run build:host-packages # 构建 host-graph + host-git-worktree 两个宿主包
 pnpm run build:renderer      # 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码）
-pnpm run build:desktop       # host-graph → renderer → 控制面 → preload → bundle:dsh
+pnpm run build:desktop       # 双 host 包 → renderer → 控制面/双包复制 → preload → bundle:dsh
 pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
 pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分）
 ```
 
 打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。普通 CI/dry-run 可为 ad-hoc/未签名构建；公开 release 必须具备 macOS Developer ID + 公证及 Windows Authenticode，并在发布前通过产物验签，否则 fail-closed 不公开。
 
+`build:desktop` 会把两个已构建 host 包复制到
+`packages/desktop/dist/host-graph-package/` 与
+`packages/desktop/dist/host-git-worktree-package/`；本地控制面从这里 seed
+打包态本地实例，桌面 ready-time 远端 seed 也复用同一份产物。
+
 > Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
 
 ## 5. CI 与发布
 
-- `.github/workflows/ci.yml`：每次 push/PR 运行——验证链（frozen install → typecheck → i18n → 控制面单测 → smoke → renderer 构建）+ 各平台桌面打包 sanity（macOS `dist:desktop:mac` + 真实 smoke；Windows `dist:desktop:win`，`windows-2022`）。
-- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖全部 6 个 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。
+- `.github/workflows/ci.yml`：每次 push/PR 运行——验证链（frozen install → 根/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ smoke → renderer 构建）+ 各平台桌面打包 sanity（macOS `dist:desktop:mac` + 真实 smoke；Windows `dist:desktop:win`，`windows-2022`）。
+- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖 release matrix 中的 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。
 - 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
 
 ## 6. 仓库结构
@@ -137,6 +150,10 @@ packages/
   dsh-chamber-client-ui-settings-bridge/
                             自研设置壳插件
   dsh-host-client-graph/    自研宿主侧 host 包（只读暴露客户端插件 boot 图）
+  dsh-chamber-client-ui-git/
+                            Git worktree 客户端（sidebar + coordinator + saga）
+  dsh-chamber-host-git-worktree/
+                            实例内 Git worktree host Remote（权威校验 + 受限 Git）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
   todo/                     未实现功能想法（每条一个文件，见 todo/README.md）
@@ -156,7 +173,13 @@ vendor/
 | `pnpm run dev:desktop` | Electron 壳：完整窗口（控制面 + dsh 前端 + 桌面壳） |
 | `pnpm run build:renderer` | 构建 dsh 前端 bundle |
 | `pnpm run build:host-graph` | 构建 host-graph 包（esbuild） |
-| `pnpm run build:desktop` | host-graph + renderer + 控制面编译 + preload + dsh 封装 |
+| `pnpm run build:host-git` | 构建实例内 Git worktree host 包（esbuild） |
+| `pnpm run build:host-packages` | 依次构建 host-graph 与 host-git-worktree |
+| `pnpm run build:desktop` | 双 host 包 + renderer + 控制面编译/双包复制 + preload + dsh 封装 |
+| `pnpm run typecheck:git` | 类型检查 Git worktree 客户端插件 |
+| `pnpm run typecheck:host-git` | 类型检查实例内 Git worktree host 包 |
+| `pnpm run test:git` | 运行 Git worktree 客户端插件测试 |
+| `pnpm run test:host-git` | 运行 Git host core 生命周期与安全守卫测试 |
 | `pnpm run dist:desktop:mac` | 打包 macOS 应用（dmg + zip） |
 | `pnpm run dist:desktop:win` | 打包 Windows 应用（nsis + zip；须在 Windows 上运行） |
 | `pnpm run cli -- <args>` | 仓库内 CLI 薄壳（serve/status/connections/host logs） |

@@ -31,10 +31,11 @@ jobs:
       - name: Bootstrap vendor tree
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
-      - name: Type check (tsc + host-graph)
+      - name: Type check (tsc + chamber host packages)
         run: |
           pnpm run typecheck
           pnpm run typecheck:host-graph
+          pnpm run typecheck:host-git
       - name: i18n pair consistency
         run: pnpm run verify:i18n
       - name: Control-plane unit tests
@@ -51,16 +52,19 @@ jobs:
         run: pnpm run test:desktop
       - name: Renderer shell unit tests
         run: pnpm run test:renderer-shell
-      - name: Client plugin type checks (sidebar / layout / connections / settings-bridge / client-web)
+      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web)
         run: |
           pnpm run typecheck:sidebar
+          pnpm run typecheck:git
           pnpm run typecheck:layout
           pnpm run typecheck:connections
           pnpm run typecheck:settings-bridge
           pnpm run typecheck:client-web
-      - name: Client plugin unit tests (sidebar / settings-bridge / connections / client-web)
+      - name: Client and host plugin unit tests (sidebar / git / settings-bridge / connections / client-web)
         run: |
           pnpm run test:sidebar
+          pnpm run test:git
+          pnpm run test:host-git
           pnpm run test:settings-bridge
           pnpm run test:connections
           pnpm run test:client-web

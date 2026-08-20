@@ -27,14 +27,19 @@ node packages/control-plane/test/m1-dsh-client.ts  # describe/health client beha
 node packages/control-plane/test/host-logs.ts   # host logs ring buffer
 node packages/control-plane/test/manager-api.ts # management REST (/health, /api/connections)
 node packages/control-plane/test/instance-proxy.ts  # per-instance reverse proxy (HTTP/WS/SSE, 503)
+node packages/control-plane/test/static-serving.ts  # first-screen static serving and boot manifest
+node packages/control-plane/test/host-graph-seed.ts # chamber host-package seed/overlay
 pnpm run smoke                                  # integration smoke
 ```
 
-These six control-plane test files are exactly what CI's `test` job runs, together with the desktop transport tests (`packages/desktop/transport-manager.test.ts`, `ssh-provider.test.ts`, `ssh-config.test.ts`) and the client plugin tests — the same set CI runs, driven by the root scripts:
+These eight control-plane test files are exactly what CI's `test` job runs, together with desktop transport, renderer-shell, and client/host plugin tests — the same set CI runs, driven by the root scripts:
 
 ```bash
 pnpm run test:desktop        # desktop transport / ssh unit tests
+pnpm run test:renderer-shell # composite entry / host-graph lockstep
 pnpm run test:sidebar        # sidebar derive / view-prefs unit tests
+pnpm run test:git            # Git worktree client / saga unit tests
+pnpm run test:host-git       # in-instance Git host core unit tests
 pnpm run test:settings-bridge  # settings shell policy unit tests
 ```
 
@@ -44,7 +49,10 @@ pnpm run test:settings-bridge  # settings shell policy unit tests
 
 ```bash
 pnpm run typecheck                            # tsc --noEmit (0 errors)
+pnpm run typecheck:host-graph
+pnpm run typecheck:host-git
 pnpm run typecheck:sidebar                    # client plugin type checks
+pnpm run typecheck:git
 pnpm run typecheck:connections
 pnpm run typecheck:settings-bridge
 node packages/control-plane/test/protocol.ts  # focused unit tests (see Testing above)
@@ -53,8 +61,13 @@ node packages/control-plane/test/m1-dsh-client.ts
 node packages/control-plane/test/host-logs.ts
 node packages/control-plane/test/manager-api.ts
 node packages/control-plane/test/instance-proxy.ts
+node packages/control-plane/test/static-serving.ts
+node packages/control-plane/test/host-graph-seed.ts
 pnpm run test:desktop                         # desktop transport / ssh unit tests
+pnpm run test:renderer-shell                  # renderer shell / coverage-table lockstep
 pnpm run test:sidebar                         # sidebar unit tests
+pnpm run test:git                             # Git client unit tests
+pnpm run test:host-git                        # Git host unit tests
 pnpm run test:settings-bridge                 # settings shell unit tests
 pnpm run smoke                                # PASS (or SKIP, which is normal)
 pnpm run build:renderer                       # renderer build succeeds
@@ -97,7 +110,7 @@ One logical change per commit; keep diffs focused. Commits bundling unrelated ch
 ## Scope Discipline
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is **attached or served, never re-implemented**.
-- Domains removed from scope (git/GitHub execution, walkthrough, notification center, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** to the roadmap in any form.
+- Domains removed from scope (walkthrough, notification center, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** to the roadmap in any form. The sole exception is the design-08 Git worktree plugin: it may only be a chamber-bundled client plugin plus a domain-limited in-instance host Remote, never a Git execution surface in the control plane or Desktop.
 - For any new domain feature proposal, first ask: does dsh native, the plugin ecosystem, or the host web frontend already cover it? If yes → don't build it.
 
 ## Pull Requests

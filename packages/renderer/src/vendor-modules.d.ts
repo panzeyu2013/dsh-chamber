@@ -124,6 +124,12 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/client' {
   export function apply(ctx: any): void
 }
 
+/** Chamber Git worktree sidebar occupant (design 08). */
+declare module '@dsh-chamber/dsh-client-ui-git/client' {
+  export const inject: string[]
+  export function apply(ctx: any): void
+}
+
 /**
  * The chamber-owned ui-layout fork (packages/dsh-chamber-client-ui-layout,
  * design 06): replaces the official layout's 'root' registration so the
@@ -202,10 +208,19 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export function releaseInstanceClient(instanceId: string): void
   export function fetchInstanceSnapshot(client: unknown): Promise<InstanceSnapshot>
   export function isInstanceUnavailable(err: unknown): boolean
-  export function createSession(client: unknown, workspaceId: string): Promise<string>
+  export class InstanceRpcError extends Error {
+    readonly code: string
+    readonly details: unknown
+  }
+  export function createSession(client: unknown, workspaceId: string, sessionId?: string): Promise<string>
   export function renameSession(client: unknown, sessionId: string, title: string): Promise<void>
   export function archiveSession(client: unknown, sessionId: string): Promise<void>
-  export function createWorkspace(client: unknown, path: string): Promise<void>
+  export interface CreateWorkspaceResult {
+    workspaceId: string
+    path: string
+    created: boolean
+  }
+  export function createWorkspace(client: unknown, path: string): Promise<CreateWorkspaceResult>
   export function renameWorkspace(client: unknown, workspaceId: string, title: string): Promise<void>
   export function deleteWorkspace(client: unknown, workspaceId: string): Promise<void>
   export interface SearchRow {

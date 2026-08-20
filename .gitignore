@@ -9,12 +9,14 @@ dist-ssr/
 release/
 build/
 *.tgz
-# The chamber host-graph package ships a committed esbuild artifact (design 09
-# §3.5): the control plane copies dist/index.js into profiles at seed time with
-# zero build dependencies, so the artifact must be tracked despite the global
-# dist/ rule above (its build script still regenerates it on demand).
+# The chamber host packages ship committed esbuild artifacts (design 08/09):
+# the control plane copies dist/index.js into profiles at seed time with zero
+# build dependencies, so the artifacts must be tracked despite the global
+# dist/ rule above (their build scripts still regenerate them on demand).
 !packages/dsh-host-client-graph/dist/
 !packages/dsh-host-client-graph/dist/index.js
+!packages/dsh-chamber-host-git-worktree/dist/
+!packages/dsh-chamber-host-git-worktree/dist/index.js
 
 # Local runtime state (control-plane data, audit log, dsh host state)
 data/

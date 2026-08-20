@@ -28,6 +28,7 @@ import { createRequire } from 'node:module'
 import { cpSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { assertRemotePackageContract, remotePackagesFromAssembly } from './typert-remote-contract.mjs'
 
 const requireFromRenderer = createRequire(fileURLToPath(new URL('../package.json', import.meta.url)))
 // esbuild is vite's transitive dependency — resolve it through vite's tree.
@@ -45,17 +46,18 @@ const BUNDLE = join(CACHE, 'typescript/lib/typert-generator.cjs')
 const HOST_CONFIG = join(CACHE, 'host-tsconfig.json')
 
 /**
- * Packages whose authoritative client assembly imports the `/remote` subpath
- * (the artifacts we emit). Derive this from the pinned embedded dsh source so
- * a bundle refresh cannot silently leave a newly added Remote unresolved.
+/**
+ * dsh-api-remotes/client is the authoritative runtime assembly. Derive its
+ * value-imported contributions instead of duplicating an rc-specific list:
+ * rc.8 added file/session reference Remotes, and a stale five-item copy made
+ * Vite fail only after the generator had reported success.
  */
-const REMOTES_CLIENT_ENTRY = join(VENDOR, 'dsh-api-remotes/src/client/index.ts')
-const REMOTE_PACKAGES = [...new Set(
-  [...readFileSync(REMOTES_CLIENT_ENTRY, 'utf8').matchAll(/from\s+['"](@deepseek-ai\/[^/'"]+)\/remote['"]/g)]
-    .map((match) => match[1]),
-)]
-if (REMOTE_PACKAGES.length === 0) {
-  throw new Error(`gen-typert-remotes: no /remote imports found in ${REMOTES_CLIENT_ENTRY}`)
+const REMOTE_ASSEMBLY_ENTRY = join(VENDOR, 'dsh-api-remotes/src/client/index.ts')
+const REMOTE_PACKAGES = remotePackagesFromAssembly(readFileSync(REMOTE_ASSEMBLY_ENTRY, 'utf8'))
+for (const packageName of REMOTE_PACKAGES) {
+  const packageDir = packageName.slice('@deepseek-ai/'.length)
+  const manifest = JSON.parse(readFileSync(join(VENDOR, packageDir, 'package.json'), 'utf8'))
+  assertRemotePackageContract(packageName, manifest)
 }
 
 function isFile(path) {

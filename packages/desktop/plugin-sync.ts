@@ -106,6 +106,8 @@ export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
 export const CLIENT_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
 export const CLIENT_GRAPH_INSERT_ID = 'client-graph'
+export const GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-host-git-worktree'
+export const GIT_WORKTREE_INSERT_ID = 'git-worktree'
 
 /**
  * The two module-A seed files (design 09 module A / design 13 §4.6): the
@@ -830,21 +832,35 @@ export async function applyPlugins(
 }
 
 // ============================================================================
-// 4. seedRemoteHostGraph (design 13 §4.6, M2)
+// 4. seedRemoteChamberHostPackages (design 13 §4.6, M2)
 // ============================================================================
 
-/**
- * The client-graph insert line for the profile's own cordis.patch.yml. The
- * loader (`@deepseek-ai/cordis-plugin-include`) requires `insert` to be a LIST
- * (`data.push(...insert)`), so the entry is the block-sequence form — matching
- * the already-shipped local seed in `packages/control-plane/src/host-graph-seed.ts`
- * (the doc's flow-mapping shorthand `- insert: { id, name }` would not be
- * iterable and would fail at boot).
- */
-export const CLIENT_GRAPH_INSERT = `- insert:
-    - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
-`
+export interface ChamberHostPackageSeed {
+  insertId: string
+  packageName: string
+  sourceDir: string
+  label: string
+}
+
+export interface ChamberHostPackageSeedState {
+  insertId: string
+  packageName: string
+  wrote: boolean
+}
+
+type ChamberHostInsert = Pick<ChamberHostPackageSeed, 'insertId' | 'packageName'>
+
+const CLIENT_GRAPH_HOST_INSERT: ChamberHostInsert = {
+  insertId: CLIENT_GRAPH_INSERT_ID,
+  packageName: CLIENT_GRAPH_PACKAGE_NAME,
+}
+
+function renderCordisInserts(inserts: readonly ChamberHostInsert[]): string {
+  return `- insert:\n${inserts.map(entry => `    - id: ${entry.insertId}\n      name: '${entry.packageName}'\n`).join('')}`
+}
+
+/** Backwards-compatible single-row canonical insert. */
+export const CLIENT_GRAPH_INSERT = renderCordisInserts([CLIENT_GRAPH_HOST_INSERT])
 
 export type CordisPatchUpdate =
   | { write: false }
@@ -859,23 +875,210 @@ export type CordisPatchUpdate =
  * @param existing - the file content, or null when the file does not exist
  *   (profile not initialized).
  */
-export function computeCordisPatchUpdate(existing: string | null): CordisPatchUpdate {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Loader ids and package names are global within the composed Cordis config.
+ * Ignore YAML comments, then count an exact scalar wherever it appears (block
+ * or flow style). A same-id/different-name or same-name/different-id row must
+ * fail before seed writes: appending our row would make the next host boot
+ * reject duplicate ids or mount the same Remote twice.
+ */
+function cordisFieldCount(existing: string, field: 'id' | 'name', value: string): number {
+  const searchable = existing.split('\n')
+    .filter(line => !line.trimStart().startsWith('#'))
+    .map(line => line.replace(/\s+#.*$/u, ''))
+    .join('\n')
+  const escaped = escapeRegExp(value)
+  const trailing = field === 'id' ? '[a-zA-Z0-9_.-]' : '[a-zA-Z0-9_.@/-]'
+  const pattern = new RegExp(`\\b${field}:\\s*(?:'${escaped}'|"${escaped}"|${escaped})(?!${trailing})`, 'gu')
+  return searchable.match(pattern)?.length ?? 0
+}
+
+interface ParsedCordisInsertRow {
+  readonly ids: string[]
+  readonly names: string[]
+}
+
+function cordisYamlScalar(raw: string): string | undefined {
+  const value = raw.trim().replace(/,$/u, '').trim()
+  const single = value.match(/^'([^']*)'$/u)
+  if (single !== null) return single[1]
+  const double = value.match(/^"([^"\\]*)"$/u)
+  if (double !== null) return double[1]
+  return /^[a-zA-Z0-9_.@/-]+$/u.test(value) ? value : undefined
+}
+
+function addCordisLoaderField(row: ParsedCordisInsertRow, text: string): void {
+  const field = text.trim().match(/^(id|name)\s*:\s*(.*?)\s*$/u)
+  if (field === null) return
+  const value = cordisYamlScalar(field[2]!)
+  if (value === undefined) return
+  const values = field[1] === 'id' ? row.ids : row.names
+  values.push(value)
+}
+
+function splitCordisFlowFields(content: string): string[] {
+  const fields: string[] = []
+  let start = 0
+  let quote: "'" | '"' | undefined
+  let escaped = false
+  let depth = 0
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index]!
+    if (quote !== undefined) {
+      if (quote === '"' && escaped) escaped = false
+      else if (quote === '"' && char === '\\') escaped = true
+      else if (char === quote) quote = undefined
+      continue
+    }
+    if (char === "'" || char === '"') quote = char
+    else if (char === '{' || char === '[') depth += 1
+    else if (char === '}' || char === ']') depth -= 1
+    else if (char === ',' && depth === 0) {
+      fields.push(content.slice(start, index))
+      start = index + 1
+    }
+  }
+  fields.push(content.slice(start))
+  return fields
+}
+
+function cordisFlowLoaderRow(mapping: string): ParsedCordisInsertRow {
+  const row: ParsedCordisInsertRow = { ids: [], names: [] }
+  const content = mapping.trim().replace(/^\{/u, '').replace(/\}$/u, '')
+  for (const field of splitCordisFlowFields(content)) addCordisLoaderField(row, field)
+  return row
+}
+
+function inlineCordisInsertRows(text: string): ParsedCordisInsertRow[] {
+  const rows: ParsedCordisInsertRow[] = []
+  const open = text.indexOf('[')
+  if (open < 0) return rows
+  let quote: "'" | '"' | undefined
+  let escaped = false
+  let bracketDepth = 0
+  let braceDepth = 0
+  let mappingStart = -1
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index]!
+    if (quote !== undefined) {
+      if (quote === '"' && escaped) escaped = false
+      else if (quote === '"' && char === '\\') escaped = true
+      else if (char === quote) quote = undefined
+      continue
+    }
+    if (char === "'" || char === '"') quote = char
+    else if (char === '[') bracketDepth += 1
+    else if (char === ']') {
+      bracketDepth -= 1
+      if (bracketDepth === 0) break
+    } else if (char === '{') {
+      if (bracketDepth === 1 && braceDepth === 0) mappingStart = index
+      braceDepth += 1
+    } else if (char === '}') {
+      braceDepth -= 1
+      if (bracketDepth === 1 && braceDepth === 0 && mappingStart >= 0) {
+        rows.push(cordisFlowLoaderRow(text.slice(mappingStart, index + 1)))
+        mappingStart = -1
+      }
+    }
+  }
+  return rows
+}
+
+/** Direct loader rows only; nested config mappings can never complete a pair. */
+function cordisLoaderRows(existing: string): ParsedCordisInsertRow[] {
+  const text = existing.split('\n')
+    .filter(line => !line.trimStart().startsWith('#'))
+    .map(line => line.replace(/\s+#.*$/u, ''))
+    .join('\n')
+  const lines = text.split('\n')
+  const rows: ParsedCordisInsertRow[] = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!
+    const insert = line.match(/^(\s*)-\s+insert\s*:\s*(.*)$/u)
+    if (insert === null) continue
+    const insertIndent = insert[1]!.length
+    if (insert[2]!.trimStart().startsWith('[')) {
+      rows.push(...inlineCordisInsertRows(lines.slice(index).join('\n')))
+      continue
+    }
+    if (insert[2]!.trimStart().startsWith('{')) {
+      rows.push(cordisFlowLoaderRow(insert[2]!.trim()))
+      continue
+    }
+    let rowIndent: number | undefined
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const candidate = lines[cursor]!
+      if (candidate.trim() === '') continue
+      const indent = candidate.match(/^\s*/u)![0].length
+      if (indent <= insertIndent) break
+      const sequence = candidate.match(/^(\s*)-\s+(.*)$/u)
+      if (sequence === null) continue
+      if (rowIndent === undefined) rowIndent = sequence[1]!.length
+      if (sequence[1]!.length !== rowIndent) continue
+      const row: ParsedCordisInsertRow = { ids: [], names: [] }
+      const first = sequence[2]!.trim()
+      if (first.startsWith('{') && first.endsWith('}')) {
+        rows.push(cordisFlowLoaderRow(first))
+        continue
+      }
+      addCordisLoaderField(row, first)
+      for (let next = cursor + 1; next < lines.length; next += 1) {
+        const continuation = lines[next]!
+        if (continuation.trim() === '') continue
+        const continuationIndent = continuation.match(/^\s*/u)![0].length
+        if (continuationIndent <= rowIndent) break
+        if (continuationIndent === rowIndent + 2) addCordisLoaderField(row, continuation.trim())
+      }
+      rows.push(row)
+    }
+  }
+  return rows
+}
+
+/** Match only when id/name belong to the same direct insert mapping. */
+function hasCordisInsert(existing: string, insert: ChamberHostInsert): boolean {
+  return cordisLoaderRows(existing).some(row => row.ids.length === 1
+    && row.names.length === 1
+    && row.ids[0] === insert.insertId
+    && row.names[0] === insert.packageName)
+}
+
+function cordisInsertConflict(existing: string, insert: ChamberHostInsert): string | undefined {
+  const exact = hasCordisInsert(existing, insert)
+  const idCount = cordisFieldCount(existing, 'id', insert.insertId)
+  const nameCount = cordisFieldCount(existing, 'name', insert.packageName)
+  if (exact && idCount === 1 && nameCount === 1) return undefined
+  if (exact || idCount > 1 || nameCount > 1) {
+    return `cordis.patch.yml contains duplicate chamber loader identity for id '${insert.insertId}' or package '${insert.packageName}'`
+  }
+  if (idCount > 0) {
+    return `cordis.patch.yml loader id '${insert.insertId}' is already bound to a different package`
+  }
+  if (nameCount > 0) {
+    return `cordis.patch.yml package '${insert.packageName}' is already mounted under a different loader id`
+  }
+  return undefined
+}
+
+export function computeCordisPatchUpdate(
+  existing: string | null,
+  inserts: readonly ChamberHostInsert[] = [CLIENT_GRAPH_HOST_INSERT],
+): CordisPatchUpdate {
   if (existing === null) {
     return { error: 'remote profile is not initialized (cordis.patch.yml missing) — run a plugin add first' }
   }
-  // Dedup: the entry is present only when a line carries the exact
-  // `id: client-graph` scalar AND a line carries the exact quoted name —
-  // LINE-LEVEL and boundary-checked, so a merely similar entry (an id like
-  // `client-graph-foo`, or a longer package name) never counts as present.
-  // The flow-mapping form (`- insert: { id: client-graph, name: '…' }`)
-  // still dedups: its id appears as a `{ id: client-graph,` token and its
-  // name as the exact quoted scalar.
-  const trimmedLines = existing.split('\n').map(line => line.trim())
-  const hasInsertId = trimmedLines.some(line => /\bid:\s*client-graph(?![a-zA-Z0-9_.-])/.test(line))
-  const hasInsertName = trimmedLines.some(line => /name:\s*(['"])@dsh-chamber\/dsh-host-client-graph\1/.test(line))
-  if (hasInsertId && hasInsertName) {
-    return { write: false }
+  for (const insert of inserts) {
+    const conflict = cordisInsertConflict(existing, insert)
+    if (conflict !== undefined) return { error: conflict }
   }
+  const missing = inserts.filter(insert => !hasCordisInsert(existing, insert))
+  if (missing.length === 0) return { write: false }
+  const rendered = renderCordisInserts(missing)
   const significant = existing.split('\n')
     .map(line => line.trim())
     .filter(line => line !== '' && !line.startsWith('#'))
@@ -883,22 +1086,26 @@ export function computeCordisPatchUpdate(existing: string | null): CordisPatchUp
   // file — deterministic rewrite, preserving the comment header.
   if (significant.length === 0 || (significant.length === 1 && significant[0] === '[]')) {
     const base = existing.replace(/\[\]\s*$/, '').trimEnd()
-    return { write: true, content: base === '' ? CLIENT_GRAPH_INSERT : `${base}\n${CLIENT_GRAPH_INSERT}` }
+    return { write: true, content: base === '' ? rendered : `${base}\n${rendered}` }
   }
   // A block-sequence list: append at the end, never touching existing rows.
   if (significant[0].startsWith('-')) {
-    return { write: true, content: `${existing.replace(/\s+$/, '')}\n${CLIENT_GRAPH_INSERT}` }
+    return { write: true, content: `${existing.replace(/\s+$/, '')}\n${rendered}` }
   }
-  return { error: 'cordis.patch.yml is not a top-level YAML array — cannot seed the client-graph insert safely' }
+  return { error: 'cordis.patch.yml is not a top-level YAML array — cannot seed chamber host inserts safely' }
 }
 
 export type SeedRemoteResult = { ok: true; wrote: boolean; patched: boolean } | { ok: false; error: string }
 
+export type SeedRemoteHostPackagesResult =
+  | { ok: true; wrote: boolean; patched: boolean; packages: ChamberHostPackageSeedState[] }
+  | { ok: false; error: string }
+
 /**
- * Seed module A (`@dsh-chamber/dsh-host-client-graph`) onto a remote instance
- * (design 13 §4.6): ensure cordis.patch.yml carries the client-graph insert
- * (cat read-back dedup, append merge, non-list fail-loud), then write-file
- * package.json + dist/index.js into the install-level flat fallback
+ * Seed all built chamber host packages onto a remote instance (design 13
+ * §4.6): ensure cordis.patch.yml carries their exact inserts (cat read-back
+ * dedup, append merge, non-list fail-loud), then write-file package.json +
+ * dist/index.js into the install-level flat fallback
  * `<remoteDshHome>/profiles/node_modules/@dsh-chamber/...` (not the profile
  * node_modules — that is managed by pnpm and re-linked on every `dsh plugin`
  * op). The PATCH IS PROBED FIRST: an uninitialized remote profile (the patch
@@ -910,24 +1117,66 @@ export type SeedRemoteResult = { ok: true; wrote: boolean; patched: boolean } | 
  * skipped (byte-domain comparison). The probe cats are marked `quiet`: on a
  * first seed the files genuinely do not exist (ENOENT by design) — the
  * expected failures are returned to the caller (ENOENT classification keeps
- * working) but never logged as instance-panel errors. An absent module A
- * source is "not shipped" — the LOCAL seed's graceful-skip invariant
+ * working) but never logged as instance-panel errors. An absent build artifact
+ * is "not shipped" — the LOCAL seed's graceful-skip invariant
  * (control-plane host-graph-seed.ts) — so the seed returns
- * `{wrote:false, patched:false}` WITHOUT touching the patch. A source that
- * exists but is missing a declared file fails loudly.
+ * `{wrote:false, patched:false}` WITHOUT touching the patch. A built source
+ * that is missing another declared file fails loudly.
  */
-export async function seedRemoteHostGraph(
+export async function seedRemoteChamberHostPackages(
   exec: ExecFn,
   spec: RemoteSpec,
-  moduleASourceDir: string,
-): Promise<SeedRemoteResult> {
+  seeds: readonly ChamberHostPackageSeed[],
+): Promise<SeedRemoteHostPackagesResult> {
   const id = spec.id
   const home = remoteHome(spec.remoteDshHome)
 
-  // Module A absent (not built / not bundled) = "not shipped": no files AND
-  // no patch insert — matching the local seed exactly.
-  if (!existsSync(moduleASourceDir)) {
-    return { ok: true, wrote: false, patched: false }
+  const seenInsertIds = new Set<string>()
+  const seenPackageNames = new Set<string>()
+  for (const seed of seeds) {
+    if (!/^[a-zA-Z0-9._-]+$/.test(seed.insertId)
+      || !/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(seed.packageName)) {
+      return { ok: false, error: `invalid chamber host package seed: ${JSON.stringify({ id: seed.insertId, name: seed.packageName })}` }
+    }
+    if (seenInsertIds.has(seed.insertId) || seenPackageNames.has(seed.packageName)) {
+      return { ok: false, error: `duplicate chamber host package seed: ${JSON.stringify({ id: seed.insertId, name: seed.packageName })}` }
+    }
+    seenInsertIds.add(seed.insertId)
+    seenPackageNames.add(seed.packageName)
+  }
+
+  // Only a built dist/index.js makes a package available. A checkout may have
+  // the source directory without its artifact; that is "not shipped", so it
+  // must not create a dangling loader row.
+  const available = seeds.filter(seed => existsSync(join(seed.sourceDir, 'dist', 'index.js')))
+  if (available.length === 0) return { ok: true, wrote: false, patched: false, packages: [] }
+
+  // Preflight every local byte before touching the remote. In particular, a
+  // broken second package cannot leave the first package half-seeded.
+  const staged: Array<{
+    seed: ChamberHostPackageSeed
+    relative: typeof SEED_FILES[number]
+    bytes: Buffer
+    sha256: string
+    remotePath: string
+    write: boolean
+  }> = []
+  for (const seed of available) {
+    for (const relative of SEED_FILES) {
+      const source = join(seed.sourceDir, relative)
+      if (!existsSync(source)) {
+        return { ok: false, error: `${seed.label} seed: ${source} missing in package ${seed.sourceDir}` }
+      }
+      const bytes = readFileSync(source)
+      staged.push({
+        seed,
+        relative,
+        bytes,
+        sha256: sha256hex(bytes),
+        remotePath: `${home}/profiles/node_modules/${seed.packageName}/${relative}`,
+        write: true,
+      })
+    }
   }
 
   // Patch probe FIRST (fail-fast, design 13 §4.6): the cordis.patch.yml
@@ -944,49 +1193,49 @@ export async function seedRemoteHostGraph(
   } else if (ENOENT_PATTERN.test(patchProbe.error)) {
     existing = null
   } else {
-    return { ok: false, error: `host-graph seed read cordis.patch.yml failed: ${patchProbe.error}` }
+    return { ok: false, error: `chamber host seed read cordis.patch.yml failed: ${patchProbe.error}` }
   }
-  const update = computeCordisPatchUpdate(existing)
+  const update = computeCordisPatchUpdate(existing, available)
   if ('error' in update) return { ok: false, error: update.error }
 
-  let wrote = false
-  for (const relative of SEED_FILES) {
-    const source = join(moduleASourceDir, relative)
-    if (!existsSync(source)) {
-      return { ok: false, error: `host-graph seed: ${source} missing in module A package ${moduleASourceDir}` }
-    }
-    const localBytes = readFileSync(source)
-    const localSha256 = sha256hex(localBytes)
-    const remotePath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/${relative}`
-    // Hash-skip: a cat read-back whose bytes match skips the write — the
-    // comparison is byte-domain (stdoutBytes), so binary seed files never
-    // false-mismatch through the lossy UTF-8 view. The probe cat is quiet:
-    // on a first seed the file genuinely does not exist (ENOENT by design).
-    const catRes = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [remotePath], quiet: true })
+  // Probe every remote byte before the first write. A transport/read failure
+  // for package two therefore cannot leave package one partially updated.
+  for (const file of staged) {
+    const catRes = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [file.remotePath], quiet: true })
     if (catRes.ok) {
       // Hash-skip: a cat read-back whose bytes match skips the write — the
       // comparison is byte-domain (stdoutBytes), so binary seed files never
       // false-mismatch through the lossy UTF-8 view. A hash MISMATCH on an
       // ok read-back (content drift) still falls through to the write.
-      if (sha256hex(catRes.stdoutBytes ?? Buffer.from(catRes.stdout ?? '', 'utf8')) === localSha256) {
-        continue
-      }
+      if (sha256hex(catRes.stdoutBytes ?? Buffer.from(catRes.stdout ?? '', 'utf8')) === file.sha256) file.write = false
     } else if (!ENOENT_PATTERN.test(catRes.error)) {
       // ENOENT = genuinely absent → write below (same discipline as the patch
       // probe above). ANY other ssh failure is loud — attempting a write that
       // will also fail would mask the real cause behind a misleading
       // "write-file failed" error. The probe cat is quiet: on a first seed the
       // file genuinely does not exist (ENOENT by design).
-      return { ok: false, error: `host-graph seed read ${relative} failed: ${catRes.error}` }
+      return { ok: false, error: `${file.seed.label} seed read ${file.relative} failed: ${catRes.error}` }
     }
+  }
+
+  let wrote = false
+  const states = available.map(seed => ({
+    insertId: seed.insertId,
+    packageName: seed.packageName,
+    wrote: false,
+  }))
+  for (const file of staged) {
+    if (!file.write) continue
     const writeRes = await exec(id, 'run', {
       op: 'write-file',
-      path: remotePath,
-      contentBase64: localBytes.toString('base64'),
-      sha256: localSha256,
+      path: file.remotePath,
+      contentBase64: file.bytes.toString('base64'),
+      sha256: file.sha256,
     })
-    if (!writeRes.ok) return { ok: false, error: `host-graph seed write-file failed for ${relative}: ${writeRes.error}` }
+    if (!writeRes.ok) return { ok: false, error: `${file.seed.label} seed write-file failed for ${file.relative}: ${writeRes.error}` }
     wrote = true
+    const state = states.find(entry => entry.insertId === file.seed.insertId && entry.packageName === file.seed.packageName)
+    if (state !== undefined) state.wrote = true
   }
 
   // Ensure cordis.patch.yml carries the insert — the WRITE stays AFTER the
@@ -1001,10 +1250,26 @@ export async function seedRemoteHostGraph(
       contentBase64: bytes.toString('base64'),
       sha256: sha256hex(bytes),
     })
-    if (!writeRes.ok) return { ok: false, error: `host-graph seed write cordis.patch.yml failed: ${writeRes.error}` }
+    if (!writeRes.ok) return { ok: false, error: `chamber host seed write cordis.patch.yml failed: ${writeRes.error}` }
     patched = true
   }
-  return { ok: true, wrote, patched }
+  return { ok: true, wrote, patched, packages: states }
+}
+
+/** Backwards-compatible single-package wrapper used by the existing IPC. */
+export async function seedRemoteHostGraph(
+  exec: ExecFn,
+  spec: RemoteSpec,
+  moduleASourceDir: string,
+): Promise<SeedRemoteResult> {
+  const result = await seedRemoteChamberHostPackages(exec, spec, [{
+    insertId: CLIENT_GRAPH_INSERT_ID,
+    packageName: CLIENT_GRAPH_PACKAGE_NAME,
+    sourceDir: moduleASourceDir,
+    label: 'host-graph',
+  }])
+  if (!result.ok) return result
+  return { ok: true, wrote: result.wrote, patched: result.patched }
 }
 
 // ============================================================================

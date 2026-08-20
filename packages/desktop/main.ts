@@ -42,8 +42,22 @@ import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, 
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { createUpdateController } from './updater.ts';
-import { applyPlugins, CLIENT_GRAPH_PACKAGE_NAME, localPluginList, materializeAndAdd, remoteHome, remotePluginList, resolveLocalMaterializeDirectory, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
-import type { ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
+import {
+  applyPlugins,
+  CLIENT_GRAPH_INSERT_ID,
+  CLIENT_GRAPH_PACKAGE_NAME,
+  GIT_WORKTREE_INSERT_ID,
+  GIT_WORKTREE_PACKAGE_NAME,
+  localPluginList,
+  materializeAndAdd,
+  remoteHome,
+  remotePluginList,
+  resolveLocalMaterializeDirectory,
+  runLocalDshPlugin,
+  seedRemoteChamberHostPackages,
+  seedRemoteHostGraph,
+} from './plugin-sync.ts';
+import type { ChamberHostPackageSeed, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
   computeQuitRisk,
@@ -762,6 +776,9 @@ if (!gotTheLock) {
         hostGraphPackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-graph-package')
           : path.join(repoRoot, 'packages', 'dsh-host-client-graph'),
+        hostGitWorktreePackageSourceDir: app.isPackaged
+          ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
+          : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree'),
       });
       await controlPlane.start();
     } catch (err) {
@@ -909,31 +926,45 @@ if (!gotTheLock) {
         return Promise.resolve(null);
       }
     };
-    // In-flight guard for the ready-time remote host-graph seed (design 09 §6
+    // In-flight guard for the ready-time chamber host-package seed (design 09 §6
     // 遗留 1): a Set of instance ids whose seed is currently running — pure
     // concurrency guard, not a "seeded" flag (the seed is idempotent, so
     // reconnects re-run a cheap content-hash no-op instead).
-    const hostGraphSeeding = new Set<string>();
+    const hostPackageSeeding = new Set<string>();
     // The authoritative local dsh home is <userData>/state/dsh-home (the real
     // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
     const localDshHome = path.join(app.getPath('userData'), 'state', 'dsh-home');
-    // Module A package source for the remote host-graph seed (design 13 §4.6):
-    // the packaged app bundles it under dist/host-graph-package (build-host-graph-package.mjs),
-    // dev reads the repo source tree — same resolution as the control-plane seed.
+    // Host package sources for the remote seed (design 13 §4.6). Packaged
+    // builds carry copies under dist/; dev reads the same source dirs used by
+    // the local control-plane seed.
     const moduleASourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-graph-package')
       : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
+    const gitWorktreeHostSourceDir = app.isPackaged
+      ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
+      : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
+    const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
+      {
+        insertId: CLIENT_GRAPH_INSERT_ID,
+        packageName: CLIENT_GRAPH_PACKAGE_NAME,
+        sourceDir: moduleASourceDir,
+        label: 'host-graph',
+      },
+      {
+        insertId: GIT_WORKTREE_INSERT_ID,
+        packageName: GIT_WORKTREE_PACKAGE_NAME,
+        sourceDir: gitWorktreeHostSourceDir,
+        label: 'git-worktree',
+      },
+    ];
     const findRemoteSpec = (id: string): RemoteSpec | null => {
       const instance = sm.listInstances().find((entry) => entry.id === id);
       if (instance === undefined) return null;
       return { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null };
     };
-    // The remote install-level flat fallback dir the seed writes module A into
-    // (design 13 §4.6): same path derivation as the plugin-sync seed/probe
-    // (remoteHome semantics + CLIENT_GRAPH_PACKAGE_NAME) — the 注入完成 log
-    // states exactly where the files landed.
-    const remoteHostGraphPackageDir = (spec: RemoteSpec): string =>
-      `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}`;
+    // Remote install-level fallback path shared by both chamber host packages.
+    const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
+      `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`;
     sm.onStatusChanged((id, status) => {
       // Ready transport → per-instance reverse proxy (design 05 §7.1):
       // register the instance transport while it is ready, unregister the
@@ -948,44 +979,48 @@ if (!gotTheLock) {
           cp.unregisterInstanceTransport(`${status.kind}:${id}`);
         }
       }
-      // Remote host-graph seed (design 09 §6 遗留 1 wiring, 2026-08): when an
-      // SSH instance comes ready, seed module A onto it once per process run.
+      // Remote chamber host-package seed: when an SSH instance comes ready,
+      // materialize every built package and merge their loader rows together.
       // NOT silent — the plugin management UI probes the live state and shows
       // the injection block verbatim (installed/patched), and the seed result
       // is logged here; a failure is retried on the next ready (the seed is
       // idempotent, content-hash skip). Idempotency also makes the guard a
       // pure in-flight Set: reconnects re-run a cheap no-op seed instead of
       // tracking a persisted "seeded" flag that could drift from the remote.
-      if (status.kind === 'ssh' && status.phase === 'ready' && !hostGraphSeeding.has(id)) {
-        hostGraphSeeding.add(id);
+      if (status.kind === 'ssh' && status.phase === 'ready' && !hostPackageSeeding.has(id)) {
+        hostPackageSeeding.add(id);
         void (async () => {
           try {
-            // Module A not shipped (dev before build / broken packaging) is a
-            // graceful skip, never a fake "already in sync" (seedRemoteHostGraph
-            // would report ok with wrote=false — honest only if we state the
-            // reason; the UI probe independently shows 未注入 either way).
-            if (!existsSync(moduleASourceDir)) {
-              console.log(`[dsh-chamber] host-graph seed skipped for ${id}: module A not shipped (${moduleASourceDir} missing)`);
-              sm.appendLog(id, 'info', 'chamber host-graph 未注入：模块 A 未打包（构建缺失），本地实例可正常使用，远端客户端插件图不可用');
+            const builtSeeds = chamberHostPackageSeeds.filter(seed => existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+            if (builtSeeds.length === 0) {
+              console.log(`[dsh-chamber] chamber host seed skipped for ${id}: no built host package artifacts`);
+              sm.appendLog(id, 'info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用');
               return;
+            }
+            const missingSeeds = chamberHostPackageSeeds.filter(seed => !builtSeeds.includes(seed));
+            if (missingSeeds.length > 0) {
+              sm.appendLog(id, 'info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`);
             }
             const spec = findRemoteSpec(id);
             if (spec === null) return;
-            const result = await seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
+            const result = await seedRemoteChamberHostPackages(execTransport, spec, chamberHostPackageSeeds);
             if (result.ok) {
-              const message = `host-graph seeded onto ${id} (wrote=${result.wrote}, patched=${result.patched})`;
+              const seeded = result.packages.map(entry => entry.insertId).join(',');
+              const message = `chamber host packages seeded onto ${id} (${seeded}; wrote=${result.wrote}, patched=${result.patched})`;
               console.log(`[dsh-chamber] ${message}`);
-              sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}（${remoteHostGraphPackageDir(spec)}），boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+              const packageSummary = result.packages.map(entry =>
+                `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}（${remoteHostPackageDir(spec, entry.packageName)}）`).join('；');
+              sm.appendLog(id, 'info', `chamber host 包注入完成：${packageSummary}；boot 层${result.patched ? '已合并挂载' : '无需改动'}（重启后生效）`);
             } else {
-              console.warn(`[dsh-chamber] host-graph seed failed for ${id}: ${result.error}`);
-              sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
+              console.warn(`[dsh-chamber] chamber host seed failed for ${id}: ${result.error}`);
+              sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
             }
           } catch (err) {
-            const message = `host-graph seed error for ${id}: ${String(err)}`;
+            const message = `chamber host seed error for ${id}: ${String(err)}`;
             console.warn(`[dsh-chamber] ${message}`);
-            sm.appendLog(id, 'error', `chamber host-graph 注入异常：${String(err)}`);
+            sm.appendLog(id, 'error', `chamber host 包注入异常：${String(err)}`);
           } finally {
-            hostGraphSeeding.delete(id);
+            hostPackageSeeding.delete(id);
           }
         })();
       }
@@ -1153,18 +1188,24 @@ if (!gotTheLock) {
       // Not shipped is a loud error on the MANUAL path (the button must never
       // look like it succeeded while writing nothing) — the auto path skips
       // with an info log instead.
-      if (!existsSync(moduleASourceDir)) {
+      if (!existsSync(path.join(moduleASourceDir, 'dist', 'index.js'))) {
         return { ok: false, error: '模块 A 未打包（host-graph seed 源缺失），无法注入——请先构建 host-graph 包' };
       }
-      const result = await seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
-      // Surface the outcome in the instance's ring-buffer log (the connections
-      // UI log panel) — the injection is never a silent modification.
-      if (result.ok) {
-        sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}（${remoteHostGraphPackageDir(spec)}），boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
-      } else {
-        sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
+      if (hostPackageSeeding.has(id)) return { ok: false, error: 'chamber host seed in progress' };
+      hostPackageSeeding.add(id);
+      try {
+        const result = await seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
+        // Surface the outcome in the instance's ring-buffer log (the connections
+        // UI log panel) — the injection is never a silent modification.
+        if (result.ok) {
+          sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}（${remoteHostPackageDir(spec, CLIENT_GRAPH_PACKAGE_NAME)}），boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+        } else {
+          sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
+        }
+        return result;
+      } finally {
+        hostPackageSeeding.delete(id);
       }
-      return result;
     }));
     // materialize_add (sync view): renderer supplies only the dependency NAME.
     // Main re-reads the authoritative local manifest and resolves/canonicalizes

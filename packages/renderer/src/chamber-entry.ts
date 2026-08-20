@@ -121,6 +121,7 @@ import * as UiTheme from '@deepseek-ai/dsh-client-ui-theme/client'
 // sidebar width across every shell boot.
 import * as UiLayout from '@dsh-chamber/dsh-client-ui-layout/client'
 import * as UiSidebar from '@dsh-chamber/dsh-client-ui-sidebar/client'
+import * as UiGit from '@dsh-chamber/dsh-client-ui-git/client'
 import * as UiSettings from '@deepseek-ai/dsh-client-ui-settings/client'
 import * as UiSettingsGeneral from '@deepseek-ai/dsh-client-ui-settings-general/client'
 import * as UiSettingsModels from '@deepseek-ai/dsh-client-ui-settings-models/client'
@@ -322,6 +323,7 @@ export function apply(ctx: Context): void {
   ctx.plugin(UiTheme)
   ctx.plugin(UiLayout)
   ctx.plugin(UiSidebar)
+  ctx.plugin(UiGit)
   ctx.plugin(UiSettings)
   ctx.plugin(UiSettingsGeneral)
   ctx.plugin(UiSettingsModels)
@@ -415,6 +417,7 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-theme', coveredFactory(UiTheme)],
   ['@dsh-chamber/dsh-client-ui-layout', coveredFactory(UiLayout)],
   ['@dsh-chamber/dsh-client-ui-sidebar', coveredFactory(UiSidebar)],
+  ['@dsh-chamber/dsh-client-ui-git', coveredFactory(UiGit)],
   ['@deepseek-ai/dsh-client-ui-settings', coveredFactory(UiSettings)],
   ['@deepseek-ai/dsh-client-ui-settings-general', coveredFactory(UiSettingsGeneral)],
   ['@deepseek-ai/dsh-client-ui-settings-models', coveredFactory(UiSettingsModels)],

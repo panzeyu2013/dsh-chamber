@@ -11,11 +11,11 @@
 |---|---|---|---|
 | 1 | [subagents-in-sidebar.md](subagents-in-sidebar.md) | session 的 subagents 在侧边栏中的显示 | 想法，未设计 / 未排期 |
 | 2 | [server-drag-sort.md](server-drag-sort.md) | server 之间的拖拽排序 | 想法，未设计 / 未排期 |
-| 3 | [08-todo-git-worktree-plugin.md](08-todo-git-worktree-plugin.md) | Git worktree 独立插件 | 设计定稿，实现未排期（2026-08-16 自 `docs/design/` 移入；"08" 编号沿用历史引用） |
-| 4 | [10-todo-event-driven-aggregation.md](10-todo-event-driven-aggregation.md) | 侧边栏聚合改事件驱动（各来源 ctx 推投影取代 10s 轮询） | **已实现（2026-08）**；历史设计记录保留于此 |
-| 5 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） | 设计待评审，实现未排期（2026-08） |
+| 3 | [10-todo-event-driven-aggregation.md](10-todo-event-driven-aggregation.md) | 侧边栏聚合改事件驱动（各来源 ctx 推投影取代 10s 轮询） | **已实现（2026-08）**；历史设计记录保留于此 |
+| 4 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） | 设计待评审，实现未排期（2026-08） |
 
-> 已实现并移入 `docs/design/`：设计 14（睡眠/后台常驻）、设计 15（Chamber 设置页）。
+> 已实现并移入 `docs/design/`：设计 08（Git Worktree 独立插件）、设计 14
+> （睡眠/后台常驻）、设计 15（Chamber 设置页）。
 
 ## 纪律
 

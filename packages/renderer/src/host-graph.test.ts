@@ -455,3 +455,9 @@ test('CHAMBER_COVERED_FACTORY_IDS: no duplicates, legal names, and every factory
     assert.ok(covered.has(id), `factory id ${JSON.stringify(id)} is missing from CHAMBER_COVERED_IDS — add it there (a non-covered factory id would double-register)`)
   }
 })
+
+test('Git worktree client is a first-screen covered factory (static composite lockstep)', () => {
+  const id = '@dsh-chamber/dsh-client-ui-git'
+  assert.ok(CHAMBER_COVERED_IDS.includes(id))
+  assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes(id))
+})

@@ -304,7 +304,7 @@ export const chamberBridge: {
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研插件包 4 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 5 个 + 宿主包 2 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。
@@ -327,11 +327,20 @@ export const chamberBridge: {
   - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber
     fork（仅替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
     播种/回写，钳位 [264,420]，覆盖 id；替换官方 ui-layout 注册，见设计 06）。
+  - `packages/dsh-chamber-client-ui-git/`——设计 08 的 chamber 内建 Git
+    Worktree 插件：占用 `sidebar.git`，页面级 singleton 以 30s 单飞读取各实例
+    topology，并编排 create/workspace/session 与 Git-first remove saga；它不把
+    Git 事实塞进 App aggregate，也不暴露任意 argv/path mutation。
+- 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
+  - `packages/dsh-host-client-graph/`——设计 09 的只读 client boot graph Remote；
+  - `packages/dsh-chamber-host-git-worktree/`——设计 08 的领域限定 Git Remote，
+    与该实例 `workspaceRegistry`/live agents 同用户、同文件系统做权威守卫；
+    Desktop 与控制面均不执行 Git。
 - 前端入口复用 `packages/renderer/`：vite 构建时把 workspace 包 alias 到源码；
   `chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换
-  官方注册）**→**chamber 侧边栏（替换官方）**→settings×4→conversation→…→
-  全量 ui-*）。
+  官方注册）**→**chamber 侧边栏（替换官方）**→**Git Worktree 插件**→
+  settings×4→conversation→…→全量 ui-*）。
 - **启动图清单 = 单 entry + 每实例宿主图额外 entry（设计 09）**：
   - 页面清单 `__DSH_BOOT__` = `{rev, entries:[{id, url, rev, immediately?}]}`
     （wire 契约以 vendor `dsh-client-modules/src/client/manifest.ts` 为权威）；
@@ -345,14 +354,14 @@ export const chamberBridge: {
     + 页面自有 id）去重，预加载剩余 bundle
     （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.ts `extraRows` seam
     合并进 boot rows（详见设计 09）。
-  - **host 包与 seed（设计 09 方案 A）**：host 包 `packages/dsh-host-client-graph`
-    （esbuild 产物 `dist/index.js`，`@deepseek-ai/*` 保持 external）；控制面
-    `host-graph-seed.ts` 把该包幂等 seed 进
-    `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/` 并
-    物化 `--patch` overlay（`<stateDir>/dsh-chamber-graph.patch.yml`，insert
-    client-graph 行），每次 spawn 注入 `--patch`
-    （`webProfileArgs(port, patchPath?)`）；模块 A 产物缺失时优雅跳过
-    （打包态/未构建不报错、不注 overlay）。
+  - **双 host 包与 seed（设计 08/09）**：`packages/dsh-host-client-graph` 与
+    `packages/dsh-chamber-host-git-worktree` 都提交 esbuild `dist/index.js`
+    （`@deepseek-ai/*` external）；控制面 `host-graph-seed.ts` 幂等 seed 所有
+    已构建包进 `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/*/`，并把
+    `client-graph` / `git-worktree` insert 合并到单一
+    `<stateDir>/dsh-chamber-graph.patch.yml`。每次 spawn 注入同一 `--patch`
+    （`webProfileArgs(port, patchPath?)`）；任一产物缺失只跳过对应行，不产生
+    悬空 insert。远程 ready-time seed 同样一次探测/一次 overlay 合并写，见设计 13。
 
 ## 7. 控制面 / 桌面契约（沿用，无认证面）
 

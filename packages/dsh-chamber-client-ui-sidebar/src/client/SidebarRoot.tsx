@@ -281,6 +281,27 @@ class ChamberListBoundary extends Component<{ children: ReactNode }, { error: Er
   }
 }
 
+/** Isolate an optional sidebar occupant from the navigation shell. */
+class SidebarGitBoundary extends Component<{ children: ReactNode; message: string }, { failed: boolean }> {
+  constructor(props: { children: ReactNode; message: string }) {
+    super(props)
+    this.state = { failed: false }
+  }
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: Error): void {
+    console.error('[dsh-chamber] sidebar.git render failed:', error)
+  }
+
+  render(): ReactNode {
+    if (this.state.failed) return <div className={css.gitError} role="alert">{this.props.message}</div>
+    return this.props.children
+  }
+}
+
 /** In-flight session-row drag: source identity plus the current insert marker (06 §2.2). */
 interface SessionDragState {
   /** Source the drag started in — cross-source drops are structurally impossible. */
@@ -2287,6 +2308,15 @@ export function SidebarRoot({
           </div>
         )}
         </ChamberListBoundary>
+      </div>
+
+      {/* Optional chamber Git section. Keep the slot mounted across wide/rail
+          transitions; its occupant returns null on the rail, preserving the
+          page-wide coordinator/dialog state while the column animates. */}
+      <div className={css.gitArea}>
+        <SidebarGitBoundary message={t('git.errorBoundary')}>
+          {renderSlot('sidebar.git', { wide })}
+        </SidebarGitBoundary>
       </div>
 
       {/* Footer actions stack above Settings in both sidebar widths. */}
