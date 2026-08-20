@@ -70,6 +70,10 @@ export interface UpdateController {
   start(): void
   /** User-confirmed download (the「更新」button): resolve {ok} or {error}. */
   download(): Promise<{ ok: true } | { ok: false; error: string }>
+  /** User-initiated check (the「检查更新」button in the settings update
+   *  section): the SAME check path as the silent periodic check
+   *  (autoDownload stays off — a check never downloads). */
+  checkNow(): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** The update feed repository (release.yml uploads the same repo's artifacts). */
@@ -240,11 +244,15 @@ export function createUpdateController(options: UpdateControllerOptions): Update
   // exemption while electron-updater still installs on quit). The flag makes
   // the download exclusion explicit and covers the whole in-flight window.
   let downloadInFlight = false
-  async function checkNow(): Promise<void> {
+  // The single check path shared by the silent periodic checks (start / 6h
+  // interval) and the user-initiated「检查更新」action (checkNow()). The phase
+  // gates make it idempotent: an in-flight check/download or a completed
+  // download is never clobbered.
+  async function runCheck(): Promise<void> {
     if (checking || downloadInFlight) return
     // The「已下载，退出时安装」state is final for this version, and an
-    // in-flight download is mid-transition — a periodic re-check must not
-    // clobber either back to `available`.
+    // in-flight download is mid-transition — a re-check must not clobber
+    // either back to `available`.
     if (state.phase === 'downloaded' || state.phase === 'downloading') return
     checking = true
     try {
@@ -277,11 +285,27 @@ export function createUpdateController(options: UpdateControllerOptions): Update
         logger.log('[updater] 跳过更新检查：当前平台不支持（linux dir target）');
         return
       }
-      const initial = setTimeout(() => void checkNow(), CHECK_DELAY_MS)
+      const initial = setTimeout(() => void runCheck(), CHECK_DELAY_MS)
       initial.unref?.()
-      const interval = setInterval(() => void checkNow(), CHECK_INTERVAL_MS)
+      const interval = setInterval(() => void runCheck(), CHECK_INTERVAL_MS)
       interval.unref?.()
       logger.log(`[updater] 更新检查已启动（channel=${channel}，${CHECK_DELAY_MS / 1000}s 后首次检查，之后每 ${CHECK_INTERVAL_MS / 3_600_000}h）`);
+    },
+    async checkNow() {
+      // Linux is inert (dir target — no installer feed): refuse loudly
+      // instead of letting the feed lookup fail obscurely.
+      if (process.platform === 'linux') {
+        logger.log('[updater] 手动检查更新被跳过：当前平台不支持（linux dir target）')
+        return { ok: false, error: 'auto-update is not supported on this platform' }
+      }
+      // Same guarded path as the periodic check: a check/download already in
+      // flight or a completed download (phase gates in runCheck) are no-ops —
+      // the state push still tells the renderer what actually happened.
+      // Contract note (2026-08 review): a gate no-op still resolves {ok:true}
+      // here — the renderer must judge the outcome from the `update-state`
+      // push (phase stays checking/downloaded/…), never from this return value.
+      await runCheck()
+      return { ok: true }
     },
     async download() {
       // Only an update that was actually found (or a retry of a DOWNLOAD

@@ -153,11 +153,15 @@ export type SshLocalPluginExecIpcResult =
  * The dsh-chamber update surface (design 11) — non-secret only: versions,
  * channel, a release-page URL, a short error text. state() resolves the
  * current snapshot; onChanged subscribes to the main-process push and
- * returns an unsubscribe; download() is the user-confirmed download action
- * (the「更新」button) — checking itself never downloads (autoDownload=false).
+ * returns an unsubscribe; check() is the user-initiated「检查更新」action
+ * (same silent check path as the startup/6h checks — never downloads);
+ * download() is the user-confirmed download action (the「更新」button) —
+ * checking itself never downloads (autoDownload=false).
  */
 export interface UpdateSurface {
   state(): Promise<UpdateState>
+  /** User-initiated check (the「检查更新」button). */
+  check(): Promise<{ ok: true } | { ok: false; error: string }>
   download(): Promise<{ ok: true } | { ok: false; error: string }>
   onChanged(callback: (state: UpdateState) => void): () => void
   /** Open a release page in the system browser (main-process allowlisted). */
@@ -182,6 +186,9 @@ export interface ChamberSettings {
   launchAtLogin: boolean
   /** prevent-app-suspension (design 14 D5); default off. */
   keepAwake: boolean
+  /** Quit confirmation (design 14 D2): confirm only while the local dsh
+   *  instance runs; remote tunnels never prompt. Default on. */
+  quitConfirmation: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -273,6 +280,7 @@ function desktopSshApi(): DesktopSshSurface {
 function updateApi(): UpdateSurface {
   return {
     state: () => ipcRenderer.invoke('dsh-chamber:update-state'),
+    check: () => ipcRenderer.invoke('dsh-chamber:update-check'),
     download: () => ipcRenderer.invoke('dsh-chamber:update-download'),
     openReleasePage: url => ipcRenderer.invoke('dsh-chamber:open-release', { url }),
     onChanged: callback => {

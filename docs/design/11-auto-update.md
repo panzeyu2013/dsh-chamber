@@ -95,21 +95,26 @@
   idle）→ 经 preload IPC（`dsh-chamber:update-state` invoke 查询 + `update-state-changed`
   push）→ settings 壳渲染。
 - **挂载位置**：settings 壳（`packages/dsh-chamber-client-ui-settings-bridge`）
-  既有的「chamber 全局固定导航入口」模式——固定入口区结构（`__connections` /
-  `__update` / `__general`，divider 之下的固定 entry + 嵌入组件，不随所选
-  服务器变化）以**设计 15** 为权威，本节不重复。「更新」部分 = 该区的
-  `__update` 入口，内容为 `UpdateSection` 组件（`update-store.ts` 模块单例
+  的**「通用」段内**（`__general` 固定入口 → `GeneralView` 底部嵌入 `UpdateSection`
+  控制组）——**2026-08 修订**：原独立的 `__update` 固定入口随用户拍板并入「通用」，
+  固定入口区结构（`__connections` / `__general`）与并入决策以**设计 15** 为权威，
+  本节不重复。「更新」控制组 = `UpdateSection` 组件（`update-store.ts` 模块单例
   订阅，N-ctx 共享）。内容小、只读一个 IPC 状态 → 无需
   新插件包，直接扩展 settings 壳。
 - **部分内容（低调状态行，不显眼）**：
   - 当前版本 vX（主进程投影 `currentVersion`，`dsh-chamber:info.version` 兜底）；
+  - **「检查更新」按钮（2026-08 新增，用户拍板）**：点击 → 主进程同一条静默检查
+    路径（`dsh-chamber:update-check` → `updater.checkNow()`，`autoDownload=false`
+    不变——检查永不下载）；在途检查/下载或「已下载」终态时按钮禁用（`update-gate.ts`
+    相位门，与主进程 `runCheck()` 门一致）；检查结果经状态行呈现；
   - 有新版时一行状态：「新版本 vY（stable/beta）」+ **「更新」按钮**（点击 →
     后台下载；状态行随之变为 下载中… → 已下载，退出时安装）；不点击 → 永不下载；
   - 无新版时：「已是最新版本」；检查失败时：「无法检查更新」（静默，绝不假成功）；
   - mac 签名未配置时：「已下载（…），请手动安装」+「前往下载页」链接（经主进程
     `shell.openExternal`，仅允许本仓库 GitHub 页——窗口禁 popup/navigation）。
 - zh/en 文案走 `dsh-chamber.settings.bridge` 命名空间（`verify:i18n` 通过）；样式用
-  普通列表行（dsh design tokens），不加高亮。
+  普通列表行（dsh design tokens），不加高亮——2026-08 起与「通用」段一致采用
+  settings-panel 控制组/胶囊按钮词汇。
 
 ## 4. 滚动/灰度：通道模型（beta → stable）
 
@@ -129,13 +134,14 @@
 
 ```
 启动（延迟 15s）→ 静默检查（autoDownload: false，无网络副作用）
-  ├─ 有新版 → settings「更新」部分一行状态「新版本 vY」+ [更新] 按钮
+  ├─ 有新版 → settings「通用」段更新组一行状态「新版本 vY」+ [更新] 按钮
   │     ├─ 用户点击 → 后台自动下载（进度经 IPC → 状态行 下载中…）
   │     └─ 不点击 → 永不下载（仅状态行）
   │  下载完成 → 「已下载，退出时安装」→ quit 时自动安装（双平台一致）
   ├─ 无新版 → 「已是最新版本」
   └─ 失败 → 「无法检查更新」（静默写主进程日志，绝不假成功）
-每 6h 周期静默复查；settings「更新」部分 = 唯一可见面
+用户主动点击 [检查更新]（2026-08）→ 同一条检查路径（update-check IPC，仍不下载）
+每 6h 周期静默复查；settings「通用」段的更新组 = 唯一可见面
 ```
 
 - **失败语义**：检查/下载/校验/安装任何失败 → 静默或 settings 内响亮（安装失败
@@ -241,6 +247,12 @@
   「更新」按钮 + 下载进度 + 失败态 + mac 安装不可用态 + 下载页链接）+
   `update-store.ts`（模块单例，bridge 异步暴露有界重试）+ zh/en 文案 +
   `SettingsShell.module.css` 样式。
+  **2026-08 修订（用户拍板）**：`__update` 固定入口并入「通用」——`UpdateSection`
+  改作 `GeneralView` 底部控制组（settings-panel 控制组/胶囊按钮词汇），导航固定入口
+  收为 `__connections` / `__general`（设计 15 D1）；新增 **「检查更新」按钮**
+  （`dsh-chamber:update-check` → `updater.checkNow()`，与周期静默检查同一条
+  `runCheck()` 路径，linux 显式拒绝）+ `update-gate.ts` 相位门（在途检查/下载或
+  「已下载」终态禁用，与主进程门一致）+ 纯逻辑测试。
 - **M3（通道与发布）**：`DSH_CHAMBER_UPDATE_CHANNEL=beta`；desktop build 配置
   （`publish`、mac zip、files 收 `updater.ts`；`differentialPackage` 于 v0.1.2
   修订为 `false`，见 §6）；release.yml 双 leg 改造（`--publish=always` + GH_TOKEN、
@@ -248,7 +260,7 @@
 
 **验证（2026-08）**：根 `typecheck`（desktop main/preload/updater + renderer）✓；
 `typecheck:settings-bridge` ✓；`build:preload`（preload.cts → dist/preload.cjs）✓；
-`test:desktop`（5 文件合计 170 用例）✓；`test:settings-bridge`（3 文件合计 25 用例）✓；
+`test:desktop`（5 文件合计 170 用例）✓；`test:settings-bridge`（5 文件合计 31 用例）✓；
 `build:renderer` ✓；`verify:i18n` ✓（无 DRIFTED）。`pnpm install --frozen-lockfile` 通过
 （electron-updater 加入后锁文件完整，vendor 记录未剪除）。
 
@@ -276,4 +288,5 @@
   `docs/progress/STATUS.md`（本文档由「未完成 / 待执行」移入「已实现」记录）。
 - 涉及面：`packages/desktop`（`main.ts`、`preload.cts`、`updater.ts`、
   `package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳
-  `__update` 入口 + `UpdateSection` + `update-store`）、`.github/workflows/release.yml`。
+  `__general` 视图内的 `UpdateSection` + `update-store` + `update-gate`）、
+  `.github/workflows/release.yml`。

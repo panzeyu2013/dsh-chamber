@@ -97,6 +97,19 @@ export function subscribeUpdateState(listener: () => void): () => void {
   }
 }
 
+/** The「检查更新」button action: a user-initiated check (same silent check
+ *  path as the startup/6h checks — autoDownload stays off, a check never
+ *  downloads). */
+export async function requestUpdateCheck(): Promise<{ ok: true } | { ok: false; error: string }> {
+  const api = bridgeUpdate()
+  if (api === null) return { ok: false, error: 'update bridge unavailable' }
+  try {
+    return await api.check()
+  } catch (error) {
+    return { ok: false, error: String(error) }
+  }
+}
+
 /** The「更新」button action: user-confirmed download (autoDownload stays off). */
 export async function requestUpdateDownload(): Promise<{ ok: true } | { ok: false; error: string }> {
   if (downloadInFlight) return { ok: false, error: 'download already in progress' }
