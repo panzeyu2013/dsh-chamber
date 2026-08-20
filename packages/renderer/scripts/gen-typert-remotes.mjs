@@ -44,14 +44,19 @@ const OUT_ROOT = fileURLToPath(new URL('../src/generated/typert/', import.meta.u
 const BUNDLE = join(CACHE, 'typescript/lib/typert-generator.cjs')
 const HOST_CONFIG = join(CACHE, 'host-tsconfig.json')
 
-/** Packages whose client assembly imports the `/remote` subpath (the artifacts we emit). */
-const REMOTE_PACKAGES = [
-  '@deepseek-ai/dsh-commands',
-  '@deepseek-ai/dsh-goal',
-  '@deepseek-ai/dsh-cordis-host-runner',
-  '@deepseek-ai/dsh-host-plugin-inventory',
-  '@deepseek-ai/dsh-message-feedback',
-]
+/**
+ * Packages whose authoritative client assembly imports the `/remote` subpath
+ * (the artifacts we emit). Derive this from the pinned embedded dsh source so
+ * a bundle refresh cannot silently leave a newly added Remote unresolved.
+ */
+const REMOTES_CLIENT_ENTRY = join(VENDOR, 'dsh-api-remotes/src/client/index.ts')
+const REMOTE_PACKAGES = [...new Set(
+  [...readFileSync(REMOTES_CLIENT_ENTRY, 'utf8').matchAll(/from\s+['"](@deepseek-ai\/[^/'"]+)\/remote['"]/g)]
+    .map((match) => match[1]),
+)]
+if (REMOTE_PACKAGES.length === 0) {
+  throw new Error(`gen-typert-remotes: no /remote imports found in ${REMOTES_CLIENT_ENTRY}`)
+}
 
 function isFile(path) {
   try {
