@@ -49,8 +49,10 @@ const REMOTE_PACKAGES = [
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-goal',
   '@deepseek-ai/dsh-cordis-host-runner',
+  '@deepseek-ai/dsh-file-reference',
   '@deepseek-ai/dsh-host-plugin-inventory',
   '@deepseek-ai/dsh-message-feedback',
+  '@deepseek-ai/dsh-session-reference',
 ]
 
 function isFile(path) {

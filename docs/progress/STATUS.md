@@ -95,6 +95,10 @@
   （`DSH_CHAMBER_DSH_VERSION=0.1.0-rc.8` `bundle:dsh`）。验证：
   `test:client-web`（9）、`test:renderer-shell`（29）、`test:settings-bridge`、
   `typecheck:*` 全套、根 `typecheck`、`build:renderer`、控制面 8 套测试全部通过。
+  **最终构建复查（2026-08-20）**：rc.8 `dsh-api-remotes/client` 新增的
+  `dsh-file-reference/remote` 与 `dsh-session-reference/remote` 已纳入 chamber
+  `gen-typert-remotes` 生成集合（5 → 7）；source-only vendor 不再因缺少两份
+  `typert.remote-client.js` 产物而使 renderer Rollup 解析失败。
   **rc.8 commands wire 兼容桥（已随 rc.8 baseline 对齐移除，2026-08）**：rc.8
   宿主 `commands.execute` Typert Remote 新增必填 `images` 参数（上游
   8d9fee19f9 起），rc.7 形状客户端缺该参数 → rc.8 宿主拒绝/崩溃 → 经
