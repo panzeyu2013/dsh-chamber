@@ -122,6 +122,11 @@ export function getInstanceClient(instanceId: string): InstanceApiClient {
   return client
 }
 
+/** Drop the cached unary client when its registry source is removed. */
+export function releaseInstanceClient(instanceId: string): void {
+  clients.delete(instanceId)
+}
+
 /**
  * Fold a wire response into a thrown Error. The unary client resolves
  * RpcResponse `{rpcId, result}`; business errors ride the `result` slot (the

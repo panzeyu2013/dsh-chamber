@@ -3,6 +3,7 @@
   "version": "0.1.3",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.21.0",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -36,10 +37,10 @@
     "typecheck:settings-bridge": "tsc -p packages/dsh-chamber-client-ui-settings-bridge/tsconfig.json --noEmit",
     "typecheck:client-web": "node scripts/typecheck-client-web.mjs",
     "typecheck:host-graph": "pnpm --filter @dsh-chamber/dsh-host-client-graph run typecheck",
-    "test:desktop": "node packages/desktop/transport-manager.test.ts && node packages/desktop/ssh-provider.test.ts && node packages/desktop/ssh-config.test.ts && node packages/desktop/renderer-trust.test.ts && node packages/desktop/plugin-sync.test.ts && node packages/desktop/chamber-settings.test.ts",
+    "test:desktop": "node packages/desktop/transport-manager.test.ts && node packages/desktop/ssh-provider.test.ts && node packages/desktop/ssh-config.test.ts && node packages/desktop/renderer-trust.test.ts && node packages/desktop/plugin-sync.test.ts && node packages/desktop/chamber-settings.test.ts && node packages/desktop/scripts/bundle-swap.test.mjs && node packages/desktop/scripts/after-pack-adhoc-sign.test.mjs",
     "test:sidebar": "node packages/dsh-chamber-client-ui-sidebar/test/derive.ts && node packages/dsh-chamber-client-ui-sidebar/test/aggregate-store.ts && node packages/dsh-chamber-client-ui-sidebar/test/view-prefs.ts && node packages/dsh-chamber-client-ui-sidebar/test/search-state.ts && node packages/dsh-chamber-client-ui-sidebar/test/pending-click.ts",
     "test:settings-bridge": "node packages/dsh-chamber-client-ui-settings-bridge/test/busy-enter-policy.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/permission-controller.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/mount-retry.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/nav-active.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/server-selector.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/update-gate.ts",
-    "test:connections": "node packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-diff.test.ts",
+    "test:connections": "node packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-diff.test.ts && node packages/dsh-chamber-client-ui-settings-connections/src/client/save-host.test.ts",
     "test:client-web": "node packages/dsh-client-web/tests/boot-tolerance.test.ts && node packages/dsh-client-web/tests/boot-rows.test.ts",
     "test:renderer-shell": "node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/aggregate-refresh.test.ts && node packages/renderer/src/host-graph.test.ts && node --import ./scripts/test-shell-register.mjs packages/renderer/src/shell.test.ts",
     "test:connection": "node packages/dsh-client-connection/test/api-path.test.ts"

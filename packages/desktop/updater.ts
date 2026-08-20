@@ -115,15 +115,15 @@ function sanitizeErrorText(message: string): string {
 /**
  * Platform-level install-block reason that is known WITHOUT probing
  * (linux / dev mac). macOS packaged is probed asynchronously (signature);
- * until the probe resolves the reason stays null (optimistic — the probe is
- * ~100ms, far faster than any download, so the honest blocked state always
- * lands long before it can be shown).
+ * until the probe resolves it stays blocked. The security decision is
+ * fail-closed: a renderer call racing startup cannot begin a download before
+ * the Developer ID verdict exists.
  */
 function platformBlockedReason(): string | null {
   if (process.platform === 'linux') return 'auto-update is not supported on this platform'
   if (process.platform !== 'darwin') return null
   if (!app.isPackaged) return 'development build'
-  return null
+  return 'verifying Developer ID signature'
 }
 
 /**
@@ -173,9 +173,8 @@ export function createUpdateController(options: UpdateControllerOptions): Update
     state = { ...state, ...patch }
     for (const listener of listeners) listener(state)
   }
-  // macOS packaged: probe the signature asynchronously (never block startup
-  // on a cosmetic hint). Absent Developer ID → honest blocked state; present
-  // → the initial optimistic null resolves to null (no change).
+  // macOS packaged: probe asynchronously without blocking startup, but keep
+  // download fail-closed until a valid Developer ID verdict clears the gate.
   if (process.platform === 'darwin' && app.isPackaged) {
     void probeMacDeveloperIdSignature().then((hasDeveloperId) => {
       setState({ installBlockedReason: hasDeveloperId ? null : 'missing Developer ID signature' })

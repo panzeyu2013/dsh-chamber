@@ -12,7 +12,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -28,6 +28,7 @@ import {
   materializePluginsDir,
   packageNameFromSpec,
   remotePluginList,
+  resolveLocalMaterializeDirectory,
   resetApplyInFlight,
   seedRemoteHostGraph,
   PLUGIN_SPEC_PATTERN,
@@ -196,6 +197,20 @@ test('localPluginList: unsafe dependency name is refused (path traversal defense
 
 test('localPluginList: throws on a missing profile manifest', () => {
   assert.throws(() => localPluginList(tempDir()), /cannot read local profile manifest/)
+})
+
+test('resolveLocalMaterializeDirectory: MAIN resolves the manifest entry and enforces package identity', () => {
+  const root = tempDir()
+  writeLocalProfile(root, { 'local-path-pkg': 'file:../local-pkg' }, [])
+  const packageDir = join(root, 'profiles', 'local-pkg')
+  mkdirSync(packageDir, { recursive: true })
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: 'local-path-pkg' }))
+  assert.deepEqual(resolveLocalMaterializeDirectory(root, 'local-path-pkg'), { ok: true, path: realpathSync(packageDir) })
+  assert.equal(resolveLocalMaterializeDirectory(root, 'not-in-manifest').ok, false)
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: 'different-package' }))
+  const mismatched = resolveLocalMaterializeDirectory(root, 'local-path-pkg')
+  assert.equal(mismatched.ok, false)
+  if (!mismatched.ok) assert.match(mismatched.error, /does not match/)
 })
 
 test('localPluginList: chamber host-graph state — installed + patched', () => {

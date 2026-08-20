@@ -20,7 +20,7 @@ import type { LocalPluginManifest, PluginApplyFailure, PluginApplyResult, Remote
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd, seedHostGraph } from './control-plane.ts'
 import {
-  computePluginDiff, defaultChecked, isDifferenceRow, materializeLocalDir, rowAddArg,
+  computePluginDiff, defaultChecked, isDifferenceRow, rowAddArg,
   type PluginDiff, type PluginRow, type PluginRowKind,
 } from './plugin-diff.ts'
 import { PluginAddView } from './PluginAddView.tsx'
@@ -271,12 +271,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
       const failed: PluginApplyFailure[] = []
       let applied = 0
       for (const row of materializeRows) {
-        const dir = row.localSpec === null ? null : materializeLocalDir(row.localSpec)
-        if (dir === null) {
-          failed.push({ spec: row.name, error: t('pluginsMaterializeNoDir') })
-          continue
-        }
-        const res = await pluginMaterializeAdd(spec.id, dir)
+        const res = await pluginMaterializeAdd(spec.id, row.name)
         if ('error' in res) failed.push({ spec: row.name, error: res.error })
         else applied += 1
       }

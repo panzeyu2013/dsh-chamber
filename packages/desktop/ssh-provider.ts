@@ -36,9 +36,11 @@
  *   registry, logs, or any renderer payload beyond the transient input. The
  *   tunnel and systemd exec channels deliver it to the system `ssh` binary
  *   via an ephemeral askpass helper (SSH_ASKPASS_REQUIRE=force — no TTY and
- *   no command line involvement; the helper is a 0600 sh script that answers
- *   host-key confirmations with `yes` and password/passphrase prompts with
- *   the stored value, deleted on transport stop). Platform note:
+ *   no command line involvement; the helper is a 0700 sh script that refuses
+ *   host-key confirmations and answers password/passphrase prompts with the
+ *   stored value, deleted on transport stop). Every ssh invocation also sets
+ *   StrictHostKeyChecking=yes: users must verify/trust a key out of band before
+ *   chamber connects, so a first-use MITM is never silently accepted. Platform note:
  *   Win32-OpenSSH askpass support is not reliable, so password auth is
  *   refused at the IPC gate on Windows (keys/agent remain the universal
  *   path).
@@ -47,10 +49,10 @@
 import type { SpawnOptions } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
+import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -94,6 +96,12 @@ export const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9_.-]+$/
  * locations when seed write-file builds its targets under it).
  */
 export const REMOTE_DSH_HOME_PATTERN = /^~?(?:\/(?!\.{1,2}(?:\/|$))[a-zA-Z0-9._-]+)+$/
+export const MAX_SSH_HOST_CHARS = 253
+export const MAX_SSH_USER_CHARS = 64
+export const MAX_SERVICE_NAME_CHARS = 255
+export const MAX_REMOTE_DSH_HOME_CHARS = 1024
+export const MAX_SSH_PASSWORD_CHARS = 4096
+export const MAX_PLUGIN_SPEC_CHARS = 512
 
 /**
  * Package spec whitelist (design 13 §7.2): registry name (+ optional scope)
@@ -481,19 +489,20 @@ function isValidInstance(instance: unknown, kind: TransportProvider['kind']): in
   if (instance === null || typeof instance !== 'object') return false
   const record = instance as Record<string, unknown>
   return typeof record.id === 'string' && INSTANCE_ID_PATTERN.test(record.id)
-    && typeof record.label === 'string'
-    && typeof record.host === 'string' && SSH_HOST_PATTERN.test(record.host)
+    && typeof record.label === 'string' && record.label.length >= 1 && record.label.length <= MAX_INSTANCE_LABEL_CHARS
+    && typeof record.host === 'string' && record.host.length <= MAX_SSH_HOST_CHARS && SSH_HOST_PATTERN.test(record.host)
     && (record.user === undefined || record.user === null
-      || (typeof record.user === 'string' && SSH_USER_PATTERN.test(record.user)))
+      || (typeof record.user === 'string' && record.user.length <= MAX_SSH_USER_CHARS && SSH_USER_PATTERN.test(record.user)))
     && typeof record.remotePort === 'number'
     && Number.isInteger(record.remotePort)
     && record.remotePort >= 1 && record.remotePort <= 65535
     && (record.sshPort === undefined || record.sshPort === null
       || (typeof record.sshPort === 'number' && Number.isInteger(record.sshPort)
         && record.sshPort >= 1 && record.sshPort <= 65535))
-    && (record.serviceName === undefined || record.serviceName === null || typeof record.serviceName === 'string')
+    && (record.serviceName === undefined || record.serviceName === null
+      || (typeof record.serviceName === 'string' && record.serviceName.length <= MAX_SERVICE_NAME_CHARS && SERVICE_NAME_PATTERN.test(record.serviceName)))
     && (record.remoteDshHome === undefined || record.remoteDshHome === null
-      || (typeof record.remoteDshHome === 'string' && REMOTE_DSH_HOME_PATTERN.test(record.remoteDshHome)))
+      || (typeof record.remoteDshHome === 'string' && record.remoteDshHome.length <= MAX_REMOTE_DSH_HOME_CHARS && REMOTE_DSH_HOME_PATTERN.test(record.remoteDshHome)))
     && (record.kind === undefined || record.kind === null || record.kind === kind)
 }
 
@@ -519,8 +528,25 @@ const passwords = new Map<string, string>()
  * platform without persistence). Configured once at startup. */
 let passwordFile: string | null = null
 
-/** id → path of the live ephemeral askpass helper (0600, deleted on dispose). */
+/** id → path of the live ephemeral askpass helper (0700, deleted on dispose). */
 const askpassHelpers = new Map<string, string>()
+
+/** Never silently trust a first-seen or changed SSH host key. */
+const SSH_HOST_KEY_ARGS = ['-o', 'StrictHostKeyChecking=yes'] as const
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function preserveInvalidPasswordFile(file: string): string {
+  const corruptPath = `${file}.corrupt`
+  try {
+    renameSync(file, corruptPath)
+    return `invalid password file preserved at ${corruptPath}`
+  } catch (error) {
+    return `invalid password file at ${file}; preserve failed: ${String(error)}`
+  }
+}
 
 /**
  * Point the password store at its persistence file (main.ts, once at
@@ -547,29 +573,38 @@ export function configureSshPasswordStore(file: string | null): string | null {
   try {
     parsed = JSON.parse(text)
   } catch {
-    const corruptPath = `${file}.corrupt`
-    try {
-      renameSync(file, corruptPath)
-    } catch { /* best effort */ }
-    return `corrupt password file preserved at ${corruptPath}`
+    return preserveInvalidPasswordFile(file)
   }
-  if (parsed !== null && typeof parsed === 'object') {
-    const entries = (parsed as Record<string, unknown>).passwords
-    if (entries !== null && typeof entries === 'object') {
-      for (const [id, value] of Object.entries(entries as Record<string, unknown>)) {
-        if (typeof value === 'string' && value !== '') passwords.set(id, value)
-      }
-    }
+  if (!isPlainRecord(parsed) || parsed.schemaVersion !== 1 || !isPlainRecord(parsed.passwords)) {
+    return preserveInvalidPasswordFile(file)
   }
+  const entries = Object.entries(parsed.passwords)
+  if (entries.some(([id, value]) => id === 'local' || !INSTANCE_ID_PATTERN.test(id)
+    || typeof value !== 'string' || value === '' || value.length > MAX_SSH_PASSWORD_CHARS)) {
+    return preserveInvalidPasswordFile(file)
+  }
+  for (const [id, value] of entries) passwords.set(id, value as string)
   return null
 }
 
 /** Set or clear the password for one instance (null/'' = clear). Persists
  * the plaintext mirror when configured. */
 export function setSshPassword(id: string, password: string | null): void {
-  if (password === null || password === '') passwords.delete(id)
-  else passwords.set(id, password)
-  persistSshPasswords()
+  if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
+    throw new Error(`refusing password for invalid instance id ${JSON.stringify(id)}`)
+  }
+  if (password !== null && password.length > MAX_SSH_PASSWORD_CHARS) {
+    throw new Error(`refusing SSH password longer than ${MAX_SSH_PASSWORD_CHARS} characters`)
+  }
+  const next = new Map(passwords)
+  if (password === null || password === '') next.delete(id)
+  else next.set(id, password)
+  // Write-through commit: the live auth state changes only after its durable
+  // mirror succeeds, so a reported persistence failure cannot leave a secret
+  // active in memory but absent on disk (or vice versa).
+  persistSshPasswords(next)
+  passwords.clear()
+  for (const [entryId, entryPassword] of next) passwords.set(entryId, entryPassword)
 }
 
 /** The stored password for one instance, or null. */
@@ -583,19 +618,29 @@ export function getSshPassword(id: string): string | null {
  * convention — the rename keeps the tmp file's 0600 mode). Empty maps still
  * write an empty file; the file is only created on the first set/clear.
  */
-function persistSshPasswords(): void {
+function persistSshPasswords(next: ReadonlyMap<string, string>): void {
   if (passwordFile === null) return
-  const payload = `${JSON.stringify({ schemaVersion: 1, passwords: Object.fromEntries(passwords) }, undefined, 2)}\n`
+  const payload = `${JSON.stringify({ schemaVersion: 1, passwords: Object.fromEntries(next) }, undefined, 2)}\n`
   const tmpPath = `${passwordFile}.tmp`
   mkdirSync(dirname(passwordFile), { recursive: true })
-  const fd = openSync(tmpPath, 'w', 0o600)
   try {
-    writeSync(fd, payload)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
+    const fd = openSync(tmpPath, 'w', 0o600)
+    try {
+      // open(..., mode) only applies the mode when the file is created. A
+      // pre-existing tmp file (for example after a hard crash) may be wider,
+      // so force owner-only permissions before writing any secret bytes.
+      fchmodSync(fd, 0o600)
+      writeSync(fd, payload)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(tmpPath, passwordFile)
+  } catch (error) {
+    // A failed atomic replace must not strand an extra plaintext secret.
+    try { rmSync(tmpPath, { force: true }) } catch { /* best effort */ }
+    throw error
   }
-  renameSync(tmpPath, passwordFile)
 }
 
 /**
@@ -610,8 +655,8 @@ export function sshPasswordSupported(): boolean {
 
 /**
  * The ephemeral askpass helper body (design 05 §8): a sh script that
- * answers ssh's non-TTY prompts — host-key confirmations with `yes` (so a
- * first connect to a new host works), everything else (password/passphrase)
+ * answers ssh's non-TTY prompts — host-key confirmations with `no`,
+ * everything else (password/passphrase)
  * with the stored password. ssh passes the prompt text as argv[1] and reads
  * the answer from stdout; `yes`-style prompts are matched textually, not by
  * position, so reordered prompt strings stay covered.
@@ -620,10 +665,10 @@ export function buildAskpassScript(password: string): string {
   const escaped = password.replace(/'/g, `'\\''`)
   return [
     '#!/bin/sh',
-    '# dsh-chamber ssh password helper (ephemeral, 0600, deleted on transport stop)',
+    '# dsh-chamber ssh password helper (ephemeral, 0700, deleted on transport stop)',
     'case "$1" in',
     '  *"yes/no"*|*"fingerprint"*|*"authenticity"*|*"continue connecting"*)',
-    '    echo yes',
+    '    echo no',
     '    ;;',
     '  *)',
     `    printf '%s\\n' '${escaped}'`,
@@ -643,9 +688,55 @@ export function createAskpassHelper(id: string, password: string): string {
   }
   const dir = join(tmpdir(), 'dsh-chamber-ssh')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const path = join(dir, `askpass-${id}-${randomUUID()}.sh`)
-  writeFileSync(path, buildAskpassScript(password), { mode: 0o600 })
-  return path
+  chmodSync(dir, 0o700)
+  // Include the owner PID so startup cleanup can distinguish crash leftovers
+  // from a simultaneously running dev/packaged chamber process.
+  const path = join(dir, `askpass-${id}.pid-${process.pid}.${randomUUID()}.sh`)
+  try {
+    // Keep a partially written helper non-executable, then publish it as an
+    // owner-only executable. The explicit chmod also defeats a restrictive
+    // process umask that would otherwise strip the owner execute bit.
+    writeFileSync(path, buildAskpassScript(password), { mode: 0o600 })
+    chmodSync(path, 0o700)
+    return path
+  } catch (error) {
+    // Never strand an untracked password-bearing helper after a failed write
+    // or chmod; callers cannot dispose a path that was never returned.
+    rmSync(path, { force: true })
+    throw error
+  }
+}
+
+/** Remove password-bearing helpers left by a hard crash before transports start. */
+export function cleanupStaleAskpassHelpers(): string | null {
+  const dir = join(tmpdir(), 'dsh-chamber-ssh')
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    chmodSync(dir, 0o700)
+    for (const name of readdirSync(dir)) {
+      const current = /^askpass-[a-zA-Z0-9_-]{1,64}\.pid-(\d+)\.[0-9a-f-]+\.sh$/i.exec(name)
+      // Legacy names predate PID ownership and can only be crash leftovers:
+      // every normal shutdown already deletes them.
+      if (current === null) {
+        if (/^askpass-[a-zA-Z0-9_-]{1,64}-[0-9a-f-]+\.sh$/i.test(name)) rmSync(join(dir, name), { force: true })
+        continue
+      }
+      const pid = Number(current[1])
+      let ownerAlive = false
+      try {
+        process.kill(pid, 0)
+        ownerAlive = true
+      } catch (probeError) {
+        // EPERM means a live process we may not signal; only ESRCH proves the
+        // owner is gone and makes deletion safe.
+        ownerAlive = (probeError as NodeJS.ErrnoException).code !== 'ESRCH'
+      }
+      if (!ownerAlive) rmSync(join(dir, name), { force: true })
+    }
+    return null
+  } catch (error) {
+    return `cannot clean stale SSH askpass helpers: ${String(error)}`
+  }
 }
 
 /** Best-effort delete of one askpass helper (no-op when already gone). */
@@ -715,8 +806,8 @@ export const sshProvider: TransportProvider = {
     // mappings that TCP keepalives cannot reach.
     const keepaliveArgs = ['-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`]
     return spec.sshPort === null
-      ? ['-N', ...keepaliveArgs, '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
-      : ['-N', ...keepaliveArgs, '-p', String(spec.sshPort), '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
+      ? ['-N', ...SSH_HOST_KEY_ARGS, ...keepaliveArgs, '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
+      : ['-N', ...SSH_HOST_KEY_ARGS, ...keepaliveArgs, '-p', String(spec.sshPort), '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
   },
 
   /**
@@ -797,8 +888,8 @@ function runExec(
   }
   const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
   const args = spec.sshPort === null
-    ? [target, 'systemctl', action, spec.serviceName]
-    : ['-p', String(spec.sshPort), target, 'systemctl', action, spec.serviceName]
+    ? [...SSH_HOST_KEY_ARGS, target, 'systemctl', action, spec.serviceName]
+    : [...SSH_HOST_KEY_ARGS, '-p', String(spec.sshPort), target, 'systemctl', action, spec.serviceName]
   return new Promise(resolve => {
     let settled = false
     let timedOut = false
@@ -956,9 +1047,9 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
     // MATERIALIZE_FILE_SPEC_PATTERN — renderer input can never reach this
     // branch: applyPlugins re-validates against PLUGIN_SPEC_PATTERN, which
     // refuses `file:`); `remove` is name-only.
-    const ok = argv[3] === 'add'
+    const ok = specArg.length <= MAX_PLUGIN_SPEC_CHARS && (argv[3] === 'add'
       ? PLUGIN_SPEC_PATTERN.test(specArg) || MATERIALIZE_FILE_SPEC_PATTERN.test(specArg)
-      : PLUGIN_NAME_PATTERN.test(specArg)
+      : PLUGIN_NAME_PATTERN.test(specArg))
     if (!ok) return null
     return [...prefix, 'dsh', ...argv]
   }
@@ -1029,7 +1120,9 @@ function spawnRemote(
 ): Promise<TransportExecResult> {
   const timeoutMs = deps.runTimeoutMs ?? 120_000
   const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
-  const args = spec.sshPort === null ? [target, ...remoteArgv] : ['-p', String(spec.sshPort), target, ...remoteArgv]
+  const args = spec.sshPort === null
+    ? [...SSH_HOST_KEY_ARGS, target, ...remoteArgv]
+    : [...SSH_HOST_KEY_ARGS, '-p', String(spec.sshPort), target, ...remoteArgv]
   return new Promise(resolve => {
     let settled = false
     let timedOut = false

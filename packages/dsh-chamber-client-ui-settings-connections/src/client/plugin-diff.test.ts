@@ -12,7 +12,6 @@ import {
   computePluginDiff,
   defaultChecked,
   isDifferenceRow,
-  materializeLocalDir,
   rowAddArg,
   type PluginRowKind,
 } from './plugin-diff.ts'
@@ -184,20 +183,6 @@ test('rowAddArg: registry rows pin name@spec, bare names pass name', () => {
   const byName = Object.fromEntries(result.rows.map(row => [row.name, row]))
   assert.equal(rowAddArg(byName.pinned), 'pinned@^1.2.3')
   assert.equal(rowAddArg(byName.bare), 'bare')
-})
-
-test('materializeLocalDir: absolute forms resolve, relative/home forms are unresolvable in the renderer', () => {
-  assert.equal(materializeLocalDir('/abs/x'), '/abs/x')
-  assert.equal(materializeLocalDir('file:/abs/x'), '/abs/x')
-  assert.equal(materializeLocalDir('link:/abs/x'), '/abs/x')
-  // Relative (./ ../) and home-relative (~/) specs are anchored to the local
-  // profile/home that only the main process knows — the renderer must fail
-  // loud, never fall back to a registry install.
-  assert.equal(materializeLocalDir('file:../pkg'), null)
-  assert.equal(materializeLocalDir('link:./pkg'), null)
-  assert.equal(materializeLocalDir('./x'), null)
-  assert.equal(materializeLocalDir('../x'), null)
-  assert.equal(materializeLocalDir('~/x'), null)
 })
 
 test('empty manifests: both empty produce no rows and a no-diff result', () => {

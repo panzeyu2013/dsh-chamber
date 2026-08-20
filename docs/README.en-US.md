@@ -186,8 +186,8 @@ The remote server only needs the dsh API-side web profile on loopback — no web
 
 ## Security
 
-- **v1 has no auth boundary** — the control plane listens on loopback only (127.0.0.1); all `/api/*` routes and the per-instance proxy are anonymously reachable, CORS restricted to loopback origins + an explicit allowlist
-- **Tunnel URLs and SSH material never reach the renderer** — the renderer only sees non-secret projections (phase/localPort), never tunnel URLs or SSH credentials; logs are equally free of tunnel/SSH material. The one sanctioned exception ([design 05 §8](design/05-connection-manager.md)): an optional per-host SSH password — entered transiently in the form, held in main-process memory, mirrored to `<userData>/ssh-passwords.json` (0600, atomic write), injected into system ssh via an ephemeral 0600 askpass helper — never on the command line, never in the registry/logs, never back to the renderer; gated off on Windows in v1
+- **v1 has no auth boundary** — the control plane listens on loopback only (127.0.0.1); all `/api/*` routes and the per-instance proxy are anonymously reachable; HTTP/WS origins must exactly match the current Host or an explicit development allowlist, while other loopback ports and `Origin: null` are rejected
+- **Tunnel URLs and SSH material never reach the renderer** — the renderer only sees non-secret projections (phase/localPort), never tunnel URLs or SSH credentials; logs are equally free of tunnel/SSH material. The one sanctioned exception ([design 05 §8](design/05-connection-manager.md)): an optional per-host SSH password — entered transiently in the form, held in main-process memory, mirrored to `<userData>/ssh-passwords.json` (0600, atomic write), injected into system ssh via an ephemeral owner-only 0700 askpass helper — never on the command line, never in the registry/logs, never back to the renderer; gated off on Windows in v1
 - **systemctl is spawned with an argument array** (no shell) + serviceName allowlist (`^[a-zA-Z0-9_.-]+$`)
 
 ## FAQ

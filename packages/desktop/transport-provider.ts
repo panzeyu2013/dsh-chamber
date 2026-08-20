@@ -23,13 +23,18 @@
 /** Transport kinds shipped in v1. Future kinds (tailscale, remote-tunnel …) extend the union. */
 export const TRANSPORT_KINDS = ['ssh'] as const
 
+/** Renderer/registry resource budgets, enforced again in the main process. */
+export const MAX_TRANSPORT_INSTANCES = 32
+export const MAX_INSTANCE_ID_CHARS = 64
+export const MAX_INSTANCE_LABEL_CHARS = 128
+
 /**
  * The registry id whitelist (design 03 §2.2): id rides /api/i/ssh-<id> path
  * segments and transport keys, so it must be a plain identifier and must
  * not collide with the reserved 'local' source id. Single source of truth —
  * enforced by every provider's validateSpec via the shared check.
  */
-export const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]+$/
+export const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 
 /**
  * Open-ended kind union: autocompletes the shipped kinds while still

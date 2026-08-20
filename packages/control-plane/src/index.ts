@@ -25,6 +25,7 @@
  */
 
 import { createServer, type Server } from 'node:http'
+import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -41,6 +42,14 @@ import { hostLogs } from './host-logs.ts'
 import { buildPatchOverlay, ensureHostGraphPackage, HOST_GRAPH_PACKAGE_NAME } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest, ApiResponse } from './api.ts'
+
+/** Browser hardening shared by static, API, proxy, and error responses. */
+export const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'cross-origin-opener-policy': 'same-origin',
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+})
 
 /** Default control-plane state root when DSH_CHAMBER_STATE is unset. */
 export const DEFAULT_STATE_DIR = join(homedir(), '.dsh-chamber')
@@ -499,7 +508,16 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // parseBootManifest contract, served from <dist>/manifest.json.
       const manifest = readBootManifest()
       if (manifest !== null) {
-        const script = `<script>window.__DSH_BOOT__=${JSON.stringify(manifest)};</script>`
+        const nonce = res._cspNonce
+        if (nonce === undefined) throw new Error('missing CSP nonce for static response')
+        // JSON is embedded in an HTML script data block: `<` must never form
+        // `</script>` (manifest values are build inputs, not trusted HTML).
+        // Escape JavaScript's two legacy line separators as well.
+        const serializedManifest = JSON.stringify(manifest)
+          .replace(/</g, '\\u003c')
+          .replace(/\u2028/g, '\\u2028')
+          .replace(/\u2029/g, '\\u2029')
+        const script = `<script nonce="${nonce}">window.__DSH_BOOT__=${serializedManifest};</script>`
         const text = data.toString('utf8')
         if (text.includes('</head>')) data = Buffer.from(text.replace('</head>', `${script}</head>`))
         else data = Buffer.from(`${text}${script}`)
@@ -607,6 +625,18 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       }
       await new Promise<void>((resolveListen, reject) => {
         server = createServer((req, res) => {
+          // Set before dispatch so proxy and every early/error response inherit
+          // the same browser boundary. Route-specific writeHead calls retain
+          // headers already set on ServerResponse.
+          for (const [name, value] of Object.entries(CONTROL_PLANE_SECURITY_HEADERS)) {
+            res.setHeader(name, value)
+          }
+          const cspNonce = randomBytes(18).toString('base64')
+          ;(res as ApiResponse)._cspNonce = cspNonce
+          res.setHeader(
+            'content-security-policy',
+            `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
+          )
           const url = new URL(req.url ?? '/', 'http://localhost')
           const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
           if (surface === 'api' || surface === 'health') {
@@ -641,6 +671,15 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           res.writeHead(404, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ error: 'not_found', code: 'not_found' }))
         })
+        // Bound pre-routing slowloris/socket pressure as well as route-level
+        // work. requestTimeout covers receiving the request, while the proxy
+        // adds a stricter 30s inter-chunk body idle timeout. The connection
+        // ceiling still leaves headroom for the documented HTTP/WS/SSE caps.
+        server.headersTimeout = 10_000
+        server.requestTimeout = 35_000
+        server.keepAliveTimeout = 5_000
+        server.maxRequestsPerSocket = 1_000
+        server.maxConnections = 192
         // WS upgrade dispatcher (design 03 §3.1/§3.2): the instance proxy
         // handles /api/i/<id>/api/events.mux|host — explicit rejections
         // only, never a silent drop.

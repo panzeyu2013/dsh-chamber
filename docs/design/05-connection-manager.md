@@ -482,20 +482,31 @@ export const chamberBridge: {
 - **可选密码认证（唯一例外，2026-08 用户需求；明文文件兜底——用户决策）**：
   表单密码字段为瞬时输入（编辑时永不回填），经 `desktop_ssh_set_password`
   转发后主进程**内存持有 + 明文镜像 `<userData>/ssh-passwords.json`**
-  （0600、`.tmp`+fsync+rename 原子写、启动时加载——密码主机重启后自动
-  连接可用；损坏文件保留为 `*.corrupt` 并响亮报告，绝不静默当空集）；
+  （0600、`.tmp`+fsync+rename 原子写；残留 `.tmp` 无论原 mode 为何都先
+  fchmod 0600 再写秘密；写成功后才发布内存状态、启动时严格
+  校验 schema——密码主机重启后自动连接可用；损坏/结构非法文件保留为
+  `*.corrupt` 并响亮报告，绝不静默当空集）；
+  新增/编辑主机若密码写入失败，设置页补偿回滚本次元数据保存；回滚 IPC
+  异常时重新读取权威注册表并按真实状态保留编辑态，避免重复新增；
   永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
-  exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 0600 askpass 助手（`<tmp>/
-  dsh-chamber-ssh/askpass-<id>-<uuid>.sh`，传输停止即删）把密码喂给系统 ssh
-  ——**永不上命令行**；助手按提示文本区分「主机密钥确认 → yes」与「密码/
-  口令 → 密码」，首次连接无需预先接受主机密钥。无可靠 askpass 的平台
+  exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH
+  直接执行该脚本；`<tmp>/
+  dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即删；启动清理仅删除
+  已退出进程或旧格式遗留，绝不误删并行 dev/打包实例的助手）把密码喂给系统 ssh
+  ——**永不上命令行**；所有 ssh 调用强制 `StrictHostKeyChecking=yes`，助手
+  按提示文本区分「主机密钥确认 → no」与「密码/口令 → 密码」。首次连接须由
+  用户在可信通道核对 fingerprint 并预先写入 `known_hosts`，绝不静默接受。
+  无可靠 askpass 的平台
   （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在 `desktop_ssh_set_password`
   IPC 门禁处**显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
   通用路径。
 - systemctl 以参数数组 spawn（无 shell 拼接）+ serviceName 白名单；
 - 控制面 HTTP 监听仅 loopback——v1 无认证边界，不变量靠监听面与 HTTP/WS
-  来源门禁（Host 仅 loopback authority；Origin 仅回环、`null` + 显式
-  allowlist；非法来源在副作用/转发前 403）维持。
+  来源门禁（Host 仅规范 loopback authority；Origin 仅限与当前 Host 精确同源
+  或显式开发 allowlist，其他 localhost 端口也默认拒绝；`null` 一律拒绝；
+  非法来源在副作用/转发前 403）维持；所有 HTTP 响应统一
+  设置 CSP（`__DSH_BOOT__` 内联脚本使用逐响应随机 nonce，不开放 script
+  `unsafe-inline`）、`nosniff`、`DENY` frame、no-referrer 与 COOP 安全头。
 
 ## 9. 分期
 

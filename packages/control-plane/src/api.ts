@@ -28,11 +28,12 @@
  * session business belongs to the dsh frontend runtime, consumed through the
  * instance proxy.
  *
- * Browser-origin fence (loopback-only + explicit allowlist — the only
- * cross-origin control in v1): cross-origin requests are
- * allowed only from loopback origins (127.0.0.1/localhost/::1 — the web dev
- * server and same-machine surfaces), from the Electron file:// shell
- * (Origin: null), and from the configured `corsOrigins` allowlist; every
+ * Browser-origin fence (same-origin + explicit allowlist — the only
+ * cross-origin control in v1): an Origin-bearing request must match this
+ * request's own loopback authority or the configured `corsOrigins` allowlist.
+ * Merely being another localhost port grants no authority. Opaque origins
+ * (`Origin: null`) are always rejected because
+ * they can be produced by untrusted sandboxed/file documents; every
  * other origin is rejected with 403 before routing (blocking reads and
  * simple-request side effects). Unknown
  * paths answer 404 {error:'not_found'}; a body that is not JSON answers 400
@@ -44,14 +45,12 @@ import type { Logger } from './types.ts'
 
 /** Body read cap for POST payloads (10 MiB; the instance proxy has its own 50MiB cap). */
 const MAX_BODY_BYTES = 10 * 1024 * 1024
+const MAX_HEALTH_EVENT_STREAMS = 32
+/** Per-client frames retained while its SSE socket is backpressured. */
+const MAX_HEALTH_EVENT_PENDING_FRAMES = 32
 
 /** Hostnames treated as loopback for CORS (any port). */
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
-
-/** The Electron file:// shell sends Origin: null — trusted local surface. */
-function isNullOrigin(origin: string) {
-  return origin === 'null'
-}
 
 /**
  * The minimal request surface the HTTP layer reads. Structural on purpose:
@@ -86,6 +85,8 @@ export interface ApiResponse {
   destroy(): unknown
   headersSent: boolean
   _corsHeaders?: Record<string, string>
+  /** Per-response CSP nonce minted by the owning HTTP server. */
+  _cspNonce?: string
 }
 
 /**
@@ -163,8 +164,13 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
   // names the attacker's domain and cannot be forged by page script.
   const host = req.headers.host
   if (typeof host !== 'string') return { allowed: false }
+  let requestOrigin: string
   try {
-    if (!LOOPBACK_HOSTNAMES.has(new URL(`http://${host}`).hostname)) return { allowed: false }
+    const authority = new URL(`http://${host}`)
+    if (!LOOPBACK_HOSTNAMES.has(authority.hostname)) return { allowed: false }
+    if (authority.username !== '' || authority.password !== '' || authority.pathname !== '/'
+      || authority.search !== '' || authority.hash !== '' || authority.host !== host.toLowerCase()) return { allowed: false }
+    requestOrigin = authority.origin
   } catch {
     return { allowed: false }
   }
@@ -173,14 +179,16 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
   // A single Origin value in practice; a malformed multi-value header is
   // treated as disallowed (never reflected).
   const originValue = typeof origin === 'string' ? origin : ''
-  let allowed = isNullOrigin(originValue)
-  if (!allowed) {
-    try {
-      const parsed = new URL(originValue)
-      allowed = LOOPBACK_HOSTNAMES.has(parsed.hostname) || allowlist.includes(originValue)
-    } catch {
-      allowed = false
-    }
+  let allowed = false
+  try {
+    const parsed = new URL(originValue)
+    // Origin is an origin, not an arbitrary URL whose `.origin` happens to
+    // match. Reject paths, credentials and non-canonical spellings instead
+    // of reflecting them into Access-Control-Allow-Origin.
+    allowed = originValue === parsed.origin
+      && (parsed.origin === requestOrigin || allowlist.includes(parsed.origin))
+  } catch {
+    allowed = false
   }
   if (!allowed) return { allowed: false }
   return {
@@ -203,6 +211,7 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
 export function createApi(deps: ApiDeps) {
   const { logger } = deps
   const corsOrigins = Array.isArray(deps.corsOrigins) ? deps.corsOrigins : []
+  let activeHealthEventStreams = 0
 
   /** The per-request CORS headers (explicit-origin discipline). */
   function corsHeaders(req: ApiRequest) {
@@ -265,11 +274,16 @@ export function createApi(deps: ApiDeps) {
       const [a, b] = [segments[1], segments[2]]
       if (a === 'host' && b === 'health-events' && method === 'GET' && deps.subscribeHealthEvents !== undefined) {
         return async () => {
+          if (activeHealthEventStreams >= MAX_HEALTH_EVENT_STREAMS) {
+            return jsonError(res, 503, { code: 'resource_exhausted', message: 'too many health-event streams' })
+          }
+          activeHealthEventStreams += 1
           // SSE push channel (design 05 §3): current snapshot first, then
           // every machine transition; keepalive keeps the stream alive
-          // through idle browsers; any write failure or client close tears
-          // the subscription down (a write on a dead socket must never
-          // escape into the state machine).
+          // through idle browsers. Backpressure is bounded per client and
+          // drained in order; write failures, overflow, or client close tear
+          // the subscription down (a slow/dead socket must never escape into
+          // the state machine or grow memory without bound).
           res.writeHead(200, {
             'content-type': 'text/event-stream',
             'cache-control': 'no-store',
@@ -277,16 +291,58 @@ export function createApi(deps: ApiDeps) {
             ...(res._corsHeaders ?? {}),
           })
           let tornDown = false
+          let backpressured = false
           let keepalive: ReturnType<typeof setInterval> | null = null
           let unsubscribe: (() => void) | null = null
+          const pendingFrames: string[] = []
+          const releaseSubscription = () => {
+            const release = unsubscribe
+            unsubscribe = null
+            try {
+              release?.()
+            } catch { /* subscriber cleanup is isolated from stream cleanup */ }
+          }
           const teardown = () => {
             if (tornDown) return
             tornDown = true
+            activeHealthEventStreams = Math.max(0, activeHealthEventStreams - 1)
             if (keepalive !== null) clearInterval(keepalive)
-            unsubscribe?.()
+            pendingFrames.length = 0
+            res.removeListener('drain', flushPending)
+            req.removeListener('close', teardown)
+            releaseSubscription()
             try {
               res.end()
             } catch { /* already gone */ }
+          }
+          const writeFrame = (frame: string) => {
+            if (tornDown) return
+            if (backpressured) {
+              if (pendingFrames.length >= MAX_HEALTH_EVENT_PENDING_FRAMES) {
+                teardown()
+              } else {
+                pendingFrames.push(frame)
+              }
+              return
+            }
+            try {
+              // Node accepted this frame even when write() returns false; do
+              // not enqueue it twice. Pause only subsequent frames until the
+              // socket drains.
+              if (!res.write(frame)) {
+                backpressured = true
+                res.once('drain', flushPending)
+              }
+            } catch {
+              teardown()
+            }
+          }
+          function flushPending() {
+            if (tornDown) return
+            backpressured = false
+            while (!tornDown && !backpressured && pendingFrames.length > 0) {
+              writeFrame(pendingFrames.shift()!)
+            }
           }
           const send = (snapshot: { status: string; port: number | null; error: string | null }) => {
             if (tornDown) return
@@ -294,23 +350,29 @@ export function createApi(deps: ApiDeps) {
               ok: true,
               dsh: { status: snapshot.status, port: snapshot.port ?? 0, error: snapshot.error ?? undefined },
             }
-            try {
-              res.write(`data: ${JSON.stringify(payload)}\n\n`)
-            } catch {
-              teardown()
-            }
+            writeFrame(`data: ${JSON.stringify(payload)}\n\n`)
           }
+          req.on('close', teardown)
           const health = deps.getHealth()
           send({ status: health.dsh.status, port: health.dsh.port, error: health.dsh.error ?? null })
-          unsubscribe = deps.subscribeHealthEvents!(send)
+          if (tornDown) return
+          try {
+            unsubscribe = deps.subscribeHealthEvents!(send)
+          } catch {
+            teardown()
+            return
+          }
+          // A custom subscription seam may synchronously close the request.
+          // Do not strand a listener when teardown ran before assignment.
+          if (tornDown) {
+            releaseSubscription()
+            return
+          }
           keepalive = setInterval(() => {
-            try {
-              if (!tornDown) res.write(': keepalive\n\n')
-            } catch {
-              teardown()
-            }
+            // A keepalive has no state value and must not consume the bounded
+            // queue while real state frames are waiting for drain.
+            if (!tornDown && !backpressured) writeFrame(': keepalive\n\n')
           }, 20_000)
-          req.on('close', teardown)
         }
       }
       if (a === 'connections') {

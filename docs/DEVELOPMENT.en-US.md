@@ -93,7 +93,7 @@ The root `.npmrc` is a gitignored local convenience config that can point Electr
 The desktop bundles the official `@deepseek-ai/dsh` release into `packages/desktop/vendor/dsh` (the control plane's default dsh workspace, preferred over the optional `ref-dsh` source symlink):
 
 ```bash
-pnpm --filter @dsh-chamber/desktop run bundle:dsh   # version pinned via DSH_CHAMBER_DSH_VERSION
+pnpm --filter @dsh-chamber/desktop run bundle:dsh   # exact pin by default; overrides must also be exact semver
 ```
 
 `bundle:dsh` also runs automatically as part of `build:desktop` / `dist:desktop:mac` — you can jump straight to running or packaging.
@@ -114,7 +114,7 @@ pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
 pnpm run dist:desktop:win    # package the Windows app (nsis + zip; must run on Windows — dsh runtime bundling is platform-specific)
 ```
 
-Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). Artifacts are **unsigned** — no Apple signing/notarization or Windows code-signing certificate is configured.
+Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). Ordinary CI/dry-run artifacts may be ad-hoc or unsigned. Public releases fail closed unless macOS Developer ID signing/notarization and Windows Authenticode credentials are present and the emitted artifacts pass signature verification.
 
 > Windows install slowness/hangs on "Installing" (Windows Defender per-file scanning) — see the README FAQ.
 

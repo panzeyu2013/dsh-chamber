@@ -8,11 +8,13 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { connect } from 'node:net'
 import { createControlPlane } from '../src/index.ts'
+import { createApi } from '../src/api.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -32,13 +34,14 @@ function fakeWire() {
   return { spawnDsh, describeCapabilities, get spawns() { return spawns } }
 }
 
-async function makePlane(stateDirOverride?: string) {
+async function makePlane(stateDirOverride?: string, corsOrigins: string[] = []) {
   const stateDir = stateDirOverride ?? mkdtempSync(join(tmpdir(), 'dsh-chamber-manager-'))
   const wire = fakeWire()
   const plane = createControlPlane({
     port: 0,
     stateDir,
     logger: silentLogger,
+    corsOrigins,
     localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
   })
   try {
@@ -170,13 +173,48 @@ test('browser-origin fence rejects hostile simple POST and WebSocket before side
     assert.equal(rejected.body.code, 'origin_forbidden')
     assert.equal(holder.wire.spawns, 0)
 
+    const opaque = await fetchJson(holder.base, '/api/connections', {
+      method: 'POST',
+      headers: { origin: 'null', 'content-type': 'text/plain' },
+      body: JSON.stringify({ kind: 'local' }),
+    })
+    assert.equal(opaque.status, 403)
+    assert.equal(opaque.body.code, 'origin_forbidden')
+    assert.equal(holder.wire.spawns, 0, 'opaque origin is rejected before side effects')
+
     const upgrade = await rawUpgrade(holder.plane.port!, 'https://evil.example')
     assert.match(upgrade, /^HTTP\/1\.1 403 Forbidden/)
     assert.match(upgrade, /origin_forbidden/)
+    const opaqueUpgrade = await rawUpgrade(holder.plane.port!, 'null')
+    assert.match(opaqueUpgrade, /^HTTP\/1\.1 403 Forbidden/)
+    assert.match(opaqueUpgrade, /origin_forbidden/)
+    const otherLoopback = await rawUpgrade(holder.plane.port!, 'http://127.0.0.1:5173')
+    assert.match(otherLoopback, /^HTTP\/1\.1 403 Forbidden/)
+    assert.match(otherLoopback, /origin_forbidden/)
+    const sameOrigin = await rawUpgrade(holder.plane.port!, `http://127.0.0.1:${holder.plane.port}`)
+    assert.doesNotMatch(sameOrigin, /^HTTP\/1\.1 403 Forbidden/)
+    const originWithPath = await rawUpgrade(holder.plane.port!, `http://127.0.0.1:${holder.plane.port}/spoof`)
+    assert.match(originWithPath, /^HTTP\/1\.1 403 Forbidden/)
     const rebound = await rawHttp(holder.plane.port!, 'attacker.example')
     assert.match(rebound, /^HTTP\/1\.1 403 Forbidden/)
     assert.match(rebound, /origin_forbidden/)
+    const hostWithUserInfo = await rawHttp(holder.plane.port!, `attacker@127.0.0.1:${holder.plane.port}`)
+    assert.match(hostWithUserInfo, /^HTTP\/1\.1 403 Forbidden/)
     assert.equal(holder.wire.spawns, 0)
+  } finally {
+    await holder.plane.stop()
+    rmSync(holder.stateDir, { recursive: true, force: true })
+  }
+})
+
+test('browser-origin fence admits only explicitly allowlisted cross-origin development servers', async () => {
+  const allowedOrigin = 'http://127.0.0.1:5173'
+  const holder = await makePlane(undefined, [allowedOrigin])
+  try {
+    const allowed = await fetchJson(holder.base, '/health', {
+      headers: { origin: allowedOrigin },
+    })
+    assert.equal(allowed.status, 200)
   } finally {
     await holder.plane.stop()
     rmSync(holder.stateDir, { recursive: true, force: true })
@@ -346,6 +384,83 @@ test('health-events streams the current snapshot and pushes every transition', a
     await holder.plane.stop()
     rmSync(holder.stateDir, { recursive: true, force: true })
   }
+})
+
+test('health-events: write backpressure drains in order and bounded overflow releases the subscription', async () => {
+  const reqEvents = new EventEmitter()
+  const resEvents = new EventEmitter()
+  const writes: string[] = []
+  let writeCalls = 0
+  let endCalls = 0
+  let unsubscribeCalls = 0
+  let healthListener: ((snapshot: { status: string; port: number | null; error: string | null }) => void) | null = null
+
+  const req = {
+    url: '/api/host/health-events',
+    method: 'GET',
+    headers: { host: '127.0.0.1:17500' },
+    async *[Symbol.asyncIterator]() {},
+    on: reqEvents.on.bind(reqEvents),
+    once: reqEvents.once.bind(reqEvents),
+    off: reqEvents.off.bind(reqEvents),
+    removeListener: reqEvents.removeListener.bind(reqEvents),
+  }
+  const res = {
+    headersSent: false,
+    writeHead() { this.headersSent = true },
+    write(chunk: unknown) {
+      writes.push(String(chunk))
+      writeCalls += 1
+      return writeCalls !== 1 && writeCalls !== 3
+    },
+    end() { endCalls += 1 },
+    destroy() {},
+    setHeader() {},
+    on: resEvents.on.bind(resEvents),
+    once: resEvents.once.bind(resEvents),
+    removeListener: resEvents.removeListener.bind(resEvents),
+  }
+  const api = createApi({
+    logger: silentLogger,
+    getHealth: () => ({ ok: true, dsh: { status: 'stopped', port: 0 } }),
+    subscribeHealthEvents: (listener) => {
+      healthListener = listener
+      return () => { unsubscribeCalls += 1 }
+    },
+    getConnectionRow: () => null,
+    startConnection: async () => ({ connection: null, spawned: false }),
+    updateConnectionProfile: async () => null,
+    stopConnection: async () => {},
+  })
+
+  await api.handle(req, res)
+  assert.equal(writes.length, 1, 'the initial frame is accepted even when write reports backpressure')
+  assert.equal(endCalls, 0, 'backpressure is not a dead connection')
+  assert.equal(unsubscribeCalls, 0)
+
+  healthListener!({ status: 'starting', port: null, error: null })
+  assert.equal(writes.length, 1, 'subsequent state waits in the bounded queue')
+  resEvents.emit('drain')
+  assert.equal(writes.length, 2)
+  assert.match(writes[1], /"status":"starting"/)
+
+  healthListener!({ status: 'ready', port: 17510, error: null })
+  assert.equal(writes.length, 3, 'a later false write enters backpressure again')
+  assert.equal(resEvents.listenerCount('drain'), 1)
+  for (let i = 0; i < 32; i += 1) {
+    healthListener!({ status: `queued-${i}`, port: null, error: null })
+  }
+  assert.equal(endCalls, 0, 'the documented bounded queue itself is accepted')
+  healthListener!({ status: 'overflow', port: null, error: null })
+  assert.equal(unsubscribeCalls, 1, 'overflow disconnects the slow subscriber')
+  assert.equal(endCalls, 1, 'overflow ends the SSE response once')
+  assert.equal(resEvents.listenerCount('drain'), 0, 'teardown removes the pending drain listener')
+
+  reqEvents.emit('close')
+  assert.equal(unsubscribeCalls, 1, 'a later close cannot clean up twice')
+  assert.equal(endCalls, 1)
+  healthListener!({ status: 'after-teardown', port: 17510, error: null })
+  assert.equal(writes.length, 3, 'a detached listener cannot write again')
 })
 
 test('health-events: a disconnected client unsubscribes and others keep streaming', async () => {

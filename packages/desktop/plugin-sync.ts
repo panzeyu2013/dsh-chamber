@@ -28,9 +28,9 @@
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 // Canonical whitelists (design 13 §7.2) — reused from ssh-provider.ts so the
 // orchestration-side二次校验 and the exec-side argv whitelist share one source
@@ -40,7 +40,7 @@ import { homedir, tmpdir } from 'node:os'
 // ssh-provider classifies the RAW stderr line against it (redaction can hide a
 // `.ssh*`-named home path), so the provider-side classification and this
 // caller-side error-text test can never drift apart.
-import { ENOENT_PATTERN, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
+import { ENOENT_PATTERN, MAX_PLUGIN_SPEC_CHARS, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 
@@ -498,6 +498,45 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
   }
 }
 
+/**
+ * Resolve one materialize dependency from the authoritative local manifest.
+ * The renderer supplies only the dependency name; it never supplies a path.
+ * Relative specs are anchored exactly where pnpm resolves them (the web
+ * profile directory), and the target package name must match the manifest key.
+ */
+export function resolveLocalMaterializeDirectory(
+  localDshHome: string,
+  name: string,
+): { ok: true; path: string } | { ok: false; error: string } {
+  if (!PLUGIN_NAME_PATTERN.test(name)) return { ok: false, error: 'invalid plugin name' }
+  let manifest: LocalPluginManifest
+  try {
+    manifest = localPluginList(localDshHome)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  const spec = manifest.dependencies[name]
+  if (typeof spec !== 'string' || classifyDependencyValue(spec).kind !== 'materialize') {
+    return { ok: false, error: 'plugin is not a materialize dependency in the local manifest' }
+  }
+  let raw = spec
+  if (raw.startsWith('file:')) raw = raw.slice('file:'.length)
+  else if (raw.startsWith('link:')) raw = raw.slice('link:'.length)
+  const profileDir = join(localDshHome, 'profiles', WEB_PROFILE)
+  const candidate = raw.startsWith('~/')
+    ? join(homedir(), raw.slice(2))
+    : isAbsolute(raw) ? raw : resolve(profileDir, raw)
+  try {
+    const real = realpathSync(candidate)
+    if (!statSync(real).isDirectory()) return { ok: false, error: 'plugin path is not a directory' }
+    const pkg = JSON.parse(readFileSync(join(real, 'package.json'), 'utf8')) as { name?: unknown }
+    if (pkg.name !== name) return { ok: false, error: 'plugin package name does not match the local manifest entry' }
+    return { ok: true, path: real }
+  } catch (error) {
+    return { ok: false, error: `plugin directory is unreadable: ${String(error)}` }
+  }
+}
+
 /** Read `<profile>/node_modules/<name>/package.json`; null when absent/unreadable. */
 function readDependencyManifest(profileDir: string, name: string): unknown {
   try {
@@ -710,13 +749,14 @@ export async function applyPlugins(
   // ① re-validate (defense in depth — renderer input is untrusted).
   const add = Array.isArray(actions.add) ? actions.add : []
   const remove = Array.isArray(actions.remove) ? actions.remove : []
+  if (add.length + remove.length > 64) return { ok: false, error: 'too many plugin changes in one request' }
   for (const s of add) {
-    if (typeof s !== 'string' || !PLUGIN_SPEC_PATTERN.test(s) || hasXWildcardVersion(s)) {
+    if (typeof s !== 'string' || s.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_SPEC_PATTERN.test(s) || hasXWildcardVersion(s)) {
       return { ok: false, error: `invalid add spec: ${JSON.stringify(s)}` }
     }
   }
   for (const name of remove) {
-    if (typeof name !== 'string' || !PLUGIN_NAME_PATTERN.test(name)) {
+    if (typeof name !== 'string' || name.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(name)) {
       return { ok: false, error: `invalid remove name: ${JSON.stringify(name)}` }
     }
   }
@@ -1015,22 +1055,88 @@ export async function materializeAbsolutePath(
   return { ok: true, path: `${remoteHome}${remotePath.slice(1)}` }
 }
 
-function packDirectory(localDir: string): { bytes: Buffer } | null {
-  const outDir = mkdtempSync(join(tmpdir(), 'dsh-materialize-'))
-  const pnpmBin = resolvePnpmBinDir()
-  const env = pnpmBin === null
-    ? process.env
-    : { ...process.env, PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` }
-  const result = spawnSync('pnpm', ['pack', '--pack-destination', outDir], {
-    cwd: localDir,
-    encoding: 'utf8',
-    timeout: 120_000,
-    env,
+const MATERIALIZED_TARBALL_MAX_BYTES = 50 * 1024 * 1024
+const CHILD_OUTPUT_MAX_CHARS = 64 * 1024
+
+/** Run a bounded child without blocking Electron's main event loop. */
+function runChild(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return new Promise(resolveResult => {
+    let settled = false
+    let timedOut = false
+    let detail = ''
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let forceTimer: ReturnType<typeof setTimeout> | null = null
+    const finish = (result: { ok: true } | { ok: false; error: string }) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) clearTimeout(timer)
+      if (forceTimer !== null) clearTimeout(forceTimer)
+      resolveResult(result)
+    }
+    let child
+    try {
+      child = spawn(command, args, {
+        cwd: options.cwd,
+        env: options.env,
+        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (error) {
+      resolveResult({ ok: false, error: String(error) })
+      return
+    }
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', chunk => {
+      if (detail.length < CHILD_OUTPUT_MAX_CHARS) detail += String(chunk).slice(0, CHILD_OUTPUT_MAX_CHARS - detail.length)
+    })
+    child.on('error', error => finish({ ok: false, error: String(error) }))
+    child.on('exit', (code, signal) => {
+      if (timedOut) finish({ ok: false, error: `child timed out after ${options.timeoutMs}ms` })
+      else if (code === 0) finish({ ok: true })
+      else finish({ ok: false, error: detail.trim() || `child exited ${code ?? signal ?? 'unknown'}` })
+    })
+    timer = setTimeout(() => {
+      timedOut = true
+      try { child.kill('SIGTERM') } catch { /* already gone */ }
+      forceTimer = setTimeout(() => {
+        try { child.kill('SIGKILL') } catch { /* already gone */ }
+      }, 2_000)
+      forceTimer.unref?.()
+      // Resolve only after the child exits. In particular, packDirectory must
+      // not remove its staging directory while pnpm is still writing there.
+    }, options.timeoutMs)
+    timer.unref?.()
   })
-  if (result.status !== 0) return null
-  const tarball = readdirSync(outDir).find(file => file.endsWith('.tgz'))
-  if (tarball === undefined) return null
-  return { bytes: readFileSync(join(outDir, tarball)) }
+}
+
+async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null> {
+  const outDir = mkdtempSync(join(tmpdir(), 'dsh-materialize-'))
+  try {
+    const pnpmBin = resolvePnpmBinDir()
+    const env = pnpmBin === null
+      ? process.env
+      : { ...process.env, PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` }
+    const result = await runChild(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['pack', '--pack-destination', outDir], {
+      cwd: localDir,
+      timeoutMs: 120_000,
+      env,
+    })
+    if (!result.ok) return null
+    const tarball = readdirSync(outDir).find(file => file.endsWith('.tgz'))
+    if (tarball === undefined) return null
+    const tarballPath = join(outDir, tarball)
+    if (statSync(tarballPath).size > MATERIALIZED_TARBALL_MAX_BYTES) return null
+    return { bytes: readFileSync(tarballPath) }
+  } finally {
+    // The remote copy is intentionally persistent, but this local staging
+    // archive contains source and must never survive success, failure or app
+    // cancellation.
+    rmSync(outDir, { recursive: true, force: true })
+  }
 }
 
 /**
@@ -1050,7 +1156,7 @@ export async function materializeAndAdd(
   exec: ExecFn,
   spec: RemoteSpec,
   localDir: string,
-  pack?: (dir: string) => { bytes: Buffer } | null,
+  pack?: (dir: string) => { bytes: Buffer } | null | Promise<{ bytes: Buffer } | null>,
 ): Promise<MaterializeResult> {
   const id = spec.id
   let name: string
@@ -1063,7 +1169,7 @@ export async function materializeAndAdd(
   } catch (error) {
     return { ok: false, error: `materialize: cannot read ${join(localDir, 'package.json')}: ${String(error)}` }
   }
-  const packed = (pack ?? packDirectory)(localDir)
+  const packed = await (pack ?? packDirectory)(localDir)
   if (packed === null) return { ok: false, error: 'materialize: pnpm pack failed' }
   const hash = sha256hex(packed.bytes).slice(0, 16)
   // Scoped names (`@scope/name`) contain `/` — normalize for the tarball
@@ -1148,15 +1254,16 @@ export interface LocalPluginExecResult {
  *  (it goes through the materialize path with its own whitelist). */
 const LOCAL_FILE_SPEC_PATTERN = /^file:\/[a-zA-Z0-9._\/ -]+$/
 
-export function runLocalDshPlugin(
+export async function runLocalDshPlugin(
   dshWorkspace: string,
   localDshHome: string,
   action: 'add' | 'remove',
   spec: string,
-): LocalPluginExecResult {
-  const addOk = (PLUGIN_SPEC_PATTERN.test(spec) && !hasXWildcardVersion(spec)) || LOCAL_FILE_SPEC_PATTERN.test(spec)
+): Promise<LocalPluginExecResult> {
+  if (typeof spec !== 'string') return { ok: false, error: 'plugin spec must be a string' }
+  const addOk = spec.length <= 4096 && ((spec.length <= MAX_PLUGIN_SPEC_CHARS && PLUGIN_SPEC_PATTERN.test(spec) && !hasXWildcardVersion(spec)) || LOCAL_FILE_SPEC_PATTERN.test(spec))
   if (action === 'add' && !addOk) return { ok: false, error: `invalid add spec: ${JSON.stringify(spec)}` }
-  if (action === 'remove' && !PLUGIN_NAME_PATTERN.test(spec)) return { ok: false, error: `invalid remove name: ${JSON.stringify(spec)}` }
+  if (action === 'remove' && (spec.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(spec))) return { ok: false, error: `invalid remove name: ${JSON.stringify(spec)}` }
 
   const installed = join(dshWorkspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   const source = join(dshWorkspace, 'apps', 'cli', 'src', 'bin.ts')
@@ -1174,16 +1281,10 @@ export function runLocalDshPlugin(
     ...(isElectron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
     ...(pnpmBin !== null ? { PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` } : {}),
   }
-  const result = spawnSync(process.execPath, [...nodeArgs, 'plugin', '--profile', 'web', action, spec], {
+  const result = await runChild(process.execPath, [...nodeArgs, 'plugin', '--profile', 'web', action, spec], {
     cwd: dshWorkspace,
-    encoding: 'utf8',
-    timeout: 120_000,
     env,
+    timeoutMs: 120_000,
   })
-  if (result.error !== undefined) return { ok: false, error: `failed to spawn local dsh: ${String(result.error)}` }
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || '').trim()
-    return { ok: false, error: detail === '' ? `dsh plugin ${action} exited ${result.status}` : detail }
-  }
-  return { ok: true }
+  return result.ok ? { ok: true } : { ok: false, error: result.error }
 }

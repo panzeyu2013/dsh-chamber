@@ -46,8 +46,9 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
   及 cookie/bearer 门禁）——管理面 `/api/*` 与反代面 `/api/i/*` 一律匿名；
 - 暴露面不变量：控制面 HTTP 仅监听 loopback（127.0.0.1）；API/upgrade 的
   Host 必须是 loopback authority（拒绝 DNS rebinding），HTTP 在路由与
-  body/副作用前、WS 在 upgrade 转发前再执行同一 Origin 门禁（仅回环 origin、
-  `null` + 显式 `corsOrigins` allowlist），非法来源 403 `origin_forbidden`。
+  body/副作用前、WS 在 upgrade 转发前再执行同一 Origin 门禁（当前 Host
+  精确同源或显式 `corsOrigins` allowlist；其他回环端口与 `null` 均拒绝），
+  非法来源 403 `origin_forbidden`。
   响应不带 CORS 头本身不是写操作防线。
 
 ### D3 · 连接唯一：catalog 单行（local）
@@ -99,7 +100,11 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 - `text/event-stream`；连接即发当前快照（`{ok:true, dsh:{...}}`，形状与
   §3.1 相同），此后**每次机器状态迁移**推一帧；每 20s 发 `: keepalive`
   注释帧；客户端断开即摘除监听（不泄漏）；写入失败（连接已死）同样触发
-  拆除——写错误永不逃逸进状态机（监听器隔离在 local-connection 扇出点）。
+  拆除。`write() === false` 仅表示 Node 已接收当前帧但下游发生背压：该客户端
+  暂停写入并按序保留至多 32 个后续状态帧，`drain` 后继续；背压期间不排队
+  keepalive，状态队列溢出则拆除该慢客户端。所有拆除路径都会取消状态订阅、
+  清空队列并移除待定 `drain` 监听——写错误/慢客户端永不逃逸进状态机或造成
+  无界内存增长（监听器隔离在 local-connection 扇出点）。
   连接行/标签等低频字段不走此流（仍由 §3.2 轮询，30s 兜底）。
 - 动机（05 §2.3）：本地实例由控制面直接托管，状态本来就发生在主进程——
   推送让 stopped → starting → ready 即时可见，渲染层不为本地状态轮询；
@@ -172,7 +177,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 | 情形 | 结果 |
 |---|---|
-| Origin 非回环、非 `null` 且不在 allowlist | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
+| Origin 非当前 Host 精确同源且不在显式 allowlist（包括 `null` 或其他回环端口） | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
 | 实例 phase != ready（无隧道 / 未就绪） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
 | 上游连接拒绝 / 超时 | 502 / 504 `{error, code:'upstream_failed'}`（脱敏） |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |

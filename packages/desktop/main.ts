@@ -29,20 +29,20 @@
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
-import path, { isAbsolute } from 'node:path';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { createTransportManager } from './transport-manager.ts';
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
-import { sshProvider, probeClientGraphLive } from './ssh-provider.ts';
-import { configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
+import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive } from './ssh-provider.ts';
+import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { createUpdateController } from './updater.ts';
-import { applyPlugins, CLIENT_GRAPH_PACKAGE_NAME, localPluginList, materializeAndAdd, remoteHome, remotePluginList, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
+import { applyPlugins, CLIENT_GRAPH_PACKAGE_NAME, localPluginList, materializeAndAdd, remoteHome, remotePluginList, resolveLocalMaterializeDirectory, runLocalDshPlugin, seedRemoteHostGraph } from './plugin-sync.ts';
 import type { ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
@@ -55,16 +55,23 @@ import {
 } from './chamber-settings.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
 
-// Main-process safety net: a stray stream/socket error (e.g. an ECONNRESET
-// from a peer that went away mid-request) must never wedge startup behind a
-// dialog or a silent stall — log the full stack and continue. The control
-// plane and transport layer already attach per-socket handlers; this is the
-// last line for anything that escapes them.
+// Last-resort crash boundary. Expected socket/stream failures are handled at
+// their owners; an unknown uncaught exception means the privileged main
+// process may be inconsistent and must fail closed rather than keep serving
+// IPC, transports and persistence from an indeterminate state.
+let fatalExceptionInProgress = false;
 process.on('uncaughtException', (error) => {
-  console.error('[dsh-chamber] uncaught exception (continuing):', error instanceof Error ? error.stack : String(error));
+  console.error('[dsh-chamber] fatal uncaught exception:', error instanceof Error ? error.stack : String(error));
+  if (fatalExceptionInProgress) {
+    process.abort();
+    return;
+  }
+  fatalExceptionInProgress = true;
+  app.exit(1);
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[dsh-chamber] unhandled rejection:', reason instanceof Error ? reason.stack : String(reason));
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  process.emit('uncaughtException', error, 'unhandledRejection');
 });
 
 // Control-plane port (design 05 §3.3): the packaged app keeps the documented
@@ -508,6 +515,9 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
         : path.join(pkgDir, 'preload.cts'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Keep Electron's renderer sandbox explicit: this window only needs the
+      // narrow contextBridge surface from preload, never Electron/Node powers.
+      sandbox: true,
       // 隐藏到托盘后渲染进程计时器不被 Chromium 节流（design 14 D1）：唤醒
       // 「立即重连」依赖 SSE 心跳/重连计时器，节流会把它拖慢到 ~1 次/秒。
       // 单窗口 + 控制面 origin + 无第三方内容，安全。
@@ -786,9 +796,7 @@ if (!gotTheLock) {
       };
     ipcMain.handle('dsh-chamber:info', trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
-      dshWorkspace,
       dshVersion: readDshVersion(dshWorkspace),
-      dshHome: path.join(app.getPath('userData'), 'dsh-home'),
       version,
     })));
 
@@ -843,6 +851,8 @@ if (!gotTheLock) {
     // auto-connect after a restart. The file never touches the registry,
     // logs, or the renderer; a corrupt file is preserved as *.corrupt and
     // reported loudly.
+    const askpassNotice = cleanupStaleAskpassHelpers();
+    if (askpassNotice !== null) console.error(`[dsh-chamber] ${askpassNotice}`);
     const passwordNotice = configureSshPasswordStore(path.join(app.getPath('userData'), 'ssh-passwords.json'));
     if (passwordNotice !== null) console.error(`[dsh-chamber] ssh password store: ${passwordNotice}`);
     transportManager = createTransportManager({
@@ -1017,8 +1027,15 @@ if (!gotTheLock) {
       if (!sshPasswordSupported()) {
         return { error: 'SSH password auth is not supported on this platform yet — use a key or ssh-agent' };
       }
-      setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
-      return { ok: true };
+      if (typeof password === 'string' && password.length > MAX_SSH_PASSWORD_CHARS) {
+        return { error: `SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters` };
+      }
+      try {
+        setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
+        return { ok: true };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
     }));
     // ~/.ssh/config discovery (design 05 §5): non-secret host projections
     // only (alias/hostName/user/port) — keys/proxies/credentials never leave
@@ -1095,6 +1112,7 @@ if (!gotTheLock) {
     ipcMain.handle('desktop_npm_search', trustedIpc(async ({ query }) => {
       if (typeof query !== 'string' || query.trim() === '') return { ok: false, error: 'empty search query' };
       const text = query.trim();
+      if (text.length > 256) return { ok: false, error: 'search query is too long' };
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5_000);
       timer.unref?.();
@@ -1148,20 +1166,16 @@ if (!gotTheLock) {
       }
       return result;
     }));
-    // materialize_add (sync view): the dir is resolved from the LOCAL manifest's
-    // absolute file:/link: spec (renderer-side materializeLocalDir). Main bounds
-    // it to an absolute, existing directory — loud failure, never a silent no-op.
-    ipcMain.handle('desktop_ssh_plugin_materialize_add', trustedIpc(async ({ id, dir }) => {
+    // materialize_add (sync view): renderer supplies only the dependency NAME.
+    // Main re-reads the authoritative local manifest and resolves/canonicalizes
+    // its path; an IPC caller can never choose an arbitrary local directory.
+    ipcMain.handle('desktop_ssh_plugin_materialize_add', trustedIpc(async ({ id, name }) => {
       const spec = findRemoteSpec(id);
       if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      if (typeof dir !== 'string' || dir === '') return { ok: false, error: 'empty plugin directory' };
-      if (!isAbsolute(dir)) return { ok: false, error: 'plugin directory must be absolute' };
-      try {
-        if (!statSync(dir).isDirectory()) return { ok: false, error: 'plugin path is not a directory' };
-      } catch (error) {
-        return { ok: false, error: `plugin directory unreadable: ${String(error)}` };
-      }
-      return materializeAndAdd(execTransport, spec, dir);
+      if (typeof name !== 'string') return { ok: false, error: 'invalid plugin name' };
+      const resolved = resolveLocalMaterializeDirectory(localDshHome, name);
+      if (!resolved.ok) return resolved;
+      return materializeAndAdd(execTransport, spec, resolved.path);
     }));
     // materialize_add_pick (add view): PICK-ONLY — the folder picker runs here in
     // the main process, so a compromised renderer can never drive the pack surface
@@ -1179,17 +1193,17 @@ if (!gotTheLock) {
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
       const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
       if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
-      const result = runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
     }));
-    ipcMain.handle('desktop_local_plugin_add', trustedIpc(({ spec: specArg }) => {
+    ipcMain.handle('desktop_local_plugin_add', trustedIpc(async ({ spec: specArg }) => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
-      const result = runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
     }));
-    ipcMain.handle('desktop_local_plugin_remove', trustedIpc(({ name }) => {
+    ipcMain.handle('desktop_local_plugin_remove', trustedIpc(async ({ name }) => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
-      const result = runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
     }));
 

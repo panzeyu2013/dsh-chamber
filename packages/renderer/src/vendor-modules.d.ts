@@ -199,6 +199,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   }
   export function emptyAggregate(state: InstanceAggregateState, error?: string | null): InstanceAggregate
   export function getInstanceClient(instanceId: string): unknown
+  export function releaseInstanceClient(instanceId: string): void
   export function fetchInstanceSnapshot(client: unknown): Promise<InstanceSnapshot>
   export function isInstanceUnavailable(err: unknown): boolean
   export function createSession(client: unknown, workspaceId: string): Promise<string>

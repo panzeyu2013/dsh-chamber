@@ -174,8 +174,9 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 ### 3.2 可达性（v1 无认证边界）
 
 - v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 与管理面 `/api/*` 对获准来源
-  **匿名可达**。来源门禁（Host 必须为 loopback authority、Origin 仅回环 /
-  `null` + 显式 allowlist、非法来源统一 403 `origin_forbidden`）与暴露面
+  **匿名可达**。来源门禁（Host 必须为规范 loopback authority、Origin 必须与
+  当前 `scheme://Host` 精确同源或命中显式开发 allowlist；其他回环端口与
+  `null` 均拒绝；非法来源统一 403 `origin_forbidden`）与暴露面
   不变量（loopback-only 监听）的完整定义见 **04 D2**（管理面 + 反代面统一
   适用；05 §8 安全不变量）。反代面要点：Host 门禁覆盖浏览器同源 DNS
   rebinding 读；静态壳（`/`、dist、`/assets/*`、`/manifest.json`）匿名加载，
@@ -194,7 +195,17 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 - **响应头白名单**（收敛上游头，防 hop-by-hop / 凭据泄露）：完整列表见
   **04 §4.3**（WS upgrade 101 所需头除外）。
 - **体积上限**：请求体 ≤ 50MiB、响应体 ≤ 100MiB（沿用 v2 runtime-proxy
-  语义；超限 → 413 / 取消上游流，显式而非截断静默）。
+  语义；超限 → 413 / 取消上游流，显式而非截断静默）；请求体分片空闲超过
+  30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
+- **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端
+  `content-length` 与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节
+  重建 `content-length`。
+- **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、
+  在缓冲请求体预算 ≤ 100MiB；健康 SSE ≤ 32。超额统一 503
+  `resource_exhausted`，计数在断连/超时/错误/完成时幂等释放；HTTP server 在
+  路由前另设 10s header、35s request、5s keep-alive 与 192 连接上限。
+- 非 SSE 上游响应使用 10s **空闲**超时（每个数据块重新计时），既阻止停滞流，
+  也不误杀持续有进展的大响应；SSE/已升级 WS 保持长连接语义。
 - 写路径背压（Node 双流适配，`res.write === false → waitForDrain`）；
   浏览器断连 → abort 上游（不泄漏 socket / 流资源）。
 

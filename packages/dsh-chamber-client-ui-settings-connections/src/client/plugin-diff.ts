@@ -217,26 +217,10 @@ export function defaultChecked(kind: PluginRowKind): boolean {
   return kind === 'missing' || kind === 'update' || kind === 'materialize'
 }
 
-/**
- * Resolve the local plugin DIRECTORY for a materialize row (design 13 §4.6
- * pack-and-transfer). The desktop IPC `plugin_materialize_add(id, dir)` needs
- * an absolute local dir, so only absolute forms (`/x`, `file:/x`, `link:/x`)
- * resolve here. Relative (`./`, `../`) and home-relative (`~/`) forms are
- * anchored to the local profile/home that only the main process knows — the
- * renderer cannot resolve them, so null = the row must fail loud (never a
- * silent registry fallback, §4.5).
- */
-export function materializeLocalDir(spec: string): string | null {
-  let path = spec
-  if (path.startsWith('file:')) path = path.slice('file:'.length)
-  else if (path.startsWith('link:')) path = path.slice('link:'.length)
-  return path.startsWith('/') ? path : null
-}
-
 /** The `add` argument for one checked REGISTRY row (missing/update): pass
  *  name@spec to pin the local version; a bare-name spec passes just the name
- *  (install latest). Materialize rows never reach this — they are applied via
- *  pluginMaterializeAdd(id, materializeLocalDir(spec)) instead (§4.6). */
+ *  (install latest). Materialize rows never reach this — the renderer sends
+ *  only the dependency name and MAIN resolves its authoritative path (§4.6). */
 export function rowAddArg(row: PluginRow): string {
   if (row.unlocked || row.localSpec === null) return row.name
   return `${row.name}@${row.localSpec}`

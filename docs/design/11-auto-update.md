@@ -23,16 +23,15 @@
 > 2. 灰度策略 = **通道模型 beta → stable**（非百分比灰度）；
 > 3. **双平台流程一致**（Windows 与 macOS 同一形态）：`electron-updater` 静默检查 →
 >    settings 提示 → 用户确认 → 后台下载 → 退出时安装；**macOS 不手动安装**。
->    macOS 安装腿的硬前置 = Developer ID 签名（Squirrel.Mac 硬前提，ad-hoc 是否
->    放行未实机）——签名未配置时该腿被阻塞（前置/开放项，**非 UX 分支**）。
+>    macOS 安装腿的硬前置 = Developer ID 签名（Squirrel.Mac 硬前提）；公开发布
+>    workflow 同时要求公证凭据并验证 stapled ticket，缺失即 fail-closed。
 > 4. **UX（三轮修订）**：**不弹窗** + **低打扰（不显眼）**——更新信息只在 settings
 >    的 chamber 全局「更新」部分低调展示；**后台下载以用户明确确认（点击「更新」）
 >    为前提**，用户不确认则永不下载；退出时自动安装（双平台）。
 >
-> **剩余验证项（实现后）**：macOS 安装腿需 Developer ID 签名（未配置 → 更新停留在
-> 「已下载」并在 settings 响亮提示手动安装，**绝不假装已安装**）；release.yml 的
-> `electron-builder --publish` 上传路径（draft → finalize 流程）需一次真实 CI 运行
-> 验证；双平台实机检查/下载/退出时安装未做。
+> **剩余验证项（实现后）**：配置真实 Developer ID/公证/Authenticode 秘密后，
+> `electron-builder --publish` 的 draft → finalize、stapling/验签与双平台实机
+> 检查/下载/退出安装仍需一次真实 CI/设备验证。
 
 ## 1. 现状（实现前的动机）
 
@@ -186,8 +185,10 @@
 ## 7. 安全与已知让步
 
 - **完整性**：`latest*.yml` 内 sha512 校验下载包——无签名也有传输/下载完整性保护。
-- **身份（主动让步）**：Windows 不配 `publisherName` → 不做 Authenticode 发布者
-  校验；未签名安装器触发 SmartScreen 警告。接受并记录在案；取得证书后可启用校验。
+- **发布身份（fail-closed）**：公开发布必须同时具备 macOS Developer ID + 公证
+  凭据和 Windows Authenticode 凭据；release workflow 在建 draft 前检查秘密，
+  构建后再以 `codesign`/`spctl`/`stapler` 与 `Get-AuthenticodeSignature` 验证。
+  缺任一项即不发布。dry-run 仍允许生成不公开的本机构建产物。
 - **出网面**：仅主进程访问 GitHub API / feed（HTTPS）；控制面零出网、loopback
   闭环不变。
 - **隐私**：检查/下载不携带任何用户/SSH 材料；仅应用版本与平台信息。
@@ -267,8 +268,8 @@
 
 **剩余验证项**：
 
-- macOS 安装腿：Developer ID 签名未配置（ad-hoc 是否放行 Squirrel.Mac 未实机）——
-  未配置时 settings 显示「已下载（…），请手动安装」（诚实，不假装）。
+- macOS/Windows 公共发布身份门禁已落代码；仍需在配置真实证书秘密后做一次 CI
+  实跑，确认 Developer ID 公证 stapling、Authenticode 与更新安装链路。
 - release.yml 的 `electron-builder --publish=always` → draft release 上传路径需一次
   真实 CI 运行验证（含 beta channel 的 `beta*.yml` 命名）。
 - 双平台实机：检查（stable/beta/无网/坏网络）、确认前不下载、下载 → 退出时安装、

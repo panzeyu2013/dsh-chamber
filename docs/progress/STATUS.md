@@ -137,15 +137,16 @@
   mac 安装腿 `installBlockedReason` 探测）、preload `update` IPC 面、settings 壳
   chamber 全局「更新」入口（`__update` + `UpdateSection`，zh/en）、desktop build
   配置（publish/mac zip/differentialPackage）、release.yml 双 leg 更新产物
-  （`--publish=always` + GH_TOKEN；channel 由版本 prerelease 后缀推导）、
+  （`--publish=always` + GH_TOKEN；channel 由版本 prerelease 后缀推导；公开发布
+  缺 Developer ID/公证或 Authenticode 凭据即在创建 draft 前失败，产物再验签）、
   `DSH_CHAMBER_UPDATE_CHANNEL=beta`。设计见 `docs/design/11-auto-update.md`
   （2026-08 自 docs/todo/ 移入）。**2026-08 修订（用户拍板）**：`__update` 固定
   入口并入「通用」段（`GeneralView` 底部 `UpdateSection` 控制组，样式对齐官方设置段
   控制组/胶囊词汇），新增「检查更新」按钮（`dsh-chamber:update-check` →
   `updater.checkNow()`，与周期静默检查同一条 `runCheck()` 路径，linux 显式拒绝；
-  `update-gate.ts` 相位门 + 纯逻辑测试）。剩余：mac 安装腿需 Developer ID 签名
-  （未配置 → settings 响亮提示手动安装）、release CI 上传路径实测、双平台实机
-  检查/下载/退出安装。
+  `update-gate.ts` 相位门 + 纯逻辑测试）。剩余：配置真实签名秘密后的 release CI
+  上传/公证/验签实测，以及双平台实机检查/下载/退出安装；mac 安装腿未配置
+  Developer ID 时 settings 响亮提示手动安装。
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游 wire 根治）；
   实现未排期；详见 `docs/todo/12-todo-archived-sessions.md`。
 - **睡眠/后台常驻（设计 14，v1 范围已实现，2026-08）**：关窗行为可设
@@ -324,6 +325,36 @@
   fiber。首块 chamber bundle 934KB → 650KB（gzip 188KB；commands/input-trigger 于
   v0.1.2 review 移回首屏后 +44KB）；settings-bridge 的
   agent-preset settings 段改为装配子 ctx 时动态导入。设计/验证细节见 chamber-entry.ts 头注。
+- **本机信任边界加固（2026-08）**：匿名 loopback 控制面在 HTTP 路由与 WS
+  upgrade 前同时校验 loopback Host 与来源；不透明 `Origin: null` 一律拒绝，静态/API/
+  代理响应统一带 CSP（内联 boot 脚本逐响应 nonce，script 不开放 unsafe-inline）、
+  COOP、no-referrer、nosniff 与 frame deny，Electron renderer 显式启用 sandbox。
+  SSH 隧道/systemd/白名单 run 全部强制 `StrictHostKeyChecking=yes`，askpass 不再代答
+  主机密钥确认；密码镜像使用 write-through 持久化语义并强制 owner-only 权限。
+  桌面 dsh runtime 的精确版本和 frozen lock 只用于可复现的本地内嵌 runtime，不约束
+  远程实例版本；远程仅做协议能力兼容检查。
+  **2026-08-20 安全/性能复查修复**：Electron IPC 仅接受当前主窗口 main frame 的
+  精确 `/` 壳文档；materialize 仅接收插件名，由主进程重读权威 manifest、realpath
+  并核验 package name。控制面 Origin 收紧为当前 Host 精确同源或显式 allowlist；
+  代理加入 HTTP/WS/SSE/请求体预算、慢上传和上游空闲超时，实例、密码、插件等输入
+  均有限额；慢上传失败会取消请求 iterator，重建请求会剥离原始 framing/proxy 头。
+  管理面 health-events SSE 将 `write() === false` 作为背压而非断连处理：每客户端
+  至多排队 32 个状态帧、`drain` 后按序刷新，溢出/异常/断连统一释放订阅与监听器。
+  插件子进程改为异步、有界输出和超时终止；askpass 目录与助手均为 owner-only
+  0700（助手由 OpenSSH 直接执行），助手名带 owner PID。聚合轮询并发限制为 4、
+  后台预热远端限制为 3，删除实例会释放 client，
+  布局共享订阅改为单监听 + WeakRef。boot manifest JSON 做 script-context 转义，WS 101
+  只透传握手白名单头，transport 只接受 loopback origin，HTTP server 增加连接与超时
+  上限；macOS Developer ID 探测完成前更新下载保持 fail-closed。Actions 固定完整 commit
+  SHA，公开 release 缺签名、公证凭据或产物验签失败即不发布。
+  发布凭据预检发生在删除同标签旧 Release 之前，缺凭据失败不会先破坏已有发布记录。
+  bundle 会清理中断的 `.dsh-src-<pid>` 暂存树；打包将 runtime 根文件与
+  `vendor/dsh/node_modules` 分成两个 extraResources FileSet（规避 electron-builder
+  跳过 FileSet 根级 `node_modules`），afterPack 对 macOS/Windows 均校验 dsh manifest、
+  版本与目标平台，不完整产物直接失败。macOS 产物显式关闭 ATS 全局任意加载，仅为
+  loopback 控制面保留明文 HTTP 例外。runtime 的
+  `pnpm-lock.yaml` 是 `packages/desktop/vendor` 中唯一纳入版本控制的文件，保证干净
+  checkout 首次封装也能执行 frozen install，其余 runtime 产物仍全部忽略。
 - **移出项**（P3 硬纪律，永不回流）：认证/审计（密码/Passkey/会话 cookie/client token/
   限流/审计 SQLite）、控制面薄壳聊天/会话列表/审批弹窗、控制面会话运行时/统一索引/
   交互管线、连接注入适配器/broker/绑定、walkthrough、notifications、cron、文件夹/笔记、
