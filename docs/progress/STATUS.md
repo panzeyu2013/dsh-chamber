@@ -69,6 +69,18 @@
   schema-form 深导入迁 ui-renderer / settingsSchema 服务——代码已按 rc.8 验证
   通过，因 pnpm 11 在本地符号链接 vendor 下重写锁文件会剪除 vendor importer 记录
   （AGENTS.md 已知问题），锁文件需按仓库 CI/受管快照流程重新生成后方可合入。
+  **rc.8 commands wire 兼容桥（2026-08 修复「无法调整 session 权限」）**：rc.8
+  宿主 `commands.execute` Typert Remote 新增必填 `images` 参数（上游
+  8d9fee19f9 起），rc.7 形状客户端缺该参数 → rc.8 宿主拒绝/崩溃 → 经
+  `session.command` 的所有斜杠命令（Access 权限芯片 `/permission` 切换在内）
+  静默失败。修复：`dsh-client-connection` 的
+  `rc8-commands-compat.ts`（纯函数：版本判定 + 幂等改写），`rpc.ts` 对
+  `commands/execute` 端点按 **`host.describe` 权威版本**（>= 0.1.0-rc.8）注入
+  `images: []`；rc.7 宿主（多余字段会被严格参数核对拒绝）与未知版本一律不注入。
+  临时桥——rc.8 baseline 对齐（harness.commit → 141eb6fef8）后移除（rc.8 客户端
+  自带 `images: []`），见设计 09 §4 待办。新增 `pnpm run test:connection`（8
+  用例：版本门 / 幂等改写 / 非 args 透传）并入 CI 与 AGENTS.md 验证清单。复验 ✓
+  （typecheck / test:connection 8）。
   **v0.1.3 发布前 review（2026-08-20）**：容错判定规则提取为 React-free 纯函数
   模块（`dsh-client-web/src/boot-tolerance.ts`：sweep 逐行裁决 + renderer 安装
   裁决），boot.tsx/app-shell.ts 接入同一规则，新增 `pnpm run test:client-web`

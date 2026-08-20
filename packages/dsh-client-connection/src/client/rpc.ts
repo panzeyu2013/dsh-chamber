@@ -20,6 +20,7 @@ import {
 import type { ClientConnectionRpc } from '../rpc.ts'
 import { resolveInstanceBasePath } from '../api-path.ts'
 import { randomUuid } from './random-uuid.ts'
+import { applyCommandsExecuteCompat, COMMANDS_EXECUTE_ENDPOINT } from './rc8-commands-compat.ts'
 
 const INTERNAL_BASE = 'http://dsh.internal'
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
@@ -29,25 +30,41 @@ const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 export interface WebConnectionRpcOptions {
   /** Per-instance api base path: `/api` (stock, no prefix) or `/api/i/<id>`. */
   basePath?: string
+  /**
+   * chamber patch (rc.8 wire compat bridge, rc8-commands-compat.ts): the
+   * AUTHORITATIVE host version getter, read per call. The connection
+   * publishes it from the `host.describe` handshake; undefined while not
+   * connected (the compat then stays inert).
+   */
+  hostVersion?: () => string | undefined
 }
 
 /**
  * Create the browser-backed generic RPC caller.
- * @param options - chamber patch: optional per-instance base path override.
+ * @param options - chamber patch: optional per-instance base path override
+ *   and host-version getter (rc.8 commands wire compat).
  * @returns caller that owns request correlation and response-envelope validation.
  */
 export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): ClientConnectionRpc {
   /** chamber patch: resolved prefix injected before the channel path ('' = stock). */
   const basePath = resolveInstanceBasePath(options.basePath)
+  const hostVersion = options.hostVersion
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)
+      // chamber patch (rc.8 wire compat bridge): the rc.8 host `commands.execute`
+      // requires the `images` argument this rc.7-shaped shell omits — inject it
+      // for rc.8+ hosts only, keyed on the authoritative host version (an extra
+      // field would be rejected by rc.7-era hosts, so the shim never fires there).
+      const body = endpoint === COMMANDS_EXECUTE_ENDPOINT
+        ? applyCommandsExecuteCompat(payload, hostVersion?.())
+        : payload
       const rpcId = RpcId(randomUuid())
       const message: ClientRequest = {
         type: 'client-request',
         rpcId,
         method: endpoint,
-        payload,
+        payload: body,
       }
       const response = await globalThis.fetch(
         new URL(`${basePath}${channel}/${endpoint}`, resolveBase()),

@@ -41,6 +41,7 @@
     "test:settings-bridge": "node packages/dsh-chamber-client-ui-settings-bridge/test/busy-enter-policy.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/permission-controller.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/mount-retry.ts && node packages/dsh-chamber-client-ui-settings-bridge/test/nav-active.ts",
     "test:connections": "node packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-diff.test.ts",
     "test:client-web": "node packages/dsh-client-web/tests/boot-tolerance.test.ts",
+    "test:connection": "node packages/dsh-client-connection/test/rc8-commands-compat.test.ts",
     "test:renderer-shell": "node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/host-graph.test.ts && node --import ./scripts/test-shell-register.mjs packages/renderer/src/shell.test.ts"
   },
   "devDependencies": {

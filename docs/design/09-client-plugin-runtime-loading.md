@@ -231,6 +231,14 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   实例 boot 失败。**rc.8 后端适配（2026-08）**：壳种子词表与 rc.8 官方一致
   （平台词 = 永不成为图行的包，`dsh-client-ui-attachment` 等出种子词表），
   app-shell renderer 安装容错（后端 `ui-renderer` 行先装则采纳）。
+  **rc.8 commands wire 兼容桥（2026-08）**：除 boot/渲染外，rc.8 还改了宿主
+  `commands.execute` Typert Remote 签名（新增必填 `images` 参数，上游
+  8d9fee19f9）——rc.7 形状客户端（本壳）向 rc.8+ 宿主发命令会被网关严格参数
+  核对拒绝或宿主崩溃，Access 权限芯片 `/permission` 切换等一切经
+  `session.command` 的斜杠命令静默失效。临时桥在 `dsh-client-connection`
+  （rc8-commands-compat.ts + rpc.ts）按 `host.describe` 权威版本为
+  rc.8+ 宿主注入 `images: []`，rc.7 宿主不受影响；**rc.8 baseline 对齐后整体
+  移除**（rc.8 客户端自带该参数）。
   **待办（rc.8 baseline 完整对齐）**：harness.commit → 141eb6fef8 后，复合延迟族
   +3 覆盖（ui-attachment / ui-brand-official / ui-reference）、ui-renderer 归
   page-own（renderer 移入 dsh-client-ui-renderer 源）、boot.tsx 迁 rc.8 模块系统

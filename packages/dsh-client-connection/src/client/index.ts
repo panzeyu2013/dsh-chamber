@@ -114,9 +114,15 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
   const basePath = resolveInstanceBasePath(config?.basePath)
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
   const api: IApiClient = fixtureClient ?? new WebApiClient({ basePath })
-  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc({ basePath })
-  let started = false
+  // Published by the readiness handshake (host.describe) once the connection
+  // is established; the generic RPC caller reads it per call for the rc.8
+  // commands wire compat bridge (rpc.ts / rc8-commands-compat.ts).
   let description: HostDescription | undefined
+  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc({
+    basePath,
+    hostVersion: () => description?.version,
+  })
+  let started = false
   const descriptionListeners = new Set<() => void>()
   const publishDescription = (next: HostDescription | undefined): void => {
     if (Object.is(description, next)) return
