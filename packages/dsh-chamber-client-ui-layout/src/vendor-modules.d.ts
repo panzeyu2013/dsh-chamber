@@ -10,6 +10,14 @@
  * packages/dsh-chamber-client-ui-sidebar/src/vendor-modules.d.ts). The
  * fork's own code stays fully checked; the loose faces are the dsh seam.
  *
+ * Deliberately NO package.json dependency on @deepseek-ai/dsh-client-ui-layout
+ * (the official package this fork replaces): a declared peer/dep would link
+ * the real vendor source into this package's node_modules and pull it into
+ * the tsc program, defeating the ambient shadow above (the vendor source
+ * fails under this package's strict config). The fork consumes the official
+ * frame purely as these ambient deep-path faces; the renderer compiles the
+ * real source via vite aliases.
+ *
  * No top-level imports: a top-level import would turn this file into a module
  * and demote every `declare module` below to an augmentation of a module that
  * does not exist here. Types are referenced through inline `import(...)`.

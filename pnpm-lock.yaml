@@ -176,9 +176,6 @@ importers:
       '@deepseek-ai/dsh-client-connection':
         specifier: workspace:^
         version: link:../dsh-client-connection
-      '@deepseek-ai/dsh-client-ui-directory-picker-browse':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-directory-picker-browse
       clsx:
         specifier: ^2.0.0
         version: 2.1.1
@@ -195,6 +192,9 @@ importers:
       '@deepseek-ai/dsh-client-test-runtime':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-test-runtime
+      '@deepseek-ai/dsh-client-ui-directory-picker-browse':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-directory-picker-browse
       '@deepseek-ai/dsh-client-ui-layout':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-layout
