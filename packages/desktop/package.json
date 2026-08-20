@@ -49,7 +49,19 @@
     "extraResources": [
       {
         "from": "vendor/dsh",
-        "to": "vendor/dsh"
+        "to": "vendor/dsh",
+        "filter": [
+          "package.json",
+          "pnpm-lock.yaml",
+          "pnpm-workspace.yaml"
+        ]
+      },
+      {
+        "from": "vendor/dsh/node_modules",
+        "to": "vendor/dsh/node_modules",
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "resources/icon.png",

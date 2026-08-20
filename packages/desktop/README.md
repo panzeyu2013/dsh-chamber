@@ -51,7 +51,7 @@ pnpm run dist:desktop
 
 ### bundle-dsh：dsh 运行时封装（scripts/bundle-dsh.mjs）
 
-- **dsh 运行时 = 官方发布包**：脚本用 `pnpm add @deepseek-ai/dsh@0.1.0-rc.7`（默认精确 pin；`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
+- **dsh 运行时 = 官方发布包**：脚本用 `pnpm add @deepseek-ai/dsh@0.1.0-rc.8`（默认精确 pin；`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
 - 构建工具固定为 `pnpm@11.21.0`；PATH 不匹配时自动以
   `npx --yes pnpm@11.21.0` 兜底，不解析浮动 major tag。
 - pnpm 11 两个坑（bundle-dsh 已处理）：① 默认拦截依赖构建脚本 → 生成的 `pnpm-workspace.yaml` 用 `allowBuilds` 白名单放行 node-pty/koffi/protobufjs/@google/genai/@deepseek-ai/dsh-subprocess-local（原生模块）；② 默认发布年龄策略可能过滤指定版本 → 临时 workspace 使用 `minimumReleaseAge: 0`，但输入仍必须是精确 semver，不引入浮动解析。
@@ -67,7 +67,7 @@ pnpm run dist:desktop
 
 ### electron-builder 配置要点（packages/desktop/package.json 的 `build` 键）
 
-- `files` 只收主进程/预加载/transport/settings/plugin-sync 源文件、package.json 与 dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经精确的 `extraResources`（`from: "vendor/dsh", to: "vendor/dsh"`）拷入 `Contents/Resources/vendor/dsh`，暂存树和交换备份不会进入产物。
+- `files` 只收主进程/预加载/transport/settings/plugin-sync 源文件、package.json 与 dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经两个精确的 `extraResources` FileSet 拷入产物：根 manifest/lock/workspace 文件一组，`vendor/dsh/node_modules` 作为独立复制根一组（electron-builder 会无条件忽略任一 FileSet 根下名为 `node_modules` 的直接子目录，不能只复制 `vendor/dsh`）。`afterPack` 在生成 DMG/ZIP/NSIS 前校验 dsh package manifest、版本与目标平台，缺失/漂移直接使打包失败；暂存树和交换备份不会进入产物。
 - `electronLanguages: ["en-US", "zh-CN"]` 裁剪 locales。
 - **更新 feed（设计 11 §6）**：`publish` 配 github provider（owner/repo）；mac target 增加 `zip`（electron-updater mac 需要 zip，dmg 保留首装）；`nsis.differentialPackage: false`（Windows 不生成/发布 exe blockmap，更新回退完整下载）；channel 由 electron-builder 从版本 semver prerelease 后缀自动推导（`0.2.0` → latest.yml，`0.2.0-beta.1` → beta.yml）——`--publish=never` 不生成 update-info yml，发布必须走 `--publish`（release.yml 以 GH_TOKEN 执行）。
 - CI 普通构建/dry-run 可生成 ad-hoc/未签名产物；**公开 release fail-closed**：macOS

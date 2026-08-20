@@ -309,8 +309,11 @@
   上限；macOS Developer ID 探测完成前更新下载保持 fail-closed。Actions 固定完整 commit
   SHA，公开 release 缺签名、公证凭据或产物验签失败即不发布。
   发布凭据预检发生在删除同标签旧 Release 之前，缺凭据失败不会先破坏已有发布记录。
-  bundle 会清理中断的 `.dsh-src-<pid>` 暂存树，打包只复制 `vendor/dsh`；macOS 产物
-  显式关闭 ATS 全局任意加载，仅为 loopback 控制面保留明文 HTTP 例外。runtime 的
+  bundle 会清理中断的 `.dsh-src-<pid>` 暂存树；打包将 runtime 根文件与
+  `vendor/dsh/node_modules` 分成两个 extraResources FileSet（规避 electron-builder
+  跳过 FileSet 根级 `node_modules`），afterPack 对 macOS/Windows 均校验 dsh manifest、
+  版本与目标平台，不完整产物直接失败。macOS 产物显式关闭 ATS 全局任意加载，仅为
+  loopback 控制面保留明文 HTTP 例外。runtime 的
   `pnpm-lock.yaml` 是 `packages/desktop/vendor` 中唯一纳入版本控制的文件，保证干净
   checkout 首次封装也能执行 frozen install，其余 runtime 产物仍全部忽略。
 - **移出项**（P3 硬纪律，永不回流）：认证/审计（密码/Passkey/会话 cookie/client token/
