@@ -48,6 +48,7 @@ import {
 import * as AppShell from './app-shell.ts'
 import { APP_SHELL_ID } from './app-shell.ts'
 import { AppRoot } from './AppRoot.tsx'
+import { classifySweepEntry } from './boot-tolerance.ts'
 import { getStaticModules } from './seed.ts'
 import { STATE_LABELS, createLoaderStatusStore, createSignal } from './loader-status.ts'
 import './base.css'
@@ -281,18 +282,40 @@ export class AppWebEntry {
     // kernel: it is shell-own code (host graph rows are all plugin bundles),
     // and mounting the assembly is not a composition decision — it rides the
     // same entry lifecycle so the sweep and status cover it uniformly.
+    //
+    // chamber patch (2026-08, version-tolerance): EXTRA rows (the per-instance
+    // host-graph rows this shell does not cover) degrade instead of failing
+    // the boot. The composite bundles ONE dsh client version; a backend of a
+    // NEWER/older dsh can ship rows the shell cannot run — a row whose id is
+    // also a shell seed word (the module system resolves seed before factory,
+    // so the entry materializes the static namespace — "invalid plugin"), a
+    // row registering into slots this shell's ui-* does not declare, or a row
+    // re-installing a service the shell already provides (e.g. rc.8 moved the
+    // slot-renderer install out of the shell into a ui-renderer row). Those
+    // are version skew, not corruption: the row's features are simply absent
+    // from this shell. The instance must keep booting. Fail-loud stays for
+    // the MANIFEST rows and the app-shell assembly (corruption there is fatal
+    // by design); extra-row failures are logged loud and marked 'failed' in
+    // the status store.
+    const toleratedIds = new Set(this.extraRows?.map(row => row.id) ?? [])
     await Promise.all(rows.map(async (name) => {
       this.status.set(name, 'loading')
-      const id = await loader.create({ name })
-      // A failed import leaves the entry fiberless (Entry._init logs and
-      // returns); project it as failed — no fiber means no status event.
-      if (loader.resolve(id).fiber === undefined) {
+      try {
+        const id = await loader.create({ name })
+        // A failed import leaves the entry fiberless (Entry._init logs and
+        // returns); project it as failed — no fiber means no status event.
+        if (loader.resolve(id).fiber === undefined) {
+          this.status.set(name, 'failed')
+        }
+      } catch (error) {
+        if (!toleratedIds.has(name)) throw error
+        console.error(`[web-shell] extra row "${name}" could not materialize; its features are unavailable on this shell version`, error)
         this.status.set(name, 'failed')
       }
     }))
 
     await loader.await()
-    this.assertEntriesActive()
+    this.assertEntriesActive(toleratedIds)
   }
 
   /**
@@ -300,24 +323,39 @@ export class AppWebEntry {
    * fiber failed its import; a fiber not ACTIVE is FAILED (apply threw) or
    * PENDING (a required service never arrived — cordis inject waiting has no
    * timeout, so this sweep is the fail-loud compensation).
+   *
+   * ## chamber patch (2026-08, version-tolerance)
+   *
+   * `toleratedIds` (the per-instance EXTRA rows) are swept but never fail the
+   * boot: a version-skewed foreign row simply marks 'failed' in the status
+   * store (and its apply error was already logged by the loader). Only the
+   * manifest rows and the app-shell assembly are fatal. The per-entry
+   * decision rules live in boot-tolerance.ts (pure + unit-tested); this loop
+   * only drives the verdicts into the status store / failure list.
    */
-  private assertEntriesActive(): void {
+  private assertEntriesActive(toleratedIds: ReadonlySet<string> = new Set()): void {
     const ctx = this.ctx!
     const failures: string[] = []
     for (const entry of ctx.loader.entries()) {
       const name = entry.options.name
-      if (entry.fiber === undefined) {
-        failures.push(`${name}: import failed (see console for the import error)`)
+      const fiber = entry.fiber
+      const fiberLabel = fiber === undefined ? undefined : STATE_LABELS[fiber.state]
+      const verdict = classifySweepEntry(
+        name,
+        fiberLabel,
+        toleratedIds,
+        // The missing-service list is only meaningful for a PENDING fiber
+        // (fiber defined); computing it for any other state is dead work.
+        fiberLabel === 'pending' && fiber !== undefined
+          ? Object.keys(fiber.inject).filter(service => ctx.get(service) === undefined)
+          : [],
+      )
+      if (verdict.kind === 'ok') continue
+      if (verdict.kind === 'degraded') {
+        this.status.set(name, 'failed')
         continue
       }
-      const state = STATE_LABELS[entry.fiber.state]
-      if (state === 'active') continue
-      if (state === 'pending') {
-        const missing = Object.keys(entry.fiber.inject).filter(service => ctx.get(service) === undefined)
-        failures.push(`${name}: pending (waiting for service${missing.length === 1 ? '' : 's'}: ${missing.join(', ') || 'unknown'})`)
-      } else {
-        failures.push(`${name}: ${state}`)
-      }
+      failures.push(verdict.reason)
     }
     if (failures.length > 0) {
       throw new Error(`web boot: ${String(failures.length)} entr${failures.length === 1 ? 'y' : 'ies'} did not activate\n${failures.join('\n')}`)

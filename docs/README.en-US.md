@@ -46,6 +46,7 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Desktop updates** — silent version checks, a low-key Settings "Update" section, download only after confirmation, install on quit
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
 - **Chamber settings page** — fixed Settings-shell entries: Connections / General / Update; chamber-global settings stay strictly separate from per-instance config planes
+- **Backend version tolerance (rc.8 compatible)** — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash); headless-verified against an rc.8 backend
 - **Security & privacy** — the control plane listens on loopback only (127.0.0.1); SSH passwords are stored 0600 and injected via an ephemeral askpass helper — never in logs, the registry, or the UI
 
 ## Server-side deployment

@@ -69,13 +69,28 @@ const bundleRev = shortHash(readFileSync(bundlePath))
 
 /**
  * The manifest-row url AND the modulepreload href are ONE address, built here
- * in a single place: root-relative `/${bundleFile}?rev=${bundleRev}`. The
- * preload must reuse this exact value — never a relative `./` form — so that
- * the boot graph's script fetch resolves to the same resource under any
+ * in a single place: root-relative `/${bundleFile}` (NO `?rev=` query).
+ *
+ * > chamber patch (2026-08, deferred-family regression fix): the query was
+ * > dropped on purpose. The vite chunk graph references the chamber entry
+ * > bundle BARE (`./chamber-<hash>.js` — shared utilities are hoisted into
+ * > the entry chunk and the deferred ui-* chunks import them from it). A
+ * > `?rev=` on the boot-time load makes the browser treat it as a DIFFERENT
+ * > module record from the chunk graph's bare reference; loading a deferred
+ * > chunk then RE-EXECUTES the chamber entry bundle, whose top-level
+ * > `__ModuleLoader__.load({id:'@dsh-chamber/app'})` hits the module table's
+ * > duplicate-registration sink — the dynamic import rejects, the deferred
+ * > ui-* family never registers, and every tool-call node renders the
+ * > "未知 surface 事件：tool-call" fallback. The filename hash is already the
+ * > immutability marker (rebuilt assets get a new name → new URL), so the
+ * > query adds nothing but the double-execution.
+ *
+ * The preload must reuse this exact value — never a relative `./` form — so
+ * that the boot graph's script fetch resolves to the same resource under any
  * mount point (origin root today, a sub-path in the future) and reuses the
  * preloaded fetch. Keep the two in lockstep; they must never diverge.
  */
-const bundleUrl = `/${bundleFile}?rev=${bundleRev}`
+const bundleUrl = `/${bundleFile}`
 
 const entries = [{
   id: CHAMBER_ID,
@@ -108,13 +123,16 @@ let html = readFileSync(INDEX_HTML, 'utf8')
 // Electron HTTP cache.
 const preload = `<link rel="modulepreload" crossorigin href="${bundleUrl}" />`
 // In-place rewrite, never accumulate: drop any stale chamber preload line
-// (older builds emitted a relative `./` href that only resolved like the
-// boot fetch at origin root — a sub-path mount would double-fetch) so the
-// head holds at most one preload — the canonical absolute href below. The
-// dedupe guard keeps repeated runs a silent no-op.
+// (older builds emitted a relative `./` href, or a `?rev=`-carrying href in
+// either the relative or the absolute form — all diverged from the vite chunk
+// graph's bare reference) so the head holds at most one preload — the
+// canonical absolute bare href below. The dedupe guard keeps repeated runs a
+// silent no-op.
 html = html
   .split('\n')
-  .filter((line) => !line.includes(`href="./${bundleFile}?rev=${bundleRev}"`))
+  .filter((line) => !line.includes(`href="./${bundleFile}"`)
+    && !line.includes(`href="./${bundleFile}?rev=`)
+    && !line.includes(`href="/${bundleFile}?rev=`))
   .join('\n')
 if (!html.includes(preload)) {
   html = html.includes('</head>')

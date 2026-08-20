@@ -10,6 +10,39 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [0.1.3] - 2026-08-20
+
+### 新增
+
+- **rc.8 后端版本容忍（设计 09 §3.3 修订）** —— 实例后端 dsh 官方前端版本与
+  chamber 壳不同步时不再整 boot 崩溃：壳未覆盖的宿主图额外行（含 rc.8 新增
+  `dsh-client-ui-attachment` client half 等核心行）apply/materialize 失败降级为
+  **特性缺席**（console.error + status `failed`，shell 照常 boot）；壳种子词表对齐
+  rc.8 官方平台集（平台词 = 永不成为图行的包）；app-shell renderer 安装容错（后端
+  `ui-renderer` 行先装则采纳）；chamber 入口 bundle 装载去 `?rev=`（与 vite chunk
+  图裸引用同 URL → 延迟 ui-* 族不再二次执行入口 bundle，duplicate factory 消失）。
+- **boot 容错决策规则单测（`pnpm run test:client-web`）** —— 版本容忍判定规则
+  提取为纯函数模块（`dsh-client-web/src/boot-tolerance.ts`）并纳入 CI 单测面，
+  后续改动不再靠人工回归。
+
+### 修复
+
+- 实例运行 rc.8 官方前端时 chamber 渲染器 boot 崩溃（seed 词表遮蔽 factory →
+  "invalid plugin"），现降级为特性缺席、实例照常可用。
+- 延迟加载的 ui-* 族导致 tool-call 节点渲染"未知 surface 事件"兜底文案（chamber
+  入口 bundle 因 `?rev=` 与 chunk 图裸引用被浏览器视为不同模块而二次执行）。
+- 后端 `ui-renderer` 行先装 slot-renderer 时 app-shell 整 boot 失败，现采纳已装
+  renderer。
+- boot 容错日志措辞与实际失败类型对齐；manifest 预加载行去重过滤覆盖旧的 `?rev=`
+  残留形式。
+
+### 变更
+
+- 壳种子词表移除 rc.7 遗留平台词（`dsh-client-web-react` /
+  `dsh-client-ui-attachment` / `dsh-client-schema-form`），与 rc.8 官方一致。
+- 设计 09 失败降级语义按层表述：加载失败响亮归预加载层（collectExtraRows），
+  apply/materialize 失败降级归 boot 内核层。
+
 ## [0.1.2] - 2026-08-19
 
 ### 新增
@@ -71,6 +104,7 @@
 
 v1 范围：无认证/审计面（仅 loopback 控制面）。
 
+[0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1
 [0.1.0]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.0

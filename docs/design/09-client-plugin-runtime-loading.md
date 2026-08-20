@@ -198,7 +198,22 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   提供完整官方壳，仅丢失 profile 新装的插件；畸形图响亮报错——错图是 boot 危害，
   不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默（图通道不可达
   时的语义 = "本实例无额外插件"）。额外 **bundle 加载**失败**不降级**——响亮失败、
-  该实例 boot 报错呈现（坏插件绝不静默消失，§4 fail-loud）。
+  该实例 boot 报错呈现（坏插件绝不静默消失，§4 fail-loud）。**分层表述（2026-08
+  精度修订）**："加载"由 chamber 预加载层负责（host-graph.ts `collectExtraRows`
+  的 `loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败）；预加载成功后内核
+  不再为额外行发起新加载（factory 已注册进共享模块表），故 boot 内核层见到的额外
+  行失败只剩 materialize/apply 一类，按下一条降级——"加载失败响亮"与"apply 失败
+  降级"各归各层，不重叠也不遗漏。
+- **额外行 apply 失败降级（2026-08，版本容忍修订，模块 D）**：额外行**加载
+  成功但 entry 未能 apply**（materialize 出非插件对象——如壳种子词表把
+  `dsh-client-ui-attachment` 静态注册、rc.8 后端新增其 client half 后 seed 遮蔽
+  factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务——
+  rc.8 把 slot-renderer 安装移出壳进了 `ui-renderer` 行）→ **降级不致命**：
+  console.error + status 'failed'，shell 照常 boot（boot.tsx 对 extraRows 逐行
+  容错 + sweep 排除）。理由：复合 bundle 固定一个 dsh client 版本，"后端 dsh 版本
+  ≠ 壳版本"时新/旧核心行与壳不兼容是**正常条件**（特性缺席），不是损坏（§4
+  fail-loud 保留给 manifest 行/app-shell 装配的损坏，以及额外 bundle 的加载失败——
+  预加载层，传输/缺失才是损坏信号；boot 内核层对额外行只区分 materialize/apply）。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
 
@@ -211,7 +226,17 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，
   不降级。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
-  两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。
+  两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
+  落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.3 apply 降级），绝不使
+  实例 boot 失败。**rc.8 后端适配（2026-08）**：壳种子词表与 rc.8 官方一致
+  （平台词 = 永不成为图行的包，`dsh-client-ui-attachment` 等出种子词表），
+  app-shell renderer 安装容错（后端 `ui-renderer` 行先装则采纳）。
+  **待办（rc.8 baseline 完整对齐）**：harness.commit → 141eb6fef8 后，复合延迟族
+  +3 覆盖（ui-attachment / ui-brand-official / ui-reference）、ui-renderer 归
+  page-own（renderer 移入 dsh-client-ui-renderer 源）、boot.tsx 迁 rc.8 模块系统
+  bootstrap API、web-react / schema-form 深导入迁 ui-renderer / settingsSchema
+  服务——代码已验证，锁文件需按仓库 CI/受管快照流程再生成（pnpm 11 本地符号
+  链接 vendor 下重写会剪除 vendor importer 记录，AGENTS.md 已知问题）。
 
 ## 5. 实施分期（M1–M4 均已落地；验证记录见 STATUS）
 

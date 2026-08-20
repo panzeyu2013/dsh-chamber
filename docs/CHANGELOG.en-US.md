@@ -10,6 +10,50 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [0.1.3] - 2026-08-20
+
+### Added
+
+- **rc.8 backend version tolerance (design 09 §3.3 revision)** — an instance
+  whose backend dsh frontend version differs from the chamber shell no longer
+  fails the whole boot: extra host-graph rows the shell does not cover
+  (including core rows rc.8 added, e.g. the `dsh-client-ui-attachment` client
+  half) degrade to **absent features** on apply/materialize failure
+  (console.error + status `failed`; the shell boots normally). The shell seed
+  word table aligns with the official rc.8 platform set (a platform word can
+  never be a graph row); the app-shell renderer install tolerates a backend
+  `ui-renderer` row installing first (it adopts the installed renderer); the
+  chamber entry bundle loads WITHOUT the `?rev=` query (same URL as the vite
+  chunk graph's bare reference — deferred ui-* chunks no longer re-execute
+  the entry bundle and the duplicate-factory sink no longer fires).
+- **Boot-tolerance decision-rule unit tests (`pnpm run test:client-web`)** —
+  the tolerance policy is extracted into a pure module
+  (`dsh-client-web/src/boot-tolerance.ts`) and added to the CI unit-test
+  surface.
+
+### Fixed
+
+- Chamber renderer boot crash against an rc.8 official frontend (seed word
+  shadowing the factory → "invalid plugin"); now degrades to absent features
+  and the instance boots normally.
+- Deferred ui-* families rendering the "unknown surface event: tool-call"
+  fallback (the chamber entry bundle was double-executed because `?rev=`
+  made the browser treat the boot-time load as a different module record
+  than the chunk graph's bare reference).
+- App-shell whole-boot failure when a backend `ui-renderer` row installed the
+  slot renderer first; the already-installed renderer is now adopted.
+- Boot-tolerance log wording aligned with the actual failure type; the
+  manifest preload dedupe filter now also strips stale `?rev=` forms.
+
+### Changed
+
+- The shell seed word table drops the rc.7-era platform words
+  (`dsh-client-web-react` / `dsh-client-ui-attachment` /
+  `dsh-client-schema-form`), matching the official rc.8 set.
+- Design 09's failure-degrade semantics are stated per layer: load failures
+  stay loud at the preload layer (collectExtraRows), apply/materialize
+  failures degrade at the boot-kernel layer.
+
 ## [0.1.2] - 2026-08-19
 
 ### Added
@@ -127,6 +171,7 @@ Initial release — local desktop connection manager for dsh:
 
 v1 scope: no authentication/audit surface (loopback-only control plane).
 
+[0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1
 [0.1.0]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.0

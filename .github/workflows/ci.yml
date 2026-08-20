@@ -58,11 +58,12 @@ jobs:
           pnpm run typecheck:connections
           pnpm run typecheck:settings-bridge
           pnpm run typecheck:client-web
-      - name: Client plugin unit tests (sidebar / settings-bridge / connections)
+      - name: Client plugin unit tests (sidebar / settings-bridge / connections / client-web)
         run: |
           pnpm run test:sidebar
           pnpm run test:settings-bridge
           pnpm run test:connections
+          pnpm run test:client-web
       - name: Smoke test
         run: pnpm run smoke
       - name: Renderer build

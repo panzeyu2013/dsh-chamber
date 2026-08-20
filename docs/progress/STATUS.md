@@ -48,7 +48,39 @@
   collectExtraRows 预加载之前装好（首个带额外行的 boot 不再让官方 bundle 在
   sink 安装前求值）；shell.ts bootError 分支经测试 loader + fixture 单测覆盖
   （`shell.test.ts`，`--import scripts/test-shell-register.mjs`）。
-  详见设计 09 §3.2。
+  详见设计 09 §3.2。**版本容忍与 rc.8 后端适配（2026-08，v0.1.2 回归修复）**：
+  - **额外行 apply 失败降级**（boot.tsx 对 extraRows 容错 + sweep 排除，替代
+    "任一额外行失败即整 boot 失败"——版本漂移 = 特性缺席而非损坏，见设计 09 §3.3
+    修订）：rc.8 后端新增的 `dsh-client-ui-attachment` 等核心 client half 作为
+    额外行无法在本壳运行时降级为特性缺席，实例照常 boot（此前 seed 遮蔽 factory
+    会整 boot 崩溃）；
+  - **壳种子词表对齐 rc.8 官方**（平台词 = 永不成为图行的包；`dsh-client-ui-
+    attachment` 出种子词表——seed 遮蔽 factory 是 rc.8 后端 boot 崩溃的根因之一）；
+  - **chamber entry 装载去 `?rev=`**（vite chunk 图裸引用与 boot 加载同 URL →
+    延迟 ui-* 族不再二次执行入口 bundle → duplicate factory 消失，tool-call 兜底
+    渲染修复）；
+  - **app-shell renderer 安装容错**（后端行已装 renderer 时采纳，不双装报错）。
+  无头验证：rc.8 后端（实例 rc.8 官方前端 + rc.7 复合壳）下 chamber 渲染器 boot
+  成功、50 个 tool-call 节点零兜底、设置页渲染正常。
+  待办（rc.8 baseline 完整对齐，需走仓库锁文件再生成流程）：harness.commit →
+  141eb6fef8（dsh 0.1.0-rc.8）后，复合延迟族 +3 覆盖（ui-attachment /
+  ui-brand-official / ui-reference）、ui-renderer 归 page-own（renderer 移入
+  dsh-client-ui-renderer 源）、boot.tsx 迁 rc.8 模块系统 bootstrap API、web-react/
+  schema-form 深导入迁 ui-renderer / settingsSchema 服务——代码已按 rc.8 验证
+  通过，因 pnpm 11 在本地符号链接 vendor 下重写锁文件会剪除 vendor importer 记录
+  （AGENTS.md 已知问题），锁文件需按仓库 CI/受管快照流程重新生成后方可合入。
+  **v0.1.3 发布前 review（2026-08-20）**：容错判定规则提取为 React-free 纯函数
+  模块（`dsh-client-web/src/boot-tolerance.ts`：sweep 逐行裁决 + renderer 安装
+  裁决），boot.tsx/app-shell.ts 接入同一规则，新增 `pnpm run test:client-web`
+  单测 9 项（含失败报告字符串逐字断言，防重构改规则）并入 CI 与 AGENTS.md 验证
+  清单；app-shell 采纳后端 renderer 的运行中生命周期尾门（行 fiber 卸载清
+  `slots._renderer`）注释在案；容错日志措辞对齐实际失败类型（materialize 而非
+  load）；manifest 预加载去重过滤补 `?rev=` 残留形式；设计 09 §3.3 失败降级语义
+  按层表述（加载失败响亮归预加载层，apply 失败降级归 boot 内核层）。复验 ✓
+  （typecheck / typecheck:client-web / test:client-web 9 / test:renderer-shell 5 /
+  test:sidebar 131 / test:settings-bridge 28 / test:connections 17 /
+  build:renderer / verify:i18n；rc.8 后端实机验证同前条无头记录，本工作区基线
+  仍为 rc.7 99f6f02f，不可复现）。
 - **侧边栏聚合改事件驱动（设计 10）**：实现未排期——改动 05 §3 契约，需评审确认；详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
 - **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程
