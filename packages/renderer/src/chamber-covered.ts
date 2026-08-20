@@ -5,17 +5,25 @@
  *
  * Two families:
  *
- * - every client plugin package the chamber composite bundle statically
- *   registers (chamber-entry.ts import list — one entry per package name):
- *   loading such a row again from the host graph would register the same
- *   plugin twice on one cordis ctx (cordis rejects the duplicate provide /
- *   slot), so these rows must be skipped, never loaded;
+ * - every client plugin package the chamber composite bundle registers
+ *   (chamber-entry.ts import list — one entry per package name): the
+ *   first-screen families via static import, the rc.8 deferred families
+ *   (ui-attachment / ui-brand-official / ui-reference) via the
+ *   registerDeferred dynamic imports. Loading any such row again from the
+ *   host graph would register the same plugin twice on one cordis ctx
+ *   (cordis rejects the duplicate provide / slot), so these rows must be
+ *   skipped, never loaded;
  * - page-own rows that must never arrive as graph extras:
  *   `@deepseek-ai/dsh-client-ui-sidebar` — the official sidebar registration
  *   the chamber sidebar REPLACES (loading it would collide on the sidebar
- *   slot), and `@deepseek-ai/dsh-client-modules` — the shell kernel adopts
- *   that entry itself (boot.tsx MODULES_ID: statically registered, never
- *   fetched), so a second entry would provide `modules` twice.
+ *   slot), `@deepseek-ai/dsh-client-modules` — the shell kernel adopts that
+ *   entry itself (boot.ts MODULES_ID: statically registered, never fetched),
+ *   so a second entry would provide `modules` twice, and (rc.8)
+ *   `@deepseek-ai/dsh-client-ui-renderer` — rc.8 moved the slot-renderer
+ *   install OUT of the shell into this row (app-shell no longer installs it;
+ *   the boot kernel mounts through the row's `ctx.uiRenderer`), so a
+ *   host-graph row would install a second renderer / provide `uiRenderer`
+ *   twice.
  *
  * Maintenance discipline: when a plugin import is added to chamber-entry.ts,
  * append its package name here in the same batch; when a row becomes
@@ -80,6 +88,13 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-permission-presets',
   '@dsh-chamber/dsh-client-ui-settings-connections',
   '@dsh-chamber/dsh-client-ui-settings-bridge',
+  // ── rc.8 deferred families (chamber-entry.ts registerDeferred dynamic
+  // imports, design 09 §4 baseline alignment): registered after the boot
+  // settles — composite-owned namespaces all the same, so a host-graph row
+  // for any of them would double-register the package on the same ctx.
+  '@deepseek-ai/dsh-client-ui-attachment',
+  '@deepseek-ai/dsh-client-ui-brand-official',
+  '@deepseek-ai/dsh-client-ui-reference',
   // ── page-own rows (see header comment) ──
   '@deepseek-ai/dsh-client-ui-sidebar',
   // The official layout registration the chamber ui-layout fork REPLACES
@@ -89,6 +104,12 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // one-declarer rule (ui-slots index.ts:800-803).
   '@deepseek-ai/dsh-client-ui-layout',
   '@deepseek-ai/dsh-client-modules',
+  // rc.8 (design 09 §4 baseline alignment): the renderer install moved OUT of
+  // the shell into this row (the shell kernel adopts it — the boot mounts
+  // through the row's ctx.uiRenderer), so a second entry would install a
+  // second slot renderer / provide `uiRenderer` twice. NOT part of the
+  // composite: chamber-entry never imports it (page-own only, no factory).
+  '@deepseek-ai/dsh-client-ui-renderer',
 ]
 
 /**

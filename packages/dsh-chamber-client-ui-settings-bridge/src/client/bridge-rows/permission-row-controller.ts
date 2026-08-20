@@ -7,9 +7,11 @@
  * so the state machine is unit-testable without the dsh runtime.
  */
 
+import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SnapshotStore } from './snapshot-store.ts'
 import { createSnapshotStore } from './snapshot-store.ts'
-import type { PermissionDefaultOption, PermissionNamespaceView } from './permission-decode.ts'
+import type { PermissionDefaultOption } from './permission-decode.ts'
 
 /** Permission's settings namespace on the host wire (official). */
 export const PERMISSION_SETTINGS_NS = 'permission'
@@ -30,14 +32,14 @@ export interface PermissionSettingsApi {
     describe(payload?: Record<string, unknown>): Promise<{
       result: {
         ok: boolean
-        value?: { namespaces: readonly PermissionNamespaceView[]; writable: boolean }
+        value?: { namespaces: readonly SettingsNamespaceView[]; writable: boolean }
         error?: { message?: string }
       }
     }>
     mutate(payload: Record<string, unknown>): Promise<{
       result: {
         ok: boolean
-        value?: PermissionNamespaceView
+        value?: SettingsNamespaceView
         error?: { message?: string }
       }
     }>
@@ -46,7 +48,8 @@ export interface PermissionSettingsApi {
 
 /** Decoder injected by the wiring (the schema-envelope decode stays out of the testable core). */
 export type PermissionViewDecoder = (
-  view: PermissionNamespaceView,
+  view: SettingsNamespaceView,
+  schema: SettingsSchemaService,
 ) => { currentValue: string; options: PermissionDefaultOption[] }
 
 /** Controller joining Settings reads, writes, and pushed invalidations. */
@@ -62,14 +65,16 @@ export class PermissionPresetSettingsController {
   })
 
   private generation = 0
-  private view: PermissionNamespaceView | undefined
+  private view: SettingsNamespaceView | undefined
   private readonly api: PermissionSettingsApi
   private readonly decode: PermissionViewDecoder
+  private readonly schema: SettingsSchemaService
 
-  /** @param api - Settings wire face. @param decode - schema-envelope decoder. */
-  constructor(api: PermissionSettingsApi, decode: PermissionViewDecoder) {
+  /** @param api - Settings wire face. @param decode - schema-envelope decoder. @param schema - settings-owned schema operations. */
+  constructor(api: PermissionSettingsApi, decode: PermissionViewDecoder, schema: SettingsSchemaService) {
     this.api = api
     this.decode = decode
+    this.schema = schema
   }
 
   /**
@@ -126,7 +131,7 @@ export class PermissionPresetSettingsController {
       })
       if (generation !== this.generation) return
       if (!response.result.ok) throw new Error(response.result.error?.message ?? 'mutate failed')
-      this.accept(response.result.value as PermissionNamespaceView, true)
+      this.accept(response.result.value as SettingsNamespaceView, true)
     } catch (error) {
       if (generation !== this.generation) return
       this.fail(error)
@@ -139,8 +144,8 @@ export class PermissionPresetSettingsController {
     this.view = undefined
   }
 
-  private accept(view: PermissionNamespaceView, writable: boolean): void {
-    const resolved = this.decode(view)
+  private accept(view: SettingsNamespaceView, writable: boolean): void {
+    const resolved = this.decode(view, this.schema)
     this.view = view
     this.store.update((state) => {
       state.status = 'ready'

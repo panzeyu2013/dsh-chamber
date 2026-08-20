@@ -231,20 +231,31 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   实例 boot 失败。**rc.8 后端适配（2026-08）**：壳种子词表与 rc.8 官方一致
   （平台词 = 永不成为图行的包，`dsh-client-ui-attachment` 等出种子词表），
   app-shell renderer 安装容错（后端 `ui-renderer` 行先装则采纳）。
-  **rc.8 commands wire 兼容桥（2026-08）**：除 boot/渲染外，rc.8 还改了宿主
-  `commands.execute` Typert Remote 签名（新增必填 `images` 参数，上游
-  8d9fee19f9）——rc.7 形状客户端（本壳）向 rc.8+ 宿主发命令会被网关严格参数
-  核对拒绝或宿主崩溃，Access 权限芯片 `/permission` 切换等一切经
-  `session.command` 的斜杠命令静默失效。临时桥在 `dsh-client-connection`
-  （rc8-commands-compat.ts + rpc.ts）按 `host.describe` 权威版本为
-  rc.8+ 宿主注入 `images: []`，rc.7 宿主不受影响；**rc.8 baseline 对齐后整体
-  移除**（rc.8 客户端自带该参数）。
-  **待办（rc.8 baseline 完整对齐）**：harness.commit → 141eb6fef8 后，复合延迟族
-  +3 覆盖（ui-attachment / ui-brand-official / ui-reference）、ui-renderer 归
-  page-own（renderer 移入 dsh-client-ui-renderer 源）、boot.tsx 迁 rc.8 模块系统
-  bootstrap API、web-react / schema-form 深导入迁 ui-renderer / settingsSchema
-  服务——代码已验证，锁文件需按仓库 CI/受管快照流程再生成（pnpm 11 本地符号
-  链接 vendor 下重写会剪除 vendor importer 记录，AGENTS.md 已知问题）。
+  **rc.8 commands wire 兼容桥（已随 rc.8 baseline 对齐移除，2026-08）**：除
+  boot/渲染外，rc.8 还改了宿主 `commands.execute` Typert Remote 签名（新增必填
+  `images` 参数，上游 8d9fee19f9）——rc.7 形状客户端（旧壳）向 rc.8+ 宿主发命令
+  会被网关严格参数核对拒绝或宿主崩溃，Access 权限芯片 `/permission` 切换等一切
+  经 `session.command` 的斜杠命令静默失效。临时桥曾在 `dsh-client-connection`
+  （rc8-commands-compat.ts + rpc.ts）按 `host.describe` 权威版本为 rc.8+ 宿主
+  注入 `images: []`，rc.7 宿主不受影响；**rc.8 baseline 对齐后已整体移除**——
+  dsh-client-connection 拷贝随 rc.8 的 fixture/index/依赖面 re-sync，rc.8
+  客户端自带 `images` 参数，`commands.execute` 不再有版本判定注入。
+  **rc.8 baseline 完整对齐（2026-08，已落地）**：harness.commit →
+  141eb6fef8（dsh 0.1.0-rc.8），vendor 源物化为仓库内真实目录
+  `vendor/harness-checkout`（pnpm 11 剪枝规避：符号链接指向仓库外源时重写锁文件
+  会剪除 vendor importer 记录，仓库内真实目录则保留；`pnpm install
+  --frozen-lockfile` 已验证）。对齐内容：复合延迟族 +3 覆盖（ui-attachment /
+  ui-brand-official / ui-reference，chamber-entry.ts registerDeferred +
+  chamber-covered.ts）；**ui-renderer 归 page-own**（renderer 移入
+  dsh-client-ui-renderer 源，boot.ts 内核收编其 client half——与 modules 同款
+  bootstrap 注册 + 内核 loader 行，挂载经 `ctx.uiRenderer`）；**boot.tsx 迁
+  rc.8 模块系统 bootstrap API**（boot.ts 类结构 AppWebEntry + `__ModuleLoader__`
+  queue-mode facade 自装 + BootPage 无框架加载页 + assertEntriesActive chamber
+  容错版）；web-react / schema-form 深导入随删/迁移（渲染装配移入 ui-renderer
+  行；settings 系包迁 `dsh-client-ui-renderer/src/client/bind` 与
+  `SettingsSchemaService`）。rc.7 宿主（无 `images` 参数）随对齐移出支持面
+  （rc.8 客户端自带 `images` 参数，rc.7 宿主会拒绝多余字段）——与版本容忍
+  §3.3 的"特性缺席"语义一致：壳与后端版本必须同代。
 
 ## 5. 实施分期（M1–M4 均已落地；验证记录见 STATUS）
 

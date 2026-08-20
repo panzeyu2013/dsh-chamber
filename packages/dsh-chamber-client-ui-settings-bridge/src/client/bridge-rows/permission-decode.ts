@@ -8,8 +8,8 @@
  * hardcoded here.
  */
 
-import { nodeAtPath, rehydrateSchema } from '@deepseek-ai/dsh-client-schema-form'
-import { PERMISSION_SETTINGS_NS } from './permission-row-controller.ts'
+import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
 
 /** Machine value of the preset that requires an explicit GUI risk gate. */
 export const FULL_ACCESS_PRESET = 'danger-full-access'
@@ -20,14 +20,6 @@ export interface PermissionDefaultOption {
   id: string
   /** Host-supplied label or a title-cased preset key. */
   label: string
-}
-
-/** One permission namespace descriptor from a settings.describe response. */
-export interface PermissionNamespaceView {
-  ns: string
-  revision: number
-  value: unknown
-  schema: unknown
 }
 
 /**
@@ -60,16 +52,17 @@ interface ConstChoice {
 /**
  * Read the dynamic preset enum encoded by the host's `defaultPreset` schema.
  * @param view - permission namespace descriptor.
+ * @param schema - settings-owned schema operations (rehydrate + path resolve).
  * @returns current value and selectable options.
  * @throws when the descriptor does not advertise the current preset.
  */
-export function permissionDefaultOf(view: PermissionNamespaceView): {
+export function permissionDefaultOf(view: SettingsNamespaceView, schema: SettingsSchemaService): {
   currentValue: string
   options: PermissionDefaultOption[]
 } {
   const value = (view.value as { defaultPreset?: unknown } | null)?.defaultPreset
   if (typeof value !== 'string') throw new Error('permission settings has no defaultPreset value')
-  const node = nodeAtPath(rehydrateSchema(view.schema), ['defaultPreset'])
+  const node = schema.nodeAtPath(schema.rehydrate(view.schema), ['defaultPreset'])
   if (node === undefined) throw new Error('permission settings schema has no defaultPreset field')
   const rawChoices = node.type === 'union'
     ? (node.list as readonly unknown[] | undefined) ?? []

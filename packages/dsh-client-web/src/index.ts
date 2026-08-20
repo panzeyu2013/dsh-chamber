@@ -1,20 +1,20 @@
 /**
  * Web shell library entry. The shell's product is {@link AppWebEntry} —
- * apps/web's vite entry runs it against #root; everything else (AppRoot
- * gate, app-shell assembly entry, module-table staticModules, platform constants) is
- * internal to the boot chain. PLATFORM_MODULES is re-exported as the
- * single source of truth for the tsdown client externals projection.
+ * apps/web's Vite entry runs it against #root. The boot page and fiber-state
+ * projection remain internal; the static module table and its platform words
+ * form the package's build-time contract.
+ *
+ * ## chamber patch (dsh-chamber connection manager, design 05 §3.6/§4)
+ *
+ * The N-ctx module-table sharing seam: `ensureWebModuleSystem` (install-or-
+ * reuse the page-level module system + `__ModuleLoader__` registration sink —
+ * the first-boot race fix) and the `AppWebEntryOptions.extraRows` per-instance
+ * host-graph boot-row merge. The boot page is the rc.8 framework-free BootPage
+ * (the React loading gate moved to the ui-renderer with the application).
  * @module @deepseek-ai/dsh-client-web
  */
 
-export { AppWebEntry, ensureWebModuleSystem, type BootSeams, type AppWebEntryOptions } from './boot.tsx'
-export { AppRoot, type AppRootProps } from './AppRoot.tsx'
-export { buildRenderApp, type AssemblyDeps } from './app.tsx'
-export { DocumentTitle, type DocumentTitleProps } from './DocumentTitle.tsx'
-export { APP_SHELL_ID, type AppShellService } from './app-shell.ts'
+export { AppWebEntry, ensureWebModuleSystem, type AppWebEntryOptions, type BootSeams } from './boot.ts'
 export { getStaticModules } from './seed.ts'
 export { PLATFORM_MODULES, type PlatformModule } from './platform.ts'
-export {
-  STATE_LABELS, FIBER_STATE, createSignal, createLoaderStatusStore,
-  type LoaderStatus, type LoaderEntryState, type KernelSignal, type KernelValueSignal, type LoaderStatusStore,
-} from './loader-status.ts'
+export { STATE_LABELS, FIBER_STATE, type LoaderEntryState } from './loader-status.ts'

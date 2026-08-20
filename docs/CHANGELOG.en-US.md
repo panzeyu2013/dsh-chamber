@@ -10,6 +10,24 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Changed
+
+- **Full dsh rc.8 baseline alignment (design 09 §4)** — `harness.commit` →
+  141eb6fef8 (dsh 0.1.0-rc.8): the vendor source is materialized as the in-repo
+  managed snapshot `vendor/harness-checkout` (avoids the pnpm 11 lockfile pruning;
+  `--frozen-lockfile` passes); the boot kernel moves to the rc.8 module-system
+  bootstrap (`boot.ts` class kernel + `__ModuleLoader__` facade + BootPage loading
+  page, mount via `ctx.uiRenderer`); the composite deferred family gains +3
+  coverage (`ui-attachment` / `ui-brand-official` / `ui-reference`), `ui-renderer`
+  becomes page-own; web-react/schema-form deep imports are removed/migrated
+  (rendering assembly moved into the ui-renderer row, settings packages move to
+  `SettingsSchemaService`); the local host is upgraded to rc.8 (vendor dsh
+  0.1.0-rc.8). The rc.8 client carries the `commands.execute` `images` argument
+  natively, so the temporary compat bridge is removed; rc.7 hosts leave the
+  supported set with this alignment.
+
 ## [0.1.3] - 2026-08-20
 
 ### Added

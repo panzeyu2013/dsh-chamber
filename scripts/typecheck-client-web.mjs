@@ -1,5 +1,5 @@
 /**
- * Chamber-owned typecheck for `packages/dsh-client-web` (the boot.tsx N-ctx
+ * Chamber-owned typecheck for `packages/dsh-client-web` (the boot.ts N-ctx
  * seam + runtimeCtx getter — see AGENTS.md runtime boundaries).
  *
  * Why a filtered gate: the vendored dsh tree is source-only (`vendor/
@@ -11,7 +11,7 @@
  * established pattern for lib-less vendor consumption is ambient declarations.
  * This gate therefore fails ONLY on errors inside `packages/dsh-client-web/`
  * itself and ignores the pre-existing vendor-graph noise, so a future edit
- * to boot.tsx (or any chamber-owned file in the package) is caught by tsc —
+ * to boot.ts (or any chamber-owned file in the package) is caught by tsc —
  * the check `pnpm run build:renderer` alone cannot provide (esbuild).
  *
  * Acceptance: exits 0 iff tsc reports no error in a chamber-owned file.

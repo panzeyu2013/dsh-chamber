@@ -24,7 +24,7 @@
  *
  * ## First-screen / deferred split (LCP perf pass, P4)
  *
- * The boot settle (`loader.await()` + `assertEntriesActive()`, boot.tsx) only
+ * The boot settle (`loader.await()` + `assertEntriesActive()`, boot.ts) only
  * requires every loader ENTRY fiber ACTIVE — for this composite that is the
  * entry's own root fiber, which is ACTIVE as soon as `apply` returns (a sync
  * function, not a thenable). Child ui-* fibers registered through
@@ -47,7 +47,8 @@
  * service at its apply root (verified against the inject lists): the deferred
  * set (jobs, goal, skill, tool, trajectory, workflow-run, deliverables,
  * subagent, message-feedback, plan, user-questions, agent-preset,
- * permission-presets) all inject first-screen services
+ * permission-presets, and the rc.8 alignment trio attachment, brand-official,
+ * reference) all inject first-screen services
  * (connection/sessions/slots/locale/remote/…). Two families that WOULD have
  * violated the invariant are kept FIRST-SCREEN by construction (2026-08
  * review fix — the vendor `inject` list is the authority, and it carries the
@@ -184,6 +185,9 @@ async function registerDeferred(ctx: Context): Promise<void> {
     userQuestions,
     agentPreset,
     permissionPresets,
+    attachment,
+    brandOfficial,
+    reference,
   ] = await Promise.all([
     import('@deepseek-ai/dsh-client-ui-jobs/client'),
     import('@deepseek-ai/dsh-client-ui-goal/client'),
@@ -198,6 +202,17 @@ async function registerDeferred(ctx: Context): Promise<void> {
     import('@deepseek-ai/dsh-client-ui-user-questions/client'),
     import('@deepseek-ai/dsh-client-ui-agent-preset/client'),
     import('@deepseek-ai/dsh-client-ui-permission-presets/client'),
+    // rc.8 deferred families (design 09 §4 baseline alignment): attachment
+    // fills the composer + message-image slots, reference registers the
+    // unified `@` source — both inject first-screen services only (slots /
+    // inputTriggers + locale + remote + the fileReferences &
+    // sessionReferenceResolver namespaces, all first-screen providers), so
+    // the deferred split stays safe; brand-official fills the official brand
+    // slots but is gated on the 'official' build profile (chamber's build
+    // defines it away — see vite.config.mjs), so it loads as a no-op.
+    import('@deepseek-ai/dsh-client-ui-attachment/client'),
+    import('@deepseek-ai/dsh-client-ui-brand-official/client'),
+    import('@deepseek-ai/dsh-client-ui-reference/client'),
   ])
   ctx.plugin(jobs)
   ctx.plugin(goal)
@@ -212,6 +227,9 @@ async function registerDeferred(ctx: Context): Promise<void> {
   ctx.plugin(userQuestions)
   ctx.plugin(agentPreset)
   ctx.plugin(permissionPresets)
+  ctx.plugin(attachment)
+  ctx.plugin(brandOfficial)
+  ctx.plugin(reference)
 }
 
 /**
@@ -359,14 +377,16 @@ const coveredFactory = (exports: unknown): ClientPluginHandoff['factory'] => () 
  * loader entry materializes.
  *
  * Deliberately NOT included:
- * - the deferred families (jobs, goal, …): their chunks load after the boot
- *   settles; the official graph only guarantees the immediately tier for
- *   synchronous requires, and the client-bundle purity gate (upstream
- *   tsdown.client.ts) forbids value imports of ui-* packages anyway;
+ * - the deferred families (jobs, goal, …, attachment, brand-official,
+ *   reference): their chunks load after the boot settles; the official graph
+ *   only guarantees the immediately tier for synchronous requires, and the
+ *   client-bundle purity gate (upstream tsdown.client.ts) forbids value
+ *   imports of ui-* packages anyway;
  * - page-own covered ids (`@deepseek-ai/dsh-client-modules`, the official
  *   `dsh-client-ui-sidebar` / `dsh-client-ui-layout` registrations the chamber
- *   replaces): the composite has no namespace for them and they are not
- *   legitimate require targets.
+ *   replaces, and rc.8's `dsh-client-ui-renderer` — the shell kernel adopts
+ *   that row, chamber-entry never imports it): the composite has no namespace
+ *   for them and they are not legitimate require targets.
  *
  * Maintenance: every id here MUST stay in `CHAMBER_COVERED_IDS` (a non-covered
  * id would double-register against the host-graph row's own bundle); keep the

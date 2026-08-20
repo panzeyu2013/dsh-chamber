@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-client-web",
-  "description": "Web shell kernel: bootWebShell (module system holding + seed table + two-stage boot + AppRoot gate + app-shell assembly entry), consumed by the apps/web vite entry",
+  "description": "Web shell kernel: AppWebEntry (module system holding + seed table + two-stage boot + framework-free boot page + rc.8 uiRenderer mount), consumed by the apps/web vite entry",
   "version": "0.1.0-rc.5",
   "publishConfig": {
     "access": "public"
@@ -28,12 +28,10 @@
   "license": "MIT",
   "dependencies": {
     "@deepseek-ai/dsh-client-modules": "workspace:^",
-    "@deepseek-ai/dsh-client-schema-form": "workspace:^",
     "@deepseek-ai/dsh-client-ui-attachment": "workspace:^",
     "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
     "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
     "@deepseek-ai/dsh-client-ui-theme": "workspace:^",
-    "@deepseek-ai/dsh-client-web-react": "workspace:^",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

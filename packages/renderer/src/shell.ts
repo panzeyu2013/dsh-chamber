@@ -8,7 +8,7 @@
  * is pure CSS, sessions stay alive).
  *
  * The module table and bundle registry are page-level singletons shared
- * across instances (boot.tsx reuse seam — the module system refuses a second
+ * across instances (boot.ts reuse seam — the module system refuses a second
  * `__ModuleLoader__` install); materialized exports are stateless plugin
  * definitions applied per-ctx, so sharing is safe.
  *
@@ -179,7 +179,7 @@ export function bootInstanceShell(
       // profile arrive as rows the composite does not cover. Preloading their
       // bundles completes BEFORE entry creation so every factory is registered
       // in the shared module table when loader.create materializes entries
-      // (boot.tsx runPluginBoot — the factories branch).
+      // (boot.ts runPluginBoot — the factories branch).
       const extraRows = await extraRowsPromise
       // 旋钮设置纳入 try（任何一步抛错都必须落成终态错误 settle，且 finally
       // 保证旋钮清除——若在 try 之外抛出，任务 promise 拒绝且永无 settle，
@@ -228,8 +228,9 @@ export function bootInstanceShell(
       return { instanceId, basePath, booted: true, booting: false, error: null } satisfies ShellState
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason)
-      // 若 run() 在 createRoot 之后才拒绝（如 AppRoot 渲染异常），容器上会
-      // 残留未卸载的 React root——先 dispose，重试才能在同一容器重新 createRoot。
+      // run() 不再拒绝（rc.8 形状：一切失败经 bootError 上浮），catch 兜底
+      // 构造期/挂载期的同步异常——若 entry 已在容器上画过加载页或挂载过 UI，
+      // 先 dispose（移除 boot DOM / 卸载 React root），重试才能干净重 boot。
       staleEntry?.dispose()
       // 失败的 boot 从不注册，无需（也不应）消费取消阈值：阈值只按代匹配
       // 本次 pending 的 boot，重加实例后的新代 boot 天然不受影响。
@@ -296,7 +297,7 @@ function rejectPendingOpens(instanceId: string, message: string): void {
 
 /**
  * Dispatch one open through the settled runtime context (ctx.sessions — the
- * ISessions face of dsh-client-runtime, see boot.tsx runtimeCtx). The runtime
+ * ISessions face of dsh-client-runtime, see boot.ts runtimeCtx). The runtime
  * validates the id against its own list, so wait until the session surfaces
  * there before calling open.
  */

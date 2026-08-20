@@ -256,5 +256,12 @@ export default defineConfig({
     'process.versions.node': '"0.0.0"',
     'process.execArgv': '[]',
     'process.env.CORDIS_SHARED': 'undefined',
+    // rc.8 (design 09 §4): ui-brand-official gates its official brand fills on
+    // `DSH_CLIENT_BUILD_PROFILE === 'official'` ("other builds load the plugin
+    // but register no occupants" — the package contract). The chamber
+    // self-build is not the official profile: define it away so the gate
+    // constant-folds to a clean no-op — without the define the browser would
+    // throw `process is not defined` inside the deferred apply on every boot.
+    'process.env.DSH_CLIENT_BUILD_PROFILE': JSON.stringify('chamber'),
   },
 })

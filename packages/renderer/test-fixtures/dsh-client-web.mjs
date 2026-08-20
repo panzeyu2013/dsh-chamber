@@ -43,7 +43,7 @@ export class AppWebEntry {
 export function ensureWebModuleSystem() {
   // Records the call so tests can pin the first-boot ordering (sink install
   // must precede any host-graph fetch / bundle preload). The real module-system
-  // install itself is not exercised here (that logic is boot.tsx's; verified
+  // install itself is not exercised here (that logic is boot.ts's; verified
   // by typecheck/build) — this only simulates its failure gate.
   eventLog.push('ensure')
   if (moduleSystemError !== undefined) throw moduleSystemError

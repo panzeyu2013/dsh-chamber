@@ -33,12 +33,12 @@ declare module '@deepseek-ai/cordis' {
 }
 
 declare module '@deepseek-ai/dsh-client-web' {
-  /** Module transport hook (boot.tsx BootSeams, Pick<ClientModuleSystemOptions, 'loadBundle'>). */
+  /** Module transport hook (boot.ts BootSeams, Pick<ClientModuleCreateOptions, 'loadBundle'>). */
   export interface BootSeams {
     loadBundle?: (url: string) => Promise<void>
   }
   /**
-   * chamber patch (05 §3.6 / design 09): mirror of boot.tsx AppWebEntryOptions —
+   * chamber patch (05 §3.6 / design 09): mirror of boot.ts AppWebEntryOptions —
    * per-instance extra host-graph client-plugin rows (bundles pre-loaded by
    * the chamber shell; ids only merged into the boot rows here).
    */
@@ -53,12 +53,12 @@ declare module '@deepseek-ai/dsh-client-web' {
    * sink; idempotent, run() adopts the same instance.
    */
   export function ensureWebModuleSystem(seams?: BootSeams): unknown
-  /** The web shell kernel consumed by shell.ts (boot.tsx). */
+  /** The web shell kernel consumed by shell.ts (boot.ts). */
   export class AppWebEntry {
     constructor(el: HTMLElement, options?: AppWebEntryOptions)
     run(): Promise<unknown>
     dispose(): void
-    /** chamber patch: settled runtime context (boot.tsx accessor; session opens ride ctx.sessions; undefined after dispose). */
+    /** chamber patch: settled runtime context (boot.ts accessor; session opens ride ctx.sessions; undefined after dispose). */
     runtimeCtx: Context | undefined
     /** chamber patch (2026-08, 05 §4 失败呈现修订): boot failure report — run() resolves on boot-chain failures by design (the dsh loading page renders the in-shell report), but the chamber shell must see it to present its own per-instance fallback; undefined while loading or after a clean settle. */
     bootError: string | undefined
@@ -74,6 +74,13 @@ declare module '@deepseek-ai/dsh-api-gateway/client'
 declare module '@deepseek-ai/dsh-api-remotes/client'
 
 declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
+// rc.8 deferred-family client entries (design 09 §4; chamber-entry.ts
+// registerDeferred dynamic imports): attachment (composer + message-image
+// slot fills), brand-official (official brand occupants — gated on the
+// 'official' build profile, a no-op in the chamber build), reference (the
+// unified `@` input-trigger source).
+declare module '@deepseek-ai/dsh-client-ui-attachment/client'
+declare module '@deepseek-ai/dsh-client-ui-brand-official/client'
 declare module '@deepseek-ai/dsh-client-ui-commands/client'
 declare module '@deepseek-ai/dsh-client-ui-conversation/client'
 declare module '@deepseek-ai/dsh-client-ui-deliverables/client'
@@ -86,6 +93,11 @@ declare module '@deepseek-ai/dsh-client-ui-message-feedback/client'
 declare module '@deepseek-ai/dsh-client-ui-model-selection/client'
 declare module '@deepseek-ai/dsh-client-ui-permission-presets/client'
 declare module '@deepseek-ai/dsh-client-ui-plan/client'
+// rc.8 page-own (design 09 §4): ui-renderer is adopted by the shell kernel
+// (the boot mounts through its ctx.uiRenderer) — chamber-entry never imports
+// it; declared for the ambient surface only.
+declare module '@deepseek-ai/dsh-client-ui-reference/client'
+declare module '@deepseek-ai/dsh-client-ui-renderer/client'
 declare module '@deepseek-ai/dsh-client-ui-settings/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-general/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-models/client'

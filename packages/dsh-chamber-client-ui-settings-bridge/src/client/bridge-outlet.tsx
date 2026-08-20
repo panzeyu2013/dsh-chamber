@@ -1,6 +1,6 @@
 /**
  * Bridge outlet: a minimal re-implementation of the official slot render
- * pipeline (dsh-client-web-react/src/scoped-slots.tsx) covering exactly the
+ * pipeline (dsh-client-ui-renderer/src/client/scoped-slots.tsx) covering exactly the
  * root-scope LIST and KEYED slots the child settings context declares
  * (settings.section / settings.general.item / settings.plugins.tab list;
  * settings.plugin.item keyed). The official renderer is boot-root-anchored
@@ -17,7 +17,7 @@
  * can never abdicate the chamber-owned shell.
  */
 import { Component, useMemo, useSyncExternalStore, type FC, type ReactNode } from 'react'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
+import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-ui-renderer/src/client/bind'
 import type {
   HostObservable, LocaleFace, RenderOpts, SnapshotSelectorHook, StoredEntry, StoreInstanceLike, Translate,
 } from '@deepseek-ai/dsh-client-ui-slots'

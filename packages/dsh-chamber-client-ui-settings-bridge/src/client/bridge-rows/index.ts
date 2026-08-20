@@ -32,7 +32,7 @@ const CONVERSATION_NS = 'conversation'
 const PERMISSION_NS = 'settings.permission'
 
 /** Required services (cordis fiber inject; all provided by the child context). */
-export const inject = ['slots', 'locale', 'connection', 'settingsScope', 'remote']
+export const inject = ['slots', 'locale', 'connection', 'settingsScope', 'remote', 'settingsSchema']
 
 /**
  * Register the bridge rows once the `settings.general.item` declaration is
@@ -65,9 +65,12 @@ export function apply(ctx: ClientContext): void {
     }),
   }, EnterBehaviorRow))
 
-  // Permission default: host descriptor read + revision-guarded mutate.
+  // Permission default: host descriptor read + revision-guarded mutate. The
+  // schema-envelope decode needs the settings-owned schema service, which the
+  // child ui-settings plugin provides on this ctx.
   const api = (ctx.get('connection') as unknown as { api: PermissionSettingsApi }).api
-  const permission = new PermissionPresetSettingsController(api, permissionDefaultOf)
+  const permission = new PermissionPresetSettingsController(
+    api, permissionDefaultOf, ctx.get('settingsSchema'))
 
   // Pushed invalidations converge the open row without polling: the stub
   // remote drops them today (no-op $on) — the wiring mirrors the official

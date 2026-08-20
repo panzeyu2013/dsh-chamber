@@ -69,25 +69,41 @@
   - **app-shell renderer 安装容错**（后端行已装 renderer 时采纳，不双装报错）。
   无头验证：rc.8 后端（实例 rc.8 官方前端 + rc.7 复合壳）下 chamber 渲染器 boot
   成功、50 个 tool-call 节点零兜底、设置页渲染正常。
-  待办（rc.8 baseline 完整对齐，需走仓库锁文件再生成流程）：harness.commit →
-  141eb6fef8（dsh 0.1.0-rc.8）后，复合延迟族 +3 覆盖（ui-attachment /
-  ui-brand-official / ui-reference）、ui-renderer 归 page-own（renderer 移入
-  dsh-client-ui-renderer 源）、boot.tsx 迁 rc.8 模块系统 bootstrap API、web-react/
-  schema-form 深导入迁 ui-renderer / settingsSchema 服务——代码已按 rc.8 验证
-  通过，因 pnpm 11 在本地符号链接 vendor 下重写锁文件会剪除 vendor importer 记录
-  （AGENTS.md 已知问题），锁文件需按仓库 CI/受管快照流程重新生成后方可合入。
-  **rc.8 commands wire 兼容桥（2026-08 修复「无法调整 session 权限」）**：rc.8
+  **rc.8 baseline 完整对齐（2026-08，本仓可改面已全部落地）**：harness.commit →
+  141eb6fef8（dsh 0.1.0-rc.8）后——复合延迟族 +3 覆盖（ui-attachment /
+  ui-brand-official / ui-reference，chamber-entry.ts registerDeferred +
+  chamber-covered.ts）、**ui-renderer 归 page-own**（renderer 移入
+  dsh-client-ui-renderer 源：chamber-covered.ts 收编 id，dsh-client-web boot.ts
+  内核收编其 client half——与 modules 同款 bootstrap 注册 + 内核 loader 行，
+  sweep 审计；挂载经 `ctx.uiRenderer`，rc.8 语义）、**boot.tsx 迁 rc.8 模块系统
+  bootstrap API**（boot.ts 类结构 AppWebEntry：`window.__ModuleLoader__`
+  queue-mode facade 自装（chamber 镜像官方 HTML 注入）+ `createClientModuleSystem`
+  bootstrap、BootPage 无框架加载页、prefetchImmediateTier →
+  runPluginBoot → assertEntriesActive（chamber 容错版，classifySweepEntry）→
+  mountApp）、**web-react/schema-form 深导入随删/迁移**（app-shell/AppRoot/
+  app.tsx/DocumentTitle 删除——渲染与装配整体移入 ui-renderer 行；chamber 桌面
+  壳本已冻结原生标题栏，标题投影迁移无可见变化；settings 系包的
+  `bindSnapshotSelector` 迁 `dsh-client-ui-renderer/src/client/bind`、
+  `nodeAtPath/rehydrateSchema` 迁 `SettingsSchemaService`
+  （permission-decode.ts 与 rc.8 ui-permission-presets 逐行一致））。
+  锁文件已按受管快照流程重生成并验证 frozen（**pnpm 11 剪枝规避**：vendor 源
+  物化为仓库内真实目录 `vendor/harness-checkout`——符号链接指向仓库外源时 pnpm
+  11 会剪除 vendor importer 记录；本仓已切到仓库内受管快照，
+  `pnpm install --frozen-lockfile` 通过）。桌面本地宿主同步升 rc.8
+  （`DSH_CHAMBER_DSH_VERSION=0.1.0-rc.8` `bundle:dsh`）。验证：
+  `test:client-web`（9）、`test:renderer-shell`（29）、`test:settings-bridge`、
+  `typecheck:*` 全套、根 `typecheck`、`build:renderer`、控制面 8 套测试全部通过。
+  **rc.8 commands wire 兼容桥（已随 rc.8 baseline 对齐移除，2026-08）**：rc.8
   宿主 `commands.execute` Typert Remote 新增必填 `images` 参数（上游
   8d9fee19f9 起），rc.7 形状客户端缺该参数 → rc.8 宿主拒绝/崩溃 → 经
   `session.command` 的所有斜杠命令（Access 权限芯片 `/permission` 切换在内）
-  静默失败。修复：`dsh-client-connection` 的
-  `rc8-commands-compat.ts`（纯函数：版本判定 + 幂等改写），`rpc.ts` 对
-  `commands/execute` 端点按 **`host.describe` 权威版本**（>= 0.1.0-rc.8）注入
-  `images: []`；rc.7 宿主（多余字段会被严格参数核对拒绝）与未知版本一律不注入。
-  临时桥——rc.8 baseline 对齐（harness.commit → 141eb6fef8）后移除（rc.8 客户端
-  自带 `images: []`），见设计 09 §4 待办。新增 `pnpm run test:connection`（8
-  用例：版本门 / 幂等改写 / 非 args 透传）并入 CI 与 AGENTS.md 验证清单。复验 ✓
-  （typecheck / test:connection 8）。
+  静默失败。临时桥曾以 `dsh-client-connection` 的 `rc8-commands-compat.ts` +
+  `rpc.ts` 按 **`host.describe` 权威版本**（>= 0.1.0-rc.8）为 `commands/execute`
+  注入 `images: []`（rc.7 宿主与未知版本一律不注入），并配 `pnpm run
+  test:connection`（8 用例：版本门 / 幂等改写 / 非 args 透传）。rc.8 baseline
+  对齐（本包 fixture/index/依赖面 re-sync 到 rc.8，rc.8 客户端自带 `images`
+  参数）后，桥、其测试与脚本已整体移除——`commands.execute` 不再有版本判定
+  注入，见设计 09 §4。
   **v0.1.3 发布前 review（2026-08-20）**：容错判定规则提取为 React-free 纯函数
   模块（`dsh-client-web/src/boot-tolerance.ts`：sweep 逐行裁决 + renderer 安装
   裁决），boot.tsx/app-shell.ts 接入同一规则，新增 `pnpm run test:client-web`

@@ -10,6 +10,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
   PermissionPresetSettingsController,
   refreshPermissionIfLoaded,
@@ -17,15 +19,22 @@ import {
   type PermissionSettingsState,
   type PermissionViewDecoder,
 } from '../src/client/bridge-rows/permission-row-controller.ts'
-import type { PermissionNamespaceView } from '../src/client/bridge-rows/permission-decode.ts'
 
-const VIEW = (overrides: Partial<PermissionNamespaceView> = {}): PermissionNamespaceView => ({
+const VIEW = (overrides: Partial<SettingsNamespaceView> = {}): SettingsNamespaceView => ({
   ns: 'permission',
   revision: 7,
   value: { defaultPreset: 'safe' },
   schema: {},
+  applies: 'live',
+  secrets: [],
   ...overrides,
 })
+
+/** Fake settings schema service: the decode is stubbed, so only the constructor face is needed. */
+const SCHEMA: SettingsSchemaService = {
+  rehydrate: () => ({ type: 'object' }),
+  nodeAtPath: () => undefined,
+}
 
 const OPTIONS = [
   { id: 'safe', label: 'Safe' },
@@ -90,7 +99,7 @@ test('load resolves the namespace into ready options', async () => {
   const api = new FakeApi()
   api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   assert.equal(snapshot(controller).status, 'ready')
   assert.equal(snapshot(controller).currentValue, 'safe')
@@ -103,7 +112,7 @@ test('missing namespace publishes unavailable', async () => {
   const api = new FakeApi()
   api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [], writable: true } } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   assert.equal(snapshot(controller).status, 'unavailable')
   assert.equal(snapshot(controller).writable, false)
@@ -113,7 +122,7 @@ test('describe failure publishes error', async () => {
   const api = new FakeApi()
   api.describeOnce(async () => ({ result: { ok: false, error: { message: 'boom' } } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   assert.equal(snapshot(controller).status, 'error')
   assert.equal(snapshot(controller).error, 'boom')
@@ -125,7 +134,7 @@ test('decode rejection publishes error', async () => {
   api.install()
   const controller = new PermissionPresetSettingsController(api, () => {
     throw new Error('no defaultPreset in schema')
-  })
+  }, SCHEMA)
   await controller.load()
   assert.equal(snapshot(controller).status, 'error')
   assert.equal(snapshot(controller).error, 'no defaultPreset in schema')
@@ -143,7 +152,7 @@ test('select writes the preset with the descriptor revision and accepts the resp
     return { result: { ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'danger-full-access' } }) } }
   })
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   await controller.select('danger-full-access')
   assert.equal(snapshot(controller).status, 'ready')
@@ -155,7 +164,7 @@ test('select is blocked while unwritable', async () => {
   const api = new FakeApi()
   api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: false } } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   await controller.select('danger-full-access')
   assert.equal(snapshot(controller).status, 'ready')
@@ -166,7 +175,7 @@ test('select is blocked without a resolved view', async () => {
   const api = new FakeApi()
   api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [], writable: true } } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   assert.equal(snapshot(controller).status, 'unavailable')
   await controller.select('safe')
@@ -178,7 +187,7 @@ test('select failure publishes error', async () => {
   api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
   api.mutateOnce(async () => ({ result: { ok: false, error: { message: 'revision conflict' } } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   await controller.select('safe')
   assert.equal(snapshot(controller).status, 'error')
@@ -193,7 +202,7 @@ test('select publishes a saving intermediate status until the write settles', as
     release = () => resolve({ result: { ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'safe' } }) } })
   }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   const pending = controller.select('safe')
   assert.equal(snapshot(controller).status, 'saving')
@@ -212,7 +221,7 @@ test('a stale select response never publishes (latest write wins)', async () => 
   }))
   api.mutateOnce(async () => ({ result: { ok: true, value: VIEW({ revision: 9, value: { defaultPreset: 'danger-full-access' } }) } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
   const first = controller.select('safe')
   const second = controller.select('danger-full-access')
@@ -232,7 +241,7 @@ test('a stale load response never publishes (latest request wins)', async () => 
   }))
   api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW({ revision: 2 })], writable: true } } }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   const first = controller.load()
   const second = controller.load()
   await second
@@ -249,7 +258,7 @@ test('dispose stops in-flight responses from publishing', async () => {
     release = () => resolve({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } })
   }))
   api.install()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   const pending = controller.load()
   controller.dispose()
   release?.()
@@ -259,7 +268,7 @@ test('dispose stops in-flight responses from publishing', async () => {
 
 test('refreshIfLoaded skips an untouched row', () => {
   const api = new FakeApi()
-  const controller = new PermissionPresetSettingsController(api, DECODE)
+  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   refreshPermissionIfLoaded(controller)
   assert.equal(snapshot(controller).status, 'idle')
 })

@@ -117,7 +117,7 @@ declare module '@deepseek-ai/dsh-client-ui-theme/client' {
   export function apply(ctx: ClientContext): void
 }
 
-declare module '@deepseek-ai/dsh-client-web-react' {
+declare module '@deepseek-ai/dsh-client-ui-renderer/src/client/bind' {
   import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
   export function bindSnapshotSelector<T>(source: HostObservable<T>): SnapshotSelectorHook<T>
 }
@@ -126,6 +126,18 @@ declare module '@deepseek-ai/dsh-client-ui-settings/client' {
   import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
   export const inject: string[]
   export function apply(ctx: ClientContext): void
+  /** Live schemastery node (introspection face this package consumes). */
+  export interface SchemaNode {
+    type: string
+    list?: readonly unknown[]
+    value?: unknown
+    meta?: { description?: unknown }
+  }
+  /** Settings-owned synchronous schema operations (ui-settings client service face). */
+  export interface SettingsSchemaService {
+    rehydrate(serialized: unknown): SchemaNode
+    nodeAtPath(root: unknown, path: readonly string[]): SchemaNode | undefined
+  }
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings-general/client' {
@@ -158,16 +170,26 @@ declare module '@deepseek-ai/dsh-client-ui-agent-preset/client' {
   export function apply(ctx: ClientContext): void
 }
 
-declare module '@deepseek-ai/dsh-client-schema-form' {
-  /** Resolve a schema node by settings path (the permission defaultPreset enum). */
-  export function nodeAtPath(schema: unknown, path: readonly string[]): {
-    type: string
-    list?: readonly unknown[]
-    value?: unknown
-    meta?: { description?: unknown }
-  } | undefined
-  /** Rehydrate the wire's serialized schemastery envelope. */
-  export function rehydrateSchema(schema: unknown): unknown
+declare module '@deepseek-ai/dsh-api-remotes/client' {
+  /** Wire view of one registered settings namespace (a settings.describe row). */
+  export interface SettingsNamespaceView {
+    /** Namespace key (`permission`, `ui-conversation`, …). */
+    ns: string
+    /** Serialized schemastery schema envelope (`schema.toJSON()`). */
+    schema: unknown
+    /** Redacted resolved value (schema defaults → composition base → user layer). */
+    value: unknown
+    /** Redacted composition base layer, when the registrant declared one. */
+    base?: unknown
+    /** Redacted raw user section, when one exists. */
+    user?: unknown
+    /** When the owner applies changes. */
+    applies: 'live' | 'restart'
+    /** Every schema-declared secret slot with its configured state. */
+    secrets: readonly { path: readonly string[]; set: boolean }[]
+    /** Monotonic revision of the raw user section this view was read at. */
+    revision: number
+  }
 }
 
 declare module '@deepseek-ai/dsh-client-ui-primitives' {

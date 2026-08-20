@@ -10,6 +10,21 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 变更
+
+- **全量对齐 dsh rc.8 baseline（设计 09 §4）** —— `harness.commit` →
+  141eb6fef8（dsh 0.1.0-rc.8）：vendor 源物化为仓库内受管快照
+  `vendor/harness-checkout`（规避 pnpm 11 锁文件剪枝，`--frozen-lockfile` 通过）；
+  boot 内核迁 rc.8 模块系统 bootstrap（`boot.ts` 类结构 + `__ModuleLoader__`
+  facade + BootPage 加载页，挂载经 `ctx.uiRenderer`）；复合延迟族 +3 覆盖
+  （`ui-attachment` / `ui-brand-official` / `ui-reference`）、`ui-renderer` 归
+  page-own；web-react/schema-form 深导入随删/迁移（渲染装配移入 ui-renderer 行，
+  settings 系迁 `SettingsSchemaService`）；本地宿主同步升 rc.8（vendor dsh
+  0.1.0-rc.8）。rc.8 客户端自带 `commands.execute` 的 `images` 参数，临时兼容桥
+  随对齐移除；rc.7 宿主随对齐移出支持面。
+
 ## [0.1.3] - 2026-08-20
 
 ### 新增

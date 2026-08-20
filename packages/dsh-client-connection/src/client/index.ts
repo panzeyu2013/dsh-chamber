@@ -85,7 +85,7 @@ export interface ConnectionHandle {
   readonly isLoopback: boolean
   /** chamber patch: resolved per-instance api base path (`/api` stock, `/api/i/<id>` chamber). */
   readonly basePath: string
-  /** Generation-scoped Host facts, including native path-open capability. */
+  /** Generation-scoped Host facts, including the account home and native path-open capability. */
   readonly hostDescription: HostDescriptionSource
   /** Generic logical RPC channels over the same Connection transport. */
   readonly rpc: ClientConnectionRpc
@@ -115,13 +115,9 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
   const api: IApiClient = fixtureClient ?? new WebApiClient({ basePath })
   // Published by the readiness handshake (host.describe) once the connection
-  // is established; the generic RPC caller reads it per call for the rc.8
-  // commands wire compat bridge (rpc.ts / rc8-commands-compat.ts).
+  // is established; observable through handle.hostDescription.
   let description: HostDescription | undefined
-  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc({
-    basePath,
-    hostVersion: () => description?.version,
-  })
+  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc({ basePath })
   let started = false
   const descriptionListeners = new Set<() => void>()
   const publishDescription = (next: HostDescription | undefined): void => {

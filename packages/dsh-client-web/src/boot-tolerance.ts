@@ -1,10 +1,14 @@
 /**
  * React-free decision rules behind the chamber version-tolerance seams
- * (design 09 §3.3, 2026-08): the boot kernel's extra-row degrade (boot.tsx)
- * and the app-shell renderer-install adoption (app-shell.ts).
+ * (design 09 §3.3, 2026-08): the boot kernel's extra-row degrade (boot.ts
+ * assertEntriesActive / runPluginBoot) and the renderer-install adoption
+ * adjudication (a chamber-owned install adopting an already-installed slot
+ * renderer — the rule is retained for any chamber-side install path; the rc.8
+ * shell itself no longer installs the renderer, the composite-covered
+ * ui-renderer row does).
  *
- * Why a separate module: boot.tsx and app-shell.ts cannot load under plain
- * node (React/DOM), but the tolerance POLICY is the load-bearing contract of
+ * Why a separate module: boot.ts cannot load under plain
+ * node (DOM), but the tolerance POLICY is the load-bearing contract of
  * the rc.8 regression fix — so the rules live here, fully self-contained
  * (zero runtime imports), and are unit-tested under plain node by
  * `packages/dsh-client-web/tests/boot-tolerance.test.ts` (node:test, run via
