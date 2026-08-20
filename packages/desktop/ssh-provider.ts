@@ -36,11 +36,9 @@
  *   registry, logs, or any renderer payload beyond the transient input. The
  *   tunnel and systemd exec channels deliver it to the system `ssh` binary
  *   via an ephemeral askpass helper (SSH_ASKPASS_REQUIRE=force — no TTY and
- *   no command line involvement; the helper is a 0700 sh script that refuses
- *   host-key confirmations and answers password/passphrase prompts with the
- *   stored value, deleted on transport stop). Every ssh invocation also sets
- *   StrictHostKeyChecking=yes: users must verify/trust a key out of band before
- *   chamber connects, so a first-use MITM is never silently accepted. Platform note:
+ *   no command line involvement; the helper is a 0700 sh script that answers
+ *   host-key confirmations with `yes` and password/passphrase prompts with
+ *   the stored value, deleted on transport stop). Platform note:
  *   Win32-OpenSSH askpass support is not reliable, so password auth is
  *   refused at the IPC gate on Windows (keys/agent remain the universal
  *   path).
@@ -531,9 +529,6 @@ let passwordFile: string | null = null
 /** id → path of the live ephemeral askpass helper (0700, deleted on dispose). */
 const askpassHelpers = new Map<string, string>()
 
-/** Never silently trust a first-seen or changed SSH host key. */
-const SSH_HOST_KEY_ARGS = ['-o', 'StrictHostKeyChecking=yes'] as const
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -655,8 +650,8 @@ export function sshPasswordSupported(): boolean {
 
 /**
  * The ephemeral askpass helper body (design 05 §8): a sh script that
- * answers ssh's non-TTY prompts — host-key confirmations with `no`,
- * everything else (password/passphrase)
+ * answers ssh's non-TTY prompts — host-key confirmations with `yes` (so a
+ * first connect to a new host works), everything else (password/passphrase)
  * with the stored password. ssh passes the prompt text as argv[1] and reads
  * the answer from stdout; `yes`-style prompts are matched textually, not by
  * position, so reordered prompt strings stay covered.
@@ -668,7 +663,7 @@ export function buildAskpassScript(password: string): string {
     '# dsh-chamber ssh password helper (ephemeral, 0700, deleted on transport stop)',
     'case "$1" in',
     '  *"yes/no"*|*"fingerprint"*|*"authenticity"*|*"continue connecting"*)',
-    '    echo no',
+    '    echo yes',
     '    ;;',
     '  *)',
     `    printf '%s\\n' '${escaped}'`,
@@ -806,8 +801,8 @@ export const sshProvider: TransportProvider = {
     // mappings that TCP keepalives cannot reach.
     const keepaliveArgs = ['-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`]
     return spec.sshPort === null
-      ? ['-N', ...SSH_HOST_KEY_ARGS, ...keepaliveArgs, '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
-      : ['-N', ...SSH_HOST_KEY_ARGS, ...keepaliveArgs, '-p', String(spec.sshPort), '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
+      ? ['-N', ...keepaliveArgs, '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
+      : ['-N', ...keepaliveArgs, '-p', String(spec.sshPort), '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, target]
   },
 
   /**
@@ -888,8 +883,8 @@ function runExec(
   }
   const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
   const args = spec.sshPort === null
-    ? [...SSH_HOST_KEY_ARGS, target, 'systemctl', action, spec.serviceName]
-    : [...SSH_HOST_KEY_ARGS, '-p', String(spec.sshPort), target, 'systemctl', action, spec.serviceName]
+    ? [target, 'systemctl', action, spec.serviceName]
+    : ['-p', String(spec.sshPort), target, 'systemctl', action, spec.serviceName]
   return new Promise(resolve => {
     let settled = false
     let timedOut = false
@@ -1121,8 +1116,8 @@ function spawnRemote(
   const timeoutMs = deps.runTimeoutMs ?? 120_000
   const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
   const args = spec.sshPort === null
-    ? [...SSH_HOST_KEY_ARGS, target, ...remoteArgv]
-    : [...SSH_HOST_KEY_ARGS, '-p', String(spec.sshPort), target, ...remoteArgv]
+    ? [target, ...remoteArgv]
+    : ['-p', String(spec.sshPort), target, ...remoteArgv]
   return new Promise(resolve => {
     let settled = false
     let timedOut = false

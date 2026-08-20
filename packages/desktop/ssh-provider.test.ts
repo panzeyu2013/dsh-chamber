@@ -1,7 +1,7 @@
 /**
  * ssh provider password-auth unit tests (design 05 §8): the in-memory
  * password store, the ephemeral askpass helper script (single-quote
- * escaping, host-key refusal, directly executable 0700 file, dispose cleanup) and the
+ * escaping, host-key `yes` answers, directly executable 0700 file, dispose cleanup) and the
  * buildStartEnv surface that wires the password into the ssh spawn without
  * a TTY or the command line. Pure-Node, no real ssh host: the helper's
  * behavior is verified by actually executing it against ssh-style prompts.
@@ -44,13 +44,13 @@ test('buildAskpassScript escapes single quotes and keeps password/passphrase pro
   // The password must be embedded sh-safely: every ' becomes '\'' so the
   // literal value survives the shell.
   assert.ok(script.includes(`printf '%s\\n' 'it'\\''s-a-pass'\\''word'`), 'single quotes are escaped for sh')
-  // The host-key confirmation branch must refuse, never reveal the password.
+  // The host-key confirmation branch must answer yes, never the password.
   assert.ok(script.includes('*"yes/no"*'), 'host-key yes/no prompts are matched')
-  assert.ok(script.includes('echo no'), 'host-key prompts answer no')
+  assert.ok(script.includes('echo yes'), 'host-key prompts answer yes')
   assert.ok(!script.includes("it's-a-pass"), 'the raw password never appears in the host-key branch')
 })
 
-test('the askpass helper refuses host-key prompts and answers password prompts with the password', () => {
+test('the askpass helper answers host-key prompts with yes and password prompts with the password', () => {
   // A restrictive umask must not strip the execute bit OpenSSH requires.
   const previousUmask = process.umask(0o177)
   let path: string
@@ -62,7 +62,7 @@ test('the askpass helper refuses host-key prompts and answers password prompts w
   try {
     const hostKey = spawnSync(path, ['Are you sure you want to continue connecting (yes/no/[fingerprint])?'], { encoding: 'utf8' })
     assert.equal(hostKey.status, 0)
-    assert.equal(hostKey.stdout.trim(), 'no', 'host-key confirmation is refused')
+    assert.equal(hostKey.stdout.trim(), 'yes', 'host-key confirmation is accepted (first connect)')
     const password = spawnSync(path, ["user@h.example.com's password:"], { encoding: 'utf8' })
     assert.equal(password.status, 0)
     assert.equal(password.stdout, "s3cr't\n", 'password prompt answers the stored password (line-terminated)')
@@ -443,10 +443,8 @@ function makeRemoteHost(home = '/home/u') {
     return child
   }
   function handleRemote(record: { command: string; args: string[]; child: FakeRunChild }) {
-    // ssh args always begin with strict host-key checking, followed by an
-    // optional port, target, and the whitelisted remote argv.
-    const afterHostKey = record.args.slice(2)
-    const remoteArgv = afterHostKey[0] === '-p' ? afterHostKey.slice(3) : afterHostKey.slice(1)
+    // ssh args: [target, ...remoteArgv] or ['-p', <port>, target, ...remoteArgv]
+    const remoteArgv = record.args[0] === '-p' ? record.args.slice(3) : record.args.slice(1)
     const child = record.child
     const joined = remoteArgv.join(' ')
     if (joined.startsWith('mkdir -p ') && joined.includes(' && base64 -d > ')) {
@@ -502,7 +500,7 @@ test('write-file: streams base64 over ssh stdin and verifies the read-back in th
   // single fixed `mkdir -p … && base64 -d > …` shell template.
   assert.ok(remote.files.get('~/.dsh-chamber/plugins/pkg-abc123.tgz')!.equals(content))
   assert.equal(remote.spawns.length, 2, 'one write spawn + one cat read-back spawn')
-  assert.ok(remote.spawns[0].args[3].startsWith('mkdir -p ~/.dsh-chamber/plugins && base64 -d > '))
+  assert.ok(remote.spawns[0].args[1].startsWith('mkdir -p ~/.dsh-chamber/plugins && base64 -d > '))
   // The raw captured bytes ride the result; the string view is lossy (U+FFFD)
   // for binary content — proving the byte-domain verification path.
   assert.ok(result.stdoutBytes !== undefined && result.stdoutBytes.equals(content))

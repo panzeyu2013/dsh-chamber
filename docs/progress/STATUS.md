@@ -329,8 +329,8 @@
   upgrade 前同时校验 loopback Host 与来源；不透明 `Origin: null` 一律拒绝，静态/API/
   代理响应统一带 CSP（内联 boot 脚本逐响应 nonce，script 不开放 unsafe-inline）、
   COOP、no-referrer、nosniff 与 frame deny，Electron renderer 显式启用 sandbox。
-  SSH 隧道/systemd/白名单 run 全部强制 `StrictHostKeyChecking=yes`，askpass 不再代答
-  主机密钥确认；密码镜像使用 write-through 持久化语义并强制 owner-only 权限。
+  askpass 助手保持原「主机密钥确认 → yes」首次连接语义（无 StrictHostKeyChecking
+  强制）；密码镜像使用 write-through 持久化语义并强制 owner-only 权限。
   桌面 dsh runtime 的精确版本和 frozen lock 只用于可复现的本地内嵌 runtime，不约束
   远程实例版本；远程仅做协议能力兼容检查。
   **2026-08-20 安全/性能复查修复**：Electron IPC 仅接受当前主窗口 main frame 的

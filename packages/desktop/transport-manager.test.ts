@@ -199,13 +199,13 @@ test('connecting → ready on tunnel-up, with the documented ssh args and a loca
   assert.equal(connecting.phase, 'connecting')
   await waitFor(() => spawnCalls.length === 1)
   assert.equal(spawnCalls[0].command, 'ssh')
-  assert.deepEqual(spawnCalls[0].args.slice(0, 7), ['-N', '-o', 'StrictHostKeyChecking=yes', '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`])
-  assert.equal(spawnCalls[0].args[7], '-L')
-  const forward = spawnCalls[0].args[8]
+  assert.deepEqual(spawnCalls[0].args.slice(0, 5), ['-N', '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`])
+  assert.equal(spawnCalls[0].args[5], '-L')
+  const forward = spawnCalls[0].args[6]
   assert.match(forward, /^\d+:127\.0\.0\.1:2222$/)
   const localPort = Number(forward.split(':')[0])
   assert.ok(Number.isInteger(localPort) && localPort >= 1 && localPort <= 65535)
-  assert.equal(spawnCalls[0].args[9], 'alice@home.example.com')
+  assert.equal(spawnCalls[0].args[7], 'alice@home.example.com')
   setProbe(true)
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
   const status = manager.status('s1')! as StatusWithNoUrlLeak
@@ -230,14 +230,14 @@ test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`'
   manager.connect('s3')
   await waitFor(() => manager.status('s3')!.phase === 'ready')
   assert.equal(spawnCalls.length, 1)
-  const forward = spawnCalls[0].args[10]
-  assert.deepEqual(spawnCalls[0].args, ['-N', '-o', 'StrictHostKeyChecking=yes', '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`, '-p', '2202', '-L', forward, 'carol@box.example.com'])
+  const forward = spawnCalls[0].args[8]
+  assert.deepEqual(spawnCalls[0].args, ['-N', '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`, '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`, '-p', '2202', '-L', forward, 'carol@box.example.com'])
   assert.match(forward, /^\d+:127\.0\.0\.1:3080$/)
   assert.equal(manager.status('s3')!.sshPort, 2202)
   const resultPromise = manager.exec('s3', 'start')
   assert.equal(spawnCalls.length, 2)
   const execCall = spawnCalls[1]
-  assert.deepEqual(execCall.args, ['-o', 'StrictHostKeyChecking=yes', '-p', '2202', 'carol@box.example.com', 'systemctl', 'start', 'dsh-chamber'])
+  assert.deepEqual(execCall.args, ['-p', '2202', 'carol@box.example.com', 'systemctl', 'start', 'dsh-chamber'])
   execCall.child.simulateExit(0)
   const result = await resultPromise
   assert.equal(result.ok, true)
@@ -1075,7 +1075,7 @@ test('startService spawns `ssh user@host systemctl start <service>` and lands se
   assert.equal(spawnCalls.length, 1)
   const call = spawnCalls[0]
   assert.equal(call.command, 'ssh')
-  assert.deepEqual(call.args, ['-o', 'StrictHostKeyChecking=yes', 'bob@lab.example.com', 'systemctl', 'start', 'dsh-chamber'])
+  assert.deepEqual(call.args, ['bob@lab.example.com', 'systemctl', 'start', 'dsh-chamber'])
   call.child.simulateExit(0)
   const result = await resultPromise
   assert.equal(result.ok, true)
@@ -1090,7 +1090,7 @@ test('stopService spawns `ssh user@host systemctl stop <service>`; non-zero exit
   const resultPromise = manager.exec('s2', 'stop')
   assert.equal(spawnCalls.length, 1)
   const call = spawnCalls[0]
-  assert.deepEqual(call.args, ['-o', 'StrictHostKeyChecking=yes', 'bob@lab.example.com', 'systemctl', 'stop', 'dsh-chamber'])
+  assert.deepEqual(call.args, ['bob@lab.example.com', 'systemctl', 'stop', 'dsh-chamber'])
   call.child.simulateExit(0)
   const okResult = await resultPromise
   assert.equal(okResult.ok, true)
@@ -1106,7 +1106,7 @@ test('isActive maps exit 0 → serviceActive true, non-zero → serviceActive fa
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const activePromise = manager.exec('s2', 'is-active')
   assert.equal(spawnCalls.length, 1)
-  assert.deepEqual(spawnCalls[0].args, ['-o', 'StrictHostKeyChecking=yes', 'bob@lab.example.com', 'systemctl', 'is-active', 'dsh-chamber'])
+  assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'systemctl', 'is-active', 'dsh-chamber'])
   spawnCalls[0].child.simulateExit(0)
   const active = await activePromise
   assert.equal(active.ok, true)
@@ -1217,7 +1217,7 @@ test('exec run: the run payload passes through to the provider and captures stdo
   })
   assert.equal(spawnCalls.length, 1)
   assert.equal(spawnCalls[0].command, 'ssh')
-  assert.deepEqual(spawnCalls[0].args, ['-o', 'StrictHostKeyChecking=yes', 'bob@lab.example.com', 'dsh', 'plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'])
+  assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'dsh', 'plugin', '--profile', 'web', 'add', 'pkg@^1.0.0'])
   spawnCalls[0].child.stdout.emit('data', Buffer.from('packed'))
   spawnCalls[0].child.simulateExit(0)
   const result = await resultPromise
@@ -1249,10 +1249,10 @@ test('exec run: the write-file payload drives the provider flow (stdin write + b
     sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
   })
   assert.equal(spawnCalls.length, 1)
-  assert.deepEqual(spawnCalls[0].args, ['-o', 'StrictHostKeyChecking=yes', 'bob@lab.example.com', 'mkdir -p ~/.dsh-chamber/plugins && base64 -d > ~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
+  assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'mkdir -p ~/.dsh-chamber/plugins && base64 -d > ~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
   spawnCalls[0].child.simulateExit(0)
   await waitFor(() => spawnCalls.length === 2)
-  assert.deepEqual(spawnCalls[1].args, ['-o', 'StrictHostKeyChecking=yes', 'bob@lab.example.com', 'cat', '~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
+  assert.deepEqual(spawnCalls[1].args, ['bob@lab.example.com', 'cat', '~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
   // The read-back carries the exact original bytes — the provider hashes the
   // RAW captured bytes, so a binary-safe verification is exercised here.
   spawnCalls[1].child.stdout.emit('data', Buffer.from('hello'))

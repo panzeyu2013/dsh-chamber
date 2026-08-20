@@ -493,10 +493,8 @@ export const chamberBridge: {
   直接执行该脚本；`<tmp>/
   dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即删；启动清理仅删除
   已退出进程或旧格式遗留，绝不误删并行 dev/打包实例的助手）把密码喂给系统 ssh
-  ——**永不上命令行**；所有 ssh 调用强制 `StrictHostKeyChecking=yes`，助手
-  按提示文本区分「主机密钥确认 → no」与「密码/口令 → 密码」。首次连接须由
-  用户在可信通道核对 fingerprint 并预先写入 `known_hosts`，绝不静默接受。
-  无可靠 askpass 的平台
+  ——**永不上命令行**；助手按提示文本区分「主机密钥确认 → yes」与「密码/
+  口令 → 密码」，首次连接无需预先接受主机密钥。无可靠 askpass 的平台
   （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在 `desktop_ssh_set_password`
   IPC 门禁处**显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
   通用路径。
