@@ -191,6 +191,16 @@
   color: var(--dsw-alias-state-success-primary, var(--dsw-alias-label-primary));
 }
 
+.badgeWarn {
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-secondary));
+  border-color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l2));
+}
+
+.badgeError {
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+  border-color: var(--dsw-alias-state-error-primary, var(--dsw-alias-border-l2));
+}
+
 .error,
 .recovery {
   margin: 5px 0;

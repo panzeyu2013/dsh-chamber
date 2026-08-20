@@ -15,6 +15,9 @@ const REPO_ID = /^repo_[0-9a-f]{64}$/u
 const WORKTREE_ID = /^worktree_[0-9a-f]{64}$/u
 const OBJECT_ID = /^[0-9a-f]{40,64}$/u
 const SNAPSHOT_OPERATIONS = new Set(['discover', 'list', 'status', 'associate'])
+const WORKTREE_STATES = new Set(['ready', 'missing', 'invalid', 'not-a-repo'])
+const HEAD_STATES = new Set(['branch', 'detached', 'unborn'])
+const ATTENTION_REASONS = new Set(['merge', 'rebase', 'cherry-pick', 'revert', 'bisect'])
 const SOURCE_ERROR_CODES = new Set([
   'state-source-unavailable', 'state-source-capacity', 'git-unavailable',
   'snapshot-capacity', 'snapshot-deadline',
@@ -22,6 +25,11 @@ const SOURCE_ERROR_CODES = new Set([
 
 function stringIds(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every(isNonEmptyString) ? [...value] : undefined
+}
+
+function attentionReasons(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || !value.every(reason => ATTENTION_REASONS.has(reason))) return undefined
+  return [...value]
 }
 
 function normalizeError(value: unknown): GitWorktreeError | undefined {
@@ -51,6 +59,7 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
   if (!isRecord(value)) return undefined
   const sessionIds = stringIds(value.sessionIds)
   const runningSessionIds = stringIds(value.runningSessionIds)
+  const attention = attentionReasons(value.attention)
   if (
     !isNonEmptyString(value.worktreeId)
     || !WORKTREE_ID.test(value.worktreeId)
@@ -61,6 +70,9 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     || typeof value.isMain !== 'boolean'
     || !(value.dirty === null || typeof value.dirty === 'boolean')
     || typeof value.locked !== 'boolean'
+    || !WORKTREE_STATES.has(value.status)
+    || !HEAD_STATES.has(value.headState)
+    || attention === undefined
     || !(value.workspaceId === null || isNonEmptyString(value.workspaceId))
     || sessionIds === undefined
     || runningSessionIds === undefined
@@ -73,6 +85,9 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     isMain: value.isMain,
     dirty: value.dirty,
     locked: value.locked,
+    status: value.status,
+    headState: value.headState,
+    attention,
     workspaceId: value.workspaceId,
     sessionIds,
     runningSessionIds,

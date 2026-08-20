@@ -13,8 +13,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, dirname, relative, resolve, sep } from 'node:path'
+import { access, lstat, readFile, realpath } from 'node:fs/promises'
+import { isAbsolute, dirname, join, relative, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
 
 const READ_TIMEOUT_MS = 10_000
@@ -94,6 +94,10 @@ export type GitSpawner = (
 export interface WorktreeFileSystem {
   realpath(path: string): Promise<string>
   lstat(path: string): Promise<{ isDirectory(): boolean }>
+  /** True when `path` exists as a file or directory (git-dir state probes). */
+  exists(path: string): Promise<boolean>
+  /** Read a small UTF-8 file (the worktree `.git` pointer). Rejects when absent/unreadable. */
+  readFile(path: string): Promise<string>
 }
 
 export interface GitWorktreeCoreOptions {
@@ -203,6 +207,10 @@ export interface SnapshotError {
   readonly workspaceId?: string
 }
 
+export type GitWorktreeState = 'ready' | 'missing' | 'invalid' | 'not-a-repo'
+
+export type GitAttentionReason = 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect'
+
 export interface SnapshotWorktree {
   readonly worktreeId: string
   readonly path: string
@@ -211,6 +219,12 @@ export interface SnapshotWorktree {
   readonly isMain: boolean
   readonly dirty: boolean | null
   readonly locked: boolean
+  /** Path/repository health: ready | missing | invalid | not-a-repo. */
+  readonly status: GitWorktreeState
+  /** Git HEAD classification: branch | detached | unborn. */
+  readonly headState: 'branch' | 'detached' | 'unborn'
+  /** In-progress Git operations detected in the worktree git dir (best-effort). */
+  readonly attention: readonly GitAttentionReason[]
   readonly workspaceId: string | null
   readonly sessionIds: readonly string[]
   readonly runningSessionIds: readonly string[]
@@ -304,7 +318,19 @@ export async function domainResult<T>(operation: () => Promise<T>): Promise<GitW
   }
 }
 
-const nodeFileSystem: WorktreeFileSystem = { realpath, lstat }
+const nodeFileSystem: WorktreeFileSystem = {
+  realpath,
+  lstat,
+  exists: async path => {
+    try {
+      await access(path)
+      return true
+    } catch {
+      return false
+    }
+  },
+  readFile: async path => readFile(path, 'utf8'),
+}
 
 function fail(code: string, message: string): never {
   throw new GitWorktreeError(code, message)
@@ -754,6 +780,56 @@ function parseWorktreePorcelain(output: string): RawWorktree[] {
   return records
 }
 
+const ZERO_HEAD = /^0+$/u
+
+/** git-dir state files that mark an in-progress Git operation (best-effort). */
+const ATTENTION_PROBES: ReadonlyArray<{ readonly name: string; readonly reason: GitAttentionReason }> = [
+  { name: 'MERGE_HEAD', reason: 'merge' },
+  { name: 'REBASE_HEAD', reason: 'rebase' },
+  { name: 'rebase-merge', reason: 'rebase' },
+  { name: 'rebase-apply', reason: 'rebase' },
+  { name: 'CHERRY_PICK_HEAD', reason: 'cherry-pick' },
+  { name: 'REVERT_HEAD', reason: 'revert' },
+  { name: 'BISECT_LOG', reason: 'bisect' },
+]
+
+function isNotARepositoryError(error: unknown): boolean {
+  return error instanceof GitWorktreeError && /not a git repository/i.test(error.message)
+}
+
+/**
+ * The worktree's git dir: `<path>/.git` when it is a directory (main
+ * checkout), otherwise the target of its `gitdir:` pointer file (linked
+ * worktrees). Resolved against the worktree path when relative.
+ */
+async function worktreeGitDir(path: string, fs: WorktreeFileSystem): Promise<string | null> {
+  const dotGit = join(path, '.git')
+  try {
+    const stat = await fs.lstat(dotGit)
+    if (stat.isDirectory()) return dotGit
+  } catch {
+    // fall through to the pointer-file read
+  }
+  try {
+    const pointer = await fs.readFile(dotGit)
+    const match = /^gitdir:\s*(.+)$/u.exec(pointer.trim())
+    if (match === null) return null
+    const target = match[1]!.trim()
+    return isAbsolute(target) ? target : resolve(path, target)
+  } catch {
+    return null
+  }
+}
+
+/** Best-effort in-progress operation detection; failures yield no attention. */
+async function detectAttention(gitDir: string, fs: WorktreeFileSystem): Promise<GitAttentionReason[]> {
+  const found: GitAttentionReason[] = []
+  for (const probe of ATTENTION_PROBES) {
+    if (await fs.exists(join(gitDir, probe.name))) found.push(probe.reason)
+  }
+  return [...new Set(found)]
+}
+
 /** Host-independent lifecycle implementation; tests inject both Git and state. */
 export class GitWorktreeCore {
   private readonly source: WorktreeStateSource
@@ -1025,6 +1101,7 @@ export class GitWorktreeCore {
           if (workspace !== undefined) associated.add(workspace.workspaceId)
 
           let dirty: boolean | null = null
+          let statusUnhealthy: Extract<GitWorktreeState, 'not-a-repo' | 'invalid'> | null = null
           if (pathAvailable && !entry.bare) {
             if (this.now() >= deadline) {
               if (!statusDeadlineReported) {
@@ -1058,7 +1135,26 @@ export class GitWorktreeCore {
                   path,
                   ...(workspace === undefined ? {} : { workspaceId: workspace.workspaceId }),
                 })
+                statusUnhealthy = isNotARepositoryError(error) ? 'not-a-repo' : 'invalid'
               }
+            }
+          }
+
+          const status: GitWorktreeState = !pathAvailable
+            ? 'missing'
+            : statusUnhealthy ?? 'ready'
+          const headState: 'branch' | 'detached' | 'unborn' = entry.branch === null
+            ? 'detached'
+            : ZERO_HEAD.test(entry.head)
+              ? 'unborn'
+              : 'branch'
+          let attention: GitAttentionReason[] = []
+          if (pathAvailable && !entry.bare && this.now() < deadline) {
+            try {
+              const gitDir = await worktreeGitDir(path, this.fs)
+              if (gitDir !== null) attention = await detectAttention(gitDir, this.fs)
+            } catch {
+              // Attention is best-effort; a probe failure must not fail the row.
             }
           }
 
@@ -1075,6 +1171,9 @@ export class GitWorktreeCore {
             isMain: index === 0,
             dirty,
             locked: entry.locked,
+            status,
+            headState,
+            attention,
             workspaceId: workspace?.workspaceId ?? null,
             sessionIds,
             runningSessionIds,

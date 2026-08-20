@@ -3,6 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { basename, dirname } from 'node:path'
 import {
   GitWorktreeCore,
   GitWorktreeError,
@@ -38,6 +39,8 @@ interface FakeWorktree {
   locked?: boolean
   prunable?: boolean
   statusFailure?: boolean
+  /** stderr text for a status failure (defaults to 'status unavailable'). */
+  statusStderr?: string
 }
 
 class MissingPathError extends Error {
@@ -64,6 +67,10 @@ class FakeRepository {
   readDelayMs = 0
   onWorktreeList?: () => void
   onStatus?: () => void
+  /** worktreePath -> gitDir (linked worktree `.git` pointer target). */
+  readonly gitDirs = new Map<string, string>()
+  /** gitDir -> state file basenames present (attention probes). */
+  readonly gitDirStateFiles = new Map<string, Set<string>>()
 
   readonly fs: WorktreeFileSystem = {
     realpath: async path => {
@@ -74,9 +81,24 @@ class FakeRepository {
       return path
     },
     lstat: async path => {
+      if (this.gitDirs.has(dirname(path)) && basename(path) === '.git') {
+        return { isDirectory: () => false }
+      }
       if (this.aliases.has(path)) return { isDirectory: () => true }
       if (!this.existing.has(path)) throw new MissingPathError(path)
       return { isDirectory: () => true }
+    },
+    exists: async path => {
+      if (this.gitDirs.has(dirname(path)) && basename(path) === '.git') return true
+      for (const [gitDir, files] of this.gitDirStateFiles) {
+        if (path.startsWith(`${gitDir}/`)) return files.has(path.slice(gitDir.length + 1))
+      }
+      return this.existing.has(path)
+    },
+    readFile: async path => {
+      const gitDir = this.gitDirs.get(dirname(path))
+      if (gitDir !== undefined && basename(path) === '.git') return `gitdir: ${gitDir}`
+      throw new MissingPathError(path)
     },
   }
 
@@ -106,7 +128,7 @@ class FakeRepository {
     if (args[0] === 'status') {
       this.onStatus?.()
       const worktree = this.worktrees.find(candidate => candidate.path === request.cwd)
-      if (worktree?.statusFailure) return this.result(2, '', 'status unavailable')
+      if (worktree?.statusFailure) return this.result(2, '', worktree.statusStderr ?? 'status unavailable')
       return this.result(0, worktree?.dirty ? ' M changed.txt\0' : '')
     }
     if (args[0] === 'check-ref-format') {
@@ -421,6 +443,8 @@ test('snapshot enforces one total worktree budget across repositories', async ()
       if (!paths.has(path)) throw new MissingPathError(path)
       return { isDirectory: () => true }
     },
+    exists: async path => paths.has(path),
+    readFile: async () => { throw new MissingPathError('.git') },
   }
   const runner: GitRunner = async request => {
     const match = /^\/multi\/(\d+)\//u.exec(request.cwd)
@@ -1305,4 +1329,66 @@ test('local runner normalizes synchronous spawn throws as pre-admission failure'
       && error.code === 'git-spawn-failed'
       && /synchronous spawn failure/u.test(error.message),
   )
+})
+
+test('snapshot classifies a vanished worktree path as missing', async () => {
+  const { core, repo } = setup({ linked: true })
+  const linked = repo.worktrees[1]!
+  repo.existing.delete(linked.path)
+  const snapshot = await core.snapshot()
+  const row = snapshot.repos[0]!.worktrees[1]!
+  assert.equal(row.status, 'missing')
+  assert.equal(row.dirty, null)
+})
+
+test('snapshot classifies a non-git path as not-a-repo', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.worktrees[1]!.statusFailure = true
+  repo.worktrees[1]!.statusStderr = 'fatal: not a git repository: /repos/feature/.git'
+  const snapshot = await core.snapshot()
+  const row = snapshot.repos[0]!.worktrees[1]!
+  assert.equal(row.status, 'not-a-repo')
+  assert.equal(snapshot.errors.some(error => error.operation === 'status' && error.path === LINKED), true)
+})
+
+test('snapshot classifies a failing status as invalid', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.worktrees[1]!.statusFailure = true
+  const snapshot = await core.snapshot()
+  const row = snapshot.repos[0]!.worktrees[1]!
+  assert.equal(row.status, 'invalid')
+})
+
+test('snapshot classifies branch, detached and unborn heads', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.addLinked({ path: '/repos/unborn', branch: 'unborn', head: '0'.repeat(40) })
+  repo.addLinked({ path: '/repos/detached', branch: null, head: FEATURE_HEAD })
+  const snapshot = await core.snapshot()
+  const rows = snapshot.repos[0]!.worktrees
+  assert.equal(rows.find(row => row.path === MAIN)!.headState, 'branch')
+  assert.equal(rows.find(row => row.path === '/repos/unborn')!.headState, 'unborn')
+  assert.equal(rows.find(row => row.path === '/repos/detached')!.headState, 'detached')
+})
+
+test('snapshot detects in-progress git operations from git-dir state files', async () => {
+  const { core, repo } = setup({ linked: true })
+  const linkedGitDir = `${COMMON}/worktrees/feature`
+  repo.gitDirs.set(LINKED, linkedGitDir)
+  repo.gitDirStateFiles.set(linkedGitDir, new Set(['MERGE_HEAD', 'BISECT_LOG']))
+  repo.gitDirStateFiles.set(COMMON, new Set(['CHERRY_PICK_HEAD']))
+  const snapshot = await core.snapshot()
+  const rows = snapshot.repos[0]!.worktrees
+  const linked = rows.find(row => row.path === LINKED)!
+  assert.deepEqual(linked.attention, ['merge', 'bisect'])
+  const main = rows.find(row => row.path === MAIN)!
+  assert.deepEqual(main.attention, ['cherry-pick'])
+})
+
+test('snapshot attention stays empty for an unresolvable git dir', async () => {
+  const { core, repo } = setup({ linked: true })
+  // No gitDirs registration: the linked .git pointer read fails -> no attention.
+  const snapshot = await core.snapshot()
+  const row = snapshot.repos[0]!.worktrees[1]!
+  assert.deepEqual(row.attention, [])
+  assert.equal(row.status, 'ready')
 })

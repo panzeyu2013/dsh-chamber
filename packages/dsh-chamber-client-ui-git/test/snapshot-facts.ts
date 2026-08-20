@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createSourceOptions, findWorktree, removeBlockReason } from '../src/shared/git-facts.ts'
+import { canTargetSession, createSourceOptions, findWorktree, removeBlockReason } from '../src/shared/git-facts.ts'
 import { GitActionLedger } from '../src/shared/action-ledger.ts'
 import { SerializedRefreshes } from '../src/shared/refresh-flight.ts'
 import { normalizeGitSnapshot } from '../src/shared/snapshot.ts'
@@ -13,7 +13,8 @@ const HEAD = 'c'.repeat(40)
 function worktree(extra: Partial<GitWorktreeInfo> = {}): GitWorktreeInfo {
   return {
     worktreeId: WORKTREE_ID, path: '/repo', head: HEAD, branch: 'main', isMain: false,
-    dirty: false, locked: false, workspaceId: 'ws-1', sessionIds: [], runningSessionIds: [],
+    dirty: false, locked: false, status: 'ready', headState: 'branch', attention: [],
+    workspaceId: 'ws-1', sessionIds: [], runningSessionIds: [],
     ...extra,
   }
 }
@@ -69,9 +70,41 @@ test('safe-remove guard covers main/registration/live/current/fs safety and allo
   assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running')
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's'), 'current')
   assert.equal(removeBlockReason(worktree({ locked: true })), 'locked')
+  assert.equal(removeBlockReason(worktree({ status: 'missing' })), 'unhealthy')
+  assert.equal(removeBlockReason(worktree({ status: 'invalid' })), 'unhealthy')
+  assert.equal(removeBlockReason(worktree({ status: 'not-a-repo' })), 'unhealthy')
   assert.equal(removeBlockReason(worktree({ dirty: true })), 'dirty')
   assert.equal(removeBlockReason(worktree({ dirty: null })), 'status-unknown')
   assert.equal(removeBlockReason(worktree({ branch: null })), undefined)
+})
+
+test('session targeting requires a healthy worktree', () => {
+  assert.equal(canTargetSession(worktree()), true)
+  assert.equal(canTargetSession(worktree({ status: 'missing' })), false)
+  assert.equal(canTargetSession(worktree({ status: 'invalid' })), false)
+  assert.equal(canTargetSession(worktree({ status: 'not-a-repo' })), false)
+  // Unregistered worktrees are adoptable: workspace.create registers them.
+  assert.equal(canTargetSession(worktree({ workspaceId: null })), true)
+})
+
+test('snapshot normalizes health/head/attention fields and rejects malformed values', () => {
+  const snapshot = normalizeGitSnapshot({
+    repos: [{
+      repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo',
+      worktrees: [
+        worktree({ status: 'missing', headState: 'unborn', attention: ['merge', 'bisect'] }),
+        { ...worktree(), status: 'bogus' },
+        { ...worktree(), headState: 'detached', attention: ['nope'] },
+      ],
+    }],
+    errors: [],
+  })
+  assert.equal(snapshot.repos[0].worktrees.length, 1)
+  const row = snapshot.repos[0].worktrees[0]
+  assert.equal(row.status, 'missing')
+  assert.equal(row.headState, 'unborn')
+  assert.deepEqual(row.attention, ['merge', 'bisect'])
+  assert.deepEqual(snapshot.errors.map(error => error.code), ['invalid-worktree', 'invalid-worktree'])
 })
 
 test('action ledger survives projection replacement and blocks a second mutation until the original lease ends', () => {

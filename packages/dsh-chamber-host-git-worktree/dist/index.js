@@ -17,7 +17,7 @@ var __runInitializers = (array, flags, self, value) => {
   return value;
 };
 var __decorateElement = (array, flags, name, decorators, target, extra) => {
-  var fn, it, done, ctx, access, k = flags & 7, s = !!(flags & 8), p = !!(flags & 16);
+  var fn, it, done, ctx, access2, k = flags & 7, s = !!(flags & 8), p = !!(flags & 16);
   var j = k > 3 ? array.length + 1 : k ? s ? 1 : 2 : 0, key = __decoratorStrings[k + 5];
   var initializers = k > 3 && (array[j - 1] = []), extraInitializers = array[j] || (array[j] = []);
   var desc = k && (!p && !s && (target = target.prototype), k < 5 && (k > 3 || !p) && __getOwnPropDesc(k < 4 ? target : { get [name]() {
@@ -29,9 +29,9 @@ var __decorateElement = (array, flags, name, decorators, target, extra) => {
   for (var i = decorators.length - 1; i >= 0; i--) {
     ctx = __decoratorContext(k, name, done = {}, array[3], extraInitializers);
     if (k) {
-      ctx.static = s, ctx.private = p, access = ctx.access = { has: p ? (x) => __privateIn(target, x) : (x) => name in x };
-      if (k ^ 3) access.get = p ? (x) => (k ^ 1 ? __privateGet : __privateMethod)(x, target, k ^ 4 ? extra : desc.get) : (x) => x[name];
-      if (k > 2) access.set = p ? (x, y) => __privateSet(x, target, y, k ^ 4 ? extra : desc.set) : (x, y) => x[name] = y;
+      ctx.static = s, ctx.private = p, access2 = ctx.access = { has: p ? (x) => __privateIn(target, x) : (x) => name in x };
+      if (k ^ 3) access2.get = p ? (x) => (k ^ 1 ? __privateGet : __privateMethod)(x, target, k ^ 4 ? extra : desc.get) : (x) => x[name];
+      if (k > 2) access2.set = p ? (x, y) => __privateSet(x, target, y, k ^ 4 ? extra : desc.set) : (x, y) => x[name] = y;
     }
     it = (0, decorators[i])(k ? k < 4 ? p ? extra : desc[key] : k > 4 ? void 0 : { get: desc.get, set: desc.set } : target, ctx), done._ = 1;
     if (k ^ 4 || it === void 0) __expectFn(it) && (k > 4 ? initializers.unshift(it) : k ? p ? extra = it : desc[key] = it : target = it);
@@ -52,8 +52,8 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/core.ts
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, dirname, relative, resolve, sep } from "node:path";
+import { access, lstat, readFile, realpath } from "node:fs/promises";
+import { isAbsolute, dirname, join, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 var READ_TIMEOUT_MS = 1e4;
 var MUTATION_TIMEOUT_MS = 3e4;
@@ -120,7 +120,19 @@ async function domainResult(operation) {
     };
   }
 }
-var nodeFileSystem = { realpath, lstat };
+var nodeFileSystem = {
+  realpath,
+  lstat,
+  exists: async (path) => {
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  readFile: async (path) => readFile(path, "utf8")
+};
 function fail(code, message) {
   throw new GitWorktreeError(code, message);
 }
@@ -427,6 +439,43 @@ function parseWorktreePorcelain(output) {
   if (records.length === 0) fail("git-protocol-error", "Git returned no worktrees");
   return records;
 }
+var ZERO_HEAD = /^0+$/u;
+var ATTENTION_PROBES = [
+  { name: "MERGE_HEAD", reason: "merge" },
+  { name: "REBASE_HEAD", reason: "rebase" },
+  { name: "rebase-merge", reason: "rebase" },
+  { name: "rebase-apply", reason: "rebase" },
+  { name: "CHERRY_PICK_HEAD", reason: "cherry-pick" },
+  { name: "REVERT_HEAD", reason: "revert" },
+  { name: "BISECT_LOG", reason: "bisect" }
+];
+function isNotARepositoryError(error) {
+  return error instanceof GitWorktreeError && /not a git repository/i.test(error.message);
+}
+async function worktreeGitDir(path, fs) {
+  const dotGit = join(path, ".git");
+  try {
+    const stat = await fs.lstat(dotGit);
+    if (stat.isDirectory()) return dotGit;
+  } catch {
+  }
+  try {
+    const pointer = await fs.readFile(dotGit);
+    const match = /^gitdir:\s*(.+)$/u.exec(pointer.trim());
+    if (match === null) return null;
+    const target = match[1].trim();
+    return isAbsolute(target) ? target : resolve(path, target);
+  } catch {
+    return null;
+  }
+}
+async function detectAttention(gitDir, fs) {
+  const found = [];
+  for (const probe of ATTENTION_PROBES) {
+    if (await fs.exists(join(gitDir, probe.name))) found.push(probe.reason);
+  }
+  return [...new Set(found)];
+}
 var GitWorktreeCore = class {
   source;
   git;
@@ -671,6 +720,7 @@ var GitWorktreeCore = class {
           const workspace = matches[0];
           if (workspace !== void 0) associated.add(workspace.workspaceId);
           let dirty = null;
+          let statusUnhealthy = null;
           if (pathAvailable && !entry.bare) {
             if (this.now() >= deadline) {
               if (!statusDeadlineReported) {
@@ -707,7 +757,18 @@ var GitWorktreeCore = class {
                   path,
                   ...workspace === void 0 ? {} : { workspaceId: workspace.workspaceId }
                 });
+                statusUnhealthy = isNotARepositoryError(error) ? "not-a-repo" : "invalid";
               }
+            }
+          }
+          const status = !pathAvailable ? "missing" : statusUnhealthy ?? "ready";
+          const headState = entry.branch === null ? "detached" : ZERO_HEAD.test(entry.head) ? "unborn" : "branch";
+          let attention = [];
+          if (pathAvailable && !entry.bare && this.now() < deadline) {
+            try {
+              const gitDir = await worktreeGitDir(path, this.fs);
+              if (gitDir !== null) attention = await detectAttention(gitDir, this.fs);
+            } catch {
             }
           }
           const sessionIds = workspace === void 0 ? [] : [...workspace.sessionIds];
@@ -723,6 +784,9 @@ var GitWorktreeCore = class {
             isMain: index === 0,
             dirty,
             locked: entry.locked,
+            status,
+            headState,
+            attention,
             workspaceId: workspace?.workspaceId ?? null,
             sessionIds,
             runningSessionIds

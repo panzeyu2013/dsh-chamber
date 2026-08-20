@@ -43,6 +43,12 @@ export interface GitWorktreeInfo {
   /** null means the host could not determine status; never coerce to clean. */
   dirty: boolean | null
   locked: boolean
+  /** Path/repository health: ready | missing | invalid | not-a-repo. */
+  status: 'ready' | 'missing' | 'invalid' | 'not-a-repo'
+  /** Git HEAD classification: branch | detached | unborn. */
+  headState: 'branch' | 'detached' | 'unborn'
+  /** In-progress Git operations detected in the worktree git dir (best-effort). */
+  attention: string[]
   workspaceId: string | null
   sessionIds: string[]
   runningSessionIds: string[]

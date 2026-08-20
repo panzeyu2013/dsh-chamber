@@ -9,7 +9,7 @@ import {
   clearActionError, createFromPreview, createSessionHere, gitCoordinator, previewCreate,
   refreshSource, removeWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
-import { createSourceOptions, removeBlockReason, shortHead } from '../shared/git-facts.ts'
+import { canTargetSession, createSourceOptions, removeBlockReason, shortHead } from '../shared/git-facts.ts'
 import type {
   GitBranchSpec, GitBusyKind, GitRecovery, GitWorktreeInfo, PreviewCreateResult,
 } from '../shared/types.ts'
@@ -57,6 +57,7 @@ function blockLabel(reason: ReturnType<typeof removeBlockReason>, t: SidebarGitI
   if (reason === 'running') return t('runningBlocked')
   if (reason === 'current') return t('currentBlocked')
   if (reason === 'locked') return t('lockedBlocked')
+  if (reason === 'unhealthy') return t('unhealthyBlocked')
   if (reason === 'dirty') return t('dirtyBlocked')
   if (reason === 'status-unknown') return t('dirtyUnknownBlocked')
   return undefined
@@ -76,6 +77,15 @@ function WorktreeRow({
   const blocked = removeBlockReason(worktree, currentSessionId)
   const blockedLabel = blockLabel(blocked, t)
   const canOfferRemove = !worktree.isMain && worktree.workspaceId !== null
+  const sessionTargetable = canTargetSession(worktree)
+  const isCurrent = currentSessionId !== undefined && worktree.sessionIds.includes(currentSessionId)
+  const attentionLabels: Record<string, GitSidebarKey> = {
+    merge: 'attentionMerge',
+    rebase: 'attentionRebase',
+    'cherry-pick': 'attentionCherryPick',
+    revert: 'attentionRevert',
+    bisect: 'attentionBisect',
+  }
   return (
     <li className={css.worktree}>
       <div className={css.worktreeHead}>
@@ -87,9 +97,9 @@ function WorktreeRow({
         <button
           type="button"
           className={css.iconButton}
-          disabled={busy}
+          disabled={busy || !sessionTargetable}
           aria-label={t('newSessionHere')}
-          title={t('newSessionHere')}
+          title={sessionTargetable ? t('newSessionHere') : t('unhealthyTarget')}
           onClick={() => onNewSession(worktree)}
         >
           <IconPlusOutline16 size={14} />
@@ -112,10 +122,21 @@ function WorktreeRow({
       <div className={css.path} title={worktree.path}>{worktree.path}</div>
       <div className={css.badges}>
         {worktree.isMain && <span className={css.badge}>{t('main')}</span>}
+        {worktree.status === 'missing' && <span className={`${css.badge} ${css.badgeError}`}>{t('missing')}</span>}
+        {worktree.status === 'invalid' && <span className={`${css.badge} ${css.badgeError}`}>{t('invalid')}</span>}
+        {worktree.status === 'not-a-repo' && <span className={`${css.badge} ${css.badgeError}`}>{t('notARepo')}</span>}
+        {worktree.headState === 'unborn' && <span className={`${css.badge} ${css.badgeWarn}`}>{t('unborn')}</span>}
+        {worktree.headState === 'detached' && <span className={css.badge}>{t('detached')}</span>}
+        {worktree.attention.map(reason => (
+          <span className={`${css.badge} ${css.badgeWarn}`} key={reason}>
+            {t(attentionLabels[reason] ?? 'attentionMerge')}
+          </span>
+        ))}
         <span className={css.badge}>
           {worktree.dirty === true ? t('dirty') : worktree.dirty === false ? t('clean') : t('dirtyUnknown')}
         </span>
         {worktree.locked && <span className={css.badge}>{t('locked')}</span>}
+        {isCurrent && <span className={`${css.badge} ${css.badgeLive}`}>{t('current')}</span>}
         {worktree.sessionIds.length > 0 && (
           <span className={css.badge}>{t('sessions')} {worktree.sessionIds.length}</span>
         )}

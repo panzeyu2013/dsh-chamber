@@ -40,6 +40,7 @@ export type RemoveBlockReason =
   | 'running'
   | 'current'
   | 'locked'
+  | 'unhealthy'
   | 'dirty'
   | 'status-unknown'
   | undefined
@@ -51,9 +52,15 @@ export function removeBlockReason(worktree: GitWorktreeInfo, currentSessionId?: 
   if (worktree.runningSessionIds.length > 0) return 'running'
   if (currentSessionId !== undefined && worktree.sessionIds.includes(currentSessionId)) return 'current'
   if (worktree.locked) return 'locked'
+  if (worktree.status !== 'ready') return 'unhealthy'
   if (worktree.dirty === true) return 'dirty'
   if (worktree.dirty === null) return 'status-unknown'
   return undefined
+}
+
+/** A new session can target a worktree only while the path is healthy. */
+export function canTargetSession(worktree: GitWorktreeInfo): boolean {
+  return worktree.status === 'ready'
 }
 
 /** Stable short head for compact sidebar rows. */
