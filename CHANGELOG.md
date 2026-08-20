@@ -12,6 +12,22 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **「检查更新」按钮与更新设置段**（design 11 修订）——设置「通用」段并入
+  `UpdateSection`，用户可显式触发更新检查（与启动/周期静默检查同一条路径，
+  从不自动下载）；`update-gate` 相位门 + 单测。
+
+### 修复
+
+- **退出流程加固**（design 14 review 轮）——退出确认仅在本地 dsh 进程实际
+  存活时弹出（`localProcessAlive`，状态串独立事实）；SIGTERM/SIGINT 走优雅
+  退出路径（will-quit 完整回收，强停不再残留 detached 孤儿进程占端口）；
+  控制面 stop 先强关连接再 close（滞留 SSE/WS 不再挂死退出）；设置壳重构为
+  「连接/通用」两固定入口 + `quitConfirmation` 开关。
+- **插件管理 Modal 两处修复**——浅色主题白底白字（内容锚定
+  label-primary）；本地实例恒 loading 导致 footer「关闭」死控件（移除）。
+
 ### 变更
 
 - **全量对齐 dsh rc.8 baseline（设计 09 §4）** —— `harness.commit` →

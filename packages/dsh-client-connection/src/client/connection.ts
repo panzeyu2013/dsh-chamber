@@ -34,6 +34,7 @@ const CONNECTION_DEFAULTS: Required<ConnectionConfig> = {
   backoffFactor: 2,
   backoffMaxMs: 10_000,
   streamOpenTimeoutMs: 3_000,
+  basePath: '',
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -85,12 +86,19 @@ export class ConnectionController {
   // check, which would spawn a second concurrent pump loop (double streams,
   // duplicated onConnected resync, leaked generations).
   private loopEpoch = 0
+  private readonly api: IApiClient
+  private readonly sinks: ConnectionSinks
 
   constructor(
-    private readonly api: IApiClient,
-    private readonly sinks: ConnectionSinks = {},
+    api: IApiClient,
+    sinks: ConnectionSinks = {},
     config: ConnectionConfig = {},
   ) {
+    // chamber patch (erasableSyntaxOnly): upstream parameter properties are
+    // explicit field assignments here so the copy typechecks under the
+    // chamber's erasable-only config.
+    this.api = api
+    this.sinks = sinks
     this.config = { ...CONNECTION_DEFAULTS, ...config }
   }
 

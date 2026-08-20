@@ -226,7 +226,7 @@ export const chamberBridge: {
    `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见的失败态
    （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**首启竞态修复
    （2026-08，05 §4）**：模块表（`window.__DSH_MODULES__` + `__ModuleLoader__`
-   sink）经 boot.tsx 导出的幂等 `ensureWebModuleSystem` 在**任何 bundle 脚本
+   sink）经 boot.ts 导出的幂等 `ensureWebModuleSystem` 在**任何 bundle 脚本
    执行前**装好（shell.ts 在 collectExtraRows 预加载之前调用，run() 经同一
    helper 收编）——旧顺序下首个带额外行的 boot 会让官方 bundle 在 sink 安装
    前求值、顶层交接抛错，boot 以难懂的 "cannot resolve" 失败。

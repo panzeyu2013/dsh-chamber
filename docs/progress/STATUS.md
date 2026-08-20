@@ -51,7 +51,7 @@
   ctx 服务同实例），`COVERED_FACTORIES` 与 `CHAMBER_COVERED_FACTORY_IDS`
   （chamber-covered.ts leaf 契约）精确一致断言 + `CHAMBER_COVERED_IDS` 覆盖断言 +
   CI 锁步单测（host-graph.test.ts：每个工厂 id 必被覆盖）。**首启竞态修复
-  （2026-08，05 §4）**：模块表经 boot.tsx 幂等 `ensureWebModuleSystem` 在
+  （2026-08，05 §4）**：模块表经 boot.ts 幂等 `ensureWebModuleSystem` 在
   collectExtraRows 预加载之前装好（首个带额外行的 boot 不再让官方 bundle 在
   sink 安装前求值）；shell.ts bootError 分支经测试 loader + fixture 单测覆盖
   （`shell.test.ts`，`--import scripts/test-shell-register.mjs`）。
@@ -114,9 +114,9 @@
   load）；manifest 预加载去重过滤补 `?rev=` 残留形式；设计 09 §3.3 失败降级语义
   按层表述（加载失败响亮归预加载层，apply 失败降级归 boot 内核层）。复验 ✓
   （typecheck / typecheck:client-web / test:client-web 9 / test:renderer-shell 5 /
-  test:sidebar 131 / test:settings-bridge 28 / test:connections 17 /
-  build:renderer / verify:i18n；rc.8 后端实机验证同前条无头记录，本工作区基线
-  仍为 rc.7 99f6f02f，不可复现）。
+  test:sidebar 131 / test:settings-bridge 32 / test:connections 17 /
+  build:renderer / verify:i18n；rc.8 后端实机验证同前条无头记录（当时工作区基线
+  为 rc.7 99f6f02f，已随 rc.8 baseline 对齐 4371cb7 推进，此处为历史记录）。
 - **侧边栏聚合改事件驱动（设计 10）**：实现未排期——改动 05 §3 契约，需评审确认；详见
   `docs/todo/10-todo-event-driven-aggregation.md`。
 - **桌面端更新提示（设计 11，已实现，2026-08）**：M1–M3 全部落地——主进程

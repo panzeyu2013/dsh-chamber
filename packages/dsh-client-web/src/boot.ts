@@ -54,6 +54,7 @@ import type {
 // pulls its Context augmentation (`ctx.uiRenderer`) into this program.
 import * as UiRenderer from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { BootPage } from './boot-page.ts'
+import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from './boot-rows.ts'
 import { classifySweepEntry } from './boot-tolerance.ts'
 import { getStaticModules } from './seed.ts'
 import { STATE_LABELS } from './loader-status.ts'
@@ -82,34 +83,6 @@ export interface AppWebEntryOptions extends BootSeams {
    */
   extraRows?: BootModuleRow[]
 }
-
-/**
- * The modules package's own graph row id. The kernel adopts that entry
- * itself: its client half is shell-bundled and handed to the module system
- * as the bootstrap registration (`ensureWebModuleSystem`), so the plugin-row
- * loop must skip it when a manifest already carries it (the vendored
- * Group.create does not deduplicate by name, and a second fiber would provide
- * 'modules' twice).
- */
-const MODULES_ID = '@deepseek-ai/dsh-client-modules'
-
-/**
- * The ui-renderer package's own graph row id (chamber patch, rc.8 baseline
- * alignment). rc.8 moved the slot-renderer install and the application mount
- * OUT of the shell into this row; the chamber kernel adopts the row the same
- * way it adopts the modules package (page-own covered id — the host-graph
- * merge filters it, chamber-entry never imports it): the client half is
- * shell-static, registered on the shared module table in
- * {@link ensureWebModuleSystem}, and this entry is created by the kernel so
- * the boot mounts through the `uiRenderer` service its apply provides.
- *
- * boot-tolerance.ts's `classifyRendererInstallError` (the rc.7-era "second
- * renderer install → adopt" rule) deliberately does NOT apply here: the
- * kernel is the ONLY installer and its create/sweep path treats a failed
- * ui-renderer row as a fatal kernel-row failure (assertEntriesActive) — the
- * rule stays as a pinned decision rule for a future non-kernel installer.
- */
-const UI_RENDERER_ID = '@deepseek-ai/dsh-client-ui-renderer'
 
 /**
  * The web shell kernel: draws the loading page into a DOM element and runs
@@ -269,12 +242,10 @@ export class AppWebEntry {
     // duplicate-registration protection is __ModuleLoader__.load's own check).
     // No prefetch here: the chamber side pre-loads the whole extra set
     // uniformly, and the kernel-adopted entries are never fetched at all.
-    const rows = [
-      MODULES_ID,
-      UI_RENDERER_ID,
-      ...this.manifest.plugins.map(row => row.id).filter(id => id !== MODULES_ID && id !== UI_RENDERER_ID),
-      ...(this.extraRows?.map(row => row.id) ?? []),
-    ]
+    const rows = composeBootRows(
+      this.manifest.plugins.map(row => row.id),
+      this.extraRows?.map(row => row.id) ?? [],
+    )
     this.page.setTotal(rows.length)
     // Barrier before any entry exists: entry creation materializes bundles,
     // and materialization runs synchronous cross-package require edges that

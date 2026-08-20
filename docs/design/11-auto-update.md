@@ -207,10 +207,11 @@
   （semver 比较；`main.ts` 读 desktop package.json 的 version 并经
   `dsh-chamber:info` 透传渲染层、注入更新控制器；release.yml 断言全部 6 包
   与发布版本一致）。4 个客户端插件包（sidebar/connections/settings-bridge/
-  layout）**不随 chamber 发版移动**——保持各自 fork 时的版本（sidebar/
-  connections/settings-bridge 为 0.1.0-rc.5，layout 为 0.1.0；vendored dsh
-  源为 0.1.0-rc.7，插件版本从不与 dsh 源逐位对齐，也从不参与任何比较/
-  展示，故无需跟随；2026-08 review 澄清措辞）。
+  layout）**不随 chamber 发版移动**——保持各自 fork 时的版本（2026-08
+  rc.8 对齐后统一 bump 到 chamber 发版版本 0.1.3，与 6 个发版包一致；
+  vendored dsh 源为 0.1.0-rc.8——插件版本只在 chamber 侧参与 workspace
+  解析，从不与 dsh 源逐位对齐，也从不参与任何比较/展示；2026-08
+  review 澄清措辞，2026-08 最终轮扫描同步现状）。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、`ssh-passwords.json`）
   天然保留。未来若改变注册表/状态格式 → 首启迁移（幂等、失败响亮不冒充成功）。
 - 升级不要求升级远端 dsh；与旧版本 chamber 的远端实例握手兼容（`verifyUp`）。

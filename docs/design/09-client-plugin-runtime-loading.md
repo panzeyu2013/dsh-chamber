@@ -112,7 +112,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   → `AppWebEntry.run()` 才装表）下，页面**首个**带额外行的 boot 会让脚本在
   sink 安装前求值——官方 bundle 的无守卫顶层交接抛错、factory 永未注册、
   boot 以难懂的 "cannot resolve" 失败（实践中被宿主就绪时序掩盖：首 boot
-  通常 503 降级装表，之后的 boot 才带额外行）。修复：boot.tsx 导出幂等的
+  通常 503 降级装表，之后的 boot 才带额外行）。修复：boot.ts 导出幂等的
   `ensureWebModuleSystem`（首次装表 + 注册 statics，其后复用），shell.ts 在
   `collectExtraRows` 预加载**之前**调用它；`AppWebEntry.run()` 经同一 helper
   收编（N-ctx 复用分支成为唯一路径）。manifest 缺失/畸形时跳过额外预加载

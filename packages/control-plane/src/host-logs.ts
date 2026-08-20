@@ -7,12 +7,13 @@
  * <stateDir>/host-logs/<port>.log, one entry per line:
  *   {"ts":"<ISO 8601>","stream":"stdout|stderr","line":"<text>"}
  *
- * Honest note: today spawn-dsh.ts forwards the host's stdout/stderr to the
- * control-plane logger only — no log files are written yet, so reads of a
- * live host return a typed not-found until a writer is attached. The module
- * never writes, never touches the catalog, and derives the managed port from
- * the spawn registry (<stateDir>/managed-dsh/<pid>.json) or from an explicit
- * port, so it is unit-testable against plain tmp-directory fixtures.
+ * Honest note: spawn-dsh.ts attaches a per-host JSONL writer (createHostLogWriter)
+ * at spawn, so a live host's stdout/stderr lands in <stateDir>/host-logs/<port>.log
+ * and reads resolve; a host that exited before any line was captured may still
+ * report a typed not-found. The module never writes, never touches the catalog,
+ * and derives the managed port from the spawn registry
+ * (<stateDir>/managed-dsh/<pid>.json) or from an explicit port, so it is
+ * unit-testable against plain tmp-directory fixtures.
  *
  * Tail safety: large files are read from the tail (TAIL_READ_BYTES window);
  * when the needed line count does not fit the window and the file is larger

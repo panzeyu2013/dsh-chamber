@@ -6,7 +6,8 @@
  *     no caching of failures, invalidateCapabilities);
  *   - the unary default 30s timeout policy (control).
  * Run directly: node packages/control-plane/test/m1-dsh-client.ts
- * Not registered in any npm script — the coordinator runs smoke.mjs separately.
+ * Run by CI directly (ci.yml) and listed in AGENTS.md; not a root npm script — the
+ * coordinator runs smoke.mjs separately.
  */
 
 import { test } from 'node:test'

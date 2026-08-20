@@ -12,6 +12,26 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Added
+
+- **In-app "Check for updates" button and update settings section** (design 11
+  revision) — the settings General section gains `UpdateSection`, letting the
+  user trigger an explicit update check (same path as the startup/periodic
+  silent checks, never auto-downloads); `update-gate` phase gate + unit test.
+
+### Fixed
+
+- **Quit-flow hardening** (design 14 review round) — the quit confirmation now
+  appears only while a local dsh process is actually alive (`localProcessAlive`,
+  a state-string-independent fact); SIGTERM/SIGINT take the graceful quit path
+  (will-quit full cleanup — hard kills no longer leave detached orphan hosts
+  holding ports); the control plane force-closes connections before close()
+  (lingering SSE/WS no longer hang the exit); the settings shell is restructured
+  to the fixed "Connections/General" entries + a `quitConfirmation` toggle.
+- **Plugin-management modal fixes** — light-theme white-on-white (content
+  anchored to label-primary); the local instance's constant loading phase left
+  the footer "Close" button permanently disabled (removed).
+
 ### Changed
 
 - **Full dsh rc.8 baseline alignment (design 09 §4)** — `harness.commit` →
