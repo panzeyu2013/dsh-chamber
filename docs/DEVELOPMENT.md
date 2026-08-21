@@ -128,7 +128,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 
 ## 5. CI 与发布
 
-- `.github/workflows/ci.yml`：每次 push/PR 运行——验证链（frozen install → 根/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ smoke → renderer 构建）+ 各平台桌面打包 sanity（macOS `dist:desktop:mac` + 真实 smoke；Windows `dist:desktop:win`，`windows-2022`）。
+- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ smoke〔未捆绑运行时 SKIP〕→ renderer 构建），**不打包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
 - `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖 release matrix 中的 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。
 - 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
 

@@ -29,12 +29,10 @@
       未跟踪文件不受影响）。
 - [ ] `bundle-dsh.mjs` `DEFAULT_DSH_VERSION` + `packages/desktop/vendor/dsh/package.json`
       `"@deepseek-ai/dsh"` → 目标版本（先确认 npm 已发布）。
-- [ ] **CI 环境变量（两个 workflow 都要改）**：`.github/workflows/release.yml` 与
-      `.github/workflows/ci.yml`（mac/win 两个打包 job 各有一处）的
-      `env.DSH_CHAMBER_DSH_VERSION` 同步（教训①：曾漏改导致产物捆绑旧版 dsh；
-      教训② v0.1.4 只改了 release.yml、漏改 ci.yml——CI 打包 job 用旧版本跑
-      bundle:dsh，对已提交的新 runtime 锁文件 frozen 安装直接
-      `ERR_PNPM_OUTDATED_LOCKFILE`，全 CI 三 job 全红）。
+- [ ] **CI 环境变量**：`.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`
+      同步（教训①：曾漏改导致产物捆绑旧版 dsh；教训② v0.1.4 时 ci.yml 也硬编码
+      了一份并漏改，CI 打包 job 全红——2026-08 起 CI 不再打包，此 env 仅存在于
+      release.yml；若将来把打包 job 加回 ci.yml，必须连同 ci.yml 一起同步）。
 - [ ] 重建 vendor 树：`node scripts/ensure-harness-vendor.mjs` → 链接数 = 目标
       版本包数（240 之类），确认无告警（HEAD==pin）。
 

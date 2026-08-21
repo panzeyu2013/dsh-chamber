@@ -135,7 +135,7 @@ artifacts.
 
 ## 5. CI & releases
 
-- `.github/workflows/ci.yml`: runs on every push/PR — validation chain (frozen install → root/two-host-package/client-plugin type checks → i18n → control-plane/desktop/renderer/client/host tests, including `test:git` and `test:host-git` → smoke → renderer build) plus per-platform packaging sanity (macOS `dist:desktop:mac` + real smoke; Windows `dist:desktop:win` on `windows-2022`).
+- `.github/workflows/ci.yml`: runs on every push/PR — validation chain only (frozen install → root/two-host-package/client-plugin type checks → i18n → control-plane/desktop/renderer/client/host tests, including `test:git` and `test:host-git` → smoke [SKIPs without a bundled runtime] → renderer build); **no packaging**. Desktop packaging plus the real smoke run live in `release.yml` (tag/manual trigger).
 - `.github/workflows/release.yml`: produces distributable releases — push a `v*` tag (or run manually with a version and optional dry-run). Creates a draft GitHub Release, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, uploads artifacts into the draft, then flips it public. Version assertions cover the chamber packages in the release matrix; the `## [<version>]` section of `CHANGELOG.md` is extracted as the release body (a missing section fails loudly).
 - Both workflows bootstrap the vendor source tree at the `harness.commit` pin before installing.
 

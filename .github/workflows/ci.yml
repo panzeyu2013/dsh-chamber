@@ -6,7 +6,13 @@ on:
   pull_request:
 
 jobs:
-  # Validation chain only — no desktop packaging (fast).
+  # Validation chain only — no desktop packaging (fast). Packaging is built and
+  # published exclusively by release.yml (tag v* / workflow_dispatch), where the
+  # bundler runs with the DSH_CHAMBER_DSH_VERSION matching the committed runtime
+  # lockfile. Keeping packaging out of the push path keeps ordinary pushes fast
+  # (2026-08 decision): the v0.1.4 CI packaging jobs carried a stale hardcoded
+  # DSH_CHAMBER_DSH_VERSION and failed every run with ERR_PNPM_OUTDATED_LOCKFILE
+  # — if packaging jobs ever return to CI, their version env must be synced too.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -70,125 +76,12 @@ jobs:
           pnpm run test:connections
           pnpm run test:client-web
           pnpm run test:connection
+      # SKIPs when the checkout carries no bundled dsh runtime — normal here,
+      # since only packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
+      # node_modules is never; the gate requires a real dsh CLI entry (2026-08
+      # fix). A real SMOKE PASS happens in release.yml's build-macos job against
+      # the freshly bundled runtime.
       - name: Smoke test
         run: pnpm run smoke
       - name: Renderer build
         run: pnpm run build:renderer
-
-  # macOS desktop packaging. v1 ships arm64 only: macos-latest is now macOS 26
-  # (Apple Silicon); macos-13, the last public Intel x64 runner, and macos-14
-  # (deprecated 2026-07, unsupported 2026-11) are both retired/retiring (see
-  # release.yml for the same decision). Smoke then runs against the freshly
-  # bundled dsh runtime (real SMOKE PASS instead of the ubuntu job's SKIP).
-  #
-  # --publish=never is MANDATORY (2026-08 v0.1.2 CI failure postmortem): the
-  # desktop build config carries a github `publish` block (design 11 — the
-  # auto-update feed), and electron-builder 26 IMPLICITLY triggers
-  # publish="onTagOrDraft" when it detects a CI environment and no explicit
-  # --publish flag (PublishManager.js, disabled in v27). CI's read-only
-  # GITHUB_TOKEN then makes the packaging step fail with 401/403. CI only
-  # BUILDS — publishing happens exclusively in release.yml (--publish=always
-  # + GH_TOKEN).
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
-        with:
-          version: 11.21.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: lts/*
-          cache: pnpm
-      - name: Cache pinned harness snapshot
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: vendor/harness-checkout
-          key: harness-${{ hashFiles('harness.commit') }}
-      - name: Bootstrap vendor tree
-        run: node scripts/ensure-harness-vendor.mjs
-      - run: pnpm install --frozen-lockfile
-      - name: Package macOS app
-        run: pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --publish=never
-        env:
-          DSH_CHAMBER_DSH_VERSION: 0.1.1-rc.2
-      - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
-        # No Apple Developer ID / notarization secrets are configured; the
-        # afterPack hook ad-hoc signs the bundle so the code signature is
-        # structurally valid (without it, macOS rejects the quarantined
-        # download as "damaged"). Verify the parts that must be right
-        # regardless: the .app bundle exists, its signature verifies, the
-        # darwin dsh runtime is baked in (extraResources vendor), and
-        # artifacts were made.
-        run: |
-          set -euo pipefail
-          APP_DIR=$(find packages/desktop/release -maxdepth 2 -name "*.app" -type d | head -n 1)
-          test -n "$APP_DIR"
-          echo "app bundle: $APP_DIR"
-          codesign --verify --deep --strict --verbose=2 "$APP_DIR"
-          RUNTIME="$APP_DIR/Contents/Resources/vendor/dsh"
-          test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
-          node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('darwin-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
-          test -n "$(ls packages/desktop/release/*.dmg 2>/dev/null | head -n 1)"
-      - name: Smoke test (bundled dsh runtime)
-        run: pnpm run smoke
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: dsh-chamber-macos
-          path: packages/desktop/release/*.dmg
-          if-no-files-found: error
-
-  # Windows desktop packaging. Must run on a Windows runner: bundle:dsh bakes
-  # the host platform's dsh runtime (win32-x64 here) into vendor/dsh — a
-  # macOS-produced bundle would ship darwin binaries inside the Windows app.
-  # windows-2022, not windows-latest: the node-gyp stack does not detect the
-  # VS 18 toolchain that windows-latest ships (same finding as OpenChamber) —
-  # bundle:dsh builds node-pty natively on this runner. x64 only.
-  # --publish=never: same mandatory rule as the mac leg (see the mac comment —
-  # the github publish block makes electron-builder 26 implicitly publish in
-  # CI without an explicit flag; CI only builds).
-  build-windows:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
-        with:
-          version: 11.21.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: lts/*
-          cache: pnpm
-      - name: Cache pinned harness snapshot
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: vendor/harness-checkout
-          key: harness-${{ hashFiles('harness.commit') }}
-      - name: Bootstrap vendor tree
-        run: node scripts/ensure-harness-vendor.mjs
-      - run: pnpm install --frozen-lockfile
-      - name: Package Windows app
-        run: pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
-        env:
-          DSH_CHAMBER_DSH_VERSION: 0.1.1-rc.2
-      - name: Verify packaged Windows app (OpenChamber-style, unsigned)
-        # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
-        # and that the win32 dsh runtime made it into the unpacked app.
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(node -p 'process.platform + "-" + process.arch')" = "win32-x64"
-          test -d packages/desktop/release/win-unpacked
-          RUNTIME=packages/desktop/release/win-unpacked/resources/vendor/dsh
-          test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
-          node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('win32-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
-          test -n "$(ls packages/desktop/release/*.exe packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: dsh-chamber-windows
-          path: |
-            packages/desktop/release/*.exe
-            packages/desktop/release/*.zip
-            packages/desktop/release/*.blockmap
-          if-no-files-found: error
