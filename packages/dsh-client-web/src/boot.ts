@@ -202,6 +202,10 @@ export class AppWebEntry {
 
   /** Prefetch stage-one bundles; their import path owns any eventual failure. */
   private async prefetchImmediateTier(): Promise<void> {
+    // A transport that carries `loadBundle` supplies the bundle bytes itself
+    // (not over HTTP), so skip the immediately-tier prefetch.
+    const transport = (globalThis as { __DSH_TRANSPORT__?: { loadBundle?: unknown } }).__DSH_TRANSPORT__
+    if (transport?.loadBundle !== undefined) return
     await Promise.all(this.manifest.plugins
       .filter(row => row.immediately)
       .map(row => this.modules.prefetch(row.id).catch((_prefetchError: unknown) => {
@@ -423,9 +427,17 @@ export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
     target.load({ id: UI_RENDERER_ID, factory: () => UiRenderer })
   }
 
+  // Aligned with upstream rc.2: a worker-preview transport may carry its own
+  // `loadBundle`; chamber has no such scenario, so this only keeps the
+  // structure consistent. The transport hook wins over the constructor seams
+  // only when the transport actually defines it.
+  const transport = (globalThis as {
+    __DSH_TRANSPORT__?: { loadBundle?: ClientModuleCreateOptions['loadBundle'] }
+  }).__DSH_TRANSPORT__
   const modules = target.create({
     boot: win.__DSH_BOOT__,
     staticModules: getStaticModules(),
+    ...transport?.loadBundle === undefined ? {} : { loadBundle: transport.loadBundle },
     ...seams,
   })
   win.__DSH_MODULES__ = modules
@@ -441,7 +453,7 @@ interface ChamberWindow extends DshWindow {
 /**
  * Install the queue-mode `window.__ModuleLoader__` facade — the chamber mirror
  * of the official host HTML injection (dsh-client-modules node half
- * `injectBootManifest`): a pending registration queue that `create()` drains
+ * `bootInjections`): a pending registration queue that `create()` drains
  * by materializing the modules bootstrap and delegating construction to
  * `createClientModuleSystem`. `create()` is called exactly once by
  * {@link ensureWebModuleSystem}; the resulting {@link ClientModuleSystem}

@@ -14,6 +14,80 @@
 
 ### 新增
 
+（v0.1.4 发布后的下一版本占位）
+
+## [0.1.4] - 2026-08-21
+
+### 新增
+
+- **Git Worktree 插件 OpenChamber 呈现对齐（设计 08 §11）** —— **workspace
+  行即 Git 表面**：occupant 渲染进 workspace 头部行内（分支 chip 常显、
+  行内创建/删除动作与 "+"/kebab 同 hover 触发、状态徽标 dirty/↑↓
+  ahead-behind/健康/attention），独立 git 行与独立面板座位移除
+  （`sidebar.workspace.git` 上下文座位替代 `sidebar.git`）。创建对话框对齐
+  OpenChamber：New/Existing 双 tab、分支名双词 slug 查重、目录同步/重置、
+  来源分支下拉（localStorage 按仓库记忆）、已有分支可选框（快照 branches）、
+  **单击直接创建**（无预览屏，host 校验链保留）、**创建永不提交会话**
+  （recovery 携带 createSession 标志）。删除对话框列出关联会话标题（≤5 +
+  "还有 N 条"）+ **可选同时删除本地分支**（用户授权，失败如实上报且不阻断
+  已删工作树）。
+- **Git Worktree 后端对齐** —— 统一 worktree 根
+  `<DSH_HOME>/worktrees/<仓库>-<hash12>/<目录>`（集中、跨同名仓库无冲突、
+  仓库工作树外）；**来源分支 startRef**（新分支从所选分支 HEAD 起，精确
+  commit 钉死 + create 复验）；快照 **upstream/ahead/behind 只读事实**
+  （status `--branch`，基于本地 refs 永不 fetch）；发现缓存 30s TTL +
+  workspace 签名失效；`show-ref --heads`/`branch -D` 白名单新增。
+- **显示全部 worktree（Plan A）** —— 未注册工作树按仓库分散到 repo 组
+  末尾（名称=目录 basename，行样式与派生 workspace 一致），"新建会话"即
+  adopt 懒注册、"删除"走未注册删除（host `workspaceId` 可选 + `path`，
+  git-first 保留全部守卫，`next: 'none'` 跳过 workspace 删除）；孤儿
+  workspace（路径已消失）显示"已消失"徽标，删除弹专门确认（仅清理注册、
+  会话保留转未分组）；关联会话计数只统计可见会话（排除已归档/子代理）。
+- **对话框细节** —— 创建对话框双 tab 改**滑块式切换**、来源分支/已有分支
+  下拉复用仓库 Menu 原语（自定义样式，弃用系统 select）、**目录重名自动
+  加数字后缀**（`name-2`/`name-3`…，打开/切换/失焦/提交四处查重，同仓库
+  范围）；删除对话框移除长说明文字、工作树路径颜色提为主色。
+
+### 修复
+
+- Git host：**startRef 解析层被丢弃**（一选来源分支即 `invalid-input`，
+  P1）；缺失分支 exit 128 被当硬错误（`localBranchHead` 非零即 null）；
+  create 不清发现缓存（新工作树快照 30s 不可见）；快照每仓库每轮多余
+  show-ref（缓存 branches 未消费）；deleteBranch 重放路径静默跳过。
+- Git 客户端：无会话创建在恢复重试时仍建会话并跳转；existing tab 残留
+  new 模式建议分支；existing 目录被静默覆盖；occupant 按钮未纳入拖拽
+  尾随 click 抑制；分支删除结果被解码丢弃；attention/upstream 等新字段
+  对旧 host 包按"缺省降级 + 未知值仍拒"解码（不再整源静默消失）；blur
+  规范化保留非 ASCII（中文分支名不再被改写成 `-`）；死样式/死 locale
+  清理。
+- **Git host 404 语义**：git RPC 404 判定为确定性的
+  `git-host-not-loaded`（host 包缺失或未生效，不建恢复、不重试）——本地
+  重启桌面端、远程在连接设置中重下发 chamber host 包并"重启生效"。
+- **一键重启远程实例**：connections 插件的 chamber 块新增"重启实例"按钮
+  （`restart_service`）与 seed 后的"重启生效"（pendingRestart）态；同时
+  chamber 双包 seed 新增 `gitWorktree` 探测。
+- **窗口重建崩溃根因**：desktop 用带尾斜杠的 rendererOrigin 重建窗口产生
+  `//` 双斜杠 URL，control-plane 的 `new URL` 解析在 Node 22 抛异常导致
+  致命退出——两端修复（URL 归一化 + 解析 try/catch 返回 400）。
+
+### 变更
+
+- **dsh 基线升级 0.1.0-rc.8 → 0.1.1-rc.2** —— 构建期源码（`harness.commit` /
+  vendor 树）、捆绑运行时（`@deepseek-ai/dsh`）与兄弟检出统一到 rc.2；
+  in-repo fork 副本重基于上游 rc.2：`dsh-client-connection`（RPC 签名合并
+  同时容纳上游 transport override、HTTP body 上限 160→300 MiB、
+  `__DSH_TRANSPORT__` 传输钩子接线且完整保留 chamber per-instance basePath
+  补丁）、`dsh-client-web`（boot 内核 `__DSH_TRANSPORT__.loadBundle` 接线 +
+  预取跳过）。上游 rc.2 的图片/Files 管线（200MiB 图片准入）经 chamber 代理
+  可达（见下条）。
+- **控制面代理体积上限 50/100 → 300 MiB** —— per-instance 代理
+  （instance-proxy）请求体/响应体上限与进程级缓冲预算对齐上游 rc.2 的
+  300MiB 请求体上限（200MiB 图片 base64 膨胀 ~267.7MiB 后仍留余量）；
+  413/503 语义与 30s 分片空闲超时不变。
+
+## [0.1.3] - 2026-08-20
+### 新增
+
 - **Git Worktree 独立插件（设计 08）** —— 新增实例内
   `@dsh-chamber/dsh-host-git-worktree` Remote 与首屏静态
   `@dsh-chamber/dsh-client-ui-git`：30 秒单飞拓扑、`sidebar.git` 座位、创建
@@ -37,7 +111,20 @@
   `UpdateSection`，用户可显式触发更新检查（与启动/周期静默检查同一条路径，
   从不自动下载）；`update-gate` 相位门 + 单测。
 
+- **rc.8 后端版本容忍（设计 09 §3.3 修订）** —— 实例后端 dsh 官方前端版本与
+  chamber 壳不同步时不再整 boot 崩溃：壳未覆盖的宿主图额外行（含 rc.8 新增
+  `dsh-client-ui-attachment` client half 等核心行）apply/materialize 失败降级为
+  **特性缺席**（console.error + status `failed`，shell 照常 boot）；壳种子词表对齐
+  rc.8 官方平台集（平台词 = 永不成为图行的包）；app-shell renderer 安装容错（后端
+  `ui-renderer` 行先装则采纳）；chamber 入口 bundle 装载去 `?rev=`（与 vite chunk
+  图裸引用同 URL → 延迟 ui-* 族不再二次执行入口 bundle，duplicate factory 消失）。
+- **boot 容错决策规则单测（`pnpm run test:client-web`）** —— 版本容忍判定规则
+  提取为纯函数模块（`dsh-client-web/src/boot-tolerance.ts`）并纳入 CI 单测面，
+  后续改动不再靠人工回归。
+
+
 ### 修复
+
 
 - **退出流程加固**（design 14 review 轮）——退出确认仅在本地 dsh 进程实际
   存活时弹出（`localProcessAlive`，状态串独立事实）；SIGTERM/SIGINT 走优雅
@@ -47,7 +134,19 @@
 - **插件管理 Modal 两处修复**——浅色主题白底白字（内容锚定
   label-primary）；本地实例恒 loading 导致 footer「关闭」死控件（移除）。
 
+
+- 实例运行 rc.8 官方前端时 chamber 渲染器 boot 崩溃（seed 词表遮蔽 factory →
+  "invalid plugin"），现降级为特性缺席、实例照常可用。
+- 延迟加载的 ui-* 族导致 tool-call 节点渲染"未知 surface 事件"兜底文案（chamber
+  入口 bundle 因 `?rev=` 与 chunk 图裸引用被浏览器视为不同模块而二次执行）。
+- 后端 `ui-renderer` 行先装 slot-renderer 时 app-shell 整 boot 失败，现采纳已装
+  renderer。
+- boot 容错日志措辞与实际失败类型对齐；manifest 预加载行去重过滤覆盖旧的 `?rev=`
+  残留形式。
+
+
 ### 变更
+
 
 - **全量对齐 dsh rc.8 baseline（设计 09 §4）** —— `harness.commit` →
   141eb6fef8（dsh 0.1.0-rc.8）：vendor 源物化为仓库内受管快照
@@ -60,33 +159,7 @@
   0.1.0-rc.8）。rc.8 客户端自带 `commands.execute` 的 `images` 参数，临时兼容桥
   随对齐移除；rc.7 宿主随对齐移出支持面。
 
-## [0.1.3] - 2026-08-20
 
-### 新增
-
-- **rc.8 后端版本容忍（设计 09 §3.3 修订）** —— 实例后端 dsh 官方前端版本与
-  chamber 壳不同步时不再整 boot 崩溃：壳未覆盖的宿主图额外行（含 rc.8 新增
-  `dsh-client-ui-attachment` client half 等核心行）apply/materialize 失败降级为
-  **特性缺席**（console.error + status `failed`，shell 照常 boot）；壳种子词表对齐
-  rc.8 官方平台集（平台词 = 永不成为图行的包）；app-shell renderer 安装容错（后端
-  `ui-renderer` 行先装则采纳）；chamber 入口 bundle 装载去 `?rev=`（与 vite chunk
-  图裸引用同 URL → 延迟 ui-* 族不再二次执行入口 bundle，duplicate factory 消失）。
-- **boot 容错决策规则单测（`pnpm run test:client-web`）** —— 版本容忍判定规则
-  提取为纯函数模块（`dsh-client-web/src/boot-tolerance.ts`）并纳入 CI 单测面，
-  后续改动不再靠人工回归。
-
-### 修复
-
-- 实例运行 rc.8 官方前端时 chamber 渲染器 boot 崩溃（seed 词表遮蔽 factory →
-  "invalid plugin"），现降级为特性缺席、实例照常可用。
-- 延迟加载的 ui-* 族导致 tool-call 节点渲染"未知 surface 事件"兜底文案（chamber
-  入口 bundle 因 `?rev=` 与 chunk 图裸引用被浏览器视为不同模块而二次执行）。
-- 后端 `ui-renderer` 行先装 slot-renderer 时 app-shell 整 boot 失败，现采纳已装
-  renderer。
-- boot 容错日志措辞与实际失败类型对齐；manifest 预加载行去重过滤覆盖旧的 `?rev=`
-  残留形式。
-
-### 变更
 
 - 壳种子词表移除 rc.7 遗留平台词（`dsh-client-web-react` /
   `dsh-client-ui-attachment` / `dsh-client-schema-form`），与 rc.8 官方一致。

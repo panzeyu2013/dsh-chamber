@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Web 外壳内核：`new AppWebEntry(container, options?).run()` 通过两阶段启动（rc.8 形态）挂载整个客户端。第一阶段（模块侧）：收编（或安装）共享客户端模块系统（`@deepseek-ai/dsh-client-modules`，经 `window.__ModuleLoader__` bootstrap facade 构建），以主机推送的配置项图（`window.__DSH_BOOT__`）为基础，并行预取 `immediately` 层级；执行组合包只会注册 factory。第二阶段（插件侧）：挂载仓库内置的 Cordis Loader，并通过其 `internal` 约定注入模块系统；为每一行图数据创建一个 loader 配置项（tree.import 会物化各模块）；等待完全停稳后审计激活状态，再经 `uiRenderer` 服务挂载真实 UI（rc.8 渲染器行——此处由内核收编）。加载页无框架（`boot-page.ts`）。组合完全由主机图决定：花名册和 immediately 层级都位于负责组合的应用中；外壳不作任何组合决策。
+Web 外壳内核：`new AppWebEntry(container, options?).run()` 通过两阶段启动（rc.2 形态）挂载整个客户端。第一阶段（模块侧）：收编（或安装）共享客户端模块系统（`@deepseek-ai/dsh-client-modules`，经 `window.__ModuleLoader__` bootstrap facade 构建），以主机推送的配置项图（`window.__DSH_BOOT__`）为基础，并行预取 `immediately` 层级；执行组合包只会注册 factory。第二阶段（插件侧）：挂载仓库内置的 Cordis Loader，并通过其 `internal` 约定注入模块系统；为每一行图数据创建一个 loader 配置项（tree.import 会物化各模块）；等待完全停稳后审计激活状态，再经 `uiRenderer` 服务挂载真实 UI（rc.2 渲染器行——此处由内核收编）。加载页无框架（`boot-page.ts`）。组合完全由主机图决定：花名册和 immediately 层级都位于负责组合的应用中；外壳不作任何组合决策。
 
 外壳自给自足（web2 硬性规则）：内核除两个 bootstrap 身份外不对任何插件包执行值导入——modules 包（`@deepseek-ai/dsh-client-modules`，模块系统不能经由自身抵达）与 ui-renderer 包（`@deepseek-ai/dsh-client-ui-renderer`，rc.8 把渲染器移出外壳；chamber 内核收编其 client half，挂载与后端版本无关）。其余全部作为 loader 行抵达。
 

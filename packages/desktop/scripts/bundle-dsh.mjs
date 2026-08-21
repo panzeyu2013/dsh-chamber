@@ -17,7 +17,7 @@ import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
  *   - 默认固定为经验证的精确版本（构建永不解析浮动 tag/range）
  *   - 此版本只属于桌面应用内嵌的本地 runtime，不要求远程 dsh 同版本；
  *     远程实例独立升级，只在连接时做协议能力兼容检查
- *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（如 0.1.0-rc.8）
+ *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（如 0.1.1-rc.2）
  *     用于显式升级验证；`latest`、range 与 URL 一律拒绝
  *   - 封装完成后 vendor/dsh/package.json 记录实际解析到的精确版本
  *     （dependencies["@deepseek-ai/dsh"]），可复现重建；--force 刷新当前 pin。
@@ -64,7 +64,7 @@ cleanStaleWorkspaces();
 const recovery = recoverBundleSwap(dest, backup);
 if (recovery === 'restored') console.warn('[bundle-dsh] 已恢复上次中断交换前的可用 dsh 封装。');
 
-const DEFAULT_DSH_VERSION = '0.1.0-rc.8';
+const DEFAULT_DSH_VERSION = '0.1.1-rc.2';
 const BUNDLE_PNPM_VERSION = '11.21.0';
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const VERSION = process.env.DSH_CHAMBER_DSH_VERSION ?? DEFAULT_DSH_VERSION;

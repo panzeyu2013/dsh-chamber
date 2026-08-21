@@ -14,6 +14,106 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Added
 
+(placeholder for the next version after v0.1.4)
+
+## [0.1.4] - 2026-08-21
+
+### Added
+
+- **Git worktree plugin OpenChamber presentation alignment (design 08 §11)**
+  — the **workspace row IS the git surface**: the occupant renders inside the
+  workspace header row (always-visible branch chip, inline create/remove
+  actions revealed together with the row's "+"/kebab on hover, status badges
+  for dirty / ↑↓ ahead-behind / health / attention); the standalone git line
+  and the standalone panel seat are removed (the contextual
+  `sidebar.workspace.git` seat replaces `sidebar.git`). The create dialog is
+  aligned with OpenChamber: New/Existing tabs, de-duplicated two-word slug
+  suggestion, directory sync/reset, source-branch dropdown (per-repo
+  localStorage memory), an existing-branch picker fed by snapshot branches,
+  **one-click direct create** (no preview screen; the host validation chain is
+  kept), and **creating never commits a session** (the recovery record carries
+  the createSession flag). The remove dialog lists the affected session titles
+  (≤5 + "and N more") and can **optionally delete the local branch** (user
+  decision; a failed branch delete is reported honestly and never undoes the
+  removed worktree).
+- **Git worktree backend alignment** — a unified worktree root
+  `<DSH_HOME>/worktrees/<repo>-<hash12>/<dir>` (centralized, collision-free
+  across same-named repos, outside any working tree); **source branch
+  (startRef)** — a new branch starts from the chosen local branch HEAD, pinned
+  to the exact commit and re-verified at create; snapshot **upstream / ahead /
+  behind read-only facts** (status `--branch`, local refs only, never
+  fetched); 30s discovery cache with workspace-signature invalidation; new
+  `show-ref --heads` / `branch -D` allowlist shapes.
+- **Show ALL worktrees (Plan A)** — unregistered worktrees render at the end
+  of their repository group (name = directory basename, row style matching
+  derived workspaces); "New session" lazy-registers (adopt), "Remove" runs the
+  unregistered removal (host `workspaceId` optional + `path`, git-first with
+  every guard kept, `next: 'none'` skips the workspace delete); orphaned
+  workspaces (path gone) show a "Missing" badge and delete through a dedicated
+  confirm (registration cleanup only; sessions are kept and become
+  Ungrouped); the associated-session count counts only VISIBLE sessions
+  (archived / subagent excluded).
+- **Dialog details** — the create dialog's tabs become a **slider-style
+  switch**; the source-branch / existing-branch dropdowns reuse the repo's
+  Menu primitive (custom styling, no native selects); the directory name
+  **auto-suffixes on collision** (`name-2`/`name-3`…, checked on open / tab
+  switch / blur / submit, same-repo scope); the remove dialog drops its long
+  description text and the worktree path ink is lifted to the primary color.
+
+### Fixed
+
+- Git host: **startRef was dropped at the input-parser layer** (choosing a
+  source branch failed with `invalid-input`, P1); a missing branch reported
+  with exit 128 was treated as a hard git failure (`localBranchHead` now maps
+  any non-zero exit to "absent"); create did not clear the discovery caches
+  (new worktrees invisible to snapshots for up to 30s); snapshots ran a
+  redundant `show-ref --heads` per repo per poll (the cached branches were
+  never consumed); deleteBranch was silently skipped on target-absent replay
+  paths.
+- Git client: a session-less create still committed and opened a session on
+  recovery retry; the Existing tab kept the new-mode random branch suggestion;
+  Existing-mode directory edits were silently overwritten; the occupant's
+  buttons were not covered by the sidebar's drag-end trailing-click
+  suppression; branch-delete outcomes were dropped by the decoder; the new
+  attention/upstream fields now decode as "absent degrades, present-but-
+  unknown rejects" for older hosts (no more silently vanishing git surface);
+  blur normalization preserves non-ASCII (Chinese branch names are no longer
+  rewritten to `-`); dead styles/locale keys cleaned up.
+- **Git host 404 semantics**: a git RPC 404 is a definitive
+  `git-host-not-loaded` (host package missing or not yet effective — no
+  recovery, no retry): restart the desktop locally, or re-seed the chamber
+  host packages in the remote connection settings and click "restart to take
+  effect".
+- **One-click remote restart**: the connections plugin's chamber block gains
+  a "Restart instance" button (`restart_service`) and a pendingRestart
+  "restart to take effect" state after seeding; the dual-package chamber seed
+  also probes `gitWorktree`.
+- **Window-rebuild crash root cause**: the desktop rebuilt the window with a
+  trailing-slash renderer origin producing a `//` URL, and the control
+  plane's `new URL` parse threw on Node 22 → fatal exit. Fixed on both ends
+  (origin normalization + parse try/catch returning 400).
+
+### Changed
+
+- **dsh baseline upgrade 0.1.0-rc.8 → 0.1.1-rc.2** — the build-time source
+  (`harness.commit` / vendor tree), the bundled runtime (`@deepseek-ai/dsh`)
+  and the sibling checkout are unified on rc.2; the in-repo forks are re-based
+  on upstream rc.2: `dsh-client-connection` (merged RPC signature that also
+  accepts the upstream transport override, HTTP body cap 160→300 MiB, and the
+  `__DSH_TRANSPORT__` transport-hook wiring while fully keeping the chamber
+  per-instance basePath patch) and `dsh-client-web` (boot kernel
+  `__DSH_TRANSPORT__.loadBundle` wiring + prefetch skip). The upstream rc.2
+  image/Files pipeline (200 MiB image admission) is now reachable through the
+  chamber proxy (see next entry).
+- **Control-plane proxy body caps 50/100 → 300 MiB** — the per-instance
+  proxy's request/response caps and the process-wide buffered budget align
+  with the upstream rc.2 300 MiB request cap (200 MiB of images still fits
+  after ~267.7 MiB base64 expansion); the 413/503 semantics and the 30s
+  chunk-idle timeout are unchanged.
+
+## [0.1.3] - 2026-08-20
+### Added
+
 - **Independent Git worktree plugin (design 08)** — adds the in-instance
   `@dsh-chamber/dsh-host-git-worktree` Remote and the first-screen static
   `@dsh-chamber/dsh-client-ui-git`: 30-second single-flight topology,
@@ -46,39 +146,6 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   user trigger an explicit update check (same path as the startup/periodic
   silent checks, never auto-downloads); `update-gate` phase gate + unit test.
 
-### Fixed
-
-- **Quit-flow hardening** (design 14 review round) — the quit confirmation now
-  appears only while a local dsh process is actually alive (`localProcessAlive`,
-  a state-string-independent fact); SIGTERM/SIGINT take the graceful quit path
-  (will-quit full cleanup — hard kills no longer leave detached orphan hosts
-  holding ports); the control plane force-closes connections before close()
-  (lingering SSE/WS no longer hang the exit); the settings shell is restructured
-  to the fixed "Connections/General" entries + a `quitConfirmation` toggle.
-- **Plugin-management modal fixes** — light-theme white-on-white (content
-  anchored to label-primary); the local instance's constant loading phase left
-  the footer "Close" button permanently disabled (removed).
-
-### Changed
-
-- **Full dsh rc.8 baseline alignment (design 09 §4)** — `harness.commit` →
-  141eb6fef8 (dsh 0.1.0-rc.8): the vendor source is materialized as the in-repo
-  managed snapshot `vendor/harness-checkout` (avoids the pnpm 11 lockfile pruning;
-  `--frozen-lockfile` passes); the boot kernel moves to the rc.8 module-system
-  bootstrap (`boot.ts` class kernel + `__ModuleLoader__` facade + BootPage loading
-  page, mount via `ctx.uiRenderer`); the composite deferred family gains +3
-  coverage (`ui-attachment` / `ui-brand-official` / `ui-reference`), `ui-renderer`
-  becomes page-own; web-react/schema-form deep imports are removed/migrated
-  (rendering assembly moved into the ui-renderer row, settings packages move to
-  `SettingsSchemaService`); the local host is upgraded to rc.8 (vendor dsh
-  0.1.0-rc.8). The rc.8 client carries the `commands.execute` `images` argument
-  natively, so the temporary compat bridge is removed; rc.7 hosts leave the
-  supported set with this alignment.
-
-## [0.1.3] - 2026-08-20
-
-### Added
-
 - **rc.8 backend version tolerance (design 09 §3.3 revision)** — an instance
   whose backend dsh frontend version differs from the chamber shell no longer
   fails the whole boot: extra host-graph rows the shell does not cover
@@ -96,7 +163,21 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   (`dsh-client-web/src/boot-tolerance.ts`) and added to the CI unit-test
   surface.
 
+
 ### Fixed
+
+
+- **Quit-flow hardening** (design 14 review round) — the quit confirmation now
+  appears only while a local dsh process is actually alive (`localProcessAlive`,
+  a state-string-independent fact); SIGTERM/SIGINT take the graceful quit path
+  (will-quit full cleanup — hard kills no longer leave detached orphan hosts
+  holding ports); the control plane force-closes connections before close()
+  (lingering SSE/WS no longer hang the exit); the settings shell is restructured
+  to the fixed "Connections/General" entries + a `quitConfirmation` toggle.
+- **Plugin-management modal fixes** — light-theme white-on-white (content
+  anchored to label-primary); the local instance's constant loading phase left
+  the footer "Close" button permanently disabled (removed).
+
 
 - Chamber renderer boot crash against an rc.8 official frontend (seed word
   shadowing the factory → "invalid plugin"); now degrades to absent features
@@ -110,7 +191,25 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 - Boot-tolerance log wording aligned with the actual failure type; the
   manifest preload dedupe filter now also strips stale `?rev=` forms.
 
+
 ### Changed
+
+
+- **Full dsh rc.8 baseline alignment (design 09 §4)** — `harness.commit` →
+  141eb6fef8 (dsh 0.1.0-rc.8): the vendor source is materialized as the in-repo
+  managed snapshot `vendor/harness-checkout` (avoids the pnpm 11 lockfile pruning;
+  `--frozen-lockfile` passes); the boot kernel moves to the rc.8 module-system
+  bootstrap (`boot.ts` class kernel + `__ModuleLoader__` facade + BootPage loading
+  page, mount via `ctx.uiRenderer`); the composite deferred family gains +3
+  coverage (`ui-attachment` / `ui-brand-official` / `ui-reference`), `ui-renderer`
+  becomes page-own; web-react/schema-form deep imports are removed/migrated
+  (rendering assembly moved into the ui-renderer row, settings packages move to
+  `SettingsSchemaService`); the local host is upgraded to rc.8 (vendor dsh
+  0.1.0-rc.8). The rc.8 client carries the `commands.execute` `images` argument
+  natively, so the temporary compat bridge is removed; rc.7 hosts leave the
+  supported set with this alignment.
+
+
 
 - The shell seed word table drops the rc.7-era platform words
   (`dsh-client-web-react` / `dsh-client-ui-attachment` /

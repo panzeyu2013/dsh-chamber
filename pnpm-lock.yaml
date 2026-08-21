@@ -1454,6 +1454,21 @@ importers:
         specifier: workspace:^
         version: link:../dsh-invariants
 
+  vendor/harness-packages/@deepseek-ai/dsh-authorization:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../cordis
+      '@deepseek-ai/dsh-credentials':
+        specifier: workspace:^
+        version: link:../dsh-credentials
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../dsh-invariants
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:^
+        version: link:../dsh-llm
+
   vendor/harness-packages/@deepseek-ai/dsh-base:
     dependencies:
       '@deepseek-ai/cordis-plugin-hmr':
@@ -3202,9 +3217,15 @@ importers:
       '@types/react':
         specifier: ~18.3.1
         version: 18.3.31
+      '@types/react-dom':
+        specifier: ~18.3.0
+        version: 18.3.0
       react:
         specifier: ^18.2.0
         version: 18.2.0
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.2.0(react@18.2.0)
 
   vendor/harness-packages/@deepseek-ai/dsh-client-ui-theme:
     dependencies:
@@ -4754,12 +4775,21 @@ importers:
       '@deepseek-ai/dsh-anonymous-user-id':
         specifier: workspace:^
         version: link:../dsh-anonymous-user-id
+      '@deepseek-ai/dsh-atomic-write':
+        specifier: workspace:^
+        version: link:../dsh-atomic-write
       '@deepseek-ai/dsh-attachment':
         specifier: workspace:^
         version: link:../dsh-attachment
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:^
+        version: link:../dsh-brand
       '@deepseek-ai/dsh-credentials':
         specifier: workspace:^
         version: link:../dsh-credentials
+      '@deepseek-ai/dsh-home-paths':
+        specifier: workspace:^
+        version: link:../dsh-home-paths
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../dsh-invariants
@@ -4800,6 +4830,9 @@ importers:
       '@deepseek-ai/dsh-attachment':
         specifier: workspace:^
         version: link:../dsh-attachment
+      '@deepseek-ai/dsh-authorization':
+        specifier: workspace:^
+        version: link:../dsh-authorization
       '@deepseek-ai/dsh-credentials':
         specifier: workspace:^
         version: link:../dsh-credentials
@@ -15180,6 +15213,7 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.2
       '@esbuild/win32-ia32': 0.28.2
       '@esbuild/win32-x64': 0.28.2
+    optional: true
 
   escalade@3.2.0: {}
 
@@ -16872,7 +16906,8 @@ snapshots:
     dependencies:
       has-flag: 4.0.0
 
-  supports-color@9.4.0: {}
+  supports-color@9.4.0:
+    optional: true
 
   tar@7.5.22:
     dependencies:
@@ -16934,6 +16969,7 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
+    optional: true
 
   tsyringe@4.10.0:
     dependencies:
@@ -16992,7 +17028,8 @@ snapshots:
 
   undici@6.28.0: {}
 
-  undici@7.29.0: {}
+  undici@7.29.0:
+    optional: true
 
   unicorn-magic@0.3.0: {}
 
@@ -17229,7 +17266,8 @@ snapshots:
 
   yallist@5.0.0: {}
 
-  yaml@2.9.0: {}
+  yaml@2.9.0:
+    optional: true
 
   yargs-parser@21.1.1: {}
 

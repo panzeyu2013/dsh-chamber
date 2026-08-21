@@ -23,6 +23,24 @@
   语义对齐（parentSessionId 闭包递归枚举直接+子会话，文案明示保留并转未分组，
   可选先归档整棵会话树，归档失败即中止）。`test:git` 31→46、`test:host-git`
   42→59，typecheck/构建/回归全绿。
+  **OpenChamber 对齐轮（2026-08-21，v0.1.4，design 08 §11）**：呈现改为
+  **workspace 行即 Git 表面**——occupant 渲染进 workspace 头部行内（分支
+  chip 常显、行内动作与 "+"/kebab 同 hover 触发、状态徽标 dirty/ahead-behind/
+  健康/attention），独立 git 行与独立面板座位移除；创建对话框对齐
+  OpenChamber（双 tab、slug 查重、目录同步/重置、来源分支下拉 + localStorage
+  记忆、单击直接创建、**创建永不提交会话**——recovery 携带 createSession
+  标志）；删除对话框列会话标题 + 可选删本地分支（用户授权，`branch -D`
+  白名单，失败如实上报）；后端：统一 worktree 根
+  `<DSH_HOME>/worktrees/<仓库>-<hash12>/<目录>`、来源分支 startRef（解析层
+  P1 修复：此前被丢弃）、快照 upstream/ahead/behind（status --branch 只读
+  本地事实）、发现缓存 30s TTL + 签名失效、exit-128 缺失分支修复。多轮
+  subagent 复查修复见 §11.5。**Plan A（2026-08，§11）**：显示全部 worktree
+  ——未注册工作树按仓库分散到 repo 组末尾（adopt 懒注册 + 未注册删除
+  `next:'none'`）、孤儿 workspace"已消失"徽标 + 专用删除确认；创建对话框
+  滑块式 tab、Menu 原语下拉、目录重名自动加数字后缀（同仓库范围）；关联
+  会话只计可见。§11.6：404 语义 + 一键重启。验证：`test:host-git` 76、
+  `test:git` 53、全 8 typecheck、i18n、build:host-git（dist 与 src 字节级
+  一致）、build:renderer 全绿。
 - **远程实例插件管理 / 一键应用本地插件清单 + 可视化添加（设计 13）**：**M1–M4 已落地**
   （exec `restart`/`run`/`write-file` + §7.2 白名单、`remoteDshHome` 贯穿 schema/投影/
   IPC/双 ambient 类型、`plugin-sync.ts` 编排、10 个 IPC 通道、前端
@@ -120,6 +138,20 @@
   对齐（本包 fixture/index/依赖面 re-sync 到 rc.8，rc.8 客户端自带 `images`
   参数）后，桥、其测试与脚本已整体移除——`commands.execute` 不再有版本判定
   注入，见设计 09 §4。
+  **rc.2 baseline 对齐（2026-08-21，本仓可改面已全部落地，dsh 内容零改动）**：
+  harness.commit → b150a551b8（dsh 0.1.1-rc.2）后——in-repo fork 副本重基于
+  上游 rc.2（`dsh-client-connection`：rpc 签名合并容纳上游 transport override
+  （RpcFetch/doFetch）、http-bridge 上限 160→300 MiB、`__DSH_TRANSPORT__`
+  传输钩子接线且完整保留 chamber per-instance basePath 补丁；`dsh-client-web`：
+  boot 内核 `__DSH_TRANSPORT__.loadBundle` 接线 + 预取跳过）；控制面
+  per-instance 代理体积上限 50/100 → **300 MiB**（MAX_REQUEST/RESPONSE/
+  BUFFERED_BYTES 三常量，对齐上游 rc.2 的 300MiB 请求体上限与 200MiB 图片
+  准入，design 03/04 与 api.ts 注释同步）；捆绑运行时 bundle:dsh 0.1.1-rc.2、
+  vendor 树 240 链接、锁文件 frozen 验证（restore-lockfile + 4 个 vendor
+  importer 手工补齐：dsh-authorization / llm-deepseek / llm-pi-ai /
+  ui-subagent）。验证：控制面 8 套、test:connection 16、test:client-web 13、
+  typecheck 全套、build:renderer、verify:i18n、smoke 全绿；.dmg 打包受沙箱
+  限制未产出（zip 产物有效，需在允许磁盘镜像挂载的环境重跑 dist:desktop:mac）。
   **v0.1.3 发布前 review（2026-08-20）**：容错判定规则提取为 React-free 纯函数
   模块（`dsh-client-web/src/boot-tolerance.ts`：sweep 逐行裁决 + renderer 安装
   裁决；当时的 boot.tsx/app-shell.ts 接入同一规则，rc.8 对齐后随 boot.ts 迁移），

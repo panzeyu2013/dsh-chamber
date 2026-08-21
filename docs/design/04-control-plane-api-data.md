@@ -181,7 +181,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | 实例 phase != ready（无隧道 / 未就绪） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
 | 上游连接拒绝 / 超时 | 502 / 504 `{error, code:'upstream_failed'}`（脱敏） |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
-| 请求体 > 50MiB / 响应体 > 100MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
+| 请求体 > 300MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
 
 ### 4.3 响应头白名单
 

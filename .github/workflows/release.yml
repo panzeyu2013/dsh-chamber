@@ -22,12 +22,13 @@ name: Release
 # unsupported by 2026-11, so the mac leg runs on macos-latest (= macOS 26,
 # arm64 — the 2026-08 v0.1.2 release decision). Windows builds on windows-2022
 # (windows-latest's VS 18 toolchain is not detected correctly by the node-gyp
-# stack — same finding as OpenChamber). Public publication is fail-closed:
-# macOS requires Developer ID signing plus Apple notarization credentials and
-# verifies the signature, Gatekeeper assessment and stapled ticket; Windows
-# requires Authenticode credentials and verifies the emitted installer. A
-# dry-run may still produce local unsigned/ad-hoc artifacts for build testing,
-# but those artifacts are never finalized as a public release.
+# stack — same finding as OpenChamber). No Apple Developer ID / notarization
+# secrets are configured: the macOS app is ad-hoc signed by the afterPack hook
+# (structurally valid signature, so no "app is damaged" on Gatekeeper-relaxed
+# systems; a default Gatekeeper still requires right-click/open or "allow
+# anywhere"), the Windows exe goes out unsigned — its auto-install proceeds
+# with a SmartScreen warning (documented tradeoff, design 11 §7); the macOS
+# INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
 
 on:
   push:
@@ -57,7 +58,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.8
+  DSH_CHAMBER_DSH_VERSION: 0.1.1-rc.2
 
 jobs:
   create-release:
@@ -138,25 +139,6 @@ jobs:
           echo "$SECTION" > /tmp/release-body.md
           echo "extracted $(wc -l < /tmp/release-body.md) lines for [${VERSION}]"
 
-      # This check must precede every mutation of GitHub release state. In
-      # particular, never delete an existing same-tag release and only then
-      # discover that the replacement cannot be signed or notarized.
-      - name: Fail closed before mutating public-release state
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        env:
-          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-        run: |
-          set -euo pipefail
-          test -n "$MAC_CSC_LINK"
-          test -n "$APPLE_ID"
-          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
-          test -n "$APPLE_TEAM_ID"
-          test -n "$WIN_CSC_LINK"
-
       - name: Delete any existing release for this tag
         # 2026-08 postmortem (body_path not applied — softprops log:
         # "Using release <old> for tag v0.1.2 instead of duplicate draft <new>
@@ -235,24 +217,11 @@ jobs:
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
 
-      - name: Require Apple signing and notarization credentials for publication
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        env:
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          test -n "$CSC_LINK"
-          test -n "$APPLE_ID"
-          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
-          test -n "$APPLE_TEAM_ID"
-
       - name: Build and package macOS app (arm64)
-        # electron-builder runs the afterPack structural ad-hoc fallback first; when
-        # publication credentials are present its normal signing/notarization stages
-        # replace that fallback with the release identity. publish=always (unless
+        # electron-builder runs the afterPack hook
+        # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
+        # signs the bundle before the dmg is built (no Apple signing /
+        # notarization secrets are configured). publish=always (unless
         # dry_run) uploads every artifact into the draft release created
         # above — INCLUDING the update feed (zip + latest-mac.yml /
         # beta-mac.yml) that electron-updater consumes (design 11 §6):
@@ -263,15 +232,16 @@ jobs:
           pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Verify packaged macOS app and public-release identity
-        # Every build must be structurally valid. A public build additionally
-        # proves Developer ID identity, Gatekeeper acceptance and stapling.
+      - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
+        # No Apple Developer ID / notarization secrets are configured; the
+        # afterPack hook ad-hoc signs the bundle so the code signature is
+        # structurally valid (without it, macOS rejects the quarantined
+        # download as "damaged"). Verify the parts that must be right
+        # regardless: the .app bundle exists, its signature verifies, the
+        # darwin dsh runtime is baked in (extraResources vendor), and
+        # artifacts — including the update feed (zip + channel yml) when not
+        # dry-running — were made.
         run: |
           set -euo pipefail
           APP_DIR=$(find packages/desktop/release -maxdepth 2 -name "*.app" -type d | head -n 1)
@@ -283,9 +253,6 @@ jobs:
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('darwin-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.dmg 2>/dev/null | head -n 1)"
           if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
-            codesign -dv --verbose=4 "$APP_DIR" 2>&1 | grep -q 'Authority=Developer ID Application:'
-            spctl --assess --type execute --verbose=2 "$APP_DIR"
-            xcrun stapler validate "$APP_DIR"
             test -n "$(ls packages/desktop/release/*.zip 2>/dev/null | head -n 1)"
             test -n "$(ls packages/desktop/release/*-mac.yml 2>/dev/null | head -n 1)"
           fi
@@ -317,14 +284,6 @@ jobs:
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
 
-      - name: Require Windows Authenticode credentials for publication
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        shell: pwsh
-        env:
-          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:CSC_LINK)) { throw 'WIN_CSC_LINK is required for a public release' }
-
       - name: Build and package Windows app
         shell: bash
         run: |
@@ -332,10 +291,8 @@ jobs:
           pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
 
-      - name: Verify packaged Windows app and public-release identity
+      - name: Verify packaged Windows app (OpenChamber-style, unsigned)
         # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
         # and that the win32 dsh runtime made it into the unpacked app. When
         # not dry-running, also assert the UPDATE FEED (design 11 §6): the
@@ -352,7 +309,6 @@ jobs:
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('win32-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.exe 2>/dev/null | head -n 1)"
           if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
-            powershell -NoProfile -Command '$exe = Get-ChildItem "packages/desktop/release/*.exe" | Select-Object -First 1; $sig = Get-AuthenticodeSignature $exe.FullName; if ($sig.Status -ne "Valid") { throw "invalid Authenticode signature: $($sig.Status)" }'
             test -z "$(ls packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
             test -f packages/desktop/release/latest.yml -o -f packages/desktop/release/beta.yml
           fi

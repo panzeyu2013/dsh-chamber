@@ -3,4 +3,4 @@
 # Keep in sync with pnpm-lock.yaml: bumping this without regenerating the lockfile
 # makes `pnpm install --frozen-lockfile` fail (intended reproducibility guard).
 # Per-run override: DSH_CHAMBER_HARNESS_COMMIT.
-141eb6fef83422698aef7a981029e843e8161534
+b150a551b8d465e31e418e1b2eaf5e79bbb7d28e

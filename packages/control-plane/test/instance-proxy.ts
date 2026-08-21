@@ -301,11 +301,13 @@ test('response header whitelist: only content-type/cache-control/x-* ride throug
   assert.equal(res.headers['x-custom-secret'], undefined)
 })
 
-test('request body over the 50MiB cap answers 413 body_too_large', async () => {
+test('request body over the 300MiB cap answers 413 body_too_large', async () => {
   const { proxy, upstream } = makeProxy()
-  const huge = 'x'.repeat(MAX_REQUEST_BODY_BYTES + 1)
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'POST', {}, huge), res)
+  await proxy.handleHttp(
+    fakeRequest('/api/i/local/api/session.list', 'POST', { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) }, 'x'),
+    res,
+  )
   assert.equal(res.status, 413)
   assert.equal(JSON.parse(res.body).code, 'body_too_large')
   assert.equal(upstream.calls.length, 0)

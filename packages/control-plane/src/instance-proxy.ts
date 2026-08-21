@@ -24,8 +24,8 @@
  * Failures are loud and explicit (04 §4.2): unknown id → 404
  * instance_not_found; no tunnel / instance not ready → 503
  * instance_unavailable; upstream connect/timeout → 502/504 upstream_failed
- * (masked, never echoing the upstream host:port); body over 50MiB / response
- * over 100MiB → 413 body_too_large (+ upstream abort).
+ * (masked, never echoing the upstream host:port); body over 300MiB / response
+ * over 300MiB → 413 body_too_large (+ upstream abort).
  *
  * Response headers are converged to a whitelist (03 §3.4): content-type,
  * cache-control, x-next-cursor, x-ratelimit-*; nothing else rides through
@@ -41,14 +41,14 @@ import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
 import { startWsHeartbeat } from './ws-heartbeat.ts'
 
-/** Request body cap (design 03 §3.4, same as the v2 runtime proxy). */
-export const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024
+/** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
+export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
-/** Response body cap for non-SSE responses (design 03 §3.4). */
-export const MAX_RESPONSE_BODY_BYTES = 100 * 1024 * 1024
+/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
+export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
-/** Process-wide budgets: bound memory, sockets and pending handshakes. */
-export const MAX_BUFFERED_REQUEST_BYTES = 100 * 1024 * 1024
+/** Process-wide budgets: bound memory, sockets and pending handshakes (aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
+export const MAX_BUFFERED_REQUEST_BYTES = 300 * 1024 * 1024
 export const MAX_CONCURRENT_HTTP_REQUESTS = 64
 export const MAX_CONCURRENT_WS_STREAMS = 64
 export const MAX_PENDING_WS_HANDSHAKES = 16
@@ -441,7 +441,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (Number.isFinite(declared) && declared > MAX_REQUEST_BODY_BYTES) {
         counters.failures += 1
         releaseRequest()
-        writeError(res, 413, 'body_too_large', 'request body exceeds the 50MiB cap')
+        writeError(res, 413, 'body_too_large', 'request body exceeds the 300MiB cap')
         return
       }
       // Unknown/chunked bodies reserve the full per-request cap. A valid
@@ -465,7 +465,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         if (code === 'request_timeout') {
           writeError(res, 408, 'request_timeout', 'request body upload timed out')
         } else {
-          writeError(res, 413, 'body_too_large', 'request body exceeds the 50MiB cap')
+          writeError(res, 413, 'body_too_large', 'request body exceeds the 300MiB cap')
         }
         return
       }
@@ -542,7 +542,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         upstreamRes.destroy()
         releaseRequest()
         counters.failures += 1
-        writeError(res, 413, 'body_too_large', 'upstream response exceeds the 100MiB cap')
+        writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap')
         return
       }
       const headers: Record<string, string | string[]> = {}
@@ -572,7 +572,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           controller.abort()
           releaseRequest()
           counters.failures += 1
-          if (!res.headersSent) writeError(res, 413, 'body_too_large', 'upstream response exceeds the 100MiB cap')
+          if (!res.headersSent) writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap')
           else res.destroy()
           return
         }

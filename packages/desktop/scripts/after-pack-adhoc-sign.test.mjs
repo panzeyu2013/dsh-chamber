@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { verifyPackagedDshRuntime } from './after-pack-adhoc-sign.mjs';
 
-function fixture(platform = 'darwin-arm64', version = '0.1.0-rc.8') {
+function fixture(platform = 'darwin-arm64', version = '0.1.1-rc.2') {
   const resourcesDir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-packaged-runtime-'));
   const runtimeDir = path.join(resourcesDir, 'vendor', 'dsh');
   const dshDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh');
@@ -41,12 +41,12 @@ test('packaged runtime verification rejects a missing node_modules payload', () 
 });
 
 test('packaged runtime verification rejects version or platform drift', () => {
-  const resourcesDir = fixture('darwin-arm64', '0.1.0-rc.8');
+  const resourcesDir = fixture('darwin-arm64', '0.1.1-rc.2');
   try {
     const dshManifest = path.join(resourcesDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'package.json');
     writeFileSync(dshManifest, JSON.stringify({ version: '0.1.0-rc.7' }));
     assert.throws(() => verifyPackagedDshRuntime(resourcesDir, 'darwin'), /version mismatch/);
-    writeFileSync(dshManifest, JSON.stringify({ version: '0.1.0-rc.8' }));
+    writeFileSync(dshManifest, JSON.stringify({ version: '0.1.1-rc.2' }));
     assert.throws(() => verifyPackagedDshRuntime(resourcesDir, 'win32'), /wrong packaged dsh platform/);
   } finally {
     rmSync(resourcesDir, { recursive: true, force: true });

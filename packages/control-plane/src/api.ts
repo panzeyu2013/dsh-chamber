@@ -43,7 +43,7 @@
 import type { InstanceProxy } from './instance-proxy.ts'
 import type { Logger } from './types.ts'
 
-/** Body read cap for POST payloads (10 MiB; the instance proxy has its own 50MiB cap). */
+/** Body read cap for POST payloads (10 MiB; the instance proxy has its own 300MiB cap). */
 const MAX_BODY_BYTES = 10 * 1024 * 1024
 const MAX_HEALTH_EVENT_STREAMS = 32
 /** Per-client frames retained while its SSE socket is backpressured. */
@@ -442,7 +442,7 @@ export function createApi(deps: ApiDeps) {
       if (a === 'i' && typeof b === 'string') {
         // Per-instance reverse proxy (03 §3 / 04 §4): raw body passthrough
         // (ownBody — the carrier 10MiB reader is bypassed; the proxy enforces
-        // its own 50MiB cap), reachable without any session (v1).
+        // its own 300MiB cap), reachable without any session (v1).
         if (deps.instanceProxy === undefined) return null
         const proxy = deps.instanceProxy
         const instanceHandler: RouteHandler = async () => {

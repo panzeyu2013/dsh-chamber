@@ -12,6 +12,8 @@
  * lands under the control-plane per-instance proxy prefix (`/api/i/<id>`).
  * When no config is passed, `window.__DSH_BASE_PATH__` (set by the chamber
  * shell before each sequential instance boot) is the fallback knob.
+ *
+ * merged: upstream rc.2 transport hook (__DSH_TRANSPORT__).
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { HostDescription, IApiClient } from './api.ts'
@@ -19,7 +21,7 @@ import { ConnectionController, type ConnectionConfig, type ConnectionSinks, type
 import { attachLivenessTriggers } from './liveness-triggers.ts'
 import { FixtureApiClient } from './fixture.ts'
 import { WebApiClient } from './web-api-client.ts'
-import { createWebConnectionRpc } from './rpc.ts'
+import { createWebConnectionRpc, type RpcFetch } from './rpc.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
 import { resolveInstanceBasePath } from '../api-path.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
@@ -53,6 +55,7 @@ export {
 // controller remains package-internal.
 export type { ConnectionConfig, ConnectionSinks, ConnectionState }
 export type { ClientConnectionRpc } from '../rpc.ts'
+export type { RpcFetch } from './rpc.ts'
 
 /** Observable Host description published by each completed connection handshake. */
 export interface HostDescriptionSource {
@@ -60,6 +63,30 @@ export interface HostDescriptionSource {
   getSnapshot(): HostDescription | undefined
   /** Subscribe to description replacement and connection loss. */
   subscribe(listener: () => void): () => void
+}
+
+/**
+ * Carrier override installed on the page global before plugin boot. The served
+ * web app leaves it unset and gets HTTP + WebSocket; a shell that owns a
+ * different physical transport (the worker preview's postMessage tunnel)
+ * provides both halves here instead of forking this plugin.
+ */
+export interface ClientTransportHooks {
+  /** Build the API carrier: unary calls plus the two downstream event streams. */
+  createApiClient(): IApiClient
+  /** Transport for generic unary RPC channels (the Typert gateway). */
+  fetch: RpcFetch
+  /**
+   * Bundle transport for the module system, present when the carrier also owns
+   * bundle bytes (the worker tunnel). Absent in the served web app, whose
+   * bundles load over HTTP.
+   */
+  loadBundle?(url: string): Promise<void>
+}
+
+/** Page global carrying {@link ClientTransportHooks}; absent in the served web app. */
+interface ClientTransportGlobal {
+  __DSH_TRANSPORT__?: ClientTransportHooks
 }
 
 /**
@@ -113,12 +140,16 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
   // (explicit config wins, then window.__DSH_BASE_PATH__ — deterministic under
   // the chamber shell's sequential instance boots).
   const basePath = resolveInstanceBasePath(config?.basePath)
+  // merged: upstream rc.2 transport hook — a shell owning a different physical
+  // transport installs it on the page global before plugin boot (chamber's
+  // basePath patch still takes precedence for the HTTP carrier).
+  const transport = (globalThis as ClientTransportGlobal).__DSH_TRANSPORT__
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
-  const api: IApiClient = fixtureClient ?? new WebApiClient({ basePath })
+  const api: IApiClient = fixtureClient ?? transport?.createApiClient() ?? new WebApiClient({ basePath })
   // Published by the readiness handshake (host.describe) once the connection
   // is established; observable through handle.hostDescription.
   let description: HostDescription | undefined
-  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc({ basePath })
+  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc({ basePath, doFetch: transport?.fetch })
   let started = false
   const descriptionListeners = new Set<() => void>()
   const publishDescription = (next: HostDescription | undefined): void => {

@@ -10,6 +10,8 @@
  * path `/api` the URL is byte-identical to upstream. The base path is resolved
  * at construction from `window.__DSH_BASE_PATH__` (chamber sets it before each
  * sequential instance boot) or from an explicit option.
+ *
+ * merged with upstream rc.2 transport override（RpcFetch/doFetch）.
  */
 
 import {
@@ -25,20 +27,28 @@ const INTERNAL_BASE = 'http://dsh.internal'
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
+/** Transport this caller posts through; same signature as the global `fetch`. */
+export type RpcFetch = (input: URL, init: RequestInit) => Promise<Response>
+
 /** chamber patch: generic RPC carrier construction options. */
 export interface WebConnectionRpcOptions {
   /** Per-instance api base path: `/api` (stock, no prefix) or `/api/i/<id>`. */
   basePath?: string
+  /** Upstream rc.2 transport override; defaults to the page's global fetch. */
+  doFetch?: RpcFetch
 }
 
 /**
  * Create the browser-backed generic RPC caller.
- * @param options - chamber patch: optional per-instance base path override.
+ * @param options - chamber patch: optional per-instance base path override, or
+ *   upstream rc.2 transport override function.
  * @returns caller that owns request correlation and response-envelope validation.
  */
-export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): ClientConnectionRpc {
+export function createWebConnectionRpc(options: WebConnectionRpcOptions | RpcFetch = {}): ClientConnectionRpc {
+  const opts = typeof options === 'function' ? { doFetch: options } : options
   /** chamber patch: resolved prefix injected before the channel path ('' = stock). */
-  const basePath = resolveInstanceBasePath(options.basePath)
+  const basePath = resolveInstanceBasePath(opts.basePath)
+  const send: RpcFetch = opts.doFetch ?? ((input, init) => globalThis.fetch(input, init))
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)
@@ -49,7 +59,7 @@ export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): C
         method: endpoint,
         payload,
       }
-      const response = await globalThis.fetch(
+      const response = await send(
         new URL(`${basePath}${channel}/${endpoint}`, resolveBase()),
         {
           method: 'POST',

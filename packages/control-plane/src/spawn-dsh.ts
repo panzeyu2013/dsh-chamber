@@ -41,8 +41,8 @@
  *  so every instance — local and remote alike — uses the same in-app
  *  directory dialog (design 05 §4; the OS chooser is never surfaced to
  *  chamber users). Only directory-picker-auto reads SSH_CONNECTION in the
- *  dsh source (verified against the pinned harness commit 141eb6fe… / dsh
- *  0.1.0-rc.8, where directory-picker-auto still reads it), so the pin has no
+ *  dsh source (verified against the pinned harness commit b150a551… / dsh
+ *  0.1.1-rc.2, where directory-picker-auto still reads it); `bundle/web-app` also probes SSH_CONNECTION/SSH_TTY via `launchedThroughSsh` (browser auto-open suppression — pre-existing at rc.8, harmless for chamber's own window), so the pin has no
  *  other effect.
  *  A pid
  *  record per design 02 §3.4.1 (pid/ownerPid/ownerInstanceId/port/binary/

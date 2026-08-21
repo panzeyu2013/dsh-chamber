@@ -200,7 +200,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   汇编的 **value import 集合为唯一选择源**，逐包校验上游标准 `./remote`
   exports/files 契约，再把 Host face 产物写入 chamber-owned
   `renderer/src/generated/typert/`；Vite 的通用 `/remote` resolver 只消费这些产物。
-  rc.8 当前 7 个 contribution（含 file/session reference）由独立锁步测试固定，
+  rc.2 当前 7 个 contribution（含 file/session reference）由独立锁步测试固定，
   避免手抄包表滞后后到 Rollup 阶段才报缺模块；vendor 始终只读。
 - **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 /
   行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，同时经 renderer-local
@@ -243,7 +243,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
   两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
   落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.3 apply 降级），绝不使
-  实例 boot 失败。**rc.8 后端适配（2026-08）**：壳种子词表与 rc.8 官方一致
+  实例 boot 失败。**rc.2 后端适配（2026-08）**：壳种子词表与 rc.2 官方一致
   （平台词 = 永不成为图行的包，`dsh-client-ui-attachment` 等出种子词表），
   app-shell renderer 安装容错（后端 `ui-renderer` 行先装则采纳）。
   **rc.8 commands wire 兼容桥（已随 rc.8 baseline 对齐移除，2026-08）**：除

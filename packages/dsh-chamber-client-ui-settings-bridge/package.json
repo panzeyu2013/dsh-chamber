@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-client-ui-settings-bridge",
   "description": "Chamber settings bridge section plugin: a server selector plus the target instance's official Settings content, rendered through a per-instance child cordis context (fake connection + official settings plugin subset). Config facts stay on the target host — the bridge only proxies the existing settings/credentials/llm RPC surface.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publishConfig": {
     "access": "public"
   },
