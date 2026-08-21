@@ -87,6 +87,9 @@ function WorktreeRow({
   const canOfferRemove = !worktree.isMain && worktree.workspaceId !== null
   const sessionTargetable = canTargetSession(worktree)
   const isCurrent = currentSessionId !== undefined && worktree.sessionIds.includes(currentSessionId)
+  // Must stay in sync with snapshot.ts ATTENTION_REASONS: the decode
+  // whitelist rejects unknown reasons, so the fallback below is defensive
+  // (dead in practice) rather than a recovery path for new host codes.
   const attentionLabels: Record<string, GitSidebarKey> = {
     merge: 'attentionMerge',
     rebase: 'attentionRebase',
@@ -452,7 +455,8 @@ export function SidebarGitSection({ wide, chamberInstanceId, t }: SidebarGitSect
             {sessionFacts !== null && sessionFacts.closure > 0 && (
               <span className={css.removeSessions}>
                 {t('removeSessions')} {sessionFacts.direct}
-                {sessionFacts.closure > sessionFacts.direct && `（${t('removeSubsessions')} ${sessionFacts.closure - sessionFacts.direct}）`}
+                {sessionFacts.closure > sessionFacts.direct
+                  && t('removeSubsessionsCount').replace('{count}', String(sessionFacts.closure - sessionFacts.direct))}
               </span>
             )}
             {sessionFactsError !== null && <span className={css.formError} role="alert">{sessionFactsError}</span>}

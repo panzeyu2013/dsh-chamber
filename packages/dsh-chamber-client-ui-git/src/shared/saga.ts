@@ -295,26 +295,33 @@ export interface RemoveSagaDeps {
 }
 
 export interface PreRemoveArchiveDeps {
-  fetchSessions(): Promise<ReadonlyArray<{ readonly sessionId: string; readonly parentSessionId?: string }>>
+  fetchSessions(): Promise<{
+    sessions: ReadonlyArray<{ readonly sessionId: string; readonly parentSessionId?: string }>
+    /** Sessions already archived; excluded from the archive pass (retry-safe). */
+    archivedSessionIds?: ReadonlyArray<string>
+  }>
   archiveSession(sessionId: string): Promise<void>
 }
 
 /**
  * Optional soft-archive of the whole session tree BEFORE any Git mutation.
  * Returns the archived closure (roots + transitive subsessions via
- * parentSessionId). A fetch or archive failure throws with nothing removed;
- * earlier archives in the same run are already committed (per-session ops).
+ * parentSessionId, minus already-archived ids). A fetch or archive failure
+ * throws with nothing removed; earlier archives in the same run are already
+ * committed (per-session ops).
  */
 export async function runPreRemoveArchive(
   deps: PreRemoveArchiveDeps,
   roots: ReadonlyArray<string>,
 ): Promise<string[]> {
-  const sessions = await deps.fetchSessions()
+  const { sessions, archivedSessionIds = [] } = await deps.fetchSessions()
+  const archived = new Set(archivedSessionIds)
   const closure = collectSessionClosure(sessions, roots)
-  for (const sessionId of closure) {
+  const toArchive = closure.filter(sessionId => !archived.has(sessionId))
+  for (const sessionId of toArchive) {
     await deps.archiveSession(sessionId)
   }
-  return closure
+  return toArchive
 }
 
 /** Git-first removal. A registry failure is retry-only; Git is never recreated. */

@@ -13,7 +13,7 @@ import {
 import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure } from './git-api.ts'
-import { findWorktree, removeBlockReason } from './git-facts.ts'
+import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
 import {
   GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
@@ -257,8 +257,11 @@ export async function createSessionHere(sourceId: string, path: string): Promise
     if (fresh.snapshot === undefined || fresh.sourceError !== undefined) {
       throw new Error(fresh.sourceError?.message ?? '无法取得最新 Git 工作树事实')
     }
-    const known = fresh.snapshot.repos.some(repo => repo.worktrees.some(worktree => worktree.path === path))
-    if (!known) throw new Error('目标工作树不在当前来源拓扑中')
+    const known = fresh.snapshot.repos.flatMap(repo => repo.worktrees).find(worktree => worktree.path === path)
+    if (known === undefined) throw new Error('目标工作树不在当前来源拓扑中')
+    // Re-check health against the FRESH snapshot: the UI button reflects an
+    // older snapshot, and a session must never target a vanished/unhealthy path.
+    if (!canTargetSession(known)) throw new Error('目标工作树不可用（目录缺失/无效/非 Git 仓库），不能作为会话目标')
     try {
       const result = await runAdoptSessionSaga({
         workspaceCreate: targetPath => createWorkspace(getInstanceClient(sourceId), targetPath),
@@ -269,7 +272,12 @@ export async function createSessionHere(sourceId: string, path: string): Promise
       requestOpenSession(sourceId, result.sessionId)
       return result.sessionId
     } catch (error) {
-      if (error instanceof GitSagaError) setRecovery(sourceId, recoveryForFailure(error))
+      if (error instanceof GitSagaError) {
+        setRecovery(sourceId, recoveryForFailure(error))
+        // An ambiguous adopt left workspace/session facts the aggregate must
+        // re-read; mirror the create path's refresh discipline.
+        if (error.refreshNeeded) finishMutation(sourceId)
+      }
       throw error
     }
   })
@@ -344,19 +352,21 @@ export async function removeWorktree(
 
     // Optional soft-archive of the whole session tree BEFORE any Git mutation.
     // A failure aborts with nothing removed; the closure enumerates direct
-    // workspace members plus every session transitively parented under them.
+    // workspace members plus every session transitively parented under them
+    // (already-archived ids are skipped, so a retry after a partial failure
+    // never re-archives).
     const directSessionIds = found.worktree.sessionIds
     if (options.archiveSessions === true && directSessionIds.length > 0) {
       try {
         await runPreRemoveArchive({
           fetchSessions: async () => {
             const snapshot = await fetchInstanceSnapshot(getInstanceClient(sourceId))
-            return snapshot.sessions
+            return { sessions: snapshot.sessions, archivedSessionIds: snapshot.archivedSessionIds }
           },
           archiveSession: sessionId => archiveSession(getInstanceClient(sourceId), sessionId),
         }, directSessionIds)
       } catch (error) {
-        throw new Error(`归档会话失败：${errorText(error)}；未删除任何工作树`)
+        throw new Error(`归档会话失败：${errorText(error)}；未删除任何工作树（部分会话可能已归档）`)
       }
     }
 
@@ -426,7 +436,9 @@ export async function retryRecovery(sourceId: string): Promise<void> {
       finishMutation(sourceId)
     } catch (error) {
       setRecovery(sourceId, recoveryForFailure(error, recovery) ?? { ...recovery, message: errorText(error) })
-      if (recovery.kind === 'rollback-create' || recovery.kind === 'workspace-adopt') finishMutation(sourceId)
+      if (recovery.kind === 'rollback-create' || recovery.kind === 'workspace-adopt' || recovery.kind === 'session-adopt') {
+        finishMutation(sourceId)
+      }
       throw error
     }
   })

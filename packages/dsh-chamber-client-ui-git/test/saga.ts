@@ -504,28 +504,46 @@ test('session-adopt recovery reuses workspace-adopt execution and commits the sa
 test('pre-remove archive archives the whole session closure in order', async () => {
   const calls: string[] = []
   const archived = await runPreRemoveArchive({
-    fetchSessions: async () => [
-      { sessionId: 'root-a' },
-      { sessionId: 'sub-a1', parentSessionId: 'root-a' },
-      { sessionId: 'sub-a2', parentSessionId: 'sub-a1' },
-      { sessionId: 'unrelated' },
-    ],
+    fetchSessions: async () => ({
+      sessions: [
+        { sessionId: 'root-a' },
+        { sessionId: 'sub-a1', parentSessionId: 'root-a' },
+        { sessionId: 'sub-a2', parentSessionId: 'sub-a1' },
+        { sessionId: 'unrelated' },
+      ],
+    }),
     archiveSession: async sessionId => { calls.push(sessionId) },
   }, ['root-a'])
   assert.deepEqual(archived, ['root-a', 'sub-a1', 'sub-a2'])
   assert.deepEqual(calls, ['root-a', 'sub-a1', 'sub-a2'])
 })
 
-test('pre-remove archive with no roots archives nothing and skips the fetch', async () => {
+test('pre-remove archive with no roots archives nothing', async () => {
   let fetched = 0
   const calls: string[] = []
   const archived = await runPreRemoveArchive({
-    fetchSessions: async () => { fetched += 1; return [] },
+    fetchSessions: async () => { fetched += 1; return { sessions: [] } },
     archiveSession: async sessionId => { calls.push(sessionId) },
   }, [])
   assert.deepEqual(archived, [])
   assert.deepEqual(calls, [])
   assert.equal(fetched, 1)
+})
+
+test('pre-remove archive skips already-archived sessions on a retry', async () => {
+  const calls: string[] = []
+  const archived = await runPreRemoveArchive({
+    fetchSessions: async () => ({
+      sessions: [
+        { sessionId: 'root-a' },
+        { sessionId: 'sub-a1', parentSessionId: 'root-a' },
+      ],
+      archivedSessionIds: ['root-a'],
+    }),
+    archiveSession: async sessionId => { calls.push(sessionId) },
+  }, ['root-a'])
+  assert.deepEqual(archived, ['sub-a1'])
+  assert.deepEqual(calls, ['sub-a1'])
 })
 
 test('pre-remove archive aborts on session fetch failure without archiving', async () => {
@@ -544,10 +562,12 @@ test('pre-remove archive stops at the first archive failure, earlier archives st
   const calls: string[] = []
   await assert.rejects(
     runPreRemoveArchive({
-      fetchSessions: async () => [
-        { sessionId: 'root-a' },
-        { sessionId: 'sub-a1', parentSessionId: 'root-a' },
-      ],
+      fetchSessions: async () => ({
+        sessions: [
+          { sessionId: 'root-a' },
+          { sessionId: 'sub-a1', parentSessionId: 'root-a' },
+        ],
+      }),
       archiveSession: async sessionId => {
         calls.push(sessionId)
         if (sessionId === 'sub-a1') throw new Error('archive rejected')

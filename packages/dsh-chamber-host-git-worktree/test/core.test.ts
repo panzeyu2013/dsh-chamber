@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import {
   GitWorktreeCore,
   GitWorktreeError,
@@ -72,6 +72,8 @@ class FakeRepository {
   onStatus?: () => void
   /** worktreePath -> gitDir (linked worktree `.git` pointer target). */
   readonly gitDirs = new Map<string, string>()
+  /** `.git` pointer text overrides (relative/malformed probe coverage). */
+  readonly pointerOverrides = new Map<string, string>()
   /** gitDir -> state file basenames present (attention probes). */
   readonly gitDirStateFiles = new Map<string, Set<string>>()
 
@@ -99,6 +101,8 @@ class FakeRepository {
       return this.existing.has(path)
     },
     readFile: async path => {
+      const override = this.pointerOverrides.get(path)
+      if (override !== undefined) return override
       const gitDir = this.gitDirs.get(dirname(path))
       if (gitDir !== undefined && basename(path) === '.git') return `gitdir: ${gitDir}`
       throw new MissingPathError(path)
@@ -1612,4 +1616,23 @@ test('local runner enforces a combined stdout+stderr byte cap', async () => {
     error => error instanceof GitWorktreeError && error.code === 'git-output-limit',
   )
   assert.equal(settled, true)
+})
+
+test('snapshot attention resolves a RELATIVE gitdir pointer against the worktree path', async () => {
+  const { core, repo } = setup({ linked: true })
+  const relativeGitDir = '../.git/worktrees/feature'
+  repo.pointerOverrides.set(`${LINKED}/.git`, `gitdir: ${relativeGitDir}`)
+  const resolved = resolve(LINKED, relativeGitDir)
+  repo.gitDirStateFiles.set(resolved, new Set(['REVERT_HEAD']))
+  const snapshot = await core.snapshot()
+  const row = snapshot.repos[0]!.worktrees.find(worktree => worktree.path === LINKED)!
+  assert.deepEqual(row.attention, ['revert'])
+})
+
+test('snapshot attention stays empty for a malformed gitdir pointer', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.pointerOverrides.set(`${LINKED}/.git`, 'not-a-gitdir-line')
+  const snapshot = await core.snapshot()
+  const row = snapshot.repos[0]!.worktrees.find(worktree => worktree.path === LINKED)!
+  assert.deepEqual(row.attention, [])
 })

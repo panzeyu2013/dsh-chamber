@@ -242,6 +242,6 @@ M0–M3 合并进 main 后追加的三处能力（对齐 OpenChamber 的会话�
    （含子会话）」选项：归档在**任何 Git mutation 之前**执行，任一归档失败
    即中止且不删除任何工作树（显式报错，可重试）。
 
-验证：`test:git`（31→47 用例）、`test:host-git`（42→48 用例）、
+验证：`test:git`（31→46 用例）、`test:host-git`（42→59 用例）、
 `typecheck:git`/`typecheck:host-git`、`build:renderer`、sidebar/renderer-shell
 回归全部通过；host 产物 `dist/index.js` 已重建并提交。

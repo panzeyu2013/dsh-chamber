@@ -52,7 +52,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/core.ts
 import { createHash, randomUUID } from "node:crypto";
-import { access, lstat, readFile, realpath } from "node:fs/promises";
+import { access, lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, dirname, join, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 var READ_TIMEOUT_MS = 1e4;
@@ -131,7 +131,19 @@ var nodeFileSystem = {
       return false;
     }
   },
-  readFile: async (path) => readFile(path, "utf8")
+  // Bounded read: a hostile or corrupt `.git` pointer file must never be read
+  // whole into memory (gitdir lines are tiny; nothing beyond the prefix is
+  // used by worktreeGitDir's parse).
+  readFile: async (path) => {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(GIT_DIR_POINTER_MAX_BYTES);
+      const { bytesRead } = await handle.read(buffer, 0, GIT_DIR_POINTER_MAX_BYTES, 0);
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  }
 };
 function fail(code, message) {
   throw new GitWorktreeError(code, message);
@@ -440,6 +452,7 @@ function parseWorktreePorcelain(output) {
   return records;
 }
 var ZERO_HEAD = /^0+$/u;
+var GIT_DIR_POINTER_MAX_BYTES = 4096;
 var ATTENTION_PROBES = [
   { name: "MERGE_HEAD", reason: "merge" },
   { name: "REBASE_HEAD", reason: "rebase" },
@@ -460,7 +473,7 @@ async function worktreeGitDir(path, fs) {
   } catch {
   }
   try {
-    const pointer = await fs.readFile(dotGit);
+    const pointer = (await fs.readFile(dotGit)).slice(0, GIT_DIR_POINTER_MAX_BYTES);
     const match = /^gitdir:\s*(.+)$/u.exec(pointer.trim());
     if (match === null) return null;
     const target = match[1].trim();
@@ -469,9 +482,10 @@ async function worktreeGitDir(path, fs) {
     return null;
   }
 }
-async function detectAttention(gitDir, fs) {
+async function detectAttention(gitDir, fs, withinBudget) {
   const found = [];
   for (const probe of ATTENTION_PROBES) {
+    if (!withinBudget()) break;
     if (await fs.exists(join(gitDir, probe.name))) found.push(probe.reason);
   }
   return [...new Set(found)];
@@ -767,7 +781,9 @@ var GitWorktreeCore = class {
           if (pathAvailable && !entry.bare && this.now() < deadline) {
             try {
               const gitDir = await worktreeGitDir(path, this.fs);
-              if (gitDir !== null) attention = await detectAttention(gitDir, this.fs);
+              if (gitDir !== null) {
+                attention = await detectAttention(gitDir, this.fs, () => this.now() < deadline);
+              }
             } catch {
             }
           }

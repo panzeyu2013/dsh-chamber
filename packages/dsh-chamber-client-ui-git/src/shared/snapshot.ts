@@ -17,6 +17,8 @@ const OBJECT_ID = /^[0-9a-f]{40,64}$/u
 const SNAPSHOT_OPERATIONS = new Set(['discover', 'list', 'status', 'associate'])
 const WORKTREE_STATES = new Set(['ready', 'missing', 'invalid', 'not-a-repo'])
 const HEAD_STATES = new Set(['branch', 'detached', 'unborn'])
+// Must stay in sync with SidebarGitSection's attentionLabels: an unknown
+// reason rejects the row (fail-closed) instead of rendering an unmapped badge.
 const ATTENTION_REASONS = new Set(['merge', 'rebase', 'cherry-pick', 'revert', 'bisect'])
 
 function stringIds(value: unknown): string[] | undefined {

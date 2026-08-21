@@ -13,7 +13,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { access, lstat, readFile, realpath } from 'node:fs/promises'
+import { access, lstat, open, realpath } from 'node:fs/promises'
 import { isAbsolute, dirname, join, relative, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
 
@@ -329,7 +329,19 @@ const nodeFileSystem: WorktreeFileSystem = {
       return false
     }
   },
-  readFile: async path => readFile(path, 'utf8'),
+  // Bounded read: a hostile or corrupt `.git` pointer file must never be read
+  // whole into memory (gitdir lines are tiny; nothing beyond the prefix is
+  // used by worktreeGitDir's parse).
+  readFile: async path => {
+    const handle = await open(path, 'r')
+    try {
+      const buffer = Buffer.alloc(GIT_DIR_POINTER_MAX_BYTES)
+      const { bytesRead } = await handle.read(buffer, 0, GIT_DIR_POINTER_MAX_BYTES, 0)
+      return buffer.subarray(0, bytesRead).toString('utf8')
+    } finally {
+      await handle.close()
+    }
+  },
 }
 
 function fail(code: string, message: string): never {
@@ -782,6 +794,9 @@ function parseWorktreePorcelain(output: string): RawWorktree[] {
 
 const ZERO_HEAD = /^0+$/u
 
+/** Bounded read for the worktree `.git` pointer; gitdir lines are tiny. */
+const GIT_DIR_POINTER_MAX_BYTES = 4096
+
 /** git-dir state files that mark an in-progress Git operation (best-effort). */
 const ATTENTION_PROBES: ReadonlyArray<{ readonly name: string; readonly reason: GitAttentionReason }> = [
   { name: 'MERGE_HEAD', reason: 'merge' },
@@ -811,7 +826,7 @@ async function worktreeGitDir(path: string, fs: WorktreeFileSystem): Promise<str
     // fall through to the pointer-file read
   }
   try {
-    const pointer = await fs.readFile(dotGit)
+    const pointer = (await fs.readFile(dotGit)).slice(0, GIT_DIR_POINTER_MAX_BYTES)
     const match = /^gitdir:\s*(.+)$/u.exec(pointer.trim())
     if (match === null) return null
     const target = match[1]!.trim()
@@ -822,9 +837,14 @@ async function worktreeGitDir(path: string, fs: WorktreeFileSystem): Promise<str
 }
 
 /** Best-effort in-progress operation detection; failures yield no attention. */
-async function detectAttention(gitDir: string, fs: WorktreeFileSystem): Promise<GitAttentionReason[]> {
+async function detectAttention(
+  gitDir: string,
+  fs: WorktreeFileSystem,
+  withinBudget: () => boolean,
+): Promise<GitAttentionReason[]> {
   const found: GitAttentionReason[] = []
   for (const probe of ATTENTION_PROBES) {
+    if (!withinBudget()) break
     if (await fs.exists(join(gitDir, probe.name))) found.push(probe.reason)
   }
   return [...new Set(found)]
@@ -1156,7 +1176,9 @@ export class GitWorktreeCore {
           if (pathAvailable && !entry.bare && this.now() < deadline) {
             try {
               const gitDir = await worktreeGitDir(path, this.fs)
-              if (gitDir !== null) attention = await detectAttention(gitDir, this.fs)
+              if (gitDir !== null) {
+                attention = await detectAttention(gitDir, this.fs, () => this.now() < deadline)
+              }
             } catch {
               // Attention is best-effort; a probe failure must not fail the row.
             }

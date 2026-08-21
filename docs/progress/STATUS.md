@@ -21,8 +21,8 @@
   （只读采纳式 saga，无 Git mutation）；② 会话↔worktree 附着状态模型（host 快照
   status/headState/attention 分类 + 侧栏徽标 + unhealthy 删除阻断）；③ 删除级联
   语义对齐（parentSessionId 闭包递归枚举直接+子会话，文案明示保留并转未分组，
-  可选先归档整棵会话树，归档失败即中止）。`test:git` 31→47、`test:host-git`
-  42→48，typecheck/构建/回归全绿。
+  可选先归档整棵会话树，归档失败即中止）。`test:git` 31→46、`test:host-git`
+  42→59，typecheck/构建/回归全绿。
 - **远程实例插件管理 / 一键应用本地插件清单 + 可视化添加（设计 13）**：**M1–M4 已落地**
   （exec `restart`/`run`/`write-file` + §7.2 白名单、`remoteDshHome` 贯穿 schema/投影/
   IPC/双 ambient 类型、`plugin-sync.ts` 编排、10 个 IPC 通道、前端
