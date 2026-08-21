@@ -37,7 +37,7 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { createTransportManager } from './transport-manager.ts';
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
-import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive } from './ssh-provider.ts';
+import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
@@ -932,6 +932,24 @@ if (!gotTheLock) {
         return Promise.resolve(null);
       }
     };
+    // Live-effect probe for the SECOND chamber host package (design 08 §11):
+    // same shape as liveProbeFor, hitting gitWorktree/previewCreate. A 404
+    // there is deterministic "the running instance never loaded the
+    // git-worktree row" — host-graph being live from an older boot does NOT
+    // prove it (a ready-time seed can add the git row after that boot).
+    const gitWorktreeLiveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
+      const url = sm.readyUrl(id);
+      if (url === null) return Promise.resolve(null);
+      try {
+        const parsed = new URL(url);
+        const port = parsed.port === '' ? null : Number(parsed.port);
+        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
+        return probeGitWorktreeLive({ host: parsed.hostname, port }).then(result =>
+          result === 'live' ? true : result === 'not-live' ? false : null);
+      } catch {
+        return Promise.resolve(null);
+      }
+    };
     // In-flight guard for the ready-time chamber host-package seed (design 09 §6
     // 遗留 1): a Set of instance ids whose seed is currently running — pure
     // concurrency guard, not a "seeded" flag (the seed is idempotent, so
@@ -1118,7 +1136,7 @@ if (!gotTheLock) {
     ipcMain.handle('desktop_ssh_plugin_list', trustedIpc(async ({ id }) => {
       const spec = findRemoteSpec(id);
       if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      return remotePluginList(execTransport, spec, { liveProbe: liveProbeFor(id) });
+      return remotePluginList(execTransport, spec, { liveProbe: liveProbeFor(id), gitWorktreeLiveProbe: gitWorktreeLiveProbeFor(id) });
     }));
     ipcMain.handle('desktop_ssh_plugin_apply', trustedIpc(async ({ id, add, remove, restart }) => {
       const spec = findRemoteSpec(id);

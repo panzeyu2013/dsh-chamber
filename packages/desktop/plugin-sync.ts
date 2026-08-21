@@ -283,16 +283,22 @@ export interface ChamberHostGraphState {
   live: boolean | null
 }
 
-/** Probe outcome: `ok:false` = the instance's injection state could not be
+/**
+ * Probe outcome: `ok:false` = the instance's injection state could not be
  *  read (remote ssh exec failure / unparseable patch) — loud, never a silent
  *  "not injected". `gitWorktree` reports the second chamber host package
  *  (design 08 §11): its loader row lives in the SAME cordis.patch.yml, so
- *  `patched` covers both; only its package presence needs its own probe. */
+ *  `patched` is checked per package (the host-graph insert present does NOT
+ *  prove the git-worktree insert present — a machine seeded before the git
+ *  package existed can carry only the client-graph row); `live` answers the
+ *  same "已生效 vs 重启后生效" question for the RUNNING instance as
+ *  hostGraph.live (host-graph can be live from an older boot while the
+ *  newly-seeded git-worktree row still awaits its restart). */
 export type ChamberInjectionState =
   | {
     ok: true
     hostGraph: ChamberHostGraphState
-    gitWorktree: { installed: boolean; version: string | null }
+    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
   }
   | { ok: false; error: string }
 
@@ -503,13 +509,37 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
         live: null,
       },
       // Second chamber host package (design 08 §11) — same two-file presence
-      // definition as the remote probe; no live probe on the local side.
+      // definition as the remote probe; `patched` checks the overlay CONTENT
+      // for the git-worktree row (the overlay normally carries both rows, but
+      // a stale overlay from before the git package existed can carry only the
+      // client-graph row — the same half-injected state the remote probe's
+      // per-package insert check detects); no live probe on the local side.
       gitWorktree: {
         installed: SEED_FILES.every(relative =>
           existsSync(join(profileDir, 'node_modules', GIT_WORKTREE_PACKAGE_NAME, relative))),
+        patched: localOverlayCarriesGitWorktree(localDshHome),
         version: readManifestVersion(readDependencyManifest(profileDir, GIT_WORKTREE_PACKAGE_NAME)),
+        live: null,
       },
     },
+  }
+}
+
+/**
+ * Whether the local `--patch` overlay (control-plane host-graph-seed.ts
+ * `dsh-chamber-graph.patch.yml`, beside the managed dsh home) actually
+ * carries the git-worktree loader row. Presence of the overlay file alone
+ * does not prove it: the overlay is regenerated per spawn with only the rows
+ * whose built artifacts exist, so a stale overlay can predate the git
+ * package. Unreadable/absent → false (never a guessed "patched").
+ */
+function localOverlayCarriesGitWorktree(localDshHome: string): boolean {
+  const overlayPath = join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)
+  if (!existsSync(overlayPath)) return false
+  try {
+    return hasCordisInsert(readFileSync(overlayPath, 'utf8'), GIT_WORKTREE_HOST_INSERT)
+  } catch {
+    return false
   }
 }
 
@@ -565,7 +595,7 @@ function readDependencyManifest(profileDir: string, name: string): unknown {
 // 2. remotePluginList
 // ============================================================================
 
-export async function remotePluginList(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe }): Promise<RemotePluginListResult> {
+export async function remotePluginList(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe; gitWorktreeLiveProbe?: LiveProbe }): Promise<RemotePluginListResult> {
   const path = remoteManifestPath(spec.remoteDshHome)
   // Quiet (2026-08 review fix): on an uninitialized remote profile the
   // manifest cat ENOENTs — an EXPECTED probe failure that must not write an
@@ -608,21 +638,23 @@ export type LiveProbe = () => Promise<boolean | null>
  * dist/index.js — the same SEED_FILES set seedRemoteHostGraph writes) at the
  * install-level flat fallback (`<home>/profiles/node_modules/…`, the layer
  * seedRemoteHostGraph writes and `dsh plugin` pnpm relinks never prune) +
- * the profile's cordis.patch.yml insert (reusing computeCordisPatchUpdate's
- * dedup rules). Three extra `cat` round-trips, all marked quiet (their ENOENT
- * on a not-yet-seeded instance is expected, never a log-panel error); ENOENT =
- * that file not injected (never an error); any other ssh failure is a loud
- * probe error — never a silent "not injected". `installed` requires BOTH
- * files: a package.json without dist/index.js is a half-installed module A
- * (the boot row could not resolve) and must not report "installed".
+ * the profile's cordis.patch.yml inserts (reusing computeCordisPatchUpdate's
+ * dedup rules, checked PER package — the host-graph insert present does not
+ * prove the git-worktree insert present, design 08 §11). Three extra `cat`
+ * round-trips, all marked quiet (their ENOENT on a not-yet-seeded instance
+ * is expected, never a log-panel error); ENOENT = that file not injected
+ * (never an error); any other ssh failure is a loud probe error — never a
+ * silent "not injected". `installed` requires BOTH files: a package.json
+ * without dist/index.js is a half-installed module A (the boot row could not
+ * resolve) and must not report "installed".
  *
- * Additionally parses module A's own VERSION from the package.json it already
- * cats, and — when a `liveProbe` is supplied (the desktop main's tunnel RPC
- * probe) — reports whether the RUNNING instance has actually loaded the
- * module (live tri-state), so the plugin UI can distinguish "已生效" from
- * "重启后生效" instead of a constant claim.
+ * Additionally parses each package's own VERSION from the package.json it
+ * already cats, and — when a `liveProbe`/`gitWorktreeLiveProbe` is supplied
+ * (the desktop main's tunnel RPC probes) — reports whether the RUNNING
+ * instance has actually loaded the module (live tri-state), so the plugin UI
+ * can distinguish "已生效" from "重启后生效" instead of a constant claim.
  */
-async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe }): Promise<ChamberInjectionState> {
+async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe; gitWorktreeLiveProbe?: LiveProbe }): Promise<ChamberInjectionState> {
   const home = remoteHome(spec.remoteDshHome)
   const pkgPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/package.json`
   const indexPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/dist/index.js`
@@ -650,10 +682,20 @@ async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveP
 
   const patchRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [remotePatchPath(spec.remoteDshHome)], quiet: true })
   let patched = false
+  let gitPatched = false
   if (patchRes.ok) {
-    const update = computeCordisPatchUpdate(patchRes.stdout ?? '')
+    // Per-package insert presence: the two chamber boot rows live in the SAME
+    // cordis.patch.yml, but one can predate the other (a machine seeded before
+    // the git-worktree package existed carries only the client-graph row —
+    // hostGraph live would then report 已生效 while the git RPC 404s and the
+    // sidebar silently shows no git surface). Each row is judged against its
+    // own insert; a conflict in either is a loud probe error.
+    const update = computeCordisPatchUpdate(patchRes.stdout ?? '', [CLIENT_GRAPH_HOST_INSERT])
     if ('error' in update) return { ok: false, error: update.error }
     patched = update.write === false
+    const gitUpdate = computeCordisPatchUpdate(patchRes.stdout ?? '', [GIT_WORKTREE_HOST_INSERT])
+    if ('error' in gitUpdate) return { ok: false, error: gitUpdate.error }
+    gitPatched = gitUpdate.write === false
   } else if (!ENOENT_PATTERN.test(patchRes.error)) {
     return { ok: false, error: `host-graph probe failed: ${patchRes.error}` }
   }
@@ -665,9 +707,10 @@ async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveP
     ? await opts.liveProbe()
     : null
 
-  // Second chamber host package (design 08 §11): presence probe only — its
-  // loader row shares the host-graph patch, and the running instance's load
-  // is only meaningful via the same restart that loads module A.
+  // Second chamber host package (design 08 §11). Its own boot-row presence
+  // (gitPatched) and its own running-process liveness (gitWorktreeLiveProbe)
+  // are probed separately: host-graph live from an older boot does NOT prove
+  // the git-worktree row loaded (a restart seeded the row after that boot).
   const gitPkgPath = `${home}/profiles/node_modules/${GIT_WORKTREE_PACKAGE_NAME}/package.json`
   const gitIndexPath = `${home}/profiles/node_modules/${GIT_WORKTREE_PACKAGE_NAME}/dist/index.js`
   const gitPkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [gitPkgPath], quiet: true })
@@ -690,11 +733,15 @@ async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveP
   } else {
     return { ok: false, error: `git-worktree probe failed: ${gitIndexRes.error}` }
   }
+  const gitInstalled = gitPkgInstalled && gitIndexInstalled
+  const gitLive = gitInstalled && gitPatched && opts?.gitWorktreeLiveProbe !== undefined
+    ? await opts.gitWorktreeLiveProbe()
+    : null
 
   return {
     ok: true,
     hostGraph: { installed, patched, version, live },
-    gitWorktree: { installed: gitPkgInstalled && gitIndexInstalled, version: gitVersion },
+    gitWorktree: { installed: gitInstalled, patched: gitPatched, version: gitVersion, live: gitLive },
   }
 }
 
@@ -896,6 +943,11 @@ type ChamberHostInsert = Pick<ChamberHostPackageSeed, 'insertId' | 'packageName'
 const CLIENT_GRAPH_HOST_INSERT: ChamberHostInsert = {
   insertId: CLIENT_GRAPH_INSERT_ID,
   packageName: CLIENT_GRAPH_PACKAGE_NAME,
+}
+
+const GIT_WORKTREE_HOST_INSERT: ChamberHostInsert = {
+  insertId: GIT_WORKTREE_INSERT_ID,
+  packageName: GIT_WORKTREE_PACKAGE_NAME,
 }
 
 function renderCordisInserts(inserts: readonly ChamberHostInsert[]): string {

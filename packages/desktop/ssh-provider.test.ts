@@ -299,9 +299,12 @@ test('buildRemoteExecArgv refuses wrong dsh argv structure', () => {
   assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'remove', 'name@1.2.3'] }), null, 'remove refuses @version')
 })
 
-test('buildRemoteExecArgv allows only the two whitelisted cat paths', () => {
-  assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json'] }), ['cat', '~/.dsh/profiles/web/package.json'])
-  assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/cordis.patch.yml'] }), ['cat', '~/.dsh/profiles/web/cordis.patch.yml'])
+test('buildRemoteExecArgv allows only the two whitelisted cat paths (always under LC_ALL=C)', () => {
+  // LC_ALL=C forces the REMOTE coreutils to English regardless of the remote
+  // locale — the general fix for localized ENOENT messages (zh_CN 没有那个文件
+  // 或目录, ja, fr, …), not a per-language whitelist.
+  assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json'] }), ['LC_ALL=C', 'cat', '~/.dsh/profiles/web/package.json'])
+  assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/cordis.patch.yml'] }), ['LC_ALL=C', 'cat', '~/.dsh/profiles/web/cordis.patch.yml'])
   assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['/etc/passwd'] }), null, 'refuses arbitrary cat path')
   assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json', 'extra'] }), null, 'refuses extra argv')
 })
@@ -347,11 +350,11 @@ test('buildRemoteExecArgv accepts the fixed printf $HOME lookup (materialize rem
 
 test('buildRemoteExecArgv allows the converged seed-subtree cat read (seed hash-skip)', () => {
   const seedPkg = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'
-  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedPkg] }), ['cat', seedPkg])
+  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedPkg] }), ['LC_ALL=C', 'cat', seedPkg])
   const seedDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/dist/index.js'
-  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedDist] }), ['cat', seedDist])
+  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedDist] }), ['LC_ALL=C', 'cat', seedDist])
   const gitWorktreeDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/dist/index.js'
-  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [gitWorktreeDist] }), ['cat', gitWorktreeDist])
+  assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [gitWorktreeDist] }), ['LC_ALL=C', 'cat', gitWorktreeDist])
   assert.equal(
     buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/node_modules/other/pkg.json'] }),
     null,
@@ -457,8 +460,11 @@ function makeRemoteHost(home = '/home/u') {
       child.simulateExit(0)
       return
     }
-    if (remoteArgv[0] === 'cat') {
-      const path = remoteArgv[1] as string
+    if (remoteArgv[0] === 'cat' || (remoteArgv[0] === 'LC_ALL=C' && remoteArgv[1] === 'cat')) {
+      // The provider now runs every remote cat under `LC_ALL=C` (English
+      // messages regardless of the remote locale); the bare form is kept for
+      // the write-file read-back fake and legacy shapes.
+      const path = remoteArgv[0] === 'cat' ? remoteArgv[1] as string : remoteArgv[2] as string
       const bytes = tamper.get(path) ?? files.get(path)
       if (bytes === undefined) {
         child.stderrWrite(`cat: ${path}: No such file or directory\n`)
@@ -636,6 +642,43 @@ test('run: a QUIET ENOENT probe under a `.ssh`-named home stays ENOENT-classifie
     assert.ok(!result.error.includes('/root/'), 'no path material rides the error')
     assert.ok(result.error.includes('[ssh material redacted]'), 'the redacted summary is what is displayed')
   }
+})
+
+test('run: a zh_CN-locale ENOENT ("没有那个文件或目录") is classified as absent — a quiet probe, never a loud failure', async () => {
+  // Real-world case (2026-08 user report): coreutils on a zh_CN-locale host
+  // prints `没有那个文件或目录` for a missing file. classifyStderr must flag
+  // it ENOENT (classified on the RAW line) so the plugin-sync caller reads
+  // "file absent" (未注入) instead of a loud ssh failure — while the quiet
+  // run stays log-free.
+  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
+    const child = new FakeRunChild()
+    setImmediate(() => {
+      child.stderrWrite('cat: ~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/package.json: 没有那个文件或目录\n')
+      child.simulateExit(1)
+    })
+    return child
+  }
+  const logs: Array<{ level: string; message: string }> = []
+  const deps = runDeps(spawnFn)
+  deps.log = (level, message) => { logs.push({ level, message }) }
+  const result = await sshProvider.exec!(spec('wzh'), 'run', deps, {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/package.json'],
+    quiet: true,
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /没有那个文件或目录/, 'the zh_CN ENOENT text rides the run error')
+  }
+  assert.ok(
+    !logs.some(entry => entry.level === 'error' && entry.message.startsWith('run command failed')),
+    'no ERROR log for a quiet zh_CN ENOENT probe',
+  )
+  assert.ok(
+    !logs.some(entry => entry.message.includes('没有那个文件或目录')),
+    'no raw-stderr INFO echo for a quiet run',
+  )
 })
 
 test('run: a QUIET exec with an auth failure stays LOUD (ERROR log + authentication-failure result)', async () => {

@@ -60,6 +60,26 @@
   应答才分类）区分三态——「已注入并已生效」/「已注入（重启后生效）」/「生效状态
   未知」（无 ready 隧道或探测不可分类时），不再永久声称"重启后生效"；本地侧按
   设计不单独探测（本地实例即 chamber 页面，boot 自身证明图通道）。
+  **2026-08 git-worktree 注入状态与侧栏断链修复（v0.1.4 实机报告）**：① 远端
+  zh_CN locale 下 `cat` 的 ENOENT 文案是「没有那个文件或目录」，`ENOENT_PATTERN`
+  原先只匹配英文 → 远端未 seed 的 git-worktree 包被误报为硬 ssh 故障
+  （"git-worktree probe failed … 没有那个文件或目录"）而非「未注入」。**通用修法
+  （非逐语言打地鼠）**：远端所有 `cat`（buildRemoteExecArgv 与 write-file 回读）现
+  统一在 `LC_ALL=C` 下运行，任何远端 locale 都输出英文 ENOENT；`ENOENT_PATTERN`
+  并入中文文案仅作纵深防御（覆盖绕过前缀/忽略该环境变量的情形），原始 stderr 分类
+  与调用侧测试双覆盖；② chamber 探测此前只用 client-graph 单行判定 `patched`，且
+  git-worktree 无独立 live 探测——host-graph 已生效（旧 boot 加载）而 git-worktree
+  行是之后 ready 时 seed 补写的机器上，UI 声称两包均已注入/生效，实际 git RPC 404、
+  侧栏按设计静默退化为无 worktree 视图，且无任何可点按钮。修复：探测按包分别校验
+  cordis.patch.yml 两行 insert（gitWorktree.patched）、新增 `probeGitWorktreeLive`
+  （POST `gitWorktree/previewCreate` 空输入——域名校验先于任何 git 调用即拒绝，
+  envelope 只证明行已加载；404 = 网关未认领命名空间 = 确定未加载，两 probe 的 404
+  均改为 `not-live`）、远端 git 行展示与 host-graph 同款三态并接入「重启生效」门控
+  （`remoteNeedsSeed` 现要求两行均在），本地 git 行 `patched` 改为 overlay 内容
+  感知。验证：`test:desktop` 全绿（plugin-sync 72、transport-manager 75、
+  ssh-provider 37——含 zh_CN ENOENT、git live 分类与 `LC_ALL=C` argv 新用例）、
+  `test:connections` 4、根 `typecheck`、`typecheck:connections`、`verify:i18n`、
+  `build:renderer`。
   剩余：本地 `dsh plugin`/`pnpm pack`
   依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
   **2026-08 插件 Modal 两处修复**：① 浅色主题下 Modal 内容（portal 到 body）未显式

@@ -30,7 +30,7 @@ import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './
 import type { TransportManagerOptions } from './transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
-import { sshProvider, verifyDshEndpoint, probeClientGraphLive, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
+import { sshProvider, verifyDshEndpoint, probeClientGraphLive, probeGitWorktreeLive, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -837,12 +837,14 @@ test('probeClientGraphLive classifies the running instance: live / not-live / un
   t.after(() => { stale.close() })
   assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: stalePort }), 'not-live')
 
-  // A 404 / no envelope / silent endpoint → unknown (never a claimed state).
+  // A plain 404 is the dsh gateway's deterministic "no Remote namespace
+  // claimed" answer (vendored gateway test) — on a ready instance that is
+  // injected-but-not-loaded (restart pending), never an unclassifiable state.
   const missing = createServer((_req, res) => { res.writeHead(404); res.end() })
   await new Promise<void>(resolve => missing.listen(0, '127.0.0.1', resolve))
   const missingPort = (missing.address() as AddressInfo).port
   t.after(() => { missing.close() })
-  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: missingPort }), 'unknown')
+  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: missingPort }), 'not-live')
 
   const wrong = createServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -858,6 +860,66 @@ test('probeClientGraphLive classifies the running instance: live / not-live / un
   const silentPort = (silent.address() as AddressInfo).port
   t.after(() => { silent.close() })
   assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: silentPort }, 50), 'unknown', 'a silent endpoint times out instead of hanging')
+})
+
+test('probeGitWorktreeLive classifies the running instance: live / not-live / unknown', async t => {
+  // A 200 server-response envelope with result.ok:true → the gateway
+  // RESOLVED gitWorktree/previewCreate: the boot row is loaded. The empty
+  // probe input fails the domain validation INSIDE result.ok:true (no git
+  // work performed) — the envelope alone proves the row loaded.
+  const live = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    let body = ''
+    req.on('data', chunk => { body += chunk })
+    req.on('end', () => {
+      const envelope = JSON.parse(body) as { rpcId?: unknown }
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { ok: false, error: { code: 'invalid-input' } } } }))
+    })
+  })
+  await new Promise<void>(resolve => live.listen(0, '127.0.0.1', resolve))
+  const livePort = (live.address() as AddressInfo).port
+  t.after(() => { live.close() })
+  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: livePort }), 'live')
+
+  // 404 = the gateway does not claim the gitWorktree namespace: the running
+  // instance never loaded the git-worktree boot row (injected, restart
+  // pending) — the exact case a host-graph-live probe misses.
+  const notLoaded = createServer((_req, res) => { res.writeHead(404); res.end() })
+  await new Promise<void>(resolve => notLoaded.listen(0, '127.0.0.1', resolve))
+  const notLoadedPort = (notLoaded.address() as AddressInfo).port
+  t.after(() => { notLoaded.close() })
+  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: notLoadedPort }), 'not-live')
+
+  // A 200 error envelope (gateway answered but could not resolve) → not-live.
+  const stale = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    let body = ''
+    req.on('data', chunk => { body += chunk })
+    req.on('end', () => {
+      const envelope = JSON.parse(body) as { rpcId?: unknown }
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'internal' } } }))
+    })
+  })
+  await new Promise<void>(resolve => stale.listen(0, '127.0.0.1', resolve))
+  const stalePort = (stale.address() as AddressInfo).port
+  t.after(() => { stale.close() })
+  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: stalePort }), 'not-live')
+
+  // Non-404 non-200 / malformed body / silence → unknown (never a claim).
+  const wrong = createServer((_req, res) => {
+    res.writeHead(500)
+    res.end()
+  })
+  await new Promise<void>(resolve => wrong.listen(0, '127.0.0.1', resolve))
+  const wrongPort = (wrong.address() as AddressInfo).port
+  t.after(() => { wrong.close() })
+  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: wrongPort }), 'unknown')
+
+  const silent = createServer(() => { /* never answer */ })
+  await new Promise<void>(resolve => silent.listen(0, '127.0.0.1', resolve))
+  const silentPort = (silent.address() as AddressInfo).port
+  t.after(() => { silent.close() })
+  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: silentPort }, 50), 'unknown', 'a silent endpoint times out instead of hanging')
 })
 
 test('jitteredBackoffMs keeps the half-open jitter bounds [0.5x, 1x)', () => {
@@ -1252,7 +1314,7 @@ test('exec run: the write-file payload drives the provider flow (stdin write + b
   assert.deepEqual(spawnCalls[0].args, ['bob@lab.example.com', 'mkdir -p ~/.dsh-chamber/plugins && base64 -d > ~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
   spawnCalls[0].child.simulateExit(0)
   await waitFor(() => spawnCalls.length === 2)
-  assert.deepEqual(spawnCalls[1].args, ['bob@lab.example.com', 'cat', '~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
+  assert.deepEqual(spawnCalls[1].args, ['bob@lab.example.com', 'LC_ALL=C', 'cat', '~/.dsh-chamber/plugins/pkg-a1b2.tgz'])
   // The read-back carries the exact original bytes — the provider hashes the
   // RAW captured bytes, so a binary-safe verification is exercised here.
   spawnCalls[1].child.stdout.emit('data', Buffer.from('hello'))

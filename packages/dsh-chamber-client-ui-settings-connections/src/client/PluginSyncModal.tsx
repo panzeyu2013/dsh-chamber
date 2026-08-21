@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { LocalPluginManifest, PluginApplyFailure, PluginApplyResult, RemotePluginManifest, SshInstanceSpec } from '../global.d.ts'
+import type { ChamberHostGraphState, LocalPluginManifest, PluginApplyFailure, PluginApplyResult, RemotePluginManifest, SshInstanceSpec } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd, restartService, seedHostGraph } from './control-plane.ts'
 import {
@@ -558,42 +558,50 @@ export function PluginSyncModal({ t, spec, onClose }: {
     const gitVersion = localCh?.ok === true
       ? localCh.gitWorktree.version
       : remoteCh?.ok === true ? remoteCh.gitWorktree.version : null
-    const localGitInjected = localCh?.ok === true && localCh.gitWorktree.installed
-    const remoteGitInstalled = remoteCh?.ok === true && remoteCh.gitWorktree.installed
-    let remoteLabel: ReactNode
-    let remoteOk = true
-    if (remoteCh === undefined) {
-      remoteLabel = '—'
-    } else if (!remoteCh.ok) {
-      remoteOk = false
-      remoteLabel = <span className={css.error}>{t('chamberRemoteUnknown')}</span>
-    } else if (remoteCh.hostGraph.installed && remoteCh.hostGraph.patched) {
-      // Live-effect tri-state (design 09 module A liveness): the desktop's
-      // tunnel RPC probe answers whether the RUNNING instance has actually
-      // loaded the module — live → 已生效; probed not-loaded → 重启后生效;
-      // unprobed/unclassifiable → 生效状态未知. Never a constant claim.
-      remoteLabel = remoteCh.hostGraph.live === true
-        ? t('chamberRemoteLive')
-        : remoteCh.hostGraph.live === false
-          ? t('chamberRemoteInjected')
-          : t('chamberRemoteInjectedUnknown')
-    } else if (remoteCh.hostGraph.installed) {
-      remoteLabel = t('chamberRemotePartial')
-    } else {
-      remoteLabel = t('chamberRemoteNotInjected')
+    const localGitInjected = localCh?.ok === true
+      && localCh.gitWorktree.installed && localCh.gitWorktree.patched
+    // Per-package remote tri-state (hostGraph and gitWorktree share the
+    // installed/patched/live shape). Live-effect (design 09 module A
+    // liveness): the desktop's tunnel RPC probe answers whether the RUNNING
+    // instance has actually loaded the package — live → 已生效; probed
+    // not-loaded → 重启后生效; unprobed/unclassifiable → 生效状态未知.
+    // Never a constant claim.
+    const remotePackageLabel = (state: ChamberHostGraphState | null | undefined): ReactNode => {
+      if (state === undefined) return '—'
+      if (state === null) return <span className={css.error}>{t('chamberRemoteUnknown')}</span>
+      if (state.installed && state.patched) {
+        return state.live === true
+          ? t('chamberRemoteLive')
+          : state.live === false
+            ? t('chamberRemoteInjected')
+            : t('chamberRemoteInjectedUnknown')
+      }
+      if (state.installed) return t('chamberRemotePartial')
+      return t('chamberRemoteNotInjected')
     }
+    const hostGraphRemote = remoteCh === undefined ? undefined : remoteCh.ok ? remoteCh.hostGraph : null
+    const gitWorktreeRemote = remoteCh === undefined ? undefined : remoteCh.ok ? remoteCh.gitWorktree : null
+    // BOTH boot rows must be present for the chamber host layer to be
+    // complete: the git-worktree insert is its OWN row in the same
+    // cordis.patch.yml, and its presence is probed separately (a machine
+    // seeded before the git package existed carries only the client-graph
+    // row — files present, git RPC still 404).
     const remoteNeedsSeed = isRemote && remoteCh !== undefined
       && (!remoteCh.ok
         || !(remoteCh.hostGraph.installed && remoteCh.hostGraph.patched)
-        || !remoteCh.gitWorktree.installed)
-    // Injected but the RUNNING instance has not loaded the boot insert yet
+        || !(remoteCh.gitWorktree.installed && remoteCh.gitWorktree.patched))
+    // Injected but the RUNNING instance has not loaded a boot insert
     // (probed not-loaded) — restart is the one step that makes it live. A
     // seed that wrote/patched ALSO demands a restart (the running instance
-    // only loads the boot layer at start), even when module A was already
-    // live (design 08 §11: host-graph live does not prove git-worktree load).
+    // only loads the boot layer at start). Each package has its own live
+    // tri-state: host-graph live from an older boot does NOT prove the
+    // git-worktree row loaded (design 08 §11) — either not-live gates the
+    // restart button.
     const remoteInjectedNotLive = isRemote && remoteCh?.ok === true
       && remoteCh.hostGraph.installed && remoteCh.hostGraph.patched && remoteCh.hostGraph.live === false
-    const restartPending = remoteInjectedNotLive || pendingRestart
+    const remoteGitNotLive = isRemote && remoteCh?.ok === true
+      && remoteCh.gitWorktree.installed && remoteCh.gitWorktree.patched && remoteCh.gitWorktree.live === false
+    const restartPending = remoteInjectedNotLive || remoteGitNotLive || pendingRestart
     return (
       <div className={css.pluginChamber}>
         <p className={css.pluginChamberTitle}>
@@ -605,7 +613,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
           {version !== null ? <span className={css.dim}> · v{version}</span> : null}
           <span className={css.pluginCellSpec}>
             {localInjected ? t('chamberLocalInjected') : t('chamberLocalNotInjected')}
-            {isRemote ? <span> · {remoteLabel}</span> : null}
+            {isRemote ? <span> · {remotePackageLabel(hostGraphRemote)}</span> : null}
           </span>
           {remoteNeedsSeed
             ? (
@@ -636,12 +644,12 @@ export function PluginSyncModal({ t, spec, onClose }: {
           {gitVersion !== null ? <span className={css.dim}> · v{gitVersion}</span> : null}
           <span className={css.pluginCellSpec}>
             {localGitInjected ? t('chamberInstalled') : t('chamberNotInstalled')}
-            {isRemote ? <span> · {remoteGitInstalled ? t('chamberInstalled') : t('chamberNotInstalled')}</span> : null}
+            {isRemote ? <span> · {remotePackageLabel(gitWorktreeRemote)}</span> : null}
           </span>
         </div>
         {seedError !== null ? <p className={css.error} role="alert">{t('chamberSeedFailed')}{seedError}</p> : null}
         {restartError !== null ? <p className={css.error} role="alert">{t('chamberRestartFailed')}{restartError}</p> : null}
-        {!remoteOk && remoteCh !== undefined && !remoteCh.ok ? <p className={css.error} role="alert">{remoteCh.error}</p> : null}
+        {remoteCh !== undefined && !remoteCh.ok ? <p className={css.error} role="alert">{remoteCh.error}</p> : null}
       </div>
     )
   }

@@ -92,12 +92,19 @@ export interface ChamberHostGraphState {
 }
 
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh
- *  exec failure / unparseable patch) — loud, never a silent "not injected". */
+ *  exec failure / unparseable patch) — loud, never a silent "not injected".
+ *  `gitWorktree` carries the SECOND chamber host package (design 08 §11):
+ *  `patched` = its own boot row present in the patch (the host-graph insert
+ *  present does not prove the git-worktree insert present — a machine seeded
+ *  before the git package existed carries only the client-graph row); `live`
+ *  = whether the RUNNING remote instance has loaded it (host-graph live from
+ *  an older boot does not prove the git-worktree row loaded after a later
+ *  seed). */
 export type ChamberInjectionState =
   | {
     ok: true
     hostGraph: ChamberHostGraphState
-    gitWorktree: { installed: boolean; version: string | null }
+    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
   }
   | { ok: false; error: string }
 

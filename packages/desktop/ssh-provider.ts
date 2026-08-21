@@ -161,8 +161,18 @@ export const AUTH_FAILURE_PATTERNS: RegExp[] = [
  * is never misclassified as a loud ssh failure. Shared with plugin-sync.ts
  * (single source of truth for the caller-side error-text test AND the
  * provider-side raw-line classification).
+ *
+ * The remote coreutils message is LOCALIZED: on a zh_CN-locale host `cat`
+ * prints `没有那个文件或目录` instead of `No such file or directory`.
+ * The PRIMARY fix is locale-independent — every remote `cat` (buildRemoteExecArgv
+ * and the write-file read-back) now runs under `LC_ALL=C`, so the message is
+ * ALWAYS English regardless of the remote locale. This pattern stays as
+ * defense-in-depth for paths that bypass the prefix or a remote that ignores
+ * it: the glibc zh_CN ENOENT text (its truncated `没有那个文件` prefix
+ * included) is matched so a genuinely-absent package is still never misread
+ * as a loud ssh failure.
  */
-export const ENOENT_PATTERN = /(no such file or directory|ENOENT|cat: .*no such file)/i
+export const ENOENT_PATTERN = /(no such file or directory|没有那个文件|ENOENT|cat: .*no such file)/i
 
 /**
  * Redact private material from ssh stderr before it enters the ring buffer
@@ -376,41 +386,49 @@ export function verifyDshEndpoint(
 }
 
 /**
- * Live-effect probe of the chamber host gateway (design 09 module A): POST the
- * `clientGraph/graph` RPC — the exact wire call the renderer's module C boot
- * merge performs (renderer/src/host-graph.ts) — directly to the tunnel
- * endpoint. This answers the plugin-management UI's "已生效 vs 重启后生效"
- * question: whether the RUNNING remote dsh instance has actually loaded the
- * seeded `@dsh-chamber/dsh-host-client-graph` module (file presence alone —
- * the `installed`/`patched` probe — cannot distinguish "booted after the
- * injection" from "restart still pending").
+ * One-shot RPC liveness probe of a chamber host Remote over the tunnel
+ * endpoint (the exact wire shape the renderer's module-C boot uses, design
+ * 09 §3.5 / design 08 §11.6). Shared by probeClientGraphLive (module A:
+ * `clientGraph/graph`) and probeGitWorktreeLive (the git-worktree host
+ * package: `gitWorktree/previewCreate`). File presence alone (the
+ * `installed`/`patched` probe) cannot distinguish "booted after the
+ * injection" from "restart still pending" — this answers the
+ * plugin-management UI's "已生效 vs 重启后生效" question per package.
  *
- * Same discipline as verifyDshEndpoint: a destination that ANSWERED the probe
- * is classified deterministically; a destination that did not answer (or an
- * unreadable/garbage body) is 'unknown' — never a guessed claim.
+ * Same discipline as verifyDshEndpoint: a destination that ANSWERED the
+ * probe is classified deterministically; a destination that did not answer
+ * (or an unreadable/garbage body) is 'unknown' — never a guessed claim.
  *
  * Classification (honest, three states):
- *   'live'     — server-response envelope with result.ok === true: the remote
- *                resolved clientGraph/graph; module A is loaded in the running
- *                process.
- *   'not-live' — a server-response envelope with result.ok !== true (the
- *                gateway answered but the method is not resolvable — the
- *                running instance booted before the injection): injected, but
- *                a restart is required for it to take effect.
- *   'unknown'  — anything else (non-200, malformed/missing envelope, timeout,
- *                connection failure, oversized body): the probe cannot
- *                classify — never 'live'/'not-live' from a non-answer.
+ *   'live'     — HTTP 200 with a server-response envelope whose result.ok is
+ *                true: the running instance resolved the method. For
+ *                gitWorktree/previewCreate a domain rejection (invalid-input
+ *                on the empty probe input) rides INSIDE result.ok:true — the
+ *                row being loaded is exactly what the probe detects, and no
+ *                git work is performed (input validation fails first).
+ *   'not-live' — HTTP 404 (the dsh gateway routes only claimed Remote
+ *                namespaces — a plain 404 on a ready instance deterministically
+ *                means the boot row did not load: injected, restart pending)
+ *                or a server-response envelope with result.ok !== true (the
+ *                gateway answered but the method is not resolvable).
+ *   'unknown'  — anything else (non-404 non-200, malformed/missing envelope,
+ *                timeout, connection failure, oversized body): the probe
+ *                cannot classify — never 'live'/'not-live' from a non-answer.
  */
-export function probeClientGraphLive(
+export type LiveProbeResult = 'live' | 'not-live' | 'unknown'
+
+function probeRemoteMethod(
   endpoint: { host: string; port: number },
-  timeoutMs = CLIENT_GRAPH_PROBE_TIMEOUT_MS,
-  maxBodyBytes = CLIENT_GRAPH_PROBE_MAX_BODY_BYTES,
-): Promise<'live' | 'not-live' | 'unknown'> {
+  method: string,
+  args: unknown,
+  timeoutMs: number,
+  maxBodyBytes: number,
+): Promise<LiveProbeResult> {
   return new Promise(resolve => {
-    const url = `http://${endpoint.host}:${endpoint.port}/api/clientGraph/graph`
+    const url = `http://${endpoint.host}:${endpoint.port}/api/${method}`
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
-    const done = (result: 'live' | 'not-live' | 'unknown') => {
+    const done = (result: LiveProbeResult) => {
       if (settled) return
       settled = true
       if (timer !== null) {
@@ -430,7 +448,11 @@ export function probeClientGraphLive(
       res.on('error', () => {})
       if (res.statusCode !== 200) {
         res.resume()
-        done('unknown')
+        // The dsh gateway routes only claimed Remote namespaces (vendored
+        // gateway test: an unclaimed route answers 404) — on a ready
+        // instance that is deterministic "not loaded yet", never an
+        // unclassifiable answer.
+        done(res.statusCode === 404 ? 'not-live' : 'unknown')
         return
       }
       const chunks: Buffer[] = []
@@ -439,7 +461,7 @@ export function probeClientGraphLive(
         if (settled) return
         size += chunk.length
         if (size > maxBodyBytes) {
-          // Oversized body: not a graph envelope — unclassifiable, never a
+          // Oversized body: not an RPC envelope — unclassifiable, never a
           // claimed 'live'/'not-live'.
           done('unknown')
           return
@@ -470,8 +492,50 @@ export function probeClientGraphLive(
     timer = setTimeout(() => done('unknown'), timeoutMs)
     timer.unref?.()
     req.on('error', () => done('unknown'))
-    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'clientGraph/graph', payload: { args: {} } }))
+    req.end(JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }))
   })
+}
+
+/**
+ * Live-effect probe of module A (design 09 module A): POST the
+ * `clientGraph/graph` RPC — the exact wire call the renderer's module C boot
+ * merge performs (renderer/src/host-graph.ts) — directly to the tunnel
+ * endpoint, answering whether the RUNNING remote dsh instance has actually
+ * loaded the seeded `@dsh-chamber/dsh-host-client-graph` module.
+ */
+export function probeClientGraphLive(
+  endpoint: { host: string; port: number },
+  timeoutMs = CLIENT_GRAPH_PROBE_TIMEOUT_MS,
+  maxBodyBytes = CLIENT_GRAPH_PROBE_MAX_BODY_BYTES,
+): Promise<LiveProbeResult> {
+  return probeRemoteMethod(endpoint, 'clientGraph/graph', {}, timeoutMs, maxBodyBytes)
+}
+
+/** Timeout of the one-shot git-worktree liveness probe (probeGitWorktreeLive). */
+export const GIT_WORKTREE_PROBE_TIMEOUT_MS = 5_000
+
+/** Response-body cap of the git-worktree liveness probe (an oversized answer
+ *  is not an RPC envelope; bounded memory on a misbehaving endpoint). */
+export const GIT_WORKTREE_PROBE_MAX_BODY_BYTES = 1024 * 1024
+
+/**
+ * Live-effect probe of the chamber git-worktree host package (design 08
+ * §11.6): POST `gitWorktree/previewCreate` with an EMPTY input to the tunnel
+ * endpoint. The dsh gateway routes only claimed Remote namespaces, so:
+ *   - 404 → the running instance never loaded the git-worktree boot row —
+ *     injected, restart pending (the exact case a host-graph-live probe
+ *     misses: host-graph can be live from an older boot while the newer
+ *     git-worktree row still awaits the restart that seeded it);
+ *   - 200 → the gateway resolved the method; the empty input fails the
+ *     domain validation FIRST (parsePreviewInput), before any git call, and
+ *     the rejection rides inside result.ok:true — cheap, no repo scan.
+ */
+export function probeGitWorktreeLive(
+  endpoint: { host: string; port: number },
+  timeoutMs = GIT_WORKTREE_PROBE_TIMEOUT_MS,
+  maxBodyBytes = GIT_WORKTREE_PROBE_MAX_BODY_BYTES,
+): Promise<LiveProbeResult> {
+  return probeRemoteMethod(endpoint, 'gitWorktree/previewCreate', { input: {} }, timeoutMs, maxBodyBytes)
 }
 
 /**
@@ -1061,7 +1125,14 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
       && argv[0].length > seedPrefix.length
       && SEED_RELATIVE_PATTERN.test(argv[0].slice(seedPrefix.length))
     if (argv[0] !== `${home}/profiles/web/package.json` && argv[0] !== `${home}/profiles/web/cordis.patch.yml` && !isSeedRead) return null
-    return [...prefix, 'cat', argv[0]]
+    // `LC_ALL=C` forces the REMOTE coreutils to emit English messages
+    // regardless of the remote locale (a zh_CN-locale host would otherwise
+    // print 没有那个文件或目录 for a missing file, which the ENOENT
+    // classification would misread as a loud ssh failure — the general fix,
+    // not a per-language whitelist). `LC_ALL=C` is a fixed literal env
+    // assignment the remote shell applies to the cat command; `DSH_HOME`
+    // (when set) already rides the same prefix chain.
+    return [...prefix, 'LC_ALL=C', 'cat', argv[0]]
   }
   if (payload.command === 'printf') {
     // Remote `$HOME` lookup for the materialize `file:` absolute path (todo
@@ -1291,7 +1362,10 @@ async function runRemoteExec(
     const remoteCmd = dir === '.' || dir === '/' ? `base64 -d > ${target}` : `mkdir -p ${dir} && base64 -d > ${target}`
     const written = await spawnRemote(spec, [remoteCmd], deps, { stdin: payload.contentBase64, quiet: payload.quiet === true })
     if (!written.ok) return written
-    const readBack = await spawnRemote(spec, ['cat', target], deps, { captureStdout: true, quiet: payload.quiet === true })
+    // Same `LC_ALL=C` discipline as the buildRemoteExecArgv cat branch: the
+    // read-back verifies what was written, and its ENOENT/probe failures
+    // must read English regardless of the remote locale.
+    const readBack = await spawnRemote(spec, ['LC_ALL=C', 'cat', target], deps, { captureStdout: true, quiet: payload.quiet === true })
     if (!readBack.ok) return readBack
     // Byte-domain verification: `stdout` is the lossy UTF-8 view of the
     // captured bytes (binary content would be corrupted by replacement chars

@@ -232,7 +232,7 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: false, version: null } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
 })
 
 test('localPluginList: chamber host-graph state — absent = not injected (honest, never "done")', () => {
@@ -240,7 +240,7 @@ test('localPluginList: chamber host-graph state — absent = not injected (hones
   const home = join(base, 'home')
   writeLocalProfile(home, {}, [])
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
 })
 
 test('localPluginList: chamber host-graph state — package.json alone is a half-injected module A (installed:false)', () => {
@@ -256,7 +256,7 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: false, version: null } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
 })
 
 test('localPluginList: chamber host-graph version is read from the seeded module A manifest', () => {
@@ -274,6 +274,45 @@ test('localPluginList: chamber host-graph version is read from the seeded module
   if (manifest.chamber.ok) {
     assert.equal(manifest.chamber.hostGraph.version, '0.1.2', 'the seeded package version is projected')
     assert.equal(manifest.chamber.hostGraph.live, null, 'local side has no separate liveness probe')
+  }
+})
+
+test('localPluginList: git-worktree patched is CONTENT-aware — a stale overlay without the git row is not "patched"', () => {
+  // The overlay regenerates per spawn with only the rows whose built
+  // artifacts exist; a stale overlay can carry only the client-graph row
+  // even after the git package files were seeded. The LOCAL gitWorktree
+  // state must reflect that (files present + row absent = half-injected,
+  // never 已注入).
+  const base = tempDir()
+  const home = join(base, 'home')
+  const profileDir = writeLocalProfile(home, {}, [])
+  // Both packages' files present.
+  for (const name of [CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME]) {
+    const pkgDir = join(profileDir, 'node_modules', name)
+    mkdirSync(join(pkgDir, 'dist'), { recursive: true })
+    writeFileSync(join(pkgDir, 'package.json'), `{"name":"${name}"}`)
+    writeFileSync(join(pkgDir, 'dist', 'index.js'), 'export const x = 1\n')
+  }
+  // Stale overlay: only the client-graph row.
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+  const stale = localPluginList(home)
+  assert.ok(stale.chamber.ok)
+  if (stale.chamber.ok) {
+    assert.deepEqual(stale.chamber.gitWorktree, { installed: true, patched: false, version: null, live: null })
+  }
+  // Regenerated overlay with BOTH rows → patched.
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+  const fresh = localPluginList(home)
+  assert.ok(fresh.chamber.ok)
+  if (fresh.chamber.ok) {
+    assert.deepEqual(fresh.chamber.gitWorktree, { installed: true, patched: true, version: null, live: null })
+  }
+  // Absent overlay → not patched.
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '')
+  const none = localPluginList(home)
+  assert.ok(none.chamber.ok)
+  if (none.chamber.ok) {
+    assert.equal(none.chamber.gitWorktree.patched, false)
   }
 })
 
@@ -301,7 +340,8 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
         return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
       }
       if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+        // A fully-seeded machine: BOTH chamber boot rows present.
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
@@ -314,7 +354,7 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       bundles: ['foo'],
       profileExists: true,
       error: undefined,
-      chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: true, version: null } },
+      chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: true, patched: true, version: null, live: null } },
     },
   })
 })
@@ -329,7 +369,7 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
         dependencies: {},
         bundles: [],
         profileExists: false,
-        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } },
+        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } },
       },
     },
   )
@@ -338,6 +378,35 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
     await remotePluginList(sshDown, { id: 's1', remoteDshHome: null }),
     { ok: false, error: 'the ssh exec could not reach the host (exit 255)' },
   )
+})
+
+test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目录") is a probe miss, never a loud failure', async () => {
+  // Real-world case (2026-08 user report): the remote host runs coreutils in
+  // the zh_CN locale, so an absent chamber package cats `没有那个文件或目录`
+  // instead of `No such file or directory`. Before the locale-broadened
+  // ENOENT_PATTERN this surfaced as "git-worktree probe failed: run command
+  // failed (exit 1): cat: …: 没有那个文件或目录" instead of 未注入.
+  const zhEnoent: ExecFn = async () => err('run command failed (exit 1): cat: /home/zeyu/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/package.json: 没有那个文件或目录')
+  assert.deepEqual(
+    await remotePluginList(zhEnoent, { id: 's1', remoteDshHome: null }),
+    {
+      ok: true,
+      manifest: {
+        dependencies: {},
+        bundles: [],
+        profileExists: false,
+        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } },
+      },
+    },
+  )
+  // The ssh-provider's redaction re-attach path keeps the marker working for
+  // a redacted zh_CN line too.
+  const redactedZh: ExecFn = async () => err('run command failed (exit 1): [ssh material redacted]: 没有那个文件或目录')
+  const redactedResult = await remotePluginList(redactedZh, { id: 's1', remoteDshHome: '/root/.ssh-custom' })
+  assert.ok(redactedResult.ok, 'a redacted zh_CN ENOENT is a probe miss, not a loud probe failure')
+  if (redactedResult.ok) {
+    assert.equal(redactedResult.manifest.chamber.ok, true)
+  }
 })
 
 test('remotePluginList: chamber probe — installed but the boot-layer insert missing (half-injected)', async () => {
@@ -357,7 +426,7 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false, version: null, live: null }, gitWorktree: { installed: true, version: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false, version: null, live: null }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
   }
 })
 
@@ -408,7 +477,7 @@ test('remotePluginList: chamber probe — package.json present but dist/index.js
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: true, version: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
   }
 })
 
@@ -462,7 +531,7 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
   assert.ok(result.ok, 'a redacted ENOENT is a probe miss, not a loud probe failure')
   if (result.ok) {
     assert.equal(result.manifest.profileExists, false)
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
   }
 })
 
@@ -478,32 +547,102 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
         return ok('{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.2"}')
       }
       if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
+  const fullySeeded = { installed: true, patched: true, version: null, live: null }
   // live = true → the RUNNING instance has loaded the module (已生效).
   const live = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
   assert.ok(live.ok)
   if (live.ok) {
-    assert.deepEqual(live.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: true }, gitWorktree: { installed: true, version: null } })
+    assert.deepEqual(live.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: true }, gitWorktree: fullySeeded })
   }
   // live = false → injected but restart still pending (重启后生效).
   const pending = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => false })
   assert.ok(pending.ok)
   if (pending.ok) {
-    assert.deepEqual(pending.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: false }, gitWorktree: { installed: true, version: null } })
+    assert.deepEqual(pending.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: false }, gitWorktree: fullySeeded })
   }
   // live = null → the desktop could not classify (no ready tunnel): the UI
   // renders 生效状态未知 — never a guessed claim.
   const unknown = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => null })
   assert.ok(unknown.ok)
   if (unknown.ok) {
-    assert.deepEqual(unknown.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: null }, gitWorktree: { installed: true, version: null } })
+    assert.deepEqual(unknown.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: null }, gitWorktree: fullySeeded })
   }
   // A version-less seeded package.json → version:null (never a guessed one).
   const versionless: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.endsWith('/cordis.patch.yml')) {
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  const noVersion = await remotePluginList(versionless, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
+  assert.ok(noVersion.ok)
+  if (noVersion.ok) {
+    assert.equal(noVersion.manifest.chamber.ok, true)
+    if (noVersion.manifest.chamber.ok) assert.equal(noVersion.manifest.chamber.hostGraph.version, null)
+  }
+})
+
+test('remotePluginList: git-worktree live is probed SEPARATELY — host-graph live does not prove the git row loaded', async () => {
+  // The user-reported dead end: host-graph live from an older boot (its row
+  // loaded) while the git-worktree row was seeded LATER (files + insert
+  // written at ready, but the running instance still boots the old layer) —
+  // the git RPC 404s and the sidebar shows no git surface. The probe must
+  // report gitWorktree.live === false independently of hostGraph.live.
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.endsWith('/cordis.patch.yml')) {
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+      }
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
+  // host-graph live, git-worktree NOT live → the exact "已生效 + 重启后生效"
+  // pair the UI must be able to render (and gate its restart button on).
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
+    liveProbe: async () => true,
+    gitWorktreeLiveProbe: async () => false,
+  })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: true }, gitWorktree: { installed: true, patched: true, version: null, live: false } })
+  }
+  // Both live → 已生效 for both.
+  const bothLive = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
+    liveProbe: async () => true,
+    gitWorktreeLiveProbe: async () => true,
+  })
+  assert.ok(bothLive.ok)
+  if (bothLive.ok) {
+    assert.equal(bothLive.manifest.chamber.ok, true)
+    if (bothLive.manifest.chamber.ok) assert.equal(bothLive.manifest.chamber.gitWorktree.live, true)
+  }
+})
+
+test('remotePluginList: the git-worktree INSERT missing from the patch is its own half-injected state (files present, row absent)', async () => {
+  // A machine seeded before the git package existed: package files present,
+  // but cordis.patch.yml carries ONLY the client-graph row. The host-graph
+  // row is genuinely patched; the git-worktree row is NOT — the UI must
+  // offer 注入 (not claim 已注入) and never report gitWorktree.live.
+  const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
@@ -517,16 +656,19 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const noVersion = await remotePluginList(versionless, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
-  assert.ok(noVersion.ok)
-  if (noVersion.ok) {
-    assert.equal(noVersion.manifest.chamber.ok, true)
-    if (noVersion.manifest.chamber.ok) assert.equal(noVersion.manifest.chamber.hostGraph.version, null)
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
+    liveProbe: async () => true,
+    gitWorktreeLiveProbe: async () => { throw new Error('must not run: the git row is not patched, so it cannot be live') },
+  })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: true }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
   }
 })
 
 test('remotePluginList: liveProbe is NOT consulted when the injection is half-present (cannot be live by definition)', async () => {
   let probed = false
+  let gitProbed = false
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
@@ -543,6 +685,9 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
       if (path.endsWith('/cordis.patch.yml')) {
+        // The git-worktree boot row is ALSO absent (a stale patch from before
+        // the git package existed): both packages are half-present, so neither
+        // live probe may run.
         return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
       }
     }
@@ -550,12 +695,14 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
   }
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
     liveProbe: async () => { probed = true; return true },
+    gitWorktreeLiveProbe: async () => { gitProbed = true; return true },
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: '0.1.2', live: null }, gitWorktree: { installed: true, version: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: '0.1.2', live: null }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
   }
   assert.equal(probed, false, 'a half-injected module is never "live" — the probe is skipped')
+  assert.equal(gitProbed, false, 'the git probe is skipped while the module is half-present')
 })
 
 // ============================================================================
