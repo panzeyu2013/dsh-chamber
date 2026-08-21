@@ -24,7 +24,9 @@ export class GitWorktreeRpcError extends Error {
 /**
  * True when the browser cannot know whether the host committed the request.
  * Typert business errors are definitive; transport/timeout/invalid response
- * failures must retain the operation id for an idempotent retry.
+ * failures must retain the operation id for an idempotent retry. A missing
+ * host package (404) is DEFINITIVE: retrying the same mutation cannot help
+ * until the instance loads the Remote, so it must not mint recovery entries.
  */
 export function isAmbiguousGitRpcFailure(error: unknown): boolean {
   if (!(error instanceof GitWorktreeRpcError)) return true
@@ -36,6 +38,35 @@ export function isAmbiguousGitRpcFailure(error: unknown): boolean {
     || error.retryable === true
 }
 
+/** Preflight/deterministic rejections that can NEVER have committed a
+ *  mutation: surfacing them as an ambiguous recovery would replay the same
+ *  failure forever and lock the whole source (review P2-1). They become a
+ *  plain actionError instead — the user fixes the cause and retries. */
+export function isDeterministicGitRejection(error: unknown): boolean {
+  if (!(error instanceof GitWorktreeRpcError)) return false
+  switch (error.code) {
+    case 'invalid-input':
+    case 'unsafe-path':
+    case 'expected-mismatch':
+    case 'workspace-not-found':
+    case 'worktree-not-found':
+    case 'main-worktree':
+    case 'worktree-locked':
+    case 'worktree-dirty':
+    case 'nested-workspace':
+    case 'workspace-registered':
+    case 'workspace-path-unavailable':
+    case 'path-unavailable':
+    case 'running-agent':
+    case 'worktree-invalid':
+    case 'branch-exists':
+    case 'branch-not-found':
+      return true
+    default:
+      return false
+  }
+}
+
 export interface CreateWorktreeInput {
   previewToken: string
   operationId: string
@@ -43,8 +74,13 @@ export interface CreateWorktreeInput {
 
 export interface RemoveWorktreeInput {
   operationId: string
-  workspaceId: string
+  /** Absent for an UNREGISTERED worktree removal (path required instead). */
+  workspaceId?: string
+  /** Required when workspaceId is absent: the exact worktree path. */
+  path?: string
   expected: { repoId: string; worktreeId: string; branch: string | null; head: string }
+  /** Optional local branch to delete after the worktree removal (design 08 §11). */
+  deleteBranch?: string
 }
 
 export type RollbackCreateExpectation = Pick<
@@ -193,6 +229,8 @@ export function decodeRollbackCreateValue(
     branchPreserved: value.branchPreserved === true
       ? true
       : invalidValue(method, 'branchPreserved 必须为 true'),
+    ...(value.branchDeleted === true ? { branchDeleted: true } : {}),
+    ...(value.branchDeleteFailed === true ? { branchDeleteFailed: true } : {}),
   }
   assertEqual(method, 'operationId', result.operationId, input.operationId)
   assertEqual(method, 'repoId', result.repoId, expected.repoId)
@@ -219,7 +257,7 @@ export function decodeRemoveValue(
     operationId: stringField(value, 'operationId', method),
     removed: value.removed === true ? true : invalidValue(method, 'removed 必须为 true'),
     replayed: booleanField(value, 'replayed', method),
-    workspaceId: stringField(value, 'workspaceId', method),
+    ...(value.workspaceId === undefined ? {} : { workspaceId: stringField(value, 'workspaceId', method) }),
     repoId: repoIdField(value, method),
     worktreeId: worktreeIdField(value, method),
     commonDir: stringField(value, 'commonDir', method),
@@ -227,12 +265,17 @@ export function decodeRemoveValue(
     branch,
     head: oidField(value, 'head', method),
     sessionIds: stringArrayField(value, 'sessionIds', method),
-    next: value.next === 'delete-workspace'
-      ? 'delete-workspace'
-      : invalidValue(method, "next 必须为 'delete-workspace'"),
+    next: value.next === 'delete-workspace' || value.next === 'none'
+      ? value.next
+      : invalidValue(method, "next 必须为 'delete-workspace' 或 'none'"),
     branchPreserved: value.branchPreserved === true
       ? true
       : invalidValue(method, 'branchPreserved 必须为 true'),
+  }
+  // Decode invariant (P2-1): `next` and `workspaceId` must agree — a
+  // 'delete-workspace' without an id would call deleteWorkspace(undefined).
+  if ((result.next === 'delete-workspace') !== (result.workspaceId !== undefined)) {
+    return invalidValue(method, "next 与 workspaceId 不一致")
   }
   assertEqual(method, 'operationId', result.operationId, input.operationId)
   assertEqual(method, 'workspaceId', result.workspaceId, input.workspaceId)
@@ -262,7 +305,20 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
     }),
     signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
   })
-  if (!response.ok) throw new GitWorktreeRpcError('http-error', `Git Remote HTTP ${response.status}`)
+  if (!response.ok) {
+    // A 404 on the gitWorktree namespace means the instance gateway does not
+    // know the Remote: the chamber host package is not loaded there (local:
+    // stale profile overlay — restart the desktop; remote: package seeded at
+    // ready but the instance must restart to pick up the patch; or the
+    // package is genuinely absent). Surfacing the raw status hides the fix.
+    if (response.status === 404) {
+      throw new GitWorktreeRpcError(
+        'git-host-not-loaded',
+        'Git 插件未在该实例加载（host 包缺失或未生效）。本地实例请重启桌面端；远程实例请在连接设置中重新下发 chamber host 包并点击“重启生效”后重试。',
+      )
+    }
+    throw new GitWorktreeRpcError('http-error', `Git Remote HTTP ${response.status}`)
+  }
   let envelope: any
   try {
     envelope = await response.json()

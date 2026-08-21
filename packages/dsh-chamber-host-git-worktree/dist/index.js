@@ -52,8 +52,9 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/core.ts
 import { createHash, randomUUID } from "node:crypto";
-import { access, lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, dirname, join, relative, resolve, sep } from "node:path";
+import { access, lstat, mkdir, open, realpath } from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 var READ_TIMEOUT_MS = 1e4;
 var MUTATION_TIMEOUT_MS = 3e4;
@@ -62,6 +63,7 @@ var MUTATION_OUTPUT_CAP = 256 * 1024;
 var PREVIEW_TTL_MS = 5 * 6e4;
 var OPERATION_TTL_MS = 24 * 60 * 6e4;
 var SNAPSHOT_DEADLINE_MS = 2e4;
+var DISCOVERY_TTL_MS = 3e4;
 var SNAPSHOT_WALL_TIMEOUT_MS = 25e3;
 var MAX_WORKSPACES = 128;
 var MAX_REPOSITORIES = 64;
@@ -123,6 +125,9 @@ async function domainResult(operation) {
 var nodeFileSystem = {
   realpath,
   lstat,
+  mkdir: async (path) => {
+    await mkdir(path, { recursive: true });
+  },
   exists: async (path) => {
     try {
       await access(path);
@@ -227,16 +232,32 @@ function expectedOpaqueId(value, kind) {
 }
 function parsePreviewInput(value) {
   assertRecord(value, "input");
-  assertExactKeys(value, ["sourceWorkspaceId", "basename", "branch"], "input");
+  {
+    const allowed = /* @__PURE__ */ new Set(["sourceWorkspaceId", "basename", "branch", "startRef"]);
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) fail("invalid-input", `input contains unsupported field '${key}'`);
+    }
+    for (const key of ["sourceWorkspaceId", "basename", "branch"]) {
+      if (!(key in value)) fail("invalid-input", `input.${key} is required`);
+    }
+  }
   const sourceWorkspaceId = requiredString(value.sourceWorkspaceId, "sourceWorkspaceId", 256);
-  const basename = safeBasename(value.basename);
+  const basename2 = safeBasename(value.basename);
   assertRecord(value.branch, "input.branch");
   assertExactKeys(value.branch, ["kind", "name"], "input.branch");
   if (value.branch.kind !== "existing" && value.branch.kind !== "new") {
     fail("invalid-input", "input.branch.kind must be 'existing' or 'new'");
   }
   const name = safeBranchName(value.branch.name);
-  return { sourceWorkspaceId, basename, branch: { kind: value.branch.kind, name } };
+  return {
+    sourceWorkspaceId,
+    basename: basename2,
+    branch: { kind: value.branch.kind, name },
+    // Same validation as the branch name: a control character or leading
+    // dash must never reach the localBranchHead argv (the allowlist would
+    // reject a leading dash, but input-layer validation is fail-closed).
+    ...value.startRef === void 0 ? {} : { startRef: safeBranchName(value.startRef, "input.startRef") }
+  };
 }
 function parseCreateInput(value) {
   assertRecord(value, "input");
@@ -250,20 +271,30 @@ function parseRollbackInput(value) {
 }
 function parseRemoveInput(value) {
   assertRecord(value, "input");
-  assertExactKeys(value, ["operationId", "workspaceId", "expected"], "input");
+  {
+    const allowed = /* @__PURE__ */ new Set(["operationId", "workspaceId", "path", "expected", "deleteBranch"]);
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) fail("invalid-input", `input contains unsupported field '${key}'`);
+    }
+    for (const key of ["operationId", "expected"]) {
+      if (!(key in value)) fail("invalid-input", `input.${key} is required`);
+    }
+  }
   assertRecord(value.expected, "input.expected");
   assertExactKeys(value.expected, ["repoId", "worktreeId", "branch", "head"], "input.expected");
   const head = requiredString(value.expected.head, "input.expected.head", 128);
   if (!/^[0-9a-fA-F]{40,64}$/u.test(head)) fail("invalid-input", "input.expected.head is not an object id");
   return {
     operationId: operationId(value.operationId),
-    workspaceId: requiredString(value.workspaceId, "workspaceId", 256),
+    workspaceId: value.workspaceId === void 0 ? void 0 : requiredString(value.workspaceId, "workspaceId", 256),
     expected: {
       repoId: expectedOpaqueId(value.expected.repoId, "repo"),
       worktreeId: expectedOpaqueId(value.expected.worktreeId, "worktree"),
       branch: value.expected.branch === null ? null : safeBranchName(value.expected.branch, "input.expected.branch"),
       head: head.toLowerCase()
-    }
+    },
+    deleteBranch: value.deleteBranch === void 0 ? void 0 : safeBranchName(value.deleteBranch, "input.deleteBranch"),
+    path: value.path === void 0 ? void 0 : value.workspaceId !== void 0 ? fail("invalid-input", "input.path and input.workspaceId are mutually exclusive") : absoluteExpectedPath(value.path, "input.path")
   };
 }
 function sameArray(left, right) {
@@ -281,7 +312,10 @@ function assertSafeGitArgv(args) {
   if (verb === "rev-parse" && (exact("--show-toplevel") || exact("--path-format=absolute", "--git-common-dir"))) return;
   if (verb === "check-ref-format" && rest.length === 2 && rest[0] === "--branch" && !rest[1].startsWith("-")) return;
   if (verb === "show-ref" && rest.length === 3 && rest[0] === "--hash" && rest[1] === "--verify" && rest[2].startsWith("refs/heads/") && !rest[2].slice("refs/heads/".length).startsWith("-")) return;
+  if (verb === "show-ref" && exact("--heads")) return;
+  if (verb === "branch" && rest.length === 2 && rest[0] === "-D" && !rest[1].startsWith("-") && !rest[1].startsWith("/")) return;
   if (verb === "status" && exact("--porcelain=v1", "-z", "--untracked-files=normal")) return;
+  if (verb === "status" && exact("--porcelain=v1", "-z", "--branch", "--untracked-files=normal")) return;
   if (verb === "worktree" && exact("list", "--porcelain", "-z")) return;
   if (verb === "worktree" && rest.length === 4 && rest[0] === "add" && rest[1] === "--" && isAbsolute(rest[2]) && !rest[3].startsWith("-")) return;
   if (verb === "worktree" && rest.length === 6 && rest[0] === "add" && rest[1] === "-b" && !rest[2].startsWith("-") && rest[3] === "--" && isAbsolute(rest[4]) && /^[0-9a-fA-F]{40,64}$/u.test(rest[5])) return;
@@ -409,6 +443,27 @@ var KeyedMutex = class {
     }
   }
 };
+function parseBranchLine(line) {
+  if (!line.startsWith("## ")) return { upstream: null, ahead: 0, behind: 0 };
+  const rest = line.slice(3);
+  let ahead = 0;
+  let behind = 0;
+  const bracket = rest.lastIndexOf(" [");
+  const namePart = bracket >= 0 ? rest.slice(0, bracket) : rest;
+  if (bracket >= 0) {
+    const meta = rest.slice(bracket + 2, rest.length - 1);
+    const aheadMatch = /ahead (\d+)/u.exec(meta);
+    const behindMatch = /behind (\d+)/u.exec(meta);
+    if (aheadMatch !== null) ahead = Number(aheadMatch[1]);
+    if (behindMatch !== null) behind = Number(behindMatch[1]);
+  }
+  const sep2 = namePart.indexOf("...");
+  return {
+    upstream: sep2 >= 0 ? namePart.slice(sep2 + 3) || null : null,
+    ahead,
+    behind
+  };
+}
 function parseWorktreePorcelain(output) {
   const records = [];
   let current;
@@ -498,10 +553,14 @@ var GitWorktreeCore = class {
   nextToken;
   operationCapacity;
   snapshotWallTimeoutMs;
+  worktreesRoot;
   mutex = new KeyedMutex();
   previews = /* @__PURE__ */ new Map();
   createOperations = /* @__PURE__ */ new Map();
   removeOperations = /* @__PURE__ */ new Map();
+  workspaceDiscoverCache = /* @__PURE__ */ new Map();
+  repoTopologyCache = /* @__PURE__ */ new Map();
+  lastWorkspaceSignature = "";
   snapshotInFlight;
   constructor(options) {
     this.source = options.source;
@@ -514,6 +573,11 @@ var GitWorktreeCore = class {
       fail("invalid-core-option", `operationCapacity must be between 1 and ${MAX_OPERATIONS}`);
     }
     this.snapshotWallTimeoutMs = options.snapshotWallTimeoutMs ?? SNAPSHOT_WALL_TIMEOUT_MS;
+    const worktreesRoot = options.worktreesRoot ?? join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "worktrees");
+    if (!isAbsolute(worktreesRoot)) {
+      fail("invalid-config", "worktreesRoot must be an absolute path");
+    }
+    this.worktreesRoot = worktreesRoot;
     if (!Number.isSafeInteger(this.snapshotWallTimeoutMs) || this.snapshotWallTimeoutMs < 1 || this.snapshotWallTimeoutMs > SNAPSHOT_WALL_TIMEOUT_MS) {
       fail("invalid-core-option", `snapshotWallTimeoutMs must be between 1 and ${SNAPSHOT_WALL_TIMEOUT_MS}`);
     }
@@ -558,6 +622,11 @@ var GitWorktreeCore = class {
     }
     const errors = [];
     let sourceError;
+    const signature = state.workspaces.map((workspace) => `${workspace.workspaceId}:${workspace.path}`).sort().join("|");
+    if (signature !== this.lastWorkspaceSignature) {
+      this.clearDiscoveryCaches();
+      this.lastWorkspaceSignature = signature;
+    }
     const canonicalWorkspaces = [];
     for (const workspace of state.workspaces) {
       if (this.now() >= deadline) {
@@ -591,7 +660,14 @@ var GitWorktreeCore = class {
     let gitSpawnFailures = 0;
     for (const workspace of canonicalWorkspaces) {
       try {
-        const discovered = await this.snapshotDiscover(workspace.canonicalPath, deadline);
+        let discovered;
+        const cachedDiscover = this.workspaceDiscoverCache.get(workspace.canonicalPath);
+        if (cachedDiscover !== void 0 && this.now() - cachedDiscover.at < DISCOVERY_TTL_MS) {
+          discovered = { commonDir: cachedDiscover.commonDir, topLevel: cachedDiscover.topLevel };
+        } else {
+          discovered = await this.snapshotDiscover(workspace.canonicalPath, deadline);
+          this.workspaceDiscoverCache.set(workspace.canonicalPath, { ...discovered, at: this.now() });
+        }
         const group = groups.get(discovered.commonDir);
         if (group === void 0) {
           if (groups.size >= MAX_REPOSITORIES) {
@@ -656,12 +732,22 @@ var GitWorktreeCore = class {
         break;
       }
       try {
-        const listed = await this.snapshotGitChecked(
-          group.cwd,
-          ["worktree", "list", "--porcelain", "-z"],
-          deadline
-        );
-        const raw = parseWorktreePorcelain(listed.stdout);
+        let raw;
+        let branches;
+        const cachedTopology = this.repoTopologyCache.get(commonDir);
+        if (cachedTopology !== void 0 && this.now() - cachedTopology.at < DISCOVERY_TTL_MS) {
+          raw = cachedTopology.listedRaw;
+          branches = cachedTopology.branches;
+        } else {
+          const listed = await this.snapshotGitChecked(
+            group.cwd,
+            ["worktree", "list", "--porcelain", "-z"],
+            deadline
+          );
+          raw = parseWorktreePorcelain(listed.stdout);
+          branches = await this.listBranches(group.cwd, deadline);
+          this.repoTopologyCache.set(commonDir, { listedRaw: raw, branches, at: this.now() });
+        }
         if (raw.length > MAX_WORKTREES_PER_REPOSITORY) {
           errors.push({
             code: "snapshot-worktree-limit",
@@ -731,9 +817,15 @@ var GitWorktreeCore = class {
               path
             });
           }
-          const workspace = matches[0];
+          let workspace = matches[0];
+          if (workspace === void 0 && pathAvailable === false) {
+            workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
+          }
           if (workspace !== void 0) associated.add(workspace.workspaceId);
           let dirty = null;
+          let upstream = null;
+          let ahead = 0;
+          let behind = 0;
           let statusUnhealthy = null;
           if (pathAvailable && !entry.bare) {
             if (this.now() >= deadline) {
@@ -753,12 +845,20 @@ var GitWorktreeCore = class {
               }
             } else {
               try {
-                dirty = (await this.snapshotGitChecked(path, [
+                const statusOutput = (await this.snapshotGitChecked(path, [
                   "status",
                   "--porcelain=v1",
                   "-z",
+                  "--branch",
                   "--untracked-files=normal"
-                ], deadline, SNAPSHOT_STATUS_TIMEOUT_MS)).stdout.length > 0;
+                ], deadline, SNAPSHOT_STATUS_TIMEOUT_MS)).stdout;
+                const nul = statusOutput.indexOf("\0");
+                const headerLine = nul >= 0 ? statusOutput.slice(0, nul) : statusOutput;
+                dirty = nul >= 0 && statusOutput.length > nul + 1;
+                const branchFacts = parseBranchLine(headerLine);
+                upstream = branchFacts.upstream;
+                ahead = branchFacts.ahead;
+                behind = branchFacts.behind;
               } catch (error) {
                 if (error instanceof GitWorktreeError && error.code === "snapshot-deadline") {
                   statusDeadlineReported = true;
@@ -802,6 +902,9 @@ var GitWorktreeCore = class {
             locked: entry.locked,
             status,
             headState,
+            upstream,
+            ahead,
+            behind,
             attention,
             workspaceId: workspace?.workspaceId ?? null,
             sessionIds,
@@ -823,7 +926,8 @@ var GitWorktreeCore = class {
           repoId: opaqueId("repo", commonDir),
           commonDir,
           mainPath: worktrees[0].path,
-          worktrees
+          worktrees,
+          branches
         });
       } catch (error) {
         errors.push({
@@ -855,19 +959,28 @@ var GitWorktreeCore = class {
       }
       const main = topology.worktrees[0];
       if (main.bare) fail("bare-repository", "bare repositories cannot own linked worktrees");
-      const parent = dirname(topology.mainPath);
-      const targetPath = resolve(parent, input.basename);
-      if (dirname(targetPath) !== parent) fail("unsafe-path", "target escaped the main checkout parent");
+      const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir);
+      const targetPath = resolve(targetRoot, input.basename);
+      if (!targetPath.startsWith(`${targetRoot}${sep}`)) fail("unsafe-path", "target escaped the unified worktree root");
       await this.assertPathAbsent(targetPath);
       await this.assertBranchFormat(topology.mainPath, input.branch.name);
       const branchHead = await this.localBranchHead(topology.mainPath, input.branch.name);
+      let startHead;
       if (input.branch.kind === "existing") {
         if (branchHead === null) fail("branch-not-found", `local branch '${input.branch.name}' does not exist`);
         if (topology.worktrees.some((worktree) => worktree.branch === input.branch.name)) {
           fail("branch-checked-out", `local branch '${input.branch.name}' is already checked out`);
         }
-      } else if (branchHead !== null) {
-        fail("branch-exists", `local branch '${input.branch.name}' already exists`);
+        startHead = branchHead;
+      } else {
+        if (branchHead !== null) fail("branch-exists", `local branch '${input.branch.name}' already exists`);
+        if (input.startRef !== void 0) {
+          const startHeadOf = await this.localBranchHead(topology.mainPath, input.startRef);
+          if (startHeadOf === null) fail("branch-not-found", `source branch '${input.startRef}' does not exist`);
+          startHead = startHeadOf;
+        } else {
+          startHead = main.head;
+        }
       }
       this.pruneCaches();
       if (this.previews.size >= MAX_PREVIEWS) fail("preview-capacity", "too many live worktree previews");
@@ -882,7 +995,8 @@ var GitWorktreeCore = class {
         targetPath,
         branch: input.branch.name,
         branchMode: input.branch.kind,
-        baseHead: input.branch.kind === "existing" ? branchHead : main.head,
+        baseHead: startHead,
+        startRef: input.branch.kind === "new" ? input.startRef : void 0,
         sourceWorkspaceId: input.sourceWorkspaceId,
         basename: input.basename,
         createdAt
@@ -894,6 +1008,7 @@ var GitWorktreeCore = class {
   /** Create exactly the previewed worktree, with bounded same-process TTL idempotency. */
   async create(untrusted) {
     const input = parseCreateInput(untrusted);
+    this.clearDiscoveryCaches();
     this.pruneCaches();
     const existing = this.createOperations.get(input.operationId);
     let preview;
@@ -968,6 +1083,7 @@ var GitWorktreeCore = class {
    */
   async rollbackCreate(untrusted) {
     const input = parseRollbackInput(untrusted);
+    this.clearDiscoveryCaches();
     this.pruneCaches();
     const record = this.createOperations.get(input.operationId);
     if (record === void 0) fail("operation-not-found", "no create operation can authorize this rollback");
@@ -1008,6 +1124,7 @@ var GitWorktreeCore = class {
   async remove(untrusted) {
     const input = parseRemoveInput(untrusted);
     const fingerprint = objectFingerprint(input);
+    this.clearDiscoveryCaches();
     this.pruneCaches();
     const existing = this.removeOperations.get(input.operationId);
     if (existing !== void 0) {
@@ -1028,7 +1145,8 @@ var GitWorktreeCore = class {
       fingerprint,
       state: "ready",
       updatedAt: this.now(),
-      attemptedRemove: false
+      attemptedRemove: false,
+      branchDeleteAttempted: false
     };
     this.removeOperations.set(input.operationId, record);
     record.state = "removing";
@@ -1101,8 +1219,9 @@ var GitWorktreeCore = class {
       if (topology.commonDir !== preview.commonDir || topology.mainPath !== preview.mainPath) {
         fail("preview-stale", "repository identity changed after preview");
       }
-      const targetPath = resolve(dirname(topology.mainPath), preview.basename);
-      if (targetPath !== preview.targetPath || dirname(targetPath) !== dirname(topology.mainPath)) {
+      const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir);
+      const targetPath = resolve(targetRoot, preview.basename);
+      if (targetPath !== preview.targetPath || !targetPath.startsWith(`${this.worktreesRoot}${sep}`)) {
         fail("preview-stale", "target identity changed after preview");
       }
       const reconciled = topology.worktrees.find((worktree) => worktree.path === targetPath);
@@ -1152,6 +1271,9 @@ var GitWorktreeCore = class {
             "operation-conflict",
             operation.gitAccepted && branchHead === preview.baseHead ? "the confirmed worktree disappeared while its preserved branch remains" : "new branch now exists without confirmed operation provenance"
           );
+        } else if (preview.startRef !== void 0) {
+          const startHead = await this.localBranchHead(topology.mainPath, preview.startRef);
+          if (startHead !== preview.baseHead) fail("preview-stale", "source branch moved after preview");
         } else if (topology.worktrees[0].head !== preview.baseHead) {
           fail("preview-stale", "main checkout moved after preview");
         }
@@ -1172,6 +1294,7 @@ var GitWorktreeCore = class {
         branchCreated: preview.branchMode === "new"
       };
       operation.attemptedCreate = true;
+      await this.ensureWorktreeRoot(targetRoot);
       const args = preview.branchMode === "existing" ? ["worktree", "add", "--", targetPath, preview.branch] : ["worktree", "add", "-b", preview.branch, "--", targetPath, preview.baseHead];
       try {
         await this.gitChecked(topology.mainPath, args, true);
@@ -1288,14 +1411,58 @@ var GitWorktreeCore = class {
         return await this.reconcileBoundRemove(input, operation, operation.intent, true);
       });
     }
+    if (input.workspaceId === void 0) {
+      const unregisteredPath = input.path;
+      if (unregisteredPath === void 0) fail("invalid-input", "input.path is required for an unregistered removal");
+      const discovered2 = await this.discover(unregisteredPath);
+      return await this.mutex.run(discovered2.commonDir, async () => {
+        const state = await this.readSource();
+        const canonicalPath = await this.existingPath(unregisteredPath);
+        await this.assertNoRunningAtPath(canonicalPath, state);
+        for (const candidate of state.workspaces) {
+          const candidatePath = await this.existingPath(candidate.path).catch(() => null);
+          if (candidatePath === null) continue;
+          if (candidatePath === canonicalPath || candidatePath.startsWith(`${canonicalPath}${sep}`)) {
+            fail("workspace-registered", "the target worktree is already registered as a workspace");
+          }
+        }
+        const topology = await this.topology(canonicalPath);
+        if (topology.commonDir !== discovered2.commonDir) fail("expected-mismatch", "worktree changed repositories");
+        const repoId = opaqueId("repo", topology.commonDir);
+        if (repoId !== input.expected.repoId) fail("expected-mismatch", "repository identity changed");
+        const target = topology.worktrees.find((worktree) => worktree.path === canonicalPath);
+        if (target === void 0) fail("worktree-not-found", "path is not an exact worktree root");
+        const worktreeId = opaqueId("worktree", topology.commonDir, target.path);
+        if (worktreeId !== input.expected.worktreeId) fail("expected-mismatch", "worktree identity changed");
+        if (target === topology.worktrees[0]) fail("main-worktree", "the main checkout cannot be removed");
+        if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
+        if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
+        if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
+        if (await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be removed");
+        const intent = {
+          repoId,
+          worktreeId,
+          commonDir: topology.commonDir,
+          mainPath: topology.mainPath,
+          path: target.path,
+          branch: target.branch,
+          head: target.head,
+          sessionIds: [],
+          deleteBranch: input.deleteBranch
+        };
+        operation.intent = intent;
+        return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
+      });
+    }
+    const registeredWorkspaceId = input.workspaceId;
     const initialState = await this.readSource();
-    const initialWorkspace = this.workspace(initialState, input.workspaceId);
+    const initialWorkspace = this.workspace(initialState, registeredWorkspaceId);
     const discovered = await this.discover(initialWorkspace.path);
     return await this.mutex.run(discovered.commonDir, async () => {
       let state = await this.readSource();
-      let workspace = this.workspace(state, input.workspaceId);
+      let workspace = this.workspace(state, registeredWorkspaceId);
       const workspacePath = await this.existingPath(workspace.path);
-      await this.assertNoOtherWorkspaceWithin(state, workspacePath, input.workspaceId);
+      await this.assertNoOtherWorkspaceWithin(state, workspacePath, registeredWorkspaceId);
       this.assertNoRunningSessions(workspace, state.runningSessionIds);
       await this.assertNoRunningAtPath(workspacePath, state);
       const topology = await this.topology(workspace.path);
@@ -1312,11 +1479,11 @@ var GitWorktreeCore = class {
       if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
       if (await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be removed");
       state = await this.readSource();
-      workspace = this.workspace(state, input.workspaceId);
+      workspace = this.workspace(state, registeredWorkspaceId);
       if (await this.existingPath(workspace.path) !== workspacePath) {
         fail("expected-mismatch", "workspace path changed during removal");
       }
-      await this.assertNoOtherWorkspaceWithin(state, workspacePath, input.workspaceId);
+      await this.assertNoOtherWorkspaceWithin(state, workspacePath, registeredWorkspaceId);
       this.assertNoRunningSessions(workspace, state.runningSessionIds);
       await this.assertNoRunningAtPath(workspacePath, state);
       const sessionIds = [...workspace.sessionIds];
@@ -1330,11 +1497,28 @@ var GitWorktreeCore = class {
         path: target.path,
         branch: target.branch,
         head: target.head,
-        sessionIds
+        sessionIds,
+        deleteBranch: input.deleteBranch
       };
       operation.intent = intent;
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
     });
+  }
+  /** Best-effort optional branch deletion after a removal, once per
+   *  operation (design 08 §11 user decision). Called from every terminal
+   *  removal path — including the target-absent replay paths — so a removal
+   *  that committed before a failure still reports the branch outcome
+   *  honestly (branchDeleted / branchDeleteFailed on the result). */
+  async attemptBranchDelete(operation, intent, mainPath) {
+    if (intent.deleteBranch === void 0 || operation.branchDeleteAttempted) return;
+    operation.branchDeleteAttempted = true;
+    try {
+      await this.assertBranchFormat(mainPath, intent.deleteBranch);
+      await this.gitChecked(mainPath, ["branch", "-D", intent.deleteBranch], true);
+      intent.branchDeleted = true;
+    } catch {
+      intent.branchDeleteFailed = true;
+    }
   }
   /** Reconcile a removal whose Git subprocess may have committed before failure. */
   async reconcileBoundRemove(input, operation, intent, replayed) {
@@ -1346,6 +1530,7 @@ var GitWorktreeCore = class {
     if (target === void 0) {
       const state2 = await this.readSource();
       await this.assertRemovedWorkspaceReceipt(intent, state2);
+      await this.attemptBranchDelete(operation, intent, topology.mainPath);
       return this.removeResult(input.operationId, intent, true);
     }
     const repoId = opaqueId("repo", topology.commonDir);
@@ -1356,6 +1541,13 @@ var GitWorktreeCore = class {
     if (target === topology.worktrees[0]) fail("operation-conflict", "bound linked worktree became the main checkout");
     if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
     if (await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be removed");
+    if (input.workspaceId === void 0) {
+      const state2 = await this.readSource();
+      const canonicalPath = await this.existingPath(intent.path);
+      await this.assertNoRunningAtPath(canonicalPath, state2);
+      operation.intent = intent;
+      return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
+    }
     const state = await this.readSource();
     const workspace = this.workspace(state, input.workspaceId);
     const workspacePath = await this.existingPath(workspace.path);
@@ -1380,6 +1572,7 @@ var GitWorktreeCore = class {
     if (finalTarget === void 0) {
       const state = await this.readSource();
       await this.assertRemovedWorkspaceReceipt(intent, state);
+      await this.attemptBranchDelete(operation, intent, finalTopology.mainPath);
       return this.removeResult(operationIdValue, intent, true);
     }
     if (finalTarget === finalTopology.worktrees[0] || finalTarget.locked || opaqueId("worktree", finalTopology.commonDir, finalTarget.path) !== intent.worktreeId || finalTarget.branch !== intent.branch || finalTarget.head !== intent.head) {
@@ -1394,6 +1587,7 @@ var GitWorktreeCore = class {
     if (after.commonDir !== intent.commonDir || after.worktrees.some((worktree) => worktree.path === intent.path)) {
       fail("postcondition-failed", "Git still reports the removed worktree or repository identity changed");
     }
+    await this.attemptBranchDelete(operation, intent, finalTopology.mainPath);
     return this.removeResult(operationIdValue, intent, replayed);
   }
   removeResult(operationIdValue, intent, replayed) {
@@ -1401,7 +1595,7 @@ var GitWorktreeCore = class {
       operationId: operationIdValue,
       removed: true,
       replayed,
-      workspaceId: intent.workspaceId,
+      ...intent.workspaceId === void 0 ? {} : { workspaceId: intent.workspaceId },
       repoId: intent.repoId,
       worktreeId: intent.worktreeId,
       commonDir: intent.commonDir,
@@ -1409,9 +1603,32 @@ var GitWorktreeCore = class {
       branch: intent.branch,
       head: intent.head,
       sessionIds: [...intent.sessionIds],
-      next: "delete-workspace",
-      branchPreserved: true
+      next: intent.workspaceId === void 0 ? "none" : "delete-workspace",
+      branchPreserved: true,
+      ...intent.branchDeleted === true ? { branchDeleted: true } : {},
+      ...intent.branchDeleteFailed === true ? { branchDeleteFailed: true } : {}
     };
+  }
+  /** Repo-specific worktree subdirectory: `<root>/<repo-name>-<hash12>` — a
+   *  unified location keyed by the repository identity (common dir), so two
+   *  same-named repositories never block each other, and never inside a
+   *  working tree (git status stays clean). */
+  worktreeRootFor(mainPath, commonDir) {
+    const repoName = basename(mainPath) || "repo";
+    const digest = createHash("sha256").update(commonDir).digest("hex").slice(0, 12);
+    return join(this.worktreesRoot, `${repoName}-${digest}`);
+  }
+  /** Ensure the unified worktree root exists before `git worktree add`
+   *  (git requires the parent directory; mkdir is recursive + idempotent). */
+  async ensureWorktreeRoot(root) {
+    try {
+      await this.fs.mkdir(root);
+    } catch {
+    }
+  }
+  clearDiscoveryCaches() {
+    this.workspaceDiscoverCache.clear();
+    this.repoTopologyCache.clear();
   }
   async readSource() {
     let rawWorkspaces;
@@ -1584,11 +1801,8 @@ var GitWorktreeCore = class {
       let canonical;
       try {
         canonical = await this.existingPath(workspace.path);
-      } catch (error) {
-        fail(
-          "workspace-path-unavailable",
-          `cannot safely resolve workspace '${workspace.workspaceId}' before removal: ${safeErrorMessage(error)}`
-        );
+      } catch {
+        continue;
       }
       if (this.containsPath(target, canonical)) {
         fail("nested-workspace", `worktree contains workspace '${workspace.workspaceId}'`);
@@ -1680,10 +1894,15 @@ var GitWorktreeCore = class {
     const result = await this.gitCommand(cwd, ["check-ref-format", "--branch", branch]);
     if (result.exitCode !== 0) fail("invalid-branch", `Git rejected local branch '${branch}'`);
   }
+  /** Local branch head, or null when the branch does not exist. Git versions
+   *  disagree on the missing-ref exit code (`show-ref --verify` exits 1 in
+   *  some, 128 with `fatal: ... not a valid ref` in others) — ANY non-zero
+   *  exit means "branch absent" for this fixed invocation; a genuinely broken
+   *  git would have failed the earlier rev-parse/worktree reads already.
+   *  (2026-08 fix: exit 128 was misreported as a hard git-command-failed.) */
   async localBranchHead(cwd, branch) {
     const result = await this.gitCommand(cwd, ["show-ref", "--hash", "--verify", `refs/heads/${branch}`]);
-    if (result.exitCode === 1) return null;
-    if (result.exitCode !== 0) this.gitExitError(result, "show-ref");
+    if (result.exitCode !== 0) return null;
     const head = this.singleLine(result.stdout, "local branch head").toLowerCase();
     if (!/^[0-9a-f]{40,64}$/u.test(head)) fail("git-protocol-error", "Git returned an invalid local branch head");
     return head;
@@ -1705,6 +1924,25 @@ var GitWorktreeCore = class {
     const result = await this.gitCommand(cwd, args, false, Math.max(1, Math.min(perCommandLimit, remaining)));
     if (result.exitCode !== 0) this.gitExitError(result, args[0] ?? "unknown");
     return result;
+  }
+  /** Local branch names for the existing-branch picker (`show-ref --heads`).
+   *  A convenience read: any failure (git down, budget exhausted) yields an
+   *  empty list and must never fail or stall the snapshot. */
+  async listBranches(cwd, deadline) {
+    if (this.now() >= deadline) return [];
+    let result;
+    try {
+      result = await this.gitCommand(cwd, ["show-ref", "--heads"], false, READ_TIMEOUT_MS);
+    } catch {
+      return [];
+    }
+    if (result.exitCode !== 0) return [];
+    const branches = [];
+    for (const line of result.stdout.split("\n")) {
+      const match = /^[0-9a-fA-F]{40,64}\s+refs\/heads\/(.+)$/u.exec(line);
+      if (match !== null && match[1] !== "" && !match[1].startsWith("-")) branches.push(match[1]);
+    }
+    return branches;
   }
   async gitCommand(cwd, args, mutation = false, readTimeoutMs = READ_TIMEOUT_MS) {
     if (!isAbsolute(cwd)) fail("unsafe-git-cwd", "Git cwd must be absolute");
@@ -1856,5 +2094,6 @@ export {
   assertSafeGitArgv,
   createLocalGitRunner,
   index_default as default,
-  domainResult
+  domainResult,
+  parseBranchLine
 };

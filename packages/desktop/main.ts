@@ -55,7 +55,6 @@ import {
   resolveLocalMaterializeDirectory,
   runLocalDshPlugin,
   seedRemoteChamberHostPackages,
-  seedRemoteHostGraph,
 } from './plugin-sync.ts';
 import type { ChamberHostPackageSeed, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 import {
@@ -513,7 +512,12 @@ function installRendererRecovery(win: BrowserWindow): void {
  * 只记录不退出（应用仍可再点图标重建）。
  */
 function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): BrowserWindow {
-  const url = `${rendererOrigin}/`;
+  // Normalize a possibly-trailing-slash origin: the startup path passes the
+  // bare origin, the rebuild path reuses mainWindowUrl (which already ends
+  // with '/') — appending unconditionally would produce a `//`-leading path
+  // that `new URL('//', base)` rejects and crashes the control plane's
+  // request handler (2026-08 fix).
+  const url = `${rendererOrigin.replace(/\/+$/, '')}/`;
   mainWindowUrl = url;
   const win = new BrowserWindow({
     width: 1280,
@@ -1189,20 +1193,25 @@ if (!gotTheLock) {
       if (spec === null) return { ok: false, error: 'ssh instance not found' };
       // Not shipped is a loud error on the MANUAL path (the button must never
       // look like it succeeded while writing nothing) — the auto path skips
-      // with an info log instead.
-      if (!existsSync(path.join(moduleASourceDir, 'dist', 'index.js'))) {
-        return { ok: false, error: '模块 A 未打包（host-graph seed 源缺失），无法注入——请先构建 host-graph 包' };
+      // with an info log instead. The manual resend covers BOTH chamber host
+      // packages (host-graph + git-worktree): a remote connected before the
+      // git package existed only picks it up through this path or the next
+      // ready transition.
+      const missing = chamberHostPackageSeeds.filter(seed => !existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+      if (missing.length > 0) {
+        return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
       }
       if (hostPackageSeeding.has(id)) return { ok: false, error: 'chamber host seed in progress' };
       hostPackageSeeding.add(id);
       try {
-        const result = await seedRemoteHostGraph(execTransport, spec, moduleASourceDir);
+        const result = await seedRemoteChamberHostPackages(execTransport, spec, chamberHostPackageSeeds);
         // Surface the outcome in the instance's ring-buffer log (the connections
         // UI log panel) — the injection is never a silent modification.
         if (result.ok) {
-          sm.appendLog(id, 'info', `chamber host-graph 注入完成：模块 A 包${result.wrote ? '已写入' : '已是最新'}（${remoteHostPackageDir(spec, CLIENT_GRAPH_PACKAGE_NAME)}），boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+          const summary = result.packages.map(entry => `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}`).join('、');
+          sm.appendLog(id, 'info', `chamber host 包注入完成：${summary}；boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
         } else {
-          sm.appendLog(id, 'error', `chamber host-graph 注入失败：${result.error}`);
+          sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
         }
         return result;
       } finally {

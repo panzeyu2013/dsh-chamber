@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canTargetSession, collectSessionClosure, createSourceOptions, findWorktree, removeBlockReason } from '../src/shared/git-facts.ts'
+import {
+  canTargetSession, collectSessionClosure, createSourceOptions, findWorktree,
+  gitFactsForWorkspace, removeBlockReason,
+} from '../src/shared/git-facts.ts'
 import { GitActionLedger } from '../src/shared/action-ledger.ts'
 import { SerializedRefreshes } from '../src/shared/refresh-flight.ts'
 import { normalizeGitSnapshot } from '../src/shared/snapshot.ts'
@@ -13,7 +16,8 @@ const HEAD = 'c'.repeat(40)
 function worktree(extra: Partial<GitWorktreeInfo> = {}): GitWorktreeInfo {
   return {
     worktreeId: WORKTREE_ID, path: '/repo', head: HEAD, branch: 'main', isMain: false,
-    dirty: false, locked: false, status: 'ready', headState: 'branch', attention: [],
+    dirty: false, locked: false, status: 'ready', headState: 'branch',
+    upstream: 'origin/main', ahead: 1, behind: 0, attention: [],
     workspaceId: 'ws-1', sessionIds: [], runningSessionIds: [],
     ...extra,
   }
@@ -24,13 +28,14 @@ test('snapshot keeps valid siblings beside malformed rows and preserves opaque i
     repos: [
       {
         repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo',
+        branches: [],
         worktrees: [
           worktree(),
           { path: '/missing-id', head: '123', branch: null },
           { ...worktree({ path: '/duplicate' }), worktreeId: WORKTREE_ID },
         ],
       },
-      { commonDir: '/bad/.git', mainPath: '/bad', worktrees: [] },
+      { commonDir: '/bad/.git', mainPath: '/bad', worktrees: [], branches: [] },
     ],
     errors: [{ code: 'status-failed', operation: 'status', path: '/other', message: 'one repo failed' }],
   })
@@ -46,6 +51,7 @@ test('snapshot never turns missing collections or malformed membership into heal
   const snapshot = normalizeGitSnapshot({
     repos: [{
       repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo',
+        branches: [],
       worktrees: [{ ...worktree(), sessionIds: 'not-an-array' }],
     }],
     errors: [{ nope: true }],
@@ -56,7 +62,7 @@ test('snapshot never turns missing collections or malformed membership into heal
 
 test('topology helpers select and find by opaque identity, never display paths', () => {
   const snapshot: GitWorktreeSnapshot = {
-    repos: [{ repoId: REPO_ID, commonDir: '/same', mainPath: '/repo', worktrees: [worktree()] }],
+    repos: [{ repoId: REPO_ID, commonDir: '/same', mainPath: '/repo', worktrees: [worktree()], branches: [] }],
     errors: [],
   }
   assert.deepEqual(createSourceOptions(snapshot), [{ workspaceId: 'ws-1', repoId: REPO_ID, label: 'repo' }])
@@ -69,6 +75,8 @@ test('safe-remove guard covers main/registration/live/current/fs safety and allo
   assert.equal(removeBlockReason(worktree({ workspaceId: null })), 'unregistered')
   assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running')
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's'), 'current')
+  // A BLANK current session carries no content and must not block removal.
+  assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's', true), undefined)
   assert.equal(removeBlockReason(worktree({ locked: true })), 'locked')
   assert.equal(removeBlockReason(worktree({ status: 'missing' })), 'unhealthy')
   assert.equal(removeBlockReason(worktree({ status: 'invalid' })), 'unhealthy')
@@ -91,6 +99,7 @@ test('snapshot normalizes health/head/attention fields and rejects malformed val
   const snapshot = normalizeGitSnapshot({
     repos: [{
       repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo',
+        branches: [],
       worktrees: [
         worktree({ status: 'missing', headState: 'unborn', attention: ['merge', 'bisect'] }),
         { ...worktree(), status: 'bogus' },
@@ -173,7 +182,7 @@ test('session closure enumerates direct + transitive subsessions, cycle-safe and
 
 test('snapshot passes through unknown sourceError codes while keeping partial facts', () => {
   const snapshot = normalizeGitSnapshot({
-    repos: [{ repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo', worktrees: [worktree()] }],
+    repos: [{ repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo', worktrees: [worktree()], branches: [] }],
     errors: [],
     sourceError: { code: 'newer-host-error-code', message: 'explicit' },
   })
@@ -185,4 +194,83 @@ test('snapshot passes through unknown sourceError codes while keeping partial fa
     }),
     /sourceError must carry string code\/message/,
   )
+})
+
+test('workspace-centric discovery maps workspaces to their git rows by workspaceId', () => {
+  const snapshot: GitWorktreeSnapshot = {
+    repos: [
+      {
+        repoId: REPO_ID, commonDir: '/a/.git', mainPath: '/a',
+        branches: [],
+        worktrees: [
+          worktree({ path: '/a', workspaceId: 'ws-a', isMain: true }),
+          { ...worktree({ path: '/a/wt-x', workspaceId: 'ws-a' }), worktreeId: `worktree_${'c'.repeat(64)}` },
+          { ...worktree({ path: '/a/wt-orphan', workspaceId: null }), worktreeId: `worktree_${'d'.repeat(64)}` },
+        ],
+      },
+      {
+        repoId: `repo_${'e'.repeat(64)}`, commonDir: '/b/.git', mainPath: '/b',
+        branches: [],
+        worktrees: [{ ...worktree({ path: '/b', workspaceId: 'ws-b' }), worktreeId: `worktree_${'f'.repeat(64)}` }],
+      },
+    ],
+    errors: [],
+  }
+  const wsA = gitFactsForWorkspace(snapshot, 'ws-a')
+  assert.equal(wsA.length, 2)
+  assert.deepEqual(wsA.map(entry => entry.worktree.path), ['/a', '/a/wt-x'])
+  assert.equal(wsA[0].repoId, REPO_ID)
+  assert.equal(gitFactsForWorkspace(snapshot, 'ws-b').length, 1)
+  assert.equal(gitFactsForWorkspace(snapshot, 'ws-unknown').length, 0)
+  // Unregistered rows (workspaceId null) match no workspace.
+  assert.equal(gitFactsForWorkspace(snapshot, 'unmatched').length, 0)
+})
+
+
+test('an older host omitting attention/upstream/ahead/behind degrades instead of rejecting the row', () => {
+  const snapshot = normalizeGitSnapshot({
+    repos: [
+      {
+        repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo',
+        branches: [],
+        worktrees: [
+          {
+            worktreeId: WORKTREE_ID, path: '/repo', head: HEAD, branch: 'main', isMain: true,
+            dirty: false, locked: false, status: 'ready', headState: 'branch',
+            workspaceId: 'ws-1', sessionIds: [], runningSessionIds: [],
+            // attention / upstream / ahead / behind all ABSENT (old host).
+          },
+        ],
+      },
+    ],
+    errors: [],
+  })
+  assert.equal(snapshot.errors.length, 0)
+  assert.equal(snapshot.repos.length, 1)
+  const row = snapshot.repos[0]!.worktrees[0]!
+  assert.deepEqual(row.attention, [])
+  assert.equal(row.upstream, null)
+  assert.equal(row.ahead, 0)
+  assert.equal(row.behind, 0)
+})
+
+test('a PRESENT but unknown attention reason still fails the row closed', () => {
+  const snapshot = normalizeGitSnapshot({
+    repos: [
+      {
+        repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo',
+        branches: [],
+        worktrees: [
+          {
+            worktreeId: WORKTREE_ID, path: '/repo', head: HEAD, branch: 'main', isMain: true,
+            dirty: false, locked: false, status: 'ready', headState: 'branch',
+            attention: ['future-reason'],
+            workspaceId: 'ws-1', sessionIds: [], runningSessionIds: [],
+          },
+        ],
+      },
+    ],
+    errors: [],
+  })
+  assert.ok(snapshot.repos[0]!.worktrees.length === 0, 'unknown attention reason must reject the row')
 })

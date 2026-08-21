@@ -87,9 +87,17 @@ session 或 delete 副作用。
 
 ## 4. 客户端数据流与座位
 
-`sidebar.git` 是 sidebar root 单 occupant 座位，固定在多来源列表和 foot
-之间。sidebar 包只声明座位与 `{wide}` owner props，不依赖 Git 类型；
-Git 插件用 `ctx.slots.inject(...register...)` 占位。窄栏 occupant 返回 `null`，
+座位在 2026-08 对齐轮改为 **`sidebar.workspace.git`**（per-workspace 上下文
+座位，v0.1.4）：sidebar root 对每来源渲染两次——`workspaceId === ''` 的源级
+警示条（恢复/动作错误，挂在工作区列表上方）与每个 workspace 组头部行内的
+occupant（OpenChamber 式：**workspace 行本身就是 Git 表面**，没有独立
+git 行）。独立面板座位 `sidebar.git` 已移除（面板功能属远期二次开发）。
+
+sidebar 包声明座位（kind single / scope root / `{wide}` owner）与
+`hookContext { sourceId, workspaceId }` + slot 级 `inject.hooks.workspaceGitContext`
+（工厂必须在 children 表的 slot inject 声明，**不能**进插件 entry inject——
+entry inject 的 hooks 会被当 observable 绑定而崩溃，slot-contract 测试守卫）。
+sidebar 不依赖 Git 类型；Git 插件用 slot inject 占位。窄栏 occupant 返回 `null`，
 但 slot 不卸载，避免切换宽度丢操作状态。
 
 插件模块内有一个页面级 singleton coordinator：
@@ -245,3 +253,158 @@ M0–M3 合并进 main 后追加的三处能力（对齐 OpenChamber 的会话�
 验证：`test:git`（31→46 用例）、`test:host-git`（42→59 用例）、
 `typecheck:git`/`typecheck:host-git`、`build:renderer`、sidebar/renderer-shell
 回归全部通过；host 产物 `dist/index.js` 已重建并提交。
+
+## 11. OpenChamber 对齐轮（2026-08-21，v0.1.4）
+
+按"前端实现方式也一并对齐"的要求完成的呈现/交互/能力对齐，以及多轮
+subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一致。
+
+### 11.1 呈现：workspace 行即 Git 表面（移除独立 git 行）
+
+- occupant 渲染进 workspace 头部行内（title 与 rowActions 之间）：worktree-
+  workspace 显示**分支 chip**（仅分支名文本、无图标、12px/500/次级色、截断，
+  常显——它就是该 worktree 的身份）；主 checkout 不显示 chip（与
+  OpenChamber 一致：root 组只显示项目名）。行内动作图标 16px（OpenChamber
+  同款）；空 workspace 的组体显示"该工作区暂无会话"提示行（OpenChamber
+  空组文案对齐）。
+- 行内动作（创建/删除）与 "+"/kebab 同触发源：字面量类 `git-ws-action`
+  由侧栏 `.workspaceHeader:hover/focus-within/:has(.rowActionsVisible)` 统一
+  揭示；静止时 `display:none`（零布局占用、移出 Tab 序）；**hover 时 chip
+  （`git-ws-chip`）原位隐藏、动作在同一位置换入**（镜像侧栏
+  count→rowActions 的原位换入，无布局漂移）；禁用态 hover 下保持 .42。
+  **禁止二次派生（OpenChamber 对齐）**：创建入口只在仓库**主 checkout**
+  行（worktree 行只有删除）；创建对话框的来源下拉也只提供主 checkout
+  workspace（`createSourceOptions` 优先 `isMain`）。
+- **折叠区图标交换（OpenChamber SessionGroupSection 对齐）**：worktree
+  （派生）workspace 的折叠按钮常态显示 **git-branch 图标**、hover 才换回
+  折叠箭头（展开=向下/折叠=向右，旋转移至 chevron 元素避免旋转分支图标）；
+  普通 workspace 保持纯折叠箭头。侧栏通过共享存储
+  （`shared/workspace-git-flags.ts`，插件发布、侧栏读布尔值——保持零 git
+  类型依赖）感知派生 workspace。**注册/创建后的定位（2026-08 修正）**：
+  dsh registry 对新建 workspace 是 **prepend（头部）** 而非 append——注册
+  流程在提交成功后立即 `workspace.insertBefore` 把新工作树移到其主
+  checkout 之后（注册表顺序持久化，重启后仍在组内；失败 best-effort 不
+  回滚已提交的 workspace）；adopt 的 workspace 标题按分支派生（目录
+  basename 可能与主同名）。
+- **派生 workspace 行简化（OpenChamber 对齐，用户决策 2026-08）**：worktree
+  行**移除省略号（kebab）与重命名**（双击改名同样禁用），hover 只保留
+  **删除**（git occupant）与 **"+"**（新建会话）；行内不再显示分支名
+  （最右侧不显示 worktree 名称——分支身份由折叠区分支图标 + 目录名表达）。
+- **图标与字体层级（OpenChamber 调研对齐，用户决策 2026-08）**：普通
+  workspace 折叠区常态 **folder 图标**（14px，project 行对等）、worktree
+  常态 **git-branch 图标**、hover 均换 14px 折叠箭头；workspace 标题
+  **14px/600 主色**（project 标签对等），**派生 workspace 标题降级次级色**
+  （worktree 组标签 muted 对等）——图标语言 + 墨色阶梯 + 会话行 26px 缩进
+  构成三级视觉引导；组间距 2px→3px（组间分隔增强，行高 26px 防 flicker
+  约束保持）。
+- **派生 workspace 的排序边界与项目分隔（用户决策 2026-08）**：flags 携带
+  `mainWorkspaceId`——派生 workspace **拖拽不能排到其主 checkout 之前**
+  （乐观序 clamp + 拖拽指示器在越界位置抑制，wire anchor 按 clamp 后顺序
+  推导）；**项目（repo 组）起始 workspace 的上间距加大**（3px→10px：
+  非 git workspace、主 checkout、或上一个 workspace 属于其它仓库的派生
+  workspace 视为项目起始），同仓库的派生组保持紧凑间距。
+- **对话框调整（用户决策 2026-08）**：删除对话框移除长说明文字（会话/
+  分支语义由勾选项与确认按钮承载），工作树路径颜色提为主色（原继承的
+  透明墨色近不可见）；创建/删除对话框宽度 480px→560px；创建对话框移除
+  "来源仓库"下拉（入口即确定派生源，内部仍锁定主 checkout 来源）；字段
+  间距 12px→14px、标签内距 5px→6px；**目录重名自动加数字后缀**
+  （OpenChamber resolveCandidateDirectory 对等：打开/切换 tab/失焦同步/
+  提交时均查重，`name-2`/`name-3`…，host target-exists 仍为最终守卫）。
+- **显示全部 worktree（Plan A，用户决策 2026-08）**：
+  - **未注册工作树按仓库分散到 repo 组末尾**（名称=目录 basename、与派生
+    workspace 一致的行样式：分支图标 + 名称 + 健康徽标），无已注册 workspace
+    的仓库在列表末尾渲染其未注册块；数据经 flags 存储的每来源仓库布局
+    （`RepoGitLayout`）发布，侧栏以 `repoKey` 上下文第三次挂载该座位，
+    occupant 渲染行与动作（"新建会话"= adopt 懒注册、"删除"= 未注册删除）；
+  - **未注册删除**：host `RemoveInput.workspaceId` 可选 + `path` 必填，
+    git-first 移除保留身份/脏/锁/主守卫，`RemoveResult.next: 'none'` 时客户端
+    跳过 workspace.delete 与归档（无会话）；operationId 幂等/重放复用；
+  - **孤儿 workspace**：快照 `workspace-path-failed` 标记 `orphaned: true`，
+    行显示"已消失"徽标；删除弹专门确认（"工作树已不存在，仅删除其注册，
+    会话保留并转未分组"）后仅 `workspace.delete`；
+  - 竞态：adopt 前 fresh 快照复核；未注册外部删除自愈消失；注册后外部删除
+    进入孤儿流程。
+- **注册/删除全链路修复（4 子代理复查 2026-08）**：adopt/创建提交后
+  `insertWorkspaceBefore` 把新工作树移到主 checkout 之后（registry 实为
+  PREPEND，原假设 append 已更正）；adopt 标题按分支派生；注册删除预检对
+  路径不可解析的无关 workspace 宽容跳过（孤儿不再阻塞该来源所有删除，
+  否则 retryable 错误会把来源锁死在 recovery）；missing 工作树行按 raw 路径
+  回链 workspace（不双显进未注册块）；确定性领域拒绝不铸 recovery（降级
+  actionError）；仓库级快照失败时 keep 继承上一快照（flag 不闪失）；删除
+  对话框会话事实失败可重试；isProjectStart 改 repoKey 级判定。
+- **状态事实不进行内**（OpenChamber 对齐）：status/headState/attention/
+  upstream/ahead/behind 保留在快照，用于删除门控（按钮阻断原因进
+  title/aria）与未来的 Worktrees 管理页；上游信息仅在 chip tooltip
+  （`路径 → 上游`）呈现。
+- 源级警示条（recovery/actionError）挂在来源工作区列表上方；snapshot
+  安装类错误**不进侧栏**（归属 connections 插件 chamber 块，见 §13 反向
+  seed 文档）：not-loaded 源退化为普通无 worktree 视图。
+
+### 11.2 创建对话框（OpenChamber NewWorktreeDialog 对齐）
+
+- New Branch / Existing Branch 双 tab（active-pill）；分支名打开时自动
+  双词 slug（10×10 组合，查重：避开已有分支与工作树目录名，8 次重roll）；
+  目录随分支名同步直至编辑（"重置为分支名"）；来源分支下拉（本地分支，
+  localStorage 按仓库记忆上次选择）；已有分支为**可选框**（host 快照
+  `branches`，`show-ref --heads` 白名单新增）。
+- **单击直接创建**（用户决策）：无预览屏——客户端内部串行
+  previewCreate→createFromPreview（host 校验链完整保留），错误直接显示。
+- **创建永不提交会话**（用户决策）：`createSession: false` 显式传入；
+  recovery 记录携带 `createSession` 标志，重试尊重原意图（无会话创建重试
+  不建会话、不跳转）。
+
+### 11.3 删除对话框
+
+- 会话闭包统计 + **会话标题列表**（≤5 + "还有 N 条"，取自侧栏 aggregate）；
+  可选先归档（含子会话）；**可选同时删除本地分支**（用户授权，违背 §6
+  "不删分支"的旧立场——`git branch -D` 白名单新增，尽力一次，失败如实
+  返回 `branchDeleteFailed` 且不阻断已删工作树；对话框留存说明）。
+- 硬阻断（dirty/locked/running/current/unhealthy）保留。
+
+### 11.4 后端对齐
+
+- **统一 worktree 根**：所有 chamber 创建的 worktree 落在
+  `<DSH_HOME>/worktrees/<仓库名>-<sha256(commonDir) 前8位>/<目录名>`——
+  集中、跨同名仓库无冲突、完全在仓库工作树外（git status 不受污染）；
+  host 自动 mkdir（fs 抽象新增 mkdir）；DSH_HOME 缺失兜底 ~/.dsh；
+  构造期校验绝对路径。
+- **来源分支（startRef）**：新分支从所选本地分支 HEAD 起（`localBranchHead`
+  解析为精确 commit 钉死为 baseHead，create 复验——比 OpenChamber 的
+  ref 名语义更严格）；缺失报 `branch-not-found`；解析层放行 + safeBranchName
+  校验（P1 修复）。
+- **upstream/ahead/behind 只读事实**：快照 status 加 `--branch`（白名单
+  新增固定形状），`parseBranchLine` 解析 `## b...u [ahead N, behind M]`；
+  数字基于本地 refs（永不 fetch，如实）；脏检测改为"表头之后有内容"。
+- **本地分支删除失败语义**：尽力 + 如实上报（OpenChamber 抛错误导，dsh
+  更诚实）；target-absent 重放路径同样执行（attemptBranchDelete 三路径）。
+
+### 11.5 修复（多轮 subagent 复查）
+
+- P1：`startRef` 解析层被丢弃（`parsePreviewInput` 不含该字段 → 一选来源
+  分支即 `invalid-input`）；exit 128 的缺失分支被当硬错误（localBranchHead
+  非零即 null）。
+- P2：create 不清发现缓存（新 worktree 快照 30s 不可见）；快照每 repo 每轮
+  多跑一次 show-ref（缓存 branches 未消费）；deleteBranch 重放静默跳过；
+  无会话创建在恢复路径仍建会话并跳转；existing tab 残留 new 模式建议分支；
+  existing 目录被静默覆盖；occupant 按钮未纳入拖拽尾随 click 抑制；分支
+  删除结果被解码丢弃。
+- P3：死样式/死 locale 清理、`createSourceOptions` 死条件、chip 双击误入
+  重命名、detached/unborn 区分、禁用态透明度。
+
+验证（v0.1.4）：`test:host-git` 76、`test:git` 53、sidebar/renderer-shell/
+desktop/connection/client-web/settings-bridge/connections 全绿、8 个
+typecheck（含根）、verify:i18n、build:host-git（dist 重建且与 src 字节级
+一致）、build:renderer。
+
+### 11.6 404 语义与一键重启（悬空引用消除）
+
+- **404 = 确定性 `git-host-not-loaded`**（git RPC 404，host 包缺失或未生效）：
+  客户端判定为**确定性失败**——不建恢复（recovery 会永久死循环）、不重试，
+  文案指引"本地实例请重启桌面端；远程实例请在连接设置中重新下发 chamber
+  host 包并点击'重启生效'后重试"。该错误归属 connections 插件的 chamber
+  块（`gitWorktree` 双包探测 + pendingRestart），不进侧栏。
+- **一键重启**：connections 插件的 chamber 块（PluginSyncModal）新增"重启
+  实例"按钮（`runServiceOp('restart_service')`）与 seed 写/补 patch 后的
+  "重启生效"（pendingRestart）态；`ChamberInjectionState` 新增 `gitWorktree`
+  探测（`probeRemoteChamber` 探 pkg+dist），`remoteNeedsSeed` 条件
+  = hostGraph 未(installed&&patched) || 未装 gitWorktree。

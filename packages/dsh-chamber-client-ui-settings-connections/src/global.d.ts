@@ -94,7 +94,11 @@ export interface ChamberHostGraphState {
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh
  *  exec failure / unparseable patch) — loud, never a silent "not injected". */
 export type ChamberInjectionState =
-  | { ok: true; hostGraph: ChamberHostGraphState }
+  | {
+    ok: true
+    hostGraph: ChamberHostGraphState
+    gitWorktree: { installed: boolean; version: string | null }
+  }
   | { ok: false; error: string }
 
 /** Remote plugin manifest projection (design 13 §4.3): the remote profile

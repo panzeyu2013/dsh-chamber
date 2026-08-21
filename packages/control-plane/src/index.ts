@@ -701,7 +701,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             'content-security-policy',
             `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
           )
-          const url = new URL(req.url ?? '/', 'http://localhost')
+          // A malformed request line (e.g. a `//`-leading path — treated as a
+          // protocol-relative URL with an empty host, which `new URL` rejects)
+          // must never take the whole control plane down: answer 400 and keep
+          // serving (proxy honesty — an invalid request is an explicit
+          // rejection, never a crash or a silent empty success).
+          let url: URL
+          try {
+            url = new URL(req.url ?? '/', 'http://localhost')
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' })
+            res.end('{"error":"invalid-url"}')
+            return
+          }
           const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
           if (surface === 'api' || surface === 'health') {
             void api.handle(req as ApiRequest, res as ApiResponse).catch(error => {

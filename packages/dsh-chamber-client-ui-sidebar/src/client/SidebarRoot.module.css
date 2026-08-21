@@ -243,26 +243,6 @@
 
 /* Optional chamber feature seat between navigation and the fixed foot. The
    occupant controls its own max-height/scrolling; an empty slot takes no room. */
-.gitArea {
-  flex: none;
-  min-width: 0;
-  width: 100%;
-}
-
-.gitArea:empty {
-  display: none;
-}
-
-.gitError {
-  margin: 4px 0;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--dsw-alias-bg-negative-subtle, var(--dsw-alias-interactive-bg-hover));
-  color: var(--dsw-alias-label-negative, var(--dsw-alias-label-primary));
-  font-size: 12px;
-  line-height: 16px;
-}
-
 /* Footer seats: additive actions stack above Settings. Each occupant owns its
    button geometry and hover chrome. */
 .footArea {

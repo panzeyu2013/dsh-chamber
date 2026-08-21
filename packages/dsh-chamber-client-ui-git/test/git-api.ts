@@ -133,3 +133,24 @@ test('missing domain envelope fails ambiguous instead of masquerading as a succe
     globalThis.fetch = original
   }
 })
+
+test('a 404 from the gitWorktree namespace maps to a definitive host-not-loaded error', async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = (async () => new Response('not found', { status: 404 })) as typeof fetch
+  try {
+    await assert.rejects(
+      gitWorktreeApi.snapshot('local'),
+      (error: unknown) => {
+        assert.ok(error instanceof GitWorktreeRpcError)
+        assert.equal(error.code, 'git-host-not-loaded')
+        // A missing host package is NOT ambiguous: retrying the same mutation
+        // cannot help until the instance loads the Remote, so recovery entries
+        // must not be minted from it.
+        assert.equal(isAmbiguousGitRpcFailure(error), false)
+        return true
+      },
+    )
+  } finally {
+    globalThis.fetch = original
+  }
+})

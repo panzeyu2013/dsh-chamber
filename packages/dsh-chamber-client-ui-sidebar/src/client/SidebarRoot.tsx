@@ -100,14 +100,14 @@
  * scrollbar indirection away while it is elsewhere, so a list the user is not
  * pointing at carries no bar.
  */
-import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-client-connection/client'
 import {
   BrandWordmark, FishLogo, HoverCard, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14,
   IconChevronRightOutline14, IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16, IconLoadingOutline16,
   IconNewChatOutline16, IconPanelLeftOutline16, IconPersonalizationOutline16, IconPlusOutline16, IconQuestionOutline14,
-  IconSearchOutline16, IconTrashOutline16, IconWarningOutline16, Menu, StateDot, Tooltip,
+  IconFolderOpenOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16, Menu, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
@@ -131,6 +131,7 @@ import {
   clearSourceBookkeeping, getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
 } from '../shared/view-prefs.ts'
 import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
+import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags, type RepoGitLayout } from '../shared/workspace-git-flags.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
@@ -281,27 +282,6 @@ class ChamberListBoundary extends Component<{ children: ReactNode }, { error: Er
   }
 }
 
-/** Isolate an optional sidebar occupant from the navigation shell. */
-class SidebarGitBoundary extends Component<{ children: ReactNode; message: string }, { failed: boolean }> {
-  constructor(props: { children: ReactNode; message: string }) {
-    super(props)
-    this.state = { failed: false }
-  }
-
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true }
-  }
-
-  componentDidCatch(error: Error): void {
-    console.error('[dsh-chamber] sidebar.git render failed:', error)
-  }
-
-  render(): ReactNode {
-    if (this.state.failed) return <div className={css.gitError} role="alert">{this.props.message}</div>
-    return this.props.children
-  }
-}
-
 /** In-flight session-row drag: source identity plus the current insert marker (06 §2.2). */
 interface SessionDragState {
   /** Source the drag started in — cross-source drops are structurally impossible. */
@@ -380,6 +360,17 @@ export function SidebarRoot({
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
+  // The sidebar's own typecheck program resolves the slots render share
+  // through the loose ambient seam (renderSlot is a 2-arg signature there),
+  // so the contextual 3-arg occurrence is narrowed locally. The runtime
+  // signature is `(key, owner, opts)` and dispatch is by key — the cast is
+  // only a type-level lift, never a runtime change.
+  const renderWorkspaceGit = renderSlot as (
+    key: 'sidebar.workspace.git',
+    owner: { wide: boolean },
+    opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
+  ) => ReactNode
+
   // Wide content stays mounted while the collapse animates (fading via
   // .collapsed .wide), unmounts at settle, and remounts right away on expand.
   const [settled, setSettled] = useState(collapsed)
@@ -487,6 +478,12 @@ export function SidebarRoot({
       setServers(next)
     })
   }, [])
+
+  // chamber (08 §11): re-render when the git plugin publishes per-workspace
+  // flags (worktree fold-button swap / create-from-main gating).
+  // The flags store's MONOTONIC VERSION is the snapshot: a store change
+  // re-renders (a constant snapshot would never trigger React — review P1).
+  useSyncExternalStore(subscribeWorkspaceGitFlags, getWorkspaceGitFlagsVersion, getWorkspaceGitFlagsVersion)
 
   // chamber (06 §3, 2026-08 — cross-ctx live sync): view preferences (folded
   // workspace groups + the ungrouped session order) live in ONE shared
@@ -934,7 +931,13 @@ export function SidebarRoot({
   }
 
   const onDeleteWorkspace = (server: ChamberServerAggregate, workspaceId: string, title: string): void => {
-    if (!window.confirm(t('confirm.delete', { title }))) return
+    // Plan A: an ORPHANED workspace (path gone) needs an explicit confirm —
+    // the deletion only removes the durable registration.
+    if (getWorkspaceGitFlag(server.id, workspaceId)?.orphaned === true) {
+      if (!window.confirm(t('confirm.deleteOrphan', { title }))) return
+    } else if (!window.confirm(t('confirm.delete', { title }))) {
+      return
+    }
     runAction(`${server.id}/workspace/${workspaceId}/delete`, async () => {
       await deleteWorkspace(getInstanceClient(server.id), workspaceId)
       chamberBridge.requestRefresh(server.id)
@@ -1137,10 +1140,59 @@ export function SidebarRoot({
     const nextOrder = renderedOrder.filter(id => id !== activeDrag.workspaceId)
     const insertAt = anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor)
     nextOrder.splice(insertAt === -1 ? nextOrder.length : insertAt, 0, activeDrag.workspaceId)
+    // chamber (08 §11): a DERIVED workspace can never precede its main
+    // checkout — clamp the optimistic order so the visual matches the rule.
+    const dragFlag = getWorkspaceGitFlag(server.id, activeDrag.workspaceId)
+    if (dragFlag?.isWorktree === true && dragFlag.mainWorkspaceId !== undefined) {
+      const mainIndex = nextOrder.indexOf(dragFlag.mainWorkspaceId)
+      const draggedIndex = nextOrder.indexOf(activeDrag.workspaceId)
+      if (mainIndex !== -1 && draggedIndex !== -1 && draggedIndex < mainIndex) {
+        nextOrder.splice(draggedIndex, 1)
+        nextOrder.splice(mainIndex, 0, activeDrag.workspaceId)
+      }
+    }
+    // chamber (08 §11, P2-5): the MAIN checkout must likewise stay BEFORE
+    // every derived worktree of the same repository — dragging it below them
+    // would violate the rule in the other direction.
+    if (dragFlag?.isMain === true) {
+      const mainIndex = nextOrder.indexOf(activeDrag.workspaceId)
+      const firstDerivedIndex = nextOrder
+        .findIndex(id => getWorkspaceGitFlag(server.id, id)?.mainWorkspaceId === activeDrag.workspaceId)
+      if (mainIndex !== -1 && firstDerivedIndex !== -1 && mainIndex > firstDerivedIndex) {
+        nextOrder.splice(mainIndex, 1)
+        nextOrder.splice(firstDerivedIndex, 0, activeDrag.workspaceId)
+      }
+    }
+    // chamber (08 §11, 2026-08): a derived workspace can ONLY reorder within
+    // its own repo group — if the drop landed beyond the group's last member
+    // (dragged into another group), clamp it back to sit right after that
+    // member so the persisted order stays group-contiguous.
+    if (dragFlag?.isWorktree === true && dragFlag.mainWorkspaceId !== undefined) {
+      const mainIndex = nextOrder.indexOf(dragFlag.mainWorkspaceId)
+      const draggedIndex = nextOrder.indexOf(activeDrag.workspaceId)
+      if (mainIndex !== -1 && draggedIndex !== -1) {
+        let groupEnd = mainIndex
+        for (let i = 0; i < nextOrder.length; i += 1) {
+          const id = nextOrder[i]
+          if (id === activeDrag.workspaceId) continue
+          if (getWorkspaceGitFlag(server.id, id)?.mainWorkspaceId === dragFlag.mainWorkspaceId && i > groupEnd) {
+            groupEnd = i
+          }
+        }
+        if (draggedIndex > groupEnd) {
+          nextOrder.splice(draggedIndex, 1)
+          nextOrder.splice(groupEnd + 1, 0, activeDrag.workspaceId)
+        }
+      }
+    }
+    // The wire anchor follows the CLAMPED order (the element right after the
+    // dragged workspace), so the persisted order matches what the user sees.
+    const finalIndex = nextOrder.indexOf(activeDrag.workspaceId)
+    const wireAnchor = finalIndex === -1 ? undefined : nextOrder[finalIndex + 1]
     setWorkspaceOrderOverride(prev => ({ ...prev, [server.id]: nextOrder }))
     runAction(`${server.id}/workspace-drag/${activeDrag.workspaceId}`, async () => {
       try {
-        await insertWorkspaceBefore(getInstanceClient(server.id), activeDrag.workspaceId, anchor)
+        await insertWorkspaceBefore(getInstanceClient(server.id), activeDrag.workspaceId, wireAnchor)
         chamberBridge.requestRefresh(server.id)
       } catch (error) {
         // A failed commit must not keep masquerading as committed: drop the
@@ -1378,11 +1430,39 @@ export function SidebarRoot({
                 && workspaceDrag.over !== null
                 && workspaceDrag.over.id === firstReal.id
                 && workspaceDrag.over.half === 'before'
+              // chamber (08 §11): would inserting the dragged worktree at the
+              // target put it AT or ABOVE its main checkout? Shared by the
+              // drop marker, the onDragOver gate and the top indicator so the
+              // visual, the accepted drop and the committed order agree.
+              const dropBlockedByMain = (draggedWorkspaceId: string, targetWorkspaceId: string, half: 'before' | 'after'): boolean => {
+                const dragFlag = getWorkspaceGitFlag(server.id, draggedWorkspaceId)
+                if (!(dragFlag?.isWorktree === true && dragFlag.mainWorkspaceId !== undefined)) return false
+                const renderedOrder = workspaceOrderOverride[server.id]
+                  ?? server.workspaces.filter(row => row.ungrouped !== true).map(row => row.id)
+                const mainIndex = renderedOrder.indexOf(dragFlag.mainWorkspaceId)
+                if (mainIndex === -1) return false
+                const targetIndex = renderedOrder.indexOf(targetWorkspaceId)
+                const insertIndex = targetIndex + (half === 'after' ? 1 : 0)
+                // Blocked when inserting AT or ABOVE the main checkout.
+                if (insertIndex <= mainIndex) return true
+                // Also blocked when inserting BEYOND the group's last member —
+                // a derived workspace reorders only within its own repo group.
+                let groupEnd = mainIndex
+                for (let i = 0; i < renderedOrder.length; i += 1) {
+                  const id = renderedOrder[i]
+                  if (id === draggedWorkspaceId) continue
+                  if (getWorkspaceGitFlag(server.id, id)?.mainWorkspaceId === dragFlag.mainWorkspaceId && i > groupEnd) {
+                    groupEnd = i
+                  }
+                }
+                return insertIndex > groupEnd + 1
+              }
               const workspaceDragMarker = (workspace: ChamberServerWorkspace): 'before' | 'after' | null => {
                 if (workspace.ungrouped === true || workspaceDrag === null
                   || workspaceDrag.sourceId !== server.id || workspaceDrag.over === null) return null
                 if (workspaceDrag.over.id !== workspace.id) return null
                 if (workspaceDropAtListStart && workspace.id === firstReal?.id) return null
+                if (dropBlockedByMain(workspaceDrag.workspaceId, workspace.id, workspaceDrag.over.half)) return null
                 return workspaceDrag.over.half
               }
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
@@ -1651,7 +1731,22 @@ export function SidebarRoot({
                     </button>
                   </div>
                 )}
-                {server.connected ? (
+                {server.connected ? (() => {
+                  // chamber (08 §11 Plan A): per-repo layouts drive the
+                  // unregistered-worktree blocks + the orphan badge.
+                  const repoLayouts = getSourceRepoLayouts(server.id)
+                  return (
+                  <>
+                  {/* chamber (08 §11): one source-level Git alert mount
+                      (workspaceId '' = source scope), OUTSIDE the list tree
+                      (review P3-3: a tree must not carry non-treeitem direct
+                      children). The chamber Git plugin renders the source's
+                      recovery/action errors here — visible even when no
+                      workspace has git rows so the source can never silently
+                      lock or lie. */}
+                  {renderWorkspaceGit('sidebar.workspace.git', { wide }, {
+                    hookContext: { sourceId: server.id, workspaceId: '' },
+                  })}
                   <div
                     className={cc.workspaceList}
                     // The browse list is one tree (official .list role="tree");
@@ -1742,12 +1837,18 @@ export function SidebarRoot({
                       <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
                     ) : (
                       <>
-                        {workspaceDropAtListStart && (
+                        {workspaceDropAtListStart && !(workspaceDrag !== null && firstReal !== undefined
+                          && dropBlockedByMain(workspaceDrag.workspaceId, firstReal.id, 'before')) && (
                           <span className={cc.listTopDropIndicator} aria-hidden="true" />
                         )}
-                        {orderedWorkspaces.map((workspace) => {
+                        {(() => {
+                          return orderedWorkspaces.map((workspace, index) => {
                           const workspaceKey = `${server.id}/${workspace.id}`
                           const folded = viewPrefs.folded[workspaceKey] === true
+                          // chamber (08 §11): derived (worktree) workspaces
+                          // drop the kebab/rename — OpenChamber worktree
+                          // groups keep only delete + new-session.
+                          const isWorktree = getWorkspaceGitFlag(server.id, workspace.id)?.isWorktree === true
                           const sessions = sessionsOf(workspace)
                           // chamber (third-wave review, R2-1#4): sessionsOf
                           // includes the projection's departed blank GHOST
@@ -1789,9 +1890,24 @@ export function SidebarRoot({
                               role="treeitem"
                               aria-expanded={!folded}
                               draggable={workspace.ungrouped !== true}
+                              // P2-5 (2026-08 client review): the git occupant
+                              // (create/remove buttons) cannot reach the
+                              // plugin's suppressClickRef, so the whole header
+                              // swallows clicks inside the drag-end trailing-
+                              // click window — mirroring the guarded controls
+                              // (fold / + / kebab / rename) in 06 §2.2.
+                              onClickCapture={(event) => {
+                                if (suppressClickRef.current) {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                }
+                              }}
                               onDoubleClick={(event) => {
                                 if (suppressClickRef.current) return
                                 if (menuOpen[workspaceKey] === true || workspace.ungrouped === true) return
+                                // Derived (worktree) workspaces have no rename
+                                // (OpenChamber parity — kebab removed too).
+                                if (getWorkspaceGitFlag(server.id, workspace.id)?.isWorktree === true) return
                                 if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return
                                 setRenaming({
                                   sourceId: server.id,
@@ -1834,7 +1950,19 @@ export function SidebarRoot({
                             >
                               <button
                                 type="button"
-                                className={clsx(cc.foldToggle, folded && cc.foldToggleFolded)}
+                                className={clsx(
+                                  cc.foldToggle,
+                                  folded && cc.foldToggleFolded,
+                                  // OpenChamber SessionGroupSection swap: a
+                                  // worktree (derived) workspace shows the
+                                  // git-branch glyph at rest and the collapse
+                                  // chevron on hover; a normal workspace shows
+                                  // a FOLDER glyph (project-row parity); the
+                                  // ungrouped bucket keeps the plain chevron.
+                                  isWorktree
+                                    ? cc.foldToggleGit
+                                    : (workspace.ungrouped !== true && cc.foldToggleFolder),
+                                )}
                                 aria-label={folded ? t('workspace.expand') : t('workspace.collapse')}
                                 onClick={() => {
                                   if (suppressClickRef.current) return
@@ -1842,13 +1970,47 @@ export function SidebarRoot({
                                   toggleWorkspaceFold(server.id, workspace.id)
                                 }}
                               >
-                                <IconChevronRightOutline14 size={12} />
+                                <IconChevronRightOutline14 size={14} className={cc.foldChevron} />
+                                {isWorktree && (
+                                  <IconBranchOutline16 size={14} className={cc.foldBranch} />
+                                )}
+                                {!isWorktree && workspace.ungrouped !== true && (
+                                  <IconFolderOpenOutline16 size={14} className={cc.foldFolder} />
+                                )}
                               </button>
-                              <span className={cc.workspaceTitle}>
+                              <span className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}>
                                 {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
                               </span>
+                              {getWorkspaceGitFlag(server.id, workspace.id)?.orphaned === true && (
+                                // Plan A: the workspace's path no longer exists
+                                // (externally deleted worktree left a ghost).
+                                // The badge doubles as the cleanup entry — an
+                                // orphaned WORKTREE keeps its worktree row
+                                // (no kebab), so the badge click opens the
+                                // dedicated delete confirm (review 2026-08).
+                                <button
+                                  type="button"
+                                  className={cc.orphanBadge}
+                                  title={t('confirm.deleteOrphan', { title: workspace.title })}
+                                  onClick={() => onDeleteWorkspace(server, workspace.id, workspace.title)}
+                                >
+                                  {t('list.orphaned')}
+                                </button>
+                              )}
                               {visibleSessionCount > 0 && (
                                 <span className={cc.workspaceCount}>{visibleSessionCount}</span>
+                              )}
+                              {workspace.ungrouped !== true && (
+                                // chamber (08 §11): the per-workspace Git
+                                // occupant lives INSIDE the workspace header
+                                // row (OpenChamber-style: the worktree/branch
+                                // surface is the row itself, not a separate
+                                // line). It renders the worktree-workspace's
+                                // branch chip plus the create/delete actions;
+                                // non-git workspaces get an empty mount.
+                                renderWorkspaceGit('sidebar.workspace.git', { wide }, {
+                                  hookContext: { sourceId: server.id, workspaceId: workspace.id },
+                                })
                               )}
                               {!workspace.ungrouped && (
                                 <span
@@ -1879,6 +2041,7 @@ export function SidebarRoot({
                                   >
                                     <IconPlusOutline16 size={14} />
                                   </button>
+                                  {!isWorktree && (
                                   <Menu
                                     compact
                                     portal
@@ -1929,11 +2092,13 @@ export function SidebarRoot({
                                       </button>
                                     )}
                                   />
+                                  )}
                                 </span>
                               )}
                             </div>
                             )
                             return (
+                            <Fragment key={workspace.id}>
                             <div
                               key={workspace.id}
                               className={clsx(
@@ -1950,6 +2115,13 @@ export function SidebarRoot({
                                   event.preventDefault()
                                   event.dataTransfer.dropEffect = 'move'
                                   const half = rowHalf(event)
+                                  if (workspaceDrag !== null
+                                    && dropBlockedByMain(workspaceDrag.workspaceId, workspace.id, half)) {
+                                    // A suppressed zone never becomes the
+                                    // target — the commit then leaves the
+                                    // order unchanged (P2-5).
+                                    return
+                                  }
                                   setWorkspaceDrag(current => current === null
                                     ? current
                                     : { ...current, over: { id: workspace.id, half } })
@@ -2269,8 +2441,31 @@ export function SidebarRoot({
                             </>
                             )}
                           </div>
+                          </Fragment>
                           )
-                        })}
+                          })
+                        })()}
+                        {(() => {
+                          // chamber (08 §11 Plan A): ALL unregistered worktrees
+                          // render at the very end of the workspace list — one
+                          // block per repository (user decision 2026-08: not
+                          // after the main checkout, not after the repo group).
+                          // The block must NOT beat the workspace list: the git
+                          // facts (fast snapshot) arrive before the aggregate
+                          // (workspace.list + sessions.list) — gate on the
+                          // aggregate having landed so the worktrees never
+                          // appear ahead of the workspaces (2026-08 report).
+                          if (server.aggregateReady !== true) return []
+                          return repoLayouts
+                            .filter(layout => layout.unregistered.length > 0)
+                            .map(layout => (
+                              <Fragment key={layout.repoKey}>
+                                {renderWorkspaceGit('sidebar.workspace.git', { wide }, {
+                                  hookContext: { sourceId: server.id, workspaceId: '', repoKey: layout.repoKey },
+                                })}
+                              </Fragment>
+                            ))
+                        })()}
                         {server.workspaces.length === 0 && <div className={cc.empty}>{t('list.noWorkspaces')}</div>}
                         {query === '' && rowErrors[`${server.id}/add-workspace`] !== undefined && (
                           <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/add-workspace`]}</div>
@@ -2278,7 +2473,9 @@ export function SidebarRoot({
                       </>
                     )}
                   </div>
-                ) : (
+                  </>
+                  )
+                })() : (
                   // Disconnected source: header + status icon only (dot or
                   // spinner — the phase lives on hover/aria; no status text
                   // on the main surface, the connections settings page
@@ -2308,15 +2505,6 @@ export function SidebarRoot({
           </div>
         )}
         </ChamberListBoundary>
-      </div>
-
-      {/* Optional chamber Git section. Keep the slot mounted across wide/rail
-          transitions; its occupant returns null on the rail, preserving the
-          page-wide coordinator/dialog state while the column animates. */}
-      <div className={css.gitArea}>
-        <SidebarGitBoundary message={t('git.errorBoundary')}>
-          {renderSlot('sidebar.git', { wide })}
-        </SidebarGitBoundary>
       </div>
 
       {/* Footer actions stack above Settings in both sidebar widths. */}

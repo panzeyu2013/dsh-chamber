@@ -12,7 +12,7 @@ import { instanceSnapshotSignature, projectInstanceSnapshot, projectRuntimeFacts
 
 export type {
   SidebarFooterActionOwnerProps, SidebarRootComponentProps, SidebarRootInjected,
-  SidebarGitOwnerProps, SidebarSectionOwnerProps, SidebarSettingsOwnerProps,
+  SidebarSectionOwnerProps, SidebarSettingsOwnerProps, SidebarWorkspaceGitOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
 
@@ -59,7 +59,22 @@ export function apply(ctx: ClientContext): void {
       locale: NS,
       children: {
         'sidebar.workspaces': { kind: 'single', scope: 'root' },
-        'sidebar.git': { kind: 'single', scope: 'root' },
+        // chamber (08 §11): the per-workspace Git hole. The slot-level inject
+        // factory is git-agnostic (closes over only the sidebar-owned
+        // occurrence context); the chamber Git plugin consumes the bound
+        // `useWorkspaceGitContext` hook.
+        'sidebar.workspace.git': {
+          kind: 'single',
+          scope: 'root',
+          inject: {
+            hooks: {
+              workspaceGitContext: (
+                _standard: object,
+                context: { sourceId: string; workspaceId: string; repoKey?: string },
+              ) => () => ({ sourceId: context.sourceId, workspaceId: context.workspaceId, repoKey: context.repoKey }),
+            },
+          },
+        },
         'sidebar.settings': { kind: 'single', scope: 'root' },
         'sidebar.footer.action': { kind: 'list', scope: 'root' },
       },

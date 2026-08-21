@@ -26,7 +26,7 @@ function local(
 ): LocalPluginManifest {
   // chamber is orthogonal to the diff — the fixtures use a neutral not-injected
   // state; computePluginDiff never reads it.
-  return { dependencies, bundles, clientLines, bundleLines, unsyncable, chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } } }
+  return { dependencies, bundles, clientLines, bundleLines, unsyncable, chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } } }
 }
 
 function remote(
@@ -40,7 +40,7 @@ function remote(
     bundles,
     profileExists,
     ...(error === undefined ? {} : { error }),
-    chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } },
+    chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } },
   }
 }
 

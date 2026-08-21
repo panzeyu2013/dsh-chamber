@@ -1,13 +1,15 @@
-/** Chamber Git worktree sidebar occupant. Facts/actions stay in shared/coordinator. */
+/** Chamber Git worktree client plugin: the per-workspace sidebar occupant. */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { gitCoordinator } from '../shared/coordinator.ts'
-import { SidebarGitSection } from './SidebarGitSection.tsx'
-import type { SidebarGitInjected } from './SidebarGitSection.tsx'
+import { SidebarWorkspaceGitLine } from './SidebarWorkspaceGitLine.tsx'
+import type { SidebarWorkspaceGitInjected } from './SidebarWorkspaceGitLine.tsx'
 import { en, zh, type GitSidebarKey } from '../locales.ts'
 
-export type { SidebarGitInjected, SidebarGitSectionProps } from './SidebarGitSection.tsx'
+export type {
+  SidebarWorkspaceGitInjected, SidebarWorkspaceGitLineProps, WorkspaceGitContext,
+} from './SidebarWorkspaceGitLine.tsx'
 export type { GitSidebarKey } from '../locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -16,7 +18,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-export const GIT_SIDEBAR_SLOT = 'sidebar.git' as const
+export const GIT_WORKSPACE_SLOT = 'sidebar.workspace.git' as const
 const NS = 'dsh-chamber.sidebar.git'
 
 export const inject = ['slots', 'locale']
@@ -28,13 +30,16 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => gitCoordinator.attach(), 'dsh-chamber: Git worktree coordinator')
 
   const t = ctx.locale.bind(NS)
-  const chamberInstanceId = (ctx as ClientContext & { chamberInstanceId?: string }).chamberInstanceId
-  const injected = (): SidebarGitInjected => ({ t, chamberInstanceId })
 
-  ctx.slots.inject(GIT_SIDEBAR_SLOT, () => ctx.slots.register({
-    name: GIT_SIDEBAR_SLOT,
-    id: 'worktrees',
+  // Per-workspace occupant (design 08 §11): the sidebar renders this seat
+  // once per source (workspaceId '' = source alert strip) and once per
+  // workspace group; the occurrence context arrives through the slot-inject
+  // `useWorkspaceGitContext` hook (factory owned by the sidebar, git-agnostic).
+  const workspaceInjected = (): SidebarWorkspaceGitInjected => ({ t })
+  ctx.slots.inject(GIT_WORKSPACE_SLOT, () => ctx.slots.register({
+    name: GIT_WORKSPACE_SLOT,
+    id: 'workspace-git',
     label: () => t('title'),
-    inject: injected,
-  }, SidebarGitSection))
+    inject: workspaceInjected,
+  }, SidebarWorkspaceGitLine))
 }

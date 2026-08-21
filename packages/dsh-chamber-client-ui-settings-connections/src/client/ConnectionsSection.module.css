@@ -262,6 +262,37 @@
   opacity: 1;
 }
 
+/* The restart button shows its own text label while enabled; only the
+   disabled state needs a hint (serviceName null = nothing to restart), so
+   the bubble exists solely while data-tip is present — same vocabulary as
+   the icon-button tooltip above. */
+.restartTip {
+  position: relative;
+}
+
+.restartTip[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-bg-layer-3);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+
+.restartTip[data-tip]:hover::after,
+.restartTip[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+
 .iconDanger:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover-danger);
   color: var(--dsw-alias-state-error-primary);

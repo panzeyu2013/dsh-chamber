@@ -13,12 +13,20 @@ function basename(path: string): string {
   return parts.at(-1) || path
 }
 
-/** One option per repository that currently has at least one registered workspace. */
+/** One option per repository that currently has at least one registered
+ *  workspace. The source is ALWAYS the repository's MAIN checkout (no
+ *  second-level derivation — OpenChamber parity), falling back to the first
+ *  registered workspace only when the main checkout has none. */
 export function createSourceOptions(snapshot: GitWorktreeSnapshot): CreateSourceOption[] {
   const out: CreateSourceOption[] = []
   for (const repo of snapshot.repos) {
-    const source = repo.worktrees.find(worktree => worktree.workspaceId !== null)
-    if (source?.workspaceId === null || source === undefined) continue
+    const main = repo.worktrees.find((worktree): worktree is GitWorktreeInfo & { workspaceId: string } => (
+      worktree.isMain && worktree.workspaceId !== null
+    ))
+    const source = main ?? repo.worktrees.find((worktree): worktree is GitWorktreeInfo & { workspaceId: string } => (
+      worktree.workspaceId !== null
+    ))
+    if (source === undefined) continue
     out.push({ workspaceId: source.workspaceId, repoId: repo.repoId, label: basename(repo.mainPath) })
   }
   return out
@@ -34,6 +42,25 @@ export function findWorktree(
   return repo === undefined || worktree === undefined ? undefined : { repo, worktree }
 }
 
+export interface WorktreeWithRepo {
+  repoId: string
+  worktree: GitWorktreeInfo
+}
+
+/** All git rows registered to one workspace (workspace-centric discovery). */
+export function gitFactsForWorkspace(
+  snapshot: GitWorktreeSnapshot,
+  workspaceId: string,
+): WorktreeWithRepo[] {
+  const out: WorktreeWithRepo[] = []
+  for (const repo of snapshot.repos) {
+    for (const worktree of repo.worktrees) {
+      if (worktree.workspaceId === workspaceId) out.push({ repoId: repo.repoId, worktree })
+    }
+  }
+  return out
+}
+
 export type RemoveBlockReason =
   | 'main'
   | 'unregistered'
@@ -46,11 +73,18 @@ export type RemoveBlockReason =
   | undefined
 
 /** Safe-remove guard: both fresh running facts and the aggregate current id block removal. */
-export function removeBlockReason(worktree: GitWorktreeInfo, currentSessionId?: string): RemoveBlockReason {
+export function removeBlockReason(
+  worktree: GitWorktreeInfo,
+  currentSessionId?: string,
+  currentSessionBlank = false,
+): RemoveBlockReason {
   if (worktree.isMain) return 'main'
   if (worktree.workspaceId === null) return 'unregistered'
   if (worktree.runningSessionIds.length > 0) return 'running'
-  if (currentSessionId !== undefined && worktree.sessionIds.includes(currentSessionId)) return 'current'
+  // A BLANK (never-submitted) current session carries no content worth
+  // protecting, so it must not block removal (2026-08 user report: clicking
+  // "new session" on a worktree and removing it before typing).
+  if (currentSessionId !== undefined && !currentSessionBlank && worktree.sessionIds.includes(currentSessionId)) return 'current'
   if (worktree.locked) return 'locked'
   if (worktree.status !== 'ready') return 'unhealthy'
   if (worktree.dirty === true) return 'dirty'

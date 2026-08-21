@@ -18,7 +18,7 @@ import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { LocalPluginManifest, PluginApplyFailure, PluginApplyResult, RemotePluginManifest, SshInstanceSpec } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
-import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd, seedHostGraph } from './control-plane.ts'
+import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd, restartService, seedHostGraph } from './control-plane.ts'
 import {
   computePluginDiff, defaultChecked, isDifferenceRow, rowAddArg,
   type PluginDiff, type PluginRow, type PluginRowKind,
@@ -35,6 +35,7 @@ type StatusFilter = 'diff' | 'all'
  *  (design 09 方案 A, module A) — the single source of truth for the name is
  *  plugin-sync.ts CLIENT_GRAPH_PACKAGE_NAME. */
 const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-host-client-graph'
+const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-host-git-worktree'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -99,6 +100,13 @@ export function PluginSyncModal({ t, spec, onClose }: {
   // ---- chamber-injected host-graph (design 09): manual seed fallback ----
   const [seedBusy, setSeedBusy] = useState(false)
   const [seedError, setSeedError] = useState<string | null>(null)
+  // ---- one-click restart for the injected-but-not-live state (08 §11) ----
+  const [restartBusy, setRestartBusy] = useState(false)
+  const [restartError, setRestartError] = useState<string | null>(null)
+  /** A seed that wrote/patched needs a restart to take effect, even when
+   *  module A was already live (host-graph live does not prove the newly
+   *  seeded git-worktree boot row loaded). Cleared by a successful restart. */
+  const [pendingRestart, setPendingRestart] = useState(false)
 
   // ---- filters ----
   const [query, setQuery] = useState('')
@@ -219,14 +227,46 @@ export function PluginSyncModal({ t, spec, onClose }: {
     setSeedError(null)
     try {
       const res = await seedHostGraph(spec.id)
-      if (!res.ok) setSeedError(res.error)
+      if (res.ok) {
+        setPendingRestart(res.wrote === true || res.patched === true)
+      } else {
+        setSeedError(res.error)
+        setPendingRestart(false)
+      }
     } catch (err) {
       setSeedError(errorMessage(err))
+      setPendingRestart(false)
     } finally {
       setSeedBusy(false)
       await loadSync(true)
     }
   }, [isRemote, spec, seedBusy, loadSync])
+
+  /**
+   * One-click restart (design 08 §11): the chamber host packages are seeded
+   * and the cordis.patch.yml insert is in place, but the RUNNING instance has
+   * not loaded it — restarting the instance is the step that makes them live.
+   * Re-probes afterwards so the live tri-state re-evaluates.
+   */
+  const doRestartNow = useCallback(async (): Promise<void> => {
+    if (!isRemote || spec === null || restartBusy || seedBusy) return
+    if (applyingRef.current) return
+    setRestartBusy(true)
+    setRestartError(null)
+    try {
+      const res = await restartService(spec.id)
+      if ('error' in res) {
+        setRestartError(res.error)
+      } else {
+        setPendingRestart(false)
+      }
+    } catch (err) {
+      setRestartError(errorMessage(err))
+    } finally {
+      setRestartBusy(false)
+      await loadSync(true)
+    }
+  }, [isRemote, spec, restartBusy, seedBusy, loadSync])
 
   useEffect(() => {
     if (isRemote) void loadSync()
@@ -252,7 +292,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
     if (!isRemote || spec === null || diff === null || applyingRef.current) return
     // A seed 注入 in flight mutates the same remote profile (module A files +
     // cordis.patch.yml) — never apply while it is mid-write (2026-08 review).
-    if (seedBusy) return
+    if (seedBusy || restartBusy) return
     const sel = diff.rows.filter(row => checked.has(row.name))
     const materializeRows = sel.filter(row => row.kind === 'materialize')
     const add = sel
@@ -311,7 +351,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
       setRestart(true)
       setPhase('done')
     }
-  }, [isRemote, spec, diff, checked, restart, seedBusy, t])
+  }, [isRemote, spec, diff, checked, restart, seedBusy, restartBusy, t])
 
   const onApplyClick = useCallback((): void => {
     if (applyingRef.current) return
@@ -375,7 +415,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
     return (
       <>
         <Button variant="outline" onClick={close}>{t('cancel')}</Button>
-        <Button variant="primary" disabled={changeCount === 0 || seedBusy} onClick={onApplyClick}>
+        <Button variant="primary" disabled={changeCount === 0 || seedBusy || restartBusy} onClick={onApplyClick}>
           {t('pluginsApply')} {changeCount > 0 ? `${changeCount}` : ''}
         </Button>
       </>
@@ -515,6 +555,11 @@ export function PluginSyncModal({ t, spec, onClose }: {
     const version = localCh?.ok === true
       ? localCh.hostGraph.version
       : remoteCh?.ok === true ? remoteCh.hostGraph.version : null
+    const gitVersion = localCh?.ok === true
+      ? localCh.gitWorktree.version
+      : remoteCh?.ok === true ? remoteCh.gitWorktree.version : null
+    const localGitInjected = localCh?.ok === true && localCh.gitWorktree.installed
+    const remoteGitInstalled = remoteCh?.ok === true && remoteCh.gitWorktree.installed
     let remoteLabel: ReactNode
     let remoteOk = true
     if (remoteCh === undefined) {
@@ -537,7 +582,18 @@ export function PluginSyncModal({ t, spec, onClose }: {
     } else {
       remoteLabel = t('chamberRemoteNotInjected')
     }
-    const remoteNeedsSeed = isRemote && remoteCh !== undefined && (!remoteCh.ok || !(remoteCh.hostGraph.installed && remoteCh.hostGraph.patched))
+    const remoteNeedsSeed = isRemote && remoteCh !== undefined
+      && (!remoteCh.ok
+        || !(remoteCh.hostGraph.installed && remoteCh.hostGraph.patched)
+        || !remoteCh.gitWorktree.installed)
+    // Injected but the RUNNING instance has not loaded the boot insert yet
+    // (probed not-loaded) — restart is the one step that makes it live. A
+    // seed that wrote/patched ALSO demands a restart (the running instance
+    // only loads the boot layer at start), even when module A was already
+    // live (design 08 §11: host-graph live does not prove git-worktree load).
+    const remoteInjectedNotLive = isRemote && remoteCh?.ok === true
+      && remoteCh.hostGraph.installed && remoteCh.hostGraph.patched && remoteCh.hostGraph.live === false
+    const restartPending = remoteInjectedNotLive || pendingRestart
     return (
       <div className={css.pluginChamber}>
         <p className={css.pluginChamberTitle}>
@@ -562,9 +618,29 @@ export function PluginSyncModal({ t, spec, onClose }: {
                 {seedBusy ? t('chamberSeeding') : t('chamberSeed')}
               </button>
             )
-            : null}
+            : restartPending
+              ? (
+                <button
+                  type="button"
+                  className={css.chamberSeedButton}
+                  disabled={restartBusy || seedBusy}
+                  onClick={() => { void doRestartNow() }}
+                >
+                  {restartBusy ? t('chamberRestarting') : t('chamberRestart')}
+                </button>
+              )
+              : null}
+        </div>
+        <div className={css.pluginChamberRow}>
+          <code className={css.pluginName}>{GIT_WORKTREE_PACKAGE}</code>
+          {gitVersion !== null ? <span className={css.dim}> · v{gitVersion}</span> : null}
+          <span className={css.pluginCellSpec}>
+            {localGitInjected ? t('chamberInstalled') : t('chamberNotInstalled')}
+            {isRemote ? <span> · {remoteGitInstalled ? t('chamberInstalled') : t('chamberNotInstalled')}</span> : null}
+          </span>
         </div>
         {seedError !== null ? <p className={css.error} role="alert">{t('chamberSeedFailed')}{seedError}</p> : null}
+        {restartError !== null ? <p className={css.error} role="alert">{t('chamberRestartFailed')}{restartError}</p> : null}
         {!remoteOk && remoteCh !== undefined && !remoteCh.ok ? <p className={css.error} role="alert">{remoteCh.error}</p> : null}
       </div>
     )

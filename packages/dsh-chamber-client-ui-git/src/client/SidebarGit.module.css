@@ -1,0 +1,466 @@
+/* Styles for the per-workspace Git occupant and its create/remove dialogs
+   (design 08 §11). The standalone panel was removed (its features are a
+   future long-term plan); only the workspace-centric line survives. */
+
+/* OpenChamber-style entry: the create button reveals on the line's hover. */
+
+.headerGit {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 45%;
+}
+
+/* Plan A: the repository's UNREGISTERED worktrees block (rendered after the
+   repo's last registered workspace). Rows match the workspace-row visual
+   language (branch glyph + name), with hover actions. */
+.unregisteredSection {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 4px;
+}
+
+.unregisteredHeading {
+  padding: 4px 4px 2px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.unregisteredRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: 6px;
+}
+
+.unregisteredRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.unregisteredIcon {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.unregisteredName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.unregisteredStatus {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.unregisteredStatusWarn {
+  background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-primary));
+}
+
+.unregisteredSpacer {
+  flex: none;
+}
+
+.unregisteredAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.unregisteredAction:not(:disabled):hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.unregisteredActionDanger:not(:disabled):hover {
+  background: var(--dsw-alias-state-error-bg, var(--dsw-alias-interactive-bg-hover));
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+}
+
+.unregisteredAction:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+/* Retry affordance inside the session-facts error row (review P2-4). */
+.factsRetry {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.factsRetry:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Directory-collision precheck note under the directory field (A3). */
+.directoryConflict {
+  margin: 0;
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-secondary));
+  font-size: 11px;
+}
+
+/* Direct-session title list in the remove dialog (A7). */
+.sessionTitles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.sessionTitles li {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.sessionTitlesMore {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Tiny inline status badges inside the branch chip: uncommitted dot,
+   local ahead/behind, path health, in-progress git operation. */
+
+/* OpenChamber-style row actions: hidden at rest; revealed together with the
+   row's own "+"/kebab cluster when the whole workspace row is hovered (the
+   sidebar css reveals :global(.git-ws-action) on .workspaceHeader:hover /
+   focus-within / kebab-open). Keyboard focus on the git chip also reveals. */
+/* The resting state is HIDDEN — display:none lives on the button's own
+   module class (specificity 0,1,0) so it can never be beaten by a later
+   same-specificity rule; every reveal rule (0,3,0) overrides it. Also out
+   of the Tab order / a11y tree, like the sidebar's own rowActions.
+   (2026-08 fix: hiding via :global(.git-ws-action) lost to
+   .headerGitAction's inline-flex on equal specificity — actions showed at
+   rest.) */
+.headerGitAction {
+  flex: none;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.headerGit:focus-within :global(.git-ws-action) {
+  display: inline-flex;
+}
+
+.headerGitAction:not(:disabled):hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.headerGitAction:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+.dialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* The tabpanel wraps the mode-specific fields; it must be its own flex column
+   so consecutive fields get the design's 14px field gap (design 08 §11.1 —
+   a plain wrapper leaves them flush, which is the spacing defect). */
+.tabPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* Text inputs reuse the dsh Input atom (32px height, border-l2, bg-layer-1,
+   14px/22px, focus = brand-primary); only the radius is lifted to the
+   dialog's 12px control radius (matching the Menu list r12 and the chamber
+   settings cards) so fields do not read square against the modal's r24. The
+   atom stretches to the label's full width as a flex item of the column. */
+.fieldInput {
+  border-radius: 12px;
+}
+
+.formError {
+  margin: 0;
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+  overflow-wrap: anywhere;
+}
+
+.danger {
+}
+
+.dialog .danger {
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+}
+
+.removeFacts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.removeFacts code {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  overflow-wrap: anywhere;
+}
+
+.removeFacts span {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.removeFacts code {
+  /* The worktree path must stay readable (review: it inherited a
+     near-invisible translucent ink). */
+  color: var(--dsw-alias-label-primary);
+}
+
+.removeSessions {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.archiveToggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.wsSourceAlert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 4px 4px;
+  padding: 5px 7px;
+  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l2));
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.wsSourceAlertText {
+  flex: 1;
+  min-width: 0;
+}
+
+.wsRetry {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.wsRetry:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+.wsRetry:not(:disabled):hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.tabs {
+  position: relative;
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  overflow: hidden;
+}
+
+/* Sliding thumb: the active segment's pill glides between the two halves
+   (user decision 2026-08 — slider-style switch). The fill is the dsh business
+   blue (--dsw-alias-state-business-primary, the same accent the sidebar uses
+   for its selected/drop indicators), so the chosen mode reads unambiguously.
+   Geometry: no gap between the two `flex:1` halves, so the thumb width
+   (calc(50% - 2px) against the padding box) is exactly one half — the 1px
+   overflow of the earlier gapped layout is gone. */
+.tabThumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  border-radius: 10px;
+  background: var(--dsw-alias-state-business-primary);
+  transition: transform 150ms ease;
+}
+
+.tabThumb[data-right] {
+  transform: translateX(100%);
+}
+
+.tab,
+.tabActive {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  transition: color 150ms ease;
+}
+
+.tabActive {
+  color: var(--dsw-alias-label-primary-foreground);
+  font-weight: 600;
+}
+
+.tab:focus-visible,
+.tabActive:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
+}
+
+.tab:disabled,
+.tabActive:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+/* Custom select anchor (repo Menu primitive — same design language). Mirrors
+   the dsh Input atom so the dropdown reads as a text field (32px, r8,
+   border-l2, bg-layer-1, 14px/22px, focus = brand-primary). */
+.fieldSelect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.fieldSelect:focus-visible {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.fieldSelect:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+.fieldSelectPlaceholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.fieldSelectChevron {
+  transform: rotate(90deg);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.fieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.resetDirectory {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+}
+
+.resetDirectory:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.sourceFrom {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}

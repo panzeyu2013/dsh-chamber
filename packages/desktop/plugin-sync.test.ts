@@ -232,7 +232,7 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: false, version: null } })
 })
 
 test('localPluginList: chamber host-graph state — absent = not injected (honest, never "done")', () => {
@@ -240,7 +240,7 @@ test('localPluginList: chamber host-graph state — absent = not injected (hones
   const home = join(base, 'home')
   writeLocalProfile(home, {}, [])
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } })
 })
 
 test('localPluginList: chamber host-graph state — package.json alone is a half-injected module A (installed:false)', () => {
@@ -256,7 +256,7 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null } })
+  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: false, version: null } })
 })
 
 test('localPluginList: chamber host-graph version is read from the seeded module A manifest', () => {
@@ -294,6 +294,12 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
         return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
       }
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) {
+        return ok('export const git = 1\n')
+      }
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      }
       if (path.endsWith('/cordis.patch.yml')) {
         return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
       }
@@ -308,7 +314,7 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       bundles: ['foo'],
       profileExists: true,
       error: undefined,
-      chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null } },
+      chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: true, version: null } },
     },
   })
 })
@@ -323,7 +329,7 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
         dependencies: {},
         bundles: [],
         profileExists: false,
-        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } },
+        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } },
       },
     },
   )
@@ -341,6 +347,8 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
       // initProfile template: comments + empty list → the seed would rewrite it.
       if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
     }
@@ -349,7 +357,7 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false, version: null, live: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false, version: null, live: null }, gitWorktree: { installed: true, version: null } })
   }
 })
 
@@ -378,8 +386,16 @@ test('remotePluginList: chamber probe — package.json present but dist/index.js
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+            if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+            if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
       // dist/index.js genuinely missing: a package.json alone is a
       // half-installed module A (the boot row could not resolve).
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) {
+        return ok('export const git = 1\n')
+      }
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      }
       if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
@@ -392,7 +408,7 @@ test('remotePluginList: chamber probe — package.json present but dist/index.js
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: true, version: null } })
   }
 })
 
@@ -402,6 +418,8 @@ test('remotePluginList: chamber probe ssh failure on dist/index.js is loud, neve
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+            if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+            if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
         return err('the ssh exec could not reach the host (exit 255)')
       }
@@ -431,6 +449,9 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
       if (path.includes('@dsh-chamber/dsh-host-client-graph')) {
         return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
       }
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree')) {
+        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
+      }
       if (path.endsWith('/cordis.patch.yml')) {
         return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
       }
@@ -441,7 +462,7 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
   assert.ok(result.ok, 'a redacted ENOENT is a probe miss, not a loud probe failure')
   if (result.ok) {
     assert.equal(result.manifest.profileExists, false)
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, version: null } })
   }
 })
 
@@ -451,6 +472,8 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
         return ok('{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.2"}')
       }
@@ -464,20 +487,20 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
   const live = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
   assert.ok(live.ok)
   if (live.ok) {
-    assert.deepEqual(live.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: true } })
+    assert.deepEqual(live.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: true }, gitWorktree: { installed: true, version: null } })
   }
   // live = false → injected but restart still pending (重启后生效).
   const pending = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => false })
   assert.ok(pending.ok)
   if (pending.ok) {
-    assert.deepEqual(pending.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: false } })
+    assert.deepEqual(pending.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: false }, gitWorktree: { installed: true, version: null } })
   }
   // live = null → the desktop could not classify (no ready tunnel): the UI
   // renders 生效状态未知 — never a guessed claim.
   const unknown = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => null })
   assert.ok(unknown.ok)
   if (unknown.ok) {
-    assert.deepEqual(unknown.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: null } })
+    assert.deepEqual(unknown.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: null }, gitWorktree: { installed: true, version: null } })
   }
   // A version-less seeded package.json → version:null (never a guessed one).
   const versionless: ExecFn = async (_id, action, payload) => {
@@ -486,6 +509,8 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
       if (path.endsWith('/cordis.patch.yml')) {
         return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
       }
@@ -508,6 +533,12 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
       if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.2"}')
       // dist/index.js missing → installed:false.
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) {
+        return ok('export const git = 1\n')
+      }
+      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      }
       if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
@@ -522,7 +553,7 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: '0.1.2', live: null } })
+    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: '0.1.2', live: null }, gitWorktree: { installed: true, version: null } })
   }
   assert.equal(probed, false, 'a half-injected module is never "live" — the probe is skipped')
 })

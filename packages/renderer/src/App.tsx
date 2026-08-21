@@ -57,6 +57,10 @@ import InstanceView from './components/InstanceView.tsx'
 const AGGREGATE_FALLBACK_POLL_MS = 30_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
+/** First-screen retry: a transient workspace.list failure is retried quickly
+ *  (bounded), instead of waiting out the 30s staleness watchdog. */
+const AGGREGATE_RETRY_MS = 3_000
+const AGGREGATE_RETRY_LIMIT = 5
 const MAX_PREWARMED_REMOTE_VIEWS = 3
 /** 连接行（label/dshPort）低频轮询：状态本身走推送，行字段极少变化。 */
 const CONNECTIONS_POLL_MS = 30_000
@@ -152,6 +156,7 @@ function deriveServers(
       connected,
       phase,
       workspaces,
+      aggregateReady: aggregate !== undefined && aggregate.state === 'ok',
       updatedAt: now,
     }
     // 运行时事实只在 connected 时附加（断连态不应携带事实，避免死状态翻转）。
@@ -495,6 +500,8 @@ export default function App() {
    */
   const aggregateSeqRef = useRef<Record<string, number>>({})
   const aggregatePollRunningRef = useRef(false)
+  const aggregateFailuresRef = useRef<Record<string, number>>({})
+  const retryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const refreshAggregate = useCallback(async (instanceId: string) => {
     const seq = (aggregateSeqRef.current[instanceId] ?? 0) + 1
     aggregateSeqRef.current[instanceId] = seq
@@ -520,6 +527,19 @@ export default function App() {
       // 旧 ready（最多一个健康轮询周期的陈旧窗口），立即刷新使连接判定
       // 尽快翻转（否则错误行要挂到下一个健康轮询才被 not-connected 替换）。
       if (isInstanceUnavailable(err)) void refreshHealth()
+      // 首屏加速：一次瞬时失败不等到 30s 兜底轮询——限次快速重试（工作区
+      // 单元冷启动期间 workspace.list 可能短暂 503/超时；git 快照先到会让
+      // 未注册块抢在 workspace 列表前渲染，2026-08 用户反馈）。
+      const failures = aggregateFailuresRef.current[instanceId] ?? 0
+      if (failures < AGGREGATE_RETRY_LIMIT) {
+        aggregateFailuresRef.current[instanceId] = failures + 1
+        const retryTimer = setTimeout(() => {
+          if (aggregateSeqRef.current[instanceId] === seq) void refreshAggregate(instanceId)
+        }, AGGREGATE_RETRY_MS)
+        retryTimersRef.current.push(retryTimer)
+      } else {
+        aggregateFailuresRef.current[instanceId] = 0
+      }
     }
   }, [refreshHealth])
 
@@ -625,6 +645,10 @@ export default function App() {
     return () => { clearInterval(timer) }
   }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
 
+  useEffect(() => () => {
+    for (const timer of retryTimersRef.current) clearTimeout(timer)
+    retryTimersRef.current = []
+  }, [])
   useEffect(() => {
     let cancelled = false
 
@@ -980,14 +1004,13 @@ export default function App() {
     })
   }, [selectView])
 
-  /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。 */
+  /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。
+   *  Always pull on a mutation: the mounted producer's push can lag the host's
+   *  registry reorder (create → prepend → insertBefore), so relying on the
+   *  freshness check here left new worktrees/sessions stranded at the prepended
+   *  head until the next 30s poll (2026-08 user report). */
   useEffect(() => {
     return chamberBridge.onRefresh((sourceId) => {
-      // A live complete producer publishes the mutation directly, so a fresh
-      // source needs no pull. A source whose push is silent past the
-      // staleness threshold (or that never pushed) is pulled — manual refresh
-      // must also heal a once-pushed producer whose channel died.
-      if (!isSnapshotStale(snapshotAtRef.current[sourceId], Date.now(), AGGREGATE_FALLBACK_POLL_MS)) return
       void refreshAggregate(sourceId)
     })
   }, [refreshAggregate])

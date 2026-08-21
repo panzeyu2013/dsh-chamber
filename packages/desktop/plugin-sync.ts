@@ -285,9 +285,15 @@ export interface ChamberHostGraphState {
 
 /** Probe outcome: `ok:false` = the instance's injection state could not be
  *  read (remote ssh exec failure / unparseable patch) — loud, never a silent
- *  "not injected". */
+ *  "not injected". `gitWorktree` reports the second chamber host package
+ *  (design 08 §11): its loader row lives in the SAME cordis.patch.yml, so
+ *  `patched` covers both; only its package presence needs its own probe. */
 export type ChamberInjectionState =
-  | { ok: true; hostGraph: ChamberHostGraphState }
+  | {
+    ok: true
+    hostGraph: ChamberHostGraphState
+    gitWorktree: { installed: boolean; version: string | null }
+  }
   | { ok: false; error: string }
 
 export interface RemotePluginManifest {
@@ -496,6 +502,13 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
         // carries one (probeRemoteChamber liveProbe).
         live: null,
       },
+      // Second chamber host package (design 08 §11) — same two-file presence
+      // definition as the remote probe; no live probe on the local side.
+      gitWorktree: {
+        installed: SEED_FILES.every(relative =>
+          existsSync(join(profileDir, 'node_modules', GIT_WORKTREE_PACKAGE_NAME, relative))),
+        version: readManifestVersion(readDependencyManifest(profileDir, GIT_WORKTREE_PACKAGE_NAME)),
+      },
     },
   }
 }
@@ -652,7 +665,37 @@ async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveP
     ? await opts.liveProbe()
     : null
 
-  return { ok: true, hostGraph: { installed, patched, version, live } }
+  // Second chamber host package (design 08 §11): presence probe only — its
+  // loader row shares the host-graph patch, and the running instance's load
+  // is only meaningful via the same restart that loads module A.
+  const gitPkgPath = `${home}/profiles/node_modules/${GIT_WORKTREE_PACKAGE_NAME}/package.json`
+  const gitIndexPath = `${home}/profiles/node_modules/${GIT_WORKTREE_PACKAGE_NAME}/dist/index.js`
+  const gitPkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [gitPkgPath], quiet: true })
+  let gitPkgInstalled: boolean
+  let gitVersion: string | null = null
+  if (gitPkgRes.ok) {
+    gitPkgInstalled = true
+    gitVersion = parsePackageVersion(gitPkgRes.stdout ?? '')
+  } else if (ENOENT_PATTERN.test(gitPkgRes.error)) {
+    gitPkgInstalled = false
+  } else {
+    return { ok: false, error: `git-worktree probe failed: ${gitPkgRes.error}` }
+  }
+  const gitIndexRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [gitIndexPath], quiet: true })
+  let gitIndexInstalled: boolean
+  if (gitIndexRes.ok) {
+    gitIndexInstalled = true
+  } else if (ENOENT_PATTERN.test(gitIndexRes.error)) {
+    gitIndexInstalled = false
+  } else {
+    return { ok: false, error: `git-worktree probe failed: ${gitIndexRes.error}` }
+  }
+
+  return {
+    ok: true,
+    hostGraph: { installed, patched, version, live },
+    gitWorktree: { installed: gitPkgInstalled && gitIndexInstalled, version: gitVersion },
+  }
 }
 
 // ============================================================================

@@ -3,6 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { basename, dirname, resolve } from 'node:path'
 import {
   GitWorktreeCore,
@@ -25,11 +26,14 @@ import {
   type GitRunner,
   type WorkspaceFact,
   type WorktreeFileSystem,
+  parseBranchLine,
 } from '../src/core.ts'
 
 const MAIN = '/repos/project'
 const COMMON = '/repos/project/.git'
 const LINKED = '/repos/feature'
+/** worktreeRootFor key: `<basename>-<sha256(commonDir) 8 hex>`. */
+const WORKTREES_KEY = `project-${createHash('sha256').update(COMMON).digest('hex').slice(0, 12)}`
 const MAIN_HEAD = '1111111111111111111111111111111111111111'
 const FEATURE_HEAD = '2222222222222222222222222222222222222222'
 
@@ -41,6 +45,10 @@ interface FakeWorktree {
   locked?: boolean
   prunable?: boolean
   bare?: boolean
+  /** Optional upstream facts echoed into the --branch status header. */
+  upstream?: string
+  ahead?: number
+  behind?: number
   statusFailure?: boolean
   /** stderr text for a status failure (defaults to 'status unavailable'). */
   statusStderr?: string
@@ -100,6 +108,7 @@ class FakeRepository {
       }
       return this.existing.has(path)
     },
+    mkdir: async () => {},
     readFile: async path => {
       const override = this.pointerOverrides.get(path)
       if (override !== undefined) return override
@@ -136,11 +145,30 @@ class FakeRepository {
       this.onStatus?.()
       const worktree = this.worktrees.find(candidate => candidate.path === request.cwd)
       if (worktree?.statusFailure) return this.result(2, '', worktree.statusStderr ?? 'status unavailable')
+      if (args.includes('--branch')) {
+        const meta: string[] = []
+        if ((worktree?.ahead ?? 0) > 0) meta.push(`ahead ${worktree!.ahead}`)
+        if ((worktree?.behind ?? 0) > 0) meta.push(`behind ${worktree!.behind}`)
+        const suffix = meta.length > 0 ? ` [${meta.join(', ')}]` : ''
+        const name = worktree?.upstream !== undefined ? `${worktree!.branch ?? 'HEAD'}...${worktree!.upstream}` : (worktree?.branch ?? 'HEAD (no branch)')
+        const header = `## ${name}${suffix}\0`
+        return this.result(0, `${header}${worktree?.dirty ? ' M changed.txt\0' : ''}`)
+      }
       return this.result(0, worktree?.dirty ? ' M changed.txt\0' : '')
     }
     if (args[0] === 'check-ref-format') {
       const branch = args[2]!
       return branch.includes('..') || branch.endsWith('.') ? this.result(1) : this.result(0, `${branch}\n`)
+    }
+    if (args[0] === 'branch' && args[1] === '-D') {
+      const name = args[2]!
+      if (!this.branches.has(name)) return this.result(1, '', `error: branch '${name}' not found.`)
+      this.branches.delete(name)
+      return this.result(0)
+    }
+    if (args[0] === 'show-ref' && args[1] === '--heads') {
+      const lines = [...this.branches.entries()].map(([name, head]) => `${head} refs/heads/${name}`)
+      return this.result(0, lines.length === 0 ? '' : `${lines.join('\n')}\n`)
     }
     if (args[0] === 'show-ref') {
       const name = args[3]!.slice('refs/heads/'.length)
@@ -281,6 +309,7 @@ function setup(options: { linked?: boolean; operationCapacity?: number } = {}) {
     fs: repo.fs,
     now: () => clock,
     token: () => `token-${++token}`,
+    worktreesRoot: '/worktrees',
     ...(options.operationCapacity === undefined ? {} : { operationCapacity: options.operationCapacity }),
   })
   return {
@@ -293,11 +322,17 @@ function setup(options: { linked?: boolean; operationCapacity?: number } = {}) {
   }
 }
 
-async function previewNew(core: GitWorktreeCore, basename = 'new-worktree', branch = 'topic') {
+async function previewNew(
+  core: GitWorktreeCore,
+  basename = 'new-worktree',
+  branch = 'topic',
+  options: { startRef?: string } = {},
+) {
   return await core.previewCreate({
     sourceWorkspaceId: 'ws-main',
     basename,
     branch: { kind: 'new', name: branch },
+    ...(options.startRef === undefined ? {} : { startRef: options.startRef }),
   })
 }
 
@@ -452,6 +487,7 @@ test('snapshot enforces one total worktree budget across repositories', async ()
       return { isDirectory: () => true }
     },
     exists: async path => paths.has(path),
+    mkdir: async () => {},
     readFile: async () => { throw new MissingPathError('.git') },
   }
   const runner: GitRunner = async request => {
@@ -553,7 +589,7 @@ test('Git spawn failure is source-wide while ordinary non-Git discovery stays lo
 test('preview and create a new branch with bounded fixed argv and idempotent replay', async () => {
   const { core, repo } = setup()
   const preview = await previewNew(core)
-  assert.equal(preview.targetPath, '/repos/new-worktree')
+  assert.equal(preview.targetPath, `/worktrees/${WORKTREES_KEY}/new-worktree`)
   assert.equal(preview.baseHead, MAIN_HEAD)
   assert.match(preview.repoId, /^repo_[0-9a-f]{64}$/)
 
@@ -564,7 +600,7 @@ test('preview and create a new branch with bounded fixed argv and idempotent rep
   assert.equal(created.branchCreated, true)
   assert.match(created.worktreeId, /^worktree_[0-9a-f]{64}$/)
   assert.deepEqual(mutationCalls(repo, 'add')[0]!.args, [
-    'worktree', 'add', '-b', 'topic', '--', '/repos/new-worktree', MAIN_HEAD,
+    'worktree', 'add', '-b', 'topic', '--', `/worktrees/${WORKTREES_KEY}/new-worktree`, MAIN_HEAD,
   ])
   assert.equal(mutationCalls(repo, 'add')[0]!.timeoutMs, 30_000)
   assert.equal(mutationCalls(repo, 'add')[0]!.maxOutputBytes, 256 * 1024)
@@ -695,7 +731,7 @@ test('terminal operation ids expire after the bounded replay TTL', async () => {
 
   const second = await previewNew(core, 'ttl-second', 'ttl-branch-second')
   const reused = await core.create({ previewToken: second.previewToken, operationId: 'ttl-operation' })
-  assert.equal(reused.path, '/repos/ttl-second')
+  assert.equal(reused.path, `/worktrees/${WORKTREES_KEY}/ttl-second`)
   assert.equal(reused.replayed, false)
 })
 
@@ -1421,6 +1457,7 @@ test('snapshot caps the repository count at MAX_REPOSITORIES', async () => {
       return { isDirectory: () => true }
     },
     exists: async path => paths.has(path),
+    mkdir: async () => {},
     readFile: async () => { throw new MissingPathError('.git') },
   }
   const runner: GitRunner = async request => {
@@ -1635,4 +1672,306 @@ test('snapshot attention stays empty for a malformed gitdir pointer', async () =
   const snapshot = await core.snapshot()
   const row = snapshot.repos[0]!.worktrees.find(worktree => worktree.path === LINKED)!
   assert.deepEqual(row.attention, [])
+})
+
+test('snapshot lists local branches via show-ref --heads for the existing-branch picker', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.branches.set('feature/x', FEATURE_HEAD)
+  const snapshot = await core.snapshot()
+  assert.equal(snapshot.repos.length, 1)
+  // 'main' is the FakeRepository default; show-ref --heads lists all heads.
+  assert.deepEqual(snapshot.repos[0]!.branches, ['main', 'feature', 'feature/x'])
+  // show-ref --heads must be the allowed fixed-flag form; anything else fails.
+  assert.throws(() => assertSafeGitArgv(['show-ref', '--heads', 'refs/heads/main']), /outside the worktree allowlist/)
+})
+
+test('a failing show-ref --heads yields empty branches, never a snapshot error', async () => {
+  const { core: _, repo, workspaces } = setup({ linked: true })
+  const failing: GitRunner = async request => {
+    if (request.args[0] === 'show-ref') return { ok: true, stdout: '', stderr: '', exitCode: 2, command: 'show-ref' }
+    return repo.runner(request)
+  }
+  const failingCore = new GitWorktreeCore({
+    source: {
+      listWorkspaces: () => workspaces.map(workspace => ({ ...workspace, sessionIds: [...workspace.sessionIds] })),
+      listAgents: () => [],
+    },
+    git: failing,
+    fs: repo.fs,
+    now: () => Date.now(),
+    token: () => 'token-x',
+  })
+  const snapshot = await failingCore.snapshot()
+  assert.equal(snapshot.repos.length, 1)
+  assert.deepEqual(snapshot.repos[0]!.branches, [])
+  assert.equal(snapshot.sourceError, undefined)
+})
+
+test('a missing branch reported with exit 128 (git version quirk) is treated as absent, not a hard git failure', async () => {
+  // Some git versions exit 128 with `fatal: ... not a valid ref` where others
+  // exit 1 for `show-ref --verify` on a missing ref. The new-branch preview
+  // and create paths must read both as "branch does not exist yet".
+  const { core: _, repo, workspaces } = setup({ linked: true })
+  const strictRunner: GitRunner = async request => {
+    if (request.args[0] === 'show-ref' && request.args[1] === '--hash') {
+      return { ok: true, stdout: '', stderr: `fatal: '${request.args[3]}' - not a valid ref\n`, exitCode: 128, command: 'show-ref' }
+    }
+    return repo.runner(request)
+  }
+  const strictCore = new GitWorktreeCore({
+    source: {
+      listWorkspaces: () => workspaces.map(workspace => ({ ...workspace, sessionIds: [...workspace.sessionIds] })),
+      listAgents: () => [],
+    },
+    git: strictRunner,
+    fs: repo.fs,
+    now: () => Date.now(),
+    token: () => 'token-strict',
+  })
+  // The new-branch preview must succeed (branch does not exist → null head).
+  const preview = await previewNew(strictCore, 'new-worktree', 'rapid-meadow')
+  assert.equal(preview.branch, 'rapid-meadow')
+  assert.equal(preview.baseHead, MAIN_HEAD)
+  // And the create must commit the worktree + branch.
+  const result = await strictCore.create({ previewToken: preview.previewToken, operationId: 'op-strict' })
+  assert.equal(result.branch, 'rapid-meadow')
+})
+
+test('remove with deleteBranch deletes the local branch after the worktree removal', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
+  const expected = { repoId: repository.repoId, worktreeId: linked.worktreeId, branch: linked.branch!, head: linked.head }
+  assert.equal(repo.branches.has('feature'), true)
+  const removed = await core.remove({ operationId: 'remove-del', workspaceId: 'ws-feature', expected, deleteBranch: 'feature' })
+  assert.equal(removed.removed, true)
+  assert.equal(removed.branchDeleted, true)
+  assert.equal(removed.branchDeleteFailed, undefined)
+  assert.equal(repo.branches.has('feature'), false)
+  const branchCalls = repo.calls.filter(call => call.args[0] === 'branch' && call.args[1] === '-D')
+  assert.deepEqual(branchCalls.at(-1)!.args, ['branch', '-D', 'feature'])
+})
+
+test('remove with deleteBranch reports a failed branch delete honestly and keeps the removed worktree', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
+  const expected = { repoId: repository.repoId, worktreeId: linked.worktreeId, branch: linked.branch!, head: linked.head }
+  // Remove the branch behind the host's back so `branch -D` fails.
+  repo.branches.delete('feature')
+  const removed = await core.remove({ operationId: 'remove-fail-branch', workspaceId: 'ws-feature', expected, deleteBranch: 'feature' })
+  assert.equal(removed.removed, true)
+  assert.equal(removed.branchDeleted, undefined)
+  assert.equal(removed.branchDeleteFailed, true)
+})
+
+test('branch -D allowlist accepts a plain name and rejects a leading dash', () => {
+  assertSafeGitArgv(['branch', '-D', 'feature'])
+  assert.throws(() => assertSafeGitArgv(['branch', '-D', '-x']), /outside the worktree allowlist/)
+  assert.throws(() => assertSafeGitArgv(['branch', '-D']), /outside the worktree allowlist/)
+})
+
+test('discovery cache skips rev-parse/worktree-list within TTL for an unchanged registry, and invalidates on registry change', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  // advanceTime must move the clock; setup returns advanceTime.
+  let snap1 = await core.snapshot()
+  assert.equal(snap1.repos.length, 1)
+  const revParseCallsAfterFirst = repo.calls.filter(call => call.args[0] === 'rev-parse').length
+  const listCallsAfterFirst = repo.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'list').length
+
+  // Second snapshot within TTL, same registry: no new rev-parse/worktree-list spawns.
+  const snap2 = await core.snapshot()
+  assert.equal(snap2.repos.length, 1)
+  const revParseCallsAfterSecond = repo.calls.filter(call => call.args[0] === 'rev-parse').length
+  const listCallsAfterSecond = repo.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'list').length
+  assert.equal(revParseCallsAfterSecond, revParseCallsAfterFirst, 'rev-parse must be served from cache within TTL')
+  assert.equal(listCallsAfterSecond, listCallsAfterFirst, 'worktree list must be served from cache within TTL')
+
+  // A workspace registry change invalidates the caches → full re-discovery.
+  workspaces.push({ workspaceId: 'ws-new', path: '/repos/other', sessionIds: [] })
+  const snap3 = await core.snapshot()
+  assert.ok(repo.calls.filter(call => call.args[0] === 'rev-parse').length > revParseCallsAfterSecond, 'registry change must re-run discovery')
+  assert.ok(snap3.repos.length >= 1)
+})
+
+
+test('previewCreate accepts startRef: the new branch starts from the chosen source branch head', async () => {
+  const { core, repo } = setup({ linked: true })
+  // setup({linked:true}) already has 'feature' (FEATURE_HEAD) as a local branch.
+  const preview = await previewNew(core, 'from-feature', 'topic-src')
+  // default: baseHead = main HEAD
+  assert.equal(preview.baseHead, MAIN_HEAD)
+  const withStart = await previewNew(core, 'from-start', 'topic-start', { startRef: 'feature' })
+  assert.equal(withStart.baseHead, FEATURE_HEAD)
+  // unknown source branch -> clean branch-not-found, not a raw git error
+  await assert.rejects(
+    previewNew(core, 'from-missing', 'topic-missing', { startRef: 'no-such-branch' }),
+    error => error instanceof GitWorktreeError && error.code === 'branch-not-found',
+  )
+})
+
+test('create reconciles a startRef source branch: a moved source fails preview-stale', async () => {
+  const { core, repo } = setup({ linked: true })
+  const preview = await previewNew(core, 'from-start', 'topic-start', { startRef: 'feature' })
+  assert.equal(preview.baseHead, FEATURE_HEAD)
+  // Move the source branch after preview -> create must refuse (stale).
+  repo.branches.set('feature', '3333333333333333333333333333333333333333')
+  await assert.rejects(
+    core.create({ previewToken: preview.previewToken, operationId: 'op-start-stale' }),
+    error => error instanceof GitWorktreeError && error.code === 'preview-stale',
+  )
+})
+
+test('a replay of a committed remove still attempts the optional branch delete', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
+  const expected = { repoId: repository.repoId, worktreeId: linked.worktreeId, branch: linked.branch!, head: linked.head }
+  // First remove commits the worktree removal (branch still present).
+  const first = await core.remove({ operationId: 'op-replay-del', workspaceId: 'ws-feature', expected, deleteBranch: 'feature' })
+  assert.equal(first.removed, true)
+  assert.equal(first.branchDeleted, true)
+  assert.equal(repo.branches.has('feature'), false)
+  // Replay (target absent now): branch delete must NOT re-run (guarded once).
+  const branchCallsBefore = repo.calls.filter(call => call.args[0] === 'branch').length
+  const replay = await core.remove({ operationId: 'op-replay-del', workspaceId: 'ws-feature', expected, deleteBranch: 'feature' })
+  assert.equal(replay.replayed, true)
+  assert.equal(replay.removed, true)
+  assert.equal(repo.calls.filter(call => call.args[0] === 'branch').length, branchCallsBefore, 'branch delete must run at most once')
+})
+
+test('create clears the discovery cache so the next snapshot sees the new worktree immediately', async () => {
+  const { core, repo } = setup({ linked: true })
+  await core.snapshot()
+  const revParseBefore = repo.calls.filter(call => call.args[0] === 'rev-parse').length
+  const preview = await previewNew(core, 'cache-clear', 'topic-clear')
+  await core.create({ previewToken: preview.previewToken, operationId: 'op-clear' })
+  // Next snapshot (unchanged registry) must still re-discover (no stale cache).
+  const snapshot = await core.snapshot()
+  assert.ok(snapshot.repos.some(repoRow => repoRow.worktrees.some(row => row.path === preview.targetPath)), 'new worktree visible in the next snapshot')
+  assert.ok(repo.calls.filter(call => call.args[0] === 'rev-parse').length > revParseBefore, 'create cleared the discovery cache')
+})
+
+test('parseBranchLine extracts local-ref upstream/ahead/behind facts', () => {
+  assert.deepEqual(parseBranchLine('## main...origin/main [ahead 2, behind 1]\u0000'), { upstream: 'origin/main', ahead: 2, behind: 1 })
+  assert.deepEqual(parseBranchLine('## feature...origin/feature [ahead 3]'), { upstream: 'origin/feature', ahead: 3, behind: 0 })
+  assert.deepEqual(parseBranchLine('## main'), { upstream: null, ahead: 0, behind: 0 })
+  assert.deepEqual(parseBranchLine('## HEAD (no branch)'), { upstream: null, ahead: 0, behind: 0 })
+  assert.deepEqual(parseBranchLine('?? untracked.txt'), { upstream: null, ahead: 0, behind: 0 })
+})
+
+test('snapshot carries upstream/ahead/behind from the --branch status header', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.worktrees[1]!.upstream = 'origin/feature'
+  repo.worktrees[1]!.ahead = 2
+  repo.worktrees[1]!.behind = 1
+  const snapshot = await core.snapshot()
+  const row = snapshot.repos[0]!.worktrees.find(worktree => worktree.path === LINKED)!
+  assert.equal(row.upstream, 'origin/feature')
+  assert.equal(row.ahead, 2)
+  assert.equal(row.behind, 1)
+  // The main checkout has no upstream facts.
+  const mainRow = snapshot.repos[0]!.worktrees.find(worktree => worktree.path === MAIN)!
+  assert.equal(mainRow.upstream, null)
+  assert.equal(mainRow.ahead, 0)
+  assert.equal(mainRow.behind, 0)
+})
+
+test('--branch snapshot dirty detection: clean stays false, dirty becomes true', async () => {
+  const { core, repo } = setup({ linked: true })
+  const clean = await core.snapshot()
+  const cleanRow = clean.repos[0]!.worktrees.find(row => row.path === LINKED)!
+  assert.equal(cleanRow.dirty, false)
+  repo.worktrees[1]!.dirty = true
+  const dirty = await core.snapshot()
+  const dirtyRow = dirty.repos[0]!.worktrees.find(row => row.path === LINKED)!
+  assert.equal(dirtyRow.dirty, true)
+})
+
+test('unregistered worktree removal: no workspace, git-first, next none', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const ext = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
+  const removed = await core.remove({
+    operationId: 'op-unreg',
+    expected: { repoId: repository.repoId, worktreeId: ext.worktreeId, branch: ext.branch!, head: ext.head },
+    path: '/repos/external',
+  })
+  assert.equal(removed.removed, true)
+  assert.equal(removed.next, 'none')
+  assert.equal(removed.workspaceId, undefined)
+  const after = await core.snapshot()
+  assert.equal(after.repos[0]!.worktrees.some(row => row.path === '/repos/external'), false)
+})
+
+test('unregistered removal keeps the dirty/locked/main guards and rejects without a path', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const ext = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
+  const expected = { repoId: repository.repoId, worktreeId: ext.worktreeId, branch: ext.branch!, head: ext.head }
+  repo.worktrees.find(row => row.path === '/repos/external')!.dirty = true
+  await assert.rejects(
+    core.remove({ operationId: 'op-unreg-dirty', expected, path: '/repos/external' }),
+    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
+  )
+  await assert.rejects(
+    core.remove({ operationId: 'op-unreg-nopath', expected }),
+    error => error instanceof GitWorktreeError && error.code === 'invalid-input',
+  )
+})
+
+test('unregistered removal replay is idempotent', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const ext = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
+  const expected = { repoId: repository.repoId, worktreeId: ext.worktreeId, branch: ext.branch!, head: ext.head }
+  const first = await core.remove({ operationId: 'op-unreg-replay', expected, path: '/repos/external' })
+  assert.equal(first.next, 'none')
+  const replay = await core.remove({ operationId: 'op-unreg-replay', expected, path: '/repos/external' })
+  assert.equal(replay.removed, true)
+  assert.equal(replay.replayed, true)
+  assert.equal(replay.next, 'none')
+})
+
+test('a worktree whose directory vanished but git metadata survives stays associated (raw-path fallback)', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  // The linked worktree's directory disappears (externally deleted) while its
+  // git metadata still lists it (git worktree list keeps 'prunable' rows).
+  repo.existing.delete(LINKED)
+  const before = await core.snapshot()
+  const repository = before.repos[0]!
+  const row = repository.worktrees.find(worktree => worktree.path === LINKED)
+  assert.ok(row !== undefined, 'the vanished worktree row still exists (metadata alive)')
+  assert.equal(row.status, 'missing')
+  // The workspace registration at the raw path (also failed realpath) keeps
+  // the association — it must NOT leak into the unregistered block.
+  assert.equal(row.workspaceId, 'ws-feature')
+})
+
+test('a VANISHED (orphaned) workspace no longer blocks another worktree removal', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  // The orphan: a workspace whose path no longer resolves (externally deleted
+  // worktree left a registration). The registered remove preflight must
+  // tolerate it (review 2026-08: it hard-failed EVERY registered removal on
+  // the source and the retryable error wedged the source in recovery).
+  workspaces.push({ workspaceId: 'orphan-1', path: '/repos/orphaned-path', sessionIds: [] })
+  const before = await core.snapshot()
+  const repository = before.repos[0]!
+  const row = repository.worktrees.find(worktree => worktree.path === LINKED)!
+  const removed = await core.remove({
+    operationId: 'op-with-orphan',
+    workspaceId: 'ws-feature',
+    expected: { repoId: repository.repoId, worktreeId: row.worktreeId, branch: row.branch!, head: row.head },
+  })
+  assert.equal(removed.removed, true)
+  assert.equal(removed.next, 'delete-workspace')
 })

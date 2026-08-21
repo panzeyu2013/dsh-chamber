@@ -32,6 +32,11 @@ export interface ChamberServerAggregate {
   /** Status text (ready/connecting/… projection). */
   phase: string
   workspaces: ChamberServerWorkspace[]
+  /** True when the per-instance aggregate snapshot has actually landed
+   *  (workspace.list + sessions.list) — git-derived rows must not render
+   *  before the workspace list itself (2026-08 user report). Absent on
+   *  older producers = not ready. */
+  aggregateReady?: boolean
   /** Snapshot-fetch error text from the last per-instance pull; absent = ok/not-connected. */
   aggregateError?: string
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */

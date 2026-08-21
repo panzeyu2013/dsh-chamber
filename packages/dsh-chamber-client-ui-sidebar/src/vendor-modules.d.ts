@@ -113,6 +113,8 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconBranchOutline16: (props: any) => ReactElement | null
   /** Per-source session sort toggle (06 §7): IconPersonalizationOutline16 glyph. */
   export const IconPersonalizationOutline16: (props: any) => ReactElement | null
+  /** Workspace header folder glyph (08 §11 project-row parity). */
+  export const IconFolderOpenOutline16: (props: any) => ReactElement | null
   /**
    * Delayed hover-preview card portaled to document.body (06 §7, official
    * ui-primitives HoverCard): `anchor` renders in place, `content` floats in

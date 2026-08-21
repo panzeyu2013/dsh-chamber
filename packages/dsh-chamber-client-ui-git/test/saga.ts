@@ -75,6 +75,7 @@ test('ambiguous create retains preview/operation/session identities and a retry 
   }
   assert.deepEqual(recovery, {
     kind: 'git-create', preview: preview('preview-fixed'), operationId: 'op-fixed', sessionId: 'session-fixed', message: 'response dropped',
+    createSession: true,
   })
   const retried = await runCreateSaga(
     deps,
@@ -287,6 +288,7 @@ test('a mismatched preallocated session id remains session recovery and never ro
 test('a definitive retry error does not erase an older unknown-operation recovery', () => {
   const previous: GitRecovery = {
     kind: 'git-create', preview: preview('p'), operationId: 'op', sessionId: 's', message: 'response dropped',
+    createSession: true,
   }
   assert.deepEqual(recoveryForFailure(new GitSagaError(new Error('preview token lost after restart')), previous), {
     ...previous,
@@ -592,4 +594,53 @@ test('rollback success resolves committed:false and never adopts a workspace', a
   })
   assert.deepEqual(result, { committed: false })
   assert.deepEqual(calls, ['rollback:op-r'])
+})
+
+test('a definitive 404 host error surfaces as a no-recovery failure, never a recovery entry', async () => {
+  // 404 = the host Remote is not loaded (host package missing / restart
+  // pending): a definitive error — retrying the same create cannot help, so
+  // the saga must throw without minting a recovery entry (design 08 §11).
+  const deps = {
+    fetchGitFacts: async () => ({ repos: [], errors: [] }),
+    hostCreate: async () => {
+      const error = new Error('git-host-not-loaded: Git 插件未在该实例加载（host 包缺失或未生效）。本地实例请重启桌面端；远程实例请在连接设置中重新下发 chamber host 包并点击“重启生效”后重试。')
+      ;(error as { code?: string }).code = 'git-host-not-loaded'
+      throw error
+    },
+    createWorktreeResult: decodeCreateValue,
+    // hostCreate throws before anything is created — rollback must never run.
+    hostRollback: async () => { throw new Error('rollback must not run for a definitive 404') },
+    workspaceCreate: async () => ({ workspaceId: 'ws-404', path: '/feature', created: true }),
+    sessionCreate: async (_workspaceId: string, sessionId: string) => sessionId,
+    snapshotWorkspace: async () => ({ workspaceId: 'ws-404', path: '/feature', title: 'feature' }),
+    snapshotSessions: async () => ({ sessionIds: [] }),
+    resolveRecoveryWorkspaceId: async () => 'ws-404',
+    // The browser-facing client classifies git-host-not-loaded as definitive
+    // (isAmbiguousGitRpcFailure excludes it) — mirror that here.
+    isAmbiguousHostFailure: () => false,
+  }
+  await assert.rejects(
+    runCreateSaga(deps, PREVIEW, { operationId: 'op-404', sessionId: 'session-404' }),
+    (error: unknown) => {
+      assert.ok(error instanceof GitSagaError)
+      assert.equal(error.recovery, undefined, 'a definitive host failure must not mint a recovery entry')
+      return true
+    },
+  )
+})
+
+test('create saga with createSession:false commits the worktree + workspace but no session', async () => {
+  const calls: string[] = []
+  const result = await runCreateSaga({
+    hostCreate: async input => { calls.push(`git:${input.operationId}`); return createResult(input.operationId) },
+    hostRollback: async () => { calls.push('rollback') },
+    workspaceCreate: async path => { calls.push(`workspace:${path}`); return { workspaceId: 'ws-2', path, created: true } },
+    sessionCreate: async (workspaceId, sessionId) => { calls.push(`session:${workspaceId}:${sessionId}`); return sessionId },
+    isAmbiguousHostFailure: () => false,
+  }, PREVIEW, { operationId: 'op-nosession', sessionId: 'session-unused' }, { createSession: false })
+  // OpenChamber-aligned: the empty worktree workspace appears without a
+  // session; the preallocated session id is simply unused.
+  assert.deepEqual(calls, ['git:op-nosession', 'workspace:/feature'])
+  assert.equal(result.workspaceId, 'ws-2')
+  assert.equal(result.path, '/feature')
 })

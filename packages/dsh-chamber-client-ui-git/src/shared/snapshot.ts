@@ -17,8 +17,9 @@ const OBJECT_ID = /^[0-9a-f]{40,64}$/u
 const SNAPSHOT_OPERATIONS = new Set(['discover', 'list', 'status', 'associate'])
 const WORKTREE_STATES = new Set(['ready', 'missing', 'invalid', 'not-a-repo'])
 const HEAD_STATES = new Set(['branch', 'detached', 'unborn'])
-// Must stay in sync with SidebarGitSection's attentionLabels: an unknown
-// reason rejects the row (fail-closed) instead of rendering an unmapped badge.
+// Must stay in sync with the occupant's attention labels (the mirror in
+// SidebarWorkspaceGitLine is defensive): an unknown reason rejects the row
+// (fail-closed) instead of rendering an unmapped badge.
 const ATTENTION_REASONS = new Set(['merge', 'rebase', 'cherry-pick', 'revert', 'bisect'])
 
 function stringIds(value: unknown): string[] | undefined {
@@ -26,6 +27,11 @@ function stringIds(value: unknown): string[] | undefined {
 }
 
 function attentionReasons(value: unknown): string[] | undefined {
+  // ABSENT attention (an older host) degrades to [] — "no in-progress git
+  // operation" is the honest default, matching the upstream/ahead/behind
+  // softening below. A PRESENT but unknown reason still rejects the row
+  // (fail-closed against a NEWER host's vocabulary).
+  if (value === undefined) return []
   if (!Array.isArray(value) || !value.every(reason => ATTENTION_REASONS.has(reason))) return undefined
   return [...value]
 }
@@ -58,6 +64,17 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
   const sessionIds = stringIds(value.sessionIds)
   const runningSessionIds = stringIds(value.runningSessionIds)
   const attention = attentionReasons(value.attention)
+  // upstream/ahead/behind are OPTIONAL in the decode: an older host omits
+  // them (degrade to null/0); a present-but-malformed value fails the row.
+  const upstream = value.upstream === undefined || value.upstream === null
+    ? null
+    : (isNonEmptyString(value.upstream) ? value.upstream : undefined)
+  const ahead = value.ahead === undefined
+    ? 0
+    : (Number.isInteger(value.ahead) && value.ahead >= 0 ? value.ahead : undefined)
+  const behind = value.behind === undefined
+    ? 0
+    : (Number.isInteger(value.behind) && value.behind >= 0 ? value.behind : undefined)
   if (
     !isNonEmptyString(value.worktreeId)
     || !WORKTREE_ID.test(value.worktreeId)
@@ -70,6 +87,9 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     || typeof value.locked !== 'boolean'
     || !WORKTREE_STATES.has(value.status)
     || !HEAD_STATES.has(value.headState)
+    || upstream === undefined
+    || ahead === undefined
+    || behind === undefined
     || attention === undefined
     || !(value.workspaceId === null || isNonEmptyString(value.workspaceId))
     || sessionIds === undefined
@@ -85,6 +105,9 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     locked: value.locked,
     status: value.status,
     headState: value.headState,
+    upstream,
+    ahead,
+    behind,
     attention,
     workspaceId: value.workspaceId,
     sessionIds,
@@ -149,7 +172,13 @@ export function normalizeGitSnapshot(value: unknown): GitWorktreeSnapshot {
         worktrees.push(worktree)
       }
     }
-    repos.push({ repoId: rawRepo.repoId, commonDir: rawRepo.commonDir, mainPath: rawRepo.mainPath, worktrees })
+    // branches is OPTIONAL in the decode: an older host omits it, and the
+    // existing-branch picker must degrade to empty rather than reject the
+    // whole snapshot (fail-closed applies to shapes, not version skew).
+    const branches = Array.isArray(rawRepo.branches) && rawRepo.branches.every(isNonEmptyString)
+      ? rawRepo.branches
+      : []
+    repos.push({ repoId: rawRepo.repoId, commonDir: rawRepo.commonDir, mainPath: rawRepo.mainPath, worktrees, branches })
   }
   const snapshot: GitWorktreeSnapshot = { repos, errors }
   if (value.sourceError !== undefined) {

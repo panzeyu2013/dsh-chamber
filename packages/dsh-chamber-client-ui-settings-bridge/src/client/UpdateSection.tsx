@@ -1,9 +1,9 @@
 /**
  * Chamber-global「更新」group (design 11), rendered inside the「通用」section
  * (design 15 — the update nav entry was merged into General): a LOW-KEY flat
- * row group in the OpenChamber settings vocabulary — group heading + intro,
- * a version line with the「检查更新」action on the right, and phase status
- * line(s) below. When a newer version exists a quiet notice plus a「更新」
+ * row group in the OpenChamber settings vocabulary — group heading, a version
+ * line with the「检查更新」action on the right, and phase status line(s)
+ * below. When a newer version exists a quiet notice plus a「更新」
  * button appear. No dialogs, no badges, no banners: the user only ever sees
  * this by opening Settings, and the download starts only after the explicit
  * click (autoDownload stays off in the main process). All state is the
@@ -176,10 +176,7 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
 
   return (
     <div className={css.updateSection}>
-      <div className={css.updateHead}>
-        <h3 className={css.generalGroupTitle}>{t('updateTitle')}</h3>
-        <p className={css.generalHint}>{t('updateIntro')}</p>
-      </div>
+      <h3 className={css.generalGroupTitle}>{t('updateTitle')}</h3>
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>{t('updateCurrentVersion', { version: currentVersion ?? '—' })}</p>
         <button type="button" className={css.updateButton} onClick={onCheck} disabled={checkDisabled}>

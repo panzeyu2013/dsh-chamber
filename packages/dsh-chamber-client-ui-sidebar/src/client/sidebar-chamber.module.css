@@ -555,12 +555,10 @@
      cluster + fold chevron), so the pointer affordance wins for scan
      consistency (design 05 §2 parity with the official surface). */
   cursor: pointer;
-  /* 2px vertical margin: keeps the hover/selected tints from fusing into
-     one blob with the adjacent session row (the row right below) or the
-     header above — the tinted rectangles must stay separated. The dense
-     3px padding stays — chamber multi-source density is a deliberate
-     choice (05 §2). */
-  margin: 2px 0;
+  /* Uniform 3px vertical margin for EVERY workspace — derived worktree and
+     plain workspace alike (2026-08: the project-start 10px gap is removed so
+     spacing stays consistent; grouping is expressed by order + drag clamp). */
+  margin: 3px 0;
   border-radius: 8px;
 }
 
@@ -583,12 +581,68 @@
   background: transparent;
   color: var(--dsw-alias-label-caption);
   cursor: pointer;
-  transform: rotate(90deg);
-  transition: transform 150ms;
 }
 
 .foldToggle:hover {
   color: var(--dsw-alias-label-primary);
+}
+
+/* The chevron glyph rotates (down when expanded, right when folded) — the
+   button itself stays upright so the git-branch glyph never rotates. */
+.foldChevron {
+  transform: rotate(90deg);
+  transition: transform 150ms;
+}
+
+.foldToggleFolded .foldChevron {
+  transform: rotate(0deg);
+}
+
+/* OpenChamber SessionGroupSection swap (08 §11): a normal workspace shows
+   the FOLDER glyph (project-row parity), a worktree (derived) workspace the
+   git-branch glyph, at rest — and both swap to the collapse chevron on row
+   hover / focus / kebab-open, in the same slot, so nothing shifts. */
+.foldToggleFolder .foldChevron {
+  display: none;
+}
+
+.foldToggleFolder .foldFolder {
+  display: inline-flex;
+}
+
+.workspaceHeader:hover .foldToggleFolder .foldChevron,
+.workspaceHeader:focus-within .foldToggleFolder .foldChevron,
+.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron {
+  display: inline-flex;
+}
+
+.workspaceHeader:hover .foldToggleFolder .foldFolder,
+.workspaceHeader:focus-within .foldToggleFolder .foldFolder,
+.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder {
+  display: none;
+}
+
+/* OpenChamber SessionGroupSection swap (08 §11): a worktree (derived)
+   workspace shows the git-branch glyph at rest and the collapse chevron on
+   row hover / focus / kebab-open — the same slot, so nothing shifts. */
+.foldToggleGit .foldChevron {
+  display: none;
+}
+
+.foldToggleGit .foldBranch {
+  display: inline-flex;
+}
+
+.workspaceHeader:hover .foldToggleGit .foldChevron,
+.workspaceHeader:focus-within .foldToggleGit .foldChevron,
+.workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldChevron {
+  display: inline-flex;
+}
+
+.workspaceHeader:hover .foldToggleGit .foldBranch,
+.workspaceHeader:focus-within .foldToggleGit .foldBranch,
+.workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldBranch {
+  display: none;
 }
 
 /* The group containing the current session's accent chevron marker: the
@@ -624,9 +678,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 18px;
-  font-weight: 500;
+  font-weight: 600;
+  /* Project-row parity (OpenChamber 08 §11): a workspace label is the
+     primary entity label — foreground ink. */
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Derived (worktree) workspace: the label demotes to secondary ink
+   (OpenChamber worktree group labels are muted) — the icon language
+   (folder vs git-branch) plus this ink step carry the hierarchy. */
+.workspaceTitleGit {
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -734,9 +797,24 @@
   display: inline-flex;
 }
 
+.workspaceHeader:hover :global(.git-ws-action),
+.workspaceHeader:focus-within :global(.git-ws-action),
+.workspaceHeader:has(.rowActionsVisible) :global(.git-ws-action) {
+  display: inline-flex;
+}
+
 .workspaceHeader:hover .rowActions,
 .sessionRow:hover .rowActions {
   display: inline-flex;
+}
+
+/* The git occupant's disabled actions must stay visibly disabled even when
+   revealed (the reveal rules set display; these keep the disabled opacity on
+   every reveal path — client review P3-6/P3-1). */
+.workspaceHeader:hover :global(.git-ws-action:disabled),
+.workspaceHeader:focus-within :global(.git-ws-action:disabled),
+.workspaceHeader:has(.rowActionsVisible) :global(.git-ws-action:disabled) {
+  opacity: .42;
 }
 
 /* The row/header state indicators swap OUT while the actions are in: on
@@ -895,6 +973,27 @@
 
 .ungroupedGroup .workspaceHeader:hover {
   background: transparent;
+}
+
+/* Plan A: the workspace's path no longer exists (externally deleted
+   worktree left an orphaned registration). Doubles as the cleanup button. */
+.orphanBadge {
+  flex: none;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-primary));
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.orphanBadge:hover {
+  background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
+  filter: brightness(1.08);
 }
 
 /* Add-workspace affordance: a `+` icon button in the SOURCE header (next to

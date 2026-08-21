@@ -320,3 +320,21 @@ test('static: /health is untouched by the static service', async () => {
     await cleanup(holder)
   }
 })
+
+test('static: a `//`-leading request line answers 400 and never crashes the server', async () => {
+  // Regression (2026-08): the window rebuild path once produced
+  // `http://127.0.0.1:<port>//`; `new URL('//', base)` throws, and the
+  // uncaught exception took the whole control plane down. The request
+  // handler must reject the malformed line explicitly and keep serving.
+  const holder = await makeStaticPlane()
+  try {
+    const bad = await rawRequest(holder.plane.port!, 'GET', '//')
+    assert.equal(bad.status, 400)
+    assert.match(bad.body.toString('utf8'), /invalid-url/)
+    // The server must still serve a normal request afterwards.
+    const health = await fetch(`${holder.base}/health`)
+    assert.equal(health.status, 200)
+  } finally {
+    await cleanup(holder)
+  }
+})

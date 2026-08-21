@@ -47,6 +47,11 @@ export interface GitWorktreeInfo {
   status: 'ready' | 'missing' | 'invalid' | 'not-a-repo'
   /** Git HEAD classification: branch | detached | unborn. */
   headState: 'branch' | 'detached' | 'unborn'
+  /** Local-ref upstream facts from the status branch header; null/0 when
+   *  there is no upstream or the host is older. */
+  upstream: string | null
+  ahead: number
+  behind: number
   /** In-progress Git operations detected in the worktree git dir (best-effort). */
   attention: string[]
   workspaceId: string | null
@@ -60,6 +65,9 @@ export interface GitRepoTopology {
   commonDir: string
   mainPath: string
   worktrees: GitWorktreeInfo[]
+  /** Local branch names for the existing-branch picker (host `show-ref
+   *  --heads`); empty when the host is older or the read failed. */
+  branches: string[]
 }
 
 export interface GitWorktreeSnapshot {
@@ -72,6 +80,8 @@ export interface PreviewCreateInput {
   sourceWorkspaceId: string
   basename: string
   branch: GitBranchSpec
+  /** Optional start point for a NEW branch (OpenChamber sourceBranch). */
+  startRef?: string
 }
 
 export interface PreviewCreateResult {
@@ -119,14 +129,31 @@ export interface RemoveWorktreeResult {
   replayed: boolean
   repoId: string
   worktreeId: string
-  workspaceId: string
+  /** Absent when the removed worktree was UNREGISTERED. */
+  workspaceId?: string
   commonDir: string
   path: string
   branch: string | null
   head: string
   sessionIds: string[]
-  next: 'delete-workspace'
+  next: 'delete-workspace' | 'none'
   branchPreserved: true
+  /** Set when `deleteBranch` was requested and deleted successfully. */
+  branchDeleted?: boolean
+  /** Set when `deleteBranch` was requested but the branch delete failed —
+   *  the worktree removal still stands. */
+  branchDeleteFailed?: boolean
+}
+
+export interface UnregisteredWorktreeInfo {
+  name: string
+  worktreeId: string
+  branch: string | null
+  status: 'ready' | 'missing' | 'invalid' | 'not-a-repo'
+  headState: 'branch' | 'detached' | 'unborn'
+  attention: string[]
+  dirty: boolean | null
+  head: string
 }
 
 export type GitBusyKind = 'preview' | 'create' | 'remove' | 'recovery' | 'adopt-session'
@@ -145,6 +172,13 @@ export type GitRecovery =
       operationId: string
       sessionId: string
       message: string
+      /** Whether the original create committed a session (the dialog creates
+       *  worktrees WITHOUT sessions; a retry must not then open one). */
+      createSession: boolean
+      /** The main-checkout workspace the new worktree should be positioned
+       *  after (best-effort `insertWorkspaceBefore`); retained across the
+       *  git-create recovery so a replay re-runs the positioning (2026-08). */
+      sourceWorkspaceId?: string
     }
   | {
       kind: 'rollback-create'
@@ -186,7 +220,8 @@ export type GitRecovery =
       /** Host remove may have committed; retry the same opaque expectation/id. */
       kind: 'git-remove'
       operationId: string
-      workspaceId: string
+      /** Absent for an UNREGISTERED worktree removal. */
+      workspaceId?: string
       expected: {
         repoId: string
         worktreeId: string
@@ -195,6 +230,8 @@ export type GitRecovery =
       }
       path: string
       message: string
+      /** Optional local branch to delete after the worktree removal. */
+      deleteBranch?: string
     }
   | {
       kind: 'workspace-delete'
@@ -209,6 +246,10 @@ export type GitRecovery =
       }
       path: string
       message: string
+      /** The original removal's optional branch deletion — the replay input
+       *  MUST match the original byte-for-byte (host fingerprints it), or
+       *  recovery is permanently stuck (review P1-1). */
+      deleteBranch?: string
     }
 
 export interface GitSourceState {

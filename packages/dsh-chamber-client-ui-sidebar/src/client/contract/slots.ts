@@ -27,8 +27,34 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * multi-source session list instead (05 §2) and never calls this hole.
      */
     'sidebar.workspaces': { kind: 'single'; scope: 'root'; owner: SidebarSectionOwnerProps }
-    /** Chamber-bundled Git worktree section between navigation and the foot. */
-    'sidebar.git': { kind: 'single'; scope: 'root'; owner: SidebarGitOwnerProps }
+    /**
+     * Per-workspace Git occupant rendered inside every workspace group of the
+     * browsing region (workspace-centric discovery, design 08 §11). The
+     * sidebar stays git-type-free: it renders the hole once per workspace
+     * with an opaque occurrence context, and the chamber Git plugin occupies
+     * it with the workspace's branch/create/remove line. Non-git workspaces
+     * get an empty mount (the occupant returns null). The workspace identity
+     * rides the slot-level `hookContext`; the contextual hook factory lives
+     * in this slot's `inject` (the vendored contextual-hook seam — entry
+     * injects bind hooks as observables, only slot injects bind factories
+     * with the occurrence context). The factory is git-agnostic (it only
+     * closes over the sidebar-owned context) and is provided in the owner's
+     * children table.
+     */
+    'sidebar.workspace.git': {
+      kind: 'single',
+      scope: 'root',
+      owner: SidebarWorkspaceGitOwnerProps,
+      hookContext: { sourceId: string; workspaceId: string; repoKey?: string },
+      inject: {
+        hooks: {
+          workspaceGitContext: (
+            _standard: object,
+            context: { sourceId: string; workspaceId: string; repoKey?: string },
+          ) => () => ({ sourceId: string; workspaceId: string; repoKey?: string }),
+        },
+      },
+    }
     /**
      * The settings seat at the sidebar foot. Declared by this package's
      * 'sidebar' entry; ui-settings registers its trigger row + modal panel.
@@ -63,8 +89,12 @@ export interface SidebarSettingsOwnerProps {
   wide: boolean
 }
 
-/** Owner share of the optional chamber Git worktree section. */
-export interface SidebarGitOwnerProps {
+/**
+ * Owner share of the per-workspace Git occupant. The workspace identity rides
+ * the slot's `hookContext` (one occurrence per workspace group); the owner
+ * share carries only the column state.
+ */
+export interface SidebarWorkspaceGitOwnerProps {
   /** Whether the sidebar renders wide content; the occupant hides on the rail. */
   wide: boolean
 }
@@ -112,5 +142,5 @@ export type SidebarRootInjected = {
  */
 export type SidebarRootComponentProps =
   PropsRuntime<'sidebar'>
-  & PropsRenderSlots<'sidebar.workspaces' | 'sidebar.git' | 'sidebar.settings' | 'sidebar.footer.action'>
+  & PropsRenderSlots<'sidebar.workspaces' | 'sidebar.workspace.git' | 'sidebar.settings' | 'sidebar.footer.action'>
   & SidebarRootInjected & PropsLocale<'sidebar'>

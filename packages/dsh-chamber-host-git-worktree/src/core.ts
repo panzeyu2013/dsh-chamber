@@ -13,8 +13,9 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { access, lstat, open, realpath } from 'node:fs/promises'
-import { isAbsolute, dirname, join, relative, resolve, sep } from 'node:path'
+import { access, lstat, mkdir, open, realpath } from 'node:fs/promises'
+import { basename, isAbsolute, dirname, join, relative, resolve, sep } from 'node:path'
+import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 
 const READ_TIMEOUT_MS = 10_000
@@ -24,6 +25,12 @@ const MUTATION_OUTPUT_CAP = 256 * 1024
 export const PREVIEW_TTL_MS = 5 * 60_000
 export const OPERATION_TTL_MS = 24 * 60 * 60_000
 export const SNAPSHOT_DEADLINE_MS = 20_000
+/** Discovery cache TTL (design 08 §11, OpenChamber parity): the per-workspace
+ *  rev-parse and per-repository worktree-list/show-ref results are reused
+ *  within this window when the workspace registry signature is unchanged, so
+ *  unchanged sources skip the spawn storm on every 30s poll. Per-worktree
+ *  STATUS (dirty) always runs fresh. Mutations clear the caches. */
+const DISCOVERY_TTL_MS = 30_000
 export const SNAPSHOT_WALL_TIMEOUT_MS = 25_000
 export const MAX_WORKSPACES = 128
 export const MAX_REPOSITORIES = 64
@@ -94,6 +101,8 @@ export type GitSpawner = (
 export interface WorktreeFileSystem {
   realpath(path: string): Promise<string>
   lstat(path: string): Promise<{ isDirectory(): boolean }>
+  /** Recursive directory creation (the unified worktree root). */
+  mkdir(path: string): Promise<void>
   /** True when `path` exists as a file or directory (git-dir state probes). */
   exists(path: string): Promise<boolean>
   /** Read a small UTF-8 file (the worktree `.git` pointer). Rejects when absent/unreadable. */
@@ -110,6 +119,11 @@ export interface GitWorktreeCoreOptions {
   readonly operationCapacity?: number
   /** Test seam for the non-cancelling snapshot response deadline. */
   readonly snapshotWallTimeoutMs?: number
+  /** Unified worktree root (design 08 §11): all chamber checkouts live under
+   *  the dsh home (`$DSH_HOME/worktrees`, one subdirectory per repository) —
+   *  outside any working tree so git status stays clean. Defaults from the
+   *  instance's DSH_HOME (fallback: ~/.dsh). */
+  readonly worktreesRoot?: string
 }
 
 export type CreateBranch =
@@ -120,6 +134,10 @@ export interface PreviewCreateInput {
   readonly sourceWorkspaceId: string
   readonly basename: string
   readonly branch: CreateBranch
+  /** Optional start point for a NEW branch (OpenChamber sourceBranch):
+   *  the new branch is created from this local branch's head instead of the
+   *  main checkout HEAD. Ignored for existing branches. */
+  readonly startRef?: string
 }
 
 export interface PreviewCreateResult {
@@ -172,20 +190,31 @@ export interface RollbackCreateResult {
 
 export interface RemoveInput {
   readonly operationId: string
-  readonly workspaceId: string
+  /** Optional: an UNREGISTERED worktree (no dsh workspace) is removed with
+   *  this absent — the git-first removal then returns `next: 'none'` and the
+   *  client skips workspace.delete (design 08 §11, Plan A). */
+  readonly workspaceId?: string
+  /** Required when `workspaceId` is absent (UNREGISTERED removal): the exact
+   *  worktree path — the workspace-based discovery cannot derive it. */
+  readonly path?: string
   readonly expected: {
     readonly repoId: string
     readonly worktreeId: string
     readonly branch: string | null
     readonly head: string
   }
+  /** Optional local branch to delete AFTER the worktree removal (design 08
+   *  §11 user decision): best-effort — a failure is reported honestly on the
+   *  result and never rolls back the (already gone) worktree. */
+  readonly deleteBranch?: string
 }
 
 export interface RemoveResult {
   readonly operationId: string
   readonly removed: true
   readonly replayed: boolean
-  readonly workspaceId: string
+  /** Absent when the removed worktree was UNREGISTERED. */
+  readonly workspaceId?: string
   readonly repoId: string
   readonly worktreeId: string
   readonly commonDir: string
@@ -194,9 +223,19 @@ export interface RemoveResult {
   readonly head: string
   /** Fresh membership captured immediately before Git-first removal. */
   readonly sessionIds: readonly string[]
-  /** The caller may now delete only this durable workspace registration. */
-  readonly next: 'delete-workspace'
+  /** The caller may now delete only this durable workspace registration.
+   *  'none' when the removed worktree was UNREGISTERED (no workspace). */
+  readonly next: 'delete-workspace' | 'none'
+  /** The host never deletes a branch on its own: `branchPreserved` means
+   *  "preserved unless the caller explicitly requested deletion" — when
+   *  `deleteBranch` was requested, the branchDelete* flags below report the
+   *  outcome of that explicit best-effort step. */
   readonly branchPreserved: true
+  /** Set when `deleteBranch` was requested and deleted successfully. */
+  readonly branchDeleted?: boolean
+  /** Set when `deleteBranch` was requested but the branch delete failed —
+   *  the worktree removal still stands. */
+  readonly branchDeleteFailed?: boolean
 }
 
 export interface SnapshotError {
@@ -223,6 +262,11 @@ export interface SnapshotWorktree {
   readonly status: GitWorktreeState
   /** Git HEAD classification: branch | detached | unborn. */
   readonly headState: 'branch' | 'detached' | 'unborn'
+  /** Local-ref upstream facts from the status branch header (`## b...u [ahead
+   *  N, behind M]`); null/0 when there is no upstream or the status failed. */
+  readonly upstream: string | null
+  readonly ahead: number
+  readonly behind: number
   /** In-progress Git operations detected in the worktree git dir (best-effort). */
   readonly attention: readonly GitAttentionReason[]
   readonly workspaceId: string | null
@@ -235,6 +279,10 @@ export interface SnapshotRepository {
   readonly commonDir: string
   readonly mainPath: string
   readonly worktrees: readonly SnapshotWorktree[]
+  /** Local branch names (`git show-ref --heads`); a convenience for the
+   *  create dialog's existing-branch picker. Empty on failure — never a
+   *  snapshot error. */
+  readonly branches: readonly string[]
 }
 
 export interface SnapshotResult {
@@ -321,6 +369,7 @@ export async function domainResult<T>(operation: () => Promise<T>): Promise<GitW
 const nodeFileSystem: WorktreeFileSystem = {
   realpath,
   lstat,
+  mkdir: async path => { await mkdir(path, { recursive: true }) },
   exists: async path => {
     try {
       await access(path)
@@ -439,7 +488,17 @@ function expectedOpaqueId(value: unknown, kind: 'repo' | 'worktree'): string {
 
 function parsePreviewInput(value: PreviewCreateInput): PreviewCreateInput {
   assertRecord(value, 'input')
-  assertExactKeys(value, ['sourceWorkspaceId', 'basename', 'branch'], 'input')
+  // startRef is OPTIONAL (assertExactKeys requires presence, so the allowed
+  // set + the required subset are checked inline, like deleteBranch in remove).
+  {
+    const allowed = new Set(['sourceWorkspaceId', 'basename', 'branch', 'startRef'])
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) fail('invalid-input', `input contains unsupported field '${key}'`)
+    }
+    for (const key of ['sourceWorkspaceId', 'basename', 'branch']) {
+      if (!(key in value)) fail('invalid-input', `input.${key} is required`)
+    }
+  }
   const sourceWorkspaceId = requiredString(value.sourceWorkspaceId, 'sourceWorkspaceId', 256)
   const basename = safeBasename(value.basename)
   assertRecord(value.branch, 'input.branch')
@@ -448,7 +507,15 @@ function parsePreviewInput(value: PreviewCreateInput): PreviewCreateInput {
     fail('invalid-input', "input.branch.kind must be 'existing' or 'new'")
   }
   const name = safeBranchName(value.branch.name)
-  return { sourceWorkspaceId, basename, branch: { kind: value.branch.kind, name } }
+  return {
+    sourceWorkspaceId,
+    basename,
+    branch: { kind: value.branch.kind, name },
+    // Same validation as the branch name: a control character or leading
+    // dash must never reach the localBranchHead argv (the allowlist would
+    // reject a leading dash, but input-layer validation is fail-closed).
+    ...(value.startRef === undefined ? {} : { startRef: safeBranchName(value.startRef, 'input.startRef') }),
+  }
 }
 
 function parseCreateInput(value: CreateInput): CreateInput {
@@ -465,14 +532,26 @@ function parseRollbackInput(value: RollbackCreateInput): RollbackCreateInput {
 
 function parseRemoveInput(value: RemoveInput): RemoveInput {
   assertRecord(value, 'input')
-  assertExactKeys(value, ['operationId', 'workspaceId', 'expected'], 'input')
+  // deleteBranch is OPTIONAL (assertExactKeys requires presence, so the
+  // allowed set + the required subset are checked inline).
+  {
+    const allowed = new Set(['operationId', 'workspaceId', 'path', 'expected', 'deleteBranch'])
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) fail('invalid-input', `input contains unsupported field '${key}'`)
+    }
+    for (const key of ['operationId', 'expected']) {
+      if (!(key in value)) fail('invalid-input', `input.${key} is required`)
+    }
+  }
   assertRecord(value.expected, 'input.expected')
   assertExactKeys(value.expected, ['repoId', 'worktreeId', 'branch', 'head'], 'input.expected')
   const head = requiredString(value.expected.head, 'input.expected.head', 128)
   if (!/^[0-9a-fA-F]{40,64}$/u.test(head)) fail('invalid-input', 'input.expected.head is not an object id')
   return {
     operationId: operationId(value.operationId),
-    workspaceId: requiredString(value.workspaceId, 'workspaceId', 256),
+    workspaceId: value.workspaceId === undefined
+      ? undefined
+      : requiredString(value.workspaceId, 'workspaceId', 256),
     expected: {
       repoId: expectedOpaqueId(value.expected.repoId, 'repo'),
       worktreeId: expectedOpaqueId(value.expected.worktreeId, 'worktree'),
@@ -481,6 +560,14 @@ function parseRemoveInput(value: RemoveInput): RemoveInput {
         : safeBranchName(value.expected.branch, 'input.expected.branch'),
       head: head.toLowerCase(),
     },
+    deleteBranch: value.deleteBranch === undefined
+      ? undefined
+      : safeBranchName(value.deleteBranch, 'input.deleteBranch'),
+    path: value.path === undefined
+      ? undefined
+      : (value.workspaceId !== undefined
+          ? fail('invalid-input', "input.path and input.workspaceId are mutually exclusive")
+          : absoluteExpectedPath(value.path, 'input.path')),
   }
 }
 
@@ -509,7 +596,17 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   if (verb === 'check-ref-format' && rest.length === 2 && rest[0] === '--branch' && !rest[1]!.startsWith('-')) return
   if (verb === 'show-ref' && rest.length === 3 && rest[0] === '--hash' && rest[1] === '--verify'
     && rest[2]!.startsWith('refs/heads/') && !rest[2]!.slice('refs/heads/'.length).startsWith('-')) return
+  // Branch enumeration for the create dialog's existing-branch picker: a
+  // fixed flag only, no user input in argv.
+  if (verb === 'show-ref' && exact('--heads')) return
+  // Optional branch deletion after worktree removal (design 08 §11 user
+  // decision): fixed flags + a validated local branch name (no leading dash).
+  if (verb === 'branch' && rest.length === 2 && rest[0] === '-D'
+    && !rest[1]!.startsWith('-') && !rest[1]!.startsWith('/')) return
   if (verb === 'status' && exact('--porcelain=v1', '-z', '--untracked-files=normal')) return
+  // Snapshot status with the branch header: local-ref upstream/ahead/behind
+  // facts (no network verb — the numbers reflect local refs only).
+  if (verb === 'status' && exact('--porcelain=v1', '-z', '--branch', '--untracked-files=normal')) return
   if (verb === 'worktree' && exact('list', '--porcelain', '-z')) return
   if (verb === 'worktree' && rest.length === 4 && rest[0] === 'add' && rest[1] === '--'
     && isAbsolute(rest[2]!) && !rest[3]!.startsWith('-')) return
@@ -671,6 +768,8 @@ interface WorktreeTopology {
 
 interface PreviewRecord extends PreviewCreateResult {
   readonly branchMode: CreateBranch['kind']
+  /** The chosen start point for a NEW branch (undefined = main checkout HEAD). */
+  readonly startRef?: string
   readonly sourceWorkspaceId: string
   readonly basename: string
   readonly createdAt: number
@@ -705,9 +804,10 @@ interface CreateOperationRecord {
 }
 
 interface RemoveIntent {
-  readonly workspaceId: string
+  /** Absent for an UNREGISTERED worktree removal (next: 'none'). */
+  readonly workspaceId?: string
   /** Exact normalized registry path captured before the first mutation. */
-  readonly workspacePath: string
+  readonly workspacePath?: string
   readonly repoId: string
   readonly worktreeId: string
   readonly commonDir: string
@@ -716,6 +816,11 @@ interface RemoveIntent {
   readonly branch: string | null
   readonly head: string
   readonly sessionIds: readonly string[]
+
+  /** Optional local branch to delete after removal (design 08 §11). */
+  readonly deleteBranch?: string
+  branchDeleted?: boolean
+  branchDeleteFailed?: boolean
 }
 
 interface RemoveOperationRecord {
@@ -723,6 +828,8 @@ interface RemoveOperationRecord {
   state: 'ready' | 'removing' | 'uncertain' | 'removed'
   updatedAt: number
   attemptedRemove: boolean
+  /** Optional branch delete was attempted once (design 08 §11). */
+  branchDeleteAttempted: boolean
   intent?: RemoveIntent
   promise?: Promise<RemoveResult>
   result?: RemoveResult
@@ -744,6 +851,32 @@ class KeyedMutex {
       release()
       if (this.tails.get(key) === tail) this.tails.delete(key)
     }
+  }
+}
+
+/** Parse the `--branch` status header (`## branch...upstream [ahead N, behind
+ *  M]`). The numbers come from LOCAL refs — honest, never fetched. */
+export function parseBranchLine(line: string): { upstream: string | null; ahead: number; behind: number } {
+  if (!line.startsWith('## ')) return { upstream: null, ahead: 0, behind: 0 }
+  const rest = line.slice(3)
+  let ahead = 0
+  let behind = 0
+  const bracket = rest.lastIndexOf(' [')
+  const namePart = bracket >= 0 ? rest.slice(0, bracket) : rest
+  if (bracket >= 0) {
+    const meta = rest.slice(bracket + 2, rest.length - 1)
+    const aheadMatch = /ahead (\d+)/u.exec(meta)
+    const behindMatch = /behind (\d+)/u.exec(meta)
+    if (aheadMatch !== null) ahead = Number(aheadMatch[1])
+    if (behindMatch !== null) behind = Number(behindMatch[1])
+  }
+  // Git rejects ref names containing '..', so '...' cannot appear inside a
+  // branch name — the separator is unambiguous (review P3-2; do not "fix").
+  const sep = namePart.indexOf('...')
+  return {
+    upstream: sep >= 0 ? (namePart.slice(sep + 3) || null) : null,
+    ahead,
+    behind,
   }
 }
 
@@ -859,10 +992,18 @@ export class GitWorktreeCore {
   private readonly nextToken: () => string
   private readonly operationCapacity: number
   private readonly snapshotWallTimeoutMs: number
+  private readonly worktreesRoot: string
   private readonly mutex = new KeyedMutex()
   private readonly previews = new Map<string, PreviewRecord>()
   private readonly createOperations = new Map<string, CreateOperationRecord>()
   private readonly removeOperations = new Map<string, RemoveOperationRecord>()
+  private readonly workspaceDiscoverCache = new Map<string, { commonDir: string; topLevel: string; at: number }>()
+  private readonly repoTopologyCache = new Map<string, {
+    listedRaw: readonly RawWorktree[]
+    branches: readonly string[]
+    at: number
+  }>()
+  private lastWorkspaceSignature = ''
   private snapshotInFlight?: Promise<SnapshotResult>
 
   constructor(options: GitWorktreeCoreOptions) {
@@ -878,6 +1019,11 @@ export class GitWorktreeCore {
       fail('invalid-core-option', `operationCapacity must be between 1 and ${MAX_OPERATIONS}`)
     }
     this.snapshotWallTimeoutMs = options.snapshotWallTimeoutMs ?? SNAPSHOT_WALL_TIMEOUT_MS
+    const worktreesRoot = options.worktreesRoot ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'worktrees')
+    if (!isAbsolute(worktreesRoot)) {
+      fail('invalid-config', 'worktreesRoot must be an absolute path')
+    }
+    this.worktreesRoot = worktreesRoot
     if (!Number.isSafeInteger(this.snapshotWallTimeoutMs)
       || this.snapshotWallTimeoutMs < 1
       || this.snapshotWallTimeoutMs > SNAPSHOT_WALL_TIMEOUT_MS) {
@@ -936,6 +1082,13 @@ export class GitWorktreeCore {
 
     const errors: SnapshotError[] = []
     let sourceError: SnapshotResult['sourceError']
+    // Registry-change invalidation: any workspace id/path change clears the
+    // discovery caches so new/adopted workspaces are always discovered.
+    const signature = state.workspaces.map(workspace => `${workspace.workspaceId}:${workspace.path}`).sort().join('|')
+    if (signature !== this.lastWorkspaceSignature) {
+      this.clearDiscoveryCaches()
+      this.lastWorkspaceSignature = signature
+    }
     const canonicalWorkspaces: Array<WorkspaceFact & { canonicalPath: string }> = []
     for (const workspace of state.workspaces) {
       if (this.now() >= deadline) {
@@ -970,7 +1123,14 @@ export class GitWorktreeCore {
     let gitSpawnFailures = 0
     for (const workspace of canonicalWorkspaces) {
       try {
-        const discovered = await this.snapshotDiscover(workspace.canonicalPath, deadline)
+        let discovered: { commonDir: string; topLevel: string }
+        const cachedDiscover = this.workspaceDiscoverCache.get(workspace.canonicalPath)
+        if (cachedDiscover !== undefined && this.now() - cachedDiscover.at < DISCOVERY_TTL_MS) {
+          discovered = { commonDir: cachedDiscover.commonDir, topLevel: cachedDiscover.topLevel }
+        } else {
+          discovered = await this.snapshotDiscover(workspace.canonicalPath, deadline)
+          this.workspaceDiscoverCache.set(workspace.canonicalPath, { ...discovered, at: this.now() })
+        }
         const group = groups.get(discovered.commonDir)
         if (group === undefined) {
           if (groups.size >= MAX_REPOSITORIES) {
@@ -1044,12 +1204,22 @@ export class GitWorktreeCore {
         break
       }
       try {
-        const listed = await this.snapshotGitChecked(
-          group.cwd,
-          ['worktree', 'list', '--porcelain', '-z'],
-          deadline,
-        )
-        const raw = parseWorktreePorcelain(listed.stdout)
+        let raw: readonly RawWorktree[]
+        let branches: readonly string[]
+        const cachedTopology = this.repoTopologyCache.get(commonDir)
+        if (cachedTopology !== undefined && this.now() - cachedTopology.at < DISCOVERY_TTL_MS) {
+          raw = cachedTopology.listedRaw
+          branches = cachedTopology.branches
+        } else {
+          const listed = await this.snapshotGitChecked(
+            group.cwd,
+            ['worktree', 'list', '--porcelain', '-z'],
+            deadline,
+          )
+          raw = parseWorktreePorcelain(listed.stdout)
+          branches = await this.listBranches(group.cwd, deadline)
+          this.repoTopologyCache.set(commonDir, { listedRaw: raw, branches, at: this.now() })
+        }
         if (raw.length > MAX_WORKTREES_PER_REPOSITORY) {
           errors.push({
             code: 'snapshot-worktree-limit',
@@ -1121,10 +1291,25 @@ export class GitWorktreeCore {
               path,
             })
           }
-          const workspace = matches[0]
+          let workspace: WorkspaceFact | undefined = matches[0]
+          if (workspace === undefined && pathAvailable === false) {
+            // A worktree whose directory no longer exists (externally deleted
+            // worktree with surviving git metadata) cannot canonical-match —
+            // the workspace at that path also failed realpath and is NOT in
+            // the canonical group. Fall back to a RAW registry-path
+            // comparison so the orphan stays associated with its workspace
+            // row instead of leaking into the unregistered block
+            // (cross-review P1-1: it would otherwise show twice — as an
+            // orphan workspace AND as an unregistered 'missing' row — and the
+            // badge delete could not converge).
+            workspace = state.workspaces.find(candidate => candidate.path === entry.path)
+          }
           if (workspace !== undefined) associated.add(workspace.workspaceId)
 
           let dirty: boolean | null = null
+          let upstream: string | null = null
+          let ahead = 0
+          let behind = 0
           let statusUnhealthy: Extract<GitWorktreeState, 'not-a-repo' | 'invalid'> | null = null
           if (pathAvailable && !entry.bare) {
             if (this.now() >= deadline) {
@@ -1144,9 +1329,23 @@ export class GitWorktreeCore {
               }
             } else {
               try {
-                dirty = (await this.snapshotGitChecked(path, [
-                  'status', '--porcelain=v1', '-z', '--untracked-files=normal',
-                ], deadline, SNAPSHOT_STATUS_TIMEOUT_MS)).stdout.length > 0
+                const statusOutput = (await this.snapshotGitChecked(path, [
+                  'status', '--porcelain=v1', '-z', '--branch', '--untracked-files=normal',
+                ], deadline, SNAPSHOT_STATUS_TIMEOUT_MS)).stdout
+                // With --branch the first NUL-terminated field is the header;
+                // anything after it is a real porcelain entry (dirty).
+                const nul = statusOutput.indexOf('\0')
+                const headerLine = nul >= 0 ? statusOutput.slice(0, nul) : statusOutput
+                // INVARIANT: `--branch` always emits the header NUL-terminated
+                // (verified against git 2.50.1: clean = `## main\0`). A
+                // header without a trailing NUL is therefore treated as clean
+                // (a lone bare header), never dirty — fail in the safe
+                // direction (review P2-1).
+                dirty = nul >= 0 && statusOutput.length > nul + 1
+                const branchFacts = parseBranchLine(headerLine)
+                upstream = branchFacts.upstream
+                ahead = branchFacts.ahead
+                behind = branchFacts.behind
               } catch (error) {
                 if (error instanceof GitWorktreeError && error.code === 'snapshot-deadline') {
                   statusDeadlineReported = true
@@ -1199,6 +1398,9 @@ export class GitWorktreeCore {
             locked: entry.locked,
             status,
             headState,
+            upstream,
+            ahead,
+            behind,
             attention,
             workspaceId: workspace?.workspaceId ?? null,
             sessionIds,
@@ -1223,6 +1425,7 @@ export class GitWorktreeCore {
           commonDir,
           mainPath: worktrees[0]!.path,
           worktrees,
+          branches,
         })
       } catch (error) {
         errors.push({
@@ -1258,20 +1461,32 @@ export class GitWorktreeCore {
       const main = topology.worktrees[0]!
       if (main.bare) fail('bare-repository', 'bare repositories cannot own linked worktrees')
 
-      const parent = dirname(topology.mainPath)
-      const targetPath = resolve(parent, input.basename)
-      if (dirname(targetPath) !== parent) fail('unsafe-path', 'target escaped the main checkout parent')
+      const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir)
+      const targetPath = resolve(targetRoot, input.basename)
+      if (!targetPath.startsWith(`${targetRoot}${sep}`)) fail('unsafe-path', 'target escaped the unified worktree root')
       await this.assertPathAbsent(targetPath)
       await this.assertBranchFormat(topology.mainPath, input.branch.name)
 
       const branchHead = await this.localBranchHead(topology.mainPath, input.branch.name)
+      let startHead: string
       if (input.branch.kind === 'existing') {
         if (branchHead === null) fail('branch-not-found', `local branch '${input.branch.name}' does not exist`)
         if (topology.worktrees.some(worktree => worktree.branch === input.branch.name)) {
           fail('branch-checked-out', `local branch '${input.branch.name}' is already checked out`)
         }
-      } else if (branchHead !== null) {
-        fail('branch-exists', `local branch '${input.branch.name}' already exists`)
+        startHead = branchHead
+      } else {
+        if (branchHead !== null) fail('branch-exists', `local branch '${input.branch.name}' already exists`)
+        // OpenChamber sourceBranch: the new branch starts from the chosen
+        // local branch's head (pinned as an exact commit), defaulting to the
+        // main checkout HEAD.
+        if (input.startRef !== undefined) {
+          const startHeadOf = await this.localBranchHead(topology.mainPath, input.startRef)
+          if (startHeadOf === null) fail('branch-not-found', `source branch '${input.startRef}' does not exist`)
+          startHead = startHeadOf
+        } else {
+          startHead = main.head
+        }
       }
 
       this.pruneCaches()
@@ -1287,7 +1502,8 @@ export class GitWorktreeCore {
         targetPath,
         branch: input.branch.name,
         branchMode: input.branch.kind,
-        baseHead: input.branch.kind === 'existing' ? branchHead! : main.head,
+        baseHead: startHead,
+        startRef: input.branch.kind === 'new' ? input.startRef : undefined,
         sourceWorkspaceId: input.sourceWorkspaceId,
         basename: input.basename,
         createdAt,
@@ -1300,6 +1516,7 @@ export class GitWorktreeCore {
   /** Create exactly the previewed worktree, with bounded same-process TTL idempotency. */
   async create(untrusted: CreateInput): Promise<CreateResult> {
     const input = parseCreateInput(untrusted)
+    this.clearDiscoveryCaches()
     this.pruneCaches()
     const existing = this.createOperations.get(input.operationId)
     let preview: PreviewRecord
@@ -1380,6 +1597,7 @@ export class GitWorktreeCore {
    */
   async rollbackCreate(untrusted: RollbackCreateInput): Promise<RollbackCreateResult> {
     const input = parseRollbackInput(untrusted)
+    this.clearDiscoveryCaches()
     this.pruneCaches()
     const record = this.createOperations.get(input.operationId)
     if (record === undefined) fail('operation-not-found', 'no create operation can authorize this rollback')
@@ -1422,6 +1640,7 @@ export class GitWorktreeCore {
   async remove(untrusted: RemoveInput): Promise<RemoveResult> {
     const input = parseRemoveInput(untrusted)
     const fingerprint = objectFingerprint(input)
+    this.clearDiscoveryCaches()
     this.pruneCaches()
     const existing = this.removeOperations.get(input.operationId)
     if (existing !== undefined) {
@@ -1444,6 +1663,7 @@ export class GitWorktreeCore {
       state: 'ready',
       updatedAt: this.now(),
       attemptedRemove: false,
+      branchDeleteAttempted: false,
     }
     this.removeOperations.set(input.operationId, record)
     record.state = 'removing'
@@ -1540,8 +1760,9 @@ export class GitWorktreeCore {
       if (topology.commonDir !== preview.commonDir || topology.mainPath !== preview.mainPath) {
         fail('preview-stale', 'repository identity changed after preview')
       }
-      const targetPath = resolve(dirname(topology.mainPath), preview.basename)
-      if (targetPath !== preview.targetPath || dirname(targetPath) !== dirname(topology.mainPath)) {
+      const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir)
+      const targetPath = resolve(targetRoot, preview.basename)
+      if (targetPath !== preview.targetPath || !targetPath.startsWith(`${this.worktreesRoot}${sep}`)) {
         fail('preview-stale', 'target identity changed after preview')
       }
 
@@ -1598,6 +1819,9 @@ export class GitWorktreeCore {
               ? 'the confirmed worktree disappeared while its preserved branch remains'
               : 'new branch now exists without confirmed operation provenance',
           )
+        } else if (preview.startRef !== undefined) {
+          const startHead = await this.localBranchHead(topology.mainPath, preview.startRef)
+          if (startHead !== preview.baseHead) fail('preview-stale', 'source branch moved after preview')
         } else if (topology.worktrees[0]!.head !== preview.baseHead) {
           fail('preview-stale', 'main checkout moved after preview')
         }
@@ -1623,6 +1847,7 @@ export class GitWorktreeCore {
       }
       operation.attemptedCreate = true
 
+      await this.ensureWorktreeRoot(targetRoot)
       const args = preview.branchMode === 'existing'
         ? ['worktree', 'add', '--', targetPath, preview.branch]
         : ['worktree', 'add', '-b', preview.branch, '--', targetPath, preview.baseHead]
@@ -1769,14 +1994,67 @@ export class GitWorktreeCore {
       })
     }
 
+    // UNREGISTERED removal (Plan A): the worktree has no dsh workspace —
+    // discover from the explicit path, keep every git-level guard, skip the
+    // workspace preflight/session guards and return next: 'none'.
+    if (input.workspaceId === undefined) {
+      const unregisteredPath = input.path
+      if (unregisteredPath === undefined) fail('invalid-input', 'input.path is required for an unregistered removal')
+      const discovered = await this.discover(unregisteredPath)
+      return await this.mutex.run(discovered.commonDir, async () => {
+        const state = await this.readSource()
+        const canonicalPath = await this.existingPath(unregisteredPath)
+        await this.assertNoRunningAtPath(canonicalPath, state)
+        // Fail-closed mirror of the registered branch (P1-3): the target must
+        // NOT be registered as a workspace — a workspace AT the path or
+        // INSIDE it blocks the unregistered removal (an adoption between the
+        // snapshot and this action must not be silently deleted).
+        for (const candidate of state.workspaces) {
+          const candidatePath = await this.existingPath(candidate.path).catch(() => null)
+          if (candidatePath === null) continue
+          if (candidatePath === canonicalPath || candidatePath.startsWith(`${canonicalPath}${sep}`)) {
+            fail('workspace-registered', 'the target worktree is already registered as a workspace')
+          }
+        }
+        const topology = await this.topology(canonicalPath)
+        if (topology.commonDir !== discovered.commonDir) fail('expected-mismatch', 'worktree changed repositories')
+        const repoId = opaqueId('repo', topology.commonDir)
+        if (repoId !== input.expected.repoId) fail('expected-mismatch', 'repository identity changed')
+        const target = topology.worktrees.find(worktree => worktree.path === canonicalPath)
+        if (target === undefined) fail('worktree-not-found', 'path is not an exact worktree root')
+        const worktreeId = opaqueId('worktree', topology.commonDir, target.path)
+        if (worktreeId !== input.expected.worktreeId) fail('expected-mismatch', 'worktree identity changed')
+        if (target === topology.worktrees[0]) fail('main-worktree', 'the main checkout cannot be removed')
+        if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
+        if (target.branch !== input.expected.branch) fail('expected-mismatch', 'worktree branch changed')
+        if (target.head !== input.expected.head) fail('expected-mismatch', 'worktree HEAD changed')
+        if (await this.isDirty(target.path)) fail('worktree-dirty', 'dirty worktrees cannot be removed')
+        const intent: RemoveIntent = {
+          repoId,
+          worktreeId,
+          commonDir: topology.commonDir,
+          mainPath: topology.mainPath,
+          path: target.path,
+          branch: target.branch,
+          head: target.head,
+          sessionIds: [],
+          deleteBranch: input.deleteBranch,
+        }
+        operation.intent = intent
+        return await this.commitBoundRemove(input.operationId, operation, intent, replayed)
+      })
+    }
+
+    // Registered branch: workspaceId is present (narrowed for the checks).
+    const registeredWorkspaceId = input.workspaceId
     const initialState = await this.readSource()
-    const initialWorkspace = this.workspace(initialState, input.workspaceId)
+    const initialWorkspace = this.workspace(initialState, registeredWorkspaceId)
     const discovered = await this.discover(initialWorkspace.path)
     return await this.mutex.run(discovered.commonDir, async () => {
       let state = await this.readSource()
-      let workspace = this.workspace(state, input.workspaceId)
+      let workspace = this.workspace(state, registeredWorkspaceId)
       const workspacePath = await this.existingPath(workspace.path)
-      await this.assertNoOtherWorkspaceWithin(state, workspacePath, input.workspaceId)
+      await this.assertNoOtherWorkspaceWithin(state, workspacePath, registeredWorkspaceId)
       this.assertNoRunningSessions(workspace, state.runningSessionIds)
       await this.assertNoRunningAtPath(workspacePath, state)
 
@@ -1798,11 +2076,11 @@ export class GitWorktreeCore {
       // running associated agent, remove only Git state, and return enough
       // identity for the client to perform workspace.delete next.
       state = await this.readSource()
-      workspace = this.workspace(state, input.workspaceId)
+      workspace = this.workspace(state, registeredWorkspaceId)
       if (await this.existingPath(workspace.path) !== workspacePath) {
         fail('expected-mismatch', 'workspace path changed during removal')
       }
-      await this.assertNoOtherWorkspaceWithin(state, workspacePath, input.workspaceId)
+      await this.assertNoOtherWorkspaceWithin(state, workspacePath, registeredWorkspaceId)
       this.assertNoRunningSessions(workspace, state.runningSessionIds)
       await this.assertNoRunningAtPath(workspacePath, state)
       const sessionIds = [...workspace.sessionIds]
@@ -1818,10 +2096,32 @@ export class GitWorktreeCore {
         branch: target.branch,
         head: target.head,
         sessionIds,
+        deleteBranch: input.deleteBranch,
       }
       operation.intent = intent
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed)
     })
+  }
+
+  /** Best-effort optional branch deletion after a removal, once per
+   *  operation (design 08 §11 user decision). Called from every terminal
+   *  removal path — including the target-absent replay paths — so a removal
+   *  that committed before a failure still reports the branch outcome
+   *  honestly (branchDeleted / branchDeleteFailed on the result). */
+  private async attemptBranchDelete(
+    operation: RemoveOperationRecord,
+    intent: RemoveIntent,
+    mainPath: string,
+  ): Promise<void> {
+    if (intent.deleteBranch === undefined || operation.branchDeleteAttempted) return
+    operation.branchDeleteAttempted = true
+    try {
+      await this.assertBranchFormat(mainPath, intent.deleteBranch)
+      await this.gitChecked(mainPath, ['branch', '-D', intent.deleteBranch], true)
+      intent.branchDeleted = true
+    } catch {
+      intent.branchDeleteFailed = true
+    }
   }
 
   /** Reconcile a removal whose Git subprocess may have committed before failure. */
@@ -1842,6 +2142,7 @@ export class GitWorktreeCore {
       // client delete a different durable record.
       const state = await this.readSource()
       await this.assertRemovedWorkspaceReceipt(intent, state)
+      await this.attemptBranchDelete(operation, intent, topology.mainPath)
       return this.removeResult(input.operationId, intent, true)
     }
 
@@ -1856,6 +2157,16 @@ export class GitWorktreeCore {
     if (target === topology.worktrees[0]) fail('operation-conflict', 'bound linked worktree became the main checkout')
     if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
     if (await this.isDirty(target.path)) fail('worktree-dirty', 'dirty worktrees cannot be removed')
+
+    if (input.workspaceId === undefined) {
+      // UNREGISTERED replay: no workspace — skip the registry/workspace
+      // guards, keep the path-level running check and the identity checks.
+      const state = await this.readSource()
+      const canonicalPath = await this.existingPath(intent.path)
+      await this.assertNoRunningAtPath(canonicalPath, state)
+      operation.intent = intent
+      return await this.commitBoundRemove(input.operationId, operation, intent, replayed)
+    }
 
     const state = await this.readSource()
     const workspace = this.workspace(state, input.workspaceId)
@@ -1893,6 +2204,7 @@ export class GitWorktreeCore {
       // not gain membership or liveness during that window.
       const state = await this.readSource()
       await this.assertRemovedWorkspaceReceipt(intent, state)
+      await this.attemptBranchDelete(operation, intent, finalTopology.mainPath)
       return this.removeResult(operationIdValue, intent, true)
     }
     if (finalTarget === finalTopology.worktrees[0]
@@ -1912,6 +2224,9 @@ export class GitWorktreeCore {
       || after.worktrees.some(worktree => worktree.path === intent.path)) {
       fail('postcondition-failed', 'Git still reports the removed worktree or repository identity changed')
     }
+    // Optional branch deletion (design 08 §11 user decision): best-effort,
+    // once per operation. A failure is honest (the worktree removal stands).
+    await this.attemptBranchDelete(operation, intent, finalTopology.mainPath)
     return this.removeResult(operationIdValue, intent, replayed)
   }
 
@@ -1920,7 +2235,7 @@ export class GitWorktreeCore {
       operationId: operationIdValue,
       removed: true,
       replayed,
-      workspaceId: intent.workspaceId,
+      ...(intent.workspaceId === undefined ? {} : { workspaceId: intent.workspaceId }),
       repoId: intent.repoId,
       worktreeId: intent.worktreeId,
       commonDir: intent.commonDir,
@@ -1928,9 +2243,37 @@ export class GitWorktreeCore {
       branch: intent.branch,
       head: intent.head,
       sessionIds: [...intent.sessionIds],
-      next: 'delete-workspace',
+      next: intent.workspaceId === undefined ? 'none' : 'delete-workspace',
       branchPreserved: true,
+      ...(intent.branchDeleted === true ? { branchDeleted: true } : {}),
+      ...(intent.branchDeleteFailed === true ? { branchDeleteFailed: true } : {}),
     }
+  }
+
+  /** Repo-specific worktree subdirectory: `<root>/<repo-name>-<hash12>` — a
+   *  unified location keyed by the repository identity (common dir), so two
+   *  same-named repositories never block each other, and never inside a
+   *  working tree (git status stays clean). */
+  private worktreeRootFor(mainPath: string, commonDir: string): string {
+    const repoName = basename(mainPath) || 'repo'
+    const digest = createHash('sha256').update(commonDir).digest('hex').slice(0, 12)
+    return join(this.worktreesRoot, `${repoName}-${digest}`)
+  }
+
+  /** Ensure the unified worktree root exists before `git worktree add`
+   *  (git requires the parent directory; mkdir is recursive + idempotent). */
+  private async ensureWorktreeRoot(root: string): Promise<void> {
+    try {
+      await this.fs.mkdir(root)
+    } catch {
+      // mkdir failure surfaces at the actual git worktree add; the root may
+      // legitimately exist already (recursive mkdir is idempotent).
+    }
+  }
+
+  private clearDiscoveryCaches(): void {
+    this.workspaceDiscoverCache.clear()
+    this.repoTopologyCache.clear()
   }
 
   private async readSource(): Promise<SourceSnapshot> {
@@ -2130,11 +2473,15 @@ export class GitWorktreeCore {
       let canonical: string
       try {
         canonical = await this.existingPath(workspace.path)
-      } catch (error) {
-        fail(
-          'workspace-path-unavailable',
-          `cannot safely resolve workspace '${workspace.workspaceId}' before removal: ${safeErrorMessage(error)}`,
-        )
+      } catch {
+        // A VANISHED workspace (externally deleted worktree left a ghost
+        // registration) can neither contain the target nor be contained by
+        // it — skip it instead of failing the whole removal. One failed
+        // entity must not block unrelated ones (AGENTS); the unregistered
+        // removal branch already tolerates this exact case (review 2026-08:
+        // an orphan workspace was blocking EVERY registered removal on the
+        // source, and the retryable error wedged the source in recovery).
+        continue
       }
       if (this.containsPath(target, canonical)) {
         fail('nested-workspace', `worktree contains workspace '${workspace.workspaceId}'`)
@@ -2240,10 +2587,15 @@ export class GitWorktreeCore {
     if (result.exitCode !== 0) fail('invalid-branch', `Git rejected local branch '${branch}'`)
   }
 
+  /** Local branch head, or null when the branch does not exist. Git versions
+   *  disagree on the missing-ref exit code (`show-ref --verify` exits 1 in
+   *  some, 128 with `fatal: ... not a valid ref` in others) — ANY non-zero
+   *  exit means "branch absent" for this fixed invocation; a genuinely broken
+   *  git would have failed the earlier rev-parse/worktree reads already.
+   *  (2026-08 fix: exit 128 was misreported as a hard git-command-failed.) */
   private async localBranchHead(cwd: string, branch: string): Promise<string | null> {
     const result = await this.gitCommand(cwd, ['show-ref', '--hash', '--verify', `refs/heads/${branch}`])
-    if (result.exitCode === 1) return null
-    if (result.exitCode !== 0) this.gitExitError(result, 'show-ref')
+    if (result.exitCode !== 0) return null
     const head = this.singleLine(result.stdout, 'local branch head').toLowerCase()
     if (!/^[0-9a-f]{40,64}$/u.test(head)) fail('git-protocol-error', 'Git returned an invalid local branch head')
     return head
@@ -2273,6 +2625,26 @@ export class GitWorktreeCore {
     const result = await this.gitCommand(cwd, args, false, Math.max(1, Math.min(perCommandLimit, remaining)))
     if (result.exitCode !== 0) this.gitExitError(result, args[0] ?? 'unknown')
     return result
+  }
+
+  /** Local branch names for the existing-branch picker (`show-ref --heads`).
+   *  A convenience read: any failure (git down, budget exhausted) yields an
+   *  empty list and must never fail or stall the snapshot. */
+  private async listBranches(cwd: string, deadline: number): Promise<string[]> {
+    if (this.now() >= deadline) return []
+    let result: GitCommandResult
+    try {
+      result = await this.gitCommand(cwd, ['show-ref', '--heads'], false, READ_TIMEOUT_MS)
+    } catch {
+      return []
+    }
+    if (result.exitCode !== 0) return []
+    const branches: string[] = []
+    for (const line of result.stdout.split('\n')) {
+      const match = /^[0-9a-fA-F]{40,64}\s+refs\/heads\/(.+)$/u.exec(line)
+      if (match !== null && match[1] !== '' && !match[1]!.startsWith('-')) branches.push(match[1]!)
+    }
+    return branches
   }
 
   private async gitCommand(

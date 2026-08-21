@@ -99,6 +99,7 @@ export async function runCreateSaga(
   deps: CreateSagaDeps,
   preview: PreviewCreateResult,
   ids: CreateSagaIds,
+  options: { createSession?: boolean; sourceWorkspaceId?: string } = {},
 ): Promise<{ sessionId: string; workspaceId: string; path: string }> {
   let created: CreateWorktreeResult
   try {
@@ -112,6 +113,8 @@ export async function runCreateSaga(
         operationId: ids.operationId,
         sessionId: ids.sessionId,
         message: errorText(createError),
+        createSession: options.createSession !== false,
+        ...(options.sourceWorkspaceId === undefined ? {} : { sourceWorkspaceId: options.sourceWorkspaceId }),
       }, true)
     }
     throw new GitSagaError(createError)
@@ -150,16 +153,24 @@ export async function runCreateSaga(
     throw new GitSagaError(workspaceError, undefined, true, false)
   }
 
-  try {
-    await createExactSession(deps.sessionCreate, workspace.workspaceId, ids.sessionId)
-  } catch (sessionError) {
-    throw new GitSagaError(sessionError, {
-      kind: 'session-create',
-      workspaceId: workspace.workspaceId,
-      path: workspace.path,
-      sessionId: ids.sessionId,
-      message: errorText(sessionError),
-    }, true)
+  // OpenChamber-aligned create (design 08 §11): an ordinary create registers
+  // the worktree workspace WITHOUT committing a session — the workspace
+  // appears immediately (0 sessions) and the user starts sessions in it
+  // afterwards. `createSession: false` skips the session step entirely (and
+  // the caller then skips the open); the preallocated session id is simply
+  // unused. The session step, when taken, keeps its never-compensate boundary.
+  if (options.createSession !== false) {
+    try {
+      await createExactSession(deps.sessionCreate, workspace.workspaceId, ids.sessionId)
+    } catch (sessionError) {
+      throw new GitSagaError(sessionError, {
+        kind: 'session-create',
+        workspaceId: workspace.workspaceId,
+        path: workspace.path,
+        sessionId: ids.sessionId,
+        message: errorText(sessionError),
+      }, true)
+    }
   }
   return { sessionId: ids.sessionId, workspaceId: workspace.workspaceId, path: workspace.path }
 }
@@ -291,6 +302,9 @@ export interface RemoveSagaDeps {
   /** Same operation replay: freshly verifies absence + registry identity/liveness. */
   verifyTerminalRemove(): Promise<RemoveWorktreeResult>
   workspaceDelete(workspaceId: string): Promise<void>
+  /** The original removal's optional branch deletion — echoed onto the
+   *  workspace-delete recovery so a replay fingerprint matches (P1-1). */
+  deleteBranch?: string
   ambiguousRecovery(error: unknown): Extract<GitRecovery, { kind: 'git-remove' }> | undefined
 }
 
@@ -333,10 +347,13 @@ export async function runRemoveSaga(deps: RemoveSagaDeps): Promise<RemoveWorktre
     const recovery = deps.ambiguousRecovery(removeError)
     throw new GitSagaError(removeError, recovery, recovery !== undefined)
   }
+  if (removed.next === 'none') return removed
   const deleteRecovery: Extract<GitRecovery, { kind: 'workspace-delete' }> = {
     kind: 'workspace-delete',
     operationId: removed.operationId,
-    workspaceId: removed.workspaceId,
+    // next === 'delete-workspace' here (early-returned on 'none' above).
+    workspaceId: removed.workspaceId!,
+    ...(deps.deleteBranch === undefined ? {} : { deleteBranch: deps.deleteBranch }),
     expected: {
       repoId: removed.repoId,
       worktreeId: removed.worktreeId,
@@ -359,7 +376,7 @@ export async function runRemoveSaga(deps: RemoveSagaDeps): Promise<RemoveWorktre
     }, true)
   }
   try {
-    await deps.workspaceDelete(removed.workspaceId)
+    await deps.workspaceDelete(removed.workspaceId!)
   } catch (workspaceError) {
     throw new GitSagaError(workspaceError, {
       ...deleteRecovery,

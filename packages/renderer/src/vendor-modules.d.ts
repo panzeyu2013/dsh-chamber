@@ -272,6 +272,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     connected: boolean
     phase: string
     workspaces: ChamberServerWorkspace[]
+    aggregateReady?: boolean
     aggregateError?: string
     runtime?: InstanceRuntimeReport
     pluginDiagnostic?: PluginGraphDiagnostic

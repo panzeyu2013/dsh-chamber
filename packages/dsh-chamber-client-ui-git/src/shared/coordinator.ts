@@ -8,18 +8,20 @@
  */
 import {
   archiveSession, chamberBridge, createSession, createWorkspace, deleteWorkspace,
+  insertWorkspaceBefore, renameWorkspace,
+  clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
   fetchInstanceSnapshot, getInstanceClient, InstanceRpcError,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
-import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure } from './git-api.ts'
+import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
 import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
 import {
   GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
 import type {
-  GitBusyState, GitRecovery, GitSourceError, GitSourceState, PreviewCreateInput, PreviewCreateResult,
+  GitBusyState, GitRecovery, GitSourceError, GitSourceState, GitWorktreeInfo, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult, RemoveWorktreeResult, UnregisteredWorktreeInfo,
 } from './types.ts'
 
 const POLL_MS = 30_000
@@ -73,8 +75,109 @@ function bumpSourceEpoch(sourceId: string): number {
   return next
 }
 
+/** Publish per-workspace git flags to the sidebar's neutral registry
+ *  (design 08 §11): which workspaces are worktrees / the main checkout.
+ *  Workspaces with no git association get their flag cleared. */
+function pathBasename(path: string): string {
+  const trimmed = path.replace(/\/+$/u, '')
+  const index = trimmed.lastIndexOf('/')
+  return index >= 0 ? trimmed.slice(index + 1) : trimmed
+}
+
+function publishWorkspaceGitFlags(
+  sourceId: string,
+  snapshot: GitWorktreeSnapshot,
+  previous?: GitWorktreeSnapshot,
+): void {
+  // Refresh per snapshot WITHOUT a leading full clear: the worktree flags are
+  // re-set, the orphan markers MERGE onto the previous identity (an
+  // externally-deleted worktree leaves its workspace orphaned but still a
+  // worktree — branch glyph + "已消失" badge, review 2026-08), then the
+  // truly-stale flags are pruned by the keep set.
+  const keep = new Set<string>()
+  const layouts: Array<{ repoKey: string; mainWorkspaceId: string | null; unregistered: UnregisteredWorktreeInfo[] }> = []
+  for (const repo of snapshot.repos) {
+    const mainWorkspaceId = repo.worktrees.find(worktree => worktree.isMain)?.workspaceId ?? null
+    const unregistered: UnregisteredWorktreeInfo[] = []
+    for (const worktree of repo.worktrees) {
+      if (worktree.workspaceId === null) {
+        // The MAIN checkout is never an unregistered worktree — it may
+        // simply have no dsh workspace of its own (user report 2026-08).
+        if (worktree.isMain) continue
+        unregistered.push({
+          name: pathBasename(worktree.path) || worktree.path,
+          worktreeId: worktree.worktreeId,
+          branch: worktree.branch,
+          status: worktree.status,
+          headState: worktree.headState,
+          attention: [...worktree.attention],
+          dirty: worktree.dirty,
+          head: worktree.head,
+        })
+        continue
+      }
+      setWorkspaceGitFlag(sourceId, worktree.workspaceId, {
+        isWorktree: !worktree.isMain,
+        isMain: worktree.isMain,
+        repoKey: repo.repoId,
+        ...(!worktree.isMain && mainWorkspaceId !== null ? { mainWorkspaceId } : {}),
+      })
+      keep.add(worktree.workspaceId)
+    }
+    layouts.push({ repoKey: repo.repoId, mainWorkspaceId, unregistered })
+  }
+  // Orphaned workspaces: inside a repository whose path no longer exists
+  // (externally deleted worktree left a registration) — surfaced by the
+  // snapshot's discovery failures. MERGE onto the PREVIOUS flag (which
+  // survived — no leading clear): the orphan keeps its worktree identity
+  // (branch glyph / no kebab / git title) + the "已消失" badge.
+  // NOTE (2026-08): the host reports a missing path as 'path-unavailable'
+  // (a GitWorktreeError code); 'workspace-path-failed' is only the fallback
+  // for NON-GitWorktreeError failures. Both must mark the workspace orphaned.
+  for (const error of snapshot.errors) {
+    if ((error.code === 'path-unavailable' || error.code === 'workspace-path-failed')
+      && error.workspaceId !== undefined) {
+      const existing = getWorkspaceGitFlag(sourceId, error.workspaceId)
+      setWorkspaceGitFlag(sourceId, error.workspaceId, {
+        isWorktree: existing?.isWorktree === true,
+        isMain: existing?.isMain === true,
+        ...(existing?.mainWorkspaceId === undefined ? {} : { mainWorkspaceId: existing.mainWorkspaceId }),
+        ...(existing?.repoKey === undefined ? {} : { repoKey: existing.repoKey }),
+        orphaned: true,
+      })
+      keep.add(error.workspaceId)
+    }
+  }
+  // Repo-level failure inheritance (cross-review P2-2): when a repository's
+  // worktree listing fails/absents this round, its worktree workspaces would
+  // be pruned by the keep set (branch glyphs / delete buttons flicker away).
+  // Inherit the PREVIOUS snapshot's associations for repos missing now — the
+  // flags survive until a good snapshot re-publishes them.
+  if (previous !== undefined) {
+    const currentRepoKeys = new Set(snapshot.repos.map(repo => repo.repoId))
+    for (const repo of previous.repos) {
+      if (currentRepoKeys.has(repo.repoId)) continue
+      for (const worktree of repo.worktrees) {
+        if (worktree.workspaceId !== null) keep.add(worktree.workspaceId)
+      }
+    }
+  }
+  retainSourceWorkspaceFlags(sourceId, keep)
+  setSourceRepoLayouts(sourceId, layouts)
+}
+
 function connectedSource(sourceId: string): boolean {
   return chamberBridge.getServers().some(server => server.id === sourceId && server.connected)
+}
+
+/** Last-seen workspace id sets per source (design 08 §11): a workspace added
+ *  or removed without a connection change (e.g. the sidebar's add-workspace,
+ *  an adopt, or an external change) must trigger a git refresh immediately —
+ *  otherwise the new workspace's git line waits for the 30s poll. */
+const lastWorkspaceKeys = new Map<string, string>()
+
+function workspaceKeyOf(server: { id: string; workspaces: ReadonlyArray<{ id: string }> }): string {
+  return server.workspaces.map(workspace => workspace.id).sort().join(',')
 }
 
 function syncServers(): void {
@@ -97,9 +200,19 @@ function syncServers(): void {
         })
         refreshIds.push(server.id)
         changed = true
+      } else {
+        const key = workspaceKeyOf(server)
+        const previous = lastWorkspaceKeys.get(server.id)
+        if (previous !== key) {
+          // A connected source whose workspace set changed: refresh now so the
+          // git line for a new workspace appears without waiting for the poll.
+          lastWorkspaceKeys.set(server.id, key)
+          refreshIds.push(server.id)
+        }
       }
     } else if (current === undefined || current.connected || current.snapshot !== undefined || current.sourceError !== undefined) {
       bumpSourceEpoch(server.id)
+      clearWorkspaceGitFlags(server.id)
       states.set(server.id, {
         sourceId: server.id,
         connected: false,
@@ -108,6 +221,7 @@ function syncServers(): void {
         recovery: current?.recovery,
         actionError: current?.actionError,
       })
+      lastWorkspaceKeys.delete(server.id)
       changed = true
     }
   }
@@ -115,6 +229,7 @@ function syncServers(): void {
     if (!ids.has(sourceId)) {
       bumpSourceEpoch(sourceId)
       states.delete(sourceId)
+      lastWorkspaceKeys.delete(sourceId)
       changed = true
     }
   }
@@ -134,10 +249,22 @@ async function beginRefresh(sourceId: string): Promise<GitSourceState> {
     if ((sourceEpochs.get(sourceId) ?? 0) !== epoch || !connectedSource(sourceId)) {
       return states.get(sourceId) ?? { sourceId, connected: false, status: 'idle' }
     }
+    // An empty deadline result (snapshot-deadline) must never erase the last
+    // complete facts: keep the previous valid snapshot visibly stale beside
+    // the explicit error (AGENTS: one failed entity must not erase unrelated
+    // complete entities). A PARTIAL result (repos present) replaces the old
+    // one — fresh progress beats stale truth.
+    const previous = states.get(sourceId)?.snapshot
+    const staleEmpty = snapshot.sourceError !== undefined && snapshot.repos.length === 0 && previous !== undefined
+    // A deadline-stale snapshot must not clear the flags of the still-valid
+    // previous snapshot (drag boundaries / badges would vanish for up to 30s
+    // while the state keeps the old snapshot) — publish the EFFECTIVE one
+    // (review P2-4).
+    publishWorkspaceGitFlags(sourceId, staleEmpty ? previous : snapshot, previous)
     return patchSource(sourceId, {
       connected: true,
       status: snapshot.sourceError === undefined ? 'ready' : 'error',
-      snapshot,
+      snapshot: staleEmpty ? previous : snapshot,
       sourceError: snapshot.sourceError,
       updatedAt: Date.now(),
     })
@@ -193,6 +320,75 @@ function finishMutation(sourceId: string): void {
   void refreshSource(sourceId, true)
 }
 
+/** Best-effort post-adopt placement/identity (review 2026-08):
+ *  - `workspace.insertBefore` moves the new workspace right after its main
+ *    checkout (the registry PREPENDS by default, leaving the worktree
+ *    stranded at the list head — "not associated with the original
+ *    workspace");
+ *  - the title derives from the branch (the directory basename can equal
+ *    the main checkout's name);
+ *  - the flag + repo layout publish optimistically so the stale unregistered
+ *    "+" row cannot mint a second session before the git refresh lands.
+ */
+/** The workspace that currently follows `mainWorkspaceId` in the rendered
+ *  order — the `insertWorkspaceBefore` anchor that lands a new/adopted
+ *  worktree IMMEDIATELY BELOW its main checkout. `insertBefore` inserts
+ *  BEFORE its anchor (DOM-like), so anchoring on the main itself would land
+ *  the worktree ABOVE it; the correct anchor is the workspace AFTER the main
+ *  (or undefined = append-to-end when the main is last). The order is read
+ *  from the projection BEFORE the post-create refresh, i.e. the pre-create
+ *  wire order, which is exactly the "who follows the main" fact we need. */
+function workspaceAfterMain(sourceId: string, mainWorkspaceId: string | undefined): string | undefined {
+  if (mainWorkspaceId === undefined) return undefined
+  const order = chamberBridge.getServers().find(server => server.id === sourceId)
+    ?.workspaces.filter(workspace => workspace.ungrouped !== true).map(workspace => workspace.id) ?? []
+  const mainIndex = order.indexOf(mainWorkspaceId)
+  return mainIndex !== -1 && mainIndex + 1 < order.length ? order[mainIndex + 1] : undefined
+}
+
+async function positionAdoptedWorkspace(
+  sourceId: string,
+  result: { workspaceId: string; path: string },
+  snapshot: GitWorktreeSnapshot,
+  known: GitWorktreeInfo,
+): Promise<void> {
+  const repo = snapshot.repos.find(candidate => candidate.worktrees.some(worktree => worktree.path === result.path))
+  const mainWorkspaceId = repo?.worktrees.find(worktree => worktree.isMain)?.workspaceId ?? undefined
+  const client = getInstanceClient(sourceId)
+  // AWAITED (not fire-and-forget): the registry order must be correct BEFORE
+  // the caller refreshes, so the adopted worktree does not first render at the
+  // prepended head and only later jump below its main checkout.
+  try {
+    await insertWorkspaceBefore(client, result.workspaceId, workspaceAfterMain(sourceId, mainWorkspaceId))
+  } catch (error) {
+    console.error('[dsh-chamber] Git adopt workspace reposition failed (best-effort):', error)
+  }
+  if (known.branch !== null) {
+    // AWAITED (best-effort) too: the workspace title must be in place before
+    // the caller's refresh, same as the order — otherwise the adopted row can
+    // briefly show the stale directory-name title before it flips to the
+    // branch name.
+    try {
+      await renameWorkspace(client, result.workspaceId, known.branch)
+    } catch (error) {
+      console.error('[dsh-chamber] Git adopt workspace rename failed (best-effort):', error)
+    }
+  }
+  if (repo !== undefined) {
+    // Optimistic flag + layout: the unregistered block stops offering "+"
+    // for this path immediately (the next git refresh confirms).
+    setWorkspaceGitFlag(sourceId, result.workspaceId, {
+      isWorktree: true,
+      isMain: false,
+      repoKey: repo.repoId,
+      ...(mainWorkspaceId === undefined ? {} : { mainWorkspaceId }),
+    })
+    setSourceRepoLayouts(sourceId, getSourceRepoLayouts(sourceId).map(layout => layout.repoKey === repo.repoId
+      ? { ...layout, unregistered: layout.unregistered.filter(info => info.worktreeId !== known.worktreeId) }
+      : layout))
+  }
+}
+
 /** Opening is a one-way UI intent, never part of the durable saga outcome. */
 function requestOpenSession(sourceId: string, sessionId: string): void {
   try {
@@ -213,6 +409,8 @@ async function performCreateSaga(
   operationId: string,
   sessionId: string,
   previousRecovery?: Extract<GitRecovery, { kind: 'git-create' }>,
+  commitSession = true,
+  sourceWorkspaceId?: string,
 ): Promise<string> {
   try {
     const result = await runCreateSaga({
@@ -221,10 +419,28 @@ async function performCreateSaga(
       workspaceCreate: path => createWorkspace(getInstanceClient(sourceId), path),
       sessionCreate: (workspaceId, id) => createSession(getInstanceClient(sourceId), workspaceId, id),
       isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
-    }, preview, { operationId, sessionId })
+    }, preview, { operationId, sessionId }, {
+      createSession: commitSession,
+      ...(sourceWorkspaceId === undefined ? {} : { sourceWorkspaceId }),
+    })
     setRecovery(sourceId, undefined)
+    // Position the new worktree IMMEDIATELY BELOW its source (main) checkout
+    // — the wire PREPENDS new workspaces to the registry head, and
+    // `insertBefore` anchors on the workspace that must FOLLOW the moved id,
+    // so the anchor is the workspace after the main (never the main itself).
+    // AWAITED so the registry order is correct before the refresh below;
+    // best-effort (a reposition failure never rolls back the committed worktree).
+    if (sourceWorkspaceId !== undefined) {
+      try {
+        await insertWorkspaceBefore(getInstanceClient(sourceId), result.workspaceId, workspaceAfterMain(sourceId, sourceWorkspaceId))
+      } catch (error) {
+        console.error('[dsh-chamber] Git create workspace reposition failed (best-effort):', error)
+      }
+    }
     finishMutation(sourceId)
-    requestOpenSession(sourceId, result.sessionId)
+    // Opening is a one-way UI intent tied to a committed session — never when
+    // the create was session-less (the empty workspace just appeared).
+    if (commitSession) requestOpenSession(sourceId, result.sessionId)
     return result.sessionId
   } catch (error) {
     if (error instanceof GitSagaError) {
@@ -236,11 +452,15 @@ async function performCreateSaga(
 }
 
 /** Execute the create saga. Navigation is fire-and-forget and never a rollback boundary. */
-export async function createFromPreview(sourceId: string, preview: PreviewCreateResult): Promise<string> {
+export async function createFromPreview(
+  sourceId: string,
+  preview: PreviewCreateResult,
+  options?: { createSession?: boolean; sourceWorkspaceId?: string },
+): Promise<string> {
   const operationId = nextId('create')
   const sessionId = nextId('session')
   return runBusy(sourceId, { kind: 'create', operationId }, () => (
-    performCreateSaga(sourceId, preview, operationId, sessionId)
+    performCreateSaga(sourceId, preview, operationId, sessionId, undefined, options?.createSession, options?.sourceWorkspaceId)
   ))
 }
 
@@ -268,6 +488,13 @@ export async function createSessionHere(sourceId: string, path: string): Promise
         sessionCreate: (workspaceId, id) => createSession(getInstanceClient(sourceId), workspaceId, id),
       }, path, sessionId)
       setRecovery(sourceId, undefined)
+      // Position + identity (review 2026-08): the wire PREPENDS new
+      // workspaces (registry order head) — the adopted worktree must sit
+      // right AFTER its main checkout, and its title should be the branch
+      // (the directory basename can equal the main's name). Both are
+      // best-effort: a failure never rolls back the committed workspace.
+      // AWAITED so the refresh below reads the corrected registry order.
+      await positionAdoptedWorkspace(sourceId, result, fresh.snapshot, known)
       finishMutation(sourceId)
       requestOpenSession(sourceId, result.sessionId)
       return result.sessionId
@@ -294,26 +521,36 @@ async function performRemoveSaga(
   sourceId: string,
   request: RemoveRecoveryInput,
   previousRecovery?: Extract<GitRecovery, { kind: 'git-remove' }>,
-): Promise<void> {
+): Promise<RemoveWorktreeResult> {
   try {
-    await runRemoveSaga({
+    return await runRemoveSaga({
       hostRemove: () => gitWorktreeApi.remove(sourceId, {
         operationId: request.operationId,
         workspaceId: request.workspaceId,
         expected: request.expected,
+        // UNREGISTERED removal: the input itself must carry the path (the
+        // host fingerprints the whole input — a path-less replay mismatch
+        // would permanently wedge recovery, review P1-2).
+        ...(request.workspaceId === undefined ? { path: request.path } : {}),
+        ...(request.deleteBranch === undefined ? {} : { deleteBranch: request.deleteBranch }),
       }, request.path),
       verifyTerminalRemove: () => gitWorktreeApi.remove(sourceId, {
         operationId: request.operationId,
         workspaceId: request.workspaceId,
         expected: request.expected,
+        ...(request.workspaceId === undefined ? { path: request.path } : {}),
+        ...(request.deleteBranch === undefined ? {} : { deleteBranch: request.deleteBranch }),
       }, request.path),
       workspaceDelete: id => deleteWorkspace(getInstanceClient(sourceId), id),
-      ambiguousRecovery: error => isAmbiguousGitRpcFailure(error)
+      deleteBranch: request.deleteBranch,
+      ambiguousRecovery: error => isAmbiguousGitRpcFailure(error) && !isDeterministicGitRejection(error)
         ? { kind: 'git-remove', ...request, message: errorText(error) }
         : undefined,
+    }).then(result => {
+      setRecovery(sourceId, undefined)
+      finishMutation(sourceId)
+      return result
     })
-    setRecovery(sourceId, undefined)
-    finishMutation(sourceId)
   } catch (error) {
     if (error instanceof GitSagaError) {
       setRecovery(sourceId, recoveryForFailure(error, previousRecovery))
@@ -323,12 +560,23 @@ async function performRemoveSaga(
   }
 }
 
+/** True when `sessionId` is the source's current session AND it is a BLANK
+ *  (never-submitted) session — a blank current session must not block worktree
+ *  removal (it carries no content worth protecting). */
+export function currentSessionIsBlank(sourceId: string, sessionId: string | undefined): boolean {
+  if (sessionId === undefined) return false
+  const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
+  if (server === undefined) return false
+  return server.workspaces.some(workspace =>
+    workspace.sessions.some(session => session.id === sessionId && session.blank === true))
+}
+
 /** Git-first safe remove; workspace-delete failure becomes explicit recovery. */
 export async function removeWorktree(
   sourceId: string,
   target: RemoveTarget,
-  options: { archiveSessions?: boolean } = {},
-): Promise<void> {
+  options: { archiveSessions?: boolean; deleteBranch?: string } = {},
+): Promise<RemoveWorktreeResult> {
   const operationId = nextId('remove')
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
     const fresh = await refreshSource(sourceId, true)
@@ -338,7 +586,7 @@ export async function removeWorktree(
     const found = findWorktree(fresh.snapshot, target.repoId, target.worktreeId)
     if (found === undefined) throw new Error('工作树已不存在；请刷新后重试')
     const current = chamberBridge.getServers().find(server => server.id === sourceId)?.runtime?.current
-    const blocked = removeBlockReason(found.worktree, current)
+    const blocked = removeBlockReason(found.worktree, current, currentSessionIsBlank(sourceId, current))
     if (blocked === 'main') throw new Error('主工作树不能删除')
     if (blocked === 'unregistered') throw new Error('该工作树未关联 dsh workspace，不能从此处删除')
     if (blocked === 'running') throw new Error('该工作树仍有运行中的会话')
@@ -370,7 +618,7 @@ export async function removeWorktree(
       }
     }
 
-    await performRemoveSaga(sourceId, {
+    return await performRemoveSaga(sourceId, {
       operationId,
       workspaceId,
       expected: {
@@ -380,7 +628,55 @@ export async function removeWorktree(
         head: found.worktree.head,
       },
       path: found.worktree.path,
+      ...(options.deleteBranch === undefined ? {} : { deleteBranch: options.deleteBranch }),
     })
+  })
+}
+
+/** Remove an UNREGISTERED worktree (no dsh workspace — Plan A): git-first
+ *  removal via the host's path-based variant, no workspace.delete, no
+ *  archive step (there are no sessions). */
+export async function removeUnregisteredWorktree(
+  sourceId: string,
+  target: { repoId: string; worktreeId: string; path: string; branch: string | null; head: string },
+  options: { deleteBranch?: string } = {},
+): Promise<void> {
+  const operationId = nextId('remove')
+  // Fresh refresh first (P2-3): the row identity may be up to 30s stale —
+  // an expected-mismatch on a stale snapshot would needlessly fail.
+  await refreshSource(sourceId, true).catch(() => {})
+  return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
+    const input = {
+      operationId,
+      path: target.path,
+      expected: {
+        repoId: target.repoId,
+        worktreeId: target.worktreeId,
+        branch: target.branch,
+        head: target.head,
+      },
+      ...(options.deleteBranch === undefined ? {} : { deleteBranch: options.deleteBranch }),
+    }
+    try {
+      await runRemoveSaga({
+        hostRemove: () => gitWorktreeApi.remove(sourceId, input, target.path),
+        verifyTerminalRemove: () => gitWorktreeApi.remove(sourceId, input, target.path),
+        workspaceDelete: id => deleteWorkspace(getInstanceClient(sourceId), id),
+        ambiguousRecovery: error => isAmbiguousGitRpcFailure(error) && !isDeterministicGitRejection(error)
+          ? { kind: 'git-remove', ...input, message: errorText(error) }
+          : undefined,
+      })
+      finishMutation(sourceId)
+    } catch (error) {
+      // Ambiguous failures must become a durable git-remove recovery (the
+      // host may have committed the removal) — never a one-shot actionError
+      // that would force a fresh operationId next time (review P1-3).
+      if (error instanceof GitSagaError) {
+        setRecovery(sourceId, recoveryForFailure(error, undefined))
+        if (error.refreshNeeded) finishMutation(sourceId)
+      }
+      throw error
+    }
   })
 }
 
@@ -392,6 +688,8 @@ export async function retryRecovery(sourceId: string): Promise<void> {
     if (recovery.kind === 'git-create') {
       await performCreateSaga(
         sourceId, recovery.preview, recovery.operationId, recovery.sessionId, recovery,
+        recovery.createSession,
+        recovery.sourceWorkspaceId,
       )
       return
     }
@@ -427,6 +725,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
             operationId: recovery.operationId,
             workspaceId: recovery.workspaceId,
             expected: recovery.expected,
+            ...(recovery.deleteBranch === undefined ? {} : { deleteBranch: recovery.deleteBranch }),
           }, recovery.path),
           () => deleteWorkspace(getInstanceClient(sourceId), recovery.workspaceId),
           error => error instanceof InstanceRpcError && error.code === 'workspace-not-found',

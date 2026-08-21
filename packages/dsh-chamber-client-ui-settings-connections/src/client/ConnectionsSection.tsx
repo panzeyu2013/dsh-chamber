@@ -306,7 +306,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [clearOpError])
 
   /** systemd 起停/查询：结果投影合并进 statuses（serviceActive 随卡片显示）。 */
-  const runServiceOp = useCallback(async (id: string, op: 'start_service' | 'stop_service' | 'is_active'): Promise<void> => {
+  const runServiceOp = useCallback(async (id: string, op: 'start_service' | 'stop_service' | 'restart_service' | 'is_active'): Promise<void> => {
     const bridge = ssh()
     if (bridge === null) return
     setBusy(prev => ({ ...prev, [id]: true }))
@@ -857,6 +857,18 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     >
                       {connected ? t('disconnect') : phase === 'connecting' ? t('phaseConnecting') : t('connect')}
                     </Button>
+                    {spec.kind === 'ssh' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={css.restartTip}
+                        disabled={specBusy || !serviceConfigured}
+                        data-tip={!serviceConfigured ? t('serviceUnconfigured') : undefined}
+                        onClick={() => { void runServiceOp(spec.id, 'restart_service') }}
+                      >
+                        {t('restartInstance')}
+                      </Button>
+                    )}
                     <div className={css.cardFoot}>
                       <button
                         type="button"

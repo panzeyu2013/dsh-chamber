@@ -31,15 +31,13 @@ type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown
 
 /**
  * One checkbox-style toggle row (OpenChamber SettingsCheckboxRow pattern): a
- * native checkbox (accent-color token, no custom widget), the label beside it
- * and an explanatory hint below; disabled with a hint when a platform gate
- * denies the capability.
+ * native checkbox (accent-color token, no custom widget), the label beside it;
+ * disabled with a hint when a platform gate denies the capability.
  */
 function ToggleRow({
-  label, hint, checked, disabled, onChange, busy, t,
+  label, checked, disabled, onChange, busy, t,
 }: {
   label: string
-  hint?: string
   checked: boolean
   disabled?: boolean
   onChange: (next: boolean) => void
@@ -57,7 +55,6 @@ function ToggleRow({
         />
         <span>{label}</span>
       </label>
-      {hint !== undefined && <p className={css.generalHint}>{hint}</p>}
       {disabled === true && t !== undefined && (
         <p className={css.generalHint}>{t('generalUnavailable')}</p>
       )}
@@ -97,7 +94,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   return (
     <div className={css.generalSection}>
       <h2 className={css.generalTitle}>{t('generalTitle')}</h2>
-      <p className={css.generalIntro}>{t('generalIntro')}</p>
 
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupLifecycle')}</h3>
@@ -159,7 +155,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         <ToggleRow
           t={t}
           label={t('generalQuitConfirm')}
-          hint={t('generalQuitConfirmHint')}
           checked={settings?.quitConfirmation !== false}
           disabled={!hydrated}
           busy={busy}
