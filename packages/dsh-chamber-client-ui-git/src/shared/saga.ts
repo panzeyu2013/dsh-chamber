@@ -1,4 +1,5 @@
 /** Pure two-domain saga policy. Transport adapters live in coordinator.ts. */
+import { collectSessionClosure } from './git-facts.ts'
 import type {
   CreateWorktreeResult, GitRecovery, PreviewCreateResult, RemoveWorktreeResult,
 } from './types.ts'
@@ -291,6 +292,29 @@ export interface RemoveSagaDeps {
   verifyTerminalRemove(): Promise<RemoveWorktreeResult>
   workspaceDelete(workspaceId: string): Promise<void>
   ambiguousRecovery(error: unknown): Extract<GitRecovery, { kind: 'git-remove' }> | undefined
+}
+
+export interface PreRemoveArchiveDeps {
+  fetchSessions(): Promise<ReadonlyArray<{ readonly sessionId: string; readonly parentSessionId?: string }>>
+  archiveSession(sessionId: string): Promise<void>
+}
+
+/**
+ * Optional soft-archive of the whole session tree BEFORE any Git mutation.
+ * Returns the archived closure (roots + transitive subsessions via
+ * parentSessionId). A fetch or archive failure throws with nothing removed;
+ * earlier archives in the same run are already committed (per-session ops).
+ */
+export async function runPreRemoveArchive(
+  deps: PreRemoveArchiveDeps,
+  roots: ReadonlyArray<string>,
+): Promise<string[]> {
+  const sessions = await deps.fetchSessions()
+  const closure = collectSessionClosure(sessions, roots)
+  for (const sessionId of closure) {
+    await deps.archiveSession(sessionId)
+  }
+  return closure
 }
 
 /** Git-first removal. A registry failure is retry-only; Git is never recreated. */

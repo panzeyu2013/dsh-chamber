@@ -13,10 +13,10 @@ import {
 import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure } from './git-api.ts'
-import { collectSessionClosure, findWorktree, removeBlockReason } from './git-facts.ts'
+import { findWorktree, removeBlockReason } from './git-facts.ts'
 import {
-  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runRemoveSaga,
-  runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
+  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
+  runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
 import type {
   GitBusyState, GitRecovery, GitSourceError, GitSourceState, PreviewCreateInput, PreviewCreateResult,
@@ -347,19 +347,16 @@ export async function removeWorktree(
     // workspace members plus every session transitively parented under them.
     const directSessionIds = found.worktree.sessionIds
     if (options.archiveSessions === true && directSessionIds.length > 0) {
-      let sessionSnapshot
       try {
-        sessionSnapshot = await fetchInstanceSnapshot(getInstanceClient(sourceId))
+        await runPreRemoveArchive({
+          fetchSessions: async () => {
+            const snapshot = await fetchInstanceSnapshot(getInstanceClient(sourceId))
+            return snapshot.sessions
+          },
+          archiveSession: sessionId => archiveSession(getInstanceClient(sourceId), sessionId),
+        }, directSessionIds)
       } catch (error) {
-        throw new Error(`无法读取会话列表以归档：${errorText(error)}`)
-      }
-      const toArchive = collectSessionClosure(sessionSnapshot.sessions, directSessionIds)
-      for (const sessionId of toArchive) {
-        try {
-          await archiveSession(getInstanceClient(sourceId), sessionId)
-        } catch (error) {
-          throw new Error(`归档会话 ${sessionId} 失败：${errorText(error)}；未删除任何工作树`)
-        }
+        throw new Error(`归档会话失败：${errorText(error)}；未删除任何工作树`)
       }
     }
 

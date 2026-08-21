@@ -21,7 +21,7 @@ const READ_TIMEOUT_MS = 10_000
 const MUTATION_TIMEOUT_MS = 30_000
 const READ_OUTPUT_CAP = 1024 * 1024
 const MUTATION_OUTPUT_CAP = 256 * 1024
-const PREVIEW_TTL_MS = 5 * 60_000
+export const PREVIEW_TTL_MS = 5 * 60_000
 export const OPERATION_TTL_MS = 24 * 60 * 60_000
 export const SNAPSHOT_DEADLINE_MS = 20_000
 export const SNAPSHOT_WALL_TIMEOUT_MS = 25_000
@@ -879,6 +879,10 @@ export class GitWorktreeCore {
           message: `snapshot did not settle within ${this.snapshotWallTimeoutMs}ms; the old scan remains single-flight`,
         },
       }), this.snapshotWallTimeoutMs)
+      // NOT unref'd on purpose: an uncancellable hung scan is kept observable by
+      // this deadline timer, which is the only handle that guarantees the
+      // single-flight settles. Unref'ing lets a quiet process drain before the
+      // deadline fires, turning a bounded response into a leaked promise.
     })
     const response = Promise.race([scan, responseDeadline])
     this.snapshotInFlight = response

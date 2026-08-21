@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runRemoveSaga,
-  runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
+  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
+  runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from '../src/shared/saga.ts'
 import {
   decodeCreateValue, decodeRemoveValue, decodeRollbackCreateValue, isAmbiguousGitRpcFailure,
@@ -499,4 +499,77 @@ test('session-adopt recovery reuses workspace-adopt execution and commits the sa
   }, { kind: 'session-adopt', path: '/existing-wt', sessionId: 'session-fixed', message: 'retry' })
   assert.deepEqual(calls, ['workspace:/existing-wt', 'session:ws-adopted:session-fixed'])
   assert.equal(result.sessionId, 'session-fixed')
+})
+
+test('pre-remove archive archives the whole session closure in order', async () => {
+  const calls: string[] = []
+  const archived = await runPreRemoveArchive({
+    fetchSessions: async () => [
+      { sessionId: 'root-a' },
+      { sessionId: 'sub-a1', parentSessionId: 'root-a' },
+      { sessionId: 'sub-a2', parentSessionId: 'sub-a1' },
+      { sessionId: 'unrelated' },
+    ],
+    archiveSession: async sessionId => { calls.push(sessionId) },
+  }, ['root-a'])
+  assert.deepEqual(archived, ['root-a', 'sub-a1', 'sub-a2'])
+  assert.deepEqual(calls, ['root-a', 'sub-a1', 'sub-a2'])
+})
+
+test('pre-remove archive with no roots archives nothing and skips the fetch', async () => {
+  let fetched = 0
+  const calls: string[] = []
+  const archived = await runPreRemoveArchive({
+    fetchSessions: async () => { fetched += 1; return [] },
+    archiveSession: async sessionId => { calls.push(sessionId) },
+  }, [])
+  assert.deepEqual(archived, [])
+  assert.deepEqual(calls, [])
+  assert.equal(fetched, 1)
+})
+
+test('pre-remove archive aborts on session fetch failure without archiving', async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    runPreRemoveArchive({
+      fetchSessions: async () => { throw new Error('offline') },
+      archiveSession: async sessionId => { calls.push(sessionId) },
+    }, ['root-a']),
+    /offline/,
+  )
+  assert.deepEqual(calls, [])
+})
+
+test('pre-remove archive stops at the first archive failure, earlier archives stay committed', async () => {
+  const calls: string[] = []
+  await assert.rejects(
+    runPreRemoveArchive({
+      fetchSessions: async () => [
+        { sessionId: 'root-a' },
+        { sessionId: 'sub-a1', parentSessionId: 'root-a' },
+      ],
+      archiveSession: async sessionId => {
+        calls.push(sessionId)
+        if (sessionId === 'sub-a1') throw new Error('archive rejected')
+      },
+    }, ['root-a']),
+    /archive rejected/,
+  )
+  assert.deepEqual(calls, ['root-a', 'sub-a1'])
+})
+
+test('rollback success resolves committed:false and never adopts a workspace', async () => {
+  const calls: string[] = []
+  const result = await runRollbackRecovery({
+    hostRollback: async operationId => { calls.push(`rollback:${operationId}`) },
+    workspaceCreate: async path => { calls.push(`workspace:${path}`); return { workspaceId: 'ws-x', path, created: true } },
+    sessionCreate: async (workspaceId, sessionId) => { calls.push(`session:${workspaceId}:${sessionId}`); return sessionId },
+    isWorkspaceOwnershipConflict: () => false,
+  }, {
+    kind: 'rollback-create', operationId: 'op-r', repoId: REPO_ID, worktreeId: WORKTREE_ID,
+    commonDir: PREVIEW.commonDir, path: PREVIEW.targetPath, branch: PREVIEW.branch, head: PREVIEW.baseHead,
+    sessionId: 'session-fixed', message: '',
+  })
+  assert.deepEqual(result, { committed: false })
+  assert.deepEqual(calls, ['rollback:op-r'])
 })

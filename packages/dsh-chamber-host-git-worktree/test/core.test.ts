@@ -7,11 +7,13 @@ import { basename, dirname } from 'node:path'
 import {
   GitWorktreeCore,
   GitWorktreeError,
+  MAX_REPOSITORIES,
   MAX_TOTAL_WORKTREES,
   MAX_TOTAL_SESSION_MEMBERSHIPS,
   MAX_WORKSPACES,
   MAX_WORKTREES_PER_REPOSITORY,
   OPERATION_TTL_MS,
+  PREVIEW_TTL_MS,
   SNAPSHOT_DEADLINE_MS,
   assertSafeGitArgv,
   createLocalGitRunner,
@@ -38,6 +40,7 @@ interface FakeWorktree {
   dirty?: boolean
   locked?: boolean
   prunable?: boolean
+  bare?: boolean
   statusFailure?: boolean
   /** stderr text for a status failure (defaults to 'status unavailable'). */
   statusStderr?: string
@@ -236,6 +239,7 @@ class FakeRepository {
       fields.push(worktree.branch === null ? 'detached' : `branch refs/heads/${worktree.branch}`)
       if (worktree.locked) fields.push('locked test')
       if (worktree.prunable) fields.push('prunable test')
+      if (worktree.bare) fields.push('bare')
       fields.push('')
     }
     return `${fields.join('\0')}\0`
@@ -1391,4 +1395,221 @@ test('snapshot attention stays empty for an unresolvable git dir', async () => {
   const row = snapshot.repos[0]!.worktrees[1]!
   assert.deepEqual(row.attention, [])
   assert.equal(row.status, 'ready')
+})
+
+test('snapshot caps the repository count at MAX_REPOSITORIES', async () => {
+  const repositoryCount = MAX_REPOSITORIES + 1
+  const paths = new Set<string>()
+  const workspaces: WorkspaceFact[] = []
+  for (let repository = 0; repository < repositoryCount; repository += 1) {
+    const main = `/cap/${repository}/main`
+    paths.add(main)
+    paths.add(`${main}/.git`)
+    workspaces.push({ workspaceId: `cap-${repository}`, path: main, sessionIds: [] })
+  }
+  const fs: WorktreeFileSystem = {
+    realpath: async path => {
+      if (!paths.has(path)) throw new MissingPathError(path)
+      return path
+    },
+    lstat: async path => {
+      if (!paths.has(path)) throw new MissingPathError(path)
+      return { isDirectory: () => true }
+    },
+    exists: async path => paths.has(path),
+    readFile: async () => { throw new MissingPathError('.git') },
+  }
+  const runner: GitRunner = async request => {
+    const match = /^\/cap\/(\d+)\//u.exec(request.cwd)
+    assert.ok(match)
+    const main = `/cap/${Number(match[1])}/main`
+    if (request.args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: `${main}/.git\n`, stderr: '' }
+    }
+    if (request.args[0] === 'worktree') {
+      return { exitCode: 0, stdout: `worktree ${main}\0HEAD ${MAIN_HEAD}\0branch refs/heads/main\0\0`, stderr: '' }
+    }
+    if (request.args[0] === 'status') return { exitCode: 0, stdout: '', stderr: '' }
+    throw new Error(`unexpected Git call: ${request.args.join(' ')}`)
+  }
+  const core = new GitWorktreeCore({
+    source: { listWorkspaces: () => workspaces, listAgents: () => [] },
+    git: runner,
+    fs,
+  })
+  const snapshot = await core.snapshot()
+  assert.equal(snapshot.repos.length, MAX_REPOSITORIES)
+  assert.equal(snapshot.sourceError?.code, 'snapshot-capacity')
+  assert.equal(snapshot.errors.some(error => error.code === 'snapshot-repository-limit'), true)
+})
+
+test('preview rejects a checked-out branch and a bare repository', async () => {
+  const { core } = setup()
+  await assert.rejects(
+    core.previewCreate({
+      sourceWorkspaceId: 'ws-main',
+      basename: 'x',
+      branch: { kind: 'existing', name: 'main' },
+    }),
+    error => error instanceof GitWorktreeError && error.code === 'branch-checked-out',
+  )
+  const { core: bareCore, repo: bareRepo } = setup()
+  bareRepo.worktrees[0]!.bare = true
+  await assert.rejects(
+    bareCore.previewCreate({
+      sourceWorkspaceId: 'ws-main',
+      basename: 'x',
+      branch: { kind: 'new', name: 'topic' },
+    }),
+    error => error instanceof GitWorktreeError && error.code === 'bare-repository',
+  )
+})
+
+test('preview rejects a new branch that already exists', async () => {
+  const { core, repo } = setup()
+  repo.branches.set('feature', FEATURE_HEAD)
+  await assert.rejects(
+    core.previewCreate({
+      sourceWorkspaceId: 'ws-main',
+      basename: 'x',
+      branch: { kind: 'new', name: 'feature' },
+    }),
+    error => error instanceof GitWorktreeError && error.code === 'branch-exists',
+  )
+})
+
+test('create fails loud on an unknown or expired preview token', async () => {
+  const { core, advanceTime } = setup()
+  await assert.rejects(
+    core.create({ previewToken: 'unknown-token', operationId: 'op-unknown' }),
+    error => error instanceof GitWorktreeError && error.code === 'preview-not-found',
+  )
+  const preview = await previewNew(core)
+  advanceTime(PREVIEW_TTL_MS + 1)
+  // pruneCaches removes expired previews before the lookup, so an expired
+  // token surfaces as preview-not-found (the preview-expired branch is the
+  // narrow race backstop between prune and check).
+  await assert.rejects(
+    core.create({ previewToken: preview.previewToken, operationId: 'op-expired' }),
+    error => error instanceof GitWorktreeError && error.code === 'preview-not-found',
+  )
+})
+
+test('duplicate workspace paths surface explicitly and never duplicate ownership', async () => {
+  const { core, workspaces } = setup()
+  workspaces.push({ workspaceId: 'ws-dupe', path: MAIN, sessionIds: [] })
+  const snapshot = await core.snapshot()
+  assert.equal(snapshot.errors.some(error => error.code === 'duplicate-workspace-path'), true)
+  const workspaceIds = snapshot.repos.flatMap(repo => repo.worktrees)
+    .map(worktree => worktree.workspaceId)
+    .filter((id): id is string => id !== null)
+  assert.equal(workspaceIds.filter(id => id === 'ws-main').length, 1)
+  assert.equal(workspaceIds.includes('ws-dupe'), false)
+})
+
+test('rollback refuses a worktree that now hosts a running agent cwd', async () => {
+  const { core, agents } = setup()
+  const preview = await previewNew(core)
+  const created = await core.create({ previewToken: preview.previewToken, operationId: 'op-rollback-running' })
+  assert.equal(created.rollbackAuthorized, true)
+  agents.push({ sessionId: 's-inside', status: 'running', cwd: created.path })
+  await assert.rejects(
+    core.rollbackCreate({ operationId: 'op-rollback-running' }),
+    error => error instanceof GitWorktreeError && error.code === 'running-agent',
+  )
+})
+
+test('remove replay with the same operation id but a drifted expected head fails closed', async () => {
+  const { core, repo } = setup({ linked: true })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
+  const input = {
+    operationId: 'op-drift',
+    workspaceId: 'ws-feature',
+    expected: {
+      repoId: repository.repoId,
+      worktreeId: linked.worktreeId,
+      branch: linked.branch,
+      head: linked.head,
+    },
+  }
+  await core.remove(input)
+  await assert.rejects(
+    core.remove({ ...input, expected: { ...input.expected, head: 'f'.repeat(40) } }),
+    error => error instanceof GitWorktreeError && error.code === 'operation-conflict',
+  )
+  assert.equal(mutationCalls(repo, 'remove').length, 1)
+})
+
+test('local runner times out, kills the child and only settles after close', async () => {
+  class FakeChild extends EventEmitter implements GitChildProcess {
+    readonly stdout = new EventEmitter()
+    readonly stderr = new EventEmitter()
+    killed = false
+
+    kill(): boolean {
+      this.killed = true
+      return true
+    }
+  }
+
+  const child = new FakeChild()
+  const runner = createLocalGitRunner(() => child)
+  const pending = runner({
+    cwd: MAIN, args: ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
+    timeoutMs: 5, maxOutputBytes: 4096,
+  })
+  let settled = false
+  void pending.then(
+    () => { settled = true },
+    () => { settled = true },
+  )
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(child.killed, true)
+  assert.equal(settled, false)
+  child.emit('close', null)
+  await assert.rejects(
+    pending,
+    error => error instanceof GitWorktreeError && error.code === 'git-timeout',
+  )
+  assert.equal(settled, true)
+})
+
+test('local runner enforces a combined stdout+stderr byte cap', async () => {
+  class FakeChild extends EventEmitter implements GitChildProcess {
+    readonly stdout = new EventEmitter()
+    readonly stderr = new EventEmitter()
+    killed = false
+
+    kill(): boolean {
+      this.killed = true
+      return true
+    }
+  }
+
+  const child = new FakeChild()
+  const runner = createLocalGitRunner(() => child)
+  const pending = runner({
+    cwd: MAIN, args: ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
+    timeoutMs: 1_000, maxOutputBytes: 8,
+  })
+  let settled = false
+  void pending.then(
+    () => { settled = true },
+    () => { settled = true },
+  )
+  child.stdout.emit('data', Buffer.from('12345'))
+  child.stderr.emit('data', Buffer.from('678'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(child.killed, false)
+  child.stdout.emit('data', Buffer.from('9'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(child.killed, true)
+  child.emit('close', null)
+  await assert.rejects(
+    pending,
+    error => error instanceof GitWorktreeError && error.code === 'git-output-limit',
+  )
+  assert.equal(settled, true)
 })

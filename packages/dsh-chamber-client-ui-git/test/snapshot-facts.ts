@@ -170,3 +170,19 @@ test('session closure enumerates direct + transitive subsessions, cycle-safe and
   assert.equal(collectSessionClosure(sessions, ['missing-root']).length, 1)
   assert.equal(collectSessionClosure([], ['root-a']).length, 1)
 })
+
+test('snapshot passes through unknown sourceError codes while keeping partial facts', () => {
+  const snapshot = normalizeGitSnapshot({
+    repos: [{ repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo', worktrees: [worktree()] }],
+    errors: [],
+    sourceError: { code: 'newer-host-error-code', message: 'explicit' },
+  })
+  assert.equal(snapshot.sourceError?.code, 'newer-host-error-code')
+  assert.equal(snapshot.repos[0].worktrees.length, 1)
+  assert.throws(
+    () => normalizeGitSnapshot({
+      repos: [], errors: [], sourceError: { code: 42, message: 'bad' },
+    }),
+    /sourceError must carry string code\/message/,
+  )
+})

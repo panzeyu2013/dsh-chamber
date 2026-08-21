@@ -18,10 +18,6 @@ const SNAPSHOT_OPERATIONS = new Set(['discover', 'list', 'status', 'associate'])
 const WORKTREE_STATES = new Set(['ready', 'missing', 'invalid', 'not-a-repo'])
 const HEAD_STATES = new Set(['branch', 'detached', 'unborn'])
 const ATTENTION_REASONS = new Set(['merge', 'rebase', 'cherry-pick', 'revert', 'bisect'])
-const SOURCE_ERROR_CODES = new Set([
-  'state-source-unavailable', 'state-source-capacity', 'git-unavailable',
-  'snapshot-capacity', 'snapshot-deadline',
-])
 
 function stringIds(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every(isNonEmptyString) ? [...value] : undefined
@@ -155,10 +151,12 @@ export function normalizeGitSnapshot(value: unknown): GitWorktreeSnapshot {
   }
   const snapshot: GitWorktreeSnapshot = { repos, errors }
   if (value.sourceError !== undefined) {
+    // Unknown codes from a NEWER host are accepted and passed through: a new
+    // source-level code must not reject the whole snapshot (and its valid
+    // partial facts). Only malformed shapes fail loud.
     if (
       !isRecord(value.sourceError)
       || !isNonEmptyString(value.sourceError.code)
-      || !SOURCE_ERROR_CODES.has(value.sourceError.code)
       || !isNonEmptyString(value.sourceError.message)
     ) {
       throw new Error('gitWorktree/snapshot: sourceError must carry string code/message')
