@@ -23,8 +23,10 @@
 > 2. 灰度策略 = **通道模型 beta → stable**（非百分比灰度）；
 > 3. **双平台流程一致**（Windows 与 macOS 同一形态）：`electron-updater` 静默检查 →
 >    settings 提示 → 用户确认 → 后台下载 → 退出时安装；**macOS 不手动安装**。
->    macOS 安装腿的硬前置 = Developer ID 签名（Squirrel.Mac 硬前提）；公开发布
->    workflow 同时要求公证凭据并验证 stapled ticket，缺失即 fail-closed。
+>    macOS 安装腿的硬前置 = Developer ID 签名（Squirrel.Mac 硬前提）；默认
+>    （2026-08 起）仓库未配置公证凭据，公开发行走 ad-hoc/未签名模型（macOS
+>    ad-hoc 签名、Windows 未签名，见 §7）；配置公证凭据后恢复正式签名 + stapled
+>    ticket 验证路径。
 > 4. **UX（三轮修订）**：**不弹窗** + **低打扰（不显眼）**——更新信息只在 settings
 >    的 chamber 全局「更新」部分低调展示；**后台下载以用户明确确认（点击「更新」）
 >    为前提**，用户不确认则永不下载；退出时自动安装（双平台）。
@@ -185,10 +187,12 @@
 ## 7. 安全与已知让步
 
 - **完整性**：`latest*.yml` 内 sha512 校验下载包——无签名也有传输/下载完整性保护。
-- **发布身份（fail-closed）**：公开发布必须同时具备 macOS Developer ID + 公证
-  凭据和 Windows Authenticode 凭据；release workflow 在建 draft 前检查秘密，
-  构建后再以 `codesign`/`spctl`/`stapler` 与 `Get-AuthenticodeSignature` 验证。
-  缺任一项即不发布。dry-run 仍允许生成不公开的本机构建产物。
+- **发布身份（2026-08 起默认 ad-hoc/未签名）**：仓库未配置 macOS Developer ID /
+  Windows Authenticode 凭据——macOS 产物由 afterPack 钩子 ad-hoc 签名（结构合法、
+  无公证），Windows 产物未签名（SmartScreen 警告）；`latest*.yml` 的 sha512 保证
+  传输/下载完整性。若日后配置 `MAC_CSC_LINK`/`APPLE_ID`/
+  `APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`/`WIN_CSC_LINK`，可恢复正式签名 +
+  公证 + `codesign`/`spctl`/`stapler`/`Get-AuthenticodeSignature` 验证路径。
 - **出网面**：仅主进程访问 GitHub API / feed（HTTPS）；控制面零出网、loopback
   闭环不变。
 - **隐私**：检查/下载不携带任何用户/SSH 材料；仅应用版本与平台信息。

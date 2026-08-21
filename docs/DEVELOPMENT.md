@@ -117,7 +117,7 @@ pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
 pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分）
 ```
 
-打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。普通 CI/dry-run 可为 ad-hoc/未签名构建；公开 release 必须具备 macOS Developer ID + 公证及 Windows Authenticode，并在发布前通过产物验签，否则 fail-closed 不公开。
+打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。发布模型（2026-08 起）：仓库未配置 Apple Developer ID / Windows Authenticode 密钥——macOS 由 afterPack 钩子（`packages/desktop/scripts/after-pack-adhoc-sign.mjs`）ad-hoc 签名（结构合法签名，Gatekeeper 宽松系统可直开，默认 Gatekeeper 需右键打开/「仍要打开」）、Windows 未签名（SmartScreen 警告，design 11 §7 记录权衡）；macOS 自动安装腿因无 Developer ID 签名被阻塞（design 11 §3.1）。若日后在 GitHub Secrets 配置 `MAC_CSC_LINK`/`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`/`WIN_CSC_LINK`，可恢复正式签名 + 公证发布路径。
 
 `build:desktop` 会把两个已构建 host 包复制到
 `packages/desktop/dist/host-graph-package/` 与
@@ -199,3 +199,5 @@ vendor/
 | [CHANGELOG.md](../CHANGELOG.md) | 版本变更记录 |
 | [docs/design/01-overview.md](design/01-overview.md) | 设计入口与收拢原则 |
 | [docs/progress/STATUS.md](progress/STATUS.md) | 进度总览（唯一进度记录） |
+| [docs/checklists/release-checklist.md](checklists/release-checklist.md) | 发布前 Checklist（版本/changelog/测试/构建/tag/CI） |
+| [docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md) | dsh 版本更新前 Checklist（pin 一致性/fork rebase/锁文件/回归） |

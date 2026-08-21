@@ -123,7 +123,7 @@ pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
 pnpm run dist:desktop:win    # package the Windows app (nsis + zip; must run on Windows — dsh runtime bundling is platform-specific)
 ```
 
-Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). Ordinary CI/dry-run artifacts may be ad-hoc or unsigned. Public releases fail closed unless macOS Developer ID signing/notarization and Windows Authenticode credentials are present and the emitted artifacts pass signature verification.
+Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). Publication model (since 2026-08): the repo configures no Apple Developer ID / Windows Authenticode secrets — the macOS app is ad-hoc signed by the afterPack hook (`packages/desktop/scripts/after-pack-adhoc-sign.mjs`; structurally valid signature, so Gatekeeper-relaxed systems open it directly while a default Gatekeeper still requires right-click/open or "allow anywhere"), and the Windows exe goes out unsigned (SmartScreen warning; documented tradeoff, design 11 §7); the macOS auto-install step stays blocked without a Developer ID signature (design 11 §3.1). If `MAC_CSC_LINK`/`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`/`WIN_CSC_LINK` are later configured in GitHub Secrets, the signed + notarized publication path can be restored.
 
 `build:desktop` copies the two built host packages into
 `packages/desktop/dist/host-graph-package/` and
@@ -206,3 +206,5 @@ Test commands live in [CONTRIBUTING.md](../CONTRIBUTING.md) "Testing" and "Befor
 | [CHANGELOG.md](../CHANGELOG.md) | Version history |
 | [docs/design/01-overview.md](design/01-overview.md) | Design entry point & consolidation principles |
 | [docs/progress/STATUS.md](progress/STATUS.md) | Progress overview (the only progress record) |
+| [docs/checklists/release-checklist.md](checklists/release-checklist.md) | Pre-release checklist (version/changelog/tests/build/tag/CI) |
+| [docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md) | Pre-dsh-upgrade checklist (pin consistency/fork rebase/lockfile/regression) |
