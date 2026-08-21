@@ -110,8 +110,11 @@ export function jitteredBackoffMs(backoffMs: number, random: () => number = Math
   return Math.floor(backoffMs * (0.5 + random() * 0.5))
 }
 
-/** SIGTERM → SIGKILL grace when stopping a child. */
-export const DISCONNECT_GRACE_MS = 2_000
+/** SIGTERM → SIGKILL grace when stopping a child. Kept short so app quit is
+ * fast: a tunnel teardown has no consistency cost, so a 1s window is plenty
+ * before the deterministic SIGKILL (the "fast exit" half of the
+ * speed-vs-reclamation balance). */
+export const DISCONNECT_GRACE_MS = 1_000
 
 /** Per-attempt TCP connect timeout of the default port probe. */
 export const PROBE_ATTEMPT_TIMEOUT_MS = 400
@@ -1090,7 +1093,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
    * grace-period SIGKILL fires. App quit must not lose the escalation to
    * process teardown: without the wait, an ssh child that ignores SIGTERM
    * would be orphaned (the escalation timers are unref'd, so quitting within
-   * the 2s grace leaves them unfulfilled). Bounded by disconnectGraceMs + 1s.
+   * the grace period leaves them unfulfilled). Bounded by disconnectGraceMs + 1s.
    */
   async function disposeAsync(): Promise<void> {
     dispose()

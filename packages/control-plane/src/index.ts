@@ -786,9 +786,22 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         // lingering renderer SSE/WS/proxy connection (e.g. after a crashed
         // local host left the page mid-reconnect) would otherwise hang the
         // close forever and strand the desktop app in a half-exited state.
-        // Force-close the connections first so close() resolves promptly.
+        // Force-close first so close() resolves promptly: spliced WS streams
+        // are tracked by the proxy (upgraded sockets leave the HTTP server's
+        // connection tracking), HTTP/SSE/keep-alive by closeAllConnections/
+        // closeIdleConnections. The 500ms window is a last-resort against any
+        // straggler — the process exit then releases the remaining fds.
+        instanceProxy.closeAllStreams()
         srv.closeAllConnections?.()
-        await new Promise(resolve => srv.close(resolve))
+        srv.closeIdleConnections?.()
+        await new Promise<void>(resolve => {
+          const force = setTimeout(resolve, 500)
+          force.unref?.()
+          srv.close(() => {
+            clearTimeout(force)
+            resolve()
+          })
+        })
       }
     },
 

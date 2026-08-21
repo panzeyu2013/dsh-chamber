@@ -226,6 +226,10 @@ export interface InstanceProxy {
   registerTransport(connectionId: string, baseUrl: string): void
   unregisterTransport(connectionId: string): void
   getDiagnostics(): InstanceProxyDiagnostics
+  /** Force-close every spliced WS stream (control-plane stop): an upgraded
+   * socket leaves the HTTP server's connection tracking, so a lingering
+   * half-open downlink would otherwise hang server.close() forever. */
+  closeAllStreams(): void
 }
 
 /** Whether an id is a valid /api/i/<id> segment ('local' or 'ssh-<id>'). */
@@ -340,6 +344,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   let activeHttpRequests = 0
   let pendingUpgrades = 0
   let bufferedRequestBytes = 0
+  /** Live spliced WS streams (downstream browser leg + upstream host leg),
+   * tracked so control-plane stop() can force-close them: an upgraded socket
+   * is removed from the HTTP server's connection tracking, so a lingering
+   * half-open downlink (crashed host mid-reconnect) would otherwise hang
+   * server.close() forever. */
+  const liveStreams = new Set<{ downstream: ProxySocket; upstream: Duplex }>()
 
   /** Resolve the forward target; returns null + writes the error response
    * when the instance is unknown/unavailable (loud, never silent). */
@@ -657,6 +667,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       releaseHandshake()
       req.removeListener('close', onClientClose)
       counters.activeStreams += 1
+      const stream = { downstream: socket, upstream: upstreamSocket }
+      liveStreams.add(stream)
       let tornDown = false
       // chamber patch (design 14 extension): the spliced downlinks are
       // downlink-only WebSockets with no heartbeat from either side — a
@@ -672,6 +684,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         if (tornDown) return
         tornDown = true
         counters.activeStreams = Math.max(0, counters.activeStreams - 1)
+        liveStreams.delete(stream)
         heartbeat?.stop()
         try {
           upstreamSocket.destroy()
@@ -862,6 +875,19 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         pendingUpgrades,
         bufferedRequestBytes,
         transports: transports.size,
+      }
+    },
+
+    /** Force-close every spliced WS stream (control-plane stop / app quit):
+     * destroys both legs exactly once via tearDown's guard. */
+    closeAllStreams(): void {
+      for (const stream of [...liveStreams]) {
+        try {
+          stream.downstream.destroy()
+        } catch { /* already gone */ }
+        try {
+          stream.upstream.destroy()
+        } catch { /* already gone */ }
       }
     },
   }

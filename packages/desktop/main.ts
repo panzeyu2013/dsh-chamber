@@ -237,8 +237,11 @@ let confirmingQuit = false;
 const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
 
 /** 退出清理（will-quit：transport dispose + 控制面 stop）的最长等待；超时强制
- *  退出，防「窗口已关、主进程永久滞留」的半退出态（2026-08 实机排查）。 */
-const QUIT_CLEANUP_TIMEOUT_MS = 15_000;
+ *  退出，防「窗口已关、主进程永久滞留」的半退出态。子进程回收用短窗口
+ *  （transport 1s / 本地 dsh 1s → SIGKILL）+ 传输层与控制面并行化，正常
+ *  ~1-2s 完成；5s 硬顶仅为异常路径（如残留连接使 server.close 不回调）兜底
+ *  （2026-08 排查；2026-08 提速，15s → 5s）。 */
+const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
@@ -721,17 +724,22 @@ if (!gotTheLock) {
     // （design 14 D5）。确认/豁免已在 before-quit 完成，这里只剩清理。
     quitRequested = true;
     setKeepAwakeActive(false);
+    // 立即移除托盘：退出在途不需要恢复入口，残留托盘图标是「退不干净」观感。
+    if (tray !== null) {
+      try {
+        tray.destroy();
+      } catch { /* already gone */ }
+      tray = null;
+    }
     if (!controlPlane) return;
     event.preventDefault();
-    // Kill any live tunnels / in-flight execs before the control plane stops
-    // (the transport lifecycle is the runtime's alone; dispose() tears
-    // everything down). disposeAsync additionally WAITS for every SIGKILL
-    // escalation: without the wait, app.quit() can exit within the 2s grace
-    // and a SIGTERM-ignoring ssh child would be orphaned (escalation timers
-    // are unref'd — quitting loses them).
-    // 2026-08 兜底：清理链（disposeAsync / cp.stop → server.close）若挂起
-    // （例如残留连接使 server.close 不回调），主进程会永久滞留成"窗口已关、
-    // 进程仍在"的半退出态——超时后强制退出，绝不无期限滞留。
+    // 传输层（SSH 隧道/在途 exec）与控制面（本地 dsh + HTTP 门面）的回收互不
+    // 依赖，并行等待（总耗时 = max 而非 sum）。各自的 SIGTERM→SIGKILL 窗口已
+    // 压到 1s（transport-manager / spawn-dsh），正常 ~1-2s 完成。disposeAsync
+    // 仍 WAITS 每个 SIGKILL 升级（否则 SIGTERM 忽略的 ssh 子进程会因 unref
+    // 计时器随退出丢失而孤儿化）。兜底：清理链若挂起（残留连接使
+    // server.close 不回调），超时强制退出，绝不无期限滞留成「窗口已关、进程
+    // 仍在」的半退出态。
     const cleanupTimer = setTimeout(() => {
       // 超时强制退出走 app.exit()：quit 事件不会触发，electron-updater 的
       // autoInstallOnAppQuit 也不执行——即使「已下载」豁免放行了退出，更新
@@ -739,21 +747,15 @@ if (!gotTheLock) {
       console.error('[dsh-chamber] 退出清理超时，强制退出（可能有子进程残留，已下载更新不会安装）');
       app.exit(1);
     }, QUIT_CLEANUP_TIMEOUT_MS);
-    void (async () => {
-      try {
-        await transportManager?.disposeAsync();
-      } catch (err) {
-        console.error('[dsh-chamber] 传输层关闭失败：', err);
-      }
-      const cp = controlPlane;
-      controlPlane = null;
-      cp.stop()
-        .catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err))
-        .finally(() => {
-          clearTimeout(cleanupTimer);
-          app.quit();
-        });
-    })();
+    const cp = controlPlane;
+    controlPlane = null;
+    void Promise.allSettled([
+      transportManager?.disposeAsync().catch((err) => console.error('[dsh-chamber] 传输层关闭失败：', err)),
+      cp.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
+    ]).finally(() => {
+      clearTimeout(cleanupTimer);
+      app.quit();
+    });
   });
 
   app.whenReady().then(async () => {

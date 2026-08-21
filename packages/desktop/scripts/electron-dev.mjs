@@ -103,6 +103,16 @@ function killTree(child) {
   try {
     if (process.platform !== 'win32') {
       process.kill(-child.pid, 'SIGTERM');
+      // 升级兜底：launcher 是被监督进程（Electron）的监督者，退出必须确定性
+      // 回收它——SIGTERM 1s 后仍活着则 SIGKILL 整个进程组，绝不留下无头
+      // Electron（此前 SIGTERM 被 Chromium 消费/忽略时，2s 硬顶 process.exit
+      // 会让 detached 的 Electron 残留在后台）。
+      const escalate = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          try { process.kill(-child.pid, 'SIGKILL'); } catch {}
+        }
+      }, 1000);
+      escalate.unref?.();
       return;
     }
   } catch {}

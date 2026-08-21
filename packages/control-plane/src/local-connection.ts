@@ -23,7 +23,7 @@
  * - state machine (design 02 §3.5):
  *   stopped → starting → ready ⇄ degraded → restarting → restart-exhausted →
  *   stopped; spawn failures land on 'error' (fail-loud; start() respawns);
- * - graceful stop (design 02 §3.7): process-group SIGTERM → 5s → SIGKILL,
+ * - graceful stop (design 02 §3.7): process-group SIGTERM → 1s → SIGKILL,
  *   pid record removed after confirmed exit, state back to stopped;
  * - the catalog row projection: status/dshPort/error ride the persisted
  *   connection row (design 03 §2.1: runtime facts are projections, the
@@ -600,7 +600,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     start: startImpl,
 
     /**
-     * Stop the connection: terminate the child (process-group SIGTERM → 5s →
+     * Stop the connection: terminate the child (process-group SIGTERM → 1s →
      * SIGKILL), stop the health probe, and land on 'stopped'. Any in-flight
      * restart loop is aborted via the epoch bump.
      */

@@ -326,7 +326,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 1. 单飞行守卫（currentRestartPromise 去重，并发触发共享同一重启）；
    停止过程（优雅停止进行中）直接返回
 2. 终止：进程组 SIGTERM（dsh profile-boot 对 SIGTERM 优雅退出，exit 0）
-   → 2.5s 未退 → SIGKILL；确认退出后才 unregisterManagedProcess
+   → 1s 未退 → SIGKILL；确认退出后才 unregisterManagedProcess
 3. 端口释放等待：固定端口场景下新宿主仍用同端口——旧进程死透才能复用
    （5s 超时，150ms 轮询）
 4. respawn（§3.1，同端口 P；若端口仍被占走 §2.2 的 P+1 路径）
@@ -340,7 +340,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 ### 3.7 优雅停止
 
 - `DELETE /api/connections/local`（04 §3.2）/ 桌面退出 / systemd stop：
-  SIGTERM 进程组 → 2.5s → SIGKILL；确认退出后注销记录，状态回 `stopped`；
+  SIGTERM 进程组 → 1s → SIGKILL；确认退出后注销记录，状态回 `stopped`；
 - **崩溃路径**：控制面被 SIGKILL → 宿主成为孤儿 → 下次启动 reaper 回收
   （§3.4）——`detached: true` 保证宿主不连带，孤儿回收保证不泄漏；
 - **会话数据不丢**：dsh 侧 JSONL 持久化在 `$DSH_HOME/sessions`，重启后由

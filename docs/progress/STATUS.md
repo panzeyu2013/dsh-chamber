@@ -310,6 +310,20 @@
    插件 4 typecheck、test:desktop 186、test:sidebar 131、test:settings-bridge
    28、test:connections 17、static-serving 6、test:renderer-shell 5、
    build:renderer、build:preload、verify:i18n、frozen-lockfile 全绿）。
+   **2026-08 退出提速（平衡关闭速度与资源收尾）**：把退出清理链从「长优雅等待」
+   压成「短窗口 + SIGKILL 确定性回收」。改动——本地 dsh SIGTERM→SIGKILL 窗口
+   5s→1s（`spawn-dsh.ts` `TERMINATE_GRACE_MS`）、SSH 隧道 `DISCONNECT_GRACE_MS`
+   2s→1s、will-quit 清理硬顶 15s→5s；传输层与控制面回收并行化（`Promise.allSettled`，
+   总耗时 = max 而非 sum）+ 退出在途立即 `tray.destroy()`（去「退不干净」观感）；
+   控制面 stop() 增加 `instanceProxy.closeAllStreams()`（instance-proxy 跟踪 splice
+   后的 WS 流并强制销毁，补 `closeAllConnections` 覆盖不到的升级 socket）+
+   `closeIdleConnections()` + `server.close()` 500ms 兜底（根治残留连接挂起 close 的
+   半退出态）；dev launcher `electron-dev.mjs` killTree 增加 SIGTERM→1s→SIGKILL
+   升级（此前 SIGTERM 被 Chromium 消费/忽略时 2s 硬顶 `process.exit` 会留下
+   detached 无头 Electron）。设计 02 §3.6/§3.7 优雅停止窗口 2.5s 同步为 1s。
+   正常退出目标 ~1-2s、硬顶 5s。验证 ✓（根 typecheck、instance-proxy 28、
+   test:desktop 214、manager-api 12 / static-serving 8 / host-logs 19 / storage 15、
+   `node --check electron-dev.mjs` 全绿）。
    **2026-08 M1–M5（事件聚合/插件诊断/长 roster）复验**：根 typecheck、
    typecheck:sidebar、typecheck:settings-bridge、侧边栏 133、设置桥 31、host-graph 26、
    renderer shell 5、build:renderer、verify:i18n 全绿；两轮 review 另修复 bundle 并发等待、

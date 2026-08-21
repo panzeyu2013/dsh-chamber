@@ -64,6 +64,15 @@ import type { Logger } from './types.ts'
 /** First port attempted for a managed dsh host. */
 export const BASE_DHSPORT = 17510
 
+/**
+ * Grace window between SIGTERM and SIGKILL when stopping a managed host
+ * (design 02 §3.7). Kept short so app quit is fast: the host persists
+ * session JSONL continuously, so a 1s window flushes the tail and a SIGKILL
+ * then releases the port/fds deterministically — the "fast exit" half of the
+ * speed-vs-reclamation balance.
+ */
+export const TERMINATE_GRACE_MS = 1_000
+
 /** Maximum spawn attempts (port +1 per retry). */
 export const MAX_SPAWN_ATTEMPTS = 5
 
@@ -399,7 +408,8 @@ function killGroup(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
-/** Stop a managed child: process-group SIGTERM, escalate to SIGKILL after 5s. */
+/** Stop a managed child: process-group SIGTERM, escalate to SIGKILL after
+ * TERMINATE_GRACE_MS (1s — the fast-exit half of the speed-vs-reclamation balance). */
 async function terminateChild(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
   const pid = child.pid
@@ -408,7 +418,7 @@ async function terminateChild(child: ChildProcess): Promise<void> {
   killGroup(pid, 'SIGTERM')
   const timer = setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) killGroup(pid, 'SIGKILL')
-  }, 5000)
+  }, TERMINATE_GRACE_MS)
   await exited
   clearTimeout(timer)
 }
