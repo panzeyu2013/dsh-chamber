@@ -39,6 +39,7 @@ import { request as httpRequest } from 'node:http'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
+import { startWsHeartbeat } from './ws-heartbeat.ts'
 
 /** Request body cap (design 03 §3.4, same as the v2 runtime proxy). */
 export const MAX_REQUEST_BODY_BYTES = 50 * 1024 * 1024
@@ -65,6 +66,33 @@ export const UPSTREAM_TIMEOUT_MS = 10_000
 
 /** Maximum silence between client request-body chunks. */
 export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
+
+/**
+ * WebSocket heartbeat (design 14 extension — sleep/wake stuck-deep-diving
+ * fix): ping cadence for the spliced event downlinks. The events streams are
+ * downlink-only with no heartbeat from either side, so the BROWSER leg of the
+ * splice can silently die (half-open TCP after an OS sleep/wake) without any
+ * 'error'/'close' firing — the splice would hold forever while the browser's
+ * pump stays "connected" but blind. The proxy pings the browser; after
+ * `WS_PING_MISSES_BEFORE_TEARDOWN` cycles without a pong, the splice is torn
+ * down so the browser's WebSocket closes and the renderer pump reconnects
+ * (fresh stream → host baseline replay → UI re-sync).
+ *
+ * Values follow the canonical `ws` README heartbeat example (30s interval,
+ * one unanswered ping cycle → terminate): the pong round-trip is loopback, so
+ * a full cycle without one is a real death, not scheduler noise.
+ *
+ * The UPSTREAM (host) leg deliberately has no heartbeat: its death is covered
+ * by SSH keepalive for remote tunnels (`ServerAliveInterval=30 × CountMax=3`
+ * ≈ 90s, ssh-provider), socket 'error'/'close' for local host death/restart,
+ * and the host's own send-failure close. A proxy-side upstream ping would
+ * only race SSH keepalive into a reconnect flap against a half-open tunnel
+ * (strict tolerance) or fire later than it (lenient tolerance — useless).
+ */
+export const WS_PING_INTERVAL_MS = 30_000
+
+/** Consecutive ping cycles without a browser pong before the splice is torn down. */
+export const WS_PING_MISSES_BEFORE_TEARDOWN = 1
 
 /** Response headers converged through to the browser (03 §3.4 / 04 §4.3). */
 export const RESPONSE_HEADER_WHITELIST = new Set([
@@ -147,6 +175,7 @@ export interface ProxySocket {
   destroy(): unknown
   pipe(destination: unknown): unknown
   on(event: string, listener: (...args: any[]) => void): unknown
+  removeListener(event: string, listener: (...args: any[]) => void): unknown
 }
 
 /** A parsed /api/i/<id> path. */
@@ -180,6 +209,10 @@ export interface InstanceProxyDeps {
   upstreamTimeoutMs?: number
   /** Client upload idle timeout in ms (tests inject small values). */
   clientBodyIdleTimeoutMs?: number
+  /** WebSocket heartbeat ping cadence in ms (tests inject small values). */
+  wsPingIntervalMs?: number
+  /** Consecutive ping cycles without a browser pong before the splice is torn down. */
+  wsPingMissesBeforeTeardown?: number
   maxConcurrentHttpRequests?: number
   maxConcurrentWsStreams?: number
   maxPendingWsHandshakes?: number
@@ -293,6 +326,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const request = deps.httpRequest ?? httpRequest
   const upstreamTimeoutMs = deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS
   const clientBodyIdleTimeoutMs = deps.clientBodyIdleTimeoutMs ?? CLIENT_BODY_IDLE_TIMEOUT_MS
+  const wsPingIntervalMs = deps.wsPingIntervalMs ?? WS_PING_INTERVAL_MS
+  const wsPingMissesBeforeTeardown = deps.wsPingMissesBeforeTeardown ?? WS_PING_MISSES_BEFORE_TEARDOWN
   const maxConcurrentHttpRequests = deps.maxConcurrentHttpRequests ?? MAX_CONCURRENT_HTTP_REQUESTS
   const maxConcurrentWsStreams = deps.maxConcurrentWsStreams ?? MAX_CONCURRENT_WS_STREAMS
   const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
@@ -623,10 +658,21 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       req.removeListener('close', onClientClose)
       counters.activeStreams += 1
       let tornDown = false
+      // chamber patch (design 14 extension): the spliced downlinks are
+      // downlink-only WebSockets with no heartbeat from either side — a
+      // silently dead (half-open) BROWSER leg after an OS sleep/wake fires no
+      // 'error'/'close', so without this the splice would hold forever while
+      // the browser's pump stays blind (stuck "Deep diving..." UI, backend
+      // still processing). The heartbeat pings the browser; missed pongs tear
+      // the splice down so the browser's WebSocket closes and the renderer
+      // pump reconnects. Declared before tearDown (which stops it); started
+      // once the splice is wired.
+      let heartbeat: { stop(): void } | null = null
       const tearDown = () => {
         if (tornDown) return
         tornDown = true
         counters.activeStreams = Math.max(0, counters.activeStreams - 1)
+        heartbeat?.stop()
         try {
           upstreamSocket.destroy()
         } catch { /* already gone */ }
@@ -660,6 +706,18 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       // Socket splice: downstream ↔ upstream; either closing tears both.
       upstreamSocket.pipe(socket as never)
       socket.pipe(upstreamSocket as never)
+      // Start the liveness heartbeat after the splice is wired (design 14
+      // extension; see the tearDown note above). Downstream-only: the
+      // upstream leg's liveness belongs to SSH keepalive / socket events.
+      heartbeat = startWsHeartbeat({
+        downstream: socket,
+        intervalMs: wsPingIntervalMs,
+        missesBeforeTeardown: wsPingMissesBeforeTeardown,
+        onDead: () => {
+          logger.log(`instance-proxy: WebSocket stream ${parsed.id} heartbeat lost (no browser pong for ${wsPingMissesBeforeTeardown} cycle(s)); tearing down`)
+          tearDown()
+        },
+      })
     })
     upstream.end()
   }

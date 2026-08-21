@@ -29,10 +29,14 @@ export interface ConnectionConfig {
   basePath?: string
 }
 
+/** Upper bound for the reconnect backoff cap in ms (exported: the liveness
+ *  trigger debounce aligns to it — see liveness-triggers.ts). */
+export const CONNECTION_BACKOFF_MAX_MS = 10_000
+
 const CONNECTION_DEFAULTS: Required<ConnectionConfig> = {
   backoffBaseMs: 500,
   backoffFactor: 2,
-  backoffMaxMs: 10_000,
+  backoffMaxMs: CONNECTION_BACKOFF_MAX_MS,
   streamOpenTimeoutMs: 3_000,
   basePath: '',
 }

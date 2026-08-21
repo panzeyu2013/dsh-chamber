@@ -179,6 +179,39 @@
   dsh-client-connection chamber 补丁（stop+start 立即重连）。实现：`chamber-settings.ts`
   （纯逻辑）+ `main.ts`/`preload.cts`；验证：根 typecheck ✓、`test:desktop`（含新增
   12 用例）✓、`build:preload` ✓。设计见 `docs/design/14-sleep-background.md`。
+   **2026-08 睡眠唤醒断流修复（stuck-deep-diving 根因，设计 14 D4 扩展）**：
+   症状——合盖再打开后**有概率**向某 session 输入，前端卡在 "Deep diving..." 而
+   后端实际已在处理（本地/远程均现）。根因：`events.mux`/`events.host` 两条事件
+   downlink 是**无心跳的只读 WebSocket**（宿主从不 ping；宿主 ws server 对任何
+   客户端消息 1008 关闭 "downlink only"，浏览器无法自测活性），连接泵只在
+   close/error 时重连——睡眠/网络切换后半开 TCP 静默死亡不触发任何事件，前端
+   "已连接但失明"，POST（新连接）照常成功、事件永不抵达 → session.running 停在
+   true 不收敛。修复两处（互补）：① 渲染侧 `dsh-client-connection` 活性触发器
+   （`liveness-triggers.ts`，`attachLivenessTriggers`）——在 system-resume 之外
+   增加 `online`（唤醒/网络恢复）与 `visibilitychange→visible`（隐藏 ≥30s 后
+   回前台）触发 stop()+start() 立即重连（短 alt-tab 不触发；**最小重启间隔
+   去抖，值代码级绑定 `CONNECTION_BACKOFF_MAX_MS`（10s，connection.ts）**，
+   resume+online 同醒并发或 online 抖动合并为一次重启），重连后
+   `handleConnected` 的 list 刷新 + resync 让卡死的 running 位收敛；② 控制面
+   **代理 WS 心跳，仅下游（浏览器）腿**（`ws-frames.ts` + `ws-heartbeat.ts`，
+   RFC 6455 §5.5.2/§5.5.3）——splice 建立后向浏览器周期发免掩码 ping
+   （浏览器按 RFC 自动 pong，透明不上抛 app），PongScanner 被动扫描浏览器
+   data 流（不消费字节、不动 pipe；浏览器→代理方向只有掩码 pong）；**参数
+   对齐 `ws` README 官方心跳示例：`WS_PING_INTERVAL_MS=30s`、
+   `WS_PING_MISSES_BEFORE_TEARDOWN=1`**（一个周期未答即断 → 检出 ~30–60s；
+   pong 往返是 loopback，一个完整周期无 pong 不可能是调度噪声）→ tearDown
+   → 浏览器 WS close → 泵重连重基线。**上游（宿主）腿刻意无心跳**：其活性
+   由既有行业机制覆盖——远程断隧 SSH keepalive（`ServerAliveInterval=30 ×
+   CountMax=3` ≈90s，ssh-provider 已配）杀隧道/换端口触发 splice tearDown、
+   本地宿主死亡/重启的 socket error/close、宿主自身发送失败即关；
+   代理侧上游 ping 只会与 SSH keepalive 抢跑成"半开隧道上反复重连"的抖动环
+   （严格容忍）或比它更晚（宽松容忍=无用）。对"OS 事件没触发"的静默死链
+   生效；心跳对浏览器透明。验证：`test:connection` 新增 10 用例（liveness
+   触发器含去抖）、control-plane 新增 `ws-frames.ts` 13 用例 + instance-proxy
+   4 用例（心跳存活/静默死链 tearDown/tearDown 后停表/写失败自清理（onDead
+   恰一次、interval 停表）+ 上游零 ping 断言）全绿；根 typecheck、
+   `build:renderer`、`build:control-plane`、verify:i18n ✓；CI 补跑
+   `test:connection` 与 `ws-frames.ts`。
    **2026-08 review 轮修复（3 subagent 独立审查 + 独立验证）**：P0 退出时序——
    退出确认移至 `before-quit`（原在 will-quit 内置位 `quitRequested` 过晚，
    hide-to-tray 默认下 Cmd+Q/托盘退出被 close 吞掉、确认与更新退出安装不可达；

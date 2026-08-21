@@ -155,6 +155,33 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   （替代等慢速重探），sleep 断掉的隧道秒级恢复。
 - 无窗口常驻期间（托盘态）resume 事件由主进程持有，窗口恢复时一次性补发。
 
+#### D4 扩展（2026-08，stuck-deep-diving 根因修复）
+
+> 现象：合盖再打开后有概率向某 session 输入，前端卡在 "Deep diving..." 而
+> 后端实际已在处理。根因：`events.mux`/`events.host` 是**无心跳的只读
+> WebSocket**（宿主从不 ping；宿主 ws server 对任何客户端消息 1008 关闭
+> "downlink only"），连接泵只在 close/error 时重连——睡眠/网络切换后半开 TCP
+> 静默死亡不触发任何事件 → 前端"已连接但失明"，POST 照常成功、事件永不抵达。
+> 补充两个互补机制（均不依赖 OS 事件必然触发）：
+>
+> 1. **渲染侧活性触发器**（`dsh-client-connection/src/client/liveness-triggers.ts`，
+>    `attachLivenessTriggers`）：system-resume 之外增加 `online`（唤醒/网络恢复）
+>    与 `visibilitychange→visible`（隐藏 ≥30s 后回前台；短 alt-tab 不触发）
+>    触发 stop()+start() 立即重连；**最小重启间隔去抖，值代码级绑定
+>    `CONNECTION_BACKOFF_MAX_MS`（10s）**（resume+online 同醒并发、online 抖动
+>    合并为一次）。重连后 `handleConnected` 的 list 刷新 + resync 让卡死的
+>    running 位收敛。
+> 2. **控制面代理 WS 心跳，仅下游（浏览器）腿**（`control-plane/src/ws-frames.ts`
+>    + `ws-heartbeat.ts`，RFC 6455 §5.5.2/§5.5.3）：splice 建立后向浏览器周期
+>    发免掩码 ping（浏览器按 RFC 自动 pong，透明不上抛 app），`PongScanner`
+>    被动扫描浏览器 data 流（不消费字节、不动 pipe）；**参数对齐 `ws` README
+>    官方心跳示例（30s 间隔、一个周期未答即断）**→ tearDown → 浏览器 WS close
+>    → 泵重连重基线（检出 ~30–60s）。**上游（宿主）腿刻意无心跳**：远程断隧由
+>    SSH keepalive（`ServerAliveInterval=30 × CountMax=3` ≈90s，ssh-provider
+>    已配）覆盖，本地宿主死亡/重启由 socket error/close 覆盖，宿主自身发送
+>    失败即关——代理侧上游 ping 只会与 SSH keepalive 抢跑成"半开隧道上反复
+>    重连"的抖动环（严格容忍）或比它更晚（宽松容忍=无用）。
+
 ### D5 keep-awake（v1 设置项，默认关）
 
 - `powerSaveBlocker.start('prevent-app-suspension')`；settings 壳「通用」入口

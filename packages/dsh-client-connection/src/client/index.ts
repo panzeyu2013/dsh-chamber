@@ -16,6 +16,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { HostDescription, IApiClient } from './api.ts'
 import { ConnectionController, type ConnectionConfig, type ConnectionSinks, type ConnectionState } from './connection.ts'
+import { attachLivenessTriggers } from './liveness-triggers.ts'
 import { FixtureApiClient } from './fixture.ts'
 import { WebApiClient } from './web-api-client.ts'
 import { createWebConnectionRpc } from './rpc.ts'
@@ -162,30 +163,34 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
           sinks.onStateChange?.(state)
         },
       }, config ?? {})
-      // chamber patch (design 14 D4): OS wake-from-sleep → the chamber shell
-      // dispatches a window SYSTEM_RESUME_EVENT (App layer); restart the loop
-      // immediately instead of waiting for the heartbeat watchdog / backoff.
+      // chamber patch (design 14 D4 + sleep/wake liveness extension): restart
+      // the loop immediately on OS wake (system-resume), network restore
+      // (online) or the window becoming visible again after a long hidden
+      // span (hide-to-tray / backgrounded sleep) — instead of waiting for a
+      // close/error that a silently-dead half-open WebSocket never fires.
       // stop()+start() is the controller's own public restart semantics
       // (made atomic-safe by the loop-epoch guard in connection.ts). The
-      // listener is registered here (loop owned) and removed by the returned
-      // stop handle — once stopped, the event is simply never observed.
-      const onSystemResume = (): void => {
-        try {
-          controller.stop()
-          controller.start()
-        } catch (error) {
-          console.warn('[web-runtime] system-resume reconnect failed:', error)
-        }
-      }
-      if (typeof window !== 'undefined') {
-        window.addEventListener(SYSTEM_RESUME_EVENT, onSystemResume)
-      }
+      // listeners are registered here (loop owned) and removed by the
+      // returned stop handle — once stopped, the triggers are never observed.
+      const detachTriggers = attachLivenessTriggers(
+        typeof window === 'undefined' ? undefined : window,
+        typeof document === 'undefined' ? undefined : document,
+        {
+          restart: () => {
+            try {
+              controller.stop()
+              controller.start()
+            } catch (error) {
+              console.warn('[web-runtime] liveness reconnect failed:', error)
+            }
+          },
+          windowEvents: [SYSTEM_RESUME_EVENT, 'online'],
+        },
+      )
       controller.start()
       return {
         stop: () => {
-          if (typeof window !== 'undefined') {
-            window.removeEventListener(SYSTEM_RESUME_EVENT, onSystemResume)
-          }
+          detachTriggers()
           controller.stop()
           publishDescription(undefined)
         },

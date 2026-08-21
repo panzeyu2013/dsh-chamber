@@ -49,7 +49,7 @@
     "test:git": "pnpm --filter @dsh-chamber/dsh-client-ui-git run test",
     "test:host-git": "pnpm --filter @dsh-chamber/dsh-host-git-worktree run test",
     "test:renderer-shell": "node packages/renderer/scripts/typert-remote-contract.test.mjs && node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/aggregate-refresh.test.ts && node packages/renderer/src/host-graph.test.ts && node --import ./scripts/test-shell-register.mjs packages/renderer/src/shell.test.ts",
-    "test:connection": "node packages/dsh-client-connection/test/api-path.test.ts"
+    "test:connection": "node packages/dsh-client-connection/test/api-path.test.ts && node packages/dsh-client-connection/test/liveness-triggers.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

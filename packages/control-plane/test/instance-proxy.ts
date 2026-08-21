@@ -14,6 +14,7 @@ import {
   parseInstancePath,
   MAX_REQUEST_BODY_BYTES,
 } from '../src/instance-proxy.ts'
+import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
 import type { InstanceProxy, ProxyRequest, ProxyResponse, ProxySocket } from '../src/instance-proxy.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
@@ -130,14 +131,16 @@ function fakeResponse(): ProxyResponse & { status: number | null; headers: Recor
   return res as any
 }
 
-/** A fake upgrade socket recording writes. */
-function fakeSocket(): ProxySocket & { written: string; closed: boolean } {
+/** A fake upgrade socket recording writes (string view + raw buffers). */
+function fakeSocket(): ProxySocket & { written: string; writtenBuffers: Buffer[]; closed: boolean } {
   const emitter = new EventEmitter()
   const socket = Object.assign(emitter, {
     written: '',
+    writtenBuffers: [] as Buffer[],
     closed: false,
     write(data: unknown) {
       this.written += String(data)
+      this.writtenBuffers.push(Buffer.from(data as Buffer))
       return true
     },
     end() { this.closed = true; return undefined },
@@ -673,4 +676,150 @@ test('upgrade: a WebSocket handshake that never completes → explicit 504 on th
   assert.ok(socket.closed)
   assert.ok(socket.written.includes('504'), `socket got: ${socket.written}`)
   assert.ok(socket.written.includes('upstream_timeout'))
+})
+
+// ---------------------------------------------------------------------------
+// WebSocket heartbeat (design 14 extension: sleep/wake silent-death recovery)
+// ---------------------------------------------------------------------------
+
+/** Build a complete pong frame (opcode 0xA) to feed the heartbeat scanners. */
+function pongFrame(payload: Buffer, masked: boolean): Buffer {
+  const header = Buffer.allocUnsafe(masked ? 6 : 2)
+  header[0] = 0x80 | 0xa
+  if (!masked) {
+    header[1] = payload.length
+    return Buffer.concat([header, payload])
+  }
+  header[1] = 0x80 | payload.length
+  const key = Buffer.from([1, 2, 3, 4])
+  key.copy(header, 2)
+  const maskedPayload = Buffer.allocUnsafe(payload.length)
+  for (let i = 0; i < payload.length; i++) maskedPayload[i] = payload[i] ^ key[i % 4]
+  return Buffer.concat([header, maskedPayload])
+}
+
+/** An upgrade factory that exposes the spliced upstream socket and records its writes. */
+function heartbeatUpgradeFactory() {
+  let captured: any = null
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      const upstreamRes = new EventEmitter() as any
+      upstreamRes.statusCode = 101
+      upstreamRes.headers = { upgrade: 'websocket', connection: 'Upgrade' }
+      const upstreamSocket = new EventEmitter() as any
+      upstreamSocket.writes = []
+      upstreamSocket.write = (data: unknown) => {
+        upstreamSocket.writes.push(Buffer.from(data as Buffer))
+        return true
+      }
+      upstreamSocket.destroy = () => { upstreamSocket.destroyed = true }
+      upstreamSocket.pipe = (target: unknown) => target
+      captured = upstreamSocket
+      req.emit('upgrade', upstreamRes, upstreamSocket, Buffer.alloc(0))
+    }
+    return req
+  }
+  return { fn, get upstreamSocket() { return captured } }
+}
+
+test('heartbeat: pings the browser only and keeps a ponging stream alive', async () => {
+  const factory = heartbeatUpgradeFactory()
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: factory.fn,
+    wsPingIntervalMs: 20,
+    wsPingMissesBeforeTeardown: 1,
+  })
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), down, Buffer.alloc(0))
+  const up = factory.upstreamSocket
+  assert.ok(up !== null)
+  assert.equal(proxy.getDiagnostics().activeStreams, 1)
+
+  // The browser answers with masked pongs (client→server).
+  const respond = () => {
+    ;(down as unknown as EventEmitter).emit('data', pongFrame(Buffer.from('down'), true))
+  }
+  respond() // answer the immediate first ping
+  const responder = setInterval(respond, 15)
+  await sleep(120) // ~6 ping cycles
+  clearInterval(responder)
+
+  assert.equal(proxy.getDiagnostics().activeStreams, 1, 'a ponging stream must stay spliced')
+  assert.equal(down.closed, false)
+  assert.equal((up as any).destroyed, undefined)
+  // Downstream pings are unmasked (the proxy is the ws server to the browser);
+  // the upstream leg deliberately gets NO pings (SSH keepalive / socket
+  // events own its liveness).
+  const downPing = down.writtenBuffers.find(chunk => chunk.length >= 2 && chunk[0] === 0x89)
+  assert.ok(downPing !== undefined, 'downstream got a ping frame')
+  assert.equal(downPing[1] & 0x80, 0, 'downstream pings are unmasked (server role)')
+  const upPing = up.writes.find((chunk: Buffer) => chunk.length >= 2 && chunk[0] === 0x89)
+  assert.equal(upPing, undefined, 'upstream must receive no pings (downstream-only heartbeat)')
+})
+
+test('heartbeat: missed pongs tear the splice down so the browser reconnects', async () => {
+  const factory = heartbeatUpgradeFactory()
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: factory.fn,
+    wsPingIntervalMs: 20,
+    wsPingMissesBeforeTeardown: 1,
+  })
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.host', 'GET'), down, Buffer.alloc(0))
+  const up = factory.upstreamSocket
+  assert.ok(up !== null)
+  assert.equal(proxy.getDiagnostics().activeStreams, 1)
+  // No browser pongs: the leg is silently dead — the heartbeat must tear it down.
+  await sleep(90)
+  assert.equal(proxy.getDiagnostics().activeStreams, 0)
+  assert.equal(down.closed, true, 'the browser socket must be closed (pump reconnects)')
+  assert.equal((up as any).destroyed, true, 'the upstream socket must be destroyed')
+})
+
+test('heartbeat: teardown by other means stops the heartbeat (no stray pings after)', async () => {
+  const factory = heartbeatUpgradeFactory()
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: factory.fn,
+    wsPingIntervalMs: 20,
+    wsPingMissesBeforeTeardown: 1,
+  })
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), down, Buffer.alloc(0))
+  const up = factory.upstreamSocket
+  assert.ok(up !== null)
+  const pingsBefore = down.writtenBuffers.filter(chunk => chunk.length >= 2 && chunk[0] === 0x89).length
+  ;(down as unknown as EventEmitter).emit('error', new Error('EPIPE')) // browser-side splice error
+  assert.equal(proxy.getDiagnostics().activeStreams, 0)
+  await sleep(70)
+  const pingsAfter = down.writtenBuffers.filter(chunk => chunk.length >= 2 && chunk[0] === 0x89).length
+  assert.equal(pingsAfter, pingsBefore, 'no pings may be injected after teardown')
+})
+
+test('heartbeat: a throwing write self-cleans (onDead once, interval stopped)', async () => {
+  // The first ping write fails synchronously (socket already destroyed): the
+  // heartbeat must tear itself down — onDead exactly once, never an armed
+  // interval firing onDead every cycle.
+  const down = new EventEmitter() as any
+  down.write = () => { throw new Error('socket destroyed') }
+  let dead = 0
+  const heartbeat = startWsHeartbeat({
+    downstream: down,
+    intervalMs: 20,
+    missesBeforeTeardown: 1,
+    onDead: () => { dead += 1 },
+  })
+  await sleep(100)
+  assert.equal(dead, 1, 'onDead must fire exactly once (the interval is stopped)')
+  heartbeat.stop()
 })
