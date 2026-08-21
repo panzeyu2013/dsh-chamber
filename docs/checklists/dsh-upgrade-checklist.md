@@ -29,8 +29,12 @@
       未跟踪文件不受影响）。
 - [ ] `bundle-dsh.mjs` `DEFAULT_DSH_VERSION` + `packages/desktop/vendor/dsh/package.json`
       `"@deepseek-ai/dsh"` → 目标版本（先确认 npm 已发布）。
-- [ ] **CI 环境变量**：`.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`
-      同步（历史教训：曾漏改导致产物捆绑旧版 dsh）。
+- [ ] **CI 环境变量（两个 workflow 都要改）**：`.github/workflows/release.yml` 与
+      `.github/workflows/ci.yml`（mac/win 两个打包 job 各有一处）的
+      `env.DSH_CHAMBER_DSH_VERSION` 同步（教训①：曾漏改导致产物捆绑旧版 dsh；
+      教训② v0.1.4 只改了 release.yml、漏改 ci.yml——CI 打包 job 用旧版本跑
+      bundle:dsh，对已提交的新 runtime 锁文件 frozen 安装直接
+      `ERR_PNPM_OUTDATED_LOCKFILE`，全 CI 三 job 全红）。
 - [ ] 重建 vendor 树：`node scripts/ensure-harness-vendor.mjs` → 链接数 = 目标
       版本包数（240 之类），确认无告警（HEAD==pin）。
 
@@ -67,7 +71,9 @@
       `test:host-git` + `test:sidebar` + `test:settings-bridge` + `test:connections` +
       `test:client-web` + `test:connection`。
 - [ ] 类型检查全套（根 + 各插件 + host 包 + client-web）。
-- [ ] `pnpm run build:renderer`、`pnpm run verify:i18n`、`pnpm run smoke`。
+- [ ] `pnpm run build:renderer`、`pnpm run verify:i18n`、`pnpm run smoke`（未捆绑
+      运行时的检出应打印 SKIP——冒烟门槛按 dsh CLI 入口存在性判定，仅有 lockfile
+      的 `packages/desktop/vendor/dsh` 不算已安装，2026-08 CI 修复）。
 - [ ] 残留扫描：`grep -rn "0\.1\.0-rc\.8\|141eb6f" packages/ scripts/ harness.commit`
       （非 vendor）仅剩历史叙述/迁移条目。
 

@@ -5,7 +5,8 @@
  *
  * Exit semantics:
  * - dsh unavailable (no $DSH_CHAMBER_DSH_PATH, <repo>/ref-dsh or
- *   <repo>/packages/desktop/vendor/dsh): prints a SKIP reason and exits 0.
+ *   <repo>/packages/desktop/vendor/dsh carrying a real dsh CLI entry): prints
+ *   a SKIP reason and exits 0.
  * - dsh available but the run fails: prints the failure and exits 1.
  */
 
@@ -21,17 +22,24 @@ const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
  * Resolve the dsh workspace (the smoke gate), mirroring desktop main.ts:
  * $DSH_CHAMBER_DSH_PATH first (trusted unconditionally), then
  * <repo>/ref-dsh, then the desktop vendor bundle <repo>/packages/desktop/vendor/dsh.
- * Returns null when none is present.
+ * A candidate only counts when it actually contains a dsh CLI entry — the same
+ * probe spawn-dsh.ts uses. A git-checked-out vendor/dsh holding nothing but the
+ * committed pnpm-lock.yaml (no node_modules) must NOT count as installed,
+ * otherwise CI runs a real smoke against an empty bundle and fails instead of
+ * SKIPping (2026-08 CI fix). Returns null when none is present.
  */
 function resolveDshWorkspace(): string | null {
   if (process.env.DSH_CHAMBER_DSH_PATH !== undefined) {
     return process.env.DSH_CHAMBER_DSH_PATH
   }
+  const hasDshCli = (workspace: string) =>
+    existsSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')) ||
+    existsSync(join(workspace, 'apps', 'cli', 'src', 'bin.ts'))
   for (const candidate of [
     join(repoRoot, 'ref-dsh'),
     join(repoRoot, 'packages', 'desktop', 'vendor', 'dsh'),
   ]) {
-    if (existsSync(candidate)) return candidate
+    if (existsSync(candidate) && hasDshCli(candidate)) return candidate
   }
   return null
 }

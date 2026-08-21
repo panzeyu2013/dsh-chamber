@@ -111,7 +111,7 @@ jobs:
       - name: Package macOS app
         run: pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --publish=never
         env:
-          DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.8
+          DSH_CHAMBER_DSH_VERSION: 0.1.1-rc.2
       - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
         # No Apple Developer ID / notarization secrets are configured; the
         # afterPack hook ad-hoc signs the bundle so the code signature is
@@ -170,7 +170,7 @@ jobs:
       - name: Package Windows app
         run: pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
         env:
-          DSH_CHAMBER_DSH_VERSION: 0.1.0-rc.8
+          DSH_CHAMBER_DSH_VERSION: 0.1.1-rc.2
       - name: Verify packaged Windows app (OpenChamber-style, unsigned)
         # Assert the runner is win32-x64 (bundle:dsh bakes the host platform)
         # and that the win32 dsh runtime made it into the unpacked app.
