@@ -56,6 +56,10 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject(VSCODE_HEADER_SLOT, () => ctx.slots.register({
     name: VSCODE_HEADER_SLOT,
     id: 'vscode-open',
+    // Row order is ascending by `order` (default 0): -1 keeps the vendor
+    // "Session log" entry (order 0) pinned at the row's far RIGHT and places
+    // this button to its left (2026-08 user requirement).
+    order: -1,
     label: () => t('title'),
     inject: injected,
   }, OpenInVscodeButton))

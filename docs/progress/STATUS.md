@@ -144,7 +144,10 @@
    `shell.overlay` frame 右上锚点（`top:12px;right:16px`）实机测量与官方会话头部
    utilities 行（details 关闭时中心列到 frame 右缘）重叠 16px——注册目标改为官方
    `conversation.session.header.utilities` 槽，按钮以行内布局排在 session-log
-   旁边（实测间距 8px、同行、无重叠），见设计 16 §6.1 修正。
+   旁边（实测间距 8px、同行、无重叠），见设计 16 §6.1 修正。**图标与排序修正（2026-08）**：① 图标由手绘旧版 SVG 改为**官方图标资源**
+   （从安装的 `Visual Studio Code.app` 的 Code.icns 提取 32px@2x PNG，vite 内联为
+   data URL），与用户本机图标一致；② 条目注册加 `order: -1`——utilities 行按 order
+   升序，使 vscode 按钮排在 session-log（默认 0）**左侧**，session-log 保持在最右侧。
    **版本容忍与 rc.8 后端适配（2026-08，v0.1.2 回归修复）**：
   - **额外行 apply 失败降级**（boot.tsx 对 extraRows 容错 + sweep 排除，替代
     "任一额外行失败即整 boot 失败"——版本漂移 = 特性缺席而非损坏，见设计 09 §3.3

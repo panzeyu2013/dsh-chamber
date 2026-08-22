@@ -29,7 +29,7 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.button:hover svg {
+.button:hover img {
   filter: brightness(1.15);
 }
 

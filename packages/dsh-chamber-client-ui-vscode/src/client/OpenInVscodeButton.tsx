@@ -18,8 +18,14 @@
  * Workspace rows come from the framework's global `useWorkspaces` selector
  * hook (the same store the sidebar groups by), so the plugin keeps zero
  * @dsh-chamber dependency and no direct ctx store access (design 16 §6.2).
+ *
+ * The mark is the ACTUAL product icon extracted from the installed VS Code
+ * app (`vscode-icon.png`, Code.icns → 32px @2x), replacing the original
+ * hand-drawn older-logo SVG path — nominative reference (design 16 §6), so
+ * the button always matches the user's installed icon.
  */
 import { useEffect, useState } from 'react'
+import vscodeIcon from './vscode-icon.png'
 import {
   ensureVscodeAvailability,
   getVscodeAvailability,
@@ -55,21 +61,13 @@ export interface OpenInVscodeProps extends OpenInVscodeInjected {
 }
 
 /**
- * The official Visual Studio Code product icon (single-path, brand blue).
- * Microsoft trademark — used here as nominative reference for a button whose
- * only function is "open in VS Code" (user decision 2026-08); implies no
- * endorsement. Fixed fill: the brand color stays recognizable regardless of
- * the theme.
+ * The official Visual Studio Code product icon (32px @2x raster extracted
+ * from the installed app's Code.icns). Microsoft trademark — used here as
+ * nominative reference for a button whose only function is "open in VS Code"
+ * (user decision 2026-08); implies no endorsement.
  */
-function VscodeLogo() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 32 32" aria-hidden="true">
-      <path
-        fill="#007ACC"
-        d="M29.01 5.03 20.997 1.02a3.335 3.335 0 0 0-3.806.648L7.637 10.37l-3.68-2.726a2 2 0 0 0-2.552.115L.3 8.853a2 2 0 0 0 .002 2.956l2.601 2.194-2.6 2.195a2 2 0 0 0-.002 2.956l1.105 1.093a2 2 0 0 0 2.552.115l3.68-2.724 9.555 8.7a3.333 3.333 0 0 0 3.806.65l8.01-4.01A3.335 3.335 0 0 0 30.999 24.86V7.14a3.333 3.333 0 0 0-1.99-2.11zM23.91 22.29l-9.582-8.7a1 1 0 0 1-.221-1.34 1 1 0 0 1 1.34-.22l9.58 8.7 2.67-1.34-9.56-17.46-2.67 1.34z"
-      />
-    </svg>
-  )
+function VscodeMark() {
+  return <img src={vscodeIcon} width={16} height={16} alt="" draggable={false} />
 }
 
 export function OpenInVscodeButton({ sourceId, t, sessionId, useWorkspaces }: OpenInVscodeProps) {
@@ -139,7 +137,7 @@ export function OpenInVscodeButton({ sourceId, t, sessionId, useWorkspaces }: Op
       aria-label={t('title')}
       title={t('title')}
     >
-      <VscodeLogo />
+      <VscodeMark />
     </button>
   )
 }

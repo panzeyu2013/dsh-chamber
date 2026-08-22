@@ -204,6 +204,13 @@ detectVscodeAvailability(platform): { available: boolean }
   sessions/workspaces**（inject 声明保持 `['slots','locale']`）；
 - 按钮 CSS：行内 32×32 图标按钮（透明底、hover 主题 tint、focus 环），与头部工具行
   对齐；aria-label / tooltip / 键盘可聚焦保持；
+- **行内排序（用户要求 2026-08）**：条目注册带 `order: -1`——utilities 行按 `order`
+  升序排列（默认 0），因此 vscode 按钮排在 "Session log"（order 0）**左侧**，
+  session-log 保持在最右侧；
+- **图标（用户修正 2026-08）**：按钮图标改为**官方产品图标资源**——从安装的
+  `Visual Studio Code.app` 的 `Code.icns` 提取 32px@2x PNG（`vscode-icon.png`，
+  vite 内联为 data URL），替代初始的手绘旧版 SVG path（旧版为 2022 年前的角形
+  logo，与本机当前图标不一致）；
 - **实施第 0 步（P1-5，已按原方案验证 ✅ 2026-08，后被实机放置测量推翻）**：vendor
   `dsh-client-ui-layout/src/client/AppFrame.tsx` 实证渲染 `shell.overlay`
   （`<div className={overlayLayer} data-shell-overlay>{renderSlot('shell.overlay', {})}</div>`，
