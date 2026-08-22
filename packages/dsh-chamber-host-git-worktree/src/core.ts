@@ -621,6 +621,14 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   fail('unsafe-git-argv', `Git command '${verb ?? '<empty>'}' is outside the worktree allowlist`)
 }
 
+/**
+ * Fixed `-c core.hooksPath=<nul>` guard prepended to every plugin git spawn.
+ * Command-line `-c` is the highest-precedence config source, so a repository's
+ * own `core.hooksPath` (which would otherwise re-enable `post-checkout` on
+ * `worktree add`) cannot override it. Read commands ignore hooksPath.
+ */
+const HOOK_GUARD: readonly string[] = ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`]
+
 /** Default bounded, shell-free local Git runner. */
 export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as GitSpawner): GitRunner {
   return request => new Promise<GitCommandResult>((resolvePromise, rejectPromise) => {
@@ -652,20 +660,19 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
       GIT_TERMINAL_PROMPT: '0',
       GIT_NO_LAZY_FETCH: '1',
       GIT_OPTIONAL_LOCKS: '0',
-      // `worktree add` normally runs post-checkout. A wire lifecycle action
-      // must not become a caller-triggered hook execution surface. This does
-      // not disable repository-configured clean/smudge/process filters: those
-      // remain inside the host OS user's trusted repository-config boundary.
-      GIT_CONFIG_COUNT: '1',
-      GIT_CONFIG_KEY_0: 'core.hooksPath',
-      GIT_CONFIG_VALUE_0: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      // `worktree add` runs post-checkout; hook suppression is injected via the
+      // argv `-c core.hooksPath=<nul>` guard (HOOK_GUARD) at spawn time, since
+      // GIT_CONFIG_* env entries are the lowest-priority source and a repo's own
+      // core.hooksPath would override them. Filters (clean/smudge/process) are
+      // intentionally NOT disabled: they remain inside the host OS user's
+      // trusted repository-config boundary.
       GCM_INTERACTIVE: 'never',
       LC_ALL: 'C',
     })
 
     let child: GitChildProcess
     try {
-      child = spawnGit('git', [...request.args], {
+      child = spawnGit('git', [...HOOK_GUARD, ...request.args], {
         cwd: request.cwd,
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
