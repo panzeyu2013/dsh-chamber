@@ -214,7 +214,31 @@ export interface SystemResumeSurface {
   onResume(callback: (payload: { timestamp: number }) => void): () => void
 }
 
-/** The full bridge: app info + ssh + update + chamber settings + system resume. */
+/**
+ * The VS Code deep-link surface (design 16 §5.2/§6.4): availability() is the
+ * main-process probe (getter, re-probed on every call — no stale cache);
+ * open() is the renderer button trigger — the same runVscodeLaunch pipeline as
+ * the OS deep link, loud {error} on failure, never a silent empty success.
+ */
+export interface VscodeSurface {
+  availability(): Promise<{ available: boolean }>
+  open(instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+}
+
+/** Normalized deep-link intent push payload (design 16 §2). */
+export interface DeepLinkIntent {
+  instanceId: string
+  path: string
+}
+
+/** The deep-link intent push surface (design 16 §2): onIntent subscribes to the
+ *  main-process push and returns an unsubscribe. */
+export interface DeepLinkSurface {
+  onIntent(callback: (intent: DeepLinkIntent) => void): () => void
+}
+
+/** The full bridge: app info + ssh + update + chamber settings + system resume
+ *  + vscode deep-link surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -223,6 +247,8 @@ export interface DshChamberBridge {
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
+  vscode: VscodeSurface
+  deepLink: DeepLinkSurface
 }
 
 /**
@@ -321,6 +347,31 @@ function systemResumeApi(): SystemResumeSurface {
 }
 
 /**
+ * The dsh-chamber:vscode-availability / dsh-chamber:open-vscode IPC surface
+ * (design 16 §5.2/§6.4): availability re-probed on every call (no stale cache);
+ * open() is the renderer button trigger — the same runVscodeLaunch pipeline as
+ * the OS deep link, loud {error} on failure.
+ */
+function vscodeApi(): VscodeSurface {
+  return {
+    availability: () => ipcRenderer.invoke('dsh-chamber:vscode-availability'),
+    open: (instanceId, path) => ipcRenderer.invoke('dsh-chamber:open-vscode', { instanceId, path }),
+  };
+}
+
+/** The dsh-chamber:deep-link-intent push surface (design 16 §2). */
+function deepLinkApi(): DeepLinkSurface {
+  return {
+    onIntent: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, intent: DeepLinkIntent) => callback(intent);
+      ipcRenderer.on('dsh-chamber:deep-link-intent', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:deep-link-intent', listener);
+    },
+  };
+}
+
+/**
  * Fetch the app-info payload for the bridge. The main-process IPC sender
  * fence (design 05 §7.4) may reject a bootstrap invoke fired before the main
  * frame has committed its trusted URL (senderFrame/URL timing during initial
@@ -358,6 +409,8 @@ requestAppInfo().then(
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
+      vscode: vscodeApi(),
+      deepLink: deepLinkApi(),
     });
   },
   (err: unknown) => {
@@ -370,6 +423,8 @@ requestAppInfo().then(
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
+      vscode: vscodeApi(),
+      deepLink: deepLinkApi(),
     });
   },
 );

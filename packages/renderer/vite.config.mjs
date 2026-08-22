@@ -231,6 +231,12 @@ export default defineConfig({
       { find: /^@dsh-chamber\/dsh-client-ui-git$/, replacement: src('../dsh-chamber-client-ui-git/src/index.ts') },
       { find: /^@dsh-chamber\/dsh-client-ui-git\/client$/, replacement: src('../dsh-chamber-client-ui-git/src/client/index.ts') },
       { find: /^@dsh-chamber\/dsh-client-ui-git\/shared$/, replacement: src('../dsh-chamber-client-ui-git/src/shared/index.ts') },
+      // Chamber VS Code deep-link overlay button (design 16): static first-
+      // screen client; the coordinator reads the main-process availability
+      // probe through the preload bridge (zero @dsh-chamber dependencies).
+      { find: /^@dsh-chamber\/dsh-client-ui-vscode$/, replacement: src('../dsh-chamber-client-ui-vscode/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-client-ui-vscode\/client$/, replacement: src('../dsh-chamber-client-ui-vscode/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-client-ui-vscode\/shared$/, replacement: src('../dsh-chamber-client-ui-vscode/src/shared/index.ts') },
       // The chamber-owned ui-layout fork (design 06) resolves to source the
       // same way: it replaces the official layout in the boot graph, and its
       // client imports the vendor frame through `@deepseek-ai/.../src/*` deep

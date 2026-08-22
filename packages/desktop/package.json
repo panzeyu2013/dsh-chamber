@@ -24,6 +24,14 @@
   "build": {
     "appId": "com.dshchamber.desktop",
     "productName": "dsh-chamber",
+    "protocols": [
+      {
+        "name": "dsh-chamber",
+        "schemes": [
+          "dsh-chamber"
+        ]
+      }
+    ],
     "afterPack": "./scripts/after-pack-adhoc-sign.mjs",
     "directories": {
       "output": "release"
@@ -39,6 +47,7 @@
       "ssh-config.ts",
       "renderer-trust.ts",
       "plugin-sync.ts",
+      "deep-link.ts",
       "dist/**/*",
       "package.json",
       "!node_modules/@dsh-chamber/control-plane/**",

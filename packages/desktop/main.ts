@@ -41,6 +41,8 @@ import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWork
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
+import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
 import { createUpdateController } from './updater.ts';
 import {
   applyPlugins,
@@ -235,6 +237,42 @@ let confirmingQuit = false;
 // 守卫在 stop() 时终止（绝不孤儿化），故「无进程则不确认」是安全的。
 const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
 
+// VS Code 深链（design 16 §4.2）：OS 级深链（macOS open-url / Win+Linux
+// second-instance argv / 冷启动 argv）统一入 pendingIntents 队列，startup 完成
+// （transportManager 装载 + 主窗口就绪）后统一 drain。seenDeepLinkUrls 去重
+// （macOS open-url 与 argv 双触发同一 URL）；超过 64 条整体清空防无限增长
+// （非 LRU——清空后同 URL 可重放，打开 VS Code 幂等，无害；security-review
+// P2-4 注释与实现语义对齐）。
+// drainPendingIntents 在 whenReady 内赋值（依赖 wiredCtx/transportManager），
+// 冷启动到达的深链只入队、drain 就绪后消费。
+let pendingIntents: VscodeLaunchRequest[] = [];
+const seenDeepLinkUrls = new Set<string>();
+let drainPendingIntents: (() => void) | null = null;
+
+/** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
+function scanDeepLinkUrls(argv: readonly string[]): string[] {
+  const urls: string[] = [];
+  for (const arg of argv) {
+    if (typeof arg === 'string' && arg.startsWith('dsh-chamber://')) urls.push(arg);
+  }
+  return urls;
+}
+
+/** 深链入队：quit 在途 ignore（不启动 VS Code）；同 URL 去重；解析失败 loud。 */
+function enqueueDeepLink(rawUrl: string): void {
+  if (quitRequested) return;
+  if (seenDeepLinkUrls.has(rawUrl)) return;
+  seenDeepLinkUrls.add(rawUrl);
+  if (seenDeepLinkUrls.size > 64) seenDeepLinkUrls.clear();
+  const parsed = parseOpenVscodeIntent(rawUrl);
+  if (!parsed.ok) {
+    console.error(`[dsh-chamber] 深链解析失败：${parsed.error}`);
+    return;
+  }
+  pendingIntents.push(parsed.intent);
+  drainPendingIntents?.();
+}
+
 /** 退出清理（will-quit：transport dispose + 控制面 stop）的最长等待；超时强制
  *  退出，防「窗口已关、主进程永久滞留」的半退出态。子进程回收用短窗口
  *  （transport 1s / 本地 dsh 1s → SIGKILL）+ 传输层与控制面并行化，正常
@@ -290,6 +328,29 @@ function maybeCreateTray(cp: PlaneHandle) {
   } catch (error) {
     tray = null;
     console.warn('[dsh-chamber] 托盘创建失败，跳过：', String(error));
+  }
+}
+
+/**
+ * 深链协议注册（design 16 §4.3）：`app.isPackaged` 门控——开发态注册会把裸
+ * Electron 注册成 scheme handler，污染 LaunchServices，与打包版 bundle id
+ * （com.dshchamber.desktop）冲突（镜像托盘先例）。win32 首版门控（暂缓一致性，
+ * 镜像 ssh 密码 askpass 门控）；linux 需显式 execPath + relaunch args
+ * （Electron 文档）；macOS 打包版由 electron-builder `protocols` 键自动生成
+ * CFBundleURLTypes，此处 setAsDefaultProtocolClient 兜底。失败 loud，绝不
+ * 打断启动。
+ */
+function registerDeepLinkProtocol(): void {
+  if (!app.isPackaged || process.platform === 'win32') return;
+  try {
+    if (process.platform === 'linux') {
+      const relaunchArgs = process.argv.length >= 2 ? [path.resolve(process.argv[1])] : [];
+      app.setAsDefaultProtocolClient('dsh-chamber', process.execPath, relaunchArgs);
+    } else {
+      app.setAsDefaultProtocolClient('dsh-chamber');
+    }
+  } catch (error) {
+    console.error('[dsh-chamber] 深链协议注册失败：', error);
   }
 }
 
@@ -601,8 +662,26 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, commandLine) => {
+    // Win/Linux 二次启动：扫描 argv 中的 dsh-chamber:// 深链。无深链 argv →
+    // 仅 showMainWindow()（保持现有行为）；深链 argv 且 quit 在途 → ignore
+    // （不启动 VS Code、不重建窗口，design 16 §4.2）；否则入队并恢复窗口。
+    const urls = scanDeepLinkUrls(commandLine);
+    if (urls.length === 0) {
+      showMainWindow();
+      return;
+    }
+    if (quitRequested) return;
+    for (const url of urls) enqueueDeepLink(url);
     showMainWindow();
+  });
+
+  // macOS 深链（design 16 §4.2）：冷启动深链先于 startup 完成到达，必须入
+  // pendingIntents 队列；与冷启动 argv 扫描的双触发由 seenDeepLinkUrls 去重。
+  // 在模块顶层（whenReady 之前）注册，冷启动 URL 不丢。
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    enqueueDeepLink(url);
   });
 
   // 终止信号（终端 Ctrl+C / Activity Monitor「退出」/ 进程管理器 SIGTERM）：
@@ -763,6 +842,9 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
+    // 冷启动深链 argv（design 16 §4.2）：macOS argv 含 -psn_ 噪声，防御式扫描
+    // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
+    for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
     try {
       const controlPlanePort = resolveControlPlanePort();
       console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${process.env.DSH_CHAMBER_CP_PORT ? 'DSH_CHAMBER_CP_PORT 覆盖' : process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 'dev 默认' : '打包默认'}）`);
@@ -861,6 +943,7 @@ if (!gotTheLock) {
     });
 
     maybeCreateTray(controlPlane);
+    registerDeepLinkProtocol();
 
     // Transport manager (design 03 §2.2 / 05 §7-§8): persisted instance
     // registry under <userData>/ssh-instances.json; instance CRUD, transport
@@ -1284,6 +1367,50 @@ if (!gotTheLock) {
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
     }));
 
+    // VS Code 深链（design 16 §4/§5）：IPC 只是可信渲染端触发的 intent，与 OS
+    // 深链共用同一 runVscodeLaunch 管线（注册表实查 + authority 构造 + 可用性
+    // 二次校验，§3.4）。wiredCtx.lookupInstance 查 transportManager 实查；
+    // vscodeAvailable 每次实探（getter 惰性、无缓存陈旧）；openVscodeUrl 包装
+    // shell.openExternal（catch → loud error，返回 {error} 由调用方处理）。
+    const wiredCtx: VscodeLaunchContext = {
+      lookupInstance: (id) => {
+        const instance = sm.listInstances().find(entry => entry.id === id);
+        if (instance === undefined) return null;
+        return { id: instance.id, host: instance.host, user: instance.user, sshPort: instance.sshPort, kind: instance.kind };
+      },
+      vscodeAvailable: () => detectVscodeAvailability(process.platform).available,
+      openVscodeUrl: async (url) => {
+        // Injection-point scheme re-verification (security-review P2-1, mirror
+        // of isAllowedReleaseUrl's discipline): only our constructed targets
+        // may ever reach shell.openExternal — the ssh-remote URL for remote
+        // sources and the file URL for the local source (user decision
+        // 2026-08: local workspaces open as local folders).
+        if (typeof url !== 'string' || !(url.startsWith('vscode://vscode-remote/') || url.startsWith('vscode://file/'))) {
+          const message = 'refused to open a non-vscode URL';
+          console.error(`[dsh-chamber] ${message}:`, url);
+          return { ok: false, error: message };
+        }
+        try {
+          await shell.openExternal(url);
+          return { ok: true };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error('[dsh-chamber] 打开 vscode URL 失败：', error);
+          return { ok: false, error: `open vscode url failed: ${message}` };
+        }
+      },
+    };
+    ipcMain.handle('dsh-chamber:vscode-availability', trustedIpc(() => detectVscodeAvailability(process.platform)));
+    ipcMain.handle('dsh-chamber:open-vscode', trustedIpc(async ({ instanceId, path }) => {
+      const result = await runVscodeLaunch({ instanceId, path }, wiredCtx);
+      // 成功后 best-effort 推送 intent 激活渲染层对应来源（窗口未就绪/销毁则跳过，
+      // 不阻塞 VS Code 启动）；失败 {error} 由调用方展示。
+      if (result.ok && mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('dsh-chamber:deep-link-intent', { instanceId, path });
+      }
+      return result;
+    }));
+
     // Update controller (design 11): silent check on a startup delay + 6h
     // interval; autoDownload=false — checking never downloads, the download
     // starts ONLY when the user clicks「更新」in the settings update section
@@ -1352,5 +1479,33 @@ if (!gotTheLock) {
     // 启动期创建主窗口：加载失败 = 大声失败 + 退出（createMainWindow 内）；
     // activate/托盘/second-instance 恢复路径共用同一创建函数。
     createMainWindow(rendererOrigin, true);
+
+    // 深链统一 drain（design 16 §4.2）：startup 完成（transportManager 装载 +
+    // 主窗口就绪）后消费 pendingIntents。深链执行（VS Code 启动）不阻塞窗口；
+    // 成功后 best-effort 推送 intent（窗口未就绪/销毁则跳过）；失败 loud
+    // （对话框 + 日志）。quit 在途的深链已在 enqueueDeepLink 被 ignore。
+    drainPendingIntents = () => {
+      const intents = pendingIntents;
+      pendingIntents = [];
+      for (const intent of intents) {
+        if (quitRequested) return;
+        void (async () => {
+          const result = await runVscodeLaunch(intent, wiredCtx);
+          if (result.ok) {
+            if (mainWindow !== null && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('dsh-chamber:deep-link-intent', intent);
+            }
+          } else {
+            console.error(`[dsh-chamber] 深链执行失败：${result.error}`);
+            dialog.showErrorBox('打开 VS Code 失败', result.error);
+          }
+        })().catch((error) => {
+          // runVscodeLaunch 内部已兜底，此处只防意外 rejection 成为
+          // unhandled（security-review：drain 的 async IIFE 无 catch）。
+          console.error('[dsh-chamber] 深链执行异常：', error);
+        });
+      }
+    };
+    drainPendingIntents();
   });
 }

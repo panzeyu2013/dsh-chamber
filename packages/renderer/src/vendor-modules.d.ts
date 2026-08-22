@@ -130,6 +130,12 @@ declare module '@dsh-chamber/dsh-client-ui-git/client' {
   export function apply(ctx: any): void
 }
 
+/** Chamber VS Code deep-link overlay button (design 16). */
+declare module '@dsh-chamber/dsh-client-ui-vscode/client' {
+  export const inject: string[]
+  export function apply(ctx: any): void
+}
+
 /**
  * The chamber-owned ui-layout fork (packages/dsh-chamber-client-ui-layout,
  * design 06): replaces the official layout's 'root' registration so the

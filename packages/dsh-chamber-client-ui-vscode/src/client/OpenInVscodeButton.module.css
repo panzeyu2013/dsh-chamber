@@ -1,0 +1,42 @@
+/* VS Code deep-link overlay button (design 16 §6.1). The `shell.overlay`
+   layer is frame-wide (absolute, inset 0, z-index 20) and click-through by
+   default; the vendor CSS `.overlayLayer > * { pointer-events: auto }` opts
+   the entry's root element back in, so this button is clickable as-is. */
+
+.button {
+  position: absolute;
+  /* Title-bar row anchoring: the row height is vendor-determined; 12px is the
+     initial tuned offset (visually validated at the real-machine pass, design
+     16 §10). The button vertically centers itself in a ~52px header row. */
+  top: 12px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  /* The official VS Code logo carries its own brand fill; hover feedback is
+     the background tint + a subtle brightness lift on the mark. */
+  cursor: pointer;
+  outline: none;
+}
+
+.button:hover,
+.button:focus-visible {
+  background: var(--dsw-alias-hover-bg, rgba(255, 255, 255, 0.06));
+}
+
+.button:hover svg {
+  filter: brightness(1.15);
+}
+
+/* Keyboard focus ring (frontend-review P2-7): outline:none above needs an
+   explicit visible equivalent, not just a background tint. */
+.button:focus-visible {
+  outline: 2px solid var(--dsw-alias-accent, #4c8dff);
+  outline-offset: 1px;
+}
