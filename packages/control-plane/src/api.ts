@@ -254,12 +254,19 @@ export function createApi(deps: ApiDeps) {
   async function readJson(req: ApiRequest): Promise<any> {
     const chunks = []
     let size = 0
+    let oversize = false
     for await (const chunk of req) {
       size += chunk.length
-      if (size > MAX_BODY_BYTES) return null
+      if (size > MAX_BODY_BYTES) {
+        // Keep draining the remainder so a keep-alive socket
+        // (maxRequestsPerSocket=1000) is not left with unread body bytes that
+        // would be misparsed as the next request line.
+        oversize = true
+        continue
+      }
       chunks.push(chunk)
     }
-    if (chunks.length === 0) return null
+    if (oversize || chunks.length === 0) return null
     try {
       return JSON.parse(Buffer.concat(chunks).toString('utf8'))
     } catch {
