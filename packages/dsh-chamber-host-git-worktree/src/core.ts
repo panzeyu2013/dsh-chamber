@@ -608,6 +608,8 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   // facts (no network verb — the numbers reflect local refs only).
   if (verb === 'status' && exact('--porcelain=v1', '-z', '--branch', '--untracked-files=normal')) return
   if (verb === 'worktree' && exact('list', '--porcelain', '-z')) return
+  // Newline-delimited --porcelain fallback (Git < 2.47, which predates `-z`).
+  if (verb === 'worktree' && exact('list', '--porcelain')) return
   if (verb === 'worktree' && rest.length === 4 && rest[0] === 'add' && rest[1] === '--'
     && isAbsolute(rest[2]!) && !rest[3]!.startsWith('-')) return
   if (verb === 'worktree' && rest.length === 6 && rest[0] === 'add' && rest[1] === '-b'
@@ -880,7 +882,13 @@ export function parseBranchLine(line: string): { upstream: string | null; ahead:
   }
 }
 
-function parseWorktreePorcelain(output: string): RawWorktree[] {
+/**
+ * Parse `git worktree list --porcelain` output in either NUL-delimited
+ * (`-z`, Git 2.47+) or newline-delimited form. The record grammar is
+ * identical across both: fields are delimiter-separated and a blank field
+ * closes the current record.
+ */
+function parseWorktreePorcelain(output: string, delimiter: '\0' | '\n' = '\0'): RawWorktree[] {
   const records: RawWorktree[] = []
   let current: RawWorktree | undefined
   const flush = (): void => {
@@ -895,7 +903,7 @@ function parseWorktreePorcelain(output: string): RawWorktree[] {
     current = undefined
   }
 
-  for (const field of output.split('\0')) {
+  for (const field of output.split(delimiter)) {
     if (field === '') {
       flush()
       continue
@@ -1211,12 +1219,7 @@ export class GitWorktreeCore {
           raw = cachedTopology.listedRaw
           branches = cachedTopology.branches
         } else {
-          const listed = await this.snapshotGitChecked(
-            group.cwd,
-            ['worktree', 'list', '--porcelain', '-z'],
-            deadline,
-          )
-          raw = parseWorktreePorcelain(listed.stdout)
+          raw = await this.listWorktrees(group.cwd, deadline)
           branches = await this.listBranches(group.cwd, deadline)
           this.repoTopologyCache.set(commonDir, { listedRaw: raw, branches, at: this.now() })
         }
@@ -2559,8 +2562,7 @@ export class GitWorktreeCore {
 
   private async topology(cwd: string): Promise<WorktreeTopology> {
     const discovered = await this.discover(cwd)
-    const output = await this.gitChecked(discovered.topLevel, ['worktree', 'list', '--porcelain', '-z'])
-    const parsed = parseWorktreePorcelain(output.stdout)
+    const parsed = await this.listWorktreesWith(async args => this.gitCommand(discovered.topLevel, args, false))
     const worktrees: RawWorktree[] = []
     const paths = new Set<string>()
     for (const entry of parsed) {
@@ -2625,6 +2627,38 @@ export class GitWorktreeCore {
     const result = await this.gitCommand(cwd, args, false, Math.max(1, Math.min(perCommandLimit, remaining)))
     if (result.exitCode !== 0) this.gitExitError(result, args[0] ?? 'unknown')
     return result
+  }
+
+  /** List a repository's worktrees from the snapshot path, honoring the probe
+   *  deadline. Delegates to the shared `-z`/newline fallback below. */
+  private async listWorktrees(cwd: string, deadline: number): Promise<RawWorktree[]> {
+    return this.listWorktreesWith(async args => {
+      const remaining = deadline - this.now()
+      if (remaining <= 0) {
+        fail('snapshot-deadline', `snapshot exceeded its ${SNAPSHOT_DEADLINE_MS}ms Git probe budget`)
+      }
+      return this.gitCommand(cwd, args, false, Math.max(1, Math.min(READ_TIMEOUT_MS, remaining)))
+    })
+  }
+
+  /**
+   * Read `git worktree list --porcelain`, preferring the NUL-delimited `-z`
+   * form and falling back to the newline-delimited form when the running Git
+   * predates `-z` (added in Git 2.47). An older Git rejects the unknown
+   * `-z` switch with a usage error — exit 129 — which is unambiguous here
+   * because the `-z` invocation is valid on every Git that recognizes it.
+   */
+  private async listWorktreesWith(
+    run: (args: readonly string[]) => Promise<GitCommandResult>,
+  ): Promise<RawWorktree[]> {
+    const withZ = await run(['worktree', 'list', '--porcelain', '-z'])
+    if (withZ.exitCode === 129) {
+      const withoutZ = await run(['worktree', 'list', '--porcelain'])
+      if (withoutZ.exitCode !== 0) this.gitExitError(withoutZ, 'worktree')
+      return parseWorktreePorcelain(withoutZ.stdout, '\n')
+    }
+    if (withZ.exitCode !== 0) this.gitExitError(withZ, 'worktree')
+    return parseWorktreePorcelain(withZ.stdout, '\0')
   }
 
   /** Local branch names for the existing-branch picker (`show-ref --heads`).

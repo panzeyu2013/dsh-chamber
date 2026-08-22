@@ -80,6 +80,9 @@ session 或 delete 副作用。
   同一 OS 用户在该仓库配置的 `clean/smudge/process` filter（例如 Git LFS）。
   这些 filter 属于实例用户/仓库配置的受信边界，创建确认必须明示；chamber 禁用
   checkout hooks，但不重写用户的 filter 语义。
+- worktree 列表优先 `git worktree list --porcelain -z`（NUL 定界，路径无歧义）；
+  `-z` 于 Git 2.47 才引入，旧 Git 以 usage error（exit 129）拒绝未知开关——host
+  检测到 129 后回退到换行定界的 `--porcelain` 形式（记录语法一致：空行分隔记录）。
 - 分支经 `check-ref-format --branch` 校验；用户值不能成为 option。
 - 新目标尚不存在，因此 canonicalize 其已存在 parent，再校验单段
   basename 和 containment；不对未存在 target 伪调 `realpath`。

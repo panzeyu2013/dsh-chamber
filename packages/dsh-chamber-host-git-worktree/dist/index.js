@@ -317,6 +317,7 @@ function assertSafeGitArgv(args) {
   if (verb === "status" && exact("--porcelain=v1", "-z", "--untracked-files=normal")) return;
   if (verb === "status" && exact("--porcelain=v1", "-z", "--branch", "--untracked-files=normal")) return;
   if (verb === "worktree" && exact("list", "--porcelain", "-z")) return;
+  if (verb === "worktree" && exact("list", "--porcelain")) return;
   if (verb === "worktree" && rest.length === 4 && rest[0] === "add" && rest[1] === "--" && isAbsolute(rest[2]) && !rest[3].startsWith("-")) return;
   if (verb === "worktree" && rest.length === 6 && rest[0] === "add" && rest[1] === "-b" && !rest[2].startsWith("-") && rest[3] === "--" && isAbsolute(rest[4]) && /^[0-9a-fA-F]{40,64}$/u.test(rest[5])) return;
   if (verb === "worktree" && rest.length === 3 && rest[0] === "remove" && rest[1] === "--" && isAbsolute(rest[2])) return;
@@ -464,7 +465,7 @@ function parseBranchLine(line) {
     behind
   };
 }
-function parseWorktreePorcelain(output) {
+function parseWorktreePorcelain(output, delimiter = "\0") {
   const records = [];
   let current;
   const flush = () => {
@@ -477,7 +478,7 @@ function parseWorktreePorcelain(output) {
     records.push(current);
     current = void 0;
   };
-  for (const field of output.split("\0")) {
+  for (const field of output.split(delimiter)) {
     if (field === "") {
       flush();
       continue;
@@ -739,12 +740,7 @@ var GitWorktreeCore = class {
           raw = cachedTopology.listedRaw;
           branches = cachedTopology.branches;
         } else {
-          const listed = await this.snapshotGitChecked(
-            group.cwd,
-            ["worktree", "list", "--porcelain", "-z"],
-            deadline
-          );
-          raw = parseWorktreePorcelain(listed.stdout);
+          raw = await this.listWorktrees(group.cwd, deadline);
           branches = await this.listBranches(group.cwd, deadline);
           this.repoTopologyCache.set(commonDir, { listedRaw: raw, branches, at: this.now() });
         }
@@ -1869,8 +1865,7 @@ var GitWorktreeCore = class {
   }
   async topology(cwd) {
     const discovered = await this.discover(cwd);
-    const output = await this.gitChecked(discovered.topLevel, ["worktree", "list", "--porcelain", "-z"]);
-    const parsed = parseWorktreePorcelain(output.stdout);
+    const parsed = await this.listWorktreesWith(async (args) => this.gitCommand(discovered.topLevel, args, false));
     const worktrees = [];
     const paths = /* @__PURE__ */ new Set();
     for (const entry of parsed) {
@@ -1924,6 +1919,34 @@ var GitWorktreeCore = class {
     const result = await this.gitCommand(cwd, args, false, Math.max(1, Math.min(perCommandLimit, remaining)));
     if (result.exitCode !== 0) this.gitExitError(result, args[0] ?? "unknown");
     return result;
+  }
+  /** List a repository's worktrees from the snapshot path, honoring the probe
+   *  deadline. Delegates to the shared `-z`/newline fallback below. */
+  async listWorktrees(cwd, deadline) {
+    return this.listWorktreesWith(async (args) => {
+      const remaining = deadline - this.now();
+      if (remaining <= 0) {
+        fail("snapshot-deadline", `snapshot exceeded its ${SNAPSHOT_DEADLINE_MS}ms Git probe budget`);
+      }
+      return this.gitCommand(cwd, args, false, Math.max(1, Math.min(READ_TIMEOUT_MS, remaining)));
+    });
+  }
+  /**
+   * Read `git worktree list --porcelain`, preferring the NUL-delimited `-z`
+   * form and falling back to the newline-delimited form when the running Git
+   * predates `-z` (added in Git 2.47). An older Git rejects the unknown
+   * `-z` switch with a usage error — exit 129 — which is unambiguous here
+   * because the `-z` invocation is valid on every Git that recognizes it.
+   */
+  async listWorktreesWith(run) {
+    const withZ = await run(["worktree", "list", "--porcelain", "-z"]);
+    if (withZ.exitCode === 129) {
+      const withoutZ = await run(["worktree", "list", "--porcelain"]);
+      if (withoutZ.exitCode !== 0) this.gitExitError(withoutZ, "worktree");
+      return parseWorktreePorcelain(withoutZ.stdout, "\n");
+    }
+    if (withZ.exitCode !== 0) this.gitExitError(withZ, "worktree");
+    return parseWorktreePorcelain(withZ.stdout, "\0");
   }
   /** Local branch names for the existing-branch picker (`show-ref --heads`).
    *  A convenience read: any failure (git down, budget exhausted) yields an

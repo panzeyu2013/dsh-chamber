@@ -76,6 +76,8 @@ class FakeRepository {
   throwBeforeAdd?: GitWorktreeError
   throwBeforeRemove?: GitWorktreeError
   readDelayMs = 0
+  /** Simulate a pre-2.47 Git: `worktree list --porcelain -z` exits 129. */
+  legacyGit = false
   onWorktreeList?: () => void
   onStatus?: () => void
   /** worktreePath -> gitDir (linked worktree `.git` pointer target). */
@@ -139,7 +141,11 @@ class FakeRepository {
         this.failNextList = false
         return this.result(2, '', 'transient list failure')
       }
-      return this.result(0, this.porcelain())
+      const withZ = args.includes('-z')
+      if (withZ && this.legacyGit) {
+        return this.result(129, '', "error: unknown switch `z'")
+      }
+      return this.result(0, withZ ? this.porcelain() : this.newlinePorcelain())
     }
     if (args[0] === 'status') {
       this.onStatus?.()
@@ -277,6 +283,21 @@ class FakeRepository {
     return `${fields.join('\0')}\0`
   }
 
+  /** Newline-delimited --porcelain form (the pre-2.47 fallback): fields are
+   *  line-separated and a blank line closes each record. */
+  private newlinePorcelain(): string {
+    const lines: string[] = []
+    for (const worktree of this.worktrees) {
+      lines.push(`worktree ${worktree.path}`, `HEAD ${worktree.head}`)
+      lines.push(worktree.branch === null ? 'detached' : `branch refs/heads/${worktree.branch}`)
+      if (worktree.locked) lines.push('locked test')
+      if (worktree.prunable) lines.push('prunable test')
+      if (worktree.bare) lines.push('bare')
+      lines.push('')
+    }
+    return `${lines.join('\n')}\n`
+  }
+
   private async enterMutation(): Promise<void> {
     this.activeMutations += 1
     this.maxActiveMutations = Math.max(this.maxActiveMutations, this.activeMutations)
@@ -358,6 +379,32 @@ test('snapshot keeps repository topology when one worktree status fails', async 
   assert.deepEqual(linked.runningSessionIds, ['s-ungrouped'])
   assert.equal(linked.dirty, null)
   assert.equal(snapshot.errors.some(error => error.operation === 'status' && error.path === LINKED), true)
+})
+
+test('snapshot falls back to newline-delimited porcelain when Git predates worktree list -z', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.legacyGit = true
+
+  const snapshot = await core.snapshot()
+  assert.equal(snapshot.sourceError, undefined)
+  assert.equal(snapshot.repos.length, 1)
+  assert.equal(snapshot.repos[0]!.worktrees.length, 2)
+  assert.equal(snapshot.repos[0]!.worktrees[0]!.isMain, true)
+  assert.equal(snapshot.repos[0]!.worktrees[0]!.workspaceId, 'ws-main')
+  assert.equal(snapshot.repos[0]!.worktrees[1]!.workspaceId, 'ws-feature')
+  // The NUL form was attempted first, then the newline fallback.
+  const listCalls = repo.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'list')
+  assert.deepEqual(listCalls.map(call => call.args.slice(2)), [['--porcelain', '-z'], ['--porcelain']])
+})
+
+test('preview/create also fall back to newline porcelain on a legacy Git', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.legacyGit = true
+
+  const preview = await previewNew(core, 'new-worktree', 'topic')
+  assert.match(preview.repoId, /^repo_[0-9a-f]{64}$/)
+  const listCalls = repo.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'list')
+  assert.deepEqual(listCalls.map(call => call.args.slice(2)), [['--porcelain', '-z'], ['--porcelain']])
 })
 
 test('overlapping snapshot polls share one in-flight host scan', async () => {
