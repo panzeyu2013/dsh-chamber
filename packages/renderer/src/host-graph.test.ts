@@ -221,15 +221,16 @@ test('dedupeHostEntries: covered set is O(1) per row and tolerates duplicate cov
   assert.deepEqual(dedupeHostEntries([row('a'), row('b'), row('c')], covered).map(r => r.id), ['c'])
 })
 
-test('toExtraRows: injects the per-instance base path into root-relative urls and drops optional fields', () => {
+test('toExtraRows: injects the per-instance base path into root-relative urls and drops non-root-relative urls', () => {
   const rows = [
     row('@scope/pkg', { inject: ['x'], immediately: true }),
-    row('pkg-no-prefix', { url: 'https://cdn.example/plugins/p/client.js?rev=r', rev: 'r' }),
+    row('pkg-absolute', { url: 'https://cdn.example/plugins/p/client.js?rev=r', rev: 'r' }),
+    row('pkg-protocol-relative', { url: '//cdn.example/plugins/p/client.js?rev=r', rev: 'r' }),
+    row('pkg-relative', { url: 'plugins/p/client.js?rev=r', rev: 'r' }),
   ]
   const out: ExtraModuleRow[] = toExtraRows(rows, '/api/i/ssh-42')
   assert.deepEqual(out, [
     { id: '@scope/pkg', url: '/api/i/ssh-42/plugins/@scope/pkg/client.js?rev=abc123', rev: 'abc123' },
-    { id: 'pkg-no-prefix', url: 'https://cdn.example/plugins/p/client.js?rev=r', rev: 'r' },
   ])
 })
 

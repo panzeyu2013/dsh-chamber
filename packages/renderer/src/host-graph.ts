@@ -196,15 +196,24 @@ export function dedupeHostEntries(entries: readonly HostGraphRow[], covered: rea
  * per-instance proxy prefix into root-relative bundle urls
  * ('/plugins/<id>/client.js?rev=…' → '<basePath>/plugins/<id>/client.js?rev=…')
  * so the script element fetches same-origin through the instance proxy.
- * Rows whose url is already absolute/relative stay untouched (defensive; the
- * host graph always emits root-relative urls).
+ * Non-root-relative urls (protocol-relative '//', absolute http(s)/blob/data:,
+ * or relative) are dropped: a poisoned host graph must never steer the
+ * module-script loader to an external origin.
  */
 export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): ExtraModuleRow[] {
-  return rows.map(row => ({
-    id: row.id,
-    url: row.url.startsWith('/') ? `${basePath}${row.url}` : row.url,
-    rev: row.rev,
-  }))
+  const out: ExtraModuleRow[] = []
+  for (const row of rows) {
+    // Only root-relative bundle urls ('/plugins/...') are valid: they are
+    // proxied same-origin through basePath. Reject protocol-relative ('//'),
+    // absolute (http(s)/blob/data:) and relative urls — a poisoned host graph
+    // must never steer the module-script loader to an external origin.
+    if (!row.url.startsWith('/') || row.url.startsWith('//')) {
+      console.warn(`[host-graph] dropping non-root-relative bundle url for ${row.id}`)
+      continue
+    }
+    out.push({ id: row.id, url: `${basePath}${row.url}`, rev: row.rev })
+  }
+  return out
 }
 
 /**

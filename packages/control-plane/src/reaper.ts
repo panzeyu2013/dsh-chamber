@@ -129,7 +129,9 @@ async function portOwnedBy(pid: number, port: number): Promise<boolean> {
   let verdict: boolean | null = lsofPort(pid, port)
   if (verdict === null) verdict = ssPort(pid, port)
   if (verdict === null) verdict = await procPort(pid, port)
-  return verdict === null ? true : verdict
+  // fail-closed: when every probe is unavailable we cannot prove the pid owns
+  // the port, so never treat it as owned (an unverifiable process is kept).
+  return verdict === true
 }
 
 async function killAndConfirm(pid: number): Promise<void> {
@@ -208,7 +210,9 @@ async function processEntry(dir: string, name: string, log: LogFn): Promise<{ st
     ? identity.command.includes('dsh')
     : identity.command.includes('dsh') && identity.command.includes(`--profile ${profile}`)
   const portNum = Number(record.port)
-  const portOk = Number.isInteger(portNum) && portNum > 0 ? await portOwnedBy(pid, portNum) : true
+  // Missing/invalid port ⇒ cannot verify the listener belongs to this pid;
+  // fail-closed (kept) instead of the previous fail-open default.
+  const portOk = Number.isInteger(portNum) && portNum > 0 ? await portOwnedBy(pid, portNum) : false
   if (!commandOk || !portOk) {
     log(`reaper: ${pid} identity mismatch (command='${identity.command}'); record kept`)
     return { status: 'kept' }
