@@ -1,23 +1,25 @@
 /**
- * VS Code deep-link overlay button (design 16 §6): anchored to the top-right
- * of the main-area title-bar row (the `shell.overlay` frame-wide layer is
- * `position:absolute; inset:0`, so the entry positions itself frame-relative;
- * the vendor layer CSS `.overlayLayer > * { pointer-events: auto }` makes the
- * root element clickable without any opt-in of its own).
+ * VS Code deep-link header utility button (design 16 §6, real-machine
+ * placement fix 2026-08): registered into the OFFICIAL conversation header
+ * utilities slot (`conversation.session.header.utilities`, the same
+ * right-aligned row as the vendor "Session log" action), so the button lays
+ * out INLINE beside it — the original `shell.overlay` top-right anchor was
+ * measured to overlap that row (details column closed ⇒ the center column
+ * reaches the frame edge), so the frame-level position is gone entirely.
  *
  * Three gates (design 16 §6.3), ANY failure → render null (never a dead
  * button):
  *  1. VS Code availability === true (unknown/probe-failed → hidden, fail-closed);
- *  2. the CURRENT session belongs to a workspace whose path exists.
- *    (Both remote AND local sources show — user decision 2026-08: local
- *    opens `vscode://file/<path>`, remote opens `ssh-remote+`.)
+ *  2. THIS header's session belongs to a workspace whose path exists
+ *    (the slot delivers the per-header `sessionId`; both remote AND local
+ *    sources show — user decision 2026-08: local opens `vscode://file/<path>`,
+ *    remote opens `ssh-remote+`).
  *
- * The current workspace path is read from THIS ctx's own runtime stores
- * (sessions snapshot `current` + workspaces rows `sessionIds`/`path` — the
- * vendor stores carry both, so the plugin keeps zero @dsh-chamber dependency,
- * design 16 §6.2/P2-1).
+ * Workspace rows come from the framework's global `useWorkspaces` selector
+ * hook (the same store the sidebar groups by), so the plugin keeps zero
+ * @dsh-chamber dependency and no direct ctx store access (design 16 §6.2).
  */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ensureVscodeAvailability,
   getVscodeAvailability,
@@ -28,33 +30,28 @@ import {
 } from '../shared/coordinator.ts'
 import styles from './OpenInVscodeButton.module.css'
 
-export interface OpenInVscodeProps {
-  /** Per-boot source id ('local' | 'ssh-<id>') from the slot inject factory. */
+/** Injected face the plugin supplies: per-boot source id + bound translator. */
+export interface OpenInVscodeInjected {
+  /** Per-boot source id ('local' | 'ssh-<id>'), read from ctx.chamberInstanceId. */
   sourceId: string
   /** Bound translator for the plugin namespace. */
   t: Translate
-  /** The source's own sessions list observable (vendor runtime store). */
-  sessionsList: {
-    subscribe(listener: () => void): () => void
-    getSnapshot(): { current?: string }
-  }
-  /** The source's own workspaces list observable (vendor runtime store rows carry path). */
-  workspacesList: {
-    subscribe(listener: () => void): () => void
-    getSnapshot(): { items: ReadonlyArray<{ workspaceId: string; path: string; sessionIds: string[] }> }
-  }
 }
 
-/** useSyncExternalStore adapter over the vendor observable lists (zustand-style). */
-function useObservableSnapshot<T>(observable: {
-  subscribe(listener: () => void): () => void
-  getSnapshot(): T
-}): T {
-  return useSyncExternalStore(
-    (callback) => observable.subscribe(callback),
-    () => observable.getSnapshot(),
-    () => observable.getSnapshot(),
-  )
+/**
+ * Slot component props: the injected face plus the framework standard kit the
+ * header-utilities slot delivers — the per-header `sessionId` and the global
+ * `useWorkspaces` selector hook over the vendor workspace store. Structural
+ * subset on purpose (the vendor runtime's published d.ts trees are absent in
+ * the workspace symlink, so the plugin types against the slice it reads).
+ */
+export interface OpenInVscodeProps extends OpenInVscodeInjected {
+  /** The session this header belongs to (framework-supplied). */
+  sessionId: string
+  /** Framework selector hook over the workspace list (rows carry path/sessionIds). */
+  useWorkspaces: <S>(sel: (ws: {
+    items: ReadonlyArray<{ workspaceId: string; path: string; sessionIds: string[] }>
+  }) => S) => S
 }
 
 /**
@@ -75,7 +72,7 @@ function VscodeLogo() {
   )
 }
 
-export function OpenInVscodeButton({ sourceId, t, sessionsList, workspacesList }: OpenInVscodeProps) {
+export function OpenInVscodeButton({ sourceId, t, sessionId, useWorkspaces }: OpenInVscodeProps) {
   const [available, setAvailable] = useState<boolean | null>(getVscodeAvailability())
 
   useEffect(() => {
@@ -104,18 +101,16 @@ export function OpenInVscodeButton({ sourceId, t, sessionsList, workspacesList }
     }
   }, [])
 
-  const sessions = useObservableSnapshot(sessionsList)
-  const workspaces = useObservableSnapshot(workspacesList)
+  // Hooks run unconditionally (before any gate's early return).
+  const workspaces = useWorkspaces(ws => ws.items)
 
   // Gate 1: availability (fail-closed — null/undefined/false all hide).
   if (available !== true) return null
-  // Gate 2: the current session must live in a workspace with a concrete path.
-  // Both remote and local sources show (user decision 2026-08); the launch
-  // branch (ssh-remote vs file) is decided in the main process by instanceId.
-  const current = sessions.current
-  const workspace = current === undefined
-    ? undefined
-    : workspaces.items.find(item => item.sessionIds.includes(current))
+  // Gate 2: THIS header's session must live in a workspace with a concrete
+  // path. Both remote and local sources show (user decision 2026-08); the
+  // launch branch (ssh-remote vs file) is decided in the main process by
+  // instanceId.
+  const workspace = workspaces.find(item => item.sessionIds.includes(String(sessionId)))
   const path = workspace?.path
   if (path === undefined || path === '') return null
 

@@ -135,7 +135,16 @@
    （实例仍在启动的瞬态信号）改为有界重试（默认 6 次 × 500ms，deps 可注入），
    超时/其它通道错误仍 fail-fast——shell 在 spawn 窗口内 boot 时不再静默丢失
    profile 安装的插件（如 `dsh-session-log-export`），预算耗尽后保持原静默降级
-   契约；host-graph.test.ts 增"503 重试后成功加载"用例
+   契约；host-graph.test.ts 增"503 重试后成功加载"用例。**vscode 插件实机
+   修复（2026-08，两处）**：① 初始实现注入工厂读取未声明的 ctx 属性
+   （`sessions`/`workspaces`），cordis 物化时抛 `cannot get property "sessions"
+   without inject`，被 slot 错误边界捕获为 `data-slot-error` 占位，按钮永不
+   显示——改为改用框架标准 props（会话头部的 `sessionId` + 全局 `useWorkspaces`
+   钩子），不再直接读 ctx store（inject 保持 `['slots','locale']`）；② 初始
+   `shell.overlay` frame 右上锚点（`top:12px;right:16px`）实机测量与官方会话头部
+   utilities 行（details 关闭时中心列到 frame 右缘）重叠 16px——注册目标改为官方
+   `conversation.session.header.utilities` 槽，按钮以行内布局排在 session-log
+   旁边（实测间距 8px、同行、无重叠），见设计 16 §6.1 修正。
    **版本容忍与 rc.8 后端适配（2026-08，v0.1.2 回归修复）**：
   - **额外行 apply 失败降级**（boot.tsx 对 extraRows 容错 + sweep 排除，替代
     "任一额外行失败即整 boot 失败"——版本漂移 = 特性缺席而非损坏，见设计 09 §3.3

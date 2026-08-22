@@ -188,20 +188,27 @@ detectVscodeAvailability(platform): { available: boolean }
 
 ## 6. 客户端插件（@dsh-chamber/dsh-client-ui-vscode）
 
-### 6.1 放置：shell.overlay
+### 6.1 放置：会话头部 utilities（实机修正 2026-08，替代 shell.overlay）
 
-- 注册 `shell.overlay` 列表条目——layout fork（chamber 自有包）已声明的
-  frame-wide 通用槽（`{kind:'list', scope:'root'}`，当前**零占用**），语义：
-  位于所有列之上、滚动容器之外、默认 click-through、条目自选加入指针事件；
-- 按钮 entry 自有 CSS：frame 右上角、垂直居中于标题栏行；对齐 `--dsw-alias-*`
-  主题 token；`pointer-events` opt-in；aria-label / tooltip / 键盘可聚焦；
-- 逐实例 ctx 渲染（root scope per shell）→ 可见按钮天然属于**活动来源**，
-  无需 chamberBridge 的"当前来源"概念（§6.3）；
-- **实施第 0 步（P1-5，已验证 ✅ 2026-08）**：vendor `dsh-client-ui-layout/src/client/AppFrame.tsx`
-  实证确认渲染 `shell.overlay`——`<div className={overlayLayer} data-shell-overlay>{renderSlot('shell.overlay', {})}</div>`，
-  层为 `position:absolute; inset:0; z-index:20`，且 `.overlayLayer > * { pointer-events: auto }`
-  使条目**自动 opt-in 点击**（无需条目自设）；条目以绝对定位锚定 frame 右上即可。
-  按钮"垂直居中于标题栏行"的 top 偏移依赖 vendor 标题栏行高（实机视觉校验微调，见 §10）。
+- **最终实现**：注册进**官方会话头部 utilities 槽**（`conversation.session.header.utilities`，
+  与 vendor "Session log" 同一右对齐行）——按钮以普通流式布局排在 session-log 旁边，
+  **无绝对定位**，由头部排版自动排列；
+- **为何放弃 shell.overlay（实机测量）**：初始实现注册 `shell.overlay`（layout fork 已声明的
+  frame-wide 槽，`{kind:'list', scope:'root'}`）并以 `top:12px; right:16px` 锚定 frame 右上角。
+  实机测量发现：details 列关闭（默认）时中心列延伸到 frame 右缘，官方会话头部
+  （top 0→76）的 utilities 行右对齐于头部右侧——session-log 按钮实测 x=1141→1252，
+  而 frame 右上锚点 x=1236→1264，**必然重叠**（重叠区 16px）。frame 右上不存在可靠
+  空闲锚点（头部高度/tabs/details 开合均变化），故整个 frame 层方案废弃；
+- 槽是 session 作用域：组件直接收到**本头部所属的 `sessionId`** 与框架全局
+  `useWorkspaces` 选择器钩子（同一 store，侧边栏归组同源），**不再直接读 ctx 的
+  sessions/workspaces**（inject 声明保持 `['slots','locale']`）；
+- 按钮 CSS：行内 32×32 图标按钮（透明底、hover 主题 tint、focus 环），与头部工具行
+  对齐；aria-label / tooltip / 键盘可聚焦保持；
+- **实施第 0 步（P1-5，已按原方案验证 ✅ 2026-08，后被实机放置测量推翻）**：vendor
+  `dsh-client-ui-layout/src/client/AppFrame.tsx` 实证渲染 `shell.overlay`
+  （`<div className={overlayLayer} data-shell-overlay>{renderSlot('shell.overlay', {})}</div>`，
+  层 `position:absolute; inset:0; z-index:20`，`.overlayLayer > * { pointer-events: auto }`）——
+  该槽保留在 layout fork 中（零占用），未来 frame 级徽标/浮层仍可复用。
 
 ### 6.2 coordinator（单例，git 插件同款模式）
 

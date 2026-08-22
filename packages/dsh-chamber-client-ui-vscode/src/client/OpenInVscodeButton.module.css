@@ -1,33 +1,32 @@
-/* VS Code deep-link overlay button (design 16 §6.1). The `shell.overlay`
-   layer is frame-wide (absolute, inset 0, z-index 20) and click-through by
-   default; the vendor CSS `.overlayLayer > * { pointer-events: auto }` opts
-   the entry's root element back in, so this button is clickable as-is. */
+/* VS Code deep-link header utility button (design 16 §6, placement fix
+   2026-08). Registered into the official conversation header utilities slot,
+   so this is a plain INLINE icon button in the header's right-aligned
+   utilities row (beside the vendor "Session log" pill) — no absolute
+   positioning: the header's own flow layout orders it and no frame-level
+   anchor can collide with the header content. Size matches the row height
+   (32px) and mirrors the vendor header-action affordance (transparent base,
+   subtle hover tint, explicit focus ring). */
 
 .button {
-  position: absolute;
-  /* Title-bar row anchoring: the row height is vendor-determined; 12px is the
-     initial tuned offset (visually validated at the real-machine pass, design
-     16 §10). The button vertically centers itself in a ~52px header row. */
-  top: 12px;
-  right: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: 16px;
   background: transparent;
   /* The official VS Code logo carries its own brand fill; hover feedback is
      the background tint + a subtle brightness lift on the mark. */
   cursor: pointer;
   outline: none;
+  flex: none;
 }
 
 .button:hover,
 .button:focus-visible {
-  background: var(--dsw-alias-hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .button:hover svg {
