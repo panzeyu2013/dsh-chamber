@@ -22,11 +22,16 @@ name: Release
 # unsupported by 2026-11, so the mac leg runs on macos-latest (= macOS 26,
 # arm64 — the 2026-08 v0.1.2 release decision). Windows builds on windows-2022
 # (windows-latest's VS 18 toolchain is not detected correctly by the node-gyp
-# stack — same finding as OpenChamber). No Apple Developer ID / notarization
-# secrets are configured: the macOS app is ad-hoc signed by the afterPack hook
-# (structurally valid signature, so no "app is damaged" on Gatekeeper-relaxed
+# stack — same finding as OpenChamber). macOS is signed + notarized when the
+# Apple secrets are configured (CSC_LINK/CSC_KEY_PASSWORD + APPLE_ID/
+# APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID); the verify step then fails closed
+# unless the .app carries a Developer ID signature and a valid stapled
+# notarization ticket, so a missing/misconfigured secret can never publish an
+# ad-hoc build as a formal release (finalize waits on build-macos). Dry runs
+# stay ad-hoc tolerant (no secrets → ad-hoc via the afterPack hook, which is a
+# structurally valid signature so no "app is damaged" on Gatekeeper-relaxed
 # systems; a default Gatekeeper still requires right-click/open or "allow
-# anywhere"), the Windows exe goes out unsigned — its auto-install proceeds
+# anywhere"). The Windows exe goes out unsigned — its auto-install proceeds
 # with a SmartScreen warning (documented tradeoff, design 11 §7); the macOS
 # INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
 
@@ -220,28 +225,43 @@ jobs:
       - name: Build and package macOS app (arm64)
         # electron-builder runs the afterPack hook
         # (packages/desktop/scripts/after-pack-adhoc-sign.mjs), which ad-hoc
-        # signs the bundle before the dmg is built (no Apple signing /
-        # notarization secrets are configured). publish=always (unless
-        # dry_run) uploads every artifact into the draft release created
-        # above — INCLUDING the update feed (zip + latest-mac.yml /
-        # beta-mac.yml) that electron-updater consumes (design 11 §6):
-        # update-info files are only generated when a publish policy other
-        # than "never" is active.
+        # signs the bundle first; when the Apple secrets below are present it
+        # then replaces that with a Developer ID signature and notarizes
+        # (mac.notarize=true reads APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/
+        # APPLE_TEAM_ID). publish=always (unless dry_run) uploads every
+        # artifact into the draft release created above — INCLUDING the update
+        # feed (zip + latest-mac.yml / beta-mac.yml) that electron-updater
+        # consumes (design 11 §6): update-info files are only generated when a
+        # publish policy other than "never" is active.
         run: |
+          # Unset empty secrets so electron-builder treats them as absent — its
+          # chooseNotNull keeps "" (an empty CSC_LINK would fail the .p12 import,
+          # while empty notarization vars are simply skipped). A secret-less dry
+          # run therefore still ad-hoc signs.
+          if [[ -z "$CSC_LINK" ]]; then unset CSC_LINK; fi
+          if [[ -z "$CSC_KEY_PASSWORD" ]]; then unset CSC_KEY_PASSWORD; fi
+          if [[ -z "$APPLE_ID" ]]; then unset APPLE_ID; fi
+          if [[ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then unset APPLE_APP_SPECIFIC_PASSWORD; fi
+          if [[ -z "$APPLE_TEAM_ID" ]]; then unset APPLE_TEAM_ID; fi
           pnpm run build:desktop
           pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Verify packaged macOS app (OpenChamber-style, ad-hoc signed)
-        # No Apple Developer ID / notarization secrets are configured; the
-        # afterPack hook ad-hoc signs the bundle so the code signature is
-        # structurally valid (without it, macOS rejects the quarantined
-        # download as "damaged"). Verify the parts that must be right
-        # regardless: the .app bundle exists, its signature verifies, the
-        # darwin dsh runtime is baked in (extraResources vendor), and
-        # artifacts — including the update feed (zip + channel yml) when not
-        # dry-running — were made.
+      - name: Verify macOS app — Developer ID + notarization (fail-closed on release)
+        # Structural checks run for every build (ad-hoc dry runs included): the
+        # .app bundle exists, its signature verifies, and the darwin dsh
+        # runtime is baked in (extraResources vendor). A REAL release
+        # (dry_run != true) additionally FAILS CLOSED unless the .app carries a
+        # Developer ID signature, a stapled notarization ticket, and Gatekeeper
+        # accepts it — missing/misconfigured secrets fail this job, which (via
+        # the finalize `needs`) keeps the draft unpublished. The update feed
+        # (zip + channel yml) must also exist when not dry-running.
         run: |
           set -euo pipefail
           APP_DIR=$(find packages/desktop/release -maxdepth 2 -name "*.app" -type d | head -n 1)
@@ -253,6 +273,10 @@ jobs:
           node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('darwin-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
           test -n "$(ls packages/desktop/release/*.dmg 2>/dev/null | head -n 1)"
           if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            codesign -dv --verbose=4 "$APP_DIR" 2>&1 | tee /tmp/codesign-dv.txt
+            grep -q 'Authority=Developer ID' /tmp/codesign-dv.txt
+            xcrun stapler validate "$APP_DIR"
+            spctl --assess --type execute --verbose=4 "$APP_DIR"
             test -n "$(ls packages/desktop/release/*.zip 2>/dev/null | head -n 1)"
             test -n "$(ls packages/desktop/release/*-mac.yml 2>/dev/null | head -n 1)"
           fi
