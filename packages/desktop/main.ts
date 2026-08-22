@@ -1337,12 +1337,14 @@ if (!gotTheLock) {
     // renderer's auto-start POST and the ready push. The renderer's own
     // POST stays idempotent on the same path; a spawn failure here is
     // non-fatal (the renderer surfaces the instance error state).
-    // v1 has no Web capability that needs a permission (camera/mic/clipboard/
-    // notifications/geolocation). Electron default-grants these to same-origin
-    // content, and the control plane also serves proxied remote-instance content
-    // under /api/i/<id>/* (same origin) — so deny-by-default instead.
+    // Deny Web permission requests by default: Electron default-grants these to
+    // same-origin content, and the control plane also serves proxied remote-instance
+    // content under /api/i/<id>/* (same origin). Keep one benign exception —
+    // clipboard-sanitized-write (navigator.clipboard copy) — which carries no
+    // read/privacy risk; clipboard-read and media/geolocation/notifications stay
+    // denied.
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-    session.defaultSession.setPermissionCheckHandler(() => false);
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
 
     void cp.startLocal().catch(err => {
       console.error('[dsh-chamber] 本地实例预启动失败（renderer 仍会尝试）：', err);
