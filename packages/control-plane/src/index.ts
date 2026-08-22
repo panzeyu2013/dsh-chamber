@@ -179,6 +179,12 @@ export interface PlaneHandle {
 export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHandle {
   const port = options.port ?? 17500
   const host = options.host ?? '127.0.0.1'
+  if (host !== '127.0.0.1' && host !== '::1') {
+    // loopback-only is a v1 invariant, not merely a default: a non-loopback
+    // bind would expose the anonymous management API + reverse proxy to the
+    // network, and the Host/Origin fence (api.ts corsFor) is browser-only.
+    throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)}; loopback-only is a v1 invariant`)
+  }
   const stateDir = options.stateDir ?? process.env.DSH_CHAMBER_STATE ?? DEFAULT_STATE_DIR
   const dshWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
   const webDistDir = options.webDistDir === undefined ? undefined : options.webDistDir
