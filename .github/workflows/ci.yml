@@ -59,7 +59,7 @@ jobs:
         run: pnpm run test:desktop
       - name: Renderer shell unit tests
         run: pnpm run test:renderer-shell
-      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web)
+      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / vscode)
         run: |
           pnpm run typecheck:sidebar
           pnpm run typecheck:git
@@ -67,6 +67,7 @@ jobs:
           pnpm run typecheck:connections
           pnpm run typecheck:settings-bridge
           pnpm run typecheck:client-web
+          pnpm run typecheck:vscode
       - name: Client and host plugin unit tests (sidebar / git / settings-bridge / connections / client-web / connection)
         run: |
           pnpm run test:sidebar

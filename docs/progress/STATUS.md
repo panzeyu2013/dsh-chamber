@@ -6,6 +6,31 @@
 
 ## 未完成 / 待执行
 
+- **VS Code 深链插件（设计 16，M0–M2 已实现，2026-08；独立复核/实机验收进行中）**：
+  `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
+  实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：
+  parseOpenVscodeIntent / buildVscodeRemoteUrl（authority 与 SSH_HOST_PATTERN 解耦、
+  IPv6 括号、sshPort≠22 拒绝）/ detectVscodeAvailability（纯 fs+PATH，默认口径）/
+  runVscodeLaunch 双入口共用流水线，43 用例全绿）+ main.ts 接线（顶层 open-url +
+  pendingIntents 去重队列 + second-instance argv 扫描 + isPackaged/win32 门控协议注册 +
+  `dsh-chamber:vscode-availability`/`open-vscode` 两 IPC + drain 后 best-effort intent
+  推送）+ preload 面（`vscode.availability()/open()`、`deepLink.onIntent()`）+ 新客户端
+  插件 `@dsh-chamber/dsh-client-ui-vscode`（`shell.overlay` 主区右上按钮（vendor
+  AppFrame 已实证渲染该槽、条目自动 opt-in pointer-events），可用性 + 当前工作区双门控
+  fail-closed，**本地与远程来源均显示**（用户决策 2026-08：local 走 `vscode://file/`，
+  远程走 `ssh-remote+`），ctx 直读 current workspace path，零 @dsh-chamber 依赖）+ IPC 只增
+  + electron-builder `protocols` + `deep-link.ts` 进打包 files。**现有包改动 = 0**
+  （sidebar/layout/connections/settings/git 均不动）。验证：test:desktop 全链 263 用例
+  （含 deep-link 43）、根 typecheck、typecheck:vscode、typecheck 全插件回归、
+  build:renderer、test:renderer-shell（含锁步断言）、test:sidebar/test:git、verify:i18n
+  全绿。**实现后两轮独立审查（2026-08，无 P0）**：安全契约审查修复 P1×2（按钮
+  `ssh-<id>`→裸 id 映射、可用性探测 X_OK 补 isFile）与 P2×4（userinfo/port 拒绝、
+  IPC instance pattern 对称校验、openVscodeUrl 注入点 scheme 复验、drain .catch）；
+  前端接线审查修复 P1×1（coordinator 桥未就绪不固化 + 有界轮询）与 P2×5（/shared
+  barrel、open .catch、chamberInstanceId bail、删未用 peer、焦点环）。
+  剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
+  N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径）。契约见
+  `docs/design/16-vscode-deeplink.md`。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径；Unix 为契约目标。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化透传、

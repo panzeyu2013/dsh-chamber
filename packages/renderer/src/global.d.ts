@@ -334,7 +334,28 @@ export interface SystemResumeSurface {
   onResume(callback: (payload: { timestamp: number }) => void): () => void
 }
 
-/** The full bridge: app info + ssh + update + chamber settings + system resume. */
+/** window.dshChamber.vscode — VS Code availability probe + open action (design 16 §5/§6.4). */
+export interface VscodeSurface {
+  /** Re-probed in the main process on every call (no stale cache); fail-closed in the UI. */
+  availability(): Promise<{ available: boolean }>
+  /** The renderer button trigger — the same runVscodeLaunch pipeline as the OS deep link. */
+  open(instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+}
+
+/** Normalized deep-link intent pushed from the main process (design 16 §2). */
+export interface DeepLinkIntent {
+  /** Raw registry id ('local' | registry id); the App layer prefixes 'ssh-' for remote sources. */
+  instanceId: string
+  path: string
+}
+
+/** window.dshChamber.deepLink — best-effort source-activation push for OS deep links. */
+export interface DeepLinkSurface {
+  onIntent(callback: (intent: DeepLinkIntent) => void): () => void
+}
+
+/** The full bridge: app info + ssh + update + chamber settings + system resume
+ *  + vscode deep-link surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -343,6 +364,8 @@ export interface DshChamberBridge {
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
+  vscode: VscodeSurface
+  deepLink: DeepLinkSurface
 }
 
 declare global {

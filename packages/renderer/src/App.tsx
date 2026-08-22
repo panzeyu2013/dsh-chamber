@@ -1004,6 +1004,21 @@ export default function App() {
     })
   }, [selectView])
 
+  /** VS Code OS 深链（design 16 §2，best-effort）：主进程推送归一化 intent →
+   *  激活对应来源 shell。raw id → 视图 id 契约（P1-4）：'local' 原样，
+   *  注册表 id 拼 `ssh-` 前缀。窗口未就绪时推送已被主进程跳过（VS Code
+   *  启动由主进程独立完成，渲染层激活从不阻塞它）。桥与 desktopSsh 同一批
+   *  expose，sshBridgeReady 即 deepLink 可用。 */
+  useEffect(() => {
+    if (!sshBridgeReady) return
+    const deepLink = window.dshChamber?.deepLink
+    if (deepLink === undefined) return
+    return deepLink.onIntent((intent) => {
+      const sourceId = intent.instanceId === 'local' ? 'local' : `ssh-${intent.instanceId}`
+      selectView(sourceId)
+    })
+  }, [sshBridgeReady, selectView])
+
   /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。
    *  Always pull on a mutation: the mounted producer's push can lag the host's
    *  registry reorder (create → prepend → insertBefore), so relying on the
