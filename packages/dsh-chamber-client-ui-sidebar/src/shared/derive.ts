@@ -228,18 +228,20 @@ export function projectInstanceSnapshot(
       blank?: boolean
       updatedAt?: number
     }>
-    state?: string
     phase?: string
   },
 ): InstanceSnapshot | undefined {
   // Both arrival phases are sticky after their first success in the upstream
-  // runtime. The activity states are therefore part of completeness: during a
-  // reconnect they step to loading/error while phase remains ready. Withdrawing
-  // here clears the producer's content signature, so an identical recovered
-  // baseline is emitted again instead of being suppressed forever.
+  // runtime. The workspace store also projects its pull-activity `state`
+  // (loading/error during a reconnect, while `phase` stays ready), so a
+  // loading/error workspace withdraws here — clearing the producer's content
+  // signature so an identical recovered baseline is emitted again instead of
+  // being suppressed forever. The session store projects only `phase` (the
+  // arrival lifecycle): `SessionListState` has no `state` axis, and its
+  // baseline refreshes together with the workspace baseline on reconnect, so
+  // the workspace `state` check is the single completeness authority there.
   if (workspaces.baselinesReady !== true || workspaces.state !== 'idle'
-    || workspaces.phase !== 'ready' || sessions.state !== 'idle'
-    || sessions.phase !== 'ready') return undefined
+    || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
   const byId = sessions.byId ?? {}
   return {
     workspaces: (workspaces.items ?? []).map(item => ({
