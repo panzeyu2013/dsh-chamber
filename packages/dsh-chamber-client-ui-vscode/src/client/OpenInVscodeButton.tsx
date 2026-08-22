@@ -67,7 +67,7 @@ export interface OpenInVscodeProps extends OpenInVscodeInjected {
  * (user decision 2026-08); implies no endorsement.
  */
 function VscodeMark() {
-  return <img src={vscodeIcon} width={16} height={16} alt="" draggable={false} />
+  return <img src={vscodeIcon} alt="" draggable={false} />
 }
 
 export function OpenInVscodeButton({ sourceId, t, sessionId, useWorkspaces }: OpenInVscodeProps) {

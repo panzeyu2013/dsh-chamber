@@ -33,6 +33,16 @@
   filter: brightness(1.15);
 }
 
+/* The official app icon is a rounded square: 20px inside the 32px pill keeps
+   a balanced 6px margin instead of the 16px icon's airy 8px ring. */
+.button img {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: block;
+  user-select: none;
+}
+
 /* Keyboard focus ring (frontend-review P2-7): outline:none above needs an
    explicit visible equivalent, not just a background tint. */
 .button:focus-visible {
