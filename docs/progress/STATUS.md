@@ -130,7 +130,13 @@
   collectExtraRows 预加载之前装好（首个带额外行的 boot 不再让官方 bundle 在
   sink 安装前求值）；shell.ts bootError 分支经测试 loader + fixture 单测覆盖
   （`shell.test.ts`，`--import scripts/test-shell-register.mjs`）。
-  详见设计 09 §3.2。**版本容忍与 rc.8 后端适配（2026-08，v0.1.2 回归修复）**：
+  详见设计 09 §3.2。**pre-ready 503 有界重试（2026-08，实机验证修复）**：
+   `collectExtraRows` 对 `clientGraph/graph` 的 503 `instance_unavailable`
+   （实例仍在启动的瞬态信号）改为有界重试（默认 6 次 × 500ms，deps 可注入），
+   超时/其它通道错误仍 fail-fast——shell 在 spawn 窗口内 boot 时不再静默丢失
+   profile 安装的插件（如 `dsh-session-log-export`），预算耗尽后保持原静默降级
+   契约；host-graph.test.ts 增"503 重试后成功加载"用例
+   **版本容忍与 rc.8 后端适配（2026-08，v0.1.2 回归修复）**：
   - **额外行 apply 失败降级**（boot.tsx 对 extraRows 容错 + sweep 排除，替代
     "任一额外行失败即整 boot 失败"——版本漂移 = 特性缺席而非损坏，见设计 09 §3.3
     修订）：rc.8 后端新增的 `dsh-client-ui-attachment` 等核心 client half 作为
@@ -427,6 +433,16 @@
    回归；全程仅改 chamber 投影，不改上游 dsh。复验 ✓（根 + sidebar typecheck、sidebar
    133、renderer shell 39、renderer production build 1093 modules、verify:i18n；同轮修复前
    control-plane / desktop / settings / connections / client-web 全矩阵亦全绿）。
+   **2026-08 session 状态图标更新慢修复（snapshot push 断链）**：`projectInstanceSnapshot`
+   的完备性判定此前同时检查 `sessions.state !== 'idle'`，但 vendor `SessionListState`
+   （store 投影）只带 `phase`（arrival 生命周期）、不投影 manager 的 `state`
+   （pull-activity loading/error 轴）——该字段恒为 `undefined`、条件恒真，导致已挂载
+   ctx 的 snapshot 生产者**永远上报 undefined**，聚合事实退回 30s unary 兜底轮询，
+   session「运行中」环等实时状态最长滞后一个轮询周期（~30s）才反映。修复：删除
+   `sessions.state` 检查（sessions 只校验 `phase !== 'ready'`）；reconnect 的
+   loading/error 撤回由 workspace store 的 `state` 轴承担（workspace 与 session
+   baseline 同随 `handleConnected` 刷新）。`test:sidebar` 92、`test:renderer-shell`、
+   `typecheck:sidebar`、`build:renderer` 全绿。
    记录在案（NIT，非阻塞）：updatedOrder/sessionUpdatedAtByAccount 只按来源
    不按 workspace 修剪（官方 retainAccountKeys 逐 workspace；有界、渲染不可
    见，契约变更留后续）；settings-store/update-store 未加 singleton 守卫

@@ -125,7 +125,11 @@ test('bootInstanceShell: installs the module system BEFORE any host-graph fetch 
     assert.equal(state.booted, true)
     // The fixture's ensureWebModuleSystem records 'ensure' synchronously at
     // bootInstanceShell entry; the fetch is collectExtraRows's first step.
-    assert.deepEqual(__testEventLog(), ['ensure', 'fetch'])
+    // collectExtraRows now retries the pre-ready 503 on a bounded budget, so
+    // the event log carries repeated 'fetch' entries — the invariant under
+    // test is the ORDER (module system installed before the FIRST fetch).
+    const events = __testEventLog()
+    assert.deepEqual(events.slice(0, 2), ['ensure', 'fetch'])
   } finally {
     __testResetEventLog()
     restoreFetch()

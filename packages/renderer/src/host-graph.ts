@@ -258,6 +258,23 @@ function reportDiagnostic(
 export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
+  /**
+   * Retry budget for the transient 503 `instance_unavailable` pre-ready
+   * signal (design 09 module C race: the shell may boot while the instance is
+   * still starting; the proxy answers 503 fast and the graph appears moments
+   * later). Only the fast 503-null path retries — a hung fetch (30s timeout)
+   * or other channel failure still fails fast, so the budget is bounded by the
+   * delay sum (~3s), never by per-attempt timeouts. Budget exhaustion keeps
+   * today's silent-degrade contract (no extra plugins for this boot).
+   */
+  retry?: {
+    /** Total fetch attempts including the first. Default 6. */
+    attempts?: number
+    /** Delay between attempts. Default 500ms. */
+    delayMs?: number
+    /** Sleep implementation (test seam). Defaults to setTimeout. */
+    sleep?(ms: number): Promise<void>
+  }
 }
 
 /**
@@ -272,25 +289,47 @@ export interface CollectExtraRowsDeps {
  * non-2xx / malformed graph): the boot proceeds without extra plugins; the
  * composite still provides the entire official shell, only profile-installed
  * client plugins are lost (graph-channel failure degrade). A 503
- * `instance_unavailable` is the expected pre-ready state and stays silent
- * (fetchHostGraph resolves null). A bundle that fails to LOAD is NOT a
- * degrade: it throws, the instance's boot fails loud and shows the error —
- * a broken extra plugin must never silently disappear (design 09 §4 fail-loud).
+ * `instance_unavailable` is the expected pre-ready state: the fetch is
+ * retried on a bounded budget (the instance's graph appears moments after the
+ * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then
+ * degrades silently, so a shell that boots inside the spawn window still gets
+ * its profile plugins instead of losing them for the rest of the boot. A
+ * bundle that fails to LOAD is NOT a degrade: it throws, the instance's boot
+ * fails loud and shows the error — a broken extra plugin must never silently
+ * disappear (design 09 §4 fail-loud).
  */
 export async function collectExtraRows(
   instanceId: string,
   basePath: string,
   deps: CollectExtraRowsDeps,
 ): Promise<ExtraModuleRow[]> {
-  let entries: HostGraphRow[] | null
-  try {
-    entries = await fetchHostGraph(basePath)
-  } catch (error) {
-    console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, error)
+  const retry = {
+    attempts: deps.retry?.attempts ?? 6,
+    delayMs: deps.retry?.delayMs ?? 500,
+    sleep: deps.retry?.sleep ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms))),
+  }
+  let entries: HostGraphRow[] | null = null
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+    try {
+      entries = await fetchHostGraph(basePath)
+    } catch (error) {
+      // Non-503 channel failures are NOT transient — fail fast as before
+      // (a hung fetch already consumed its own 30s timeout; retrying would
+      // only stack them).
+      lastError = error
+      break
+    }
+    if (entries !== null) break
+    // 503 instance_unavailable: instance still starting. Bounded retry.
+    if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
+  }
+  if (lastError !== null) {
+    console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, lastError)
     reportDiagnostic(
       instanceId,
-      error instanceof HostGraphChannelError ? error.diagnosticState : 'graph-unreachable',
-      { message: error instanceof Error ? error.message : String(error) },
+      lastError instanceof HostGraphChannelError ? lastError.diagnosticState : 'graph-unreachable',
+      { message: lastError instanceof Error ? lastError.message : String(lastError) },
       deps.reportDiagnostic,
     )
     return []

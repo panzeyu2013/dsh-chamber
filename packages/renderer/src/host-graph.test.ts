@@ -292,15 +292,52 @@ test('collectExtraRows: a missing graph endpoint reports not-injected', async ()
   }
 })
 
-test('collectExtraRows: 503 instance_unavailable stays silent and returns []', async () => {
+test('collectExtraRows: 503 instance_unavailable retries on the bounded budget, then stays silent and returns []', async () => {
   const stub = stubFetch(503, { code: 'instance_unavailable', error: 'instance not ready' })
   const consoleCapture = captureConsoleError()
+  const noSleep = async () => {}
   try {
-    assert.deepEqual(await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async () => {} }), [])
+    assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      retry: { attempts: 3, delayMs: 1, sleep: noSleep },
+    }), [])
+    // The transient pre-ready 503 is retried up to the budget, not one-shot.
+    assert.equal(stub.calls.length, 3)
     assert.equal(consoleCapture.messages.length, 0)
   } finally {
     stub.restore()
     consoleCapture.restore()
+  }
+})
+
+test('collectExtraRows: a 503 that resolves on retry loads the rows (spawn-window race)', async () => {
+  // First call answers the pre-ready 503, the retry answers a real graph.
+  let calls = 0
+  const original = globalThis.fetch
+  globalThis.fetch = (() => {
+    calls += 1
+    const status = calls === 1 ? 503 : 200
+    const body = calls === 1
+      ? { code: 'instance_unavailable', error: 'instance not ready' }
+      : envelope([row('@scope/race-p1')])
+    return Promise.resolve(new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    }))
+  }) as typeof fetch
+  const loaded: string[] = []
+  try {
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async (url: string) => { loaded.push(url) },
+      retry: { attempts: 4, delayMs: 1, sleep: async () => {} },
+    })
+    assert.equal(calls, 2)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0]!.id, '@scope/race-p1')
+    assert.equal(loaded.length, 1)
+    assert.ok(loaded[0]!.includes('@scope/race-p1'))
+  } finally {
+    globalThis.fetch = original
   }
 })
 
