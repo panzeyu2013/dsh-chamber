@@ -196,8 +196,9 @@ export function dedupeHostEntries(entries: readonly HostGraphRow[], covered: rea
  * per-instance proxy prefix into root-relative bundle urls
  * ('/plugins/<id>/client.js?rev=…' → '<basePath>/plugins/<id>/client.js?rev=…')
  * so the script element fetches same-origin through the instance proxy.
- * Rows whose url is already absolute/relative stay untouched (defensive; the
- * host graph always emits root-relative urls).
+ * Non-root-relative urls (protocol-relative '//', absolute http(s)/blob/data:,
+ * or relative) are dropped: a poisoned host graph must never steer the
+ * module-script loader to an external origin.
  */
 export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): ExtraModuleRow[] {
   const out: ExtraModuleRow[] = []
