@@ -2122,9 +2122,11 @@ export function SidebarRoot({
                                     // order unchanged (P2-5).
                                     return
                                   }
-                                  setWorkspaceDrag(current => current === null
-                                    ? current
-                                    : { ...current, over: { id: workspace.id, half } })
+                                  setWorkspaceDrag(current => {
+                                    if (current === null) return current
+                                    if (current.over?.id === workspace.id && current.over.half === half) return current
+                                    return { ...current, over: { id: workspace.id, half } }
+                                  })
                                 }}
                               onDrop={workspace.ungrouped === true || workspaceDrag === null
                                 || workspaceDrag.sourceId !== server.id
@@ -2242,9 +2244,11 @@ export function SidebarRoot({
                                         event.preventDefault()
                                         event.dataTransfer.dropEffect = 'move'
                                         const half = rowHalf(event)
-                                        setSessionDrag(current => current === null
-                                          ? current
-                                          : { ...current, over: { id: session.id, half } })
+                                        setSessionDrag(current => {
+                                          if (current === null) return current
+                                          if (current.over?.id === session.id && current.over.half === half) return current
+                                          return { ...current, over: { id: session.id, half } }
+                                        })
                                       }}
                                     onDrop={!activeSessionDrag
                                       ? undefined
