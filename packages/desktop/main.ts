@@ -27,7 +27,7 @@
  * - Tray (packaged only, defensive), single-instance lock.
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -1330,6 +1330,13 @@ if (!gotTheLock) {
     // renderer's auto-start POST and the ready push. The renderer's own
     // POST stays idempotent on the same path; a spawn failure here is
     // non-fatal (the renderer surfaces the instance error state).
+    // v1 has no Web capability that needs a permission (camera/mic/clipboard/
+    // notifications/geolocation). Electron default-grants these to same-origin
+    // content, and the control plane also serves proxied remote-instance content
+    // under /api/i/<id>/* (same origin) — so deny-by-default instead.
+    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
+
     void cp.startLocal().catch(err => {
       console.error('[dsh-chamber] 本地实例预启动失败（renderer 仍会尝试）：', err);
     });
