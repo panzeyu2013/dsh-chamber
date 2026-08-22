@@ -1268,6 +1268,13 @@ if (!gotTheLock) {
     }));
     ipcMain.handle('desktop_local_plugin_add', trustedIpc(async ({ spec: specArg }) => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
+      // `file:` imports must go through the main-process folder picker
+      // (desktop_local_plugin_add_file); this spec channel only accepts registry
+      // specs so a compromised renderer can never drive the local pack surface
+      // to an arbitrary directory (design 13 §5.8 hardening).
+      if (typeof specArg === 'string' && specArg.startsWith('file:')) {
+        return { ok: false, error: 'local file imports must use the folder picker' };
+      }
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
     }));
