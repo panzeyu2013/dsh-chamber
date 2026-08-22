@@ -123,6 +123,14 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+  // Spoofable routing/identity headers must never reach the instance.
+  'forwarded',
+  'via',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-forwarded-port',
+  'x-real-ip',
 ])
 
 /** Only headers required to complete a WebSocket 101 may cross downstream. */
