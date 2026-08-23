@@ -67,7 +67,7 @@ if (recovery === 'restored') console.warn('[bundle-dsh] 已恢复上次中断交
 
 const DEFAULT_DSH_VERSION = '0.1.1-rc.2';
 const BUNDLE_PNPM_VERSION = '11.21.0';
-const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const VERSION = process.env.DSH_CHAMBER_DSH_VERSION ?? DEFAULT_DSH_VERSION;
 if (!EXACT_SEMVER.test(VERSION)) {
   console.error(`[bundle-dsh] DSH_CHAMBER_DSH_VERSION 必须是精确 semver，拒绝 ${JSON.stringify(VERSION)}`);
