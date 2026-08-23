@@ -16,7 +16,7 @@
  * returns to the renderer).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
@@ -43,6 +43,12 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
 import { saveHostWithPassword } from './save-host.ts'
+import {
+  currentRuntimeSurface,
+  getRuntimeState,
+  runtimeBlocksLocalStart,
+  subscribeRuntimeState,
+} from '../../../../packages/renderer/src/runtime-management.ts'
 import css from './ConnectionsSection.module.css'
 
 /** Registration-side business face for the connections section. */
@@ -186,6 +192,11 @@ function PluginDiagnosticLine({ diagnostic, t }: {
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const { t, pluginDiagnostics } = props
+  const runtimeState = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
+  const runtimeSurfacePresent = currentRuntimeSurface() !== null
+  // Fail closed while the desktop runtime bridge hydrates; once hydrated,
+  // applying is the one design-17 phase that forbids every local spawn entry.
+  const runtimeStartBlocked = runtimeBlocksLocalStart(runtimeState, runtimeSurfacePresent)
 
   // ---- local instance card ----
   const [health, setHealth] = useState<HealthResponse | null>(null)
@@ -272,6 +283,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   /** 幂等启动本地实例（POST /api/connections；启动后立即回读 /health）。 */
   const startLocal = useCallback(async (): Promise<void> => {
+    if (runtimeStartBlocked) return
     setLocalBusy(true)
     try {
       setConnection(await cp.createLocal())
@@ -282,7 +294,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setLocalBusy(false)
     }
     void loadLocal()
-  }, [loadLocal])
+  }, [loadLocal, runtimeStartBlocked])
 
   /** 优雅停止本地实例（DELETE /api/connections/local）。 */
   const stopLocal = useCallback(async (): Promise<void> => {
@@ -741,9 +753,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'
   const starting = dsh?.status === 'starting' || dsh?.status === 'restarting'
 
-  // dsh 运行时版本（design 16 §3.6 B）：读主进程投影（string | null），
-  // 与 settings「dsh 运行时」块同源一致；null/空串时省略 chip（不编造）。
-  const dshVersion = typeof window !== 'undefined' ? (window.dshChamber?.dshVersion ?? null) : null
+  // dsh 运行时版本（design 17 §3.6 B）：优先读同一个 runtime state；旧壳
+  // 尚未提供完整状态时才回退 M0 的 info 投影，null/空串时不编造 chip。
+  const dshVersion = runtimeState?.active
+    ?? (typeof window !== 'undefined' ? (window.dshChamber?.dshVersion ?? null) : null)
 
   return (
     <div className={css.section}>
@@ -770,12 +783,19 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           </div>
           {dsh?.error != null && dsh.error !== '' ? <p className={css.error}>{dsh.error}</p> : null}
           {localError !== null ? <p className={css.error} role="alert">{localError}</p> : null}
+          {runtimeState?.phase === 'applying'
+            ? <p className={css.hint}>{t('localRuntimeApplying')}</p>
+            : runtimeSurfacePresent && runtimeState === null
+              ? <p className={css.hint}>{t('localRuntimeHydrating')}</p>
+              : runtimeState?.runtimeBlocked === true
+                ? <p className={css.hint}>{runtimeState.runtimeBlockedReason ?? t('localRuntimeBlocked')}</p>
+                : null}
           <PluginDiagnosticLine diagnostic={pluginDiagnostics?.['local']} t={t} />
           <div className={css.localActions}>
             <Button
               variant="primary"
               size="sm"
-              disabled={healthy || starting || localBusy || stopping}
+              disabled={healthy || starting || localBusy || stopping || runtimeStartBlocked}
               onClick={() => { void startLocal() }}
             >
               {t('localStart')}

@@ -13,8 +13,8 @@
  *   never prompt; update-downloaded exempt);
  * - 更新 (design 11, merged into General): current version +「检查更新」+
  *   low-key status (UpdateSection);
- * - dsh 运行时 (design 16 M0, read-only): the active dsh runtime version line
- *   (window.dshChamber.dshVersion projection — no selector/actions until M4).
+ * - dsh 运行时 (design 17 M4): active/bundled versions, registry source,
+ *   version selection, guarded actions, failure and snapshot projections.
  *
  * Every mutation goes through the main-process settings IPC (settings-store);
  * failures surface LOUDLY (never a silent fake success). The closeToTray gate
@@ -172,12 +172,10 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           section — the dedicated __update nav entry was folded in here. */}
       <UpdateSection t={t} />
 
-      {/* Chamber-global「dsh 运行时」group (design 16 M0, read-only): the
-          active dsh runtime version line, shown right after the update group
-          per the「更新」控制组扩展 layout. No selector/registry-source/actions
-          until M4. When the bridge has not projected dshVersion yet, show
-         「dsh 运行时 —」— never a fabricated version, never a fake
-          「已是最新」. */}
+      {/* Chamber-global「dsh 运行时」group (design 17 M4), immediately after
+          the app-update group: full authoritative state/action projection.
+          Before bridge hydration it shows an unknown version and disables
+          mutations — never a fabricated version or fake success. */}
       <DshRuntimeSection t={t} />
 
       {saveError !== null && (

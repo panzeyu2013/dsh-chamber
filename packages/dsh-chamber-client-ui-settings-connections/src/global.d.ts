@@ -4,6 +4,7 @@
  * global.d.ts declaration structurally (interface merging): non-secret
  * projections only — never a tunnel URL, never SSH material.
  */
+import type { RuntimeSurface } from '../../renderer/src/runtime-management.ts'
 
 /** Transport lifecycle phase machine（隧道生命周期 phase 机）. */
 export type SshPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
@@ -303,6 +304,8 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry trust anchor (design 17). */
+  registryOrigin: string
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -331,6 +334,21 @@ export interface SystemResumeSurface {
   onResume(callback: (payload: { timestamp: number }) => void): () => void
 }
 
+/** VS Code and deep-link surfaces are part of the full preload bridge. */
+export interface VscodeSurface {
+  availability(): Promise<{ available: boolean }>
+  open(instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+}
+
+export interface DeepLinkIntent {
+  instanceId: string
+  path: string
+}
+
+export interface DeepLinkSurface {
+  onIntent(callback: (intent: DeepLinkIntent) => void): () => void
+}
+
 declare global {
   /**
    * Structurally mirrors renderer/src/global.d.ts's DshChamberBridge so the
@@ -346,6 +364,9 @@ declare global {
       update: UpdateSurface
       settings: SettingsSurface
       systemResume: SystemResumeSurface
+      vscode: VscodeSurface
+      deepLink: DeepLinkSurface
+      runtime: RuntimeSurface
     }
   }
 }
