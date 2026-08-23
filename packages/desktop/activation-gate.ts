@@ -18,7 +18,24 @@
  * 单测（activation-gate.test.ts）。
  */
 
-/** 单条探针结果（host 侧执行汇总；name 仅用于日志与定位，裁决只看 ok）。 */
+/**
+ * The activation contract is deliberately closed. An empty/partial probe
+ * list must never become a vacuous success when a caller forgets to wire one
+ * of the Design 17 compatibility checks.
+ */
+export const REQUIRED_ACTIVATION_PROBES = [
+  'host.describe',
+  'commands.execute',
+  'session.list',
+  'workspace.list',
+  'clientGraph/graph',
+  'settings.describe',
+  'gitWorktree/previewCreate',
+  'data.settings',
+  'data.sessions',
+] as const;
+
+/** 单条探针结果（host 侧执行汇总；name 用于完整性校验、日志与定位）。 */
 export interface ProbeResult {
   /** 探针名（如 'host.describe' / 'commands.execute' / 'session-list' …）。 */
   name: string;
@@ -51,9 +68,27 @@ export const DEFAULT_PROBE_WINDOW_MS = 60_000;
  */
 export function decideVerdict(
   probes: ProbeResult[],
-  opts: { elapsedMs: number; windowMs?: number; observedOnce?: boolean },
+  opts: {
+    elapsedMs: number
+    windowMs?: number
+    observedOnce?: boolean
+    /** Test/forward-compatibility seam; production uses the closed default. */
+    expectedNames?: readonly string[]
+  },
 ): ActivationVerdict {
-  if (probes.every((p) => p.ok)) return 'pass';
+  const expected = opts.expectedNames ?? REQUIRED_ACTIVATION_PROBES;
+  const windowMs = opts.windowMs ?? DEFAULT_PROBE_WINDOW_MS;
+  const counts = new Map<string, number>();
+  for (const probe of probes) counts.set(probe.name, (counts.get(probe.name) ?? 0) + 1);
+  const exactSet = probes.length === expected.length
+    && expected.every((name) => counts.get(name) === 1)
+    && probes.every((probe) => expected.includes(probe.name));
+  const withinWindow = Number.isFinite(opts.elapsedMs)
+    && opts.elapsedMs >= 0
+    && Number.isFinite(windowMs)
+    && windowMs > 0
+    && opts.elapsedMs <= windowMs;
+  if (exactSet && withinWindow && probes.every((p) => p.ok)) return 'pass';
   if (opts.observedOnce === true) return 'fail';
   return 'observe';
 }

@@ -11,66 +11,73 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_PROBE_WINDOW_MS,
+  REQUIRED_ACTIVATION_PROBES,
   decideVerdict,
   rollbackTarget,
   shouldAutoRollback,
 } from './activation-gate.ts';
 
 const ok = (name: string): { name: string; ok: boolean } => ({ name, ok: true });
+const allOk = () => REQUIRED_ACTIVATION_PROBES.map(ok);
+const withFailure = (name: string) => allOk().map(probe => (
+  probe.name === name ? { ...probe, ok: false, error: 'failed' } : probe
+));
 
 test('decideVerdict: 全部探针 ok → pass（含多探针；error 字段不影响裁决）', () => {
-  const probes = [
-    { name: 'host.describe', ok: true },
-    { name: 'commands.execute', ok: true },
-    { name: 'data-readable', ok: true, error: undefined },
-  ];
+  const probes = allOk();
   assert.equal(decideVerdict(probes, { elapsedMs: 5_000 }), 'pass');
   // observedOnce 只在「仍失败」时生效；探针已恢复 → pass
   assert.equal(decideVerdict(probes, { elapsedMs: 5_000, observedOnce: true }), 'pass');
 });
 
-test('decideVerdict: 空探针列表 → pass（空真；探针集合由 host 固定注入，空列表按全过处理）', () => {
-  assert.equal(decideVerdict([], { elapsedMs: 0 }), 'pass');
+test('decideVerdict: 空或不完整探针列表绝不空真', () => {
+  assert.equal(decideVerdict([], { elapsedMs: 0 }), 'observe');
+  assert.equal(decideVerdict([], { elapsedMs: 0, observedOnce: true }), 'fail');
+  assert.equal(decideVerdict([ok('host.describe')], { elapsedMs: 0 }), 'observe');
 });
 
 test('decideVerdict: 窗口内首次失败 → observe（超时不立即判失败，给慢迁移二次确认窗口）', () => {
-  const probes = [ok('host.describe'), { name: 'commands.execute', ok: false, error: 'smoke failed' }];
+  const probes = withFailure('commands.execute');
   assert.equal(decideVerdict(probes, { elapsedMs: 5_000 }), 'observe');
   // 窗口边界内（elapsed === windowMs）仍 observe
   assert.equal(decideVerdict(probes, { elapsedMs: DEFAULT_PROBE_WINDOW_MS }), 'observe');
 });
 
 test('decideVerdict: 窗口外首次失败 → observe（§3.4 超时不立即判失败，慢迁移二次确认）', () => {
-  const probes = [ok('host.describe'), { name: 'session-list', ok: false, error: 'timeout' }];
+  const probes = withFailure('session.list');
   assert.equal(decideVerdict(probes, { elapsedMs: DEFAULT_PROBE_WINDOW_MS + 1 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 120_000 }), 'observe');
 });
 
 test('decideVerdict: 已 observe 过一次仍 fail → fail（延迟裁决后再失败才回退）', () => {
-  const probes = [ok('host.describe'), { name: 'graph', ok: false, error: 'rpc failed' }];
+  const probes = withFailure('clientGraph/graph');
   // 窗口内第二次仍失败：observe 只给一次二次确认窗口
   assert.equal(decideVerdict(probes, { elapsedMs: 5_000, observedOnce: true }), 'fail');
   // 窗口外第二次仍失败：同样 fail
   assert.equal(decideVerdict(probes, { elapsedMs: 120_000, observedOnce: true }), 'fail');
 });
 
-test('decideVerdict: windowMs 只约束单次探针时长，不改变首败必 observe 口径', () => {
-  const probes = [ok('host.describe'), { name: 'git-worktree', ok: false }];
+test('decideVerdict: windowMs 是硬上限，超窗成功也需二次观察', () => {
+  const probes = withFailure('gitWorktree/previewCreate');
   assert.equal(decideVerdict(probes, { elapsedMs: 500, windowMs: 1_000 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 1_001, windowMs: 1_000 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 10_000, windowMs: 5_000 }), 'observe');
+  assert.equal(decideVerdict(allOk(), { elapsedMs: 1_001, windowMs: 1_000 }), 'observe');
+  assert.equal(decideVerdict(allOk(), { elapsedMs: 1_001, windowMs: 1_000, observedOnce: true }), 'fail');
 });
 
 test('decideVerdict: 混合探针（部分 ok 部分 fail）按任一 fail 裁决', () => {
-  const probes = [
-    ok('host.describe'),
-    ok('commands.execute'),
-    { name: 'settings-rpc', ok: false, error: 'unexpected' },
-    ok('session-list'),
-  ];
+  const probes = withFailure('settings.describe');
   assert.equal(decideVerdict(probes, { elapsedMs: 3_000 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 90_000 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 3_000, observedOnce: true }), 'fail');
+});
+
+test('decideVerdict: duplicate or unexpected names fail closed', () => {
+  const duplicate = allOk();
+  duplicate[duplicate.length - 1] = ok('host.describe');
+  assert.equal(decideVerdict(duplicate, { elapsedMs: 1 }), 'observe');
+  assert.equal(decideVerdict(duplicate, { elapsedMs: 1, observedOnce: true }), 'fail');
 });
 
 test('rollbackTarget: previous known-good（曾探针通过或 known-good）→ 切换前版本', () => {
