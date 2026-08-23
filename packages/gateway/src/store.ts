@@ -1,0 +1,198 @@
+/**
+ * Gateway persistence (design 16 §10): the gateway's OWN state, physically
+ * separate from dsh's $DSH_HOME. All JSON docs go through control-plane
+ * `createJsonStore` (backup-first + revision + recovery); secrets (token hash,
+ * jwt-secret) go through a 0600 atomic-file discipline (never plaintext in a
+ * store doc, S5/S8).
+ *
+ * The gateway is never authoritative over dsh facts: the worktrees/schedule/
+ * index docs are the gateway's own orchestration records, and the session
+ * index is a derived cache (§8.2).
+ */
+
+import { mkdirSync, openSync, readFileSync, renameSync, writeSync, fchmodSync, fsyncSync, closeSync, rmSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { randomBytes, scryptSync } from 'node:crypto'
+import { createJsonStore, type JsonStore, type JsonStoreDocument } from '@dsh-chamber/control-plane'
+
+export interface GatewayStoreLogger { log(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void }
+
+export interface DeviceRecord {
+  id: string
+  label: string
+  platform: string
+  tokenHash: string
+  createdAt: number
+  revokedAt?: number
+}
+
+export interface GatewayDocument {
+  schemaVersion?: number
+  revision?: number
+  channels: unknown[]
+  devices?: DeviceRecord[]
+}
+
+export interface WorktreeStoreRecord {
+  id: string
+  workspaceId: string
+  sessionId?: string
+  path: string
+  branch: string
+  state: 'creating' | 'ready' | 'deleting' | 'failed'
+  error?: string
+  createdAt: number
+}
+
+export interface ScheduleStoreRecord {
+  id: string
+  delayMs: number
+  intervalMs: number | null
+  targetSessionId: string
+  prompt: string
+}
+
+export interface GatewaySettingsDoc {
+  schemaVersion?: number
+  revision?: number
+  git?: { enabled: boolean }
+  notifications?: { enabled: boolean }
+  schedule?: { enabled: boolean }
+}
+
+/** A json-store-backed document accessor (load-once + mutate). The domain doc
+ * shape `T` is the caller's business; the store layers its own `revision`/
+ * `schemaVersion` onto it. */
+function docStore<T>(filePath: string, logger: GatewayStoreLogger, initial: T): { load(): T & { revision?: number }; get(): T & { revision?: number }; mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> } {
+  const store: JsonStore = createJsonStore({ filePath, logger, initial: initial as JsonStoreDocument })
+  store.load()
+  return {
+    load(): T & { revision?: number } { return store.getDoc() as T & { revision?: number } },
+    get(): T & { revision?: number } { return store.getDoc() as T & { revision?: number } },
+    async mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> {
+      await store.mutate(doc => {
+        const { next, changed } = mutator(doc as unknown as T)
+        return { next: next as unknown as JsonStoreDocument, changed }
+      })
+    },
+  }
+}
+
+/** Read a 0600 file, or null when absent (never a fake-empty on corrupt). */
+function readSecret(file: string): string | null {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+  return text.trim() === '' ? null : text
+}
+
+/** 0600 atomic write (tmp → fchmod 0600 → fsync → rename). */
+function writeSecret(file: string, value: string): void {
+  mkdirSync(dirname(file), { recursive: true })
+  const tmp = `${file}.tmp`
+  try {
+    const fd = openSync(tmp, 'w', 0o600)
+    try {
+      fchmodSync(fd, 0o600)
+      writeSync(fd, value)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(tmp, file)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
+    throw error
+  }
+}
+
+export interface GatewayStore {
+  /** gateway.json — channels/devices (devices post-MVP). */
+  gateway: { load(): GatewayDocument; get(): GatewayDocument; mutate(m: (d: GatewayDocument) => { next: GatewayDocument; changed: boolean }): Promise<void> }
+  /** worktrees.json — the git offload records (§8.1). */
+  worktrees: { load(): { items: WorktreeStoreRecord[] }; get(): { items: WorktreeStoreRecord[] }; mutate(m: (d: { items: WorktreeStoreRecord[] }) => { next: { items: WorktreeStoreRecord[] }; changed: boolean }): Promise<void> }
+  /** schedule.json — cron jobs (§8.4). */
+  schedule: { load(): { items: ScheduleStoreRecord[] }; get(): { items: ScheduleStoreRecord[] }; mutate(m: (d: { items: ScheduleStoreRecord[] }) => { next: { items: ScheduleStoreRecord[] }; changed: boolean }): Promise<void> }
+  /** settings.json — the /chamber/settings doc (§8.5). */
+  settings: { load(): GatewaySettingsDoc; get(): GatewaySettingsDoc; mutate(m: (d: GatewaySettingsDoc) => { next: GatewaySettingsDoc; changed: boolean }): Promise<void> }
+  /** tokens.json — the shared token hash (0600, hash only, S5). */
+  getTokenHash(): string | null
+  setTokenHash(hash: string | null): void
+  /** jwt-secret — the session signing key (0600, rotatable, S13). */
+  getJwtSecret(): string
+  rotateJwtSecret(): string
+}
+
+const SCRYPT_SALT_LEN = 16
+
+/** Hash a plaintext token/password (scrypt, per design §5.1). */
+export function hashCredential(plain: string): string {
+  const salt = randomBytes(SCRYPT_SALT_LEN).toString('hex')
+  const derived = scryptSync(plain, salt, 32).toString('hex')
+  return `scrypt$${salt}$${derived}`
+}
+
+/** Constant-time compare a plaintext against a stored `scrypt$salt$hash`. */
+export function verifyCredential(plain: string, stored: string | null): boolean {
+  if (stored === null) return false
+  const parts = stored.split('$')
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false
+  const [, salt, expectedHex] = parts
+  const derived = scryptSync(plain, salt, 32)
+  const expected = Buffer.from(expectedHex, 'hex')
+  if (derived.length !== expected.length) return false
+  return derived.equals(expected) // Buffer.equals is constant-time
+}
+
+export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger): GatewayStore {
+  const root = join(stateDir, 'gateway')
+  mkdirSync(root, { recursive: true })
+
+  const gateway = docStore<GatewayDocument>(join(stateDir, 'gateway.json'), logger, { schemaVersion: 1, revision: 0, channels: [] })
+  const worktrees = docStore<{ items: WorktreeStoreRecord[] }>(join(root, 'worktrees.json'), logger, { items: [] })
+  const schedule = docStore<{ items: ScheduleStoreRecord[] }>(join(root, 'schedule.json'), logger, { items: [] })
+  const settings = docStore<GatewaySettingsDoc>(join(root, 'settings.json'), logger, { schemaVersion: 1, revision: 0 })
+
+  const tokensFile = join(stateDir, 'tokens.json')
+  const jwtSecretFile = join(stateDir, 'jwt-secret')
+
+  function getTokenHash(): string | null {
+    try {
+      const text = readSecret(tokensFile)
+      if (text === null) return null
+      const parsed = JSON.parse(text) as { hash?: unknown }
+      return typeof parsed.hash === 'string' && parsed.hash !== '' ? parsed.hash : null
+    } catch {
+      logger.warn(`gateway-store: cannot read ${tokensFile}`)
+      return null
+    }
+  }
+
+  function setTokenHash(hash: string | null): void {
+    if (hash === null) {
+      try { rmSync(tokensFile, { force: true }) } catch { /* best effort */ }
+      return
+    }
+    writeSecret(tokensFile, `${JSON.stringify({ hash })}\n`)
+  }
+
+  function getJwtSecret(): string {
+    const existing = readSecret(jwtSecretFile)
+    if (existing !== null && existing.length >= 32) return existing
+    const fresh = randomBytes(32).toString('hex')
+    writeSecret(jwtSecretFile, fresh)
+    return fresh
+  }
+
+  function rotateJwtSecret(): string {
+    const fresh = randomBytes(32).toString('hex')
+    writeSecret(jwtSecretFile, fresh)
+    return fresh
+  }
+
+  return { gateway, worktrees, schedule, settings, getTokenHash, setTokenHash, getJwtSecret, rotateJwtSecret }
+}

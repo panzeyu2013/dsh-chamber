@@ -36,7 +36,10 @@
     "packages/desktop/renderer-trust.ts",
     "packages/desktop/renderer-trust.test.ts",
     "packages/desktop/deep-link.ts",
-    "packages/desktop/deep-link.test.ts"
+    "packages/desktop/deep-link.test.ts",
+    "packages/desktop/gateway-provider.ts",
+    "packages/gateway/src/**/*.ts",
+    "packages/gateway/test/**/*.ts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }

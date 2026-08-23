@@ -1,0 +1,17 @@
+{
+  "name": "@dsh-chamber/gateway",
+  "version": "0.1.0",
+  "description": "Server-side access gateway for dsh-chamber: exposes a loopback dsh as an authenticated URL (design 16)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "dsh-chamber-gateway": "./src/cli.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@dsh-chamber/control-plane": "workspace:^"
+  }
+}

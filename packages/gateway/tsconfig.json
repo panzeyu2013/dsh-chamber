@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "../control-plane/src/**/*.ts",
+    "../desktop/gateway-provider.ts",
+    "../desktop/transport-provider.ts",
+    "../desktop/transport-manager.ts",
+    "../desktop/ssh-provider.ts"
+  ]
+}
