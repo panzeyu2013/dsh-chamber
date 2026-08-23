@@ -689,12 +689,26 @@ Remote 不需要；git/编排 offload 的可行性成立。**
 即：**能保证「注入失败要么干净地不注入、要么响亮失败」，且可手动回滚；但不做「自动
 删坏插件继续启动」**——后者会掩盖打包 bug。
 
-> **与 design 08 的关系（取代标注，暂缓执行）**：本 §8.1 的 gateway git offload **取代** design 08 的
-> chamber-bundled git 插件路线（`dsh-chamber-host-git-worktree` + `dsh-chamber-client-ui-git`
-> 退役）。这是对 08 的一次路线变更（git 从「dsh 插件」迁到「gateway 编排」）。
-> **决策（2026-08，用户拍板）**：在 gateway 合并主分支、整体稳定之前**不退役**现有 git 插件——
-> control-plane 继续 seed `host-git-worktree`，两套并行走；等功能迁移完成、稳定后再做退役
-> 标注与 08 同步，不得静默漂移。
+> **与 design 08 的关系（取代 + 退役计划）**：本 §8.1 的 gateway git offload **取代** design 08 的
+> chamber-bundled git 插件路线（`dsh-chamber-host-git-worktree` + `dsh-chamber-client-ui-git`）。
+> 这是对 08 的一次路线变更：git 从「dsh 插件」迁到「gateway 编排」。
+
+**插件退役计划**——决策（2026-08，用户拍板）：**合并主分支、整体稳定之前不退役**，两套并行
+（control-plane 继续 seed `host-git-worktree`）；等功能迁移完成、稳定后按下列清单退役，
+不得静默漂移：
+
+| 步骤 | 门禁 / 动作 | 涉及 |
+|---|---|---|
+| 0 触发门禁 | gateway 已合并 main；git offload（§8.1）端到端稳定；有真 dsh 反代 + worktree 冒烟证据（P0-2） | — |
+| 1 停 seed | control-plane 移除 `HOST_GIT_WORKTREE_PACKAGE_NAME` / `HOST_GIT_WORKTREE_INSERT` 常量与其 seed 逻辑（seedDshHomeDefaults 中的 host-git-worktree 注入） | `packages/control-plane/src/index.ts` |
+| 2 移除插件包 | 删除 `packages/dsh-chamber-host-git-worktree` 与 `packages/dsh-chamber-client-ui-git` 两个包，连带 `test:git` / `test:host-git` / `typecheck:git` / `typecheck:host-git` 脚本与 tsconfig include 项 | `packages/*`、`package.json`、`tsconfig.json` |
+| 3 同步 08 | 在 `docs/design/08-git-worktree-plugin.md` 顶部标注「已被 gateway git offload 取代（设计 16 §8.1），2026-08 退役」 | `docs/design/08-*.md` |
+| 4 同步 STATUS | 「Git Worktree 插件（设计 08）」条目改为「已退役/迁移至 gateway（16 §8.1）」并保留历史结论 | `docs/progress/STATUS.md` |
+| 5 回滚预案 | 若 gateway 回退：恢复 seed + 两个插件包即可——两套并行，回滚 = 重新启用插件，无数据破坏（worktree 记录在各自权威域，不共享） | — |
+
+> 退役期间数据语义：gateway 的 `gateway/worktrees.json` 与 design 08 插件的实例内
+> workspace 权威**互不共享**——两者各自维护 worktree→workspace→session 事实，退役只是
+> 移除 08 的执行面，不迁移历史记录（08 已创建的 worktree 仍由 dsh workspace 权威持有）。
 
 ### 8.2 会话索引（只索引，不消费帧）
 
