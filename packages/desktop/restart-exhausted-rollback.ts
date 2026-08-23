@@ -167,8 +167,9 @@ export function planRestartExhaustedRollback(
     ...journal,
     phase: 'rollback-needed',
     rollbackTarget: target,
-    // Store validation currently permits this queue only while monitoring.
-    // Return it separately so the owner can re-queue it after safe rollback.
+    // Detach the deferred intent from the rollback journal: the owner re-queues
+    // it (main.ts runRestartExhaustedRollback) after the rollback lands safely,
+    // so a crash between plan and re-queue never replays the failed version.
     nextIntent: null,
     updatedAt: now.toISOString(),
   }

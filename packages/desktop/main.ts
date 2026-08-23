@@ -3059,12 +3059,14 @@ if (!gotTheLock) {
     // frontend (design 05 §1) — no local file loads. A load failure is a
     // loud startup failure (dialog + exit), never a silently broken window;
     // the control plane is stopped first so no local dsh child is orphaned.
-    // The local instance is pre-spawned BEFORE the window loads (05 §7.5):
-    // the first screen finds it already ready — the spawn's ~seconds of
-    // boot time overlap the page/bundle load instead of sitting between the
-    // renderer's auto-start POST and the ready push. The renderer's own
-    // POST stays idempotent on the same path; a spawn failure here is
-    // non-fatal (the renderer surfaces the instance error state).
+    // The runtime startup transaction (runRuntimeStartup, below) starts after
+    // the window is created, so the first screen finds the local instance
+    // ready only when the transaction wins the race against the renderer
+    // boot; the renderer's own auto-start POST stays idempotent on the same
+    // path, and a spawn failure here is non-fatal (the renderer surfaces the
+    // instance error state). The ~seconds of spawn boot time still overlap
+    // the page/bundle load instead of sitting between the renderer's POST and
+    // the ready push.
     // Deny Web permission requests by default: Electron default-grants these to
     // same-origin content, and the control plane also serves proxied remote-instance
     // content under /api/i/<id>/* (same origin). Keep one benign exception —
