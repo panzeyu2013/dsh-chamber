@@ -1,5 +1,5 @@
 /**
- * override-lifecycle.ts 纯逻辑测试（design 16 §3.5 失效规则 / 回落保护 /
+ * override-lifecycle.ts 纯逻辑测试（design 17 §3.5 失效规则 / 回落保护 /
  * swap-attempted / pending 重放）——node:test，无 electron、无文件 IO。
  *
  * 覆盖：shouldInvalidate 版本相等/不等；invalidate 保留
@@ -73,6 +73,23 @@ test('invalidate: swapAttempted 复位（true → false），入参不被修改'
 test('invalidate: swapAttempted 已是 false 时保持 false（标记幂等）', () => {
   const record = makeRecord({ swapAttempted: false });
   assert.equal(invalidate(record).swapAttempted, false);
+});
+
+test('invalidate: persists reason/time and an already-invalidated record stays invalid', () => {
+  const record = makeRecord();
+  const invalidated = invalidate(record, 'shell-version-changed', new Date('2026-08-23T00:00:00.000Z'));
+  assert.equal(invalidated.invalidatedAt, '2026-08-23T00:00:00.000Z');
+  assert.equal(invalidated.invalidatedReason, 'shell-version-changed');
+  assert.equal(invalidated.lastInvalidatedAt, '2026-08-23T00:00:00.000Z');
+  assert.equal(invalidated.lastInvalidatedReason, 'shell-version-changed');
+  assert.equal(invalidated.lastInvalidatedFromVersion, record.resolvedVersion);
+  assert.equal(invalidated.lastInvalidationRecovered, false);
+  assert.equal(shouldInvalidate(invalidated, SHELL), true, 'persistent marker, not transient comparison');
+  assert.equal(effectivePending(invalidated, SHELL), null);
+  const again = invalidate(invalidated, 'different', new Date('2026-08-24T00:00:00.000Z'));
+  assert.equal(again.invalidatedAt, invalidated.invalidatedAt);
+  assert.equal(again.invalidatedReason, invalidated.invalidatedReason);
+  assert.equal(again.lastInvalidatedAt, invalidated.lastInvalidatedAt);
 });
 
 test('effectivePending: 未失效时返回 record.pending', () => {

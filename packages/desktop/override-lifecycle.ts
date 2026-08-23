@@ -1,8 +1,8 @@
 /**
- * dsh 运行时 override 生命周期（design 16 §3.5）——纯逻辑、无 electron、无文件 IO
+ * dsh 运行时 override 生命周期（design 17 §3.5）——纯逻辑、无 electron、无文件 IO
  * （M3：失效规则 / 回落保护 / swap-attempted / pending 重放）。
  *
- * 权威规则（design 16 §3.5）：
+ * 权威规则（design 17 §3.5）：
  *   - 失效规则（覆盖 override 与 pending）：启动时 shellVersion ≠ 当前壳版本 →
  *     override 与 pending **一并失效**。失效 = **标记失效**（保留记录、版本树与
  *     快照）而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」
@@ -30,7 +30,7 @@ import type { OverrideRecord } from './dsh-runtime-store.ts';
  * 投影为「无 pending 生效」。
  */
 export function shouldInvalidate(record: OverrideRecord, currentShellVersion: string): boolean {
-  return record.shellVersion !== currentShellVersion;
+  return record.invalidatedAt != null || record.shellVersion !== currentShellVersion;
 }
 
 /**
@@ -42,13 +42,24 @@ export function shouldInvalidate(record: OverrideRecord, currentShellVersion: st
  * 回显「原选择 vY 保留，可重新选用」）。swapAttempted 复位是因为失效开启
  * 了一个新的壳生命周期：旧的「换树已尝试」标记不得抑制新生命周期里的重试。
  */
-export function invalidate(record: OverrideRecord): OverrideRecord {
+export function invalidate(
+  record: OverrideRecord,
+  reason = 'shell-version-changed',
+  now = new Date(),
+): OverrideRecord {
+  const invalidatedAt = record.invalidatedAt ?? now.toISOString();
+  const invalidatedReason = record.invalidatedReason ?? reason;
   return {
-    shellVersion: record.shellVersion,
-    chosenVersion: record.chosenVersion,
-    resolvedVersion: record.resolvedVersion,
-    pending: record.pending,
+    ...record,
     swapAttempted: false,
+    invalidatedAt,
+    invalidatedReason,
+    lastInvalidatedAt: record.lastInvalidatedAt ?? invalidatedAt,
+    lastInvalidatedReason: record.lastInvalidatedReason ?? invalidatedReason,
+    lastInvalidatedFromVersion: record.lastInvalidatedFromVersion
+      ?? record.resolvedVersion
+      ?? record.chosenVersion,
+    lastInvalidationRecovered: record.lastInvalidationRecovered ?? false,
   };
 }
 
