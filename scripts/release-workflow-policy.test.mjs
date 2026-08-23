@@ -60,4 +60,16 @@ assert.equal(
   'formal desktop builds must not trust a committed third-party Electron mirror',
 )
 
+// Every build job (build-gateway / build-macos / build-windows) must build
+// from the exact SHA the create-release job validated and bound the tag to;
+// a default-branch advance between jobs must never ship an unvalidated
+// commit under a validated tag (S16).
+const buildJobs = workflow.slice(workflow.indexOf('  build-gateway:'))
+const buildRefPins = buildJobs.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []
+assert.equal(
+  buildRefPins.length,
+  3,
+  'every build-job checkout must pin ref: ${{ github.sha }} to the validated workflow SHA',
+)
+
 console.log('release workflow policy: commit-bound, published-immutable, dry-run mutation-free')

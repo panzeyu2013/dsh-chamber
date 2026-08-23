@@ -270,6 +270,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Artifacts must be built from the exact SHA the create-release job
+          # bound the tag to; a default-branch advance between jobs must not
+          # pack/publish an unvalidated commit under a validated tag (S16).
+          ref: ${{ github.sha }}
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -374,6 +379,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Build from the exact SHA the create-release job bound the tag to
+          # (S16): a branch advance between jobs must not ship an unvalidated
+          # commit under a validated tag.
+          ref: ${{ github.sha }}
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -460,6 +470,11 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Build from the exact SHA the create-release job bound the tag to
+          # (S16): a branch advance between jobs must not ship an unvalidated
+          # commit under a validated tag.
+          ref: ${{ github.sha }}
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
