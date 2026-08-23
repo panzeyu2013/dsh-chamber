@@ -221,6 +221,9 @@ export interface InstanceProxyDeps {
   getLocalState(): string
   /** The managed local instance port (null when not ready). */
   getLocalDshPort(): number | null
+  /** False while a newly spawned runtime is quarantined behind activation
+   * probes. Internal main-process probes use the direct host port. */
+  canExposeLocal?: () => boolean
   /** Injectable outbound request factory (defaults to node:http request). */
   httpRequest?: typeof httpRequest
   /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS; tests inject small values). */
@@ -373,7 +376,10 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    * when the instance is unknown/unavailable (loud, never silent). */
   function resolveTarget(id: string, res: ProxyResponse | null): { baseUrl: string } | null {
     if (id === 'local') {
-      if (getLocalState() === 'ready' && Number.isInteger(getLocalDshPort()) && (getLocalDshPort() ?? 0) > 0) {
+      if ((deps.canExposeLocal?.() ?? true)
+        && getLocalState() === 'ready'
+        && Number.isInteger(getLocalDshPort())
+        && (getLocalDshPort() ?? 0) > 0) {
         return { baseUrl: `http://127.0.0.1:${getLocalDshPort()}` }
       }
       if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local instance is not ready')
