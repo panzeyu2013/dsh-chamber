@@ -75,9 +75,9 @@
     `registry-metadata` 需要 loopback/真实计时，在本沙箱不能形成新的全链 PASS；
     不把 `listen EPERM` 或沙箱计时超时写成代码回归。
   - 控制面本轮复验：protocol **21/21**、storage **15/15**、dsh client **7/7**、
-    host logs **19/19**、instance proxy **29/29** PASS；host-graph seed 的前
-    **20/20** 个纯文件测试 PASS，随后依赖 control-plane listen 的用例与
-    static-serving 同样由沙箱 `listen EPERM` 阻断。
+    host logs **19/19**、instance proxy **29/29** PASS；host-graph seed 的
+    **20/20** 个纯文件测试（文件内散布）PASS，其余依赖 control-plane listen
+    的用例与 static-serving 同样由沙箱 `listen EPERM` 阻断。
   - 根 `tsc --noEmit`、`typecheck:settings-bridge`、`test:settings-bridge`、
     `build:renderer`、`verify:i18n`、离线 `pnpm install --frozen-lockfile
     --ignore-scripts` 与 `git diff --check`：**PASS**。`smoke` 在工作树没有可用

@@ -39,8 +39,9 @@
 - 现状：dsh 运行时随 chamber 捆绑（`vendor/dsh` → extraResources →
   `resourcesPath/vendor/dsh`），dsh 更新只能随 chamber 整包更新（设计 11），
   每次全量下载 100–140MB（win exe ~97.5MB / mac zip ~139.7MB，**外部实测**
-  v0.1.3，M1 回填实测值）；本地 dsh 版本号已投影（`dsh-chamber:info.dshVersion`）
-  但**全仓库零 UI 消费**。
+  v0.1.3，M1 回填实测值）；设计前本地 dsh 版本号已投影
+  （`dsh-chamber:info.dshVersion`）但全仓库零 UI 消费——M0 起该投影接入
+  settings「dsh 运行时」块与 connections 本地卡片。
 - 目标（用户拍板）：
   1. **dsh 版本更新不等 chamber 发版**——运行期从 npm 拉取最新包安装进壳；
   2. **版本选择/回滚**：settings 里用户自由选版本（默认推荐最新），坏了可回滚，
@@ -408,8 +409,12 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
   work 目录不得位于含 pnpm-workspace.yaml 的祖先下（向上探测实测报错）；**白名单
   miss 是硬失败**（实测 ERR_PNPM_IGNORED_BUILDS）→ 新 dsh 引入新 build-script
   依赖时安装失败，UI 给出「请升级 dsh-chamber」指引（「不等 chamber 发版」对这类
-  版本不成立，诚实声明）；简略 packument 无 hasInstallScript（实测），白名单覆盖
-  校验以捆绑基线 lockfile 为准（M2 测试）。
+  版本不成立，诚实声明）；简略 packument 无 hasInstallScript（实测），且捆绑基线
+  lockfile（`packages/desktop/vendor/dsh/pnpm-lock.yaml`）同样不记录
+  `hasInstallScript` 字段——因此**无法从 lockfile 推导 build-script 覆盖**，白名单
+  覆盖以「单一来源常量 + 漂移钉死测试 + 白名单 miss 硬失败」三层兜底（allow-builds
+  测试钉死 5 项；新增 build-script 依赖的检测由真实安装的 ERR_PNPM_IGNORED_BUILDS
+  显式失败暴露，UI 引导升级，不静默跳过）。
 - **prune 打包纪律**：`packages/desktop/prune-runtime.mjs` 由 desktop `files`
   显式枚举，打包态不依赖会被排除的根 `scripts/`；**版本切换 = current
   指针原子写（新小模块），不搬 bundle-swap 的目录
@@ -484,10 +489,10 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - **URL 白名单**：registry 域（metadata / tarball 最终 origin / **search 端点
   `/-/v1/search`**）同款校验结构（new URL + origin + userinfo 拒绝 + decode 后
   前缀），为 registry 域新写实例（`isAllowedReleaseUrl` 硬编码 github 不可复用）；
-  既有 `desktop_npm_search`（main.ts:1171-1199）并入同一口径 + 行为保持测试
+  既有 `desktop_npm_search`（main.ts:1544 起）并入同一口径 + 行为保持测试
   （R3-5 P2-6）。
-- **错误脱敏**：`sanitizeErrorText`（updater.ts:109-113）提取为共享模块并导出，
-  评估相对路径覆盖。
+- **错误脱敏**：`sanitizeErrorText`（sanitize-error.ts:18 导出）提取为共享模块并
+  导出，评估相对路径覆盖。
 - **出网面**：仅主进程访问 npm registry；控制面零出网、loopback 闭环不变。
 - **隐私**：不携带用户/SSH 材料；失败记录仅版本/时间戳/探测结果/脱敏路径。
 - **已接受让步（用户拍板）**：无验证 + 自由选版本 = 壳可能跑在未重基的 dsh 上；
