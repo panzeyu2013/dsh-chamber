@@ -114,6 +114,44 @@ test('buildVersionList: active 版本置顶且去重（只出现一次）', () =
   assert.equal(entries.filter((e) => e.version === '1.0.0').length, 1, 'active 去重');
 });
 
+test('buildVersionList: dist-tags.latest（推荐）紧随 active 置顶第二位（§3.6 A.2 字面排序）', () => {
+  // latest ≠ active：latest 必须位于第二位，即使降序排序会把别的版本放前面。
+  const meta = makeMeta(['0.9.0', '1.0.0', '1.1.0', '2.0.0'], '2.0.0');
+  const entries = buildVersionList(meta, { active: '1.1.0', cachedVersions: [], compatibilityBaseline: null });
+  assert.deepEqual(
+    entries.map((e) => e.version),
+    ['1.1.0', '2.0.0', '1.0.0', '0.9.0'],
+    'active 置顶，latest(2.0.0) 第二位，其余降序',
+  );
+  assert.equal(entries[1].version, '2.0.0', '推荐版本应在第二位');
+  assert.equal(entries[1].latest, true, '推荐版本带 latest 标记');
+
+  // latest === active：置顶条目本身即推荐，不重复出现。
+  const activeIsLatest = buildVersionList(meta, { active: '2.0.0', cachedVersions: [], compatibilityBaseline: null });
+  assert.deepEqual(
+    activeIsLatest.map((e) => e.version),
+    ['2.0.0', '1.1.0', '1.0.0', '0.9.0'],
+    'active 即 latest 时仅置顶一次',
+  );
+  assert.equal(activeIsLatest.filter((e) => e.latest).length, 1);
+
+  // latest 不可列出（无 tarball / 被 yank）：不置顶第二位，按降序回落。
+  const yanked = {
+    latest: '3.0.0',
+    versions: ['1.0.0', '2.0.0'],
+    byVersion: new Map([
+      ['1.0.0', { version: '1.0.0', tarball: 'https://registry.npmjs.org/dsh/-/dsh-1.0.0.tgz', integrity: 'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }],
+      ['2.0.0', { version: '2.0.0', tarball: 'https://registry.npmjs.org/dsh/-/dsh-2.0.0.tgz', integrity: 'sha512-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB' }],
+    ]),
+  };
+  const yankedEntries = buildVersionList(yanked, { active: '1.0.0', cachedVersions: [], compatibilityBaseline: null });
+  assert.deepEqual(
+    yankedEntries.map((e) => e.version),
+    ['1.0.0', '2.0.0'],
+    'latest 不可列出时保持降序，不出现 3.0.0',
+  );
+});
+
 test('buildVersionList: latest 标记 dist-tags.latest 对应条目，其余为 false；latest 为空恒 false', () => {
   const meta = makeMeta(['1.0.0', '1.1.0', '2.0.0-rc.1', '2.0.0'], '2.0.0');
   const entries = buildVersionList(meta, { active: null, cachedVersions: [], compatibilityBaseline: null });
