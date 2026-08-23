@@ -61,6 +61,13 @@ export interface ApiRequest {
   url?: string
   method?: string
   headers: Record<string, string | string[] | undefined>
+  /** Node's live peer/TLS facts. Optional so existing structural test doubles
+   * remain valid; an externally-bound composer must fail closed when they are
+   * absent instead of trusting forwarded headers. */
+  socket?: { remoteAddress?: string; encrypted?: boolean }
+  /** Original header pairs, used by external boundaries to reject duplicate
+   * authority/forwarding headers that the normalized map may hide. */
+  rawHeaders?: readonly string[]
   [Symbol.asyncIterator](): AsyncIterableIterator<Buffer>
   on(event: string, listener: (...args: any[]) => void): unknown
   removeListener(event: string, listener: (...args: any[]) => void): unknown
@@ -128,6 +135,10 @@ interface RouteHandler {
 export interface ApiDeps {
   logger: Logger
   corsOrigins?: string[]
+  /** Optional external request-boundary decision. The ordinary control plane
+   * deliberately omits this and retains the loopback-only `corsFor` policy;
+   * the authenticated gateway supplies its stricter public authority policy. */
+  corsEvaluator?: ApiCorsEvaluator
   getHealth(): { ok: boolean; dsh: { status: string; port: number; error?: string } }
   getConnectionRow(): ConnectionRowView | null
   startConnection(input: { kind: string; label?: string; accentColor?: string }): Promise<{ connection: ConnectionRowView | null; spawned: boolean }>
@@ -148,6 +159,15 @@ export interface ApiSurface {
   handle(req: ApiRequest, res: ApiResponse): Promise<void>
   getCorsHeaders(req: ApiRequest): { allowed: boolean; headers: Record<string, string> }
 }
+
+/** A composer's complete Host/Origin decision. `headers` contains only CORS
+ * response headers that are safe to reflect for this exact request. */
+export interface ApiCorsDecision {
+  allowed: boolean
+  headers?: Record<string, string>
+}
+
+export type ApiCorsEvaluator = (req: ApiRequest) => ApiCorsDecision
 
 /**
  * The per-request CORS decision: {allowed, headers?}. Same-origin/CLI requests
@@ -211,11 +231,12 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
 export function createApi(deps: ApiDeps) {
   const { logger } = deps
   const corsOrigins = Array.isArray(deps.corsOrigins) ? deps.corsOrigins : []
+  const corsEvaluator = deps.corsEvaluator
   let activeHealthEventStreams = 0
 
   /** The per-request CORS headers (explicit-origin discipline). */
   function corsHeaders(req: ApiRequest) {
-    const decision = corsFor(req, corsOrigins)
+    const decision = corsEvaluator === undefined ? corsFor(req, corsOrigins) : corsEvaluator(req)
     return { allowed: decision.allowed, headers: decision.headers ?? {} }
   }
 
@@ -504,8 +525,6 @@ export function createApi(deps: ApiDeps) {
 
   /** The request handler: CORS, routing, and carrier-level codes. */
   async function handle(req: ApiRequest, res: ApiResponse) {
-    const url = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`)
-    const segments = url.pathname.split('/').filter(Boolean)
     const cors = corsHeaders(req)
     res._corsHeaders = cors.headers
     // Missing CORS response headers only prevents a hostile page from
@@ -516,6 +535,19 @@ export function createApi(deps: ApiDeps) {
       jsonError(res, 403, { code: 'origin_forbidden', message: 'request origin is not allowed' })
       return
     }
+    let url: URL
+    try {
+      // Request targets are origin-form here; Host is a security input already
+      // handled by corsHeaders, never a parser base for routing.
+      const rawTarget = req.url ?? '/'
+      if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+        || rawTarget.includes('\\') || rawTarget.includes('#')) throw new Error('non-origin-form target')
+      url = new URL(rawTarget, 'http://localhost')
+    } catch {
+      jsonError(res, 400, { code: 'bad_request', message: 'invalid request target' })
+      return
+    }
+    const segments = url.pathname.split('/').filter(Boolean)
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         ...res._corsHeaders,

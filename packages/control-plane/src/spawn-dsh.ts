@@ -61,6 +61,20 @@ import { call, RpcBusinessError } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
 import type { Logger } from './types.ts'
 
+/** Gateway credentials belong to the outer authenticated boundary and must
+ * never become ambient authority inside the managed dsh or its tools/plugins.
+ * Keep this exported pure helper covered without spawning a process. */
+export function sanitizeManagedDshEnv(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const output = { ...input }
+  for (const name of Object.keys(output)) {
+    // Windows environment names are case-insensitive even though enumeration
+    // preserves spelling. Strip case-insensitively so a lower/mixed-case
+    // credential that configured the parent cannot survive into the child.
+    if (name.toUpperCase().startsWith('DSH_GATEWAY_')) delete output[name]
+  }
+  return output
+}
+
 /** First port attempted for a managed dsh host. */
 export const BASE_DHSPORT = 17510
 
@@ -287,14 +301,14 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     // the host's directory-picker-auto resolves `browse` under an
     // SSH-launch marker, so the managed host serves host.listDirectory /
     // host.createDirectory — one in-app dialog for every instance.
-    env: {
+    env: sanitizeManagedDshEnv({
       ...process.env,
       ...nodeExec.env,
       DSH_HOME: dshHome,
       DSH_TELEMETRY_DISABLED: '1',
       DSH_PERMISSION_MODE: 'workspace-write',
       SSH_CONNECTION: '127.0.0.1 0 127.0.0.1 0',
-    },
+    }),
     stdio: ['ignore', 'pipe', 'pipe'],
     // Own process group: the host outlives a control-plane crash and the
     // orphan reaper (design 02 §3.4.2) reclaims it.

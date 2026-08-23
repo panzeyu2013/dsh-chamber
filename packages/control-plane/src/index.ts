@@ -50,7 +50,7 @@ import {
   HOST_GRAPH_PACKAGE_NAME,
 } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
-import type { ApiRequest, ApiResponse, ApiSurface } from './api.ts'
+import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
 /** Browser hardening shared by static, API, proxy, and error responses. */
 export const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
@@ -128,6 +128,10 @@ export interface ControlPlaneOptions {
   webDistDir?: string
   logger?: Logger
   corsOrigins?: string[]
+  /** Explicit request boundary for an authenticated external composer. Its
+   * presence is also the opt-in that permits a non-loopback bind; the normal
+   * anonymous control plane never supplies it and remains loopback-only. */
+  corsEvaluator?: ApiCorsEvaluator
   /** Injectable local-connection wire deps (test seams: fake spawn/describe). */
   localConnectionDeps?: LocalConnectionDeps
   /**
@@ -145,7 +149,7 @@ export interface ControlPlaneOptions {
    */
   hostGitWorktreePackageSourceDir?: string
   /**
-   * Optional request middleware (design 16 §2.1 改动③): runs after the
+   * Optional request middleware (design 17 §2.1 改动③): runs after the
    * security headers + CSP + URL parse and BEFORE the default dispatch. A
    * truthy return CLAIMS the request (the default dispatch is skipped); a
    * falsy return falls through. The gateway uses it to inject its auth gate
@@ -171,7 +175,7 @@ export interface ControlPlaneOptions {
   ) => boolean | void | Promise<boolean | void>
 }
 
-/** The internal surfaces handed to a composing gateway's middleware (design 16
+/** The internal surfaces handed to a composing gateway's middleware (design 17
  * §2.1 改动③): the management REST handle + CORS decision + per-instance proxy. */
 export interface PlaneMiddlewareContext {
   api: ApiSurface
@@ -190,7 +194,7 @@ export interface PlaneHandle {
    */
   readonly localProcessAlive: boolean
   readonly instanceId: string
-  /** The managed local dsh host's port, or null when not ready (design 16
+  /** The managed local dsh host's port, or null when not ready (design 17
    * §2.1 改动①: exposed for the gateway-proxy's single-target resolution). */
   getLocalDshPort(): number | null
   registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>): void
@@ -203,6 +207,9 @@ export interface PlaneHandle {
    * instance already ready.
    */
   startLocal(): Promise<void>
+  /** Subscribe to authoritative local-host lifecycle transitions. Gateway
+   * consumers use this to attach only while the managed dsh is ready. */
+  onLocalStateChange(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
 }
 
 /**
@@ -215,11 +222,12 @@ export interface PlaneHandle {
 export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHandle {
   const port = options.port ?? 17500
   const host = options.host ?? '127.0.0.1'
-  if (host !== '127.0.0.1' && host !== '::1') {
+  if (host !== '127.0.0.1' && host !== '::1'
+    && (options.corsEvaluator === undefined || options.middleware === undefined || options.upgradeMiddleware === undefined)) {
     // loopback-only is a v1 invariant, not merely a default: a non-loopback
     // bind would expose the anonymous management API + reverse proxy to the
     // network, and the Host/Origin fence (api.ts corsFor) is browser-only.
-    throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)}; loopback-only is a v1 invariant`)
+    throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)} without an external request-boundary evaluator plus HTTP/upgrade middleware; loopback-only is the anonymous v1 invariant`)
   }
   const stateDir = options.stateDir ?? process.env.DSH_CHAMBER_STATE ?? DEFAULT_STATE_DIR
   const dshWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
@@ -398,6 +406,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const api = createApi({
     logger,
     corsOrigins: explicitOrigins,
+    ...(options.corsEvaluator !== undefined ? { corsEvaluator: options.corsEvaluator } : {}),
     getHealth: () => ({ ok: true, dsh: { status: local.getState(), port: local.getDshPort() ?? 0, error: local.getError() ?? undefined } }),
     subscribeHealthEvents: (listener) => {
       healthListeners.add(listener)
@@ -722,7 +731,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       if (Array.isArray(reaped.errors) && reaped.errors.length > 0) {
         for (const reaperError of reaped.errors) logger.error(`reaper: ${String(reaperError)}`)
       }
-      // Gateway middleware context (design 16 改动③): the management REST +
+      // Gateway middleware context (design 17 改动③): the management REST +
       // per-instance proxy surfaces handed to a composing gateway's middleware.
       const middlewareCtx: PlaneMiddlewareContext = { api, instanceProxy }
 
@@ -789,13 +798,18 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           // rejection, never a crash or a silent empty success).
           let url: URL
           try {
-            url = new URL(req.url ?? '/', 'http://localhost')
+            const rawTarget = req.url ?? '/'
+            if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+              || rawTarget.includes('\\') || rawTarget.includes('#')) {
+              throw new Error('non-origin-form request target')
+            }
+            url = new URL(rawTarget, 'http://localhost')
           } catch {
             res.writeHead(400, { 'content-type': 'application/json' })
             res.end('{"error":"invalid-url"}')
             return
           }
-          // Gateway middleware (design 16 改动③): a truthy return claims the
+          // Gateway middleware (design 17 改动③): a truthy return claims the
           // request; falsy falls through to dispatchRest below.
           if (options.middleware !== undefined) {
             void Promise.resolve(options.middleware(req as ApiRequest, res as ApiResponse, url, middlewareCtx)).then((claimed) => {
@@ -846,7 +860,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           })
         }
         server.on('upgrade', (req, socket, head) => {
-          // Gateway upgrade middleware (design 16 改动③): truthy claims.
+          const rawTarget = req.url ?? '/'
+          if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+            || rawTarget.includes('\\') || rawTarget.includes('#')) {
+            socket.end(
+              'HTTP/1.1 400 Bad Request\r\n'
+              + 'Content-Type: application/json\r\n'
+              + 'Connection: close\r\n'
+              + '\r\n'
+              + '{"error":"invalid-url","code":"bad_request"}',
+            )
+            return
+          }
+          // Gateway upgrade middleware (design 17 改动③): truthy claims.
           if (options.upgradeMiddleware !== undefined) {
             void Promise.resolve(options.upgradeMiddleware(req as ApiRequest, socket as Duplex, head, middlewareCtx)).then((claimed) => {
               if (claimed) return
@@ -921,7 +947,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       return instanceId
     },
 
-    /** The managed local dsh host's port (design 16 §2.1 改动①). */
+    /** The managed local dsh host's port (design 17 §2.1 改动①). */
     getLocalDshPort() {
       return local.getDshPort()
     },
@@ -945,15 +971,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     startLocal: async () => {
       await startLocalConnection()
     },
+
+    onLocalStateChange(listener) {
+      return local.onStateChange(listener)
+    },
   } satisfies PlaneHandle
 }
 
-export { spawnDsh } from './spawn-dsh.ts'
+export { sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
 export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
 export type { ServerRequest } from './dsh-client.ts'
 export type { Logger } from './types.ts'
-export type { ApiRequest, ApiResponse, ApiSurface } from './api.ts'
-// Shared forwarding core (design 16 §6.2, 方案 A): extracted from
+export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
+// Shared forwarding core (design 17 §6.2, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
 // rewrite + WS splice + limits/errors without forking.
 export * from './proxy-forward.ts'
