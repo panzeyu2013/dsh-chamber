@@ -31,6 +31,118 @@
   剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
   N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径）。契约见
   `docs/design/16-vscode-deeplink.md`。
+- **dsh 运行时版本管理（设计 17，设计定稿 2026-08；M0 已落地 2026-08，M1–M4 未实现）**：settings「通用」段
+  「更新」组新增「dsh 运行时」块（版本号 + 版本选择器 + 回滚 + 失败记录；
+  connections 本地卡片回显版本号）。**获取方式（用户拍板，2026-08 更正）**：运行期
+  从 npm 拉取 `@deepseek-ai/dsh` 安装进壳（不等 chamber 发版、不预打包）——
+  运行期安装为唯一获取方式（内嵌 pnpm、registry metadata = feed、integrity 校验、
+  浮动依赖让步 + 冒烟/探针兜底；**2026-08 用户拍板：完全移除 Provider B 预打包
+  方案**），registry 源由用户在软件内显式设置（默认 npmjs，白名单镜像可选，非按
+  locale 静默默认切换）。**无验证区分**、默认推荐最新、自由选择/
+  回滚；三版本缓存（可运行 / 失败现场 / 尝试中）；下次启动换树（不动退出路径）；
+  探针门控激活 + 自动回退 + 现场保留；override 失效规则（壳更新后回落内建，保留
+  选择记录）。**三轮审查完成（2026-08：自审 + 独立边界审查 + 独立代码事实核对）**：
+  已吸收 2×P0（快照时序与孤儿实例、恢复原子性修正为两阶段协议）、10×P1（pending
+  清除/重放、壳更新回落保护、known-good 终态、restart-exhausted 回退分支、完整
+  状态机、指针模型、异步启动相位、快照失败中止、保留策略矛盾、Windows 平台范围）
+  与主要 P2；代码事实核对 10 清单全对码（无 WRONG）。**第三轮 5 视角并行审查
+  （2026-08）**：修订后一致性（P1×3：保留策略矛盾残留、bundle-swap 旧模型残留、
+  快照命名/手动回滚语义）、Provider A 安装深度（**无 P0**：allowBuilds miss 硬
+  失败、macOS 默认 entitlements 已含 disable-library-validation、koffi/node-pty
+  无 toolchain 路径源码核实；P1×4：npmrc 源漂移需钉源、allowBuilds 维护耦合、
+  退出孤儿 install 子进程、镜像决策）、UX 与状态机（P1×4：失效无用户记录、
+  applying 启动门控、文案分支诚实、快照失败出口）、测试计划（P1×3：restart-
+  exhausted 分支测试、fake-registry 离线集成、状态机纯模块测试）、发布/版本纪律
+  （P1×2：内嵌 pnpm 定案 extraResources 规避 asar、files 显式枚举 + 产物断言）——
+  全部已吸收（design 17 修订标注 R3-*）；design 11 §8 版本集口径修正为 7 发版包/
+  5 客户端插件包（以 release.yml 断言集为权威）。M0（版本号显示）可先行。
+   **M0 已落地（2026-08）**：settings-bridge「通用」视图 `UpdateSection` 之后新增
+   只读「dsh 运行时」组（`GeneralView.tsx` 读 `window.dshChamber.dshVersion`，null
+   显示「—」）+ connections 本地实例卡片 `.localMeta` 追加 `dsh vX` mono chip
+   （null/空串省略）+ zh/en i18n（`dshRuntimeTitle`/`dshRuntimeVersionUnknown`，
+   settings-bridge locales）。验证：`typecheck:settings-bridge`、`typecheck:connections`
+   均 exit 0、`verify:i18n` 4 对文档 consistent；未改 preload/主进程/ambient
+   （dshVersion 投影早已就绪）。M1、M2 余项（registry/安装器/清理/打包纪律）、M3、M4 未实现。
+  设计见 `docs/design/17-dsh-runtime-version.md`。
+  **M2 基础纯逻辑层已落地（2026-08）**：
+  `dsh-runtime-store.ts`（`<baseDir>/dsh-runtime/` 数据面：current 指针原子写
+  tmp+rename、override 损坏保留 `*.corrupt`、known-good 标记、受保护类版本四类
+  判定、版本树列表）+ `version-safety.ts`（EXACT_SEMVER + 拒绝 `/`、`\`、`..`）+
+  `allow-builds.mjs`（ALLOW_BUILDS 单一来源常量，bundle-dsh.mjs 改为 import 同
+  源）。全部 baseDir 注入、无 electron、不接 IPC/UI；node:test 单测 21 例
+  （`node packages/desktop/version-safety.test.ts && node packages/desktop/dsh-runtime-store.test.ts && node packages/desktop/allow-builds.test.ts` 均 exit 0；
+  `node --check packages/desktop/scripts/bundle-dsh.mjs` exit 0）。另落地网络/URL/脱敏侧（`sanitize-error.ts`/`registry-url.ts`/`registry-metadata.ts`，updater.ts 改为 import `sanitizeErrorText`，含 loopback 离线 metadata 测试）——两侧合计单测 41 例全绿。集成：根 tsconfig `include` 增补 11 个 .ts、`test:desktop` 追加 6 个测试、desktop `files` 增补 6 个主进程模块（含 `allow-builds.mjs` + `allow-builds.d.mts` 声明）。验证：根 `tsc --noEmit`、`test:desktop` 全套、`verify:i18n` 均 exit 0。
+   **M2 核心（守卫 + 安装器）已落地（2026-08）**：`dsh-runtime-updater.ts`
+   （SingleFlight / isNoopSelection / buildVersionList / versionExists，16 例）+
+   `runtime-installer.ts`（installRuntimeVersion：work 先写 pnpm-workspace.yaml
+   allowBuilds 全 true、hoisted+store-dir+registry 命令、prune+冒烟+manifest 原子发布、
+   失败重试一次、残留清理，7 例）+ `scripts/prune-runtime.d.mts`。验证：根 `tsc --noEmit`、
+   `test:desktop` 全套 16 文件均 exit 0。`dsh-runtime-controller.ts`（check/install/
+   resetBuiltin 编排 + onChanged 广播 + 单飞/无操作/版本存在门禁接线，10 例）已落地；
+   根 `tsc --noEmit` 与 `test:desktop` 全套 17 文件 exit 0。**M2 IPC 已落地（2026-08）**：
+   main.ts 注册 `dsh-chamber:runtime-state/check/install/reset-builtin` + `runtime-state-changed`
+   push、preload 暴露 `window.dshChamber.runtime`（state/check/install/resetBuiltin/onChanged）、
+   renderer `global.d.ts` 增补 `RuntimeState`/`RuntimeSurface`/`RuntimePhase`。验证：根 `tsc --noEmit`
+   与 `test:desktop` 全套 exit 0、`verify:i18n` exit 0。pnpm 依赖嵌入（锁文件敏感，延后单独做）随后。
+   **M3 激活与回退纯逻辑层已落地（2026-08）**：`snapshot-store.ts`（DSH_HOME 静止拷贝
+   快照 + 两阶段恢复 + 幂等补完 + 无快照不切指针 + pre-rollback 上限 1 份，9 例）+
+   `activation-gate.ts`（探针裁决 pass/fail/observe 延迟裁决 + 回退目标 + restart-exhausted
+   自动回退，13 例）+ `override-lifecycle.ts`（失效=标记非删除 + swap-attempted 重试 +
+   pending 重放三分支，13 例）+ `apply-phase.ts`（apply 编排：快照→切指针→探针裁决→
+   回退/标记 known-good，注入依赖，6 例）。验证：根 `tsc --noEmit`、`test:desktop` 全套
+   21 文件 exit 0。**M4 已落地（2026-08）**：`runtime-state-machine.ts`（§3.6 完整状态
+   转移表 + 终态门 allowedActions + isTerminal，8 例）+ settings-bridge
+   `DshRuntimeSection.tsx`（版本概览双版本 + 版本选择器 + 更新/回滚/恢复内建动作 +
+   状态行/失败记录 + registry 源下拉，接入 `window.dshChamber.runtime` + settings，
+   替换 M0 只读组）+ i18n 22 键 zh/en + `chamber-settings.ts` `registryOrigin` 字段
+   （normalizeRegistryOrigin 校验 https/无 userinfo）+ main.ts 控制器读
+   `chamberSettings.registryOrigin`。验证：根 `tsc --noEmit`、`test:desktop` 全套 22 文件、
+   `typecheck:settings-bridge`、`verify:i18n`、`build:renderer` 均 exit 0。
+   **真实环境检测已通过（2026-08）**：① pnpm 依赖嵌入——desktop 加 `pnpm@11.21.0`，
+   lockfile 手工补齐 pnpm（landlock 16 记录保留），`pnpm install --frozen-lockfile` exit 0；
+   ② 真实运行期安装——`installRuntimeVersion` 实际装 `@deepseek-ai/dsh@0.1.1-rc.2`：
+   plain node 86.2s / **Electron-as-node 64.3s**（Electron 43.4.0 / Node 24.18.1，经 npmmirror
+   下载二进制），install/prune/冒烟/原子发布全链路 OK，manifest `dependencies`+`dsh.platform`
+   正确；③ 真实 spawn——安装树 spawn `--profile web` TCP listener UP + HTTP 响应 +「dsh web」
+   输出。**实测修正**：`--no-update-notifier` 非 pnpm 11 旗标（「Unknown option」），已从安装
+   命令移除（runtime-installer.ts + 设计 §4 更正）。剩余：**M3 主进程实机接线**（whenReady 相位 +
+   cp.startLocal + host.describe 探针，仍需真实 Electron 壳内跑）+ **M1 实机项其余**（koffi 无
+   toolchain 探测、打包态 extraResources spawn、安装耗时/体积回填）延后。
+   **静态 review 验收（2026-08，3 subagent）**：无 P0。已修 P1 ×12：① readOverride 读面 fail-safe
+   （版本字段 isSafeVersion，不安全→*.corrupt）；② 安装 env scrubbing 剥离 npm_config_*（MITM 面）；
+   ③ decideVerdict 首败必 observe（§3.4 慢迁移二次确认，修正原「窗口外首败→fail」反转）；
+   ④ apply-phase 'half' 恢复响亮报错 + outcome 增 rollbackTarget 字段（null 落内建）+ probe/
+   switchPointer/restore rejection 全包 try/catch + markKnownGood→recordProbePass（探针通过=候选，
+   健康推进由监视器）；⑤ fetchRegistryMetadata 接线 §6 白名单（请求 URL/redirect 最终 origin/tarball
+   同款校验）+ controller.check 传 registryOrigin；⑥ controller.install 强制 pending 终态门（非仅 UI）；
+   ⑦ UI isNewer 用 semver 比较（修 0.1.10 vs 0.1.9 标反）+ 未检查/未水合不再假「已是最新」（新增
+   dshRuntimeStatusNotChecked）+ 主进程启动延迟 15s 静默 check + runtime-install IPC 参数守卫；
+   ⑧ preload ChamberSettings 补 registryOrigin（类型漂移）。全量验证：根 tsc / test:desktop 22 文件 /
+   typecheck:settings-bridge / verify:i18n / build:renderer 均 exit 0。**仍延后**：P1-5 磁盘模型
+   （evict/--cache-dir/store prune/.work pid 启动清扫）、P1-6 打包态 prune 编译进主进程、P1-7
+   desktop_npm_search 并入白名单口径、F8 每操作现读 registryOrigin（当前启动冻结）、P2 若干
+   （env 来源建模、离线缓存回滚、状态机活路径接线、known-good 24h 监视器实机接线等）。
+   **复验（2026-08）**：第二轮复验 subagent 停滞（无 findings），改为自查——又修 2 处：① `semverGt`
+   版本比较的「release vs prerelease」边界错误（`1.0.0 > 1.0.0-rc.1` 误判 false，更新/回滚按钮会标反；
+   已修 + 7 例 node 断言）；② apply-phase 回退 `switchPointer(target)` 未包 try/catch（回退指针切换失败
+   会逃逸，现已包 + 响亮报错）。全量验证：根 tsc / test:desktop 22 文件 / typecheck:settings-bridge /
+   verify:i18n / build:renderer 均 exit 0。
+   **全部缺口补齐（2026-08）**：① snapshot-store 加固（P2-1 恢复补完按「dshHome 非空 + .old」判已恢复、
+   P2-2 续作读标记 snapshotPath、P2-3 stash 先暂存后清理 + dest 随机后缀防同毫秒碰撞）；② 磁盘模型
+   `evictVersions`（受保护绝不逐出、非保护 mtime 旧→新逐出至 3 份）+ 安装 `--cache-dir` + `.work-*` 记
+   pid + `cleanupStaleInstalls` 启动判活清扫；③ 状态机增 `snapshot-failed` 相位 + `retry-apply` 直边
+   （§3.6 R3-3 不再自动每启重试）；④ `known-good-monitor.ts`（shouldPromote 24h+N boot 推进 +
+   recordProbePass/noteBoot/promoteDueCandidates，3 例）；⑤ controller `getRegistryOrigin` 每操作现读
+   （F8，main.ts 注入 `() => chamberSettings.registryOrigin`）；⑥ desktop_npm_search 经
+   `isAllowedRegistryUrl`；⑦ `RuntimeState.source`（bundled/user/env）+ UI (env) 标记与门控；⑧ F11 离线
+   缓存 `buildCachedVersionList` + install 对缓存树放行（免 registry 门禁/免重装）；⑨ F9 状态机接线 +
+   ⑬ M3 启动相位 → `runtime-startup.ts`（cleanup→evict→补完→applyPendingVersion，4 例）；⑩ F7 自定义源
+   输入 + [测试连通]（check 探测）+ patch 失败回显；⑪ P2-8 `completeInterruptedRestore` 启动补完入口；
+   ⑫ P1-6 prune-runtime.mjs 移入 `packages/desktop/`（files 显式枚举，打包态不再依赖被排除的 scripts/）；
+   ⑭ `probeKoffiLoadable`（M1 探测）。**实机未验（代码落地）**：runtime-startup 的 `spawnAndProbe` 依赖
+   control-plane 真实 spawn + host.describe，仍未接 whenReady 活路径；M1 koffi 探测未在打包产物上跑。
+   全量验证：根 tsc / test:desktop **24 文件** / typecheck:settings-bridge / verify:i18n / build:renderer
+   均 exit 0。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径；Unix 为契约目标。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化透传、
