@@ -881,6 +881,80 @@ test('read-only feature routes reject mutating methods and assets support HEAD',
   assert.equal(Number(head.headers['content-length']) > 0, true)
 })
 
+test('answering a pending interaction while dsh is not ready answers 503 and keeps the pending row', async () => {
+  let baseUrl: string | null = 'http://127.0.0.1:12345'
+  const responses: any[] = []
+  const host = createFeatureHost({
+    getDshBaseUrl: () => baseUrl,
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, notifications: { enabled: true } },
+    }),
+    featureTransport: {
+      reconnectDelayMs: 5,
+      callDsh: (async () => ({
+        rpcId: 'session-list', result: { ok: true, value: { items: [] } },
+      })) as any,
+      respondDsh: (async (_base: string, message: { rpcId?: string; result: any }) => {
+        responses.push(message)
+        return { accepted: true }
+      }) as any,
+      openStream: async function *(_base, path, signal, onOpen): AsyncGenerator<ServerRequest> {
+        onOpen?.()
+        if (path.endsWith('mux')) {
+          yield {
+            type: 'server-request', rpcId: 'approval-rpc', method: 'approval/requested',
+            payload: { sessionId: 's1', approvalId: 'a1', toolName: 'shell' },
+          }
+        }
+        if (!signal?.aborted) {
+          await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
+        }
+      },
+    },
+  })
+  host.start()
+
+  const getPending = async (): Promise<any[]> => {
+    const response = new FakeResponse()
+    await host.handle(new FakeRequest('GET') as unknown as ApiRequest,
+      response as unknown as ApiResponse, '/chamber/approvals')
+    return response.json().items
+  }
+  const deadline = Date.now() + 1_000
+  while ((await getPending()).length === 0) {
+    if (Date.now() >= deadline) throw new Error('pending approval never arrived')
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+
+  baseUrl = null
+  const unanswered = new FakeResponse()
+  await host.handle(new FakeRequest('POST', {
+    rpcId: 'approval-rpc', outcome: 'allowed-once',
+  }) as unknown as ApiRequest, unanswered as unknown as ApiResponse, '/chamber/approvals')
+  assert.equal(unanswered.status, 503)
+  assert.equal(unanswered.json().code, 'instance_unavailable')
+  assert.equal(responses.length, 0, 'a not-ready answer never reaches dsh')
+  assert.equal((await getPending()).length, 1, 'the pending row survives a not-ready answer for retry')
+  host.stop()
+})
+
+test('approval notifier rejects answers with a coded instance_unavailable error while not ready', async () => {
+  const notifier = createApprovalNotifier({
+    getDshBaseUrl: () => null,
+    logger,
+    onApproval() {},
+    onQuestion() {},
+    respondDsh: (async () => ({ accepted: true })) as any,
+  })
+  const approval = { sessionId: 's1', approvalId: 'a1', rpcId: 'approval-rpc', toolName: 'shell' }
+  await assert.rejects(notifier.answerApproval(approval, 'allowed-once'),
+    (error: unknown) => (error as { code?: string })?.code === 'instance_unavailable')
+  await assert.rejects(notifier.answerQuestion({ sessionId: 's1', rpcId: 'q', questions: [] }, { answers: [] }),
+    (error: unknown) => (error as { code?: string })?.code === 'instance_unavailable')
+})
+
 test('browser orchestration assets are CSP-safe, secret-blind, and keep settings JSON wire unchanged', async () => {
   const host = createFeatureHost({ getDshBaseUrl: () => null, logger, channels, store: fakeStore() })
 

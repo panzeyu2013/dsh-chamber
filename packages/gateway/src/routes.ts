@@ -1081,6 +1081,12 @@ function featureDisabled(res: ApiResponse): true {
 }
 
 function featureError(res: ApiResponse, error: unknown, logger: Logger): void {
+  // Upstream-unavailable (managed dsh not ready): explicit 503, never a
+  // misleading 500 internal (S4). Shared by the notifier and git feature.
+  if ((error as { code?: unknown })?.code === 'instance_unavailable') {
+    json(res, 503, { error: 'instance_unavailable', code: 'instance_unavailable' })
+    return
+  }
   if (error instanceof AnswerRejectedError) {
     json(res, 409, { error: error.message, code: error.code, reason: error.reason })
     return

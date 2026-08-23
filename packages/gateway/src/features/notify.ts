@@ -46,6 +46,14 @@ export class AnswerRejectedError extends Error {
   }
 }
 
+/** Upstream-unavailable error mapped to an explicit 503 by the route layer
+ * (S4: never a misleading 500 internal when the managed dsh is not ready). */
+function notReadyError(what: string): Error & { code: string } {
+  const error = new Error(`${what}: local dsh instance is not ready`) as Error & { code: string }
+  error.code = 'instance_unavailable'
+  return error
+}
+
 export function createApprovalNotifier(deps: {
   getDshBaseUrl(): string | null
   logger: Logger
@@ -144,7 +152,7 @@ export function createApprovalNotifier(deps: {
     },
     async answerApproval(req: ApprovalRequest, outcome: 'allowed-once' | 'rejected'): Promise<void> {
       const baseUrl = deps.getDshBaseUrl()
-      if (baseUrl === null) throw new Error('approval answer: local dsh instance is not ready')
+      if (baseUrl === null) throw notReadyError('approval answer')
       const receipt = await respondDsh(baseUrl, {
         rpcId: req.rpcId,
         result: { ok: true, value: { sessionId: req.sessionId, approvalId: req.approvalId, outcome } },
@@ -153,7 +161,7 @@ export function createApprovalNotifier(deps: {
     },
     async answerQuestion(req: QuestionRequest, answer: unknown): Promise<void> {
       const baseUrl = deps.getDshBaseUrl()
-      if (baseUrl === null) throw new Error('question answer: local dsh instance is not ready')
+      if (baseUrl === null) throw notReadyError('question answer')
       const receipt = await respondDsh(baseUrl, {
         rpcId: req.rpcId,
         result: { ok: true, value: { sessionId: req.sessionId, answer } },
