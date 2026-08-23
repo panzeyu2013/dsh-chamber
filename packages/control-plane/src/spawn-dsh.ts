@@ -193,6 +193,60 @@ interface SpawnAttemptOptions {
   /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
   patchPath?: string | null
   signal?: AbortSignal
+  pidRecordWriter: typeof writePidRecord
+  terminateChildFn: (child: ChildProcess) => Promise<void>
+}
+
+export const DSH_SPAWN_NON_RETRYABLE_CODE = 'dsh_spawn_non_retryable'
+export const DSH_WRITER_QUIESCENCE_UNKNOWN_CODE = 'dsh_writer_quiescence_unknown'
+
+export type SpawnLifecycleErrorCode =
+  | typeof DSH_SPAWN_NON_RETRYABLE_CODE
+  | typeof DSH_WRITER_QUIESCENCE_UNKNOWN_CODE
+
+export class SpawnLifecycleError extends Error {
+  readonly code: SpawnLifecycleErrorCode
+  readonly cause: unknown
+
+  constructor(code: SpawnLifecycleErrorCode, message: string, cause?: unknown) {
+    super(message)
+    this.name = 'SpawnLifecycleError'
+    this.code = code
+    this.cause = cause
+  }
+}
+
+export function isWriterQuiescenceUnknown(error: unknown): error is Error & { code: typeof DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } {
+  return error instanceof Error
+    && (error as Error & { code?: unknown }).code === DSH_WRITER_QUIESCENCE_UNKNOWN_CODE
+}
+
+function isNonRetryableSpawnError(error: unknown): error is Error & { code: SpawnLifecycleErrorCode } {
+  if (!(error instanceof Error)) return false
+  const code = (error as Error & { code?: unknown }).code
+  return code === DSH_SPAWN_NON_RETRYABLE_CODE || code === DSH_WRITER_QUIESCENCE_UNKNOWN_CODE
+}
+
+function writerQuiescenceUnknown(child: ChildProcess, context: string, cause: unknown): SpawnLifecycleError {
+  if (isWriterQuiescenceUnknown(cause)) return cause as SpawnLifecycleError
+  const pid = child.pid ?? 'unknown'
+  return new SpawnLifecycleError(
+    DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
+    `${context}; dsh process group ${pid} quiescence is unknown: ${String(cause)}`,
+    cause,
+  )
+}
+
+async function terminateAndProveQuiet(
+  child: ChildProcess,
+  terminateChildFn: (child: ChildProcess) => Promise<void>,
+  context: string,
+): Promise<void> {
+  try {
+    await terminateChildFn(child)
+  } catch (error) {
+    throw writerQuiescenceUnknown(child, context, error)
+  }
 }
 
 /**
@@ -266,7 +320,17 @@ interface SpawnAttemptResult {
   baseUrl: string
 }
 
-async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, patchPath, signal }: SpawnAttemptOptions): Promise<SpawnAttemptResult> {
+async function spawnAttempt({
+  dshHome,
+  stateDir,
+  dshWorkspacePath,
+  port,
+  logger,
+  patchPath,
+  signal,
+  pidRecordWriter,
+  terminateChildFn,
+}: SpawnAttemptOptions): Promise<SpawnAttemptResult> {
   const baseUrl = `http://127.0.0.1:${port}`
   const log = (line: string) => logger.log(`[dsh:${port}] ${line}`)
   // Per-port rolling log (design 02 §3.8 / host-logs.ts): stdout/stderr go
@@ -317,7 +381,30 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
   })
   child.once('exit', () => hostLog.close())
   const instanceId = readInstanceId(stateDir)
-  writePidRecord(stateDir, pid, port, process.pid, instanceId === null ? {} : { ownerInstanceId: instanceId })
+  try {
+    pidRecordWriter(stateDir, pid, port, process.pid, instanceId === null ? {} : { ownerInstanceId: instanceId })
+  } catch (ledgerError) {
+    // A detached writer must never continue without its durable reaper
+    // evidence. Reclaim it before surfacing the ledger failure, and make the
+    // attempt non-retryable so another port cannot create a second writer.
+    try {
+      await terminateAndProveQuiet(child, terminateChildFn, 'pid ledger publication failed and child cleanup did not prove quiescence')
+    } catch (terminationError) {
+      throw writerQuiescenceUnknown(
+        child,
+        `pid ledger publication failed (${String(ledgerError)}) and cleanup failed`,
+        terminationError,
+      )
+    }
+    // A custom/injected writer may have published and then thrown. Only erase
+    // possible evidence after the process group is positively absent.
+    removePidRecord(stateDir, pid)
+    throw new SpawnLifecycleError(
+      DSH_SPAWN_NON_RETRYABLE_CODE,
+      `dsh pid ledger publication failed on port ${port}; child was reclaimed: ${String(ledgerError)}`,
+      ledgerError,
+    )
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
@@ -327,7 +414,8 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     onExit = (code, sig) => resolve(`exit(${code ?? sig})`)
     child.once('exit', onExit)
     onAbort = () => resolve('aborted')
-    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+    else signal?.addEventListener('abort', onAbort, { once: true })
     const probe = () => {
       if (child.exitCode !== null || child.signalCode !== null) return
       const socket = createConnection({ host: '127.0.0.1', port })
@@ -347,7 +435,12 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
   })
   if (outcome !== 'tcp') {
-    child.kill('SIGKILL')
+    // stopLocal() uses the signal as a writer-quiescence barrier. Do not
+    // settle the spawn promise until the detached process group has really
+    // exited; merely delivering child.kill() would leave a snapshot race.
+    await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed before TCP readiness`)
+    // The ledger is writer evidence: delete only after PGID quiescence was
+    // positively established above.
     removePidRecord(stateDir, pid)
     throw new Error(`dsh spawn attempt on port ${port} failed: ${outcome} before TCP listen`)
   }
@@ -356,6 +449,9 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
   // the listen window expires.
   const controller = new AbortController()
   const probeTimer = setTimeout(() => controller.abort(), LISTEN_WAIT_MS)
+  const abortProbe = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  else signal?.addEventListener('abort', abortProbe, { once: true })
   let lastProbeError: unknown
   try {
     for (;;) {
@@ -367,17 +463,21 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
         if (child.exitCode !== null || child.signalCode !== null) {
           throw new Error(`dsh spawn attempt on port ${port} failed: child exited: ${String(probeError)}`)
         }
+        if (controller.signal.aborted) throw probeError
         lastProbeError = probeError
         await new Promise(resolve => setTimeout(resolve, 500))
       }
     }
   } catch (error) {
     clearTimeout(probeTimer)
-    child.kill('SIGKILL')
+    signal?.removeEventListener('abort', abortProbe)
+    await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed during host.describe`)
+    // Preserve the ledger when termination cannot prove group quiescence.
     removePidRecord(stateDir, pid)
     throw new Error(`dsh spawn attempt on port ${port} failed: host.describe: ${String(error)}`)
   }
   clearTimeout(probeTimer)
+  signal?.removeEventListener('abort', abortProbe)
   // Best-effort browse-capability probe (design 05 §4): the in-app directory
   // dialog needs the host to serve `browse`. A native-capability host — a
   // dsh version predating the SSH_CONNECTION resolver arm, or a deployment
@@ -385,7 +485,7 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
   // loud in the log instead of a silent dialog failure. Never fails the
   // spawn (the host is otherwise healthy); other failures are ignored.
   try {
-    await call(baseUrl, 'host.listDirectory', {}, { timeoutMs: 10_000 })
+    await call(baseUrl, 'host.listDirectory', {}, { timeoutMs: 10_000, signal })
   } catch (probeError) {
     if (probeError instanceof RpcBusinessError && probeError.code === 'directory-picker-unavailable') {
       logger.warn(
@@ -398,29 +498,92 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
 }
 
 /** Signal the whole process group of a detached child; fall back to the pid. */
-function killGroup(pid: number, signal: NodeJS.Signals): void {
+function signalManagedGroup(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
+  if (process.platform === 'win32') {
+    try {
+      child.kill(signal)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+    return
+  }
   try {
     process.kill(-pid, signal)
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    // A detached Unix child is normally its process-group leader. Retain a
+    // direct-pid fallback for a platform/runtime that did not establish the
+    // group, but only while Node still considers this exact child live.
+    if (child.exitCode !== null || child.signalCode !== null) return
     try {
       process.kill(pid, signal)
-    } catch { /* already gone */ }
+    } catch (fallbackError) {
+      if ((fallbackError as NodeJS.ErrnoException).code !== 'ESRCH') throw fallbackError
+    }
   }
 }
 
-/** Stop a managed child: process-group SIGTERM, escalate to SIGKILL after
- * TERMINATE_GRACE_MS (1s — the fast-exit half of the speed-vs-reclamation balance). */
-async function terminateChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return
+/** Whether the owned process group (or Windows direct child) still exists.
+ * EPERM proves existence without permission; only ESRCH proves quiescence. */
+export function managedProcessGroupAlive(child: ChildProcess): boolean {
+  const pid = child.pid
+  if (pid === undefined) return false
+  const target = process.platform === 'win32' ? pid : -pid
+  try {
+    process.kill(target, 0)
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH') {
+      if (process.platform !== 'win32' && child.exitCode === null && child.signalCode === null) {
+        try {
+          process.kill(pid, 0)
+          return true
+        } catch (fallbackError) {
+          return (fallbackError as NodeJS.ErrnoException).code === 'EPERM'
+        }
+      }
+      return false
+    }
+    if (code === 'EPERM') return true
+    throw error
+  }
+}
+
+const PROCESS_GROUP_POLL_MS = 25
+
+async function waitForManagedGroupExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  while (managedProcessGroupAlive(child)) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return false
+    await new Promise(resolve => setTimeout(resolve, Math.min(PROCESS_GROUP_POLL_MS, remaining)))
+  }
+  return true
+}
+
+/**
+ * Stop a managed child and prove the complete detached process group is gone.
+ * The leader's `exit` event is insufficient: PTY/plugin descendants can keep
+ * the PGID and continue writing DSH_HOME. The pid ledger is removed by the
+ * caller only after this function returns successfully.
+ */
+export async function terminateChild(child: ChildProcess, graceMs = TERMINATE_GRACE_MS): Promise<void> {
   const pid = child.pid
   if (pid === undefined) return
-  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
-  killGroup(pid, 'SIGTERM')
-  const timer = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) killGroup(pid, 'SIGKILL')
-  }, TERMINATE_GRACE_MS)
-  await exited
-  clearTimeout(timer)
+  try {
+    if (!managedProcessGroupAlive(child)) return
+    signalManagedGroup(child, pid, 'SIGTERM')
+    if (await waitForManagedGroupExit(child, graceMs)) return
+    signalManagedGroup(child, pid, 'SIGKILL')
+    if (await waitForManagedGroupExit(child, graceMs)) return
+    throw new SpawnLifecycleError(
+      DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
+      `dsh process group ${pid} did not exit after SIGKILL`,
+    )
+  } catch (error) {
+    throw writerQuiescenceUnknown(child, 'managed child termination failed', error)
+  }
 }
 
 /** Options for spawnDsh. */
@@ -432,6 +595,10 @@ export interface SpawnDshOptions {
   /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
   patchPath?: string | null
   signal?: AbortSignal
+  /** Injectable ledger writer for deterministic lifecycle-failure tests. */
+  pidRecordWriter?: typeof writePidRecord
+  /** Injectable terminator for deterministic residual-writer tests. */
+  terminateChildFn?: (child: ChildProcess) => Promise<void>
 }
 
 /** The ready host surface returned by spawnDsh. */
@@ -448,7 +615,16 @@ export interface SpawnedHost {
  *   signal}.
  * @returns {child, port, baseUrl, stop()}.
  */
-export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, patchPath, signal }: SpawnDshOptions): Promise<SpawnedHost> {
+export async function spawnDsh({
+  stateDir,
+  dshHome,
+  dshWorkspacePath,
+  logger,
+  patchPath,
+  signal,
+  pidRecordWriter = writePidRecord,
+  terminateChildFn = terminateChild,
+}: SpawnDshOptions): Promise<SpawnedHost> {
   let lastError: unknown
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
     const port = BASE_DHSPORT + attempt
@@ -465,12 +641,24 @@ export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, pa
       continue
     }
     try {
-      const spawned = await spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, patchPath, signal })
+      const spawned = await spawnAttempt({
+        dshHome,
+        stateDir,
+        dshWorkspacePath,
+        port,
+        logger,
+        patchPath,
+        signal,
+        pidRecordWriter,
+        terminateChildFn,
+      })
       return {
         ...spawned,
         stop: async () => {
-          await terminateChild(spawned.child)
+          await terminateAndProveQuiet(spawned.child, terminateChildFn, 'managed host stop failed')
           const pid = spawned.child.pid
+          // terminateChild rejects on residual group liveness, so a failed
+          // proof leaves this record for the startup reaper/fail-closed gate.
           if (pid !== undefined) removePidRecord(stateDir, pid)
         },
       }
@@ -478,6 +666,9 @@ export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, pa
       lastError = error
       const message = error instanceof Error ? error.message : String(error)
       logger.log(`spawn attempt ${attempt + 1}/${MAX_SPAWN_ATTEMPTS} on port ${port} failed: ${message}`)
+      // Ledger publication and unknown-writer failures are lifecycle failures,
+      // not port collisions. Retrying would create a second DSH_HOME writer.
+      if (isNonRetryableSpawnError(error)) throw error
     }
   }
   throw new Error(`dsh failed to start after ${MAX_SPAWN_ATTEMPTS} attempts: ${String(lastError)}`)

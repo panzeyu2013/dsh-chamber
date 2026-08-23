@@ -34,6 +34,25 @@ function alive(pid: number): boolean {
   }
 }
 
+/** Detached managed hosts own PGID=pid on Unix. Only ESRCH proves that no
+ * residual descendant remains after the leader exits. */
+function groupAlive(pid: number): boolean {
+  if (process.platform === 'win32') return alive(pid)
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH') return false
+    if (code === 'EPERM') return true
+    throw error
+  }
+}
+
+function managedTreeAlive(pid: number): boolean {
+  return groupAlive(pid) || alive(pid)
+}
+
 /**
  * Signal the whole process group of a managed dsh host (design 02 §3.4.2:
  * "进程组 SIGTERM → 轮询 1.5s → SIGKILL" — spawn-dsh's terminateChild does
@@ -139,15 +158,15 @@ async function killAndConfirm(pid: number): Promise<void> {
   let deadline = Date.now() + TERM_WAIT_MS
   while (Date.now() < deadline) {
     await sleep(TERM_POLL_MS)
-    if (!alive(pid)) return
+    if (!managedTreeAlive(pid)) return
   }
   if (!signal(pid, 'SIGKILL')) return
   deadline = Date.now() + TERM_WAIT_MS
   while (Date.now() < deadline) {
     await sleep(TERM_POLL_MS)
-    if (!alive(pid)) return
+    if (!managedTreeAlive(pid)) return
   }
-  throw new Error(`pid ${pid} still alive after SIGTERM + SIGKILL`)
+  throw new Error(`process group ${pid} still alive after SIGTERM + SIGKILL`)
 }
 
 async function removeFile(file: string): Promise<void> {
@@ -179,9 +198,12 @@ async function processEntry(dir: string, name: string, log: LogFn): Promise<{ st
       log(`reaper: ${label} corrupt claim kept (${String(error)})`)
       return { status: 'kept' }
     }
-    await removeFile(file)
-    log(`reaper: ${label} corrupt record removed (${String(error)})`)
-    return { status: 'removed' }
+    // A managed-host record is the only durable evidence for a detached
+    // process group after the owning control plane dies.  Malformed bytes do
+    // not prove that writer absent, so preserve the record and make startup's
+    // writer-quiescence latch fail closed.
+    log(`reaper: ${label} corrupt record kept (${String(error)})`)
+    return { status: 'kept' }
   }
   if (name.startsWith('claim-')) {
     const ownerPid = Number.isInteger(record.ownerPid) ? record.ownerPid : null
@@ -195,11 +217,21 @@ async function processEntry(dir: string, name: string, log: LogFn): Promise<{ st
   }
   const pid = record.pid
   if (!Number.isInteger(pid) || pid <= 0) {
-    await removeFile(file)
-    log(`reaper: ${label} non-integer pid; record removed`)
-    return { status: 'removed' }
+    // The filename/payload may have been torn while publishing the ledger.
+    // Without a trustworthy PGID there is no safe absence proof; deleting the
+    // file would erase the only recovery evidence and reopen DSH_HOME writes.
+    log(`reaper: ${label} invalid pid; record kept`)
+    return { status: 'kept' }
   }
   if (!alive(pid)) {
+    // A crashed leader can leave PTY/plugin descendants in its detached
+    // group. We can no longer re-verify the leader identity safely, so keep
+    // the ledger and fail writer-quiescence closed instead of deleting the
+    // only evidence and racing a runtime snapshot.
+    if (groupAlive(pid)) {
+      log(`reaper: ${pid} leader dead but residual process group alive; record kept`)
+      return { status: 'kept' }
+    }
     await removeFile(file)
     log(`reaper: ${pid} dead; record removed`)
     return { status: 'removed' }
