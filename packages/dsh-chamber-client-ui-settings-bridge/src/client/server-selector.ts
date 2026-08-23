@@ -4,7 +4,7 @@ export interface ServerSelectorRow {
 }
 
 export interface ServerProjectionRow extends ServerSelectorRow {
-  kind: 'local' | 'ssh'
+  kind: 'local' | 'ssh' | 'gateway'
   connected: boolean
   phase: string
   /** Transport refresh stamp; deliberately excluded from the rendered signature. */
