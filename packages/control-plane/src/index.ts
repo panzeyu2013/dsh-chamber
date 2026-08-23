@@ -388,6 +388,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   // Managed-host rolling logs (design 02 §3.8): the read side of the
   // per-port JSONL files written by spawn-dsh.ts / local-connection.ts.
+  // While the desktop activation verdict is pending, the 'local' alias
+  // resolves to the most recent spawn record — the quarantined candidate —
+  // and its rolling log contains the candidate port and a "ready" line.
+  // That is an internal fact like every other public surface, so the alias
+  // read is gated by the same exposure latch (an explicit port query is an
+  // internal/diagnostic read and stays available).
   const hostLogsModule = hostLogs({ stateDir, logger })
 
   // Per-instance reverse proxy (design 03 §3): /api/i/<id>/* HTTP/WS/SSE
@@ -507,7 +513,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       await local.stop()
       // The row stays (03 §2.1: DELETE stops the instance, the row persists).
     },
-    hostLogs: (query: { port?: number; limit?: number; offset?: number }) => hostLogsModule.readManagedLog(query?.port ?? 'local', { limit: query?.limit, offset: query?.offset }),
+    hostLogs: (query: { port?: number; limit?: number; offset?: number }) => {
+      // An explicit port is an internal/diagnostic read; the 'local' alias is
+      // the public surface and must not leak the quarantined candidate's
+      // port/ready state before the activation verdict (same latch as the
+      // proxy and health surfaces). Fail closed with a loud 503 rather than a
+      // silent empty log.
+      if (query?.port === undefined && !localExposureAllowed()) {
+        const error = new Error('local instance is quarantined behind activation probes') as Error & { code: string }
+        error.code = 'quarantined'
+        throw error
+      }
+      return hostLogsModule.readManagedLog(query?.port ?? 'local', { limit: query?.limit, offset: query?.offset })
+    },
     instanceProxy,
   })
 

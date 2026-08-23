@@ -168,6 +168,11 @@ test('candidate quarantine hides ready/port until the activation verdict opens e
     const proxyResponse = await fetchJson(base, '/api/i/local/api/session.list')
     assert.equal(proxyResponse.status, 503)
     assert.equal(proxyResponse.body.code, 'instance_unavailable')
+    // The 'local' host-log alias is the same internal fact: quarantined reads
+    // must 503 loudly, never leak the candidate port / ready line.
+    const logsResponse = await fetchJson(base, '/api/host/logs')
+    assert.equal(logsResponse.status, 503)
+    assert.equal(logsResponse.body.code, 'quarantined')
 
     const events = await fetch(`${base}/api/host/health-events`)
     const reader = events.body!.getReader()
