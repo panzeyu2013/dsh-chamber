@@ -145,7 +145,7 @@ export interface TransportManagerOptions {
 /** createTransportManager dependencies (provider/spawn/probe/allocator injectable). */
 export interface TransportManagerDeps {
   provider: TransportProvider
-  /** Optional per-kind overrides (design 16 §6.5): a kind present here
+  /** Optional per-kind overrides (design 17 §6.5): a kind present here
    * (e.g. 'gateway') resolves to that provider; every other kind falls back to
    * `provider`. */
   providers?: Partial<Record<TransportKind, TransportProvider>>
@@ -189,6 +189,36 @@ export interface TransportManager {
   dispose(): void
   /** dispose() + wait for every SIGKILL escalation to resolve (app quit). */
   disposeAsync(): Promise<void>
+}
+
+/**
+ * Replace provider-owned credentials without leaving a live transport bound
+ * to the previous value. The credential writer is write-through: if it
+ * throws, its old in-memory value remains authoritative, so reconnecting
+ * restores the prior transport. A mismatched kind is intentionally left
+ * alone — kind-switch cleanup may clear the OLD provider's secret after the
+ * replacement provider is already live.
+ */
+export function commitTransportCredentialUpdate(
+  transport: Pick<TransportManager, 'status' | 'disconnect' | 'connect'>,
+  id: string,
+  kind: TransportKind,
+  commit: () => void,
+): void {
+  const previousStatus = transport.status(id)
+  const shouldReconnect = previousStatus !== null
+    && previousStatus.kind === kind
+    && previousStatus.phase !== 'idle'
+  if (shouldReconnect) transport.disconnect(id)
+  try {
+    commit()
+  } catch (error) {
+    // A write-through credential store leaves its previous value live on a
+    // failed commit. Restore the transport under that prior credential.
+    if (shouldReconnect) transport.connect(id)
+    throw error
+  }
+  if (shouldReconnect) transport.connect(id)
 }
 
 /** Internal per-instance runtime state (phase machine + logs; never persisted). */
@@ -298,7 +328,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const doSpawn: (command: string, args: readonly string[], opts: SpawnOptions) => SpawnedProcess =
     spawnFn ?? ((command: string, args: readonly string[], opts: SpawnOptions) => spawn(command, args, opts))
   const doProbe = portProbe ?? defaultPortProbe
-  /** Resolve the provider for a spec's kind (design 16 §6.5): a per-kind
+  /** Resolve the provider for a spec's kind (design 17 §6.5): a per-kind
    * override wins; otherwise the default provider. */
   const resolveProvider = (kind: TransportKind): TransportProvider => providers?.[kind] ?? provider
   const doVerify = verifyProbe ?? ((spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) => {
@@ -550,7 +580,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   async function startTransport(id: string) {
     const spec = instances.get(id)
     if (spec === undefined) return
-    // The provider for THIS instance's kind (design 16 §6.5) — a gateway
+    // The provider for THIS instance's kind (design 17 §6.5) — a gateway
     // instance resolves to gatewayProvider, an ssh instance to sshProvider.
     const providerForSpec = resolveProvider(spec.kind)
     const state = ensureState(id)
@@ -897,9 +927,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * disconnected and are removed; the set becomes exactly `next`. Invalid
    * entries are dropped with a warning; duplicate ids keep the FIRST entry
    * (loud, never silent) so the file and the returned set never disagree.
-   * Instances whose transport parameters (host/user/sshPort/remotePort)
-   * changed while their transport is live are restarted so the transport
-   * and the projection never disagree (no stale-parameters drift).
+   * Instances whose transport kind or parameters
+   * (host/user/sshPort/remotePort) changed while their transport is live are
+   * restarted so the transport and the projection never disagree. Teardown
+   * always runs while the OLD spec is still authoritative: provider-owned
+   * resources and status listeners must observe/unregister the old kind before
+   * the registry starts projecting the replacement kind.
    * @returns the persisted instance list.
    */
   function saveInstances(next: TransportInstanceInput[]): TransportInstanceSpec[] {
@@ -916,6 +949,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const kept: TransportInstanceSpec[] = []
     const dropped: TransportInstanceInput[] = []
     const restartIds: string[] = []
+    const stopBeforeReplaceIds: string[] = []
+    const kindChangedIds: string[] = []
     const seenIds = new Set<string>()
     for (const entry of next) {
       const entryKind = (entry as { kind?: unknown }).kind
@@ -932,12 +967,19 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       seenIds.add(normalized.id)
       const previous = instances.get(normalized.id)
       const state = previous === undefined ? undefined : states.get(normalized.id)
-      const transportFieldsChanged = previous !== undefined && (previous.host !== normalized.host
+      const kindChanged = previous !== undefined && previous.kind !== normalized.kind
+      if (kindChanged) kindChangedIds.push(normalized.id)
+      const transportFieldsChanged = previous !== undefined && (kindChanged
+        || previous.host !== normalized.host
         || previous.user !== normalized.user
         || previous.sshPort !== normalized.sshPort
         || previous.remotePort !== normalized.remotePort)
-      if (transportFieldsChanged && state !== undefined && state.phase !== 'idle') {
-        restartIds.push(normalized.id)
+      if (transportFieldsChanged && state !== undefined) {
+        // A kind switch must dispose the old provider even while idle (there
+        // may still be provider-owned auth material). Other field-only edits
+        // need no teardown when the transport is already idle.
+        if (kindChanged || state.phase !== 'idle') stopBeforeReplaceIds.push(normalized.id)
+        if (state.phase !== 'idle') restartIds.push(normalized.id)
       }
       kept.push(normalized)
     }
@@ -951,17 +993,29 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       if (!nextIds.has(id)) {
         log(`transport-manager: instance ${id} removed from the set; disconnecting its transport`)
         disconnect(id)
-        instances.delete(id)
       }
+    }
+    // Stop changed transports BEFORE replacing `instances`. disconnect()
+    // resolves the provider and emits the idle projection from the current
+    // registry entry; doing this after replacement disposes the new provider
+    // and asks listeners to unregister the wrong `<kind>:<id>` target.
+    for (const id of stopBeforeReplaceIds) {
+      log(`transport-manager: instance ${id} transport kind/parameters changed; stopping old transport`)
+      disconnect(id)
     }
     instances.clear()
     for (const entry of kept) instances.set(entry.id, entry)
+    // Provider-specific projection fields cannot cross a kind boundary. For
+    // example, an SSH systemd result must never appear on a gateway status.
+    for (const id of kindChangedIds) {
+      const state = states.get(id)
+      if (state !== undefined) state.serviceActive = null
+    }
     // Transport parameters changed while live: stop the old transport and
     // start a fresh one under the new spec (disconnect is idempotent,
     // connect starts from the now-updated registry).
     for (const id of restartIds) {
-      log(`transport-manager: instance ${id} transport parameters changed; restarting its transport`)
-      disconnect(id)
+      log(`transport-manager: instance ${id} transport kind/parameters changed; starting replacement transport`)
       connect(id)
     }
     return listInstances()

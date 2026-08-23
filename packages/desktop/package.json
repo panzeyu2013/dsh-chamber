@@ -44,6 +44,7 @@
       "transport-provider.ts",
       "transport-manager.ts",
       "ssh-provider.ts",
+      "gateway-provider.ts",
       "ssh-config.ts",
       "renderer-trust.ts",
       "plugin-sync.ts",

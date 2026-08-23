@@ -14,10 +14,9 @@
  * Responsibilities:
  * - Single-frame BrowserWindow (contextIsolation, no nodeIntegration).
  * - Control plane lifecycle: spawn on ready, stop() on will-quit.
- * - Transport manager (transport-manager.ts + the `ssh` provider in
- *   ssh-provider.ts, design 03 §2.2): persisted instance registry
- *   (<userData>/ssh-instances.json), transport lifecycle, remote systemd
- *   exec (start/stop/is-active).
+ * - Transport manager (transport-manager.ts + the `ssh` and direct `gateway`
+ *   providers): persisted instance registry (<userData>/ssh-instances.json),
+ *   transport lifecycle, and SSH-only remote systemd exec.
  * - Transport registration: ready transport → registerInstanceTransport
  *   ('<kind>:<id>', readyUrl); leaving ready → unregisterInstanceTransport.
  *   (design 03 §2.2, driven by transport-manager + the `ssh` provider's
@@ -34,12 +33,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
-import { createTransportManager } from './transport-manager.ts';
+import { commitTransportCredentialUpdate, createTransportManager } from './transport-manager.ts';
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
-import { configureGatewayTokenStore, gatewayProvider, getGatewayToken, setGatewayToken } from './gateway-provider.ts';
+import { configureGatewayTokenStore, gatewayProvider, gatewayTokenValidationError, getGatewayToken, setGatewayToken } from './gateway-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
@@ -1088,7 +1087,7 @@ if (!gotTheLock) {
           if (url !== null) {
             if (status.kind === 'gateway') {
               // The gateway transport is https + bearer-token authenticated
-              // (design 16 §6.4): inject the shared token as an Authorization
+              // (design 17 §6.4): inject the shared token as an Authorization
               // header — the instance-proxy forwards it to the gateway auth gate.
               const token = getGatewayToken(id);
               cp.registerInstanceTransport(`${status.kind}:${id}`, url, token === null ? undefined : { authorization: `Bearer ${token}` });
@@ -1152,12 +1151,19 @@ if (!gotTheLock) {
 
     ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => sm.listInstances()));
     ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
-      const before = new Set(sm.listInstances().map(instance => instance.id));
+      const before = sm.listInstances();
       const saved = sm.saveInstances(instances);
-      // A removed instance's in-memory password dies with its registry entry
-      // (memory-only credentials never outlive the instance they belong to).
-      for (const id of before) {
-        if (!saved.some(instance => instance.id === id)) setSshPassword(id, null);
+      // Secrets are provider-owned and never part of the registry. Removal
+      // clears BOTH stores (also scrubs residue from a historical kind switch).
+      // A kind switch deliberately keeps the old secret until the form's new
+      // secret commit succeeds: the UI can roll metadata back if that commit
+      // fails, then explicitly clears the old provider secret after success.
+      for (const previous of before) {
+        const replacement = saved.find(instance => instance.id === previous.id);
+        if (replacement === undefined) {
+          setSshPassword(previous.id, null);
+          setGatewayToken(previous.id, null);
+        }
       }
       // Registry-change push: the renderer App layer re-pulls immediately
       // (roster/auto-connect/reap), so add/edit/delete propagates without
@@ -1177,31 +1183,61 @@ if (!gotTheLock) {
     // not reliable, so Windows refuses password auth loudly (keys/agent
     // remain the universal path) instead of silently failing at connect time.
     ipcMain.handle('desktop_ssh_set_password', trustedIpc(({ id, password }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
+      const spec = typeof id === 'string'
+        ? sm.listInstances().find(instance => instance.id === id)
+        : undefined;
+      const clearing = password === null || password === '';
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
+        || (password !== null && typeof password !== 'string')
+        || (!clearing && spec.kind !== 'ssh')) {
         return { error: 'invalid or unknown instance id' };
       }
-      if (!sshPasswordSupported()) {
+      // Clearing is always permitted so a completed ssh → gateway kind
+      // switch can scrub the old provider's secret even on platforms where
+      // accepting a new SSH password is unsupported.
+      if (!clearing && !sshPasswordSupported()) {
         return { error: 'SSH password auth is not supported on this platform yet — use a key or ssh-agent' };
       }
       if (typeof password === 'string' && password.length > MAX_SSH_PASSWORD_CHARS) {
         return { error: `SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters` };
       }
+      const normalizedPassword = typeof password === 'string' && password !== '' ? password : null;
       try {
-        setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
+        // A new password can race the renderer's registry-change auto-connect
+        // (especially gateway -> ssh): rebuild any non-idle SSH transport so
+        // an early terminal auth failure recovers without a manual click.
+        commitTransportCredentialUpdate(sm, id, 'ssh', () => {
+          setSshPassword(id, normalizedPassword);
+        });
         return { ok: true };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     }));
-    // Gateway shared token (design 16 §6.5): held in main-process memory +
+    // Gateway shared token (design 17 §6.5): held in main-process memory +
     // mirrored to <userData>/gateway-tokens.json (0600) — never in the
     // registry, never logged, never exposed back to the renderer.
     ipcMain.handle('desktop_gateway_set_token', trustedIpc(({ id, token }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
+      const spec = typeof id === 'string'
+        ? sm.listInstances().find(instance => instance.id === id)
+        : undefined;
+      const clearing = token === null || token === '';
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
+        || (token !== null && typeof token !== 'string')
+        || (!clearing && spec.kind !== 'gateway')) {
         return { error: 'invalid or unknown instance id' };
       }
+      const normalizedToken = typeof token === 'string' && token !== '' ? token : null;
+      const tokenError = gatewayTokenValidationError(normalizedToken);
+      if (tokenError !== null) return { error: tokenError };
       try {
-        setGatewayToken(id, typeof token === 'string' && token !== '' ? token : null);
+        // Revoke the currently registered Authorization header BEFORE
+        // mutating the token. disconnect() synchronously emits the old
+        // gateway idle projection, so the control plane unregisters
+        // gateway:<id> before a replacement transport can register.
+        commitTransportCredentialUpdate(sm, id, 'gateway', () => {
+          setGatewayToken(id, normalizedToken);
+        });
         return { ok: true };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };

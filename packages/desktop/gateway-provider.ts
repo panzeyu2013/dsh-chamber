@@ -1,5 +1,5 @@
 /**
- * The `gateway` transport provider (design 16 §6.4/§6.5): a DIRECT ENDPOINT
+ * The `gateway` transport provider (design 17 §6.4/§6.5): a DIRECT ENDPOINT
  * provider — no local tunnel child process. The "endpoint" is a dsh-gateway's
  * https URL, reached as-is and authenticated with a shared bearer token held
  * in main-process memory (mirrored to `<userData>/gateway-tokens.json`, 0600,
@@ -14,7 +14,7 @@
  * (design 05 §8), but without askpass (the bearer token rides the
  * Authorization header the control-plane proxy injects, §6.4).
  *
- * Security discipline (design 16 §11 S5/S12): the token never enters the
+ * Security discipline (design 17 §11 S5/S12): the token never enters the
  * registry, logs, or any renderer projection; the mirror file is 0600 +
  * atomic write; a corrupt file fails loudly (preserved as `.corrupt`), never
  * silently treated as empty.
@@ -50,6 +50,23 @@ import type {
 export const GATEWAY_HOST_PATTERN = /^(?:[a-zA-Z0-9._-]+|\[[0-9a-fA-F:.]+\])$/
 export const MAX_GATEWAY_HOST_CHARS = 253
 export const MAX_GATEWAY_TOKEN_CHARS = 4096
+export const MIN_GATEWAY_TOKEN_CHARS = 32
+const GATEWAY_TOKEN_HEADER_PATTERN = /^[\x20-\x7e]+$/
+
+/** Validate a token before any live transport is disconnected. */
+export function gatewayTokenValidationError(token: string | null): string | null {
+  if (token === null || token === '') return null
+  if (!GATEWAY_TOKEN_HEADER_PATTERN.test(token)) {
+    return 'gateway token must contain visible ASCII characters only'
+  }
+  if (token.length < MIN_GATEWAY_TOKEN_CHARS) {
+    return `gateway token must contain at least ${MIN_GATEWAY_TOKEN_CHARS} characters`
+  }
+  if (token.length > MAX_GATEWAY_TOKEN_CHARS) {
+    return `gateway token is limited to ${MAX_GATEWAY_TOKEN_CHARS} characters`
+  }
+  return null
+}
 
 /** Default gateway https port when the connection form omits it. */
 export const DEFAULT_GATEWAY_PORT = 443
@@ -60,8 +77,21 @@ export const GATEWAY_VERIFY_TIMEOUT_MS = 5_000
 /** Response-body cap of the gateway identity probe. */
 export const GATEWAY_VERIFY_MAX_BODY_BYTES = 1024 * 1024
 
+/** Classify a non-success identity-probe response. Client/protocol mistakes
+ * are deterministic, except timeout/early-data/rate-limit statuses whose
+ * meaning is explicitly transient. Every 5xx is transient: gateway startup,
+ * overload, maintenance, and upstream dsh failures can recover by retry. */
+export function gatewayHttpFailureIsTerminal(statusCode: number): boolean {
+  if (statusCode === 408 || statusCode === 425 || statusCode === 429) return false
+  if (statusCode >= 500 && statusCode < 600) return false
+  // Any other actual HTTP answer is deterministic protocol/config evidence:
+  // redirects and alternate 2xx statuses are not the required dsh RPC
+  // envelope and will not heal through transport retry.
+  return statusCode >= 100 && statusCode < 600
+}
+
 // ---------------------------------------------------------------------------
-// Per-instance gateway tokens (design 16 §6.5). Held in main-process memory,
+// Per-instance gateway tokens (design 17 §6.5). Held in main-process memory,
 // mirrored to `<userData>/gateway-tokens.json` (0600, atomic write) so a
 // token-only gateway auto-connects after restart. Never in the registry,
 // never logged, never exposed to the renderer. The entry is dropped on
@@ -115,7 +145,8 @@ export function configureGatewayTokenStore(file: string | null): string | null {
   }
   const entries = Object.entries(parsed.tokens)
   if (entries.some(([id, value]) => id === 'local' || !INSTANCE_ID_PATTERN.test(id)
-    || typeof value !== 'string' || value === '' || value.length > MAX_GATEWAY_TOKEN_CHARS)) {
+    || typeof value !== 'string' || value.length < MIN_GATEWAY_TOKEN_CHARS || value.length > MAX_GATEWAY_TOKEN_CHARS
+    || !GATEWAY_TOKEN_HEADER_PATTERN.test(value))) {
     return preserveInvalidTokenFile(file)
   }
   for (const [id, value] of entries) tokens.set(id, value as string)
@@ -129,9 +160,12 @@ export function setGatewayToken(id: string, token: string | null): void {
   if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
     throw new Error(`refusing token for invalid instance id ${JSON.stringify(id)}`)
   }
-  if (token !== null && token.length > MAX_GATEWAY_TOKEN_CHARS) {
-    throw new Error(`refusing gateway token longer than ${MAX_GATEWAY_TOKEN_CHARS} characters`)
-  }
+  const tokenError = gatewayTokenValidationError(token)
+  if (tokenError !== null) throw new Error(tokenError)
+  // Deleting an SSH-only instance clears both provider stores. If this id has
+  // never owned a gateway token, do not manufacture/rewrite a second secret
+  // file (or make an otherwise-valid deletion depend on that disk write).
+  if ((token === null || token === '') && !tokens.has(id)) return
   const next = new Map(tokens)
   if (token === null || token === '') next.delete(id)
   else next.set(id, token)
@@ -169,7 +203,7 @@ function persistGatewayTokens(next: ReadonlyMap<string, string>): void {
 }
 
 // ---------------------------------------------------------------------------
-// Gateway endpoint identity verification (design 16 §6.5 step 4): the gateway
+// Gateway endpoint identity verification (design 17 §6.5 step 4): the gateway
 // URL must answer the dsh host.describe wire handshake WITH the bearer token
 // before the runtime may declare the instance ready. Mirrors ssh-provider's
 // verifyDshEndpoint, but over https and with an Authorization header.
@@ -214,8 +248,15 @@ function verifyGatewayEndpoint(
         return
       }
       if (res.statusCode !== 200) {
+        const statusCode = res.statusCode ?? 0
         res.resume()
-        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe — it does not appear to be a dsh-gateway`, true)
+        // Authentication and deterministic client/protocol mistakes require
+        // user action. A gateway/local-dsh startup window, overload, reverse-
+        // proxy failure, or maintenance response is time-dependent: every 5xx
+        // remains transient so the manager's bounded/slow retry machinery can
+        // recover without a manual reconnect.
+        const terminal = gatewayHttpFailureIsTerminal(statusCode)
+        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe`, terminal)
         return
       }
       const chunks: Buffer[] = []

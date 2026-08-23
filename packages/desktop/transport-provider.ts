@@ -20,7 +20,7 @@
  * aliases below); desktop internals use the `Transport*` names.
  */
 
-/** Transport kinds shipped. `gateway` (design 16 §6.4/§6.5) is a DIRECT
+/** Transport kinds shipped. `gateway` (design 17 §6.4/§6.5) is a DIRECT
  * ENDPOINT kind: no tunnel child; the endpoint is a dsh-gateway's https URL
  * authenticated with a shared bearer token. Future kinds extend the union. */
 export const TRANSPORT_KINDS = ['ssh', 'gateway'] as const
@@ -31,8 +31,9 @@ export const MAX_INSTANCE_ID_CHARS = 64
 export const MAX_INSTANCE_LABEL_CHARS = 128
 
 /**
- * The registry id whitelist (design 03 §2.2): id rides /api/i/ssh-<id> path
- * segments and transport keys, so it must be a plain identifier and must
+ * The registry id whitelist (design 03 §2.2): id rides
+ * /api/i/<transport-kind>-<id> path segments and transport keys, so it must
+ * be a plain identifier and must
  * not collide with the reserved 'local' source id. Single source of truth —
  * enforced by every provider's validateSpec via the shared check.
  */
