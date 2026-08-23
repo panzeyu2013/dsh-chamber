@@ -313,6 +313,32 @@ test('request body over the 300MiB cap answers 413 body_too_large', async () => 
   assert.equal(upstream.calls.length, 0)
 })
 
+test('local activation quarantine rejects HTTP and WebSocket before either reaches upstream', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'application/json' }, body: '{}' },
+  }))
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    canExposeLocal: () => false,
+    httpRequest: upstream.fn,
+  })
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'POST', {}, '{}'), response)
+  assert.equal(response.status, 503)
+  assert.equal(JSON.parse(response.body).code, 'instance_unavailable')
+
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(
+    fakeRequest('/api/i/local/api/events.mux', 'GET', { upgrade: 'websocket', 'sec-websocket-key': 'k' }),
+    socket,
+    Buffer.alloc(0),
+  )
+  assert.ok(socket.written.includes('503'))
+  assert.equal(upstream.calls.length, 0)
+})
+
 test('upstream connect failure answers 502 upstream_failed (masked)', async () => {
   const upstream = fakeHttpRequest(() => ({ error: new Error('ECONNREFUSED 127.0.0.1:17510') }))
   const proxy = createInstanceProxy({

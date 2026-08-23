@@ -11,11 +11,12 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { createControlPlane } from '../src/index.ts'
 import { createApi } from '../src/api.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
+import { DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } from '../src/spawn-dsh.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -140,6 +141,356 @@ test('health + connections: idempotent create, ready projection, no double spawn
   } finally {
     await holder.plane.stop()
     rmSync(holder.stateDir, { recursive: true, force: true })
+  }
+})
+
+test('candidate quarantine hides ready/port until the activation verdict opens exposure', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-quarantine-'))
+  const wire = fakeWire()
+  let exposed = false
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    canExposeLocal: () => exposed,
+    localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    const base = `http://127.0.0.1:${plane.port}`
+    const quarantined = await fetchJson(base, '/api/connections')
+    assert.equal(quarantined.body.connection.status, 'starting')
+    assert.equal(quarantined.body.connection.dshPort, undefined)
+    const health = await fetchJson(base, '/health')
+    assert.equal(health.body.dsh.status, 'starting')
+    assert.equal(health.body.dsh.port, 0)
+    const proxyResponse = await fetchJson(base, '/api/i/local/api/session.list')
+    assert.equal(proxyResponse.status, 503)
+    assert.equal(proxyResponse.body.code, 'instance_unavailable')
+
+    const events = await fetch(`${base}/api/host/health-events`)
+    const reader = events.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const nextFrame = async (): Promise<any> => {
+      for (;;) {
+        const boundary = buffer.indexOf('\n\n')
+        if (boundary !== -1) {
+          const frame = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          return JSON.parse(frame.replace(/^data: /, ''))
+        }
+        const { done, value } = await reader.read()
+        if (done) throw new Error('quarantine health stream ended early')
+        buffer += decoder.decode(value, { stream: true })
+      }
+    }
+    assert.equal((await nextFrame()).dsh.status, 'starting')
+
+    exposed = true
+    plane.refreshLocalExposure()
+    const readyEvent = await nextFrame()
+    assert.equal(readyEvent.dsh.status, 'ready')
+    assert.equal(readyEvent.dsh.port, 17510)
+    await reader.cancel()
+    const accepted = await fetchJson(base, '/api/connections')
+    assert.equal(accepted.body.connection.status, 'ready')
+    assert.equal(accepted.body.connection.dshPort, 17510)
+  } finally {
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('candidate quarantine also hides internal error state, port, and detail before verdict', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-quarantine-error-'))
+  let spawns = 0
+  const child = Object.assign(new EventEmitter(), {
+    exitCode: null as number | null,
+    signalCode: null as string | null,
+  })
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    canExposeLocal: () => false,
+    localConnectionDeps: {
+      spawnDsh: async (): Promise<SpawnedDsh> => {
+        spawns += 1
+        if (spawns > 1) {
+          const failure = new Error('candidate failed at /private/runtime-secret on port 17510') as Error & { code: string }
+          failure.code = DSH_WRITER_QUIESCENCE_UNKNOWN_CODE
+          throw failure
+        }
+        return {
+          child,
+          port: 17510,
+          stop: async () => { child.exitCode = 1 },
+        }
+      },
+      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+    },
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    const errored = new Promise<void>(resolve => {
+      const unsubscribe = plane.onLocalStateChange(snapshot => {
+        if (snapshot.status !== 'error') return
+        unsubscribe()
+        resolve()
+      })
+    })
+    child.exitCode = 1
+    child.emit('exit', 1, null)
+    await errored
+    assert.equal(plane.connectionState, 'error')
+
+    const base = `http://127.0.0.1:${plane.port}`
+    const connections = await fetchJson(base, '/api/connections')
+    assert.equal(connections.body.connection.status, 'starting')
+    assert.equal(connections.body.connection.dshPort, undefined)
+    assert.equal(connections.body.connection.error, undefined)
+    assert.ok(!JSON.stringify(connections.body).includes('runtime-secret'))
+    assert.ok(!JSON.stringify(connections.body).includes('17510'))
+
+    const health = await fetchJson(base, '/health')
+    assert.deepEqual(health.body.dsh, { status: 'starting', port: 0 })
+    assert.ok(!JSON.stringify(health.body).includes('runtime-secret'))
+  } finally {
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('runtime start gate blocks every spawn entry and workspace resolver is read per restart', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-runtime-gate-'))
+  let blocked = true
+  let workspace = '/runtime/0.1.0'
+  const spawnedFrom: string[] = []
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    getDshWorkspacePath: () => workspace,
+    canStartLocal: () => blocked ? { ok: false, reason: 'runtime apply in progress' } : { ok: true },
+    localConnectionDeps: {
+      spawnDsh: async (options): Promise<SpawnedDsh> => {
+        spawnedFrom.push(options.dshWorkspacePath)
+        return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
+      },
+      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+    },
+  })
+  try {
+    await plane.start()
+    const base = `http://127.0.0.1:${plane.port}`
+    const rejected = await fetchJson(base, '/api/connections', postJson({ kind: 'local' }))
+    assert.equal(rejected.status, 409)
+    assert.equal(rejected.body.code, 'connection_busy')
+    await assert.rejects(plane.startLocal(), /runtime apply in progress/)
+    assert.deepEqual(spawnedFrom, [])
+
+    blocked = false
+    await plane.startLocal()
+    assert.deepEqual(spawnedFrom, ['/runtime/0.1.0'])
+    assert.equal(plane.localDshPort, 17510)
+    await plane.stopLocal()
+
+    workspace = '/runtime/0.2.0'
+    await plane.startLocal()
+    assert.deepEqual(spawnedFrom, ['/runtime/0.1.0', '/runtime/0.2.0'])
+  } finally {
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('runtime gate plus stop invalidates a queued start before every DSH_HOME seed and spawn', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-runtime-fence-'))
+  const graphSource = join(stateDir, 'host-graph-source')
+  mkdirSync(join(graphSource, 'dist'), { recursive: true })
+  writeFileSync(join(graphSource, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph' }))
+  writeFileSync(join(graphSource, 'dist', 'index.js'), 'export const graph = true\n')
+
+  let blocked = false
+  let spawns = 0
+  let releaseCheckpoint!: () => void
+  let announceCheckpoint!: () => void
+  const checkpointReached = new Promise<void>(resolve => { announceCheckpoint = resolve })
+  const checkpointRelease = new Promise<void>(resolve => { releaseCheckpoint = resolve })
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    dshWorkspacePath: '/runtime/0.1.0',
+    hostGraphPackageSourceDir: graphSource,
+    hostGitWorktreePackageSourceDir: join(stateDir, 'missing-git-package'),
+    logger: silentLogger,
+    canStartLocal: () => blocked ? { ok: false, reason: 'runtime snapshot in progress' } : { ok: true },
+    localConnectionDeps: {
+      beforeSpawnCheckpoint: async kind => {
+        if (kind !== 'start') return
+        announceCheckpoint()
+        await checkpointRelease
+      },
+      spawnDsh: async (): Promise<SpawnedDsh> => {
+        spawns += 1
+        return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
+      },
+      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+    },
+  })
+  try {
+    await plane.start()
+    const pendingStart = plane.startLocal()
+    await checkpointReached
+
+    // The request already passed the management-entry gate. Closing the
+    // runtime gate and stopLocal() must invalidate its captured lifecycle
+    // epoch before the suspended request is allowed to continue.
+    blocked = true
+    const pendingStop = plane.stopLocal()
+    releaseCheckpoint()
+    await Promise.all([
+      assert.rejects(pendingStart, /invalidated by stop|runtime snapshot in progress/),
+      pendingStop,
+    ])
+
+    assert.equal(spawns, 0)
+    assert.equal(existsSync(join(stateDir, 'dsh-home', 'settings.yaml')), false, 'default locale was not seeded')
+    assert.equal(
+      existsSync(join(stateDir, 'dsh-home', 'profiles', 'web', 'node_modules', '@dsh-chamber', 'dsh-host-client-graph')),
+      false,
+      'host package was not seeded',
+    )
+    assert.equal(plane.connectionState, 'stopped')
+  } finally {
+    releaseCheckpoint?.()
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('stopLocal waits for and reclaims an inside-spawn start before reporting writer quiescence', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-spawn-owner-fence-'))
+  let blocked = false
+  let announceSpawn!: () => void
+  let releaseSpawn!: (spawned: SpawnedDsh) => void
+  const spawnEntered = new Promise<void>(resolve => { announceSpawn = resolve })
+  const spawnRelease = new Promise<SpawnedDsh>(resolve => { releaseSpawn = resolve })
+  let spawnSignal: AbortSignal | undefined
+  let staleChildStops = 0
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    canStartLocal: () => blocked ? { ok: false, reason: 'runtime snapshot in progress' } : { ok: true },
+    hostGraphPackageSourceDir: join(stateDir, 'missing-graph-package'),
+    hostGitWorktreePackageSourceDir: join(stateDir, 'missing-git-package'),
+    localConnectionDeps: {
+      spawnDsh: async options => {
+        spawnSignal = options.signal
+        announceSpawn()
+        return spawnRelease
+      },
+      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+    },
+  })
+  try {
+    await plane.start()
+    const pendingStart = plane.startLocal()
+    await spawnEntered
+
+    blocked = true
+    let stopResolved = false
+    const pendingStop = plane.stopLocal().then(() => { stopResolved = true })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(spawnSignal?.aborted, true, 'stop aborts the readiness owner')
+    assert.equal(stopResolved, false, 'stop cannot report quiescence while spawn still owns a possible writer')
+
+    releaseSpawn({
+      child: { on: () => {}, exitCode: null },
+      port: 17510,
+      stop: async () => { staleChildStops += 1 },
+    })
+    await Promise.all([pendingStart, pendingStop])
+    assert.equal(staleChildStops, 1, 'the stale spawned child is reclaimed before stop resolves')
+    assert.equal(plane.connectionState, 'stopped')
+    assert.equal(plane.localProcessAlive, false)
+  } finally {
+    releaseSpawn?.({
+      child: { on: () => {}, exitCode: 1 },
+      port: 17510,
+      stop: async () => {},
+    })
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('unknown residual writer permanently closes the plane start latch until restart reaping', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-writer-latch-'))
+  let spawnCalls = 0
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    hostGraphPackageSourceDir: join(stateDir, 'missing-graph-package'),
+    hostGitWorktreePackageSourceDir: join(stateDir, 'missing-git-package'),
+    localConnectionDeps: {
+      spawnDsh: async () => {
+        spawnCalls += 1
+        const failure = new Error('process group cleanup could not be proven') as Error & { code: string }
+        failure.code = DSH_WRITER_QUIESCENCE_UNKNOWN_CODE
+        throw failure
+      },
+      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+    },
+  })
+  try {
+    await plane.start()
+    assert.equal(plane.localWritersQuiescent, true, 'startup reaper initially proved a clean state')
+    await assert.rejects(plane.startLocal(), /could not be proven/)
+    assert.equal(spawnCalls, 1)
+    assert.equal(plane.localWritersQuiescent, false, 'unknown termination closes the durable in-process latch')
+
+    await assert.rejects(plane.startLocal(), /writer quiescence is not proven/)
+    assert.equal(spawnCalls, 1, 'a later manual start is rejected before seed or spawn')
+
+    const base = `http://127.0.0.1:${plane.port}`
+    const rejected = await fetchJson(base, '/api/connections', postJson({ kind: 'local' }))
+    assert.equal(rejected.status, 409)
+    assert.equal(rejected.body.code, 'connection_busy')
+    assert.equal(spawnCalls, 1)
+  } finally {
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('startup reaper preserves corrupt/invalid writer ledgers and keeps the writer latch closed', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-corrupt-writer-ledger-'))
+  const ledgerDir = join(stateDir, 'managed-dsh')
+  const corruptLedger = join(ledgerDir, '41001.json')
+  const invalidPidLedger = join(ledgerDir, '41002.json')
+  mkdirSync(ledgerDir, { recursive: true })
+  writeFileSync(corruptLedger, '{ truncated')
+  writeFileSync(invalidPidLedger, JSON.stringify({ pid: 'not-a-pid', port: 17510 }))
+
+  const holder = await makePlane(stateDir)
+  try {
+    assert.equal(holder.plane.localWritersQuiescent, false)
+    assert.equal(existsSync(corruptLedger), true, 'corrupt ledger is durable recovery evidence')
+    assert.equal(existsSync(invalidPidLedger), true, 'invalid-PID ledger is durable recovery evidence')
+
+    const rejected = await fetchJson(holder.base, '/api/connections', postJson({ kind: 'local' }))
+    assert.equal(rejected.status, 409)
+    assert.equal(rejected.body.code, 'connection_busy')
+    assert.equal(holder.wire.spawns, 0)
+  } finally {
+    await holder.plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
   }
 })
 
@@ -514,9 +865,8 @@ test('health-events: a disconnected client unsubscribes and others keep streamin
 
 test('DELETE during an in-flight start does not resurrect the connection (2026-08 review: stop-race guard)', async () => {
   // A slow spawn (resolves only on demand) + a stop issued mid-spawn: the
-  // epoch guard in startImpl must tear the late spawn down, NOT adopt it —
-  // otherwise quitting during a pre-spawn leaves a detached dsh orphan that
-  // resurrects the connection state after stop() returned.
+  // epoch guard in startImpl must tear the late spawn down, NOT adopt it, and
+  // DELETE must not report success until that owner is quiescent.
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-stoprace-'))
   // Object property (not a captured let): TS 7 narrows closure-mutated `let`
   // bindings to `never`, making the release call untypeable.
@@ -550,13 +900,16 @@ test('DELETE during an in-flight start does not resurrect the connection (2026-0
     })
     await new Promise(resolve => setTimeout(resolve, 30))
     // Stop while the spawn is still pending.
-    const del = await fetch(`${base}/api/connections/local`, { method: 'DELETE' })
-    assert.equal(del.status, 200)
-    const mid = await fetchJson(base, '/api/connections')
-    assert.equal(mid.body.connection.status, 'stopped')
-    // Let the pending spawn resolve — the guard must tear it down, not adopt.
+    let deleteResolved = false
+    const deleteP = fetch(`${base}/api/connections/local`, { method: 'DELETE' })
+      .then(response => { deleteResolved = true; return response })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(deleteResolved, false, 'DELETE waits for in-flight writer ownership')
+    // Let the pending spawn resolve — the guard tears it down before DELETE
+    // reports the connection stopped.
     spawnControl.release!()
-    await startP
+    const [del] = await Promise.all([deleteP, startP])
+    assert.equal(del.status, 200)
     await new Promise(resolve => setTimeout(resolve, 30))
     const after = await fetchJson(base, '/api/connections')
     assert.equal(after.body.connection.status, 'stopped', 'late spawn must not resurrect the connection')

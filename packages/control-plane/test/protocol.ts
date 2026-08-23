@@ -4,19 +4,36 @@
  * validation, generation abort propagation (connection_offline), unknown-code
  * business error passthrough — plus the v4 local host-management surface
  * (spawn → ready, health failure counting → degraded, restart at threshold,
- * child-exit restart, graceful stop). The dsh wire (fetch, spawn) is fully
- * mocked — only node:test and the modules under test.
+ * child-exit restart, graceful stop). The dsh wire is mocked; one Unix-only
+ * process test proves detached-group reclamation when the leader exits first.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { call, respond, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
+import {
+  call,
+  respond,
+  MAX_UNARY_RESPONSE_BYTES,
+  RpcBusinessError,
+  RpcTransportError,
+  pendingStats,
+} from '../src/dsh-client.ts'
 import { createLocalConnection } from '../src/local-connection.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { seedDshHomeDefaults } from '../src/index.ts'
+import {
+  DSH_SPAWN_NON_RETRYABLE_CODE,
+  DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
+  managedProcessGroupAlive,
+  spawnDsh,
+  terminateChild,
+  writePidRecord,
+} from '../src/spawn-dsh.ts'
+import { runReaper } from '../src/reaper.ts'
 
 const HOST = 'http://127.0.0.1:17510'
 
@@ -79,6 +96,23 @@ test('call echoes the minted rpcId and resolves the narrow form', async () => {
     const response = await call(HOST, 'session.list', {})
     assert.equal(response.rpcId, sent.rpcId)
     assert.deepEqual(response.result.value, { items: [] })
+    assert.equal(pendingStats().size, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('call rejects an oversized runtime envelope before buffering it unboundedly', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response('x'.repeat(MAX_UNARY_RESPONSE_BYTES + 1), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+  try {
+    await assert.rejects(call(HOST, 'host.describe', {}), error =>
+      error instanceof RpcTransportError
+      && error.code === 'response_too_large'
+      && error.status === 200)
     assert.equal(pendingStats().size, 0)
   } finally {
     globalThis.fetch = originalFetch
@@ -232,6 +266,14 @@ function mockCatalog() {
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 
+function idleDshWorkspace(root: string): string {
+  const workspace = join(root, 'runtime')
+  const binDir = join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib')
+  mkdirSync(binDir, { recursive: true })
+  writeFileSync(join(binDir, 'bin.js'), 'setInterval(() => {}, 1000)\n', 'utf8')
+  return workspace
+}
+
 let spawnCounter = 0
 /** A spawn mock that always succeeds on a fresh port. */
 function mockSpawn(): Promise<SpawnedDsh> {
@@ -293,6 +335,48 @@ test('a spawn failure is fail-loud: state lands on error and start() rejects', a
   await assert.rejects(connection.start(), /port occupied/)
   assert.equal(connection.getState(), 'error')
   assert.match(connection.getError() ?? '', /port occupied/)
+})
+
+test('a runtime gate closed after queueing is re-read before seed and spawn', async () => {
+  let blocked = false
+  let seeds = 0
+  let spawns = 0
+  let announceCheckpoint!: () => void
+  let releaseCheckpoint!: () => void
+  const checkpointReached = new Promise<void>(resolve => { announceCheckpoint = resolve })
+  const checkpointRelease = new Promise<void>(resolve => { releaseCheckpoint = resolve })
+  const connection = createLocalConnection({
+    stateDir: '/tmp/none',
+    dshHome: '/tmp/none',
+    dshWorkspacePath: '/tmp/none',
+    catalog: mockCatalog(),
+    logger: quietLogger,
+    options: {
+      canSpawn: () => blocked ? { ok: false, reason: 'runtime restore in progress' } : { ok: true },
+      patchPath: () => { seeds += 1; return null },
+    },
+    deps: {
+      beforeSpawnCheckpoint: async () => {
+        announceCheckpoint()
+        await checkpointRelease
+      },
+      spawnDsh: async () => { spawns += 1; return mockSpawn() },
+      describeCapabilities: mockDescribe().describeCapabilities,
+    },
+  })
+  try {
+    const pending = connection.start()
+    await checkpointReached
+    blocked = true
+    releaseCheckpoint()
+    await assert.rejects(pending, /runtime restore in progress/)
+    assert.equal(seeds, 0)
+    assert.equal(spawns, 0)
+    assert.equal(connection.getState(), 'stopped')
+  } finally {
+    releaseCheckpoint?.()
+    await connection.stop()
+  }
 })
 
 test('a catalog write failure prevents publishing the next lifecycle state', async () => {
@@ -385,6 +469,226 @@ test('a dead child skips counting and restarts immediately', async () => {
   await waitFor(() => connection.getState() === 'ready', 3000, 'ready after respawn')
   assert.equal(connection.getConsecutiveFailures(), 0)
   await connection.stop()
+})
+
+test('stop waits for and reclaims an inside-spawn automatic restart', async () => {
+  let fireFirstExit: ((code: number | null, sig: string | null) => void) | undefined
+  const firstChild = {
+    child: {
+      on: (event: string, listener: (...args: any[]) => void) => {
+        if (event === 'exit') fireFirstExit = listener
+      },
+      exitCode: null as number | null,
+    },
+    port: 17960,
+    stop: async () => {},
+  }
+  let spawnCalls = 0
+  let announceRestartSpawn!: () => void
+  let releaseRestartSpawn!: (spawned: SpawnedDsh) => void
+  const restartSpawnEntered = new Promise<void>(resolve => { announceRestartSpawn = resolve })
+  const restartSpawnRelease = new Promise<SpawnedDsh>(resolve => { releaseRestartSpawn = resolve })
+  let restartSignal: AbortSignal | undefined
+  let staleStops = 0
+  const connection = createLocalConnection({
+    stateDir: '/tmp/none',
+    dshHome: '/tmp/none',
+    dshWorkspacePath: '/tmp/none',
+    catalog: mockCatalog(),
+    logger: quietLogger,
+    options: { healthIntervalMs: 0 },
+    deps: {
+      spawnDsh: async options => {
+        spawnCalls += 1
+        if (spawnCalls === 1) return firstChild
+        restartSignal = options.signal
+        announceRestartSpawn()
+        return restartSpawnRelease
+      },
+      describeCapabilities: mockDescribe().describeCapabilities,
+    },
+  })
+  try {
+    await connection.start()
+    firstChild.child.exitCode = 1
+    fireFirstExit?.(1, null)
+    await restartSpawnEntered
+
+    let stopResolved = false
+    const pendingStop = connection.stop().then(() => { stopResolved = true })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(restartSignal?.aborted, true)
+    assert.equal(stopResolved, false, 'stop waits for the restart readiness owner')
+
+    releaseRestartSpawn({
+      child: { on: () => {}, exitCode: null },
+      port: 17961,
+      stop: async () => { staleStops += 1 },
+    })
+    await pendingStop
+    assert.equal(staleStops, 1)
+    assert.equal(spawnCalls, 2)
+    assert.equal(connection.getState(), 'stopped')
+    assert.equal(connection.hasLiveProcess(), false)
+  } finally {
+    releaseRestartSpawn?.({
+      child: { on: () => {}, exitCode: 1 },
+      port: 17961,
+      stop: async () => {},
+    })
+    await connection.stop()
+  }
+})
+
+test('terminateChild waits past leader exit and kills a stubborn same-group descendant', {
+  skip: process.platform === 'win32' ? 'Unix detached process-group contract' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-chamber-process-group-'))
+  const marker = join(root, 'descendant.pid')
+  const descendantScript = [
+    "const { writeFileSync } = require('node:fs')",
+    "process.on('SIGTERM', () => {})",
+    "writeFileSync(process.env.DSH_TEST_DESCENDANT_MARKER, String(process.pid))",
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  const leaderScript = [
+    "const { spawn } = require('node:child_process')",
+    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: 'ignore' })`,
+    'child.unref()',
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  const leader = spawn(process.execPath, ['-e', leaderScript], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, DSH_TEST_DESCENDANT_MARKER: marker },
+  })
+  const leaderPid = leader.pid
+  let descendantPid = 0
+  let termination: Promise<void> | null = null
+  try {
+    assert.ok(leaderPid !== undefined && leaderPid > 0)
+    await waitFor(() => existsSync(marker), 3_000, 'stubborn descendant readiness')
+    descendantPid = Number(readFileSync(marker, 'utf8'))
+    assert.ok(Number.isInteger(descendantPid) && descendantPid > 0)
+
+    const leaderExited = new Promise<void>(resolve => leader.once('exit', () => resolve()))
+    termination = terminateChild(leader, 750)
+    await Promise.race([
+      leaderExited,
+      sleep(2_000).then(() => { throw new Error('leader did not exit after process-group SIGTERM') }),
+    ])
+    // The default-behaviour leader exited on TERM, while the descendant's
+    // installed handler deliberately ignored it. Group liveness—not the
+    // leader exit event—must keep terminateChild pending here.
+    assert.equal(managedProcessGroupAlive(leader), true)
+    assert.doesNotThrow(() => process.kill(descendantPid, 0))
+
+    // Startup reaping must not erase the only ledger when the leader is gone
+    // but the PGID still contains an unverifiable writer. Keeping the record
+    // makes localWritersQuiescent fail closed.
+    const ledgerDir = join(root, 'managed-dsh')
+    const ledgerPath = join(ledgerDir, `${leaderPid}.json`)
+    mkdirSync(ledgerDir, { recursive: true })
+    writeFileSync(ledgerPath, JSON.stringify({ pid: leaderPid }))
+    const reaped = await runReaper({ stateDir: root })
+    assert.deepEqual(reaped, { reclaimed: 0, kept: 1, errors: [] })
+    assert.equal(existsSync(ledgerPath), true)
+
+    await termination
+    assert.equal(managedProcessGroupAlive(leader), false)
+    assert.throws(() => process.kill(-leaderPid, 0), (error: unknown) =>
+      (error as NodeJS.ErrnoException).code === 'ESRCH')
+    assert.throws(() => process.kill(descendantPid, 0), (error: unknown) =>
+      (error as NodeJS.ErrnoException).code === 'ESRCH')
+  } finally {
+    await termination?.catch(() => undefined)
+    if (leaderPid !== undefined) {
+      try { process.kill(-leaderPid, 'SIGKILL') } catch { /* already gone */ }
+    }
+    if (descendantPid > 0) {
+      try { process.kill(descendantPid, 'SIGKILL') } catch { /* already gone */ }
+    }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('pid-ledger publication failure reclaims the child and is never retried on another port', {
+  skip: process.platform === 'win32' ? 'Unix detached process-group contract' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-chamber-ledger-failure-'))
+  const workspace = idleDshWorkspace(root)
+  const stateDir = join(root, 'state')
+  mkdirSync(stateDir, { recursive: true })
+  let writerCalls = 0
+  let childPid = 0
+  try {
+    await assert.rejects(spawnDsh({
+      stateDir,
+      dshHome: join(root, 'dsh-home'),
+      dshWorkspacePath: workspace,
+      logger: quietLogger,
+      pidRecordWriter(_stateDir, pid) {
+        writerCalls += 1
+        childPid = pid
+        const failure = new Error('simulated ENOSPC') as NodeJS.ErrnoException
+        failure.code = 'ENOSPC'
+        throw failure
+      },
+    }), (error: unknown) => {
+      assert.equal((error as { code?: unknown }).code, DSH_SPAWN_NON_RETRYABLE_CODE)
+      return true
+    })
+    assert.equal(writerCalls, 1, 'ledger failure aborts the port retry loop')
+    assert.ok(childPid > 0)
+    assert.throws(() => process.kill(-childPid, 0), (error: unknown) =>
+      (error as NodeJS.ErrnoException).code === 'ESRCH')
+    assert.equal(existsSync(join(stateDir, 'managed-dsh', `${childPid}.json`)), false)
+  } finally {
+    if (childPid > 0) {
+      try { process.kill(-childPid, 'SIGKILL') } catch { /* already gone */ }
+    }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('unproven attempt termination aborts port retries and preserves the pid ledger', {
+  skip: process.platform === 'win32' ? 'Unix detached process-group contract' : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-chamber-residual-writer-'))
+  const workspace = idleDshWorkspace(root)
+  const stateDir = join(root, 'state')
+  mkdirSync(stateDir, { recursive: true })
+  const controller = new AbortController()
+  let writerCalls = 0
+  let childPid = 0
+  try {
+    await assert.rejects(spawnDsh({
+      stateDir,
+      dshHome: join(root, 'dsh-home'),
+      dshWorkspacePath: workspace,
+      logger: quietLogger,
+      signal: controller.signal,
+      pidRecordWriter(...args) {
+        writerCalls += 1
+        childPid = args[1]
+        writePidRecord(...args)
+        controller.abort()
+      },
+      terminateChildFn: async () => { throw new Error('simulated residual process group') },
+    }), (error: unknown) => {
+      assert.equal((error as { code?: unknown }).code, DSH_WRITER_QUIESCENCE_UNKNOWN_CODE)
+      return true
+    })
+    assert.equal(writerCalls, 1, 'unknown residual writer aborts the port retry loop')
+    assert.ok(childPid > 0)
+    assert.equal(existsSync(join(stateDir, 'managed-dsh', `${childPid}.json`)), true)
+    assert.doesNotThrow(() => process.kill(-childPid, 0), 'injected failed termination leaves the test writer live')
+  } finally {
+    if (childPid > 0) {
+      try { process.kill(-childPid, 'SIGKILL') } catch { /* already gone */ }
+    }
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('restart window exhaustion lands on restart-exhausted (manual start required)', async () => {
