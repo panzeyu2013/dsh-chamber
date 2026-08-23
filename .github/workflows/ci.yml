@@ -37,13 +37,16 @@ jobs:
       - name: Bootstrap vendor tree
         run: node scripts/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
-      - name: Type check (tsc + chamber host packages)
+      - name: Type check (tsc + chamber host packages + gateway)
         run: |
           pnpm run typecheck
           pnpm run typecheck:host-graph
           pnpm run typecheck:host-git
+          pnpm run typecheck:gateway
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      - name: Release workflow safety policy
+        run: pnpm run test:release-workflow
       - name: Control-plane unit tests
         run: |
           node packages/control-plane/test/protocol.ts
@@ -52,11 +55,14 @@ jobs:
           node packages/control-plane/test/host-logs.ts
           node packages/control-plane/test/manager-api.ts
           node packages/control-plane/test/instance-proxy.ts
+          node packages/control-plane/test/gateway-transport.test.ts
           node packages/control-plane/test/ws-frames.ts
           node packages/control-plane/test/static-serving.ts
           node packages/control-plane/test/host-graph-seed.ts
       - name: Desktop unit tests (transport / ssh)
         run: pnpm run test:desktop
+      - name: Gateway unit tests
+        run: pnpm run test:gateway
       - name: Renderer shell unit tests
         run: pnpm run test:renderer-shell
       - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / vscode)
@@ -86,3 +92,9 @@ jobs:
         run: pnpm run smoke
       - name: Renderer build
         run: pnpm run build:renderer
+      - name: Gateway package build and installed CLI smoke
+        run: |
+          mkdir -p /tmp/dsh-gateway-pack /tmp/dsh-gateway-install
+          pnpm --filter @dsh-chamber/gateway pack --pack-destination /tmp/dsh-gateway-pack
+          npm install --ignore-scripts --prefix /tmp/dsh-gateway-install /tmp/dsh-gateway-pack/*.tgz
+          /tmp/dsh-gateway-install/node_modules/.bin/gateway --help

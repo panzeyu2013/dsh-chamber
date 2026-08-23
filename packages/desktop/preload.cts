@@ -25,6 +25,12 @@ export interface DesktopSshSurface {
    * Resolves {ok:true} or {error} (unknown id / platform not supported).
    */
   set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  /**
+   * Forward a gateway bearer token to the main process. The token is write-
+   * only from the renderer's perspective: it is never returned/prefilled;
+   * '' / null clears it and forces any live gateway transport to re-auth.
+   */
+  set_gateway_token(id: string, token: string | null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -256,7 +262,7 @@ export interface DshChamberBridge {
   runtime: RuntimeSurface
 }
 
-/** dsh runtime version management surface (design 17 M2 IPC). */
+/** dsh runtime version management surface (design 18 M2 IPC). */
 export interface RuntimeSurface {
   state(): Promise<RuntimeState>
   check(): Promise<RuntimeState>
@@ -279,6 +285,7 @@ function desktopSshApi(): DesktopSshSurface {
     instances_get: () => ipcRenderer.invoke('desktop_ssh_instances_get'),
     instances_set: instances => ipcRenderer.invoke('desktop_ssh_instances_set', instances),
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),
+    set_gateway_token: (id, token) => ipcRenderer.invoke('desktop_gateway_set_token', { id, token }),
     config_list: () => ipcRenderer.invoke('desktop_ssh_config_list'),
     connect: id => ipcRenderer.invoke('desktop_ssh_connect', { id }),
     disconnect: id => ipcRenderer.invoke('desktop_ssh_disconnect', { id }),
@@ -364,7 +371,7 @@ function systemResumeApi(): SystemResumeSurface {
   };
 }
 
-/** The dsh-chamber:runtime-* IPC surface (design 17 M2). Non-secret projection
+/** The dsh-chamber:runtime-* IPC surface (design 18 M2). Non-secret projection
  *  only (version strings / list / phase / short error); install/check/reset run
  *  in the main process. onChanged subscribes to the main-process push. */
 function runtimeApi(): RuntimeSurface {

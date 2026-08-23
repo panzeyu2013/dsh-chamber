@@ -1,5 +1,5 @@
 /**
- * dsh runtime snapshot/restore (design 17 §3.7) — the cross-version user-data
+ * dsh runtime snapshot/restore (design 18 §3.7) — the cross-version user-data
  * protection core.
  *
  * Restore is a durable transaction. A snapshot is copied completely to a

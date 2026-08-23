@@ -31,7 +31,32 @@
   剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
   N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径）。契约见
   `docs/design/16-vscode-deeplink.md`。
-- **dsh 运行时版本管理（设计 17，当前判定：M0/M2/M4 done，M1/M3
+- **服务端接入层 / Gateway（设计 17，验收候选，2026-08-23）**：
+  `docs/design/17-server-side-gateway.md`。已 rebase 最新 main，并完成独立认证 server 形态：
+  managed local dsh 的 ready 生命周期、HTTP/WS 统一 Host/Origin/trusted-proxy 门、password +
+  token 组合认证、跨重启 cookie 撤销、共享有界 proxy、Desktop `gateway` transport 与 write-only
+  token、Gateway 自有浏览器/桌面编排界面、双流有 barrier 的派生会话索引、审批/提问、schedule
+  和安全 Git saga。高危回归已补门禁：absolute/backslash SSRF、forwarded identity 注入、弱凭据、
+  子进程 secret/`GIT_*` 继承、旧 token live stream、进程 body 预算、歧义 Git 补偿、unverified 删除、
+  running/symlink cwd 删除、negative answer receipt、stale pending、默认关闭且服务端强制的 feature
+  flags、timer overflow/重入/取消竞态、raw mux/session 正文无界缓冲、登录/编排 body 超限后继续
+  累计、Git create/delete mutation 前 live 权威复验、缺失 workspace 的残存路径与 deleting 路径
+  重占、已有 secret 权限/symlink 及 state 文件权限。
+  npm 包、CI 与 integrity-idempotent release publish 链路已接通；发布版本只经 env 进入 shell，
+  tag/SHA 绑定、公开 release 不可变、dry-run 零写入、全局串行与 npm latest/beta 单调门均有静态
+  回归；正式 Electron 下载不再固定第三方 mirror。Design 08 Git 插件按迁移决策继续
+  双轨，不提前退役。
+  **本轮实机基线已通过**：使用打包的真实 dsh 启动 Gateway 并等到 ready，`/health`、
+  `/api/connections`、`/chamber/settings` 与官方 `/` 页面均为 200；macOS ad-hoc `.app`、DMG、
+  ZIP/blockmap 已生成，bundle 签名、DMG checksum 与 ZIP 完整性通过。
+  **剩余发布前门禁**：真实 dsh 的 events.mux/host 双 WS 断线恢复与插件 bundle；生产 TLS 反代的
+  Host/Origin/XFF/Secure-cookie 验证；打包 Desktop 的 Gateway/N-ctx/token 撤销实测；真 Git
+  仓库的并发 session 删除竞态与恢复测试；macOS Developer ID 公证安装及 Windows 签名安装。
+  host 尚无原子 session lease，因此
+  session.list→Git mutation 的 TOCTOU 只能以 realpath fail-closed + 两次 live check + non-force
+  缩小，长期根治需上游原子 guard。PWA/离线/UA 移动轻面明确不在本轮验收。
+
+- **dsh 运行时版本管理（设计 18，当前判定：M0/M2/M4 done，M1/M3
   partial）**：运行期安装是唯一获取方式（无 Provider B）。主进程将 registry
   origin、精确版本、`dist.tarball` 与 `dist.integrity` 绑定，只下载一次顶层
   tarball 并流式校验 SRI，再让内嵌 pnpm 通过本地 `file:` spec 安装；顶层包不
@@ -89,10 +114,10 @@
   `.app`、不做真实产物的签名/公证；这是明确的验收边界，不是当前代码验收阻断。
   Windows 管理面保持只读：可查看版本/状态，controller/main/UI 均拒绝安装、
   选择、应用、回滚与清理，未跑 Windows mutation 不构成契约偏差。设计与
-  开放项见 `docs/design/17-dsh-runtime-version.md` §8。
+  开放项见 `docs/design/18-dsh-runtime-version.md` §8。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 完整 mutation 能力暂缓**：detached/进程组/lsof 降级路径仍以
-  Unix 为契约目标；设计 17 的 Windows 运行时管理因此按上述契约保持只读。
+  Unix 为契约目标；设计 18 的 Windows 运行时管理因此按上述契约保持只读。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化透传、
   host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游解锁（07 §3/§4）。
 - **Git Worktree 插件（设计 08，v1 已落地，2026-08-20）**：原 todo 经实施前审计

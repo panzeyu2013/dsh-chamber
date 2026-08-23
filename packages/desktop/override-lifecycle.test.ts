@@ -1,5 +1,5 @@
 /**
- * override-lifecycle.ts 纯逻辑测试（design 17 §3.5 失效规则 / 回落保护 /
+ * override-lifecycle.ts 纯逻辑测试（design 18 §3.5 失效规则 / 回落保护 /
  * swap-attempted / pending 重放）——node:test，无 electron、无文件 IO。
  *
  * 覆盖：shouldInvalidate 版本相等/不等；invalidate 保留

@@ -34,7 +34,7 @@ function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}
   }
 }
 
-test('runtime action matrix covers every design-17 phase and keeps busy/terminal gates strict', () => {
+test('runtime action matrix covers every design-18 phase and keeps busy/terminal gates strict', () => {
   const expected: Record<RuntimePhase, readonly string[]> = {
     idle: ['check', 'select-version', 'install', 'cleanup-version'],
     checking: [],

@@ -23,9 +23,9 @@ export interface ChamberServerWorkspace {
 }
 
 export interface ChamberServerAggregate {
-  /** 'local' | 'ssh-<id>' */
+  /** 'local' | '<transport-kind>-<id>' */
   id: string
-  kind: 'local' | 'ssh'
+  kind: 'local' | 'ssh' | 'gateway'
   label: string
   /** Local: dsh ready; remote: tunnel phase ready. */
   connected: boolean

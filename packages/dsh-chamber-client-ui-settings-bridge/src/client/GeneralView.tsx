@@ -13,7 +13,7 @@
  *   never prompt; update-downloaded exempt);
  * - 更新 (design 11, merged into General): current version +「检查更新」+
  *   low-key status (UpdateSection);
- * - dsh 运行时 (design 17 M4): active/bundled versions, registry source,
+ * - dsh 运行时 (design 18 M4): active/bundled versions, registry source,
  *   version selection, guarded actions, failure and snapshot projections.
  *
  * Every mutation goes through the main-process settings IPC (settings-store);
@@ -172,7 +172,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           section — the dedicated __update nav entry was folded in here. */}
       <UpdateSection t={t} />
 
-      {/* Chamber-global「dsh 运行时」group (design 17 M4), immediately after
+      {/* Chamber-global「dsh 运行时」group (design 18 M4), immediately after
           the app-update group: full authoritative state/action projection.
           Before bridge hydration it shows an unknown version and disables
           mutations — never a fabricated version or fake success. */}

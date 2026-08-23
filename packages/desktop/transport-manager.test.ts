@@ -22,15 +22,22 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
-import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
-import type { TransportManagerOptions } from './transport-manager.ts'
+import { commitTransportCredentialUpdate, createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
+import type { TransportManager, TransportManagerOptions } from './transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
 import { sshProvider, verifyDshEndpoint, probeClientGraphLive, probeGitWorktreeLive, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
+import {
+  configureGatewayTokenStore,
+  gatewayHttpFailureIsTerminal,
+  gatewayProvider,
+  getGatewayToken,
+  setGatewayToken,
+} from './gateway-provider.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -1412,6 +1419,107 @@ test('loadInstances drops duplicate persisted ids loudly (first wins)', () => {
   assert.equal(instances[0].label, 'first')
 })
 
+test('desktop package includes the gateway provider required by main.ts', () => {
+  const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+    build?: { files?: unknown[] }
+  }
+  assert.ok(Array.isArray(pkg.build?.files), 'electron-builder files list exists')
+  assert.ok(pkg.build?.files?.includes('gateway-provider.ts'), 'gateway-provider.ts ships in the packaged app')
+  const preload = readFileSync(new URL('./preload.cts', import.meta.url), 'utf8')
+  assert.match(preload, /set_gateway_token:\s*\(id, token\)\s*=>\s*ipcRenderer\.invoke\('desktop_gateway_set_token'/)
+  assert.doesNotMatch(preload, /get_gateway_token|gateway_token_get/, 'renderer receives no token getter')
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  assert.match(main, /commitTransportCredentialUpdate\(sm, id, 'ssh'/, 'SSH password updates rebuild a live SSH transport')
+  assert.match(main, /commitTransportCredentialUpdate\(sm, id, 'gateway'/, 'gateway token updates use the same live replacement transaction')
+})
+
+test('credential updates reconnect live transports and restore the old transport after a failed write', () => {
+  const events: string[] = []
+  let status: TransportStatusProjection | null = {
+    kind: 'ssh', phase: 'ready', localPort: 1234, sshPort: 22, remotePort: 17500,
+    retryAttempt: 0, requiresUserAction: false, serviceActive: null,
+    remoteDshHome: null, logSummary: '',
+  }
+  const transport: Pick<TransportManager, 'status' | 'disconnect' | 'connect'> = {
+    status: () => status,
+    disconnect: () => {
+      events.push('disconnect')
+      status = status === null ? null : { ...status, phase: 'idle', localPort: null }
+    },
+    connect: () => {
+      events.push('connect')
+      status = status === null ? null : { ...status, phase: 'connecting', localPort: null }
+      return status
+    },
+  }
+
+  commitTransportCredentialUpdate(transport, 'host', 'ssh', () => { events.push('commit:new') })
+  assert.deepEqual(events, ['disconnect', 'commit:new', 'connect'])
+
+  events.length = 0
+  status = status === null ? null : { ...status, phase: 'error', requiresUserAction: true }
+  assert.throws(() => {
+    commitTransportCredentialUpdate(transport, 'host', 'ssh', () => {
+      events.push('commit:failed')
+      throw new Error('disk full')
+    })
+  }, /disk full/)
+  assert.deepEqual(events, ['disconnect', 'commit:failed', 'connect'], 'failed persistence restores the prior credential transport')
+
+  events.length = 0
+  status = status === null ? null : { ...status, kind: 'gateway', phase: 'ready' }
+  commitTransportCredentialUpdate(transport, 'host', 'ssh', () => { events.push('clear-old-ssh') })
+  assert.deepEqual(events, ['clear-old-ssh'], 'clearing the old kind secret never interrupts the replacement provider')
+})
+
+test('gateway identity HTTP classification keeps every 5xx transient', () => {
+  for (const status of [500, 502, 503, 504, 599, 408, 425, 429]) {
+    assert.equal(gatewayHttpFailureIsTerminal(status), false, `HTTP ${status} is retried`)
+  }
+  for (const status of [201, 204, 301, 400, 401, 403, 404, 409, 422]) {
+    assert.equal(gatewayHttpFailureIsTerminal(status), true, `HTTP ${status} requires a config/auth fix`)
+  }
+})
+
+test('gateway tokens stay outside registry projections and clear durably', t => {
+  const token = 'write-only-secret-0123456789abcdef'
+  const file = join(tempDir(t), 'gateway-tokens.json')
+  t.after(() => { configureGatewayTokenStore(null) })
+  assert.equal(configureGatewayTokenStore(file), null)
+  setGatewayToken('never-owned-token', null)
+  assert.equal(existsSync(file), false, 'clearing the other provider store is a disk no-op')
+  setGatewayToken('gateway-one', token)
+  assert.equal(getGatewayToken('gateway-one'), token)
+  if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600)
+  assert.equal(configureGatewayTokenStore(file), null)
+  assert.equal(getGatewayToken('gateway-one'), token, 'restart reloads the durable token')
+  assert.throws(() => setGatewayToken('gateway-one', 'line-one\r\nline-two'), /visible ASCII/)
+  assert.equal(getGatewayToken('gateway-one'), token, 'a rejected value never mutates the live store')
+  const spec = gatewayProvider.validateSpec({
+    id: 'gateway-one', label: 'Gateway', kind: 'gateway', host: 'gateway.example.com', remotePort: 443,
+    token: 'must-not-enter-the-registry',
+  })
+  assert.ok(spec !== null)
+  assert.equal(JSON.stringify(spec).includes('write-only-secret'), false)
+  assert.equal(JSON.stringify(spec).includes('must-not-enter-the-registry'), false)
+
+  setGatewayToken('gateway-one', null)
+  assert.equal(getGatewayToken('gateway-one'), null)
+  const persisted = JSON.parse(readFileSync(file, 'utf8')) as { tokens: Record<string, string> }
+  assert.deepEqual(persisted.tokens, {})
+})
+
+test('a corrupt gateway-token file is preserved and never treated as a valid empty store', t => {
+  const file = join(tempDir(t), 'gateway-tokens.json')
+  t.after(() => { configureGatewayTokenStore(null) })
+  writeFileSync(file, '{broken-token-json')
+  const notice = configureGatewayTokenStore(file)
+  assert.match(notice ?? '', /preserved/)
+  assert.equal(existsSync(file), false)
+  assert.equal(existsSync(`${file}.corrupt`), true)
+  assert.equal(getGatewayToken('anything'), null)
+})
+
 /** A process-less DIRECT ENDPOINT provider: the abstraction proof. */
 const fakeEndpointProvider: TransportProvider = {
   kind: 'fake',
@@ -1439,6 +1547,76 @@ const fakeEndpointProvider: TransportProvider = {
   classifyStderr: line => ({ log: line, terminalAuth: false, enoent: false }),
   // no exec → exec returns an explicit unsupported error
 }
+
+function directKindProvider(kind: string, events: string[]): TransportProvider {
+  return {
+    kind,
+    validateSpec(input: unknown): TransportInstanceSpec | null {
+      if (input === null || typeof input !== 'object') return null
+      const record = input as Record<string, unknown>
+      if (record.kind !== kind || typeof record.id !== 'string' || typeof record.label !== 'string'
+        || typeof record.host !== 'string' || typeof record.remotePort !== 'number') return null
+      return {
+        id: record.id,
+        label: record.label,
+        kind,
+        host: record.host,
+        user: null,
+        sshPort: null,
+        remotePort: record.remotePort,
+        serviceName: null,
+        remoteDshHome: null,
+      }
+    },
+    probeTarget: spec => ({ host: spec.host, port: spec.remotePort }),
+    endpointUrl: spec => `https://${spec.host}:${spec.remotePort}`,
+    classifyStderr: line => ({ log: line, terminalAuth: false, enoent: false }),
+    disposeAuth: spec => { events.push(`dispose:${spec.kind}`) },
+    exec: (spec, _action, deps) => {
+      deps.setProjection(spec.id, 'serviceActive', true)
+      const status = deps.projection(spec.id)
+      return Promise.resolve(status === null ? { ok: false, error: 'missing projection' } : { ok: true, status })
+    },
+  }
+}
+
+test('kind switch unregisters and disposes the old provider before the replacement starts', async t => {
+  const events: string[] = []
+  const oldProvider = directKindProvider('old-kind', events)
+  const newProvider = directKindProvider('new-kind', events)
+  const manager = createTransportManager({
+    provider: oldProvider,
+    providers: { 'new-kind': newProvider },
+    instancesFile: join(tempDir(t), 'instances.json'),
+    logger: silentLogger,
+    portProbe: async () => true,
+    options: { readyTimeoutMs: 100, probeIntervalMs: 5 },
+  })
+  manager.saveInstances([{
+    id: 'switch', label: 'switch', kind: 'old-kind', host: 'old.example.com', remotePort: 443,
+  }])
+  manager.onStatusChanged((_id, status) => { events.push(`status:${status.kind}:${status.phase}`) })
+  manager.connect('switch')
+  await waitFor(() => manager.status('switch')?.phase === 'ready', 3000, 'old provider ready')
+  const oldExec = await manager.exec('switch', 'start')
+  assert.equal(oldExec.ok, true)
+  assert.equal(manager.status('switch')?.serviceActive, true)
+  events.length = 0
+
+  manager.saveInstances([{
+    id: 'switch', label: 'switch', kind: 'new-kind', host: 'new.example.com', remotePort: 443,
+  }])
+  await waitFor(() => manager.status('switch')?.phase === 'ready', 3000, 'new provider ready')
+
+  assert.deepEqual(events.slice(0, 3), [
+    'dispose:old-kind',
+    'status:old-kind:idle',
+    'status:new-kind:connecting',
+  ])
+  assert.ok(events.includes('status:new-kind:ready'))
+  assert.equal(manager.readyUrl('switch'), 'https://new.example.com:443')
+  assert.equal(manager.status('switch')?.serviceActive, null, 'old provider projections do not cross the kind boundary')
+})
 
 test('direct-endpoint provider: no child, probe-driven ready, endpoint URL, kind routing', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {

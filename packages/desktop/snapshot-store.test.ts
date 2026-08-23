@@ -1,4 +1,4 @@
-/** snapshot-store design 17 §3.7 transactional data-safety tests. */
+/** snapshot-store design 18 §3.7 transactional data-safety tests. */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {

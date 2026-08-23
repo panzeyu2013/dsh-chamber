@@ -1,5 +1,5 @@
 /**
- * runtime-state-machine.ts tests (design 17 §3.6) — node:test, pure logic.
+ * runtime-state-machine.ts tests (design 18 §3.6) — node:test, pure logic.
  * Covers the full transition table: main chain, probe-fail/rollback-exhausted,
  * reset-builtin, error recovery, terminal judgement, and the terminal gate
  * (pending only reset-builtin; applying is an atomic critical section).

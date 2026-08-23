@@ -25,6 +25,7 @@
  */
 
 import { createServer, type Server } from 'node:http'
+import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { extname, join, resolve, sep } from 'node:path'
@@ -36,7 +37,7 @@ import { createLocalConnection } from './local-connection.ts'
 import type { LocalConnectionDeps } from './local-connection.ts'
 import { createApi } from './api.ts'
 import { runReaper } from './reaper.ts'
-import { createInstanceProxy } from './instance-proxy.ts'
+import { createInstanceProxy, type InstanceProxy } from './instance-proxy.ts'
 import { ensureInstanceId } from './instance-id.ts'
 import { hostLogs } from './host-logs.ts'
 import {
@@ -49,7 +50,7 @@ import {
   HOST_GRAPH_PACKAGE_NAME,
 } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
-import type { ApiRequest, ApiResponse } from './api.ts'
+import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
 /** Browser hardening shared by static, API, proxy, and error responses. */
 export const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
@@ -137,6 +138,10 @@ export interface ControlPlaneOptions {
   webDistDir?: string
   logger?: Logger
   corsOrigins?: string[]
+  /** Explicit request boundary for an authenticated external composer. Its
+   * presence is also the opt-in that permits a non-loopback bind; the normal
+   * anonymous control plane never supplies it and remains loopback-only. */
+  corsEvaluator?: ApiCorsEvaluator
   /** Injectable local-connection wire deps (test seams: fake spawn/describe). */
   localConnectionDeps?: LocalConnectionDeps
   /**
@@ -153,6 +158,38 @@ export interface ControlPlaneOptions {
    * artifact gate and profile seed lifecycle as hostGraphPackageSourceDir.
    */
   hostGitWorktreePackageSourceDir?: string
+  /**
+   * Optional request middleware (design 17 §2.1 改动③): runs after the
+   * security headers + CSP + URL parse and BEFORE the default dispatch. A
+   * truthy return CLAIMS the request (the default dispatch is skipped); a
+   * falsy return falls through. The gateway uses it to inject its auth gate
+   * and route `/auth/*`, `/chamber/*`, `/plugins/*`, `/` and non-management
+   * `/api/*` to its own handlers while letting the management surface fall
+   * through to the default dispatch.
+   */
+  middleware?: (
+    req: ApiRequest,
+    res: ApiResponse,
+    url: URL,
+    ctx: PlaneMiddlewareContext,
+  ) => boolean | void | Promise<boolean | void>
+  /**
+   * Optional upgrade middleware: runs BEFORE the default origin fence +
+   * instance-proxy upgrade dispatch. A truthy return CLAIMS the upgrade.
+   */
+  upgradeMiddleware?: (
+    req: ApiRequest,
+    socket: Duplex,
+    head: Buffer,
+    ctx: PlaneMiddlewareContext,
+  ) => boolean | void | Promise<boolean | void>
+}
+
+/** The internal surfaces handed to a composing gateway's middleware (design 17
+ * §2.1 改动③): the management REST handle + CORS decision + per-instance proxy. */
+export interface PlaneMiddlewareContext {
+  api: ApiSurface
+  instanceProxy: InstanceProxy
 }
 
 /** The assembled control-plane handle returned by createControlPlane. */
@@ -172,7 +209,10 @@ export interface PlaneHandle {
   /** Live port of the managed local host; null while it is not serving. */
   readonly localDshPort: number | null
   readonly instanceId: string
-  registerInstanceTransport(connectionId: string, baseUrl: string): void
+  /** The managed local dsh host's port, or null when not ready (design 17
+   * §2.1 改动①: exposed for the gateway-proxy's single-target resolution). */
+  getLocalDshPort(): number | null
+  registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>): void
   unregisterInstanceTransport(connectionId: string): void
   /**
    * Pre-start the local instance (desktop pre-spawn, 05 §7.5): idempotent —
@@ -187,7 +227,9 @@ export interface PlaneHandle {
   stopLocal(): Promise<void>
   /** Re-publish the public local lifecycle after canExposeLocal changes. */
   refreshLocalExposure(): void
-  /** Observe local lifecycle transitions (used by delayed rollback policy). */
+  /** Subscribe to authoritative local-host lifecycle transitions. Gateway
+   * consumers use this to attach only while the managed dsh is ready; the
+   * desktop also uses it for delayed rollback policy. */
   onLocalStateChange(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
 }
 
@@ -201,11 +243,12 @@ export interface PlaneHandle {
 export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHandle {
   const port = options.port ?? 17500
   const host = options.host ?? '127.0.0.1'
-  if (host !== '127.0.0.1' && host !== '::1') {
+  if (host !== '127.0.0.1' && host !== '::1'
+    && (options.corsEvaluator === undefined || options.middleware === undefined || options.upgradeMiddleware === undefined)) {
     // loopback-only is a v1 invariant, not merely a default: a non-loopback
     // bind would expose the anonymous management API + reverse proxy to the
     // network, and the Host/Origin fence (api.ts corsFor) is browser-only.
-    throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)}; loopback-only is a v1 invariant`)
+    throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)} without an external request-boundary evaluator plus HTTP/upgrade middleware; loopback-only is the anonymous v1 invariant`)
   }
   const stateDir = options.stateDir ?? process.env.DSH_CHAMBER_STATE ?? DEFAULT_STATE_DIR
   const defaultWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
@@ -454,6 +497,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const api = createApi({
     logger,
     corsOrigins: explicitOrigins,
+    ...(options.corsEvaluator !== undefined ? { corsEvaluator: options.corsEvaluator } : {}),
     getHealth: () => {
       const snapshot = currentPublicLocalSnapshot()
       return { ok: true, dsh: { status: snapshot.status, port: snapshot.port ?? 0, error: snapshot.error ?? undefined } }
@@ -785,6 +829,45 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       if (Array.isArray(reaped.errors) && reaped.errors.length > 0) {
         for (const reaperError of reaped.errors) logger.error(`reaper: ${String(reaperError)}`)
       }
+      // Gateway middleware context (design 17 改动③): the management REST +
+      // per-instance proxy surfaces handed to a composing gateway's middleware.
+      const middlewareCtx: PlaneMiddlewareContext = { api, instanceProxy }
+
+      /** The default request dispatch (the surface routing the gateway's
+       * middleware falls through to): /api + /health → api.handle; static dist
+       * → serveStatic; else 404. */
+      function dispatchRest(req: ApiRequest, res: ApiResponse, url: URL): void {
+        const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
+        if (surface === 'api' || surface === 'health') {
+          void api.handle(req, res).catch(error => {
+            logger.error(`api handler failure: ${String(error)}`)
+            if (!res.headersSent) {
+              res.writeHead(500, { 'content-type': 'application/json' })
+              res.end('{"error":"internal"}')
+            } else {
+              res.end()
+            }
+          })
+          return
+        }
+        if (webDistDir !== undefined) {
+          try {
+            serveStatic(req, res, url.pathname)
+          } catch (staticError) {
+            logger.error(`static handler failure: ${String(staticError)}`)
+            if (!res.headersSent) {
+              res.writeHead(500, { 'content-type': 'application/json' })
+              res.end('{"error":"internal"}')
+            } else {
+              res.end()
+            }
+          }
+          return
+        }
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'not_found', code: 'not_found' }))
+      }
+
       await new Promise<void>((resolveListen, reject) => {
         server = createServer((req, res) => {
           // Set before dispatch so proxy and every early/error response inherit
@@ -813,16 +896,25 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           // rejection, never a crash or a silent empty success).
           let url: URL
           try {
-            url = new URL(req.url ?? '/', 'http://localhost')
+            const rawTarget = req.url ?? '/'
+            if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+              || rawTarget.includes('\\') || rawTarget.includes('#')) {
+              throw new Error('non-origin-form request target')
+            }
+            url = new URL(rawTarget, 'http://localhost')
           } catch {
             res.writeHead(400, { 'content-type': 'application/json' })
             res.end('{"error":"invalid-url"}')
             return
           }
-          const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
-          if (surface === 'api' || surface === 'health') {
-            void api.handle(req as ApiRequest, res as ApiResponse).catch(error => {
-              logger.error(`api handler failure: ${String(error)}`)
+          // Gateway middleware (design 17 改动③): a truthy return claims the
+          // request; falsy falls through to dispatchRest below.
+          if (options.middleware !== undefined) {
+            void Promise.resolve(options.middleware(req as ApiRequest, res as ApiResponse, url, middlewareCtx)).then((claimed) => {
+              if (claimed) return
+              dispatchRest(req as ApiRequest, res as ApiResponse, url)
+            }).catch((middlewareError: unknown) => {
+              logger.error(`middleware failure: ${String(middlewareError)}`)
               if (!res.headersSent) {
                 res.writeHead(500, { 'content-type': 'application/json' })
                 res.end('{"error":"internal"}')
@@ -832,25 +924,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             })
             return
           }
-          if (webDistDir !== undefined) {
-            try {
-              serveStatic(req as ApiRequest, res as ApiResponse, url.pathname)
-            } catch (staticError) {
-              // A throw in the static path (beyond the gzip race guarded
-              // inside serveStatic) must answer 500, never crash the plane
-              // child process — same pattern as the api.handle catch above.
-              logger.error(`static handler failure: ${String(staticError)}`)
-              if (!res.headersSent) {
-                res.writeHead(500, { 'content-type': 'application/json' })
-                res.end('{"error":"internal"}')
-              } else {
-                res.end()
-              }
-            }
-            return
-          }
-          res.writeHead(404, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: 'not_found', code: 'not_found' }))
+          dispatchRest(req as ApiRequest, res as ApiResponse, url)
         })
         // Bound pre-routing slowloris/socket pressure as well as route-level
         // work. requestTimeout covers receiving the request, while the proxy
@@ -864,11 +938,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         // WS upgrade dispatcher (design 03 §3.1/§3.2): the instance proxy
         // handles /api/i/<id>/api/events.mux|host — explicit rejections
         // only, never a silent drop.
-        server.on('upgrade', (req, socket, head) => {
+        function defaultUpgrade(req: ApiRequest, socket: Duplex, head: Buffer): void {
           // WebSocket ignores browser CORS response handling. Apply the same
           // origin fence before the proxy replaces Host and strips browser
           // markers; otherwise the upstream sees a trusted loopback request.
-          if (!api.getCorsHeaders(req as ApiRequest).allowed) {
+          if (!api.getCorsHeaders(req).allowed) {
             socket.end(
               'HTTP/1.1 403 Forbidden\r\n'
               + 'Content-Type: application/json\r\n'
@@ -882,6 +956,32 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             logger.error(`upgrade handler failure: ${String(error)}`)
             socket.destroy()
           })
+        }
+        server.on('upgrade', (req, socket, head) => {
+          const rawTarget = req.url ?? '/'
+          if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+            || rawTarget.includes('\\') || rawTarget.includes('#')) {
+            socket.end(
+              'HTTP/1.1 400 Bad Request\r\n'
+              + 'Content-Type: application/json\r\n'
+              + 'Connection: close\r\n'
+              + '\r\n'
+              + '{"error":"invalid-url","code":"bad_request"}',
+            )
+            return
+          }
+          // Gateway upgrade middleware (design 17 改动③): truthy claims.
+          if (options.upgradeMiddleware !== undefined) {
+            void Promise.resolve(options.upgradeMiddleware(req as ApiRequest, socket as Duplex, head, middlewareCtx)).then((claimed) => {
+              if (claimed) return
+              defaultUpgrade(req as ApiRequest, socket as Duplex, head)
+            }).catch((middlewareError: unknown) => {
+              logger.error(`upgrade middleware failure: ${String(middlewareError)}`)
+              socket.destroy()
+            })
+            return
+          }
+          defaultUpgrade(req as ApiRequest, socket as Duplex, head)
         })
         server.once('error', reject)
         server.listen(port, host, () => {
@@ -954,14 +1054,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       return instanceId
     },
 
+    /** The managed local dsh host's port (design 17 §2.1 改动①). */
+    getLocalDshPort() {
+      return local.getDshPort()
+    },
+
     /**
      * Register a remote instance transport (design 05 §3.3): the desktop
      * main process reports a ready tunnel as connectionId `ssh:<id>` with
      * baseUrl `http://127.0.0.1:<tunnel localPort>` — the /api/i/ssh-<id>/*
      * proxy target. Tunnel URLs never leave the main process / proxy.
      */
-    registerInstanceTransport(connectionId: string, baseUrl: string) {
-      instanceProxy.registerTransport(connectionId, baseUrl)
+    registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>) {
+      instanceProxy.registerTransport(connectionId, baseUrl, extraHeaders)
     },
 
     /** Unregister a remote instance transport (tunnel torn down). */
@@ -983,12 +1088,21 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       publishPublicLocalSnapshot()
     },
 
-    /** Subscribe to the same authoritative lifecycle stream as health SSE. */
+    /** Subscribe to the authoritative local-host lifecycle stream. */
     onLocalStateChange(listener) {
       return local.onStateChange(listener)
     },
   } satisfies PlaneHandle
 }
 
-export { spawnDsh, resolveNodeExecutable } from './spawn-dsh.ts'
+export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
 export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+export type { ServerRequest } from './dsh-client.ts'
+export type { Logger } from './types.ts'
+export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
+// Shared forwarding core (design 17 §6.2, 方案 A): extracted from
+// instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
+// rewrite + WS splice + limits/errors without forking.
+export * from './proxy-forward.ts'
+export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
+export type { JsonStore, JsonStoreDocument, JsonStoreMutator, JsonStoreOptions } from './json-store.ts'

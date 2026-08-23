@@ -1,9 +1,9 @@
-# 17 · dsh 运行时版本管理（npm 拉取安装，2026-08 现行）
+# 18 · dsh 运行时版本管理（npm 拉取安装，2026-08 现行）
 
 > **状态：现行实现；M0/M2/M4 done，M1/M3 partial。** M1 的开发树安装
 > 与 hermetic fake-registry 验收已完成，macOS 打包态执行夹具已就绪，但本轮按
 > 用户要求未生成或检查真实 `.app`；Windows 管理面保持只读。唯一权威的当前进度、
-> 已执行验证与验收边界见 `docs/progress/STATUS.md`（design 17 条目）；本文只保留
+> 已执行验证与验收边界见 `docs/progress/STATUS.md`（design 18 条目）；本文只保留
 > 架构与行为契约，不以历史验证记录冒充当前结果。
 >
 > 决策记录（2026-08 多轮讨论，用户拍板）：
@@ -559,8 +559,8 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 
 ## 9. 关联文档
 
-- `01-overview.md` §3 文档地图（本文档编号 17，2026-08 新增）；
-- `docs/progress/STATUS.md`（design 17 条目）；
+- `01-overview.md` §3 文档地图（本文档编号 18，2026-08 新增）；
+- `docs/progress/STATUS.md`（design 18 条目）；
 - 设计 11（应用本体更新——双通道并存见 §7；§8 版本集口径与 release.yml 对齐）；
   设计 15（settings「通用」段承载）；设计 14（退出生命周期——install 子进程回收
   与退出路径的衔接，§4）；设计 02 §3.5/§3.6（健康/restart-exhausted——§3.4 回退

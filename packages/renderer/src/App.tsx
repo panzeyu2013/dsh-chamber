@@ -46,7 +46,13 @@ import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import { isSnapshotStale, planAggregateRefreshes } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
-import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
+import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
+import {
+  instanceBasePath,
+  rawInstanceIdFromSourceId,
+  sourceIdForInstance,
+  sourceIdForRawInstance,
+} from './transport-source.ts'
 import InstanceView from './components/InstanceView.tsx'
 
 /**
@@ -67,17 +73,13 @@ const CONNECTIONS_POLL_MS = 30_000
 
 const LOCAL_INSTANCE_ID = 'local'
 
-function instanceBasePath(instanceId: string): string {
-  return `/api/i/${instanceId}`
-}
-
 /**
  * 实例可被聚合轮询：对齐反代契约（03 §3.3）——只有 `ready` 才放行，否则
  * 显式 503。starting/degraded/connecting 期间轮询只会收获 503，故一律按
  * 未连接呈现（分组头 + 相位文本，不轮询、无错误刷屏）。
  */
 function instanceConnected(
-  kind: 'local' | 'ssh',
+  kind: 'local' | TransportKind,
   health: HealthResponse | null,
   remoteStatus: Record<string, SshStatusProjection>,
   instanceId: string,
@@ -86,8 +88,11 @@ function instanceConnected(
     const status = health?.dsh?.status
     return status === 'ready'
   }
-  const phase = remoteStatus[instanceId]?.phase
-  return phase === 'ready'
+  const status = remoteStatus[instanceId]
+  // A registry kind switch and its IPC pushes are separate messages. Never
+  // treat a briefly-stale READY projection from the old provider as proof
+  // that the replacement provider is ready.
+  return status?.kind === kind && status.phase === 'ready'
 }
 
 /**
@@ -105,8 +110,8 @@ function collectReadySourceIds(
   if (instanceConnected('local', health, remoteStatus, LOCAL_INSTANCE_ID)) ready.push(LOCAL_INSTANCE_ID)
   else notReady.push(LOCAL_INSTANCE_ID)
   for (const instance of remoteInstances) {
-    const id = `ssh-${instance.id}`
-    if (instanceConnected('ssh', health, remoteStatus, instance.id)) ready.push(id)
+    const id = sourceIdForInstance(instance)
+    if (instanceConnected(instance.kind, health, remoteStatus, instance.id)) ready.push(id)
     else notReady.push(id)
   }
   return { ready, notReady }
@@ -131,10 +136,9 @@ function deriveServers(
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const now = Date.now()
-  // The proxy contract is /api/i/ssh-<id>/*, so every remote source id that
-  // reaches the sidebar / shell paths carries the 'ssh-' prefix (05 §3);
-  // remoteStatus is keyed by the raw registry id (the IPC projection's id).
-  const push = (kind: 'local' | 'ssh', id: string, label: string, rawId?: string): void => {
+  // The proxy contract is /api/i/<kind>-<id>/*; remoteStatus remains keyed by
+  // the raw registry id from the IPC projection.
+  const push = (kind: 'local' | TransportKind, id: string, label: string, rawId?: string): void => {
     const statusKey = kind === 'local' ? id : (rawId ?? id)
     const phase = kind === 'local'
       ? (health?.dsh?.status ?? 'unknown')
@@ -175,7 +179,7 @@ function deriveServers(
     servers.push(entry)
   }
   push('local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例')
-  for (const instance of remoteInstances) push('ssh', `ssh-${instance.id}`, instance.label, instance.id)
+  for (const instance of remoteInstances) push(instance.kind, sourceIdForInstance(instance), instance.label, instance.id)
   return servers
 }
 
@@ -232,8 +236,13 @@ export default function App() {
   // 两种状态区分后，首启（无行）才会触发本地实例自动启动。
   const [connections, setConnections] = useState<ConnectionSummary[] | null>(null)
   const [remoteInstances, setRemoteInstances] = useState<SshInstanceSpec[]>([])
+  // [] is a valid authoritative roster, so track first successful IPC load
+  // separately. A deep-link intent can arrive as soon as preload exposes the
+  // bridge, before instances_get resolves; it must wait for kind resolution
+  // instead of being guessed as ssh or silently dropped.
+  const [remoteInstancesLoaded, setRemoteInstancesLoaded] = useState(false)
   const [remoteStatus, setRemoteStatus] = useState<Record<string, SshStatusProjection>>({})
-  // 视图：'local' | 'ssh-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
+  // 视图：'local' | '<kind>-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
   // Views mounted only by background prewarm. User selection removes the id
@@ -311,6 +320,11 @@ export default function App() {
   // 身份保持稳定（本文件既有 ref 镜像纪律），相位变化不重建这些回调。
   const remoteStatusRef = useRef(remoteStatus)
   remoteStatusRef.current = remoteStatus
+  const remoteInstancesRef = useRef(remoteInstances)
+  remoteInstancesRef.current = remoteInstances
+  const remoteInstancesLoadedRef = useRef(remoteInstancesLoaded)
+  remoteInstancesLoadedRef.current = remoteInstancesLoaded
+  const pendingDeepLinkInstanceRef = useRef<string | null>(null)
 
   // 切换意图镜像：activeViewRef = 已落地的当前视图（渲染期镜像），
   // pendingViewRef = 在途/顺延中的最新切换意图（过渡链 apply 前有效）。
@@ -433,10 +447,11 @@ export default function App() {
     }
     setRemoteStatus(prev => {
       // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
-      // 与 servers 的 ssh-<id> 前缀 id 不同——按前缀剥离还原再比较。
+      // 与 servers 的 <kind>-<id> 不同——按 kind 前缀还原再比较。
       const liveRaw = new Set<string>()
       for (const server of servers) {
-        liveRaw.add(server.kind === 'local' ? 'local' : server.id.slice(4))
+        const rawId = server.kind === 'local' ? 'local' : rawInstanceIdFromSourceId(server.id)
+        if (rawId !== null) liveRaw.add(rawId)
       }
       const next = { ...prev }
       let changed = false
@@ -486,6 +501,7 @@ export default function App() {
     try {
       const instances = await ssh.instances_get()
       setRemoteInstances(instances)
+      setRemoteInstancesLoaded(true)
       for (const instance of instances) void refreshRemoteStatus(instance.id)
     } catch {
       // 桌面 SSH 面不可达时保持现状；实例列表由下次刷新重试
@@ -823,7 +839,8 @@ export default function App() {
     if (viewId === LOCAL_INSTANCE_ID) return
     const ssh = window.dshChamber?.desktopSsh
     if (ssh === undefined) return
-    const rawId = viewId.slice('ssh-'.length)
+    const rawId = rawInstanceIdFromSourceId(viewId)
+    if (rawId === null) return
     const phase = remoteStatusRef.current[rawId]?.phase
     if (phase !== 'error' && phase !== 'degraded') return
     void ssh.connect(rawId).catch(err => {
@@ -893,7 +910,7 @@ export default function App() {
     // 空 label 不入表（与本地行同规）：InstanceView 的 `?? viewId` 回落
     // 只认 undefined——空串会渲染出无名的骨架标题。
     for (const instance of remoteInstances) {
-      if (instance.label !== '') map[`ssh-${instance.id}`] = instance.label
+      if (instance.label !== '') map[sourceIdForInstance(instance)] = instance.label
     }
     return map
   }, [connections, remoteInstances])
@@ -918,14 +935,14 @@ export default function App() {
    */
   const prewarmEligibleRef = useRef<Set<string>>(new Set())
   const prewarmEligible = useMemo(() => {
-    const liveRemoteIds = new Set(remoteInstances.map(instance => `ssh-${instance.id}`))
+    const liveRemoteIds = new Set(remoteInstances.map(sourceIdForInstance))
     for (const id of autoPrewarmedRef.current) {
       if (!liveRemoteIds.has(id)) autoPrewarmedRef.current.delete(id)
     }
     const remaining = Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
     const eligible = remoteInstances
       .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
-      .map(instance => `ssh-${instance.id}`)
+      .map(sourceIdForInstance)
       .filter(id => !mountedViews.includes(id))
       .slice(0, remaining)
     return new Set(eligible)
@@ -962,7 +979,7 @@ export default function App() {
     const eligible = prewarmEligibleRef.current
     prewarmQueueRef.current = prewarmQueueRef.current.filter(id => eligible.has(id))
     for (const instance of remoteInstances) {
-      const id = `ssh-${instance.id}`
+      const id = sourceIdForInstance(instance)
       if (!eligible.has(id)) continue
       const queue = prewarmQueueRef.current
       if (!queue.includes(id)) queue.push(id)
@@ -1006,18 +1023,35 @@ export default function App() {
 
   /** VS Code OS 深链（design 16 §2，best-effort）：主进程推送归一化 intent →
    *  激活对应来源 shell。raw id → 视图 id 契约（P1-4）：'local' 原样，
-   *  注册表 id 拼 `ssh-` 前缀。窗口未就绪时推送已被主进程跳过（VS Code
-   *  启动由主进程独立完成，渲染层激活从不阻塞它）。桥与 desktopSsh 同一批
-   *  expose，sshBridgeReady 即 deepLink 可用。 */
+   *  注册表 id 按实时 transport kind 映射。桥已就绪但首次 roster 尚未
+   *  返回时暂存 raw id，待 kind 可知后再激活；绝不猜测为 ssh。窗口未就绪时
+   *  推送已被主进程跳过（VS Code 启动由主进程独立完成）。 */
   useEffect(() => {
     if (!sshBridgeReady) return
     const deepLink = window.dshChamber?.deepLink
     if (deepLink === undefined) return
     return deepLink.onIntent((intent) => {
-      const sourceId = intent.instanceId === 'local' ? 'local' : `ssh-${intent.instanceId}`
-      selectView(sourceId)
+      const sourceId = sourceIdForRawInstance(intent.instanceId, remoteInstancesRef.current)
+      if (sourceId !== null) {
+        pendingDeepLinkInstanceRef.current = null
+        selectView(sourceId)
+      } else if (!remoteInstancesLoadedRef.current) {
+        pendingDeepLinkInstanceRef.current = intent.instanceId
+      }
     })
   }, [sshBridgeReady, selectView])
+
+  // Replay the one latest intent that raced the first registry load. Once the
+  // roster is authoritative, an unknown raw id is discarded (main still
+  // launches VS Code independently; renderer activation remains best-effort).
+  useEffect(() => {
+    if (!remoteInstancesLoaded) return
+    const rawId = pendingDeepLinkInstanceRef.current
+    if (rawId === null) return
+    pendingDeepLinkInstanceRef.current = null
+    const sourceId = sourceIdForRawInstance(rawId, remoteInstances)
+    if (sourceId !== null) selectView(sourceId)
+  }, [remoteInstancesLoaded, remoteInstances, selectView])
 
   /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。
    *  Always pull on a mutation: the mounted producer's push can lag the host's

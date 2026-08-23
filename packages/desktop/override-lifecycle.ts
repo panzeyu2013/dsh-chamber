@@ -1,8 +1,8 @@
 /**
- * dsh 运行时 override 生命周期（design 17 §3.5）——纯逻辑、无 electron、无文件 IO
+ * dsh 运行时 override 生命周期（design 18 §3.5）——纯逻辑、无 electron、无文件 IO
  * （M3：失效规则 / 回落保护 / swap-attempted / pending 重放）。
  *
- * 权威规则（design 17 §3.5）：
+ * 权威规则（design 18 §3.5）：
  *   - 失效规则（覆盖 override 与 pending）：启动时 shellVersion ≠ 当前壳版本 →
  *     override 与 pending **一并失效**。失效 = **标记失效**（保留记录、版本树与
  *     快照）而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」

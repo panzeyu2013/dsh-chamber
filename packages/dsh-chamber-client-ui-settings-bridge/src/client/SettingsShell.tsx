@@ -29,8 +29,10 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/src/client/ConnectionsSection.tsx'
 import { GeneralView } from './GeneralView.tsx'
+import { GatewayOrchestrationView } from './GatewayOrchestrationView.tsx'
 import {
   CONNECTIONS_SECTION_ID,
+  GATEWAY_SECTION_ID,
   GENERAL_SECTION_ID,
   resolveActiveSection,
   type SectionNavRow,
@@ -54,7 +56,7 @@ export interface SettingsShellInjected {
   t: (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
   /** Bound translate over the connections section's dictionary ('dsh-chamber.settings.connections'). */
   connectionsT: (key: string) => string
-  /** The hosting boot's instance id ('local' | 'ssh-<id>'), when known. */
+  /** The hosting boot's instance id ('local' | '<kind>-<id>'), when known. */
   chamberInstanceId?: string
 }
 
@@ -351,10 +353,11 @@ function SettingsPanel({
   )
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
-  const active = resolveActiveSection(activeId, rows)
   const selected = servers.find(server => server.id === selectedId)
+  const gatewayAvailable = selected?.kind === 'gateway'
+  const active = resolveActiveSection(activeId, rows, gatewayAvailable)
   // Per-source client-plugin runtime diagnostics, keyed by source id
-  // ('local' | 'ssh-<id>'), handed to the chamber-global connections surface.
+  // ('local' | '<kind>-<id>'), handed to the chamber-global connections surface.
   // The diagnostic is a chamber-owned fact (design 09) and belongs in the
   // connections page, NOT on top of the official dsh「插件」section.
   const pluginDiagnostics = useMemo(() => {
@@ -389,6 +392,18 @@ function SettingsPanel({
                 <span className={css.navLabel}>{row.label}</span>
               </button>
             ))}
+            {gatewayAvailable && (
+              <button
+                key={GATEWAY_SECTION_ID}
+                type="button"
+                className={clsx(css.navCell, active === GATEWAY_SECTION_ID && css.active)}
+                aria-current={active === GATEWAY_SECTION_ID ? 'true' : undefined}
+                onClick={() => onSelectSection(GATEWAY_SECTION_ID)}
+              >
+                <IconDataOutline16 className={css.navIcon} size={16} />
+                <span className={css.navLabel}>{t('gatewayNav')}</span>
+              </button>
+            )}
           </div>
           <div className={css.navDivider} />
           <div className={css.navList}>
@@ -457,6 +472,23 @@ function SettingsPanel({
                  independent of the selected server. The update status (design
                  11) lives inside this section too. */
               <GeneralView t={t} />
+            ) : active === GATEWAY_SECTION_ID ? (
+              selectedId === undefined || selected === undefined ? (
+                <p className={css.placeholder}>{t('noServers')}</p>
+              ) : !selected.connected ? (
+                <div className={css.unavailableView}>
+                  <p className={css.placeholder}>{t('targetUnavailable')}</p>
+                  <button type="button" className={css.inlineAction} onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}>
+                    {t('manageConnections')}
+                  </button>
+                </div>
+              ) : (
+                /* This is the gateway's own authenticated orchestration API,
+                   not an official dsh settings child-context slot. The view
+                   derives a same-origin path from the canonical source id;
+                   its bearer token stays in Desktop main. */
+                <GatewayOrchestrationView key={selectedId} sourceId={selectedId} t={t} />
+              )
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (

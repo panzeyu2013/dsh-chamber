@@ -391,6 +391,15 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
 
+  packages/gateway:
+    devDependencies:
+      '@dsh-chamber/control-plane':
+        specifier: workspace:^
+        version: link:../control-plane
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+
   packages/renderer:
     dependencies:
       react:

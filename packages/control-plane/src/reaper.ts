@@ -6,7 +6,7 @@
  * managed-process-registry safety model: a spawn record is only reclaimed when
  * all of "we recorded it", "identity re-verified (command line + port
  * listener)", and "orphaned (reparented to init or owner dead)" hold; any
- * doubt keeps the record and the process untouched. Since the design-17
+ * doubt keeps the record and the process untouched. Since the design-18
  * writer-quiescence revision, corrupt records and records whose pid is not an
  * integer are KEPT (fail-closed): a managed-host record is the only durable
  * evidence for a detached process group after the owning control plane dies,

@@ -1,5 +1,5 @@
 /**
- * Page-wide dsh runtime-management projection (design 17 §3.6).
+ * Page-wide dsh runtime-management projection (design 18 §3.6).
  *
  * This module is deliberately browser-framework-free. It is the shared
  * contract used by the settings runtime block and the connections local-card
@@ -148,7 +148,7 @@ export type RuntimeAction =
 
 /**
  * The strict visible-action matrix. Busy phases expose no mutation; pending
- * and applying expose only the escape hatch required by design 17. Retry
+ * and applying expose only the escape hatch required by design 18. Retry
  * actions are added separately from explicit controller capability bits.
  */
 const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {

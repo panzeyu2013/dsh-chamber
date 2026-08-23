@@ -1,5 +1,5 @@
 /**
- * dsh runtime installer (design 17 §4).
+ * dsh runtime installer (design 18 §4).
  *
  * The top-level package is downloaded exactly once from the source-bound
  * registry resolution, streamed through SRI verification, and handed to pnpm
@@ -76,7 +76,7 @@ export interface InstallerDeps {
     destination: string,
     opts: { signal: AbortSignal },
   ) => Promise<void>
-  /** Prune the installed tree (prune-runtime semantics, design 17 §4). */
+  /** Prune the installed tree (prune-runtime semantics, design 18 §4). */
   prune: (root: string) => Promise<PruneResult>
   /** Smoke: assert the installed CLI reports exactly `version`. */
   smoke: (workDir: string, version: string, context: SmokeContext) => Promise<void>

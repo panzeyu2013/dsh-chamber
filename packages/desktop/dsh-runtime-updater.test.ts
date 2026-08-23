@@ -1,5 +1,5 @@
 /**
- * dsh-runtime-updater.ts 纯逻辑测试（design 17 §3.6 编排守卫）——node:test，
+ * dsh-runtime-updater.ts 纯逻辑测试（design 18 §3.6 编排守卫）——node:test，
  * 无 electron。覆盖：SingleFlight 单飞互斥（二次 tryBegin false / end 后可再入 /
  * inFlight 态）、isNoopSelection 三态、buildVersionList（active 置顶去重 / latest
  * 标记 / 降序 / cached 标记 / belowBaseline 与基线空不标 / byVersion 缺失跳过）、

@@ -1,20 +1,20 @@
 {
   "files": {
     "docs/README.en-US.md": {
-      "en": "7192430f0bdc1679c9b3b6415dee43906243cde8759c6f6c2b0ca19d5c458931",
-      "zh": "1a525fce91af39f752b49656fdd66e2c8b5677a5d783fb300e77ac89de314edb"
+      "en": "47ec491fd4868ba4a10b683c8ba53e4dfc69efc323a8813b227c8819e023e0e5",
+      "zh": "eb87b4ad9c35a28c0186b68195706a1fd5006decab26a753c0e4d590a1f1360e"
     },
     "docs/CONTRIBUTING.en-US.md": {
       "en": "f288c9adab5337a013901b314b87f99bab096b5b1f688a4178acf949e8d97793",
       "zh": "9a4e333f2cbc1b1d31573b7b7fa7bf50e6a9f965c5c68b65baddad8d13d92feb"
     },
     "docs/CHANGELOG.en-US.md": {
-      "en": "4a4a2faddb8240408b776e7b37238606eabbbff671f2eeed8946d0505845879f",
-      "zh": "1d8c6b9bd04d9d2ffa8689a19a66e0f86432eb7783ef691f546f321358b97b28"
+      "en": "d17cb85e062df08649495e8ce06e691b519ec88db5d048f53e5cd7a86a77af55",
+      "zh": "f06cff1a16449928741dce87ec6311ef5209e351472683669c437a142d88a06d"
     },
     "docs/DEVELOPMENT.en-US.md": {
-      "en": "19913387337c7c036e6ce4b22703acf4e2df09747fe35f91d1aa59e8abbd614a",
-      "zh": "1249d74cdfa476db9067b729536e4b4663d35fcc993e01d19d1cb302b8dc9b74"
+      "en": "3edadf56e8e625a4a80806f57d0cb4994f112cf933a05a8f7d81c6438ed32fcd",
+      "zh": "605ce6018406c0c2d3dfdec6219130d7d1b3f3f6e16233a2e6fbadbe23f445d8"
     }
   }
 }

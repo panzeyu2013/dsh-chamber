@@ -22,7 +22,7 @@ export interface ChamberSidebarViewPrefs {
   ungroupedOrder: Record<string, string[]>
   /**
    * Per-source session ordering preference (design 06 §3.1 orderBy): key =
-   * sourceId ('local', 'ssh-<id>'), value = SessionOrderBy. OPTIONAL — kept
+   * sourceId ('local', '<kind>-<id>'), value = SessionOrderBy. OPTIONAL — kept
    * so old persisted payloads (and any external literal constructor) stay
    * valid without a version bump (v stays 1: re-seeding on a version change
    * would drop folded/ungroupedOrder for data written by a mixed fleet).

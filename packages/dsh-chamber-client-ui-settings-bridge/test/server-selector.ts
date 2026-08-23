@@ -5,13 +5,15 @@ import { filterServerRows, serverDropdownPlacement, serverProjectionSignature } 
 const rows = [
   { id: 'local', label: '本地实例' },
   { id: 'ssh-alpha', label: 'Build Alpha' },
+  { id: 'gateway-prod', label: 'Gateway Prod' },
   { id: 'ssh-beta', label: '离线备机' },
 ]
 
 test('server selector filters by label or stable instance id without dropping offline rows', () => {
   assert.deepEqual(filterServerRows(rows, 'alpha').map(row => row.id), ['ssh-alpha'])
   assert.deepEqual(filterServerRows(rows, 'ssh-beta').map(row => row.id), ['ssh-beta'])
-  assert.equal(filterServerRows(rows, '').length, 3)
+  assert.deepEqual(filterServerRows(rows, 'gateway').map(row => row.id), ['gateway-prod'])
+  assert.equal(filterServerRows(rows, '').length, 4)
 })
 
 test('portal placement flips above near the viewport tail and clamps horizontally', () => {
@@ -51,5 +53,13 @@ test('settings roster signature cannot collide through separator-like user text'
   assert.notEqual(
     serverProjectionSignature([row('a', 'b\u0000ssh\nnext')]),
     serverProjectionSignature([row('a\u0000b', 'ssh\nnext')]),
+  )
+})
+
+test('settings roster signature preserves gateway as a first-class transport kind', () => {
+  const base = { id: 'gateway-prod', label: 'Prod', connected: true, phase: 'ready' }
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, kind: 'gateway' }]),
+    serverProjectionSignature([{ ...base, kind: 'ssh' }]),
   )
 })

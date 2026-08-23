@@ -461,6 +461,244 @@
   }
 }
 
+/* ---- selected gateway orchestration (design 17 §8.5) ----
+   This is a chamber-owned, gateway-authoritative surface. It deliberately
+   uses plain settings vocabulary rather than borrowing official dsh section
+   slots: cards isolate independently fetched resources and retain stale data
+   beside an honest per-card error when one route is temporarily unavailable. */
+
+.gatewaySurface {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.gatewayTitleRow,
+.gatewayRowHead,
+.gatewayCardActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gatewayTitleRow {
+  align-items: flex-start;
+}
+
+.gatewayTitleRow h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.gatewayTitleRow p,
+.gatewayInteraction p,
+.gatewayCompactRow p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.gatewayCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.gatewayCard h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.gatewayButton,
+.gatewayPrimaryButton {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.gatewayButton {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+}
+
+.gatewayPrimaryButton {
+  border: none;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.gatewayButton:hover:not(:disabled),
+.gatewayButton:focus-visible:not(:disabled) {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.gatewayPrimaryButton:hover:not(:disabled),
+.gatewayPrimaryButton:focus-visible:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.gatewayButton:disabled,
+.gatewayPrimaryButton:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.gatewayError,
+.gatewayMuted {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.gatewayError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.gatewayMuted {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.gatewayToggles,
+.gatewayList,
+.gatewayChoices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gatewayToggles label,
+.gatewayChoice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.gatewayToggles input,
+.gatewayChoice input {
+  flex: none;
+  margin-top: 3px;
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.gatewayInteraction,
+.gatewayCompactRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.gatewayRowHead {
+  min-width: 0;
+  align-items: baseline;
+}
+
+.gatewayRowHead strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.gatewayRowHead span,
+.gatewayRowHead code,
+.gatewayCompactRow code,
+.gatewayCompactRow small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.gatewayQuestionGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 4px 0;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
+.gatewayQuestionGroup legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.gatewayQuestionText {
+  color: var(--dsw-alias-label-primary) !important;
+}
+
+.gatewayChoice > span {
+  display: flex;
+  flex-direction: column;
+}
+
+.gatewayChoice small {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.gatewayCustomAnswer {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.gatewayCustomAnswer input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+.gatewayCustomAnswer input:focus {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.gatewayPrompt {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--dsw-alias-label-primary) !important;
+}
+
 /* Visually-hidden text seat (close button accessible name). */
 .hiddenLabel {
   position: absolute;

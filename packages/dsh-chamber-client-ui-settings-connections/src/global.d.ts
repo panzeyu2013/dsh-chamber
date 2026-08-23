@@ -8,18 +8,19 @@ import type { RuntimeSurface } from '../../renderer/src/runtime-management.ts'
 
 /** Transport lifecycle phase machine（隧道生命周期 phase 机）. */
 export type SshPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
+export type TransportKind = 'ssh' | 'gateway'
 
 /** Normalized non-secret instance spec as held by the registry (design 05 §8). */
 export interface SshInstanceSpec {
   id: string
   label: string
-  /** Transport provider kind (v1: 'ssh'). */
-  kind: string
+  /** Transport provider kind. */
+  kind: TransportKind
   host: string
   user: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
   sshPort: number | null
-  /** The remote dsh web profile port on 127.0.0.1 (the tunnel destination). */
+  /** SSH: remote dsh loopback port; gateway: HTTPS origin port. */
   remotePort: number
   serviceName: string | null
   /**
@@ -34,7 +35,7 @@ export interface SshInstanceInput {
   id: string
   label: string
   /** Transport provider kind; omitted/legacy entries default to 'ssh'. */
-  kind?: string
+  kind?: TransportKind
   host: string
   user?: string | null
   sshPort?: number | null
@@ -46,13 +47,13 @@ export interface SshInstanceInput {
 
 /** The non-secret status projection (design 05 §8): never a transport URL. */
 export interface SshStatusProjection {
-  /** Transport provider kind (v1: 'ssh'). */
-  kind: string
+  /** Transport provider kind. */
+  kind: TransportKind
   phase: SshPhase
   localPort: number | null
   sshPort: number | null
   remotePort: number
-  /** Configured remote dsh home ($DSH_HOME); null = ssh default. */
+  /** Configured remote dsh home ($DSH_HOME); gateway always reports null. */
   remoteDshHome: string | null
   retryAttempt: number
   requiresUserAction: boolean
@@ -210,9 +211,9 @@ export type SshLocalPluginExecIpcResult =
   | { ok: false; error: string }
 
 /**
- * The desktop_ssh_* IPC surface (design 05 §3.3) — non-secret only. The
- * systemd ops require the registry spec's serviceName (format whitelist
- * enforced on the main side).
+ * The desktop_ssh_* compatibility-named IPC surface (design 05 §3.3) —
+ * non-secret only. Systemd/plugin ops are SSH-only; gateway token writes use
+ * their dedicated method and no read method exists.
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
@@ -223,6 +224,8 @@ export interface DesktopSshSurface {
    * Resolves {ok:true} or {error} (unknown id / platform not supported).
    */
   set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  /** Gateway token is renderer-write-only; never returned by any bridge API. */
+  set_gateway_token(id: string, token: string | null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -304,7 +307,7 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
-  /** dsh runtime npm registry trust anchor (design 17). */
+  /** dsh runtime npm registry trust anchor (design 18). */
   registryOrigin: string
 }
 

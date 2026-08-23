@@ -825,6 +825,11 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
   const a = [server('local'), server('ssh-r1')]
   const b = [server('local', { updatedAt: 123456789 }), server('ssh-r1', { updatedAt: 987654321 })]
   assert.equal(serversProjectionSignature(a), serversProjectionSignature(b))
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1')]),
+    serversProjectionSignature([server('ssh-r1', { kind: 'gateway' })]),
+    'gateway remains a first-class kind in the shared aggregate contract',
+  )
   // Session-level updatedAt IS part of the signature since the 2026-08
   // updated-mode alignment (updated = manual order + activity promotion): a
   // session's last-activity tick must re-publish the projection so the

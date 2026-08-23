@@ -10,9 +10,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import {
+  convergeLocation,
   createInstanceProxy,
   parseInstancePath,
   MAX_REQUEST_BODY_BYTES,
+  getProcessBufferedRequestBytes,
 } from '../src/instance-proxy.ts'
 import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
 import type { InstanceProxy, ProxyRequest, ProxyResponse, ProxySocket } from '../src/instance-proxy.ts'
@@ -47,6 +49,7 @@ function fakeHttpRequest(handler: (url: URL, options: any) => UpstreamBehavior |
       return true
     }
     req.end = () => {
+      req.emit('finish')
       const behavior = handler(url, options)
       if (behavior === undefined) return // hang
       if (behavior.error !== undefined) {
@@ -104,12 +107,13 @@ function fakeRequest(url: string, method = 'GET', headers: Record<string, string
 }
 
 /** A fake response recording writeHead/end/write calls. */
-function fakeResponse(): ProxyResponse & { status: number | null; headers: Record<string, unknown>; body: string } {
+function fakeResponse(): ProxyResponse & { status: number | null; headers: Record<string, unknown>; body: string; destroyed: boolean } {
   const emitter = new EventEmitter()
   const res = Object.assign(emitter, {
     status: null as number | null,
     headers: {} as Record<string, unknown>,
     body: '',
+    destroyed: false,
     headersSent: false,
     writeHead(status: number, headers?: Record<string, unknown>) {
       this.status = status
@@ -123,10 +127,15 @@ function fakeResponse(): ProxyResponse & { status: number | null; headers: Recor
     },
     end(payload?: unknown) {
       if (payload !== undefined) this.body += String(payload)
+      emitter.emit('finish')
       return undefined
     },
     setHeader() {},
-    destroy() {},
+    destroy() {
+      if (this.destroyed) return
+      this.destroyed = true
+      emitter.emit('close')
+    },
   })
   return res as any
 }
@@ -144,7 +153,11 @@ function fakeSocket(): ProxySocket & { written: string; writtenBuffers: Buffer[]
       return true
     },
     end() { this.closed = true; return undefined },
-    destroy() { this.closed = true },
+    destroy() {
+      if (this.closed) return
+      this.closed = true
+      emitter.emit('close')
+    },
     pipe(target: unknown) { return target },
   })
   return socket as any
@@ -211,6 +224,13 @@ test('request convergence strips framing and proxy headers, then emits the accep
       connection: 'keep-alive',
       expect: '100-continue',
       'proxy-authenticate': 'secret',
+      forwarded: 'for=203.0.113.7;host=evil.example',
+      via: '1.1 attacker',
+      'x-forwarded-for': '203.0.113.7',
+      'x-forwarded-host': 'evil.example',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-real-ip': '203.0.113.7',
       te: 'trailers',
       trailer: 'x-secret',
     }, 'abc'),
@@ -221,6 +241,13 @@ test('request convergence strips framing and proxy headers, then emits the accep
   assert.equal(headers.connection, undefined)
   assert.equal(headers.expect, undefined)
   assert.equal(headers['proxy-authenticate'], undefined)
+  assert.equal(headers.forwarded, undefined)
+  assert.equal(headers.via, undefined)
+  assert.equal(headers['x-forwarded-for'], undefined)
+  assert.equal(headers['x-forwarded-host'], undefined)
+  assert.equal(headers['x-forwarded-proto'], undefined)
+  assert.equal(headers['x-forwarded-port'], undefined)
+  assert.equal(headers['x-real-ip'], undefined)
   assert.equal(headers.te, undefined)
   assert.equal(headers.trailer, undefined)
 })
@@ -250,6 +277,43 @@ test('ssh-<id> mapping: registered transport baseUrl wins; unregistered answers 
   assert.equal(JSON.parse(gone.body).code, 'instance_unavailable')
 })
 
+test('transport replacement and unregister revoke already-open HTTP/SSE and WS channels', async () => {
+  const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/events.')
+    ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
+    : { response: { status: 200, headers: { 'content-type': 'text/event-stream' }, body: null } })
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+  })
+  proxy.registerTransport('ssh:rotating', 'http://127.0.0.1:22001')
+
+  const oldSse = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session.list'), oldSse)
+  const oldWs = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/ssh-rotating/api/events.mux'), oldWs, Buffer.alloc(0))
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
+  assert.equal(proxy.getDiagnostics().activeStreams, 1)
+
+  proxy.registerTransport('ssh:rotating', 'http://127.0.0.1:22002')
+  assert.equal(oldSse.destroyed, true, 'replacement closes responses authenticated/routed through the old record')
+  assert.equal(oldWs.closed, true, 'replacement closes WebSockets authenticated/routed through the old record')
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
+  assert.equal(proxy.getDiagnostics().activeStreams, 0)
+
+  const newSse = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session.list'), newSse)
+  assert.equal(upstream.calls.at(-1)?.url.origin, 'http://127.0.0.1:22002')
+  proxy.unregisterTransport('ssh:rotating')
+  assert.equal(newSse.destroyed, true, 'unregister closes an existing long HTTP/SSE response')
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
+
+  const gone = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session.list'), gone)
+  assert.equal(gone.status, 503)
+})
+
 test('local instance not ready → explicit 503, never a silent empty success', async () => {
   const { proxy, upstream } = makeProxy({ state: 'starting', port: null })
   const res = fakeResponse()
@@ -272,13 +336,18 @@ test('unknown id answers 404 instance_not_found', async () => {
 // Response convergence
 // ---------------------------------------------------------------------------
 
-test('response header whitelist: only content-type/cache-control/x-* ride through', async () => {
+test('response header convergence preserves representation metadata and rewrites same-origin redirects', async () => {
   const upstream = fakeHttpRequest(() => ({
     response: {
       status: 200,
       headers: {
         'content-type': 'application/json',
+        'content-encoding': 'gzip',
+        'content-language': 'en',
         'cache-control': 'no-store',
+        etag: '"v1"',
+        location: '/login?next=%2F',
+        vary: 'accept-encoding',
         'x-next-cursor': 'abc',
         'x-ratelimit-limit': '10',
         'set-cookie': 'leak=1',
@@ -294,11 +363,43 @@ test('response header whitelist: only content-type/cache-control/x-* ride throug
     httpRequest: upstream.fn,
   })
   const res = fakeResponse()
+  res._corsHeaders = { 'access-control-allow-origin': 'https://client.example', vary: 'Origin' }
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
   assert.equal(res.status, 200)
-  assert.deepEqual(Object.keys(res.headers).sort(), ['cache-control', 'content-type', 'x-next-cursor', 'x-ratelimit-limit'])
+  assert.deepEqual(Object.keys(res.headers).sort(), [
+    'access-control-allow-origin',
+    'cache-control',
+    'content-encoding',
+    'content-language',
+    'content-type',
+    'etag',
+    'location',
+    'vary',
+    'x-next-cursor',
+    'x-ratelimit-limit',
+  ])
+  assert.equal(res.headers.location, '/api/i/local/login?next=%2F')
+  assert.equal(res.headers.vary, 'accept-encoding, Origin')
+  assert.equal(res.headers['access-control-allow-origin'], 'https://client.example')
   assert.equal(res.headers['set-cookie'], undefined)
   assert.equal(res.headers['x-custom-secret'], undefined)
+})
+
+test('convergeLocation: undefined passthrough, root mount strips origin, prefixed mount prepends', () => {
+  const target = new URL('http://127.0.0.1:17510')
+  // No mounted prefix: the raw Location rides through unchanged (owner opts out).
+  assert.equal(convergeLocation('http://127.0.0.1:17510/login?next=%2F', target, undefined), 'http://127.0.0.1:17510/login?next=%2F')
+  // Root mount (the gateway): same-origin absolute redirects are stripped to
+  // their path so the internal loopback origin never escapes the public one.
+  assert.equal(convergeLocation('http://127.0.0.1:17510/login?next=%2F', target, ''), '/login?next=%2F')
+  // Relative Location resolves against the target and is rewritten too.
+  assert.equal(convergeLocation('/login', target, ''), '/login')
+  // Prefixed mount (instance proxy): the browser-visible prefix is prepended.
+  assert.equal(convergeLocation('http://127.0.0.1:17510/login', target, '/api/i/local'), '/api/i/local/login')
+  // A different origin is never rewritten (external redirects stay absolute).
+  assert.equal(convergeLocation('https://other.example/login', target, ''), 'https://other.example/login')
+  // An unparseable Location is passed through untouched.
+  assert.equal(convergeLocation('http://[', target, ''), 'http://[')
 })
 
 test('request body over the 300MiB cap answers 413 body_too_large', async () => {
@@ -497,16 +598,37 @@ test('upgrade splice: an error on the downstream end tears both down exactly onc
 })
 
 test('http stream: a client response error aborts the upstream, never uncaught', async () => {
-  const { proxy, upstream } = makeProxy()
+  const captured = { signal: null as AbortSignal | null }
+  const fn: any = (_url: URL, options: { signal: AbortSignal }) => {
+    captured.signal = options.signal
+    const request = new EventEmitter() as any
+    request.write = () => true
+    request.end = () => {
+      request.emit('finish')
+      const upstreamResponse = new EventEmitter() as any
+      upstreamResponse.statusCode = 200
+      upstreamResponse.headers = { 'content-type': 'text/event-stream' }
+      upstreamResponse.destroy = () => upstreamResponse.emit('close')
+      upstreamResponse.pause = () => {}
+      upstreamResponse.resume = () => {}
+      request.emit('response', upstreamResponse)
+      upstreamResponse.emit('data', Buffer.from('data: live\n\n'))
+    }
+    return request
+  }
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: fn,
+  })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
-  assert.equal(upstream.calls.length, 1)
-  const signal = upstream.calls[0].options.signal as AbortSignal
-  assert.equal(signal.aborted, false)
+  assert.equal(captured.signal?.aborted, false)
   // The client connection died mid-stream (app exit): res.write becomes
   // writeAfterFIN — the 'error' must be consumed and abort the upstream.
   ;(res as unknown as EventEmitter).emit('error', new Error('This socket has been ended by the other party'))
-  assert.equal(signal.aborted, true)
+  assert.equal(captured.signal?.aborted, true)
 })
 
 test('diagnostics: plain counters, no sensitive data', async () => {
@@ -591,6 +713,71 @@ test('http: a responding upstream stays unaffected by the timeout guard', async 
   assert.equal(res.status, 200) // fast upstream: timeout guard cleared, no 504
 })
 
+test('http: IncomingMessage close after parsing does not abort a live upstream request', async () => {
+  let pending: EventEmitter | null = null
+  const captured = { signal: null as AbortSignal | null }
+  const fn: any = (_url: URL, options: { signal: AbortSignal }) => {
+    captured.signal = options.signal
+    const request = new EventEmitter() as any
+    request.write = () => true
+    request.end = () => { pending = request }
+    return request
+  }
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: fn,
+    upstreamTimeoutMs: 200,
+  })
+  const request = fakeRequest('/api/i/local/api/session.list', 'GET')
+  const response = fakeResponse()
+  await proxy.handleHttp(request, response)
+  ;(request as unknown as EventEmitter).emit('close')
+  assert.equal(captured.signal?.aborted, false)
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
+
+  const upstream = pending as EventEmitter | null
+  assert.ok(upstream !== null)
+  const upstreamResponse = new EventEmitter() as any
+  upstreamResponse.statusCode = 200
+  upstreamResponse.headers = { 'content-type': 'application/json' }
+  upstreamResponse.destroy = () => upstreamResponse.emit('close')
+  upstreamResponse.pause = () => {}
+  upstreamResponse.resume = () => {}
+  upstream.emit('response', upstreamResponse)
+  upstreamResponse.emit('data', Buffer.from('{"ok":true}'))
+  upstreamResponse.emit('end')
+  assert.equal(response.status, 200)
+  assert.equal(response.body, '{"ok":true}')
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
+})
+
+test('http: unfinished downstream response close aborts upstream and clears timeout', async () => {
+  const captured = { signal: null as AbortSignal | null }
+  const fn: any = (_url: URL, options: { signal: AbortSignal }) => {
+    captured.signal = options.signal
+    const request = new EventEmitter() as any
+    request.write = () => true
+    request.end = () => {}
+    return request
+  }
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: fn,
+    upstreamTimeoutMs: 30,
+  })
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), response)
+  ;(response as unknown as EventEmitter).emit('close')
+  assert.equal(captured.signal?.aborted, true)
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
+  await sleep(60)
+  assert.equal(response.status, null, 'a cleared timeout must not write after the client disconnected')
+})
+
 test('http: concurrent request budget rejects excess work before opening another upstream', async () => {
   const upstream = fakeHttpRequest(() => undefined)
   const proxy = createInstanceProxy({
@@ -650,6 +837,57 @@ test('http: a stalled client upload releases its body and request budgets with 4
   assert.equal(iteratorReturned, true)
 })
 
+test('http: request-body bytes stay reserved while upstream write is backpressured', async () => {
+  let pendingRequest: EventEmitter | null = null
+  let first = true
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => {
+      if (first) {
+        first = false
+        pendingRequest = req
+        return false
+      }
+      return true
+    }
+    req.end = () => {
+      req.emit('finish')
+      const upstreamRes = new EventEmitter() as any
+      upstreamRes.statusCode = 200
+      upstreamRes.headers = { 'content-type': 'application/json' }
+      upstreamRes.destroy = () => upstreamRes.emit('close')
+      req.emit('response', upstreamRes)
+      upstreamRes.emit('data', Buffer.from('{}'))
+      upstreamRes.emit('end')
+    }
+    return req
+  }
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: fn,
+    maxBufferedRequestBytes: 3,
+  })
+  const response = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/upload', 'POST', { 'content-length': '3' }, 'abc'), response)
+  assert.equal(response.status, null)
+  assert.equal(proxy.getDiagnostics().bufferedRequestBytes, 3)
+  assert.equal(getProcessBufferedRequestBytes(), 3, 'the reservation is shared process-wide, not only per proxy owner')
+
+  const rejected = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/upload', 'POST', { 'content-length': '1' }, 'x'), rejected)
+  assert.equal(rejected.status, 503)
+  assert.match(rejected.body, /resource_exhausted/)
+
+  const blocked = pendingRequest as EventEmitter | null
+  assert.ok(blocked !== null)
+  blocked.emit('drain')
+  assert.equal(response.status, 200)
+  assert.equal(proxy.getDiagnostics().bufferedRequestBytes, 0)
+  assert.equal(getProcessBufferedRequestBytes(), 0)
+})
+
 test('http: non-SSE timeout is idle-based and re-arms on every body chunk', async () => {
   const fn: any = () => {
     const req = new EventEmitter() as any
@@ -704,6 +942,31 @@ test('upgrade: a WebSocket handshake that never completes → explicit 504 on th
   assert.ok(socket.closed)
   assert.ok(socket.written.includes('504'), `socket got: ${socket.written}`)
   assert.ok(socket.written.includes('upstream_timeout'))
+})
+
+test('upgrade: request close does not abort the handshake; downstream socket close does', async () => {
+  const captured = { signal: null as AbortSignal | null }
+  const fn: any = (_url: URL, options: { signal: AbortSignal }) => {
+    captured.signal = options.signal
+    const request = new EventEmitter() as any
+    request.write = () => true
+    request.end = () => {}
+    return request
+  }
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: fn,
+    upstreamTimeoutMs: 200,
+  })
+  const request = fakeRequest('/api/i/local/api/events.mux')
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(request, socket, Buffer.alloc(0))
+  ;(request as unknown as EventEmitter).emit('close')
+  assert.equal(captured.signal?.aborted, false)
+  ;(socket as unknown as EventEmitter).emit('close')
+  assert.equal(captured.signal?.aborted, true)
 })
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /**
- * dsh runtime controller (design 17 §3.5/§3.6/§5) — main-process orchestration
+ * dsh runtime controller (design 18 §3.5/§3.6/§5) — main-process orchestration
  * over the M2 data plane: check (registry metadata → version list), install
  * (version-exists gate + no-op gate + single-flight → runtime installer →
  * override.pending). Reset is intentionally not executed here: main owns the
@@ -175,7 +175,7 @@ export interface ControllerOptions {
   envVersion?: string | null
   /** Presence is authoritative even when the env tree's manifest is unreadable. */
   envOverrideActive?: boolean
-  /** Unix is the design-17 mutation target; unsupported platforms remain read-only. */
+  /** Unix is the design-18 mutation target; unsupported platforms remain read-only. */
   managementSupported?: boolean
   managementUnsupportedReason?: string | null
   pnpmEntry: string

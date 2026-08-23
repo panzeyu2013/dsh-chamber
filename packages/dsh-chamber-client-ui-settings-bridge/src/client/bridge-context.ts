@@ -73,7 +73,7 @@ function buildRemoteStub(api: BridgeApiClient) {
 
 /** The rendered side of one bridged instance: the live child context and its service faces. */
 export interface BridgeSession {
-  /** The instance this session was assembled for ('local' or 'ssh-<id>'). */
+  /** The instance this session was assembled for ('local' or '<kind>-<id>'). */
   instanceId: string
   /** The independent child context (the rendering React tree must not call ctx methods outside the plugin fibers). */
   ctx: Context
@@ -184,7 +184,7 @@ async function waitForActive(fibers: readonly { state: number; await(): Promise<
  * inject service is satisfied (all services here provide synchronously, so
  * waiting for ACTIVE yields the fully-registered ledger); the bridge UI then
  * renders through `slots` version ticks.
- * @param instanceId - 'local' or 'ssh-<id>' (the /api/i/<id> prefix key).
+ * @param instanceId - 'local' or '<kind>-<id>' (the /api/i/<id> prefix key).
  */
 export async function mountBridgeSession(instanceId: string): Promise<BridgeSession> {
   const ctx = new Context()

@@ -1,5 +1,5 @@
 /**
- * dsh 运行时激活门控裁决（design 17 §3.4）——纯逻辑、无 electron、无副作用
+ * dsh 运行时激活门控裁决（design 18 §3.4）——纯逻辑、无 electron、无副作用
  * （M3）。探针列表本身（host.describe / commands.execute 冒烟 / session 只读
  * list / graph 通道 / host settings RPC / git-worktree 只读 / 数据可读性探测）
  * 由 host 侧执行并汇成 `ProbeResult[]`；本模块只做裁决，不 spawn、不 fetch、

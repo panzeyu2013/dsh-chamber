@@ -31,8 +31,10 @@
  */
 
 import {
+  chmodSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -102,6 +104,10 @@ export interface JsonStoreOptions {
   logger?: JsonStoreLogger
   initial?: JsonStoreDocument
   onLoadValidate?: (doc: JsonStoreDocument) => JsonStoreValidateResult
+  /** Optional owner policy for the main, backup and temporary documents.
+   * Applied to existing files on load and after every open, so umask or a
+   * legacy permissive mode cannot silently weaken a secret-bearing store. */
+  fileMode?: number
 }
 
 /** persist() options; backupDoc overrides the .bak content (migrations). */
@@ -174,7 +180,7 @@ export class JsonStorePersistError extends Error {
 
 /**
  * Create a JSON document store.
- * @param options - {filePath, logger, initial, onLoadValidate}.
+ * @param options - {filePath, logger, initial, onLoadValidate, fileMode}.
  *   - filePath: the main document path (<file>.bak and <file>.tmp are derived).
  *   - logger: {warn(...)} sink for persist failures.
  *   - initial: the empty document used when neither main nor .bak exists.
@@ -184,6 +190,8 @@ export class JsonStorePersistError extends Error {
  *     the migrated doc is persisted immediately with the pre-migration
  *     document as the backup. Throwing marks the document as unusable at the
  *     document level and sends the loader down the .bak recovery path.
+ *   - fileMode: optional mode enforced on main/.bak/.tmp during load and every
+ *     write; intended for owner-only stores that may contain sensitive data.
  * @returns {load(), getDoc(), getSnapshot(), mutate(), mutateIfMatch(),
  *   persist(), getStatus()}.
  */
@@ -192,6 +200,7 @@ export function createJsonStore({
   logger,
   initial = {},
   onLoadValidate,
+  fileMode,
 }: JsonStoreOptions): JsonStore {
   const backupPath = `${filePath}.bak`
   const tmpPath = `${filePath}.tmp`
@@ -218,12 +227,20 @@ export function createJsonStore({
 
   /** writeFileSync + fsync: open 'w', write, fsync, close. */
   function writeFileWithFsync(path: string, text: string): void {
-    const fd = openSync(path, 'w')
+    const fd = openSync(path, 'w', fileMode)
     try {
+      if (fileMode !== undefined) fchmodSync(fd, fileMode)
       writeSync(fd, text)
       fsyncSync(fd)
     } finally {
       closeSync(fd)
+    }
+  }
+
+  function enforceExistingFileModes(): void {
+    if (fileMode === undefined) return
+    for (const path of [filePath, backupPath, tmpPath]) {
+      if (existsSync(path)) chmodSync(path, fileMode)
     }
   }
 
@@ -352,6 +369,7 @@ export function createJsonStore({
      * a backup-loaded document is never rewritten.
      */
     load(): JsonStoreDocument {
+      enforceExistingFileModes()
       const outcome = readDocument()
       state = outcome.doc
       recoveryState = outcome.recoveryState

@@ -24,8 +24,9 @@
  * Failures are loud and explicit (04 §4.2): unknown id → 404
  * instance_not_found; no tunnel / instance not ready → 503
  * instance_unavailable; upstream connect/timeout → 502/504 upstream_failed
- * (masked, never echoing the upstream host:port); body over 300MiB / response
- * over 300MiB → 413 body_too_large (+ upstream abort).
+ * (masked, never echoing the upstream host:port); declared body over 300MiB,
+ * unknown-length body over 32MiB, or response over 300MiB → 413
+ * body_too_large (+ upstream abort).
  *
  * Response headers are converged to a whitelist (03 §3.4): content-type,
  * cache-control, x-next-cursor, x-ratelimit-*; nothing else rides through
@@ -33,168 +34,69 @@
  *
  * Diagnostics: plain counters (requests / failures / activeStreams) — no
  * sensitive data, no URLs.
+ *
+ * ## proxy-forward.ts split (design 17 §6.2, 方案 A)
+ *
+ * This module is now the thin shell: prefix parsing (`parseInstanceId` /
+ * `parseInstancePath`), target resolution (`resolveTarget`) and the
+ * request/upgrade entry points + transport registry. The actual forwarding
+ * core (header rewrite, body caps, error semantics, WS splice, heartbeat) is
+ * the shared `proxy-forward.ts` module, which `gateway-proxy.ts` reuses for
+ * its single-target full passthrough. Wire behavior is unchanged from the
+ * pre-split instance-proxy.
  */
 
-import { request as httpRequest } from 'node:http'
-import type { ClientRequest, IncomingMessage } from 'node:http'
-import type { Duplex } from 'node:stream'
+import {
+  CLIENT_BODY_IDLE_TIMEOUT_MS,
+  MAX_BUFFERED_REQUEST_BYTES,
+  MAX_CONCURRENT_HTTP_REQUESTS,
+  MAX_CONCURRENT_WS_STREAMS,
+  MAX_PENDING_WS_HANDSHAKES,
+  MAX_REQUEST_BODY_BYTES,
+  MAX_RESPONSE_BODY_BYTES,
+  RESPONSE_HEADER_WHITELIST,
+  UPSTREAM_TIMEOUT_MS,
+  WS_PING_INTERVAL_MS,
+  WS_PING_MISSES_BEFORE_TEARDOWN,
+  WS_STREAM_PATHS,
+  convergeLocation,
+  forwardHttp,
+  forwardUpgrade,
+  getProcessBufferedRequestBytes,
+  rejectUpgrade,
+  writeError,
+} from './proxy-forward.ts'
 import type { Logger } from './types.ts'
-import { startWsHeartbeat } from './ws-heartbeat.ts'
+import type {
+  HttpRequestFactory,
+  ProxyForwardCounters,
+  ProxyForwardDeps,
+  ProxyLiveStream,
+  ProxyRequest,
+  ProxyResponse,
+  ProxySocket,
+} from './proxy-forward.ts'
 
-/** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
-export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
-
-/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
-export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
-
-/** Process-wide budgets: bound memory, sockets and pending handshakes (aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
-export const MAX_BUFFERED_REQUEST_BYTES = 300 * 1024 * 1024
-export const MAX_CONCURRENT_HTTP_REQUESTS = 64
-export const MAX_CONCURRENT_WS_STREAMS = 64
-export const MAX_PENDING_WS_HANDSHAKES = 16
-
-/**
- * Upstream timeout (design 03 §3.3: "上游连接拒绝 / 超时 → 502 / 504"):
- * how long an upstream may take to answer headers, and — for non-SSE
- * responses — how long its body may idle before the proxy gives up with an
- * explicit 504 (upstream_timeout). SSE streams and upgraded WebSockets are
- * long-lived by nature: the timeout only covers reaching the response/101,
- * never the stream lifetime. A hung upstream can no longer stall the request
- * indefinitely.
- *
- * 45s, not 10s (2026-08 bug report): the chamber Git worktree host runs
- * SYNCHRONOUS git subprocesses inside the instance with a 30s mutation
- * budget (MUTATION_TIMEOUT_MS in dsh-host-git-worktree) — a mutation emits
- * no bytes while git works, so the old 10s IDLE timer cut slow operations
- * (`git worktree remove` over a node_modules-heavy directory routinely
- * exceeds 10s of silence) with an HTTP 504 AFTER the host had already
- * committed the mutation, stranding the workspace registration. The timeout
- * must stay strictly above the host's own mutation budget so the host's
- * domain result (success or git-timeout) always wins the race.
- */
-export const UPSTREAM_TIMEOUT_MS = 45_000
-
-/** Maximum silence between client request-body chunks. */
-export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
-
-/**
- * WebSocket heartbeat (design 14 extension — sleep/wake stuck-deep-diving
- * fix): ping cadence for the spliced event downlinks. The events streams are
- * downlink-only with no heartbeat from either side, so the BROWSER leg of the
- * splice can silently die (half-open TCP after an OS sleep/wake) without any
- * 'error'/'close' firing — the splice would hold forever while the browser's
- * pump stays "connected" but blind. The proxy pings the browser; after
- * `WS_PING_MISSES_BEFORE_TEARDOWN` cycles without a pong, the splice is torn
- * down so the browser's WebSocket closes and the renderer pump reconnects
- * (fresh stream → host baseline replay → UI re-sync).
- *
- * Values follow the canonical `ws` README heartbeat example (30s interval,
- * one unanswered ping cycle → terminate): the pong round-trip is loopback, so
- * a full cycle without one is a real death, not scheduler noise.
- *
- * The UPSTREAM (host) leg deliberately has no heartbeat: its death is covered
- * by SSH keepalive for remote tunnels (`ServerAliveInterval=30 × CountMax=3`
- * ≈ 90s, ssh-provider), socket 'error'/'close' for local host death/restart,
- * and the host's own send-failure close. A proxy-side upstream ping would
- * only race SSH keepalive into a reconnect flap against a half-open tunnel
- * (strict tolerance) or fire later than it (lenient tolerance — useless).
- */
-export const WS_PING_INTERVAL_MS = 30_000
-
-/** Consecutive ping cycles without a browser pong before the splice is torn down. */
-export const WS_PING_MISSES_BEFORE_TEARDOWN = 1
-
-/** Response headers converged through to the browser (03 §3.4 / 04 §4.3). */
-export const RESPONSE_HEADER_WHITELIST = new Set([
-  'content-type',
-  'cache-control',
-  'x-next-cursor',
-  'x-ratelimit-limit',
-  'x-ratelimit-remaining',
-  'x-ratelimit-reset',
-])
-
-/** WS downlink paths forwarded to the instance (03 §3.1 / 05 §3.1). */
-export const WS_STREAM_PATHS = new Set(['/api/events.mux', '/api/events.host'])
-
-/** Hop-by-hop and credential headers never forwarded upstream. */
-const STRIPPED_REQUEST_HEADERS = new Set([
-  'connection',
-  'content-length',
-  'expect',
-  'keep-alive',
-  'host',
-  'cookie',
-  'authorization',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'proxy-connection',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-  // Spoofable routing/identity headers must never reach the instance.
-  'forwarded',
-  'via',
-  'x-forwarded-for',
-  'x-forwarded-host',
-  'x-forwarded-proto',
-  'x-forwarded-port',
-  'x-real-ip',
-])
-
-/** Only headers required to complete a WebSocket 101 may cross downstream. */
-const WS_RESPONSE_HEADER_WHITELIST = new Set([
-  'upgrade',
-  'connection',
-  'sec-websocket-accept',
-  'sec-websocket-protocol',
-  'sec-websocket-extensions',
-])
-
-const STATUS_TEXT: Record<number, string> = {
-  404: 'Not Found',
-  408: 'Request Timeout',
-  413: 'Payload Too Large',
-  502: 'Bad Gateway',
-  503: 'Service Unavailable',
-  504: 'Gateway Timeout',
+// Re-export the public constants/types that historically lived here so the
+// module surface stays compatible (the test suite and future importers read
+// them from instance-proxy.ts).
+export {
+  CLIENT_BODY_IDLE_TIMEOUT_MS,
+  MAX_BUFFERED_REQUEST_BYTES,
+  MAX_CONCURRENT_HTTP_REQUESTS,
+  MAX_CONCURRENT_WS_STREAMS,
+  MAX_PENDING_WS_HANDSHAKES,
+  MAX_REQUEST_BODY_BYTES,
+  MAX_RESPONSE_BODY_BYTES,
+  RESPONSE_HEADER_WHITELIST,
+  UPSTREAM_TIMEOUT_MS,
+  WS_PING_INTERVAL_MS,
+  WS_PING_MISSES_BEFORE_TEARDOWN,
+  WS_STREAM_PATHS,
+  convergeLocation,
+  getProcessBufferedRequestBytes,
 }
-
-/** The minimal request surface the proxy reads (node:http + test doubles). */
-export interface ProxyRequest {
-  url?: string
-  method?: string
-  headers: Record<string, string | string[] | undefined>
-  on(event: string, listener: (...args: any[]) => void): unknown
-  removeListener(event: string, listener: (...args: any[]) => void): unknown
-  [Symbol.asyncIterator](): AsyncIterableIterator<Buffer>
-}
-
-/** The minimal response surface the proxy writes. */
-export interface ProxyResponse {
-  writeHead(statusCode: number, headers?: Record<string, string | number | string[] | undefined>): unknown
-  end(payload?: unknown): unknown
-  write(chunk: unknown): boolean
-  on(event: string, listener: (...args: any[]) => void): unknown
-  once(event: string, listener: (...args: any[]) => void): unknown
-  removeListener(event: string, listener: (...args: any[]) => void): unknown
-  setHeader(name: string, value: unknown): unknown
-  destroy(): unknown
-  headersSent: boolean
-  /** The per-request CORS headers set by the api layer (spread into every response). */
-  _corsHeaders?: Record<string, string>
-}
-
-/** The upgrade socket surface (net.Socket). */
-export interface ProxySocket {
-  write(data: unknown, cb?: () => void): unknown
-  end(data?: unknown): unknown
-  destroy(): unknown
-  pipe(destination: unknown): unknown
-  on(event: string, listener: (...args: any[]) => void): unknown
-  removeListener(event: string, listener: (...args: any[]) => void): unknown
-}
+export type { ProxyRequest, ProxyResponse, ProxySocket }
 
 /** A parsed /api/i/<id> path. */
 export interface InstancePath {
@@ -225,7 +127,7 @@ export interface InstanceProxyDeps {
    * probes. Internal main-process probes use the direct host port. */
   canExposeLocal?: () => boolean
   /** Injectable outbound request factory (defaults to node:http request). */
-  httpRequest?: typeof httpRequest
+  httpRequest?: HttpRequestFactory
   /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS; tests inject small values). */
   upstreamTimeoutMs?: number
   /** Client upload idle timeout in ms (tests inject small values). */
@@ -244,7 +146,7 @@ export interface InstanceProxyDeps {
 export interface InstanceProxy {
   handleHttp(req: ProxyRequest, res: ProxyResponse): Promise<void>
   handleUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer): Promise<void>
-  registerTransport(connectionId: string, baseUrl: string): void
+  registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>): void
   unregisterTransport(connectionId: string): void
   getDiagnostics(): InstanceProxyDiagnostics
   /** Force-close every spliced WS stream (control-plane stop): an upgraded
@@ -253,10 +155,12 @@ export interface InstanceProxy {
   closeAllStreams(): void
 }
 
-/** Whether an id is a valid /api/i/<id> segment ('local' or 'ssh-<id>'). */
-export function parseInstanceId(id: string): 'local' | 'ssh' | null {
+/** Whether an id is a valid /api/i/<id> segment ('local', 'ssh-<id>' or
+ * 'gateway-<id>'; design 17 §6.4 adds the gateway kind). */
+export function parseInstanceId(id: string): 'local' | 'ssh' | 'gateway' | null {
   if (id === 'local') return 'local'
   if (/^ssh-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'ssh'
+  if (/^gateway-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'gateway'
   return null
 }
 
@@ -276,69 +180,6 @@ export function parseInstancePath(raw: string): InstancePath | null {
 }
 
 /**
- * Read the request body up to `cap` bytes; rejects with {code:
- * 'body_too_large'} when the cap is exceeded (design 03 §3.4 — explicit
- * 413, never a silent truncation).
- */
-export async function readBody(req: ProxyRequest, cap: number, idleTimeoutMs = CLIENT_BODY_IDLE_TIMEOUT_MS): Promise<Buffer> {
-  const chunks: Buffer[] = []
-  let size = 0
-  const iterator = req[Symbol.asyncIterator]()
-  while (true) {
-    let timeout: ReturnType<typeof setTimeout> | null = null
-    const next = iterator.next()
-    let result: IteratorResult<Buffer>
-    try {
-      result = await Promise.race([
-        next,
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => {
-            const error: Error & { code?: string } = new Error(`request body idle for ${idleTimeoutMs}ms`)
-            error.code = 'request_timeout'
-            reject(error)
-          }, idleTimeoutMs)
-        }),
-      ])
-    } catch (error) {
-      // Cancel the underlying IncomingMessage iterator as well as our wait;
-      // otherwise a slow client may keep the socket/request parser alive
-      // after the proxy already returned 408.
-      void iterator.return?.()
-      throw error
-    } finally {
-      if (timeout !== null) clearTimeout(timeout)
-    }
-    if (result.done) break
-    const chunk = result.value
-    size += chunk.length
-    if (size > cap) {
-      const error: Error & { code?: string } = new Error(`request body exceeds ${cap} bytes`)
-      error.code = 'body_too_large'
-      void iterator.return?.()
-      throw error
-    }
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-  }
-  return Buffer.concat(chunks)
-}
-
-/** Wait for the response socket to drain (write-path backpressure). */
-function waitForDrain(res: ProxyResponse): Promise<void> {
-  return new Promise(resolve => res.once('drain', () => resolve()))
-}
-
-/** A request body with a byte budget, for capped forwarding. */
-function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void; size: number } {
-  const size = chunks.reduce((total, chunk) => total + chunk.length, 0)
-  return {
-    size,
-    send(upstream) {
-      for (const chunk of chunks) upstream.write(chunk)
-    },
-  }
-}
-
-/**
  * Create the instance proxy.
  * @param deps - {logger, getLocalState, getLocalDshPort}.
  *   - getLocalState/getLocalDshPort: the managed local instance facts; a
@@ -348,7 +189,6 @@ function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void
  */
 export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const { logger, getLocalState, getLocalDshPort } = deps
-  const request = deps.httpRequest ?? httpRequest
   const upstreamTimeoutMs = deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS
   const clientBodyIdleTimeoutMs = deps.clientBodyIdleTimeoutMs ?? CLIENT_BODY_IDLE_TIMEOUT_MS
   const wsPingIntervalMs = deps.wsPingIntervalMs ?? WS_PING_INTERVAL_MS
@@ -357,24 +197,90 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const maxConcurrentWsStreams = deps.maxConcurrentWsStreams ?? MAX_CONCURRENT_WS_STREAMS
   const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
-  /** connectionId ('ssh:<id>') → tunnel baseUrl (desktop main-process
-   * registration, design 05 §3.3). Local is never registered — its baseUrl
-   * is derived from the managed dshPort. */
-  const transports = new Map<string, string>()
-  const counters = { requests: 0, failures: 0, activeStreams: 0 }
+  /** connectionId ('ssh:<id>' / 'gateway:<id>') → target record (design 05
+   * §3.3 + design 17 §6.4). Local is never registered — its baseUrl is
+   * derived from the managed dshPort. A gateway record carries extra headers
+   * (the shared bearer token) injected at forward time, never in the registry. */
+  interface TransportRecord { baseUrl: string; headers?: Record<string, string> }
+  const transports = new Map<string, TransportRecord>()
+  const counters: ProxyForwardCounters = { requests: 0, failures: 0, activeStreams: 0, bufferedRequestBytes: 0 }
   let activeHttpRequests = 0
   let pendingUpgrades = 0
-  let bufferedRequestBytes = 0
   /** Live spliced WS streams (downstream browser leg + upstream host leg),
    * tracked so control-plane stop() can force-close them: an upgraded socket
    * is removed from the HTTP server's connection tracking, so a lingering
    * half-open downlink (crashed host mid-reconnect) would otherwise hang
    * server.close() forever. */
-  const liveStreams = new Set<{ downstream: ProxySocket; upstream: Duplex }>()
+  const liveStreams = new Set<ProxyLiveStream>()
+  /** In-flight HTTP/SSE and WS handshakes keyed by transport. Revocation must
+   * terminate traffic already authenticated with the old transport/token;
+   * deleting only the routing-table row would leave those channels alive. */
+  const liveHttpByTransport = new Map<string, Set<ProxyResponse>>()
+  const liveUpgradeByTransport = new Map<string, Set<ProxySocket>>()
+
+  function connectionIdForInstance(id: string): string | null {
+    if (id === 'local') return null
+    const separator = id.indexOf('-')
+    return `${id.slice(0, separator)}:${id.slice(separator + 1)}`
+  }
+
+  function trackHttp(connectionId: string, res: ProxyResponse): void {
+    const responses = liveHttpByTransport.get(connectionId) ?? new Set<ProxyResponse>()
+    responses.add(res)
+    liveHttpByTransport.set(connectionId, responses)
+    const release = () => {
+      responses.delete(res)
+      if (responses.size === 0) liveHttpByTransport.delete(connectionId)
+    }
+    res.once('finish', release)
+    res.once('close', release)
+    res.once('error', release)
+  }
+
+  function trackUpgrade(connectionId: string, socket: ProxySocket): void {
+    const sockets = liveUpgradeByTransport.get(connectionId) ?? new Set<ProxySocket>()
+    sockets.add(socket)
+    liveUpgradeByTransport.set(connectionId, sockets)
+    socket.on('close', () => {
+      sockets.delete(socket)
+      if (sockets.size === 0) liveUpgradeByTransport.delete(connectionId)
+    })
+  }
+
+  function revokeTransportTraffic(connectionId: string): void {
+    const responses = liveHttpByTransport.get(connectionId)
+    liveHttpByTransport.delete(connectionId)
+    for (const res of responses ?? []) {
+      try { res.destroy() } catch { /* already closed */ }
+    }
+    const sockets = liveUpgradeByTransport.get(connectionId)
+    liveUpgradeByTransport.delete(connectionId)
+    for (const socket of sockets ?? []) {
+      try { socket.destroy() } catch { /* already closed */ }
+    }
+    for (const stream of [...liveStreams]) {
+      if (stream.ownerId !== connectionId) continue
+      try { stream.downstream.destroy() } catch { /* already closed */ }
+      try { stream.upstream.destroy() } catch { /* already closed */ }
+    }
+  }
+
+  /** The shared forwarding-core config; only the log label differs per
+   * request (the /api/i/<id> id), so the per-call deps spread it in. */
+  const forwardDeps: Omit<ProxyForwardDeps, 'id'> = {
+    logPrefix: 'instance-proxy',
+    httpRequest: deps.httpRequest,
+    upstreamTimeoutMs,
+    clientBodyIdleTimeoutMs,
+    wsPingIntervalMs,
+    wsPingMissesBeforeTeardown,
+    maxBufferedRequestBytes,
+    liveStreams,
+  }
 
   /** Resolve the forward target; returns null + writes the error response
    * when the instance is unknown/unavailable (loud, never silent). */
-  function resolveTarget(id: string, res: ProxyResponse | null): { baseUrl: string } | null {
+  function resolveTarget(id: string, res: ProxyResponse | null): TransportRecord | null {
     if (id === 'local') {
       if ((deps.canExposeLocal?.() ?? true)
         && getLocalState() === 'ready'
@@ -382,381 +288,20 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         && (getLocalDshPort() ?? 0) > 0) {
         return { baseUrl: `http://127.0.0.1:${getLocalDshPort()}` }
       }
-      if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local instance is not ready')
+      if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local instance is not ready', logger)
       return null
     }
-    const connectionId = `ssh:${id.slice('ssh-'.length)}`
-    const baseUrl = transports.get(connectionId)
-    if (typeof baseUrl === 'string' && baseUrl !== '') {
-      return { baseUrl }
+    // ssh-<id> → ssh:<id>; gateway-<id> → gateway:<id>.
+    const kind = id.slice(0, id.indexOf('-'))
+    const connectionId = `${kind}:${id.slice(kind.length + 1)}`
+    const record = transports.get(connectionId)
+    if (record !== undefined && record.baseUrl !== '') {
+      return record
     }
     // An unregistered transport is an instance without a live tunnel —
     // explicit 503, never a silent empty success (AGENTS.md proxy honesty).
-    if (res !== null) writeError(res, 503, 'instance_unavailable', 'no tunnel is available for this instance')
+    if (res !== null) writeError(res, 503, 'instance_unavailable', 'no transport is available for this instance', logger)
     return null
-  }
-
-  /** Write a JSON error in the unified shape ({error, code}). */
-  function writeError(res: ProxyResponse, status: number, code: string, message: string): void {
-    const body = JSON.stringify({ error: message, code })
-    try {
-      res.writeHead(status, {
-        'content-type': 'application/json',
-        'cache-control': 'no-store',
-        connection: 'close',
-        ...(res._corsHeaders ?? {}),
-      })
-      res.end(body)
-    } catch (writeError) {
-      logger.warn(`instance-proxy: failed to write error ${status}: ${String(writeError)}`)
-    }
-  }
-
-  /** Write a JSON error on an upgrade socket (rejections are explicit). */
-  function rejectUpgrade(socket: ProxySocket, status: number, code: string, message: string): void {
-    const body = JSON.stringify({ error: message, code })
-    const head = `HTTP/1.1 ${status} ${STATUS_TEXT[status] ?? 'Error'}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nCache-Control: no-store\r\n\r\n`
-    try {
-      // The client may have already gone (app exit, page reload): an 'error'
-      // on this socket must be consumed, never an uncaught exception.
-      socket.on('error', () => {})
-      socket.write(head + body)
-      socket.end()
-    } catch (writeError) {
-      logger.warn(`instance-proxy: failed to write upgrade rejection ${status}: ${String(writeError)}`)
-    }
-  }
-
-  /**
-   * One-shot upstream silence guard (design 03 §3.3): fires the callback when
-   * the upstream produced no socket activity for upstreamTimeoutMs. Covers
-   * "headers never arrive" and (re-armed after headers) "body idles" for
-   * non-SSE responses; SSE/WebSocket streams never re-arm it, so their
-   * lifetime is unbounded. The returned clear is idempotent and must be
-   * called on response/error/end.
-   */
-  function armUpstreamTimeout(parsed: InstancePath, onTimeout: () => void): () => void {
-    let handle: ReturnType<typeof setTimeout> | null = null
-    let fired = false
-    handle = setTimeout(() => {
-      if (fired) return
-      fired = true
-      counters.failures += 1
-      logger.log(`instance-proxy: upstream ${parsed.id} request timed out (${upstreamTimeoutMs}ms)`)
-      onTimeout()
-    }, upstreamTimeoutMs)
-    return () => {
-      if (handle !== null) {
-        clearTimeout(handle)
-        handle = null
-      }
-    }
-  }
-
-  /** Forward an HTTP request: prefix-stripped path, method/body/query kept. */
-  async function forwardHttp(req: ProxyRequest, res: ProxyResponse, parsed: InstancePath, baseUrl: string, releaseRequest: () => void): Promise<void> {
-    const target = new URL(`${baseUrl}${parsed.rest}${parsed.search}`)
-    const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
-    const hasBody = !(method === 'GET' || method === 'HEAD')
-    let body: Buffer | null = null
-    if (hasBody) {
-      const rawLength = Array.isArray(req.headers['content-length']) ? req.headers['content-length'][0] : req.headers['content-length']
-      const declared = rawLength === undefined ? NaN : Number(rawLength)
-      if (Number.isFinite(declared) && declared > MAX_REQUEST_BODY_BYTES) {
-        counters.failures += 1
-        releaseRequest()
-        writeError(res, 413, 'body_too_large', 'request body exceeds the 300MiB cap')
-        return
-      }
-      // Unknown/chunked bodies reserve the full per-request cap. A valid
-      // Content-Length reserves its exact byte count; Node's parser enforces
-      // that framing, so a caller cannot smuggle additional body bytes.
-      const reservation = Number.isFinite(declared) && declared >= 0 ? declared : MAX_REQUEST_BODY_BYTES
-      if (bufferedRequestBytes + reservation > maxBufferedRequestBytes) {
-        counters.failures += 1
-        releaseRequest()
-        writeError(res, 503, 'resource_exhausted', 'proxy request-body budget is exhausted')
-        return
-      }
-      bufferedRequestBytes += reservation
-      try {
-        body = await readBody(req, MAX_REQUEST_BODY_BYTES, clientBodyIdleTimeoutMs)
-      } catch (bodyError) {
-        bufferedRequestBytes = Math.max(0, bufferedRequestBytes - reservation)
-        counters.failures += 1
-        releaseRequest()
-        const code = (bodyError as Error & { code?: string }).code
-        if (code === 'request_timeout') {
-          writeError(res, 408, 'request_timeout', 'request body upload timed out')
-        } else {
-          writeError(res, 413, 'body_too_large', 'request body exceeds the 300MiB cap')
-        }
-        return
-      }
-      bufferedRequestBytes = Math.max(0, bufferedRequestBytes - reservation)
-    }
-    const headers: Record<string, string> = { host: target.host }
-    for (const [name, value] of Object.entries(req.headers)) {
-      const lower = name.toLowerCase()
-      if (STRIPPED_REQUEST_HEADERS.has(lower)) continue
-      if (value === undefined) continue
-      // Same-origin proxy honesty (design 03 §3.1): the browser's page origin
-      // is the CONTROL PLANE (127.0.0.1:17500), but the instance's browser
-      // trust fence (dsh-client-connection node half) requires any attached
-      // Origin to equal the request's Host authority — it compares
-      // `new URL(origin).host === host` regardless of --trusted-host. Rewrite
-      // the origin to the upstream's own authority so the fence sees exactly
-      // the same-origin shape it accepts in the official deployment (page and
-      // api on one host). Requests without an origin header are untouched.
-      if (lower === 'origin') {
-        headers[name] = `http://${target.host}`
-        continue
-      }
-      headers[name] = Array.isArray(value) ? value.join(', ') : value
-    }
-    // Forward the bytes we actually accepted, never an untrusted client
-    // declaration. This also normalizes chunked uploads into a bounded body.
-    if (body !== null) headers['content-length'] = String(body.length)
-    const controller = new AbortController()
-    const onClientClose = () => {
-      controller.abort()
-      releaseRequest()
-    }
-    req.on('close', onClientClose)
-    const timeoutAbort = (): void => {
-      controller.abort()
-      releaseRequest()
-      if (!res.headersSent) writeError(res, 504, 'upstream_timeout', 'upstream request timed out')
-      else res.destroy()
-    }
-    // Headers must arrive within upstreamTimeoutMs; a non-SSE body must not
-    // idle longer than that either (re-armed after headers arrive). SSE and
-    // upgraded WebSockets never re-arm — long-lived by nature.
-    let clearUpstreamTimeout = armUpstreamTimeout(parsed, timeoutAbort)
-    const clearTimeoutGuards = (): void => {
-      clearUpstreamTimeout()
-      clearUpstreamTimeout = () => {}
-    }
-    const source = body === null ? null : bodySource([body])
-    const upstream = request(target, {
-      method,
-      headers,
-      signal: controller.signal,
-    })
-    upstream.on('error', upstreamError => {
-      clearTimeoutGuards()
-      const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
-      releaseRequest()
-      if (abort) return
-      counters.failures += 1
-      logger.log(`instance-proxy: upstream ${parsed.id} request failed: ${String(upstreamError)}`)
-      if (!res.headersSent) {
-        writeError(res, 502, 'upstream_failed', 'upstream request failed')
-      } else {
-        res.destroy()
-      }
-    })
-    upstream.on('response', upstreamRes => {
-      clearTimeoutGuards()
-      const contentType = String(upstreamRes.headers['content-type'] ?? '')
-      const isSse = contentType.startsWith('text/event-stream')
-      const declaredLength = upstreamRes.headers['content-length']
-      const declaredBytes = typeof declaredLength === 'string' ? Number(declaredLength) : NaN
-      if (!isSse && Number.isFinite(declaredBytes) && declaredBytes > MAX_RESPONSE_BODY_BYTES) {
-        upstreamRes.destroy()
-        releaseRequest()
-        counters.failures += 1
-        writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap')
-        return
-      }
-      const headers: Record<string, string | string[]> = {}
-      for (const [name, value] of Object.entries(upstreamRes.headers)) {
-        const lower = name.toLowerCase()
-        if (!RESPONSE_HEADER_WHITELIST.has(lower)) continue
-        headers[name] = value as string | string[]
-      }
-      if (!isSse && Number.isFinite(declaredBytes)) headers['content-length'] = String(declaredBytes)
-      res.writeHead(upstreamRes.statusCode ?? 502, { ...headers, ...(res._corsHeaders ?? {}) })
-      // Headers are out: a stalled non-SSE body gets the same explicit
-      // teardown (headersSent=true → destroy, the browser sees the stream cut).
-      if (!isSse) clearUpstreamTimeout = armUpstreamTimeout(parsed, timeoutAbort)
-      let received = 0
-      upstreamRes.on('data', (chunk: Buffer) => {
-        // This is an IDLE timeout, not a total-duration deadline. Every body
-        // chunk proves progress and starts a fresh idle window.
-        if (!isSse) {
-          clearUpstreamTimeout()
-          clearUpstreamTimeout = armUpstreamTimeout(parsed, timeoutAbort)
-        }
-        received += chunk.length
-        if (!isSse && received > MAX_RESPONSE_BODY_BYTES) {
-          // Explicit overflow: abort the upstream stream, never a silent
-          // truncation (design 03 §3.4).
-          upstreamRes.destroy()
-          controller.abort()
-          releaseRequest()
-          counters.failures += 1
-          if (!res.headersSent) writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap')
-          else res.destroy()
-          return
-        }
-        if (!res.write(chunk)) {
-          upstreamRes.pause()
-          void waitForDrain(res).then(() => upstreamRes.resume())
-        }
-      })
-      upstreamRes.on('error', () => {
-        clearTimeoutGuards()
-        releaseRequest()
-        counters.failures += 1
-        res.destroy()
-      })
-      // A client that closed its connection mid-stream (app exit) turns
-      // res.write into writeAfterFIN — the resulting EPIPE 'error' must be
-      // consumed, and the upstream aborted instead of kept streaming into
-      // a dead response (same teardown family as the upgrade splice).
-      res.on('error', () => {
-        controller.abort()
-        releaseRequest()
-      })
-      upstreamRes.on('end', () => {
-        clearTimeoutGuards()
-        releaseRequest()
-        req.removeListener('close', onClientClose)
-        res.end()
-      })
-    })
-    source?.send(upstream)
-    upstream.end()
-  }
-
-  /** Forward a WS upgrade to the instance (events.mux / events.host). */
-  async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer, parsed: InstancePath, baseUrl: string, releaseHandshake: () => void): Promise<void> {
-    // The upstream request stays on http(s) — node's http.request performs
-    // the upgrade handshake internally (it never accepts a ws: URL).
-    const wsTarget = new URL(`${baseUrl}${parsed.rest}${parsed.search}`)
-    const headers: Record<string, string> = { host: new URL(baseUrl).host }
-    const take = new Set(['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions'])
-    for (const [name, value] of Object.entries(req.headers)) {
-      if (!take.has(name.toLowerCase())) continue
-      if (value === undefined) continue
-      headers[name] = Array.isArray(value) ? value.join(', ') : value
-    }
-    const controller = new AbortController()
-    const onClientClose = () => {
-      controller.abort()
-      releaseHandshake()
-    }
-    req.on('close', onClientClose)
-    // The upgrade handshake must complete within upstreamTimeoutMs; once the
-    // upstream answers 101 the socket is spliced and the timeout is cleared
-    // (a live WebSocket is long-lived by nature).
-    const clearUpgradeTimeout = armUpstreamTimeout(parsed, () => {
-      controller.abort()
-      releaseHandshake()
-      rejectUpgrade(socket, 504, 'upstream_timeout', 'upstream WebSocket upgrade timed out')
-    })
-    const upstream = request(wsTarget, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-    })
-    upstream.on('error', upstreamError => {
-      clearUpgradeTimeout()
-      releaseHandshake()
-      const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
-      if (abort) return
-      counters.failures += 1
-      logger.log(`instance-proxy: upstream ${parsed.id} upgrade failed: ${String(upstreamError)}`)
-      rejectUpgrade(socket, 503, 'instance_unavailable', 'upstream WebSocket unavailable')
-    })
-    // A non-101 upstream reply (the instance 404s an unknown WS path, its
-    // connection plugin is not mounted, an old dsh version, …): the upgrade
-    // request must never be left with an unread, unlistened stream — a late
-    // RST on that connection is an unhandled socket 'error' (uncaught
-    // ECONNRESET in the main process). Drain-and-destroy the reply and
-    // reject the client upgrade explicitly instead.
-    upstream.on('response', (upstreamRes: IncomingMessage) => {
-      clearUpgradeTimeout()
-      releaseHandshake()
-      counters.failures += 1
-      logger.log(`instance-proxy: upstream ${parsed.id} upgrade answered non-101 (${upstreamRes.statusCode ?? '?'}); rejecting`)
-      upstreamRes.on('error', () => {})
-      upstreamRes.destroy()
-      req.removeListener('close', onClientClose)
-      rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket answered non-101')
-    })
-    upstream.on('upgrade', (upstreamRes: IncomingMessage, upstreamSocket: Duplex, upstreamHead: Buffer) => {
-      clearUpgradeTimeout()
-      releaseHandshake()
-      req.removeListener('close', onClientClose)
-      counters.activeStreams += 1
-      const stream = { downstream: socket, upstream: upstreamSocket }
-      liveStreams.add(stream)
-      let tornDown = false
-      // chamber patch (design 14 extension): the spliced downlinks are
-      // downlink-only WebSockets with no heartbeat from either side — a
-      // silently dead (half-open) BROWSER leg after an OS sleep/wake fires no
-      // 'error'/'close', so without this the splice would hold forever while
-      // the browser's pump stays blind (stuck "Deep diving..." UI, backend
-      // still processing). The heartbeat pings the browser; missed pongs tear
-      // the splice down so the browser's WebSocket closes and the renderer
-      // pump reconnects. Declared before tearDown (which stops it); started
-      // once the splice is wired.
-      let heartbeat: { stop(): void } | null = null
-      const tearDown = () => {
-        if (tornDown) return
-        tornDown = true
-        counters.activeStreams = Math.max(0, counters.activeStreams - 1)
-        liveStreams.delete(stream)
-        heartbeat?.stop()
-        try {
-          upstreamSocket.destroy()
-        } catch { /* already gone */ }
-        try {
-          socket.destroy()
-        } catch { /* already gone */ }
-      }
-      // Error/close listeners on BOTH ends, attached before any write: on
-      // app exit the browser and the dsh host are torn down at once, so one
-      // pipe can push into a socket that already received the peer's FIN —
-      // node flips write to writeAfterFIN, which destroys with an EPIPE
-      // "ended by the other party" 'error'. Without a listener on that end
-      // the error becomes an uncaught exception. Either end failing or
-      // closing tears both down exactly once.
-      socket.on('error', tearDown)
-      upstreamSocket.on('error', tearDown)
-      socket.on('close', tearDown)
-      upstreamSocket.on('close', tearDown)
-      const wireHeaders: string[] = [`HTTP/1.1 ${upstreamRes.statusCode ?? 101} Switching Protocols`]
-      for (const [name, value] of Object.entries(upstreamRes.headers)) {
-        if (!WS_RESPONSE_HEADER_WHITELIST.has(name.toLowerCase())) continue
-        if (value === undefined) continue
-        const values = Array.isArray(value) ? value : [value]
-        for (const entry of values) wireHeaders.push(`${name}: ${entry}`)
-      }
-      socket.write(wireHeaders.join('\r\n') + '\r\n\r\n')
-      if (upstreamHead.length > 0) socket.write(upstreamHead)
-      // Client head bytes (pre-sent frame data, RFC 6455 pipelining) flow to
-      // the upstream socket only after the upstream accepted the upgrade.
-      if (head.length > 0) upstreamSocket.write(head)
-      // Socket splice: downstream ↔ upstream; either closing tears both.
-      upstreamSocket.pipe(socket as never)
-      socket.pipe(upstreamSocket as never)
-      // Start the liveness heartbeat after the splice is wired (design 14
-      // extension; see the tearDown note above). Downstream-only: the
-      // upstream leg's liveness belongs to SSH keepalive / socket events.
-      heartbeat = startWsHeartbeat({
-        downstream: socket,
-        intervalMs: wsPingIntervalMs,
-        missesBeforeTeardown: wsPingMissesBeforeTeardown,
-        onDead: () => {
-          logger.log(`instance-proxy: WebSocket stream ${parsed.id} heartbeat lost (no browser pong for ${wsPingMissesBeforeTeardown} cycle(s)); tearing down`)
-          tearDown()
-        },
-      })
-    })
-    upstream.end()
   }
 
   return {
@@ -772,13 +317,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         parsed = null
       }
       if (parsed === null) {
-        writeError(res, 404, 'instance_not_found', 'unknown instance path')
+        writeError(res, 404, 'instance_not_found', 'unknown instance path', logger)
         return
       }
       counters.requests += 1
       if (activeHttpRequests >= maxConcurrentHttpRequests) {
         counters.failures += 1
-        writeError(res, 503, 'resource_exhausted', 'too many concurrent proxy requests')
+        writeError(res, 503, 'resource_exhausted', 'too many concurrent proxy requests', logger)
         return
       }
       const target = resolveTarget(parsed.id, res)
@@ -787,6 +332,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       activeHttpRequests += 1
+      const connectionId = connectionIdForInstance(parsed.id)
+      if (connectionId !== null) trackHttp(connectionId, res)
       let released = false
       const releaseRequest = () => {
         if (released) return
@@ -794,12 +341,18 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         activeHttpRequests = Math.max(0, activeHttpRequests - 1)
       }
       try {
-        await forwardHttp(req, res, parsed, target.baseUrl, releaseRequest)
+        const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
+        await forwardHttp(req, res, forwardTarget, releaseRequest, logger, counters, {
+          ...forwardDeps,
+          id: parsed.id,
+          responseBasePath: `/api/i/${parsed.id}`,
+          ...(connectionId === null ? {} : { streamOwner: connectionId }),
+        }, target.headers)
       } catch (error) {
         releaseRequest()
         counters.failures += 1
         logger.warn(`instance-proxy: request setup failed: ${String(error)}`)
-        if (!res.headersSent) writeError(res, 502, 'upstream_failed', 'upstream request failed')
+        if (!res.headersSent) writeError(res, 502, 'upstream_failed', 'upstream request failed', logger)
         else res.destroy()
       }
     },
@@ -818,26 +371,28 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         parsed = null
       }
       if (parsed === null) {
-        rejectUpgrade(socket, 404, 'instance_not_found', 'unknown instance path')
+        rejectUpgrade(socket, 404, 'instance_not_found', 'unknown instance path', logger)
         return
       }
       if (!WS_STREAM_PATHS.has(parsed.rest)) {
-        rejectUpgrade(socket, 404, 'instance_not_found', 'unknown WebSocket path')
+        rejectUpgrade(socket, 404, 'instance_not_found', 'unknown WebSocket path', logger)
         return
       }
       counters.requests += 1
       if (counters.activeStreams >= maxConcurrentWsStreams || pendingUpgrades >= maxPendingWsHandshakes) {
         counters.failures += 1
-        rejectUpgrade(socket, 503, 'resource_exhausted', 'too many active proxy streams')
+        rejectUpgrade(socket, 503, 'resource_exhausted', 'too many active proxy streams', logger)
         return
       }
       const target = resolveTarget(parsed.id, null)
       if (target === null) {
         counters.failures += 1
-        rejectUpgrade(socket, 503, 'instance_unavailable', 'no tunnel is available for this instance')
+        rejectUpgrade(socket, 503, 'instance_unavailable', 'no tunnel is available for this instance', logger)
         return
       }
       pendingUpgrades += 1
+      const connectionId = connectionIdForInstance(parsed.id)
+      if (connectionId !== null) trackUpgrade(connectionId, socket)
       let released = false
       const releaseHandshake = () => {
         if (released) return
@@ -845,12 +400,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         pendingUpgrades = Math.max(0, pendingUpgrades - 1)
       }
       try {
-        await forwardUpgrade(req, socket, head, parsed, target.baseUrl, releaseHandshake)
+        const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
+        await forwardUpgrade(req, socket, head, forwardTarget, releaseHandshake, logger, counters, {
+          ...forwardDeps,
+          id: parsed.id,
+          ...(connectionId === null ? {} : { streamOwner: connectionId }),
+        }, target.headers)
       } catch (error) {
         releaseHandshake()
         counters.failures += 1
         logger.warn(`instance-proxy: upgrade setup failed: ${String(error)}`)
-        rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket setup failed')
+        rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket setup failed', logger)
       }
     },
 
@@ -860,9 +420,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
      * baseUrl `http://127.0.0.1:<tunnel localPort>`. Re-registration
      * replaces the previous baseUrl (tunnel re-established on a new port).
      */
-    registerTransport(connectionId: string, baseUrl: string) {
+    registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>) {
       if (typeof connectionId !== 'string' || connectionId === '' || typeof baseUrl !== 'string' || baseUrl === '') {
         throw new TypeError('registerInstanceTransport: connectionId and baseUrl must be non-empty strings')
+      }
+      if (!/^(ssh|gateway):[a-zA-Z0-9_-]{1,64}$/.test(connectionId)) {
+        throw new TypeError('registerInstanceTransport: connectionId must be "ssh:<id>" or "gateway:<id>"')
       }
       let target: URL
       try {
@@ -870,21 +433,54 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       } catch (urlError) {
         throw new TypeError(`registerInstanceTransport: invalid baseUrl: ${String(urlError)}`)
       }
+      const isGateway = connectionId.startsWith('gateway:')
       if (target.protocol !== 'http:' && target.protocol !== 'https:') {
         throw new TypeError('registerInstanceTransport: baseUrl must be an http(s) URL')
       }
-      if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)
-        || target.username !== '' || target.password !== '' || target.pathname !== '/'
-        || target.search !== '' || target.hash !== '') {
-        throw new TypeError('registerInstanceTransport: baseUrl must be a loopback origin')
+      if (!isGateway) {
+        // ssh tunnel: loopback origin only (design 05 §3.3) — one combined
+        // check keeps the historical message (the test asserts /loopback/).
+        if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)
+          || target.username !== '' || target.password !== '' || target.pathname !== '/'
+          || target.search !== '' || target.hash !== '') {
+          throw new TypeError('registerInstanceTransport: ssh baseUrl must be a loopback origin')
+        }
+        if (extraHeaders !== undefined) {
+          throw new TypeError('registerInstanceTransport: ssh transports cannot inject request headers')
+        }
+      } else {
+        // gateway: https origin, non-loopback allowed (design 17 §6.4).
+        if (target.protocol !== 'https:') {
+          throw new TypeError('registerInstanceTransport: gateway baseUrl must be https')
+        }
+        if (target.username !== '' || target.password !== '' || target.pathname !== '/'
+          || target.search !== '' || target.hash !== '') {
+          throw new TypeError('registerInstanceTransport: gateway baseUrl must be an origin (no credentials/path/query)')
+        }
+        const entries = extraHeaders === undefined ? [] : Object.entries(extraHeaders)
+        if (entries.length !== 1 || entries[0][0].toLowerCase() !== 'authorization') {
+          throw new TypeError('registerInstanceTransport: gateway transport requires exactly one Authorization header')
+        }
+        const credential = entries[0][1]
+        if (typeof credential !== 'string' || !credential.startsWith('Bearer ')
+          || credential.length <= 'Bearer '.length || credential.length > 'Bearer '.length + 4096
+          || /[\r\n\0]/.test(credential)) {
+          throw new TypeError('registerInstanceTransport: gateway Authorization must be a bounded Bearer credential')
+        }
+        extraHeaders = { authorization: credential }
       }
-      transports.set(connectionId, baseUrl)
+      // Clone the only sanctioned header so caller mutation cannot alter a
+      // live transport after validation.
+      if (transports.has(connectionId)) revokeTransportTraffic(connectionId)
+      transports.set(connectionId, { baseUrl, ...(extraHeaders !== undefined ? { headers: { ...extraHeaders } } : {}) })
       logger.log(`instance-proxy: transport registered ${connectionId} -> ${target.host}`)
     },
 
     /** Unregister a remote instance transport (tunnel torn down). */
     unregisterTransport(connectionId: string) {
-      if (transports.delete(connectionId)) {
+      const removed = transports.delete(connectionId)
+      revokeTransportTraffic(connectionId)
+      if (removed) {
         logger.log(`instance-proxy: transport unregistered ${connectionId}`)
       }
     },
@@ -897,7 +493,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         activeStreams: counters.activeStreams,
         activeHttpRequests,
         pendingUpgrades,
-        bufferedRequestBytes,
+        bufferedRequestBytes: counters.bufferedRequestBytes,
         transports: transports.size,
       }
     },

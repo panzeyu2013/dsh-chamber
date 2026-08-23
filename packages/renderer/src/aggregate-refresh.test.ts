@@ -1,6 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isSnapshotStale, planAggregateRefreshes } from './aggregate-refresh.ts'
+import {
+  instanceBasePath,
+  isChamberSourceId,
+  rawInstanceIdFromSourceId,
+  sourceIdForInstance,
+  sourceIdForRawInstance,
+} from './transport-source.ts'
 
 test('a stable ready source with a complete producer needs no unary refresh', () => {
   const plan = planAggregateRefreshes(['local'], new Set(['local']), { local: true })
@@ -44,4 +51,39 @@ test('isSnapshotStale: a recent push is fresh even when the producer is quiet', 
 
 test('isSnapshotStale: silence past the threshold is stale (push channel presumed dead)', () => {
   assert.equal(isSnapshotStale(1_000, 31_001, 30_000), true)
+})
+
+test('transport source ids preserve the registry kind across N-ctx and proxy routing', () => {
+  const instances = [
+    { id: 'ssh-east', kind: 'ssh' as const },
+    { id: 'edge-west', kind: 'gateway' as const },
+  ]
+  assert.equal(sourceIdForInstance(instances[0]), 'ssh-ssh-east')
+  assert.equal(sourceIdForInstance(instances[1]), 'gateway-edge-west')
+  assert.equal(sourceIdForRawInstance('edge-west', instances), 'gateway-edge-west')
+  assert.equal(sourceIdForRawInstance('local', instances), 'local')
+  assert.equal(sourceIdForRawInstance('missing', instances), null)
+  assert.equal(rawInstanceIdFromSourceId('ssh-ssh-east'), 'ssh-east')
+  assert.equal(rawInstanceIdFromSourceId('gateway-edge-west'), 'edge-west')
+  assert.equal(rawInstanceIdFromSourceId('local'), null)
+  assert.equal(instanceBasePath('gateway-edge-west'), '/api/i/gateway-edge-west')
+})
+
+test('chamber source-id validation accepts gateway but rejects unknown/malformed prefixes', () => {
+  for (const sourceId of [undefined, 'local', 'ssh-east', 'gateway-west']) {
+    assert.equal(isChamberSourceId(sourceId), true, String(sourceId))
+  }
+  for (const sourceId of ['', 'ssh-', 'gateway-', 'gateway-../east', 'http-east', '../gateway-east']) {
+    assert.equal(isChamberSourceId(sourceId), false, sourceId)
+    assert.throws(() => instanceBasePath(sourceId), /invalid chamber source id/)
+  }
+  assert.throws(() => instanceBasePath(undefined as never), /invalid chamber source id/)
+  assert.throws(
+    () => sourceIdForInstance({ id: '../east', kind: 'gateway' }),
+    /invalid transport instance id/,
+  )
+  assert.throws(
+    () => sourceIdForInstance({ id: 'east', kind: 'direct' as never }),
+    /invalid transport kind/,
+  )
 })

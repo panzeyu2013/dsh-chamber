@@ -77,7 +77,10 @@
     "packages/desktop/runtime-operation-fence.ts",
     "packages/desktop/runtime-operation-fence.test.ts",
     "packages/desktop/runtime-metadata-recovery.ts",
-    "packages/desktop/runtime-metadata-recovery.test.ts"
+    "packages/desktop/runtime-metadata-recovery.test.ts",
+    "packages/desktop/gateway-provider.ts",
+    "packages/gateway/src/**/*.ts",
+    "packages/gateway/test/**/*.ts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }

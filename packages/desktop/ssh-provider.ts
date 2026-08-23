@@ -655,6 +655,9 @@ export function setSshPassword(id: string, password: string | null): void {
   if (password !== null && password.length > MAX_SSH_PASSWORD_CHARS) {
     throw new Error(`refusing SSH password longer than ${MAX_SSH_PASSWORD_CHARS} characters`)
   }
+  // Kind-agnostic instance deletion clears both credential stores. A gateway
+  // id with no SSH password must not force an unnecessary password-file write.
+  if ((password === null || password === '') && !passwords.has(id)) return
   const next = new Map(passwords)
   if (password === null || password === '') next.delete(id)
   else next.set(id, password)

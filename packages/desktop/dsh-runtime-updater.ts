@@ -1,14 +1,14 @@
 /**
- * dsh 运行时版本管理（design 17）——编排守卫纯逻辑（M2）。纯逻辑、无 electron、
+ * dsh 运行时版本管理（design 18）——编排守卫纯逻辑（M2）。纯逻辑、无 electron、
  * 无 spawn / fetch / IPC，可用 node:test 直接单测（dsh-runtime-updater.test.ts）。
  *
- * 本模块只承担「守卫」职责（design 17 §3.6「单飞与幂等」 + §5 数据流）：
+ * 本模块只承担「守卫」职责（design 18 §3.6「单飞与幂等」 + §5 数据流）：
  *
  *   - SingleFlight：切换单飞守卫，覆盖整个 install 窗口（含 apply 全程）；
  *   - isNoopSelection：选择当前激活版本 = 无操作（选当前版本无动作）；
  *   - buildVersionList：版本选择器列表（当前版本置顶 + dist-tags.latest 推荐
  *     标记 + 其余 semver 降序 + 离线缓存版本标记 + 兼容基线以下警示）；
- *   - versionExists：版本存在门禁（design 17 §5「版本存在门禁（integrity）」）——
+ *   - versionExists：版本存在门禁（design 18 §5「版本存在门禁（integrity）」）——
  *     byVersion 记录存在、tarball 非空且 integrity 是受支持的 SRI → true。
  *     缺失 integrity 的版本可以展示，但不得进入安装路径（安装层对顶层
  *     tarball 做流式 SRI 校验，与门禁同源同口径）。
@@ -61,7 +61,7 @@ export function bindRuntimeInstallResolution(
 }
 
 /**
- * 单飞守卫（design 17 §3.6「单飞守卫覆盖整个 install 窗口」）：整个切换流程
+ * 单飞守卫（design 18 §3.6「单飞守卫覆盖整个 install 窗口」）：整个切换流程
  * （安装 + apply 全程）只能有一个在途。tryBegin 成功置位返回 true；已有在途
  * 返回 false；end 结束在途后允许再入。
  */
@@ -87,14 +87,14 @@ export class SingleFlight {
 }
 
 /**
- * 「选择当前激活版本 = 无操作」（design 17 §3.6）：chosen 与 active 都非 null
+ * 「选择当前激活版本 = 无操作」（design 18 §3.6）：chosen 与 active 都非 null
  * 且相等 → true；chosen null（未选）、active null（无激活版本）或两者不等 → false。
  */
 export function isNoopSelection(chosen: string | null, active: string | null): boolean {
   return chosen !== null && active !== null && chosen === active;
 }
 
-/** 版本选择器条目（design 17 §3.6 前端显示规格 A.2）。 */
+/** 版本选择器条目（design 18 §3.6 前端显示规格 A.2）。 */
 export interface VersionListEntry {
   version: string;
   /** dist-tags.latest 推荐标记（meta.latest 为 null 或不在列表时恒 false）。 */
@@ -128,7 +128,7 @@ function compareNumericText(a: string, b: string): number {
 }
 
 /**
- * 升序 semver 比较（自实现，无 semver 依赖；design 17 §6「精确 semver」口径）：
+ * 升序 semver 比较（自实现，无 semver 依赖；design 18 §6「精确 semver」口径）：
  *
  *   - 数字段 major/minor/patch 逐段比较；
  *   - 数字段相等时：release > prerelease（升序时 prerelease 靠前）；
@@ -195,7 +195,7 @@ function isListable(
 }
 
 /**
- * 构建版本选择器列表（design 17 §3.6 A.2 显示规格）：
+ * 构建版本选择器列表（design 18 §3.6 A.2 显示规格）：
  *
  *   1. active 版本置顶（精确 semver 即可列出，并从其余列表中去重）；
  *   2. dist-tags.latest（「推荐」）紧随 active 之后第二位（active 本身就是
@@ -274,7 +274,7 @@ export function buildVersionList(
 }
 
 /**
- * 版本存在门禁（design 17 §5「版本存在门禁」）：version 在 byVersion 中且
+ * 版本存在门禁（design 18 §5「版本存在门禁」）：version 在 byVersion 中且
  * tarball 非空且 integrity 是受支持的 SRI → true，否则 false。缺失 integrity
  * 的版本可以展示，但不得进入安装路径。
  */
@@ -289,7 +289,7 @@ export function versionExists(
 }
 
 /**
- * 离线缓存版本列表（design 17 §3.6 A.2「自由回滚的 UI 基础」）：registry 元数据
+ * 离线缓存版本列表（design 18 §3.6 A.2「自由回滚的 UI 基础」）：registry 元数据
  * 不可得时（check 失败 → lastMeta null），用本地已装版本树构建选择器列表——全部
  * 标记 `cached`、无 tarball/integrity/latest/belowBaseline，active 置顶。这样断网
  * /镜像挂时用户仍可回滚到任一已缓存版本。

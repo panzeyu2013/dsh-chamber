@@ -1,5 +1,5 @@
 /**
- * dsh-runtime-store.ts 目录数据面测试（design 17 §3.2/§3.5）——node:test，
+ * dsh-runtime-store.ts 目录数据面测试（design 18 §3.2/§3.5）——node:test，
  * 无 electron；baseDir 用 mkdtempSync(os.tmpdir()) 隔离（仿 chamber-settings
  * 测试）。覆盖：current 指针 round-trip / 损坏 / 原子写无残留 tmp；override
  * round-trip / 损坏 → *.corrupt 保留 + null；isProtectedVersion 四类受保护

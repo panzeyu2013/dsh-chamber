@@ -1,5 +1,5 @@
 /**
- * dsh-runtime-controller.ts tests (design 17 §3.5/§3.6) — node:test, no real
+ * dsh-runtime-controller.ts tests (design 18 §3.5/§3.6) — node:test, no real
  * fetch/install. fetchMetadata / install / store are injected mocks; the tests
  * assert orchestration: check phases, no-op + version-exists gates,
  * single-flight, override.pending write, resetBuiltin.

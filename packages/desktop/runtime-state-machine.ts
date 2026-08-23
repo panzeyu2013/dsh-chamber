@@ -1,5 +1,5 @@
 /**
- * dsh 运行时版本管理状态机（design 17 §3.6 状态转移表）——纯逻辑、零依赖、
+ * dsh 运行时版本管理状态机（design 18 §3.6 状态转移表）——纯逻辑、零依赖、
  * 无 electron、无副作用（M4 抽纯模块）。只有三个纯函数：`transition`
  * （状态 × 事件 → 状态）、`allowedActions`（终态门：该状态下可见动作）、
  * `isTerminal`（rollback / failed 终态判定）。不碰文件、不碰 IPC、不碰 UI：

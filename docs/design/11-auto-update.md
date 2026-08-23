@@ -171,11 +171,10 @@
     移除；create-release 建 draft + finalize 翻转公开的流程不变）；
   - win leg 产物：`*.exe` + `latest.yml` / `beta.yml`（**无 blockmap**，2026-08）；
   - mac leg 产物：`*.dmg` + `*.zip` + `latest-mac.yml` / `beta-mac.yml`；
-  - workflow_dispatch 的 `version` 输入必须等于 `packages/desktop/package.json`
-    版本（create-release 先断言，防 electron-builder 上传到幻影 v<package.json>
-    draft 而 finalize 空 release）；draft 的 `prerelease` 由版本 prerelease 后缀
-    推导；`dry_run` 时回退 `--publish=never`（build-only 检查；create-release 仍会
-    建一个空 draft——与既有行为一致，已在 workflow 输入描述注明）；
+  - workflow_dispatch 的 `version` 输入先按 canonical SemVer 校验，且必须等于全部 chamber
+    package 版本；tag 会 peel 并绑定本次 checkout SHA，防 electron-builder 上传到错误源码对应的
+    draft。draft 的 `prerelease` 由版本 prerelease 后缀推导；`dry_run` 回退
+    `--publish=never` 且不创建或修改 GitHub Release（纯 build-only 检查）；
   - CI 验证步骤新增：非 dry-run 时断言 channel yml 存在、**无** blockmap 产物；
   - finalize 前新增清理步骤：经 GitHub API 删除 draft release 里的
     `*.zip.blockmap`（mac zip 的 blockmap 由 electron-builder 硬编码生成，无配置

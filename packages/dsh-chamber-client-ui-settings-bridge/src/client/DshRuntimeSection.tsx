@@ -1,5 +1,5 @@
 /**
- * Chamber-global dsh runtime management block (design 17 §3.6).
+ * Chamber-global dsh runtime management block (design 18 §3.6).
  *
  * Runtime facts and mutations remain main-process authoritative. This view
  * consumes the shared renderer projection so its action gates, status copy,

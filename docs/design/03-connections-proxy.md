@@ -194,7 +194,8 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 
 - **响应头白名单**（收敛上游头，防 hop-by-hop / 凭据泄露）：完整列表见
   **04 §4.3**（WS upgrade 101 所需头除外）。
-- **体积上限**：请求体 ≤ 300MiB、响应体 ≤ 300MiB（与上游 dsh 0.1.1-rc.2
+- **体积上限**：带可信 `Content-Length` 的请求体 ≤ 300MiB；未知长度/chunked 请求体
+  ≤ 32MiB（避免 chunks + concat 的双份峰值）；响应体 ≤ 300MiB（与上游 dsh 0.1.1-rc.2
   的 300MiB 请求体上限 / 200MiB 图片准入对齐：200MiB 图片 base64 膨胀
   ~267.7MiB 后仍留余量；沿用 v2 runtime-proxy 语义；超限 → 413 / 取消上游
   流，显式而非截断静默）；请求体分片空闲超过
@@ -203,7 +204,7 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   `content-length` 与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节
   重建 `content-length`。
 - **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、
-  在缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503
+  所有 proxy owner 共享的进程级缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503
   `resource_exhausted`，计数在断连/超时/错误/完成时幂等释放；HTTP server 在
   路由前另设 10s header、35s request、5s keep-alive 与 192 连接上限。
 - 非 SSE 上游响应使用 45s **空闲**超时（每个数据块重新计时；2026-08 由 10s
