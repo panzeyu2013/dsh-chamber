@@ -10,18 +10,19 @@
 
 /** Transport lifecycle phase machine（隧道生命周期 phase 机）. */
 export type SshPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
+export type TransportKind = 'ssh' | 'gateway'
 
 /** Normalized non-secret instance spec as held by the registry (design 05 §8). */
 export interface SshInstanceSpec {
   id: string
   label: string
-  /** Transport provider kind (v1: 'ssh'). */
-  kind: string
+  /** Transport provider kind. */
+  kind: TransportKind
   host: string
   user: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
   sshPort: number | null
-  /** The remote dsh web profile port on 127.0.0.1 (the tunnel destination). */
+  /** SSH: remote dsh loopback port; gateway: HTTPS origin port. */
   remotePort: number
   serviceName: string | null
   /**
@@ -36,7 +37,7 @@ export interface SshInstanceInput {
   id: string
   label: string
   /** Transport provider kind; omitted/legacy entries default to 'ssh'. */
-  kind?: string
+  kind?: TransportKind
   host: string
   user?: string | null
   sshPort?: number | null
@@ -48,13 +49,13 @@ export interface SshInstanceInput {
 
 /** The non-secret status projection (design 05 §8): never a transport URL. */
 export interface SshStatusProjection {
-  /** Transport provider kind (v1: 'ssh'). */
-  kind: string
+  /** Transport provider kind. */
+  kind: TransportKind
   phase: SshPhase
   localPort: number | null
   sshPort: number | null
   remotePort: number
-  /** Configured remote dsh home ($DSH_HOME); null = ssh default. */
+  /** Configured remote dsh home ($DSH_HOME); gateway always reports null. */
   remoteDshHome: string | null
   retryAttempt: number
   requiresUserAction: boolean
@@ -173,9 +174,8 @@ export interface NpmSearchPackage {
 
 /**
  * The desktop_ssh_* IPC surface (design 05 §3.3) — non-secret only: never a
- * tunnel URL, never SSH material. start_service/stop_service/is_active drive
- * remote systemd control (serviceName comes from the registry spec; format
- * whitelist `^[a-zA-Z0-9_.-]+$` enforced on the main side).
+ * transport URL, never SSH material or gateway tokens. The systemd/plugin
+ * operations are SSH-only and fail explicitly for providers without exec.
  *
  * Mirrors packages/desktop/preload.cts structurally (interface merging).
  */
@@ -188,6 +188,8 @@ export interface DesktopSshSurface {
    * Resolves {ok:true} or {error} (unknown id / platform not supported).
    */
   set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  /** Gateway token is renderer-write-only; never returned by any bridge API. */
+  set_gateway_token(id: string, token: string | null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -344,7 +346,7 @@ export interface VscodeSurface {
 
 /** Normalized deep-link intent pushed from the main process (design 16 §2). */
 export interface DeepLinkIntent {
-  /** Raw registry id ('local' | registry id); the App layer prefixes 'ssh-' for remote sources. */
+  /** Raw registry id ('local' | registry id); App resolves the live transport kind. */
   instanceId: string
   path: string
 }

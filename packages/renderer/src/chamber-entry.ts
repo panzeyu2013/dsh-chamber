@@ -97,6 +97,7 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import { getChamberInstanceId } from './chamber-knob.ts'
+import { isChamberSourceId } from './transport-source.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -310,11 +311,15 @@ export function apply(ctx: Context): void {
   // Union-table lockstep guard FIRST (see assertCoveredFactoryLockstep): a
   // COVERED_FACTORIES drift must fail this entry before any plugin registers.
   assertCoveredFactoryLockstep()
+  const chamberInstanceId = getChamberInstanceId()
+  if (!isChamberSourceId(chamberInstanceId)) {
+    throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
+  }
   // chamber patch (05 §4): the per-boot instance id, set by shell.ts through
   // the chamber knob for the duration of the boot — the sidebar plugin reads
   // it to highlight the current source. Declared via ctx.provide: cordis
   // rejects assigning undeclared context properties at runtime.
-  ctx.provide('chamberInstanceId', getChamberInstanceId())
+  ctx.provide('chamberInstanceId', chamberInstanceId)
   ctx.plugin(ConnectionPlugin)
   ctx.plugin(TypertRegistry)
   ctx.plugin(ApiGateway)
@@ -342,10 +347,6 @@ export function apply(ctx: Context): void {
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
-  const chamberInstanceId = getChamberInstanceId()
-  if (chamberInstanceId !== undefined && !chamberInstanceId.startsWith('ssh-') && chamberInstanceId !== 'local') {
-    throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
-  }
   ctx.plugin(UiDirectoryPickerBrowse)
   ctx.plugin(UiSettingsConnections)
   ctx.plugin(UiSettingsBridge)
