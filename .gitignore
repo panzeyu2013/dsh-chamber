@@ -56,6 +56,9 @@ packages/renderer/src/generated/
 # Agent memory
 .graymatter/
 
+# Local toolchain scratch (dev environment bootstrap: corepack cache / pnpm store / npm cache)
+.tooling/
+
 # Logs
 logs
 *.log
