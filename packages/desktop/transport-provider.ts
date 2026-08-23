@@ -20,8 +20,10 @@
  * aliases below); desktop internals use the `Transport*` names.
  */
 
-/** Transport kinds shipped in v1. Future kinds (tailscale, remote-tunnel …) extend the union. */
-export const TRANSPORT_KINDS = ['ssh'] as const
+/** Transport kinds shipped. `gateway` (design 16 §6.4/§6.5) is a DIRECT
+ * ENDPOINT kind: no tunnel child; the endpoint is a dsh-gateway's https URL
+ * authenticated with a shared bearer token. Future kinds extend the union. */
+export const TRANSPORT_KINDS = ['ssh', 'gateway'] as const
 
 /** Renderer/registry resource budgets, enforced again in the main process. */
 export const MAX_TRANSPORT_INSTANCES = 32

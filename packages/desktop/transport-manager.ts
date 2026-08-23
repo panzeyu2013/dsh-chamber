@@ -9,7 +9,7 @@
  *   files fail loudly, never masquerade as an empty set — the desktop main
  *   process preserves the corrupt file before starting empty). Legacy files
  *   without `kind` migrate to the provider kind on load.
- * - Transport lifecycle per instance: tunnel mode (provider.buildStartArgs →
+ * - Transport lifecycle per instance: tunnel mode (providerForSpec.buildStartArgs →
  *   a child process, local port bound via net listen(0), readiness = the
  *   local port accepts a TCP connection AND the provider's endpoint identity
  *   verification passes — verifyUp, e.g. the ssh provider's host.describe
@@ -61,6 +61,7 @@ import type {
   TransportExecResult,
   TransportInstanceInput,
   TransportInstanceSpec,
+  TransportKind,
   TransportLogEntry,
   TransportPhase,
   TransportProbeEndpoint,
@@ -144,6 +145,10 @@ export interface TransportManagerOptions {
 /** createTransportManager dependencies (provider/spawn/probe/allocator injectable). */
 export interface TransportManagerDeps {
   provider: TransportProvider
+  /** Optional per-kind overrides (design 16 §6.5): a kind present here
+   * (e.g. 'gateway') resolves to that provider; every other kind falls back to
+   * `provider`. */
+  providers?: Partial<Record<TransportKind, TransportProvider>>
   spawnFn?: (command: string, args: readonly string[], options: SpawnOptions) => SpawnedProcess
   portProbe?: (port: number, opts?: { timeoutMs?: number; host?: string }) => Promise<boolean>
   /**
@@ -276,7 +281,7 @@ function defaultPortProbe(port: number, { timeoutMs = PROBE_ATTEMPT_TIMEOUT_MS, 
  *   disconnect(), status(), readyUrl(), logs(), clearLogs(), exec(),
  *   onStatusChanged(), dispose()}.
  */
-export function createTransportManager({ provider, spawnFn, portProbe, verifyProbe, allocatePort, random, instancesFile, logger, options = {} }: TransportManagerDeps): TransportManager {
+export function createTransportManager({ provider, providers, spawnFn, portProbe, verifyProbe, allocatePort, random, instancesFile, logger, options = {} }: TransportManagerDeps): TransportManager {
   const readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS
   const probeIntervalMs = options.probeIntervalMs ?? PROBE_INTERVAL_MS
   const maxRetryAttempts = options.maxRetryAttempts ?? MAX_RETRY_ATTEMPTS
@@ -293,7 +298,14 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   const doSpawn: (command: string, args: readonly string[], opts: SpawnOptions) => SpawnedProcess =
     spawnFn ?? ((command: string, args: readonly string[], opts: SpawnOptions) => spawn(command, args, opts))
   const doProbe = portProbe ?? defaultPortProbe
-  const doVerify = verifyProbe ?? provider.verifyUp
+  /** Resolve the provider for a spec's kind (design 16 §6.5): a per-kind
+   * override wins; otherwise the default provider. */
+  const resolveProvider = (kind: TransportKind): TransportProvider => providers?.[kind] ?? provider
+  const doVerify = verifyProbe ?? ((spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) => {
+    const verify = resolveProvider(spec.kind).verifyUp
+    // A provider without verifyUp has no destination-identity check: pass.
+    return verify === undefined ? Promise.resolve({ ok: true }) : verify(spec, endpoint)
+  })
   const doAllocate = allocatePort ?? allocateLocalPort
   const doRandom = random ?? Math.random
   const loggerLog = logger?.log
@@ -538,6 +550,9 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   async function startTransport(id: string) {
     const spec = instances.get(id)
     if (spec === undefined) return
+    // The provider for THIS instance's kind (design 16 §6.5) — a gateway
+    // instance resolves to gatewayProvider, an ssh instance to sshProvider.
+    const providerForSpec = resolveProvider(spec.kind)
     const state = ensureState(id)
     // A ready transport is not re-started; an already-connecting invocation
     // is idempotent (connect() is the only other entry and it refuses while
@@ -568,7 +583,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     let localPort: number | null = null
     // Capability: a provider with buildStartArgs gets a local tunnel port;
     // a provider without it is DIRECT ENDPOINT mode (no child, no port).
-    if (provider.buildStartArgs !== undefined) {
+    if (providerForSpec.buildStartArgs !== undefined) {
       try {
         localPort = await doAllocate()
       } catch (allocateError) {
@@ -583,13 +598,13 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     }
 
     let args: readonly string[] | null = null
-    if (provider.buildStartArgs !== undefined) {
+    if (providerForSpec.buildStartArgs !== undefined) {
       try {
-        args = provider.buildStartArgs(spec, localPort as number)
+        args = providerForSpec.buildStartArgs(spec, localPort as number)
       } catch (buildError) {
         // A throwing provider must never leave the machine stuck in
         // connecting with no child and no recovery machinery.
-        warn(`transport-manager: provider.buildStartArgs threw: ${String(buildError)}`)
+        warn(`transport-manager: providerForSpec.buildStartArgs threw: ${String(buildError)}`)
         transition(id, 'error', `provider build failed: ${String(buildError)}`)
         appendLogInternal(state, 'error', `provider buildStartArgs threw: ${String(buildError)}`)
         return
@@ -603,7 +618,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     const probeTarget = (() => {
       try {
         return directEndpoint
-          ? (provider.probeTarget?.(spec) ?? { host: spec.host, port: spec.remotePort })
+          ? (providerForSpec.probeTarget?.(spec) ?? { host: spec.host, port: spec.remotePort })
           : { host: '127.0.0.1', port: localPort as number }
       } catch (probeError) {
         // A throwing probeTarget must not leave the machine stuck in
@@ -626,11 +641,11 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       // (the child must keep HOME, PATH, …). A throwing provider lands on a
       // loud error, never a stuck connecting with no child.
       let transportEnv: NodeJS.ProcessEnv | null = null
-      if (provider.buildStartEnv !== undefined) {
+      if (providerForSpec.buildStartEnv !== undefined) {
         try {
-          transportEnv = provider.buildStartEnv(spec)
+          transportEnv = providerForSpec.buildStartEnv(spec)
         } catch (envError) {
-          warn(`transport-manager: provider.buildStartEnv threw: ${String(envError)}`)
+          warn(`transport-manager: providerForSpec.buildStartEnv threw: ${String(envError)}`)
           transition(id, 'error', `provider buildStartEnv threw: ${String(envError)}`)
           appendLogInternal(state, 'error', `provider buildStartEnv threw: ${String(envError)}`)
           return
@@ -675,7 +690,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
           let logLine: string
           let terminalAuth: boolean
           try {
-            const classified = provider.classifyStderr(line)
+            const classified = providerForSpec.classifyStderr(line)
             logLine = classified.log
             terminalAuth = classified.terminalAuth
           } catch (classifyError) {
@@ -792,7 +807,8 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     if (spec === undefined) {
       return Promise.resolve({ ok: false, error: 'ssh instance not found' })
     }
-    if (provider.exec === undefined) {
+    const providerForSpec = resolveProvider(spec.kind)
+    if (providerForSpec.exec === undefined) {
       return Promise.resolve({ ok: false, error: `exec not supported by transport kind ${spec.kind}` })
     }
     const state = ensureState(id)
@@ -805,7 +821,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       return child
     }
     try {
-      return provider.exec(spec, action, {
+      return providerForSpec.exec(spec, action, {
         spawnFn: trackedSpawn,
         execTimeoutMs,
         runTimeoutMs: runExecTimeoutMs,
@@ -854,8 +870,10 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     const seenIds = new Set<string>()
     let duplicates = 0
     for (const entry of parsed) {
-      const normalized = provider.validateSpec(entry)
-      if (normalized === null || normalized.kind !== provider.kind) {
+      const entryKind = (entry as { kind?: unknown }).kind
+      const providerForKind = typeof entryKind === 'string' ? resolveProvider(entryKind as TransportKind) : provider
+      const normalized = providerForKind.validateSpec(entry)
+      if (normalized === null) {
         dropped.push(entry)
         continue
       }
@@ -900,8 +918,10 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     const restartIds: string[] = []
     const seenIds = new Set<string>()
     for (const entry of next) {
-      const normalized = provider.validateSpec(entry)
-      if (normalized === null || normalized.kind !== provider.kind) {
+      const entryKind = (entry as { kind?: unknown }).kind
+      const providerForKind = typeof entryKind === 'string' ? resolveProvider(entryKind as TransportKind) : provider
+      const normalized = providerForKind.validateSpec(entry)
+      if (normalized === null) {
         dropped.push(entry)
         continue
       }
@@ -1002,7 +1022,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     // retyping — it is only cleared by setSshPassword(null), instance
     // removal, or app quit.
     const spec = instances.get(id)
-    if (spec !== undefined) provider.disposeAuth?.(spec)
+    if (spec !== undefined) resolveProvider(spec.kind).disposeAuth?.(spec)
     state.localPort = null
     state.retryAttempt = 0
     state.requiresUserAction = false
@@ -1046,7 +1066,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     if (state.localPort !== null) return `http://127.0.0.1:${state.localPort}`
     const spec = instances.get(id)
     if (spec === undefined) return null
-    return provider.endpointUrl?.(spec) ?? null
+    return resolveProvider(spec.kind).endpointUrl?.(spec) ?? null
   }
 
   /** Ring-buffer log lines for one instance (copies; newest last). */

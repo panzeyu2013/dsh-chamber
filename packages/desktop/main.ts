@@ -39,6 +39,7 @@ import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
+import { configureGatewayTokenStore, gatewayProvider, getGatewayToken, setGatewayToken } from './gateway-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
@@ -961,8 +962,11 @@ if (!gotTheLock) {
     if (askpassNotice !== null) console.error(`[dsh-chamber] ${askpassNotice}`);
     const passwordNotice = configureSshPasswordStore(path.join(app.getPath('userData'), 'ssh-passwords.json'));
     if (passwordNotice !== null) console.error(`[dsh-chamber] ssh password store: ${passwordNotice}`);
+    const gatewayTokenNotice = configureGatewayTokenStore(path.join(app.getPath('userData'), 'gateway-tokens.json'));
+    if (gatewayTokenNotice !== null) console.error(`[dsh-chamber] gateway token store: ${gatewayTokenNotice}`);
     transportManager = createTransportManager({
       provider: sshProvider,
+      providers: { gateway: gatewayProvider },
       instancesFile: path.join(app.getPath('userData'), 'ssh-instances.json'),
       logger: {
         log: (...args) => console.log('[transport-manager]', ...args),
@@ -1081,7 +1085,17 @@ if (!gotTheLock) {
       if (cp !== null) {
         if (status.phase === 'ready') {
           const url = sm.readyUrl(id);
-          if (url !== null) cp.registerInstanceTransport(`${status.kind}:${id}`, url);
+          if (url !== null) {
+            if (status.kind === 'gateway') {
+              // The gateway transport is https + bearer-token authenticated
+              // (design 16 §6.4): inject the shared token as an Authorization
+              // header — the instance-proxy forwards it to the gateway auth gate.
+              const token = getGatewayToken(id);
+              cp.registerInstanceTransport(`${status.kind}:${id}`, url, token === null ? undefined : { authorization: `Bearer ${token}` });
+            } else {
+              cp.registerInstanceTransport(`${status.kind}:${id}`, url);
+            }
+          }
         } else {
           cp.unregisterInstanceTransport(`${status.kind}:${id}`);
         }
@@ -1174,6 +1188,20 @@ if (!gotTheLock) {
       }
       try {
         setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
+        return { ok: true };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+    // Gateway shared token (design 16 §6.5): held in main-process memory +
+    // mirrored to <userData>/gateway-tokens.json (0600) — never in the
+    // registry, never logged, never exposed back to the renderer.
+    ipcMain.handle('desktop_gateway_set_token', trustedIpc(({ id, token }) => {
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
+        return { error: 'invalid or unknown instance id' };
+      }
+      try {
+        setGatewayToken(id, typeof token === 'string' && token !== '' ? token : null);
         return { ok: true };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
