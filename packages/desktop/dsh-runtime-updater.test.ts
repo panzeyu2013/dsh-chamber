@@ -1,5 +1,5 @@
 /**
- * dsh-runtime-updater.ts 纯逻辑测试（design 16 §3.6 编排守卫）——node:test，
+ * dsh-runtime-updater.ts 纯逻辑测试（design 17 §3.6 编排守卫）——node:test，
  * 无 electron。覆盖：SingleFlight 单飞互斥（二次 tryBegin false / end 后可再入 /
  * inFlight 态）、isNoopSelection 三态、buildVersionList（active 置顶去重 / latest
  * 标记 / 降序 / cached 标记 / belowBaseline 与基线空不标 / byVersion 缺失跳过）、
@@ -9,10 +9,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SingleFlight,
+  bindRuntimeInstallResolution,
   buildVersionList,
+  compareRuntimeVersions,
   isNoopSelection,
   versionExists,
 } from './dsh-runtime-updater.ts';
+
+const VALID_SRI = `sha512-${Buffer.alloc(64, 0x5a).toString('base64')}`;
 
 function makeMeta(
   versions: string[],
@@ -23,11 +27,19 @@ function makeMeta(
   latest: string | null;
   versions: string[];
   byVersion: ReadonlyMap<string, { version: string; tarball: string; integrity: string | null }>;
+  packageName: string;
+  origin: string;
 } {
   const byVersion = new Map(
     versions.map((v) => [v, { version: v, tarball: tarballFor(v), integrity: integrityFor(v) }]),
   );
-  return { latest, versions, byVersion };
+  return {
+    packageName: '@deepseek-ai/dsh',
+    origin: 'https://registry.npmjs.org',
+    latest,
+    versions,
+    byVersion,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +153,7 @@ test('buildVersionList: cached 标记 = version ∈ cachedVersions（离线缓�
   assert.equal(cached.get('1.0.0'), true);
   assert.equal(cached.get('2.0.0'), true);
   assert.equal(cached.get('1.1.0'), false, '不在 cachedVersions 的不标记');
+  assert.ok(entries.every((entry) => !('tarball' in entry) && !('integrity' in entry)), 'IPC projection must not expose supply-chain metadata');
 });
 
 test('buildVersionList: belowBaseline 标记低于基线的版本；等于/高于不标；基线为 null 恒 false', () => {
@@ -164,7 +177,7 @@ test('buildVersionList: belowBaseline 标记低于基线的版本；等于/高�
   assert.ok(noBaseline.every((e) => e.belowBaseline === false), '基线为空时不标任何警示');
 });
 
-test('buildVersionList: byVersion 缺失（或 tarball 为空）的版本条目跳过，active 缺失时也不置顶', () => {
+test('buildVersionList: active remains visible while unusable registry-only entries are skipped', () => {
   const meta = makeMeta(['1.0.0', '1.1.0', '2.0.0', '9.9.9'], '9.9.9');
   // 篡改：9.9.9 从 byVersion 剔除，2.0.0 的 tarball 置空。
   const byVersion = new Map(meta.byVersion);
@@ -176,10 +189,28 @@ test('buildVersionList: byVersion 缺失（或 tarball 为空）的版本条目�
   );
   assert.deepEqual(
     entries.map((e) => e.version),
-    ['1.1.0', '1.0.0'],
-    'byVersion 缺失的 9.9.9 与 tarball 为空的 2.0.0 都不出现；active=9.9.9 缺失 → 不置顶',
+    ['9.9.9', '1.1.0', '1.0.0'],
+    'active is a local runtime fact and stays first; other registry entries still require a tarball',
   );
-  assert.ok(entries.every((e) => e.latest === false), 'latest 指向缺失版本时无推荐标记');
+  assert.equal(entries[0]?.latest, true, 'the retained active entry may also carry the metadata recommendation');
+});
+
+test('buildVersionList: validated cached trees are unioned even after registry yank', () => {
+  const meta = makeMeta(['2.0.0', '1.5.0'], '2.0.0');
+  const entries = buildVersionList(meta, {
+    active: '1.5.0',
+    cachedVersions: ['1.5.0', '1.2.3', '0.9.0-rc.1', '../unsafe'],
+    compatibilityBaseline: '1.0.0',
+  });
+  assert.deepEqual(entries.map((entry) => entry.version), [
+    '1.5.0',
+    '2.0.0',
+    '1.2.3',
+    '0.9.0-rc.1',
+  ]);
+  assert.equal(entries.find((entry) => entry.version === '1.2.3')?.cached, true);
+  assert.equal(entries.find((entry) => entry.version === '0.9.0-rc.1')?.belowBaseline, true);
+  assert.equal(entries.some((entry) => entry.version === '../unsafe'), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -191,15 +222,41 @@ test('versionExists: byVersion 有记录且 tarball 非空（含 integrity）→
     ['1.0.0'],
     null,
     (v) => `https://registry.npmjs.org/dsh/-/dsh-${v}.tgz`,
-    (v) => `sha512-${v}`,
+    () => VALID_SRI,
   );
   assert.equal(versionExists(meta, '1.0.0'), true);
 });
 
-test('versionExists: 缺 integrity 但有 tarball → true（简略 packument 放宽语义）', () => {
+test('versionExists: 缺 integrity 但有 tarball → false（不可进入安装路径）', () => {
   const meta = makeMeta(['1.0.0'], null);
   assert.equal(meta.byVersion.get('1.0.0')!.integrity, null);
-  assert.equal(versionExists(meta, '1.0.0'), true);
+  assert.equal(versionExists(meta, '1.0.0'), false);
+});
+
+test('bindRuntimeInstallResolution: binds exact origin + tarball + integrity', () => {
+  const meta = makeMeta(['1.0.0'], '1.0.0', undefined, () => VALID_SRI);
+  const resolution = bindRuntimeInstallResolution(meta, '1.0.0', 'https://registry.npmjs.org/');
+  assert.deepEqual(resolution, {
+    packageName: '@deepseek-ai/dsh',
+    version: '1.0.0',
+    registryOrigin: 'https://registry.npmjs.org',
+    tarball: 'https://registry.npmjs.org/dsh/-/dsh-1.0.0.tgz',
+    integrity: VALID_SRI,
+  });
+  assert.ok(Object.isFrozen(resolution));
+});
+
+test('bindRuntimeInstallResolution: source change and missing SRI fail closed', () => {
+  const meta = makeMeta(['1.0.0'], '1.0.0', undefined, () => VALID_SRI);
+  assert.throws(
+    () => bindRuntimeInstallResolution(meta, '1.0.0', 'https://registry.npmmirror.com'),
+    /源已变更/,
+  );
+  const missingSri = makeMeta(['1.0.0'], '1.0.0');
+  assert.throws(
+    () => bindRuntimeInstallResolution(missingSri, '1.0.0', missingSri.origin),
+    /integrity/,
+  );
 });
 
 test('versionExists: 版本不在 byVersion 或 tarball 为空 → false', () => {
@@ -214,4 +271,11 @@ test('versionExists: 版本不在 byVersion 或 tarball 为空 → false', () =>
     'tarball 为空（registry 有版本但无下载地址）→ false',
   );
   assert.equal(versionExists({ byVersion: new Map() }, '1.0.0'), false, '空 byVersion → false');
+});
+
+test('compareRuntimeVersions: supports arbitrarily large numeric identifiers without precision loss', () => {
+  assert.equal(compareRuntimeVersions('999999999999999999999.0.0', '2.0.0'), 1);
+  assert.equal(compareRuntimeVersions('1.0.0-999999999999999999999', '1.0.0-2'), 1);
+  assert.equal(compareRuntimeVersions('1.0.0+one', '1.0.0+two'), 0);
+  assert.equal(compareRuntimeVersions('01.0.0', '1.0.0'), null);
 });
