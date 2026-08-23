@@ -397,33 +397,6 @@
   overflow-y: auto;
 }
 
-.pluginDiagnostic {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  margin: 0 0 16px;
-  padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.pluginDiagnostic span {
-  color: var(--dsw-alias-label-secondary);
-  overflow-wrap: anywhere;
-}
-
-.pluginDiagnosticOk {
-  color: var(--dsw-alias-state-success-primary);
-  background: var(--dsw-alias-state-success-bg, transparent);
-}
-
-.pluginDiagnosticProblem {
-  color: var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-state-error-bg, transparent);
-}
-
 .placeholder {
   font-size: 13px;
   color: var(--dsw-alias-label-tertiary);

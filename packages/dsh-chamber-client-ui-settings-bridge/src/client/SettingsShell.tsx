@@ -66,17 +66,6 @@ export type SettingsShellProps =
 /** The local instance id (always selectable, even while its host is not ready). */
 const LOCAL_INSTANCE_ID = 'local'
 
-function pluginDiagnosticText(
-  state: NonNullable<BridgeServerRow['pluginDiagnostic']>['state'],
-  t: (key: SettingsBridgeKey) => string,
-): string {
-  if (state === 'ok') return t('pluginDiagnosticOk')
-  if (state === 'not-injected') return t('pluginDiagnosticNotInjected')
-  if (state === 'graph-unreachable') return t('pluginDiagnosticGraphUnreachable')
-  if (state === 'bundle-load-failed') return t('pluginDiagnosticBundleFailed')
-  return t('pluginDiagnosticRestartRequired')
-}
-
 /**
  * Per-selection session-mount retry ledger: `failures` counts consecutive
  * child-ctx mount rejections for selection `id` (0 = none; '' = no
@@ -364,6 +353,15 @@ function SettingsPanel({
   // server-section id that left the ledger falls back to the first row.
   const active = resolveActiveSection(activeId, rows)
   const selected = servers.find(server => server.id === selectedId)
+  // Per-source client-plugin runtime diagnostics, keyed by source id
+  // ('local' | 'ssh-<id>'), handed to the chamber-global connections surface.
+  // The diagnostic is a chamber-owned fact (design 09) and belongs in the
+  // connections page, NOT on top of the official dsh「插件」section.
+  const pluginDiagnostics = useMemo(() => {
+    const map: Record<string, BridgeServerRow['pluginDiagnostic']> = {}
+    for (const server of servers) map[server.id] = server.pluginDiagnostic
+    return map
+  }, [servers])
 
   return (
     <div className={css.overlay} role="presentation">
@@ -448,23 +446,10 @@ function SettingsPanel({
             </button>
           </div>
           <div className={css.options}>
-            {active === 'plugins' && selected?.pluginDiagnostic !== undefined && (
-              <div
-                className={clsx(
-                  css.pluginDiagnostic,
-                  selected.pluginDiagnostic.state === 'ok' ? css.pluginDiagnosticOk : css.pluginDiagnosticProblem,
-                )}
-                role="status"
-              >
-                <strong>{t('pluginDiagnosticLabel')}：{pluginDiagnosticText(selected.pluginDiagnostic.state, t)}</strong>
-                {selected.pluginDiagnostic.pluginId !== undefined && <span>{selected.pluginDiagnostic.pluginId}</span>}
-                {selected.pluginDiagnostic.message !== undefined && <span>{selected.pluginDiagnostic.message}</span>}
-              </div>
-            )}
             {active === CONNECTIONS_SECTION_ID ? (
               /* Chamber-global connection management: independent of the
                  selected server (never refetched on server switch). */
-              <ConnectionsSection t={connectionsT} />
+              <ConnectionsSection t={connectionsT} pluginDiagnostics={pluginDiagnostics} />
             ) : active === GENERAL_SECTION_ID ? (
               /* Chamber-global runtime settings (design 14 D7 / design 15):
                  close-window behavior / launch at login / keep awake / quit

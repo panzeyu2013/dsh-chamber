@@ -19,7 +19,7 @@ import { ConnectionsSection } from './ConnectionsSection.tsx'
 import type { ConnectionsSectionInjected } from './ConnectionsSection.tsx'
 import { en, zh, type SettingsConnectionsKey } from '../locales.ts'
 
-export type { ConnectionsSectionInjected, ConnectionsSectionProps } from './ConnectionsSection.tsx'
+export type { ConnectionsSectionInjected, ConnectionsSectionProps, PluginDiagnostic } from './ConnectionsSection.tsx'
 export type { SettingsConnectionsKey } from '../locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
