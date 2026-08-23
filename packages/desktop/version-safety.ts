@@ -13,8 +13,9 @@ export const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|
 /**
  * 版本串是否安全：trim 后精确匹配 EXACT_SEMVER，且不含 `/`、`\`、`..`。
  *
- * 语义上 EXACT_SEMVER 已排除 `/` 与 `\`（字符类不含），`..` 检查是纵深防御
- * （prerelease/build 段允许 `.` 与 `-`，形如 `1.0.0-..` 能过正则但必须拒绝）。
+ * 语义上 EXACT_SEMVER 已排除 `/` 与 `\`（字符类不含），也排除了单独的 `.`
+ * 标识符（prerelease/build 标识符字符集不含 `.`，`1.0.0-..` 无法通过正则）；
+ * `..` 检查是纵深防御（版本串可能来自不可信输入，防御任何未来正则放宽）。
  */
 export function isSafeVersion(raw: string): boolean {
   const trimmed = raw.trim();

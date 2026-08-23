@@ -34,6 +34,7 @@ export interface RegistryMetadata {
 
 import { canonicalRegistryOrigin, isAllowedRegistryUrl } from './registry-url.ts'
 import { isSupportedIntegrity } from './registry-integrity.ts'
+import { EXACT_SEMVER } from './version-safety.ts'
 
 export const DEFAULT_REGISTRY_TIMEOUT_MS = 15_000
 export const DEFAULT_REGISTRY_MAX_REDIRECTS = 5
@@ -160,8 +161,10 @@ export async function fetchRegistryMetadata(
   const url = new URL(`/${packageName}`, origin)
   // §6 URL whitelist: the request URL, the redirect's final origin, and every
   // tarball must all pass the same gate (「切换源即切换信任边界」) — an
-  // off-origin/credentialed redirect or tarball is never fetched. Tarballs may
-  // be served from a whitelisted mirror even when metadata came from `origin`.
+  // off-origin/credentialed redirect or tarball is never fetched. Tarballs are
+  // pinned to the exact metadata origin (同源约束, §3.1): parseRegistryMetadata
+  // validates each tarball against the same allowedOrigins list, so a whitelisted
+  // mirror is only reachable when it IS the configured source.
   if (!isAllowedRegistryUrl(url.toString(), [origin])) {
     throw new Error(`registry metadata URL 不在白名单：${url.toString()}`)
   }
@@ -207,6 +210,10 @@ function parseRegistryMetadata(
   const rawVersions = packument.versions
   if (rawVersions !== null && typeof rawVersions === 'object' && !Array.isArray(rawVersions)) {
     for (const [version, entry] of Object.entries(rawVersions)) {
+      // Junk/非精确 semver 版本键（registry 受损或恶意响应）不得进入版本列表：
+      // 版本选择器只允许 registry 真实版本（§6），parse 期即排除，避免脏键
+      // 流入 UI 排序与 later 的安装路径。
+      if (!EXACT_SEMVER.test(version)) continue
       // A version without a tarball/SRI (or an off-whitelist tarball — §6)
       // cannot be installed — exclude it rather than recommending a version
       // the installer must later reject.

@@ -9,8 +9,9 @@
  *   - buildVersionList：版本选择器列表（当前版本置顶 + dist-tags.latest 推荐
  *     标记 + 其余 semver 降序 + 离线缓存版本标记 + 兼容基线以下警示）；
  *   - versionExists：版本存在门禁（design 17 §5「版本存在门禁（integrity）」）——
- *     语义放宽为只要求 byVersion 记录存在且 tarball 非空，integrity 可空
- *     （简略 packument 可能缺 integrity；完整性校验由安装层对顶层 tarball 负责）。
+ *     byVersion 记录存在、tarball 非空且 integrity 是受支持的 SRI → true。
+ *     缺失 integrity 的版本可以展示，但不得进入安装路径（安装层对顶层
+ *     tarball 做流式 SRI 校验，与门禁同源同口径）。
  *
  * 数据面（存储/指针/override）见 dsh-runtime-store.ts，安装/下载不在本模块。
  */
@@ -197,7 +198,8 @@ function isListable(
  * 构建版本选择器列表（design 17 §3.6 A.2 显示规格）：
  *
  *   1. active 版本置顶（精确 semver 即可列出，并从其余列表中去重）；
- *   2. latest 标记 dist-tags.latest 对应的那一个（不改变位置，仅置标记）；
+ *   2. dist-tags.latest（「推荐」）紧随 active 之后第二位（active 本身就是
+ *      latest 时该标记打在置顶条目上，不重复出现）；
  *   3. 其余按 semver 降序（自实现简单降序比较，见 semverCompareAsc）；
  *   4. cached 标记 = version ∈ cachedVersions（离线缓存版本）；
  *   5. belowBaseline = compatibilityBaseline 非空且 version 严格低于基线
@@ -239,7 +241,7 @@ export function buildVersionList(
     emitted.add(opts.active);
   }
 
-  // 2/3. 其余按 semver 降序（去重 + 跳过不可列出条目）。
+  // 其余候选：registry 可列出版本 ∪ 本地缓存版本，统一降序。
   const candidates = new Set<string>();
   for (const version of meta.versions) {
     if (isListable(version, byVersion)) candidates.add(version);
@@ -248,6 +250,20 @@ export function buildVersionList(
   const rest = [...candidates]
     .filter((v) => !emitted.has(v))
     .sort(semverCompareDesc);
+
+  // 2. dist-tags.latest（「推荐」）紧随 active 置顶第二位：字面排序规格
+  //    （§3.6 A.2「置顶当前版本 → dist-tags.latest → 其余降序」）。latest 不可
+  //    列出（yank/无 tarball）或已是 active 时不改变降序。
+  if (meta.latest !== null && EXACT_SEMVER.test(meta.latest) && !emitted.has(meta.latest)) {
+    const latestIndex = rest.indexOf(meta.latest)
+    if (latestIndex !== -1) {
+      entries.push(makeEntry(meta.latest));
+      emitted.add(meta.latest);
+      rest.splice(latestIndex, 1);
+    }
+  }
+
+  // 3. 其余按 semver 降序（去重 + 跳过不可列出条目）。
   for (const v of rest) {
     if (emitted.has(v)) continue; // meta.versions 内的重复项
     emitted.add(v);
