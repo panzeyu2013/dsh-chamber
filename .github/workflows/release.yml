@@ -46,7 +46,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'Dry run (skip publishing — build-only; note: an empty draft release is still created)'
+        description: 'Dry run (build-only; no GitHub Release or registry mutations)'
         required: false
         default: false
         type: boolean
@@ -54,13 +54,12 @@ on:
 permissions:
   contents: read
 
-# A same-tag double run (re-dispatch / tag re-push while a run is in flight)
-# would interleave two drafts/uploads on the same tag — cancel the older run
-# so the tag always has exactly one coherent draft→finalize sequence
-# (2026-08 review NIT).
+# npm dist-tags and GitHub's latest release are shared mutable channel state,
+# not per-version resources. Serialize every release and never cancel a running
+# mutation sequence; the npm step also rejects a channel downgrade after wait.
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-publish
+  cancel-in-progress: false
 
 env:
   DSH_CHAMBER_DSH_VERSION: 0.1.1-rc.2
@@ -79,6 +78,10 @@ jobs:
       release_id: ${{ steps.create_release.outputs.id }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Commit/tag identity is a release authority boundary. Full history
+          # is required to resolve and peel an existing annotated tag.
+          fetch-depth: 0
 
       - name: Get version
         id: get_version
@@ -87,11 +90,51 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
         run: |
           if [[ -n "$RELEASE_INPUT_VERSION" ]]; then
-            echo "version=$RELEASE_INPUT_VERSION" >> "$GITHUB_OUTPUT"
+            VERSION="$RELEASE_INPUT_VERSION"
           elif [[ "$RELEASE_REF" == refs/tags/* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            VERSION="${RELEASE_REF#refs/tags/v}"
           else
-            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+            VERSION="0.0.0-dev"
+          fi
+          if ! node scripts/release-semver.mjs channel "$VERSION" >/dev/null; then
+            echo "::error::release version must be canonical SemVer without build metadata"
+            exit 1
+          fi
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Bind release tag to the checked-out commit
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          TAG_REF="refs/tags/${TAG}"
+          CHECKOUT_SHA=$(git rev-parse HEAD^{commit})
+
+          if [[ "$CHECKOUT_SHA" != "$RELEASE_SHA" ]]; then
+            echo "::error::checkout ${CHECKOUT_SHA} does not match workflow SHA ${RELEASE_SHA}"
+            exit 1
+          fi
+          if [[ "$RELEASE_EVENT" == "push" && "$RELEASE_REF" != "$TAG_REF" ]]; then
+            echo "::error::tag-triggered release ref ${RELEASE_REF} does not match ${TAG_REF}"
+            exit 1
+          fi
+
+          if git show-ref --verify --quiet "$TAG_REF"; then
+            TAG_SHA=$(git rev-parse "${TAG}^{commit}")
+            if [[ "$TAG_SHA" != "$RELEASE_SHA" ]]; then
+              echo "::error::${TAG} peels to ${TAG_SHA}, not workflow SHA ${RELEASE_SHA}"
+              exit 1
+            fi
+            echo "${TAG} is bound to checked-out commit ${RELEASE_SHA}"
+          elif [[ "$RELEASE_EVENT" == "push" ]]; then
+            echo "::error::tag push ${TAG_REF} is missing from the fetched repository"
+            exit 1
+          else
+            echo "${TAG} does not exist; GitHub Release creation must target ${RELEASE_SHA} explicitly"
           fi
 
       - name: Assert version matches package.json
@@ -101,12 +144,13 @@ jobs:
         # artifact to a phantom v<package.json version> draft and finalize an
         # EMPTY release. Fail fast: the developer bumps the chamber packages
         # (design 11 §8: root/desktop/control-plane/renderer/cli +
-        # dsh-host-client-graph + dsh-host-git-worktree — 7 packages) before
+        # dsh-host-client-graph + dsh-host-git-worktree + gateway — 8 packages) before
         # releasing, so the input version must equal EVERY package's version.
         # (2026-08 review: extended from desktop-only so a partial bump of the
         # siblings fails the run instead of shipping a version-skewed app.)
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
           for PKG in \
             ./package.json \
             ./packages/desktop/package.json \
@@ -114,14 +158,15 @@ jobs:
             ./packages/renderer/package.json \
             ./packages/cli/package.json \
             ./packages/dsh-host-client-graph/package.json \
-            ./packages/dsh-chamber-host-git-worktree/package.json; do
+            ./packages/dsh-chamber-host-git-worktree/package.json \
+            ./packages/gateway/package.json; do
             PKG_VERSION=$(node -p "require('${PKG}').version")
             if [[ "$VERSION" != "$PKG_VERSION" ]]; then
-              echo "::error::release version ${VERSION} != ${PKG} version ${PKG_VERSION} — bump all 7 chamber packages (root/desktop/control-plane/renderer/cli/dsh-host-client-graph/dsh-host-git-worktree) to match before releasing"
+              echo "::error::release version ${VERSION} != ${PKG} version ${PKG_VERSION} — bump all 8 chamber packages (root/desktop/control-plane/renderer/cli/dsh-host-client-graph/dsh-host-git-worktree/gateway) to match before releasing"
               exit 1
             fi
           done
-          echo "release version ${VERSION} matches all 7 chamber packages ✓"
+          echo "release version ${VERSION} matches all 8 chamber packages ✓"
 
       - name: Extract CHANGELOG section for the release body
         # The release page must show OUR changelog entry (CHANGELOG.md), not
@@ -130,10 +175,11 @@ jobs:
         # matching "## [<version>]" section (Keep a Changelog format); a
         # missing section fails loudly (never publish with an empty body).
         id: changelog_body
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-          SECTION=$(awk '
-            $0 ~ /^## \['"$VERSION"'\]/ { found=1; print; next }
+          SECTION=$(awk -v version="$VERSION" '
+            index($0, "## [" version "]") == 1 { found=1; print; next }
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md)
@@ -144,7 +190,7 @@ jobs:
           echo "$SECTION" > /tmp/release-body.md
           echo "extracted $(wc -l < /tmp/release-body.md) lines for [${VERSION}]"
 
-      - name: Delete any existing release for this tag
+      - name: Refuse published release and replace stale drafts for this tag
         # 2026-08 postmortem (body_path not applied — softprops log:
         # "Using release <old> for tag v0.1.2 instead of duplicate draft <new>
         # / Removing duplicate draft"): deleting a GIT TAG does NOT delete the
@@ -152,33 +198,56 @@ jobs:
         # tags/{tag} endpoint then 404s even though the release still exists,
         # and re-pushing the tag makes softprops FIND the old release and
         # UPDATE it, discarding the freshly-created draft that carried our
-        # CHANGELOG body). So we must enumerate ALL releases and delete by
-        # tag_name — the list endpoint sees detached releases — not resolve
-        # via tags/{tag}. Missing release is fine (nothing to do); any gh api
-        # error fails loud. Skipped on dry_run (build-only).
+        # CHANGELOG body). So we must enumerate ALL releases by tag_name — the
+        # list endpoint sees detached releases — not resolve via tags/{tag}.
+        # Published releases are immutable here: a sequential rerun fails
+        # closed before touching one. Only stale drafts may be recreated.
+        # Skipped on dry_run, which performs zero GitHub Release mutations.
         if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.get_version.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.get_version.outputs.version }}"
-          EXISTING_IDS=$(gh api \
-            "repos/${{ github.repository }}/releases" \
-            --jq '.[] | select(.tag_name == "v'"${VERSION}"'") | .id')
-          if [[ -z "$EXISTING_IDS" ]]; then
+          EXISTING_RELEASES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases?per_page=100" \
+            | jq -r --arg tag "v${VERSION}" '.[][] | select(.tag_name == $tag) | [.id, .draft] | @tsv')
+          if [[ -z "$EXISTING_RELEASES" ]]; then
             echo "no existing release for v${VERSION} — fresh draft will be created"
             exit 0
           fi
-          for EXISTING_ID in $EXISTING_IDS; do
-            gh api -X DELETE "repos/${{ github.repository }}/releases/${EXISTING_ID}" >/dev/null
-            echo "deleted existing release ${EXISTING_ID} for v${VERSION} (will create fresh)"
-          done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+          DRAFT_IDS=()
+          PUBLISHED_IDS=()
+          while IFS=$'\t' read -r EXISTING_ID IS_DRAFT; do
+            [[ -n "$EXISTING_ID" ]] || continue
+            if [[ "$IS_DRAFT" == "true" ]]; then
+              DRAFT_IDS+=("$EXISTING_ID")
+            else
+              PUBLISHED_IDS+=("$EXISTING_ID")
+            fi
+          done <<< "$EXISTING_RELEASES"
+
+          if (( ${#PUBLISHED_IDS[@]} > 0 )); then
+            echo "::error::published release(s) ${PUBLISHED_IDS[*]} already exist for v${VERSION}; refusing destructive rerun"
+            exit 1
+          fi
+
+          for EXISTING_ID in "${DRAFT_IDS[@]}"; do
+            gh api -X DELETE "repos/${{ github.repository }}/releases/${EXISTING_ID}" >/dev/null
+            echo "deleted stale draft ${EXISTING_ID} for v${VERSION} (will create fresh)"
+          done
       - name: Create GitHub Release (draft)
+        # Dry-run is build-only. Never let the action find a published tag and
+        # update that release back to draft.
+        if: ${{ github.event.inputs.dry_run != 'true' }}
         id: create_release
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
+          # For a manual dispatch with no pre-existing tag, create it at the
+          # exact checkout SHA rather than GitHub's default branch head.
+          target_commitish: ${{ github.sha }}
           draft: true
           # Prerelease derived from the VERSION's semver prerelease suffix
           # (v0.2.0-beta.1 → prerelease). Deriving from the workflow input
@@ -188,6 +257,105 @@ jobs:
           prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
           body_path: /tmp/release-body.md
           name: dsh-chamber v${{ steps.get_version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-gateway:
+    # npm versions are immutable. Wait for both desktop artifacts to pass
+    # before publishing so a failed signing/packaging leg cannot leave an npm
+    # release with no corresponding chamber release.
+    needs: [create-release, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: lts/*
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Cache pinned harness snapshot
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: vendor/harness-checkout
+          key: harness-${{ hashFiles('harness.commit') }}
+      - name: Bootstrap vendor tree
+        run: node scripts/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Pack and smoke-test the installed gateway CLI
+        run: |
+          mkdir -p packages/gateway/release /tmp/dsh-gateway-install
+          pnpm --filter @dsh-chamber/gateway pack --pack-destination packages/gateway/release
+          npm install --ignore-scripts --prefix /tmp/dsh-gateway-install packages/gateway/release/*.tgz
+          /tmp/dsh-gateway-install/node_modules/.bin/gateway --help
+      - name: Publish gateway package to npm (integrity-idempotent)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
+          test -n "$TGZ"
+          CHANNEL=$(node scripts/release-semver.mjs channel "$VERSION")
+          LOCAL_INTEGRITY=$(node -e "const fs=require('node:fs'),c=require('node:crypto');process.stdout.write('sha512-'+c.createHash('sha512').update(fs.readFileSync(process.argv[1])).digest('base64'))" "$TGZ")
+
+          set +e
+          CHANNEL_RAW=$(npm view "@dsh-chamber/gateway" "dist-tags.${CHANNEL}" --json 2>/tmp/gateway-npm-channel.err)
+          CHANNEL_STATUS=$?
+          set -e
+          if [[ "$CHANNEL_STATUS" -ne 0 ]] && ! grep -q 'E404' /tmp/gateway-npm-channel.err; then
+            cat /tmp/gateway-npm-channel.err >&2
+            echo "::error::unable to read npm ${CHANNEL} channel"
+            exit "$CHANNEL_STATUS"
+          fi
+          CURRENT_CHANNEL=""
+          if [[ "$CHANNEL_STATUS" -eq 0 ]]; then
+            CURRENT_CHANNEL=$(node -e "const raw=process.argv[1].trim();if(raw&&raw!=='null'){const v=JSON.parse(raw);if(typeof v!=='string'||v==='')throw new Error('registry returned an invalid dist-tag');process.stdout.write(v)}" "$CHANNEL_RAW")
+          fi
+          if [[ -n "$CURRENT_CHANNEL" ]]; then
+            CHANNEL_ORDER=$(node scripts/release-semver.mjs compare "$CURRENT_CHANNEL" "$VERSION")
+            if [[ "$CHANNEL_ORDER" -gt 0 ]]; then
+              echo "::error::refusing to move npm ${CHANNEL} backward from ${CURRENT_CHANNEL} to ${VERSION}"
+              exit 1
+            fi
+          fi
+
+          set +e
+          REMOTE_RAW=$(npm view "@dsh-chamber/gateway@${VERSION}" dist.integrity --json 2>/tmp/gateway-npm-view.err)
+          VIEW_STATUS=$?
+          set -e
+          if [[ "$VIEW_STATUS" -eq 0 ]]; then
+            REMOTE_INTEGRITY=$(node -e "const v=JSON.parse(process.argv[1]);if(typeof v!=='string'||v==='')throw new Error('registry returned no integrity');process.stdout.write(v)" "$REMOTE_RAW")
+            if [[ "$REMOTE_INTEGRITY" == "$LOCAL_INTEGRITY" ]]; then
+              if [[ "$CURRENT_CHANNEL" != "$VERSION" ]]; then
+                npm dist-tag add "@dsh-chamber/gateway@${VERSION}" "$CHANNEL"
+                echo "repaired npm ${CHANNEL} channel to @dsh-chamber/gateway@${VERSION}"
+              else
+                echo "@dsh-chamber/gateway@${VERSION} already exists with identical integrity and channel"
+              fi
+              exit 0
+            fi
+            echo "::error::npm already contains @dsh-chamber/gateway@${VERSION} with different tarball integrity"
+            exit 1
+          fi
+          if ! grep -q 'E404' /tmp/gateway-npm-view.err; then
+            cat /tmp/gateway-npm-view.err >&2
+            echo "::error::unable to determine whether @dsh-chamber/gateway@${VERSION} already exists"
+            exit "$VIEW_STATUS"
+          fi
+          npm publish "$TGZ" --access public --tag "$CHANNEL"
+      - name: Upload gateway package to the draft release
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        with:
+          tag_name: v${{ needs.create-release.outputs.version }}
+          draft: true
+          files: packages/gateway/release/*.tgz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -338,7 +506,7 @@ jobs:
           fi
 
   finalize-release:
-    needs: [create-release, build-macos, build-windows]
+    needs: [create-release, build-gateway, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -386,5 +554,8 @@ jobs:
         with:
           tag_name: v${{ needs.create-release.outputs.version }}
           draft: false
+          # Stable releases may advance GitHub latest only after the npm
+          # monotonic channel guard passed; prereleases never become latest.
+          make_latest: ${{ contains(needs.create-release.outputs.version, '-') && 'false' || 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

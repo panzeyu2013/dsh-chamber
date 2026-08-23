@@ -94,7 +94,7 @@ The script resolves the source tree in this order:
 3. sibling checkout `<repo>/../deepseek-harness` (zero-network local dev; warns when HEAD differs from the pin);
 4. otherwise download a snapshot from codeload at the pinned commit (pinned in `harness.commit`, overridable via `DSH_CHAMBER_HARNESS_COMMIT`).
 
-The root `.npmrc` is a gitignored local convenience config that can point Electron binary downloads at the npmmirror mirror; without it they come from the official source. The packaging-time mirror is committed in `packages/desktop/package.json` (`electronDownload.mirror`).
+The root `.npmrc` is a gitignored local convenience config, so local development may opt into a binary mirror. Formal build configuration commits no third-party `electronDownload.mirror` and always uses Electron's official source, preventing one mirror from replacing both a binary and its checksum before formal signing.
 
 ### 2.3 Bundle the dsh runtime
 
