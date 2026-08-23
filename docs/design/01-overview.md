@@ -87,6 +87,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code 深链插件：`dsh-chamber://` OS 深链 + `shell.overlay` 主区右上按钮快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed，现有包改动 = 0 |
+| 17 | [17-dsh-runtime-version.md](17-dsh-runtime-version.md) | 设计定稿（2026-08，未实现） | dsh 运行时版本管理：运行期 npm 拉取安装（唯一获取方式，无 Provider B）、settings 版本选择/回滚 + registry 源用户自设、探针门控激活 + 自动回退、三版本缓存、无验证区分 |
 
 ---
 
