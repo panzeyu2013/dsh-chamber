@@ -15,20 +15,24 @@ import { fileURLToPath } from 'node:url';
 
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(desktopDir, '..', '..');
-const tscBin = path.join(repoRoot, 'node_modules', '.bin', 'tsc');
+// Invoke the TypeScript JS entry through the current Node binary instead of
+// relying on package-manager-generated `.bin` shims. This is cross-platform
+// and also works in frozen/offline installs that materialize package links but
+// intentionally omit executable shims.
+const tscEntry = path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc');
 const project = path.join(desktopDir, 'tsconfig.control-plane.build.json');
 const entry = path.join(desktopDir, 'dist', 'control-plane', 'index.js');
 
-if (!existsSync(tscBin)) {
-  console.error('[build-control-plane] 未找到 tsc。请先在仓库根目录执行 npm install。');
+if (!existsSync(tscEntry)) {
+  console.error('[build-control-plane] 未找到 TypeScript。请先在仓库根目录执行 pnpm install。');
   process.exit(1);
 }
 
 rmSync(path.join(desktopDir, 'dist', 'control-plane'), { recursive: true, force: true });
 
-const result = spawnSync(tscBin, ['-p', project], {
+const result = spawnSync(process.execPath, [tscEntry, '-p', project], {
   stdio: 'inherit',
-  shell: process.platform === 'win32',
+  shell: false,
 });
 if (result.error || result.status !== 0) {
   console.error(`[build-control-plane] 编译失败（exit ${result.status ?? 'null'}）`);

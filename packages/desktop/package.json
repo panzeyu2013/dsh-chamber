@@ -9,9 +9,9 @@
     "build:control-plane": "node scripts/build-control-plane.mjs",
     "build:host-graph-package": "node scripts/build-host-graph-package.mjs",
     "build:preload": "node scripts/build-preload.mjs",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win --x64"
+    "dist": "node ./node_modules/electron-builder/cli.js",
+    "dist:mac": "node ./node_modules/electron-builder/cli.js --mac",
+    "dist:win": "node ./node_modules/electron-builder/cli.js --win --x64"
   },
   "dependencies": {
     "@dsh-chamber/control-plane": "workspace:^",
@@ -78,9 +78,6 @@
         "to": "icon.png"
       }
     ],
-    "electronDownload": {
-      "mirror": "https://npmmirror.com/mirrors/electron/"
-    },
     "electronLanguages": [
       "en-US",
       "zh-CN"
