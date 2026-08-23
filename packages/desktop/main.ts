@@ -44,6 +44,11 @@ import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
 import { createUpdateController } from './updater.ts';
+import { DshRuntimeController } from './dsh-runtime-controller.ts';
+import { fetchRegistryMetadata } from './registry-metadata.ts';
+import { isAllowedRegistryUrl } from './registry-url.ts';
+import { installRuntimeVersion } from './runtime-installer.ts';
+import { overridePath, readCurrentPointer, readOverride, writeOverride, listVersionTrees } from './dsh-runtime-store.ts';
 import {
   applyPlugins,
   CLIENT_GRAPH_INSERT_ID,
@@ -282,6 +287,10 @@ const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
+// dsh runtime version controller (design 16 M2): module-level ref so the
+// settings「dsh 运行时」block's install/check/reset always reach the same
+// instance; state pushes go to the (single) main window.
+let runtimeController: DshRuntimeController | null = null;
 /** Chamber 设置文件路径（design 14 D7）：<userData>/chamber-settings.json。 */
 const chamberSettingsFile = (): string => path.join(app.getPath('userData'), 'chamber-settings.json');
 
@@ -1259,7 +1268,13 @@ if (!gotTheLock) {
       const timer = setTimeout(() => controller.abort(), 5_000);
       timer.unref?.();
       try {
-        const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`, {
+        const searchUrl = new URL(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`);
+        // §6 R3-5 P2-6: the search endpoint shares the registry URL whitelist
+        // (origin + `/-/v1/search` path shape), never a raw hardcoded fetch.
+        if (!isAllowedRegistryUrl(searchUrl.toString())) {
+          return { ok: false, error: 'search URL is not whitelisted' };
+        }
+        const response = await fetch(searchUrl, {
           signal: controller.signal,
         });
         if (!response.ok) return { ok: false, error: `npm search failed (HTTP ${response.status})` };
@@ -1453,6 +1468,60 @@ if (!gotTheLock) {
       return { ok: true };
     }));
     updater.start();
+
+    // dsh runtime version management (design 16 M2): the controller owns
+    // check/install/reset over the M2 data plane. Registry source is the
+    // user-configurable npm registry (default npmjs; the M4 settings block
+    // will expose it). The embedded pnpm path is resolved below — pnpm
+    // embedding is a deferred packaging step, so install fails loud (never
+    // fake success) until pnpm ships in extraResources / desktop deps.
+    const runtimeInstance = new DshRuntimeController({
+      baseDir: app.getPath('userData'),
+      bundledVersion: readDshVersion(dshWorkspace),
+      packageName: '@deepseek-ai/dsh',
+      registryOrigin: chamberSettings.registryOrigin,
+      // F8: 每操作现读当前 registry 源（切换源不必等重启，check/install 时取值）。
+      getRegistryOrigin: () => chamberSettings.registryOrigin,
+      // F6 env 来源：DSH_CHAMBER_DSH_PATH 设定时 active 版本来自 env（门控选择器）。
+      envVersion: process.env.DSH_CHAMBER_DSH_PATH ? readDshVersion(dshWorkspace) : null,
+      pnpmEntry: app.isPackaged
+        ? path.join(process.resourcesPath, 'pnpm', 'bin', 'pnpm.cjs')
+        : path.join(pkgDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
+      compatibilityBaseline: readDshVersion(dshWorkspace),
+      deps: {
+        fetchMetadata: (pkg, origin) => fetchRegistryMetadata(pkg, { origin }),
+        install: (opts) => installRuntimeVersion(opts),
+        store: {
+          readOverride: (b) => readOverride(b),
+          writeOverride: (b, record) => writeOverride(b, record),
+          readCurrentPointer: (b) => readCurrentPointer(b),
+          listVersionTrees: (b) => listVersionTrees(b),
+          deleteOverride: (b) => rmSync(overridePath(b), { force: true }),
+        },
+        shellVersion: version,
+      },
+    });
+    runtimeController = runtimeInstance;
+    runtimeInstance.onChanged((state) => {
+      if (mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('dsh-chamber:runtime-state-changed', state);
+      }
+    });
+    ipcMain.handle('dsh-chamber:runtime-state', trustedIpc(() => runtimeInstance.getState()));
+    ipcMain.handle('dsh-chamber:runtime-check', trustedIpc(() => runtimeInstance.check()));
+    ipcMain.handle('dsh-chamber:runtime-install', trustedIpc((args) => {
+      // Fail-closed on non-object/non-string payload (05 §7.4): never throw,
+      // return the current projection unchanged.
+      const v = args !== null && typeof args === 'object' ? (args as Record<string, unknown>).version : undefined;
+      if (typeof v !== 'string') return runtimeInstance.getState();
+      return runtimeInstance.install(v);
+    }));
+    ipcMain.handle('dsh-chamber:runtime-reset-builtin', trustedIpc(() => runtimeInstance.resetBuiltin()));
+
+    // §5 startup check: delayed 15s silent metadata refresh so the version
+    // list/latest is available without blocking startup; check() swallows
+    // network failure internally (→ error phase, projected honestly).
+    setTimeout(() => { void runtimeInstance.check() }, 15_000);
 
     // Single frame, single origin: the control plane serves the built dsh
     // frontend (design 05 §1) — no local file loads. A load failure is a

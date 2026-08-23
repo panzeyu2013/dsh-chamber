@@ -27,6 +27,10 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2, 2026-08 修订): confirm before quitting
    *  while the LOCAL dsh instance is running; remote tunnels never prompt. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry origin (design 16 M4): default npmjs; a
+   *  user-selected mirror/custom origin, validated as an https:// URL with
+   *  no userinfo (trust anchor — switching origin switches the trust anchor). */
+  registryOrigin: string
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -46,6 +50,7 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
   launchAtLogin: false,
   keepAwake: false,
   quitConfirmation: true,
+  registryOrigin: 'https://registry.npmjs.org',
 };
 
 const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
@@ -53,7 +58,25 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'launchAtLogin',
   'keepAwake',
   'quitConfirmation',
+  'registryOrigin',
 ];
+
+/** Normalize a registry origin (design 16 M4): a valid https:// URL with no
+ *  userinfo, reduced to scheme://host (no path/query/hash, no trailing slash).
+ *  Returns null for anything else — the registry origin is a trust anchor, so
+ *  invalid input is never silently accepted. */
+function normalizeRegistryOrigin(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '') return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  if (url.username !== '' || url.password !== '') return null;
+  return `${url.protocol}//${url.host}`;
+}
 
 /** Validate and normalize an unknown settings payload; unknown keys ignored. */
 export function normalizeSettings(input: unknown): ChamberSettings {
@@ -66,6 +89,8 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   if (typeof record.launchAtLogin === 'boolean') base.launchAtLogin = record.launchAtLogin;
   if (typeof record.keepAwake === 'boolean') base.keepAwake = record.keepAwake;
   if (typeof record.quitConfirmation === 'boolean') base.quitConfirmation = record.quitConfirmation;
+  const origin = normalizeRegistryOrigin(record.registryOrigin);
+  if (origin !== null) base.registryOrigin = origin;
   return base;
 }
 
@@ -181,6 +206,12 @@ export function validatePatch(patch: unknown): { ok: true; patch: Partial<Chambe
         return { ok: false, error: 'windowCloseBehavior must be "hide-to-tray" or "quit"' };
       }
       result.windowCloseBehavior = record[key] as WindowCloseBehavior;
+    } else if (key === 'registryOrigin') {
+      const origin = normalizeRegistryOrigin(record[key]);
+      if (origin === null) {
+        return { ok: false, error: 'registryOrigin must be a valid https:// URL without credentials' };
+      }
+      result.registryOrigin = origin;
     } else if (typeof record[key] !== 'boolean') {
       return { ok: false, error: `${key} must be a boolean` };
     } else {
