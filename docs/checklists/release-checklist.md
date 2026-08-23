@@ -34,11 +34,12 @@
       `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`
 - [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/client-web/host-graph/host-git`
 
-## 4. 构建与打包
+## 4. 构建
 
 - [ ] `pnpm install --frozen-lockfile` 通过（锁文件含 vendor importer 记录）。
 - [ ] `pnpm run build:renderer`、`pnpm run build:host-packages`、`pnpm run build:desktop` 通过。
-- [ ] `pnpm run dist:desktop:mac` 产出 `.dmg` + `.zip` + `.app` + `latest-mac.yml`（dmg 需允许 hdiutil 挂载的环境）。
+- [ ] **本地不做打包/签名/公证**（2026-08 决策）：安装包/更新源由 release.yml 的
+      build-macos / build-windows 在 CI 生成，发布者本机无需 hdiutil/密钥。
 - [ ] `pnpm run smoke` 通过（dsh 已封装时真跑；未安装时 SKIP 属正常）。
 
 ## 5. 工作区健康
@@ -48,12 +49,10 @@
 - [ ] 旧 dsh pin 残留扫描：`grep -rn "141eb6f\|0\.1\.0-rc\.8" packages/ scripts/ harness.commit`
       （非 vendor/node_modules）仅剩历史文档/迁移条目。
 
-## 6. 签名/发布模型决策（2026-08 起默认 ad-hoc/未签名）
+## 6. 签名/公证（2026-08 起全部由 CI 处理）
 
-- [ ] 默认路径：未配置密钥 → macOS ad-hoc 签名、Windows 未签名（documented
-      tradeoff，design 11 §7；macOS 自动安装腿无 Developer ID 被阻塞）。
-- [ ] 正式路径（可选）：配置 `MAC_CSC_LINK`/`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/
-      `APPLE_TEAM_ID`/`WIN_CSC_LINK` 后可恢复签名 + 公证发布。
+- [ ] 本地不配置任何签名密钥；macOS 签名/公证、Windows 签名由 release.yml 的
+      afterPack/发布腿处理（缺凭据或验签失败时 fail-closed 不发布，见 design 11 §7）。
 
 ## 7. 提交、tag 与 CI
 
@@ -67,5 +66,6 @@
 ## 8. 发布后
 
 - [ ] GitHub Release 正文 = changelog `[<version>]` 节（自动提取）。
-- [ ] 工件齐全：mac `.dmg`/`.zip`/`latest-mac.yml`、win `.exe`/`latest.yml`；无 `.blockmap`。
+- [ ] **CI 产物**齐全（本地不打包）：Actions 运行页 mac `.dmg`/`.zip`/`latest-mac.yml`、
+      win `.exe`/`latest.yml`；无 `.blockmap`。
 - [ ] 更新源存在（electron-updater feed）；如发布 beta，`beta.yml`/`beta-mac.yml` 对应。

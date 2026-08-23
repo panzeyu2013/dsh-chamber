@@ -10,11 +10,48 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.1.5] - 2026-08-23
 
 ### 新增
 
-（v0.1.4 发布后的下一版本占位）
+- **VS Code 深链插件（设计 16）** —— `dsh-chamber://` OS 深链 + 应用内按钮
+  快速拉起本机 VS Code Remote-SSH 打开对应 server 实例目录（本地走
+  `vscode://file/`、远程走 `ssh-remote+`）；按钮位于官方会话头部 utilities
+  槽（session-log 左侧），图标取自本机 VS Code 官方资源。
+- **Git 工作树删除增强（设计 08 §6 修订，用户拍板）** —— dirty 工作树不再
+  硬性阻断删除：删除对话框警示「未提交更改将被丢弃、分支保留」+ 勾选框，
+  勾选后以 `git worktree remove --force` 移除；**分支/提交/HEAD 永不触碰**，
+  身份/锁/主 checkout/running 守卫全部保留。
+
+### 修复
+
+- **Git 删除 504 竞态与 workspace 残留** —— 控制面实例反代上游空闲超时
+  10s→45s（高于 host git mutation 预算 30s）、浏览器 git RPC 超时 30s→60s：
+  慢速 `git worktree remove`（node_modules 重型目录）不再被 504 截断、
+  不再残留"普通 workspace"。
+- **Git host** —— pre-2.47 Git 回退换行定界 `--porcelain`（`-z` 未知开关
+  exit 129 时自动降级）；以最高优先级 `-c core.hooksPath` 禁用 worktree
+  hooks（防仓库自身 `core.hooksPath` 重新启用 `post-checkout`）。
+- **控制面加固** —— 代理剥离转发身份头；keep-alive 超大 JSON 请求体排空
+  （防连接被长请求体长期占用）；reaper 端口不可验证时 fail-closed；强制
+  仅回环绑定地址。
+- **桌面端安全** —— 拒绝渲染层注入的 `file:` 插件 spec；默认拒绝 web
+  权限请求（剪贴板写入豁免）。
+- **渲染器** —— pre-ready 503 预加载额外行有界重试（实例启动窗口内不再
+  静默丢失 profile 安装的插件）；host-graph bundle 仅加载 root-relative
+  形态。
+- **侧边栏** —— 移除死的 `sessions.state` 完备性检查（修复 session 状态
+  图标滞后一轮轮询周期的断链）。
+- **设置桥** —— 搜索聚焦时服务器下拉保持打开；客户端插件诊断迁移到
+  connections 插件的 chamber 块。
+- **VS Code 插件** —— 按钮入位官方 `conversation.session.header.utilities`
+  槽（不再与 utilities 行重叠）；图标换官方资源、排序在 session-log 左侧。
+
+### 变更
+
+- **发布流水线** —— macOS Developer ID 签名/公证接线（fail-closed：缺
+  凭据或验签失败即不发布，删除旧 Release 之前先预检凭据）。
+- **性能** —— 侧边栏拖拽目标未变化时跳过重渲染。
 
 ## [0.1.4] - 2026-08-21
 

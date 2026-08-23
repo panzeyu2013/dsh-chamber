@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-client-ui-settings-connections",
   "description": "Chamber connections settings section plugin (design 05 §5): local instance card (health / connections row / host logs) + remote host management (registry CRUD, connect/disconnect, on-demand systemd control, ring-buffer logs)",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publishConfig": {
     "access": "public"
   },

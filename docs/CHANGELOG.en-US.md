@@ -10,11 +10,61 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.1.5] - 2026-08-23
 
 ### Added
 
-(placeholder for the next version after v0.1.4)
+- **VS Code deep-link plugin (design 16)** — `dsh-chamber://` OS deep links
+  plus an in-app button that launches the local VS Code Remote-SSH session
+  for the target server instance (local: `vscode://file/`, remote:
+  `ssh-remote+`); the button sits in the official session-header utilities
+  slot (left of session-log) with the icon taken from the local VS Code
+  official resources.
+- **Git worktree removal enhancement (design 08 §6 amendment, user decision)**
+  — a dirty worktree no longer hard-blocks removal: the remove dialog warns
+  "uncommitted changes will be discarded, the branch is kept" and requires a
+  checkbox before the host removes it with `git worktree remove --force`;
+  **the branch/commits/HEAD are never touched** and the identity/lock/main/
+  running guards all stay unconditional.
+
+### Fixed
+
+- **Git removal 504 race and workspace residue** — the control-plane upstream
+  idle timeout is raised 10s→45s (above the host's 30s git mutation budget)
+  and the browser git RPC timeout 30s→60s: a slow `git worktree remove` over
+  a node_modules-heavy directory is no longer cut with 504 after the host
+  already committed, and no longer strands the workspace registration as a
+  plain workspace.
+- **Git host** — fall back to newline-delimited `--porcelain` on pre-2.47 Git
+  (unknown `-z` switch exits 129); disable worktree hooks via the
+  highest-precedence `-c core.hooksPath` so a repo's own `core.hooksPath`
+  cannot re-enable `post-checkout`.
+- **Control-plane hardening** — strip forwarded identity headers in the
+  proxy; drain oversized JSON request bodies on keep-alive (no long-lived
+  connection squatting); fail closed on an unverifiable reaper port; enforce
+  loopback-only bind addresses.
+- **Desktop security** — reject renderer-supplied `file:` plugin specs; deny
+  web permission requests by default (clipboard write exempted).
+- **Renderer** — bounded retry on pre-ready 503 while preloading extra rows
+  (profile-installed plugins no longer silently lost during the instance
+  spawn window); load only root-relative host-graph bundles.
+- **Sidebar** — drop the dead `sessions.state` completeness check (fixes the
+  session status icon lagging a poll cycle after a broken snapshot push).
+- **Settings bridge** — keep the server dropdown open while its search
+  focuses; move the client-plugin diagnostic into the connections plugin's
+  chamber block.
+- **VS Code plugin** — place the button in the official
+  `conversation.session.header.utilities` slot (no more overlap with the
+  utilities row); use the official icon resources and order before
+  session-log.
+
+### Changed
+
+- **Release pipeline** — macOS Developer ID signing/notarization wiring
+  (fail-closed: missing credentials or failed verification aborts the
+  release, and credentials are preflighted before deleting the old Release).
+- **Performance** — the sidebar skips re-rendering when the drag target did
+  not change.
 
 ## [0.1.4] - 2026-08-21
 

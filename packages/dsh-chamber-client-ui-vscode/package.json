@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-client-ui-vscode",
   "description": "Chamber-bundled VS Code deep-link client plugin: open the current source's workspace in local VS Code Remote-SSH (design 16)",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
