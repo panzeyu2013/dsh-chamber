@@ -262,6 +262,10 @@ export interface RuntimeSurface {
   check(): Promise<RuntimeState>
   install(version: string): Promise<RuntimeState>
   resetBuiltin(): Promise<RuntimeState>
+  retryApply(): Promise<RuntimeState>
+  retryRestore(): Promise<RuntimeState>
+  recoverMetadata(): Promise<RuntimeState>
+  cleanupVersion(version: string): Promise<RuntimeState>
   onChanged(callback: (state: RuntimeState) => void): () => void
 }
 
@@ -369,6 +373,10 @@ function runtimeApi(): RuntimeSurface {
     check: () => ipcRenderer.invoke('dsh-chamber:runtime-check'),
     install: version => ipcRenderer.invoke('dsh-chamber:runtime-install', { version }),
     resetBuiltin: () => ipcRenderer.invoke('dsh-chamber:runtime-reset-builtin'),
+    retryApply: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-apply'),
+    retryRestore: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-restore'),
+    recoverMetadata: () => ipcRenderer.invoke('dsh-chamber:runtime-recover-metadata'),
+    cleanupVersion: version => ipcRenderer.invoke('dsh-chamber:runtime-cleanup-version', { version }),
     onChanged: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event: IpcRendererEvent, state: RuntimeState) => callback(state);

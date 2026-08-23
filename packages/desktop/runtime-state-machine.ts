@@ -1,5 +1,5 @@
 /**
- * dsh 运行时版本管理状态机（design 16 §3.6 状态转移表）——纯逻辑、零依赖、
+ * dsh 运行时版本管理状态机（design 17 §3.6 状态转移表）——纯逻辑、零依赖、
  * 无 electron、无副作用（M4 抽纯模块）。只有三个纯函数：`transition`
  * （状态 × 事件 → 状态）、`allowedActions`（终态门：该状态下可见动作）、
  * `isTerminal`（rollback / failed 终态判定）。不碰文件、不碰 IPC、不碰 UI：
@@ -13,7 +13,7 @@
  *   pending → [恢复内建]（清 pending）→ idle
  *   applying → 回退连续失败 → failed（落内建树终态）
  *   applied → 下一周期 checking；rollback/failed → 终态（回滚后可再选）
- *   任意态 → error；error →(check) checking（retry-apply 即 check）
+ *   任意态 → error；error →(check) checking
  *
  * 本模块的简化接线（任务拍板，与 §3.6 的差异在此声明）：
  *   - `available →(install-confirm) installing` 一步到位——download+install 合
@@ -76,7 +76,6 @@ export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePha
         case 'available':
         case 'applied':
         case 'rollback':
-        case 'snapshot-failed':
         case 'failed':
         case 'error':
           return 'checking';
@@ -87,9 +86,9 @@ export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePha
       if (state !== 'checking') return state;
       return event.available ? 'available' : 'idle';
     case 'install-confirm':
-      // 简化：available 一步进 installing（download+install 合并），见文件头。
-      if (state !== 'available') return state;
-      return 'installing';
+      // Cached/offline rollback and an explicit install are valid from every
+      // non-busy phase that exposes the install action, not only available.
+      return allowedActions(state).includes('install') ? 'installing' : state;
     case 'install-done':
       if (state === 'installing' || state === 'downloading') return 'pending';
       return state;
@@ -137,6 +136,36 @@ export function transition(state: RuntimePhase, event: RuntimeEvent): RuntimePha
   }
 }
 
+/**
+ * Privileged startup/rollback orchestration publishes lifecycle outcomes from
+ * outside the controller's check/install event chain. Keep those edges
+ * explicit: a stale async projection must not jump a concurrent check or
+ * install directly into a rollback/failure story. Invalid edges are absorbed
+ * as the current phase; DshRuntimeController rejects the accompanying patch.
+ */
+const LIFECYCLE_PROJECTION_EDGES: Record<RuntimePhase, readonly RuntimePhase[]> = {
+  idle: ['applying', 'failed'],
+  checking: [],
+  available: ['applying', 'failed'],
+  downloading: [],
+  installing: [],
+  pending: ['applying', 'failed'],
+  applying: ['idle', 'applied', 'rollback', 'snapshot-failed', 'failed'],
+  applied: ['applying', 'failed'],
+  rollback: ['applying', 'failed'],
+  'snapshot-failed': ['applying', 'failed'],
+  failed: ['applying'],
+  // `error → idle` is reserved for a successful writer-fenced maintenance
+  // action that clears the disk-accounting/quota error without changing the
+  // active runtime. Reset/switch transactions still go through applying.
+  error: ['idle', 'applying', 'failed'],
+}
+
+export function transitionLifecycleProjection(current: RuntimePhase, next: RuntimePhase): RuntimePhase {
+  if (current === next) return current
+  return LIFECYCLE_PROJECTION_EDGES[current].includes(next) ? next : current
+}
+
 /** 可见动作（终态门，§3.6）：UI 依此渲染按钮；'select-version' 的无操作守卫在 controller。 */
 export type RuntimeAction =
   | 'check'
@@ -144,11 +173,13 @@ export type RuntimeAction =
   | 'install'
   | 'reset-builtin'
   | 'retry-apply'
-  | 'none';
+  | 'retry-restore'
+  | 'cleanup-version'
+  | 'recover-metadata';
 
 /**
  * 终态门（§3.6）：
- *   - pending/applying 期间除 reset-builtin 外其余禁用；
+ *   - pending 可恢复内建；applying 是持久事务临界区，所有新动作禁用；
  *   - idle/checking/available 允许 check + select-version（available 加 install）；
  *   - downloading/installing 在安装窗口内无可见动作（单飞守卫覆盖整个 install
  *     窗口，UI 只显示进度，即 'none'）；
@@ -156,29 +187,53 @@ export type RuntimeAction =
  *     reset-builtin；
  *   - error 允许 retry-apply（= check）+ reset-builtin。
  */
-export function allowedActions(state: RuntimePhase): RuntimeAction[] {
+export function allowedActions(
+  state: RuntimePhase,
+  capabilities: {
+    canRetryApply?: boolean
+    canRetryRestore?: boolean
+    canRecoverMetadata?: boolean
+  } = {},
+): RuntimeAction[] {
   switch (state) {
-    case 'idle':
-    case 'checking':
-      return ['check', 'select-version'];
+    case 'idle': {
+      const base: RuntimeAction[] = ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+      if (capabilities.canRecoverMetadata === true && capabilities.canRetryRestore !== true) {
+        base.unshift('recover-metadata');
+      }
+      return base;
+    }
     case 'available':
-      return ['check', 'select-version', 'install'];
+      return ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+    case 'checking':
     case 'downloading':
     case 'installing':
-      return ['none'];
+      return [];
     case 'pending':
+      return ['reset-builtin'];
     case 'applying':
       return ['reset-builtin'];
     case 'applied':
-    case 'rollback':
-    case 'failed':
-      return ['check', 'select-version', 'reset-builtin'];
+      return ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+    case 'rollback': {
+      const base: RuntimeAction[] = ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+      return capabilities.canRetryRestore === true ? ['retry-restore', ...base] : base;
+    }
+    case 'failed': {
+      const base: RuntimeAction[] = ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+      if (capabilities.canRetryRestore === true) base.unshift('retry-restore');
+      else if (capabilities.canRecoverMetadata === true) base.unshift('recover-metadata');
+      if (capabilities.canRetryApply === true) base.unshift('retry-apply');
+      return base;
+    }
     case 'snapshot-failed':
       // 快照失败（当前树仍好，未切指针）：可 [重试应用]（直入 applying）或
       // [恢复内建]；不再自动每启重试（§3.6 R3-3 UX-P1-F4）。
-      return ['retry-apply', 'reset-builtin'];
+      return capabilities.canRetryApply === true
+        ? ['retry-apply', 'reset-builtin']
+        : ['reset-builtin'];
     case 'error':
-      return ['retry-apply', 'reset-builtin'];
+      return ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
   }
 }
 
@@ -206,7 +261,10 @@ export function isTerminal(state: RuntimePhase): boolean {
  *   applied --check--> checking                            （下一周期）
  *   rollback --check--> checking / --reset-builtin--> idle （回滚后可再选）
  *   failed --check--> checking / --reset-builtin--> idle
- *   pending/applying/applied/rollback/failed/error --reset-builtin--> idle
+ *   pending/applied/rollback/failed/error --reset-builtin--> idle
+ *   applying --reset-builtin--> idle is an internal transaction outcome only;
+ *     the public reset action is durably queued and cannot interrupt the
+ *     active critical section.
  *   error --check--> checking                              （retry-apply 即 check）
  *   任意态 --error--> error
  */
