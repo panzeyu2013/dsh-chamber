@@ -24,8 +24,9 @@
  * Failures are loud and explicit (04 §4.2): unknown id → 404
  * instance_not_found; no tunnel / instance not ready → 503
  * instance_unavailable; upstream connect/timeout → 502/504 upstream_failed
- * (masked, never echoing the upstream host:port); body over 300MiB / response
- * over 300MiB → 413 body_too_large (+ upstream abort).
+ * (masked, never echoing the upstream host:port); declared body over 300MiB,
+ * unknown-length body over 32MiB, or response over 300MiB → 413
+ * body_too_large (+ upstream abort).
  *
  * Response headers are converged to a whitelist (03 §3.4): content-type,
  * cache-control, x-next-cursor, x-ratelimit-*; nothing else rides through
@@ -34,7 +35,7 @@
  * Diagnostics: plain counters (requests / failures / activeStreams) — no
  * sensitive data, no URLs.
  *
- * ## proxy-forward.ts split (design 16 §6.2, 方案 A)
+ * ## proxy-forward.ts split (design 17 §6.2, 方案 A)
  *
  * This module is now the thin shell: prefix parsing (`parseInstanceId` /
  * `parseInstancePath`), target resolution (`resolveTarget`) and the
@@ -45,7 +46,6 @@
  * pre-split instance-proxy.
  */
 
-import type { Duplex } from 'node:stream'
 import {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
   MAX_BUFFERED_REQUEST_BYTES,
@@ -61,6 +61,7 @@ import {
   WS_STREAM_PATHS,
   forwardHttp,
   forwardUpgrade,
+  getProcessBufferedRequestBytes,
   rejectUpgrade,
   writeError,
 } from './proxy-forward.ts'
@@ -69,6 +70,7 @@ import type {
   HttpRequestFactory,
   ProxyForwardCounters,
   ProxyForwardDeps,
+  ProxyLiveStream,
   ProxyRequest,
   ProxyResponse,
   ProxySocket,
@@ -90,6 +92,7 @@ export {
   WS_PING_INTERVAL_MS,
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
+  getProcessBufferedRequestBytes,
 }
 export type { ProxyRequest, ProxyResponse, ProxySocket }
 
@@ -148,7 +151,7 @@ export interface InstanceProxy {
 }
 
 /** Whether an id is a valid /api/i/<id> segment ('local', 'ssh-<id>' or
- * 'gateway-<id>'; design 16 §6.4 adds the gateway kind). */
+ * 'gateway-<id>'; design 17 §6.4 adds the gateway kind). */
 export function parseInstanceId(id: string): 'local' | 'ssh' | 'gateway' | null {
   if (id === 'local') return 'local'
   if (/^ssh-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'ssh'
@@ -190,7 +193,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
   /** connectionId ('ssh:<id>' / 'gateway:<id>') → target record (design 05
-   * §3.3 + design 16 §6.4). Local is never registered — its baseUrl is
+   * §3.3 + design 17 §6.4). Local is never registered — its baseUrl is
    * derived from the managed dshPort. A gateway record carries extra headers
    * (the shared bearer token) injected at forward time, never in the registry. */
   interface TransportRecord { baseUrl: string; headers?: Record<string, string> }
@@ -203,7 +206,59 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    * is removed from the HTTP server's connection tracking, so a lingering
    * half-open downlink (crashed host mid-reconnect) would otherwise hang
    * server.close() forever. */
-  const liveStreams = new Set<{ downstream: ProxySocket; upstream: Duplex }>()
+  const liveStreams = new Set<ProxyLiveStream>()
+  /** In-flight HTTP/SSE and WS handshakes keyed by transport. Revocation must
+   * terminate traffic already authenticated with the old transport/token;
+   * deleting only the routing-table row would leave those channels alive. */
+  const liveHttpByTransport = new Map<string, Set<ProxyResponse>>()
+  const liveUpgradeByTransport = new Map<string, Set<ProxySocket>>()
+
+  function connectionIdForInstance(id: string): string | null {
+    if (id === 'local') return null
+    const separator = id.indexOf('-')
+    return `${id.slice(0, separator)}:${id.slice(separator + 1)}`
+  }
+
+  function trackHttp(connectionId: string, res: ProxyResponse): void {
+    const responses = liveHttpByTransport.get(connectionId) ?? new Set<ProxyResponse>()
+    responses.add(res)
+    liveHttpByTransport.set(connectionId, responses)
+    const release = () => {
+      responses.delete(res)
+      if (responses.size === 0) liveHttpByTransport.delete(connectionId)
+    }
+    res.once('finish', release)
+    res.once('close', release)
+    res.once('error', release)
+  }
+
+  function trackUpgrade(connectionId: string, socket: ProxySocket): void {
+    const sockets = liveUpgradeByTransport.get(connectionId) ?? new Set<ProxySocket>()
+    sockets.add(socket)
+    liveUpgradeByTransport.set(connectionId, sockets)
+    socket.on('close', () => {
+      sockets.delete(socket)
+      if (sockets.size === 0) liveUpgradeByTransport.delete(connectionId)
+    })
+  }
+
+  function revokeTransportTraffic(connectionId: string): void {
+    const responses = liveHttpByTransport.get(connectionId)
+    liveHttpByTransport.delete(connectionId)
+    for (const res of responses ?? []) {
+      try { res.destroy() } catch { /* already closed */ }
+    }
+    const sockets = liveUpgradeByTransport.get(connectionId)
+    liveUpgradeByTransport.delete(connectionId)
+    for (const socket of sockets ?? []) {
+      try { socket.destroy() } catch { /* already closed */ }
+    }
+    for (const stream of [...liveStreams]) {
+      if (stream.ownerId !== connectionId) continue
+      try { stream.downstream.destroy() } catch { /* already closed */ }
+      try { stream.upstream.destroy() } catch { /* already closed */ }
+    }
+  }
 
   /** The shared forwarding-core config; only the log label differs per
    * request (the /api/i/<id> id), so the per-call deps spread it in. */
@@ -269,6 +324,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       activeHttpRequests += 1
+      const connectionId = connectionIdForInstance(parsed.id)
+      if (connectionId !== null) trackHttp(connectionId, res)
       let released = false
       const releaseRequest = () => {
         if (released) return
@@ -277,7 +334,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
-        await forwardHttp(req, res, forwardTarget, releaseRequest, logger, counters, { ...forwardDeps, id: parsed.id }, target.headers)
+        await forwardHttp(req, res, forwardTarget, releaseRequest, logger, counters, {
+          ...forwardDeps,
+          id: parsed.id,
+          responseBasePath: `/api/i/${parsed.id}`,
+          ...(connectionId === null ? {} : { streamOwner: connectionId }),
+        }, target.headers)
       } catch (error) {
         releaseRequest()
         counters.failures += 1
@@ -321,6 +383,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       pendingUpgrades += 1
+      const connectionId = connectionIdForInstance(parsed.id)
+      if (connectionId !== null) trackUpgrade(connectionId, socket)
       let released = false
       const releaseHandshake = () => {
         if (released) return
@@ -329,7 +393,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
-        await forwardUpgrade(req, socket, head, forwardTarget, releaseHandshake, logger, counters, { ...forwardDeps, id: parsed.id }, target.headers)
+        await forwardUpgrade(req, socket, head, forwardTarget, releaseHandshake, logger, counters, {
+          ...forwardDeps,
+          id: parsed.id,
+          ...(connectionId === null ? {} : { streamOwner: connectionId }),
+        }, target.headers)
       } catch (error) {
         releaseHandshake()
         counters.failures += 1
@@ -369,8 +437,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           || target.search !== '' || target.hash !== '') {
           throw new TypeError('registerInstanceTransport: ssh baseUrl must be a loopback origin')
         }
+        if (extraHeaders !== undefined) {
+          throw new TypeError('registerInstanceTransport: ssh transports cannot inject request headers')
+        }
       } else {
-        // gateway: https origin, non-loopback allowed (design 16 §6.4).
+        // gateway: https origin, non-loopback allowed (design 17 §6.4).
         if (target.protocol !== 'https:') {
           throw new TypeError('registerInstanceTransport: gateway baseUrl must be https')
         }
@@ -378,14 +449,30 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           || target.search !== '' || target.hash !== '') {
           throw new TypeError('registerInstanceTransport: gateway baseUrl must be an origin (no credentials/path/query)')
         }
+        const entries = extraHeaders === undefined ? [] : Object.entries(extraHeaders)
+        if (entries.length !== 1 || entries[0][0].toLowerCase() !== 'authorization') {
+          throw new TypeError('registerInstanceTransport: gateway transport requires exactly one Authorization header')
+        }
+        const credential = entries[0][1]
+        if (typeof credential !== 'string' || !credential.startsWith('Bearer ')
+          || credential.length <= 'Bearer '.length || credential.length > 'Bearer '.length + 4096
+          || /[\r\n\0]/.test(credential)) {
+          throw new TypeError('registerInstanceTransport: gateway Authorization must be a bounded Bearer credential')
+        }
+        extraHeaders = { authorization: credential }
       }
-      transports.set(connectionId, { baseUrl, ...(extraHeaders !== undefined ? { headers: extraHeaders } : {}) })
+      // Clone the only sanctioned header so caller mutation cannot alter a
+      // live transport after validation.
+      if (transports.has(connectionId)) revokeTransportTraffic(connectionId)
+      transports.set(connectionId, { baseUrl, ...(extraHeaders !== undefined ? { headers: { ...extraHeaders } } : {}) })
       logger.log(`instance-proxy: transport registered ${connectionId} -> ${target.host}`)
     },
 
     /** Unregister a remote instance transport (tunnel torn down). */
     unregisterTransport(connectionId: string) {
-      if (transports.delete(connectionId)) {
+      const removed = transports.delete(connectionId)
+      revokeTransportTraffic(connectionId)
+      if (removed) {
         logger.log(`instance-proxy: transport unregistered ${connectionId}`)
       }
     },

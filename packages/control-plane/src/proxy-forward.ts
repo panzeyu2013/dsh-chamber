@@ -1,7 +1,7 @@
 /**
- * Shared reverse-proxy forwarding core (design 16 §6.2, 方案 A).
+ * Shared reverse-proxy forwarding core (design 17 §6.2, 方案 A).
  *
- * Extracted verbatim from instance-proxy.ts so that gateway-proxy.ts reuses
+ * Extracted from instance-proxy.ts so that gateway-proxy.ts reuses
  * the exact Host/Origin rewrite, header-stripping, error semantics, rate
  * limiting, WebSocket splice and heartbeat — no fork, no drift. The two
  * proxies differ only in target resolution, which the caller passes in as a
@@ -13,8 +13,8 @@
  *     and forwards the path verbatim (no prefix stripping).
  *
  * The wire behavior (forwarded headers, JSON error bodies, status codes,
- * body caps, WS splice, heartbeat) is byte-identical to instance-proxy.ts as
- * of the extraction. Log lines are the only parameterized surface: callers
+ * body caps, WS splice, heartbeat) stays identical for both owners. Log lines
+ * are the only parameterized surface: callers
  * pass `deps.logPrefix` (instance-proxy → 'instance-proxy', gateway-proxy →
  * 'gateway-proxy') and `deps.id` (the /api/i/<id> id, or a fixed label).
  */
@@ -32,11 +32,24 @@ export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 /** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
-/** Process-wide budgets: bound memory, sockets and pending handshakes (aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
+/** Shared memory budget plus per-proxy concurrency defaults. The byte budget
+ * is enforced process-wide across instance-proxy and gateway-proxy owners. */
 export const MAX_BUFFERED_REQUEST_BYTES = 300 * 1024 * 1024
+/** Chunked/unknown-length uploads cannot be preallocated without a second
+ * full-size concat buffer. Keep that path small; large browser uploads must
+ * carry Content-Length and use the single-allocation path below. */
+export const MAX_UNDECLARED_REQUEST_BODY_BYTES = 32 * 1024 * 1024
 export const MAX_CONCURRENT_HTTP_REQUESTS = 64
 export const MAX_CONCURRENT_WS_STREAMS = 64
 export const MAX_PENDING_WS_HANDSHAKES = 16
+
+/** Shared by every proxy owner in this process (instance proxy + gateway
+ * direct proxy). Per-owner counters remain diagnostic projections only. */
+let processBufferedRequestBytes = 0
+
+export function getProcessBufferedRequestBytes(): number {
+  return processBufferedRequestBytes
+}
 
 /**
  * Upstream timeout (design 03 §3.3: "上游连接拒绝 / 超时 → 502 / 504"):
@@ -86,7 +99,17 @@ export const WS_PING_MISSES_BEFORE_TEARDOWN = 1
 /** Response headers converged through to the browser (03 §3.4 / 04 §4.3). */
 export const RESPONSE_HEADER_WHITELIST = new Set([
   'content-type',
+  'content-encoding',
+  'content-language',
+  'content-range',
+  'content-disposition',
+  'accept-ranges',
   'cache-control',
+  'etag',
+  'expires',
+  'last-modified',
+  'location',
+  'vary',
   'x-next-cursor',
   'x-ratelimit-limit',
   'x-ratelimit-remaining',
@@ -188,6 +211,15 @@ export interface ProxyForwardCounters {
   bufferedRequestBytes: number
 }
 
+/** One established WS splice. `ownerId` is set by the multi-transport
+ * instance proxy so revoking a transport also revokes streams authenticated
+ * with that transport's old credentials. */
+export interface ProxyLiveStream {
+  downstream: ProxySocket
+  upstream: Duplex
+  ownerId?: string
+}
+
 /** Config + shared state the forward functions need (all resolved by the owner). */
 export interface ProxyForwardDeps {
   /** Log label: the /api/i/<id> id, or a fixed gateway label. */
@@ -206,12 +238,20 @@ export interface ProxyForwardDeps {
   wsPingMissesBeforeTeardown: number
   maxBufferedRequestBytes: number
   /**
+   * Browser-visible prefix for an attached instance. Same-origin upstream
+   * redirects are rewritten through this prefix so a `Location: /login`
+   * cannot escape `/api/i/<id>`. The single-target gateway omits it.
+   */
+  responseBasePath?: string
+  /**
    * Live spliced WS streams (downstream browser leg + upstream host leg),
    * shared with the owner so its stop() can force-close them: an upgraded
    * socket leaves the HTTP server's connection tracking, so a lingering
    * half-open downlink would otherwise hang server.close() forever.
    */
-  liveStreams: Set<{ downstream: ProxySocket; upstream: Duplex }>
+  liveStreams: Set<ProxyLiveStream>
+  /** Optional transport registry key owning this request/stream. */
+  streamOwner?: string
 }
 
 /**
@@ -219,8 +259,17 @@ export interface ProxyForwardDeps {
  * 'body_too_large'} when the cap is exceeded (design 03 §3.4 — explicit
  * 413, never a silent truncation).
  */
-export async function readBody(req: ProxyRequest, cap: number, idleTimeoutMs = CLIENT_BODY_IDLE_TIMEOUT_MS): Promise<Buffer> {
+export async function readBody(
+  req: ProxyRequest,
+  cap: number,
+  idleTimeoutMs = CLIENT_BODY_IDLE_TIMEOUT_MS,
+  expectedBytes?: number,
+): Promise<Buffer> {
   const chunks: Buffer[] = []
+  const preallocated = expectedBytes !== undefined && Number.isInteger(expectedBytes)
+    && expectedBytes >= 0 && expectedBytes <= cap
+    ? Buffer.allocUnsafe(expectedBytes)
+    : null
   let size = 0
   const iterator = req[Symbol.asyncIterator]()
   while (true) {
@@ -249,16 +298,30 @@ export async function readBody(req: ProxyRequest, cap: number, idleTimeoutMs = C
     }
     if (result.done) break
     const chunk = result.value
-    size += chunk.length
-    if (size > cap) {
+    const nextSize = size + chunk.length
+    if (nextSize > cap) {
       const error: Error & { code?: string } = new Error(`request body exceeds ${cap} bytes`)
       error.code = 'body_too_large'
       void iterator.return?.()
       throw error
     }
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    const normalized = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    if (preallocated !== null) {
+      const available = Math.max(0, preallocated.length - size)
+      if (available > 0) normalized.subarray(0, available).copy(preallocated, size)
+      if (normalized.length > available) chunks.push(normalized.subarray(available))
+    } else chunks.push(normalized)
+    size = nextSize
   }
-  return Buffer.concat(chunks)
+  if (preallocated !== null && chunks.length === 0) return preallocated.subarray(0, size)
+  // A declared Content-Length is enforced by Node's parser in production. If
+  // an injected/test request violates it, preserve correctness without
+  // reading beyond the cap; only that non-production mismatch uses concat.
+  if (preallocated !== null && size > preallocated.length) {
+    return Buffer.concat([preallocated.subarray(0, preallocated.length), ...chunks], size)
+  }
+  if (chunks.length === 0) return Buffer.alloc(0)
+  return chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, size)
 }
 
 /** Wait for the response socket to drain (write-path backpressure). */
@@ -266,15 +329,75 @@ function waitForDrain(res: ProxyResponse): Promise<void> {
   return new Promise(resolve => res.once('drain', () => resolve()))
 }
 
-/** A request body with a byte budget, for capped forwarding. */
-function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void; size: number } {
+/**
+ * A request body with a byte budget, for capped forwarding. `send()` keeps
+ * the chunks live only until node:http accepts them and honours writable
+ * backpressure instead of queueing the entire 300MiB body unconditionally.
+ */
+function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void; stop: (upstream: ClientRequest) => void; size: number } {
   const size = chunks.reduce((total, chunk) => total + chunk.length, 0)
+  let index = 0
+  let stopped = false
+  let drainListener: (() => void) | null = null
+  const writeAvailable = (upstream: ClientRequest): void => {
+    if (stopped) return
+    drainListener = null
+    while (index < chunks.length) {
+      const accepted = upstream.write(chunks[index])
+      index += 1
+      if (!accepted) {
+        drainListener = () => writeAvailable(upstream)
+        upstream.once('drain', drainListener)
+        return
+      }
+    }
+    chunks.length = 0
+    upstream.end()
+  }
   return {
     size,
-    send(upstream) {
-      for (const chunk of chunks) upstream.write(chunk)
+    send(upstream: ClientRequest) {
+      writeAvailable(upstream)
+    },
+    stop(upstream: ClientRequest) {
+      stopped = true
+      chunks.length = 0
+      if (drainListener !== null) {
+        upstream.removeListener('drain', drainListener)
+        drainListener = null
+      }
     },
   }
+}
+
+/** Rewrite only redirects back to the same trusted upstream origin. */
+function convergeLocation(value: string, target: URL, responseBasePath: string | undefined): string {
+  if (responseBasePath === undefined || responseBasePath === '') return value
+  let resolved: URL
+  try {
+    resolved = new URL(value, target)
+  } catch {
+    return value
+  }
+  if (resolved.origin !== target.origin) return value
+  return `${responseBasePath}${resolved.pathname}${resolved.search}${resolved.hash}`
+}
+
+function mergeVary(headers: Record<string, string | string[]>, corsHeaders: Record<string, string>): void {
+  const values = [headers.vary, corsHeaders.vary]
+    .flatMap(value => Array.isArray(value) ? value : value === undefined ? [] : [value])
+    .flatMap(value => value.split(','))
+    .map(value => value.trim())
+    .filter(Boolean)
+  if (values.length === 0) return
+  const seen = new Set<string>()
+  headers.vary = values.filter(value => {
+    const key = value.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).join(', ')
+  delete corsHeaders.vary
 }
 
 /** Write a JSON error in the unified shape ({error, code}). */
@@ -337,12 +460,20 @@ export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwar
 
 /** Forward an HTTP request to a fully-resolved target (method/body/query kept). */
 export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target: URL, releaseRequest: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>): Promise<void> {
-  // Select the http/https request by target protocol (design 16 §6.4: the
+  // Select the http/https request by target protocol (design 17 §6.4: the
   // gateway transport target is `https://`, which node:http cannot send).
   const request = deps.httpRequest ?? (target.protocol === 'https:' ? httpsRequest : httpRequest)
   const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
   const hasBody = !(method === 'GET' || method === 'HEAD')
   let body: Buffer | null = null
+  let bodyReservation = 0
+  let bodyReservationReleased = false
+  const releaseBodyReservation = (): void => {
+    if (bodyReservationReleased) return
+    bodyReservationReleased = true
+    counters.bufferedRequestBytes = Math.max(0, counters.bufferedRequestBytes - bodyReservation)
+    processBufferedRequestBytes = Math.max(0, processBufferedRequestBytes - bodyReservation)
+  }
   if (hasBody) {
     const rawLength = Array.isArray(req.headers['content-length']) ? req.headers['content-length'][0] : req.headers['content-length']
     const declared = rawLength === undefined ? NaN : Number(rawLength)
@@ -355,29 +486,43 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     // Unknown/chunked bodies reserve the full per-request cap. A valid
     // Content-Length reserves its exact byte count; Node's parser enforces
     // that framing, so a caller cannot smuggle additional body bytes.
-    const reservation = Number.isFinite(declared) && declared >= 0 ? declared : MAX_REQUEST_BODY_BYTES
-    if (counters.bufferedRequestBytes + reservation > deps.maxBufferedRequestBytes) {
+    const hasDeclaredLength = Number.isFinite(declared) && declared >= 0
+    const readCap = hasDeclaredLength ? MAX_REQUEST_BODY_BYTES : MAX_UNDECLARED_REQUEST_BODY_BYTES
+    const reservation = hasDeclaredLength ? declared : MAX_UNDECLARED_REQUEST_BODY_BYTES
+    if (counters.bufferedRequestBytes + reservation > deps.maxBufferedRequestBytes
+      || processBufferedRequestBytes + reservation > MAX_BUFFERED_REQUEST_BYTES) {
       counters.failures += 1
       releaseRequest()
       writeError(res, 503, 'resource_exhausted', 'proxy request-body budget is exhausted', logger)
       return
     }
-    counters.bufferedRequestBytes += reservation
+    bodyReservation = reservation
+    counters.bufferedRequestBytes += bodyReservation
+    processBufferedRequestBytes += bodyReservation
     try {
-      body = await readBody(req, MAX_REQUEST_BODY_BYTES, deps.clientBodyIdleTimeoutMs)
+      body = await readBody(req, readCap, deps.clientBodyIdleTimeoutMs, hasDeclaredLength ? declared : undefined)
     } catch (bodyError) {
-      counters.bufferedRequestBytes = Math.max(0, counters.bufferedRequestBytes - reservation)
+      releaseBodyReservation()
       counters.failures += 1
       releaseRequest()
       const code = (bodyError as Error & { code?: string }).code
       if (code === 'request_timeout') {
         writeError(res, 408, 'request_timeout', 'request body upload timed out', logger)
       } else {
-        writeError(res, 413, 'body_too_large', 'request body exceeds the 300MiB cap', logger)
+        const capMiB = Math.floor(readCap / (1024 * 1024))
+        writeError(res, 413, 'body_too_large', `request body exceeds the ${capMiB}MiB cap`, logger)
       }
       return
     }
-    counters.bufferedRequestBytes = Math.max(0, counters.bufferedRequestBytes - reservation)
+    // Unknown/chunked bodies conservatively reserve the full cap while they
+    // are being read. Once complete, retain only the bytes that are actually
+    // still buffered — and keep that reservation until the upstream request
+    // emits `finish`/`close`/`error`.
+    if (body.length < bodyReservation) {
+      counters.bufferedRequestBytes -= bodyReservation - body.length
+      processBufferedRequestBytes -= bodyReservation - body.length
+      bodyReservation = body.length
+    }
   }
   const headers: Record<string, string> = { host: target.host }
   for (const [name, value] of Object.entries(req.headers)) {
@@ -398,28 +543,45 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     }
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 16 §6.4: the gateway's Authorization)
+  // Per-transport extra headers (design 17 §6.4: the gateway's Authorization)
   // are injected AFTER the strip + Origin rewrite so they are never mistaken
   // for a browser header and never stripped.
   if (extraHeaders !== undefined) {
     for (const [name, value] of Object.entries(extraHeaders)) {
       const lower = name.toLowerCase()
-      // Defense-in-depth: extraHeaders must only ADD credentials — never
-      // override the rewritten host/origin (trust fence) or the body framing.
-      if (lower === 'host' || lower === 'origin' || lower === 'content-length') continue
-      headers[lower] = value
+      // Defense-in-depth behind registerTransport(): the sole sanctioned
+      // injected header is the gateway bearer credential.
+      if (lower !== 'authorization') continue
+      headers.authorization = value
     }
   }
   // Forward the bytes we actually accepted, never an untrusted client
   // declaration. This also normalizes chunked uploads into a bounded body.
   if (body !== null) headers['content-length'] = String(body.length)
   const controller = new AbortController()
+  let responseEnded = false
+  let clearTimeoutGuards = (): void => {}
+  let stopBodySource = (): void => releaseBodyReservation()
+  const cleanupClientListeners = (): void => {
+    req.removeListener('aborted', onClientClose)
+    res.removeListener('close', onClientClose)
+  }
   const onClientClose = () => {
+    if (responseEnded) return
+    cleanupClientListeners()
+    clearTimeoutGuards()
+    stopBodySource()
     controller.abort()
     releaseRequest()
   }
-  req.on('close', onClientClose)
+  // IncomingMessage `close` means "request parsing completed" on modern
+  // Node, not necessarily that the peer disappeared. Abort only on the
+  // explicit request `aborted` signal or an unfinished ServerResponse close.
+  req.on('aborted', onClientClose)
+  res.on('close', onClientClose)
   const timeoutAbort = (): void => {
+    cleanupClientListeners()
+    stopBodySource()
     controller.abort()
     releaseRequest()
     if (!res.headersSent) writeError(res, 504, 'upstream_timeout', 'upstream request timed out', logger)
@@ -429,18 +591,37 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   // idle longer than that either (re-armed after headers arrive). SSE and
   // upgraded WebSockets never re-arm — long-lived by nature.
   let clearUpstreamTimeout = armUpstreamTimeout(deps, counters, logger, timeoutAbort)
-  const clearTimeoutGuards = (): void => {
+  clearTimeoutGuards = (): void => {
     clearUpstreamTimeout()
     clearUpstreamTimeout = () => {}
   }
   const source = body === null ? null : bodySource([body])
-  const upstream = request(target, {
-    method,
-    headers,
-    signal: controller.signal,
-  })
-  upstream.on('error', upstreamError => {
+  let upstream: ClientRequest
+  try {
+    upstream = request(target, {
+      method,
+      headers,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    cleanupClientListeners()
     clearTimeoutGuards()
+    releaseBodyReservation()
+    throw error
+  }
+  stopBodySource = (): void => {
+    source?.stop(upstream)
+    releaseBodyReservation()
+  }
+  // `finish` means all accepted request bytes have left ClientRequest's
+  // writable queue. Until then the body remains charged against the process
+  // budget, including while waiting for `drain`.
+  upstream.once('finish', stopBodySource)
+  upstream.once('close', stopBodySource)
+  upstream.on('error', upstreamError => {
+    stopBodySource()
+    clearTimeoutGuards()
+    cleanupClientListeners()
     const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
     releaseRequest()
     if (abort) return
@@ -460,6 +641,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     const declaredBytes = typeof declaredLength === 'string' ? Number(declaredLength) : NaN
     if (!isSse && Number.isFinite(declaredBytes) && declaredBytes > MAX_RESPONSE_BODY_BYTES) {
       upstreamRes.destroy()
+      stopBodySource()
+      cleanupClientListeners()
       releaseRequest()
       counters.failures += 1
       writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap', logger)
@@ -469,10 +652,20 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     for (const [name, value] of Object.entries(upstreamRes.headers)) {
       const lower = name.toLowerCase()
       if (!RESPONSE_HEADER_WHITELIST.has(lower)) continue
+      if (lower === 'location') {
+        if (Array.isArray(value)) {
+          headers[name] = value.map(entry => convergeLocation(entry, target, deps.responseBasePath))
+        } else if (typeof value === 'string') {
+          headers[name] = convergeLocation(value, target, deps.responseBasePath)
+        }
+        continue
+      }
       headers[name] = value as string | string[]
     }
     if (!isSse && Number.isFinite(declaredBytes)) headers['content-length'] = String(declaredBytes)
-    res.writeHead(upstreamRes.statusCode ?? 502, { ...headers, ...(res._corsHeaders ?? {}) })
+    const corsHeaders = { ...(res._corsHeaders ?? {}) }
+    mergeVary(headers, corsHeaders)
+    res.writeHead(upstreamRes.statusCode ?? 502, { ...headers, ...corsHeaders })
     // Headers are out: a stalled non-SSE body gets the same explicit
     // teardown (headersSent=true → destroy, the browser sees the stream cut).
     if (!isSse) clearUpstreamTimeout = armUpstreamTimeout(deps, counters, logger, timeoutAbort)
@@ -489,6 +682,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
         // Explicit overflow: abort the upstream stream, never a silent
         // truncation (design 03 §3.4).
         upstreamRes.destroy()
+        stopBodySource()
+        cleanupClientListeners()
         controller.abort()
         releaseRequest()
         counters.failures += 1
@@ -503,6 +698,8 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     })
     upstreamRes.on('error', () => {
       clearTimeoutGuards()
+      stopBodySource()
+      cleanupClientListeners()
       releaseRequest()
       counters.failures += 1
       res.destroy()
@@ -511,19 +708,26 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     // res.write into writeAfterFIN — the resulting EPIPE 'error' must be
     // consumed, and the upstream aborted instead of kept streaming into
     // a dead response (same teardown family as the upgrade splice).
-    res.on('error', () => {
-      controller.abort()
-      releaseRequest()
-    })
+    res.on('error', onClientClose)
     upstreamRes.on('end', () => {
       clearTimeoutGuards()
+      stopBodySource()
       releaseRequest()
-      req.removeListener('close', onClientClose)
+      responseEnded = true
+      cleanupClientListeners()
       res.end()
     })
   })
-  source?.send(upstream)
-  upstream.end()
+  try {
+    source?.send(upstream)
+    if (source === null) upstream.end()
+  } catch (error) {
+    stopBodySource()
+    clearTimeoutGuards()
+    cleanupClientListeners()
+    controller.abort()
+    throw error
+  }
 }
 
 /** Forward a WS upgrade to a fully-resolved target (events.mux / events.host). */
@@ -538,15 +742,13 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     if (value === undefined) continue
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 16 §6.4: Authorization) ride the
+  // Per-transport extra headers (design 17 §6.4: Authorization) ride the
   // upgrade handshake too — the gateway's WS auth == HTTP auth (S2).
   if (extraHeaders !== undefined) {
     for (const [name, value] of Object.entries(extraHeaders)) {
       const lower = name.toLowerCase()
-      // Same guard as forwardHttp: extraHeaders must never override the
-      // rewritten host/origin or the handshake framing.
-      if (lower === 'host' || lower === 'origin' || lower === 'content-length') continue
-      headers[lower] = value
+      if (lower !== 'authorization') continue
+      headers.authorization = value
     }
   }
   const controller = new AbortController()
@@ -554,7 +756,9 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     controller.abort()
     releaseHandshake()
   }
-  req.on('close', onClientClose)
+  // The downstream socket, not IncomingMessage `close`, owns upgrade
+  // handshake liveness (the latter may merely mean the HTTP headers parsed).
+  socket.on('close', onClientClose)
   // The upgrade handshake must complete within upstreamTimeoutMs; once the
   // upstream answers 101 the socket is spliced and the timeout is cleared
   // (a live WebSocket is long-lived by nature).
@@ -571,6 +775,7 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
   upstream.on('error', upstreamError => {
     clearUpgradeTimeout()
     releaseHandshake()
+    socket.removeListener('close', onClientClose)
     const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
     if (abort) return
     counters.failures += 1
@@ -590,15 +795,19 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     logger.log(`${deps.logPrefix}: upstream ${deps.id} upgrade answered non-101 (${upstreamRes.statusCode ?? '?'}); rejecting`)
     upstreamRes.on('error', () => {})
     upstreamRes.destroy()
-    req.removeListener('close', onClientClose)
+    socket.removeListener('close', onClientClose)
     rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket answered non-101', logger)
   })
   upstream.on('upgrade', (upstreamRes: IncomingMessage, upstreamSocket: Duplex, upstreamHead: Buffer) => {
     clearUpgradeTimeout()
     releaseHandshake()
-    req.removeListener('close', onClientClose)
+    socket.removeListener('close', onClientClose)
     counters.activeStreams += 1
-    const stream = { downstream: socket, upstream: upstreamSocket }
+    const stream: ProxyLiveStream = {
+      downstream: socket,
+      upstream: upstreamSocket,
+      ...(deps.streamOwner === undefined ? {} : { ownerId: deps.streamOwner }),
+    }
     deps.liveStreams.add(stream)
     let tornDown = false
     // chamber patch (design 14 extension): the spliced downlinks are

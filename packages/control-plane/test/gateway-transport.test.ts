@@ -1,5 +1,5 @@
 /**
- * Gateway transport registration + extraHeaders injection tests (design 16
+ * Gateway transport registration + extraHeaders injection tests (design 17
  * §6.4 / D8): the new `gateway:` kind (https, non-loopback) and the per-
  * transport Authorization injection at forward time. Run with
  * `node packages/control-plane/test/gateway-transport.test.ts`.
@@ -20,6 +20,7 @@ function fakeHttpRequest() {
     const req = new EventEmitter() as any
     req.write = () => true
     req.end = () => {
+      req.emit('finish')
       const res = new EventEmitter() as any
       res.statusCode = 200
       res.headers = { 'content-type': 'application/json' }
@@ -67,7 +68,7 @@ function fakeResponse(): ProxyResponse & { status: number | null } {
 test('registerTransport accepts a gateway https non-loopback origin + extraHeaders', () => {
   const upstream = fakeHttpRequest()
   const proxy = createInstanceProxy({ logger: quietLogger, getLocalState: () => 'ready', getLocalDshPort: () => 17510, httpRequest: upstream.fn })
-  // Non-loopback https origin with an Authorization header (design 16 §6.4).
+  // Non-loopback https origin with an Authorization header (design 17 §6.4).
   proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', { authorization: 'Bearer secret' })
   assert.equal(proxy.getDiagnostics().transports, 1)
 })
@@ -90,20 +91,38 @@ test('registerTransport still rejects a non-loopback ssh baseUrl', () => {
   assert.throws(() => proxy.registerTransport('ssh:x', 'https://example.com'), /loopback/)
 })
 
-test('extraHeaders are injected at forward time and never override host/origin', async () => {
+test('gateway transport accepts only one bounded Bearer Authorization header', () => {
   const upstream = fakeHttpRequest()
   const proxy = createInstanceProxy({ logger: quietLogger, getLocalState: () => 'ready', getLocalDshPort: () => 17510, httpRequest: upstream.fn })
-  proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', {
-    authorization: 'Bearer secret',
-    host: 'evil.injected',
-    origin: 'https://evil.injected',
-  })
+  assert.throws(
+    () => proxy.registerTransport('gateway:missing', 'https://gateway.example.com'),
+    /exactly one Authorization/,
+  )
+  assert.throws(
+    () => proxy.registerTransport('gateway:multi', 'https://gateway.example.com', { authorization: 'Bearer secret', host: 'evil' }),
+    /exactly one Authorization/,
+  )
+  assert.throws(
+    () => proxy.registerTransport('gateway:basic', 'https://gateway.example.com', { authorization: 'Basic secret' }),
+    /Bearer credential/,
+  )
+  assert.throws(
+    () => proxy.registerTransport('gateway:crlf', 'https://gateway.example.com', { authorization: 'Bearer good\r\nx-evil: yes' }),
+    /Bearer credential/,
+  )
+  assert.throws(
+    () => proxy.registerTransport('ssh:inject', 'http://127.0.0.1:22001', { authorization: 'Bearer secret' }),
+    /cannot inject/,
+  )
+})
+
+test('validated Authorization is injected at forward time without changing authority', async () => {
+  const upstream = fakeHttpRequest()
+  const proxy = createInstanceProxy({ logger: quietLogger, getLocalState: () => 'ready', getLocalDshPort: () => 17510, httpRequest: upstream.fn })
+  proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', { Authorization: 'Bearer secret' })
   await proxy.handleHttp(fakeRequest('/api/i/gateway-server-1/api/session.list'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
-  // The Authorization header rides through; host must NOT be overridden by the
-  // injected extraHeaders, and the injected origin is dropped (the request had
-  // no origin to rewrite, so none may appear).
   assert.equal(headers.authorization, 'Bearer secret')
   assert.equal(headers.host, 'gateway.example.com:8443')
   assert.equal(headers.origin, undefined)
