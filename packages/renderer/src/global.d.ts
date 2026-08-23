@@ -357,38 +357,19 @@ export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
 }
 
-/** dsh runtime version state (design 17 §3.6) — non-secret projection. */
-export type RuntimePhase = 'idle' | 'checking' | 'available' | 'installing' | 'pending' | 'error'
-
-export interface RuntimeVersionEntry {
-  version: string
-  tarball: string
-  integrity: string | null
-  latest: boolean
-  cached: boolean
-  belowBaseline: boolean
-}
-
-export interface RuntimeState {
-  active: string | null
-  bundled: string | null
-  /** bundled | user | env (§3.5/§3.6 A.1 env 来源建模)。 */
-  source: 'bundled' | 'user' | 'env'
-  latest: string | null
-  versions: RuntimeVersionEntry[]
-  pending: string | null
-  phase: RuntimePhase
-  error: string | null
-}
-
-/** dsh runtime version management surface (design 17 M2 IPC). */
-export interface RuntimeSurface {
-  state(): Promise<RuntimeState>
-  check(): Promise<RuntimeState>
-  install(version: string): Promise<RuntimeState>
-  resetBuiltin(): Promise<RuntimeState>
-  onChanged(callback: (state: RuntimeState) => void): () => void
-}
+/** dsh runtime management types and complete design-17 state projection. */
+import type { RuntimeSurface } from './runtime-management.ts'
+export type {
+  RuntimeAction,
+  RuntimeFailure,
+  RuntimeMetadataComponent,
+  RuntimeMetadataHealth,
+  RuntimePhase,
+  RuntimeRestoreOutcome,
+  RuntimeState,
+  RuntimeSurface,
+  RuntimeVersionEntry,
+} from './runtime-management.ts'
 
 /** The full bridge: app info + ssh + update + chamber settings + system resume,
  *  VS Code deep-link, and dsh runtime-management surfaces. */
