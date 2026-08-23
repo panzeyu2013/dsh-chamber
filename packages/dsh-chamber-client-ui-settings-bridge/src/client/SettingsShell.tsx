@@ -140,6 +140,7 @@ function ServerDropdown({
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const popupRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const searchRef = useRef<HTMLInputElement | null>(null)
   const menuId = useId()
   const selected = servers.find(server => server.id === selectedId)
   const filteredServers = filterServerRows(servers, query)
@@ -158,10 +159,18 @@ function ServerDropdown({
     setPosition(serverDropdownPlacement(rect, { width: window.innerWidth, height: window.innerHeight }))
   }, [])
 
-  // Measure before paint so the body portal never flashes at (0, 0).
+  // Measure before paint so the body portal never flashes at (0, 0), and move
+  // focus to the search input. Focus must NOT use the `autoFocus` attribute:
+  // React runs `autoFocus` in the MUTATION phase, BEFORE the portal's
+  // `popupRef` is attached (refs attach in the LAYOUT phase). The trigger's
+  // resulting blur would then be misread by onRootBlur as "focus left the
+  // dropdown" (popupRef.current is still null), so the list would close the
+  // instant it opens. Focusing here — after refs are attached — lets
+  // onRootBlur see the input inside the portal and keeps the list open.
   useLayoutEffect(() => {
     if (!open) return
     updatePosition()
+    searchRef.current?.focus()
     window.addEventListener('resize', updatePosition)
     window.addEventListener('scroll', updatePosition, true)
     return () => {
@@ -256,12 +265,12 @@ function ServerDropdown({
           style={{ top: position.top, left: position.left, width: position.width, maxHeight: position.maxHeight }}
         >
           <input
+            ref={searchRef}
             className={css.dropdownSearch}
             value={query}
             placeholder={t('serverSearchPlaceholder')}
             aria-label={t('serverSearchLabel')}
             onChange={event => setQuery(event.target.value)}
-            autoFocus
           />
           <div id={menuId} ref={listRef} role="listbox" className={css.dropdownItems} aria-label={t('serverDropdownLabel')}>
           {filteredServers.map(server => {
