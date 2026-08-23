@@ -17,6 +17,23 @@ export const ALLOWED_REGISTRY_ORIGINS: readonly string[] = [
   'https://registry.npmmirror.com',
 ]
 
+/** Canonicalize a registry setting to an exact origin (never a path/query). */
+export function canonicalRegistryOrigin(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '') return null
+  try {
+    const url = new URL(raw)
+    const loopbackHttp = url.protocol === 'http:'
+      && (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]')
+    if (url.protocol !== 'https:' && !loopbackHttp) return null
+    if (url.username !== '' || url.password !== '') return null
+    if (url.pathname !== '' && url.pathname !== '/') return null
+    if (url.search !== '' || url.hash !== '') return null
+    return url.origin
+  } catch {
+    return null
+  }
+}
+
 /**
  * Whether `raw` is a URL the dsh runtime channel may fetch: it parses with
  * `new URL`, its origin is in `origins` (defaults to

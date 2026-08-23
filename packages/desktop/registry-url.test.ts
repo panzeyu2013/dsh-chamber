@@ -7,7 +7,17 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ALLOWED_REGISTRY_ORIGINS, isAllowedRegistryUrl } from './registry-url.ts';
+import { ALLOWED_REGISTRY_ORIGINS, canonicalRegistryOrigin, isAllowedRegistryUrl } from './registry-url.ts';
+
+test('canonicalRegistryOrigin: accepts exact HTTPS origins and loopback HTTP only', () => {
+  assert.equal(canonicalRegistryOrigin('https://registry.npmjs.org/'), 'https://registry.npmjs.org');
+  assert.match(canonicalRegistryOrigin('http://127.0.0.1:12345') ?? '', /^http:\/\/127\.0\.0\.1:/);
+  assert.equal(canonicalRegistryOrigin('http://registry.npmjs.org'), null);
+  assert.equal(canonicalRegistryOrigin('ftp://registry.npmjs.org'), null);
+  assert.equal(canonicalRegistryOrigin('https://registry.npmjs.org/path'), null);
+  assert.equal(canonicalRegistryOrigin('https://user:secret@registry.npmjs.org'), null);
+  assert.equal(canonicalRegistryOrigin('https://registry.npmjs.org?token=secret'), null);
+});
 
 test('isAllowedRegistryUrl: metadata / tarball / search URLs pass', () => {
   assert.equal(isAllowedRegistryUrl('https://registry.npmjs.org/@deepseek-ai/dsh'), true);

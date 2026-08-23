@@ -14,6 +14,8 @@ test('EXACT_SEMVER: 与 bundle-dsh.mjs 第 69 行同口径（精确 semver，含
   assert.equal(EXACT_SEMVER.test('latest'), false);
   assert.equal(EXACT_SEMVER.test('1.0'), false);
   assert.equal(EXACT_SEMVER.test('1.0.0-'), false);
+  assert.equal(EXACT_SEMVER.test('01.0.0'), false);
+  assert.equal(EXACT_SEMVER.test('1.0.0-01'), false);
 });
 
 test('isSafeVersion: 合法 semver（含 prerelease / build metadata / 首尾空白）通过', () => {

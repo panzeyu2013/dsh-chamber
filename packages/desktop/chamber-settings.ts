@@ -75,7 +75,9 @@ function normalizeRegistryOrigin(raw: unknown): string | null {
   }
   if (url.protocol !== 'https:') return null;
   if (url.username !== '' || url.password !== '') return null;
-  return `${url.protocol}//${url.host}`;
+  if (url.pathname !== '' && url.pathname !== '/') return null;
+  if (url.search !== '' || url.hash !== '') return null;
+  return url.origin;
 }
 
 /** Validate and normalize an unknown settings payload; unknown keys ignored. */
@@ -97,7 +99,18 @@ export function normalizeSettings(input: unknown): ChamberSettings {
 /** Whether the persisted file's key set is well-formed (unknown keys are a
  *  forward-compat concern, not corruption — tolerate them). */
 function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
-  return input !== null && typeof input === 'object' && !Array.isArray(input);
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return false;
+  const record = input as Record<string, unknown>;
+  if (record.windowCloseBehavior !== undefined
+    && record.windowCloseBehavior !== 'hide-to-tray'
+    && record.windowCloseBehavior !== 'quit') return false;
+  for (const key of ['launchAtLogin', 'keepAwake', 'quitConfirmation'] as const) {
+    if (record[key] !== undefined && typeof record[key] !== 'boolean') return false;
+  }
+  // Once persisted, an invalid registry trust anchor is corruption, not a
+  // request to silently switch back to the public default registry.
+  if (record.registryOrigin !== undefined && normalizeRegistryOrigin(record.registryOrigin) === null) return false;
+  return true;
 }
 
 /**

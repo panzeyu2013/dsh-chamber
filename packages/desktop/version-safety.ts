@@ -8,7 +8,7 @@
  *
  * 本模块刻意 electron-free，可用 node:test 直接单测（version-safety.test.ts）。
  */
-export const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+export const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 /**
  * 版本串是否安全：trim 后精确匹配 EXACT_SEMVER，且不含 `/`、`\`、`..`。
