@@ -868,5 +868,5 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   } satisfies PlaneHandle
 }
 
-export { spawnDsh } from './spawn-dsh.ts'
+export { spawnDsh, resolveNodeExecutable } from './spawn-dsh.ts'
 export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
