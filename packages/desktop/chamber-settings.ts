@@ -27,6 +27,10 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2, 2026-08 修订): confirm before quitting
    *  while the LOCAL dsh instance is running; remote tunnels never prompt. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry origin (design 16 M4): default npmjs; a
+   *  user-selected mirror/custom origin, validated as an https:// URL with
+   *  no userinfo (trust anchor — switching origin switches the trust anchor). */
+  registryOrigin: string
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -46,6 +50,7 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
   launchAtLogin: false,
   keepAwake: false,
   quitConfirmation: true,
+  registryOrigin: 'https://registry.npmjs.org',
 };
 
 const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
@@ -53,7 +58,27 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'launchAtLogin',
   'keepAwake',
   'quitConfirmation',
+  'registryOrigin',
 ];
+
+/** Normalize a registry origin (design 16 M4): a valid https:// URL with no
+ *  userinfo, reduced to scheme://host (no path/query/hash, no trailing slash).
+ *  Returns null for anything else — the registry origin is a trust anchor, so
+ *  invalid input is never silently accepted. */
+function normalizeRegistryOrigin(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '') return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  if (url.username !== '' || url.password !== '') return null;
+  if (url.pathname !== '' && url.pathname !== '/') return null;
+  if (url.search !== '' || url.hash !== '') return null;
+  return url.origin;
+}
 
 /** Validate and normalize an unknown settings payload; unknown keys ignored. */
 export function normalizeSettings(input: unknown): ChamberSettings {
@@ -66,13 +91,26 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   if (typeof record.launchAtLogin === 'boolean') base.launchAtLogin = record.launchAtLogin;
   if (typeof record.keepAwake === 'boolean') base.keepAwake = record.keepAwake;
   if (typeof record.quitConfirmation === 'boolean') base.quitConfirmation = record.quitConfirmation;
+  const origin = normalizeRegistryOrigin(record.registryOrigin);
+  if (origin !== null) base.registryOrigin = origin;
   return base;
 }
 
 /** Whether the persisted file's key set is well-formed (unknown keys are a
  *  forward-compat concern, not corruption — tolerate them). */
 function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
-  return input !== null && typeof input === 'object' && !Array.isArray(input);
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return false;
+  const record = input as Record<string, unknown>;
+  if (record.windowCloseBehavior !== undefined
+    && record.windowCloseBehavior !== 'hide-to-tray'
+    && record.windowCloseBehavior !== 'quit') return false;
+  for (const key of ['launchAtLogin', 'keepAwake', 'quitConfirmation'] as const) {
+    if (record[key] !== undefined && typeof record[key] !== 'boolean') return false;
+  }
+  // Once persisted, an invalid registry trust anchor is corruption, not a
+  // request to silently switch back to the public default registry.
+  if (record.registryOrigin !== undefined && normalizeRegistryOrigin(record.registryOrigin) === null) return false;
+  return true;
 }
 
 /**
@@ -181,6 +219,12 @@ export function validatePatch(patch: unknown): { ok: true; patch: Partial<Chambe
         return { ok: false, error: 'windowCloseBehavior must be "hide-to-tray" or "quit"' };
       }
       result.windowCloseBehavior = record[key] as WindowCloseBehavior;
+    } else if (key === 'registryOrigin') {
+      const origin = normalizeRegistryOrigin(record[key]);
+      if (origin === null) {
+        return { ok: false, error: 'registryOrigin must be a valid https:// URL without credentials' };
+      }
+      result.registryOrigin = origin;
     } else if (typeof record[key] !== 'boolean') {
       return { ok: false, error: `${key} must be a boolean` };
     } else {

@@ -44,16 +44,94 @@ import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
 import { createUpdateController } from './updater.ts';
+import { DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES, DshRuntimeController } from './dsh-runtime-controller.ts';
+import type { RuntimeMetadataComponent, RuntimeMetadataHealthProjection } from './dsh-runtime-controller.ts';
+import { fetchRegistryMetadata } from './registry-metadata.ts';
+import { isAllowedRegistryUrl } from './registry-url.ts';
+import { sanitizeErrorText } from './sanitize-error.ts';
+import { disposeRuntimeInstaller, installRuntimeVersion, pruneRuntimeStore } from './runtime-installer.ts';
+import {
+  cleanupStaleInstalls,
+  cleanupExplicitRuntimeVersion,
+  clearActivationJournal,
+  clearCurrentPointer,
+  clearRuntimeFailure,
+  clearStorePruneRequest,
+  deleteOverride,
+  evictVersions,
+  latestKnownGood,
+  listKnownGoodVersions,
+  listExplicitlyInstalledVersions,
+  listValidVersionTrees,
+  queueActivationIntent,
+  readActivationJournalState,
+  readCurrentPointer,
+  readCurrentPointerState,
+  readOverride,
+  readOverrideState,
+  readStorePruneRequest,
+  recordExplicitInstall,
+  recordRuntimeFailure,
+  runtimeDiskSummary,
+  runtimeFailureSummary,
+  runtimeSnapshotRetentionState,
+  validateVersionTree,
+  writeActivationIntent,
+  writeActivationJournal,
+  writeCurrentPointer,
+  writeOverride,
+} from './dsh-runtime-store.ts';
+import type { ActivationJournal, ActivationJournalState } from './dsh-runtime-store.ts';
+import {
+  cleanupSnapshotArtifacts,
+  completeInterruptedRestore,
+  prepareManualRollbackData,
+  pruneSnapshots,
+  resolveSnapshotName,
+  restoreMarkerAuthorityStatus,
+  restoreSnapshot,
+  snapshotDshHome,
+  snapshotSummary,
+} from './snapshot-store.ts';
+import {
+  noteBoot,
+  promoteDueCandidates,
+  recordProbePass,
+  removeKnownGoodCandidate,
+  resetCandidateHealthWindow,
+} from './known-good-monitor.ts';
+import { invalidate } from './override-lifecycle.ts';
+import {
+  runDelayedRollback,
+  runStartupPhase,
+  shouldProbeEnvWithDormantCorruptSelection,
+  type StartupDeps,
+  type StartupResult,
+} from './runtime-startup.ts';
+import { planRestartExhaustedRollback } from './restart-exhausted-rollback.ts';
+import { RuntimeOperationFence, type OperationLease } from './runtime-operation-fence.ts';
+import { runRuntimeActivationProbes } from './runtime-probes.ts';
+import {
+  detectRuntimeMetadataHealth,
+  inspectCorruptMetadataRecoveryMarker,
+  recoverRuntimeMetadata,
+  rescueCorruptMetadataRecoveryMarker,
+  type RuntimeMetadataHealth,
+} from './runtime-metadata-recovery.ts';
+import { allowedActions } from './runtime-state-machine.ts';
+import { isSafeVersion } from './version-safety.ts';
 import {
   applyPlugins,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
+  disposeLocalPluginChildren,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
   materializeAndAdd,
   remoteHome,
   remotePluginList,
+  reapStaleLocalPluginWriters,
   resolveLocalMaterializeDirectory,
   runLocalDshPlugin,
   seedRemoteChamberHostPackages,
@@ -138,12 +216,9 @@ const controlPlaneEntrySpecifier = './dist/control-plane/index.js';
 const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (app.isPackaged
   ? import(controlPlaneEntrySpecifier)
   : import('@dsh-chamber/control-plane'));
-const { createControlPlane } = controlPlaneModule;
+const { call, createControlPlane } = controlPlaneModule;
 
-function resolveDshWorkspace(): string | null {
-  if (process.env.DSH_CHAMBER_DSH_PATH) {
-    return process.env.DSH_CHAMBER_DSH_PATH;
-  }
+function resolveBuiltinDshWorkspace(): string | null {
   if (app.isPackaged) {
     const bundled = path.join(process.resourcesPath, 'vendor', 'dsh');
     return existsSync(bundled) ? bundled : null;
@@ -157,11 +232,83 @@ function resolveDshWorkspace(): string | null {
   return null;
 }
 
-const dshWorkspace = resolveDshWorkspace();
-if (dshWorkspace === null) {
+const builtinDshWorkspace = resolveBuiltinDshWorkspace();
+if (builtinDshWorkspace === null) {
   console.warn(
     '[dsh-chamber] 未找到 dsh 工作区（DSH_CHAMBER_DSH_PATH / <repoRoot>/ref-dsh / <pkg>/vendor/dsh 均不可用），连接页将显示错误',
   );
+}
+
+type ActiveRuntimeSource = 'env' | 'user' | 'bundled';
+interface ActiveRuntimeResolution {
+  path: string | null
+  version: string | null
+  source: ActiveRuntimeSource
+  blockedReason: string | null
+}
+
+/**
+ * Synchronous spawn-time resolver: env > valid override/current > builtin.
+ * Selection metadata corruption and pointer/override disagreement fail closed;
+ * they never alias the absence of a user runtime.
+ */
+function resolveActiveRuntime(baseDir: string): ActiveRuntimeResolution {
+  const envPath = process.env.DSH_CHAMBER_DSH_PATH;
+  if (envPath) return { path: envPath, version: readDshVersion(envPath), source: 'env', blockedReason: null };
+
+  const overrideState = readOverrideState(baseDir);
+  const pointerState = readCurrentPointerState(baseDir);
+  if (overrideState.kind === 'corrupt') {
+    return { path: null, version: null, source: 'bundled', blockedReason: 'dsh runtime override metadata is corrupt' };
+  }
+  if (pointerState.kind === 'corrupt') {
+    return { path: null, version: null, source: 'bundled', blockedReason: 'dsh runtime current pointer is corrupt' };
+  }
+  const override = overrideState.kind === 'valid' ? overrideState.record : null;
+  const pointer = pointerState.kind === 'valid' ? pointerState.version : null;
+  if (
+    override !== null
+    && override.shellVersion === version
+    && override.invalidatedAt == null
+  ) {
+    if (pointer !== null) {
+      const tree = validateVersionTree(baseDir, pointer);
+      if (tree.ok) return { path: tree.path, version: pointer, source: 'user', blockedReason: null };
+      return {
+        path: null,
+        version: pointer,
+        source: 'user',
+        blockedReason: `dsh runtime pointer tree is invalid: ${tree.error}`,
+      };
+    }
+    const builtinIsAuthoritative = override.pending !== null
+      || override.chosenVersion === null
+      || override.resolvedVersion === null
+      || override.lastOutcome === 'rolled-back'
+      || override.lastOutcome === 'failed';
+    if (!builtinIsAuthoritative) {
+      return {
+        path: null,
+        version: override.resolvedVersion,
+        source: 'user',
+        blockedReason: 'active user override is missing its authoritative current pointer',
+      };
+    }
+  }
+  if (pointer !== null) {
+    return {
+      path: null,
+      version: pointer,
+      source: 'user',
+      blockedReason: 'dsh runtime pointer has no matching active override',
+    };
+  }
+  return {
+    path: builtinDshWorkspace,
+    version: readDshVersion(builtinDshWorkspace),
+    source: 'bundled',
+    blockedReason: builtinDshWorkspace === null ? 'bundled dsh workspace not found' : null,
+  };
 }
 
 function readDshVersion(workspace: string | null): string | null {
@@ -282,6 +429,23 @@ const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
+// dsh runtime version controller (design 16 M2): module-level ref so the
+// settings「dsh 运行时」block's install/check/reset always reach the same
+// instance; state pushes go to the (single) main window.
+let runtimeController: DshRuntimeController | null = null;
+// Runtime lifecycle gate. Renderer REST starts and desktop pre-starts share
+// the same control-plane guard; only the startup transaction may temporarily
+// open the internal path while applying/restoring.
+let runtimeStartBlocked = true;
+let runtimeStartBlockedReason = '正在确认 dsh 运行时安全状态';
+let runtimeInternalStart = false;
+// Exact workspace selected by the privileged activation transaction. It is
+// consulted only while public starts remain blocked; normal resolution never
+// trusts this transient value.
+let runtimeTransactionWorkspace: string | null = null;
+let runtimeOperation: Promise<StartupResult | null> | null = null;
+let runtimeOperationAbort: AbortController | null = null;
+let willQuitCleanupComplete = false;
 /** Chamber 设置文件路径（design 14 D7）：<userData>/chamber-settings.json。 */
 const chamberSettingsFile = (): string => path.join(app.getPath('userData'), 'chamber-settings.json');
 
@@ -803,6 +967,7 @@ if (!gotTheLock) {
   });
 
   app.on('will-quit', (event) => {
+    if (willQuitCleanupComplete) return;
     // 真正退出在途（窗口已全部关闭）：close 分支不再 hide；keep-awake 停止
     // （design 14 D5）。确认/豁免已在 before-quit 完成，这里只剩清理。
     quitRequested = true;
@@ -814,8 +979,9 @@ if (!gotTheLock) {
       } catch { /* already gone */ }
       tray = null;
     }
-    if (!controlPlane) return;
     event.preventDefault();
+    runtimeStartBlocked = true;
+    runtimeOperationAbort?.abort(new Error('application is quitting'));
     // 传输层（SSH 隧道/在途 exec）与控制面（本地 dsh + HTTP 门面）的回收互不
     // 依赖，并行等待（总耗时 = max 而非 sum）。各自的 SIGTERM→SIGKILL 窗口已
     // 压到 1s（transport-manager / spawn-dsh），正常 ~1-2s 完成。disposeAsync
@@ -834,9 +1000,13 @@ if (!gotTheLock) {
     controlPlane = null;
     void Promise.allSettled([
       transportManager?.disposeAsync().catch((err) => console.error('[dsh-chamber] 传输层关闭失败：', err)),
-      cp.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
+      cp?.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
+      disposeRuntimeInstaller().catch((err) => console.error('[dsh-chamber] 运行时安装器关闭失败：', err)),
+      disposeLocalPluginChildren().catch((err) => console.error('[dsh-chamber] 本地插件子进程关闭失败：', err)),
+      runtimeOperation?.catch((err) => console.error('[dsh-chamber] 运行时事务关闭失败：', err)),
     ]).finally(() => {
       clearTimeout(cleanupTimer);
+      willQuitCleanupComplete = true;
       app.quit();
     });
   });
@@ -845,14 +1015,100 @@ if (!gotTheLock) {
     // 冷启动深链 argv（design 16 §4.2）：macOS argv 含 -psn_ 噪声，防御式扫描
     // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
     for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
+    const runtimeBaseDir = app.getPath('userData');
+    const localDshHome = path.join(runtimeBaseDir, 'state', 'dsh-home');
+    const runtimeWriterFence = new RuntimeOperationFence();
+    const envOverrideActive = Boolean(process.env.DSH_CHAMBER_DSH_PATH);
+    const runtimeManagementSupported = process.platform !== 'win32';
+    const bundledVersion = readDshVersion(builtinDshWorkspace);
+    const stalePluginWriter = await reapStaleLocalPluginWriters(localDshHome);
+    const runtimeBootstrapWriterUnsafe = !stalePluginWriter.ok;
+    let runtimeBootstrapFailure: string | null = stalePluginWriter.ok
+      ? null
+      : `无法证明旧的本地插件写进程已回收：${stalePluginWriter.error}`;
+
+    let startupMetadataHealth: RuntimeMetadataHealth | null = null;
+    try {
+      startupMetadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+    } catch (error) {
+      runtimeBootstrapFailure = `无法检查 dsh 运行时选择元数据：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`;
+    }
+
+    // A shell-version fallback is itself a runtime/data switch. Persist the
+    // builtin activation intent before invalidating the override so a crash
+    // cannot start builtin against user-migrated DSH_HOME without a snapshot.
+    // Reuse the single hardened health snapshot. Re-reading these paths here
+    // would both create a startup TOCTOU and let a malicious hardlink/symlink
+    // reach permission-tightening side effects after health already rejected it.
+    const startupOverrideState = startupMetadataHealth?.override ?? { kind: 'corrupt' as const };
+    const startupPointerState = startupMetadataHealth?.current ?? { kind: 'corrupt' as const };
+    if (runtimeBootstrapFailure !== null) {
+      // Writer ownership outranks runtime-selection mutation. Preserve every
+      // pointer/journal byte until the stale process is proven gone.
+    } else if (startupMetadataHealth?.status === 'recovery-in-progress') {
+      runtimeBootstrapFailure = 'dsh 运行时元数据恢复事务未完成；已隔离本地实例并将在启动事务中续作';
+    } else if (startupMetadataHealth?.status === 'selection-corrupt') {
+      runtimeBootstrapFailure = 'dsh runtime 选择元数据损坏；已阻止本地实例启动';
+    } else if (startupMetadataHealth?.status === 'recovery-marker-corrupt') {
+      runtimeBootstrapFailure = 'dsh runtime 元数据恢复标记损坏；已阻止本地实例启动';
+    } else if (startupOverrideState.kind === 'corrupt') {
+      runtimeBootstrapFailure = 'dsh runtime override metadata 损坏；已阻止本地实例启动';
+    } else if (startupPointerState.kind === 'corrupt') {
+      runtimeBootstrapFailure = 'dsh runtime current pointer 损坏；已阻止本地实例启动';
+    } else if (
+      runtimeManagementSupported
+      && !envOverrideActive
+      && startupOverrideState.kind === 'valid'
+      // A durable invalidation means the builtin fallback verdict already
+      // committed. Do not manufacture a fresh snapshot/switch transaction on
+      // every later boot; only a newly observed shell-version mismatch starts
+      // F4. An interrupted first transaction is resumed from its journal.
+      && startupOverrideState.record.invalidatedAt == null
+      && startupOverrideState.record.shellVersion !== version
+    ) {
+      if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
+        runtimeBootstrapFailure = '无法确认内建 dsh 运行时版本；拒绝执行 shell 更新回落';
+      } else {
+        try {
+          writeActivationIntent(runtimeBaseDir, {
+            targetVersion: bundledVersion,
+            targetIsBuiltin: true,
+            manualRollback: false,
+            intentKind: 'shell-invalidation',
+          });
+          writeOverride(
+            runtimeBaseDir,
+            invalidate(startupOverrideState.record, `shell updated to ${version}`),
+          );
+        } catch (error) {
+          runtimeBootstrapFailure = `无法持久化 shell 更新回落事务：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`;
+        }
+      }
+    }
     try {
       const controlPlanePort = resolveControlPlanePort();
       console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${process.env.DSH_CHAMBER_CP_PORT ? 'DSH_CHAMBER_CP_PORT 覆盖' : process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 'dev 默认' : '打包默认'}）`);
       controlPlane = createControlPlane({
         port: controlPlanePort,
         stateDir: path.join(app.getPath('userData'), 'state'),
-        // null and undefined fall through the option's ?? chain identically.
-        dshWorkspacePath: dshWorkspace as string | undefined,
+        getDshWorkspacePath: () => {
+          if (runtimeTransactionWorkspace !== null) return runtimeTransactionWorkspace;
+          const resolved = resolveActiveRuntime(runtimeBaseDir);
+          if (resolved.path === null) throw new Error(resolved.blockedReason ?? 'dsh workspace not found');
+          return resolved.path;
+        },
+        canStartLocal: () => {
+          if (controlPlane?.localWritersQuiescent === false) {
+            return { ok: false, reason: 'managed dsh writer ownership could not be proven quiescent' };
+          }
+          return runtimeStartBlocked && !runtimeInternalStart
+            ? { ok: false, reason: runtimeStartBlockedReason }
+            : { ok: true };
+        },
+        // A privileged activation may internally spawn a candidate while
+        // public starts remain blocked. Keep its HTTP/WS and ready projection
+        // quarantined until the full probe verdict opens runtimeStartBlocked.
+        canExposeLocal: () => !runtimeStartBlocked,
         // The built dsh frontend (renderer vite output) served by the control
         // plane (design 05 §3.3): <pkg>/dist in dev and packaged (asar) alike.
         webDistDir: path.join(pkgDir, 'dist'),
@@ -899,9 +1155,26 @@ if (!gotTheLock) {
         }
         return handler(...args);
       };
+    const runLocalPluginMutation = async <T>(
+      owner: string,
+      mutate: (dshWorkspace: string) => Promise<T>,
+    ): Promise<T | { ok: false; error: string }> => {
+      const lease = runtimeWriterFence.tryAcquire(owner);
+      if (lease === null) return { ok: false, error: 'dsh runtime/data operation in progress' };
+      try {
+        if (runtimeStartBlocked) return { ok: false, error: runtimeStartBlockedReason };
+        // Resolve again only after acquiring the writer fence. A folder picker
+        // or queued IPC must never retain a workspace across a runtime swap.
+        const resolved = resolveActiveRuntime(runtimeBaseDir);
+        if (resolved.path === null) return { ok: false, error: resolved.blockedReason ?? 'dsh workspace not found' };
+        return await mutate(resolved.path);
+      } finally {
+        lease.release();
+      }
+    };
     ipcMain.handle('dsh-chamber:info', trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
-      dshVersion: readDshVersion(dshWorkspace),
+      dshVersion: resolveActiveRuntime(runtimeBaseDir).version,
       version,
     })));
 
@@ -921,9 +1194,25 @@ if (!gotTheLock) {
     // Chamber settings IPC 面：get 查询 / set 应用并持久化 / 变更推送。全部走
     // trustedIpc 围栏；失败 loud {error}，绝不静默假成功。
     ipcMain.handle('dsh-chamber:settings-get', trustedIpc(() => chamberSettingsStatus()));
-    ipcMain.handle('dsh-chamber:settings-set', trustedIpc(({ patch }) => {
+    ipcMain.handle('dsh-chamber:settings-set', trustedIpc(async ({ patch }) => {
       const validated = validatePatch(patch);
       if (!validated.ok) return { error: validated.error };
+      const nextOrigin = validated.patch.registryOrigin;
+      if (nextOrigin !== undefined && nextOrigin !== chamberSettings.registryOrigin) {
+        const win = mainWindow;
+        if (win === null || win.isDestroyed()) return { error: 'native confirmation unavailable' };
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'warning',
+          title: '切换 dsh 运行时版本源？',
+          message: '切换 dsh 运行时版本源？',
+          detail: `版本检查、下载与安装的信任边界将从\n${chamberSettings.registryOrigin}\n切换到\n${nextOrigin}`,
+          buttons: ['取消', '切换版本源'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        if (response !== 1) return { error: 'cancelled' };
+      }
       const applied = applySettingsPatch(validated.patch);
       if (!applied.ok) return applied;
       pushSettingsChanged();
@@ -1040,7 +1329,8 @@ if (!gotTheLock) {
     const hostPackageSeeding = new Set<string>();
     // The authoritative local dsh home is <userData>/state/dsh-home (the real
     // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
-    const localDshHome = path.join(app.getPath('userData'), 'state', 'dsh-home');
+    // localDshHome was resolved before control-plane construction so the
+    // startup transaction and every plugin action share one authoritative path.
     // Host package sources for the remote seed (design 13 §4.6). Packaged
     // builds carry copies under dist/; dev reads the same source dirs used by
     // the local control-plane seed.
@@ -1259,7 +1549,13 @@ if (!gotTheLock) {
       const timer = setTimeout(() => controller.abort(), 5_000);
       timer.unref?.();
       try {
-        const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`, {
+        const searchUrl = new URL(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`);
+        // §6 R3-5 P2-6: the search endpoint shares the registry URL whitelist
+        // (origin + `/-/v1/search` path shape), never a raw hardcoded fetch.
+        if (!isAllowedRegistryUrl(searchUrl.toString())) {
+          return { ok: false, error: 'search URL is not whitelisted' };
+        }
+        const response = await fetch(searchUrl, {
           signal: controller.signal,
         });
         if (!response.ok) return { ok: false, error: `npm search failed (HTTP ${response.status})` };
@@ -1342,15 +1638,15 @@ if (!gotTheLock) {
       return materializeAndAdd(execTransport, spec, picked.filePaths[0]);
     }));
     ipcMain.handle('desktop_local_plugin_add_file', trustedIpc(async () => {
-      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
       const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
       if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+      return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
+        return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+      });
     }));
     ipcMain.handle('desktop_local_plugin_add', trustedIpc(async ({ spec: specArg }) => {
-      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
       // `file:` imports must go through the main-process folder picker
       // (desktop_local_plugin_add_file); this spec channel only accepts registry
       // specs so a compromised renderer can never drive the local pack surface
@@ -1358,13 +1654,16 @@ if (!gotTheLock) {
       if (typeof specArg === 'string' && specArg.startsWith('file:')) {
         return { ok: false, error: 'local file imports must use the folder picker' };
       }
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+      return runLocalPluginMutation('plugin:add', async (dshWorkspace) => {
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
+        return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+      });
     }));
     ipcMain.handle('desktop_local_plugin_remove', trustedIpc(async ({ name }) => {
-      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
+      return runLocalPluginMutation('plugin:remove', async (dshWorkspace) => {
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
+        return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
+      });
     }));
 
     // VS Code 深链（design 16 §4/§5）：IPC 只是可信渲染端触发的 intent，与 OS
@@ -1454,16 +1753,1320 @@ if (!gotTheLock) {
     }));
     updater.start();
 
+    // Design 17 runtime management: registry/install state and the startup
+    // activation transaction publish through one controller projection.
+    const pnpmEntry = app.isPackaged
+      ? path.join(process.resourcesPath, 'pnpm', 'bin', 'pnpm.cjs')
+      : path.join(pkgDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
+    let storePruneOperation: Promise<void> | null = null;
+    const runStorePruneIfNeeded = (): Promise<void> => {
+      if (storePruneOperation !== null) return storePruneOperation;
+      if (quitRequested || readStorePruneRequest(runtimeBaseDir) === null) return Promise.resolve();
+      const operation = pruneRuntimeStore({ baseDir: runtimeBaseDir, pnpmEntry })
+        .then(() => { clearStorePruneRequest(runtimeBaseDir); })
+        .catch((error) => {
+          // Retain the marker: the next safe startup/operation retries. Prune
+          // failure is disk hygiene, not permission to block a verified tree.
+          console.error('[dsh-chamber] dsh runtime store prune failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+        })
+        .finally(() => {
+          if (storePruneOperation === operation) storePruneOperation = null;
+        });
+      storePruneOperation = operation;
+      return operation;
+    };
+    const runtimeInstance = new DshRuntimeController({
+      baseDir: runtimeBaseDir,
+      bundledVersion,
+      packageName: '@deepseek-ai/dsh',
+      registryOrigin: chamberSettings.registryOrigin,
+      getRegistryOrigin: () => chamberSettings.registryOrigin,
+      envVersion: process.env.DSH_CHAMBER_DSH_PATH
+        ? readDshVersion(process.env.DSH_CHAMBER_DSH_PATH)
+        : null,
+      envOverrideActive,
+      managementSupported: runtimeManagementSupported,
+      managementUnsupportedReason: runtimeManagementSupported
+        ? null
+        : '当前版本仅在 macOS/Linux 验证了运行时切换与数据恢复；Windows 暂为只读',
+      pnpmEntry,
+      compatibilityBaseline: bundledVersion,
+      deps: {
+        fetchMetadata: (pkg, origin) => fetchRegistryMetadata(pkg, { origin }),
+        install: async (opts) => {
+          await runStorePruneIfNeeded();
+          return installRuntimeVersion(opts);
+        },
+        store: {
+          readOverride: (b) => readOverride(b),
+          writeOverride: (b, record) => writeOverride(b, record),
+          readCurrentPointer: (b) => readCurrentPointer(b),
+          listVersionTrees: (b) => listValidVersionTrees(b),
+          validateVersionTree: (b, runtimeVersion) => validateVersionTree(b, runtimeVersion),
+          deleteOverride: (b) => deleteOverride(b),
+          clearCurrentPointer: (b) => clearCurrentPointer(b),
+          recordExplicitInstall: (b, runtimeVersion) => recordExplicitInstall(b, runtimeVersion),
+          runtimeDiskSummary: (b) => runtimeDiskSummary(b),
+          writeActivationIntent: (b, input) => { writeActivationIntent(b, input); },
+          clearActivationJournal: (b) => clearActivationJournal(b),
+          recordFailure: (b, failure) => {
+            recordRuntimeFailure(b, {
+              version: failure.version,
+              phase: 'installing',
+              error: failure.reason,
+              restoreOutcome: 'none',
+            });
+          },
+        },
+        shellVersion: version,
+      },
+    });
+    runtimeController = runtimeInstance;
+    runtimeInstance.onChanged((state) => {
+      if (mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('dsh-chamber:runtime-state-changed', state);
+      }
+    });
+    const projectMetadataHealth = (
+      phase: Parameters<typeof runtimeInstance.setLifecycle>[0]['phase'],
+      canRetryRestore: boolean,
+    ): {
+      metadataHealth: RuntimeMetadataHealthProjection
+      metadataComponents: RuntimeMetadataComponent[]
+      canRecoverMetadata: boolean
+    } => {
+      let health: RuntimeMetadataHealth;
+      try {
+        health = detectRuntimeMetadataHealth(runtimeBaseDir);
+      } catch {
+        return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false };
+      }
+      const components = new Set<RuntimeMetadataComponent>();
+      if (health.current.kind === 'corrupt'
+        || health.corruptEvidence.some(name => name.startsWith('current.'))) components.add('current');
+      if (health.override.kind === 'corrupt'
+        || health.corruptEvidence.some(name => name.startsWith('override.json.'))) components.add('override');
+      if (health.activationJournal.kind === 'corrupt'
+        || health.corruptEvidence.some(name => name.startsWith('activation-journal.json.'))) components.add('activation-journal');
+      if (health.recovery.kind === 'corrupt'
+        || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')) {
+        components.add('recovery-marker');
+      }
+      if (health.corruptEvidence.length > 0) components.add('retained-evidence');
+      const effectivePhase = phase ?? runtimeInstance.getState().phase;
+      const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
+        && inspectCorruptMetadataRecoveryMarker(runtimeBaseDir).recoverable;
+      const needsRecovery = health.status === 'selection-corrupt'
+        || health.status === 'recovery-in-progress'
+        || markerRescueAvailable;
+      const canRecoverMetadata = needsRecovery
+        && (effectivePhase === 'idle' || effectivePhase === 'failed')
+        && !canRetryRestore
+        && runtimeManagementSupported
+        && !envOverrideActive
+        && !runtimeBootstrapWriterUnsafe
+        && cp.localWritersQuiescent
+        && bundledVersion !== null
+        && isSafeVersion(bundledVersion)
+        && restoreMarkerAuthorityStatus(runtimeBaseDir) === 'missing';
+      return {
+        metadataHealth: health.status,
+        metadataComponents: [...components],
+        canRecoverMetadata,
+      };
+    };
+    const refreshRuntimeEvidence = async (patch: Parameters<typeof runtimeInstance.setLifecycle>[0] = {}) => {
+      const effectivePhase = patch.phase ?? runtimeInstance.getState().phase;
+      const effectiveCanRetryRestore = patch.canRetryRestore
+        ?? (runtimeInstance.getState().canRetryRestore === true);
+      const showFailure = effectivePhase === 'failed' || effectivePhase === 'rollback'
+        || effectivePhase === 'snapshot-failed' || effectivePhase === 'error';
+      let snapshotProjection: Parameters<typeof runtimeInstance.setLifecycle>[0];
+      try {
+        const snapshots = await snapshotSummary(runtimeBaseDir);
+        const failures = runtimeFailureSummary(runtimeBaseDir);
+        snapshotProjection = {
+          snapshotCount: snapshots.count,
+          latestSnapshotAt: snapshots.latestAt,
+          snapshotError: null,
+          failure: !showFailure || failures.latest === null ? null : {
+            version: failures.latest.version,
+            at: failures.latest.lastFailedAt,
+            reason: failures.latest.error,
+          },
+        };
+      } catch (error) {
+        snapshotProjection = {
+          snapshotError: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+        };
+      }
+      let diskProjection: Parameters<typeof runtimeInstance.setLifecycle>[0];
+      try {
+        const diskUsage = runtimeDiskSummary(runtimeBaseDir);
+        diskProjection = {
+          diskUsage,
+          diskError: null,
+          diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+          diskLimitExceeded: diskUsage.totalBytes >= DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+          explicitlyInstalledVersions: listExplicitlyInstalledVersions(runtimeBaseDir),
+        };
+      } catch (error) {
+        diskProjection = {
+          diskUsage: null,
+          diskError: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+          diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+          diskLimitExceeded: null,
+          explicitlyInstalledVersions: [],
+        };
+      }
+      runtimeInstance.setLifecycle({
+        ...snapshotProjection,
+        ...diskProjection,
+        ...patch,
+        // These fields are an authoritative main-process projection. A stale
+        // lifecycle patch must never manufacture metadata-recovery authority.
+        ...projectMetadataHealth(effectivePhase, effectiveCanRetryRestore),
+      });
+    };
+
+    const setRuntimeGate = (blocked: boolean, reason: string | null = null) => {
+      runtimeStartBlocked = blocked;
+      runtimeStartBlockedReason = blocked
+        ? reason ?? 'dsh 运行时尚未通过安全确认'
+        : '';
+      cp.refreshLocalExposure();
+    };
+
+    const probesPassed = (probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>) =>
+      probes.length > 0 && probes.every(probe => probe.ok);
+
+    const startAndProbeWorkspace = async (workspace: string, signal?: AbortSignal) => {
+      if (quitRequested) throw new Error('application is quitting');
+      signal?.throwIfAborted();
+      runtimeTransactionWorkspace = workspace;
+      runtimeInternalStart = true;
+      try {
+        await cp.startLocal();
+      } finally {
+        runtimeInternalStart = false;
+      }
+      try {
+        const port = cp.localDshPort;
+        if (port === null) throw new Error('local dsh did not publish a probe port');
+        return await runRuntimeActivationProbes({
+          baseUrl: `http://127.0.0.1:${port}`,
+          dshHome: localDshHome,
+          call,
+          signal,
+        });
+      } finally {
+        runtimeTransactionWorkspace = null;
+      }
+    };
+
+    const resolveExactRuntimeWorkspace = (runtimeVersion: string, isBuiltin: boolean): string => {
+      if (isBuiltin) {
+        if (builtinDshWorkspace === null || bundledVersion !== runtimeVersion) {
+          throw new Error('内建 dsh 运行时清单与激活目标不一致');
+        }
+        return builtinDshWorkspace;
+      }
+      const tree = validateVersionTree(runtimeBaseDir, runtimeVersion);
+      if (!tree.ok) throw new Error(`dsh runtime ${runtimeVersion} tree invalid: ${tree.error}`);
+      return tree.path;
+    };
+
+    const startAndProbeRuntime = async (runtimeVersion: string, isBuiltin: boolean, signal?: AbortSignal) =>
+      startAndProbeWorkspace(resolveExactRuntimeWorkspace(runtimeVersion, isBuiltin), signal);
+
+    const startAndProbeCurrent = async (signal?: AbortSignal) => {
+      const active = resolveActiveRuntime(runtimeBaseDir);
+      if (active.path === null) throw new Error(active.blockedReason ?? 'dsh workspace not found');
+      return {
+        active,
+        probes: await startAndProbeWorkspace(active.path, signal),
+      };
+    };
+
+    const selectedJournalIntent = (state: ActivationJournalState) => {
+      if (state.kind !== 'valid') return null;
+      if (state.journal.phase === 'applied-monitoring' && state.journal.nextIntent !== null) {
+        return state.journal.nextIntent;
+      }
+      return state.journal;
+    };
+
+    const readActivationFacts = () => {
+      const pointer = readCurrentPointerState(runtimeBaseDir);
+      if (pointer.kind === 'corrupt') throw new Error('current pointer metadata 损坏');
+      const overrideState = readOverrideState(runtimeBaseDir);
+      if (overrideState.kind === 'corrupt') throw new Error('override metadata 损坏');
+      const journalIntent = selectedJournalIntent(readActivationJournalState(runtimeBaseDir));
+      const excludedVersion = journalIntent?.targetVersion
+        ?? (overrideState.kind === 'valid' ? overrideState.record.pending : null);
+      if (pointer.kind === 'valid') {
+        const tree = validateVersionTree(runtimeBaseDir, pointer.version);
+        if (!tree.ok) throw new Error(`current runtime tree invalid: ${tree.error}`);
+        const record = overrideState.kind === 'valid' ? overrideState.record : null;
+        return {
+          sourceVersion: pointer.version,
+          sourceIsBuiltin: false,
+          sourceWasKnownGood: listKnownGoodVersions(runtimeBaseDir).includes(pointer.version)
+            || (record?.lastOutcome === 'applied' && record.resolvedVersion === pointer.version),
+          knownGoodVersion: latestKnownGood(runtimeBaseDir, excludedVersion),
+        };
+      }
+      if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
+        throw new Error('无法确认内建 dsh 运行时版本');
+      }
+      return {
+        sourceVersion: bundledVersion,
+        sourceIsBuiltin: true,
+        sourceWasKnownGood: true,
+        knownGoodVersion: latestKnownGood(runtimeBaseDir, excludedVersion),
+      };
+    };
+
+    const buildStartupDeps = (): StartupDeps => {
+      if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
+        throw new Error('无法确认内建 dsh 运行时版本');
+      }
+      return {
+        cleanupStaleInstalls: () => cleanupStaleInstalls(runtimeBaseDir),
+        evict: () => evictVersions(runtimeBaseDir),
+        completeInterruptedRestore: () => completeInterruptedRestore(runtimeBaseDir, localDshHome),
+        readOverrideState: () => readOverrideState(runtimeBaseDir),
+        writeOverride: record => writeOverride(runtimeBaseDir, record),
+        deleteOverride: () => deleteOverride(runtimeBaseDir),
+        readCurrentPointerState: () => readCurrentPointerState(runtimeBaseDir),
+        readActivationJournal: () => readActivationJournalState(runtimeBaseDir),
+        writeActivationJournal: journal => writeActivationJournal(runtimeBaseDir, journal),
+        clearActivationJournal: () => clearActivationJournal(runtimeBaseDir),
+        envOverrideActive: () => envOverrideActive,
+        shellVersion: version,
+        builtinVersion: bundledVersion,
+        activationFacts: readActivationFacts,
+        snapshot: sourceVersion => snapshotDshHome(runtimeBaseDir, localDshHome, sourceVersion),
+        resolveSnapshotName: snapshotName => resolveSnapshotName(runtimeBaseDir, snapshotName),
+        prepareManualRollback: targetVersion => prepareManualRollbackData(runtimeBaseDir, localDshHome, targetVersion),
+        validateTarget: (runtimeVersion, isBuiltin) => {
+          if (isBuiltin) {
+            return builtinDshWorkspace !== null && runtimeVersion === bundledVersion
+              ? { ok: true as const }
+              : { ok: false as const, error: '内建运行时清单与目标版本不一致' };
+          }
+          const tree = validateVersionTree(runtimeBaseDir, runtimeVersion);
+          return tree.ok ? { ok: true as const } : { ok: false as const, error: tree.error };
+        },
+        switchPointer: runtimeVersion => {
+          if (runtimeVersion === null) clearCurrentPointer(runtimeBaseDir);
+          else writeCurrentPointer(runtimeBaseDir, runtimeVersion);
+        },
+        spawnAndProbe: (runtimeVersion, isBuiltin) => startAndProbeRuntime(
+          runtimeVersion,
+          isBuiltin,
+          runtimeOperationAbort?.signal,
+        ),
+        stopHost: () => cp.stopLocal(),
+        restore: snapshotPath => restoreSnapshot(runtimeBaseDir, localDshHome, snapshotPath),
+        recordProbePass: runtimeVersion => {
+          if (validateVersionTree(runtimeBaseDir, runtimeVersion).ok) recordProbePass(runtimeBaseDir, runtimeVersion);
+        },
+        recordFailure: input => { recordRuntimeFailure(runtimeBaseDir, input); },
+      };
+    };
+
+    const pruneRuntimeSnapshots = async () => {
+      // Retention evidence and deletion must be one transaction. Otherwise a
+      // new activation can publish a journal/snapshot after this function
+      // reads the protected set but before it deletes the old tail.
+      const lease = await runtimeWriterFence.acquire('maintenance:snapshot-prune');
+      try {
+        const artifactCleanup = await cleanupSnapshotArtifacts(runtimeBaseDir, localDshHome);
+        if (artifactCleanup.removedTemporaryEntries.length > 0
+          || artifactCleanup.removedRestoreBackups.length > 0) {
+          console.log(
+            `[dsh-chamber] runtime snapshot cleanup removed ${artifactCleanup.removedTemporaryEntries.length} temporary entr${artifactCleanup.removedTemporaryEntries.length === 1 ? 'y' : 'ies'} and ${artifactCleanup.removedRestoreBackups.length} completed restore backup(s)`,
+          );
+        }
+        if (artifactCleanup.restoreBackupCleanup !== 'completed') {
+          console.warn(`[dsh-chamber] runtime restore-backup cleanup skipped: ${artifactCleanup.restoreBackupCleanup}`);
+        }
+        if (artifactCleanup.restoreBackupCleanup === 'blocked-marker') return;
+        const retention = runtimeSnapshotRetentionState(runtimeBaseDir);
+        if (retention.kind === 'corrupt') return;
+        await pruneSnapshots(runtimeBaseDir, {
+          protectedVersions: retention.protectedVersions,
+          protectedSnapshotNames: retention.protectedSnapshotNames,
+          keepRecentUnprotected: 3,
+        });
+      } finally {
+        lease.release();
+      }
+    };
+
+    const publishApplyOutcome = async (
+      outcome: NonNullable<StartupResult['applyOutcome']>,
+      targetVersion: string | null,
+      targetIsBuiltin: boolean,
+      sourceVersion: string | null,
+    ) => {
+      let blocked = outcome.runtimeBlocked;
+      let error = outcome.error;
+      if (targetVersion !== null && !targetIsBuiltin && outcome.status !== 'applied') {
+        try { removeKnownGoodCandidate(runtimeBaseDir, targetVersion); } catch { /* diagnostic retention only */ }
+      }
+      // Snapshot/validation/initial-pointer failures leave the old pointer
+      // authoritative but the transaction stopped its host. Re-open the gate
+      // only after that exact current tree passes the full probe set again.
+      if (!blocked && (outcome.status === 'snapshot-failed' || !cp.localProcessAlive)) {
+        try {
+          const resumed = await startAndProbeCurrent(runtimeOperationAbort?.signal);
+          if (!probesPassed(resumed.probes)) throw new Error('原运行时兼容性探针失败');
+        } catch (resumeError) {
+          await cp.stopLocal().catch(() => undefined);
+          blocked = true;
+          error = `${error === null ? '' : `${error}; `}无法安全恢复当前运行时：${sanitizeErrorText(resumeError instanceof Error ? resumeError.message : String(resumeError))}`;
+        }
+      }
+      if (outcome.status === 'applied' && targetVersion !== null && !targetIsBuiltin) {
+        try { clearRuntimeFailure(runtimeBaseDir, targetVersion); } catch { /* diagnostic cleanup only */ }
+        noteBoot(runtimeBaseDir, targetVersion);
+        promoteDueCandidates(runtimeBaseDir);
+      }
+      const blockedReason = blocked ? error ?? 'dsh 运行时恢复尚未完成' : null;
+      setRuntimeGate(blocked, blockedReason);
+      const override = readOverrideState(runtimeBaseDir);
+      const shellFallback = targetIsBuiltin
+        && override.kind === 'valid'
+        && override.record.invalidatedAt != null;
+      await refreshRuntimeEvidence({
+        phase: outcome.status === 'rolled-back'
+          ? 'rollback'
+          : outcome.status === 'applied' && targetIsBuiltin
+            ? shellFallback ? 'rollback' : 'idle'
+            : outcome.status,
+        error,
+        targetVersion,
+        sourceVersion,
+        rollbackTarget: outcome.rollbackTarget,
+        restoreOutcome: outcome.restoreOutcome,
+        snapshotError: outcome.status === 'snapshot-failed' ? error : null,
+        canRetryApply: outcome.retryAction === 'apply',
+        canRetryRestore: outcome.retryAction === 'restore',
+        runtimeBlocked: blocked,
+        runtimeBlockedReason: blockedReason,
+        swapAttempted: outcome.swapAttempted,
+      });
+    };
+
+    const publishBlockedStartup = async (
+      reason: string,
+      patch: Parameters<typeof runtimeInstance.setLifecycle>[0] = {},
+    ) => {
+      const safeReason = sanitizeErrorText(reason);
+      setRuntimeGate(true, safeReason);
+      await refreshRuntimeEvidence({
+        phase: 'failed',
+        error: safeReason,
+        canRetryApply: false,
+        canRetryRestore: false,
+        runtimeBlocked: true,
+        runtimeBlockedReason: safeReason,
+        ...patch,
+      });
+    };
+
+    const metadataProbeError = (
+      probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>,
+    ): string => {
+      const failed = probes.filter(probe => !probe.ok).map(probe => (
+        `${probe.name}: ${probe.error ?? '探针未通过'}`
+      ));
+      return sanitizeErrorText(
+        failed.length === 0
+          ? '内建 dsh 运行时探针未返回完整成功结果'
+          : `内建 dsh 运行时探针失败：${failed.join('; ')}`,
+      );
+    };
+
+    /** Execute inside runtimeOperation + runtimeWriterFence. The public gate
+     * remains closed until the exact bundled tree passes the full probe set
+     * and the durable recovery marker is finalized. */
+    type RecoverableMetadataStatus = 'selection-corrupt' | 'recovery-in-progress' | 'recovery-marker-corrupt';
+    const executeMetadataRecovery = async (
+      signal: AbortSignal,
+      expectedStatus: RecoverableMetadataStatus,
+      markerRescueConfirmed: boolean,
+    ): Promise<boolean> => {
+      if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
+        await publishBlockedStartup('无法确认内建 dsh 运行时版本；拒绝恢复元数据');
+        return false;
+      }
+      const initialHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+      if (initialHealth.status !== expectedStatus) {
+        await publishBlockedStartup('元数据恢复状态已变更；必须重新确认后才能继续');
+        return false;
+      }
+      if (initialHealth.status === 'recovery-marker-corrupt' && !markerRescueConfirmed) {
+        await publishBlockedStartup('元数据恢复标记已损坏；自动续作已停止，必须由用户显式确认二阶恢复');
+        return false;
+      }
+      setRuntimeGate(true, '正在保留 DSH_HOME 与元数据证据，并恢复内建 dsh');
+      await refreshRuntimeEvidence({
+        phase: 'applying',
+        error: null,
+        targetVersion: bundledVersion,
+        canRetryApply: false,
+        canRetryRestore: false,
+        canRecoverMetadata: false,
+        runtimeBlocked: true,
+        runtimeBlockedReason: '正在保留 DSH_HOME 与元数据证据，并恢复内建 dsh',
+      });
+      try {
+        const recoveryOptions = {
+          baseDir: runtimeBaseDir,
+          dshHome: localDshHome,
+          builtinVersion: bundledVersion,
+          stopHost: () => cp.stopLocal(),
+          completeRestore: () => completeInterruptedRestore(runtimeBaseDir, localDshHome),
+          probeBuiltin: async () => {
+            const probes = await startAndProbeRuntime(bundledVersion, true, signal);
+            return probesPassed(probes)
+              ? { ok: true as const }
+              : { ok: false as const, error: metadataProbeError(probes) };
+          },
+        };
+        const health = detectRuntimeMetadataHealth(runtimeBaseDir);
+        if (health.status !== expectedStatus) {
+          await publishBlockedStartup('元数据恢复状态在执行前发生变化；本地实例继续隔离');
+          return false;
+        }
+        const result = health.status === 'recovery-marker-corrupt'
+          ? await rescueCorruptMetadataRecoveryMarker(recoveryOptions)
+          : await recoverRuntimeMetadata(recoveryOptions);
+        if (result.status === 'finalized') {
+          setRuntimeGate(false);
+          await refreshRuntimeEvidence({
+            phase: 'idle',
+            error: null,
+            targetVersion: null,
+            sourceVersion: null,
+            rollbackTarget: null,
+            restoreOutcome: result.restoreOutcome,
+            canRetryApply: false,
+            canRetryRestore: false,
+            canRecoverMetadata: false,
+            runtimeBlocked: false,
+            runtimeBlockedReason: null,
+          });
+          return true;
+        }
+        if (result.status === 'restore-blocked') {
+          await publishBlockedStartup(
+            result.restoreOutcome === 'half'
+              ? '数据恢复只完成一部分；已保留现场，必须先重试恢复'
+              : '数据恢复未完成；已保留现场，必须先重试恢复',
+            {
+              restoreOutcome: result.restoreOutcome,
+              canRetryRestore: true,
+              canRecoverMetadata: false,
+            },
+          );
+          return false;
+        }
+        if (result.status === 'probe-failed') {
+          await publishBlockedStartup(result.error, {
+            restoreOutcome: result.restoreOutcome,
+            canRecoverMetadata: true,
+          });
+          return false;
+        }
+        // A user/startup eligibility re-read guarantees an unfinished
+        // transaction. A no-op/finalized result here means the authority
+        // changed underneath us; never open exposure without a fresh probe.
+        await publishBlockedStartup('元数据恢复状态已变更；未经新的内建运行时探针，本地实例继续隔离');
+        return false;
+      } catch (error) {
+        await cp.stopLocal().catch(() => undefined);
+        await publishBlockedStartup(`元数据恢复失败：${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    };
+
+    /** Probe an explicit env tree without reading, archiving, or changing any
+     * dormant chamber selection metadata. Restore completion remains the only
+     * permitted metadata-adjacent operation before the env probe. */
+    const runEnvOverrideStartup = async (signal: AbortSignal): Promise<void> => {
+      try {
+        await cp.stopLocal();
+        const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome);
+        if (restored === 'half' || restored === 'incomplete') {
+          await publishBlockedStartup('数据恢复未完成（现场已保留），请重试恢复', {
+            restoreOutcome: restored,
+            canRetryRestore: true,
+          });
+          return;
+        }
+        const current = await startAndProbeCurrent(signal);
+        if (current.active.source !== 'env' || !probesPassed(current.probes)) {
+          throw new Error('env runtime compatibility probes failed');
+        }
+        setRuntimeGate(false);
+        await refreshRuntimeEvidence({
+          phase: 'idle', error: null, runtimeBlocked: false, runtimeBlockedReason: null,
+          canRetryApply: false, canRetryRestore: false,
+        });
+      } catch (error) {
+        await cp.stopLocal().catch(() => undefined);
+        await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    const runRuntimeStartup = (): Promise<StartupResult | null> => {
+      if (runtimeOperation !== null) return runtimeOperation;
+      let operationLease: OperationLease | null = null;
+      const operation = (async (): Promise<StartupResult | null> => {
+        runtimeOperationAbort = new AbortController();
+        setRuntimeGate(true, '正在确认 dsh 运行时与数据恢复状态');
+        operationLease = await runtimeWriterFence.acquire('runtime:startup', runtimeOperationAbort.signal);
+
+        // A persisted wall clock is not uptime. Close every candidate health
+        // window before the first probe of this transaction; a successful
+        // full compatibility probe/boot below opens a fresh window.
+        resetCandidateHealthWindow(runtimeBaseDir);
+
+        const bootstrapMetadataCorrupt = startupOverrideState.kind === 'corrupt'
+          || startupPointerState.kind === 'corrupt';
+        if (runtimeBootstrapFailure !== null && runtimeBootstrapWriterUnsafe) {
+          await publishBlockedStartup(runtimeBootstrapFailure);
+          return null;
+        }
+        if (!cp.localWritersQuiescent) {
+          await publishBlockedStartup('无法确认旧 dsh 写进程已完全回收；为保护 DSH_HOME，已阻止本地实例启动与版本切换');
+          return null;
+        }
+
+        let metadataHealth: RuntimeMetadataHealth;
+        try {
+          metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+        } catch (error) {
+          await publishBlockedStartup(`无法检查 dsh 运行时选择元数据：${error instanceof Error ? error.message : String(error)}`);
+          return null;
+        }
+        if (metadataHealth.status === 'recovery-in-progress') {
+          if (!runtimeManagementSupported || envOverrideActive) {
+            await publishBlockedStartup('元数据恢复事务未完成；当前平台或 env 运行时不允许续作管理事务');
+            return null;
+          }
+          await executeMetadataRecovery(
+            runtimeOperationAbort.signal,
+            'recovery-in-progress',
+            false,
+          );
+          return null;
+        }
+        // A valid env workspace has highest selection priority. Corrupt
+        // dormant current/override/journal bytes remain untouched evidence;
+        // only an independently authoritative restore may finish first.
+        if (shouldProbeEnvWithDormantCorruptSelection(metadataHealth.status, envOverrideActive)) {
+          await runEnvOverrideStartup(runtimeOperationAbort.signal);
+          return null;
+        }
+        if (metadataHealth.status === 'selection-corrupt') {
+          // A crash-interrupted DSH_HOME restore outranks metadata archival.
+          // Complete/retry it first so the stash never captures a half restore.
+          if (restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
+            await cp.stopLocal();
+            const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome);
+            if (restored === 'half' || restored === 'incomplete') {
+              await publishBlockedStartup('数据恢复未完成；必须先重试恢复，再处理运行时元数据', {
+                restoreOutcome: restored,
+                canRetryRestore: true,
+                canRecoverMetadata: false,
+              });
+              return null;
+            }
+            metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+          }
+          if (metadataHealth.status === 'selection-corrupt') {
+            await publishBlockedStartup('运行时选择元数据损坏；已保留证据并等待用户确认“保留数据并恢复内建”', {
+              canRecoverMetadata: runtimeManagementSupported && !envOverrideActive,
+            });
+            return null;
+          }
+        }
+        if (metadataHealth.status === 'recovery-marker-corrupt') {
+          // A snapshot restore marker is independently authoritative. Finish
+          // it before offering second-order metadata recovery so the new stash
+          // can never capture a half-restored DSH_HOME.
+          if (restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
+            await cp.stopLocal();
+            const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome);
+            if (restored === 'half' || restored === 'incomplete') {
+              await publishBlockedStartup('数据恢复未完成；必须先重试恢复，再处理损坏的元数据恢复标记', {
+                restoreOutcome: restored,
+                canRetryRestore: true,
+                canRecoverMetadata: false,
+              });
+              return null;
+            }
+            metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+          }
+          if (metadataHealth.status === 'recovery-marker-corrupt') {
+            const capability = inspectCorruptMetadataRecoveryMarker(runtimeBaseDir);
+            await publishBlockedStartup(
+              capability.recoverable
+                ? '元数据恢复标记损坏；已保留现场并等待用户确认二阶恢复'
+                : '元数据恢复标记不是可安全归档的普通文件；已保留现场并拒绝自动修复',
+              { canRecoverMetadata: capability.recoverable && runtimeManagementSupported && !envOverrideActive },
+            );
+            return null;
+          }
+        }
+        if (runtimeBootstrapFailure !== null && !bootstrapMetadataCorrupt) {
+          const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome);
+          if (restored === 'half' || restored === 'incomplete') {
+            await publishBlockedStartup('数据恢复未完成（现场已保留），请重试恢复', {
+              restoreOutcome: restored,
+              canRetryRestore: true,
+            });
+            return null;
+          }
+          await publishBlockedStartup(runtimeBootstrapFailure);
+          return null;
+        }
+        if (!runtimeManagementSupported) {
+          try {
+            const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome);
+            if (restored === 'half' || restored === 'incomplete') {
+              await publishBlockedStartup('未完成的数据恢复仍需人工重试；Windows 运行时版本管理保持只读', {
+                restoreOutcome: restored,
+                canRetryRestore: true,
+              });
+              return null;
+            }
+            const current = await startAndProbeCurrent(runtimeOperationAbort.signal);
+            if (!probesPassed(current.probes)) throw new Error('runtime compatibility probes failed');
+            setRuntimeGate(false);
+            await refreshRuntimeEvidence({
+              phase: 'idle', error: null, runtimeBlocked: false, runtimeBlockedReason: null,
+              canRetryApply: false, canRetryRestore: false,
+            });
+          } catch (error) {
+            await cp.stopLocal().catch(() => undefined);
+            await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+          }
+          return null;
+        }
+
+        // An explicit env workspace is independent of the chamber-managed
+        // builtin and selection metadata. It still waits for writer
+        // quiescence and completes a crash-interrupted DSH_HOME restore, but
+        // it must not require a readable bundled manifest or mutate dormant
+        // current/override/journal state before probing the env tree.
+        if (envOverrideActive) {
+          await runEnvOverrideStartup(runtimeOperationAbort.signal);
+          return null;
+        }
+
+        const journalBefore = readActivationJournalState(runtimeBaseDir);
+        const intentBefore = selectedJournalIntent(journalBefore);
+        const overrideBefore = readOverrideState(runtimeBaseDir);
+        const pendingBefore = overrideBefore.kind === 'valid' && overrideBefore.record.invalidatedAt == null
+          ? overrideBefore.record.pending
+          : null;
+        // Env is authoritative over dormant chamber selection metadata. The
+        // startup module must first complete any restore and then return its
+        // env-override verdict; reading corrupt current/override facts here
+        // would incorrectly make that safe path unreachable.
+        let sourceFacts: ReturnType<typeof readActivationFacts> | null = null;
+        if (!envOverrideActive) {
+          try {
+            sourceFacts = readActivationFacts();
+          } catch (error) {
+            await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+            return null;
+          }
+        }
+
+        // Stop unconditionally: restart backoff can own a future spawn even
+        // while no child is alive. stopLocal cancels that epoch before any
+        // snapshot/restore touches the shared DSH_HOME.
+        await cp.stopLocal();
+        if (!envOverrideActive
+          && (intentBefore !== null || pendingBefore !== null
+            || restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing')) {
+          await refreshRuntimeEvidence({
+            phase: 'applying',
+            error: null,
+            targetVersion: intentBefore?.targetVersion ?? pendingBefore,
+            sourceVersion: sourceFacts?.sourceVersion ?? null,
+            canRetryApply: false,
+            canRetryRestore: false,
+            runtimeBlocked: true,
+            runtimeBlockedReason: '正在执行 dsh 运行时激活或数据恢复事务',
+          });
+        }
+
+        const deps = buildStartupDeps();
+        const result = await runStartupPhase(deps);
+        const outcomeTarget = intentBefore?.targetVersion
+          ?? result.monitoringJournal?.targetVersion
+          ?? pendingBefore;
+        const targetIsBuiltin = intentBefore?.targetIsBuiltin
+          ?? result.monitoringJournal?.targetIsBuiltin
+          ?? false;
+        const durableJournal = readActivationJournalState(runtimeBaseDir);
+        const durableSource = durableJournal.kind === 'valid' && durableJournal.journal.sourceVersion !== null
+          ? durableJournal.journal.sourceVersion
+          : sourceFacts?.sourceVersion ?? null;
+
+        if (result.applyOutcome !== null) {
+          await publishApplyOutcome(
+            result.applyOutcome,
+            outcomeTarget,
+            targetIsBuiltin,
+            durableSource,
+          );
+          return result;
+        }
+
+        if (result.blockedReason === 'restore-half' || result.blockedReason === 'restore-incomplete') {
+          await publishBlockedStartup(
+            result.blockedReason === 'restore-half'
+              ? '数据恢复失败（现场已保留），请重试恢复'
+              : '数据恢复未完成（现场已保留），请重试恢复',
+            {
+              restoreOutcome: result.restored === 'half' ? 'half' : 'incomplete',
+              canRetryRestore: true,
+            },
+          );
+          return result;
+        }
+
+        const hardBlockedReasons = new Set([
+          'journal-corrupt',
+          'current-corrupt',
+          'override-corrupt',
+          'journal-mismatch',
+        ]);
+        if (result.blockedReason !== null && hardBlockedReasons.has(result.blockedReason)) {
+          await publishBlockedStartup(`运行时恢复元数据异常（${result.blockedReason}）；拒绝启动以保护 DSH_HOME`);
+          return result;
+        }
+        if (result.blockedReason === 'swap-attempted') {
+          await publishBlockedStartup('上次运行时指针切换未完成；请显式重试应用', {
+            canRetryApply: true,
+            swapAttempted: true,
+          });
+          return result;
+        }
+
+        try {
+          const current = await startAndProbeCurrent(runtimeOperationAbort.signal);
+          if (!probesPassed(current.probes)) throw new Error('runtime compatibility probes failed');
+          if (current.active.source === 'user' && current.active.version !== null) {
+            noteBoot(runtimeBaseDir, current.active.version);
+            promoteDueCandidates(runtimeBaseDir);
+          }
+          setRuntimeGate(false);
+          await refreshRuntimeEvidence({
+            phase: result.blockedReason === 'snapshot-failed' ? 'snapshot-failed' : 'idle',
+            error: result.blockedReason === 'snapshot-failed'
+              ? readOverride(runtimeBaseDir)?.lastError ?? '快照失败；当前运行时仍可安全使用'
+              : null,
+            canRetryApply: result.blockedReason === 'snapshot-failed',
+            canRetryRestore: false,
+            runtimeBlocked: false,
+            runtimeBlockedReason: null,
+            snapshotError: result.blockedReason === 'snapshot-failed'
+              ? readOverride(runtimeBaseDir)?.lastError ?? '快照失败'
+              : null,
+          });
+        } catch (error) {
+          await cp.stopLocal().catch(() => undefined);
+          const monitoring = result.monitoringJournal;
+          if (monitoring !== null && monitoring.targetIsBuiltin === false && !envOverrideActive) {
+            try {
+              removeKnownGoodCandidate(runtimeBaseDir, monitoring.targetVersion);
+              const rollbackOutcome = await runDelayedRollback(deps, monitoring);
+              await publishApplyOutcome(
+                rollbackOutcome,
+                monitoring.targetVersion,
+                false,
+                monitoring.sourceVersion,
+              );
+              return result;
+            } catch (rollbackError) {
+              await publishBlockedStartup(`运行时探针失败且自动回退未完成：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+              return result;
+            }
+          }
+          await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+        }
+        return result;
+      })().catch(async (error) => {
+        await cp.stopLocal().catch(() => undefined);
+        await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+        return null;
+      }).finally(() => {
+        runtimeInternalStart = false;
+        runtimeTransactionWorkspace = null;
+        operationLease?.release();
+        runtimeOperationAbort = null;
+        runtimeOperation = null;
+        void runStorePruneIfNeeded();
+        void pruneRuntimeSnapshots().catch(error => {
+          console.error('[dsh-chamber] dsh runtime snapshot prune failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+        });
+      });
+      runtimeOperation = operation;
+      return operation;
+    };
+
+    const runRestartExhaustedRollback = (): Promise<StartupResult | null> | null => {
+      if (quitRequested || runtimeOperation !== null || envOverrideActive || !runtimeManagementSupported) return null;
+      let operationLease: OperationLease | null = null;
+      const operation = (async (): Promise<StartupResult | null> => {
+        runtimeOperationAbort = new AbortController();
+        setRuntimeGate(true, 'dsh 运行时连续重启失败，正在自动回退');
+        operationLease = await runtimeWriterFence.acquire('runtime:restart-exhausted', runtimeOperationAbort.signal);
+        // Re-read after the shared fence. An install may have been in flight
+        // when restart-exhausted fired and may have durably queued nextIntent.
+        const state = runtimeInstance.getState();
+        const failedVersion = state.source === 'user' ? state.active : null;
+        if (failedVersion === null) return null;
+        const plan = planRestartExhaustedRollback({
+          restartExhausted: true,
+          activeIsOverride: state.source === 'user',
+          failedVersion,
+          journalState: readActivationJournalState(runtimeBaseDir),
+        });
+        if (plan.status === 'not-triggered') return null;
+        if (plan.status === 'planned') {
+          // Exactly-once latch: rollback-needed reaches disk before candidate
+          // mutation, host stop, pointer switch, or DSH_HOME restore.
+          writeActivationJournal(runtimeBaseDir, {
+            ...plan.journal,
+            nextIntent: plan.deferredIntent,
+          });
+        }
+        const rollbackTarget = plan.rollbackTarget;
+        const sourceVersion = plan.journal.sourceVersion;
+        await refreshRuntimeEvidence({
+          phase: 'applying',
+          error: 'dsh 运行时连续重启失败，正在自动回退',
+          targetVersion: failedVersion,
+          rollbackTarget,
+          runtimeBlocked: true,
+          runtimeBlockedReason: 'dsh 运行时连续重启失败，正在自动回退',
+          canRetryApply: false,
+          canRetryRestore: false,
+        });
+        removeKnownGoodCandidate(runtimeBaseDir, failedVersion);
+        const result = await runStartupPhase(buildStartupDeps());
+        if (result.applyOutcome === null) {
+          await publishBlockedStartup(`restart-exhausted 回退未完成${result.blockedReason === null ? '' : `：${result.blockedReason}`}`);
+          return result;
+        }
+        await publishApplyOutcome(
+          result.applyOutcome,
+          failedVersion,
+          false,
+          sourceVersion,
+        );
+        return result;
+      })().catch(async (error) => {
+        await cp.stopLocal().catch(() => undefined);
+        await publishBlockedStartup(`restart-exhausted 回退失败：${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      }).finally(() => {
+        runtimeInternalStart = false;
+        runtimeTransactionWorkspace = null;
+        operationLease?.release();
+        runtimeOperationAbort = null;
+        runtimeOperation = null;
+        void runStorePruneIfNeeded();
+        void pruneRuntimeSnapshots().catch(error => {
+          console.error('[dsh-chamber] dsh runtime snapshot prune failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+        });
+      });
+      runtimeOperation = operation;
+      return operation;
+    };
+
+    cp.onLocalStateChange((snapshot) => {
+      if (snapshot.status === 'degraded' || snapshot.status === 'restarting'
+        || snapshot.status === 'error' || snapshot.status === 'restart-exhausted') {
+        try { resetCandidateHealthWindow(runtimeBaseDir); } catch (error) {
+          console.error('[dsh-chamber] known-good 健康窗口重置失败：', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+        }
+      }
+      if (snapshot.status === 'restart-exhausted') void runRestartExhaustedRollback();
+    });
+
+    const confirmRuntimeMutation = async (message: string, detail: string, confirmLabel: string): Promise<boolean> => {
+      const win = mainWindow;
+      if (win === null || win.isDestroyed()) return false;
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning', title: message, message, detail,
+        buttons: ['取消', confirmLabel], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      return response === 1;
+    };
+
+    const authoritativeMetadataRecoveryStatus = (): RecoverableMetadataStatus | null => {
+      const state = runtimeInstance.getState();
+      if (quitRequested
+        || state.runtimeBlocked !== true
+        || (state.phase !== 'idle' && state.phase !== 'failed')
+        || state.canRetryRestore === true
+        || state.restoreOutcome === 'half'
+        || state.restoreOutcome === 'incomplete'
+        || state.source === 'env'
+        || state.managementSupported === false
+        || runtimeBootstrapWriterUnsafe
+        || !cp.localWritersQuiescent
+        || bundledVersion === null
+        || !isSafeVersion(bundledVersion)
+        || restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') return null;
+      try {
+        const health = detectRuntimeMetadataHealth(runtimeBaseDir);
+        if (state.metadataHealth !== health.status) return null;
+        if (health.status === 'selection-corrupt' || health.status === 'recovery-in-progress') {
+          return health.status;
+        }
+        if (health.status === 'recovery-marker-corrupt'
+          && inspectCorruptMetadataRecoveryMarker(runtimeBaseDir).recoverable) {
+          return health.status;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    };
+
+    const runUserMetadataRecovery = (
+      expectedStatus: RecoverableMetadataStatus,
+    ): Promise<StartupResult | null> | null => {
+      if (runtimeOperation !== null || authoritativeMetadataRecoveryStatus() !== expectedStatus) return null;
+      let operationLease: OperationLease | null = null;
+      const operation = (async (): Promise<StartupResult | null> => {
+        runtimeOperationAbort = new AbortController();
+        operationLease = runtimeWriterFence.tryAcquire('runtime:metadata-recovery');
+        if (operationLease === null || authoritativeMetadataRecoveryStatus() !== expectedStatus) return null;
+        await executeMetadataRecovery(
+          runtimeOperationAbort.signal,
+          expectedStatus,
+          expectedStatus === 'recovery-marker-corrupt',
+        );
+        return null;
+      })().catch(async (error) => {
+        await cp.stopLocal().catch(() => undefined);
+        await publishBlockedStartup(`元数据恢复事务失败：${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      }).finally(() => {
+        runtimeInternalStart = false;
+        runtimeTransactionWorkspace = null;
+        operationLease?.release();
+        runtimeOperationAbort = null;
+        runtimeOperation = null;
+        void runStorePruneIfNeeded();
+      });
+      runtimeOperation = operation;
+      return operation;
+    };
+
+    ipcMain.handle('dsh-chamber:runtime-state', trustedIpc(() => runtimeInstance.getState()));
+    const runtimeActionAllowed = (action: Parameters<typeof allowedActions>[0] extends never ? never : ReturnType<typeof allowedActions>[number]) => {
+      const state = runtimeInstance.getState();
+      if (state.managementSupported === false && action !== 'retry-restore') return false;
+      if (action === 'recover-metadata' && state.source === 'env') return false;
+      const applyingReset = action === 'reset-builtin'
+        && state.phase === 'applying'
+        && state.source !== 'env'
+        && state.hasOverride === true;
+      if (runtimeWriterFence.busy && !applyingReset) return false;
+      if (state.runtimeBlocked === true) {
+        if (action === 'retry-restore') return state.canRetryRestore === true
+          && (state.phase === 'rollback' || state.phase === 'failed');
+        if (action === 'recover-metadata') return state.canRetryRestore !== true
+          && state.canRecoverMetadata === true
+          && (state.metadataHealth === 'selection-corrupt'
+            || state.metadataHealth === 'recovery-in-progress'
+            || state.metadataHealth === 'recovery-marker-corrupt')
+          && (state.phase === 'idle' || state.phase === 'failed');
+        if (action === 'retry-apply') return state.canRetryApply === true
+          && (state.phase === 'snapshot-failed' || state.phase === 'failed');
+        if (applyingReset) return true;
+        return false;
+      }
+      return allowedActions(state.phase, {
+        canRetryApply: state.canRetryApply,
+        canRetryRestore: state.canRetryRestore,
+        canRecoverMetadata: state.canRecoverMetadata,
+      }).includes(action);
+    };
+    const runRuntimeCheck = async () => {
+      if (quitRequested || runtimeOperation !== null || !runtimeActionAllowed('check')) {
+        return runtimeInstance.getState();
+      }
+      const lease = runtimeWriterFence.tryAcquire('runtime:check');
+      if (lease === null) return runtimeInstance.getState();
+      try {
+        return await runtimeInstance.check();
+      } finally {
+        lease.release();
+      }
+    };
+    ipcMain.handle('dsh-chamber:runtime-check', trustedIpc(runRuntimeCheck));
+    ipcMain.handle('dsh-chamber:runtime-install', trustedIpc(async (args) => {
+      const v = args !== null && typeof args === 'object' ? (args as Record<string, unknown>).version : undefined;
+      if (typeof v !== 'string' || v.length > 128 || !isSafeVersion(v)) return runtimeInstance.getState();
+      const requestedVersion = v.trim();
+      const before = runtimeInstance.getState();
+      if (runtimeOperation !== null || before.source === 'env' || !runtimeActionAllowed('install')) {
+        return before;
+      }
+      if (!await confirmRuntimeMutation(
+        `安装 dsh 运行时 ${requestedVersion}？`,
+        `将从 ${chamberSettings.registryOrigin} 下载并执行白名单依赖的安装脚本；切换将在下次启动应用。`,
+        '安装',
+      )) return runtimeInstance.getState();
+      const current = runtimeInstance.getState();
+      if (runtimeOperation !== null || current.source === 'env' || !runtimeActionAllowed('install')) {
+        return current;
+      }
+      const lease = runtimeWriterFence.tryAcquire('runtime:install');
+      if (lease === null) return runtimeInstance.getState();
+      try {
+        await runtimeInstance.install(requestedVersion);
+        await refreshRuntimeEvidence();
+        return runtimeInstance.getState();
+      } finally {
+        lease.release();
+      }
+    }));
+    ipcMain.handle('dsh-chamber:runtime-cleanup-version', trustedIpc(async (args) => {
+      const rawVersion = args !== null && typeof args === 'object'
+        ? (args as Record<string, unknown>).version
+        : undefined;
+      if (typeof rawVersion !== 'string' || rawVersion.length > 128 || !isSafeVersion(rawVersion)) {
+        return runtimeInstance.getState();
+      }
+      const requestedVersion = rawVersion.trim();
+      const before = runtimeInstance.getState();
+      if (runtimeOperation !== null
+        || before.source === 'env'
+        || before.active === requestedVersion
+        || !runtimeActionAllowed('cleanup-version')
+        || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
+        return before;
+      }
+      if (!await confirmRuntimeMutation(
+        `清理 dsh 运行时 ${requestedVersion}？`,
+        '仅删除该不可变版本树并回收 pnpm store；当前、待应用、回退、known-good 与失败现场保护版本不会被删除。',
+        '清理版本',
+      )) return runtimeInstance.getState();
+
+      // Re-read eligibility after confirmation. cleanupExplicitRuntimeVersion
+      // re-reads the complete protection set again while the writer fence is
+      // held, so a new recovery/pending reference always wins the TOCTOU race.
+      const current = runtimeInstance.getState();
+      if (runtimeOperation !== null
+        || current.source === 'env'
+        || current.active === requestedVersion
+        || !runtimeActionAllowed('cleanup-version')
+        || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
+        return current;
+      }
+      const lease = runtimeWriterFence.tryAcquire('runtime:cleanup-version');
+      if (lease === null) return runtimeInstance.getState();
+      try {
+        const locked = runtimeInstance.getState();
+        if (locked.source === 'env'
+          || locked.active === requestedVersion
+          || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
+          return locked;
+        }
+        const result = cleanupExplicitRuntimeVersion(runtimeBaseDir, requestedVersion);
+        if (result.stillProtected) {
+          throw new Error(`dsh ${requestedVersion} 仍被当前/回退/恢复/失败证据保护，拒绝清理`);
+        }
+        await runStorePruneIfNeeded();
+        await refreshRuntimeEvidence();
+        const refreshed = runtimeInstance.getState();
+        const clearedDiskGate = locked.phase === 'error'
+          && (locked.diskLimitExceeded === true || locked.diskError != null)
+          && refreshed.diskLimitExceeded === false
+          && refreshed.diskError === null;
+        if (clearedDiskGate) runtimeInstance.setLifecycle({ phase: 'idle', error: null });
+        return runtimeInstance.getState();
+      } finally {
+        lease.release();
+      }
+    }));
+    ipcMain.handle('dsh-chamber:runtime-recover-metadata', trustedIpc(async () => {
+      const before = runtimeInstance.getState();
+      const expectedStatus = authoritativeMetadataRecoveryStatus();
+      // First authority read occurs before showing a destructive native
+      // confirmation. A forged renderer action cannot manufacture eligibility.
+      if (runtimeOperation !== null
+        || !runtimeActionAllowed('recover-metadata')
+        || expectedStatus === null) return before;
+      if (!await confirmRuntimeMutation(
+        '保留数据并恢复内建 dsh？',
+        expectedStatus === 'recovery-marker-corrupt'
+          ? '将停止本地实例，另存一份完整 DSH_HOME，把损坏的恢复标记按原始字节归档且不修改既有恢复数据，再用内建 dsh 执行完整只读探针。只有探针全部通过才会恢复本地访问。'
+          : '将停止本地实例，先保留 DSH_HOME 完整数据副本和原始选择元数据证据，再用内建 dsh 执行完整只读探针。只有探针全部通过才会恢复本地访问。',
+        '保留数据并恢复内建',
+      )) return runtimeInstance.getState();
+      // Re-read after the modal. A restore marker, env override, platform
+      // change, writer, or another recovery transaction always wins the race.
+      if (runtimeOperation !== null
+        || !runtimeActionAllowed('recover-metadata')
+        || authoritativeMetadataRecoveryStatus() !== expectedStatus) return runtimeInstance.getState();
+      const operation = runUserMetadataRecovery(expectedStatus);
+      if (operation === null) return runtimeInstance.getState();
+      await operation;
+      return runtimeInstance.getState();
+    }));
+    ipcMain.handle('dsh-chamber:runtime-reset-builtin', trustedIpc(async () => {
+      const before = runtimeInstance.getState();
+      const queueBehindApplying = runtimeOperation !== null && before.phase === 'applying';
+      if ((!queueBehindApplying && runtimeOperation !== null) || before.source === 'env' || before.hasOverride !== true
+        || !runtimeActionAllowed('reset-builtin')) return before;
+      if (!queueBehindApplying && restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
+        setRuntimeGate(true, '数据恢复未完成；恢复内建前须先重试恢复');
+        return refreshRuntimeEvidence({
+          phase: 'failed', canRetryRestore: true, restoreOutcome: 'incomplete',
+          error: '数据恢复未完成；恢复内建前须先重试恢复',
+          runtimeBlocked: true,
+          runtimeBlockedReason: '数据恢复未完成；恢复内建前须先重试恢复',
+        }).then(() => runtimeInstance.getState());
+      }
+      if (!await confirmRuntimeMutation('恢复内建 dsh 运行时？', '将停止本地实例并清除用户运行时指针；版本树与快照仍保留。', '恢复内建')) return runtimeInstance.getState();
+      const current = runtimeInstance.getState();
+      const inFlight = runtimeOperation;
+      const stillQueueing = inFlight !== null && current.phase === 'applying';
+      if ((!stillQueueing && runtimeOperation !== null) || current.source === 'env' || current.hasOverride !== true
+        || !runtimeActionAllowed('reset-builtin')) return current;
+      if (stillQueueing) {
+        try {
+          if (bundledVersion === null || !isSafeVersion(bundledVersion)) throw new Error('无法确认内建 dsh 运行时版本');
+          queueActivationIntent(runtimeBaseDir, {
+            targetVersion: bundledVersion,
+            targetIsBuiltin: true,
+            manualRollback: false,
+            intentKind: 'reset-builtin',
+          });
+        } catch (error) {
+          runtimeInstance.setLifecycle({
+            error: sanitizeErrorText(`无法排队恢复内建事务：${error instanceof Error ? error.message : String(error)}`),
+          });
+          return runtimeInstance.getState();
+        }
+        await inFlight.catch(() => null);
+        await runRuntimeStartup();
+        return runtimeInstance.getState();
+      }
+      if (restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
+        setRuntimeGate(true, '数据恢复未完成；恢复内建前须先重试恢复');
+        return refreshRuntimeEvidence({
+          phase: 'failed', canRetryRestore: true, restoreOutcome: 'incomplete',
+          error: '数据恢复未完成；恢复内建前须先重试恢复',
+          runtimeBlocked: true,
+          runtimeBlockedReason: '数据恢复未完成；恢复内建前须先重试恢复',
+        }).then(() => runtimeInstance.getState());
+      }
+      try {
+        if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
+          throw new Error('无法确认内建 dsh 运行时版本');
+        }
+        writeActivationIntent(runtimeBaseDir, {
+          targetVersion: bundledVersion,
+          targetIsBuiltin: true,
+          manualRollback: false,
+          intentKind: 'reset-builtin',
+        });
+      } catch (error) {
+        await publishBlockedStartup(`无法持久化恢复内建事务：${error instanceof Error ? error.message : String(error)}`);
+        return runtimeInstance.getState();
+      }
+      await runRuntimeStartup();
+      return runtimeInstance.getState();
+    }));
+    ipcMain.handle('dsh-chamber:runtime-retry-apply', trustedIpc(async () => {
+      const before = runtimeInstance.getState();
+      if (runtimeOperation !== null || before.source === 'env'
+        || !runtimeActionAllowed('retry-apply')) return before;
+      const overrideState = readOverrideState(runtimeBaseDir);
+      const journalState = readActivationJournalState(runtimeBaseDir);
+      const retryTarget = selectedJournalIntent(journalState)?.targetVersion
+        ?? (overrideState.kind === 'valid' ? overrideState.record.pending : null);
+      if (retryTarget === null) return runtimeInstance.getState();
+      if (!await confirmRuntimeMutation(`重试应用 dsh ${retryTarget}？`, '将停止本地实例并从持久化事务安全续作。', '重试应用')) return runtimeInstance.getState();
+      const current = runtimeInstance.getState();
+      if (runtimeOperation !== null || current.source === 'env'
+        || !runtimeActionAllowed('retry-apply')) return current;
+      const latestOverride = readOverrideState(runtimeBaseDir);
+      if (latestOverride.kind === 'valid') {
+        writeOverride(runtimeBaseDir, {
+          ...latestOverride.record,
+          swapAttempted: false,
+          lastOutcome: null,
+          lastError: null,
+        });
+      }
+      await runRuntimeStartup();
+      return runtimeInstance.getState();
+    }));
+    ipcMain.handle('dsh-chamber:runtime-retry-restore', trustedIpc(async () => {
+      const before = runtimeInstance.getState();
+      if (runtimeOperation !== null
+        || !runtimeActionAllowed('retry-restore')) return before;
+      if (!await confirmRuntimeMutation('重试恢复 dsh 数据？', '将停止本地实例并从已记录的快照事务继续恢复。', '重试恢复')) return runtimeInstance.getState();
+      const current = runtimeInstance.getState();
+      if (runtimeOperation !== null
+        || !runtimeActionAllowed('retry-restore')) return current;
+      await runRuntimeStartup();
+      return runtimeInstance.getState();
+    }));
+
+    const maybeCheckRuntime = () => {
+      if (quitRequested || runtimeOperation !== null || !runtimeActionAllowed('check')) return;
+      void runRuntimeCheck();
+    };
+    // Startup refresh plus a real periodic cycle. Both share the same core
+    // gate, so apply/restore suspends checks and the next cycle resumes them.
+    const startupRuntimeCheck = setTimeout(maybeCheckRuntime, 15_000);
+    startupRuntimeCheck.unref();
+    const periodicRuntimeCheck = setInterval(maybeCheckRuntime, 6 * 60 * 60 * 1_000);
+    periodicRuntimeCheck.unref();
+    // Promotion needs a real in-process health interval. The state listener
+    // above closes the window on any unhealthy transition; this timer merely
+    // commits candidates whose still-open window has actually elapsed.
+    const knownGoodPromotionTimer = setInterval(() => {
+      if (quitRequested || runtimeOperation !== null || !cp.localProcessAlive) return;
+      try { promoteDueCandidates(runtimeBaseDir); } catch (error) {
+        console.error('[dsh-chamber] known-good 晋升检查失败：', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+      }
+    }, 60 * 60 * 1_000);
+    knownGoodPromotionTimer.unref();
+
     // Single frame, single origin: the control plane serves the built dsh
     // frontend (design 05 §1) — no local file loads. A load failure is a
     // loud startup failure (dialog + exit), never a silently broken window;
     // the control plane is stopped first so no local dsh child is orphaned.
-    // The local instance is pre-spawned BEFORE the window loads (05 §7.5):
-    // the first screen finds it already ready — the spawn's ~seconds of
-    // boot time overlap the page/bundle load instead of sitting between the
-    // renderer's auto-start POST and the ready push. The renderer's own
-    // POST stays idempotent on the same path; a spawn failure here is
-    // non-fatal (the renderer surfaces the instance error state).
+    // The runtime startup transaction (runRuntimeStartup, below) starts after
+    // the window is created, so the first screen finds the local instance
+    // ready only when the transaction wins the race against the renderer
+    // boot; the renderer's own auto-start POST stays idempotent on the same
+    // path, and a spawn failure here is non-fatal (the renderer surfaces the
+    // instance error state). The ~seconds of spawn boot time still overlap
+    // the page/bundle load instead of sitting between the renderer's POST and
+    // the ready push.
     // Deny Web permission requests by default: Electron default-grants these to
     // same-origin content, and the control plane also serves proxied remote-instance
     // content under /api/i/<id>/* (same origin). Keep one benign exception —
@@ -1473,12 +3076,14 @@ if (!gotTheLock) {
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
 
-    void cp.startLocal().catch(err => {
-      console.error('[dsh-chamber] 本地实例预启动失败（renderer 仍会尝试）：', err);
-    });
     // 启动期创建主窗口：加载失败 = 大声失败 + 退出（createMainWindow 内）；
     // activate/托盘/second-instance 恢复路径共用同一创建函数。
     createMainWindow(rendererOrigin, true);
+    void refreshRuntimeEvidence().then(() => runRuntimeStartup()).catch(error => {
+      console.error('[dsh-chamber] dsh 运行时启动事务失败：', error);
+      runtimeStartBlocked = true;
+      runtimeInstance.setLifecycle({ phase: 'failed', error: error instanceof Error ? error.message : String(error) });
+    });
 
     // 深链统一 drain（design 16 §4.2）：startup 完成（transportManager 装载 +
     // 主窗口就绪）后消费 pendingIntents。深链执行（VS Code 启动）不阻塞窗口；

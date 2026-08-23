@@ -310,6 +310,9 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry origin (design 16 M4): default npmjs; a
+   *  user-selected mirror/custom https origin (trust anchor). */
+  registryOrigin: string
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -354,8 +357,22 @@ export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
 }
 
-/** The full bridge: app info + ssh + update + chamber settings + system resume
- *  + vscode deep-link surfaces. */
+/** dsh runtime management types and complete design-17 state projection. */
+import type { RuntimeSurface } from './runtime-management.ts'
+export type {
+  RuntimeAction,
+  RuntimeFailure,
+  RuntimeMetadataComponent,
+  RuntimeMetadataHealth,
+  RuntimePhase,
+  RuntimeRestoreOutcome,
+  RuntimeState,
+  RuntimeSurface,
+  RuntimeVersionEntry,
+} from './runtime-management.ts'
+
+/** The full bridge: app info + ssh + update + chamber settings + system resume,
+ *  VS Code deep-link, and dsh runtime-management surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -366,6 +383,7 @@ export interface DshChamberBridge {
   systemResume: SystemResumeSurface
   vscode: VscodeSurface
   deepLink: DeepLinkSurface
+  runtime: RuntimeSurface
 }
 
 declare global {

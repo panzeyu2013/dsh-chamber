@@ -2,6 +2,7 @@ import type { IpcRendererEvent } from 'electron';
 import type { SshInstanceInput, SshInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
+import type { RuntimeState } from './dsh-runtime-controller.ts';
 
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -189,6 +190,9 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry origin (design 16 M4): default npmjs; a
+   *  user-selected mirror/custom https origin (trust anchor). */
+  registryOrigin: string
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -249,6 +253,20 @@ export interface DshChamberBridge {
   systemResume: SystemResumeSurface
   vscode: VscodeSurface
   deepLink: DeepLinkSurface
+  runtime: RuntimeSurface
+}
+
+/** dsh runtime version management surface (design 17 M2 IPC). */
+export interface RuntimeSurface {
+  state(): Promise<RuntimeState>
+  check(): Promise<RuntimeState>
+  install(version: string): Promise<RuntimeState>
+  resetBuiltin(): Promise<RuntimeState>
+  retryApply(): Promise<RuntimeState>
+  retryRestore(): Promise<RuntimeState>
+  recoverMetadata(): Promise<RuntimeState>
+  cleanupVersion(version: string): Promise<RuntimeState>
+  onChanged(callback: (state: RuntimeState) => void): () => void
 }
 
 /**
@@ -346,6 +364,28 @@ function systemResumeApi(): SystemResumeSurface {
   };
 }
 
+/** The dsh-chamber:runtime-* IPC surface (design 17 M2). Non-secret projection
+ *  only (version strings / list / phase / short error); install/check/reset run
+ *  in the main process. onChanged subscribes to the main-process push. */
+function runtimeApi(): RuntimeSurface {
+  return {
+    state: () => ipcRenderer.invoke('dsh-chamber:runtime-state'),
+    check: () => ipcRenderer.invoke('dsh-chamber:runtime-check'),
+    install: version => ipcRenderer.invoke('dsh-chamber:runtime-install', { version }),
+    resetBuiltin: () => ipcRenderer.invoke('dsh-chamber:runtime-reset-builtin'),
+    retryApply: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-apply'),
+    retryRestore: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-restore'),
+    recoverMetadata: () => ipcRenderer.invoke('dsh-chamber:runtime-recover-metadata'),
+    cleanupVersion: version => ipcRenderer.invoke('dsh-chamber:runtime-cleanup-version', { version }),
+    onChanged: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, state: RuntimeState) => callback(state);
+      ipcRenderer.on('dsh-chamber:runtime-state-changed', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:runtime-state-changed', listener);
+    },
+  };
+}
+
 /**
  * The dsh-chamber:vscode-availability / dsh-chamber:open-vscode IPC surface
  * (design 16 §5.2/§6.4): availability re-probed on every call (no stale cache);
@@ -411,6 +451,7 @@ requestAppInfo().then(
       systemResume: systemResumeApi(),
       vscode: vscodeApi(),
       deepLink: deepLinkApi(),
+      runtime: runtimeApi(),
     });
   },
   (err: unknown) => {
@@ -425,6 +466,7 @@ requestAppInfo().then(
       systemResume: systemResumeApi(),
       vscode: vscodeApi(),
       deepLink: deepLinkApi(),
+      runtime: runtimeApi(),
     });
   },
 );

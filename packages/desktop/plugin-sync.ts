@@ -27,9 +27,21 @@
  * path is derived from `remoteDshHome` (a whitelisted, shell-safe value).
  */
 
-import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 // Canonical whitelists (design 13 §7.2) — reused from ssh-provider.ts so the
@@ -41,6 +53,10 @@ import { homedir, tmpdir } from 'node:os'
 // `.ssh*`-named home path), so the provider-side classification and this
 // caller-side error-text test can never drift apart.
 import { ENOENT_PATTERN, MAX_PLUGIN_SPEC_CHARS, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
+import {
+  RuntimeInstallerSupervisor,
+  isRuntimeInstallerWriterSafetyError,
+} from './runtime-installer.ts'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 
@@ -1417,60 +1433,219 @@ export async function materializeAbsolutePath(
 
 const MATERIALIZED_TARBALL_MAX_BYTES = 50 * 1024 * 1024
 const CHILD_OUTPUT_MAX_CHARS = 64 * 1024
+const localPluginChildSupervisor = new RuntimeInstallerSupervisor(CHILD_OUTPUT_MAX_CHARS, 1_000)
+const LOCAL_PLUGIN_WRITER_SCHEMA = 1
+const PRIVATE_DIR_MODE = 0o700
+const PRIVATE_FILE_MODE = 0o600
+
+export interface LocalPluginWriterRecord {
+  schemaVersion: 1
+  pid: number
+  ownerPid: number
+  ownerStartToken: string | null
+  childStartToken: string | null
+  childCommandHash: string | null
+  createdAt: string
+}
+
+interface ProcessIdentity {
+  startToken: string
+  commandHash: string
+}
+
+export interface LocalPluginWriterReaperDeps {
+  inspectProcess(pid: number): ProcessIdentity | null
+  processAlive(pid: number, group: boolean): boolean
+  signalGroup(pid: number, signal: NodeJS.Signals): void
+  wait(ms: number): Promise<void>
+}
+
+export function localPluginWriterLedgerPath(localDshHome: string): string {
+  return join(dirname(localDshHome), 'local-plugin-writer.json')
+}
+
+function inspectProcess(pid: number): ProcessIdentity | null {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform === 'win32') return null
+  const ps = '/bin/ps'
+  const started = spawnSync(ps, ['-p', String(pid), '-o', 'lstart='], {
+    encoding: 'utf8', timeout: 2_000, windowsHide: true,
+  })
+  const command = spawnSync(ps, ['-p', String(pid), '-o', 'command='], {
+    encoding: 'utf8', timeout: 2_000, windowsHide: true,
+  })
+  if (started.status !== 0 || command.status !== 0) return null
+  const startToken = started.stdout.trim()
+  const commandText = command.stdout.trim()
+  if (startToken === '' || commandText === '') return null
+  return {
+    startToken,
+    commandHash: createHash('sha256').update(commandText).digest('hex'),
+  }
+}
+
+function processAlive(pid: number, group: boolean): boolean {
+  try {
+    process.kill(group && process.platform !== 'win32' ? -pid : pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+const defaultWriterReaperDeps: LocalPluginWriterReaperDeps = {
+  inspectProcess,
+  processAlive,
+  signalGroup: (pid, signal) => {
+    process.kill(process.platform === 'win32' ? pid : -pid, signal)
+  },
+  wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
+}
+
+function readLocalPluginWriterRecord(localDshHome: string): LocalPluginWriterRecord | null | 'corrupt' {
+  const ledger = localPluginWriterLedgerPath(localDshHome)
+  if (!existsSync(ledger)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(ledger, 'utf8')) as Partial<LocalPluginWriterRecord>
+    if (parsed.schemaVersion !== LOCAL_PLUGIN_WRITER_SCHEMA
+      || !Number.isInteger(parsed.pid) || (parsed.pid ?? 0) <= 0
+      || !Number.isInteger(parsed.ownerPid) || (parsed.ownerPid ?? 0) <= 0
+      || (parsed.ownerStartToken !== null && typeof parsed.ownerStartToken !== 'string')
+      || (parsed.childStartToken !== null && typeof parsed.childStartToken !== 'string')
+      || (parsed.childCommandHash !== null && typeof parsed.childCommandHash !== 'string')
+      || typeof parsed.createdAt !== 'string') return 'corrupt'
+    return parsed as LocalPluginWriterRecord
+  } catch {
+    return 'corrupt'
+  }
+}
+
+function writeLocalPluginWriterRecord(localDshHome: string, pid: number): void {
+  const ownerIdentity = inspectProcess(process.pid)
+  const childIdentity = inspectProcess(pid)
+  if (process.platform !== 'win32' && childIdentity === null) {
+    throw new Error('cannot establish local plugin writer identity')
+  }
+  const ledger = localPluginWriterLedgerPath(localDshHome)
+  const parent = dirname(ledger)
+  mkdirSync(parent, { recursive: true, mode: PRIVATE_DIR_MODE })
+  chmodSync(parent, PRIVATE_DIR_MODE)
+  const record: LocalPluginWriterRecord = {
+    schemaVersion: LOCAL_PLUGIN_WRITER_SCHEMA,
+    pid,
+    ownerPid: process.pid,
+    ownerStartToken: ownerIdentity?.startToken ?? null,
+    childStartToken: childIdentity?.startToken ?? null,
+    childCommandHash: childIdentity?.commandHash ?? null,
+    createdAt: new Date().toISOString(),
+  }
+  const tmp = `${ledger}.tmp-${randomBytes(4).toString('hex')}`
+  try {
+    writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
+    chmodSync(tmp, PRIVATE_FILE_MODE)
+    renameSync(tmp, ledger)
+    chmodSync(ledger, PRIVATE_FILE_MODE)
+  } catch (error) {
+    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
+    throw error
+  }
+}
+
+/** Reap a plugin writer left by a hard-crashed Electron owner. Identity is
+ * checked before signaling so PID reuse can never kill an unrelated process.
+ * A corrupt or unverifiable live record fails closed and blocks DSH_HOME use. */
+export async function reapStaleLocalPluginWriters(
+  localDshHome: string,
+  deps: LocalPluginWriterReaperDeps = defaultWriterReaperDeps,
+): Promise<{ ok: true; reaped: boolean } | { ok: false; error: string }> {
+  const ledger = localPluginWriterLedgerPath(localDshHome)
+  const record = readLocalPluginWriterRecord(localDshHome)
+  if (record === null) return { ok: true, reaped: false }
+  if (record === 'corrupt') return { ok: false, error: 'local plugin writer ledger is corrupt' }
+
+  const ownerIdentity = deps.inspectProcess(record.ownerPid)
+  const ownerIsSame = deps.processAlive(record.ownerPid, false)
+    && record.ownerStartToken !== null
+    && ownerIdentity?.startToken === record.ownerStartToken
+  if (ownerIsSame) return { ok: false, error: 'a local plugin writer is still owned by a live application process' }
+
+  if (!deps.processAlive(record.pid, process.platform !== 'win32')) {
+    rmSync(ledger, { force: true })
+    return { ok: true, reaped: false }
+  }
+  if (process.platform === 'win32' || record.childStartToken === null || record.childCommandHash === null) {
+    return { ok: false, error: 'a stale local plugin writer cannot be safely identified on this platform' }
+  }
+  const childIdentity = deps.inspectProcess(record.pid)
+  // If the original group leader is still present, authenticate it exactly
+  // before signaling. A daemonized descendant may keep the original process
+  // group alive after that leader exits; in that case there is no leader PID
+  // left to compare, but the still-live PGID remains reserved to that group.
+  if (childIdentity !== null && (childIdentity.startToken !== record.childStartToken
+    || childIdentity.commandHash !== record.childCommandHash)) {
+    return { ok: false, error: 'local plugin writer PID identity changed; refusing to signal it' }
+  }
+  try { deps.signalGroup(record.pid, 'SIGTERM') } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+      return { ok: false, error: 'failed to terminate stale local plugin writer' }
+    }
+  }
+  await deps.wait(1_000)
+  if (deps.processAlive(record.pid, true)) {
+    try { deps.signalGroup(record.pid, 'SIGKILL') } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+        return { ok: false, error: 'failed to kill stale local plugin writer' }
+      }
+    }
+    await deps.wait(1_000)
+  }
+  if (deps.processAlive(record.pid, true)) {
+    return { ok: false, error: 'stale local plugin writer did not exit' }
+  }
+  rmSync(ledger, { force: true })
+  return { ok: true, reaped: true }
+}
+
+/** App-quit barrier for local pack/plugin children and their Unix groups. */
+export async function disposeLocalPluginChildren(): Promise<void> {
+  await localPluginChildSupervisor.dispose()
+}
 
 /** Run a bounded child without blocking Electron's main event loop. */
-function runChild(
+async function runChild(
   command: string,
   args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; writerHome?: string },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  return new Promise(resolveResult => {
-    let settled = false
-    let timedOut = false
-    let detail = ''
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let forceTimer: ReturnType<typeof setTimeout> | null = null
-    const finish = (result: { ok: true } | { ok: false; error: string }) => {
-      if (settled) return
-      settled = true
-      if (timer !== null) clearTimeout(timer)
-      if (forceTimer !== null) clearTimeout(forceTimer)
-      resolveResult(result)
-    }
-    let child
-    try {
-      child = spawn(command, args, {
-        cwd: options.cwd,
-        env: options.env,
-        stdio: ['ignore', 'ignore', 'pipe'],
-        windowsHide: true,
-      })
-    } catch (error) {
-      resolveResult({ ok: false, error: String(error) })
-      return
-    }
-    child.stderr?.setEncoding('utf8')
-    child.stderr?.on('data', chunk => {
-      if (detail.length < CHILD_OUTPUT_MAX_CHARS) detail += String(chunk).slice(0, CHILD_OUTPUT_MAX_CHARS - detail.length)
+  const env = Object.fromEntries(
+    Object.entries(options.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  )
+  let supervisionComplete = false
+  try {
+    const result = await localPluginChildSupervisor.run([command, ...args], {
+      cwd: options.cwd,
+      env,
+      timeoutMs: options.timeoutMs,
+      onSpawn: options.writerHome === undefined
+        ? undefined
+        : pid => writeLocalPluginWriterRecord(options.writerHome!, pid),
     })
-    child.on('error', error => finish({ ok: false, error: String(error) }))
-    child.on('exit', (code, signal) => {
-      if (timedOut) finish({ ok: false, error: `child timed out after ${options.timeoutMs}ms` })
-      else if (code === 0) finish({ ok: true })
-      else finish({ ok: false, error: detail.trim() || `child exited ${code ?? signal ?? 'unknown'}` })
-    })
-    timer = setTimeout(() => {
-      timedOut = true
-      try { child.kill('SIGTERM') } catch { /* already gone */ }
-      forceTimer = setTimeout(() => {
-        try { child.kill('SIGKILL') } catch { /* already gone */ }
-      }, 2_000)
-      forceTimer.unref?.()
-      // Resolve only after the child exits. In particular, packDirectory must
-      // not remove its staging directory while pnpm is still writing there.
-    }, options.timeoutMs)
-    timer.unref?.()
-  })
+    // A resolved supervisor promise means the direct child and its Unix
+    // process group have both been proven gone. Only then may crash evidence
+    // be cleared, regardless of the command's exit status.
+    supervisionComplete = true
+    if (result.status === 0) return { ok: true }
+    return { ok: false, error: result.stderr.trim() || `child exited ${result.status ?? 'unknown'}` }
+  } catch (error) {
+    // A residual/unknown writer is not an ordinary command failure. Preserve
+    // the durable ledger in `finally` and reject so the caller's writer fence
+    // cannot observe a normal result while DSH_HOME may still be mutating.
+    if (isRuntimeInstallerWriterSafetyError(error)) throw error
+    return { ok: false, error: String(error) }
+  } finally {
+    if (options.writerHome !== undefined && supervisionComplete) {
+      try { rmSync(localPluginWriterLedgerPath(options.writerHome), { force: true }) } catch { /* startup reaper handles residue */ }
+    }
+  }
 }
 
 async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null> {
@@ -1645,6 +1820,7 @@ export async function runLocalDshPlugin(
     cwd: dshWorkspace,
     env,
     timeoutMs: 120_000,
+    writerHome: localDshHome,
   })
   return result.ok ? { ok: true } : { ok: false, error: result.error }
 }

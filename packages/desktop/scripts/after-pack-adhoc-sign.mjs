@@ -26,9 +26,105 @@
 // chamber needs plaintext HTTP only for its loopback control plane, never a
 // process-wide NSAllowsArbitraryLoads grant. This must happen before signing
 // because Info.plist is a sealed resource.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export const MAC_DISABLE_LIBRARY_VALIDATION = 'com.apple.security.cs.disable-library-validation';
+export const MAC_ENTITLEMENTS_PATH = fileURLToPath(new URL('../resources/entitlements.mac.plist', import.meta.url));
+
+function entitlementEnabled(plistText, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`<key>\\s*${escaped}\\s*<\\/key>\\s*<true\\s*\\/>`).test(plistText);
+}
+
+/** The committed plist is the source of truth for both signing paths. */
+export function verifyMacEntitlementsFile(entitlementsPath = MAC_ENTITLEMENTS_PATH) {
+  if (!existsSync(entitlementsPath)) {
+    throw new Error(`missing macOS entitlements file: ${entitlementsPath}`);
+  }
+  const plist = readFileSync(entitlementsPath, 'utf8');
+  if (!entitlementEnabled(plist, MAC_DISABLE_LIBRARY_VALIDATION)) {
+    throw new Error(`macOS entitlements must enable ${MAC_DISABLE_LIBRARY_VALIDATION}`);
+  }
+}
+
+/** Exact argv used by the no-identity afterPack fallback. Kept pure so the
+ * packaging gate can prove that ad-hoc signing cannot silently drop the
+ * native-module entitlement. */
+export function macAdhocSignArgs(appPath, entitlementsPath = MAC_ENTITLEMENTS_PATH) {
+  return ['--force', '--deep', '--sign', '-', '--entitlements', entitlementsPath, appPath];
+}
+
+/** Inspect the signature that will be shipped, rather than trusting config. */
+export function verifySignedMacEntitlements(appPath, spawn = spawnSync) {
+  const result = spawn('codesign', ['-d', '--entitlements', ':-', appPath], {
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.error !== undefined) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`unable to read packaged macOS entitlements (codesign exit ${result.status}): ${(result.stderr || result.stdout || '').trim()}`);
+  }
+  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+  if (!entitlementEnabled(output, MAC_DISABLE_LIBRARY_VALIDATION)) {
+    throw new Error(`packaged macOS signature is missing ${MAC_DISABLE_LIBRARY_VALIDATION}=true`);
+  }
+}
+
+export const PACKAGED_RUNTIME_MODULES = Object.freeze([
+  'sanitize-error.ts',
+  'registry-url.ts',
+  'registry-integrity.ts',
+  'registry-metadata.ts',
+  'version-safety.ts',
+  'dsh-runtime-updater.ts',
+  'runtime-installer.ts',
+  'dsh-runtime-controller.ts',
+  'dsh-runtime-store.ts',
+  'runtime-startup.ts',
+  'runtime-probes.ts',
+  'restart-exhausted-rollback.ts',
+  'runtime-operation-fence.ts',
+  'runtime-metadata-recovery.ts',
+  'activation-gate.ts',
+  'override-lifecycle.ts',
+  'snapshot-store.ts',
+  'apply-phase.ts',
+  'runtime-state-machine.ts',
+  'known-good-monitor.ts',
+  'allow-builds.mjs',
+  'prune-runtime.mjs',
+]);
+
+/**
+ * Runtime-version support must be present on the real filesystem: pnpm is an
+ * extraResource and the modules are deliberately asar-unpacked so afterPack
+ * can assert the exact bytes that Electron will load.
+ */
+export function verifyPackagedRuntimeSupport(resourcesDir) {
+  const pnpmDir = path.join(resourcesDir, 'pnpm');
+  const pnpmManifestPath = path.join(pnpmDir, 'package.json');
+  const pnpmEntry = path.join(pnpmDir, 'bin', 'pnpm.cjs');
+  const pnpmModuleEntry = path.join(pnpmDir, 'bin', 'pnpm.mjs');
+  const pnpmDist = path.join(pnpmDir, 'dist', 'pnpm.mjs');
+  if (!existsSync(pnpmManifestPath) || !existsSync(pnpmEntry)
+    || !existsSync(pnpmModuleEntry) || !existsSync(pnpmDist)) {
+    throw new Error(`incomplete packaged pnpm runtime: expected ${pnpmEntry}, ${pnpmModuleEntry} and ${pnpmDist}`);
+  }
+  const pnpmManifest = JSON.parse(readFileSync(pnpmManifestPath, 'utf8'));
+  if (pnpmManifest.name !== 'pnpm' || pnpmManifest.version !== '11.21.0') {
+    throw new Error(`wrong packaged pnpm: ${JSON.stringify(pnpmManifest.name)}@${JSON.stringify(pnpmManifest.version)}`);
+  }
+
+  const unpackedRoot = path.join(resourcesDir, 'app.asar.unpacked');
+  const missing = PACKAGED_RUNTIME_MODULES.filter((name) => !existsSync(path.join(unpackedRoot, name)));
+  if (missing.length > 0) {
+    throw new Error(`incomplete packaged runtime modules: ${missing.join(', ')}`);
+  }
+  console.log(`[after-pack-adhoc-sign] runtime installer support verified: pnpm@${pnpmManifest.version}, ${PACKAGED_RUNTIME_MODULES.length} modules`);
+}
 
 /**
  * Fail the build before distributable targets are created when extraResources
@@ -63,6 +159,7 @@ export default async function afterPackAdhocSign(context) {
     ? path.join(context.appOutDir, `${appName}.app`, 'Contents', 'Resources')
     : path.join(context.appOutDir, 'resources');
   verifyPackagedDshRuntime(resourcesDir, context.electronPlatformName);
+  verifyPackagedRuntimeSupport(resourcesDir);
   if (context.electronPlatformName !== 'darwin') return;
   const appPath = path.join(context.appOutDir, `${appName}.app`);
   const infoPlist = path.join(appPath, 'Contents', 'Info.plist');
@@ -83,8 +180,10 @@ export default async function afterPackAdhocSign(context) {
     throw new Error(`failed to disable NSAllowsArbitraryLoads (got ${JSON.stringify(arbitraryLoads)})`);
   }
   console.log('[after-pack-adhoc-sign] ATS restricted to declared loopback exceptions');
+  verifyMacEntitlementsFile();
   console.log(`[after-pack-adhoc-sign] ad-hoc signing ${appPath}`);
-  execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
+  execFileSync('codesign', macAdhocSignArgs(appPath), { stdio: 'inherit' });
   execFileSync('codesign', ['--verify', '--deep', '--strict', appPath], { stdio: 'inherit' });
-  console.log('[after-pack-adhoc-sign] signature verified');
+  verifySignedMacEntitlements(appPath);
+  console.log(`[after-pack-adhoc-sign] signature verified (${MAC_DISABLE_LIBRARY_VALIDATION}=true)`);
 }

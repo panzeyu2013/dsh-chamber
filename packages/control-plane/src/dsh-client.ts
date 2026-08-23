@@ -110,6 +110,62 @@ export interface ServerRequest {
 /** Default unary transport health deadline (matches the ref client's 30_000). */
 export const DEFAULT_TIMEOUT_MS = 30_000
 
+/** A damaged or hostile runtime must not make the desktop buffer an
+ * unbounded unary envelope before the activation probe can reject it. */
+export const MAX_UNARY_RESPONSE_BYTES = 1024 * 1024
+
+class BoundedJsonError extends Error {
+  readonly kind: 'too-large' | 'invalid-json'
+
+  constructor(kind: 'too-large' | 'invalid-json') {
+    super(kind)
+    this.kind = kind
+  }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const declared = response.headers.get('content-length')
+  if (declared !== null && /^\d+$/.test(declared)
+    && Number(declared) > MAX_UNARY_RESPONSE_BYTES) {
+    try { await response.body?.cancel() } catch { /* best-effort carrier cleanup */ }
+    throw new BoundedJsonError('too-large')
+  }
+  if (response.body === null) throw new BoundedJsonError('invalid-json')
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_UNARY_RESPONSE_BYTES) {
+        try { await reader.cancel() } catch { /* best-effort carrier cleanup */ }
+        throw new BoundedJsonError('too-large')
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    if (error instanceof BoundedJsonError) throw error
+    throw new BoundedJsonError('invalid-json')
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  } catch {
+    throw new BoundedJsonError('invalid-json')
+  }
+}
+
 /**
  * Default per-session pending soft cap (design 02 §3.3): at most this many
  * in-flight unary calls may address one session before new calls are rejected
@@ -463,9 +519,12 @@ export async function call(
   }
   let envelope: any
   try {
-    envelope = await response.json()
+    envelope = await readBoundedJson(response)
   } catch (error) {
-    throw fail(`dsh unary ${method}: response body is not JSON: ${String(error)}`, response.status, 'protocol_violation')
+    if (error instanceof BoundedJsonError && error.kind === 'too-large') {
+      throw fail(`dsh unary ${method}: response body exceeds ${MAX_UNARY_RESPONSE_BYTES} bytes`, response.status, 'response_too_large')
+    }
+    throw fail(`dsh unary ${method}: response body is not valid bounded JSON`, response.status, 'protocol_violation')
   }
   if (envelope?.type !== 'server-response' || envelope.rpcId !== rpcId) {
     throw fail(`dsh unary ${method}: missing or mismatched server-response`, response.status, 'protocol_violation')
@@ -546,9 +605,12 @@ export async function respond(
   }
   let receipt: any
   try {
-    receipt = await response.json()
+    receipt = await readBoundedJson(response)
   } catch (error) {
-    throw fail(`dsh respond: response body is not JSON: ${String(error)}`, response.status, 'protocol_violation')
+    if (error instanceof BoundedJsonError && error.kind === 'too-large') {
+      throw fail(`dsh respond: response body exceeds ${MAX_UNARY_RESPONSE_BYTES} bytes`, response.status, 'response_too_large')
+    }
+    throw fail('dsh respond: response body is not valid bounded JSON', response.status, 'protocol_violation')
   }
   if (receipt?.accepted !== true && !(receipt?.accepted === false && typeof receipt.reason === 'string')) {
     throw fail('dsh respond: malformed receipt', response.status, 'protocol_violation')
@@ -750,4 +812,3 @@ export async function describeCapabilities(
   capabilityCache.set(baseUrl, entry)
   return { value: entry.value, cachedAt: entry.cachedAt }
 }
-

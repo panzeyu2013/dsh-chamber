@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -27,18 +27,20 @@ test('normalizeSettings: defaults for null / non-object', () => {
 });
 
 test('normalizeSettings: accepts valid fields, rejects bad values, ignores unknown keys', () => {
-  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, futureKey: 42 });
-  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false });
+  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, registryOrigin: 'https://registry.npmmirror.com', futureKey: 42 });
+  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, registryOrigin: 'https://registry.npmmirror.com' });
   // Bad enum / non-boolean values fall back to defaults silently (normalize is
   // the persistence read path; loud validation lives in validatePatch).
   const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1, quitConfirmation: 'yes' });
   assert.deepEqual(bad, DEFAULT_CHAMBER_SETTINGS);
+  assert.equal(normalizeSettings({ registryOrigin: 'https://registry.example/private' }).registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
+  assert.equal(normalizeSettings({ registryOrigin: 'https://registry.example/?token=x' }).registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
 });
 
 test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
   const file = path.join(dir, 'chamber-settings.json');
-  const settings = { windowCloseBehavior: 'quit' as const, launchAtLogin: true, keepAwake: true, quitConfirmation: false };
+  const settings = { windowCloseBehavior: 'quit' as const, launchAtLogin: true, keepAwake: true, quitConfirmation: false, registryOrigin: 'https://registry.npmjs.org' };
   writeSettingsFile(file, settings);
   const read = readSettingsFile(file);
   assert.equal(read.notice, null);
@@ -73,6 +75,21 @@ test('readSettingsFile: non-object JSON is corrupt', () => {
   const read = readSettingsFile(file);
   assert.ok(read.notice !== null);
   assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS);
+});
+
+test('readSettingsFile: invalid persisted registry trust anchor is preserved as corrupt', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-invalid-registry-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeFileSync(file, JSON.stringify({ registryOrigin: 'http://private.example/path' }));
+    const read = readSettingsFile(file);
+    assert.equal(read.settings.registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
+    assert.match(read.notice ?? '', /corrupt/);
+    assert.equal(existsSync(file), false);
+    assert.equal(existsSync(`${file}.corrupt`), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('computeSupported: launchAtLogin off on win32; closeToTray follows tray availability, always on darwin', () => {

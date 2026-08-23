@@ -124,6 +124,16 @@ export interface ControlPlaneOptions {
   host?: string
   stateDir?: string
   dshWorkspacePath?: string
+  /** Resolve the workspace for each local spawn/restart (runtime switching). */
+  getDshWorkspacePath?: () => string
+  /**
+   * Optional dynamic lifecycle gate. It is checked at management entry and
+   * again before every start/restart seed and process spawn.
+   */
+  canStartLocal?: () => { ok: true } | { ok: false; reason: string }
+  /** Dynamic public exposure gate. The desktop keeps this closed from spawn
+   * through the full activation-probe verdict. */
+  canExposeLocal?: () => boolean
   webDistDir?: string
   logger?: Logger
   corsOrigins?: string[]
@@ -156,6 +166,11 @@ export interface PlaneHandle {
    * (state-string independent — see local-connection hasLiveProcess).
    */
   readonly localProcessAlive: boolean
+  /** True only when startup reaping proved there are no kept/failed managed
+   * host records that could still be writing the shared DSH_HOME. */
+  readonly localWritersQuiescent: boolean
+  /** Live port of the managed local host; null while it is not serving. */
+  readonly localDshPort: number | null
   readonly instanceId: string
   registerInstanceTransport(connectionId: string, baseUrl: string): void
   unregisterInstanceTransport(connectionId: string): void
@@ -167,6 +182,13 @@ export interface PlaneHandle {
    * instance already ready.
    */
   startLocal(): Promise<void>
+  /** Stop the managed local host without tearing down the control plane.
+   * Resolves only after queued/in-flight start and restart writers settle. */
+  stopLocal(): Promise<void>
+  /** Re-publish the public local lifecycle after canExposeLocal changes. */
+  refreshLocalExposure(): void
+  /** Observe local lifecycle transitions (used by delayed rollback policy). */
+  onLocalStateChange(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
 }
 
 /**
@@ -186,10 +208,32 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)}; loopback-only is a v1 invariant`)
   }
   const stateDir = options.stateDir ?? process.env.DSH_CHAMBER_STATE ?? DEFAULT_STATE_DIR
-  const dshWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
+  const defaultWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
+  const getDshWorkspacePath = options.getDshWorkspacePath ?? (() => defaultWorkspacePath)
   const webDistDir = options.webDistDir === undefined ? undefined : options.webDistDir
   // The console default satisfies every module's logger option ({log,warn,error}).
   const logger = (options.logger ?? console) as Logger
+  let localWritersQuiescent = false
+
+  /**
+   * Combine the external runtime-apply gate with the internal process-writer
+   * safety latch. The latch begins closed until startup reaping succeeds and
+   * closes permanently for this plane lifecycle if any termination cannot
+   * prove the detached process group is gone.
+   */
+  function localStartGate(): { ok: true } | { ok: false; reason: string } {
+    if (!localWritersQuiescent) {
+      return {
+        ok: false,
+        reason: 'local DSH_HOME writer quiescence is not proven; restart and reaper recovery are required',
+      }
+    }
+    return options.canStartLocal?.() ?? { ok: true }
+  }
+
+  function localExposureAllowed(): boolean {
+    return localWritersQuiescent && (options.canExposeLocal?.() ?? true)
+  }
 
   // Module-A host package source (design 09 module B); may be absent — the seed
   // skips it gracefully and the plane keeps working without the host graph.
@@ -238,13 +282,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * runLocalDshPlugin included) re-links profile node_modules, which prunes
    * such packages: without the per-spawn re-seed the next instance restart
    * would boot with a --patch row that cannot resolve and fail loudly, the
-   * only self-heal being a desktop-app restart (plane start()). Both this
-   * thunk and the plane's start() initial run are idempotent (content-hash
-   * skip in ensureHostGraphPackage, content-compare in buildPatchOverlay), so
-   * they never conflict. Returns the --patch overlay path, or null when
+   * only self-heal being a desktop-app restart. This thunk is idempotent
+   * (content-hash skip in ensureHostGraphPackage, content-compare in
+   * buildPatchOverlay). Returns the --patch overlay path, or null when
    * module A's built artifact is absent (v4 baseline command line, nothing
    * to mount). Failure semantics: a seed throw on the initial-spawn path
-   * lands the instance in error state (next plane start() retries); on the
+   * lands the instance in error state (the next local start retries); on the
    * restart path it rides the connection's existing bounded backoff loop and
    * ends in restart-exhausted — the same fail-loud surface as any spawn
    * failure (a broken shipped module A is a packaging bug, never silent).
@@ -295,21 +338,62 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // The managed local connection adapter (design 02): spawn/health/reaper
   // owner; readiness = TCP + host.describe inside spawn-dsh.
   const local = createLocalConnection({
-    stateDir, dshHome, dshWorkspacePath, catalog, logger,
-    // patchPath is a thunk: the seed may land after construction (the plane's
-    // start()), and resolving it per spawn (restarts included) re-runs the
-    // idempotent seed, self-healing a pruned one (see resolveHostGraphPatch).
-    options: { patchPath: resolveHostGraphPatch },
+    stateDir, dshHome, dshWorkspacePath: getDshWorkspacePath, catalog, logger,
+    // patchPath is a thunk resolved only behind the per-spawn fence. Re-read
+    // it for starts and restarts so a profile-internal prune self-heals
+    // without allowing a DSH_HOME write during runtime apply/restore.
+    options: {
+      canSpawn: localStartGate,
+      onWriterQuiescenceUnknown: (writerError) => {
+        localWritersQuiescent = false
+        logger.error(`local writer quiescence became unknown; further starts are blocked until restart/reaper: ${writerError.message}`)
+      },
+      patchPath: () => {
+        // This thunk is reached only after local-connection's spawn fence.
+        // Keeping every DSH_HOME seed here prevents runtime snapshot/restore
+        // from racing a start that passed an earlier API-entry check.
+        if (seedDshHomeDefaults(dshHome)) {
+          logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
+        }
+        return resolveHostGraphPatch()
+      },
+    },
     deps: options.localConnectionDeps,
   })
-  // Health-events push fan-out (05 §3): the connection's lifecycle
-  // subscription reaches every SSE client of GET /api/host/health-events.
-  local.onStateChange((snapshot) => {
+  // Candidate lifecycle is an internal fact until the desktop's full probe
+  // verdict opens exposure. A candidate can move from ready to degraded,
+  // restarting, or error while the full probe is still running; none of those
+  // states (nor its port/error detail) may escape through public REST/SSE.
+  const publicLocalSnapshot = (snapshot: { status: string; port: number | null; error: string | null }) => {
+    if (!localExposureAllowed()) {
+      return { status: 'starting', port: null, error: null }
+    }
+    return snapshot
+  }
+  const currentPublicLocalSnapshot = () => publicLocalSnapshot({
+    status: local.getState(),
+    port: local.getDshPort(),
+    error: local.getError(),
+  })
+  const publishPublicLocalSnapshot = () => {
+    const snapshot = currentPublicLocalSnapshot()
     for (const listener of healthListeners) listener(snapshot)
+  }
+  // Health-events push fan-out (05 §3): the connection's lifecycle
+  // subscription reaches every SSE client through the same quarantine view.
+  local.onStateChange((snapshot) => {
+    const projected = publicLocalSnapshot(snapshot)
+    for (const listener of healthListeners) listener(projected)
   })
 
   // Managed-host rolling logs (design 02 §3.8): the read side of the
   // per-port JSONL files written by spawn-dsh.ts / local-connection.ts.
+  // While the desktop activation verdict is pending, the 'local' alias
+  // resolves to the most recent spawn record — the quarantined candidate —
+  // and its rolling log contains the candidate port and a "ready" line.
+  // That is an internal fact like every other public surface, so the alias
+  // read is gated by the same exposure latch (an explicit port query is an
+  // internal/diagnostic read and stays available).
   const hostLogsModule = hostLogs({ stateDir, logger })
 
   // Per-instance reverse proxy (design 03 §3): /api/i/<id>/* HTTP/WS/SSE
@@ -320,6 +404,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     logger,
     getLocalState: () => local.getState(),
     getLocalDshPort: () => local.getDshPort(),
+    canExposeLocal: localExposureAllowed,
   })
 
   /** The connection-row projection on the wire (04 §3.2): status/dshPort/error
@@ -330,15 +415,16 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   function connectionRowView() {
     const row = catalog.getConnection('local')
     if (row === null) return null
+    const publicSnapshot = currentPublicLocalSnapshot()
     const view: { id: string; label?: string; accentColor?: string; status: string; dshPort?: number; error?: string } = {
       id: row.connectionId,
-      status: local.getState(),
+      status: publicSnapshot.status,
     }
     if (typeof row.label === 'string' && row.label !== '') view.label = row.label
     if (typeof row.accentColor === 'string' && row.accentColor !== '') view.accentColor = row.accentColor
-    const livePort = local.getDshPort()
+    const livePort = publicSnapshot.port
     if (Number.isInteger(livePort) && livePort !== null && livePort > 0) view.dshPort = livePort
-    const liveError = local.getError()
+    const liveError = publicSnapshot.error
     if (typeof liveError === 'string' && liveError !== '') view.error = liveError
     return view
   }
@@ -347,6 +433,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * existing state — never a duplicate spawn. Shared by the POST route and
    * the handle's startLocal pre-spawn. */
   const startLocalConnection = async (label?: string, accentColor?: string) => {
+    const gate = localStartGate()
+    if (gate?.ok === false) {
+      const error = new Error(gate.reason) as Error & { code: string }
+      error.code = 'connection_busy'
+      throw error
+    }
     let row = catalog.getConnection('local')
     if (row === null) {
       row = { connectionId: 'local', kind: 'local', status: 'starting', dshPort: null }
@@ -362,7 +454,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const api = createApi({
     logger,
     corsOrigins: explicitOrigins,
-    getHealth: () => ({ ok: true, dsh: { status: local.getState(), port: local.getDshPort() ?? 0, error: local.getError() ?? undefined } }),
+    getHealth: () => {
+      const snapshot = currentPublicLocalSnapshot()
+      return { ok: true, dsh: { status: snapshot.status, port: snapshot.port ?? 0, error: snapshot.error ?? undefined } }
+    },
     subscribeHealthEvents: (listener) => {
       healthListeners.add(listener)
       return () => { healthListeners.delete(listener) }
@@ -418,7 +513,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       await local.stop()
       // The row stays (03 §2.1: DELETE stops the instance, the row persists).
     },
-    hostLogs: (query: { port?: number; limit?: number; offset?: number }) => hostLogsModule.readManagedLog(query?.port ?? 'local', { limit: query?.limit, offset: query?.offset }),
+    hostLogs: (query: { port?: number; limit?: number; offset?: number }) => {
+      // An explicit port is an internal/diagnostic read; the 'local' alias is
+      // the public surface and must not leak the quarantined candidate's
+      // port/ready state before the activation verdict (same latch as the
+      // proxy and health surfaces). Fail closed with a loud 503 rather than a
+      // silent empty log.
+      if (query?.port === undefined && !localExposureAllowed()) {
+        const error = new Error('local instance is quarantined behind activation probes') as Error & { code: string }
+        error.code = 'quarantined'
+        throw error
+      }
+      return hostLogsModule.readManagedLog(query?.port ?? 'local', { limit: query?.limit, offset: query?.offset })
+    },
     instanceProxy,
   })
 
@@ -637,18 +744,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       if (server !== null) return
       mkdirSync(join(stateDir, 'managed-dsh'), { recursive: true })
       mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-      // First-run default locale for the managed local host (zh); the user's
-      // explicit settings choice always wins from then on.
-      if (seedDshHomeDefaults(dshHome)) {
-        logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
-      }
-      // Host-graph seed (design 09 方案 A, module B): distribute the chamber
-      // host package into the local profile (idempotent, content-hash skip)
-      // and materialize the --patch overlay that mounts it. The initial run
-      // here is for early exposure (logs + fail-loud on a broken module A);
-      // the spawn-time thunk re-runs the same idempotent seed before every
-      // spawn, restarts included — a seed pruned by a profile-internal pnpm
-      // operation self-heals on the next spawn, not only at plane start.
+      // Report host-package availability here, but defer every DSH_HOME seed
+      // to the fenced spawn-time thunk. plane.start() therefore performs the
+      // writer reaper before runtime activation takes its still snapshot;
+      // starts and restarts later re-seed idempotently when their fence opens.
       // dist/index.js is a COMMITTED artifact (design 09 §3.5, .gitignore
       // negation), so a fresh clone has it; the gate only skips when the
       // artifact is genuinely absent (module A not built/bundled in this
@@ -658,7 +757,6 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // leave the spawn command line exactly the v4 base. A pre-existing
       // running local instance is unaffected until its next restart — the
       // overlay applies at host boot, the official plugin-set-change cadence.
-      resolveHostGraphPatch()
       if (!existsSync(hostGraphArtifact)) {
         logger.log(`host-graph: host package build artifact ${hostGraphArtifact} not present; seed skipped (module A not built)`)
       }
@@ -680,6 +778,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // restarted reclaims its detached hosts before any new spawn — safe by
       // construction (triple verification, owner-dead only).
       const reaped = await runReaper({ stateDir, logger })
+      localWritersQuiescent = reaped.kept === 0 && reaped.errors.length === 0
       if (reaped.reclaimed > 0) logger.log(`reaper: reclaimed ${reaped.reclaimed} orphaned dsh host(s)`)
       // Failure isolation must be visible: entry errors are surfaced, never
       // silently dropped (one bad record never blocks the rest).
@@ -838,6 +937,15 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       return local.hasLiveProcess()
     },
 
+    get localWritersQuiescent() {
+      return localWritersQuiescent
+    },
+
+    /** The live local dsh port, used only by main-process activation probes. */
+    get localDshPort() {
+      return local.getDshPort()
+    },
+
     /**
      * The control-plane instance identity (design 02 §2.5); spawn records
      * carry it for multi-instance diagnostics.
@@ -865,8 +973,22 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     startLocal: async () => {
       await startLocalConnection()
     },
+
+    /** Stop only the local managed host (the HTTP control plane stays up). */
+    stopLocal: async () => {
+      await local.stop()
+    },
+
+    refreshLocalExposure() {
+      publishPublicLocalSnapshot()
+    },
+
+    /** Subscribe to the same authoritative lifecycle stream as health SSE. */
+    onLocalStateChange(listener) {
+      return local.onStateChange(listener)
+    },
   } satisfies PlaneHandle
 }
 
-export { spawnDsh } from './spawn-dsh.ts'
+export { spawnDsh, resolveNodeExecutable } from './spawn-dsh.ts'
 export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'

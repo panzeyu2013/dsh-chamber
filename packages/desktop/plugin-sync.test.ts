@@ -12,7 +12,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -27,11 +28,13 @@ import {
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
+  localPluginWriterLedgerPath,
   materializeAbsolutePath,
   materializeAndAdd,
   materializePluginsDir,
   packageNameFromSpec,
   remotePluginList,
+  reapStaleLocalPluginWriters,
   resolveLocalMaterializeDirectory,
   resetApplyInFlight,
   seedRemoteChamberHostPackages,
@@ -1513,4 +1516,73 @@ test('materializeAndAdd: a write-file failure fails loud before the add', async 
   const result = await materializeAndAdd(exec, SEED_SPEC, pkgDir, () => ({ bytes: Buffer.from('x') }))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /write-file failed/)
+})
+
+test('local plugin writer reaper fail-closes on PID identity reuse', async () => {
+  const root = tempDir()
+  const home = join(root, 'state', 'dsh-home')
+  mkdirSync(join(root, 'state'), { recursive: true })
+  writeFileSync(localPluginWriterLedgerPath(home), JSON.stringify({
+    schemaVersion: 1,
+    pid: 41001,
+    ownerPid: 41000,
+    ownerStartToken: 'old-owner',
+    childStartToken: 'old-child',
+    childCommandHash: 'old-command',
+    createdAt: new Date().toISOString(),
+  }))
+  const signals: string[] = []
+  const result = await reapStaleLocalPluginWriters(home, {
+    inspectProcess: pid => pid === 41001
+      ? { startToken: 'reused-child', commandHash: 'different-command' }
+      : null,
+    processAlive: pid => pid === 41001,
+    signalGroup: (_pid, signal) => { signals.push(signal) },
+    wait: async () => {},
+  })
+  assert.deepEqual(result, { ok: false, error: 'local plugin writer PID identity changed; refusing to signal it' })
+  assert.deepEqual(signals, [])
+  assert.equal(existsSync(localPluginWriterLedgerPath(home)), true)
+})
+
+test('local plugin writer reaper kills a daemonized descendant after its group leader exited', {
+  skip: process.platform === 'win32',
+  timeout: 15_000,
+}, async () => {
+  const root = tempDir()
+  const home = join(root, 'state', 'dsh-home')
+  mkdirSync(join(root, 'state'), { recursive: true })
+  const leader = spawn(process.execPath, ['-e', [
+    "const {spawn}=require('node:child_process')",
+    "const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref()",
+    "process.stdout.write(String(child.pid))",
+  ].join(';')], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+  let output = ''
+  leader.stdout?.setEncoding('utf8')
+  leader.stdout?.on('data', chunk => { output += chunk })
+  await new Promise<void>((resolve, reject) => {
+    leader.once('close', () => resolve())
+    leader.once('error', reject)
+  })
+  const descendantPid = Number(output)
+  assert.ok(Number.isInteger(leader.pid) && leader.pid! > 0)
+  assert.ok(Number.isInteger(descendantPid) && descendantPid > 0)
+  writeFileSync(localPluginWriterLedgerPath(home), JSON.stringify({
+    schemaVersion: 1,
+    pid: leader.pid,
+    ownerPid: 2_000_000_000,
+    ownerStartToken: null,
+    childStartToken: 'leader-exited',
+    childCommandHash: 'leader-exited',
+    createdAt: new Date().toISOString(),
+  }))
+  try {
+    const result = await reapStaleLocalPluginWriters(home)
+    assert.deepEqual(result, { ok: true, reaped: true })
+    assert.equal(existsSync(localPluginWriterLedgerPath(home)), false)
+    assert.throws(() => process.kill(descendantPid, 0), /ESRCH/)
+  } finally {
+    try { process.kill(-leader.pid!, 'SIGKILL') } catch { /* already reaped */ }
+    rmSync(root, { recursive: true, force: true })
+  }
 })

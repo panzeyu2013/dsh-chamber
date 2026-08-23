@@ -31,8 +31,68 @@
   剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
   N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径）。契约见
   `docs/design/16-vscode-deeplink.md`。
+- **dsh 运行时版本管理（设计 17，当前判定：M0/M2/M4 done，M1/M3
+  partial）**：运行期安装是唯一获取方式（无 Provider B）。主进程将 registry
+  origin、精确版本、`dist.tarball` 与 `dist.integrity` 绑定，只下载一次顶层
+  tarball 并流式校验 SRI，再让内嵌 pnpm 通过本地 `file:` spec 安装；顶层包不
+  二次解析/下载，传递依赖继续从同一显式 registry 解析并校验 integrity。
+
+  - **M0 — done**：激活/内建版本双来源投影；settings 与 connections 本地卡
+    回显版本；zh/en 文案已接线。
+  - **M1 — partial**：内嵌 pnpm、extraResources/asar-unpack、afterPack 静态门与
+    macOS packaged smoke harness 已就绪；开发树 Electron-as-node 安装有历史
+    实测。本轮按用户要求不执行真实产物的打包、签名、公证，因而没有真实 `.app`
+    的 pnpm/koffi/dsh/entitlement 结果，不宣称 packaged PASS。
+  - **M2 — done**：简略 metadata、latest 回退、同源重定向、source binding、
+    单次 tarball + SRI + pnpm `file:` install、allowBuilds、prune/冒烟/关键摘要/
+    只读原子发布、版本/快照/失败现场保留、work/store/cache/恢复备份/二阶恢复数据/
+    中断发布 backup 分类统计、10 GiB 新安装软阈值、writer fence 内权威保护重读后清理、
+    store prune 与维护清理、IPC 与打包清单已闭环。
+  - **M3 — partial**：异步启动活路径、durable activation journal、writer fence、
+    进程组静默门、快照→指针→spawn→全量只读探针→自动/手动回退、两阶段
+    恢复与 known-good 推进已接线；恢复 marker/staging/home/backup 均以 no-follow
+    权威状态 fail-closed，symlink/hardlink 不会被当成完成态。仍无真实 packaged Electron 壳中「候选
+    运行时→web host + 全探针→故障回退/恢复」端到端记录。
+  - **M4 — done**：版本/源选择、检查/安装/回滚/恢复、失败/快照/
+    磁盘投影、失效通知、平台/env 门控、状态 × 动作矩阵与 i18n 已落地；
+    生命周期投影由纯边表强制合法转移。损坏的 current/override/journal 会先
+    fail-closed 并保留现场，用户经原生确认执行无路径恢复：完整 stash → 原始字节
+    证据归档 → 内建树隔离探针 → 全绿放行；崩溃可幂等续作。恢复 marker 自身损坏时，
+    仅普通、可读、单硬链接文件开放二阶恢复：独立保存新 stash 与旧 marker 字节，
+    不修改既有 recovery tree；symlink/特殊文件/不可读/多硬链接保持安全隔离。
+
+  **当前确认的验收证据**：
+
+  - `pnpm run acceptance:runtime:fake-registry`：**PASS**。loopback fixture 覆盖简略
+    packument、`latest` 缺失回退、metadata/tarball 302、精确同源绑定、单次
+    顶层 tarball、SRI、真实 pnpm `file:` 安装、prune/冒烟/发布；它使用开发树
+    Node/pnpm，不等价于 packaged Electron。该 PASS 来自允许 loopback 的验收运行；
+    当前受限沙箱内复跑会在 `listen(127.0.0.1)` 处以 `EPERM` 退出。
+  - 当前最终工作树的 desktop 非 loopback 聚焦回归：**481/481 PASS**，覆盖
+    store/installer/controller、activation journal、snapshot/apply/startup、全量探针、
+    metadata 恢复（含损坏 marker 二阶恢复）、writer fence、plugin writer reaper、
+    known-good 连续健康与 UI 状态矩阵。`test:desktop` 中的 `transport-manager` 和
+    `registry-metadata` 需要 loopback/真实计时，在本沙箱不能形成新的全链 PASS；
+    不把 `listen EPERM` 或沙箱计时超时写成代码回归。
+  - 控制面本轮复验：protocol **21/21**、storage **15/15**、dsh client **7/7**、
+    host logs **19/19**、instance proxy **29/29** PASS；host-graph seed 的
+    **20/20** 个纯文件测试（文件内散布）PASS，其余依赖 control-plane listen
+    的用例与 static-serving 同样由沙箱 `listen EPERM` 阻断。
+  - 根 `tsc --noEmit`、`typecheck:settings-bridge`、`test:settings-bridge`、
+    `build:renderer`、`verify:i18n`、离线 `pnpm install --frozen-lockfile
+    --ignore-scripts` 与 `git diff --check`：**PASS**。`smoke` 在工作树没有可用
+    dsh 安装时按契约 SKIP。
+  - `node packages/desktop/scripts/after-pack-adhoc-sign.test.mjs`：**PASS（8/8）**；
+    这是静态/fixture 断言，不替代真实 `.app` 的 Mach-O、签名或原生模块运行结果。
+
+  **验收边界**：macOS packaged harness-ready，但本轮按用户要求不生成/运行
+  `.app`、不做真实产物的签名/公证；这是明确的验收边界，不是当前代码验收阻断。
+  Windows 管理面保持只读：可查看版本/状态，controller/main/UI 均拒绝安装、
+  选择、应用、回滚与清理，未跑 Windows mutation 不构成契约偏差。设计与
+  开放项见 `docs/design/17-dsh-runtime-version.md` §8。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
-- **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径；Unix 为契约目标。
+- **Windows 完整 mutation 能力暂缓**：detached/进程组/lsof 降级路径仍以
+  Unix 为契约目标；设计 17 的 Windows 运行时管理因此按上述契约保持只读。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化透传、
   host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游解锁（07 §3/§4）。
 - **Git Worktree 插件（设计 08，v1 已落地，2026-08-20）**：原 todo 经实施前审计

@@ -494,6 +494,9 @@ export function createApi(deps: ApiDeps) {
             const err = error as ApiError
             if (err.code === 'not_found') return jsonError(res, 404, 'not_found')
             if (err.code === 'invalid_argument') return jsonError(res, 400, { code: err.code, message: err.message })
+            // 候选隔离（design 17 §3.4）：激活探针裁决前的本地别名读取是
+            // 内部事实，显式 503，绝不静默返回空日志。
+            if (err.code === 'quarantined') return jsonError(res, 503, { code: err.code, message: err.message })
             return jsonError(res, 500, 'internal')
           }
         }
