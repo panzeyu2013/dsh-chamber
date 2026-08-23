@@ -6,13 +6,16 @@
  * managed-process-registry safety model: a spawn record is only reclaimed when
  * all of "we recorded it", "identity re-verified (command line + port
  * listener)", and "orphaned (reparented to init or owner dead)" hold; any
- * doubt keeps the record and the process untouched. Corrupt records and
- * records whose pid is not an integer are deleted without killing. Claim
- * records (claim-*.json) are v2-era external-takeover records — the
- * external-claim module was deleted with the thin-shell architecture (01
- * §4/§5), so nothing writes claims in v4; they are never killed, only
- * removed once their recorded owner is dead. Run once at control-plane
- * startup, before spawning hosts.
+ * doubt keeps the record and the process untouched. Since the design-17
+ * writer-quiescence revision, corrupt records and records whose pid is not an
+ * integer are KEPT (fail-closed): a managed-host record is the only durable
+ * evidence for a detached process group after the owning control plane dies,
+ * so malformed bytes must not be erased — startup's writer-quiescence latch
+ * stays closed until the record is resolved. Claim records (claim-*.json)
+ * are v2-era external-takeover records — the external-claim module was
+ * deleted with the thin-shell architecture (01 §4/§5), so nothing writes
+ * claims in v4; they are never killed, only removed once their recorded
+ * owner is dead. Run once at control-plane startup, before spawning hosts.
  */
 
 import { readdir, readFile, readlink, unlink } from 'node:fs/promises'

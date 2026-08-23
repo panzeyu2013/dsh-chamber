@@ -622,7 +622,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   async function startImpl(): Promise<ConnectionRow | null> {
     if (startPromise !== null) return startPromise
     startPromise = (async () => {
-      if (stopping) throw new Error('connection is stopping')
+      if (stopping) throw connectionBusy('local start was invalidated by stop')
       if (state === 'ready') return catalog.getConnection('local')
       epoch += 1
       // Capture the epoch, not just the mutable `stopping` flag. stop() bumps
