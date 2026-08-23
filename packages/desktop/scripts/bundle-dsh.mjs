@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, rmSync, mkdirSync, writeFileSync, readFileSyn
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pruneRuntimeArtifacts } from './prune-runtime.mjs';
+import { pruneRuntimeArtifacts } from '../prune-runtime.mjs';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
 import { ALLOW_BUILDS } from '../allow-builds.mjs';
 
@@ -158,7 +158,7 @@ function run(args, what) {
  *   92,070 个条目 / ~1.1GB（实测）；hoisted 布局只有 ~3.3 万真实文件、
  *   无重复展开，解压负担降为约 1/3（dsh 官方发行即 npm 全局安装，扁平布局
  *   是 dsh 已验证的运行形态；控制面冒烟对 hoisted 树实测通过）。
- * 裁剪实现见 ./prune-runtime.mjs（独立模块，可对任意目录直接验证）；
+ * 裁剪实现见 ../prune-runtime.mjs（独立模块，可对任意目录直接验证）；
  * 安装后 `node bin.js --version` 冒烟检查兜底裁剪正确性。
  */
 const sourceLockfile = path.join(dest, 'pnpm-lock.yaml');
