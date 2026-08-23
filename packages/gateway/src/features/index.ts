@@ -49,15 +49,21 @@ function boundedText(value: unknown, maxChars: number): value is string {
   return typeof value === 'string' && value !== '' && value.length <= maxChars
 }
 
+/** Display fields are truncated to the projection bound instead of rejecting
+ * the row: an overlong title/cwd must not erase the session from the index. */
+function truncatedText(value: unknown, maxChars: number): string | null {
+  return typeof value === 'string' && value !== '' ? value.slice(0, maxChars) : null
+}
+
 /** Copy the complete, deliberately tiny session-list projection vocabulary.
- * Never retain the host object: unknown keys could carry session content. */
+ * Never retain the host object: unknown keys could carry session content.
+ * Unknown FUTURE keys are dropped, not rejected — a host schema addition must
+ * degrade the projection, never wedge the whole generation (forward compat). */
 function decodeListMetadata(value: unknown): SessionListMetadata | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const row = value as { blank?: unknown; lastPromptAt?: unknown }
   if (typeof row.blank !== 'boolean'
     || !(row.lastPromptAt === null || (typeof row.lastPromptAt === 'number' && Number.isFinite(row.lastPromptAt)))) return null
-  const keys = Object.keys(value)
-  if (keys.some(key => key !== 'blank' && key !== 'lastPromptAt')) return null
   return { blank: row.blank, lastPromptAt: row.lastPromptAt as number | null }
 }
 
@@ -146,23 +152,26 @@ export function createSessionIndex(deps: {
     } | null
     if (!boundedText(row?.sessionId, MAX_SESSION_ID_CHARS)
       || typeof row.running !== 'boolean' || typeof row.blank !== 'boolean'
-      || (row.cwd !== undefined && (typeof row.cwd !== 'string' || row.cwd.length > MAX_CWD_CHARS))) return null
+      || (row.cwd !== undefined && typeof row.cwd !== 'string')) return null
     const values = row.projections?.values
     const asOfSeq = row.projections === undefined ? -1 : row.projections.asOfSeq
     if (!Number.isInteger(asOfSeq) || (asOfSeq as number) < -1
       || (row.projections !== undefined && (values === null || typeof values !== 'object'))) return null
     const title = values?.title
-    if (title !== undefined && !boundedText(title, MAX_TITLE_CHARS)) return null
+    const titleValue = title === undefined ? undefined : truncatedText(title, MAX_TITLE_CHARS)
+    if (titleValue === null) return null
     const rawMetadata = values?.sessionListMetadata
     const metadata = rawMetadata === undefined ? undefined : decodeListMetadata(rawMetadata)
     if (metadata === null) return null
+    const cwd = row.cwd === undefined ? undefined : truncatedText(row.cwd, MAX_CWD_CHARS)
+    if (cwd === null) return null
     return { projection: {
       sessionId: row.sessionId,
-      ...(typeof title === 'string' ? { title } : {}),
+      ...(titleValue === undefined ? {} : { title: titleValue }),
       ...(metadata === undefined ? {} : { metadata }),
       running: row.running,
       blank: row.blank,
-      ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}),
+      ...(cwd === undefined ? {} : { cwd }),
       updatedAt: typeof row.updatedAt === 'number' && Number.isFinite(row.updatedAt)
         ? row.updatedAt : Date.now(),
     }, asOfSeq: asOfSeq as number }
@@ -176,7 +185,13 @@ export function createSessionIndex(deps: {
     const nextSeqs = new Map<string, Map<string, number>>()
     for (const item of items) {
       const decoded = projectionOf(item)
-      if (decoded === null) throw new Error('session.list returned a malformed session row')
+      // One malformed/forward-incompatible row must degrade the projection,
+      // never fail the whole generation: a hard throw would wedge the index
+      // in a permanent reconnect loop (every reconnect hits the same row).
+      if (decoded === null) {
+        deps.logger.warn('session-index: skipping a malformed session.list row')
+        continue
+      }
       next.set(decoded.projection.sessionId, decoded.projection)
       const values = (item as { projections?: { values?: Record<string, unknown> } }).projections?.values
       const keys = values === undefined ? [] : Object.keys(values)
