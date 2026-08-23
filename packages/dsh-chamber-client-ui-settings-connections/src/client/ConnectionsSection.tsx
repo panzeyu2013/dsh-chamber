@@ -741,6 +741,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'
   const starting = dsh?.status === 'starting' || dsh?.status === 'restarting'
 
+  // dsh 运行时版本（design 16 §3.6 B）：读主进程投影（string | null），
+  // 与 settings「dsh 运行时」块同源一致；null/空串时省略 chip（不编造）。
+  const dshVersion = typeof window !== 'undefined' ? (window.dshChamber?.dshVersion ?? null) : null
+
   return (
     <div className={css.section}>
       <h2 className={css.title}>{t('nav')}</h2>
@@ -762,6 +766,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           <div className={css.localMeta}>
             <span>{t('localPort')}：<span className={css.mono}>{dsh?.port ?? '—'}</span></span>
             {connection?.label !== undefined && connection.label !== '' ? <span>{connection.label}</span> : null}
+            {dshVersion != null && dshVersion !== '' ? <span className={css.mono}>dsh v{dshVersion}</span> : null}
           </div>
           {dsh?.error != null && dsh.error !== '' ? <p className={css.error}>{dsh.error}</p> : null}
           {localError !== null ? <p className={css.error} role="alert">{localError}</p> : null}

@@ -12,7 +12,9 @@
  *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
  *   never prompt; update-downloaded exempt);
  * - 更新 (design 11, merged into General): current version +「检查更新」+
- *   low-key status (UpdateSection).
+ *   low-key status (UpdateSection);
+ * - dsh 运行时 (design 16 M0, read-only): the active dsh runtime version line
+ *   (window.dshChamber.dshVersion projection — no selector/actions until M4).
  *
  * Every mutation goes through the main-process settings IPC (settings-store);
  * failures surface LOUDLY (never a silent fake success). The closeToTray gate
@@ -24,6 +26,7 @@ import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
 import { UpdateSection } from './UpdateSection.tsx'
+import { DshRuntimeSection } from './DshRuntimeSection.tsx'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported). */
@@ -90,6 +93,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   const settings = status?.settings
   const supported = status?.supported
   const hydrated = status !== null
+
+  // The active dsh runtime version block (design 16 M4) is rendered by
+  // DshRuntimeSection below — it reads the runtime surface directly.
 
   return (
     <div className={css.generalSection}>
@@ -165,6 +171,14 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       {/* Chamber-global update status (design 11): merged into the General
           section — the dedicated __update nav entry was folded in here. */}
       <UpdateSection t={t} />
+
+      {/* Chamber-global「dsh 运行时」group (design 16 M0, read-only): the
+          active dsh runtime version line, shown right after the update group
+          per the「更新」控制组扩展 layout. No selector/registry-source/actions
+          until M4. When the bridge has not projected dshVersion yet, show
+         「dsh 运行时 —」— never a fabricated version, never a fake
+          「已是最新」. */}
+      <DshRuntimeSection t={t} />
 
       {saveError !== null && (
         <p className={css.generalError} aria-live="polite">{t('generalSaveFailed', { error: saveError })}</p>
