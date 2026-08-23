@@ -14,7 +14,29 @@
 
 ### 新增
 
-（v0.1.4 发布后的下一版本占位）
+- **认证服务端 Gateway（设计 17）** —— 新增可独立发布的
+  `@dsh-chamber/gateway`：托管 loopback dsh，经统一 HTTP/WS Host/Origin、强认证与
+  有界反代暴露官方前端/API；Desktop 新增 `gateway` transport、write-only token 和按
+  server 编排设置；Gateway 自带浏览器编排页、派生会话索引、审批/提问、schedule 与
+  受 workspace 权威约束的 Git worktree saga。CI/release 已覆盖 build、typecheck、测试、
+  tgz 安装冒烟和 npm publish。
+
+### 安全
+
+- Gateway 拒绝 absolute/protocol-relative/backslash authority、伪造 forwarded identity、
+  弱凭据和匿名外部部署；密码改变跨重启撤销旧 cookie，token 更新会关闭已建立流，凭据从
+  renderer/日志/managed dsh/Git 环境隔离。共享 proxy 采用真正的全进程 300 MiB 请求体预算
+  （未知/chunked 单请求 32 MiB）、backpressure 生命周期与 forwarding-header 清洗；登录 body、
+  dsh event 原始帧/队列和派生索引均有过滤前硬上限，Gateway state 全部 owner-only。
+- Git 补偿改为“歧义即保留并记录 recovery”：只允许 live workspace 派生的 canonical
+  主 checkout；Git 子进程清空继承的 `GIT_*`，create/delete 紧邻 mutation 二次验证 live
+  权威；unverified 记录不可删除，运行中/符号链接 cwd fail-closed，删除不 force、不删分支，
+  不允许 deleting 恢复记录删除被新 workspaceId 重占或在 workspace 消失后残存的路径；审批/提问只有 dsh
+  receipt 明确 accepted 才从 pending 移除。Feature flags 默认关闭并在服务端执行；scheduler
+  具备 timer 上限、single-flight、失败退避和取消/重连代际保护。
+- Release workflow 绑定 tag/checkout SHA，拒绝不可信版本 shell 注入、删除已发布 release、dry-run
+  写入与 npm channel 回退；稳定版/预发布分别使用 `latest`/`beta`，正式构建不固定第三方 Electron
+  mirror。已有 Gateway secret 读取前拒绝 symlink/非普通文件并收敛至 0600。
 
 ## [0.1.4] - 2026-08-21
 

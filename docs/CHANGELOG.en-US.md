@@ -14,7 +14,41 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Added
 
-(placeholder for the next version after v0.1.4)
+- **Authenticated server Gateway (design 17)** — adds the independently
+  publishable `@dsh-chamber/gateway`: it manages a loopback dsh and exposes the
+  official frontend/API behind one HTTP/WS Host/Origin policy, mandatory auth,
+  and bounded proxying. Desktop gains a `gateway` transport, write-only token,
+  and per-server orchestration settings. Gateway also ships a browser
+  orchestration page, derived session index, approval/question handling,
+  scheduler, and a workspace-authority-bound Git worktree saga. CI/release now
+  cover build, typecheck, tests, tgz install smoke, and npm publish.
+
+### Security
+
+- Gateway rejects absolute/protocol-relative/backslash authorities, forged
+  forwarded identity, weak credentials, and anonymous external deployment.
+  Password changes revoke old cookies across restarts, token replacement closes
+  established streams, and credentials are isolated from the renderer, logs,
+  managed dsh, and Git environments. The shared proxy now enforces a genuine
+  process-wide 300 MiB request-body budget (32 MiB per unknown/chunked request),
+  backpressure-aware lifetimes, and forwarding-header stripping. Login bodies,
+  raw dsh event frames/queues, and the derived-index buffer all have hard
+  pre-filter limits; every Gateway state document is owner-only.
+- Git compensation now preserves ambiguous commits and records recovery state:
+  repositories must be canonical main checkouts derived from live workspaces,
+  inherited `GIT_*` overrides are stripped, and create/delete revalidate live
+  authority immediately before mutation. Unverified records cannot be deleted,
+  live/symlink cwd checks fail closed, deletion never forces or removes branches,
+  and a deleting recovery row cannot remove a path reoccupied by another workspace
+  id or surviving after workspace authority disappeared. Approval/question pending
+  rows are removed only after an explicitly accepted dsh receipt. Feature flags
+  default off and are server-enforced; the scheduler bounds timers, runs
+  single-flight, backs off failures, and guards cancel/reconnect generations.
+- The release workflow binds tags to the checkout SHA and rejects untrusted-version
+  shell injection, deletion of a published release, dry-run mutations, and npm
+  channel rollback. Stable/prerelease packages use `latest`/`beta` respectively,
+  formal builds do not pin a third-party Electron mirror, and existing Gateway
+  secrets reject symlinks/non-regular files and converge to mode 0600 before read.
 
 ## [0.1.4] - 2026-08-21
 

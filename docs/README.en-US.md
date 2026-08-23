@@ -31,7 +31,7 @@ The **local dsh instance is hosted automatically** (web profile auto-spawn/healt
 
 ### 3 · Add a remote host
 
-In Settings → Connections, add a remote host: label / host / user / SSH port / dsh port (default `30800`) / service name (default `dsh`). The app takes over from there: automatic SSH tunnel + remote systemd service management (start/stop/status). See "Server-side deployment" for the remote side.
+In Settings → Connections, add either an SSH host or an HTTPS gateway URL plus its shared token. The app owns the SSH tunnel and remote systemd lifecycle; a gateway attaches directly to the authenticated Design 17 server shape. See "Server-side deployment" for both forms.
 
 ### 4 · Running from source?
 
@@ -41,6 +41,7 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 
 - **Local dsh hosting, one click** — works out of the box: the local instance auto-starts with readiness/health/logs; the first screen is the local instance's full dsh UI
 - **Remote instances over SSH** — add a host in the connections settings and the app sets up an SSH tunnel and manages the remote systemd service; optional password auth (stored securely, see Security)
+- **Authenticated gateway access** — publish a device's loopback dsh through the standalone HTTPS-fronted gateway and attach it to desktop N-ctx as a `gateway` source; the token is write-only to a 0600 main-process file and never enters the registry or logs
 - **Unified multi-source sidebar navigation** — sessions/workspaces from every source (local + remote instances) are listed equally in the dsh-native sidebar, grouped by source (remote sources carry a colored badge); single click opens a session, double click renames
 - **Git worktree lifecycle** — a bundled, independent chamber plugin shows per-instance repository topology in the sidebar and closes the worktree → workspace → session create flow; deletion is a retryable Git-first transaction that rejects main, dirty, locked, or running targets, never archives sessions, never forces, and never deletes branches
 - **Multiple instances in parallel (N-ctx)** — several dsh shells coexist in one window; switch the active instance at any time
@@ -48,9 +49,25 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
 - **Chamber settings page** — fixed Settings-shell entries: Connections / General / Update; chamber-global settings stay strictly separate from per-instance config planes
 - **Backend version tolerance (rc.2 compatible)** — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash); headless-verified against an rc.2 backend
-- **Security & privacy** — the control plane listens on loopback only (127.0.0.1); SSH passwords are stored 0600 and injected via an ephemeral askpass helper — never in logs, the registry, or the UI
+- **Security & privacy** — the ordinary desktop control plane remains loopback-only; SSH passwords and gateway tokens use write-only 0600 storage and never enter the registry or logs; public reachability exists only in the explicitly started, mandatory-auth gateway process
 
 ## Server-side deployment
+
+### Authenticated gateway (Design 17)
+
+The gateway hosts one loopback dsh and proxies HTTP/WS/SSE through a single authenticated boundary. In production, keep the gateway listener on loopback and terminate TLS at Nginx/Caddy; Desktop accepts HTTPS gateway URLs only.
+
+```bash
+npm install -g @deepseek-ai/dsh @dsh-chamber/gateway
+openssl rand -hex 32   # save this output as the shared token (minimum 32 characters)
+gateway serve \
+  --host 127.0.0.1 --port 3000 \
+  --api-token '<TOKEN>' \
+  --public-origin 'https://gateway.example.com' \
+  --trusted-proxy 127.0.0.1
+```
+
+Proxy HTTPS for `gateway.example.com` to `127.0.0.1:3000`, preserve WebSocket upgrades, and set canonical `X-Forwarded-Host`, `X-Forwarded-Proto: https`, and client `X-Forwarded-For` headers. `--trusted-proxy` must be the proxy peer's exact IP; missing, duplicate, or malformed forwarded facts fail closed. Then choose HTTPS Gateway in Desktop Settings → Connections and enter `https://gateway.example.com` with the same token. The gateway has no built-in TLS; TLS configuration fails closed.
 
 ### Remote dsh instance (systemd)
 

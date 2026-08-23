@@ -31,7 +31,7 @@
 
 ### 3 · 添加远程主机
 
-「设置 → 连接」添加远程主机：label / host / user / SSH 端口 / dsh 端口（默认 `30800`）/ 服务名（默认 `dsh`）。其余由应用接管：自动建立 SSH 隧道 + 管理远端 systemd 服务（启动/停止/状态）。远程服务器端部署见「服务器端部署」。
+「设置 → 连接」可添加 SSH 主机，或填写 HTTPS Gateway URL + 共享 token。SSH 形态由应用自动建立隧道并管理远端 systemd；Gateway 形态直接连接 Design 17 的认证服务端。两种服务器部署见「服务器端部署」。
 
 ### 4 · 从源码运行？
 
@@ -41,6 +41,7 @@
 
 - **本地 dsh 一键托管** — 打开即用：本地实例自动启动、就绪检测、守护/回收、健康状态与宿主日志；首屏就是本地实例的完整 dsh 界面
 - **远程实例 SSH 接入** — 连接设置页添加主机后，自动建立 SSH 隧道并管理远端 systemd 服务；支持可选的主机密码认证（安全存储，见「安全」）
+- **认证 Gateway 接入** — 可把同一台设备上的 loopback dsh 通过独立 gateway 安全发布为 HTTPS 服务，并在桌面 N-ctx 中作为 `gateway` 来源接入；token 只写入桌面主进程的 0600 文件，不进注册表或日志
 - **统一侧边栏多来源导航** — 本地 + 远程各实例的 session/workspace 在同一个 dsh 原生侧边栏内平等列出、按来源分组（远程来源带颜色徽标）；单击打开会话、双击重命名
 - **Git Worktree 生命周期** — chamber 内建独立插件在侧边栏按实例展示仓库拓扑，并闭环创建 worktree → workspace → session；删除采用 Git-first 可重试事务，拒绝主工作树、dirty/locked/运行中目标，不归档会话、不 force、不删分支
 - **多实例并行（N-ctx）** — 一个窗口内多个 dsh shell 共存，随时切换活动实例
@@ -48,9 +49,25 @@
 - **睡眠/后台常驻** — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（mac/linux）；OS 唤醒即时重连；保持唤醒开关
 - **Chamber 设置页** — 设置壳固定入口：连接 / 通用 / 更新；chamber 全局设置与各实例配置严格分离
 - **后端版本容忍（rc.2 兼容）** — 实例后端 dsh 官方前端版本与 chamber 壳不同步时照常可用：壳未覆盖的额外插件行以「特性缺席」降级（绝不整 boot 崩溃），rc.2 后端已无头验证
-- **安全与隐私** — 控制面仅监听 loopback（127.0.0.1）；SSH 密码 0600 权限存储、经临时 askpass 助手注入，永不进日志/注册表/界面
+- **安全与隐私** — 普通桌面控制面仅监听 loopback（127.0.0.1）；SSH 密码与 Gateway token 以 0600 权限、只写方式保存，永不进入注册表或日志；公网能力只存在于显式启动且强制认证的独立 gateway
 
 ## 服务器端部署
+
+### 认证 Gateway（Design 17）
+
+Gateway 自己托管一个 loopback dsh，并通过认证边界统一代理 HTTP/WS/SSE。生产环境应让 gateway 仍监听 loopback，由 Nginx/Caddy 终止 TLS；Desktop 只接受 HTTPS Gateway URL。
+
+```bash
+npm install -g @deepseek-ai/dsh @dsh-chamber/gateway
+openssl rand -hex 32   # 保存输出；作为至少 32 字符的共享 token
+gateway serve \
+  --host 127.0.0.1 --port 3000 \
+  --api-token '<TOKEN>' \
+  --public-origin 'https://gateway.example.com' \
+  --trusted-proxy 127.0.0.1
+```
+
+反向代理须把 `gateway.example.com` 的 HTTPS 请求转到 `127.0.0.1:3000`，保留 WebSocket upgrade，并设置规范的 `X-Forwarded-Host`、`X-Forwarded-Proto: https` 与客户端 `X-Forwarded-For`。`--trusted-proxy` 必须是实际代理 peer 的精确 IP；缺失、重复或畸形 forwarded headers 会被拒绝。随后在 Desktop「设置 → 连接」选择 HTTPS Gateway，填 `https://gateway.example.com` 与同一 token。Gateway 不提供内置 TLS，传入 TLS 配置会 fail closed。
 
 ### 远程 dsh 实例（systemd）
 

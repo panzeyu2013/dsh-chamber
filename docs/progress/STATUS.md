@@ -31,27 +31,30 @@
   剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
   N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径）。契约见
   `docs/design/16-vscode-deeplink.md`。
-- **服务端接入层 / gateway（设计 16，已实现全量，待合并/稳定）**：
-  `docs/design/16-server-side-gateway.md`（详设版）。定位 = dsh-chamber 单仓库内的服务端形态
-  `packages/gateway`：把每台设备上 loopback dsh 暴露成**带认证的网址**（浏览器/手机/桌面
-  访问），复用 dsh 前端 + control-plane 反代（Host/Origin 改写），编排（git worktree 等）
-  下沉到 gateway 用 dsh `/api` 驱动（dsh 零改动）。**已落地**：P0-1（结论 A）；P1（proxy-forward
-  抽取 + gateway 骨架 + middleware 钩子）；P2（control-plane `registerTransport` 放宽 https/
-  extraHeaders + **桌面侧 transport-manager 多 provider + main.ts gatewayProvider/token store/
-  Authorization 注入**）；P3（git offload + notify/index/schedule + `/chamber` 面）；**password
-  认证全量（scrypt+HS256 JWT+HttpOnly/SameSite=Strict cookie+登录限流+登录页）**；**§10 持久化
-  `store.ts`**（gateway.json/tokens.json(hash)/jwt-secret/worktrees.json/schedule.json/
-  settings.json）；**§7 `channels.ts`**（类型占位）；**S11 Host 权威判定 + `--public-origin`**；
-  **`/chamber` 端点全表**（settings GET/PUT、channels GET、git worktrees、approvals SSE+JSON+POST、
-  schedule、notifications SSE）。**验证**：全仓 typecheck + 单测全绿（control-plane 134 + gateway
-  21 + desktop 127）+ 运行时冒烟（登录 302/401、S11 421、settings PUT 持久化、notifications SSE）。
-  4 子代理审查发现的高/中危（SSRF、CSP 白屏、`-D` 强删、TLS 忽略、空凭据、https 502、启动时序等）
-  已全部修复。**剩余**：P0-2（真 dsh 反代冒烟，沙箱无 dsh 二进制，待用户本机）；P4 移动端/PWA
-  （设计标记远期）。**决策（用户拍板）**：git offload 取代 design 08 插件路线（16 §8.1 已标注），
-  但在合并主分支、稳定前**不退役** `dsh-chamber-host-git-worktree`/`dsh-chamber-client-ui-git`——
-  control-plane 继续 seed，两套并行，稳定后再迁移。
-  注意：本方案回归认证面，是相对 v1「无认证/loopback-only」的**有边界扩展**（独立服务端
-  形态，非 control-plane 变更）。
+- **服务端接入层 / Gateway（设计 17，验收候选，2026-08-23）**：
+  `docs/design/17-server-side-gateway.md`。已 rebase 最新 main，并完成独立认证 server 形态：
+  managed local dsh 的 ready 生命周期、HTTP/WS 统一 Host/Origin/trusted-proxy 门、password +
+  token 组合认证、跨重启 cookie 撤销、共享有界 proxy、Desktop `gateway` transport 与 write-only
+  token、Gateway 自有浏览器/桌面编排界面、双流有 barrier 的派生会话索引、审批/提问、schedule
+  和安全 Git saga。高危回归已补门禁：absolute/backslash SSRF、forwarded identity 注入、弱凭据、
+  子进程 secret/`GIT_*` 继承、旧 token live stream、进程 body 预算、歧义 Git 补偿、unverified 删除、
+  running/symlink cwd 删除、negative answer receipt、stale pending、默认关闭且服务端强制的 feature
+  flags、timer overflow/重入/取消竞态、raw mux/session 正文无界缓冲、登录/编排 body 超限后继续
+  累计、Git create/delete mutation 前 live 权威复验、缺失 workspace 的残存路径与 deleting 路径
+  重占、已有 secret 权限/symlink 及 state 文件权限。
+  npm 包、CI 与 integrity-idempotent release publish 链路已接通；发布版本只经 env 进入 shell，
+  tag/SHA 绑定、公开 release 不可变、dry-run 零写入、全局串行与 npm latest/beta 单调门均有静态
+  回归；正式 Electron 下载不再固定第三方 mirror。Design 08 Git 插件按迁移决策继续
+  双轨，不提前退役。
+  **本轮实机基线已通过**：使用打包的真实 dsh 启动 Gateway 并等到 ready，`/health`、
+  `/api/connections`、`/chamber/settings` 与官方 `/` 页面均为 200；macOS ad-hoc `.app`、DMG、
+  ZIP/blockmap 已生成，bundle 签名、DMG checksum 与 ZIP 完整性通过。
+  **剩余发布前门禁**：真实 dsh 的 events.mux/host 双 WS 断线恢复与插件 bundle；生产 TLS 反代的
+  Host/Origin/XFF/Secure-cookie 验证；打包 Desktop 的 Gateway/N-ctx/token 撤销实测；真 Git
+  仓库的并发 session 删除竞态与恢复测试；macOS Developer ID 公证安装及 Windows 签名安装。
+  host 尚无原子 session lease，因此
+  session.list→Git mutation 的 TOCTOU 只能以 realpath fail-closed + 两次 live check + non-force
+  缩小，长期根治需上游原子 guard。PWA/离线/UA 移动轻面明确不在本轮验收。
 
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径；Unix 为契约目标。
