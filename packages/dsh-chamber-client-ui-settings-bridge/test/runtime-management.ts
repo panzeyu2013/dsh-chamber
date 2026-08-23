@@ -43,15 +43,29 @@ test('runtime action matrix covers every design-17 phase and keeps busy/terminal
     installing: [],
     pending: ['reset-builtin'],
     applying: ['reset-builtin'],
-    applied: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
-    rollback: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    applied: ['check', 'select-version', 'install', 'cleanup-version'],
+    rollback: ['check', 'select-version', 'install', 'cleanup-version'],
     'snapshot-failed': ['reset-builtin'],
-    failed: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
-    error: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    failed: ['check', 'select-version', 'install', 'cleanup-version'],
+    error: ['check', 'select-version', 'install', 'cleanup-version'],
   }
   for (const [phase, actions] of Object.entries(expected) as [RuntimePhase, readonly string[]][]) {
     assert.deepEqual(runtimeAllowedActions(runtimeState(phase)), actions, phase)
   }
+})
+
+test('reset-builtin stays visible on error/failed/rollback/applied only when an override exists', () => {
+  const withOverride = (phase: RuntimePhase, overrides: Partial<RuntimeState> = {}) =>
+    runtimeAllowedActions(runtimeState(phase, { hasOverride: true, source: 'user', ...overrides }))
+  assert.deepEqual(withOverride('error'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
+  assert.deepEqual(withOverride('failed'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
+  assert.deepEqual(withOverride('rollback'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
+  assert.deepEqual(withOverride('applied'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
+  // A clean bundled install without any override must not show a no-op reset
+  // (main rejects reset-builtin unless hasOverride — the button would be dead).
+  assert.deepEqual(runtimeAllowedActions(runtimeState('error', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('applied', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
 })
 
 test('retry actions require explicit capabilities and never pierce pending/applying gates', () => {
@@ -60,11 +74,11 @@ test('retry actions require explicit capabilities and never pierce pending/apply
     ['retry-apply', 'reset-builtin'],
   )
   assert.deepEqual(
-    runtimeAllowedActions(runtimeState('failed', { canRetryRestore: true, restoreOutcome: 'incomplete' })),
+    runtimeAllowedActions(runtimeState('failed', { canRetryRestore: true, restoreOutcome: 'incomplete', hasOverride: true, source: 'user' })),
     ['retry-restore', 'check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   )
   assert.deepEqual(
-    runtimeAllowedActions(runtimeState('failed', { canRetryApply: true })),
+    runtimeAllowedActions(runtimeState('failed', { canRetryApply: true, hasOverride: true, source: 'user' })),
     ['retry-apply', 'check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   )
   assert.deepEqual(

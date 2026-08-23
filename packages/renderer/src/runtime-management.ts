@@ -205,10 +205,11 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     return actions
   }
   const actions = [...BASE_ACTIONS[state.phase]]
-  // Keep the explicit exit visible after applied -> checking -> idle/available
-  // when a user override remains active. Do not add a no-op reset button for a
-  // clean bundled install.
-  if ((state.phase === 'idle' || state.phase === 'available')
+  // reset-builtin 只在确实存在 override 时有意义（main 对 hasOverride !== true
+  // 一律拒绝，UI 不得显示 main 会 no-op 的动作）。pending/applying/snapshot-failed
+  // 是持久化事务的逃生口（此时必有 pending override），其余相位无 override 时
+  // 移除该按钮——包括 error/failed/rollback/applied，而不只是 idle/available。
+  if (state.phase !== 'pending' && state.phase !== 'applying' && state.phase !== 'snapshot-failed'
     && !(state.hasOverride ?? state.source === 'user')) {
     const index = actions.indexOf('reset-builtin')
     if (index >= 0) actions.splice(index, 1)
