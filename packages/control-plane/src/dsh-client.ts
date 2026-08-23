@@ -10,9 +10,9 @@
  *   result.error branch; non-2xx HTTP statuses express only carrier failures.
  * - respond: POST /api/respond, body {type:'client-response', rpcId, result};
  *   the response body is an RpcReceipt, idempotent (not-pending on late/duplicate).
- * - downstream: GET /api/events.mux and /api/events.host are SSE streams whose
- *   `data:` lines are ServerRequest full forms {type:'server-request', rpcId,
- *   method, payload} with payload = the frame itself (method = frame type).
+ * - downstream: /api/events.mux and /api/events.host are downlink-only
+ *   WebSockets carrying one JSON ServerRequest full form per text message;
+ *   ordinary GET receives 426 and there is no network SSE fallback.
  * - every client-request converges on the rpcId pending table (design 02 §3.3):
  *   the `settled` flag + first-writer-wins make response arrival vs timeout vs
  *   generation abort vs caller abort settle each entry exactly once.
@@ -308,6 +308,7 @@ export class RpcBusinessError extends Error {
  * A carrier-level failure. `code` is the control plane's own transport error
  * namespace (never a dsh RpcErrorCode, design 02 §3.10):
  *   connection_offline / request_timeout / aborted / protocol_violation /
+ *   stream_frame_too_large / stream_queue_overflow /
  *   transport_http_<status> / transport_error
  */
 export class RpcTransportError extends Error {
@@ -322,6 +323,68 @@ export class RpcTransportError extends Error {
     this.status = status
     this.code = code ?? (status > 0 ? `transport_http_${status}` : 'transport_error')
   }
+}
+
+/** Hard production ceilings for one raw downstream WebSocket stream. */
+const EVENT_STREAM_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
+const EVENT_STREAM_MAX_QUEUE_BYTES = 16 * 1024 * 1024
+const EVENT_STREAM_MAX_QUEUE_FRAMES = 256
+
+/**
+ * Optional limits seam for focused socket regressions. Overrides can only
+ * tighten the production ceilings; callers cannot use this surface to widen
+ * the amount of unfiltered WebSocket data retained by the process.
+ */
+export interface EventStreamLimits {
+  maxPayloadBytes?: number
+  maxQueueBytes?: number
+  maxQueueFrames?: number
+}
+
+interface NormalizedEventStreamLimits {
+  maxPayloadBytes: number
+  maxQueueBytes: number
+  maxQueueFrames: number
+}
+
+function normalizeEventStreamLimit(value: number | undefined, ceiling: number, name: string): number {
+  if (value === undefined) return ceiling
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`openEventStream: ${name} must be a positive safe integer`)
+  }
+  return Math.min(value, ceiling)
+}
+
+function normalizeEventStreamLimits(limits: EventStreamLimits | undefined): NormalizedEventStreamLimits {
+  return {
+    maxPayloadBytes: normalizeEventStreamLimit(
+      limits?.maxPayloadBytes,
+      EVENT_STREAM_MAX_PAYLOAD_BYTES,
+      'maxPayloadBytes',
+    ),
+    maxQueueBytes: normalizeEventStreamLimit(
+      limits?.maxQueueBytes,
+      EVENT_STREAM_MAX_QUEUE_BYTES,
+      'maxQueueBytes',
+    ),
+    maxQueueFrames: normalizeEventStreamLimit(
+      limits?.maxQueueFrames,
+      EVENT_STREAM_MAX_QUEUE_FRAMES,
+      'maxQueueFrames',
+    ),
+  }
+}
+
+function rawDataByteLength(data: RawData): number {
+  if (!Array.isArray(data)) return data.byteLength
+  let bytes = 0
+  for (const chunk of data) bytes += chunk.byteLength
+  return bytes
+}
+
+function isMaxPayloadError(error: Error): boolean {
+  return (error as Error & { code?: string }).code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH'
+    || /max payload size exceeded/i.test(error.message)
 }
 
 /** Mint a fresh correlation id (the initiator's job per the dsh contract). */
@@ -568,16 +631,29 @@ export async function respond(
  * @param baseUrl - origin of the dsh host (http://127.0.0.1:<port>).
  * @param path - '/api/events.mux' or '/api/events.host'.
  * @param signal - the stream's AbortSignal; aborts the socket and ends iteration.
+ * @param onOpen - optional barrier callback fired only after the WebSocket
+ *   upgrade has completed and message listeners are installed.
+ * @param limits - optional test seam that may only tighten hard production
+ *   limits for one raw frame and the pre-parse queue.
  * @returns an async generator of ServerRequest full forms.
  */
-export async function *openEventStream(baseUrl: string, path: string, signal?: AbortSignal): AsyncGenerator<ServerRequest> {
+export async function *openEventStream(
+  baseUrl: string,
+  path: string,
+  signal?: AbortSignal,
+  onOpen?: () => void,
+  limits?: EventStreamLimits,
+): AsyncGenerator<ServerRequest> {
   const { default: WebSocket } = await import('ws')
+  const boundedLimits = normalizeEventStreamLimits(limits)
   const wsUrl = baseUrl.replace(/^http/, 'ws') + path
-  const socket = new WebSocket(wsUrl)
-  let opened = false
+  const socket = new WebSocket(wsUrl, { maxPayload: boundedLimits.maxPayloadBytes })
   let ended = false
+  let aborted = signal?.aborted ?? false
   let openError: Error | null = null
-  const queue: RawData[] = []
+  let terminalError: RpcTransportError | null = null
+  const queue: Array<{ data: RawData; bytes: number }> = []
+  let queuedBytes = 0
   let wake: (() => void) | null = null
 
   const pump = () => {
@@ -587,25 +663,87 @@ export async function *openEventStream(baseUrl: string, path: string, signal?: A
       resolve()
     }
   }
-  socket.on('message', data => {
-    queue.push(data)
+
+  const clearQueue = () => {
+    queue.length = 0
+    queuedBytes = 0
+  }
+  const terminateSocket = () => {
+    try {
+      // ws.terminate() is a no-op while CONNECTING; close() is the path that
+      // actually aborts an in-flight handshake.
+      if (socket.readyState === WebSocket.CONNECTING) socket.close()
+      else if (socket.readyState !== WebSocket.CLOSED) socket.terminate()
+    } catch {
+      try {
+        socket.terminate()
+      } catch { /* already closed */ }
+    }
+  }
+  const failStream = (error: RpcTransportError, terminate = true) => {
+    if (terminalError === null && !aborted) terminalError = error
+    ended = true
+    clearQueue()
+    if (terminate) terminateSocket()
     pump()
-  })
-  socket.on('close', () => {
+  }
+  const frameLimitError = () => new RpcTransportError(
+    `dsh stream ${path}: WebSocket frame exceeds ${boundedLimits.maxPayloadBytes} bytes`,
+    0,
+    'stream_frame_too_large',
+  )
+  const handleMessage = (data: RawData) => {
+    if (ended) return
+    const bytes = rawDataByteLength(data)
+    // This defensive check is intentionally before JSON/envelope filtering;
+    // ws's maxPayload is the primary single-frame gate.
+    if (bytes > boundedLimits.maxPayloadBytes) {
+      failStream(frameLimitError())
+      return
+    }
+    if (
+      queue.length >= boundedLimits.maxQueueFrames
+      || bytes > boundedLimits.maxQueueBytes - queuedBytes
+    ) {
+      failStream(new RpcTransportError(
+        `dsh stream ${path}: raw queue exceeds ${boundedLimits.maxQueueFrames} frames or ${boundedLimits.maxQueueBytes} bytes`,
+        0,
+        'stream_queue_overflow',
+      ))
+      return
+    }
+    queue.push({ data, bytes })
+    queuedBytes += bytes
+    pump()
+  }
+  const handleClose = (code: number) => {
+    if (code === 1009 && terminalError === null && !aborted) {
+      failStream(frameLimitError(), false)
+      return
+    }
     ended = true
     pump()
-  })
-  socket.on('error', error => {
+  }
+  const handleError = (error: Error) => {
     openError = error
-    ended = true
-    pump()
-  })
+    if (aborted) {
+      ended = true
+      pump()
+      return
+    }
+    failStream(isMaxPayloadError(error)
+      ? frameLimitError()
+      : new RpcTransportError(`dsh stream ${path} failed: ${String(error)}`, 0))
+  }
+  socket.on('message', handleMessage)
+  socket.on('close', handleClose)
+  socket.on('error', handleError)
 
   const onAbort = () => {
+    aborted = true
     ended = true
-    try {
-      socket.close()
-    } catch { /* already closed */ }
+    clearQueue()
+    terminateSocket()
     pump()
   }
   if (signal !== undefined) {
@@ -614,26 +752,48 @@ export async function *openEventStream(baseUrl: string, path: string, signal?: A
   }
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      const onOpen = () => {
-        opened = true
-        resolve()
-      }
-      socket.once('open', onOpen)
-      socket.once('error', reject)
-      if (ended) reject(openError ?? new Error('stream closed before open'))
-      // ws emits 'open' only after the upgrade; 'error' before it rejects the wait.
-      queueMicrotask(() => {
-        if (!opened && !ended) socket.once('error', reject)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const openedListener = () => {
+          cleanup()
+          resolve()
+        }
+        const errorListener = (error: Error) => {
+          cleanup()
+          reject(error)
+        }
+        const abortListener = () => {
+          cleanup()
+          reject(new Error('stream aborted before open'))
+        }
+        const closedListener = () => {
+          cleanup()
+          reject(openError ?? new Error('stream closed before open'))
+        }
+        const cleanup = () => {
+          socket.off('open', openedListener)
+          socket.off('error', errorListener)
+          socket.off('close', closedListener)
+          signal?.removeEventListener('abort', abortListener)
+        }
+        socket.once('open', openedListener)
+        socket.once('error', errorListener)
+        socket.once('close', closedListener)
+        signal?.addEventListener('abort', abortListener, { once: true })
+        if (ended) errorListener(openError ?? new Error('stream closed before open'))
       })
-    })
-  } catch (error) {
-    throw new RpcTransportError(`dsh stream ${path} failed: ${String(error)}`, 0)
-  }
-  try {
+    } catch (error) {
+      if (signal?.aborted) return
+      throw terminalError ?? new RpcTransportError(`dsh stream ${path} failed: ${String(error)}`, 0)
+    }
+    if (signal?.aborted) return
+    onOpen?.()
     while (true) {
+      if (terminalError !== null) throw terminalError
       if (queue.length > 0) {
-        const raw = String(queue.shift()!)
+        const item = queue.shift()!
+        queuedBytes -= item.bytes
+        const raw = String(item.data)
         let frame: any
         try {
           frame = JSON.parse(raw)
@@ -651,9 +811,14 @@ export async function *openEventStream(baseUrl: string, path: string, signal?: A
     }
   } finally {
     signal?.removeEventListener('abort', onAbort)
-    try {
-      socket.close()
-    } catch { /* already closed */ }
+    clearQueue()
+    terminateSocket()
+    socket.off('message', handleMessage)
+    socket.off('close', handleClose)
+    socket.off('error', handleError)
+    // A close/terminate error can be delivered on a later turn. Keep a
+    // closure-free sink until the socket itself is collected.
+    socket.on('error', () => {})
   }
 }
 
@@ -750,4 +915,3 @@ export async function describeCapabilities(
   capabilityCache.set(baseUrl, entry)
   return { value: entry.value, cachedAt: entry.cachedAt }
 }
-

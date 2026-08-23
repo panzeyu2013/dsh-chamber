@@ -10,10 +10,13 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { call, respond, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
+import { WebSocketServer } from 'ws'
+import type WebSocket from 'ws'
+import { call, openEventStream, respond, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
 import { createLocalConnection } from '../src/local-connection.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { seedDshHomeDefaults } from '../src/index.ts'
@@ -46,6 +49,48 @@ async function waitFor(predicate: () => unknown, timeoutMs: number, what: string
     await sleep(50)
   }
   throw new Error(`timed out waiting for ${what} (${timeoutMs}ms)`)
+}
+
+async function createEventStreamServer() {
+  const server = createServer()
+  const sockets = new Set<import('node:net').Socket>()
+  server.on('connection', socket => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+  })
+  const wss = new WebSocketServer({ noServer: true })
+  server.on('upgrade', (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request))
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => resolve())
+  })
+  const address = server.address()
+  assert.ok(address !== null && typeof address === 'object')
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    wss,
+    async close() {
+      for (const client of wss.clients) client.terminate()
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      for (const socket of sockets) socket.destroy()
+    },
+  }
+}
+
+function nextEventStreamClient(wss: WebSocketServer): Promise<WebSocket> {
+  return new Promise(resolve => wss.once('connection', resolve))
+}
+
+function eventFrame(rpcId: string, padding = ''): string {
+  return JSON.stringify({
+    type: 'server-request',
+    rpcId,
+    method: 'session/status',
+    payload: { padding },
+  })
 }
 
 /** Echo the client-request rpcId and serve the given body. */
@@ -181,6 +226,152 @@ test('respond honors the generation signal (connection_offline)', async () => {
     assert.equal(pendingStats().size, 0)
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('event-stream open barrier waits for the real WebSocket upgrade', async () => {
+  const server = createServer()
+  const sockets = new Set<import('node:net').Socket>()
+  server.on('connection', socket => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+  })
+  const wss = new WebSocketServer({ noServer: true })
+  const upgradeSeen = deferred<void>()
+  const releaseUpgrade = deferred<void>()
+  server.on('upgrade', (request, socket, head) => {
+    upgradeSeen.resolve()
+    void releaseUpgrade.promise.then(() => {
+      wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request))
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => resolve())
+  })
+  const address = server.address()
+  assert.ok(address !== null && typeof address === 'object')
+  const abort = new AbortController()
+  let opened = false
+  const iterator = openEventStream(
+    `http://127.0.0.1:${address.port}`,
+    '/api/events.mux',
+    abort.signal,
+    () => { opened = true },
+  )
+  const pendingFrame = iterator.next()
+  try {
+    await upgradeSeen.promise
+    assert.equal(opened, false, 'TCP/HTTP upgrade arrival is not yet a ready stream')
+    releaseUpgrade.resolve()
+    await waitFor(() => opened, 1_000, 'event-stream open barrier')
+  } finally {
+    abort.abort()
+    await pendingFrame.catch(() => ({ done: true, value: undefined }))
+    for (const client of wss.clients) client.terminate()
+    await new Promise<void>(resolve => wss.close(() => resolve()))
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    for (const socket of sockets) socket.destroy()
+  }
+})
+
+test('event-stream single-frame maxPayload fails closed with an explicit transport error', async () => {
+  const harness = await createEventStreamServer()
+  const connected = nextEventStreamClient(harness.wss)
+  const iterator = openEventStream(
+    harness.baseUrl,
+    '/api/events.mux',
+    undefined,
+    undefined,
+    { maxPayloadBytes: 64 },
+  )
+  const pendingFrame = iterator.next()
+  try {
+    const peer = await connected
+    peer.send('x'.repeat(65))
+    await assert.rejects(pendingFrame, error => {
+      assert.ok(error instanceof RpcTransportError)
+      assert.equal(error.code, 'stream_frame_too_large')
+      assert.equal(error.status, 0)
+      assert.match(error.message, /exceeds 64 bytes/)
+      return true
+    })
+    await waitFor(() => peer.readyState === 3, 1_000, 'oversized-frame socket termination')
+    assert.equal((await iterator.next()).done, true, 'the rejected stream cannot retain or yield later data')
+  } finally {
+    await harness.close()
+  }
+})
+
+test('event-stream raw queue frame-count overflow clears data and terminates the stream', async () => {
+  const harness = await createEventStreamServer()
+  const connected = nextEventStreamClient(harness.wss)
+  const opened = deferred<void>()
+  const iterator = openEventStream(
+    harness.baseUrl,
+    '/api/events.host',
+    undefined,
+    () => opened.resolve(),
+    { maxPayloadBytes: 1_024, maxQueueBytes: 1_024, maxQueueFrames: 2 },
+  )
+  const firstFrame = iterator.next()
+  try {
+    const peer = await connected
+    await opened.promise
+    peer.send(eventFrame('first'))
+    assert.equal((await firstFrame).value?.rpcId, 'first')
+
+    // The generator is paused at yield, so these raw frames accumulate before
+    // any JSON/envelope filtering. The third queued frame must fail closed.
+    peer.send(eventFrame('queued-1'))
+    peer.send(eventFrame('queued-2'))
+    peer.send(eventFrame('must-not-survive'))
+    await waitFor(() => peer.readyState === 3, 1_000, 'frame-count overflow socket termination')
+    await assert.rejects(iterator.next(), error => {
+      assert.ok(error instanceof RpcTransportError)
+      assert.equal(error.code, 'stream_queue_overflow')
+      assert.match(error.message, /2 frames or 1024 bytes/)
+      return true
+    })
+    assert.equal((await iterator.next()).done, true, 'overflowed raw frames were cleared')
+  } finally {
+    await harness.close()
+  }
+})
+
+test('event-stream raw queue byte overflow clears data and terminates the stream', async () => {
+  const harness = await createEventStreamServer()
+  const connected = nextEventStreamClient(harness.wss)
+  const opened = deferred<void>()
+  const queuedFrame = eventFrame('queued', 'x'.repeat(32))
+  const queuedFrameBytes = Buffer.byteLength(queuedFrame)
+  const queueByteLimit = queuedFrameBytes * 2 - 1
+  const iterator = openEventStream(
+    harness.baseUrl,
+    '/api/events.mux',
+    undefined,
+    () => opened.resolve(),
+    { maxPayloadBytes: 1_024, maxQueueBytes: queueByteLimit, maxQueueFrames: 8 },
+  )
+  const firstFrame = iterator.next()
+  try {
+    const peer = await connected
+    await opened.promise
+    peer.send(eventFrame('first'))
+    assert.equal((await firstFrame).value?.rpcId, 'first')
+
+    peer.send(queuedFrame)
+    peer.send(queuedFrame)
+    await waitFor(() => peer.readyState === 3, 1_000, 'byte overflow socket termination')
+    await assert.rejects(iterator.next(), error => {
+      assert.ok(error instanceof RpcTransportError)
+      assert.equal(error.code, 'stream_queue_overflow')
+      assert.match(error.message, new RegExp(`8 frames or ${queueByteLimit} bytes`))
+      return true
+    })
+    assert.equal((await iterator.next()).done, true, 'overflowed raw bytes were cleared')
+  } finally {
+    await harness.close()
   }
 })
 
