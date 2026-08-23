@@ -41,6 +41,7 @@
     "packages/desktop/sanitize-error.test.ts",
     "packages/desktop/registry-url.ts",
     "packages/desktop/registry-url.test.ts",
+    "packages/desktop/registry-integrity.ts",
     "packages/desktop/registry-metadata.ts",
     "packages/desktop/registry-metadata.test.ts",
     "packages/desktop/version-safety.ts",
@@ -67,7 +68,15 @@
     "packages/desktop/known-good-monitor.ts",
     "packages/desktop/known-good-monitor.test.ts",
     "packages/desktop/runtime-startup.ts",
-    "packages/desktop/runtime-startup.test.ts"
+    "packages/desktop/runtime-startup.test.ts",
+    "packages/desktop/runtime-probes.ts",
+    "packages/desktop/runtime-probes.test.ts",
+    "packages/desktop/restart-exhausted-rollback.ts",
+    "packages/desktop/restart-exhausted-rollback.test.ts",
+    "packages/desktop/runtime-operation-fence.ts",
+    "packages/desktop/runtime-operation-fence.test.ts",
+    "packages/desktop/runtime-metadata-recovery.ts",
+    "packages/desktop/runtime-metadata-recovery.test.ts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }
