@@ -7,8 +7,9 @@
 > session/workspace 在 dsh 原生侧边栏内平等呈现**（仅按来源分类，远程
 > 来源以颜色标注——codex 式"导航统一、执行按来源路由"）。
 >
-> 认证/审计面已随 v1 收敛**整体移除**；控制面 = 托管 + 反代 + 静态服务，
-> loopback-only、无认证边界。
+> 桌面 v1 的认证/审计面已随收敛**整体移除**；桌面控制面 = 托管 + 反代 +
+> 静态服务，loopback-only、无认证边界。设计 17 另定义一个需显式启动、带强制认证
+> 边界的 server gateway；它不是把公网能力塞回匿名控制面。
 > 本文档是唯一入口；`05-connection-manager.md` 是 v1 权威契约。
 
 ---
@@ -87,6 +88,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code 深链插件：`dsh-chamber://` OS 深链 + `shell.overlay` 主区右上按钮快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed，现有包改动 = 0 |
+| 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 验收候选（2026-08-23） | 独立启动的认证 server 形态：单本地 dsh 公网接入、Desktop `gateway` transport 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only；剩余真实 dsh/TLS/打包实机门禁 |
 
 ---
 
@@ -96,18 +98,19 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 
 | 域 | 处置 | 依据 |
 |---|---|---|
-| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **移除（v1 收敛）** | dsh 无认证概念；loopback-only 是 v1 安全面 |
+| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **从桌面/control-plane 移除；gateway 仅保留入口认证** | loopback-only 是桌面 v1 安全面；design 17 的独立公网进程必须有认证，但不提供 control-plane 审计域 |
 | 控制面薄壳聊天/会话列表/审批弹窗 | **移除** | dsh 官方前端复用取代 |
 | 控制面会话运行时/统一索引/交互管线 | **移除** | 各实例前端 runtime 自有（N-ctx） |
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
-| walkthrough、通知中心、MCP、cron、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）** | 宿主原生覆盖，控制面只接入/服务 |
-| git/GitHub | **插件化（2026-08-16 修订）** | 不进控制面/本体；允许以 chamber 强制打包的客户端插件形态提供（worktree 生命周期等，设计 08），绝不重造 dsh 宿主执行面 |
+| walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）** | 宿主原生覆盖，控制面只接入/服务 |
+| 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime |
+| git/GitHub | **插件化 + gateway 迁移期双轨** | design 08 仍是实例内权威实现；design 17 可在同一 OS 用户下做 server 编排，达到稳定/实机门禁前不得退役插件 |
 
-> **例外（2026-08-16）**：git/GitHub 行经本节修订为插件化，是上表唯一例外
-> （"不得以'后续版本'名义回到 backlog"仅约束其余行）。插件形态仍受 §5 原则
-> 约束：控制面不建立 git 索引、不消费宿主会话，git 事实与执行只来自各实例内的
-> chamber host plugin；Desktop 仅分发该包，不运行 Git（设计 08 §2/§5/§6）。
+> **有界例外**：design 08 的插件与 design 17 的独立 gateway 是两个显式边界。
+> `packages/control-plane` 本身仍不建立 Git/会话索引、不运行 Git、不认证；Desktop
+> 仍仅接入/分发。gateway 的派生状态丢失后必须能从 dsh 权威重建，且 gateway 进程
+> 未显式启动时这些域完全不存在。
 
 ---
 
@@ -117,5 +120,5 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 2. **单窗口多实例**：一个前端窗口内 N 个 dsh shell（N-ctx），导航层统一、执行层按来源路由。
 3. **同源唯一入口**：所有实例流量经控制面 `/api/i/<id>/*` 同源反代；前端永不直连非 loopback。
 4. **权威边界纪律**：凡宿主侧事实，控制面只服务/探活，绝不成为权威；会话列表只来自各实例 API。
-5. **信任最小化**：前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort）；隧道 URL 与 SSH 材料永不进 renderer/日志/持久层；监听仅 loopback。
+5. **信任最小化**：桌面前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort）；隧道 URL 与 SSH 材料永不进 renderer/日志/持久层；普通 control-plane 监听仅 loopback。design 17 的 gateway 可非 loopback，但必须同时启用认证、Host/Origin/peer evaluator 与 HTTP/WS 一致门禁。
 6. **P3 硬纪律**：移出项不回流。
