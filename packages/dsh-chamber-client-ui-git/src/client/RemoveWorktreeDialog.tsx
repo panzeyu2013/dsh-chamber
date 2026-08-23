@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
-import { gitCoordinator, removeWorktree } from '../shared/coordinator.ts'
+import { gitCoordinator, removeWorktree, WorktreeDirtyError } from '../shared/coordinator.ts'
 import { collectSessionClosure } from '../shared/git-facts.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
 import css from './SidebarGit.module.css'
@@ -13,6 +13,10 @@ export interface RemoveViewTarget {
   path: string
   branch: string | null
   sessionIds: string[]
+  /** The snapshot reports uncommitted state (modified/untracked files). A
+   *  dirty worktree requires the user to explicitly authorize discarding
+   *  those files before removal (design 08 §6 amendment 2026-08). */
+  dirty: boolean
 }
 
 interface RemoveSessionFacts {
@@ -40,12 +44,28 @@ export function RemoveWorktreeDialog({
   const [sessionFactsError, setSessionFactsError] = useState<string | null>(null)
   const [archiveSessions, setArchiveSessions] = useState(false)
   const [deleteBranch, setDeleteBranch] = useState(false)
+  /** Explicit authorization to DISCARD the worktree's uncommitted files
+   *  (modified/untracked). The branch and its commits are never touched —
+   *  only the working-tree files are lost (design 08 §6 amendment 2026-08). */
+  const [discardChanges, setDiscardChanges] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
   /** Set when the removal succeeded but the optional branch delete failed. */
   const [branchDeleteFailed, setBranchDeleteFailed] = useState(false)
 
   const busy = source?.busy !== undefined
   const actionLocked = busy || source?.recovery !== undefined
+  /** Set when the FRESH preflight inside removeWorktree reported dirty even
+   *  though the dialog's row fact was stale-clean — force-show the discard
+   *  checkbox so the user can authorize and retry without closing (review
+   *  2026-08 P2-1). */
+  const [freshDirty, setFreshDirty] = useState(false)
+  /** A dirty worktree needs the discard checkbox before the remove is enabled. */
+  const needsDiscardConfirmation = target?.dirty === true || freshDirty
+  const confirmDisabled = actionLocked || target === null || branchDeleteFailed
+    // Unknown session impact must block a destructive delete — the
+    // user might unknowingly drop unarchived sessions (review P2-6).
+    || sessionFactsError !== null
+    || (needsDiscardConfirmation && !discardChanges)
 
   // Enumerate the full session tree (direct + transitive subsessions) the
   // removal would orphan, for explicit confirmation copy.
@@ -53,6 +73,8 @@ export function RemoveWorktreeDialog({
   useEffect(() => {
     setArchiveSessions(false)
     setDeleteBranch(false)
+    setDiscardChanges(false)
+    setFreshDirty(false)
     setSessionFacts(null)
     setSessionFactsError(null)
     setRemoveError(null)
@@ -112,6 +134,7 @@ export function RemoveWorktreeDialog({
       const result = await removeWorktree(sourceId, target, {
         archiveSessions,
         ...(deleteBranch && target.branch !== null ? { deleteBranch: target.branch } : {}),
+        ...(needsDiscardConfirmation && discardChanges ? { discardChanges: true } : {}),
       })
       // Honest outcome (2026-08 client review): a failed branch delete keeps
       // the dialog open with an explanation — the worktree removal stands.
@@ -123,6 +146,9 @@ export function RemoveWorktreeDialog({
     } catch (error) {
       // Surface the failure in-dialog; recovery (ambiguous failures) also
       // renders on the per-workspace line so the source can never stay locked.
+      // A fresh-preflight dirty rejection force-shows the discard checkbox
+      // (review 2026-08 P2-1) so the user can authorize without closing.
+      if (error instanceof WorktreeDirtyError) setFreshDirty(true)
       setRemoveError(error instanceof Error ? error.message : String(error))
     }
   }
@@ -137,10 +163,7 @@ export function RemoveWorktreeDialog({
       footer={(
         <>
           <Button variant="outline" disabled={busy} onClick={close}>{t('cancel')}</Button>
-          <Button variant="outline" className={css.danger} disabled={actionLocked || target === null || branchDeleteFailed
-            // Unknown session impact must block a destructive delete — the
-            // user might unknowingly drop unarchived sessions (review P2-6).
-            || sessionFactsError !== null} onClick={() => { void runRemove() }}>
+          <Button variant="outline" className={css.danger} disabled={confirmDisabled} onClick={() => { void runRemove() }}>
             {busy ? t('removing') : t('removeConfirm')}
           </Button>
         </>
@@ -182,6 +205,20 @@ export function RemoveWorktreeDialog({
           {removeError !== null && <span className={css.formError} role="alert">{removeError}</span>}
           {branchDeleteFailed && (
             <span className={css.formError} role="alert">{t('branchDeleteFailedNote')}</span>
+          )}
+          {needsDiscardConfirmation && (
+            <div className={css.dirtyWarning}>
+              <span role="alert">{t('dirtyDiscardWarning')}</span>
+              <label className={css.archiveToggle}>
+                <input
+                  type="checkbox"
+                  checked={discardChanges}
+                  disabled={actionLocked}
+                  onChange={event => setDiscardChanges(event.target.checked)}
+                />
+                <span>{t('dirtyDiscardLabel')}</span>
+              </label>
+            </div>
           )}
           <label className={css.archiveToggle}>
             <input

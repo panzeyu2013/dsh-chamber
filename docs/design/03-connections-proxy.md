@@ -206,8 +206,11 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   在缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503
   `resource_exhausted`，计数在断连/超时/错误/完成时幂等释放；HTTP server 在
   路由前另设 10s header、35s request、5s keep-alive 与 192 连接上限。
-- 非 SSE 上游响应使用 10s **空闲**超时（每个数据块重新计时），既阻止停滞流，
-  也不误杀持续有进展的大响应；SSE/已升级 WS 保持长连接语义。
+- 非 SSE 上游响应使用 45s **空闲**超时（每个数据块重新计时；2026-08 由 10s
+  调高：chamber Git worktree host 的同步 git mutation 预算 30s，旧 10s 空闲
+  计时会在 host 已提交后截断慢速 `git worktree remove` 为 504，见设计 08
+  §6 修订与 STATUS），既阻止停滞流，也不误杀持续有进展的大响应；SSE/已
+  升级 WS 保持长连接语义。
 - 写路径背压（Node 双流适配，`res.write === false → waitForDrain`）；
   浏览器断连 → abort 上游（不泄漏 socket / 流资源）。
 

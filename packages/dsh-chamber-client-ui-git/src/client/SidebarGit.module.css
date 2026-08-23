@@ -286,6 +286,28 @@
   line-height: 1.45;
 }
 
+/* Dirty-worktree removal authorization (design 08 §6 amendment 2026-08):
+   the discard checkbox must visually stand out against the ordinary
+   archive/branch toggles. */
+.dirtyWarning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l2));
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dirtyWarning > span {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
 .wsSourceAlert {
   display: flex;
   align-items: center;

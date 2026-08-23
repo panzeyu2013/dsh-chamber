@@ -272,7 +272,7 @@ function parseRollbackInput(value) {
 function parseRemoveInput(value) {
   assertRecord(value, "input");
   {
-    const allowed = /* @__PURE__ */ new Set(["operationId", "workspaceId", "path", "expected", "deleteBranch"]);
+    const allowed = /* @__PURE__ */ new Set(["operationId", "workspaceId", "path", "expected", "deleteBranch", "discardChanges"]);
     for (const key of Object.keys(value)) {
       if (!allowed.has(key)) fail("invalid-input", `input contains unsupported field '${key}'`);
     }
@@ -294,6 +294,7 @@ function parseRemoveInput(value) {
       head: head.toLowerCase()
     },
     deleteBranch: value.deleteBranch === void 0 ? void 0 : safeBranchName(value.deleteBranch, "input.deleteBranch"),
+    discardChanges: value.discardChanges === void 0 ? void 0 : typeof value.discardChanges === "boolean" ? value.discardChanges : fail("invalid-input", "input.discardChanges must be a boolean"),
     path: value.path === void 0 ? void 0 : value.workspaceId !== void 0 ? fail("invalid-input", "input.path and input.workspaceId are mutually exclusive") : absoluteExpectedPath(value.path, "input.path")
   };
 }
@@ -321,8 +322,10 @@ function assertSafeGitArgv(args) {
   if (verb === "worktree" && rest.length === 4 && rest[0] === "add" && rest[1] === "--" && isAbsolute(rest[2]) && !rest[3].startsWith("-")) return;
   if (verb === "worktree" && rest.length === 6 && rest[0] === "add" && rest[1] === "-b" && !rest[2].startsWith("-") && rest[3] === "--" && isAbsolute(rest[4]) && /^[0-9a-fA-F]{40,64}$/u.test(rest[5])) return;
   if (verb === "worktree" && rest.length === 3 && rest[0] === "remove" && rest[1] === "--" && isAbsolute(rest[2])) return;
+  if (verb === "worktree" && rest.length === 4 && rest[0] === "remove" && rest[1] === "--force" && rest[2] === "--" && isAbsolute(rest[3])) return;
   fail("unsafe-git-argv", `Git command '${verb ?? "<empty>"}' is outside the worktree allowlist`);
 }
+var HOOK_GUARD = ["-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`];
 function createLocalGitRunner(spawnGit = spawn) {
   return (request) => new Promise((resolvePromise, rejectPromise) => {
     try {
@@ -346,19 +349,18 @@ function createLocalGitRunner(spawnGit = spawn) {
       GIT_TERMINAL_PROMPT: "0",
       GIT_NO_LAZY_FETCH: "1",
       GIT_OPTIONAL_LOCKS: "0",
-      // `worktree add` normally runs post-checkout. A wire lifecycle action
-      // must not become a caller-triggered hook execution surface. This does
-      // not disable repository-configured clean/smudge/process filters: those
-      // remain inside the host OS user's trusted repository-config boundary.
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "core.hooksPath",
-      GIT_CONFIG_VALUE_0: process.platform === "win32" ? "NUL" : "/dev/null",
+      // `worktree add` runs post-checkout; hook suppression is injected via the
+      // argv `-c core.hooksPath=<nul>` guard (HOOK_GUARD) at spawn time, since
+      // GIT_CONFIG_* env entries are the lowest-priority source and a repo's own
+      // core.hooksPath would override them. Filters (clean/smudge/process) are
+      // intentionally NOT disabled: they remain inside the host OS user's
+      // trusted repository-config boundary.
       GCM_INTERACTIVE: "never",
       LC_ALL: "C"
     });
     let child;
     try {
-      child = spawnGit("git", [...request.args], {
+      child = spawnGit("git", [...HOOK_GUARD, ...request.args], {
         cwd: request.cwd,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
@@ -1434,7 +1436,9 @@ var GitWorktreeCore = class {
         if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
         if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
         if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
-        if (await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be removed");
+        if (await this.isDirty(target.path) && input.discardChanges !== true) {
+          fail("worktree-dirty", "dirty worktrees cannot be removed");
+        }
         const intent = {
           repoId,
           worktreeId,
@@ -1444,7 +1448,8 @@ var GitWorktreeCore = class {
           branch: target.branch,
           head: target.head,
           sessionIds: [],
-          deleteBranch: input.deleteBranch
+          deleteBranch: input.deleteBranch,
+          discardChanges: input.discardChanges
         };
         operation.intent = intent;
         return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
@@ -1473,7 +1478,9 @@ var GitWorktreeCore = class {
       if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
       if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
       if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
-      if (await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be removed");
+      if (await this.isDirty(target.path) && input.discardChanges !== true) {
+        fail("worktree-dirty", "dirty worktrees cannot be removed");
+      }
       state = await this.readSource();
       workspace = this.workspace(state, registeredWorkspaceId);
       if (await this.existingPath(workspace.path) !== workspacePath) {
@@ -1494,7 +1501,8 @@ var GitWorktreeCore = class {
         branch: target.branch,
         head: target.head,
         sessionIds,
-        deleteBranch: input.deleteBranch
+        deleteBranch: input.deleteBranch,
+        discardChanges: input.discardChanges
       };
       operation.intent = intent;
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
@@ -1536,7 +1544,9 @@ var GitWorktreeCore = class {
     }
     if (target === topology.worktrees[0]) fail("operation-conflict", "bound linked worktree became the main checkout");
     if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
-    if (await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be removed");
+    if (await this.isDirty(target.path) && intent.discardChanges !== true) {
+      fail("worktree-dirty", "dirty worktrees cannot be removed");
+    }
     if (input.workspaceId === void 0) {
       const state2 = await this.readSource();
       const canonicalPath = await this.existingPath(intent.path);
@@ -1574,11 +1584,12 @@ var GitWorktreeCore = class {
     if (finalTarget === finalTopology.worktrees[0] || finalTarget.locked || opaqueId("worktree", finalTopology.commonDir, finalTarget.path) !== intent.worktreeId || finalTarget.branch !== intent.branch || finalTarget.head !== intent.head) {
       fail("operation-conflict", "removal target changed immediately before mutation");
     }
-    if (await this.isDirty(finalTarget.path)) {
+    if (await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
       fail("worktree-dirty", "worktree became dirty immediately before removal");
     }
     operation.attemptedRemove = true;
-    await this.gitChecked(finalTopology.mainPath, ["worktree", "remove", "--", intent.path], true);
+    const removeArgs = intent.discardChanges === true ? ["worktree", "remove", "--force", "--", intent.path] : ["worktree", "remove", "--", intent.path];
+    await this.gitChecked(finalTopology.mainPath, removeArgs, true);
     const after = await this.topology(finalTopology.mainPath);
     if (after.commonDir !== intent.commonDir || after.worktrees.some((worktree) => worktree.path === intent.path)) {
       fail("postcondition-failed", "Git still reports the removed worktree or repository identity changed");

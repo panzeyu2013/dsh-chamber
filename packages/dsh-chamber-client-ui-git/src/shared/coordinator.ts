@@ -522,6 +522,7 @@ async function performRemoveSaga(
   request: RemoveRecoveryInput,
   previousRecovery?: Extract<GitRecovery, { kind: 'git-remove' }>,
 ): Promise<RemoveWorktreeResult> {
+  const discardChanges = request.discardChanges === true ? { discardChanges: true } : {}
   try {
     return await runRemoveSaga({
       hostRemove: () => gitWorktreeApi.remove(sourceId, {
@@ -533,6 +534,7 @@ async function performRemoveSaga(
         // would permanently wedge recovery, review P1-2).
         ...(request.workspaceId === undefined ? { path: request.path } : {}),
         ...(request.deleteBranch === undefined ? {} : { deleteBranch: request.deleteBranch }),
+        ...discardChanges,
       }, request.path),
       verifyTerminalRemove: () => gitWorktreeApi.remove(sourceId, {
         operationId: request.operationId,
@@ -540,9 +542,11 @@ async function performRemoveSaga(
         expected: request.expected,
         ...(request.workspaceId === undefined ? { path: request.path } : {}),
         ...(request.deleteBranch === undefined ? {} : { deleteBranch: request.deleteBranch }),
+        ...discardChanges,
       }, request.path),
       workspaceDelete: id => deleteWorkspace(getInstanceClient(sourceId), id),
       deleteBranch: request.deleteBranch,
+      discardChanges: request.discardChanges,
       ambiguousRecovery: error => isAmbiguousGitRpcFailure(error) && !isDeterministicGitRejection(error)
         ? { kind: 'git-remove', ...request, message: errorText(error) }
         : undefined,
@@ -571,11 +575,23 @@ export function currentSessionIsBlank(sourceId: string, sessionId: string | unde
     workspace.sessions.some(session => session.id === sessionId && session.blank === true))
 }
 
+/** Marker for the in-dialog dirty dead-end (review 2026-08 P2-1): the dialog
+ *  shows the discard checkbox from its (possibly stale) row dirty fact; if
+ *  the FRESH preflight snapshot discovers dirty after the dialog opened
+ *  clean, the dialog must force-show the checkbox instead of leaving the
+ *  user with a bare error and no way forward. */
+export class WorktreeDirtyError extends Error {
+  constructor() {
+    super('有未提交改动的工作树不能删除')
+    this.name = 'WorktreeDirtyError'
+  }
+}
+
 /** Git-first safe remove; workspace-delete failure becomes explicit recovery. */
 export async function removeWorktree(
   sourceId: string,
   target: RemoveTarget,
-  options: { archiveSessions?: boolean; deleteBranch?: string } = {},
+  options: { archiveSessions?: boolean; deleteBranch?: string; discardChanges?: boolean } = {},
 ): Promise<RemoveWorktreeResult> {
   const operationId = nextId('remove')
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
@@ -593,7 +609,14 @@ export async function removeWorktree(
     if (blocked === 'current') throw new Error('该工作树包含当前正在查看的会话')
     if (blocked === 'locked') throw new Error('已锁定的工作树不能删除')
     if (blocked === 'unhealthy') throw new Error('工作树不可用（目录缺失/无效/非 Git 仓库），不能删除')
-    if (blocked === 'dirty') throw new Error('有未提交改动的工作树不能删除')
+    // Dirty is NOT an automatic throw here: the dialog collects an explicit
+    // user checkbox (discardChanges) authorizing the host to force-remove —
+    // the worktree's uncommitted files are discarded, the branch is kept
+    // (design 08 §6 amendment 2026-08). The typed marker lets the dialog
+    // force-show the checkbox even when its row fact was stale-clean.
+    if (blocked === 'dirty' && options.discardChanges !== true) {
+      throw new WorktreeDirtyError()
+    }
     if (blocked === 'status-unknown') throw new Error('无法确认工作树是否干净，不能删除')
     const workspaceId = found.worktree.workspaceId
     if (workspaceId === null) throw new Error('工作树缺少 workspace id')
@@ -629,13 +652,17 @@ export async function removeWorktree(
       },
       path: found.worktree.path,
       ...(options.deleteBranch === undefined ? {} : { deleteBranch: options.deleteBranch }),
+      ...(options.discardChanges === true ? { discardChanges: true } : {}),
     })
   })
 }
 
 /** Remove an UNREGISTERED worktree (no dsh workspace — Plan A): git-first
  *  removal via the host's path-based variant, no workspace.delete, no
- *  archive step (there are no sessions). */
+ *  archive step (there are no sessions). NOTE: the unregistered row's delete
+ *  button stays hard-disabled for dirty worktrees (no discard checkbox in
+ *  its window.confirm flow — review 2026-08 P2-2); the host-side
+ *  `discardChanges` path exists but is not wired from this UI yet. */
 export async function removeUnregisteredWorktree(
   sourceId: string,
   target: { repoId: string; worktreeId: string; path: string; branch: string | null; head: string },
@@ -726,6 +753,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
             workspaceId: recovery.workspaceId,
             expected: recovery.expected,
             ...(recovery.deleteBranch === undefined ? {} : { deleteBranch: recovery.deleteBranch }),
+            ...(recovery.discardChanges === true ? { discardChanges: true } : {}),
           }, recovery.path),
           () => deleteWorkspace(getInstanceClient(sourceId), recovery.workspaceId),
           error => error instanceof InstanceRpcError && error.code === 'workspace-not-found',

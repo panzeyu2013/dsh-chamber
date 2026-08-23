@@ -123,7 +123,10 @@ export function SidebarWorkspaceGitLine({
         {unregistered.map((worktree) => {
           // Mirrors removeBlockReason: main checkout / dirty / locked /
           // unhealthy all reject at the host — keep the button honest
-          // (review P2-5).
+          // (review P2-5). Deliberate asymmetry (review 2026-08 P2-2):
+          // the REGISTERED occupant offers the discard-changes dialog for
+          // dirty worktrees, but this unregistered row's window.confirm flow
+          // cannot collect that authorization, so dirty stays hard-blocked.
           const blocked = worktree.status !== 'ready' || worktree.locked
             || worktree.isMain || worktree.dirty === true
           return (
@@ -256,15 +259,20 @@ export function SidebarWorkspaceGitLine({
           <button
             type="button"
             className={`${css.headerGitAction} git-ws-action`}
-            disabled={actionLocked || blocked !== undefined}
-            aria-label={blockLabel(blocked, t) ?? t('remove')}
-            title={blockLabel(blocked, t) ?? t('remove')}
+            // A dirty worktree is NOT disabled: the remove dialog collects an
+            // explicit discard-changes checkbox instead (design 08 §6
+            // amendment 2026-08). Every other block (running/current/locked/
+            // unhealthy/status-unknown) stays a hard disable.
+            disabled={actionLocked || (blocked !== undefined && blocked !== 'dirty')}
+            aria-label={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, t) ?? t('remove'))}
+            title={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, t) ?? t('remove'))}
             onClick={() => setRemoveTarget({
               repoId: rows[0]!.repoId,
               worktreeId: primary.worktreeId,
               path: primary.path,
               branch: primary.branch,
               sessionIds: primary.sessionIds,
+              dirty: primary.dirty === true,
             })}
           >
             <IconTrashOutline16 size={16} />

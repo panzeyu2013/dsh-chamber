@@ -400,6 +400,49 @@ test('first successful remove never deletes the registry when terminal replay no
   assert.equal(deleteCalls, 0)
 })
 
+test('force removal echoes discardChanges into every recovery for byte-identical replays', async () => {
+  const request = {
+    operationId: 'op-force-remove', workspaceId: 'ws-2',
+    expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
+    path: '/feature',
+  }
+  // Ambiguous failure (e.g. proxy 504) mints a git-remove recovery that
+  // carries discardChanges so the same-id replay stays byte-identical.
+  try {
+    await runRemoveSaga({
+      hostRemove: async () => { throw new TypeError('response dropped') },
+      verifyTerminalRemove: async () => removeResult,
+      workspaceDelete: async () => {},
+      discardChanges: true,
+      ambiguousRecovery: error => ({ kind: 'git-remove', ...request, message: String((error as Error).message), discardChanges: true }),
+    })
+    assert.fail('expected failure')
+  } catch (error) {
+    assert.ok(error instanceof GitSagaError)
+    assert.equal(error.recovery?.kind, 'git-remove')
+    assert.equal(error.recovery?.discardChanges, true)
+  }
+  // A successful force removal echoes discardChanges into the
+  // workspace-delete recovery (the terminal replay must re-send it).
+  try {
+    await runRemoveSaga({
+      hostRemove: async () => removeResult,
+      verifyTerminalRemove: async () => ({ ...removeResult, replayed: true }),
+      workspaceDelete: async () => { throw new Error('registry unavailable') },
+      discardChanges: true,
+      ambiguousRecovery: () => undefined,
+    })
+    assert.fail('expected failure')
+  } catch (error) {
+    assert.ok(error instanceof GitSagaError)
+    assert.deepEqual(error.recovery, {
+      kind: 'workspace-delete', operationId: 'op-remove', workspaceId: 'ws-2',
+      expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
+      path: '/feature', message: 'registry unavailable', discardChanges: true,
+    })
+  }
+})
+
 test('workspace-delete recovery treats workspace-not-found as an idempotent committed delete', async () => {
   const notFound = Object.assign(new Error('gone'), { code: 'workspace-not-found' })
   const calls: string[] = []

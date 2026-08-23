@@ -5,7 +5,11 @@ import type {
 } from './types.ts'
 import { normalizeGitSnapshot } from './snapshot.ts'
 
-const RPC_TIMEOUT_MS = 30_000
+// 60s, not 30s (2026-08 bug report): the proxy's upstream idle timeout is
+// 45s (UPSTREAM_TIMEOUT_MS in the control plane) and the host's git mutation
+// budget is 30s — the browser must never abort while the host is still
+// legitimately working, or a committed mutation is misread as ambiguous.
+const RPC_TIMEOUT_MS = 60_000
 
 export class GitWorktreeRpcError extends Error {
   readonly code: string
@@ -81,6 +85,11 @@ export interface RemoveWorktreeInput {
   expected: { repoId: string; worktreeId: string; branch: string | null; head: string }
   /** Optional local branch to delete after the worktree removal (design 08 §11). */
   deleteBranch?: string
+  /** Explicit user authorization to DISCARD the worktree's uncommitted state:
+   *  the host then removes a dirty worktree with `git worktree remove
+   *  --force` (branch/commits/HEAD untouched). Never set without a confirmed
+   *  dialog checkbox (design 08 §6 amendment 2026-08). */
+  discardChanges?: boolean
 }
 
 export type RollbackCreateExpectation = Pick<

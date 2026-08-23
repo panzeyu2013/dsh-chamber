@@ -305,6 +305,10 @@ export interface RemoveSagaDeps {
   /** The original removal's optional branch deletion — echoed onto the
    *  workspace-delete recovery so a replay fingerprint matches (P1-1). */
   deleteBranch?: string
+  /** The original removal's discard-changes authorization — echoed onto the
+   *  workspace-delete recovery so a force-removal replay stays byte-identical
+   *  (2026-08, design 08 §6 amendment). */
+  discardChanges?: boolean
   ambiguousRecovery(error: unknown): Extract<GitRecovery, { kind: 'git-remove' }> | undefined
 }
 
@@ -354,6 +358,7 @@ export async function runRemoveSaga(deps: RemoveSagaDeps): Promise<RemoveWorktre
     // next === 'delete-workspace' here (early-returned on 'none' above).
     workspaceId: removed.workspaceId!,
     ...(deps.deleteBranch === undefined ? {} : { deleteBranch: deps.deleteBranch }),
+    ...(deps.discardChanges === true ? { discardChanges: true } : {}),
     expected: {
       repoId: removed.repoId,
       worktreeId: removed.worktreeId,

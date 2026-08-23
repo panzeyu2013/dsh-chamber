@@ -232,6 +232,10 @@ export type GitRecovery =
       message: string
       /** Optional local branch to delete after the worktree removal. */
       deleteBranch?: string
+      /** Original user authorization to discard uncommitted state — the
+       *  replay input MUST be byte-identical to the original (the host
+       *  fingerprints it), so a force removal retry re-sends it. */
+      discardChanges?: boolean
     }
   | {
       kind: 'workspace-delete'
@@ -250,6 +254,9 @@ export type GitRecovery =
        *  MUST match the original byte-for-byte (host fingerprints it), or
        *  recovery is permanently stuck (review P1-1). */
       deleteBranch?: string
+      /** Same byte-identity requirement for a force removal (design 08 §6
+       *  amendment): the terminal replay re-sends the original flag. */
+      discardChanges?: boolean
     }
 
 export interface GitSourceState {

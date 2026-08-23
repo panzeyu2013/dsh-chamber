@@ -59,7 +59,7 @@ namespace 固定为 `gitWorktree`：
 | `previewCreate(input)` | 验证 repo id、本地分支、目标 parent/basename 和当前 HEAD，返回短期 capability token；preview 不是最终授权 |
 | `create(input)` | 在 common-dir mutex 中重新验证；`operationId` 合并重复请求，响应丢失时同 id 返回同一结果 |
 | `rollbackCreate(input)` | 仅对本 operation 创建、尚未被 workspace 注册、身份未变且 clean 的 worktree 有效；不用 `--force` |
-| `remove(input)` | fresh 对账后仅删除权威 worktree list 中的 linked worktree；主 checkout、dirty、locked、身份变化、关联 running agent 都拒绝；不用 `--force`、不删分支 |
+| `remove(input)` | fresh 对账后仅删除权威 worktree list 中的 linked worktree；主 checkout、locked、身份变化、关联 running agent 都拒绝；dirty 默认拒绝，仅当 `discardChanges: true`（对话框显式勾选，§6 修订）时以 `git worktree remove --force` 移除；不删分支（除非显式 `deleteBranch`，§11.3） |
 
 RPC 只接受领域 operation，不接受任意 Git argv。所有 mutation 的锁键是
 canonical common-dir，不是 renderer 提供的 repo path。
@@ -159,13 +159,35 @@ fresh-preflight -> git-removing -> git-removed
   host 核心拒绝任一关联 running agent。
 - Git remove 先执行且不用 force。响应丢失后以权威 topology 已无
   该 worktree 为成功对账条件。
+- **2026-08 修订（用户拍板）**：dirty 工作树不再硬性阻断删除——删除对话框
+  列出该工作树有未提交更改（host 快照 `dirty` 事实），要求用户勾选
+  「丢弃未提交更改并移除（保留分支）」后，客户端才发送 `discardChanges: true`，
+  host 以 `git worktree remove --force` 移除（§11.3）。**force 只经显式授权**：
+  - 分支/提交/HEAD 永不触碰：`--force` 只丢弃工作树工作区文件
+    （已修改/未跟踪文件），`branchPreserved: true` 无条件成立；
+  - 身份/锁/主 checkout/running-agent 守卫全部保留，force 只放行 dirty
+    （注意：`git worktree remove --force` 同时绕过 **git 自身**的锁检查——
+    host 层 `worktree-locked` 守卫无条件保留，但 finalTopology 读取与 git
+    调用之间被外部 `git worktree lock` 的窄窗口不再被 git 拒绝，属 §7 已
+    声明的外部 Git TOCTOU 剩余边界）；
+  - argv 白名单新增精确文法 `worktree remove --force -- <abs-path>`，
+    `--force` 不能以任何其它形态混入；
+  - `discardChanges` 参与输入指纹：恢复重放必须携带原值，否则
+    `operation-conflict`（恢复永久卡死的反面：明确报错而非静默换语义）；
+  - 剩余边界（§7 既有，force 下略更常见）：git 先删 admin entry 再删工作
+    目录，若递归删除目录因权限等失败，git 退出非零、admin entry 已不在
+    list——重试对账按"topology 无此 worktree"收敛成功，但**目录可能残留**
+    （如 2026-08 实机 `server-side/` 空目录），需用户手动清理；收敛语义
+    与 §6「topology 已无该 worktree 为成功对账条件」一致，不做目录存在性
+    反向校验。
 - 然后调 `workspace.delete`：它只解注册，会话日志保留并转 Ungrouped。
 - workspace delete 失败时保留完整的 `operationId + workspaceId + opaque expected + path`
   恢复项。首次及每次重试 registry delete 前，都先重放 host remove 终态验证：目标仍
   不存在，且 workspace 已不存在或仍为同 path/同 membership、没有 running agent；
   目标重现或 registry 身份漂移一律 conflict，绝不继续 delete。通过后才把
   `workspace-not-found` 视为前次 delete 已提交；不反向重建 Git 工作树，也不隐藏会话。
-- v1 不删分支。特别是不使用 `branch -D`。
+- v1 不删分支。特别是不使用 `branch -D`（删除对话框的「同时删除本地分支」
+  是 §11.3 的显式用户授权例外，与 `discardChanges` 无关）。
 
 这是两个持久化域（Git FS + dsh registry）之间的可重试 saga，不是原子
 事务。紧邻 delete 的终态验证只能缩小可控的 TOCTOU 窗口，不能把两次 RPC 变成原子
@@ -223,7 +245,7 @@ fresh-preflight -> git-removing -> git-removed
 | M0 | 修正 workspace/session wrapper，定稿 host-in-instance 边界、幂等键与无归档删除 saga |
 | M1 | host snapshot + 远程/本地分发 + singleton 30s facts + `sidebar.git` 只读拓扑 |
 | M2 | preview/create/workspace/session/open-intent 创建闭环，含丢响应重试和安全补偿 |
-| M3 | fresh guard + Git-first + workspace-delete retry 删除闭环，不归档、不 force、不删分支 |
+| M3 | fresh guard + Git-first + workspace-delete retry 删除闭环，不归档、不删分支；force 仅经 `discardChanges` 显式授权（§6 修订） |
 | M4 | N-ctx/断连/局部失败/无 Git/打包回归与远程实机验收 |
 
 v1 明确不做 commit/diff/stash/fetch/push/PR，也不新增任意 Git 终端。
@@ -362,7 +384,13 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
   可选先归档（含子会话）；**可选同时删除本地分支**（用户授权，违背 §6
   "不删分支"的旧立场——`git branch -D` 白名单新增，尽力一次，失败如实
   返回 `branchDeleteFailed` 且不阻断已删工作树；对话框留存说明）。
-- 硬阻断（dirty/locked/running/current/unhealthy）保留。
+- **dirty 工作树（2026-08 修订，用户拍板）**：删除图标不再禁用（仅 dirty），
+  点击进入对话框后显示醒目警示（"该工作树有未提交的更改，将被永久丢弃；
+  分支与已提交内容不受影响"）+ 勾选框「我了解这些更改将被丢弃，仅移除
+  工作树（保留分支）」；未勾选时确认按钮禁用，勾选后才发送
+  `discardChanges: true`（§6）。
+- 硬阻断（locked/running/current/unhealthy/status-unknown）保留；
+  main/unregistered 仍不可从此入口删除。
 
 ### 11.4 后端对齐
 

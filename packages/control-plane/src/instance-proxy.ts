@@ -61,8 +61,18 @@ export const MAX_PENDING_WS_HANDSHAKES = 16
  * long-lived by nature: the timeout only covers reaching the response/101,
  * never the stream lifetime. A hung upstream can no longer stall the request
  * indefinitely.
+ *
+ * 45s, not 10s (2026-08 bug report): the chamber Git worktree host runs
+ * SYNCHRONOUS git subprocesses inside the instance with a 30s mutation
+ * budget (MUTATION_TIMEOUT_MS in dsh-host-git-worktree) — a mutation emits
+ * no bytes while git works, so the old 10s IDLE timer cut slow operations
+ * (`git worktree remove` over a node_modules-heavy directory routinely
+ * exceeds 10s of silence) with an HTTP 504 AFTER the host had already
+ * committed the mutation, stranding the workspace registration. The timeout
+ * must stay strictly above the host's own mutation budget so the host's
+ * domain result (success or git-timeout) always wins the race.
  */
-export const UPSTREAM_TIMEOUT_MS = 10_000
+export const UPSTREAM_TIMEOUT_MS = 45_000
 
 /** Maximum silence between client request-body chunks. */
 export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000

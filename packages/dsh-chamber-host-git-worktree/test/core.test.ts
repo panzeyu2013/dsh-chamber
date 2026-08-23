@@ -230,7 +230,9 @@ class FakeRepository {
       }
       await this.enterMutation()
       try {
-        const path = args[3]!
+        // Both grammars are allowlisted: `remove -- <path>` and the
+        // discardChanges-authorized `remove --force -- <path>`.
+        const path = args[2] === '--force' ? args[4]! : args[3]!
         const index = this.worktrees.findIndex(candidate => candidate.path === path)
         if (index < 1) return this.result(128, '', 'cannot remove')
         this.worktrees.splice(index, 1)
@@ -1245,6 +1247,166 @@ test('remove refuses main, dirty and locked worktrees without exposing force', a
     error => error instanceof GitWorktreeError && error.code === 'worktree-locked',
   )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
+})
+
+test('remove with discardChanges force-removes a dirty worktree and preserves the branch', async () => {
+  const { core, repo, workspaces } = setup({ linked: true })
+  repo.worktrees[1]!.dirty = true
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const linked = repository.worktrees[1]!
+  const expected = {
+    repoId: repository.repoId,
+    worktreeId: linked.worktreeId,
+    branch: linked.branch!,
+    head: linked.head,
+  }
+
+  // Without discardChanges the dirty worktree is still rejected.
+  await assert.rejects(
+    core.remove({ operationId: 'force-op-no-flag', workspaceId: 'ws-feature', expected }),
+    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
+  )
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
+
+  // With discardChanges the removal goes through with --force; the branch
+  // and the registered workspace row survive (Git-first protocol).
+  const removed = await core.remove({
+    operationId: 'force-op',
+    workspaceId: 'ws-feature',
+    expected,
+    discardChanges: true,
+  })
+  assert.equal(removed.removed, true)
+  assert.equal(removed.next, 'delete-workspace')
+  assert.equal(removed.branchPreserved, true)
+  assert.deepEqual(removed.sessionIds, ['s-feature'])
+  assert.equal(repo.branches.has('feature'), true)
+  assert.equal(workspaces.some(workspace => workspace.workspaceId === 'ws-feature'), true)
+  assert.deepEqual(mutationCalls(repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', LINKED])
+  assert.equal(repo.calls.some(call => call.args[0] === 'branch'), false)
+
+  // Same-id replay with the identical input is byte-identical (fingerprint)
+  // and does not re-run the mutation.
+  const replay = await core.remove({
+    operationId: 'force-op',
+    workspaceId: 'ws-feature',
+    expected,
+    discardChanges: true,
+  })
+  assert.equal(replay.replayed, true)
+  assert.equal(mutationCalls(repo, 'remove').length, 1)
+
+  // A replay WITHOUT discardChanges changes the fingerprint -> conflict.
+  await assert.rejects(
+    core.remove({ operationId: 'force-op', workspaceId: 'ws-feature', expected }),
+    error => error instanceof GitWorktreeError && error.code === 'operation-conflict',
+  )
+})
+
+test('unregistered removal honors discardChanges with --force on a dirty path', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  repo.worktrees.find(worktree => worktree.path === '/repos/external')!.dirty = true
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const external = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
+  const expected = {
+    repoId: repository.repoId,
+    worktreeId: external.worktreeId,
+    branch: 'ext' as string | null,
+    head: FEATURE_HEAD,
+  }
+  await assert.rejects(
+    core.remove({ operationId: 'unreg-dirty', expected, path: '/repos/external' }),
+    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
+  )
+  const removed = await core.remove({
+    operationId: 'unreg-dirty-force',
+    expected,
+    path: '/repos/external',
+    discardChanges: true,
+  })
+  assert.equal(removed.removed, true)
+  assert.equal(removed.next, 'none')
+  assert.equal(removed.workspaceId, undefined)
+  assert.equal(repo.branches.has('ext'), true)
+  assert.deepEqual(mutationCalls(repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', '/repos/external'])
+})
+
+test('force remove reconciles a committed timeout with a single --force call', async () => {
+  // First attempt commits `git worktree remove --force` (dirty worktree,
+  // discardChanges authorized) but the response is lost (simulated timeout
+  // thrown AFTER the fake mutation applied). The same-id retry must converge
+  // on the receipt WITHOUT re-running the mutation, and the reconcile/
+  // commit dirty guards (core.ts reconcile/commit intent.discardChanges)
+  // must be exercised by that path.
+  const { core, repo } = setup({ linked: true })
+  repo.worktrees[1]!.dirty = true
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const linked = repository.worktrees[1]!
+  const input = {
+    operationId: 'force-uncertain',
+    workspaceId: 'ws-feature',
+    expected: {
+      repoId: repository.repoId,
+      worktreeId: linked.worktreeId,
+      branch: linked.branch!,
+      head: linked.head,
+    },
+    discardChanges: true,
+  }
+  repo.throwAfterRemove = new GitWorktreeError('git-timeout', 'simulated timeout after --force commit')
+  await assert.rejects(core.remove(input))
+  assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), false)
+  const reconciled = await core.remove(input)
+  assert.equal(reconciled.removed, true)
+  assert.equal(reconciled.replayed, true)
+  assert.deepEqual(mutationCalls(repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', LINKED])
+  assert.equal(mutationCalls(repo, 'remove').length, 1)
+})
+
+test('discardChanges never overrides the locked guard, even on a clean worktree', async () => {
+  const { core, repo } = setup({ linked: true })
+  // Clean (no dirty flag) but LOCKED: discardChanges must still be rejected
+  // with worktree-locked and zero git mutations — --force is only allowed to
+  // relax the DIRTY check, never the host's locked guard (review 2026-08).
+  repo.worktrees[1]!.locked = true
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const linked = repository.worktrees[1]!
+  await assert.rejects(
+    core.remove({
+      operationId: 'force-locked',
+      workspaceId: 'ws-feature',
+      expected: {
+        repoId: repository.repoId,
+        worktreeId: linked.worktreeId,
+        branch: linked.branch!,
+        head: linked.head,
+      },
+      discardChanges: true,
+    }),
+    error => error instanceof GitWorktreeError && error.code === 'worktree-locked',
+  )
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
+})
+
+test('git argv allowlist admits only the exact discardChanges remove grammar', async () => {
+  assert.doesNotThrow(() => assertSafeGitArgv(['worktree', 'remove', '--force', '--', '/safe/path']))
+  assert.throws(
+    () => assertSafeGitArgv(['worktree', 'remove', '--force', '/safe/path']),
+    error => error instanceof GitWorktreeError && error.code === 'unsafe-git-argv',
+  )
+  assert.throws(
+    () => assertSafeGitArgv(['worktree', 'remove', '--force', '--', '--upload-pack=evil']),
+    error => error instanceof GitWorktreeError && error.code === 'unsafe-git-argv',
+  )
+  assert.throws(
+    () => assertSafeGitArgv(['worktree', 'remove', '--force', '--', 'relative/path']),
+    error => error instanceof GitWorktreeError && error.code === 'unsafe-git-argv',
+  )
 })
 
 test('remove accepts a detached linked worktree only with expected branch null', async () => {

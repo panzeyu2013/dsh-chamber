@@ -66,6 +66,23 @@
   会话只计可见。§11.6：404 语义 + 一键重启。验证：`test:host-git` 76、
   `test:git` 53、全 8 typecheck、i18n、build:host-git（dist 与 src 字节级
   一致）、build:renderer 全绿。
+  **2026-08 实机删除故障修复（dirty 阻断 / 504 竞态 / 慢删除）**：①
+  **dirty 工作树删除（用户拍板）**：删除图标对 dirty 不再禁用——对话框
+  警示「未提交更改将被丢弃、分支保留」+ 勾选框，勾选后发送
+  `discardChanges: true`，host 以 `git worktree remove --force` 移除；
+  force 只放行 dirty（身份/锁/主 checkout/running 守卫保留）、argv 白名单
+  新增精确 `remove --force -- <abs>` 文法、`discardChanges` 参与操作指纹
+  （恢复重放必须携带原值，否则 `operation-conflict`）；② **504 竞态**：
+  控制面实例反代的 `UPSTREAM_TIMEOUT_MS` 10s→45s（旧值低于 host git
+  mutation 预算 30s，慢速 `git worktree remove`（node_modules 重型目录）
+  在 host 已提交后被代理 10s 空闲计时截断为 504 → workspace 残留成"普通
+  workspace"、删除图标全失效），浏览器 git RPC 超时 30s→60s（不再先于
+  host 领域结果竞速）；③ 并发恢复卡死确认并记录在案：host 重启后同
+  operationId 重放走 fresh 路径得 `worktree-not-found`（内存幂等缓存不跨
+  重启），属设计边界（§7 已声明），reload 清页面恢复项。验证：
+  `test:host-git` 83（新增 force 三用例）、`test:git` 54（discardChanges
+  恢复回显）、typecheck:git/host-git、instance-proxy 28、build:host-git
+  全绿。
 - **远程实例插件管理 / 一键应用本地插件清单 + 可视化添加（设计 13）**：**M1–M4 已落地**
   （exec `restart`/`run`/`write-file` + §7.2 白名单、`remoteDshHome` 贯穿 schema/投影/
   IPC/双 ambient 类型、`plugin-sync.ts` 编排、10 个 IPC 通道、前端

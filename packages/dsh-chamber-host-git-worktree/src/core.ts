@@ -207,6 +207,13 @@ export interface RemoveInput {
    *  §11 user decision): best-effort — a failure is reported honestly on the
    *  result and never rolls back the (already gone) worktree. */
   readonly deleteBranch?: string
+  /** Explicit user authorization to DISCARD the worktree's uncommitted state
+   *  (dirty/untracked files). When true, a dirty worktree is removed with
+   *  `git worktree remove --force` instead of being rejected. The branch,
+   *  commits and HEAD are never touched — only the working tree files are
+   *  discarded. Locked/running/identity guards are unchanged. (design 08 §6
+   *  amendment, 2026-08 user decision) */
+  readonly discardChanges?: boolean
 }
 
 export interface RemoveResult {
@@ -532,10 +539,10 @@ function parseRollbackInput(value: RollbackCreateInput): RollbackCreateInput {
 
 function parseRemoveInput(value: RemoveInput): RemoveInput {
   assertRecord(value, 'input')
-  // deleteBranch is OPTIONAL (assertExactKeys requires presence, so the
-  // allowed set + the required subset are checked inline).
+  // deleteBranch / discardChanges are OPTIONAL (assertExactKeys requires
+  // presence, so the allowed set + the required subset are checked inline).
   {
-    const allowed = new Set(['operationId', 'workspaceId', 'path', 'expected', 'deleteBranch'])
+    const allowed = new Set(['operationId', 'workspaceId', 'path', 'expected', 'deleteBranch', 'discardChanges'])
     for (const key of Object.keys(value)) {
       if (!allowed.has(key)) fail('invalid-input', `input contains unsupported field '${key}'`)
     }
@@ -563,6 +570,11 @@ function parseRemoveInput(value: RemoveInput): RemoveInput {
     deleteBranch: value.deleteBranch === undefined
       ? undefined
       : safeBranchName(value.deleteBranch, 'input.deleteBranch'),
+    discardChanges: value.discardChanges === undefined
+      ? undefined
+      : (typeof value.discardChanges === 'boolean'
+          ? value.discardChanges
+          : fail('invalid-input', 'input.discardChanges must be a boolean')),
     path: value.path === undefined
       ? undefined
       : (value.workspaceId !== undefined
@@ -617,6 +629,12 @@ export function assertSafeGitArgv(args: readonly string[]): void {
     && /^[0-9a-fA-F]{40,64}$/u.test(rest[5]!)) return
   if (verb === 'worktree' && rest.length === 3 && rest[0] === 'remove' && rest[1] === '--'
     && isAbsolute(rest[2]!)) return
+  // Explicit discard of uncommitted state (design 08 §6 amendment, 2026-08
+  // user decision): `worktree remove --force` is authorized only by the
+  // `discardChanges` input flag — the fixed grammar here is the last line of
+  // defense (the git runner itself never passes --force otherwise).
+  if (verb === 'worktree' && rest.length === 4 && rest[0] === 'remove' && rest[1] === '--force'
+    && rest[2] === '--' && isAbsolute(rest[3]!)) return
 
   fail('unsafe-git-argv', `Git command '${verb ?? '<empty>'}' is outside the worktree allowlist`)
 }
@@ -828,6 +846,11 @@ interface RemoveIntent {
 
   /** Optional local branch to delete after removal (design 08 §11). */
   readonly deleteBranch?: string
+  /** User-authorized discard of uncommitted state (design 08 §6 amendment):
+   *  dirty worktrees are removed with `git worktree remove --force`; the
+   *  branch/commits/HEAD are never touched. Carried so replay/reconcile
+   *  paths keep the identical fingerprint and the same force semantics. */
+  readonly discardChanges?: boolean
   branchDeleted?: boolean
   branchDeleteFailed?: boolean
 }
@@ -2038,7 +2061,9 @@ export class GitWorktreeCore {
         if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
         if (target.branch !== input.expected.branch) fail('expected-mismatch', 'worktree branch changed')
         if (target.head !== input.expected.head) fail('expected-mismatch', 'worktree HEAD changed')
-        if (await this.isDirty(target.path)) fail('worktree-dirty', 'dirty worktrees cannot be removed')
+        if (await this.isDirty(target.path) && input.discardChanges !== true) {
+          fail('worktree-dirty', 'dirty worktrees cannot be removed')
+        }
         const intent: RemoveIntent = {
           repoId,
           worktreeId,
@@ -2049,6 +2074,7 @@ export class GitWorktreeCore {
           head: target.head,
           sessionIds: [],
           deleteBranch: input.deleteBranch,
+          discardChanges: input.discardChanges,
         }
         operation.intent = intent
         return await this.commitBoundRemove(input.operationId, operation, intent, replayed)
@@ -2080,7 +2106,9 @@ export class GitWorktreeCore {
       if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
       if (target.branch !== input.expected.branch) fail('expected-mismatch', 'worktree branch changed')
       if (target.head !== input.expected.head) fail('expected-mismatch', 'worktree HEAD changed')
-      if (await this.isDirty(target.path)) fail('worktree-dirty', 'dirty worktrees cannot be removed')
+      if (await this.isDirty(target.path) && input.discardChanges !== true) {
+        fail('worktree-dirty', 'dirty worktrees cannot be removed')
+      }
 
       // Git-first protocol: capture the final durable membership, reject a
       // running associated agent, remove only Git state, and return enough
@@ -2107,6 +2135,7 @@ export class GitWorktreeCore {
         head: target.head,
         sessionIds,
         deleteBranch: input.deleteBranch,
+        discardChanges: input.discardChanges,
       }
       operation.intent = intent
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed)
@@ -2166,7 +2195,9 @@ export class GitWorktreeCore {
     }
     if (target === topology.worktrees[0]) fail('operation-conflict', 'bound linked worktree became the main checkout')
     if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
-    if (await this.isDirty(target.path)) fail('worktree-dirty', 'dirty worktrees cannot be removed')
+    if (await this.isDirty(target.path) && intent.discardChanges !== true) {
+      fail('worktree-dirty', 'dirty worktrees cannot be removed')
+    }
 
     if (input.workspaceId === undefined) {
       // UNREGISTERED replay: no workspace — skip the registry/workspace
@@ -2224,11 +2255,17 @@ export class GitWorktreeCore {
       || finalTarget.head !== intent.head) {
       fail('operation-conflict', 'removal target changed immediately before mutation')
     }
-    if (await this.isDirty(finalTarget.path)) {
+    if (await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
       fail('worktree-dirty', 'worktree became dirty immediately before removal')
     }
     operation.attemptedRemove = true
-    await this.gitChecked(finalTopology.mainPath, ['worktree', 'remove', '--', intent.path], true)
+    // `--force` is used ONLY under explicit user authorization
+    // (input.discardChanges); it discards the working-tree files but never
+    // touches the branch, commits or HEAD (design 08 §6 amendment 2026-08).
+    const removeArgs = intent.discardChanges === true
+      ? ['worktree', 'remove', '--force', '--', intent.path]
+      : ['worktree', 'remove', '--', intent.path]
+    await this.gitChecked(finalTopology.mainPath, removeArgs, true)
     const after = await this.topology(finalTopology.mainPath)
     if (after.commonDir !== intent.commonDir
       || after.worktrees.some(worktree => worktree.path === intent.path)) {
