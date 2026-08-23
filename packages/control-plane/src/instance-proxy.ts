@@ -59,6 +59,7 @@ import {
   WS_PING_INTERVAL_MS,
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
+  convergeLocation,
   forwardHttp,
   forwardUpgrade,
   getProcessBufferedRequestBytes,
@@ -92,6 +93,7 @@ export {
   WS_PING_INTERVAL_MS,
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
+  convergeLocation,
   getProcessBufferedRequestBytes,
 }
 export type { ProxyRequest, ProxyResponse, ProxySocket }

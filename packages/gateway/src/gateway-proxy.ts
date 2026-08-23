@@ -76,6 +76,10 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     wsPingMissesBeforeTeardown: WS_PING_MISSES_BEFORE_TEARDOWN,
     maxBufferedRequestBytes: MAX_BUFFERED_REQUEST_BYTES,
     liveStreams,
+    // Root-mounted owner (design 17 §6): same-origin absolute redirects from
+    // the managed dsh are stripped to their path so a `Location:
+    // http://127.0.0.1:<port>/…` can never escape the public origin.
+    responseBasePath: '',
   }
 
   /** Resolve the single target (the local dsh loopback origin). Loud 503 when

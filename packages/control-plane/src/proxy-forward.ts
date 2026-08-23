@@ -240,7 +240,11 @@ export interface ProxyForwardDeps {
   /**
    * Browser-visible prefix for an attached instance. Same-origin upstream
    * redirects are rewritten through this prefix so a `Location: /login`
-   * cannot escape `/api/i/<id>`. The single-target gateway omits it.
+   * cannot escape `/api/i/<id>`. `''` is a valid value for the single-target
+   * gateway whose managed dsh is mounted at the root: the target origin is
+   * stripped and the path is kept verbatim (`http://127.0.0.1:<port>/login`
+   * becomes `/login` at the public origin). `undefined` (no rewriting) is the
+   * passthrough default for owners without a mounted prefix.
    */
   responseBasePath?: string
   /**
@@ -370,9 +374,11 @@ function bodySource(chunks: Buffer[]): { send: (upstream: ClientRequest) => void
   }
 }
 
-/** Rewrite only redirects back to the same trusted upstream origin. */
-function convergeLocation(value: string, target: URL, responseBasePath: string | undefined): string {
-  if (responseBasePath === undefined || responseBasePath === '') return value
+/** Rewrite only redirects back to the same trusted upstream origin. The
+ * mounted prefix is prepended when one exists; `''` (root-mounted owner like
+ * the gateway) strips the target origin and keeps the path verbatim. */
+export function convergeLocation(value: string, target: URL, responseBasePath: string | undefined): string {
+  if (responseBasePath === undefined) return value
   let resolved: URL
   try {
     resolved = new URL(value, target)

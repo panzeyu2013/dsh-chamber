@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import {
+  convergeLocation,
   createInstanceProxy,
   parseInstancePath,
   MAX_REQUEST_BODY_BYTES,
@@ -382,6 +383,23 @@ test('response header convergence preserves representation metadata and rewrites
   assert.equal(res.headers['access-control-allow-origin'], 'https://client.example')
   assert.equal(res.headers['set-cookie'], undefined)
   assert.equal(res.headers['x-custom-secret'], undefined)
+})
+
+test('convergeLocation: undefined passthrough, root mount strips origin, prefixed mount prepends', () => {
+  const target = new URL('http://127.0.0.1:17510')
+  // No mounted prefix: the raw Location rides through unchanged (owner opts out).
+  assert.equal(convergeLocation('http://127.0.0.1:17510/login?next=%2F', target, undefined), 'http://127.0.0.1:17510/login?next=%2F')
+  // Root mount (the gateway): same-origin absolute redirects are stripped to
+  // their path so the internal loopback origin never escapes the public one.
+  assert.equal(convergeLocation('http://127.0.0.1:17510/login?next=%2F', target, ''), '/login?next=%2F')
+  // Relative Location resolves against the target and is rewritten too.
+  assert.equal(convergeLocation('/login', target, ''), '/login')
+  // Prefixed mount (instance proxy): the browser-visible prefix is prepended.
+  assert.equal(convergeLocation('http://127.0.0.1:17510/login', target, '/api/i/local'), '/api/i/local/login')
+  // A different origin is never rewritten (external redirects stay absolute).
+  assert.equal(convergeLocation('https://other.example/login', target, ''), 'https://other.example/login')
+  // An unparseable Location is passed through untouched.
+  assert.equal(convergeLocation('http://[', target, ''), 'http://[')
 })
 
 test('request body over the 300MiB cap answers 413 body_too_large', async () => {
