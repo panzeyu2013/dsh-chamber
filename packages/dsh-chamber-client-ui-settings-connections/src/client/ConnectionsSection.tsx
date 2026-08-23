@@ -1,9 +1,9 @@
 /**
  * Connections settings section (design 05 §5): the local instance card —
  * /health status, the /api/connections row, graceful stop behind a confirm,
- * and the host rolling log — beside the remote host roster: registry CRUD
- * (non-secret metadata only), connect/disconnect over the tunnel IPC, and
- * on-demand systemd control plus the ring-buffer logs.
+ * and the host rolling log — beside the remote connection roster: registry
+ * CRUD (non-secret metadata only), connect/disconnect over the transport IPC,
+ * and SSH-only systemd control plus the ring-buffer logs.
  *
  * Everything rides page-level surfaces: window.dshChamber.desktopSsh (IPC,
  * 05 §7.4) and the control-plane REST client (05 §7.2). No host frames and
@@ -13,7 +13,9 @@
  * mirrors it to an owner-readable file (plaintext-file fallback, user
  * decision 2026-08) so auto-connect works after restart — the form itself
  * never logs it, and the field is never prefilled (the stored value never
- * returns to the renderer).
+ * returns to the renderer). Gateway bearer tokens follow the same write-only
+ * renderer contract and are stored in a separate owner-readable main-process
+ * mirror; they are never placed in the registry or returned by IPC.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -37,12 +39,13 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {
-  DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceInput, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection,
+  DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceInput, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection, TransportKind,
 } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
-import { saveHostWithPassword } from './save-host.ts'
+import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
+import { clearSupersededTransportSecret, saveHostWithGatewayToken, saveHostWithPassword } from './save-host.ts'
 import css from './ConnectionsSection.module.css'
 
 /** Registration-side business face for the connections section. */
@@ -69,12 +72,13 @@ export type ConnectionsSectionProps =
   & PropsLocale<'dsh-chamber.settings.connections'>
   & InjectFace<ConnectionsSectionInjected>
   & {
-    /** Per-instance diagnostics keyed by source id ('local' | 'ssh-<id>'); optional (absent outside the chamber shell). */
+    /** Per-instance diagnostics keyed by source id ('local' | '<kind>-<id>'); optional outside the chamber shell. */
     pluginDiagnostics?: Readonly<Record<string, PluginDiagnostic | undefined>>
   }
 
 /** Host-log page size (04 §3.3: default 200, cap 1000). */
 const HOST_LOG_LIMIT = 200
+const MIN_GATEWAY_TOKEN_CHARS = 32
 
 /** Local-card connection-row poll cadence: 状态由 /api/host/health-events
  * 推送（05 §3），此处只兜底行字段（label/dshPort）与流异常收敛。 */
@@ -84,13 +88,18 @@ const LOCAL_ROW_POLL_MS = 30_000
  * The add/edit form draft; every field starts as text (ports validated on
  * save). sshPort empty = ssh default (port 22 or the host's ~/.ssh/config
  * Port); remotePort is the remote dsh web profile port on 127.0.0.1.
- * `password` (design 05 §8) is NEVER sent to the registry (instances_set is
- * metadata-only) — it is forwarded to the main process over set_password,
- * held in memory there, and never prefilled on edit.
+ * `password` and `gatewayToken` are NEVER sent to the registry
+ * (instances_set is metadata-only) — each is forwarded through its dedicated
+ * write-only IPC, held by the main process, and never prefilled on edit.
  */
 interface HostDraft {
+  kind: TransportKind
   id: string
   label: string
+  /** User-facing HTTPS origin; normalized to host + remotePort on save. */
+  gatewayUrl: string
+  /** Write-only secret; never prefilled from the main process. */
+  gatewayToken: string
   host: string
   user: string
   sshPort: string
@@ -100,7 +109,10 @@ interface HostDraft {
   password: string
 }
 
-const EMPTY_DRAFT: HostDraft = { id: '', label: '', host: '', user: '', sshPort: '', remotePort: '30800', serviceName: '', remoteDshHome: '', password: '' }
+const EMPTY_DRAFT: HostDraft = {
+  kind: 'ssh', id: '', label: '', gatewayUrl: '', gatewayToken: '', host: '', user: '',
+  sshPort: '', remotePort: '30800', serviceName: '', remoteDshHome: '', password: '',
+}
 
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
 function slugifyAlias(alias: string): string {
@@ -543,8 +555,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const openEdit = useCallback((spec: SshInstanceSpec): void => {
     setEditing(spec)
     setDraft({
+      kind: spec.kind,
       id: spec.id,
       label: spec.label,
+      gatewayUrl: spec.kind === 'gateway' ? formatGatewayUrl(spec.host, spec.remotePort) : '',
+      // Stored tokens are never exposed back to the renderer.
+      gatewayToken: '',
       host: spec.host,
       user: spec.user ?? '',
       sshPort: spec.sshPort === null ? '' : String(spec.sshPort),
@@ -574,6 +590,19 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [editing])
 
+  /** Clear a stored gateway token without ever reading it into the renderer. */
+  const clearGatewayToken = useCallback(async (): Promise<void> => {
+    const bridge = ssh()
+    if (bridge === null || editing === null || editing === 'new') return
+    const result = await bridge.set_gateway_token(editing.id, null)
+    if ('error' in result) {
+      setFormError(result.error)
+    } else {
+      setDraft(prev => (prev === null ? prev : { ...prev, gatewayToken: '' }))
+      setFormError(null)
+    }
+  }, [editing])
+
   const closeForm = useCallback((): void => {
     if (saving) return
     setEditing(null)
@@ -593,9 +622,26 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     const id = value.id.trim()
     if (id === '') errors.id = t('validationIdRequired')
     else if (id === 'local') errors.id = t('validationIdReserved')
-    else if (!/^[a-zA-Z0-9_-]+$/.test(id)) errors.id = t('validationIdInvalid')
+    else if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) errors.id = t('validationIdInvalid')
     else if (editing === 'new' && instances.some(instance => instance.id === id)) errors.id = t('validationIdDuplicate')
     if (value.label.trim() === '') errors.label = t('validationLabelRequired')
+    else if (value.label.length > 128) errors.label = t('validationLabelTooLong')
+    if (value.kind === 'gateway') {
+      const parsed = parseGatewayUrl(value.gatewayUrl)
+      if (!parsed.ok) {
+        errors.gatewayUrl = parsed.error === 'required'
+          ? t('validationGatewayUrlRequired')
+          : parsed.error === 'https'
+            ? t('validationGatewayUrlHttps')
+            : t('validationGatewayUrlOrigin')
+      }
+      const needsInitialToken = editing === 'new' || (editing !== null && editing.kind !== 'gateway')
+      if (needsInitialToken && value.gatewayToken === '') errors.gatewayToken = t('validationGatewayTokenRequired')
+      else if (value.gatewayToken !== '' && value.gatewayToken.length < MIN_GATEWAY_TOKEN_CHARS) {
+        errors.gatewayToken = t('validationGatewayTokenLength')
+      }
+      return errors
+    }
     const host = value.host.trim()
     if (host === '') errors.host = t('validationHostRequired')
     else if (!/^[a-zA-Z0-9.:\[][a-zA-Z0-9._:[\]-]*$/.test(host)) errors.host = t('validationHostInvalid')
@@ -630,15 +676,25 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     setSaving(true)
     try {
       const input: SshInstanceInput = {
+        kind: draft.kind,
         id: draft.id.trim(),
         label: draft.label.trim(),
-        host: draft.host.trim(),
-        remotePort: Number(draft.remotePort),
+        host: '',
+        remotePort: 0,
       }
-      if (draft.user.trim() !== '') input.user = draft.user.trim()
-      if (draft.sshPort.trim() !== '') input.sshPort = Number(draft.sshPort)
-      if (draft.serviceName.trim() !== '') input.serviceName = draft.serviceName.trim()
-      if (draft.remoteDshHome.trim() !== '') input.remoteDshHome = draft.remoteDshHome.trim()
+      if (draft.kind === 'gateway') {
+        const parsed = parseGatewayUrl(draft.gatewayUrl)
+        if (!parsed.ok) return
+        input.host = parsed.host
+        input.remotePort = parsed.port
+      } else {
+        input.host = draft.host.trim()
+        input.remotePort = Number(draft.remotePort)
+        if (draft.user.trim() !== '') input.user = draft.user.trim()
+        if (draft.sshPort.trim() !== '') input.sshPort = Number(draft.sshPort)
+        if (draft.serviceName.trim() !== '') input.serviceName = draft.serviceName.trim()
+        if (draft.remoteDshHome.trim() !== '') input.remoteDshHome = draft.remoteDshHome.trim()
+      }
       const next = editing === 'new'
         ? [...instances, input]
         : instances.map(instance => instance.id === editing.id ? { ...input, id: instance.id } : instance)
@@ -651,7 +707,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // (e.g. unsupported platform) keeps the form open with the error so
       // the user sees why.
       const savedId = editing === 'new' ? input.id : editing.id
-      const result = await saveHostWithPassword(bridge, instances, next, savedId, draft.password)
+      const result = draft.kind === 'gateway'
+        ? await saveHostWithGatewayToken(bridge, instances, next, savedId, draft.gatewayToken)
+        : await saveHostWithPassword(bridge, instances, next, savedId, draft.password)
       setInstances(result.instances)
       if (!result.ok) {
         setFormError(result.error)
@@ -664,6 +722,16 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         }
         return
       }
+      // The metadata+new-secret transaction is now committed. If this was a
+      // kind switch, remove the old provider's credential only afterwards so
+      // a failed new-secret commit could still roll back to a usable old spec.
+      if (editing !== 'new' && editing.kind !== draft.kind) {
+        const cleared = await clearSupersededTransportSecret(bridge, savedId, editing.kind, draft.kind)
+        if ('error' in cleared) {
+          setFormError(cleared.error)
+          return
+        }
+      }
       setEditing(null)
       setDraft(null)
       setFormError(null)
@@ -672,7 +740,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     } finally {
       setSaving(false)
     }
-  }, [draft, editing, instances, t, validate])
+  }, [draft, editing, instances, validate])
 
   // 挂载：装载本地卡 / 注册表；订阅隧道状态推送（实时更新徽标）。
   // 主机日志默认折叠，首次展开时懒加载，挂载不拉取。
@@ -857,16 +925,21 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           : (
             <ul className={css.cards}>
               {instances.map(spec => {
-                const status = statuses[spec.id]
+                // Registry and status pushes are independent. Suppress a
+                // stale old-provider projection during a kind switch instead
+                // of showing the replacement connection as falsely ready.
+                const projectedStatus = statuses[spec.id]
+                const status = projectedStatus?.kind === spec.kind ? projectedStatus : undefined
                 const phase = status?.phase
                 const connected = phase === 'ready' || phase === 'degraded'
                 const specBusy = busy[spec.id] === true
                 const serviceActive = status?.serviceActive
-                const serviceConfigured = spec.serviceName !== null
+                const serviceConfigured = spec.kind === 'ssh' && spec.serviceName !== null
                 return (
                   <li key={spec.id} className={css.card}>
                     <div className={css.cardHead}>
                       <span className={css.cardName} title={spec.label}>{spec.label}</span>
+                      <span className={css.kindBadge}>{spec.kind === 'gateway' ? t('kindGateway') : t('kindSsh')}</span>
                       <span className={clsx(
                         css.badge,
                         (phase === 'error' || phase === 'degraded') && css.badgeBad,
@@ -876,10 +949,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       </span>
                     </div>
                     <div className={css.cardMeta}>
-                      <code className={css.cardHost}>
-                        {spec.user !== null && spec.user !== '' ? `${spec.user}@` : ''}{spec.host}{spec.sshPort !== null ? `:${spec.sshPort}` : ''}
-                      </code>
-                      <span className={css.mono}>{t('dshPort')}：{spec.remotePort}</span>
+                      <code className={css.cardHost}>{spec.kind === 'gateway'
+                        ? formatGatewayUrl(spec.host, spec.remotePort)
+                        : `${spec.user !== null && spec.user !== '' ? `${spec.user}@` : ''}${spec.host}${spec.sshPort !== null ? `:${spec.sshPort}` : ''}`}</code>
+                      {spec.kind === 'ssh' ? <span className={css.mono}>{t('dshPort')}：{spec.remotePort}</span> : null}
                       {status?.localPort !== null && status?.localPort !== undefined
                         ? <span className={css.mono}>{t('tunnelPort')}：{status.localPort}</span>
                         : null}
@@ -895,10 +968,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       : null}
                     {status?.logSummary !== '' ? <p className={css.hint}>{status?.logSummary}</p> : null}
                     {status?.requiresUserAction === true && (phase === 'error' || phase === 'degraded')
-                      ? <p className={css.hint}>{t('authActionHint')}</p>
+                      ? <p className={css.hint}>{t(spec.kind === 'gateway' ? 'gatewayAuthActionHint' : 'authActionHint')}</p>
                       : null}
                     {opError[spec.id] !== undefined ? <p className={css.error} role="alert">{opError[spec.id]}</p> : null}
-                    <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`ssh-${spec.id}`]} t={t} />
+                    <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]} t={t} />
                     <Button
                       variant={connected ? 'outline' : 'primary'}
                       size="sm"
@@ -922,37 +995,47 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       </Button>
                     )}
                     <div className={css.cardFoot}>
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={specBusy}
-                        data-tip={t('pluginsOpen')}
-                        aria-label={`${t('pluginsOpen')}: ${spec.label}`}
-                        onClick={() => { setPluginFor(spec) }}
-                      >
-                        <IconChecklistOutline14 />
-                      </button>
+                      {spec.kind === 'ssh'
+                        ? (
+                          <button
+                            type="button"
+                            className={css.iconButton}
+                            disabled={specBusy}
+                            data-tip={t('pluginsOpen')}
+                            aria-label={`${t('pluginsOpen')}: ${spec.label}`}
+                            onClick={() => { setPluginFor(spec) }}
+                          >
+                            <IconChecklistOutline14 />
+                          </button>
+                        )
+                        : null}
                       <span className={css.footSpacer} />
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={!serviceConfigured || specBusy}
-                        data-tip={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
-                        aria-label={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
-                        onClick={() => { void runServiceOp(spec.id, serviceActive === true ? 'stop_service' : 'start_service') }}
-                      >
-                        {serviceActive === true ? <IconStopFill16 /> : <IconPlayOutline16 />}
-                      </button>
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={!serviceConfigured || specBusy}
-                        data-tip={t('serviceCheck')}
-                        aria-label={`${t('serviceCheck')}: ${spec.label}`}
-                        onClick={() => { void runServiceOp(spec.id, 'is_active') }}
-                      >
-                        <IconRefreshOutline16 />
-                      </button>
+                      {spec.kind === 'ssh'
+                        ? (
+                          <>
+                            <button
+                              type="button"
+                              className={css.iconButton}
+                              disabled={!serviceConfigured || specBusy}
+                              data-tip={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
+                              aria-label={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
+                              onClick={() => { void runServiceOp(spec.id, serviceActive === true ? 'stop_service' : 'start_service') }}
+                            >
+                              {serviceActive === true ? <IconStopFill16 /> : <IconPlayOutline16 />}
+                            </button>
+                            <button
+                              type="button"
+                              className={css.iconButton}
+                              disabled={!serviceConfigured || specBusy}
+                              data-tip={t('serviceCheck')}
+                              aria-label={`${t('serviceCheck')}: ${spec.label}`}
+                              onClick={() => { void runServiceOp(spec.id, 'is_active') }}
+                            >
+                              <IconRefreshOutline16 />
+                            </button>
+                          </>
+                        )
+                        : null}
                       <button
                         type="button"
                         className={css.iconButton}
@@ -1036,7 +1119,22 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           ? null
           : (
             <div className={css.dialogFields}>
-              {editing === 'new'
+              <label className={css.field}>
+                <span className={css.fieldLabel}>{t('kindLabel')}</span>
+                <select
+                  className={css.input}
+                  value={draft.kind}
+                  onChange={event => {
+                    setDraft({ ...draft, kind: event.target.value as TransportKind })
+                    setFieldErrors({})
+                    setFormError(null)
+                  }}
+                >
+                  <option value="ssh">{t('kindSsh')}</option>
+                  <option value="gateway">{t('kindGateway')}</option>
+                </select>
+              </label>
+              {editing === 'new' && draft.kind === 'ssh'
                 ? (
                   <div className={css.configPicker}>
                     <div className={css.configHead}>
@@ -1087,6 +1185,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                   value={draft.id}
                   disabled={editing !== 'new'}
                   autoFocus
+                  maxLength={64}
                   spellCheck={false}
                   placeholder={t('fieldIdPlaceholder')}
                   onChange={event => { setDraft({ ...draft, id: event.target.value }) }}
@@ -1098,105 +1197,156 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.label}
+                  maxLength={128}
                   spellCheck={false}
                   placeholder={t('fieldLabelPlaceholder')}
                   onChange={event => { setDraft({ ...draft, label: event.target.value }) }}
                 />
                 {fieldErrors.label === undefined ? null : <span className={css.error} role="alert">{fieldErrors.label}</span>}
               </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldHost')}</span>
-                <input
-                  className={css.input}
-                  value={draft.host}
-                  spellCheck={false}
-                  placeholder={t('fieldHostPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, host: event.target.value }) }}
-                />
-                {fieldErrors.host === undefined ? null : <span className={css.error} role="alert">{fieldErrors.host}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldUser')}</span>
-                <input
-                  className={css.input}
-                  value={draft.user}
-                  spellCheck={false}
-                  placeholder={t('fieldUserPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, user: event.target.value }) }}
-                />
-                {fieldErrors.user === undefined ? null : <span className={css.error} role="alert">{fieldErrors.user}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabelRow}>
-                  <span className={css.fieldLabel}>{t('fieldPassword')}</span>
-                  {editing !== 'new'
-                    ? (
-                      <button
-                        type="button"
-                        className={css.clearPassword}
-                        onClick={() => { void clearPassword() }}
-                      >
-                        {t('passwordClear')}
-                      </button>
-                    )
-                    : null}
-                </span>
-                <input
-                  className={css.input}
-                  type="password"
-                  value={draft.password}
-                  autoComplete="new-password"
-                  spellCheck={false}
-                  placeholder={t('fieldPasswordPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, password: event.target.value }) }}
-                />
-                <span className={css.dim}>{t('passwordHint')}</span>
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldSshPort')}</span>
-                <input
-                  className={css.input}
-                  value={draft.sshPort}
-                  inputMode="numeric"
-                  spellCheck={false}
-                  placeholder={t('fieldSshPortPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, sshPort: event.target.value }) }}
-                />
-                {fieldErrors.sshPort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.sshPort}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldRemotePort')}</span>
-                <input
-                  className={css.input}
-                  value={draft.remotePort}
-                  inputMode="numeric"
-                  spellCheck={false}
-                  placeholder={t('fieldRemotePortPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, remotePort: event.target.value }) }}
-                />
-                {fieldErrors.remotePort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remotePort}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldServiceName')}</span>
-                <input
-                  className={css.input}
-                  value={draft.serviceName}
-                  spellCheck={false}
-                  placeholder={t('fieldServiceNamePlaceholder')}
-                  onChange={event => { setDraft({ ...draft, serviceName: event.target.value }) }}
-                />
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldRemoteDshHome')}</span>
-                <input
-                  className={css.input}
-                  value={draft.remoteDshHome}
-                  spellCheck={false}
-                  placeholder={t('fieldRemoteDshHomePlaceholder')}
-                  onChange={event => { setDraft({ ...draft, remoteDshHome: event.target.value }) }}
-                />
-                {fieldErrors.remoteDshHome === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remoteDshHome}</span>}
-              </label>
+              {draft.kind === 'gateway'
+                ? (
+                  <>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldGatewayUrl')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.gatewayUrl}
+                        inputMode="url"
+                        autoComplete="url"
+                        spellCheck={false}
+                        placeholder={t('fieldGatewayUrlPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, gatewayUrl: event.target.value }) }}
+                      />
+                      {fieldErrors.gatewayUrl === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayUrl}</span>}
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabelRow}>
+                        <span className={css.fieldLabel}>{t('fieldGatewayToken')}</span>
+                        {editing !== null && editing !== 'new' && editing.kind === 'gateway'
+                          ? (
+                            <button
+                              type="button"
+                              className={css.clearPassword}
+                              onClick={() => { void clearGatewayToken() }}
+                            >
+                              {t('gatewayTokenClear')}
+                            </button>
+                          )
+                          : null}
+                      </span>
+                      <input
+                        className={css.input}
+                        type="password"
+                        value={draft.gatewayToken}
+                        maxLength={4096}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        placeholder={t('fieldGatewayTokenPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, gatewayToken: event.target.value }) }}
+                      />
+                      {fieldErrors.gatewayToken === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayToken}</span>}
+                      <span className={css.dim}>{t('gatewayTokenHint')}</span>
+                    </label>
+                  </>
+                )
+                : (
+                  <>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldHost')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.host}
+                        spellCheck={false}
+                        placeholder={t('fieldHostPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, host: event.target.value }) }}
+                      />
+                      {fieldErrors.host === undefined ? null : <span className={css.error} role="alert">{fieldErrors.host}</span>}
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldUser')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.user}
+                        spellCheck={false}
+                        placeholder={t('fieldUserPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, user: event.target.value }) }}
+                      />
+                      {fieldErrors.user === undefined ? null : <span className={css.error} role="alert">{fieldErrors.user}</span>}
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabelRow}>
+                        <span className={css.fieldLabel}>{t('fieldPassword')}</span>
+                        {editing !== null && editing !== 'new' && editing.kind === 'ssh'
+                          ? (
+                            <button
+                              type="button"
+                              className={css.clearPassword}
+                              onClick={() => { void clearPassword() }}
+                            >
+                              {t('passwordClear')}
+                            </button>
+                          )
+                          : null}
+                      </span>
+                      <input
+                        className={css.input}
+                        type="password"
+                        value={draft.password}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        placeholder={t('fieldPasswordPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, password: event.target.value }) }}
+                      />
+                      <span className={css.dim}>{t('passwordHint')}</span>
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldSshPort')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.sshPort}
+                        inputMode="numeric"
+                        spellCheck={false}
+                        placeholder={t('fieldSshPortPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, sshPort: event.target.value }) }}
+                      />
+                      {fieldErrors.sshPort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.sshPort}</span>}
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldRemotePort')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.remotePort}
+                        inputMode="numeric"
+                        spellCheck={false}
+                        placeholder={t('fieldRemotePortPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, remotePort: event.target.value }) }}
+                      />
+                      {fieldErrors.remotePort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remotePort}</span>}
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldServiceName')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.serviceName}
+                        spellCheck={false}
+                        placeholder={t('fieldServiceNamePlaceholder')}
+                        onChange={event => { setDraft({ ...draft, serviceName: event.target.value }) }}
+                      />
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldRemoteDshHome')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.remoteDshHome}
+                        spellCheck={false}
+                        placeholder={t('fieldRemoteDshHomePlaceholder')}
+                        onChange={event => { setDraft({ ...draft, remoteDshHome: event.target.value }) }}
+                      />
+                      {fieldErrors.remoteDshHome === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remoteDshHome}</span>}
+                    </label>
+                  </>
+                )}
               {formError === null ? null : <p className={css.error} role="alert">{formError}</p>}
             </div>
           )}

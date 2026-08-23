@@ -156,6 +156,18 @@
   text-overflow: ellipsis;
 }
 
+.kindBadge {
+  flex: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
 .cardMeta {
   display: flex;
   align-items: baseline;
