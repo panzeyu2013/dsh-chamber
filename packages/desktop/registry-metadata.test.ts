@@ -101,6 +101,31 @@ test('fetchRegistryMetadata: selected origin cannot delegate tarballs to another
   }
 });
 
+test('fetchRegistryMetadata: junk/non-semver version keys are excluded at parse time', async () => {
+  const registry = await startRegistryServer((_url, origin) => ({
+    status: 200,
+    body: {
+      'dist-tags': { latest: '0.2.0' },
+      versions: {
+        ...fixture(origin).versions,
+        '1.0': { dist: { tarball: `${origin}/@deepseek-ai/dsh/-/dsh-1.0.tgz`, integrity: SRI_A } },
+        'not-a-version': { dist: { tarball: `${origin}/@deepseek-ai/dsh/-/dsh-x.tgz`, integrity: SRI_A } },
+        '0.2.0/../evil': { dist: { tarball: `${origin}/@deepseek-ai/dsh/-/dsh-evil.tgz`, integrity: SRI_A } },
+      },
+    },
+  }));
+  try {
+    const metadata = await fetchRegistryMetadata('@deepseek-ai/dsh', { origin: registry.origin });
+    assert.deepEqual(metadata.versions, ['0.2.0', '0.1.1-rc.2'], 'junk version keys never enter versions/byVersion');
+    assert.equal(metadata.byVersion.get('1.0'), undefined);
+    assert.equal(metadata.byVersion.get('not-a-version'), undefined);
+    assert.equal(metadata.byVersion.get('0.2.0/../evil'), undefined);
+    assert.equal(metadata.latest, '0.2.0');
+  } finally {
+    await registry.close();
+  }
+});
+
 test('fetchRegistryMetadata: dist-tags.latest missing → max semver fallback', async () => {
   // No dist-tags at all in the packument.
   const registry = await startRegistryServer((_url, origin) => ({ status: 200, body: { versions: fixture(origin).versions } }));

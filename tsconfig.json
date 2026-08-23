@@ -42,6 +42,7 @@
     "packages/desktop/registry-url.ts",
     "packages/desktop/registry-url.test.ts",
     "packages/desktop/registry-integrity.ts",
+    "packages/desktop/registry-integrity.test.ts",
     "packages/desktop/registry-metadata.ts",
     "packages/desktop/registry-metadata.test.ts",
     "packages/desktop/version-safety.ts",
