@@ -1,13 +1,19 @@
 /**
- * Gateway configuration (design 16 §3.1): the parsed config of the
+ * Gateway configuration (design 17 §3.1): the parsed config of the
  * server-side access shape — bind host/port, state/dsh roots, auth kind,
  * channels/ui flags, CORS origins, optional TLS. `parseGatewayConfig` enforces
  * the S1 exposure guard at config time: a non-loopback bind without auth is a
  * configuration error (the CLI surfaces it as exit 2).
  */
 
+import { isIP } from 'node:net'
+
 export type GatewayBindHost = '127.0.0.1' | '0.0.0.0'
-export type GatewayAuthKind = 'none' | 'password' | 'token'
+export type GatewayAuthKind = 'none' | 'password' | 'token' | 'password+token'
+export const MIN_GATEWAY_PASSWORD_CHARS = 12
+export const MAX_GATEWAY_PASSWORD_CHARS = 1024
+export const MIN_GATEWAY_TOKEN_CHARS = 32
+export const MAX_GATEWAY_TOKEN_CHARS = 4096
 
 export interface GatewayConfig {
   plane: {
@@ -18,14 +24,16 @@ export interface GatewayConfig {
   }
   auth: {
     kind: GatewayAuthKind
-    /** scrypt-verified (MVP 占位, design 16 §5); present only when kind==='password'. */
+    /** scrypt-verified browser credential (design 17 §5). */
     password?: string
-    /** shared bearer token (design 16 §6.4 D7); present only when kind==='token'. */
+    /** shared bearer token (design 17 §6.4 D7). May coexist with password. */
     token?: string
   }
   channels: { direct: boolean; ssh: boolean }
-  ui: { pwa: boolean; shellNav: boolean }
   corsOrigins: string[]
+  /** Exact proxy peer IPs whose Forwarded/X-Forwarded facts may be trusted.
+   * Empty by default: a direct client can never self-assert its address/TLS. */
+  trustedProxies: string[]
   /** The operator's expected public authority (S11), e.g. `https://gateway.example.com`.
    * When set, requests with an unrecognized Host are rejected (421). */
   publicOrigin?: string
@@ -42,10 +50,10 @@ export interface GatewayConfigInput {
   uiPassword?: string
   apiToken?: string
   corsOrigins?: string[]
-  noPwa?: boolean
   tlsCert?: string
   tlsKey?: string
   publicOrigin?: string
+  trustedProxies?: string[]
 }
 
 /** Configuration error (surfaced as exit 2 by the CLI). */
@@ -62,6 +70,47 @@ function firstEnv(...names: string[]): string | undefined {
     if (value !== undefined && value !== '') return value
   }
   return undefined
+}
+
+function canonicalOrigin(value: string, label: string): string {
+  try {
+    const parsed = new URL(value)
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || value !== parsed.origin) {
+      throw new Error('not a canonical HTTP origin')
+    }
+    return parsed.origin
+  } catch {
+    throw new GatewayConfigError(`${label} must be a canonical http(s) origin (scheme + authority only), got ${JSON.stringify(value)}`)
+  }
+}
+
+function canonicalCorsOrigin(value: string): string {
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return canonicalOrigin(value, '--cors-origin')
+    // Packaged clients use opaque custom schemes (design 17 §5.2). URL.origin
+    // is the literal "null" for these, so validate the exact scheme+authority
+    // string instead of normalizing through `.origin`.
+    if ((parsed.protocol === 'capacitor:' || parsed.protocol === 'openchamber-ui:')
+      && parsed.username === '' && parsed.password === ''
+      && (parsed.pathname === '' || parsed.pathname === '/')
+      && parsed.search === '' && parsed.hash === ''
+      && value === `${parsed.protocol}//${parsed.host}`) return value
+  } catch { /* mapped to the stable config error below */ }
+  throw new GatewayConfigError(`--cors-origin must be a canonical http(s) or supported packaged-app origin, got ${JSON.stringify(value)}`)
+}
+
+function trustedProxyList(input: string[] | undefined): string[] {
+  const fromEnv = firstEnv('DSH_GATEWAY_TRUSTED_PROXIES')
+  const values = input ?? (fromEnv === undefined ? [] : fromEnv.split(',').map(value => value.trim()).filter(Boolean))
+  const unique = new Set<string>()
+  for (const value of values) {
+    if (isIP(value) === 0) {
+      throw new GatewayConfigError(`trusted proxy must be an exact IP address, got ${JSON.stringify(value)}`)
+    }
+    unique.add(value)
+  }
+  return [...unique]
 }
 
 /**
@@ -85,22 +134,36 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   // satisfied password/token kind that would silently fail-closed.
   if (password === '') throw new GatewayConfigError('--ui-password must not be empty')
   if (token === '') throw new GatewayConfigError('--api-token must not be empty')
-  const kind: GatewayAuthKind = password !== undefined ? 'password' : token !== undefined ? 'token' : 'none'
-  // S1 (design 16 §11): a network-exposed bind without auth refuses to start.
-  if (host !== '127.0.0.1' && kind === 'none') {
-    throw new GatewayConfigError('refusing to bind 0.0.0.0 without authentication: pass --ui-password or --api-token')
+  if (password !== undefined && (password.length < MIN_GATEWAY_PASSWORD_CHARS || password.length > MAX_GATEWAY_PASSWORD_CHARS)) {
+    throw new GatewayConfigError(`--ui-password must be ${MIN_GATEWAY_PASSWORD_CHARS}-${MAX_GATEWAY_PASSWORD_CHARS} characters`)
   }
+  if (token !== undefined && (token.length < MIN_GATEWAY_TOKEN_CHARS || token.length > MAX_GATEWAY_TOKEN_CHARS
+    || !/^[\x20-\x7e]+$/.test(token))) {
+    throw new GatewayConfigError(`--api-token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters; generate it with a CSPRNG`)
+  }
+  const kind: GatewayAuthKind = password !== undefined && token !== undefined
+    ? 'password+token'
+    : password !== undefined ? 'password' : token !== undefined ? 'token' : 'none'
   const tlsCert = input.tlsCert ?? firstEnv('DSH_GATEWAY_TLS_CERT')
   const tlsKey = input.tlsKey ?? firstEnv('DSH_GATEWAY_TLS_KEY')
   if ((tlsCert === undefined) !== (tlsKey === undefined)) {
     throw new GatewayConfigError('--tls-cert and --tls-key must be provided together')
   }
   // HTTPS server is not implemented: refuse rather than silently serving
-  // plaintext while the operator believes TLS is on (design 16 §6.6 pending).
+  // plaintext while the operator believes TLS is on (design 17 §6.6 pending).
   if (tlsCert !== undefined && tlsKey !== undefined) {
     throw new GatewayConfigError('--tls-cert/--tls-key are not implemented yet (HTTPS server is pending); use a reverse proxy for TLS termination')
   }
-  const publicOrigin = input.publicOrigin ?? firstEnv('DSH_GATEWAY_PUBLIC_ORIGIN')
+  const publicOriginInput = input.publicOrigin ?? firstEnv('DSH_GATEWAY_PUBLIC_ORIGIN')
+  const publicOrigin = publicOriginInput === undefined ? undefined : canonicalOrigin(publicOriginInput, '--public-origin')
+  const corsOrigins = [...new Set((input.corsOrigins ?? []).map(canonicalCorsOrigin))]
+  const trustedProxies = trustedProxyList(input.trustedProxies)
+  // S1 (design 17 §11): exposure is a semantic deployment fact, not just the
+  // socket bind. A loopback listener behind an explicitly configured public
+  // origin or trusted reverse proxy is still public and therefore needs auth.
+  if ((host !== '127.0.0.1' || publicOrigin !== undefined || trustedProxies.length > 0) && kind === 'none') {
+    throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication: pass --ui-password or --api-token')
+  }
   return {
     plane: { port: portRaw, host, stateDir, dshWorkspacePath },
     auth: {
@@ -109,8 +172,8 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
       ...(token !== undefined ? { token } : {}),
     },
     channels: { direct: host === '0.0.0.0', ssh: false },
-    ui: { pwa: !(input.noPwa ?? false), shellNav: false },
-    corsOrigins: input.corsOrigins ?? [],
+    corsOrigins,
+    trustedProxies,
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(tlsCert !== undefined && tlsKey !== undefined ? { tls: { cert: tlsCert, key: tlsKey } } : {}),
   }

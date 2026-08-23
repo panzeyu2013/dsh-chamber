@@ -1,5 +1,5 @@
 /**
- * Gateway single-target proxy unit tests (design 16 §6): the SSRF guard
+ * Gateway single-target proxy unit tests (design 17 §6): the SSRF guard
  * (non-origin-form targets rejected), the loud 503 (dsh not ready), and the WS
  * path whitelist. Run with `node packages/gateway/test/gateway-proxy.test.ts`.
  */
@@ -60,6 +60,17 @@ test('SSRF: a protocol-relative request target is rejected with 400', async () =
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('//evil.com/x'), res)
   assert.equal(res.status, 400)
+})
+
+test('SSRF: a backslash authority request target is rejected for HTTP and WebSocket', async () => {
+  const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => 17510, getLocalState: () => 'ready' })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/\\evil.example/api/session.list'), res)
+  assert.equal(res.status, 400)
+
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/\\evil.example/api/events.mux'), socket, Buffer.alloc(0))
+  assert.match(socket.written, /400/)
 })
 
 test('an origin-form request target is accepted (no 400 before forwarding)', async () => {

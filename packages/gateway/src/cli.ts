@@ -1,39 +1,40 @@
 #!/usr/bin/env node
 /**
- * dsh-chamber gateway CLI (design 16 §3.1 / §6.6): the server-side access
+ * dsh-chamber gateway CLI (design 17 §3.1 / §6.6): the server-side access
  * shape's entry point. Mirrors the control-plane standalone.ts arg-parsing
  * style (strict flags, `--key value` / `--key=value`, exit 2 on config error).
  *
  * Usage:
- *   dsh-chamber-gateway serve [--host 0.0.0.0] [--port 3000]
+ *   gateway serve [--host 0.0.0.0] [--port 3000]
  *       [--state-dir DIR] [--dsh-path PATH]
  *       [--ui-password PWD] [--api-token TOK] [--cors-origin ORIGIN ...]
- *       [--public-origin URL] [--no-pwa] [--tls-cert C --tls-key K]
+ *       [--public-origin URL] [--trusted-proxy IP ...]
  */
 
-import { statSync } from 'node:fs'
 import { DEFAULT_STATE_DIR, defaultDshWorkspacePath, type Logger } from '@dsh-chamber/control-plane'
 import { GatewayConfigError, parseGatewayConfig } from './config.ts'
+import { findDshWorkspace, isDshWorkspace } from './dsh-path.ts'
 import { createGateway } from './index.ts'
 
-const HELP = `dsh-chamber-gateway — server-side access gateway (design 16)
+const HELP = `gateway — dsh-chamber server-side access gateway (design 17)
 
 Usage:
-  dsh-chamber-gateway serve [options]
+  gateway serve [options]
 
 Options:
   --host ADDR         listen address ('127.0.0.1' | '0.0.0.0', default 127.0.0.1)
   --port N            HTTP port (default 3000)
   --state-dir DIR     state root (default $DSH_GATEWAY_STATE or ~/.dsh-chamber)
   --dsh-path PATH     dsh workspace path (default $DSH_GATEWAY_DSH_PATH or repo default)
-  --ui-password PWD   browser password auth (S1: required with 0.0.0.0)
-  --api-token TOK     shared bearer token for desktop connections
+  --ui-password PWD   browser password auth (12-1024 characters)
+  --api-token TOK     shared bearer token (32-4096 visible ASCII; use a CSPRNG)
   --public-origin URL expected public authority (S11: reject unknown Host with 421)
+  --trusted-proxy IP exact reverse-proxy peer allowed to supply X-Forwarded-* (repeatable)
   --cors-origin O     extra allowed origin (repeatable)
-  --no-pwa            disable PWA injection (forward-looking flag)
-  --tls-cert C        TLS cert (must be paired with --tls-key)
-  --tls-key K         TLS key (must be paired with --tls-cert)
   -h, --help          show this help
+
+TLS terminates at a reverse proxy. Configure --public-origin and one or more
+exact --trusted-proxy peers; this process intentionally serves HTTP only.
 
 Exit codes: 0 clean shutdown/help, 1 startup failure, 2 configuration error,
 130 SIGINT.
@@ -47,23 +48,20 @@ interface ParsedArgs {
   uiPassword?: string
   apiToken?: string
   publicOrigin?: string
+  trustedProxies: string[]
   corsOrigins: string[]
-  noPwa: boolean
-  tlsCert?: string
-  tlsKey?: string
   help: boolean
 }
 
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { corsOrigins: [], noPwa: false, help: false }
+  const args: ParsedArgs = { corsOrigins: [], trustedProxies: [], help: false }
   let positional = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === 'serve' && !positional) { positional = true; continue }
     if (arg === '-h' || arg === '--help') { args.help = true; continue }
-    if (arg === '--no-pwa') { args.noPwa = true; continue }
     let name = arg
     let inlineValue: string | undefined
     const eq = arg.indexOf('=')
@@ -87,9 +85,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--ui-password': args.uiPassword = takeValue(); break
       case '--api-token': args.apiToken = takeValue(); break
       case '--public-origin': args.publicOrigin = takeValue(); break
+      case '--trusted-proxy': args.trustedProxies.push(takeValue()); break
       case '--cors-origin': args.corsOrigins.push(takeValue()); break
-      case '--tls-cert': args.tlsCert = takeValue(); break
-      case '--tls-key': args.tlsKey = takeValue(); break
       default: throw new UsageError(`unknown option: ${arg}`)
     }
   }
@@ -121,16 +118,17 @@ async function main(): Promise<number | null> {
     console.log(HELP)
     return 0
   }
-  if (args.dshPath !== undefined) {
-    try {
-      if (!statSync(args.dshPath).isDirectory()) throw new Error('not a directory')
-    } catch {
-      logger.error(`--dsh-path is not a directory: ${args.dshPath}`)
-      return 2
-    }
+  const configuredDshPath = args.dshPath ?? process.env.DSH_GATEWAY_DSH_PATH
+  if (configuredDshPath !== undefined && !isDshWorkspace(configuredDshPath)) {
+    logger.error(`dsh workspace has no supported CLI entry: ${configuredDshPath}`)
+    return 2
   }
   const stateDir = args.stateDir ?? process.env.DSH_GATEWAY_STATE ?? DEFAULT_STATE_DIR
-  const dshWorkspacePath = args.dshPath ?? process.env.DSH_GATEWAY_DSH_PATH ?? defaultDshWorkspacePath()
+  const dshWorkspacePath = configuredDshPath ?? findDshWorkspace(defaultDshWorkspacePath())
+  if (dshWorkspacePath === null) {
+    logger.error('cannot locate dsh: install @deepseek-ai/dsh globally or pass --dsh-path/DSH_GATEWAY_DSH_PATH')
+    return 2
+  }
   let config
   try {
     config = parseGatewayConfig({
@@ -139,10 +137,8 @@ async function main(): Promise<number | null> {
       uiPassword: args.uiPassword,
       apiToken: args.apiToken,
       publicOrigin: args.publicOrigin,
+      trustedProxies: args.trustedProxies.length === 0 ? undefined : args.trustedProxies,
       corsOrigins: args.corsOrigins,
-      noPwa: args.noPwa,
-      tlsCert: args.tlsCert,
-      tlsKey: args.tlsKey,
     }, stateDir, dshWorkspacePath)
   } catch (error) {
     if (error instanceof GatewayConfigError) {
@@ -171,7 +167,7 @@ async function main(): Promise<number | null> {
   process.on('SIGTERM', () => void shutdown('SIGTERM', 0))
   try {
     await gateway.start()
-    logger.log(`boot: gateway listening (reaper ran, local dsh spawns on demand)`)
+    logger.log('boot: gateway listening; local dsh is ready')
     return null // keep running
   } catch (error) {
     logger.error(`failed to start: ${String(error)}`)

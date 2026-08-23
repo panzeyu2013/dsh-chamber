@@ -1,5 +1,5 @@
 /**
- * Gateway authentication (design 16 §5): the pluggable AuthProvider seam.
+ * Gateway authentication (design 17 §5): the pluggable AuthProvider seam.
  *
  *   - `none`    — loopback-only trust (S1 forbids it on a non-loopback bind).
  *   - `token`   — the D7 shared bearer token; only its SHA-256 hash is
@@ -13,9 +13,15 @@
  * only the principal kind, never header values.
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, scrypt, timingSafeEqual } from 'node:crypto'
 import type { GatewayStore } from './store.ts'
-import { hashCredential, verifyCredential } from './store.ts'
+import { hashCredential } from './store.ts'
+import {
+  MAX_GATEWAY_PASSWORD_CHARS,
+  MAX_GATEWAY_TOKEN_CHARS,
+  MIN_GATEWAY_PASSWORD_CHARS,
+  MIN_GATEWAY_TOKEN_CHARS,
+} from './config.ts'
 
 export interface AuthPrincipal {
   kind: 'password' | 'token' | 'passkey' | 'none'
@@ -27,6 +33,11 @@ export interface AuthPrincipal {
 export interface AuthRequest {
   headers: Record<string, string | string[] | undefined>
   socketAddr: string
+  /** Boundary-evaluated client IP. Forwarded headers are interpreted only by
+   * the gateway request policy, never by the auth provider itself. */
+  clientAddress?: string
+  /** True only for a TLS socket or a trusted proxy's validated https hop. */
+  secure?: boolean
 }
 
 export interface AuthProvider {
@@ -41,7 +52,7 @@ export interface AuthProvider {
 }
 
 export interface AuthConfig {
-  kind: 'none' | 'password' | 'token'
+  kind: 'none' | 'password' | 'token' | 'password+token'
   password?: string
   token?: string
 }
@@ -108,34 +119,106 @@ function parseCookie(header: string | undefined): Record<string, string> {
 const SESSION_COOKIE = 'dsh_gateway_session'
 const SESSION_TTL_SECONDS = 12 * 3600 // 12h
 
-/** Login rate limiter (S8): 10 attempts / 5min → 15min lock, keyed on the
- * x-forwarded-for first hop (trusted reverse proxy) falling back to the
- * socketAddr; a missing IP uses a shared low-quota no-IP bucket. */
-function createLoginRateLimiter(): (key: string) => { allowed: boolean; retryAfterMs: number } {
+interface LoginRateLimiter {
+  consume(key: string): { allowed: boolean; retryAfterMs: number }
+  reset(key: string): void
+}
+
+/** Login rate limiter (S8): bounded cardinality as well as per-client quota.
+ * Once the table is full, new addresses share a low-quota overflow bucket
+ * instead of allocating attacker-controlled keys forever. */
+function createLoginRateLimiter(): LoginRateLimiter {
   const buckets = new Map<string, { count: number; firstAt: number; lockedUntil: number }>()
   const WINDOW_MS = 5 * 60_000
   const LOCK_MS = 15 * 60_000
   const MAX_ATTEMPTS = 10
+  const MAX_BUCKETS = 4096
   const NO_IP_KEY = '<no-ip>'
-  return (rawKey: string) => {
-    const key = rawKey === '' ? NO_IP_KEY : rawKey
-    const now = Date.now()
-    const b = buckets.get(key) ?? { count: 0, firstAt: now, lockedUntil: 0 }
-    if (b.lockedUntil > now) {
-      return { allowed: false, retryAfterMs: b.lockedUntil - now }
-    }
-    if (now - b.firstAt > WINDOW_MS) {
-      b.count = 0
-      b.firstAt = now
-    }
-    if (b.count >= MAX_ATTEMPTS) {
-      b.lockedUntil = now + LOCK_MS
-      return { allowed: false, retryAfterMs: LOCK_MS }
-    }
-    b.count += 1
-    buckets.set(key, b)
-    return { allowed: true, retryAfterMs: 0 }
+  const OVERFLOW_KEY = '<overflow>'
+  let calls = 0
+  function normalizeKey(rawKey: string): string {
+    const candidate = rawKey === '' ? NO_IP_KEY : rawKey.slice(0, 128)
+    return buckets.has(candidate) || buckets.size < MAX_BUCKETS ? candidate : OVERFLOW_KEY
   }
+  function prune(now: number): void {
+    for (const [key, bucket] of buckets) {
+      if (key === OVERFLOW_KEY) continue
+      if (bucket.lockedUntil <= now && now - bucket.firstAt > WINDOW_MS) buckets.delete(key)
+    }
+  }
+  return {
+    consume(rawKey: string) {
+      const now = Date.now()
+      calls += 1
+      if (calls % 64 === 0) prune(now)
+      const key = normalizeKey(rawKey)
+      const b = buckets.get(key) ?? { count: 0, firstAt: now, lockedUntil: 0 }
+      if (b.lockedUntil > now) {
+        return { allowed: false, retryAfterMs: b.lockedUntil - now }
+      }
+      if (now - b.firstAt > WINDOW_MS) {
+        b.count = 0
+        b.firstAt = now
+      }
+      if (b.count >= MAX_ATTEMPTS) {
+        b.lockedUntil = now + LOCK_MS
+        return { allowed: false, retryAfterMs: LOCK_MS }
+      }
+      b.count += 1
+      buckets.set(key, b)
+      return { allowed: true, retryAfterMs: 0 }
+    },
+    reset(rawKey: string) {
+      buckets.delete(normalizeKey(rawKey))
+    },
+  }
+}
+
+/** Small process-local semaphore around asynchronous scrypt. It keeps the
+ * event loop responsive and bounds queued memory under distributed guessing. */
+function createPasswordWorkGate(maxActive = 2, maxQueued = 32) {
+  let active = 0
+  const waiters: Array<() => void> = []
+  async function acquire(): Promise<void> {
+    if (active < maxActive) {
+      active += 1
+      return
+    }
+    if (waiters.length >= maxQueued) {
+      const error = new Error('password verifier is busy') as Error & { code?: string }
+      error.code = 'auth_busy'
+      throw error
+    }
+    await new Promise<void>(resolve => waiters.push(resolve))
+  }
+  function release(): void {
+    const next = waiters.shift()
+    if (next !== undefined) next()
+    else active = Math.max(0, active - 1)
+  }
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    await acquire()
+    try { return await task() } finally { release() }
+  }
+}
+
+function verifyCredentialAsync(plain: string, stored: string | null): Promise<boolean> {
+  if (stored === null) return Promise.resolve(false)
+  const parts = stored.split('$')
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return Promise.resolve(false)
+  const [, salt, expectedHex] = parts
+  if (!/^[a-f0-9]{64}$/i.test(expectedHex)) return Promise.resolve(false)
+  const expected = Buffer.from(expectedHex, 'hex')
+  return new Promise((resolve, reject) => {
+    scrypt(plain, salt, expected.length, (error, derived) => {
+      if (error !== null) {
+        reject(error)
+        return
+      }
+      const actual = Buffer.from(derived)
+      resolve(actual.length === expected.length && timingSafeEqual(actual, expected))
+    })
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -178,13 +261,10 @@ function createTokenProvider(store: GatewayStore, plainToken: string): AuthProvi
 function createPasswordProvider(store: GatewayStore, plainPassword: string): AuthProvider {
   const passwordHash = plainPassword !== '' ? hashCredential(plainPassword) : null
   const rateLimit = createLoginRateLimiter()
+  const verifyBounded = createPasswordWorkGate()
 
   function rateKey(req: AuthRequest): string {
-    // Behind a reverse proxy every peer is loopback, so prefer the trusted
-    // x-forwarded-for first hop; fall back to the socketAddr.
-    const xff = headerValue(req.headers, 'x-forwarded-for')
-    if (xff !== undefined && xff !== '') return xff.split(',')[0].trim()
-    return req.socketAddr
+    return req.clientAddress ?? req.socketAddr
   }
 
   return {
@@ -202,19 +282,24 @@ function createPasswordProvider(store: GatewayStore, plainPassword: string): Aut
       return { kind: 'password', id: sub, issuedAt: iat }
     },
     async login(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }> {
-      const check = rateLimit(rateKey(req))
+      const key = rateKey(req)
+      const check = rateLimit.consume(key)
       if (!check.allowed) {
         const err = new Error(`too many login attempts; retry in ${Math.ceil(check.retryAfterMs / 1000)}s`) as Error & { code?: string }
         err.code = 'rate_limited'
         throw err
       }
       const password = (body as { password?: unknown } | null | undefined)?.password
-      if (passwordHash === null || typeof password !== 'string' || !verifyCredential(password, passwordHash)) {
+      if (passwordHash === null || typeof password !== 'string'
+        || !(await verifyBounded(() => verifyCredentialAsync(password, passwordHash)))) {
         throw new Error('invalid password')
       }
+      rateLimit.reset(key)
       const now = Math.floor(Date.now() / 1000)
       const jwt = signJwt({ sub: 'user', iat: now, exp: now + SESSION_TTL_SECONDS }, store.getJwtSecret())
-      return { setCookie: `${SESSION_COOKIE}=${jwt}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_SECONDS}` }
+      return {
+        setCookie: `${SESSION_COOKIE}=${jwt}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_SECONDS}${req.secure === true ? '; Secure' : ''}`,
+      }
     },
     async revoke(): Promise<void> {
       store.rotateJwtSecret()
@@ -223,7 +308,32 @@ function createPasswordProvider(store: GatewayStore, plainPassword: string): Aut
 }
 
 export function createAuth(config: AuthConfig, store: GatewayStore): AuthProvider {
-  if (config.kind === 'none') return createNoneProvider()
-  if (config.kind === 'token') return createTokenProvider(store, config.token ?? '')
-  return createPasswordProvider(store, config.password ?? '')
+  const hasPassword = config.password !== undefined && config.password !== ''
+  const hasToken = config.token !== undefined && config.token !== ''
+  if (hasPassword && (config.password!.length < MIN_GATEWAY_PASSWORD_CHARS || config.password!.length > MAX_GATEWAY_PASSWORD_CHARS)) {
+    throw new TypeError(`gateway password must be ${MIN_GATEWAY_PASSWORD_CHARS}-${MAX_GATEWAY_PASSWORD_CHARS} characters`)
+  }
+  if (hasToken && (config.token!.length < MIN_GATEWAY_TOKEN_CHARS || config.token!.length > MAX_GATEWAY_TOKEN_CHARS
+    || !/^[\x20-\x7e]+$/.test(config.token!))) {
+    throw new TypeError(`gateway token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
+  }
+  store.syncPasswordCredential(hasPassword ? config.password! : null)
+  if (!hasPassword && !hasToken) return createNoneProvider()
+  const password = hasPassword ? createPasswordProvider(store, config.password!) : null
+  const token = hasToken ? createTokenProvider(store, config.token!) : null
+  if (password === null) return token!
+  if (token === null) return password
+  return {
+    kind: 'password+token',
+    async verify(req): Promise<AuthPrincipal | null> {
+      // Authorization is explicit machine intent; check it before the ambient
+      // browser cookie so a valid bearer retains its token principal.
+      return await token.verify(req) ?? await password.verify(req)
+    },
+    login: (body, req) => password.login!(body, req),
+    async revoke(principal): Promise<void> {
+      if (principal.kind === 'password') await password.revoke?.(principal)
+      else await token.revoke?.(principal)
+    },
+  }
 }

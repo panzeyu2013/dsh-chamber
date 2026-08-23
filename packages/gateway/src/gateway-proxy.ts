@@ -1,9 +1,9 @@
 /**
- * The gateway single-target reverse proxy (design 16 §6): the browser/desktop
+ * The gateway single-target reverse proxy (design 17 §6): the browser/desktop
  * entry point for ONE local dsh — forwards `/`, `/plugins/*` and every
  * non-management `/api/*` verbatim to `http://127.0.0.1:<localDshPort>` with
  * the SAME Host/Origin rewrite, WS splice, limits and error semantics as the
- * control-plane's per-instance proxy (shared `proxy-forward.ts`, design 16
+ * control-plane's per-instance proxy (shared `proxy-forward.ts`, design 17
  * §6.2 方案 A). Unlike instance-proxy, there is no `/api/i/<id>` prefix and no
  * transports table: the target is always the managed local dsh.
  */
@@ -98,8 +98,9 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     const raw = reqUrl ?? '/'
     // Only origin-form may be forwarded: leading '/' but NOT '//' (a
     // protocol-relative URL `//evil/x` starts with '/' yet resolves to
-    // `http://evil/x`), and never an absolute-form `http://evil/x`.
-    if (!raw.startsWith('/') || raw.startsWith('//')) return null
+    // `http://evil/x`), never an absolute-form `http://evil/x`, and no
+    // backslash. WHATWG treats `/\\evil/x` as an authority switch too.
+    if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return null
     return new URL(raw, target)
   }
 

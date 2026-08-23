@@ -1,5 +1,5 @@
 /**
- * Gateway persistence (design 16 §10): the gateway's OWN state, physically
+ * Gateway persistence (design 17 §10): the gateway's OWN state, physically
  * separate from dsh's $DSH_HOME. All JSON docs go through control-plane
  * `createJsonStore` (backup-first + revision + recovery); secrets (token hash,
  * jwt-secret) go through a 0600 atomic-file discipline (never plaintext in a
@@ -10,7 +10,7 @@
  * index is a derived cache (§8.2).
  */
 
-import { mkdirSync, openSync, readFileSync, renameSync, writeSync, fchmodSync, fsyncSync, closeSync, rmSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes, scryptSync } from 'node:crypto'
 import { createJsonStore, type JsonStore, type JsonStoreDocument } from '@dsh-chamber/control-plane'
@@ -37,8 +37,13 @@ export interface WorktreeStoreRecord {
   id: string
   workspaceId: string
   sessionId?: string
+  /** Canonical main-workspace repository; server-derived at create time. */
+  repo?: string
   path: string
   branch: string
+  /** Only `owned` rows may authorize deletion. Missing legacy values and
+   * `unverified` transport-ambiguity rows are observability-only. */
+  ownership?: 'owned' | 'unverified'
   state: 'creating' | 'ready' | 'deleting' | 'failed'
   error?: string
   createdAt: number
@@ -64,7 +69,7 @@ export interface GatewaySettingsDoc {
  * shape `T` is the caller's business; the store layers its own `revision`/
  * `schemaVersion` onto it. */
 function docStore<T>(filePath: string, logger: GatewayStoreLogger, initial: T): { load(): T & { revision?: number }; get(): T & { revision?: number }; mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> } {
-  const store: JsonStore = createJsonStore({ filePath, logger, initial: initial as JsonStoreDocument })
+  const store: JsonStore = createJsonStore({ filePath, logger, initial: initial as JsonStoreDocument, fileMode: 0o600 })
   store.load()
   return {
     load(): T & { revision?: number } { return store.getDoc() as T & { revision?: number } },
@@ -80,14 +85,33 @@ function docStore<T>(filePath: string, logger: GatewayStoreLogger, initial: T): 
 
 /** Read a 0600 file, or null when absent (never a fake-empty on corrupt). */
 function readSecret(file: string): string | null {
-  let text: string
+  let pathStat
   try {
-    text = readFileSync(file, 'utf8')
+    pathStat = lstatSync(file)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
   }
-  return text.trim() === '' ? null : text
+  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
+    throw new Error(`gateway secret path must be a regular file: ${file}`)
+  }
+
+  // O_NOFOLLOW closes the lstat/open symlink race. Checking the opened inode
+  // additionally rejects a regular-file replacement between those calls.
+  const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  try {
+    const openedStat = fstatSync(fd)
+    if (!openedStat.isFile() || openedStat.dev !== pathStat.dev || openedStat.ino !== pathStat.ino) {
+      throw new Error(`gateway secret path changed while opening: ${file}`)
+    }
+    // Tighten legacy or manually provisioned files before any secret bytes are
+    // read into process memory.
+    fchmodSync(fd, 0o600)
+    const text = readFileSync(fd, 'utf8')
+    return text.trim() === '' ? null : text
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /** 0600 atomic write (tmp → fchmod 0600 → fsync → rename). */
@@ -125,6 +149,9 @@ export interface GatewayStore {
   /** jwt-secret — the session signing key (0600, rotatable, S13). */
   getJwtSecret(): string
   rotateJwtSecret(): string
+  /** Persist a salted password verifier and rotate the JWT key whenever the
+   * configured password changes or is removed. */
+  syncPasswordCredential(password: string | null): void
 }
 
 const SCRYPT_SALT_LEN = 16
@@ -150,7 +177,10 @@ export function verifyCredential(plain: string, stored: string | null): boolean 
 
 export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger): GatewayStore {
   const root = join(stateDir, 'gateway')
-  mkdirSync(root, { recursive: true })
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  chmodSync(stateDir, 0o700)
+  mkdirSync(root, { recursive: true, mode: 0o700 })
+  chmodSync(root, 0o700)
 
   const gateway = docStore<GatewayDocument>(join(stateDir, 'gateway.json'), logger, { schemaVersion: 1, revision: 0, channels: [] })
   const worktrees = docStore<{ items: WorktreeStoreRecord[] }>(join(root, 'worktrees.json'), logger, { items: [] })
@@ -159,6 +189,7 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
 
   const tokensFile = join(stateDir, 'tokens.json')
   const jwtSecretFile = join(stateDir, 'jwt-secret')
+  const passwordCredentialFile = join(stateDir, 'password-credential')
 
   function getTokenHash(): string | null {
     try {
@@ -194,5 +225,19 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
     return fresh
   }
 
-  return { gateway, worktrees, schedule, settings, getTokenHash, setTokenHash, getJwtSecret, rotateJwtSecret }
+  function syncPasswordCredential(password: string | null): void {
+    const existing = readSecret(passwordCredentialFile)
+    const unchanged = password === null ? existing === null : verifyCredential(password, existing)
+    if (unchanged) return
+    // Rotate first. If persisting the new verifier fails, startup fails with
+    // old cookies already invalidated instead of accepting a mixed state.
+    rotateJwtSecret()
+    if (password === null) {
+      rmSync(passwordCredentialFile, { force: true })
+      return
+    }
+    writeSecret(passwordCredentialFile, `${hashCredential(password)}\n`)
+  }
+
+  return { gateway, worktrees, schedule, settings, getTokenHash, setTokenHash, getJwtSecret, rotateJwtSecret, syncPasswordCredential }
 }

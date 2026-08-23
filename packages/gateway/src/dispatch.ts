@@ -1,7 +1,7 @@
 /**
- * Gateway dispatch middleware (design 16 §4): the auth gate + surface routing
+ * Gateway dispatch middleware (design 17 §4): the auth gate + surface routing
  * injected into the control-plane's server shell via the `middleware` /
- * `upgradeMiddleware` hooks (design 16 §2.1 改动③). A truthy return CLAIMS the
+ * `upgradeMiddleware` hooks (design 17 §2.1 改动③). A truthy return CLAIMS the
  * request/upgrade; falsy falls through to the control-plane default dispatch
  * (management REST + per-instance proxy).
  *
@@ -17,17 +17,30 @@ import {
   type ApiRequest,
   type ApiResponse,
   type Logger,
-  type PlaneMiddlewareContext,
 } from '@dsh-chamber/control-plane'
 import type { AuthProvider } from './auth.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { FeatureHost } from './routes.ts'
+import type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
 
-/** The two public paths (no auth). */
-const PUBLIC_PATHS = new Set(['/health', '/auth/login'])
+function isPublicRequest(method: string | undefined, pathname: string): boolean {
+  if (pathname === '/health') return method === 'GET'
+  return pathname === '/auth/login' && (method === 'GET' || method === 'HEAD' || method === 'POST')
+}
+
+function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProvider): boolean {
+  if (auth.kind !== 'password' && auth.kind !== 'password+token') return false
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false
+  if (!(headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')) return false
+  // These prefixes are protocol/API surfaces even when a client happens to
+  // advertise HTML. Only dsh document navigations should reach the form.
+  return pathname !== '/api' && !pathname.startsWith('/api/')
+    && pathname !== '/chamber' && !pathname.startsWith('/chamber/')
+    && pathname !== '/plugins' && !pathname.startsWith('/plugins/')
+}
 
 /**
- * CSP for the PROXIED dsh frontend (design 16 §11 S14): the control-plane
+ * CSP for the PROXIED dsh frontend (design 17 §11 S14): the control-plane
  * shell sets a per-response nonce CSP with `unsafe-inline` closed, but the
  * gateway cannot backfill that nonce into dsh's streamed HTML (its inline
  * `__DSH_BOOT__`/loader scripts). Rather than white-screen the frontend, the
@@ -35,6 +48,7 @@ const PUBLIC_PATHS = new Set(['/health', '/auth/login'])
  * and already behind the auth gate. Every other directive stays identical.
  */
 const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
+const LOGIN_PAGE_CSP = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'unsafe-inline'"
 
 function json(res: ApiResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -46,30 +60,16 @@ function headerValue(headers: Record<string, string | string[] | undefined>, nam
   return typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined
 }
 
-/** S11 (design 16 §11): the gateway Host authority decision. When the operator
- * configured a publicOrigin, an unrecognized Host is rejected 421 (misdirected
- * request) — only the public origin, loopback, and private-network peers are
- * legitimate authorities. No publicOrigin = no public authority configured,
- * so any Host is accepted (loopback-only operators). */
-function isAuthorizedHost(hostHeader: string | undefined, publicOrigin: string | undefined): boolean {
-  if (publicOrigin === undefined) return true
-  if (hostHeader === undefined || hostHeader === '') return false
-  const host = hostHeader
-  try {
-    if (host === new URL(publicOrigin).host) return true
-  } catch { /* invalid publicOrigin → fail closed below */ }
-  const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0]
-  if (hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1') return true
-  return /^10\./.test(hostname) || /^192\.168\./.test(hostname) || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(hostname)
-}
-
-function rejectWs(socket: { end(data: string): unknown }, status: number, message: string): void {
+function rejectWs(socket: { end(data: string): unknown }, status: number, message: string, code?: string): void {
+  const reason = status === 400 ? 'Bad Request'
+    : status === 401 ? 'Unauthorized'
+      : status === 421 ? 'Misdirected Request' : 'Forbidden'
   socket.end(
-    `HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Forbidden'}\r\n`
+    `HTTP/1.1 ${status} ${reason}\r\n`
     + 'Content-Type: application/json\r\n'
     + 'Connection: close\r\n'
     + '\r\n'
-    + JSON.stringify({ error: message, code: status === 401 ? 'unauthorized' : 'origin_forbidden' }),
+    + JSON.stringify({ error: message, code: code ?? (status === 401 ? 'unauthorized' : 'origin_forbidden') }),
   )
 }
 
@@ -86,22 +86,62 @@ const LOGIN_PAGE_HTML = `<!doctype html>
 </form>
 `
 
-/** Read + parse a JSON request body (bounded). */
+function codedError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code })
+}
+
+/** Read a bounded login body. The static HTML uses form-urlencoded; JSON is
+ * retained for API clients and tests. Unsupported/malformed media is a 400,
+ * never silently treated as an empty credential. */
 function readBody(req: ApiRequest): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
-    const MAX = 1024 * 1024
+    let finished = false
+    // A configured password is capped at 1024 characters. 16 KiB leaves ample
+    // room for UTF-8/JSON or form encoding without letting anonymous slow
+    // clients reserve a megabyte on every accepted connection.
+    const MAX = 16 * 1024
+    const fail = (error: unknown): void => {
+      if (finished) return
+      finished = true
+      // The request may continue to drain until Node's request timeout. Drop
+      // every retained byte immediately and make all later events no-ops so an
+      // unauthenticated slow upload cannot pin one body per connection.
+      chunks.length = 0
+      reject(error)
+    }
     req.on('data', (chunk: Buffer) => {
+      if (finished) return
       size += chunk.length
-      if (size > MAX) { reject(new Error('body too large')); return }
+      if (size > MAX) {
+        fail(codedError('body_too_large', 'login body too large'))
+        return
+      }
       chunks.push(chunk)
     })
     req.on('end', () => {
-      try { resolve(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8'))) }
-      catch { resolve({}) }
+      if (finished) return
+      finished = true
+      const text = Buffer.concat(chunks).toString('utf8')
+      chunks.length = 0
+      const contentType = (headerValue(req.headers, 'content-type') ?? '').split(';', 1)[0].trim().toLowerCase()
+      try {
+        if (contentType === 'application/x-www-form-urlencoded') {
+          const form = new URLSearchParams(text)
+          resolve({ password: form.get('password') ?? undefined })
+          return
+        }
+        if (contentType === 'application/json') {
+          resolve(text === '' ? {} : JSON.parse(text))
+          return
+        }
+        reject(codedError('bad_request', 'unsupported login content type'))
+      } catch {
+        reject(codedError('bad_request', 'malformed login body'))
+      }
     })
-    req.on('error', reject)
+    req.on('error', fail)
   })
 }
 
@@ -110,24 +150,64 @@ export interface GatewayDispatch {
   upgradeMiddleware: NonNullable<import('@dsh-chamber/control-plane').ControlPlaneOptions['upgradeMiddleware']>
 }
 
-export function createGatewayDispatch(auth: AuthProvider, getProxy: () => GatewayProxy, getFeatures: () => FeatureHost, logger: Logger, publicOrigin?: string): GatewayDispatch {
+function authRequest(req: ApiRequest, decision: GatewayRequestDecision) {
+  return {
+    headers: req.headers,
+    socketAddr: req.socket?.remoteAddress ?? '',
+    clientAddress: decision.clientAddress,
+    secure: decision.secure,
+  }
+}
+
+export function createGatewayDispatch(auth: AuthProvider, getProxy: () => GatewayProxy, getFeatures: () => FeatureHost, logger: Logger, requestPolicy: GatewayRequestPolicy): GatewayDispatch {
   const middleware: GatewayDispatch['middleware'] = async (req, res, url) => {
     const pathname = url.pathname
-    // -1. Host authority (S11): reject a misdirected request before any
-    // auth/routing (the authority check is the outermost gate).
-    if (!isAuthorizedHost(headerValue(req.headers, 'host'), publicOrigin)) {
-      json(res, 421, { error: 'misdirected request', code: 'misdirected_request' })
+    // -1. One authority/origin boundary for every HTTP surface, including
+    // public paths and OPTIONS. Its result also supplies sanitized auth facts.
+    const decision = requestPolicy.evaluate(req)
+    if (!decision.allowed) {
+      json(res, decision.status, {
+        error: decision.code === 'misdirected_request' ? 'misdirected request' : 'request origin is not allowed',
+        code: decision.code,
+      })
       return true
     }
-    // 0. CORS preflight (design 16 §5): OPTIONS carries no Authorization, so it
-    // must bypass the auth gate and fall through to the shell's CORS handler.
-    if (req.method === 'OPTIONS') return false
+    res._corsHeaders = decision.headers
+    for (const [name, value] of Object.entries(decision.headers)) res.setHeader(name, value)
+    // 0. CORS preflight (design 17 §5): OPTIONS carries no Authorization and
+    // applies to gateway-owned as well as control-plane paths, so claim it
+    // here instead of relying on the management router's path dispatch.
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        ...decision.headers,
+        'access-control-allow-methods': 'GET, POST, PATCH, PUT, DELETE, OPTIONS',
+        'access-control-allow-headers': 'content-type, authorization',
+        'access-control-max-age': '600',
+      })
+      res.end()
+      return true
+    }
     // 1. Auth gate (public paths exempt). socketAddr is not available through
     // the middleware ctx — the token/password providers do not use it (S11's
     // Host authority decision is a post-MVP hardening).
-    if (!PUBLIC_PATHS.has(pathname)) {
-      const principal = await auth.verify({ headers: req.headers, socketAddr: '' })
+    if (pathname === '/auth/login'
+      && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') {
+      res.writeHead(405, {
+        allow: 'GET, HEAD, POST',
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      })
+      res.end(JSON.stringify({ error: 'method not allowed', code: 'method_not_allowed' }))
+      return true
+    }
+    if (!isPublicRequest(req.method, pathname)) {
+      const principal = await auth.verify(authRequest(req, decision))
       if (principal === null) {
+        if (shouldRedirectToLogin(req, pathname, auth)) {
+          res.writeHead(302, { location: '/auth/login', 'cache-control': 'no-store' })
+          res.end()
+          return true
+        }
         json(res, 401, { error: 'unauthorized', code: 'unauthorized' })
         return true
       }
@@ -135,22 +215,30 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     // 2. Auth login (public, design §5.1): POST verifies the password and sets
     // the session cookie → 302 to `/`; GET serves the minimal login page.
     if (pathname === '/auth/login') {
+      res.setHeader('content-security-policy', LOGIN_PAGE_CSP)
+      if (auth.login === undefined) {
+        json(res, 404, { error: 'not_found', code: 'not_found' })
+        return true
+      }
       if (req.method === 'POST' && auth.login !== undefined) {
         try {
           const body = await readBody(req)
-          const { setCookie } = await auth.login(body, { headers: req.headers, socketAddr: '' })
+          const { setCookie } = await auth.login(body, authRequest(req, decision))
           if (setCookie !== undefined) res.setHeader('set-cookie', setCookie)
           res.writeHead(302, { location: '/', 'cache-control': 'no-store' })
           res.end()
         } catch (error) {
           const code = (error as Error & { code?: string }).code
           if (code === 'rate_limited') json(res, 429, { error: 'too many login attempts', code: 'rate_limited' })
+          else if (code === 'auth_busy') json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
+          else if (code === 'body_too_large') json(res, 413, { error: 'request body too large', code })
+          else if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
           else json(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
         }
         return true
       }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(LOGIN_PAGE_HTML)
+      res.end(req.method === 'HEAD' ? undefined : LOGIN_PAGE_HTML)
       return true
     }
     // 3. Management routes → fall through to api.handle (prefix-match so
@@ -158,7 +246,7 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     if (pathname === '/health' || pathname.startsWith('/api/connections') || pathname.startsWith('/api/host/') || pathname.startsWith('/api/i/')) {
       return false
     }
-    // 4. Feature host (design 16 §8.5): /chamber/* is the gateway's own
+    // 4. Feature host (design 17 §8.5): /chamber/* is the gateway's own
     // orchestration surface (git worktrees, approvals, cron, settings).
     if (pathname.startsWith('/chamber/')) {
       await getFeatures().handle(req, res, pathname)
@@ -178,21 +266,28 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     return true
   }
 
-  const upgradeMiddleware: GatewayDispatch['upgradeMiddleware'] = async (req, socket, head, ctx) => {
-    const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
+  const upgradeMiddleware: GatewayDispatch['upgradeMiddleware'] = async (req, socket, head) => {
+    const rawTarget = req.url ?? '/'
+    if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+      || rawTarget.includes('\\') || rawTarget.includes('#')) {
+      rejectWs(socket, 400, 'invalid request target', 'bad_request')
+      return true
+    }
+    const pathname = new URL(rawTarget, 'http://localhost').pathname
+    // 0. The exact same public boundary applies before every WS route.
+    const decision = requestPolicy.evaluate(req)
+    if (!decision.allowed) {
+      rejectWs(socket, decision.status, decision.code === 'misdirected_request' ? 'misdirected request' : 'request origin is not allowed', decision.code)
+      return true
+    }
     // 1. Auth gate (WS auth == HTTP auth, S2).
-    const principal = await auth.verify({ headers: req.headers, socketAddr: '' })
+    const principal = await auth.verify(authRequest(req, decision))
     if (principal === null) {
       rejectWs(socket, 401, 'unauthorized')
       return true
     }
     // 2. The two dsh downlink stream paths → origin fence + gateway-proxy.
     if (pathname === '/api/events.mux' || pathname === '/api/events.host') {
-      const cors = (ctx as PlaneMiddlewareContext).api.getCorsHeaders(req)
-      if (!cors.allowed) {
-        rejectWs(socket, 403, 'request origin is not allowed')
-        return true
-      }
       try {
         await getProxy().handleUpgrade(req, socket as never, head)
       } catch (error) {

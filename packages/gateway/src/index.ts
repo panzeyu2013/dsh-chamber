@@ -1,11 +1,11 @@
 /**
- * @dsh-chamber/gateway — the server-side access gateway (design 16).
+ * @dsh-chamber/gateway — the server-side access gateway (design 17).
  *
  * createGateway assembles: the control-plane core (local dsh hosting +
  * management REST + per-instance proxy), the pluggable auth provider (§5),
  * the single-target gateway-proxy (§6), and the feature host (§8). The auth
  * gate + dispatch + upgradeMiddleware are mounted on the HTTP surface via the
- * control-plane's middleware hooks (design 16 §2.1 改动③ / §4).
+ * control-plane's middleware hooks (design 17 §2.1 改动③ / §4).
  */
 
 import {
@@ -15,17 +15,33 @@ import {
   type Logger,
   type PlaneHandle,
 } from '@dsh-chamber/control-plane'
-import { parseGatewayConfig, type GatewayConfig, type GatewayConfigInput } from './config.ts'
+import {
+  GatewayConfigError,
+  MAX_GATEWAY_PASSWORD_CHARS,
+  MAX_GATEWAY_TOKEN_CHARS,
+  MIN_GATEWAY_PASSWORD_CHARS,
+  MIN_GATEWAY_TOKEN_CHARS,
+  parseGatewayConfig,
+  type GatewayConfig,
+  type GatewayConfigInput,
+} from './config.ts'
 import { createAuth, type AuthProvider, type AuthPrincipal } from './auth.ts'
 import { createGatewayProxy, type GatewayProxy, type GatewayProxyDeps } from './gateway-proxy.ts'
 import { createGatewayDispatch } from './dispatch.ts'
-import { createFeatureHost } from './routes.ts'
+import { createGatewayRequestPolicy } from './middleware.ts'
+import { createFeatureHost, type FeatureHost } from './routes.ts'
 import { createGatewayStore } from './store.ts'
 import { createChannelRegistry } from './channels.ts'
 
 export interface GatewayOptions {
   config: GatewayConfig
   logger?: Logger
+  /** Narrow construction seams for no-listen lifecycle composition tests. */
+  deps?: {
+    createPlane?: typeof createControlPlane
+    createProxy?: typeof createGatewayProxy
+    createFeatures?: (options: Parameters<typeof createFeatureHost>[0]) => FeatureHost
+  }
 }
 
 export interface GatewayHandle {
@@ -45,19 +61,56 @@ export function buildGatewayConfig(input: GatewayConfigInput, stateDir = DEFAULT
   return parseGatewayConfig(input, stateDir, dshWorkspacePath)
 }
 
+/** Defend the public programmatic constructor as well as the CLI parser.
+ * GatewayConfig is a structural TypeScript type, so JavaScript callers can
+ * otherwise forge `kind:'token'` without a token or request unimplemented TLS
+ * and accidentally expose the anonymous provider over plaintext. */
+function validateMaterializedConfig(config: GatewayConfig): void {
+  if (config.plane.host !== '127.0.0.1' && config.plane.host !== '0.0.0.0') {
+    throw new GatewayConfigError(`invalid materialized gateway host: ${String(config.plane.host)}`)
+  }
+  if (!Number.isInteger(config.plane.port) || config.plane.port < 1 || config.plane.port > 65535) {
+    throw new GatewayConfigError(`invalid materialized gateway port: ${String(config.plane.port)}`)
+  }
+  const hasPassword = typeof config.auth.password === 'string' && config.auth.password !== ''
+  const hasToken = typeof config.auth.token === 'string' && config.auth.token !== ''
+  const actualKind = hasPassword && hasToken ? 'password+token'
+    : hasPassword ? 'password' : hasToken ? 'token' : 'none'
+  if (config.auth.kind !== actualKind) {
+    throw new GatewayConfigError(`materialized auth kind ${config.auth.kind} does not match its credentials`)
+  }
+  if (hasPassword && (config.auth.password!.length < MIN_GATEWAY_PASSWORD_CHARS
+    || config.auth.password!.length > MAX_GATEWAY_PASSWORD_CHARS)) {
+    throw new GatewayConfigError(`materialized password must be ${MIN_GATEWAY_PASSWORD_CHARS}-${MAX_GATEWAY_PASSWORD_CHARS} characters`)
+  }
+  if (hasToken && (config.auth.token!.length < MIN_GATEWAY_TOKEN_CHARS
+    || config.auth.token!.length > MAX_GATEWAY_TOKEN_CHARS || !/^[\x20-\x7e]+$/.test(config.auth.token!))) {
+    throw new GatewayConfigError(`materialized token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
+  }
+  if ((config.plane.host !== '127.0.0.1' || config.publicOrigin !== undefined || config.trustedProxies.length > 0)
+    && actualKind === 'none') {
+    throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication')
+  }
+  if (config.tls !== undefined) {
+    throw new GatewayConfigError('materialized TLS config is not implemented; terminate TLS at a trusted reverse proxy')
+  }
+}
+
 export function createGateway(options: GatewayOptions): GatewayHandle {
+  validateMaterializedConfig(options.config)
   const logger = options.logger ?? console
-  // The gateway store (design 16 §10) owns tokens/jwt-secret + the orchestration
+  // The gateway store (design 17 §10) owns tokens/jwt-secret + the orchestration
   // docs; auth needs it for the token hash + session secret (S5/S13).
   const store = createGatewayStore(options.config.plane.stateDir, logger)
   const auth = createAuth(options.config.auth, store)
+  const requestPolicy = createGatewayRequestPolicy(options.config)
   // Mutable holders: the dispatch middleware and feature host are wired into
   // createControlPlane BEFORE the plane/proxy exist (the proxy + feature host
   // need plane.getLocalDshPort()). They dereference lazily at request time.
   let plane: PlaneHandle | null = null
   let proxy: GatewayProxy | null = null
   const channels = createChannelRegistry()
-  const features = createFeatureHost({
+  const features = (options.deps?.createFeatures ?? createFeatureHost)({
     logger,
     getDshBaseUrl: () => {
       const port = plane?.getLocalDshPort() ?? null
@@ -66,37 +119,80 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     store,
     channels,
   })
-  const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, logger, options.config.publicOrigin)
-  const createdPlane = createControlPlane({
+  const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, logger, requestPolicy)
+  const createdPlane = (options.deps?.createPlane ?? createControlPlane)({
     host: options.config.plane.host,
     port: options.config.plane.port,
     stateDir: options.config.plane.stateDir,
     dshWorkspacePath: options.config.plane.dshWorkspacePath,
-    logger: options.logger,
+    logger,
     corsOrigins: options.config.corsOrigins,
+    corsEvaluator: requestPolicy.corsEvaluator,
     middleware: dispatch.middleware,
     upgradeMiddleware: dispatch.upgradeMiddleware,
   })
   plane = createdPlane
-  proxy = createGatewayProxy({
+  proxy = (options.deps?.createProxy ?? createGatewayProxy)({
     logger,
     getLocalDshPort: () => createdPlane.getLocalDshPort(),
     getLocalState: () => createdPlane.connectionState,
   })
-  // Start the feature-host stream consumers NOW that `plane` is assigned
-  // (getDshBaseUrl resolves) — starting earlier no-ops on a null base URL.
-  features.start()
+  let started = false
+  let startPromise: Promise<void> | null = null
+  let unsubscribeLocalState: (() => void) | null = null
+  let featuresAttached = false
+
+  function syncFeatures(status: string): void {
+    if (status === 'ready') {
+      if (featuresAttached) return
+      features.start()
+      featuresAttached = true
+      return
+    }
+    if (!featuresAttached) return
+    features.stop()
+    featuresAttached = false
+  }
+
+  async function start(): Promise<void> {
+    if (started) return
+    if (startPromise !== null) return startPromise
+    startPromise = (async () => {
+      try {
+        await createdPlane.start()
+        unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
+        // Gateway is a managed local-dsh deployment, not API-only: readiness is
+        // part of successful startup. The lifecycle subscription above starts
+        // feature consumers only after the authoritative ready transition.
+        await createdPlane.startLocal()
+        syncFeatures(createdPlane.connectionState)
+        started = true
+      } catch (error) {
+        syncFeatures('error')
+        unsubscribeLocalState?.()
+        unsubscribeLocalState = null
+        await createdPlane.stop().catch(stopError => logger.warn(`gateway startup rollback failed: ${String(stopError)}`))
+        throw error
+      }
+    })().finally(() => { startPromise = null })
+    return startPromise
+  }
+
+  async function stop(): Promise<void> {
+    await startPromise?.catch(() => {})
+    unsubscribeLocalState?.()
+    unsubscribeLocalState = null
+    // Close the gateway's own WS splices + feature consumers before the
+    // control-plane tears down its instance-proxy streams.
+    proxy?.closeAllStreams()
+    syncFeatures('stopped')
+    await createdPlane.stop()
+    started = false
+  }
 
   return {
-    start: () => createdPlane.start(),
-    stop: () => {
-      // Close the gateway's own WS splices + feature consumers before the
-      // control-plane tears down its instance-proxy streams (design 16 review
-      // M2: a dirty close otherwise leaks streams to the server close timeout).
-      proxy?.closeAllStreams()
-      features.stop()
-      return createdPlane.stop()
-    },
+    start,
+    stop,
     get port() { return createdPlane.port },
     get connectionState() { return createdPlane.connectionState },
     get localProcessAlive() { return createdPlane.localProcessAlive },
@@ -124,4 +220,5 @@ export { createGatewayStore, hashCredential, verifyCredential } from './store.ts
 export type { GatewayStore, GatewayDocument, DeviceRecord, WorktreeStoreRecord, ScheduleStoreRecord, GatewaySettingsDoc } from './store.ts'
 export { createChannelRegistry } from './channels.ts'
 export type { ChannelKind, ChannelHealth, ChannelProvider, ChannelInstance, ChannelRegistry, ChannelListEntry } from './channels.ts'
-export { GATEWAY_VIEWPORT_META } from './middleware.ts'
+export { createGatewayRequestPolicy, GATEWAY_VIEWPORT_META } from './middleware.ts'
+export type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
