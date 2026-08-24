@@ -909,6 +909,12 @@ export function inspectCorruptMetadataRecoveryMarker(
  * Detect selection-metadata health using the store's tri-state readers plus
  * every durable *.corrupt* sentinel. This function never accepts or returns a
  * stash/evidence path.
+ *
+ * A semantically-inconsistent-but-parseable set (e.g. the activation journal's
+ * target disagrees with override.pending, or the pre-swap journal is missing
+ * while the pointer already advanced to pending) is reported as
+ * `selection-corrupt` so the "保留数据并恢复内建" escape stays reachable —
+ * otherwise such states hard-block startup with no recovery action.
  */
 export function detectRuntimeMetadataHealth(baseDir: string): RuntimeMetadataHealth {
   const { runtimeDir } = recoveryRootPaths(baseDir)
@@ -930,6 +936,7 @@ export function detectRuntimeMetadataHealth(baseDir: string): RuntimeMetadataHea
     || override.kind === 'corrupt'
     || activationJournal.kind === 'corrupt'
     || corruptEvidence.length > 0
+    || detectSemanticMismatch(current, override, activationJournal)
 
   let status: RuntimeMetadataHealthStatus
   if (recovery.kind === 'corrupt') status = 'recovery-marker-corrupt'
@@ -938,6 +945,35 @@ export function detectRuntimeMetadataHealth(baseDir: string): RuntimeMetadataHea
   else if (recovery.kind === 'valid') status = 'recovery-finalized'
   else status = 'healthy'
   return { status, current, override, activationJournal, corruptEvidence, recovery }
+}
+
+const ROLLBACK_CONTINUATION_PHASES = new Set(['rollback-needed', 'restoring', 'restore-complete', 'fallback-builtin'])
+
+/**
+ * A parseable-but-semantically-inconsistent selection-metadata set that the
+ * startup replay cannot resolve (its `journal-mismatch` blocked reason).
+ * Mirrors runtime-startup.ts's journal-mismatch conditions, conservatively:
+ * only when a non-null override.pending signals an in-flight switch, and only
+ * for (a) a missing journal with the pointer already advanced to pending, or
+ * (b) a valid non-builtin, non-rollback journal whose expected target
+ * disagrees with pending.
+ */
+function detectSemanticMismatch(
+  current: CurrentPointerState,
+  override: OverrideState,
+  journal: ActivationJournalState,
+): boolean {
+  const pending = override.kind === 'valid' ? override.record.pending : null
+  if (pending === null || pending === undefined) return false
+  if (journal.kind === 'missing') {
+    return current.kind === 'valid' && current.version === pending
+  }
+  if (journal.kind !== 'valid' || journal.journal.targetIsBuiltin) return false
+  if (ROLLBACK_CONTINUATION_PHASES.has(journal.journal.phase)) return false
+  const expected = journal.journal.nextIntent !== null && !journal.journal.nextIntent.targetIsBuiltin
+    ? journal.journal.nextIntent.targetVersion
+    : journal.journal.targetVersion
+  return expected !== pending
 }
 
 function sourcePathHash(

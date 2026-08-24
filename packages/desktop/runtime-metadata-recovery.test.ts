@@ -152,6 +152,73 @@ test('detect health combines tri-state reads with durable corrupt sentinels', ()
   assert.ok(existsSync(path.join(f.runtimeDir, 'override.json.corrupt')))
 })
 
+function writeValidPreparedJournal(f: Fixture, targetVersion: string): void {
+  writeFileSync(path.join(f.runtimeDir, 'activation-journal.json'), JSON.stringify({
+    schemaVersion: 1,
+    phase: 'prepared',
+    targetVersion,
+    targetIsBuiltin: false,
+    manualRollback: false,
+    intentKind: 'version-switch',
+    sourceVersion: '1.0.0',
+    sourceIsBuiltin: false,
+    sourceWasKnownGood: false,
+    knownGoodVersion: null,
+    preSwapSnapshotName: '1.0.0-1700000000000',
+    manualDataSnapshotName: null,
+    preRollbackStashName: null,
+    rollbackTarget: null,
+    nextIntent: null,
+    startedAt: '2026-08-24T00:00:00.000Z',
+    updatedAt: '2026-08-24T00:00:00.000Z',
+  }), 'utf8')
+}
+
+function writePendingOverride(f: Fixture, pending: string): void {
+  writeFileSync(path.join(f.runtimeDir, 'override.json'), JSON.stringify({
+    shellVersion: '0.1.5',
+    chosenVersion: pending,
+    resolvedVersion: pending,
+    pending,
+    swapAttempted: false,
+  }), 'utf8')
+}
+
+test('detect health flags a semantically-mismatched journal target as selection-corrupt', () => {
+  const f = fixture()
+  writeFileSync(path.join(f.runtimeDir, 'current'), JSON.stringify({ version: '2.0.0' }), 'utf8')
+  writePendingOverride(f, '2.0.0')
+  writeValidPreparedJournal(f, '1.0.0') // journal target 1.0.0 ≠ pending 2.0.0
+
+  const health = detectRuntimeMetadataHealth(f.baseDir)
+  assert.equal(health.status, 'selection-corrupt')
+  assert.equal(health.current.kind, 'valid')
+  assert.equal(health.override.kind, 'valid')
+  assert.equal(health.activationJournal.kind, 'valid')
+})
+
+test('detect health flags a missing journal with an already-advanced pointer as selection-corrupt', () => {
+  const f = fixture()
+  writeFileSync(path.join(f.runtimeDir, 'current'), JSON.stringify({ version: '2.0.0' }), 'utf8')
+  writePendingOverride(f, '2.0.0')
+  // no activation-journal.json — the pre-swap journal is missing while the
+  // pointer already advanced to pending (runtime-startup journal-mismatch).
+
+  const health = detectRuntimeMetadataHealth(f.baseDir)
+  assert.equal(health.status, 'selection-corrupt')
+  assert.equal(health.activationJournal.kind, 'missing')
+})
+
+test('detect health leaves a consistent pending state healthy', () => {
+  const f = fixture()
+  writeFileSync(path.join(f.runtimeDir, 'current'), JSON.stringify({ version: '1.0.0' }), 'utf8')
+  writePendingOverride(f, '2.0.0')
+  writeValidPreparedJournal(f, '2.0.0') // journal target == pending
+
+  const health = detectRuntimeMetadataHealth(f.baseDir)
+  assert.equal(health.status, 'healthy')
+})
+
 test('full recovery stashes DSH_HOME, preserves every metadata byte, probes, and finalizes', async () => {
   const f = fixture()
   const expectedEvidence = writeSelectionEvidence(f)
