@@ -100,6 +100,48 @@ test('isAllowedRegistryUrl: npmmirror CDN tarball passes with the redirect origi
     isAllowedRegistryUrl('https://cdn.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.1.1-rc.1.tgz', allowed),
     true,
   );
+  // The real 302 target: the CDN's own `/packages/...` tarball layout, with
+  // the percent-encoded scope slash exactly as the registry sends it.
+  assert.equal(
+    isAllowedRegistryUrl('https://cdn.npmmirror.com/packages/%40deepseek-ai/dsh/0.1.1-rc.1/dsh-0.1.1-rc.1.tgz', allowed),
+    true,
+    'encoded CDN tarball layout',
+  );
+  assert.equal(
+    isAllowedRegistryUrl('https://cdn.npmmirror.com/packages/@deepseek-ai/dsh/0.1.1-rc.1/dsh-0.1.1-rc.1.tgz', allowed),
+    true,
+    'decoded CDN tarball layout',
+  );
+  assert.equal(
+    isAllowedRegistryUrl('https://cdn.npmmirror.com/packages/lodash/4.17.21/lodash-4.17.21.tgz', allowed),
+    true,
+    'unscoped CDN tarball layout',
+  );
+  // The CDN-only layout must never be accepted on a registry origin, and the
+  // CDN must never accept registry-internal paths beyond the tarball shapes.
+  assert.equal(
+    isAllowedRegistryUrl('https://registry.npmmirror.com/packages/@deepseek-ai/dsh/0.1.1-rc.1/dsh-0.1.1-rc.1.tgz', allowed),
+    false,
+    '/packages layout is CDN-only',
+  );
+  assert.equal(
+    isAllowedRegistryUrl('https://cdn.npmmirror.com/packages/@deepseek-ai/dsh/0.1.1-rc.1/', allowed),
+    false,
+    'directory-shaped CDN path',
+  );
+  // A traversal must still re-normalize and land on an allowed shape: enough
+  // dot-segments to climb above /packages/ resolves to /etc/… and is rejected
+  // (a shallower traversal only reaches a 404 under /packages/, never SSRF).
+  assert.equal(
+    isAllowedRegistryUrl('https://cdn.npmmirror.com/packages/@deepseek-ai/dsh/0.1.1-rc.1/../../../../etc/passwd.tgz', allowed),
+    false,
+    'traversal escaping the CDN layout',
+  );
+  assert.equal(
+    isAllowedRegistryUrl('https://cdn.npmmirror.com/packages/@deepseek-ai/dsh/0.1.1-rc.1/..%2f..%2f..%2f..%2fetc%2fpasswd.tgz', allowed),
+    false,
+    'encoded traversal escaping the CDN layout',
+  );
   // The CDN is NOT a metadata source: it is rejected by the default whitelist.
   assert.equal(isAllowedRegistryUrl('https://cdn.npmmirror.com/@deepseek-ai/dsh'), false);
 });

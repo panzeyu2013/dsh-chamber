@@ -11,7 +11,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { fetchRegistryMetadata, type RegistryMetadata } from './registry-metadata.ts';
+import { fetchRegistryMetadata, fetchRegistryResponse, type RegistryMetadata } from './registry-metadata.ts';
+import { registryRedirectOrigins } from './registry-url.ts';
 
 const SRI_A = `sha512-${Buffer.alloc(64, 0xaa).toString('base64')}`;
 const SRI_C = `sha512-${Buffer.alloc(64, 0xcc).toString('base64')}`;
@@ -224,6 +225,37 @@ test('fetchRegistryMetadata: validates every redirect before issuing the next re
     },
   );
   assert.equal(calls.length, 1, 'off-origin redirect target must never be fetched');
+});
+
+test('tarball download gate follows the real npmmirror CDN redirect chain', async () => {
+  // npmmirror 302s the registry-shaped tarball URL to the CDN's own
+  // `/packages/<scope>/<name>/<version>/<file>.tgz` layout (with the scope
+  // slash percent-encoded). The per-hop gate must allow exactly that.
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.startsWith('https://registry.npmmirror.com/')) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'https://cdn.npmmirror.com/packages/%40deepseek-ai/dsh/0.1.1-rc.1/dsh-0.1.1-rc.1.tgz' },
+      });
+    }
+    return new Response('tarball-bytes', { status: 200 });
+  };
+  const { response, finalUrl } = await fetchRegistryResponse(
+    'https://registry.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.1.1-rc.1.tgz',
+    {
+      allowedOrigins: registryRedirectOrigins('https://registry.npmmirror.com'),
+      fetchImpl,
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(finalUrl, 'https://cdn.npmmirror.com/packages/%40deepseek-ai/dsh/0.1.1-rc.1/dsh-0.1.1-rc.1.tgz');
+  assert.deepEqual(calls, [
+    'https://registry.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.1.1-rc.1.tgz',
+    'https://cdn.npmmirror.com/packages/%40deepseek-ai/dsh/0.1.1-rc.1/dsh-0.1.1-rc.1.tgz',
+  ]);
 });
 
 test('fetchRegistryMetadata: follows an allowed redirect manually and enforces the hop limit', async () => {

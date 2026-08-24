@@ -32,7 +32,7 @@ export interface RegistryMetadata {
   readonly byVersion: ReadonlyMap<string, RegistryVersionInfo>
 }
 
-import { canonicalRegistryOrigin, isAllowedRegistryUrl } from './registry-url.ts'
+import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { isSupportedIntegrity } from './registry-integrity.ts'
 import { EXACT_SEMVER } from './version-safety.ts'
 
@@ -163,9 +163,10 @@ export async function fetchRegistryMetadata(
   // §6 URL whitelist: the request URL, the redirect's final origin, and every
   // tarball must all pass the same gate (「切换源即切换信任边界」) — an
   // off-origin/credentialed redirect or tarball is never fetched. Tarballs are
-  // pinned to the exact metadata origin (同源约束, §3.1): parseRegistryMetadata
-  // validates each tarball against the same allowedOrigins list, so a whitelisted
-  // mirror is only reachable when it IS the configured source.
+  // pinned to the exact metadata origin plus the mirror's own tarball CDN
+  // (同源约束, §3.1): parseRegistryMetadata validates each tarball against the
+  // same allowedOrigins list, so a whitelisted mirror is only reachable when it
+  // IS the configured source.
   if (!isAllowedRegistryUrl(url.toString(), [origin])) {
     throw new Error(`registry metadata URL 不在白名单：${url.toString()}`)
   }
@@ -191,7 +192,7 @@ export async function fetchRegistryMetadata(
       opts?.maxBytes ?? DEFAULT_REGISTRY_METADATA_MAX_BYTES,
       deadline.signal,
     )
-    return parseRegistryMetadata(doc, packageName, origin, [origin])
+    return parseRegistryMetadata(doc, packageName, origin, registryRedirectOrigins(origin))
   } finally {
     deadline.cleanup()
   }
