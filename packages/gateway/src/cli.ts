@@ -28,6 +28,8 @@ Options:
   --dsh-path PATH     dsh workspace path (default $DSH_GATEWAY_DSH_PATH or repo default)
   --ui-password PWD   browser password auth (12-1024 characters)
   --api-token TOK     shared bearer token (32-4096 visible ASCII; use a CSPRNG)
+                      for API/Desktop clients — a token-only deployment has NO
+                      browser login/frontend; add --ui-password for browser use
   --public-origin URL expected public authority (S11: reject unknown Host with 421)
   --trusted-proxy IP exact reverse-proxy peer allowed to supply X-Forwarded-* (repeatable)
   --cors-origin O     extra allowed origin (repeatable)
