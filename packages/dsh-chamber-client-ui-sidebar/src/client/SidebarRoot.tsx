@@ -16,9 +16,10 @@
  * state — no spinner/dot flicker on every retry attempt); the phase text
  * lives on hover only; active source highlighted) →
  * workspace groups → session rows. Remote sources carry a stable accent
- * derived from the source id (hue hash); the local source uses the default
- * dot. The accent also feeds the active source/session left inset through a
- * per-element CSS variable (--dsh-source-accent). A session row click asks
+ * derived from the source id (hue hash); the local source omits the accent
+ * and falls back to the default ink. The accent also feeds the active
+ * source/session left inset through a per-element CSS variable
+ * (--dsh-source-accent). A session row click asks
  * the App layer to switch to that source's
  * shell and open the session (chamberBridge.requestOpenSession); clicking a
  * remote source's header asks the App layer to switch the active N-ctx view
@@ -28,7 +29,9 @@
  * interactions = a distinguishable 14px icon badge — question `?`,
  * plan-review checklist, approval warning triangle; completed-but-unread = a
  * persistent blue DOT — the slot is not a
- * server-identity marker, the source header dot owns identity). Hover swaps
+ * server-identity marker; identity rides the source header accent (fold
+ * glyph + active inset) and the rail dots — the old header identity DOT was
+ * removed 2026-10 (user feedback)). Hover swaps
  * are TRUE replacements: the actions take no layout space at rest
  * (display:none), so the state icon really sits at the end; hovering swaps
  * the state slot for the kebab+archive actions (source header: status ↔
@@ -111,6 +114,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
+import { IconMonitorOutline16 } from './icons.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
   armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, hashString, increasedForkTitle, mergeSearchResults,
@@ -163,10 +167,17 @@ function sourceHue(sourceId: string): number {
   return hashString(sourceId) % 360
 }
 
-/** Remote sources carry the derived accent; the local source keeps the default dot. */
+/**
+ * Remote sources carry the derived accent; the local source keeps the default
+ * dot. Soft palette (user feedback 2026-10): 34% saturation at 61% lightness,
+ * matching the workspace icon accents — the old 65%/52% jewel tone read as
+ * harsh next to the (now softer) workspace hues. The source-header identity
+ * DOT is gone (2026-10, user feedback); this color survives on the rail dots,
+ * the active-source left inset and the source fold-toggle glyph only.
+ */
 function sourceDotStyle(server: ChamberServerAggregate): CSSProperties | undefined {
   if (server.kind === 'local') return undefined
-  return { backgroundColor: `hsl(${sourceHue(server.id)} 65% 52%)` }
+  return { backgroundColor: `hsl(${sourceHue(server.id)} 34% 61%)` }
 }
 
 /**
@@ -1764,14 +1775,17 @@ export function SidebarRoot({
                     }
                   }}
                 >
-                  {/* chamber (2026-09, docs/todo/server-drag-sort.md): the
-                      server-level fold toggle — workspace parity: a FOLDER
-                      glyph at rest, swapping to the collapse chevron on
-                      header hover/focus (same slot, nothing shifts). Clicking
-                      collapses/expands the source's ENTIRE workspace list
-                      without touching any workspace's own conversation fold
-                      state. stopPropagation keeps the header's activate
-                      click (and the pending-click discipline) out. */}
+                  {/* chamber (2026-09, docs/todo/server-drag-sort.md; glyph
+                      swapped 2026-10 user feedback): the server-level fold
+                      toggle — a MONITOR glyph at rest (server = machine, NOT
+                      the workspace folder glyph — the shared folder reads as
+                      a workspace and misleads), swapping to the collapse
+                      chevron on header hover/focus (same slot, nothing
+                      shifts). Clicking collapses/expands the source's ENTIRE
+                      workspace list without touching any workspace's own
+                      conversation fold state. stopPropagation keeps the
+                      header's activate click (and the pending-click
+                      discipline) out. */}
                   <button
                     type="button"
                     className={clsx(cc.sourceFoldToggle, sourceFolded && cc.sourceFoldToggleFolded)}
@@ -1788,13 +1802,9 @@ export function SidebarRoot({
                       toggleSourceFold(server.id)
                     }}
                   >
-                    <IconChevronRightOutline14 size={14} className={cc.sourceFoldChevron} />
-                    <IconFolderOpenOutline16 size={14} className={cc.sourceFoldFolder} />
+                    <IconChevronRightOutline14 size={15} className={cc.sourceFoldChevron} />
+                    <IconMonitorOutline16 size={15} className={cc.sourceFoldGlyph} />
                   </button>
-                  <span
-                    className={clsx(cc.sourceDot)}
-                    style={sourceDotStyle(server)}
-                  />
                   <span className={cc.sourceLabel}>{server.label}</span>
                   {server.pluginDiagnostic !== undefined && server.pluginDiagnostic.state !== 'ok' && (
                     <span

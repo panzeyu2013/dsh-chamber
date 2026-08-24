@@ -43,8 +43,14 @@ export const SEARCH_QUERY_MAX_CODE_UNITS = 500
  * from the workspace identity — no user customization, no persistence, no
  * selection state. The hue is a golden-angle spread of the
  * (serverId, family seed) hash, so distinct seeds land far apart on the hue
- * wheel; a SECOND hash jitters the rest lightness per workspace (44/49/54%)
+ * wheel; a SECOND hash jitters the rest lightness per workspace (56/61/66%)
  * so even near-hue pairs stay eye-distinguishable.
+ *
+ * Soft palette (user feedback 2026-10): the original 62%/45% saturation at
+ * 44–54% lightness read as harsh jewel tones on the sidebar; the accent now
+ * sits at 34% (21% for derived worktrees) saturation and a lifted
+ * 56/61/66% lightness — clearly distinguishable hues, pastel-calm in both
+ * light and dark themes.
  *
  * Derived (worktree) workspaces inherit their repository's family hue — the
  * family seed is the repoKey, shared by the MAIN checkout and every derived
@@ -107,8 +113,11 @@ export function workspaceAccentStyle(
   // One-decimal hue normalized into [0, 360): 359.96 rounds to 360.0, which
   // would escape the format contract — map it back to 0.
   const hue = (Math.round(rawHue * 10) % 3600) / 10
-  const saturation = seed?.isWorktree === true ? 45 : 62
-  const lightness = 44 + (hashString(workspaceId) % 3) * 5
+  // Soft palette (user feedback 2026-10): saturation 34% (21% for derived
+  // worktrees) + lifted lightness 56/61/66% — pastel-calm while keeping the
+  // family/main-vs-derived hierarchy and the near-hue jitter tie-break.
+  const saturation = seed?.isWorktree === true ? 21 : 34
+  const lightness = 56 + (hashString(workspaceId) % 3) * 5
   return { '--dsh-workspace-accent': `hsl(${hue} ${saturation}% ${lightness}%)` }
 }
 

@@ -27,15 +27,21 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
   localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。
 - 来源组同样可**折叠**（2026-09，设计 06 §2.4）：每个来源分组头左侧槽位为
-  文件夹字形、hover 换折叠 chevron——点击收拢该来源**整个 workspace 列表**
+  **MONITOR 电脑字形**（自绘 `client/icons.tsx` `IconMonitorOutline16`——
+  primitives 无服务器字形，原 folder 字形与 workspace 文件夹图标重合易
+  误解：folder = workspace、monitor = server，2026-10 用户反馈）、hover 换
+  折叠 chevron——点击收拢该来源**整个 workspace 列表**
   （搜索胶囊、来源级 git 告警与列表一并隐藏），**不动各 workspace 自身的
   对话折叠态**（`sourceFolded` 独立于 `folded`），展开后各 workspace 及其
-  会话原样恢复。
+  会话原样恢复。**2026-10 用户反馈**：来源头身份圆点已移除（身份由折叠
+  字形 accent + 激活左内边线 + rail 点承担；连接状态点/转圈保留右端）。
 - 每个 workspace 组头图标（文件夹，或派生 worktree 的 git-branch 字形）带
   各自的**确定性 accent 色**（`shared/derive.ts` 的 `workspaceAccentStyle`）：
   `(来源 id, 家族种子)` 哈希的黄金角色相散布 + 每 workspace 明度抖动
-  （44/49/54%）；无用户自定义、无持久化、与选中态无关（当前会话行保留其
-  官方选中 tint）。worktree 与所属仓库的**主检出共享家族色相**（种子 =
+  （56/61/66%）的**柔和色板**（饱和度 34%，worktree 21%；2026-10 用户
+  反馈由原 62%/45% + 44–54% 明度柔化，来源 accent 同步为
+  `hsl(hue 34% 61%)`）；无用户自定义、无持久化、与选中态无关（当前会话行
+  保留其官方选中 tint）。worktree 与所属仓库的**主检出共享家族色相**（种子 =
   `repoKey`；`mainWorkspaceId` 仅为无 repoKey 时的回退——主检出未注册或
   改名都不影响家族色）并降饱和；未分组桶无 accent（默认墨色）。
 

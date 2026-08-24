@@ -434,17 +434,6 @@
   box-shadow: inset 2px 0 0 var(--dsh-source-accent, var(--dsw-alias-label-primary));
 }
 
-/* Source identity dot: the local source renders the default secondary ink
-   directly (no derived accent); remote sources carry their stable hue via
-   the inline --dsh-source-accent-driven background. */
-.sourceDot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--dsw-alias-label-secondary);
-}
-
 .sourceLabel {
   flex: 1;
   min-width: 0;
@@ -680,13 +669,15 @@
   transform: rotate(0deg);
 }
 
-/* chamber (2026-09, docs/todo/server-drag-sort.md): SOURCE-level fold toggle
-   (collapses the server's whole workspace list) — workspace-parity swap: a
-   FOLDER glyph at rest, the collapse chevron on header hover/focus, same
-   16px slot, so nothing shifts. The chevron rotates exactly like the
-   workspace fold chevron (down while expanded, right while folded). The
-   source header's fixed 28px height absorbs the button; the slot reserves
-   its 16px at rest so the identity dot never reflows. */
+/* chamber (2026-09, docs/todo/server-drag-sort.md; glyph 2026-10 user
+   feedback): SOURCE-level fold toggle (collapses the server's whole
+   workspace list) — workspace-parity swap: a MONITOR glyph at rest (server =
+   machine; the workspace FOLDER glyph would read as another workspace), the
+   collapse chevron on header hover/focus, same 16px slot, so nothing
+   shifts. The chevron rotates exactly like the workspace fold chevron (down
+   while expanded, right while folded). The source header's fixed 28px height
+   absorbs the button; the slot reserves its 16px at rest so the label never
+   reflows. */
 .sourceFoldToggle {
   flex: none;
   display: inline-flex;
@@ -721,7 +712,7 @@
   transition: transform 150ms;
 }
 
-.sourceFoldToggle .sourceFoldFolder {
+.sourceFoldToggle .sourceFoldGlyph {
   display: inline-flex;
 }
 
@@ -730,8 +721,8 @@
   display: inline-flex;
 }
 
-.sourceHeader:hover .sourceFoldFolder,
-.sourceHeader:focus-within .sourceFoldFolder {
+.sourceHeader:hover .sourceFoldGlyph,
+.sourceHeader:focus-within .sourceFoldGlyph {
   display: none;
 }
 

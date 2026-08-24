@@ -198,8 +198,10 @@
 ### 2.4 来源级收拢 + 来源显示序（2026-09，todo/server-drag-sort.md 方案 1）
 
 - **来源级收拢（server 折叠）**：来源头左侧新增折叠开关（与 workspace 头
-  同款槽位：常态 FOLDER 字形、行 hover/focus 换入折叠 chevron，16px 槽位
-  无位移），点击收拢该来源**整个 workspace 列表**（搜索胶囊、来源级 git
+  同款槽位：常态 **MONITOR 电脑字形**（2026-10 用户反馈：原 folder 字形与
+  workspace 文件夹图标重合易误解，改自绘 monitor——folder = workspace、
+  monitor = server）、行 hover/focus 换入折叠 chevron，16px 槽位无位移），
+  点击收拢该来源**整个 workspace 列表**（搜索胶囊、来源级 git
   告警与 workspace 列表一并隐藏；搜索状态本身不动，展开后原查询恢复）。
   **刻意独立于每 workspace 的 `folded`**——收拢服务器**不折叠 workspace
   内的对话**（用户明确规则），展开后各 workspace 及其会话原样恢复。
@@ -358,7 +360,8 @@
 
 ### 4.3 UI 语义（状态指示）
 
-- 行尾为**固定 10px 状态槽**（非常驻身份点——来源身份由来源头圆点承担）：
+- 行尾为**固定 10px 状态槽**（非常驻身份点——来源身份由来源头折叠字形
+  accent + 激活左内边线 + rail 点承担；2026-10 起来源头身份圆点已移除）：
   - 常态（不运行、未完成、无子 agent）：空槽，不显示任何图标（槽保留
     宽度，行右缘跨行对齐）；
   - 运行中：官方 `StateDot` **ongoing 圆环**
@@ -512,16 +515,21 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   chevron `--dsw-alias-label-caption`、来源头底色 `--dsw-specific-sidebar-fill`；
   不存在的 `--dsw-alias-accent/success/danger/input-fill` 一律不得使用。
 - **来源 accent**：每元素 `--dsh-source-accent` CSS 变量承载远程来源 hue
-  （`hsl(hue 65% 52%)`），本地来源省略、回退默认 ink；用于来源头激活左
+  （**柔和色板 2026-10 用户反馈：`hsl(hue 34% 61%)`**，原 65%/52% 偏扎眼；
+  本地来源省略、回退默认 ink），用于来源头激活左
   内边线与 rail 活动环（**2026-09 起 workspace 组 chevron 不再取来源
-  accent**——workspace 图标自带确定性 accent，见下条）。
-- **workspace 图标 accent（2026-09）**：workspace 头行内联
+  accent**——workspace 图标自带确定性 accent，见下条）。**2026-10 用户
+  反馈**：来源头身份**圆点移除**（折叠字形 accent 承担身份；rail 点保留）。
+- **workspace 图标 accent（2026-09，柔和化 2026-10 用户反馈）**：workspace
+  头行内联
   `--dsh-workspace-accent`（`.foldToggle` 基色/hover 同取，图标走
   currentColor）——色相 = `(serverId, 家族种子)` 哈希 × 137.508 黄金角
-  步进 mod 360，明度 = 44/49/54%（第二哈希抖动，近色相兜底）；家族种子
+  步进 mod 360，明度 = 56/61/66%（第二哈希抖动，近色相兜底）；家族种子
   = `repoKey`（worktree 与主检出共享家族色相，主检出未注册/改名不漂移；
-  `mainWorkspaceId` 仅为无 repoKey 时的回退），worktree 降饱和 45%、
-  主检出/普通 workspace 62%；未分组桶无 accent 回退 caption ink。
+  `mainWorkspaceId` 仅为无 repoKey 时的回退），worktree 降饱和 **21%**、
+  主检出/普通 workspace **34%**（原 62%/45% + 44–54% 明度偏扎眼——低饱和
+  高明的柔和色板，色相分布与家族层级不变）；未分组桶无 accent 回退
+  caption ink。
   **2026-10 review（F4）**：来源首个 git 快照发布前 accent 一律不渲染
   （默认 ink）——git workspace 不会先出现独立色相再闪变为家族色相（启动
   瞬间的一次性闪变）；`isSourceGitFlagsLoaded` 后整源一次性落定最终色。
@@ -534,7 +542,8 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   已移除）——当前指示不重复编码于 workspace 级，两组高亮永不相邻融合，
   色调全为官方 token 浅档。
 - **排版**：字号下限 12px；会话标题 13/18——官方行 14px，13/18 是 chamber
-  多来源密度的刻意折中；来源身份点 8px（仅来源头/rail），session 行首为
+  多来源密度的刻意折中；来源身份点 8px（**2026-10 起仅 rail**——来源头
+  身份圆点已移除，见 §7 来源 accent 条），session 行首为
   固定 10px 状态槽（常态空）。
 - **行几何**：圆角 8px（来源头/workspace 头/会话行一致）；密度为多来源
   列表的有意取舍。
@@ -579,7 +588,9 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   契约见 §4.3，本节只定稿 token：运行与 completed 颜色一律
   `--dsw-static-deepseek-450`，pending 徽标用
   `--dsw-alias-state-{business,warn}-primary`（不再有 green/red 状态色）；
-  状态槽非身份标记（来源身份由来源头圆点承担）。
+  状态槽非身份标记（来源身份由来源头折叠字形 accent + 激活左内边线 +
+  rail 点承担——2026-10 用户反馈：来源头身份圆点已移除，连接状态点/转圈
+  保留在头部右端）。
 - **当前会话高亮（含 workspace 组标记）**：session 行 = 官方 selected 的
   浅 hover 色调（无阴影无加粗）；workspace 组 = 图标恒定自有色
   （2026-09 起，曾取来源 accent 的 chevron 规则已移除）——无底色融合、

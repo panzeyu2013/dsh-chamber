@@ -1596,7 +1596,7 @@ test('distinct workspace ids get distinct, well-spread accents', () => {
   // Golden-angle hues of distinct hash inputs are distinct unless the hashes
   // differ by a multiple of 30000 (see derive.ts WORKSPACE_HUE_STEP) — never
   // the case for these fixed ids — and the second-hash lightness jitter
-  // (44/49/54) breaks up near-hue pairs anyway.
+  // (56/61/66) breaks up near-hue pairs anyway.
   const seen = new Set(colors.map(color => `${color.hue.toFixed(1)}/${color.lightness}`))
   assert.equal(seen.size, colors.length, 'every sample workspace must have a unique accent')
   // The jitter must actually vary — plain hue-only spacing is not enough to
@@ -1621,10 +1621,11 @@ test('worktree workspaces inherit the repository family hue (registered main)', 
   assert.equal(siblingHsl.hue, mainHsl.hue)
   assert.notEqual(otherHsl.hue, mainHsl.hue)
   assert.notEqual(parseAccent(plain).hue, mainHsl.hue)
-  // Derived members demote to the muted saturation; the main keeps the full one.
-  assert.equal(mainHsl.saturation, 62)
-  assert.equal(derivedHsl.saturation, 45)
-  assert.equal(siblingHsl.saturation, 45)
+  // Derived members demote to the muted saturation; the main keeps the full
+  // one. Soft palette (user feedback 2026-10): 34% regular / 21% worktree.
+  assert.equal(mainHsl.saturation, 34)
+  assert.equal(derivedHsl.saturation, 21)
+  assert.equal(siblingHsl.saturation, 21)
 })
 
 test('worktrees share the family hue through repoKey when the main is unregistered', () => {

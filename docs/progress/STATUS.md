@@ -41,6 +41,14 @@
   "切换到该实例"）。验证：typecheck:sidebar/git、test:sidebar（含
   workspace-git-flags 新增 loaded 标记用例）、test:git、
   build:renderer、verify:i18n。
+  **2026-10 用户反馈调整（F6/F7）**：⑥ 来源头折叠字形由 folder 换为
+  自绘 **monitor 电脑图标**（`client/icons.tsx` `IconMonitorOutline16`，
+  primitives 无服务器字形；folder 与 workspace 图标重合易误解——folder =
+  workspace、monitor = server）；⑦ 来源头身份**圆点移除**（来源身份改由
+  折叠字形 accent + 激活左内边线 + rail 点承担；连接状态点/转圈保留在
+  头部右端）。柔和化色板同上条（workspace accent 34%/21% + 56/61/66%，
+  来源 accent 34% 61%）。验证：typecheck:sidebar、test:sidebar（饱和度
+  断言随新色板更新）、build:renderer。
 - **VS Code 深链插件（设计 16，M0–M2 已实现，2026-08；独立复核/实机验收进行中）**：
   `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
   实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：
@@ -600,10 +608,14 @@
   §2.2 / §3.1——不再在 STATUS 复述。
 - **workspace 图标按身份着色（2026-09，已落地）**：workspace 组头图标
   （文件夹 / worktree branch 字形）按 `(serverId, 家族种子)` 哈希 +
-  黄金角步进（×137.508）派生稳定色相，第二哈希抖动明度（44/49/54%）保证
+  黄金角步进（×137.508）派生稳定色相，第二哈希抖动明度（56/61/66%）保证
   肉眼可区分；worktree 与主检出共享仓库家族色相（种子 = `repoKey`，
   `mainWorkspaceId` 仅为无 repoKey 时的回退——主检出未注册/改名不影响
-  家族色）并降饱和（45%），主检出/普通 workspace 全饱和（62%）。
+  家族色）并降饱和（21%），主检出/普通 workspace 34%。**柔和化（2026-10
+  用户反馈）**：原 62%/45% 饱和度 + 44–54% 明度在侧栏上偏扎眼，现统一为
+  低饱和 + 抬高明度的柔和色板（色相分布与家族层级不变）；来源 accent
+  同步由 `hsl(hue 65% 52%)` 调为 `hsl(hue 34% 61%)`（rail 点 / 激活左内
+  边线 / 来源折叠字形同色板）。
   选中态不编码于图标——当前会话行自带官方选中 tint（原
   `.groupContainsCurrent .foldToggle` 源 accent 规则移除）。纯函数
   `workspaceAccentStyle`/`hashString`（shared/derive.ts），无持久化、
