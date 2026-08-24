@@ -28,8 +28,9 @@ test('token provider accepts a matching bearer (hash-stored)', async () => {
     const auth = createAuth({ kind: 'token', token: TOKEN }, store)
     const principal = await auth.verify({ headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '' })
     assert.equal(principal?.kind, 'token')
-    // The plaintext token is never persisted — only its hash.
+    // The plaintext token is never persisted — only its salted scrypt hash.
     assert.notEqual(store.getTokenHash(), TOKEN)
+    assert.match(store.getTokenHash() ?? '', /^scrypt\$[a-f0-9]+\$[a-f0-9]{64}$/i)
   } finally { cleanup() }
 })
 

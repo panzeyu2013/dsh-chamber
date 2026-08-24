@@ -2,7 +2,7 @@
  * Gateway authentication (design 17 §5): the pluggable AuthProvider seam.
  *
  *   - `none`    — loopback-only trust (S1 forbids it on a non-loopback bind).
- *   - `token`   — the D7 shared bearer token; only its SHA-256 hash is
+ *   - `token`   — the D7 shared bearer token; only its salted scrypt hash is
  *                 persisted (`tokens.json`, 0600), never the plaintext (S5).
  *   - `password`— scrypt password verify → HS256 JWT session cookie (12h),
  *                 `Path=/; HttpOnly; SameSite=Strict; Secure(conditional)`
@@ -93,10 +93,6 @@ function verifyJwt(token: string, secret: string): Record<string, unknown> | nul
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function sha256hex(value: string): string {
-  return createHmac('sha256', 'dsh-gateway-token').update(value).digest('hex')
-}
 
 function headerValue(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
   const v = headers[name]
@@ -234,10 +230,15 @@ function createNoneProvider(): AuthProvider {
   }
 }
 
-/** `token`: the D7 shared bearer token. Only its SHA-256 hash is persisted;
- * the config/env plaintext is hashed at creation and never written back. */
+/** `token`: the D7 shared bearer token. Persisted only as a salted scrypt
+ * hash (S5) — never the plaintext; the config/env plaintext is dropped at
+ * creation. Verify is constant-time and scrypt-work-gated, like the password
+ * path. (Migration: a legacy fixed-key HMAC hash fails verify and must be
+ * re-provisioned.) */
 function createTokenProvider(store: GatewayStore, plainToken: string): AuthProvider {
-  if (plainToken !== '') store.setTokenHash(sha256hex(plainToken))
+  const tokenHash = plainToken !== '' ? hashCredential(plainToken) : null
+  if (tokenHash !== null) store.setTokenHash(tokenHash)
+  const verifyBounded = createPasswordWorkGate()
   return {
     kind: 'token',
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
@@ -246,10 +247,9 @@ function createTokenProvider(store: GatewayStore, plainToken: string): AuthProvi
       const match = /^Bearer[ \t]+(.+)$/i.exec(value)
       if (match === null) return null
       const stored = store.getTokenHash()
-      const incoming = sha256hex(match[1])
-      const a = Buffer.from(incoming)
-      const b = Buffer.from(stored ?? '')
-      if (stored === null || a.length !== b.length || !timingSafeEqual(a, b)) return null
+      if (stored === null) return null
+      const ok = await verifyBounded(() => verifyCredentialAsync(match[1], stored))
+      if (!ok) return null
       return { kind: 'token', id: 'shared-token', issuedAt: Date.now() }
     },
   }
