@@ -1150,7 +1150,15 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                   className={css.input}
                   value={draft.kind}
                   onChange={event => {
-                    setDraft({ ...draft, kind: event.target.value as TransportKind })
+                    const nextKind = event.target.value as TransportKind
+                    const kindChanged = nextKind !== draft.kind
+                    setDraft({
+                      ...draft,
+                      kind: nextKind,
+                      // ssh's remotePort is the remote dsh web port; a gateway's
+                      // HTTPS port (e.g. 443) must not carry over on kind switch.
+                      remotePort: kindChanged && nextKind === 'ssh' ? '30800' : draft.remotePort,
+                    })
                     setFieldErrors({})
                     setFormError(null)
                   }}
