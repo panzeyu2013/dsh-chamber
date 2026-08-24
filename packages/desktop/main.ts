@@ -1213,7 +1213,7 @@ if (!gotTheLock) {
           cancelId: 0,
           noLink: true,
         });
-        if (response !== 1) return { error: 'cancelled' };
+        if (response !== 1) return { error: 'cancelled', code: 'cancelled' };
       }
       const applied = applySettingsPatch(validated.patch);
       if (!applied.ok) return applied;

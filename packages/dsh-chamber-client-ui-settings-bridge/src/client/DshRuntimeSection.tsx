@@ -49,13 +49,12 @@ function formatTimestamp(value: string): string {
   }
 }
 
-/** Map the main-process registry patch errors to localized copy. The desktop
- *  validation message is technical English; the known invalid-origin failure
- *  becomes a dictionary key (the user-cancelled confirm dialog is intercepted
- *  by the caller and never reaches this), and anything unknown stays honest
- *  and raw. */
-function localizeRegistryError(error: string, t: RuntimeTranslate): string {
-  if (error === 'registryOrigin must be a valid https:// URL without credentials') {
+/** Map the main-process registry patch failures to localized copy by their
+ *  stable machine-readable `code` (never by display-text matching — the main
+ *  process may reword `error` without notice). Known codes become dictionary
+ *  keys; anything unknown stays honest and raw. */
+function localizeRegistryError(code: string | undefined, error: string, t: RuntimeTranslate): string {
+  if (code === 'invalid-registry-origin') {
     return t('dshRuntimeRegistryInvalidOrigin')
   }
   return error
@@ -202,10 +201,10 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
       if (!result.ok) {
         // The confirm dialog was declined — not an error; the caller reverts
         // the dropdown so it never claims an origin that was not applied.
-        if (result.error === 'cancelled') return { ok: false, cancelled: true }
+        if (result.code === 'cancelled') return { ok: false, cancelled: true }
         // A validation failure is an inline field error on the custom origin;
         // any other apply failure surfaces on the general registry line.
-        const error = localizeRegistryError(result.error, t)
+        const error = localizeRegistryError(result.code, result.error, t)
         if (inline) setOriginError(error)
         else setRegistryError(error)
         return { ok: false, cancelled: false }

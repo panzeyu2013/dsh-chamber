@@ -203,8 +203,12 @@ export function computeQuitRisk(input: {
   return { needsConfirm: reasons.length > 0, reasons };
 }
 
-/** Validate a renderer-supplied settings patch: known keys + types only. */
-export function validatePatch(patch: unknown): { ok: true; patch: Partial<ChamberSettings> } | { ok: false; error: string } {
+/** Validate a renderer-supplied settings patch: known keys + types only.
+ * Failures carry a stable machine-readable `code` for the renderer's known
+ * branches (e.g. 'invalid-registry-origin'); `error` is display text only. */
+export function validatePatch(
+  patch: unknown,
+): { ok: true; patch: Partial<ChamberSettings> } | { ok: false; error: string; code?: string } {
   if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
     return { ok: false, error: 'settings patch must be an object' };
   }
@@ -222,7 +226,7 @@ export function validatePatch(patch: unknown): { ok: true; patch: Partial<Chambe
     } else if (key === 'registryOrigin') {
       const origin = normalizeRegistryOrigin(record[key]);
       if (origin === null) {
-        return { ok: false, error: 'registryOrigin must be a valid https:// URL without credentials' };
+        return { ok: false, error: 'registryOrigin must be a valid https:// URL without credentials', code: 'invalid-registry-origin' };
       }
       result.registryOrigin = origin;
     } else if (typeof record[key] !== 'boolean') {

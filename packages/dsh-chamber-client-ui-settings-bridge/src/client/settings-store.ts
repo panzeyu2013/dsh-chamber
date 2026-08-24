@@ -93,12 +93,12 @@ export function subscribeSettings(listener: () => void): () => void {
  */
 export async function applySettingsPatch(
   patch: Partial<ChamberSettings>,
-): Promise<{ ok: true; status: ChamberSettingsStatus } | { ok: false; error: string }> {
+): Promise<{ ok: true; status: ChamberSettingsStatus } | { ok: false; error: string; code?: string }> {
   const api = bridgeSettings()
   if (api === null) return { ok: false, error: 'settings bridge unavailable' }
   try {
     const result = await api.set(patch)
-    if ('error' in result) return { ok: false, error: result.error }
+    if ('error' in result) return { ok: false, error: result.error, code: result.code }
     current = result
     notify()
     return { ok: true, status: result }

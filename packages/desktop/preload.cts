@@ -214,7 +214,10 @@ export interface ChamberSettingsStatus {
 
 export interface SettingsSurface {
   get(): Promise<ChamberSettingsStatus>
-  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string }>
+  /** Failure carries a stable machine-readable `code` where the renderer must
+   *  branch (e.g. 'cancelled', 'invalid-registry-origin'); `error` is a
+   *  user-facing fallback text only, never a branching key. */
+  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string; code?: string }>
   onChanged(callback: (status: ChamberSettingsStatus) => void): () => void
 }
 
