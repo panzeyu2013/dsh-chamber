@@ -189,6 +189,19 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
+  /** 桌面通知设置（design 19 §3.4）：嵌套键，与 chamber-settings.ts 权威 store
+   *  及 renderer global.d.ts 的结构镜像保持一致（镜像同步纪律）。 */
+  notifications: ChamberNotificationSettings
+}
+
+/** 桌面通知设置子块（design 19 §3.4）——结构与 desktop/chamber-settings.ts 的
+ *  ChamberNotificationSettings 保持一致。 */
+export interface ChamberNotificationSettings {
+  enabled: boolean
+  mode: 'hidden-only' | 'always'
+  onComplete: boolean
+  onAsk: boolean
+  onRequest: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -237,8 +250,40 @@ export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
 }
 
+/** 通知事件种类（design 19 §3.2）：complete / ask / request + test（设置页测试按钮）。 */
+export type NotificationKind = 'complete' | 'ask' | 'request' | 'test'
+
+/** 通知 payload（design 19 §3.3）——渲染端组装，主进程白名单校验 + 裁决。 */
+export interface NotificationRequest {
+  sourceId: string
+  sessionId: string
+  kind: NotificationKind
+  title: string
+  body: string
+  /** 正在屏幕上查看的会话（渲染端 document.hasFocus 判定，主进程再查一次作为权威）。 */
+  requireHidden: boolean
+}
+
+/** 通知点击打开事件的载荷（design 19 §3.3）：渲染端据此 openSession。 */
+export interface NotificationOpenRequest {
+  sourceId: string
+  sessionId: string
+}
+
+/** The dsh-chamber notification surface (design 19 §3.3): notify() invokes the
+ *  main-process decision chain (returns whether a native notification was
+ *  actually shown); ready() signals that the renderer registered its onOpen
+ *  listener (the main process only drains notification-open pushes after this);
+ *  onOpen subscribes to the notification-click push and returns an
+ *  unsubscribe. */
+export interface NotificationSurface {
+  notify(payload: NotificationRequest): Promise<boolean>
+  ready(): Promise<boolean>
+  onOpen(callback: (req: NotificationOpenRequest) => void): () => void
+}
+
 /** The full bridge: app info + ssh + update + chamber settings + system resume
- *  + vscode deep-link surfaces. */
+ *  + vscode deep-link + notifications surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -249,6 +294,7 @@ export interface DshChamberBridge {
   systemResume: SystemResumeSurface
   vscode: VscodeSurface
   deepLink: DeepLinkSurface
+  notifications: NotificationSurface
 }
 
 /**
@@ -372,6 +418,28 @@ function deepLinkApi(): DeepLinkSurface {
 }
 
 /**
+ * The dsh-chamber notification surface (design 19 §3.3): notify() invokes the
+ * main-process decision chain (payload whitelist / dedupe claim / settings /
+ * native Notification) and resolves whether a notification was actually shown;
+ * ready() signals that the renderer has registered its onOpen listener (the
+ * main process only drains notification-open pushes after this — did-finish-load
+ * fires before the listener exists); onOpen subscribes to the notification-click
+ * push ({sourceId, sessionId} → renderer openSession) and returns an unsubscribe.
+ */
+function notificationsApi(): NotificationSurface {
+  return {
+    notify: payload => ipcRenderer.invoke('dsh-chamber:notify', { payload }),
+    ready: () => ipcRenderer.invoke('dsh-chamber:notifications-ready'),
+    onOpen: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, req: NotificationOpenRequest) => callback(req);
+      ipcRenderer.on('dsh-chamber:notification-open', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:notification-open', listener);
+    },
+  };
+}
+
+/**
  * Fetch the app-info payload for the bridge. The main-process IPC sender
  * fence (design 05 §7.4) may reject a bootstrap invoke fired before the main
  * frame has committed its trusted URL (senderFrame/URL timing during initial
@@ -411,6 +479,7 @@ requestAppInfo().then(
       systemResume: systemResumeApi(),
       vscode: vscodeApi(),
       deepLink: deepLinkApi(),
+      notifications: notificationsApi(),
     });
   },
   (err: unknown) => {
@@ -425,6 +494,7 @@ requestAppInfo().then(
       systemResume: systemResumeApi(),
       vscode: vscodeApi(),
       deepLink: deepLinkApi(),
+      notifications: notificationsApi(),
     });
   },
 );

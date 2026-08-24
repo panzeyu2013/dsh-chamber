@@ -529,6 +529,25 @@ test('projectRuntimeFacts returns empty sessions for an empty snapshot', () => {
   assert.deepEqual(projectRuntimeFacts({ current: 's1' }), { current: 's1', sessions: {} })
 })
 
+test('projectRuntimeFacts drops subagent-origin rows (no notification edge / no navigation facts)', () => {
+  const report = projectRuntimeFacts({
+    current: 's1',
+    byId: {
+      s1: { running: true },
+      sub1: { running: true, origin: 'subagent' },
+      sub2: { running: false, completed: true, origin: 'subagent', pendingInteraction: 'question' },
+      s2: { running: false, completed: true },
+    },
+  })
+  // subagent 行（无论 running/completed/pending 如何）不进入事实报告——
+  // 否则通知边沿会对子代理完成/提问发「未命名会话」通知刷屏。
+  assert.deepEqual(report.sessions, {
+    s1: { running: true },
+    s2: { running: false, completed: true },
+  })
+  assert.equal(report.current, 's1')
+})
+
 test('projectRuntimeFacts treats missing running bits as false (the App edge memory uses === true)', () => {
   const report = projectRuntimeFacts({
     byId: {

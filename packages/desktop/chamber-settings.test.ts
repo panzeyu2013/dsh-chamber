@@ -28,23 +28,47 @@ test('normalizeSettings: defaults for null / non-object', () => {
 
 test('normalizeSettings: accepts valid fields, rejects bad values, ignores unknown keys', () => {
   const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, futureKey: 42 });
-  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false });
+  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, notifications: DEFAULT_CHAMBER_SETTINGS.notifications });
   // Bad enum / non-boolean values fall back to defaults silently (normalize is
   // the persistence read path; loud validation lives in validatePatch).
   const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1, quitConfirmation: 'yes' });
   assert.deepEqual(bad, DEFAULT_CHAMBER_SETTINGS);
 });
 
+test('normalizeSettings: nested notifications — missing/invalid fields fall back to defaults', () => {
+  // 缺字段 → 整组默认。
+  assert.deepEqual(normalizeSettings({ notifications: {} }).notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
+  // 非对象（null/数组/标量）→ 整组默认。
+  assert.deepEqual(normalizeSettings({ notifications: null }).notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
+  assert.deepEqual(normalizeSettings({ notifications: 'yes' }).notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
+  assert.deepEqual(normalizeSettings({ notifications: ['x'] }).notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
+  // 部分字段 → 缺失用默认；合法字段保留；非法值回落默认。
+  const partial = normalizeSettings({ notifications: { enabled: true, mode: 'always', onAsk: false, onComplete: 'yes' } });
+  assert.deepEqual(partial.notifications, { enabled: true, mode: 'always', onComplete: true, onAsk: false, onRequest: true });
+  const invalid = normalizeSettings({ notifications: { enabled: 'yes', mode: 'sometimes', onRequest: 1 } });
+  assert.deepEqual(invalid.notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
+  // 未知嵌套键忽略（前向兼容，persistence 读路径语义同顶层）。
+  const unknown = normalizeSettings({ notifications: { enabled: true, futureNested: 42 } });
+  assert.deepEqual(unknown.notifications, { enabled: true, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true });
+});
+
 test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
   const file = path.join(dir, 'chamber-settings.json');
-  const settings = { windowCloseBehavior: 'quit' as const, launchAtLogin: true, keepAwake: true, quitConfirmation: false };
+  const settings = {
+    windowCloseBehavior: 'quit' as const,
+    launchAtLogin: true,
+    keepAwake: true,
+    quitConfirmation: false,
+    notifications: { enabled: true, mode: 'always' as const, onComplete: false, onAsk: true, onRequest: false },
+  };
   writeSettingsFile(file, settings);
   const read = readSettingsFile(file);
   assert.equal(read.notice, null);
   assert.deepEqual(read.settings, settings);
   const stat = readFileSync(file, 'utf8');
   assert.ok(stat.includes('"quit"'));
+  assert.ok(stat.includes('"always"'));
   assert.ok(!existsSync(`${file}.tmp`), 'tmp file cleaned up by rename');
 });
 
@@ -126,4 +150,37 @@ test('validatePatch: accepts known partial patches', () => {
   const ok = validatePatch({ windowCloseBehavior: 'quit', keepAwake: true, quitConfirmation: false });
   assert.ok(ok.ok);
   if (ok.ok) assert.deepEqual(ok.patch, { windowCloseBehavior: 'quit', keepAwake: true, quitConfirmation: false });
+});
+
+test('validatePatch: nested notifications — valid partial patches accepted', () => {
+  const full = validatePatch({ notifications: { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: true } });
+  assert.ok(full.ok);
+  if (full.ok) assert.deepEqual(full.patch.notifications, { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: true });
+  // 部分嵌套字段合法（未提供的字段不落 patch，由 applySettingsPatch deep-merge 兜底）。
+  const partial = validatePatch({ notifications: { enabled: true, mode: 'hidden-only' } });
+  assert.ok(partial.ok);
+  if (partial.ok) assert.deepEqual(partial.patch.notifications, { enabled: true, mode: 'hidden-only' });
+  // 空对象也是合法 partial（无操作）。
+  const empty = validatePatch({ notifications: {} });
+  assert.ok(empty.ok);
+});
+
+test('validatePatch: nested notifications — invalid values rejected loudly', () => {
+  const notObject = validatePatch({ notifications: 'yes' });
+  assert.equal(notObject.ok, false);
+  const nullNested = validatePatch({ notifications: null });
+  assert.equal(nullNested.ok, false);
+  const arrayNested = validatePatch({ notifications: ['enabled'] });
+  assert.equal(arrayNested.ok, false);
+  const badMode = validatePatch({ notifications: { mode: 'sometimes' } });
+  assert.equal(badMode.ok, false);
+  const badBool = validatePatch({ notifications: { onComplete: 'yes' } });
+  assert.equal(badBool.ok, false);
+  const unknownNested = validatePatch({ notifications: { enabled: true, futureNested: 42 } });
+  assert.equal(unknownNested.ok, false);
+  // 嵌套非法时顶层合法键也不应被采纳（整体失败）。
+  const mixed = validatePatch({ keepAwake: true, notifications: { mode: 'always' as unknown } });
+  assert.ok(mixed.ok, 'mode 合法时整体通过');
+  const mixedBad = validatePatch({ keepAwake: true, notifications: { mode: 'sometimes' } });
+  assert.equal(mixedBad.ok, false);
 });

@@ -87,6 +87,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code 深链插件：`dsh-chamber://` OS 深链 + `shell.overlay` 主区右上按钮快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed，现有包改动 = 0 |
+| 19 | [19-notifications.md](19-notifications.md) | 已实现（2026-09；四路 review 轮后） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
 
 ---
 

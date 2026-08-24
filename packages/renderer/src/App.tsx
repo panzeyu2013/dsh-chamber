@@ -41,6 +41,7 @@ import {
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
@@ -279,6 +280,17 @@ export default function App() {
   // 无状态（纯投影），避免在每 ctx 复制一套状态机。
   const [completedBySource, setCompletedBySource] = useState<Record<string, Record<string, boolean>>>({})
   const prevRunningRef = useRef<Record<string, Record<string, boolean>>>({})
+  // 通知边沿记忆（设计 19 §3.2）：每来源每会话的上一份事实快照，供
+  // detectNotificationEdges 判定 running→idle / pending 武装边沿。与
+  // prevRunningRef（蓝点机）并存互不耦合：蓝点带「正在阅读」解除，通知边沿
+  // 不受解除影响——窗口隐藏到托盘时活动来源的当前会话完成也必须通知
+  // （requireHidden 豁免在主进程裁决）。随来源生命周期收敛（onRuntimeReport
+  // 的 clear 分支 delete，与 prevRunningRef 同纪律）。
+  const prevRuntimeFactsRef = useRef<Record<string, Record<string, SessionFacts>>>({})
+  // 通知 complete 去重记忆（设计 19 §3.2，dedupeCompleteEdges）：每来源已发
+  // complete 的会话集合——正被查看的会话完成先走 running 边沿，切走后 vendor
+  // 延迟武装 completed 的重复边沿在此丢弃；会话重新 running 时清除。
+  const notifiedCompleteRef = useRef<Record<string, Set<string>>>({})
 
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
@@ -430,6 +442,14 @@ export default function App() {
     // prevRunning 是 ref：同步裁剪，随注册表收敛（重加同名 id 由刷新重建）。
     for (const id of Object.keys(prevRunningRef.current)) {
       if (!servers.some(server => server.id === id)) delete prevRunningRef.current[id]
+    }
+    // 通知边沿记忆同款收敛（设计 19 §3.2）：与 prevRunningRef 对称，
+    // 随注册表收敛，重加同名 id 由刷新重建。
+    for (const id of Object.keys(prevRuntimeFactsRef.current)) {
+      if (!servers.some(server => server.id === id)) delete prevRuntimeFactsRef.current[id]
+    }
+    for (const id of Object.keys(notifiedCompleteRef.current)) {
+      if (!servers.some(server => server.id === id)) delete notifiedCompleteRef.current[id]
     }
     setRemoteStatus(prev => {
       // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
@@ -748,11 +768,29 @@ export default function App() {
     const unsubscribeResume = window.dshChamber?.systemResume?.onResume(() => {
       window.dispatchEvent(new Event('dsh-chamber:system-resume'))
     })
+    // 通知点击打开（design 19 §3.3）：主进程推送 notification-open →
+    // openSession（既有路径：切 shell → ensureRemoteConnected →
+    // openInstanceSession）。桥与 desktopSsh 同一批 expose，desktopSsh 存在
+    // 则 notifications 必存在（与上方 SYSTEM_RESUME_EVENT 同款锁定纪律）。
+    // 监听注册后立即发就绪信号：主进程只在就绪后放行推送（did-finish-load
+    // 早于本监听注册，窗口重建路径的事件不能丢）。
+    const unsubscribeNotifications = window.dshChamber?.notifications?.onOpen(({ sourceId, sessionId }) => {
+      void openSession(sourceId, sessionId).catch(err => {
+        console.error('[notifications] 打开会话失败:', err)
+      })
+    })
+    if (unsubscribeNotifications !== undefined) {
+      void window.dshChamber?.notifications?.ready?.().catch(() => {})
+    }
     return () => {
       unsubscribe()
       unsubscribeInstances()
       unsubscribeResume?.()
+      unsubscribeNotifications?.()
     }
+    // openSession 依赖链稳定到 []（selectView/ensureRemoteConnected 均
+    // useCallback([])），函数引用恒定——effect 单次订阅捕获的闭包永不过期，
+    // 无需（也不能——声明在其后，deps 立即求值会 TDZ）列入依赖。
   }, [sshBridgeReady, refreshRemotes])
 
   /**
@@ -897,6 +935,14 @@ export default function App() {
     }
     return map
   }, [connections, remoteInstances])
+
+  // 通知事件组装镜像（设计 19 §3.3）：onRuntimeReport effect（依赖 []）经
+  // ref 读取最新 aggregates/serverLabels——effect 闭包拿不到 state/useMemo，
+  // 渲染期镜像纪律同 remoteStatusRef（与 commit 同步，微任务/事件回调安全）。
+  const aggregatesRef = useRef(aggregates)
+  aggregatesRef.current = aggregates
+  const serverLabelsRef = useRef(serverLabels)
+  serverLabelsRef.current = serverLabels
 
   /**
    * 空闲预热（设计 05 §4）：ready 的注册表远程实例按序、一次一个地在后台
@@ -1108,6 +1154,8 @@ export default function App() {
       if (report === undefined) {
         // shell 卸载（来源移除）：清掉该来源的边沿记忆与蓝点。
         delete prevRunningRef.current[sourceId]
+        delete prevRuntimeFactsRef.current[sourceId]
+        delete notifiedCompleteRef.current[sourceId]
         setCompletedBySource(prev => {
           if (prev[sourceId] === undefined) return prev
           const next = { ...prev }
@@ -1115,6 +1163,79 @@ export default function App() {
           return next
         })
         return
+      }
+      // 通知边沿（设计 19 §3.2/§3.3）：独立纯函数 detectNotificationEdges +
+      // dedupeCompleteEdges，与蓝点机互不耦合——蓝点带「正在阅读」解除，
+      // 通知边沿不受解除影响（窗口隐藏时活动来源的当前会话完成也必须通知，
+      // requireHidden 豁免在主进程裁决）。首份上报（prev === undefined）只
+      // 播种记忆不发事件；边沿为空也更新记忆（记忆是后续上报的 prev，report
+      // 为不可变新对象，直接存引用即可）。
+      const prevFacts = prevRuntimeFactsRef.current[sourceId]
+      const edges = detectNotificationEdges(prevFacts, report.sessions)
+      prevRuntimeFactsRef.current[sourceId] = report.sessions
+      // 父会话回合结束但后台子代理仍在运行时（runningSubagents > 0）不视为
+      // 完成（06 §4.5 与官方 Rows 呈现优先级 pending > runningSubagents >
+      // completed 一致）：通知面不得成为唯一「大声」的错位表面——用户点开
+      // 发现子代理还在干活。抑制发生在去重之前（不记账），若 vendor 在子
+      // 代理全部结束后才武装 completed，届时 completed 边沿正常补发。
+      const edgesWithoutRunningSubagents = edges.filter(edge =>
+        !(edge.kind === 'complete'
+          && (report.sessions[edge.sessionId]?.runningSubagents ?? 0) > 0)
+      )
+      // complete 去重（跨上报记忆）：正被查看的会话完成先走 running 边沿，
+      // 切走后 vendor 延迟武装 completed 的重复边沿在此丢弃；running=true
+      // 的会话清除记忆（下次完成重新可发）。
+      const runningIds = Object.entries(report.sessions)
+        .filter(([, facts]) => facts?.running === true)
+        .map(([sessionId]) => sessionId)
+      const notifiedBefore = notifiedCompleteRef.current[sourceId] ?? new Set<string>()
+      const deduped = dedupeCompleteEdges(edgesWithoutRunningSubagents, notifiedBefore, runningIds)
+      // 已离开列表的会话清除已发记忆（与蓝点机 leave-the-list 清扫同纪律，
+      // 防长活来源上的记忆缓慢增长）。
+      for (const sessionId of [...deduped.notified]) {
+        if (report.sessions[sessionId] === undefined) deduped.notified.delete(sessionId)
+      }
+      notifiedCompleteRef.current[sourceId] = deduped.notified
+      if (deduped.edges.length > 0) {
+        // 事件组装（设计 19 §3.3）：固定文案（zh 字面量，沿 App.tsx 既有
+        // 风格）；label/title 取渲染期镜像（本 effect 依赖 []，拿不到
+        // state/useMemo 闭包）。桥未就绪（window.dshChamber 异步出现）静默
+        // 跳过——边沿是低频事件，错过早期事件可接受，不报错刷屏。组装块
+        // 与蓝点对账隔离：任何异常不得吞掉该份上报的蓝点推进（try/finally
+        // 保底，主链路 notify 本身有 catch）。
+        try {
+          const bridge = window.dshChamber?.notifications
+          if (bridge !== undefined) {
+            const label = serverLabelsRef.current[sourceId] ?? sourceId
+            const aggregate = aggregatesRef.current[sourceId]
+            const sessionTitle = (sessionId: string) =>
+              aggregate?.sessions.find(session => session.sessionId === sessionId)?.title ?? '未命名会话'
+            for (const edge of deduped.edges) {
+              const title =
+                edge.kind === 'complete' ? '会话已完成'
+                : edge.kind === 'ask' ? '代理正在等待你的回答'
+                : '代理请求你的批准'
+              const body = `${label} · ${sessionTitle(edge.sessionId)}`
+              // 正在屏幕上查看的会话豁免（与 OpenChamber requireHidden 同语义；
+              // 单窗口下 renderer 的 document.hasFocus() 与主进程
+              // isAnyWindowFocused() 等价，主进程再查一次作权威）。
+              const requireHidden =
+                sourceId === activeViewRef.current &&
+                edge.sessionId === report.current &&
+                document.hasFocus()
+              void bridge.notify({
+                sourceId,
+                sessionId: edge.sessionId,
+                kind: edge.kind,
+                title,
+                body,
+                requireHidden,
+              }).catch(err => console.warn('[notifications] 发送失败:', err))
+            }
+          }
+        } catch (error) {
+          console.warn('[notifications] 事件组装失败:', error)
+        }
       }
       // 蓝点对账（规则与 vendor 提醒同构，但「正在阅读」取 App 侧事实——
       // 活动视图的 current 会话，而非各来源自己可能陈旧的 selected；纯函数

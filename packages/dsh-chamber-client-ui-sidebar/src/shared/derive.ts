@@ -169,12 +169,17 @@ export function projectRuntimeFacts(
       running?: boolean
       completed?: boolean
       pendingInteraction?: 'approval' | 'plan-review' | 'question'
+      origin?: 'subagent'
     }>
   },
   subagentRunning?: ReadonlyMap<string, number>,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
+    // subagent 行不进入运行时事实（与 projectInstanceSnapshot 的 origin 过滤
+    // 同规）：导航不呈现子会话，通知边沿也不得对子代理完成/提问发通知——
+    // 子代理完成是高频事件，漏入会刷屏（design 19 §3.2）。
+    if (facts?.origin === 'subagent') continue
     const row: {
       running?: boolean
       completed?: boolean
