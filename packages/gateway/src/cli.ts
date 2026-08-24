@@ -31,7 +31,7 @@ Options:
   --public-origin URL expected public authority (S11: reject unknown Host with 421)
   --trusted-proxy IP exact reverse-proxy peer allowed to supply X-Forwarded-* (repeatable)
   --cors-origin O     extra allowed origin (repeatable)
-  --allow-anonymous-external
+  --no-auth
                       allow an externally-reachable bind with NO auth (S1 override;
                       prints a loud warning — trusted networks only)
   -h, --help          show this help
@@ -91,7 +91,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--public-origin': args.publicOrigin = takeValue(); break
       case '--trusted-proxy': args.trustedProxies.push(takeValue()); break
       case '--cors-origin': args.corsOrigins.push(takeValue()); break
-      case '--allow-anonymous-external': args.allowAnonymousExternal = true; break
+      case '--no-auth': args.allowAnonymousExternal = true; break
       default: throw new UsageError(`unknown option: ${arg}`)
     }
   }

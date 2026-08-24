@@ -108,7 +108,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       || options.config.trustedProxies.length > 0)) {
     logger.warn(
       'SECURITY WARNING: gateway is externally reachable with NO authentication '
-      + '(--allow-anonymous-external). Any host that can reach this port has full, '
+      + '(--no-auth). Any host that can reach this port has full, '
       + 'unauthenticated access to the managed dsh instance and its orchestration '
       + 'surface. This overrides design 17 S1 — use only on trusted networks.',
     )

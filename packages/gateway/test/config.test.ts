@@ -37,7 +37,7 @@ test('S1: loopback behind a public origin or trusted proxy still requires auth',
   )
 })
 
-test('S1 override: --allow-anonymous-external permits an anonymous external bind', () => {
+test('S1 override: --no-auth permits an anonymous external bind', () => {
   const config = parseGatewayConfig({ host: '0.0.0.0', allowAnonymousExternal: true }, STATE, DSH)
   assert.equal(config.auth.kind, 'none')
   assert.equal(config.allowAnonymousExternal, true)
