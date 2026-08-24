@@ -126,8 +126,10 @@
    `runtime-restore-pre-rollback` + UI「恢复回滚前数据」按钮（§3.7「可反悔」落地）；
    ③ restore-missing-snapshot 死循环——`restoreOutcome==='incomplete'`（快照永久缺失）不再
    封锁 `recover-metadata`（'half' 仍仅可重试），执行器把遗留的 restore-in-progress 标记
-   归档为证据。残缺口：纯「健康元数据 + 快照缺失」场景下 recover-metadata 按钮仍要求
-   元数据健康判定为非 healthy 才显示（执行器已具备处理能力，待后续接线）。
+   归档为证据。残缺口已补（2026-08 末轮）：`detectRuntimeMetadataHealth(baseDir,
+   shellVersion?)` 现在把「应用更新失效的 override + 旧壳 pre-verdict journal」与
+   「恢复中 journal 引用缺失快照」都归入 `selection-corrupt`，执行器按健康状态
+   （含语义不一致）归档实时元数据并完成内建逃逸。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 完整 mutation 能力暂缓**：detached/进程组/lsof 降级路径仍以
   Unix 为契约目标；设计 18 的 Windows 运行时管理因此按上述契约保持只读。
