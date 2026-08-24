@@ -13,11 +13,14 @@ import {
   BLANK_GHOST_GRACE_MS,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
+  hashString,
   increasedForkTitle,
   instanceSnapshotSignature,
   mergeRuntimeFacts,
   mergeSearchResults,
+  nextServerOrder,
   nextUpdatedOrder,
+  orderServersForDisplay,
   orderUngroupedSessions,
   projectRuntimeFacts,
   projectInstanceSnapshot,
@@ -30,6 +33,7 @@ import {
   serversProjectionSignature,
   SEARCH_QUERY_MAX_CODE_UNITS,
   UNGROUPED_WORKSPACE_ID,
+  workspaceAccentStyle,
   __resetBlankGhostsForTests,
 } from '../src/shared/derive.ts'
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
@@ -527,6 +531,25 @@ test('projectRuntimeFacts maps every pendingInteraction kind and keeps completed
 test('projectRuntimeFacts returns empty sessions for an empty snapshot', () => {
   assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
   assert.deepEqual(projectRuntimeFacts({ current: 's1' }), { current: 's1', sessions: {} })
+})
+
+test('projectRuntimeFacts drops subagent-origin rows (no notification edge / no navigation facts)', () => {
+  const report = projectRuntimeFacts({
+    current: 's1',
+    byId: {
+      s1: { running: true },
+      sub1: { running: true, origin: 'subagent' },
+      sub2: { running: false, completed: true, origin: 'subagent', pendingInteraction: 'question' },
+      s2: { running: false, completed: true },
+    },
+  })
+  // subagent 行（无论 running/completed/pending 如何）不进入事实报告——
+  // 否则通知边沿会对子代理完成/提问发「未命名会话」通知刷屏。
+  assert.deepEqual(report.sessions, {
+    s1: { running: true },
+    s2: { running: false, completed: true },
+  })
+  assert.equal(report.current, 's1')
 })
 
 test('projectRuntimeFacts treats missing running bits as false (the App edge memory uses === true)', () => {
@@ -1483,6 +1506,64 @@ test('increasedForkTitle increments without precision loss (BigInt)', () => {
   assert.equal(increasedForkTitle(`huge (${'9'.repeat(40)})`), `huge (1${'0'.repeat(40)})`)
 })
 
+// ---- server display order (2026-09, docs/todo/server-drag-sort.md — option 1) ----
+
+test('orderServersForDisplay returns the projection order unchanged when no preference exists', () => {
+  const projection = [server('local'), server('ssh-a'), server('ssh-b')]
+  assert.equal(orderServersForDisplay(projection, undefined), projection)
+  assert.equal(orderServersForDisplay(projection, []), projection)
+})
+
+test('orderServersForDisplay applies the stored order first, then trails the rest in projection order', () => {
+  const projection = [server('local'), server('ssh-a'), server('ssh-b'), server('ssh-c')]
+  const ordered = orderServersForDisplay(projection, ['ssh-b', 'local', 'ssh-c'])
+  assert.deepEqual(ordered.map(item => item.id), ['ssh-b', 'local', 'ssh-c', 'ssh-a'])
+  // A partial preference only reorders the listed ids — the rest keep their
+  // relative projection order after the listed ones.
+  assert.deepEqual(orderServersForDisplay(projection, ['ssh-c']).map(item => item.id), ['ssh-c', 'local', 'ssh-a', 'ssh-b'])
+})
+
+test('orderServersForDisplay skips unknown stored ids and never duplicates a server', () => {
+  const projection = [server('local'), server('ssh-a')]
+  // A vanished source (ghost id) is skipped — no phantom group; duplicates
+  // in a corrupt payload are collapsed (first occurrence wins).
+  const ordered = orderServersForDisplay(projection, ['ssh-a', 'ghost', 'local', 'ssh-a'])
+  assert.deepEqual(ordered.map(item => item.id), ['ssh-a', 'local'])
+})
+
+test('nextServerOrder computes the drop order for moves in both directions', () => {
+  const order = ['local', 'ssh-a', 'ssh-b', 'ssh-c']
+  // Move down: drag local before ssh-b.
+  assert.deepEqual(nextServerOrder(order, 'local', { id: 'ssh-b', half: 'before' }), ['ssh-a', 'local', 'ssh-b', 'ssh-c'])
+  // Move down past more than one: drag local after ssh-b (anchor = ssh-c).
+  assert.deepEqual(nextServerOrder(order, 'local', { id: 'ssh-b', half: 'after' }), ['ssh-a', 'ssh-b', 'local', 'ssh-c'])
+  // Move up: drag ssh-c after local (anchor = ssh-a).
+  assert.deepEqual(nextServerOrder(order, 'ssh-c', { id: 'local', half: 'after' }), ['local', 'ssh-c', 'ssh-a', 'ssh-b'])
+  // Append at the end: after the last element.
+  assert.deepEqual(nextServerOrder(order, 'ssh-a', { id: 'ssh-c', half: 'after' }), ['local', 'ssh-b', 'ssh-c', 'ssh-a'])
+  // Insert at the top: before the first element.
+  assert.deepEqual(nextServerOrder(order, 'ssh-c', { id: 'local', half: 'before' }), ['ssh-c', 'local', 'ssh-a', 'ssh-b'])
+})
+
+test('nextServerOrder returns null for every no-op drop', () => {
+  const order = ['local', 'ssh-a', 'ssh-b', 'ssh-c']
+  // The dragged source IS the anchor.
+  assert.equal(nextServerOrder(order, 'ssh-a', { id: 'ssh-a', half: 'before' }), null)
+  // Dropping right after itself = the current position.
+  assert.equal(nextServerOrder(order, 'ssh-b', { id: 'ssh-b', half: 'after' }), null)
+  // Already in place (ssh-a sits right before ssh-b).
+  assert.equal(nextServerOrder(order, 'ssh-a', { id: 'ssh-b', half: 'before' }), null)
+  // Already last (append at the end of the last element).
+  assert.equal(nextServerOrder(order, 'ssh-c', { id: 'ssh-c', half: 'after' }), null)
+  // The target vanished from the rendered order.
+  assert.equal(nextServerOrder(order, 'local', { id: 'ghost', half: 'before' }), null)
+  // The dragged source vanished from the rendered order (no ghost writes).
+  assert.equal(nextServerOrder(order, 'ghost', { id: 'local', half: 'before' }), null)
+  // A single-element order can never move.
+  assert.equal(nextServerOrder(['local'], 'local', { id: 'local', half: 'before' }), null)
+  assert.equal(nextServerOrder(['local'], 'local', { id: 'local', half: 'after' }), null)
+})
+
 // ---- singleton guard (third-wave review, R2-1#2) ----
 
 test('importing derive registers exactly one entry in the shared-singleton registry', () => {
@@ -1499,4 +1580,103 @@ test('importing derive registers exactly one entry in the shared-singleton regis
   ]
   assert.ok(registry !== undefined, 'the singleton registry must exist after importing derive.ts')
   assert.deepEqual(Object.keys(registry), ['derive'])
+})
+
+// ---- per-workspace icon accent (2026-09) ----
+
+interface ParsedHsl {
+  hue: number
+  saturation: number
+  lightness: number
+}
+
+function parseAccent(accent: { '--dsh-workspace-accent': string }): ParsedHsl {
+  const match = /^hsl\((\d+(?:\.\d+)?) (\d+)% (\d+)%\)$/.exec(accent['--dsh-workspace-accent'])
+  assert.ok(match !== null, `unexpected accent format: ${accent['--dsh-workspace-accent']}`)
+  return { hue: Number(match[1]), saturation: Number(match[2]), lightness: Number(match[3]) }
+}
+
+test('workspaceAccentStyle is deterministic, single-keyed and well-formed', () => {
+  const first = workspaceAccentStyle('srv', 'w1')
+  assert.ok(first !== undefined, 'a real workspace must always receive an accent')
+  assert.deepEqual(workspaceAccentStyle('srv', 'w1'), first)
+  assert.deepEqual(Object.keys(first), ['--dsh-workspace-accent'])
+  parseAccent(first) // throws on a malformed hsl string
+  // Deterministic across calls and servers — never a random color.
+  assert.deepEqual(workspaceAccentStyle('srv-a', 'w1'), workspaceAccentStyle('srv-a', 'w1'))
+})
+
+test('workspaceAccentStyle returns undefined for the ungrouped bucket', () => {
+  assert.equal(workspaceAccentStyle('srv', UNGROUPED_WORKSPACE_ID), undefined)
+  assert.equal(workspaceAccentStyle('srv', UNGROUPED_WORKSPACE_ID, { isWorktree: true, repoKey: 'r' }), undefined)
+})
+
+test('distinct workspace ids get distinct, well-spread accents', () => {
+  const colors = Array.from({ length: 24 }, (_, i) => {
+    const accent = workspaceAccentStyle('srv', `workspace-${i}`)
+    assert.ok(accent !== undefined)
+    return parseAccent(accent)
+  })
+  // Golden-angle hues of distinct hash inputs are distinct unless the hashes
+  // differ by a multiple of 30000 (see derive.ts WORKSPACE_HUE_STEP) — never
+  // the case for these fixed ids — and the second-hash lightness jitter
+  // (56/61/66) breaks up near-hue pairs anyway.
+  const seen = new Set(colors.map(color => `${color.hue.toFixed(1)}/${color.lightness}`))
+  assert.equal(seen.size, colors.length, 'every sample workspace must have a unique accent')
+  // The jitter must actually vary — plain hue-only spacing is not enough to
+  // guarantee eye-distinguishability for near pairs.
+  assert.ok(new Set(colors.map(color => color.lightness)).size >= 2, 'lightness jitter must vary across workspaces')
+})
+
+test('worktree workspaces inherit the repository family hue (registered main)', () => {
+  const main = workspaceAccentStyle('srv', 'main-checkout', { isMain: true, repoKey: 'repo-1' })
+  const derived = workspaceAccentStyle('srv', 'worktree-a', { isWorktree: true, mainWorkspaceId: 'main-checkout', repoKey: 'repo-1' })
+  const sibling = workspaceAccentStyle('srv', 'worktree-b', { isWorktree: true, mainWorkspaceId: 'main-checkout', repoKey: 'repo-1' })
+  const otherRepo = workspaceAccentStyle('srv', 'worktree-x', { isWorktree: true, mainWorkspaceId: 'other-main', repoKey: 'repo-2' })
+  const plain = workspaceAccentStyle('srv', 'plain-workspace')
+  assert.ok(main && derived && sibling && otherRepo && plain)
+  const mainHsl = parseAccent(main)
+  const derivedHsl = parseAccent(derived)
+  const siblingHsl = parseAccent(sibling)
+  const otherHsl = parseAccent(otherRepo)
+  // Same family seed → same hue; a different repo → a different hue; a plain
+  // workspace has no family seed, so its hue differs from the family too.
+  assert.equal(derivedHsl.hue, mainHsl.hue)
+  assert.equal(siblingHsl.hue, mainHsl.hue)
+  assert.notEqual(otherHsl.hue, mainHsl.hue)
+  assert.notEqual(parseAccent(plain).hue, mainHsl.hue)
+  // Derived members demote to the muted saturation; the main keeps the full
+  // one. Soft palette (user feedback 2026-10): 34% regular / 21% worktree.
+  assert.equal(mainHsl.saturation, 34)
+  assert.equal(derivedHsl.saturation, 21)
+  assert.equal(siblingHsl.saturation, 21)
+})
+
+test('worktrees share the family hue through repoKey when the main is unregistered', () => {
+  const a = workspaceAccentStyle('srv', 'worktree-a', { isWorktree: true, repoKey: 'repo-1' })
+  const b = workspaceAccentStyle('srv', 'worktree-b', { isWorktree: true, repoKey: 'repo-1' })
+  const c = workspaceAccentStyle('srv', 'worktree-c', { isWorktree: true, repoKey: 'repo-3' })
+  assert.ok(a && b && c)
+  assert.equal(parseAccent(a).hue, parseAccent(b).hue)
+  assert.notEqual(parseAccent(c).hue, parseAccent(a).hue)
+  // The family hue depends on the repoKey alone: a worktree carrying a
+  // mainWorkspaceId still shares the hue, and a RENAMED main (different
+  // workspace id, same repoKey) never shifts the family.
+  const withMain = workspaceAccentStyle('srv', 'worktree-d', {
+    isWorktree: true, mainWorkspaceId: 'renamed-main', repoKey: 'repo-1',
+  })
+  assert.ok(withMain)
+  assert.equal(parseAccent(withMain).hue, parseAccent(a).hue)
+  const renamedMain = workspaceAccentStyle('srv', 'renamed-main', { isMain: true, repoKey: 'repo-1' })
+  assert.ok(renamedMain)
+  assert.equal(parseAccent(renamedMain).hue, parseAccent(a).hue)
+})
+
+test('hashString matches the historical sourceHue arithmetic', () => {
+  // The sidebar source hue is `hashString(id) % 360` — lock the 32-bit hash
+  // shape so a future refactor cannot silently change server dot colors.
+  assert.equal(hashString(''), 0)
+  assert.equal(hashString('a'), 97)
+  assert.equal(hashString('ab'), 3105)
+  assert.equal(hashString('local'), 103145323)
 })

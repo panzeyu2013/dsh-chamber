@@ -245,7 +245,7 @@ importers:
         specifier: ^19.0.0
         version: 19.2.8
 
-  packages/dsh-chamber-client-ui-vscode:
+  packages/dsh-chamber-client-ui-open-in:
     dependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -256,6 +256,9 @@ importers:
       '@deepseek-ai/dsh-client-runtime':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-runtime
+      '@deepseek-ai/dsh-client-ui-primitives':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-primitives
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots

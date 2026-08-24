@@ -14,10 +14,18 @@ import type {
   ChamberSettings,
   ChamberSettingsStatus,
   DshChamberBridge,
+  NotificationRequest,
+  NotificationSurface,
   SettingsSurface,
 } from '../../../../packages/renderer/src/global.d.ts'
 
-export type { ChamberSettings, ChamberSettingsStatus, SettingsSurface }
+export type {
+  ChamberSettings,
+  ChamberSettingsStatus,
+  NotificationRequest,
+  NotificationSurface,
+  SettingsSurface,
+}
 
 declare global {
   interface Window {

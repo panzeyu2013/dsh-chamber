@@ -6,15 +6,88 @@
 
 ## 未完成 / 待执行
 
-- **VS Code 深链插件（设计 16，M0–M2 已实现，2026-08；独立复核/实机验收进行中）**：
+- **来源级收拢 + server 拖拽排序（2026-09，todo/server-drag-sort.md 方案 1，已实现）**：
+  侧边栏 server 分组两处增强——① **来源级收拢**：来源头左侧折叠开关
+  （workspace 同款 folder↔chevron 的 hover 槽位互换），点击收拢该来源
+  **整个 workspace 列表**（搜索胶囊 / 来源级 git 告警 / 列表一并隐藏），
+  **刻意不动各 workspace 自身的对话折叠态**（用户明确规则：不要折叠
+  workspace 中的对话），展开后各 workspace 及其会话原样恢复；② **server
+  拖拽排序**：来源头为拖柄，section 边界 drop marker（`dropBefore`/
+  `dropAfter`），提交写入共享 view-prefs 的 `serverOrder`
+  （`dsh-chamber.sidebar.v1`，localStorage 持久化 + 跨 ctx 实时联动）——
+  **纯显示偏好**：无 wire、App 层 N-ctx 常驻/预热/注册表顺序不动（导航按
+  id 键控，与顺序无关）；`orderServersForDisplay` 纯函数应用（存储序优先 +
+  未知 id 跳过 + 未列出 id 按投影序尾随），rail 圆点同序。两字段
+  （`sourceFolded`/`serverOrder`）均可选，v 保持 1 不重播种，写时裁剪同
+  orderBy 规则（本会话见过、现已消失的来源才裁）。实现：
+  `shared/view-prefs.ts`、`shared/derive.ts`、`client/SidebarRoot.tsx`、
+  `client/sidebar-chamber.module.css`、`client/locales.ts`（zh/en）。
+  契约见 `docs/design/06-sidebar-enhancements.md` §2.4 / §3.1。
+  验证：`typecheck:sidebar`、`test:sidebar`（144 用例全绿，含
+  `orderServersForDisplay`/`nextServerOrder`/view-prefs 新增用例；
+  口径 = 并发会话回退其 workspaceAccentStyle 测试后的当前树）、
+  `verify:i18n` 全绿；另经两轮独立 subagent 审查（正确性 + 设计一致性）
+  并修复：header 键盘劫持（P1）、跨 ctx 提交竞态与 ESC 取消落盘（P2）、
+  session/workspace 提交消失源守卫对齐（P2）。
+  **2026-10 review 修复（F1–F5）**：① ESC 取消守卫对 dragend 时
+  `dataTransfer` 为 null（Safari 曾有）同样视为取消（06 §2.4）；
+  ② server 拖拽指针离开全部 section 即清除 marker、**列表外释放 =
+  取消**（会话/workspace 保持 §2.2"drop/end 提交最后 marker"不变——
+  整组位移影响面大故收窄）；③ header 拖拽手势起始于任意 button 时
+  dragstart 取消拖拽（按钮保持纯点击，>4px 微拖不吞折叠点击）；
+  ④ workspace accent 在来源 git 快照发布前不渲染（消除启动瞬间
+  "独立色→家族色"闪变，`isSourceGitFlagsLoaded` 门控，06 §4 accent
+  条）；⑤ 来源头折叠/搜索按钮补自身 title（不再继承 header 的
+  "切换到该实例"）。验证：typecheck:sidebar/git、test:sidebar（含
+  workspace-git-flags 新增 loaded 标记用例）、test:git、
+  build:renderer、verify:i18n。
+  **2026-10 用户反馈调整（F6/F7）**：⑥ 来源头折叠字形由 folder 换为
+  自绘 **monitor 电脑图标**（`client/icons.tsx` `IconMonitorOutline16`，
+  primitives 无服务器字形；folder 与 workspace 图标重合易误解——folder =
+  workspace、monitor = server）；⑦ 来源头身份**圆点移除**（来源身份改由
+  折叠字形 accent + 激活左内边线 + rail 点承担；连接状态点/转圈保留在
+  头部右端）。柔和化色板同上条（workspace accent 34%/21% + 56/61/66%，
+  来源 accent 34% 61%）。验证：typecheck:sidebar、test:sidebar（饱和度
+  断言随新色板更新）、build:renderer。
+- **桌面通知（设计 19，已实现 2026-09）**：session 在 complete / ask（question）/
+  request（approval/plan-review）时推送桌面原生通知，设置中可选项（并入通用页
+  「通知」控制组 + 四组分割线）。检测 = renderer 复用 06 §4 运行时事实通道边沿
+  检测（`renderer/src/notification-edges.ts` 纯函数：首报播种/断连补发/同 tick
+  去重；控制面零改动、无新 host 插件）；呈现 = 主进程 `desktop/notifications.ts`
+  裁决链（enabled/mode hidden-only|always/每事件开关 + requireHidden 聚焦豁免 +
+  5s 去重 claim + payload 白名单）+ Electron Notification（`dsh-chamber:notify`
+  IPC；click → showMainWindow + `dsh-chamber:notification-open` → openSession，
+  pending 队列 + drain 防窗口重建竞态——design 16 模式）；设置 =
+  chamber-settings.json 嵌套 `notifications` 键 + settings 壳通用页通知组
+  （notifications-settings.ts 纯函数 + GeneralView 接线 + i18n zh/en +
+  测试按钮）。验证：test:desktop 全绿（chamber-settings 16 + notifications 19 +
+  既有全链）、test:renderer-shell 全绿（notification-edges 26 + 既有）、
+  test:settings-bridge 全绿（notifications-settings 7 + 既有 37）、根 typecheck +
+  typecheck:settings-bridge/sidebar、verify:i18n 无 DRIFTED、build:renderer 成功。
+  **2026-09 独立 review 轮（四路并行：desktop 安全/正确性、renderer 接线、
+  设置 UI、跨层契约与架构纪律）**：无 P0；修复 P1×6——① 测试按钮空 sessionId
+  被白名单拒绝（validate 对 'test' 豁免 + click 跳过 openSession 入队）；
+  ② subagent 行漏入边沿导致子代理完成通知刷屏（projectRuntimeFacts 过滤
+  origin==='subagent'）；③ completedEdge 双发（dedupeCompleteEdges 跨上报
+  记忆，会话重跑清除）；④ pending 直切（question→approval 不经 undefined）
+  漏发（改为值变化即发）；⑤ ChamberSettings 契约类型缺 notifications 键
+  （preload/global.d.ts 镜像同步 + settings-bridge 删强转/本地声明）；
+  ⑥ 全对象 patch 与主进程 partial+deep-merge 契约相悖（改发 partial）。
+  P2 一并修复：claim 移至裁决后、队列 64 上限、claim key JSON 化、renderer
+  就绪信号（dsh-chamber:notifications-ready）解决重建路径点击丢失、onOpen
+  deps 稳定化注释、测试通知专用文案 key、未知键过滤、分割线反向组合、
+  默认值镜像断言。契约见 `docs/design/19-notifications.md`（含 OpenChamber
+  调研；§3.4 已同步 2026-09 用户拍板（并入通用页，无新入口））。剩余：
+  macOS 系统通知权限实机验收（M3，打包态冒烟）。
+- **VS Code 深链 + open-in 打开注册表（设计 16 + 2026-08 扩展，M0–M2 已实现；
+  独立复核/实机验收进行中）**：
   `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
   实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：
   parseOpenVscodeIntent / buildVscodeRemoteUrl（authority 与 SSH_HOST_PATTERN 解耦、
   IPv6 括号、sshPort≠22 拒绝）/ detectVscodeAvailability（纯 fs+PATH，默认口径）/
   runVscodeLaunch 双入口共用流水线，43 用例全绿）+ main.ts 接线（顶层 open-url +
   pendingIntents 去重队列 + second-instance argv 扫描 + isPackaged/win32 门控协议注册 +
-  `dsh-chamber:vscode-availability`/`open-vscode` 两 IPC + drain 后 best-effort intent
-  推送）+ preload 面（`vscode.availability()/open()`、`deepLink.onIntent()`）+ 新客户端
+  drain 后 best-effort intent 推送）+ preload 面（`deepLink.onIntent()`）+ 新客户端
   插件 `@dsh-chamber/dsh-client-ui-vscode`（`shell.overlay` 主区右上按钮（vendor
   AppFrame 已实证渲染该槽、条目自动 opt-in pointer-events），可用性 + 当前工作区双门控
   fail-closed，**本地与远程来源均显示**（用户决策 2026-08：local 走 `vscode://file/`，
@@ -28,8 +101,43 @@
   IPC instance pattern 对称校验、openVscodeUrl 注入点 scheme 复验、drain .catch）；
   前端接线审查修复 P1×1（coordinator 桥未就绪不固化 + 有界轮询）与 P2×5（/shared
   barrel、open .catch、chamberInstanceId bail、删未用 peer、焦点环）。
+  > 上段为 design 16 历史基线（重命名前）。2026-08 open-in 扩展后现状见下段。
+  **open-in 扩展（2026-08，设计 20 已落档 `docs/design/20-open-in-registry.md`）**：插件升级为通用打开
+  注册表——包重命名 `@dsh-chamber/dsh-client-ui-open-in`（组件 OpenInButton，会话头部
+  utilities 槽单条目 `open-in` order -1）；主进程新增 `packages/desktop/open-in.ts`
+  （electron-free：OpenInApp 注册表 [finder, vscode]，finder provider 仅 local
+  （validateRemotePath + stat → 目录 `shell.openPath` / 文件 `shell.showItemInFolder`，
+  openchamber reveal 同款语义），vscode provider 包装 runVscodeLaunch 零行为变化；
+  `runOpenInLaunch` 六步 loud 管线：appId 白名单 → instanceId 校验 → **path 校验上移
+  管线**（validateRemotePath，防未来 provider 漏检）→ remoteCapable 门（远程来源只
+  放行 vscode 家族）→ 可用性二次校验（经注入 ctx，任意机器可测）→ 分发，24 用例全绿）；
+  `dsh-chamber:open-in-apps`（能力协商）/`dsh-chamber:open-in` 两 IPC（**原 design 16
+  的 vscode-availability/open-vscode 两 IPC 已随旧插件删除**，渲染层唯一入口收敛；
+  open-in 对 vscode 成功后保留 deep-link-intent 推送，与 OS 深链对齐）+ info 载荷
+  `platform`（非秘密）+ preload 面 `vscode`→`openIn`（apps()/open()）+ global.d.ts 同步；
+  本地来源（sourceId==='local'）显示 [finder, vscode]（≥2 → 图标 + Menu 下拉，默认
+  vscode 保持单键行为；**vscode 未装时显示单 finder 按钮为净新增能力**），远程来源仅
+  vscode（行为不变）；平台文案 Finder/资源管理器/文件管理器按 `platform` 选键。
+  验证：test:desktop 全链 **287 用例**（含 deep-link 43 + open-in 24）、typecheck:open-in
+  及全部插件 typecheck 回归、build:renderer、test:renderer-shell（锁步断言）、
+  test:sidebar/test:git、verify:i18n、frozen-lockfile（锁文件 = HEAD + 仅 importer
+  重命名与 primitives peer 的最小 diff，无再生漂移）全绿。
+  **2026-08 五路对抗复核（安全/前端接线/测试质量/打包分发/集成等价，无 P0）**：
+  修复 P1×3（测试套件机器依赖——可用性门改为 ctx 注入；AGENTS.md 行号前缀事故；
+  锁文件再生漂移还原）+ P2×7（孤儿 vscode IPC 删除、path 校验上移管线、open-in 载荷
+  形状守卫、openPath 边界提取 normalizeOpenPathError 并补测、vscode URL 断言强化为
+  精确目标、门失败副作用 spy、folder 图标 hover 反馈）。如实记录的边界：①
+  `showItemInFolder` 为 Electron void API——文件 reveal 分支无错误通道，静默面
+  （目录分支 loud，此面属 API 限制）；② Windows 盘符路径被 validateRemotePath
+  （POSIX `/` 开头）拒绝 → win32 上 finder/vscode-file loud 失败（"Windows 首版暂缓"
+  口径一致，需实机确认 dsh 工作区路径形态）；③ "Session log 同槽"与按钮/下拉在
+  vendor 头部的定位/层叠为描述性主张，需实机确认；④ apps 列表会话内记忆化——
+  打开下拉时 `refreshApps()` 重探（会话中途装/卸 app 无需刷新页面），点击时主进程
+  活体复检兜底（loud）；⑤ slot 条目 label 为 vendor 诊断标识（非用户可见），已用
+  中性文案。
   剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
-  N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径）。契约见
+  N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径、Finder 下拉在 vendor
+  头部的定位/层叠、远程来源仅 vscode）。深链契约见
   `docs/design/16-vscode-deeplink.md`。
 - **服务端接入层 / Gateway（设计 17，验收候选，2026-08-23）**：
   `docs/design/17-server-side-gateway.md`。已 rebase 最新 main，并完成独立认证 server 形态：
@@ -675,6 +783,23 @@
   [264,420] 钳位）。交互细节与加固（stopPropagation 配对、ghost 守卫、
   checkVisibility 重试等）见 `docs/design/06-sidebar-enhancements.md`
   §2.2 / §3.1——不再在 STATUS 复述。
+- **workspace 图标按身份着色（2026-09，已落地）**：workspace 组头图标
+  （文件夹 / worktree branch 字形）按 `(serverId, 家族种子)` 哈希 +
+  黄金角步进（×137.508）派生稳定色相，第二哈希抖动明度（56/61/66%）保证
+  肉眼可区分；worktree 与主检出共享仓库家族色相（种子 = `repoKey`，
+  `mainWorkspaceId` 仅为无 repoKey 时的回退——主检出未注册/改名不影响
+  家族色）并降饱和（21%），主检出/普通 workspace 34%。**柔和化（2026-10
+  用户反馈）**：原 62%/45% 饱和度 + 44–54% 明度在侧栏上偏扎眼，现统一为
+  低饱和 + 抬高明度的柔和色板（色相分布与家族层级不变）；来源 accent
+  同步由 `hsl(hue 65% 52%)` 调为 `hsl(hue 34% 61%)`（rail 点 / 激活左内
+  边线 / 来源折叠字形同色板）。
+  选中态不编码于图标——当前会话行自带官方选中 tint（原
+  `.groupContainsCurrent .foldToggle` 源 accent 规则移除）。纯函数
+  `workspaceAccentStyle`/`hashString`（shared/derive.ts），无持久化、
+  无配置 UI、无新增订阅；未分组桶无 accent 回退默认墨色。**2026-10
+  review（F4）**：来源首个 git 快照发布前 accent 一律不渲染（默认
+  ink）——消除启动瞬间"独立色→家族色"闪变（`isSourceGitFlagsLoaded`
+  门控；加载标记与 flags 同订阅、同 version，无新增订阅）。
 - **设置桥 keyed 插槽（2026-08）**：bridge-outlet 现支持 root+keyed（`settings.plugin.item`，
   镜像官方 scoped-slots 契约，entryKey 分发 + fallback），修复 Plugins 页黑屏；所有桥接出口
   （本地专属 `settings.action` + 选中实例 `settings.section` 内容出口）在 child-ctx → host

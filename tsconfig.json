@@ -83,7 +83,9 @@
     "packages/desktop/transport-target.test.ts",
     "packages/desktop/runtime-lockstep.test.ts",
     "packages/gateway/src/**/*.ts",
-    "packages/gateway/test/**/*.ts"
+    "packages/gateway/test/**/*.ts",
+    "packages/desktop/open-in.ts",
+    "packages/desktop/open-in.test.ts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }

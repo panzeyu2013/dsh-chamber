@@ -61,7 +61,7 @@ const MAX_REMOTE_PATH_CHARS = 4096
  * design 16 §8). Must be absolute (leading `/`), ≤ 4096 chars, and free of
  * control characters / CR / LF / NUL.
  */
-function validateRemotePath(path: string): { ok: true; path: string } | { ok: false; error: string } {
+export function validateRemotePath(path: string): { ok: true; path: string } | { ok: false; error: string } {
   if (typeof path !== 'string' || path.length === 0) {
     return { ok: false, error: 'path is required' }
   }

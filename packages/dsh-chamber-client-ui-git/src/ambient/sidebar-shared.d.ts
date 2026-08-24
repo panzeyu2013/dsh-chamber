@@ -76,6 +76,8 @@ export function getSourceRepoLayouts(sourceId: string): RepoGitLayout[]
 export function getWorkspaceGitFlagsVersion(): number
 export function retainSourceWorkspaceFlags(sourceId: string, keep: ReadonlySet<string>): void
 export function setWorkspaceGitFlag(sourceId: string, workspaceId: string, flag: WorkspaceGitFlag | undefined): void
+export function markSourceGitFlagsLoaded(sourceId: string): void
+export function isSourceGitFlagsLoaded(sourceId: string): boolean
 export function clearWorkspaceGitFlags(sourceId: string): void
 export function getWorkspaceGitFlag(sourceId: string, workspaceId: string): WorkspaceGitFlag | undefined
 export function subscribeWorkspaceGitFlags(listener: () => void): () => void

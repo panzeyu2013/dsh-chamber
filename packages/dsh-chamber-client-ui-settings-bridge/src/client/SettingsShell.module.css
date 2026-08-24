@@ -738,6 +738,21 @@
   gap: 10px;
 }
 
+/* Divider between adjacent control groups (visual fix): a hairline using the
+   same border token as the shell nav divider (--dsw-alias-border-l2), with
+   padding matching the section's 12px gap rhythm so the line sits centered
+   between groups. Covers all four groups — 启动与关闭 / 运行 / 通知 / 更新 —
+   including the update group, whose wrapper uses its own class
+   (.updateSection). Any two siblings inside the section get the rule
+   regardless of order/combination, so future groups keep the divider. */
+.generalSection > .generalGroup + .generalGroup,
+.generalSection > .generalGroup + .updateSection,
+.generalSection > .updateSection + .generalGroup,
+.generalSection > .updateSection + .updateSection {
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding-top: 12px;
+}
+
 /* In-section group heading (same vocabulary as the connections section's
    groupHead): quiet uppercase caption, not a competing title. */
 .generalGroupTitle {
@@ -814,6 +829,15 @@
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-state-error-primary);
+}
+
+/* Success inline hint (test-notification feedback): the same row vocabulary
+   as .generalError, success token instead of error. */
+.generalNotifyOk {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-success-primary);
 }
 
 /* ---- chamber-global「更新」group (design 11, merged into 通用) ----

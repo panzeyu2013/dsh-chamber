@@ -130,8 +130,8 @@ declare module '@dsh-chamber/dsh-client-ui-git/client' {
   export function apply(ctx: any): void
 }
 
-/** Chamber VS Code deep-link overlay button (design 16). */
-declare module '@dsh-chamber/dsh-client-ui-vscode/client' {
+/** Chamber open-in header button (design 16 + open-in extension). */
+declare module '@dsh-chamber/dsh-client-ui-open-in/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }

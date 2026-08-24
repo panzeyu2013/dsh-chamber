@@ -16,9 +16,10 @@
  * state — no spinner/dot flicker on every retry attempt); the phase text
  * lives on hover only; active source highlighted) →
  * workspace groups → session rows. Remote sources carry a stable accent
- * derived from the source id (hue hash); the local source uses the default
- * dot. The accent also feeds the active source/session left inset through a
- * per-element CSS variable (--dsh-source-accent). A session row click asks
+ * derived from the source id (hue hash); the local source omits the accent
+ * and falls back to the default ink. The accent also feeds the active
+ * source/session left inset through a per-element CSS variable
+ * (--dsh-source-accent). A session row click asks
  * the App layer to switch to that source's
  * shell and open the session (chamberBridge.requestOpenSession); clicking a
  * remote source's header asks the App layer to switch the active N-ctx view
@@ -28,7 +29,9 @@
  * interactions = a distinguishable 14px icon badge — question `?`,
  * plan-review checklist, approval warning triangle; completed-but-unread = a
  * persistent blue DOT — the slot is not a
- * server-identity marker, the source header dot owns identity). Hover swaps
+ * server-identity marker; identity rides the source header accent (fold
+ * glyph + active inset) and the rail dots — the old header identity DOT was
+ * removed 2026-10 (user feedback)). Hover swaps
  * are TRUE replacements: the actions take no layout space at rest
  * (display:none), so the state icon really sits at the end; hovering swaps
  * the state slot for the kebab+archive actions (source header: status ↔
@@ -111,11 +114,13 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
+import { IconMonitorOutline16 } from './icons.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults, nextUpdatedOrder,
-  orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket, runningRingVisible, sanitizeSearchQuery,
-  serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, type SessionOrderBy,
+  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, hashString, increasedForkTitle, mergeSearchResults,
+  nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
+  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, workspaceAccentStyle,
+  type SessionOrderBy,
 } from '../shared/derive.ts'
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
@@ -131,7 +136,7 @@ import {
   clearSourceBookkeeping, getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
 } from '../shared/view-prefs.ts'
 import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
-import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags, type RepoGitLayout } from '../shared/workspace-git-flags.ts'
+import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags, type RepoGitLayout } from '../shared/workspace-git-flags.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
@@ -159,15 +164,20 @@ const SCROLLBAR_LINGER_MS = 2000
 
 /** Stable per-source accent: deterministic hue hash of the source id (05 §2). */
 function sourceHue(sourceId: string): number {
-  let hash = 0
-  for (let i = 0; i < sourceId.length; i += 1) hash = (hash * 31 + sourceId.charCodeAt(i)) >>> 0
-  return hash % 360
+  return hashString(sourceId) % 360
 }
 
-/** Remote sources carry the derived accent; the local source keeps the default dot. */
+/**
+ * Remote sources carry the derived accent; the local source keeps the default
+ * dot. Soft palette (user feedback 2026-10): 34% saturation at 61% lightness,
+ * matching the workspace icon accents — the old 65%/52% jewel tone read as
+ * harsh next to the (now softer) workspace hues. The source-header identity
+ * DOT is gone (2026-10, user feedback); this color survives on the rail dots,
+ * the active-source left inset and the source fold-toggle glyph only.
+ */
 function sourceDotStyle(server: ChamberServerAggregate): CSSProperties | undefined {
   if (server.kind === 'local') return undefined
-  return { backgroundColor: `hsl(${sourceHue(server.id)} 65% 52%)` }
+  return { backgroundColor: `hsl(${sourceHue(server.id)} 34% 61%)` }
 }
 
 /**
@@ -306,6 +316,17 @@ interface SessionDragState {
 interface WorkspaceDragState {
   sourceId: string
   workspaceId: string
+  over: { id: string; half: 'before' | 'after' } | null
+}
+
+/**
+ * In-flight server-group drag (2026-09, docs/todo/server-drag-sort.md —
+ * option 1): the dragged source id plus the current insert marker. The whole
+ * server list is ONE account (no cross-source gating needed — every section
+ * is a valid target; the dragged server's own section no-ops in the commit).
+ */
+interface ServerDragState {
+  sourceId: string
   over: { id: string; half: 'before' | 'after' } | null
 }
 
@@ -505,6 +526,41 @@ export function SidebarRoot({
       return { ...prev, folded }
     })
   }
+
+  // chamber (2026-09, docs/todo/server-drag-sort.md): server-level fold —
+  // collapses the source's ENTIRE workspace list (all workspace groups
+  // hidden). Deliberately a SEPARATE preference from per-workspace `folded`:
+  // collapsing the server must NOT fold each workspace's conversations, so
+  // expanding the server restores every workspace with its sessions exactly
+  // as they were (user rule: 不要折叠 workspace 中的对话). P3 (review
+  // 2026-09): expanding the LAST folded source deletes the field entirely —
+  // no permanent empty-object key in the persisted prefs.
+  const toggleSourceFold = (serverId: string): void => {
+    updateViewPrefs((prev) => {
+      const sourceFolded = { ...prev.sourceFolded }
+      if (sourceFolded[serverId] === true) {
+        delete sourceFolded[serverId]
+        if (Object.keys(sourceFolded).length === 0) {
+          const next = { ...prev }
+          delete next.sourceFolded
+          return next
+        }
+        return { ...prev, sourceFolded }
+      }
+      sourceFolded[serverId] = true
+      return { ...prev, sourceFolded }
+    })
+  }
+
+  // chamber (2026-09, docs/todo/server-drag-sort.md — option 1): the server
+  // groups render in the user's persisted display order when one exists
+  // (local view preference only — the App's N-ctx residency/prewarm order
+  // and the instance registry are untouched; navigation is id-keyed). The
+  // rail dots share the same order so both views agree.
+  const orderedServers = useMemo(
+    () => orderServersForDisplay(servers, viewPrefs.serverOrder),
+    [servers, viewPrefs.serverOrder],
+  )
 
   // chamber (06 §3.1, 2026-08 C档 alignment): explicit per-source sort
   // selection through the source-header menu (official ViewOptionsMenu
@@ -715,13 +771,43 @@ export function SidebarRoot({
   // sourceId matching the hovered group's source.
   const [sessionDrag, setSessionDrag] = useState<SessionDragState | null>(null)
   const [workspaceDrag, setWorkspaceDrag] = useState<WorkspaceDragState | null>(null)
+  // chamber (2026-09, docs/todo/server-drag-sort.md): server-group drag state
+  // (display-order preference only — commit writes view-prefs, no wire).
+  const [serverDrag, setServerDrag] = useState<ServerDragState | null>(null)
   const sessionDropCommitted = useRef(false)
   const workspaceDropCommitted = useRef(false)
+  const serverDropCommitted = useRef(false)
   // Some browsers dispatch a trailing `click` after an aborted drag or a
   // drop; the flag set on dragstart (and cleared a tick after dragend) keeps
   // that click from opening the session the row no longer represents (P2-8).
   const suppressClickRef = useRef(false)
-  useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null)
+  // 2026-10 review (F3): whether the CURRENT pointer press started on a
+  // header BUTTON. dragstart's `target` is the drag SOURCE (the header),
+  // not the pressed element, so the press target is recorded on pointerdown
+  // and consulted on dragstart — a gesture that began on a button (fold /
+  // sort / add-workspace / search / + / kebab / git actions) must never
+  // initiate a header drag: a >4px micro-drag on the fold toggle would
+  // swallow its click.
+  const dragPressOnButtonRef = useRef(false)
+  useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null || serverDrag !== null)
+
+  // 2026-10 review (F2, docs/todo/server-drag-sort.md): while a SERVER drag
+  // is active, a pointer outside every source section clears the insert
+  // marker — releasing outside the list cancels instead of committing the
+  // last hovered marker. Session/workspace drags KEEP the §2.2 semantics
+  // (release-outside commits); the server drag moves a WHOLE group, so the
+  // blast radius warrants the stricter rule. Only the boolean flips the
+  // effect; the functional updater keeps the closure stale-free.
+  useEffect(() => {
+    if (serverDrag === null) return
+    const clearMarkerOutsideSections = (event: DragEvent): void => {
+      if (!(event.target instanceof Element)) return
+      if (event.target.closest('[data-chamber-section]') !== null) return
+      setServerDrag(current => (current === null || current.over === null ? current : { ...current, over: null }))
+    }
+    document.addEventListener('dragover', clearMarkerOutsideSections)
+    return () => document.removeEventListener('dragover', clearMarkerOutsideSections)
+  }, [serverDrag === null])
 
   // chamber (2026-08 review fix, design 06 §2.2): blank-row GHOST slot — the
   // local grace clock that bounds how long a departed blank "new session" row
@@ -1083,8 +1169,13 @@ export function SidebarRoot({
     const anchor = over.half === 'before' ? over.id : renderedOrder[targetIndex + 1]
     if (anchor === activeDrag.sessionId) return
     const sourceIndex = renderedOrder.findIndex(id => id === activeDrag.sessionId)
+    // P2 (review 2026-09): a dragged row that vanished from the rendered
+    // order is a NO-OP — never re-insert the ghost into the persisted order
+    // (aligns with nextServerOrder's contract; the old guard only skipped
+    // the no-op check and then spliced the vanished id back in).
+    if (sourceIndex === -1) return
     const anchorIndex = anchor === undefined ? renderedOrder.length : renderedOrder.findIndex(id => id === anchor)
-    if (sourceIndex !== -1 && (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1)) return
+    if (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1) return
     const nextOrder = renderedOrder.filter(id => id !== activeDrag.sessionId)
     const insertAt = anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor)
     nextOrder.splice(insertAt === -1 ? nextOrder.length : insertAt, 0, activeDrag.sessionId)
@@ -1135,8 +1226,12 @@ export function SidebarRoot({
     if (anchor === activeDrag.workspaceId) return
     const renderedOrder = workspaceOrderOverride[server.id] ?? realWorkspaces.map(workspace => workspace.id)
     const sourceIndex = renderedOrder.findIndex(id => id === activeDrag.workspaceId)
+    // P2 (review 2026-09): a dragged workspace that vanished from the
+    // rendered order is a NO-OP — never re-insert the ghost into the
+    // persisted order (aligns with nextServerOrder's contract).
+    if (sourceIndex === -1) return
     const anchorIndex = anchor === undefined ? renderedOrder.length : renderedOrder.findIndex(id => id === anchor)
-    if (sourceIndex !== -1 && (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1)) return
+    if (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1) return
     const nextOrder = renderedOrder.filter(id => id !== activeDrag.workspaceId)
     const insertAt = anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor)
     nextOrder.splice(insertAt === -1 ? nextOrder.length : insertAt, 0, activeDrag.workspaceId)
@@ -1204,6 +1299,32 @@ export function SidebarRoot({
         })
         throw error
       }
+    })
+  }
+
+  // chamber (2026-09, docs/todo/server-drag-sort.md — option 1): server-group
+  // drag commit. Pure DISPLAY preference — persists the new order into the
+  // shared `serverOrder` view pref (cross-ctx live sync), NO wire, NO
+  // App-layer N-ctx/registry change (navigation is id-keyed, never
+  // order-keyed). The anchor math lives in the pure `nextServerOrder`
+  // (unit-tested); `null` = no-op (unchanged position / vanished target) —
+  // the write is skipped. P2 (review 2026-09): the anchor math runs INSIDE
+  // the updateViewPrefs mutator against the FRESHEST stored order — another
+  // ctx's commit landing between this render and the drop must not be
+  // clobbered by a stale-render snapshot (the commitSessionDrag updated-mode
+  // branch reads the live store for the same reason).
+  const commitServerDrag = (
+    activeDrag: ServerDragState,
+    over: NonNullable<ServerDragState['over']>,
+  ): void => {
+    if (serverDropCommitted.current) return
+    serverDropCommitted.current = true
+    setServerDrag(null)
+    updateViewPrefs(prev => {
+      const renderedOrder = orderServersForDisplay(servers, prev.serverOrder).map(server => server.id)
+      const nextOrder = nextServerOrder(renderedOrder, activeDrag.sourceId, over)
+      if (nextOrder === null) return prev
+      return { ...prev, serverOrder: nextOrder }
     })
   }
 
@@ -1352,7 +1473,7 @@ export function SidebarRoot({
             the incoming shell on N-ctx view switch. */}
         {wide ? (
           <div className={cc.chamberList} data-chamber-sidebar-scroll="">
-            {servers.map((server) => {
+            {orderedServers.map((server) => {
               // chamber (06 §1.2): per-source search read from the shared
               // controller (survives view switches). The state's query is the
               // sanitized current value by construction; the loading fallback
@@ -1386,6 +1507,12 @@ export function SidebarRoot({
               // its current-session highlight; the other sources' last-opened
               // sessions stay unhighlighted (one global selection marker).
               const currentId = server.id === chamberInstanceId ? server.runtime?.current : undefined
+              // chamber (2026-09, docs/todo/server-drag-sort.md): server-level
+              // fold — hides the ENTIRE workspace list below the header. The
+              // per-workspace conversation folds are NOT touched (see
+              // toggleSourceFold), so expanding restores every workspace with
+              // its sessions as they were.
+              const sourceFolded = viewPrefs.sourceFolded?.[server.id] === true
               // chamber (third-wave review, R2-1#4): the row-render ghost
               // predicate hoisted so the workspace header count reuses the
               // SAME rule — a ghost is a blank "New Session" row that stopped
@@ -1522,7 +1649,46 @@ export function SidebarRoot({
                 return false
               }
               return (
-              <section key={server.id} className={cc.sourceGroup} role="group" aria-label={server.label}>
+              <section
+                key={server.id}
+                className={clsx(
+                  cc.sourceGroup,
+                  // chamber (2026-09, docs/todo/server-drag-sort.md): the
+                  // server-group drag marker lives on the SECTION boundary
+                  // (before = above the header, after = below the whole
+                  // group) — mirroring the workspace-group marker.
+                  serverDrag !== null && serverDrag.over?.id === server.id && serverDrag.over.half === 'before' && cc.dropBefore,
+                  serverDrag !== null && serverDrag.over?.id === server.id && serverDrag.over.half === 'after' && cc.dropAfter,
+                )}
+                role="group"
+                aria-label={server.label}
+                // 2026-10 review (F2): identifies a source SECTION for the
+                // server-drag outside-list cancel (document dragover scope
+                // check) — any descendant counts as "inside the list".
+                data-chamber-section={server.id}
+                // The fold state's a11y surface is the fold BUTTON's own
+                // aria-expanded (the group carries no expand semantics — a
+                // focusable button is the operable, announced control).
+                onDragOver={serverDrag === null
+                  ? undefined
+                  : (event) => {
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = 'move'
+                    const half = rowHalf(event)
+                    setServerDrag(current => {
+                      if (current === null) return current
+                      if (current.over?.id === server.id && current.over.half === half) return current
+                      return { ...current, over: { id: server.id, half } }
+                    })
+                  }}
+                onDrop={serverDrag === null
+                  ? undefined
+                  : (event) => {
+                    event.preventDefault()
+                    if (serverDrag === null) return
+                    commitServerDrag(serverDrag, { id: server.id, half: rowHalf(event) })
+                  }}
+              >
                 <header
                   className={clsx(
                     cc.sourceHeader,
@@ -1535,6 +1701,58 @@ export function SidebarRoot({
                   role={server.id === chamberInstanceId ? undefined : 'button'}
                   tabIndex={server.id === chamberInstanceId ? undefined : 0}
                   aria-label={server.id === chamberInstanceId ? undefined : t('list.activate')}
+                  // chamber (2026-09, docs/todo/server-drag-sort.md — option
+                  // 1): the source header is the drag handle for the
+                  // server-group display-order drag. The same trailing-click
+                  // suppression as the workspace header: a drop ending over
+                  // the header (or its buttons) must not fire a spurious
+                  // activate/toggle/action.
+                  draggable
+                  onPointerDown={(event) => {
+                    // F3 (review 2026-10): record whether the press started
+                    // on a header BUTTON. dragstart's target is the drag
+                    // SOURCE (the header itself), not the pressed element, so
+                    // the press target must be captured here, at pointerdown.
+                    dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
+                  }}
+                  onDragStart={(event) => {
+                    // F3 (review 2026-10): a gesture that STARTED on a header
+                    // button (fold / sort / add-workspace / search) aborts the
+                    // drag initiation — buttons are click affordances, a >4px
+                    // micro-drag on the fold toggle must not swallow its click
+                    // (the click then fires normally on release). Dragging
+                    // from the header's non-button area is unaffected.
+                    if (dragPressOnButtonRef.current) {
+                      dragPressOnButtonRef.current = false
+                      event.preventDefault()
+                      return
+                    }
+                    dragPressOnButtonRef.current = false
+                    event.dataTransfer.effectAllowed = 'move'
+                    event.dataTransfer.setData('text/plain', server.id)
+                    suppressClickRef.current = true
+                    serverDropCommitted.current = false
+                    setServerDrag({ sourceId: server.id, over: null })
+                  }}
+                  onDragEnd={(event) => {
+                    // P2 (review 2026-09) + F1 (review 2026-10): an
+                    // ESC-cancelled drag must not persist the last marker —
+                    // dropEffect 'none' means the user explicitly cancelled.
+                    // F1: a NULL dataTransfer at dragend (Safari has done
+                    // this) must also count as cancelled — with `?.` alone,
+                    // undefined !== 'none' would wrongly commit. The section
+                    // onDrop path is unaffected: a real drop commits there
+                    // first, and the serverDropCommitted guard makes this
+                    // no-op.
+                    if (serverDrag !== null && serverDrag.over !== null
+                      && event.dataTransfer !== null && event.dataTransfer.dropEffect !== 'none') {
+                      commitServerDrag(serverDrag, serverDrag.over)
+                    } else {
+                      setServerDrag(null)
+                    }
+                    serverDropCommitted.current = false
+                    window.setTimeout(() => { suppressClickRef.current = false }, 0)
+                  }}
                   onClick={() => {
                     if (suppressClickRef.current) return
                     // A remote source's header switches the active N-ctx view
@@ -1543,16 +1761,50 @@ export function SidebarRoot({
                   }}
                   onKeyDown={(event) => {
                     if (server.id === chamberInstanceId) return
+                    // P1 (review 2026-09): only respond to the header's OWN
+                    // focus. A keydown bubbling from an inner button (fold
+                    // toggle / sort / add-workspace / search) must not be
+                    // swallowed: preventDefault here would cancel the
+                    // button's native Enter/Space activation AND switch the
+                    // active N-ctx view — the fold toggle was unreachable by
+                    // keyboard on remote sources.
+                    if (event.target !== event.currentTarget) return
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
                       chamberBridge.requestActivateSource(server.id)
                     }
                   }}
                 >
-                  <span
-                    className={clsx(cc.sourceDot)}
-                    style={sourceDotStyle(server)}
-                  />
+                  {/* chamber (2026-09, docs/todo/server-drag-sort.md; glyph
+                      swapped 2026-10 user feedback): the server-level fold
+                      toggle — a MONITOR glyph at rest (server = machine, NOT
+                      the workspace folder glyph — the shared folder reads as
+                      a workspace and misleads), swapping to the collapse
+                      chevron on header hover/focus (same slot, nothing
+                      shifts). Clicking collapses/expands the source's ENTIRE
+                      workspace list without touching any workspace's own
+                      conversation fold state. stopPropagation keeps the
+                      header's activate click (and the pending-click
+                      discipline) out. */}
+                  <button
+                    type="button"
+                    className={clsx(cc.sourceFoldToggle, sourceFolded && cc.sourceFoldToggleFolded)}
+                    aria-label={sourceFolded ? t('server.expand') : t('server.collapse')}
+                    aria-expanded={!sourceFolded}
+                    // F5 (review 2026-10): own tooltip — without it the
+                    // header's inherited title ("切换到该实例") would show on
+                    // hover, semantically misleading for a fold toggle.
+                    title={sourceFolded ? t('server.expand') : t('server.collapse')}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      if (suppressClickRef.current) return
+                      clearPendingClick()
+                      toggleSourceFold(server.id)
+                    }}
+                  >
+                    <IconChevronRightOutline14 size={15} className={cc.sourceFoldChevron} />
+                    <IconMonitorOutline16 size={15} className={cc.sourceFoldGlyph} />
+                  </button>
                   <span className={cc.sourceLabel}>{server.label}</span>
                   {server.pluginDiagnostic !== undefined && server.pluginDiagnostic.state !== 'ok' && (
                     <span
@@ -1669,6 +1921,10 @@ export function SidebarRoot({
                         type="button"
                         className={cc.searchButton}
                         aria-label={t('search.sessions.aria')}
+                        // F5 (review 2026-10): own tooltip like the sibling
+                        // sort/add buttons — the header's inherited title
+                        // ("切换到该实例") must not show on this button.
+                        title={t('search.sessions.aria')}
                         aria-expanded={search?.expanded === true}
                         ref={(node) => { searchButtons.current[server.id] = node }}
                         onClick={(event) => {
@@ -1695,6 +1951,14 @@ export function SidebarRoot({
                     )}
                   </span>
                 </header>
+                {/* chamber (2026-09, docs/todo/server-drag-sort.md): the
+                    server-level fold hides EVERYTHING below the header —
+                    search capsule, source-scope git alert and the workspace
+                    list (search results included). The search state itself is
+                    untouched (shared search-state store): expanding the
+                    server remounts the capsule with its query intact. */}
+                {!sourceFolded && (
+                <>
                 {/* chamber (06 §1.2): the search capsule row beneath the header.
                     Escape clears and collapses; the clear button does the same. */}
                 {search?.expanded === true && (
@@ -1847,8 +2111,22 @@ export function SidebarRoot({
                           const folded = viewPrefs.folded[workspaceKey] === true
                           // chamber (08 §11): derived (worktree) workspaces
                           // drop the kebab/rename — OpenChamber worktree
-                          // groups keep only delete + new-session.
-                          const isWorktree = getWorkspaceGitFlag(server.id, workspace.id)?.isWorktree === true
+                          // groups keep only delete + new-session. The flag
+                          // also seeds the per-workspace icon accent (family
+                          // hue for worktree/main workspaces).
+                          const gitFlag = getWorkspaceGitFlag(server.id, workspace.id)
+                          // F4 (review 2026-10, design 06 §2.4): the accent
+                          // is gated on the source's git identity being
+                          // RESOLVED (first snapshot published) — until then
+                          // a git workspace would first render an independent
+                          // hue that later flips to its family hue (the
+                          // one-time startup flash). Default ink renders
+                          // instead; every workspace settles to its FINAL
+                          // color at the same identity-resolve moment.
+                          const workspaceAccent = isSourceGitFlagsLoaded(server.id)
+                            ? workspaceAccentStyle(server.id, workspace.id, gitFlag)
+                            : undefined
+                          const isWorktree = gitFlag?.isWorktree === true
                           const sessions = sessionsOf(workspace)
                           // chamber (third-wave review, R2-1#4): sessionsOf
                           // includes the projection's departed blank GHOST
@@ -1882,10 +2160,13 @@ export function SidebarRoot({
                           // lives on the chevron button).
                           const workspaceHeader = (
                             <div
-                              className={clsx(
-                                cc.workspaceHeader,
-                                sessions.some(session => session.id === currentId) && cc.groupContainsCurrent,
-                              )}
+                              className={clsx(cc.workspaceHeader)}
+                              // chamber (2026-09): per-workspace icon accent —
+                              // deterministic, selection-independent (the
+                              // current-session row carries its own official
+                              // selected tint); undefined for the ungrouped
+                              // bucket, so CSS falls back to the default ink.
+                              style={workspaceAccent}
                               data-chamber-row={workspaceKey}
                               role="treeitem"
                               aria-expanded={!folded}
@@ -1916,9 +2197,29 @@ export function SidebarRoot({
                                   value: workspace.title,
                                 })
                               }}
+                              onPointerDown={workspace.ungrouped === true
+                                ? undefined
+                                : (event) => {
+                                  // F3 (review 2026-10): same press-target
+                                  // guard as the source header — a gesture
+                                  // that STARTED on a workspace-header button
+                                  // (fold / orphan badge / git actions / + /
+                                  // kebab) never initiates the workspace drag
+                                  // (a >4px micro-drag on the fold toggle must
+                                  // not swallow its click).
+                                  dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
+                                }}
                               onDragStart={workspace.ungrouped === true
                                 ? undefined
                                 : (event) => {
+                                  // F3: abort drags that began on a button —
+                                  // buttons stay pure click affordances.
+                                  if (dragPressOnButtonRef.current) {
+                                    dragPressOnButtonRef.current = false
+                                    event.preventDefault()
+                                    return
+                                  }
+                                  dragPressOnButtonRef.current = false
                                   event.dataTransfer.effectAllowed = 'move'
                                   event.dataTransfer.setData('text/plain', workspace.id)
                                   // Workspace-header drags must suppress the
@@ -2150,7 +2451,7 @@ export function SidebarRoot({
                                       )}
                                     </div>
                                   )}
-                                  disabled={menuOpen[workspaceKey] === true || workspaceDrag !== null || sessionDrag !== null}
+                                  disabled={menuOpen[workspaceKey] === true || workspaceDrag !== null || sessionDrag !== null || serverDrag !== null}
                                 />
                               )}
                             {!folded && (
@@ -2427,7 +2728,7 @@ export function SidebarRoot({
                                           )}
                                         </div>
                                       )}
-                                      disabled={menuOpen[sessionKey] === true || sessionDrag !== null || workspaceDrag !== null}
+                                      disabled={menuOpen[sessionKey] === true || sessionDrag !== null || workspaceDrag !== null || serverDrag !== null}
                                       copyText={session.blank === true ? undefined : (session.title || t('list.unnamed'))}
                                       copyLabel={t('action.copy')}
                                       copiedLabel={t('hover.copied')}
@@ -2486,6 +2787,8 @@ export function SidebarRoot({
                   // carries the detailed logSummary).
                   null
                 )}
+                </>
+                )}
               </section>
               )
             })}
@@ -2495,7 +2798,7 @@ export function SidebarRoot({
           </div>
         ) : (
           <div className={cc.railDots}>
-            {servers.map((server) => (
+            {orderedServers.map((server) => (
               <span
                 key={server.id}
                 className={clsx(

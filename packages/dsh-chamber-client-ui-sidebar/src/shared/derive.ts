@@ -39,6 +39,89 @@ export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 export const SEARCH_QUERY_MAX_CODE_UNITS = 500
 
 /**
+ * Stable per-workspace icon accent (chamber 2026-09): a deterministic color
+ * from the workspace identity — no user customization, no persistence, no
+ * selection state. The hue is a golden-angle spread of the
+ * (serverId, family seed) hash, so distinct seeds land far apart on the hue
+ * wheel; a SECOND hash jitters the rest lightness per workspace (56/61/66%)
+ * so even near-hue pairs stay eye-distinguishable.
+ *
+ * Soft palette (user feedback 2026-10): the original 62%/45% saturation at
+ * 44–54% lightness read as harsh jewel tones on the sidebar; the accent now
+ * sits at 34% (21% for derived worktrees) saturation and a lifted
+ * 56/61/66% lightness — clearly distinguishable hues, pastel-calm in both
+ * light and dark themes.
+ *
+ * Derived (worktree) workspaces inherit their repository's family hue — the
+ * family seed is the repoKey, shared by the MAIN checkout and every derived
+ * worktree alike (stable even when the main is unregistered or later
+ * renamed); `mainWorkspaceId` is only the fallback for a repoKey-less flag.
+ * Family members share one hue, while the derived members demote to a muted
+ * saturation and the MAIN checkout keeps the full one, mirroring the
+ * folder/branch glyph + title-ink hierarchy. The synthetic ungrouped bucket
+ * gets NO accent (undefined) — CSS falls back to the default caption ink.
+ * Selection is deliberately NOT encoded here: the current-session row
+ * carries its own official selected tint.
+ *
+ * `WorkspaceAccentSeed` is a structural subset of the git plugin's
+ * `WorkspaceGitFlag` (shared/workspace-git-flags.ts) — this module stays
+ * free of git types by design.
+ */
+export interface WorkspaceAccentSeed {
+  /** True when this workspace IS a git worktree (derived workspace). */
+  isWorktree?: boolean
+  /** True when this workspace is the repository's MAIN checkout. */
+  isMain?: boolean
+  /** For a derived worktree: the MAIN checkout workspace id of the same repo. */
+  mainWorkspaceId?: string
+  /** The repository's opaque identity (repoKey) this workspace belongs to. */
+  repoKey?: string
+}
+
+/**
+ * Golden-angle hue step (design 2026-09): hue = (hash × 137.508) mod 360.
+ * 137.508 = 34377/250, and 90000/gcd(34377, 90000) = 30000, so two hashes
+ * land on the exact same hue only when they differ by a multiple of 30000 —
+ * negligible for real ids, and even then the per-workspace lightness jitter
+ * (below) usually breaks the visual tie. All other pairs are spread ~137°
+ * apart on the wheel.
+ */
+const WORKSPACE_HUE_STEP = 137.508
+
+/** Deterministic 32-bit string hash (the sidebar sourceHue arithmetic). */
+export function hashString(input: string): number {
+  let hash = 0
+  for (let i = 0; i < input.length; i += 1) hash = (hash * 31 + input.charCodeAt(i)) >>> 0
+  return hash
+}
+
+/**
+ * Per-workspace accent CSS variable for the workspace header row (the fold
+ * toggle's folder/branch glyph inherits currentColor). `undefined` for the
+ * ungrouped bucket, so the CSS fallback chain keeps today's visuals there.
+ */
+export function workspaceAccentStyle(
+  serverId: string,
+  workspaceId: string,
+  seed?: WorkspaceAccentSeed,
+): { '--dsh-workspace-accent': string } | undefined {
+  if (workspaceId === UNGROUPED_WORKSPACE_ID) return undefined
+  const family = seed !== undefined && (seed.isWorktree === true || seed.isMain === true)
+    ? (seed.repoKey ?? seed.mainWorkspaceId ?? workspaceId)
+    : workspaceId
+  const rawHue = (hashString(`${serverId}/${family}`) * WORKSPACE_HUE_STEP) % 360
+  // One-decimal hue normalized into [0, 360): 359.96 rounds to 360.0, which
+  // would escape the format contract — map it back to 0.
+  const hue = (Math.round(rawHue * 10) % 3600) / 10
+  // Soft palette (user feedback 2026-10): saturation 34% (21% for derived
+  // worktrees) + lifted lightness 56/61/66% — pastel-calm while keeping the
+  // family/main-vs-derived hierarchy and the near-hue jitter tie-break.
+  const saturation = seed?.isWorktree === true ? 21 : 34
+  const lightness = 56 + (hashString(workspaceId) % 3) * 5
+  return { '--dsh-workspace-accent': `hsl(${hue} ${saturation}% ${lightness}%)` }
+}
+
+/**
  * Search input normalization (design 06 §1.1 wire schema): strip NULs, clamp
  * to SEARCH_QUERY_MAX_CODE_UNITS UTF-16 code units without splitting a
  * surrogate pair, trim; '' when empty. Mirrors the wire search query schema
@@ -79,6 +162,68 @@ export function reconciledSessionOrder(stored: readonly string[], wireIds: reado
     ordered.push(id)
   }
   return ordered
+}
+
+/**
+ * Source display order (2026-09, docs/todo/server-drag-sort.md — option 1):
+ * the sidebar's server groups render in the user's stored order when one
+ * exists — ids known to the projection come in stored order first, then the
+ * remaining projection ids in projection order (a newly added source appears
+ * at the bottom until dragged). Unknown stored ids are skipped, so a source
+ * deleted from the registry cannot leave a ghost group. `undefined` (no
+ * preference yet) returns the projection order unchanged — the same
+ * reference, so callers can skip re-renders on absent prefs.
+ */
+export function orderServersForDisplay(
+  servers: readonly ChamberServerAggregate[],
+  stored: readonly string[] | undefined,
+): ChamberServerAggregate[] {
+  if (stored === undefined || stored.length === 0) return servers as ChamberServerAggregate[]
+  const byId = new Map(servers.map(server => [server.id, server]))
+  const placed = new Set<string>()
+  const ordered: ChamberServerAggregate[] = []
+  for (const id of stored) {
+    const server = byId.get(id)
+    if (server === undefined || placed.has(id)) continue
+    placed.add(id)
+    ordered.push(server)
+  }
+  for (const server of servers) {
+    if (placed.has(server.id)) continue
+    placed.add(server.id)
+    ordered.push(server)
+  }
+  return ordered
+}
+
+/**
+ * Server-group drop order math (2026-09, docs/todo/server-drag-sort.md —
+ * option 1): the display order that results from inserting
+ * `draggedSourceId` at `over`'s boundary of the CURRENT rendered order.
+ * `null` = NO-OP — the drop leaves the order unchanged and the caller skips
+ * the write: the target or the dragged source vanished from the rendered
+ * order, the dragged source IS the anchor, or the position did not actually
+ * move (inserting right after itself / already in place / already last).
+ * The anchor math mirrors the workspace commit (anchor = half === 'before'
+ * ? over.id : next id, undefined = append at the end).
+ */
+export function nextServerOrder(
+  renderedOrder: readonly string[],
+  draggedSourceId: string,
+  over: { id: string; half: 'before' | 'after' },
+): string[] | null {
+  const targetIndex = renderedOrder.findIndex(id => id === over.id)
+  if (targetIndex === -1) return null
+  const anchor = over.half === 'before' ? over.id : renderedOrder[targetIndex + 1]
+  if (anchor === draggedSourceId) return null
+  const sourceIndex = renderedOrder.findIndex(id => id === draggedSourceId)
+  if (sourceIndex === -1) return null
+  const anchorIndex = anchor === undefined ? renderedOrder.length : renderedOrder.findIndex(id => id === anchor)
+  if (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1) return null
+  const nextOrder = renderedOrder.filter(id => id !== draggedSourceId)
+  const insertAt = anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor)
+  nextOrder.splice(insertAt === -1 ? nextOrder.length : insertAt, 0, draggedSourceId)
+  return nextOrder
 }
 
 /**
@@ -169,12 +314,17 @@ export function projectRuntimeFacts(
       running?: boolean
       completed?: boolean
       pendingInteraction?: 'approval' | 'plan-review' | 'question'
+      origin?: 'subagent'
     }>
   },
   subagentRunning?: ReadonlyMap<string, number>,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
+    // subagent 行不进入运行时事实（与 projectInstanceSnapshot 的 origin 过滤
+    // 同规）：导航不呈现子会话，通知边沿也不得对子代理完成/提问发通知——
+    // 子代理完成是高频事件，漏入会刷屏（design 19 §3.2）。
+    if (facts?.origin === 'subagent') continue
     const row: {
       running?: boolean
       completed?: boolean

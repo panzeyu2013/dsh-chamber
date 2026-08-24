@@ -53,6 +53,12 @@ export interface RepoGitLayout {
 
 const flags = new Map<string, WorkspaceGitFlag>()
 const repoLayouts = new Map<string, RepoGitLayout[]>()
+/** Sources whose FIRST git snapshot has been published (2026-10 review,
+ *  design 06 §2.4): a source's git identity is UNKNOWN until then — the
+ *  sidebar gates the workspace accent on this so a git workspace never
+ *  first renders an independent hue that later flips to its family hue
+ *  (the one-time startup flash). Cleared on disconnect like the flags. */
+const loadedSources = new Set<string>()
 const listeners = new Set<() => void>()
 /** Monotonic version — the sidebar subscribes via getSnapshot on THIS so a
  *  store change actually re-renders (review P1: a constant snapshot never
@@ -101,11 +107,30 @@ export function clearWorkspaceGitFlags(sourceId: string): void {
     }
   }
   if (repoLayouts.delete(sourceId)) changed = true
+  // The source's identity is unknown again — a reconnect must re-gate the
+  // accent (no stale "loaded" past the disconnect).
+  if (loadedSources.delete(sourceId)) changed = true
   if (changed) bump()
 }
 
 export function getWorkspaceGitFlag(sourceId: string, workspaceId: string): WorkspaceGitFlag | undefined {
   return flags.get(keyOf(sourceId, workspaceId))
+}
+
+/** Mark a source's git identity as resolved (its first snapshot has been
+ *  published — even an empty one). Idempotent; bumps on the transition so
+ *  the sidebar re-renders and the gated accent appears. */
+export function markSourceGitFlagsLoaded(sourceId: string): void {
+  if (loadedSources.has(sourceId)) return
+  loadedSources.add(sourceId)
+  bump()
+}
+
+/** Whether the source's git identity is known (first snapshot published).
+ *  Before that, every flag is UNKNOWN, not absent — consumers must not
+ *  render a definitive state from the flag's undefined-ness alone. */
+export function isSourceGitFlagsLoaded(sourceId: string): boolean {
+  return loadedSources.has(sourceId)
 }
 
 /** Drop this source's flags EXCEPT the given workspace ids (keep). The

@@ -11,6 +11,9 @@
  * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
  *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
  *   never prompt; update-downloaded exempt);
+ * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 通知
+ *   时机 (hidden-only / always) + 事件开关 (complete / ask / request) +
+ *   「发送测试通知」;
  * - 更新 (design 11, merged into General): current version +「检查更新」+
  *   low-key status (UpdateSection);
  * - dsh 运行时 (design 18 M4): active/bundled versions, registry source,
@@ -23,8 +26,9 @@
  */
 import { useCallback, useId, useState, useSyncExternalStore } from 'react'
 import type { SettingsBridgeKey } from '../locales.ts'
-import type { ChamberSettingsStatus } from '../ambient/settings-bridge.d.ts'
+import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
+import { notificationsOf, notificationsPatch } from './notifications-settings.ts'
 import { UpdateSection } from './UpdateSection.tsx'
 import { DshRuntimeSection } from './DshRuntimeSection.tsx'
 import css from './SettingsShell.module.css'
@@ -65,6 +69,14 @@ function ToggleRow({
   )
 }
 
+/** The live notify surface, or null while the bridge is absent (button gate).
+ *  The ambient `window.dshChamber` type carries the notifications surface
+ *  (renderer global.d.ts, re-exported via ambient/settings-bridge.d.ts). */
+function testNotifySurface(): NotificationSurface | null {
+  const notifications = typeof window !== 'undefined' ? window.dshChamber?.notifications : undefined
+  return notifications !== undefined && notifications.notify !== undefined ? notifications : null
+}
+
 /** The section content (rendered inside the settings options column). */
 export function GeneralView({ t }: { t: GeneralTranslate }) {
   const status = useSyncExternalStore(subscribeSettings, getSettingsStatus)
@@ -75,6 +87,11 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // share a radio group; useId keeps the group scoped to this component.
   const closeBehaviorGroup = useId()
   const closeBehaviorLabel = useId()
+  // Same scoping for the notifications-mode radio group.
+  const notifyModeGroup = useId()
+  const notifyModeLabel = useId()
+  const [notifyBusy, setNotifyBusy] = useState(false)
+  const [notifyResult, setNotifyResult] = useState<'sent' | 'failed' | null>(null)
 
   const save = useCallback((patch: Parameters<typeof applySettingsPatch>[0]) => {
     setBusy(true)
@@ -86,6 +103,27 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       .finally(() => setBusy(false))
   }, [])
 
+  /** 「发送测试通知」— bypasses the settings gates in the main process (design
+      17 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
+      never a silent fake success. */
+  const sendTestNotification = useCallback(() => {
+    const surface = testNotifySurface()
+    if (surface === null) return
+    setNotifyBusy(true)
+    setNotifyResult(null)
+    void surface.notify({
+      sourceId: 'local',
+      sessionId: '',
+      kind: 'test',
+      title: t('generalNotificationsTestTitle'),
+      body: t('generalNotificationsTestBody'),
+      requireHidden: false,
+    })
+      .then((shown) => setNotifyResult(shown ? 'sent' : 'failed'))
+      .catch(() => setNotifyResult('failed'))
+      .finally(() => setNotifyBusy(false))
+  }, [t])
+
   // No bridge yet (or the main process does not expose settings): render the
   // skeleton rows with placeholder values — never a fake "off". Controls stay
   // disabled until hydrated (a click before hydration would save a value the
@@ -93,6 +131,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   const settings = status?.settings
   const supported = status?.supported
   const hydrated = status !== null
+  // Notifications block (design 19 §3.4): design defaults while absent — never
+  // a fake off (unknown/future keys filtered in notificationsOf).
+  const notifications = notificationsOf(settings)
 
   // The active dsh runtime version block (design 18 M4) is rendered by
   // DshRuntimeSection below — it reads the runtime surface directly.
@@ -166,6 +207,95 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           busy={busy}
           onChange={(next) => save({ quitConfirmation: next })}
         />
+      </div>
+
+      {/* 通知 (design 19, merged into General — no new nav entry): 主开关 +
+          通知时机 (hidden-only / always) + 事件开关 (complete / ask / request)
+          +「发送测试通知」。事件开关在主开关关闭时仍可预配置（OpenChamber
+          语义——保持可交互，不加说明）。 */}
+      <div className={css.generalGroup}>
+        <h3 className={css.generalGroupTitle}>{t('generalGroupNotifications')}</h3>
+
+        <ToggleRow
+          t={t}
+          label={t('generalNotificationsEnabled')}
+          checked={notifications.enabled === true}
+          disabled={!hydrated}
+          busy={busy}
+          onChange={(next) => save(notificationsPatch({ enabled: next }))}
+        />
+
+        <div className={css.generalRow}>
+          <span className={css.generalFieldLabel} id={notifyModeLabel}>{t('generalNotificationsMode')}</span>
+          <div className={css.generalOptions} role="group" aria-labelledby={notifyModeLabel}>
+            <label className={css.generalOption}>
+              <input
+                type="radio"
+                name={notifyModeGroup}
+                checked={notifications.mode !== 'always'}
+                disabled={!hydrated || busy}
+                onChange={() => save(notificationsPatch({ mode: 'hidden-only' }))}
+              />
+              <span>{t('generalNotificationsModeHidden')}</span>
+            </label>
+            <label className={css.generalOption}>
+              <input
+                type="radio"
+                name={notifyModeGroup}
+                checked={notifications.mode === 'always'}
+                disabled={!hydrated || busy}
+                onChange={() => save(notificationsPatch({ mode: 'always' }))}
+              />
+              <span>{t('generalNotificationsModeAlways')}</span>
+            </label>
+          </div>
+        </div>
+
+        <ToggleRow
+          t={t}
+          label={t('generalNotifyOnComplete')}
+          checked={notifications.onComplete !== false}
+          disabled={!hydrated}
+          busy={busy}
+          onChange={(next) => save(notificationsPatch({ onComplete: next }))}
+        />
+
+        <ToggleRow
+          t={t}
+          label={t('generalNotifyOnAsk')}
+          checked={notifications.onAsk !== false}
+          disabled={!hydrated}
+          busy={busy}
+          onChange={(next) => save(notificationsPatch({ onAsk: next }))}
+        />
+
+        <ToggleRow
+          t={t}
+          label={t('generalNotifyOnRequest')}
+          checked={notifications.onRequest !== false}
+          disabled={!hydrated}
+          busy={busy}
+          onChange={(next) => save(notificationsPatch({ onRequest: next }))}
+        />
+
+        <div className={css.generalRow}>
+          <button
+            type="button"
+            className={css.updateButton}
+            onClick={sendTestNotification}
+            disabled={testNotifySurface() === null || notifyBusy}
+          >
+            {t('generalNotificationsTest')}
+          </button>
+          {notifyResult !== null && (
+            <p
+              className={notifyResult === 'sent' ? css.generalNotifyOk : css.generalError}
+              aria-live="polite"
+            >
+              {notifyResult === 'sent' ? t('generalNotificationsTestSent') : t('generalNotificationsTestFailed')}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Chamber-global update status (design 11): merged into the General

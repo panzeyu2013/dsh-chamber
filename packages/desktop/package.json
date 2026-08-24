@@ -73,6 +73,7 @@
       "allow-builds.mjs",
       "prune-runtime.mjs",
       "prune-runtime.d.mts",
+      "open-in.ts",
       "dist/**/*",
       "package.json",
       "!node_modules/@dsh-chamber/control-plane/**",

@@ -315,6 +315,24 @@ export interface ChamberSettings {
   /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
    *  user-selected mirror/custom https origin (trust anchor). */
   registryOrigin: string
+  /** 桌面通知设置（design 19 §3.4）：嵌套键，默认值镜像 desktop
+   *  chamber-settings.ts 的 DEFAULT_CHAMBER_SETTINGS.notifications。 */
+  notifications: ChamberNotificationSettings
+}
+
+/** 桌面通知设置子块（design 19 §3.4）——结构与 desktop/chamber-settings.ts
+ *  的 ChamberNotificationSettings 保持一致（镜像同步纪律）。 */
+export interface ChamberNotificationSettings {
+  /** 主开关（默认 false：低打扰，用户显式开启）。 */
+  enabled: boolean
+  /** 通知时机（默认 'hidden-only'：窗口聚焦时不打扰）。 */
+  mode: 'hidden-only' | 'always'
+  /** 会话完成时（默认 true）。 */
+  onComplete: boolean
+  /** 代理提问时（默认 true）。 */
+  onAsk: boolean
+  /** 审批请求时（默认 true）。 */
+  onRequest: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -342,12 +360,44 @@ export interface SystemResumeSurface {
   onResume(callback: (payload: { timestamp: number }) => void): () => void
 }
 
-/** window.dshChamber.vscode — VS Code availability probe + open action (design 16 §5/§6.4). */
-export interface VscodeSurface {
-  /** Re-probed in the main process on every call (no stale cache); fail-closed in the UI. */
-  availability(): Promise<{ available: boolean }>
-  /** The renderer button trigger — the same runVscodeLaunch pipeline as the OS deep link. */
-  open(instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+/** 桌面原生通知请求（design 19 §3.3）：renderer 组装 → 主进程裁决/呈现。
+ *  载荷全为非秘密投影（会话 id/标题/来源 label），无隧道 URL、无 SSH 材料。 */
+export interface NotificationRequest {
+  /** 来源 id（'local' | 'ssh-<id>'）。 */
+  sourceId: string
+  sessionId: string
+  /** 'test' 由设置页「发送测试通知」直调（主进程跳过门禁直接显示）。 */
+  kind: 'complete' | 'ask' | 'request' | 'test'
+  title: string
+  body: string
+  /** 正在屏幕上查看的会话（主进程再查一次窗口焦点作权威豁免）。 */
+  requireHidden: boolean
+}
+
+/** window.dshChamber.notifications — 桌面原生通知（design 19 §3.3）。
+ *  桥与 desktopSsh 同一批 expose，desktopSsh 存在则 notifications 必存在。 */
+export interface NotificationSurface {
+  /** invoke 'dsh-chamber:notify'；返回主进程是否实际显示了通知。 */
+  notify(payload: NotificationRequest): Promise<boolean>
+  /** 就绪信号（invoke 'dsh-chamber:notifications-ready'）：onOpen 监听注册后
+   *  调用——主进程只在就绪后放行 notification-open 推送（did-finish-load 早于
+   *  监听注册，窗口重建路径的事件不能丢）。 */
+  ready(): Promise<boolean>
+  /** 主进程推送通知点击（'dsh-chamber:notification-open'）→ renderer 打开会话。 */
+  onOpen(listener: (req: { sourceId: string; sessionId: string }) => void): () => void
+}
+
+/** window.dshChamber.openIn — registry capability negotiation + unified open action (open-in.ts). */
+export interface OpenInAppInfo {
+  id: string
+  remoteCapable: boolean
+  available: boolean
+}
+export interface OpenInSurface {
+  /** Registry capability negotiation (fixed order); availability re-probed in the main process on every call. */
+  apps(): Promise<OpenInAppInfo[]>
+  /** The renderer trigger — the same runOpenInLaunch pipeline every entry point shares. */
+  open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** Normalized deep-link intent pushed from the main process (design 16 §2). */
@@ -376,19 +426,23 @@ export type {
   RuntimeVersionEntry,
 } from './runtime-management.ts'
 
-/** The full bridge: app info + ssh + update + chamber settings + system resume,
- *  VS Code deep-link, and dsh runtime-management surfaces. */
+/** The full bridge: app info + platform + ssh + update + chamber settings
+ *  + system resume + open-in + deep-link + notifications + dsh runtime
+ *  management surfaces. */
+
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
   version: string | null
+  platform: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
-  vscode: VscodeSurface
+  openIn: OpenInSurface
   deepLink: DeepLinkSurface
   runtime: RuntimeSurface
+  notifications: NotificationSurface
 }
 
 declare global {

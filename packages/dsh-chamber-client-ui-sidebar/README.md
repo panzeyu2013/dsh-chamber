@@ -14,7 +14,9 @@ place of the official ui-sidebar (which stays untouched in
   registered remote instance) renders in ONE equal list, grouped by source
   only. Source header = label + connection-status badge (active source
   highlighted); remote sources carry a stable accent derived from the source
-  id (hue hash), local keeps the default dot; the rail renders the source color dots.
+  id (hue hash), local keeps the default ink (the old header identity DOT is
+  gone — 2026-10 user feedback; identity rides the fold-glyph accent, the
+  active left inset and the rail dots); the rail renders the source color dots.
 - Sessions outside every workspace trail in one synthetic ungrouped bucket at
   the source's end (sessions only, no workspace actions); blank rows DO surface
   while they are the source's current session (rendered as "New Session") and
@@ -32,6 +34,29 @@ place of the official ui-sidebar (which stays untouched in
   below.
 - Workspace groups fold via the header chevron (session-count badge); fold
   state persists in localStorage view prefs (`dsh-chamber.sidebar.v1`).
+- Source groups fold the same way (2026-09, design 06 §2.4): each source
+  header's left slot holds a MONITOR glyph (self-drawn `IconMonitorOutline16`
+  in `client/icons.tsx` — the primitives set has no server glyph, and the
+  former folder glyph read as another workspace; folder = workspace,
+  monitor = server, 2026-10 user feedback) that swaps to the collapse
+  chevron on hover — clicking collapses the source's ENTIRE workspace list
+  (search capsule, source-scope git alert and list included) WITHOUT touching
+  any workspace's own conversation fold state (`sourceFolded`, separate from
+  `folded`), so expanding restores every workspace with its sessions exactly
+  as they were.
+- Each workspace header's icon (folder, or the git-branch glyph of a derived
+  worktree) carries its own deterministic accent (`workspaceAccentStyle` in
+  `shared/derive.ts`): a golden-angle hue spread of the
+  `(sourceId, family seed)` hash plus a per-workspace lightness jitter
+  (56/61/66 %) at a SOFT palette (34 % saturation; 21 % for derived
+  worktrees — user feedback 2026-10 softened the original 62/45 % jewel
+  tones; the source accent matches at `hsl(hue 34% 61%)`) — no user
+  customization, no persistence, selection-independent
+  (the current-session row keeps its own official selected tint). Worktrees
+  and their repository's MAIN checkout share the family hue (seed = the
+  `repoKey`; `mainWorkspaceId` only falls back for a repoKey-less flag — the
+  family survives an unregistered or renamed main) at a muted saturation;
+  the ungrouped bucket gets no accent (default ink).
 
 ## Interactions
 
@@ -73,6 +98,15 @@ place of the official ui-sidebar (which stays untouched in
   workspaces commit through the wire (`insertSessionBefore`/`insertBefore`)
   with a transient optimistic order override that self-heals on the next
   pull; the ungrouped order persists in view prefs.
+- Source-group drag ordering (2026-09, design 06 §2.4): source headers are
+  the drag handles — dropping on a section boundary reorders the source
+  groups. A pure DISPLAY preference: the new order persists into the shared
+  `serverOrder` view pref (cross-ctx live sync, no wire, no App-layer
+  N-ctx/registry change — navigation is id-keyed); the anchor math is the
+  unit-tested `nextServerOrder` pure function and the render order is
+  `orderServersForDisplay` (stored order first, unknown ids skipped,
+  unlisted ids trail in projection order — a new source appears at the
+  bottom until dragged).
 - View-preference persistence (06 §3, 2026-08 revision): fold state and the
   ungrouped order live in ONE shared live store under one localStorage key
   (`dsh-chamber.sidebar.v1`, `shared/view-prefs.ts`) — a single vite-shared

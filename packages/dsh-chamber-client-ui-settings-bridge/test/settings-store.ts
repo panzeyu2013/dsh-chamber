@@ -16,6 +16,7 @@ function status(registryOrigin: string): ChamberSettingsStatus {
       keepAwake: false,
       quitConfirmation: true,
       registryOrigin,
+      notifications: { enabled: false, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true },
     },
     supported: { launchAtLogin: true, closeToTray: true },
   }

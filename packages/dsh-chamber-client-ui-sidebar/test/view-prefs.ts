@@ -548,3 +548,113 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
   assert.equal(getViewPrefs().sidebarWidth, 340)
 })
+
+// ---- sourceFolded / serverOrder (2026-09, docs/todo/server-drag-sort.md; v stays 1) ----
+
+test('sourceFolded round-trips and sanitizes booleans leniently, absent stays absent', () => {
+  const storage = new MemoryStorage()
+  const prefs: ChamberSidebarViewPrefs = {
+    v: 1,
+    folded: { 'local/w1': true },
+    ungroupedOrder: {},
+    orderBy: {},
+    updatedOrder: {},
+    sessionUpdatedAtByAccount: {},
+    sourceFolded: { local: true, 'ssh-a': false },
+    seenSources: [],
+  }
+  saveViewPrefs(prefs, storage)
+  assert.deepEqual(loadViewPrefs(storage), prefs)
+  // Malformed entries are dropped, valid ones kept.
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({
+    v: 1,
+    folded: {},
+    ungroupedOrder: {},
+    sourceFolded: { local: true, 'ssh-a': 'yes', 'ssh-b': 1, 'ssh-c': [] },
+  }))
+  assert.deepEqual(loadViewPrefs(storage).sourceFolded, { local: true })
+  // Old payloads without the field keep working (no re-seed, key omitted).
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: { 'local/w1': true }, ungroupedOrder: {} }))
+  const loaded = loadViewPrefs(storage)
+  assert.equal(loaded.sourceFolded, undefined)
+  assert.equal(loaded.folded['local/w1'], true)
+})
+
+test('serverOrder sanitizes to a deduped string array, non-arrays are dropped', () => {
+  const storage = new MemoryStorage()
+  const prefs: ChamberSidebarViewPrefs = {
+    v: 1,
+    folded: {},
+    ungroupedOrder: {},
+    orderBy: {},
+    updatedOrder: {},
+    sessionUpdatedAtByAccount: {},
+    serverOrder: ['ssh-b', 'local', 'ssh-a'],
+    seenSources: [],
+  }
+  saveViewPrefs(prefs, storage)
+  assert.deepEqual(loadViewPrefs(storage), prefs)
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({
+    v: 1,
+    folded: {},
+    ungroupedOrder: {},
+    serverOrder: ['local', 'ssh-a', 42, 'ssh-a', null, 'ssh-b', 'ssh-a'],
+  }))
+  assert.deepEqual(loadViewPrefs(storage).serverOrder, ['local', 'ssh-a', 'ssh-b'])
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, serverOrder: 'not-an-array' }))
+  assert.equal(loadViewPrefs(storage).serverOrder, undefined)
+  storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {} }))
+  assert.equal(loadViewPrefs(storage).serverOrder, undefined)
+})
+
+test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, never-seen kept, rebuild carries them', () => {
+  __resetViewPrefsForTests()
+  updateViewPrefs(prev => ({
+    ...prev,
+    sourceFolded: { local: true, 'ssh-b': true, ghost: true },
+    serverOrder: ['ssh-b', 'local', 'ghost'],
+  }))
+  chamberBridge.publish([
+    {
+      id: 'local',
+      kind: 'local',
+      label: 'L',
+      connected: true,
+      phase: 'ready',
+      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
+      updatedAt: 0,
+    },
+    {
+      id: 'ssh-b',
+      kind: 'ssh',
+      label: 'B',
+      connected: true,
+      phase: 'ready',
+      workspaces: [],
+      updatedAt: 0,
+    },
+  ])
+  // Both sources are present in the projection now: nothing pruned, but the
+  // FIRST write rebuilds the prefs object (records the seen sources) — the
+  // new fields must survive that reconstruction.
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  assert.deepEqual(getViewPrefs().sourceFolded, { local: true, 'ssh-b': true, ghost: true })
+  assert.deepEqual(getViewPrefs().serverOrder, ['ssh-b', 'local', 'ghost'])
+  // ssh-b vanishes AFTER being seen: pruned from both new fields on the next
+  // write; never-seen ghost stays (safe), local stays.
+  chamberBridge.publish([
+    {
+      id: 'local',
+      kind: 'local',
+      label: 'L',
+      connected: true,
+      phase: 'ready',
+      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
+      updatedAt: 0,
+    },
+  ])
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
+  const pruned = getViewPrefs()
+  assert.deepEqual(pruned.sourceFolded, { local: true, ghost: true })
+  assert.deepEqual(pruned.serverOrder, ['local', 'ghost'])
+})

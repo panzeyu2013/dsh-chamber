@@ -199,6 +199,19 @@ export interface ChamberSettings {
   /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
    *  user-selected mirror/custom https origin (trust anchor). */
   registryOrigin: string
+  /** 桌面通知设置（design 19 §3.4）：嵌套键，与 chamber-settings.ts 权威 store
+   *  及 renderer global.d.ts 的结构镜像保持一致（镜像同步纪律）。 */
+  notifications: ChamberNotificationSettings
+}
+
+/** 桌面通知设置子块（design 19 §3.4）——结构与 desktop/chamber-settings.ts 的
+ *  ChamberNotificationSettings 保持一致。 */
+export interface ChamberNotificationSettings {
+  enabled: boolean
+  mode: 'hidden-only' | 'always'
+  onComplete: boolean
+  onAsk: boolean
+  onRequest: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -228,14 +241,22 @@ export interface SystemResumeSurface {
 }
 
 /**
- * The VS Code deep-link surface (design 16 §5.2/§6.4): availability() is the
- * main-process probe (getter, re-probed on every call — no stale cache);
- * open() is the renderer button trigger — the same runVscodeLaunch pipeline as
- * the OS deep link, loud {error} on failure, never a silent empty success.
+ * The open-in surface (open-in.ts): apps() is the registry capability
+ * negotiation — the full app list in fixed order with id / remoteCapable /
+ * available (availability re-probed in the main process on every call — no
+ * stale cache); open() is the renderer trigger — the same runOpenInLaunch
+ * pipeline every entry point shares (appId whitelist + instanceId/path
+ * validation + remoteCapable gate), loud {error} on failure, never a silent
+ * empty success.
  */
-export interface VscodeSurface {
-  availability(): Promise<{ available: boolean }>
-  open(instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+export interface OpenInAppInfo {
+  id: string
+  remoteCapable: boolean
+  available: boolean
+}
+export interface OpenInSurface {
+  apps(): Promise<OpenInAppInfo[]>
+  open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** Normalized deep-link intent push payload (design 16 §2). */
@@ -250,19 +271,53 @@ export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
 }
 
-/** The full bridge: app info + ssh + update + chamber settings + system resume
- *  + vscode deep-link surfaces. */
+/** 通知事件种类（design 19 §3.2）：complete / ask / request + test（设置页测试按钮）。 */
+export type NotificationKind = 'complete' | 'ask' | 'request' | 'test'
+
+/** 通知 payload（design 19 §3.3）——渲染端组装，主进程白名单校验 + 裁决。 */
+export interface NotificationRequest {
+  sourceId: string
+  sessionId: string
+  kind: NotificationKind
+  title: string
+  body: string
+  /** 正在屏幕上查看的会话（渲染端 document.hasFocus 判定，主进程再查一次作为权威）。 */
+  requireHidden: boolean
+}
+
+/** 通知点击打开事件的载荷（design 19 §3.3）：渲染端据此 openSession。 */
+export interface NotificationOpenRequest {
+  sourceId: string
+  sessionId: string
+}
+
+/** The dsh-chamber notification surface (design 19 §3.3): notify() invokes the
+ *  main-process decision chain (returns whether a native notification was
+ *  actually shown); ready() signals that the renderer registered its onOpen
+ *  listener (the main process only drains notification-open pushes after this);
+ *  onOpen subscribes to the notification-click push and returns an
+ *  unsubscribe. */
+export interface NotificationSurface {
+  notify(payload: NotificationRequest): Promise<boolean>
+  ready(): Promise<boolean>
+  onOpen(callback: (req: NotificationOpenRequest) => void): () => void
+}
+
+/** The full bridge: app info + platform + ssh + update + chamber settings
+ *  + system resume + open-in + deep-link + notifications surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
   version: string | null
+  platform: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
-  vscode: VscodeSurface
+  openIn: OpenInSurface
   deepLink: DeepLinkSurface
   runtime: RuntimeSurface
+  notifications: NotificationSurface
 }
 
 /** dsh runtime version management surface (design 18 M2 IPC). */
@@ -401,15 +456,18 @@ function runtimeApi(): RuntimeSurface {
 }
 
 /**
- * The dsh-chamber:vscode-availability / dsh-chamber:open-vscode IPC surface
- * (design 16 §5.2/§6.4): availability re-probed on every call (no stale cache);
- * open() is the renderer button trigger — the same runVscodeLaunch pipeline as
- * the OS deep link, loud {error} on failure.
+ * The dsh-chamber:open-in-apps / dsh-chamber:open-in IPC surface (open-in.ts):
+ * apps() resolves the registry capability negotiation ({apps} payload unwrapped
+ * to the list); open() is the renderer trigger — the same runOpenInLaunch
+ * pipeline as every other entry point, loud {error} on failure.
  */
-function vscodeApi(): VscodeSurface {
+function openInApi(): OpenInSurface {
   return {
-    availability: () => ipcRenderer.invoke('dsh-chamber:vscode-availability'),
-    open: (instanceId, path) => ipcRenderer.invoke('dsh-chamber:open-vscode', { instanceId, path }),
+    apps: async () => {
+      const payload = await ipcRenderer.invoke('dsh-chamber:open-in-apps') as { apps: OpenInAppInfo[] };
+      return payload.apps;
+    },
+    open: (appId, instanceId, path) => ipcRenderer.invoke('dsh-chamber:open-in', { appId, instanceId, path }),
   };
 }
 
@@ -421,6 +479,28 @@ function deepLinkApi(): DeepLinkSurface {
       const listener = (_event: IpcRendererEvent, intent: DeepLinkIntent) => callback(intent);
       ipcRenderer.on('dsh-chamber:deep-link-intent', listener);
       return () => ipcRenderer.removeListener('dsh-chamber:deep-link-intent', listener);
+    },
+  };
+}
+
+/**
+ * The dsh-chamber notification surface (design 19 §3.3): notify() invokes the
+ * main-process decision chain (payload whitelist / dedupe claim / settings /
+ * native Notification) and resolves whether a notification was actually shown;
+ * ready() signals that the renderer has registered its onOpen listener (the
+ * main process only drains notification-open pushes after this — did-finish-load
+ * fires before the listener exists); onOpen subscribes to the notification-click
+ * push ({sourceId, sessionId} → renderer openSession) and returns an unsubscribe.
+ */
+function notificationsApi(): NotificationSurface {
+  return {
+    notify: payload => ipcRenderer.invoke('dsh-chamber:notify', { payload }),
+    ready: () => ipcRenderer.invoke('dsh-chamber:notifications-ready'),
+    onOpen: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, req: NotificationOpenRequest) => callback(req);
+      ipcRenderer.on('dsh-chamber:notification-open', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:notification-open', listener);
     },
   };
 }
@@ -459,13 +539,15 @@ requestAppInfo().then(
       controlPlaneUrl: info?.controlPlaneUrl,
       dshVersion: info?.dshVersion,
       version: info?.version,
+      platform: info?.platform ?? null,
       desktopSsh: desktopSshApi(),
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
-      vscode: vscodeApi(),
+      openIn: openInApi(),
       deepLink: deepLinkApi(),
       runtime: runtimeApi(),
+      notifications: notificationsApi(),
     });
   },
   (err: unknown) => {
@@ -474,13 +556,15 @@ requestAppInfo().then(
       controlPlaneUrl: null,
       dshVersion: null,
       version: null,
+      platform: null,
       desktopSsh: desktopSshApi(),
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
-      vscode: vscodeApi(),
+      openIn: openInApi(),
       deepLink: deepLinkApi(),
       runtime: runtimeApi(),
+      notifications: notificationsApi(),
     });
   },
 );
