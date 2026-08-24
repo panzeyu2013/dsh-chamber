@@ -33,10 +33,11 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
   if (req.method !== 'GET' && req.method !== 'HEAD') return false
   if (!(headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')) return false
   // These prefixes are protocol/API surfaces even when a client happens to
-  // advertise HTML. Only dsh document navigations should reach the form.
+  // advertise HTML: /api, /plugins, and the /chamber/<subpath> JSON/SSE
+  // endpoints. Document navigations (/, /chamber, /chamber/) reach the form.
   return pathname !== '/api' && !pathname.startsWith('/api/')
-    && pathname !== '/chamber' && !pathname.startsWith('/chamber/')
     && pathname !== '/plugins' && !pathname.startsWith('/plugins/')
+    && !(pathname.startsWith('/chamber/') && pathname !== '/chamber/')
 }
 
 /**
@@ -245,6 +246,13 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     // `/api/connections/local` PATCH/DELETE and `/api/host/*` all reach it).
     if (pathname === '/health' || pathname.startsWith('/api/connections') || pathname.startsWith('/api/host/') || pathname.startsWith('/api/i/')) {
       return false
+    }
+    // /chamber (no trailing slash) → redirect to the dashboard's canonical URL
+    // (otherwise it falls through to the dsh proxy and 404s).
+    if (pathname === '/chamber') {
+      res.writeHead(302, { location: '/chamber/', 'cache-control': 'no-store' })
+      res.end()
+      return true
     }
     // 4. Feature host (design 17 §8.5): /chamber/* is the gateway's own
     // orchestration surface (git worktrees, approvals, cron, settings).
