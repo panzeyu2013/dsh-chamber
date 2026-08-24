@@ -394,7 +394,7 @@ PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露
 
 | # | 不变量 |
 |---|---|
-| S1 | 外部部署无认证不能启动 |
+| S1 | 外部部署无认证不能启动（默认；`--no-auth` 为有界偏差） |
 | S2 | HTTP 与 WS 使用同一 request policy 和认证 |
 | S3 | 未经信任的 forwarded headers 永不影响 authority/client/TLS 判断 |
 | S4 | 上游不可用显式 5xx，绝不 empty success |

@@ -9,7 +9,7 @@
 >
 > 桌面 v1 的认证/审计面已随收敛**整体移除**；桌面控制面 = 托管 + 反代 +
 > 静态服务，loopback-only、无认证边界。设计 17 另定义一个需显式启动、带强制认证
-> 边界的 server gateway；它不是把公网能力塞回匿名控制面。
+> 边界（默认；`--no-auth` 为有界偏差，见 17 §3.1）的 server gateway；它不是把公网能力塞回匿名控制面。
 > 本文档是唯一入口；`05-connection-manager.md` 是 v1 权威契约。
 
 ---
@@ -99,7 +99,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 
 | 域 | 处置 | 依据 |
 |---|---|---|
-| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **从桌面/control-plane 移除；gateway 仅保留入口认证** | loopback-only 是桌面 v1 安全面；design 17 的独立公网进程必须有认证，但不提供 control-plane 审计域 |
+| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **从桌面/control-plane 移除；gateway 仅保留入口认证** | loopback-only 是桌面 v1 安全面；design 17 的独立公网进程必须有认证（默认；`--no-auth` 为有界偏差），但不提供 control-plane 审计域 |
 | 控制面薄壳聊天/会话列表/审批弹窗 | **移除** | dsh 官方前端复用取代 |
 | 控制面会话运行时/统一索引/交互管线 | **移除** | 各实例前端 runtime 自有（N-ctx） |
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
@@ -121,5 +121,5 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 2. **单窗口多实例**：一个前端窗口内 N 个 dsh shell（N-ctx），导航层统一、执行层按来源路由。
 3. **同源唯一入口**：所有实例流量经控制面 `/api/i/<id>/*` 同源反代；前端永不直连非 loopback。
 4. **权威边界纪律**：凡宿主侧事实，控制面只服务/探活，绝不成为权威；会话列表只来自各实例 API。
-5. **信任最小化**：桌面前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort）；隧道 URL 与 SSH 材料永不进 renderer/日志/持久层；普通 control-plane 监听仅 loopback。design 17 的 gateway 可非 loopback，但必须同时启用认证、Host/Origin/peer evaluator 与 HTTP/WS 一致门禁。
+5. **信任最小化**：桌面前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort）；隧道 URL 与 SSH 材料永不进 renderer/日志/持久层；普通 control-plane 监听仅 loopback。design 17 的 gateway 可非 loopback，但必须同时启用认证（默认；`--no-auth` 为有界偏差）、Host/Origin/peer evaluator 与 HTTP/WS 一致门禁。
 6. **P3 硬纪律**：移出项不回流。

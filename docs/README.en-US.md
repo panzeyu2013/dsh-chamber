@@ -49,7 +49,7 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
 - **Chamber settings page** — fixed Settings-shell entries: Connections / General / Update; chamber-global settings stay strictly separate from per-instance config planes
 - **Backend version tolerance (rc.2 compatible)** — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash); headless-verified against an rc.2 backend
-- **Security & privacy** — the ordinary desktop control plane remains loopback-only; SSH passwords and gateway tokens use write-only 0600 storage and never enter the registry or logs; public reachability exists only in the explicitly started, mandatory-auth gateway process
+- **Security & privacy** — the ordinary desktop control plane remains loopback-only; SSH passwords and gateway tokens use write-only 0600 storage and never enter the registry or logs; public reachability exists only in the explicitly started, mandatory-auth gateway process (by default; `--no-auth` is a trusted-network bounded deviation)
 
 ## Server-side deployment
 
