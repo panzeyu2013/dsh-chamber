@@ -917,11 +917,14 @@ const CHAMBER_APP_JS = `(function () {
   }
   function normalizeQuestion(value) {
     var row = ownRecord(value, 'question');
-    if (!Array.isArray(row.options)) throw new Error('Malformed question response');
-    var options = row.options.map(function (value) {
-      var option = ownRecord(value, 'question option');
-      return { label: requiredText(option, 'label', 'question option'), description: optionalText(option, 'description', 'question option') };
-    });
+    // options is optional in the dsh schema (custom-answer-only questions omit
+    // it); normalize to [] so the panel renders a custom-answer fieldset.
+    var options = Array.isArray(row.options)
+      ? row.options.map(function (value) {
+          var option = ownRecord(value, 'question option');
+          return { label: requiredText(option, 'label', 'question option'), description: optionalText(option, 'description', 'question option') };
+        })
+      : [];
     return { id: requiredText(row, 'id', 'question'), header: optionalText(row, 'header', 'question'), question: requiredText(row, 'question', 'question'), detail: optionalText(row, 'detail', 'question'), multiSelect: row.multiSelect === true, options: options };
   }
   function renderApproval(row) {
