@@ -24,7 +24,7 @@
 ### 安全
 
 - Gateway 拒绝 absolute/protocol-relative/backslash authority、伪造 forwarded identity、
-  弱凭据和匿名外部部署；密码改变跨重启撤销旧 cookie，token 更新会关闭已建立流，凭据从
+  弱凭据和匿名外部部署（匿名外部默认拒绝；`--no-auth` 是显式、带醒目告警的可信网络运维覆盖）；密码改变跨重启撤销旧 cookie，token 更新会关闭已建立流，凭据从
   renderer/日志/managed dsh/Git 环境隔离。共享 proxy 采用真正的全进程 300 MiB 请求体预算
   （未知/chunked 单请求 32 MiB）、backpressure 生命周期与 forwarding-header 清洗；登录 body、
   dsh event 原始帧/队列和派生索引均有过滤前硬上限，Gateway state 全部 owner-only。

@@ -26,7 +26,9 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ### Security
 
 - Gateway rejects absolute/protocol-relative/backslash authorities, forged
-  forwarded identity, weak credentials, and anonymous external deployment.
+  forwarded identity, weak credentials, and anonymous external deployment
+  (anonymous external is refused by default; the `--no-auth` flag is an explicit,
+  loudly-warned operator override for trusted networks).
   Password changes revoke old cookies across restarts, token replacement closes
   established streams, and credentials are isolated from the renderer, logs,
   managed dsh, and Git environments. The shared proxy now enforces a genuine

@@ -91,6 +91,7 @@ gateway serve [--host 127.0.0.1|0.0.0.0] [--port 3000]
               [--ui-password PASSWORD] [--api-token TOKEN]
               [--public-origin https://gateway.example.com]
               [--trusted-proxy IP ...] [--cors-origin ORIGIN ...]
+              [--no-auth]
 ```
 
 兼容别名为 `dsh-chamber-gateway`。环境变量包括 `DSH_GATEWAY_HOST`、

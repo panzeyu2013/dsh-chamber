@@ -89,7 +89,7 @@ function validateMaterializedConfig(config: GatewayConfig): void {
   }
   if ((config.plane.host !== '127.0.0.1' || config.publicOrigin !== undefined || config.trustedProxies.length > 0)
     && actualKind === 'none' && config.allowAnonymousExternal !== true) {
-    throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication')
+    throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication (or --no-auth to override)')
   }
   if (config.tls !== undefined) {
     throw new GatewayConfigError('materialized TLS config is not implemented; terminate TLS at a trusted reverse proxy')

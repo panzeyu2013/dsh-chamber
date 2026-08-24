@@ -197,3 +197,39 @@ test('the materialized S1 guard is overridable via allowAnonymousExternal', () =
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
+
+test('the S1 override warns only for anonymous-external, never loopback-only or credential kinds', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-warn-'))
+  const warnings: string[] = []
+  const capturing = { log() {}, warn: (...parts: unknown[]) => warnings.push(parts.join(' ')), error() {} }
+  const build = (mutate: (c: ReturnType<typeof config>) => void) => {
+    const c = config(stateDir)
+    mutate(c)
+    createGateway({
+      config: c,
+      logger: capturing,
+      deps: {
+        createPlane: (() => ({})) as never,
+        createProxy: (() => ({})) as never,
+        createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
+      },
+    })
+  }
+  try {
+    // anonymous external → warns exactly once
+    build(c => { c.plane.host = '0.0.0.0'; c.allowAnonymousExternal = true })
+    assert.equal(warnings.length, 1)
+    assert.match(warnings[0], /SECURITY WARNING/)
+    warnings.length = 0
+
+    // loopback + override → silent (not externally reachable)
+    build(c => { c.allowAnonymousExternal = true })
+    assert.equal(warnings.length, 0)
+
+    // password + override → silent (kind !== none)
+    build(c => { c.plane.host = '0.0.0.0'; c.auth = { kind: 'password', password: 'correct-horse-battery' }; c.allowAnonymousExternal = true })
+    assert.equal(warnings.length, 0)
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})

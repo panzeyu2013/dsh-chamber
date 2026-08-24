@@ -53,6 +53,13 @@ test('S1 override: also permits anonymous loopback behind a public origin or tru
   )
 })
 
+test('S1 override with a credential still resolves the credential kind (flag is inert)', () => {
+  const withPassword = parseGatewayConfig({ host: '0.0.0.0', uiPassword: PASSWORD, allowAnonymousExternal: true }, STATE, DSH)
+  assert.equal(withPassword.auth.kind, 'password')
+  const withToken = parseGatewayConfig({ host: '0.0.0.0', apiToken: TOKEN, allowAnonymousExternal: true }, STATE, DSH)
+  assert.equal(withToken.auth.kind, 'token')
+})
+
 test('0.0.0.0 + api-token resolves kind token', () => {
   const config = parseGatewayConfig({ host: '0.0.0.0', apiToken: TOKEN }, STATE, DSH)
   assert.equal(config.auth.kind, 'token')

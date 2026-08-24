@@ -8,7 +8,7 @@
  *   gateway serve [--host 0.0.0.0] [--port 3000]
  *       [--state-dir DIR] [--dsh-path PATH]
  *       [--ui-password PWD] [--api-token TOK] [--cors-origin ORIGIN ...]
- *       [--public-origin URL] [--trusted-proxy IP ...]
+ *       [--public-origin URL] [--trusted-proxy IP ...] [--no-auth]
  */
 
 import { DEFAULT_STATE_DIR, defaultDshWorkspacePath, type Logger } from '@dsh-chamber/control-plane'
@@ -91,7 +91,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--public-origin': args.publicOrigin = takeValue(); break
       case '--trusted-proxy': args.trustedProxies.push(takeValue()); break
       case '--cors-origin': args.corsOrigins.push(takeValue()); break
-      case '--no-auth': args.allowAnonymousExternal = true; break
+      case '--no-auth':
+        if (inlineValue !== undefined) throw new UsageError('--no-auth takes no value')
+        args.allowAnonymousExternal = true
+        break
       default: throw new UsageError(`unknown option: ${arg}`)
     }
   }
