@@ -1,0 +1,112 @@
+/* Open-in header utility button group (design 16 §6 + open-in extension,
+   placement fix 2026-08). Registered into the official conversation header
+   utilities slot, so this is a plain INLINE icon button in the header's
+   right-aligned utilities row (beside the vendor "Session log" pill) — no
+   absolute positioning: the header's own flow layout orders it and no
+   frame-level anchor can collide with the header content. Size matches the
+   row height (32px) and mirrors the vendor header-action affordance
+   (transparent base, subtle hover tint, explicit focus ring). */
+
+/* The two-button group (main icon button + chevron) reads as one control. */
+.group {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 16px;
+  background: transparent;
+  /* The official VS Code logo carries its own brand fill; hover feedback is
+     the background tint + a subtle brightness lift on the mark. */
+  cursor: pointer;
+  outline: none;
+  flex: none;
+}
+
+.button:hover,
+.button:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.button:hover img {
+  filter: brightness(1.15);
+}
+
+/* Folder mark hover feedback mirrors the VS Code mark's lift (a token-based
+   color shift — the SVG stroke is currentColor, so no filter is needed). */
+.button:hover .folderMark {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The official app icon is a rounded square: 20px inside the 32px pill keeps
+   a balanced 6px margin instead of the 16px icon's airy 8px ring. */
+.button img {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: block;
+  user-select: none;
+}
+
+/* Keyboard focus ring (frontend-review P2-7): outline:none above needs an
+   explicit visible equivalent, not just a background tint. Vendor focus-ring
+   convention (--dsw-alias-state-business-primary). */
+.button:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+/* Neutral folder mark: inherits the button's text color (set below) so the
+   stroke follows the design token instead of a hardcoded brand color. */
+.folderMark {
+  display: block;
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Chevron dropdown trigger (only when ≥2 apps are usable): a 16px chevron
+   inside the same pill, with a hairline divider on its leading edge. */
+.chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 0 16px 16px 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  outline: none;
+  flex: none;
+}
+
+.chevron:hover,
+.chevron:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.chevronMark {
+  display: block;
+  flex: none;
+  transition: transform 120ms ease;
+}
+
+.chevron[aria-expanded='true'] .chevronMark {
+  transform: rotate(180deg);
+}
+
+.chevron:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}

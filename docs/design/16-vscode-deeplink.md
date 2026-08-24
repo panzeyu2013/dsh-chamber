@@ -1,5 +1,12 @@
 # 16 · VS Code 深链插件（deeplink 快速拉起本机 VS Code 打开对应 server 目录）
 
+> **更新（2026-08）**：应用内按钮已演进为 open-in 通用打开注册表（设计 17）——
+> 插件重命名 `@dsh-chamber/dsh-client-ui-open-in`，`dsh-chamber:open-vscode`/
+> `vscode-availability` 两 IPC 与 `window.dshChamber.vscode` 桥面已随旧插件
+> 删除（渲染层唯一入口收敛为 `open-in-apps`/`open-in`）；OS 深链
+> `dsh-chamber://open-vscode` 管线**不变**。本文保留为 OS 深链与 vscode 拉起的
+> 契约；文中旧 IPC/桥面/包名描述属历史基线，以设计 17 §6 演进表为准。
+
 > **状态：设计定稿并已实现（M0–M2，2026-08）**。经两轮反思 + 一轮独立对抗复核收敛
 > （复核发现无 P0；5 项 P1 必改与 P2 边界均已并入本文），实现后另经一轮安全契约
 > 审查与一轮前端接线审查（无 P0；必改项均已修复，见 §10.2）。配套进度见

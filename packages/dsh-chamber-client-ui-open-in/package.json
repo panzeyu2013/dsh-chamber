@@ -1,6 +1,6 @@
 {
-  "name": "@dsh-chamber/dsh-client-ui-vscode",
-  "description": "Chamber-bundled VS Code deep-link client plugin: open the current source's workspace in local VS Code Remote-SSH (design 16)",
+  "name": "@dsh-chamber/dsh-client-ui-open-in",
+  "description": "Chamber-bundled open-in client plugin: open the current source's workspace in Finder (local) or VS Code (local/remote SSH), design 16 + open-in extension",
   "version": "0.1.5",
   "private": true,
   "type": "module",
@@ -30,6 +30,7 @@
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",
     "@deepseek-ai/dsh-client-runtime": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
     "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
     "react": "^19.0.0"
   },

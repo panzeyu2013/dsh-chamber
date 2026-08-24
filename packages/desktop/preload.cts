@@ -215,14 +215,22 @@ export interface SystemResumeSurface {
 }
 
 /**
- * The VS Code deep-link surface (design 16 §5.2/§6.4): availability() is the
- * main-process probe (getter, re-probed on every call — no stale cache);
- * open() is the renderer button trigger — the same runVscodeLaunch pipeline as
- * the OS deep link, loud {error} on failure, never a silent empty success.
+ * The open-in surface (open-in.ts): apps() is the registry capability
+ * negotiation — the full app list in fixed order with id / remoteCapable /
+ * available (availability re-probed in the main process on every call — no
+ * stale cache); open() is the renderer trigger — the same runOpenInLaunch
+ * pipeline every entry point shares (appId whitelist + instanceId/path
+ * validation + remoteCapable gate), loud {error} on failure, never a silent
+ * empty success.
  */
-export interface VscodeSurface {
-  availability(): Promise<{ available: boolean }>
-  open(instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+export interface OpenInAppInfo {
+  id: string
+  remoteCapable: boolean
+  available: boolean
+}
+export interface OpenInSurface {
+  apps(): Promise<OpenInAppInfo[]>
+  open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** Normalized deep-link intent push payload (design 16 §2). */
@@ -237,17 +245,18 @@ export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
 }
 
-/** The full bridge: app info + ssh + update + chamber settings + system resume
- *  + vscode deep-link surfaces. */
+/** The full bridge: app info + platform + ssh + update + chamber settings
+ *  + system resume + open-in + deep-link surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
   version: string | null
+  platform: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
-  vscode: VscodeSurface
+  openIn: OpenInSurface
   deepLink: DeepLinkSurface
 }
 
@@ -347,15 +356,18 @@ function systemResumeApi(): SystemResumeSurface {
 }
 
 /**
- * The dsh-chamber:vscode-availability / dsh-chamber:open-vscode IPC surface
- * (design 16 §5.2/§6.4): availability re-probed on every call (no stale cache);
- * open() is the renderer button trigger — the same runVscodeLaunch pipeline as
- * the OS deep link, loud {error} on failure.
+ * The dsh-chamber:open-in-apps / dsh-chamber:open-in IPC surface (open-in.ts):
+ * apps() resolves the registry capability negotiation ({apps} payload unwrapped
+ * to the list); open() is the renderer trigger — the same runOpenInLaunch
+ * pipeline as every other entry point, loud {error} on failure.
  */
-function vscodeApi(): VscodeSurface {
+function openInApi(): OpenInSurface {
   return {
-    availability: () => ipcRenderer.invoke('dsh-chamber:vscode-availability'),
-    open: (instanceId, path) => ipcRenderer.invoke('dsh-chamber:open-vscode', { instanceId, path }),
+    apps: async () => {
+      const payload = await ipcRenderer.invoke('dsh-chamber:open-in-apps') as { apps: OpenInAppInfo[] };
+      return payload.apps;
+    },
+    open: (appId, instanceId, path) => ipcRenderer.invoke('dsh-chamber:open-in', { appId, instanceId, path }),
   };
 }
 
@@ -405,11 +417,12 @@ requestAppInfo().then(
       controlPlaneUrl: info?.controlPlaneUrl,
       dshVersion: info?.dshVersion,
       version: info?.version,
+      platform: info?.platform ?? null,
       desktopSsh: desktopSshApi(),
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
-      vscode: vscodeApi(),
+      openIn: openInApi(),
       deepLink: deepLinkApi(),
     });
   },
@@ -419,11 +432,12 @@ requestAppInfo().then(
       controlPlaneUrl: null,
       dshVersion: null,
       version: null,
+      platform: null,
       desktopSsh: desktopSshApi(),
       update: updateApi(),
       settings: settingsApi(),
       systemResume: systemResumeApi(),
-      vscode: vscodeApi(),
+      openIn: openInApi(),
       deepLink: deepLinkApi(),
     });
   },
