@@ -13,6 +13,7 @@ import {
   BLANK_GHOST_GRACE_MS,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
+  hashString,
   increasedForkTitle,
   instanceSnapshotSignature,
   mergeRuntimeFacts,
@@ -32,6 +33,7 @@ import {
   serversProjectionSignature,
   SEARCH_QUERY_MAX_CODE_UNITS,
   UNGROUPED_WORKSPACE_ID,
+  workspaceAccentStyle,
   __resetBlankGhostsForTests,
 } from '../src/shared/derive.ts'
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
@@ -1556,3 +1558,100 @@ test('importing derive registers exactly one entry in the shared-singleton regis
   assert.deepEqual(Object.keys(registry), ['derive'])
 })
 
+// ---- per-workspace icon accent (2026-09) ----
+
+interface ParsedHsl {
+  hue: number
+  saturation: number
+  lightness: number
+}
+
+function parseAccent(accent: { '--dsh-workspace-accent': string }): ParsedHsl {
+  const match = /^hsl\((\d+(?:\.\d+)?) (\d+)% (\d+)%\)$/.exec(accent['--dsh-workspace-accent'])
+  assert.ok(match !== null, `unexpected accent format: ${accent['--dsh-workspace-accent']}`)
+  return { hue: Number(match[1]), saturation: Number(match[2]), lightness: Number(match[3]) }
+}
+
+test('workspaceAccentStyle is deterministic, single-keyed and well-formed', () => {
+  const first = workspaceAccentStyle('srv', 'w1')
+  assert.ok(first !== undefined, 'a real workspace must always receive an accent')
+  assert.deepEqual(workspaceAccentStyle('srv', 'w1'), first)
+  assert.deepEqual(Object.keys(first), ['--dsh-workspace-accent'])
+  parseAccent(first) // throws on a malformed hsl string
+  // Deterministic across calls and servers — never a random color.
+  assert.deepEqual(workspaceAccentStyle('srv-a', 'w1'), workspaceAccentStyle('srv-a', 'w1'))
+})
+
+test('workspaceAccentStyle returns undefined for the ungrouped bucket', () => {
+  assert.equal(workspaceAccentStyle('srv', UNGROUPED_WORKSPACE_ID), undefined)
+  assert.equal(workspaceAccentStyle('srv', UNGROUPED_WORKSPACE_ID, { isWorktree: true, repoKey: 'r' }), undefined)
+})
+
+test('distinct workspace ids get distinct, well-spread accents', () => {
+  const colors = Array.from({ length: 24 }, (_, i) => {
+    const accent = workspaceAccentStyle('srv', `workspace-${i}`)
+    assert.ok(accent !== undefined)
+    return parseAccent(accent)
+  })
+  // Golden-angle hues of distinct hash inputs are distinct unless the hashes
+  // differ by a multiple of 30000 (see derive.ts WORKSPACE_HUE_STEP) — never
+  // the case for these fixed ids — and the second-hash lightness jitter
+  // (44/49/54) breaks up near-hue pairs anyway.
+  const seen = new Set(colors.map(color => `${color.hue.toFixed(1)}/${color.lightness}`))
+  assert.equal(seen.size, colors.length, 'every sample workspace must have a unique accent')
+  // The jitter must actually vary — plain hue-only spacing is not enough to
+  // guarantee eye-distinguishability for near pairs.
+  assert.ok(new Set(colors.map(color => color.lightness)).size >= 2, 'lightness jitter must vary across workspaces')
+})
+
+test('worktree workspaces inherit the repository family hue (registered main)', () => {
+  const main = workspaceAccentStyle('srv', 'main-checkout', { isMain: true, repoKey: 'repo-1' })
+  const derived = workspaceAccentStyle('srv', 'worktree-a', { isWorktree: true, mainWorkspaceId: 'main-checkout', repoKey: 'repo-1' })
+  const sibling = workspaceAccentStyle('srv', 'worktree-b', { isWorktree: true, mainWorkspaceId: 'main-checkout', repoKey: 'repo-1' })
+  const otherRepo = workspaceAccentStyle('srv', 'worktree-x', { isWorktree: true, mainWorkspaceId: 'other-main', repoKey: 'repo-2' })
+  const plain = workspaceAccentStyle('srv', 'plain-workspace')
+  assert.ok(main && derived && sibling && otherRepo && plain)
+  const mainHsl = parseAccent(main)
+  const derivedHsl = parseAccent(derived)
+  const siblingHsl = parseAccent(sibling)
+  const otherHsl = parseAccent(otherRepo)
+  // Same family seed → same hue; a different repo → a different hue; a plain
+  // workspace has no family seed, so its hue differs from the family too.
+  assert.equal(derivedHsl.hue, mainHsl.hue)
+  assert.equal(siblingHsl.hue, mainHsl.hue)
+  assert.notEqual(otherHsl.hue, mainHsl.hue)
+  assert.notEqual(parseAccent(plain).hue, mainHsl.hue)
+  // Derived members demote to the muted saturation; the main keeps the full one.
+  assert.equal(mainHsl.saturation, 62)
+  assert.equal(derivedHsl.saturation, 45)
+  assert.equal(siblingHsl.saturation, 45)
+})
+
+test('worktrees share the family hue through repoKey when the main is unregistered', () => {
+  const a = workspaceAccentStyle('srv', 'worktree-a', { isWorktree: true, repoKey: 'repo-1' })
+  const b = workspaceAccentStyle('srv', 'worktree-b', { isWorktree: true, repoKey: 'repo-1' })
+  const c = workspaceAccentStyle('srv', 'worktree-c', { isWorktree: true, repoKey: 'repo-3' })
+  assert.ok(a && b && c)
+  assert.equal(parseAccent(a).hue, parseAccent(b).hue)
+  assert.notEqual(parseAccent(c).hue, parseAccent(a).hue)
+  // The family hue depends on the repoKey alone: a worktree carrying a
+  // mainWorkspaceId still shares the hue, and a RENAMED main (different
+  // workspace id, same repoKey) never shifts the family.
+  const withMain = workspaceAccentStyle('srv', 'worktree-d', {
+    isWorktree: true, mainWorkspaceId: 'renamed-main', repoKey: 'repo-1',
+  })
+  assert.ok(withMain)
+  assert.equal(parseAccent(withMain).hue, parseAccent(a).hue)
+  const renamedMain = workspaceAccentStyle('srv', 'renamed-main', { isMain: true, repoKey: 'repo-1' })
+  assert.ok(renamedMain)
+  assert.equal(parseAccent(renamedMain).hue, parseAccent(a).hue)
+})
+
+test('hashString matches the historical sourceHue arithmetic', () => {
+  // The sidebar source hue is `hashString(id) % 360` — lock the 32-bit hash
+  // shape so a future refactor cannot silently change server dot colors.
+  assert.equal(hashString(''), 0)
+  assert.equal(hashString('a'), 97)
+  assert.equal(hashString('ab'), 3105)
+  assert.equal(hashString('local'), 103145323)
+})

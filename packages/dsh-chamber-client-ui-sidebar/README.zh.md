@@ -31,6 +31,13 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   （搜索胶囊、来源级 git 告警与列表一并隐藏），**不动各 workspace 自身的
   对话折叠态**（`sourceFolded` 独立于 `folded`），展开后各 workspace 及其
   会话原样恢复。
+- 每个 workspace 组头图标（文件夹，或派生 worktree 的 git-branch 字形）带
+  各自的**确定性 accent 色**（`shared/derive.ts` 的 `workspaceAccentStyle`）：
+  `(来源 id, 家族种子)` 哈希的黄金角色相散布 + 每 workspace 明度抖动
+  （44/49/54%）；无用户自定义、无持久化、与选中态无关（当前会话行保留其
+  官方选中 tint）。worktree 与所属仓库的**主检出共享家族色相**（种子 =
+  `repoKey`；`mainWorkspaceId` 仅为无 repoKey 时的回退——主检出未注册或
+  改名都不影响家族色）并降饱和；未分组桶无 accent（默认墨色）。
 
 ## 交互
 

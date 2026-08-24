@@ -499,12 +499,23 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   不存在的 `--dsw-alias-accent/success/danger/input-fill` 一律不得使用。
 - **来源 accent**：每元素 `--dsh-source-accent` CSS 变量承载远程来源 hue
   （`hsl(hue 65% 52%)`），本地来源省略、回退默认 ink；用于来源头激活左
-  内边线、rail 活动环与当前会话所在 workspace 组的折叠 chevron 标记。
+  内边线与 rail 活动环（**2026-09 起 workspace 组 chevron 不再取来源
+  accent**——workspace 图标自带确定性 accent，见下条）。
+- **workspace 图标 accent（2026-09）**：workspace 头行内联
+  `--dsh-workspace-accent`（`.foldToggle` 基色/hover 同取，图标走
+  currentColor）——色相 = `(serverId, 家族种子)` 哈希 × 137.508 黄金角
+  步进 mod 360，明度 = 44/49/54%（第二哈希抖动，近色相兜底）；家族种子
+  = `repoKey`（worktree 与主检出共享家族色相，主检出未注册/改名不漂移；
+  `mainWorkspaceId` 仅为无 repoKey 时的回退），worktree 降饱和 45%、
+  主检出/普通 workspace 62%；未分组桶无 accent 回退 caption ink。无用户
+  自定义、无持久化、**与选中态无关**（纯函数 `workspaceAccentStyle`，
+  shared/derive.ts；当前会话指示完全由 session 行官方 selected tint 承担）。
 - **当前会话高亮（对齐官方 selected 处理）**：session 行 = 官方
   `.sessionRow.selected` 的浅 `interactive-bg-hover` 色调（无 inset 阴影、
-  无深色调、无标题加粗）；所在 workspace 组 = 无底色，折叠 chevron 取
-  来源 accent（镜像官方 project 行 folderActive 品牌色文件夹图标）——
-  两组高亮永不相邻融合，色调全为官方 token 浅档。
+  无深色调、无标题加粗）；所在 workspace 组 = 无底色、图标色恒定
+  （2026-09：曾取来源 accent 的 `.groupContainsCurrent .foldToggle` 规则
+  已移除）——当前指示不重复编码于 workspace 级，两组高亮永不相邻融合，
+  色调全为官方 token 浅档。
 - **排版**：字号下限 12px；会话标题 13/18——官方行 14px，13/18 是 chamber
   多来源密度的刻意折中；来源身份点 8px（仅来源头/rail），session 行首为
   固定 10px 状态槽（常态空）。
@@ -553,8 +564,9 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `--dsw-alias-state-{business,warn}-primary`（不再有 green/red 状态色）；
   状态槽非身份标记（来源身份由来源头圆点承担）。
 - **当前会话高亮（含 workspace 组标记）**：session 行 = 官方 selected 的
-  浅 hover 色调（无阴影无加粗）；workspace 组 = 折叠 chevron 取来源
-  accent（镜像官方 folderActive）——无底色融合、无深色调。
+  浅 hover 色调（无阴影无加粗）；workspace 组 = 图标恒定自有色
+  （2026-09 起，曾取来源 accent 的 chevron 规则已移除）——无底色融合、
+  无深色调。
 - **嵌套缩进（收紧）**：workspace 列表距来源头 10+1+6 = 17px；session 行
   左 padding 26px——session 标题相对 workspace 标题（24px）深 18px，
   server→session 标题级联 ~59px（原 73px）；会话级重命名表单与错误行

@@ -434,11 +434,6 @@
   box-shadow: inset 2px 0 0 var(--dsh-source-accent, var(--dsw-alias-label-primary));
 }
 
-/* Current-session workspace group marker: the fold chevron takes the source
-   accent (mirroring the official folderActive brand-colored folder icon) —
-   no background, so the group can never fuse with the current-session row
-   below it. The rule itself lives after .foldToggle:hover (see there). */
-
 /* Source identity dot: the local source renders the default secondary ink
    directly (no derived accent); remote sources carry their stable hue via
    the inline --dsh-source-accent-driven background. */
@@ -597,7 +592,10 @@
 }
 
 /* Workspace group fold toggle: a right chevron that points down while the
-   group is expanded and rotates back to the right when folded. */
+   group is expanded and rotates back to the right when folded. The glyph
+   (folder / git-branch / chevron) carries the workspace's own accent color
+   (chamber 2026-09): an inline --dsh-workspace-accent set per header row,
+   with the old caption ink as fallback (the ungrouped bucket sets none). */
 .foldToggle {
   flex: none;
   display: inline-flex;
@@ -609,12 +607,15 @@
   padding: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--dsw-alias-label-caption);
+  color: var(--dsh-workspace-accent, var(--dsw-alias-label-caption));
   cursor: pointer;
 }
 
+/* The accent is CONSTANT on hover (selection-independent): the hover
+   affordance is the row background tint (.workspaceHeader:hover) — a hover
+   color jump on a colored glyph would read as a selection state. */
 .foldToggle:hover {
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsh-workspace-accent, var(--dsw-alias-label-primary));
 }
 
 /* The chevron glyph rotates (down when expanded, right when folded) — the
@@ -673,13 +674,6 @@
 .workspaceHeader:focus-within .foldToggleGit .foldBranch,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldBranch {
   display: none;
-}
-
-/* The group containing the current session's accent chevron marker: the
-   accent outranks both the base caption ink and the hover bump (declared
-   after, equal specificity). */
-.groupContainsCurrent .foldToggle {
-  color: var(--dsh-source-accent, var(--dsw-alias-label-primary));
 }
 
 .foldToggleFolded {

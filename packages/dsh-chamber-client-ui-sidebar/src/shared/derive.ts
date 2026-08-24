@@ -39,6 +39,80 @@ export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 export const SEARCH_QUERY_MAX_CODE_UNITS = 500
 
 /**
+ * Stable per-workspace icon accent (chamber 2026-09): a deterministic color
+ * from the workspace identity — no user customization, no persistence, no
+ * selection state. The hue is a golden-angle spread of the
+ * (serverId, family seed) hash, so distinct seeds land far apart on the hue
+ * wheel; a SECOND hash jitters the rest lightness per workspace (44/49/54%)
+ * so even near-hue pairs stay eye-distinguishable.
+ *
+ * Derived (worktree) workspaces inherit their repository's family hue — the
+ * family seed is the repoKey, shared by the MAIN checkout and every derived
+ * worktree alike (stable even when the main is unregistered or later
+ * renamed); `mainWorkspaceId` is only the fallback for a repoKey-less flag.
+ * Family members share one hue, while the derived members demote to a muted
+ * saturation and the MAIN checkout keeps the full one, mirroring the
+ * folder/branch glyph + title-ink hierarchy. The synthetic ungrouped bucket
+ * gets NO accent (undefined) — CSS falls back to the default caption ink.
+ * Selection is deliberately NOT encoded here: the current-session row
+ * carries its own official selected tint.
+ *
+ * `WorkspaceAccentSeed` is a structural subset of the git plugin's
+ * `WorkspaceGitFlag` (shared/workspace-git-flags.ts) — this module stays
+ * free of git types by design.
+ */
+export interface WorkspaceAccentSeed {
+  /** True when this workspace IS a git worktree (derived workspace). */
+  isWorktree?: boolean
+  /** True when this workspace is the repository's MAIN checkout. */
+  isMain?: boolean
+  /** For a derived worktree: the MAIN checkout workspace id of the same repo. */
+  mainWorkspaceId?: string
+  /** The repository's opaque identity (repoKey) this workspace belongs to. */
+  repoKey?: string
+}
+
+/**
+ * Golden-angle hue step (design 2026-09): hue = (hash × 137.508) mod 360.
+ * 137.508 = 34377/250, and 90000/gcd(34377, 90000) = 30000, so two hashes
+ * land on the exact same hue only when they differ by a multiple of 30000 —
+ * negligible for real ids, and even then the per-workspace lightness jitter
+ * (below) usually breaks the visual tie. All other pairs are spread ~137°
+ * apart on the wheel.
+ */
+const WORKSPACE_HUE_STEP = 137.508
+
+/** Deterministic 32-bit string hash (the sidebar sourceHue arithmetic). */
+export function hashString(input: string): number {
+  let hash = 0
+  for (let i = 0; i < input.length; i += 1) hash = (hash * 31 + input.charCodeAt(i)) >>> 0
+  return hash
+}
+
+/**
+ * Per-workspace accent CSS variable for the workspace header row (the fold
+ * toggle's folder/branch glyph inherits currentColor). `undefined` for the
+ * ungrouped bucket, so the CSS fallback chain keeps today's visuals there.
+ */
+export function workspaceAccentStyle(
+  serverId: string,
+  workspaceId: string,
+  seed?: WorkspaceAccentSeed,
+): { '--dsh-workspace-accent': string } | undefined {
+  if (workspaceId === UNGROUPED_WORKSPACE_ID) return undefined
+  const family = seed !== undefined && (seed.isWorktree === true || seed.isMain === true)
+    ? (seed.repoKey ?? seed.mainWorkspaceId ?? workspaceId)
+    : workspaceId
+  const rawHue = (hashString(`${serverId}/${family}`) * WORKSPACE_HUE_STEP) % 360
+  // One-decimal hue normalized into [0, 360): 359.96 rounds to 360.0, which
+  // would escape the format contract — map it back to 0.
+  const hue = (Math.round(rawHue * 10) % 3600) / 10
+  const saturation = seed?.isWorktree === true ? 45 : 62
+  const lightness = 44 + (hashString(workspaceId) % 3) * 5
+  return { '--dsh-workspace-accent': `hsl(${hue} ${saturation}% ${lightness}%)` }
+}
+
+/**
  * Search input normalization (design 06 §1.1 wire schema): strip NULs, clamp
  * to SEARCH_QUERY_MAX_CODE_UNITS UTF-16 code units without splitting a
  * surrogate pair, trim; '' when empty. Mirrors the wire search query schema

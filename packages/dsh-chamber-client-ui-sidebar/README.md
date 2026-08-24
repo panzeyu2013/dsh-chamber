@@ -39,6 +39,16 @@ place of the official ui-sidebar (which stays untouched in
   workspace's own conversation fold state (`sourceFolded`, separate from
   `folded`), so expanding restores every workspace with its sessions exactly
   as they were.
+- Each workspace header's icon (folder, or the git-branch glyph of a derived
+  worktree) carries its own deterministic accent (`workspaceAccentStyle` in
+  `shared/derive.ts`): a golden-angle hue spread of the
+  `(sourceId, family seed)` hash plus a per-workspace lightness jitter
+  (44/49/54 %) — no user customization, no persistence, selection-independent
+  (the current-session row keeps its own official selected tint). Worktrees
+  and their repository's MAIN checkout share the family hue (seed = the
+  `repoKey`; `mainWorkspaceId` only falls back for a repoKey-less flag — the
+  family survives an unregistered or renamed main) at a muted saturation;
+  the ungrouped bucket gets no accent (default ink).
 
 ## Interactions
 

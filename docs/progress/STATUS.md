@@ -586,6 +586,16 @@
   [264,420] 钳位）。交互细节与加固（stopPropagation 配对、ghost 守卫、
   checkVisibility 重试等）见 `docs/design/06-sidebar-enhancements.md`
   §2.2 / §3.1——不再在 STATUS 复述。
+- **workspace 图标按身份着色（2026-09，已落地）**：workspace 组头图标
+  （文件夹 / worktree branch 字形）按 `(serverId, 家族种子)` 哈希 +
+  黄金角步进（×137.508）派生稳定色相，第二哈希抖动明度（44/49/54%）保证
+  肉眼可区分；worktree 与主检出共享仓库家族色相（种子 = `repoKey`，
+  `mainWorkspaceId` 仅为无 repoKey 时的回退——主检出未注册/改名不影响
+  家族色）并降饱和（45%），主检出/普通 workspace 全饱和（62%）。
+  选中态不编码于图标——当前会话行自带官方选中 tint（原
+  `.groupContainsCurrent .foldToggle` 源 accent 规则移除）。纯函数
+  `workspaceAccentStyle`/`hashString`（shared/derive.ts），无持久化、
+  无配置 UI、无新增订阅；未分组桶无 accent 回退默认墨色。
 - **设置桥 keyed 插槽（2026-08）**：bridge-outlet 现支持 root+keyed（`settings.plugin.item`，
   镜像官方 scoped-slots 契约，entryKey 分发 + fallback），修复 Plugins 页黑屏；所有桥接出口
   （本地专属 `settings.action` + 选中实例 `settings.section` 内容出口）在 child-ctx → host

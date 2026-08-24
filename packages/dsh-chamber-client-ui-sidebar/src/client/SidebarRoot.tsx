@@ -113,9 +113,9 @@ import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults,
+  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, hashString, increasedForkTitle, mergeSearchResults,
   nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
-  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS,
+  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, workspaceAccentStyle,
   type SessionOrderBy,
 } from '../shared/derive.ts'
 import {
@@ -160,9 +160,7 @@ const SCROLLBAR_LINGER_MS = 2000
 
 /** Stable per-source accent: deterministic hue hash of the source id (05 §2). */
 function sourceHue(sourceId: string): number {
-  let hash = 0
-  for (let i = 0; i < sourceId.length; i += 1) hash = (hash * 31 + sourceId.charCodeAt(i)) >>> 0
-  return hash % 360
+  return hashString(sourceId) % 360
 }
 
 /** Remote sources carry the derived accent; the local source keeps the default dot. */
@@ -2041,8 +2039,11 @@ export function SidebarRoot({
                           const folded = viewPrefs.folded[workspaceKey] === true
                           // chamber (08 §11): derived (worktree) workspaces
                           // drop the kebab/rename — OpenChamber worktree
-                          // groups keep only delete + new-session.
-                          const isWorktree = getWorkspaceGitFlag(server.id, workspace.id)?.isWorktree === true
+                          // groups keep only delete + new-session. The flag
+                          // also seeds the per-workspace icon accent (family
+                          // hue for worktree/main workspaces).
+                          const gitFlag = getWorkspaceGitFlag(server.id, workspace.id)
+                          const isWorktree = gitFlag?.isWorktree === true
                           const sessions = sessionsOf(workspace)
                           // chamber (third-wave review, R2-1#4): sessionsOf
                           // includes the projection's departed blank GHOST
@@ -2076,10 +2077,13 @@ export function SidebarRoot({
                           // lives on the chevron button).
                           const workspaceHeader = (
                             <div
-                              className={clsx(
-                                cc.workspaceHeader,
-                                sessions.some(session => session.id === currentId) && cc.groupContainsCurrent,
-                              )}
+                              className={clsx(cc.workspaceHeader)}
+                              // chamber (2026-09): per-workspace icon accent —
+                              // deterministic, selection-independent (the
+                              // current-session row carries its own official
+                              // selected tint); undefined for the ungrouped
+                              // bucket, so CSS falls back to the default ink.
+                              style={workspaceAccentStyle(server.id, workspace.id, gitFlag)}
                               data-chamber-row={workspaceKey}
                               role="treeitem"
                               aria-expanded={!folded}
