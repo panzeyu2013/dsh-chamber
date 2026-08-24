@@ -3190,16 +3190,15 @@ if (!gotTheLock) {
       }
       if (restoreResult.outcome === 'incomplete') {
         // The stash was missing/untrustworthy, so DSH_HOME was never touched.
-        // Surface the error but hand off to the startup transaction instead of
-        // hard-blocking with no actions (that would strand the local instance).
-        await refreshRuntimeEvidence({ error: '回滚前数据暂存缺失或不可信；拒绝恢复' });
+        // Restart the instance (never a hard block), then THROW so the
+        // renderer surfaces the failure in its persistent action-error slot —
+        // a silent restart would hide the rejection from the user.
         await runRuntimeStartup();
-        return runtimeInstance.getState();
+        throw new Error('回滚前数据暂存缺失或不可信；拒绝恢复');
       }
       if (restoreResult.error !== null) {
-        await refreshRuntimeEvidence({ error: `恢复回滚前数据失败：${restoreResult.error}` });
         await runRuntimeStartup();
-        return runtimeInstance.getState();
+        throw new Error(`恢复回滚前数据失败：${restoreResult.error}`);
       }
       // 'complete': restart the local instance against the restored data.
       await runRuntimeStartup();
