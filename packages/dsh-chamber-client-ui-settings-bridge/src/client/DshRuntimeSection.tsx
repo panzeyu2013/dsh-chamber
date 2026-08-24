@@ -34,6 +34,33 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Localize a projected ISO timestamp before it reaches user copy. The locale
+ *  plugin keeps `<html lang>` in sync with the active app locale (zh-CN / en),
+ *  so it is the stable formatting hint; falls back to the raw value when the
+ *  timestamp is unparsable or the formatter rejects the locale. */
+function formatTimestamp(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const locale = typeof document !== 'undefined' ? document.documentElement.lang : undefined
+  try {
+    return new Intl.DateTimeFormat(locale === '' ? undefined : locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  } catch {
+    return value
+  }
+}
+
+/** Map the main-process registry patch errors to localized copy. The desktop
+ *  validation message is technical English; the known invalid-origin failure
+ *  becomes a dictionary key (the user-cancelled confirm dialog is intercepted
+ *  by the caller and never reaches this), and anything unknown stays honest
+ *  and raw. */
+function localizeRegistryError(error: string, t: RuntimeTranslate): string {
+  if (error === 'registryOrigin must be a valid https:// URL without credentials') {
+    return t('dshRuntimeRegistryInvalidOrigin')
+  }
+  return error
+}
+
 function metadataComponentText(component: RuntimeMetadataComponent, t: RuntimeTranslate): string {
   switch (component) {
     case 'current': return t('dshRuntimeMetadataComponentCurrent')
@@ -54,8 +81,10 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
   const [registrySelection, setRegistrySelection] = useState(NPMJS)
   const [actionError, setActionError] = useState<string | null>(null)
   const [registryError, setRegistryError] = useState<string | null>(null)
+  const [originError, setOriginError] = useState<string | null>(null)
   const [registryReachable, setRegistryReachable] = useState(false)
   const [testingRegistry, setTestingRegistry] = useState(false)
+  const [applyingRegistry, setApplyingRegistry] = useState(false)
 
   const runtime = currentRuntimeSurface()
   const hydrated = state !== null
@@ -153,25 +182,40 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
     void runRuntimeAction(() => runtime.cleanupVersion(chosen))
   }, [runtime, chosen, cleanupEligible, actions, runRuntimeAction])
 
-  const onApplyRegistry = useCallback(async (origin: string): Promise<boolean> => {
-    if (envGated || !actions.has('check')) return false
+  const onApplyRegistry = useCallback(async (
+    origin: string,
+    inline: boolean,
+  ): Promise<{ ok: boolean; cancelled: boolean }> => {
+    if (envGated || !actions.has('check')) return { ok: false, cancelled: false }
     setBusy(true)
+    setApplyingRegistry(true)
     setRegistryError(null)
+    setOriginError(null)
     setRegistryReachable(false)
     try {
       const result = await applySettingsPatch({ registryOrigin: origin })
       if (!result.ok) {
-        setRegistryError(result.error)
-        return false
+        // The confirm dialog was declined — not an error; the caller reverts
+        // the dropdown so it never claims an origin that was not applied.
+        if (result.error === 'cancelled') return { ok: false, cancelled: true }
+        // A validation failure is an inline field error on the custom origin;
+        // any other apply failure surfaces on the general registry line.
+        const error = localizeRegistryError(result.error, t)
+        if (inline) setOriginError(error)
+        else setRegistryError(error)
+        return { ok: false, cancelled: false }
       }
-      return true
+      return { ok: true, cancelled: false }
     } catch (error) {
-      setRegistryError(errorMessage(error))
-      return false
+      const message = errorMessage(error)
+      if (inline) setOriginError(message)
+      else setRegistryError(message)
+      return { ok: false, cancelled: false }
     } finally {
+      setApplyingRegistry(false)
       setBusy(false)
     }
-  }, [envGated, actions])
+  }, [envGated, actions, t])
 
   const onTestRegistry = useCallback(async (): Promise<void> => {
     if (runtime === null || !actions.has('check')) return
@@ -224,7 +268,7 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
       case 'unknown': return t('dshRuntimeSnapshotUnknown')
       case 'ready': return t('dshRuntimeSnapshotSummary', {
         count: snapshot.count ?? 0,
-        at: snapshot.latestAt ?? t('dshRuntimeSnapshotNever'),
+        at: snapshot.latestAt != null ? formatTimestamp(snapshot.latestAt) : t('dshRuntimeSnapshotNever'),
       })
       case 'failed': return t('dshRuntimeSnapshotFailed', { error: snapshot.detail ?? '—' })
       case 'restore-half': return t('dshRuntimeSnapshotRestoreHalf')
@@ -255,9 +299,10 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
 
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>
-          {active === null
-            ? `${t('dshRuntimeTitle')} ${t('dshRuntimeVersionUnknown')}`
-            : `${t('dshRuntimeTitle')} v${active}${sourceTag !== null ? `（${sourceTag}）` : ''}`}
+          {t('updateCurrentVersion', {
+            version: active === null ? t('dshRuntimeVersionUnknown') : active,
+          })}
+          {active !== null && sourceTag !== null ? `（${sourceTag}）` : ''}
         </p>
       </div>
       {active !== null && bundled !== null && active !== bundled && (
@@ -299,7 +344,7 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
               : 'dshRuntimeInvalidationFallback',
             {
               version: state.invalidationNotice.fromVersion ?? '—',
-              at: state.invalidationNotice.at,
+              at: formatTimestamp(state.invalidationNotice.at),
             },
           )}
         </p>
@@ -316,15 +361,17 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
             setSelected(event.target.value)
           }}
         >
-          {versions.map((entry: RuntimeVersionEntry) => (
-            <option key={entry.version} value={entry.version}>
-              v{entry.version}
-              {entry.version === active ? ` · ${t('current')}` : ''}
-              {entry.latest ? ` · ${t('dshRuntimeLatestTag')}` : ''}
-              {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
-              {entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
-            </option>
-          ))}
+          {versions.length === 0
+            ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
+            : versions.map((entry: RuntimeVersionEntry) => (
+              <option key={entry.version} value={entry.version}>
+                v{entry.version}
+                {entry.version === active ? ` · ${t('current')}` : ''}
+                {entry.latest ? ` · ${t('dshRuntimeLatestTag')}` : ''}
+                {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
+                {entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
+              </option>
+            ))}
         </select>
       </label>
 
@@ -338,8 +385,12 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
             const value = event.target.value
             setRegistrySelection(value)
             if (value !== CUSTOM_REGISTRY) {
-              void onApplyRegistry(value).then((ok) => {
-                if (!ok) setRegistrySelection(registryMode)
+              void onApplyRegistry(value, false).then((result) => {
+                // Only a declined confirm dialog reverts the dropdown (it must
+                // never claim an origin that was not applied). Any other
+                // failure keeps the user's selection mounted — a custom origin
+                // stays editable instead of being yanked away with its error.
+                if (!result.ok && result.cancelled) setRegistrySelection(registryMode)
               })
             }
           }}
@@ -348,7 +399,11 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
           <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
           <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
         </select>
-        <span className={css.generalHint}>{t('dshRuntimeRegistryHint')}</span>
+        <span className={css.generalHint}>
+          {t('dshRuntimeRegistryHint')}
+          {' '}
+          {t('dshRuntimeRegistryCurrent', { origin: registryOrigin })}
+        </span>
       </label>
 
       {registrySelection === CUSTOM_REGISTRY && (
@@ -362,17 +417,20 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
             disabled={registryDisabled}
             onChange={(event) => setCustomOrigin(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && customOrigin.trim() !== '') void onApplyRegistry(customOrigin.trim())
+              if (event.key === 'Enter' && customOrigin.trim() !== '') {
+                void onApplyRegistry(customOrigin.trim(), true)
+              }
             }}
           />
           <button
             type="button"
             className={css.updateButton}
             disabled={registryDisabled || customOrigin.trim() === ''}
-            onClick={() => { void onApplyRegistry(customOrigin.trim()) }}
+            onClick={() => { void onApplyRegistry(customOrigin.trim(), true) }}
           >
-            {t('dshRuntimeRegistryApply')}
+            {applyingRegistry ? t('dshRuntimeRegistryApplying') : t('dshRuntimeRegistryApply')}
           </button>
+          {originError !== null && <p className={css.generalError} role="alert">{originError}</p>}
         </label>
       )}
 
@@ -383,7 +441,7 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
           disabled={!canCheck || testingRegistry || busy}
           onClick={() => { void onTestRegistry() }}
         >
-          {t('dshRuntimeRegistryTest')}
+          {testingRegistry ? t('dshRuntimeRegistryTesting') : t('dshRuntimeRegistryTest')}
         </button>
       </div>
 
@@ -403,19 +461,19 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
             </button>
           )}
           {canRetryApply && (
-            <button type="button" className={css.updatePrimaryButton} onClick={onRetryApply} disabled={mutationDisabled}>
+            <button type="button" className={css.updateButton} onClick={onRetryApply} disabled={mutationDisabled}>
               {t('dshRuntimeRetryApply')}
             </button>
           )}
           {canRetryRestore && (
-            <button type="button" className={css.updatePrimaryButton} onClick={onRetryRestore} disabled={operationDisabled}>
+            <button type="button" className={css.updateButton} onClick={onRetryRestore} disabled={operationDisabled}>
               {t('dshRuntimeRetryRestore')}
             </button>
           )}
           {canRecoverMetadata && (
             <button
               type="button"
-              className={css.updatePrimaryButton}
+              className={css.updateButton}
               onClick={onRecoverMetadata}
               disabled={mutationDisabled}
             >
@@ -443,7 +501,7 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
         <p className={css.generalError} role="alert">
           {t('dshRuntimeFailureRecord', {
             version: state.failure.version,
-            at: state.failure.at,
+            at: formatTimestamp(state.failure.at),
             reason: state.failure.reason,
           })}
         </p>

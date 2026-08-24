@@ -843,10 +843,13 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* One phase status line: text flexes to the left, actions sit right. */
+/* One phase status line: text flexes to the left, actions sit right. Wraps so
+   a crowded action row (e.g. the runtime block's up-to-six capsules) never
+   overflows the settings column. */
 .updateStatusLine {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
