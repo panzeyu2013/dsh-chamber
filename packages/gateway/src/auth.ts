@@ -2,8 +2,9 @@
  * Gateway authentication (design 17 §5): the pluggable AuthProvider seam.
  *
  *   - `none`    — loopback-only trust (S1 forbids it on a non-loopback bind).
- *   - `token`   — the D7 shared bearer token; only its salted scrypt hash is
- *                 persisted (`tokens.json`, 0600), never the plaintext (S5).
+ *   - `token`   — the shared bearer token (design 17 §5.2); only its salted
+ *                 scrypt hash is persisted (`tokens.json`, 0600), never the
+ *                 plaintext (S5).
  *   - `password`— scrypt password verify → HS256 JWT session cookie (12h),
  *                 `Path=/; HttpOnly; SameSite=Strict; Secure(conditional)`
  *                 (S12), login rate limit (S8), rotate-jwt-secret on revoke
@@ -230,7 +231,7 @@ function createNoneProvider(): AuthProvider {
   }
 }
 
-/** `token`: the D7 shared bearer token. Persisted only as a salted scrypt
+/** `token`: the shared bearer token (design 17 §5.2). Persisted only as a salted scrypt
  * hash (S5) — never the plaintext; the config/env plaintext is dropped at
  * creation. Verify is constant-time and scrypt-work-gated, like the password
  * path. (Migration: a legacy fixed-key HMAC hash fails verify and must be

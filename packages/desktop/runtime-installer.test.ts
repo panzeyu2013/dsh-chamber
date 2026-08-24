@@ -403,6 +403,35 @@ test('downloadVerifiedRegistryTarball: verifies SRI and removes mismatching byte
   assert.equal(existsSync(mismatch), false)
 })
 
+test('downloadVerifiedRegistryTarball: reports byte progress (declared and undeclared length)', async () => {
+  const dir = makeBaseDir()
+  const destination = path.join(dir, 'progress.tgz')
+  const ticks: Array<{ received: number; total: number | null }> = []
+  // Declared content-length: the total rides the progress ticks.
+  const withLength = new Response(TARBALL, { status: 200, headers: { 'content-length': String(TARBALL.length) } })
+  const fetchImpl: typeof fetch = async () => withLength
+  await downloadVerifiedRegistryTarball(resolution(), destination, {
+    signal: new AbortController().signal,
+    fetchImpl,
+    onProgress: (received, total) => ticks.push({ received, total }),
+  })
+  assert.equal(ticks.at(-1)?.received, TARBALL.length)
+  assert.equal(ticks.at(-1)?.total, TARBALL.length)
+  assert.ok(ticks.length >= 1, 'at least one progress tick was reported')
+
+  // No content-length: total stays null (indeterminate bar), bytes still tick.
+  const noLength = new Response(TARBALL, { status: 200 })
+  const fetchImpl2: typeof fetch = async () => noLength
+  const ticks2: Array<{ received: number; total: number | null }> = []
+  await downloadVerifiedRegistryTarball(resolution(), path.join(dir, 'progress-nolength.tgz'), {
+    signal: new AbortController().signal,
+    fetchImpl: fetchImpl2,
+    onProgress: (received, total) => ticks2.push({ received, total }),
+  })
+  assert.equal(ticks2.at(-1)?.received, TARBALL.length)
+  assert.equal(ticks2.at(-1)?.total, null)
+})
+
 test('RuntimeInstallerSupervisor: bounds output and reports the real child pid', async () => {
   const supervisor = new RuntimeInstallerSupervisor(128, 25)
   let childPid = 0

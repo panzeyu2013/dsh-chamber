@@ -253,3 +253,25 @@ test('WS rejects backslash authority request targets before routing or auth', as
   assert.equal(verifyCalls, 0)
   assert.equal(state.upgradeProxyCalls, 0)
 })
+
+test('a saturated scrypt work gate on verify answers 503 auth_busy, never 500', async () => {
+  // The login path maps auth_busy → 503; the verify path used to let the
+  // rejection fall through to the shell as a generic 500 internal, so an
+  // attacker flooding bogus Bearer tokens saw 500s while legitimate clients
+  // were squeezed out (design §5.3).
+  const auth: AuthProvider = {
+    kind: 'token',
+    async verify() {
+      const error = new Error('password verifier is busy') as Error & { code?: string }
+      error.code = 'auth_busy'
+      throw error
+    },
+  }
+  const { dispatch } = setup(auth)
+  const res = await runHttp(dispatch, new FakeRequest('GET', '/api/connections', {
+    host: 'gateway.example:3000',
+    authorization: 'Bearer whatever',
+  }))
+  assert.equal(res.status, 503)
+  assert.equal(JSON.parse(res.body).code, 'auth_busy')
+})

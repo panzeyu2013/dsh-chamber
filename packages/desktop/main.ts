@@ -36,6 +36,7 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { commitTransportCredentialUpdate, createTransportManager } from './transport-manager.ts';
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
+import { transportTargetChanged } from './transport-provider.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { configureGatewayTokenStore, gatewayProvider, gatewayTokenValidationError, getGatewayToken, setGatewayToken } from './gateway-provider.ts';
@@ -428,6 +429,9 @@ function enqueueDeepLink(rawUrl: string): void {
  *  ~1-2s 完成；5s 硬顶仅为异常路径（如残留连接使 server.close 不回调）兜底
  *  （2026-08 排查；2026-08 提速，15s → 5s）。 */
 const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
+/** Cap on the npm search JSON body (registry search responses are ~KB-scale;
+ * 256 KiB bounds a hostile or misbehaving registry). */
+const NPM_SEARCH_MAX_BODY_BYTES = 256 * 1024;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
@@ -1379,7 +1383,7 @@ if (!gotTheLock) {
           if (url !== null) {
             if (status.kind === 'gateway') {
               // The gateway transport is https + bearer-token authenticated
-              // (design 17 §6.4): inject the shared token as an Authorization
+              // (design 17 §7): inject the shared token as an Authorization
               // header — the instance-proxy forwards it to the gateway auth gate.
               const token = getGatewayToken(id);
               cp.registerInstanceTransport(`${status.kind}:${id}`, url, token === null ? undefined : { authorization: `Bearer ${token}` });
@@ -1441,6 +1445,26 @@ if (!gotTheLock) {
       }
     });
 
+    /**
+     * Clear BOTH provider secret stores for one instance id. A failed
+     * write-through (e.g. disk full) must not break the registry save that
+     * already committed: the stale secret stays on disk for a removed /
+     * retargeted id (harmless for removed ids; the next successful edit
+     * clears it) and the failure is LOUD in the main-process log.
+     */
+    function clearStoredSecrets(id: string): void {
+      try {
+        setSshPassword(id, null);
+      } catch (error) {
+        console.error(`[dsh-chamber] clearing ssh password for ${id} failed:`, error);
+      }
+      try {
+        setGatewayToken(id, null);
+      } catch (error) {
+        console.error(`[dsh-chamber] clearing gateway token for ${id} failed:`, error);
+      }
+    }
+
     ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => sm.listInstances()));
     ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
       const before = sm.listInstances();
@@ -1450,11 +1474,17 @@ if (!gotTheLock) {
       // A kind switch deliberately keeps the old secret until the form's new
       // secret commit succeeds: the UI can roll metadata back if that commit
       // fails, then explicitly clears the old provider secret after success.
+      // A SAME-KIND target edit (host/user/ports changed) must never silently
+      // reuse the old target's credential against the new target: clear both
+      // stores right here — the form re-commits a fresh secret with the save,
+      // and a save without one now needs explicit re-entry instead of leaking
+      // the old secret to a different server.
       for (const previous of before) {
         const replacement = saved.find(instance => instance.id === previous.id);
         if (replacement === undefined) {
-          setSshPassword(previous.id, null);
-          setGatewayToken(previous.id, null);
+          clearStoredSecrets(previous.id);
+        } else if (previous.kind === replacement.kind && transportTargetChanged(previous, replacement)) {
+          clearStoredSecrets(previous.id);
         }
       }
       // Registry-change push: the renderer App layer re-pulls immediately
@@ -1506,7 +1536,7 @@ if (!gotTheLock) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     }));
-    // Gateway shared token (design 17 §6.5): held in main-process memory +
+    // Gateway shared token (design 17 §7): held in main-process memory +
     // mirrored to <userData>/gateway-tokens.json (0600) — never in the
     // registry, never logged, never exposed back to the renderer.
     ipcMain.handle('desktop_gateway_set_token', trustedIpc(({ id, token }) => {
@@ -1621,11 +1651,35 @@ if (!gotTheLock) {
         if (!isAllowedRegistryUrl(searchUrl.toString())) {
           return { ok: false, error: 'search URL is not whitelisted' };
         }
+        // redirect: 'manual' — the same per-hop discipline as
+        // fetchRegistryResponse: a redirected search answer is NOT accepted
+        // from an arbitrary origin, so any 3xx is an explicit failure here.
         const response = await fetch(searchUrl, {
           signal: controller.signal,
+          redirect: 'manual',
         });
         if (!response.ok) return { ok: false, error: `npm search failed (HTTP ${response.status})` };
-        const data = (await response.json()) as { objects?: Array<{ package?: { name?: unknown; version?: unknown; description?: unknown } }> };
+        // Bounded read: an oversized or endless search response must never
+        // accumulate in main-process memory.
+        const reader = response.body?.getReader();
+        let raw = '';
+        if (reader !== undefined) {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            raw += Buffer.from(value).toString('utf8');
+            if (raw.length > NPM_SEARCH_MAX_BODY_BYTES) {
+              await reader.cancel().catch(() => undefined);
+              return { ok: false, error: 'npm search response is too large' };
+            }
+          }
+        }
+        let data: { objects?: Array<{ package?: { name?: unknown; version?: unknown; description?: unknown } }> };
+        try {
+          data = JSON.parse(raw) as { objects?: Array<{ package?: { name?: unknown; version?: unknown; description?: unknown } }> };
+        } catch {
+          return { ok: false, error: 'npm search returned malformed JSON' };
+        }
         const objects = Array.isArray(data.objects) ? data.objects : [];
         const packages = objects
           .map(entry => entry.package)

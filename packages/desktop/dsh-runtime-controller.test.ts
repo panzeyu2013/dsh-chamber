@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DshRuntimeController } from './dsh-runtime-controller.ts';
-import type { ControllerDeps } from './dsh-runtime-controller.ts';
+import type { ControllerDeps, RuntimeState } from './dsh-runtime-controller.ts';
 import type { RegistryMetadata } from './registry-metadata.ts';
 import type { OverrideRecord } from './dsh-runtime-store.ts';
 import type { ActivationIntentInput } from './dsh-runtime-store.ts';
@@ -178,6 +178,42 @@ test('install: version not in registry → error, no install', async () => {
   const state = await c.install('0.9.9');
   assert.equal(installCalls, 0);
   assert.equal(state.phase, 'error');
+});
+
+test('install: live progress is projected (download bytes + stages) and clears on completion', async () => {
+  const store = makeStore();
+  const deps = makeDeps(store, { meta: meta('0.2.0', ['0.2.0']) });
+  deps.install = async (opts) => {
+    // The renderer must see byte progress mid-download, then the stage
+    // milestones, then the terminal 'done' (bar clears). The 200ms gap
+    // clears the controller's 150ms push throttle so both byte ticks land.
+    opts.onProgress?.({ stage: 'download', received: 512, total: 1024 });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    opts.onProgress?.({ stage: 'download', received: 1024, total: 1024 });
+    opts.onProgress?.({ stage: 'install' });
+    opts.onProgress?.({ stage: 'done' });
+    return { versionTreeDir: '/rt/0.2.0', resolvedVersion: '0.2.0' };
+  };
+  const c = makeController(store, deps);
+  const states: RuntimeState[] = [];
+  const unsubscribe = c.onChanged((state) => states.push(state));
+  try {
+    await c.check();
+    const final = await c.install('0.2.0');
+    assert.equal(final.phase, 'pending');
+    assert.equal(final.progress, null, 'the bar is cleared once the install commits');
+    const downloadPushes = states.filter((s) => s.progress?.stage === 'download');
+    assert.ok(downloadPushes.length >= 1, 'download byte progress was projected');
+    const lastDownload = downloadPushes.at(-1)?.progress;
+    assert.equal(lastDownload?.stage, 'download');
+    if (lastDownload?.stage === 'download') {
+      assert.equal(lastDownload.received, 1024);
+      assert.equal(lastDownload.total, 1024);
+    }
+    assert.ok(states.some((s) => s.progress?.stage === 'install'), 'the install stage milestone was projected');
+  } finally {
+    unsubscribe();
+  }
 });
 
 test('install: logical disk soft limit blocks only a fresh download', async () => {

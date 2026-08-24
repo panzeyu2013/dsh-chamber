@@ -993,32 +993,39 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       })
     },
 
-    /** Stop the local dsh connection and close the HTTP surface. */
+    /** Stop the local dsh connection and close the HTTP surface. The HTTP
+     * surface closes even when the local stop fails: a caller that sees a
+     * stop error must not be left with a half-exited plane whose port stays
+     * bound (independent stop() callers would keep accepting traffic). The
+     * local.stop() error still propagates after the surface converged. */
     async stop() {
-      await local.stop()
-      if (server !== null) {
-        const srv = server
-        server = null
-        // Node's server.close() waits for every active connection to end — a
-        // lingering renderer SSE/WS/proxy connection (e.g. after a crashed
-        // local host left the page mid-reconnect) would otherwise hang the
-        // close forever and strand the desktop app in a half-exited state.
-        // Force-close first so close() resolves promptly: spliced WS streams
-        // are tracked by the proxy (upgraded sockets leave the HTTP server's
-        // connection tracking), HTTP/SSE/keep-alive by closeAllConnections/
-        // closeIdleConnections. The 500ms window is a last-resort against any
-        // straggler — the process exit then releases the remaining fds.
-        instanceProxy.closeAllStreams()
-        srv.closeAllConnections?.()
-        srv.closeIdleConnections?.()
-        await new Promise<void>(resolve => {
-          const force = setTimeout(resolve, 500)
-          force.unref?.()
-          srv.close(() => {
-            clearTimeout(force)
-            resolve()
+      try {
+        await local.stop()
+      } finally {
+        if (server !== null) {
+          const srv = server
+          server = null
+          // Node's server.close() waits for every active connection to end — a
+          // lingering renderer SSE/WS/proxy connection (e.g. after a crashed
+          // local host left the page mid-reconnect) would otherwise hang the
+          // close forever and strand the desktop app in a half-exited state.
+          // Force-close first so close() resolves promptly: spliced WS streams
+          // are tracked by the proxy (upgraded sockets leave the HTTP server's
+          // connection tracking), HTTP/SSE/keep-alive by closeAllConnections/
+          // closeIdleConnections. The 500ms window is a last-resort against any
+          // straggler — the process exit then releases the remaining fds.
+          instanceProxy.closeAllStreams()
+          srv.closeAllConnections?.()
+          srv.closeIdleConnections?.()
+          await new Promise<void>(resolve => {
+            const force = setTimeout(resolve, 500)
+            force.unref?.()
+            srv.close(() => {
+              clearTimeout(force)
+              resolve()
+            })
           })
-        })
+        }
       }
     },
 

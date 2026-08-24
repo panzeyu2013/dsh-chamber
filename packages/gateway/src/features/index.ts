@@ -129,6 +129,8 @@ export function createSessionIndex(deps: {
     onOpen?: () => void,
   ) => AsyncIterable<ServerRequest>
   reconnectDelayMs?: number
+  /** Test seam: the dual-stream open barrier deadline (see below). */
+  barrierOpenTimeoutMs?: number
 }): SessionIndex {
   const projections = new Map<string, SessionProjection>()
   /** Per-key projection watermarks implement the host contract's
@@ -140,6 +142,12 @@ export function createSessionIndex(deps: {
   const callDsh = deps.callDsh ?? call
   const openStream = deps.openStream ?? openEventStream
   const reconnectDelayMs = deps.reconnectDelayMs ?? 1_000
+  /** A dsh that accepts TCP but never completes a WS upgrade (hung instance,
+   * wedged proxy) used to stall the ready barrier forever: the generation
+   * kept buffering, /chamber/sessions stayed empty and nothing recovered.
+   * The open barrier now fails after this window and the reconnect loop
+   * retries a fresh generation. */
+  const barrierOpenTimeoutMs = deps.barrierOpenTimeoutMs ?? 30_000
 
   function projectionOf(summary: unknown): { projection: SessionProjection; asOfSeq: number } | null {
     const row = summary as {
@@ -355,13 +363,28 @@ export function createSessionIndex(deps: {
       outcome: typeof mux,
       name: string,
     ): Promise<void> => {
-      await Promise.race([
-        ready,
-        outcome.then(result => {
-          if (!result.ok) throw result.error
-          throw new Error(`${name} stream ended before its open barrier`)
-        }),
-      ])
+      // Watchdog: without a handshake deadline a hung upstream (TCP accepted,
+      // upgrade never completed) wedges the generation in buffering forever.
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${name} open barrier timed out after ${barrierOpenTimeoutMs}ms`)),
+          barrierOpenTimeoutMs,
+        )
+        timer.unref?.()
+      })
+      try {
+        await Promise.race([
+          ready,
+          outcome.then(result => {
+            if (!result.ok) throw result.error
+            throw new Error(`${name} stream ended before its open barrier`)
+          }),
+          timeout,
+        ])
+      } finally {
+        if (timer !== null) clearTimeout(timer)
+      }
     }
     try {
       await Promise.all([

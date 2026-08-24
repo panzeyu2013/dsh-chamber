@@ -26,7 +26,7 @@ export interface GatewayConfig {
     kind: GatewayAuthKind
     /** scrypt-verified browser credential (design 17 §5). */
     password?: string
-    /** shared bearer token (design 17 §6.4 D7). May coexist with password. */
+    /** shared bearer token (design 17 §5.2). May coexist with password. */
     token?: string
   }
   channels: { direct: boolean; ssh: boolean }
@@ -155,7 +155,7 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     throw new GatewayConfigError('--tls-cert and --tls-key must be provided together')
   }
   // HTTPS server is not implemented: refuse rather than silently serving
-  // plaintext while the operator believes TLS is on (design 17 §6.6 pending).
+  // plaintext while the operator believes TLS is on (design 17 §3.1).
   if (tlsCert !== undefined && tlsKey !== undefined) {
     throw new GatewayConfigError('--tls-cert/--tls-key are not implemented yet (HTTPS server is pending); use a reverse proxy for TLS termination')
   }

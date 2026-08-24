@@ -20,7 +20,7 @@ import {
   versionExists,
 } from './dsh-runtime-updater.ts'
 import type { ActivationIntentInput, OverrideRecord, RuntimeDiskSummary } from './dsh-runtime-store.ts'
-import type { InstallOptions, InstallResult } from './runtime-installer.ts'
+import type { InstallOptions, InstallResult, RuntimeInstallProgress } from './runtime-installer.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { allowedActions, transition, transitionLifecycleProjection, type RuntimePhase } from './runtime-state-machine.ts'
 
@@ -113,6 +113,9 @@ export interface RuntimeState {
   metadataComponents?: RuntimeMetadataComponent[]
   /** Explicit privileged capability. Renderer input can never set this bit. */
   canRecoverMetadata?: boolean
+  /** Live install progress (design 18 M4 bar): download bytes + stage
+   * milestones while an install runs; null when idle. */
+  progress?: RuntimeInstallProgress | null
 }
 
 export interface RuntimeLifecycleProjection {
@@ -141,6 +144,7 @@ export interface RuntimeLifecycleProjection {
   metadataHealth?: RuntimeMetadataHealthProjection
   metadataComponents?: RuntimeMetadataComponent[]
   canRecoverMetadata?: boolean
+  progress?: RuntimeInstallProgress | null
 }
 
 export interface ControllerDeps {
@@ -289,6 +293,24 @@ export class DshRuntimeController {
         console.error('[dsh-runtime-controller] state listener failed:', error)
       }
     }
+  }
+
+  /** Throttled progress projection (design 18 M4 bar): per-chunk download
+   * bytes would otherwise flood the renderer push. Stage transitions and
+   * the terminal 'done' always emit; byte ticks emit at most every 150ms. */
+  private lastProgressEmit = 0
+  private publishInstallProgress(progress: RuntimeInstallProgress): void {
+    const now = Date.now()
+    const stageChanged = this.lifecycle.progress?.stage !== progress.stage
+    if (progress.stage === 'done') {
+      this.lifecycle = { ...this.lifecycle, progress: null }
+      this.emit()
+      return
+    }
+    if (!stageChanged && now - this.lastProgressEmit < 150) return
+    this.lastProgressEmit = now
+    this.lifecycle = { ...this.lifecycle, progress }
+    this.emit()
   }
 
   getState(): RuntimeState {
@@ -508,6 +530,7 @@ export class DshRuntimeController {
       metadataHealth: this.lifecycle.metadataHealth,
       metadataComponents: this.lifecycle.metadataComponents,
       canRecoverMetadata: false,
+      progress: null,
     }
     this.emit()
     try {
@@ -522,6 +545,7 @@ export class DshRuntimeController {
           baseDir: this.baseDir,
           resolution,
           pnpmEntry: this.pnpmEntry,
+          onProgress: (progress) => this.publishInstallProgress(progress),
         })
         resolvedVersion = result.resolvedVersion
       }
@@ -542,9 +566,13 @@ export class DshRuntimeController {
       })
       this.deps.store.writeOverride(this.baseDir, record)
       this.phase = transition(this.phase, { type: 'install-done' })
+      // The install is committed: clear the live bar (the pending phase has
+      // its own copy).
+      this.lifecycle = { ...this.lifecycle, progress: null }
     } catch (err) {
       this.error = sanitizeErrorText(err instanceof Error ? err.message : String(err))
       this.phase = transition(this.phase, { type: 'error' })
+      this.lifecycle = { ...this.lifecycle, progress: null }
       const failure = { version, at: new Date().toISOString(), reason: this.error }
       this.lifecycle = { ...this.lifecycle, failure }
       try {

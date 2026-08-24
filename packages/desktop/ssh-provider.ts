@@ -590,8 +590,21 @@ const passwords = new Map<string, string>()
  * platform without persistence). Configured once at startup. */
 let passwordFile: string | null = null
 
-/** id → path of the live ephemeral askpass helper (0700, deleted on dispose). */
-const askpassHelpers = new Map<string, string>()
+/**
+ * id → askpass helper generations: the live path plus retired generations
+ * that in-flight ssh children may still be about to execute. Recreating the
+ * helper on every sshAuthEnv call used to DELETE the previous generation
+ * immediately — a concurrent exec (systemd start / remote run) could then
+ * remove the file under a freshly spawned tunnel's askpass prompt and fail
+ * its password auth into the requiresUserAction terminal state (P1
+ * regression, locked by ssh-provider.test.ts). Retired helpers are deleted
+ * on dispose (transport stop / removal / quit) and at startup cleanup.
+ */
+const askpassHelpers = new Map<string, { current: string; retired: string[] }>()
+
+/** Cap on retired generations kept per id (each helper is a ~200-byte 0700
+ * owner-only file; the oldest retired generation is deleted beyond the cap). */
+const ASKPASS_RETIRED_CAP = 4
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -811,38 +824,49 @@ function deleteAskpassHelper(path: string) {
 /**
  * The askpass environment for one instance's ssh spawn (tunnel AND systemd
  * exec): null when the instance has no stored password or the platform does
- * not support it. Recreates the ephemeral helper on every call (one live
- * helper per id at most — a changed password is always baked fresh).
+ * not support it. Recreates the ephemeral helper on every call (a changed
+ * password is always baked fresh) and RETIRES the previous generation — it
+ * stays on disk until dispose, because a concurrently spawned ssh child may
+ * still be about to execute that exact file for its first prompt (see the
+ * map doc).
  */
 export function sshAuthEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | null {
   if (!sshPasswordSupported()) return null
   const password = getSshPassword(spec.id)
   if (password === null) return null
   const previous = askpassHelpers.get(spec.id)
-  if (previous !== undefined) {
-    deleteAskpassHelper(previous)
-  }
   const helper = createAskpassHelper(spec.id, password)
-  askpassHelpers.set(spec.id, helper)
+  if (previous === undefined) {
+    askpassHelpers.set(spec.id, { current: helper, retired: [] })
+  } else {
+    const retired = [...previous.retired, previous.current]
+    const overflow = retired.length - ASKPASS_RETIRED_CAP
+    for (const stale of retired.splice(0, Math.max(0, overflow))) {
+      deleteAskpassHelper(stale)
+    }
+    askpassHelpers.set(spec.id, { current: helper, retired })
+  }
   return { SSH_ASKPASS: helper, SSH_ASKPASS_REQUIRE: 'force' }
 }
 
 /**
- * Delete the instance's ephemeral askpass helper (transport stop / removal
- * / app quit). The in-memory password itself survives a plain disconnect
- * (the user may reconnect without retyping) and is only cleared by
- * setSshPassword(null), instance removal, or app quit.
+ * Delete the instance's ephemeral askpass helpers (current + retired) —
+ * transport stop / removal / app quit. The in-memory password itself
+ * survives a plain disconnect (the user may reconnect without retyping) and
+ * is only cleared by setSshPassword(null), instance removal, or app quit.
  */
 export function disposeSshAuth(spec: TransportInstanceSpec): void {
-  const helper = askpassHelpers.get(spec.id)
-  if (helper === undefined) return
+  const helpers = askpassHelpers.get(spec.id)
+  if (helpers === undefined) return
   askpassHelpers.delete(spec.id)
-  deleteAskpassHelper(helper)
+  deleteAskpassHelper(helpers.current)
+  for (const retired of helpers.retired) deleteAskpassHelper(retired)
 }
 
 /** The ssh provider: validate → spawn args → stderr classification → exec. */
 export const sshProvider: TransportProvider = {
   kind: 'ssh',
+  redactOutput: redactSshStderr,
 
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (!isValidInstance(input, 'ssh')) return null

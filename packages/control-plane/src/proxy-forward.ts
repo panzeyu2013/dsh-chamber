@@ -466,7 +466,7 @@ export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwar
 
 /** Forward an HTTP request to a fully-resolved target (method/body/query kept). */
 export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target: URL, releaseRequest: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>): Promise<void> {
-  // Select the http/https request by target protocol (design 17 §6.4: the
+  // Select the http/https request by target protocol (design 17 §6: the
   // gateway transport target is `https://`, which node:http cannot send).
   const request = deps.httpRequest ?? (target.protocol === 'https:' ? httpsRequest : httpRequest)
   const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
@@ -549,7 +549,7 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     }
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 17 §6.4: the gateway's Authorization)
+  // Per-transport extra headers (design 17 §7: the gateway's Authorization)
   // are injected AFTER the strip + Origin rewrite so they are never mistaken
   // for a browser header and never stripped.
   if (extraHeaders !== undefined) {
@@ -748,7 +748,7 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     if (value === undefined) continue
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 17 §6.4: Authorization) ride the
+  // Per-transport extra headers (design 17 §7: Authorization) ride the
   // upgrade handshake too — the gateway's WS auth == HTTP auth (S2).
   if (extraHeaders !== undefined) {
     for (const [name, value] of Object.entries(extraHeaders)) {
@@ -786,7 +786,10 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     if (abort) return
     counters.failures += 1
     logger.log(`${deps.logPrefix}: upstream ${deps.id} upgrade failed: ${String(upstreamError)}`)
-    rejectUpgrade(socket, 503, 'instance_unavailable', 'upstream WebSocket unavailable', logger)
+    // An upstream connect refusal is upstream_failed (502, design 04 §4.2) —
+    // the same code the HTTP path uses; 503 stays reserved for "no tunnel /
+    // not ready". Regression locked by instance-proxy.ts.
+    rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket unavailable', logger)
   })
   // A non-101 upstream reply (the instance 404s an unknown WS path, its
   // connection plugin is not mounted, an old dsh version, …): the upgrade

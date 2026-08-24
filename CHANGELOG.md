@@ -20,6 +20,11 @@
   server 编排设置；Gateway 自带浏览器编排页、派生会话索引、审批/提问、schedule 与
   受 workspace 权威约束的 Git worktree saga。CI/release 已覆盖 build、typecheck、测试、
   tgz 安装冒烟和 npm publish。
+- **dsh 运行时版本管理（设计 18）** —— 运行期安装/切换 dsh 运行时：registry origin
+  绑定 + SRI 校验 + 内嵌 pnpm `file:` 安装，探针门控切换与两阶段回滚/恢复闭环
+  （M0/M2/M4 done，M1/M3 partial：打包态实机验收待真实 `.app`）；数据安全缺口修复
+  ——journal-mismatch 归入 `selection-corrupt`、pre-rollback stash 恢复、
+  `incomplete` 恢复放行 `recover-metadata`。
 
 ### 安全
 

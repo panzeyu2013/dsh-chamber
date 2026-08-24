@@ -658,6 +658,68 @@ test('stale-install cleanup only removes a proven empty pre-spawn work dir', () 
   assert.equal(existsSync(corruptWork), true, 'corrupt PID evidence is preserved');
 });
 
+test('stale-install cleanup reclaims a pre-spawn work dir whose state marker is preparing', () => {
+  // P1 regression: the installer writes package.json/pnpm-workspace.yaml
+  // BEFORE any child exists (the download window is the longest phase), so a
+  // hard crash there used to leave a non-empty work dir with no PID evidence
+  // and block startup forever with no UI escape. The 'preparing' marker
+  // proves no child ever existed and makes the residue reclaimable.
+  const base = freshBase();
+  const work = path.join(base, 'dsh-runtime', '.work-prepare-crash');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(path.join(work, 'state'), 'preparing\n');
+  writeFileSync(path.join(work, 'package.json'), '{}');
+  writeFileSync(path.join(work, 'pnpm-workspace.yaml'), 'minimumReleaseAge: 0\n');
+  assert.deepEqual(cleanupStaleInstalls(base), ['.work-prepare-crash']);
+  assert.equal(existsSync(work), false);
+});
+
+test('stale-install cleanup reclaims a spawn-failure work dir whose state marker is failed', () => {
+  const base = freshBase();
+  const work = path.join(base, 'dsh-runtime', '.work-spawn-fail');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(path.join(work, 'state'), 'failed\n');
+  writeFileSync(path.join(work, 'package.json'), '{}');
+  assert.deepEqual(cleanupStaleInstalls(base), ['.work-spawn-fail']);
+  assert.equal(existsSync(work), false);
+});
+
+test('stale-install cleanup still blocks post-spawn scenes and legacy/corrupt markers', () => {
+  // 'spawned' with lost PID evidence: a child may exist — fail closed.
+  const spawnedBase = freshBase();
+  const spawnedWork = path.join(spawnedBase, 'dsh-runtime', '.work-spawned');
+  mkdirSync(spawnedWork, { recursive: true });
+  writeFileSync(path.join(spawnedWork, 'state'), 'spawned\n');
+  writeFileSync(path.join(spawnedWork, 'package.json'), '{}');
+  assert.throws(() => cleanupStaleInstalls(spawnedBase), /PID\/PGID.*缺失/);
+  assert.equal(existsSync(spawnedWork), true, 'post-spawn residue without PID evidence is preserved');
+
+  // 'spawning' with lost PID evidence: same fail-closed rule.
+  const spawningBase = freshBase();
+  const spawningWork = path.join(spawningBase, 'dsh-runtime', '.work-spawning');
+  mkdirSync(spawningWork, { recursive: true });
+  writeFileSync(path.join(spawningWork, 'state'), 'spawning\n');
+  writeFileSync(path.join(spawningWork, 'package.json'), '{}');
+  assert.throws(() => cleanupStaleInstalls(spawningBase), /PID\/PGID.*缺失/);
+
+  // Legacy non-empty work dir without a marker keeps the conservative block.
+  const legacyBase = freshBase();
+  const legacyWork = path.join(legacyBase, 'dsh-runtime', '.work-legacy');
+  mkdirSync(legacyWork, { recursive: true });
+  writeFileSync(path.join(legacyWork, 'package.json'), '{}');
+  assert.throws(() => cleanupStaleInstalls(legacyBase), /PID\/PGID.*缺失/);
+  assert.equal(existsSync(legacyWork), true);
+
+  // A symlinked marker is never read (fail-closed).
+  const symlinkBase = freshBase();
+  const symlinkWork = path.join(symlinkBase, 'dsh-runtime', '.work-symlink-marker');
+  mkdirSync(symlinkWork, { recursive: true });
+  symlinkSync('/etc/hosts', path.join(symlinkWork, 'state'));
+  writeFileSync(path.join(symlinkWork, 'package.json'), '{}');
+  assert.throws(() => cleanupStaleInstalls(symlinkBase), /PID\/PGID.*缺失/);
+  assert.equal(existsSync(symlinkWork), true);
+});
+
 test('override chosen/resolved are protected after pending clears', () => {
   const base = freshBase();
   makeVersionTree(base, '1.0.0');

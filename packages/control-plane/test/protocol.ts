@@ -37,7 +37,7 @@ import {
   terminateChild,
   writePidRecord,
 } from '../src/spawn-dsh.ts'
-import { runReaper } from '../src/reaper.ts'
+import { commandMatchesEntry, runReaper } from '../src/reaper.ts'
 
 const HOST = 'http://127.0.0.1:17510'
 
@@ -942,4 +942,25 @@ test('seedDshHomeDefaults writes a zh locale default once and never touches an e
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('reaper command identity matches both installed and dev-source layouts', () => {
+  // The source layout argv carries NO 'dsh' substring anywhere — the old
+  // whole-command includes('dsh') check never matched it, so a crashed dev
+  // tree kept the record, closed the writer-quiescence latch and blocked
+  // every local spawn (design 02 §3.4.2 / P1 regression).
+  const sourceCommand = 'node --import tsx/esm apps/cli/src/bin.ts --profile web --port 17500'
+  assert.equal(commandMatchesEntry(sourceCommand, 'apps/cli/src/bin.ts', 'dsh'), true)
+  assert.equal(commandMatchesEntry(sourceCommand, '/abs/node_modules/@deepseek-ai/dsh/lib/bin.js', 'dsh'), false)
+  // Installed layout: the argv0 token is the absolute bin.js path.
+  const installedCommand = '/usr/local/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web --port 17500'
+  assert.equal(commandMatchesEntry(installedCommand, '/usr/local/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', 'dsh'), true)
+  // Legacy records (no entry field) still match installed layouts through
+  // the binary marker embedded in the node_modules path token…
+  assert.equal(commandMatchesEntry(installedCommand, null, 'dsh'), true)
+  // …and still fail closed for the source layout (kept, same as before).
+  assert.equal(commandMatchesEntry(sourceCommand, null, 'dsh'), false)
+  // An unrelated process never matches either identity.
+  assert.equal(commandMatchesEntry('nginx: worker process', 'apps/cli/src/bin.ts', 'dsh'), false)
+  assert.equal(commandMatchesEntry('', 'apps/cli/src/bin.ts', 'dsh'), false)
 })

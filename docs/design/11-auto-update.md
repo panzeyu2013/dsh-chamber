@@ -205,15 +205,15 @@
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于 **7 包**（根/desktop/control-plane/renderer/cli/
-  dsh-host-client-graph/dsh-chamber-host-git-worktree——host-graph 与
+- chamber 版本分布于 **8 包**（根/desktop/control-plane/renderer/cli/
+  dsh-host-client-graph/dsh-chamber-host-git-worktree/gateway——host-graph 与
   host-git-worktree 是 chamber 自有宿主包，版本随 chamber 发版且经插件管理 UI
   展示，2026-08 review 补入 §8；**计数以 release.yml 断言集为唯一权威**），发版时
   **一致 bump**（semver 比较；`main.ts` 读 desktop package.json 的 version 并经
-  `dsh-chamber:info` 透传渲染层、注入更新控制器；release.yml 断言全部 7 包
+  `dsh-chamber:info` 透传渲染层、注入更新控制器；release.yml 断言全部 8 包
   与发布版本一致）。**5 个客户端插件包**（sidebar/connections/settings-bridge/
   layout/git）**不随 chamber 发版移动**——保持各自 fork 时的版本（2026-08
-  rc.8 对齐后统一 bump 到 chamber 发版版本 0.1.3，与 7 个发版包一致；
+  rc.8 对齐后统一 bump 到 chamber 发版版本 0.1.3，与 8 个发版包一致；
   vendored dsh 源为 0.1.1-rc.2——插件版本只在 chamber 侧参与 workspace
   解析，从不与 dsh 源逐位对齐，也从不参与任何比较/展示；2026-08
   review 澄清措辞，2026-08 最终轮扫描同步现状）。

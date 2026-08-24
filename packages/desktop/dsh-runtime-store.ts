@@ -665,7 +665,10 @@ function parseNullableSnapshotName(value: unknown): string | null | undefined {
 
 function parseNullablePreRollbackName(value: unknown): string | null | undefined {
   if (value === null) return null
-  return isSafeStoredBasename(value) && /^\d+-[0-9a-f]{8}$/.test(value) ? value : undefined
+  // Same 13-digit-epoch shape snapshot-store's isStashName enforces (stashes
+  // are only ever created there); keeping the two patterns in lockstep
+  // prevents a drift where the store accepts a name the resolver rejects.
+  return isSafeStoredBasename(value) && /^\d{13}-[0-9a-f]{8}$/.test(value) ? value : undefined
 }
 
 function parseJournalIntent(value: unknown): ActivationJournalIntent | null | undefined {
@@ -1447,6 +1450,21 @@ function isPidAlive(pid: number, group = false): boolean {
   }
 }
 
+/** Read the installer's work-dir lifecycle marker (see runtime-installer.ts).
+ * Returns one of the known states, or null when absent/corrupt — null is
+ * deliberately NOT reclaimable (legacy residue without the marker keeps the
+ * fail-closed block). No-follow: a symlinked marker is never read. */
+function readWorkStateMarker(workDir: string): 'preparing' | 'spawning' | 'spawned' | 'failed' | null {
+  try {
+    const info = lstatSync(join(workDir, 'state'))
+    if (info.isSymbolicLink() || !info.isFile() || info.size > 32) return null
+    const value = readFileSync(join(workDir, 'state'), 'utf8').trim()
+    return value === 'preparing' || value === 'spawning' || value === 'spawned' || value === 'failed' ? value : null
+  } catch {
+    return null
+  }
+}
+
 export function cleanupStaleInstalls(baseDir: string): string[] {
   let entries
   try {
@@ -1485,6 +1503,19 @@ export function cleanupStaleInstalls(baseDir: string): string[] {
       // content, however, a hard crash may have landed between spawn() and the
       // synchronous PID write. Missing/malformed evidence must not be erased.
       if (pidEvidence === 'missing' && entries.length === 0) {
+        rmSync(workDir, { recursive: true, force: true })
+        removed.push(entry.name)
+        continue
+      }
+      // The installer persists a `state` marker as its FIRST work-dir file:
+      // 'preparing' (or 'failed') proves no child ever existed — a crash
+      // during the (up-to-minutes) download window leaves exactly this scene
+      // and MUST be reclaimable, or startup blocks forever with no UI exit.
+      // 'spawning'/'spawned'/missing/corrupt markers stay fail-closed (a
+      // child may exist without PID evidence). Legacy work dirs without a
+      // marker keep the conservative block.
+      const workState = readWorkStateMarker(workDir)
+      if (workState === 'preparing' || workState === 'failed') {
         rmSync(workDir, { recursive: true, force: true })
         removed.push(entry.name)
         continue

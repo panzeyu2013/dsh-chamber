@@ -176,6 +176,14 @@ export function createScheduler(deps: {
       return put({ id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...input })
     },
     restore(job: ScheduledJob): ScheduledJob {
+      // A corrupted/duplicated persisted schedule (hand-edited schedule.json
+      // with repeated ids) must not veto gateway startup — one bad job is
+      // not a corrupt store document. Keep the first definition, warn and
+      // skip the duplicate.
+      if (jobs.has(job.id)) {
+        deps.logger.warn(`scheduler: duplicate persisted job id ${job.id}; keeping the first definition`)
+        return job
+      }
       return put({ ...job })
     },
     cancel(id: string): boolean {

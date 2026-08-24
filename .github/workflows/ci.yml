@@ -83,6 +83,7 @@ jobs:
           pnpm run test:connections
           pnpm run test:client-web
           pnpm run test:connection
+          pnpm run test:cli
       # SKIPs when the checkout carries no bundled dsh runtime — normal here,
       # since only packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
       # node_modules is never committed; the gate requires a real dsh CLI entry

@@ -259,7 +259,8 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
    禁用；选当前版本 = 无操作。
 4. **版本源设置行**（registry 源用户自设）：下拉 `npmjs（默认）` / `npmmirror` /
    `自定义…`；自定义走 §6 URL 白名单校验（origin 精确、拒绝 userinfo、decode
-   归一化）；附 `[测试连通]`（主进程 spawn 一条 metadata 请求，回显「连通/超时/失败」）；
+   归一化）；附 `[检查更新]`（主进程执行一次检查：metadata 请求 + 更新判定，
+   失败回显原因）；
    小字说明「安装与版本检查均来自所选源，切换源即切换信任边界」。
 5. **状态/进度行**（上下文驱动）：idle「已是最新版本 / 有可用更新 vY」；checking
    「检查更新中…」；installing「安装 dsh vY…」；pending「将于下次启动切换到 vY」；
@@ -284,7 +285,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
     h3.generalGroupTitle             「dsh 运行时」（复用组标题词汇）
     .runtimeVersionRow               版本概览（主行 + 来源 tag + 内建副行）
     .runtimeFieldRow                 版本选择器（field label + select）
-    .runtimeFieldRow                 版本源（field label + select + [测试连通]）
+    .runtimeFieldRow                 版本源（field label + select + [检查更新]）
     .runtimeActionsRow               动作按钮组（更新 / 回滚 / 恢复内建）
     .runtimeStatus                   状态/进度行（aria-live="polite"）
     .runtimeFailureRow               失败记录（仅失败时，role="alert"）
@@ -512,8 +513,8 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - **「单调向前」仅对壳版本成立**：应用整包更新后回落内建（新壳重基代）；运行时
   版本失效（用户选择）非单调向前——用户可显式选更旧版本，失效回落带数据可读性
   探测保护（§3.5）。
-- **chamber 发版版本集（口径修正）**：7 个发版包（根/desktop/control-plane/
-  renderer/cli/dsh-host-client-graph/**dsh-chamber-host-git-worktree**，以
+- **chamber 发版版本集（口径修正）**：8 个发版包（根/desktop/control-plane/
+  renderer/cli/dsh-host-client-graph/**dsh-chamber-host-git-worktree**/gateway，以
   release.yml 断言集为唯一权威）；客户端插件包 5 个（sidebar/connections/
   settings-bridge/layout/git）不参与发版版本集。**运行时版本（npm 用户可选）不在
   该集合内**——与 chamber 发版正交，release.yml 断言不受影响。

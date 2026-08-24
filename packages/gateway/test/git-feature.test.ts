@@ -68,6 +68,17 @@ test('git child environment drops gateway secrets and enforces timeout/concurren
     GIT_CONFIG_KEY_0: 'core.bare',
     GIT_CONFIG_VALUE_0: 'true',
     PATH: '/bin',
+    HOME: '/home/gateway',
+    LC_ALL: 'C',
+    LANG: 'C.UTF-8',
+    // Credential material that prefix-filtering used to inherit: hooks and
+    // git itself must never see any of it (design 17 §9.4 whitelist rebuild).
+    SSH_AUTH_SOCK: '/run/user/1000/ssh-agent.sock',
+    SSH_ASKPASS: '/tmp/askpass',
+    GIT_ASKPASS: '/tmp/git-askpass',
+    GIT_SSH: '/tmp/evil-ssh',
+    AWS_ACCESS_KEY_ID: 'must-not-leak',
+    OPERATOR_SECRET: 'must-not-leak',
   })
   assert.equal(sanitized.DSH_GATEWAY_TOKEN, undefined)
   assert.equal(sanitized.GIT_DIR, undefined)
@@ -79,6 +90,17 @@ test('git child environment drops gateway secrets and enforces timeout/concurren
   assert.equal(sanitized.GIT_CONFIG_KEY_0, undefined)
   assert.equal(sanitized.GIT_CONFIG_VALUE_0, undefined)
   assert.equal(sanitized.GIT_TERMINAL_PROMPT, '0')
+  // The whitelist: PATH/HOME/locale survive, everything else is dropped.
+  assert.equal(sanitized.PATH, '/bin')
+  assert.equal(sanitized.HOME, '/home/gateway')
+  assert.equal(sanitized.LC_ALL, 'C')
+  assert.equal(sanitized.LANG, 'C.UTF-8')
+  assert.equal(sanitized.SSH_AUTH_SOCK, undefined)
+  assert.equal(sanitized.SSH_ASKPASS, undefined)
+  assert.equal(sanitized.GIT_ASKPASS, undefined)
+  assert.equal(sanitized.GIT_SSH, undefined)
+  assert.equal(sanitized.AWS_ACCESS_KEY_ID, undefined)
+  assert.equal(sanitized.OPERATOR_SECRET, undefined)
 
   const rawRoot = await mkdtemp(join(tmpdir(), 'gateway-git-runner-'))
   const root = await realpath(rawRoot)

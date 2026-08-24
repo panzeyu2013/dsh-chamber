@@ -1,5 +1,5 @@
 /**
- * The `gateway` transport provider (design 17 §6.4/§6.5): a DIRECT ENDPOINT
+ * The `gateway` transport provider (design 17 §7): a DIRECT ENDPOINT
  * provider — no local tunnel child process. The "endpoint" is a dsh-gateway's
  * https URL, reached as-is and authenticated with a shared bearer token held
  * in main-process memory (mirrored to `<userData>/gateway-tokens.json`, 0600,
@@ -12,7 +12,7 @@
  * renderer payload): it is held in the token store keyed by instance id —
  * the same plaintext-file-fallback discipline as the ssh password store
  * (design 05 §8), but without askpass (the bearer token rides the
- * Authorization header the control-plane proxy injects, §6.4).
+ * Authorization header the control-plane proxy injects, §7).
  *
  * Security discipline (design 17 §11 S5/S12): the token never enters the
  * registry, logs, or any renderer projection; the mirror file is 0600 +
@@ -91,7 +91,7 @@ export function gatewayHttpFailureIsTerminal(statusCode: number): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Per-instance gateway tokens (design 17 §6.5). Held in main-process memory,
+// Per-instance gateway tokens (design 17 §7). Held in main-process memory,
 // mirrored to `<userData>/gateway-tokens.json` (0600, atomic write) so a
 // token-only gateway auto-connects after restart. Never in the registry,
 // never logged, never exposed to the renderer. The entry is dropped on
@@ -203,7 +203,7 @@ function persistGatewayTokens(next: ReadonlyMap<string, string>): void {
 }
 
 // ---------------------------------------------------------------------------
-// Gateway endpoint identity verification (design 17 §6.5 step 4): the gateway
+// Gateway endpoint identity verification (design 17 §7 step 4): the gateway
 // URL must answer the dsh host.describe wire handshake WITH the bearer token
 // before the runtime may declare the instance ready. Mirrors ssh-provider's
 // verifyDshEndpoint, but over https and with an Authorization header.
@@ -242,9 +242,19 @@ function verifyGatewayEndpoint(
       },
     }, res => {
       res.on('error', () => {})
-      if (res.statusCode === 401 || res.statusCode === 403) {
+      // 401 = the shared token was rejected; 403 = an origin/Host policy
+      // rejection (design 17 §5.3: Host→421, Origin→403) — the credentials
+      // may be fine but the gateway refuses this deployment's peer. Split
+      // the guidance so a policy misconfiguration is not misreported as a
+      // token problem.
+      if (res.statusCode === 401) {
         res.resume()
-        done(false, 'the gateway rejected the token (401/403) — check the shared token', true)
+        done(false, 'the gateway rejected the token (401) — check the shared token', true)
+        return
+      }
+      if (res.statusCode === 403) {
+        res.resume()
+        done(false, 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings', true)
         return
       }
       if (res.statusCode !== 200) {

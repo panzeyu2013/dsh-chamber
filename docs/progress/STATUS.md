@@ -58,6 +58,10 @@
   **偏差（2026-08，用户决策）**：新增 `--no-auth` 显式开关，允许无认证的
   外部绑定以覆盖 S1 硬门。默认仍 fail closed；仅在显式传参时放行，并打印醒目安全告警；
   仅限可信网络。对应实现见 `packages/gateway/src/config.ts` / `index.ts` / `cli.ts`。
+  **已记录风险（2026-08 安全审查）**：N-ctx 单文档模型使'连接一个远端服务器'的信任
+  边界扩大到'同一渲染文档内所有实例'——恶意远端实例的前端代码可同源读取/操作其他
+  实例数据与 API（`/api/i/<id>` 匿名反代）；`--no-auth` 误用于不可信网络同理。属
+  产品形态决策，非代码缺陷；已记录待中期缓解（per-ctx 会话令牌/实例隔离）。
 
 - **dsh 运行时版本管理（设计 18，当前判定：M0/M2/M4 done，M1/M3
   partial）**：运行期安装是唯一获取方式（无 Provider B）。主进程将 registry
@@ -88,24 +92,32 @@
     证据归档 → 内建树隔离探针 → 全绿放行；崩溃可幂等续作。恢复 marker 自身损坏时，
     仅普通、可读、单硬链接文件开放二阶恢复：独立保存新 stash 与旧 marker 字节，
     不修改既有 recovery tree；symlink/特殊文件/不可读/多硬链接保持安全隔离。
+  - **M4 补强（2026-08）**：切换版本实时进度条——安装器按下载字节
+    （content-length 已知时定值、否则不确定）/阶段（install/prune/smoke/publish）
+    上报，控制器 150ms 节流推送 `RuntimeState.progress` 投影，安装完成即清除；
+    设置页「dsh 运行时」块按「当前状态（含进度条）/版本操作/版本源」重组布局。
+    配套测试：installer 字节上报（含缺 content-length）、controller 节流投影与清除。
 
   **当前确认的验收证据**：
 
   - `pnpm run acceptance:runtime:fake-registry`：**PASS**。loopback fixture 覆盖简略
     packument、`latest` 缺失回退、metadata/tarball 302、精确同源绑定、单次
     顶层 tarball、SRI、真实 pnpm `file:` 安装、prune/冒烟/发布；它使用开发树
-    Node/pnpm，不等价于 packaged Electron。该 PASS 来自允许 loopback 的验收运行；
-    当前受限沙箱内复跑会在 `listen(127.0.0.1)` 处以 `EPERM` 退出。
-  - 当前最终工作树的 desktop 非 loopback 聚焦回归：**481/481 PASS**，覆盖
+    Node/pnpm，不等价于 packaged Electron。该 PASS 来自允许 loopback 的验收运行。
+    （历史沙箱记录：transport-manager/registry-metadata/static-serving 等 loopback
+    用例曾在受限沙箱被 listen EPERM 阻断；在允许 loopback 的环境全链可复跑）
+  - 当前最终工作树的 desktop 非 loopback 聚焦回归：**599/599 PASS**，覆盖
     store/installer/controller、activation journal、snapshot/apply/startup、全量探针、
     metadata 恢复（含损坏 marker 二阶恢复）、writer fence、plugin writer reaper、
-    known-good 连续健康与 UI 状态矩阵。`test:desktop` 中的 `transport-manager` 和
-    `registry-metadata` 需要 loopback/真实计时，在本沙箱不能形成新的全链 PASS；
-    不把 `listen EPERM` 或沙箱计时超时写成代码回归。
-  - 控制面本轮复验：protocol **21/21**、storage **15/15**、dsh client **7/7**、
-    host logs **19/19**、instance proxy **29/29** PASS；host-graph seed 的
-    **20/20** 个纯文件测试（文件内散布）PASS，其余依赖 control-plane listen
-    的用例与 static-serving 同样由沙箱 `listen EPERM` 阻断。
+    known-good 连续健康与 UI 状态矩阵。（历史沙箱记录：`test:desktop` 中的
+    `transport-manager`/`registry-metadata` 等 loopback/真实计时用例曾在受限沙箱
+    被 listen EPERM 阻断；在允许 loopback 的环境全链可复跑）不把沙箱
+    `listen EPERM` 或计时超时写成代码回归。
+  - 控制面本轮复验：protocol **25/25**、storage **16/16**、dsh client **7/7**、
+    host logs **19/19**、instance proxy **35/35** PASS；host-graph seed 的
+    **25/25** 个纯文件测试（文件内散布）PASS（历史沙箱记录：其余依赖
+    control-plane listen 的用例与 static-serving 等 loopback 用例曾在受限沙箱
+    被 listen EPERM 阻断；在允许 loopback 的环境全链可复跑）。
   - 根 `tsc --noEmit`、`typecheck:settings-bridge`、`test:settings-bridge`、
     `build:renderer`、`verify:i18n`、离线 `pnpm install --frozen-lockfile
     --ignore-scripts` 与 `git diff --check`：**PASS**。`smoke` 在工作树没有可用
@@ -120,7 +132,7 @@
   开放项见 `docs/design/18-dsh-runtime-version.md` §8。
    **数据安全缺口修复（2026-08 末轮）**：① journal-mismatch——`detectRuntimeMetadataHealth`
    新增保守语义一致性检测（journal 目标 ≠ override.pending / 缺 journal 且指针已前进到
-   pending），归入 `selection-corrupt`，`recover-metadata` 逃逸可达（仍受 phase===failed
+   pending），归入 `selection-corrupt`，`recover-metadata` 逃逸可达（受 phase∈{idle,failed}
    门控）；② 手动回滚 pre-rollback stash——新增 `restorePreRollback`（复用两阶段 rename
    恢复事务 + 恢复标记、no-follow 身份校验）+ `listPreRollbackStashes` + IPC
    `runtime-restore-pre-rollback` + UI「恢复回滚前数据」按钮（§3.7「可反悔」落地）；
@@ -180,7 +192,7 @@
   host 领域结果竞速）；③ 并发恢复卡死确认并记录在案：host 重启后同
   operationId 重放走 fresh 路径得 `worktree-not-found`（内存幂等缓存不跨
   重启），属设计边界（§7 已声明），reload 清页面恢复项。验证：
-  `test:host-git` 83（新增 force 三用例）、`test:git` 54（discardChanges
+  `test:host-git` 85（新增 force 三用例）、`test:git` 54（discardChanges
   恢复回显）、typecheck:git/host-git、instance-proxy 28、build:host-git
   全绿。
 - **远程实例插件管理 / 一键应用本地插件清单 + 可视化添加（设计 13）**：**M1–M4 已落地**
@@ -267,7 +279,7 @@
    升序，使 vscode 按钮排在 session-log（默认 0）**左侧**，session-log 保持在最右侧。
    **版本容忍与 rc.8 后端适配（2026-08，v0.1.2 回归修复）**：
   - **额外行 apply 失败降级**（boot.tsx 对 extraRows 容错 + sweep 排除，替代
-    "任一额外行失败即整 boot 失败"——版本漂移 = 特性缺席而非损坏，见设计 09 §3.3
+    "任一额外行失败即整 boot 失败"——版本漂移 = 特性缺席而非损坏，见设计 09 §3.5
     修订）：rc.8 后端新增的 `dsh-client-ui-attachment` 等核心 client half 作为
     额外行无法在本壳运行时降级为特性缺席，实例照常 boot（此前 seed 遮蔽 factory
     会整 boot 崩溃）；
@@ -301,7 +313,7 @@
   11 会剪除 vendor importer 记录；本仓已切到仓库内受管快照，
   `pnpm install --frozen-lockfile` 通过）。桌面本地宿主同步升 rc.8
   （`DSH_CHAMBER_DSH_VERSION=0.1.0-rc.8` `bundle:dsh`）。验证：
-  `test:client-web`（9）、`test:renderer-shell`（33）、`test:settings-bridge`、
+  `test:client-web`（9）、`test:renderer-shell`（49）、`test:settings-bridge`、
   `typecheck:*` 全套、根 `typecheck`、`build:renderer`、控制面 8 套测试全部通过。
   **rc.8 Remote 汇编生成锁步（2026-08-20）**：renderer 的 Typert 生成集合不再
   手抄 5 个包，改从官方 `dsh-api-remotes/client` value imports 推导并校验标准
@@ -339,10 +351,10 @@
   单测 9 项（含失败报告字符串逐字断言，防重构改规则）并入 CI 与 AGENTS.md 验证
   清单；当时的 app-shell 采纳后端 renderer 的运行中生命周期尾门（行 fiber
   卸载清 `slots._renderer`，rc.8 对齐后该职责随 ui-renderer 行迁出）注释在案；容错日志措辞对齐实际失败类型（materialize 而非
-  load）；manifest 预加载去重过滤补 `?rev=` 残留形式；设计 09 §3.3 失败降级语义
+  load）；manifest 预加载去重过滤补 `?rev=` 残留形式；设计 09 §3.5 失败降级语义
   按层表述（加载失败响亮归预加载层，apply 失败降级归 boot 内核层）。复验 ✓
   （typecheck / typecheck:client-web / test:client-web 9 / test:renderer-shell 5 /
-  test:sidebar 131 / test:settings-bridge 32 / test:connections 17 /
+  test:sidebar 131 / test:settings-bridge 32 / test:connections 24 /
   build:renderer / verify:i18n；rc.8 后端实机验证同前条无头记录（当时工作区基线
   为 rc.7 99f6f02f，已随 rc.8 baseline 对齐 4371cb7 推进，此处为历史记录）。
 - **侧边栏聚合改事件驱动（设计 10，已实现）**：已挂载 ctx 从自身
@@ -520,7 +532,7 @@
    性列表补 11/14/15 用户面；connections `global.d.ts` 声明镜像补
    settings/systemResume（接口合并契约）。复验 ✓（根 typecheck、
    插件 4 typecheck、test:desktop 186、test:sidebar 131、test:settings-bridge
-   28、test:connections 17、static-serving 6、test:renderer-shell 5、
+   28、test:connections 24、static-serving 6、test:renderer-shell 5、
    build:renderer、build:preload、verify:i18n、frozen-lockfile 全绿）。
    **2026-08 退出提速（平衡关闭速度与资源收尾）**：把退出清理链从「长优雅等待」
    压成「短窗口 + SIGKILL 确定性回收」。改动——本地 dsh SIGTERM→SIGKILL 窗口
@@ -537,7 +549,7 @@
    test:desktop 214、manager-api 12 / static-serving 8 / host-logs 19 / storage 15、
    `node --check electron-dev.mjs` 全绿）。
    **2026-08 M1–M5（事件聚合/插件诊断/长 roster）复验**：根 typecheck、
-   typecheck:sidebar、typecheck:settings-bridge、侧边栏 133、设置桥 31、host-graph 26、
+   typecheck:sidebar、typecheck:settings-bridge、侧边栏 136、设置桥 31、host-graph 26、
    renderer shell 5、build:renderer、verify:i18n 全绿；两轮 review 另修复 bundle 并发等待、
    推送/补拉取竞态、shell 测试解析镜像，以及 roster 纵向布局/ARIA/窄视口边界。依赖按
    frozen lockfile 装配（Electron postinstall 下载未作为本轮验证前置，最终依赖装配使用
@@ -545,8 +557,8 @@
    **第三轮全量 review（2026-08）**：修复 settings roster 去重遗漏 `pluginId` / 分隔符
    碰撞、旧 boot 迟到诊断覆盖新一代、触发器关闭未清搜索词；新增诊断 generation 与
    roster 签名单测。全矩阵复验：根 + sidebar/layout/connections/settings-bridge/client-web/
-   host-graph typecheck；control-plane、desktop 186、sidebar 133、settings-bridge 33、
-   connections 17、host-graph 26、renderer shell 6 全绿；renderer production build
+   host-graph typecheck；control-plane、desktop 186、sidebar 136、settings-bridge 60、
+   connections 24、host-graph 26、renderer shell 6 全绿；renderer production build
    （1091 modules）、control-plane/preload/host-graph-package 编译、verify:i18n 全绿。
    smoke 因本工作树无 dsh 安装按契约 SKIP；mac 打包未执行（同一缺失前置）。
    **最终合并审查重连缺口修复（2026-08）**：App 为每来源维护同步 ready 代集合，
@@ -560,7 +572,7 @@
    loading/error 立即撤回并清生产者签名，保证 ready 边沿 unary 瞬时失败后，相同内容的
    成功 baseline 仍会重发并清除错误态。新增两轴 loading/error + sticky-phase 同内容恢复
    回归；全程仅改 chamber 投影，不改上游 dsh。复验 ✓（根 + sidebar typecheck、sidebar
-   133、renderer shell 39、renderer production build 1093 modules、verify:i18n；同轮修复前
+   136、renderer shell 49、renderer production build 1093 modules、verify:i18n；同轮修复前
    control-plane / desktop / settings / connections / client-web 全矩阵亦全绿）。
    **2026-08 session 状态图标更新慢修复（snapshot push 断链）**：`projectInstanceSnapshot`
    的完备性判定此前同时检查 `sessions.state !== 'idle'`，但 vendor `SessionListState`

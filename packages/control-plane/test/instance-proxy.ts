@@ -522,6 +522,24 @@ test('upgrade: a non-101 upstream reply rejects explicitly (no unhandled stream)
   assert.ok(socket.closed)
 })
 
+test('upgrade: an upstream connect failure rejects 502 upstream_failed (matches the HTTP path)', async () => {
+  // Design 04 §4.2: upstream connect refusal → 502 upstream_failed — the WS
+  // leg used to answer 503 instance_unavailable (reserved for "no tunnel /
+  // not ready"), which misled operators into debugging the wrong layer.
+  const upstream = fakeHttpRequest(() => ({ error: new Error('ECONNREFUSED 127.0.0.1:17510') }))
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+  })
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), socket, Buffer.alloc(0))
+  assert.match(socket.written, /502 Bad Gateway/)
+  assert.match(socket.written, /upstream_failed/)
+  assert.ok(socket.closed)
+})
+
 // ---------------------------------------------------------------------------
 // Splice teardown: peer-FIN write errors must be consumed, never uncaught
 // ---------------------------------------------------------------------------

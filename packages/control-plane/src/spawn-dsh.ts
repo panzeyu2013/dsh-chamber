@@ -118,6 +118,9 @@ export interface PidRecord {
   ownerPid: number
   port: number
   binary: string
+  /** The spawned entry token (argv0 / source script path); reaper identity
+   * re-verification matches the live command against it. */
+  entry?: string
   profile: string
   source: string
   startedAt: string
@@ -134,8 +137,13 @@ export interface PidRecord {
  * @param port - the port the child was asked to serve.
  * @param ownerPid - the control plane process pid.
  * @param extra - optional extra record fields (ownerInstanceId, …).
+ * @param entryPath - the spawned entry token (argv0 for installed layouts,
+ *   the script path for the dev-tree source layout). The reaper re-verifies
+ *   the live process against this token; without it the source layout's argv
+ *   (no 'dsh' substring anywhere) can never match and a crashed dev tree
+ *   leaves the writer-quiescence latch closed forever.
  */
-export function writePidRecord(stateDir: string, pid: number, port: number, ownerPid: number, extra: Record<string, unknown> = {}): void {
+export function writePidRecord(stateDir: string, pid: number, port: number, ownerPid: number, extra: Record<string, unknown> = {}, entryPath?: string | null): void {
   const dir = join(stateDir, 'managed-dsh')
   mkdirSync(dir, { recursive: true })
   const record = {
@@ -144,6 +152,7 @@ export function writePidRecord(stateDir: string, pid: number, port: number, owne
     ...extra,
     port,
     binary: 'dsh',
+    ...(entryPath !== undefined && entryPath !== null && entryPath !== '' ? { entry: entryPath } : {}),
     profile: 'web',
     source: 'spawn',
     startedAt: new Date().toISOString(),
@@ -396,7 +405,10 @@ async function spawnAttempt({
   child.once('exit', () => hostLog.close())
   const instanceId = readInstanceId(stateDir)
   try {
-    pidRecordWriter(stateDir, pid, port, process.pid, instanceId === null ? {} : { ownerInstanceId: instanceId })
+    // The entry token rides the ledger so the reaper can re-verify the live
+    // process identity in BOTH layouts (installed bin.js path / dev source
+    // script) — design 02 §3.4.2.
+    pidRecordWriter(stateDir, pid, port, process.pid, instanceId === null ? {} : { ownerInstanceId: instanceId }, entry.args[0])
   } catch (ledgerError) {
     // A detached writer must never continue without its durable reaper
     // evidence. Reclaim it before surfacing the ledger failure, and make the

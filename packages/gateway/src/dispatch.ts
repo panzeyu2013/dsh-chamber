@@ -18,13 +18,15 @@ import {
   type ApiResponse,
   type Logger,
 } from '@dsh-chamber/control-plane'
-import type { AuthProvider } from './auth.ts'
+import type { AuthPrincipal, AuthProvider } from './auth.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { FeatureHost } from './routes.ts'
 import type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
 
 function isPublicRequest(method: string | undefined, pathname: string): boolean {
-  if (pathname === '/health') return method === 'GET'
+  // HEAD is the no-body twin of GET; a monitoring HEAD /health must not be
+  // forced through the auth gate while GET /health is public.
+  if (pathname === '/health') return method === 'GET' || method === 'HEAD'
   return pathname === '/auth/login' && (method === 'GET' || method === 'HEAD' || method === 'POST')
 }
 
@@ -202,7 +204,21 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       return true
     }
     if (!isPublicRequest(req.method, pathname)) {
-      const principal = await auth.verify(authRequest(req, decision))
+      let principal: AuthPrincipal | null
+      try {
+        principal = await auth.verify(authRequest(req, decision))
+      } catch (error) {
+        // The scrypt work gate saturates under abuse: an overloaded verify
+        // must answer 503 auth_busy — the same code the login path uses —
+        // never fall through as a generic 500 internal (design §5.3).
+        // Regression locked by auth.test.ts.
+        const code = (error as Error & { code?: string }).code
+        if (code === 'auth_busy') {
+          json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
+          return true
+        }
+        throw error
+      }
       if (principal === null) {
         if (shouldRedirectToLogin(req, pathname, auth)) {
           res.writeHead(302, { location: '/auth/login', 'cache-control': 'no-store' })

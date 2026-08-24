@@ -645,11 +645,18 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           ? t('validationGatewayUrlRequired')
           : parsed.error === 'https'
             ? t('validationGatewayUrlHttps')
-            : t('validationGatewayUrlOrigin')
+            : parsed.error === 'host'
+              ? t('validationGatewayUrlHost')
+              : t('validationGatewayUrlOrigin')
       }
       const needsInitialToken = editing === 'new' || (editing !== null && editing.kind !== 'gateway')
       if (needsInitialToken && value.gatewayToken === '') errors.gatewayToken = t('validationGatewayTokenRequired')
-      else if (value.gatewayToken !== '' && value.gatewayToken.length < MIN_GATEWAY_TOKEN_CHARS) {
+      else if (value.gatewayToken !== '' && !/^[\x20-\x7e]+$/.test(value.gatewayToken)) {
+        // Mirror the main-process gate (gatewayTokenValidationError): a
+        // token with non-visible-ASCII bytes would pass the renderer but be
+        // rejected by the main process with a vague write failure.
+        errors.gatewayToken = t('validationGatewayTokenAscii')
+      } else if (value.gatewayToken !== '' && value.gatewayToken.length < MIN_GATEWAY_TOKEN_CHARS) {
         errors.gatewayToken = t('validationGatewayTokenLength')
       }
       return errors

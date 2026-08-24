@@ -14,8 +14,9 @@
 | 3 | [10-todo-event-driven-aggregation.md](10-todo-event-driven-aggregation.md) | 侧边栏聚合改事件驱动（各来源 ctx 推投影取代 10s 轮询） | **已实现（2026-08）**；历史设计记录保留于此 |
 | 4 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） | 设计待评审，实现未排期（2026-08） |
 
-> 已实现并移入 `docs/design/`：设计 08（Git Worktree 独立插件）、设计 14
-> （睡眠/后台常驻）、设计 15（Chamber 设置页）。
+> 已实现并移入 `docs/design/`：设计 08（Git Worktree 独立插件）、设计 09
+> （客户端插件运行时加载）、设计 11（桌面端更新）、设计 14（睡眠/后台常驻）、
+> 设计 15（Chamber 设置页）。
 
 ## 纪律
 

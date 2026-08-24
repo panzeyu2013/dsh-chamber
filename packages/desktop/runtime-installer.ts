@@ -65,6 +65,13 @@ export interface SmokeContext {
   onSpawn: (pid: number) => void
 }
 
+/** Live install progress (design 18 M4 renderer progress bar): byte progress
+ * during 'download' (total = content-length when the registry declares it),
+ * stage-only milestones afterwards. The terminal 'done' clears the bar. */
+export type RuntimeInstallProgress =
+  | { stage: 'download'; received: number; total: number | null }
+  | { stage: 'install' | 'prune' | 'smoke' | 'publish' | 'done' }
+
 export interface InstallerDeps {
   /** Node executable used to run pnpm + the smoke check. */
   node: () => { file: string; args: string[]; env: Record<string, string> }
@@ -74,7 +81,7 @@ export interface InstallerDeps {
   download: (
     resolution: RuntimeInstallResolution,
     destination: string,
-    opts: { signal: AbortSignal },
+    opts: { signal: AbortSignal; onProgress?: (received: number, total: number | null) => void },
   ) => Promise<void>
   /** Prune the installed tree (prune-runtime semantics, design 18 §4). */
   prune: (root: string) => Promise<PruneResult>
@@ -97,6 +104,9 @@ export interface InstallOptions {
   signal?: AbortSignal
   /** One wall-clock budget across download, both install attempts, prune and smoke. */
   timeoutMs?: number
+  /** Live progress callback (design 18 M4): the controller forwards it to
+   * the renderer projection, throttled. */
+  onProgress?: (progress: RuntimeInstallProgress) => void
   deps?: Partial<InstallerDeps>
 }
 
@@ -707,6 +717,7 @@ export async function downloadVerifiedRegistryTarball(
     signal: AbortSignal
     maxBytes?: number
     fetchImpl?: typeof globalThis.fetch
+    onProgress?: (received: number, total: number | null) => void
   },
 ): Promise<void> {
   const resolution = assertInstallResolution(rawResolution)
@@ -724,20 +735,25 @@ export async function downloadVerifiedRegistryTarball(
       await response.body?.cancel().catch(() => {})
       throw new Error(`registry tarball fetch failed: HTTP ${response.status}`)
     }
-    const declaredLength = Number(response.headers.get('content-length'))
+    const rawLength = response.headers.get('content-length')
+    const declaredLength = rawLength === null ? Number.NaN : Number(rawLength)
     if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
       await response.body.cancel().catch(() => {})
       throw new Error(`registry tarball exceeds ${maxBytes} bytes`)
     }
+    // Absent/undeclared content-length → unknown total (indeterminate bar).
+    const total = Number.isFinite(declaredLength) && declaredLength >= 0 ? declaredLength : null
     file = await open(destination, 'wx', 0o600)
-    let total = 0
+    let received = 0
     for await (const raw of response.body) {
       opts.signal.throwIfAborted()
       const chunk = Buffer.from(raw)
-      total += chunk.length
-      if (total > maxBytes) throw new Error(`registry tarball exceeds ${maxBytes} bytes`)
+      received += chunk.length
+      if (received > maxBytes) throw new Error(`registry tarball exceeds ${maxBytes} bytes`)
       verifier.update(chunk)
       await file.write(chunk)
+      // Byte progress for the design-18 M4 bar; the controller throttles.
+      opts.onProgress?.(received, total)
     }
     opts.signal.throwIfAborted()
     verifier.assertMatch()
@@ -915,19 +931,44 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     const npmrc = join(runtimeDir, '.npmrc')
     const pidPath = join(workDir, 'pid')
     const tarballPath = join(workDir, 'dsh-runtime-package.tgz')
-    const noteChildPid = (pid: number): void => writeFileSync(pidPath, String(pid), { mode: 0o600 })
-    const runCommand = (args: string[], runOpts: Omit<RunOptions, 'signal' | 'onSpawn'>): Promise<RunResult> => (
-      runFn(args, {
-        ...runOpts,
-        signal: deadline!.signal,
-        onSpawn: noteChildPid,
-      })
-    )
+    // Work-dir lifecycle marker consumed by startup stale-work cleanup:
+    // 'preparing' proves no child ever existed (a hard crash during the long
+    // download window is reclaimable), 'spawning'/'spawned' mean a child may
+    // exist even without PID evidence (startup must fail closed), 'failed' is
+    // a spawn error with no child (reclaimable). The marker is the FIRST file
+    // written into the work dir; without it, non-empty work + missing pid is
+    // indistinguishable from a post-spawn scene and blocks startup forever.
+    const statePath = join(workDir, 'state')
+    const writeState = (value: 'preparing' | 'spawning' | 'spawned' | 'failed'): void => {
+      writeFileSync(statePath, `${value}\n`, { mode: 0o600 })
+    }
+    const noteChildPid = (pid: number): void => {
+      writeFileSync(pidPath, String(pid), { mode: 0o600 })
+      // PID evidence is written BEFORE the marker flips to 'spawned' — the
+      // marker alone never authorizes cleanup.
+      writeState('spawned')
+    }
+    const runCommand = async (args: string[], runOpts: Omit<RunOptions, 'signal' | 'onSpawn'>): Promise<RunResult> => {
+      writeState('spawning')
+      try {
+        return await runFn(args, {
+          ...runOpts,
+          signal: deadline!.signal,
+          onSpawn: noteChildPid,
+        })
+      } catch (error) {
+        // A failed spawn must not strand a 'spawning' marker that would
+        // block startup cleanup as if a child might exist.
+        writeState('failed')
+        throw error
+      }
+    }
     mkdirSync(runtimeDir, { recursive: true, mode: 0o700 })
     mkdirSync(workDir, { recursive: true, mode: 0o700 })
     mkdirSync(installHome, { recursive: true, mode: 0o700 })
     mkdirSync(xdgCacheDir, { recursive: true, mode: 0o700 })
     writeFileSync(npmrc, '', { mode: 0o600 })
+    writeState('preparing')
     writeFileSync(join(workDir, 'package.json'), `${JSON.stringify({
       name: 'dsh-runtime-install',
       version: '0.0.0',
@@ -963,9 +1004,18 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
 
     stage = 'download'
     deadline.signal.throwIfAborted()
-    await downloadFn(resolution, tarballPath, { signal: deadline.signal })
+    // Byte progress rides the default downloader's per-chunk callback; the
+    // controller throttles the renderer pushes. Stage-only milestones follow
+    // for install/prune/smoke/publish (no reliable byte source).
+    const reportStage = (next: RuntimeInstallProgress): void => opts.onProgress?.(next)
+    reportStage({ stage: 'download', received: 0, total: null })
+    await downloadFn(resolution, tarballPath, {
+      signal: deadline.signal,
+      onProgress: (received, total) => reportStage({ stage: 'download', received, total }),
+    })
     deadline.signal.throwIfAborted()
     stage = 'install'
+    reportStage({ stage: 'install' })
     let res = await runCommand(installArgs, { cwd: workDir, env: installEnv })
     if (res.status !== 0) {
       deadline.signal.throwIfAborted()
@@ -978,9 +1028,11 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
 
     rmSync(tarballPath, { force: true })
     stage = 'prune'
+    reportStage({ stage: 'prune' })
     await pruneFn(workDir)
     deadline.signal.throwIfAborted()
     stage = 'smoke'
+    reportStage({ stage: 'smoke' })
     await smokeFn(workDir, version, {
       signal: deadline.signal,
       onSpawn: noteChildPid,
@@ -1001,6 +1053,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     rmSync(pidPath, { force: true })
     deadline.signal.throwIfAborted()
     stage = 'publish'
+    reportStage({ stage: 'publish' })
     // Re-check at the commit point: a concurrent installer may have published
     // after our early refusal check. Valid trees are never replaced or reused.
     if (existsSync(versionTreeDir)) {
@@ -1042,6 +1095,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       previousTreeBackedUp = false
     }
     try { removeOwnedTree(failedScenePath(runtimeDir, version)) } catch { /* stale failure evidence is non-authoritative */ }
+    reportStage({ stage: 'done' })
     return { versionTreeDir, resolvedVersion: version }
   } catch (error) {
     preserveWorkDir = isRuntimeInstallerWriterSafetyError(error)

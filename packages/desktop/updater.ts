@@ -90,7 +90,15 @@ function resolveChannel(): 'stable' | 'beta' {
   return process.env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta' ? 'beta' : 'stable'
 }
 
-function releaseUrlFor(version: string): string {
+/** Build the release-page projection from the FEED's version string — feed
+ * data is untrusted input, so a version that is not semver-shaped yields
+ * null (no fabricated URL) instead of an openable link; the open action is
+ * additionally gated by isAllowedReleaseUrl. */
+function releaseUrlFor(version: string): string | null {
+  if (typeof version !== 'string' || version === '' || version.length > 128
+    || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(version)) {
+    return null
+  }
   return `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/tag/v${version}`
 }
 

@@ -185,6 +185,33 @@ type EntryStatus = 'reclaimed' | 'kept' | 'removed'
 
 type LogFn = (message: string) => void
 
+/**
+ * True when a ps `command` line carries the managed-host identity:
+ *
+ * - the recorded `entry` token (spawn argv0 — the installed
+ *   `…/@deepseek-ai/dsh/lib/bin.js` path or the dev-tree source script
+ *   `apps/cli/src/bin.ts`) appears as a whitespace token (exact match or
+ *   contained, since ps may emit the token with path decorations), or
+ * - a legacy record without `entry` falls back to the `binary` marker:
+ *   any token containing 'dsh' (installed layouts embed it in the
+ *   node_modules path).
+ *
+ * The old implementation required the whole command to contain the substring
+ * 'dsh', which is absent from the source layout's argv
+ * (`node --import tsx/esm apps/cli/src/bin.ts …`) — a crash in a dev tree
+ * then stranded the record, kept the writer-quiescence latch closed and
+ * blocked every local spawn (regression locked by protocol.ts).
+ */
+export function commandMatchesEntry(command: string, entry: string | null, binary: string | null): boolean {
+  const tokens = command.split(/\s+/)
+  for (const token of tokens) {
+    if (token === '') continue
+    if (entry !== null && (token === entry || token.includes(entry))) return true
+    if (binary !== null && binary !== '' && token.includes(binary)) return true
+  }
+  return false
+}
+
 async function processEntry(dir: string, name: string, log: LogFn): Promise<{ status: EntryStatus }> {
   const file = join(dir, name)
   const label = name.slice(0, -5)
@@ -241,9 +268,10 @@ async function processEntry(dir: string, name: string, log: LogFn): Promise<{ st
   }
   const identity = psIdentity(pid)
   const profile = typeof record.profile === 'string' && record.profile !== '' ? record.profile : null
-  const commandOk = profile === null
-    ? identity.command.includes('dsh')
-    : identity.command.includes('dsh') && identity.command.includes(`--profile ${profile}`)
+  const entry = typeof record.entry === 'string' && record.entry !== '' ? record.entry : null
+  const binary = typeof record.binary === 'string' && record.binary !== '' ? record.binary : null
+  const commandOk = commandMatchesEntry(identity.command, entry, binary)
+    && (profile === null || identity.command.includes(`--profile ${profile}`))
   const portNum = Number(record.port)
   // Missing/invalid port ⇒ cannot verify the listener belongs to this pid;
   // fail-closed (kept) instead of the previous fail-open default.

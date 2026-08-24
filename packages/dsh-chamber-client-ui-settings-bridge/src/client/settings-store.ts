@@ -20,8 +20,14 @@ let current: ChamberSettingsStatus | null = null
 const listeners = new Set<() => void>()
 /** True once the bridge onChanged/state subscription is attached (module-wide, once). */
 let bridgeSubscribed = false
+/** Unsubscribe handle of the attached onChanged listener, or null. */
+let bridgeUnsubscribe: (() => void) | null = null
 /** The active hydration retry timer, or null when no chain is running. */
 let retryTimer: ReturnType<typeof setTimeout> | null = null
+/** Backoff for bridge re-probing: fast 100ms while the bridge is expected
+ * imminently, capped at 2s so a late bridge or a one-shot query failure can
+ * never strand the section permanently disabled. */
+let retryDelayMs = 100
 
 function notify(): void {
   for (const listener of listeners) listener()
@@ -31,10 +37,28 @@ function bridgeSettings(): SettingsSurface | null {
   return typeof window !== 'undefined' ? window.dshChamber?.settings ?? null : null
 }
 
+/** Re-arm the bridge probe chain (once at a time): the bridge absent, or a
+ * one-shot get() failure, both recover by re-attaching. While no subscriber
+ * is present the slow chain stays quiet. */
+function retryLater(): void {
+  if (retryTimer !== null) return
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    const api = bridgeSettings()
+    if (api === null) {
+      if (current === null && listeners.size > 0) retryLater()
+      return
+    }
+    retryDelayMs = 100
+    attachBridge(api)
+  }, retryDelayMs)
+  retryDelayMs = Math.min(retryDelayMs * 2, 2_000)
+}
+
 function attachBridge(api: SettingsSurface): void {
   if (bridgeSubscribed) return
   bridgeSubscribed = true
-  api.onChanged((status) => {
+  bridgeUnsubscribe = api.onChanged((status) => {
     current = status
     notify()
   })
@@ -47,7 +71,16 @@ function attachBridge(api: SettingsSurface): void {
         notify()
       }
     })
-    .catch(() => {})
+    .catch(() => {
+      // A one-shot query failure must not leave the store unhydrated forever
+      // (GeneralView/DshRuntimeSection would stay permanently disabled with
+      // no error): release the latch, drop the listener, and re-arm the
+      // retry chain.
+      bridgeUnsubscribe?.()
+      bridgeUnsubscribe = null
+      bridgeSubscribed = false
+      retryLater()
+    })
 }
 
 function hydrate(): void {
@@ -59,6 +92,10 @@ function hydrate(): void {
         retryTimer = setTimeout(() => tryAttach(attempt + 1), 100)
       } else {
         retryTimer = null
+        // The fast chain is exhausted: keep probing slowly so a late bridge
+        // (or a bridge that appeared between the fast attempts) still
+        // hydrates while subscribers are waiting.
+        if (listeners.size > 0) retryLater()
       }
       return
     }

@@ -242,7 +242,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   不降级。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
   两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
-  落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.3 apply 降级），绝不使
+  落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使
   实例 boot 失败。**rc.2 后端适配（2026-08）**：壳种子词表与 rc.2 官方一致
   （平台词 = 永不成为图行的包，`dsh-client-ui-attachment` 等出种子词表），
   app-shell renderer 安装容错（后端 `ui-renderer` 行先装则采纳）。
@@ -270,7 +270,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   行；settings 系包迁 `dsh-client-ui-renderer/src/client/bind` 与
   `SettingsSchemaService`）。rc.7 宿主（无 `images` 参数）随对齐移出支持面
   （rc.8 客户端自带 `images` 参数，rc.7 宿主会拒绝多余字段）——与版本容忍
-  §3.3 的"特性缺席"语义一致：壳与后端版本必须同代。
+  §3.5 的"特性缺席"语义一致：壳与后端版本必须同代。
 
 ## 5. 实施分期（M1–M4 均已落地；验证记录见 STATUS）
 

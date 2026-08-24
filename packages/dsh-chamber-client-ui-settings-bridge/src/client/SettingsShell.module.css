@@ -935,3 +935,60 @@
 .updateStatus {
   display: block;
 }
+
+/* ---- dsh runtime block (design 18 M4) ----
+   Grouped layout: status + live progress on top, version actions, then the
+   version source; quiet uppercase sub-captions reuse generalGroupTitle. */
+
+/* A control row that pairs a select with its inline action (install / test). */
+.runtimeSelectRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Live install progress: label above a slim track; determinate fill when the
+   registry declared content-length, sliding stripe otherwise. */
+.runtimeProgressBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.runtimeProgressLabel {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runtimeProgressTrack {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dsw-alias-border-l2);
+  overflow: hidden;
+}
+
+.runtimeProgressBar {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--dsw-alias-brand-primary);
+  transition: width .2s ease;
+}
+
+.runtimeProgressBarIndeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: 3px;
+  background: var(--dsw-alias-brand-primary);
+  animation: runtimeProgressSlide 1.1s ease-in-out infinite;
+}
+
+@keyframes runtimeProgressSlide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}

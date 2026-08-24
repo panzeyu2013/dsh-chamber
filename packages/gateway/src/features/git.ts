@@ -79,14 +79,22 @@ const GIT_KILL_GRACE_MS = 1_000
 
 let activeGitProcesses = 0
 
-/** Remove gateway secrets and every ambient Git override before forking.
- * `git -C` does not neutralize GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_*; inheriting
- * them can make authority checks inspect one path while mutations hit another
- * object database. Re-add only the explicit non-interactive policy. */
+/** Rebuild a minimal, safe Git child environment — design 17 §9.4 "只显式
+ * 重建安全的 Git 环境". Prefix-filtering the ambient environment is NOT
+ * enough: non-GIT credential material (SSH_AUTH_SOCK, SSH_ASKPASS,
+ * GIT_ASKPASS, any operator secret placed in the gateway env) would
+ * otherwise reach git and its hooks (post-checkout runs on every worktree
+ * add, and hook scripts are written by the same OS user as the repos). Only
+ * the functional whitelist (executable lookup, config home, deterministic
+ * output locale) plus the explicit non-interactive policy is re-added;
+ * `git -C` does not neutralize GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* anyway,
+ * so inheriting them could make authority checks inspect one path while
+ * mutations hit another object database. */
 export function sanitizedGitEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...source }
-  for (const key of Object.keys(env)) {
-    if (/^DSH_GATEWAY(?:_|$)/i.test(key) || /^GIT_/i.test(key)) delete env[key]
+  const env: NodeJS.ProcessEnv = {}
+  for (const key of ['PATH', 'HOME', 'LC_ALL', 'LANG'] as const) {
+    const value = source[key]
+    if (value !== undefined) env[key] = value
   }
   env.GIT_TERMINAL_PROMPT = '0'
   return env

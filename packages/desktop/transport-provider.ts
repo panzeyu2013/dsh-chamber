@@ -20,7 +20,7 @@
  * aliases below); desktop internals use the `Transport*` names.
  */
 
-/** Transport kinds shipped. `gateway` (design 17 §6.4/§6.5) is a DIRECT
+/** Transport kinds shipped. `gateway` (design 17 §7) is a DIRECT
  * ENDPOINT kind: no tunnel child; the endpoint is a dsh-gateway's https URL
  * authenticated with a shared bearer token. Future kinds extend the union. */
 export const TRANSPORT_KINDS = ['ssh', 'gateway'] as const
@@ -277,6 +277,14 @@ export interface TransportProvider {
   /** Classify one COMPLETE stderr line of the transport process. */
   classifyStderr(line: string): StderrClassification
   /**
+   * Optional redaction for NON-stderr channels (tunnel stdout): the stderr
+   * path is redacted inside classifyStderr, but stdout lines would otherwise
+   * land in the ring verbatim (ssh -N writes no stdout in practice, yet a
+   * misbehaving remote could echo path/credential-shaped text). Applied per
+   * chunk, like the exec channel. Absent = no redaction.
+   */
+  redactOutput?(text: string): string
+  /**
    * Optional one-shot endpoint identity verification (dsh: the destination
    * answers the host.describe wire handshake). The runtime calls it once
    * after the transport probe reports the endpoint up and BEFORE the phase
@@ -303,3 +311,26 @@ export type SshInstanceSpec = TransportInstanceSpec
 export type SshStatusProjection = TransportStatusProjection
 export type SshLogEntry = TransportLogEntry
 export type SshPhase = TransportPhase
+
+/**
+ * True when two specs point at a different transport TARGET — kind or any
+ * host/user/port field. Label-only edits are not target changes.
+ *
+ * The main process uses this to invalidate provider-held credentials: the
+ * secret stores are keyed by instance id only, so without this check an
+ * edit of `host` from A to B would silently reuse A's SSH password (or
+ * gateway token) against B (P1 regression, locked by
+ * transport-target.test.ts). Kind switches are deliberately EXCLUDED from
+ * the caller's clear decision — the form keeps the old provider secret
+ * until the new secret commits so a failed commit can roll the metadata
+ * back (save-host.ts compensation).
+ */
+export function transportTargetChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
+  return a.kind !== b.kind
+    || a.host !== b.host
+    || a.user !== b.user
+    || a.sshPort !== b.sshPort
+    || a.remotePort !== b.remotePort
+    || a.serviceName !== b.serviceName
+    || a.remoteDshHome !== b.remoteDshHome
+}

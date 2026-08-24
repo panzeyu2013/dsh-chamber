@@ -22,6 +22,13 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   orchestration page, derived session index, approval/question handling,
   scheduler, and a workspace-authority-bound Git worktree saga. CI/release now
   cover build, typecheck, tests, tgz install smoke, and npm publish.
+- **dsh runtime version management (design 18)** — installs/switches the dsh
+  runtime at runtime: registry-origin binding + SRI verification + embedded pnpm
+  `file:` install, probe-gated switching with a two-phase rollback/recovery loop
+  (M0/M2/M4 done; M1/M3 partial — packaged-machine acceptance awaits a real
+  `.app`); data-safety gap fixes — journal-mismatch classified as
+  `selection-corrupt`, pre-rollback stash restore, and `incomplete` restores
+  unblocking `recover-metadata`.
 
 ### Security
 

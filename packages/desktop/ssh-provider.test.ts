@@ -14,6 +14,8 @@ import type { SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -24,6 +26,7 @@ import {
   createAskpassHelper,
   disposeSshAuth,
   getSshPassword,
+  probeDshSignature,
   resolveWriteTarget,
   setSshPassword,
   sshAuthEnv,
@@ -131,6 +134,55 @@ test('disposeSshAuth deletes the ephemeral askpass helper', () => {
   } finally {
     setSshPassword('t-env-3', null)
     disposeSshAuth(spec('t-env-3'))
+  }
+})
+
+test('recreating the askpass env RETIRES the previous helper instead of deleting it (concurrent-exec race)', () => {
+  // P1 regression: the old implementation deleted the previous helper on
+  // every sshAuthEnv call — a tunnel spawned first, then an exec (systemd
+  // start) recreated the helper and deleted the file the tunnel's ssh was
+  // still about to execute for its first prompt, failing password auth.
+  setSshPassword('t-env-4', 'pw')
+  try {
+    const first = sshAuthEnv(spec('t-env-4'))
+    assert.ok(first !== null && first!.SSH_ASKPASS !== undefined)
+    const firstPath = first!.SSH_ASKPASS
+    const second = sshAuthEnv(spec('t-env-4'))
+    assert.ok(second !== null && second!.SSH_ASKPASS !== undefined)
+    const secondPath = second!.SSH_ASKPASS
+    assert.notEqual(secondPath, firstPath, 'a fresh helper is baked for the new spawn')
+    // The in-flight child's helper must still be on disk, executable.
+    assert.ok(existsSync(firstPath), 'the retired (in-flight) helper survives the recreation')
+    assert.equal(statSync(firstPath).mode & 0o777, 0o700, 'retired helper stays owner-executable')
+    // Dispose removes the whole generation list.
+    disposeSshAuth(spec('t-env-4'))
+    assert.ok(!existsSync(firstPath) && !existsSync(secondPath), 'dispose deletes current AND retired helpers')
+  } finally {
+    setSshPassword('t-env-4', null)
+    disposeSshAuth(spec('t-env-4'))
+  }
+})
+
+test('askpass helper retirement is bounded by the generation cap', () => {
+  setSshPassword('t-env-5', 'pw')
+  try {
+    const paths: string[] = []
+    // Cap = 4 retired + 1 current. Generation N+1 pushes generation N into
+    // retirement; the overflow (oldest beyond the cap) is deleted on the
+    // next recreation. With 7 calls, generations 1–2 are pruned, 3–6
+    // retired, 7 current.
+    for (let i = 0; i < 7; i += 1) {
+      const env = sshAuthEnv(spec('t-env-5'))
+      assert.ok(env !== null && env!.SSH_ASKPASS !== undefined)
+      paths.push(env!.SSH_ASKPASS)
+    }
+    assert.ok(!existsSync(paths[0]), 'oldest generation is pruned beyond the cap')
+    assert.ok(!existsSync(paths[1]), 'second-oldest generation is pruned beyond the cap')
+    assert.ok(existsSync(paths[2]) && existsSync(paths[3]) && existsSync(paths[4]) && existsSync(paths[5]), 'recent retired generations survive')
+    assert.ok(existsSync(paths[6]), 'current generation survives')
+  } finally {
+    setSshPassword('t-env-5', null)
+    disposeSshAuth(spec('t-env-5'))
   }
 })
 
@@ -728,5 +780,63 @@ test('run: private material in stderr is redacted from the failure detail', asyn
   if (!result.ok) {
     assert.ok(!result.error.includes('/Users/alice/.ssh'), 'the key path never rides the error')
     assert.match(result.error, /\[ssh material redacted\]/)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// probeDshSignature: the dsh-signature classification over a REAL loopback
+// HTTP server (426+upgrade / 200+SSE / anything else / timeout / refused).
+// ---------------------------------------------------------------------------
+
+test('probeDshSignature classifies the dsh connection-plugin and SSE signatures', async () => {
+  const behaviors: Array<(req: any, res: any) => void> = [
+    // 426 + Upgrade: websocket — the connection-plugin signature.
+    (req, res) => { res.writeHead(426, { upgrade: 'websocket', connection: 'Upgrade' }); res.end() },
+    // 200 + text/event-stream — the SSE signature.
+    (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('data: {"ok":true}\n\n')
+      setTimeout(() => res.end(), 50)
+    },
+    // 200 with another content type: NOT a dsh signature.
+    (req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html></html>') },
+    // 404: no signature.
+    (req, res) => { res.writeHead(404); res.end('nope') },
+  ]
+  let call = 0
+  const server = createServer((req, res) => {
+    const behavior = behaviors[call++]
+    if (behavior === undefined) { res.writeHead(500); res.end() }
+    else behavior(req, res)
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'connection-plugin')
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'sse')
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('probeDshSignature answers none on connection failure and timeout', async () => {
+  // A refused port (server closed): the probe must resolve 'none', never
+  // reject or hang.
+  const server = createServer(() => {})
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  await new Promise<void>(resolve => server.close(() => resolve()))
+  assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none', 'ECONNREFUSED → none')
+
+  // A silent server: the request timeout resolves 'none'.
+  const silent = createServer(() => { /* never answers */ })
+  await new Promise<void>(resolve => silent.listen(0, '127.0.0.1', resolve))
+  const silentPort = (silent.address() as AddressInfo).port
+  try {
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port: silentPort }, 120), 'none', 'timeout → none')
+  } finally {
+    await new Promise<void>(resolve => silent.close(() => resolve()))
   }
 })

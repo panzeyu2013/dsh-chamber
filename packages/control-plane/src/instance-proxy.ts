@@ -156,7 +156,7 @@ export interface InstanceProxy {
 }
 
 /** Whether an id is a valid /api/i/<id> segment ('local', 'ssh-<id>' or
- * 'gateway-<id>'; design 17 §6.4 adds the gateway kind). */
+ * 'gateway-<id>'; design 17 §7 adds the gateway kind). */
 export function parseInstanceId(id: string): 'local' | 'ssh' | 'gateway' | null {
   if (id === 'local') return 'local'
   if (/^ssh-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'ssh'
@@ -198,7 +198,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
   /** connectionId ('ssh:<id>' / 'gateway:<id>') → target record (design 05
-   * §3.3 + design 17 §6.4). Local is never registered — its baseUrl is
+   * §3.3 + design 17 §7). Local is never registered — its baseUrl is
    * derived from the managed dshPort. A gateway record carries extra headers
    * (the shared bearer token) injected at forward time, never in the registry. */
   interface TransportRecord { baseUrl: string; headers?: Record<string, string> }
@@ -449,7 +449,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           throw new TypeError('registerInstanceTransport: ssh transports cannot inject request headers')
         }
       } else {
-        // gateway: https origin, non-loopback allowed (design 17 §6.4).
+        // gateway: https origin, non-loopback allowed (design 17 §7).
         if (target.protocol !== 'https:') {
           throw new TypeError('registerInstanceTransport: gateway baseUrl must be https')
         }

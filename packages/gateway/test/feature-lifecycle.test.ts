@@ -87,6 +87,54 @@ test('session index waits for readiness, rebuilds session.list baseline, and rec
   assert.deepEqual(index.list(), [])
 })
 
+test('session index open barrier has a watchdog: a hung upgrade cannot wedge the generation forever', async () => {
+  let baseUrl: string | null = null
+  let baselineCalls = 0
+  let attempts = 0
+  const index = createSessionIndex({
+    getDshBaseUrl: () => baseUrl,
+    logger,
+    reconnectDelayMs: 5,
+    barrierOpenTimeoutMs: 60,
+    callDsh: (async () => {
+      baselineCalls += 1
+      return {
+        rpcId: `baseline-${baselineCalls}`,
+        result: {
+          ok: true,
+          value: { items: [{
+            sessionId: 'session-recovered', updatedAt: 10, running: false, blank: true, cwd: '/repo',
+            projections: { asOfSeq: 0, values: { title: 'Recovered' } },
+          }] },
+        },
+      }
+    }) as any,
+    openStream: async function *(_base, path, signal, onOpen): AsyncGenerator<ServerRequest> {
+      attempts += 1
+      if (attempts <= 2) {
+        // The upstream accepts the connection but NEVER completes the WS
+        // upgrade (no onOpen, no frames). Without the barrier watchdog this
+        // generation would buffer forever and /chamber/sessions stay empty.
+        await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
+        return
+      }
+      onOpen?.()
+      if (path.endsWith('mux')) {
+        yield {
+          type: 'server-request', rpcId: 'mux-recovered', method: 'session/projection',
+          payload: { sessionId: 'session-recovered', key: 'title', value: 'Live', seq: 1 },
+        }
+      }
+      await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
+    },
+  })
+  index.start()
+  baseUrl = 'http://127.0.0.1:12345'
+  await waitFor(() => index.get('session-recovered')?.title === 'Live', 3_000)
+  assert.ok(attempts >= 3, `the generation recovered through reconnect (attempts=${attempts})`)
+  index.stop()
+})
+
 test('session index buffers host changes after WS-ready and replays them over the list baseline', async () => {
   let releaseBaseline!: () => void
   const baselineGate = new Promise<void>(resolve => { releaseBaseline = resolve })
@@ -205,6 +253,28 @@ test('scheduler detach keeps definitions and start re-arms them', async () => {
   await waitFor(() => prompts >= 2)
   scheduler.stop()
   assert.equal(scheduler.list()[0]?.id, 'persisted-job')
+})
+
+test('scheduler restore tolerates duplicate persisted ids (keeps first, warns) instead of vetoing startup', async () => {
+  let prompts = 0
+  const scheduler = createScheduler({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    callDsh: (async () => {
+      prompts += 1
+      return { rpcId: `prompt-${prompts}`, result: { ok: true, value: {} } }
+    }) as any,
+  })
+  const first = { id: 'dup-job', delayMs: 5, intervalMs: 1_000, targetSessionId: 's1', prompt: 'continue' }
+  scheduler.restore(first)
+  // A hand-edited schedule.json with a repeated id must not crash the
+  // feature host at startup (P2 regression): keep the first definition.
+  assert.doesNotThrow(() => scheduler.restore({ ...first }))
+  assert.equal(scheduler.list().length, 1)
+  scheduler.start()
+  await waitFor(() => prompts >= 1)
+  scheduler.stop()
+  assert.equal(scheduler.list()[0]?.id, 'dup-job')
 })
 
 test('scheduler interval prompts are single-flight', async () => {

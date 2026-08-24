@@ -292,8 +292,6 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
   const canCheck = actions.has('check')
   const canRestorePreRollback = actions.has('restore-pre-rollback')
     && (state?.preRollbackCount ?? 0) > 0
-  const hasVisibleRuntimeAction = canInstall || canReset || canRetryApply || canRetryRestore
-    || canRecoverMetadata || canCleanup || canRestorePreRollback
   const operationDisabled = !hydrated || busy || testingRegistry
   const mutationDisabled = operationDisabled || envGated || managementGated
   const registryDisabled = settingsStatus === null || mutationDisabled || !canCheck
@@ -301,9 +299,39 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
     .map(component => metadataComponentText(component, t))
     .join(t('dshRuntimeMetadataComponentSeparator')) || t('dshRuntimeMetadataComponentUnknown')
 
+  // Live install progress (design 18 M4): byte-percent while downloading
+  // with a declared content-length, stage labels otherwise, and an
+  // indeterminate bar during the phase-only windows (installing/applying).
+  const progress = state?.progress ?? null
+  const installingPhase = phase === 'downloading' || phase === 'installing' || phase === 'applying'
+  const showProgress = progress !== null || installingPhase
+  const progressPercent = progress?.stage === 'download' && typeof progress.total === 'number' && progress.total > 0
+    ? Math.min(100, Math.max(0, Math.round(((progress.received ?? 0) / progress.total) * 100)))
+    : null
+  const progressLabel = useMemo(() => {
+    if (progress?.stage === 'download') {
+      return progressPercent !== null
+        ? t('dshRuntimeProgressDownloading', { percent: progressPercent })
+        : t('dshRuntimeProgressDownloadingIndeterminate')
+    }
+    switch (progress?.stage) {
+      case 'install': return t('dshRuntimeProgressInstalling')
+      case 'prune': return t('dshRuntimeProgressPruning')
+      case 'smoke': return t('dshRuntimeProgressSmoke')
+      case 'publish': return t('dshRuntimeProgressPublishing')
+      default: return phase === 'applying'
+        ? t('dshRuntimeProgressApplying')
+        : phase === 'installing' || phase === 'downloading'
+          ? t('dshRuntimeProgressInstalling')
+          : t('dshRuntimeProgressDownloadingIndeterminate')
+    }
+  }, [progress, progressPercent, phase, t])
+
   return (
     <div className={css.generalGroup}>
       <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
+
+      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupStatus')}</h4>
 
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>
@@ -313,6 +341,20 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
           {active !== null && sourceTag !== null ? `（${sourceTag}）` : ''}
         </p>
       </div>
+      <div className={css.updateStatus} aria-live="polite">
+        <p className={css.updateStatusText}>{statusText}</p>
+      </div>
+      {showProgress && (
+        <div className={css.runtimeProgressBlock} role="status" aria-live="polite">
+          <span className={css.runtimeProgressLabel}>{progressLabel}</span>
+          <div className={css.runtimeProgressTrack}>
+            <div
+              className={progressPercent === null ? css.runtimeProgressBarIndeterminate : css.runtimeProgressBar}
+              style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}
+            />
+          </div>
+        </div>
+      )}
       {active !== null && bundled !== null && active !== bundled && (
         <p className={css.generalHint}>{t('dshRuntimeBundledRow')} v{bundled}</p>
       )}
@@ -358,55 +400,139 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
         </p>
       )}
 
+      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupActions')}</h4>
+
       <label className={css.generalRow}>
         <span className={css.generalFieldLabel}>{t('dshRuntimeSelectVersion')}</span>
-        <select
-          className={css.updateButton}
-          value={chosen ?? ''}
-          disabled={mutationDisabled || !canSelect}
-          onChange={(event) => {
-            selectionExplicit.current = true
-            setSelected(event.target.value)
-          }}
-        >
-          {versions.length === 0
-            ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
-            : versions.map((entry: RuntimeVersionEntry) => (
-              <option key={entry.version} value={entry.version}>
-                v{entry.version}
-                {entry.version === active ? ` · ${t('current')}` : ''}
-                {entry.latest ? ` · ${t('dshRuntimeLatestTag')}` : ''}
-                {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
-                {entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
-              </option>
-            ))}
-        </select>
+        <div className={css.runtimeSelectRow}>
+          <select
+            className={css.updateButton}
+            value={chosen ?? ''}
+            disabled={mutationDisabled || !canSelect}
+            onChange={(event) => {
+              selectionExplicit.current = true
+              setSelected(event.target.value)
+            }}
+          >
+            {versions.length === 0
+              ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
+              : versions.map((entry: RuntimeVersionEntry) => (
+                <option key={entry.version} value={entry.version}>
+                  v{entry.version}
+                  {entry.version === active ? ` · ${t('current')}` : ''}
+                  {entry.latest ? ` · ${t('dshRuntimeLatestTag')}` : ''}
+                  {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
+                  {entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
+                </option>
+              ))}
+          </select>
+          {canInstall && (
+            <button
+              type="button"
+              className={css.updatePrimaryButton}
+              onClick={onInstall}
+              disabled={mutationDisabled || isActive || chosen === null}
+            >
+              {selectionDirection === 'rollback' ? t('dshRuntimeActionRollback') : t('dshRuntimeActionUpdate')} v{chosen ?? '—'}
+            </button>
+          )}
+          {canCleanup && chosen !== null && (
+            <button type="button" className={css.updateButton} onClick={onCleanupVersion} disabled={mutationDisabled}>
+              {t('dshRuntimeCleanupVersion')} v{chosen}
+            </button>
+          )}
+        </div>
       </label>
+
+      <p className={css.generalHint}>{snapshotText}</p>
+      {pending !== null && phase !== 'pending' && phase !== 'applying' && (
+        <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: pending })}</p>
+      )}
+
+      {(canRetryApply || canRetryRestore || canRestorePreRollback || canRecoverMetadata || canReset) && (
+        <div className={css.updateStatusLine}>
+          {canRetryApply && (
+            <button type="button" className={css.updateButton} onClick={onRetryApply} disabled={mutationDisabled}>
+              {t('dshRuntimeRetryApply')}
+            </button>
+          )}
+          {canRetryRestore && (
+            <button type="button" className={css.updateButton} onClick={onRetryRestore} disabled={operationDisabled}>
+              {t('dshRuntimeRetryRestore')}
+            </button>
+          )}
+          {canRestorePreRollback && (
+            <button type="button" className={css.updateButton} onClick={onRestorePreRollback} disabled={mutationDisabled}>
+              {t('dshRuntimeRestorePreRollback')}
+            </button>
+          )}
+          {canRecoverMetadata && (
+            <button
+              type="button"
+              className={css.updateButton}
+              onClick={onRecoverMetadata}
+              disabled={mutationDisabled}
+            >
+              {t('dshRuntimeRecoverMetadata')}
+            </button>
+          )}
+          {canReset && (
+            <button type="button" className={css.updateButton} onClick={onReset} disabled={mutationDisabled}>
+              {t('dshRuntimeResetBuiltin')}
+            </button>
+          )}
+        </div>
+      )}
+
+      {state?.failure != null && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeFailureRecord', {
+            version: state.failure.version,
+            at: formatTimestamp(state.failure.at),
+            reason: state.failure.reason,
+          })}
+        </p>
+      )}
+      {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
+
+      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupSource')}</h4>
 
       <label className={css.generalRow}>
         <span className={css.generalFieldLabel}>{t('dshRuntimeRegistryLabel')}</span>
-        <select
-          className={css.updateButton}
-          value={registrySelection}
-          disabled={registryDisabled}
-          onChange={(event) => {
-            const value = event.target.value
-            setRegistrySelection(value)
-            if (value !== CUSTOM_REGISTRY) {
-              void onApplyRegistry(value, false).then((result) => {
-                // Only a declined confirm dialog reverts the dropdown (it must
-                // never claim an origin that was not applied). Any other
-                // failure keeps the user's selection mounted — a custom origin
-                // stays editable instead of being yanked away with its error.
-                if (!result.ok && result.cancelled) setRegistrySelection(registryMode)
-              })
-            }
-          }}
-        >
-          <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
-          <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
-          <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
-        </select>
+        <div className={css.runtimeSelectRow}>
+          <select
+            className={css.updateButton}
+            value={registrySelection}
+            disabled={registryDisabled}
+            onChange={(event) => {
+              const value = event.target.value
+              setRegistrySelection(value)
+              if (value !== CUSTOM_REGISTRY) {
+                void onApplyRegistry(value, false).then((result) => {
+                  // Any failed/declined apply reverts the dropdown: it must
+                  // never claim an origin that was not applied. The error text
+                  // (originError) stays visible; a custom origin is handled by
+                  // its own input below and keeps its editable value.
+                  if (!result.ok) setRegistrySelection(registryMode)
+                })
+              }
+            }}
+          >
+            <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
+            <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
+            <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
+          </select>
+          {canCheck && (
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={!canCheck || testingRegistry || busy}
+              onClick={() => { void onTestRegistry() }}
+            >
+              {testingRegistry ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
+            </button>
+          )}
+        </div>
         <span className={css.generalHint}>
           {t('dshRuntimeRegistryHint')}
           {' '}
@@ -442,85 +568,9 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
         </label>
       )}
 
-      <div className={css.updateStatusLine}>
-        <button
-          type="button"
-          className={css.updateButton}
-          disabled={!canCheck || testingRegistry || busy}
-          onClick={() => { void onTestRegistry() }}
-        >
-          {testingRegistry ? t('dshRuntimeRegistryTesting') : t('dshRuntimeRegistryTest')}
-        </button>
-      </div>
-
       {registryError !== null && <p className={css.generalError} role="alert">{registryError}</p>}
       {registryReachable && <p className={css.generalHint} role="status">{t('dshRuntimeRegistryReachable')}</p>}
 
-      {hasVisibleRuntimeAction && (
-        <div className={css.updateStatusLine}>
-          {canInstall && (
-            <button
-              type="button"
-              className={css.updatePrimaryButton}
-              onClick={onInstall}
-              disabled={mutationDisabled || isActive || chosen === null}
-            >
-              {selectionDirection === 'rollback' ? t('dshRuntimeActionRollback') : t('dshRuntimeActionUpdate')} v{chosen ?? '—'}
-            </button>
-          )}
-          {canRetryApply && (
-            <button type="button" className={css.updateButton} onClick={onRetryApply} disabled={mutationDisabled}>
-              {t('dshRuntimeRetryApply')}
-            </button>
-          )}
-          {canRetryRestore && (
-            <button type="button" className={css.updateButton} onClick={onRetryRestore} disabled={operationDisabled}>
-              {t('dshRuntimeRetryRestore')}
-            </button>
-          )}
-          {canRestorePreRollback && (
-            <button type="button" className={css.updateButton} onClick={onRestorePreRollback} disabled={mutationDisabled}>
-              {t('dshRuntimeRestorePreRollback')}
-            </button>
-          )}
-          {canRecoverMetadata && (
-            <button
-              type="button"
-              className={css.updateButton}
-              onClick={onRecoverMetadata}
-              disabled={mutationDisabled}
-            >
-              {t('dshRuntimeRecoverMetadata')}
-            </button>
-          )}
-          {canReset && (
-            <button type="button" className={css.updateButton} onClick={onReset} disabled={mutationDisabled}>
-              {t('dshRuntimeResetBuiltin')}
-            </button>
-          )}
-          {canCleanup && chosen !== null && (
-            <button type="button" className={css.updateButton} onClick={onCleanupVersion} disabled={mutationDisabled}>
-              {t('dshRuntimeCleanupVersion')} v{chosen}
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className={css.updateStatus} aria-live="polite">
-        <p className={css.updateStatusText}>{statusText}</p>
-      </div>
-
-      {state?.failure != null && (
-        <p className={css.generalError} role="alert">
-          {t('dshRuntimeFailureRecord', {
-            version: state.failure.version,
-            at: formatTimestamp(state.failure.at),
-            reason: state.failure.reason,
-          })}
-        </p>
-      )}
-      {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
-      <p className={css.generalHint}>{snapshotText}</p>
       {state?.diskUsage != null && (
         <p className={css.generalHint}>
           {t('dshRuntimeDiskSummary', {
@@ -550,9 +600,6 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
         <p className={css.generalError} role="status">
           {t('dshRuntimeDiskQuotaWarning', { limit: formatRuntimeBytes(state.diskLimitBytes) })}
         </p>
-      )}
-      {pending !== null && phase !== 'pending' && phase !== 'applying' && (
-        <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: pending })}</p>
       )}
     </div>
   )

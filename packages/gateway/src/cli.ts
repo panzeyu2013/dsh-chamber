@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-chamber gateway CLI (design 17 §3.1 / §6.6): the server-side access
+ * dsh-chamber gateway CLI (design 17 §3): the server-side access
  * shape's entry point. Mirrors the control-plane standalone.ts arg-parsing
  * style (strict flags, `--key value` / `--key=value`, exit 2 on config error).
  *

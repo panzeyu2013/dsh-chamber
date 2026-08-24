@@ -9,6 +9,7 @@
  */
 
 import { createControlPlane } from '@dsh-chamber/control-plane'
+import { followNewLines } from './follow-filter.ts'
 
 const DEFAULT_URL = 'http://127.0.0.1:17500'
 
@@ -385,17 +386,12 @@ async function hostLogsCommand(flags: FlagMap) {
   for (;;) {
     const data = await fetchLogs()
     const lines = Array.isArray(data?.lines) ? data.lines : []
-    const newLines = lines.filter(entry => {
-      const ts = typeof entry?.ts === 'number' ? entry.ts : Number(entry?.ts)
-      return Number.isFinite(ts) && ts > lastTs
-    })
-    printLines(newLines)
-    let maxTs = lastTs
-    for (const entry of lines) {
-      const ts = typeof entry?.ts === 'number' ? entry.ts : Number(entry?.ts)
-      if (Number.isFinite(ts) && ts > maxTs) maxTs = ts
-    }
-    lastTs = maxTs
+    // The wire ts is an ISO-8601 string; parseLogTs accepts both that and
+    // numeric epoch ms (Number() on an ISO string is NaN and used to drop
+    // every line — regression locked by follow-filter.test.ts).
+    const window = followNewLines(lines, lastTs)
+    printLines(window.newLines)
+    lastTs = window.nextTs
     await new Promise(resolve => setTimeout(resolve, LOG_FOLLOW_INTERVAL_MS))
   }
 }

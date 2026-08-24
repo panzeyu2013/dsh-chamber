@@ -145,7 +145,7 @@ export interface TransportManagerOptions {
 /** createTransportManager dependencies (provider/spawn/probe/allocator injectable). */
 export interface TransportManagerDeps {
   provider: TransportProvider
-  /** Optional per-kind overrides (design 17 §6.5): a kind present here
+  /** Optional per-kind overrides (design 17 §7): a kind present here
    * (e.g. 'gateway') resolves to that provider; every other kind falls back to
    * `provider`. */
   providers?: Partial<Record<TransportKind, TransportProvider>>
@@ -328,7 +328,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const doSpawn: (command: string, args: readonly string[], opts: SpawnOptions) => SpawnedProcess =
     spawnFn ?? ((command: string, args: readonly string[], opts: SpawnOptions) => spawn(command, args, opts))
   const doProbe = portProbe ?? defaultPortProbe
-  /** Resolve the provider for a spec's kind (design 17 §6.5): a per-kind
+  /** Resolve the provider for a spec's kind (design 17 §7): a per-kind
    * override wins; otherwise the default provider. */
   const resolveProvider = (kind: TransportKind): TransportProvider => providers?.[kind] ?? provider
   const doVerify = verifyProbe ?? ((spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) => {
@@ -580,7 +580,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   async function startTransport(id: string) {
     const spec = instances.get(id)
     if (spec === undefined) return
-    // The provider for THIS instance's kind (design 17 §6.5) — a gateway
+    // The provider for THIS instance's kind (design 17 §7) — a gateway
     // instance resolves to gatewayProvider, an ssh instance to sshProvider.
     const providerForSpec = resolveProvider(spec.kind)
     const state = ensureState(id)
@@ -693,7 +693,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         return
       }
       if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) {
+        // A stale epoch (a newer attempt took over while this spawn was in
+        // flight): the freshly spawned child must still get the SIGKILL
+        // escalation — a SIGTERM-ignoring transport would otherwise become
+        // an unreaped orphan.
         signalChild(child, 'SIGTERM')
+        armKillEscalation(state, child)
         return
       }
       state.child = child
@@ -701,7 +706,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       if (child.stdout !== null) {
         child.stdout.on('data', chunk => {
           if (state.child !== child) return
-          appendLogInternal(state, 'info', String(chunk).trimEnd())
+          // Non-stderr channels get the provider's redaction too (the stderr
+          // path is redacted inside classifyStderr; without this a
+          // misbehaving remote could echo credential/path-shaped text into
+          // the ring via stdout).
+          const text = String(chunk)
+          appendLogInternal(state, 'info', (providerForSpec.redactOutput?.(text) ?? text).trimEnd())
         })
       }
       // Line-buffered stderr (per child): provider classification (redaction
