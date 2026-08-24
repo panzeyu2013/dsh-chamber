@@ -118,6 +118,11 @@
   Windows 管理面保持只读：可查看版本/状态，controller/main/UI 均拒绝安装、
   选择、应用、回滚与清理，未跑 Windows mutation 不构成契约偏差。设计与
   开放项见 `docs/design/18-dsh-runtime-version.md` §8。
+  **已知缺口（审查确认，未修）**：① journal-mismatch（apply 中途崩溃 + 应用更新
+  的窄窗口）进入无 UI 逃逸的硬阻塞态——`recover-metadata` 因元数据健康判定只看
+  文件解析层而不合格，仅能手删 `activation-journal.json` 恢复；② 手动回滚的
+  pre-rollback stash 只写不读，回滚前数据无任何 UI/IPC/启动续作可恢复（§3.7「可反悔」
+  未实现）。两者均为 fail-closed 数据安全缺口，建议发布前补上。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 完整 mutation 能力暂缓**：detached/进程组/lsof 降级路径仍以
   Unix 为契约目标；设计 18 的 Windows 运行时管理因此按上述契约保持只读。

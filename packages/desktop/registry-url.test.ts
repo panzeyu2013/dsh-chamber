@@ -1,5 +1,5 @@
 /**
- * registry-url.ts pure-logic tests (design 16 §4/§6 — registry-domain URL
+ * registry-url.ts pure-logic tests (design 18 §4/§6 — registry-domain URL
  * whitelist) — node:test, no electron. Covers the three allowed shapes
  * (metadata / tarball / `/-/v1/search`), origin + scheme + port rejection,
  * userinfo rejection, the decode-then-re-normalize encoding-traversal

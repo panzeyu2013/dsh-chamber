@@ -429,7 +429,7 @@ const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
-// dsh runtime version controller (design 16 M2): module-level ref so the
+// dsh runtime version controller (design 18 M2): module-level ref so the
 // settings「dsh 运行时」block's install/check/reset always reach the same
 // instance; state pushes go to the (single) main window.
 let runtimeController: DshRuntimeController | null = null;

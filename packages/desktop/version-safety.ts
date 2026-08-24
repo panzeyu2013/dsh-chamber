@@ -1,10 +1,10 @@
 /**
- * dsh 运行时版本串预校验（design 16 §4「路径安全」）——纯逻辑，无 electron。
+ * dsh 运行时版本串预校验（design 18 §4「路径安全」）——纯逻辑，无 electron。
  *
  * registry 返回/用户输入的版本串在进入任何路径（版本树目录名、指针、override、
  * failures 记录）之前必须通过 EXACT_SEMVER 预校验并拒绝 `/`、`\`、`..`
  * （路径穿越面）。本模块与 bundle-dsh.mjs 的 EXACT_SEMVER 保持同一正则
- * （design 16 §4 路径安全与构建期同口径）。
+ * （design 18 §4 路径安全与构建期同口径）。
  *
  * 本模块刻意 electron-free，可用 node:test 直接单测（version-safety.test.ts）。
  */

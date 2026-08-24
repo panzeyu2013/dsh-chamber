@@ -1,5 +1,5 @@
 /**
- * version-safety.ts 纯逻辑测试（design 16 §4 路径安全）——node:test，无
+ * version-safety.ts 纯逻辑测试（design 18 §4 路径安全）——node:test，无
  * electron。合法 semver（含 prerelease/build）通过；`..`、`/`、`\`、非 semver、
  * 空串拒绝；assertSafeVersion 不安全即 throw（错误信息含原始串）。
  */

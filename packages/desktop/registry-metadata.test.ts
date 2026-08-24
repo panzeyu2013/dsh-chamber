@@ -1,5 +1,5 @@
 /**
- * registry-metadata.ts pure-logic tests (design 16 §4 — abbreviated packument
+ * registry-metadata.ts pure-logic tests (design 18 §4 — abbreviated packument
  * reading) — node:test, no electron, NO real network: a node:http loopback
  * server serves controlled JSON and records the request (URL + Accept
  * header). Covers dist-tags.latest passthrough / max-semver fallback when
@@ -21,7 +21,7 @@ interface ServedRequest {
   accept: string | null;
 }
 
-/** Abbreviated packument fixture (install-v1+json shape, design 16 §4). */
+/** Abbreviated packument fixture (install-v1+json shape, design 18 §4). */
 const fixture = (origin = 'https://registry.npmjs.org') => ({
   'dist-tags': { latest: '0.2.0' },
   versions: {
@@ -68,7 +68,7 @@ async function startRegistryServer(
   };
 }
 
-test('fetchRegistryMetadata: parses the abbreviated packument (design 16 §4)', async () => {
+test('fetchRegistryMetadata: parses the abbreviated packument (design 18 §4)', async () => {
   const registry = await startRegistryServer((_url, origin) => ({ status: 200, body: fixture(origin) }));
   try {
     const metadata = await fetchRegistryMetadata('@deepseek-ai/dsh', { origin: registry.origin });

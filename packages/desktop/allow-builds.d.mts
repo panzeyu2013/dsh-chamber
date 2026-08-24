@@ -1,5 +1,5 @@
 /**
- * Type declaration for allow-builds.mjs (design 16 §4 R3-2 F6/F7, R3-5 P2-3).
+ * Type declaration for allow-builds.mjs (design 18 §4 R3-2 F6/F7, R3-5 P2-3).
  *
  * allow-builds.mjs is the single source of truth for the dsh runtime
  * allowBuilds whitelist, imported by BOTH the build-time bundler

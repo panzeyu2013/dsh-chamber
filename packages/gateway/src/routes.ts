@@ -1,8 +1,8 @@
 /**
  * Feature-host routes (design 17 §8.5): the gateway's own orchestration
  * surface `/chamber/*`, all behind the auth gate (dispatch.ts). Wires the git
- * worktree offload (features/git.ts) and leaves the remaining orchestration
- * features (session index, approvals, cron, settings) as clear placeholders.
+ * worktree offload (features/git.ts), the session index, approvals/questions,
+ * scheduler, settings, notifications, and the browser dashboard.
  *
  * Every route reads/writes gateway-owned state; the authoritative dsh facts
  * come from dsh `/api` through features/git.ts — the gateway never becomes

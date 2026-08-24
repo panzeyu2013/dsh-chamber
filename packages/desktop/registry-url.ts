@@ -1,5 +1,5 @@
 /**
- * npm registry URL whitelist for the dsh runtime version channel (design 16
+ * npm registry URL whitelist for the dsh runtime version channel (design 18
  * §4/§6). The main process only ever fetches from these registry domains —
  * metadata (`/{packageName}`), tarballs (`/{package}/-/{file}.tgz`) and the
  * search endpoint (`/-/v1/search`) — so the trust anchor stays explicit
@@ -9,7 +9,7 @@
  * Same validation structure as main.ts `isAllowedReleaseUrl` (new URL +
  * origin whitelist + userinfo rejection + decode-then-re-normalize), newly
  * written for the registry domain because the GitHub-hardcoded instance is
- * not reusable (design 16 §6). `desktop_npm_search` is folded onto this same
+ * not reusable (design 18 §6). `desktop_npm_search` is folded onto this same
  * gate in the M2 wiring; this module itself is pure logic with no IPC.
  */
 export const ALLOWED_REGISTRY_ORIGINS: readonly string[] = [

@@ -9,7 +9,7 @@
  *   /health                  → fall through (management probe, public)
  *   /auth/login              → auth login (public)
  *   /api/connections, /api/host/*, /api/i/* → fall through (management)
- *   /chamber/*               → feature host (P3; MVP answers 404)
+ *   /chamber/*               → feature host (design 17 §8.5, fully implemented)
  *   /plugins/*, /, /api/*(rest) → gateway-proxy → dsh
  */
 

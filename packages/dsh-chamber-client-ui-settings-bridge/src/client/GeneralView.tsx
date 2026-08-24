@@ -94,7 +94,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   const supported = status?.supported
   const hydrated = status !== null
 
-  // The active dsh runtime version block (design 16 M4) is rendered by
+  // The active dsh runtime version block (design 18 M4) is rendered by
   // DshRuntimeSection below — it reads the runtime surface directly.
 
   return (

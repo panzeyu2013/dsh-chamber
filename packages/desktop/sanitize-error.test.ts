@@ -1,5 +1,5 @@
 /**
- * sanitize-error.ts pure-logic tests (design 16 §6 — extraction of the
+ * sanitize-error.ts pure-logic tests (design 18 §6 — extraction of the
  * updater's redaction) — node:test, no electron. Covers URL survival (the
  * scheme + `//host` part is never swallowed), POSIX absolute-path redaction,
  * Windows drive-path redaction (scheme-like `x://` survives), and plain-text

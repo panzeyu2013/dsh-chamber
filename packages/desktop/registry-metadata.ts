@@ -1,5 +1,5 @@
 /**
- * npm registry metadata reader for the dsh runtime version channel (design 16
+ * npm registry metadata reader for the dsh runtime version channel (design 18
  * §4). Fetches the ABBREVIATED packument (`Accept:
  * application/vnd.npm.install-v1+json` — contains dist-tags.latest and
  * dist.{tarball,integrity,unpackedSize}) for a package and projects it into a

@@ -75,7 +75,7 @@ if (!EXACT_SEMVER.test(VERSION)) {
 }
 
 /** 允许执行安装脚本的依赖（原生模块/编译步骤）——单一来源常量，见
- *  ../allow-builds.mjs（design 16 §4：与运行期安装器编译产物同源）。 */
+ *  ../allow-builds.mjs（design 18 §4：与运行期安装器编译产物同源）。 */
 
 const installed = path.join(dest, 'node_modules', '@deepseek-ai', 'dsh');
 // 平台感知的幂等跳过：node_modules 内含平台原生二进制（node-pty/sharp/ripgrep），

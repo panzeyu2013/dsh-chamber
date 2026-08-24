@@ -27,7 +27,7 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2, 2026-08 修订): confirm before quitting
    *  while the LOCAL dsh instance is running; remote tunnels never prompt. */
   quitConfirmation: boolean
-  /** dsh runtime npm registry origin (design 16 M4): default npmjs; a
+  /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
    *  user-selected mirror/custom origin, validated as an https:// URL with
    *  no userinfo (trust anchor — switching origin switches the trust anchor). */
   registryOrigin: string
@@ -61,7 +61,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'registryOrigin',
 ];
 
-/** Normalize a registry origin (design 16 M4): a valid https:// URL with no
+/** Normalize a registry origin (design 18 M4): a valid https:// URL with no
  *  userinfo, reduced to scheme://host (no path/query/hash, no trailing slash).
  *  Returns null for anything else — the registry origin is a trust anchor, so
  *  invalid input is never silently accepted. */

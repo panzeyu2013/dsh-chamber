@@ -1,5 +1,5 @@
 /**
- * activation-gate.ts 纯逻辑测试（design 16 §3.4 激活门控裁决）——node:test，
+ * activation-gate.ts 纯逻辑测试（design 18 §3.4 激活门控裁决）——node:test，
  * 无 electron、无副作用。覆盖：decideVerdict 全 ok → pass / 窗口内首次 fail →
  * observe / 窗口外 fail → fail / observe 后仍 fail → fail（延迟裁决后再失败
  * 才回退）/ 窗口边界与自定义窗口 / 观察一次后恢复 → pass；rollbackTarget 四

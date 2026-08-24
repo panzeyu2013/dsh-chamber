@@ -1,5 +1,5 @@
 /**
- * apply-phase.ts tests (design 16 §3.3/§3.4) — node:test, injected deps mock
+ * apply-phase.ts tests (design 18 §3.3/§3.4) — node:test, injected deps mock
  * snapshot/switchPointer/probe/restore/markKnownGood. Asserts the activation
  * flow: no-snapshot-no-switch, probe-gated pass/fail, and rollback target.
  */

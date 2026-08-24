@@ -39,7 +39,7 @@ export const REQUIRED_ACTIVATION_PROBES = [
 export interface ProbeResult {
   /** 探针名（如 'host.describe' / 'commands.execute' / 'session-list' …）。 */
   name: string;
-  /** 探针是否通过；false 时建议附 error 说明失败原因（脱敏，design 16 §6）。 */
+  /** 探针是否通过；false 时建议附 error 说明失败原因（脱敏，design 18 §6）。 */
   ok: boolean;
   /** 失败原因（可选；仅在 ok === false 时语义有意义）。 */
   error?: string;

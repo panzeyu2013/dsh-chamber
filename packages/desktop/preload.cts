@@ -196,7 +196,7 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
-  /** dsh runtime npm registry origin (design 16 M4): default npmjs; a
+  /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
    *  user-selected mirror/custom https origin (trust anchor). */
   registryOrigin: string
 }
