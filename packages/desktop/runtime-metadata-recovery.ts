@@ -58,6 +58,15 @@ const RECOVERY_MARKER = 'metadata-recovery.json'
 const RECOVERY_DATA_DIR = 'metadata-recovery-data'
 const RECOVERY_RESCUE_DATA_DIR = 'metadata-recovery-rescue-data'
 const PRIOR_RECOVERY_MARKER_EVIDENCE = 'metadata-recovery.json.prior-corrupt'
+/**
+ * The snapshot restore marker (`dsh-runtime/restore-in-progress`) is
+ * independently authoritative for DSH_HOME transactions. When a restore is
+ * permanently stuck ('incomplete' — the journaled snapshot is missing or
+ * untrustworthy), the metadata-recovery transaction archives the marker as
+ * opaque evidence so the escape can complete; a retryable 'half' restore
+ * still blocks metadata recovery before anything is archived.
+ */
+const RESTORE_MARKER_EVIDENCE = 'restore-in-progress'
 const MAX_RECOVERY_MARKER_PARSE_BYTES = 1024 * 1024
 const STASH_TMP_DIR = '.dsh-home.stash.tmp'
 const STASH_DIR = 'dsh-home.stash'
@@ -225,7 +234,7 @@ export type RecoverRuntimeMetadataResult =
     status: 'already-finalized'
     phase: 'finalized'
     record: RuntimeMetadataRecoveryRecord
-    restoreOutcome: 'none' | 'complete'
+    restoreOutcome: 'none' | 'complete' | 'incomplete'
     error: null
   }
   | {
@@ -239,14 +248,14 @@ export type RecoverRuntimeMetadataResult =
     status: 'probe-failed'
     phase: 'probe-required'
     record: RuntimeMetadataRecoveryRecord
-    restoreOutcome: 'none' | 'complete'
+    restoreOutcome: 'none' | 'complete' | 'incomplete'
     error: string
   }
   | {
     status: 'finalized'
     phase: 'finalized'
     record: RuntimeMetadataRecoveryRecord
-    restoreOutcome: 'none' | 'complete'
+    restoreOutcome: 'none' | 'complete' | 'incomplete'
     error: null
   }
 
@@ -339,7 +348,9 @@ function isSelectionEvidenceBasename(name: string): boolean {
 }
 
 function isEvidenceBasename(name: string): boolean {
-  return name === PRIOR_RECOVERY_MARKER_EVIDENCE || isSelectionEvidenceBasename(name)
+  return name === PRIOR_RECOVERY_MARKER_EVIDENCE
+    || name === RESTORE_MARKER_EVIDENCE
+    || isSelectionEvidenceBasename(name)
 }
 
 function assertRecoveryId(id: string): string {
@@ -1004,7 +1015,7 @@ function sourcePathHash(
 
 function collectEvidence(runtimeDir: string, requireSelectionEvidence = true): string[] {
   const entries = readdirSync(runtimeDir, { withFileTypes: true })
-    .filter(entry => isSelectionEvidenceBasename(entry.name))
+    .filter(entry => isSelectionEvidenceBasename(entry.name) || entry.name === RESTORE_MARKER_EVIDENCE)
     .sort((left, right) => left.name.localeCompare(right.name))
   for (const entry of entries) {
     const source = join(runtimeDir, entry.name)
@@ -1015,7 +1026,9 @@ function collectEvidence(runtimeDir: string, requireSelectionEvidence = true): s
     }
   }
   const names = entries.map(entry => entry.name)
-  if (requireSelectionEvidence && names.length === 0) {
+  // Only selection evidence satisfies the corrupt-metadata report; a lone
+  // restore marker must never manufacture a recovery transaction.
+  if (requireSelectionEvidence && !names.some(isSelectionEvidenceBasename)) {
     throw new Error('corrupt metadata was reported but no archivable evidence file exists')
   }
   return names
@@ -1705,7 +1718,7 @@ function restoreBlockedResult(
 async function probeAndFinalizeMetadataRecovery(
   options: RecoverRuntimeMetadataOptions,
   resumed: ResumeRuntimeMetadataRecoveryResult,
-  restoreOutcome: 'none' | 'complete',
+  restoreOutcome: 'none' | 'complete' | 'incomplete',
 ): Promise<RecoverRuntimeMetadataResult> {
   if (resumed.phase === 'not-needed') {
     return { status: 'not-needed', phase: 'not-needed', record: null, restoreOutcome: 'none', error: null }
@@ -1767,6 +1780,12 @@ async function probeAndFinalizeMetadataRecovery(
  * Full lifecycle wrapper for the explicit corrupt-marker rescue. This is the
  * only high-level API that may replace a malformed regular marker. The ordinary
  * recovery orchestrator below intentionally continues to fail closed.
+ *
+ * A 'half' interrupted restore is transient (retry-restore is the only correct
+ * action) and blocks the rescue before anything is archived. An 'incomplete'
+ * restore — the journaled snapshot is missing or untrustworthy, so no retry
+ * can ever succeed — does not block: the stale restore marker is archived as
+ * opaque evidence with the selection metadata, and the transaction proceeds.
  */
 export async function rescueCorruptMetadataRecoveryMarker(
   options: RecoverRuntimeMetadataOptions,
@@ -1780,7 +1799,7 @@ export async function rescueCorruptMetadataRecoveryMarker(
   await options.stopHost()
   const restoreOutcome: unknown = await options.completeRestore()
   assertRestoreOutcome(restoreOutcome)
-  if (restoreOutcome === 'half' || restoreOutcome === 'incomplete') {
+  if (restoreOutcome === 'half') {
     return restoreBlockedResult(restoreOutcome, null)
   }
 
@@ -1791,6 +1810,13 @@ export async function rescueCorruptMetadataRecoveryMarker(
 /**
  * Main-process convenience orchestrator. The caller supplies lifecycle/probe
  * callbacks, but this module owns every durable phase transition.
+ *
+ * A 'half' interrupted restore is transient: the retry-restore action owns the
+ * scene and the transaction must NOT be archived over it. An 'incomplete'
+ * restore is permanent (the journaled snapshot is missing or untrustworthy, so
+ * no retry can succeed); the transaction proceeds, archiving the stale restore
+ * marker as opaque evidence alongside the selection metadata before the
+ * builtin probe.
  */
 export async function recoverRuntimeMetadata(
   options: RecoverRuntimeMetadataOptions,
@@ -1820,7 +1846,7 @@ export async function recoverRuntimeMetadata(
   await options.stopHost()
   const restoreOutcome: unknown = await options.completeRestore()
   assertRestoreOutcome(restoreOutcome)
-  if (restoreOutcome === 'half' || restoreOutcome === 'incomplete') {
+  if (restoreOutcome === 'half') {
     return restoreBlockedResult(
       restoreOutcome,
       initial.recovery.kind === 'valid' ? initial.recovery.record : null,

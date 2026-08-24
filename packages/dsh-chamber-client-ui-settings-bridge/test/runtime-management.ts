@@ -127,6 +127,17 @@ test('metadata recovery is the sole blocked action and restore retry has priorit
   }), ['retry-restore'], 'restore-half must finish before metadata archival')
   assert.deepEqual(runtimeAllowedActions({
     ...corrupt,
+    canRetryRestore: true,
+    restoreOutcome: 'incomplete',
+  }), ['retry-restore', 'recover-metadata'], 'permanent incomplete restore keeps retry and adds the terminal metadata recovery escape')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    canRetryRestore: true,
+    restoreOutcome: 'incomplete',
+    metadataHealth: 'healthy',
+  }), ['retry-restore'], 'incomplete restore without recoverable metadata keeps only the retry action')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
     metadataHealth: 'healthy',
   }), [], 'a forged capability bit cannot manufacture corrupt metadata')
   assert.deepEqual(runtimeAllowedActions({

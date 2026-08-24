@@ -511,6 +511,77 @@ test('half/incomplete restore blocks before stash creation or evidence archival'
   assert.ok(!existsSync(path.join(f.runtimeDir, 'metadata-recovery-data')))
 })
 
+test('missing-snapshot incomplete restore is recoverable via metadata recovery while half stays blocked', async () => {
+  // 'half' is transient and retryable: the retry-restore action owns the scene
+  // and metadata recovery must not archive over it.
+  const half = fixture()
+  writeSelectionEvidence(half)
+  const blocked = await recoverRuntimeMetadata({
+    baseDir: half.baseDir,
+    dshHome: half.dshHome,
+    builtinVersion: '1.0.0',
+    stopHost: async () => undefined,
+    completeRestore: async () => 'half',
+    probeBuiltin: async () => { throw new Error('probe must not run') },
+  })
+  assert.equal(blocked.status, 'restore-blocked')
+  assert.ok(!existsSync(path.join(half.runtimeDir, 'metadata-recovery-data')))
+
+  // 'incomplete' is permanent (the journaled snapshot is missing or
+  // untrustworthy — no retry can succeed). The recover-metadata path proceeds:
+  // the selection evidence AND the stale restore marker are archived, the
+  // active marker is cleared, and the builtin probe/finalize runs.
+  const incomplete = fixture()
+  const expectedEvidence = writeSelectionEvidence(incomplete)
+  writeFileSync(path.join(incomplete.runtimeDir, 'restore-in-progress'), JSON.stringify({
+    schemaVersion: 1,
+    phase: 'copying',
+    snapshotPath: 'unresolvable-snapshot',
+  }), 'utf8')
+  const result = await recoverRuntimeMetadata({
+    baseDir: incomplete.baseDir,
+    dshHome: incomplete.dshHome,
+    builtinVersion: '1.0.0',
+    stopHost: async () => undefined,
+    completeRestore: async () => 'incomplete',
+    probeBuiltin: async () => ({ ok: true }),
+  })
+  assert.equal(result.status, 'finalized')
+  const paths = pathsFor(incomplete, result.record.id)
+  assert.deepEqual(
+    readdirSync(paths.evidence).sort(),
+    [...expectedEvidence, 'restore-in-progress'].sort(),
+    'selection evidence and the stale restore marker are archived',
+  )
+  assert.ok(
+    !existsSync(path.join(incomplete.runtimeDir, 'restore-in-progress')),
+    'the active restore marker is cleared by the archival',
+  )
+})
+
+test('second-order rescue proceeds past an incomplete restore and archives the stale restore marker', async () => {
+  const f = fixture()
+  const corruptBytes = Buffer.from('{ incomplete-restore-corrupt-marker')
+  writeFileSync(path.join(f.runtimeDir, 'metadata-recovery.json'), corruptBytes)
+  writeFileSync(path.join(f.runtimeDir, 'restore-in-progress'), '{"schemaVersion":1,"phase":"copying"}', 'utf8')
+  const result = await rescueCorruptMetadataRecoveryMarker({
+    baseDir: f.baseDir,
+    dshHome: f.dshHome,
+    builtinVersion: '1.0.0',
+    stopHost: async () => undefined,
+    completeRestore: async () => 'incomplete',
+    probeBuiltin: async () => ({ ok: true }),
+  })
+  assert.equal(result.status, 'finalized')
+  assert.equal(result.record.storageKind, 'marker-rescue')
+  const paths = rescuePathsFor(f, result.record.id)
+  assert.deepEqual(
+    readdirSync(paths.evidence).sort(),
+    ['metadata-recovery.json.prior-corrupt', 'restore-in-progress'],
+  )
+  assert.ok(!existsSync(path.join(f.runtimeDir, 'restore-in-progress')))
+})
+
 test('missing DSH_HOME publishes a valid empty stash before archiving metadata', async () => {
   const f = fixture()
   const missingHome = path.join(f.baseDir, 'never-created-dsh-home')
@@ -994,7 +1065,7 @@ test('second-order restore block makes no rescue transaction and probe failure r
     dshHome: blocked.dshHome,
     builtinVersion: '1.0.0',
     stopHost: async () => undefined,
-    completeRestore: async () => 'incomplete',
+    completeRestore: async () => 'half',
     probeBuiltin: async () => { throw new Error('must not probe') },
   })
   assert.equal(blockedResult.status, 'restore-blocked')

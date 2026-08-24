@@ -176,15 +176,25 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
   if (state.managementSupported === false) return canRetryRestore ? ['retry-restore'] : []
   if (state.runtimeBlocked === true) {
     // An interrupted DSH_HOME restore must complete before selection metadata
-    // can be archived. It is therefore the sole visible action when present.
-    if (canRetryRestore) return ['retry-restore']
+    // can be archived. A retryable 'half' restore is therefore the sole
+    // visible action when present. A permanent 'incomplete' restore (the
+    // journaled snapshot is missing or untrustworthy — no retry can ever
+    // succeed) keeps the retry button but no longer hides the terminal
+    // recover-metadata escape.
+    const permanentIncomplete = state.restoreOutcome === 'incomplete'
+    if (canRetryRestore && !permanentIncomplete) return ['retry-restore']
     const metadataRecoveryEligible = state.canRecoverMetadata === true
       && (state.metadataHealth === 'selection-corrupt'
         || state.metadataHealth === 'recovery-in-progress'
         || state.metadataHealth === 'recovery-marker-corrupt')
       && (state.phase === 'idle' || state.phase === 'failed')
       && state.source !== 'env'
-    if (metadataRecoveryEligible) return ['recover-metadata']
+    if (metadataRecoveryEligible) {
+      return permanentIncomplete && canRetryRestore
+        ? ['retry-restore', 'recover-metadata']
+        : ['recover-metadata']
+    }
+    if (canRetryRestore) return ['retry-restore']
     const actions: RuntimeAction[] = []
     if ((state.phase === 'snapshot-failed' || state.phase === 'failed') && state.canRetryApply === true) {
       actions.push('retry-apply')

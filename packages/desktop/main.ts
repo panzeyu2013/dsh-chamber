@@ -1894,6 +1894,7 @@ if (!gotTheLock) {
     const projectMetadataHealth = (
       phase: Parameters<typeof runtimeInstance.setLifecycle>[0]['phase'],
       canRetryRestore: boolean,
+      restoreOutcome: 'none' | 'complete' | 'half' | 'incomplete',
     ): {
       metadataHealth: RuntimeMetadataHealthProjection
       metadataComponents: RuntimeMetadataComponent[]
@@ -1923,16 +1924,23 @@ if (!gotTheLock) {
       const needsRecovery = health.status === 'selection-corrupt'
         || health.status === 'recovery-in-progress'
         || markerRescueAvailable;
+      // 'incomplete' is a permanent restore outcome: the journaled snapshot is
+      // missing or untrustworthy, so retry-restore can never succeed and the
+      // recover-metadata escape must stay eligible (including when a stale
+      // restore marker from the abandoned transaction is still present). A
+      // 'half' outcome is transient and retryable, so it keeps the retry gate
+      // and the marker gate fully closed.
+      const permanentIncomplete = restoreOutcome === 'incomplete';
       const canRecoverMetadata = needsRecovery
         && (effectivePhase === 'idle' || effectivePhase === 'failed')
-        && !canRetryRestore
+        && (permanentIncomplete || !canRetryRestore)
         && runtimeManagementSupported
         && !envOverrideActive
         && !runtimeBootstrapWriterUnsafe
         && cp.localWritersQuiescent
         && bundledVersion !== null
         && isSafeVersion(bundledVersion)
-        && restoreMarkerAuthorityStatus(runtimeBaseDir) === 'missing';
+        && (permanentIncomplete || restoreMarkerAuthorityStatus(runtimeBaseDir) === 'missing');
       return {
         metadataHealth: health.status,
         metadataComponents: [...components],
@@ -1943,6 +1951,9 @@ if (!gotTheLock) {
       const effectivePhase = patch.phase ?? runtimeInstance.getState().phase;
       const effectiveCanRetryRestore = patch.canRetryRestore
         ?? (runtimeInstance.getState().canRetryRestore === true);
+      const effectiveRestoreOutcome = patch.restoreOutcome
+        ?? runtimeInstance.getState().restoreOutcome
+        ?? 'none';
       const showFailure = effectivePhase === 'failed' || effectivePhase === 'rollback'
         || effectivePhase === 'snapshot-failed' || effectivePhase === 'error';
       let snapshotProjection: Parameters<typeof runtimeInstance.setLifecycle>[0];
@@ -1989,7 +2000,7 @@ if (!gotTheLock) {
         ...patch,
         // These fields are an authoritative main-process projection. A stale
         // lifecycle patch must never manufacture metadata-recovery authority.
-        ...projectMetadataHealth(effectivePhase, effectiveCanRetryRestore),
+        ...projectMetadataHealth(effectivePhase, effectiveCanRetryRestore, effectiveRestoreOutcome),
       });
     };
 
@@ -2205,11 +2216,17 @@ if (!gotTheLock) {
         && override.kind === 'valid'
         && override.record.invalidatedAt != null;
       await refreshRuntimeEvidence({
-        phase: outcome.status === 'rolled-back'
+        // A rolled-back outcome stays in the retryable 'rollback' phase; an
+        // 'incomplete' data restore is permanent (missing/untrustworthy
+        // snapshot — no retry can succeed), so it is a terminal 'failed'
+        // phase where the recover-metadata escape stays eligible.
+        phase: outcome.status === 'rolled-back' && outcome.restoreOutcome !== 'incomplete'
           ? 'rollback'
-          : outcome.status === 'applied' && targetIsBuiltin
-            ? shellFallback ? 'rollback' : 'idle'
-            : outcome.status,
+          : outcome.status === 'rolled-back'
+            ? 'failed'
+            : outcome.status === 'applied' && targetIsBuiltin
+              ? shellFallback ? 'rollback' : 'idle'
+              : outcome.status,
         error,
         targetVersion,
         sourceVersion,
@@ -2317,7 +2334,10 @@ if (!gotTheLock) {
             targetVersion: null,
             sourceVersion: null,
             rollbackTarget: null,
-            restoreOutcome: result.restoreOutcome,
+            // A finalized recovery resolved any interrupted DSH_HOME restore
+            // (the stale marker, if any, was archived as evidence). Do not let
+            // an 'incomplete' outcome linger and keep blocking local start.
+            restoreOutcome: result.restoreOutcome === 'incomplete' ? 'none' : result.restoreOutcome,
             canRetryApply: false,
             canRetryRestore: false,
             canRecoverMetadata: false,
@@ -2782,19 +2802,25 @@ if (!gotTheLock) {
 
     const authoritativeMetadataRecoveryStatus = (): RecoverableMetadataStatus | null => {
       const state = runtimeInstance.getState();
+      // 'incomplete' is a permanent restore outcome (the journaled snapshot is
+      // missing or untrustworthy): retry-restore can never succeed, so the
+      // recover-metadata escape stays eligible even while canRetryRestore is
+      // still advertised and even when a stale restore marker from the
+      // abandoned transaction is still present. 'half' remains transient and
+      // retryable, so it keeps every gate closed.
+      const permanentIncomplete = state.restoreOutcome === 'incomplete';
       if (quitRequested
         || state.runtimeBlocked !== true
         || (state.phase !== 'idle' && state.phase !== 'failed')
-        || state.canRetryRestore === true
+        || (state.canRetryRestore === true && !permanentIncomplete)
         || state.restoreOutcome === 'half'
-        || state.restoreOutcome === 'incomplete'
         || state.source === 'env'
         || state.managementSupported === false
         || runtimeBootstrapWriterUnsafe
         || !cp.localWritersQuiescent
         || bundledVersion === null
         || !isSafeVersion(bundledVersion)
-        || restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') return null;
+        || (!permanentIncomplete && restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing')) return null;
       try {
         const health = detectRuntimeMetadataHealth(runtimeBaseDir);
         if (state.metadataHealth !== health.status) return null;
@@ -2855,7 +2881,8 @@ if (!gotTheLock) {
       if (state.runtimeBlocked === true) {
         if (action === 'retry-restore') return state.canRetryRestore === true
           && (state.phase === 'rollback' || state.phase === 'failed');
-        if (action === 'recover-metadata') return state.canRetryRestore !== true
+        if (action === 'recover-metadata') return (state.canRetryRestore !== true
+            || state.restoreOutcome === 'incomplete')
           && state.canRecoverMetadata === true
           && (state.metadataHealth === 'selection-corrupt'
             || state.metadataHealth === 'recovery-in-progress'
