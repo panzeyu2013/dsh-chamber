@@ -35,15 +35,17 @@ function errorMessage(error: unknown): string {
 }
 
 /** Localize a projected ISO timestamp before it reaches user copy. The locale
- *  plugin keeps `<html lang>` in sync with the active app locale (zh-CN / en),
- *  so it is the stable formatting hint; falls back to the raw value when the
- *  timestamp is unparsable or the formatter rejects the locale. */
+ *  service keeps `<html lang>` in sync at activation and on every locale
+ *  change (dsh-client-locale syncDocumentLanguage); the served markup defaults
+ *  to zh-CN, so an unset lang falls back to zh-CN rather than the OS locale. */
 function formatTimestamp(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  const locale = typeof document !== 'undefined' ? document.documentElement.lang : undefined
+  const locale = typeof document !== 'undefined' && document.documentElement.lang !== ''
+    ? document.documentElement.lang
+    : 'zh-CN'
   try {
-    return new Intl.DateTimeFormat(locale === '' ? undefined : locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+    return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
   } catch {
     return value
   }
