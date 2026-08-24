@@ -845,7 +845,15 @@ export async function restorePreRollback(
       return 'incomplete'
     }
   }
-  return runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
+  const outcome = await runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
+  if (outcome === 'complete') {
+    // The stash has been consumed: its content now lives in DSH_HOME and the
+    // pre-restore data is preserved in dsh-home.old. Remove it so the restore
+    // action disappears and the next manual rollback writes a fresh stash. A
+    // 'half' outcome keeps the stash (the durable marker resumes from it).
+    await rm(stashPath, { recursive: true, force: true }).catch(() => {})
+  }
+  return outcome
 }
 
 /** Return snapshots for an exact source version, newest first. */
