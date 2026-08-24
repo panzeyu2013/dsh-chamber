@@ -29,7 +29,7 @@ import { validateVersionTree } from './dsh-runtime-store.ts'
 import type { RuntimeInstallResolution } from './dsh-runtime-updater.ts'
 import { createIntegrityVerifier, isSupportedIntegrity } from './registry-integrity.ts'
 import { fetchRegistryResponse } from './registry-metadata.ts'
-import { canonicalRegistryOrigin, isAllowedRegistryUrl } from './registry-url.ts'
+import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { assertSafeVersion } from './version-safety.ts'
 
@@ -690,7 +690,7 @@ function assertInstallResolution(resolution: RuntimeInstallResolution): RuntimeI
   if (origin === null || origin !== resolution.registryOrigin) {
     throw new Error(`invalid bound registry origin: ${resolution.registryOrigin}`)
   }
-  if (!isAllowedRegistryUrl(resolution.tarball, [origin])) {
+  if (!isAllowedRegistryUrl(resolution.tarball, registryRedirectOrigins(origin))) {
     throw new Error('bound runtime tarball is outside the registry whitelist')
   }
   if (!isSupportedIntegrity(resolution.integrity)) {
@@ -716,7 +716,7 @@ export async function downloadVerifiedRegistryTarball(
   let file: Awaited<ReturnType<typeof open>> | null = null
   try {
     const { response } = await fetchRegistryResponse(resolution.tarball, {
-      allowedOrigins: [resolution.registryOrigin],
+      allowedOrigins: registryRedirectOrigins(resolution.registryOrigin),
       signal: opts.signal,
       fetchImpl: opts.fetchImpl,
     })

@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ALLOWED_REGISTRY_ORIGINS, canonicalRegistryOrigin, isAllowedRegistryUrl } from './registry-url.ts';
+import { ALLOWED_REGISTRY_ORIGINS, canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts';
 
 test('canonicalRegistryOrigin: accepts exact HTTPS origins and loopback HTTP only', () => {
   assert.equal(canonicalRegistryOrigin('https://registry.npmjs.org/'), 'https://registry.npmjs.org');
@@ -83,4 +83,23 @@ test('isAllowedRegistryUrl: custom origins override the default whitelist', () =
 
 test('ALLOWED_REGISTRY_ORIGINS: design §4 default whitelist', () => {
   assert.deepEqual(ALLOWED_REGISTRY_ORIGINS, ['https://registry.npmjs.org', 'https://registry.npmmirror.com']);
+});
+
+test('registryRedirectOrigins: npmmirror includes its tarball CDN, others do not', () => {
+  assert.deepEqual(
+    registryRedirectOrigins('https://registry.npmmirror.com'),
+    ['https://registry.npmmirror.com', 'https://cdn.npmmirror.com'],
+  );
+  assert.deepEqual(registryRedirectOrigins('https://registry.npmjs.org'), ['https://registry.npmjs.org']);
+  assert.deepEqual(registryRedirectOrigins('https://custom.registry.example'), ['https://custom.registry.example']);
+});
+
+test('isAllowedRegistryUrl: npmmirror CDN tarball passes with the redirect origins', () => {
+  const allowed = registryRedirectOrigins('https://registry.npmmirror.com');
+  assert.equal(
+    isAllowedRegistryUrl('https://cdn.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.1.1-rc.1.tgz', allowed),
+    true,
+  );
+  // The CDN is NOT a metadata source: it is rejected by the default whitelist.
+  assert.equal(isAllowedRegistryUrl('https://cdn.npmmirror.com/@deepseek-ai/dsh'), false);
 });

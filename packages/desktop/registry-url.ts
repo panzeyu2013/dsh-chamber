@@ -17,6 +17,21 @@ export const ALLOWED_REGISTRY_ORIGINS: readonly string[] = [
   'https://registry.npmmirror.com',
 ]
 
+/**
+ * The origins a registry's tarball download may legitimately touch (the
+ * registry itself plus any tarball CDN it redirects to). npmmirror serves
+ * metadata from registry.npmmirror.com but 302-redirects tarball downloads to
+ * its CDN cdn.npmmirror.com; the download's initial-URL check and per-hop
+ * redirect gate must both allow that CDN. Tarball integrity is still enforced
+ * by SRI after download, so the CDN cannot substitute bytes.
+ */
+export function registryRedirectOrigins(origin: string): readonly string[] {
+  if (origin === 'https://registry.npmmirror.com') {
+    return ['https://registry.npmmirror.com', 'https://cdn.npmmirror.com']
+  }
+  return [origin]
+}
+
 /** Canonicalize a registry setting to an exact origin (never a path/query). */
 export function canonicalRegistryOrigin(raw: unknown): string | null {
   if (typeof raw !== 'string' || raw === '') return null

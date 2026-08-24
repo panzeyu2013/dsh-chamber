@@ -17,7 +17,7 @@
  */
 import { EXACT_SEMVER } from './version-safety.ts';
 import type { RegistryMetadata } from './registry-metadata.ts';
-import { canonicalRegistryOrigin, isAllowedRegistryUrl } from './registry-url.ts';
+import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts';
 import { isSupportedIntegrity } from './registry-integrity.ts';
 
 /** Immutable, source-bound input accepted by the runtime installer. */
@@ -48,7 +48,7 @@ export function bindRuntimeInstallResolution(
   if (record === undefined || record.version !== version || !isSupportedIntegrity(record.integrity)) {
     throw new Error(`版本缺少可验证的 tarball integrity：${version}`)
   }
-  if (!isAllowedRegistryUrl(record.tarball, [currentOrigin])) {
+  if (!isAllowedRegistryUrl(record.tarball, registryRedirectOrigins(currentOrigin))) {
     throw new Error(`版本 tarball 不在 registry 白名单：${version}`)
   }
   return Object.freeze({
