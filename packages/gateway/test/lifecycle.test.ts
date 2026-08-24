@@ -177,3 +177,23 @@ test('the programmatic constructor cannot bypass auth or TLS config guards', () 
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
+
+test('the materialized S1 guard is overridable via allowAnonymousExternal', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-anon-'))
+  try {
+    const anonExternal = config(stateDir)
+    anonExternal.plane.host = '0.0.0.0'
+    anonExternal.allowAnonymousExternal = true
+    assert.doesNotThrow(() => createGateway({
+      config: anonExternal,
+      logger: silentLogger,
+      deps: {
+        createPlane: (() => ({})) as never,
+        createProxy: (() => ({})) as never,
+        createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
+      },
+    }))
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})

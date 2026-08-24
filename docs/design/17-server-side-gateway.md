@@ -107,6 +107,9 @@ gateway serve [--host 127.0.0.1|0.0.0.0] [--port 3000]
 - bind host 只允许 `127.0.0.1` 或 `0.0.0.0`；port 必须为 1–65535；
 - 非 loopback bind、配置 `publicOrigin` 或配置 trusted proxy，任一成立即视为外部部署，
   必须有密码或 token；
+- **有界偏差（2026-08，用户决策）**：`--allow-anonymous-external` 显式覆盖上述 S1 门，
+  允许无认证的外部绑定。仅当显式传参才生效（默认仍 fail closed），且启动时打印
+  醒目安全告警；仅限可信网络使用。见 `docs/progress/STATUS.md` 偏差记录；
 - 密码长度 12–1024；token 长度 32–4096 且必须为 visible ASCII；
 - 密码与 token 可以同时启用，不互相遮蔽；
 - `publicOrigin` 必须是无 path/query/userinfo 的 canonical HTTP(S) origin；

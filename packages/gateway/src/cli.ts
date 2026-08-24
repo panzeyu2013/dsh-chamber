@@ -31,6 +31,9 @@ Options:
   --public-origin URL expected public authority (S11: reject unknown Host with 421)
   --trusted-proxy IP exact reverse-proxy peer allowed to supply X-Forwarded-* (repeatable)
   --cors-origin O     extra allowed origin (repeatable)
+  --allow-anonymous-external
+                      allow an externally-reachable bind with NO auth (S1 override;
+                      prints a loud warning — trusted networks only)
   -h, --help          show this help
 
 TLS terminates at a reverse proxy. Configure --public-origin and one or more
@@ -50,13 +53,14 @@ interface ParsedArgs {
   publicOrigin?: string
   trustedProxies: string[]
   corsOrigins: string[]
+  allowAnonymousExternal: boolean
   help: boolean
 }
 
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { corsOrigins: [], trustedProxies: [], help: false }
+  const args: ParsedArgs = { corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, help: false }
   let positional = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -87,6 +91,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--public-origin': args.publicOrigin = takeValue(); break
       case '--trusted-proxy': args.trustedProxies.push(takeValue()); break
       case '--cors-origin': args.corsOrigins.push(takeValue()); break
+      case '--allow-anonymous-external': args.allowAnonymousExternal = true; break
       default: throw new UsageError(`unknown option: ${arg}`)
     }
   }
@@ -139,6 +144,7 @@ async function main(): Promise<number | null> {
       publicOrigin: args.publicOrigin,
       trustedProxies: args.trustedProxies.length === 0 ? undefined : args.trustedProxies,
       corsOrigins: args.corsOrigins,
+      allowAnonymousExternal: args.allowAnonymousExternal,
     }, stateDir, dshWorkspacePath)
   } catch (error) {
     if (error instanceof GatewayConfigError) {

@@ -38,6 +38,10 @@ export interface GatewayConfig {
    * When set, requests with an unrecognized Host are rejected (421). */
   publicOrigin?: string
   tls?: { cert: string; key: string }
+  /** Explicit operator opt-in (design 17 §3.1 S1 deviation): bind externally
+   * with NO authentication. Default false — the S1 exposure guard stays hard.
+   * The CLI surfaces this as --allow-anonymous-external. */
+  allowAnonymousExternal?: boolean
 }
 
 /** Raw config input (CLI flags already resolved by the CLI entry; env fallback
@@ -54,6 +58,7 @@ export interface GatewayConfigInput {
   tlsKey?: string
   publicOrigin?: string
   trustedProxies?: string[]
+  allowAnonymousExternal?: boolean
 }
 
 /** Configuration error (surfaced as exit 2 by the CLI). */
@@ -158,11 +163,15 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   const publicOrigin = publicOriginInput === undefined ? undefined : canonicalOrigin(publicOriginInput, '--public-origin')
   const corsOrigins = [...new Set((input.corsOrigins ?? []).map(canonicalCorsOrigin))]
   const trustedProxies = trustedProxyList(input.trustedProxies)
+  const allowAnonymousExternal = input.allowAnonymousExternal === true
   // S1 (design 17 §11): exposure is a semantic deployment fact, not just the
   // socket bind. A loopback listener behind an explicitly configured public
   // origin or trusted reverse proxy is still public and therefore needs auth.
-  if ((host !== '127.0.0.1' || publicOrigin !== undefined || trustedProxies.length > 0) && kind === 'none') {
-    throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication: pass --ui-password or --api-token')
+  // --allow-anonymous-external is an explicit, loudly-warned operator override
+  // (documented deviation) for trusted networks only.
+  if ((host !== '127.0.0.1' || publicOrigin !== undefined || trustedProxies.length > 0)
+    && kind === 'none' && !allowAnonymousExternal) {
+    throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication: pass --ui-password or --api-token (or --allow-anonymous-external to override)')
   }
   return {
     plane: { port: portRaw, host, stateDir, dshWorkspacePath },
@@ -176,5 +185,6 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     trustedProxies,
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(tlsCert !== undefined && tlsKey !== undefined ? { tls: { cert: tlsCert, key: tlsKey } } : {}),
+    allowAnonymousExternal,
   }
 }

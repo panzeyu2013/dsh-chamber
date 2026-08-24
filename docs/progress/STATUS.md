@@ -55,6 +55,9 @@
   host 尚无原子 session lease，因此
   session.list→Git mutation 的 TOCTOU 只能以 realpath fail-closed + 两次 live check + non-force
   缩小，长期根治需上游原子 guard。PWA/离线/UA 移动轻面明确不在本轮验收。
+  **偏差（2026-08，用户决策）**：新增 `--allow-anonymous-external` 显式开关，允许无认证的
+  外部绑定以覆盖 S1 硬门。默认仍 fail closed；仅在显式传参时放行，并打印醒目安全告警；
+  仅限可信网络。对应实现见 `packages/gateway/src/config.ts` / `index.ts` / `cli.ts`。
 
 - **dsh 运行时版本管理（设计 18，当前判定：M0/M2/M4 done，M1/M3
   partial）**：运行期安装是唯一获取方式（无 Provider B）。主进程将 registry

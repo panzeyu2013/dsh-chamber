@@ -37,6 +37,22 @@ test('S1: loopback behind a public origin or trusted proxy still requires auth',
   )
 })
 
+test('S1 override: --allow-anonymous-external permits an anonymous external bind', () => {
+  const config = parseGatewayConfig({ host: '0.0.0.0', allowAnonymousExternal: true }, STATE, DSH)
+  assert.equal(config.auth.kind, 'none')
+  assert.equal(config.allowAnonymousExternal, true)
+  assert.equal(config.plane.host, '0.0.0.0')
+})
+
+test('S1 override: also permits anonymous loopback behind a public origin or trusted proxy', () => {
+  assert.doesNotThrow(
+    () => parseGatewayConfig({ host: '127.0.0.1', publicOrigin: 'https://gateway.example', allowAnonymousExternal: true }, STATE, DSH),
+  )
+  assert.doesNotThrow(
+    () => parseGatewayConfig({ host: '127.0.0.1', trustedProxies: ['127.0.0.1'], allowAnonymousExternal: true }, STATE, DSH),
+  )
+})
+
 test('0.0.0.0 + api-token resolves kind token', () => {
   const config = parseGatewayConfig({ host: '0.0.0.0', apiToken: TOKEN }, STATE, DSH)
   assert.equal(config.auth.kind, 'token')

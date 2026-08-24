@@ -88,7 +88,7 @@ function validateMaterializedConfig(config: GatewayConfig): void {
     throw new GatewayConfigError(`materialized token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
   }
   if ((config.plane.host !== '127.0.0.1' || config.publicOrigin !== undefined || config.trustedProxies.length > 0)
-    && actualKind === 'none') {
+    && actualKind === 'none' && config.allowAnonymousExternal !== true) {
     throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication')
   }
   if (config.tls !== undefined) {
@@ -99,6 +99,20 @@ function validateMaterializedConfig(config: GatewayConfig): void {
 export function createGateway(options: GatewayOptions): GatewayHandle {
   validateMaterializedConfig(options.config)
   const logger = options.logger ?? console
+  // Loud, unmissable warning for the explicit S1 override (design 17 §3.1
+  // deviation): anonymous external exposure is operator-opted-in.
+  if (options.config.allowAnonymousExternal === true
+    && options.config.auth.kind === 'none'
+    && (options.config.plane.host !== '127.0.0.1'
+      || options.config.publicOrigin !== undefined
+      || options.config.trustedProxies.length > 0)) {
+    logger.warn(
+      'SECURITY WARNING: gateway is externally reachable with NO authentication '
+      + '(--allow-anonymous-external). Any host that can reach this port has full, '
+      + 'unauthenticated access to the managed dsh instance and its orchestration '
+      + 'surface. This overrides design 17 S1 — use only on trusted networks.',
+    )
+  }
   // The gateway store (design 17 §10) owns tokens/jwt-secret + the orchestration
   // docs; auth needs it for the token hash + session secret (S5/S13).
   const store = createGatewayStore(options.config.plane.stateDir, logger)
