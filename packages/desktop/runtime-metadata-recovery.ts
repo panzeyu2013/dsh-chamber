@@ -49,6 +49,7 @@ import {
   type OverrideState,
 } from './dsh-runtime-store.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+import { snapshotPaths } from './snapshot-store.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 
 const PRIVATE_DIR_MODE = 0o700
@@ -187,6 +188,10 @@ export interface ResumeRuntimeMetadataRecoveryOptions {
   baseDir: string
   dshHome: string
   builtinVersion: string
+  /** Current shell version, so the health projection mirrors the startup's
+   *  override-invalidation contract (runtime-startup.ts:349-364). Optional:
+   *  without it the invalidated-override mismatch is not detected. */
+  shellVersion?: string
   operations?: Partial<RuntimeMetadataRecoveryOperations>
 }
 
@@ -922,12 +927,13 @@ export function inspectCorruptMetadataRecoveryMarker(
  * stash/evidence path.
  *
  * A semantically-inconsistent-but-parseable set (e.g. the activation journal's
- * target disagrees with override.pending, or the pre-swap journal is missing
- * while the pointer already advanced to pending) is reported as
- * `selection-corrupt` so the "保留数据并恢复内建" escape stays reachable —
- * otherwise such states hard-block startup with no recovery action.
+ * target disagrees with override.pending, an app-update-invalidated override
+ * mid-transaction, or a rollback journal whose restore snapshot is gone) is
+ * reported as `selection-corrupt` so the "保留数据并恢复内建" escape stays
+ * reachable — otherwise such states hard-block startup with no recovery
+ * action.
  */
-export function detectRuntimeMetadataHealth(baseDir: string): RuntimeMetadataHealth {
+export function detectRuntimeMetadataHealth(baseDir: string, shellVersion?: string): RuntimeMetadataHealth {
   const { runtimeDir } = recoveryRootPaths(baseDir)
   const currentPath = currentPointerPath(baseDir)
   const current: CurrentPointerState = stateForUnsafeExactFile(currentPath) === 'unsafe'
@@ -947,7 +953,7 @@ export function detectRuntimeMetadataHealth(baseDir: string): RuntimeMetadataHea
     || override.kind === 'corrupt'
     || activationJournal.kind === 'corrupt'
     || corruptEvidence.length > 0
-    || detectSemanticMismatch(current, override, activationJournal)
+    || detectSemanticMismatch(baseDir, shellVersion, current, override, activationJournal)
 
   let status: RuntimeMetadataHealthStatus
   if (recovery.kind === 'corrupt') status = 'recovery-marker-corrupt'
@@ -958,32 +964,76 @@ export function detectRuntimeMetadataHealth(baseDir: string): RuntimeMetadataHea
   return { status, current, override, activationJournal, corruptEvidence, recovery }
 }
 
+/** The startup's `journalIsRollbackContinuation` set (runtime-startup.ts:351). */
 const ROLLBACK_CONTINUATION_PHASES = new Set(['rollback-needed', 'restoring', 'restore-complete', 'fallback-builtin'])
+
+/** Phases that actively restore a snapshot on resume (apply-phase.ts). */
+const ACTIVE_RESTORE_PHASES = new Set(['rollback-needed', 'restoring', 'manual-restoring'])
+
+/** Whether the snapshot entry exists as a real, non-symlink directory (mirrors
+ * snapshot-store's published-snapshot identity without following links). */
+function publishedSnapshotEntryExists(baseDir: string, snapshotName: string): boolean {
+  try {
+    const info = lstatSync(join(snapshotPaths(baseDir).snapshotsDir, snapshotName))
+    return info.isDirectory() && !info.isSymbolicLink()
+  } catch {
+    return false
+  }
+}
 
 /**
  * A parseable-but-semantically-inconsistent selection-metadata set that the
- * startup replay cannot resolve (its `journal-mismatch` blocked reason).
- * Mirrors runtime-startup.ts's journal-mismatch conditions, conservatively:
- * only when a non-null override.pending signals an in-flight switch, and only
- * for (a) a missing journal with the pointer already advanced to pending, or
+ * startup replay cannot resolve. Mirrors runtime-startup.ts's blocked reasons,
+ * conservatively:
+ * (a) a missing journal with the pointer already advanced to pending;
  * (b) a valid non-builtin, non-rollback journal whose expected target
- * disagrees with pending.
+ *     disagrees with a non-null pending (journal-mismatch);
+ * (c) an app-update-invalidated override paired with a pre-verdict
+ *     version-switch journal (journal-mismatch, runtime-startup.ts:349-364);
+ * (d) an actively-restoring journal whose restore snapshot is gone —
+ *     the startup blocks 'restore-incomplete' and no retry can succeed.
  */
 function detectSemanticMismatch(
+  baseDir: string,
+  shellVersion: string | undefined,
   current: CurrentPointerState,
   override: OverrideState,
   journal: ActivationJournalState,
 ): boolean {
   const pending = override.kind === 'valid' ? override.record.pending : null
-  if (pending === null || pending === undefined) return false
   if (journal.kind === 'missing') {
-    return current.kind === 'valid' && current.version === pending
+    return pending !== null && current.kind === 'valid' && current.version === pending
   }
-  if (journal.kind !== 'valid' || journal.journal.targetIsBuiltin) return false
-  if (ROLLBACK_CONTINUATION_PHASES.has(journal.journal.phase)) return false
-  const expected = journal.journal.nextIntent !== null && !journal.journal.nextIntent.targetIsBuiltin
-    ? journal.journal.nextIntent.targetVersion
-    : journal.journal.targetVersion
+  if (journal.kind !== 'valid') return false
+  const j = journal.journal
+
+  // (d) A rollback in progress can never finish once its restore snapshot is
+  // gone: manual rollbacks restore manualDataSnapshotName, automatic
+  // rollbacks resolve preSwapSnapshotName (apply-phase.ts resolvePreSwap /
+  // manual-restoring branch).
+  if (ACTIVE_RESTORE_PHASES.has(j.phase)) {
+    const needed = j.phase === 'manual-restoring'
+      ? j.manualDataSnapshotName
+      : j.preSwapSnapshotName
+    if (needed !== null && !publishedSnapshotEntryExists(baseDir, needed)) return true
+  }
+
+  // (c) App update invalidates override + pending; a pre-verdict transaction
+  // from the old shell is never applied under the new contract.
+  if (shellVersion !== undefined
+    && override.kind === 'valid'
+    && (override.record.invalidatedAt != null || override.record.shellVersion !== shellVersion)
+    && j.intentKind === 'version-switch'
+    && !ROLLBACK_CONTINUATION_PHASES.has(j.phase)) {
+    return true
+  }
+
+  if (j.targetIsBuiltin) return false
+  if (ROLLBACK_CONTINUATION_PHASES.has(j.phase)) return false
+  if (pending === null || pending === undefined) return false
+  const expected = j.nextIntent !== null && !j.nextIntent.targetIsBuiltin
+    ? j.nextIntent.targetVersion
+    : j.targetVersion
   return expected !== pending
 }
 
@@ -1564,12 +1614,10 @@ export function resumeMetadataRecoveryCore(
     paths = recoveryPaths(options.baseDir, record.id, record.storageKind)
     ensureRecoveryDirectories(paths)
   } else {
-    const health = detectRuntimeMetadataHealth(options.baseDir)
-    const selectionCorrupt = health.current.kind === 'corrupt'
-      || health.override.kind === 'corrupt'
-      || health.activationJournal.kind === 'corrupt'
-      || health.corruptEvidence.length > 0
-    if (!selectionCorrupt) {
+    const health = detectRuntimeMetadataHealth(options.baseDir, options.shellVersion)
+    // `selection-corrupt` includes the semantic-mismatch classifications —
+    // the live (valid) metadata files are then the archivable evidence.
+    if (health.status !== 'selection-corrupt') {
       return existing.kind === 'valid'
         ? { phase: 'finalized', record: existing.record }
         : { phase: 'not-needed', record: null }
@@ -1822,18 +1870,17 @@ export async function recoverRuntimeMetadata(
   options: RecoverRuntimeMetadataOptions,
 ): Promise<RecoverRuntimeMetadataResult> {
   assertSafeVersion(options.builtinVersion)
-  const initial = detectRuntimeMetadataHealth(options.baseDir)
+  const initial = detectRuntimeMetadataHealth(options.baseDir, options.shellVersion)
   if (initial.recovery.kind === 'corrupt') throw new Error(initial.recovery.error)
-  const selectionCorrupt = initial.current.kind === 'corrupt'
-    || initial.override.kind === 'corrupt'
-    || initial.activationJournal.kind === 'corrupt'
-    || initial.corruptEvidence.length > 0
-  if (initial.recovery.kind === 'missing' && !selectionCorrupt) {
+  // `selection-corrupt` includes the semantic-mismatch classifications (a
+  // stuck restore, an invalidated override, a journal/pending disagreement) —
+  // those states have no corrupt FILE but still need the archiving escape.
+  if (initial.recovery.kind === 'missing' && initial.status !== 'selection-corrupt') {
     return { status: 'not-needed', phase: 'not-needed', record: null, restoreOutcome: 'none', error: null }
   }
   if (initial.recovery.kind === 'valid'
     && initial.recovery.record.phase === 'finalized'
-    && !selectionCorrupt) {
+    && initial.status !== 'selection-corrupt') {
     return {
       status: 'already-finalized',
       phase: 'finalized',

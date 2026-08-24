@@ -1031,7 +1031,7 @@ if (!gotTheLock) {
 
     let startupMetadataHealth: RuntimeMetadataHealth | null = null;
     try {
-      startupMetadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+      startupMetadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, version);
     } catch (error) {
       runtimeBootstrapFailure = `无法检查 dsh 运行时选择元数据：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`;
     }
@@ -1904,7 +1904,7 @@ if (!gotTheLock) {
     } => {
       let health: RuntimeMetadataHealth;
       try {
-        health = detectRuntimeMetadataHealth(runtimeBaseDir);
+        health = detectRuntimeMetadataHealth(runtimeBaseDir, version);
       } catch {
         return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false };
       }
@@ -2288,7 +2288,7 @@ if (!gotTheLock) {
         await publishBlockedStartup('无法确认内建 dsh 运行时版本；拒绝恢复元数据');
         return false;
       }
-      const initialHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+      const initialHealth = detectRuntimeMetadataHealth(runtimeBaseDir, version);
       if (initialHealth.status !== expectedStatus) {
         await publishBlockedStartup('元数据恢复状态已变更；必须重新确认后才能继续');
         return false;
@@ -2313,6 +2313,7 @@ if (!gotTheLock) {
           baseDir: runtimeBaseDir,
           dshHome: localDshHome,
           builtinVersion: bundledVersion,
+          shellVersion: version,
           stopHost: () => cp.stopLocal(),
           completeRestore: () => completeInterruptedRestore(runtimeBaseDir, localDshHome),
           probeBuiltin: async () => {
@@ -2322,7 +2323,7 @@ if (!gotTheLock) {
               : { ok: false as const, error: metadataProbeError(probes) };
           },
         };
-        const health = detectRuntimeMetadataHealth(runtimeBaseDir);
+        const health = detectRuntimeMetadataHealth(runtimeBaseDir, version);
         if (health.status !== expectedStatus) {
           await publishBlockedStartup('元数据恢复状态在执行前发生变化；本地实例继续隔离');
           return false;
@@ -2437,7 +2438,7 @@ if (!gotTheLock) {
 
         let metadataHealth: RuntimeMetadataHealth;
         try {
-          metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+          metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, version);
         } catch (error) {
           await publishBlockedStartup(`无法检查 dsh 运行时选择元数据：${error instanceof Error ? error.message : String(error)}`);
           return null;
@@ -2475,7 +2476,7 @@ if (!gotTheLock) {
               });
               return null;
             }
-            metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+            metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, version);
           }
           if (metadataHealth.status === 'selection-corrupt') {
             await publishBlockedStartup('运行时选择元数据损坏；已保留证据并等待用户确认“保留数据并恢复内建”', {
@@ -2499,7 +2500,7 @@ if (!gotTheLock) {
               });
               return null;
             }
-            metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir);
+            metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, version);
           }
           if (metadataHealth.status === 'recovery-marker-corrupt') {
             const capability = inspectCorruptMetadataRecoveryMarker(runtimeBaseDir);
@@ -2826,7 +2827,7 @@ if (!gotTheLock) {
         || !isSafeVersion(bundledVersion)
         || (!permanentIncomplete && restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing')) return null;
       try {
-        const health = detectRuntimeMetadataHealth(runtimeBaseDir);
+        const health = detectRuntimeMetadataHealth(runtimeBaseDir, version);
         if (state.metadataHealth !== health.status) return null;
         if (health.status === 'selection-corrupt' || health.status === 'recovery-in-progress') {
           return health.status;

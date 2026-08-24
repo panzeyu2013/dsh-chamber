@@ -219,6 +219,68 @@ test('detect health leaves a consistent pending state healthy', () => {
   assert.equal(health.status, 'healthy')
 })
 
+function writeRestoringJournal(f: Fixture, preSwapSnapshotName: string): void {
+  writeFileSync(path.join(f.runtimeDir, 'activation-journal.json'), JSON.stringify({
+    schemaVersion: 1,
+    phase: 'restoring',
+    targetVersion: '1.0.0',
+    targetIsBuiltin: false,
+    manualRollback: false,
+    intentKind: 'version-switch',
+    sourceVersion: '2.0.0',
+    sourceIsBuiltin: false,
+    sourceWasKnownGood: false,
+    knownGoodVersion: null,
+    preSwapSnapshotName,
+    manualDataSnapshotName: null,
+    preRollbackStashName: null,
+    rollbackTarget: '1.0.0',
+    nextIntent: null,
+    startedAt: '2026-08-24T00:00:00.000Z',
+    updatedAt: '2026-08-24T00:00:00.000Z',
+  }), 'utf8')
+}
+
+test('detect health flags a restoring journal whose restore snapshot is gone', () => {
+  const f = fixture()
+  writeFileSync(path.join(f.runtimeDir, 'current'), JSON.stringify({ version: '2.0.0' }), 'utf8')
+  writePendingOverride(f, '1.0.0')
+  // The journal references a pre-swap snapshot that does not exist: the
+  // restore can never complete (startup blocks 'restore-incomplete').
+  writeRestoringJournal(f, '2.0.0-1700000000000')
+
+  const health = detectRuntimeMetadataHealth(f.baseDir)
+  assert.equal(health.status, 'selection-corrupt')
+})
+
+test('detect health leaves a restoring journal healthy while its snapshot exists', () => {
+  const f = fixture()
+  writeFileSync(path.join(f.runtimeDir, 'current'), JSON.stringify({ version: '2.0.0' }), 'utf8')
+  writePendingOverride(f, '1.0.0')
+  writeRestoringJournal(f, '2.0.0-1700000000000')
+  mkdirSync(path.join(f.runtimeDir, 'snapshots', '2.0.0-1700000000000'), { recursive: true, mode: 0o700 })
+
+  const health = detectRuntimeMetadataHealth(f.baseDir)
+  assert.equal(health.status, 'healthy')
+})
+
+test('detect health flags an app-update-invalidated override mid-transaction', () => {
+  const f = fixture()
+  writeFileSync(path.join(f.runtimeDir, 'current'), JSON.stringify({ version: '1.0.0' }), 'utf8')
+  // Override written by the OLD shell (0.1.4), journal still mid-transaction.
+  writeFileSync(path.join(f.runtimeDir, 'override.json'), JSON.stringify({
+    shellVersion: '0.1.4',
+    chosenVersion: '2.0.0',
+    resolvedVersion: '2.0.0',
+    pending: '2.0.0',
+    swapAttempted: false,
+  }), 'utf8')
+  writeValidPreparedJournal(f, '2.0.0')
+
+  assert.equal(detectRuntimeMetadataHealth(f.baseDir).status, 'healthy', 'without the shell version the invalidation is unknowable')
+  assert.equal(detectRuntimeMetadataHealth(f.baseDir, '0.1.5').status, 'selection-corrupt', 'a newer shell invalidates the old transaction')
+})
+
 test('full recovery stashes DSH_HOME, preserves every metadata byte, probes, and finalizes', async () => {
   const f = fixture()
   const expectedEvidence = writeSelectionEvidence(f)
