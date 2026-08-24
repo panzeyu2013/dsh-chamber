@@ -9,7 +9,7 @@
 import {
   archiveSession, chamberBridge, createSession, createWorkspace, deleteWorkspace,
   insertWorkspaceBefore, renameWorkspace,
-  clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
+  clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
   fetchInstanceSnapshot, getInstanceClient, InstanceRpcError,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { GitActionLedger } from './action-ledger.ts'
@@ -164,6 +164,11 @@ function publishWorkspaceGitFlags(
   }
   retainSourceWorkspaceFlags(sourceId, keep)
   setSourceRepoLayouts(sourceId, layouts)
+  // 2026-10 review (design 06 §2.4): the snapshot (even an empty one) is
+  // the source's identity resolution — the sidebar gates the workspace
+  // accent on this so a git workspace never first renders an independent
+  // hue that later flips to its family hue (one-time startup flash).
+  markSourceGitFlagsLoaded(sourceId)
 }
 
 function connectedSource(sourceId: string): boolean {

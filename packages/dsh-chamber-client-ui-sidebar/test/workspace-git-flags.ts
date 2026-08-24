@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion,
-  retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
+  isSourceGitFlagsLoaded, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
 } from '../src/shared/workspace-git-flags.ts'
 
 test('set/clear + version counter bumps on change only', () => {
@@ -47,4 +47,19 @@ test('repo layouts publish + clear with the source', () => {
   assert.equal(getWorkspaceGitFlagsVersion(), v, 'identical layouts do not bump')
   clearWorkspaceGitFlags('s')
   assert.equal(getSourceRepoLayouts('s').length, 0)
+})
+
+test('git-flags-loaded marker: per-source, idempotent, reset on clear (2026-10, F4)', () => {
+  const v0 = getWorkspaceGitFlagsVersion()
+  assert.equal(isSourceGitFlagsLoaded('s'), false, 'not loaded by default')
+  markSourceGitFlagsLoaded('s')
+  assert.equal(isSourceGitFlagsLoaded('s'), true)
+  assert.ok(getWorkspaceGitFlagsVersion() > v0, 'mark bumps the version (sidebar re-renders)')
+  const v1 = getWorkspaceGitFlagsVersion()
+  markSourceGitFlagsLoaded('s')
+  assert.equal(getWorkspaceGitFlagsVersion(), v1, 're-mark is a no-op (idempotent)')
+  assert.equal(isSourceGitFlagsLoaded('other'), false, 'marker is per-source')
+  clearWorkspaceGitFlags('s')
+  assert.equal(isSourceGitFlagsLoaded('s'), false, 'disconnect/clear resets the marker (reconnect re-gates)')
+  assert.ok(getWorkspaceGitFlagsVersion() > v1, 'reset bumps')
 })

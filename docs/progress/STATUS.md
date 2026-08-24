@@ -29,6 +29,18 @@
   `verify:i18n` 全绿；另经两轮独立 subagent 审查（正确性 + 设计一致性）
   并修复：header 键盘劫持（P1）、跨 ctx 提交竞态与 ESC 取消落盘（P2）、
   session/workspace 提交消失源守卫对齐（P2）。
+  **2026-10 review 修复（F1–F5）**：① ESC 取消守卫对 dragend 时
+  `dataTransfer` 为 null（Safari 曾有）同样视为取消（06 §2.4）；
+  ② server 拖拽指针离开全部 section 即清除 marker、**列表外释放 =
+  取消**（会话/workspace 保持 §2.2"drop/end 提交最后 marker"不变——
+  整组位移影响面大故收窄）；③ header 拖拽手势起始于任意 button 时
+  dragstart 取消拖拽（按钮保持纯点击，>4px 微拖不吞折叠点击）；
+  ④ workspace accent 在来源 git 快照发布前不渲染（消除启动瞬间
+  "独立色→家族色"闪变，`isSourceGitFlagsLoaded` 门控，06 §4 accent
+  条）；⑤ 来源头折叠/搜索按钮补自身 title（不再继承 header 的
+  "切换到该实例"）。验证：typecheck:sidebar/git、test:sidebar（含
+  workspace-git-flags 新增 loaded 标记用例）、test:git、
+  build:renderer、verify:i18n。
 - **VS Code 深链插件（设计 16，M0–M2 已实现，2026-08；独立复核/实机验收进行中）**：
   `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
   实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：
@@ -595,7 +607,10 @@
   选中态不编码于图标——当前会话行自带官方选中 tint（原
   `.groupContainsCurrent .foldToggle` 源 accent 规则移除）。纯函数
   `workspaceAccentStyle`/`hashString`（shared/derive.ts），无持久化、
-  无配置 UI、无新增订阅；未分组桶无 accent 回退默认墨色。
+  无配置 UI、无新增订阅；未分组桶无 accent 回退默认墨色。**2026-10
+  review（F4）**：来源首个 git 快照发布前 accent 一律不渲染（默认
+  ink）——消除启动瞬间"独立色→家族色"闪变（`isSourceGitFlagsLoaded`
+  门控；加载标记与 flags 同订阅、同 version，无新增订阅）。
 - **设置桥 keyed 插槽（2026-08）**：bridge-outlet 现支持 root+keyed（`settings.plugin.item`，
   镜像官方 scoped-slots 契约，entryKey 分发 + fallback），修复 Plugins 页黑屏；所有桥接出口
   （本地专属 `settings.action` + 选中实例 `settings.section` 内容出口）在 child-ctx → host

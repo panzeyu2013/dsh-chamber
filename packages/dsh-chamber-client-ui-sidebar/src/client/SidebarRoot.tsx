@@ -132,7 +132,7 @@ import {
   clearSourceBookkeeping, getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
 } from '../shared/view-prefs.ts'
 import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
-import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags, type RepoGitLayout } from '../shared/workspace-git-flags.ts'
+import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags, type RepoGitLayout } from '../shared/workspace-git-flags.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
@@ -770,7 +770,33 @@ export function SidebarRoot({
   // drop; the flag set on dragstart (and cleared a tick after dragend) keeps
   // that click from opening the session the row no longer represents (P2-8).
   const suppressClickRef = useRef(false)
+  // 2026-10 review (F3): whether the CURRENT pointer press started on a
+  // header BUTTON. dragstart's `target` is the drag SOURCE (the header),
+  // not the pressed element, so the press target is recorded on pointerdown
+  // and consulted on dragstart — a gesture that began on a button (fold /
+  // sort / add-workspace / search / + / kebab / git actions) must never
+  // initiate a header drag: a >4px micro-drag on the fold toggle would
+  // swallow its click.
+  const dragPressOnButtonRef = useRef(false)
   useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null || serverDrag !== null)
+
+  // 2026-10 review (F2, docs/todo/server-drag-sort.md): while a SERVER drag
+  // is active, a pointer outside every source section clears the insert
+  // marker — releasing outside the list cancels instead of committing the
+  // last hovered marker. Session/workspace drags KEEP the §2.2 semantics
+  // (release-outside commits); the server drag moves a WHOLE group, so the
+  // blast radius warrants the stricter rule. Only the boolean flips the
+  // effect; the functional updater keeps the closure stale-free.
+  useEffect(() => {
+    if (serverDrag === null) return
+    const clearMarkerOutsideSections = (event: DragEvent): void => {
+      if (!(event.target instanceof Element)) return
+      if (event.target.closest('[data-chamber-section]') !== null) return
+      setServerDrag(current => (current === null || current.over === null ? current : { ...current, over: null }))
+    }
+    document.addEventListener('dragover', clearMarkerOutsideSections)
+    return () => document.removeEventListener('dragover', clearMarkerOutsideSections)
+  }, [serverDrag === null])
 
   // chamber (2026-08 review fix, design 06 §2.2): blank-row GHOST slot — the
   // local grace clock that bounds how long a departed blank "new session" row
@@ -1625,6 +1651,10 @@ export function SidebarRoot({
                 )}
                 role="group"
                 aria-label={server.label}
+                // 2026-10 review (F2): identifies a source SECTION for the
+                // server-drag outside-list cancel (document dragover scope
+                // check) — any descendant counts as "inside the list".
+                data-chamber-section={server.id}
                 // The fold state's a11y surface is the fold BUTTON's own
                 // aria-expanded (the group carries no expand semantics — a
                 // focusable button is the operable, announced control).
@@ -1667,7 +1697,26 @@ export function SidebarRoot({
                   // the header (or its buttons) must not fire a spurious
                   // activate/toggle/action.
                   draggable
+                  onPointerDown={(event) => {
+                    // F3 (review 2026-10): record whether the press started
+                    // on a header BUTTON. dragstart's target is the drag
+                    // SOURCE (the header itself), not the pressed element, so
+                    // the press target must be captured here, at pointerdown.
+                    dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
+                  }}
                   onDragStart={(event) => {
+                    // F3 (review 2026-10): a gesture that STARTED on a header
+                    // button (fold / sort / add-workspace / search) aborts the
+                    // drag initiation — buttons are click affordances, a >4px
+                    // micro-drag on the fold toggle must not swallow its click
+                    // (the click then fires normally on release). Dragging
+                    // from the header's non-button area is unaffected.
+                    if (dragPressOnButtonRef.current) {
+                      dragPressOnButtonRef.current = false
+                      event.preventDefault()
+                      return
+                    }
+                    dragPressOnButtonRef.current = false
                     event.dataTransfer.effectAllowed = 'move'
                     event.dataTransfer.setData('text/plain', server.id)
                     suppressClickRef.current = true
@@ -1675,12 +1724,17 @@ export function SidebarRoot({
                     setServerDrag({ sourceId: server.id, over: null })
                   }}
                   onDragEnd={(event) => {
-                    // P2 (review 2026-09): an ESC-cancelled drag must not
-                    // persist the last marker — dropEffect 'none' means the
-                    // user explicitly cancelled (the section onDrop path is
-                    // unaffected: a real drop commits there first, and the
-                    // serverDropCommitted guard makes this no-op).
-                    if (serverDrag !== null && serverDrag.over !== null && event.dataTransfer?.dropEffect !== 'none') {
+                    // P2 (review 2026-09) + F1 (review 2026-10): an
+                    // ESC-cancelled drag must not persist the last marker —
+                    // dropEffect 'none' means the user explicitly cancelled.
+                    // F1: a NULL dataTransfer at dragend (Safari has done
+                    // this) must also count as cancelled — with `?.` alone,
+                    // undefined !== 'none' would wrongly commit. The section
+                    // onDrop path is unaffected: a real drop commits there
+                    // first, and the serverDropCommitted guard makes this
+                    // no-op.
+                    if (serverDrag !== null && serverDrag.over !== null
+                      && event.dataTransfer !== null && event.dataTransfer.dropEffect !== 'none') {
                       commitServerDrag(serverDrag, serverDrag.over)
                     } else {
                       setServerDrag(null)
@@ -1723,6 +1777,10 @@ export function SidebarRoot({
                     className={clsx(cc.sourceFoldToggle, sourceFolded && cc.sourceFoldToggleFolded)}
                     aria-label={sourceFolded ? t('server.expand') : t('server.collapse')}
                     aria-expanded={!sourceFolded}
+                    // F5 (review 2026-10): own tooltip — without it the
+                    // header's inherited title ("切换到该实例") would show on
+                    // hover, semantically misleading for a fold toggle.
+                    title={sourceFolded ? t('server.expand') : t('server.collapse')}
                     onClick={(event) => {
                       event.stopPropagation()
                       if (suppressClickRef.current) return
@@ -1853,6 +1911,10 @@ export function SidebarRoot({
                         type="button"
                         className={cc.searchButton}
                         aria-label={t('search.sessions.aria')}
+                        // F5 (review 2026-10): own tooltip like the sibling
+                        // sort/add buttons — the header's inherited title
+                        // ("切换到该实例") must not show on this button.
+                        title={t('search.sessions.aria')}
                         aria-expanded={search?.expanded === true}
                         ref={(node) => { searchButtons.current[server.id] = node }}
                         onClick={(event) => {
@@ -2043,6 +2105,17 @@ export function SidebarRoot({
                           // also seeds the per-workspace icon accent (family
                           // hue for worktree/main workspaces).
                           const gitFlag = getWorkspaceGitFlag(server.id, workspace.id)
+                          // F4 (review 2026-10, design 06 §2.4): the accent
+                          // is gated on the source's git identity being
+                          // RESOLVED (first snapshot published) — until then
+                          // a git workspace would first render an independent
+                          // hue that later flips to its family hue (the
+                          // one-time startup flash). Default ink renders
+                          // instead; every workspace settles to its FINAL
+                          // color at the same identity-resolve moment.
+                          const workspaceAccent = isSourceGitFlagsLoaded(server.id)
+                            ? workspaceAccentStyle(server.id, workspace.id, gitFlag)
+                            : undefined
                           const isWorktree = gitFlag?.isWorktree === true
                           const sessions = sessionsOf(workspace)
                           // chamber (third-wave review, R2-1#4): sessionsOf
@@ -2083,7 +2156,7 @@ export function SidebarRoot({
                               // current-session row carries its own official
                               // selected tint); undefined for the ungrouped
                               // bucket, so CSS falls back to the default ink.
-                              style={workspaceAccentStyle(server.id, workspace.id, gitFlag)}
+                              style={workspaceAccent}
                               data-chamber-row={workspaceKey}
                               role="treeitem"
                               aria-expanded={!folded}
@@ -2114,9 +2187,29 @@ export function SidebarRoot({
                                   value: workspace.title,
                                 })
                               }}
+                              onPointerDown={workspace.ungrouped === true
+                                ? undefined
+                                : (event) => {
+                                  // F3 (review 2026-10): same press-target
+                                  // guard as the source header — a gesture
+                                  // that STARTED on a workspace-header button
+                                  // (fold / orphan badge / git actions / + /
+                                  // kebab) never initiates the workspace drag
+                                  // (a >4px micro-drag on the fold toggle must
+                                  // not swallow its click).
+                                  dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
+                                }}
                               onDragStart={workspace.ungrouped === true
                                 ? undefined
                                 : (event) => {
+                                  // F3: abort drags that began on a button —
+                                  // buttons stay pure click affordances.
+                                  if (dragPressOnButtonRef.current) {
+                                    dragPressOnButtonRef.current = false
+                                    event.preventDefault()
+                                    return
+                                  }
+                                  dragPressOnButtonRef.current = false
                                   event.dataTransfer.effectAllowed = 'move'
                                   event.dataTransfer.setData('text/plain', workspace.id)
                                   // Workspace-header drags must suppress the

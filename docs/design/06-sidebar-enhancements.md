@@ -106,6 +106,12 @@
   dragover/drop preventDefault（官方 `useNativeDragAcceptance` 移植）——
   拖出列表外不表现为拒绝；行半区（上/下半）即 marker 词汇
   （`rowHalf`：clientY 与行中线比较）。
+- **拖柄排除按钮（2026-10 review，F3）**：workspace/source header 的
+  pointerdown 落在 header 内任意 button（折叠 / 排序 / 加工作区 / 搜索 /
+  `+` / kebab / git 行内动作）上时，dragstart 即 preventDefault 取消拖拽
+  （dragstart 的 target 是拖柄本身，故按压目标在 pointerdown 记录）——
+  按钮保持纯点击语义，>4px 微拖不吞点击。会话行拖拽不受影响（行内动作
+  沿用尾随 click 抑制）。
 - **状态机**（SidebarRoot 本地）：
   `SessionDragState { sourceId, accountKey, sessionId, over: { id, half } | null }`、
   `WorkspaceDragState { sourceId, workspaceId, over }`。
@@ -209,6 +215,14 @@
   orderBy 同规则）。**2026-09 review 收窄**：dragend 时
   `dropEffect === 'none'`（ESC 取消）不提交最后 marker——§2.2"drop/end
   提交最后 marker"在来源级收窄为"仅非取消的结束提交"（取消即放弃）。
+  **2026-10 review 再收窄（F1/F2）**：① dragend 时 `dataTransfer` 为
+  null（Safari 曾有该行为）同样视为取消——null 无法读取 dropEffect，
+  `?.` 会把 `undefined !== 'none'` 误判为已提交（ESC 取消仍落盘）；
+  ② 拖拽期间指针离开所有来源 section（document 级 dragover 目标不在
+  `[data-chamber-section]` 内）即清除 marker——**列表外释放 = 取消**，
+  不提交最后悬停 marker。会话/workspace 拖拽保持 §2.2"drop/end 提交
+  最后 marker"语义不变（来源级拖拽移动整个分组、影响面大，故收窄；
+  ESC 仍由 ① 覆盖）。
 
 ## 3. 视图偏好持久化
 
@@ -507,8 +521,11 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   步进 mod 360，明度 = 44/49/54%（第二哈希抖动，近色相兜底）；家族种子
   = `repoKey`（worktree 与主检出共享家族色相，主检出未注册/改名不漂移；
   `mainWorkspaceId` 仅为无 repoKey 时的回退），worktree 降饱和 45%、
-  主检出/普通 workspace 62%；未分组桶无 accent 回退 caption ink。无用户
-  自定义、无持久化、**与选中态无关**（纯函数 `workspaceAccentStyle`，
+  主检出/普通 workspace 62%；未分组桶无 accent 回退 caption ink。
+  **2026-10 review（F4）**：来源首个 git 快照发布前 accent 一律不渲染
+  （默认 ink）——git workspace 不会先出现独立色相再闪变为家族色相（启动
+  瞬间的一次性闪变）；`isSourceGitFlagsLoaded` 后整源一次性落定最终色。
+  无用户自定义、无持久化、**与选中态无关**（纯函数 `workspaceAccentStyle`，
   shared/derive.ts；当前会话指示完全由 session 行官方 selected tint 承担）。
 - **当前会话高亮（对齐官方 selected 处理）**：session 行 = 官方
   `.sessionRow.selected` 的浅 `interactive-bg-hover` 色调（无 inset 阴影、

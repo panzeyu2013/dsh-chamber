@@ -2,6 +2,12 @@
 
 > 状态：**已实现（2026-09，方案 1）**——见 `docs/progress/STATUS.md`
 > （server 折叠 + 显示序拖拽）。记录于 2026-08-16。
+>
+> 2026-10 review 收窄（F1/F2，契约见 06 §2.4）：ESC 取消守卫对 dragend
+> 时 `dataTransfer` 为 null（Safari 曾有）同样视为取消；拖拽期间指针离开
+> 所有来源 section 即清除 marker——**列表外释放 = 取消**（整组位移影响面
+> 大，故比 §2.2"drop/end 提交最后 marker"严格）；header 按钮上起手的
+> 拖拽手势不启动拖拽（F3，按钮保持纯点击）。
 
 ## 动机
 
