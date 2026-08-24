@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Design 17 macOS packaged-runtime acceptance smoke.
+ * Design 18 macOS packaged-runtime acceptance smoke.
  *
  * Usage:
  *   node runtime-mac-packaged-smoke.mjs [--app /path/to/dsh-chamber.app]

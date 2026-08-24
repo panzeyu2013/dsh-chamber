@@ -1,5 +1,5 @@
 /**
- * Design 17 runtime renderer policy tests: full state/action/copy matrix,
+ * Design 18 runtime renderer policy tests: full state/action/copy matrix,
  * SemVer 2.0 precedence, local-spawn applying gate, and the page-wide bridge
  * subscription/hydration race.
  */

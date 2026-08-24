@@ -1,4 +1,4 @@
-/** Design 17 §3.4 sustained-health known-good promotion monitor. */
+/** Design 18 §3.4 sustained-health known-good promotion monitor. */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'

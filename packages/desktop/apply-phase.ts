@@ -1,5 +1,5 @@
 /**
- * Design 17 activation transaction. The pre-swap snapshot and immutable
+ * Design 18 activation transaction. The pre-swap snapshot and immutable
  * source facts are journaled before the current pointer is touched. Re-entry
  * resumes from that journal instead of creating a second, post-migration
  * snapshot.

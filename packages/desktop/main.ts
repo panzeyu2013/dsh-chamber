@@ -1817,7 +1817,7 @@ if (!gotTheLock) {
     }));
     updater.start();
 
-    // Design 17 runtime management: registry/install state and the startup
+    // Design 18 runtime management: registry/install state and the startup
     // activation transaction publish through one controller projection.
     const pnpmEntry = app.isPackaged
       ? path.join(process.resourcesPath, 'pnpm', 'bin', 'pnpm.cjs')

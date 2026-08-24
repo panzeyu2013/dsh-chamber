@@ -1,5 +1,5 @@
 /**
- * Design 17 runtime disk data plane. Pure Node, baseDir-injected, no Electron.
+ * Design 18 runtime disk data plane. Pure Node, baseDir-injected, no Electron.
  *
  * Security/data invariants:
  * - metadata writes are atomic, files 0600 and containing directories 0700;

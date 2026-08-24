@@ -1,5 +1,5 @@
 /**
- * Design 17 §3.4 F7 planner for a delayed crash (`restart-exhausted`).
+ * Design 18 §3.4 F7 planner for a delayed crash (`restart-exhausted`).
  *
  * This module deliberately performs no process, pointer, snapshot, or store
  * effect. It turns the durable `applied-monitoring` journal into a

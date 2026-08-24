@@ -1,5 +1,5 @@
 /**
- * Design 17 activation probes. This module owns the real, read-only probe
+ * Design 18 activation probes. This module owns the real, read-only probe
  * list while keeping the control-plane wire injectable for hermetic tests.
  */
 import { constants } from 'node:fs'

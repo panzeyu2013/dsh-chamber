@@ -1,4 +1,4 @@
-/** Design 17 §3.4 F7 durable rollback-planner tests. */
+/** Design 18 §3.4 F7 durable rollback-planner tests. */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'

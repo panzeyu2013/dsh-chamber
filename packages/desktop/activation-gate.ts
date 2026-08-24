@@ -21,7 +21,7 @@
 /**
  * The activation contract is deliberately closed. An empty/partial probe
  * list must never become a vacuous success when a caller forgets to wire one
- * of the Design 17 compatibility checks.
+ * of the Design 18 compatibility checks.
  */
 export const REQUIRED_ACTIVATION_PROBES = [
   'host.describe',

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Hermetic Design 17 runtime-install acceptance harness.
+ * Hermetic Design 18 runtime-install acceptance harness.
  *
  * The only network endpoint is a loopback node:http registry. The harness
  * packs a dependency-free @deepseek-ai/dsh fixture locally, serves an

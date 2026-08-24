@@ -1,5 +1,5 @@
 /**
- * Design 17 startup transaction. Reaper has completed and public local-host
+ * Design 18 startup transaction. Reaper has completed and public local-host
  * starts remain gated while this module completes restore/journal recovery.
  */
 import { applyPendingVersion, beginDelayedRollback, type ApplyOutcome } from './apply-phase.ts'

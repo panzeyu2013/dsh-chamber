@@ -1,5 +1,5 @@
 /**
- * Design 17 corrupt runtime-selection metadata recovery.
+ * Design 18 corrupt runtime-selection metadata recovery.
  *
  * This module is deliberately Electron/IPC free. The only path inputs are the
  * main-process-owned userData base directory and DSH_HOME; evidence and stash

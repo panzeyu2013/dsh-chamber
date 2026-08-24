@@ -1,5 +1,5 @@
 /**
- * Design 17 registry SRI unit tests: parse/strength rules of registry-integrity.ts.
+ * Design 18 registry SRI unit tests: parse/strength rules of registry-integrity.ts.
  *
  * The acceptance harness (runtime-fake-registry-acceptance.mjs) proves the
  * happy-path SRI on a real tarball; these hermetic cases pin the parser's
