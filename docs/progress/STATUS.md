@@ -6,6 +6,29 @@
 
 ## 未完成 / 待执行
 
+- **来源级收拢 + server 拖拽排序（2026-09，todo/server-drag-sort.md 方案 1，已实现）**：
+  侧边栏 server 分组两处增强——① **来源级收拢**：来源头左侧折叠开关
+  （workspace 同款 folder↔chevron 的 hover 槽位互换），点击收拢该来源
+  **整个 workspace 列表**（搜索胶囊 / 来源级 git 告警 / 列表一并隐藏），
+  **刻意不动各 workspace 自身的对话折叠态**（用户明确规则：不要折叠
+  workspace 中的对话），展开后各 workspace 及其会话原样恢复；② **server
+  拖拽排序**：来源头为拖柄，section 边界 drop marker（`dropBefore`/
+  `dropAfter`），提交写入共享 view-prefs 的 `serverOrder`
+  （`dsh-chamber.sidebar.v1`，localStorage 持久化 + 跨 ctx 实时联动）——
+  **纯显示偏好**：无 wire、App 层 N-ctx 常驻/预热/注册表顺序不动（导航按
+  id 键控，与顺序无关）；`orderServersForDisplay` 纯函数应用（存储序优先 +
+  未知 id 跳过 + 未列出 id 按投影序尾随），rail 圆点同序。两字段
+  （`sourceFolded`/`serverOrder`）均可选，v 保持 1 不重播种，写时裁剪同
+  orderBy 规则（本会话见过、现已消失的来源才裁）。实现：
+  `shared/view-prefs.ts`、`shared/derive.ts`、`client/SidebarRoot.tsx`、
+  `client/sidebar-chamber.module.css`、`client/locales.ts`（zh/en）。
+  契约见 `docs/design/06-sidebar-enhancements.md` §2.4 / §3.1。
+  验证：`typecheck:sidebar`、`test:sidebar`（144 用例全绿，含
+  `orderServersForDisplay`/`nextServerOrder`/view-prefs 新增用例；
+  口径 = 并发会话回退其 workspaceAccentStyle 测试后的当前树）、
+  `verify:i18n` 全绿；另经两轮独立 subagent 审查（正确性 + 设计一致性）
+  并修复：header 键盘劫持（P1）、跨 ctx 提交竞态与 ESC 取消落盘（P2）、
+  session/workspace 提交消失源守卫对齐（P2）。
 - **VS Code 深链插件（设计 16，M0–M2 已实现，2026-08；独立复核/实机验收进行中）**：
   `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
   实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：

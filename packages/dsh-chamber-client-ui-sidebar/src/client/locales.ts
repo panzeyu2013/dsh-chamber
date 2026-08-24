@@ -65,6 +65,8 @@ export const zh = {
   'time.ago': '{t}前',
   'workspace.expand': '展开',
   'workspace.collapse': '收起',
+  'server.expand': '展开全部工作区',
+  'server.collapse': '收起全部工作区',
   'list.activate': '切换到该实例',
   'git.errorBoundary': 'Git 工作树区域加载失败。请重试或重启应用。',
 } satisfies Record<string, string>
@@ -137,6 +139,8 @@ export const en = {
   'time.ago': '{t} ago',
   'workspace.expand': 'Expand',
   'workspace.collapse': 'Collapse',
+  'server.expand': 'Expand all workspaces',
+  'server.collapse': 'Collapse all workspaces',
   'list.activate': 'Switch to this instance',
   'git.errorBoundary': 'The Git worktree section failed to load. Retry or restart the app.',
 } satisfies Record<SidebarKey, string>

@@ -189,6 +189,27 @@
   （stored 序优先、未知 id 按 wire 序追加——官方 `reconciledSessionOrder`/
   `orderedUngrouped` 移植），`test/derive.ts` 补用例。
 
+### 2.4 来源级收拢 + 来源显示序（2026-09，todo/server-drag-sort.md 方案 1）
+
+- **来源级收拢（server 折叠）**：来源头左侧新增折叠开关（与 workspace 头
+  同款槽位：常态 FOLDER 字形、行 hover/focus 换入折叠 chevron，16px 槽位
+  无位移），点击收拢该来源**整个 workspace 列表**（搜索胶囊、来源级 git
+  告警与 workspace 列表一并隐藏；搜索状态本身不动，展开后原查询恢复）。
+  **刻意独立于每 workspace 的 `folded`**——收拢服务器**不折叠 workspace
+  内的对话**（用户明确规则），展开后各 workspace 及其会话原样恢复。
+- **来源拖拽排序（显示序偏好）**：来源头为拖柄（HTML5 DnD，镜像 §2.2
+  状态机——`ServerDragState { sourceId, over }`，section 边界渲染
+  `dropBefore`/`dropAfter` marker），提交把新序写入 §3 共享存储的
+  `serverOrder[sourceId…]`（**纯显示偏好，无 wire、不动 App 层 N-ctx
+  常驻/预热/注册表**——导航按 id 键控，与顺序无关）；锚点数学为纯函数
+  `nextServerOrder`（no-op 返回 null，单测覆盖）；渲染期
+  `orderServersForDisplay(servers, stored)` 应用（存储序优先、未知 id
+  跳过、未列出 id 按投影序尾随——新来源出现在列表底部直到被拖走）。
+  rail 圆点同序渲染。来源从注册表删除后其 id 由写时裁剪清出（与
+  orderBy 同规则）。**2026-09 review 收窄**：dragend 时
+  `dropEffect === 'none'`（ESC 取消）不提交最后 marker——§2.2"drop/end
+  提交最后 marker"在来源级收窄为"仅非取消的结束提交"（取消即放弃）。
+
 ## 3. 视图偏好持久化
 
 ### 3.1 存储形状
@@ -202,8 +223,14 @@
     orderBy: Record<sourceId, 'manual' | 'updated'>,
     updatedOrder: Record<`${sourceId}/${workspaceId}`, string[]>,
     sessionUpdatedAtByAccount: Record<`${sourceId}/${workspaceId}`, Record<sessionId, number>>,
-    sidebarWidth: number }
+    sidebarWidth: number,
+    sourceFolded?: Record<sourceId, boolean>,
+    serverOrder?: string[] }
   ```
+- **sourceFolded / serverOrder（2026-09，todo/server-drag-sort.md 方案 1）**：
+  来源级收拢 + 来源显示序（见 §2.4）。均为可选字段——旧数据无字段即视为
+  全展开 / 投影序，v 保持 1 不重播种；裁剪规则同 orderBy（本会话见过、
+  现已消失的来源才裁）。
 - **updatedOrder / sessionUpdatedAtByAccount（2026-08 C档新增）**：updated 排序
   模式的活动序 account 与簿记（见 §2「会话排序模式」）。键与 folded 同为
   `${sourceId}/${workspaceId}`（未分组桶的 workspaceId 即

@@ -32,6 +32,13 @@ place of the official ui-sidebar (which stays untouched in
   below.
 - Workspace groups fold via the header chevron (session-count badge); fold
   state persists in localStorage view prefs (`dsh-chamber.sidebar.v1`).
+- Source groups fold the same way (2026-09, design 06 §2.4): each source
+  header's left slot holds a folder glyph that swaps to the collapse chevron
+  on hover — clicking collapses the source's ENTIRE workspace list (search
+  capsule, source-scope git alert and list included) WITHOUT touching any
+  workspace's own conversation fold state (`sourceFolded`, separate from
+  `folded`), so expanding restores every workspace with its sessions exactly
+  as they were.
 
 ## Interactions
 
@@ -73,6 +80,15 @@ place of the official ui-sidebar (which stays untouched in
   workspaces commit through the wire (`insertSessionBefore`/`insertBefore`)
   with a transient optimistic order override that self-heals on the next
   pull; the ungrouped order persists in view prefs.
+- Source-group drag ordering (2026-09, design 06 §2.4): source headers are
+  the drag handles — dropping on a section boundary reorders the source
+  groups. A pure DISPLAY preference: the new order persists into the shared
+  `serverOrder` view pref (cross-ctx live sync, no wire, no App-layer
+  N-ctx/registry change — navigation is id-keyed); the anchor math is the
+  unit-tested `nextServerOrder` pure function and the render order is
+  `orderServersForDisplay` (stored order first, unknown ids skipped,
+  unlisted ids trail in projection order — a new source appears at the
+  bottom until dragged).
 - View-preference persistence (06 §3, 2026-08 revision): fold state and the
   ungrouped order live in ONE shared live store under one localStorage key
   (`dsh-chamber.sidebar.v1`, `shared/view-prefs.ts`) — a single vite-shared

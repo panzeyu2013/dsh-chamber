@@ -58,6 +58,28 @@ export interface ChamberSidebarViewPrefs {
    */
   sessionUpdatedAtByAccount?: Record<string, Record<string, number>>
   /**
+   * Source-level fold (2026-09, server-drag-sort): key = sourceId, value =
+   * the source's workspace LIST is collapsed (every workspace group hidden).
+   * Deliberately SEPARATE from `folded` — collapsing a server must NOT touch
+   * each workspace's own conversation fold state (explicit user rule), so
+   * expanding the server restores every workspace with its conversations
+   * exactly as they were. OPTIONAL — absent = no source collapsed; kept so
+   * old persisted payloads stay valid without a version bump (v stays 1).
+   */
+  sourceFolded?: Record<string, boolean>
+  /**
+   * Source display order (2026-09, docs/todo/server-drag-sort.md — option 1):
+   * sourceIds in the user's sidebar order. DISPLAY-ONLY view preference —
+   * the App's N-ctx residency/prewarm order and the instance registry are
+   * untouched (navigation is id-keyed, never order-keyed). OPTIONAL —
+   * absent = projection order (local first, then registry order); ids
+   * unknown to the projection are skipped by the renderer, and unlisted ids
+   * trail in projection order (a newly added source appears at the bottom
+   * until dragged). Kept so old persisted payloads stay valid without a
+   * version bump (v stays 1).
+   */
+  serverOrder?: string[]
+  /**
    * Page-wide sidebar width preference in px (design 06, chamber ui-layout
    * fork — 2026-08): the chamber layout store persists every drag (clamped
    * into the vendor [SIDEBAR_MIN, SIDEBAR_MAX] drag range, columns.ts) here,
@@ -155,6 +177,27 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       sessionUpdatedAtByAccount[key] = timestamps
     }
   }
+  // sourceFolded：键为 sourceId，布尔值过滤规则同 folded。字段缺失（旧数据）
+  // 时不产出该键（v 保持 1，不重播种）；写入路径带空对象也会被保留。
+  let hasSourceFolded = false
+  const sourceFolded: Record<string, boolean> = {}
+  if (isPlainObject(raw.sourceFolded)) {
+    hasSourceFolded = true
+    for (const [key, value] of Object.entries(raw.sourceFolded)) {
+      if (typeof value === 'boolean') sourceFolded[key] = value
+    }
+  }
+  // serverOrder：sourceId 有序数组——仅保留字符串条目并去重（首个出现位置
+  // 胜出，防御损坏载荷）；非数组（含缺失）不产出该键（v 保持 1）。
+  let serverOrder: string[] | undefined
+  if (Array.isArray(raw.serverOrder)) {
+    const seen = new Set<string>()
+    serverOrder = raw.serverOrder.filter((entry): entry is string => {
+      if (typeof entry !== 'string' || seen.has(entry)) return false
+      seen.add(entry)
+      return true
+    })
+  }
   // sidebarWidth：仅接受有限数值，钳到厂商侧边栏拖动范围 [264, 420]（即
   // @deepseek-ai/dsh-client-ui-layout columns.ts 的 SIDEBAR_MIN/SIDEBAR_MAX
   // 契约固定点，含与 vendor clampWidth 一致的取整）；非数值/非有限值
@@ -178,6 +221,8 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
     orderBy,
     updatedOrder,
     sessionUpdatedAtByAccount,
+    ...(hasSourceFolded ? { sourceFolded } : {}),
+    ...(serverOrder !== undefined ? { serverOrder } : {}),
     ...(sidebarWidth !== undefined ? { sidebarWidth } : {}),
     seenSources,
   }
@@ -298,6 +343,10 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   const orderBy = { ...prefs.orderBy }
   const updatedOrder = { ...prefs.updatedOrder }
   const sessionUpdatedAtByAccount = { ...prefs.sessionUpdatedAtByAccount }
+  // sourceFolded / serverOrder 同为可选字段：undefined 保持 undefined
+  // （重建分支按原样携带，绝不把缺失变成空对象写回）。
+  const sourceFolded = prefs.sourceFolded === undefined ? undefined : { ...prefs.sourceFolded }
+  let serverOrder = prefs.serverOrder === undefined ? undefined : [...prefs.serverOrder]
   let changed = false
   for (const key of Object.keys(folded)) {
     const slash = key.indexOf('/')
@@ -340,6 +389,25 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
       changed = true
     }
   }
+  // sourceFolded 为 sourceId 键：与 orderBy 同规则（本会话见过、现已消失的
+  // 来源其折叠偏好一并裁剪；断连来源保留）。
+  if (sourceFolded !== undefined) {
+    for (const sourceId of Object.keys(sourceFolded)) {
+      if (knownGone(sourceId)) {
+        delete sourceFolded[sourceId]
+        changed = true
+      }
+    }
+  }
+  // serverOrder 为 sourceId 有序数组：裁掉「见过、已消失」的 id，其余保持
+  // 相对顺序（渲染侧跳过未知 id，裁剪只是防止死键堆积）。
+  if (serverOrder !== undefined) {
+    const kept = serverOrder.filter(id => !knownGone(id))
+    if (kept.length !== serverOrder.length) {
+      serverOrder = kept
+      changed = true
+    }
+  }
   if (!changed && prefs.seenSources.length === seen.length && prefs.seenSources.every((id, i) => id === seen[i])) {
     return prefs
   }
@@ -348,6 +416,8 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   // records a seen source never drops the persisted width preference.
   return {
     v: 1, folded, ungroupedOrder, orderBy, updatedOrder, sessionUpdatedAtByAccount,
+    ...(sourceFolded !== undefined ? { sourceFolded } : {}),
+    ...(serverOrder !== undefined ? { serverOrder } : {}),
     sidebarWidth: prefs.sidebarWidth, seenSources: seen,
   }
 }

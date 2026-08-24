@@ -26,6 +26,11 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   与当前会话高亮（全局单选）见下方"第三轮（设计 06）"。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
   localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。
+- 来源组同样可**折叠**（2026-09，设计 06 §2.4）：每个来源分组头左侧槽位为
+  文件夹字形、hover 换折叠 chevron——点击收拢该来源**整个 workspace 列表**
+  （搜索胶囊、来源级 git 告警与列表一并隐藏），**不动各 workspace 自身的
+  对话折叠态**（`sourceFolded` 独立于 `folded`），展开后各 workspace 及其
+  会话原样恢复。
 
 ## 交互
 
@@ -62,6 +67,12 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   分组头经 HTML5 DnD 在各自来源内重排（跨来源 drop 在代码层阻断）。真实
   workspace 经 wire（`insertSessionBefore`/`insertBefore`）提交，渲染期以
   瞬态乐观序覆盖、下轮拉取自愈；未分组序持久化于视图偏好。
+- **来源组拖拽排序（2026-09，设计 06 §2.4）**：来源分组头为拖柄，落点在
+  section 边界即重排来源组。**纯显示偏好**：新序持久化到共享 `serverOrder`
+  视图偏好（跨 ctx 实时联动；无 wire、不动 App 层 N-ctx/注册表——导航按
+  id 键控）；锚点数学为带单测的 `nextServerOrder` 纯函数，渲染序经
+  `orderServersForDisplay` 应用（存储序优先、未知 id 跳过、未列出 id 按
+  投影序尾随——新来源出现在列表底部直到被拖走）。
 - **视图偏好持久化（06 §3，2026-08 修订）**：折叠状态与未分组序存于单键
   localStorage（`dsh-chamber.sidebar.v1`，`shared/view-prefs.ts`）之上的
   **共享实时存储**——vite shared chunk 下所有 ctx 的侧边栏共享同一内存

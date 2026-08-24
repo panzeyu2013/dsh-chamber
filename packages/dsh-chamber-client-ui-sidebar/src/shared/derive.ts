@@ -82,6 +82,68 @@ export function reconciledSessionOrder(stored: readonly string[], wireIds: reado
 }
 
 /**
+ * Source display order (2026-09, docs/todo/server-drag-sort.md — option 1):
+ * the sidebar's server groups render in the user's stored order when one
+ * exists — ids known to the projection come in stored order first, then the
+ * remaining projection ids in projection order (a newly added source appears
+ * at the bottom until dragged). Unknown stored ids are skipped, so a source
+ * deleted from the registry cannot leave a ghost group. `undefined` (no
+ * preference yet) returns the projection order unchanged — the same
+ * reference, so callers can skip re-renders on absent prefs.
+ */
+export function orderServersForDisplay(
+  servers: readonly ChamberServerAggregate[],
+  stored: readonly string[] | undefined,
+): ChamberServerAggregate[] {
+  if (stored === undefined || stored.length === 0) return servers as ChamberServerAggregate[]
+  const byId = new Map(servers.map(server => [server.id, server]))
+  const placed = new Set<string>()
+  const ordered: ChamberServerAggregate[] = []
+  for (const id of stored) {
+    const server = byId.get(id)
+    if (server === undefined || placed.has(id)) continue
+    placed.add(id)
+    ordered.push(server)
+  }
+  for (const server of servers) {
+    if (placed.has(server.id)) continue
+    placed.add(server.id)
+    ordered.push(server)
+  }
+  return ordered
+}
+
+/**
+ * Server-group drop order math (2026-09, docs/todo/server-drag-sort.md —
+ * option 1): the display order that results from inserting
+ * `draggedSourceId` at `over`'s boundary of the CURRENT rendered order.
+ * `null` = NO-OP — the drop leaves the order unchanged and the caller skips
+ * the write: the target or the dragged source vanished from the rendered
+ * order, the dragged source IS the anchor, or the position did not actually
+ * move (inserting right after itself / already in place / already last).
+ * The anchor math mirrors the workspace commit (anchor = half === 'before'
+ * ? over.id : next id, undefined = append at the end).
+ */
+export function nextServerOrder(
+  renderedOrder: readonly string[],
+  draggedSourceId: string,
+  over: { id: string; half: 'before' | 'after' },
+): string[] | null {
+  const targetIndex = renderedOrder.findIndex(id => id === over.id)
+  if (targetIndex === -1) return null
+  const anchor = over.half === 'before' ? over.id : renderedOrder[targetIndex + 1]
+  if (anchor === draggedSourceId) return null
+  const sourceIndex = renderedOrder.findIndex(id => id === draggedSourceId)
+  if (sourceIndex === -1) return null
+  const anchorIndex = anchor === undefined ? renderedOrder.length : renderedOrder.findIndex(id => id === anchor)
+  if (anchorIndex === sourceIndex || anchorIndex === sourceIndex + 1) return null
+  const nextOrder = renderedOrder.filter(id => id !== draggedSourceId)
+  const insertAt = anchor === undefined ? nextOrder.length : nextOrder.indexOf(anchor)
+  nextOrder.splice(insertAt === -1 ? nextOrder.length : insertAt, 0, draggedSourceId)
+  return nextOrder
+}
+
+/**
  * One reconcile step of the App-owned "completed but unread" dot state
  * machine (design 06 §4.2). PURE — the App layer calls it inside a functional
  * state updater so batched reports compose without losing earlier arms.

@@ -246,6 +246,36 @@
   pointer-events: none;
 }
 
+/* chamber (2026-09, docs/todo/server-drag-sort.md): server-group drag insert
+   markers — the same 2px-rule vocabulary as the workspace groups, on the
+   SECTION boundary: before = above the header, after = below the whole group
+   (the section wraps header + workspace list, so the after boundary is the
+   insertion point between this group's content and the next server). */
+.sourceGroup.dropBefore,
+.sourceGroup.dropAfter {
+  position: relative;
+}
+
+.sourceGroup.dropBefore::before,
+.sourceGroup.dropAfter::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 4px;
+  height: 2px;
+  background: var(--dsw-alias-state-business-primary);
+  pointer-events: none;
+}
+
+.sourceGroup.dropBefore::before {
+  top: -2px;
+}
+
+.sourceGroup.dropAfter::after {
+  bottom: -2px;
+}
+
 /* chamber (06 §4.3, revised 2026-08): per-session STATE indicators — this
    slot is NOT a server-identity marker (the source header dot owns
    identity). It sits at the row's RIGHT edge (trailing the hover actions,
@@ -656,6 +686,65 @@
   transform: rotate(0deg);
 }
 
+/* chamber (2026-09, docs/todo/server-drag-sort.md): SOURCE-level fold toggle
+   (collapses the server's whole workspace list) — workspace-parity swap: a
+   FOLDER glyph at rest, the collapse chevron on header hover/focus, same
+   16px slot, so nothing shifts. The chevron rotates exactly like the
+   workspace fold chevron (down while expanded, right while folded). The
+   source header's fixed 28px height absorbs the button; the slot reserves
+   its 16px at rest so the identity dot never reflows. */
+.sourceFoldToggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  /* The glyph rides the SOURCE accent (inherited from the header's inline
+     --dsh-source-accent — the same variable as the active-source left
+     inset), so a remote server's fold toggle carries its identity hue;
+     the local source sets no accent and falls back to the default caption
+     ink. */
+  color: var(--dsh-source-accent, var(--dsw-alias-label-caption));
+  cursor: pointer;
+}
+
+/* The accent is CONSTANT on hover (selection-independent): the hover
+   affordance is the row background tint (.sourceHeader:hover) — a hover
+   color jump on a colored glyph would read as a selection state (workspace
+   fold toggle parity). */
+.sourceFoldToggle:hover {
+  color: var(--dsh-source-accent, var(--dsw-alias-label-primary));
+}
+
+.sourceFoldChevron {
+  display: none;
+  transform: rotate(90deg);
+  transition: transform 150ms;
+}
+
+.sourceFoldToggle .sourceFoldFolder {
+  display: inline-flex;
+}
+
+.sourceHeader:hover .sourceFoldChevron,
+.sourceHeader:focus-within .sourceFoldChevron {
+  display: inline-flex;
+}
+
+.sourceHeader:hover .sourceFoldFolder,
+.sourceHeader:focus-within .sourceFoldFolder {
+  display: none;
+}
+
+.sourceFoldToggleFolded .sourceFoldChevron {
+  transform: rotate(0deg);
+}
+
 /* Session count badge: small tertiary pill, shown only when sessions exist.
    Sits at the workspace header's right end at rest (the actions take no
    space until shown); on hover / open-menu its slot is taken by the row
@@ -777,6 +866,9 @@
     animation: none;
   }
   .foldToggle {
+    transition: none;
+  }
+  .sourceFoldChevron {
     transition: none;
   }
 }

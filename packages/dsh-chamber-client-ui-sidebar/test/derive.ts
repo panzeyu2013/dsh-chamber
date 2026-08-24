@@ -17,7 +17,9 @@ import {
   instanceSnapshotSignature,
   mergeRuntimeFacts,
   mergeSearchResults,
+  nextServerOrder,
   nextUpdatedOrder,
+  orderServersForDisplay,
   orderUngroupedSessions,
   projectRuntimeFacts,
   projectInstanceSnapshot,
@@ -1478,6 +1480,64 @@ test('increasedForkTitle increments without precision loss (BigInt)', () => {
   assert.equal(increasedForkTitle(`huge (${'9'.repeat(40)})`), `huge (1${'0'.repeat(40)})`)
 })
 
+// ---- server display order (2026-09, docs/todo/server-drag-sort.md — option 1) ----
+
+test('orderServersForDisplay returns the projection order unchanged when no preference exists', () => {
+  const projection = [server('local'), server('ssh-a'), server('ssh-b')]
+  assert.equal(orderServersForDisplay(projection, undefined), projection)
+  assert.equal(orderServersForDisplay(projection, []), projection)
+})
+
+test('orderServersForDisplay applies the stored order first, then trails the rest in projection order', () => {
+  const projection = [server('local'), server('ssh-a'), server('ssh-b'), server('ssh-c')]
+  const ordered = orderServersForDisplay(projection, ['ssh-b', 'local', 'ssh-c'])
+  assert.deepEqual(ordered.map(item => item.id), ['ssh-b', 'local', 'ssh-c', 'ssh-a'])
+  // A partial preference only reorders the listed ids — the rest keep their
+  // relative projection order after the listed ones.
+  assert.deepEqual(orderServersForDisplay(projection, ['ssh-c']).map(item => item.id), ['ssh-c', 'local', 'ssh-a', 'ssh-b'])
+})
+
+test('orderServersForDisplay skips unknown stored ids and never duplicates a server', () => {
+  const projection = [server('local'), server('ssh-a')]
+  // A vanished source (ghost id) is skipped — no phantom group; duplicates
+  // in a corrupt payload are collapsed (first occurrence wins).
+  const ordered = orderServersForDisplay(projection, ['ssh-a', 'ghost', 'local', 'ssh-a'])
+  assert.deepEqual(ordered.map(item => item.id), ['ssh-a', 'local'])
+})
+
+test('nextServerOrder computes the drop order for moves in both directions', () => {
+  const order = ['local', 'ssh-a', 'ssh-b', 'ssh-c']
+  // Move down: drag local before ssh-b.
+  assert.deepEqual(nextServerOrder(order, 'local', { id: 'ssh-b', half: 'before' }), ['ssh-a', 'local', 'ssh-b', 'ssh-c'])
+  // Move down past more than one: drag local after ssh-b (anchor = ssh-c).
+  assert.deepEqual(nextServerOrder(order, 'local', { id: 'ssh-b', half: 'after' }), ['ssh-a', 'ssh-b', 'local', 'ssh-c'])
+  // Move up: drag ssh-c after local (anchor = ssh-a).
+  assert.deepEqual(nextServerOrder(order, 'ssh-c', { id: 'local', half: 'after' }), ['local', 'ssh-c', 'ssh-a', 'ssh-b'])
+  // Append at the end: after the last element.
+  assert.deepEqual(nextServerOrder(order, 'ssh-a', { id: 'ssh-c', half: 'after' }), ['local', 'ssh-b', 'ssh-c', 'ssh-a'])
+  // Insert at the top: before the first element.
+  assert.deepEqual(nextServerOrder(order, 'ssh-c', { id: 'local', half: 'before' }), ['ssh-c', 'local', 'ssh-a', 'ssh-b'])
+})
+
+test('nextServerOrder returns null for every no-op drop', () => {
+  const order = ['local', 'ssh-a', 'ssh-b', 'ssh-c']
+  // The dragged source IS the anchor.
+  assert.equal(nextServerOrder(order, 'ssh-a', { id: 'ssh-a', half: 'before' }), null)
+  // Dropping right after itself = the current position.
+  assert.equal(nextServerOrder(order, 'ssh-b', { id: 'ssh-b', half: 'after' }), null)
+  // Already in place (ssh-a sits right before ssh-b).
+  assert.equal(nextServerOrder(order, 'ssh-a', { id: 'ssh-b', half: 'before' }), null)
+  // Already last (append at the end of the last element).
+  assert.equal(nextServerOrder(order, 'ssh-c', { id: 'ssh-c', half: 'after' }), null)
+  // The target vanished from the rendered order.
+  assert.equal(nextServerOrder(order, 'local', { id: 'ghost', half: 'before' }), null)
+  // The dragged source vanished from the rendered order (no ghost writes).
+  assert.equal(nextServerOrder(order, 'ghost', { id: 'local', half: 'before' }), null)
+  // A single-element order can never move.
+  assert.equal(nextServerOrder(['local'], 'local', { id: 'local', half: 'before' }), null)
+  assert.equal(nextServerOrder(['local'], 'local', { id: 'local', half: 'after' }), null)
+})
+
 // ---- singleton guard (third-wave review, R2-1#2) ----
 
 test('importing derive registers exactly one entry in the shared-singleton registry', () => {
@@ -1495,3 +1555,4 @@ test('importing derive registers exactly one entry in the shared-singleton regis
   assert.ok(registry !== undefined, 'the singleton registry must exist after importing derive.ts')
   assert.deepEqual(Object.keys(registry), ['derive'])
 })
+
