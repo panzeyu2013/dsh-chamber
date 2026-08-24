@@ -485,6 +485,29 @@ async function isPublishedSnapshotPath(baseDir: string, path: string): Promise<b
   return pathIsDirectoryNoFollow(candidate)
 }
 
+/**
+ * A pre-rollback stash source must be a real, non-symlink directory directly
+ * under the private pre-rollback root with a stash-shaped basename.
+ * `ownedDirectoryState` revalidates the parent's identity without following
+ * the leaf, so a redirect between readdir and this check fails closed.
+ */
+async function isPublishedStashPath(baseDir: string, path: string): Promise<boolean> {
+  const { preRollbackDir } = snapshotPaths(baseDir)
+  if (ownedDirectoryState(preRollbackDir) !== 'directory') return false
+  const candidate = resolve(path)
+  if (dirname(candidate) !== resolve(preRollbackDir)) return false
+  if (!isStashName(basename(candidate))) return false
+  return ownedDirectoryState(candidate) === 'directory'
+}
+
+/** The restore transaction may copy from a snapshot or a pre-rollback stash.
+ *  Each check must be awaited before the fallthrough: an un-awaited promise is
+ *  truthy and would short-circuit the `||` and mask the stash path. */
+async function isPublishedRestoreSource(baseDir: string, path: string): Promise<boolean> {
+  if (await isPublishedSnapshotPath(baseDir, path)) return true
+  return isPublishedStashPath(baseDir, path)
+}
+
 function pathIsInside(path: string, parent: string): boolean {
   const candidate = resolve(path)
   const root = resolve(parent)
@@ -570,7 +593,10 @@ function parseMarker(raw: string, baseDir: string, dshHome: string): RestoreMark
   if (typeof record.stagingPath !== 'string' || typeof record.backupPath !== 'string') return null
   if (typeof record.hadDshHome !== 'boolean' || typeof record.startedAt !== 'number' || typeof record.updatedAt !== 'number') return null
   if (resolve(record.dshHome) !== resolve(dshHome)) return null
-  if (!pathIsInside(record.snapshotPath, snapshotPaths(baseDir).snapshotsDir)) return null
+  // A marker may name a snapshot or a pre-rollback stash as its source; both
+  // live under the private dsh-runtime root and are re-validated per phase.
+  if (!pathIsInside(record.snapshotPath, snapshotPaths(baseDir).snapshotsDir)
+    && !pathIsInside(record.snapshotPath, snapshotPaths(baseDir).preRollbackDir)) return null
 
   const homeParent = dirname(resolve(dshHome))
   const homeName = basename(dshHome)
@@ -647,7 +673,7 @@ async function runRestoreTransaction(
   const markerPath = snapshotPaths(baseDir).restoreMarker
   try {
     if (marker.phase === 'copying') {
-      if (!(await isPublishedSnapshotPath(baseDir, marker.snapshotPath))) return 'incomplete'
+      if (!(await isPublishedRestoreSource(baseDir, marker.snapshotPath))) return 'incomplete'
       // Contents in a `copying` staging dir are never trusted, even non-empty.
       await rm(marker.stagingPath, { recursive: true, force: true })
       await ensurePrivateDir(marker.stagingPath)
@@ -766,6 +792,62 @@ export async function restoreSnapshot(
   return runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
 }
 
+/**
+ * Restore a pre-rollback stash over DSH_HOME. The stash is validated as a
+ * real, non-symlink directory under the private pre-rollback root (identity
+ * re-checked without following either the leaf or its parent) BEFORE the
+ * restore marker is written, and again inside the copying phase on resume.
+ * The transaction is the same durable two-phase rename used by
+ * `restoreSnapshot`: the live DSH_HOME is renamed to `dsh-home.old` and the
+ * marker remains authoritative until the published phase completes, so a
+ * crash or an unsafe stash always leaves the data recoverable. An existing
+ * valid marker (snapshot or stash) wins: recovery continues it.
+ */
+export async function restorePreRollback(
+  baseDir: string,
+  dshHome: string,
+  stashName: string,
+  copyFn: CopyFn = defaultCopy,
+  hooks: RestoreHooks = {},
+): Promise<RestoreOutcome> {
+  const stashPath = await resolveStashPath(baseDir, stashName)
+  if (stashPath === null) return 'incomplete'
+  const { restoreMarker, snapshotsDir } = snapshotPaths(baseDir)
+  let authority = readRestoreMarkerAuthority(baseDir)
+  if (authority.kind === 'unsafe') return 'incomplete'
+  if (authority.kind === 'missing') {
+    await ensurePrivateDir(dirname(restoreMarker))
+    // A marker appearing during directory creation is authoritative too.
+    authority = readRestoreMarkerAuthority(baseDir)
+    if (authority.kind === 'unsafe') return 'incomplete'
+  }
+
+  let marker: RestoreMarker
+  if (authority.kind === 'valid') {
+    const parsed = parseMarker(authority.raw, baseDir, dshHome)
+    if (parsed === null) return 'incomplete'
+    if ('legacySnapshotPath' in parsed) {
+      // Legacy markers predate stashes and can only reference snapshots.
+      const legacySnapshot = parsed.legacySnapshotPath
+      if (!pathIsInside(legacySnapshot, snapshotsDir) || !(await isPublishedSnapshotPath(baseDir, legacySnapshot))) return 'incomplete'
+      try {
+        marker = await beginRestore(baseDir, dshHome, legacySnapshot, hooks)
+      } catch {
+        return 'incomplete'
+      }
+    } else {
+      marker = parsed
+    }
+  } else {
+    try {
+      marker = await beginRestore(baseDir, dshHome, stashPath, hooks)
+    } catch {
+      return 'incomplete'
+    }
+  }
+  return runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
+}
+
 /** Return snapshots for an exact source version, newest first. */
 export async function listSnapshotsForVersion(baseDir: string, version: string): Promise<string[]> {
   const safe = assertSafeVersion(version)
@@ -803,6 +885,58 @@ export async function resolveSnapshotName(baseDir: string, snapshotName: string)
   const { snapshotsDir } = snapshotPaths(baseDir)
   const candidate = join(snapshotsDir, snapshotName)
   return pathIsInside(candidate, snapshotsDir) && await isPublishedSnapshotPath(baseDir, candidate) ? candidate : null
+}
+
+/** Exact basename shape written by `stashPreRollback` (`<epochMs>-<hex>`). */
+function isStashName(name: string): boolean {
+  return name.length <= 255
+    && /^\d{13}-[0-9a-f]{8}$/.test(name)
+}
+
+function stashTimestamp(name: string): number {
+  const match = /^(\d+)-/.exec(name)
+  if (match === null) return 0
+  const value = Number(match[1])
+  return Number.isSafeInteger(value) ? value : 0
+}
+
+/**
+ * Safe, non-symlink pre-rollback stash names (basenames only, newest first).
+ * Dirent `isDirectory()` never follows a symlink, and only stash-shaped
+ * names are surfaced; anything else in the private root is ignored.
+ */
+export async function listPreRollbackStashes(baseDir: string): Promise<string[]> {
+  const { preRollbackDir } = snapshotPaths(baseDir)
+  const rootState = ownedDirectoryState(preRollbackDir)
+  if (rootState === 'missing') return []
+  if (rootState === 'unsafe') throw new Error('回滚暂存根目录不安全')
+  let entries
+  try {
+    entries = await readdir(preRollbackDir, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && isStashName(entry.name))
+    .sort((a, b) => stashTimestamp(b.name) - stashTimestamp(a.name) || b.name.localeCompare(a.name))
+    .map((entry) => entry.name)
+}
+
+/**
+ * Resolve a stash basename into the private pre-rollback root with a no-follow
+ * identity check (parent + leaf revalidated, symlinks/unsafe dirs rejected).
+ * Tightening the owned inode also proves the path was not redirected after the
+ * lstat, and is the validation the restore caller requires before any marker
+ * write or rename.
+ */
+async function resolveStashPath(baseDir: string, stashName: string): Promise<string | null> {
+  if (typeof stashName !== 'string' || !isStashName(stashName)) return null
+  const { preRollbackDir } = snapshotPaths(baseDir)
+  const candidate = join(preRollbackDir, stashName)
+  if (!pathIsInside(candidate, preRollbackDir)) return null
+  if (ownedDirectoryState(candidate) !== 'directory' || !tightenOwnedDirectory(candidate)) return null
+  return candidate
 }
 
 /**
@@ -861,6 +995,8 @@ export interface SnapshotSummary {
   latestAt: string | null
   restoreInProgress: boolean
   preRollbackCount: number
+  /** Newest safe stash basename, or null when no stash exists. */
+  latestStashName: string | null
 }
 
 export interface SnapshotRetentionPolicy {
@@ -997,12 +1133,15 @@ export async function snapshotSummary(baseDir: string): Promise<SnapshotSummary>
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   let preRollbackCount = 0
+  let latestStashName: string | null = null
   const preRollbackRootState = ownedDirectoryState(paths.preRollbackDir)
   if (preRollbackRootState === 'unsafe') throw new Error('回滚暂存根目录不安全')
-  if (preRollbackRootState === 'directory') try {
-    preRollbackCount = (await readdir(paths.preRollbackDir, { withFileTypes: true })).filter((entry) => entry.isDirectory()).length
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  if (preRollbackRootState === 'directory') {
+    // Safe enumeration only: crash staging and non-stash entries are neither
+    // counted nor surfaced (see listPreRollbackStashes).
+    const stashes = await listPreRollbackStashes(baseDir)
+    preRollbackCount = stashes.length
+    latestStashName = stashes[0] ?? null
   }
   return {
     count: snapshots.length,
@@ -1010,6 +1149,7 @@ export async function snapshotSummary(baseDir: string): Promise<SnapshotSummary>
     latestAt: snapshots[0] === undefined ? null : new Date(snapshots[0].timestamp).toISOString(),
     restoreInProgress: restoreMarkerAuthorityStatus(baseDir) !== 'missing',
     preRollbackCount,
+    latestStashName,
   }
 }
 

@@ -81,6 +81,10 @@ export interface RuntimeState {
   snapshotCount?: number
   latestSnapshotAt?: string | null
   snapshotError?: string | null
+  /** Number of safe pre-rollback stashes; absence/0 means none exist. */
+  preRollbackCount?: number
+  /** Newest safe stash basename (never a userData path). */
+  preRollbackLatestName?: string | null
   canRetryApply?: boolean
   canRetryRestore?: boolean
   /** Authoritative main-process local-spawn gate, not inferred from phase. */
@@ -121,6 +125,8 @@ export interface RuntimeLifecycleProjection {
   snapshotCount?: number
   latestSnapshotAt?: string | null
   snapshotError?: string | null
+  preRollbackCount?: number
+  preRollbackLatestName?: string | null
   canRetryApply?: boolean
   canRetryRestore?: boolean
   runtimeBlocked?: boolean

@@ -36,7 +36,7 @@ function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}
 
 test('runtime action matrix covers every design-18 phase and keeps busy/terminal gates strict', () => {
   const expected: Record<RuntimePhase, readonly string[]> = {
-    idle: ['check', 'select-version', 'install', 'cleanup-version'],
+    idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'],
     checking: [],
     available: ['check', 'select-version', 'install', 'cleanup-version'],
     downloading: [],
@@ -44,9 +44,9 @@ test('runtime action matrix covers every design-18 phase and keeps busy/terminal
     pending: ['reset-builtin'],
     applying: ['reset-builtin'],
     applied: ['check', 'select-version', 'install', 'cleanup-version'],
-    rollback: ['check', 'select-version', 'install', 'cleanup-version'],
+    rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'],
     'snapshot-failed': ['reset-builtin'],
-    failed: ['check', 'select-version', 'install', 'cleanup-version'],
+    failed: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'],
     error: ['check', 'select-version', 'install', 'cleanup-version'],
   }
   for (const [phase, actions] of Object.entries(expected) as [RuntimePhase, readonly string[]][]) {
@@ -58,13 +58,13 @@ test('reset-builtin stays visible on error/failed/rollback/applied only when an 
   const withOverride = (phase: RuntimePhase, overrides: Partial<RuntimeState> = {}) =>
     runtimeAllowedActions(runtimeState(phase, { hasOverride: true, source: 'user', ...overrides }))
   assert.deepEqual(withOverride('error'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
-  assert.deepEqual(withOverride('failed'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
-  assert.deepEqual(withOverride('rollback'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
+  assert.deepEqual(withOverride('failed'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
+  assert.deepEqual(withOverride('rollback'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
   assert.deepEqual(withOverride('applied'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
   // A clean bundled install without any override must not show a no-op reset
   // (main rejects reset-builtin unless hasOverride — the button would be dead).
   assert.deepEqual(runtimeAllowedActions(runtimeState('error', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
-  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', { hasOverride: false })), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'])
   assert.deepEqual(runtimeAllowedActions(runtimeState('applied', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
 })
 
@@ -75,11 +75,11 @@ test('retry actions require explicit capabilities and never pierce pending/apply
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { canRetryRestore: true, restoreOutcome: 'incomplete', hasOverride: true, source: 'user' })),
-    ['retry-restore', 'check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    ['retry-restore', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { canRetryApply: true, hasOverride: true, source: 'user' })),
-    ['retry-apply', 'check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    ['retry-apply', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('applying', { canRetryApply: true, canRetryRestore: true })),
@@ -202,7 +202,7 @@ test('an unknown active runtime is labeled as a forward install, never rollback'
 test('active user override keeps the restore-builtin exit after periodic checks settle', () => {
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('idle', { source: 'user', hasOverride: true })),
-    ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('available', { source: 'user', hasOverride: true })),
@@ -318,6 +318,7 @@ function surfaceHarness(initial: Promise<RuntimeState>) {
     retryApply: async () => runtimeState('applying'),
     retryRestore: async () => runtimeState('rollback'),
     recoverMetadata: async () => runtimeState('applying'),
+    restorePreRollback: async () => runtimeState('idle'),
     cleanupVersion: async () => runtimeState('idle'),
     onChanged: (callback) => {
       subscriptions += 1
@@ -392,6 +393,7 @@ test('runtime store tears down and retries after a transient hydration failure',
     retryApply: async () => runtimeState('applying'),
     retryRestore: async () => runtimeState('rollback'),
     recoverMetadata: async () => runtimeState('applying'),
+    restorePreRollback: async () => runtimeState('idle'),
     cleanupVersion: async () => runtimeState('idle'),
     onChanged: () => {
       subscriptions += 1

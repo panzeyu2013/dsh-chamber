@@ -85,10 +85,12 @@ import type { ActivationJournal, ActivationJournalState } from './dsh-runtime-st
 import {
   cleanupSnapshotArtifacts,
   completeInterruptedRestore,
+  listPreRollbackStashes,
   prepareManualRollbackData,
   pruneSnapshots,
   resolveSnapshotName,
   restoreMarkerAuthorityStatus,
+  restorePreRollback,
   restoreSnapshot,
   snapshotDshHome,
   snapshotSummary,
@@ -1963,6 +1965,8 @@ if (!gotTheLock) {
         snapshotProjection = {
           snapshotCount: snapshots.count,
           latestSnapshotAt: snapshots.latestAt,
+          preRollbackCount: snapshots.preRollbackCount,
+          preRollbackLatestName: snapshots.latestStashName,
           snapshotError: null,
           failure: !showFailure || failures.latest === null ? null : {
             version: failures.latest.version,
@@ -3121,6 +3125,67 @@ if (!gotTheLock) {
       const current = runtimeInstance.getState();
       if (runtimeOperation !== null
         || !runtimeActionAllowed('retry-restore')) return current;
+      await runRuntimeStartup();
+      return runtimeInstance.getState();
+    }));
+    ipcMain.handle('dsh-chamber:runtime-restore-pre-rollback', trustedIpc(async (args) => {
+      // Only a stash-shaped basename is accepted; the main process re-validates
+      // it against its own private pre-rollback listing before any mutation.
+      const stashName = args !== null && typeof args === 'object'
+        ? (args as Record<string, unknown>).stashName
+        : undefined;
+      if (typeof stashName !== 'string' || !/^\d{13}-[0-9a-f]{8}$/.test(stashName)) {
+        return runtimeInstance.getState();
+      }
+      const before = runtimeInstance.getState();
+      if (runtimeOperation !== null
+        || !runtimeActionAllowed('restore-pre-rollback')) return before;
+      if (!await confirmRuntimeMutation(
+        '恢复回滚前数据？',
+        '将停止本地实例，把当前 DSH_HOME 保留为 dsh-home.old，再用最近一次手动回滚前保存的数据覆盖恢复。恢复事务崩溃安全，可在下次启动续作。',
+        '恢复回滚前数据',
+      )) return runtimeInstance.getState();
+      const current = runtimeInstance.getState();
+      if (runtimeOperation !== null
+        || !runtimeActionAllowed('restore-pre-rollback')) return current;
+
+      const restoreResult: { outcome: 'complete' | 'half' | 'incomplete' | 'blocked' } = { outcome: 'blocked' };
+      const operation = (async (): Promise<StartupResult | null> => {
+        const lease = runtimeWriterFence.tryAcquire('runtime:restore-pre-rollback');
+        if (lease === null) return null;
+        try {
+          const stashes = await listPreRollbackStashes(runtimeBaseDir);
+          if (!stashes.includes(stashName)) {
+            throw new Error('回滚前数据暂存已不存在或不可信');
+          }
+          await cp.stopLocal();
+          restoreResult.outcome = await restorePreRollback(runtimeBaseDir, localDshHome, stashName);
+        } finally {
+          lease.release();
+        }
+        return null;
+      })().catch(async (error) => {
+        await cp.stopLocal().catch(() => undefined);
+        await publishBlockedStartup(`恢复回滚前数据失败：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`);
+        return null;
+      }).finally(() => {
+        runtimeOperation = null;
+      });
+      runtimeOperation = operation;
+      await operation;
+      if (restoreResult.outcome === 'incomplete') {
+        await publishBlockedStartup('回滚前数据暂存缺失或不可信；拒绝恢复');
+        return runtimeInstance.getState();
+      }
+      if (restoreResult.outcome === 'half') {
+        await publishBlockedStartup('恢复回滚前数据未完成（现场已保留），请重试恢复', {
+          restoreOutcome: 'half',
+          canRetryRestore: true,
+        });
+        return runtimeInstance.getState();
+      }
+      if (restoreResult.outcome === 'blocked') return runtimeInstance.getState();
+      // 'complete': restart the local instance against the restored data.
       await runRuntimeStartup();
       return runtimeInstance.getState();
     }));

@@ -177,6 +177,11 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
     void runRuntimeAction(() => runtime.recoverMetadata())
   }, [runtime, actions, runRuntimeAction])
 
+  const onRestorePreRollback = useCallback(() => {
+    if (runtime === null || !actions.has('restore-pre-rollback')) return
+    void runRuntimeAction(() => runtime.restorePreRollback(state?.preRollbackLatestName ?? ''))
+  }, [runtime, actions, state, runRuntimeAction])
+
   const onCleanupVersion = useCallback(() => {
     if (runtime === null || chosen === null || !cleanupEligible || !actions.has('cleanup-version')) return
     void runRuntimeAction(() => runtime.cleanupVersion(chosen))
@@ -284,8 +289,10 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
   const canRecoverMetadata = actions.has('recover-metadata') && state?.canRecoverMetadata === true
   const canCleanup = actions.has('cleanup-version') && cleanupEligible
   const canCheck = actions.has('check')
+  const canRestorePreRollback = actions.has('restore-pre-rollback')
+    && (state?.preRollbackCount ?? 0) > 0
   const hasVisibleRuntimeAction = canInstall || canReset || canRetryApply || canRetryRestore
-    || canRecoverMetadata || canCleanup
+    || canRecoverMetadata || canCleanup || canRestorePreRollback
   const operationDisabled = !hydrated || busy || testingRegistry
   const mutationDisabled = operationDisabled || envGated || managementGated
   const registryDisabled = settingsStatus === null || mutationDisabled || !canCheck
@@ -468,6 +475,11 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
           {canRetryRestore && (
             <button type="button" className={css.updateButton} onClick={onRetryRestore} disabled={operationDisabled}>
               {t('dshRuntimeRetryRestore')}
+            </button>
+          )}
+          {canRestorePreRollback && (
+            <button type="button" className={css.updateButton} onClick={onRestorePreRollback} disabled={mutationDisabled}>
+              {t('dshRuntimeRestorePreRollback')}
             </button>
           )}
           {canRecoverMetadata && (

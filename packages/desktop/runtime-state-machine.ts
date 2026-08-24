@@ -175,7 +175,8 @@ export type RuntimeAction =
   | 'retry-apply'
   | 'retry-restore'
   | 'cleanup-version'
-  | 'recover-metadata';
+  | 'recover-metadata'
+  | 'restore-pre-rollback';
 
 /**
  * 终态门（§3.6）：
@@ -197,7 +198,7 @@ export function allowedActions(
 ): RuntimeAction[] {
   switch (state) {
     case 'idle': {
-      const base: RuntimeAction[] = ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+      const base: RuntimeAction[] = ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
       if (capabilities.canRecoverMetadata === true && capabilities.canRetryRestore !== true) {
         base.unshift('recover-metadata');
       }
@@ -216,11 +217,11 @@ export function allowedActions(
     case 'applied':
       return ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
     case 'rollback': {
-      const base: RuntimeAction[] = ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+      const base: RuntimeAction[] = ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
       return capabilities.canRetryRestore === true ? ['retry-restore', ...base] : base;
     }
     case 'failed': {
-      const base: RuntimeAction[] = ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
+      const base: RuntimeAction[] = ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'];
       if (capabilities.canRetryRestore === true) base.unshift('retry-restore');
       else if (capabilities.canRecoverMetadata === true) base.unshift('recover-metadata');
       if (capabilities.canRetryApply === true) base.unshift('retry-apply');

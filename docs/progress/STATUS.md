@@ -118,11 +118,16 @@
   Windows 管理面保持只读：可查看版本/状态，controller/main/UI 均拒绝安装、
   选择、应用、回滚与清理，未跑 Windows mutation 不构成契约偏差。设计与
   开放项见 `docs/design/18-dsh-runtime-version.md` §8。
-  **已知缺口（审查确认，未修）**：① journal-mismatch（apply 中途崩溃 + 应用更新
-  的窄窗口）进入无 UI 逃逸的硬阻塞态——`recover-metadata` 因元数据健康判定只看
-  文件解析层而不合格，仅能手删 `activation-journal.json` 恢复；② 手动回滚的
-  pre-rollback stash 只写不读，回滚前数据无任何 UI/IPC/启动续作可恢复（§3.7「可反悔」
-  未实现）。两者均为 fail-closed 数据安全缺口，建议发布前补上。
+   **数据安全缺口修复（2026-08 末轮）**：① journal-mismatch——`detectRuntimeMetadataHealth`
+   新增保守语义一致性检测（journal 目标 ≠ override.pending / 缺 journal 且指针已前进到
+   pending），归入 `selection-corrupt`，`recover-metadata` 逃逸可达（仍受 phase===failed
+   门控）；② 手动回滚 pre-rollback stash——新增 `restorePreRollback`（复用两阶段 rename
+   恢复事务 + 恢复标记、no-follow 身份校验）+ `listPreRollbackStashes` + IPC
+   `runtime-restore-pre-rollback` + UI「恢复回滚前数据」按钮（§3.7「可反悔」落地）；
+   ③ restore-missing-snapshot 死循环——`restoreOutcome==='incomplete'`（快照永久缺失）不再
+   封锁 `recover-metadata`（'half' 仍仅可重试），执行器把遗留的 restore-in-progress 标记
+   归档为证据。残缺口：纯「健康元数据 + 快照缺失」场景下 recover-metadata 按钮仍要求
+   元数据健康判定为非 healthy 才显示（执行器已具备处理能力，待后续接线）。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 完整 mutation 能力暂缓**：detached/进程组/lsof 降级路径仍以
   Unix 为契约目标；设计 18 的 Windows 运行时管理因此按上述契约保持只读。

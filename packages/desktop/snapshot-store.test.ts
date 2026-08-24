@@ -24,9 +24,11 @@ import {
   cleanupSnapshotArtifacts,
   completeInterruptedRestore,
   findLatestSnapshotForVersion,
+  listPreRollbackStashes,
   prepareManualRollbackData,
   pruneSnapshots,
   restoreMarkerAuthorityStatus,
+  restorePreRollback,
   restoreSnapshot,
   snapshotDshHome,
   snapshotPaths,
@@ -355,6 +357,72 @@ test('stashPreRollback: partial-copy failure leaves live DSH_HOME and prior stas
   assert.deepEqual(readdirSync(snapshotPaths(base).preRollbackDir), [path.basename(prior)])
 })
 
+test('restorePreRollback restores the stash and preserves current DSH_HOME into dsh-home.old', async () => {
+  const { base, dshHome } = makeDirs()
+  put(dshHome, 'settings.yaml', 'pre-rollback-data')
+  const stash = await stashPreRollback(base, dshHome)
+  // Non-stash entries in the private root are neither listed nor restored.
+  mkdirSync(path.join(snapshotPaths(base).preRollbackDir, 'junk'), { recursive: true })
+  assert.deepEqual(await listPreRollbackStashes(base), [path.basename(stash)])
+
+  put(dshHome, 'new.txt', 'data-after-rollback')
+  assert.equal(await restorePreRollback(base, dshHome, path.basename(stash)), 'complete')
+  assert.equal(readFileSync(path.join(dshHome, 'settings.yaml'), 'utf8'), 'pre-rollback-data')
+  assert.equal(existsSync(path.join(dshHome, 'new.txt')), false, 'post-rollback data is replaced by the stash')
+  assert.equal(readFileSync(path.join(`${dshHome}.old`, 'new.txt'), 'utf8'), 'data-after-rollback')
+  assert.equal(mode(dshHome), 0o700)
+  assert.equal(mode(`${dshHome}.old`), 0o700)
+  assert.ok(!existsSync(snapshotPaths(base).restoreMarker), 'a complete restore clears the marker')
+})
+
+test('restorePreRollback: crash after backup resumes from the stash marker at startup', async () => {
+  const { base, dshHome } = makeDirs()
+  put(dshHome, 'current.txt', 'current')
+  const stash = await stashPreRollback(base, dshHome)
+  put(stash, 'restored.txt', 'restored')
+  let crashed = false
+  const afterPhase = (phase: RestorePhase) => {
+    if (phase === 'publishing' && !crashed) {
+      crashed = true
+      throw new Error('simulated process death')
+    }
+  }
+  assert.equal(await restorePreRollback(base, dshHome, path.basename(stash), undefined, { afterPhase }), 'half')
+  assert.equal(existsSync(dshHome), false, 'backup rename happened but publish did not')
+  assert.equal(readFileSync(path.join(`${dshHome}.old`, 'current.txt'), 'utf8'), 'current')
+  assert.equal(await completeInterruptedRestore(base, dshHome), 'complete')
+  assert.equal(readFileSync(path.join(dshHome, 'restored.txt'), 'utf8'), 'restored')
+  assert.ok(!existsSync(snapshotPaths(base).restoreMarker))
+})
+
+test('restorePreRollback rejects a symlinked stash without mutating DSH_HOME or its target', {
+  skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
+}, async () => {
+  const { base, dshHome } = makeDirs()
+  put(dshHome, 'current.txt', 'current')
+  const outside = path.join(base, 'outside-stash')
+  put(outside, 'secret.txt', 'outside')
+  mkdirSync(snapshotPaths(base).preRollbackDir, { recursive: true, mode: 0o700 })
+  symlinkSync(outside, path.join(snapshotPaths(base).preRollbackDir, '1700000000000-aaaaaaaa'), 'dir')
+  const outsideBefore = statSync(outside)
+
+  assert.equal(await restorePreRollback(base, dshHome, '1700000000000-aaaaaaaa'), 'incomplete')
+  assert.equal(readFileSync(path.join(dshHome, 'current.txt'), 'utf8'), 'current')
+  assert.equal(readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'outside')
+  assert.equal(statSync(outside).mode & 0o777, outsideBefore.mode & 0o777)
+  assert.ok(!existsSync(snapshotPaths(base).restoreMarker), 'an unsafe stash never writes a restore marker')
+  assert.deepEqual(await listPreRollbackStashes(base), [], 'symlinked stashes are never listed')
+})
+
+test('restorePreRollback rejects a stash whose basename is not a stash-shaped name', async () => {
+  const { base, dshHome } = makeDirs()
+  put(dshHome, 'current.txt', 'current')
+  put(path.join(snapshotPaths(base).preRollbackDir, 'not-a-stash'), 'data', 'x')
+  assert.equal(await restorePreRollback(base, dshHome, 'not-a-stash'), 'incomplete')
+  assert.equal(readFileSync(path.join(dshHome, 'current.txt'), 'utf8'), 'current')
+  assert.deepEqual(await listPreRollbackStashes(base), [])
+})
+
 test('pruneSnapshots keeps newest active/known-good, exact failure/journal snapshots, and a bounded tail', async () => {
   const { base } = makeDirs()
   const dir = snapshotPaths(base).snapshotsDir
@@ -552,7 +620,7 @@ test('snapshotSummary reports newest snapshot, restore marker, and stash count',
   const { base, dshHome } = makeDirs()
   put(dshHome, 'data', 'data')
   const snap = await snapshotDshHome(base, dshHome, '0.1.1')
-  await stashPreRollback(base, dshHome)
+  const stash = await stashPreRollback(base, dshHome)
   const marker = snapshotPaths(base).restoreMarker
   writeFileSync(marker, '{}', { mode: 0o600 })
   const summary = await snapshotSummary(base)
@@ -561,6 +629,7 @@ test('snapshotSummary reports newest snapshot, restore marker, and stash count',
   assert.match(String(summary.latestAt), /^\d{4}-\d{2}-\d{2}T/)
   assert.equal(summary.restoreInProgress, true)
   assert.equal(summary.preRollbackCount, 1)
+  assert.equal(summary.latestStashName, path.basename(stash))
 })
 
 test('restoreSnapshot: staged copy itself may use node cp injection', async () => {

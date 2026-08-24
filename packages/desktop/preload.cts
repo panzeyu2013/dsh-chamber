@@ -272,6 +272,9 @@ export interface RuntimeSurface {
   retryRestore(): Promise<RuntimeState>
   recoverMetadata(): Promise<RuntimeState>
   cleanupVersion(version: string): Promise<RuntimeState>
+  /** Write-only data-restore action: the main process validates the stash name
+   *  against its private pre-rollback listing; no path is ever accepted. */
+  restorePreRollback(stashName: string): Promise<RuntimeState>
   onChanged(callback: (state: RuntimeState) => void): () => void
 }
 
@@ -384,6 +387,7 @@ function runtimeApi(): RuntimeSurface {
     retryRestore: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-restore'),
     recoverMetadata: () => ipcRenderer.invoke('dsh-chamber:runtime-recover-metadata'),
     cleanupVersion: version => ipcRenderer.invoke('dsh-chamber:runtime-cleanup-version', { version }),
+    restorePreRollback: stashName => ipcRenderer.invoke('dsh-chamber:runtime-restore-pre-rollback', { stashName }),
     onChanged: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event: IpcRendererEvent, state: RuntimeState) => callback(state);

@@ -97,6 +97,10 @@ export interface RuntimeState {
   snapshotCount?: number
   latestSnapshotAt?: string | null
   snapshotError?: string | null
+  /** Number of safe pre-rollback stashes; absence/0 means none exist. */
+  preRollbackCount?: number
+  /** Newest safe stash basename (never a userData path). */
+  preRollbackLatestName?: string | null
   /** Explicit main-process capabilities; absence/false means no visible retry. */
   canRetryApply?: boolean
   canRetryRestore?: boolean
@@ -133,6 +137,8 @@ export interface RuntimeSurface {
   /** No renderer-controlled path/version input is accepted. */
   recoverMetadata(): Promise<RuntimeState>
   cleanupVersion(version: string): Promise<RuntimeState>
+  /** Restore the newest pre-rollback stash over DSH_HOME (main-validated name). */
+  restorePreRollback(stashName: string): Promise<RuntimeState>
   onChanged(callback: (state: RuntimeState) => void): () => void
 }
 
@@ -145,6 +151,7 @@ export type RuntimeAction =
   | 'retry-restore'
   | 'cleanup-version'
   | 'recover-metadata'
+  | 'restore-pre-rollback'
 
 /**
  * The strict visible-action matrix. Busy phases expose no mutation; pending
@@ -152,7 +159,7 @@ export type RuntimeAction =
  * actions are added separately from explicit controller capability bits.
  */
 const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
-  idle: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+  idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   checking: [],
   available: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   downloading: [],
@@ -160,9 +167,9 @@ const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
   pending: ['reset-builtin'],
   applying: ['reset-builtin'],
   applied: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
-  rollback: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+  rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   'snapshot-failed': ['reset-builtin'],
-  failed: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+  failed: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
   error: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
 }
 
