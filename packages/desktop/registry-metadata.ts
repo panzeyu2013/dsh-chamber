@@ -55,9 +55,10 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 function safeUrlForError(raw: string): string {
   try {
     const url = new URL(raw)
-    // A registry may use a capability token in userinfo, query, or the path
-    // itself. Renderer-visible errors need only identify the rejected origin.
-    return `${url.protocol}//${url.host}/<redacted>`
+    // Renderer-visible errors need only identify the rejected origin — no path,
+    // which would otherwise be re-mangled by the shared path-redaction layer
+    // into a confusing `[path]` artifact.
+    return `${url.protocol}//${url.host}`
   } catch {
     return '<invalid registry URL>'
   }
