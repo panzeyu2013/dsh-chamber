@@ -49,6 +49,36 @@
   头部右端）。柔和化色板同上条（workspace accent 34%/21% + 56/61/66%，
   来源 accent 34% 61%）。验证：typecheck:sidebar、test:sidebar（饱和度
   断言随新色板更新）、build:renderer。
+- **桌面通知（设计 19，已实现 2026-09）**：session 在 complete / ask（question）/
+  request（approval/plan-review）时推送桌面原生通知，设置中可选项（并入通用页
+  「通知」控制组 + 四组分割线）。检测 = renderer 复用 06 §4 运行时事实通道边沿
+  检测（`renderer/src/notification-edges.ts` 纯函数：首报播种/断连补发/同 tick
+  去重；控制面零改动、无新 host 插件）；呈现 = 主进程 `desktop/notifications.ts`
+  裁决链（enabled/mode hidden-only|always/每事件开关 + requireHidden 聚焦豁免 +
+  5s 去重 claim + payload 白名单）+ Electron Notification（`dsh-chamber:notify`
+  IPC；click → showMainWindow + `dsh-chamber:notification-open` → openSession，
+  pending 队列 + drain 防窗口重建竞态——design 16 模式）；设置 =
+  chamber-settings.json 嵌套 `notifications` 键 + settings 壳通用页通知组
+  （notifications-settings.ts 纯函数 + GeneralView 接线 + i18n zh/en +
+  测试按钮）。验证：test:desktop 全绿（chamber-settings 16 + notifications 19 +
+  既有全链）、test:renderer-shell 全绿（notification-edges 26 + 既有）、
+  test:settings-bridge 全绿（notifications-settings 7 + 既有 37）、根 typecheck +
+  typecheck:settings-bridge/sidebar、verify:i18n 无 DRIFTED、build:renderer 成功。
+  **2026-09 独立 review 轮（四路并行：desktop 安全/正确性、renderer 接线、
+  设置 UI、跨层契约与架构纪律）**：无 P0；修复 P1×6——① 测试按钮空 sessionId
+  被白名单拒绝（validate 对 'test' 豁免 + click 跳过 openSession 入队）；
+  ② subagent 行漏入边沿导致子代理完成通知刷屏（projectRuntimeFacts 过滤
+  origin==='subagent'）；③ completedEdge 双发（dedupeCompleteEdges 跨上报
+  记忆，会话重跑清除）；④ pending 直切（question→approval 不经 undefined）
+  漏发（改为值变化即发）；⑤ ChamberSettings 契约类型缺 notifications 键
+  （preload/global.d.ts 镜像同步 + settings-bridge 删强转/本地声明）；
+  ⑥ 全对象 patch 与主进程 partial+deep-merge 契约相悖（改发 partial）。
+  P2 一并修复：claim 移至裁决后、队列 64 上限、claim key JSON 化、renderer
+  就绪信号（dsh-chamber:notifications-ready）解决重建路径点击丢失、onOpen
+  deps 稳定化注释、测试通知专用文案 key、未知键过滤、分割线反向组合、
+  默认值镜像断言。契约见 `docs/design/19-notifications.md`（含 OpenChamber
+  调研；§3.4 已同步 2026-09 用户拍板（并入通用页，无新入口））。剩余：
+  macOS 系统通知权限实机验收（M3，打包态冒烟）。
 - **VS Code 深链插件（设计 16，M0–M2 已实现，2026-08；独立复核/实机验收进行中）**：
   `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
   实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：

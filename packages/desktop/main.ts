@@ -27,7 +27,7 @@
  * - Tray (packaged only, defensive), single-instance lock.
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -69,6 +69,8 @@ import {
   writeSettingsFile,
 } from './chamber-settings.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
+import { claimNotification, decideNotification, validateNotificationRequest } from './notifications.ts';
+import type { NotificationSettingsLike } from './notifications.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
@@ -249,6 +251,17 @@ let pendingIntents: VscodeLaunchRequest[] = [];
 const seenDeepLinkUrls = new Set<string>();
 let drainPendingIntents: (() => void) | null = null;
 
+// 桌面通知（design 19 §3.3）：pendingNotificationOpens 照搬 pendingIntents 的
+// 队列 + drain 模式——点击通知时窗口可能正在重建/加载，事件不能丢；active
+// Notifications Set 持有存活引用防 GC 吞 click（macOS 已知坑，OpenChamber 同款）。
+let pendingNotificationOpens: Array<{ sourceId: string; sessionId: string }> = [];
+let drainPendingNotificationOpens: (() => void) | null = null;
+/** Renderer 就绪标志（design 19 §3.3）：renderer 注册 onOpen 监听后 invoke
+ *  dsh-chamber:notifications-ready 置位——did-finish-load 早于监听注册，推送
+ *  必须在就绪后才放行，否则窗口重建路径的点击事件会被 IPC 丢弃。 */
+let notificationOpenDrainReady = false;
+const activeNotifications = new Set<Notification>();
+
 /** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
 function scanDeepLinkUrls(argv: readonly string[]): string[] {
   const urls: string[] = [];
@@ -271,6 +284,17 @@ function enqueueDeepLink(rawUrl: string): void {
   }
   pendingIntents.push(parsed.intent);
   drainPendingIntents?.();
+}
+
+/** 通知点击入队（design 19 §3.3）：quit 在途 ignore；入队后立即 drain（窗口
+ *  已加载则直接推送，重建/加载中由 did-finish-load 补发——窗口关闭期间点击
+ *  通知不丢事件，照搬 pendingIntents 模式）。有界队列（64 条上限，与
+ *  seenDeepLinkUrls 同款防御）：窗口长期无法加载时超限丢弃最旧，绝不无限增长。 */
+function enqueueNotificationOpen(sourceId: string, sessionId: string): void {
+  if (quitRequested) return;
+  pendingNotificationOpens.push({ sourceId, sessionId });
+  if (pendingNotificationOpens.length > 64) pendingNotificationOpens.shift();
+  drainPendingNotificationOpens?.();
 }
 
 /** 退出清理（will-quit：transport dispose + 控制面 stop）的最长等待；超时强制
@@ -370,6 +394,13 @@ function showMainWindow(): void {
   if (mainWindowUrl !== null) createMainWindow(mainWindowUrl, false);
 }
 
+/** 单窗口聚焦判定（通知裁决的权威复查，design 19 §3.3）：渲染端 document.hasFocus
+ *  与主进程复查等价（单窗口），主进程再查一次作为权威。窗口必须存在、可见且聚焦
+ *  ——隐藏到托盘/后台的窗口不算聚焦。 */
+function isAnyWindowFocused(): boolean {
+  return mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused();
+}
+
 /** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控。 */
 function chamberSettingsStatus(): ChamberSettingsStatus {
   return {
@@ -382,6 +413,72 @@ function chamberSettingsStatus(): ChamberSettingsStatus {
 function pushSettingsChanged(): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('dsh-chamber:settings-changed', chamberSettingsStatus());
+  }
+}
+
+/**
+ * 桌面原生通知主链路（design 19 §3.3）：payload 白名单 → 去重 claim → 平台
+ * 支持 → 设置裁决 → 显示。返回是否实际显示（IPC 调用方/渲染端可据此判断）。
+ * 'test' 绕过 claim 与全部设置门禁（设置页「发送测试通知」）；通知失败静默
+ * 降级不误报——会话业务不受影响，侧边栏蓝点照常。
+ */
+function maybeShowNativeNotification(payload: unknown): boolean {
+  const validated = validateNotificationRequest(payload);
+  if (!validated.ok) {
+    console.warn(`[dsh-chamber] 拒绝非法通知 payload：${validated.error}`);
+    return false;
+  }
+  const request = validated.request;
+  if (!Notification.isSupported()) {
+    console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
+    return false;
+  }
+  // 设置权威在主进程内存（chamberSettings.notifications，settings-set 即时更新）；
+  // 旧文件缺字段时用 DEFAULT 兜底（normalizeSettings 已归一，此处仅防御）。
+  const settings: NotificationSettingsLike = {
+    ...DEFAULT_CHAMBER_SETTINGS.notifications,
+    ...(chamberSettings.notifications ?? {}),
+  };
+  const decision = decideNotification({
+    request,
+    settings,
+    anyWindowFocused: isAnyWindowFocused(),
+  });
+  if (decision.action === 'skip') return false;
+  // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
+  // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
+  if (request.kind !== 'test' && !claimNotification(request)) {
+    return false;
+  }
+  try {
+    const notification = new Notification({
+      title: request.title,
+      body: request.body,
+      silent: false,
+      // macOS 系统提示音（OpenChamber 同款）；其余平台交给系统默认。
+      ...(process.platform === 'darwin' ? { sound: 'Glass' } : {}),
+    });
+    // activeNotifications 持有存活引用防 GC 吞 click（macOS 已知坑）。
+    activeNotifications.add(notification);
+    notification.on('click', () => {
+      // 聚焦/显示窗口（存在则 restore+focus，无窗则重建）+ 打开对应会话：先把
+      // 打开意图入队并 drain，窗口未就绪时由 did-finish-load 补发。'test'
+      // 通知（设置页测试按钮）没有会话上下文，click 只聚焦不打开。
+      showMainWindow();
+      if (request.kind !== 'test') enqueueNotificationOpen(request.sourceId, request.sessionId);
+    });
+    notification.on('close', () => {
+      activeNotifications.delete(notification);
+    });
+    notification.on('failed', (_event, error) => {
+      console.warn('[dsh-chamber] 原生通知显示失败：', error);
+      activeNotifications.delete(notification);
+    });
+    notification.show();
+    return true;
+  } catch (error) {
+    console.warn('[dsh-chamber] 创建原生通知失败：', error);
+    return false;
   }
 }
 
@@ -441,7 +538,15 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
  * windowCloseBehavior 无副作用（影响未来的 close 事件）。
  */
 function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { ok: false; error: string } {
-  const next: ChamberSettings = { ...chamberSettings, ...patch };
+  // notifications 是嵌套对象：patch 可能只带部分子键（validatePatch 允许 partial），
+  // 必须 deep-merge 到当前值，绝不整组替换丢开关。
+  const next: ChamberSettings = {
+    ...chamberSettings,
+    ...patch,
+    notifications: patch.notifications !== undefined
+      ? { ...chamberSettings.notifications, ...patch.notifications }
+      : chamberSettings.notifications,
+  };
   // 副作用应用包 try：powerSaveBlocker / 登录自启意外抛异常时 loud 失败并
   // best-effort 回滚 keepAwake，绝不带病继续（绝不落半个设置）。
   try {
@@ -537,6 +642,9 @@ function installRendererRecovery(win: BrowserWindow): void {
   });
   win.webContents.on('render-process-gone', (_event, details) => {
     if (details.reason === 'clean-exit') return; // 用户关窗等正常退出
+    // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
+    // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
+    notificationOpenDrainReady = false;
     console.error(
       `[dsh-chamber] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}`,
     );
@@ -623,6 +731,17 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
   });
   installRendererRecovery(win);
+  // 通知点击的重建竞态兜底（design 19 §3.3）：点击时窗口若在重建/加载中，打开
+  // 意图入队；renderer 就绪后统一补发（照搬 pendingIntents 模式，不丢事件）。
+  // 就绪标志的重置点选在 did-start-loading（而非 did-finish-load）：页面刚加载
+  // 完成时 renderer 的 onOpen 监听尚未注册（preload 桥异步 expose → React mount
+  // → sshBridgeReady effect），而 did-finish-load 可能被 >500ms 的慢子资源拖迟
+  // 到 ready() invoke 之后——若在 finish 时重置会把已置位的标志 clobber 成永久
+  // false。start-loading 必先于页面脚本执行（invoke 恒在其后），顺序保证成立。
+  win.webContents.on('did-start-loading', () => {
+    notificationOpenDrainReady = false;
+    drainPendingNotificationOpens?.();
+  });
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
   });
@@ -928,6 +1047,19 @@ if (!gotTheLock) {
       if (!applied.ok) return applied;
       pushSettingsChanged();
       return chamberSettingsStatus();
+    }));
+
+    // 桌面通知（design 19 §3.3）：渲染端检测会话边沿并组装 payload → notify
+    // （invoke，返回是否实际显示）→ 主进程白名单/去重/裁决 + 原生通知。click →
+    // notification-open 推送 → 渲染端 openSession（既有路径）。
+    ipcMain.handle('dsh-chamber:notify', trustedIpc(({ payload }) => maybeShowNativeNotification(payload)));
+    // Renderer 通知就绪信号（design 19 §3.3）：onOpen 监听注册后调用——通知点击
+    // 的推送只在就绪后放行（did-finish-load 早于监听注册，见 drain 条件）。
+    // 返回 true 与 preload 的 Promise<boolean> 声明一致（成功置位信号）。
+    ipcMain.handle('dsh-chamber:notifications-ready', trustedIpc(() => {
+      notificationOpenDrainReady = true;
+      drainPendingNotificationOpens?.();
+      return true;
     }));
 
     // OS 唤醒即时重探 + 推送（design 14 D4）：主进程对 error/degraded 实例
@@ -1507,5 +1639,28 @@ if (!gotTheLock) {
       }
     };
     drainPendingIntents();
+
+    // 通知打开事件统一 drain（design 19 §3.3，照搬 pendingIntents 模式）：窗口
+    // 存在、已完成加载且 renderer 已就绪（onOpen 监听注册后经
+    // dsh-chamber:notifications-ready 置位）→ 直接推送；任一条件不满足 → 重新
+    // 入队，did-finish-load / ready IPC 后再补发（窗口关闭期间点击通知不丢事件）。
+    drainPendingNotificationOpens = () => {
+      const opens = pendingNotificationOpens;
+      pendingNotificationOpens = [];
+      for (const open of opens) {
+        if (quitRequested) return;
+        if (
+          mainWindow !== null && !mainWindow.isDestroyed()
+          && !mainWindow.webContents.isLoading()
+          && !mainWindow.webContents.isCrashed()
+          && notificationOpenDrainReady
+        ) {
+          mainWindow.webContents.send('dsh-chamber:notification-open', open);
+        } else {
+          pendingNotificationOpens.push(open);
+        }
+      }
+    };
+    drainPendingNotificationOpens();
   });
 }
