@@ -3149,7 +3149,10 @@ if (!gotTheLock) {
       if (runtimeOperation !== null
         || !runtimeActionAllowed('restore-pre-rollback')) return current;
 
-      const restoreResult: { outcome: 'complete' | 'half' | 'incomplete' | 'blocked' } = { outcome: 'blocked' };
+      const restoreResult: {
+        outcome: 'complete' | 'half' | 'incomplete' | 'blocked'
+        error: string | null
+      } = { outcome: 'blocked', error: null };
       const operation = (async (): Promise<StartupResult | null> => {
         const lease = runtimeWriterFence.tryAcquire('runtime:restore-pre-rollback');
         if (lease === null) return null;
@@ -3166,17 +3169,18 @@ if (!gotTheLock) {
         return null;
       })().catch(async (error) => {
         await cp.stopLocal().catch(() => undefined);
-        await publishBlockedStartup(`恢复回滚前数据失败：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`);
+        // Recorded, not hard-blocked: the startup transaction below restarts
+        // the instance (a thrown transaction leaves a resumeable marker).
+        restoreResult.error = sanitizeErrorText(error instanceof Error ? error.message : String(error));
         return null;
       }).finally(() => {
         runtimeOperation = null;
       });
       runtimeOperation = operation;
       await operation;
-      if (restoreResult.outcome === 'incomplete') {
-        await publishBlockedStartup('回滚前数据暂存缺失或不可信；拒绝恢复');
-        return runtimeInstance.getState();
-      }
+      if (restoreResult.outcome === 'blocked') return runtimeInstance.getState();
+      // A 'half' restore leaves the durable marker for retry-restore to resume
+      // (the standard restore-half convention).
       if (restoreResult.outcome === 'half') {
         await publishBlockedStartup('恢复回滚前数据未完成（现场已保留），请重试恢复', {
           restoreOutcome: 'half',
@@ -3184,7 +3188,19 @@ if (!gotTheLock) {
         });
         return runtimeInstance.getState();
       }
-      if (restoreResult.outcome === 'blocked') return runtimeInstance.getState();
+      if (restoreResult.outcome === 'incomplete') {
+        // The stash was missing/untrustworthy, so DSH_HOME was never touched.
+        // Surface the error but hand off to the startup transaction instead of
+        // hard-blocking with no actions (that would strand the local instance).
+        await refreshRuntimeEvidence({ error: '回滚前数据暂存缺失或不可信；拒绝恢复' });
+        await runRuntimeStartup();
+        return runtimeInstance.getState();
+      }
+      if (restoreResult.error !== null) {
+        await refreshRuntimeEvidence({ error: `恢复回滚前数据失败：${restoreResult.error}` });
+        await runRuntimeStartup();
+        return runtimeInstance.getState();
+      }
       // 'complete': restart the local instance against the restored data.
       await runRuntimeStartup();
       return runtimeInstance.getState();
