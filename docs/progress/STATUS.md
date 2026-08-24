@@ -79,15 +79,15 @@
   默认值镜像断言。契约见 `docs/design/19-notifications.md`（含 OpenChamber
   调研；§3.4 已同步 2026-09 用户拍板（并入通用页，无新入口））。剩余：
   macOS 系统通知权限实机验收（M3，打包态冒烟）。
-- **VS Code 深链插件（设计 16，M0–M2 已实现，2026-08；独立复核/实机验收进行中）**：
+- **VS Code 深链 + open-in 打开注册表（设计 16 + 2026-08 扩展，M0–M2 已实现；
+  独立复核/实机验收进行中）**：
   `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
   实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：
   parseOpenVscodeIntent / buildVscodeRemoteUrl（authority 与 SSH_HOST_PATTERN 解耦、
   IPv6 括号、sshPort≠22 拒绝）/ detectVscodeAvailability（纯 fs+PATH，默认口径）/
   runVscodeLaunch 双入口共用流水线，43 用例全绿）+ main.ts 接线（顶层 open-url +
   pendingIntents 去重队列 + second-instance argv 扫描 + isPackaged/win32 门控协议注册 +
-  `dsh-chamber:vscode-availability`/`open-vscode` 两 IPC + drain 后 best-effort intent
-  推送）+ preload 面（`vscode.availability()/open()`、`deepLink.onIntent()`）+ 新客户端
+  drain 后 best-effort intent 推送）+ preload 面（`deepLink.onIntent()`）+ 新客户端
   插件 `@dsh-chamber/dsh-client-ui-vscode`（`shell.overlay` 主区右上按钮（vendor
   AppFrame 已实证渲染该槽、条目自动 opt-in pointer-events），可用性 + 当前工作区双门控
   fail-closed，**本地与远程来源均显示**（用户决策 2026-08：local 走 `vscode://file/`，
@@ -101,8 +101,43 @@
   IPC instance pattern 对称校验、openVscodeUrl 注入点 scheme 复验、drain .catch）；
   前端接线审查修复 P1×1（coordinator 桥未就绪不固化 + 有界轮询）与 P2×5（/shared
   barrel、open .catch、chamberInstanceId bail、删未用 peer、焦点环）。
+  > 上段为 design 16 历史基线（重命名前）。2026-08 open-in 扩展后现状见下段。
+  **open-in 扩展（2026-08，设计 17 已落档 `docs/design/17-open-in-registry.md`）**：插件升级为通用打开
+  注册表——包重命名 `@dsh-chamber/dsh-client-ui-open-in`（组件 OpenInButton，会话头部
+  utilities 槽单条目 `open-in` order -1）；主进程新增 `packages/desktop/open-in.ts`
+  （electron-free：OpenInApp 注册表 [finder, vscode]，finder provider 仅 local
+  （validateRemotePath + stat → 目录 `shell.openPath` / 文件 `shell.showItemInFolder`，
+  openchamber reveal 同款语义），vscode provider 包装 runVscodeLaunch 零行为变化；
+  `runOpenInLaunch` 六步 loud 管线：appId 白名单 → instanceId 校验 → **path 校验上移
+  管线**（validateRemotePath，防未来 provider 漏检）→ remoteCapable 门（远程来源只
+  放行 vscode 家族）→ 可用性二次校验（经注入 ctx，任意机器可测）→ 分发，24 用例全绿）；
+  `dsh-chamber:open-in-apps`（能力协商）/`dsh-chamber:open-in` 两 IPC（**原 design 16
+  的 vscode-availability/open-vscode 两 IPC 已随旧插件删除**，渲染层唯一入口收敛；
+  open-in 对 vscode 成功后保留 deep-link-intent 推送，与 OS 深链对齐）+ info 载荷
+  `platform`（非秘密）+ preload 面 `vscode`→`openIn`（apps()/open()）+ global.d.ts 同步；
+  本地来源（sourceId==='local'）显示 [finder, vscode]（≥2 → 图标 + Menu 下拉，默认
+  vscode 保持单键行为；**vscode 未装时显示单 finder 按钮为净新增能力**），远程来源仅
+  vscode（行为不变）；平台文案 Finder/资源管理器/文件管理器按 `platform` 选键。
+  验证：test:desktop 全链 **287 用例**（含 deep-link 43 + open-in 24）、typecheck:open-in
+  及全部插件 typecheck 回归、build:renderer、test:renderer-shell（锁步断言）、
+  test:sidebar/test:git、verify:i18n、frozen-lockfile（锁文件 = HEAD + 仅 importer
+  重命名与 primitives peer 的最小 diff，无再生漂移）全绿。
+  **2026-08 五路对抗复核（安全/前端接线/测试质量/打包分发/集成等价，无 P0）**：
+  修复 P1×3（测试套件机器依赖——可用性门改为 ctx 注入；AGENTS.md 行号前缀事故；
+  锁文件再生漂移还原）+ P2×7（孤儿 vscode IPC 删除、path 校验上移管线、open-in 载荷
+  形状守卫、openPath 边界提取 normalizeOpenPathError 并补测、vscode URL 断言强化为
+  精确目标、门失败副作用 spy、folder 图标 hover 反馈）。如实记录的边界：①
+  `showItemInFolder` 为 Electron void API——文件 reveal 分支无错误通道，静默面
+  （目录分支 loud，此面属 API 限制）；② Windows 盘符路径被 validateRemotePath
+  （POSIX `/` 开头）拒绝 → win32 上 finder/vscode-file loud 失败（"Windows 首版暂缓"
+  口径一致，需实机确认 dsh 工作区路径形态）；③ "Session log 同槽"与按钮/下拉在
+  vendor 头部的定位/层叠为描述性主张，需实机确认；④ apps 列表会话内记忆化——
+  打开下拉时 `refreshApps()` 重探（会话中途装/卸 app 无需刷新页面），点击时主进程
+  活体复检兜底（loud）；⑤ slot 条目 label 为 vendor 诊断标识（非用户可见），已用
+  中性文案。
   剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
-  N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径）。契约见
+  N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径、Finder 下拉在 vendor
+  头部的定位/层叠、远程来源仅 vscode）。深链契约见
   `docs/design/16-vscode-deeplink.md`。
 - **SSH 密码认证（05 §8 例外，已落地）**：未做（可选）：一键免密引导、系统钥匙串。
 - **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径；Unix 为契约目标。

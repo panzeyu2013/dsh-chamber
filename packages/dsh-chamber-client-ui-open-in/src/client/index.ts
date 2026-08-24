@@ -1,7 +1,7 @@
 /**
- * Chamber VS Code deep-link client plugin (design 16): a header utility
- * button that opens the current session's workspace in local VS Code
- * Remote-SSH.
+ * Chamber open-in client plugin (design 16 + open-in extension): a header
+ * utility button that opens the current session's workspace in an installed
+ * app — Finder (local sources) and/or VS Code (local + remote SSH).
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
@@ -15,28 +15,28 @@
  *
  * The source id rides `ctx.chamberInstanceId` (provided by chamber-entry);
  * the workspace path for the header's session comes from the framework store
- * (see OpenInVscodeButton).
+ * (see OpenInButton).
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { OpenInVscodeButton, type OpenInVscodeInjected } from './OpenInVscodeButton.tsx'
-import { en, zh, type VscodeKey } from '../locales.ts'
+import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
+import { en, zh, type OpenInKey } from '../locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    'dsh-chamber.vscode': VscodeKey
+    'dsh-chamber.open-in': OpenInKey
   }
 }
 
 /** The official conversation header utilities slot (beside "Session log"). */
-export const VSCODE_HEADER_SLOT = 'conversation.session.header.utilities' as const
-const NS = 'dsh-chamber.vscode'
+export const OPEN_IN_HEADER_SLOT = 'conversation.session.header.utilities' as const
+const NS = 'dsh-chamber.open-in'
 
 export const inject = ['slots', 'locale']
 
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: VS Code deep-link dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: open-in dictionaries')
 
   // Per-boot instance id provided by chamber-entry; loose cast (the sidebar
   // plugin uses the same `as any` seam — the vendor cordis face stays loose).
@@ -50,17 +50,19 @@ export function apply(ctx: ClientContext): void {
   // The slot inject factory closes over ctx (same pattern as the vendor
   // session-log entry): it hands the component this ctx's source id and the
   // bound translator; the per-header session id and the workspace rows come
-  // from the framework standard kit (see OpenInVscodeButton props).
-  const injected = (): OpenInVscodeInjected => ({ sourceId, t })
+  // from the framework standard kit (see OpenInButton props).
+  const injected = (): OpenInInjected => ({ sourceId, t })
 
-  ctx.slots.inject(VSCODE_HEADER_SLOT, () => ctx.slots.register({
-    name: VSCODE_HEADER_SLOT,
-    id: 'vscode-open',
+  ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
+    name: OPEN_IN_HEADER_SLOT,
+    id: 'open-in',
     // Row order is ascending by `order` (default 0): -1 keeps the vendor
     // "Session log" entry (order 0) pinned at the row's far RIGHT and places
     // this button to its left (2026-08 user requirement).
     order: -1,
-    label: () => t('title'),
+    // Neutral entry label (slot registrant diagnostics — the user-facing
+    // tooltip/aria-label comes from the component per app, see OpenInButton).
+    label: () => t('titleOpen'),
     inject: injected,
-  }, OpenInVscodeButton))
+  }, OpenInButton))
 }

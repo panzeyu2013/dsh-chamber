@@ -379,12 +379,17 @@ export interface NotificationSurface {
   onOpen(listener: (req: { sourceId: string; sessionId: string }) => void): () => void
 }
 
-/** window.dshChamber.vscode — VS Code availability probe + open action (design 16 §5/§6.4). */
-export interface VscodeSurface {
-  /** Re-probed in the main process on every call (no stale cache); fail-closed in the UI. */
-  availability(): Promise<{ available: boolean }>
-  /** The renderer button trigger — the same runVscodeLaunch pipeline as the OS deep link. */
-  open(instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+/** window.dshChamber.openIn — registry capability negotiation + unified open action (open-in.ts). */
+export interface OpenInAppInfo {
+  id: string
+  remoteCapable: boolean
+  available: boolean
+}
+export interface OpenInSurface {
+  /** Registry capability negotiation (fixed order); availability re-probed in the main process on every call. */
+  apps(): Promise<OpenInAppInfo[]>
+  /** The renderer trigger — the same runOpenInLaunch pipeline every entry point shares. */
+  open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** Normalized deep-link intent pushed from the main process (design 16 §2). */
@@ -399,17 +404,18 @@ export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
 }
 
-/** The full bridge: app info + ssh + update + chamber settings + system resume
- *  + vscode deep-link + desktop notification surfaces. */
+/** The full bridge: app info + platform + ssh + update + chamber settings
+ *  + system resume + open-in + deep-link + notifications surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
   version: string | null
+  platform: string | null
   desktopSsh: DesktopSshSurface
   update: UpdateSurface
   settings: SettingsSurface
   systemResume: SystemResumeSurface
-  vscode: VscodeSurface
+  openIn: OpenInSurface
   deepLink: DeepLinkSurface
   notifications: NotificationSurface
 }

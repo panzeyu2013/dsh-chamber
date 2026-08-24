@@ -29,7 +29,7 @@
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +43,8 @@ import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
+import { listOpenInApps, normalizeOpenPathError, runOpenInLaunch } from './open-in.ts';
+import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController } from './updater.ts';
 import {
   applyPlugins,
@@ -1022,6 +1024,7 @@ if (!gotTheLock) {
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
       dshVersion: readDshVersion(dshWorkspace),
       version,
+      platform: process.platform,
     })));
 
     // Chamber settings（design 14 D7）：启动加载 + 应用副作用（keep-awake /
@@ -1499,11 +1502,11 @@ if (!gotTheLock) {
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
     }));
 
-    // VS Code 深链（design 16 §4/§5）：IPC 只是可信渲染端触发的 intent，与 OS
-    // 深链共用同一 runVscodeLaunch 管线（注册表实查 + authority 构造 + 可用性
-    // 二次校验，§3.4）。wiredCtx.lookupInstance 查 transportManager 实查；
-    // vscodeAvailable 每次实探（getter 惰性、无缓存陈旧）；openVscodeUrl 包装
-    // shell.openExternal（catch → loud error，返回 {error} 由调用方处理）。
+    // VS Code 深链（design 16 §4/§5）+ open-in 注册表（open-in.ts）的共享宿主
+    // 依赖束：wiredCtx 同时供 OS 深链 drain（runVscodeLaunch）与 open-in 执行
+    // 管线复用。lookupInstance 查 transportManager 实查；vscodeAvailable 每次
+    // 实探（getter 惰性、无缓存陈旧）；openVscodeUrl 包装 shell.openExternal
+    // （catch → loud error，返回 {error} 由调用方处理）。
     const wiredCtx: VscodeLaunchContext = {
       lookupInstance: (id) => {
         const instance = sm.listInstances().find(entry => entry.id === id);
@@ -1532,16 +1535,53 @@ if (!gotTheLock) {
         }
       },
     };
-    ipcMain.handle('dsh-chamber:vscode-availability', trustedIpc(() => detectVscodeAvailability(process.platform)));
-    ipcMain.handle('dsh-chamber:open-vscode', trustedIpc(async ({ instanceId, path }) => {
-      const result = await runVscodeLaunch({ instanceId, path }, wiredCtx);
-      // 成功后 best-effort 推送 intent 激活渲染层对应来源（窗口未就绪/销毁则跳过，
-      // 不阻塞 VS Code 启动）；失败 {error} 由调用方展示。
-      if (result.ok && mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('dsh-chamber:deep-link-intent', { instanceId, path });
+
+    // open-in 注册表（open-in.ts）：apps() 能力协商 + 统一执行管线。wiredCtx
+    // 复用 registry/availability/openVscodeUrl 依赖，补 shell 文件系统面
+    // （stat/openPath/showItemInFolder 均为主进程包装）。原 design 16 的两个
+    // vscode IPC（vscode-availability / open-vscode）随旧插件删除而移除——渲染
+    // 层唯一入口收敛为 open-in 两个通道（复核 2026-08）。
+    const openInCtx: OpenInLaunchContext = {
+      lookupInstance: wiredCtx.lookupInstance,
+      vscodeAvailable: wiredCtx.vscodeAvailable,
+      openVscodeUrl: wiredCtx.openVscodeUrl,
+      stat: async (p) => {
+        try {
+          const s = await fsp.stat(p)
+          return s.isDirectory() ? { kind: 'dir' } : { kind: 'file' }
+        } catch { return null }
+      },
+      openPath: async (p) => {
+        // shell.openPath 部分失败模式（win32/linux）存在 reject 路径——与
+        // openVscodeUrl 封装同款纪律：reject 归一为错误串（loud），绝不落
+        // transport rejection。
+        try {
+          return normalizeOpenPathError(await shell.openPath(p))
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          console.error('[dsh-chamber] 打开路径失败：', error)
+          return `open path failed: ${message}`
+        }
+      },
+      showItemInFolder: (p) => shell.showItemInFolder(p),
+    }
+    ipcMain.handle('dsh-chamber:open-in-apps', trustedIpc(() => ({ apps: listOpenInApps(process.platform) })))
+    ipcMain.handle('dsh-chamber:open-in', trustedIpc(async (payload: unknown) => {
+      // 载荷形状守卫（复核 P2）：不可信渲染载荷直接解构会以 TypeError 落到
+      // transport rejection——统一为 loud {error}，与其余失败面一致。
+      const req = payload as Partial<OpenInRequest> | null
+      if (req === null || typeof req !== 'object' || typeof req.appId !== 'string' || typeof req.instanceId !== 'string' || typeof req.path !== 'string') {
+        return { ok: false, error: 'invalid open-in payload' }
+      }
+      const result = await runOpenInLaunch({ appId: req.appId, instanceId: req.instanceId, path: req.path }, openInCtx)
+      // vscode 启动成功后 best-effort 推送 intent 激活渲染层对应来源（与 OS
+      // 深链路径对齐，维持「vscode 启动→激活源」不变量；finder 无对应激活
+      // 语义不推送；窗口未就绪/销毁则跳过，不阻塞启动）。
+      if (result.ok && req.appId === 'vscode' && mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('dsh-chamber:deep-link-intent', { instanceId: req.instanceId, path: req.path });
       }
       return result;
-    }));
+    }))
 
     // Update controller (design 11): silent check on a startup delay + 6h
     // interval; autoDownload=false — checking never downloads, the download
