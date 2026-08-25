@@ -12,6 +12,8 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+## [0.2.0-beta.1] - 2026-08-25
+
 ### Added
 
 - **Authenticated server Gateway (design 17)** — adds the independently
