@@ -297,63 +297,68 @@ jobs:
           pnpm --filter @dsh-chamber/gateway pack --pack-destination packages/gateway/release
           npm install --ignore-scripts --prefix /tmp/dsh-gateway-install packages/gateway/release/*.tgz
           /tmp/dsh-gateway-install/node_modules/.bin/gateway --help
-      - name: Publish gateway package to npm (integrity-idempotent)
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ needs.create-release.outputs.version }}
-        run: |
-          set -euo pipefail
-          TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
-          test -n "$TGZ"
-          CHANNEL=$(node scripts/release-semver.mjs channel "$VERSION")
-          LOCAL_INTEGRITY=$(node -e "const fs=require('node:fs'),c=require('node:crypto');process.stdout.write('sha512-'+c.createHash('sha512').update(fs.readFileSync(process.argv[1])).digest('base64'))" "$TGZ")
-
-          set +e
-          CHANNEL_RAW=$(npm view "@dsh-chamber/gateway" "dist-tags.${CHANNEL}" --json 2>/tmp/gateway-npm-channel.err)
-          CHANNEL_STATUS=$?
-          set -e
-          if [[ "$CHANNEL_STATUS" -ne 0 ]] && ! grep -q 'E404' /tmp/gateway-npm-channel.err; then
-            cat /tmp/gateway-npm-channel.err >&2
-            echo "::error::unable to read npm ${CHANNEL} channel"
-            exit "$CHANNEL_STATUS"
-          fi
-          CURRENT_CHANNEL=""
-          if [[ "$CHANNEL_STATUS" -eq 0 ]]; then
-            CURRENT_CHANNEL=$(node -e "const raw=process.argv[1].trim();if(raw&&raw!=='null'){const v=JSON.parse(raw);if(typeof v!=='string'||v==='')throw new Error('registry returned an invalid dist-tag');process.stdout.write(v)}" "$CHANNEL_RAW")
-          fi
-          if [[ -n "$CURRENT_CHANNEL" ]]; then
-            CHANNEL_ORDER=$(node scripts/release-semver.mjs compare "$CURRENT_CHANNEL" "$VERSION")
-            if [[ "$CHANNEL_ORDER" -gt 0 ]]; then
-              echo "::error::refusing to move npm ${CHANNEL} backward from ${CURRENT_CHANNEL} to ${VERSION}"
-              exit 1
-            fi
-          fi
-
-          set +e
-          REMOTE_RAW=$(npm view "@dsh-chamber/gateway@${VERSION}" dist.integrity --json 2>/tmp/gateway-npm-view.err)
-          VIEW_STATUS=$?
-          set -e
-          if [[ "$VIEW_STATUS" -eq 0 ]]; then
-            REMOTE_INTEGRITY=$(node -e "const v=JSON.parse(process.argv[1]);if(typeof v!=='string'||v==='')throw new Error('registry returned no integrity');process.stdout.write(v)" "$REMOTE_RAW")
-            if [[ "$REMOTE_INTEGRITY" == "$LOCAL_INTEGRITY" ]]; then
-              if [[ "$CURRENT_CHANNEL" != "$VERSION" ]]; then
-                npm dist-tag add "@dsh-chamber/gateway@${VERSION}" "$CHANNEL"
-                echo "repaired npm ${CHANNEL} channel to @dsh-chamber/gateway@${VERSION}"
-              else
-                echo "@dsh-chamber/gateway@${VERSION} already exists with identical integrity and channel"
-              fi
-              exit 0
-            fi
-            echo "::error::npm already contains @dsh-chamber/gateway@${VERSION} with different tarball integrity"
-            exit 1
-          fi
-          if ! grep -q 'E404' /tmp/gateway-npm-view.err; then
-            cat /tmp/gateway-npm-view.err >&2
-            echo "::error::unable to determine whether @dsh-chamber/gateway@${VERSION} already exists"
-            exit "$VIEW_STATUS"
-          fi
-          npm publish "$TGZ" --access public --tag "$CHANNEL"
+      # ------------------------------------------------------------------
+      # [2026-08-25] npm 发布暂缓（发布者决策）：暂不发布 npm，整个
+      # "Publish gateway package to npm" 步骤暂时注释。恢复发布时取消
+      # 下方整段注释（含 S16 的 npm 侧完整性幂等/渠道防回退逻辑）。
+      # ------------------------------------------------------------------
+      # - name: Publish gateway package to npm (integrity-idempotent)
+      # if: ${{ github.event.inputs.dry_run != 'true' }}
+      # env:
+      # NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # VERSION: ${{ needs.create-release.outputs.version }}
+      # run: |
+      # set -euo pipefail
+      # TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
+      # test -n "$TGZ"
+      # CHANNEL=$(node scripts/release-semver.mjs channel "$VERSION")
+      # LOCAL_INTEGRITY=$(node -e "const fs=require('node:fs'),c=require('node:crypto');process.stdout.write('sha512-'+c.createHash('sha512').update(fs.readFileSync(process.argv[1])).digest('base64'))" "$TGZ")
+      #
+      # set +e
+      # CHANNEL_RAW=$(npm view "@dsh-chamber/gateway" "dist-tags.${CHANNEL}" --json 2>/tmp/gateway-npm-channel.err)
+      # CHANNEL_STATUS=$?
+      # set -e
+      # if [[ "$CHANNEL_STATUS" -ne 0 ]] && ! grep -q 'E404' /tmp/gateway-npm-channel.err; then
+      # cat /tmp/gateway-npm-channel.err >&2
+      # echo "::error::unable to read npm ${CHANNEL} channel"
+      # exit "$CHANNEL_STATUS"
+      # fi
+      # CURRENT_CHANNEL=""
+      # if [[ "$CHANNEL_STATUS" -eq 0 ]]; then
+      # CURRENT_CHANNEL=$(node -e "const raw=process.argv[1].trim();if(raw&&raw!=='null'){const v=JSON.parse(raw);if(typeof v!=='string'||v==='')throw new Error('registry returned an invalid dist-tag');process.stdout.write(v)}" "$CHANNEL_RAW")
+      # fi
+      # if [[ -n "$CURRENT_CHANNEL" ]]; then
+      # CHANNEL_ORDER=$(node scripts/release-semver.mjs compare "$CURRENT_CHANNEL" "$VERSION")
+      # if [[ "$CHANNEL_ORDER" -gt 0 ]]; then
+      # echo "::error::refusing to move npm ${CHANNEL} backward from ${CURRENT_CHANNEL} to ${VERSION}"
+      # exit 1
+      # fi
+      # fi
+      #
+      # set +e
+      # REMOTE_RAW=$(npm view "@dsh-chamber/gateway@${VERSION}" dist.integrity --json 2>/tmp/gateway-npm-view.err)
+      # VIEW_STATUS=$?
+      # set -e
+      # if [[ "$VIEW_STATUS" -eq 0 ]]; then
+      # REMOTE_INTEGRITY=$(node -e "const v=JSON.parse(process.argv[1]);if(typeof v!=='string'||v==='')throw new Error('registry returned no integrity');process.stdout.write(v)" "$REMOTE_RAW")
+      # if [[ "$REMOTE_INTEGRITY" == "$LOCAL_INTEGRITY" ]]; then
+      # if [[ "$CURRENT_CHANNEL" != "$VERSION" ]]; then
+      # npm dist-tag add "@dsh-chamber/gateway@${VERSION}" "$CHANNEL"
+      # echo "repaired npm ${CHANNEL} channel to @dsh-chamber/gateway@${VERSION}"
+      # else
+      # echo "@dsh-chamber/gateway@${VERSION} already exists with identical integrity and channel"
+      # fi
+      # exit 0
+      # fi
+      # echo "::error::npm already contains @dsh-chamber/gateway@${VERSION} with different tarball integrity"
+      # exit 1
+      # fi
+      # if ! grep -q 'E404' /tmp/gateway-npm-view.err; then
+      # cat /tmp/gateway-npm-view.err >&2
+      # echo "::error::unable to determine whether @dsh-chamber/gateway@${VERSION} already exists"
+      # exit "$VIEW_STATUS"
+      # fi
+      # npm publish "$TGZ" --access public --tag "$CHANNEL"
       - name: Upload gateway package to the draft release
         if: ${{ github.event.inputs.dry_run != 'true' }}
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
