@@ -20,6 +20,16 @@ const shared = {
   sourcemap: false,
   legalComments: 'none',
   logLevel: 'info',
+  // Pure-ESM output has no ambient `require`. Bundled CJS deps that do a
+  // static `require('events')` (ws's websocket.js — the session-index /
+  // approval streams' transport) used to hit esbuild's __require fallback:
+  // "Dynamic require of 'events' is not supported", which wedged the
+  // derived session index in an endless reconnect loop (live finding on
+  // Linux + macOS). The banner installs a module-scoped require shim so
+  // __require resolves node builtins normally.
+  banner: {
+    js: `import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);`,
+  },
 }
 
 // Bundle the control-plane and its runtime dependencies into both outputs.
