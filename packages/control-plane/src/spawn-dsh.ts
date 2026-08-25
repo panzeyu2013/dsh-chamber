@@ -75,8 +75,19 @@ export function sanitizeManagedDshEnv(input: NodeJS.ProcessEnv): NodeJS.ProcessE
   return output
 }
 
-/** First port attempted for a managed dsh host. */
+/** First port attempted for a managed dsh host (desktop/local default). */
 export const BASE_DHSPORT = 17510
+
+/**
+ * Validate a dsh port base: a positive integer in the port range. The base is
+ * the first port attempted for a managed dsh host; spawn attempts walk upward
+ * (base, base+1, …). Server gateway deployments override it via
+ * `--dsh-port` / `DSH_GATEWAY_DSH_PORT` (design 17 §3; the installer wizard
+ * defaults to 30800 so the gateway occupies 30801 next to the managed dsh).
+ */
+export function isDshPortBaseValid(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= 65535
+}
 
 /**
  * Grace window between SIGTERM and SIGKILL when stopping a managed host
@@ -215,6 +226,9 @@ interface SpawnAttemptOptions {
   logger: Logger
   /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
   patchPath?: string | null
+  /** First port attempted (default BASE_DHSPORT). Server gateway deployments
+   *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
+  dshPortBase?: number
   signal?: AbortSignal
   pidRecordWriter: typeof writePidRecord
   terminateChildFn: (child: ChildProcess) => Promise<void>
@@ -620,6 +634,9 @@ export interface SpawnDshOptions {
   logger: Logger
   /** Optional `--patch` overlay passed to the dsh launcher (design 09 module B). */
   patchPath?: string | null
+  /** First port attempted (default BASE_DHSPORT). Server gateway deployments
+   *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
+  dshPortBase?: number
   signal?: AbortSignal
   /** Injectable ledger writer for deterministic lifecycle-failure tests. */
   pidRecordWriter?: typeof writePidRecord
@@ -648,12 +665,17 @@ export async function spawnDsh({
   logger,
   patchPath,
   signal,
+  dshPortBase,
   pidRecordWriter = writePidRecord,
   terminateChildFn = terminateChild,
 }: SpawnDshOptions): Promise<SpawnedHost> {
+  const basePort = dshPortBase ?? BASE_DHSPORT
+  if (!isDshPortBaseValid(basePort)) {
+    throw new Error(`invalid dsh port base: ${String(basePort)}`)
+  }
   let lastError: unknown
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
-    const port = BASE_DHSPORT + attempt
+    const port = basePort + attempt
     if (signal?.aborted) throw new Error('spawn aborted')
     // Port pre-check: skip a port that is already taken (a stray process from
     // an earlier run would otherwise make this attempt die with EADDRINUSE).

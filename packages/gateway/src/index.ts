@@ -139,6 +139,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     port: options.config.plane.port,
     stateDir: options.config.plane.stateDir,
     dshWorkspacePath: options.config.plane.dshWorkspacePath,
+    ...(options.config.plane.dshPort === undefined ? {} : { dshPortBase: options.config.plane.dshPort }),
     logger,
     corsOrigins: options.config.corsOrigins,
     corsEvaluator: requestPolicy.corsEvaluator,

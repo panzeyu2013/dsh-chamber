@@ -24,6 +24,8 @@ Usage:
 Options:
   --host ADDR         listen address ('127.0.0.1' | '0.0.0.0', default 127.0.0.1)
   --port N            HTTP port (default 3000)
+  --dsh-port N        first port attempted for the managed dsh host
+                      (default 17510; server installs commonly use 30800)
   --state-dir DIR     state root (default $DSH_GATEWAY_STATE or ~/.dsh-chamber)
   --dsh-path PATH     dsh workspace path (default $DSH_GATEWAY_DSH_PATH or repo default)
   --ui-password PWD   browser password auth (12-1024 characters)
@@ -48,6 +50,7 @@ Exit codes: 0 clean shutdown/help, 1 startup failure, 2 configuration error,
 interface ParsedArgs {
   host?: string
   port?: number
+  dshPort?: number
   stateDir?: string
   dshPath?: string
   uiPassword?: string
@@ -84,6 +87,12 @@ function parseArgs(argv: string[]): ParsedArgs {
         const raw = takeValue()
         if (!/^\d+$/.test(raw)) throw new UsageError(`invalid --port value: ${raw}`)
         args.port = Number(raw)
+        break
+      }
+      case '--dsh-port': {
+        const raw = takeValue()
+        if (!/^\d+$/.test(raw)) throw new UsageError(`invalid --dsh-port value: ${raw}`)
+        args.dshPort = Number(raw)
         break
       }
       case '--state-dir': args.stateDir = takeValue(); break

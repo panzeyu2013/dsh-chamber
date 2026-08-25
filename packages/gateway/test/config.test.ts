@@ -104,6 +104,37 @@ test('an invalid port is a config error', () => {
   assert.throws(() => parseGatewayConfig({ port: 70000 }, STATE, DSH), GatewayConfigError)
 })
 
+test('--dsh-port sets the managed dsh port base (design 17 §3 server override)', () => {
+  const cfg = parseGatewayConfig({ dshPort: 30800 }, STATE, DSH)
+  assert.equal(cfg.plane.dshPort, 30800)
+  // absent = default (not set)
+  assert.equal(parseGatewayConfig({}, STATE, DSH).plane.dshPort, undefined)
+})
+
+test('DSH_GATEWAY_DSH_PORT env sets the managed dsh port base', () => {
+  const before = process.env.DSH_GATEWAY_DSH_PORT
+  process.env.DSH_GATEWAY_DSH_PORT = '30801'
+  try {
+    assert.equal(parseGatewayConfig({}, STATE, DSH).plane.dshPort, 30801)
+  } finally {
+    if (before === undefined) delete process.env.DSH_GATEWAY_DSH_PORT
+    else process.env.DSH_GATEWAY_DSH_PORT = before
+  }
+})
+
+test('an invalid dsh port is a config error', () => {
+  assert.throws(() => parseGatewayConfig({ dshPort: 0 }, STATE, DSH), GatewayConfigError)
+  assert.throws(() => parseGatewayConfig({ dshPort: 70000 }, STATE, DSH), GatewayConfigError)
+  const before = process.env.DSH_GATEWAY_DSH_PORT
+  process.env.DSH_GATEWAY_DSH_PORT = 'not-a-number'
+  try {
+    assert.throws(() => parseGatewayConfig({}, STATE, DSH), GatewayConfigError)
+  } finally {
+    if (before === undefined) delete process.env.DSH_GATEWAY_DSH_PORT
+    else process.env.DSH_GATEWAY_DSH_PORT = before
+  }
+})
+
 test('--tls-cert and --tls-key must be paired', () => {
   assert.throws(() => parseGatewayConfig({ tlsCert: '/c.pem' }, STATE, DSH), GatewayConfigError)
   assert.throws(() => parseGatewayConfig({ tlsKey: '/k.pem' }, STATE, DSH), GatewayConfigError)

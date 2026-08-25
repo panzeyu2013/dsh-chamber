@@ -21,6 +21,10 @@ export interface GatewayConfig {
     host: GatewayBindHost
     stateDir: string
     dshWorkspacePath: string
+    /** First port attempted for the managed dsh host (design 17 §3 server
+     *  deployments; default 17510). Server installs commonly set 30800 so the
+     *  gateway listens on 30801 right next to the managed dsh. */
+    dshPort?: number
   }
   auth: {
     kind: GatewayAuthKind
@@ -49,6 +53,7 @@ export interface GatewayConfig {
 export interface GatewayConfigInput {
   host?: string
   port?: number
+  dshPort?: number
   stateDir?: string
   dshWorkspacePath?: string
   uiPassword?: string
@@ -133,6 +138,12 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   if (!Number.isInteger(portRaw) || portRaw < 1 || portRaw > 65535) {
     throw new GatewayConfigError(`invalid port: ${String(portRaw)}`)
   }
+  const dshPortEnv = firstEnv('DSH_GATEWAY_DSH_PORT')
+  const dshPortRaw = input.dshPort ?? (dshPortEnv === undefined ? undefined : Number(dshPortEnv))
+  if (dshPortRaw !== undefined
+    && (!Number.isInteger(dshPortRaw) || dshPortRaw < 1 || dshPortRaw > 65535)) {
+    throw new GatewayConfigError(`invalid dsh port: ${String(dshPortRaw)}`)
+  }
   const password = input.uiPassword ?? firstEnv('DSH_GATEWAY_PASSWORD')
   const token = input.apiToken ?? firstEnv('DSH_GATEWAY_TOKEN')
   // An empty credential is not auth (S1): reject loudly, never treat it as a
@@ -174,7 +185,13 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication: pass --ui-password or --api-token (or --no-auth to override)')
   }
   return {
-    plane: { port: portRaw, host, stateDir, dshWorkspacePath },
+    plane: {
+      port: portRaw,
+      host,
+      stateDir,
+      dshWorkspacePath,
+      ...(dshPortRaw === undefined ? {} : { dshPort: dshPortRaw as number }),
+    },
     auth: {
       kind,
       ...(password !== undefined ? { password } : {}),

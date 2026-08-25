@@ -19,6 +19,47 @@ function config(stateDir: string): GatewayConfig {
   }
 }
 
+test('gateway forwards plane.dshPort as the control-plane dshPortBase (design 17 §3)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-dshport-'))
+  let received: { dshPortBase?: number } | null = null
+  const plane: PlaneHandle = {
+    async start() {},
+    async startLocal() {},
+    async stop() {},
+    onLocalStateChange() { return () => {} },
+    get port() { return 3000 },
+    get connectionState() { return 'stopped' },
+    get localProcessAlive() { return false },
+    get localWritersQuiescent() { return true },
+    get localDshPort() { return null },
+    instanceId: 'test',
+    getLocalDshPort() { return null },
+    async stopLocal() {},
+    refreshLocalExposure() {},
+    registerInstanceTransport() {},
+    unregisterInstanceTransport() {},
+  }
+  const gateway = createGateway({
+    config: {
+      ...config(stateDir),
+      plane: { ...config(stateDir).plane, dshPort: 30800 },
+    },
+    logger: silentLogger,
+    deps: {
+      createPlane: ((opts: { dshPortBase?: number }) => {
+        received = opts
+        return plane
+      }) as never,
+      createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+      createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
+    },
+  })
+  await gateway.start()
+  assert.equal(received?.dshPortBase, 30800)
+  await gateway.stop()
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
 test('gateway start owns local readiness and attaches features on ready transitions', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-'))
   const order: string[] = []

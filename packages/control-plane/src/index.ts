@@ -386,6 +386,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // it for starts and restarts so a profile-internal prune self-heals
     // without allowing a DSH_HOME write during runtime apply/restore.
     options: {
+      ...(options.dshPortBase === undefined ? {} : { dshPortBase: options.dshPortBase }),
       canSpawn: localStartGate,
       onWriterQuiescenceUnknown: (writerError) => {
         localWritersQuiescent = false

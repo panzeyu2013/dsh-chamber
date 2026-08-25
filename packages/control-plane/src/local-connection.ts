@@ -79,6 +79,8 @@ export interface LocalConnectionDeps {
     logger: Logger
     /** Optional `--patch` overlay for the dsh launcher (design 09 module B); null/absent when none. */
     patchPath?: string | null
+    /** First port attempted (design 17 §3 server override); absent = BASE_DHSPORT. */
+    dshPortBase?: number
     /** Aborted by stop() so a readiness wait cannot outlive writer quiescence. */
     signal?: AbortSignal
   }) => Promise<SpawnedDsh>
@@ -105,6 +107,9 @@ export interface LocalConnectionOptions {
   restartBackoffCeilMs?: number
   restartWindowMs?: number
   maxRestartsInWindow?: number
+  /** First port attempted for the managed dsh host (design 17 §3 server
+   *  deployments; absent = BASE_DHSPORT 17510). */
+  dshPortBase?: number
   /**
    * Re-read immediately before DSH_HOME seeding and immediately before the
    * process spawn. This is deliberately dynamic: runtime apply/restore can
@@ -213,6 +218,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   const restartBackoffCeilMs = options.restartBackoffCeilMs ?? RESTART_BACKOFF_CEIL_MS
   const restartWindowMs = options.restartWindowMs ?? RESTART_WINDOW_MS
   const maxRestartsInWindow = options.maxRestartsInWindow ?? MAX_RESTARTS_IN_WINDOW
+  const dshPortBase = options.dshPortBase
   const spawnDshFn = (deps.spawnDsh ?? spawnDsh) as NonNullable<LocalConnectionDeps['spawnDsh']>
   const describeCapabilities = deps.describeCapabilities ?? describeCapabilitiesFn
 
@@ -321,7 +327,11 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     }
     spawnAbortController = controller
     try {
-      return await spawnDshFn({ ...options, signal: controller.signal })
+      return await spawnDshFn({
+        ...options,
+        ...(dshPortBase === undefined ? {} : { dshPortBase }),
+        signal: controller.signal,
+      })
     } finally {
       if (spawnAbortController === controller) spawnAbortController = null
     }

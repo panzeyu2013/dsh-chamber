@@ -362,13 +362,23 @@ jobs:
       # exit "$VIEW_STATUS"
       # fi
       # npm publish "$TGZ" --access public --tag "$CHANNEL"
+      - name: Write gateway package sha256 (installer verification asset)
+        run: |
+          set -euo pipefail
+          TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
+          test -n "$TGZ"
+          cd packages/gateway/release
+          sha256sum "$(basename "$TGZ")" > "$(basename "$TGZ").sha256"
+          cat "$(basename "$TGZ").sha256"
       - name: Upload gateway package to the draft release
         if: ${{ github.event.inputs.dry_run != 'true' }}
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: v${{ needs.create-release.outputs.version }}
           draft: true
-          files: packages/gateway/release/*.tgz
+          files: |
+            packages/gateway/release/*.tgz
+            packages/gateway/release/*.tgz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
