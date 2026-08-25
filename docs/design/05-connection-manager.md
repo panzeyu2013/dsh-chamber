@@ -500,7 +500,10 @@ export const chamberBridge: {
   永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
   exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH
   直接执行该脚本；`<tmp>/
-  dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即删；启动清理仅删除
+  dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即退役、实例删除/应用
+  退出才最终删除（2026-08 审查修订：disconnect 时在途 exec 可能仍持有指向该文件的
+  SSH_ASKPASS，立即删除会使其密码认证失败，故 disconnect 只退役保留在盘，由
+  purgeAuth/启动清理回收）；启动清理仅删除
   已退出进程或旧格式遗留，绝不误删并行 dev/打包实例的助手）把密码喂给系统 ssh
   ——**永不上命令行**；助手按提示文本区分「主机密钥确认 → yes」与「密码/
   口令 → 密码」，首次连接无需预先接受主机密钥。无可靠 askpass 的平台

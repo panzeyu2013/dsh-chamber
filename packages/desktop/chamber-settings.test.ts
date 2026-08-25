@@ -117,6 +117,47 @@ test('readSettingsFile: invalid persisted registry trust anchor is preserved as 
   }
 });
 
+test('readSettingsFile: malformed nested notifications block is preserved as corrupt (review 2026-08)', () => {
+  // The notifications sub-block is part of the file's SHAPE: a scalar, an
+  // array, or a wrongly-typed field must never be silently re-normalized to
+  // defaults (corrupt-preserve discipline, same as registryOrigin).
+  const malformed: unknown[] = [
+    { notifications: 'enabled' },
+    { notifications: ['enabled', true] },
+    { notifications: { enabled: true, mode: 'sometimes' } },
+    { notifications: { enabled: 'yes', mode: 'always' } },
+    { notifications: { enabled: true, mode: 'always', onComplete: 1 } },
+  ];
+  for (const [index, payload] of malformed.entries()) {
+    const dir = mkdtempSync(path.join(tmpdir(), `chamber-settings-bad-notifications-${index}-`));
+    const file = path.join(dir, 'chamber-settings.json');
+    try {
+      writeFileSync(file, JSON.stringify(payload));
+      const read = readSettingsFile(file);
+      assert.match(read.notice ?? '', /corrupt/, `notifications payload #${index} must be corrupt`);
+      assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS, `notifications payload #${index} falls back to defaults`);
+      assert.equal(existsSync(file), false, `notifications payload #${index} file moved away`);
+      assert.equal(existsSync(`${file}.corrupt`), true, `notifications payload #${index} preserved`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  // A well-formed notifications block stays valid (and unknown nested keys
+  // remain a forward-compat tolerance, like the top level).
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-good-notifications-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeFileSync(file, JSON.stringify({
+      notifications: { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false, futureKey: 'x' },
+    }));
+    const read = readSettingsFile(file);
+    assert.equal(read.notice, null, 'well-formed notifications block reads clean');
+    assert.deepEqual(read.settings.notifications, { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('computeSupported: launchAtLogin off on win32; closeToTray follows tray availability, always on darwin', () => {
   assert.deepEqual(computeSupported('win32', true), { launchAtLogin: false, closeToTray: true });
   assert.deepEqual(computeSupported('win32', false), { launchAtLogin: false, closeToTray: false });

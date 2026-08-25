@@ -47,12 +47,14 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 | `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主、N-ctx 编排、启动图清单 |
 | `packages/desktop` | Electron 壳：单 frame、transport-manager + ssh provider（隧道 + systemd）、远端 ready-time host 包分发、实例注册表、IPC |
 | `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
+| `packages/gateway` | 独立认证 server 形态（design 17）：强制认证公网边界 + 单本地 dsh 反代 + 派生编排 |
 | `packages/dsh-client-connection` | 官方连接客户端仓库内拷贝 + base 路径补丁 |
 | `packages/dsh-client-web` | 官方 web shell 仓库内拷贝 + boot.ts N-ctx 模块表共享 seam |
 | `packages/dsh-chamber-client-ui-sidebar` | 自研侧边栏插件：多来源会话导航 + chamberBridge（替换官方 ui-sidebar 注册） |
 | `packages/dsh-chamber-client-ui-settings-connections` | 自研连接设置插件（本地实例卡 + 远程主机 CRUD/连接/systemd/日志） |
 | `packages/dsh-chamber-client-ui-settings-bridge` | 自研设置壳插件（shadow 官方 SettingsRoot 注册，服务器下拉 + 固定连接导航项） |
 | `packages/dsh-chamber-client-ui-layout` | 自研 ui-layout 壳 fork（layout store 替换，持久化 sidebarWidth） |
+| `packages/dsh-chamber-client-ui-open-in` | open-in 打开注册表（design 20）：Finder/VS Code 统一打开面 |
 | `packages/dsh-host-client-graph` | 宿主侧包：经 Typert Remote 只读暴露实例的客户端插件 boot 图 |
 | `packages/dsh-chamber-client-ui-git` | chamber 内建 Git worktree 客户端：sidebar 座位、每实例拓扑、创建/删除 saga；不直接执行 Git |
 | `packages/dsh-chamber-host-git-worktree` | 实例内 host 包：按 workspace/agent 权威校验并执行受限、本地-only Git worktree 生命周期 |
@@ -128,7 +130,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 
 ## 5. CI 与发布
 
-- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ smoke〔未捆绑运行时 SKIP〕→ renderer 构建），**不打包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
+- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ smoke〔未捆绑运行时 SKIP〕→ renderer 构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不打包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
 - `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖 release matrix 中的 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。
 - 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
 

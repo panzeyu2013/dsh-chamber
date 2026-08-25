@@ -160,3 +160,27 @@ test('an https public origin rejects a direct plaintext request', () => {
   const decision = boundary.evaluate(request({ host: 'gateway.example' }, '203.0.113.8'))
   assert.equal(decision.status, 421)
 })
+
+test('a cross-site request without Origin is rejected via sec-fetch-site', () => {
+  const boundary = policy({ host: '0.0.0.0', port: 3000, publicOrigin: 'http://gateway.example:3000' })
+  // A cross-site browser navigation/media load carries no Origin, so the
+  // sec-fetch-site signal is the only way to detect it — reject, never
+  // bypass the Origin check.
+  const decision = boundary.evaluate(request({
+    host: 'gateway.example:3000',
+    'sec-fetch-site': 'cross-site',
+  }, '203.0.113.8'))
+  assert.deepEqual({ allowed: decision.allowed, status: decision.status, code: decision.code }, {
+    allowed: false,
+    status: 403,
+    code: 'origin_forbidden',
+  })
+  // Same-origin / absent sec-fetch-site must not be affected by the branch.
+  const sameOrigin = boundary.evaluate(request({
+    host: 'gateway.example:3000',
+    'sec-fetch-site': 'same-origin',
+  }, '203.0.113.8'))
+  assert.equal(sameOrigin.allowed, true)
+  const absent = boundary.evaluate(request({ host: 'gateway.example:3000' }, '203.0.113.8'))
+  assert.equal(absent.allowed, true)
+})

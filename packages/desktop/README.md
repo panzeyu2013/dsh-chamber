@@ -13,7 +13,7 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` 编译为 JS（`dist/control-plane/`，见下）
 - `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
-- `scripts/electron-dev.mjs` — dev 编排：fail-fast 检查 electron 二进制 → 按需构建 renderer/preload → 以进程组方式启动 Electron → 信号/退出时清理子进程
+- `scripts/electron-dev.mjs` — dev 编排：二进制缺失时自动补装（ensure-electron + DSH_CHAMBER_ELECTRON=1）→ 按需构建 renderer/preload → 以进程组方式启动 Electron → 信号/退出时清理子进程
 - `dist/` — 渲染层构建产物（由 renderer 包构建输出到这里，不在此提交）
 
 ## 依赖安装
@@ -23,7 +23,7 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 pnpm install
 ```
 
-- 根目录 `.npmrc` 已配置 `electron_mirror`，pnpm 安装 electron 二进制时会自动走镜像。
+- pnpm install 默认不再下载 Electron 二进制（DSH_CHAMBER_ELECTRON=1 或 electron-dev 首启时经 electron_mirror 下载）。
 - `@dsh-chamber/control-plane` 是工作区包，`main.ts` 直接 `import` 使用。
 
 ## 运行

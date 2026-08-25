@@ -1,13 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApiRequest, ApiResponse, ServerRequest } from '@dsh-chamber/control-plane'
+import { RpcBusinessError, RpcTransportError, type ApiRequest, type ApiResponse, type ServerRequest } from '@dsh-chamber/control-plane'
 import { createSessionIndex } from '../src/features/index.ts'
 import { AnswerRejectedError, createApprovalNotifier } from '../src/features/notify.ts'
-import { MAX_TIMER_DELAY_MS, createScheduler } from '../src/features/schedule.ts'
+import { MAX_TIMER_DELAY_MS, createScheduler, type ScheduledJob } from '../src/features/schedule.ts'
 import { createFeatureHost } from '../src/routes.ts'
 import { createGatewayStore } from '../src/store.ts'
 import type { GatewaySettingsDoc, GatewayStore, WorktreeStoreRecord } from '../src/store.ts'
@@ -24,6 +25,35 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
     if (Date.now() >= deadline) throw new Error('condition timed out')
     await new Promise(resolve => setTimeout(resolve, 5))
   }
+}
+
+/** Fake dsh wire: an HTTP fetch stub that decodes the unary envelope and
+ * returns a server-response built from the handler's result. */
+function rpcFetch(handler: (method: string, payload: any) => any): typeof globalThis.fetch {
+  return async (_url, init) => {
+    const request = JSON.parse(String(init?.body))
+    const result = handler(request.method, request.payload)
+    return new Response(JSON.stringify({
+      type: 'server-response',
+      rpcId: request.rpcId,
+      result,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+}
+
+/** A real single-commit git repository on a temp dir. */
+async function makeGitRepo(prefix: string): Promise<{ root: string; repo: string }> {
+  const rawRoot = await mkdtemp(join(tmpdir(), prefix))
+  const root = await realpath(rawRoot)
+  const repo = join(root, 'repo')
+  await mkdir(repo)
+  execFileSync('git', ['init', repo], { stdio: 'ignore' })
+  execFileSync('git', ['-C', repo, 'config', 'user.email', 'gateway-test@example.invalid'])
+  execFileSync('git', ['-C', repo, 'config', 'user.name', 'Gateway Test'])
+  await writeFile(join(repo, 'README.md'), 'baseline\n')
+  execFileSync('git', ['-C', repo, 'add', 'README.md'])
+  execFileSync('git', ['-C', repo, 'commit', '-m', 'baseline'], { stdio: 'ignore' })
+  return { root, repo }
 }
 
 test('session index waits for readiness, rebuilds session.list baseline, and reconnects streams', async () => {
@@ -233,6 +263,38 @@ test('approval notifier emits valid RpcResult responses and rejects negative rec
   await notifier.answerQuestion({ sessionId: 's1', rpcId: 'question-rpc', questions: [] }, { answers: [] })
 })
 
+test('notify answer RPC shapes are locked for approval and question answers', async () => {
+  // Regression guard: the answer path is the single dsh respond RPC (the
+  // ClientResponse envelope {rpcId, result}); the rpcId echoes the
+  // server-request and the result carries the answerable payload. Lock the
+  // exact shapes so a future refactor cannot silently drift them.
+  const sent: Array<{ rpcId?: string; result: any }> = []
+  const notifier = createApprovalNotifier({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    onApproval() {},
+    onQuestion() {},
+    respondDsh: (async (_base: string, message: { rpcId?: string; result: any }) => {
+      sent.push(message)
+      return { accepted: true }
+    }) as any,
+  })
+  await notifier.answerApproval(
+    { sessionId: 's1', approvalId: 'a1', rpcId: 'approval-rpc', toolName: 'shell' },
+    'allowed-once',
+  )
+  assert.deepEqual(sent[0], {
+    rpcId: 'approval-rpc',
+    result: { ok: true, value: { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' } },
+  })
+  const answer = { answers: [{ id: 'q1', selected: ['a'] }] }
+  await notifier.answerQuestion({ sessionId: 's1', rpcId: 'question-rpc', questions: [] }, answer)
+  assert.deepEqual(sent[1], {
+    rpcId: 'question-rpc',
+    result: { ok: true, value: { sessionId: 's1', answer } },
+  })
+})
+
 test('scheduler detach keeps definitions and start re-arms them', async () => {
   let prompts = 0
   const scheduler = createScheduler({
@@ -304,12 +366,12 @@ test('scheduler fires session.prompt with the dsh 0.1.1-rc.2 wire shape (mode+co
   // real wire ("invalid payload for session.prompt") — every scheduled
   // prompt failed validation. The accepted shape is
   // {sessionId, mode:'queue', content:[{type:'text',text}]}.
-  const sent: Array<{ sessionId: string; mode: string; content: unknown }> = []
+  const sent: Array<{ method: string; sessionId: string; mode: string; content: unknown }> = []
   const scheduler = createScheduler({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
     callDsh: (async (_base: string, method: string, payload: unknown) => {
-      sent.push(payload as { sessionId: string; mode: string; content: unknown })
+      sent.push({ method, ...(payload as { sessionId: string; mode: string; content: unknown }) })
       return { rpcId: 'prompt-1', result: { ok: true, value: {} } }
     }) as any,
   })
@@ -317,11 +379,75 @@ test('scheduler fires session.prompt with the dsh 0.1.1-rc.2 wire shape (mode+co
   scheduler.start()
   await waitFor(() => sent.length === 1)
   scheduler.stop()
+  assert.equal(sent[0]?.method, 'session.prompt', 'the scheduled prompt targets session.prompt')
   assert.deepEqual(sent[0], {
+    method: 'session.prompt',
     sessionId: 's1',
     mode: 'queue',
     content: [{ type: 'text', text: 'continue' }],
   })
+})
+
+test('a deterministic dsh rejection terminates a one-shot job and persists the removal', async () => {
+  // RpcBusinessError (result.ok === false: target session deleted, payload
+  // refused, …) can never succeed on retry — backing off would spin
+  // session.prompt forever. The job must be removed and the removal
+  // persisted, unlike transient carrier failures (next test).
+  let calls = 0
+  const persisted: Array<ScheduledJob[]> = []
+  const scheduler = createScheduler({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    onJobsChanged: async jobs => { persisted.push(jobs) },
+    callDsh: (async () => {
+      calls += 1
+      throw new RpcBusinessError({ code: 'session-not-found', message: 'target session deleted' })
+    }) as any,
+  })
+  scheduler.schedule({ delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'no retry' })
+  scheduler.start()
+  await waitFor(() => scheduler.list().length === 0 && calls === 1)
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.equal(calls, 1, 'a business rejection must not back off and spin')
+  assert.deepEqual(persisted.at(-1), [], 'the termination was persisted as a removal')
+  scheduler.stop()
+})
+
+test('a deterministic dsh rejection stops an interval job', async () => {
+  let calls = 0
+  const scheduler = createScheduler({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    callDsh: (async () => {
+      calls += 1
+      throw new RpcBusinessError({ code: 'invalid-payload', message: 'payload refused' })
+    }) as any,
+  })
+  scheduler.schedule({ delayMs: 0, intervalMs: 1_000, targetSessionId: 's1', prompt: 'stop' })
+  scheduler.start()
+  await waitFor(() => calls === 1 && scheduler.list().length === 0)
+  await new Promise(resolve => setTimeout(resolve, 1_100))
+  assert.equal(calls, 1, 'the interval cadence stops after a business rejection')
+  scheduler.stop()
+})
+
+test('a transport failure keeps the one-shot retry backoff and the job', async () => {
+  let calls = 0
+  const scheduler = createScheduler({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    callDsh: (async () => {
+      calls += 1
+      throw new RpcTransportError('dsh unary: connection is offline', 0, 'connection_offline')
+    }) as any,
+  })
+  scheduler.schedule({ delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'keep retrying' })
+  scheduler.start()
+  await waitFor(() => calls === 1)
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.equal(calls, 1, 'transient failures use the bounded backoff (min 1s), not an immediate spin')
+  assert.equal(scheduler.list().length, 1, 'the job is retained for the next backoff attempt')
+  scheduler.stop()
 })
 
 test('one-shot failures back off and an in-flight cancel cannot resurrect a job', async () => {
@@ -793,6 +919,55 @@ test('schedule routes reject timer overflow and accept the exact Node timer boun
   host.stop()
 })
 
+test('schedule POST rejects oversized prompts and target session ids with invalid_input', async () => {
+  const host = createFeatureHost({
+    getDshBaseUrl: () => null,
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+    }),
+  })
+  for (const body of [
+    { delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'x'.repeat(10_001) },
+    { delayMs: 0, intervalMs: null, targetSessionId: 's'.repeat(513), prompt: 'ok' },
+  ]) {
+    const response = new FakeResponse()
+    await host.handle(new FakeRequest('POST', body) as unknown as ApiRequest,
+      response as unknown as ApiResponse, '/chamber/schedule')
+    assert.equal(response.status, 400)
+    assert.equal(response.json().code, 'invalid_input')
+  }
+  const accepted = new FakeResponse()
+  await host.handle(new FakeRequest('POST', {
+    delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'x'.repeat(10_000),
+  }) as unknown as ApiRequest, accepted as unknown as ApiResponse, '/chamber/schedule')
+  assert.equal(accepted.status, 200)
+  host.stop()
+})
+
+test('schedule POST enforces the total job cap', async () => {
+  const jobs = Array.from({ length: 1_000 }, (_, i) => ({
+    id: `job-${i}`, delayMs: 60_000, intervalMs: null, targetSessionId: 's1', prompt: 'p',
+  }))
+  const host = createFeatureHost({
+    getDshBaseUrl: () => null,
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+      schedule: jobs,
+    }),
+  })
+  const response = new FakeResponse()
+  await host.handle(new FakeRequest('POST', {
+    delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'one more',
+  }) as unknown as ApiRequest, response as unknown as ApiResponse, '/chamber/schedule')
+  assert.equal(response.status, 400)
+  assert.equal(response.json().code, 'schedule_full')
+  host.stop()
+})
+
 test('SSE lifetime follows response close, not request close', async () => {
   const enabled = { schemaVersion: 1, revision: 0, notifications: { enabled: true } }
   const host = createFeatureHost({ getDshBaseUrl: () => null, logger, channels, store: fakeStore({ settings: enabled }) })
@@ -851,6 +1026,75 @@ test('DELETE rejects unverified/legacy ownership and client-controlled delete op
     response as unknown as ApiResponse, '/chamber/git/worktrees/ws-recovery')
   assert.equal(response.status, 400)
   assert.equal(response.json().code, 'delete_body_not_allowed')
+})
+
+test('dirty worktree delete failure rolls the record back to ready with the error and stays retryable', async () => {
+  // A dirty worktree makes `git worktree remove` (non-force) fail. The record
+  // must not stay stuck in state:'deleting' with an empty error field: roll
+  // back to a retryable 'ready' + recorded reason, and a second DELETE must
+  // re-enter the saga instead of being deadlocked.
+  const fixture = await makeGitRepo('gateway-delete-rollback-')
+  const target = join(fixture.root, 'feature-dirty')
+  execFileSync('git', ['-C', fixture.repo, 'worktree', 'add', '-b', 'feature/dirty', target], { stdio: 'ignore' })
+  await writeFile(join(target, 'dirty.txt'), 'uncommitted change\n')
+  const originalFetch = globalThis.fetch
+  let sessionListCalls = 0
+  globalThis.fetch = rpcFetch(method => {
+    if (method === 'workspace.list') {
+      return { ok: true, value: { items: [
+        { workspaceId: 'ws-main', path: fixture.repo },
+        { workspaceId: 'ws-dirty', path: target },
+      ] } }
+    }
+    if (method === 'session.list') {
+      sessionListCalls += 1
+      return { ok: true, value: { items: [] } }
+    }
+    throw new Error(`unexpected ${method}`)
+  })
+  const host = createFeatureHost({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, git: { enabled: true } },
+      worktrees: [{
+        id: 'ws-dirty', workspaceId: 'ws-dirty', repo: fixture.repo, path: target,
+        branch: 'feature/dirty', ownership: 'owned', state: 'ready', createdAt: 1,
+      }],
+    }),
+  })
+  const listWorktrees = async (): Promise<any[]> => {
+    const response = new FakeResponse()
+    await host.handle(new FakeRequest('GET') as unknown as ApiRequest,
+      response as unknown as ApiResponse, '/chamber/git/worktrees')
+    return response.json().items
+  }
+  try {
+    const first = new FakeResponse()
+    await host.handle(new FakeRequest('DELETE') as unknown as ApiRequest,
+      first as unknown as ApiResponse, '/chamber/git/worktrees/ws-dirty')
+    assert.equal(first.status, 500)
+    assert.equal(first.json().code, 'git_worktree_remove_failed')
+    assert.equal(sessionListCalls, 1, 'the saga reached the live-session guard before git removal')
+    let record = (await listWorktrees())[0]
+    assert.equal(record?.state, 'ready', 'a dirty-tree failure must not stay stuck in deleting')
+    assert.ok(typeof record?.error === 'string' && record.error !== '', 'the failure reason is recorded')
+    assert.equal(await realpath(target), target, 'the worktree directory still exists')
+
+    const second = new FakeResponse()
+    await host.handle(new FakeRequest('DELETE') as unknown as ApiRequest,
+      second as unknown as ApiResponse, '/chamber/git/worktrees/ws-dirty')
+    assert.equal(second.status, 500, 'the second DELETE is still initiated')
+    assert.equal(second.json().code, 'git_worktree_remove_failed')
+    assert.ok(sessionListCalls >= 2, 'the retry re-entered the delete saga')
+    record = (await listWorktrees())[0]
+    assert.equal(record?.state, 'ready')
+    assert.ok(typeof record?.error === 'string' && record.error !== '')
+  } finally {
+    globalThis.fetch = originalFetch
+    await rm(fixture.root, { recursive: true, force: true })
+  }
 })
 
 test('pending interactions dedupe, rejected receipts stay pending, and resolved/reset reach SSE clients', async () => {

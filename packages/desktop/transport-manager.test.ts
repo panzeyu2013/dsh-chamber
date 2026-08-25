@@ -1309,6 +1309,33 @@ test('exec run: a whitelist-refused payload never spawns a process', async t => 
   assert.equal(spawnCalls.length, 0, 'no ssh process may spawn for a refused run payload')
 })
 
+test('removing an instance cancels its in-flight exec; its late callbacks never pollute a same-id reuse', async t => {
+  // Review 2026-08: an instance removed while an exec is in flight must not
+  // leave the exec running (disconnect SIGTERMs it), and the exec's LATE
+  // setProjection/log callbacks must never write into the state of a later
+  // same-id reuse (execEpoch bumped at disconnect + states.delete on
+  // removal are the authoritative cleanup).
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const resultPromise = manager.exec('s2', 'start')
+  assert.equal(spawnCalls.length, 1)
+  const execChild = spawnCalls[0].child
+  // Removal → disconnect: the in-flight exec child is SIGTERMed.
+  manager.saveInstances([])
+  assert.ok(execChild.killCalls.includes('SIGTERM'), 'disconnect SIGTERMs the in-flight exec child')
+  assert.equal(manager.status('s2'), null)
+  // Same id re-added: the new instance must start from a clean state.
+  manager.saveInstances([EXEC_INSTANCE])
+  assert.equal(manager.status('s2')!.serviceActive, null, 'fresh state — no carry-over projection')
+  assert.deepEqual(manager.logs('s2'), [], 'fresh ring buffer — no carry-over logs')
+  // The OLD exec's ssh process finally exits 0: its late callbacks are
+  // stale and must never reach the NEW instance.
+  execChild.simulateExit(0)
+  const result = await resultPromise
+  assert.equal(result.ok, true, 'the stale exec still resolves (its projection reads the current registry)')
+  assert.equal(manager.status('s2')!.serviceActive, null, 'late setProjection never pollutes the reused instance')
+  assert.equal(manager.logs('s2').some(entry => /systemctl start/.test(entry.message)), false, 'late exec logs never reach the reused instance')
+})
+
 test('exec run: the write-file payload drives the provider flow (stdin write + byte-domain read-back)', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'run', {

@@ -51,10 +51,14 @@ pnpm run test:settings-bridge  # 设置壳策略单测
 pnpm run typecheck                            # tsc --noEmit（0 错误）
 pnpm run typecheck:host-graph
 pnpm run typecheck:host-git
+pnpm run typecheck:gateway                    # gateway 包类型检查
 pnpm run typecheck:sidebar                    # 客户端插件类型检查
+pnpm run typecheck:layout
 pnpm run typecheck:git
+pnpm run typecheck:open-in
 pnpm run typecheck:connections
 pnpm run typecheck:settings-bridge
+pnpm run typecheck:client-web                 # dsh-client-web 拷贝类型检查
 node packages/control-plane/test/protocol.ts  # 聚焦单测（见上方"测试"节）
 node packages/control-plane/test/storage.ts
 node packages/control-plane/test/m1-dsh-client.ts
@@ -64,11 +68,16 @@ node packages/control-plane/test/instance-proxy.ts
 node packages/control-plane/test/static-serving.ts
 node packages/control-plane/test/host-graph-seed.ts
 pnpm run test:desktop                         # 桌面传输/ssh 单测
+pnpm run test:gateway                         # gateway 传输/包单测
+pnpm run test:cli                             # CLI 薄壳单测
 pnpm run test:renderer-shell                  # renderer shell/覆盖表锁步
 pnpm run test:sidebar                         # 侧边栏单测
 pnpm run test:git                             # Git 客户端单测
 pnpm run test:host-git                        # Git host 单测
 pnpm run test:settings-bridge                 # 设置壳单测
+pnpm run test:connections                     # 连接设置插件单测
+pnpm run test:client-web                      # dsh-client-web 拷贝单测
+pnpm run test:connection                      # 连接客户端 base-path 单测
 pnpm run smoke                                # PASS（或 SKIP，属正常）
 pnpm run build:renderer                       # 渲染层构建成功
 ```

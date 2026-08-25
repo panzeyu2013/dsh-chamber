@@ -599,6 +599,16 @@ let passwordFile: string | null = null
  * its password auth into the requiresUserAction terminal state (P1
  * regression, locked by ssh-provider.test.ts). Retired helpers are deleted
  * on dispose (transport stop / removal / quit) and at startup cleanup.
+ *
+ * The CURRENT generation must NEVER be deleted by a plain disconnect
+ * (disposeSshAuth): an in-flight exec (systemctl, or a `run` up to
+ * runTimeoutMs) may still hold SSH_ASKPASS pointing at that exact file and
+ * execute it for its next prompt — deleting it fails that exec's password
+ * auth (same P1 regression, review 2026-08). dispose therefore only retires
+ * it (kept on disk); the final deletion happens on instance removal
+ * (purgeSshAuth, transport-manager saveInstances), app quit (the owner
+ * process dies and startup cleanup reclaims the file), the retired-cap
+ * overflow of a later recreation, or the explicit purge below.
  */
 const askpassHelpers = new Map<string, { current: string; retired: string[] }>()
 
@@ -753,6 +763,26 @@ export function buildAskpassScript(password: string): string {
   ].join('\n')
 }
 
+/**
+ * Owner-only chmod of the SHARED askpass directory (`<tmpdir>/dsh-chamber-ssh`).
+ * On a multi-user machine the directory may already exist — created by
+ * another OS user — and chmod by a non-owner fails with EPERM. That must
+ * NEVER take password auth down wholesale (review 2026-08): downgrade by
+ * KEEPING the existing mode and logging loudly. A genuine non-EPERM chmod
+ * failure still throws (the caller cannot safely proceed without knowing the
+ * directory state). Exported for the EPERM-downgrade test.
+ */
+export function chmodAskpassDirOwnerOnly(dir: string): void {
+  try {
+    chmodSync(dir, 0o700)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error
+    console.warn(
+      `[ssh-provider] cannot chmod the shared askpass directory ${dir} to 0700 (EPERM — likely owned by another OS user); keeping the existing mode; password auth will fail if the directory is not writable`,
+    )
+  }
+}
+
 /** Write one ephemeral askpass helper for an instance; returns its path. */
 export function createAskpassHelper(id: string, password: string): string {
   // The id lands in the temp filename — refuse anything outside the registry
@@ -763,7 +793,7 @@ export function createAskpassHelper(id: string, password: string): string {
   }
   const dir = join(tmpdir(), 'dsh-chamber-ssh')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  chmodSync(dir, 0o700)
+  chmodAskpassDirOwnerOnly(dir)
   // Include the owner PID so startup cleanup can distinguish crash leftovers
   // from a simultaneously running dev/packaged chamber process.
   const path = join(dir, `askpass-${id}.pid-${process.pid}.${randomUUID()}.sh`)
@@ -787,7 +817,7 @@ export function cleanupStaleAskpassHelpers(): string | null {
   const dir = join(tmpdir(), 'dsh-chamber-ssh')
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
-    chmodSync(dir, 0o700)
+    chmodAskpassDirOwnerOnly(dir)
     for (const name of readdirSync(dir)) {
       const current = /^askpass-[a-zA-Z0-9_-]{1,64}\.pid-(\d+)\.[0-9a-f-]+\.sh$/i.exec(name)
       // Legacy names predate PID ownership and can only be crash leftovers:
@@ -850,15 +880,47 @@ export function sshAuthEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | nul
 }
 
 /**
- * Delete the instance's ephemeral askpass helpers (current + retired) —
- * transport stop / removal / app quit. The in-memory password itself
- * survives a plain disconnect (the user may reconnect without retyping) and
- * is only cleared by setSshPassword(null), instance removal, or app quit.
+ * Retire the instance's ephemeral askpass helpers on transport stop —
+ * transport stop / removal / app quit all route through this via
+ * TransportProvider.disposeAuth.
+ *
+ * Deliberately NOT a full deletion: the CURRENT generation moves into the
+ * retired list and stays on disk, because an in-flight exec (systemctl, or
+ * a `run` up to runTimeoutMs) spawned BEFORE the disconnect may still hold
+ * SSH_ASKPASS pointing at that exact file and execute it for its next
+ * prompt. Deleting it there would fail that exec's password auth (the P1
+ * concurrent-exec regression, see the map doc). Only the already-retired
+ * generations (older than the current one, referenced by strictly older
+ * children) are deleted here. The retained current file is finally removed
+ * by purgeSshAuth (instance removal), by the retired-cap overflow of a
+ * later recreation, by app quit (owner process dies → startup cleanup
+ * reclaims it), or by an explicit purge.
+ *
+ * The in-memory password itself survives a plain disconnect (the user may
+ * reconnect without retyping) and is only cleared by setSshPassword(null),
+ * instance removal, or app quit.
  */
 export function disposeSshAuth(spec: TransportInstanceSpec): void {
   const helpers = askpassHelpers.get(spec.id)
   if (helpers === undefined) return
-  askpassHelpers.delete(spec.id)
+  for (const retired of helpers.retired) deleteAskpassHelper(retired)
+  // The current helper is retained (marked retired — no longer handed out
+  // as the fresh helper, but kept on disk for in-flight execs).
+  askpassHelpers.set(spec.id, { current: helpers.current, retired: [] })
+}
+
+/**
+ * FINAL deletion of the instance's askpass helper generations (current +
+ * retired) — instance REMOVAL / explicit purge only, never a plain
+ * disconnect: by the time an instance is removed, its transport and every
+ * in-flight exec have been stopped, so no ssh child can still reference the
+ * files. App quit does not need this call: the owner process exits and the
+ * next startup cleanup (cleanupStaleAskpassHelpers) reclaims the files.
+ */
+export function purgeSshAuth(id: string): void {
+  const helpers = askpassHelpers.get(id)
+  if (helpers === undefined) return
+  askpassHelpers.delete(id)
   deleteAskpassHelper(helpers.current)
   for (const retired of helpers.retired) deleteAskpassHelper(retired)
 }
@@ -907,13 +969,24 @@ export const sshProvider: TransportProvider = {
   },
 
   /**
-   * Delete the instance's ephemeral askpass helper (transport stop /
-   * removal / app quit). The in-memory password itself survives a plain
-   * disconnect (the user may reconnect without retyping) and is only
-   * cleared by setSshPassword(null), instance removal, or app quit.
+   * Retire the instance's ephemeral askpass helper (transport stop /
+   * removal / app quit): retired generations are deleted, the current one
+   * is kept on disk for in-flight execs (see disposeSshAuth). The in-memory
+   * password itself survives a plain disconnect (the user may reconnect
+   * without retyping) and is only cleared by setSshPassword(null), instance
+   * removal, or app quit.
    */
   disposeAuth(spec: TransportInstanceSpec): void {
     disposeSshAuth(spec)
+  },
+
+  /**
+   * FINAL askpass helper deletion — called by the runtime ONLY on instance
+   * removal (never on a plain disconnect): no transport or exec may still
+   * reference the files by then (see purgeSshAuth).
+   */
+  purgeAuth(spec: TransportInstanceSpec): void {
+    purgeSshAuth(spec.id)
   },
 
   classifyStderr(line: string) {

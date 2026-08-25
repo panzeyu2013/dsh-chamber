@@ -66,7 +66,8 @@ function headerValue(headers: Record<string, string | string[] | undefined>, nam
 function rejectWs(socket: { end(data: string): unknown }, status: number, message: string, code?: string): void {
   const reason = status === 400 ? 'Bad Request'
     : status === 401 ? 'Unauthorized'
-      : status === 421 ? 'Misdirected Request' : 'Forbidden'
+      : status === 421 ? 'Misdirected Request'
+        : status === 503 ? 'Service Unavailable' : 'Forbidden'
   socket.end(
     `HTTP/1.1 ${status} ${reason}\r\n`
     + 'Content-Type: application/json\r\n'
@@ -248,8 +249,13 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
           const code = (error as Error & { code?: string }).code
           if (code === 'rate_limited') json(res, 429, { error: 'too many login attempts', code: 'rate_limited' })
           else if (code === 'auth_busy') json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
-          else if (code === 'body_too_large') json(res, 413, { error: 'request body too large', code })
-          else if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
+          else if (code === 'body_too_large') {
+            json(res, 413, { error: 'request body too large', code })
+            // The 413 is written; the oversized body may still be streaming.
+            // Destroy the request socket instead of draining it, so a slow
+            // anonymous upload cannot pin the connection.
+            req.destroy?.()
+          } else if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
           else json(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
         }
         return true
@@ -304,8 +310,21 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       rejectWs(socket, decision.status, decision.code === 'misdirected_request' ? 'misdirected request' : 'request origin is not allowed', decision.code)
       return true
     }
-    // 1. Auth gate (WS auth == HTTP auth, S2).
-    const principal = await auth.verify(authRequest(req, decision))
+    // 1. Auth gate (WS auth == HTTP auth, S2). A saturated scrypt work gate
+    // must answer 503 auth_busy here too — never a generic 500 internal —
+    // mirroring the HTTP verify path (regression locked in
+    // dispatch-composition.test.ts).
+    let principal: AuthPrincipal | null
+    try {
+      principal = await auth.verify(authRequest(req, decision))
+    } catch (error) {
+      const code = (error as Error & { code?: string }).code
+      if (code === 'auth_busy') {
+        rejectWs(socket, 503, 'authentication service is busy', 'auth_busy')
+        return true
+      }
+      throw error
+    }
     if (principal === null) {
       rejectWs(socket, 401, 'unauthorized')
       return true

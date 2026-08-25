@@ -65,7 +65,8 @@
 
 ## 6. 回归（迁移相关全量）
 
-- [ ] 测试：控制面 8 套 + `test:desktop` + `test:renderer-shell` + `test:git` +
+- [ ] 测试：控制面 8 套 + `test:desktop` + `test:gateway` + `test:cli` +
+      `test:renderer-shell` + `test:git` +
       `test:host-git` + `test:sidebar` + `test:settings-bridge` + `test:connections` +
       `test:client-web` + `test:connection`。
 - [ ] 类型检查全套（根 + 各插件 + host 包 + client-web）。

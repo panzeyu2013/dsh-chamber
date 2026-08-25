@@ -21,10 +21,12 @@ import { join } from 'node:path'
 import {
   buildAskpassScript,
   buildRemoteExecArgv,
+  chmodAskpassDirOwnerOnly,
   configureSshPasswordStore,
   cleanupStaleAskpassHelpers,
   createAskpassHelper,
   disposeSshAuth,
+  purgeSshAuth,
   getSshPassword,
   probeDshSignature,
   resolveWriteTarget,
@@ -93,6 +95,39 @@ test('startup cleanup preserves helpers owned by this live process', () => {
   }
 })
 
+test('askpass dir chmod EPERM downgrades instead of failing password auth (multi-user machine)', () => {
+  // On a shared machine a second OS user cannot chmod the askpass directory
+  // the first user created (EPERM). The downgrade keeps the existing mode
+  // and logs LOUDLY — password auth must not fail wholesale (review 2026-08).
+  // /dev/null is root-owned on macOS/Linux, so chmodSync on it raises a
+  // genuine EPERM (verified; no root required).
+  let eperm = false
+  try {
+    chmodSync('/dev/null', 0o700)
+  } catch (error) {
+    eperm = (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+  if (!eperm) return // platform without the EPERM trigger (e.g. win32) — nothing to downgrade
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (message?: unknown, ...args: unknown[]) => {
+    warnings.push(String(message))
+    originalWarn(message, ...args)
+  }
+  try {
+    chmodAskpassDirOwnerOnly('/dev/null')
+  } finally {
+    console.warn = originalWarn
+  }
+  assert.ok(
+    warnings.some(text => /EPERM/.test(text) && /askpass directory/.test(text)),
+    'the EPERM downgrade logs loudly',
+  )
+  // A NON-EPERM chmod failure still throws: the caller must not proceed
+  // blind (only the shared-directory multi-user case downgrades).
+  assert.throws(() => chmodAskpassDirOwnerOnly(join(process.cwd(), 'definitely-missing-askpass-dir')), /ENOENT|ENOTDIR/)
+})
+
 test('setSshPassword/getSshPassword round-trip and clear (empty string and null both clear)', () => {
   setSshPassword('t-store-1', 'pw')
   assert.equal(getSshPassword('t-store-1'), 'pw')
@@ -114,12 +149,18 @@ test('sshAuthEnv returns the askpass env only when a password is stored', () => 
     assert.equal(sshAuthEnv(spec('t-env-2')), null, 'no stored password = key/agent auth (null env)')
   } finally {
     setSshPassword('t-env-1', null)
-    disposeSshAuth(spec('t-env-1'))
-    disposeSshAuth(spec('t-env-2'))
+    purgeSshAuth('t-env-1')
+    purgeSshAuth('t-env-2')
   }
 })
 
-test('disposeSshAuth deletes the ephemeral askpass helper', () => {
+test('disposeSshAuth keeps the current helper for in-flight execs; purgeSshAuth deletes it', () => {
+  // Review 2026-08: a plain disconnect must NOT delete the generation an
+  // in-flight exec (systemctl / run, up to runTimeoutMs) may still hold as
+  // SSH_ASKPASS — deleting it fails that exec's password auth (the same P1
+  // regression the retirement discipline fixes). dispose retires the current
+  // generation (kept on disk); the FINAL deletion happens on instance
+  // removal (purgeSshAuth).
   setSshPassword('t-env-3', 'pw')
   try {
     const env = sshAuthEnv(spec('t-env-3'))
@@ -127,13 +168,19 @@ test('disposeSshAuth deletes the ephemeral askpass helper', () => {
     const path = env!.SSH_ASKPASS
     assert.ok(existsSync(path))
     disposeSshAuth(spec('t-env-3'))
-    assert.ok(!existsSync(path), 'helper is deleted on dispose')
-    // A later sshAuthEnv (reconnect) writes a FRESH helper.
+    assert.ok(existsSync(path), 'dispose keeps the current helper: an in-flight exec may still execute it')
+    assert.equal(statSync(path).mode & 0o777, 0o700, 'the retained helper stays owner-executable')
+    // A later sshAuthEnv (reconnect) writes a FRESH helper; the retained one
+    // moves into retirement and stays on disk (never deleted by dispose).
     const next = sshAuthEnv(spec('t-env-3'))
     assert.ok(next !== null && next!.SSH_ASKPASS !== path, 'a fresh helper replaces the disposed one')
+    assert.ok(existsSync(path), 'the retained generation is NOT deleted by the next recreation')
+    // The FINAL deletion is the explicit purge (instance removal path).
+    purgeSshAuth('t-env-3')
+    assert.ok(!existsSync(path), 'purge deletes the retained generation')
   } finally {
     setSshPassword('t-env-3', null)
-    disposeSshAuth(spec('t-env-3'))
+    purgeSshAuth('t-env-3')
   }
 })
 
@@ -154,12 +201,17 @@ test('recreating the askpass env RETIRES the previous helper instead of deleting
     // The in-flight child's helper must still be on disk, executable.
     assert.ok(existsSync(firstPath), 'the retired (in-flight) helper survives the recreation')
     assert.equal(statSync(firstPath).mode & 0o777, 0o700, 'retired helper stays owner-executable')
-    // Dispose removes the whole generation list.
+    // Dispose deletes the RETIRED generation but keeps the current one
+    // (an in-flight child may still execute it): only the final purge
+    // removes the whole generation list.
     disposeSshAuth(spec('t-env-4'))
-    assert.ok(!existsSync(firstPath) && !existsSync(secondPath), 'dispose deletes current AND retired helpers')
+    assert.ok(!existsSync(firstPath), 'dispose deletes the retired generation')
+    assert.ok(existsSync(secondPath), 'dispose KEEPS the current generation for in-flight execs')
+    purgeSshAuth('t-env-4')
+    assert.ok(!existsSync(firstPath) && !existsSync(secondPath), 'purge deletes current AND retained generations')
   } finally {
     setSshPassword('t-env-4', null)
-    disposeSshAuth(spec('t-env-4'))
+    purgeSshAuth('t-env-4')
   }
 })
 
@@ -182,7 +234,7 @@ test('askpass helper retirement is bounded by the generation cap', () => {
     assert.ok(existsSync(paths[6]), 'current generation survives')
   } finally {
     setSshPassword('t-env-5', null)
-    disposeSshAuth(spec('t-env-5'))
+    purgeSshAuth('t-env-5')
   }
 })
 

@@ -524,6 +524,34 @@ test('loadViewPrefs keeps old payloads without sidebarWidth valid (v stays 1 —
   assert.deepEqual(loaded.ungroupedOrder['local'], ['s1'])
 })
 
+test('the sidebarWidth clamp stays in sync with the vendor contract (columns.ts SIDEBAR_MIN/MAX)', () => {
+  // sanitizePrefs hardcodes `Math.min(420, Math.max(264, Math.round(x)))` in
+  // view-prefs.ts. The vendor contract — the pinned
+  // @deepseek-ai/dsh-client-ui-layout/src/client/columns.ts — fixes
+  // SIDEBAR_MIN = 264, SIDEBAR_MAX = 420, and clampWidth(px, min, max) =
+  // Math.min(max, Math.max(min, Math.round(px))): the EXACT round-then-clamp
+  // the sanitizer reproduces. The vendor source cannot be imported here (its
+  // .ts file sits outside this package's tsconfig rootDir and the vendor
+  // tree ships no built lib/ for plain node), so this test pins BOTH sides —
+  // the literals mirror the vendor constants, and the formula below IS the
+  // vendor clampWidth spelled out — so an unconscious drift on either side
+  // fails loudly instead of silently diverging the persisted clamp (2026-09
+  // review nit).
+  const VENDOR_SIDEBAR_MIN = 264
+  const VENDOR_SIDEBAR_MAX = 420
+  const vendorClampWidth = (px: number): number =>
+    Math.min(VENDOR_SIDEBAR_MAX, Math.max(VENDOR_SIDEBAR_MIN, Math.round(px)))
+  const storage = new MemoryStorage()
+  for (const raw of [0, 100, 250, 263.5, 264, 279.4, 279.5, 280.4, 300, 419.4, 419.5, 420, 500, 1000, -5]) {
+    storage.setItem(VIEW_PREFS_KEY, JSON.stringify({ v: 1, folded: {}, ungroupedOrder: {}, sidebarWidth: raw }))
+    assert.equal(
+      loadViewPrefs(storage).sidebarWidth,
+      vendorClampWidth(raw),
+      `sidebarWidth ${raw} must clamp like the vendor clampWidth`,
+    )
+  }
+})
+
 test('sidebarWidth survives the write-time prune rebuild and unrelated writes', () => {
   __resetViewPrefsForTests()
   // The FIRST write of a session adds a seen source and rebuilds the prefs

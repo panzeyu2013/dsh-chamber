@@ -3,6 +3,10 @@ import type { SshInstanceInput, SshInstanceSpec, SshLogEntry, SshStatusProjectio
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
 import type { RuntimeState } from './dsh-runtime-controller.ts';
+// Type-only import (erased at compile time): the wire's chamber injection
+// state is produced by plugin-sync.ts — importing its type keeps the preload
+// mirror from drifting (renderer global.d.ts mirrors the same shape).
+import type { ChamberInjectionState } from './plugin-sync.ts';
 
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -85,6 +89,10 @@ export interface SshRemotePluginManifest {
   bundles: string[]
   profileExists: boolean
   error?: string
+  /** Chamber-injected component state (design 09), probed over the wire —
+   *  mirror of plugin-sync.ts (the wire producer); renderer global.d.ts
+   *  mirrors the same shape. */
+  chamber: ChamberInjectionState
 }
 export type SshRemotePluginListResult =
   | { ok: true; manifest: SshRemotePluginManifest }
@@ -98,6 +106,8 @@ export interface SshLocalPluginManifest {
   /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
   bundleLines: string[]
   unsyncable: { name: string; reason: string }[]
+  /** Chamber-injected component state (design 09), always readable locally. */
+  chamber: ChamberInjectionState
 }
 export type SshLocalPluginListResult =
   | { ok: true; manifest: SshLocalPluginManifest }

@@ -180,6 +180,20 @@
   远程 Linux 全量验证：控制面/CLI/gateway 实机矩阵 + 全部单测
   （desktop 30 文件、gateway、control-plane 9 文件、插件套件）+ 9 typecheck +
   build:renderer 全绿（Node 24）。
+  ③ notify answer/approval 的 client-response 信封形状实机验证：正确信封 +
+  approval/question value 形状 → dsh 回 `not-pending` 回执（形状通过校验），失败
+  形态 = receipt 拒绝 → 409 + pending 保留（与设计一致）。④ 远程真实 LLM 全链路
+  （容器内 Ollama + qwen2.5:1.5b）：真实 agent 会话运行（累计 512s 推理、6 轮、
+  工具调用到达参数校验、EMPTY_RESPONSE 退避重试、LLM 标题生成）、真实运行时安装
+  （npmmirror 真实源全链）、reaper/生命周期、gateway 打包安装冒烟、interval
+  schedule 实机投递 7 次。⑤ **第三轮全量审查修复（2026-08）**：5 视角并行审查
+  （gateway 13 项 / desktop 8 项 / renderer 插件 6 项 / 工程文档 12 项 / 安全 4 项），
+  全部修复并锁测试——gateway 来源 open-in 按钮 fail-closed（P2）、tsconfig 补
+  notifications 测试（P2）、schedule 业务拒绝终止 job、git 脏删除回退 ready+error、
+  removedSessionIds 上限、请求流销毁、WS auth_busy→503、JWT alg 校验、schedule
+  上限、open-in/layout 客户端测试（29 例）、askpass 退役语义（disconnect 保留在途
+  helper，移除才最终删除；design 05 §8 已同步）、exec epoch 防污染、settings 文件
+  校验含 notifications 子块、EPERM 降级、文档/编号/清单全同步。
 
 - **dsh 运行时版本管理（设计 18，当前判定：M0/M2/M4 done，M1/M3
   partial）**：运行期安装是唯一获取方式（无 Provider B）。主进程将 registry
@@ -671,7 +685,10 @@
    renderer shell 5、build:renderer、verify:i18n 全绿；两轮 review 另修复 bundle 并发等待、
    推送/补拉取竞态、shell 测试解析镜像，以及 roster 纵向布局/ARIA/窄视口边界。依赖按
    frozen lockfile 装配（Electron postinstall 下载未作为本轮验证前置，最终依赖装配使用
-   `--ignore-scripts`）。
+   `--ignore-scripts`）。**Electron 二进制惰性安装（2026-08 用户拍板）**：根 postinstall
+   `ensure-electron.mjs` 默认 SKIP，仅 `DSH_CHAMBER_ELECTRON=1`（或 `electron-dev` 首启
+   自动补装）时经 electron_mirror 下载；server 部署（gateway/control-plane/CLI）不再携带
+   ~100MB 桌面二进制；electron-builder 打包走自身缓存不受影响（`7117e45`）。
    **第三轮全量 review（2026-08）**：修复 settings roster 去重遗漏 `pluginId` / 分隔符
    碰撞、旧 boot 迟到诊断覆盖新一代、触发器关闭未清搜索词；新增诊断 generation 与
    roster 签名单测。全矩阵复验：根 + sidebar/layout/connections/settings-bridge/client-web/

@@ -24,6 +24,8 @@ import {
   type RuntimePhase,
   type RuntimeState,
 } from '../renderer/src/runtime-management.ts'
+import type { RuntimeInstallProgress as MainRuntimeInstallProgress } from './runtime-installer.ts'
+import type { RuntimeInstallProgress as RendererRuntimeInstallProgress } from '../renderer/src/runtime-management.ts'
 
 const PHASES: readonly RuntimePhase[] = [
   'idle', 'checking', 'available', 'downloading', 'installing', 'pending',
@@ -158,4 +160,46 @@ test('renderer blocked branch matches the main blocked gate', () => {
     runtimeAllowedActions(blocked({ canRecoverMetadata: true, metadataHealth: 'selection-corrupt', restoreOutcome: 'half', canRetryRestore: true })),
     ['retry-restore'],
   )
+})
+
+test('the renderer RuntimeInstallProgress flat mirror projects from the main-process union without drift', () => {
+  // The main process emits a DISCRIMINATED UNION
+  // (runtime-installer.ts: `{stage:'download'; received; total}` | stage-only
+  // milestones) while the renderer's mirror (runtime-management.ts) is a FLAT
+  // interface with optional received/total. The invariant that matters: every
+  // union member must project losslessly into the flat mirror — the line
+  // `const flat: RendererRuntimeInstallProgress = progress` below is a
+  // COMPILE-TIME assignability check (the root typecheck fails on drift), and
+  // this test pins the runtime shape: received/total ride 'download' only,
+  // and every milestone stage the renderer declares exists on the main side.
+  const samples: MainRuntimeInstallProgress[] = [
+    { stage: 'download', received: 0, total: null },
+    { stage: 'download', received: 1024, total: 2048 },
+    { stage: 'install' },
+    { stage: 'prune' },
+    { stage: 'smoke' },
+    { stage: 'publish' },
+    { stage: 'done' },
+  ]
+  const rendererStages: ReadonlyArray<RendererRuntimeInstallProgress['stage']> = ['download', 'install', 'prune', 'smoke', 'publish', 'done']
+  for (const progress of samples) {
+    // Compile-time: the main union member is assignable to the flat mirror.
+    const flat: RendererRuntimeInstallProgress = progress
+    assert.equal(flat.stage, progress.stage)
+    if (progress.stage === 'download') {
+      assert.equal(typeof progress.received, 'number', 'download always carries received bytes')
+      assert.ok(progress.total === null || typeof progress.total === 'number', 'download total is a number or null (content-length unknown)')
+    } else {
+      // The renderer's optional fields must never be fabricated: a milestone
+      // stage carries neither received nor total on the wire.
+      assert.equal('received' in progress, false, `${progress.stage} carries no received`)
+      assert.equal('total' in progress, false, `${progress.stage} carries no total`)
+    }
+  }
+  // Every renderer-declared stage exists on the main side (the union's stage
+  // set is the single source of truth for the bar UI).
+  const mainStages = new Set<MainRuntimeInstallProgress['stage']>(samples.map(sample => sample.stage))
+  for (const stage of rendererStages) {
+    assert.ok(mainStages.has(stage), `renderer stage '${stage}' is produced by the main-process union`)
+  }
 })

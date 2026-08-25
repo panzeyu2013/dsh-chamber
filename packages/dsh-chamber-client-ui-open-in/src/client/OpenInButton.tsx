@@ -49,6 +49,7 @@ import {
   type OpenInApp,
   type Translate,
 } from '../shared/coordinator.ts'
+import { rawInstanceIdForLaunch, usableAppsForSource, workspacePathForSession } from './open-in-gates.ts'
 import styles from './OpenInButton.module.css'
 
 /** Injected face the plugin supplies: per-boot source id + bound translator. */
@@ -156,20 +157,21 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
 
   // Gate 1: the probed app list, fail-closed (null/undefined/empty all hide),
   // filtered to what this source may actually use. LOCAL sources get every
-  // available app; REMOTE (ssh-<id>) sources only remote-capable ones. The
-  // bridge's `available` flag is honored as a hard filter (fail-closed).
-  const availableApps = (appList ?? []).filter(app => app.available)
-  const usableApps = sourceId === 'local'
-    ? availableApps
-    : availableApps.filter(app => app.remoteCapable)
+  // available app; REMOTE (ssh-<id>) sources only remote-capable ones
+  // (vscode). GATEWAY (gateway-<id>) and unknown sources get NOTHING — a
+  // gateway instance has no vscode-remote semantics and the main-process
+  // launch keys on the raw registry id ('ssh-' prefix strip only), so any
+  // gateway button would be a guaranteed-fail dead button (frontend-review
+  // P2 fix, 2026-09). The bridge's `available` flag is honored as a hard
+  // filter (fail-closed).
+  const usableApps = usableAppsForSource(sourceId, appList ?? [])
   if (usableApps.length === 0) return null
 
   // Gate 2: THIS header's session must live in a workspace with a concrete
   // path. Both remote and local sources show (user decision 2026-08); the
   // launch branch (ssh-remote vs file) is decided in the main process by
   // instanceId.
-  const workspace = workspaces.find(item => item.sessionIds.includes(String(sessionId)))
-  const path = workspace?.path
+  const path = workspacePathForSession(workspaces, sessionId)
   if (path === undefined || path === '') return null
 
   // Default selection (this mount's memory only, no localStorage): VS Code
@@ -183,8 +185,9 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
     // View id → raw instance id: the sourceId is the per-boot VIEW id
     // ('local' | 'ssh-<id>'), but the main-process launch keys on the RAW
     // registry id — the 'ssh-' prefix is stripped here ('local' stays as-is;
-    // security-review P1-1 / user decision 2026-08).
-    const instanceId = sourceId.startsWith('ssh-') ? sourceId.slice(4) : sourceId
+    // security-review P1-1 / user decision 2026-08). Gateway ids never reach
+    // this path (gate 1 filters them out — P2 fix).
+    const instanceId = rawInstanceIdForLaunch(sourceId)
     void (window as unknown as {
       dshChamber?: { openIn?: { open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }> } }
     }).dshChamber?.openIn?.open(app.id, instanceId, path).then((result) => {

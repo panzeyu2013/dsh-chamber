@@ -120,3 +120,13 @@ export function subscribeOpenIn(listener: () => void): () => void {
     listeners.delete(listener)
   }
 }
+
+/** Test-only: reset the shared probe state (list, in-flight promise, epoch
+ *  and listeners) for isolation — same pattern as the sidebar's
+ *  `__resetViewPrefsForTests`. */
+export function __resetOpenInForTests(): void {
+  apps = null
+  appsPromise = null
+  probeEpoch = 0
+  listeners.clear()
+}

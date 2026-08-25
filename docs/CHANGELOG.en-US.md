@@ -59,6 +59,54 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   formal builds do not pin a third-party Electron mirror, and existing Gateway
   secrets reject symlinks/non-regular files and converge to mode 0600 before read.
 
+### Added
+
+- **open-in registry (design 20)** — evolution of the VS Code deep-link
+  (design 16) into one unified open surface: Finder / local / remote VS Code via
+  the main-process OpenInApp provider registry plus a six-step loud execution
+  pipeline; the plugin package is renamed `dsh-chamber-client-ui-open-in` and
+  the legacy vscode IPC is removed.
+- **Desktop notifications (design 19)** — native notifications for session
+  completion / agent questions / approval requests (opt-in setting); detection =
+  renderer edge detection over the runtime fact channel, presentation =
+  main-process Electron Notification + click-to-open; settings merged into the
+  general-page "Notifications" control group.
+- **Sidebar enhancements (design 06 §2.4/§3.1)** — service group folding,
+  drag-to-reorder, stable accent colors for workspace icons.
+- **Lazy Electron binary bootstrap** — the root postinstall no longer downloads
+  the Electron binary (~100MB) by default; it is fetched only with
+  `DSH_CHAMBER_ELECTRON=1` (or auto-installed on the first `electron-dev` launch);
+  server deployments (gateway/control-plane/CLI) install without the desktop
+  dependency.
+
+### Fixed
+
+- **Gateway ESM bundle require shim** — ws's static `require('events')` hit
+  "Dynamic require not supported" in the pure-ESM bundle, wedging the derived
+  session index / approval streams in an endless reconnect loop with an
+  always-empty `/chamber/sessions` (live finding on Linux + macOS); the build.mjs
+  banner now injects `createRequire`, locked by a build smoke test.
+- **Scheduler `session.prompt` wire shape** — the old `{sessionId, prompt}`
+  payload was rejected by dsh 0.1.1-rc.2 (schema reverse-engineered live: the
+  discriminator is `mode`); switched to
+  `{sessionId, mode:'queue', content:[{type:'text',text}]}` with a regression test.
+- **Review hardening round (2026-08 full review)** — business rejections now
+  terminate scheduled jobs (no infinite backoff); dirty-worktree git deletes roll
+  back to `ready` with an `error` field (retryable); `removedSessionIds` cap;
+  request streams destroyed after body-limit rejection; WS upgrade `auth_busy` →
+  503; explicit JWT alg check; scheduler job/prompt limits; gateway-source open-in
+  buttons fail closed (dead control removed); open-in/layout client packages gain
+  tests (29 cases); askpass generation retirement semantics (disconnect keeps the
+  in-flight helper, final deletion on removal); exec epoch guards against stale
+  projection pollution; settings file validation covers the notifications block;
+  EPERM degradation; etc.
+
+### Security
+
+- notify answer/approval client-response envelope shapes verified live against
+  the real dsh wire (unknown rpcId → `not-pending` receipt; failure surfaces as
+  explicit 409 + pending row kept).
+
 ## [0.1.5] - 2026-08-23
 
 ### Added

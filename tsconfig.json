@@ -85,7 +85,9 @@
     "packages/gateway/src/**/*.ts",
     "packages/gateway/test/**/*.ts",
     "packages/desktop/open-in.ts",
-    "packages/desktop/open-in.test.ts"
+    "packages/desktop/open-in.test.ts",
+    "packages/desktop/notifications.ts",
+    "packages/desktop/notifications.test.ts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }

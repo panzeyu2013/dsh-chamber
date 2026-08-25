@@ -148,6 +148,18 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     },
 
     async handleUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer): Promise<void> {
+      // Hoisted SSRF guard (defense in depth): reject absolute-form
+      // (`http://evil/x`), protocol-relative (`//evil/x`) and backslash
+      // (`/\\evil/x`) request targets BEFORE any pathname normalization.
+      // `new URL()` silently normalizes those forms, so `/api\events.mux`
+      // would otherwise match WS_STREAM_PATHS with a normalized pathname and
+      // only be caught later by parsePathTarget. Same rejection semantics as
+      // the HTTP path; behavior for valid targets is unchanged.
+      if (parsePathTarget(req.url, new URL('http://localhost')) === null) {
+        counters.failures += 1
+        rejectUpgrade(socket, 400, 'invalid_request', 'absolute request targets are not allowed', logger)
+        return
+      }
       // Only the two dsh downlink stream paths upgrade (design 03 §3.1).
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
       if (!WS_STREAM_PATHS.has(pathname)) {
@@ -168,6 +180,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
       }
       const fullTarget = parsePathTarget(req.url, target)
       if (fullTarget === null) {
+        // Unreachable after the hoisted guard above — kept as defense in
+        // depth in case parsePathTarget's refusal set ever diverges.
         counters.failures += 1
         rejectUpgrade(socket, 400, 'invalid_request', 'absolute request targets are not allowed', logger)
         return

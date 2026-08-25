@@ -78,6 +78,18 @@ function verifyJwt(token: string, secret: string): Record<string, unknown> | nul
   const parts = token.split('.')
   if (parts.length !== 3) return null
   const [header, body, signature] = parts
+  // The MAC below is always recomputed with HS256, so a forged header can
+  // never weaken the signature. Reject any non-HS256 alg header explicitly
+  // anyway: the verification policy must be self-documenting (defense in
+  // depth against a future refactor that keys the MAC off the header).
+  let headerValue: unknown
+  try {
+    headerValue = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+  if (headerValue === null || typeof headerValue !== 'object'
+    || (headerValue as { alg?: unknown }).alg !== 'HS256') return null
   const expected = createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')
   const a = Buffer.from(signature)
   const b = Buffer.from(expected)

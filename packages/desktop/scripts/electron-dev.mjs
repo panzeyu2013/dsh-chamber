@@ -49,7 +49,7 @@ if (electronDir === null) {
     env: { ...process.env, DSH_CHAMBER_ELECTRON: '1' },
   });
   if (ensured.error || ensured.status !== 0 || resolveElectron() === null) {
-    fail('未找到 electron 二进制。请重跑 node scripts/ensure-electron.mjs（需 DSH_CHAMBER_ELECTRON=1）或 pnpm install。');
+    fail('未找到 electron 二进制。请重跑 node scripts/ensure-electron.mjs（需 DSH_CHAMBER_ELECTRON=1）（pnpm install 默认跳过 Electron 二进制，需 DSH_CHAMBER_ELECTRON=1）。');
   }
 }
 

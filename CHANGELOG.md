@@ -43,6 +43,39 @@
   写入与 npm channel 回退；稳定版/预发布分别使用 `latest`/`beta`，正式构建不固定第三方 Electron
   mirror。已有 Gateway secret 读取前拒绝 symlink/非普通文件并收敛至 0600。
 
+### 新增
+
+- **open-in 打开注册表（设计 20）** —— 原 VS Code 深链（设计 16）演进为统一打开面：
+  Finder/本地/远程 VS Code 经主进程 OpenInApp provider 注册表 + 六步 loud 执行管线打开；
+  插件包重命名为 `dsh-chamber-client-ui-open-in`，旧 vscode IPC 收敛删除。
+- **桌面通知（设计 19）** —— 会话完成/代理提问/审批请求推送原生通知（设置可选项）；
+  检测 = renderer 复用运行时事实通道边沿检测，呈现 = 主进程 Electron Notification +
+  点击打开会话；设置并入通用页「通知」控制组。
+- **侧边栏增强（design 06 §2.4/§3.1）** —— 服务分组折叠、拖拽排序、工作区图标稳定强调色。
+- **Electron 二进制惰性安装** —— 根 postinstall 默认不再下载 Electron 二进制（约 100MB）；
+  仅 `DSH_CHAMBER_ELECTRON=1`（或 `electron-dev` 首启自动补装）时下载；server 部署
+  （gateway/control-plane/CLI）安装不再携带桌面依赖。
+
+### 修复
+
+- **Gateway ESM bundle require shim** —— ws 静态 `require('events')` 在纯 ESM 产物中触发
+  "Dynamic require not supported"，派生会话索引/审批流无限重连、`/chamber/sessions` 恒空
+  （Linux + macOS 实机发现）；build.mjs banner 注入 `createRequire` 修复，构建冒烟测试锁定。
+- **schedule 的 `session.prompt` wire 形状** —— 旧 `{sessionId, prompt}` 载荷被 dsh
+  0.1.1-rc.2 拒绝（实机反推 schema：判别字段 `mode`）；改为
+  `{sessionId, mode:'queue', content:[{type:'text',text}]}` 并锁回归测试。
+- **审查加固轮（2026-08 全量审查）** —— schedule 业务拒绝终止 job（不再无限退避）；
+  git 脏工作树删除回退 ready + error 字段（可重试）；`removedSessionIds` 上限；请求体超限
+  销毁流；WS upgrade `auth_busy` → 503；JWT alg 显式校验；schedule 作业数/长度上限；
+  gateway 来源的 open-in 按钮 fail-closed（不再渲染死控件）；open-in/layout 客户端包补
+  测试（29 例）；askpass 代际退役语义（disconnect 保留在途 helper，移除才最终删除）；
+  exec epoch 防迟到投影污染；settings 文件校验纳入 notifications 子块；EPERM 降级等。
+
+### 安全
+
+- notify answer/approval 的 client-response 信封形状实机验证（未知 rpcId → `not-pending`
+  回执，失败形态显式 409 + pending 保留）。
+
 ## [0.1.5] - 2026-08-23
 
 ### 新增

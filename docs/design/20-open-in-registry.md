@@ -1,4 +1,4 @@
-# 17 · open-in 打开注册表（Finder 本地 + VS Code 本地/远程的统一打开面）
+# 20 · open-in 打开注册表（Finder 本地 + VS Code 本地/远程的统一打开面）
 
 > **状态：设计定稿并已实现（M0–M3 全部落地，2026-08）。** 本文是设计 16
 > （VS Code 深链）的同族演进：把"会话头部 utilities 行的 vscode 按钮"升级为
@@ -225,7 +225,7 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
 
 ## 10. 相关文档
 
-- `docs/design/01-overview.md` §3（文档地图，本文条目 17）
+- `docs/design/01-overview.md` §3（文档地图，本文条目 20）
 - `docs/design/16-vscode-deeplink.md`（母设计：OS 深链 + 槽位/门控/IPC 纪律；
   本文的 vscode provider 与其共享管线）
 - `docs/design/05-connection-manager.md` §7（trustedIpc 围栏 / 安全不变量）

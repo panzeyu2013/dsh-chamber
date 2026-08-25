@@ -264,12 +264,21 @@ export interface TransportProvider {
    */
   buildStartEnv?(spec: TransportInstanceSpec): NodeJS.ProcessEnv | null
   /**
-   * Optional per-instance resource cleanup (ssh: delete the ephemeral
+   * Optional per-instance resource cleanup (ssh: retire the ephemeral
    * askpass helper). Called by the runtime when an instance's transport is
    * stopped (disconnect, removal, app quit). Never called for an instance
    * the provider does not know.
    */
   disposeAuth?(spec: TransportInstanceSpec): void
+  /**
+   * Optional FINAL per-instance resource deletion (ssh: delete ALL askpass
+   * helper generations). Called by the runtime ONLY when an instance is
+   * REMOVED from the registry — never on a plain disconnect, where an
+   * in-flight exec may still reference provider-owned resources (the ssh
+   * askpass current generation). Absent = disposeAuth already covers
+   * removal.
+   */
+  purgeAuth?(spec: TransportInstanceSpec): void
   /** Probe target for DIRECT ENDPOINT providers (ignored in tunnel mode). */
   probeTarget?(spec: TransportInstanceSpec): { host: string; port: number }
   /** Ready URL for DIRECT ENDPOINT providers (ignored in tunnel mode). */

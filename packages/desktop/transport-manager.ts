@@ -244,6 +244,18 @@ interface InstanceState {
   /** Monotonic transport attempt counter: stale startTransport invocations and
    *  delayed exits of replaced children are recognized and ignored. */
   tunnelEpoch: number
+  /**
+   * Monotonic exec-generation counter, incremented on disconnect: execs
+   * started BEFORE the disconnect (whose callbacks may still fire late) are
+   * recognized as stale and never write into the instance's state — a
+   * removed-and-reused id, a kind switch, or a field-edit restart must not
+   * be polluted by the old instance's in-flight exec (review 2026-08).
+   */
+  execEpoch: number
+  /** In-flight provider exec children of THIS instance, SIGTERMed by
+   *  disconnect (a disconnect cancels the execs it owns) in addition to the
+   *  global set SIGTERMed by dispose (app quit). */
+  execChildren: Set<SpawnedProcess>
 }
 
 /** Error that may carry a machine-readable code. */
@@ -369,6 +381,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         readyLoop: null,
         logs: [],
         tunnelEpoch: 0,
+        execEpoch: 0,
+        execChildren: new Set(),
       }
       states.set(id, state)
     }
@@ -852,12 +866,24 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       return Promise.resolve({ ok: false, error: `exec not supported by transport kind ${spec.kind}` })
     }
     const state = ensureState(id)
-    // Wrap the spawn so in-flight exec children are tracked and SIGTERMed by
-    // dispose() (app quit) instead of being orphaned mid-network-blackhole.
+    // Snapshot the exec generation: disconnect() increments execEpoch, so a
+    // late callback of an exec started before the disconnect recognizes it
+    // is stale and drops its write (a removed-and-reused id, a kind switch,
+    // or a field-edit restart must never be polluted by the old instance's
+    // in-flight exec — review 2026-08). Label/serviceName-only edits do not
+    // disconnect, so their execs keep writing.
+    const execEpoch = state.execEpoch
+    // Wrap the spawn so in-flight exec children are tracked per instance
+    // (SIGTERMed by disconnect — a disconnect cancels the execs it owns)
+    // and globally (SIGTERMed by dispose/app quit).
     const trackedSpawn = (command: string, args: readonly string[], spawnOptions: SpawnOptions) => {
       const child = doSpawn(command, args, spawnOptions)
       execChildren.add(child)
-      child.on('exit', () => execChildren.delete(child))
+      state.execChildren.add(child)
+      child.on('exit', () => {
+        execChildren.delete(child)
+        state.execChildren.delete(child)
+      })
       return child
     }
     try {
@@ -866,9 +892,18 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         execTimeoutMs,
         runTimeoutMs: runExecTimeoutMs,
         disconnectGraceMs,
-        log: (level, message) => appendLogInternal(state, level, message),
+        log: (level, message) => {
+          // Stale-exec guard: an exec that outlived its instance's
+          // disconnect must never write into the ring buffer of a reused
+          // (or kind-switched) instance.
+          if (state.execEpoch !== execEpoch) return
+          appendLogInternal(state, level, message)
+        },
         setProjection: (execId, key, value) => {
           if (key === 'serviceActive') {
+            // Stale-exec guard (same rationale as log): an ssh-specific
+            // projection must never leak onto a kind-switched or reused id.
+            if (state.execEpoch !== execEpoch) return
             state.serviceActive = value
             emitStatus(execId)
           }
@@ -1001,8 +1036,20 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const nextIds = new Set(kept.map(entry => entry.id))
     for (const id of [...instances.keys()]) {
       if (!nextIds.has(id)) {
+        const removedSpec = instances.get(id)
         log(`transport-manager: instance ${id} removed from the set; disconnecting its transport`)
         disconnect(id)
+        // The instance is GONE: drop its runtime state (phase machine, ring
+        // buffer, per-instance exec children) so a later same-id reuse
+        // starts clean — an in-flight exec of the removed instance must
+        // never write into the NEW instance's state (its callbacks are
+        // already stale via the execEpoch bump; this is the authoritative
+        // cleanup, review 2026-08).
+        states.delete(id)
+        // Provider-owned resources that must be deleted only on REMOVAL (not
+        // on a plain disconnect): ssh purges the retained askpass generation
+        // an in-flight exec may still reference during a disconnect.
+        if (removedSpec !== undefined) resolveProvider(removedSpec.kind).purgeAuth?.(removedSpec)
       }
     }
     // Stop changed transports BEFORE replacing `instances`. disconnect()
@@ -1073,6 +1120,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       clearTimeout(state.reconnectTimer)
       state.reconnectTimer = null
     }
+    // Bump the exec generation FIRST: every in-flight exec started before
+    // this disconnect becomes stale at once, so any late callback (a child
+    // that ignored the SIGTERM and exits later) is dropped instead of
+    // writing into the instance's state — a removed-and-reused id, a kind
+    // switch, or a field-edit restart must never be polluted by the old
+    // instance's exec (review 2026-08).
+    state.execEpoch += 1
     stopReadyLoop(state)
     if (state.child !== null) {
       const child = state.child
@@ -1080,6 +1134,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       signalChild(child, 'SIGTERM')
       armKillEscalation(state, child)
     }
+    // In-flight provider execs (ssh: systemctl / run) belong to this
+    // transport: a disconnect cancels them too, instead of leaving them
+    // running against a torn-down transport (their late callbacks are
+    // already stale via the execEpoch bump). SIGTERM now; the provider's own
+    // exec timeout escalates to SIGKILL if the child ignores it.
+    for (const child of state.execChildren) signalChild(child, 'SIGTERM')
     // Provider-owned per-instance resources (ssh: the ephemeral askpass
     // helper) are released with the transport; the in-memory password
     // itself survives a plain disconnect so the user can reconnect without

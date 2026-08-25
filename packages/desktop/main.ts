@@ -614,6 +614,11 @@ function maybeShowNativeNotification(payload: unknown): boolean {
   const decision = decideNotification({
     request,
     settings,
+    // anyWindowFocused 只回答「是否有窗口聚焦」，无法知道用户正在查看哪个
+    // 会话——会话级焦点只有渲染端可见。'always' 模式下「正在查看的会话不
+    // 打扰」的豁免完全依赖渲染端上报的 requireHidden（on-screen 判定）；
+    // isAnyWindowFocused 不参与 'always' 的独立豁免（信任切分，review
+    // 2026-08，见 notifications.ts 模块头）。
     anyWindowFocused: isAnyWindowFocused(),
   });
   if (decision.action === 'skip') return false;
@@ -1609,6 +1614,16 @@ if (!gotTheLock) {
       // A kind switch deliberately keeps the old secret until the form's new
       // secret commit succeeds: the UI can roll metadata back if that commit
       // fails, then explicitly clears the old provider secret after success.
+      // DEPENDENCY + RISK (review 2026-08): this ordering leaves an
+      // INTERMEDIATE WINDOW — if the renderer's compensation ever fails (IPC
+      // error, renderer crash mid-flow), the OLD provider's secret stays in
+      // its store until the next explicit set/clear, and a switch BACK to the
+      // old kind would silently reuse it. Accepted: the old kind's transport
+      // is already stopped (no live consumer), and the explicit
+      // set_password / set_gateway_token clear path is always available; the
+      // compensation must NOT be moved before the commit, or a failed new-
+      // secret commit would leave the user with no way back to the prior
+      // working credential.
       // A SAME-KIND target edit (host/user/ports changed) must never silently
       // reuse the old target's credential against the new target: clear both
       // stores right here — the form re-commits a fresh secret with the save,

@@ -39,6 +39,12 @@ const MAX_BASELINE_CONTROL_FRAMES = 4_096
 const MAX_SESSION_ID_CHARS = 512
 const MAX_TITLE_CHARS = 4_096
 const MAX_CWD_CHARS = 32_768
+/** Removed-session tombstones only exist to suppress late mux frames for a
+ * removed session until a baseline or host/session-added re-authorizes it.
+ * They grow under session churn, so cap them and drop the oldest past the
+ * bound — a dropped tombstone only re-allows an already-deleted session's
+ * late frame, which the next baseline/add clears. */
+const MAX_REMOVED_SESSION_IDS = 512
 
 interface SessionListMetadata extends Record<string, unknown> {
   blank: boolean
@@ -292,6 +298,13 @@ export function createSessionIndex(deps: {
       })
     } else if (frame.method === 'host/session-removed' && typeof p.sessionId === 'string') {
       removedSessionIds.add(p.sessionId)
+      // Bounded tombstones: past the cap, drop the oldest so the set cannot
+      // grow without bound under session churn (host/session-added above
+      // clears the tombstone when the session comes back).
+      if (removedSessionIds.size > MAX_REMOVED_SESSION_IDS) {
+        const oldest = removedSessionIds.values().next().value
+        if (typeof oldest === 'string') removedSessionIds.delete(oldest)
+      }
       projections.delete(p.sessionId)
       projectionSeqs.delete(p.sessionId)
     }

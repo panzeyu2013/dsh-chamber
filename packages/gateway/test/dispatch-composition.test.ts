@@ -16,6 +16,7 @@ class FakeRequest extends EventEmitter {
   readonly method: string
   readonly url: string
   readonly socket: { remoteAddress: string; encrypted?: boolean }
+  destroyed = false
   constructor(method: string, url: string, headers: Record<string, string>, remoteAddress = '203.0.113.8') {
     super()
     this.method = method
@@ -23,6 +24,7 @@ class FakeRequest extends EventEmitter {
     this.headers = headers
     this.socket = { remoteAddress }
   }
+  destroy(): void { this.destroyed = true }
   async *[Symbol.asyncIterator](): AsyncIterableIterator<Buffer> {}
 }
 
@@ -136,6 +138,7 @@ test('oversized public login bodies enter drain-only mode and never reach auth',
   await pending
   assert.equal(res.status, 413)
   assert.equal(JSON.parse(res.body).code, 'body_too_large')
+  assert.equal(req.destroyed, true, 'the oversized body destroys the request socket after the 413 is written')
   assert.equal(loginCalls, 0)
 })
 
@@ -274,4 +277,25 @@ test('a saturated scrypt work gate on verify answers 503 auth_busy, never 500', 
   }))
   assert.equal(res.status, 503)
   assert.equal(JSON.parse(res.body).code, 'auth_busy')
+})
+
+test('WS upgrade maps a saturated verify work gate to 503 auth_busy like HTTP', async () => {
+  const auth: AuthProvider = {
+    kind: 'token',
+    async verify() {
+      const error = new Error('password verifier is busy') as Error & { code?: string }
+      error.code = 'auth_busy'
+      throw error
+    },
+  }
+  const state = setup(auth)
+  let rejection = ''
+  const socket = { end(value: string) { rejection = value }, destroy() {} }
+  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/api/events.mux', {
+    host: 'gateway.example:3000',
+    authorization: 'Bearer whatever',
+  }) as unknown as ApiRequest, socket as never, Buffer.alloc(0), {} as never)
+  assert.match(rejection, /503 Service Unavailable/)
+  assert.match(rejection, /auth_busy/)
+  assert.equal(state.upgradeProxyCalls, 0, 'a busy verify never reaches the proxy')
 })

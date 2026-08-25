@@ -32,7 +32,7 @@
 - [ ] `pnpm run test:desktop`（transport/ssh 等；已知偶发事件循环 flake，失败重跑即可）
 - [ ] `pnpm run test:renderer-shell`、`test:git`、`test:host-git`、`test:sidebar`、
       `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`
-- [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/client-web/host-graph/host-git`
+- [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/host-graph/host-git/gateway`
 
 ## 4. 构建
 

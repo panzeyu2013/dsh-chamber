@@ -73,6 +73,10 @@ export interface ApiRequest {
   removeListener(event: string, listener: (...args: any[]) => void): unknown
   once(event: string, fn: () => void): unknown
   off(event: string, fn: () => void): unknown
+  /** Socket release used to drop an oversized, still-streaming body after the
+   * error response is written (node:http IncomingMessage implements it).
+   * Optional so structural test doubles remain valid. */
+  destroy?(): unknown
 }
 
 /**

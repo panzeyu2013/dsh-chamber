@@ -66,6 +66,12 @@ export interface FeatureHost {
   stop(): void
 }
 
+/** POST /chamber/schedule admission bounds: one authenticated caller must not
+ * accumulate unbounded persisted job definitions or huge prompt strings. */
+const MAX_SCHEDULED_JOBS = 1_000
+const MAX_SCHEDULE_PROMPT_CHARS = 10_000
+const MAX_SCHEDULE_TARGET_SESSION_ID_CHARS = 512 // mirrors the session index bound
+
 function json(res: ApiResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
@@ -330,7 +336,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
           }
           json(res, 200, record)
         } catch (error) {
-          featureError(res, error, logger)
+          featureError(res, req, error, logger)
         }
         return true
       }
@@ -348,6 +354,10 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
         json(res, 404, { error: 'not_found', code: 'not_found' })
         return true
       }
+      // True once the saga has persisted state:'deleting'; only then may a
+      // failure rewrite the record (rollback / error retention).
+      let deletingPersisted = false
+      let deleting: WorktreeRecord | undefined
       try {
         const body = await readJsonBody(req)
         if (body === null || typeof body !== 'object' || Array.isArray(body)
@@ -365,8 +375,9 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
           )
         }
         const resumeAfterGitRemoval = record.state === 'deleting'
-        const deleting: WorktreeRecord = { ...record, state: 'deleting' }
+        deleting = { ...record, state: 'deleting' }
         await persistWorktree(deleting)
+        deletingPersisted = true
         await deleteWorktree({
           dshBaseUrl: requireDsh(),
           workspaceId: record.workspaceId,
@@ -379,7 +390,28 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
         await persistWorktreeRemoval(workspaceId)
         json(res, 200, { deleted: true })
       } catch (error) {
-        featureError(res, error, logger)
+        if (deletingPersisted && deleting !== undefined) {
+          const message = error instanceof Error ? error.message : String(error)
+          try {
+            if (error instanceof GitFeatureError && error.code === 'git_worktree_remove_failed') {
+              // `git worktree remove` refused (e.g. uncommitted changes): the
+              // worktree still exists, so roll the record back to a retryable
+              // 'ready' state with the reason recorded — never leave it stuck
+              // in 'deleting' with no diagnostics. A later DELETE may retry.
+              await persistWorktree({ ...deleting, state: 'ready', error: message })
+            } else {
+              // Any other saga failure (live session, transport, the
+              // workspace.delete leg after Git was already removed): record
+              // the reason on the retained 'deleting' row so the resume path
+              // (which skips Git removal) can finish the saga on the next
+              // DELETE instead of being stuck with an empty error field.
+              await persistWorktree({ ...deleting, error: message })
+            }
+          } catch (persistError) {
+            logger.warn(`feature-host: failed to persist worktree delete outcome: ${String(persistError)}`)
+          }
+        }
+        featureError(res, req, error, logger)
       }
       return true
     }
@@ -440,7 +472,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
             return true
           }
         } catch (error) {
-          featureError(res, error, logger)
+          featureError(res, req, error, logger)
         }
         return true
       }
@@ -473,32 +505,53 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
           const intervalMs = typeof body.intervalMs === 'number' ? body.intervalMs : null
           // delayMs must be a finite non-negative number; intervalMs (when
           // present) a finite number ≥ 1s — a zero/negative/NaN interval would
-          // otherwise busy-loop session.prompt (review M6).
+          // otherwise busy-loop session.prompt (review M6). prompt and
+          // targetSessionId are bounded so one authenticated caller cannot
+          // accumulate unbounded definitions or huge persisted strings.
           if (typeof delayMs !== 'number' || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > MAX_TIMER_DELAY_MS
-            || typeof body.targetSessionId !== 'string' || typeof body.prompt !== 'string'
+            || typeof body.targetSessionId !== 'string'
+            || body.targetSessionId.length > MAX_SCHEDULE_TARGET_SESSION_ID_CHARS
+            || typeof body.prompt !== 'string' || body.prompt.length > MAX_SCHEDULE_PROMPT_CHARS
             || !validIntervalShape
             || (intervalMs !== null && (!Number.isFinite(intervalMs) || intervalMs < 1000 || intervalMs > MAX_TIMER_DELAY_MS))) {
             json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
             return true
           }
-          let job!: ReturnType<typeof scheduler.schedule>
+          // Bound the total retained job count (each job is persisted and
+          // re-armed across restarts).
+          if (scheduler.list().length >= MAX_SCHEDULED_JOBS) {
+            json(res, 400, { error: 'schedule_full', code: 'schedule_full' })
+            return true
+          }
+          let job: ReturnType<typeof scheduler.schedule> | undefined
           await serializePersistence(async () => {
-            job = scheduler.schedule({
+            // schedule() only throws on a duplicate id / invalid delay, both
+            // excluded by the validation above; assign it BEFORE the
+            // persistence try so that catch can never reference an unassigned
+            // job (review finding: empty `job` in the catch → TypeError → 500).
+            const scheduled = scheduler.schedule({
               delayMs,
               intervalMs,
               targetSessionId: body.targetSessionId as string,
               prompt: body.prompt as string,
             })
+            job = scheduled
             try {
               await writeScheduleItems(scheduler.list())
             } catch (persistError) {
-              scheduler.cancel(job.id)
+              scheduler.cancel(scheduled.id)
               throw new GitFeatureError('persistence_failed', `failed to persist schedule: ${String(persistError)}`)
             }
           })
+          if (job === undefined) {
+            // Unreachable in practice: an exception inside serializePersistence
+            // rejects above. Defensive explicit 500 instead of a null deref.
+            json(res, 500, { error: 'internal', code: 'internal' })
+            return true
+          }
           json(res, 200, job)
         } catch (error) {
-          featureError(res, error, logger)
+          featureError(res, req, error, logger)
         }
         return true
       }
@@ -519,7 +572,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
         })
         json(res, 200, { cancelled: exists })
       } catch (error) {
-        featureError(res, error, logger)
+        featureError(res, req, error, logger)
       }
       return true
     }
@@ -560,7 +613,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
           })
           json(res, 200, store.settings.get())
         } catch (error) {
-          featureError(res, error, logger)
+          featureError(res, req, error, logger)
         }
         return true
       }
@@ -1083,7 +1136,7 @@ function featureDisabled(res: ApiResponse): true {
   return true
 }
 
-function featureError(res: ApiResponse, error: unknown, logger: Logger): void {
+function featureError(res: ApiResponse, req: ApiRequest, error: unknown, logger: Logger): void {
   // Upstream-unavailable (managed dsh not ready): explicit 503, never a
   // misleading 500 internal (S4). Shared by the notifier and git feature.
   if ((error as { code?: unknown })?.code === 'instance_unavailable') {
@@ -1105,6 +1158,12 @@ function featureError(res: ApiResponse, error: unknown, logger: Logger): void {
         : error.code === 'not_found' ? 404
           : 500
     json(res, status, { error: error.message, code: error.code })
+    if (error.code === 'body_too_large') {
+      // The 400 is already written. The oversized body may still be streaming
+      // — destroy the request socket instead of draining it, so a slow
+      // authenticated upload cannot pin the connection.
+      req.destroy?.()
+    }
     return
   }
   logger.warn(`feature-host: ${String(error)}`)

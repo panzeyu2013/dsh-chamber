@@ -45,6 +45,13 @@ export interface NotificationSettingsLike {
  *    （'always' 放行聚焦状态）；
  * 6. 否则 'show'。
  * 'test' 不受 requireHidden 影响（绕过全部门禁）。
+ *
+ * 信任切分（review 2026-08）：主进程的 anyWindowFocused 只回答「是否有窗口
+ * 聚焦」，无法知道用户正在查看哪个会话——会话级焦点只有渲染端可见。因此在
+ * 'always' 模式下（步骤 5 放行聚焦状态），「正在查看的会话不打扰」的豁免
+ * 完全依赖渲染端上报的 requireHidden（步骤 4 的 on-screen 判定）；主进程
+ * isAnyWindowFocused 不参与 'always' 的独立豁免。'hidden-only' 模式下两者
+ * 叠加：步骤 4 保护被查看会话，步骤 5 保护任何聚焦状态下的打扰。
  */
 export function decideNotification(input: {
   request: NotificationRequest
@@ -62,6 +69,10 @@ export function decideNotification(input: {
   if (!kindSwitch[request.kind]) return { action: 'skip', reason: 'kind-off' };
   if (request.requireHidden && anyWindowFocused) return { action: 'skip', reason: 'on-screen' };
   if (settings.mode === 'hidden-only' && anyWindowFocused) {
+    // 'always' 放行聚焦状态：此处不拦截。焦点豁免（正在查看的会话不打扰）
+    // 在 'always' 模式下完全依赖渲染端 requireHidden（上面的 on-screen 判定）
+    // ——主进程 isAnyWindowFocused 不参与 'always' 的独立豁免（信任切分见
+    // 模块头注释，review 2026-08）。
     return { action: 'skip', reason: 'focused-hidden-only' };
   }
   return { action: 'show' };

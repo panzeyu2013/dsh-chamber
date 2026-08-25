@@ -11,6 +11,8 @@ import { createGatewayStore } from '../src/store.ts'
 class Request extends EventEmitter {
   method = 'PUT'
   headers: Record<string, string | undefined> = {}
+  destroyed = false
+  destroy(): void { this.destroyed = true }
 }
 
 class Response extends EventEmitter {
@@ -47,4 +49,5 @@ test('oversized feature bodies enter drain-only mode and never retain later chun
   assert.equal(await handled, true)
   assert.equal(res.status, 400)
   assert.equal(res.json().code, 'body_too_large')
+  assert.equal(req.destroyed, true, 'the oversized body destroys the request socket after the 400 is written')
 })

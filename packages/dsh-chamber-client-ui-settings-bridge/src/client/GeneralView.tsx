@@ -104,7 +104,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   }, [])
 
   /** 「发送测试通知」— bypasses the settings gates in the main process (design
-      17 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
+      19 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
       never a silent fake success. */
   const sendTestNotification = useCallback(() => {
     const surface = testNotifySurface()

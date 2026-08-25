@@ -146,7 +146,12 @@ export function normalizeSettings(input: unknown): ChamberSettings {
 }
 
 /** Whether the persisted file's key set is well-formed (unknown keys are a
- *  forward-compat concern, not corruption — tolerate them). */
+ *  forward-compat concern, not corruption — tolerate them). The nested
+ *  `notifications` sub-block is part of the file's SHAPE (review 2026-08):
+ *  a scalar/array/wrongly-typed sub-block is corruption, never a silent
+ *  fall-back to defaults — the same corrupt-preserve discipline as
+ *  registryOrigin (a wrongly-shaped trust-relevant value must not be
+ *  silently reinterpreted). */
 function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return false;
   const record = input as Record<string, unknown>;
@@ -159,6 +164,20 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   // Once persisted, an invalid registry trust anchor is corruption, not a
   // request to silently switch back to the public default registry.
   if (record.registryOrigin !== undefined && normalizeRegistryOrigin(record.registryOrigin) === null) return false;
+  // Nested notifications shape: must be an object with correctly-typed known
+  // fields (unknown nested keys stay a forward-compat tolerance, like the
+  // top level); an invalid `mode` is corruption — silently flipping a
+  // user's 'always' back to 'hidden-only' would change notification
+  // behavior without their consent.
+  if (record.notifications !== undefined) {
+    const notifications = record.notifications;
+    if (notifications === null || typeof notifications !== 'object' || Array.isArray(notifications)) return false;
+    const nested = notifications as Record<string, unknown>;
+    if (nested.mode !== undefined && nested.mode !== 'hidden-only' && nested.mode !== 'always') return false;
+    for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest'] as const) {
+      if (nested[key] !== undefined && typeof nested[key] !== 'boolean') return false;
+    }
+  }
   return true;
 }
 

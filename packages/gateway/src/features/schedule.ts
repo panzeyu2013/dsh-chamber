@@ -1,6 +1,6 @@
 /** Gateway cross-session scheduler, distinct from dsh's session-local schedule. */
 
-import { call, type Logger } from '@dsh-chamber/control-plane'
+import { RpcBusinessError, call, type Logger } from '@dsh-chamber/control-plane'
 
 /** Node clamps larger delays to 1ms, which would turn a far-future job into
  * an immediate prompt. Keep every persisted/runtime timer within libuv's
@@ -51,6 +51,24 @@ export function createScheduler(deps: {
     return retryDelay(attempt)
   }
 
+  /** A deterministic dsh business rejection (`result.ok === false` — target
+   * session deleted, payload refused, …) can never succeed on retry. Remove
+   * the job, persisting the removal best-effort, and clear its failure state.
+   * Distinct from transient carrier failures, which keep the retry backoff. */
+  async function terminateJob(job: ScheduledJob, error: RpcBusinessError): Promise<void> {
+    oneShotFailures.delete(job.id)
+    deps.logger.error(
+      `scheduler: job ${job.id} terminated after a deterministic dsh rejection (${error.code}: ${error.message})`,
+    )
+    const remaining = [...jobs.values()].filter(current => current !== job)
+    try {
+      await deps.onJobsChanged?.(remaining)
+    } catch (persistError) {
+      deps.logger.warn(`scheduler: failed to persist termination of ${job.id}: ${String(persistError)}`)
+    }
+    if (jobs.get(job.id) === job) jobs.delete(job.id)
+  }
+
   async function fire(job: ScheduledJob): Promise<boolean> {
     const baseUrl = deps.getDshBaseUrl()
     if (baseUrl === null) {
@@ -70,7 +88,12 @@ export function createScheduler(deps: {
       })
       return true
     } catch (error) {
-      deps.logger.warn(`scheduler: job ${job.id} failed: ${String(error)}`)
+      if (error instanceof RpcBusinessError) {
+        // Deterministic rejection: the caller terminates the job. Only this
+        // error type escapes fire(); everything else is transient.
+        throw error
+      }
+      deps.logger.warn(`scheduler: job ${job.id} failed transiently: ${String(error)}`)
       return false
     }
   }
@@ -81,7 +104,20 @@ export function createScheduler(deps: {
     oneShotInFlight.add(job.id)
     let retryMs: number | undefined
     try {
-      const fired = await fire(job)
+      let fired: boolean
+      try {
+        fired = await fire(job)
+      } catch (error) {
+        if (error instanceof RpcBusinessError) {
+          await terminateJob(job, error)
+          return
+        }
+        // Defensive: fire() only rethrows RpcBusinessError. Treat anything
+        // else as transient and keep the bounded backoff.
+        deps.logger.warn(`scheduler: job ${job.id} failed transiently: ${String(error)}`)
+        retryMs = nextOneShotRetryDelay(job.id)
+        return
+      }
       // A cancel, replacement, or detach while the RPC was in flight owns the
       // outcome. It must never persist or resurrect this run generation.
       if (!running || runGeneration !== fireGeneration || jobs.get(job.id) !== job) return
@@ -135,7 +171,19 @@ export function createScheduler(deps: {
       || intervalInFlight.has(job.id)) return
     intervalInFlight.add(job.id)
     try {
-      await fire(job)
+      try {
+        await fire(job)
+      } catch (error) {
+        if (error instanceof RpcBusinessError) {
+          // A deterministic rejection stops the interval: retrying the same
+          // prompt at the fixed cadence can never succeed.
+          await terminateJob(job, error)
+          return
+        }
+        // Defensive: fire() only rethrows RpcBusinessError. A transient
+        // failure keeps the interval cadence.
+        deps.logger.warn(`scheduler: interval job ${job.id} failed transiently: ${String(error)}`)
+      }
     } finally {
       intervalInFlight.delete(job.id)
       const current = jobs.get(job.id)
