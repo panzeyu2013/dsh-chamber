@@ -29,9 +29,9 @@
       （release.yml 提取为发布正文，缺失即失败）；中英条目对等。
 - [ ] 版本节结构完整（`### 新增/修复/变更` 或 `### Added/Fixed/Changed`），
       无重复版本标题。
-- [ ] `node scripts/verify-i18n.mjs` → 5 对全部 `consistent`（改过 README/
+- [ ] `node scripts/dev/verify-i18n.mjs` → 5 对全部 `consistent`（改过 README/
       DEVELOPMENT/CONTRIBUTING/CHANGELOG/THIRD_PARTY_NOTICES 任意文本后须
-      `node scripts/verify-i18n.mjs --write` 刷新）。
+      `node scripts/dev/verify-i18n.mjs --write` 刷新）。
 
 ## 3. 测试与类型检查（AGENTS.md 清单）
 

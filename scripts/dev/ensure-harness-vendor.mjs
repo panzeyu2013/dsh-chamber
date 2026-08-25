@@ -33,7 +33,7 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
-const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const LINK_DIR = join(REPO_ROOT, 'vendor', 'harness-packages', '@deepseek-ai')
 const MANAGED_DIR = join(REPO_ROOT, 'vendor', 'harness-checkout')
 const MANAGED_PIN_FILE = join(MANAGED_DIR, '.harness-pin')

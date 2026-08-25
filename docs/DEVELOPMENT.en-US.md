@@ -81,10 +81,10 @@ git clone <REPO-URL>
 cd dsh-chamber
 ```
 
-`vendor/harness-packages` is a **gitignored symlink directory** — one symlink per dsh package, named after the package, pointing at the [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) source tree. It is never committed and must exist **before** `pnpm install` (the workspace resolves unmodified dsh packages through it). `scripts/ensure-harness-vendor.mjs` bootstraps it; on a fresh clone run it explicitly **before** `pnpm install`:
+`vendor/harness-packages` is a **gitignored symlink directory** — one symlink per dsh package, named after the package, pointing at the [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) source tree. It is never committed and must exist **before** `pnpm install` (the workspace resolves unmodified dsh packages through it). `scripts/dev/ensure-harness-vendor.mjs` bootstraps it; on a fresh clone run it explicitly **before** `pnpm install`:
 
 ```bash
-node scripts/ensure-harness-vendor.mjs
+node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 

@@ -11,7 +11,7 @@ Environment setup (requirements, clone, vendor bootstrap, `pnpm install`, `bundl
 ```bash
 git clone <REPO-URL>
 cd dsh-chamber
-node scripts/ensure-harness-vendor.mjs   # must run before pnpm install
+node scripts/dev/ensure-harness-vendor.mjs   # must run before pnpm install
 pnpm install
 pnpm run dev:desktop                     # full window (control plane + dsh frontend + desktop shell)
 ```

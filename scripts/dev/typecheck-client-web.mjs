@@ -22,7 +22,7 @@ import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)))
+const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
 const CONFIG = join(ROOT, 'packages', 'dsh-client-web', 'tsconfig.json')
 

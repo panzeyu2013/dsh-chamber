@@ -9,7 +9,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)))
+const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const OUT = join(ROOT, 'THIRD_PARTY_NOTICES.md')
 const found = new Map()
 

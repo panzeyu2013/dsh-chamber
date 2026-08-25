@@ -35,7 +35,7 @@ jobs:
           path: vendor/harness-checkout
           key: harness-${{ hashFiles('harness.commit') }}
       - name: Bootstrap vendor tree
-        run: node scripts/ensure-harness-vendor.mjs
+        run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Type check (tsc + chamber host packages + gateway)
         run: |

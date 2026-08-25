@@ -77,10 +77,10 @@ git clone <REPO-URL>
 cd dsh-chamber
 ```
 
-`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次：
+`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/dev/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次：
 
 ```bash
-node scripts/ensure-harness-vendor.mjs
+node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { compareReleaseVersions, releaseChannel } from './release-semver.mjs'
 
-const workflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
+const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
 const desktopPackage = JSON.parse(
-  readFileSync(new URL('../packages/desktop/package.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../packages/desktop/package.json', import.meta.url), 'utf8'),
 )
 
 function between(startMarker, endMarker) {

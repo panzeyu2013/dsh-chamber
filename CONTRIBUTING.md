@@ -11,7 +11,7 @@
 ```bash
 git clone <REPO-URL>
 cd dsh-chamber
-node scripts/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
+node scripts/dev/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
 pnpm install
 pnpm run dev:desktop                     # 完整窗口（控制面 + dsh 前端 + 桌面壳）
 ```

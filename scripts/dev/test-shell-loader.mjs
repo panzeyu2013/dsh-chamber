@@ -10,16 +10,16 @@
  * dsh-client-web.mjs`), which exposes a controllable AppWebEntry face.
  *
  * Registered via `--import` in the test:renderer-shell script (node >= 22:
- * `node --import ./scripts/test-shell-register.mjs ...`). Never used by the
+ * `node --import ./scripts/dev/test-shell-register.mjs ...`). Never used by the
  * build or typecheck.
  */
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const FIXTURE_URL = pathToFileURL(
-  fileURLToPath(new URL('../packages/renderer/test-fixtures/dsh-client-web.mjs', import.meta.url)),
+  fileURLToPath(new URL('../../packages/renderer/test-fixtures/dsh-client-web.mjs', import.meta.url)),
 ).href
 const CHAMBER_BRIDGE_URL = pathToFileURL(
-  fileURLToPath(new URL('../packages/dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts', import.meta.url)),
+  fileURLToPath(new URL('../../packages/dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts', import.meta.url)),
 ).href
 
 /** @type {import('node:module').ResolveHook} */

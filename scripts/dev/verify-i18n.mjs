@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)))
+const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const PAIRS = [
   // 2026: Chinese promoted to primary (user decision) — every top-level doc
   // is the Chinese primary; English mirrors live under docs/ as *.en-US.md

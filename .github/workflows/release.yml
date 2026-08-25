@@ -99,7 +99,7 @@ jobs:
           else
             VERSION="0.0.0-dev"
           fi
-          if ! node scripts/release-semver.mjs channel "$VERSION" >/dev/null; then
+          if ! node scripts/dev/release-semver.mjs channel "$VERSION" >/dev/null; then
             echo "::error::release version must be canonical SemVer without build metadata"
             exit 1
           fi
@@ -292,7 +292,7 @@ jobs:
           path: vendor/harness-checkout
           key: harness-${{ hashFiles('harness.commit') }}
       - name: Bootstrap vendor tree
-        run: node scripts/ensure-harness-vendor.mjs
+        run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Pack and smoke-test the installed gateway CLI
         run: |
@@ -314,7 +314,7 @@ jobs:
       # set -euo pipefail
       # TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
       # test -n "$TGZ"
-      # CHANNEL=$(node scripts/release-semver.mjs channel "$VERSION")
+      # CHANNEL=$(node scripts/dev/release-semver.mjs channel "$VERSION")
       # LOCAL_INTEGRITY=$(node -e "const fs=require('node:fs'),c=require('node:crypto');process.stdout.write('sha512-'+c.createHash('sha512').update(fs.readFileSync(process.argv[1])).digest('base64'))" "$TGZ")
       #
       # set +e
@@ -331,7 +331,7 @@ jobs:
       # CURRENT_CHANNEL=$(node -e "const raw=process.argv[1].trim();if(raw&&raw!=='null'){const v=JSON.parse(raw);if(typeof v!=='string'||v==='')throw new Error('registry returned an invalid dist-tag');process.stdout.write(v)}" "$CHANNEL_RAW")
       # fi
       # if [[ -n "$CURRENT_CHANNEL" ]]; then
-      # CHANNEL_ORDER=$(node scripts/release-semver.mjs compare "$CURRENT_CHANNEL" "$VERSION")
+      # CHANNEL_ORDER=$(node scripts/dev/release-semver.mjs compare "$CURRENT_CHANNEL" "$VERSION")
       # if [[ "$CHANNEL_ORDER" -gt 0 ]]; then
       # echo "::error::refusing to move npm ${CHANNEL} backward from ${CURRENT_CHANNEL} to ${VERSION}"
       # exit 1
@@ -415,7 +415,7 @@ jobs:
           path: vendor/harness-checkout
           key: harness-${{ hashFiles('harness.commit') }}
       - name: Bootstrap vendor tree
-        run: node scripts/ensure-harness-vendor.mjs
+        run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
 
       - name: Build and package macOS app (arm64)
@@ -506,7 +506,7 @@ jobs:
           path: vendor/harness-checkout
           key: harness-${{ hashFiles('harness.commit') }}
       - name: Bootstrap vendor tree
-        run: node scripts/ensure-harness-vendor.mjs
+        run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
 
       - name: Build and package Windows app
