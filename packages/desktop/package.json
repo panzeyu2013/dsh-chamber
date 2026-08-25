@@ -48,10 +48,12 @@
       "renderer-trust.ts",
       "plugin-sync.ts",
       "deep-link.ts",
+      "notifications.ts",
       "open-in.ts",
       "dist/**/*",
       "package.json",
       "!node_modules/@dsh-chamber/control-plane/**",
+      "!dist/.vite/**",
       "!vendor/**",
       "!scripts/**",
       "!README.md"
