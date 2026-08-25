@@ -11,11 +11,17 @@
 
 ## 1. 版本断言（release.yml create-release 会硬校验）
 
-- [ ] 根 `package.json` + 全部 12 个 `@dsh-chamber/*` 包 version = 目标版本
+- [ ] 根 `package.json` + 全部 13 个 `@dsh-chamber/*` 包 version = 目标版本
       （`grep -m1 '"version"' package.json packages/*/package.json`；
-      release.yml 硬断言其中 7 个发版包，本步覆盖全部）。
+      release.yml 硬断言其中 8 个发版包：根 + desktop/control-plane/renderer/cli/
+      dsh-host-client-graph/dsh-chamber-host-git-worktree/gateway，本步覆盖全部）。
 - [ ] fork 副本例外：`@deepseek-ai/dsh-client-connection` / `dsh-client-web`
       版本 = 上游基线版本（如 `0.1.1-rc.2`），**不随发布版本**。
+- [ ] **安装脚本 dsh 版本常量**：`scripts/install-gateway.sh` 内置的
+      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.1-rc.2`）与
+      `.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION` 一致
+      ——dsh 运行时版本变更时必须同步改脚本常量（教训：曾漏改导致安装脚本
+      装错 dsh 版本；该常量为脚本默认安装版本，用户可交互覆盖）。
 
 ## 2. changelog 与 i18n
 
