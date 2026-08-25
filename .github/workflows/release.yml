@@ -6,12 +6,15 @@ name: Release
 # (electron-builder --publish with GH_TOKEN — this is what generates and
 # uploads the update feed, see below), and a finalize job flips the draft to
 # public. Since design 11 (desktop auto-update) each platform also ships its
-# UPDATE FEED: Windows uploads the NSIS exe + latest.yml (beta.yml for beta),
-# macOS uploads the dmg + zip + latest-mac.yml (beta-mac.yml for beta) — the
-# feed files electron-updater's github provider consumes. The channel is
-# derived by electron-builder from the VERSION's semver prerelease tag
-# (0.2.0 → latest.yml; 0.2.0-beta.1 → beta.yml); a beta release is
-# additionally created as a GitHub prerelease. NO .blockmap sidecars ship
+# UPDATE FEED: Windows uploads the NSIS exe + latest.yml, macOS uploads the
+# dmg + zip + latest-mac.yml — the feed files electron-updater's github
+# provider consumes. The publish config in packages/desktop/package.json uses
+# the github provider with NO explicit channel, so electron-builder always
+# writes the 'latest' feed (latest.yml / latest-mac.yml) — a beta release
+# does NOT get a beta.yml feed unless the config adds one (observed
+# 2026-08-25 on v0.2.0-beta.1; the workflow comment previously claimed
+# beta-derived feeds, which was inaccurate). A beta release is additionally
+# created as a GitHub prerelease. NO .blockmap sidecars ship
 # (2026-08 decision): Windows has differentialPackage=false (no exe.blockmap)
 # and the mac zip's hardcoded .zip.blockmap is deleted from the draft release
 # before finalize — the feeds never reference blockmaps, so updates fall back
