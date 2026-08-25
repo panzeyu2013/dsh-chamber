@@ -1,7 +1,7 @@
 # 14 · 睡眠/后台常驻：窗口收起而 dsh 继续运行（已实现（v1 范围），2026-08）
 
-> **状态：已实现（v1 范围，2026-08）——设计见本文，实现记录与验证见
-> `docs/progress/STATUS.md`（design 14 条目）**。需求来源：让 dsh-chamber「睡眠」（窗口
+> **状态：已实现（v1 范围，2026-08）——设计见本文；实现基线以 git 历史与
+> CHANGELOG 为准**。需求来源：让 dsh-chamber「睡眠」（窗口
 > 隐藏/后台）时，**本地 dsh 实例、远程隧道、控制面全部继续运行**——长时间
 > 任务进行中收起窗口不被中断；OS 睡眠唤醒后快速恢复；登录自启后台常驻
 > （可选）。本文先给出 **OpenChamber 桌面端实现调研**（外部参考，本地源码
@@ -14,13 +14,13 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 关窗行为 | **non-darwin 关窗即退出**：`window-all-closed` → `app.quit()` → `will-quit` → `transportManager.disposeAsync()` + `controlPlane.stop()`——本地 dsh 实例与全部远程隧道**一次性终止** | `packages/desktop/main.ts` L366–391 |
-| macOS 关窗 | 关窗不退出（darwin 惯例），应用**无窗常驻**，`activate`/`second-instance` 重建窗口 | `main.ts` L362–368、L219–227 |
-| 托盘 | 打包态防御式最小托盘：tooltip + 「显示窗口/退出」，无状态投影、无设置 | `main.ts` L175–211（`maybeCreateTray`） |
+| 关窗行为 | **non-darwin 关窗即退出**：`window-all-closed` → `app.quit()` → `will-quit` → `transportManager.disposeAsync()` + `controlPlane.stop()`——本地 dsh 实例与全部远程隧道**一次性终止** | `packages/desktop/main.ts`（关窗分支接线，见 §3.1 实现清单） |
+| macOS 关窗 | 关窗不退出（darwin 惯例），应用**无窗常驻**，`activate`/`second-instance` 重建窗口 | `main.ts`（`showMainWindow()`，§3.1 实现清单） |
+| 托盘 | 打包态防御式最小托盘：tooltip + 「显示窗口/退出」，无状态投影、无设置 | `main.ts`（`maybeCreateTray`） |
 | 唤醒/防休眠 | 无 `powerMonitor` / `powerSaveBlocker` 任何处理 | `main.ts` 全量 |
 | 后台启动 | 无 `--background` / 登录自启 | `main.ts` 全量 |
 | 退出保护 | 无退出确认（活动隧道/实例直接被杀） | `main.ts` `will-quit` |
-| 断链恢复 | **已具备**：transport-manager jittered 指数退避重连 + 慢速重探（隧道断线自动恢复）；dsh-client-connection 原生 connect/pump/reconnect 循环（SSE 断线自动重连） | `transport-manager.ts` L21–30、L425–489；`dsh-client-connection/src/client/connection.ts` L69–90 |
+| 断链恢复 | **已具备**：transport-manager jittered 指数退避重连 + 慢速重探（隧道断线自动恢复）；dsh-client-connection 原生 connect/pump/reconnect 循环（SSE 断线自动重连） | `transport-manager.ts`（重连状态机）；`dsh-client-connection/src/client/connection.ts`（connect/pump/reconnect） |
 
 **结论**：断链自愈机制已存在；缺的是**「窗口生命周期不杀进程」**（关窗 =
 hide 而非 quit/destroy）、**「唤醒即时重连」**（powerMonitor resume）、以及
@@ -39,11 +39,11 @@ hide 而非 quit/destroy）、**「唤醒即时重连」**（powerMonitor resume
 - 设置项 `desktopMinimizeToTrayEnabled`（win32/linux）；关窗事件里
   `shouldHideMainWindowToTray(browserWindow)` 为真 → `event.preventDefault();
   browserWindow.hide()`——**窗口只是隐藏，Electron 主进程 + 进程内 web 服务器
-  + 其管理的 sidecar/SSH 子进程全部继续运行**（`main.mjs` L314–328、L2610–2616）。
-- macOS 关窗默认 hide（`window-all-closed` 在 darwin 直接 return，L5521–5533）；
+  + 其管理的 sidecar/SSH 子进程全部继续运行**（`main.mjs`）。
+- macOS 关窗默认 hide（`window-all-closed` 在 darwin 直接 return）；
   Cmd+W/红点关窗不退出，Cmd+Q 才是退出（`before-quit` + 退出确认）。
 - 窗口全部关闭后应用**保持运行**（托盘常驻），`activate`/`second-instance`/
-  托盘点击 → `show()` + `focus()` 恢复（L5574–5593）。
+  托盘点击 → `show()` + `focus()` 恢复。
 
 ### 2.2 托盘控制器（常驻入口 + 状态投影）
 
@@ -51,17 +51,17 @@ hide 而非 quit/destroy）、**「唤醒即时重连」**（powerMonitor resume
   帧 + 会话/审批快照菜单；点击 → `onAction` 回调回主进程路由。
 - 渲染端 `useTraySync.ts`：经 `desktop_tray_update` IPC 命令把**非秘密快照**
   （会话数、审批数、runtime key）推给主进程；托盘点击路由到**快照所属 runtime
-  的窗口**（防会话 id 串台，`main.mjs` L5256–5290）。
+  的窗口**（防会话 id 串台）。
 - 托盘在 darwin/win32/linux 全部启用；macOS 菜单栏项默认开、可在 General 设置
-  关闭（`main.mjs` L5327–5353、`electron/README.md`）。
+  关闭（`main.mjs` / `electron/README.md`）。
 
 ### 2.3 后台启动（无窗口常驻，登录自启）
 
 - `--background` 启动参数 + 登录项（`shouldStartInBackground`：argv 含该参数或
-  `wasOpenedAtLogin`/`wasOpenedAsHidden`，`main.mjs` L50、L75–81）。
+  `wasOpenedAtLogin`/`wasOpenedAsHidden`，`main.mjs`）。
 - 无窗口启动时：进程内 web 服务器照常启动（`resolveInitialUrl` 等），
   `startupResolved` 置位；**窗口后开时重新探测远端**而非信任登录时刻的
-  reachability（L5643–5656）。
+  reachability。
 - 登录自启：darwin/win32 `setLoginItemSettings`（带 `--background`）、Linux
   XDG autostart（`linux-autostart.mjs`）。
 
@@ -69,14 +69,14 @@ hide 而非 quit/destroy）、**「唤醒即时重连」**（powerMonitor resume
 
 - **唤醒恢复**：`powerMonitor.on('resume')` → 广播 `openchamber:system-resume` →
   渲染端 event-pipeline（SSE 事件管线）监听该事件**立即重连**，无需等心跳
-  看门狗超时（`main.mjs` L5667–5674；`packages/ui/src/sync/event-pipeline.ts`
-  L936–966，另有 visibilitychange/online 兜底）。
+  看门狗超时（`main.mjs`；`packages/ui/src/sync/event-pipeline.ts`，
+  另有 visibilitychange/online 兜底）。
 - **防休眠**：`powerSaveBlocker.start('prevent-app-suspension')`（设置项
-  `desktopKeepAwakeEnabled`，`setDesktopKeepAwakeActive`，L289–312）。
+  `desktopKeepAwakeEnabled`，`setDesktopKeepAwakeActive`）。
 - **退出保护**：`quitRisk`（活动隧道 / 运行中的定时任务）→ 退出确认对话框
-  （"Quitting now will stop sidecar/background processes…"，L330–358）；确认后
-  `shutdownBackgroundServices`（kill sidecar + `sshManager.shutdownAll()`，
-  L360–384）；SIGINT/SIGTERM 硬信号同样走后台服务清理（L434–438）。
+  （"Quitting now will stop sidecar/background processes…"）；确认后
+  `shutdownBackgroundServices`（kill sidecar + `sshManager.shutdownAll()`）；
+  SIGINT/SIGTERM 硬信号同样走后台服务清理。
 - 渲染设置面：General 设置页 `DesktopNetworkSettings.tsx`——keep-awake /
   minimize-to-tray / mac menu bar / launch-at-login / LAN access 开关，写
   app 自身配置（`/api/config/settings`）。
@@ -113,7 +113,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   非 darwin 回退现状（关窗即退出，仍受 D2 确认保护）——**绝不允许窗口被隐藏后
   无任何恢复入口**。macOS 无托盘也安全（Dock 图标常驻可恢复，hide 是系统惯例）。
 - **隐藏窗口不节流**：`createMainWindow` webPreferences 增加
-  `backgroundThrottling: false`（对齐 OpenChamber main.mjs L2527）——否则窗口
+  `backgroundThrottling: false`（对齐 OpenChamber main.mjs）——否则窗口
   隐藏后渲染进程计时器被 Chromium 节流（隐藏 5 分钟后钳制到 ~1 次/秒），
   D4 唤醒「立即重连」会被拖慢。仅 dsh-chamber 单窗口 + 控制面 origin + 无第三
   方内容，安全。
@@ -124,8 +124,11 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 - **2026-08 修订（用户拍板）**：远程隧道**不影响关闭**——风险只看**本地实例**；
   且退出确认成为**可设置开关** `quitConfirmation`（默认开；关 → 永不确认）。
-- 开关开启且**本地实例运行中**（控制面 `/api/connections` 有 local 条目，含
-  starting/restarting 在途态）→ `dialog.showMessageBox` 确认：「退出将停止正在
+- 开关开启且**本地实例运行中**——判据 = 状态机 running（含 starting/
+  restarting 在途态）**且实际有存活进程**（`localProcessAlive`，经控制面
+  `hasLiveProcess`；状态字符串不是存活事实——restart 序列中 restarting 期间
+  新进程尚未 spawn、死亡进程在下次探活前滞留 ready/degraded，2026-08 加固）
+  → `dialog.showMessageBox` 确认：「退出将停止正在
   运行的本地 dsh 实例」。确认后走既有退出路径。
 - 对齐 OpenChamber quitRisk；这是**唯一允许的退出确认对话框**，与设计 11
   「更新无弹窗」纪律不冲突（更新提示仍不弹窗）。
@@ -176,7 +179,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 >    发免掩码 ping（浏览器按 RFC 自动 pong，透明不上抛 app），`PongScanner`
 >    被动扫描浏览器 data 流（不消费字节、不动 pipe）；**参数对齐 `ws` README
 >    官方心跳示例（30s 间隔、一个周期未答即断）**→ tearDown → 浏览器 WS close
->    → 泵重连重基线（检出 ~30–60s）。**上游（宿主）腿刻意无心跳**：远程断隧由
+>    → 泵重连重基线（检出 ~30s）。**上游（宿主）腿刻意无心跳**：远程断隧由
 >    SSH keepalive（`ServerAliveInterval=30 × CountMax=3` ≈90s，ssh-provider
 >    已配）覆盖，本地宿主死亡/重启由 socket error/close 覆盖，宿主自身发送
 >    失败即关——代理侧上游 ping 只会与 SSH keepalive 抢跑成"半开隧道上反复

@@ -1,6 +1,7 @@
 # 19 · 桌面通知：会话 complete / ask / request（设置可选项）
 
-> **状态：已实现（2026-09；实现与验证记录见 `docs/progress/STATUS.md`，入口
+> **状态：已实现（2026-09；实现基线以 git 历史与 CHANGELOG 为准，剩余
+> macOS 实机验收见 `docs/progress/STATUS.md`；入口
 > 形态以 §3.4 的 2026-09 用户拍板为准）**。需求来源：用户要求「一个 session
 > 在 complete、ask、request 时给用户推送通知」，做成设置中的可选项。本文先给出
 > **OpenChamber 通知功能调研**（外部参考，本地源码
@@ -14,7 +15,7 @@
 | 项 | 现状 | 证据 |
 |---|---|---|
 | 桌面通知 | **无任何通知能力**：main.ts 无 `Notification` 导入、无通知 IPC、无权限处理 | `packages/desktop/main.ts` 全量 |
-| 会话状态检测 | **已具备事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件经 `chamberBridge.reportInstanceRuntime` 上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` L104–155；`packages/renderer/src/App.tsx` L1090–1145 |
+| 会话状态检测 | **已具备事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件经 `chamberBridge.reportInstanceRuntime` 上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`（`reportInstanceRuntime` 上报点）；`packages/renderer/src/App.tsx`（`reconcileCompletedFacts` 蓝点边沿机） |
 | 会话标题/来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
 | 窗口隐藏场景 | 设计 14 已落地：关窗 hide 到托盘 / macOS 无窗常驻 / 后台启动——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
 | 设置存储 | chamber 全局设置 `chamber-settings.json`（主进程权威、`dsh-chamber:settings-get/set` IPC + push、`validatePatch` 白名单） | `packages/desktop/chamber-settings.ts` |
@@ -47,7 +48,7 @@
   - `emitDesktopNotification` → 桌面形态直调 Electron 主进程回调（`onDesktopNotification`）；
   - `broadcastUiNotification` → 经 SSE/WS 全局事件 `openchamber:notification` 广播给 UI，
     携带 `desktopNotificationDelivered` 标志——**桌面已发过原生通知时，UI 侧不得再发**
-    （防双发，`sync-context.tsx` L513–518）。
+    （防双发，`sync-context.tsx` 的 `desktopNotificationDelivered` claim 逻辑）。
 
 ### 2.2 桌面端（main.mjs `maybeShowNativeNotification`）
 

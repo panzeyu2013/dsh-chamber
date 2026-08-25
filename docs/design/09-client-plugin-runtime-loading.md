@@ -24,7 +24,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
    `window.__ModuleLoader__`，物化/缓存/依赖边齐全）。
 
 **chamber 的断点只在第 3 步**：控制面服务的是自建 dist（`packages/renderer` vite
-产物），注入的是**构建期写死的单 entry 清单**（`scripts/gen-boot-manifest.mjs` 写
+产物），注入的是**构建期写死的单 entry 清单**（`packages/renderer/scripts/gen-boot-manifest.mjs` 写
 `dist/manifest.json`，只有 `@dsh-chamber/app` 一个复合 entry，05 §6）；前端
 **从不向宿主取图**。而第 1、2 步在 chamber 托管的本地实例上照常运行（本地 host 跑
 官方 web profile，`dsh-web-app` 的 `cordis.patch.yml` 挂载 `modules` 行），
@@ -242,7 +242,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   不降级。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
   两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
-  落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.3 apply 降级），绝不使
+  落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使
   实例 boot 失败。**rc.2 后端适配（2026-08）**：壳种子词表与 rc.2 官方一致
   （平台词 = 永不成为图行的包，`dsh-client-ui-attachment` 等出种子词表），
   app-shell renderer 安装容错（后端 `ui-renderer` 行先装则采纳）。
@@ -272,14 +272,14 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   （rc.8 客户端自带 `images` 参数，rc.7 宿主会拒绝多余字段）——与版本容忍
   §3.3 的"特性缺席"语义一致：壳与后端版本必须同代。
 
-## 5. 实施分期（M1–M4 均已落地；验证记录见 STATUS）
+## 5. 实施分期（M1–M4 均已落地；验证记录见 git 历史与 CHANGELOG，STATUS 只记录剩余项）
 
 | 里程碑 | 内容 | 落地与验证 |
 |---|---|---|
 | M1 | 图通道：方案 A host 包 + Remote + 每实例取图 | ✅ 模块 A+B：host-graph-seed 单测 8 项（overlay 幂等/0600/自愈、seed 首拷/跳过/漂移覆盖/缺源跳过、`--patch` 注入位置、patchPath 到 spawn 的接线）；实机 E2E：seed → `--patch` spawn → 宿主内插件装载 → 反代 wire 调用 `clientGraph/graph` 返回 38 条真实 boot graph 行，宿主日志无 client-graph 错误 |
 | M2 | 合并加载：boot 流程去重 + 加载额外 entry + `inject`/`immediately` 尊重 | ✅ 模块 C+D：renderer host-graph 单测 12 项（wire 调用形状/503 静默/畸形图响亮/去重/toExtraRows 前缀）、`build:renderer` 通过 |
 | M3 | N-ctx 与远程：远程实例宿主图加载、各自 ctx 子集、断开清理 | ◐ 链路同构（远程反代同一条 `/api/i/<id>/*` 透传，前端无本地/远程分支）；**远程 seed 编排已落地**（设计 13 M2：`seedRemoteHostGraph` 经 exec write-file 原语把模块 A 包落到远端平铺 fallback `profiles/node_modules` + `cordis.patch.yml` 列表 insert + restart，见 §6 遗留 1 更新）；远程实例图通道不可达时按降级语义运行（无额外插件，不报错） |
-| M4 | 收尾：信任声明入代码注释、STATUS/文档同步、失败路径（缺 bundle/坏图） | ✅ 信任声明已入 `host-graph.ts` / 模块 A `index.ts` 注释；失败路径实现 + 单测覆盖（图通道降级、畸形图/坏 bundle 响亮、503 静默）；本文定稿与 STATUS 同步完成；verify:i18n 见 STATUS 验证记录 |
+| M4 | 收尾：信任声明入代码注释、STATUS/文档同步、失败路径（缺 bundle/坏图） | ✅ 信任声明已入 `host-graph.ts` / 模块 A `index.ts` 注释；失败路径实现 + 单测覆盖（图通道降级、畸形图/坏 bundle 响亮、503 静默）；本文定稿与 STATUS 同步完成（验证记录见 git 历史） |
 
 ## 6. 风险与开放问题（按落地后更新）
 
@@ -296,7 +296,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   IPC 的显式调用路径）——注入不再是静默修改；本地列表视图同样展示本地注入状态。
   注入结果（成功 wrote/patched 或失败原因）写入实例环形缓冲日志
   （transport-manager 公开 `appendLog`），连接设置页的远端日志面板可见。
-  部署说明并入 02 §3.9 的远端部署单元说明仍待做。
+  部署说明并入 02 §3.9 的远端部署单元说明仍待做（开放项：02 §2.6 已覆盖
+  本地 seed 接线，远端 systemd 单元的 chamber 双包部署说明尚未补入 02 §3.9）。
 - **遗留 2：打包态分发——已接线（2026-08）**：desktop main 打包态传
   `hostGraphPackageSourceDir = pkgDir/dist/host-graph-package`（asar 内），
   `build-host-graph-package.mjs` 产出、electron-builder `files` 含 `dist/**/*`，

@@ -86,8 +86,8 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 ### 3.1 GET /health
 
 ```
-200 { "ok": true, "dsh": { "status": "ready", "port": 17501 } }
-200 { "ok": true, "dsh": { "status": "starting", "error": "spawn 失败：端口 17501 被占用（P+1 重试 10 次后放弃）" } }
+200 { "ok": true, "dsh": { "status": "ready", "port": 17510 } }
+200 { "ok": true, "dsh": { "status": "starting", "error": "spawn 失败：端口 17510 被占用（P+1 重试 5 次（MAX_SPAWN_ATTEMPTS）后放弃）" } }
 500 { "error": "internal" }   // 控制面自身异常
 ```
 
@@ -130,7 +130,7 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 ### 3.3 GET /api/host/logs
 
 ```
-200 { "port": 17501, "lines": [ { "ts": 1720000000000, "stream": "stdout|stderr", "line": "…" } ],
+200 { "port": 17510, "lines": [ { "ts": 1720000000000, "stream": "stdout|stderr", "line": "…" } ],
       "truncated": false }
 参数：?port=（缺省取 local 最近 spawn 记录）&limit=（默认 200，上限 1000）&offset=（跳过最新 N 行）
 ```
@@ -179,7 +179,10 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 |---|---|
 | Origin 非当前 Host 精确同源且不在显式 allowlist（包括 `null` 或其他回环端口） | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
 | 实例 phase != ready（无隧道 / 未就绪） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
-| 上游连接拒绝 / 超时 | 502 / 504 `{error, code:'upstream_failed'}`（脱敏） |
+| 请求体上传超时 | 408 `{error, code:'request_timeout'}` |
+| 请求体预算耗尽（进程级并发缓冲上限） | 503 `{error, code:'resource_exhausted'}` |
+| 上游连接拒绝 / 请求失败 | 502 `{error, code:'upstream_failed'}`（脱敏） |
+| 上游空闲超时（默认 45s） | 504 `{error, code:'upstream_timeout'}` |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
 | 请求体 > 300MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
 
@@ -206,7 +209,7 @@ interface WebBootGraph {
   rev: string // 全图一致性锚（sha1-12）
   entries: {
     id: string // 条目名 == 包名（插件注册键）
-    url: string // bundle 端点（含 ?rev= 缓存锚）
+    url: string // bundle 端点（裸 URL，无 ?rev= 查询串——2026-08 双执行修复后移除）
     rev: string // bundle 内容哈希（sha1-12）
     immediately?: boolean // 一阶段预取标记
   }[]
@@ -222,8 +225,10 @@ interface WebBootGraph {
     的 Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
     `CHAMBER_COVERED_IDS` 去重并预加载剩余 bundle、经 boot.ts `extraRows`
     seam 合并进 boot rows——机制与构建链详见 05 §6 / 设计 09 §3.5；
-  - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`
-    （gen-boot-manifest 按 `assets/chamber-*.js` 模式定位产物；vendor
+  - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js`（**裸 URL，
+    无 `?rev=` 查询串**——2026-08 起 gen-boot-manifest 刻意去查询串修复延迟族
+    双执行，照抄旧 `?rev=` 写法会复现该 bug；gen-boot-manifest 按
+    `assets/chamber-*.js` 模式定位产物；vendor
     自身的默认路径 `/plugins/<id>/client.js` 仅为参考——wire 只要求
     id/url/rev 为字符串）。
 - **N-ctx**：每个实例一个 AppWebEntry（05 §4）；实例流量全部经
@@ -236,7 +241,7 @@ interface WebBootGraph {
 
 | 载体 | 路径 | 内容 | 权威方 |
 |---|---|---|---|
-| JSON 单行 | `$XDG_STATE_HOME/dsh-chamber/connections.json` | `{schemaVersion, connection: {id:'local', label, accentColor}}`（status / dshPort 为运行态投影） | 控制面（03 §2.1） |
+| JSON 单行 | `<stateDir>/catalog.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写） | `{schemaVersion: 2, revision, connections: [{connectionId, kind, status, dshPort, label, accentColor}]}`（status / dshPort 为运行态投影） | 控制面（03 §2.1） |
 | JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, label, kind, host, user, sshPort, remotePort, serviceName, remoteDshHome}`（schema 以 03 §2.2 为准） | 桌面主进程（03 §2.2） |
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
@@ -255,8 +260,15 @@ interface WebBootGraph {
 
 ## 7. 边界与未决问题
 
-1. **反代响应头白名单演进**：上游若引入新必需响应头，需同步 03 §3.4 与
-   本文 §4.3（一处契约两处表述，变更必须两处一致）。
-2. **`__DSH_BOOT__` 与 dsh 版本漂移**：manifest 形状随 dsh parseBootManifest
-   契约（vendor 源码为准）维护；构建链变更见 05 §6（pnpm + 符号链接 +
-   `assets/chamber-*.js` 产物）。
+> 各条目以 7.x 编号供外部引用（STATUS「设计未决」按此引用）。
+
+### 7.1 反代响应头白名单演进
+
+上游若引入新必需响应头，需同步 03 §3.4 与
+本文 §4.3（一处契约两处表述，变更必须两处一致）。
+
+### 7.2 `__DSH_BOOT__` 与 dsh 版本漂移
+
+manifest 形状随 dsh parseBootManifest
+契约（vendor 源码为准）维护；构建链变更见 05 §6（pnpm + 符号链接 +
+`assets/chamber-*.js` 产物）。

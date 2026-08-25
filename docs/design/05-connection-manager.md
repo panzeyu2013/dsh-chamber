@@ -288,7 +288,8 @@ export const chamberBridge: {
   删除 + dashed"添加主机"卡 → Modal 表单）。
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/host/user/sshPort/remotePort/serviceName，id 白名单
-  `^[a-zA-Z0-9_-]+$`，端口 1–65535），SSH 认证默认走系统 ssh-agent/
+  `^(?!local$)[a-zA-Z0-9_-]{1,64}$`（禁 `local`、限长 1–64，transport-provider
+  常量），端口 1–65535），SSH 认证默认走系统 ssh-agent/
   默认密钥；**可选密码字段**（§8 例外）：经 `desktop_ssh_set_password`
   转发主进程（内存 + `<userData>/ssh-passwords.json` 明文镜像，0600 原子写），
   表单永不记录、编辑时永不回填——**SSH 材料（除该瞬时输入外）永不进
@@ -304,7 +305,7 @@ export const chamberBridge: {
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 5 个 + 宿主包 2 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 2 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。
@@ -328,9 +329,14 @@ export const chamberBridge: {
     fork（仅替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
     播种/回写，钳位 [264,420]，覆盖 id；替换官方 ui-layout 注册，见设计 06）。
   - `packages/dsh-chamber-client-ui-git/`——设计 08 的 chamber 内建 Git
-    Worktree 插件：占用 `sidebar.git`，页面级 singleton 以 30s 单飞读取各实例
+    Worktree 插件：占用 `sidebar.workspace.git`（v0.1.4 起，见设计 08 §4），
+    页面级 singleton 以 30s 单飞读取各实例
     topology，并编排 create/workspace/session 与 Git-first remove saga；它不把
     Git 事实塞进 App aggregate，也不暴露任意 argv/path mutation。
+  - `packages/dsh-chamber-client-ui-open-in/`——设计 16/17 的 chamber 内建
+    open-in 插件（原 vscode 插件演进）：`conversation.session.header.utilities`
+    槽 open-in 按钮（本地 Finder + 本地/远程 VS Code，主进程 OpenInApp 注册表 +
+    `dsh-chamber://` OS 深链），零控制面执行面。
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
   - `packages/dsh-host-client-graph/`——设计 09 的只读 client boot graph Remote；
   - `packages/dsh-chamber-host-git-worktree/`——设计 08 的领域限定 Git Remote，
@@ -345,7 +351,9 @@ export const chamberBridge: {
   - 页面清单 `__DSH_BOOT__` = `{rev, entries:[{id, url, rev, immediately?}]}`
     （wire 契约以 vendor `dsh-client-modules/src/client/manifest.ts` 为权威）；
     构建期写死**单 entry**（`@dsh-chamber/app` chamber composite bundle），
-    bundle = vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`。构建链 =
+    bundle = vite 产物 `/assets/chamber-<hash>.js`（**裸 URL，无 `?rev=`
+    查询串**——2026-08 双执行修复后移除；下一行的每实例额外 entry 带
+    `?rev=` 不受影响）。构建链 =
     gen-typert-remotes → vite build → gen-boot-manifest。
   - **每实例宿主图额外 entry（设计 09，2026-08 落地）**：boot 时前端经反代
     （`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-host-client-graph` 的
@@ -379,7 +387,8 @@ export const chamberBridge: {
 
 ### 7.3 PlaneHandle
 
-`{start(), stop(), port, connectionState, instanceId}` +
+`{start(), stop(), startLocal(), localProcessAlive(), port, connectionState,
+instanceId}` +
 `registerInstanceTransport(connectionId, baseUrl)` /
 `unregisterInstanceTransport(connectionId)`（隧道 ready/断开时主进程上报
 `ssh:<id>` → `http://127.0.0.1:<隧道 localPort>`）；`webDistDir?` 静态服务
@@ -401,18 +410,27 @@ export const chamberBridge: {
   重连——设计 14 D4）；
 - 插件同步面（设计 13，远端 dsh plugin 编排经 provider exec 通道，spec 白名单
   见 13 §7.2）：`desktop_ssh_plugin_list/plugin_apply`（add/remove/restart，
-  restart 需布尔值）、`desktop_local_plugin_list/add/remove`（本地实例插件）、
-  `desktop_npm_search`（npm 搜索，best-effort）、`desktop_ssh_seed_host_graph`
-  （远端 seed 模块 A 宿主包）、`desktop_ssh_plugin_materialize_add`
-  （本地路径包物化：pack → ssh 传输 → 远端 `add file:`）、`desktop_pick_directory`
-  （主进程目录选择）；
+  restart 需布尔值）、`desktop_local_plugin_list/add/remove`（本地实例插件，
+  另含 `desktop_local_plugin_add_file`——本地路径包物化）、`desktop_npm_search`
+  （npm 搜索，best-effort）、`desktop_ssh_seed_host_graph`（远端 seed 模块 A
+  宿主包）、`desktop_ssh_plugin_materialize_add`（本地路径包物化：pack → ssh
+  传输 → 远端 `add file:`）与 `desktop_ssh_plugin_materialize_add_pick`（目录
+  选择物化，主进程目录选择）；
+  > 目录选择面统一为应用内 browse 对话框（§4）后，旧 `desktop_pick_directory`
+  > 主进程通道已移除（2026-08），不再存在。
 - `desktop_ssh_status_changed` 推送（隧道相位即时投影）、
   `desktop_ssh_instances_changed` 推送（注册表增删改后即时重拉 roster；
   renderer 另有 30s 轮询兜底）。
+- 其余通道族（同属 preload 白名单，契约以各自设计文档为权威，此处不展开）：
+  `dsh-chamber:update-state/check/download/open-release/update-state-changed`
+  （设计 11）、`dsh-chamber:open-in-apps/open-in` + `dsh-chamber:deep-link-intent`
+  （设计 16/17）、`dsh-chamber:notify/notifications-ready/notification-open`
+  （设计 19）。
 - 传输 URL 永不进 renderer；renderer 只见 localPort/phase 投影（含 `kind`）。
-- 所有 `dsh-chamber:info` / `desktop_ssh_*` invoke 必须同时满足：sender 是当前
-  主窗口 WebContents、senderFrame 是其 mainFrame、frame URL 精确属于当前
-  控制面 origin；否则抛 `ipc_sender_forbidden`。窗口拒绝新窗口，并在
+- **所有 invoke handler**（`dsh-chamber:*` 与 `desktop_*` 全部通道）必须同时
+  满足：sender 是当前主窗口 WebContents、senderFrame 是其 mainFrame、frame
+  URL 精确属于当前控制面 origin（pathname 恰为 `/`）；否则抛
+  `ipc_sender_forbidden`。窗口拒绝新窗口，并在
   `will-navigate` / `will-redirect` 阶段阻断离开控制面 origin，防止 preload
   主机能力暴露给被导航页面。
 
