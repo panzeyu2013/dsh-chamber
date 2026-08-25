@@ -170,6 +170,16 @@
   边界扩大到'同一渲染文档内所有实例'——恶意远端实例的前端代码可同源读取/操作其他
   实例数据与 API（`/api/i/<id>` 匿名反代）；`--no-auth` 误用于不可信网络同理。属
   产品形态决策，非代码缺陷；已记录待中期缓解（per-ctx 会话令牌/实例隔离）。
+  **实机测试修复（2026-08，远程容器 Ubuntu 22.04 + 本机 macOS，真实 dsh 0.1.1-rc.2）**：
+  ① gateway esbuild ESM bundle 缺 require shim——ws 静态 `require('events')` 触发
+  "Dynamic require of events is not supported"，派生会话索引/审批流无限重连、
+  `/chamber/sessions` 恒空；build.mjs banner 注入 createRequire 修复，实机复验
+  sessions 索引正常返回。② schedule 的 `session.prompt` 载荷与 dsh 0.1.1-rc.2 wire
+  不符（`{sessionId,prompt}` 被拒），正确形状为 `{sessionId, mode:'queue',
+  content:[{type:'text',text}]}`（实机 accepted:true）；已修并锁回归测试。
+  远程 Linux 全量验证：控制面/CLI/gateway 实机矩阵 + 全部单测
+  （desktop 30 文件、gateway、control-plane 9 文件、插件套件）+ 9 typecheck +
+  build:renderer 全绿（Node 24）。
 
 - **dsh 运行时版本管理（设计 18，当前判定：M0/M2/M4 done，M1/M3
   partial）**：运行期安装是唯一获取方式（无 Provider B）。主进程将 registry
