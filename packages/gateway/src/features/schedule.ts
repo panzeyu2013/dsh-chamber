@@ -58,7 +58,16 @@ export function createScheduler(deps: {
       return false
     }
     try {
-      await callDsh(baseUrl, 'session.prompt', { sessionId: job.targetSessionId, prompt: job.prompt })
+      // dsh 0.1.1-rc.2 wire: session.prompt payload = {sessionId, mode:
+      // 'queue'|'steer', content: MessagePart[]} — the old {sessionId,
+      // prompt} shape was rejected with "invalid payload for session.prompt"
+      // and every scheduled prompt failed validation (live finding, Linux +
+      // macOS, verified against the real wire).
+      await callDsh(baseUrl, 'session.prompt', {
+        sessionId: job.targetSessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: job.prompt }],
+      })
       return true
     } catch (error) {
       deps.logger.warn(`scheduler: job ${job.id} failed: ${String(error)}`)

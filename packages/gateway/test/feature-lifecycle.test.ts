@@ -299,6 +299,31 @@ test('scheduler interval prompts are single-flight', async () => {
   scheduler.stop()
 })
 
+test('scheduler fires session.prompt with the dsh 0.1.1-rc.2 wire shape (mode+content)', async () => {
+  // Live finding: the old {sessionId, prompt} payload was rejected by the
+  // real wire ("invalid payload for session.prompt") — every scheduled
+  // prompt failed validation. The accepted shape is
+  // {sessionId, mode:'queue', content:[{type:'text',text}]}.
+  const sent: Array<{ sessionId: string; mode: string; content: unknown }> = []
+  const scheduler = createScheduler({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    callDsh: (async (_base: string, method: string, payload: unknown) => {
+      sent.push(payload as { sessionId: string; mode: string; content: unknown })
+      return { rpcId: 'prompt-1', result: { ok: true, value: {} } }
+    }) as any,
+  })
+  scheduler.schedule({ delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'continue' })
+  scheduler.start()
+  await waitFor(() => sent.length === 1)
+  scheduler.stop()
+  assert.deepEqual(sent[0], {
+    sessionId: 's1',
+    mode: 'queue',
+    content: [{ type: 'text', text: 'continue' }],
+  })
+})
+
 test('one-shot failures back off and an in-flight cancel cannot resurrect a job', async () => {
   let failures = 0
   const backingOff = createScheduler({
