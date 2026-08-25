@@ -21,7 +21,7 @@ function config(stateDir: string): GatewayConfig {
 
 test('gateway forwards plane.dshPort as the control-plane dshPortBase (design 17 §3)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-dshport-'))
-  let received: { dshPortBase?: number } | null = null
+  const captured: Array<{ dshPortBase?: number }> = []
   const plane: PlaneHandle = {
     async start() {},
     async startLocal() {},
@@ -46,8 +46,8 @@ test('gateway forwards plane.dshPort as the control-plane dshPortBase (design 17
     },
     logger: silentLogger,
     deps: {
-      createPlane: ((opts: { dshPortBase?: number }) => {
-        received = opts
+      createPlane: ((opts: unknown) => {
+        captured.push(opts as { dshPortBase?: number })
         return plane
       }) as never,
       createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
@@ -55,7 +55,7 @@ test('gateway forwards plane.dshPort as the control-plane dshPortBase (design 17
     },
   })
   await gateway.start()
-  assert.equal(received?.dshPortBase, 30800)
+  assert.equal(captured[0]?.dshPortBase, 30800)
   await gateway.stop()
   rmSync(stateDir, { recursive: true, force: true })
 })

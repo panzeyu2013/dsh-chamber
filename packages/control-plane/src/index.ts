@@ -135,6 +135,9 @@ export interface ControlPlaneOptions {
   /** Dynamic public exposure gate. The desktop keeps this closed from spawn
    * through the full activation-probe verdict. */
   canExposeLocal?: () => boolean
+  /** First port attempted for the managed dsh host (design 17 §3 server
+   *  deployments; absent = BASE_DHSPORT 17510). */
+  dshPortBase?: number
   webDistDir?: string
   logger?: Logger
   corsOrigins?: string[]
