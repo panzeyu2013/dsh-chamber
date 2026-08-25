@@ -39,7 +39,18 @@ function resolveElectron() {
 
 const electronDir = resolveElectron();
 if (electronDir === null) {
-  fail('未找到 electron 二进制。请先在仓库根目录执行 pnpm install（.npmrc 已配置 electron_mirror，根 postinstall 自动补齐二进制）。');
+  // Lazy electron bootstrap (2026-08): root postinstall skips the binary
+  // unless DSH_CHAMBER_ELECTRON=1 (server deployments don't need it). The
+  // dev launcher is the desktop path, so it auto-installs on first use.
+  console.log('[electron:dev] 未找到 electron 二进制，先执行 ensure-electron（DSH_CHAMBER_ELECTRON=1）');
+  const ensured = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'ensure-electron.mjs')], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: { ...process.env, DSH_CHAMBER_ELECTRON: '1' },
+  });
+  if (ensured.error || ensured.status !== 0 || resolveElectron() === null) {
+    fail('未找到 electron 二进制。请重跑 node scripts/ensure-electron.mjs（需 DSH_CHAMBER_ELECTRON=1）或 pnpm install。');
+  }
 }
 
 if (forceBuild || !existsSync(DIST_INDEX)) {
@@ -77,7 +88,24 @@ let electronExecutable;
 try {
   electronExecutable = require('electron');
 } catch {
-  fail('electron 包不可解析（二进制缺失？）。请重跑 pnpm install 或 node scripts/ensure-electron.mjs');
+  // Binary-level lazy bootstrap: the npm package is installed by pnpm, but
+  // the ~100MB binary is skipped by the root postinstall unless
+  // DSH_CHAMBER_ELECTRON=1 (server deployments never need it). The dev
+  // launcher is the desktop path — install the binary on first use.
+  console.log('[electron:dev] electron 二进制缺失，先执行 ensure-electron（DSH_CHAMBER_ELECTRON=1）');
+  const ensured = spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'ensure-electron.mjs')], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: { ...process.env, DSH_CHAMBER_ELECTRON: '1' },
+  });
+  if (ensured.error || ensured.status !== 0) {
+    fail('electron 二进制补装失败。请重跑 node scripts/ensure-electron.mjs（需 DSH_CHAMBER_ELECTRON=1）检查镜像/网络。');
+  }
+  try {
+    electronExecutable = require('electron');
+  } catch {
+    fail('electron 包仍不可解析。请检查 packages/desktop/node_modules/electron/dist 是否存在。');
+  }
 }
 
 // The child env must never force Electron into node mode: a parent environment

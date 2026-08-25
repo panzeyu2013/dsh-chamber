@@ -7,6 +7,12 @@
  * packages/desktop/node_modules/electron/dist/electron。本脚本在根
  * postinstall 中兜底：按 .npmrc 的 electron_mirror（或 ELECTRON_MIRROR 环境
  * 变量）执行 electron 自带的 install.js；二进制已就位则跳过。
+ *
+ * 惰性门（2026-08，用户拍板）：Electron 二进制只在桌面端需要——server 部署
+ * （gateway/control-plane/CLI）完全不需要它。默认 SKIP；仅当显式设置
+ * DSH_CHAMBER_ELECTRON=1（桌面开发 dev:desktop 的 electron-dev.mjs 会在
+ * 二进制缺失时自动带此变量补装；打包 electron-builder 自行拉取缓存）时才
+ * 下载。全新环境先跑 gateway/单测不再白下 ~100MB 二进制。
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -16,6 +22,13 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
+
+if (process.env.DSH_CHAMBER_ELECTRON !== '1') {
+  console.log(
+    '[ensure-electron] 跳过（未设置 DSH_CHAMBER_ELECTRON=1；仅桌面开发/打包需要，server 部署无需 Electron 二进制）',
+  )
+  process.exit(0)
+}
 
 /** Locate the electron package from the desktop workspace's resolution. */
 function resolveElectronDir() {
