@@ -12,7 +12,7 @@
 *用户主界面——单窗口，dsh 原生侧边栏平等列出各来源（本地 + 远程实例）的 session/workspace，主区为活动实例的纯 dsh shell。*
 
 > [!WARNING]
-> **开发者预览（v0.1）**——协议与 API 正在快速迭代，将存在破坏性变更。
+> **开发者预览（v0.1.x）**——协议与 API 正在快速迭代，将存在破坏性变更。
 
 > English: [docs/README.en-US.md](docs/README.en-US.md) · 开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · 设计入口 [docs/design/01-overview.md](docs/design/01-overview.md) · 进度 [docs/progress/STATUS.md](docs/progress/STATUS.md)
 
@@ -44,6 +44,9 @@
 - **统一侧边栏多来源导航** — 本地 + 远程各实例的 session/workspace 在同一个 dsh 原生侧边栏内平等列出、按来源分组（远程来源带颜色徽标）；单击打开会话、双击重命名
 - **Git Worktree 生命周期** — chamber 内建独立插件在侧边栏按实例展示仓库拓扑，并闭环创建 worktree → workspace → session；删除采用 Git-first 可重试事务，拒绝主工作树、dirty/locked/运行中目标，不归档会话、不 force、不删分支
 - **多实例并行（N-ctx）** — 一个窗口内多个 dsh shell 共存，随时切换活动实例
+- **Open in（Finder / VS Code）** — 会话头部一键打开对应目录：本地用 Finder
+  显示/打开，本地与远程均可用 VS Code Remote-SSH 拉起（`dsh-chamber://` OS
+  深链，需本机安装 VS Code）
 - **桌面端更新** — 静默检查新版本，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
 - **睡眠/后台常驻** — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（mac/linux）；OS 唤醒即时重连；保持唤醒开关
 - **Chamber 设置页** — 设置壳固定入口：连接 / 通用 / 更新；chamber 全局设置与各实例配置严格分离

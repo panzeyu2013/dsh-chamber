@@ -10,6 +10,37 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 新增
+
+- **桌面通知（设计 19）** —— session complete / ask / request 时推送桌面原生
+  通知（设置可选项，并入设置壳「通用」页通知控制组；检测复用侧边栏运行时事实
+  通道边沿，零控制面改动）。
+- **来源级收拢 + server 拖拽排序（06 §2.4 方案 1）** —— 侧边栏来源头折叠
+  开关（收拢整来源 workspace 列表）+ 来源头拖拽排序（显示偏好，持久化于
+  `dsh-chamber.sidebar.v1`，跨 ctx 实时联动）。
+- **workspace 图标按身份着色（06）** —— 图标色相按 `(serverId, 家族种子)`
+  哈希派生稳定 accent，worktree 与主检出共享家族色；2026-10 柔和化色板。
+- **Open in 打开注册表（设计 17）** —— VS Code 深链插件演进为通用打开面：
+  本地来源 Finder + 本地/远程 VS Code 统一按钮（`conversation.session.header.
+  utilities` 槽），插件重命名 `@dsh-chamber/dsh-client-ui-open-in`，旧 vscode
+  IPC 收敛删除。
+
+### 修复
+
+- **打包完整性** —— `notifications.ts` 补入 electron-builder `build.files`
+  （此前打包产物缺该模块会启动失败）；preload 编译改为临时目录 emit 只搬入
+  `preload.cjs`（消除 3 个死文件进 asar）；`build.files` 排除 `dist/.vite/**`。
+- **死依赖清理** —— 移除控制面 `@simplewebauthn/server`（v1 认证面移除后的
+  残留），锁文件与第三方声明同步。
+
+### 变更
+
+- **文档收口** —— `docs/progress/STATUS.md` 重写为只记录未完成/部分完成项与
+  范围偏差（已实现基线以 git 历史与 CHANGELOG 为准）；AGENTS.md 与设计文档
+  同步（open-in 包、ws-frames 测试、打包完整性 checklist 新增）。
+
 ## [0.1.5] - 2026-08-23
 
 ### 新增
@@ -264,6 +295,8 @@
 
 v1 范围：无认证/审计面（仅 loopback 控制面）。
 
+[0.1.5]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.5
+[0.1.4]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.4
 [0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1

@@ -10,6 +10,43 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Added
+
+- **Desktop notifications (design 19)** — native notifications on session
+  complete / ask / request (opt-in, in the settings shell's General page
+  notification control group; detection reuses the sidebar runtime-facts
+  edge detection, zero control-plane changes).
+- **Source-level collapse + server drag ordering (06 §2.4, plan 1)** —
+  sidebar source-header collapse toggle (folds the whole source workspace
+  list) + source-header drag ordering (display preference persisted in
+  `dsh-chamber.sidebar.v1`, live-synced across ctx).
+- **Workspace icon identity coloring (06)** — icon hue derived from
+  `(serverId, family seed)` hashing with stable accent; worktrees share the
+  main checkout's family hue; softened palette in 2026-10.
+- **Open-in registry (design 17)** — the VS Code deep-link plugin evolved
+  into a general open surface: local Finder + local/remote VS Code in one
+  button (`conversation.session.header.utilities` slot); plugin renamed to
+  `@dsh-chamber/dsh-client-ui-open-in`; legacy vscode IPC removed.
+
+### Fixed
+
+- **Packaging integrity** — `notifications.ts` added to the electron-builder
+  `build.files` (the packaged app would otherwise fail to start); the preload
+  build now emits into a temp dir and moves only `preload.cjs` (three dead
+  files no longer ship in the asar); `build.files` excludes `dist/.vite/**`.
+- **Dead dependency cleanup** — removed `@simplewebauthn/server` from the
+  control plane (vestige of the removed v1 auth surface); lockfile and
+  third-party notices synced.
+
+### Changed
+
+- **Docs consolidation** — `docs/progress/STATUS.md` rewritten to track only
+  incomplete/partially-complete items and scope deviations (implemented
+  baselines live in git history / CHANGELOG); AGENTS.md and design docs
+  synced (open-in package, ws-frames tests, new packaging-closure checklist).
+
 ## [0.1.5] - 2026-08-23
 
 ### Added
@@ -273,7 +310,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ### Added
 
 - **Desktop auto-update (design 11)** — silent update checks (startup delay +
-  6h interval), a low-key Settings「更新」section, download only after explicit
+  6h interval), a low-key Settings "Update" section, download only after explicit
   user confirmation, install on quit. Update feed shipped for both platforms
   (`latest.yml` / `latest-mac.yml`; beta channel via a semver prerelease
   version). macOS install leg reports honestly when a Developer ID signature
@@ -298,7 +335,8 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   server switches; explicit sort menu with official updated-order semantics
   (manual order + activity promotion).
 - **Host-graph visibility** — the chamber-injected host package row shows the
-  module A version and a live-effect tri-state (已生效 / 重启后生效 / 未知)
+  module A version and a live-effect tri-state (Effective / Effective after
+  restart / Unknown)
   probed over the tunnel RPC.
 - **Boot hardening** — union-table completion for covered packages,
   chamber-level failure overlay (report + retry + server switching),
@@ -385,6 +423,8 @@ Initial release — local desktop connection manager for dsh:
 
 v1 scope: no authentication/audit surface (loopback-only control plane).
 
+[0.1.5]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.5
+[0.1.4]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.4
 [0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1

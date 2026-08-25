@@ -12,7 +12,7 @@
 *Main user interface — a single window with the dsh-native sidebar listing every source's sessions/workspaces, and the pure-dsh shell of the active instance.*
 
 > [!WARNING]
-> **Developer preview (v0.1)** — the protocol and API are iterating rapidly; expect breaking changes.
+> **Developer preview (v0.1.x)** — the protocol and API are iterating rapidly; expect breaking changes.
 
 > 中文版: [README.md](../README.md) · Development: [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md) · Design entry: [design/01-overview.md](design/01-overview.md) · Progress: [progress/STATUS.md](progress/STATUS.md)
 
@@ -44,6 +44,7 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Unified multi-source sidebar navigation** — sessions/workspaces from every source (local + remote instances) are listed equally in the dsh-native sidebar, grouped by source (remote sources carry a colored badge); single click opens a session, double click renames
 - **Git worktree lifecycle** — a bundled, independent chamber plugin shows per-instance repository topology in the sidebar and closes the worktree → workspace → session create flow; deletion is a retryable Git-first transaction that rejects main, dirty, locked, or running targets, never archives sessions, never forces, and never deletes branches
 - **Multiple instances in parallel (N-ctx)** — several dsh shells coexist in one window; switch the active instance at any time
+- **Open in (Finder / VS Code)** — a one-click button in the session header opens the corresponding directory: Finder reveals/opens it locally, and VS Code Remote-SSH opens it for both local and remote sources (`dsh-chamber://` OS deep link; requires a local VS Code install)
 - **Desktop updates** — silent version checks, a low-key Settings "Update" section, download only after confirmation, install on quit
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
 - **Chamber settings page** — fixed Settings-shell entries: Connections / General / Update; chamber-global settings stay strictly separate from per-instance config planes
