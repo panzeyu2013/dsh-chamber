@@ -1,7 +1,8 @@
 # 13 · 远程实例插件管理（远程 dsh plugin 编排；已实现，2026-08；设计 08 双包 seed 更新 2026-08-20）
 
-> **状态：已实现（2026-08，M1–M4 落地）**——实现记录与验证见
-> `docs/progress/STATUS.md`（设计 13 条目）。本文档补全此前散落于
+> **状态：已实现（2026-08，M1–M4 落地）**——实现基线以 git 历史与
+> CHANGELOG 为准；剩余项（本机 pnpm 依赖）见 `docs/progress/STATUS.md`。
+> 本文档补全此前散落于
 > 05 §7.4/§7.6、03 §2.2 与 STATUS 中的契约实体，成为该面的设计权威。
 > 范围纪律：只做**编排**（远端 dsh plugin CLI 经 exec 通道驱动），不重造
 > dsh 宿主插件系统本身。设计 08 增加的 Git 执行仍在远端 dsh 实例内；本设计
@@ -23,7 +24,9 @@
 `TransportExecPayload.op`（05 §7.6）：
 
 - `'exec'`：systemctl `start/stop/is-active/restart`；远端命令 `run`——命令名
-  白名单 `dsh|cat|printf|base64|mkdir` + argv/路径白名单 + shell 元字符拒绝
+  白名单 `dsh|cat|printf`（可分发命令；`base64`/`mkdir` 仅内联于 write-file
+  的固定远端管线 `mkdir -p && base64 -d`，不可单独分发）+ argv/路径白名单 +
+  shell 元字符拒绝
   （见 §7.2）。成功结果同时携带 stdout（UTF-8 视图）与 stdoutBytes（原始
   Buffer）——二进制内容校验在字节域进行。
 - `'write-file'`：stdin base64 流式写 + **字节域 SHA-256 回读校验** + 目标
@@ -88,9 +91,10 @@
 - 远程：`desktop_ssh_plugin_list`、`desktop_ssh_plugin_apply`（add/remove/
   restart）、`desktop_ssh_seed_host_graph`、`desktop_ssh_plugin_materialize_add`
   （`add file:`）、`desktop_ssh_plugin_materialize_add_pick`；
-- 本地：`desktop_local_plugin_list/add/remove`；
-- 其他：`desktop_npm_search`（npm 搜索，best-effort）、`desktop_pick_directory`
-  （主进程目录选择）。
+- 本地：`desktop_local_plugin_list/add/remove` + `desktop_local_plugin_add_file`
+  （本地路径包物化——目录选择收敛后取代旧 `desktop_pick_directory` 通道，
+  2026-08 起不存在）；
+- 其他：`desktop_npm_search`（npm 搜索，best-effort）。
 
 ## 6. UI（连接设置页 · 插件管理）
 
@@ -134,7 +138,9 @@ UTF-8 文本视图。
 ## 8. 分期
 
 - **M1–M4 已落地（2026-08）**：exec `restart/run/write-file` + §7.2 白名单、
-  remoteDshHome 贯穿、plugin-sync 编排、10 个 IPC 通道、前端
+  remoteDshHome 贯穿、plugin-sync 编排、10 个 IPC 通道（远端
+  plugin_list/plugin_apply/seed_host_graph/materialize_add/materialize_add_pick
+  + 本地 local_plugin_list/add/remove/add_file + npm_search）、前端
   PluginSyncModal/PluginAddView/plugin-diff、chamber 内建注入可见化 +
   生效三态。
 - **设计 08 扩展已落地（2026-08-20）**：通用双 host-package seed、精确

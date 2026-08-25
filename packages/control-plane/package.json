@@ -12,7 +12,6 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@simplewebauthn/server": "^13.3.2",
     "ws": "^8.18.0"
   }
 }

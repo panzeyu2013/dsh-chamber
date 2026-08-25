@@ -38,9 +38,6 @@ importers:
 
   packages/control-plane:
     dependencies:
-      '@simplewebauthn/server':
-        specifier: ^13.3.2
-        version: 13.3.2
       ws:
         specifier: ^8.18.0
         version: 8.21.3
@@ -109,6 +106,31 @@ importers:
       '@dsh-chamber/dsh-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
+      react:
+        specifier: ^19.0.0
+        version: 19.2.8
+
+  packages/dsh-chamber-client-ui-open-in:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/cordis
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-locale
+      '@deepseek-ai/dsh-client-runtime':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-runtime
+      '@deepseek-ai/dsh-client-ui-primitives':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-primitives
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
       react:
         specifier: ^19.0.0
         version: 19.2.8
@@ -238,31 +260,6 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-invariants
-      '@types/react':
-        specifier: ^19.2.18
-        version: 19.2.18
-      react:
-        specifier: ^19.0.0
-        version: 19.2.8
-
-  packages/dsh-chamber-client-ui-open-in:
-    dependencies:
-      '@deepseek-ai/cordis':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/cordis
-      '@deepseek-ai/dsh-client-locale':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-locale
-      '@deepseek-ai/dsh-client-runtime':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-runtime
-      '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-primitives
-      '@deepseek-ai/dsh-client-ui-slots':
-        specifier: workspace:^
-        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
-    devDependencies:
       '@types/react':
         specifier: ^19.2.18
         version: 19.2.18
@@ -10098,10 +10095,6 @@ packages:
   '@shikijs/vscode-textmate@10.0.2':
     resolution: {integrity: sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg==}
 
-  '@simplewebauthn/server@13.3.2':
-    resolution: {integrity: sha512-KEDhfcGP1PAKRVSDjA3npTQFqS2b/srm+ipoNBNHdkzrHAlaRQUTE+a5f4ywsx6thxAw1NU2rYcLEY1949RGbQ==}
-    engines: {node: '>=20.0.0'}
-
   '@sindresorhus/is@4.0.0':
     resolution: {integrity: sha512-FyD2meJpDPjyNQejSjvnhpgI/azsQkA4lGbuu5BQZfjvJ9cbRZXzeWL2HceCekW4lixO9JPesIIQkSoLjeJHNQ==}
     engines: {node: '>=10'}
@@ -14157,17 +14150,6 @@ snapshots:
       '@types/hast': 3.0.5
 
   '@shikijs/vscode-textmate@10.0.2': {}
-
-  '@simplewebauthn/server@13.3.2':
-    dependencies:
-      '@hexagon/base64': 1.1.28
-      '@levischuck/tiny-cbor': 0.2.2
-      '@peculiar/asn1-android': 2.8.0
-      '@peculiar/asn1-ecc': 2.8.0
-      '@peculiar/asn1-rsa': 2.8.0
-      '@peculiar/asn1-schema': 2.8.0
-      '@peculiar/asn1-x509': 2.8.0
-      '@peculiar/x509': 1.14.3
 
   '@sindresorhus/is@4.0.0': {}
 

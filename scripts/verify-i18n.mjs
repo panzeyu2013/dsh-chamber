@@ -20,6 +20,7 @@ const PAIRS = [
   ['docs/DEVELOPMENT.en-US.md', 'docs/DEVELOPMENT.md'],
   ['docs/CONTRIBUTING.en-US.md', 'CONTRIBUTING.md'],
   ['docs/CHANGELOG.en-US.md', 'CHANGELOG.md'],
+  ['docs/THIRD_PARTY_NOTICES.en-US.md', 'THIRD_PARTY_NOTICES.md'],
 ]
 const RECORD_FILE = 'docs/i18n-record.json'
 

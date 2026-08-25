@@ -10,13 +10,14 @@
 | # | 文件 | 主题 | 状态 |
 |---|---|---|---|
 | 1 | [subagents-in-sidebar.md](subagents-in-sidebar.md) | session 的 subagents 在侧边栏中的显示 | 想法，未设计 / 未排期 |
-| 2 | [server-drag-sort.md](server-drag-sort.md) | server 之间的拖拽排序 | 想法，未设计 / 未排期 |
+| 2 | [server-drag-sort.md](server-drag-sort.md) | server 之间的拖拽排序（来源级收拢 + 来源显示序） | **已实现（2026-09，方案 1）**；历史设计记录保留于此（契约见 06 §2.4） |
 | 3 | [10-todo-event-driven-aggregation.md](10-todo-event-driven-aggregation.md) | 侧边栏聚合改事件驱动（各来源 ctx 推投影取代 10s 轮询） | **已实现（2026-08）**；历史设计记录保留于此 |
 | 4 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） | 设计待评审，实现未排期（2026-08） |
 
-> 已实现并移入 `docs/design/`：设计 08（Git Worktree 独立插件）、设计 09
-> （客户端插件运行时加载）、设计 11（桌面端更新）、设计 14（睡眠/后台常驻）、
-> 设计 15（Chamber 设置页）。
+> 现行设计均已落地（除 07 推迟待上游、12 设计待评审外）；已实现并移入
+> `docs/design/` 的：08/09/11/14/15/16/17/19/20（编号与状态以
+> `docs/design/01-overview.md` §3 文档地图为准；open-in 在 dev 侧编号为 20）。
+
 
 ## 纪律
 

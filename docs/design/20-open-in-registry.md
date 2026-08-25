@@ -198,9 +198,12 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
 > platform → M2 插件重命名 + 下拉 UI + 锁步接线 → M3 验证门全绿 + 实机验收。
 > 与 design 16 §9 同款分期口径。
 
-- `test:desktop` **287 用例**（transport-manager 75 + ssh-provider 37 + ssh-config
+- `test:desktop` **287 用例**（截至 2026-08 定稿快照：transport-manager 75 +
+  ssh-provider 37 + ssh-config
   15 + renderer-trust 2 + plugin-sync 72 + chamber-settings 13 + deep-link 43 +
-  **open-in 24** + bundle-swap 3 + after-pack-adhoc-sign 3）；open-in 套件覆盖
+  **open-in 24** + bundle-swap 3 + after-pack-adhoc-sign 3；后续新增
+  notifications 19 等用例后合计 ~316，以 `pnpm run test:desktop` 实时为准）；
+  open-in 套件覆盖
   六步管线每步（含精确 vscode URL 断言、门失败副作用 spy、path 非 string/空串、
   normalizeOpenPathError 四态），**任意机器确定**（可用性经 ctx 注入）；
 - 全部插件 typecheck（open-in + sidebar/layout/connections/settings-bridge/git

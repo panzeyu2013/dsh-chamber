@@ -61,6 +61,7 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 | `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork (layout-store replacement persisting sidebarWidth) |
 | `packages/dsh-host-client-graph` | Host-side package: read-only exposure of the instance's client-plugin boot graph over a Typert Remote |
 | `packages/dsh-chamber-client-ui-git` | Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly |
+| `packages/dsh-chamber-client-ui-open-in` | Chamber-bundled open-in client plugin: session-header utilities open button (local Finder + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link) |
 | `packages/dsh-chamber-host-git-worktree` | In-instance host package: authoritative workspace/agent guards plus constrained, local-only Git worktree lifecycle |
 
 ## 2. Environment setup
@@ -161,10 +162,13 @@ packages/
                             Git worktree client (sidebar + coordinator + sagas)
   dsh-chamber-host-git-worktree/
                             In-instance Git worktree host Remote (guards + constrained Git)
+  dsh-chamber-client-ui-open-in/
+                            Open-in client plugin (session-header Finder/VS Code open)
 docs/
   design/                   Design documents (01 is the entry point; 05 is the surface/architecture contract (v1))
-  todo/                     Unimplemented feature ideas (one file each, see todo/README.md)
-  progress/                 STATUS.md — the only progress overview
+  todo/                     Unimplemented feature ideas (one file each; implemented historical design records are kept here, see todo/README.md)
+  progress/                 STATUS.md — the only progress overview (incomplete/partially-complete items only)
+  checklists/               Operational checklists (release / dsh upgrade / packaging integrity)
   *.en-US.md                English mirrors of the root docs
 vendor/
   harness-packages/         @deepseek-ai/* symlink tree into the dsh source
@@ -208,3 +212,4 @@ Test commands live in [CONTRIBUTING.md](../CONTRIBUTING.md) "Testing" and "Befor
 | [docs/progress/STATUS.md](progress/STATUS.md) | Progress overview (the only progress record) |
 | [docs/checklists/release-checklist.md](checklists/release-checklist.md) | Pre-release checklist (version/changelog/tests/build/tag/CI) |
 | [docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md) | Pre-dsh-upgrade checklist (pin consistency/fork rebase/lockfile/regression) |
+| [docs/checklists/packaging-closure-checklist.md](checklists/packaging-closure-checklist.md) | Packaging integrity checklist (module closure vs build.files, build-chain artifacts, packaged-app smoke) |

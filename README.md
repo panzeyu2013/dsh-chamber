@@ -12,7 +12,7 @@
 *用户主界面——单窗口，dsh 原生侧边栏平等列出各来源（本地 + 远程实例）的 session/workspace，主区为活动实例的纯 dsh shell。*
 
 > [!WARNING]
-> **开发者预览（v0.1）**——协议与 API 正在快速迭代，将存在破坏性变更。
+> **开发者预览（v0.1.x）**——协议与 API 正在快速迭代，将存在破坏性变更。
 
 > English: [docs/README.en-US.md](docs/README.en-US.md) · 开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · 设计入口 [docs/design/01-overview.md](docs/design/01-overview.md) · 进度 [docs/progress/STATUS.md](docs/progress/STATUS.md)
 
@@ -46,7 +46,7 @@
 - **侧边栏折叠 / 拖拽 / 强调色** — 来源级折叠开关一键收拢该来源的 workspace 列表；server 分组可拖拽排序（跨实例持久化）；来源/workspace 携带柔和强调色条（design 06 §2.4/§3.1）
 - **Git Worktree 生命周期** — chamber 内建独立插件在侧边栏按实例展示仓库拓扑，并闭环创建 worktree → workspace → session；删除采用 Git-first 可重试事务：主工作树/locked/运行中目标硬阻断，dirty 目标须在对话框中显式勾选「丢弃未提交更改」后才以 force 移除（分支与已提交内容保留），删除对话框还可选同时删除本地分支
 - **多实例并行（N-ctx）** — 一个窗口内多个 dsh shell 共存，随时切换活动实例
-- **open-in 打开注册表** — 会话头部统一打开面：本地来源在 Finder/文件管理器显示目录，本地/远程来源一键拉起 VS Code（本地 `vscode://file/`、远程 Remote-SSH）；可用性实探、失败全 loud（design 20）
+- **open-in 打开注册表** — 会话头部统一打开面：本地来源在 Finder/文件管理器显示目录，本地/远程来源一键拉起 VS Code（本地 `vscode://file/`、远程 Remote-SSH，`dsh-chamber://` OS 深链，需本机安装 VS Code）；可用性实探、失败全 loud（design 20）
 - **桌面通知** — 会话完成 / 提问 / 审批时推送桌面原生通知，点击直达该会话；可在设置「通知」分组开关（design 19）
 - **桌面端更新** — 静默检查新版本，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
 - **睡眠/后台常驻** — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（mac/linux）；OS 唤醒即时重连；保持唤醒开关

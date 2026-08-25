@@ -31,7 +31,7 @@ Desktop 的新执行面。**
 
 ```text
 ┌─ @dsh-chamber/dsh-client-ui-git ────────────────────┐
-│ sidebar.git 座位、拓扑、创建/删除 saga、30s 单飞协调器     │
+│ sidebar.workspace.git 座位、拓扑、创建/删除 saga、30s 单飞协调器     │
 └──────────────────────────┬──────────────────────┘
                            │ 每实例反代 + dsh 现有 unary
                            ▼

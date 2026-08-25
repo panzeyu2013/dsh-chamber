@@ -67,7 +67,8 @@
   `trustedIpc` 围栏（05 §7.4）；
 - 与 dsh shell 的联动为 **best-effort**：VS Code 启动由主进程独立完成；深链可附带
   归一化 intent 推送渲染层激活对应来源（`deepLink.onIntent` + App 订阅 +
-  `selectView`），窗口未就绪时按 hold/replay 纪律（仿 `lastResume`，main.ts:581），
+  `selectView`），窗口未就绪时按 hold/replay 纪律（仿 `lastResume` 的 pending
+  队列语义），
   shell 激活失败不阻塞 VS Code 启动。
 
 ## 3. 深链契约
@@ -112,7 +113,7 @@ buildVscodeFileUrl(path): string
 ```
 
 - scheme **硬编码 `vscode:`**，绝不把原始深链 URL 透传给 `shell.openExternal`
-  （对比 `isAllowedReleaseUrl` 白名单纪律，main.ts:189）；
+  （对比主进程 `isAllowedReleaseUrl` 白名单纪律）；
 - path 逐段 `encodeURIComponent`（首 `/` 保留），空格/中文/`#`/`?`/`&`/`%` 均有
   单测覆盖；控制字符在 §3.1 已拒绝；
 - 失败路径全部 loud：对话框（VS Code 未装）/ 日志 / `{error}` 返回，绝不静默假成功。
@@ -139,8 +140,11 @@ interface DeepLinkHandler {
 }
 ```
 
-vscode handler 为第一个实现；未来"在终端打开/浏览器打开"等深链动作只增 handler，
-核心零改动（镜像 05 §7.6 "新来源接入 = 新 provider + kind 注册"）。
+> **落地现状（2026-08 修订）**：当前 `deep-link.ts` 是**具体函数形态**
+> （`parseOpenVscodeIntent` / `buildVscodeRemoteUrl` / `runVscodeLaunch` /
+> `detectVscodeAvailability` / `validateRemotePath`），尚无通用注册表接口；
+> 上文的 handler 抽象是**设计愿景**——未来"在终端打开/浏览器打开"等深链动作
+> 扩展时再抽象 registry（镜像 05 §7.6 "新来源接入 = 新 provider + kind 注册"）。
 
 ### 4.2 生命周期接线（main.ts）
 
@@ -156,15 +160,16 @@ vscode handler 为第一个实现；未来"在终端打开/浏览器打开"等�
 
 ### 4.3 协议注册（打包门控）
 
-- **`app.isPackaged` 门控** `setAsDefaultProtocolClient('dsh-chamber')`（镜像托盘
-  先例 main.ts:258）——开发态注册会把裸 Electron 注册成 scheme handler，污染
+- **`app.isPackaged` 门控** `setAsDefaultProtocolClient('dsh-chamber')`（镜像
+  托盘创建的 isPackaged 门控先例）——开发态注册会把裸 Electron 注册成 scheme
+  handler，污染
   LaunchServices，与打包版（bundle id `com.dshchamber.desktop`）冲突；
 - 打包态：electron-builder `protocols: [{ schemes: ['dsh-chamber'] }]`（自动生成
   mac `CFBundleURLTypes` / linux desktop `MimeType` / Windows 注册表项）；
 - dev 深链测试：`electron-dev.mjs` 支持透传 argv 注入（URL 作为冷启动 argv），
   不依赖真实 OS 协议事件；
 - Windows 首版暂缓一致性：win32 门控 `setAsDefaultProtocolClient` + argv 扫描
-  （镜像 ssh 密码 askpass 门控 main.ts:1086）；`open-url` 为 mac 专属事件。
+  （镜像 ssh 密码 askpass 的平台门控语义）；`open-url` 为 mac 专属事件。
 
 ## 5. VS Code 可用性探测（默认口径，用户拍板）
 

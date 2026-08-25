@@ -44,7 +44,7 @@
 | 更新产物 | 显式关闭：`dmg.writeUpdateInfo: false`、`nsis.differentialPackage: false` | 实现前 desktop package.json `build` |
 | 发布 feed | `--publish=never`，每平台只传安装器（mac dmg / win exe）——「no zip/blockmap sidecars」 | 实现前 `.github/workflows/release.yml` |
 | 签名 | macOS **ad-hoc**（afterPack 钩子）；Windows 未签名 | `after-pack-adhoc-sign.mjs`、STATUS.md |
-| 版本 | chamber 版本分布于根/desktop/control-plane/renderer/cli 五包；4 个 chamber 插件包跟随 vendored dsh | 各 package.json |
+| 版本 | chamber 版本分布于根/desktop/control-plane/renderer/cli 五包；4 个 chamber 插件包跟随 vendored dsh（**实现前基线**；现状见 §8：12 个 `@dsh-chamber/*` 包一致 bump） | 各 package.json |
 
 ## 2. 目标与边界
 
@@ -205,18 +205,19 @@
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于 **8 包**（根/desktop/control-plane/renderer/cli/
-  dsh-host-client-graph/dsh-chamber-host-git-worktree/gateway——host-graph 与
-  host-git-worktree 是 chamber 自有宿主包，版本随 chamber 发版且经插件管理 UI
-  展示，2026-08 review 补入 §8；**计数以 release.yml 断言集为唯一权威**），发版时
-  **一致 bump**（semver 比较；`main.ts` 读 desktop package.json 的 version 并经
-  `dsh-chamber:info` 透传渲染层、注入更新控制器；release.yml 断言全部 8 包
-  与发布版本一致）。**5 个客户端插件包**（sidebar/connections/settings-bridge/
-  layout/git）**不随 chamber 发版移动**——保持各自 fork 时的版本（2026-08
-  rc.8 对齐后统一 bump 到 chamber 发版版本 0.1.3，与 8 个发版包一致；
-  vendored dsh 源为 0.1.1-rc.2——插件版本只在 chamber 侧参与 workspace
-  解析，从不与 dsh 源逐位对齐，也从不参与任何比较/展示；2026-08
-  review 澄清措辞，2026-08 最终轮扫描同步现状）。
+- chamber 版本分布于根 `dsh-chamber` + 13 个 `@dsh-chamber/*` 包（desktop/
+  control-plane/renderer/cli/dsh-host-client-graph/dsh-chamber-host-git-worktree/
+  gateway + **6 个客户端插件包** sidebar/layout/settings-connections/
+  settings-bridge/git/open-in），发版时**一致 bump**（semver 比较；`main.ts`
+  读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入
+  更新控制器）。**release.yml 断言集（8 包：根 + desktop/control-plane/
+  renderer/cli/dsh-host-client-graph/dsh-chamber-host-git-worktree/gateway——
+  2026-08 review 补入 gateway，见 `Assert version matches package.json` step）
+  为唯一硬校验权威**；发布 checklist（`docs/checklists/release-checklist.md`
+  §1）另人工核对全部 14 包 + 2 个 fork 副本（`@deepseek-ai/dsh-client-connection`
+  / `dsh-client-web` 保持上游基线版本 0.1.1-rc.2，不随 chamber 发版移动）。
+  vendored dsh 源为 0.1.1-rc.2——插件版本只在 chamber 侧参与 workspace 解析，
+  从不与 dsh 源逐位对齐，也从不参与任何比较/展示。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、`ssh-passwords.json`）
   天然保留。未来若改变注册表/状态格式 → 首启迁移（幂等、失败响亮不冒充成功）。
 - 升级不要求升级远端 dsh；与旧版本 chamber 的远端实例握手兼容（`verifyUp`）。

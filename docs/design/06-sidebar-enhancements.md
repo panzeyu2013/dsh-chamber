@@ -1,13 +1,14 @@
 # 06 · 侧边栏增强（第三轮：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道）
 
-> 本设计将 05 §9 中 1/3/5/6/7 项落地为 v1 形态；第 2 项（fork）
-> 已由官方 conversation 回合尾部分支动作（ui-conversation turn-tail
+> 本设计将 05 §9 的侧边栏相关项（已落地范围 / fork）落地为 v1 形态；
+> fork 已由官方 conversation 回合尾部分支动作（ui-conversation turn-tail
 > forkAt）覆盖（会话内），且 2026-08 起侧边栏会话行菜单也提供行内 fork
 > （wire `sessions.fork`，对齐官方 ui-workspace；两者并存，turn-tail 保留）；
-> 第 4 项（flat）维持推迟。
+> flat 单列表模式维持推迟（05 §9）。
 > 本文档 + 05 为实现契约。
 
-> **状态：已实现（2026-08）**——实现记录与验证见 `docs/progress/STATUS.md`
+> **状态：已实现（2026-08，后续增强至 2026-10）**——实现基线以 git 历史与
+> CHANGELOG 为准；剩余项见 `docs/progress/STATUS.md`。
 > （design 06 条目）；未落地项（flat）维持推迟。
 
 ## 0. 范围与来源

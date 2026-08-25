@@ -22,8 +22,9 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   and bounded proxying. Desktop gains a `gateway` transport, write-only token,
   and per-server orchestration settings. Gateway also ships a browser
   orchestration page, derived session index, approval/question handling,
-  scheduler, and a workspace-authority-bound Git worktree saga. CI/release now
-  cover build, typecheck, tests, tgz install smoke, and npm publish.
+  scheduler, and a workspace-authority-bound Git worktree saga. CI/release
+  cover build, typecheck, tests, and tgz pack+install smoke (npm publishing is
+  deferred, 2026-08).
 - **dsh runtime version management (design 18)** — installs/switches the dsh
   runtime at runtime: registry-origin binding + SRI verification + embedded pnpm
   `file:` install, probe-gated switching with a two-phase rollback/recovery loop
@@ -31,39 +32,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   `.app`); data-safety gap fixes — journal-mismatch classified as
   `selection-corrupt`, pre-rollback stash restore, and `incomplete` restores
   unblocking `recover-metadata`.
-
-### Security
-
-- Gateway rejects absolute/protocol-relative/backslash authorities, forged
-  forwarded identity, weak credentials, and anonymous external deployment
-  (anonymous external is refused by default; the `--no-auth` flag is an explicit,
-  loudly-warned operator override for trusted networks).
-  Password changes revoke old cookies across restarts, token replacement closes
-  established streams, and credentials are isolated from the renderer, logs,
-  managed dsh, and Git environments. The shared proxy now enforces a genuine
-  process-wide 300 MiB request-body budget (32 MiB per unknown/chunked request),
-  backpressure-aware lifetimes, and forwarding-header stripping. Login bodies,
-  raw dsh event frames/queues, and the derived-index buffer all have hard
-  pre-filter limits; every Gateway state document is owner-only.
-- Git compensation now preserves ambiguous commits and records recovery state:
-  repositories must be canonical main checkouts derived from live workspaces,
-  inherited `GIT_*` overrides are stripped, and create/delete revalidate live
-  authority immediately before mutation. Unverified records cannot be deleted,
-  live/symlink cwd checks fail closed, deletion never forces or removes branches,
-  and a deleting recovery row cannot remove a path reoccupied by another workspace
-  id or surviving after workspace authority disappeared. Approval/question pending
-  rows are removed only after an explicitly accepted dsh receipt. Feature flags
-  default off and are server-enforced; the scheduler bounds timers, runs
-  single-flight, backs off failures, and guards cancel/reconnect generations.
-- The release workflow binds tags to the checkout SHA and rejects untrusted-version
-  shell injection, deletion of a published release, dry-run mutations, and npm
-  channel rollback. Stable/prerelease packages use `latest`/`beta` respectively,
-  formal builds do not pin a third-party Electron mirror, and existing Gateway
-  secrets reject symlinks/non-regular files and converge to mode 0600 before read.
-
-### Added
-
-- **open-in registry (design 20)** — evolution of the VS Code deep-link
+- **Open-in registry (design 20)** — evolution of the VS Code deep-link
   (design 16) into one unified open surface: Finder / local / remote VS Code via
   the main-process OpenInApp provider registry plus a six-step loud execution
   pipeline; the plugin package is renamed `dsh-chamber-client-ui-open-in` and
@@ -73,8 +42,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   renderer edge detection over the runtime fact channel, presentation =
   main-process Electron Notification + click-to-open; settings merged into the
   general-page "Notifications" control group.
-- **Sidebar enhancements (design 06 §2.4/§3.1)** — service group folding,
-  drag-to-reorder, stable accent colors for workspace icons.
+- **Sidebar enhancements (design 06 §2.4/§3.1)** — source-level collapse
+  (source-header collapse toggle, folds the whole source workspace list) +
+  server drag ordering (display preference persisted in
+  `dsh-chamber.sidebar.v1`, live-synced across ctx) + workspace icon identity
+  coloring (hue derived from `(serverId, family seed)` hashing with stable
+  accent; worktrees share the main checkout's family hue).
 - **Lazy Electron binary bootstrap** — the root postinstall no longer downloads
   the Electron binary (~100MB) by default; it is fetched only with
   `DSH_CHAMBER_ELECTRON=1` (or auto-installed on the first `electron-dev` launch);
@@ -83,6 +56,14 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **Packaging closure** — `notifications.ts` added to electron-builder
+  `build.files` (the packaged artifact previously missed the module and would
+  fail at startup); preload compilation now emits into a temp dir and copies
+  only `preload.cjs` (three dead files no longer enter the asar);
+  `build.files` excludes `dist/.vite/**`.
+- **Dead dependency cleanup** — the control-plane's `@simplewebauthn/server`
+  (a leftover from the removed v1 auth surface) is dropped; lockfile and
+  third-party declarations synced.
 - **Gateway ESM bundle require shim** — ws's static `require('events')` hit
   "Dynamic require not supported" in the pure-ESM bundle, wedging the derived
   session index / approval streams in an endless reconnect loop with an
@@ -105,9 +86,43 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Security
 
+- Gateway rejects absolute/protocol-relative/backslash authorities, forged
+  forwarded identity, weak credentials, and anonymous external deployment
+  (anonymous external is refused by default; the `--no-auth` flag is an explicit,
+  loudly-warned operator override for trusted networks).
+  Password changes revoke old cookies across restarts, token replacement closes
+  established streams, and credentials are isolated from the renderer, logs,
+  managed dsh, and Git environments. The shared proxy enforces a real process-wide
+  300 MiB body budget (unknown/chunked 32 MiB per request), a backpressure
+  lifecycle, and forwarding-header scrubbing; login bodies, raw dsh event
+  frames/queues, and the derived index all have pre-filter hard caps, and all
+  Gateway state is owner-only.
+- Git compensation is "keep ambiguous and record recovery": only live-workspace
+  canonical main checkouts are allowed; Git children have inherited `GIT_*`
+  stripped and mutations re-verify live authority right before create/delete;
+  unverified records cannot be deleted, running/symlinked cwd fails closed,
+  deletes are non-force and never drop branches, and deleting-recovery records
+  cannot be removed after a new workspaceId takes the path or the workspace
+  vanishes; approvals/questions leave pending only on an explicit accepted dsh
+  receipt. Feature flags are off by default and enforced server-side; the
+  scheduler has timer caps, single-flight, failure backoff, and cancel/reconnect
+  generation guards.
+- The release workflow binds tags to checkout SHAs, rejects untrusted-version
+  shell injection, published-release deletion, dry-run writes, and npm channel
+  downgrades (the npm step is commented out while publishing is deferred,
+  2026-08); stable/prerelease use `latest`/`beta` channels, and official builds
+  do not pin third-party Electron mirrors. Existing Gateway secrets refuse
+  symlink/non-regular files and are chmodded to 0600 before reads.
 - notify answer/approval client-response envelope shapes verified live against
   the real dsh wire (unknown rpcId → `not-pending` receipt; failure surfaces as
   explicit 409 + pending row kept).
+
+### Changed
+
+- **Documentation closure** — `docs/progress/STATUS.md` rewritten to track only
+  incomplete/partially-complete items and scope deviations (implemented
+  baselines live in git history / CHANGELOG); AGENTS.md and design docs synced
+  (open-in package, ws-frames tests, packaging-closure checklist added).
 
 ## [0.1.5] - 2026-08-23
 
@@ -372,7 +387,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ### Added
 
 - **Desktop auto-update (design 11)** — silent update checks (startup delay +
-  6h interval), a low-key Settings「更新」section, download only after explicit
+  6h interval), a low-key Settings "Update" section, download only after explicit
   user confirmation, install on quit. Update feed shipped for both platforms
   (`latest.yml` / `latest-mac.yml`; beta channel via a semver prerelease
   version). macOS install leg reports honestly when a Developer ID signature
@@ -397,7 +412,8 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   server switches; explicit sort menu with official updated-order semantics
   (manual order + activity promotion).
 - **Host-graph visibility** — the chamber-injected host package row shows the
-  module A version and a live-effect tri-state (已生效 / 重启后生效 / 未知)
+  module A version and a live-effect tri-state (Effective / Effective after
+  restart / Unknown)
   probed over the tunnel RPC.
 - **Boot hardening** — union-table completion for covered packages,
   chamber-level failure overlay (report + retry + server switching),
@@ -484,6 +500,8 @@ Initial release — local desktop connection manager for dsh:
 
 v1 scope: no authentication/audit surface (loopback-only control plane).
 
+[0.1.5]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.5
+[0.1.4]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.4
 [0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1

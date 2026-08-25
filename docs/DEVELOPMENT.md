@@ -57,6 +57,7 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 | `packages/dsh-chamber-client-ui-open-in` | open-in 打开注册表（design 20）：Finder/VS Code 统一打开面 |
 | `packages/dsh-host-client-graph` | 宿主侧包：经 Typert Remote 只读暴露实例的客户端插件 boot 图 |
 | `packages/dsh-chamber-client-ui-git` | chamber 内建 Git worktree 客户端：sidebar 座位、每实例拓扑、创建/删除 saga；不直接执行 Git |
+| `packages/dsh-chamber-client-ui-open-in` | chamber 内建 open-in 客户端插件：会话头部 utilities 槽打开按钮（本地 Finder + 本地/远程 VS Code，主进程 OpenInApp 注册表 + `dsh-chamber://` 深链） |
 | `packages/dsh-chamber-host-git-worktree` | 实例内 host 包：按 workspace/agent 权威校验并执行受限、本地-only Git worktree 生命周期 |
 
 ## 2. 环境搭建
@@ -154,12 +155,16 @@ packages/
   dsh-host-client-graph/    自研宿主侧 host 包（只读暴露客户端插件 boot 图）
   dsh-chamber-client-ui-git/
                             Git worktree 客户端（sidebar + coordinator + saga）
+  dsh-chamber-client-ui-open-in/
+                            open-in 客户端插件（会话头部 Finder/VS Code 打开）
   dsh-chamber-host-git-worktree/
                             实例内 Git worktree host Remote（权威校验 + 受限 Git）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
-  todo/                     未实现功能想法（每条一个文件，见 todo/README.md）
-  progress/                 STATUS.md——唯一进度总览
+  todo/                     未实现功能想法（每条一个文件；已实现的历史设计记录
+                            保留于此，见 todo/README.md）
+  progress/                 STATUS.md——唯一进度总览（只记未完成/部分完成项）
+  checklists/               操作清单（发布 / dsh 升级 / 打包完整性）
   *.en-US.md                各根文档的英文镜像
 vendor/
   harness-packages/         @deepseek-ai/* 符号链接树，指向 dsh 源码
@@ -203,3 +208,4 @@ vendor/
 | [docs/progress/STATUS.md](progress/STATUS.md) | 进度总览（唯一进度记录） |
 | [docs/checklists/release-checklist.md](checklists/release-checklist.md) | 发布前 Checklist（版本/changelog/测试/构建/tag/CI） |
 | [docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md) | dsh 版本更新前 Checklist（pin 一致性/fork rebase/锁文件/回归） |
+| [docs/checklists/packaging-closure-checklist.md](checklists/packaging-closure-checklist.md) | 打包完整性 Checklist（模块闭包 vs build.files、构建链产物、打包态冒烟） |

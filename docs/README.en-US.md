@@ -12,7 +12,7 @@
 *Main user interface — a single window with the dsh-native sidebar listing every source's sessions/workspaces, and the pure-dsh shell of the active instance.*
 
 > [!WARNING]
-> **Developer preview (v0.1)** — the protocol and API are iterating rapidly; expect breaking changes.
+> **Developer preview (v0.1.x)** — the protocol and API are iterating rapidly; expect breaking changes.
 
 > 中文版: [README.md](../README.md) · Development: [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md) · Design entry: [design/01-overview.md](design/01-overview.md) · Progress: [progress/STATUS.md](progress/STATUS.md)
 
@@ -46,7 +46,7 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Sidebar collapse / drag / accent colors** — source-level collapse toggles fold the whole source's workspace list; server groups can be drag-sorted (persisted across instances); sources/workspaces carry soft accent color bars (Design 06 §2.4/§3.1)
 - **Git worktree lifecycle** — a bundled, independent chamber plugin shows per-instance repository topology in the sidebar and closes the worktree → workspace → session create flow; deletion is a retryable Git-first transaction that hard-blocks main/locked/running targets, force-removes a dirty target only after the dialog's explicit "discard uncommitted changes" consent (branches and commits stay untouched), and may also delete the local branch from the dialog
 - **Multiple instances in parallel (N-ctx)** — several dsh shells coexist in one window; switch the active instance at any time
-- **Open-in registry** — one unified open surface in the session header: reveal directories in Finder/file manager for local sources, and launch VS Code for local (`vscode://file/`) or remote (Remote-SSH) sources; availability is probed live and failures are loud (Design 20)
+- **Open-in registry** — one unified open surface in the session header: reveal directories in Finder/file manager for local sources, and launch VS Code for local (`vscode://file/`) or remote (Remote-SSH, `dsh-chamber://` OS deep link; requires a local VS Code install); availability is probed live and failures are loud (Design 20)
 - **Desktop notifications** — native notifications when a session completes or asks/requests approval; clicking opens the session; toggle per the Settings "Notifications" group (Design 19)
 - **Desktop updates** — silent version checks, a low-key Settings "Update" section, download only after confirmation, install on quit
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle

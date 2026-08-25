@@ -80,13 +80,14 @@
 ### 2.2 端口占用重试（port+1）：固定端口 + 确定性退让
 
 web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定起始端口
-（本地默认如 17501；`POST /api/connections` 幂等启动可显式指定）后：
+（本地默认如 17510；端口不可在 `POST /api/connections` 中显式指定——body
+仅收 kind/label/accentColor，见 04 §3）后：
 
 ```
 尝试端口 P：
   spawn 后就绪探测（TCP + host.describe，§3.2）成功 → 使用 P
   TCP 通但 host.describe 失败 → 端口被无关服务占用（协议不匹配）→ 杀子进程，
-    按 P+1 重试（至多 N 次，如 10 次）→ 全部失败 → 显式报错（含启动输出）
+    按 P+1 重试（至多 N 次，如 5 次——MAX_SPAWN_ATTEMPTS）→ 全部失败 → 显式报错（含启动输出）
   spawn 立即退出 / 启动超时 → 启动失败（fail-loud，附诊断）
 每次重试必须同时更新 --port 与 --trusted-host（两者恒一致：127.0.0.1:<P>）
 ```
@@ -105,7 +106,7 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
 | 参考实现（被管 agent） | 本设计（dsh web profile 宿主） |
 |---|---|
 | 命令行含 `--port N`，可直接查命令串 | 命令行含 `--profile web --port N`，端口匹配可查命令串 + `lsof -i :port` 监听者 pid |
-| 注册表 `<参考实现状态目录>/managed-agent/<pid>.json` | `$XDG_STATE_HOME/dsh-chamber/managed-dsh/<pid>.json` |
+| 注册表 `<参考实现状态目录>/managed-agent/<pid>.json` | `<stateDir>/managed-dsh/<pid>.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写，§3.3） |
 | 记录 `{pid, ownerPid, port, binary, runtime, startedAt}` | 记录 `{pid, ownerPid, ownerInstanceId, port, binary, profile, source, startedAt}`（profile 固定 `'web'`，§3.3） |
 
 每进程一个 JSON 文件（按 pid 命名，每个实例只写/删自己的文件，零写竞争），
@@ -196,8 +197,9 @@ dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
     symbol"），而 `--expose-internals` 的官方 require 路径可用；
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm）→ 最终退回裸名 `node`（保留历史行为，仅作诊断兜底）。
-- **cwd 决策**：以配置的默认工作根（缺省 `$HOME`）为 cwd spawn——模型侧
-  文件面落在可预期位置；会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
+- **cwd 决策**：以 `dshWorkspacePath`（= 桌面打包态 `vendor/dsh` 或开发态
+  `ref-dsh` 检出根）为 cwd spawn——spawn 的 dsh 以该工作根解析自身入口；
+  会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
 - **环境固定**（确定性 + 隐私）：`DSH_TELEMETRY_DISABLED=1`（任意非空值
   即禁用）；`DSH_PERMISSION_MODE=workspace-write`（显式固定默认）；
   `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0`（目录选择交互 pin：宿主
@@ -214,16 +216,17 @@ dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
   浏览器/系统语言；仅缺文件时写，用户显式选择（settings 页或手改文件）
   永不被覆盖。
 - **日志**：stdout/stderr 管道接入控制面 host-logs 滚动日志（§3.8），同时
-  是启动诊断与就绪失败的证据（`lastSpawnDiagnostics` 式结构：binary、args、
-  cwd、env 键数、PATH 项数）。
+  是启动诊断与就绪失败的证据（host-logs 登记 spawn 诊断字段：binary、args、
+  cwd、env 键数、PATH 项数——设计文档曾称 `lastSpawnDiagnostics` 结构，
+  spawn-dsh 现以注册表字段形式承载，非独立结构化对象）。
 
 ### 3.2 就绪探测与端口占用判定（TCP + host.describe）
 
 ```
-starting ──① TCP connect 127.0.0.1:P（300ms 间隔轮询，15s 超时）
+starting ──① TCP connect 127.0.0.1:P（250ms 间隔轮询，总窗口 90s = LISTEN_WAIT_MS）
               └─ 失败/超时 → 若子进程已退出：启动失败；否则继续轮询
-          ──② host.describe unary（5s 超时）→ 成功 = ready
-              └─ 失败（非 JSON / 非 200 / 契约不匹配）→ 重试（400ms 间隔，≤2 次）
+          ──② host.describe unary（每轮 500ms 超时，90s 窗口内无限重试）→ 成功 = ready
+              └─ 失败（非 JSON / 非 200 / 契约不匹配）→ 重试
                  —— TCP 通但 describe 失败 = 端口被无关服务占用（协议不匹配），
                     杀子进程 → 按 §2.2 以 P+1 重试
 ready
@@ -238,15 +241,15 @@ ready
 
 ### 3.3 进程记录文件（managed-dsh/<pid>.json）
 
-目录：`$XDG_STATE_HOME/dsh-chamber/managed-dsh/`（`XDG_STATE_HOME` 缺省
-`~/.local/state`；测试/部署可用环境变量覆写）。
+目录：`<stateDir>/managed-dsh/`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE`
+可覆写；04 §6）。
 
 ```json
 {
   "pid": 31415,
   "ownerPid": 27182,
   "ownerInstanceId": "3f2b…-uuid",
-  "port": 17501,
+  "port": 17510,
   "binary": "/opt/deepseek/dsh/bin/dsh",
   "profile": "web",
   "source": "spawn",
@@ -312,7 +315,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 | 通道 | 触发 | 实现 |
 |---|---|---|
 | 周期 | 定时器（缺省 10s，可配） | `host.describe` unary，5s 超时 |
-| 传输触发 | 反代侧连接异常（WS 握手失败、连续 5xx） | 同一 `runHealthCheckCycle('transport')` |
+| 传输触发 | （设计预留；反代侧连接异常触发健康检查**未实现**——`InstanceProxyDeps` 无健康回调，当前仅周期通道驱动） | — |
 
 - 单飞行探测：并发触发共享一个 in-flight promise；结果带 750ms 缓存；
 - 计频节流：两次计数至少间隔一个窗口 W（= 周期间隔，缺省 15s）；
@@ -328,7 +331,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 2. 终止：进程组 SIGTERM（dsh profile-boot 对 SIGTERM 优雅退出，exit 0）
    → 1s 未退 → SIGKILL；确认退出后才 unregisterManagedProcess
 3. 端口释放等待：固定端口场景下新宿主仍用同端口——旧进程死透才能复用
-   （5s 超时，150ms 轮询）
+   （实现：无独立等待轮询——spawn 侧端口预检 + P+1 退让覆盖占用窗口，§2.2）
 4. respawn（§3.1，同端口 P；若端口仍被占走 §2.2 的 P+1 路径）
    → 新 pid.json → 就绪探测（§3.2）
 5. 计数清零；失败 → 指数退避（1s→60s，jitter）
@@ -349,8 +352,8 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 ### 3.8 host-logs 滚动日志
 
 - 宿主 stdout/stderr 行写入控制面**滚动缓冲**（RING_BUFFER，如 500 行 /
-  按字节上限），同时保留 `lastSpawnDiagnostics` 结构（binary/args/cwd/env
-  键数/PATH 项数）供启动失败诊断；
+  按字节上限），启动诊断字段（binary/args/cwd/env 键数/PATH 项数）随
+  注册表进程记录登记（host-logs 以注册表字段承载，见 §3.1 日志条）；
 - 读取面：`GET /api/host/logs`（04 §3.3，local-only）——桌面
   chamber-settings 插件展示"本地实例日志"；远程实例日志经
   `desktop_ssh_logs` IPC（03 §2.2）；
@@ -453,27 +456,46 @@ WantedBy=multi-user.target
 
 ## 5. 边界与未决问题
 
-1. **Windows 路径退化**：`detached` 语义、进程组信号、`lsof` 均不可用——
-   Windows 上退化为：reaper 仅"owner 死亡 + tasklist 镜像名"判定、终止走
-   `taskkill /T` 序列。是否支持 Windows 首版存疑，先以 Unix 为契约目标。
-2. **起始端口选择**：本地默认起始端口（17501）与控制面端口（17500）相邻；
-   是否可配 / 每实例偏移未定——先以"固定起始端口 + P+1 重试 + 记录仲裁"落地。
-3. **trusted-host 与反代 Host 头**：`--trusted-host 127.0.0.1:<port>` 对应
-   反代转发时的 Host 头（转发保持实例自身 host:port，不改写）；若未来引入
-   自定义 Host 场景需同步扩展 trusted-host 集（05 §7.5 固定形态）。
-4. **restart-exhausted 后的恢复策略**：重试入口与计数重置见 §3.6（连接 API
-   幂等启动或桌面设置页操作；一次成功就绪即清零）。
-5. **host-logs 容量**：RING_BUFFER 行数/字节上限取桌面场景经验值（如
-   500 行），滚动丢弃；长期留存/导出不在范围。
-6. **`$DSH_HOME` 与多用户冲突**：宿主 `DSH_HOME` 固定为
-   `<stateDir>/dsh-home`（§3.1），多控制面实例共享同一 stateDir 时才
-   共享该 home——会话 JSONL 追加式多写安全，settings 为 last-writer-wins
-   文档由 dsh `settings-conflict` 仲裁；不同 stateDir 的实例互不相干。
-   **服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**（2026-08 重审）：
-   远程实例以单元运行账号的身份直启 dsh，home 即该账号自己的 `~/.dsh`——
-   dsh 本就是「一账号一 home、多 profile 共存」的模型
-   （`$DSH_HOME/profiles/<name>`），web profile 与同账号其他 profile
-   共享 home 是上游支持的常态（settings 仲裁同前）。独立 home 的诉求
-   只存在于控制面托管宿主（stateDir 生命周期/可移植性，§3.1），不适用于
-   systemd 直启形态；若确有「同账号多 profile 必须互不共享配置」的罕见
-   诉求，仍可显式 `Environment=DSH_HOME=...` 隔离。
+> 各条目以 5.x 编号供外部引用（STATUS「设计未决」按此引用）。
+
+### 5.1 Windows 路径退化
+
+`detached` 语义、进程组信号、`lsof` 均不可用——
+Windows 上退化为：reaper 仅"owner 死亡 + tasklist 镜像名"判定、终止走
+`taskkill /T` 序列。是否支持 Windows 首版存疑，先以 Unix 为契约目标。
+
+### 5.2 起始端口选择
+
+本地默认起始端口（17510）与控制面端口（17500）相邻；
+是否可配 / 每实例偏移未定——先以"固定起始端口 + P+1 重试 + 记录仲裁"落地。
+
+### 5.3 trusted-host 与反代 Host 头
+
+`--trusted-host 127.0.0.1:<port>` 对应
+反代转发时的 Host 头（转发保持实例自身 host:port，不改写）；若未来引入
+自定义 Host 场景需同步扩展 trusted-host 集（05 §7.5 固定形态）。
+
+### 5.4 restart-exhausted 后的恢复策略
+
+重试入口与计数重置见 §3.6（连接 API
+幂等启动或桌面设置页操作；一次成功就绪即清零）。
+
+### 5.5 host-logs 容量
+
+RING_BUFFER 行数/字节上限取桌面场景经验值（如
+500 行），滚动丢弃；长期留存/导出不在范围。
+
+### 5.6 `$DSH_HOME` 与多用户冲突
+
+宿主 `DSH_HOME` 固定为
+`<stateDir>/dsh-home`（§3.1），多控制面实例共享同一 stateDir 时才
+共享该 home——会话 JSONL 追加式多写安全，settings 为 last-writer-wins
+文档由 dsh `settings-conflict` 仲裁；不同 stateDir 的实例互不相干。
+**服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**（2026-08 重审）：
+远程实例以单元运行账号的身份直启 dsh，home 即该账号自己的 `~/.dsh`——
+dsh 本就是「一账号一 home、多 profile 共存」的模型
+（`$DSH_HOME/profiles/<name>`），web profile 与同账号其他 profile
+共享 home 是上游支持的常态（settings 仲裁同前）。独立 home 的诉求
+只存在于控制面托管宿主（stateDir 生命周期/可移植性，§3.1），不适用于
+systemd 直启形态；若确有「同账号多 profile 必须互不共享配置」的罕见
+诉求，仍可显式 `Environment=DSH_HOME=...` 隔离。

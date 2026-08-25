@@ -1,4 +1,4 @@
-# 发布前 Checklist（v0.1.4 起沉淀）
+# 发布前 Checklist（v0.1.5 起沉淀）
 
 > 面向发布者：按序执行，任何 ❌ 都阻断发布。依据：`.github/workflows/release.yml`、
 > `docs/DEVELOPMENT.md` §5、AGENTS.md 验证清单。命令前先
@@ -6,13 +6,14 @@
 
 ## 0. 版本与内容确认
 
-- [ ] 目标版本号（如 `0.1.4`）已确定；changelog 无 `[Unreleased]` 待收尾条目。
+- [ ] 目标版本号（如 `0.1.6`）已确定；changelog 无 `[Unreleased]` 待收尾条目。
 - [ ] 发布内容（功能/迁移/修复）已全部合入 `main` 且本地无未提交改动。
 
 ## 1. 版本断言（release.yml create-release 会硬校验）
 
-- [ ] 根 `package.json` + 全部 11 个 `@dsh-chamber/*` 包 version = 目标版本
-      （`grep -m1 '"version"' package.json packages/*/package.json`）。
+- [ ] 根 `package.json` + 全部 12 个 `@dsh-chamber/*` 包 version = 目标版本
+      （`grep -m1 '"version"' package.json packages/*/package.json`；
+      release.yml 硬断言其中 7 个发版包，本步覆盖全部）。
 - [ ] fork 副本例外：`@deepseek-ai/dsh-client-connection` / `dsh-client-web`
       版本 = 上游基线版本（如 `0.1.1-rc.2`），**不随发布版本**。
 
@@ -22,14 +23,14 @@
       （release.yml 提取为发布正文，缺失即失败）；中英条目对等。
 - [ ] 版本节结构完整（`### 新增/修复/变更` 或 `### Added/Fixed/Changed`），
       无重复版本标题。
-- [ ] `node scripts/verify-i18n.mjs` → 4 对全部 `consistent`（改过 README/
-      DEVELOPMENT/CONTRIBUTING/CHANGELOG 任意文本后须
+- [ ] `node scripts/verify-i18n.mjs` → 5 对全部 `consistent`（改过 README/
+      DEVELOPMENT/CONTRIBUTING/CHANGELOG/THIRD_PARTY_NOTICES 任意文本后须
       `node scripts/verify-i18n.mjs --write` 刷新）。
 
 ## 3. 测试与类型检查（AGENTS.md 清单）
 
-- [ ] 控制面 8 套：`node packages/control-plane/test/{protocol,storage,m1-dsh-client,host-logs,manager-api,instance-proxy,static-serving,host-graph-seed}.ts`
-- [ ] `pnpm run test:desktop`（transport/ssh 等；已知偶发事件循环 flake，失败重跑即可）
+- [ ] 控制面 9 套：`node packages/control-plane/test/{protocol,storage,m1-dsh-client,host-logs,manager-api,instance-proxy,ws-frames,static-serving,host-graph-seed}.ts`
+- [ ] `pnpm run test:desktop`（transport/ssh/config/trust/plugin-sync/settings/notifications/deep-link/open-in；已知偶发事件循环 flake，失败重跑即可）
 - [ ] `pnpm run test:renderer-shell`、`test:git`、`test:host-git`、`test:sidebar`、
       `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`
 - [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/host-graph/host-git/gateway`
@@ -38,6 +39,9 @@
 
 - [ ] `pnpm install --frozen-lockfile` 通过（锁文件含 vendor importer 记录）。
 - [ ] `pnpm run build:renderer`、`pnpm run build:host-packages`、`pnpm run build:desktop` 通过。
+- [ ] **打包完整性自检**（`docs/checklists/packaging-closure-checklist.md` §1–§2）：
+      main.ts 传递 import 闭包 ⊆ `build.files`；构建链产物齐全
+      （dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。
 - [ ] **本地不做打包/签名/公证**（2026-08 决策）：安装包/更新源由 release.yml 的
       build-macos / build-windows 在 CI 生成，发布者本机无需 hdiutil/密钥。
 - [ ] `pnpm run smoke` 通过（dsh 已封装时真跑；未安装时 SKIP 属正常）。

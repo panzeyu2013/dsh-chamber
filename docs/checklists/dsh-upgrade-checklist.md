@@ -65,7 +65,7 @@
 
 ## 6. 回归（迁移相关全量）
 
-- [ ] 测试：控制面 8 套 + `test:desktop` + `test:gateway` + `test:cli` +
+- [ ] 测试：控制面 9 套（含 ws-frames.ts）+ `test:desktop` + `test:gateway` + `test:cli` +
       `test:renderer-shell` + `test:git` +
       `test:host-git` + `test:sidebar` + `test:settings-bridge` + `test:connections` +
       `test:client-web` + `test:connection`。

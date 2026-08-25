@@ -20,46 +20,34 @@
   `@dsh-chamber/gateway`：托管 loopback dsh，经统一 HTTP/WS Host/Origin、强认证与
   有界反代暴露官方前端/API；Desktop 新增 `gateway` transport、write-only token 和按
   server 编排设置；Gateway 自带浏览器编排页、派生会话索引、审批/提问、schedule 与
-  受 workspace 权威约束的 Git worktree saga。CI/release 已覆盖 build、typecheck、测试、
-  tgz 安装冒烟和 npm publish。
+  受 workspace 权威约束的 Git worktree saga。CI/release 已覆盖 build、typecheck、测试
+  与 tgz 打包安装冒烟（npm 发布暂缓，2026-08）。
 - **dsh 运行时版本管理（设计 18）** —— 运行期安装/切换 dsh 运行时：registry origin
   绑定 + SRI 校验 + 内嵌 pnpm `file:` 安装，探针门控切换与两阶段回滚/恢复闭环
   （M0/M2/M4 done，M1/M3 partial：打包态实机验收待真实 `.app`）；数据安全缺口修复
   ——journal-mismatch 归入 `selection-corrupt`、pre-rollback stash 恢复、
   `incomplete` 恢复放行 `recover-metadata`。
-
-### 安全
-
-- Gateway 拒绝 absolute/protocol-relative/backslash authority、伪造 forwarded identity、
-  弱凭据和匿名外部部署（匿名外部默认拒绝；`--no-auth` 是显式、带醒目告警的可信网络运维覆盖）；密码改变跨重启撤销旧 cookie，token 更新会关闭已建立流，凭据从
-  renderer/日志/managed dsh/Git 环境隔离。共享 proxy 采用真正的全进程 300 MiB 请求体预算
-  （未知/chunked 单请求 32 MiB）、backpressure 生命周期与 forwarding-header 清洗；登录 body、
-  dsh event 原始帧/队列和派生索引均有过滤前硬上限，Gateway state 全部 owner-only。
-- Git 补偿改为“歧义即保留并记录 recovery”：只允许 live workspace 派生的 canonical
-  主 checkout；Git 子进程清空继承的 `GIT_*`，create/delete 紧邻 mutation 二次验证 live
-  权威；unverified 记录不可删除，运行中/符号链接 cwd fail-closed，删除不 force、不删分支，
-  不允许 deleting 恢复记录删除被新 workspaceId 重占或在 workspace 消失后残存的路径；审批/提问只有 dsh
-  receipt 明确 accepted 才从 pending 移除。Feature flags 默认关闭并在服务端执行；scheduler
-  具备 timer 上限、single-flight、失败退避和取消/重连代际保护。
-- Release workflow 绑定 tag/checkout SHA，拒绝不可信版本 shell 注入、删除已发布 release、dry-run
-  写入与 npm channel 回退；稳定版/预发布分别使用 `latest`/`beta`，正式构建不固定第三方 Electron
-  mirror。已有 Gateway secret 读取前拒绝 symlink/非普通文件并收敛至 0600。
-
-### 新增
-
 - **open-in 打开注册表（设计 20）** —— 原 VS Code 深链（设计 16）演进为统一打开面：
   Finder/本地/远程 VS Code 经主进程 OpenInApp provider 注册表 + 六步 loud 执行管线打开；
   插件包重命名为 `dsh-chamber-client-ui-open-in`，旧 vscode IPC 收敛删除。
 - **桌面通知（设计 19）** —— 会话完成/代理提问/审批请求推送原生通知（设置可选项）；
   检测 = renderer 复用运行时事实通道边沿检测，呈现 = 主进程 Electron Notification +
   点击打开会话；设置并入通用页「通知」控制组。
-- **侧边栏增强（design 06 §2.4/§3.1）** —— 服务分组折叠、拖拽排序、工作区图标稳定强调色。
+- **侧边栏增强（design 06 §2.4/§3.1）** —— 来源级收拢（来源头折叠开关，收拢整来源
+  workspace 列表）+ server 拖拽排序（显示偏好，持久化于 `dsh-chamber.sidebar.v1`，
+  跨 ctx 实时联动）+ workspace 图标按身份着色（色相按 `(serverId, 家族种子)` 哈希派生
+  稳定 accent，worktree 与主检出共享家族色）。
 - **Electron 二进制惰性安装** —— 根 postinstall 默认不再下载 Electron 二进制（约 100MB）；
   仅 `DSH_CHAMBER_ELECTRON=1`（或 `electron-dev` 首启自动补装）时下载；server 部署
   （gateway/control-plane/CLI）安装不再携带桌面依赖。
 
 ### 修复
 
+- **打包完整性** —— `notifications.ts` 补入 electron-builder `build.files`
+  （此前打包产物缺该模块会启动失败）；preload 编译改为临时目录 emit 只搬入
+  `preload.cjs`（消除 3 个死文件进 asar）；`build.files` 排除 `dist/.vite/**`。
+- **死依赖清理** —— 移除控制面 `@simplewebauthn/server`（v1 认证面移除后的
+  残留），锁文件与第三方声明同步。
 - **Gateway ESM bundle require shim** —— ws 静态 `require('events')` 在纯 ESM 产物中触发
   "Dynamic require not supported"，派生会话索引/审批流无限重连、`/chamber/sessions` 恒空
   （Linux + macOS 实机发现）；build.mjs banner 注入 `createRequire` 修复，构建冒烟测试锁定。
@@ -75,8 +63,29 @@
 
 ### 安全
 
+- Gateway 拒绝 absolute/protocol-relative/backslash authority、伪造 forwarded identity、
+  弱凭据和匿名外部部署（匿名外部默认拒绝；`--no-auth` 是显式、带醒目告警的可信网络运维覆盖）；密码改变跨重启撤销旧 cookie，token 更新会关闭已建立流，凭据从
+  renderer/日志/managed dsh/Git 环境隔离。共享 proxy 采用真正的全进程 300 MiB 请求体预算
+  （未知/chunked 单请求 32 MiB）、backpressure 生命周期与 forwarding-header 清洗；登录 body、
+  dsh event 原始帧/队列和派生索引均有过滤前硬上限，Gateway state 全部 owner-only。
+- Git 补偿改为“歧义即保留并记录 recovery”：只允许 live workspace 派生的 canonical
+  主 checkout；Git 子进程清空继承的 `GIT_*`，create/delete 紧邻 mutation 二次验证 live
+  权威；unverified 记录不可删除，运行中/符号链接 cwd fail-closed，删除不 force、不删分支，
+  不允许 deleting 恢复记录删除被新 workspaceId 重占或在 workspace 消失后残存的路径；审批/提问只有 dsh
+  receipt 明确 accepted 才从 pending 移除。Feature flags 默认关闭并在服务端执行；scheduler
+  具备 timer 上限、single-flight、失败退避和取消/重连代际保护。
+- Release workflow 绑定 tag/checkout SHA，拒绝不可信版本 shell 注入、删除已发布 release、dry-run
+  写入与 npm channel 回退（npm 发布暂缓期间该步骤已注释，恢复时启用）；稳定版/预发布分别使用
+  `latest`/`beta`，正式构建不固定第三方 Electron mirror。已有 Gateway secret 读取前拒绝
+  symlink/非普通文件并收敛至 0600。
 - notify answer/approval 的 client-response 信封形状实机验证（未知 rpcId → `not-pending`
   回执，失败形态显式 409 + pending 保留）。
+
+### 变更
+
+- **文档收口** —— `docs/progress/STATUS.md` 重写为只记录未完成/部分完成项与
+  范围偏差（已实现基线以 git 历史与 CHANGELOG 为准）；AGENTS.md 与设计文档
+  同步（open-in 包、ws-frames 测试、打包完整性 checklist 新增）。
 
 ## [0.1.5] - 2026-08-23
 
@@ -332,6 +341,8 @@
 
 v1 范围：无认证/审计面（仅 loopback 控制面）。
 
+[0.1.5]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.5
+[0.1.4]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.4
 [0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1

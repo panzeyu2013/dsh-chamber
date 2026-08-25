@@ -47,22 +47,27 @@
 
 ### 2.1 本地实例：控制面 catalog 单行（connectionId 'local'）
 
-文件：`$XDG_STATE_HOME/dsh-chamber/connections.json`（04 §6）：
+文件：`<stateDir>/catalog.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE`
+可覆写；04 §6）：
 
 ```jsonc
 {
-  "schemaVersion": 1,
-  "connection": {
-    "id": "local",
-    "label": "Local dsh",
-    "accentColor": "#1a1a2e",
-    "status": "ready",            // PlaneHandle.connectionState 投影（05 §7.3）
-    "dshPort": 17501              // 实际监听端口（就绪后写入）
-  }
+  "schemaVersion": 2,          // CATALOG_SCHEMA_VERSION
+  "revision": 7,               // 每次持久化递增（原子写协议，§2.1 末）
+  "connections": [
+    {
+      "connectionId": "local",
+      "kind": "local",
+      "status": "ready",        // PlaneHandle.connectionState 投影（05 §7.3）
+      "dshPort": 17510,         // 实际监听端口（就绪后写入）
+      "label": "Local dsh",
+      "accentColor": "#1a1a2e"
+    }
+  ]
 }
 ```
 
-- **单行固定**：`local` 恒存在（不可删除；DELETE = 停止实例，§2.1.2）；
+- **单行固定**：`local` 恒存在（不可删除；DELETE = 停止实例，§2.1.1）；
   无 kind 分支、无 projects 子表——"本地实例"就是唯一一行。
 - **status / dshPort 是投影**：status 派生自 PlaneHandle（02 §3.5 七态），
   `dshPort` 在就绪后写入；控制面在文件里只持久化 `label / accentColor`
@@ -212,6 +217,11 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   计时会在 host 已提交后截断慢速 `git worktree remove` 为 504，见设计 08
   §6 修订与 STATUS），既阻止停滞流，也不误杀持续有进展的大响应；SSE/已
   升级 WS 保持长连接语义。
+- **代理 WS 心跳（仅下游浏览器腿）**：splice 建立后向浏览器周期发免掩码
+  ping（`WS_PING_INTERVAL_MS=30s`、`WS_PING_MISSES_BEFORE_TEARDOWN=1`，
+  与 `ws` README 官方心跳示例对齐）；PongScanner 被动扫描、不消费字节；
+  上游（宿主）腿刻意无心跳（活性由 SSH keepalive / socket error 覆盖）——
+  契约与参数见 14-sleep-background.md D4 扩展与 `ws-frames.ts`/`ws-heartbeat.ts`。
 - 写路径背压（Node 双流适配，`res.write === false → waitForDrain`）；
   浏览器断连 → abort 上游（不泄漏 socket / 流资源）。
 
