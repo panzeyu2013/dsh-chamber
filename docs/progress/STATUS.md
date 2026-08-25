@@ -25,6 +25,10 @@
   VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径、Finder 下拉在
   vendor 头部的定位/层叠、远程来源仅 vscode。契约见
   `docs/design/16-vscode-deeplink.md` / `docs/design/17-open-in-registry.md`。
+  （2026-09 打磨：下拉行改为 图标 + 短应用名，OpenChamber OpenInAppButton
+  样式；Finder 使用系统 Finder 图标（darwin，finder-icon.png），非 darwin
+  保留中性文件夹标记；按钮组 hover 一体化 + 图标圆角微调；主按钮
+  tooltip/aria-label 长句文案不变，无契约变化。）
 - **Git Worktree 插件（设计 08，v1 已落地）**：M4 尚余真实远程 Linux +
   Git 仓库的端到端验收（含首次 ready-time seed 后重启生效、Git LFS/filter
   提示边界）。契约见 `docs/design/08-git-worktree-plugin.md`。

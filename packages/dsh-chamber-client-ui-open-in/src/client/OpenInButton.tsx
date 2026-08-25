@@ -11,10 +11,11 @@
  * The button opens the current session's workspace in an installed app,
  * chosen per source: LOCAL sources (sourceId === 'local') can open in any
  * reported app (Finder + VS Code on a typical mac) — ≥2 apps render the main
- * icon button (default = VS Code when present) plus a chevron dropdown;
- * REMOTE sources (ssh-<id>) only get remote-capable apps (VS Code) — exactly
- * one app renders the plain icon button, behavior unchanged from the VS
- * Code-only days.
+ * icon button (default = VS Code when present) plus a chevron dropdown whose
+ * rows show each app's own mark + short name (OpenChamber OpenInAppButton
+ * style, 2026-09); REMOTE sources (ssh-<id>) only get remote-capable apps
+ * (VS Code) — exactly one app renders the plain icon button, behavior
+ * unchanged from the VS Code-only days.
  *
  * Three gates (design 16 §6.3), ANY failure → render null (never a dead
  * button):
@@ -32,12 +33,15 @@
  * Marks: the VS Code mark is the ACTUAL product icon extracted from the
  * installed VS Code app (`vscode-icon.png`, Code.icns → 32px @2x), replacing
  * the original hand-drawn older-logo SVG path — nominative reference (design
- * 16 §6), so the button always matches the user's installed icon. Finder (and
- * Explorer / file managers) get a neutral inline folder outline in design
- * tokens.
+ * 16 §6), so the button always matches the user's installed icon. Finder
+ * (macOS only) uses the real Finder product icon (`finder-icon.png`, system
+ * Finder.icns → 32px @2x, pixel-identical to OpenChamber's embedded Finder
+ * mark, OpenChamber OpenInAppButton style); Explorer / file managers keep the
+ * neutral inline folder outline in design tokens.
  */
 import { useEffect, useState } from 'react'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import finderIcon from './finder-icon.png'
 import vscodeIcon from './vscode-icon.png'
 import {
   bridgePlatform,
@@ -83,8 +87,17 @@ function VscodeMark() {
   return <img src={vscodeIcon} alt="" draggable={false} />
 }
 
+/** The macOS Finder product icon (32px @2x raster extracted from the system
+ *  Finder.icns, pixel-identical to OpenChamber's embedded Finder mark). Apple
+ *  trademark — nominative reference for a row/button whose only function is
+ *  "open in Finder" (design 16 §6 precedent); implies no endorsement. */
+function FinderMark() {
+  return <img src={finderIcon} alt="" draggable={false} />
+}
+
 /** Neutral folder outline (20×20), tinted with the design token label color —
- *  the platform-neutral mark for Finder / Explorer / file managers. */
+ *  the platform-neutral mark for Explorer / file managers (and Finder on
+ *  non-macOS). */
 function FolderMark() {
   return (
     <svg
@@ -106,6 +119,14 @@ function FolderMark() {
   )
 }
 
+/** The file-manager mark for the current platform: the real Finder icon on
+ *  macOS (OpenChamber OpenInAppButton style), the neutral folder outline
+ *  elsewhere — Explorer / file managers get a platform-neutral mark in design
+ *  tokens. */
+function fileManagerMark(platform: string | null) {
+  return platform === 'darwin' ? <FinderMark /> : <FolderMark />
+}
+
 /** Platform-appropriate wording for the "file manager" app: Finder on macOS,
  *  Explorer on Windows, generic file manager elsewhere. */
 function finderLabel(t: Translate, platform: string | null): string {
@@ -114,10 +135,24 @@ function finderLabel(t: Translate, platform: string | null): string {
   return t('titleFileManager')
 }
 
-/** Per-app title used for both the button tooltip/aria-label and the dropdown
- *  row label. */
+/** Full per-app title for the main button tooltip/aria-label ("open current
+ *  workspace in …"); the dropdown rows use the short `appName` instead. */
 function appLabel(app: OpenInApp, t: Translate, platform: string | null): string {
   return app.id === 'vscode' ? t('titleVscode') : finderLabel(t, platform)
+}
+
+/** Short display name for the finder-family app (dropdown row wording). */
+function finderName(t: Translate, platform: string | null): string {
+  if (platform === 'darwin') return t('appFinder')
+  if (platform === 'win32') return t('appExplorer')
+  return t('appFileManager')
+}
+
+/** Short per-app display name for a dropdown row — the app itself ("VS Code",
+ *  "Finder"), not the full "open current workspace in …" sentence that stays
+ *  on the main button's tooltip/aria-label. */
+function appName(app: OpenInApp, t: Translate, platform: string | null): string {
+  return app.id === 'vscode' ? t('appVscode') : finderName(t, platform)
 }
 
 export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInProps) {
@@ -210,13 +245,24 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
         aria-label={label}
         title={label}
       >
-        {app.id === 'vscode' ? <VscodeMark /> : <FolderMark />}
+        {app.id === 'vscode' ? <VscodeMark /> : fileManagerMark(platform)}
       </button>
     )
   }
 
   // ≥2 usable apps → main icon button (default selection) + chevron dropdown.
-  const items = usableApps.map(app => ({ id: app.id, label: appLabel(app, t, platform) }))
+  // Each row carries the app's own mark + short name (OpenChamber
+  // OpenInAppButton style) — nothing else, so the list is exactly
+  // "icon + app name" per entry.
+  const items = usableApps.map(app => ({
+    id: app.id,
+    label: appName(app, t, platform),
+    icon: (
+      <span className={styles.menuIcon}>
+        {app.id === 'vscode' ? <VscodeMark /> : fileManagerMark(platform)}
+      </span>
+    ),
+  }))
   const activeLabel = appLabel(activeApp, t, platform)
   return (
     <span className={styles.group}>
@@ -227,7 +273,7 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
         aria-label={activeLabel}
         title={activeLabel}
       >
-        {activeApp.id === 'vscode' ? <VscodeMark /> : <FolderMark />}
+        {activeApp.id === 'vscode' ? <VscodeMark /> : fileManagerMark(platform)}
       </button>
       <Menu
         portal
@@ -241,6 +287,7 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
           if (chosen !== undefined) openApp(chosen)
         }}
         items={items}
+        selectedId={activeApp.id}
         anchor={(
           <button
             type="button"

@@ -31,7 +31,14 @@
   flex: none;
 }
 
-.button:hover,
+/* The two halves read as ONE control: hovering anywhere in the group tints
+   both (focus-visible stays per-button below, so keyboard focus never lights
+   up the sibling half). */
+.group:hover .button,
+.group:hover .chevron {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 .button:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -46,14 +53,18 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* The official app icon is a rounded square: 20px inside the 32px pill keeps
-   a balanced 6px margin instead of the 16px icon's airy 8px ring. */
+/* The official app icons are rounded squares: 20px inside the 32px pill keeps
+   a balanced 6px margin instead of the 16px icon's airy 8px ring. The 4px
+   radius restores the native squircle shape on the square Finder raster (the
+   VS Code PNG carries its own baked rounding, so the radius is invisible
+   there). */
 .button img {
   width: 20px;
   height: 20px;
   flex: none;
   display: block;
   user-select: none;
+  border-radius: 4px;
 }
 
 /* Keyboard focus ring (frontend-review P2-7): outline:none above needs an
@@ -72,13 +83,14 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* Chevron dropdown trigger (only when ≥2 apps are usable): a 16px chevron
-   inside the same pill, with a hairline divider on its leading edge. */
+/* Chevron dropdown trigger (only when ≥2 apps are usable): a chevron inside
+   the same pill, with a hairline divider on its leading edge. 24px wide for a
+   comfortable tap target while the group still reads as one control. */
 .chevron {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
+  width: 24px;
   height: 32px;
   padding: 0;
   border: none;
@@ -91,7 +103,11 @@
   flex: none;
 }
 
-.chevron:hover,
+.chevron:hover .chevronMark,
+.chevron:focus-visible .chevronMark {
+  color: var(--dsw-alias-label-primary);
+}
+
 .chevron:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -109,4 +125,30 @@
 .chevron:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
+}
+
+/* Dropdown-row app mark (icon + app name rows, OpenChamber style). The Menu
+   primitive's .itemIcon slot is a 16×16 flex box but does not constrain its
+   children — the VS Code PNG (32px natural) and the 20px folder SVG both
+   scale down to the menu-cell icon size. The 3px radius restores the native
+   squircle shape on the square Finder raster (VS Code's PNG carries its own
+   baked rounding, so the radius is invisible there). */
+.menuIcon {
+  display: inline-flex;
+  flex: none;
+}
+
+.menuIcon img {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex: none;
+  user-select: none;
+  border-radius: 3px;
+}
+
+.menuIcon svg {
+  width: 16px;
+  height: 16px;
+  color: var(--dsw-alias-label-secondary);
 }
