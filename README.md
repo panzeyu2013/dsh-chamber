@@ -60,34 +60,21 @@
 
 Gateway 自己托管一个 loopback dsh，并通过认证边界统一代理 HTTP/WS/SSE。生产环境应让 gateway 仍监听 loopback，由 Nginx/Caddy 终止 TLS；Desktop 只接受 HTTPS Gateway URL。
 
-**一键安装（推荐）**——从 GitHub release 拉取安装包（npm 未发布也能装），
+**安装（一键脚本）**——从 GitHub release 拉取安装包（npm 未发布也能装），
 交互式确认配置（默认：gateway 监听 **30801**、托管 dsh 监听 **30800**，均可改）：
 
 ```bash
 curl -fsSL -o install-gateway.sh \
   https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/dev/scripts/install-gateway.sh
 bash install-gateway.sh          # 交互向导（回车接受默认值，可逐项修改）
-# 或非交互：bash install-gateway.sh -y --channel beta --origin https://gw.example.com
 ```
 
-自动完成：dsh 探测/安装（已有则复用）→ 下载 + sha256 校验 → npm 全局安装
-（或本地 `~/.dsh-chamber`）→ 凭据写入 0600 env → systemd 单元（root）/
-前台（非 root）→ 健康检查。管理命令：`install-gateway.sh status|logs|update|uninstall`。
-详见 [docs/deploy-gateway.md](docs/deploy-gateway.md)。
-
-**手动安装**（npm 发布后与高级用法）：
-
-```bash
-npm install -g @deepseek-ai/dsh @dsh-chamber/gateway
-openssl rand -hex 32   # 保存输出；作为至少 32 字符的共享 token
-gateway serve \
-  --host 127.0.0.1 --port 30801 --dsh-port 30800 \
-  --api-token '<TOKEN>' \
-  --public-origin 'https://gateway.example.com' \
-  --trusted-proxy 127.0.0.1
-```
-
-反向代理须把 `gateway.example.com` 的 HTTPS 请求转到 `127.0.0.1:30801`，保留 WebSocket upgrade，并设置规范的 `X-Forwarded-Host`、`X-Forwarded-Proto: https` 与客户端 `X-Forwarded-For`。`--trusted-proxy` 必须是实际代理 peer 的精确 IP；缺失、重复或畸形 forwarded headers 会被拒绝。随后在 Desktop「设置 → 连接」选择 HTTPS Gateway，填 `https://gateway.example.com` 与同一 token。Gateway 不提供内置 TLS，传入 TLS 配置会 fail closed。
+脚本自动完成：dsh 探测/安装（已有则复用）→ 下载 + sha256 校验 → npm 全局安装
+→ 凭据写入 0600 env → systemd 单元（root）/ 前台（非 root）→ 健康检查；
+管理命令 `install-gateway.sh status|logs|update|uninstall`。
+公网接入：反代将 HTTPS 转到 `127.0.0.1:30801` 并配置 `--origin` 与
+`--trusted-proxy`（详见 [docs/deploy-gateway.md](docs/deploy-gateway.md)）。
+Desktop 接入：「设置 → 连接」选择 HTTPS Gateway，填反代地址与共享 token。
 
 ### 远程 dsh 实例（systemd）
 

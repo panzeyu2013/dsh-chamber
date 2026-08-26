@@ -60,30 +60,16 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 
 The gateway hosts one loopback dsh and proxies HTTP/WS/SSE through a single authenticated boundary. In production, keep the gateway listener on loopback and terminate TLS at Nginx/Caddy; Desktop accepts HTTPS gateway URLs only.
 
-**One-shot install (recommended)** — pulls the package from GitHub Releases (works before npm publishing), with an interactive wizard (defaults: gateway listens on **30801**, managed dsh on **30800**; both editable):
+**Install (one-shot script)** — pulls the package from GitHub Releases (works before npm publishing), with an interactive wizard (defaults: gateway listens on **30801**, managed dsh on **30800**; both editable):
 
 ```bash
 curl -fsSL -o install-gateway.sh \
   https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/dev/scripts/install-gateway.sh
 bash install-gateway.sh          # interactive wizard (Enter = default, type to change)
-# non-interactive: bash install-gateway.sh -y --channel beta --origin https://gw.example.com
 ```
 
-It auto-detects/installs dsh (reuses an existing one), downloads the tgz + sha256 check, npm-global (or local `~/.dsh-chamber`) install, writes credentials to a 0600 env file, sets up systemd (root) / foreground (non-root), and health-checks. Management: `install-gateway.sh status|logs|update|uninstall`. See [docs/deploy-gateway.md](docs/deploy-gateway.md).
-
-**Manual install** (once npm-published, and for advanced use):
-
-```bash
-npm install -g @deepseek-ai/dsh @dsh-chamber/gateway
-openssl rand -hex 32   # save this output as the shared token (minimum 32 characters)
-gateway serve \
-  --host 127.0.0.1 --port 30801 --dsh-port 30800 \
-  --api-token '<TOKEN>' \
-  --public-origin 'https://gateway.example.com' \
-  --trusted-proxy 127.0.0.1
-```
-
-Proxy HTTPS for `gateway.example.com` to `127.0.0.1:30801`, preserve WebSocket upgrades, and set canonical `X-Forwarded-Host`, `X-Forwarded-Proto: https`, and client `X-Forwarded-For` headers. `--trusted-proxy` must be the proxy peer's exact IP; missing, duplicate, or malformed forwarded facts fail closed. Then choose HTTPS Gateway in Desktop Settings → Connections and enter `https://gateway.example.com` with the same token. The gateway has no built-in TLS; TLS configuration fails closed.
+The script auto-detects/installs dsh (reuses an existing one), downloads the tgz + sha256 check, npm-global install, writes credentials to a 0600 env file, sets up systemd (root) / foreground (non-root), and health-checks; management: `install-gateway.sh status|logs|update|uninstall`.
+Public access: reverse-proxy HTTPS to `127.0.0.1:30801` and configure `--origin` / `--trusted-proxy` (see [docs/deploy-gateway.md](docs/deploy-gateway.md)). Desktop: Settings → Connections → HTTPS Gateway with the proxy address and the shared token.
 
 ### Remote dsh instance (systemd)
 
