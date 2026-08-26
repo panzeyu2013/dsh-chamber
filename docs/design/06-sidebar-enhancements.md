@@ -180,6 +180,20 @@
     同一截止点（本地时钟 + 一次性定时器）停止渲染——即便 App 下个轮询
     周期才重派生，隐形空位也不会残留。宽限期后行才消失/列表才可位移，
     已安全越过双击窗口。
+  - **创建/fork 会话的「未分类」瞬时摆放抑制（2026-10，创建/fork 延迟修复）**：
+    host 把一次变更拆成两条有序帧（`host/session-added` 在 create 期间发出、
+    `host/workspace-changed` 在 attach 提交后发出），两条帧之间的推送投影会把
+    新会话暂放合成未分组桶、下一帧再拽进工作区（位置乱跳）。抑制分两路：
+    **成员宽限**（`derive.ts armMembershipGrace`，`MEMBERSHIP_GRACE_MS = 3s`，
+    来源作用域键控——host 部分路径按进程计数器铸造会话 id，sessionId 单键
+    会跨来源误伤）——create 成功后同步 arm、App derive 在宽限内跳过该会话的
+    未分组摆放；只由 create 路径 arm（create 必带 workspaceId），绝不隐藏真正
+    未分组的会话。**parent-accounted 规则**——fork 子会话的 id 由 host 铸造、
+    帧可先于 fork 应答到达，宽限的 arm 时序有缺口，故对 fork 用纯快照状态
+    规则：父会话已被某工作区记账的 fork 子会话（host fork 挂接跟随源会话），
+    其未记账态必然是双帧间的瞬时截面，从未分组桶隐藏；父未记账（真正未分组）
+    的子会话照常立即显示。配合 05 §2.3 的 mutation 域拉取（推送不作废变更
+    拉取），行出现/收敛不再依赖下一条帧或 30s 兜底。
   - **跨 shell 滚动锚点同步（2026-08，`renderer/src/sidebar-scroll-sync.ts`，
     App selectView 接线）**：切换来源（N-ctx）时恢复该来源上次的侧边栏滚动
     位置；ghost 行带 `data-chamber-ghost`，锚点捕获跳过之（仅 arming shell

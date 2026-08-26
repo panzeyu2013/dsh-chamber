@@ -126,7 +126,15 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   连接代边沿固定执行一次 unary：生产者会对同内容快照去重，而 App 在断线时已清空
   聚合，该单次权威拉取保证“内容未变”的重连也恢复列表；稳定 ready 代仍为零轮询。
   若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
-  error。推快照按来源序号使较旧在途 pull 失效。
+  error。推快照按来源序号使较旧在途 pull 失效。**2026-10 修订（创建/fork
+  延迟修复）**：用户动作的 `requestRefresh` 拉取改走独立的 mutation
+  generation 域——帧推送不再作废它（推送可能携带 session-added 与
+  workspace-changed 两条有序帧之间的中间态截面），只有更新的变更拉取或
+  not-ready 清扫能作废；其失败路径仍保留共享序号守卫（在途期间的推送事件
+  不得被 error 覆盖）。判定逻辑为纯函数
+  `renderer/src/aggregate-refresh.ts` `refreshPullStillCurrent`（单测覆盖）；
+  创建/fork 会话的「未分类」瞬时摆放由 06 §2.2 的成员宽限与
+  parent-accounted 规则抑制。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 

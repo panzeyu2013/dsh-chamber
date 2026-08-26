@@ -45,7 +45,7 @@ import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from 
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
-import { isSnapshotStale, planAggregateRefreshes } from './aggregate-refresh.ts'
+import { isSnapshotStale, planAggregateRefreshes, refreshPullStillCurrent } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
 import InstanceView from './components/InstanceView.tsx'
@@ -148,7 +148,7 @@ function deriveServers(
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
       // 空"新建会话"行。其他来源 blank 行照旧不进入导航列表。
       const current = id === activeViewId ? runtimeFacts[id]?.current : undefined
-      workspaces = deriveServerWorkspaces(aggregate, '', current)
+      workspaces = deriveServerWorkspaces(aggregate, id, '', current)
     }
     const entry: ChamberServerAggregate = {
       id,
@@ -517,17 +517,47 @@ export default function App() {
    * 每次调用按实例取序并递增；resolve/reject 时仅当捕获的序号仍是最新才
    * 落 state——避免慢轮询在拖拽提交后的即时刷新之后落地、用旧序覆盖新序
    * （拖拽 commit 前的兜底快照可能晚于 refresh 拉取到达，造成陈旧排序）。
+   *
+   * 2026-10 修复（创建/fork 延迟反馈）：变更触发的拉取（mutationTag 非空，
+   * 来自 onRefresh）走独立的 generation 域——帧驱动的 push 不得作废它。拉
+   * 取只在 mutation 应答之后发起，数据必然包含本次变更；而 host 把一次变更
+   * 拆成两条有序帧（session-added 在 create 期间发出、workspace-changed 在
+   * attach 提交后发出），两者之间到达的 push 携带中间态截面（新会话在会话
+   * 列表里、但尚未进入任何工作区的 sessionIds）。旧共享 seq 会让这种 push
+   * 杀掉在途的刷新拉取，把新会话困在未分类桶里直到下一条 push——store 静默
+   * 时更是一路拖到 30s 兜底。普通拉取（就绪边沿/兜底看门狗）仍用共享 seq：
+   * push（更新的 store 事实）或更新的拉取必须能作废更旧的拉取，防止其最后
+   * 落地回退聚合。判定逻辑为纯函数 refreshPullStillCurrent（单测覆盖）。
    */
   const aggregateSeqRef = useRef<Record<string, number>>({})
+  const mutationRefreshSeqRef = useRef<Record<string, number>>({})
   const aggregatePollRunningRef = useRef(false)
   const aggregateFailuresRef = useRef<Record<string, number>>({})
   const retryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
-  const refreshAggregate = useCallback(async (instanceId: string) => {
+  const refreshAggregate = useCallback(async (instanceId: string, mutationTag?: number) => {
     const seq = (aggregateSeqRef.current[instanceId] ?? 0) + 1
     aggregateSeqRef.current[instanceId] = seq
+    const stillCurrent = (): boolean => refreshPullStillCurrent({
+      mutationTag,
+      mutationSeq: mutationRefreshSeqRef.current[instanceId],
+      pollSeq: aggregateSeqRef.current[instanceId],
+      startedPollSeq: seq,
+    })
+    const scheduleRetry = (): void => {
+      const failures = aggregateFailuresRef.current[instanceId] ?? 0
+      if (failures < AGGREGATE_RETRY_LIMIT) {
+        aggregateFailuresRef.current[instanceId] = failures + 1
+        const retryTimer = setTimeout(() => {
+          if (stillCurrent()) void refreshAggregate(instanceId, mutationTag)
+        }, AGGREGATE_RETRY_MS)
+        retryTimersRef.current.push(retryTimer)
+      } else {
+        aggregateFailuresRef.current[instanceId] = 0
+      }
+    }
     try {
       const snapshot = await fetchInstanceSnapshot(getInstanceClient(instanceId))
-      if (aggregateSeqRef.current[instanceId] !== seq) return
+      if (!stillCurrent()) return
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
@@ -541,7 +571,18 @@ export default function App() {
         return { ...prev, [instanceId]: { state: 'ok', ...snapshot, error: null } }
       })
     } catch (err) {
-      if (aggregateSeqRef.current[instanceId] !== seq) return
+      if (!stillCurrent()) return
+      // 2026-10（error 分支保留共享 seq 守卫，multi-agent 复查 F1/A1）：双域
+      // 只放宽 ok 路径——成功拉取的数据后于 mutation、可跨推送落地；失败路径
+      // 携带的只是 error 事实。若拉取在途期间推送通道有任何事件（快照推送/
+      // 撤回/其他拉取启动，均递增共享 seq），生产者的状态比本次失败更新鲜、
+      // 更权威——不得用 error 覆盖健康列表（修复前的共享 seq 本就覆盖此路径；
+      // 丢掉该守卫会让一次瞬时 503 把整表换成错误文本，直到 3s 重试或下一条
+      // 推送）。重试仍按 tag 域调度：帧若已丢（断连窗口），重试拉取负责收敛。
+      if (aggregateSeqRef.current[instanceId] !== seq) {
+        scheduleRetry()
+        return
+      }
       setAggregates(prev => ({ ...prev, [instanceId]: emptyAggregate('error', errorMessage(err)) }))
       // 反代 503 = 权威"未就绪"信号（03 §3.3）：本地 /health 可能还停留在
       // 旧 ready（最多一个健康轮询周期的陈旧窗口），立即刷新使连接判定
@@ -550,16 +591,7 @@ export default function App() {
       // 首屏加速：一次瞬时失败不等到 30s 兜底轮询——限次快速重试（工作区
       // 单元冷启动期间 workspace.list 可能短暂 503/超时；git 快照先到会让
       // 未注册块抢在 workspace 列表前渲染，2026-08 用户反馈）。
-      const failures = aggregateFailuresRef.current[instanceId] ?? 0
-      if (failures < AGGREGATE_RETRY_LIMIT) {
-        aggregateFailuresRef.current[instanceId] = failures + 1
-        const retryTimer = setTimeout(() => {
-          if (aggregateSeqRef.current[instanceId] === seq) void refreshAggregate(instanceId)
-        }, AGGREGATE_RETRY_MS)
-        retryTimersRef.current.push(retryTimer)
-      } else {
-        aggregateFailuresRef.current[instanceId] = 0
-      }
+      scheduleRetry()
     }
   }, [refreshHealth])
 
@@ -603,8 +635,11 @@ export default function App() {
     if (notReady.length > 0) {
       // A pull started in the dying generation must never restore an `ok`
       // aggregate after the authoritative transport state became not-ready.
+      // 变更触发（mutation）拉取走独立 generation 域，同样在此作废——它的
+      // 应答可能穿隧道迟到，绝不能把刚被 not-connected 覆盖的聚合复活。
       for (const id of notReady) {
         aggregateSeqRef.current[id] = (aggregateSeqRef.current[id] ?? 0) + 1
+        mutationRefreshSeqRef.current[id] = (mutationRefreshSeqRef.current[id] ?? 0) + 1
       }
       setAggregates(prev => {
         let changed = false
@@ -1069,10 +1104,15 @@ export default function App() {
    *  Always pull on a mutation: the mounted producer's push can lag the host's
    *  registry reorder (create → prepend → insertBefore), so relying on the
    *  freshness check here left new worktrees/sessions stranded at the prepended
-   *  head until the next 30s poll (2026-08 user report). */
+   *  head until the next 30s poll (2026-08 user report). 2026-10 修复：该拉取
+   *  以独立 mutation generation 域发出——推送不得作废它（推送可能携带
+   *  session-added 与 workspace-changed 两条帧之间的中间态截面，见
+   *  refreshPullStillCurrent）；只有更新的变更拉取或 not-ready 清扫能作废。 */
   useEffect(() => {
     return chamberBridge.onRefresh((sourceId) => {
-      void refreshAggregate(sourceId)
+      const tag = (mutationRefreshSeqRef.current[sourceId] ?? 0) + 1
+      mutationRefreshSeqRef.current[sourceId] = tag
+      void refreshAggregate(sourceId, tag)
     })
   }, [refreshAggregate])
 

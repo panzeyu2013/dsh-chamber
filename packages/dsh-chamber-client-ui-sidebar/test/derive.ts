@@ -10,12 +10,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   armBlankGhost,
+  armMembershipGrace,
   BLANK_GHOST_GRACE_MS,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
   hashString,
   increasedForkTitle,
   instanceSnapshotSignature,
+  MEMBERSHIP_GRACE_MS,
   mergeRuntimeFacts,
   mergeSearchResults,
   nextServerOrder,
@@ -35,6 +37,7 @@ import {
   UNGROUPED_WORKSPACE_ID,
   workspaceAccentStyle,
   __resetBlankGhostsForTests,
+  __resetMembershipGracesForTests,
 } from '../src/shared/derive.ts'
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
 import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/shared/aggregate-store.ts'
@@ -42,7 +45,7 @@ import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/share
 function session(
   id: string,
   updatedAt = 0,
-  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'running'>> = {},
+  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'running' | 'parentSessionId'>> = {},
 ): SessionRow {
   return { sessionId: id, updatedAt, running: false, blank: false, ...extra }
 }
@@ -110,6 +113,7 @@ test('blank sessions are hidden from workspaces and from the ungrouped bucket wh
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -123,6 +127,7 @@ test('a blank session surfaces while it is the current session (official !blank 
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b',
   )
@@ -138,6 +143,7 @@ test('a blank-current session not accounted by any workspace trails in the ungro
       [workspace('w1', 'Work', ['a'])],
       [session('a', 1), session('blank', 300, { blank: true })],
     ),
+    'srv-a',
     '',
     'blank',
   )
@@ -151,6 +157,7 @@ test('blank rows carry the sparse blank flag; ordinary rows never do', () => {
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b',
   )
@@ -164,6 +171,7 @@ test('a non-current blank session stays hidden even when another blank session i
       [workspace('w1', 'Work', ['b1', 'b2'])],
       [session('b1', 1, { blank: true }), session('b2', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b2',
   )
@@ -185,6 +193,7 @@ test('a departed blank session keeps its layout slot (ghost) while the grace is 
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     1000 + BLANK_GHOST_GRACE_MS - 1,
@@ -205,6 +214,7 @@ test('the ghost grace expires at BLANK_GHOST_GRACE_MS: the departed blank row th
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     1000 + BLANK_GHOST_GRACE_MS,
@@ -219,6 +229,7 @@ test('a departed blank row hides immediately when no ghost was armed (pre-grace 
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
   )
@@ -233,6 +244,7 @@ test('the ghost also holds a departed blank stray in the ungrouped bucket', () =
       [workspace('w1', 'Work', ['a'])],
       [session('a', 1), session('blank', 300, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     1200,
@@ -249,6 +261,7 @@ test('arming the ghost never surfaces a NON-blank session (the map only affects 
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b',
     1200,
@@ -272,6 +285,7 @@ test('a refreshed arm extends the ghost (a later real transition wins over an ea
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     2100, // inside the FRESH grace, past the stale one
@@ -282,12 +296,198 @@ test('a refreshed arm extends the ghost (a later real transition wins over an ea
   ])
 })
 
+// ---- membership grace (2026-10: create ungrouped-flash fix) + parent-accounted fork rule ----
+
+test('a just-created session is skipped from the ungrouped bucket while the membership grace is live', () => {
+  __resetMembershipGracesForTests()
+  // The host publishes session-added BEFORE workspace-changed: the interim
+  // store cross-section lists the new session while no workspace accounts it.
+  // The sidebar armed the grace synchronously after the create resolved; the
+  // App's derive must NOT surface the row under 未分类 during the grace.
+  armMembershipGrace('srv-a', 'new', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('new', 500, { blank: true })],
+    ),
+    'srv-a',
+    '',
+    'new',
+    1500,
+  )
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+})
+
+test('the membership grace never hides a session its workspace already accounts', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'new', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['new', 'a'])],
+      [session('new', 500), session('a', 1)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  // Membership landed: the row renders in its workspace even inside the grace
+  // window (the grace only suppresses the STRAY placement).
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions, [
+    { id: 'new', title: '', running: false, updatedAt: 500 },
+    { id: 'a', title: '', running: false, updatedAt: 1 },
+  ])
+})
+
+test('the membership grace expires at MEMBERSHIP_GRACE_MS: the stray then surfaces in the ungrouped bucket', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'new', 1000)
+  const atExpiry = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('new', 500)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  assert.equal(atExpiry.length, 2)
+  assert.equal(atExpiry[1].ungrouped, true)
+  assert.deepEqual(atExpiry[1].sessions, [{ id: 'new', title: '', running: false, updatedAt: 500 }])
+})
+
+test('an unarmed session still surfaces as a stray (grace only affects armed ids)', () => {
+  __resetMembershipGracesForTests()
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('stray', 500)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1].sessions, [{ id: 'stray', title: '', running: false, updatedAt: 500 }])
+})
+
+test('a refreshed arm extends the membership grace (a later mutation wins over an earlier stale arm)', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'new', 1000)
+  armMembershipGrace('srv-a', 'new', 4000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('new', 500)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    4100, // past the stale expiry, inside the fresh one
+  )
+  assert.equal(result.length, 1)
+})
+
+test('the membership grace is source-scoped: an arm on one source never suppresses another source strays', () => {
+  __resetMembershipGracesForTests()
+  // Host session ids mint from per-process counters on some paths
+  // (`session-<n>`), so a same-id session legitimately exists on two sources.
+  armMembershipGrace('srv-a', 'session-5', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('session-5', 500)],
+    ),
+    'srv-b', // a DIFFERENT source derives: its stray must stay visible
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1].sessions, [{ id: 'session-5', title: '', running: false, updatedAt: 500 }])
+})
+
+test('a fork child of a workspace-accounted parent is skipped from the ungrouped bucket (parent-accounted rule, no grace)', () => {
+  __resetMembershipGracesForTests()
+  // Host fork attachment follows the source session: the child of an
+  // accounted parent provably lands in that workspace, so its unaccounted
+  // state can only be the session-added/workspace-changed frame gap. Pure
+  // snapshot judgment — no arm, no timer, no arming-timing window.
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['parent'])],
+      [
+        session('parent', 10),
+        session('child', 500, { parentSessionId: 'parent' }),
+      ],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions, [{ id: 'parent', title: '', running: false, updatedAt: 10 }])
+})
+
+test('a fork child of an UNACCOUNTED parent stays visible in the ungrouped bucket (genuinely ungrouped)', () => {
+  __resetMembershipGracesForTests()
+  // Forking a stray: the host skips the attach (workspace-less source), so
+  // the child is genuinely ungrouped — the parent-accounted rule must NOT
+  // hide it (the flows reviewer's fork-of-stray case).
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [
+        session('a', 1),
+        session('stray-parent', 40),
+        session('stray-child', 500, { parentSessionId: 'stray-parent' }),
+      ],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1].sessions, [
+    { id: 'stray-child', title: '', running: false, updatedAt: 500 },
+    { id: 'stray-parent', title: '', running: false, updatedAt: 40 },
+  ])
+})
+
+test('an accounted fork child renders in its workspace even while an unrelated grace is armed', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'other', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['parent', 'child'])],
+      [
+        session('parent', 10),
+        session('child', 500, { parentSessionId: 'parent' }),
+        session('other', 600),
+      ],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions.map(row => row.id), ['parent', 'child'])
+})
+
 test('subagent sessions are hidden from workspaces and from the ungrouped bucket', () => {
   const result = deriveServerWorkspaces(
     snapshot(
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { origin: 'subagent' })],
     ),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -304,6 +504,7 @@ test('workspace membership maps in sessionIds order with titles from the snapsho
         session('s3', 30, { title: 'Three' }),
       ],
     ),
+    'srv-a',
     '',
   )
   assert.deepEqual(result, [
@@ -332,6 +533,7 @@ test('visible sessions not accounted by any workspace trail in one ungrouped buc
         session('sub-stray', 300, { origin: 'subagent' }),
       ],
     ),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 2)
@@ -349,6 +551,7 @@ test('visible sessions not accounted by any workspace trail in one ungrouped buc
 test('the ungrouped bucket carries the caller-provided title', () => {
   const result = deriveServerWorkspaces(
     snapshot([workspace('w1', 'Work', ['a'])], [session('x', 100), session('a', 1)]),
+    'srv-a',
     'Ungrouped',
   )
   assert.equal(result[1].title, 'Ungrouped')
@@ -358,6 +561,7 @@ test('the ungrouped bucket carries the caller-provided title', () => {
 test('no stray sessions means no ungrouped bucket', () => {
   const result = deriveServerWorkspaces(
     snapshot([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2)]),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -365,7 +569,7 @@ test('no stray sessions means no ungrouped bucket', () => {
 })
 
 test('empty snapshot derives to an empty list', () => {
-  assert.deepEqual(deriveServerWorkspaces(snapshot([], []), ''), [])
+  assert.deepEqual(deriveServerWorkspaces(snapshot([], []), 'srv-a', ''), [])
 })
 
 test('members not present in the session list are skipped without breaking workspace order', () => {
@@ -374,6 +578,7 @@ test('members not present in the session list are skipped without breaking works
       [workspace('w1', 'Work', ['missing', 'a'])],
       [session('a', 1, { title: 'A' })],
     ),
+    'srv-a',
     '',
   )
   assert.deepEqual(result[0].sessions, [{ id: 'a', title: 'A', running: false, updatedAt: 1 }])
@@ -386,6 +591,7 @@ test('archived sessions are hidden from workspaces and from the ungrouped bucket
       sessions: [session('a', 1), session('b', 2), session('archived-stray', 3)],
       archivedSessionIds: ['b', 'archived-stray'],
     },
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -400,6 +606,7 @@ test('archived members keep their accounting slot: only non-archived strays surf
       sessions: [session('a', 1), session('archived', 2), session('x', 3)],
       archivedSessionIds: ['archived'],
     },
+    'srv-a',
     '',
   )
   assert.equal(result.length, 2)
@@ -417,6 +624,7 @@ test('running and updatedAt pass through to workspace members and strays', () =>
         session('s', 99, { running: true }),
       ],
     ),
+    'srv-a',
     '',
   )
   assert.deepEqual(result[0].sessions, [

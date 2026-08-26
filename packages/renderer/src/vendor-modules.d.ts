@@ -291,6 +291,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export const UNGROUPED_WORKSPACE_ID: string
   export function deriveServerWorkspaces(
     snapshot: InstanceSnapshot,
+    serverId: string,
     ungroupedTitle: string,
     currentSessionId?: string,
   ): ChamberServerWorkspace[]

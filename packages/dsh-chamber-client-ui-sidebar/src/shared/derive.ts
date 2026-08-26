@@ -13,9 +13,15 @@
  * `armBlankGhost` (called by the sidebar synchronously when a click moves the
  * current away from a blank row) and read only by `sessionVisible`, which
  * also lazily SWEEPS expired entries on read (third-wave, R2-1#3) so the map
- * cannot accumulate across armings without a derive in between — the derive
- * functions stay deterministic for a given (snapshot, current, now) triple,
- * and tests inject `now` so the grace behavior is fully unit-tested.
+ * cannot accumulate across armings without a derive in between. A SECOND
+ * mutable exception of the same shape (2026-10 fix): the module-level
+ * membership-grace map — written only by `armMembershipGrace` (the sidebar,
+ * synchronously after a successful CREATE) and read only by
+ * `deriveServerWorkspaces`'s stray filter, lazily swept on write and read.
+ * Both maps only ever suppress a row placement; the derive functions stay
+ * deterministic for a given (snapshot, current, now) triple plus the two
+ * grace maps, and tests inject `now` so the grace behavior is fully
+ * unit-tested.
  *
  * No React, no DOM — plain-node unit-testable (see test/derive.ts).
  */
@@ -139,6 +145,90 @@ export function sanitizeSearchQuery(query: string): string {
     cleaned = cleaned.slice(0, end)
   }
   return cleaned.trim()
+}
+
+/**
+ * How long a just-created session stays out of the synthetic ungrouped bucket
+ * while its workspace membership has not landed yet (design 06 §2.2 sibling,
+ * 2026-10 fix). The host commits session creation and workspace attach as TWO
+ * ordered frames (`host/session-added` fires during `session.create`,
+ * `host/workspace-changed` only after the attach commit), and the chamber
+ * projection mirrors the mounted ctx store — a snapshot pushed between the
+ * two frames would surface the new session in the trailing ungrouped bucket
+ * ("未分类") for one frame, then yank it into its workspace on the next push
+ * ("位置乱跳"). The sidebar arms this grace synchronously right after the
+ * CREATE mutation resolves (before requesting the App-layer refresh/open),
+ * and `deriveServerWorkspaces` skips the session's STRAY placement while the
+ * grace holds: the row appears once membership lands — always in the right
+ * workspace, never via the ungrouped bucket.
+ *
+ * The grace is armed ONLY by the create path (which always carries an
+ * explicit workspaceId), so it can never hide a genuinely ungrouped session.
+ * The FORK path is covered by the parent-accounted rule instead (see
+ * deriveServerWorkspaces): host fork attachment follows the source session,
+ * so a fork child of a workspace-accounted parent is provably transient when
+ * unaccounted — no timer, no arming-timing window. The grace must cover the
+ * mutation-triggered aggregate pull's round trip (the App's refresh is
+ * guaranteed post-mutation — see renderer aggregate-refresh); 3s covers even
+ * a slow SSH-tunneled pull.
+ */
+export const MEMBERSHIP_GRACE_MS = 3_000
+
+/**
+ * Module-level membership-grace map: `${serverId}:${sessionId}` -> expiry
+ * epoch-ms. Source-scoped (2026-10 multi-agent review): host session ids are
+ * per-process counters on some minting paths (`session-<n>` in dsh-session's
+ * SessionStore), so a sessionId-only key could suppress another source's
+ * same-id stray for the grace duration. Written only by `armMembershipGrace`
+ * (the sidebar, synchronously after a successful create) and read only by
+ * `deriveServerWorkspaces`'s stray filter for the SAME source; rides the same
+ * vite shared chunk as the blank-ghost grace (see assertSingletonModule
+ * above), so the arming shell and the App's derive share ONE map. Lazy
+ * sweeps on write AND read bound the map: entries die after
+ * MEMBERSHIP_GRACE_MS, and the write-side sweep clears every expired entry on
+ * each arm (the read-side sweep only drops the queried id).
+ */
+const membershipGraceUntil = new Map<string, number>()
+
+/**
+ * Arm (or refresh) the membership grace for a session the sidebar just
+ * created under `serverId`. The sidebar calls this synchronously after the
+ * create mutation resolves and BEFORE requesting the App-layer refresh — the
+ * App's next derive (a moment later, when the refresh pull lands) then
+ * consults the grace and skips the session's ungrouped placement until the
+ * workspace membership arrives. Refreshing overwrites the expiry, so a later
+ * re-arm always wins over an earlier stale arm.
+ * @param now - epoch-ms; injected in tests, Date.now() in the app.
+ */
+export function armMembershipGrace(serverId: string, sessionId: string, now = Date.now()): void {
+  for (const [key, expiry] of membershipGraceUntil) {
+    if (expiry <= now) membershipGraceUntil.delete(key)
+  }
+  membershipGraceUntil.set(`${serverId}:${sessionId}`, now + MEMBERSHIP_GRACE_MS)
+}
+
+/**
+ * Whether the session's ungrouped placement is suppressed by an active
+ * membership grace armed for the same source. Expired entries are lazily
+ * swept on read (third-wave R2-1#3 discipline, mirrors the blank-ghost
+ * sweep). The grace ONLY affects the stray/ungrouped placement — a session
+ * already listed in a workspace's sessionIds renders normally in that
+ * workspace regardless of the map.
+ */
+function membershipGraceActive(serverId: string, sessionId: string, now: number): boolean {
+  const key = `${serverId}:${sessionId}`
+  const expiry = membershipGraceUntil.get(key)
+  if (expiry === undefined) return false
+  if (expiry <= now) {
+    membershipGraceUntil.delete(key)
+    return false
+  }
+  return true
+}
+
+/** Test-only: clear the membership-grace map (node tests share the module instance). */
+export function __resetMembershipGracesForTests(): void {
+  membershipGraceUntil.clear()
 }
 
 /**
@@ -966,6 +1056,10 @@ export function increasedForkTitle(title: string): string {
 /**
  * Compute the sidebar workspace list for one instance snapshot.
  * @param snapshot - one InstanceAggregate-like pull (workspaces/sessions).
+ * @param serverId - the source id ('local' | 'ssh-<id>'); scopes the
+ *   membership-grace lookup (grace entries are source-keyed — host session
+ *   ids mint from per-process counters on some paths and could otherwise
+ *   collide across sources).
  * @param ungroupedTitle - display title for the trailing ungrouped bucket;
  *   the sidebar overrides it when `ungrouped` is true; pass '' from App.
  * @param currentSessionId - the source's current session id (from the
@@ -974,12 +1068,19 @@ export function increasedForkTitle(title: string): string {
  * @param now - epoch-ms of this derive (injected for tests; the App passes
  *   nothing and Date.now() applies). The ghost-slot grace is measured against
  *   this clock, so a derive with an injected `now` is fully deterministic.
+ *   The membership grace (armMembershipGrace) is measured against the same
+ *   clock: a just-created session whose workspace membership has not landed
+ *   yet is skipped from the ungrouped bucket (see above). Fork children of
+ *   workspace-accounted parents are additionally skipped by the
+ *   parent-accounted rule (host fork attachment follows the source) — a pure
+ *   snapshot-state judgment with no timer or arming-timing window.
  * @returns real workspaces in wire order (visible members in sessionIds order),
  *   plus one synthetic trailing ungrouped group when visible stray sessions
  *   exist; [] for an empty snapshot.
  */
 export function deriveServerWorkspaces(
   snapshot: InstanceSnapshot,
+  serverId: string,
   ungroupedTitle: string,
   currentSessionId?: string,
   now = Date.now(),
@@ -1008,7 +1109,26 @@ export function deriveServerWorkspaces(
     workspaces.push({ id: workspace.workspaceId, title: workspace.title, sessions })
   }
   const stray = snapshot.sessions
-    .filter(session => !accounted.has(session.sessionId) && sessionVisible(session, currentSessionId, archivedIds, now))
+    .filter(session => !accounted.has(session.sessionId)
+      && sessionVisible(session, currentSessionId, archivedIds, now)
+      // 2026-10 fix (1/2): a just-CREATED session whose workspace membership
+      // has not landed yet must NOT flash through the ungrouped bucket — the
+      // host publishes session-added and workspace-changed as two ordered
+      // frames, and the interim projection would place the row under 未分类
+      // for one frame, then yank it into its workspace (位置乱跳). The
+      // membership grace (armed synchronously after create; source-scoped)
+      // hides the stray placement until membership lands — armed only by
+      // create-with-workspaceId, so nothing real is ever hidden.
+      && !membershipGraceActive(serverId, session.sessionId, now)
+      // 2026-10 fix (2/2): the parent-accounted rule for FORK children — host
+      // fork attachment follows the source session (the fork contract), so a
+      // fork child of a workspace-accounted parent is provably transient when
+      // unaccounted: its membership WILL land, and the interim ungrouped
+      // placement is suppressed. Pure snapshot-state judgment — no timer, no
+      // arming-timing window (the grace cannot cover fork: the child id is
+      // host-minted and the session-added frame can beat the arm). A fork of
+      // an UNACCOUNTED (genuinely ungrouped) parent stays visible immediately.
+      && !(session.parentSessionId !== undefined && accounted.has(session.parentSessionId)))
     .sort(byRecency)
   if (stray.length > 0) {
     workspaces.push({

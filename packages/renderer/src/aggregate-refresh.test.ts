@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isSnapshotStale, planAggregateRefreshes } from './aggregate-refresh.ts'
+import { isSnapshotStale, planAggregateRefreshes, refreshPullStillCurrent } from './aggregate-refresh.ts'
 
 test('a stable ready source with a complete producer needs no unary refresh', () => {
   const plan = planAggregateRefreshes(['local'], new Set(['local']), { local: true })
@@ -44,4 +44,66 @@ test('isSnapshotStale: a recent push is fresh even when the producer is quiet', 
 
 test('isSnapshotStale: silence past the threshold is stale (push channel presumed dead)', () => {
   assert.equal(isSnapshotStale(1_000, 31_001, 30_000), true)
+})
+
+// ---- refresh pull validity domains (2026-10: create/fork latency fix) ----
+
+test('a mutation-triggered pull stays committable across pushes (the interim frame cross-section must not kill it)', () => {
+  // The pull starts after the mutation response, so its data always includes
+  // the mutation. Frame-driven pushes bump the shared poll seq — the mutation
+  // pull must ignore that and check only its own tag.
+  assert.equal(refreshPullStillCurrent({
+    mutationTag: 7,
+    mutationSeq: 7,
+    pollSeq: 42, // bumped by an interim host-frame push
+    startedPollSeq: 3,
+  }), true)
+})
+
+test('a newer mutation pull supersedes an older one (same source, rapid actions)', () => {
+  assert.equal(refreshPullStillCurrent({
+    mutationTag: 7,
+    mutationSeq: 8,
+    pollSeq: 8,
+    startedPollSeq: 8,
+  }), false)
+})
+
+test('the not-ready sweep invalidates an in-flight mutation pull (it bumps both domains)', () => {
+  // The pull (tag 7) started while the source was ready (startedPollSeq 8);
+  // the transport died and the sweep bumped BOTH domains to 9 — the late
+  // tunnel answer must never resurrect the ok aggregate.
+  assert.equal(refreshPullStillCurrent({
+    mutationTag: 7,
+    mutationSeq: 9,
+    pollSeq: 9,
+    startedPollSeq: 8,
+  }), false)
+})
+
+test('an ordinary pull is still invalidated by a push or a newer pull (shared seq, unchanged semantics)', () => {
+  assert.equal(refreshPullStillCurrent({
+    mutationTag: undefined,
+    mutationSeq: undefined,
+    pollSeq: 42,
+    startedPollSeq: 3,
+  }), false)
+  assert.equal(refreshPullStillCurrent({
+    mutationTag: undefined,
+    mutationSeq: undefined,
+    pollSeq: 3,
+    startedPollSeq: 3,
+  }), true)
+})
+
+test('a mutation tag with no recorded mutation seq fails closed (defensive; unreachable in App)', () => {
+  // App.tsx writes mutationRefreshSeqRef before every tagged pull, so this
+  // shape cannot occur — but if a future caller passes a tag without the ref
+  // write, the pull must NOT commit (never resurrect a dead generation).
+  assert.equal(refreshPullStillCurrent({
+    mutationTag: 5,
+    mutationSeq: undefined,
+    pollSeq: 5,
+    startedPollSeq: 5,
+  }), false)
 })
