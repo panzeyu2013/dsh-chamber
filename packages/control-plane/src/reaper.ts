@@ -206,9 +206,15 @@ async function processEntry(dir: string, name: string, log: LogFn): Promise<{ st
   }
   const identity = psIdentity(pid)
   const profile = typeof record.profile === 'string' && record.profile !== '' ? record.profile : null
+  // The installed entry is `…/@deepseek-ai/dsh/lib/bin.js`; the SOURCE-tsx
+  // dev path is `node --import tsx/esm …/apps/cli/src/bin.ts` — neither a
+  // `dsh` literal nor the packaged path (2026 round-3 review). Both forms
+  // carry the profile flag when one is recorded, so the profile check is
+  // the strong half; the binary-form check is the weak half.
+  const looksLikeDsh = identity.command.includes('dsh') || identity.command.includes('bin.ts')
   const commandOk = profile === null
-    ? identity.command.includes('dsh')
-    : identity.command.includes('dsh') && identity.command.includes(`--profile ${profile}`)
+    ? looksLikeDsh
+    : looksLikeDsh && identity.command.includes(`--profile ${profile}`)
   const portNum = Number(record.port)
   // Missing/invalid port ⇒ cannot verify the listener belongs to this pid;
   // fail-closed (kept) instead of the previous fail-open default.

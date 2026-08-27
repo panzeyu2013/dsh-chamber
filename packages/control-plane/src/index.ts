@@ -869,4 +869,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 }
 
 export { spawnDsh } from './spawn-dsh.ts'
-export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+// 2026 audit M12: only the PRODUCTION unary surface is re-exported — the
+// session-runtime leftovers (respond / openEventStream / pending machinery,
+// removed from scope with the v4 consolidation) stay internal to dsh-client.ts
+// (direct-import consumers: control-plane tests only).
+export { call, RpcBusinessError, RpcTransportError } from './dsh-client.ts'

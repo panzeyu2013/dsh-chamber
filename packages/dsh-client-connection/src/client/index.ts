@@ -92,9 +92,11 @@ interface ClientTransportGlobal {
 /**
  * chamber patch (design 14 D4): the window event the chamber shell dispatches
  * on OS wake-from-sleep (the App layer re-broadcasts the main-process
- * `system-resume` IPC push as this window event). SINGLE canonical definition —
- * the renderer App layer imports it from here so the two sides can never
- * drift apart (a drift would silently break the immediate-reconnect chain).
+ * `system-resume` IPC push as this window event). NOTE (2026 round-3 review):
+ * the renderer App layer cannot resolve this deep package path, so it keeps
+ * the same literal ('dsh-chamber:system-resume') locally — the two literals
+ * must stay in sync manually; a drift silently breaks the immediate-reconnect
+ * chain (the sidebar bridge test suite covers the pairing).
  */
 export const SYSTEM_RESUME_EVENT = 'dsh-chamber:system-resume'
 

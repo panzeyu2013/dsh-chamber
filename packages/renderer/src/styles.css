@@ -101,6 +101,21 @@ body {
    主题——旧视图 → 骨架 → 真实内容的两次 View Transition 都是同底色平滑
    过渡。 */
 
+.instance-plugin-degraded {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-text-secondary, inherit);
+  background: var(--dsw-alias-bg-warning, rgba(255, 196, 0, 0.12));
+  border-bottom: 1px solid var(--dsw-alias-line, rgba(128, 128, 128, 0.25));
+  pointer-events: none;
+}
+
 .instance-loading {
   position: absolute;
   inset: 0;

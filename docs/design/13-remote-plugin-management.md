@@ -72,7 +72,9 @@
 
 ### 4.1 远端插件清单
 
-`desktop_ssh_plugin_list` → 远端 `dsh plugin --profile web list` 解析。现有
+`desktop_ssh_plugin_list` → 远端 `cat <home>/profiles/web/package.json` +
+主进程本地 JSON 解析（`remotePluginList`；白名单固定 cat 目标，无远端命令
+分发面）。现有
 `chamber.hostGraph.installed` 投影的本地/远端语义保持**两文件定义**
 （package.json + dist/index.js，`SEED_FILES`）；设计 08 没有把 Git host 包塞进
 普通插件 manifest schema。Git 客户端以每实例 `gitWorktree` Remote 的实际应答
@@ -116,6 +118,23 @@
 
 ## 7. 安全
 
+### 7.0 主进程确认与路径脱敏（2026-11 审计复核，09 §4 v1 缓解）
+
+- `desktop_ssh_plugin_materialize_add` / `desktop_local_plugin_add` /
+  `desktop_local_plugin_remove` 在真正动作前须经主进程 `dialog.showMessageBox`
+  确认（远程 bundle 与 chamber 页面同上下文，脚本不能静默驱动外传/安装/卸载）；
+  取消返回 `{ok:true,cancelled:true}`（与 picker 取消同形）；无窗口 fail-closed；
+  单飞防弹窗堆叠。文案构造为纯函数（`describe*Confirmation`，可单测）。
+- `desktop_ssh_plugin_apply` 的 **registry add/remove**（2026 final review）同样
+  须主进程确认——远端安装是持久执行面，与本地安装同类；取消返回
+  `{ok:true,cancelled:true}`（`SshPluginApplyIpcResult` 增补该变体，三处镜像
+  同步）。空 add/remove 的 apply 是 **no-op**（`applyPlugins` 仅在存在变更时
+  重启），脚本无法借 plugin_apply 触发无变更重启。
+- `desktop_local_plugin_list` 的依赖值投影脱敏：materialize 类（file:/link:/
+  相对/绝对/`~/`）值掩码为 `file:<hidden>`（保持双端 materialize 分类与名称
+  匹配语义），本地绝对路径不回显 renderer。主进程内部仍持有完整 manifest
+  （`resolveLocalMaterializeDirectory` 等不受影响）。
+
 ### 7.1 双侧二次校验
 
 renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exec argv）
@@ -123,9 +142,12 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
 
 ### 7.2 白名单（权威）
 
-- 远端命令名：`dsh|cat|printf|base64|mkdir`；argv/路径白名单 + shell 元字符
-  拒绝。OpenSSH 的远端命令最终仍由远端 shell 解释，因此安全性来自固定命令
-  形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全边界；
+- 可分发远端命令名：`dsh|cat|printf`（`buildRemoteExecArgv` 按命令分发并
+  逐参数白名单）；`base64 -d`/`mkdir -p` 仅内联于 write-file 管线（固定
+  `mkdir -p <dir> && base64 -d > <path>` 形状，非可分发命令）。argv/路径白名单
+  + shell 元字符拒绝。OpenSSH 的远端命令最终仍由远端 shell 解释，因此安全性
+  来自固定命令形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全
+  边界；
 - 服务名：`^[a-zA-Z0-9_.-]+$`（systemctl 目标）；
 - remoteDshHome：白名单 + shell 安全值（null = 远端默认 `~/.dsh`）；
 - `write-file` 目标前缀白名单 + 50MiB 大小上限。

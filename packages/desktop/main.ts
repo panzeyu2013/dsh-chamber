@@ -50,10 +50,16 @@ import {
   applyPlugins,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
+  describeLocalPluginAddConfirmation,
+  describeLocalPluginRemoveConfirmation,
+  describeSeedConfirmation,
+  describeMaterializeConfirmation,
+  describePluginApplyConfirmation,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
   materializeAndAdd,
+  redactLocalPluginManifest,
   remoteHome,
   remotePluginList,
   resolveLocalMaterializeDirectory,
@@ -1018,6 +1024,14 @@ if (!gotTheLock) {
           error.code = 'ipc_sender_forbidden';
           throw error;
         }
+        // Quit in progress: refuse every IPC (2026 final review, defensive
+        // depth) — the transport/control-plane teardown has begun, and a
+        // late connect/exec/apply must not spawn work into the shutdown.
+        if (quitRequested) {
+          const error = new Error('app is quitting') as Error & { code?: string };
+          error.code = 'app_quitting';
+          throw error;
+        }
         return handler(...args);
       };
     ipcMain.handle('dsh-chamber:info', trustedIpc(() => ({
@@ -1045,7 +1059,9 @@ if (!gotTheLock) {
     ipcMain.handle('dsh-chamber:settings-get', trustedIpc(() => chamberSettingsStatus()));
     ipcMain.handle('dsh-chamber:settings-set', trustedIpc(({ patch }) => {
       const validated = validatePatch(patch);
-      if (!validated.ok) return { error: validated.error };
+      // Uniform {ok,error} shape for every failure (2026 review) — the
+      // validation failure previously returned a bare {error}.
+      if (!validated.ok) return { ok: false, error: validated.error };
       const applied = applySettingsPatch(validated.patch);
       if (!applied.ok) return applied;
       pushSettingsChanged();
@@ -1273,8 +1289,21 @@ if (!gotTheLock) {
 
     ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => sm.listInstances()));
     ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
+      // Non-array input (a page script) must not become an IPC rejection —
+      // refuse the change and return the CURRENT registry (same family as
+      // the {error}/null shapes of the other channels; 2026 review).
+      if (!Array.isArray(instances)) {
+        console.warn('[dsh-chamber] desktop_ssh_instances_set: non-array input refused');
+        return sm.listInstances();
+      }
       const before = new Set(sm.listInstances().map(instance => instance.id));
-      const saved = sm.saveInstances(instances);
+      let saved;
+      try {
+        saved = sm.saveInstances(instances);
+      } catch (saveError) {
+        console.warn('[dsh-chamber] desktop_ssh_instances_set: save refused: ', saveError);
+        return sm.listInstances();
+      }
       // A removed instance's in-memory password dies with its registry entry
       // (memory-only credentials never outlive the instance they belong to).
       for (const id of before) {
@@ -1318,7 +1347,16 @@ if (!gotTheLock) {
     // only (alias/hostName/user/port) — keys/proxies/credentials never leave
     // the main process.
     ipcMain.handle('desktop_ssh_config_list', trustedIpc(() => discoverSshConfigHosts()));
-    ipcMain.handle('desktop_ssh_connect', trustedIpc(({ id }) => sm.connect(id)));
+    ipcMain.handle('desktop_ssh_connect', trustedIpc(({ id }) => {
+      // Unknown ids throw ssh_instance_not_found inside connect — converge
+      // it to the null shape the other status channels use (2026 review).
+      try {
+        return sm.connect(id);
+      } catch (connectError) {
+        if ((connectError as Error & { code?: string }).code === 'ssh_instance_not_found') return null;
+        throw connectError;
+      }
+    }));
     ipcMain.handle('desktop_ssh_disconnect', trustedIpc(({ id }) => {
       sm.disconnect(id);
       return sm.status(id);
@@ -1377,11 +1415,32 @@ if (!gotTheLock) {
         console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
         knownBundles = undefined;
       }
+      // User confirmation (design 09 §4 v1 mitigation, 2026 final review):
+      // a registry add/remove on a REMOTE instance is a persistent execution
+      // surface — a page script must not drive it silently. Restart-only
+      // applies stay ungated (same class as the restart_service surface).
+      const addList = Array.isArray(add) ? add.filter((entry): entry is string => typeof entry === 'string') : [];
+      const removeList = Array.isArray(remove) ? remove.filter((entry): entry is string => typeof entry === 'string') : [];
+      if (addList.length > 0 || removeList.length > 0) {
+        const instance = sm.listInstances().find(entry => entry.id === id);
+        const confirm = await confirmPluginAction(mainWindow, describePluginApplyConfirmation({
+          targetLabel: instance !== undefined ? (instance.label || instance.host) : null,
+          targetId: id,
+          add: addList,
+          remove: removeList,
+          restart: restart === true,
+        }));
+        if ('cancelled' in confirm) return { ok: true, cancelled: true };
+        if (!confirm.ok) return { ok: false, error: confirm.error };
+      }
       return applyPlugins(execTransport, statusTransport, spec, { add, remove, restart }, { knownBundles });
     }));
     ipcMain.handle('desktop_local_plugin_list', trustedIpc(() => {
       try {
-        return { ok: true, manifest: localPluginList(localDshHome) };
+        // Projection redaction (design 09 §4 v1 mitigation): local-path spec
+        // values (file:/link:/absolute…) must never echo local absolute paths
+        // into the renderer — a remote bundle could read them.
+        return { ok: true, manifest: redactLocalPluginManifest(localPluginList(localDshHome)) };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
@@ -1416,6 +1475,41 @@ if (!gotTheLock) {
       }
     }));
 
+    // Plugin-action confirmation (design 09 §4 v1 mitigation): the pack-and-
+    // transfer / local-install / local-remove IPC channels must pass a
+    // main-process dialog — a remote instance's client bundle executes in the
+    // chamber page (declared trust boundary) and could otherwise drive these
+    // silently. Fail closed without a window; one dialog at a time (a script
+    // burst must not stack dialogs).
+    type PluginConfirmResult = { ok: true } | { cancelled: true } | { ok: false; error: string }
+    let pluginConfirmOpen = false
+    async function confirmPluginAction(
+      win: BrowserWindow | null,
+      copy: { message: string; detail: string },
+    ): Promise<PluginConfirmResult> {
+      if (win === null || win.isDestroyed()) return { ok: false, error: 'no window for confirmation' }
+      if (pluginConfirmOpen) return { ok: false, error: 'another confirmation is in progress' }
+      pluginConfirmOpen = true
+      try {
+        // A hidden-to-tray window must not receive an invisible dialog — show
+        // it first so the confirmation is a real user action.
+        if (!win.isVisible()) win.show()
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'warning',
+          title: copy.message,
+          message: copy.message,
+          detail: copy.detail,
+          buttons: ['取消', '确认'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        })
+        return response === 1 ? { ok: true } : { cancelled: true }
+      } finally {
+        pluginConfirmOpen = false
+      }
+    }
+
     // Host-graph seed + materialize + local plugin exec (design 13 M4): the M2
     // orchestration functions that were implemented but not yet wired. Seed
     // installs module A onto the remote (09 遗留 1); materialize packs a local
@@ -1438,6 +1532,20 @@ if (!gotTheLock) {
         return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
       }
       if (hostPackageSeeding.has(id)) return { ok: false, error: 'chamber host seed in progress' };
+      // Manual-path user confirmation (2026 review): the seed is a persistent
+      // remote modification (writes packages + merges the boot layer) — the
+      // only ungated channel of its class. The AUTO path (ready transition,
+      // main.ts ~1245) calls seedRemoteChamberHostPackages directly and is
+      // unaffected. Cancel → {ok, cancelled}.
+      {
+        const instance = sm.listInstances().find(entry => entry.id === id);
+        const confirm = await confirmPluginAction(mainWindow, describeSeedConfirmation({
+          targetLabel: instance !== undefined ? (instance.label || instance.host) : null,
+          targetId: id,
+        }));
+        if ('cancelled' in confirm) return { ok: true, cancelled: true };
+        if (!confirm.ok) return { ok: false, error: confirm.error };
+      }
       hostPackageSeeding.add(id);
       try {
         const result = await seedRemoteChamberHostPackages(execTransport, spec, chamberHostPackageSeeds);
@@ -1463,6 +1571,18 @@ if (!gotTheLock) {
       if (typeof name !== 'string') return { ok: false, error: 'invalid plugin name' };
       const resolved = resolveLocalMaterializeDirectory(localDshHome, name);
       if (!resolved.ok) return resolved;
+      // User confirmation (design 09 §4 v1 mitigation): pack-and-transfer
+      // sends LOCAL source to the remote — a script in the page must not be
+      // able to do this silently. Cancel mirrors the picker's cancelled shape.
+      const instance = sm.listInstances().find(entry => entry.id === id);
+      const confirm = await confirmPluginAction(mainWindow, describeMaterializeConfirmation({
+        pluginName: name,
+        pluginPath: resolved.path,
+        targetLabel: instance !== undefined ? (instance.label || instance.host) : null,
+        targetId: id,
+      }));
+      if ('cancelled' in confirm) return { ok: true, cancelled: true };
+      if (!confirm.ok) return { ok: false, error: confirm.error };
       return materializeAndAdd(execTransport, spec, resolved.path);
     }));
     // materialize_add_pick (add view): PICK-ONLY — the folder picker runs here in
@@ -1490,14 +1610,27 @@ if (!gotTheLock) {
       // (desktop_local_plugin_add_file); this spec channel only accepts registry
       // specs so a compromised renderer can never drive the local pack surface
       // to an arbitrary directory (design 13 §5.8 hardening).
-      if (typeof specArg === 'string' && specArg.startsWith('file:')) {
+      if (typeof specArg !== 'string') return { ok: false, error: 'invalid plugin spec' };
+      if (specArg.startsWith('file:')) {
         return { ok: false, error: 'local file imports must use the folder picker' };
       }
+      // User confirmation (design 09 §4 v1 mitigation): installing a registry
+      // package into the LOCAL profile creates a persistent execution surface
+      // on the next local boot — never a silent script action.
+      const confirm = await confirmPluginAction(mainWindow, describeLocalPluginAddConfirmation(specArg));
+      if ('cancelled' in confirm) return { ok: true, cancelled: true };
+      if (!confirm.ok) return { ok: false, error: confirm.error };
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
     }));
     ipcMain.handle('desktop_local_plugin_remove', trustedIpc(async ({ name }) => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
+      if (typeof name !== 'string' || name === '') return { ok: false, error: 'invalid plugin name' };
+      // User confirmation (design 09 §4 v1 mitigation): removal is destructive
+      // — a page script must not be able to wipe the local profile silently.
+      const confirm = await confirmPluginAction(mainWindow, describeLocalPluginRemoveConfirmation(name));
+      if ('cancelled' in confirm) return { ok: true, cancelled: true };
+      if (!confirm.ok) return { ok: false, error: confirm.error };
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
     }));

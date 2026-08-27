@@ -222,6 +222,19 @@ export const chamberBridge: {
   遗留僵尸 ctx）；被回收的视图若是当前视图则回落到 local（常驻）。
   插件图诊断同样受 boot generation 门控：已取消/已被重试取代的旧 boot
   即使迟到完成 graph 请求，也不能覆盖新一代的诊断。
+- **boot 预算与串行化（2026 audit H1/M1，契约）**：整个 boot 任务（含
+  host-graph 通道与 `AppWebEntry.run()` 各阶段）受 `BOOT_TIMEOUT_MS` 预算
+  约束——超时即取消（记录 cancelledBoots、立即 dispose 已构造的 entry、
+  拒绝排队 opens），调用方与串行链都在预算内 settle；两个 boot 永不并发，
+  也就不会并发覆盖 `window.__DSH_BASE_PATH__` 旋钮（跨实例流量混淆的
+  根因）。取消阈值**单调、永不删除**（与 bootGenerations 同范式——注册成功
+  清阈值依赖队列 FIFO，被超时打破；迟到 settle 观察阈值后拆除而非注册）。
+  dispose 串行化：
+  `AppWebEntry.dispose()` 是异步 teardown，同 ID 重 boot 必须先 await 旧
+  teardown 完成（pendingDisposes），新旧 ctx 永不重叠。
+  **L2（来源域键）**：双击 pending 与 blank-ghost 宽限均按
+  `(serverId, sessionId)` 建键——克隆实例携带相同 UUID 时跨来源点击/幽灵槽
+  绝不串状态（`data-chamber-section` 提供点击目标的来源归属）。
 - **切换实现（修正：即时隐藏 + View Transition + 骨架屏，content-visibility）**：
   非活动视图用 `visibility:hidden + opacity:0 + pointer-events:none` 即时隐藏，
   且 `.instance-shell` 同时置 `content-visibility:hidden`——跳过整棵 shell 的
@@ -472,14 +485,17 @@ instanceId}` +
   端点身份验证）。就绪判据（TCP + dsh 身份握手）、两段式重连与 `verifyUp`
   **确定性验证失败免重试**（`terminal` 分类——目标应答了探测但证明不是
   兼容 dsh → 第一次失败即落 error 终态，仅瞬时失败走重连）的机制细节见
-  03 §2.2。
+  03 §2.2。**加固（2026 audit M2/M10）**：exec 子进程与隧道子进程同款
+  SIGTERM→SIGKILL 升级且 `disposeAsync` 等待两者全部退出（SIGTERM 忽略型
+  ssh exec 不残留孤儿）；本地端口分配瞬时失败（临时端口耗尽）进入慢速
+  周期重探，不再永久停在 error。
 - `ssh-provider.ts` 是 v1 唯一实现：`ssh -N -o ServerAliveInterval=30 -o
   ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort>`
   隧道 + systemctl exec；认证特征/脱敏/白名单全在 provider 内。
 - **exec 通道（2026-08 扩展，设计 13）**：`TransportExecPayload.op` 为
   `'exec'`（systemctl `start/stop/is-active/restart`、远端命令 `run`——命令名
-  白名单 `dsh|cat|printf|base64|mkdir` + argv/路径白名单 + shell 元字符拒绝，
-  见 13 §7.2）或 `'write-file'`（stdin base64 流式写 + **字节域** SHA-256 回读
+  白名单 `dsh|cat|printf`（可分发；`base64`/`mkdir` 仅内联于 write-file 管线）
+  + argv/路径白名单 + shell 元字符拒绝，见 13 §7.2）或 `'write-file'`（stdin base64 流式写 + **字节域** SHA-256 回读
   校验 + 目标前缀白名单 + **50MiB 大小上限**）。成功结果同时携带 stdout
   （UTF-8 视图）与 stdoutBytes（原始 Buffer）——二进制内容校验在字节域进行。
   plugin-sync 编排（apply/seed/materialize）全部经此通道，spec 在主进程二次
@@ -521,7 +537,9 @@ instanceId}` +
   fchmod 0600 再写秘密；写成功后才发布内存状态、启动时严格
   校验 schema——密码主机重启后自动连接可用；损坏/结构非法文件保留为
   `*.corrupt` 并响亮报告，绝不静默当空集）；
-  新增/编辑主机若密码写入失败，设置页补偿回滚本次元数据保存；回滚 IPC
+  保存顺序按注册表存在性（2026 final review）：**编辑**既有主机时密码先行、
+  密码失败则注册表不动（无需回滚）；**新增**主机时注册表先行（主进程拒绝
+  为未注册 id 存密码）再落密码，密码失败回滚本次元数据保存；回滚 IPC
   异常时重新读取权威注册表并按真实状态保留编辑态，避免重复新增；
   永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
   exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH

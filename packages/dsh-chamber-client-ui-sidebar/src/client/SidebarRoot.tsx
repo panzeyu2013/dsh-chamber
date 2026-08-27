@@ -954,7 +954,7 @@ export function SidebarRoot({
     const isBlankCurrent = active.workspaces.some(workspace =>
       workspace.sessions.some(session => session.id === current && session.blank === true))
     if (!isBlankCurrent) return
-    armBlankGhost(current)
+    armBlankGhost(active.id, current)
     ghostExpiry.current.set(current, Date.now() + BLANK_GHOST_GRACE_MS)
     // chamber (third-wave review, R2-1#5): the one-shot timer is trimmed from
     // the ref after it fires, so repeated armings (rare, but each timer
@@ -1183,7 +1183,7 @@ export function SidebarRoot({
     const workspace = server.workspaces.find(candidate =>
       candidate.id === activeDrag.accountKey && (candidate.ungrouped === true) === activeDrag.ungrouped)
     if (workspace === undefined) return
-    const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
+    const orderBy = getViewPrefs().orderBy?.[server.id] ?? viewPrefs.orderBy?.[server.id] ?? 'manual'
     const wireIds = workspace.sessions.map(session => session.id)
     const accountKey = `${server.id}/${workspace.id}`
     // Updated branch reads the LIVE store (like the derivation effect, not
@@ -1352,7 +1352,10 @@ export function SidebarRoot({
     serverDropCommitted.current = true
     setServerDrag(null)
     updateViewPrefs(prev => {
-      const renderedOrder = orderServersForDisplay(servers, prev.serverOrder).map(server => server.id)
+      // Live roster at commit time (2026 review S4): the render-closure
+      // `servers` snapshot may lag a concurrent registry change.
+      const liveServers = chamberBridge.getServers()
+      const renderedOrder = orderServersForDisplay(liveServers, prev.serverOrder).map(server => server.id)
       const nextOrder = nextServerOrder(renderedOrder, activeDrag.sourceId, over)
       if (nextOrder === null) return prev
       return { ...prev, serverOrder: nextOrder }
@@ -1531,6 +1534,9 @@ export function SidebarRoot({
                 currentRemote,
                 SESSION_SEARCH_RESULT_LIMIT,
                 visibleIds,
+                // 2026 audit M7：投影实际落定（aggregateReady）后可见集才是权威
+                // ——就绪且空集时远程腿过滤为空；未就绪保留降级（不过滤）。
+                server.aggregateReady === true,
               )
               // chamber (06 §4): the current-session highlight is channel-based
               // — no direct store subscription — and single-selection: only the
@@ -1625,7 +1631,7 @@ export function SidebarRoot({
               }
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
-                const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
+                const orderBy = getViewPrefs().orderBy?.[server.id] ?? viewPrefs.orderBy?.[server.id] ?? 'manual'
                 // 2026-08 C档（对齐官方）：updated = 手动序 + 活动置顶。渲染序
                 // 直接取共享的 updated-order account（推导 effect 已把 seeding/
                 // recency sort/promotion 写回，见上）；account 尚不存在时（切换
@@ -1973,7 +1979,8 @@ export function SidebarRoot({
                             }
                           } else {
                             expandSearch(server.id)
-                            searchInputs.current[server.id]?.focus()
+                            // (no synchronous focus here — the input mounts
+                            // after the state update; autoFocus covers it)
                           }
                         }}
                     >
@@ -2604,15 +2611,18 @@ export function SidebarRoot({
                                       // (OpenChamber model). The module-global
                                       // pending (keyed by sessionId) only
                                       // answers "is this the SECOND click of a
-                                      // double click on the same session within
-                                      // DOUBLE_CLICK_WINDOW_MS" — that one
-                                      // enters inline rename; any other click
-                                      // records the pending and opens right
-                                      // away. openSession is idempotent, so a
-                                      // misjudged slow second click just
-                                      // re-opens (no-op) and can NEVER
-                                      // accidentally rename.
-                                      if (noteSessionRowClick(session.id)) {
+                                      // double click on the same (source,
+                                      // session) within DOUBLE_CLICK_WINDOW_MS"
+                                      // — that one enters inline rename; any
+                                      // other click records the pending and
+                                      // opens right away. openSession is
+                                      // idempotent, so a misjudged slow second
+                                      // click just re-opens (no-op) and can
+                                      // NEVER accidentally rename. Keyed by
+                                      // (server.id, session.id) (2026 audit L2:
+                                      // cloned UUIDs across sources must not
+                                      // cross-trigger rename).
+                                      if (noteSessionRowClick(server.id, session.id)) {
                                         // P2-10 同款 blank 门控（2026-08
                                         // review）：空白"新建会话"占位行无内容可
                                         // 改名——双击不得进入内联重命名（否则会

@@ -35,7 +35,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** The patch overlay file under <stateDir> (design 09 §3.1 方案 A). */
@@ -312,10 +312,18 @@ export const HOST_GRAPH_PATCH_OVERLAY = renderPatchOverlay([HOST_GRAPH_INSERT])
 /** Files seeded from each chamber host package (its complete runtime surface). */
 const HOST_PACKAGE_SEED_FILES = ['package.json', 'dist/index.js'] as const
 
-/** Atomic text write (tmp + rename, 0600): no partial file on crash. */
+/** Atomic text write (tmp + fsync + rename, 0600): no partial file on
+ *  crash (2026 review added the fsync). */
 function atomicWrite(path: string, content: string | Uint8Array): void {
   const tmp = `${path}.${randomUUID()}.tmp`
-  writeFileSync(tmp, content, { mode: 0o600 })
+  const fd = openSync(tmp, 'w', 0o600)
+  try {
+    if (typeof content === 'string') writeSync(fd, content)
+    else writeSync(fd, Buffer.from(content))
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
   renameSync(tmp, path)
 }
 

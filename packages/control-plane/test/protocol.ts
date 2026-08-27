@@ -295,7 +295,7 @@ test('a spawn failure is fail-loud: state lands on error and start() rejects', a
   assert.match(connection.getError() ?? '', /port occupied/)
 })
 
-test('a catalog write failure prevents publishing the next lifecycle state', async () => {
+test('a catalog write failure never blocks the lifecycle state machine (M13)', async () => {
   let spawns = 0
   const connection = createLocalConnection({
     stateDir: '/tmp/none',
@@ -311,9 +311,13 @@ test('a catalog write failure prevents publishing the next lifecycle state', asy
       describeCapabilities: mockDescribe().describeCapabilities,
     },
   })
-  await assert.rejects(connection.start(), /catalog disk unavailable/)
-  assert.equal(connection.getState(), 'stopped')
-  assert.equal(spawns, 0)
+  // Runtime projections (status/dshPort/error) persist BEST-EFFORT: a disk
+  // failure is loud in the log but must never block the in-memory machine
+  // (2026 audit M13; previously this test asserted the write-through reject).
+  const row = await connection.start()
+  assert.equal(connection.getState(), 'ready', 'the machine advances despite the persist failure')
+  assert.equal(spawns, 1)
+  assert.equal(row?.connectionId, 'local')
 })
 
 test('health failures count into degraded; success resets; threshold triggers a restart', async () => {

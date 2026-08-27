@@ -191,8 +191,78 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Release-path validation gate (2026 review): the tag push runs ci.yml and
+  # release.yml in PARALLEL, so the release must validate itself — finalize
+  # must never publish an untested commit. Mirrors ci.yml's test job core.
+  validation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@1d0a4696b7d49f21e82fb2a5395270ae1984f0db # v4.2.2
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Cache pinned harness snapshot
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: vendor/harness-checkout
+          key: harness-${{ hashFiles('harness.commit') }}
+      - name: Bootstrap vendor tree
+        run: node scripts/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Type check (tsc + chamber host packages)
+        run: |
+          pnpm run typecheck
+          pnpm run typecheck:host-graph
+          pnpm run typecheck:host-git
+      - name: i18n pair consistency
+        run: pnpm run verify:i18n
+      - name: Control-plane unit tests
+        run: |
+          node packages/control-plane/test/protocol.ts
+          node packages/control-plane/test/storage.ts
+          node packages/control-plane/test/m1-dsh-client.ts
+          node packages/control-plane/test/host-logs.ts
+          node packages/control-plane/test/manager-api.ts
+          node packages/control-plane/test/local-connection.ts
+          node packages/control-plane/test/spawn-dsh.ts
+          node packages/control-plane/test/instance-proxy.ts
+          node packages/control-plane/test/ws-frames.ts
+          node packages/control-plane/test/static-serving.ts
+          node packages/control-plane/test/host-graph-seed.ts
+      - name: Desktop / renderer / plugin unit tests and type checks
+        run: |
+          pnpm run test:desktop
+          pnpm run test:renderer-shell
+          pnpm run typecheck:sidebar
+          pnpm run typecheck:git
+          pnpm run typecheck:layout
+          pnpm run typecheck:connections
+          pnpm run typecheck:settings-bridge
+          pnpm run typecheck:client-web
+          pnpm run typecheck:open-in
+          pnpm run test:sidebar
+          pnpm run test:git
+          pnpm run test:host-git
+          pnpm run test:settings-bridge
+          pnpm run test:connections
+          pnpm run test:client-web
+          pnpm run test:connection
+      - name: Renderer + host package builds
+        run: |
+          pnpm run build:renderer
+          pnpm run build:host-packages
+
   build-macos:
-    needs: create-release
+    needs: [create-release, validation]
     permissions:
       contents: write
     # Public arm64 runner label only (OpenChamber 踩坑：非公开标签
@@ -282,7 +352,7 @@ jobs:
           fi
 
   build-windows:
-    needs: create-release
+    needs: [create-release, validation]
     permissions:
       contents: write
     # windows-2022, not windows-latest: the node-gyp stack does not detect the

@@ -71,8 +71,11 @@ const PINNED = /^[~^]?v?\d/
  *  Note `~/` (tilde then slash) is a home path, while a bare `~1.2.3` is a
  *  tilde range; a bare `.foo` is NOT a path on either side (unsyncable). */
 function isPathSpec(spec: string): boolean {
-  return spec.startsWith('file:')
-    || spec.startsWith('link:')
+  // Scheme checks are case-insensitive to match the main process
+  // (plugin-sync isMaterializeSpec, /i) — a `FILE:`/`LINK:` value must
+  // classify as materialize on BOTH sides (2026 final review).
+  return /^file:/i.test(spec)
+    || /^link:/i.test(spec)
     || /^\.{1,2}\//.test(spec)
     || spec.startsWith('/')
     || spec.startsWith('~/')

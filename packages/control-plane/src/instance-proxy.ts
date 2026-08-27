@@ -28,8 +28,10 @@
  * over 300MiB → 413 body_too_large (+ upstream abort).
  *
  * Response headers are converged to a whitelist (03 §3.4): content-type,
- * cache-control, x-next-cursor, x-ratelimit-*; nothing else rides through
- * (hop-by-hop and potential credential surfaces stay server-side).
+ * cache-control, content-encoding (compression labels ride through so the
+ * browser decodes correctly, 2026 audit M3b), x-next-cursor, x-ratelimit-*;
+ * nothing else rides through (hop-by-hop and potential credential surfaces
+ * stay server-side).
  *
  * Diagnostics: plain counters (requests / failures / activeStreams) — no
  * sensitive data, no URLs.
@@ -104,10 +106,14 @@ export const WS_PING_INTERVAL_MS = 30_000
 /** Consecutive ping cycles without a browser pong before the splice is torn down. */
 export const WS_PING_MISSES_BEFORE_TEARDOWN = 1
 
-/** Response headers converged through to the browser (03 §3.4 / 04 §4.3). */
+/** Response headers converged through to the browser (03 §3.4 / 04 §4.3).
+ *  content-encoding rides through so any compressed upstream body stays
+ *  correctly labeled (2026 audit M3b; accept-encoding is stripped upstream,
+ *  so compression is the exception, not the rule). */
 export const RESPONSE_HEADER_WHITELIST = new Set([
   'content-type',
   'cache-control',
+  'content-encoding',
   'x-next-cursor',
   'x-ratelimit-limit',
   'x-ratelimit-remaining',
@@ -141,6 +147,12 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   'x-forwarded-proto',
   'x-forwarded-port',
   'x-real-ip',
+  // Compression negotiation must not cross the proxy: the response side
+  // forwards raw bytes and would drop content-encoding, so a compressed
+  // upstream body would be misparsed by the browser (2026 audit M3b).
+  // Identity is always acceptable; any upstream that still compresses is
+  // labeled correctly via the content-encoding whitelist below.
+  'accept-encoding',
 ])
 
 /** Only headers required to complete a WebSocket 101 may cross downstream. */
@@ -168,6 +180,9 @@ export interface ProxyRequest {
   headers: Record<string, string | string[] | undefined>
   on(event: string, listener: (...args: any[]) => void): unknown
   removeListener(event: string, listener: (...args: any[]) => void): unknown
+  /** Discard unread body bytes as they arrive (IncomingMessage.resume;
+   *  optional because test fakes may omit it). */
+  resume?(): unknown
   [Symbol.asyncIterator](): AsyncIterableIterator<Buffer>
 }
 
@@ -452,7 +467,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     const target = new URL(`${baseUrl}${parsed.rest}${parsed.search}`)
     const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
     const hasBody = !(method === 'GET' || method === 'HEAD')
+    if (!hasBody) {
+      // A GET/HEAD carrying a body must be drained as it arrives — unread
+      // bytes would stay on the keep-alive socket and be misparsed as the
+      // next request's start line (2026 round-3 review). resume() discards;
+      // bodyless requests are unaffected.
+      req.resume?.()
+    }
     let body: Buffer | null = null
+    // The read-body reservation, held until the upstream request completes
+    // (see the budget comment in the hasBody block).
+    let bodyReservation = 0
     if (hasBody) {
       const rawLength = Array.isArray(req.headers['content-length']) ? req.headers['content-length'][0] : req.headers['content-length']
       const declared = rawLength === undefined ? NaN : Number(rawLength)
@@ -466,6 +491,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       // Content-Length reserves its exact byte count; Node's parser enforces
       // that framing, so a caller cannot smuggle additional body bytes.
       const reservation = Number.isFinite(declared) && declared >= 0 ? declared : MAX_REQUEST_BODY_BYTES
+      bodyReservation = reservation
       if (bufferedRequestBytes + reservation > maxBufferedRequestBytes) {
         counters.failures += 1
         releaseRequest()
@@ -476,6 +502,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       try {
         body = await readBody(req, MAX_REQUEST_BODY_BYTES, clientBodyIdleTimeoutMs)
       } catch (bodyError) {
+        bodyReservation = 0
         bufferedRequestBytes = Math.max(0, bufferedRequestBytes - reservation)
         counters.failures += 1
         releaseRequest()
@@ -487,7 +514,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         }
         return
       }
-      bufferedRequestBytes = Math.max(0, bufferedRequestBytes - reservation)
+      // The reservation is HELD past readBody: the body Buffer lives until
+      // the upstream request completes, so the process-wide budget must
+      // account for it that long (2026 review — releasing here let 64×300MiB
+      // concurrent bodies blow the memory budget while the counter said 0).
+      // releaseBodyBudget() runs at every post-forward completion point.
+    }
+    const releaseBodyBudget = (): void => {
+      if (bodyReservation > 0) {
+        bufferedRequestBytes = Math.max(0, bufferedRequestBytes - bodyReservation)
+        bodyReservation = 0
+      }
     }
     const headers: Record<string, string> = { host: target.host }
     for (const [name, value] of Object.entries(req.headers)) {
@@ -514,11 +551,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     const controller = new AbortController()
     const onClientClose = () => {
       controller.abort()
+      releaseBodyBudget()
       releaseRequest()
     }
     req.on('close', onClientClose)
     const timeoutAbort = (): void => {
       controller.abort()
+      releaseBodyBudget()
       releaseRequest()
       if (!res.headersSent) writeError(res, 504, 'upstream_timeout', 'upstream request timed out')
       else res.destroy()
@@ -532,13 +571,27 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       clearUpstreamTimeout = () => {}
     }
     const source = body === null ? null : bodySource([body])
-    const upstream = request(target, {
-      method,
-      headers,
-      signal: controller.signal,
-    })
+    // A synchronous request-setup failure (invalid target URL/protocol, a
+    // pre-flight throw from the injected httpRequest) must release the BODY
+    // budget as well — the reservation lives in THIS closure, and the outer
+    // catch in handleHttp only releases the request slot. Without this, a
+    // doomed setup would leave bufferedRequestBytes inflated forever and
+    // eventually produce false 503 resource_exhausted (2026 review hardening).
+    let upstream: ReturnType<typeof httpRequest>
+    try {
+      upstream = request(target, {
+        method,
+        headers,
+        signal: controller.signal,
+      })
+    } catch (setupError) {
+      clearTimeoutGuards()
+      releaseBodyBudget()
+      throw setupError
+    }
     upstream.on('error', upstreamError => {
       clearTimeoutGuards()
+      releaseBodyBudget()
       const abort = (upstreamError as Error & { name?: string }).name === 'AbortError' || controller.signal.aborted
       releaseRequest()
       if (abort) return
@@ -558,6 +611,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       const declaredBytes = typeof declaredLength === 'string' ? Number(declaredLength) : NaN
       if (!isSse && Number.isFinite(declaredBytes) && declaredBytes > MAX_RESPONSE_BODY_BYTES) {
         upstreamRes.destroy()
+        releaseBodyBudget()
         releaseRequest()
         counters.failures += 1
         writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap')
@@ -588,6 +642,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           // truncation (design 03 §3.4).
           upstreamRes.destroy()
           controller.abort()
+          releaseBodyBudget()
           releaseRequest()
           counters.failures += 1
           if (!res.headersSent) writeError(res, 413, 'body_too_large', 'upstream response exceeds the 300MiB cap')
@@ -601,6 +656,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       })
       upstreamRes.on('error', () => {
         clearTimeoutGuards()
+        releaseBodyBudget()
         releaseRequest()
         counters.failures += 1
         res.destroy()
@@ -611,10 +667,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       // a dead response (same teardown family as the upgrade splice).
       res.on('error', () => {
         controller.abort()
+        releaseBodyBudget()
         releaseRequest()
       })
       upstreamRes.on('end', () => {
         clearTimeoutGuards()
+        releaseBodyBudget()
         releaseRequest()
         req.removeListener('close', onClientClose)
         res.end()

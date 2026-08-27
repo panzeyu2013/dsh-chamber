@@ -204,6 +204,8 @@ test('classifySpec: pinned/tag specs are registry, paths are materialize, else u
   assert.deepEqual(classifySpec('next'), { type: 'registry', unlocked: true })
   assert.deepEqual(classifySpec('file:../x'), { type: 'materialize' })
   assert.deepEqual(classifySpec('link:../x'), { type: 'materialize' })
+  assert.deepEqual(classifySpec('FILE:../x'), { type: 'materialize' }, 'scheme matching is case-insensitive (main-side parity)')
+  assert.deepEqual(classifySpec('LINK:../x'), { type: 'materialize' }, 'scheme matching is case-insensitive (main-side parity)')
   assert.deepEqual(classifySpec('./x'), { type: 'materialize' })
   assert.deepEqual(classifySpec('/abs/x'), { type: 'materialize' })
   assert.equal(classifySpec('workspace:*').type, 'unsyncable')

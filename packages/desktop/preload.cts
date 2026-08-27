@@ -38,25 +38,33 @@ export interface DesktopSshSurface {
   restart_service(id: string): Promise<SshExecIpcResult>
   /** Read the remote instance's plugin manifest (design 13 §4.3). */
   plugin_list(id: string): Promise<SshRemotePluginListResult>
-  /** Apply a plugin-set change to a remote instance (design 13 §4.3/§4.5). */
+  /** Apply a plugin-set change to a remote instance (design 13 §4.3/§4.5).
+   *  Registry add/remove requires a main-process user confirmation (design
+   *  09 §4); cancel → {ok, cancelled}. */
   plugin_apply(id: string, input: SshPluginApplyInput): Promise<SshPluginApplyIpcResult>
-  /** Read the LOCAL instance's plugin manifest (design 13 §4.3). */
+  /** Read the LOCAL instance's plugin manifest (design 13 §4.3). Local-path
+   *  dependency values are masked (`file:<hidden>`) — absolute paths never
+   *  leave the main process (design 09 §4). */
   local_plugin_list(): Promise<SshLocalPluginListResult>
   /** Best-effort npm registry search (main-process fetch; design 13 §5.8). */
   npm_search(query: string): Promise<SshNpmSearchResult>
   /** Seed module A onto a remote instance (design 13 §4.6, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
   /** Pack a named local-manifest dependency and install it remotely. Main
-   *  resolves the directory; renderer paths are never accepted. */
+   *  resolves the directory; renderer paths are never accepted. Requires a
+   *  main-process user confirmation (design 09 §4); cancel → {ok, cancelled}. */
   plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
   /** Pack a user-PICKED local plugin dir and install it remotely (pick-only; the
    *  main process opens the folder picker, no renderer-supplied path, design 13 §5.8). */
   plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
-  /** Install a spec into the LOCAL dsh profile (design 13 §5.1). */
+  /** Install a registry spec into the LOCAL dsh profile (design 13 §5.1).
+   *  Requires a main-process user confirmation (design 09 §4); cancel →
+   *  {ok, cancelled}. `file:` specs are refused — use local_plugin_add_file. */
   local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
   /** Pick a local folder and install it into the LOCAL dsh profile (pick-only). */
   local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
-  /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
+  /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). Requires a
+   *  main-process user confirmation (design 09 §4); cancel → {ok, cancelled}. */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
@@ -73,11 +81,32 @@ export interface SshStatusChangedPayload {
 export type SshExecIpcResult = SshStatusProjection | { error: string }
 
 /** Remote plugin manifest projection (design 13 §4.3). */
+/** Chamber host-graph injection state (design 09 module A) — the same
+ *  two-file presence definition as the control-plane seed. */
+export interface ChamberHostGraphState {
+  installed: boolean
+  patched: boolean
+  version: string | null
+  live: boolean | null
+}
+
+/** Chamber-injected component state (design 09): ok:false = unreadable (loud,
+ *  never a silent "not injected"). Mirrors renderer/settings-connections. */
+export type ChamberInjectionState =
+  | {
+    ok: true
+    hostGraph: ChamberHostGraphState
+    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
+  }
+  | { ok: false; error: string }
+
 export interface SshRemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
   profileExists: boolean
   error?: string
+  /** Chamber-injected component state (design 09), probed over the wire. */
+  chamber: ChamberInjectionState
 }
 export type SshRemotePluginListResult =
   | { ok: true; manifest: SshRemotePluginManifest }
@@ -91,6 +120,8 @@ export interface SshLocalPluginManifest {
   /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
   bundleLines: string[]
   unsyncable: { name: string; reason: string }[]
+  /** Chamber-injected component state (design 09), always readable locally. */
+  chamber: ChamberInjectionState
 }
 export type SshLocalPluginListResult =
   | { ok: true; manifest: SshLocalPluginManifest }
@@ -111,6 +142,7 @@ export interface SshPluginApplyResult {
 }
 export type SshPluginApplyIpcResult =
   | { ok: true; result: SshPluginApplyResult }
+  | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
 /** Apply input (renderer → main; main re-validates every spec, design 13 §7.2). */
@@ -133,6 +165,7 @@ export type SshNpmSearchResult =
 /** Host-graph seed outcome (design 13 §4.6). */
 export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
+  | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
 /** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed
@@ -482,9 +515,11 @@ function requestAppInfo(): Promise<Partial<DshChamberBridge>> {
 requestAppInfo().then(
   (info: Partial<DshChamberBridge>) => {
     contextBridge.exposeInMainWorld('dshChamber', {
-      controlPlaneUrl: info?.controlPlaneUrl,
-      dshVersion: info?.dshVersion,
-      version: info?.version,
+      // Normalize absent info fields to null — the bridge type declares
+      // `string | null`, not `undefined` (2026 review T3).
+      controlPlaneUrl: info?.controlPlaneUrl ?? null,
+      dshVersion: info?.dshVersion ?? null,
+      version: info?.version ?? null,
       platform: info?.platform ?? null,
       desktopSsh: desktopSshApi(),
       update: updateApi(),

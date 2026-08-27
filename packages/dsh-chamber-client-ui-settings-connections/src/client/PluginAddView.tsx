@@ -60,7 +60,8 @@ export function PluginAddView({ t, spec, onInstalled }: {
     try {
       if (isRemote && spec !== null) {
         const res = await pluginApply(spec.id, { add: [value], remove: [], restart: false })
-        if ('error' in res) setDraftError(res.error)
+        if ('cancelled' in res) { /* silent no-op (user dismissed the main-process confirmation) */ }
+        else if ('error' in res) setDraftError(res.error)
         else if (res.result.failed.length > 0 || !res.result.verified) {
           // pluginApply resolves {ok:true} even when an individual add failed
           // or the manifest assertion failed (design 13 §4.5) — fail loud and
@@ -75,6 +76,7 @@ export function PluginAddView({ t, spec, onInstalled }: {
       } else {
         const res = await localPluginAdd(value)
         if ('error' in res) setDraftError(res.error)
+        else if ('cancelled' in res) { /* silent no-op (user dismissed the confirmation) */ }
         else { setResult(t('pluginsApplied')); setDraft(''); onInstalled() }
       }
     } catch (err) {

@@ -70,6 +70,11 @@
   （处置映射见 01 §4；git/GitHub 例外：插件化，见 01 §4 / 设计 08）。
 - **不做（v1）**：跨来源移动会话、单 store 真融合（fork runtime）、会话
   实时推送同步、远程实例管理 UI 外壳。
+- **P0 信任域残余（09 §4，已缓解，架构版解决）**：远端 bundle 与 chamber 页面
+  共享高权限 bridge 的上下文。2026-11 已落地 v1 缓解——materialize/本地插件
+  add/remove 与远端 `plugin_apply`（registry add/remove，2026 final review）
+  主进程确认对话框 + `local_plugin_list` 路径脱敏；bridge 全局面与
+  横向实例数据面隔离推迟到每实例独立 WebContents 架构版（本阶段明确不做）。
 - **推迟**：flat 单列表模式（与「仅按来源分类」呈现原则张力）。
 - **设置壳偏差（持续成立）**：未连接实例不装配子 ctx（配置在目标机器上，
   物理不可达）；stub remote 无 WS 失效流；设置壳不渲染官方 SettingsRoot；

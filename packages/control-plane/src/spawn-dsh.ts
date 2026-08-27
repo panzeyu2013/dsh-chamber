@@ -52,7 +52,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { mkdirSync, writeFileSync, rmSync, readFileSync, renameSync, existsSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -300,6 +300,13 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     // orphan reaper (design 02 §3.4.2) reclaims it.
     detached: true,
   })
+  // A spawn failure (ENOENT/EACCES/Electron fuse) arrives as an async
+  // 'error' event. Attach a listener BEFORE the pid check: if the pid check
+  // throws, the pending event would otherwise be unhandled and crash the
+  // whole control plane with an uncaughtException. The listener converges
+  // into the outcome failure once the outcome promise exists (2026 review).
+  let onSpawnError: ((error: Error) => void) | undefined
+  child.on('error', error => onSpawnError?.(error))
   const pid = child.pid
   if (pid === undefined) {
     child.kill('SIGKILL')
@@ -317,7 +324,16 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
   })
   child.once('exit', () => hostLog.close())
   const instanceId = readInstanceId(stateDir)
-  writePidRecord(stateDir, pid, port, process.pid, instanceId === null ? {} : { ownerInstanceId: instanceId })
+  // The pid record is best-effort for the REAPER (a missing record can be
+  // re-derived) — but a FAILED WRITE still cleans the spawned child up and
+  // makes this spawn attempt FAIL (design 02 §3.3): never leave an untracked
+  // detached process behind (2026 audit H3).
+  try {
+    writePidRecord(stateDir, pid, port, process.pid, instanceId === null ? {} : { ownerInstanceId: instanceId })
+  } catch (recordError) {
+    await killFailedSpawn(stateDir, child)
+    throw recordError
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
@@ -328,6 +344,13 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     child.once('exit', onExit)
     onAbort = () => resolve('aborted')
     signal?.addEventListener('abort', onAbort, { once: true })
+    onSpawnError = error => {
+      // Converge into the regular non-tcp failure path: the caller's
+      // killFailedSpawn cleanup + loud throw take over.
+      if (timer !== undefined) clearTimeout(timer)
+      if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
+      resolve(`spawn-error: ${error.message}`)
+    }
     const probe = () => {
       if (child.exitCode !== null || child.signalCode !== null) return
       const socket = createConnection({ host: '127.0.0.1', port })
@@ -347,8 +370,7 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
   })
   if (outcome !== 'tcp') {
-    child.kill('SIGKILL')
-    removePidRecord(stateDir, pid)
+    await killFailedSpawn(stateDir, child)
     throw new Error(`dsh spawn attempt on port ${port} failed: ${outcome} before TCP listen`)
   }
   // The TCP listener comes up before the connection plugin's /api routes are
@@ -373,8 +395,7 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     }
   } catch (error) {
     clearTimeout(probeTimer)
-    child.kill('SIGKILL')
-    removePidRecord(stateDir, pid)
+    await killFailedSpawn(stateDir, child)
     throw new Error(`dsh spawn attempt on port ${port} failed: host.describe: ${String(error)}`)
   }
   clearTimeout(probeTimer)
@@ -406,6 +427,27 @@ function killGroup(pid: number, signal: NodeJS.Signals): void {
       process.kill(pid, signal)
     } catch { /* already gone */ }
   }
+}
+
+/**
+ * Abandon a FAILED spawn attempt: process-group SIGKILL → wait for the exit →
+ * remove the pid record. Every spawnAttempt failure path converges here so a
+ * broken attempt can never leave an untracked detached process behind (2026
+ * audit H3 — writePidRecord failures and the TCP/describe failure paths used
+ * to kill only the pid and remove the record before exit). Mirror of
+ * terminateChild's group discipline; the record is removed only after the
+ * process is confirmed dead (design 02 §3.3: 注销只在确认进程已退出后) — a
+ * child that somehow survives the SIGKILL stays tracked for the orphan reaper.
+ */
+export async function killFailedSpawn(stateDir: string, child: ChildProcess): Promise<void> {
+  const pid = child.pid
+  if (pid === undefined) return
+  if (child.exitCode === null && child.signalCode === null) {
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+    killGroup(pid, 'SIGKILL')
+    await exited
+  }
+  removePidRecord(stateDir, pid)
 }
 
 /** Stop a managed child: process-group SIGTERM, escalate to SIGKILL after
@@ -495,6 +537,14 @@ export function readPidRecord(stateDir: string, pid: number): PidRecord | null {
 /** Atomic JSON write (tmp + rename): catalog/pid durability without partial files. */
 export function atomicWriteJson(path: string, value: unknown): void {
   const tmp = `${path}.${randomUUID()}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(value, undefined, 2)}\n`)
+  // fsync before the rename (2026 review): a crash between write and rename
+  // must not leave a zero-length/partial record at the final path.
+  const fd = openSync(tmp, 'w', 0o600)
+  try {
+    writeSync(fd, `${JSON.stringify(value, undefined, 2)}\n`)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
   renameSync(tmp, path)
 }

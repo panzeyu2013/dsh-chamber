@@ -591,7 +591,13 @@ const passwords = new Map<string, string>()
 let passwordFile: string | null = null
 
 /** id → path of the live ephemeral askpass helper (0700, deleted on dispose). */
-const askpassHelpers = new Map<string, string>()
+// id → every helper file ever baked for it (a password change creates a new
+// helper; the old one stays until dispose/clear so an in-flight spawn that
+// already captured its env keeps working — 2026 review: deleting the previous
+// helper on every sshAuthEnv call raced concurrent tunnel+exec).
+const askpassHelpers = new Map<string, string[]>()
+/** The password each id's helpers were baked with (reuse key). */
+const askpassHelperPasswords = new Map<string, string>()
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -654,6 +660,10 @@ export function setSshPassword(id: string, password: string | null): void {
   }
   if (password !== null && password.length > MAX_SSH_PASSWORD_CHARS) {
     throw new Error(`refusing SSH password longer than ${MAX_SSH_PASSWORD_CHARS} characters`)
+  }
+  if (password === null || password === '') {
+    // Cleared passwords must not leave baked secrets on disk (2026 review).
+    clearAskpassHelpers(id)
   }
   const next = new Map(passwords)
   if (password === null || password === '') next.delete(id)
@@ -808,20 +818,34 @@ function deleteAskpassHelper(path: string) {
 /**
  * The askpass environment for one instance's ssh spawn (tunnel AND systemd
  * exec): null when the instance has no stored password or the platform does
- * not support it. Recreates the ephemeral helper on every call (one live
- * helper per id at most — a changed password is always baked fresh).
+ * not support it. The helper is REUSED while the password is unchanged —
+ * never deleted and recreated per call (a concurrent tunnel+exec would
+ * delete each other's in-use helper and produce a fake auth failure; 2026
+ * review). A changed password bakes a NEW helper; the old file stays until
+ * dispose/clear so an in-flight spawn keeps working.
  */
 export function sshAuthEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | null {
   if (!sshPasswordSupported()) return null
   const password = getSshPassword(spec.id)
   if (password === null) return null
-  const previous = askpassHelpers.get(spec.id)
-  if (previous !== undefined) {
-    deleteAskpassHelper(previous)
+  const existing = askpassHelpers.get(spec.id) ?? []
+  if (existing.length > 0 && askpassHelperPasswords.get(spec.id) === password) {
+    return { SSH_ASKPASS: existing[existing.length - 1], SSH_ASKPASS_REQUIRE: 'force' }
   }
   const helper = createAskpassHelper(spec.id, password)
-  askpassHelpers.set(spec.id, helper)
+  askpassHelpers.set(spec.id, [...existing, helper])
+  askpassHelperPasswords.set(spec.id, password)
   return { SSH_ASKPASS: helper, SSH_ASKPASS_REQUIRE: 'force' }
+}
+
+/** Remove every baked helper for one instance (password clear / removal / quit). */
+export function clearAskpassHelpers(id: string): void {
+  const helpers = askpassHelpers.get(id)
+  if (helpers !== undefined) {
+    for (const helper of helpers) deleteAskpassHelper(helper)
+    askpassHelpers.delete(id)
+  }
+  askpassHelperPasswords.delete(id)
 }
 
 /**
@@ -831,10 +855,7 @@ export function sshAuthEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | nul
  * setSshPassword(null), instance removal, or app quit.
  */
 export function disposeSshAuth(spec: TransportInstanceSpec): void {
-  const helper = askpassHelpers.get(spec.id)
-  if (helper === undefined) return
-  askpassHelpers.delete(spec.id)
-  deleteAskpassHelper(helper)
+  clearAskpassHelpers(spec.id)
 }
 
 /** The ssh provider: validate → spawn args → stderr classification → exec. */

@@ -45,6 +45,8 @@ import type { Logger } from './types.ts'
 
 /** Body read cap for POST payloads (10 MiB; the instance proxy has its own 300MiB cap). */
 const MAX_BODY_BYTES = 10 * 1024 * 1024
+/** Management body per-chunk idle timeout (2026 review). */
+const BODY_IDLE_TIMEOUT_MS = 10_000
 const MAX_HEALTH_EVENT_STREAMS = 32
 /** Per-client frames retained while its SSE socket is backpressured. */
 const MAX_HEALTH_EVENT_PENDING_FRAMES = 32
@@ -66,6 +68,8 @@ export interface ApiRequest {
   removeListener(event: string, listener: (...args: any[]) => void): unknown
   once(event: string, fn: () => void): unknown
   off(event: string, fn: () => void): unknown
+  /** Abort the request stream (IncomingMessage.destroy); optional for fakes. */
+  destroy?(): unknown
 }
 
 /**
@@ -255,16 +259,38 @@ export function createApi(deps: ApiDeps) {
     const chunks = []
     let size = 0
     let oversize = false
-    for await (const chunk of req) {
-      size += chunk.length
-      if (size > MAX_BODY_BYTES) {
-        // Keep draining the remainder so a keep-alive socket
-        // (maxRequestsPerSocket=1000) is not left with unread body bytes that
-        // would be misparsed as the next request line.
-        oversize = true
-        continue
+    let idleTimer: NodeJS.Timeout | undefined
+    let idleExpired = false
+    // Per-chunk idle timeout (2026 review): a slow body must not hold a
+    // connection slot for the whole 35s requestTimeout — management bodies
+    // are small JSON, 10s of silence means the client is gone.
+    const armIdle = (): void => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        idleExpired = true
+        req.destroy?.()
+      }, BODY_IDLE_TIMEOUT_MS)
+      idleTimer.unref?.()
+    }
+    armIdle()
+    try {
+      for await (const chunk of req) {
+        if (idleExpired) return null
+        armIdle()
+        size += chunk.length
+        if (size > MAX_BODY_BYTES) {
+          // Keep draining the remainder so a keep-alive socket
+          // (maxRequestsPerSocket=1000) is not left with unread body bytes
+          // that would be misparsed as the next request line.
+          oversize = true
+          continue
+        }
+        chunks.push(chunk)
       }
-      chunks.push(chunk)
+    } catch {
+      return null
+    } finally {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
     }
     if (oversize || chunks.length === 0) return null
     try {

@@ -11,7 +11,7 @@
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
@@ -152,11 +152,21 @@ export function readSettingsFile(filePath: string): { settings: ChamberSettings;
   }
 }
 
-/** Atomic write (tmp + rename), 0600 — mirrors the ssh-passwords store pattern. */
+/** Atomic write (tmp + fsync + rename), 0600 — mirrors the ssh-passwords
+ *  store pattern (open/write/fsync/close; 2026 review added the fsync and
+ *  the explicit chmod so a crash never leaves a partial or wider-permission
+ *  settings file). */
 export function writeSettingsFile(filePath: string, settings: ChamberSettings): void {
   const tmpPath = `${filePath}.tmp`;
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(tmpPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  const fd = openSync(tmpPath, 'w', 0o600);
+  try {
+    writeSync(fd, `${JSON.stringify(settings, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(tmpPath, 0o600);
   renameSync(tmpPath, filePath);
 }
 

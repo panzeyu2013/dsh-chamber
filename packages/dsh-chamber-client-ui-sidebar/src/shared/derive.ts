@@ -717,9 +717,12 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
 export const BLANK_GHOST_GRACE_MS = 450
 
 /**
- * Module-level ghost grace map: departed blank sessionId -> expiry epoch-ms.
- * Written by `armBlankGhost` (the sidebar, at the transition click) and read
- * by `sessionVisible` during the App's derive — the blank row keeps its slot
+ * Module-level ghost grace map: departed blank `sourceId:sessionId` -> expiry
+ * epoch-ms. Source-scoped (2026 audit L2): cloned instances can carry the
+ * SAME session UUID, and a bare sessionId key would let one source's ghost
+ * grace suppress another source's blank row (or leak it). Written by
+ * `armBlankGhost` (the sidebar, at the transition click) and read by
+ * `sessionVisible` during the App's derive — the blank row keeps its slot
  * in the projection (and therefore in the sidebar's list) until the grace
  * expires, so the list never shifts inside the double-click window. The App
  * drops the row on its next derive after expiry; the sidebar additionally
@@ -739,14 +742,14 @@ const blankGhostUntil = new Map<string, number>()
  * the row. Refreshing overwrites the expiry, so a later real transition always
  * wins over an earlier stale arm (e.g. an earlier click on the blank row
  * itself). Lazy sweep drops expired entries (bounded: at most one blank row
- * per source).
+ * per source). Source-scoped key (L2): `sourceId:sessionId`.
  * @param now - epoch-ms; injected in tests, Date.now() in the app.
  */
-export function armBlankGhost(sessionId: string, now = Date.now()): void {
+export function armBlankGhost(sourceId: string, sessionId: string, now = Date.now()): void {
   for (const [id, expiry] of blankGhostUntil) {
     if (expiry <= now) blankGhostUntil.delete(id)
   }
-  blankGhostUntil.set(sessionId, now + BLANK_GHOST_GRACE_MS)
+  blankGhostUntil.set(`${sourceId}:${sessionId}`, now + BLANK_GHOST_GRACE_MS)
 }
 
 /** Test-only: clear the ghost grace map (node tests share the module instance). */
@@ -769,6 +772,7 @@ export function __resetBlankGhostsForTests(): void {
  * @param now - epoch-ms; the caller injects its derive clock (testable).
  */
 function sessionVisible(
+  serverId: string,
   session: { sessionId: string; blank: boolean; origin?: 'subagent' },
   currentSessionId: string | undefined,
   archived: ReadonlySet<string>,
@@ -779,9 +783,11 @@ function sessionVisible(
   // on write). Deleting an expired entry cannot change any derive result (the
   // expiry predicate would have failed anyway), and the currentness branch
   // below keeps a CURRENT blank row visible regardless of the map. At most one
-  // blank row per source can be ghosted, so this stays O(1).
-  const ghostExpiry = blankGhostUntil.get(session.sessionId)
-  if (ghostExpiry !== undefined && ghostExpiry <= now) blankGhostUntil.delete(session.sessionId)
+  // blank row per source can be ghosted, so this stays O(1). Source-scoped
+  // key (L2): cloned UUIDs across sources must not share ghost grace.
+  const ghostKey = `${serverId}:${session.sessionId}`
+  const ghostExpiry = blankGhostUntil.get(ghostKey)
+  if (ghostExpiry !== undefined && ghostExpiry <= now) blankGhostUntil.delete(ghostKey)
   return session.origin !== 'subagent'
     && !archived.has(session.sessionId)
     && (!session.blank
@@ -987,24 +993,31 @@ export function deriveLocalSearchMatches(snapshot: InstanceSnapshot, query: stri
  * hits for hidden sessions would sneak into the results. The official
  * deriveSearchResults applies sessionVisible() to every content item (tree.ts
  * L370-373); the projection IS the chamber's visibility authority, so "in
- * the projection" == "visible". An EMPTY visible set (source disconnected /
- * projection not yet ready) degrades to no filtering — never wipe out all
- * remote hits because the projection is temporarily absent.
+ * the projection" == "visible". 2026 audit M7: `projectionReady`
+ * distinguishes "projection genuinely empty" from "projection not yet
+ * loaded" — when READY the visible set is authoritative and an empty set
+ * filters ALL remote hits (hidden sessions must never resurface in clickable
+ * results); only a NOT-ready projection keeps the no-filter degrade (never
+ * wipe out remote hits because the snapshot is temporarily absent).
  * @param local - deriveLocalSearchMatches output (recency-ordered).
  * @param remote - the wire searchSessions page.
  * @param limit - protocol-owned maximum merged row count.
  * @param visibleIds - ids of sessions visible in the projection (the union of
- *   every workspace's session ids); remote items outside it are dropped.
- *   Empty set = projection not ready → no filtering.
+ *   every workspace's session ids); remote items outside it are dropped when
+ *   the projection is ready (empty ready set → nothing remote survives).
+ * @param projectionReady - whether the projection has actually landed
+ *   (aggregateReady); false = degrade to no filtering.
  */
 export function mergeSearchResults(
   local: readonly SearchRow[],
   remote: { items: readonly SearchRow[]; hasMore: boolean },
   limit: number,
   visibleIds: ReadonlySet<string>,
+  projectionReady: boolean,
 ): { items: SearchRow[]; hasMore: boolean } {
-  // 可见集为空（断连/投影未就绪）时降级：不按可见集过滤，保留全部远程命中。
-  const filterRemote = visibleIds.size > 0
+  // 投影 READY 后可见集是权威：空集 = 合法空（远程腿过滤为空，隐藏会话不
+  // 回流）；未就绪时降级为不过滤（避免临时缺位清空全部命中）。
+  const filterRemote = projectionReady
   const remoteBySession = new Map<string, string>()
   for (const item of remote.items) {
     if (filterRemote && !visibleIds.has(item.sessionId)) continue
@@ -1095,7 +1108,7 @@ export function deriveServerWorkspaces(
       const session = sessionsById.get(sessionId)
       if (session === undefined) continue
       accounted.add(sessionId)
-      if (!sessionVisible(session, currentSessionId, archivedIds, now)) continue
+      if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now)) continue
       sessions.push({
         id: sessionId,
         title: session.title ?? '',
@@ -1110,7 +1123,7 @@ export function deriveServerWorkspaces(
   }
   const stray = snapshot.sessions
     .filter(session => !accounted.has(session.sessionId)
-      && sessionVisible(session, currentSessionId, archivedIds, now)
+      && sessionVisible(serverId, session, currentSessionId, archivedIds, now)
       // 2026-10 fix (1/2): a just-CREATED session whose workspace membership
       // has not landed yet must NOT flash through the ungrouped bucket — the
       // host publishes session-added and workspace-changed as two ordered

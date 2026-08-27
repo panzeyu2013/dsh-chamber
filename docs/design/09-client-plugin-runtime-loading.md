@@ -228,7 +228,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   诊断状态统一为：成功 `ok`，host gateway 未注入 `not-injected`，图通道失败
   `graph-unreachable`，额外 bundle 加载失败 `bundle-load-failed`，同 id 异 rev
   `restart-required`。来源标题只显示异常标记，设置的 Plugins 页显示状态、插件 id
-  与原因。
+  与原因。**实例视图警告条（2026 audit M6）**：图通道失败
+  （graph-unreachable/not-injected）的 boot 仍成功，但 settle 状态携带
+  `pluginDegraded`，InstanceView 在 shell 顶部显示「部分插件未能加载」通栏——
+  这是第三呈现面（来源标记 / Plugins 页 / 实例视图）。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
 
@@ -236,6 +239,21 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   web profile 同样加载宿主下发的一切：宿主是权威、loopback-only、v1 无认证面）。
   但这是安全相关事实，已在 `host-graph.ts` 与模块 A `src/index.ts` 的模块头注释中
   显式声明，不静默。
+- **v1 缓解（2026-11 审计复核落地，契约）**：同一页面共享高权限 bridge 的边界
+  内，把「脚本可静默完成、后果不可逆/外传」的动作改为**主进程用户确认**——
+  `desktop_ssh_plugin_materialize_add`（本地插件源码打包上传远端）、
+  `desktop_local_plugin_add`（安装 registry 包 → 本地持久执行面）、
+  `desktop_local_plugin_remove`（破坏性卸载）以及 `desktop_ssh_plugin_apply`
+  的 registry add/remove（远端持久执行面，2026 final review）均须经主进程
+  `dialog.showMessageBox` 确认（取消返回 `{ok:true,cancelled:true}`；无窗口
+  fail-closed；单飞防堆叠）。
+  同时 `desktop_local_plugin_list` 的依赖值投影**脱敏**：file:/link:/相对/
+  绝对/`~/` 路径值统一掩码为 `file:<hidden>`（保持 materialize 分类，客户端
+  diff 语义不变），本地绝对路径永不出主进程（实现：`plugin-sync.ts`
+  `redactLocalPluginManifest` + `describe*Confirmation`，测试见 plugin-sync.test.ts）。
+- **残余边界（架构版解决）**：bridge 全局面（实例注册表读写、设置、更新）与
+  横向同源访问其他实例数据面仍与远端 bundle 同上下文——v1 依赖 loopback-only +
+  本缓解；架构隔离（每实例独立 WebContents + 最小权限 broker）推迟到后续版本。
 - 插件作者须提供**构建好的 `./client` bundle**（官方工具链产物；缺 bundle 时
   宿主 `ClientModuleRegistry` 激活即 fail-loud，chamber 侧同样报错不静默）。
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，
@@ -256,7 +274,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   dsh-client-connection 拷贝随 rc.8 的 fixture/index/依赖面 re-sync，rc.8
   客户端自带 `images` 参数，`commands.execute` 不再有版本判定注入。
   **rc.8 baseline 完整对齐（2026-08，已落地）**：harness.commit →
-  141eb6fef8（dsh 0.1.0-rc.8），vendor 源物化为仓库内真实目录
+  141eb6fef8（dsh 0.1.0-rc.8）〔历史落地记录——当前基线已随 CHANGELOG 升级
+  至 0.1.1-rc.2〕，vendor 源物化为仓库内真实目录
   `vendor/harness-checkout`（pnpm 11 剪枝规避：符号链接指向仓库外源时重写锁文件
   会剪除 vendor importer 记录，仓库内真实目录则保留；`pnpm install
   --frozen-lockfile` 已验证）。对齐内容：复合延迟族 +3 覆盖（ui-attachment /

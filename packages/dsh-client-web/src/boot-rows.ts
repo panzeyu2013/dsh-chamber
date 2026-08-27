@@ -31,10 +31,10 @@ export function composeBootRows(
   manifestIds: readonly string[],
   extraIds: readonly string[] = [],
 ): string[] {
-  return [
-    MODULES_ID,
-    UI_RENDERER_ID,
-    ...manifestIds.filter(id => id !== MODULES_ID && id !== UI_RENDERER_ID),
-    ...extraIds,
-  ]
+  const manifest = manifestIds.filter(id => id !== MODULES_ID && id !== UI_RENDERER_ID)
+  // Dedupe WITHIN extras (2026 review W1): a duplicated extra id would be
+  // passed to loader.create twice. Kernel/manifest overlaps stay (union
+  // model — the loader creates kernel rows first, first wins).
+  const extras = extraIds.filter((id, index) => extraIds.indexOf(id) === index)
+  return [MODULES_ID, UI_RENDERER_ID, ...manifest, ...extras]
 }

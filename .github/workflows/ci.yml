@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # Tag pushes (v*) run the SAME validation chain — a release cannot be
+    # published from an untested commit (2026 round-3 review: release.yml
+    # itself only packages, never validates).
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -22,7 +26,7 @@ jobs:
           version: 11.21.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: lts/*
+          node-version: 22
           cache: pnpm
       # Bootstrap the vendor symlink tree BEFORE pnpm install: pnpm captures the
       # workspace snapshot before preinstall runs, so the links must already
@@ -51,6 +55,8 @@ jobs:
           node packages/control-plane/test/m1-dsh-client.ts
           node packages/control-plane/test/host-logs.ts
           node packages/control-plane/test/manager-api.ts
+          node packages/control-plane/test/local-connection.ts
+          node packages/control-plane/test/spawn-dsh.ts
           node packages/control-plane/test/instance-proxy.ts
           node packages/control-plane/test/ws-frames.ts
           node packages/control-plane/test/static-serving.ts
@@ -86,3 +92,22 @@ jobs:
         run: pnpm run smoke
       - name: Renderer build
         run: pnpm run build:renderer
+      # Host-package esbuild bundles (dsh-host-client-graph / host-git-worktree
+      # dist/index.js) only used to build in release — their esbuild entry/
+      # external mapping is an independent failure mode, so the push path
+      # validates them too (2026 round-3 review).
+      - name: Host package builds
+        run: pnpm run build:host-packages
+      # Desktop packaging sub-steps (control-plane bundle / preload / host
+      # package) run in CI too — a PR breaking them must not wait for a
+      # release to surface (bundle:dsh stays release-only: it bakes the host
+      # platform's dsh runtime).
+      - name: Desktop build sub-steps
+        run: |
+          pnpm --filter @dsh-chamber/desktop run build:control-plane
+          pnpm --filter @dsh-chamber/desktop run build:preload
+          pnpm --filter @dsh-chamber/desktop run build:host-graph-package
+      # Third-party notices must track the installed dependency set; a
+      # stale committed file fails the push (2026 review).
+      - name: Third-party notices current
+        run: node scripts/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md

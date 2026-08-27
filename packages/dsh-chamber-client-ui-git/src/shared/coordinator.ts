@@ -676,7 +676,10 @@ export async function removeUnregisteredWorktree(
   const operationId = nextId('remove')
   // Fresh refresh first (P2-3): the row identity may be up to 30s stale —
   // an expected-mismatch on a stale snapshot would needlessly fail.
-  await refreshSource(sourceId, true).catch(() => {})
+  const refreshFailure = await refreshSource(sourceId, true).catch((error: unknown) => error)
+  if (refreshFailure !== undefined) {
+    throw new Error(`刷新工作树状态失败：${refreshFailure instanceof Error ? refreshFailure.message : String(refreshFailure)}`)
+  }
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
     const input = {
       operationId,

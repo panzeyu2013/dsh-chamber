@@ -352,6 +352,10 @@ export default function App() {
     if (removed.length > 0) {
       for (const id of removed) {
         autoPrewarmedRef.current.delete(id)
+        // 回收在途预热的实例：inflight 标记必须同步清除（2026 audit M8）——
+        // 卸载后 settle 回调被 InstanceView 丢弃，handleInstanceSettled 不会
+        // 再为此 id 触发，残留标记会让 drainPrewarm 永久早退、预热队列卡死。
+        if (prewarmInflightRef.current === id) prewarmInflightRef.current = null
         disposeInstanceShell(id)
         releaseInstanceClient(id)
         chamberBridge.clearPluginDiagnostic(id)
@@ -417,6 +421,20 @@ export default function App() {
     for (const id of Object.keys(snapshotSourcesRef.current)) {
       if (!servers.some(server => server.id === id)) delete snapshotSourcesRef.current[id]
     }
+    // Reap the parallel per-instance refs too (2026 round-3 review) — dead
+    // keys only, the values self-heal, but the registry must stay converged.
+    for (const id of Object.keys(snapshotAtRef.current)) {
+      if (!servers.some(server => server.id === id)) delete snapshotAtRef.current[id]
+    }
+    for (const id of [...readyAggregateSourcesRef.current]) {
+      if (!servers.some(server => server.id === id)) readyAggregateSourcesRef.current.delete(id)
+    }
+    for (const id of Object.keys(aggregateSeqRef.current)) {
+      if (!servers.some(server => server.id === id)) delete aggregateSeqRef.current[id]
+    }
+    for (const id of Object.keys(mutationRefreshSeqRef.current)) {
+      if (!servers.some(server => server.id === id)) delete mutationRefreshSeqRef.current[id]
+    }
     setPluginDiagnostics(prev => {
       const next = { ...prev }
       let changed = false
@@ -468,6 +486,8 @@ export default function App() {
       }
       return changed ? next : prev
     })
+    // 回收后立即推进预热队列（2026 audit M8）：inflight 已清，排队项应继续。
+    drainPrewarm()
   }, [servers, mountedViews])
 
   const refreshConnections = useCallback(async () => {

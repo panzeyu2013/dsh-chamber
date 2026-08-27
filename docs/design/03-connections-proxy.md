@@ -206,7 +206,9 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
 - **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端
   `content-length` 与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节
-  重建 `content-length`。
+  重建 `content-length`。**压缩协商不跨代理（2026 audit M3b）**：请求侧剥离
+  `accept-encoding`（上游恒 identity），响应白名单放行 `content-encoding`
+  ——压缩标签必须随行，浏览器才能正确解码；反代不经手压缩字节。
 - **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、
   在缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503
   `resource_exhausted`，计数在断连/超时/错误/完成时幂等释放；HTTP server 在

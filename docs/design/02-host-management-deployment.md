@@ -257,11 +257,13 @@ ready
 }
 ```
 
-- 写文件：`writeFileSync(tmp-<pid>) + renameSync` 原子替换；**best-effort**
-  ——注册失败绝不阻断 spawn/关闭；
+- 写文件：`writeFileSync(tmp-<pid>) + renameSync` 原子替换；**写入失败时
+  （2026 audit H3）**清理已 spawn 的子进程（`killFailedSpawn`：进程组
+  SIGKILL → 确认退出 → 删记录）并使本次 spawn 尝试失败——绝不遗留无记录可
+  追踪的 detached 进程；
 - 读取：跳过非 `.json`；解析失败或 `pid` 非整数 → 删文件（损坏即丢，不猜测）；
-- 注销：`unregisterManagedProcess(pid)` 只在**确认进程已退出**后调用（存活
-  幸存者留在注册表等下次 reaper）。
+- 注销：`removePidRecord(pid)` 只在**确认进程已退出**后调用（存活幸存者留在
+  注册表等下次 reaper）。
 
 ### 3.4 reaper（孤儿回收）
 
@@ -274,9 +276,12 @@ ready
 4. 身份重验（Unix：ps -p <pid> -o ppid=,command=）：
    a. 命令串包含 binary 的 basename（'dsh'）且含 '--profile web'
       （固定 profile 形态，可直接命令串匹配）
-   b. 端口归属：记录的 port 存在时，lsof -i :port -sTCP:LISTEN 的 pid == 记录 pid
+   a′. 命令身份：安装产物路径含 `dsh` 或 `bin.ts`（源码 tsx dev 启动路径）
+   ——dev-only 兼容，fail-closed（不匹配 → 保留不杀）；
+   b. 端口归属：记录的 port 存在时，探测该端口的监听 pid == 记录 pid
+      （lsof → ss → /proc 三级探测；全部不可用或 port 缺失/非法时 **fail-closed
+      保留不杀**——无法证明归属就不动；Windows：tasklist 镜像名匹配，见 §5）
       —— 防 pid 复用：回收的 pid 指向无关进程（哪怕它恰巧也是 dsh）时放行
-      （lsof 不可用 → 退化为仅 a；Windows：tasklist 镜像名匹配，见 §5）
    c. a/b 任一不成立 → 不杀，保留文件
 5. 孤儿判定：ppid == 1（被 reparent 到 init）或 ownerPid 已死
    —— 不成立（owner 仍活）→ 不杀，保留文件【多实例安全】
@@ -338,6 +343,11 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 6. 窗口内（10min）重启次数 ≥ M（5）→ restart-exhausted：停止自动重启，
    状态对 surface 暴露（catalog status），等待人工介入（POST /api/connections
    幂等启动或桌面设置页操作）；绝不无限重启循环
+7. **迟到的健康判定（2026 audit H2，契约）**：stop()/start() abort 在途健康
+   探针（`generationSignal`）并等待其落定；任何在 `stopped`/`error` 态或
+   start 在途时到达的失败判定一律惰性（不计数、不触发重启——start 在途时
+   重启被抑制，防止双 spawn）；spawn 失败落在 stop() 之后（epoch 已变）也不得
+   把 `stopped` 改回 `error`。
 ```
 
 ### 3.7 优雅停止

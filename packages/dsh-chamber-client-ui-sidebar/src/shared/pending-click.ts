@@ -61,6 +61,10 @@ assertSingletonModule('pending-click')
 export const DOUBLE_CLICK_WINDOW_MS = 350
 
 interface PendingClick {
+  /** The row's OWNING source (server id), not the tree that recorded it:
+   *  a cross-source double-click switches shells between click1 and click2,
+   *  so both clicks must key on the row's server to keep matching. */
+  sourceId: string
   sessionId: string
   /** Click time on the MONOTONIC clock (performance.now()); the window is a gap between clicks, not an absolute deadline. */
   at: number
@@ -71,21 +75,26 @@ let pending: PendingClick | null = null
 
 /**
  * Note a session-row click and answer whether it is the SECOND click of a
- * deliberate double click on the SAME session:
- * - first click (or a click on a different session): records the pending and
- *   returns FALSE — the caller opens the session IMMEDIATELY (zero delay);
- * - second click on the same session within DOUBLE_CLICK_WINDOW_MS: consumes
- *   the pending and returns TRUE — the caller enters inline rename.
+ * deliberate double click on the SAME session of the SAME source:
+ * - first click (or a click on a different session/source): records the
+ *   pending and returns FALSE — the caller opens the session IMMEDIATELY
+ *   (zero delay);
+ * - second click on the same (source, session) within DOUBLE_CLICK_WINDOW_MS:
+ *   consumes the pending and returns TRUE — the caller enters inline rename.
+ *
+ * Keyed by (sourceId, sessionId) — 2026 audit L2: cloned instances can carry
+ * the SAME session UUID, and a bare sessionId key would let click1 on source
+ * A's clone row match click2 on source B's clone row (spurious rename).
  *
  * The window is intentionally one-sided (a slow/misjudged second click just
  * re-opens idempotently, never renames) — see the header comment.
  */
-export function noteSessionRowClick(sessionId: string, now = performance.now()): boolean {
-  if (pending !== null && pending.sessionId === sessionId && now - pending.at <= DOUBLE_CLICK_WINDOW_MS) {
+export function noteSessionRowClick(sourceId: string, sessionId: string, now = performance.now()): boolean {
+  if (pending !== null && pending.sourceId === sourceId && pending.sessionId === sessionId && now - pending.at <= DOUBLE_CLICK_WINDOW_MS) {
     pending = null
     return true
   }
-  pending = { sessionId, at: now }
+  pending = { sourceId, sessionId, at: now }
   return false
 }
 
@@ -96,11 +105,13 @@ export function clearPendingClick(): void {
 
 /**
  * Whether the given event target lies inside the pending session row. The row
- * renders `data-session-id={session.id}`; containment is matched by that
- * attribute via closest(), so it works across shells (the pending row may have
- * been rendered by a different SidebarRoot tree than the one whose document
- * listener runs — DOM ancestry still resolves) and never holds a stale row
- * reference. Text-node targets fall back to their parent element.
+ * renders `data-session-id={session.id}` inside its source section, which
+ * renders `data-chamber-section={server.id}`; containment is matched by those
+ * attributes via closest(), so it works across shells (the pending row may
+ * have been rendered by a different SidebarRoot tree than the one whose
+ * document listener runs — DOM ancestry still resolves) and never holds a
+ * stale row reference. A click on another source's row is "outside" (L2:
+ * source-scoped pending).
  */
 export function isClickInsidePendingRow(target: unknown): boolean {
   if (pending === null) return false
@@ -111,6 +122,8 @@ export function isClickInsidePendingRow(target: unknown): boolean {
   }
   const walker = typeof node.closest === 'function' ? node : (node.parentElement ?? null)
   if (walker === null || typeof walker.closest !== 'function') return false
+  const section = walker.closest('[data-chamber-section]')
+  if (section === null || section.getAttribute('data-chamber-section') !== pending.sourceId) return false
   const row = walker.closest('[data-session-id]')
   return row !== null && row.getAttribute('data-session-id') === pending.sessionId
 }

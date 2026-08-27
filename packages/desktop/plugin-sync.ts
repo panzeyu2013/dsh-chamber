@@ -50,7 +50,7 @@ export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 
 export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
 
-export type TransportRunCommand = 'dsh' | 'cat' | 'base64' | 'mkdir' | 'printf'
+export type TransportRunCommand = 'dsh' | 'cat' | 'printf'
 
 export interface TransportRunPayload {
   op: 'exec' | 'write-file'
@@ -522,6 +522,100 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
         live: null,
       },
     },
+  }
+}
+
+// ============================================================================
+// 1.5 Renderer projection + confirmation copy (design 09 §4 v1 mitigations)
+// ============================================================================
+
+/**
+ * Mask for local-path dependency values in the renderer-facing projection.
+ * The IPC surface must never echo local absolute paths: a remote instance's
+ * client bundle executes in the chamber page (declared trust boundary, design
+ * 09 §4) and could read them. The mask keeps a `file:` prefix so BOTH sides'
+ * spec classifiers (main `isMaterializeSpec` / client `isPathSpec`) still
+ * classify the value as materialize and the name-based diff matching
+ * (plugin-diff.ts §4.5) keeps working unchanged.
+ */
+export const MATERIALIZED_VALUE_MASK = 'file:<hidden>'
+
+/**
+ * Project the LOCAL manifest for the renderer: dependency VALUES that are
+ * local-path specs (file:/link:/relative/absolute/`~/` — classified
+ * materialize) are replaced with MATERIALIZED_VALUE_MASK. Names, kinds,
+ * bundle lines, unsyncable entries and the chamber block pass through
+ * untouched. The main-process-internal full manifest (used by
+ * resolveLocalMaterializeDirectory, applyPlugins knownBundles, the seed
+ * paths) is never projected — only the IPC response is redacted.
+ */
+export function redactLocalPluginManifest(manifest: LocalPluginManifest): LocalPluginManifest {
+  const dependencies: Record<string, string> = {}
+  for (const [name, spec] of Object.entries(manifest.dependencies)) {
+    dependencies[name] = classifyDependencyValue(spec).kind === 'materialize' ? MATERIALIZED_VALUE_MASK : spec
+  }
+  return { ...manifest, dependencies }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): pack-and-transfer. */
+export function describeMaterializeConfirmation(info: {
+  pluginName: string
+  pluginPath: string
+  targetLabel: string | null
+  targetId: string
+}): { message: string; detail: string } {
+  const target = info.targetLabel ?? info.targetId
+  return {
+    message: `将本地插件 ${info.pluginName} 发送到远程实例？`,
+    detail: `插件目录：${info.pluginPath}\n目标实例：${target}\n\n该插件的源码将被打包并上传到目标服务器。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): local install. */
+export function describeLocalPluginAddConfirmation(spec: string): { message: string; detail: string } {
+  return {
+    message: `安装插件 ${spec} 到本地 dsh？`,
+    detail: `将从 npm registry 安装 ${spec} 到本地 dsh profile。\n该插件的客户端代码将在下次本地实例启动时于本应用内执行。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): local remove. */
+export function describeLocalPluginRemoveConfirmation(name: string): { message: string; detail: string } {
+  return {
+    message: `从本地 dsh 移除插件 ${name}？`,
+    detail: `将从本地 dsh profile 卸载 ${name}。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): manual chamber host
+ *  seed (persistent remote modification — packages + boot-layer merge;
+ *  2026 review). */
+export function describeSeedConfirmation(info: { targetLabel: string | null; targetId: string }): { message: string; detail: string } {
+  const target = info.targetLabel ?? info.targetId
+  return {
+    message: `向远程实例 ${target} 注入 chamber 宿主组件？`,
+    detail: `将在远端实例 ${target} 上写入 chamber host 包并挂载 boot 层（幂等，已是最新则跳过）。\n注入内容来自本机已构建的 chamber 包，重启远端 dsh 后生效。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): remote plugin apply
+ *  (registry add/remove on a remote instance — a persistent execution
+ *  surface, same class as the local install; 2026 final review). */
+export function describePluginApplyConfirmation(info: {
+  targetLabel: string | null
+  targetId: string
+  add: string[]
+  remove: string[]
+  restart: boolean
+}): { message: string; detail: string } {
+  const target = info.targetLabel ?? info.targetId
+  const parts: string[] = []
+  if (info.add.length > 0) parts.push(`安装 ${info.add.length} 个插件（${info.add.slice(0, 3).join('、')}${info.add.length > 3 ? ' 等' : ''}）`)
+  if (info.remove.length > 0) parts.push(`移除 ${info.remove.length} 个插件（${info.remove.slice(0, 3).join('、')}${info.remove.length > 3 ? ' 等' : ''}）`)
+  if (info.restart) parts.push('并重启远端 dsh 实例')
+  return {
+    message: `修改远程实例 ${target} 的插件？`,
+    detail: `将在远端实例 ${target} 上${parts.join('，')}。\n这些插件安装自 npm registry，将在远端以该实例用户身份执行。`,
   }
 }
 

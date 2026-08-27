@@ -22,10 +22,11 @@ import { chamberBridge } from '../../dsh-chamber-client-ui-sidebar/src/shared/ag
 // specifier to this URL; the relative import resolves to the same file).
 import {
   __testDisposedCount, __testEventLog, __testResetDisposed, __testResetEventLog,
-  __testSetBootError, __testSetModuleSystemError, __testSetRunError,
+  __testLifecycleLog, __testResetLifecycleLog, __testSetBootError, __testSetDisposeDelayMs,
+  __testSetModuleSystemError, __testSetRunDelayMs, __testSetRunError, __testSetRunHang,
 } from '../test-fixtures/dsh-client-web.mjs'
 
-const { bootInstanceShell, disposeInstanceShell } = await import('./shell.ts')
+const { bootInstanceShell, disposeInstanceShell, __testSetBootTimeoutMs } = await import('./shell.ts')
 
 // ── Plumbing ───────────────────────────────────────────────────────────────
 
@@ -40,6 +41,15 @@ function stubUnavailableGraph(onFetch?: () => void): () => void {
     )
   }) as typeof fetch
   return () => { globalThis.fetch = original }
+}
+
+/** Poll a condition (the budget timers are unref'd; the test loop must poll). */
+async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<void> {
+  const start = Date.now()
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitUntil timed out')
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
 }
 
 /** shell.ts reads the `window` global for the per-boot knob; mirror it onto globalThis. */
@@ -206,6 +216,189 @@ test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugi
     disposeInstanceShell(sourceId)
     globalThis.fetch = originalFetch
     console.error = originalConsoleError
+    restoreWindow()
+  }
+})
+
+// ── H1 / M1 (2026 audit): boot-budget cancellation + serialized dispose ────
+
+test('bootInstanceShell: a run() that never settles is cancelled at the boot budget (H1) — the caller and the chain both settle', async () => {
+  // 200 + empty entries: the graph channel resolves WITHOUT the 503 retry
+  // budget (6 × 500ms sleeps would delay entry construction past the budget).
+  const originalFetch = globalThis.fetch
+  const restoreFetch = () => { globalThis.fetch = originalFetch }
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    rpcId: 't', result: { ok: true, value: { entries: [] } },
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  __testResetDisposed()
+  __testSetRunHang(true)
+  __testSetBootTimeoutMs(40)
+  // The budget timer is unref'd by design (a hung boot must not keep the app
+  // alive); a ref'd interval keeps the TEST event loop alive until it fires.
+  const keepAlive = setInterval(() => {}, 500)
+  try {
+    const state = await bootInstanceShell('t-hang-run', '/api/i/t-hang-run', {} as HTMLElement, () => {})
+    assert.equal(state.booted, false)
+    assert.match(state.error ?? '', /timed out/)
+    assert.equal(__testDisposedCount(), 1, 'the hung entry is disposed by the timeout branch')
+    // The serialized chain advanced: a second instance's boot runs and
+    // settles normally after the timeout (never concurrent with the zombie).
+    __testSetRunHang(false)
+    const second = await bootInstanceShell('t-after-hang', '/api/i/t-after-hang', {} as HTMLElement, () => {})
+    assert.equal(second.booted, true)
+  } finally {
+    clearInterval(keepAlive)
+    __testSetRunHang(false)
+    __testSetBootTimeoutMs(60_000)
+    console.error = originalConsoleError
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('bootInstanceShell: a hung host-graph channel also settles at the budget and never constructs an entry (H1)', async () => {
+  const restoreWindow = stubWindow()
+  const originalFetch = globalThis.fetch
+  const originalConsoleError = console.error
+  console.error = () => {}
+  // The graph channel never settles → collectExtraRows hangs pre-knob.
+  globalThis.fetch = (() => new Promise(() => {})) as typeof fetch
+  __testResetDisposed()
+  __testResetLifecycleLog()
+  __testSetBootTimeoutMs(40)
+  const keepAlive = setInterval(() => {}, 500)
+  try {
+    const state = await bootInstanceShell('t-hang-graph', '/api/i/t-hang-graph', {} as HTMLElement, () => {})
+    assert.equal(state.booted, false)
+    assert.match(state.error ?? '', /timed out/)
+    assert.deepEqual(__testLifecycleLog(), [], 'no entry was ever constructed before the budget expired')
+    assert.equal(__testDisposedCount(), 0)
+  } finally {
+    clearInterval(keepAlive)
+    globalThis.fetch = originalFetch
+    __testSetBootTimeoutMs(60_000)
+    console.error = originalConsoleError
+    restoreWindow()
+  }
+})
+
+test('disposeInstanceShell → immediate re-boot: the fresh ctx is constructed only after the old async dispose settles (M1)', async () => {
+  const restoreFetch = stubUnavailableGraph()
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  __testResetDisposed()
+  __testResetLifecycleLog()
+  __testSetBootError(undefined)
+  __testSetRunError(undefined)
+  __testSetDisposeDelayMs(60)
+  const keepAlive = setInterval(() => {}, 500)
+  try {
+    const el = {} as HTMLElement
+    const first = await bootInstanceShell('t-serial', '/api/i/t-serial', el, () => {})
+    assert.equal(first.booted, true)
+    disposeInstanceShell('t-serial')
+    const second = await bootInstanceShell('t-serial', '/api/i/t-serial', el, () => {})
+    assert.equal(second.booted, true)
+    assert.deepEqual(
+      __testLifecycleLog(),
+      ['construct', 'dispose', 'construct'],
+      'the re-boot awaits the old teardown — no same-id ctx overlap',
+    )
+    assert.equal(__testDisposedCount(), 1)
+  } finally {
+    clearInterval(keepAlive)
+    __testSetDisposeDelayMs(0)
+    console.error = originalConsoleError
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('H1: a timed-out boot that LATE-settles must never register over a newer boot (monotonic cancellation threshold)', async () => {
+  // 200 + empty entries: no 503 retry budget (fast entry construction).
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    rpcId: 't', result: { ok: true, value: { entries: [] } },
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  __testResetDisposed()
+  __testResetLifecycleLog()
+  __testSetRunDelayMs(250) // run() settles AFTER the budget (wide margins)
+  __testSetBootTimeoutMs(80)
+  const keepAlive = setInterval(() => {}, 500)
+  try {
+    const first = await bootInstanceShell('t-late', '/api/i/t-late', {} as HTMLElement, () => {})
+    assert.match(first.error ?? '', /timed out/)
+    assert.equal(__testDisposedCount(), 1, 'the timeout branch disposed the hung entry')
+    // Retry boots and registers while the timed-out run() is still pending.
+    __testSetRunDelayMs(0)
+    const retry = await bootInstanceShell('t-late', '/api/i/t-late', {} as HTMLElement, () => {})
+    assert.equal(retry.booted, true)
+    // The FIRST boot's run() now settles late: it must be CANCELLED (its entry
+    // disposed again), never registered over the retry entry.
+    await waitUntil(() => __testDisposedCount() >= 2, 2000)
+    assert.deepEqual(__testLifecycleLog(), ['construct', 'dispose', 'construct', 'dispose'],
+      'late settle is torn down — the retry entry is never overwritten (no zombie ctx)')
+  } finally {
+    clearInterval(keepAlive)
+    __testSetRunDelayMs(0)
+    __testSetBootTimeoutMs(60_000)
+    console.error = originalConsoleError
+    globalThis.fetch = originalFetch
+    restoreWindow()
+  }
+})
+
+test('two DIFFERENT instances boot strictly serially through the shared chain (round-3 review: cross-instance isolation)', async () => {
+  // 200 + empty entries stub (no 503 retry budget — fast entry construction).
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    rpcId: 't', result: { ok: true, value: { entries: [] } },
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  __testResetDisposed()
+  __testResetLifecycleLog()
+  __testSetRunDelayMs(80) // instance A holds the chain for 80ms
+  const keepAlive = setInterval(() => {}, 500)
+  try {
+    const start = Date.now()
+    const bootA = bootInstanceShell('t-serial-a', '/api/i/t-serial-a', {} as HTMLElement, () => {})
+    // Let A's task run to its run() call first (a microtask yield is NOT
+    // enough — the task awaits the dispose chain and the stub fetch before
+    // constructing; a macrotask guarantees all microtasks drained, so A's
+    // run() has read the 80ms knob), THEN clear it for B: the knob is a
+    // module-level global read at run() call time, so clearing it
+    // synchronously would zero A's delay too. With B at 0ms, serial B
+    // settles only after A's 80ms run delay, concurrent B ~0ms (2026
+    // review — the old test left B at 80ms, which a concurrent B would
+    // also pass: false-negative).
+    await new Promise(resolve => setTimeout(resolve, 0))
+    __testSetRunDelayMs(0)
+    const bootB = bootInstanceShell('t-serial-b', '/api/i/t-serial-b', {} as HTMLElement, () => {})
+    // B's settle must come AFTER A's 80ms run delay — serialization, not
+    // concurrency (a concurrent regression would settle B in ~0ms).
+    const stateB = await bootB
+    const elapsedB = Date.now() - start
+    assert.equal(stateB.booted, true)
+    assert.ok(elapsedB >= 60, `instance B booted after ${elapsedB}ms — the chain must serialize across instances`)
+    const stateA = await bootA
+    assert.equal(stateA.booted, true)
+    // Both constructed exactly once, in order.
+    assert.deepEqual(__testLifecycleLog().filter(e => e === 'construct'), ['construct', 'construct'])
+  } finally {
+    clearInterval(keepAlive)
+    __testSetRunDelayMs(0)
+    __testSetBootTimeoutMs(60_000)
+    console.error = originalConsoleError
+    globalThis.fetch = originalFetch
     restoreWindow()
   }
 })

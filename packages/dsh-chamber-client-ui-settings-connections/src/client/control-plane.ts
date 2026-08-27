@@ -182,7 +182,7 @@ function desktopSsh() {
 
 export type LocalPluginListResult = { ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }
 export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }
-export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: false; error: string }
+export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: true; cancelled: true } | { ok: false; error: string }
 export type NpmSearchResult = { ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }
 
 /** Local plugin manifest (main reads the authoritative local profile path). */

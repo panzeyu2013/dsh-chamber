@@ -80,6 +80,9 @@ export class ConnectionController {
   private generation = 0
   private attempt = 0
   private current: AbortController | null = null
+  /** The in-flight backoff sleep's controller (2026 round-3 review): stop()
+   *  aborts it so a stopped loop never lingers on the retry timer. */
+  private retryIdle: AbortController | null = null
   private running = false
   private lastState: ConnectionState | null = null
   private readonly config: Required<ConnectionConfig>
@@ -121,6 +124,10 @@ export class ConnectionController {
     this.loopEpoch += 1
     this.current?.abort()
     this.current = null
+    // Wake a pending backoff sleep immediately (2026 round-3 review) — the
+    // stopped loop must not linger on the retry timer.
+    this.retryIdle?.abort()
+    this.retryIdle = null
   }
 
   private backoffDelay(attempt: number): number {
@@ -204,8 +211,14 @@ export class ConnectionController {
       this.emitState('reconnecting')
       this.attempt += 1
       console.warn(`[web-runtime] connection lost, retry #${this.attempt}`)
+      this.retryIdle?.abort()
       const idle = new AbortController()
-      await sleep(this.backoffDelay(this.attempt), idle.signal)
+      this.retryIdle = idle
+      try {
+        await sleep(this.backoffDelay(this.attempt), idle.signal)
+      } finally {
+        if (this.retryIdle === idle) this.retryIdle = null
+      }
     }
   }
 

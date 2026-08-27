@@ -301,6 +301,31 @@ test('response header whitelist: only content-type/cache-control/x-* ride throug
   assert.equal(res.headers['x-custom-secret'], undefined)
 })
 
+test('http: accept-encoding is stripped upstream — the proxy never negotiates compression (M3b)', async () => {
+  const { proxy, upstream } = makeProxy()
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET', { 'accept-encoding': 'gzip, br' }), res)
+  const headers = upstream.calls[0].options.headers as Record<string, string>
+  assert.equal(headers['accept-encoding'], undefined, 'the upstream must receive identity')
+  assert.equal(res.status, 200)
+})
+
+test('http: a content-encoding upstream header rides through so the browser decodes correctly (M3b)', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' }, body: 'gzipped-bytes' },
+  }))
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers['content-encoding'], 'gzip', 'the compression label must never be dropped')
+})
+
 test('request body over the 300MiB cap answers 413 body_too_large', async () => {
   const { proxy, upstream } = makeProxy()
   const res = fakeResponse()

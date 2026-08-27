@@ -83,7 +83,7 @@ class FakeChild extends EventEmitter implements SpawnedProcess {
   }
 }
 
-function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult> } = {}) {
+function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult>; allocatePort?: () => Promise<number> } = {}) {
   const spawnCalls: Array<{ command: string; args: readonly string[]; options: SpawnOptions; child: FakeChild }> = []
   const children: FakeChild[] = []
   const spawnTimes: number[] = []
@@ -100,6 +100,7 @@ function makeManager(t: TestContext, overrides: { options?: TransportManagerOpti
     instancesFile: join(tempDir(t), 'ssh-instances.json'),
     logger: silentLogger,
     portProbe: async () => probeOk,
+    allocatePort: overrides.allocatePort,
     // Fake the provider's own endpoint verification when it has one (the
     // real ssh provider would open a real HTTP connection to the fake
     // tunnel port); providers without verifyUp keep the skip path.
@@ -1605,4 +1606,63 @@ test('a throwing provider buildStartEnv lands on a loud error, never a stuck con
   await waitFor(() => manager.status('e3')!.phase === 'error', 3000, 'terminal error')
   assert.equal(spawnCalls.length, 0, 'no transport spawns after a throwing buildStartEnv')
   assert.equal(manager.status('e3')!.requiresUserAction, false, 'a provider bug is not a user-action failure')
+})
+
+test('a disconnect during port allocation must not arm the slow re-probe (M10 phase/epoch guard)', async t => {
+  let allocations = 0
+  let rejectAllocation: ((error: Error) => void) | null = null
+  const allocationGate = new Promise<never>((_resolve, reject) => { rejectAllocation = reject })
+  const { manager } = makeManager(t, {
+    allocatePort: async () => {
+      allocations += 1
+      await allocationGate
+      throw new Error('EADDRINUSE: ephemeral ports exhausted')
+    },
+    options: { slowRetryMs: 30 },
+  })
+  manager.connect('s1')
+  await waitFor(() => allocations === 1, 2000, 'allocation in flight')
+  // A manual disconnect lands WHILE the allocation is pending — the failure
+  // that follows must be inert: no slow re-probe may be armed for a machine
+  // that moved on (the guard is the point, not the retry).
+  manager.disconnect('s1')
+  rejectAllocation!(new Error('EADDRINUSE: ephemeral ports exhausted'))
+  await sleep(80) // well past slowRetryMs=30
+  assert.equal(allocations, 1, 'no slow re-probe may be armed after a manual disconnect')
+  assert.equal(manager.status('s1')?.phase, 'idle')
+})
+
+test('a transient port-allocation failure is retried on the slow re-probe, never stuck in error (M10)', async t => {
+  let allocations = 0
+  const { manager, setProbe } = makeManager(t, {
+    allocatePort: async () => {
+      allocations += 1
+      if (allocations === 1) throw new Error('EADDRINUSE: ephemeral ports exhausted')
+      return 22_000
+    },
+    options: { slowRetryMs: 30 },
+  })
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => allocations === 2, 3000, 'second allocation attempt')
+  await waitFor(() => manager.status('s1')?.phase === 'ready', 3000, 'slow re-probe recovery to ready')
+  assert.equal(allocations, 2)
+})
+
+test('dispose(): exec children get SIGTERM plus a SIGKILL escalation that disposeAsync WAITS for (M2)', async t => {
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const resultPromise = manager.exec('s2', 'start')
+  assert.equal(spawnCalls.length, 1)
+  const child = spawnCalls[0].child
+  // The exec child never exits on its own (in-flight ssh exec at app quit).
+  let disposeSettled = false
+  const disposePromise = manager.disposeAsync().then(() => { disposeSettled = true })
+  await waitFor(() => child.killCalls.includes('SIGTERM'), 2000, 'exec child SIGTERM')
+  // The wait semantics are the point: disposeAsync must NOT settle before
+  // the SIGKILL escalation fired (a no-wait regression would settle here).
+  assert.equal(disposeSettled, false, 'disposeAsync must still be waiting after SIGTERM (M2 wait semantics)')
+  await waitFor(() => child.killCalls.includes('SIGKILL'), 2000, 'exec child SIGKILL escalation')
+  await disposePromise
+  assert.equal(disposeSettled, true)
+  resultPromise.catch(() => {})
 })

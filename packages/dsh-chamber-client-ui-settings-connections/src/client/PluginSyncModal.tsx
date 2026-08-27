@@ -151,7 +151,9 @@ export function PluginSyncModal({ t, spec, onClose }: {
         setLocalRemoveError(res.error)
       } else {
         setLocalRemoveTarget(null)
-        await loadLocalList()
+        // Main-process confirmation dismissed: silent no-op — nothing was
+        // removed, keep the list as-is (never a misleading refresh).
+        if (!('cancelled' in res)) await loadLocalList()
       }
     } catch (err) {
       setLocalRemoveError(errorMessage(err))
@@ -227,7 +229,10 @@ export function PluginSyncModal({ t, spec, onClose }: {
     setSeedError(null)
     try {
       const res = await seedHostGraph(spec.id)
-      if (res.ok) {
+      if ('cancelled' in res) {
+        // User dismissed the main-process confirmation: a silent no-op.
+        setPendingRestart(false)
+      } else if (res.ok) {
         setPendingRestart(res.wrote === true || res.patched === true)
       } else {
         setSeedError(res.error)
@@ -313,6 +318,7 @@ export function PluginSyncModal({ t, spec, onClose }: {
       for (const row of materializeRows) {
         const res = await pluginMaterializeAdd(spec.id, row.name)
         if ('error' in res) failed.push({ spec: row.name, error: res.error })
+        else if ('cancelled' in res) { /* user dismissed the confirmation: skipped, never counted as applied */ }
         else applied += 1
       }
 
@@ -320,7 +326,12 @@ export function PluginSyncModal({ t, spec, onClose }: {
       // (remove-first, serial, restart unless deferred, assert, ready recheck).
       if (add.length > 0 || remove.length > 0) {
         const res = await pluginApply(spec.id, { add, remove, restart })
-        if ('error' in res) {
+        if ('cancelled' in res) {
+          // User dismissed the MAIN-PROCESS confirmation: the registry rows
+          // were skipped — frame the materialized installs (if any) as
+          // deferred, never as applied.
+          setResult({ applied, failed, skipped: add.length + remove.length, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
+        } else if ('error' in res) {
           setResultError(res.error)
           // The registry apply was refused outright (e.g. apply in progress):
           // no restart was attempted — the materialized installs (if any) take
