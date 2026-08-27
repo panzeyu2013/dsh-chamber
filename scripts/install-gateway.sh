@@ -7,11 +7,13 @@
 # 生成 systemd 单元（root）或 systemctl --user / 前台（非 root），
 # 提供 install / update / status / logs / uninstall 管理子命令。
 #
-# dsh 定位（design 18 §9）：脚本安装的 npm 全局 dsh 是 gateway 的
-# 「内建/回退锚」（经 --dsh-path / DSH_GATEWAY_DSH_PATH 提供给 gateway）。
+# dsh 定位（design 18 §9，2026-09 受控锚决策）：dsh 内建/回退锚安装在
+# gateway 自己的受控目录 ${BASE_DIR}/gateway/dsh-anchor（workspace 形态，
+# 经 --dsh-path / DSH_GATEWAY_DSH_PATH 提供给 gateway），不使用 npm 全局
+# 安装——dsh 运行时由 gateway 拥有，锚与版本树都在受控位置。
 # 安装完成后 dsh 版本可在 gateway 的 /chamber/ 页面（或 /chamber/runtime API）
-# 运行期管理（安装/切换/回滚）；运行时状态与版本树位于 DSH_GATEWAY_STATE
-# （默认 ${BASE_DIR}/gateway/data）下的 dsh-runtime/ 目录。
+# 运行期管理（安装/切换/回滚）；运行期安装由 gateway 嵌入式 pnpm 落到
+# DSH_GATEWAY_STATE（默认 ${BASE_DIR}/gateway/data）下的 dsh-runtime/ 目录。
 #
 # 端口模型（服务器部署默认，均可改）：
 #   gateway 监听  :30801   （--port / DSH_GATEWAY_PORT）
@@ -254,29 +256,15 @@ detect_dsh() {
     return 0
   fi
   if [[ "$SKIP_DSH" == "1" ]]; then return 0; fi
-  local root
-  if have dsh; then
-    root=$(npm root -g 2>/dev/null || true)
-    if [[ -n "$root" && ( -e "$root/@deepseek-ai/dsh/lib/bin.js" || -e "$root/@deepseek-ai/dsh/apps/cli/src/bin.ts" ) ]]; then
-      # npm 全局根本身就是 node_modules 目录；gateway 锚要求 workspace 形态
-      # （<ws>/node_modules/@deepseek-ai/dsh）——dirname(npmRoot) 下必有
-      # node_modules/@deepseek-ai/dsh，即该全局安装的 workspace 形态锚
-      # （2026-09 实机测试修复：直接传 npmRoot 会让 verify_dsh 与 gateway
-      # 的 readBuiltinVersion/spawn 都去找 npmRoot/node_modules/... 而失败）。
-      DSH_WS="$(dirname "$root")"
-      DSH_FOUND="global"
-      return 0
-    fi
-    DSH_FOUND="path"      # 有 dsh 但无法定位 workspace，交向导处理
+  # 受控锚复用（2026-09 实机决策）：gateway 自己的 dsh-anchor 目录存在且
+  # 有效即复用；不探测/复用 npm 全局安装——dsh 运行时由 gateway 拥有，
+  # 锚与版本树都应在受控位置（<GATEWAY_DIR>/dsh-anchor 与
+  # <stateDir>/dsh-runtime/）。
+  if [[ -e "${GATEWAY_DIR}/dsh-anchor/node_modules/@deepseek-ai/dsh/lib/bin.js"
+    || -e "${GATEWAY_DIR}/dsh-anchor/node_modules/@deepseek-ai/dsh/apps/cli/src/bin.ts" ]]; then
+    DSH_WS="${GATEWAY_DIR}/dsh-anchor"
+    DSH_FOUND="controlled"
     return 0
-  fi
-  if have npm; then
-    root=$(npm root -g 2>/dev/null || true)
-    if [[ -n "$root" && ( -e "$root/@deepseek-ai/dsh/lib/bin.js" || -e "$root/@deepseek-ai/dsh/apps/cli/src/bin.ts" ) ]]; then
-      DSH_WS="$(dirname "$root")"
-      DSH_FOUND="global"
-      return 0
-    fi
   fi
   return 0
 }
@@ -291,18 +279,21 @@ verify_dsh() {
 
 install_dsh() {
   local target_version="$1"
-  log "安装 dsh 内建锚 @${target_version}（npm 全局）…"
+  # 受控锚（design 18 §9.3 / 2026-09 实机决策）：dsh 内建锚安装在 gateway
+  # 自己的受控目录（workspace 形态 <anchor>/node_modules/@deepseek-ai/dsh），
+  # 不使用 npm 全局安装——全局树不属于 gateway 部署、卸载/升级不可控，且
+  # 与「运行时状态由 gateway 拥有」的边界冲突。版本切换的运行期安装仍由
+  # /chamber/runtime/select 的嵌入式 pnpm 落到 <stateDir>/dsh-runtime/。
+  local anchor_dir="${GATEWAY_DIR}/dsh-anchor"
+  log "安装 dsh 内建锚 @${target_version}（受控位置 $anchor_dir）…"
   local registry
   registry=$(npm config get registry 2>/dev/null || printf 'https://registry.npmjs.org')
   if [[ -n "$npm_mirror" ]]; then registry="$npm_mirror"; fi
   log "使用 npm 镜像：$registry"
-  if ! npm install -g "@deepseek-ai/dsh@${target_version}" --registry "$registry"; then
+  if ! npm install --prefix "$anchor_dir" "@deepseek-ai/dsh@${target_version}" --registry "$registry"; then
     die "dsh 安装失败（若为构建脚本错误，请确认服务器有 make/g++/python3，或改用带 prebuild 的平台）"
   fi
-  DSH_WS=$(npm root -g 2>/dev/null || true)
-  # workspace 形态锚（同 detect_dsh 的 global 分支）：npmRoot 本身是
-  # node_modules 目录，gateway 锚要求 <ws>/node_modules/@deepseek-ai/dsh。
-  DSH_WS="$(dirname "$DSH_WS")"
+  DSH_WS="$anchor_dir"
   local ver
   ver=$(verify_dsh "$DSH_WS" || true)
   [[ -n "$ver" ]] || die "dsh 安装后验证失败：$DSH_WS"
@@ -487,19 +478,19 @@ wizard() {
   if [[ "$SKIP_DSH" == "1" && "$DSH_FOUND" != "explicit" && -z "${DSH_GATEWAY_DSH_PATH:-}" ]]; then
     die "--skip-dsh 需要显式内建锚（design 18 §9.3）：gateway 启动必须有 --dsh-path 或 DSH_GATEWAY_DSH_PATH。请提供 --dsh-path <workspace>（含 node_modules/@deepseek-ai/dsh），或设 DSH_GATEWAY_DSH_PATH，或去掉 --skip-dsh 让脚本自动探测/安装 dsh。"
   fi
-  if [[ "$DSH_FOUND" == "global" ]]; then
+  if [[ "$DSH_FOUND" == "controlled" ]]; then
     local v
     v=$(verify_dsh "$DSH_WS")
-    log "检测到已有 dsh${v:+（${v}）}：复用 npm 全局工作区 $DSH_WS 作为内建锚（跳过安装；运行期可在 /chamber/runtime 切换激活版本）"
+    log "检测到受控锚 dsh${v:+（${v}）}：复用 ${GATEWAY_DIR}/dsh-anchor 作为内建锚（跳过安装；运行期可在 /chamber/runtime 切换激活版本）"
   elif [[ "$DSH_FOUND" == "path" ]]; then
-    warn "检测到 dsh 命令但无法定位 npm 全局工作区"
-    prompt DSH_WS "请提供 dsh workspace 路径（含 node_modules/@deepseek-ai/dsh，留空=自动安装）" ""
+    warn "无法定位受控锚，且未显式提供 --dsh-path"
+    prompt DSH_WS "请提供 dsh workspace 路径（含 node_modules/@deepseek-ai/dsh，留空=自动安装到受控锚）" ""
     if [[ -z "$DSH_WS" ]]; then
       prompt DSH_VER "安装 dsh 锚版本（默认与 gateway 发布绑定）" "$DSH_CHAMBER_DSH_VERSION"
     fi
   else
     if [[ "$SKIP_DSH" != "1" ]]; then
-      prompt DSH_VER "安装 dsh 锚版本（默认与 gateway 发布绑定）" "$DSH_CHAMBER_DSH_VERSION"
+      prompt DSH_VER "安装 dsh 锚版本（默认与 gateway 发布绑定，安装到受控锚目录）" "$DSH_CHAMBER_DSH_VERSION"
     fi
   fi
   if [[ -z "$DSH_WS" && "$SKIP_DSH" != "1" ]]; then

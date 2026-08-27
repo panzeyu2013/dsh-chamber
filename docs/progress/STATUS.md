@@ -229,6 +229,18 @@
   （0.1.1-rc.2 → 0.1.0-rc.8 降级，manualRollback 路径）、restart 202+轮询
   ok、restore-builtin 回落、restart 在途 select 409、坏 body 400、
   status/logs/uninstall 子命令。
+  **第十二轮受控锚决策（2026-09，用户拍板）**：gateway 的 dsh 内建锚不再使用
+  npm 全局安装——dsh 运行时由 gateway 拥有（desktop 同理打包自带 dsh，
+  互不共享）。install-gateway.sh 改为把锚安装到受控位置
+  `${GATEWAY_DIR}/dsh-anchor`（`npm install --prefix`，workspace 形态），
+  detect 不再探测/复用 npm 全局树（保留 --dsh-path 显式锚与 env 锚）；
+  运行期版本仍由 gateway 嵌入式 pnpm 经 /chamber/runtime/select 安装到
+  `<stateDir>/dsh-runtime/`。实测（移除全局 dsh 后全流程）：受控锚安装 →
+  select 0.1.0-rc.8（树落 stateDir/dsh-runtime）→ apply + 重启切换（运行中
+  dsh = 受控 runtime 树）→ restart 202+ok → restore-builtin 回落受控锚 →
+  restart 在途 select 409。另记录：该机 ZFS 文件系统下 pnpm 全新 store
+  克隆偶发 ERR_PNPM_EAGAIN（瞬时资源抖动，失败投影诚实、重试恢复、无数据
+  损坏；系统化缓解（克隆并发上限）留待后续）。
 
 ## 部分完成（剩余验收 / 剩余实现）
 
