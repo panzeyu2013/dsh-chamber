@@ -47,10 +47,10 @@
       退出均验证资源回收）。
 - [ ] 变更 `build.files` 后至少做一次 mac + win 双平台打包产物内容抽查
       （app.asar 内文件列表 vs 模块闭包；2026-09 beta.2 实测：Windows 上
-      electron-builder 不跟随 pnpm junction 链接的 workspace 包——`@dsh-chamber/
-      dsh-runtime` 曾漏进 asar，afterPack 校验拦截；已改 `build.files` 显式
-      `from: ../dsh-runtime → to: node_modules/@dsh-chamber/dsh-runtime` 映射，
-      不依赖平台链接行为）。
+      electron-builder 不跟随 pnpm junction 链接的 workspace 包，`@dsh-chamber/
+      dsh-runtime` 漏进 asar，afterPack 校验拦截——修复 = `build.beforePack`
+      钩子（`scripts/before-pack.mjs`）把该包物化为实体目录，不依赖平台链接
+      行为；`files` 的 from/to 映射经实测无效，勿回归）。
 - [ ] asar 内含 `node_modules/ws`（控制面编译产物 `dsh-client.ts` 的
       `await import('ws')` 依赖；2026-09 审计 P2-6 验证项）。
 
@@ -61,10 +61,9 @@
 - `main.ts`、`preload.cts`、`updater.ts`、`chamber-settings.ts`、
   `transport-provider.ts`、`transport-manager.ts`、`ssh-provider.ts`、
   `ssh-config.ts`、`renderer-trust.ts`、`plugin-sync.ts`、`deep-link.ts`、
-  `notifications.ts`、`open-in.ts` + `dist/**/*` + `package.json` +
-  `{ from: "../dsh-runtime", to: "node_modules/@dsh-chamber/dsh-runtime",
-  filter: ["dist/**", "package.json"] }`（asar 内运行时核心，Windows junction
-  不跟随的显式映射）。
+  `notifications.ts`、`open-in.ts` + `dist/**/*` + `package.json`；
+  运行时核心 `@dsh-chamber/dsh-runtime` 经 `build.beforePack`
+  （`scripts/before-pack.mjs`）物化进 node_modules（Windows junction 不跟随）。
 
 已生效的排除（勿删）：
 
