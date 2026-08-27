@@ -78,6 +78,14 @@
       "open-in.ts",
       "dist/**/*",
       "package.json",
+      {
+        "from": "../dsh-runtime",
+        "to": "node_modules/@dsh-chamber/dsh-runtime",
+        "filter": [
+          "dist/**",
+          "package.json"
+        ]
+      },
       "!node_modules/@dsh-chamber/control-plane/**",
       "!dist/.vite/**",
       "!vendor/**",
