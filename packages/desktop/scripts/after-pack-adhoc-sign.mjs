@@ -137,17 +137,16 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
     const asar = require('@electron/asar');
     const files = asar.listPackage(asarPath);
     const runtimeCoreDist = 'node_modules/@dsh-chamber/dsh-runtime/dist/index.js';
-    // listPackage yields entries with a leading '/' (asar-absolute form).
-    const packed = files.some((entry) => entry === runtimeCoreDist || entry === `/${runtimeCoreDist}`);
+    // listPackage yields entries with a leading '/' (asar-absolute form) on
+    // POSIX hosts but backslash separators on Windows hosts (2026-09 beta.2:
+    // the file was packed all along — the exact-string comparison missed the
+    // Windows path shape). Normalize before comparing.
+    const packed = files.some((entry) => {
+      const normalized = entry.replace(/\\/g, '/');
+      return normalized === runtimeCoreDist || normalized === `/${runtimeCoreDist}`;
+    });
     if (!packed) {
-      // Diagnostic dump (2026-09 Windows release leg): list whatever chamber
-      // entries the asar actually carries so the failure pinpoints the
-      // collection gap instead of requiring a second debug cycle.
-      const chamberEntries = files.filter((entry) => entry.includes('@dsh-chamber'));
-      throw new Error(
-        `packaged app.asar is missing ${runtimeCoreDist} — rebuild with build:dsh-runtime before dist:desktop. `
-        + `asar entries: ${chamberEntries.length} @dsh-chamber paths: ${JSON.stringify(chamberEntries.slice(0, 12))}`,
-      );
+      throw new Error(`packaged app.asar is missing ${runtimeCoreDist} — rebuild with build:dsh-runtime before dist:desktop`);
     }
   }
   console.log(`[after-pack-adhoc-sign] runtime installer support verified: pnpm@${pnpmManifest.version}, ${PACKAGED_RUNTIME_MODULES.length} modules`);
