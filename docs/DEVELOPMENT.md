@@ -131,8 +131,17 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 
 ## 5. CI 与发布
 
-- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ smoke〔未捆绑运行时 SKIP〕→ renderer 构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不打包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
-- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖 release matrix 中的 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。
+- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ **workflow action SHA 门禁**（`release-preflight --actions-only`，2026-09 起）→ smoke〔未捆绑运行时 SKIP〕→ renderer 构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不打包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
+- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖 release matrix 中的 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。含 `validation` job（发布自验证门禁）与 `build-gateway` job（gateway tgz 打包冒烟；npm 发布暂缓，2026-08 决策）。
+- **发布机械门禁（2026-09 起）**：`pnpm run release:preflight <版本>`
+  （`scripts/dev/release-preflight.mjs`）——版本统一性（含 fork 副本与安装器 dsh
+  常量）、changelog 中英对等、i18n、**workflow action SHA 上游可解析**、冲突标记、
+  git 干净、frozen install、test:release-workflow；发布 checklist §1.5/§7 强制
+  commit 前与 push 前各跑一次。
+- **发布流程（2026-09 优化）**：本地 preflight + 全量炮组（精确发布提交）→
+  commit+tag → **workflow_dispatch dry_run 先行**（新增/修改的 workflow/脚本
+  路径/action SHA 必须先 dry-run 验证过一次）→ 正式 tag push。
+  详细步骤见发布 checklist。
 - 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
 
 ## 6. 仓库结构

@@ -196,6 +196,14 @@ export interface ActivationIntentInput {
   intentKind: ActivationIntentKind
 }
 
+/**
+ * The builtin/fallback identity token (gateway status/override terminology):
+ * an activation intent targeting the builtin anchor may name exactly this
+ * sentinel instead of a semver — the startup/apply phases only compare
+ * targetVersion for non-builtin targets.
+ */
+export const BUILTIN_ANCHOR_VERSION_TOKEN = 'builtin-anchor'
+
 function runtimeDirPath(baseDir: string): string {
   return join(baseDir, 'dsh-runtime')
 }
@@ -675,8 +683,9 @@ function parseJournalIntent(value: unknown): ActivationJournalIntent | null | un
   if (value === null) return null
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  if (typeof record.targetVersion !== 'string' || !isSafeVersion(record.targetVersion)) return undefined
   if (typeof record.targetIsBuiltin !== 'boolean' || typeof record.manualRollback !== 'boolean') return undefined
+  if (typeof record.targetVersion !== 'string'
+    || (!(record.targetIsBuiltin && record.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN) && !isSafeVersion(record.targetVersion))) return undefined
   const intentKind = parseIntentKind(record.intentKind)
   if (intentKind === null || !validIntentShape(intentKind, record.targetIsBuiltin, record.manualRollback)) return undefined
   return {
@@ -705,8 +714,9 @@ function parseActivationJournal(parsed: unknown): ActivationJournal | null {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const record = parsed as Record<string, unknown>
   if (record.schemaVersion !== 1 || !isActivationJournalPhase(record.phase)) return null
-  if (typeof record.targetVersion !== 'string' || !isSafeVersion(record.targetVersion)) return null
   if (typeof record.targetIsBuiltin !== 'boolean') return null
+  if (typeof record.targetVersion !== 'string'
+    || (!(record.targetIsBuiltin && record.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN) && !isSafeVersion(record.targetVersion))) return null
   if (typeof record.manualRollback !== 'boolean') return null
   const intentKind = parseIntentKind(record.intentKind)
   if (intentKind === null || !validIntentShape(intentKind, record.targetIsBuiltin, record.manualRollback)) return null
@@ -792,7 +802,17 @@ export function writeActivationIntent(
   input: ActivationIntentInput,
   now = new Date(),
 ): ActivationJournal {
-  const targetVersion = assertSafeVersion(input.targetVersion)
+  // Builtin targets may name the exact sentinel token ('builtin-anchor',
+  // the gateway's builtin/fallback identity) instead of a semver — the
+  // startup/apply phases only compare targetVersion for non-builtin targets.
+  // Anything else must still pass the strict path-safe semver gate
+  // (2026-09 release gate: F4 shell-invalidation with an existing override
+  // crashed the gateway on the builtin-anchor token).
+  const targetVersion = input.targetIsBuiltin
+    ? (input.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN
+      ? input.targetVersion
+      : assertSafeVersion(input.targetVersion))
+    : assertSafeVersion(input.targetVersion)
   const targetIsBuiltin = input.targetIsBuiltin ?? false
   if (typeof targetIsBuiltin !== 'boolean') throw new Error('targetIsBuiltin 必须是 boolean')
   if (typeof input.manualRollback !== 'boolean') throw new Error('manualRollback 必须是 boolean')
@@ -860,7 +880,17 @@ export function queueActivationIntent(
   input: ActivationIntentInput,
   now = new Date(),
 ): ActivationJournal {
-  const targetVersion = assertSafeVersion(input.targetVersion)
+  // Builtin targets may name the exact sentinel token ('builtin-anchor',
+  // the gateway's builtin/fallback identity) instead of a semver — the
+  // startup/apply phases only compare targetVersion for non-builtin targets.
+  // Anything else must still pass the strict path-safe semver gate
+  // (2026-09 release gate: F4 shell-invalidation with an existing override
+  // crashed the gateway on the builtin-anchor token).
+  const targetVersion = input.targetIsBuiltin
+    ? (input.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN
+      ? input.targetVersion
+      : assertSafeVersion(input.targetVersion))
+    : assertSafeVersion(input.targetVersion)
   const targetIsBuiltin = input.targetIsBuiltin ?? false
   if (typeof targetIsBuiltin !== 'boolean' || typeof input.manualRollback !== 'boolean') {
     throw new Error('queued activation intent 形状无效')

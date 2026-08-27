@@ -909,3 +909,21 @@ test('runtimeDiskSummary propagates non-ENOENT accounting errors instead of repo
   assert.throws(() => runtimeDiskSummary(base), (error: unknown) =>
     (error as NodeJS.ErrnoException).code === 'ENOTDIR');
 });
+
+test('builtin activation intents accept the exact builtin-anchor sentinel (F4 shell-invalidation regression)', () => {
+  const base = freshBase();
+  // The gateway's F4 fallback passes the sentinel token when a shell upgrade
+  // invalidates an existing override (2026-09 release gate: assertSafeVersion
+  // used to reject it, crashing gateway startup on any upgrade with an
+  // existing override record).
+  const sentinel = writeActivationIntent(base, {
+    targetVersion: 'builtin-anchor', targetIsBuiltin: true, manualRollback: false, intentKind: 'shell-invalidation',
+  });
+  assert.equal(sentinel.targetVersion, 'builtin-anchor');
+  assert.equal(sentinel.targetIsBuiltin, true);
+  // The sentinel stays illegal for non-builtin targets (path-safety gate).
+  clearActivationJournal(base);
+  assert.throws(() => writeActivationIntent(base, {
+    targetVersion: 'builtin-anchor', manualRollback: false, intentKind: 'version-switch',
+  }), /不安全/);
+});

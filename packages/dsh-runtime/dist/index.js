@@ -884,6 +884,7 @@ var MAX_CURRENT_POINTER_BYTES = 16 * 1024;
 var MAX_OVERRIDE_BYTES = 64 * 1024;
 var MAX_ACTIVATION_JOURNAL_BYTES = 128 * 1024;
 var PUBLISH_BACKUP_NAME = /^\.(.+)\.publish-backup-[0-9a-f]{8}$/;
+var BUILTIN_ANCHOR_VERSION_TOKEN = "builtin-anchor";
 function runtimeDirPath(baseDir) {
   return join(baseDir, "dsh-runtime");
 }
@@ -1243,8 +1244,8 @@ function parseJournalIntent(value) {
   if (value === null) return null;
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   const record = value;
-  if (typeof record.targetVersion !== "string" || !isSafeVersion(record.targetVersion)) return void 0;
   if (typeof record.targetIsBuiltin !== "boolean" || typeof record.manualRollback !== "boolean") return void 0;
+  if (typeof record.targetVersion !== "string" || !(record.targetIsBuiltin && record.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN) && !isSafeVersion(record.targetVersion)) return void 0;
   const intentKind = parseIntentKind(record.intentKind);
   if (intentKind === null || !validIntentShape(intentKind, record.targetIsBuiltin, record.manualRollback)) return void 0;
   return {
@@ -1266,8 +1267,8 @@ function parseActivationJournal(parsed) {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const record = parsed;
   if (record.schemaVersion !== 1 || !isActivationJournalPhase(record.phase)) return null;
-  if (typeof record.targetVersion !== "string" || !isSafeVersion(record.targetVersion)) return null;
   if (typeof record.targetIsBuiltin !== "boolean") return null;
+  if (typeof record.targetVersion !== "string" || !(record.targetIsBuiltin && record.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN) && !isSafeVersion(record.targetVersion)) return null;
   if (typeof record.manualRollback !== "boolean") return null;
   const intentKind = parseIntentKind(record.intentKind);
   if (intentKind === null || !validIntentShape(intentKind, record.targetIsBuiltin, record.manualRollback)) return null;
@@ -1333,7 +1334,7 @@ function writeActivationJournal(baseDir, journal) {
   atomicWriteJson(activationJournalPath(baseDir), parsed);
 }
 function writeActivationIntent(baseDir, input, now = /* @__PURE__ */ new Date()) {
-  const targetVersion = assertSafeVersion(input.targetVersion);
+  const targetVersion = input.targetIsBuiltin ? input.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN ? input.targetVersion : assertSafeVersion(input.targetVersion) : assertSafeVersion(input.targetVersion);
   const targetIsBuiltin = input.targetIsBuiltin ?? false;
   if (typeof targetIsBuiltin !== "boolean") throw new Error("targetIsBuiltin \u5FC5\u987B\u662F boolean");
   if (typeof input.manualRollback !== "boolean") throw new Error("manualRollback \u5FC5\u987B\u662F boolean");
@@ -1389,7 +1390,7 @@ function writeActivationIntent(baseDir, input, now = /* @__PURE__ */ new Date())
   return journal;
 }
 function queueActivationIntent(baseDir, input, now = /* @__PURE__ */ new Date()) {
-  const targetVersion = assertSafeVersion(input.targetVersion);
+  const targetVersion = input.targetIsBuiltin ? input.targetVersion === BUILTIN_ANCHOR_VERSION_TOKEN ? input.targetVersion : assertSafeVersion(input.targetVersion) : assertSafeVersion(input.targetVersion);
   const targetIsBuiltin = input.targetIsBuiltin ?? false;
   if (typeof targetIsBuiltin !== "boolean" || typeof input.manualRollback !== "boolean") {
     throw new Error("queued activation intent \u5F62\u72B6\u65E0\u6548");
@@ -6593,6 +6594,7 @@ init_prune_runtime();
 export {
   ALLOWED_REGISTRY_ORIGINS,
   ALLOW_BUILDS,
+  BUILTIN_ANCHOR_VERSION_TOKEN,
   DEFAULT_HEALTH_POLICY,
   DEFAULT_INSTALL_TIMEOUT_MS,
   DEFAULT_PROBE_WINDOW_MS,

@@ -46,7 +46,7 @@ test('gateway start: a swap-attempted block keeps the gateway up with dsh stoppe
     // Seed the interrupted-switch marker BEFORE start(): runStartupPhase then
     // returns 'swap-attempted' without spawning or exposing the tree.
     writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.1',
+      shellVersion: '0.2.0-beta.2',
       chosenVersion: '1.2.3',
       resolvedVersion: '1.2.3',
       pending: '1.2.3',

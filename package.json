@@ -62,7 +62,8 @@
     "test:renderer-shell": "node packages/renderer/scripts/typert-remote-contract.test.mjs && node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/aggregate-refresh.test.ts && node packages/renderer/src/notification-edges.test.ts && node packages/renderer/src/host-graph.test.ts && node --import ./scripts/dev/test-shell-register.mjs packages/renderer/src/shell.test.ts",
     "test:connection": "node packages/dsh-client-connection/test/api-path.test.ts && node packages/dsh-client-connection/test/liveness-triggers.test.ts",
     "test:cli": "node packages/cli/test/follow-filter.test.ts",
-    "test:gateway": "pnpm --filter @dsh-chamber/gateway run test"
+    "test:gateway": "pnpm --filter @dsh-chamber/gateway run test",
+    "release:preflight": "node scripts/dev/release-preflight.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

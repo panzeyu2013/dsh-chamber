@@ -309,7 +309,7 @@ test('status suppresses pending under an env override (R7: env defers the switch
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-env-pending-'))
   try {
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    writeOverride(stateDir, { shellVersion: '0.2.0-beta.1', chosenVersion: '1.0.0', resolvedVersion: '1.0.0', pending: '1.0.0', swapAttempted: false })
+    writeOverride(stateDir, { shellVersion: '0.2.0-beta.2', chosenVersion: '1.0.0', resolvedVersion: '1.0.0', pending: '1.0.0', swapAttempted: false })
     assert.equal(manager.status().pending, null)
   } finally {
     if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
@@ -709,7 +709,7 @@ test('real manager: retry-apply/retry-restore refuse without a matching blocked 
     // A swap-attempted override: retry-apply clears the marker, re-runs the
     // startup transaction (no pending → not blocked) and brings dsh up.
     writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.1',
+      shellVersion: '0.2.0-beta.2',
       chosenVersion: '1.2.3',
       resolvedVersion: '1.2.3',
       pending: null,
@@ -724,7 +724,7 @@ test('real manager: retry-apply/retry-restore refuse without a matching blocked 
     // retryApply accepts lastOutcome === 'snapshot-failed', clears it and
     // re-runs the startup transaction (desktop canRetryApply parity).
     writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.1',
+      shellVersion: '0.2.0-beta.2',
       chosenVersion: '1.2.3',
       resolvedVersion: '1.2.3',
       pending: null,

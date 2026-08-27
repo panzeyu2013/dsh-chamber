@@ -58,6 +58,12 @@
 - **spawn pid 记录失败 fail-closed** —— 发布失败即回收子进程并抛
   `dsh_spawn_non_retryable`（绝不换端口重试；与 main 侧可重试语义合并时定夺保留）。
 - **侧边栏 create/fork 收敛（无未分组闪现）**、**open-in 下拉图标 + 短应用名**。
+- **发布门禁修复（2026-09 beta.2 事故）** —— preload.cts 恢复
+  `ChamberInjectionState` 本地声明（L3 lockstep 守卫回归）；workflow action SHA
+  校验门禁（`release-preflight --actions-only`）+ 脚本路径修正；**共享核心 F4
+  修复**：`writeActivationIntent`/journal 回读接受 `builtin-anchor` 哨兵（否则带
+  override 的机器升级 shell 启动即崩溃）；测试硬编码版本号解耦。
+
 
 ## [0.2.0-beta.1] - 2026-08-25
 

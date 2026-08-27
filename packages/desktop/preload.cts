@@ -3,11 +3,6 @@ import type { SshInstanceInput, SshInstanceSpec, SshLogEntry, SshStatusProjectio
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
 import type { RuntimeState } from './dsh-runtime-controller.ts';
-// Type-only import (erased at compile time): the wire's chamber injection
-// state is produced by plugin-sync.ts — importing its type keeps the preload
-// mirror from drifting (renderer global.d.ts mirrors the same shape).
-import type { ChamberInjectionState } from './plugin-sync.ts';
-
 const { contextBridge, ipcRenderer } = require('electron');
 
 /**
@@ -100,7 +95,16 @@ export interface ChamberHostGraphState {
   version: string | null
   live: boolean | null
 }
-
+/** Chamber-injected component state (design 09): ok:false = unreadable (loud,
+ *  never a silent "not injected"). The preload mirror of plugin-sync.ts /
+ *  renderer global.d.ts — the L3 lockstep test guards shape drift. */
+export type ChamberInjectionState =
+  | {
+    ok: true
+    hostGraph: ChamberHostGraphState
+    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
+  }
+  | { ok: false; error: string }
 export interface SshRemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]

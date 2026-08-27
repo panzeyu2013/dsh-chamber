@@ -50,6 +50,10 @@ jobs:
           pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      - name: Workflow action pins resolve upstream (release-preflight --actions-only)
+        run: node scripts/dev/release-preflight.mjs --actions-only
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Release workflow safety policy
         run: pnpm run test:release-workflow
       - name: Shared runtime core unit tests (packages/dsh-runtime)
@@ -121,7 +125,7 @@ jobs:
       # Third-party notices must track the installed dependency set; a
       # stale committed file fails the push (2026 review).
       - name: Third-party notices current
-        run: node scripts/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
+        run: node scripts/dev/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
       - name: Gateway package build and installed CLI smoke
         run: |
           pnpm run build:dsh-runtime

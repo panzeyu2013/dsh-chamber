@@ -74,6 +74,14 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   resolution kept when merging with main's retryable semantics).
 - **Sidebar create/fork convergence without the ungrouped flash** and
   **open-in dropdown icon + short app name**.
+- **Release-gate fixes (2026-09 beta.2 incident)** — preload.cts restores the
+  local `ChamberInjectionState` declaration (L3 lockstep guard regression);
+  workflow action-SHA gate (`release-preflight --actions-only`) + script path
+  fixes; **shared-core F4 fix**: `writeActivationIntent` and the journal
+  round-trip parsers accept the `builtin-anchor` sentinel (previously any
+  machine with an existing override record crashed at shell upgrade startup);
+  tests' hardcoded versions decoupled.
+
 
 ## [0.2.0-beta.1] - 2026-08-25
 
