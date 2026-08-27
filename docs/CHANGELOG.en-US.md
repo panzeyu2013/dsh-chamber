@@ -12,6 +12,69 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+## [0.2.0-beta.2] - 2026-08-27
+
+### Added
+
+- **Serverized gateway runtime management (design 18 M5–M7)** — authenticated
+  `/chamber/runtime` surface (status / versions / select / apply / rollback /
+  restore-builtin / retry-apply / retry-restore / restart / registry, exempt from
+  the not-ready gate): startup transaction (cleanup → snapshot → atomic pointer
+  switch → candidate spawn → full activation probe set) with two-phase
+  rollback/restore; runtime-manager (env → override → builtin anchor resolution,
+  intent journal, fail-loud owner takeover, 409 mutation exclusion,
+  blocked-but-alive / FATAL projection); restart endpoint whitelist
+  (ready / degraded) with honest failure (resolve ≠ success: stopped /
+  restart-exhausted never reports ok).
+- **Shared pure-Node runtime core `packages/dsh-runtime`** — the desktop main
+  process and the gateway server adapt the same core through real DI seams
+  (StartupDeps / ApplyDeps / InstallerDeps / ControllerDeps; `RuntimeHostAdapter`
+  remains a documented sketch); runtime state and version trees are never shared
+  between owners.
+- **`dsh-runtime` settings section (design 18 §3.6)** — local = full runtime
+  management, gateway = proxied `/chamber/runtime`, ssh = version read-only;
+  every source gets a restart-dsh action (control-plane `restartLocal()` /
+  `/chamber/runtime/restart` / `restart_service` systemd IPC) without restarting
+  the Electron shell.
+- **Controlled installer anchor** — install-gateway.sh installs the dsh builtin
+  anchor into the gateway-controlled directory (`${BASE_DIR}/gateway/dsh-anchor`,
+  `npm install --prefix` workspace shape) instead of the npm global tree; runtime
+  versions are still installed by the gateway's embedded pnpm into
+  `<stateDir>/dsh-runtime/` via `/chamber/runtime/select`.
+- **Chamber host packages ship with the gateway tarball** — the build copies
+  `dsh-host-client-graph` / `dsh-chamber-host-git-worktree` (package.json +
+  committed dist) into the gateway package and injects them into the
+  control-plane seed (`hostGraphPackageSourceDir` /
+  `hostGitWorktreePackageSourceDir`); managed dsh instances expose the chamber
+  RPCs so the full activation probe set passes server-side (verified live).
+
+### Fixed
+
+- **install-gateway.sh npm-global anchor path semantics** — `verify_dsh` expects
+  the workspace shape (`<ws>/node_modules/@deepseek-ai/dsh`) but the global
+  branch passed `npm root -g` (itself the node_modules directory), so
+  post-install verification always failed and the anchor pointed at the wrong
+  place; both paths now convert to `dirname(npmRoot)` (live-test finding).
+- **Response-leg disconnect detection (main 6791f84 merged)** — `IncomingMessage
+  'close'` fires as soon as the request body is consumed (immediately for a
+  bodyless GET), so request-leg detection aborted every GET/WS forward and SSE;
+  detection moved to the response leg (`res 'close'` + `writableEnded` guard,
+  raw browser socket for WS upgrades).
+- **M3b compression headers** — `accept-encoding` is stripped upstream (the
+  proxy never negotiates compression); response `content-encoding` rides through
+  the header whitelist so the browser decodes correctly.
+- **Main-process plugin action confirmation (design 09 §4)** — local/remote
+  plugin installs & removals and the materialize transfer require a confirmation
+  dialog; a dismissal is never reported as success
+  (`{ok:true, cancelled:true}`).
+- **H2 generation-aborted health probes / killFailedSpawn host-log writer /
+  reaper command identity / fsync'd atomic writes** (audit rounds merged).
+- **Spawn pid-record failure is fail-closed** — the child is reclaimed and the
+  spawn throws `dsh_spawn_non_retryable` (never retried on another port;
+  resolution kept when merging with main's retryable semantics).
+- **Sidebar create/fork convergence without the ungrouped flash** and
+  **open-in dropdown icon + short app name**.
+
 ## [0.2.0-beta.1] - 2026-08-25
 
 ### Added

@@ -12,6 +12,53 @@
 
 ## [Unreleased]
 
+## [0.2.0-beta.2] - 2026-08-27
+
+### 新增
+
+- **Gateway 运行时版本管理服务化（设计 18 M5–M7）** —— `/chamber/runtime` 认证管理表面
+  （status / versions / select / apply / rollback / restore-builtin / retry-apply /
+  retry-restore / restart / registry，not-ready 门禁豁免）：启动事务（清理 → 快照 →
+  原子指针切换 → spawn 候选 → 全量激活探针）与两阶段回滚/恢复闭环；runtime-manager
+  （env → override → 内建锚解析链、intent journal、owner 抢占 fail-loud、并发互斥 409、
+  阻止但存活 / FATAL 状态投影）；restart 端点白名单（ready / degraded）+ 失败诚实
+  （resolve ≠ 成功：stopped / restart-exhausted 永不报 ok）。
+- **dsh 运行时核心抽取为共享纯 Node 包 `packages/dsh-runtime`** —— desktop 主进程与
+  gateway 服务器两个 owner 经真实 DI 接缝（StartupDeps / ApplyDeps / InstallerDeps /
+  ControllerDeps；`RuntimeHostAdapter` 仅为文档草图）适配；运行时状态与版本树
+  互不共享。
+- **settings 的 `dsh-runtime` 分节（design 18 §3.6）** —— local = 完整运行时管理、
+  gateway = 代理 `/chamber/runtime`、ssh = 版本只读；每个来源都有「重启 dsh」动作
+  （control-plane `restartLocal()` / `/chamber/runtime/restart` / `restart_service`
+  systemd IPC），无需重启 Electron 壳即刷新插件挂载。
+- **安装脚本受控锚** —— install-gateway.sh 将 dsh 内建锚安装到 gateway 受控目录
+  （`${BASE_DIR}/gateway/dsh-anchor`，`npm install --prefix` workspace 形态），不再
+  使用 npm 全局安装；运行期版本仍由 gateway 嵌入式 pnpm 经 `/chamber/runtime/select`
+  安装到 `<stateDir>/dsh-runtime/`。
+- **Gateway 打包随附 chamber host 包** —— 构建将 `dsh-host-client-graph` /
+  `dsh-chamber-host-git-worktree`（package.json + committed dist）复制进 gateway 包并
+  经 `hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` 注入控制面 seed；
+  托管 dsh 具备 chamber RPC，全量激活探针集可在服务器端通过（实机切换验证）。
+
+### 修复
+
+- **install-gateway.sh npm 全局锚路径语义** —— `verify_dsh` 期望 workspace 形态
+  （`<ws>/node_modules/@deepseek-ai/dsh`），全局分支与安装后传入的是 `npm root -g`
+  （本身即 node_modules 目录）导致安装后验证必失败、且锚位置错误；统一转换
+  `dirname(npmRoot)`（实机测试发现）。
+- **响应腿断连检测（main 6791f84 并入）** —— 请求体消费后 `IncomingMessage 'close'`
+  立即触发（无体 GET 更甚），按请求腿检测会误杀所有 GET/WS 转发与 SSE；改在响应腿
+  （`res 'close'` + `writableEnded` 守卫、WS 原始 socket、SSE 同理）。
+- **M3b 压缩头** —— 上游请求剥离 `accept-encoding`（代理永不协商压缩）；响应
+  `content-encoding` 白名单放行，浏览器正确解码。
+- **插件操作主进程确认（design 09 §4）** —— 本地/远端插件安装与移除、materialize
+  传输需主进程确认对话框；取消永不报告成功（`{ok:true, cancelled:true}`）。
+- **H2 生成中止健康探针 / killFailedSpawn 主机日志写入 / reaper 命令身份 /
+  fsync 原子写**（审计轮并入）。
+- **spawn pid 记录失败 fail-closed** —— 发布失败即回收子进程并抛
+  `dsh_spawn_non_retryable`（绝不换端口重试；与 main 侧可重试语义合并时定夺保留）。
+- **侧边栏 create/fork 收敛（无未分组闪现）**、**open-in 下拉图标 + 短应用名**。
+
 ## [0.2.0-beta.1] - 2026-08-25
 
 ### 新增

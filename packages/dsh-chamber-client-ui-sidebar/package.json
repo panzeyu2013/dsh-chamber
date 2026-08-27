@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-client-ui-sidebar",
   "description": "Chamber sidebar plugin: multi-source session/workspace navigation (design 05 §2) — copied from the official ui-sidebar shell, region replaced with the chamber multi-source list",
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-beta.2",
   "publishConfig": {
     "access": "public"
   },
