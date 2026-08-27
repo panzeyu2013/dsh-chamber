@@ -27,7 +27,9 @@ Options:
   --dsh-port N        first port attempted for the managed dsh host
                       (default 17510; server installs commonly use 30800)
   --state-dir DIR     state root (default $DSH_GATEWAY_STATE or ~/.dsh-chamber)
-  --dsh-path PATH     dsh workspace path (default $DSH_GATEWAY_DSH_PATH or repo default)
+  --dsh-path PATH     builtin anchor dsh workspace (design 18 §9.3 resolution:
+                      $DSH_GATEWAY_DSH_PATH env > runtime override > this anchor;
+                      default: repo-adjacent checkout if found)
   --ui-password PWD   browser password auth (12-1024 characters)
   --api-token TOK     shared bearer token (32-4096 visible ASCII; use a CSPRNG)
                       for API/Desktop clients — a token-only deployment has NO
@@ -143,7 +145,12 @@ async function main(): Promise<number | null> {
     return 2
   }
   const stateDir = args.stateDir ?? process.env.DSH_GATEWAY_STATE ?? DEFAULT_STATE_DIR
-  const dshWorkspacePath = configuredDshPath ?? findDshWorkspace(defaultDshWorkspacePath())
+  // design 18 §9.3 anchor semantics: --dsh-path / findDshWorkspace is the
+  // BUILTIN ANCHOR; DSH_GATEWAY_DSH_PATH is the runtime env override (highest
+  // priority at resolve time). Compatibility: an env-only deployment stays
+  // valid — the env path is validated above and doubles as the anchor.
+  const anchorPath = args.dshPath ?? findDshWorkspace(defaultDshWorkspacePath())
+  const dshWorkspacePath = anchorPath ?? (configuredDshPath !== undefined ? configuredDshPath : null)
   if (dshWorkspacePath === null) {
     logger.error('cannot locate dsh: install @deepseek-ai/dsh globally or pass --dsh-path/DSH_GATEWAY_DSH_PATH')
     return 2
@@ -187,7 +194,14 @@ async function main(): Promise<number | null> {
   process.on('SIGTERM', () => void shutdown('SIGTERM', 0))
   try {
     await gateway.start()
-    logger.log('boot: gateway listening; local dsh is ready')
+    // Honest boot line (review fix): a blocked runtime startup (swap-attempted
+    // / restore-half / restore-incomplete) keeps the gateway up with the
+    // managed dsh STOPPED — never print 'local dsh is ready' in that state.
+    if (gateway.connectionState === 'ready' || gateway.connectionState === 'degraded') {
+      logger.log('boot: gateway listening; local dsh is ready')
+    } else {
+      logger.error(`boot: gateway listening but local dsh is ${gateway.connectionState} — resume via POST /chamber/runtime/retry-apply|retry-restore or restart the gateway service`)
+    }
     return null // keep running
   } catch (error) {
     logger.error(`failed to start: ${String(error)}`)

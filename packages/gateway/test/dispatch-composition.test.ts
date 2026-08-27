@@ -46,7 +46,10 @@ class FakeResponse extends EventEmitter {
   destroy(): void { this.destroyed = true }
 }
 
-function setup(auth: AuthProvider) {
+function setup(
+  auth: AuthProvider,
+  runtime: () => { handle(req: unknown, res: FakeResponse, pathname: string): Promise<boolean> } = () => ({ async handle() { return false } }),
+) {
   const config = parseGatewayConfig({
     host: '0.0.0.0',
     port: 3000,
@@ -67,7 +70,7 @@ function setup(auth: AuthProvider) {
     start() {},
     stop() {},
   }
-  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, silentLogger, policy)
+  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, runtime as never, silentLogger, policy)
   return { dispatch, get httpProxyCalls() { return httpProxyCalls }, get upgradeProxyCalls() { return upgradeProxyCalls } }
 }
 
@@ -298,4 +301,34 @@ test('WS upgrade maps a saturated verify work gate to 503 auth_busy like HTTP', 
   assert.match(rejection, /503 Service Unavailable/)
   assert.match(rejection, /auth_busy/)
   assert.equal(state.upgradeProxyCalls, 0, 'a busy verify never reaches the proxy')
+})
+
+test('/chamber/runtime requires auth end-to-end (S20): 401 unauthenticated, claimed after auth', async () => {
+  const seen: string[] = []
+  const runtime = () => ({
+    async handle(_req: unknown, res: FakeResponse, pathname: string) {
+      seen.push(pathname)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":true}')
+      return true
+    },
+  })
+  const auth: AuthProvider = {
+    kind: 'token',
+    async verify(req) {
+      return req.headers.authorization === 'Bearer secret'
+        ? { kind: 'token', id: 'test', issuedAt: 0 }
+        : null
+    },
+  }
+  const { dispatch } = setup(auth, runtime)
+  const denied = await runHttp(dispatch, new FakeRequest('GET', '/chamber/runtime/status', { host: 'gateway.example:3000' }))
+  assert.equal(denied.status, 401)
+  assert.deepEqual(seen, [])
+  const ok = await runHttp(dispatch, new FakeRequest('GET', '/chamber/runtime/status', {
+    host: 'gateway.example:3000',
+    authorization: 'Bearer secret',
+  }))
+  assert.equal(ok.status, 200)
+  assert.deepEqual(seen, ['/chamber/runtime/status'])
 })

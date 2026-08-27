@@ -17,6 +17,12 @@ build/
 !packages/dsh-host-client-graph/dist/index.js
 !packages/dsh-chamber-host-git-worktree/dist/
 !packages/dsh-chamber-host-git-worktree/dist/index.js
+# The shared runtime core's dist/index.js is likewise a committed esbuild
+# artifact: the desktop shims statically import the package main (dist) in
+# dev AND packaged mode, so a clean checkout must carry it. Regenerate via
+# `pnpm run build:dsh-runtime` after any packages/dsh-runtime/src change.
+!packages/dsh-runtime/dist/
+!packages/dsh-runtime/dist/index.js
 
 # Local runtime state (control-plane data, audit log, dsh host state)
 data/

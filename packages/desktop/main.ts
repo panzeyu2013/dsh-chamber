@@ -2066,10 +2066,18 @@ if (!gotTheLock) {
       ? path.join(process.resourcesPath, 'pnpm', 'bin', 'pnpm.cjs')
       : path.join(pkgDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
     let storePruneOperation: Promise<void> | null = null;
+    // The shared core's default node executor is plain node (design 18 §9.1);
+    // the desktop injects its Electron-as-node branch for EVERY pnpm child —
+    // installs AND store-prune — so dev and packaged modes run pnpm with the
+    // same deliberate process semantics (ELECTRON_RUN_AS_NODE + --expose-internals).
+    const runtimeNodeExecutor = (): { file: string; args: string[]; env: Record<string, string> } =>
+      process.versions.electron !== undefined
+        ? { file: process.execPath, args: ['--expose-internals'], env: { ELECTRON_RUN_AS_NODE: '1' } }
+        : { file: process.execPath, args: [], env: {} };
     const runStorePruneIfNeeded = (): Promise<void> => {
       if (storePruneOperation !== null) return storePruneOperation;
       if (quitRequested || readStorePruneRequest(runtimeBaseDir) === null) return Promise.resolve();
-      const operation = pruneRuntimeStore({ baseDir: runtimeBaseDir, pnpmEntry })
+      const operation = pruneRuntimeStore({ baseDir: runtimeBaseDir, pnpmEntry, deps: { node: runtimeNodeExecutor } })
         .then(() => { clearStorePruneRequest(runtimeBaseDir); })
         .catch((error) => {
           // Retain the marker: the next safe startup/operation retries. Prune
@@ -2102,7 +2110,12 @@ if (!gotTheLock) {
         fetchMetadata: (pkg, origin) => fetchRegistryMetadata(pkg, { origin }),
         install: async (opts) => {
           await runStorePruneIfNeeded();
-          return installRuntimeVersion(opts);
+          // Merge, never replace: a future caller-supplied deps member (e.g.
+          // deps.run) must survive the desktop's node-executor injection.
+          return installRuntimeVersion({
+            ...opts,
+            deps: { ...opts.deps, node: runtimeNodeExecutor },
+          });
         },
         store: {
           readOverride: (b) => readOverride(b),
@@ -3115,6 +3128,58 @@ if (!gotTheLock) {
     };
 
     ipcMain.handle('dsh-chamber:runtime-state', trustedIpc(() => runtimeInstance.getState()));
+    // Transactional managed-dsh restart (design 18 §3.6 项 8): refreshes mounted
+    // plugins. Not a version mutation — the pointer/tree is untouched, so no
+    // snapshot/probe gate; the control-plane restartLocal() is single-flight,
+    // serialized with health restarts, and respects canStartLocal.
+    ipcMain.handle('dsh-chamber:runtime-restart', trustedIpc(async () => {
+      const state = runtimeInstance.getState();
+      const busyPhase = state.phase === 'checking' || state.phase === 'downloading'
+        || state.phase === 'installing' || state.phase === 'applying' || state.phase === 'pending';
+      if (runtimeOperation !== null || runtimeWriterFence.busy || busyPhase
+        || state.managementSupported === false || state.runtimeBlocked === true
+        || state.source === 'env' || state.phase === 'snapshot-failed') {
+        // Honest refusal (R7 review): a busy runtime must not resolve into a
+        // silent no-op "success" — the renderer shows the failure line.
+        const reason = state.runtimeBlocked === true
+          ? state.runtimeBlockedReason ?? 'runtime blocked'
+          : 'dsh runtime is busy (another runtime operation is in progress)'
+        throw new Error(sanitizeErrorText(reason));
+      }
+      // Hold the shared writer fence for the transaction: other runtime
+      // actions (retry-apply / restore-pre-rollback / reset-builtin) acquire
+      // the same fence, so a restart cannot interleave with a stopLocal()
+      // from a concurrent mutation (V2 review M1).
+      const restartLease = runtimeWriterFence.tryAcquire('runtime:restart');
+      if (restartLease === null) {
+        throw new Error('dsh runtime is busy (another writer holds the fence)');
+      }
+      try {
+        if (controlPlane === null) throw new Error('control plane not initialized')
+        await controlPlane.restartLocal();
+        // CONTRACT (design 18 §9.3): resolve ≠ success — a restart that
+        // exhausted the shared window settles into restart-exhausted (or
+        // error) and RESOLVES; project that honestly instead of a silent
+        // "healthy" runtime state.
+        const connectionState = controlPlane.connectionState;
+        // Whitelist (round-3 fix): restartLocal() also resolves from
+        // restart-exhausted / error / stopped and can bail on an epoch bump
+        // while 'restarting' is still live — only ready/degraded (process
+        // alive) is a success; resolve ≠ success, strictly.
+        if (connectionState !== 'ready' && connectionState !== 'degraded') {
+          throw new Error(`dsh restart did not reach ready (${connectionState})`);
+        }
+        return runtimeInstance.getState();
+      } catch (error) {
+        const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+        console.warn('[dsh-chamber] restart dsh failed:', message);
+        // Honest failure (design 18 §3.6 项 8): reject so the renderer shows
+        // the failure line instead of silently resolving.
+        throw new Error(message);
+      } finally {
+        restartLease.release();
+      }
+    }));
     const runtimeActionAllowed = (action: Parameters<typeof allowedActions>[0] extends never ? never : ReturnType<typeof allowedActions>[number]) => {
       const state = runtimeInstance.getState();
       if (state.managementSupported === false && action !== 'retry-restore') return false;

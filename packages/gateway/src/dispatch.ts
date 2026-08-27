@@ -9,6 +9,7 @@
  *   /health                  → fall through (management probe, public)
  *   /auth/login              → auth login (public)
  *   /api/connections, /api/host/*, /api/i/* → fall through (management)
+ *   /chamber/runtime/*       → runtime controller (design 18 §9.3; NOT ready-gated)
  *   /chamber/*               → feature host (design 17 §8.5, fully implemented)
  *   /plugins/*, /, /api/*(rest) → gateway-proxy → dsh
  */
@@ -21,6 +22,7 @@ import {
 import type { AuthPrincipal, AuthProvider } from './auth.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { FeatureHost } from './routes.ts'
+import type { RuntimeRoutes } from './runtime-routes.ts'
 import type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
 
 function isPublicRequest(method: string | undefined, pathname: string): boolean {
@@ -163,7 +165,7 @@ function authRequest(req: ApiRequest, decision: GatewayRequestDecision) {
   }
 }
 
-export function createGatewayDispatch(auth: AuthProvider, getProxy: () => GatewayProxy, getFeatures: () => FeatureHost, logger: Logger, requestPolicy: GatewayRequestPolicy): GatewayDispatch {
+export function createGatewayDispatch(auth: AuthProvider, getProxy: () => GatewayProxy, getFeatures: () => FeatureHost, getRuntime: () => RuntimeRoutes, logger: Logger, requestPolicy: GatewayRequestPolicy): GatewayDispatch {
   const middleware: GatewayDispatch['middleware'] = async (req, res, url) => {
     const pathname = url.pathname
     // -1. One authority/origin boundary for every HTTP surface, including
@@ -274,6 +276,15 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     if (pathname === '/chamber') {
       res.writeHead(302, { location: '/chamber/', 'cache-control': 'no-store' })
       res.end()
+      return true
+    }
+    // 3.5 Runtime controller (design 18 §9.3): /chamber/runtime/* is claimed
+    // here, BEFORE the ready-gated feature host — the runtime surface manages
+    // dsh itself and must stay pollable while dsh is down (restart/applying).
+    // Exact-prefix match only: /chamber/runtime and /chamber/runtime/<suffix>
+    // belong to the controller; /chamber/runtimeevil must NOT be claimed.
+    if (pathname === '/chamber/runtime' || pathname.startsWith('/chamber/runtime/')) {
+      await getRuntime().handle(req, res, pathname)
       return true
     }
     // 4. Feature host (design 17 §8.5): /chamber/* is the gateway's own

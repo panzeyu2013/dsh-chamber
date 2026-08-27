@@ -36,6 +36,8 @@ import * as BridgeRows from './bridge-rows/index.ts'
  * per-instance bridge client) and `isLoopback` (true, so settings scopes and
  * welcome onboarding persist to the TARGET host, never memory mode).
  */
+import { createRuntimeSectionPlugin } from './runtime-section-plugin.ts'
+
 export interface FakeConnectionHandle {
   api: BridgeApiClient
   isLoopback: boolean
@@ -211,6 +213,7 @@ export async function mountBridgeSession(instanceId: string): Promise<BridgeSess
     const plugins = [
       ...SETTINGS_PLUGINS,
       await import('@deepseek-ai/dsh-client-ui-agent-preset/client'),
+      createRuntimeSectionPlugin(instanceId),
     ] as readonly SettingsPlugin[]
     const fibers = [
       ctx.plugin(DECLARATION_PLUGIN),

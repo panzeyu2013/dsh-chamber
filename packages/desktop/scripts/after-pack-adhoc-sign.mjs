@@ -28,9 +28,11 @@
 // because Info.plist is a sealed resource.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const require = createRequire(import.meta.url);
 export const MAC_DISABLE_LIBRARY_VALIDATION = 'com.apple.security.cs.disable-library-validation';
 export const MAC_ENTITLEMENTS_PATH = fileURLToPath(new URL('../resources/entitlements.mac.plist', import.meta.url));
 
@@ -122,6 +124,24 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
   const missing = PACKAGED_RUNTIME_MODULES.filter((name) => !existsSync(path.join(unpackedRoot, name)));
   if (missing.length > 0) {
     throw new Error(`incomplete packaged runtime modules: ${missing.join(', ')}`);
+  }
+
+  // The shared runtime core ships INSIDE app.asar as a production dependency
+  // (node_modules/@dsh-chamber/dsh-runtime/dist/index.js); a missing or stale
+  // dist there would surface as a startup module-not-found, not a build
+  // failure. Assert the packed asar explicitly (review fix). Fixture/CI
+  // contexts build no asar — a real electron-builder run always does, so the
+  // skip is never silent in production packaging.
+  const asarPath = path.join(resourcesDir, 'app.asar');
+  if (existsSync(asarPath)) {
+    const asar = require('@electron/asar');
+    const files = asar.listPackage(asarPath);
+    const runtimeCoreDist = 'node_modules/@dsh-chamber/dsh-runtime/dist/index.js';
+    // listPackage yields entries with a leading '/' (asar-absolute form).
+    const packed = files.some((entry) => entry === runtimeCoreDist || entry === `/${runtimeCoreDist}`);
+    if (!packed) {
+      throw new Error(`packaged app.asar is missing ${runtimeCoreDist} — rebuild with build:dsh-runtime before dist:desktop`);
+    }
   }
   console.log(`[after-pack-adhoc-sign] runtime installer support verified: pnpm@${pnpmManifest.version}, ${PACKAGED_RUNTIME_MODULES.length} modules`);
 }

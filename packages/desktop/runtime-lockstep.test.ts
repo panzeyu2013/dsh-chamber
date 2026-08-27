@@ -94,6 +94,21 @@ test('renderer actions are always a subset of the main-process matrix (non-block
   }
 })
 
+test('renderer and main action matrices are EXACTLY equal on the non-blocked, managed, no-capability path', () => {
+  // Review fix: subset-only guarding let a renderer silently DROP an action
+  // (e.g. restart-dsh) pass. On the plain managed path (source 'user', no
+  // capability bits, non-blocked) the two hand-maintained matrices must be
+  // identical — a missing action is now a failure.
+  for (const phase of PHASES) {
+    const state = rendererState(phase, { source: 'user' })
+    assert.deepEqual(
+      [...runtimeAllowedActions(state)].sort(),
+      [...mainActions(phase, state)].sort(),
+      `${phase}: renderer and main matrices must be exactly equal (non-blocked, managed, no caps)`,
+    )
+  }
+})
+
 test('the recover-metadata masking invariant is explicit (canRecoverMetadata ⟹ blocked publishing)', () => {
   // The renderer's NON-blocked path never emits recover-metadata, while the
   // main non-blocked matrix does for idle/failed + canRecoverMetadata +
@@ -201,5 +216,38 @@ test('the renderer RuntimeInstallProgress flat mirror projects from the main-pro
   const mainStages = new Set<MainRuntimeInstallProgress['stage']>(samples.map(sample => sample.stage))
   for (const stage of rendererStages) {
     assert.ok(mainStages.has(stage), `renderer stage '${stage}' is produced by the main-process union`)
+  }
+})
+
+test('renderer compareSemver stays lockstep with the shared compareRuntimeVersions (main)', async () => {
+  const { compareSemver } = await import('../renderer/src/runtime-management.ts')
+  const { compareRuntimeVersions } = await import('@dsh-chamber/dsh-runtime')
+  const corpus: Array<[string, string]> = [
+    ['1.0.0', '1.0.0'],
+    ['1.0.0', '1.0.1'],
+    ['1.10.0', '1.9.9'],
+    ['2.0.0', '10.0.0'],
+    ['1.0.0-beta.1', '1.0.0'],
+    ['1.0.0-rc.1', '1.0.0-beta.2'],
+    ['0.9.9', '1.0.0'],
+    ['1.2.3', '1.2.3-beta.4'],
+    // Adversarial pairs where hand-maintained SemVer implementations diverge:
+    // numeric-vs-alphanumeric prerelease identifiers, same-prefix list length,
+    // arbitrarily large numeric identifiers (no Number precision loss),
+    // invalid/non-semver inputs (both must return null), build metadata
+    // equality, and a bare prerelease-vs-release boundary.
+    ['1.0.0-1', '1.0.0-alpha'],
+    ['1.0.0-alpha', '1.0.0-alpha.1'],
+    ['1.0.0-rc.1', '1.0.0-rc.1.1'],
+    ['99999999999999999999.0.0', '2.0.0'],
+    ['not-a-semver', '1.0.0'],
+    ['', '1.0.0'],
+    ['1.0.0+one', '1.0.0+two'],
+    ['1.0.0', '1.0.0+build'],
+    ['1.0.0-alpha.1', '1.0.0'],
+  ]
+  for (const [a, b] of corpus) {
+    assert.equal(compareSemver(a, b), compareRuntimeVersions(a, b), `${a} vs ${b}`)
+    assert.equal(compareSemver(b, a), compareRuntimeVersions(b, a), `${b} vs ${a}`)
   }
 })

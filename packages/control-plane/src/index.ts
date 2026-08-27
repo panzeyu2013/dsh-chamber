@@ -228,6 +228,14 @@ export interface PlaneHandle {
   /** Stop the managed local host without tearing down the control plane.
    * Resolves only after queued/in-flight start and restart writers settle. */
   stopLocal(): Promise<void>
+  /**
+   * Transactional user-triggered dsh restart (design 18 §9.3): refresh
+   * mounted plugins without a stopLocal()+startLocal() pairing. Shares the
+   * health state machine's restart single-flight; rejects (connection_busy)
+   * when the runtime gate (canStartLocal — applying/restore) is closed, when
+   * a stop is in progress, or from restart-exhausted.
+   */
+  restartLocal(): Promise<void>
   /** Re-publish the public local lifecycle after canExposeLocal changes. */
   refreshLocalExposure(): void
   /** Subscribe to authoritative local-host lifecycle transitions. Gateway
@@ -1093,6 +1101,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     /** Stop only the local managed host (the HTTP control plane stays up). */
     stopLocal: async () => {
       await local.stop()
+    },
+
+    /** Transactional user-triggered dsh restart (design 18 §9.3). */
+    restartLocal: async () => {
+      await local.restartLocal()
     },
 
     refreshLocalExposure() {

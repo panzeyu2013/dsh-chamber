@@ -150,6 +150,9 @@ export interface RuntimeSurface {
   cleanupVersion(version: string): Promise<RuntimeState>
   /** Restore the newest pre-rollback stash over DSH_HOME (main-validated name). */
   restorePreRollback(stashName: string): Promise<RuntimeState>
+  /** Transactional managed-dsh restart (design 18 §3.6 项 8): refreshes mounted
+   *  plugins; the pointer/version tree is untouched. */
+  restart(): Promise<RuntimeState>
   onChanged(callback: (state: RuntimeState) => void): () => void
 }
 
@@ -163,6 +166,7 @@ export type RuntimeAction =
   | 'cleanup-version'
   | 'recover-metadata'
   | 'restore-pre-rollback'
+  | 'restart-dsh'
 
 /**
  * The strict visible-action matrix. Busy phases expose no mutation; pending
@@ -170,18 +174,26 @@ export type RuntimeAction =
  * actions are added separately from explicit controller capability bits.
  */
 const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
-  idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+  idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   checking: [],
-  available: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+  available: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   downloading: [],
   installing: [],
   pending: ['reset-builtin'],
   applying: ['reset-builtin'],
-  applied: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
-  rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+  applied: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
+  rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   'snapshot-failed': ['reset-builtin'],
-  failed: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
-  error: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+  failed: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
+  error: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
+}
+
+/** Restart-dsh gate (design 18 §3.6 项 8): usable in any non-busy,
+ *  non-applying state; the transactional control-plane restart is
+ *  single-flight and re-seeds mounted plugins on every spawn. */
+export function runtimeRestartAllowed(state: RuntimeState | null): boolean {
+  if (state === null) return false
+  return runtimeAllowedActions(state).includes('restart-dsh')
 }
 
 export function runtimeAllowedActions(state: RuntimeState | null): readonly RuntimeAction[] {

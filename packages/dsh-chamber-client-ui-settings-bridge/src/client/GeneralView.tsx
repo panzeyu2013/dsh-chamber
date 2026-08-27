@@ -15,9 +15,10 @@
  *   时机 (hidden-only / always) + 事件开关 (complete / ask / request) +
  *   「发送测试通知」;
  * - 更新 (design 11, merged into General): current version +「检查更新」+
- *   low-key status (UpdateSection);
- * - dsh 运行时 (design 18 M4): active/bundled versions, registry source,
- *   version selection, guarded actions, failure and snapshot projections.
+ *   low-key status (UpdateSection).
+ *
+ * （design 18 §3.6：dsh 运行时块已自本视图迁出——per-server「dsh 运行时」
+ *  settings.section，见 runtime-section-plugin.ts。）
  *
  * Every mutation goes through the main-process settings IPC (settings-store);
  * failures surface LOUDLY (never a silent fake success). The closeToTray gate
@@ -30,7 +31,6 @@ import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/sett
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
 import { notificationsOf, notificationsPatch } from './notifications-settings.ts'
 import { UpdateSection } from './UpdateSection.tsx'
-import { DshRuntimeSection } from './DshRuntimeSection.tsx'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported). */
@@ -135,8 +135,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // a fake off (unknown/future keys filtered in notificationsOf).
   const notifications = notificationsOf(settings)
 
-  // The active dsh runtime version block (design 18 M4) is rendered by
-  // DshRuntimeSection below — it reads the runtime surface directly.
+  // The dsh runtime block moved to the per-server「dsh 运行时」settings.section
+  // (design 18 §3.6, 2026-09 修订): GeneralView keeps only the design-15
+  // control groups (startup/shutdown / runtime / update).
 
   return (
     <div className={css.generalSection}>
@@ -301,12 +302,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       {/* Chamber-global update status (design 11): merged into the General
           section — the dedicated __update nav entry was folded in here. */}
       <UpdateSection t={t} />
-
-      {/* Chamber-global「dsh 运行时」group (design 18 M4), immediately after
-          the app-update group: full authoritative state/action projection.
-          Before bridge hydration it shows an unknown version and disables
-          mutations — never a fabricated version or fake success. */}
-      <DshRuntimeSection t={t} />
 
       {saveError !== null && (
         <p className={css.generalError} aria-live="polite">{t('generalSaveFailed', { error: saveError })}</p>

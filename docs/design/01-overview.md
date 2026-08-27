@@ -89,7 +89,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code 深链插件：`dsh-chamber://` OS 深链 + `shell.overlay` 主区右上按钮快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed，现有包改动 = 0 |
 | 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 验收候选（2026-08-23） | 独立启动的认证 server 形态：单本地 dsh 公网接入、Desktop `gateway` transport 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only；剩余真实 dsh/TLS/打包实机门禁 |
-| 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md) | 现行（M0/M2/M4 done；M1/M3 packaged evidence partial；2026-08，详见 STATUS） | dsh 运行时版本管理：一次 source-bound tarball 下载 + SRI + pnpm `file:` 安装（唯一获取方式，无 Provider B）、settings 版本选择/回滚 + registry 源用户自设、探针门控激活 + 自动回退、快照/失败现场与磁盘治理；macOS/Linux 可管理，Windows 只读 |
+| 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md) | 现行（M0/M2/M4 done；M1/M3 packaged evidence partial；2026-08，详见 STATUS；§9 gateway 服务端化 + 共享核心与 §3.6 per-server 设置段 = 已实现（M5–M7，2026-09）） | dsh 运行时版本管理：一次 source-bound tarball 下载 + SRI + pnpm `file:` 安装（唯一获取方式，无 Provider B）、per-server「dsh 运行时」设置段（agent 预设后）版本选择/回滚 + registry 源用户自设、探针门控激活 + 自动回退、快照/失败现场与磁盘治理；macOS/Linux 可管理，Windows 只读；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位 + S17–S20） |
 | 19 | [19-notifications.md](19-notifications.md) | 已实现（2026-09；四路 review 轮后） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
 | 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行（已实现（M0–M3），2026-08） | open-in 打开注册表（design 16 演进）：本地来源 Finder + 本地/远程 VS Code 的统一打开面；主进程 OpenInApp provider 注册表 + 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-client-ui-open-in`，旧 vscode IPC 收敛删除（2026-08 合并 main 时重编号 17→20，避开 design 17 gateway） |
 
@@ -115,7 +115,10 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 > **有界例外**：design 08 的插件与 design 17 的独立 gateway 是两个显式边界。
 > `packages/control-plane` 本身仍不建立 Git/会话索引、不运行 Git、不认证；Desktop
 > 仍仅接入/分发。gateway 的派生状态丢失后必须能从 dsh 权威重建，且 gateway 进程
-> 未显式启动时这些域完全不存在。
+> 未显式启动时这些域完全不存在。design 18 §9 是 17/18 的有界扩展：gateway 获得与
+> 桌面同源的 dsh 运行时版本管理（design 18 共享核心 + `/chamber/runtime` 面），
+> 不新增执行面、control-plane 版本切换零改动（「重启 dsh」另增事务化
+> `restartLocal()` 接口，design 18 §9.3）、P3 移出项不回流。
 
 ---
 

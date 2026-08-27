@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================================
-# dsh-chamber Gateway 一键安装器（design 17 服务器部署，2026-08）
+# dsh-chamber Gateway 一键安装器（design 17 服务器部署 + design 18 运行时管理）
 #
 # 用途：从 GitHub release 拉取 gateway 包（npm 未发布也能装），交互式确认
-# 每个配置（默认值合理、全部可改、非交互 -y 供 CI），自动探测/安装 dsh，
+# 每个配置（默认值合理、全部可改、非交互 -y 供 CI），探测/安装 dsh，
 # 生成 systemd 单元（root）或 systemctl --user / 前台（非 root），
 # 提供 install / update / status / logs / uninstall 管理子命令。
+#
+# dsh 定位（design 18 §9）：脚本安装的 npm 全局 dsh 是 gateway 的
+# 「内建/回退锚」（经 --dsh-path / DSH_GATEWAY_DSH_PATH 提供给 gateway）。
+# 安装完成后 dsh 版本可在 gateway 的 /chamber/ 页面（或 /chamber/runtime API）
+# 运行期管理（安装/切换/回滚）；运行时状态与版本树位于 DSH_GATEWAY_STATE
+# （默认 ${BASE_DIR}/gateway/data）下的 dsh-runtime/ 目录。
 #
 # 端口模型（服务器部署默认，均可改）：
 #   gateway 监听  :30801   （--port / DSH_GATEWAY_PORT）
 #   托管 dsh 监听 :30800   （--dsh-port / DSH_GATEWAY_DSH_PORT，spawn-dsh 基口）
-#
-# dsh 版本常量：DSH_CHAMBER_DSH_VERSION —— 与 release.yml 的
-# env.DSH_CHAMBER_DSH_VERSION 保持一致（发布 checklist 锁定同步项）。
 #
 # 用法：
 #   install-gateway.sh [install] [选项]     安装（默认子命令）
@@ -20,13 +23,16 @@
 #   install-gateway.sh status|logs|uninstall
 #   选项：-y/--yes 非交互（用默认值+flags）；--version V 精确 pin；
 #         --channel beta 预发布通道；--tgz FILE 离线本地包；
-#         --gateway-port N --dsh-port N --origin URL --trusted-proxy IP
-#         --ui-password P --api-token T --no-auth --local --foreground
+#         --gateway-port N --dsh-port N --dsh-path DIR --skip-dsh
+#         --origin URL --trusted-proxy IP --ui-password P --api-token T
+#         --no-auth --local --foreground --purge
 # ============================================================================
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # 常量（发布 checklist 锁定：dsh 版本变更必须同步这里与 release.yml）
+# DSH_CHAMBER_DSH_VERSION 是「内建/回退锚」默认版本（design 18 §9）：运行期
+# 可经 /chamber/runtime 切换，此常量仅决定本脚本安装的锚版本。
 # ---------------------------------------------------------------------------
 DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.1.1-rc.2}"
 GITHUB_REPO="${DSH_CHAMBER_GITHUB_REPO:-panzeyu2013/dsh-chamber}"
@@ -58,6 +64,10 @@ NO_AUTH=0
 INSTALL_METHOD="global"        # global | local
 SERVICE_MODE="auto"            # systemd | user | foreground
 SKIP_DSH=0
+DSH_FOUND=""
+DSH_WS=""
+DSH_VER=""
+ENV_ANCHOR=0        # 锚来自用户显式 DSH_GATEWAY_DSH_PATH（env 恒最高，仅此时才写回 env）
 npm_mirror=""
 
 log()  { printf '\033[1;34m[gateway]\033[0m %s\n' "$*"; }
@@ -142,8 +152,16 @@ confirm() {
 # ---------------------------------------------------------------------------
 port_free() {
   local host="$1" port="$2"
-  if ! timeout 2 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null; then
-    return 0   # 连接失败 = 端口空闲
+  # GNU timeout 缺失时（如 macOS）退化为直接探测：连接失败 = 端口空闲。
+  # Linux 服务器目标下 timeout 仍用于给 /dev/tcp 兜底超时。
+  if have timeout; then
+    if ! timeout 2 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null; then
+      return 0
+    fi
+    return 1
+  fi
+  if ! bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null; then
+    return 0
   fi
   return 1
 }
@@ -175,8 +193,8 @@ resolve_version() {
     local json
     json=$(github_api "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=10") \
       || die "无法访问 GitHub Releases API（可设 HTTPS_PROXY 代理）"
-    VERSION=$(printf '%s' "$json" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
-    [[ -n "$VERSION" ]] || die "未找到 beta 预发布版本"
+    VERSION=$(printf '%s' "$json" | tr -d '\n' | sed 's/},{/}\n{/g' | grep '"prerelease": *true' | head -1 | grep -o '"tag_name": *"v[^"]*"' | sed 's/.*"v\([^"]*\)".*/\1/')
+    [[ -n "$VERSION" ]] || die "未找到 beta 预发布版本（prerelease）"
   else
     local json
     json=$(github_api "https://api.github.com/repos/${GITHUB_REPO}/releases/latest") \
@@ -222,16 +240,24 @@ download_verify() {
 detect_dsh() {
   # 用户显式 --dsh-path 优先，跳过探测
   if [[ "$DSH_FOUND" == "explicit" ]]; then
-    [[ -x "$DSH_WS/node_modules/@deepseek-ai/dsh/lib/bin.js" ]] || die "--dsh-path 缺少 node_modules/@deepseek-ai/dsh：$DSH_WS"
+    [[ -e "$DSH_WS/node_modules/@deepseek-ai/dsh/lib/bin.js" || -e "$DSH_WS/node_modules/@deepseek-ai/dsh/apps/cli/src/bin.ts" ]] || die "--dsh-path 缺少 node_modules/@deepseek-ai/dsh：$DSH_WS"
     return 0
   fi
   DSH_WS=""
   DSH_FOUND=""
+  # env 锚（design 18 §9.3 解析链恒最高）：无 --dsh-path 时捕获
+  # DSH_GATEWAY_DSH_PATH 作为锚，避免 write_env 覆写成空串。
+  if [[ -n "${DSH_GATEWAY_DSH_PATH:-}" ]]; then
+    DSH_WS="$DSH_GATEWAY_DSH_PATH"
+    DSH_FOUND="env"
+    ENV_ANCHOR=1
+    return 0
+  fi
   if [[ "$SKIP_DSH" == "1" ]]; then return 0; fi
   local root
   if have dsh; then
     root=$(npm root -g 2>/dev/null || true)
-    if [[ -n "$root" && -x "$root/@deepseek-ai/dsh/lib/bin.js" ]]; then
+    if [[ -n "$root" && ( -e "$root/@deepseek-ai/dsh/lib/bin.js" || -e "$root/@deepseek-ai/dsh/apps/cli/src/bin.ts" ) ]]; then
       DSH_WS="$root"
       DSH_FOUND="global"
       return 0
@@ -241,7 +267,7 @@ detect_dsh() {
   fi
   if have npm; then
     root=$(npm root -g 2>/dev/null || true)
-    if [[ -n "$root" && -x "$root/@deepseek-ai/dsh/lib/bin.js" ]]; then
+    if [[ -n "$root" && ( -e "$root/@deepseek-ai/dsh/lib/bin.js" || -e "$root/@deepseek-ai/dsh/apps/cli/src/bin.ts" ) ]]; then
       DSH_WS="$root"
       DSH_FOUND="global"
       return 0
@@ -252,7 +278,7 @@ detect_dsh() {
 
 verify_dsh() {
   local ws="$1"
-  [[ -x "$ws/node_modules/@deepseek-ai/dsh/lib/bin.js" ]] || return 1
+  [[ -e "$ws/node_modules/@deepseek-ai/dsh/lib/bin.js" || -e "$ws/node_modules/@deepseek-ai/dsh/apps/cli/src/bin.ts" ]] || return 1
   local ver
   ver=$(node "$ws/node_modules/@deepseek-ai/dsh/lib/bin.js" --version 2>/dev/null | head -1 || true)
   printf '%s' "$ver"
@@ -260,7 +286,7 @@ verify_dsh() {
 
 install_dsh() {
   local target_version="$1"
-  log "安装 dsh@${target_version}（npm 全局）…"
+  log "安装 dsh 内建锚 @${target_version}（npm 全局）…"
   local registry
   registry=$(npm config get registry 2>/dev/null || printf 'https://registry.npmjs.org')
   if [[ -n "$npm_mirror" ]]; then registry="$npm_mirror"; fi
@@ -272,7 +298,7 @@ install_dsh() {
   local ver
   ver=$(verify_dsh "$DSH_WS" || true)
   [[ -n "$ver" ]] || die "dsh 安装后验证失败：$DSH_WS"
-  log "dsh 就绪：$ver（$DSH_WS）"
+  log "dsh 内建锚就绪：$ver（$DSH_WS）"
 }
 
 # ---------------------------------------------------------------------------
@@ -299,6 +325,10 @@ write_config() {
   chmod 600 "$CONF_FILE"
 }
 
+# 服务环境落盘（EnvironmentFile 引用，0600）。DSH_GATEWAY_STATE 指向的 state
+# 目录承载 design 18 运行时状态：dsh-runtime/（版本树、current 指针、快照）与
+# dsh-home/（会话数据），gateway 启动相位收敛为 0700；普通 uninstall 保留，
+# 仅 --purge 删除。
 write_env() {
   umask 077
   {
@@ -306,8 +336,14 @@ write_env() {
     printf 'DSH_GATEWAY_PORT=%q\n' "$GATEWAY_PORT"
     printf 'DSH_GATEWAY_DSH_PORT=%q\n' "$DSH_PORT"
     printf 'DSH_GATEWAY_HOST=%q\n' "$BIND_HOST"
+    printf '# state 目录：dsh-runtime/（版本树/快照）+ dsh-home/（会话数据），仅 --purge 删除\n'
     printf 'DSH_GATEWAY_STATE=%q\n' "${BASE_DIR}/gateway/data"
-    printf 'DSH_GATEWAY_DSH_PATH=%q\n' "$DSH_WS"
+    # 锚默认走 --dsh-path（内建/回退锚，运行期可切换）；仅当用户显式以
+    # DSH_GATEWAY_DSH_PATH 提供（env 恒最高）时才写回 env 行，否则写 env 会
+    # 把实例永久钉在 env 源、静默禁用版本切换/回滚（design 18 §9.3）。
+    if [[ -n "$DSH_WS" && "$ENV_ANCHOR" == "1" ]]; then
+      printf 'DSH_GATEWAY_DSH_PATH=%q\n' "$DSH_WS"
+    fi
     if [[ -n "$PUBLIC_ORIGIN" ]]; then
       printf 'DSH_GATEWAY_PUBLIC_ORIGIN=%q\n' "$PUBLIC_ORIGIN"
     fi
@@ -335,6 +371,14 @@ gateway_exec() {
   fi
 }
 
+# 内建锚参数（--dsh-path，非 env）：解析链中为「内建/回退锚」，运行期可经
+# /chamber/runtime 切换。ENV_ANCHOR=1（用户显式 env）时锚已由 env 提供。
+anchor_args() {
+  if [[ -n "$DSH_WS" && "$ENV_ANCHOR" != "1" ]]; then
+    printf ' --dsh-path %q' "$DSH_WS"
+  fi
+}
+
 write_unit() {
   local unit_name="dsh-chamber-gateway.service"
   local exec_path
@@ -355,7 +399,7 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=${ENV_FILE}
-ExecStart=${exec_path} serve
+ExecStart=${exec_path} serve$(anchor_args)
 Restart=on-failure
 RestartSec=3
 
@@ -402,7 +446,7 @@ start_foreground() {
   # shellcheck disable=SC1090
   . "$ENV_FILE"
   set +a
-  nohup "$(gateway_exec)" serve >"$out" 2>&1 &
+  nohup "$(gateway_exec)" serve$(anchor_args) >"$out" 2>&1 &
   local pid=$!
   printf '%s\n' "$pid" > "${BASE_DIR}/run/gateway.pid"
   if ! health_wait "$GATEWAY_PORT" 30; then
@@ -430,21 +474,24 @@ wizard() {
     fi
   fi
 
-  # [2] dsh 运行环境（探测优先）
+  # [2] dsh 内建锚（探测优先；design 18 §9：此为「锚」，激活版本运行期切换）
   detect_dsh
+  if [[ "$SKIP_DSH" == "1" && "$DSH_FOUND" != "explicit" && -z "${DSH_GATEWAY_DSH_PATH:-}" ]]; then
+    die "--skip-dsh 需要显式内建锚（design 18 §9.3）：gateway 启动必须有 --dsh-path 或 DSH_GATEWAY_DSH_PATH。请提供 --dsh-path <workspace>（含 node_modules/@deepseek-ai/dsh），或设 DSH_GATEWAY_DSH_PATH，或去掉 --skip-dsh 让脚本自动探测/安装 dsh。"
+  fi
   if [[ "$DSH_FOUND" == "global" ]]; then
     local v
     v=$(verify_dsh "$DSH_WS")
-    log "检测到已有 dsh${v:+（${v}）}：复用 npm 全局工作区 $DSH_WS（跳过安装）"
+    log "检测到已有 dsh${v:+（${v}）}：复用 npm 全局工作区 $DSH_WS 作为内建锚（跳过安装；运行期可在 /chamber/runtime 切换激活版本）"
   elif [[ "$DSH_FOUND" == "path" ]]; then
     warn "检测到 dsh 命令但无法定位 npm 全局工作区"
     prompt DSH_WS "请提供 dsh workspace 路径（含 node_modules/@deepseek-ai/dsh，留空=自动安装）" ""
     if [[ -z "$DSH_WS" ]]; then
-      prompt DSH_VER "安装 dsh 版本（默认与 gateway 发布绑定）" "$DSH_CHAMBER_DSH_VERSION"
+      prompt DSH_VER "安装 dsh 锚版本（默认与 gateway 发布绑定）" "$DSH_CHAMBER_DSH_VERSION"
     fi
   else
     if [[ "$SKIP_DSH" != "1" ]]; then
-      prompt DSH_VER "安装 dsh 版本（默认与 gateway 发布绑定）" "$DSH_CHAMBER_DSH_VERSION"
+      prompt DSH_VER "安装 dsh 锚版本（默认与 gateway 发布绑定）" "$DSH_CHAMBER_DSH_VERSION"
     fi
   fi
   if [[ -z "$DSH_WS" && "$SKIP_DSH" != "1" ]]; then
@@ -533,7 +580,7 @@ wizard() {
     printf '安装预览：\n'
     printf '  版本=%s  方式=%s  网关端口=%s  dsh端口=%s\n' "$VERSION" "$INSTALL_METHOD" "$GATEWAY_PORT" "$DSH_PORT"
     printf '  bind=%s  origin=%s  proxy=%s\n' "$BIND_HOST" "${PUBLIC_ORIGIN:-(无)}" "${TRUSTED_PROXY:-(无)}"
-    printf '  dsh=%s  服务=%s  no-auth=%s\n' "${DSH_WS:-自动安装}" "$SERVICE_MODE" "$([[ $NO_AUTH == 1 ]] && printf 是 || printf 否)"
+    printf '  dsh 锚=%s  服务=%s  no-auth=%s\n' "${DSH_WS:-自动安装}" "$SERVICE_MODE" "$([[ $NO_AUTH == 1 ]] && printf 是 || printf 否)"
     printf '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
     if ! confirm "确认执行？" "y"; then die "已取消"; fi
   fi
@@ -543,16 +590,24 @@ wizard() {
 # 执行序列（dsh 先行，再 gateway）
 # ---------------------------------------------------------------------------
 do_install() {
-  [[ -d "$GATEWAY_DIR" ]] && { die "检测到已有安装（$CONF_FILE）。请用 update / uninstall 管理。"; }
+  # 非 purge 卸载会保留 GATEWAY_DIR（state 数据），重新安装应当允许原地
+  # 复用；仅当目录存在且无任何安装/状态痕迹时才视为外来冲突。
+  if [[ -d "$GATEWAY_DIR" ]]; then
+    if [[ -f "$CONF_FILE" || -d "$GATEWAY_DIR/data" || -d "$VERSIONS_DIR" ]]; then
+      log "检测到保留的 gateway state（非 purge 卸载或既有安装）：原地复用，程序文件将被覆盖"
+    else
+      die "检测到外来目录 $GATEWAY_DIR（无安装/状态痕迹）。请先清空或改名该目录。"
+    fi
+  fi
 
-  # 1) dsh（探测 → 安装 → 验证）
+  # 1) dsh 内建锚（探测 → 安装 → 验证；激活版本运行期经 /chamber/runtime 切换）
   if [[ -z "$DSH_WS" && "$SKIP_DSH" != "1" ]]; then
     install_dsh "${DSH_VER:-$DSH_CHAMBER_DSH_VERSION}"
   elif [[ -n "$DSH_WS" ]]; then
     local v
     v=$(verify_dsh "$DSH_WS" || true)
     [[ -n "$v" ]] || die "dsh workspace 验证失败：$DSH_WS（缺少 node_modules/@deepseek-ai/dsh）"
-    log "dsh 验证通过：${v}（$DSH_WS）"
+    log "dsh 内建锚验证通过：${v}（$DSH_WS）"
   fi
 
   # 2) gateway 包
@@ -577,10 +632,11 @@ do_install() {
     log "本地安装到 $GATEWAY_DIR/versions/${VERSION} …"
     mkdir -p "$VERSIONS_DIR/${VERSION}"
     tar -xzf "$tgz_src" -C "$VERSIONS_DIR/${VERSION}" --strip-components=1
+    ln -sfn "$VERSIONS_DIR/${VERSION}" "$GATEWAY_DIR/current" 2>/dev/null || true
     mkdir -p "$LOCAL_BIN_DIR"
     cat > "$LOCAL_BIN_DIR/gateway" <<EOF
 #!/usr/bin/env bash
-exec node "$VERSIONS_DIR/${VERSION}/dist/cli.js" "\$@"
+exec node "$GATEWAY_DIR/current/dist/cli.js" "\$@"
 EOF
     chmod +x "$LOCAL_BIN_DIR/gateway"
   fi
@@ -627,6 +683,19 @@ cmd_status() {
     fi
   fi
   curl -fsS -m 3 "http://127.0.0.1:${GATEWAY_PORT}/health" 2>/dev/null && printf '\n健康: OK\n' || printf '\n健康: 不可达\n'
+  # design 18 §9.3：runtime 状态探测（/chamber/runtime 需认证，design 17 §4）。
+  # 无凭据时 401 为诚实结果：提示用户经登录后查看，绝不静默假装成功。
+  local rt rt_code
+  rt=$(curl -sS -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${GATEWAY_PORT}/chamber/runtime/status" 2>/dev/null || true)
+  rt_code="${rt:-000}"
+  if [[ "$rt_code" == "401" || "$rt_code" == "403" ]]; then
+    printf 'dsh 运行时: 需认证（%s）——登录后经 /chamber/runtime 查看\n' "$rt_code"
+  else
+    rt=$(curl -fsS -m 3 "http://127.0.0.1:${GATEWAY_PORT}/chamber/runtime/status" 2>/dev/null || true)
+    if [[ -n "$rt" ]]; then
+      printf 'dsh 运行时: %s\n' "$rt"
+    fi
+  fi
 }
 
 cmd_logs() {
@@ -709,7 +778,11 @@ cmd_update() {
 
 cmd_uninstall() {
   load_conf
-  if ! confirm "确认卸载 gateway（保留数据，--purge 可清数据）？" "n"; then die "已取消"; fi
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    :  # -y 显式放行（脚本化卸载）
+  elif ! confirm "确认卸载 gateway（保留 state，--purge 才删 dsh-runtime/ 与 dsh-home/）？" "n"; then
+    die "已取消"
+  fi
   if [[ "$SERVICE_MODE" == "foreground" ]]; then
     local fg_pid
     fg_pid=$(cat "${BASE_DIR}/run/gateway.pid" 2>/dev/null || true)
@@ -732,11 +805,14 @@ cmd_uninstall() {
     npm uninstall -g @dsh-chamber/gateway 2>/dev/null || true
   fi
   rm -f "$CONF_FILE"
+  # 非 purge 卸载仍清掉指向已删程序文件的启动器与运行期痕迹（state 保留）。
+  rm -f "${BASE_DIR}/bin/gateway" 2>/dev/null || true
+  rm -f "${BASE_DIR}/run/gateway.pid" "${BASE_DIR}"/run/gateway*.log 2>/dev/null || true
   if [[ "${PURGE:-0}" == "1" ]]; then
     rm -rf "$GATEWAY_DIR"
-    log "已彻底卸载（含数据）"
+    log "已彻底卸载（含 state：dsh-runtime/ 版本树与快照、dsh-home/ 会话数据）"
   else
-    log "已卸载（配置与数据保留于 $GATEWAY_DIR；如需彻底删除：rm -rf $GATEWAY_DIR）"
+    log "已卸载（配置与数据保留于 $GATEWAY_DIR，含 data/dsh-runtime/ 版本树与快照、data/dsh-home/ 会话数据；仅 --purge 删除）"
   fi
 }
 
@@ -744,7 +820,8 @@ cmd_uninstall() {
 # 参数解析
 # ---------------------------------------------------------------------------
 usage() {
-  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+  # 打印头部注释块（第 2 行起，止于 set -euo pipefail 之前）
+  awk 'NR>=2 { if ($0=="set -euo pipefail") exit; sub(/^# ?/, ""); print }' "$0"
   exit 0
 }
 

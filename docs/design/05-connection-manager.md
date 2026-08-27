@@ -281,6 +281,24 @@ export const chamberBridge: {
 - chamber 自研插件包 `packages/dsh-chamber-client-ui-settings-connections`
   （`@dsh-chamber/dsh-client-ui-settings-connections`），注册进 dsh 设置模态
   的 `settings.section` 槽（id `connections`，order 30，在 agent-presets 之后）。
+- 「dsh 运行时」段（design 18 §3.6/§9，2026-09 per-server 修订）：同为
+  chamber 自研 `settings.section`（id `dsh-runtime`，order 31），注册在选中
+  服务器的子上下文 ledger、紧随 agent-presets 渲染；**connections 是壳的
+  固定 nav 入口**（在分隔线之下、不占 ledger order），故「dsh 运行时」在
+  视觉上位于 server 段列表内 agent-presets 之后。local = 完整运行时管理面，
+  gateway = 经反代触达该 gateway 的 `/chamber/runtime`，ssh = 版本只读行。
+  **不再位于 chamber 全局「通用」视图**（design 15 的 `__general` 控制组不含
+  运行时块）。
+- 三种来源均含**「重启 dsh」动作**（design 18 §3.6 项 8，刷新插件挂载）：
+  local = 控制面事务接口 `restartLocal()`（design 18 §9.3，与健康状态机重启
+  单飞行串行化——**不是**连接页裸 启动/停止 的组合）；gateway =
+  `POST /chamber/runtime/restart`（经 `/api/i/gateway-<id>/chamber/*` 反代，
+  202 + status 轮询）；ssh = 既有 `restart_service` systemd IPC（03 §2.2，
+  重启窗口内隧道 phase 保持 ready、目标连接拒绝显式 503）。二次确认 +
+  状态行，与健康状态机 `restarting` 单飞行互斥、applying 期间禁用。
+- **职责划分**：连接页本地卡的 启动/停止 = 连接生命周期（开机常驻与否）；
+  「dsh 运行时」段的 重启 dsh = 运行时维护（刷新插件挂载、恢复服务）——两者
+  不合并、文案不混用（起停不改运行时事实，重启不改指针/版本）。
 - 内容：本地实例卡（/health 状态徽标 + /api/connections 行端口/label +
   启动/停止（二次确认）+ host 日志只读）+ 远程主机卡片列表（label +
   user@host:port + phase 徽标 + 隧道 localPort + serviceName + logSummary；
@@ -389,6 +407,9 @@ export const chamberBridge: {
 
 `{start(), stop(), startLocal(), localProcessAlive(), port, connectionState,
 instanceId}` +
+`restartLocal()`（design 18 §9.3 事务化用户重启：与健康状态机重启单飞行
+串行化、canStartLocal 门控、restart-exhausted 窗口共享）+
+`refreshLocalExposure()`（重新发布本地公共快照，供事务后解除 quarantine）+
 `registerInstanceTransport(connectionId, baseUrl)` /
 `unregisterInstanceTransport(connectionId)`（隧道 ready/断开时主进程上报
 `ssh:<id>` → `http://127.0.0.1:<隧道 localPort>`）；`webDistDir?` 静态服务

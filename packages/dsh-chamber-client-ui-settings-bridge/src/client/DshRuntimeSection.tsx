@@ -1,9 +1,23 @@
 /**
- * Chamber-global dsh runtime management block (design 18 §3.6).
+ * Per-server dsh runtime section (design 18 §3.6, 2026-09 per-server 修订):
+ * registered as `settings.section` id `dsh-runtime` (order 31, right after
+ * agent-presets) in every instance context. Local = full management surface;
+ * gateway = proxied `/chamber/runtime` restart (version read-only line);
+ * ssh = `restart_service` systemd restart (版本只读行属后续阶段，当前 ssh
+ * 分支只渲染重启动作与提示)。Every source gets the「重启 dsh」
+ * action (design 18 §3.6 项 8) to refresh mounted plugins.
  *
- * Runtime facts and mutations remain main-process authoritative. This view
- * consumes the shared renderer projection so its action gates, status copy,
- * SemVer ordering and subscription lifecycle stay aligned with the
+ * STAGED DEVIATION (registered in STATUS.md M7): the gateway branch currently
+ * renders a REDUCED view — the remote version line (or fallback hint) + the
+ * restart button + status polling. The full per-server section content
+ * (version selector / registry source / status·failure·snapshot rows /
+ * mutations) routed through `/api/i/<id>/chamber/runtime/*` is a later stage;
+ * the route surface (status/versions/select/apply/rollback/restore-builtin/
+ * retry-apply/retry-restore/restart/registry) is already complete server-side.
+ *
+ * Runtime facts and mutations remain main-process authoritative. The local
+ * view consumes the shared renderer projection so its action gates, status
+ * copy, SemVer ordering and subscription lifecycle stay aligned with the
  * connections local-start gate.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -16,12 +30,14 @@ import {
   projectRuntimeSnapshot,
   projectRuntimeStatus,
   runtimeAllowedActions,
+  runtimeRestartAllowed,
   runtimeSelectionDirection,
   subscribeRuntimeState,
   type RuntimeMetadataComponent,
   type RuntimeVersionEntry,
 } from '../../../../packages/renderer/src/runtime-management.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
+import { pollGatewayReady } from './gateway-runtime-poll.ts'
 import css from './SettingsShell.module.css'
 
 type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
@@ -72,10 +88,28 @@ function metadataComponentText(component: RuntimeMetadataComponent, t: RuntimeTr
   }
 }
 
-export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
+export type { DshRuntimeSource } from './runtime-source.ts'
+import type { DshRuntimeSource } from './runtime-source.ts'
+
+export interface DshRuntimeSectionProps {
+  t: RuntimeTranslate
+  /** Source kind derived from the instance context's canonical chamber id. */
+  instanceSource?: DshRuntimeSource
+  /** The canonical per-instance id (local | ssh-<id> | gateway-<id>). */
+  chamberInstanceId?: string
+}
+
+export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstanceId }: DshRuntimeSectionProps) {
   const state = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
   const settingsStatus = useSyncExternalStore(subscribeSettings, getSettingsStatus)
   const [busy, setBusy] = useState(false)
+  const [restarting, setRestarting] = useState(false)
+  const [restartNote, setRestartNote] = useState<string | null>(null)
+  const restartPollAbort = useRef<AbortController | null>(null)
+  // Synchronous re-entry gate: the async state update cannot stop a double
+  // click in the same frame (V2 review M3).
+  const restartingRef = useRef(false)
+  useEffect(() => () => { restartPollAbort.current?.abort() }, [])
   const [selected, setSelected] = useState<string | null>(null)
   const selectionExplicit = useRef(false)
   const [customOrigin, setCustomOrigin] = useState('')
@@ -152,6 +186,68 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
       setBusy(false)
     }
   }, [])
+
+  // 重启 dsh（design 18 §3.6 项 8）：受控进程重启刷新插件挂载；指针/版本树
+  // 不动。local = 事务化 control-plane restartLocal()；gateway = 该 server 的
+  // /chamber/runtime/restart（202 + status 轮询）；ssh = restart_service systemd。
+  const canRestartDsh = runtimeRestartAllowed(state)
+  const onRestartDsh = useCallback(async (): Promise<void> => {
+    if (restartingRef.current) return
+    if (window.confirm(t('dshRuntimeRestartConfirm'))) {
+      restartingRef.current = true
+      setRestarting(true)
+      setActionError(null)
+      setRestartNote(null)
+      try {
+        if (instanceSource === 'local') {
+          const surface = currentRuntimeSurface()
+          if (surface !== null) {
+            await surface.restart()
+          } else {
+            // Bridge torn down between render and click: never claim a
+            // restart that cannot run (review fix).
+            throw new Error('runtime surface unavailable')
+          }
+        } else if (instanceSource === 'gateway' && chamberInstanceId !== undefined) {
+          const response = await fetch(`/api/i/${chamberInstanceId}/chamber/runtime/restart`, { method: 'POST' })
+          if (response.status !== 202) {
+            // Surface the server's own reason (round-3 fix): the route answers
+            // 409 with a specific error ('managed dsh is not running (stopped)…',
+            // 'runtime activation in progress…', 'a restart is already in flight')
+            // that must reach the user instead of a bare status code.
+            let serverReason = ''
+            try {
+              const body = await response.json() as { error?: unknown }
+              if (typeof body.error === 'string' && body.error !== '') serverReason = body.error
+            } catch { /* non-JSON body — fall back to the status */ }
+            throw new Error(serverReason !== '' ? `restart refused: ${serverReason}` : `restart refused (${response.status})`)
+          }
+          restartPollAbort.current?.abort()
+          const pollController = new AbortController()
+          restartPollAbort.current = pollController
+          await pollGatewayReady(chamberInstanceId, pollController.signal)
+        } else if (instanceSource === 'ssh' && chamberInstanceId !== undefined) {
+          const hostId = chamberInstanceId.slice('ssh-'.length)
+          const desktopSsh = window.dshChamber?.desktopSsh
+          if (desktopSsh === undefined) throw new Error('desktop ssh surface unavailable')
+          const result = await desktopSsh.restart_service(hostId)
+          if (result !== null && typeof result === 'object' && 'error' in result) {
+            throw new Error(String((result as { error: unknown }).error))
+          }
+        } else {
+          // Defensive (review fix): a source/id mismatch must never fall
+          // through to the success note for a restart that cannot run.
+          throw new Error('runtime restart unavailable for this source')
+        }
+        setRestartNote(t('dshRuntimeRestarted'))
+      } catch (error) {
+        setActionError(errorMessage(error))
+      } finally {
+        restartingRef.current = false
+        setRestarting(false)
+      }
+    }
+  }, [t, instanceSource, chamberInstanceId])
 
   const onInstall = useCallback(() => {
     if (runtime === null || chosen === null || isActive || envGated || !actions.has('install')) return
@@ -327,6 +423,64 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
     }
   }, [progress, progressPercent, phase, t])
 
+  // Remote gateway facts (design 18 §3.6): the gateway branch projects the
+  // server's own runtime status through its /chamber/runtime surface.
+  const [remoteRuntime, setRemoteRuntime] = useState<{ activeVersion?: unknown; connectionState?: unknown } | null>(null)
+  useEffect(() => {
+    if (instanceSource !== 'gateway' || chamberInstanceId === undefined) return
+    // Never show the previous server's version while the new one loads (M4).
+    setRemoteRuntime(null)
+    let cancelled = false
+    fetch(`/api/i/${chamberInstanceId}/chamber/runtime/status`, { credentials: 'same-origin' })
+      .then(async response => (response.status === 200 ? response.json() : null))
+      .then((payload) => {
+        if (!cancelled && payload !== null) setRemoteRuntime(payload as { activeVersion?: unknown; connectionState?: unknown })
+      })
+      .catch(() => { /* unavailable surface renders the honest hint row */ })
+    return () => { cancelled = true }
+  }, [instanceSource, chamberInstanceId])
+
+  // Remote sources (design 18 §3.6 分支): version read-only + 重启 dsh.
+  if (instanceSource !== 'local') {
+    return (
+      <div className={css.generalGroup}>
+        <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
+        {instanceSource === 'ssh' && (
+          <p className={css.generalHint}>{t('dshRuntimeRemoteSshNote')}</p>
+        )}
+        {instanceSource === 'gateway' && (
+          <p className={css.generalHint}>
+            {remoteRuntime?.activeVersion !== undefined
+              ? `${t('dshRuntimeRemoteVersion')} v${String(remoteRuntime.activeVersion)}`
+              : t('dshRuntimeRemoteGatewayNote')}
+          </p>
+        )}
+        {instanceSource === 'gateway' && remoteRuntime?.connectionState !== undefined
+          && remoteRuntime.connectionState !== 'ready' && (
+          <p className={css.generalHint} role="status">
+            {t('dshRuntimeRemoteConnState', { state: String(remoteRuntime.connectionState) })}
+          </p>
+        )}
+        <div className={css.updateStatusLine}>
+          <button
+            type="button"
+            className={css.updateButton}
+            onClick={() => { void onRestartDsh() }}
+            disabled={restarting}
+          >
+            {restarting
+              ? t('dshRuntimeRestarting')
+              : instanceSource === 'ssh'
+                ? t('dshRuntimeRestartRemoteAction')
+                : t('dshRuntimeRestartAction')}
+          </button>
+        </div>
+        {restartNote !== null && <p className={css.generalHint} role="status">{restartNote}</p>}
+        {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
+      </div>
+    )
+  }
+
   return (
     <div className={css.generalGroup}>
       <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
@@ -447,6 +601,20 @@ export function DshRuntimeSection({ t }: { t: RuntimeTranslate }) {
       <p className={css.generalHint}>{snapshotText}</p>
       {pending !== null && phase !== 'pending' && phase !== 'applying' && (
         <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: pending })}</p>
+      )}
+
+      <div className={css.updateStatusLine}>
+        <button
+          type="button"
+          className={css.updateButton}
+          onClick={() => { void onRestartDsh() }}
+          disabled={restarting || !canRestartDsh}
+        >
+          {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
+        </button>
+      </div>
+      {restartNote !== null && (
+        <p className={css.generalHint} role="status">{restartNote}</p>
       )}
 
       {(canRetryApply || canRetryRestore || canRestorePreRollback || canRecoverMetadata || canReset) && (

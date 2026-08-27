@@ -5,6 +5,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { deriveRuntimeSource } from '../src/client/runtime-source.ts'
+import { pollGatewayReady } from '../src/client/gateway-runtime-poll.ts'
 import {
   RuntimeStateStore,
   compareSemver,
@@ -14,6 +16,7 @@ import {
   projectRuntimeStatus,
   runtimeAllowedActions,
   runtimeBlocksLocalStart,
+  runtimeRestartAllowed,
   runtimeSelectionDirection,
   type RuntimePhase,
   type RuntimeState,
@@ -36,36 +39,153 @@ function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}
 
 test('runtime action matrix covers every design-18 phase and keeps busy/terminal gates strict', () => {
   const expected: Record<RuntimePhase, readonly string[]> = {
-    idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'],
+    idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
     checking: [],
-    available: ['check', 'select-version', 'install', 'cleanup-version'],
+    available: ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
     downloading: [],
     installing: [],
     pending: ['reset-builtin'],
     applying: ['reset-builtin'],
-    applied: ['check', 'select-version', 'install', 'cleanup-version'],
-    rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'],
+    applied: ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+    rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
     'snapshot-failed': ['reset-builtin'],
-    failed: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'],
-    error: ['check', 'select-version', 'install', 'cleanup-version'],
+    failed: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+    error: ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
   }
   for (const [phase, actions] of Object.entries(expected) as [RuntimePhase, readonly string[]][]) {
     assert.deepEqual(runtimeAllowedActions(runtimeState(phase)), actions, phase)
   }
 })
 
+
+test('pollGatewayReady resolves on ready, times out honestly, and honours abort', async () => {
+  let calls = 0
+  const readyFetch = (async () => {
+    calls += 1
+    return { status: 200, json: async () => ({ connectionState: calls >= 2 ? 'ready' : 'starting' }) }
+  }) as unknown as typeof fetch
+  await pollGatewayReady('gateway-x', undefined, { fetchImpl: readyFetch, pollIntervalMs: 0, timeoutMs: 5_000 })
+  assert.equal(calls, 2, 'polls until ready')
+
+  const stuckFetch = (async () => ({ status: 500, json: async () => ({}) })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: stuckFetch, pollIntervalMs: 0, timeoutMs: 10 }),
+    /did not reach ready/,
+  )
+
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(
+    pollGatewayReady('gateway-x', controller.signal, { fetchImpl: readyFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    /cancelled/,
+  )
+
+  // R7: a failed restart must be distinguishable from a slow one — the poll
+  // surfaces terminal failure states with the gateway's operationError.
+  const failedFetch = (async () => ({
+    status: 200,
+    json: async () => ({ connectionState: 'restart-exhausted', operationError: 'spawn denied' }),
+  })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: failedFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    /restart failed: spawn denied/,
+  )
+})
+
+test('pollGatewayReady fails fast on auth/support config errors instead of blind-polling', async () => {
+  // 401: gateway token invalid/missing through the desktop gateway transport.
+  const unauthorized = (async () => ({ status: 401, json: async () => ({}) })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: unauthorized, pollIntervalMs: 0, timeoutMs: 90_000 }),
+    /restart failed: unauthorized \(401\)/,
+  )
+  // 404: the gateway predates the /chamber/runtime surface.
+  const unsupported = (async () => ({ status: 404, json: async () => ({}) })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: unsupported, pollIntervalMs: 0, timeoutMs: 90_000 }),
+    /restart failed: gateway does not expose \/chamber\/runtime \(404\)/,
+  )
+  // Transient 5xx during the down-window still keeps polling.
+  let calls = 0
+  const transient = (async () => {
+    calls += 1
+    if (calls < 3) return { status: 502, json: async () => ({}) }
+    return { status: 200, json: async () => ({ connectionState: 'ready', restart: 'ok' }) }
+  }) as unknown as typeof fetch
+  await pollGatewayReady('gateway-x', undefined, { fetchImpl: transient, pollIntervalMs: 0, timeoutMs: 5_000 })
+  assert.equal(calls, 3, '5xx tolerated until ready')
+})
+
+test('pollGatewayReady: a post-202 entry rejection (restart:failed + ready connectionState) is a failure, not success', async () => {
+  // The gateway manager records restart:'failed' + operationError when
+  // plane.restartLocal() rejects at its entry checks after the route already
+  // answered 202; connectionState can still read 'ready' at that point.
+  const entryRejected = (async () => ({
+    status: 200,
+    json: async () => ({ connectionState: 'ready', operationError: 'restart-exhausted: recover with start()', restart: 'failed' }),
+  })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: entryRejected, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    /restart failed: restart-exhausted: recover with start\(\)/,
+  )
+  // And restart:'ok' resolves even when the connectionState projection lags.
+  const okFetch = (async () => ({
+    status: 200,
+    json: async () => ({ connectionState: 'starting', restart: 'ok' }),
+  })) as unknown as typeof fetch
+  await pollGatewayReady('gateway-x', undefined, { fetchImpl: okFetch, pollIntervalMs: 0, timeoutMs: 5_000 })
+})
+
+test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported restart:ok', async () => {
+  // Round-3 ordering regression: the terminal-state check must run BEFORE the
+  // restart:'ok' resolve — resolve ≠ success (restartLocal also resolves from
+  // restart-exhausted/error/stopped). A future reordering would fail here.
+  for (const terminal of ['restart-exhausted', 'error', 'stopped'] as const) {
+    const fetchImpl = (async () => ({
+      status: 200,
+      json: async () => ({ connectionState: terminal, operationError: `landed ${terminal}`, restart: 'ok' }),
+    })) as unknown as typeof fetch
+    await assert.rejects(
+      pollGatewayReady('gateway-x', undefined, { fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 }),
+      new RegExp(`restart failed: landed ${terminal}`),
+      `${terminal} must outrank restart:ok`,
+    )
+  }
+})
+
+test('per-server source derivation: local / gateway-<id> / ssh-<id> / fallback', () => {
+  assert.equal(deriveRuntimeSource('local'), 'local')
+  assert.equal(deriveRuntimeSource('gateway-inst-7'), 'gateway')
+  assert.equal(deriveRuntimeSource('ssh-inst-3'), 'ssh')
+  assert.equal(deriveRuntimeSource(undefined), 'local')
+  assert.equal(deriveRuntimeSource('weird'), 'local')
+})
+
+test('restart-dsh gate (design 18 §3.6 项 8): allowed in non-busy phases, blocked while applying/busy/blocked', () => {
+  assert.equal(runtimeRestartAllowed(runtimeState('idle')), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('available')), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('failed')), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('applying')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('checking')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('downloading')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('installing')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('pending')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('idle', { runtimeBlocked: true })), false)
+  assert.equal(runtimeRestartAllowed(null), false)
+})
+
 test('reset-builtin stays visible on error/failed/rollback/applied only when an override exists', () => {
   const withOverride = (phase: RuntimePhase, overrides: Partial<RuntimeState> = {}) =>
     runtimeAllowedActions(runtimeState(phase, { hasOverride: true, source: 'user', ...overrides }))
-  assert.deepEqual(withOverride('error'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
-  assert.deepEqual(withOverride('failed'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
-  assert.deepEqual(withOverride('rollback'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
-  assert.deepEqual(withOverride('applied'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'])
+  assert.deepEqual(withOverride('error'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
+  assert.deepEqual(withOverride('failed'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
+  assert.deepEqual(withOverride('rollback'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
+  assert.deepEqual(withOverride('applied'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
   // A clean bundled install without any override must not show a no-op reset
   // (main rejects reset-builtin unless hasOverride — the button would be dead).
-  assert.deepEqual(runtimeAllowedActions(runtimeState('error', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
-  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', { hasOverride: false })), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version'])
-  assert.deepEqual(runtimeAllowedActions(runtimeState('applied', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('error', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', { hasOverride: false })), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('applied', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'])
 })
 
 test('retry actions require explicit capabilities and never pierce pending/applying gates', () => {
@@ -75,11 +195,11 @@ test('retry actions require explicit capabilities and never pierce pending/apply
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { canRetryRestore: true, restoreOutcome: 'incomplete', hasOverride: true, source: 'user' })),
-    ['retry-restore', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    ['retry-restore', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { canRetryApply: true, hasOverride: true, source: 'user' })),
-    ['retry-apply', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    ['retry-apply', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('applying', { canRetryApply: true, canRetryRestore: true })),
@@ -202,11 +322,11 @@ test('an unknown active runtime is labeled as a forward install, never rollback'
 test('active user override keeps the restore-builtin exit after periodic checks settle', () => {
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('idle', { source: 'user', hasOverride: true })),
-    ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('available', { source: 'user', hasOverride: true })),
-    ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin'],
+    ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   )
 })
 
@@ -320,6 +440,7 @@ function surfaceHarness(initial: Promise<RuntimeState>) {
     recoverMetadata: async () => runtimeState('applying'),
     restorePreRollback: async () => runtimeState('idle'),
     cleanupVersion: async () => runtimeState('idle'),
+    restart: async () => runtimeState('idle'),
     onChanged: (callback) => {
       subscriptions += 1
       push = callback
@@ -395,6 +516,7 @@ test('runtime store tears down and retries after a transient hydration failure',
     recoverMetadata: async () => runtimeState('applying'),
     restorePreRollback: async () => runtimeState('idle'),
     cleanupVersion: async () => runtimeState('idle'),
+    restart: async () => runtimeState('idle'),
     onChanged: () => {
       subscriptions += 1
       return () => { unsubscriptions += 1 }

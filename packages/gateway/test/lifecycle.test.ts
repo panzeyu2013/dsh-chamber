@@ -1,13 +1,96 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
+import { writeOverride } from '@dsh-chamber/dsh-runtime'
 import { createGateway } from '../src/index.ts'
 import type { GatewayConfig } from '../src/config.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
+
+/** Minimal plane fake for composition tests: startLocal/stopLocal/restartLocal
+ * are no-ops; the real runtime manager's startup transaction drives the state
+ * dir, so the blocked/FATAL branches run against real store files. */
+function compositionPlane(state: { connectionState: string }, order: string[]): PlaneHandle {
+  return {
+    async start() { order.push('plane:start') },
+    async startLocal() { order.push('local:start'); state.connectionState = 'ready' },
+    async stop() { order.push('plane:stop') },
+    async stopLocal() { order.push('local:stop') },
+    async restartLocal() { order.push('local:restart') },
+    onLocalStateChange() { return () => {} },
+    refreshLocalExposure() {},
+    registerInstanceTransport() {},
+    unregisterInstanceTransport() {},
+    getLocalDshPort() { return null },
+    get port() { return 3000 },
+    get connectionState() { return state.connectionState },
+    get localProcessAlive() { return false },
+    get localWritersQuiescent() { return true },
+    get localDshPort() { return null },
+    instanceId: 'test',
+  }
+}
+
+const compositionDeps = (plane: PlaneHandle): never => ({
+  createPlane: (() => plane) as never,
+  createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+  createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
+}) as never
+
+test('gateway start: a swap-attempted block keeps the gateway up with dsh stopped (review fix)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-blocked-'))
+  try {
+    // Seed the interrupted-switch marker BEFORE start(): runStartupPhase then
+    // returns 'swap-attempted' without spawning or exposing the tree.
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.1',
+      chosenVersion: '1.2.3',
+      resolvedVersion: '1.2.3',
+      pending: '1.2.3',
+      swapAttempted: true,
+    })
+    const order: string[] = []
+    const state = { connectionState: 'stopped' }
+    const gateway = createGateway({
+      config: config(stateDir),
+      logger: silentLogger,
+      deps: compositionDeps(compositionPlane(state, order)),
+    })
+    await gateway.start()
+    assert.equal(gateway.connectionState, 'stopped', 'managed dsh left stopped')
+    assert.ok(!order.includes('local:start'), 'blocked startup must not spawn the unprobed tree')
+    // The gateway stays up and stoppable; the runtime controller remains the
+    // recovery surface (retry-apply/retry-restore).
+    await gateway.stop()
+    assert.ok(order.includes('plane:stop'))
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('gateway start: metadata corruption fails loud and rolls the plane back (FATAL block)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-fatal-'))
+  try {
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
+    const order: string[] = []
+    const state = { connectionState: 'stopped' }
+    const gateway = createGateway({
+      config: config(stateDir),
+      logger: silentLogger,
+      deps: compositionDeps(compositionPlane(state, order)),
+    })
+    await assert.rejects(gateway.start(), /journal-corrupt/)
+    assert.ok(order.includes('plane:stop'), 'startup failure rolls the plane back')
+    assert.ok(!order.includes('local:start'), 'no dsh spawn on a FATAL block')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 
 function config(stateDir: string): GatewayConfig {
   return {
@@ -35,6 +118,7 @@ test('gateway forwards plane.dshPort as the control-plane dshPortBase (design 17
     instanceId: 'test',
     getLocalDshPort() { return null },
     async stopLocal() {},
+    async restartLocal() {},
     refreshLocalExposure() {},
     registerInstanceTransport() {},
     unregisterInstanceTransport() {},
@@ -88,6 +172,7 @@ test('gateway start owns local readiness and attaches features on ready transiti
     instanceId: 'test-instance',
     getLocalDshPort() { return port },
     async stopLocal() {},
+    async restartLocal() {},
     refreshLocalExposure() {},
     registerInstanceTransport() {},
     unregisterInstanceTransport() {},
@@ -134,6 +219,7 @@ test('a local startup failure rolls back the listening plane', async () => {
     instanceId: 'test-instance',
     getLocalDshPort() { return null },
     async stopLocal() {},
+    async restartLocal() {},
     refreshLocalExposure() {},
     registerInstanceTransport() {},
     unregisterInstanceTransport() {},
@@ -172,6 +258,7 @@ test('a plane listen failure is also rolled back and remains retryable', async (
     instanceId: 'test-instance',
     getLocalDshPort() { return null },
     async stopLocal() {},
+    async restartLocal() {},
     refreshLocalExposure() {},
     registerInstanceTransport() {},
     unregisterInstanceTransport() {},

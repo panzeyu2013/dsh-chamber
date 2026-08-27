@@ -43,10 +43,13 @@ jobs:
           pnpm run typecheck:host-graph
           pnpm run typecheck:host-git
           pnpm run typecheck:gateway
+          pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
       - name: Release workflow safety policy
         run: pnpm run test:release-workflow
+      - name: Shared runtime core unit tests (packages/dsh-runtime)
+        run: pnpm run test:runtime
       - name: Control-plane unit tests
         run: |
           node packages/control-plane/test/protocol.ts
@@ -59,6 +62,7 @@ jobs:
           node packages/control-plane/test/ws-frames.ts
           node packages/control-plane/test/static-serving.ts
           node packages/control-plane/test/host-graph-seed.ts
+          node packages/control-plane/test/restart-local.ts
       - name: Desktop unit tests (transport / ssh)
         run: pnpm run test:desktop
       - name: Gateway unit tests
@@ -95,6 +99,7 @@ jobs:
         run: pnpm run build:renderer
       - name: Gateway package build and installed CLI smoke
         run: |
+          pnpm run build:dsh-runtime
           mkdir -p /tmp/dsh-gateway-pack /tmp/dsh-gateway-install
           pnpm --filter @dsh-chamber/gateway pack --pack-destination /tmp/dsh-gateway-pack
           npm install --ignore-scripts --prefix /tmp/dsh-gateway-install /tmp/dsh-gateway-pack/*.tgz

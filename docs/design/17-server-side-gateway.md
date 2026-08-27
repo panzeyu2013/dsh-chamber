@@ -6,6 +6,13 @@
 >
 > 编号说明：主分支的 Design 16 是 VS Code 深链；服务端 Gateway 在 rebase 后使用
 > **Design 17**，不复用或覆盖 Design 16。
+>
+> 修订（design 18 §9，已实现，2026-09）：新增 **dsh 运行时版本管理**能力——
+> 复用 design 18 共享核心（`packages/dsh-runtime`），启动切换相位（§2.1 步骤 4）、
+> `/chamber/runtime` 管理面（§4/§8.4）、`<stateDir>/dsh-runtime` 状态目录（§10）
+> 与 S17–S20 不变量（§13）；control-plane 仅消费既有惰性 seam（版本切换零
+> 改动），「重启 dsh」另增一个事务化 `restartLocal()` 接口（design 18 §9.3，已实现）。
+> 细节见 `docs/design/18-dsh-runtime-version.md` §9。
 
 ## 1. 定位与边界
 
@@ -31,6 +38,7 @@ loopback-only、匿名、只负责连接管理与同源反代。Gateway 的公�
 | 审批与提问转发 | 只投影 pending 控制帧，回答仍提交给 dsh `/api/respond` |
 | 跨会话定时触发 | Gateway 自有任务定义，到点调用 dsh `session.prompt` |
 | 同 OS 用户 Git worktree | 受 dsh workspace 权威和安全 saga 约束 |
+| dsh 运行时版本管理 | 复用 design 18 共享核心（§9）：安装/切换/回滚/探针/快照均为编排，不成为 dsh 权威 |
 
 ### 1.2 Gateway 不做什么
 
@@ -40,6 +48,9 @@ loopback-only、匿名、只负责连接管理与同源反代。Gateway 的公�
 - 不把派生索引当作 dsh 权威；流 generation 失效时立即清空旧活性；
 - 不在进程内终止 TLS。生产 HTTPS 必须由可信反向代理提供；
 - 不在本阶段退役 Design 08 Git 插件。两条路线在实机稳定门禁前并行。
+- 不在 gateway 内复制 design 18 实现：运行时版本管理核心来自共享包
+  `@dsh-chamber/dsh-runtime`（design 18 §9.1），gateway 只做宿主适配与
+  `/chamber/runtime` 管理面。
 
 ## 2. 组合架构与生命周期
 
@@ -73,13 +84,21 @@ upgrade middleware 和 CORS evaluator 才能越过 loopback 构造门。仅传�
 1. 校验 materialized config，拒绝 JS 调用者绕过 CLI 安全门；
 2. 打开 Gateway/control-plane server；
 3. 注册本地状态订阅；
-4. 调用 `startLocal()` 并等待 dsh `ready`；
-5. 仅在 `ready` generation 启动索引、通知和 scheduler；
-6. 任一步失败都会停止已打开的 server，下一次 `start()` 可重试。
+4. 执行 dsh 运行时启动事务（design 18 §9.3）：残留 install 清理 → 逐出 →
+   interrupted-restore 幂等补完 →（有 pending 时）快照 `<stateDir>/dsh-home`
+   → 原子切指针 → 经 `startLocal()` spawn 候选（`canExposeLocal` 隔离）→
+   全量只读探针 + ≤60s 窗口 + 延迟裁决；无 pending 时仅清理/补完；
+5. 探针裁决通过后等待 dsh `ready`；
+6. 仅在 `ready` generation 启动索引、通知和 scheduler；
+7. 任一步失败都会停止已打开的 server，下一次 `start()` 可重试。
 
-停止时先关闭 Gateway 自有 WS/feature consumers，再停止 control-plane 与 managed dsh。
-dsh 从 ready 离开时 feature host 立即 detach；scheduler 保留定义但清除 timer，下一代
-ready 后重新 arm。
+停止时先回收 runtime install 子进程（design 18 §9.3），再关闭 Gateway 自有
+WS/feature consumers，最后停止 control-plane 与 managed dsh。
+dsh 从 ready 离开时 feature host（**dsh 派生** consumers：index/notify/scheduler/git）
+立即 detach；scheduler 保留定义但清除 timer，下一代
+ready 后重新 arm。**例外**：`/chamber/runtime` 是 gateway 自有 runtime 控制器
+（挂在 dispatch 面，不随 ready detach）——dsh 停机/重启/applying 窗口内必须
+持续可轮询进度（design 18 §9.3）。
 
 ## 3. 配置与部署
 
@@ -147,6 +166,7 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 | `/api/i/<source>/*` | 注册 transport 的实例代理 | 必须 |
 | 其余 `/api/*`、`/plugins/*`、`/`、dsh assets | 单目标 Gateway proxy | 必须 |
 | `/chamber/*` | Gateway 编排/API/页面 | 必须 |
+| `/chamber/runtime*` | Gateway runtime 控制器（design 18 §9.3；不随 ready detach） | 必须 |
 | `/api/events.mux`、`/api/events.host` upgrade | 单目标 Gateway proxy | 必须且同一 Host/Origin 策略 |
 
 ## 5. 认证与凭据生命周期
@@ -268,7 +288,16 @@ Gateway 自有 JSON API：
 - `/chamber/sessions`、`/chamber/channels`：只读投影；
 - `/chamber/approvals`、`/chamber/notifications`：poll/SSE/answer；
 - `/chamber/schedule`：list/create/delete；
-- `/chamber/git/worktrees`：list/create/delete。
+- `/chamber/git/worktrees`：list/create/delete；
+- `/chamber/runtime`：dsh 运行时版本管理（design 18 §9.3）——
+  `status`/`versions` 投影、`select`/`apply`/`rollback`/`restore-builtin`/
+  `retry-apply`/`retry-restore`/`restart` 动作、`registry` 源设置（owner-only
+  0600）；`restart` = 事务化
+  受控重启托管 dsh 刷新插件挂载（design 18 §3.6 项 8/§9.3：202 + status
+  轮询/SSE，指针不动、无快照/探针）；该面挂在 dispatch 的 runtime 控制器上、
+  **不随 ready detach**（dsh 停机窗口可轮询进度），`syncFeatures` 只
+  detach/attach dsh 派生 feature 面；状态机/文案矩阵与
+  design 18 §3.6 同口径，异步安装进度经 SSE/poll（与 §8.2 通道模式一致）。
 
 `git`、`notifications`、`schedule` 三个能力默认关闭；开关是服务端执行门而不是 UI 提示。
 禁用能力的所有读写路由稳定返回 `403 feature_disabled`。Settings PUT 必须先完成 owner-only
@@ -276,8 +305,11 @@ Gateway 自有 JSON API：
 关闭 schedule 会停 timer 但保留 job 定义，重启按持久化开关恢复。
 
 浏览器可在 `/chamber/` 打开 Gateway 自有编排页；页面只使用同源 cookie/fetch，不接收或
-持久化 token。Desktop settings-bridge 仅对选中的 `gateway` server 显示固定编排入口，路径
-从 canonical `gateway-<id>` 派生为 `/api/i/gateway-<id>/chamber/*`，同样不接触 token。
+持久化 token。运行时管理（design 18 §9.3）在该页为 runtime 块（版本概览/选择器/
+动作/状态行/失败行/快照行，组件与文案规格同 design 18 §3.6）。Desktop settings-bridge
+仅对选中的 `gateway` server 显示固定编排入口，路径
+从 canonical `gateway-<id>` 派生为 `/api/i/gateway-<id>/chamber/*`，同样不接触 token；
+「dsh 运行时」per-server 设置段（design 18 §3.6/§9.3）经同路径触达 runtime 路由。
 各资源独立失败，单一路由错误不会抹掉其他已加载数据。
 
 ## 9. Git worktree 安全 saga
@@ -328,6 +360,7 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 ├─ tokens.json                 # salted token hash, 0600
 ├─ jwt-secret                  # 0600
 ├─ password-credential         # salted verifier, 0600
+├─ dsh-runtime/                # design 18 §9.3：版本树/current 指针/override/快照（0700）
 └─ gateway/
    ├─ settings.json
    ├─ worktrees.json
@@ -345,6 +378,11 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 `@dsh-chamber/gateway` 构建为 `dist/index.js` 与带 shebang 的 `dist/cli.js`，要求 Node 22+；
 package export 不指向源码 TypeScript。根脚本包含 `build:gateway`、`typecheck:gateway`、
 `test:gateway`。
+
+运行时版本管理（design 18 §9）：`@dsh-chamber/dsh-runtime` 以 workspace devDependency
+经 `scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时
+依赖 `pnpm@11.21.0`（与 desktop 同源，design 18 §9.2 D1）。pack/install smoke 必须
+覆盖 pnpm 依赖安装成功与 `gateway --help`。
 
 CI 运行 Gateway typecheck、完整测试、release workflow policy 和 pack/install CLI smoke。release workflow 在 macOS 与
 Windows Desktop 产物门禁完成后才 pack Gateway、安装 tgz、执行 `gateway --help`，随后使用
@@ -367,6 +405,8 @@ GitHub Release 永不删除，只有 stale draft 可替换；dry-run 不创建�
 - root、Gateway、所有 chamber client/host 包 typecheck；
 - control-plane 协议、存储、托管、管理 API、静态服务、实例代理测试；
 - Gateway config/auth/request-policy/dispatch/proxy/lifecycle/feature/真实 socket 测试；
+- dsh-runtime 共享核心 typecheck/测试；Gateway runtime 启动事务/路由权限测试与
+  fake-registry acceptance（design 18 §9.5）；
 - Desktop 全量 transport/provider/secret/plugin/deep-link 测试；
 - renderer shell、sidebar、connections、settings-bridge、Git 插件回归；
 - renderer 与 Gateway build；Gateway pack/install/CLI smoke；
@@ -386,6 +426,9 @@ GitHub Release 永不删除，只有 stale draft 可替换；dry-run 不创建�
 4. 真 Git 仓库：创建/歧义恢复/删除重试、dirty/locked/主 checkout、运行中 session 与
    并发启动 session 的安全验证；
 5. macOS 发布产物完成签名/公证/安装；Windows 产物完成签名与安装。
+6. 服务端 dsh runtime 实机：安装候选版本 → 重启 Gateway → 探针 → 故障注入回退 →
+   `<stateDir>/dsh-home` 数据恢复；生产 TLS 反代下 `/chamber/runtime` 的
+   SSE/poll 与认证行为（design 18 §9.5）。
 
 PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露无实现的 CLI flag。它们如需推进，
 必须作为独立设计与测试面进入 STATUS。
@@ -410,6 +453,10 @@ PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露
 | S14 | dsh raw event queue 与 session 索引净化 buffer 都有硬上限，绝不持久保留会话正文 |
 | S15 | Gateway state 目录与 JSON/secret 文件分别强制 0700/0600 |
 | S16 | release 必须 commit-bound、公开记录不可变，npm channel 单调且 stable/beta 隔离 |
+| S17 | dsh runtime：无快照不切指针；切换/恢复中断由 durable journal/marker 幂等补完（design 18 §9.7） |
+| S18 | dsh runtime：探针全绿才宣布 applied 并开放代理；回退目标 = 切换前版本或最近 known-good，绝不两棵坏树间交替 |
+| S19 | dsh runtime：状态/凭据（registry 源、失败记录、install 子进程 env）不进日志；状态文件 0600/0700；install 源钉死 + env scrubbing |
+| S20 | dsh runtime：切换不得削弱 S12（普通 control-plane loopback 门）；`/chamber/runtime` 全部认证后 |
 
 ## 14. 相关文档
 
@@ -418,4 +465,6 @@ PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露
 - `04-control-plane-api-data.md`：管理 API、静态服务和数据边界；
 - `05-connection-manager.md`：Desktop transport 与 N-ctx；
 - `08-git-worktree-plugin.md`：迁移期保留的实例内 Git 路线；
+- `18-dsh-runtime-version.md`：dsh 运行时版本管理的权威行为契约；§9 = gateway
+  宿主实现设计（共享核心抽取 + 启动切换相位 + `/chamber/runtime` 管理面）；
 - `docs/progress/STATUS.md`：当前验证证据和剩余实机门禁。

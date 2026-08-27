@@ -51,7 +51,7 @@ test('public Host health/preflight pass while an unknown authority is rejected',
   }
   const proxy = { async handleHttp() {}, async handleUpgrade() {}, getDiagnostics() { return { requests: 0, failures: 0, activeStreams: 0, activeHttpRequests: 0, pendingUpgrades: 0, bufferedRequestBytes: 0 } }, closeAllStreams() {} }
   const features = { async handle() { return true }, start() {}, stop() {} }
-  const dispatch = createGatewayDispatch(auth, () => proxy, () => features, silentLogger, policy)
+  const dispatch = createGatewayDispatch(auth, () => proxy, () => features, () => ({ async handle() { return false } }), silentLogger, policy)
   const plane = createControlPlane({
     host: '0.0.0.0',
     port: 0,

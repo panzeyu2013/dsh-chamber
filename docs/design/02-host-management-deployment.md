@@ -162,7 +162,10 @@ host package：
    损坏，启动 fail-loud。文件与 overlay 都原子写入并保持 0600。
 4. seed thunk 在**每次 spawn（含自动重启）之前**重新求值。`dsh plugin`
    导致 pnpm 重链并裁掉 extraneous host 包后，下一次 spawn 会自动补回；overlay
-   也按当时实际可用产物重建，不留下悬空 row。
+   也按当时实际可用产物重建，不留下悬空 row。用户触发的「重启 dsh」动作
+   （design 18 §3.6 项 8，刷新插件挂载）走同一条 spawn 路径：seed 重求值与
+   overlay 重建语义一致，插件挂载在每次 dsh 进程 boot 时重新确定——不是
+   Electron 会话级事实，重启 dsh 即刷新，无需重启壳。
 
 这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`
 或 `gitWorktree` 的领域结果，只做受控文件分发与 loader 挂载。
@@ -296,7 +299,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    │                                            │  └──fail(N)┐
    │                                            └─────restarting──────┐
    └──── graceful stop ────────────────────────────────────────────────┘
-                                  └─ kill → 端口释放 → respawn → starting
+                                  └─ kill → 端口释放 → respawn → ready（spawnDsh 内建 TCP+describe 就绪探测）
    spawn 失败 ──► error（fail-loud）──start() 重试──► starting
 ```
 
@@ -334,7 +337,8 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    （实现：无独立等待轮询——spawn 侧端口预检 + P+1 退让覆盖占用窗口，§2.2）
 4. respawn（§3.1，同端口 P；若端口仍被占走 §2.2 的 P+1 路径）
    → 新 pid.json → 就绪探测（§3.2）
-5. 计数清零；失败 → 指数退避（1s→60s，jitter）
+5. 健康失败计数 N 清零（注意：与 restart 背压窗口 M 不同——design 18
+   §9.3(5) 的 M 对每次重启（含成功）计数）；失败 → 指数退避（1s→60s，jitter）
 6. 窗口内（10min）重启次数 ≥ M（5）→ restart-exhausted：停止自动重启，
    状态对 surface 暴露（catalog status），等待人工介入（POST /api/connections
    幂等启动或桌面设置页操作）；绝不无限重启循环

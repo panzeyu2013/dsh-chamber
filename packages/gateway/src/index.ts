@@ -32,6 +32,21 @@ import { createGatewayRequestPolicy } from './middleware.ts'
 import { createFeatureHost, type FeatureHost } from './routes.ts'
 import { createGatewayStore } from './store.ts'
 import { createChannelRegistry } from './channels.ts'
+import { createGatewayRuntimeManager, type GatewayRuntimeManager } from './runtime-manager.ts'
+import { createRuntimeRoutes } from './runtime-routes.ts'
+
+/** Startup-block reasons that fail gateway boot loudly (design 18 §9.3).
+ * Metadata corruption is a hard boot failure — DSH_HOME stays protected and
+ * the operator must intervene. swap-attempted and restore-half/incomplete are
+ * NOT fatal (review fix): they keep the gateway up with the managed dsh
+ * stopped and are resumable via POST /chamber/runtime/retry-apply |
+ * retry-restore, mirroring the desktop's blocked-but-alive app semantics. */
+const FATAL_RUNTIME_BLOCKS = new Set<string>([
+  'journal-corrupt',
+  'current-corrupt',
+  'override-corrupt',
+  'journal-mismatch',
+])
 
 export interface GatewayOptions {
   config: GatewayConfig
@@ -123,6 +138,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   // need plane.getLocalDshPort()). They dereference lazily at request time.
   let plane: PlaneHandle | null = null
   let proxy: GatewayProxy | null = null
+  let runtimeManager: GatewayRuntimeManager | null = null
   const channels = createChannelRegistry()
   const features = (options.deps?.createFeatures ?? createFeatureHost)({
     logger,
@@ -133,12 +149,33 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     store,
     channels,
   })
-  const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, logger, requestPolicy)
+  // The runtime controller is gateway-owned and NOT ready-gated (design 18
+  // §9.3): it dereferences the manager lazily so dsh-down windows stay pollable.
+  const runtimeRoutes = createRuntimeRoutes(() => {
+    if (runtimeManager === null) throw new Error('gateway runtime manager not initialized')
+    return runtimeManager
+  }, logger)
+  const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, () => runtimeRoutes, logger, requestPolicy)
   const createdPlane = (options.deps?.createPlane ?? createControlPlane)({
     host: options.config.plane.host,
     port: options.config.plane.port,
     stateDir: options.config.plane.stateDir,
+    // Static anchor for fakes/boot log; the live spawn path resolves per-spawn
+    // through the runtime manager (env → override → anchor, design 18 §9.3).
     dshWorkspacePath: options.config.plane.dshWorkspacePath,
+    getDshWorkspacePath: () => {
+      if (runtimeManager === null) return options.config.plane.dshWorkspacePath
+      if (runtimeManager.transactionWorkspace !== null) return runtimeManager.transactionWorkspace
+      return runtimeManager.resolveWorkspace().path
+    },
+    canStartLocal: () => {
+      if (runtimeManager === null) return { ok: true }
+      if (runtimeManager.activationInProgress() && !runtimeManager.internalSpawnActive()) {
+        return { ok: false, reason: 'dsh runtime activation in progress' }
+      }
+      return { ok: true }
+    },
+    canExposeLocal: () => runtimeManager === null || !runtimeManager.activationInProgress(),
     ...(options.config.plane.dshPort === undefined ? {} : { dshPortBase: options.config.plane.dshPort }),
     logger,
     corsOrigins: options.config.corsOrigins,
@@ -175,17 +212,47 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     startPromise = (async () => {
       try {
         await createdPlane.start()
+        // Runtime manager construction (single-owner guard + state root).
+        runtimeManager = createGatewayRuntimeManager({ config: options.config, plane: createdPlane, logger })
+        // design 17 §2.1 step 4: the runtime startup transaction runs BEFORE the
+        // first startLocal() — cleanup → eviction → restore completion →
+        // (pending) snapshot → pointer switch → spawn candidate → probe gate.
+        const startup = await runtimeManager.startupTransaction()
+        if (startup.blockedReason !== null && FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)) {
+          throw new Error(`gateway runtime startup blocked: ${startup.blockedReason}`)
+        }
+        // Desktop-mirror blocked startups (design 18 §3.6/§9.3 review fix): a
+        // mid-transaction pointer switch (swap-attempted) or an interrupted
+        // snapshot restore (restore-half / restore-incomplete) must NOT be
+        // exposed — keep the gateway up with the managed dsh stopped and let
+        // the operator resume via POST /chamber/runtime/retry-apply |
+        // retry-restore (the runtime controller is mounted and not
+        // ready-gated, so the recovery surface stays reachable).
+        if (startup.blockedReason === 'swap-attempted' || startup.blockedReason === 'restore-half' || startup.blockedReason === 'restore-incomplete') {
+          logger.error(`gateway runtime startup blocked: ${startup.blockedReason}; managed dsh left stopped — resume via POST /chamber/runtime/retry-apply|retry-restore`)
+          unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
+          started = true
+          return
+        }
+        // The transaction's candidate spawn emits transient ready transitions;
+        // the feature-consumer subscription attaches only AFTER the verdict,
+        // so consumers never start against a candidate that is about to be
+        // rolled back (R7 review). The explicit sync below covers the first
+        // authoritative transition, and startLocal() re-publishes exposure
+        // once the transaction's quarantine window has closed.
         unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
         // Gateway is a managed local-dsh deployment, not API-only: readiness is
-        // part of successful startup. The lifecycle subscription above starts
-        // feature consumers only after the authoritative ready transition.
+        // part of successful startup.
         await createdPlane.startLocal()
         syncFeatures(createdPlane.connectionState)
+        createdPlane.refreshLocalExposure()
         started = true
       } catch (error) {
         syncFeatures('error')
         unsubscribeLocalState?.()
         unsubscribeLocalState = null
+        await runtimeManager?.dispose().catch(stopError => logger.warn(`gateway runtime disposal failed: ${String(stopError)}`))
+        runtimeManager = null
         await createdPlane.stop().catch(stopError => logger.warn(`gateway startup rollback failed: ${String(stopError)}`))
         throw error
       }
@@ -197,8 +264,9 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     await startPromise?.catch(() => {})
     unsubscribeLocalState?.()
     unsubscribeLocalState = null
-    // Close the gateway's own WS splices + feature consumers before the
-    // control-plane tears down its instance-proxy streams.
+    // Reap runtime install children first (design 18 §9.3 stop order), then the
+    // gateway's own WS splices + feature consumers, then the control plane.
+    await runtimeManager?.dispose().catch(stopError => logger.warn(`gateway runtime disposal failed: ${String(stopError)}`))
     proxy?.closeAllStreams()
     syncFeatures('stopped')
     await createdPlane.stop()
