@@ -92,3 +92,6 @@ Thumbs.db
 /tmp/
 *.local
 *.swp
+# Gateway build output: host packages are copied in by scripts/build.mjs
+# (the seed sources' dist artifacts are committed in their own packages).
+packages/gateway/host-packages/

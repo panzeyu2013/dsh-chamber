@@ -8,6 +8,8 @@
  * control-plane's middleware hooks (design 17 §2.1 改动③ / §4).
  */
 
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_STATE_DIR,
   createControlPlane,
@@ -156,6 +158,13 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     return runtimeManager
   }, logger)
   const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, () => runtimeRoutes, logger, requestPolicy)
+  // Chamber host packages ship inside the gateway package (build.mjs copies
+  // them into host-packages/); the control-plane seeds them into the managed
+  // dsh profile so the full runtime activation probe set (which verifies
+  // their RPC domains) can pass — design 18 §9.3. A packaged gateway without
+  // them silently skips the seed and every switch probe-fails (2026-09
+  // real-machine finding).
+  const gatewayHostPackagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'host-packages')
   const createdPlane = (options.deps?.createPlane ?? createControlPlane)({
     host: options.config.plane.host,
     port: options.config.plane.port,
@@ -163,6 +172,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // Static anchor for fakes/boot log; the live spawn path resolves per-spawn
     // through the runtime manager (env → override → anchor, design 18 §9.3).
     dshWorkspacePath: options.config.plane.dshWorkspacePath,
+    hostGraphPackageSourceDir: join(gatewayHostPackagesDir, 'dsh-host-client-graph'),
+    hostGitWorktreePackageSourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-host-git-worktree'),
     getDshWorkspacePath: () => {
       if (runtimeManager === null) return options.config.plane.dshWorkspacePath
       if (runtimeManager.transactionWorkspace !== null) return runtimeManager.transactionWorkspace

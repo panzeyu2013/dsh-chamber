@@ -258,7 +258,12 @@ detect_dsh() {
   if have dsh; then
     root=$(npm root -g 2>/dev/null || true)
     if [[ -n "$root" && ( -e "$root/@deepseek-ai/dsh/lib/bin.js" || -e "$root/@deepseek-ai/dsh/apps/cli/src/bin.ts" ) ]]; then
-      DSH_WS="$root"
+      # npm 全局根本身就是 node_modules 目录；gateway 锚要求 workspace 形态
+      # （<ws>/node_modules/@deepseek-ai/dsh）——dirname(npmRoot) 下必有
+      # node_modules/@deepseek-ai/dsh，即该全局安装的 workspace 形态锚
+      # （2026-09 实机测试修复：直接传 npmRoot 会让 verify_dsh 与 gateway
+      # 的 readBuiltinVersion/spawn 都去找 npmRoot/node_modules/... 而失败）。
+      DSH_WS="$(dirname "$root")"
       DSH_FOUND="global"
       return 0
     fi
@@ -268,7 +273,7 @@ detect_dsh() {
   if have npm; then
     root=$(npm root -g 2>/dev/null || true)
     if [[ -n "$root" && ( -e "$root/@deepseek-ai/dsh/lib/bin.js" || -e "$root/@deepseek-ai/dsh/apps/cli/src/bin.ts" ) ]]; then
-      DSH_WS="$root"
+      DSH_WS="$(dirname "$root")"
       DSH_FOUND="global"
       return 0
     fi
@@ -295,6 +300,9 @@ install_dsh() {
     die "dsh 安装失败（若为构建脚本错误，请确认服务器有 make/g++/python3，或改用带 prebuild 的平台）"
   fi
   DSH_WS=$(npm root -g 2>/dev/null || true)
+  # workspace 形态锚（同 detect_dsh 的 global 分支）：npmRoot 本身是
+  # node_modules 目录，gateway 锚要求 <ws>/node_modules/@deepseek-ai/dsh。
+  DSH_WS="$(dirname "$DSH_WS")"
   local ver
   ver=$(verify_dsh "$DSH_WS" || true)
   [[ -n "$ver" ]] || die "dsh 安装后验证失败：$DSH_WS"

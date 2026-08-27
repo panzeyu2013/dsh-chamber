@@ -208,6 +208,27 @@
   settings gateway 分支透出 connectionState（非 ready 时显示，i18n 新增
   dshRuntimeRemoteConnState zh/en）；design 18 §9.1 迁入模块清单补
   allow-builds/prune-runtime；AGENTS Gateway packaging 措辞对齐 CI。
+  **第十一轮实机测试修复（2026-09，192.168.110.172 全流程测试）**：
+  install-gateway.sh npm 全局 dsh 锚路径语义修复——verify_dsh 期望 workspace
+  形态（$ws/node_modules/@deepseek-ai/dsh），但全局分支与 install_dsh 传入
+  npm root -g（本身已是 node_modules 目录）导致安装后验证必失败，且即使
+  通过，--dsh-path <npmRoot> 也会让 gateway 的 readBuiltinVersion/spawn
+  找不到树；修复 = 全局分支与安装后统一转换 workspace 形态
+  （dirname(npmRoot)）；gateway 部署缺 chamber host 包（dsh-host-client-graph
+  / dsh-chamber-host-git-worktree）——打包 gateway 不含它们时 REPO_ROOT 在
+  npm 全局安装下解析到全局 node_modules、seed 被静默跳过，托管 dsh 无
+  chamber RPC，全量激活探针集（含 chamber 域）必失败 → 每次运行时切换都在
+  探针门回退（本测试实证：切换 → 快照恢复 → 内建回退探针失败）；修复 =
+  build.mjs 把两个 host 包（package.json + committed dist/index.js）复制进
+  packages/gateway/host-packages/ 并随 tarball 发布，createGateway 经
+  hostGraphPackageSourceDir/hostGitWorktreePackageSourceDir 注入控制面，
+  seed 恢复（启动日志：seeded @dsh-chamber/dsh-host-client-graph /
+  dsh-host-git-worktree），切换事务全探针通过；实测覆盖：全新安装（离线
+  tgz + npm dsh 锚 + systemd）、401 边界、select 真实安装（首次遇 pnpm
+  EAGAIN 瞬时失败、重试成功、失败投影诚实）、apply + 重启切换
+  （0.1.1-rc.2 → 0.1.0-rc.8 降级，manualRollback 路径）、restart 202+轮询
+  ok、restore-builtin 回落、restart 在途 select 409、坏 body 400、
+  status/logs/uninstall 子命令。
 
 ## 部分完成（剩余验收 / 剩余实现）
 

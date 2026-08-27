@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { chmodSync, existsSync, rmSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -43,4 +43,24 @@ if (!existsSync(indexOut) || !existsSync(cliOut)) {
 }
 chmodSync(cliOut, 0o755)
 
-console.log(`[build-gateway] standalone ESM bundle -> ${outDir}`)
+// Ship the chamber host packages (module A / git worktree) inside the gateway
+// package: the control-plane seeds them into the managed dsh profile
+// (ensureHostPackage: package.json + dist/index.js) and the full runtime
+// activation probe set verifies their RPC domains — without them the probe
+// gate can never pass on a gateway-managed dsh (2026-09 real-machine test
+// finding: npm-global install resolved REPO_ROOT to the global node_modules
+// and silently skipped the seed). The dist artifacts are committed (gitignore
+// negation, same as dsh-runtime), so a clean checkout carries them.
+const hostPackagesOut = join(packageDir, 'host-packages')
+rmSync(hostPackagesOut, { recursive: true, force: true })
+const HOST_PACKAGES = [
+  { name: 'dsh-host-client-graph', source: join(packageDir, '..', 'dsh-host-client-graph') },
+  { name: 'dsh-chamber-host-git-worktree', source: join(packageDir, '..', 'dsh-chamber-host-git-worktree') },
+]
+for (const { name, source } of HOST_PACKAGES) {
+  const out = join(hostPackagesOut, name)
+  mkdirSync(join(out, 'dist'), { recursive: true })
+  cpSync(join(source, 'package.json'), join(out, 'package.json'))
+  cpSync(join(source, 'dist', 'index.js'), join(out, 'dist', 'index.js'))
+}
+console.log(`[build-gateway] host packages -> ${hostPackagesOut}`)
