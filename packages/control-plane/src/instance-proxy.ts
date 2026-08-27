@@ -197,6 +197,9 @@ export interface ProxyResponse {
   setHeader(name: string, value: unknown): unknown
   destroy(): unknown
   headersSent: boolean
+  /** True once end() has been called (Node's ServerResponse; distinguishes a
+   *  normal end from a mid-stream client disconnect on 'close'). */
+  writableEnded: boolean
   /** The per-request CORS headers set by the api layer (spread into every response). */
   _corsHeaders?: Record<string, string>
 }
@@ -554,7 +557,16 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       releaseBodyBudget()
       releaseRequest()
     }
-    req.on('close', onClientClose)
+    // Node 16+ fires IncomingMessage 'close' as soon as the request body is
+    // fully consumed — immediately for a bodyless GET/HEAD — so a req 'close'
+    // listener would abort every bodyless forward right after it starts (the
+    // browser side is still waiting for its response; POST survives only by
+    // timing luck: its 'close' fires inside readBody's await, before this
+    // listener is attached). Real client disconnects surface on the RESPONSE
+    // leg: 'close' fires on connection teardown, and writableEnded separates
+    // a normal end() from an aborted one (same discipline as api.ts SSE).
+    const onResClose = () => { if (!res.writableEnded) onClientClose() }
+    res.on('close', onResClose)
     const timeoutAbort = (): void => {
       controller.abort()
       releaseBodyBudget()
@@ -674,7 +686,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         clearTimeoutGuards()
         releaseBodyBudget()
         releaseRequest()
-        req.removeListener('close', onClientClose)
+        res.removeListener('close', onResClose)
         res.end()
       })
     })
@@ -699,7 +711,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       controller.abort()
       releaseHandshake()
     }
-    req.on('close', onClientClose)
+    // Same Node-16+ trap as forwardHttp: a bodyless upgrade request fires
+    // IncomingMessage 'close' immediately after its headers are consumed, so
+    // a req listener would abort EVERY handshake before the upstream answers.
+    // Real client disconnects surface on the raw browser socket's 'close'
+    // (before 101 the socket closes only on teardown; after 101 this listener
+    // is removed and the splice's tearDown takes over).
+    socket.on('close', onClientClose)
     // The upgrade handshake must complete within upstreamTimeoutMs; once the
     // upstream answers 101 the socket is spliced and the timeout is cleared
     // (a live WebSocket is long-lived by nature).
@@ -735,13 +753,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       logger.log(`instance-proxy: upstream ${parsed.id} upgrade answered non-101 (${upstreamRes.statusCode ?? '?'}); rejecting`)
       upstreamRes.on('error', () => {})
       upstreamRes.destroy()
-      req.removeListener('close', onClientClose)
+      socket.removeListener('close', onClientClose)
       rejectUpgrade(socket, 502, 'upstream_failed', 'upstream WebSocket answered non-101')
     })
     upstream.on('upgrade', (upstreamRes: IncomingMessage, upstreamSocket: Duplex, upstreamHead: Buffer) => {
       clearUpgradeTimeout()
       releaseHandshake()
-      req.removeListener('close', onClientClose)
+      socket.removeListener('close', onClientClose)
       counters.activeStreams += 1
       const stream = { downstream: socket, upstream: upstreamSocket }
       liveStreams.add(stream)

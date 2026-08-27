@@ -88,6 +88,9 @@ export interface ApiResponse {
   setHeader(name: string, value: unknown): unknown
   destroy(): unknown
   headersSent: boolean
+  /** True once end() has been called (Node's ServerResponse; distinguishes a
+   *  normal end from a mid-stream client disconnect on 'close'). */
+  writableEnded: boolean
   _corsHeaders?: Record<string, string>
   /** Per-response CSP nonce minted by the owning HTTP server. */
   _cspNonce?: string
@@ -342,7 +345,6 @@ export function createApi(deps: ApiDeps) {
             if (keepalive !== null) clearInterval(keepalive)
             pendingFrames.length = 0
             res.removeListener('drain', flushPending)
-            req.removeListener('close', teardown)
             releaseSubscription()
             try {
               res.end()
@@ -385,7 +387,14 @@ export function createApi(deps: ApiDeps) {
             }
             writeFrame(`data: ${JSON.stringify(payload)}\n\n`)
           }
-          req.on('close', teardown)
+          // Node 16+: IncomingMessage 'close' fires as soon as the request
+          // body is consumed (immediately for a bodyless GET) — not on client
+          // disconnect — so a req listener would tear this SSE stream down
+          // right after it opens. Detect real disconnects on the response
+          // leg: 'close' fires on connection teardown, and writableEnded
+          // separates a normal end() from an aborted one (teardown is
+          // idempotent via tornDown).
+          res.on('close', () => { if (!res.writableEnded) teardown() })
           const health = deps.getHealth()
           send({ status: health.dsh.status, port: health.dsh.port, error: health.dsh.error ?? null })
           if (tornDown) return

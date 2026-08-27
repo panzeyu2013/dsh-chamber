@@ -29,6 +29,19 @@
 
 ### 修复
 
+- **反代误杀全部无 body 请求与 WS 握手（03 §3.3 断连检测）** —— 控制面
+  `instance-proxy` 的 HTTP 转发与 WS upgrade 路径把 `req.on('close')` 当作
+  客户端断连信号，但 Node 16+ 的 `IncomingMessage 'close'` 在请求体消费完
+  时即触发（无 body GET/HEAD 立即触发），导致每个经反代的 GET/HEAD 请求与
+  WS 握手都在发出后被误 abort：bundle 加载 30s 超时（「实例启动失败」）、
+  web-runtime 无限 `connection lost, retry #N`、实例 boot 全部超时——local
+  与远程无差别受害。POST 因 `'close'` 在 `readBody` await 期间触发（监听器
+  尚未注册）而侥幸正常，使问题长期掩盖在「POST 探测一切正常」之下。修复：
+  断连检测改挂响应腿（`res 'close'` + `writableEnded` 守卫，与 api.ts SSE
+  同纪律）、WS upgrade 改挂浏览器 socket `'close'`（101 前仅真实断开触发，
+  101 后由 splice tearDown 接管）；api.ts health-events SSE 同款修复。
+  新增 4 个真实 Node 流集成回归测试（fake 请求不模拟真实 `'close'` 语义，
+  红-绿验证过：还原 bug 即挂起超时）。
 - **插件动作主进程确认（09 §4 v1 安全缓解）** —— `desktop_ssh_plugin_materialize_add` /
   `desktop_local_plugin_add` / `desktop_local_plugin_remove` 增加主进程确认
   对话框：远端 bundle 与 chamber 页面同上下文，脚本不能静默驱动本地源码外传、
