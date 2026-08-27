@@ -112,6 +112,11 @@ export default function InstanceView({
   return (
     <div className={viewClass} data-instance={instanceId}>
       <div ref={containerRef} className="instance-shell" />
+      {shell.booted && shell.pluginDegraded && (
+        <div className="instance-plugin-degraded" role="status">
+          该实例的部分插件未能加载（宿主启动图不可达）——可在连接设置的插件管理中重试。
+        </div>
+      )}
       {!settled && (
         <div className="instance-loading" aria-busy="true">
           <div className="instance-loading-frame">

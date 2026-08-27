@@ -117,9 +117,10 @@ import type { SidebarKey } from './locales.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, hashString, increasedForkTitle, mergeSearchResults,
-  nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
-  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, workspaceAccentStyle,
+  armBlankGhost, armMembershipGrace, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, hashString, increasedForkTitle,
+  mergeSearchResults, nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, reconciledSessionOrder,
+  relativeTimeBucket, runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS,
+  workspaceAccentStyle,
   type SessionOrderBy,
 } from '../shared/derive.ts'
 import {
@@ -953,7 +954,7 @@ export function SidebarRoot({
     const isBlankCurrent = active.workspaces.some(workspace =>
       workspace.sessions.some(session => session.id === current && session.blank === true))
     if (!isBlankCurrent) return
-    armBlankGhost(current)
+    armBlankGhost(active.id, current)
     ghostExpiry.current.set(current, Date.now() + BLANK_GHOST_GRACE_MS)
     // chamber (third-wave review, R2-1#5): the one-shot timer is trimmed from
     // the ref after it fires, so repeated armings (rare, but each timer
@@ -977,23 +978,43 @@ export function SidebarRoot({
   // 「回合尾部 forkAt 覆盖、侧边栏不做」本轮契约反转：行内 kebab 增加分叉入口).
   // P1-4: wire session.fork 只收 { sessionId, atSeq? }（increaseTitle 非 wire
   // 字段），子会话标题 = 源标题；chamber 侧按官方 runtime service 移植的
-  // increasedForkTitle 在 fork 成功后对子会话做标题递增 rename（经该来源
-  // unary client）。递增失败非致命：fork 已成功、子会话已创建并打开（下方
-  // requestRefresh/requestOpenSession 照常执行），仅标题不递增——inline
-  // rowErrors 不阻断（runAction 只吃 fork 自身的失败）。
+  // increasedForkTitle 对子会话做标题递增 rename（经该来源 unary client）。
+  // 2026-10 修复后顺序为 fork → 刷新/打开 → rename → 再刷新：刷新/打开不再
+  // 被一次 rename 往返推迟（见函数体内注释）；「未分类」闪现由 App 侧
+  // parent-accounted 规则覆盖（非成员宽限）。递增失败非致命：fork 已成功、
+  // 子会话已创建并打开，仅标题不递增——inline rowErrors 不阻断（runAction
+  // 只吃 fork 自身的失败）。
   const onForkSession = (server: ChamberServerAggregate, session: { id: string; title: string }): void => {
     runAction(`${server.id}/session/${session.id}/fork`, async () => {
       const client = getInstanceClient(server.id)
       const childId = await forkSession(client, session.id)
+      // 2026-10 修复（创建/fork 延迟反馈）：先请求刷新/打开，再做标题递增
+      // rename——旧顺序把子会话行出现的时间推迟了一次 rename 往返
+      // （fork → rename → 刷新/打开）。刷新/打开在 fork 应答之后即可发起
+      // （App 的变更拉取保证包含子会话），rename 照旧 best-effort：递增成功
+      // 前子行短暂显示源标题（官方 increaseTitle 同款便利语义），递增失败
+      // 非致命——fork 已成功、子会话已创建并打开（下方
+      // requestRefresh/requestOpenSession 已照常执行），仅标题不递增——
+      // inline rowErrors 不阻断（runAction 只吃 fork 自身的失败）。
+      //
+      // fork 的「未分类」闪现不靠成员宽限（arm 时序有缺口：子会话 id 由
+      // host 铸造，session-added 帧可能先于 fork 应答到达；且分叉未分组源
+      // 会得到真正无工作区的子会话）——由 App 侧 derive 的 parent-accounted
+      // 规则覆盖（derive.ts：父已记账的 fork 子会话必然落入父的工作区，其
+      // 未记账态是双帧间的瞬时截面，纯快照状态判定）。
+      chamberBridge.requestRefresh(server.id)
+      chamberBridge.requestOpenSession(server.id, childId)
       if (session.title !== '') {
         try {
           await renameSession(client, childId, increasedForkTitle(session.title))
         } catch {
           // 非致命：fork 已成功，仅子会话标题不递增。
         }
+        // 标题递增是第二次 mutation：再请求一次刷新（第二次变更拉取），
+        // 保证标题在帧丢失（重连窗口）时也经拉取收敛——零成本保险，正常
+        // 情况下标题早已由 session/projection 帧推送收敛、拉取被身份去重吞掉。
+        chamberBridge.requestRefresh(server.id)
       }
-      chamberBridge.requestRefresh(server.id)
-      chamberBridge.requestOpenSession(server.id, childId)
     })
   }
 
@@ -1001,6 +1022,16 @@ export function SidebarRoot({
     runAction(`${server.id}/workspace/${workspaceId}/new`, async () => {
       const client = getInstanceClient(server.id)
       const sessionId = await createSession(client, workspaceId)
+      // 2026-10 修复（创建/fork 延迟反馈）：host 把 create 拆成
+      // session-added + workspace-changed 两条有序帧，两者之间到达的推送
+      // 投影会把新会话暂放「未分类」桶、下一帧再拽进工作区（位置乱跳）。
+      // 同步 arm 成员宽限（来源作用域键控）：App 的 derive 在宽限内跳过该
+      // 会话的未分类摆放，行只会在成员关系落地后出现在正确的工作区里
+      // （derive.ts armMembershipGrace）。宽限只由 create 路径 arm（create
+      // 必带 workspaceId，绝不会隐藏真正未分组的会话）；fork 由
+      // parent-accounted 规则覆盖（见 onForkSession）。随后照旧请求刷新
+      // （App 的变更拉取保证后于本次 mutation，不会被推送作废）并打开会话。
+      armMembershipGrace(server.id, sessionId)
       // 05 §2.2: created under this workspace, then open it on that source.
       // The App layer re-pulls the snapshot so the new session shows here.
       chamberBridge.requestRefresh(server.id)
@@ -1152,7 +1183,7 @@ export function SidebarRoot({
     const workspace = server.workspaces.find(candidate =>
       candidate.id === activeDrag.accountKey && (candidate.ungrouped === true) === activeDrag.ungrouped)
     if (workspace === undefined) return
-    const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
+    const orderBy = getViewPrefs().orderBy?.[server.id] ?? viewPrefs.orderBy?.[server.id] ?? 'manual'
     const wireIds = workspace.sessions.map(session => session.id)
     const accountKey = `${server.id}/${workspace.id}`
     // Updated branch reads the LIVE store (like the derivation effect, not
@@ -1321,7 +1352,10 @@ export function SidebarRoot({
     serverDropCommitted.current = true
     setServerDrag(null)
     updateViewPrefs(prev => {
-      const renderedOrder = orderServersForDisplay(servers, prev.serverOrder).map(server => server.id)
+      // Live roster at commit time (2026 review S4): the render-closure
+      // `servers` snapshot may lag a concurrent registry change.
+      const liveServers = chamberBridge.getServers()
+      const renderedOrder = orderServersForDisplay(liveServers, prev.serverOrder).map(server => server.id)
       const nextOrder = nextServerOrder(renderedOrder, activeDrag.sourceId, over)
       if (nextOrder === null) return prev
       return { ...prev, serverOrder: nextOrder }
@@ -1500,6 +1534,9 @@ export function SidebarRoot({
                 currentRemote,
                 SESSION_SEARCH_RESULT_LIMIT,
                 visibleIds,
+                // 2026 audit M7：投影实际落定（aggregateReady）后可见集才是权威
+                // ——就绪且空集时远程腿过滤为空；未就绪保留降级（不过滤）。
+                server.aggregateReady === true,
               )
               // chamber (06 §4): the current-session highlight is channel-based
               // — no direct store subscription — and single-selection: only the
@@ -1594,7 +1631,7 @@ export function SidebarRoot({
               }
               const sessionsOf = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
-                const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
+                const orderBy = getViewPrefs().orderBy?.[server.id] ?? viewPrefs.orderBy?.[server.id] ?? 'manual'
                 // 2026-08 C档（对齐官方）：updated = 手动序 + 活动置顶。渲染序
                 // 直接取共享的 updated-order account（推导 effect 已把 seeding/
                 // recency sort/promotion 写回，见上）；account 尚不存在时（切换
@@ -1942,7 +1979,8 @@ export function SidebarRoot({
                             }
                           } else {
                             expandSearch(server.id)
-                            searchInputs.current[server.id]?.focus()
+                            // (no synchronous focus here — the input mounts
+                            // after the state update; autoFocus covers it)
                           }
                         }}
                     >
@@ -2573,15 +2611,18 @@ export function SidebarRoot({
                                       // (OpenChamber model). The module-global
                                       // pending (keyed by sessionId) only
                                       // answers "is this the SECOND click of a
-                                      // double click on the same session within
-                                      // DOUBLE_CLICK_WINDOW_MS" — that one
-                                      // enters inline rename; any other click
-                                      // records the pending and opens right
-                                      // away. openSession is idempotent, so a
-                                      // misjudged slow second click just
-                                      // re-opens (no-op) and can NEVER
-                                      // accidentally rename.
-                                      if (noteSessionRowClick(session.id)) {
+                                      // double click on the same (source,
+                                      // session) within DOUBLE_CLICK_WINDOW_MS"
+                                      // — that one enters inline rename; any
+                                      // other click records the pending and
+                                      // opens right away. openSession is
+                                      // idempotent, so a misjudged slow second
+                                      // click just re-opens (no-op) and can
+                                      // NEVER accidentally rename. Keyed by
+                                      // (server.id, session.id) (2026 audit L2:
+                                      // cloned UUIDs across sources must not
+                                      // cross-trigger rename).
+                                      if (noteSessionRowClick(server.id, session.id)) {
                                         // P2-10 同款 blank 门控（2026-08
                                         // review）：空白"新建会话"占位行无内容可
                                         // 改名——双击不得进入内联重命名（否则会

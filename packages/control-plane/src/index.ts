@@ -1120,6 +1120,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 }
 
 export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
+// main's 2026 audit M12 narrowed this re-export to the production unary
+// surface; dev's design-17 gateway composes `respond` / `openEventStream` /
+// `ServerRequest` from '@dsh-chamber/control-plane', so the full surface is
+// kept (the session-runtime leftovers remain plain re-exports, not new code).
 export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
 export type { ServerRequest } from './dsh-client.ts'
 export type { Logger } from './types.ts'

@@ -65,7 +65,21 @@ cleanStaleWorkspaces();
 const recovery = recoverBundleSwap(dest, backup);
 if (recovery === 'restored') console.warn('[bundle-dsh] 已恢复上次中断交换前的可用 dsh 封装。');
 
-const DEFAULT_DSH_VERSION = '0.1.1-rc.2';
+/** Derive the default dsh version from the COMMITTED runtime lockfile — the
+ *  hardcoded twin of release.yml's DSH_CHAMBER_DSH_VERSION used to drift
+ *  silently (2026 review); the lockfile is the single source of truth for
+ *  the no-env path. The lockfile path is resolved HERE (sourceLockfile is
+ *  declared later in the module — a TDZ reference from this call site would
+ *  silently fall back to the pin). */
+function lockfileDshVersion() {
+  try {
+    const text = readFileSync(path.join(pkgDir, 'vendor', 'dsh', 'pnpm-lock.yaml'), 'utf8');
+    const match = /@deepseek-ai\/dsh@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(text);
+    if (match !== null) return match[1];
+  } catch { /* fall through to the pin */ }
+  return '0.1.1-rc.2';
+}
+const DEFAULT_DSH_VERSION = lockfileDshVersion();
 const BUNDLE_PNPM_VERSION = '11.21.0';
 const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const VERSION = process.env.DSH_CHAMBER_DSH_VERSION ?? DEFAULT_DSH_VERSION;

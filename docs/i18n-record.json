@@ -1,24 +1,24 @@
 {
   "files": {
     "docs/README.en-US.md": {
-      "en": "504f2967132f0c56c75bafd7832badbdc316e91ff7092ac9cada0a3fbc909645",
-      "zh": "26bb74ee84e4f2eb1918cf9c1a298a46224680b815fd534162c193b43271eb84"
+      "en": "e62b909c6fcc466021527f0ed51af18228e162b8a33ebccdf14ccbc8b88d81d8",
+      "zh": "f6abafc8a7ee07e90a0c635ad0166b28eca0c132d99758282ab9a74983774958"
+    },
+    "docs/DEVELOPMENT.en-US.md": {
+      "en": "07c41c04f930dfc9f1d41cb032f6bcb0f6022c00247e7a9b9b6d60825172d666",
+      "zh": "27e710d53a2ad2c892e0032bdb2b2b43f34de53617e19b2f5af1cf9e3c7e6561"
     },
     "docs/CONTRIBUTING.en-US.md": {
       "en": "768927f84900dc369651704594e44e80585bd5f305d87e9ef00a81bd10b4b76f",
       "zh": "5971ff878e779dd3142f575545fa991b8982ed01e4bc886f07291ccc1173c4af"
     },
     "docs/CHANGELOG.en-US.md": {
-      "en": "bc7a720e9a10a545e7ace2fc8445b638c279bb70282d12929be8c8e80b6c2532",
-      "zh": "d65e059c78c2697fa9ae4b97463f407adba9c40858100ec7497b5c56691f1a1b"
-    },
-    "docs/DEVELOPMENT.en-US.md": {
-      "en": "07c41c04f930dfc9f1d41cb032f6bcb0f6022c00247e7a9b9b6d60825172d666",
-      "zh": "27e710d53a2ad2c892e0032bdb2b2b43f34de53617e19b2f5af1cf9e3c7e6561"
+      "en": "2503a17dd23b2aa7f2dbc88f8f7bf9b49d5c9d54930f5549c835931dca3fdd75",
+      "zh": "475a419e3a98613a16791aa54f62b6a03f22a169dea85c82a831eb1767f6d98a"
     },
     "docs/THIRD_PARTY_NOTICES.en-US.md": {
-      "en": "c0aaf1cafabc3857fd85acffb513600ec92adddd4d54b4a1a16ee0b11b495a9d",
-      "zh": "d108b58366ec75824a1b0e34d389b4d74e0464f96f61b33562aa723ef98492cb"
+      "en": "3bcdc21f924e22541b74e8d3aa5e3da536071980646504968d296c4da7161ef5",
+      "zh": "05c0f5365e62ba0d2c5276700a9a5c276ee303c795fec9becbf9f193d02bdb20"
     }
   }
 }

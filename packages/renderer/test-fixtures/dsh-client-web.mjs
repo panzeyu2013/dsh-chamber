@@ -12,23 +12,32 @@
 let bootError = undefined
 let runError = undefined
 let moduleSystemError = undefined
+let runHang = false
+let runDelayMs = 0
+let disposeDelayMs = 0
 let disposedCount = 0
 const eventLog = []
+const lifecycleLog = []
 
 export class AppWebEntry {
   constructor(el, options) {
     this.el = el
     this.options = options
     this.disposed = false
+    lifecycleLog.push('construct')
   }
 
   async run() {
     if (runError !== undefined) throw runError
+    if (runHang) return new Promise(() => {}) // never settles (H1 timeout tests)
+    if (runDelayMs > 0) await new Promise(resolve => setTimeout(resolve, runDelayMs)) // late settle (H1)
   }
 
-  dispose() {
+  async dispose() {
     this.disposed = true
     disposedCount += 1
+    lifecycleLog.push('dispose')
+    if (disposeDelayMs > 0) await new Promise(resolve => setTimeout(resolve, disposeDelayMs))
   }
 
   get bootError() {
@@ -60,6 +69,31 @@ export function __testSetRunError(value) {
 
 export function __testSetModuleSystemError(value) {
   moduleSystemError = value
+}
+
+/** H1 timeout tests: run() returns a never-settling promise. */
+export function __testSetRunHang(value) {
+  runHang = value
+}
+
+/** H1 late-settle tests: run() resolves after this delay (ms) — lets a boot
+ *  settle AFTER its budget expired. */
+export function __testSetRunDelayMs(value) {
+  runDelayMs = value
+}
+
+/** M1 serialization tests: dispose() awaits this delay before settling. */
+export function __testSetDisposeDelayMs(value) {
+  disposeDelayMs = value
+}
+
+/** M1 ordering assertions: 'construct' / 'dispose' in real execution order. */
+export function __testLifecycleLog() {
+  return lifecycleLog
+}
+
+export function __testResetLifecycleLog() {
+  lifecycleLog.length = 0
 }
 
 export function __testDisposedCount() {

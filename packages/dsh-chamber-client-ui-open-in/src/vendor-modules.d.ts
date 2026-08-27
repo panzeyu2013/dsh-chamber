@@ -29,6 +29,9 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     onClose: () => void
     onSelect?: (id: string) => void
     items?: MenuItem[]
+    /** Row shown with the trailing selection check (the vendor runtime's
+     *  native selected marker). */
+    selectedId?: string
     anchor: ReactNode
   }
   export function Menu(props: MenuProps): ReactNode

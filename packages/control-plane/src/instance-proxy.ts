@@ -29,8 +29,10 @@
  * body_too_large (+ upstream abort).
  *
  * Response headers are converged to a whitelist (03 §3.4): content-type,
- * cache-control, x-next-cursor, x-ratelimit-*; nothing else rides through
- * (hop-by-hop and potential credential surfaces stay server-side).
+ * cache-control, content-encoding (compression labels ride through so the
+ * browser decodes correctly, 2026 audit M3b), x-next-cursor, x-ratelimit-*;
+ * nothing else rides through (hop-by-hop and potential credential surfaces
+ * stay server-side).
  *
  * Diagnostics: plain counters (requests / failures / activeStreams) — no
  * sensitive data, no URLs.

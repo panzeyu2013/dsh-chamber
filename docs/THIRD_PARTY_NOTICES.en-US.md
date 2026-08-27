@@ -6,6 +6,7 @@ Generated with `npm run gen:notices`.
 
 | Package | Version | License |
 |---|---|---|
+| `@electron/asar` | 3.2.1 | MIT |
 | `@shikijs/langs` | 4.4.3 | MIT |
 | `@tanstack/react-virtual` | 3.14.9 | MIT |
 | `@types/node` | 26.2.0 | MIT |

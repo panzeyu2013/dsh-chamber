@@ -144,6 +144,12 @@ export const STRIPPED_REQUEST_HEADERS = new Set([
   'x-forwarded-proto',
   'x-forwarded-port',
   'x-real-ip',
+  // Compression negotiation must not cross the proxy (2026 audit M3b):
+  // accept-encoding is stripped upstream so the upstream answers identity;
+  // any upstream that still compresses is labeled correctly via the
+  // content-encoding response whitelist, so the browser never misparses a
+  // compressed body as raw bytes.
+  'accept-encoding',
 ])
 
 /** Only headers required to complete a WebSocket 101 may cross downstream. */

@@ -606,9 +606,11 @@ let passwordFile: string | null = null
  * execute it for its next prompt — deleting it fails that exec's password
  * auth (same P1 regression, review 2026-08). dispose therefore only retires
  * it (kept on disk); the final deletion happens on instance removal
- * (purgeSshAuth, transport-manager saveInstances), app quit (the owner
- * process dies and startup cleanup reclaims the file), the retired-cap
- * overflow of a later recreation, or the explicit purge below.
+ * (purgeSshAuth, transport-manager saveInstances), on an explicit password
+ * clear (setSshPassword(id, null) — a cleared password must not leave baked
+ * secrets on disk, 2026 review), on app quit (the owner process dies and
+ * startup cleanup reclaims the file), or on the retired-cap overflow of a
+ * later recreation.
  */
 const askpassHelpers = new Map<string, { current: string; retired: string[] }>()
 
@@ -681,6 +683,15 @@ export function setSshPassword(id: string, password: string | null): void {
   // Kind-agnostic instance deletion clears both credential stores. A gateway
   // id with no SSH password must not force an unnecessary password-file write.
   if ((password === null || password === '') && !passwords.has(id)) return
+  if (password === null || password === '') {
+    // Cleared passwords must not leave baked secrets on disk (2026 review):
+    // FINAL deletion of every helper generation. New spawns can no longer
+    // reference them (no password → sshAuthEnv returns null), and any exec
+    // still holding SSH_ASKPASS from before the explicit clear is a
+    // deliberate user-initiated action, so the retained-current discipline
+    // (in-flight exec safety) does not apply here.
+    purgeSshAuth(id)
+  }
   const next = new Map(passwords)
   if (password === null || password === '') next.delete(id)
   else next.set(id, password)

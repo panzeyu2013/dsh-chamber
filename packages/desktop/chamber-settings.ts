@@ -11,7 +11,7 @@
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
-import { closeSync, fchmodSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
@@ -209,20 +209,27 @@ export function readSettingsFile(filePath: string): { settings: ChamberSettings;
   }
 }
 
-/** Atomic write (tmp + rename), 0600 — mirrors the ssh-passwords store
- * pattern. open(..., mode) only applies the mode on creation; a pre-existing
- * tmp file (hard-crash residue) may be wider, so force owner-only
- * permissions before writing (the registry origin is a trust anchor). */
+/** Atomic write (tmp + fsync + rename), 0600 — mirrors the ssh-passwords
+ *  store pattern (open/fchmod/write/fsync/close; the fchmod forces owner-only
+ *  permissions on a pre-existing wider tmp file — hard-crash residue — before
+ *  any bytes are written since the registry origin is a trust anchor, and
+ *  the fsync plus the explicit post-close chmod ensure a crash never leaves
+ *  a partial or wider-permission settings file). */
 export function writeSettingsFile(filePath: string, settings: ChamberSettings): void {
   const tmpPath = `${filePath}.tmp`;
   mkdirSync(dirname(filePath), { recursive: true });
   const fd = openSync(tmpPath, 'w', 0o600);
   try {
+    // open(..., mode) only applies the mode on creation; a pre-existing
+    // tmp file (hard-crash residue) may be wider, so force owner-only
+    // permissions before writing (the registry origin is a trust anchor).
     fchmodSync(fd, 0o600);
     writeSync(fd, `${JSON.stringify(settings, null, 2)}\n`);
+    fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
+  chmodSync(tmpPath, 0o600);
   renameSync(tmpPath, filePath);
 }
 

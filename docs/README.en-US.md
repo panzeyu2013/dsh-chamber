@@ -52,7 +52,8 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
 - **Chamber settings page** — fixed Settings-shell entries: Connections / General; chamber-global settings stay strictly separate from per-instance config planes
 - **Backend version tolerance (rc.2 compatible)** — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash); headless-verified against an rc.2 backend
-- **Security & privacy** — the ordinary desktop control plane remains loopback-only; SSH passwords and gateway tokens use write-only 0600 storage and never enter the registry or logs; public reachability exists only in the explicitly started, mandatory-auth gateway process (by default; `--no-auth` is a trusted-network bounded deviation)
+- **Security & privacy** — the control plane listens on loopback only (127.0.0.1); SSH passwords and gateway tokens use write-only 0600 storage injected via an ephemeral askpass helper — never in logs, the registry, or the UI; public reachability exists only in the explicitly started, mandatory-auth gateway process (by default; `--no-auth` is a trusted-network bounded deviation)
+- **Plugin actions need a main-process confirmation (design 09 §4)** — local/remote plugin installs & removals and the materialize transfer require a user confirmation dialog; local plugin-manifest dependency values are path-redacted
 
 ## Server-side deployment
 

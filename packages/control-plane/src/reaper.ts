@@ -270,7 +270,16 @@ async function processEntry(dir: string, name: string, log: LogFn): Promise<{ st
   const profile = typeof record.profile === 'string' && record.profile !== '' ? record.profile : null
   const entry = typeof record.entry === 'string' && record.entry !== '' ? record.entry : null
   const binary = typeof record.binary === 'string' && record.binary !== '' ? record.binary : null
-  const commandOk = commandMatchesEntry(identity.command, entry, binary)
+  // The installed entry is `…/@deepseek-ai/dsh/lib/bin.js`; the SOURCE-tsx
+  // dev path is `node --import tsx/esm …/apps/cli/src/bin.ts` — neither a
+  // `dsh` literal nor the packaged path (2026 round-3 review). Both forms
+  // carry the profile flag when one is recorded, so the profile check is
+  // the strong half; the binary-form check is the weak half.
+  const looksLikeDsh = identity.command.includes('dsh') || identity.command.includes('bin.ts')
+  // Command identity = recorded entry/binary token match (the strong half,
+  // dev's `entry` ledger) OR the command-shape fallback (main's reaper,
+  // which covers legacy records written before the `entry` token existed).
+  const commandOk = (commandMatchesEntry(identity.command, entry, binary) || looksLikeDsh)
     && (profile === null || identity.command.includes(`--profile ${profile}`))
   const portNum = Number(record.port)
   // Missing/invalid port ⇒ cannot verify the listener belongs to this pid;

@@ -763,13 +763,14 @@ test('health-events: write backpressure drains in order and bounded overflow rel
   }
   const res = {
     headersSent: false,
+    writableEnded: false,
     writeHead() { this.headersSent = true },
     write(chunk: unknown) {
       writes.push(String(chunk))
       writeCalls += 1
       return writeCalls !== 1 && writeCalls !== 3
     },
-    end() { endCalls += 1 },
+    end() { endCalls += 1; this.writableEnded = true },
     destroy() {},
     setHeader() {},
     on: resEvents.on.bind(resEvents),

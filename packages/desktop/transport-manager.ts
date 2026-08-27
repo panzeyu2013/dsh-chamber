@@ -361,6 +361,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const states = new Map<string, InstanceState>()
   /** In-flight provider exec children, SIGTERMed by dispose() (app quit). */
   const execChildren = new Set<SpawnedProcess>()
+  /** Quit/teardown gate (2026 final review): set by dispose(); exec()/connect()
+   *  refuse new work after it — no spawn can be started into the shutdown. */
+  let disposed = false
+  /** Exec-child SIGTERM → SIGKILL escalations (2026 audit M2): exec children
+   *  get the same grace escalation as tunnel children, and disposeAsync waits
+   *  for both — a SIGTERM-ignoring ssh exec must not survive app quit. */
+  const execKillEscalations = new Map<SpawnedProcess, ReturnType<typeof setTimeout>>()
   const bus = new EventEmitter()
 
   function ensureState(id: string): InstanceState {
@@ -631,8 +638,21 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       try {
         localPort = await doAllocate()
       } catch (allocateError) {
+        // disconnect()/failTerminal/restart may have landed while the port was
+        // being allocated: never arm recovery for a machine that moved on —
+        // a manual disconnect must cancel the slow re-probe (2026 final
+        // review, same guard as the success path below).
+        if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
         transition(id, 'error', `failed to allocate a local port: ${String(allocateError)}`)
         appendLogInternal(state, 'error', `port allocation failed: ${String(allocateError)}`)
+        // A transient allocation failure (ephemeral-port exhaustion) must not
+        // leave the instance stuck in error forever: arm the slow periodic
+        // re-probe, same pattern as the max-retry recovery (2026 audit M10).
+        state.reconnectTimer = setTimeout(() => {
+          state.reconnectTimer = null
+          void startTransport(id).catch(error => warn(`transport-manager: slow re-probe rejected: ${String(error)}`))
+        }, slowRetryMs)
+        state.reconnectTimer.unref?.()
         return
       }
       // disconnect()/failTerminal/restart may have landed while the port was
@@ -723,9 +743,16 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
           // Non-stderr channels get the provider's redaction too (the stderr
           // path is redacted inside classifyStderr; without this a
           // misbehaving remote could echo credential/path-shaped text into
-          // the ring via stdout).
-          const text = String(chunk)
-          appendLogInternal(state, 'info', (providerForSpec.redactOutput?.(text) ?? text).trimEnd())
+          // the ring via stdout). Guarded like the stderr path — a throwing
+          // redactor must never take the transport down.
+          let log: string
+          try {
+            log = providerForSpec.redactOutput?.(String(chunk)) ?? String(chunk)
+          } catch (redactError) {
+            warn(`transport-manager: providerForSpec.redactOutput threw on stdout: ${String(redactError)}`)
+            log = String(chunk)
+          }
+          appendLogInternal(state, 'info', log.trimEnd())
         })
       }
       // Line-buffered stderr (per child): provider classification (redaction
@@ -857,6 +884,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
 
   /** Provider exec channel (ssh: one remote systemd exec). */
   function exec(id: string, action: TransportExecAction, payload?: TransportRunPayload): Promise<TransportExecResult> {
+    if (disposed) return Promise.resolve({ ok: false, error: 'transport manager is disposed' })
     const spec = instances.get(id)
     if (spec === undefined) {
       return Promise.resolve({ ok: false, error: 'ssh instance not found' })
@@ -883,6 +911,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       child.on('exit', () => {
         execChildren.delete(child)
         state.execChildren.delete(child)
+        // The child exited on its own: cancel any pending escalation (the
+        // dispose-time timer would otherwise linger until it fires).
+        const escalation = execKillEscalations.get(child)
+        if (escalation !== undefined) {
+          clearTimeout(escalation)
+          execKillEscalations.delete(child)
+        }
       })
       return child
     }
@@ -1090,6 +1125,9 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * @returns the status projection.
    */
   function connect(id: string): TransportStatusProjection | null {
+    // Quit/teardown guard (2026 final review, defensive depth): a connect
+    // arriving after dispose() is a no-op returning the current projection.
+    if (disposed) return status(id)
     if (!instances.has(id)) {
       const error: CodedError = new Error('ssh instance not found')
       error.code = 'ssh_instance_not_found'
@@ -1225,8 +1263,20 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
 
   /** Stop every transport, cancel in-flight execs, drop all listeners (app quit). */
   function dispose() {
+    disposed = true
     for (const id of [...states.keys()]) disconnect(id)
-    for (const child of execChildren) signalChild(child, 'SIGTERM')
+    for (const child of execChildren) {
+      signalChild(child, 'SIGTERM')
+      // Exec children get the same SIGTERM → SIGKILL escalation as tunnel
+      // children (2026 audit M2): disposeAsync waits for these to drain, so a
+      // SIGTERM-ignoring ssh exec cannot be orphaned at app quit.
+      const timer = setTimeout(() => {
+        execKillEscalations.delete(child)
+        signalChild(child, 'SIGKILL')
+      }, disconnectGraceMs)
+      timer.unref?.()
+      execKillEscalations.set(child, timer)
+    }
     execChildren.clear()
     bus.removeAllListeners('status-changed')
   }
@@ -1245,6 +1295,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     await new Promise<void>((resolve) => {
       const check = () => {
         const pending = [...states.values()].some(state => state.killEscalations.size > 0)
+          || execKillEscalations.size > 0
         if (!pending || Date.now() >= deadline) resolve()
         else setTimeout(check, 25)
       }

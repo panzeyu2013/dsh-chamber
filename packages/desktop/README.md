@@ -92,11 +92,11 @@ pnpm run dist:desktop
 - **phase 机**：`idle → connecting → ready ⇄ degraded → error`，**两段式重连**：快速**半开 jitter** 指数退避突发（保留下界 0.5×、上界 1×，多实例/唤醒后错峰；至多 5 次 ≈31s）+ 突发耗尽后落 error（诚实红态）但进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限——瞬时故障是时变的，「放弃」绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）。认证失败置 `requiresUserAction`，**终态不自动重试**（用户须修复凭据/host key）。**确定性验证失败免重试**：`verifyUp` 结果带 `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 第一次失败即 error 终态（requiresUserAction，重试无法改变应答）；仅连接错误/超时等瞬时失败走重连。子进程监督 per-child：SIGTERM → 宽限后 SIGKILL。
 - **远端 systemd exec**：`ssh user@host systemctl start|stop|is-active <serviceName>`——参数数组 spawn（**无 shell**），serviceName 先过白名单 `^[a-zA-Z0-9_.-]+$` 再执行（注入防护）；有界超时（`execTimeoutMs`，默认 15s）；失败写入实例环形日志并作为错误结果返回（响亮，绝不吞掉）；认证失败复用 `AUTH_FAILURE_PATTERNS`，只经结果错误显式返回（**不写隧道终态**）。结果按需写入状态投影的 `serviceActive`（不轮询）。`systemctl` 默认目标为远端 system 级 unit 管理器。
 - stderr 按行缓冲后脱敏 + 终态认证判定（跨 chunk 不绕过）；每实例环形日志（约 200 行）。
-- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。新增/编辑主机时若密码保存失败，设置页补偿回滚元数据；回滚 IPC 异常时重新读取权威注册表，避免把半提交的新主机再次按新增提交。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
+- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。保存顺序按注册表存在性：编辑时密码先行（失败则注册表不动）；新增时注册表先行再落密码（主进程拒绝未注册 id），密码失败回滚元数据；回滚 IPC 异常时重新读取权威注册表，避免把半提交的新主机再次按新增提交。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
 
 ### 实例注册表
 
-`<userData>/ssh-instances.json`，字段：`{id, label, kind, host, user, sshPort, remotePort, serviceName}`（`kind` = 传输来源，旧文件缺失时迁移为 `ssh`；`sshPort`/`serviceName` 为 `number | null` / `string | null`，null = 走 ssh 默认端口 / 不管理起停）。**元数据白名单在核心逻辑强制**（provider `validateSpec`）：id `^[a-zA-Z0-9_-]+$`（反代路径段/传输键），host `^[a-zA-Z0-9._:[\]]+$`、user `^[a-zA-Z0-9._-]+$` 且均不以 `-` 开头（防 ssh 选项注入，如 `-oProxyCommand=…`）；serviceName 格式在 exec 前强制。原子写（`.tmp` → fsync → rename）；**损坏文件响亮失败，绝不伪装成空集**（启动时先改名保留 `*.corrupt`）；写入时非法条目丢弃并告警，**重复 id 首胜丢弃**（文件与返回集永不一致漂移）；**隧道参数（host/user/sshPort/remotePort）变更且隧道存活时自动重启隧道**（投影与隧道永不一致漂移）。
+`<userData>/ssh-instances.json`，字段：`{id, label, kind, host, user, sshPort, remotePort, serviceName, remoteDshHome}`（`kind` = 传输来源，旧文件缺失时迁移为 `ssh`；`sshPort`/`serviceName` 为 `number | null` / `string | null`，null = 走 ssh 默认端口 / 不管理起停）。**元数据白名单在核心逻辑强制**（provider `validateSpec`）：id `^[a-zA-Z0-9_-]+$`（反代路径段/传输键），host `^[a-zA-Z0-9._:[\]]+$`、user `^[a-zA-Z0-9._-]+$` 且均不以 `-` 开头（防 ssh 选项注入，如 `-oProxyCommand=…`）；serviceName 格式在 exec 前强制。原子写（`.tmp` → fsync → rename）；**损坏文件响亮失败，绝不伪装成空集**（启动时先改名保留 `*.corrupt`）；写入时非法条目丢弃并告警，**重复 id 首胜丢弃**（文件与返回集永不一致漂移）；**隧道参数（host/user/sshPort/remotePort）变更且隧道存活时自动重启隧道**（投影与隧道永不一致漂移）。
 
 ### ~/.ssh/config 发现（ssh-config.ts）
 
@@ -113,7 +113,7 @@ pnpm run dist:desktop
 
 | 通道 | 方向 | 说明 |
 |---|---|---|
-| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version}`（不向 renderer 暴露本机工作区/状态目录） |
+| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform}`（不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
 | `desktop_ssh_instances_set` | invoke | 持久化新实例集（原子写） |
 | `desktop_ssh_set_password` | invoke | SSH 密码（05 §8 例外）：内存 + `ssh-passwords.json` 明文镜像（0600 原子写），`{id, password}`，'' / null 清除；未知 id 或平台不支持 → `{error}` |
@@ -122,7 +122,16 @@ pnpm run dist:desktop
 | `desktop_ssh_disconnect` | invoke | 停止隧道（SIGTERM → 宽限后 SIGKILL） |
 | `desktop_ssh_status` | invoke | 非秘密状态投影 `{kind, phase, localPort, sshPort, remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}` |
 | `desktop_ssh_logs` / `desktop_ssh_logs_clear` | invoke | 环形日志读取/清空 |
-| `desktop_ssh_start_service` / `stop_service` / `is_active` | invoke | 远端 systemctl 起停/查询 |
+| `desktop_ssh_start_service` / `stop_service` / `is_active` / `restart_service` | invoke | 远端 systemctl 起停/查询/重启 |
+| `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析） |
+| `desktop_ssh_plugin_apply` | invoke | 远端插件增删（**registry add/remove 须主进程确认**，设计 09 §4；取消 `{ok,cancelled}`） |
+| `desktop_ssh_seed_host_graph` | invoke | 向远端注入 chamber host 包（idempotent，hash-skip） |
+| `desktop_ssh_plugin_materialize_add` | invoke | 本地 manifest 依赖打包上传远端（**主进程确认**；name-only，路径由主进程解析） |
+| `desktop_ssh_plugin_materialize_add_pick` | invoke | 文件夹选择器打包上传远端（pick-only） |
+| `desktop_local_plugin_list` | invoke | 本地插件清单（依赖值路径**脱敏**为 `file:<hidden>`） |
+| `desktop_local_plugin_add` / `local_plugin_remove` | invoke | 本地插件安装/卸载（**主进程确认**；`file:` 拒收，走 picker） |
+| `desktop_local_plugin_add_file` | invoke | 本地文件夹选择器安装（pick-only） |
+| `desktop_npm_search` | invoke | npm registry 搜索（主进程 fetch，best-effort） |
 | `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影 |
 | `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作：触发后台下载（`autoDownload=false`，不点击永不下载）；`{ok}` 或 `{error}` |
 | `dsh-chamber:open-release` | invoke | 「前往下载页」：经主进程 `shell.openExternal` 打开，仅允许本仓库 GitHub 页（严格白名单） |
@@ -130,11 +139,11 @@ pnpm run dist:desktop
 | `desktop_ssh_status_changed` | 主进程推送 | 状态变化事件 `{id, status}` |
 | `desktop_ssh_instances_changed` | 主进程推送 | 注册表增删改后触发（renderer 重拉 roster；另有 30s 轮询兜底） |
 
-preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, desktopSsh, update}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
+preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, platform, desktopSsh, update, settings, systemResume, openIn, deepLink, notifications}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
 
 ### 退出 / 单实例 / 错误处理
 
-- 退出时 `will-quit` 中先 `transportManager.dispose()`（终止所有隧道与在途 exec，传输生命周期归运行时），再 `await cp.stop()` 级联终止 dsh 子进程。
+- 退出时 `will-quit` 中 `transportManager.disposeAsync()`（终止所有隧道与在途 exec，等待 SIGKILL 升级完成，传输生命周期归运行时）与 `cp.stop()` 级联终止 dsh 子进程以 `Promise.allSettled` **并行**执行。
 - 单实例锁：`requestSingleInstanceLock`；二次启动只 focus 已存在的窗口。
 - 出错不静默：控制面启动失败 / 渲染层产物（`dist/index.html`）缺失 / 打包态控制面编译产物（`dist/control-plane/index.js`）缺失 / 前端 loadURL 失败时 `dialog.showErrorBox` 并以退出码 1 退出；损坏实例文件先改名保留 `*.corrupt` 再置空。
 - 打包态且图标资源存在时创建托盘（状态 tooltip + 显示/退出菜单）；任何失败只记日志，不阻塞启动。
@@ -144,6 +153,7 @@ preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, deskt
 - **传输 URL 只在主进程**：`readyUrl()` 仅限内部使用，永不经过 `status()` 或 IPC 面；renderer 只见 phase/localPort 投影，自行用 localPort 构造访问 URL。
 - **systemctl 无 shell 拼接**：参数数组 spawn；serviceName 白名单先校验后执行。
 - **凭据不出主进程**：默认 ssh key/agent 认证；可选密码存于**主进程内存 + 05 §8 明确允许的 owner-only 明文镜像**（见上），经临时 owner-only 0700 askpass 助手注入——永不上命令行；日志只含主机名/端口，不含任何凭据材料；ssh stderr 按行脱敏（跨 chunk 不绕过）。
+- **插件动作主进程确认（设计 09 §4 v1 缓解）**：materialize 外传、本地插件安装/卸载、远端 `plugin_apply` registry 增删均须用户确认对话框（取消 `{ok,cancelled}`；无窗口 fail-closed；单飞防堆叠）；`local_plugin_list` 依赖值路径脱敏。
 
 ## 桌面环境验收清单
 

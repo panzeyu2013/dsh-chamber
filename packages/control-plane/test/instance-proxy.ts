@@ -402,6 +402,31 @@ test('convergeLocation: undefined passthrough, root mount strips origin, prefixe
   assert.equal(convergeLocation('http://[', target, ''), 'http://[')
 })
 
+test('http: accept-encoding is stripped upstream — the proxy never negotiates compression (M3b)', async () => {
+  const { proxy, upstream } = makeProxy()
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET', { 'accept-encoding': 'gzip, br' }), res)
+  const headers = upstream.calls[0].options.headers as Record<string, string>
+  assert.equal(headers['accept-encoding'], undefined, 'the upstream must receive identity')
+  assert.equal(res.status, 200)
+})
+
+test('http: a content-encoding upstream header rides through so the browser decodes correctly (M3b)', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' }, body: 'gzipped-bytes' },
+  }))
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers['content-encoding'], 'gzip', 'the compression label must never be dropped')
+})
+
 test('request body over the 300MiB cap answers 413 body_too_large', async () => {
   const { proxy, upstream } = makeProxy()
   const res = fakeResponse()
@@ -1131,4 +1156,148 @@ test('heartbeat: a throwing write self-cleans (onDead once, interval stopped)', 
   await sleep(100)
   assert.equal(dead, 1, 'onDead must fire exactly once (the interval is stopped)')
   heartbeat.stop()
+})
+
+// ---------------------------------------------------------------------------
+// Real-Node integration regression (2026-08): IncomingMessage 'close' fires
+// as soon as the request body is consumed — immediately for a bodyless
+// GET/HEAD — NOT on client disconnect. The proxy's disconnect detection must
+// therefore hang off the RESPONSE leg (res 'close' + writableEnded) and the
+// upgrade path off the raw socket; a req 'close' listener would abort every
+// bodyless forward / WS handshake right after it starts (fake-request unit
+// tests never exercise real Node stream semantics — this block does).
+// ---------------------------------------------------------------------------
+
+import { createServer, get, request as httpRequest } from 'node:http'
+import type { AddressInfo } from 'node:net'
+
+/** Boot a real proxy instance + real upstream, returns their ports. */
+function bootRealProxy(): Promise<{ proxyPort: number; upstreamPort: number; upstream: ReturnType<typeof createServer>; server: ReturnType<typeof createServer> }> {
+  return new Promise((resolve) => {
+    const upstream = createServer((req, res) => {
+      res.setHeader('content-type', 'text/plain')
+      res.end(`upstream-ok:${req.method}`)
+    })
+    const proxy = createInstanceProxy({
+      logger: quietLogger,
+      getLocalState: () => 'ready',
+      getLocalDshPort: () => upstreamPort,
+    })
+    let upstreamPort = 0
+    let server: ReturnType<typeof createServer> | null = null
+    upstream.listen(0, '127.0.0.1', () => {
+      upstreamPort = (upstream.address() as AddressInfo).port
+      server = createServer((req, res) => { void proxy.handleHttp(req as any, res as any) })
+      server.on('upgrade', (req, socket, head) => { void proxy.handleUpgrade(req as any, socket as any, head) })
+      server.listen(0, '127.0.0.1', () => {
+        resolve({ proxyPort: (server!.address() as AddressInfo).port, upstreamPort, upstream, server: server! })
+      })
+    })
+  })
+}
+
+test('real Node streams: bodyless GET forwards (req close must not abort the upstream)', async () => {
+  const { proxyPort, upstream, server } = await bootRealProxy()
+  try {
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = get(`http://127.0.0.1:${proxyPort}/api/i/local/some/path?q=1`, res => {
+        let data = ''
+        res.on('data', chunk => { data += chunk })
+        res.on('end', () => resolve(data))
+      })
+      req.on('error', reject)
+    })
+    assert.equal(body, 'upstream-ok:GET')
+  } finally {
+    server.close()
+    upstream.close()
+  }
+})
+
+test('real Node streams: bodyless HEAD forwards', async () => {
+  const { proxyPort, upstream, server } = await bootRealProxy()
+  try {
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = httpRequest(`http://127.0.0.1:${proxyPort}/api/i/local/head-target`, { method: 'HEAD' }, res => {
+        res.resume()
+        res.on('end', () => resolve(res.statusCode))
+      })
+      req.on('error', reject)
+      req.end()
+    })
+    assert.equal(status, 200)
+  } finally {
+    server.close()
+    upstream.close()
+  }
+})
+
+test('real Node streams: POST with body still forwards', async () => {
+  const { proxyPort, upstream, server } = await bootRealProxy()
+  try {
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = httpRequest(`http://127.0.0.1:${proxyPort}/api/i/local/post-target`, { method: 'POST' }, res => {
+        let data = ''
+        res.on('data', chunk => { data += chunk })
+        res.on('end', () => resolve(data))
+      })
+      req.on('error', reject)
+      req.end('payload')
+    })
+    assert.equal(body, 'upstream-ok:POST')
+  } finally {
+    server.close()
+    upstream.close()
+  }
+})
+
+test('real Node streams: WS upgrade handshake is not aborted by req close', async () => {
+  const upstream = createServer(() => {})
+  upstream.on('upgrade', (_req, socket) => {
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+    )
+    socket.end()
+  })
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => upstreamPort,
+  })
+  let upstreamPort = 0
+  let server: ReturnType<typeof createServer> | null = null
+  await new Promise<void>((resolve) => {
+    upstream.listen(0, '127.0.0.1', () => {
+      upstreamPort = (upstream.address() as AddressInfo).port
+      server = createServer((req, res) => { void proxy.handleHttp(req as any, res as any) })
+      server.on('upgrade', (req, socket, head) => { void proxy.handleUpgrade(req as any, socket as any, head) })
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+  })
+  try {
+    const got101 = await new Promise<boolean>((resolve) => {
+      const req = httpRequest({
+        host: '127.0.0.1',
+        port: (server!.address() as AddressInfo).port,
+        path: '/api/i/local/api/events.mux',
+        headers: {
+          connection: 'upgrade',
+          upgrade: 'websocket',
+          'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'sec-websocket-version': '13',
+        },
+      })
+      req.on('upgrade', () => {
+        req.destroy()
+        resolve(true)
+      })
+      req.on('response', () => resolve(false))
+      req.on('error', () => resolve(false))
+      req.end()
+    })
+    assert.equal(got101, true, 'the WS handshake must reach the upstream (req close must not abort it)')
+  } finally {
+    server!.close()
+    upstream.close()
+  }
 })

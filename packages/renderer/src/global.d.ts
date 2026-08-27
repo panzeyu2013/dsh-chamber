@@ -102,7 +102,11 @@ export interface ChamberHostGraphState {
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh
  *  exec failure / unparseable patch) — loud, never a silent "not injected". */
 export type ChamberInjectionState =
-  | { ok: true; hostGraph: ChamberHostGraphState }
+  | {
+    ok: true
+    hostGraph: ChamberHostGraphState
+    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
+  }
   | { ok: false; error: string }
 
 /** Remote plugin manifest projection (design 13 §4.3): the remote profile
@@ -206,7 +210,7 @@ export interface DesktopSshSurface {
   plugin_list(id: string): Promise<{ ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }>
   /** Apply plugin add/remove (design 13 §4.5): main re-validates, execs serially,
    *  restarts (unless deferred), asserts, and re-checks readiness. */
-  plugin_apply(id: string, input: PluginApplyInput): Promise<{ ok: true; result: PluginApplyResult } | { ok: false; error: string }>
+  plugin_apply(id: string, input: PluginApplyInput): Promise<{ ok: true; result: PluginApplyResult } | { ok: true; cancelled: true } | { ok: false; error: string }>
   /** Local plugin manifest (design 13 §4.3): main reads the authoritative local
    *  profile path (never dsh-chamber:info.dshHome). */
   local_plugin_list(): Promise<{ ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }>
@@ -246,6 +250,7 @@ export type SshConfigDiscovery =
  *  patched = cordis.patch.yml gained the insert line. */
 export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
+  | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
 /** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed

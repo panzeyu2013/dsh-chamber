@@ -77,6 +77,13 @@ export class BusyEnterPolicy {
   private adopt(host: BusyEnterScope): void {
     const section = host.getSnapshot().value as { busyEnter?: BusyEnterBehavior } | undefined
     if (section === undefined || section.busyEnter === undefined) return
+    // Fail-closed wire validation (2026 review B5): an out-of-enum value
+    // (corrupt persisted state) must not render a phantom label — fall back
+    // to the default behavior instead.
+    if (!BUSY_ENTER_BEHAVIORS.includes(section.busyEnter)) {
+      this.busyEnter.set(DEFAULT_BUSY_ENTER_BEHAVIOR)
+      return
+    }
     if (this.busyEnter.getSnapshot() === section.busyEnter) return
     this.busyEnter.set(section.busyEnter)
   }

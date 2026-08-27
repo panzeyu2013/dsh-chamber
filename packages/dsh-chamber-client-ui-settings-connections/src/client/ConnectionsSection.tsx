@@ -465,7 +465,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     if (bridge === null || pendingDelete === null) return
     setDeleting(true)
     try {
-      const next = instances.filter(instance => instance.id !== pendingDelete.id)
+      // Read-modify-write against the AUTHORITATIVE list (2026 review S5):
+      // the render-closure `instances` snapshot may lag an external push.
+      const current = await bridge.instances_get()
+      const next = current.filter(instance => instance.id !== pendingDelete.id)
       // The main process is authoritative (it drops invalid entries loudly);
       // adopt its saved list instead of trusting the local filter.
       const saved = await bridge.instances_set(next)
@@ -476,14 +479,21 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         delete copy[pendingDelete.id]
         return copy
       })
-      clearOpError(pendingDelete.id)
+      // Loud-failure invariant (2026 review): instances_set carries NO error
+      // channel — a refused save returns the current registry. If the
+      // deletion did not land, say so instead of a silent no-op.
+      if (saved.some(instance => instance.id === pendingDelete.id)) {
+        setOpError(prev => ({ ...prev, [pendingDelete.id]: '删除未生效：主进程拒绝了该变更（实例数量上限或状态目录不可写？）' }))
+      } else {
+        clearOpError(pendingDelete.id)
+      }
     } catch (err) {
       // 删除失败：卡片保留，错误留在卡片与弹窗内
       setOpError(prev => ({ ...prev, [pendingDelete.id]: errorMessage(err) }))
     } finally {
       setDeleting(false)
     }
-  }, [instances, pendingDelete, clearOpError])
+  }, [pendingDelete, clearOpError])
 
   /**
    * Load the ~/.ssh/config host projections (non-secret metadata only; the
@@ -714,9 +724,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         if (draft.serviceName.trim() !== '') input.serviceName = draft.serviceName.trim()
         if (draft.remoteDshHome.trim() !== '') input.remoteDshHome = draft.remoteDshHome.trim()
       }
+      // Read-modify-write against the AUTHORITATIVE list (2026 review S5).
+      const current = await bridge.instances_get()
       const next = editing === 'new'
-        ? [...instances, input]
-        : instances.map(instance => instance.id === editing.id ? { ...input, id: instance.id } : instance)
+        ? [...current, input]
+        : current.map(instance => instance.id === editing.id ? { ...input, id: instance.id } : instance)
       // Password auth (design 05 §8): forward the form's TRANSIENT password
       // to the main process (held there in memory + plaintext mirror for
       // restart auto-connect; never in the registry above, never logged).
@@ -727,8 +739,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // the user sees why.
       const savedId = editing === 'new' ? input.id : editing.id
       const result = draft.kind === 'gateway'
-        ? await saveHostWithGatewayToken(bridge, instances, next, savedId, draft.gatewayToken)
-        : await saveHostWithPassword(bridge, instances, next, savedId, draft.password)
+        ? await saveHostWithGatewayToken(bridge, current, next, savedId, draft.gatewayToken)
+        : await saveHostWithPassword(bridge, current, next, savedId, draft.password)
       setInstances(result.instances)
       if (!result.ok) {
         setFormError(result.error)

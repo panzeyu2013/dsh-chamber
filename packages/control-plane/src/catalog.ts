@@ -21,7 +21,12 @@
  *
  * All row APIs stay synchronous and write-through: they return only after the
  * atomic disk commit succeeds; failure rolls the in-memory document back and
- * throws to the lifecycle/API caller.
+ * throws to the lifecycle/API caller. EXCEPTION (2026 audit M13): the runtime
+ * projections status/dshPort/error are written by the host-management layer
+ * BEST-EFFORT — local-connection setState catches a persist failure, logs it
+ * loud and advances the in-memory machine regardless (runtime facts are
+ * projections, never authoritative; the next transition re-attempts the
+ * write). User-editable fields (label/accentColor) keep strict write-through.
  */
 
 import { join } from 'node:path'

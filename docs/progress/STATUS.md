@@ -251,6 +251,11 @@
   VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径、Finder 下拉在
   vendor 头部的定位/层叠、远程来源仅 vscode。契约见
   `docs/design/16-vscode-deeplink.md` / `docs/design/20-open-in-registry.md`。
+  `docs/design/16-vscode-deeplink.md` / `docs/design/17-open-in-registry.md`。
+  （2026-09 打磨：下拉行改为 图标 + 短应用名，OpenChamber OpenInAppButton
+  样式；Finder 使用系统 Finder 图标（darwin，finder-icon.png），非 darwin
+  保留中性文件夹标记；按钮组 hover 一体化 + 图标圆角微调；主按钮
+  tooltip/aria-label 长句文案不变，无契约变化。）
 - **Git Worktree 插件（设计 08，v1 已落地）**：M4 尚余真实远程 Linux +
   Git 仓库的端到端验收（含首次 ready-time seed 后重启生效、Git LFS/filter
   提示边界）。契约见 `docs/design/08-git-worktree-plugin.md`。
@@ -260,6 +265,11 @@
 - **桌面端更新（设计 11，已实现）**：剩余——配置真实签名秘密后的 release
   CI 上传/公证/验签实测，双平台实机检查/下载/退出安装；mac 安装腿未配置
   Developer ID 时 settings 响亮提示手动安装。契约见 `docs/design/11-auto-update.md`。
+- **会话创建/fork 侧边栏收敛延迟修复（2026-10，已实现）**：变更拉取改独立
+  mutation 域（推送不作废；失败路径保留共享序号守卫）；创建/fork 会话的
+  「未分类」瞬时摆放由成员宽限 + parent-accounted 规则抑制（05 §2.3 /
+  06 §2.2）。剩余：本地 + 远程 SSH 实例实机验收（行出现延迟、状态图标
+  延迟、位置跳动三类症状的改善确认）。
 
 - **认证服务端 Gateway（设计 17，已实现）**：剩余发布前门禁——生产 TLS
   反代（Caddy 等）的 Host/Origin/XFF/Secure-cookie 实机验证（基础形态已在
@@ -304,6 +314,11 @@
   （处置映射见 01 §4；git/GitHub 例外：插件化，见 01 §4 / 设计 08）。
 - **不做（v1）**：跨来源移动会话、单 store 真融合（fork runtime）、会话
   实时推送同步、远程实例管理 UI 外壳。
+- **P0 信任域残余（09 §4，已缓解，架构版解决）**：远端 bundle 与 chamber 页面
+  共享高权限 bridge 的上下文。2026-11 已落地 v1 缓解——materialize/本地插件
+  add/remove 与远端 `plugin_apply`（registry add/remove，2026 final review）
+  主进程确认对话框 + `local_plugin_list` 路径脱敏；bridge 全局面与
+  横向实例数据面隔离推迟到每实例独立 WebContents 架构版（本阶段明确不做）。
 - **推迟**：flat 单列表模式（与「仅按来源分类」呈现原则张力）。
 - **设置壳偏差（持续成立）**：未连接实例不装配子 ctx（配置在目标机器上，
   物理不可达）；stub remote 无 WS 失效流；设置壳不渲染官方 SettingsRoot；

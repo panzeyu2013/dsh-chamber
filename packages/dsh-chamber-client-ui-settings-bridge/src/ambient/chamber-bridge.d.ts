@@ -10,7 +10,9 @@
  * identity/connectivity plus the client-plugin diagnostic projection.
  */
 
-/** One server row as published by the renderer App layer. */
+/** One server row as published by the renderer App layer (aligned with the
+ *  REAL aggregate-store.ts ChamberServerAggregate — 2026 review T2: the old
+ *  mirror carried a phantom `hint` and missed workspaces / aggregate / runtime). */
 export interface ChamberServerAggregate {
   /** 'local' | '<transport-kind>-<id>' */
   id: string
@@ -20,7 +22,28 @@ export interface ChamberServerAggregate {
   connected: boolean
   /** Status text (ready/connecting/… projection). */
   phase: string
-  hint?: string
+  workspaces: Array<{
+    id: string
+    title: string
+    /** True only for the synthetic trailing ungrouped bucket. */
+    ungrouped?: boolean
+    sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
+  }>
+  /** True when the per-instance aggregate snapshot has actually landed. */
+  aggregateReady?: boolean
+  /** Snapshot-fetch error text from the last per-instance pull. */
+  aggregateError?: string
+  /** Runtime facts from the source's own ctx (design 06 §4). */
+  runtime?: {
+    current?: string
+    sessions: Record<string, {
+      running?: boolean
+      completed?: boolean
+      pending?: 'approval' | 'plan-review' | 'question'
+      runningSubagents?: number
+    }>
+  }
+  /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: {
     state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
     message?: string
