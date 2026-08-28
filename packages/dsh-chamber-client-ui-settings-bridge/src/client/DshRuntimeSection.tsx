@@ -2,27 +2,24 @@
  * Per-server dsh runtime section (design 18 §3.6, 2026-09 per-server 修订):
  * registered as `settings.section` id `dsh-runtime` (order 31, right after
  * agent-presets) in every instance context. Local = full management surface;
- * gateway = proxied `/chamber/runtime` restart (version read-only line);
- * ssh = `restart_service` systemd restart (版本只读行属后续阶段，当前 ssh
- * 分支只渲染重启动作与提示)。Every source gets the「重启 dsh」
+ * gateway = full per-server segment proxied through `/chamber/runtime`
+ * (status/versions/select/apply/rollback/restore-builtin/retry-apply/
+ * retry-restore/registry/restart, design 18 §9.3 + design 17 §3); ssh =
+ * `restart_service` systemd restart (版本只读行属后续阶段，当前 ssh 分支只
+ * 渲染重启动作与提示)。Every source gets the「重启 dsh」
  * action (design 18 §3.6 项 8) to refresh mounted plugins.
  *
- * STAGED DEVIATION (registered in STATUS.md M7): the gateway branch currently
- * renders a REDUCED view — the remote version line (or fallback hint) + the
- * restart button + status polling. The full per-server section content
- * (version selector / registry source / status·failure·snapshot rows /
- * mutations) routed through `/api/i/<id>/chamber/runtime/*` is a later stage;
- * the route surface (status/versions/select/apply/rollback/restore-builtin/
- * retry-apply/retry-restore/restart/registry) is already complete server-side.
- *
- * Runtime facts and mutations remain main-process authoritative. The local
- * view consumes the shared renderer projection so its action gates, status
- * copy, SemVer ordering and subscription lifecycle stay aligned with the
- * connections local-start gate.
+ * Runtime facts and mutations remain main-process/gateway-authoritative. The
+ * local view consumes the shared renderer projection so its action gates,
+ * status copy, SemVer ordering and subscription lifecycle stay aligned with
+ * the connections local-start gate; the gateway view consumes the gateway's
+ * own `/chamber/runtime` projection through the same-origin instance proxy
+ * (no token ever leaves the main process, design 17 §7.2/§12).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { SettingsBridgeKey } from '../locales.ts'
 import {
+  compareSemver,
   currentRuntimeSurface,
   formatRuntimeBytes,
   getRuntimeState,
@@ -38,6 +35,16 @@ import {
 } from '../../../../packages/renderer/src/runtime-management.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
 import { pollGatewayReady } from './gateway-runtime-poll.ts'
+import {
+  fetchRemoteRuntimeStatus,
+  fetchRemoteRuntimeVersions,
+  pollRemoteRuntimeUntilSettled,
+  remoteRuntimeAction,
+  remoteRuntimeSetRegistry,
+  remoteRuntimeStatusView,
+  type RemoteRuntimeStatus,
+  type RemoteVersions,
+} from './gateway-runtime-api.ts'
 import css from './SettingsShell.module.css'
 
 type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
@@ -97,6 +104,504 @@ export interface DshRuntimeSectionProps {
   instanceSource?: DshRuntimeSource
   /** The canonical per-instance id (local | ssh-<id> | gateway-<id>). */
   chamberInstanceId?: string
+}
+
+/**
+ * Full per-server「dsh 运行时」segment for a GATEWAY connection (design 18
+ * §3.6/§9.3, design 17 §3): every fact and action goes through the instance's
+ * same-origin `/api/i/gateway-<id>/chamber/runtime/*` proxy — the gateway's
+ * own status is the authority, the desktop never touches the token. The
+ * restart action (design 18 §3.6 项 8) stays the shared transactional flow
+ * (POST /restart 202 + pollGatewayReady) owned by the parent so the local/ssh
+ * branches keep identical semantics.
+ *
+ * Remote status is polled every ~3s (the /chamber/runtime controller stays
+ * mounted while dsh is down — applying/restart windows keep progress
+ * pollable); versions are pulled on entry and re-pulled after a status change
+ * that may have altered the cached-tree list (an install finishing). Action
+ * errors (409 refusals and failures) surface on the shared actionError row
+ * with the server's own `error` copy passed through verbatim.
+ */
+function GatewayRuntimeSection({
+  t,
+  chamberInstanceId,
+  restarting,
+  onRestartDsh,
+  restartNote,
+  actionError,
+  setActionError,
+}: {
+  t: RuntimeTranslate
+  chamberInstanceId: string
+  restarting: boolean
+  onRestartDsh: () => Promise<void>
+  restartNote: string | null
+  actionError: string | null
+  setActionError: (error: string | null) => void
+}) {
+  const STATUS_POLL_MS = 3_000
+  const [remoteStatus, setRemoteStatus] = useState<RemoteRuntimeStatus | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const [remoteVersions, setRemoteVersions] = useState<RemoteVersions | null>(null)
+  const [versionsError, setVersionsError] = useState<string | null>(null)
+  const [versionsEpoch, setVersionsEpoch] = useState(0)
+  const [selectedRemote, setSelectedRemote] = useState<string | null>(null)
+  const selectionExplicit = useRef(false)
+  const [actionBusy, setActionBusy] = useState(false)
+  const lastPhaseRef = useRef<string | null>(null)
+  const [registrySelection, setRegistrySelection] = useState(NPMJS)
+  const [customOrigin, setCustomOrigin] = useState('')
+  const [registryEditing, setRegistryEditing] = useState(false)
+  const [registryError, setRegistryError] = useState<string | null>(null)
+  const [registryBusy, setRegistryBusy] = useState(false)
+
+  // Remote status poll (design 18 §9.3 mounting discipline): the section stays
+  // live through dsh-down windows. A transient fetch failure keeps the last
+  // status beside an honest error line; a phase transition out of 'applying'
+  // re-pulls the version list (the install may have added a cached tree).
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async (): Promise<void> => {
+      try {
+        const status = await fetchRemoteRuntimeStatus(chamberInstanceId)
+        if (!cancelled) {
+          if (lastPhaseRef.current === 'applying' && status.phase !== 'applying') {
+            setVersionsEpoch((epoch) => epoch + 1)
+          }
+          lastPhaseRef.current = status.phase
+          setRemoteStatus(status)
+          setStatusError(null)
+        }
+      } catch (error) {
+        if (!cancelled) setStatusError(errorMessage(error))
+      } finally {
+        if (!cancelled) timer = setTimeout(() => { void tick() }, STATUS_POLL_MS)
+      }
+    }
+    void tick()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [chamberInstanceId])
+
+  // Version list: pulled once on entry and re-pulled after a status change
+  // (versionsEpoch bumps on an applying→settled transition or after select).
+  useEffect(() => {
+    let cancelled = false
+    fetchRemoteRuntimeVersions(chamberInstanceId)
+      .then((versions) => {
+        if (!cancelled) {
+          setRemoteVersions(versions)
+          setVersionsError(null)
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setVersionsError(errorMessage(error))
+      })
+    return () => { cancelled = true }
+  }, [chamberInstanceId, versionsEpoch])
+
+  // Descending semver order (newest first); entries that do not parse as
+  // exact semver keep their server-relative order at the tail.
+  const sortedVersions = useMemo(() => {
+    const list = remoteVersions?.versions ?? []
+    return [...list].sort((a, b) => compareSemver(b.version, a.version) ?? 0)
+  }, [remoteVersions])
+
+  const remoteActive = remoteStatus?.activeVersion ?? null
+  const latestTag = useMemo(
+    () => sortedVersions.find(entry => entry.latest)?.version ?? null,
+    [sortedVersions],
+  )
+
+  // Preserve an explicit choice across status pushes / version re-pulls;
+  // before the user chooses, the recommendation wins, then the active version
+  // (same policy as the local branch's preferredRuntimeVersion).
+  useEffect(() => {
+    if (remoteStatus === null) return
+    setSelectedRemote((current) => {
+      const stillExplicit = selectionExplicit.current
+        && current !== null
+        && sortedVersions.some(entry => entry.version === current)
+      if (!stillExplicit) selectionExplicit.current = false
+      return preferredRuntimeVersion(stillExplicit ? current : null, sortedVersions, latestTag, remoteActive)
+    })
+  }, [remoteStatus, sortedVersions, latestTag, remoteActive])
+
+  const chosenRemote = preferredRuntimeVersion(
+    selectionExplicit.current ? selectedRemote : null,
+    sortedVersions,
+    latestTag,
+    remoteActive,
+  )
+  const isActiveRemote = chosenRemote !== null && chosenRemote === remoteActive
+
+  const mutationsAllowed = remoteStatus?.mutationsAllowed !== false
+  const envGatedRemote = remoteStatus?.source === 'env'
+  // Task-gated mutation window: applying / restart-in-flight refuse 409
+  // server-side — the buttons mirror that gate instead of waiting for it.
+  const mutationBusy = remoteStatus === null
+    || !mutationsAllowed
+    || envGatedRemote
+    || remoteStatus.phase === 'applying'
+    || remoteStatus.restart === 'running'
+    || actionBusy
+    || restarting
+  const mutationDisabled = mutationBusy
+
+  const runRemoteAction = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
+    setActionBusy(true)
+    setActionError(null)
+    try {
+      await task()
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setActionBusy(false)
+    }
+  }, [setActionError])
+
+  const onApplySelected = useCallback(() => {
+    if (chosenRemote === null || isActiveRemote || mutationBusy) return
+    void runRemoteAction(async () => {
+      // select = async install job (202, progress via status).phase; after it
+      // settles, apply() arms the next-startup switch — the gateway analog of
+      // the local branch's「更新到 vY」install→pending flow (design 18 §3.6
+      // 项 3 + §9.3 route table: select records the choice WITHOUT pending,
+      // apply is the separate action that arms it).
+      const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'select', version: chosenRemote })
+      if (result.status === 202) {
+        await pollRemoteRuntimeUntilSettled(chamberInstanceId)
+      }
+      if (chosenRemote !== remoteActive) {
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'apply' })
+      }
+      // The install may have added a cached tree — refresh the selector.
+      setVersionsEpoch((epoch) => epoch + 1)
+    })
+  }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationBusy, remoteActive, runRemoteAction])
+
+  const onRollback = useCallback(() => {
+    if (chosenRemote === null || isActiveRemote || mutationBusy) return
+    void runRemoteAction(async () => {
+      // rollback arms the pending switch itself (pre-rollback stash + snapshot
+      // semantics, design 18 §3.7/§9.3); the switch lands on the next gateway
+      // restart.
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'rollback', version: chosenRemote })
+    })
+  }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationBusy, runRemoteAction])
+
+  const onRestoreBuiltin = useCallback(() => {
+    if (mutationBusy) return
+    void runRemoteAction(async () => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-builtin' })
+    })
+  }, [chamberInstanceId, mutationBusy, runRemoteAction])
+
+  const onRetryApply = useCallback(() => {
+    if (mutationBusy) return
+    void runRemoteAction(async () => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-apply' })
+    })
+  }, [chamberInstanceId, mutationBusy, runRemoteAction])
+
+  const onRetryRestore = useCallback(() => {
+    if (mutationBusy) return
+    void runRemoteAction(async () => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-restore' })
+    })
+  }, [chamberInstanceId, mutationBusy, runRemoteAction])
+
+  const registryOrigin = remoteStatus?.registry ?? ''
+  const registryMode = registryOrigin === NPMJS || registryOrigin === NPMMIRROR
+    ? registryOrigin
+    : CUSTOM_REGISTRY
+
+  useEffect(() => {
+    setRegistrySelection(registryMode)
+    if (registryMode === CUSTOM_REGISTRY) setCustomOrigin(registryOrigin)
+  }, [registryMode, registryOrigin])
+
+  const onApplyRegistry = useCallback(async (origin: string): Promise<void> => {
+    setRegistryBusy(true)
+    setRegistryError(null)
+    try {
+      await remoteRuntimeSetRegistry(chamberInstanceId, origin)
+      setRegistryEditing(false)
+    } catch (error) {
+      setRegistryError(errorMessage(error))
+    } finally {
+      setRegistryBusy(false)
+    }
+  }, [chamberInstanceId])
+
+  // Retryability derives from the server's own phase projection (the routes
+  // refuse with 409 no_retry_target otherwise): retry-apply resumes an
+  // interrupted pointer switch / snapshot failure; retry-restore resumes an
+  // interrupted data restore.
+  const canRetryApplyRemote = remoteStatus !== null
+    && (remoteStatus.phase === 'swap-attempted' || remoteStatus.phase === 'snapshot-failed')
+  const canRetryRestoreRemote = remoteStatus !== null
+    && remoteStatus.phase === 'restore-blocked'
+
+  const view = remoteStatus === null ? null : remoteRuntimeStatusView(remoteStatus)
+  const phaseBadgeKey = remoteStatus === null
+    ? null
+    : remoteStatus.phase === 'applying'
+      ? 'dshRuntimeRemotePhaseApplying'
+      : remoteStatus.phase === 'snapshot-failed'
+        ? 'dshRuntimeRemotePhaseSnapshotFailed'
+        : remoteStatus.phase === 'swap-attempted'
+          ? 'dshRuntimeRemotePhaseSwapAttempted'
+          : remoteStatus.phase === 'restore-blocked'
+            ? 'dshRuntimeRemotePhaseRestoreBlocked'
+            : 'dshRuntimeRemotePhaseIdle'
+  const sourceTag = remoteStatus === null || remoteStatus.source === null
+    ? null
+    : remoteStatus.source === 'env'
+      ? t('dshRuntimeEnvTag')
+      : remoteStatus.source === 'user-selected'
+        ? t('dshRuntimeUserTag')
+        : t('dshRuntimeRemoteAnchorTag')
+
+  const statusText = useMemo(() => {
+    if (view === null) return null
+    const title = t(view.titleKey, view.params)
+    return view.detail !== null && view.detail !== ''
+      ? `${title}：${view.detail}`
+      : title
+  }, [view, t])
+
+  const restartActions = (
+    <>
+      <div className={css.updateStatusLine}>
+        <button
+          type="button"
+          className={css.updateButton}
+          onClick={() => { void onRestartDsh() }}
+          disabled={restarting}
+        >
+          {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
+        </button>
+      </div>
+      {restartNote !== null && <p className={css.generalHint} role="status">{restartNote}</p>}
+      {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
+    </>
+  )
+
+  if (remoteStatus === null) {
+    return (
+      <div className={css.generalGroup}>
+        <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
+        {statusError !== null ? (
+          <>
+            <p className={css.generalError} role="alert">{t('dshRuntimeRemoteUnavailable')}</p>
+            <p className={css.generalError} role="alert">{statusError}</p>
+          </>
+        ) : (
+          <p className={css.generalHint} role="status">{t('dshRuntimeRemoteLoading')}</p>
+        )}
+        {restartActions}
+      </div>
+    )
+  }
+
+  return (
+    <div className={css.generalGroup}>
+      <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
+
+      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupStatus')}</h4>
+
+      <div className={css.updateVersionRow}>
+        <p className={css.updateRow}>
+          {t('updateCurrentVersion', { version: remoteStatus.activeVersion ?? t('dshRuntimeVersionUnknown') })}
+          {sourceTag !== null ? `（${sourceTag}）` : ''}
+          {' '}
+          {/* A FATAL metadata block projects phase idle while
+              startupBlockedReason is set — an idle badge next to a blocked
+              status line would be contradictory, so suppress it there. */}
+          {phaseBadgeKey !== null
+            && !(view !== null && view.kind === 'blocked' && remoteStatus.phase === 'idle') && (
+            <span className={css.runtimeBadge} role="status">{t(phaseBadgeKey)}</span>
+          )}
+        </p>
+      </div>
+      <div className={css.updateStatus} aria-live="polite">
+        <p className={css.updateStatusText}>{statusText}</p>
+      </div>
+
+      {statusError !== null && <p className={css.generalHint} role="status">{statusError}</p>}
+      {remoteStatus.connectionState !== null && remoteStatus.connectionState !== 'ready' && (
+        <p className={css.generalHint} role="status">
+          {t('dshRuntimeRemoteConnState', { state: remoteStatus.connectionState })}
+        </p>
+      )}
+      {envGatedRemote && <p className={css.generalHint}>{t('dshRuntimeRemoteEnvHint')}</p>}
+      {remoteStatus.pending !== null && remoteStatus.phase !== 'applying' && (
+        <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: remoteStatus.pending })}</p>
+      )}
+      {/* Failure rows stay honest and separate when the status line does not
+          already carry them (a failed view renders operationError in its
+          title; a blocked view renders startupBlockedReason in its detail). */}
+      {view !== null && view.kind !== 'failed' && remoteStatus.operationError !== null
+        && remoteStatus.operationError !== '' && (
+        <p className={css.generalError} role="alert">{remoteStatus.operationError}</p>
+      )}
+      {view !== null && view.kind !== 'blocked' && remoteStatus.startupBlockedReason !== null
+        && remoteStatus.startupBlockedReason !== '' && (
+        <p className={css.generalError} role="alert">{remoteStatus.startupBlockedReason}</p>
+      )}
+
+      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupActions')}</h4>
+
+      <label className={css.generalRow}>
+        <span className={css.generalFieldLabel}>{t('dshRuntimeSelectVersion')}</span>
+        <div className={css.runtimeSelectRow}>
+          <select
+            className={css.updateButton}
+            value={chosenRemote ?? ''}
+            disabled={mutationDisabled}
+            onChange={(event) => {
+              selectionExplicit.current = true
+              setSelectedRemote(event.target.value)
+            }}
+          >
+            {sortedVersions.length === 0
+              ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
+              : sortedVersions.map((entry) => (
+                <option key={entry.version} value={entry.version}>
+                  v{entry.version}
+                  {entry.version === remoteActive ? ` · ${t('current')}` : ''}
+                  {entry.latest ? ` · ${t('dshRuntimeLatestTag')}` : ''}
+                  {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
+                  {entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
+                </option>
+              ))}
+          </select>
+          <button
+            type="button"
+            className={css.updatePrimaryButton}
+            onClick={() => { void onApplySelected() }}
+            disabled={mutationDisabled || isActiveRemote || chosenRemote === null}
+          >
+            {actionBusy ? t('dshRuntimeRemoteApplying') : t('dshRuntimeRemoteApplyAction')}
+          </button>
+        </div>
+      </label>
+
+      {versionsError !== null && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeRemoteVersionsUnavailable', { error: versionsError })}
+        </p>
+      )}
+
+      <div className={css.updateStatusLine}>
+        {!isActiveRemote && chosenRemote !== null && (
+          <button
+            type="button"
+            className={css.updateButton}
+            onClick={() => { void onRollback() }}
+            disabled={mutationDisabled}
+          >
+            {t('dshRuntimeActionRollback')} v{chosenRemote}
+          </button>
+        )}
+        <button
+          type="button"
+          className={css.updateButton}
+          onClick={() => { void onRestoreBuiltin() }}
+          disabled={mutationDisabled}
+        >
+          {t('dshRuntimeResetBuiltin')}
+        </button>
+        {canRetryApplyRemote && (
+          <button type="button" className={css.updateButton} onClick={() => { void onRetryApply() }} disabled={mutationDisabled}>
+            {t('dshRuntimeRetryApply')}
+          </button>
+        )}
+        {canRetryRestoreRemote && (
+          <button type="button" className={css.updateButton} onClick={() => { void onRetryRestore() }} disabled={mutationDisabled}>
+            {t('dshRuntimeRetryRestore')}
+          </button>
+        )}
+      </div>
+
+      {restartActions}
+
+      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupSource')}</h4>
+
+      <label className={css.generalRow}>
+        <span className={css.generalFieldLabel}>{t('dshRuntimeRegistryLabel')}</span>
+        {registryEditing ? (
+          <div className={css.runtimeSelectRow}>
+            <select
+              className={css.updateButton}
+              value={registrySelection}
+              disabled={mutationDisabled}
+              onChange={(event) => {
+                const value = event.target.value
+                setRegistrySelection(value)
+                if (value !== CUSTOM_REGISTRY) setCustomOrigin('')
+              }}
+            >
+              <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
+              <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
+              <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
+            </select>
+            {registrySelection === CUSTOM_REGISTRY && (
+              <input
+                type="url"
+                className={css.updateButton}
+                value={customOrigin}
+                placeholder="https://registry.example.com"
+                disabled={mutationDisabled}
+                onChange={(event) => setCustomOrigin(event.target.value)}
+              />
+            )}
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={mutationDisabled
+                || (registrySelection === CUSTOM_REGISTRY && customOrigin.trim() === '')}
+              onClick={() => {
+                void onApplyRegistry(
+                  registrySelection === CUSTOM_REGISTRY ? customOrigin.trim() : registrySelection,
+                )
+              }}
+            >
+              {registryBusy ? t('dshRuntimeRegistryApplying') : t('dshRuntimeRegistryApply')}
+            </button>
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={registryBusy}
+              onClick={() => setRegistryEditing(false)}
+            >
+              {t('dshRuntimeRegistryCancel')}
+            </button>
+          </div>
+        ) : (
+          <div className={css.updateStatusLine}>
+            <span className={css.generalHint}>
+              {t('dshRuntimeRegistryCurrent', { origin: registryOrigin !== '' ? registryOrigin : '—' })}
+            </span>
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={mutationDisabled}
+              onClick={() => setRegistryEditing(true)}
+            >
+              {t('dshRuntimeRegistryEdit')}
+            </button>
+          </div>
+        )}
+      </label>
+
+      {registryError !== null && <p className={css.generalError} role="alert">{registryError}</p>}
+    </div>
+  )
 }
 
 export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstanceId }: DshRuntimeSectionProps) {
@@ -423,44 +928,40 @@ export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstance
     }
   }, [progress, progressPercent, phase, t])
 
-  // Remote gateway facts (design 18 §3.6): the gateway branch projects the
-  // server's own runtime status through its /chamber/runtime surface.
-  const [remoteRuntime, setRemoteRuntime] = useState<{ activeVersion?: unknown; connectionState?: unknown } | null>(null)
-  useEffect(() => {
-    if (instanceSource !== 'gateway' || chamberInstanceId === undefined) return
-    // Never show the previous server's version while the new one loads (M4).
-    setRemoteRuntime(null)
-    let cancelled = false
-    fetch(`/api/i/${chamberInstanceId}/chamber/runtime/status`, { credentials: 'same-origin' })
-      .then(async response => (response.status === 200 ? response.json() : null))
-      .then((payload) => {
-        if (!cancelled && payload !== null) setRemoteRuntime(payload as { activeVersion?: unknown; connectionState?: unknown })
-      })
-      .catch(() => { /* unavailable surface renders the honest hint row */ })
-    return () => { cancelled = true }
-  }, [instanceSource, chamberInstanceId])
-
-  // Remote sources (design 18 §3.6 分支): version read-only + 重启 dsh.
-  if (instanceSource !== 'local') {
+  // Remote sources (design 18 §3.6 分支): gateway = full per-server segment
+  // proxied through /chamber/runtime (§9.3); ssh = version read-only +
+  // restart-service action.
+  if (instanceSource === 'gateway') {
+    if (chamberInstanceId === undefined) {
+      // Defensive: never render the management surface without a canonical
+      // id — a render-time mismatch falls back to the honest unavailable hint.
+      return (
+        <div className={css.generalGroup}>
+          <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
+          <p className={css.generalHint}>{t('dshRuntimeRemoteUnavailable')}</p>
+        </div>
+      )
+    }
+    // keyed per server: switching the selected server remounts a fresh section
+    // (never the previous server's status/versions/selection).
+    return (
+      <GatewayRuntimeSection
+        key={chamberInstanceId}
+        t={t}
+        chamberInstanceId={chamberInstanceId}
+        restarting={restarting}
+        onRestartDsh={onRestartDsh}
+        restartNote={restartNote}
+        actionError={actionError}
+        setActionError={setActionError}
+      />
+    )
+  }
+  if (instanceSource === 'ssh') {
     return (
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
-        {instanceSource === 'ssh' && (
-          <p className={css.generalHint}>{t('dshRuntimeRemoteSshNote')}</p>
-        )}
-        {instanceSource === 'gateway' && (
-          <p className={css.generalHint}>
-            {remoteRuntime?.activeVersion !== undefined
-              ? `${t('dshRuntimeRemoteVersion')} v${String(remoteRuntime.activeVersion)}`
-              : t('dshRuntimeRemoteGatewayNote')}
-          </p>
-        )}
-        {instanceSource === 'gateway' && remoteRuntime?.connectionState !== undefined
-          && remoteRuntime.connectionState !== 'ready' && (
-          <p className={css.generalHint} role="status">
-            {t('dshRuntimeRemoteConnState', { state: String(remoteRuntime.connectionState) })}
-          </p>
-        )}
+        <p className={css.generalHint}>{t('dshRuntimeRemoteSshNote')}</p>
         <div className={css.updateStatusLine}>
           <button
             type="button"
@@ -468,11 +969,7 @@ export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstance
             onClick={() => { void onRestartDsh() }}
             disabled={restarting}
           >
-            {restarting
-              ? t('dshRuntimeRestarting')
-              : instanceSource === 'ssh'
-                ? t('dshRuntimeRestartRemoteAction')
-                : t('dshRuntimeRestartAction')}
+            {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartRemoteAction')}
           </button>
         </div>
         {restartNote !== null && <p className={css.generalHint} role="status">{restartNote}</p>}

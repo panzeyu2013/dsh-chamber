@@ -24,12 +24,10 @@
     端到端回归（分支仅 `deriveRuntimeSource` 有派生测试）。
   - restart-local 测试用立即 resolve 的 stop mock，未覆盖真实 1s
     SIGTERM→SIGKILL 窗口与 grace 期间健康计时器交互。
-  - React 组件级缺口：gateway `remoteRuntime` useEffect 的 server 切换重取/
-    取消、`fence.busy → restart reject → actionError` 链路、ssh 分支 hostId
-    截取均无组件单测（纯函数已测）。
-  - settings gateway 分支当前为缩减视图（remote 版本行 + 重启按钮 + 轮询）；
-    完整 per-server 段（版本选择器/状态/快照/变更经
-    `/api/i/<id>/chamber/runtime/*` 代理）属后续阶段（登记偏差）。
+  - React 组件级缺口：gateway 分支（服务器切换重取/取消、动作失败链路）与
+    ssh 分支 hostId 截取均无组件单测（纯函数与 API 客户端已测：
+    `gateway-runtime-api` 的状态视图映射/错误分类/settle 轮询/解析器；
+    server 切换重取/取消经 keyed remount + effect cancelled 守卫实现）。
   - 该机 ZFS 下 pnpm 全新 store 克隆偶发 `ERR_PNPM_EAGAIN`（瞬时、失败投影
     诚实、重试恢复）；系统化缓解（克隆并发上限）留待后续。
   契约见 `docs/design/18-dsh-runtime-version.md` §9/§3.6。

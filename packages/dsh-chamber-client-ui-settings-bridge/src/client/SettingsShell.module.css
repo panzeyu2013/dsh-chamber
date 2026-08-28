@@ -1016,3 +1016,18 @@
   0% { transform: translateX(-100%); }
   100% { transform: translateX(250%); }
 }
+
+/* Compact phase chip on the gateway runtime version row (design 18 §3.6
+   A.1 phase badge; the `.badge` vocabulary: pill, hairline border, 11px). */
+.runtimeBadge {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 18px;
+  padding: 1px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
