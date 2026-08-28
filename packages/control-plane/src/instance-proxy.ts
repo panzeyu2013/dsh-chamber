@@ -7,16 +7,24 @@
  *
  *   /api/i/local/*       → the managed local web profile (baseUrl derived
  *                          from the local connection's dshPort)
- *   /api/i/ssh-<id>/*    → the tunnel registered by the desktop main process
- *                          (registerInstanceTransport with connectionId
- *                          `ssh:<id>`, design 05 §3.3)
+ *   /api/i/dsh-<id>/*    → the dsh-kind target registered by the desktop main
+ *                          process (registerInstanceTransport with
+ *                          connectionId `dsh:<id>`; `ssh:<id>`/`ssh-<id>`
+ *                          remain accepted as the legacy spelling of the same
+ *                          kind, design 17 §2.2 migration)
+ *   /api/i/gateway-<id>/* → the gateway-kind target registered with
+ *                          connectionId `gateway:<id>` (design 17 §9.3:
+ *                          http(s) direct origin, optional bounded
+ *                          Authorization/Cookie injection)
  *
  * Prefix stripping: the /api/i/<id> prefix is removed and the remaining path
  * is forwarded verbatim — the instance anchors everything under its /api
  * root (dsh's connection node half registers the whole route tree at
- * API_PATH '/api'). The Host header is kept as the instance's own
- * 127.0.0.1:<port> so the instance's --trusted-host fence admits the request
- * (02 §2.1); the login cookie and Authorization are never forwarded.
+ * API_PATH '/api'). The Host header is kept as the target's own authority
+ * (127.0.0.1:<port> for local/ssh) so the instance's --trusted-host fence
+ * admits the request (02 §2.1); browser-supplied login cookie and
+ * Authorization are never forwarded — only a gateway transport's bounded
+ * registered headers ride upstream (design 17 §9.3).
  *
  * v1 has no authentication boundary: /api/i/* is directly reachable, HTTP
  * and WS upgrade alike, with no session required.
@@ -66,6 +74,7 @@ import {
   forwardUpgrade,
   getProcessBufferedRequestBytes,
   rejectUpgrade,
+  SPKI_PIN_PATTERN,
   writeError,
 } from './proxy-forward.ts'
 import type { Logger } from './types.ts'
@@ -148,7 +157,10 @@ export interface InstanceProxyDeps {
 export interface InstanceProxy {
   handleHttp(req: ProxyRequest, res: ProxyResponse): Promise<void>
   handleUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer): Promise<void>
-  registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>): void
+  /** `opts.tls.spkiPin` (S23): optional gateway-only https SPKI certificate
+   * pin — forwarded with the target so proxy-forward gates the outbound
+   * https connection on it (a mismatch is an explicit 502 upstream_failed). */
+  registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: { tls?: { spkiPin?: string }; authority?: string }): void
   unregisterTransport(connectionId: string): void
   getDiagnostics(): InstanceProxyDiagnostics
   /** Force-close every spliced WS stream (control-plane stop): an upgraded
@@ -157,12 +169,14 @@ export interface InstanceProxy {
   closeAllStreams(): void
 }
 
-/** Whether an id is a valid /api/i/<id> segment ('local', 'ssh-<id>' or
- * 'gateway-<id>'; design 17 §7 adds the gateway kind). */
-export function parseInstanceId(id: string): 'local' | 'ssh' | 'gateway' | null {
+/** Whether an id is a valid /api/i/<id> segment ('local', 'dsh-<id>' or
+ * 'gateway-<id>'; 'ssh-<id>' is accepted as the legacy spelling of the dsh
+ * kind — design 17 §2.2 keeps the old source ids deep-linkable). */
+export function parseInstanceId(id: string): 'local' | 'dsh' | 'gateway' | null {
   if (id === 'local') return 'local'
-  if (/^ssh-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'ssh'
+  if (/^dsh-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'dsh'
   if (/^gateway-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'gateway'
+  if (/^ssh-[a-zA-Z0-9_-]{1,64}$/.test(id)) return 'dsh' // legacy alias
   return null
 }
 
@@ -199,11 +213,14 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const maxConcurrentWsStreams = deps.maxConcurrentWsStreams ?? MAX_CONCURRENT_WS_STREAMS
   const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
-  /** connectionId ('ssh:<id>' / 'gateway:<id>') → target record (design 05
-   * §3.3 + design 17 §7). Local is never registered — its baseUrl is
-   * derived from the managed dshPort. A gateway record carries extra headers
-   * (the shared bearer token) injected at forward time, never in the registry. */
-  interface TransportRecord { baseUrl: string; headers?: Record<string, string> }
+  /** connectionId ('dsh:<id>' / 'gateway:<id>'; 'ssh:<id>' legacy alias of
+   * the dsh kind) → target record (design 05 §3.3 + design 17 §9.3). Local
+   * is never registered — its baseUrl is derived from the managed dshPort. A
+   * gateway record carries the optional bounded extra headers (Authorization
+   * Bearer / Cookie dsh_gateway_session) injected at forward time, never in
+   * the registry, and the optional https SPKI certificate pin (S23) applied
+   * by proxy-forward to every outbound connection to the target. */
+  interface TransportRecord { baseUrl: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string }
   const transports = new Map<string, TransportRecord>()
   const counters: ProxyForwardCounters = { requests: 0, failures: 0, activeStreams: 0, bufferedRequestBytes: 0 }
   let activeHttpRequests = 0
@@ -293,7 +310,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local instance is not ready', logger)
       return null
     }
-    // ssh-<id> → ssh:<id>; gateway-<id> → gateway:<id>.
+    // dsh-<id> → dsh:<id>; gateway-<id> → gateway:<id>; ssh-<id> → ssh:<id>
+    // (legacy alias of the dsh kind, kept for migrated registrations).
     const kind = id.slice(0, id.indexOf('-'))
     const connectionId = `${kind}:${id.slice(kind.length + 1)}`
     const record = transports.get(connectionId)
@@ -349,7 +367,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           id: parsed.id,
           responseBasePath: `/api/i/${parsed.id}`,
           ...(connectionId === null ? {} : { streamOwner: connectionId }),
-        }, target.headers)
+        }, target.headers, target.tls, target.authority)
       } catch (error) {
         releaseRequest()
         counters.failures += 1
@@ -407,7 +425,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           ...forwardDeps,
           id: parsed.id,
           ...(connectionId === null ? {} : { streamOwner: connectionId }),
-        }, target.headers)
+        }, target.headers, target.tls, target.authority)
       } catch (error) {
         releaseHandshake()
         counters.failures += 1
@@ -417,17 +435,22 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     },
 
     /**
-     * Register a remote instance transport (design 05 §3.3): the desktop
-     * main process reports a ready tunnel as connectionId `ssh:<id>` with
-     * baseUrl `http://127.0.0.1:<tunnel localPort>`. Re-registration
-     * replaces the previous baseUrl (tunnel re-established on a new port).
+     * Register a remote instance transport (design 05 §3.3 + design 17 §9.3):
+     * the desktop main process reports a ready target as connectionId
+     * `dsh:<id>` (ssh tunnel, legacy `ssh:<id>` spelling accepted) or
+     * `gateway:<id>` (ssh tunnel or http(s) direct origin). Re-registration
+     * replaces the previous baseUrl/headers (tunnel re-established on a new
+     * port) and revokes traffic already authenticated through the old record.
      */
-    registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>) {
+    registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: { tls?: { spkiPin?: string }; authority?: string }) {
       if (typeof connectionId !== 'string' || connectionId === '' || typeof baseUrl !== 'string' || baseUrl === '') {
         throw new TypeError('registerInstanceTransport: connectionId and baseUrl must be non-empty strings')
       }
-      if (!/^(ssh|gateway):[a-zA-Z0-9_-]{1,64}$/.test(connectionId)) {
-        throw new TypeError('registerInstanceTransport: connectionId must be "ssh:<id>" or "gateway:<id>"')
+      // dsh:<id> / gateway:<id>; ssh:<id> stays accepted as the legacy
+      // spelling of the dsh kind (design 17 §2.2 migration keeps old tunnel
+      // connectionIds valid).
+      if (!/^(dsh|gateway|ssh):[a-zA-Z0-9_-]{1,64}$/.test(connectionId)) {
+        throw new TypeError('registerInstanceTransport: connectionId must be "dsh:<id>", "gateway:<id>" or the legacy "ssh:<id>"')
       }
       let target: URL
       try {
@@ -440,41 +463,105 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         throw new TypeError('registerInstanceTransport: baseUrl must be an http(s) URL')
       }
       if (!isGateway) {
-        // ssh tunnel: loopback origin only (design 05 §3.3) — one combined
-        // check keeps the historical message (the test asserts /loopback/).
+        // ssh tunnel shape (the dsh kind, incl. the legacy ssh spelling):
+        // loopback origin only (design 05 §3.3) — one combined check keeps
+        // the historical message (the test asserts /loopback/).
         if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)
           || target.username !== '' || target.password !== '' || target.pathname !== '/'
           || target.search !== '' || target.hash !== '') {
           throw new TypeError('registerInstanceTransport: ssh baseUrl must be a loopback origin')
         }
+        // dsh targets never carry credentials: no header injection, ever
+        // (design 17 §2.1 — kind decides target semantics, not transport).
         if (extraHeaders !== undefined) {
-          throw new TypeError('registerInstanceTransport: ssh transports cannot inject request headers')
+          throw new TypeError('registerInstanceTransport: dsh transports cannot inject request headers')
         }
       } else {
-        // gateway: https origin, non-loopback allowed (design 17 §7).
-        if (target.protocol !== 'https:') {
-          throw new TypeError('registerInstanceTransport: gateway baseUrl must be https')
-        }
+        // gateway: http(s) origin, non-loopback allowed (design 17 §9.3; http
+        // = the user's explicit insecureHttp choice, https = the default).
         if (target.username !== '' || target.password !== '' || target.pathname !== '/'
           || target.search !== '' || target.hash !== '') {
           throw new TypeError('registerInstanceTransport: gateway baseUrl must be an origin (no credentials/path/query)')
         }
+        // 0..2 sanctioned headers, each bounded and whitelist-checked:
+        // Authorization (Bearer) and Cookie (dsh_gateway_session) — anything
+        // else, duplicates or unbounded values are rejected.
         const entries = extraHeaders === undefined ? [] : Object.entries(extraHeaders)
-        if (entries.length !== 1 || entries[0][0].toLowerCase() !== 'authorization') {
-          throw new TypeError('registerInstanceTransport: gateway transport requires exactly one Authorization header')
+        const injected: Record<string, string> = {}
+        for (const [name, rawValue] of entries) {
+          const lower = name.toLowerCase()
+          if (lower === 'authorization') {
+            if (injected.authorization !== undefined) {
+              throw new TypeError('registerInstanceTransport: gateway Authorization may be given at most once')
+            }
+            if (typeof rawValue !== 'string' || !rawValue.startsWith('Bearer ')
+              || rawValue.length <= 'Bearer '.length || rawValue.length > 'Bearer '.length + 4096
+              || /[\r\n\0]/.test(rawValue)) {
+              throw new TypeError('registerInstanceTransport: gateway Authorization must be a bounded Bearer credential')
+            }
+            injected.authorization = rawValue
+          } else if (lower === 'cookie') {
+            if (injected.cookie !== undefined) {
+              throw new TypeError('registerInstanceTransport: gateway Cookie may be given at most once')
+            }
+            if (typeof rawValue !== 'string' || !rawValue.startsWith('dsh_gateway_session=')
+              || rawValue.length <= 'dsh_gateway_session='.length
+              || rawValue.length > 'dsh_gateway_session='.length + 4096
+              || /[\r\n\0;,]/.test(rawValue)) {
+              throw new TypeError('registerInstanceTransport: gateway Cookie must be a bounded dsh_gateway_session credential')
+            }
+            injected.cookie = rawValue
+          } else {
+            throw new TypeError(`registerInstanceTransport: gateway transports may only inject Authorization/Cookie headers (got "${lower}")`)
+          }
         }
-        const credential = entries[0][1]
-        if (typeof credential !== 'string' || !credential.startsWith('Bearer ')
-          || credential.length <= 'Bearer '.length || credential.length > 'Bearer '.length + 4096
-          || /[\r\n\0]/.test(credential)) {
-          throw new TypeError('registerInstanceTransport: gateway Authorization must be a bounded Bearer credential')
-        }
-        extraHeaders = { authorization: credential }
+        extraHeaders = Object.keys(injected).length === 0 ? undefined : injected
       }
-      // Clone the only sanctioned header so caller mutation cannot alter a
+      // S23: an SPKI certificate pin is a gateway-only, https-only gate
+      // (design 17 §13.4.2) — a dsh/ssh target has no TLS trust decision to
+      // pin, and http 模式无 TLS 层，pin 无意义且不得声称任何 TLS 保护. Format
+      // mirrors the spec gate (64-hex sha256, case-insensitive compare at
+      // verify time).
+      const tlsSpkiPin = opts?.tls?.spkiPin
+      if (tlsSpkiPin !== undefined) {
+        if (!isGateway) {
+          throw new TypeError('registerInstanceTransport: dsh transports cannot use an SPKI certificate pin')
+        }
+        if (!SPKI_PIN_PATTERN.test(tlsSpkiPin)) {
+          throw new TypeError('registerInstanceTransport: spkiPin must be a 64-character hex sha256 of the SPKI DER')
+        }
+        if (target.protocol !== 'https:') {
+          throw new TypeError('registerInstanceTransport: an SPKI pin requires an https gateway origin')
+        }
+      }
+      // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): an ssh-tunneled
+      // gateway target connects to the loopback tunnel endpoint but must
+      // present the REMOTE gateway authority in the Host header — the
+      // gateway's request policy requires the authority port to equal its own
+      // listen port, which the tunnel's local port can never satisfy. The
+      // override is gateway-only (a dsh target has no Host policy to satisfy)
+      // and shape-bounded: a host[:port] authority without path/query/
+      // userinfo/fragment.
+      const authority = opts?.authority
+      if (authority !== undefined) {
+        if (!isGateway) {
+          throw new TypeError('registerInstanceTransport: dsh transports cannot override the upstream Host authority')
+        }
+        if (typeof authority !== 'string' || authority.length > 253
+          || !/^(?:[a-zA-Z0-9._-]+|\[[0-9a-fA-F:.]+\])(?::\d{1,5})?$/.test(authority)
+          || authority.includes('://')) {
+          throw new TypeError('registerInstanceTransport: gateway authority must be a host[:port] without path/query/credentials')
+        }
+      }
+      // Clone the only sanctioned headers so caller mutation cannot alter a
       // live transport after validation.
       if (transports.has(connectionId)) revokeTransportTraffic(connectionId)
-      transports.set(connectionId, { baseUrl, ...(extraHeaders !== undefined ? { headers: { ...extraHeaders } } : {}) })
+      transports.set(connectionId, {
+        baseUrl,
+        ...(extraHeaders !== undefined ? { headers: { ...extraHeaders } } : {}),
+        ...(tlsSpkiPin === undefined ? {} : { tls: { spkiPin: tlsSpkiPin } }),
+        ...(authority === undefined ? {} : { authority }),
+      })
       logger.log(`instance-proxy: transport registered ${connectionId} -> ${target.host}`)
     },
 

@@ -22,12 +22,80 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { ClientRequest, IncomingMessage } from 'node:http'
+import type { TLSSocket } from 'node:tls'
+import { createHash, X509Certificate } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
 import { startWsHeartbeat } from './ws-heartbeat.ts'
 
 /** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
 export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
+
+// ---------------------------------------------------------------------------
+// SPKI certificate pinning (design 17 §13.4.2 / S23): an https-only optional
+// gate for gateway transports — the user pins the expected server
+// certificate's SPKI fingerprint and the reverse proxy rejects any peer
+// whose public key does not match (the identity probe side lives in the
+// desktop's gateway-provider.ts, with an identical copy of these helpers).
+//
+// Mechanism note (verified on Node 22.22.3): checkServerIdentity's error
+// return is silently IGNORED when `rejectUnauthorized: false`, and with
+// `rejectUnauthorized: true` an untrusted (internal-CA) chain fails BEFORE
+// checkServerIdentity runs — so neither combination can enforce a pin against
+// an internal CA. The pin check therefore runs on the TLS socket's
+// 'secureConnect' event with `rejectUnauthorized: false` (the pin alone
+// decides trust) and `agent: false` (every pinned request opens a fresh
+// connection, so 'secureConnect' always fires): a mismatch destroys the
+// request with SPKI_PIN_MISMATCH_CODE, which the caller's upstream 'error'
+// path turns into an explicit 502 upstream_failed.
+// ---------------------------------------------------------------------------
+
+/** A valid SPKI pin: exactly 64 hex chars (hex sha256 of the SPKI DER). */
+export const SPKI_PIN_PATTERN = /^[0-9a-fA-F]{64}$/
+
+/** Error code attached to the destroy() error of a rejected pin. */
+export const SPKI_PIN_MISMATCH_CODE = 'ERR_SPKI_PIN_MISMATCH'
+
+/** The hex sha256 of a peer certificate's SPKI DER (S23) — the digest the
+ * user pins. `rawDer` is the peer certificate's DER (TLSSocket
+ * getPeerCertificate().raw): X509Certificate exposes the KeyObject whose
+ * SPKI export is the canonical fingerprint. */
+export function spkiPinOfPeerCertificate(rawDer: Buffer): string {
+  return createHash('sha256')
+    .update(new X509Certificate(rawDer).publicKey.export({ type: 'spki', format: 'der' }))
+    .digest('hex')
+}
+
+/** Attach the SPKI pin gate to an outbound https request (S23): on TLS
+ * handshake completion the peer certificate's SPKI digest is compared
+ * case-insensitively with the pinned value; a mismatch destroys the request
+ * with SPKI_PIN_MISMATCH_CODE. Callers must ALSO pass `rejectUnauthorized:
+ * false` (the pin replaces CA trust for this connection — the internal-CA use
+ * case) and `agent: false` (so 'secureConnect' always fires). MUST stay
+ * byte-for-byte consistent with gateway-provider.ts's copy of this helper —
+ * the packaged desktop cannot import the control plane (workspace TS sources
+ * are excluded from the asar), so the two files keep identical
+ * implementations. */
+export function attachSpkiPinVerifier(req: ClientRequest, pin: string): void {
+  req.on('socket', (socket: NodeJS.Socket) => {
+    ;(socket as TLSSocket).once('secureConnect', () => {
+      let digest: string
+      try {
+        digest = spkiPinOfPeerCertificate((socket as TLSSocket).getPeerCertificate().raw)
+      } catch {
+        const error: NodeJS.ErrnoException = new Error('the gateway certificate could not be read for the SPKI pin check')
+        error.code = SPKI_PIN_MISMATCH_CODE
+        req.destroy(error)
+        return
+      }
+      if (digest.toLowerCase() !== pin.toLowerCase()) {
+        const error: NodeJS.ErrnoException = new Error('SPKI pin mismatch')
+        error.code = SPKI_PIN_MISMATCH_CODE
+        req.destroy(error)
+      }
+    })
+  })
+}
 
 /** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
@@ -470,8 +538,13 @@ export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwar
   }
 }
 
-/** Forward an HTTP request to a fully-resolved target (method/body/query kept). */
-export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target: URL, releaseRequest: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>): Promise<void> {
+/** Forward an HTTP request to a fully-resolved target (method/body/query kept).
+ * `extraHeaders` are the per-transport injected headers (already whitelisted
+ * by registerTransport); `tls` carries the optional gateway SPKI pin (S23) —
+ * when set and the target is https, the pin gates the connection (see
+ * attachSpkiPinVerifier); a mismatch surfaces as an upstream 'error' → the
+ * caller's explicit 502 upstream_failed. */
+export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target: URL, releaseRequest: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>, tls?: { spkiPin?: string }, authority?: string): Promise<void> {
   // Select the http/https request by target protocol (design 17 §6: the
   // gateway transport target is `https://`, which node:http cannot send).
   const request = deps.httpRequest ?? (target.protocol === 'https:' ? httpsRequest : httpRequest)
@@ -536,7 +609,15 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       bodyReservation = body.length
     }
   }
-  const headers: Record<string, string> = { host: target.host }
+  // The upstream Host is the target's own authority by default (design 17
+  // §8); an ssh-tunneled gateway target overrides it with the REMOTE gateway
+  // authority (design 17 §9.3 隧道 Host 覆盖 — the gateway's request policy
+  // requires the Host port to equal its listen port, and the tunnel's
+  // loopback URL can never satisfy that). The Origin rewrite below uses the
+  // SAME effective authority so the browser trust fence sees a consistent
+  // same-origin shape.
+  const effectiveHost = authority ?? target.host
+  const headers: Record<string, string> = { host: effectiveHost }
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase()
     if (STRIPPED_REQUEST_HEADERS.has(lower)) continue
@@ -550,21 +631,22 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     // the same-origin shape it accepts in the official deployment (page and
     // api on one host). Requests without an origin header are untouched.
     if (lower === 'origin') {
-      headers[name] = `${target.protocol}//${target.host}`
+      headers[name] = `${target.protocol}//${effectiveHost}`
       continue
     }
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 17 §7: the gateway's Authorization)
-  // are injected AFTER the strip + Origin rewrite so they are never mistaken
-  // for a browser header and never stripped.
+  // Per-transport extra headers (design 17 §9.3: the gateway's bounded
+  // Authorization and/or dsh_gateway_session Cookie) are injected AFTER the
+  // strip + Origin rewrite so they are never mistaken for a browser header
+  // and never stripped. registerTransport already validated the whitelist;
+  // this filter is defense-in-depth: only the two sanctioned names ever ride
+  // upstream.
   if (extraHeaders !== undefined) {
     for (const [name, value] of Object.entries(extraHeaders)) {
       const lower = name.toLowerCase()
-      // Defense-in-depth behind registerTransport(): the sole sanctioned
-      // injected header is the gateway bearer credential.
-      if (lower !== 'authorization') continue
-      headers.authorization = value
+      if (lower !== 'authorization' && lower !== 'cookie') continue
+      headers[lower] = value
     }
   }
   // Forward the bytes we actually accepted, never an untrusted client
@@ -608,12 +690,19 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     clearUpstreamTimeout = () => {}
   }
   const source = body === null ? null : bodySource([body])
+  // S23: a pinned gateway target opens a FRESH https connection with the pin
+  // as its trust anchor (rejectUnauthorized: false — the internal-CA case,
+  // the pin alone decides trust); the socket verifier destroys the request on
+  // mismatch. http targets never pin (registerTransport refuses http + pin,
+  // and the https guard here is defense-in-depth).
+  const tlsSpkiPin = target.protocol === 'https:' ? tls?.spkiPin : undefined
   let upstream: ClientRequest
   try {
     upstream = request(target, {
       method,
       headers,
       signal: controller.signal,
+      ...(tlsSpkiPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
     })
   } catch (error) {
     cleanupClientListeners()
@@ -621,6 +710,7 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     releaseBodyReservation()
     throw error
   }
+  if (tlsSpkiPin !== undefined) attachSpkiPinVerifier(upstream, tlsSpkiPin)
   stopBodySource = (): void => {
     source?.stop(upstream)
     releaseBodyReservation()
@@ -742,25 +832,29 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   }
 }
 
-/** Forward a WS upgrade to a fully-resolved target (events.mux / events.host). */
-export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer, target: URL, releaseHandshake: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>): Promise<void> {
+/** Forward a WS upgrade to a fully-resolved target (events.mux / events.host).
+ * `tls` carries the optional gateway SPKI pin (S23) — when set and the target
+ * is https, the pin gates the handshake connection exactly like forwardHttp;
+ * a mismatch surfaces as an upstream 'error' → 502 upstream_failed. */
+export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer, target: URL, releaseHandshake: () => void, logger: Logger, counters: ProxyForwardCounters, deps: ProxyForwardDeps, extraHeaders?: Record<string, string>, tls?: { spkiPin?: string }, authority?: string): Promise<void> {
   const request = deps.httpRequest ?? (target.protocol === 'https:' ? httpsRequest : httpRequest)
   // The upstream request stays on http(s) — node's http.request performs
   // the upgrade handshake internally (it never accepts a ws: URL).
-  const headers: Record<string, string> = { host: target.host }
+  const headers: Record<string, string> = { host: authority ?? target.host }
   const take = new Set(['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions'])
   for (const [name, value] of Object.entries(req.headers)) {
     if (!take.has(name.toLowerCase())) continue
     if (value === undefined) continue
     headers[name] = Array.isArray(value) ? value.join(', ') : value
   }
-  // Per-transport extra headers (design 17 §7: Authorization) ride the
-  // upgrade handshake too — the gateway's WS auth == HTTP auth (S2).
+  // Per-transport extra headers (design 17 §9.3: Authorization and/or
+  // dsh_gateway_session Cookie) ride the upgrade handshake too — the
+  // gateway's WS auth == HTTP auth (S2).
   if (extraHeaders !== undefined) {
     for (const [name, value] of Object.entries(extraHeaders)) {
       const lower = name.toLowerCase()
-      if (lower !== 'authorization') continue
-      headers.authorization = value
+      if (lower !== 'authorization' && lower !== 'cookie') continue
+      headers[lower] = value
     }
   }
   const controller = new AbortController()
@@ -779,11 +873,15 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     releaseHandshake()
     rejectUpgrade(socket, 504, 'upstream_timeout', 'upstream WebSocket upgrade timed out', logger)
   })
+  // S23: pinned gateway targets gate the handshake connection (see forwardHttp).
+  const tlsSpkiPin = target.protocol === 'https:' ? tls?.spkiPin : undefined
   const upstream = request(target, {
     method: 'GET',
     headers,
     signal: controller.signal,
+    ...(tlsSpkiPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
   })
+  if (tlsSpkiPin !== undefined) attachSpkiPinVerifier(upstream, tlsSpkiPin)
   upstream.on('error', upstreamError => {
     clearUpgradeTimeout()
     releaseHandshake()
