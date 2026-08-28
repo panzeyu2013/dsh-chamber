@@ -23,6 +23,7 @@ import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   createGatewaySessionManager,
+  GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS,
   GATEWAY_SESSION_COOKIE_NAME,
   GATEWAY_SESSION_EXPIRY_SKEW_MS,
   GATEWAY_SESSION_TTL_MS,
@@ -186,14 +187,14 @@ test('login failure classification: 400/413/401 → invalid_credentials, 429 →
     res.writeHead(statuses.shift() ?? 500)
     res.end()
   })
-  const mgr = createGatewaySessionManager()
+  let nowMs = 1_000_000_000
+  const mgr = createGatewaySessionManager({ now: () => nowMs })
   try {
     const expected: Array<[number, 'invalid_credentials' | 'rate_limited' | 'auth_busy']> = [
       [400, 'invalid_credentials'],
       [413, 'invalid_credentials'],
       [401, 'invalid_credentials'],
       [429, 'rate_limited'],
-      [503, 'auth_busy'],
     ]
     for (const [status, code] of expected) {
       const result = await mgr.ensureSession(gw.origin, PASSWORD)
@@ -201,7 +202,79 @@ test('login failure classification: 400/413/401 → invalid_credentials, 429 →
       assert.equal(mgr.cachedCookie(gw.origin), null, 'no failure status caches a cookie')
       assert.equal(result.error.includes(String(status)), true, 'the classified message names the status')
     }
+    // The 429 armed a 5-minute courtesy backoff (design 17 §13.5) — advance
+    // the clock past it so the 503 classification still reaches the network.
+    nowMs += GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS + 1000
+    const last = await mgr.ensureSession(gw.origin, PASSWORD)
+    assertFailure(last, 'auth_busy')
+    assert.equal(last.error.includes('503'), true, 'the classified message names the status')
     assert.equal(statuses.length, 0, 'every status was consumed')
+  } finally {
+    mgr.dispose()
+    await gw.close()
+  }
+})
+
+test('a 429 login failure arms a bounded courtesy backoff that suppresses further login requests (design 17 §13.5)', async () => {
+  let nowMs = 1_000_000_000
+  let requests = 0
+  const gw = await startGateway((_req, res) => {
+    requests += 1
+    res.writeHead(429)
+    res.end()
+  })
+  const mgr = createGatewaySessionManager({ now: () => nowMs })
+  try {
+    const first = await mgr.ensureSession(gw.origin, PASSWORD)
+    assertFailure(first, 'rate_limited')
+    assert.equal(requests, 1)
+    // Inside the backoff window the manager answers WITHOUT touching the
+    // network — a reconnect loop must not hammer /auth/login with cheap 429s.
+    const second = await mgr.ensureSession(gw.origin, PASSWORD)
+    assertFailure(second, 'rate_limited')
+    assert.equal(requests, 1, 'no request issued while the origin is throttled')
+    assert.match(second.error, /backing off/)
+    // After the window the manager tries the network again.
+    nowMs += GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS + 1000
+    const third = await mgr.ensureSession(gw.origin, PASSWORD)
+    assertFailure(third, 'rate_limited')
+    assert.equal(requests, 2, 'the network is tried again after the backoff window')
+    // A successful login clears the backoff.
+    mgr.dispose()
+  } finally {
+    await gw.close()
+  }
+})
+
+test('a successful login clears an armed 429 backoff', async () => {
+  let nowMs = 1_000_000_000
+  let failNext = true
+  const gw = await startGateway((_req, res) => {
+    if (failNext) {
+      failNext = false
+      res.writeHead(429)
+      res.end()
+      return
+    }
+    res.writeHead(302, { 'set-cookie': 'dsh_gateway_session=abc.def; Path=/; HttpOnly' })
+    res.end()
+  })
+  const mgr = createGatewaySessionManager({ now: () => nowMs })
+  try {
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    const throttled = await mgr.ensureSession(gw.origin, PASSWORD)
+    assertFailure(throttled, 'rate_limited')
+    assert.match(throttled.error, /backing off/, 'the backoff window answers without a request')
+    // Advance past the window; the login succeeds and clears the backoff.
+    nowMs += GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS + 1000
+    const ok = await mgr.ensureSession(gw.origin, PASSWORD)
+    assert.equal(ok.ok, true)
+    assert.equal(mgr.cachedCookie(gw.origin)?.startsWith('dsh_gateway_session='), true)
+    // A fresh failure after a success is a NEW network attempt (no stale
+    // backoff): flip the server to 429 again and confirm the request is made.
+    failNext = true
+    nowMs += 1000
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
   } finally {
     mgr.dispose()
     await gw.close()

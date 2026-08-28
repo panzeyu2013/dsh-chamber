@@ -133,6 +133,14 @@ export const GATEWAY_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 export const GATEWAY_SESSION_EXPIRY_SKEW_MS = 5 * 60 * 1000
 /** Login request timeout — a blackholed gateway must not hang the desktop. */
 export const GATEWAY_LOGIN_TIMEOUT_MS = 10_000
+/** Client-side backoff after a 429 rate_limited login failure (design 17
+ * §13.5 尊重 429 退避): the server enforces a 10-attempts/5-min sliding
+ * window plus a lockout; during the client backoff window ensureSession
+ * returns the cached rate_limited failure WITHOUT issuing another request,
+ * so a reconnect loop (slow 60s probes) never hammers /auth/login with
+ * cheap 429s. The server rate limiter remains the real authority — this is
+ * a bounded courtesy, not a bypass. */
+export const GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000
 /** The session cookie name (design 17 §7.1). */
 export const GATEWAY_SESSION_COOKIE_NAME = 'dsh_gateway_session'
 /** Defensive bound on the cookie VALUE, mirroring the instance-proxy
@@ -148,6 +156,9 @@ interface CachedSession {
 export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): GatewaySessionManager {
   const now = deps.now ?? (() => Date.now())
   const cache = new Map<string, CachedSession>()
+  /** Per-origin 429 backoff deadline (epoch ms); entries past the deadline
+   * are treated as expired and cleared lazily. */
+  const throttledUntil = new Map<string, number>()
   let disposed = false
 
   /** Validate the origin and derive the cache key + login URL. Mirrors
@@ -223,6 +234,14 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
 
   function ensureSession(origin: GatewaySessionOrigin, password: string): Promise<GatewaySessionResult> {
     const { key, url } = resolveOrigin(origin)
+    // 429 courtesy backoff (design 17 §13.5): while the origin is throttled
+    // the manager answers the cached rate_limited failure WITHOUT touching
+    // the network — a reconnect loop must not hammer /auth/login.
+    const until = throttledUntil.get(key)
+    if (until !== undefined && now() < until) {
+      return Promise.resolve({ ok: false, code: 'rate_limited', error: 'the gateway is rate-limiting login attempts (429) — backing off before retrying' })
+    }
+    if (until !== undefined) throttledUntil.delete(key)
     const request = deps.request ?? (origin.insecureHttp ? nodeHttpRequest : nodeHttpsRequest)
     const body = JSON.stringify({ password })
     return new Promise(resolve => {
@@ -236,6 +255,12 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
         if (result.ok && !disposed) {
           // Cache with the 12h TTL minus a 5-minute skew (design 17 §7.1).
           cache.set(key, { cookie: result.cookie, expiresAt: now() + GATEWAY_SESSION_TTL_MS - GATEWAY_SESSION_EXPIRY_SKEW_MS })
+          throttledUntil.delete(key)
+        } else if (!result.ok && result.code === 'rate_limited') {
+          throttledUntil.set(key, now() + GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS)
+        } else if (!result.ok && result.code === 'invalid_credentials') {
+          // A rejected password is deterministic — no backoff, no retry.
+          throttledUntil.delete(key)
         }
         req?.destroy()
         resolve(result)
@@ -333,6 +358,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
     dispose(): void {
       disposed = true
       cache.clear()
+      throttledUntil.clear()
     },
   }
 }
