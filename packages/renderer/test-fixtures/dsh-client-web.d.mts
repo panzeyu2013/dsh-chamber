@@ -25,6 +25,8 @@ export function __testSetRunDelayMs(value: number): void
 export function __testSetDisposeDelayMs(value: number): void
 export function __testLifecycleLog(): string[]
 export function __testResetLifecycleLog(): void
+export function __testChamberContextLog(): Array<{ instanceId: string; basePath: string; generation: number } | undefined>
+export function __testResetChamberContextLog(): void
 export function __testDisposedCount(): number
 export function __testResetDisposed(): void
 export function __testEventLog(): string[]

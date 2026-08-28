@@ -44,6 +44,7 @@ declare module '@deepseek-ai/dsh-client-web' {
    */
   export interface AppWebEntryOptions extends BootSeams {
     extraRows?: { id: string; url: string; rev: string }[]
+    chamberContext?: { instanceId: string; basePath: string; generation: number }
   }
   /**
    * chamber patch (2026-08 first-boot race fix, 05 §4): install-or-reuse the
@@ -57,7 +58,7 @@ declare module '@deepseek-ai/dsh-client-web' {
   export class AppWebEntry {
     constructor(el: HTMLElement, options?: AppWebEntryOptions)
     run(): Promise<unknown>
-    dispose(): void
+    dispose(): Promise<void>
     /** chamber patch: settled runtime context (boot.ts accessor; session opens ride ctx.sessions; undefined after dispose). */
     runtimeCtx: Context | undefined
     /** chamber patch (2026-08, 05 §4 失败呈现修订): boot failure report — run() resolves on boot-chain failures by design (the dsh loading page renders the in-shell report), but the chamber shell must see it to present its own per-instance fallback; undefined while loading or after a clean settle. */
@@ -467,20 +468,16 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     onRefresh(listener: (sourceId: string) => void): () => void
     requestActivateSource(sourceId: string): void
     onActivateSource(listener: (sourceId: string) => void): () => void
-    reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void
-    clearInstanceRuntime(sourceId: string): void
+    reserveInstanceProducerGeneration(sourceId: string, generation: number): void
+    registerInstanceRuntimeProducer(sourceId: string, generation: number): {
+      report(report: InstanceRuntimeReport): void
+      clear(): void
+    }
     onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined) => void): () => void
     onInstanceSnapshot(listener: (sourceId: string, snapshot: InstanceSnapshot | undefined) => void): () => void
     reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void
     clearPluginDiagnostic(sourceId: string): void
     getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
     onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
-  }
-}
-
-/** window.__DSH_BASE_PATH__ (chamber per-instance knob; see shell.ts). */
-declare global {
-  interface Window {
-    __DSH_BASE_PATH__?: string
   }
 }

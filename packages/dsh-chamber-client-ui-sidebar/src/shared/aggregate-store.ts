@@ -112,9 +112,12 @@ const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
 let servers: ChamberServerAggregate[] = []
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
+const runtimeProducerTokens: Record<string, number> = {}
 const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
+const instanceProducerGenerations: Record<string, number> = {}
 const pluginDiagnostics: Record<string, PluginGraphDiagnostic> = {}
+let nextRuntimeProducerToken = 0
 let nextSnapshotProducerToken = 0
 
 export const chamberBridge = {
@@ -176,17 +179,62 @@ export const chamberBridge = {
     }
   },
 
-  /** Per-ctx sidebar plugin write: publish the source's runtime facts (design 06 §4.2). */
-  reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void {
-    runtimeReports[sourceId] = report
-    for (const listener of [...runtimeReportListeners]) listener(sourceId, report)
+  /**
+   * Reserve the newest shell generation before its async boot begins. Besides
+   * clearing the superseded reports, this is a registration floor: a
+   * cancelled older ctx that resumes after the new boot started receives
+   * inert producers and cannot temporarily replace the new generation.
+   */
+  reserveInstanceProducerGeneration(sourceId: string, generation: number): void {
+    if (!Number.isSafeInteger(generation) || generation < 1) {
+      throw new Error(`invalid instance producer generation ${JSON.stringify(generation)}`)
+    }
+    if ((instanceProducerGenerations[sourceId] ?? 0) >= generation) return
+    instanceProducerGenerations[sourceId] = generation
+    delete runtimeProducerTokens[sourceId]
+    delete snapshotProducerTokens[sourceId]
+    if (runtimeReports[sourceId] !== undefined) {
+      delete runtimeReports[sourceId]
+      for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined)
+    }
+    if (instanceSnapshots[sourceId] !== undefined) {
+      delete instanceSnapshots[sourceId]
+      for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined)
+    }
   },
 
-  /** Per-ctx sidebar plugin write: drop the source's runtime facts (effect teardown). */
-  clearInstanceRuntime(sourceId: string): void {
-    if (runtimeReports[sourceId] === undefined) return
-    delete runtimeReports[sourceId]
-    for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined)
+  /**
+   * Register the runtime-facts producer owned by one mounted instance ctx.
+   * The reserved generation rejects late old registrations; the token keeps
+   * replacement/teardown within one accepted generation ownership-safe.
+   */
+  registerInstanceRuntimeProducer(sourceId: string, generation: number): {
+    report: (report: InstanceRuntimeReport) => void
+    clear: () => void
+  } {
+    if (instanceProducerGenerations[sourceId] !== generation) {
+      return { report: () => {}, clear: () => {} }
+    }
+    const token = ++nextRuntimeProducerToken
+    runtimeProducerTokens[sourceId] = token
+    if (runtimeReports[sourceId] !== undefined) {
+      delete runtimeReports[sourceId]
+      for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined)
+    }
+    return {
+      report(report): void {
+        if (runtimeProducerTokens[sourceId] !== token) return
+        runtimeReports[sourceId] = report
+        for (const listener of [...runtimeReportListeners]) listener(sourceId, report)
+      },
+      clear(): void {
+        if (runtimeProducerTokens[sourceId] !== token) return
+        delete runtimeProducerTokens[sourceId]
+        if (runtimeReports[sourceId] === undefined) return
+        delete runtimeReports[sourceId]
+        for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined)
+      },
+    }
   },
 
   /** App-layer subscription to runtime-fact reports (report or clear); returns the unsubscribe. */
@@ -199,13 +247,16 @@ export const chamberBridge = {
 
   /**
    * Register the snapshot producer owned by one mounted instance ctx. The
-   * token makes teardown generation-safe: a late cleanup from an old shell
-   * cannot clear a newer shell's report for the same source.
+   * generation floor + token make teardown safe: a late registration/report/
+   * cleanup from an old shell cannot affect a newer shell for the same source.
    */
-  registerInstanceSnapshotProducer(sourceId: string): {
+  registerInstanceSnapshotProducer(sourceId: string, generation: number): {
     report: (snapshot: InstanceSnapshot | undefined) => void
     clear: () => void
   } {
+    if (instanceProducerGenerations[sourceId] !== generation) {
+      return { report: () => {}, clear: () => {} }
+    }
     const token = ++nextSnapshotProducerToken
     snapshotProducerTokens[sourceId] = token
     if (instanceSnapshots[sourceId] !== undefined) {

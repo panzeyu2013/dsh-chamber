@@ -7,11 +7,12 @@ import type { HostDescription, IApiClient, HostFrame, MuxFrame, RpcRequest } fro
  * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
  *
  * `basePath` is the added per-instance knob: the browser plugin apply resolves
- * the api-carrier base path from it (falling back to the `window.__DSH_BASE_PATH__`
- * deployment knob at construction — chamber sets it before each sequential
- * instance boot). `/api` is the stock value (no prefix injection — paths are
- * byte-identical to upstream); `/api/i/<id>` routes every RPC/WS path through
- * the control-plane per-instance proxy. Defaults preserve existing behaviour.
+ * the api-carrier base path from it (falling back to the
+ * `window.__DSH_BASE_PATH__` compatibility deployment knob at construction).
+ * Chamber always supplies the explicit per-entry value. `/api` is the stock
+ * value (no prefix injection — paths are byte-identical to upstream);
+ * `/api/i/<id>` routes every RPC/WS path through the control-plane
+ * per-instance proxy. Defaults preserve existing behaviour.
  */
 export interface ConnectionConfig {
   /** First-retry backoff cap in ms (jittered: actual delay is cap/2..cap). */

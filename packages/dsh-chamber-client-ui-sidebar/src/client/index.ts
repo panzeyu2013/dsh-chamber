@@ -46,8 +46,8 @@ export function apply(ctx: ClientContext): void {
     // always acts on the current source.
     startSession: (workspaceId) => { ctx.workspaces.startSession(workspaceId) },
     toggleSidebar: () => { ctx.layout.toggleSidebar() },
-    // chamber patch (05 §4): the renderer shell sets the per-boot instance id
-    // through the chamber knob while the boot owns the base-path window knob.
+    // chamber patch (05 §4): AppWebEntry provides the immutable per-entry
+    // instance id on this shell's Cordis root context.
     chamberInstanceId: (ctx as any).chamberInstanceId as string | undefined,
     // chamber (05 §4): the in-app directory-browser dialog copy — the browse
     // directory-picker package (mounted in every boot) owns this namespace.
@@ -103,10 +103,12 @@ export function apply(ctx: ClientContext): void {
   // subagent-live ring semantics can never drift from the official UI).
   ctx.effect(() => {
     const chamberInstanceId = (ctx as any).chamberInstanceId as string | undefined
-    if (chamberInstanceId === undefined) return () => {}
+    const chamberBootGeneration = (ctx as any).chamberBootGeneration as number | undefined
+    if (chamberInstanceId === undefined || chamberBootGeneration === undefined) return () => {}
     const sessionsList = (ctx.sessions as unknown as { list: ObservableSnapshot<SessionListState> }).list
     const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceListState> }).list
-    const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(chamberInstanceId)
+    const runtimeProducer = chamberBridge.registerInstanceRuntimeProducer(chamberInstanceId, chamberBootGeneration)
+    const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(chamberInstanceId, chamberBootGeneration)
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
@@ -138,7 +140,7 @@ export function apply(ctx: ClientContext): void {
       for (const [parentId, summary] of indexSubagentDescendants(snapshot.byId)) {
         if (summary.runningCount > 0) subagentRunning.set(parentId, summary.runningCount)
       }
-      chamberBridge.reportInstanceRuntime(chamberInstanceId, projectRuntimeFacts(snapshot, subagentRunning))
+      runtimeProducer.report(projectRuntimeFacts(snapshot, subagentRunning))
       queueSnapshot()
     }
     sync()
@@ -150,7 +152,7 @@ export function apply(ctx: ClientContext): void {
       unsubscribeSessions()
       unsubscribeWorkspaces()
       snapshotProducer.clear()
-      chamberBridge.clearInstanceRuntime(chamberInstanceId)
+      runtimeProducer.clear()
     }
   }, 'dsh-chamber: sidebar runtime facts report')
 }

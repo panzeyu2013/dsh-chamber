@@ -18,6 +18,7 @@ let disposeDelayMs = 0
 let disposedCount = 0
 const eventLog = []
 const lifecycleLog = []
+const chamberContextLog = []
 
 export class AppWebEntry {
   constructor(el, options) {
@@ -25,19 +26,25 @@ export class AppWebEntry {
     this.options = options
     this.disposed = false
     lifecycleLog.push('construct')
+    chamberContextLog.push(options?.chamberContext)
   }
 
   async run() {
     if (runError !== undefined) throw runError
     if (runHang) return new Promise(() => {}) // never settles (H1 timeout tests)
     if (runDelayMs > 0) await new Promise(resolve => setTimeout(resolve, runDelayMs)) // late settle (H1)
+    if (this.disposed) lifecycleLog.push('cancelled-run')
   }
 
   async dispose() {
+    if (this.disposed) return
     this.disposed = true
     disposedCount += 1
     lifecycleLog.push('dispose')
-    if (disposeDelayMs > 0) await new Promise(resolve => setTimeout(resolve, disposeDelayMs))
+    if (disposeDelayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, disposeDelayMs))
+      lifecycleLog.push('dispose-complete')
+    }
   }
 
   get bootError() {
@@ -94,6 +101,14 @@ export function __testLifecycleLog() {
 
 export function __testResetLifecycleLog() {
   lifecycleLog.length = 0
+}
+
+export function __testChamberContextLog() {
+  return chamberContextLog
+}
+
+export function __testResetChamberContextLog() {
+  chamberContextLog.length = 0
 }
 
 export function __testDisposedCount() {

@@ -987,8 +987,8 @@ export default function App() {
   /**
    * 空闲预热（设计 05 §4）：ready 的注册表远程实例按序、一次一个地在后台
    * boot（settle 后推进下一个），使多数首次切换在点击时已就绪——骨架屏只
-   * 在预热未覆盖时出现。boot 本身经 shell.ts 的全局串行队列（`__DSH_BASE_PATH__`
-   * 旋钮纪律），与用户触发的 boot 共享一条链（用户请求经同一链排队，最坏
+   * 在预热未覆盖时出现。boot 本身经 shell.ts 的全局 admission 队列，实例
+   * 路由固化在各自 Cordis root context；与用户触发的 boot 共享一条链（最坏
    * 等一个在途 boot）。预热视图为 instance-pending 态（仅 visibility 隐藏、
    * 保留 layout——vendor 测量/IntersectionObserver 在 boot 期间正常）。
    */

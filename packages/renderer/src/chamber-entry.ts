@@ -19,8 +19,8 @@
  * > replacement, 05 §2); the bridge host (health/connection polling + the
  * > session aggregation loop that publishes chamberBridge, App.tsx) remains
  * > an entry-level React implementation in the shell entry (main.tsx) — the
- * > wire crosser is the shared chamberBridge + the per-boot instance knob
- * > (see chamber-knob.ts).
+ * > wire crosser is the shared chamberBridge. Per-entry instance/routing facts
+ * > are provided on the Cordis root context by AppWebEntry (05 §4).
  *
  * ## First-screen / deferred split (LCP perf pass, P4)
  *
@@ -96,12 +96,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-import { getChamberInstanceId } from './chamber-knob.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Per-boot instance id (05 §4): provided by this entry, read by the sidebar plugin. */
+    /** Per-entry source facts (05 §4): provided on the AppWebEntry root ctx. */
     chamberInstanceId?: string
+    chamberConnectionBasePath?: string
+    chamberBootGeneration?: number
   }
 }
 
@@ -239,9 +240,8 @@ async function registerDeferred(ctx: Context): Promise<void> {
  * dedupe set the per-instance host-graph merge filters against (shell.ts →
  * host-graph.ts). Re-exported from the leaf module `chamber-covered.ts` (the
  * constant is DEFINED there): shell.ts must import it without pulling this
- * bundle's top-level module-table handoff into the main chunk — same pattern
- * as chamber-knob.ts (see its header comment). Maintenance: keep the two
- * lists in lockstep (see chamber-covered.ts header).
+ * bundle's top-level module-table handoff into the main chunk. Maintenance:
+ * keep the two lists in lockstep (see chamber-covered.ts header).
  */
 export { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 
@@ -310,12 +310,26 @@ export function apply(ctx: Context): void {
   // Union-table lockstep guard FIRST (see assertCoveredFactoryLockstep): a
   // COVERED_FACTORIES drift must fail this entry before any plugin registers.
   assertCoveredFactoryLockstep()
-  // chamber patch (05 §4): the per-boot instance id, set by shell.ts through
-  // the chamber knob for the duration of the boot — the sidebar plugin reads
-  // it to highlight the current source. Declared via ctx.provide: cordis
-  // rejects assigning undeclared context properties at runtime.
-  ctx.provide('chamberInstanceId', getChamberInstanceId())
-  ctx.plugin(ConnectionPlugin)
+  // chamber patch (05 §4): AppWebEntry bound both facts to THIS Cordis root
+  // context before creating any loader entry. Refuse a missing/mismatched
+  // context loudly; the connection client receives an explicit basePath and
+  // never reads the mutable window fallback in chamber.
+  const chamberInstanceId = ctx.chamberInstanceId
+  const chamberConnectionBasePath = ctx.chamberConnectionBasePath
+  const chamberBootGeneration = ctx.chamberBootGeneration
+  if (chamberInstanceId === undefined || chamberConnectionBasePath === undefined || chamberBootGeneration === undefined) {
+    throw new Error('chamber-entry: missing per-entry routing context')
+  }
+  if (chamberConnectionBasePath !== `/api/i/${chamberInstanceId}`) {
+    throw new Error(`chamber-entry: routing context mismatch for ${JSON.stringify(chamberInstanceId)}`)
+  }
+  if (!chamberInstanceId.startsWith('ssh-') && chamberInstanceId !== 'local') {
+    throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
+  }
+  if (!Number.isSafeInteger(chamberBootGeneration) || chamberBootGeneration < 1) {
+    throw new Error(`chamber-entry: invalid boot generation ${JSON.stringify(chamberBootGeneration)}`)
+  }
+  ctx.plugin(ConnectionPlugin, { basePath: chamberConnectionBasePath })
   ctx.plugin(TypertRegistry)
   ctx.plugin(ApiGateway)
   ctx.plugin(ApiRemotes)
@@ -342,10 +356,6 @@ export function apply(ctx: Context): void {
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
-  const chamberInstanceId = getChamberInstanceId()
-  if (chamberInstanceId !== undefined && !chamberInstanceId.startsWith('ssh-') && chamberInstanceId !== 'local') {
-    throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
-  }
   ctx.plugin(UiDirectoryPickerBrowse)
   ctx.plugin(UiSettingsConnections)
   ctx.plugin(UiSettingsBridge)

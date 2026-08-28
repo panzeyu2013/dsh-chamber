@@ -56,6 +56,7 @@ import * as UiRenderer from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { BootPage } from './boot-page.ts'
 import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from './boot-rows.ts'
 import { classifySweepEntry } from './boot-tolerance.ts'
+import { bindChamberBootContext, type ChamberBootContext } from './chamber-context.ts'
 import { getStaticModules } from './seed.ts'
 import { STATE_LABELS } from './loader-status.ts'
 import './base.css'
@@ -82,6 +83,12 @@ export interface AppWebEntryOptions extends BootSeams {
    * pre-loads the whole extra set uniformly).
    */
   extraRows?: BootModuleRow[]
+  /**
+   * chamber patch (design 05 §4): immutable per-entry routing facts. They are
+   * bound to this entry's Cordis root context before loader creation, so a
+   * cancelled boot that unwinds late can never observe a newer entry's route.
+   */
+  chamberContext?: ChamberBootContext
 }
 
 /**
@@ -94,7 +101,14 @@ export class AppWebEntry {
   private readonly container: HTMLElement
   private readonly seams: BootSeams | undefined
   private readonly extraRows: BootModuleRow[] | undefined
+  private readonly chamberContext: ChamberBootContext | undefined
   private readonly page: BootPage
+  /** Set synchronously at the start of dispose(); late async boot work checks it. */
+  private disposed = false
+  /** Every caller joins the same teardown instead of observing an early no-op. */
+  private disposePromise: Promise<void> | undefined
+  /** Serialize the initial teardown and the late-continuation safety sweep. */
+  private contextDisposeChain: Promise<void> = Promise.resolve()
   // Assigned by run() before any private method reads them; dispose() nulls
   // ctx, and reads must handle the pre-run / post-dispose state.
   private ctx: Context | undefined
@@ -114,6 +128,7 @@ export class AppWebEntry {
     this.container = container
     this.seams = options
     this.extraRows = options?.extraRows
+    this.chamberContext = options?.chamberContext
     this.page = new BootPage(container)
   }
 
@@ -123,7 +138,9 @@ export class AppWebEntry {
    * @returns Resolves after application mount or failure rendering.
    */
   async run(): Promise<void> {
+    let bootCtx: Context | undefined
     try {
+      this.assertNotDisposed()
       // chamber patch (design 05 §4): install-or-reuse the page-level module
       // system. The chamber shell installs it BEFORE preloading any host-graph
       // bundle (ensureWebModuleSystem — first-boot race fix), so run() must
@@ -134,10 +151,23 @@ export class AppWebEntry {
 
       const prefetching = this.prefetchImmediateTier()
       const ctx = new Context()
+      bootCtx = ctx
       this.ctx = ctx
+      if (this.chamberContext !== undefined) {
+        bindChamberBootContext(ctx, this.chamberContext)
+      }
       await this.runPluginBoot(ctx, prefetching)
+      this.assertNotDisposed()
       await this.mountApp(ctx)
     } catch (reason) {
+      // dispose() is also the cancellation signal for a budget-expired chamber
+      // boot. Async loader work may resume after the first teardown; sweep the
+      // same root once more and never redraw the already-disposed boot page or
+      // mount a late application root.
+      if (this.disposed) {
+        if (bootCtx !== undefined) await this.disposeContext(bootCtx)
+        return
+      }
       // Stay on the loading page; surface the sweep report (fail loud).
       console.error(reason)
       this.bootFailure = reason instanceof Error ? reason.message : String(reason)
@@ -150,25 +180,47 @@ export class AppWebEntry {
    * Resolves once the teardown settled (never rejects — teardown errors are
    * logged; the chamber shell calls this fire-and-forget).
    */
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposePromise !== undefined) return this.disposePromise
+    this.disposed = true
     const ctx = this.ctx
     // Drop the handle so a second dispose is a no-op and late runtimeCtx
     // reads observe a dead context.
     this.ctx = undefined
-    if (ctx !== undefined) {
+    const promise = (async () => {
+      if (ctx !== undefined) {
+        await this.disposeContext(ctx)
+      }
       try {
-        // Root-fiber dispose cascades through every loader entry fiber and
-        // the mount inject fiber (each child fiber's disposer is collected on
-        // its parent's effect list), releasing what React unmount alone never
-        // would: the connection stream loop, reconnect timers, session /
-        // conversation stores, and the chamber sidebar / runtime-facts
-        // producers.
+        this.page.dispose()
+      } catch (error) {
+        console.error('[web-shell] boot page teardown failed:', error)
+      }
+    })()
+    this.disposePromise = promise
+    return promise
+  }
+
+  /** Fail an async boot continuation after dispose() marked this entry dead. */
+  private assertNotDisposed(): void {
+    if (this.disposed) throw new Error('web boot cancelled: entry disposed')
+  }
+
+  /** Idempotent root sweep, also repeated when cancelled work settles late. */
+  private async disposeContext(ctx: Context): Promise<void> {
+    const sweep = this.contextDisposeChain.then(async () => {
+      try {
+        // Root-fiber dispose cascades through every loader entry fiber and the
+        // mount inject fiber, releasing what React unmount alone never would:
+        // the connection stream loop, reconnect timers, session/conversation
+        // stores, and the chamber sidebar/runtime-facts producers.
         await ctx.fiber.dispose()
       } catch (error) {
         console.error('[web-shell] ctx teardown failed:', error)
       }
-    }
-    this.page.dispose()
+    })
+    this.contextDisposeChain = sweep
+    await sweep
   }
 
   /**
@@ -218,6 +270,7 @@ export class AppWebEntry {
   /** Mount the Loader, create all graph entries, await quiescence, and audit activation. */
   private async runPluginBoot(ctx: Context, prefetching: Promise<void>): Promise<void> {
     await ctx.plugin(Loader)
+    this.assertNotDisposed()
     const loader = ctx.loader
     // Inject the module system BEFORE any entry exists: tree.import falls back
     // to a bare dynamic import when internal is undefined, which in a browser
@@ -256,6 +309,7 @@ export class AppWebEntry {
     // need every immediately-tier factory already registered (module
     // comment). Resolves even when individual prefetches failed.
     await prefetching
+    this.assertNotDisposed()
 
     // Entry creation order carries no semantics (fiber inject waiting owns
     // activation order); creating concurrently lets non-prefetched bundle
@@ -276,22 +330,29 @@ export class AppWebEntry {
     // boot page.
     const toleratedIds = new Set(this.extraRows?.map(row => row.id) ?? [])
     await Promise.all(rows.map(async (name) => {
+      this.assertNotDisposed()
       this.page.setState(name, 'loading')
       try {
         const id = await loader.create({ name })
+        this.assertNotDisposed()
         // A failed import leaves the entry fiberless (Entry._init logs and
         // returns); project it as failed — no fiber means no status event.
         if (loader.resolve(id).fiber === undefined) {
           this.page.setState(name, 'failed')
         }
       } catch (error) {
+        // Cancellation is never a version-skew degradation, even for an extra
+        // row: do not redraw a disposed page while the remaining rows unwind.
+        this.assertNotDisposed()
         if (!toleratedIds.has(name)) throw error
         console.error(`[web-shell] extra row "${name}" could not materialize; its features are unavailable on this shell version`, error)
         this.page.setState(name, 'failed')
       }
     }))
 
+    this.assertNotDisposed()
     await loader.await()
+    this.assertNotDisposed()
     this.assertEntriesActive(toleratedIds)
   }
 
@@ -353,6 +414,7 @@ export class AppWebEntry {
    * is shell-static local code, its inject set is composite-covered runtime).
    */
   private async mountApp(ctx: Context): Promise<void> {
+    this.assertNotDisposed()
     const mounted = ctx.inject(['uiRenderer'], (scope) => {
       scope.effect(() => scope.uiRenderer.mount(this.container), 'web boot: application mount')
     })
@@ -364,6 +426,7 @@ export class AppWebEntry {
     })
     try {
       await Promise.race([mounted, timeout])
+      this.assertNotDisposed()
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }

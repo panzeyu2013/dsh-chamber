@@ -9,17 +9,48 @@ const snapshot = (id: string): InstanceSnapshot => ({
   archivedSessionIds: [],
 })
 
+test('runtime producers ignore reports and cleanup from an old shell generation', () => {
+  const events: string[] = []
+  const unsubscribe = chamberBridge.onRuntimeReport((sourceId, value) => {
+    events.push(`${sourceId}:${Object.keys(value?.sessions ?? {}).join(',') || 'clear'}`)
+  })
+  chamberBridge.reserveInstanceProducerGeneration('runtime-source', 1)
+  const first = chamberBridge.registerInstanceRuntimeProducer('runtime-source', 1)
+  first.report({ sessions: { old: { running: true } } })
+  chamberBridge.reserveInstanceProducerGeneration('runtime-source', 2)
+  const second = chamberBridge.registerInstanceRuntimeProducer('runtime-source', 2)
+  second.report({ sessions: { fresh: { running: false } } })
+
+  const lateFirst = chamberBridge.registerInstanceRuntimeProducer('runtime-source', 1)
+  lateFirst.report({ sessions: { tooLate: { running: false } } })
+  first.report({ sessions: { stale: { running: false } } })
+  first.clear()
+  second.clear()
+
+  assert.deepEqual(events, [
+    'runtime-source:old',
+    'runtime-source:clear',
+    'runtime-source:fresh',
+    'runtime-source:clear',
+  ])
+  unsubscribe()
+})
+
 test('snapshot producers replay complete state, re-report after withdrawal, and ignore old-generation cleanup', () => {
   const events: string[] = []
-  const first = chamberBridge.registerInstanceSnapshotProducer('source-test')
+  chamberBridge.reserveInstanceProducerGeneration('source-test', 1)
+  const first = chamberBridge.registerInstanceSnapshotProducer('source-test', 1)
   first.report(snapshot('one'))
   const unsubscribe = chamberBridge.onInstanceSnapshot((sourceId, value) => {
     events.push(`${sourceId}:${value?.sessions[0]?.sessionId ?? 'clear'}`)
   })
   assert.deepEqual(events, ['source-test:one'])
 
-  const second = chamberBridge.registerInstanceSnapshotProducer('source-test')
+  chamberBridge.reserveInstanceProducerGeneration('source-test', 2)
+  const second = chamberBridge.registerInstanceSnapshotProducer('source-test', 2)
   second.report(snapshot('two'))
+  const lateFirst = chamberBridge.registerInstanceSnapshotProducer('source-test', 1)
+  lateFirst.report(snapshot('too-late'))
   first.clear()
   assert.equal(chamberBridge.getInstanceSnapshots()['source-test']?.sessions[0]?.sessionId, 'two')
 

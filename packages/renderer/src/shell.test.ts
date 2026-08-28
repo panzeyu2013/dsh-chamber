@@ -21,7 +21,8 @@ import { chamberBridge } from '../../dsh-chamber-client-ui-sidebar/src/shared/ag
 // Test knobs — same module instance shell.ts sees (the loader maps the bare
 // specifier to this URL; the relative import resolves to the same file).
 import {
-  __testDisposedCount, __testEventLog, __testResetDisposed, __testResetEventLog,
+  __testChamberContextLog, __testDisposedCount, __testEventLog, __testResetChamberContextLog,
+  __testResetDisposed, __testResetEventLog,
   __testLifecycleLog, __testResetLifecycleLog, __testSetBootError, __testSetDisposeDelayMs,
   __testSetModuleSystemError, __testSetRunDelayMs, __testSetRunError, __testSetRunHang,
 } from '../test-fixtures/dsh-client-web.mjs'
@@ -52,7 +53,7 @@ async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<vo
   }
 }
 
-/** shell.ts reads the `window` global for the per-boot knob; mirror it onto globalThis. */
+/** shell.ts/browser helpers read `window`; mirror it onto globalThis. */
 function stubWindow(): () => void {
   const g = globalThis as Record<string, unknown>
   const original = g.window
@@ -67,6 +68,7 @@ test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a 
   const restoreFetch = stubUnavailableGraph()
   const restoreWindow = stubWindow()
   __testResetDisposed()
+  __testResetChamberContextLog()
   __testSetBootError('client-modules: require("@deepseek-ai/dsh-client-runtime/client") missed the module table')
   __testSetRunError(undefined)
   try {
@@ -234,6 +236,7 @@ test('bootInstanceShell: a run() that never settles is cancelled at the boot bud
   const originalConsoleError = console.error
   console.error = () => {}
   __testResetDisposed()
+  __testResetChamberContextLog()
   __testSetRunHang(true)
   __testSetBootTimeoutMs(40)
   // The budget timer is unref'd by design (a hung boot must not keep the app
@@ -244,11 +247,21 @@ test('bootInstanceShell: a run() that never settles is cancelled at the boot bud
     assert.equal(state.booted, false)
     assert.match(state.error ?? '', /timed out/)
     assert.equal(__testDisposedCount(), 1, 'the hung entry is disposed by the timeout branch')
-    // The serialized chain advanced: a second instance's boot runs and
-    // settles normally after the timeout (never concurrent with the zombie).
+    assert.equal(
+      (globalThis as Record<string, unknown>).__DSH_BASE_PATH__,
+      undefined,
+      'routing must never be held in a mutable page-global knob',
+    )
+    // The admission chain advanced: a second instance's boot runs and settles
+    // normally without sharing mutable routing with the disposed timed-out
+    // entry, whose run() may still be unwinding in the background.
     __testSetRunHang(false)
     const second = await bootInstanceShell('t-after-hang', '/api/i/t-after-hang', {} as HTMLElement, () => {})
     assert.equal(second.booted, true)
+    assert.deepEqual(__testChamberContextLog(), [
+      { instanceId: 't-hang-run', basePath: '/api/i/t-hang-run', generation: 1 },
+      { instanceId: 't-after-hang', basePath: '/api/i/t-after-hang', generation: 1 },
+    ])
   } finally {
     clearInterval(keepAlive)
     __testSetRunHang(false)
@@ -264,7 +277,7 @@ test('bootInstanceShell: a hung host-graph channel also settles at the budget an
   const originalFetch = globalThis.fetch
   const originalConsoleError = console.error
   console.error = () => {}
-  // The graph channel never settles → collectExtraRows hangs pre-knob.
+  // The graph channel never settles → collectExtraRows hangs before entry construction.
   globalThis.fetch = (() => new Promise(() => {})) as typeof fetch
   __testResetDisposed()
   __testResetLifecycleLog()
@@ -305,7 +318,7 @@ test('disposeInstanceShell → immediate re-boot: the fresh ctx is constructed o
     assert.equal(second.booted, true)
     assert.deepEqual(
       __testLifecycleLog(),
-      ['construct', 'dispose', 'construct'],
+      ['construct', 'dispose', 'dispose-complete', 'construct'],
       'the re-boot awaits the old teardown — no same-id ctx overlap',
     )
     assert.equal(__testDisposedCount(), 1)
@@ -329,8 +342,9 @@ test('H1: a timed-out boot that LATE-settles must never register over a newer bo
   console.error = () => {}
   __testResetDisposed()
   __testResetLifecycleLog()
-  __testSetRunDelayMs(250) // run() settles AFTER the budget (wide margins)
-  __testSetBootTimeoutMs(80)
+  __testSetRunDelayMs(120) // run() settles after timeout, while teardown is pending
+  __testSetDisposeDelayMs(220)
+  __testSetBootTimeoutMs(40)
   const keepAlive = setInterval(() => {}, 500)
   try {
     const first = await bootInstanceShell('t-late', '/api/i/t-late', {} as HTMLElement, () => {})
@@ -338,16 +352,25 @@ test('H1: a timed-out boot that LATE-settles must never register over a newer bo
     assert.equal(__testDisposedCount(), 1, 'the timeout branch disposed the hung entry')
     // Retry boots and registers while the timed-out run() is still pending.
     __testSetRunDelayMs(0)
+    // The artificial teardown delay intentionally exceeds the first boot's
+    // tiny test budget; give the retry a realistic budget so this assertion
+    // isolates teardown ordering rather than timing out in its queue wait.
+    __testSetBootTimeoutMs(1_000)
     const retry = await bootInstanceShell('t-late', '/api/i/t-late', {} as HTMLElement, () => {})
     assert.equal(retry.booted, true)
-    // The FIRST boot's run() now settles late: it must be CANCELLED (its entry
-    // disposed again), never registered over the retry entry.
-    await waitUntil(() => __testDisposedCount() >= 2, 2000)
-    assert.deepEqual(__testLifecycleLog(), ['construct', 'dispose', 'construct', 'dispose'],
-      'late settle is torn down — the retry entry is never overwritten (no zombie ctx)')
+    // The FIRST boot's run() now settles late: AppWebEntry observes the prior
+    // dispose as cancellation and never mounts; the shell never registers it
+    // over the retry entry and dispose remains idempotent.
+    await waitUntil(() => __testLifecycleLog().includes('cancelled-run'), 2000)
+    assert.deepEqual(
+      __testLifecycleLog(),
+      ['construct', 'dispose', 'cancelled-run', 'dispose-complete', 'construct'],
+      'duplicate dispose keeps the real teardown promise — retry waits and late work never overwrites it',
+    )
   } finally {
     clearInterval(keepAlive)
     __testSetRunDelayMs(0)
+    __testSetDisposeDelayMs(0)
     __testSetBootTimeoutMs(60_000)
     console.error = originalConsoleError
     globalThis.fetch = originalFetch

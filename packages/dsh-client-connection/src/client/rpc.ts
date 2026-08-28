@@ -8,8 +8,9 @@
  * prefix. The origin resolution stays same-origin (`location.origin`, with the
  * `dsh.internal` fallback for no-location environments). With the stock base
  * path `/api` the URL is byte-identical to upstream. The base path is resolved
- * at construction from `window.__DSH_BASE_PATH__` (chamber sets it before each
- * sequential instance boot) or from an explicit option.
+ * at construction from an explicit option, or from
+ * `window.__DSH_BASE_PATH__` as a compatibility fallback. Chamber supplies
+ * the explicit per-entry value.
  *
  * merged with upstream rc.2 transport override（RpcFetch/doFetch）.
  */

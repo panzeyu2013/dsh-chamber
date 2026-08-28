@@ -2,9 +2,9 @@
  * InstanceView — one dsh shell per instance (design 05 §1: N-ctx).
  * The container div hosts a full AppWebEntry (independent cordis ctx + full
  * ui-* tree, connected to this instance through the /api/i/<id> proxy via the
- * base-path parameterized connection client). Boots are serialized through
- * shell.ts (window.__DSH_BASE_PATH__ discipline); once booted the shell stays
- * mounted and switching is pure CSS hide/show.
+ * base-path parameterized connection client). shell.ts binds the source id
+ * and base path to this entry's own Cordis root context; once booted the shell
+ * stays mounted and switching is pure CSS hide/show.
  *
  * Switching is driven by the App layer wrapping the active-view change in a
  * View Transition (view-transition.ts): the previous view is captured as a

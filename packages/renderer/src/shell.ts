@@ -1,10 +1,10 @@
 /**
  * N-ctx shell orchestration (design 05 §1/§3.6): one AppWebEntry per dsh
  * instance, each an independent cordis ctx with a full ui-* tree, mounted
- * into its own container div. Boots are strictly sequential (the connection
- * client resolves its per-instance base path from `window.__DSH_BASE_PATH__`
- * at carrier construction, so the knob must not change while a boot is
- * in flight); instance shells stay mounted once booted (hide/show switching
+ * into its own container div. Boot admission is sequential; instance routing
+ * is immutable per entry (`AppWebEntryOptions.chamberContext` → Cordis root
+ * services), so a timed-out entry that unwinds late cannot observe a newer
+ * entry's route. Instance shells stay mounted once booted (hide/show switching
  * is pure CSS, sessions stay alive).
  *
  * The module table and bundle registry are page-level singletons shared
@@ -24,11 +24,8 @@
  * surface is unchanged.
  */
 
-
-
 import { AppWebEntry, ensureWebModuleSystem } from '@deepseek-ai/dsh-client-web'
 
-import { getChamberInstanceId, setChamberInstanceId } from './chamber-knob.ts'
 import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
@@ -45,8 +42,8 @@ const OPEN_RETRY_MS = 400
  * entry is disposed, queued opens are rejected, and the caller AND the
  * serialized chain settle within budget. A boot that late-settles after its
  * cancellation observes the monotonic cancellation threshold and tears the
- * entry down instead of registering (no zombie ctx); its knob cleanup is
- * value- and generation-guarded so it never clobbers a later boot's knob.
+ * entry down instead of registering (no zombie ctx). Routing facts are bound
+ * to that entry's own root context, never a page-global value.
  */
 const BOOT_TIMEOUT_MS = 60_000
 const QUEUED_OPEN_TIMEOUT_MS = BOOT_TIMEOUT_MS + OPEN_WAIT_MS
@@ -167,7 +164,7 @@ function dispatchOpen(entry: AppWebEntry, sessionId: string): Promise<void> {
  * unchanged — this is a pure structural move.
  */
 class ShellRegistry {
-  /** One serialized boot queue shared by every instance (window knob discipline). */
+  /** One serialized admission queue shared by every instance. */
   #bootChain: Promise<void> = Promise.resolve()
 
   /**
@@ -198,7 +195,7 @@ class ShellRegistry {
    * constructing a new ctx — no same-id ctx overlap, and an old teardown can
    * never clear a new shell's shared state.
    */
-  #pendingDisposes = new Map<string, Promise<void>>()
+  #pendingDisposes = new Map<string, { entry: AppWebEntry; promise: Promise<void> }>()
 
   /** Session opens requested before boot; their original promises settle on dispatch. */
   #pendingOpens = new PendingOpenQueue(QUEUED_OPEN_TIMEOUT_MS)
@@ -212,18 +209,44 @@ class ShellRegistry {
   }
 
   #disposeEntry(instanceId: string, entry: AppWebEntry): void {
-    const promise = Promise.resolve().then(() => entry.dispose())
+    const previous = this.#pendingDisposes.get(instanceId)
+    // Timeout + late-settle can request disposal of the SAME entry twice.
+    // Never replace the still-running real teardown with the idempotent second
+    // call's immediately-resolved promise: a same-id retry would then construct
+    // before the first ctx finished releasing shared producers.
+    if (previous?.entry === entry) return
+    // A different entry for the same id is also serialized behind the prior
+    // teardown. This is defensive (normal boot admission already awaits it)
+    // and preserves the one-ctx-per-source invariant under unusual shutdown
+    // interleavings.
+    let promise: Promise<void>
+    if (previous === undefined) {
+      // Start immediately so timeout synchronously flips AppWebEntry's
+      // cancellation bit before resolving the caller-facing bounded promise.
+      try {
+        promise = Promise.resolve(entry.dispose())
+      } catch (error) {
+        promise = Promise.reject(error)
+      }
+    } else {
+      promise = previous.promise.catch(() => undefined).then(() => entry.dispose())
+    }
     promise.catch(error => console.error(`[shell] dispose of instance ${instanceId} threw:`, error))
-    this.#pendingDisposes.set(instanceId, promise)
-    void promise.finally(() => {
-      if (this.#pendingDisposes.get(instanceId) === promise) this.#pendingDisposes.delete(instanceId)
-    })
+    const record = { entry, promise }
+    this.#pendingDisposes.set(instanceId, record)
+    const clear = (): void => {
+      if (this.#pendingDisposes.get(instanceId) === record) this.#pendingDisposes.delete(instanceId)
+    }
+    // `finally()` would create a second rejecting promise when teardown fails;
+    // settle both arms explicitly so cleanup itself cannot become unhandled.
+    void promise.then(clear, clear)
   }
 
   /**
    * Boot (or queue) the instance shell into `el`. Returns the settled state.
-   * One boot at a time: `window.__DSH_BASE_PATH__` is set for the duration of
-   * this boot only, then removed.
+   * Normal boots run one at a time. A budget-expired task may still unwind in
+   * the background, but it owns immutable context routing and is cancelled
+   * before it can register.
    */
   boot(
     instanceId: string,
@@ -234,6 +257,10 @@ class ShellRegistry {
     // 取序必须在入队前：dispose 记录的阈值与 settle 检查都按本次 boot 的代。
     const gen = (this.#bootGenerations.get(instanceId) ?? 0) + 1
     this.#bootGenerations.set(instanceId, gen)
+    // Establish the generation floor before any async boot work starts. A
+    // cancelled older ctx that resumes late cannot register a producer after
+    // this point and temporarily displace this generation's facts.
+    chamberBridge.reserveInstanceProducerGeneration(instanceId, gen)
     const before: ShellState = { instanceId, basePath, booted: false, booting: true, error: null, pluginDegraded: false }
     onState(before)
     // 首启竞态修复（2026-08，05 §4）：任何 bundle 脚本执行前必须装好页面级
@@ -252,7 +279,7 @@ class ShellRegistry {
       moduleSystemError = reason instanceof Error ? reason.message : String(reason)
     }
     // 提前启动宿主启动图 fetch（LCP/perf pass，design 09 module C）：collectExtraRows
-    // 只读 basePath 参数、完全不碰 __DSH_BASE_PATH__ 旋钮（见下注释），所以可以在
+    // 只读 basePath 参数、完全不读页面级兼容 fallback，所以可以在
     // 排进串行链之前就开始——与排在前面的 boot（前一实例的 AppWebEntry.run()，最坏
     // 占满 BOOT_TIMEOUT_MS）以及 App 自身的启动工作重叠，而不是在拿到链槽后才发起
     // 网络往返。任务体仍在构造 entry 之前 await 它（extraRows-before-create 顺序不变：
@@ -285,7 +312,6 @@ class ShellRegistry {
     // entry（H1），而任务体在迟到 settle 时也用它走取消检查。
     let staleEntry: AppWebEntry | undefined
     const task = this.#bootChain.then(async () => {
-      const win = window as Window & { __DSH_BASE_PATH__?: string }
       try {
         // M1（2026 audit）：同 ID 旧 ctx 的异步 teardown 必须完成，新 boot
         // 才能构造新 entry——否则新旧 ctx 重叠，旧 teardown 会清掉新 ctx
@@ -293,7 +319,7 @@ class ShellRegistry {
         const pendingDispose = this.#pendingDisposes.get(instanceId)
         if (pendingDispose !== undefined) {
           try {
-            await pendingDispose
+            await pendingDispose.promise
           } catch { /* already logged by disposeEntry */ }
           if (this.#pendingDisposes.get(instanceId) === pendingDispose) this.#pendingDisposes.delete(instanceId)
         }
@@ -305,19 +331,15 @@ class ShellRegistry {
         // (boot.ts runPluginBoot — the factories branch).
         const extraRows = await extraRowsPromise
         // 预算已到期（超时分支已取消本 boot、拒绝 opens）：迟到 continuation
-        // 不得再设旋钮或构造 entry，直接退场——绝不与后续 boot 并发覆盖
-        // 窗口旋钮（H1）。
+        // 不得再构造 entry，直接退场（H1）。
         if ((this.#cancelledBoots.get(instanceId) ?? 0) >= gen) {
           return { instanceId, basePath, booted: false, booting: false, error: 'boot timed out', pluginDegraded } satisfies ShellState
         }
-        // 旋钮设置纳入 try（任何一步抛错都必须落成终态错误 settle，且 finally
-        // 保证旋钮清除——若在 try 之外抛出，任务 promise 拒绝且永无 settle，
-        // 视图骨架屏与预热队列会卡死），并放在 collectExtraRows 之后：图 fetch
-        // 与 bundle 预加载完全不读旋钮（basePath 是参数），放后面收窄旋钮窗口。
-        win.__DSH_BASE_PATH__ = basePath
-        // The sidebar plugin reads the knob while this boot materializes (05 §4).
-        setChamberInstanceId(instanceId)
-        const entry = new AppWebEntry(el, { loadBundle: loadModuleBundle, extraRows })
+        const entry = new AppWebEntry(el, {
+          loadBundle: loadModuleBundle,
+          extraRows,
+          chamberContext: { instanceId, basePath, generation: gen },
+        })
         staleEntry = entry
         await entry.run()
         if ((this.#cancelledBoots.get(instanceId) ?? 0) >= gen) {
@@ -366,26 +388,21 @@ class ShellRegistry {
         // 本次 pending 的 boot，重加实例后的新代 boot 天然不受影响。
         this.#rejectPendingOpens(instanceId, message)
         return { instanceId, basePath, booted: false, booting: false, error: message, pluginDegraded } satisfies ShellState
-      } finally {
-        // 迟到 settle 的旋钮清理必须按值守卫 + 代际守卫：值守卫防「误删他人
-        // 实例的旋钮」；代际守卫防「同实例重 boot 的迟到 finally 删掉新 boot
-        // 刚设的同值旋钮」（2026 最终 review MEDIUM）。
-        if (win.__DSH_BASE_PATH__ === basePath && this.#bootGenerations.get(instanceId) === gen) delete win.__DSH_BASE_PATH__
-        if (getChamberInstanceId() === instanceId && this.#bootGenerations.get(instanceId) === gen) setChamberInstanceId(undefined)
       }
     })
     // H1 修复（2026 audit）：整个 boot 任务（含 extraRows/run 各阶段）受预算
     // 约束。超时即取消——记录 cancelledBoots（任务体内的取消检查随后 dispose
     // 而非注册）、立即 dispose 已构造的 entry、拒绝排队 opens；调用方与串行
-    // 链都在预算内 settle，两个 boot 永不并发覆盖窗口旋钮（跨实例流量混淆的
-    // 根因）。vendor run() 可能仍卡在无超时 fetch 里：其迟到 settle 观察到
-    // cancelledBoots 后拆除，绝不注册。任务先 settle 时计时器必须清除——
+    // 链都在预算内 settle。vendor run() 可能仍卡在无超时 fetch 里：其路由
+    // 已固化在自己的 Cordis root context，迟到 settle 观察到 cancelledBoots
+    // 后拆除，绝不注册。任务先 settle 时计时器必须清除——
     // 否则过期计时器会在稍后误取消/误 dispose 一个已注册的 entry。
     const bounded: Promise<ShellState> = new Promise((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined
       const timeoutBranch = (): void => {
         console.error(`[shell] instance ${instanceId} boot timed out after ${this.#bootTimeoutMs}ms — cancelled`)
         this.#cancelledBoots.set(instanceId, gen)
+        chamberBridge.reserveInstanceProducerGeneration(instanceId, gen + 1)
         if (staleEntry !== undefined) this.#disposeEntry(instanceId, staleEntry)
         this.#rejectPendingOpens(instanceId, `boot timed out after ${this.#bootTimeoutMs}ms`)
         resolve({ instanceId, basePath, booted: false, booting: false, error: 'boot timed out', pluginDegraded } satisfies ShellState)
@@ -445,6 +462,8 @@ class ShellRegistry {
    * and the sidebar both anchor the registry, the shell must not diverge).
    */
   dispose(instanceId: string): void {
+    const generation = this.#bootGenerations.get(instanceId) ?? 0
+    chamberBridge.reserveInstanceProducerGeneration(instanceId, generation + 1)
     const holder = this.#entries.get(instanceId)
     if (holder !== undefined) {
       this.#entries.delete(instanceId)
@@ -481,6 +500,7 @@ class ShellRegistry {
     this.#entries.clear()
     for (const [instanceId, gen] of this.#bootGenerations) {
       this.#cancelledBoots.set(instanceId, gen)
+      chamberBridge.reserveInstanceProducerGeneration(instanceId, gen + 1)
     }
     this.#pendingOpens.rejectAll(new Error('全部实例 shell 已释放，排队的会话未打开'))
   }
@@ -496,8 +516,8 @@ export function __testSetBootTimeoutMs(ms: number): void {
 
 /**
  * Boot (or queue) the instance shell into `el`. Returns the settled state.
- * One boot at a time: `window.__DSH_BASE_PATH__` is set for the duration of
- * this boot only, then removed.
+ * Normal boots enter through one serialized queue; per-entry routing is
+ * immutable on the Cordis root context.
  */
 export function bootInstanceShell(
   instanceId: string,

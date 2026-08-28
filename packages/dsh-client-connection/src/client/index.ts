@@ -10,8 +10,8 @@
  * (default `/api` = stock) is resolved at carrier construction and handed to
  * both the HTTP/WS carrier and the generic RPC caller, so every api path
  * lands under the control-plane per-instance proxy prefix (`/api/i/<id>`).
- * When no config is passed, `window.__DSH_BASE_PATH__` (set by the chamber
- * shell before each sequential instance boot) is the fallback knob.
+ * When no config is passed, `window.__DSH_BASE_PATH__` remains a compatibility
+ * fallback. Chamber passes an explicit per-entry basePath.
  *
  * merged: upstream rc.2 transport hook (__DSH_TRANSPORT__).
  */
@@ -139,8 +139,8 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
   const pageLocation = typeof location === 'undefined' ? undefined : location
   const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
   // chamber patch: resolve the per-instance base path once, at construction
-  // (explicit config wins, then window.__DSH_BASE_PATH__ — deterministic under
-  // the chamber shell's sequential instance boots).
+  // (explicit config wins, then the window.__DSH_BASE_PATH__ compatibility
+  // fallback; chamber always uses the explicit per-entry value).
   const basePath = resolveInstanceBasePath(config?.basePath)
   // merged: upstream rc.2 transport hook — a shell owning a different physical
   // transport installs it on the page global before plugin boot (chamber's
