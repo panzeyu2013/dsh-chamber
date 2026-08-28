@@ -153,12 +153,19 @@ test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported r
   }
 })
 
-test('per-server source derivation: local / gateway-<id> / ssh-<id> / fallback', () => {
+test('per-server source derivation: local / gateway-<id> / ssh-<id> / dsh-<id>; unknown ids fail loud', () => {
   assert.equal(deriveRuntimeSource('local'), 'local')
   assert.equal(deriveRuntimeSource('gateway-inst-7'), 'gateway')
   assert.equal(deriveRuntimeSource('ssh-inst-3'), 'ssh')
-  assert.equal(deriveRuntimeSource(undefined), 'local')
-  assert.equal(deriveRuntimeSource('weird'), 'local')
+  // v2 dsh-<id> (kind='dsh', ssh tunnel or http direct) has no /chamber/*
+  // management surface (design 17 §3) — version read-only, never the full
+  // local management surface.
+  assert.equal(deriveRuntimeSource('dsh-inst-9'), 'ssh')
+  // Unknown ids and undefined FAIL LOUD — they must never fall back to 'local'
+  // (which would render the full runtime management surface).
+  assert.equal(deriveRuntimeSource(undefined), null)
+  assert.equal(deriveRuntimeSource(''), null)
+  assert.equal(deriveRuntimeSource('weird'), null)
 })
 
 test('restart-dsh gate (design 18 §3.6 项 8): allowed in non-busy phases, blocked while applying/busy/blocked', () => {
