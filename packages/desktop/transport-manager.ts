@@ -1040,6 +1040,14 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const seenIds = new Set<string>()
     let duplicates = 0
     for (const entry of parsed) {
+      // A null/non-object entry (corrupt or hand-edited file) must never
+      // throw inside provider resolution — drop it loudly with the other
+      // invalid entries (the corrupt whole-file path preserves the file;
+      // this is the per-entry defense).
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        dropped.push(entry)
+        continue
+      }
       // v2 migration first (design 17 §2.2): legacy kinds normalize before
       // provider selection so the provider is resolved by the v2 transport.
       const migrated = migrateInstanceEntry(entry)
@@ -1096,6 +1104,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const kindChangedIds: string[] = []
     const seenIds = new Set<string>()
     for (const entry of next) {
+      // A null/non-object entry must never throw inside provider resolution —
+      // drop it loudly with the other invalid entries (defensive; the renderer
+      // never produces one, a hand-edited file can).
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        dropped.push(entry as TransportInstanceInput)
+        continue
+      }
       // v2 migration first (design 17 §2.2): legacy kinds normalize before
       // provider selection so the provider is resolved by the v2 transport.
       const migrated = migrateInstanceEntry(entry)

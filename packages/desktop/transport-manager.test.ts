@@ -413,6 +413,20 @@ test('loadInstances fails loudly on corrupt files and drops invalid entries', ()
   const mixedManager = createTransportManager({ provider: sshProvider, instancesFile: mixed, logger: silentLogger })
   const loaded = mixedManager.loadInstances()
   assert.deepEqual(loaded.map(entry => entry.id), ['ok'])
+  // A null/non-object entry among valid ones must be DROPPED loudly, never
+  // throw inside provider resolution (per-entry defense beside the corrupt
+  // whole-file path).
+  const withNull = join(dir, 'with-null.json')
+  writeFileSync(withNull, JSON.stringify([
+    { id: 'ok', label: 'fine', host: 'h.example.com', remotePort: 22 },
+    null,
+    42,
+    'stray',
+    { id: 'also-ok', label: 'fine', host: 'h.example.com', remotePort: 22 },
+  ]))
+  const nullManager = createTransportManager({ provider: sshProvider, instancesFile: withNull, logger: silentLogger })
+  const nullLoaded = nullManager.loadInstances()
+  assert.deepEqual(nullLoaded.map(entry => entry.id), ['ok', 'also-ok'], 'valid entries survive; null/non-object entries are dropped')
 })
 
 test('label/serviceName-only edits keep the live tunnel untouched', async t => {
