@@ -6,6 +6,12 @@
 > 删除（渲染层唯一入口收敛为 `open-in-apps`/`open-in`）；OS 深链
 > `dsh-chamber://open-vscode` 管线**不变**。本文保留为 OS 深链与 vscode 拉起的
 > 契约；文中旧 IPC/桥面/包名描述属历史基线，以设计 20 §6 演进表为准。
+>
+> **连接模型 v2 注记（2026-09）**：本文 `ssh-<id>`（及 `kind === 'ssh'` 等）为
+> v1 连接模型表述，**design 17 连接模型 v2 迁移后为 legacy**——来源 id 迁移为
+> `dsh-<id>` / `gateway-<id>`（`ssh-` 前缀仅保留 legacy 兼容映射，deep link 可用），
+> kind 语义由目标类型（dsh/gateway）× 传输（ssh/http）取代（17 §2.2/§9.1）；
+> 本文相关表述随 PR1（连接模型 v2 代码）落地同步改写。
 
 > **状态：设计定稿并已实现（M0–M2，2026-08）**。经两轮反思 + 一轮独立对抗复核收敛
 > （复核发现无 P0；5 项 P1 必改与 P2 边界均已并入本文），实现后另经一轮安全契约
@@ -82,7 +88,8 @@ dsh-chamber://open-vscode?instance=<id>&path=<远端绝对路径>
 - 用 `new URL()` 解析；`hostname` 必须精确等于 `open-vscode`（其余 host 一律拒绝，
   不猜测、不归一化）；
 - `instance`：`INSTANCE_ID_PATTERN`（`/^(?!local$)[a-zA-Z0-9_-]{1,64}$/`）+
-  注册表实查（`transportManager.listInstances()`），`kind !== 'ssh'` 或查无 →
+  注册表实查（`transportManager.listInstances()`），`kind !== 'ssh'`（v1 legacy，
+  v2 迁移后按目标类型 `dsh`/`gateway` 判定，随 PR1 同步改写）或查无 →
   确定性拒绝 + loud；**`local` 显式放行**（用户决策 2026-08：走 §3.4 的 local 分支，
   不查注册表）；
 - `path`：必须以 `/` 开头（绝对路径），拒绝控制字符 / CR / LF / NUL，长度 ≤ 4096；
@@ -334,7 +341,8 @@ detectVscodeAvailability(platform): { available: boolean }
 
 ### 10.2 实现后审查记录（2026-08，两轮独立审查 + 修复）
 
-- **安全契约审查**（无 P0）：P1 两必改已修复——① 按钮侧视图 id（`ssh-<id>`）→ 裸注册表
+- **安全契约审查**（无 P0）：P1 两必改已修复——① 按钮侧视图 id（`ssh-<id>`，
+  v1 legacy 视图 id 表述，见文首注记）→ 裸注册表
   id 的映射（此前按钮传 `ssh-<id>`，主进程按裸 id 实查恒不命中，M2 核心功能不可用）；
   ② `detectVscodeAvailability` 的 X_OK 判定补 `isFile()`（POSIX 目录带执行位会被误判为
   可执行 `code`），Windows `Code.exe` 分支同补。P2 已修：parse 拒绝 userinfo/port、

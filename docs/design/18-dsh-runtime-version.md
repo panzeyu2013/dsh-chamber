@@ -110,7 +110,7 @@ dsh-runtime-updater.ts（客户端）
 ### 3.2 存储模型：不可变版本树 + 原子指针切换（R3-1 P1-1/P2-5）
 
 **宿主根（§9 扩展）**：desktop = `<userData>/dsh-runtime/`；gateway =
-`<stateDir>/dsh-runtime/`（与 gateway state 同目录，权限纪律并入 design 17 §10：
+`<stateDir>/dsh-runtime/`（与 gateway state 同目录，权限纪律并入 design 17 §12：
 目录 0700、JSON/secret 0600）。两个宿主各自管理自己托管实例的运行时，状态
 零交叉。树形与保留策略两侧完全同构：
 
@@ -339,13 +339,19 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
     `restartLocal()`（§9.3，与健康重启单飞行串行化）；
   - **gateway**：同一段内容，但事实与动作经该实例反代触达 gateway 的
     `/chamber/runtime`（`/api/i/gateway-<id>/chamber/runtime/*`，§9.3），
-    不接触 token（design 17 §7/§8.4 纪律）；状态机文案矩阵同口径；
-    重启 = `POST /chamber/runtime/restart`；
+    不接触 token（design 17 §7.2/§12 纪律）；状态机文案矩阵同口径；
+    重启 = `POST /chamber/runtime/restart`。**分期注记（STATUS M7）**：
+    当前 gateway settings 分支为**缩减视图**（remote 版本行 + 重启按钮 +
+    轮询），完整 per-server 段（版本选择器/状态/快照/变更经反代代理）属
+    后续阶段——登记于 STATUS 的 M7 剩余门禁（§9.5）；
   - **ssh**：版本只读——显示远端 dsh 版本行（实例面可得时）与「运行时由远端
     systemd 部署管理」说明，无版本 mutation 控件（远端运行时版本随 systemd，
     设计 13/18 口径）；**唯一动作 `[重启远端 dsh]`** = 既有 `restart_service`
     systemd IPC（03 §2.2）——刷新远端插件挂载（设计 13 §3 重启后加载新 row
-    同路径），同样二次确认 + 状态行。
+    同路径），同样二次确认 + 状态行；
+  - **dsh（http 直连）**：**不挂载**——无管理面、无 ssh 通道、无 `/chamber`
+    面（design 17 §3 能力差异表），该来源设置段不渲染 dsh-runtime 分节、
+    无任何版本/重启动作。
 - `DshRuntimeSection` 内部行序（自上而下，与上列显示规格一一对应）：
   ```
   .runtimeSection（官方 settings-section 词汇：列向 gap 8px）
@@ -710,7 +716,7 @@ interface RuntimeHostAdapter {
 **存储模型**：`<stateDir>/dsh-runtime/`，树形与 §3.2 同构（`<version>/` 不可变
 树、`current` 指针（普通文件禁 symlink）、`snapshots/`、`failures/`、
 `override.json`、activation journal、`.pnpm-store`/`.pnpm-cache`/`.install-home`/
-work 目录）。权限纪律并入 design 17 §10（目录 0700、JSON/secret 0600、每次
+work 目录）。权限纪律并入 design 17 §12（目录 0700、JSON/secret 0600、每次
 加载/写入复验；corrupt 元数据 → 隔离 + 响亮失败，复用 metadata-recovery
 语义）。磁盘治理随共享包带走，gateway 启动相位执行同一清理。**与 desktop 状态
 零交叉**——两个 owner 各自管理自己托管实例的运行时。**单进程不变量**：一个
@@ -748,7 +754,7 @@ const plane = createControlPlane({
 静态 `dshWorkspacePath` 字段保留作内建锚与 boot 日志；`runtimeTransactionWorkspace`
 在激活事务期间指向候选树，事务结束即清空。
 
-**启动顺序（design 17 §2.1 修订）**：在 `startLocal()` 之前插入运行时启动
+**启动顺序（design 17 §4.1 修订）**：在 `startLocal()` 之前插入运行时启动
 事务（共享包 `runtime-startup`）：残留 install 清理 → 逐出 → interrupted-restore
 幂等补完 →（有 pending 时）快照 `<stateDir>/dsh-home` → 原子切指针 → 经
 `startLocal()` spawn 候选（`canExposeLocal` 隔离）→ 全量只读探针 + ≤60s 窗口 +
@@ -818,7 +824,7 @@ npm registry（§6 已并入）；spawn 的 dsh 子进程与控制面保持零�
 
 **desktop 对 gateway 服务器的投影（§3.6 A 已并入）**：settings-bridge 的
 「dsh 运行时」段对 `gateway` server 经 `/api/i/gateway-<id>/chamber/runtime/*`
-反代触达上述面（只读状态 + 远端动作），不接触 token（design 17 §7/§8.4 纪律）。
+反代触达上述面（只读状态 + 远端动作），不接触 token（design 17 §7.2/§12 纪律）。
 
 ### 9.4 desktop 迁移（迁移期）
 
@@ -856,10 +862,10 @@ npm registry（§6 已并入）；spawn 的 dsh 子进程与控制面保持零�
   electron-updater、design 18 桌面引入 pnpm 同性质），实现 PR 须同步在
   AGENTS.md 的 current set 登记。
 
-### 9.7 安全不变量（单一权威 = design 17 §13 续号 S17–S20）
+### 9.7 安全不变量（单一权威 = design 17 §17 续号 S17–S20）
 
 本设计的安全不变量**不在两处重复表述**（防双处漂移，04 §7.1 同款纪律）：
-S17–S20 的权威表格在 `design/17-server-side-gateway.md` §13，本节只引用。
+S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只引用。
 要点：无快照不切指针（S17）、探针全绿才宣布（S18）、runtime 凭据不进日志 +
 0600/0700 + install 源钉死（S19）、不削弱 S12 且 `/chamber/runtime` 全认证
 （S20）。restart 动作不引入新编号——它受既有 S4（诚实失败）与 02 §3.5 健康

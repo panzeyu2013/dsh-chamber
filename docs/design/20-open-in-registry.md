@@ -13,13 +13,20 @@
 > 等价，无 P0）与两轮修复，验证门全绿（test:desktop 287 用例、全部插件
 > typecheck、build:renderer、test:renderer-shell、verify:i18n、frozen-lockfile）。
 > 剩余仅实机验收项（见 §9）。
+>
+> **连接模型 v2 注记（2026-09）**：本文 `ssh-<id>` 视图 id 与 `ssh-` 前缀剥离为
+> v1 连接模型表述，**design 17 连接模型 v2 迁移后为 legacy**——来源 id 迁移为
+> `dsh-<id>` / `gateway-<id>`（`ssh-` 前缀仅保留 legacy 兼容映射），前缀剥离与
+> instanceId 判定随之扩展（17 §2.2/§9.1）；本文相关表述随 PR1（连接模型 v2 代码）
+> 落地同步改写。
 
 ## 1. 目标与非目标
 
 ### 目标
 
 - **本地环境识别**：`sourceId === 'local'` 时可用 app 集 = [finder, vscode]
-  （≥2 → 图标按钮 + chevron 下拉选择）；远程来源（`ssh-<id>`）仅 vscode
+  （≥2 → 图标按钮 + chevron 下拉选择）；远程来源（`ssh-<id>`，v1 legacy——
+  v2 迁移后为 `dsh-<id>`/`gateway-<id>`，见文首注记）仅 vscode
   （`remoteCapable` 过滤，行为与 design 16 完全一致）；
 - **注册表抽象**：主进程 `OpenInApp` provider 接口（id / remoteCapable /
   available / open），新 app（terminal 等）= 新增一个 provider，桥面/IPC/客户端
@@ -158,7 +165,8 @@ Electron `shell.openPath` 成功返回 `''`、失败返回错误串——提取�
   挂载内记忆）+ chevron + `Menu`（portal，vendor primitives 原语）；chevron
   **打开即显示 + 后台 `refreshApps()` 重探**（toggle 关闭；协调器 epoch 防抖，
   会话中途装/卸 app 无需刷新页面）；
-- 打开：`ssh-` 前缀剥离 → `openIn.open(appId, instanceId, path)`；失败 loud
+- 打开：`ssh-` 前缀剥离（v1 legacy——v2 迁移后前缀为 `dsh-`/`gateway-`，随 PR1
+  同步改写）→ `openIn.open(appId, instanceId, path)`；失败 loud
   `console.error`（`openFailed` 前缀）+ `.catch` 兜底；
 - 图标：vscode = 官方图标资源（`vscode-icon.png`）；finder = 中性文件夹 SVG
   （design token 着色）；slot 条目 `label` 用中性文案（该 label 是 vendor 槽的
@@ -184,7 +192,8 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
 ## 7. 安全不变量
 
 - appId 精确白名单（不猜测、不归一化）；`openInApps` 模块私有不可篡改；
-- instanceId 门与 `runVscodeLaunch` 对称；`ssh-<id>` 视图 id 直呼被双层吸收
+- instanceId 门与 `runVscodeLaunch` 对称；`ssh-<id>`（v1 legacy，见文首注记）
+  视图 id 直呼被双层吸收
   （finder 走 remoteCapable 门拒绝 / vscode 走注册表实查 → `instance not found`）；
 - remoteCapable 双层（管线门 + provider 复查）；远程路径绝不进入本地文件系统面；
 - path 校验 + stat 存在性在主进程完成；只调 `shell.openPath`/`showItemInFolder`

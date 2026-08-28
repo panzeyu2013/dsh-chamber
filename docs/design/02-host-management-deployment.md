@@ -18,6 +18,8 @@
 >
 > 权威契约：`05-connection-manager.md`（架构 / PlaneHandle）；管理面端点见
 > `04-control-plane-api-data.md`；连接模型见 `03-connections-proxy.md`。
+> 服务端部署形态（gateway 单元 / http 直连）与远程连接模型 v2 见
+> `17-server-side-gateway.md`（2026-09 v2）。
 
 ---
 
@@ -44,7 +46,8 @@
 - **out**：会话/目标/终端等宿主能力（宿主原生，前端经每实例反代消费，
   03 §3）；dsh 连接协议（wire 以 vendor dsh-host-apiproxy 为权威，控制面仅用
   describe/健康探活面）；认证/审计
-  （随 v1 收敛整体移除）；远程实例的隧道与 systemd 编排（03 §2.2：桌面
+  （匿名 loopback 控制面随 v1 收敛整体移除；gateway 部署的认证/凭据/审计
+  见 17 §7/§13.4）；远程实例的隧道与 systemd 编排（03 §2.2：桌面
   主进程 transport-manager（ssh provider）+ 注册表）。
 
 ### 1.3 原则
@@ -444,13 +447,31 @@ WantedBy=multi-user.target
   须显式 `Environment=PATH=<node-bin-dir>:/usr/local/sbin:...`（整行字面赋值，
   无追加语法、无变量展开）；
 - **绑定面**：恒 `--host 127.0.0.1`（loopback）——chamber 隧道是唯一入口，
-  不额外暴露面；绕过隧道直连（0.0.0.0）须配套鉴权（v1 实例匿名）或反代前置。
+  不额外暴露面；绕过隧道直连（0.0.0.0）须配套鉴权（v1 实例匿名）或反代前置
+  （dsh 目标匿名 loopback 直连须反代/TLS 前置；gateway 目标自带认证边界与
+  公网请求策略，17 §5.1/§6）。
 - **远端 chamber host 包**：SSH transport 进入 `ready` 后，桌面主进程调用
   `seedRemoteChamberHostPackages`，把本次实际已构建的 host-graph + Git worktree
   两包写到 `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`，并对
   `<remoteDshHome>/profiles/web/cordis.patch.yml` 做一次合并写。它复用受限
   `cat/write-file` 通道，仅做分发，**不经 SSH 执行 Git**；已运行的远端 dsh
   需重启后才加载新 row，完整原子顺序、去重与失败语义见设计 13 §3。
+
+**gateway 目标单元形态（design 17，2026-09 v2）**：远程 gateway 部署以
+`dsh-chamber-gateway.service` 单元持久化（`install-gateway.sh` 一键安装器
+生成，17 §5），默认监听远端 30801（gateway 目标 `remotePort` 缺省；dsh 目标
+30800 不变，17 §2.2）：`ExecStart=<GATEWAY_BIN> serve --host 127.0.0.1
+--port 30801 …`，服务账号 / `NoNewPrivileges` / `PrivateTmp` / PATH 环境
+要求同本单元；凭据经 owner-only systemd `EnvironmentFile` 注入（17 §5）。
+ssh transport 的 systemd exec 起停目标按 `serviceName` 在该单元与
+`dsh.service` 间选择（03 §2.2 schema v2 注）。
+
+**http 直连形态（transport=http）**：无隧道子进程、无 systemd exec——桌面
+直接以 http(s) 访问目标端点。dsh 目标需**用户自建穿透**（TLS 反代 /
+tailscale / SSH 隧道 / frp，17 §1.1）把 loopback 实例暴露为可直连端点；
+gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形态下 systemd
+单元只作服务器侧部署参考，桌面侧不再编排远端服务起停（`serviceName`
+留空，03 §2.2）。
 
 ---
 

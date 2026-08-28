@@ -12,6 +12,65 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **凭据存储 safeStorage v2（S22）** —— `<userData>/gateway-secrets.json` schema
+  v2：tokens+passwords 双表，`SecretCryptoAdapter` 接线 Electron safeStorage
+  （`isEncryptionAvailable()` 不可用时 0600 明文回退）；v1 `gateway-tokens.json`
+  启动自动迁移（失败响亮保留旧文件）；密码 12–1024 visible ASCII 门；双表
+  corrupt 检测（`.corrupt` 保留）；凭据永不进注册表/日志/renderer。**token 与
+  密码两个独立可空维度**（17 §2.3，清除互不影响），整实例双清走显式
+  `setInstanceSecrets(id, null, null)`；**`instances_get` 投影合并
+  `secretStorage`（`'safeStorage' | 'plaintext'`）**——safeStorage 不可用时 UI
+  设置页可见明文回退路径。
+- **密码登录会话** —— gateway `/auth/login`（GET 最小登录页 / POST 校验密码 →
+  `dsh_gateway_session` cookie → 302 `/`）；桌面 `gateway-session.ts` 管理器
+  （12h `dsh_gateway_session` cookie，仅主进程内存，按 gateway origin 键控——
+  ssh 隧道目标 = 隧道端点 loopback http origin）经
+  `configureGatewaySessionProvider` 接线：verifyUp 对无 token 的密码型 gateway
+  目标 ensureSession、带 Cookie 探针（缓存会话快速路径，401 → invalidate +
+  terminal「重新输入密码」）、ready 注册按 token→Bearer / 密码→Cookie / 都空→0
+  头注入（0..2 白名单由 instance-proxy 复验）；`desktop_gateway_set_password`
+  IPC（write-only，变更撤销缓存会话）。**预过期会话刷新
+  （`gateway-session-refresh.ts`，TTL−60s 定时重登+重注册）**——每个已注册
+  密码型目标在缓存会话过期前 ~60s 定时重登并以新 cookie 重注册 transport、
+  重 arm（armed on ready / disarmed on 离开 ready/移除/退出；隧道重连换端点 →
+  新 origin 重新登录）；刷新失败保持旧注册并在过期时刻重试，已过期仍失败如实
+  告警、残余窗口走有界重连（verifyUp 用存储密码重登），绝不静默。
+- **SPKI 证书固定（S23）** —— 可选 `spkiPin`（hex sha256 of SPKI DER）作为
+  https 直连信任锚：verifyGatewayEndpoint socket 层 'secureConnect' 校验，不匹配
+  terminal「证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误」；
+  instance-proxy registerTransport / forwardHttp / forwardUpgrade 带 pin 转发
+  （不匹配 → 显式 502 upstream_failed）；http 模式拒绝 pin；真实 node:https
+  自签证书 fixture 测试（pin 匹配探针成功 / 不匹配 terminal / 无 pin 正常）。
+- **轻量非秘密审计（S24）** —— 桌面 `packages/desktop/audit-log.ts`（JSONL 追加
+  + fsync、0600（遗留松权限回紧）、5 MiB 轮转到 `<file>.1`、白名单序列化——
+  凭据字段即使误传也绝不落盘）记 phase 迁移（connecting/ready/error 含
+  requiresUserAction terminal）/ transport 注册注销（认证模式 token|password|
+  none + insecureHttp，不记值）/ 凭据 set-clear（不记值）；gateway
+  `packages/gateway/src/audit.ts`（`<stateDir>/audit.log`，0700 stateDir 内）+
+  dispatch.ts login 事件分类（成功/invalid_credentials/rate_limited/busy，含
+  客户端来源，绝不含密码与 cookie）；双端单元测试。
+
+### 变更
+
+- **设计 17 重写（2026-09，连接模型 v2）** —— `docs/design/17-server-side-gateway.md`
+  全面重写：远程连接提升为一等设计面，四维正交模型（目标类型 dsh/gateway × 传输
+  ssh/http × 认证可空 token/密码 × 通道服务器侧槽位）；http 明文/无认证登记为用户
+  决策有界偏差（S21，客户端不前置校验，服务器为认证权威）；安全增强逐项评估决策
+  （S22 safeStorage 集成 / S23 SPKI 证书固定集成 / S24 轻量非秘密审计集成，mTLS
+  与每连接网段策略预留槽位）；原 design 01 编排规则不再作为本设计依据，本设计
+  自包含（17 §1）。
+- **连接模型 v2 迁移决策（17 §2.2/§9.1）** —— 来源 id 由 `ssh-<id>` 迁移为
+  `dsh-<id>` / `gateway-<id>`（`ssh-` 前缀保留 legacy 兼容映射，deep link 可用）；
+  旧 `kind:'ssh'` → `{kind:'dsh', transport:'ssh'}`、旧 `kind:'gateway'` →
+  `{transport:'http'}`；kind 决定目标语义（dsh 目标永不注入认证头/挂载
+  `/chamber/*`；gateway 目标可注入可空 token/密码）。外围文档同步：01 文档地图/
+  引用与移出项 S22/S24 有界例外注记、08/19 来源 id 枚举、11 版本包计数与 userData
+  保留清单、14 托盘「连接 N」口径与退出确认矛盾修复、16/20 legacy 标注。
+  **S22/S23/S24 与密码登录会话代码已随 PR2/PR3 落地**（见上方「新增」条目）；
+  剩余发布前实机门禁如实登记于 `docs/progress/STATUS.md` 设计 17 条目。
+
 ## [0.2.0-beta.2] - 2026-08-27
 
 ### 新增

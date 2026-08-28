@@ -4,13 +4,16 @@
 > CHANGELOG 为准；剩余项（本机 pnpm 依赖）见 `docs/progress/STATUS.md`。
 > 本文档补全此前散落于
 > 05 §7.4/§7.6、03 §2.2 与 STATUS 中的契约实体，成为该面的设计权威。
+> **范围（连接模型 v2，17 §2/§9.1）**：本面只服务
+> `{kind:'dsh', transport:'ssh'}` 目标——gateway 目标（http/ssh）的插件与
+> 编排面走 gateway 自身编排面（17 §10），不经本 exec 通道。
 > 范围纪律：只做**编排**（远端 dsh plugin CLI 经 exec 通道驱动），不重造
 > dsh 宿主插件系统本身。设计 08 增加的 Git 执行仍在远端 dsh 实例内；本设计
 > 只负责把 chamber 自带的 host package 分发过去，绝不增加 `ssh ... git ...`。
 
 ## 1. 动机与范围
 
-- 远程 dsh 实例（`ssh-<id>`）的插件管理：远端 `dsh plugin` CLI 无法从 chamber
+- 远程 dsh 实例（`dsh-<id>`，`ssh-<id>` legacy）的插件管理：远端 `dsh plugin` CLI 无法从 chamber
   前端直接调用——经桌面主进程 + provider exec 通道编排（list / add / remove /
   restart / seed / materialize）。
 - 一键应用本地插件清单 + 可视化添加：npm 搜索（best-effort）与本地路径包

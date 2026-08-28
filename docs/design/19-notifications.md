@@ -149,7 +149,7 @@ function detectNotificationEdges(
 
 ```ts
 interface NotificationRequest {
-  sourceId: string            // 'local' | 'ssh-<id>'
+  sourceId: string            // 'local' | 'dsh-<id>' | 'gateway-<id>'（'ssh-<id>' 为 v2 迁移前 legacy，17 §2.2/§9.1）
   sessionId: string
   kind: NotificationKind | 'test'
   title: string

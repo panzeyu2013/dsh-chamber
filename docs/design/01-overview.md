@@ -9,7 +9,7 @@
 >
 > 桌面 v1 的认证/审计面已随收敛**整体移除**；桌面控制面 = 托管 + 反代 +
 > 静态服务，loopback-only、无认证边界。设计 17 另定义一个需显式启动、带强制认证
-> 边界（默认；`--no-auth` 为有界偏差，见 17 §3.1）的 server gateway；它不是把公网能力塞回匿名控制面。
+> 边界（默认；`--no-auth` 为有界偏差，见 17 §5.1/S1）的 server gateway；它不是把公网能力塞回匿名控制面。
 > 本文档是唯一入口；`05-connection-manager.md` 是 v1 权威契约。
 
 ---
@@ -88,12 +88,10 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code 深链插件：`dsh-chamber://` OS 深链 + `shell.overlay` 主区右上按钮快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed，现有包改动 = 0 |
-| 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 验收候选（2026-08-23） | 独立启动的认证 server 形态：单本地 dsh 公网接入、Desktop `gateway` transport 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only；剩余真实 dsh/TLS/打包实机门禁 |
+| 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 重写（2026-09，连接模型 v2） | 独立启动的认证 server 形态：单本地 dsh 公网接入、Desktop `gateway` transport 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only；连接模型 v2（四维正交 + S21–S24 集成决策，代码待落地） |
 | 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md) | 现行（M0/M2/M4 done；M1/M3 packaged evidence partial；2026-08，详见 STATUS；§9 gateway 服务端化 + 共享核心与 §3.6 per-server 设置段 = 已实现（M5–M7，2026-09）） | dsh 运行时版本管理：一次 source-bound tarball 下载 + SRI + pnpm `file:` 安装（唯一获取方式，无 Provider B）、per-server「dsh 运行时」设置段（agent 预设后）版本选择/回滚 + registry 源用户自设、探针门控激活 + 自动回退、快照/失败现场与磁盘治理；macOS/Linux 可管理，Windows 只读；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位 + S17–S20） |
 | 19 | [19-notifications.md](19-notifications.md) | 已实现（2026-09；四路 review 轮后） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
 | 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行（已实现（M0–M3），2026-08） | open-in 打开注册表（design 16 演进）：本地来源 Finder + 本地/远程 VS Code 的统一打开面；主进程 OpenInApp provider 注册表 + 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-client-ui-open-in`，旧 vscode IPC 收敛删除（2026-08 合并 main 时重编号 17→20，避开 design 17 gateway） |
-
-> 编号 18 未分配（10/12 保留在 docs/todo/，见上表）；文档地图以本表为唯一索引。
 
 ---
 
@@ -103,7 +101,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 
 | 域 | 处置 | 依据 |
 |---|---|---|
-| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **从桌面/control-plane 移除；gateway 仅保留入口认证** | loopback-only 是桌面 v1 安全面；design 17 的独立公网进程必须有认证（默认；`--no-auth` 为有界偏差），但不提供 control-plane 审计域 |
+| 认证/审计（统一登录/Passkey/会话 cookie/client token/审计 SQLite） | **从桌面/control-plane 移除；gateway 入口认证 + 桌面 S22/S24 受限形态为有界例外** | loopback-only 是桌面 v1 安全面；design 17 的独立公网进程必须有认证（默认；`--no-auth` 为有界偏差），但不提供 control-plane 审计域。**design 17 有界例外（设计已决策、代码未实现/待执行）**：S22——桌面凭据经 safeStorage 加密落盘（`<userData>/gateway-secrets.json` schema v2，不可用时回退 0600 明文）；S24——桌面/gateway 轻量非秘密审计（连接/认证事件）。两者都不构成域回流：凭据永不进注册表/日志/renderer，审计永不回流匿名控制面 |
 | 控制面薄壳聊天/会话列表/审批弹窗 | **移除** | dsh 官方前端复用取代 |
 | 控制面会话运行时/统一索引/交互管线 | **移除** | 各实例前端 runtime 自有（N-ctx） |
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |

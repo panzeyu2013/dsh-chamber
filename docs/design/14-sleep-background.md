@@ -103,7 +103,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   继续运行。显式退出（托盘「退出」/ Cmd+Q / 应用菜单）走现有
   `will-quit` → `transportManager.disposeAsync()` → `controlPlane.stop()` 完整
   清理路径，顺序不变。
-- 设置 = `quit` 时关窗仍受 D2 退出确认保护（有活动隧道/本地实例先确认再退出），
+- 设置 = `quit` 时关窗仍受 D2 退出确认保护（本地实例运行中先确认再退出；
+  远程隧道/连接不影响关闭——2026-08 修订，D2），
   非 darwin 行为与现状一致（关窗即退出）。
 - 三平台一致：macOS/win/linux 同走 `windowCloseBehavior`；macOS 系统惯例
   （红点/Cmd+W = hide、Cmd+Q = 退出）在 hide-to-tray 语义下天然一致。
@@ -142,9 +143,9 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 ### D3 托盘增强（P1，可选）
 
 - 状态 tooltip：`dsh-chamber · 控制面 http://127.0.0.1:<port> · <connectionState>
-  · 隧道 N/本地实例运行中`（非秘密投影，来自 transport-manager status push +
+  · 连接 N/本地实例运行中`（非秘密投影，来自 transport-manager status push +
   control plane `/health`）。
-- 菜单：显示窗口 / 退出（现状）+ 可选「N 个远程隧道活动」只读行。
+- 菜单：显示窗口 / 退出（现状）+ 可选「N 个远程连接活动」只读行。
 - 保持防御式构造（沿用 `maybeCreateTray` 的 try/catch 跳过语义：无图标资源/
   失败 → 跳过并日志，绝不阻塞启动）。
 - **不做** OpenChamber 式会话级托盘（会话业务归各实例前端 runtime，P2 纪律）。
@@ -214,7 +215,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 | 面 | 改动 |
 |---|---|
-| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；`backgroundThrottling: false`；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（活动隧道/本地实例投影，**含更新安装豁免 + 单飞**）；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
+| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；`backgroundThrottling: false`；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（本地实例运行中投影——远程隧道/连接不影响关闭（2026-08 修订，D2）；**含更新安装豁免 + 单飞**）；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 windowCloseBehavior / launchAtLogin / keepAwake）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |

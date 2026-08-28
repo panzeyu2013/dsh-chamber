@@ -1,8 +1,12 @@
 # 03 · 连接模型与每实例通用反代（v1 定稿）
 
-> 连接模型与每实例通用反代（v1 定稿，2026-08-14）：**连接模型**（本地 =
+> 连接模型与每实例通用反代（v1 定稿，2026-08-14；**连接模型随 design 17
+> 升级为 2026-09 v2**）：**连接模型**（本地 =
 > 控制面 catalog 单行；远程 = 桌面主进程注册表）+ **每实例通用反代**
 > `/api/i/<id>/*`（HTTP/WS/SSE 全量透传）。
+> **远程连接模型以 `17-server-side-gateway.md`（2026-09 v2）为权威**：
+> 目标类型 kind（dsh|gateway）× 传输方式 transport（ssh|http）× 认证 ×
+> 通道四维正交（17 §2）；本文 §2.2 注册表 schema 即 17 §9.1 的 v2 形态。
 > 薄壳时代 project 目录 / 适配器 / broker / 绑定 / 会话索引体系随 v2 整体
 > 退役（§1.3）。
 > 权威契约：`05-connection-manager.md`（架构 / 路径 / PlaneHandle / IPC）；
@@ -30,8 +34,9 @@
   （`ssh-instances.json`）schema 与 IPC 契约；每实例反代的路径映射 /
   失败与收敛语义。
 - **out**：宿主进程托管（02）；管理 REST 端点全表（04）；认证/审计
-  （随 v1 收敛整体移除）；隧道 / systemd 实现（desktop transport-manager（ssh provider），
-  本文只定契约边界）。
+  （匿名 loopback 控制面随 v1 收敛整体移除；桌面/gateway 连接的认证、
+  凭据与审计见 17 §7/§13.4）；隧道 / systemd 实现（desktop transport-manager
+  （ssh provider），本文只定契约边界）。
 
 ### 1.3 连接模型边界（旧体系删除项，01 §4/§5）
 
@@ -84,36 +89,54 @@
 不在此面）；`PATCH` 只改 `label / accentColor`；`status / dshPort` 是运行态
 投影。端点、请求/响应与幂等细节以 04 §3.2 为准。
 
-### 2.2 远程实例：桌面主进程注册表（ssh-instances.json）
+### 2.2 远程实例：桌面主进程注册表（ssh-instances.json，schema v2）
 
 - **位置与所有权**：`<userData>/ssh-instances.json`，由**桌面主进程**
   （main.ts 的 transport-manager + 实例注册表）读写；**不进控制面 catalog**
   （05 §1 架构图）。
-- **schema**（05 §7.4 的 IPC spec 同源）：
+- **schema v2**（17 §9.1 同源；05 §7.4 的 IPC spec 同源）：`kind` 是
+  **目标类型**（dsh|gateway，17 §2.1），`transport` 独立成维（ssh|http，
+  开放联合，provider 按 transport 注册，17 §2.2）：
 
 ```jsonc
 {
-  "id": "ssh-inst-7",            // 反代 id = ssh-<id>
-  "kind": "ssh",                 // provider kind（缺失/旧条目按注册表默认 kind 归一）
+  "id": "dsh-inst-7",            // 反代 id = dsh-<id>（ssh-<id> legacy 映射保留，17 §2.2）
+  "kind": "dsh",                 // 目标类型：dsh | gateway（kind 决定目标语义，17 §2.1）
+  "transport": "ssh",            // 传输：ssh | http（开放联合，17 §2.2）
   "label": "home-server",
   "host": "192.0.2.10",        // 文档保留网段占位（RFC 5737）
-  "user": "root",
+  "user": "root",                // transport=ssh 时必填
   "sshPort": 2222,               // SSH 守护端口（null = ssh 默认 22 / config Port）
-  "remotePort": 30800,           // 远程 dsh web profile 端口（02 §3.9 部署参考）
-  "serviceName": "dsh-chamber",  // 远程 systemd 单元名（exec 目标；null = 不托管起停）
-  "remoteDshHome": null          // 远端 dsh home（$DSH_HOME），插件同步/seed 的远端路径基准
-                                 // （null = ssh 默认 home；白名单见 13 §7.2，2026-08 新增）
+  "remotePort": 30800,           // ssh 隧道远端端口 / http 直连端口（02 §3.9 部署参考；
+                                 //  dsh 缺省 30800 / gateway 缺省 30801，17 §2.2）
+  "serviceName": "dsh-chamber",  // ssh 时：远端 systemd 单元（dsh.service /
+                                 //  dsh-chamber-gateway.service；null = 不托管起停）
+  "remoteDshHome": null,         // 远端 dsh home（$DSH_HOME），插件同步/seed 的远端路径基准
+                                 // （null = ssh 默认 home；白名单见 13 §7.2）
+  "insecureHttp": false,         // transport=http：true = http 明文（缺省 false = https，17 §9.1）
+  "spkiPin": null                // S23 可选 SPKI pin：hex sha256 of SPKI DER（^[0-9a-fA-F]{64}$）；
+                                 //  仅 gateway+https 有效，http 明文拒绝（17 §9.1）
 }
 ```
 
-- **生命周期**：SSH 隧道（`ssh -N [-p <sshPort>] -L <localPort>:127.0.0.1:
-  <remotePort> <user@host>`，sshPort null 时不传 `-p`，走 ssh 默认/config）+
-  systemd exec（`start/stop/is_active`，serviceName 校验
-  `^[a-zA-Z0-9_.-]+$`；复用 host-logs 的 RING_BUFFER 日志环与
-  AUTH_FAILURE_PATTERNS）；隧道 / 服务状态 → **phase** 投影给 renderer
+- **凭据不进注册表**：`tokenSet`/`passwordSet` 是主进程凭据存储的实时
+  **非秘密投影**（`instances_get` 读时合并，UI 徽标/编辑回填用）；
+  `transportTargetChanged` 不含 `insecureHttp` 与凭据投影（17 §9.1）。
+- **迁移规则（17 §2.2/§9.1）**：旧 `kind:'ssh'` 条目载入时映射为
+  `{kind:'dsh', transport:'ssh'}`；旧 `kind:'gateway'` 条目映射为
+  `{transport:'http'}`；source id 的 `ssh-` 前缀保留 legacy 兼容映射
+  （deep link 可用）。
+
+- **生命周期（transport=ssh）**：SSH 隧道（`ssh -N [-p <sshPort>] -L
+  <localPort>:127.0.0.1:<remotePort> <user@host>`，sshPort null 时不传
+  `-p`，走 ssh 默认/config）+ systemd exec（`start/stop/is_active`，
+  serviceName 校验 `^[a-zA-Z0-9_.-]+$`；复用 host-logs 的 RING_BUFFER 日志环与
+  AUTH_FAILURE_PATTERNS）；**transport=http 无子进程**——直接 http(s) 访问
+  目标端点（dsh 目标需用户自建穿透，gateway 目标即其入口，17 §2.2/§9.2）；
+  隧道 / 服务 / 直连状态 → **phase** 投影给 renderer
   （idle / connecting / ready / degraded / error）；
-  **隧道 URL 永不进 renderer**——renderer 只见 localPort / phase 投影
-  （05 §7.4）。
+  **隧道 URL 与直连端点 URL 永不进 renderer**——renderer 只见
+  localPort / phase 投影（05 §7.4；直连端点仅主进程持有，17 §9.3）。
 - **IPC 白名单**（renderer ↔ main，preload 限定）：全集见 05 §7.4（2026-08
   已扩展插件编排面 `desktop_ssh_plugin_*`、`restart_service`、
   `seed_host_graph`、`status_changed` 等，不再在此枚举）。要点：
@@ -123,13 +146,14 @@
 - **liveness 纪律**（AGENTS.md 正确性不变量）：隧道 / 服务事实只来自
   "隧道相位 + systemd is-active"的实时判定，从不持久化"已连接"状态。
 - **就绪 = 隧道 TCP + dsh 身份握手**：TCP accept 只证明目标端口上有服务
-  在听，不证明是 dsh。置 ready 前经 provider `verifyUp`（ssh：
-  `host.describe` 信封探测，与本地实例就绪判据同源，02 §3.2）验证远端
-  真是 dsh——目标端口上跑非 dsh 服务时显式报错/降级，**绝不呈现已连接**
-  （假连接修复）。**确定性失败免重试**：目标**应答了**探测但证明不是
-  （兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 验证结果带
-  `terminal` 标记，第一次失败即落 error 终态（重试无法改变应答）；
-  仅连接错误/超时等瞬时失败走重连。
+  在听，不证明是 dsh。置 ready 前经 provider `verifyUp`（`host.describe`
+  信封探测，与本地实例就绪判据同源，02 §3.2；**按 `spec.kind` 决定是否带
+  认证头**——dsh 目标无认证头、gateway 目标可选认证头，探针认证矩阵见
+  17 §9.2）验证远端真是目标——目标端口上跑非 dsh 服务时显式报错/降级，
+  **绝不呈现已连接**（假连接修复）。**确定性失败免重试**：目标**应答了**
+  探测但证明不是（兼容的）目标（HTTP 非 200 / 错误信封 / 版本过老）→
+  验证结果带 `terminal` 标记，第一次失败即落 error 终态（重试无法改变
+  应答）；仅连接错误/超时等瞬时失败走重连。
 - **两段式重连（2026-08 修订）**：瞬时失败先走**快速有界突发**（半开
   jitter 指数退避，1s→30s，至多 N=5 次），突发耗尽落 error（诚实红态）
   **但不停摆**——进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限）：
@@ -142,12 +166,12 @@
 
 ### 2.3 两形态对照
 
-| 维度 | 本地（local） | 远程（ssh-<id>） |
+| 维度 | 本地（local） | 远程（dsh-<id> / gateway-<id>） |
 |---|---|---|
 | 权威位置 | 控制面 catalog 单行（§2.1） | 桌面主进程注册表（§2.2） |
-| 进程所有权 | 控制面 spawn / reaper（02） | 远程 systemd（ssh provider exec） |
-| 反代目标 | 本机 web profile `127.0.0.1:dshPort` | 隧道 localPort |
-| 实例 id（`/api/i/<id>`） | `local` | `ssh-<sshInstanceId>` |
+| 进程所有权 | 控制面 spawn / reaper（02） | 远程 systemd（ssh provider exec）；http 直连无子进程（17 §2.2） |
+| 反代目标 | 本机 web profile `127.0.0.1:dshPort` | 隧道 localPort / 直连端点 origin |
+| 实例 id（`/api/i/<id>`） | `local` | `dsh-<id>`（ssh-<id> legacy）/ `gateway-<id>`（17 §9.3） |
 | 管理面可见性 | `/api/connections`（04 §3.2） | 不可见（renderer 经 IPC 投影） |
 
 ---
@@ -156,7 +180,9 @@
 
 ### 3.1 挂载与路径映射
 
-- 控制面挂载 `/api/i/<id>` 前缀；`id ∈ {local, ssh-<sshInstanceId>}`。
+- 控制面挂载 `/api/i/<id>` 前缀；`id ∈ {local, dsh-<id>, gateway-<id>}`
+  （`ssh-<id>` 为 legacy 兼容段，17 §2.2/§9.1；connectionId 由
+  `${kind}:${id}` 派生，17 §9.3）。
 - **HTTP 全量透传**：任意方法（**无方法白名单**——05 §1），保持
   method/body/headers；**WS upgrade** 直通（`events.mux` / `events.host`
   双下行流）；**SSE 直通**（`text/event-stream` 响应不缓冲、不逐条解析、
@@ -172,9 +198,14 @@ WS   /api/i/<id>/api/events.mux    → 实例 WS  /api/events.mux
 WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 ```
 
-- 反代不改写上游内容（不注入认证头——实例信任栅栏由 loopback +
-  trusted-host 满足，02 §2.1）；Host 头保持实例自身
-  `127.0.0.1:<port>`（与 `--trusted-host` 一致）。
+- 反代不改写上游内容；**认证头按 kind 白名单注入（17 §9.3）**：**dsh 目标
+  禁注入**——实例信任栅栏由 loopback + trusted-host 满足（02 §2.1），Host
+  头保持实例自身 `127.0.0.1:<port>`（与 `--trusted-host` 一致）；
+  **gateway 目标 0..2 个**可注入头（`Authorization` Bearer /
+  `Cookie` `dsh_gateway_session`），白名单逐项校验、绝不允许其他头；
+  上游 Host 改写为目标 origin（ssh 隧道 = loopback origin；http 直连 =
+  用户配置的 http(s) origin，非 loopback 放行——穿透由用户自建，
+  SSRF 面 = 用户配置面，17 §13.4）。
 
 ### 3.2 可达性（v1 无认证边界）
 
@@ -186,7 +217,9 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   适用；05 §8 安全不变量）。反代面要点：Host 门禁覆盖浏览器同源 DNS
   rebinding 读；静态壳（`/`、dist、`/assets/*`、`/manifest.json`）匿名加载，
   无敏感面。
-- 不再有认证/审计中间件（`/api/auth/*`、`/api/audit` 随 v1 收敛整体移除）。
+- 不再有认证/审计中间件（`/api/auth/*`、`/api/audit` 随 v1 收敛整体移除）——
+  **该匿名边界只约束普通 loopback 控制面**；gateway 部署的认证边界、
+  请求策略与 401/403/421 分类见 17 §6/§7.3。
 
 ### 3.3 失败语义（fail-loud）
 
@@ -239,4 +272,7 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 - `02-host-management-deployment.md`：local 实例进程托管（本文只引用其
   状态投影与端口语义）；
 - `05-connection-manager.md` §8：安全不变量（loopback-only、隧道 URL 与
-  SSH 材料永不进 renderer/日志）。
+  SSH 材料永不进 renderer/日志）；
+- `17-server-side-gateway.md`：远程连接模型 v2 的权威（kind × transport ×
+  认证 × 通道四维正交，§2；注册表 schema §9.1；反代头注入规则 §9.3；
+  凭据 / safeStorage / 审计 §12/§13.4；安全不变量 S21–S24 §17）。

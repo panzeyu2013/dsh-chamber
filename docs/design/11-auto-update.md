@@ -205,10 +205,10 @@
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于根 `dsh-chamber` + 13 个 `@dsh-chamber/*` 包（desktop/
-  control-plane/renderer/cli/dsh-host-client-graph/dsh-chamber-host-git-worktree/
-  gateway + **6 个客户端插件包** sidebar/layout/settings-connections/
-  settings-bridge/git/open-in），发版时**一致 bump**（semver 比较；`main.ts`
+- chamber 版本分布于根 `dsh-chamber` + 14 个 `@dsh-chamber/*` 包（desktop/
+  control-plane/renderer/cli/dsh-runtime/dsh-host-client-graph/
+  dsh-chamber-host-git-worktree/gateway + **6 个客户端插件包** sidebar/layout/
+  settings-connections/settings-bridge/git/open-in），发版时**一致 bump**（semver 比较；`main.ts`
   读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入
   更新控制器）。**release.yml 断言集（8 包：根 + desktop/control-plane/
   renderer/cli/dsh-host-client-graph/dsh-chamber-host-git-worktree/gateway——
@@ -218,8 +218,10 @@
   / `dsh-client-web` 保持上游基线版本 0.1.1-rc.2，不随 chamber 发版移动）。
   vendored dsh 源为 0.1.1-rc.2——插件版本只在 chamber 侧参与 workspace 解析，
   从不与 dsh 源逐位对齐，也从不参与任何比较/展示。
-- 更新只替换应用本体；`userData`（`ssh-instances.json`、state、`ssh-passwords.json`）
-  天然保留。未来若改变注册表/状态格式 → 首启迁移（幂等、失败响亮不冒充成功）。
+- 更新只替换应用本体；`userData`（`ssh-instances.json`、state、
+  `ssh-passwords.json`、`gateway-secrets.json`（schema v2 桌面凭据存储：
+  safeStorage 加密 / 0600 明文回退，design 17 §12））天然保留。未来若改变
+  注册表/状态格式 → 首启迁移（幂等、失败响亮不冒充成功）。
 - 升级不要求升级远端 dsh；与旧版本 chamber 的远端实例握手兼容（`verifyUp`）。
 
 ## 9. 实现记录与剩余项

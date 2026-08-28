@@ -63,13 +63,80 @@
   时 settings 响亮提示手动安装。契约见 `docs/design/11-auto-update.md`。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收
   （行出现延迟、状态图标延迟、位置跳动三类症状的改善确认）。
-- **认证服务端 Gateway（设计 17）**：剩余发布前门禁——生产 TLS 反代
-  （Caddy 等）Host/Origin/XFF/Secure-cookie 实机验证、真实 dsh 的
-  events.mux/host 双 WS 断线恢复与插件 bundle、打包 Desktop 的
-  Gateway/N-ctx/token 撤销实测、真 Git 仓库的并发 session 删除竞态与恢复、
-  macOS Developer ID 公证安装及 Windows 签名安装；session.list→Git mutation
-  的 TOCTOU 已以 realpath fail-closed + 两次 live check + non-force 缩小
-  （上游根治待原子 session lease）。**范围偏差（2026-08 用户决策）**：
+- **认证服务端 Gateway（设计 17）**：剩余发布前实机门禁（17 §16.2）——生产
+  TLS 反代（Caddy 等）Host/Origin/XFF/Secure-cookie 实机验证、真实 dsh 的
+  events.mux/host 双 WS 断线恢复与插件 bundle；**打包 Desktop 三形态新增
+  Gateway**（https+凭据 / http 明文+凭据 / http 无认证）、重启后自动连接
+  （safeStorage 解密 + 密码会话重登）、token/密码更新/清除撤销既有流、N-ctx
+  与 gateway 缩减视图（版本行+重启+轮询，STATUS design 18 条目同口径）；生产
+  TLS 反代下 `/chamber/runtime` 的 SSE/poll
+  与认证行为（design 18 §9.5）；`--bind 0.0.0.0` 明文 HTTP 直连（带凭据 /
+  `--no-auth`）、SSH 隧道回环直连、tailscale 直连——四组合全链路 + 401/421/403
+  负例；真 Git 仓库的并发 session 删除竞态与恢复、macOS Developer ID 公证安装
+  及 Windows 签名安装。session.list→Git mutation 的 TOCTOU 已以 realpath
+  fail-closed + 两次 live check + non-force 缩小（上游根治待原子 session
+   lease）。**已实现（PR2/PR3 落地，17 §2.3/§5.1/§12/§13.4/S21–S24 决策）**：S21
+   （http 明文 `insecureHttp` + 客户端不前置校验）保持既有实现；S22/S23/S24
+   与密码登录会话（`/auth/login` + cookie 注入 + 401 重登）已落地，逐项如下。
+   - **S22 凭据存储 v2（safeStorage + 0600 明文回退）**：`gateway-secrets.json`
+     schema v2 tokens+passwords 双表；`SecretCryptoAdapter` 接线 Electron
+     safeStorage（`isEncryptionAvailable()` 为真时 encrypt/decrypt 为 base64
+     密文 blob，否则 0600 明文回退）；v1 `gateway-tokens.json`（schemaVersion 1）
+     启动时自动迁移（失败响亮保留旧文件；v2 写成功但旧文件 unlink 失败 → 每次
+     后续启动加载到有效 v2 时静默重试删除）；token/密码清除互不影响（§2.3 独立
+     可空维度），整实例双清走显式 `setInstanceSecrets(id, null, null)`
+     （main.ts `clearStoredSecrets`）；密码 12–1024 visible ASCII 门；双表
+     corrupt 检测（`.corrupt` 保留）；`configureGatewayTokenStore` 保留为明文
+     别名（v1 文件名 →v2 迁移路径仍有效）；**`instances_get` 投影合并
+     `secretStorage`（`'safeStorage' | 'plaintext'`）**——safeStorage 不可用时
+     main 侧 loud registration + UI 设置页可见明文回退路径。
+   - **S23 SPKI 证书固定（https 直连可选门）**：`TransportInstanceInput`/`Spec` 可选
+     `spkiPin`（hex sha256 of SPKI DER，`^[0-9a-fA-F]{64}$`，validateSpec 拒绝非法值
+     与 http 模式 + pin）；verifyGatewayEndpoint https + pin → socket 层
+     'secureConnect' SPKI 校验（Node 22 实测 checkServerIdentity 错误在
+     rejectUnauthorized:false 下被忽略、内部 CA 链在 rejectUnauthorized:true 下
+     先失败——故 pin 作为信任锚：rejectUnauthorized:false + agent:false + 校验器，
+     不匹配 terminal「证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误」）；
+     instance-proxy registerTransport 第 4 参 `opts.tls.spkiPin`（仅 gateway+https，
+     dsh/http 拒绝），TransportRecord 携带，proxy-forward forwardHttp/forwardUpgrade
+     带 pin 转发（不匹配 → 显式 502 upstream_failed）；main.ts 注册时传
+     `opts.tls.spkiPin = spec.spkiPin`；transport-manager transportFieldsChanged 纳入
+     spkiPin（pin 编辑重启活动传输）；真实 node:https 自签证书 fixture 测试
+     （pin 匹配探针成功 / 不匹配 terminal / 无 pin 正常；registerTransport 校验；
+     带 pin 转发 HTTP/WS）。
+   - **S24 轻量非秘密审计（桌面 audit.log + gateway 登录事件投影）**：桌面
+     `packages/desktop/audit-log.ts`（JSONL 追加 + fsync、0600（遗留松权限回紧）、
+     5 MiB 轮转到 `<file>.1`（删旧 .1）、白名单序列化——凭据字段即使被误传也绝不
+     落盘）+ main.ts DI（`configureAuditLog(<userData>/audit-log.jsonl)`）：phase
+     迁移（connecting/ready/error 含 requiresUserAction terminal）、transport
+     注册/注销（认证模式标记 token|password|none + insecureHttp，不记值）、
+     set_gateway_token/set_gateway_password 的 set/clear（不记值）；
+     `packages/gateway/src/audit.ts` 同款 + index.ts 配置 `<stateDir>/audit.log`
+     （0700 stateDir 内）+ dispatch.ts login 分支记成功/invalid_credentials/
+     rate_limited/busy 分类（含客户端来源，绝不含密码与 cookie）；双端单元测试
+     （追加/轮转/0600/无凭据字段 + login 事件分类）。
+   - **密码登录会话（`/auth/login` + cookie 注入 + 401 重登）**：gateway 侧
+     `/auth/login`（GET 最小登录页 / POST 校验密码 → `dsh_gateway_session`
+     cookie → 302 `/`）；桌面侧 `gateway-session.ts` 管理器（12h
+     `dsh_gateway_session` cookie，仅主进程内存，按 **gateway origin 键控**——
+     ssh 隧道目标 = 隧道端点 loopback http origin，http 直连 = 配置 origin）经
+     `configureGatewaySessionProvider` 接线：verifyUp 对无 token 的密码型
+     gateway 目标 ensureSession → 带 Cookie 探针（缓存会话快速路径，401 →
+     invalidate + terminal「重新输入密码」，token 优先）；ready 注册按
+     token→Bearer / 密码→cachedCookie→Cookie / 都空→0 头组装注入（0..2 白名单
+     由 instance-proxy 复验）；**预过期会话刷新（TTL−60s 定时重登+重注册，
+     `gateway-session-refresh.ts`）**：每个已注册密码型目标在缓存会话过期前
+     ~60s 定时重登并以新 cookie 重注册 transport、重 arm（armed on ready /
+     disarmed on 离开 ready/移除/退出；隧道重连换端点 → 新 origin 重新登录），
+     刷新失败保持旧注册、过期时刻重试、已过期仍失败如实告警走有界重连
+     （verifyUp 用存储密码重登）；main.ts 切到
+     `configureGatewaySecretStore(<userData>/gateway-secrets.json)` + 密码 IPC
+     `desktop_gateway_set_password`（12–1024 visible ASCII 门 + id 白名单/存在性
+     镜像 token setter，变更时同时撤销缓存会话；write-only，preload/两处
+     global.d.ts 同步）；`instances_get` 合并 `tokenSet`+`passwordSet`+
+     `secretStorage` 三项非秘密投影。
+   **待执行**：重启后自动连接的实机验收。
+  **有界偏差（2026-08 用户决策）**：
   `--no-auth` 显式开关允许无认证外部绑定覆盖 S1 硬门（默认 fail closed，
   仅显式传参放行并打印醒目安全告警，仅限可信网络）；**已记录风险**：N-ctx
   单文档模型使'连接一个远端服务器'的信任边界扩大到'同一渲染文档内所有实例'
@@ -97,7 +164,10 @@
 ## 范围决策与剩余偏差（不做 / 推迟 / 移出）
 
 - **移出项**（P3 硬纪律，永不回流）：认证/审计（密码/Passkey/会话 cookie/
-  client token/限流/审计 SQLite）、控制面薄壳聊天/会话列表/审批弹窗、控制面
+  client token/限流/审计 SQLite）——**永不回流限定为匿名控制面**（design 17
+  有界例外：gateway 入口认证面 + 桌面 S22 safeStorage 凭据存储 / S24 轻量非
+  秘密审计，见 17 §12/§13.4；凭据永不进注册表/日志/renderer，审计不回流
+  匿名控制面）；控制面薄壳聊天/会话列表/审批弹窗、控制面
   会话运行时/统一索引/交互管线、连接注入适配器/broker/绑定、walkthrough、
   通知中心、cron、文件夹/笔记、web 预览、MCP、目标/终端等宿主 UI 职责面
   （处置映射见 01 §4；git/GitHub 例外：插件化，见 01 §4 / 设计 08）。
