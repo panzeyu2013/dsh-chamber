@@ -223,3 +223,93 @@ test('ChamberInjectionState / ChamberHostGraphState / ChamberSettings stay in lo
   assert.deepEqual(interfaceFieldNames(preload, 'ChamberHostGraphState'), interfaceFieldNames(renderer, 'ChamberHostGraphState'), 'ChamberHostGraphState preload/renderer drifted')
   assert.deepEqual(interfaceFieldNames(renderer, 'ChamberSettings'), interfaceFieldNames(preload, 'ChamberSettings'), 'ChamberSettings preload/renderer drifted')
 })
+
+// ---------------------------------------------------------------------------
+// B8: channel-name lockstep (string-level guard). The main side registers
+// every channel through the IPC_CHANNELS constants in ipc-events.ts (single
+// source of truth); the preload CANNOT import that module (build-preload.mjs
+// self-contained single-file contract), so its literals are duplicated on
+// purpose. These tests assert the two sides can never drift:
+//   main-side  ipcMain.handle  set  ==  preload-side ipcRenderer.invoke set
+//   main-side  webContents.send set ==  preload-side ipcRenderer.on    set
+// and that every preload literal is a known IPC_CHANNELS value (so a rename
+// in the constants fails loudly on the preload side too).
+// ---------------------------------------------------------------------------
+
+const { IPC_CHANNELS } = await import('./ipc-events.ts')
+
+/** The main-process files that register IPC channels (main.ts assembly +
+ *  the wiring modules). */
+const MAIN_SIDE_FILES = [
+  'main.ts',
+  'ipc-settings.ts',
+  'ipc-notifications.ts',
+  'ipc-ssh.ts',
+  'ipc-plugin-sync.ts',
+  'ipc-open-in.ts',
+  'ipc-update.ts',
+  'ipc-deep-link.ts',
+]
+
+function mainSideSource(): string {
+  return MAIN_SIDE_FILES
+    .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
+    .join('\n')
+}
+
+/** Collect the channel names of one main-side registration/send call: the
+ *  argument is either an IPC_CHANNELS constant reference (resolved against
+ *  the imported constants) or a raw quoted literal (a regression the guard
+ *  must also surface — the constant set is the source of truth). */
+function collectMainChannels(source: string, call: 'ipcMain.handle' | 'webContents.send'): string[] {
+  const channels = new Set<string>()
+  const pattern = new RegExp(`${call}\\(\\s*(?:IPC_CHANNELS\\.([A-Z][A-Z0-9_]*)|'([^']*)'|"([^"]*)")`, 'g')
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(source)) !== null) {
+    if (match[1] !== undefined) {
+      const key = match[1] as keyof typeof IPC_CHANNELS
+      assert.ok(key in IPC_CHANNELS, `main-side code references an unknown IPC_CHANNELS member: ${match[1]}`)
+      channels.add(IPC_CHANNELS[key])
+    } else {
+      // A raw literal on the main side: still pinned by the equality checks
+      // below, but the constants are the source of truth — loud here too.
+      channels.add(match[2] !== undefined ? match[2] : match[3])
+    }
+  }
+  return [...channels].sort()
+}
+
+/** Collect the preload-side channel literals of one ipcRenderer call. */
+function collectPreloadChannels(source: string, call: 'invoke' | 'on'): string[] {
+  const channels = new Set<string>()
+  const pattern = new RegExp(`ipcRenderer\\.${call}\\(\\s*'([^']*)'`, 'g')
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(source)) !== null) channels.add(match[1])
+  return [...channels].sort()
+}
+
+const mainHandleChannels = collectMainChannels(mainSideSource(), 'ipcMain.handle')
+const mainSendChannels = collectMainChannels(mainSideSource(), 'webContents.send')
+const preloadInvokeChannels = collectPreloadChannels(preload, 'invoke')
+const preloadOnChannels = collectPreloadChannels(preload, 'on')
+
+test('every ipcMain.handle channel is an IPC_CHANNELS constant (B8 — no raw main-side literals)', () => {
+  const mainSource = mainSideSource()
+  const rawLiteral = /ipcMain\.handle\(\s*'([^']*)'|ipcMain\.handle\(\s*"([^"]*)"/.exec(mainSource)
+  assert.equal(rawLiteral, null, `main-side ipcMain.handle must use IPC_CHANNELS constants, found raw literal: ${rawLiteral?.[1] ?? rawLiteral?.[2]}`)
+})
+
+test('the main-side handle channel set EQUALS the preload invoke channel set (B8)', () => {
+  assert.deepEqual(mainHandleChannels, preloadInvokeChannels, 'ipcMain.handle channels drifted from the preload invoke channels')
+})
+
+test('the main-side send channel set EQUALS the preload on channel set (B8 — pushes can never drift)', () => {
+  assert.deepEqual(mainSendChannels, preloadOnChannels, 'webContents.send channels drifted from the preload on channels')
+})
+
+test('every preload channel literal is a known IPC_CHANNELS value (B8 — constants are the single source)', () => {
+  const known = new Set<string>(Object.values(IPC_CHANNELS))
+  for (const channel of [...preloadInvokeChannels, ...preloadOnChannels]) {
+    assert.ok(known.has(channel), `preload references a channel that is not in IPC_CHANNELS: ${channel}`)
+  }
+})

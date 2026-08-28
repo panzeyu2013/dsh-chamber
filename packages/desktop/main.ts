@@ -11,75 +11,61 @@
  * manager's ready phase — the transport URL stays in the main process and
  * never enters a renderer payload (design 05 §8).
  *
- * Responsibilities:
+ * This file is the thin boot after the A1 split: window lifecycle
+ * (single-frame BrowserWindow, renderer recovery, tray, deep-link intake
+ * handlers), the exit state machine (before-quit confirmation / will-quit
+ * parallel cleanup + 5s force quit) and the wiring assembly. The IPC
+ * surfaces live in the domain wiring modules, each registered with a
+ * `register*` call injecting its dependencies:
+ * - ipc-settings.ts — chamber settings holder + side effects (design 14 D7)
+ * - ipc-notifications.ts — native notification chain + open queue (design 19)
+ * - ipc-ssh.ts — transport manager + desktop_ssh_* surface (design 03/05)
+ * - ipc-plugin-sync.ts — remote/local plugin management (design 13)
+ * - ipc-open-in.ts — open-in registry (designs 16/17)
+ * - ipc-deep-link.ts — VS Code deep-link queue + drain (design 16)
+ * - ipc-update.ts — update controller (design 11)
+ *
+ * Responsibilities kept here:
  * - Single-frame BrowserWindow (contextIsolation, no nodeIntegration).
  * - Control plane lifecycle: spawn on ready, stop() on will-quit.
- * - Transport manager (transport-manager.ts + the `ssh` provider in
- *   ssh-provider.ts, design 03 §2.2): persisted instance registry
- *   (<userData>/ssh-instances.json), transport lifecycle, remote systemd
- *   exec (start/stop/is-active).
- * - Transport registration: ready transport → registerInstanceTransport
- *   ('<kind>:<id>', readyUrl); leaving ready → unregisterInstanceTransport.
- *   (design 03 §2.2, driven by transport-manager + the `ssh` provider's
- *   tunnel phase).
- * - IPC (preload whitelist, design 05 §7.4): dsh-chamber:info, the
- *   desktop_ssh_* surface incl. start/stop/is-active, status pushes.
- * - Tray (packaged only, defensive), single-instance lock.
+ * - Quit state machine (design 14 D2) + cleanup ordering (before-quit /
+ *   will-quit parallel + QUIT_CLEANUP_TIMEOUT_MS force quit).
+ * - Tray (packaged only, defensive), single-instance lock, OS wake handling.
+ * - The dsh-chamber:info bootstrap channel (needs every boot fact).
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
-import type { IpcMainInvokeEvent } from 'electron';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
-import os from 'node:os';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, session } from 'electron';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
-import { createTransportManager } from './transport-manager.ts';
-import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
-import type { TransportManager } from './transport-manager.ts';
-import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
-import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
-import { discoverSshConfigHosts } from './ssh-config.ts';
-import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
-import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
-import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
-import { listOpenInApps, normalizeOpenPathError, runOpenInLaunch } from './open-in.ts';
-import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
-import { createUpdateController } from './updater.ts';
-import { SYSTEM_RESUME_EVENT } from './ipc-events.ts';
-import {
-  applyPlugins,
-  CLIENT_GRAPH_INSERT_ID,
-  CLIENT_GRAPH_PACKAGE_NAME,
-  describeLocalPluginAddConfirmation,
-  describeLocalPluginRemoveConfirmation,
-  describeSeedConfirmation,
-  describeMaterializeConfirmation,
-  describePluginApplyConfirmation,
-  GIT_WORKTREE_INSERT_ID,
-  GIT_WORKTREE_PACKAGE_NAME,
-  localPluginList,
-  materializeAndAdd,
-  redactLocalPluginManifest,
-  remoteHome,
-  remotePluginList,
-  resolveLocalMaterializeDirectory,
-  runLocalDshPlugin,
-  seedRemoteChamberHostPackages,
-} from './plugin-sync.ts';
-import type { ChamberHostPackageSeed, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
+// The dual-path control-plane resolution (packaged → compiled artifact,
+// dev → workspace source) is single-sourced in control-plane-module.ts (A2
+// cross-package protocol single-sourcing) — the same module ssh-provider.ts
+// and plugin-sync.ts consume their shared envelope/cordis primitives from.
+import { CONTROL_PLANE_ENTRY, createControlPlane } from './control-plane-module.ts';
+import { createTrustedIpc, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { IPC_CHANNELS } from './ipc-events.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
+  closeToTrayRecoveryAvailable,
   computeQuitRisk,
-  computeSupported,
-  readSettingsFile,
   shouldHideToTray,
-  validatePatch,
-  writeSettingsFile,
 } from './chamber-settings.ts';
-import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
-import { claimNotification, decideNotification, validateNotificationRequest } from './notifications.ts';
-import type { NotificationSettingsLike } from './notifications.ts';
+import type { ChamberSettings } from './chamber-settings.ts';
+import { isLocalProcessRunning, isUpdateDownloadReady } from './wiring.ts';
+import { registerSettings } from './ipc-settings.ts';
+import type { SettingsWiring } from './ipc-settings.ts';
+import { registerNotifications } from './ipc-notifications.ts';
+import type { NotificationsWiring } from './ipc-notifications.ts';
+import { registerSsh } from './ipc-ssh.ts';
+import type { SshWiring } from './ipc-ssh.ts';
+import { registerPluginSync } from './ipc-plugin-sync.ts';
+import { registerOpenIn } from './ipc-open-in.ts';
+import { enqueueDeepLink, registerDeepLink, scanDeepLinkUrls } from './ipc-deep-link.ts';
+import type { DeepLinkWiring } from './ipc-deep-link.ts';
+import { registerUpdate } from './ipc-update.ts';
+import type { UpdateWiring } from './ipc-update.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
@@ -140,17 +126,6 @@ const pkgDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(pkgDir, '..', '..');
 const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
 
-// 打包态导入编译产物（Node 类型擦除不覆盖 node_modules，workspace 包的 TS
-// 源码无法在 asar 内运行）；开发态走 workspace 符号链接直接运行源码。类型
-// 以源码包为准（编译产物由 build:control-plane 生成，产物缺省时类型检查不
-// 可依赖它）。
-const CONTROL_PLANE_ENTRY = path.join(pkgDir, 'dist', 'control-plane', 'index.js');
-const controlPlaneEntrySpecifier = './dist/control-plane/index.js';
-const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (app.isPackaged
-  ? import(controlPlaneEntrySpecifier)
-  : import('@dsh-chamber/control-plane'));
-const { createControlPlane } = controlPlaneModule;
-
 function resolveDshWorkspace(): string | null {
   if (process.env.DSH_CHAMBER_DSH_PATH) {
     return process.env.DSH_CHAMBER_DSH_PATH;
@@ -185,125 +160,34 @@ function readDshVersion(workspace: string | null): string | null {
   }
 }
 
-/**
- * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
- * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
- * startsWith string check) so scheme/host/path-root are pinned exactly.
- *
- * Two extra defenses (2026-08 review):
- * - `new URL` does NOT decode percent-encoded path segments, so an encoded
- *   `..%2f..%2f` traversal would pass a raw pathname prefix check yet land on
- *   an arbitrary github.com path (the browser decodes on request). Decode the
- *   pathname and re-normalize through a fresh URL before the prefix check.
- * - userinfo (`https://user:pass@github.com/...`) is ignored by `origin`;
- *   reject any non-empty username/password so the allowlist can never be
- *   pointed at a credentialed github.com URL.
- */
-function isAllowedReleaseUrl(raw: unknown): boolean {
-  if (typeof raw !== 'string') return false;
-  try {
-    const url = new URL(raw);
-    if (url.origin !== 'https://github.com') return false;
-    if (url.username !== '' || url.password !== '') return false;
-    // Decode + re-normalize the pathname: an encoded traversal then normalizes
-    // like a literal one and fails the prefix check instead of escaping it.
-    const normalized = new URL(`https://github.com${decodeURIComponent(url.pathname)}`).pathname;
-    return normalized.startsWith('/panzeyu2013/dsh-chamber/');
-  } catch {
-    return false;
-  }
-}
-
 let mainWindow: BrowserWindow | null = null;
 let controlPlane: PlaneHandle | null = null;
-let transportManager: TransportManager | null = null;
 let tray: Tray | null = null;
 // 当前窗口 URL（控制面 origin，控制面启动后赋值）。窗口被关闭后可据此
 // 重建（macOS activate 路径）——没有它，窗口一旦关闭应用就永久无窗。
 let mainWindowUrl: string | null = null;
 
-// Chamber settings (design 14 D7, v1 scope): loaded at startup from
-// <userData>/chamber-settings.json, mutated via dsh-chamber:settings-set. The
-// side effects (keep-awake / login autostart / close behavior) are applied
-// here in the main process — never in any instance's dsh home (01 §2 P2).
-let chamberSettings: ChamberSettings = { ...DEFAULT_CHAMBER_SETTINGS };
-let keepAwakeBlockerId: number | null = null;
-// 最近一次 OS 唤醒时间戳：无窗口常驻（托盘态）期间 held，窗口 show 时补发。
-let lastResume: number | null = null;
 // Quit state machine (design 14 D2): quitRequested 置位后关窗不再 hide（真正
 // 退出在途）；quitConfirmed 表示退出已获确认/豁免；confirmingQuit 是确认
 // 对话框单飞闸（防连点/双路径重复弹窗）。
 let quitRequested = false;
 let quitConfirmed = false;
 let confirmingQuit = false;
-// 本地实例「运行中/在途」状态（design 14 D2，2026-08 修订）：进程存活
-// （ready/degraded）或 spawn/重启在途（starting/restarting）——退出会中断
-// 它们，需确认。stopped / error / restart-exhausted 无进程可中断，不触发
-// 确认。**2026-08 二次修订**：状态字符串不是存活事实——restart 序列里
-// `restarting` 期间新进程可能尚未 spawn（backoff 1s→60s），死亡进程在下次
-// 探活前也可能滞留在 ready/degraded；退出确认必须同时要求**实际有存活进程**
-// （localProcessAlive），否则"本地明明没有实例在运行"也会误弹确认。注意
-// `starting` 全程 child 尚未赋值（spawn 解析后才挂到连接上），hasLiveProcess()
-// 恒为 false，配合 AND 门实际不参与确认——spawn 在途由控制面的 epoch/stopping
-// 守卫在 stop() 时终止（绝不孤儿化），故「无进程则不确认」是安全的。
-const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
+// 最近一次 OS 唤醒时间戳：无窗口常驻（托盘态）期间 held，窗口 show 时补发。
+let lastResume: number | null = null;
 
-// VS Code 深链（design 16 §4.2）：OS 级深链（macOS open-url / Win+Linux
-// second-instance argv / 冷启动 argv）统一入 pendingIntents 队列，startup 完成
-// （transportManager 装载 + 主窗口就绪）后统一 drain。seenDeepLinkUrls 去重
-// （macOS open-url 与 argv 双触发同一 URL）；超过 64 条整体清空防无限增长
-// （非 LRU——清空后同 URL 可重放，打开 VS Code 幂等，无害；security-review
-// P2-4 注释与实现语义对齐）。
-// drainPendingIntents 在 whenReady 内赋值（依赖 wiredCtx/transportManager），
-// 冷启动到达的深链只入队、drain 就绪后消费。
-let pendingIntents: VscodeLaunchRequest[] = [];
-const seenDeepLinkUrls = new Set<string>();
-let drainPendingIntents: (() => void) | null = null;
+// Wiring handles (created in whenReady; null before startup so the pre-ready
+// paths — e.g. the single-instance-lock failure quit — stay inert).
+let settingsWiring: SettingsWiring | null = null;
+let notificationsWiring: NotificationsWiring | null = null;
+let sshWiring: SshWiring | null = null;
+let deepLinkWiring: DeepLinkWiring | null = null;
+let updateWiring: UpdateWiring | null = null;
 
-// 桌面通知（design 19 §3.3）：pendingNotificationOpens 照搬 pendingIntents 的
-// 队列 + drain 模式——点击通知时窗口可能正在重建/加载，事件不能丢；active
-// Notifications Set 持有存活引用防 GC 吞 click（macOS 已知坑，OpenChamber 同款）。
-let pendingNotificationOpens: Array<{ sourceId: string; sessionId: string }> = [];
-let drainPendingNotificationOpens: (() => void) | null = null;
-/** Renderer 就绪标志（design 19 §3.3）：renderer 注册 onOpen 监听后 invoke
- *  dsh-chamber:notifications-ready 置位——did-finish-load 早于监听注册，推送
- *  必须在就绪后才放行，否则窗口重建路径的点击事件会被 IPC 丢弃。 */
-let notificationOpenDrainReady = false;
-const activeNotifications = new Set<Notification>();
-
-/** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
-function scanDeepLinkUrls(argv: readonly string[]): string[] {
-  const urls: string[] = [];
-  for (const arg of argv) {
-    if (typeof arg === 'string' && arg.startsWith('dsh-chamber://')) urls.push(arg);
-  }
-  return urls;
-}
-
-/** 深链入队：quit 在途 ignore（不启动 VS Code）；同 URL 去重；解析失败 loud。 */
-function enqueueDeepLink(rawUrl: string): void {
-  if (quitRequested) return;
-  if (seenDeepLinkUrls.has(rawUrl)) return;
-  seenDeepLinkUrls.add(rawUrl);
-  if (seenDeepLinkUrls.size > 64) seenDeepLinkUrls.clear();
-  const parsed = parseOpenVscodeIntent(rawUrl);
-  if (!parsed.ok) {
-    console.error(`[dsh-chamber] 深链解析失败：${parsed.error}`);
-    return;
-  }
-  pendingIntents.push(parsed.intent);
-  drainPendingIntents?.();
-}
-
-/** 通知点击入队（design 19 §3.3）：quit 在途 ignore；入队后立即 drain（窗口
- *  已加载则直接推送，重建/加载中由 did-finish-load 补发——窗口关闭期间点击
- *  通知不丢事件，照搬 pendingIntents 模式）。有界队列（64 条上限，与
- *  seenDeepLinkUrls 同款防御）：窗口长期无法加载时超限丢弃最旧，绝不无限增长。 */
-function enqueueNotificationOpen(sourceId: string, sessionId: string): void {
-  if (quitRequested) return;
-  pendingNotificationOpens.push({ sourceId, sessionId });
-  if (pendingNotificationOpens.length > 64) pendingNotificationOpens.shift();
-  drainPendingNotificationOpens?.();
+/** 当前 chamber 设置快照：wiring 装配前（whenReady 前）回落 DEFAULT（与
+ *  旧 main.ts 的模块级 holder 初始化语义一致）。 */
+function chamberSettingsSnapshot(): ChamberSettings {
+  return settingsWiring === null ? { ...DEFAULT_CHAMBER_SETTINGS } : settingsWiring.get();
 }
 
 /** 退出清理（will-quit：transport dispose + 控制面 stop）的最长等待；超时强制
@@ -312,11 +196,6 @@ function enqueueNotificationOpen(sourceId: string, sessionId: string): void {
  *  ~1-2s 完成；5s 硬顶仅为异常路径（如残留连接使 server.close 不回调）兜底
  *  （2026-08 排查；2026-08 提速，15s → 5s）。 */
 const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
-// Update controller ref (created in whenReady): the quit-confirmation exemption
-// (design 14 D2) reads its state at will-quit time.
-let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
-/** Chamber 设置文件路径（design 14 D7）：<userData>/chamber-settings.json。 */
-const chamberSettingsFile = (): string => path.join(app.getPath('userData'), 'chamber-settings.json');
 
 /**
  * Minimal tray（桌面一体形态的最小托盘：状态 tooltip + 显示/退出菜单）: status
@@ -365,29 +244,6 @@ function maybeCreateTray(cp: PlaneHandle) {
 }
 
 /**
- * 深链协议注册（design 16 §4.3）：`app.isPackaged` 门控——开发态注册会把裸
- * Electron 注册成 scheme handler，污染 LaunchServices，与打包版 bundle id
- * （com.dshchamber.desktop）冲突（镜像托盘先例）。win32 首版门控（暂缓一致性，
- * 镜像 ssh 密码 askpass 门控）；linux 需显式 execPath + relaunch args
- * （Electron 文档）；macOS 打包版由 electron-builder `protocols` 键自动生成
- * CFBundleURLTypes，此处 setAsDefaultProtocolClient 兜底。失败 loud，绝不
- * 打断启动。
- */
-function registerDeepLinkProtocol(): void {
-  if (!app.isPackaged || process.platform === 'win32') return;
-  try {
-    if (process.platform === 'linux') {
-      const relaunchArgs = process.argv.length >= 2 ? [path.resolve(process.argv[1])] : [];
-      app.setAsDefaultProtocolClient('dsh-chamber', process.execPath, relaunchArgs);
-    } else {
-      app.setAsDefaultProtocolClient('dsh-chamber');
-    }
-  } catch (error) {
-    console.error('[dsh-chamber] 深链协议注册失败：', error);
-  }
-}
-
-/**
  * 显示/恢复主窗口；窗口已不存在（被关闭）时按控制面 origin 重建。Dock
  * 图标点击（macOS activate）、二次启动（second-instance）与托盘菜单共用
  * 这一条恢复路径——没有重建分支时，窗口一旦关闭应用就以无窗口状态常驻，
@@ -401,222 +257,6 @@ function showMainWindow(): void {
     return;
   }
   if (mainWindowUrl !== null) createMainWindow(mainWindowUrl, false);
-}
-
-/** 单窗口聚焦判定（通知裁决的权威复查，design 19 §3.3）：渲染端 document.hasFocus
- *  与主进程复查等价（单窗口），主进程再查一次作为权威。窗口必须存在、可见且聚焦
- *  ——隐藏到托盘/后台的窗口不算聚焦。 */
-function isAnyWindowFocused(): boolean {
-  return mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused();
-}
-
-/** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控。 */
-function chamberSettingsStatus(): ChamberSettingsStatus {
-  return {
-    settings: chamberSettings,
-    supported: computeSupported(process.platform, tray !== null),
-  };
-}
-
-/** 设置变更推送（主窗口存活时；无窗口常驻期间由下次查询兜底）。 */
-function pushSettingsChanged(): void {
-  if (mainWindow !== null && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('dsh-chamber:settings-changed', chamberSettingsStatus());
-  }
-}
-
-/**
- * 桌面原生通知主链路（design 19 §3.3）：payload 白名单 → 去重 claim → 平台
- * 支持 → 设置裁决 → 显示。返回是否实际显示（IPC 调用方/渲染端可据此判断）。
- * 'test' 绕过 claim 与全部设置门禁（设置页「发送测试通知」）；通知失败静默
- * 降级不误报——会话业务不受影响，侧边栏蓝点照常。
- */
-function maybeShowNativeNotification(payload: unknown): boolean {
-  const validated = validateNotificationRequest(payload);
-  if (!validated.ok) {
-    console.warn(`[dsh-chamber] 拒绝非法通知 payload：${validated.error}`);
-    return false;
-  }
-  const request = validated.request;
-  if (!Notification.isSupported()) {
-    console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
-    return false;
-  }
-  // 设置权威在主进程内存（chamberSettings.notifications，settings-set 即时更新）；
-  // 旧文件缺字段时用 DEFAULT 兜底（normalizeSettings 已归一，此处仅防御）。
-  const settings: NotificationSettingsLike = {
-    ...DEFAULT_CHAMBER_SETTINGS.notifications,
-    ...(chamberSettings.notifications ?? {}),
-  };
-  const decision = decideNotification({
-    request,
-    settings,
-    anyWindowFocused: isAnyWindowFocused(),
-  });
-  if (decision.action === 'skip') return false;
-  // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
-  // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
-  if (request.kind !== 'test' && !claimNotification(request)) {
-    return false;
-  }
-  try {
-    const notification = new Notification({
-      title: request.title,
-      body: request.body,
-      silent: false,
-      // macOS 系统提示音（OpenChamber 同款）；其余平台交给系统默认。
-      ...(process.platform === 'darwin' ? { sound: 'Glass' } : {}),
-    });
-    // activeNotifications 持有存活引用防 GC 吞 click（macOS 已知坑）。
-    activeNotifications.add(notification);
-    notification.on('click', () => {
-      // 聚焦/显示窗口（存在则 restore+focus，无窗则重建）+ 打开对应会话：先把
-      // 打开意图入队并 drain，窗口未就绪时由 did-finish-load 补发。'test'
-      // 通知（设置页测试按钮）没有会话上下文，click 只聚焦不打开。
-      showMainWindow();
-      if (request.kind !== 'test') enqueueNotificationOpen(request.sourceId, request.sessionId);
-    });
-    notification.on('close', () => {
-      activeNotifications.delete(notification);
-    });
-    notification.on('failed', (_event, error) => {
-      console.warn('[dsh-chamber] 原生通知显示失败：', error);
-      activeNotifications.delete(notification);
-    });
-    notification.show();
-    return true;
-  } catch (error) {
-    console.warn('[dsh-chamber] 创建原生通知失败：', error);
-    return false;
-  }
-}
-
-/** keep-awake（design 14 D5）：powerSaveBlocker prevent-app-suspension。 */
-function setKeepAwakeActive(enabled: boolean): void {
-  const current = keepAwakeBlockerId;
-  const isActive = current !== null && powerSaveBlocker.isStarted(current);
-  if (enabled) {
-    if (!isActive) {
-      keepAwakeBlockerId = powerSaveBlocker.start('prevent-app-suspension');
-    }
-    return;
-  }
-  if (isActive && current !== null) {
-    powerSaveBlocker.stop(current);
-    keepAwakeBlockerId = null;
-  }
-}
-
-/**
- * 登录自启（design 14 D6）：macOS setLoginItemSettings；Linux XDG autostart
- * （手写最小 .desktop）；Windows v1 门控（supported=false，调用方不得持久化）。
- * 失败 loud 返回 {error}，绝不静默假成功。
- */
-function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error: string } {
-  if (process.platform === 'win32') {
-    return { ok: false, error: 'not supported on this platform' };
-  }
-  try {
-    if (process.platform === 'darwin') {
-      app.setLoginItemSettings({ openAtLogin: enabled });
-      return { ok: true };
-    }
-    const autostartDir = path.join(os.homedir(), '.config', 'autostart');
-    const desktopFile = path.join(autostartDir, 'dsh-chamber.desktop');
-    if (enabled) {
-      mkdirSync(autostartDir, { recursive: true });
-      writeFileSync(
-        desktopFile,
-        '[Desktop Entry]\nType=Application\nName=dsh-chamber\n' +
-          `Exec="${process.execPath}"\nX-GNOME-Autostart-enabled=true\n`,
-        { mode: 0o600 },
-      );
-    } else {
-      rmSync(desktopFile, { force: true });
-    }
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-/**
- * 应用一个已校验的设置 patch（design 14 D7）：先应用副作用（keep-awake /
- * 登录自启），**全部成功并持久化成功后才更新 holder**——任何失败 loud 返回
- * {error} 并回滚已应用的副作用（绝不落半个设置、绝不内存与磁盘不一致）。
- * windowCloseBehavior 无副作用（影响未来的 close 事件）。
- */
-function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { ok: false; error: string } {
-  // notifications 是嵌套对象：patch 可能只带部分子键（validatePatch 允许 partial），
-  // 必须 deep-merge 到当前值，绝不整组替换丢开关。
-  const next: ChamberSettings = {
-    ...chamberSettings,
-    ...patch,
-    notifications: patch.notifications !== undefined
-      ? { ...chamberSettings.notifications, ...patch.notifications }
-      : chamberSettings.notifications,
-  };
-  // 副作用应用包 try：powerSaveBlocker / 登录自启意外抛异常时 loud 失败并
-  // best-effort 回滚 keepAwake，绝不带病继续（绝不落半个设置）。
-  try {
-    if (patch.keepAwake !== undefined) setKeepAwakeActive(patch.keepAwake);
-    if (patch.launchAtLogin !== undefined) {
-      const result = applyLaunchAtLogin(patch.launchAtLogin);
-      if (!result.ok) {
-        // 副作用失败：回滚已应用的 keepAwake（保持原状），绝不持久化。
-        if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
-        return result;
-      }
-    }
-  } catch (error) {
-    console.error('[dsh-chamber] 应用 chamber 设置副作用失败：', error);
-    try {
-      if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
-    } catch {
-      // 回滚失败也 loud 已记日志，不再叠加异常。
-    }
-    return { ok: false, error: 'settings apply failed' };
-  }
-  try {
-    writeSettingsFile(chamberSettingsFile(), next);
-  } catch (error) {
-    console.error('[dsh-chamber] 写入 chamber 设置失败：', error);
-    // 持久化失败：回滚已应用的副作用，holder 保持旧值——内存/磁盘/实际行为一致。
-    if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
-    if (patch.launchAtLogin !== undefined) {
-      const rollback = applyLaunchAtLogin(chamberSettings.launchAtLogin);
-      if (!rollback.ok) console.error(`[dsh-chamber] 登录自启回滚失败：${rollback.error}`);
-    }
-    return { ok: false, error: 'settings persist failed' };
-  }
-  chamberSettings = next;
-  return { ok: true };
-}
-
-/**
- * OS 唤醒即时重探（design 14 D4，主进程侧）：只触碰瞬时失败的实例——
- * phase=error/degraded 且 **非终态**（requiresUserAction=false；认证失败/
- * verifyUp 终态等确定性错误绝不自动重试，05 §7.6 纪律）；**绝不触碰 idle**
- * （保持手动断开语义）。connect() 对 connecting/ready 幂等，重复唤醒无副作用。
- */
-function reconnectStaleTransports(): void {
-  // 2026-08 review NIT：退出在途（will-quit 的 disposeAsync 已开始）时 OS
-  // 唤醒不得再 spawn 新传输——否则可能在 dispose 完成后留下孤儿 ssh 子进程
-  // （SIGKILL 升级计时器 unref 后随退出丢失）。
-  if (quitRequested) return;
-  const sm = transportManager;
-  if (sm === null) return;
-  for (const instance of sm.listInstances()) {
-    const status = sm.status(instance.id);
-    if (status === null) continue;
-    if (status.phase !== 'error' && status.phase !== 'degraded') continue;
-    if (status.requiresUserAction === true) continue;
-    try {
-      sm.connect(instance.id);
-    } catch (error) {
-      console.warn(`[dsh-chamber] 唤醒重探 ${instance.id} 失败：`, error);
-    }
-  }
 }
 
 /**
@@ -653,7 +293,7 @@ function installRendererRecovery(win: BrowserWindow): void {
     if (details.reason === 'clean-exit') return; // 用户关窗等正常退出
     // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
     // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
-    notificationOpenDrainReady = false;
+    notificationsWiring?.resetDrainReady();
     console.error(
       `[dsh-chamber] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}`,
     );
@@ -748,8 +388,8 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 到 ready() invoke 之后——若在 finish 时重置会把已置位的标志 clobber 成永久
   // false。start-loading 必先于页面脚本执行（invoke 恒在其后），顺序保证成立。
   win.webContents.on('did-start-loading', () => {
-    notificationOpenDrainReady = false;
-    drainPendingNotificationOpens?.();
+    notificationsWiring?.resetDrainReady();
+    notificationsWiring?.drainOpens();
   });
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
@@ -759,8 +399,8 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 传输层/dsh 子进程继续运行。托盘缺失时回退现状（关窗即退，受 D2 确认保护）
   // ——绝不允许窗口被隐藏后无任何恢复入口。
   win.on('close', (event) => {
-    const recoveryAvailable = process.platform === 'darwin' || tray !== null;
-    if (shouldHideToTray(chamberSettings.windowCloseBehavior, recoveryAvailable, quitRequested)) {
+    const recoveryAvailable = closeToTrayRecoveryAvailable(process.platform, tray !== null);
+    if (shouldHideToTray(chamberSettingsSnapshot().windowCloseBehavior, recoveryAvailable, quitRequested)) {
       event.preventDefault();
       win.hide();
     }
@@ -769,7 +409,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 恢复可见时一次性补发（design 14 D4）。
   win.on('show', () => {
     if (lastResume !== null) {
-      win.webContents.send(SYSTEM_RESUME_EVENT, { timestamp: lastResume });
+      win.webContents.send(IPC_CHANNELS.SYSTEM_RESUME, { timestamp: lastResume });
       lastResume = null;
     }
   });
@@ -805,8 +445,9 @@ if (!gotTheLock) {
   });
 
   // macOS 深链（design 16 §4.2）：冷启动深链先于 startup 完成到达，必须入
-  // pendingIntents 队列；与冷启动 argv 扫描的双触发由 seenDeepLinkUrls 去重。
-  // 在模块顶层（whenReady 之前）注册，冷启动 URL 不丢。
+  // pendingIntents 队列（ipc-deep-link 模块级队列，register 前即可用）；与
+  // 冷启动 argv 扫描的双触发由 seenDeepLinkUrls 去重。在模块顶层（whenReady
+  // 之前）注册，冷启动 URL 不丢。
   app.on('open-url', (event, url) => {
     event.preventDefault();
     enqueueDeepLink(url);
@@ -843,7 +484,7 @@ if (!gotTheLock) {
     // 关窗路径（design 14 D1）用户意图是退出：此时 darwin 也必须走
     // app.quit()，经 before-quit 的 D2 确认（取消时窗口由取消分支重建，绝不
     // 无窗滞留）。非 darwin 恒退出。
-    if (process.platform !== 'darwin' || chamberSettings.windowCloseBehavior === 'quit') app.quit();
+    if (process.platform !== 'darwin' || chamberSettingsSnapshot().windowCloseBehavior === 'quit') app.quit();
   });
 
   // 退出确认（design 14 D2，2026-08 修订）在 **before-quit**（窗口关闭前）拦截：
@@ -864,17 +505,14 @@ if (!gotTheLock) {
       event.preventDefault(); // 确认框已打开：忽略重入（单飞）
       return;
     }
-    const updateState = updateController?.state();
-    const updateDownloadReady = updateState !== undefined
-      && updateState.phase === 'downloaded'
-      && updateState.installBlockedReason === null;
     // 2026-08 修订：远程隧道不影响关闭（用户拍板）——风险只看本地实例；退出
     // 确认开关（quitConfirmation）关闭时永不确认。2026-08 二次修订：状态机
     // 显示 running 还不够——必须实际有存活进程（restart backoff / 死亡未探活
     // 期间状态机可能误报 running）。
-    const localRunning = LOCAL_RUNNING_STATES.has(cp.connectionState) && cp.localProcessAlive;
+    const updateDownloadReady = isUpdateDownloadReady(updateWiring?.updateState());
+    const localRunning = isLocalProcessRunning(cp.connectionState, cp.localProcessAlive);
     const risk = computeQuitRisk({
-      quitConfirmation: chamberSettings.quitConfirmation,
+      quitConfirmation: chamberSettingsSnapshot().quitConfirmation,
       localRunning,
       updateDownloadReady,
     });
@@ -934,7 +572,7 @@ if (!gotTheLock) {
     // 真正退出在途（窗口已全部关闭）：close 分支不再 hide；keep-awake 停止
     // （design 14 D5）。确认/豁免已在 before-quit 完成，这里只剩清理。
     quitRequested = true;
-    setKeepAwakeActive(false);
+    settingsWiring?.shutdownKeepAwake();
     // 立即移除托盘：退出在途不需要恢复入口，残留托盘图标是「退不干净」观感。
     if (tray !== null) {
       try {
@@ -942,7 +580,8 @@ if (!gotTheLock) {
       } catch { /* already gone */ }
       tray = null;
     }
-    if (!controlPlane) return;
+    const cp = controlPlane;
+    if (cp === null) return;
     event.preventDefault();
     // 传输层（SSH 隧道/在途 exec）与控制面（本地 dsh + HTTP 门面）的回收互不
     // 依赖，并行等待（总耗时 = max 而非 sum）。各自的 SIGTERM→SIGKILL 窗口已
@@ -958,10 +597,9 @@ if (!gotTheLock) {
       console.error('[dsh-chamber] 退出清理超时，强制退出（可能有子进程残留，已下载更新不会安装）');
       app.exit(1);
     }, QUIT_CLEANUP_TIMEOUT_MS);
-    const cp = controlPlane;
     controlPlane = null;
     void Promise.allSettled([
-      transportManager?.disposeAsync().catch((err) => console.error('[dsh-chamber] 传输层关闭失败：', err)),
+      sshWiring?.transportManager()?.disposeAsync().catch((err) => console.error('[dsh-chamber] 传输层关闭失败：', err)),
       cp.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
     ]).finally(() => {
       clearTimeout(cleanupTimer);
@@ -1017,747 +655,108 @@ if (!gotTheLock) {
     // (the handler runs later, after startup).
     const cp = controlPlane;
     const rendererOrigin = `http://127.0.0.1:${cp.port}`;
-    const trustedIpc = (handler: (...args: any[]) => any) =>
-      (event: IpcMainInvokeEvent, ...args: any[]) => {
+    // trustedIpc 围栏（design 05 §7.4）：每个 ipcMain.handle 注册都经它——
+    // sender 校验（当前主窗口 + 固定 chamber 文档）+ quit 在途拒绝（2026
+    // final review，防御纵深：teardown 已开始，late connect/exec/apply 不得
+    // 向 shutdown 注入新工作）。语义见 renderer-trust.ts 的 createTrustedIpc。
+    const trustedIpc = createTrustedIpc({
+      isTrustedSender: (event) => {
         const win = mainWindow;
-        if (win === null || win.isDestroyed() || !isTrustedIpcSender(event, win.webContents, rendererOrigin)) {
-          const error = new Error('forbidden IPC sender') as Error & { code?: string };
-          error.code = 'ipc_sender_forbidden';
-          throw error;
-        }
-        // Quit in progress: refuse every IPC (2026 final review, defensive
-        // depth) — the transport/control-plane teardown has begun, and a
-        // late connect/exec/apply must not spawn work into the shutdown.
-        if (quitRequested) {
-          const error = new Error('app is quitting') as Error & { code?: string };
-          error.code = 'app_quitting';
-          throw error;
-        }
-        return handler(...args);
-      };
-    ipcMain.handle('dsh-chamber:info', trustedIpc(() => ({
+        return win !== null && !win.isDestroyed() && isTrustedIpcSender(event, win.webContents, rendererOrigin);
+      },
+      isQuitting: () => quitRequested,
+    });
+    ipcMain.handle(IPC_CHANNELS.INFO, trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
       dshVersion: readDshVersion(dshWorkspace),
       version,
       platform: process.platform,
     })));
 
+    // ---- wiring 装配（顺序与旧 main.ts 的启动序一致）----
+
     // Chamber settings（design 14 D7）：启动加载 + 应用副作用（keep-awake /
-    // 登录自启 reconcile）；损坏 loud（*.corrupt 保留），绝不静默假默认。
-    const settingsLoad = readSettingsFile(chamberSettingsFile());
-    if (settingsLoad.notice !== null) console.error(`[dsh-chamber] ${settingsLoad.notice}`);
-    chamberSettings = settingsLoad.settings;
-    setKeepAwakeActive(chamberSettings.keepAwake);
-    if (process.platform !== 'win32') {
-      const loginItemResult = applyLaunchAtLogin(chamberSettings.launchAtLogin);
-      if (!loginItemResult.ok) {
-        console.warn(`[dsh-chamber] 登录自启 reconcile 失败：${loginItemResult.error}`);
-      }
-    }
+    // 登录自启 reconcile）+ settings IPC 面。损坏 loud（*.corrupt 保留）。
+    settingsWiring = registerSettings({
+      trustedIpc,
+      mainWindow: () => mainWindow,
+      userDataPath: app.getPath('userData'),
+      trayAvailable: () => tray !== null,
+    });
+    const settings = settingsWiring;
+    settings.loadAndReconcile();
 
-    // Chamber settings IPC 面：get 查询 / set 应用并持久化 / 变更推送。全部走
-    // trustedIpc 围栏；失败 loud {error}，绝不静默假成功。
-    ipcMain.handle('dsh-chamber:settings-get', trustedIpc(() => chamberSettingsStatus()));
-    ipcMain.handle('dsh-chamber:settings-set', trustedIpc(({ patch }) => {
-      const validated = validatePatch(patch);
-      // Uniform {ok,error} shape for every failure (2026 review) — the
-      // validation failure previously returned a bare {error}.
-      if (!validated.ok) return { ok: false, error: validated.error };
-      const applied = applySettingsPatch(validated.patch);
-      if (!applied.ok) return applied;
-      pushSettingsChanged();
-      return chamberSettingsStatus();
-    }));
+    // 桌面通知（design 19 §3.3）：notify / notifications-ready 通道 + 点击
+    // 打开队列。窗口生命周期（did-start-loading / render-process-gone）经
+    // notificationsWiring 复位/补发。
+    notificationsWiring = registerNotifications({
+      trustedIpc,
+      mainWindow: () => mainWindow,
+      quitRequested: () => quitRequested,
+      showMainWindow,
+      getChamberNotificationSettings: () => settings.get().notifications,
+    });
 
-    // 桌面通知（design 19 §3.3）：渲染端检测会话边沿并组装 payload → notify
-    // （invoke，返回是否实际显示）→ 主进程白名单/去重/裁决 + 原生通知。click →
-    // notification-open 推送 → 渲染端 openSession（既有路径）。
-    ipcMain.handle('dsh-chamber:notify', trustedIpc(({ payload }) => maybeShowNativeNotification(payload)));
-    // Renderer 通知就绪信号（design 19 §3.3）：onOpen 监听注册后调用——通知点击
-    // 的推送只在就绪后放行（did-finish-load 早于监听注册，见 drain 条件）。
-    // 返回 true 与 preload 的 Promise<boolean> 声明一致（成功置位信号）。
-    ipcMain.handle('dsh-chamber:notifications-ready', trustedIpc(() => {
-      notificationOpenDrainReady = true;
-      drainPendingNotificationOpens?.();
-      return true;
-    }));
+    // 托盘（打包态防御性创建）：settings 投影的 closeToTray 门控依赖它。
+    maybeCreateTray(controlPlane);
+
+    // SSH 传输层（design 03 §2.2 / 05 §7-§8）：transport manager 创建 + 实例
+    // 装载 + desktop_ssh_* IPC + 状态推送（控制面 transport 注册 + renderer push）。
+    sshWiring = registerSsh({
+      trustedIpc,
+      mainWindow: () => mainWindow,
+      controlPlane: () => controlPlane,
+      quitRequested: () => quitRequested,
+      userDataPath: app.getPath('userData'),
+    });
+    const sm = sshWiring;
 
     // OS 唤醒即时重探 + 推送（design 14 D4）：主进程对 error/degraded 实例
     // 立即重探（绝不触碰 idle），并向渲染端 push（dsh 前端连接立即重连）。
     powerMonitor.on('resume', () => {
       lastResume = Date.now();
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(SYSTEM_RESUME_EVENT, { timestamp: lastResume });
+      const win = mainWindow;
+      if (win !== null && !win.isDestroyed()) {
+        win.webContents.send(IPC_CHANNELS.SYSTEM_RESUME, { timestamp: lastResume });
         // 窗口存活（含隐藏）已即时收到：清空 held 值，避免 hide→show 补发过期事件。
         lastResume = null;
       }
-      reconnectStaleTransports();
+      sshWiring?.reconnectStaleTransports();
     });
 
-    maybeCreateTray(controlPlane);
-    registerDeepLinkProtocol();
-
-    // Transport manager (design 03 §2.2 / 05 §7-§8): persisted instance
-    // registry under <userData>/ssh-instances.json; instance CRUD, transport
-    // lifecycle and the provider exec channel (ssh: remote systemd) stay in
-    // the main process; the renderer only ever sees non-secret status
-    // projections (never a transport URL, never credential material).
-    //
-    // SSH password store (design 05 §8, user decision 2026-08 — plaintext
-    // file fallback): passwords mirror to <userData>/ssh-passwords.json
-    // (0600, atomic write) and load back at startup so password-only hosts
-    // auto-connect after a restart. The file never touches the registry,
-    // logs, or the renderer; a corrupt file is preserved as *.corrupt and
-    // reported loudly.
-    const askpassNotice = cleanupStaleAskpassHelpers();
-    if (askpassNotice !== null) console.error(`[dsh-chamber] ${askpassNotice}`);
-    const passwordNotice = configureSshPasswordStore(path.join(app.getPath('userData'), 'ssh-passwords.json'));
-    if (passwordNotice !== null) console.error(`[dsh-chamber] ssh password store: ${passwordNotice}`);
-    transportManager = createTransportManager({
-      provider: sshProvider,
-      instancesFile: path.join(app.getPath('userData'), 'ssh-instances.json'),
-      logger: {
-        log: (...args) => console.log('[transport-manager]', ...args),
-        warn: (...args) => console.warn('[transport-manager]', ...args),
-        error: (...args) => console.error('[transport-manager]', ...args),
-      },
-    });
-    try {
-      transportManager.loadInstances();
-    } catch (loadError) {
-      // Corrupt instance file: loud failure — PRESERVE the file (rename to
-      // *.corrupt, reversible) before starting empty; the user's next
-      // instances_set re-persists the set (never silently faked as empty).
-      console.error('[dsh-chamber] 加载 SSH 实例失败：', loadError);
-      const file = path.join(app.getPath('userData'), 'ssh-instances.json');
-      try {
-        renameSync(file, `${file}.corrupt`);
-        console.warn(`[dsh-chamber] 已保留损坏的实例文件为 ${file}.corrupt`);
-      } catch (renameError) {
-        console.error('[dsh-chamber] 保留损坏实例文件失败：', renameError);
-      }
-    }
-    // Capture the non-null manager before registering closures over it (the
-    // ipc handlers run later, after startup).
-    const sm = transportManager;
-    // Plugin-sync dependency injection (design 13 M2+M3, contract A): the
-    // orchestration in plugin-sync.ts is decoupled from the transport runtime,
-    // so it is adapted here onto transport-manager.exec(id, action, payload?).
-    // The contract types (TransportExecAction / TransportRunPayload) are
-    // SHARED from transport-provider.ts — the compiler checks this assignment
-    // (no cast): plugin-sync's ExecFn is structurally the manager's exec.
-    const execTransport: ExecFn = sm.exec;
-    const statusTransport: StatusFn = (id) => sm.status(id);
-    // Live-effect probe for the chamber host-graph state (design 09 module A):
-    // adapts probeClientGraphLive (ssh-provider.ts, tunnel RPC) onto
-    // plugin-sync's LiveProbe shape. `readyUrl` is main-process only (never
-    // the renderer); no ready tunnel → null = "not probed" (the plugin UI then
-    // renders 生效状态未知 instead of a guessed claim).
-    const liveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
-      const url = sm.readyUrl(id);
-      if (url === null) return Promise.resolve(null);
-      try {
-        const parsed = new URL(url);
-        const port = parsed.port === '' ? null : Number(parsed.port);
-        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
-        return probeClientGraphLive({ host: parsed.hostname, port }).then(result =>
-          result === 'live' ? true : result === 'not-live' ? false : null);
-      } catch {
-        return Promise.resolve(null);
-      }
-    };
-    // Live-effect probe for the SECOND chamber host package (design 08 §11):
-    // same shape as liveProbeFor, hitting gitWorktree/previewCreate. A 404
-    // there is deterministic "the running instance never loaded the
-    // git-worktree row" — host-graph being live from an older boot does NOT
-    // prove it (a ready-time seed can add the git row after that boot).
-    const gitWorktreeLiveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
-      const url = sm.readyUrl(id);
-      if (url === null) return Promise.resolve(null);
-      try {
-        const parsed = new URL(url);
-        const port = parsed.port === '' ? null : Number(parsed.port);
-        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
-        return probeGitWorktreeLive({ host: parsed.hostname, port }).then(result =>
-          result === 'live' ? true : result === 'not-live' ? false : null);
-      } catch {
-        return Promise.resolve(null);
-      }
-    };
-    // In-flight guard for the ready-time chamber host-package seed (design 09 §6
-    // 遗留 1): a Set of instance ids whose seed is currently running — pure
-    // concurrency guard, not a "seeded" flag (the seed is idempotent, so
-    // reconnects re-run a cheap content-hash no-op instead).
-    const hostPackageSeeding = new Set<string>();
-    // The authoritative local dsh home is <userData>/state/dsh-home (the real
-    // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
-    const localDshHome = path.join(app.getPath('userData'), 'state', 'dsh-home');
-    // Host package sources for the remote seed (design 13 §4.6). Packaged
-    // builds carry copies under dist/; dev reads the same source dirs used by
-    // the local control-plane seed.
-    const moduleASourceDir = app.isPackaged
-      ? path.join(pkgDir, 'dist', 'host-graph-package')
-      : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
-    const gitWorktreeHostSourceDir = app.isPackaged
-      ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-      : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
-    const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
-      {
-        insertId: CLIENT_GRAPH_INSERT_ID,
-        packageName: CLIENT_GRAPH_PACKAGE_NAME,
-        sourceDir: moduleASourceDir,
-        label: 'host-graph',
-      },
-      {
-        insertId: GIT_WORKTREE_INSERT_ID,
-        packageName: GIT_WORKTREE_PACKAGE_NAME,
-        sourceDir: gitWorktreeHostSourceDir,
-        label: 'git-worktree',
-      },
-    ];
-    const findRemoteSpec = (id: string): RemoteSpec | null => {
-      const instance = sm.listInstances().find((entry) => entry.id === id);
-      if (instance === undefined) return null;
-      return { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null };
-    };
-    // Remote install-level fallback path shared by both chamber host packages.
-    const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
-      `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`;
-    sm.onStatusChanged((id, status) => {
-      // Ready transport → per-instance reverse proxy (design 05 §7.1):
-      // register the instance transport while it is ready, unregister the
-      // moment it leaves ready. The transport URL only exists in the main
-      // process — it never rides the renderer payload below (design 05 §8).
-      const cp = controlPlane;
-      if (cp !== null) {
-        if (status.phase === 'ready') {
-          const url = sm.readyUrl(id);
-          if (url !== null) cp.registerInstanceTransport(`${status.kind}:${id}`, url);
-        } else {
-          cp.unregisterInstanceTransport(`${status.kind}:${id}`);
-        }
-      }
-      // Remote chamber host-package seed: when an SSH instance comes ready,
-      // materialize every built package and merge their loader rows together.
-      // NOT silent — the plugin management UI probes the live state and shows
-      // the injection block verbatim (installed/patched), and the seed result
-      // is logged here; a failure is retried on the next ready (the seed is
-      // idempotent, content-hash skip). Idempotency also makes the guard a
-      // pure in-flight Set: reconnects re-run a cheap no-op seed instead of
-      // tracking a persisted "seeded" flag that could drift from the remote.
-      if (status.kind === 'ssh' && status.phase === 'ready' && !hostPackageSeeding.has(id)) {
-        hostPackageSeeding.add(id);
-        void (async () => {
-          try {
-            const builtSeeds = chamberHostPackageSeeds.filter(seed => existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
-            if (builtSeeds.length === 0) {
-              console.log(`[dsh-chamber] chamber host seed skipped for ${id}: no built host package artifacts`);
-              sm.appendLog(id, 'info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用');
-              return;
-            }
-            const missingSeeds = chamberHostPackageSeeds.filter(seed => !builtSeeds.includes(seed));
-            if (missingSeeds.length > 0) {
-              sm.appendLog(id, 'info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`);
-            }
-            const spec = findRemoteSpec(id);
-            if (spec === null) return;
-            const result = await seedRemoteChamberHostPackages(execTransport, spec, chamberHostPackageSeeds);
-            if (result.ok) {
-              const seeded = result.packages.map(entry => entry.insertId).join(',');
-              const message = `chamber host packages seeded onto ${id} (${seeded}; wrote=${result.wrote}, patched=${result.patched})`;
-              console.log(`[dsh-chamber] ${message}`);
-              const packageSummary = result.packages.map(entry =>
-                `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}（${remoteHostPackageDir(spec, entry.packageName)}）`).join('；');
-              sm.appendLog(id, 'info', `chamber host 包注入完成：${packageSummary}；boot 层${result.patched ? '已合并挂载' : '无需改动'}（重启后生效）`);
-            } else {
-              console.warn(`[dsh-chamber] chamber host seed failed for ${id}: ${result.error}`);
-              sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
-            }
-          } catch (err) {
-            const message = `chamber host seed error for ${id}: ${String(err)}`;
-            console.warn(`[dsh-chamber] ${message}`);
-            sm.appendLog(id, 'error', `chamber host 包注入异常：${String(err)}`);
-          } finally {
-            hostPackageSeeding.delete(id);
-          }
-        })();
-      }
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('desktop_ssh_status_changed', { id, status });
-      }
+    // 插件管理（design 13 M2+M3）：远端/本地插件 IPC + chamber host 包
+    // ready-time seed（与 ipc-ssh 的 status listener 并行注册）。
+    registerPluginSync({
+      trustedIpc,
+      transportManager: () => sm.transportManager(),
+      mainWindow: () => mainWindow,
+      dshWorkspace,
+      userDataPath: app.getPath('userData'),
     });
 
-    ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => sm.listInstances()));
-    ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
-      // Non-array input (a page script) must not become an IPC rejection —
-      // refuse the change and return the CURRENT registry (same family as
-      // the {error}/null shapes of the other channels; 2026 review).
-      if (!Array.isArray(instances)) {
-        console.warn('[dsh-chamber] desktop_ssh_instances_set: non-array input refused');
-        return sm.listInstances();
-      }
-      const before = new Set(sm.listInstances().map(instance => instance.id));
-      let saved;
-      try {
-        saved = sm.saveInstances(instances);
-      } catch (saveError) {
-        console.warn('[dsh-chamber] desktop_ssh_instances_set: save refused: ', saveError);
-        return sm.listInstances();
-      }
-      // A removed instance's in-memory password dies with its registry entry
-      // (memory-only credentials never outlive the instance they belong to).
-      for (const id of before) {
-        if (!saved.some(instance => instance.id === id)) setSshPassword(id, null);
-      }
-      // Registry-change push: the renderer App layer re-pulls immediately
-      // (roster/auto-connect/reap), so add/edit/delete propagates without
-      // waiting for the 30s roster poll fallback.
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('desktop_ssh_instances_changed');
-      }
-      return saved;
-    }));
-    // Password auth (design 05 §8, plaintext-file fallback): the password is
-    // held in MAIN-PROCESS memory and mirrored to <userData>/ssh-passwords.json
-    // (0600, atomic write, loaded at startup) so password-only hosts
-    // auto-connect after a restart — never in the registry, never logged,
-    // and the renderer only ever holds it transiently in the form input
-    // before forwarding it here. '' / null clears it (and removes the file
-    // entry). The IPC is the platform gate: Win32-OpenSSH askpass support is
-    // not reliable, so Windows refuses password auth loudly (keys/agent
-    // remain the universal path) instead of silently failing at connect time.
-    ipcMain.handle('desktop_ssh_set_password', trustedIpc(({ id, password }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
-        return { error: 'invalid or unknown instance id' };
-      }
-      if (!sshPasswordSupported()) {
-        return { error: 'SSH password auth is not supported on this platform yet — use a key or ssh-agent' };
-      }
-      if (typeof password === 'string' && password.length > MAX_SSH_PASSWORD_CHARS) {
-        return { error: `SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters` };
-      }
-      try {
-        setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
-        return { ok: true };
-      } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) };
-      }
-    }));
-    // ~/.ssh/config discovery (design 05 §5): non-secret host projections
-    // only (alias/hostName/user/port) — keys/proxies/credentials never leave
-    // the main process.
-    ipcMain.handle('desktop_ssh_config_list', trustedIpc(() => discoverSshConfigHosts()));
-    ipcMain.handle('desktop_ssh_connect', trustedIpc(({ id }) => {
-      // Unknown ids throw ssh_instance_not_found inside connect — converge
-      // it to the null shape the other status channels use (2026 review).
-      try {
-        return sm.connect(id);
-      } catch (connectError) {
-        if ((connectError as Error & { code?: string }).code === 'ssh_instance_not_found') return null;
-        throw connectError;
-      }
-    }));
-    ipcMain.handle('desktop_ssh_disconnect', trustedIpc(({ id }) => {
-      sm.disconnect(id);
-      return sm.status(id);
-    }));
-    ipcMain.handle('desktop_ssh_status', trustedIpc(({ id }) => sm.status(id)));
-    ipcMain.handle('desktop_ssh_logs', trustedIpc(({ id }) => sm.logs(id)));
-    ipcMain.handle('desktop_ssh_logs_clear', trustedIpc(({ id }) => sm.clearLogs(id)));
-    // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
-    // status projection on success (serviceActive included), {error} on
-    // failure — loud, never a silent empty success, never an unhandled
-    // rejection.
-    ipcMain.handle('desktop_ssh_start_service', trustedIpc(({ id }) =>
-      sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
-    ));
-    ipcMain.handle('desktop_ssh_stop_service', trustedIpc(({ id }) =>
-      sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
-    ));
-    ipcMain.handle('desktop_ssh_is_active', trustedIpc(({ id }) =>
-      sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
-    ));
-    // Plugin management surface (design 13 M2+M3, contract B): restart the remote
-    // service, read the remote/local plugin manifests, apply a plugin-set change,
-    // and best-effort npm search (main-process fetch; the renderer stays on
-    // 127.0.0.1). All handlers go through the trustedIpc fence and resolve loud
-    // {error} / {ok:...} shapes — never a silent empty success, never an
-    // unhandled rejection. renderer-supplied specs are re-validated inside
-    // applyPlugins (defense in depth).
-    ipcMain.handle('desktop_ssh_restart_service', trustedIpc(({ id }) =>
-      execTransport(id, 'restart').then(result =>
-        (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
-      ).catch(err => ({ error: `exec failed: ${String(err)}` })),
-    ));
-    ipcMain.handle('desktop_ssh_plugin_list', trustedIpc(async ({ id }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      return remotePluginList(execTransport, spec, { liveProbe: liveProbeFor(id), gitWorktreeLiveProbe: gitWorktreeLiveProbeFor(id) });
-    }));
-    ipcMain.handle('desktop_ssh_plugin_apply', trustedIpc(async ({ id, add, remove, restart }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      // A non-boolean `restart` (e.g. the string 'false') must never be
-      // treated as truthy and trigger an unwanted restart — refused here
-      // before any exec (applyPlugins re-checks too, defense in depth).
-      if (restart !== undefined && typeof restart !== 'boolean') {
-        return { ok: false, error: 'restart must be a boolean' };
-      }
-      // Known bundle packages for the §4.5 ④ bundles assertion (design 13):
-      // the LOCAL manifest's bundle-declaring dependency names. When the
-      // local profile is unreadable there is no local source to sync from,
-      // so the bundles half of the assertion is skipped (dependencies
-      // membership is still asserted); never a silent wrong assertion.
-      let knownBundles: string[] | undefined;
-      try {
-        knownBundles = localPluginList(localDshHome).bundleLines;
-      } catch (localError) {
-        console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
-        knownBundles = undefined;
-      }
-      // User confirmation (design 09 §4 v1 mitigation, 2026 final review):
-      // a registry add/remove on a REMOTE instance is a persistent execution
-      // surface — a page script must not drive it silently. Restart-only
-      // applies stay ungated (same class as the restart_service surface).
-      const addList = Array.isArray(add) ? add.filter((entry): entry is string => typeof entry === 'string') : [];
-      const removeList = Array.isArray(remove) ? remove.filter((entry): entry is string => typeof entry === 'string') : [];
-      if (addList.length > 0 || removeList.length > 0) {
-        const instance = sm.listInstances().find(entry => entry.id === id);
-        const confirm = await confirmPluginAction(mainWindow, describePluginApplyConfirmation({
-          targetLabel: instance !== undefined ? (instance.label || instance.host) : null,
-          targetId: id,
-          add: addList,
-          remove: removeList,
-          restart: restart === true,
-        }));
-        if ('cancelled' in confirm) return { ok: true, cancelled: true };
-        if (!confirm.ok) return { ok: false, error: confirm.error };
-      }
-      return applyPlugins(execTransport, statusTransport, spec, { add, remove, restart }, { knownBundles });
-    }));
-    ipcMain.handle('desktop_local_plugin_list', trustedIpc(() => {
-      try {
-        // Projection redaction (design 09 §4 v1 mitigation): local-path spec
-        // values (file:/link:/absolute…) must never echo local absolute paths
-        // into the renderer — a remote bundle could read them.
-        return { ok: true, manifest: redactLocalPluginManifest(localPluginList(localDshHome)) };
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
-    }));
-    ipcMain.handle('desktop_npm_search', trustedIpc(async ({ query }) => {
-      if (typeof query !== 'string' || query.trim() === '') return { ok: false, error: 'empty search query' };
-      const text = query.trim();
-      if (text.length > 256) return { ok: false, error: 'search query is too long' };
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5_000);
-      timer.unref?.();
-      try {
-        const response = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`, {
-          signal: controller.signal,
-        });
-        if (!response.ok) return { ok: false, error: `npm search failed (HTTP ${response.status})` };
-        const data = (await response.json()) as { objects?: Array<{ package?: { name?: unknown; version?: unknown; description?: unknown } }> };
-        const objects = Array.isArray(data.objects) ? data.objects : [];
-        const packages = objects
-          .map(entry => entry.package)
-          .filter((pkg): pkg is { name: string; version: unknown; description: unknown } => pkg !== undefined && typeof pkg.name === 'string')
-          .map(pkg => ({
-            name: pkg.name,
-            version: typeof pkg.version === 'string' ? pkg.version : '',
-            ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
-          }));
-        return { ok: true, packages };
-      } catch (error) {
-        return { ok: false, error: `npm search failed: ${String(error)}` };
-      } finally {
-        clearTimeout(timer);
-      }
-    }));
-
-    // Plugin-action confirmation (design 09 §4 v1 mitigation): the pack-and-
-    // transfer / local-install / local-remove IPC channels must pass a
-    // main-process dialog — a remote instance's client bundle executes in the
-    // chamber page (declared trust boundary) and could otherwise drive these
-    // silently. Fail closed without a window; one dialog at a time (a script
-    // burst must not stack dialogs).
-    type PluginConfirmResult = { ok: true } | { cancelled: true } | { ok: false; error: string }
-    let pluginConfirmOpen = false
-    async function confirmPluginAction(
-      win: BrowserWindow | null,
-      copy: { message: string; detail: string },
-    ): Promise<PluginConfirmResult> {
-      if (win === null || win.isDestroyed()) return { ok: false, error: 'no window for confirmation' }
-      if (pluginConfirmOpen) return { ok: false, error: 'another confirmation is in progress' }
-      pluginConfirmOpen = true
-      try {
-        // A hidden-to-tray window must not receive an invisible dialog — show
-        // it first so the confirmation is a real user action.
-        if (!win.isVisible()) win.show()
-        const { response } = await dialog.showMessageBox(win, {
-          type: 'warning',
-          title: copy.message,
-          message: copy.message,
-          detail: copy.detail,
-          buttons: ['取消', '确认'],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true,
-        })
-        return response === 1 ? { ok: true } : { cancelled: true }
-      } finally {
-        pluginConfirmOpen = false
-      }
-    }
-
-    // Host-graph seed + materialize + local plugin exec (design 13 M4): the M2
-    // orchestration functions that were implemented but not yet wired. Seed
-    // installs module A onto the remote (09 遗留 1); materialize packs a local
-    // plugin dir and installs it remotely — the ADD view goes through
-    // materialize_add_pick (folder picker in MAIN, pick-only), the sync view
-    // through materialize_add (dir resolved from the local manifest, validated
-    // here as absolute + directory); local add/remove run `dsh plugin` against
-    // the LOCAL dsh home (05 §5.1).
-    ipcMain.handle('desktop_ssh_seed_host_graph', trustedIpc(async ({ id }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      // Not shipped is a loud error on the MANUAL path (the button must never
-      // look like it succeeded while writing nothing) — the auto path skips
-      // with an info log instead. The manual resend covers BOTH chamber host
-      // packages (host-graph + git-worktree): a remote connected before the
-      // git package existed only picks it up through this path or the next
-      // ready transition.
-      const missing = chamberHostPackageSeeds.filter(seed => !existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
-      if (missing.length > 0) {
-        return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
-      }
-      if (hostPackageSeeding.has(id)) return { ok: false, error: 'chamber host seed in progress' };
-      // Manual-path user confirmation (2026 review): the seed is a persistent
-      // remote modification (writes packages + merges the boot layer) — the
-      // only ungated channel of its class. The AUTO path (ready transition,
-      // main.ts ~1245) calls seedRemoteChamberHostPackages directly and is
-      // unaffected. Cancel → {ok, cancelled}.
-      {
-        const instance = sm.listInstances().find(entry => entry.id === id);
-        const confirm = await confirmPluginAction(mainWindow, describeSeedConfirmation({
-          targetLabel: instance !== undefined ? (instance.label || instance.host) : null,
-          targetId: id,
-        }));
-        if ('cancelled' in confirm) return { ok: true, cancelled: true };
-        if (!confirm.ok) return { ok: false, error: confirm.error };
-      }
-      hostPackageSeeding.add(id);
-      try {
-        const result = await seedRemoteChamberHostPackages(execTransport, spec, chamberHostPackageSeeds);
-        // Surface the outcome in the instance's ring-buffer log (the connections
-        // UI log panel) — the injection is never a silent modification.
-        if (result.ok) {
-          const summary = result.packages.map(entry => `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}`).join('、');
-          sm.appendLog(id, 'info', `chamber host 包注入完成：${summary}；boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
-        } else {
-          sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
-        }
-        return result;
-      } finally {
-        hostPackageSeeding.delete(id);
-      }
-    }));
-    // materialize_add (sync view): renderer supplies only the dependency NAME.
-    // Main re-reads the authoritative local manifest and resolves/canonicalizes
-    // its path; an IPC caller can never choose an arbitrary local directory.
-    ipcMain.handle('desktop_ssh_plugin_materialize_add', trustedIpc(async ({ id, name }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      if (typeof name !== 'string') return { ok: false, error: 'invalid plugin name' };
-      const resolved = resolveLocalMaterializeDirectory(localDshHome, name);
-      if (!resolved.ok) return resolved;
-      // User confirmation (design 09 §4 v1 mitigation): pack-and-transfer
-      // sends LOCAL source to the remote — a script in the page must not be
-      // able to do this silently. Cancel mirrors the picker's cancelled shape.
-      const instance = sm.listInstances().find(entry => entry.id === id);
-      const confirm = await confirmPluginAction(mainWindow, describeMaterializeConfirmation({
-        pluginName: name,
-        pluginPath: resolved.path,
-        targetLabel: instance !== undefined ? (instance.label || instance.host) : null,
-        targetId: id,
-      }));
-      if ('cancelled' in confirm) return { ok: true, cancelled: true };
-      if (!confirm.ok) return { ok: false, error: confirm.error };
-      return materializeAndAdd(execTransport, spec, resolved.path);
-    }));
-    // materialize_add_pick (add view): PICK-ONLY — the folder picker runs here in
-    // the main process, so a compromised renderer can never drive the pack surface
-    // to an arbitrary local directory (design 13 §5.8 hardening).
-    ipcMain.handle('desktop_ssh_plugin_materialize_add_pick', trustedIpc(async ({ id }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
-      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-      if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
-      return materializeAndAdd(execTransport, spec, picked.filePaths[0]);
-    }));
-    ipcMain.handle('desktop_local_plugin_add_file', trustedIpc(async () => {
-      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
-      if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
-      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-      if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
-    }));
-    ipcMain.handle('desktop_local_plugin_add', trustedIpc(async ({ spec: specArg }) => {
-      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
-      // `file:` imports must go through the main-process folder picker
-      // (desktop_local_plugin_add_file); this spec channel only accepts registry
-      // specs so a compromised renderer can never drive the local pack surface
-      // to an arbitrary directory (design 13 §5.8 hardening).
-      if (typeof specArg !== 'string') return { ok: false, error: 'invalid plugin spec' };
-      if (specArg.startsWith('file:')) {
-        return { ok: false, error: 'local file imports must use the folder picker' };
-      }
-      // User confirmation (design 09 §4 v1 mitigation): installing a registry
-      // package into the LOCAL profile creates a persistent execution surface
-      // on the next local boot — never a silent script action.
-      const confirm = await confirmPluginAction(mainWindow, describeLocalPluginAddConfirmation(specArg));
-      if ('cancelled' in confirm) return { ok: true, cancelled: true };
-      if (!confirm.ok) return { ok: false, error: confirm.error };
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
-    }));
-    ipcMain.handle('desktop_local_plugin_remove', trustedIpc(async ({ name }) => {
-      if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
-      if (typeof name !== 'string' || name === '') return { ok: false, error: 'invalid plugin name' };
-      // User confirmation (design 09 §4 v1 mitigation): removal is destructive
-      // — a page script must not be able to wipe the local profile silently.
-      const confirm = await confirmPluginAction(mainWindow, describeLocalPluginRemoveConfirmation(name));
-      if ('cancelled' in confirm) return { ok: true, cancelled: true };
-      if (!confirm.ok) return { ok: false, error: confirm.error };
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
-    }));
-
-    // VS Code 深链（design 16 §4/§5）+ open-in 注册表（open-in.ts）的共享宿主
-    // 依赖束：wiredCtx 同时供 OS 深链 drain（runVscodeLaunch）与 open-in 执行
-    // 管线复用。lookupInstance 查 transportManager 实查；vscodeAvailable 每次
-    // 实探（getter 惰性、无缓存陈旧）；openVscodeUrl 包装 shell.openExternal
-    // （catch → loud error，返回 {error} 由调用方处理）。
-    const wiredCtx: VscodeLaunchContext = {
-      lookupInstance: (id) => {
-        const instance = sm.listInstances().find(entry => entry.id === id);
-        if (instance === undefined) return null;
-        return { id: instance.id, host: instance.host, user: instance.user, sshPort: instance.sshPort, kind: instance.kind };
-      },
-      vscodeAvailable: () => detectVscodeAvailability(process.platform).available,
-      openVscodeUrl: async (url) => {
-        // Injection-point scheme re-verification (security-review P2-1, mirror
-        // of isAllowedReleaseUrl's discipline): only our constructed targets
-        // may ever reach shell.openExternal — the ssh-remote URL for remote
-        // sources and the file URL for the local source (user decision
-        // 2026-08: local workspaces open as local folders).
-        if (typeof url !== 'string' || !(url.startsWith('vscode://vscode-remote/') || url.startsWith('vscode://file/'))) {
-          const message = 'refused to open a non-vscode URL';
-          console.error(`[dsh-chamber] ${message}:`, url);
-          return { ok: false, error: message };
-        }
-        try {
-          await shell.openExternal(url);
-          return { ok: true };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error('[dsh-chamber] 打开 vscode URL 失败：', error);
-          return { ok: false, error: `open vscode url failed: ${message}` };
-        }
-      },
-    };
-
-    // open-in 注册表（open-in.ts）：apps() 能力协商 + 统一执行管线。wiredCtx
-    // 复用 registry/availability/openVscodeUrl 依赖，补 shell 文件系统面
-    // （stat/openPath/showItemInFolder 均为主进程包装）。原 design 16 的两个
-    // vscode IPC（vscode-availability / open-vscode）随旧插件删除而移除——渲染
-    // 层唯一入口收敛为 open-in 两个通道（复核 2026-08）。
-    const openInCtx: OpenInLaunchContext = {
-      lookupInstance: wiredCtx.lookupInstance,
-      vscodeAvailable: wiredCtx.vscodeAvailable,
-      openVscodeUrl: wiredCtx.openVscodeUrl,
-      stat: async (p) => {
-        try {
-          const s = await fsp.stat(p)
-          return s.isDirectory() ? { kind: 'dir' } : { kind: 'file' }
-        } catch { return null }
-      },
-      openPath: async (p) => {
-        // shell.openPath 部分失败模式（win32/linux）存在 reject 路径——与
-        // openVscodeUrl 封装同款纪律：reject 归一为错误串（loud），绝不落
-        // transport rejection。
-        try {
-          return normalizeOpenPathError(await shell.openPath(p))
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          console.error('[dsh-chamber] 打开路径失败：', error)
-          return `open path failed: ${message}`
-        }
-      },
-      showItemInFolder: (p) => shell.showItemInFolder(p),
-    }
-    ipcMain.handle('dsh-chamber:open-in-apps', trustedIpc(() => ({ apps: listOpenInApps(process.platform) })))
-    ipcMain.handle('dsh-chamber:open-in', trustedIpc(async (payload: unknown) => {
-      // 载荷形状守卫（复核 P2）：不可信渲染载荷直接解构会以 TypeError 落到
-      // transport rejection——统一为 loud {error}，与其余失败面一致。
-      const req = payload as Partial<OpenInRequest> | null
-      if (req === null || typeof req !== 'object' || typeof req.appId !== 'string' || typeof req.instanceId !== 'string' || typeof req.path !== 'string') {
-        return { ok: false, error: 'invalid open-in payload' }
-      }
-      const result = await runOpenInLaunch({ appId: req.appId, instanceId: req.instanceId, path: req.path }, openInCtx)
-      // vscode 启动成功后 best-effort 推送 intent 激活渲染层对应来源（与 OS
-      // 深链路径对齐，维持「vscode 启动→激活源」不变量；finder 无对应激活
-      // 语义不推送；窗口未就绪/销毁则跳过，不阻塞启动）。
-      if (result.ok && req.appId === 'vscode' && mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('dsh-chamber:deep-link-intent', { instanceId: req.instanceId, path: req.path });
-      }
-      return result;
-    }))
-
-    // Update controller (design 11): silent check on a startup delay + 6h
-    // interval; autoDownload=false — checking never downloads, the download
-    // starts ONLY when the user clicks「更新」in the settings update section
-    // (dsh-chamber:update-download). The user can also check manually from
-    // that section (dsh-chamber:update-check — the same silent check path,
-    // still no download). Install is deferred to quit
-    // (autoInstallOnAppQuit): no dialog, no mid-session interruption. The
-    // state projection is non-secret only (versions / channel / release URL /
-    // short error text) and every failure is silent (main-process log), never
-    // blocking startup — the settings section renders the honest state.
-    const updater = createUpdateController({
-      version,
-      logger: {
-        log: (...args) => console.log('[updater]', ...args),
-        warn: (...args) => console.warn('[updater]', ...args),
-        error: (...args) => console.error('[updater]', ...args),
-      },
+    // open-in 注册表（designs 16/17）：apps() 协商 + 统一执行管线；同时构建
+    // 与深链共享的 vscodeCtx（runVscodeLaunch 宿主依赖）。
+    const openInWiring = registerOpenIn({
+      trustedIpc,
+      transportManager: () => sm.transportManager(),
+      mainWindow: () => mainWindow,
     });
-    // Module-level ref so will-quit can read the update state for the quit-
-    // confirmation exemption (design 14 D2).
-    updateController = updater;
-    updater.subscribe((updateState) => {
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('dsh-chamber:update-state-changed', updateState);
-      }
+
+    // VS Code 深链（design 16 §4/§5）：协议注册 + pendingIntents drain 绑定
+    // （vscodeCtx 来自 open-in）。入队在模块顶层即可用（冷启动 open-url）。
+    deepLinkWiring = registerDeepLink({
+      quitRequested: () => quitRequested,
+      mainWindow: () => mainWindow,
+      vscodeCtx: openInWiring.vscodeCtx,
     });
-    ipcMain.handle('dsh-chamber:update-state', trustedIpc(() => updater.state()));
-    ipcMain.handle('dsh-chamber:update-check', trustedIpc(() => updater.checkNow()));
-    ipcMain.handle('dsh-chamber:update-download', trustedIpc(() => updater.download()));
-    // The settings update section's「前往下载页」link: popups are denied and
-    // navigation is pinned to the control-plane origin, so opening a release
-    // page must go through the main process. Strict allowlist — parsed, not
-    // prefix-string matched: only this repo's GitHub pages can ever be opened
-    // (never an arbitrary URL, subdomain, userinfo or path-root trick).
-    ipcMain.handle('dsh-chamber:open-release', trustedIpc(({ url }) => {
-      if (!isAllowedReleaseUrl(url)) {
-        return { ok: false, error: 'url not allowed' };
-      }
-      void shell.openExternal(url).catch(err => console.error('[dsh-chamber] 打开下载页失败：', err));
-      return { ok: true };
-    }));
-    updater.start();
+
+    // Update controller（design 11）：静默检查 + 用户确认下载 + 退出时安装。
+    // 模块级 ref 供 before-quit 的退出豁免读取（design 14 D2）。
+    updateWiring = registerUpdate({
+      trustedIpc,
+      mainWindow: () => mainWindow,
+      appVersion: version,
+    });
 
     // Single frame, single origin: the control plane serves the built dsh
     // frontend (design 05 §1) — no local file loads. A load failure is a
@@ -1786,54 +785,11 @@ if (!gotTheLock) {
     createMainWindow(rendererOrigin, true);
 
     // 深链统一 drain（design 16 §4.2）：startup 完成（transportManager 装载 +
-    // 主窗口就绪）后消费 pendingIntents。深链执行（VS Code 启动）不阻塞窗口；
-    // 成功后 best-effort 推送 intent（窗口未就绪/销毁则跳过）；失败 loud
-    // （对话框 + 日志）。quit 在途的深链已在 enqueueDeepLink 被 ignore。
-    drainPendingIntents = () => {
-      const intents = pendingIntents;
-      pendingIntents = [];
-      for (const intent of intents) {
-        if (quitRequested) return;
-        void (async () => {
-          const result = await runVscodeLaunch(intent, wiredCtx);
-          if (result.ok) {
-            if (mainWindow !== null && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('dsh-chamber:deep-link-intent', intent);
-            }
-          } else {
-            console.error(`[dsh-chamber] 深链执行失败：${result.error}`);
-            dialog.showErrorBox('打开 VS Code 失败', result.error);
-          }
-        })().catch((error) => {
-          // runVscodeLaunch 内部已兜底，此处只防意外 rejection 成为
-          // unhandled（security-review：drain 的 async IIFE 无 catch）。
-          console.error('[dsh-chamber] 深链执行异常：', error);
-        });
-      }
-    };
-    drainPendingIntents();
+    // 主窗口就绪）后消费 pendingIntents（registerDeepLink 已绑定 drain）。
+    deepLinkWiring.drainIntents();
 
-    // 通知打开事件统一 drain（design 19 §3.3，照搬 pendingIntents 模式）：窗口
-    // 存在、已完成加载且 renderer 已就绪（onOpen 监听注册后经
-    // dsh-chamber:notifications-ready 置位）→ 直接推送；任一条件不满足 → 重新
-    // 入队，did-finish-load / ready IPC 后再补发（窗口关闭期间点击通知不丢事件）。
-    drainPendingNotificationOpens = () => {
-      const opens = pendingNotificationOpens;
-      pendingNotificationOpens = [];
-      for (const open of opens) {
-        if (quitRequested) return;
-        if (
-          mainWindow !== null && !mainWindow.isDestroyed()
-          && !mainWindow.webContents.isLoading()
-          && !mainWindow.webContents.isCrashed()
-          && notificationOpenDrainReady
-        ) {
-          mainWindow.webContents.send('dsh-chamber:notification-open', open);
-        } else {
-          pendingNotificationOpens.push(open);
-        }
-      }
-    };
-    drainPendingNotificationOpens();
+    // 通知打开事件统一 drain（design 19 §3.3）：startup 完成 + 窗口就绪后
+    // 补发（did-start-loading 已复位，若 renderer 已 ready 则直接推送）。
+    notificationsWiring.drainOpens();
   });
 }

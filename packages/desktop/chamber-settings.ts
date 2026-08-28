@@ -179,6 +179,15 @@ function preserveCorrupt(filePath: string): void {
   }
 }
 
+/** 关窗隐藏到托盘的「恢复入口可用」判定（design 14 D1）：macOS Dock 图标常驻
+ *  （激活即恢复窗口），其余平台必须有托盘。 */
+export function closeToTrayRecoveryAvailable(
+  platform: NodeJS.Platform,
+  trayAvailable: boolean,
+): boolean {
+  return platform === 'darwin' || trayAvailable;
+}
+
 /** Platform capability gates (design 14 D6/D1). */
 export function computeSupported(
   platform: NodeJS.Platform,
@@ -186,7 +195,7 @@ export function computeSupported(
 ): ChamberSettingsStatus['supported'] {
   return {
     launchAtLogin: platform !== 'win32',
-    closeToTray: platform === 'darwin' || trayAvailable,
+    closeToTray: closeToTrayRecoveryAvailable(platform, trayAvailable),
   };
 }
 

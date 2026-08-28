@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   DEFAULT_CHAMBER_SETTINGS,
+  closeToTrayRecoveryAvailable,
   computeQuitRisk,
   computeSupported,
   normalizeSettings,
@@ -105,6 +106,15 @@ test('computeSupported: launchAtLogin off on win32; closeToTray follows tray ava
   assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true });
   assert.deepEqual(computeSupported('linux', true), { launchAtLogin: true, closeToTray: true });
   assert.deepEqual(computeSupported('linux', false), { launchAtLogin: true, closeToTray: false });
+});
+
+test('closeToTrayRecoveryAvailable: macOS Dock always recovers; elsewhere the tray is the gate', () => {
+  assert.equal(closeToTrayRecoveryAvailable('darwin', false), true, 'macOS Dock icon recovery is always available');
+  assert.equal(closeToTrayRecoveryAvailable('darwin', true), true);
+  assert.equal(closeToTrayRecoveryAvailable('linux', true), true);
+  assert.equal(closeToTrayRecoveryAvailable('linux', false), false, 'no tray on linux → no recovery surface');
+  assert.equal(closeToTrayRecoveryAvailable('win32', true), true);
+  assert.equal(closeToTrayRecoveryAvailable('win32', false), false);
 });
 
 test('shouldHideToTray: needs behavior + recovery surface + no quit in flight', () => {
