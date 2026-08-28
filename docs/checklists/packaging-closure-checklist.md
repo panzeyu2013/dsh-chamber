@@ -55,8 +55,7 @@
 `build.files` 以根级 `*.ts` / `*.cts` glob 收取，并用 `!*.test.ts` 排除测试；
 当前运行闭包包括：
 
-- `main.ts`、`preload.cts`、`control-plane-module.ts`、`wiring.ts`、
-  `ipc-events.ts`、全部 `ipc-*.ts`，以及 `updater.ts`、
+- `main.ts`、`preload.cts`、`control-plane-module.ts`、`ipc-events.ts`，以及 `updater.ts`、
   `chamber-settings.ts`、`transport-provider.ts`、`transport-manager.ts`、
   `ssh-provider.ts`、`ssh-config.ts`、`renderer-trust.ts`、`plugin-sync.ts`、
   `deep-link.ts`、`notifications.ts`、`open-in.ts`；另含 `dist/**/*` 与

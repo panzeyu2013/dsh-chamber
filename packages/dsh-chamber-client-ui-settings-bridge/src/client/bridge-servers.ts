@@ -1,10 +1,10 @@
 /**
  * Settings bridge server roster: the renderer-published chamberBridge
  * projection (design 05 §3) — the same non-secret source the sidebar and
- * the App layer consume (id / kind / label / connected / phase). No tunnel
- * URLs, no SSH material ever cross this module. The chamberBridge face is
- * ambient (vendor-modules.d.ts) — this package bundles independently of the
- * sidebar package's own sources.
+ * the App layer consume (id / authoritative sourceFingerprint / kind / label /
+ * connected / phase). No tunnel URLs, no SSH material ever cross this
+ * module. The chamberBridge face is ambient (vendor-modules.d.ts) — this
+ * package bundles independently of the sidebar package's own sources.
  */
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { serverProjectionSignature } from './server-selector.ts'
@@ -19,10 +19,10 @@ export function getServers(): BridgeServerRow[] {
 
 /**
  * Subscribe to projection refreshes with a rendered-surface dedup: the
- * listener fires only when the id/kind/label/connected/phase/plugin diagnostic
- * projection actually changed. Timestamp-only publishes stay suppressed;
- * the collision-safe signature includes every diagnostic field the plugin
- * section renders, including pluginId.
+ * listener fires only when the source owner or a rendered roster/plugin
+ * diagnostic field actually changed. Timestamp-only publishes stay
+ * suppressed; the collision-safe signature includes sourceFingerprint and
+ * every diagnostic field the plugin section renders, including pluginId.
  * @param listener - invoked on meaningful projection changes.
  * @returns unsubscribe.
  */

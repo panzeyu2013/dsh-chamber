@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts'
+import { createTrustedIpc, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts'
+import type { IpcSenderLike } from './renderer-trust.ts'
 
 const origin = 'http://127.0.0.1:17500'
 
@@ -29,6 +30,47 @@ test('IPC trust requires the current webContents main frame and trusted URL', ()
   assert.equal(isTrustedIpcSender({ sender: webContents, senderFrame: mainFrame }, webContents, origin), false)
 })
 
+test('trusted IPC rejects an untrusted sender before invoking the handler', () => {
+  const trustedIpc = createTrustedIpc({
+    isTrustedSender: () => false,
+    isQuitting: () => false,
+  })
+  let called = false
+  const wrapped = trustedIpc(() => { called = true })
+  const event: IpcSenderLike = { sender: {}, senderFrame: { url: 'https://evil.example/' } }
+  assert.throws(() => wrapped(event), (error: unknown) => {
+    assert.equal((error as Error & { code?: string }).code, 'ipc_sender_forbidden')
+    return true
+  })
+  assert.equal(called, false)
+})
+
+test('trusted IPC rejects late work once application shutdown starts', () => {
+  const trustedIpc = createTrustedIpc({
+    isTrustedSender: () => true,
+    isQuitting: () => true,
+  })
+  let called = false
+  const wrapped = trustedIpc(() => { called = true })
+  assert.throws(() => wrapped({ sender: {}, senderFrame: { url: `${origin}/` } }), (error: unknown) => {
+    assert.equal((error as Error & { code?: string }).code, 'app_quitting')
+    return true
+  })
+  assert.equal(called, false)
+})
+
+test('trusted IPC passes only invoke arguments to an accepted handler', () => {
+  const trustedIpc = createTrustedIpc({
+    isTrustedSender: () => true,
+    isQuitting: () => false,
+  })
+  const seen: unknown[] = []
+  const wrapped = trustedIpc((...args: unknown[]) => seen.push(...args))
+  const event: IpcSenderLike = { sender: {}, senderFrame: { url: `${origin}/` } }
+  wrapped(event, { id: 's1' }, 42)
+  assert.deepEqual(seen, [{ id: 's1' }, 42])
+})
+
 test('fatal main-process boundary claims ownership before every hostile host call', () => {
   const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   const start = source.indexOf('function fatalMainError(reason: unknown): void {')
@@ -49,16 +91,16 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   assert.match(source, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(source, /function pushHeldSystemResume\([\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(source, /desktop_ssh_instances_changed[\s\S]*?return projectedSaved;/)
-  assert.match(source, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?desktop_ssh_status_changed/)
-  assert.match(source, /const updateWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?dsh-chamber:update-state-changed/)
+  assert.match(source, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
+  assert.match(source, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(source, /const updateWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
 })
 
 test('renderer ACK deliveries project and preload-validates the captured lifecycle proof', () => {
   const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   const preload = readFileSync(new URL('./preload.cts', import.meta.url), 'utf8')
-  assert.match(main, /dsh-chamber:deep-link-intent[\s\S]*?sourceFingerprint: intent\.sourceFingerprint/)
-  assert.match(main, /dsh-chamber:notification-open[\s\S]*?sourceFingerprint: delivery\.payload\.sourceFingerprint/)
+  assert.match(main, /IPC_CHANNELS\.DEEP_LINK_INTENT[\s\S]*?sourceFingerprint: intent\.sourceFingerprint/)
+  assert.match(main, /IPC_CHANNELS\.NOTIFICATION_OPEN[\s\S]*?sourceFingerprint: delivery\.payload\.sourceFingerprint/)
   assert.match(preload, /const REMOTE_SOURCE_FINGERPRINT_PATTERN = \/\^\[a-f0-9\]\{64\}\$\//)
   assert.match(preload, /validSourceFingerprint\(intent\.instanceId, intent\.sourceFingerprint\)/)
   assert.match(preload, /validSourceFingerprint\(sourceId as string, req\.sourceFingerprint\)/)

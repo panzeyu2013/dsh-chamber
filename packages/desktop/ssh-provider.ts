@@ -11,7 +11,7 @@
  *   mappings alive).
  * - systemctl exec (design 02 §3.9): `ssh user@host systemctl
  *   start|stop|is-active <serviceName>` — argument-array spawn (no shell),
- *   serviceName whitelisted `^[a-zA-Z0-9_.-]+$` before anything runs
+ *   serviceName whitelisted `^(?!-)[a-zA-Z0-9_.:@-]+$` before anything runs
  *   (injection guard), bounded timeout, failures loud. Auth failures surface
  *   through the result error only — the exec channel never writes the tunnel
  *   state (a later routine drop is never mislabeled terminal). is-active is
@@ -31,9 +31,11 @@
  * - Optional password auth (design 05 §8, user request 2026-08): a password
  *   entered in the connections form is held in MAIN-PROCESS memory and —
  *   user decision 2026-08: plaintext-file fallback — mirrored to
- *   `<userData>/ssh-passwords.json` (0600, atomic write, loaded at startup)
- *   so password-only hosts auto-connect after a restart. It never enters the
- *   registry, logs, or any renderer payload beyond the transient input. The
+ *   `<userData>/ssh-passwords.json` (0600, atomic write, loaded at startup),
+ *   bound to the exact host/user/sshPort authentication peer so a registry
+ *   edit or cross-file crash window cannot redirect it to another endpoint.
+ *   It never enters the registry, logs, or any renderer payload beyond the
+ *   transient input. The
  *   tunnel and systemd exec channels deliver it to the system `ssh` binary
  *   via an ephemeral askpass helper (SSH_ASKPASS_REQUIRE=force — no TTY and
  *   no command line involvement; the helper is a 0700 sh script that answers
@@ -47,7 +49,7 @@
 import type { SpawnOptions } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
-import { chmodSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 // The dsh RPC wire envelope is single-sourced in control-plane
@@ -88,9 +90,13 @@ export const SSH_USER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 /**
  * systemd unit name whitelist (design 02 §3.9): only plain unit-name
  * characters are ever placed on the systemctl command line (no shell, no
- * injection). Anything else is refused before a process is spawned.
+ * injection). A leading '-' is specifically refused because systemctl would
+ * parse an otherwise valid-looking name such as '--help' as an option.
  */
-export const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9_.-]+$/
+// `@` (template instances) and `:` are valid, shell-safe systemd unit-name
+// characters. Backslash escapes remain out because OpenSSH joins the remote
+// argv through a shell; a leading '-' remains an option-injection shape.
+export const SERVICE_NAME_PATTERN = /^(?!-)[a-zA-Z0-9_.:@-]+$/
 
 /**
  * Remote dsh home whitelist (design 13 §7.2): `~/.dsh` or an absolute path,
@@ -513,10 +519,24 @@ function isValidInstance(instance: unknown, kind: TransportProvider['kind']): in
  * `<userData>/ssh-passwords.json` (0600, atomic write) so auto-connect works
  * after a restart. Never written to the registry (ssh-instances.json stays
  * non-secret metadata), never logged, never exposed back to the renderer.
- * The entry is dropped on instance removal and on explicit clear
- * (setSshPassword(id, null)); app quit leaves the file in place by design.
+ * Each entry carries its exact authentication owner (id/host/user/sshPort).
+ * Every ssh spawn compares that owner to the current authoritative spec, so
+ * two separately atomic files cannot redirect an old credential if the app
+ * crashes between their commits. The entry is dropped on instance removal
+ * and on explicit clear; app quit leaves the file in place by design.
  */
-const passwords = new Map<string, string>()
+export type SshPasswordOwner = Pick<TransportInstanceSpec, 'id' | 'host' | 'user' | 'sshPort'>
+
+export interface SshPasswordReplacement {
+  owner: SshPasswordOwner
+  password: string
+}
+
+interface StoredSshPassword extends SshPasswordOwner {
+  password: string
+}
+
+const passwords = new Map<string, StoredSshPassword>()
 
 /** The plaintext persistence mirror path; null = memory-only (tests, or a
  * platform without persistence). Configured once at startup. */
@@ -545,6 +565,42 @@ function preserveInvalidPasswordFile(file: string): string {
   }
 }
 
+/** Schema v1 stored only id → password and therefore cannot prove which SSH
+ * peer owns a credential. Preserve it for manual recovery but never guess an
+ * owner from the current registry: that registry may be the newer half of an
+ * interrupted cross-file commit. */
+function retireUnownedPasswordFile(file: string): string {
+  const retiredPath = `${file}.v1-retired`
+  try {
+    renameSync(file, retiredPath)
+    return `legacy password file without endpoint ownership retired at ${retiredPath}; re-enter SSH passwords`
+  } catch (error) {
+    return `legacy password file has no endpoint ownership and was not loaded; preserve failed: ${String(error)}; re-enter SSH passwords`
+  }
+}
+
+function isValidPasswordOwner(owner: unknown): owner is SshPasswordOwner {
+  if (!isPlainRecord(owner)) return false
+  return typeof owner.id === 'string'
+    && owner.id !== 'local'
+    && INSTANCE_ID_PATTERN.test(owner.id)
+    && typeof owner.host === 'string'
+    && owner.host.length <= MAX_SSH_HOST_CHARS
+    && SSH_HOST_PATTERN.test(owner.host)
+    && (owner.user === null
+      || (typeof owner.user === 'string' && owner.user.length <= MAX_SSH_USER_CHARS && SSH_USER_PATTERN.test(owner.user)))
+    && (owner.sshPort === null
+      || (typeof owner.sshPort === 'number' && Number.isInteger(owner.sshPort)
+        && owner.sshPort >= 1 && owner.sshPort <= 65535))
+}
+
+function samePasswordOwner(stored: StoredSshPassword, owner: SshPasswordOwner): boolean {
+  return stored.id === owner.id
+    && stored.host === owner.host
+    && stored.user === owner.user
+    && stored.sshPort === owner.sshPort
+}
+
 /**
  * Point the password store at its persistence file (main.ts, once at
  * startup) and load existing entries. Missing file = empty set (first run).
@@ -558,13 +614,35 @@ export function configureSshPasswordStore(file: string | null): string | null {
   passwords.clear()
   if (file === null) return null
   let text: string
+  let fd: number | null = null
   try {
-    text = readFileSync(file, 'utf8')
+    // O_NOFOLLOW prevents a local symlink from redirecting credential reads.
+    // Windows password auth is disabled; lstat still rejects a symlink there
+    // because O_NOFOLLOW is not consistently supported by Win32 filesystems.
+    if (process.platform === 'win32' && lstatSync(file).isSymbolicLink()) {
+      return `refusing non-regular password file ${file}`
+    }
+    const noFollow = process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW
+    fd = openSync(file, fsConstants.O_RDONLY | noFollow)
+    const info = fstatSync(fd)
+    if (!info.isFile()) return `refusing non-regular password file ${file}`
+    const getuid = process.getuid
+    if (typeof getuid === 'function' && info.uid !== getuid()) {
+      return `refusing password file not owned by the current user: ${file}`
+    }
+    if (process.platform !== 'win32' && (info.mode & 0o777) !== 0o600) {
+      // A legacy/manual 0644 store is already exposed. Tighten the opened
+      // inode before reading any secret and continue only if chmod succeeds.
+      fchmodSync(fd, 0o600)
+    }
+    text = readFileSync(fd, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     // Unreadable for another reason (permissions…): loud, non-fatal — the
     // app starts and password hosts fail auth until the user re-enters.
     return `cannot read ${file}: ${String(error)}`
+  } finally {
+    if (fd !== null) closeSync(fd)
   }
   let parsed: unknown
   try {
@@ -572,58 +650,76 @@ export function configureSshPasswordStore(file: string | null): string | null {
   } catch {
     return preserveInvalidPasswordFile(file)
   }
-  if (!isPlainRecord(parsed) || parsed.schemaVersion !== 1 || !isPlainRecord(parsed.passwords)) {
+  if (isPlainRecord(parsed) && parsed.schemaVersion === 1) {
+    return retireUnownedPasswordFile(file)
+  }
+  if (!isPlainRecord(parsed) || parsed.schemaVersion !== 2 || !isPlainRecord(parsed.passwords)) {
     return preserveInvalidPasswordFile(file)
   }
   const entries = Object.entries(parsed.passwords)
-  if (entries.some(([id, value]) => id === 'local' || !INSTANCE_ID_PATTERN.test(id)
-    || typeof value !== 'string' || value === '' || value.length > MAX_SSH_PASSWORD_CHARS)) {
-    return preserveInvalidPasswordFile(file)
+  const loaded = new Map<string, StoredSshPassword>()
+  for (const [id, value] of entries) {
+    if (!isPlainRecord(value)) return preserveInvalidPasswordFile(file)
+    const owner = { id, host: value.host, user: value.user, sshPort: value.sshPort }
+    if (!isValidPasswordOwner(owner)
+      || typeof value.password !== 'string'
+      || value.password === ''
+      || value.password.length > MAX_SSH_PASSWORD_CHARS) {
+      return preserveInvalidPasswordFile(file)
+    }
+    loaded.set(id, { ...owner, password: value.password })
   }
-  for (const [id, value] of entries) passwords.set(id, value as string)
+  for (const [id, value] of loaded) passwords.set(id, value)
   return null
 }
 
 /** Set or clear the password for one instance (null/'' = clear). Persists
- * the plaintext mirror when configured. */
-export function setSshPassword(id: string, password: string | null): void {
-  if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
-    throw new Error(`refusing password for invalid instance id ${JSON.stringify(id)}`)
+ * the plaintext mirror when configured. A non-empty password always receives
+ * the current authoritative SSH authentication owner from main.ts. */
+export function setSshPassword(owner: SshPasswordOwner, password: string | null): void {
+  if (!isValidPasswordOwner(owner)) {
+    throw new Error(`refusing password for invalid SSH owner ${JSON.stringify(owner)}`)
   }
-  if (password !== null && password.length > MAX_SSH_PASSWORD_CHARS) {
+  if (password !== null && (typeof password !== 'string' || password.length > MAX_SSH_PASSWORD_CHARS)) {
     throw new Error(`refusing SSH password longer than ${MAX_SSH_PASSWORD_CHARS} characters`)
   }
   const clearing = password === null || password === ''
   if (clearing) {
-    clearSshPasswords([id])
+    updateSshPasswords([owner.id])
     return
   }
-  const next = new Map(passwords)
-  next.set(id, password)
-  // Write-through commit: the live auth state changes only after its durable
-  // mirror succeeds, so a reported persistence failure cannot leave a secret
-  // active in memory but absent on disk (or vice versa).
-  persistSshPasswords(next)
-  passwords.clear()
-  for (const [entryId, entryPassword] of next) passwords.set(entryId, entryPassword)
+  updateSshPasswords([], { owner, password })
 }
 
 /**
- * Clear multiple removed instances in ONE password-file transaction. Either
- * every requested secret is durably removed and then unpublished from
- * memory/helpers, or none is. This prevents a multi-host registry deletion
- * from clearing only its first password when the file replace later fails.
+ * Apply retirements plus an optional replacement in ONE password-file write.
+ * Either the complete next credential map is durable and then published, or
+ * the old map/helpers remain untouched. Setting happens after clears, so an
+ * authentication-peer edit may retire and replace the same id atomically.
  */
-export function clearSshPasswords(ids: readonly string[]): void {
+export function updateSshPasswords(
+  ids: readonly string[],
+  replacement?: SshPasswordReplacement,
+): void {
   const unique = [...new Set(ids)]
   for (const id of unique) {
     if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
       throw new Error(`refusing password clear for invalid instance id ${JSON.stringify(id)}`)
     }
   }
-  if (unique.length === 0) return
+  if (replacement !== undefined) {
+    if (!isValidPasswordOwner(replacement.owner)) {
+      throw new Error(`refusing password for invalid SSH owner ${JSON.stringify(replacement.owner)}`)
+    }
+    if (typeof replacement.password !== 'string'
+      || replacement.password === ''
+      || replacement.password.length > MAX_SSH_PASSWORD_CHARS) {
+      throw new Error(`refusing invalid SSH replacement password`)
+    }
+  }
+  if (unique.length === 0 && replacement === undefined) return
   const present = unique.filter(id => passwords.has(id))
-  if (present.length === 0) {
+  if (present.length === 0 && replacement === undefined) {
     // There is no durable secret to rewrite. A registry deletion must not be
     // refused merely because an unrelated/empty password file is unwritable.
     for (const id of unique) clearAskpassHelpers(id)
@@ -631,6 +727,10 @@ export function clearSshPasswords(ids: readonly string[]): void {
   }
   const next = new Map(passwords)
   for (const id of present) next.delete(id)
+  if (replacement !== undefined) {
+    const { owner, password } = replacement
+    next.set(owner.id, { ...owner, password })
+  }
   persistSshPasswords(next)
   passwords.clear()
   for (const [entryId, entryPassword] of next) passwords.set(entryId, entryPassword)
@@ -640,9 +740,16 @@ export function clearSshPasswords(ids: readonly string[]): void {
   for (const id of unique) clearAskpassHelpers(id)
 }
 
-/** The stored password for one instance, or null. */
-export function getSshPassword(id: string): string | null {
-  return passwords.get(id) ?? null
+/** Clear multiple removed instances in one password-file transaction. */
+export function clearSshPasswords(ids: readonly string[]): void {
+  updateSshPasswords(ids)
+}
+
+/** The stored password for the exact authentication peer, or null. This is
+ * the final fail-closed gate used immediately before every ssh spawn. */
+export function getSshPassword(owner: SshPasswordOwner): string | null {
+  const stored = passwords.get(owner.id)
+  return stored !== undefined && samePasswordOwner(stored, owner) ? stored.password : null
 }
 
 /**
@@ -651,9 +758,15 @@ export function getSshPassword(id: string): string | null {
  * convention — the rename keeps the tmp file's 0600 mode). Empty maps still
  * write an empty file; the file is only created on the first set/clear.
  */
-function persistSshPasswords(next: ReadonlyMap<string, string>): void {
+function persistSshPasswords(next: ReadonlyMap<string, StoredSshPassword>): void {
   if (passwordFile === null) return
-  const payload = `${JSON.stringify({ schemaVersion: 1, passwords: Object.fromEntries(next) }, undefined, 2)}\n`
+  const persistedEntries = [...next].map(([id, entry]) => [id, {
+    password: entry.password,
+    host: entry.host,
+    user: entry.user,
+    sshPort: entry.sshPort,
+  }])
+  const payload = `${JSON.stringify({ schemaVersion: 2, passwords: Object.fromEntries(persistedEntries) }, undefined, 2)}\n`
   const tmpPath = `${passwordFile}.tmp`
   mkdirSync(dirname(passwordFile), { recursive: true })
   try {
@@ -816,7 +929,11 @@ function deleteAskpassHelper(path: string) {
  */
 export function sshAuthEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | null {
   if (!sshPasswordSupported()) return null
-  const password = getSshPassword(spec.id)
+  // The password file and instance registry are separately atomic. Compare
+  // the persisted owner at the last possible moment so a crash between their
+  // commits can only disable password auth, never send an old secret to the
+  // new endpoint behind the same id.
+  const password = getSshPassword(spec)
   if (password === null) return null
   const existing = askpassHelpers.get(spec.id) ?? []
   if (existing.length > 0 && askpassHelperPasswords.get(spec.id) === password) {
@@ -842,7 +959,7 @@ export function clearAskpassHelpers(id: string): void {
  * Delete the instance's ephemeral askpass helper (transport stop / removal
  * / app quit). The in-memory password itself survives a plain disconnect
  * (the user may reconnect without retyping) and is only cleared by
- * setSshPassword(null), instance removal, or app quit.
+ * setSshPassword(owner, null), instance removal, or app quit.
  */
 export function disposeSshAuth(spec: TransportInstanceSpec): void {
   clearAskpassHelpers(spec.id)
@@ -894,7 +1011,7 @@ export const sshProvider: TransportProvider = {
    * Delete the instance's ephemeral askpass helper (transport stop /
    * removal / app quit). The in-memory password itself survives a plain
    * disconnect (the user may reconnect without retyping) and is only
-   * cleared by setSshPassword(null), instance removal, or app quit.
+   * cleared by setSshPassword(owner, null), instance removal, or app quit.
    */
   disposeAuth(spec: TransportInstanceSpec): void {
     disposeSshAuth(spec)
@@ -1190,22 +1307,27 @@ export function resolveWriteTarget(spec: TransportInstanceSpec, path: string | u
 /**
  * Spawn one short-lived `ssh` run (design 13 §4.1) and drive it to completion:
  * bounded `run` timeout (SIGTERM → SIGKILL), stderr redaction + auth
- * classification, optional stdin write (write-file) and optional stdout
- * capture (`cat` → file content). Never auto-retried, never touches the
- * tunnel's terminal classification.
+ * classification, optional stdin write (write-file), and one bounded stdout
+ * mode: capture for whitelisted reads or streaming SHA-256 for write-file
+ * verification. Never auto-retried, never touches the tunnel's terminal
+ * classification.
  */
 function spawnRemote(
   spec: TransportInstanceSpec,
   remoteArgv: string[],
   deps: TransportExecDeps,
-  opts: { stdin?: string; captureStdout?: boolean; quiet?: boolean },
-): Promise<TransportExecResult> {
+  opts: {
+    stdin?: string
+    stdoutMode?: 'capture' | 'sha256'
+    quiet?: boolean
+  },
+): Promise<TransportExecResult & { stdoutSha256?: string }> {
   const timeoutMs = deps.runTimeoutMs ?? 120_000
   const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
   const args = spec.sshPort === null
     ? [target, ...remoteArgv]
     : ['-p', String(spec.sshPort), target, ...remoteArgv]
-  return new Promise(resolve => {
+  return new Promise<TransportExecResult & { stdoutSha256?: string }>(resolve => {
     let settled = false
     let timedOut = false
     let authFailed = false
@@ -1213,8 +1335,9 @@ function spawnRemote(
     let timer: ReturnType<typeof setTimeout> | null = null
     let killTimer: ReturnType<typeof setTimeout> | null = null
     const stdoutChunks: Buffer[] = []
+    const stdoutHash = opts.stdoutMode === 'sha256' ? createHash('sha256') : null
     let stdoutBytes = 0
-    const finish = (result: TransportExecResult) => {
+    const finish = (result: TransportExecResult & { stdoutSha256?: string }) => {
       if (settled) return
       settled = true
       if (timer !== null) { clearTimeout(timer); timer = null }
@@ -1278,7 +1401,7 @@ function spawnRemote(
     )
     if (child.stdout !== null) {
       child.stdout.on('data', chunk => {
-        if (opts.captureStdout !== true || settled) return
+        if (opts.stdoutMode === undefined || settled) return
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
         if (stdoutBytes + bytes.length > RUN_STDOUT_MAX_BYTES) {
           deps.log('error', `run stdout exceeds the ${RUN_STDOUT_MAX_BYTES}-byte limit`)
@@ -1289,7 +1412,8 @@ function spawnRemote(
           return
         }
         stdoutBytes += bytes.length
-        stdoutChunks.push(bytes)
+        if (opts.stdoutMode === 'capture') stdoutChunks.push(bytes)
+        else stdoutHash!.update(bytes)
       })
     }
     if (child.stderr !== null) {
@@ -1334,15 +1458,16 @@ function spawnRemote(
         finish({ ok: false, error: 'ssh instance not found' })
         return
       }
-      // Keep the RAW captured bytes alongside the UTF-8 view: binary stdout
-      // (a `.tgz` read-back) is lossy through `toString('utf8')` (U+FFFD
-      // replacement chars), so byte-domain consumers hash `stdoutBytes`.
-      const capturedStdout = opts.captureStdout === true ? Buffer.concat(stdoutChunks, stdoutBytes) : undefined
+      // Whitelisted exec reads retain raw bytes plus their UTF-8 view. The
+      // write-file path selects sha256 mode instead and never builds either
+      // full-size representation.
+      const capturedStdout = opts.stdoutMode === 'capture' ? Buffer.concat(stdoutChunks, stdoutBytes) : undefined
       finish({
         ok: true,
         status: projection,
         stdout: capturedStdout !== undefined ? capturedStdout.toString('utf8') : undefined,
         stdoutBytes: capturedStdout,
+        stdoutSha256: stdoutHash?.digest('hex'),
       })
     })
   })
@@ -1366,7 +1491,7 @@ async function runRemoteExec(
       deps.log('error', `refused run exec: command/argv not whitelisted ${JSON.stringify(payload.command)} ${JSON.stringify(payload.argv)}`)
       return Promise.resolve({ ok: false, error: 'invalid run command or arguments (whitelist refused)' })
     }
-    return spawnRemote(spec, argv, deps, { captureStdout: true, quiet: payload.quiet === true })
+    return spawnRemote(spec, argv, deps, { stdoutMode: 'capture', quiet: payload.quiet === true })
   }
   if (payload.op === 'write-file') {
     const target = resolveWriteTarget(spec, payload.path)
@@ -1402,17 +1527,18 @@ async function runRemoteExec(
     // Same `LC_ALL=C` discipline as the buildRemoteExecArgv cat branch: the
     // read-back verifies what was written, and its ENOENT/probe failures
     // must read English regardless of the remote locale.
-    const readBack = await spawnRemote(spec, ['LC_ALL=C', 'cat', target], deps, { captureStdout: true, quiet: payload.quiet === true })
+    const readBack = await spawnRemote(spec, ['LC_ALL=C', 'cat', target], deps, {
+      stdoutMode: 'sha256',
+      quiet: payload.quiet === true,
+    })
     if (!readBack.ok) return readBack
-    // Byte-domain verification: `stdout` is the lossy UTF-8 view of the
-    // captured bytes (binary content would be corrupted by replacement chars
-    // and the hash would never match), so the hash is computed over the RAW
-    // captured bytes (`stdoutBytes`).
-    const readBackBytes = readBack.stdoutBytes ?? Buffer.from(readBack.stdout ?? '', 'utf8')
-    if (createHash('sha256').update(readBackBytes).digest('hex') !== payload.sha256.toLowerCase()) {
+    // Byte-domain verification stays streaming: write-file may be 50 MiB,
+    // so retaining chunks, concatenating a Buffer, and then decoding a UTF-8
+    // copy would multiply main-process memory for data no caller consumes.
+    if (readBack.stdoutSha256 !== payload.sha256.toLowerCase()) {
       return { ok: false, error: 'write-file verification failed: remote SHA-256 mismatch' }
     }
-    return readBack
+    return { ok: true, status: readBack.status }
   }
   return Promise.resolve({ ok: false, error: 'unknown run payload op' })
 }

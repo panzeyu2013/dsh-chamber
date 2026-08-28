@@ -11,10 +11,19 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { killFailedSpawn, probePortBusy, readPidRecord, spawnDsh, writePidRecord, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
+import {
+  formatChildOutputChunk,
+  killFailedSpawn,
+  probePortBusy,
+  readPidRecord,
+  spawnDsh,
+  writePidRecord,
+  DEFAULT_DSH_START_PORT,
+  MAX_CHILD_OUTPUT_CHUNK_BYTES,
+} from '../src/spawn-dsh.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -38,6 +47,21 @@ class FakeProbeSocket extends EventEmitter {
     return this
   }
 }
+
+test('child output formatter bounds Buffer bytes before decode and marks truncation once', () => {
+  assert.equal(formatChildOutputChunk(Buffer.from('ordinary output\n')), 'ordinary output')
+
+  const hiddenTail = 'must-not-reach-logger-or-host-log'
+  const oversized = Buffer.concat([
+    Buffer.alloc(MAX_CHILD_OUTPUT_CHUNK_BYTES, 0x61),
+    Buffer.from(hiddenTail),
+  ])
+  const formatted = formatChildOutputChunk(oversized)
+  assert.equal(formatted.includes(hiddenTail), false)
+  assert.equal(formatted.endsWith('\n...[output chunk truncated]'), true)
+  assert.equal(Buffer.byteLength(formatted), MAX_CHILD_OUTPUT_CHUNK_BYTES)
+  assert.equal(formatted.match(/output chunk truncated/g)?.length, 1)
+})
 
 test('probePortBusy: abort destroys an inconclusive socket and rejects promptly', async () => {
   const socket = new FakeProbeSocket()
@@ -84,7 +108,16 @@ test('writePidRecord persists the exact CLI entry used for reaper identity check
 test('spawnDsh: an early-exit attempt cleans its pid record (no stale record for the reaper)', async () => {
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
-  writeFakeDshEntry(dshWorkspacePath, 'process.exit(3)\n')
+  // Both pipes finish a payload before exit. Node may deliver their final data
+  // after the child `exit` event but always before `close`; the rolling writer
+  // must therefore retire on `close` and persist both sentinels.
+  writeFakeDshEntry(dshWorkspacePath, [
+    'let pending = 2',
+    'const done = () => { if (--pending === 0) process.exit(3) }',
+    "process.stdout.write('final stdout\\n' + 'x'.repeat(128 * 1024), done)",
+    "process.stderr.write('final stderr\\n', done)",
+    '',
+  ].join('\n'))
   try {
     await assert.rejects(
       () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger }),
@@ -93,6 +126,12 @@ test('spawnDsh: an early-exit attempt cleans its pid record (no stale record for
     const recordsDir = join(stateDir, 'managed-dsh')
     const leftovers = existsSync(recordsDir) ? readdirSync(recordsDir).filter(file => file.endsWith('.json')) : []
     assert.deepEqual(leftovers, [], 'no pid record may survive a failed spawn attempt')
+    const finalAttemptLog = join(stateDir, 'host-logs', `${DEFAULT_DSH_START_PORT + 4}.log`)
+    await waitUntil(() => {
+      if (!existsSync(finalAttemptLog)) return false
+      const contents = readFileSync(finalAttemptLog, 'utf8')
+      return contents.includes('final stdout') && contents.includes('final stderr')
+    }, 3000)
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

@@ -35,6 +35,7 @@ export type {
   SshLocalPluginExecIpcResult,
   SshLogEntry,
   SshMaterializeResult,
+  SshPasswordSubmission,
   SshPhase,
   SshSeedHostGraphResult,
   SshStatusChangedPayload,

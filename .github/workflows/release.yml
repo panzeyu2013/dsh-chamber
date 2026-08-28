@@ -54,16 +54,12 @@ on:
 permissions:
   contents: read
 
-# A same-tag double run (re-dispatch / tag re-push while a run is in flight)
-# would interleave two drafts/uploads on the same tag — cancel the older run
-# so the tag always has exactly one coherent draft→finalize sequence
-# (2026-08 review NIT).
+# GitHub's latest release/feed are shared mutable state. Serialize release
+# publication and never cancel a run after it may have created a draft or
+# uploaded assets; a later run waits and then re-checks remote state.
 concurrency:
-  # Normalize both trigger shapes to the RELEASE TAG. A tag push for v0.2.0
-  # and a manual dispatch for 0.2.0 must share one group (they mutate the same
-  # GitHub Release), while unrelated manual versions remain independent.
-  group: release-${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
-  cancel-in-progress: true
+  group: release-publish
+  cancel-in-progress: false
 
 env:
   DSH_CHAMBER_DSH_VERSION: 0.1.1-rc.2
@@ -86,6 +82,10 @@ jobs:
       release_id: ${{ steps.create_release.outputs.id }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Existing annotated tags must be resolvable and peelable before a
+          # release is allowed to mutate remote state.
+          fetch-depth: 0
 
       - name: Get version
         id: get_version
@@ -109,6 +109,36 @@ jobs:
           fi
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Bind release tag to the checked-out commit
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          TAG_REF="refs/tags/${TAG}"
+          CHECKOUT_SHA=$(git rev-parse HEAD^{commit})
+          if [[ "$CHECKOUT_SHA" != "$RELEASE_SHA" ]]; then
+            echo "::error::checkout ${CHECKOUT_SHA} does not match workflow SHA ${RELEASE_SHA}"
+            exit 1
+          fi
+          if [[ "$RELEASE_EVENT" == "push" && "$RELEASE_REF" != "$TAG_REF" ]]; then
+            echo "::error::tag-triggered release ref ${RELEASE_REF} does not match ${TAG_REF}"
+            exit 1
+          fi
+          if git show-ref --verify --quiet "$TAG_REF"; then
+            TAG_SHA=$(git rev-parse "${TAG}^{commit}")
+            if [[ "$TAG_SHA" != "$RELEASE_SHA" ]]; then
+              echo "::error::${TAG} peels to ${TAG_SHA}, not workflow SHA ${RELEASE_SHA}"
+              exit 1
+            fi
+          elif [[ "$RELEASE_EVENT" == "push" ]]; then
+            echo "::error::tag push ${TAG_REF} is missing from the fetched repository"
+            exit 1
+          fi
+
       - name: Assert version matches package.json
         # electron-builder uploads to tag v<BUILT version> (from
         # packages/desktop/package.json), and the softprops draft above uses
@@ -120,8 +150,9 @@ jobs:
         # releasing, so the input version must equal EVERY package's version.
         # (2026-08 review: extended from desktop-only so a partial bump of the
         # siblings fails the run instead of shipping a version-skewed app.)
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
           for PKG in \
             ./package.json \
             ./packages/desktop/package.json \
@@ -145,10 +176,11 @@ jobs:
         # matching "## [<version>]" section (Keep a Changelog format); a
         # missing section fails loudly (never publish with an empty body).
         id: changelog_body
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-          SECTION=$(awk '
-            $0 ~ /^## \['"$VERSION"'\]/ { found=1; print; next }
+          SECTION=$(awk -v version="$VERSION" '
+            index($0, "## [" version "]") == 1 { found=1; print; next }
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md)
@@ -159,7 +191,22 @@ jobs:
           echo "$SECTION" > /tmp/release-body.md
           echo "extracted $(wc -l < /tmp/release-body.md) lines for [${VERSION}]"
 
-      - name: Delete any existing release for this tag
+      - name: Require macOS release signing credentials before mutation
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" || -z "$APPLE_ID" || -z "$APPLE_APP_SPECIFIC_PASSWORD" || -z "$APPLE_TEAM_ID" ]]; then
+            echo "::error::formal releases require CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID"
+            exit 1
+          fi
+
+      - name: Refuse published release and replace stale drafts for this tag
         # 2026-08 postmortem (body_path not applied — softprops log:
         # "Using release <old> for tag v0.1.2 instead of duplicate draft <new>
         # / Removing duplicate draft"): deleting a GIT TAG does NOT delete the
@@ -167,27 +214,41 @@ jobs:
         # tags/{tag} endpoint then 404s even though the release still exists,
         # and re-pushing the tag makes softprops FIND the old release and
         # UPDATE it, discarding the freshly-created draft that carried our
-        # CHANGELOG body). So we must enumerate ALL releases and delete by
-        # tag_name — the list endpoint sees detached releases — not resolve
-        # via tags/{tag}. Missing release is fine (nothing to do); any gh api
-        # error fails loud. Skipped on dry_run (build-only).
+        # CHANGELOG body). Enumerate every page by tag_name: a published
+        # release is immutable and makes the rerun fail; only stale drafts are
+        # removed. Skipped on dry_run (build-only).
         if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.get_version.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.get_version.outputs.version }}"
-          EXISTING_IDS=$(gh api \
-            "repos/${{ github.repository }}/releases" \
-            --jq '.[] | select(.tag_name == "v'"${VERSION}"'") | .id')
-          if [[ -z "$EXISTING_IDS" ]]; then
+          EXISTING_RELEASES=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/releases?per_page=100" \
+            | jq -r --arg tag "v${VERSION}" '.[][] | select(.tag_name == $tag) | [.id, .draft] | @tsv')
+          if [[ -z "$EXISTING_RELEASES" ]]; then
             echo "no existing release for v${VERSION} — fresh draft will be created"
             exit 0
           fi
-          for EXISTING_ID in $EXISTING_IDS; do
+
+          DRAFT_IDS=()
+          PUBLISHED_IDS=()
+          while IFS=$'\t' read -r EXISTING_ID IS_DRAFT; do
+            [[ -n "$EXISTING_ID" ]] || continue
+            if [[ "$IS_DRAFT" == "true" ]]; then
+              DRAFT_IDS+=("$EXISTING_ID")
+            else
+              PUBLISHED_IDS+=("$EXISTING_ID")
+            fi
+          done <<< "$EXISTING_RELEASES"
+          if (( ${#PUBLISHED_IDS[@]} > 0 )); then
+            echo "::error::published release(s) ${PUBLISHED_IDS[*]} already exist for v${VERSION}; refusing destructive rerun"
+            exit 1
+          fi
+          for EXISTING_ID in "${DRAFT_IDS[@]}"; do
             gh api -X DELETE "repos/${{ github.repository }}/releases/${EXISTING_ID}" >/dev/null
-            echo "deleted existing release ${EXISTING_ID} for v${VERSION} (will create fresh)"
+            echo "deleted stale draft ${EXISTING_ID} for v${VERSION} (will create fresh)"
           done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub Release (draft)
         id: create_release
@@ -195,6 +256,7 @@ jobs:
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           draft: true
           # Prerelease derived from the VERSION's semver prerelease suffix
           # (v0.2.0-beta.1 → prerelease). Deriving from the workflow input
@@ -261,6 +323,8 @@ jobs:
           pnpm run test:connections
           pnpm run test:client-web
           pnpm run test:connection
+          pnpm run test:open-in
+          pnpm run test:cli
       - name: Renderer + host package builds
         run: |
           pnpm run build:renderer
@@ -457,9 +521,13 @@ jobs:
 
       - name: Publish release (flip draft to public)
         if: ${{ github.event.inputs.dry_run != 'true' }}
-        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
-        with:
-          tag_name: v${{ needs.create-release.outputs.version }}
-          draft: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_ID" ]]; then
+            echo "::error::create-release did not expose a release id — cannot publish"
+            exit 1
+          fi
+          gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" -F draft=false >/dev/null

@@ -23,6 +23,7 @@ const FILES = [
   'm1-dsh-client.ts',
   'host-logs.ts',
   'manager-api.ts',
+  'lifecycle.ts',
   'local-connection.ts',
   'spawn-dsh.ts',
   'instance-proxy.ts',

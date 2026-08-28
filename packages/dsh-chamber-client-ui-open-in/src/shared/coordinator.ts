@@ -72,7 +72,9 @@ export function getOpenInApps(): OpenInApp[] | null {
  *  no-op). A real IPC rejection gets three delayed attempts inside the same
  *  page-wide flight; this recovers a transient first-call sender/handler race
  *  even while the fail-closed button is hidden and has no manual refresh
- *  affordance. Success or final exhaustion is memoized. */
+ *  affordance. Success or final exhaustion is memoized; an explicit lifecycle
+ *  signal (window focus/menu opening) calls refreshApps() to release it. This
+ *  recovers without turning N mounted buttons into an implicit retry loop. */
 export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[] | null> {
   if (appsPromise !== null) return appsPromise
   const bridge = (window as unknown as OpenInBridgeSurface).dshChamber?.openIn
@@ -100,8 +102,8 @@ export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[
           if (epoch !== probeEpoch) return apps
           continue
         }
-        // Exhaustion remains fail-closed and memoized: the coordinator never
-        // loops forever against a genuinely broken/forbidden IPC channel.
+        // Exhaustion remains fail-closed and memoized until refreshApps().
+        // This prevents staggered N-ctx mounts from starting repeated waves.
         apps = null
       }
     }
@@ -116,7 +118,7 @@ export function openInBridgeReady(): boolean {
   return (window as unknown as OpenInBridgeSurface).dshChamber?.openIn !== undefined
 }
 
-/** Force a fresh probe bypassing the memo (menu-open refresh): a mid-session
+/** Force a fresh probe bypassing the memo (menu-open/window-focus refresh): a mid-session
  *  app install/uninstall becomes visible without a page reload. The probe
  *  epoch is bumped so a still-in-flight older probe cannot overwrite the
  *  fresh result. NOTE the fail-closed failure path: a real probe failure
@@ -137,7 +139,15 @@ export function bridgePlatform(): string | null {
 
 export function subscribeOpenIn(listener: () => void): () => void {
   listeners.add(listener)
+  if (listeners.size === 1) window.addEventListener('focus', refreshAppsOnFocus)
   return () => {
     listeners.delete(listener)
+    if (listeners.size === 0) window.removeEventListener('focus', refreshAppsOnFocus)
   }
+}
+
+/** One page-level focus signal covers every N-ctx consumer and naturally
+ * catches apps installed or removed while Chamber was in the background. */
+function refreshAppsOnFocus(): void {
+  void refreshApps()
 }

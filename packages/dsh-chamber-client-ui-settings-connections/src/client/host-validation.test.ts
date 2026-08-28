@@ -50,3 +50,11 @@ test('remoteDshHome rejects traversal/empty segments and accepts safe home roots
     assert.equal(UI_REMOTE_DSH_HOME_PATTERN.test(valid), true, valid)
   }
 })
+
+test('service names cannot be parsed as systemctl options', () => {
+  assert.equal(UI_SERVICE_NAME_PATTERN.test('--help'), false)
+  assert.equal(UI_SERVICE_NAME_PATTERN.test('-Hattacker'), false)
+  assert.equal(UI_SERVICE_NAME_PATTERN.test('dsh-chamber.service'), true)
+  assert.equal(UI_SERVICE_NAME_PATTERN.test('dsh@worker.service'), true)
+  assert.equal(UI_SERVICE_NAME_PATTERN.test('team:worker.service'), true)
+})

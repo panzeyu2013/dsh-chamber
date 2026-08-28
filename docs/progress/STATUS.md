@@ -4,29 +4,53 @@
 > `docs/design/`（设计契约与样式定稿）为准，工程细节在代码注释——不记录
 > 历史日志/每日验证记录。本文档是 dsh-chamber 进度追踪的唯一记录。
 
-## 当前冻结 HEAD 合并验证（2026-08-28，第二轮独立检查）
+## architecture 合并后审计与修复状态（2026-08-28，当前工作树）
 
-- **结论性代码审查**：完成相较 main 与 design 01/03/05/16/17/19 的第二轮独立
-  静态复核；冻结树无遗留代码 P0/P1/P2。第二轮修复重点包括：transport/exec/seed
-  多步异步操作绑定精确实例 incarnation；删除与传输身份编辑统一退役旧来源代；
-  renderer runtime/snapshot producer 同步撤销；open-in、深链与原生通知全链携带
-  主进程签发的 opaque source proof，并在异步边界复验；notification/deep-link
-  renderer handoff 改为 deliveryId+attempt retain-until-ACK；主进程 fatal 与已提交
-  状态 push 边界收敛 hostile thrown value，已提交保存不因 renderer send 失败反报失败。
-- **最终冻结树自动化**：control-plane 9 套合计 **142/142**；desktop 全套
-  **371/371**；renderer shell **113/113**；客户端/插件测试合计 **410/410**。
-  四类自动化总计 **1036/1036**。
-  根 typecheck、全部专项 typecheck、`build:renderer`、desktop preload、两项 host
-  package build、`verify:i18n`、`git diff --check` 全绿；`pnpm run smoke` 使用已装配
-  dsh 实际 **PASS**（非 SKIP）。
-- **依赖与分发**：`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ pnpm
-  install --frozen-lockfile` **PASS**，Electron 镜像可用，安装未使用代理。Linux
-  `dist:desktop` 首跑受环境代理失败；使用用户提供的备用代理重跑并 **PASS**。
-  代理配置未进入 renderer、日志持久化契约或产品配置。
-- **仍未代证**：当前执行宿主不是 macOS；`dist:desktop:mac` 会按内嵌 runtime
-  平台保护拒绝在 Linux 组装 darwin 包。因此 macOS M3 实机（Apple Silicon、系统
-  通知权限/点击、Finder/VS Code 拉起、深链冷/热启动、托盘/退出与 dmg/zip）仍须在
-  macOS/release CI 完成，不能由上述 Linux 自动化替代。
+- **口径**：`architecture` 已合入 `main`，随后对合并结果按架构边界、权威归属、
+  生命周期/并发、安全与性能重新审计，并在当前工作树修复本轮确认的问题。这里不再
+  使用“冻结 HEAD”“无 P1/P2”或把不同历史 HEAD 的用例数相加成一个总数；本结论只说明
+  下列已审范围与当前验证证据，不替代尚未执行的平台实机验收。
+- **生命周期与单一生产路径**：control-plane HTTP `PlaneHandle` 已具备显式
+  start/stop single-flight 与 lifecycle epoch：candidate 仅在 `listening` 后发布，
+  bind/start 失败可重试，start/stop 交错不能复活旧 server，stop 后 `port=null`，运行期
+  server error 有 loud handler。桌面生产装配收敛到 `main.ts` + 已消费的共享 facade/
+  helper，architecture 合并遗留的未导入重复 IPC/wiring 与旧 renderer recycle/eviction
+  实现已删除。跨实例异步所有权继续绑定 generation/`sourceFingerprint`；settings 子 ctx
+  缓存也绑定 `(sourceId, sourceFingerprint)`，proof 变化、删除或迟到结果都会 dispose，
+  不允许同 id 旧代重新提交。
+- **凭据与 IPC 提交**：SSH 密码文件为 schema v2，每项绑定精确
+  `(id, host, user, sshPort)` owner；无 owner 的 v1 文件只退役保留，不从当前 registry
+  猜测迁移，spawn 前再次匹配权威 owner。新增/编辑把 replacement password 与完整
+  registry 放进一次 `instances_set` IPC：先校验归一化 registry/owner，registry 文件落盘
+  后以一次 password-map 写同时完成多 owner 退役与 replacement，secret 就绪后才发布
+  内存 registry 并触发 transport restart；secret 写失败恢复旧 registry，旧运行态与旧
+  secret 不发布变化。trusted IPC 统一执行 current-main-frame 与 quit-in-progress 门禁，
+  renderer 侧旧的第二次密码 IPC、补偿回滚与重复权威校验已移除。
+- **日志、CLI 与 Open-In**：host-log 写入从 child stdio 回调里的同步 I/O 改为按 backing
+  path 共享的有界异步串行 lane（append/compaction 同序，256 条 / 512 KiB 高水位丢最新，
+  close 可等待已接受项 flush），避免日志风暴阻塞控制面 event loop，也不重引入
+  WriteStream/rename 竞态。CLI `host logs --follow` 以相邻有界快照的 suffix/prefix overlap
+  续读，不再用毫秒时间戳作游标，因而同毫秒、重复行和滚动窗口平移不丢行。Open-In
+  capability 探测仍为页面级 single-flight/有界重试；耗尽后保持 fail-closed，菜单显式刷新
+  与唯一 window-focus 监听可恢复能力，不为每个 N-ctx 按钮创建轮询或无限重试。
+- **当前验证证据**：`test:control-plane`、`test:desktop`、`test:renderer-shell`、
+  `test:sidebar`、`test:settings-bridge`、`test:connections`、`test:open-in`、`test:cli`、
+  `test:git`、`test:host-git`、`test:client-web` 与 `test:connection` 均在合并后当前完整树
+  通过；根 typecheck 与 sidebar/layout/connections/settings-bridge/open-in/git/client-web/
+  connection/host-graph/host-git 专项 typecheck 全绿，desktop preload CJS 和
+  `build:renderer`（1148 modules）成功，`verify:i18n`、`verify:workflows` 与
+  `git diff --check` 通过。`smoke` 因本 checkout 没有可用 dsh runtime 正常 SKIP，
+  不是运行期通过。本文后续各模块中的旧用例数字保留为其明确标注的实现轮历史证据，
+  不视为当前工作树的合并总数，也不据此虚构跨套件总计。
+- **刻意保留的窄余量**：registry 与 password map 分别原子落盘；若进程恰在前者
+  rename 完成、后者提交前被 SIGKILL/掉电，删除实例的旧密码可能留下不可用的 orphan。
+  spawn 前精确 owner 校验保证它不能发往不同端点，但未来用完全相同的
+  `(id, host, user, sshPort)` 重建时会再次生效。当前不为这一极窄 P3 窗口引入跨文件
+  journal/事务或额外启动状态机；首次 SSH host-key 自动确认与单根 renderer 共享
+  preload 信任域也继续作为已记录的架构让步，而非伪称由本轮局部修复消除。
+- **仍未代证**：当前执行宿主不是 macOS；Apple Silicon 上的系统通知权限/点击、
+  Finder/VS Code 拉起、深链冷/热启动、托盘/退出以及 dmg/zip 签名/公证仍须由 macOS
+  实机或 release CI 完成，Linux 自动化不能替代这些平台事实。
 
 ## 未完成 / 待执行
 
@@ -475,7 +499,8 @@
   chamber 全局「更新」入口（`__update` + `UpdateSection`，zh/en）、desktop build
   配置（publish/mac zip/differentialPackage）、release.yml 双 leg 更新产物
   （`--publish=always` + GH_TOKEN；channel 由版本 prerelease 后缀推导；公开发布
-  缺 Developer ID/公证或 Authenticode 凭据即在创建 draft 前失败，产物再验签）、
+  缺 macOS Developer ID/公证凭据即在创建 draft 前失败，mac 产物再验签；Windows
+  首版仍按 design 11 明确让步保持未签名）、
   `DSH_CHAMBER_UPDATE_CHANNEL=beta`。设计见 `docs/design/11-auto-update.md`
   （2026-08 自 docs/todo/ 移入）。**2026-08 修订（用户拍板）**：`__update` 固定
   入口并入「通用」段（`GeneralView` 底部 `UpdateSection` 控制组，样式对齐官方设置段
@@ -727,7 +752,10 @@
   骨架屏永不进入 React；2026-08-20 实机排查）、
   COOP、no-referrer、nosniff 与 frame deny，Electron renderer 显式启用 sandbox。
   askpass 助手保持原「主机密钥确认 → yes」首次连接语义（无 StrictHostKeyChecking
-  强制）；密码镜像使用 write-through 持久化语义并强制 owner-only 权限。
+  强制）；密码镜像使用 write-through 持久化语义并强制 owner-only 权限；主机
+  元数据与 replacement password 已合并为一次 `instances_set` 主进程提交，完整
+  registry/owner 校验后以单次 password-map 写完成退役/替换，secret 就绪后才发布
+  registry 并重启 transport，失败恢复旧 registry 且不改变旧运行态/secret。
   桌面 dsh runtime 的精确版本和 frozen lock 只用于可复现的本地内嵌 runtime，不约束
   远程实例版本；远程仅做协议能力兼容检查。
   **2026-08-20 安全/性能复查修复**：Electron IPC 仅接受当前主窗口 main frame 的
@@ -737,13 +765,17 @@
   均有限额；慢上传失败会取消请求 iterator，重建请求会剥离原始 framing/proxy 头。
   管理面 health-events SSE 将 `write() === false` 作为背压而非断连处理：每客户端
   至多排队 32 个状态帧、`drain` 后按序刷新，溢出/异常/断连统一释放订阅与监听器。
-  插件子进程改为异步、有界输出和超时终止；askpass 目录与助手均为 owner-only
-  0700（助手由 OpenSSH 直接执行），助手名带 owner PID。聚合轮询并发限制为 4、
+  插件子进程改为异步、有界输出和超时终止；host-logs 写入改为每 backing path
+  共享的异步串行 lane（child Buffer 入口先限 64 KiB 并复用一次解码结果，256 条 /
+  512 KiB 高水位丢最新，append/compaction 同序，stdio `close` 后 writer 退役且
+  `close` 可等待 flush），宿主日志风暴不再逐 chunk 同步阻塞控制面 event loop；
+  askpass 目录与助手均为 owner-only 0700（助手由 OpenSSH 直接执行），助手名带 owner PID。聚合轮询并发限制为 4、
   后台预热远端限制为 3，删除实例会释放 client，
   布局共享订阅改为单监听 + WeakRef。boot manifest JSON 做 script-context 转义，WS 101
   只透传握手白名单头，transport 只接受 loopback origin，HTTP server 增加连接与超时
   上限；macOS Developer ID 探测完成前更新下载保持 fail-closed。Actions 固定完整 commit
-  SHA，公开 release 缺签名、公证凭据或产物验签失败即不发布。
+  SHA，公开 release 缺 macOS 签名/公证凭据或产物验签失败即不发布（Windows 未签名
+  是已记录让步，不伪称 Authenticode）。
   发布凭据预检发生在删除同标签旧 Release 之前，缺凭据失败不会先破坏已有发布记录。
   bundle 会清理中断的 `.dsh-src-<pid>` 暂存树；打包将 runtime 根文件与
   `vendor/dsh/node_modules` 分成两个 extraResources FileSet（规避 electron-builder
@@ -798,7 +830,10 @@
   （W2 补）**：选中实例 mid-boot/restart 的 not-ready 突发会使子 ctx 装配瞬时失败，壳现以有界
   退避（1s/2s/4s/8s，最多 5 次尝试、~15s 等待封顶）自动重试同一装配路径（`mount-retry.ts`），
   面板保持打开也能自愈，不再只能靠重新点击/连接切换/重开恢复；成功/卸载/关面板/切换选中即清
-  账并清定时器。**部署注意**：PRE-fix 状态下已 abdicate 到官方 SettingsRoot 的设置壳需对本地
+  账并清定时器。**同 id 来源代隔离**：子 ctx 缓存以
+  `(sourceId, sourceFingerprint)` 认领；来源删除或 authoritative proof 更换会
+  dispose 所有受影响的已选/未选缓存，迟到的旧 proof 装配结果不得提交。
+  **部署注意**：PRE-fix 状态下已 abdicate 到官方 SettingsRoot 的设置壳需对本地
   实例/应用**重启一次**方可恢复（vendor one-shot retirement——槽系统不再重试已退役的壳注册；
   全新启动不受影响）。
 - **推迟**：flat 单列表模式（与「仅按来源分类」呈现原则张力）。

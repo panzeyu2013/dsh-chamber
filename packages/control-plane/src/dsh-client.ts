@@ -63,6 +63,64 @@ export interface UnaryOptions {
 /** Default unary transport health deadline (matches the ref client's 30_000). */
 export const DEFAULT_TIMEOUT_MS = 30_000
 
+/** Maximum accepted JSON envelope for one unary host response. */
+export const MAX_UNARY_RESPONSE_BYTES = 1024 * 1024
+
+class BoundedResponseError extends Error {
+  readonly kind: 'too-large' | 'invalid-json'
+
+  constructor(kind: 'too-large' | 'invalid-json') {
+    super(kind)
+    this.kind = kind
+  }
+}
+
+/** Read one fetch response without allowing a damaged host to grow memory
+ * without bound. Content-Length is only a fast rejection; the streamed byte
+ * count remains authoritative when the header is absent or dishonest. */
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const declared = response.headers.get('content-length')
+  if (declared !== null && /^\d+$/.test(declared)
+    && Number(declared) > MAX_UNARY_RESPONSE_BYTES) {
+    try { await response.body?.cancel() } catch { /* best-effort carrier cleanup */ }
+    throw new BoundedResponseError('too-large')
+  }
+  if (response.body === null) throw new BoundedResponseError('invalid-json')
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_UNARY_RESPONSE_BYTES) {
+        try { await reader.cancel() } catch { /* best-effort carrier cleanup */ }
+        throw new BoundedResponseError('too-large')
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    if (error instanceof BoundedResponseError) throw error
+    throw new BoundedResponseError('invalid-json')
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  } catch {
+    throw new BoundedResponseError('invalid-json')
+  }
+}
+
 /** One pending-table entry (settle-once row for a unary call). */
 interface PendingEntry {
   rpcId: string
@@ -134,7 +192,7 @@ export class RpcBusinessError extends Error {
  * A carrier-level failure. `code` is the control plane's own transport error
  * namespace (never a dsh RpcErrorCode):
  *   connection_offline / request_timeout / aborted / protocol_violation /
- *   transport_http_<status> / transport_error
+ *   response_too_large / transport_http_<status> / transport_error
  */
 export class RpcTransportError extends Error {
   code: string
@@ -277,11 +335,18 @@ export async function call(
   }
   let envelope: any
   try {
-    envelope = await response.json()
+    envelope = await readBoundedJson(response)
   } catch (error) {
     const cancellation = composed.fired()
     if (cancellation !== null) {
       throw fail(`dsh unary ${method}: request cancelled while reading response`, 0, cancellation)
+    }
+    if (error instanceof BoundedResponseError && error.kind === 'too-large') {
+      throw fail(
+        `dsh unary ${method}: response body exceeds ${MAX_UNARY_RESPONSE_BYTES} bytes`,
+        response.status,
+        'response_too_large',
+      )
     }
     throw fail(`dsh unary ${method}: response body is not JSON: ${String(error)}`, response.status, 'protocol_violation')
   }

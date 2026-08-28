@@ -257,6 +257,7 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   chamberBridge.publish([
     {
       id: 'local',
+      sourceFingerprint: 'local',
       kind: 'local',
       label: 'L',
       connected: true,
@@ -266,6 +267,7 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
     },
     {
       id: 'ssh-b',
+      sourceFingerprint: 'b'.repeat(64),
       kind: 'ssh',
       label: 'B',
       connected: false,
@@ -306,6 +308,7 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   chamberBridge.publish([
     {
       id: 'local',
+      sourceFingerprint: 'local',
       kind: 'local',
       label: 'L',
       connected: true,
@@ -368,6 +371,7 @@ test('a fresh session under a local-only projection never prunes unloaded remote
   chamberBridge.publish([
     {
       id: 'local',
+      sourceFingerprint: 'local',
       kind: 'local',
       label: 'L',
       connected: true,
@@ -533,6 +537,7 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
   chamberBridge.publish([
     {
       id: 'local',
+      sourceFingerprint: 'local',
       kind: 'local',
       label: 'L',
       connected: true,
@@ -617,6 +622,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
   chamberBridge.publish([
     {
       id: 'local',
+      sourceFingerprint: 'local',
       kind: 'local',
       label: 'L',
       connected: true,
@@ -626,6 +632,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
     },
     {
       id: 'ssh-b',
+      sourceFingerprint: 'b'.repeat(64),
       kind: 'ssh',
       label: 'B',
       connected: true,
@@ -645,6 +652,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
   chamberBridge.publish([
     {
       id: 'local',
+      sourceFingerprint: 'local',
       kind: 'local',
       label: 'L',
       connected: true,

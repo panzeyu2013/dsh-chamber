@@ -178,6 +178,12 @@ export interface PluginApplyInput {
   restart?: boolean
 }
 
+/** Transient replacement credential committed with one registry save. */
+export interface SshPasswordSubmission {
+  id: string
+  password: string
+}
+
 /** One npm registry search hit (non-secret projection). */
 export interface NpmSearchPackage {
   name: string
@@ -186,8 +192,9 @@ export interface NpmSearchPackage {
 }
 
 /**
- * The desktop_ssh_* IPC surface (design 05 §3.3) — non-secret only: never a
- * tunnel URL, never SSH material. start_service/stop_service/is_active drive
+ * The desktop_ssh_* IPC surface (design 05 §3.3): results never expose a
+ * tunnel URL or SSH material. Password arguments are transient write-only
+ * inputs and are never returned. start_service/stop_service/is_active drive
  * remote systemd control (serviceName comes from the registry spec; format
  * whitelist `^[a-zA-Z0-9_.-]+$` enforced on the main side).
  *
@@ -195,7 +202,7 @@ export interface NpmSearchPackage {
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  instances_set(instances: SshInstanceInput[]): Promise<SshInstanceSpec[]>
+  instances_set(instances: SshInstanceInput[], password?: SshPasswordSubmission): Promise<SshInstanceSpec[]>
   /**
    * Store the SSH password in main-process memory plus the owner-only
    * plaintext fallback (design 05 §8); never logged; '' / null clears it.

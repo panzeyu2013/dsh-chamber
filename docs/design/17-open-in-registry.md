@@ -206,8 +206,10 @@ Electron `shell.openPath` 成功返回 `''`、失败返回错误串——提取�
 - 协调器：`getApps()` 单飞 + 桥未就绪不固化可重试 + 真实结果 memoized +
   fail-closed；首次真实 `apps()` IPC reject 在**同一 page-wide flight** 内最多 3 次、
   每次间隔 500ms，成功或第三次耗尽才 memoize（耗尽仍为 null，按钮隐藏，绝不无限
-  重试）；一次新 probe/`refreshApps()` 发现桥缺失时清除旧 capability（不会声称在无
-  probe 的情况下主动侦测桥消失）；每个 IPC 条目严格校验，坏条目不抹掉合法 sibling；
+  重试）；page-wide 订阅在窗口重新获得 focus 时显式 `refreshApps()`，因此持续失败后
+  恢复以及 0→有 app / 1→多 app 都无需页面重载，且 N 个 ctx 不会各自产生重试波；
+  一次新 probe/`refreshApps()` 发现桥缺失时清除旧 capability（不会声称在无 probe 的
+  情况下主动侦测桥消失）；每个 IPC 条目严格校验，坏条目不抹掉合法 sibling；
   `refreshApps()` 绕过 memo 强制重探，probe epoch 阻止被取代的旧 flight 迟到覆盖新结果。
 
 ## 6. 与 design 16 的关系（演进记录）
@@ -293,8 +295,9 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
   结果，但 API 不提供 reveal 完成/失败回执；非 macOS 目录的 `openPath` 有完整错误串；
   Darwin 上任意注册扩展/package bit 都可能改变目录的 LaunchServices 分类，因此所有
   目录统一采用 reveal 的 void 边界，不维护不可完备的后缀黑名单；
-- **apps 会话内记忆化**：协调器 memo 真实结果，会话中途装/卸 app 需打开下拉
-  （refreshApps 重探）或刷新页面才反映；点击时主进程活体复检兜底（loud）；
+- **apps 会话内记忆化**：协调器 memo 真实结果；打开下拉或窗口重新获得 focus 时
+  `refreshApps()` 重探，会话中途装/卸 app 与持续探测失败后的恢复无需刷新页面；
+  点击时主进程仍做活体复检兜底（loud）；
 - **实机验收剩余**：macOS Finder/vscode:// 实际拉起、按钮+下拉在 vendor 头部
   utilities 行的定位/层叠（"Session log 同槽"为描述性主张）、N-ctx 混合渲染、
   OS 深链冷/热启动与打包态回归。

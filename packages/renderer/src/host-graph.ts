@@ -232,8 +232,12 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  *
  * The in-flight promise is published BEFORE the load (so concurrent/duplicate
  * ids await the same execution instead of merely observing a premature
- * "loaded" mark) and DELETED on failure — net effect: only a successful load
- * stays marked. A failed preload must not be treated
+ * "loaded" mark). Ordinary load failures are deleted and remain retryable. A
+ * DOM-script timeout is different: its tagged rejection remains a tombstone
+ * while the original element can still execute. The loader exposes that
+ * element's eventual result: a late load converts the entry to success; a
+ * late error deletes it so a later boot may retry safely.
+ * A failed preload must not otherwise be treated
  * as done — the module system does NOT re-fetch extra bundles on its own (an
  * extra row has no boot-graph row; a later system.ts import() would throw
  * "cannot resolve"), so a permanent mark would strand the plugin for the rest
@@ -250,6 +254,18 @@ interface PreloadedExtraBundle {
 }
 
 const preloadedExtraBundles = new Map<string, PreloadedExtraBundle>()
+
+/** A module element can still execute after its request-level timeout. The
+ * explicit type keeps that one exceptional lifecycle distinct from ordinary
+ * load failures without inspecting arbitrary thrown objects. */
+export class BundleLoadTimeoutError extends Error {
+  readonly bundleOutcome: Promise<boolean>
+
+  constructor(message: string, bundleOutcome: Promise<boolean>) {
+    super(message)
+    this.bundleOutcome = bundleOutcome
+  }
+}
 
 function reportDiagnostic(
   instanceId: string,
@@ -365,7 +381,21 @@ export async function collectExtraRows(
       // Only the owner still installed in the map may clear it. This guards a
       // retry installed after a rejection from being deleted by a later catch
       // in another waiter of the old promise.
-      if (preloadedExtraBundles.get(row.id) === loaded) preloadedExtraBundles.delete(row.id)
+      const bundleOutcome = error instanceof BundleLoadTimeoutError ? error.bundleOutcome : null
+      if (bundleOutcome === null && preloadedExtraBundles.get(row.id) === loaded) {
+        preloadedExtraBundles.delete(row.id)
+      } else if (bundleOutcome !== null) {
+        void bundleOutcome.then(
+          succeeded => {
+            if (preloadedExtraBundles.get(row.id) !== loaded) return
+            if (succeeded) loaded.load = Promise.resolve()
+            else preloadedExtraBundles.delete(row.id)
+          },
+          () => {
+            if (preloadedExtraBundles.get(row.id) === loaded) preloadedExtraBundles.delete(row.id)
+          },
+        )
+      }
       reportDiagnostic(instanceId, 'bundle-load-failed', {
         pluginId: row.id,
         message: error instanceof Error ? error.message : String(error),

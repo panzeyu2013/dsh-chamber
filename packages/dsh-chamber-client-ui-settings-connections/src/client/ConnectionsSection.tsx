@@ -673,23 +673,15 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // Password auth (design 05 §8): forward the form's TRANSIENT password
       // to the main process (held there in memory + plaintext mirror for
       // restart auto-connect; never in the registry above, never logged).
-      // An empty field leaves any stored password untouched — a blind '' on
-      // an unrelated field edit must not wipe a working password (the
-      // explicit 清除密码 button is the clear path). A refused password
-      // (e.g. unsupported platform) keeps the form open with the error so
-      // the user sees why.
+      // An empty field leaves a stored password untouched for unrelated
+      // edits. Main clears it when host/user/SSH port changes so a credential
+      // can never follow the same id to a different authentication peer; the
+      // user may enter the replacement password in this same save.
       const savedId = editing === 'new' ? input.id : editing.id
       const result = await saveHostWithPassword(bridge, current, next, savedId, draft.password)
       setInstances(result.instances)
       if (!result.ok) {
         setFormError(result.error)
-        // If rollback genuinely failed, turn a newly-created row into an edit
-        // target so retry cannot submit a duplicate id. The password field
-        // remains in the current draft for an explicit retry.
-        if (result.metadataCommitted && editing === 'new') {
-          const committed = result.instances.find(instance => instance.id === savedId)
-          if (committed !== undefined) setEditing(committed)
-        }
         return
       }
       setEditing(null)

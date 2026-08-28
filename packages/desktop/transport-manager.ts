@@ -73,6 +73,13 @@ export { INSTANCE_ID_PATTERN } from './transport-provider.ts'
 /** Ring-buffer log cap per instance（滚动日志上限，截断 200 行）. */
 export const RING_BUFFER_LIMIT = 200
 
+/** Display/persistence projection cap after provider classification/redaction.
+ * CHILD_LINE_MAX_CHARS bounds incremental parsing; this smaller cap bounds the
+ * retained 32-instance × 200-line ring footprint without weakening the
+ * classifier's ability to inspect a complete diagnostic line. */
+export const RING_LOG_MESSAGE_MAX_CHARS = 4 * 1024
+const RING_LOG_TRUNCATION_SUFFIX = ' … [truncated]'
+
 /** How long the transport has to come up (local port accept / endpoint probe) before degraded. */
 export const READY_TIMEOUT_MS = 10_000
 
@@ -162,6 +169,17 @@ export interface TransportManagerDeps {
 /** Status-change listener: listener(instanceId, statusProjection). */
 export type StatusChangedListener = (instanceId: string, status: TransportStatusProjection) => void
 
+/**
+ * Optional registry commit preparation. It runs after the complete proposal
+ * has been validated and normalized, but before either file is changed. The
+ * returned synchronous commit runs after the new registry file is durable
+ * and before in-memory publication or transport restart. If it throws, the
+ * previous registry file is restored and the old runtime remains untouched.
+ */
+export type PrepareRegistryCommit = (
+  next: readonly TransportInstanceSpec[],
+) => (() => void) | undefined
+
 /** Synchronous registry delta projected with the instances-changed push. The
  * removed ids come from main's authoritative before/saved snapshots, so a
  * rapid remove→re-add cannot be erased by a superseding async roster pull. */
@@ -179,6 +197,31 @@ export function computeRemovedInstanceIds(
     }
   }
   return removed
+}
+
+/** Stored SSH passwords are credentials for an authentication endpoint, not
+ * for a stable UI id. Deletion or an edit to host/user/sshPort retires the
+ * old secret; label, forwarded remotePort and remote service/home changes do
+ * not alter the SSH authentication peer and keep it. */
+export function computePasswordRetirementIds(
+  before: readonly Pick<TransportInstanceSpec, 'id' | 'host' | 'user' | 'sshPort'>[],
+  after: readonly Pick<TransportInstanceSpec, 'id' | 'host' | 'user' | 'sshPort'>[],
+): string[] {
+  const afterById = new Map(after.map(instance => [instance.id, instance]))
+  const retired: string[] = []
+  const seen = new Set<string>()
+  for (const previous of before) {
+    if (seen.has(previous.id)) continue
+    seen.add(previous.id)
+    const current = afterById.get(previous.id)
+    if (current === undefined
+      || previous.host !== current.host
+      || previous.user !== current.user
+      || previous.sshPort !== current.sshPort) {
+      retired.push(previous.id)
+    }
+  }
+  return retired
 }
 
 /** Renderer lifecycle retirement is broader than deletion: changing the
@@ -225,7 +268,7 @@ export function attemptCommittedRegistryPush(push: () => void):
 /** The runtime surface returned by createTransportManager. */
 export interface TransportManager {
   loadInstances(): TransportInstanceSpec[]
-  saveInstances(next: TransportInstanceInput[]): TransportInstanceSpec[]
+  saveInstances(next: TransportInstanceInput[], prepareCommit?: PrepareRegistryCommit): TransportInstanceSpec[]
   listInstances(): TransportInstanceSpec[]
   connect(id: string): TransportStatusProjection | null
   disconnect(id: string): void
@@ -424,7 +467,10 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   }
 
   function appendLogInternal(state: InstanceState, level: TransportLogEntry['level'], message: string) {
-    state.logs.push({ ts: Date.now(), level, message })
+    const retainedMessage = message.length <= RING_LOG_MESSAGE_MAX_CHARS
+      ? message
+      : `${message.slice(0, RING_LOG_MESSAGE_MAX_CHARS - RING_LOG_TRUNCATION_SUFFIX.length)}${RING_LOG_TRUNCATION_SUFFIX}`
+    state.logs.push({ ts: Date.now(), level, message: retainedMessage })
     if (state.logs.length > ringBufferLimit) {
       state.logs.splice(0, state.logs.length - ringBufferLimit)
     }
@@ -967,7 +1013,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
    * restarted so the transport and projection never disagree.
    * @returns the persisted instance list.
    */
-  function saveInstances(next: TransportInstanceInput[]): TransportInstanceSpec[] {
+  function saveInstances(next: TransportInstanceInput[], prepareCommit?: PrepareRegistryCommit): TransportInstanceSpec[] {
     if (!Array.isArray(next)) {
       const error: CodedError = new Error('instances must be an array')
       error.code = 'ssh_instances_invalid'
@@ -1016,10 +1062,32 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       }
       kept.push(normalized)
     }
+    // The optional coordinator validates against defensive copies of the
+    // COMPLETE normalized proposal before any durable change. It returns a
+    // synchronous write-through operation to run at the publication barrier.
+    const commit = prepareCommit?.(kept.map(entry => ({ ...entry })))
+    const previous = listInstances()
     // Persist BEFORE mutating the in-memory registry: a failed write throws
     // while the registry (and every live transport) stays untouched, so the
-    // runtime and the UI never diverge on a partial save.
+    // runtime and the UI never diverge on a partial save. A coordinated
+    // secondary store commits next; only then may transports observe/restart
+    // under the new registry incarnation.
     writeFileAtomic(instancesFile, `${JSON.stringify(kept, undefined, 2)}\n`)
+    try {
+      commit?.()
+    } catch (commitError) {
+      try {
+        writeFileAtomic(instancesFile, `${JSON.stringify(previous, undefined, 2)}\n`)
+      } catch (rollbackError) {
+        const error: CodedError = new Error(
+          `registry commit failed and the previous registry could not be restored: ${describeTransportError(rollbackError)}`,
+          { cause: commitError },
+        )
+        error.code = 'transport_registry_commit_incomplete_rollback'
+        throw error
+      }
+      throw commitError
+    }
     const nextIds = new Set(kept.map(entry => entry.id))
     for (const id of [...instances.keys()]) {
       if (!nextIds.has(id)) {

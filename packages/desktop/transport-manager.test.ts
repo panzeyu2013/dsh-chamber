@@ -26,7 +26,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
-import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
+import { attemptCommittedRegistryPush, computePasswordRetirementIds, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT, RING_LOG_MESSAGE_MAX_CHARS } from './transport-manager.ts'
+import { prepareRegistryPasswordCommit } from './registry-password-commit.ts'
 import { CHILD_LINE_MAX_CHARS } from './bounded-lines.ts'
 import type { TransportManagerOptions } from './transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
@@ -89,6 +90,7 @@ function makeManager(t: TestContext, overrides: { options?: TransportManagerOpti
   const children: FakeChild[] = []
   const spawnTimes: number[] = []
   let probeOk = false
+  const instancesFile = join(tempDir(t), 'ssh-instances.json')
   const manager = createTransportManager({
     provider: overrides.provider ?? sshProvider,
     spawnFn: (command, args, options) => {
@@ -98,7 +100,7 @@ function makeManager(t: TestContext, overrides: { options?: TransportManagerOpti
       spawnTimes.push(Date.now())
       return child
     },
-    instancesFile: join(tempDir(t), 'ssh-instances.json'),
+    instancesFile,
     logger: overrides.logger ?? silentLogger,
     portProbe: async () => probeOk,
     // Fake the provider's own endpoint verification when it has one (the
@@ -129,6 +131,7 @@ function makeManager(t: TestContext, overrides: { options?: TransportManagerOpti
     spawnCalls,
     children,
     spawnTimes,
+    instancesFile,
     setProbe: (ok: boolean) => {
       probeOk = ok
     },
@@ -174,6 +177,150 @@ test('registry lifecycle retires deletion and transport identity edits, but not 
   assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], sshPort: 2222 }]), ['same'])
   assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], remotePort: 4080 }]), ['same'])
   assert.deepEqual(computeRetiredInstanceIds(before, []), ['same'])
+})
+
+test('password ownership follows the SSH authentication peer, not unrelated host metadata', () => {
+  const before: TransportInstanceSpec[] = [{
+    id: 'same', label: 'old label', kind: 'ssh', host: 'old.example.com', user: 'alice',
+    sshPort: 22, remotePort: 3080, serviceName: 'dsh-old', remoteDshHome: '~/.old',
+  }]
+  assert.deepEqual(computePasswordRetirementIds(before, []), ['same'])
+  assert.deepEqual(computePasswordRetirementIds(before, [{ ...before[0], host: 'new.example.com' }]), ['same'])
+  assert.deepEqual(computePasswordRetirementIds(before, [{ ...before[0], user: 'bob' }]), ['same'])
+  assert.deepEqual(computePasswordRetirementIds(before, [{ ...before[0], sshPort: 2222 }]), ['same'])
+  const nonAuthenticationEdit: TransportInstanceSpec[] = [{
+    ...before[0], label: 'new label', remotePort: 4080, serviceName: 'dsh-new', remoteDshHome: '~/.new',
+  }]
+  assert.deepEqual(computePasswordRetirementIds(before, nonAuthenticationEdit), [])
+})
+
+test('endpoint edit commits replacement password before restart, including other retirements in one write', async (t) => {
+  const secrets = new Map([['s1', 'old-password'], ['retired', 'retired-password']])
+  const provider: TransportProvider = {
+    ...sshProvider,
+    buildStartEnv: spec => ({ CHAMBER_TEST_PASSWORD: secrets.get(spec.id) ?? '' }),
+    disposeAuth() {},
+  }
+  const runtime = makeManager(t, {
+    provider,
+    instances: [{ id: 'retired', label: 'retired', host: 'retired.example.com', remotePort: 3080 }],
+  })
+  runtime.setProbe(true)
+  runtime.manager.connect('s1')
+  await waitFor(() => runtime.manager.status('s1')?.phase === 'ready', 1000, 'initial ready transport')
+
+  const before = runtime.manager.listInstances()
+  let updateCalls = 0
+  const saved = runtime.manager.saveInstances(
+    [{ ...before[0], host: 'moved.example.com' }],
+    after => prepareRegistryPasswordCommit(
+      before,
+      after,
+      { id: 's1', password: 'new-password' },
+      {
+        update(clearIds, replacement) {
+          updateCalls += 1
+          assert.deepEqual(clearIds, ['s1', 'retired'])
+          assert.equal(replacement?.owner.host, 'moved.example.com')
+          assert.equal(runtime.manager.listInstances()[0].host, 'home.example.com', 'runtime is not published yet')
+          assert.deepEqual(runtime.children[0].killCalls, [], 'old transport is not retired before the secret commit')
+          const next = new Map(secrets)
+          for (const id of clearIds) next.delete(id)
+          if (replacement !== undefined) next.set(replacement.owner.id, replacement.password)
+          secrets.clear()
+          for (const [id, password] of next) secrets.set(id, password)
+        },
+      },
+    ),
+  )
+
+  assert.equal(updateCalls, 1)
+  assert.equal(saved[0].host, 'moved.example.com')
+  assert.equal(secrets.get('s1'), 'new-password')
+  assert.equal(secrets.has('retired'), false)
+  await waitFor(() => runtime.spawnCalls.length === 2, 1000, 'replacement transport spawn')
+  assert.equal(runtime.spawnCalls[1].options.env?.CHAMBER_TEST_PASSWORD, 'new-password')
+  assert.deepEqual(runtime.children[0].killCalls, ['SIGTERM'])
+})
+
+test('password commit failure restores the old registry and leaves its live transport and secret untouched', async (t) => {
+  const runtime = makeManager(t)
+  runtime.setProbe(true)
+  runtime.manager.connect('s1')
+  await waitFor(() => runtime.manager.status('s1')?.phase === 'ready', 1000, 'initial ready transport')
+  const before = runtime.manager.listInstances()
+  const beforeFile = readFileSync(runtime.instancesFile, 'utf8')
+  let secret = 'old-password'
+
+  assert.throws(() => runtime.manager.saveInstances(
+    [{ ...before[0], host: 'moved.example.com' }],
+    after => prepareRegistryPasswordCommit(
+      before,
+      after,
+      { id: 's1', password: 'new-password' },
+      {
+        update() {
+          throw new Error('password write failed')
+        },
+      },
+    ),
+  ), /password write failed/)
+
+  assert.equal(secret, 'old-password')
+  assert.deepEqual(runtime.manager.listInstances(), before)
+  assert.equal(readFileSync(runtime.instancesFile, 'utf8'), beforeFile)
+  assert.equal(runtime.manager.status('s1')?.phase, 'ready')
+  assert.deepEqual(runtime.children[0].killCalls, [])
+  assert.equal(runtime.spawnCalls.length, 1)
+})
+
+test('replacement owner is validated against the complete normalized proposal before registry persistence', (t) => {
+  const runtime = makeManager(t)
+  const before = runtime.manager.listInstances()
+  const beforeFile = readFileSync(runtime.instancesFile, 'utf8')
+  assert.throws(() => runtime.manager.saveInstances(
+    [{ ...before[0], label: 'renamed' }],
+    after => prepareRegistryPasswordCommit(
+      before,
+      after,
+      { id: 'not-in-proposal', password: 'pw' },
+      { update() { assert.fail('password store must not run for an invalid owner') } },
+    ),
+  ), /does not match an instance/)
+  assert.deepEqual(runtime.manager.listInstances(), before)
+  assert.equal(readFileSync(runtime.instancesFile, 'utf8'), beforeFile)
+})
+
+test('authentication-owner edit without a replacement retires the old secret', (t) => {
+  const runtime = makeManager(t)
+  const before = runtime.manager.listInstances()
+  let secret: string | null = 'old-password'
+  let clearIds: readonly string[] = []
+  runtime.manager.saveInstances(
+    [{ ...before[0], user: 'bob' }],
+    after => prepareRegistryPasswordCommit(before, after, undefined, {
+      update(ids, replacement) {
+        clearIds = ids
+        assert.equal(replacement, undefined)
+        secret = null
+      },
+    }),
+  )
+  assert.deepEqual(clearIds, ['s1'])
+  assert.equal(secret, null)
+})
+
+test('non-authentication edit does not touch the password store', (t) => {
+  const runtime = makeManager(t)
+  const before = runtime.manager.listInstances()
+  let updateCalls = 0
+  runtime.manager.saveInstances(
+    [{ ...before[0], label: 'renamed', remotePort: 4080, serviceName: 'dsh-new' }],
+    after => prepareRegistryPasswordCommit(before, after, undefined, {
+      update() { updateCalls += 1 },
+    }),
+  )
+  assert.equal(updateCalls, 0)
 })
 
 test('a renderer send throw after registry commit is a loud delivery miss, never a save failure', () => {
@@ -665,6 +812,21 @@ test('auth failure → error with requiresUserAction, no auto-retry', async t =>
   assert.equal(status.requiresUserAction, true)
   await sleep(80)
   assert.equal(spawnCalls.length, 1, 'no auto-retry after a terminal auth failure')
+})
+
+test('ring projection truncation happens after auth classification', async t => {
+  const { manager, children, spawnCalls, setProbe } = makeManager(t)
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  children[0].stderrWrite(`${'x'.repeat(RING_LOG_MESSAGE_MAX_CHARS + 128)} Permission denied (publickey,password).\n`)
+  children[0].simulateExit(255)
+  await waitFor(() => manager.status('s1')!.phase === 'error')
+  assert.equal(manager.status('s1')!.requiresUserAction, true, 'the classifier still sees the auth marker after the display cap')
+  const retained = manager.logs('s1').find(entry => entry.message.startsWith('x'))?.message ?? ''
+  assert.equal(retained.length, RING_LOG_MESSAGE_MAX_CHARS)
+  assert.ok(retained.endsWith('[truncated]'))
+  assert.ok(manager.logs('s1').some(entry => entry.message.includes('authentication failure detected')))
 })
 
 test('spawn failure (ssh binary missing) → error with requiresUserAction', async t => {
@@ -1363,6 +1525,19 @@ test('appendLog: external callers (plugin-sync seed outcomes) land in the ring b
   assert.ok(lines.some(entry => entry.level === 'error' && entry.message.includes('注入失败：boom')))
 })
 
+test('ring entries retain a useful prefix but cap classified messages independently of parser lines', async t => {
+  const { manager, setProbe } = makeManager(t)
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready')
+  const oversized = `diagnostic:${'x'.repeat(RING_LOG_MESSAGE_MAX_CHARS * 2)}`
+  assert.equal(manager.appendLog('s1', 'info', oversized), true)
+  const retained = manager.logs('s1').at(-1)?.message ?? ''
+  assert.equal(retained.length, RING_LOG_MESSAGE_MAX_CHARS)
+  assert.ok(retained.startsWith('diagnostic:'))
+  assert.ok(retained.endsWith('[truncated]'))
+})
+
 test('onStatusChanged pushes non-secret projections and unsubscribe works', async t => {
   const { manager, setProbe } = makeManager(t)
   const seen: Array<{ id: string } & StatusWithNoUrlLeak> = []
@@ -1472,10 +1647,13 @@ test('is-active distinguishes unit-not-found and ssh-exec failures from inactive
 test('registry refuses an invalid serviceName before it can reach exec', async t => {
   const { manager, spawnCalls } = makeManager(t)
   const before = manager.listInstances()
-  assert.throws(
-    () => manager.saveInstances([...before, { ...EXEC_INSTANCE, serviceName: 'bad;rm -rf /' }]),
-    (error: unknown) => (error as { code?: string }).code === 'ssh_instances_invalid',
-  )
+  for (const serviceName of ['bad;rm -rf /', '--help', '-Hattacker.example']) {
+    assert.throws(
+      () => manager.saveInstances([...before, { ...EXEC_INSTANCE, serviceName }]),
+      (error: unknown) => (error as { code?: string }).code === 'ssh_instances_invalid',
+      serviceName,
+    )
+  }
   assert.deepEqual(manager.listInstances(), before)
   const result = await manager.exec('s2', 'start')
   assert.equal(result.ok, false)

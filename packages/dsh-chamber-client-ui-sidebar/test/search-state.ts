@@ -23,6 +23,7 @@ import { chamberBridge, type ChamberServerAggregate } from '../src/shared/aggreg
 function server(id: string, connected: boolean): ChamberServerAggregate {
   return {
     id,
+    sourceFingerprint: 'a'.repeat(64),
     kind: 'ssh',
     label: id,
     connected,

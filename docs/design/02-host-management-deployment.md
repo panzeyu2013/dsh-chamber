@@ -237,7 +237,9 @@ ready
 - 就绪失败（超时 / 进程退出 / 重试耗尽）：显式启动失败，附完整启动输出与
   `--dump-config` 建议（`dsh --profile web --dump-config` 检查组合树）。
 - `host.describe` 响应（version / cwd / attachedSessions …）仅用于就绪与
-  健康探活，不作任何会话级消费（协议细节以 dsh wire / vendor 源码为权威）。
+  健康探活，不作任何会话级消费（协议细节以 dsh wire / vendor 源码为权威）；
+  控制面 unary fetch carrier 对单个 JSON 响应实施 1 MiB 流式字节上限，声明
+  长度与实际流均受约束，异常宿主不能借探活把响应无界缓冲进控制面。
 
 ### 3.3 进程记录文件（managed-dsh/<pid>.json）
 
@@ -383,10 +385,21 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 - 宿主 stdout/stderr 行写入控制面**滚动缓冲**（RING_BUFFER，如 500 行 /
   按字节上限），启动诊断字段（binary/args/cwd/env 键数/PATH 项数）随
   注册表进程记录登记（host-logs 以注册表字段承载，见 §3.1 日志条）；
+- 写入面按 backing path 共享一条**异步串行 lane**：stdout/stderr 与 lifecycle
+  writer 共用队列及 compaction ring，append 与临界 rename 绝不并行；child
+  `data` 回调先在 Buffer 层截为最多 64 KiB、添加固定截断摘要，再只解码一次供
+  logger/writer 共用；writer 只入队，不执行同步文件 I/O，并在 child `close`
+  （stdio 已关闭）后退役。每 host 在途最多 256 条 / 512 KiB，
+  达到任一高水位即丢弃**最新**诊断条目（原控制面 logger 已持有该行），绝不
+  反向暂停或阻塞宿主 pipe；未跨行数 cap 的批次只 append，跨 cap 的批次直接
+  原子替换为尾部 ring（不先 append 再整文件重写）；`flush/close` 可等待调用前
+  已接纳条目落定；
 - 读取面：`GET /api/host/logs`（04 §3.3，local-only）——桌面
   chamber-settings 插件展示"本地实例日志"；远程实例日志经
   `desktop_ssh_logs` IPC（03 §2.2）；
-- 写入或压缩失败会切换到新的日志代次（清空旧内存 ring/计数并重新 setup）；
+- 写入或压缩失败会丢弃失败批次及其后已排队诊断并切换到新的日志代次
+  （清空旧内存 ring/计数并重新 setup）；只有失败后到达的**新写入**发起一次
+  新 setup，永久磁盘故障不会形成无限重试队列；
   旧 backing file 被删除后绝不由临界压缩把历史 ring 复活，失败写也不在下次
   重建时重复；
 - 纪律：日志永不含凭据/令牌（05 §8 安全不变量）。

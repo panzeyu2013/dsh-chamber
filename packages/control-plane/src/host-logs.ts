@@ -10,7 +10,7 @@
  * Honest note: spawn-dsh.ts attaches a per-host JSONL writer (createHostLogWriter)
  * at spawn, so a live host's stdout/stderr lands in <stateDir>/host-logs/<port>.log
  * and reads resolve; a host that exited before any line was captured may still
- * report a typed not-found. The module never writes, never touches the catalog,
+ * report a typed not-found. The read/diagnostic side never touches the catalog
  * and derives the managed port from the spawn registry
  * (<stateDir>/managed-dsh/<pid>.json) or from an explicit port, so it is
  * unit-testable against plain tmp-directory fixtures.
@@ -21,8 +21,8 @@
  * `truncated: true` instead of loading the whole file.
  */
 
-import { open, readdir, stat } from 'node:fs/promises'
-import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFile, mkdir, open, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readPidRecord } from './spawn-dsh.ts'
 import type { PidRecord } from './spawn-dsh.ts'
@@ -55,6 +55,12 @@ export const MAX_LOG_LINES = 500
 /** Compaction retains this many trailing lines (so compaction runs ~every 100 writes). */
 export const COMPACT_KEEP_LINES = 400
 
+/** Per-host pending-write ceiling. stdout/stderr remain live when disk is slow:
+ * once either ceiling is reached, the newest diagnostic entry is dropped
+ * instead of growing memory or applying backpressure to the managed host. */
+export const MAX_PENDING_LOG_ENTRIES = 256
+export const MAX_PENDING_LOG_BYTES = 512 * 1024
+
 /** The rolling-log file for a given managed-host port. */
 export function logPathFor(stateDir: string, port: number): string {
   return join(stateDir, LOG_DIR, `${port}.log`)
@@ -62,85 +68,237 @@ export function logPathFor(stateDir: string, port: number): string {
 
 /** The appending rolling-log writer for one managed host. */
 interface HostLogWriter {
-  write(line: string, streamName?: string): void
-  close(): void
+  /** False means the entry was dropped at the high-water mark or after close. */
+  write(line: string, streamName?: string): boolean
+  /** Flush every entry accepted before this call while keeping the handle live. */
+  flush(): Promise<void>
+  /** Flush every entry accepted before this call. Never rejects. */
+  close(): Promise<void>
 }
 
-/** Appending JSONL writer for one managed host (the write side of the
- * rolling-log convention above — attached by spawn-dsh.ts to the host's
- * stdout/stderr). Writes are SYNCHRONOUS appendFileSync calls: an async
- * WriteStream would race compaction's rename (a pending async open appends
- * its buffered backlog into the renamed file, duplicating and interleaving
- * content — 2026 round-3 review). The volume is tiny (the web-profile host
- * is silent on stdio; the observable content is lifecycle transitions), so
- * sync appends are free. Failures are swallowed (the control-plane logger
- * already carried the line; a dead log file must never wedge the host pipe).
- */
-export function createHostLogWriter(stateDir: string, port: number): HostLogWriter {
-  let needsSetup = true
-  let linesWritten = 0
-  // In-memory ring of the last COMPACT_KEEP_LINES lines — the compaction
-  // source (the file is never re-read for compaction, so no read-vs-write
-  // race exists at all).
-  const ring: string[] = []
+interface PendingLogEntry {
+  entry: string
+  bytes: number
+}
+
+/** One shared lane per backing path. spawn-dsh stdout/stderr and the local
+ * lifecycle logger can both create handles for the same port; sharing the
+ * queue AND ring is what makes compaction preserve both producers. */
+const hostLogLanes = new Map<string, AsyncHostLogLane>()
+
+class AsyncHostLogLane {
+  readonly path: string
+  readonly directory: string
+  handleCount = 0
+
+  #needsSetup = true
+  #linesWritten = 0
+  #ring: string[] = []
+  #pending: PendingLogEntry[] = []
+  #pendingEntries = 0
+  #pendingBytes = 0
+  #drainPromise: Promise<void> | null = null
+
+  constructor(stateDir: string, port: number) {
+    this.path = logPathFor(stateDir, port)
+    this.directory = join(stateDir, LOG_DIR)
+  }
+
   /**
    * Drop all in-memory knowledge of the current backing-file generation.
    * After any append/compaction failure we cannot prove that the file still
    * contains the ring; retaining it could resurrect deleted content when a
    * later compaction replaces a newly-created file.
    */
-  function resetGeneration(): void {
-    ring.length = 0
-    linesWritten = 0
-    needsSetup = true
+  #resetGeneration(): void {
+    this.#ring = []
+    this.#linesWritten = 0
+    this.#needsSetup = true
   }
+
+  /** Load only a bounded tail of an existing generation. A replacement
+   * writer must count earlier lines toward the same on-disk cap, but startup
+   * must not read an arbitrarily large legacy log into memory. */
+  async #hydrateGeneration(): Promise<void> {
+    let fd: FileHandle
+    try {
+      fd = await open(this.path, 'r')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return
+    }
+    try {
+      const info = await fd.stat()
+      if (info.size === 0) return
+      const bytes = Math.min(info.size, MAX_WHOLE_READ_BYTES)
+      const buffer = Buffer.allocUnsafe(bytes)
+      const { bytesRead } = await fd.read(buffer, 0, bytes, info.size - bytes)
+      let text = buffer.subarray(0, bytesRead).toString('utf8')
+      if (info.size > bytes) {
+        const firstBreak = text.indexOf('\n')
+        text = firstBreak === -1 ? '' : text.slice(firstBreak + 1)
+      }
+      const lines = text.split('\n')
+      if (lines[lines.length - 1] === '') lines.pop()
+      const retained = lines.slice(-COMPACT_KEEP_LINES)
+      this.#ring.push(...retained.map(line => `${line}\n`))
+      // A partial tail proves the old generation exceeded our byte budget;
+      // compact it on the next successful append without guessing its count.
+      this.#linesWritten = info.size > bytes ? MAX_LOG_LINES : lines.length
+    } finally {
+      await fd.close()
+    }
+  }
+
   /** (Re)create the log directory; the next append then lands. */
-  function setup(): void {
-    try {
-      mkdirSync(join(stateDir, LOG_DIR), { recursive: true })
-      needsSetup = false
-    } catch {
-      /* swallow — the write is lost; the next write retries */
+  async #setup(): Promise<void> {
+    await mkdir(this.directory, { recursive: true })
+    await this.#hydrateGeneration()
+    this.#needsSetup = false
+  }
+
+  /** Atomically replace the backing generation with its retained tail. */
+  async #compact(retained: string[]): Promise<void> {
+    const tmp = `${this.path}.compact.tmp`
+    // Ring entries already end with '\n' — join with '' (a '\n' join
+    // would double the separators and leave blank lines between entries).
+    await writeFile(tmp, retained.join(''))
+    await rename(tmp, this.path)
+  }
+
+  /** Drain batches serially. append and compaction share this one lane, so no
+   * buffered append can target the inode renamed away by compaction. */
+  async #drain(): Promise<void> {
+    // Keep write() enqueue-only even when this is the first entry on an idle
+    // lane; no filesystem work runs on the child stream's data callback stack.
+    await Promise.resolve()
+    while (this.#pending.length > 0) {
+      const batch = this.#pending.splice(0)
+      const batchBytes = batch.reduce((sum, item) => sum + item.bytes, 0)
+      try {
+        if (this.#needsSetup) await this.#setup()
+        const entries = batch.map(item => item.entry)
+        if (this.#linesWritten + entries.length > MAX_LOG_LINES) {
+          // Crossing the cap is one atomic replacement, not append followed by
+          // another full-file write. The backing file therefore never exposes
+          // an oversized batch between two filesystem operations.
+          const retained = [...this.#ring, ...entries].slice(-COMPACT_KEEP_LINES)
+          await this.#compact(retained)
+          this.#ring = retained
+          this.#linesWritten = retained.length
+        } else {
+          await appendFile(this.path, entries.join(''))
+          // Mutate the compaction source only after persistence succeeds: a
+          // swallowed write must never be resurrected by a later replacement.
+          this.#ring.push(...entries)
+          if (this.#ring.length > COMPACT_KEEP_LINES) {
+            this.#ring.splice(0, this.#ring.length - COMPACT_KEEP_LINES)
+          }
+          this.#linesWritten += entries.length
+        }
+        this.#pendingEntries -= batch.length
+        this.#pendingBytes -= batchBytes
+      } catch {
+        // The failed batch and everything queued behind it are diagnostic-only
+        // and are dropped together. A later NEW write gets one fresh setup
+        // attempt; a permanently broken disk never creates an infinite retry
+        // loop or wedges the managed host's stdout/stderr pipe.
+        this.#pending = []
+        this.#pendingEntries = 0
+        this.#pendingBytes = 0
+        this.#resetGeneration()
+        return
+      }
     }
   }
-  /** Compaction: keep the trailing COMPACT_KEEP_LINES. Failures are
-   * swallowed: logging must never wedge the host pipe. */
-  function compact(): void {
-    try {
-      const tmp = `${logPathFor(stateDir, port)}.compact.tmp`
-      // Ring entries already end with '\n' — join with '' (a '\n' join
-      // would double the separators and leave blank lines between entries).
-      writeFileSync(tmp, ring.join(''))
-      renameSync(tmp, logPathFor(stateDir, port))
-      linesWritten = ring.length
-    } catch {
-      resetGeneration()
-      /* swallow — see header note */
-    }
+
+  #ensureDrain(): void {
+    if (this.#drainPromise !== null) return
+    const pending = this.#drain()
+    this.#drainPromise = pending
+    void pending.then(() => {
+      if (this.#drainPromise !== pending) return
+      this.#drainPromise = null
+      if (this.#pending.length > 0) this.#ensureDrain()
+      else maybeReleaseHostLogLane(this)
+    })
   }
+
+  enqueue(entry: string): boolean {
+    const bytes = Buffer.byteLength(entry)
+    if (
+      this.#pendingEntries >= MAX_PENDING_LOG_ENTRIES
+      || bytes > MAX_PENDING_LOG_BYTES
+      || this.#pendingBytes + bytes > MAX_PENDING_LOG_BYTES
+    ) return false
+    this.#pending.push({ entry, bytes })
+    this.#pendingEntries += 1
+    this.#pendingBytes += bytes
+    this.#ensureDrain()
+    return true
+  }
+
+  async flush(): Promise<void> {
+    while (this.#drainPromise !== null) await this.#drainPromise
+  }
+
+  get idle(): boolean {
+    return this.#drainPromise === null && this.#pendingEntries === 0
+  }
+}
+
+function getHostLogLane(stateDir: string, port: number): AsyncHostLogLane {
+  const path = logPathFor(stateDir, port)
+  let lane = hostLogLanes.get(path)
+  if (lane === undefined) {
+    lane = new AsyncHostLogLane(stateDir, port)
+    hostLogLanes.set(path, lane)
+  }
+  return lane
+}
+
+function maybeReleaseHostLogLane(lane: AsyncHostLogLane): void {
+  if (lane.handleCount === 0 && lane.idle && hostLogLanes.get(lane.path) === lane) {
+    hostLogLanes.delete(lane.path)
+  }
+}
+
+/** Appending JSONL handle for one managed host (the write side attached by
+ * spawn-dsh.ts and local-connection.ts). Handles for the same backing path
+ * share one bounded asynchronous lane: writes and compaction are serialized,
+ * so fixing event-loop blocking does not revive the old WriteStream/rename
+ * race. The high-water policy drops the newest entry; the control-plane logger
+ * already carried it, and diagnostics must never backpressure the host pipe. */
+export function createHostLogWriter(stateDir: string, port: number): HostLogWriter {
+  let ownedLane: AsyncHostLogLane | null = null
+  let closed = false
+
+  function laneForWrite(): AsyncHostLogLane {
+    if (ownedLane === null) {
+      ownedLane = getHostLogLane(stateDir, port)
+      ownedLane.handleCount += 1
+    }
+    return ownedLane
+  }
+
   return {
     write(line, streamName) {
-      if (needsSetup) setup()
+      if (closed) return false
       const entry = `${JSON.stringify({ ts: new Date().toISOString(), stream: streamName, line })}\n`
-      try {
-        appendFileSync(logPathFor(stateDir, port), entry)
-        // The ring is the compaction source and compaction REPLACES the file
-        // with it — push only on success so the invariant ring == file holds
-        // exactly (a swallowed write must never be resurrected by a later
-        // compaction; 2026 review hardening).
-        ring.push(entry)
-        if (ring.length > COMPACT_KEEP_LINES) ring.splice(0, ring.length - COMPACT_KEEP_LINES)
-        // Count only writes known to have landed in this backing generation.
-        linesWritten += 1
-        if (linesWritten > MAX_LOG_LINES) compact()
-      } catch {
-        // The write is lost and the backing generation is now uncertain.
-        // Forget its ring/counter so a later recreation cannot resurrect it.
-        resetGeneration()
-      }
+      return laneForWrite().enqueue(entry)
     },
-    close() {
-      // Sync appends are already durable; nothing to flush.
+    async flush() {
+      await ownedLane?.flush()
+    },
+    async close() {
+      if (!closed) {
+        closed = true
+        if (ownedLane !== null) ownedLane.handleCount -= 1
+      }
+      const lane = ownedLane
+      if (lane === null) return
+      await lane.flush()
+      maybeReleaseHostLogLane(lane)
     },
   }
 }

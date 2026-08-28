@@ -687,8 +687,10 @@ export function runtimeReportSignature(
 
 /**
  * Render-relevant projection signature of the merged multi-source projection.
- * Covers everything the sidebar (and the settings bridge) actually renders —
- * and nothing else:
+ * Covers everything the sidebar (and the settings bridge) renders or uses
+ * as a lifecycle boundary — and nothing else:
+ * - sourceFingerprint is not visible UI, but a same-id replacement must
+ *   publish so source-owned child contexts can be retired synchronously.
  * - session rows carry id/title/running/blank/updatedAt. `updatedAt` IS part
  *   of it since the 2026-08 updated-mode alignment (updated = manual order +
  *   activity promotion, design 06 §3.1): a session's last-activity tick
@@ -724,6 +726,7 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
     const runtime = server.runtime === undefined ? '' : runtimeReportSignature(server.runtime, visibleSessionIds, false)
     return {
       id: server.id,
+      sourceFingerprint: server.sourceFingerprint,
       kind: server.kind,
       label: server.label,
       connected: server.connected,

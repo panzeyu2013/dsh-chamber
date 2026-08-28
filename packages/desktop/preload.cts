@@ -32,18 +32,25 @@ export interface SshInstanceSpec extends RegistrySshInstanceSpec {
   sourceFingerprint: string
 }
 
+/** Transient replacement credential committed with one registry save. */
+export interface SshPasswordSubmission {
+  id: string
+  password: string
+}
+
 /**
  * The window.dshChamber bridge contract (design 05 §7.4) — the typed
- * surface the renderer consumes. The desktop_ssh_* surface is non-secret
- * only: never a transport URL, never credential material. onStatusChanged
- * subscribes to the main-process push and returns an unsubscribe. The
+ * surface the renderer consumes. Registry/status RESULTS are non-secret and
+ * never contain a transport URL or credential; the only credential inputs
+ * are the documented transient password arguments below, never returned.
+ * onStatusChanged subscribes to the main-process push and returns an unsubscribe. The
  * provider exec channels (ssh: systemd) resolve the fresh status projection
  * (serviceActive included) or {error} — loud failures, never silent empty
  * success.
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  instances_set(instances: SshInstanceInput[]): Promise<SshInstanceSpec[]>
+  instances_set(instances: SshInstanceInput[], password?: SshPasswordSubmission): Promise<SshInstanceSpec[]>
   /**
    * Forward the SSH password to the main process, which holds it in memory
    * and mirrors it to the documented 0600 password store (design 05 §8).
@@ -384,7 +391,7 @@ export interface DshChamberBridge {
 function desktopSshApi(): DesktopSshSurface {
   return {
     instances_get: () => ipcRenderer.invoke('desktop_ssh_instances_get'),
-    instances_set: instances => ipcRenderer.invoke('desktop_ssh_instances_set', instances),
+    instances_set: (instances, password) => ipcRenderer.invoke('desktop_ssh_instances_set', instances, password),
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),
     config_list: () => ipcRenderer.invoke('desktop_ssh_config_list'),
     connect: id => ipcRenderer.invoke('desktop_ssh_connect', { id }),

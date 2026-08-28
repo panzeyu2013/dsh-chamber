@@ -142,6 +142,7 @@ interface ChamberServerWorkspace {
 }
 interface ChamberServerAggregate {
   id: string                      // 'local' | 'ssh-<id>'
+  sourceFingerprint: string       // 该精确来源代的权威 proof（local='local'）
   kind: 'local' | 'ssh'
   label: string
   connected: boolean              // 本地：dsh ready；远程：隧道 phase ready
@@ -201,6 +202,8 @@ export const chamberBridge: {
   已挂载 ctx 的完整快照上报；仅无完整生产者的 ready 来源 30s unary 兜底 →
   `chamberBridge.publish`；另在每个 not-ready → ready 连接代边沿执行一次 unary，
   收敛生产者同内容去重后的聚合空窗。拉取失败的来源带 `aggregateError` 文本发布。
+  每行同时携带当前权威 `sourceFingerprint`；共享发布签名必须纳入该字段，
+  使“同 id、其余投影不变”的 replacement 仍会通知来源所有者。
 - 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）。
 - 订阅 `onActivateSource` → 仅切换活动来源视图（不打开会话）。
 - 订阅 `onRefresh` → 仅无完整生产者的来源立即重拉；已挂载完整生产者由同一
@@ -327,8 +330,10 @@ export const chamberBridge: {
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/host/user/sshPort/remotePort/serviceName，id 白名单
   `^[a-zA-Z0-9_-]+$`，端口 1–65535），SSH 认证默认走系统 ssh-agent/
-  默认密钥；**可选密码字段**（§8 例外）：经 `desktop_ssh_set_password`
-  转发主进程（内存 + `<userData>/ssh-passwords.json` 明文镜像，0600 原子写），
+  默认密钥；**可选密码字段**（§8 例外）：与本次元数据作为
+  `desktop_ssh_instances_set` 的可选参数一次提交到主进程（内存 +
+  `<userData>/ssh-passwords.json` 明文镜像，0600 原子写；显式清除仍走
+  `desktop_ssh_set_password`），
   表单永不记录、编辑时永不回填——**SSH 材料（除该瞬时输入外）永不进
   renderer**。
 - **`~/.ssh/config` 自动发现**：主进程读取并投影非秘密字段
@@ -370,7 +375,10 @@ export const chamberBridge: {
     （§5，`settings.section` id `connections`）；
   - `packages/dsh-chamber-client-ui-settings-bridge/`——自研设置壳插件（§5 同款
     讨论，`sidebar.settings` 槽 priority -1 shadow 官方 SettingsRoot，
-    服务器下拉 + 子 ctx 官方 settings 子集渲染）。
+    服务器下拉 + 子 ctx 官方 settings 子集渲染）。子 ctx 缓存所有权绑定
+    `(sourceId, sourceFingerprint)`：权威 roster 删除来源或在同 id 下更换 proof 时，
+    立即退役并 dispose 所有受影响的已选/未选缓存；异步装配结果提交前再校验
+    捕获的 proof 与当前 roster，迟到的旧代结果只 dispose、不进入缓存。
   - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber
     fork（仅替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
     播种/回写，钳位 [264,420]，覆盖 id；替换官方 ui-layout 注册，见设计 06）。
@@ -443,7 +451,8 @@ export const chamberBridge: {
   明文文件兜底，§8）、`desktop_ssh_config_list`（`~/.ssh/config` 非秘密投影）、
   `desktop_ssh_connect/disconnect/status/logs/logs_clear`、
   `desktop_ssh_start_service/stop_service/is_active/restart_service`（systemctl，
-  serviceName 白名单 `^[a-zA-Z0-9_.-]+$`）；
+  serviceName 白名单 `^(?!-)[a-zA-Z0-9_.-]+$`（只额外拒绝会被 systemctl
+  解释为选项的前导 `-`，不收紧既有普通 unit 字符范围））；
 - chamber 设置面（设计 14 D7，chamber 全局运行设置，非秘密）：
   `dsh-chamber:settings-get`（查询当前设置 + 平台能力门控）、
   `dsh-chamber:settings-set`（应用并持久化 `<userData>/chamber-settings.json`，
@@ -535,10 +544,12 @@ export const chamberBridge: {
   隧道 + systemctl exec；认证特征/脱敏/白名单全在 provider 内。
 - **exec 通道（2026-08 扩展，设计 13）**：`TransportExecPayload.op` 为
   `'exec'`（systemctl `start/stop/is-active/restart`、远端命令 `run`——命令名
-  白名单 `dsh|cat|printf|base64|mkdir` + argv/路径白名单 + shell 元字符拒绝，
+  白名单 `dsh|cat|printf` + argv/路径白名单 + shell 元字符拒绝（`base64 -d`/
+  `mkdir -p` 仅存在于固定 write-file 管线，不是可分发命令），
   见 13 §7.2）或 `'write-file'`（stdin base64 流式写 + **字节域** SHA-256 回读
-  校验 + 目标前缀白名单 + **50MiB 大小上限**）。成功结果同时携带 stdout
-  （UTF-8 视图）与 stdoutBytes（原始 Buffer）——二进制内容校验在字节域进行。
+  校验 + 目标前缀白名单 + **50MiB 大小上限**）。白名单 `exec` 结果同时携带
+  stdout（UTF-8 视图）与 stdoutBytes（原始 Buffer）；`write-file` 回读直接流式
+  计算 SHA-256，成功仅返回 status，不在主进程保留整份回读。
   plugin-sync 编排（apply/seed/materialize）全部经此通道，spec 在主进程二次
   白名单校验（applyPlugins + buildRemoteExecArgv）；materialize 的 `add file:`
   走独立的目录约束白名单分支（仅物化目录内绝对路径）。
@@ -570,27 +581,40 @@ export const chamberBridge: {
 - 传输 URL 与**私密 SSH 材料**（凭据/私钥/代理配置/IdentityFile/ProxyCommand）
   永不进 renderer/日志/持久层——renderer 只见 host/user/端口等**非秘密元数据
   投影**与 localPort/phase；ssh stderr 含密钥路径的行入环前脱敏（按行缓冲，
-  跨 chunk 不绕过）；
+  跨 chunk 不绕过）；分类器可检查的单行上限为 64KiB，脱敏/分类后真正保留到每实例
+  200 行 ring 的展示文本再裁到 4KiB，避免 32 个实例的最坏驻留内存按 64KiB/行放大；
 - **可选密码认证（唯一例外，2026-08 用户需求；明文文件兜底——用户决策）**：
-  表单密码字段为瞬时输入（编辑时永不回填），经 `desktop_ssh_set_password`
-  转发后主进程**内存持有 + 明文镜像 `<userData>/ssh-passwords.json`**
+  表单密码字段为瞬时输入（编辑时永不回填）；新增/编辑时作为
+  `desktop_ssh_instances_set` 的可选 replacement 与元数据同次转发，主进程
+  **内存持有 + 明文镜像 `<userData>/ssh-passwords.json`**
   （0600、`.tmp`+fsync+rename 原子写；残留 `.tmp` 无论原 mode 为何都先
-  fchmod 0600 再写秘密；写成功后才发布内存状态、启动时严格
-  校验 schema——密码主机重启后自动连接可用；损坏/结构非法文件保留为
+  fchmod 0600 再写秘密；写成功后才发布内存状态；启动读取拒绝 symlink/非普通文件/
+  非当前用户 owner，并在读取前把过宽 mode 收敛到 0600，同时严格校验 schema；
+  schema v2 的每个密码项同时持久化其精确 `(host,user,sshPort)` owner，任何 SSH
+  spawn 前均与当前权威实例 spec 再匹配，跨注册表/密码文件两次原子提交之间即使崩溃
+  也只会使密码认证失效，不会把旧密码转发给同 id 的新端点；无 owner 的 schema v1
+  文件保留为 `*.v1-retired` 并响亮要求重新输入，绝不从当前注册表猜测迁移——
+  密码主机重启后自动连接可用；损坏/结构非法文件保留为
   `*.corrupt` 并响亮报告，绝不静默当空集）；
-  新增/编辑主机若密码写入失败，设置页补偿回滚本次元数据保存；回滚 IPC
-  异常时重新读取权威注册表并按真实状态保留编辑态，避免重复新增；
-  永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
+  主进程先验证完整归一化 registry 与 replacement owner；注册表文件落盘后，以
+  **一次密码 map 写入**同时完成全部旧 owner 退役及可选 replacement，成功后才发布
+  新内存 registry / 重启 transport。密码写入失败则在该同步提交屏障内恢复旧
+  registry，旧运行态与旧 secret 均不发布变化，renderer 不再执行第二次 IPC 或补偿；
+  永不进注册表、永不记日志；密码 owner 是 `(id, host, user, sshPort)`，实例删除或
+  host/user/sshPort 变化会以一次密码文件事务退役旧 secret（失败则回滚注册表），
+  label/remotePort/service/home 编辑不误清；显式清除同样删条目；隧道与 systemd
   exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH
   直接执行该脚本；`<tmp>/
   dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即删；启动清理仅删除
   已退出进程或旧格式遗留，绝不误删并行 dev/打包实例的助手）把密码喂给系统 ssh
   ——**永不上命令行**；助手按提示文本区分「主机密钥确认 → yes」与「密码/
   口令 → 密码」，首次连接无需预先接受主机密钥。无可靠 askpass 的平台
-  （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在 `desktop_ssh_set_password`
-  IPC 门禁处**显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
+  （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在带 replacement 的
+  `desktop_ssh_instances_set` 与显式 `desktop_ssh_set_password` IPC 门禁处
+  **显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
   通用路径。
-- systemctl 以参数数组 spawn（无 shell 拼接）+ serviceName 白名单；
+- systemctl 以参数数组 spawn（无 shell 拼接）+ serviceName 白名单，名称不得以 `-`
+  开头，避免被 systemctl 解释为 `--help`/`--version` 等选项并假成功；
 - 控制面 HTTP 监听仅 loopback——v1 无认证边界，不变量靠监听面与 HTTP/WS
   来源门禁（Host 仅规范 loopback authority；Origin 仅限与当前 Host 精确同源
   或显式开发 allowlist，其他 localhost 端口也默认拒绝；`null` 一律拒绝；

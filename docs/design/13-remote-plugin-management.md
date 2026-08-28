@@ -29,8 +29,9 @@
   shell 元字符拒绝
   （见 §7.2）。成功结果同时携带 stdout（UTF-8 视图）与 stdoutBytes（原始
   Buffer）——二进制内容校验在字节域进行。
-- `'write-file'`：stdin base64 流式写 + **字节域 SHA-256 回读校验** + 目标
-  前缀白名单 + **50MiB 大小上限**。
+- `'write-file'`：stdin base64 流式写 + **字节域流式 SHA-256 回读校验** + 目标
+  前缀白名单 + **50MiB 大小上限**；回读不保留 Buffer/UTF-8 副本，成功仅返回
+  status。
 - `run` 捕获 stdout 在追加 Buffer 前执行 50MiB 总字节上限；stderr/隧道与
   systemd stdout/stderr 先按完整行重组再脱敏，每条未终止行最多 64Ki 字符，
   超限整行丢弃且只记固定摘要。失败详情在接收每行时即限制为 2048 字符，不能
@@ -155,7 +156,9 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
   + shell 元字符拒绝。OpenSSH 的远端命令最终仍由远端 shell 解释，因此安全性
   来自固定命令形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全
   边界；
-- 服务名：`^[a-zA-Z0-9_.-]+$`（systemctl 目标）；
+- 服务名：`^(?!-)[a-zA-Z0-9_.:@-]+$`（systemctl 目标；支持 systemd template
+  instance 的 `@` 与合法 `:`，同时拒绝 `--help`/`-H…` 等前导 option 形状；
+  不接受需经远端 shell 解释的反斜杠转义）；
 - remoteDshHome：`^~?(?:\/(?!\.{1,2}(?:\/|$))[a-zA-Z0-9._-]+)+$` +
   1024 字符上限（null = 远端默认 `~/.dsh`）；renderer UX 门禁与主进程权威
   由 parity 测试防漂移；
@@ -163,8 +166,9 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
 
 ### 7.3 字节域校验
 
-`write-file` 回读 SHA-256 在字节域进行（stdoutBytes 原始 Buffer），不依赖
-UTF-8 文本视图。
+`write-file` 回读 SHA-256 在字节域增量计算，不依赖 UTF-8 文本视图，也不把
+整份远端内容保留为 stdoutBytes；普通白名单 `exec` 读取才返回 stdout/
+stdoutBytes。
 
 ## 8. 分期
 

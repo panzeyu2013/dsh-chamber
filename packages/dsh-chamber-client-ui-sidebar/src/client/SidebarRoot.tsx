@@ -953,7 +953,7 @@ export function SidebarRoot({
     const isBlankCurrent = active.workspaces.some(workspace =>
       workspace.sessions.some(session => session.id === current && session.blank === true))
     if (!isBlankCurrent) return
-    armBlankGhost(current)
+    armBlankGhost(active.id, current)
     ghostExpiry.current.set(current, Date.now() + BLANK_GHOST_GRACE_MS)
     // chamber (third-wave review, R2-1#5): the one-shot timer is trimmed from
     // the ref after it fires, so repeated armings (rare, but each timer
@@ -1500,6 +1500,7 @@ export function SidebarRoot({
                 currentRemote,
                 SESSION_SEARCH_RESULT_LIMIT,
                 visibleIds,
+                server.aggregateReady === true,
               )
               // chamber (06 §4): the current-session highlight is channel-based
               // — no direct store subscription — and single-selection: only the
@@ -2581,7 +2582,7 @@ export function SidebarRoot({
                                       // misjudged slow second click just
                                       // re-opens (no-op) and can NEVER
                                       // accidentally rename.
-                                      if (noteSessionRowClick(session.id)) {
+                                      if (noteSessionRowClick(server.id, session.id)) {
                                         // P2-10 同款 blank 门控（2026-08
                                         // review）：空白"新建会话"占位行无内容可
                                         // 改名——双击不得进入内联重命名（否则会

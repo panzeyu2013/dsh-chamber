@@ -218,7 +218,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 | 面 | 改动 |
 |---|---|
-| `packages/desktop/main.ts` + `ipc-settings.ts` | main 保留关窗分支（hide vs quit，**托盘可用门控**）、`backgroundThrottling: false`、`powerMonitor.on('resume')` → push 与退出确认（活动隧道/本地实例投影，**含更新安装豁免 + 单飞**），will-quit 并行等待 plugin-sync 本地子进程、transport 与控制面；ipc-settings 拥有 `powerSaveBlocker`、`chamber-settings.json` store、`dsh-chamber:settings-get/set` IPC + push |
+| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）、`backgroundThrottling: false`、`powerMonitor.on('resume')` → push 与退出确认（活动隧道/本地实例投影，**含更新安装豁免 + 单飞**），will-quit 并行等待 plugin-sync 本地子进程、transport 与控制面；同一装配入口拥有 `powerSaveBlocker`、`chamber-settings.json` store、`dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 windowCloseBehavior / launchAtLogin / keepAwake）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |

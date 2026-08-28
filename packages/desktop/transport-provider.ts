@@ -105,11 +105,11 @@ export interface TransportStatusProjection {
  * projection (serviceActive included), failure carries an error string.
  * Never thrown.
  *
- * `run`-channel captures: `stdout` is the UTF-8-decoded view of the remote
+ * `run` exec captures: `stdout` is the UTF-8-decoded view of the remote
  * stdout (lossy for binary content — replacement chars), and `stdoutBytes`
- * is the RAW captured bytes for byte-domain consumers (write-file SHA-256
- * verification, design 13 §4.1). Both are only present when the exec requested
- * stdout capture.
+ * is the RAW captured bytes for byte-domain consumers. Both are only present
+ * for the whitelisted `exec` reads. `write-file` verifies its read-back with
+ * a streaming SHA-256 digest and returns status only.
  */
 export type TransportExecResult =
   | { ok: true; status: TransportStatusProjection; stdout?: string; stdoutBytes?: Buffer }

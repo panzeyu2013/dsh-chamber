@@ -15,7 +15,6 @@
  */
 
 export { AppWebEntry, ensureWebModuleSystem, type AppWebEntryOptions, type BootSeams } from './boot.ts'
-export type { ChamberBootContext } from './chamber-context.ts'
 export { getStaticModules } from './seed.ts'
 export { PLATFORM_MODULES, type PlatformModule } from './platform.ts'
 export { STATE_LABELS, FIBER_STATE, type LoaderEntryState } from './loader-status.ts'

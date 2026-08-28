@@ -200,8 +200,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   分支命中，无需 graph row），不 prefetch/不 fetch（chamber 侧统一预加载整个额外
   集合）。共享模块表拒绝重复 factory（system.ts 的 `__ModuleLoader__.load` sink），
   页面级一次加载保证由 host-graph.ts 的 `preloadedExtraBundles` Map 显式维护
-  （成功后才标记：失败不标记 → 重试可重新预加载；同 id 异 rev 先到先得并
-  上报 `restart-required`，用户不再面对静默版本复用）。
+  （成功后才标记；普通失败删除后可重试；DOM script 超时因移除元素不能可靠取消，
+  先保留临时 tombstone 并观察明确的 `BundleLoadTimeoutError.bundleOutcome`：迟到 load
+  收敛为成功，迟到 error 才删除并允许重试，绝不并发执行同 id 第二份 bundle；同 id
+  异 rev 先到先得并上报 `restart-required`，用户不再面对静默版本复用）。
 - **同包 N-ctx 生命周期 seam（05 §4，2026-08-28）**：`AppWebEntryOptions`
   另有同步 `configureContext(ctx)`，在 Context 构造后、任何 await/plugin
   materialization 前执行；`dispose()` 返回 Promise 并等待 root fiber teardown，

@@ -9,6 +9,7 @@
  */
 
 import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT } from '@dsh-chamber/control-plane'
+import { followNewLines } from './follow-filter.ts'
 
 const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}`
 
@@ -381,21 +382,13 @@ async function hostLogsCommand(flags: FlagMap) {
     printLines(lines)
     return
   }
-  let lastTs = 0
+  let previousKeys: string[] = []
   for (;;) {
     const data = await fetchLogs()
     const lines = Array.isArray(data?.lines) ? data.lines : []
-    const newLines = lines.filter(entry => {
-      const ts = typeof entry?.ts === 'number' ? entry.ts : Number(entry?.ts)
-      return Number.isFinite(ts) && ts > lastTs
-    })
-    printLines(newLines)
-    let maxTs = lastTs
-    for (const entry of lines) {
-      const ts = typeof entry?.ts === 'number' ? entry.ts : Number(entry?.ts)
-      if (Number.isFinite(ts) && ts > maxTs) maxTs = ts
-    }
-    lastTs = maxTs
+    const followed = followNewLines(lines, previousKeys)
+    printLines(followed.newLines)
+    previousKeys = followed.nextKeys
     await new Promise(resolve => setTimeout(resolve, LOG_FOLLOW_INTERVAL_MS))
   }
 }

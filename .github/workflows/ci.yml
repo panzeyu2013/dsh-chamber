@@ -76,6 +76,7 @@ jobs:
           pnpm run test:client-web
           pnpm run test:connection
           pnpm run test:open-in
+          pnpm run test:cli
       # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
       # dsh runtime — normal here, since only
       # packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and

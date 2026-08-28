@@ -1155,6 +1155,7 @@ test('runtimeReportSignature onlyIds restricts the signature to the given sessio
 function server(id: string, overrides: Partial<ChamberServerAggregate> = {}): ChamberServerAggregate {
   return {
     id,
+    sourceFingerprint: id === 'local' ? 'local' : 'a'.repeat(64),
     kind: id === 'local' ? 'local' : 'ssh',
     label: id,
     connected: true,
@@ -1165,10 +1166,17 @@ function server(id: string, overrides: Partial<ChamberServerAggregate> = {}): Ch
   }
 }
 
-test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks every rendered field', () => {
+test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks rendered fields and source ownership', () => {
   const a = [server('local'), server('ssh-r1')]
   const b = [server('local', { updatedAt: 123456789 }), server('ssh-r1', { updatedAt: 987654321 })]
   assert.equal(serversProjectionSignature(a), serversProjectionSignature(b))
+  // A same-id authoritative replacement must publish even when every visible
+  // field is identical, so source-owned child contexts can retire the old
+  // incarnation instead of reusing it.
+  assert.notEqual(
+    serversProjectionSignature(a),
+    serversProjectionSignature([server('local'), server('ssh-r1', { sourceFingerprint: 'b'.repeat(64) })]),
+  )
   // Session-level updatedAt IS part of the signature since the 2026-08
   // updated-mode alignment (updated = manual order + activity promotion): a
   // session's last-activity tick must re-publish the projection so the

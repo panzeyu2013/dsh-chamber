@@ -242,7 +242,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
    * a dead log file must never take the connection state machine down.
    * Tracked by the port it was created for: after a respawn on a new port
    * the old writer is closed and recreated. */
-  let hostLogWriter: { write(line: string, kind?: string): void; close(): void } | null = null
+  let hostLogWriter: { write(line: string, kind?: string): void; close(): Promise<void> } | null = null
   let hostLogWriterPort: number | null = null
   function noteHostLog(line: string) {
     if (typeof line !== 'string' || line === '') return
@@ -250,7 +250,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     if (port !== null && port > 0 && (hostLogWriter === null || hostLogWriterPort !== port)) {
       if (hostLogWriter !== null) {
         try {
-          hostLogWriter.close()
+          void hostLogWriter.close()
         } catch {
           /* swallow — see note above */
         }
@@ -260,7 +260,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
         hostLogWriter = createHostLogWriter(stateDir, port)
         hostLogWriterPort = port
       } catch {
-        hostLogWriter = { write() {}, close() {} }
+        hostLogWriter = { write() {}, async close() {} }
         hostLogWriterPort = port
       }
     }
@@ -736,11 +736,10 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
           // setState writes the final line through the existing per-port writer
           // even though dshPort is already null; close it immediately after.
           setState('stopped', null)
-          if (hostLogWriter !== null) {
-            hostLogWriter.close()
-            hostLogWriter = null
-          }
+          const writerToClose = hostLogWriter
+          hostLogWriter = null
           hostLogWriterPort = null
+          if (writerToClose !== null) await writerToClose.close()
         } finally {
           stopping = false
         }

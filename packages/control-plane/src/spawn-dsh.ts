@@ -88,6 +88,24 @@ export const LISTEN_WAIT_MS = 90_000
  * firewall rule that drops packets instead of rejecting them). */
 export const PORT_PROBE_TIMEOUT_MS = 1_000
 
+/**
+ * Per-pipe-event input ceiling. Child stdout/stderr arrives as Buffer objects;
+ * slice those bytes before decoding so one hostile/buggy write cannot first
+ * allocate an unbounded string in both the control-plane logger and host-log
+ * JSON encoder. 64 KiB also leaves ample room below host-logs' 512 KiB
+ * encoded-entry admission ceiling for worst-case JSON escaping.
+ */
+export const MAX_CHILD_OUTPUT_CHUNK_BYTES = 64 * 1024
+const CHILD_OUTPUT_TRUNCATION_MARKER = '\n...[output chunk truncated]'
+
+/** Format one child-pipe chunk once for both logger and rolling-log sinks. */
+export function formatChildOutputChunk(chunk: Buffer): string {
+  if (chunk.byteLength <= MAX_CHILD_OUTPUT_CHUNK_BYTES) return chunk.toString('utf8').trimEnd()
+  const markerBytes = Buffer.byteLength(CHILD_OUTPUT_TRUNCATION_MARKER)
+  const retainedBytes = Math.max(0, MAX_CHILD_OUTPUT_CHUNK_BYTES - markerBytes)
+  return `${chunk.subarray(0, retainedBytes).toString('utf8').trimEnd()}${CHILD_OUTPUT_TRUNCATION_MARKER}`
+}
+
 /** A retry delay that wakes immediately when its lifecycle is cancelled. */
 function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve()
@@ -401,17 +419,16 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     child.kill('SIGKILL')
     throw new Error(`dsh spawn on port ${port} produced no pid`)
   }
-  child.stdout.on('data', chunk => {
-    const line = String(chunk).trimEnd()
+  const forwardChildOutput = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
+    const line = formatChildOutputChunk(chunk)
     log(line)
-    hostLog.write(line, 'stdout')
-  })
-  child.stderr.on('data', chunk => {
-    const line = String(chunk).trimEnd()
-    log(line)
-    hostLog.write(line, 'stderr')
-  })
-  child.once('exit', () => hostLog.close())
+    hostLog.write(line, stream)
+  }
+  child.stdout.on('data', chunk => forwardChildOutput(chunk, 'stdout'))
+  child.stderr.on('data', chunk => forwardChildOutput(chunk, 'stderr'))
+  // Unlike 'exit', 'close' fires only after both stdio pipes have closed, so
+  // every data event is enqueued before the writer is retired.
+  child.once('close', () => { void hostLog.close() })
   const instanceId = readInstanceId(stateDir)
   // The pid record is best-effort for the REAPER (a missing record can be
   // re-derived) — but a FAILED WRITE still cleans the spawned child up and

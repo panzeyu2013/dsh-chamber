@@ -26,7 +26,7 @@ import { AppWebEntry, ensureWebModuleSystem } from '@deepseek-ai/dsh-client-web'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
-import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
+import { BundleLoadTimeoutError, collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 
@@ -81,33 +81,47 @@ function loadModuleBundle(url: string): Promise<void> {
     const el = document.createElement('script')
     el.type = 'module'
     el.src = url
-    let done = false
+    let requestSettled = false
+    let scriptSettled = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    // One finish path (load / error / timeout) wins; the loser is a no-op.
-    const finish = (action: () => void): void => {
-      if (done) return
-      done = true
+    let settleOutcome!: (loaded: boolean) => void
+    const bundleOutcome = new Promise<boolean>(resolveOutcome => { settleOutcome = resolveOutcome })
+    const settleScript = (loaded: boolean, action: () => void): void => {
+      if (scriptSettled) return
+      scriptSettled = true
       if (timer !== undefined) clearTimeout(timer)
       el.remove()
-      action()
+      settleOutcome(loaded)
+      if (!requestSettled) {
+        requestSettled = true
+        action()
+      }
     }
     // A hung bundle (server stalls, never fires load/error) must not keep this
     // instance's boot pending forever — fail loud at the same order of
     // magnitude as the graph fetch (host-graph.ts GRAPH_TIMEOUT_MS); the
     // rejection runs through the same fail-loud boot path as a load error.
-    // Known boundary: el.remove() does not cancel the in-flight module fetch —
-    // a bundle delivered after the timeout still executes and registers its
-    // factory; a later retry boot that re-preloads the same URL would then hit
-    // the duplicate-registration sink and fail loud. Low probability (stall +
-    // late delivery + manual retry), loud either way; documented, not fixed.
+    // Removing a module element does not reliably cancel its fetch, so leave
+    // it attached after timeout. host-graph keeps a temporary tombstone and
+    // observes bundleOutcome: a late load becomes success, a late error makes
+    // a later retry safe.
     timer = setTimeout(() => {
-      finish(() => reject(new Error(`dsh-chamber: bundle script ${url} timed out after ${BUNDLE_LOAD_TIMEOUT_MS}ms`)))
+      if (requestSettled) return
+      requestSettled = true
+      reject(new BundleLoadTimeoutError(
+        `dsh-chamber: bundle script ${url} timed out after ${BUNDLE_LOAD_TIMEOUT_MS}ms`,
+        bundleOutcome,
+      ))
     }, BUNDLE_LOAD_TIMEOUT_MS)
-    el.addEventListener('load', () => finish(resolve), { once: true })
+    el.addEventListener('load', () => settleScript(true, resolve), { once: true })
     el.addEventListener('error', () => {
-      finish(() => reject(new Error(`dsh-chamber: bundle script ${url} failed to load`)))
+      settleScript(false, () => reject(new Error(`dsh-chamber: bundle script ${url} failed to load`)))
     }, { once: true })
-    document.head.append(el)
+    try {
+      document.head.append(el)
+    } catch (error) {
+      settleScript(false, () => reject(error))
+    }
   })
 }
 

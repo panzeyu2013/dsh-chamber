@@ -16,6 +16,8 @@
 export interface ChamberServerAggregate {
   /** 'local' | 'ssh-<id>' */
   id: string
+  /** Opaque authoritative lifecycle proof for this exact source incarnation. */
+  sourceFingerprint: string
   kind: 'local' | 'ssh'
   label: string
   /** Local: dsh ready; remote: tunnel phase ready. */

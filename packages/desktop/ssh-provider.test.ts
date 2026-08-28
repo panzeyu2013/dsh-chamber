@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -30,6 +30,7 @@ import {
   sshAuthEnv,
   sshPasswordSupported,
   sshProvider,
+  updateSshPasswords,
   MAX_SSH_PASSWORD_CHARS,
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
@@ -130,17 +131,18 @@ test('startup cleanup preserves helpers owned by this live process', () => {
 })
 
 test('setSshPassword/getSshPassword round-trip and clear (empty string and null both clear)', () => {
-  setSshPassword('t-store-1', 'pw')
-  assert.equal(getSshPassword('t-store-1'), 'pw')
-  setSshPassword('t-store-1', '')
-  assert.equal(getSshPassword('t-store-1'), null, "'' clears")
-  setSshPassword('t-store-1', 'pw2')
-  setSshPassword('t-store-1', null)
-  assert.equal(getSshPassword('t-store-1'), null, 'null clears')
+  const owner = spec('t-store-1')
+  setSshPassword(owner, 'pw')
+  assert.equal(getSshPassword(owner), 'pw')
+  setSshPassword(owner, '')
+  assert.equal(getSshPassword(owner), null, "'' clears")
+  setSshPassword(owner, 'pw2')
+  setSshPassword(owner, null)
+  assert.equal(getSshPassword(owner), null, 'null clears')
 })
 
 test('sshAuthEnv returns the askpass env only when a password is stored', () => {
-  setSshPassword('t-env-1', 'pw')
+  setSshPassword(spec('t-env-1'), 'pw')
   try {
     const env = sshAuthEnv(spec('t-env-1'))
     assert.ok(env !== null, 'a stored password yields an askpass env')
@@ -149,14 +151,45 @@ test('sshAuthEnv returns the askpass env only when a password is stored', () => 
     assert.ok(existsSync(env!.SSH_ASKPASS!), 'the helper exists before the spawn')
     assert.equal(sshAuthEnv(spec('t-env-2')), null, 'no stored password = key/agent auth (null env)')
   } finally {
-    setSshPassword('t-env-1', null)
+    setSshPassword(spec('t-env-1'), null)
     disposeSshAuth(spec('t-env-1'))
     disposeSshAuth(spec('t-env-2'))
   }
 })
 
+test('every askpass spawn requires the exact persisted host/user/sshPort owner', () => {
+  const owner = spec('t-owner-bound')
+  setSshPassword(owner, 'pw')
+  try {
+    assert.ok(sshAuthEnv(owner) !== null, 'the exact owner receives an askpass helper')
+    for (const changed of [
+      { ...owner, host: 'attacker.example.com' },
+      { ...owner, user: 'other-user' },
+      { ...owner, sshPort: 2222 },
+    ]) {
+      assert.equal(getSshPassword(changed), null)
+      assert.equal(sshAuthEnv(changed), null, 'a same-id endpoint edit cannot receive the old password')
+    }
+    const nonAuthenticationEdit: TransportInstanceSpec = {
+      ...owner,
+      label: 'renamed',
+      remotePort: 4080,
+      serviceName: 'other.service',
+      remoteDshHome: '/srv/dsh',
+    }
+    assert.equal(
+      getSshPassword(nonAuthenticationEdit),
+      'pw',
+      'non-authentication metadata is outside password ownership',
+    )
+  } finally {
+    setSshPassword(owner, null)
+    disposeSshAuth(owner)
+  }
+})
+
 test('disposeSshAuth deletes the ephemeral askpass helper', () => {
-  setSshPassword('t-env-3', 'pw')
+  setSshPassword(spec('t-env-3'), 'pw')
   try {
     const env = sshAuthEnv(spec('t-env-3'))
     assert.ok(env !== null && env!.SSH_ASKPASS !== undefined)
@@ -168,7 +201,7 @@ test('disposeSshAuth deletes the ephemeral askpass helper', () => {
     const next = sshAuthEnv(spec('t-env-3'))
     assert.ok(next !== null && next!.SSH_ASKPASS !== path, 'a fresh helper replaces the disposed one')
   } finally {
-    setSshPassword('t-env-3', null)
+    setSshPassword(spec('t-env-3'), null)
     disposeSshAuth(spec('t-env-3'))
   }
 })
@@ -182,24 +215,97 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
   const file = join(dir, 'ssh-passwords.json')
   try {
     assert.equal(configureSshPasswordStore(file), null, 'missing file = first run, no notice')
-    setSshPassword('t-file-1', 'pw-1')
-    setSshPassword('t-file-2', 'pw-2')
+    const firstOwner = spec('t-file-1')
+    const secondOwner = { ...spec('t-file-2'), host: 'second.example.com', user: null, sshPort: 2222 }
+    setSshPassword(firstOwner, 'pw-1')
+    setSshPassword(secondOwner, 'pw-2')
     assert.ok(existsSync(file), 'file is written on the first set')
     assert.equal(statSync(file).mode & 0o777, 0o600, 'password file is 0600')
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { passwords: Record<string, string> }
-    assert.equal(parsed.passwords['t-file-1'], 'pw-1')
-    assert.equal(parsed.passwords['t-file-2'], 'pw-2')
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+      schemaVersion: number
+      passwords: Record<string, { password: string; host: string; user: string | null; sshPort: number | null }>
+    }
+    assert.equal(parsed.schemaVersion, 2)
+    assert.deepEqual(parsed.passwords['t-file-1'], {
+      password: 'pw-1', host: 'h.example.com', user: 'u', sshPort: null,
+    })
+    assert.deepEqual(parsed.passwords['t-file-2'], {
+      password: 'pw-2', host: 'second.example.com', user: null, sshPort: 2222,
+    })
     // Simulate a restart: reconfigure away (clears the memory map), reload.
     configureSshPasswordStore(null)
-    assert.equal(getSshPassword('t-file-1'), null, 'memory cleared by reconfiguration')
+    assert.equal(getSshPassword(firstOwner), null, 'memory cleared by reconfiguration')
     assert.equal(configureSshPasswordStore(file), null, 'reload is clean')
-    assert.equal(getSshPassword('t-file-1'), 'pw-1', 'password survives a restart via the file')
-    assert.equal(getSshPassword('t-file-2'), 'pw-2')
+    assert.equal(getSshPassword(firstOwner), 'pw-1', 'password survives a restart via the file')
+    assert.equal(getSshPassword(secondOwner), 'pw-2')
+    assert.equal(
+      sshAuthEnv({ ...firstOwner, host: 'new-endpoint.example.com' }),
+      null,
+      'a registry/password crash split fails closed after restart instead of redirecting the old secret',
+    )
     // Explicit clear removes the entry from the file too.
-    setSshPassword('t-file-1', null)
-    const afterClear = JSON.parse(readFileSync(file, 'utf8')) as { passwords: Record<string, string> }
+    setSshPassword(firstOwner, null)
+    const afterClear = JSON.parse(readFileSync(file, 'utf8')) as { passwords: Record<string, unknown> }
     assert.equal(afterClear.passwords['t-file-1'], undefined, 'cleared entry leaves the file')
-    assert.equal(afterClear.passwords['t-file-2'], 'pw-2', 'other entries stay')
+    assert.deepEqual(afterClear.passwords['t-file-2'], parsed.passwords['t-file-2'], 'other entries stay')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('password-store load tightens a broad mode before reading owner-bound secrets', () => {
+  if (process.platform === 'win32') return
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    writeFileSync(file, JSON.stringify({
+      schemaVersion: 2,
+      passwords: {
+        't-owner-mode': { password: 'pw', host: 'h.example.com', user: 'u', sshPort: null },
+      },
+    }))
+    chmodSync(file, 0o644)
+    assert.equal(configureSshPasswordStore(file), null)
+    assert.equal(statSync(file).mode & 0o777, 0o600)
+    assert.equal(getSshPassword(spec('t-owner-mode')), 'pw')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('schema v1 passwords are preserved but loudly retired because they have no endpoint owner', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    writeFileSync(file, JSON.stringify({ schemaVersion: 1, passwords: { 't-v1': 'pw' } }), { mode: 0o600 })
+    const notice = configureSshPasswordStore(file)
+    assert.match(notice ?? '', /without endpoint ownership/)
+    assert.match(notice ?? '', /re-enter SSH passwords/)
+    assert.equal(existsSync(`${file}.v1-retired`), true, 'the old plaintext file is preserved for manual recovery')
+    assert.equal(getSshPassword(spec('t-v1')), null, 'an unowned legacy secret is never guessed onto the current registry')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('password-store load refuses symlinks instead of following them', () => {
+  if (process.platform === 'win32') return
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const target = join(dir, 'target.json')
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    writeFileSync(target, JSON.stringify({
+      schemaVersion: 2,
+      passwords: {
+        't-symlink': { password: 'pw', host: 'h.example.com', user: 'u', sshPort: null },
+      },
+    }), { mode: 0o600 })
+    symlinkSync(target, file)
+    assert.match(configureSshPasswordStore(file) ?? '', /cannot read|non-regular/)
+    assert.equal(getSshPassword(spec('t-symlink')), null)
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -214,7 +320,7 @@ test('password persistence tightens a pre-existing plaintext tmp file before rep
     configureSshPasswordStore(file)
     writeFileSync(tmp, 'stale plaintext')
     chmodSync(tmp, 0o644)
-    setSshPassword('t-mode', 'pw')
+    setSshPassword(spec('t-mode'), 'pw')
     assert.equal(statSync(file).mode & 0o777, 0o600, 'renamed password file is owner-only even when tmp existed as 0644')
   } finally {
     configureSshPasswordStore(null)
@@ -230,7 +336,7 @@ test('a corrupt password file is preserved as *.corrupt and fails loud, never si
     const notice = configureSshPasswordStore(file)
     assert.ok(notice !== null && notice.includes('.corrupt'), 'corrupt file reports loudly')
     assert.ok(existsSync(`${file}.corrupt`), 'corrupt file is preserved for forensics')
-    assert.equal(getSshPassword('anything'), null, 'store starts empty after a corrupt file')
+    assert.equal(getSshPassword(spec('anything')), null, 'store starts empty after a corrupt file')
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -241,11 +347,18 @@ test('a syntactically valid password file with an invalid schema is preserved an
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
   try {
-    writeFileSync(file, JSON.stringify({ schemaVersion: 1, passwords: { local: 'pw', 'bad/id': 'pw', valid: 42 } }))
+    writeFileSync(file, JSON.stringify({
+      schemaVersion: 2,
+      passwords: {
+        local: { password: 'pw', host: 'h.example.com', user: 'u', sshPort: null },
+        'bad/id': { password: 'pw', host: 'h.example.com', user: 'u', sshPort: null },
+        valid: 42,
+      },
+    }))
     const notice = configureSshPasswordStore(file)
     assert.ok(notice !== null && notice.includes('invalid password file'), 'invalid schema reports loudly')
     assert.ok(existsSync(`${file}.corrupt`), 'invalid file is preserved for forensics')
-    assert.equal(getSshPassword('valid'), null, 'no partial entries are published')
+    assert.equal(getSshPassword(spec('valid')), null, 'no partial entries are published')
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -259,22 +372,32 @@ test('password persistence failure rolls back memory and removes the plaintext t
   let secondHelper: string | null = null
   try {
     configureSshPasswordStore(file)
-    setSshPassword('t-rollback', 'old')
-    setSshPassword('t-rollback-2', 'old-2')
-    helper = sshAuthEnv(spec('t-rollback'))?.SSH_ASKPASS ?? null
-    secondHelper = sshAuthEnv(spec('t-rollback-2'))?.SSH_ASKPASS ?? null
+    const firstOwner = spec('t-rollback')
+    const secondOwner = spec('t-rollback-2')
+    setSshPassword(firstOwner, 'old')
+    setSshPassword(secondOwner, 'old-2')
+    helper = sshAuthEnv(firstOwner)?.SSH_ASKPASS ?? null
+    secondHelper = sshAuthEnv(secondOwner)?.SSH_ASKPASS ?? null
     assert.ok(helper !== null && existsSync(helper), 'old committed auth helper exists')
     assert.ok(secondHelper !== null && existsSync(secondHelper), 'second committed auth helper exists')
     // Replacing the target file with a directory makes the final atomic rename
     // fail after the tmp payload was written, deterministically across CI.
     rmSync(file)
     mkdirSync(file)
-    assert.throws(() => setSshPassword('t-rollback', 'new'))
-    assert.equal(getSshPassword('t-rollback'), 'old', 'failed update does not publish new memory state')
+    assert.throws(() => setSshPassword(firstOwner, 'new'))
+    assert.equal(getSshPassword(firstOwner), 'old', 'failed update does not publish new memory state')
     assert.equal(existsSync(`${file}.tmp`), false, 'failed update leaves no extra plaintext tmp')
+    const replacementOwner = { ...firstOwner, host: 'moved.example.com' }
+    assert.throws(() => updateSshPasswords(
+      ['t-rollback', 't-rollback-2'],
+      { owner: replacementOwner, password: 'replacement' },
+    ))
+    assert.equal(getSshPassword(firstOwner), 'old', 'failed combined update preserves the old owner secret')
+    assert.equal(getSshPassword(replacementOwner), null, 'failed combined update never publishes the replacement')
+    assert.equal(getSshPassword(secondOwner), 'old-2', 'failed combined update never partially retires another id')
     assert.throws(() => clearSshPasswords(['t-rollback', 't-rollback-2']))
-    assert.equal(getSshPassword('t-rollback'), 'old', 'failed clear does not erase live auth state')
-    assert.equal(getSshPassword('t-rollback-2'), 'old-2', 'multi-clear is all-or-nothing')
+    assert.equal(getSshPassword(firstOwner), 'old', 'failed clear does not erase live auth state')
+    assert.equal(getSshPassword(secondOwner), 'old-2', 'multi-clear is all-or-nothing')
     assert.equal(existsSync(helper!), true, 'failed clear preserves the helper used by in-flight ssh')
     assert.equal(existsSync(secondHelper!), true, 'failed batch clear preserves every helper')
   } finally {
@@ -285,33 +408,73 @@ test('password persistence failure rolls back memory and removes the plaintext t
   }
 })
 
-test('clearing an id with no stored password is a true no-op even when the store is unwritable', () => {
+test('password retirements and an endpoint replacement commit as one next map', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
   try {
     configureSshPasswordStore(file)
-    setSshPassword('t-kept', 'old')
-    rmSync(file)
-    mkdirSync(file)
-    assert.doesNotThrow(() => clearSshPasswords(['t-never-stored']))
-    assert.equal(getSshPassword('t-kept'), 'old')
+    const previousOwner = spec('t-replaced')
+    const retiredOwner = spec('t-retired')
+    const keptOwner = spec('t-kept')
+    setSshPassword(previousOwner, 'old')
+    setSshPassword(retiredOwner, 'retired')
+    setSshPassword(keptOwner, 'kept')
+    const replacementOwner = { ...previousOwner, host: 'moved.example.com', sshPort: 2222 }
+
+    updateSshPasswords(
+      ['t-replaced', 't-retired'],
+      { owner: replacementOwner, password: 'new' },
+    )
+
+    assert.equal(getSshPassword(previousOwner), null)
+    assert.equal(getSshPassword(replacementOwner), 'new')
+    assert.equal(getSshPassword(retiredOwner), null)
+    assert.equal(getSshPassword(keptOwner), 'kept')
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as { passwords: Record<string, { password: string; host: string }> }
+    assert.deepEqual(Object.keys(stored.passwords).sort(), ['t-kept', 't-replaced'])
+    assert.deepEqual(stored.passwords['t-replaced'], {
+      password: 'new',
+      host: 'moved.example.com',
+      user: 'u',
+      sshPort: 2222,
+    })
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('setSshPassword refuses reserved and non-whitelisted ids', () => {
-  assert.throws(() => setSshPassword('local', 'pw'), /invalid instance id/)
-  assert.throws(() => setSshPassword('../escape', 'pw'), /invalid instance id/)
+test('clearing an id with no stored password is a true no-op even when the store is unwritable', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    configureSshPasswordStore(file)
+    const keptOwner = spec('t-kept')
+    setSshPassword(keptOwner, 'old')
+    rmSync(file)
+    mkdirSync(file)
+    assert.doesNotThrow(() => clearSshPasswords(['t-never-stored']))
+    assert.equal(getSshPassword(keptOwner), 'old')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('setSshPassword refuses reserved ids and malformed authentication owners', () => {
+  assert.throws(() => setSshPassword(spec('local'), 'pw'), /invalid SSH owner/)
+  assert.throws(() => setSshPassword(spec('../escape'), 'pw'), /invalid SSH owner/)
+  assert.throws(() => setSshPassword({ ...spec('valid-owner'), host: '-oProxyCommand=evil' }, 'pw'), /invalid SSH owner/)
 })
 
 test('password and instance metadata limits are enforced in the provider', () => {
-  assert.throws(() => setSshPassword('t-too-long', 'x'.repeat(MAX_SSH_PASSWORD_CHARS + 1)), /longer/)
+  assert.throws(() => setSshPassword(spec('t-too-long'), 'x'.repeat(MAX_SSH_PASSWORD_CHARS + 1)), /longer/)
   assert.equal(sshProvider.validateSpec({ id: 'x'.repeat(65), label: 'h', host: 'h', remotePort: 3080 }), null)
   assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'x'.repeat(129), host: 'h', remotePort: 3080 }), null)
   assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'x'.repeat(254), remotePort: 3080 }), null)
   assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080, serviceName: 'x'.repeat(256) }), null)
+  assert.ok(sshProvider.validateSpec({ id: 'valid-template', label: 'h', host: 'h', remotePort: 3080, serviceName: 'dsh@worker.service' }) !== null)
+  assert.ok(sshProvider.validateSpec({ id: 'valid-colon', label: 'h', host: 'h', remotePort: 3080, serviceName: 'team:worker.service' }) !== null)
   assert.ok(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080 }) !== null)
 })
 
@@ -577,10 +740,10 @@ test('write-file: streams base64 over ssh stdin and verifies the read-back in th
   assert.ok(remote.files.get('~/.dsh-chamber/plugins/pkg-abc123.tgz')!.equals(content))
   assert.equal(remote.spawns.length, 2, 'one write spawn + one cat read-back spawn')
   assert.ok(remote.spawns[0].args[1].startsWith('mkdir -p ~/.dsh-chamber/plugins && base64 -d > '))
-  // The raw captured bytes ride the result; the string view is lossy (U+FFFD)
-  // for binary content — proving the byte-domain verification path.
-  assert.ok(result.stdoutBytes !== undefined && result.stdoutBytes.equals(content))
-  assert.ok(result.stdout!.includes('\uFFFD'), 'the UTF-8 view is lossy for binary content')
+  // Verification is a streaming digest. Successful write-file calls return
+  // status only instead of retaining/decoding a second copy of the payload.
+  assert.equal(result.stdoutBytes, undefined)
+  assert.equal(result.stdout, undefined)
 })
 
 test('write-file: a tampered read-back fails loud (never a fake success)', async () => {

@@ -4,16 +4,8 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 
 ## 目录
 
-- `main.ts` — Electron 主进程（薄引导）：单窗口单 frame（`loadURL` 控制面 origin）、窗口生命周期/退出清理（before-quit 确认、will-quit 并行回收 + 5s 强退）、wiring 装配
-- `wiring.ts` — 主进程纯决策函数（enqueueBounded / recordDeepLinkSeen / shouldDrainNotificationOpen / isLocalProcessRunning / isUpdateDownloadReady 等，`wiring.test.ts` 覆盖）
-- `ipc-ssh.ts` — transport-manager 创建/装载 + `desktop_ssh_*` 通道 + 状态推送监听 + 唤醒重探
-- `ipc-plugin-sync.ts` — 插件编排 `desktop_*_plugin_*` 通道 + 主进程确认对话框 + ready-time chamber host 包 seed
-- `ipc-settings.ts` — chamber 设置 holder（keep-awake / 登录自启副作用）+ `dsh-chamber:settings-*` 通道
-- `ipc-notifications.ts` — 桌面通知链 + `dsh-chamber:notify` 族通道 + pendingNotificationOpens 队列/drain
-- `ipc-update.ts` — 更新控制器接线 + `dsh-chamber:update-*` 通道 + open-release 白名单
-- `ipc-open-in.ts` — open-in 通道 + VS Code 上下文构建（`dsh-chamber:open-in*`）
-- `ipc-deep-link.ts` — `dsh-chamber://` 深链队列/去重 + 协议注册（`dsh-chamber:deep-link-intent`）
-- `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 ipc-surface-mirror.test.ts 字符串级守卫钉住）
+- `main.ts` — Electron 主进程的唯一装配与 IPC 注册入口：单窗口单 frame、transport/plugin/open-in/deep-link/通知/设置/更新接线，以及退出清理。避免并存一套未导入的 handler 实现。
+- `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 `ipc-surface-mirror.test.ts` 守卫）
 - `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/` 编译产物），导出 `createControlPlane` 与共享协议工具（rpc-envelope / cordis-inserts）
 - `updater.ts` — 更新控制器（设计 11）：electron-updater（github provider）静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
@@ -111,7 +103,7 @@ pnpm run dist:desktop
 - stdout/stderr 按完整行缓冲后脱敏 + 终态认证判定（跨 chunk 不绕过）；未终止行
   64Ki 字符上限，超限整行 fail-closed 丢弃并记固定摘要；远端 run stdout 总量
   50MiB、失败 stderr detail 2048 字符上限；每实例环形日志约 200 行。
-- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。新增/编辑统一先提交并核验权威注册表，再写密码；注册表拒绝时密码不动，密码失败则把注册表回滚到提交前完整快照；回滚返回值同样核验，回滚被静默拒绝或 IPC 异常时重新读取权威注册表，避免把半提交的新主机再次按新增提交。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
+- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：新增/编辑把瞬时 replacement password 作为 `desktop_ssh_instances_set` 的可选第二参数，与注册表变更一次交给主进程；显式清除仍走 `desktop_ssh_set_password`。密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。主进程先校验完整归一化 registry/replacement owner，持久化 registry 后用一次密码 map 写同时完成旧 owner 退役与 replacement；secret 成功后才发布内存 registry 并重启 transport。secret 失败则同步恢复旧 registry，旧运行态/旧 secret 不变；owner binding 使两文件之间崩溃仍 fail closed。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
 
 ### 实例注册表
 
@@ -134,7 +126,7 @@ pnpm run dist:desktop
 |---|---|---|
 | `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform}`（不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
-| `desktop_ssh_instances_set` | invoke | 持久化新实例集（原子写） |
+| `desktop_ssh_instances_set` | invoke | 持久化新实例集；可选 `{id,password}` 与 owner 退役在主进程提交屏障内一次提交，secret 就绪后才重启 transport |
 | `desktop_ssh_set_password` | invoke | SSH 密码（05 §8 例外）：内存 + `ssh-passwords.json` 明文镜像（0600 原子写），`{id, password}`，'' / null 清除；未知 id 或平台不支持 → `{error}` |
 | `desktop_ssh_config_list` | invoke | `~/.ssh/config` 非秘密投影 `{hosts:[{alias,hostName,user,port}]}` 或 `{error}` |
 | `desktop_ssh_connect` | invoke | 启动/重启隧道 |

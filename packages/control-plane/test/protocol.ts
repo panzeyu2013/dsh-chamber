@@ -13,7 +13,13 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { call, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
+import {
+  call,
+  MAX_UNARY_RESPONSE_BYTES,
+  RpcBusinessError,
+  RpcTransportError,
+  pendingStats,
+} from '../src/dsh-client.ts'
 import { createLocalConnection } from '../src/local-connection.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { seedDshHomeDefaults } from '../src/index.ts'
@@ -80,6 +86,23 @@ test('call echoes the minted rpcId and resolves the narrow form', async () => {
     const response = await call(HOST, 'session.list', {})
     assert.equal(response.rpcId, sent.rpcId)
     assert.deepEqual(response.result.value, { items: [] })
+    assert.equal(pendingStats().size, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('call rejects an oversized runtime envelope under a fixed byte cap', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response('x'.repeat(MAX_UNARY_RESPONSE_BYTES + 1), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+  try {
+    await assert.rejects(call(HOST, 'host.describe', {}), error =>
+      error instanceof RpcTransportError
+      && error.code === 'response_too_large'
+      && error.status === 200)
     assert.equal(pendingStats().size, 0)
   } finally {
     globalThis.fetch = originalFetch
@@ -170,14 +193,15 @@ test('generation abort during response-body read is not misclassified as a proto
   const bodyStarted = deferred<void>()
   const generation = new AbortController()
   globalThis.fetch = async (_url, init) => {
-    return {
-      ok: true,
-      status: 200,
-      json: () => new Promise((_resolve, reject) => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
         bodyStarted.resolve()
-        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
-      }),
-    } as Response
+        init?.signal?.addEventListener('abort', () => {
+          controller.error(new DOMException('Aborted', 'AbortError'))
+        }, { once: true })
+      },
+    })
+    return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
   }
   try {
     const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
@@ -194,25 +218,27 @@ test('generation abort during response-body read is not misclassified as a proto
 test('a body completing after generation abort is never accepted as a live response', async () => {
   const originalFetch = globalThis.fetch
   const bodyStarted = deferred<void>()
-  const body = deferred<unknown>()
   const generation = new AbortController()
+  let bodyController!: ReadableStreamDefaultController<Uint8Array>
   let rpcId = ''
   globalThis.fetch = async (_url, init) => {
     rpcId = JSON.parse(init!.body as string).rpcId
-    return {
-      ok: true,
-      status: 200,
-      json: async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller
         bodyStarted.resolve()
-        return body.promise
       },
-    } as Response
+    })
+    return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
   }
   try {
     const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
     await bodyStarted.promise
     generation.abort()
-    body.resolve({ type: 'server-response', rpcId, result: { ok: true, value: {} } })
+    bodyController.enqueue(new TextEncoder().encode(JSON.stringify({
+      type: 'server-response', rpcId, result: { ok: true, value: {} },
+    })))
+    bodyController.close()
     await assert.rejects(attempt, error =>
       error instanceof RpcTransportError && error.code === 'connection_offline' && error.status === 0)
     assert.equal(pendingStats().size, 0)

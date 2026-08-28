@@ -14,9 +14,10 @@
  * imports, no Node globals. Every value is non-secret: tunnel URLs and SSH
  * material never cross this module.
  *
- * The base URL is the single frontend source for the loopback default
- * (B1-fe): the injected `window.dshChamber.controlPlaneUrl` wins, else
- * DEFAULT_CONTROL_PLANE_URL.
+ * The page's own origin is authoritative: the shell itself is served by the
+ * control plane, so REST and SSE must not wait for the asynchronous preload
+ * bridge before learning a dev/overridden port. The injected URL and fixed
+ * default remain fallbacks for non-page harnesses only.
  */
 
 /** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
@@ -45,8 +46,9 @@ interface ControlPlaneBridgeSlot {
 }
 
 export function controlPlaneUrl(): string {
+  const pageOrigin = window.location?.origin
   const injected = (window as ControlPlaneBridgeSlot).dshChamber?.controlPlaneUrl
-  return String(injected || DEFAULT_CONTROL_PLANE_URL).replace(/\/+$/, '')
+  return String(pageOrigin || injected || DEFAULT_CONTROL_PLANE_URL).replace(/\/+$/, '')
 }
 
 export interface RequestOptions {

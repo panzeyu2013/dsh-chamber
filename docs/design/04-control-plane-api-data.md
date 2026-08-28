@@ -62,6 +62,13 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 - 控制面在 `/` 服务 dsh 官方前端构建产物（dist/）并注入启动图清单
   （§5）；静态壳匿名加载。
 
+- renderer 的管理 REST/SSE 基址以当前 shell 的 `window.location.origin` 为权威；
+  preload 异步注入的 `controlPlaneUrl` 只作非页面 harness 回退。这样 dev 端口或
+  `DSH_CHAMBER_CP_PORT` 覆盖在首个 effect 即生效，不会先连固定 17500，也无需桥水合后
+  重建 EventSource。
+- 静态 gzip 先做协商再读文件：缓存命中直接返回压缩 Buffer，miss 只读一次后压缩并
+  入有界 cache；identity 仍只读一次，避免命中时无用分配原文件、miss 时重复读取。
+
 ### D5 · 反代 = 与 03 共享定义
 
 - 契约定义于 03 §3；本文 §4 只补 HTTP 形状（路径 / 方法 / 错误码），

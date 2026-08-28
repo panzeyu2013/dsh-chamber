@@ -1,6 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { filterServerRows, serverDropdownPlacement, serverProjectionSignature } from '../src/client/server-selector.ts'
+import {
+  filterServerRows,
+  serverDropdownPlacement,
+  serverProjectionSignature,
+  sourceFingerprintIsCurrent,
+  staleOwnedSessionIds,
+} from '../src/client/server-selector.ts'
 
 const rows = [
   { id: 'local', label: '本地实例' },
@@ -35,6 +41,7 @@ test('portal placement shrinks to a tiny viewport instead of overflowing it', ()
 test('settings roster signature tracks rendered pluginId but ignores timestamp-only changes', () => {
   const base = {
     id: 'ssh-alpha', kind: 'ssh' as const, label: 'Alpha', connected: true, phase: 'ready',
+    sourceFingerprint: 'proof-a',
     pluginDiagnostic: { state: 'bundle-load-failed', message: 'load failed', pluginId: 'plugin-a' },
   }
   const signature = serverProjectionSignature([{ ...base, updatedAt: 1 }])
@@ -42,14 +49,45 @@ test('settings roster signature tracks rendered pluginId but ignores timestamp-o
   assert.notEqual(signature, serverProjectionSignature([{
     ...base, pluginDiagnostic: { ...base.pluginDiagnostic, pluginId: 'plugin-b' }, updatedAt: 2,
   }]))
+  assert.notEqual(signature, serverProjectionSignature([{
+    ...base, sourceFingerprint: 'proof-b', updatedAt: 2,
+  }]))
 })
 
 test('settings roster signature cannot collide through separator-like user text', () => {
   const row = (id: string, label: string) => ({
-    id, kind: 'ssh' as const, label, connected: true, phase: 'ready',
+    id, sourceFingerprint: 'proof', kind: 'ssh' as const, label, connected: true, phase: 'ready',
   })
   assert.notEqual(
     serverProjectionSignature([row('a', 'b\u0000ssh\nnext')]),
     serverProjectionSignature([row('a\u0000b', 'ssh\nnext')]),
   )
+})
+
+test('source-owned settings sessions retire on replacement or deletion', () => {
+  const sessions = {
+    local: { sourceFingerprint: 'local' },
+    'ssh-stable': { sourceFingerprint: 'proof-stable' },
+    'ssh-replaced': { sourceFingerprint: 'proof-old' },
+    'ssh-deleted': { sourceFingerprint: 'proof-deleted' },
+  }
+  const roster = [
+    { id: 'local', sourceFingerprint: 'local' },
+    { id: 'ssh-stable', sourceFingerprint: 'proof-stable' },
+    { id: 'ssh-replaced', sourceFingerprint: 'proof-new' },
+  ]
+
+  assert.deepEqual(staleOwnedSessionIds(sessions, roster), ['ssh-replaced', 'ssh-deleted'])
+})
+
+test('a late mount can commit only while its captured source proof is still current', () => {
+  const roster = [
+    { id: 'local', sourceFingerprint: 'local' },
+    { id: 'ssh-stable', sourceFingerprint: 'proof-stable' },
+    { id: 'ssh-replaced', sourceFingerprint: 'proof-new' },
+  ]
+
+  assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-stable', 'proof-stable'), true)
+  assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-replaced', 'proof-old'), false)
+  assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-deleted', 'proof-deleted'), false)
 })

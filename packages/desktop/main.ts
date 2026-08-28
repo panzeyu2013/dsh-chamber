@@ -28,7 +28,6 @@
  */
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
-import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,10 +37,13 @@ import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetired
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
+import { prepareRegistryPasswordCommit } from './registry-password-commit.ts';
+import type { RegistryPasswordSubmission } from './registry-password-commit.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
-import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
+import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported, updateSshPasswords } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
-import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { createTrustedIpc, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { createControlPlane } from './control-plane-module.ts';
 import {
   attemptDeepLinkProtocolRegistration,
   BoundedAckDeliveryQueue,
@@ -57,7 +59,7 @@ import {
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
 import { classifyLocalPath, invokeOpenPath, listOpenInApps, runOpenInLaunch } from './open-in.ts';
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
-import { createUpdateController } from './updater.ts';
+import { createUpdateController, openReleasePage } from './updater.ts';
 import {
   applyPlugins,
   CLIENT_GRAPH_INSERT_ID,
@@ -177,17 +179,6 @@ const pkgDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(pkgDir, '..', '..');
 const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
 
-// 打包态导入编译产物（Node 类型擦除不覆盖 node_modules，workspace 包的 TS
-// 源码无法在 asar 内运行）；开发态走 workspace 符号链接直接运行源码。类型
-// 以源码包为准（编译产物由 build:control-plane 生成，产物缺省时类型检查不
-// 可依赖它）。
-const CONTROL_PLANE_ENTRY = path.join(pkgDir, 'dist', 'control-plane', 'index.js');
-const controlPlaneEntrySpecifier = './dist/control-plane/index.js';
-const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (app.isPackaged
-  ? import(controlPlaneEntrySpecifier)
-  : import('@dsh-chamber/control-plane'));
-const { createControlPlane } = controlPlaneModule;
-
 function resolveDshWorkspace(): string | null {
   if (process.env.DSH_CHAMBER_DSH_PATH) {
     return process.env.DSH_CHAMBER_DSH_PATH;
@@ -219,35 +210,6 @@ function readDshVersion(workspace: string | null): string | null {
     return manifest.dependencies?.['@deepseek-ai/dsh'] ?? null;
   } catch {
     return null;
-  }
-}
-
-/**
- * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
- * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
- * startsWith string check) so scheme/host/path-root are pinned exactly.
- *
- * Two extra defenses (2026-08 review):
- * - `new URL` does NOT decode percent-encoded path segments, so an encoded
- *   `..%2f..%2f` traversal would pass a raw pathname prefix check yet land on
- *   an arbitrary github.com path (the browser decodes on request). Decode the
- *   pathname and re-normalize through a fresh URL before the prefix check.
- * - userinfo (`https://user:pass@github.com/...`) is ignored by `origin`;
- *   reject any non-empty username/password so the allowlist can never be
- *   pointed at a credentialed github.com URL.
- */
-function isAllowedReleaseUrl(raw: unknown): boolean {
-  if (typeof raw !== 'string') return false;
-  try {
-    const url = new URL(raw);
-    if (url.origin !== 'https://github.com') return false;
-    if (url.username !== '' || url.password !== '') return false;
-    // Decode + re-normalize the pathname: an encoded traversal then normalizes
-    // like a literal one and fails the prefix check instead of escaping it.
-    const normalized = new URL(`https://github.com${decodeURIComponent(url.pathname)}`).pathname;
-    return normalized.startsWith('/panzeyu2013/dsh-chamber/');
-  } catch {
-    return false;
   }
 }
 
@@ -1286,29 +1248,19 @@ if (!gotTheLock) {
       return;
     }
 
-    if (app.isPackaged && !existsSync(CONTROL_PLANE_ENTRY)) {
-      dialog.showErrorBox(
-        'dsh-chamber 启动失败',
-        `未找到控制面编译产物：${CONTROL_PLANE_ENTRY}\n请先执行 pnpm --filter @dsh-chamber/desktop run build:control-plane`,
-      );
-      app.exit(1);
-      return;
-    }
-
     // Capture the non-null control plane before registering closures over it
     // (the handler runs later, after startup).
     const cp = controlPlane;
     const rendererOrigin = `http://127.0.0.1:${cp.port}`;
-    const trustedIpc = (handler: (...args: any[]) => any) =>
-      (event: IpcMainInvokeEvent, ...args: any[]) => {
+    const trustedIpc = createTrustedIpc({
+      isTrustedSender: event => {
         const win = mainWindow;
-        if (win === null || win.isDestroyed() || !isTrustedIpcSender(event, win.webContents, rendererOrigin)) {
-          const error = new Error('forbidden IPC sender') as Error & { code?: string };
-          error.code = 'ipc_sender_forbidden';
-          throw error;
-        }
-        return handler(...args);
-      };
+        return win !== null
+          && !win.isDestroyed()
+          && isTrustedIpcSender(event, win.webContents, rendererOrigin);
+      },
+      isQuitting: () => quitRequested,
+    });
     ipcMain.handle(IPC_CHANNELS.INFO, trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
       dshVersion: readDshVersion(dshWorkspace),
@@ -1648,9 +1600,34 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle(IPC_CHANNELS.SSH_INSTANCES_GET, trustedIpc(() => projectRemoteInstances(sm.listInstances())));
-    ipcMain.handle(IPC_CHANNELS.SSH_INSTANCES_SET, trustedIpc((instances) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_INSTANCES_SET, trustedIpc((instances, passwordInput) => {
       const before = sm.listInstances();
-      const saved = sm.saveInstances(instances);
+      let passwordSubmission: RegistryPasswordSubmission | undefined;
+      if (passwordInput !== undefined) {
+        if (passwordInput === null || typeof passwordInput !== 'object' || Array.isArray(passwordInput)) {
+          throw new Error('password submission must be an object');
+        }
+        const candidate = passwordInput as Record<string, unknown>;
+        if (typeof candidate.id !== 'string' || !INSTANCE_ID_PATTERN.test(candidate.id)) {
+          throw new Error('password submission has an invalid instance id');
+        }
+        if (typeof candidate.password !== 'string' || candidate.password.length === 0) {
+          throw new Error('replacement password must be a non-empty string');
+        }
+        if (candidate.password.length > MAX_SSH_PASSWORD_CHARS) {
+          throw new Error(`SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters`);
+        }
+        if (!sshPasswordSupported()) {
+          throw new Error('SSH password auth is not supported on this platform yet — use a key or ssh-agent');
+        }
+        passwordSubmission = { id: candidate.id, password: candidate.password };
+      }
+      const saved = sm.saveInstances(instances, next => prepareRegistryPasswordCommit(
+        before,
+        next,
+        passwordSubmission,
+        { update: updateSshPasswords },
+      ));
       const projectedSaved = projectRemoteInstances(saved);
       const removedIds = computeRemovedInstanceIds(before, saved);
       const retiredIds = computeRetiredInstanceIds(before, saved);
@@ -1676,11 +1653,6 @@ if (!gotTheLock) {
           activeNotifications.delete(notification);
           try { notification.close(); } catch { /* best-effort stale banner retirement */ }
         }
-      }
-      // A removed instance's in-memory password dies with its registry entry
-      // (memory-only credentials never outlive the instance they belong to).
-      for (const { id } of before) {
-        if (!saved.some(instance => instance.id === id)) setSshPassword(id, null);
       }
       // service/home-only edits intentionally preserve a ready tunnel, so no
       // new status transition will trigger the ready-time seed. Start the new
@@ -1714,7 +1686,10 @@ if (!gotTheLock) {
     // not reliable, so Windows refuses password auth loudly (keys/agent
     // remain the universal path) instead of silently failing at connect time.
     ipcMain.handle(IPC_CHANNELS.SSH_SET_PASSWORD, trustedIpc(({ id, password }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
+      const owner = typeof id === 'string' && INSTANCE_ID_PATTERN.test(id)
+        ? sm.listInstances().find(instance => instance.id === id)
+        : undefined;
+      if (owner === undefined) {
         return { error: 'invalid or unknown instance id' };
       }
       if (!sshPasswordSupported()) {
@@ -1724,7 +1699,10 @@ if (!gotTheLock) {
         return { error: `SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters` };
       }
       try {
-        setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
+        // Bind the secret to the exact authoritative authentication peer. The
+        // password store checks this tuple again immediately before every ssh
+        // spawn, closing the registry/password cross-file crash window.
+        setSshPassword(owner, typeof password === 'string' && password !== '' ? password : null);
         return { ok: true };
       } catch (error) {
         return { error: describeUnknownError(error) };
@@ -2084,13 +2062,8 @@ if (!gotTheLock) {
     // page must go through the main process. Strict allowlist — parsed, not
     // prefix-string matched: only this repo's GitHub pages can ever be opened
     // (never an arbitrary URL, subdomain, userinfo or path-root trick).
-    ipcMain.handle(IPC_CHANNELS.OPEN_RELEASE, trustedIpc(({ url }) => {
-      if (!isAllowedReleaseUrl(url)) {
-        return { ok: false, error: 'url not allowed' };
-      }
-      void shell.openExternal(url).catch(err => console.error('[dsh-chamber] 打开下载页失败：', err));
-      return { ok: true };
-    }));
+    ipcMain.handle(IPC_CHANNELS.OPEN_RELEASE, trustedIpc(({ url }) =>
+      openReleasePage(url, value => shell.openExternal(value))));
     updater.start();
 
     // Single frame, single origin: the control plane serves the built dsh

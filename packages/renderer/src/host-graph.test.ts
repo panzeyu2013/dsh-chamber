@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  collectExtraRows, dedupeHostEntries, fetchHostGraph, toExtraRows,
+  BundleLoadTimeoutError, collectExtraRows, dedupeHostEntries, fetchHostGraph, toExtraRows,
   type ExtraModuleRow, type HostGraphRow,
 } from './host-graph.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
@@ -180,6 +180,54 @@ test('collectExtraRows: a shared concurrent rejection fails every waiter and rem
     assert.ok(results.every(result => result.status === 'rejected'))
     shouldFail = false
     await collectExtraRows('failure-retry', '/api/i/local', { loadModuleBundle })
+    assert.equal(loads, 2)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: a timed-out script is not duplicated and a late load converges to success', async () => {
+  const id = '@scope/late-timeout-tombstone'
+  const stub = stubFetch(200, envelope([row(id)]))
+  let loads = 0
+  let settleOutcome!: (loaded: boolean) => void
+  const bundleOutcome = new Promise<boolean>(resolve => { settleOutcome = resolve })
+  const timeout = new BundleLoadTimeoutError('bundle timed out', bundleOutcome)
+  const loadModuleBundle = async (): Promise<void> => {
+    loads += 1
+    throw timeout
+  }
+  try {
+    await assert.rejects(collectExtraRows('timeout-a', '/api/i/local', { loadModuleBundle }), /timed out/)
+    await assert.rejects(collectExtraRows('timeout-b', '/api/i/ssh-b', { loadModuleBundle }), /timed out/)
+    assert.equal(loads, 1, 'a second source must reuse the tombstone, not execute another URL')
+    settleOutcome(true)
+    await bundleOutcome
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await collectExtraRows('timeout-recovered', '/api/i/local', { loadModuleBundle })
+    assert.equal(loads, 1, 'the late script registered the factory; recovery must reuse it')
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: a timed-out script that later errors becomes retryable', async () => {
+  const id = '@scope/late-timeout-error'
+  const stub = stubFetch(200, envelope([row(id)]))
+  let loads = 0
+  let settleOutcome!: (loaded: boolean) => void
+  const bundleOutcome = new Promise<boolean>(resolve => { settleOutcome = resolve })
+  const timeout = new BundleLoadTimeoutError('bundle timed out', bundleOutcome)
+  const loadModuleBundle = async (): Promise<void> => {
+    loads += 1
+    if (loads === 1) throw timeout
+  }
+  try {
+    await assert.rejects(collectExtraRows('timeout-error-a', '/api/i/local', { loadModuleBundle }), /timed out/)
+    settleOutcome(false)
+    await bundleOutcome
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await collectExtraRows('timeout-error-retry', '/api/i/local', { loadModuleBundle })
     assert.equal(loads, 2)
   } finally {
     stub.restore()

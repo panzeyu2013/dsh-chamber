@@ -46,7 +46,12 @@ import {
 } from './mount-retry.ts'
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import css from './SettingsShell.module.css'
-import { filterServerRows, serverDropdownPlacement } from './server-selector.ts'
+import {
+  filterServerRows,
+  serverDropdownPlacement,
+  sourceFingerprintIsCurrent,
+  staleOwnedSessionIds,
+} from './server-selector.ts'
 
 /** Registration-side business face for the chamber settings shell. */
 export interface SettingsShellInjected {
@@ -68,15 +73,27 @@ const LOCAL_INSTANCE_ID = 'local'
 
 /**
  * Per-selection session-mount retry ledger: `failures` counts consecutive
- * child-ctx mount rejections for selection `id` (0 = none; '' = no
- * selection). The id binding gives a selection switch (or panel reopen) a
- * FRESH budget even when the previous server burned its attempts; the
- * schedule itself lives in mount-retry.ts (bounded backoff, ~15s worst-case
- * wait, fail-loud at the bound).
+ * child-ctx mount rejections for one `(id, sourceFingerprint)` owner (0 =
+ * none; empty strings = no selection). The source-incarnation binding gives
+ * both a selection switch and a same-id replacement a FRESH budget even when
+ * the previous owner burned its attempts; the schedule itself lives in
+ * mount-retry.ts (bounded backoff, ~15s worst-case wait, fail-loud at the
+ * bound).
  */
 interface MountRetryLedger {
   id: string
+  sourceFingerprint: string
   failures: number
+}
+
+function resetMountRetryLedger(
+  current: MountRetryLedger,
+  id: string,
+  sourceFingerprint: string,
+): MountRetryLedger {
+  return current.id === id && current.sourceFingerprint === sourceFingerprint && current.failures === 0
+    ? current
+    : { id, sourceFingerprint, failures: 0 }
 }
 
 /** Nav glyph by section id; unknown ids fall back to the settings gear (official mirror). */
@@ -328,10 +345,15 @@ function SettingsPanel({
   const closeButton = useRef<HTMLButtonElement | null>(null)
   useEffect(() => { closeButton.current?.focus() }, [])
 
-  // The selected server's session (its child ctx keeps a per-server cache —
-  // repeat switches are instant; an uncached switch shows the loading
-  // intermediate state immediately instead of stale content).
-  const selectedSession = selectedId === undefined ? undefined : sessions[selectedId]
+  const selected = servers.find(server => server.id === selectedId)
+  // A cache row is renderable only for the exact authoritative source
+  // incarnation. The passive cleanup below disposes stale rows, but this
+  // synchronous render guard prevents even one frame of old settings from
+  // appearing after a same-id replacement.
+  const selectedCandidate = selectedId === undefined ? undefined : sessions[selectedId]
+  const selectedSession = selectedCandidate?.sourceFingerprint === selected?.sourceFingerprint
+    ? selectedCandidate
+    : undefined
 
   // The selected server's section ledger, live while the panel is open.
   // Stable subscribe/getSnapshot closures per session (no resubscribe churn
@@ -352,7 +374,6 @@ function SettingsPanel({
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
   const active = resolveActiveSection(activeId, rows)
-  const selected = servers.find(server => server.id === selectedId)
   // Per-source client-plugin runtime diagnostics, keyed by source id
   // ('local' | 'ssh-<id>'), handed to the chamber-global connections surface.
   // The diagnostic is a chamber-owned fact (design 09) and belongs in the
@@ -470,7 +491,7 @@ function SettingsPanel({
               </div>
             ) : sessionError !== null ? (
               <p className={css.placeholder}>{sessionError}</p>
-            ) : sessions[selectedId] !== undefined ? (
+            ) : selectedSession !== undefined ? (
               /* The selected server's own session: normal content, keyed by
                  server so a server switch remounts the wrapper and replays
                  the fade-in. */
@@ -491,8 +512,8 @@ function SettingsPanel({
                         shell (falling back to the official SettingsRoot). */}
                     <BridgeEntryBoundary containAll slotKey="settings.section">
                       <BridgeOutlet
-                        slots={sessions[selectedId].slots}
-                        locale={sessions[selectedId].locale}
+                        slots={selectedSession.slots}
+                        locale={selectedSession.locale}
                         slotKey="settings.section"
                         ownerProps={{ close: onClose }}
                         opts={{ only: active }}
@@ -535,16 +556,20 @@ export function SettingsShell(props: SettingsShellProps) {
   const [servers, setServers] = useState<BridgeServerRow[]>(() => getServers())
   const [selectedId, setSelectedId] = useState<string | undefined>(() =>
     defaultSelection(getServers(), chamberInstanceId))
-  // Per-server child ctx cache (keep-alive while the panel is open): repeat
-  // switches to a visited server are instant (no re-assembly, no re-read).
+  // Per-source-incarnation child ctx cache (keep-alive while the panel is
+  // open): repeat switches to the same `(id, proof)` owner are instant.
   const [sessions, setSessions] = useState<Record<string, BridgeSession>>({})
   const sessionsRef = useRef<Record<string, BridgeSession>>({})
+  // Updated during render so a Promise that settles before passive-effect
+  // cleanup still cannot commit against a superseded roster proof.
+  const serversRef = useRef<BridgeServerRow[]>(servers)
+  serversRef.current = servers
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [retryNonce, setRetryNonce] = useState(0)
   // Auto-retry ledger for the CURRENT selection's session mount (bounded
   // backoff — see MountRetryLedger / mount-retry.ts). Bumping the state
   // re-runs the mount effect, which re-attempts the SAME mount path.
-  const [mountRetry, setMountRetry] = useState<MountRetryLedger>({ id: '', failures: 0 })
+  const [mountRetry, setMountRetry] = useState<MountRetryLedger>({ id: '', sourceFingerprint: '', failures: 0 })
 
   useEffect(() => subscribeServers(() => setServers(getServers())), [])
 
@@ -563,6 +588,7 @@ export function SettingsShell(props: SettingsShellProps) {
   // server's ledger falls back to its first row via the derived `active`.
   const selected = servers.find(server => server.id === selectedId)
   const selectedConnected = selected?.connected ?? false
+  const selectedSourceFingerprint = selected?.sourceFingerprint
 
   // Child ctx keep-alive: sessions assemble lazily per server while the
   // panel is open; closing (or an unreachable target) releases everything.
@@ -579,17 +605,36 @@ export function SettingsShell(props: SettingsShellProps) {
   // never leak child contexts outside the panel lifetime.
   useEffect(() => () => { releaseAllSessions() }, [releaseAllSessions])
 
+  // Cache ownership follows the authoritative roster, not the stable source
+  // id. Delete/re-add and transport-identity edits can replace a source under
+  // the same id; retire every affected child ctx (including unselected cache
+  // rows) before it can be reused by the replacement.
   useEffect(() => {
-    if (!open || selectedId === undefined) {
+    const staleIds = staleOwnedSessionIds(sessionsRef.current, servers)
+    if (staleIds.length === 0) return
+    const next = { ...sessionsRef.current }
+    for (const sourceId of staleIds) {
+      const stale = next[sourceId]
+      delete next[sourceId]
+      if (stale !== undefined) void stale.dispose().catch(() => {})
+    }
+    sessionsRef.current = next
+    setSessions(next)
+  }, [servers])
+
+  useEffect(() => {
+    if (!open || selectedId === undefined || selectedSourceFingerprint === undefined) {
       // Panel closed (or the selection is being re-anchored): release every
       // child ctx and clear the projection-facing state. The retry ledger
       // resets too — a reopen is a fresh context (no-op when already reset).
       releaseAllSessions()
       setSessions({})
       setSessionError(null)
-      setMountRetry(current => current.id === selectedId && current.failures === 0
-        ? current
-        : { id: selectedId ?? '', failures: 0 })
+      setMountRetry(current => resetMountRetryLedger(
+        current,
+        selectedId ?? '',
+        selectedSourceFingerprint ?? '',
+      ))
       return
     }
     if (!selectedConnected) {
@@ -607,42 +652,62 @@ export function SettingsShell(props: SettingsShellProps) {
         void dropped.dispose().catch(() => {})
       }
       setSessionError(null)
-      setMountRetry(current => current.id === selectedId && current.failures === 0
-        ? current
-        : { id: selectedId, failures: 0 })
+      setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
       return
     }
     // Already mounted for this selection: nothing to do (cache hit) — but
     // clear any error left by a PREVIOUS server's failed mount so the
     // cached content is never shadowed by a foreign error. The ledger resets
     // as well (content is live again: any later failure starts fresh).
-    if (sessionsRef.current[selectedId] !== undefined) {
+    const cached = sessionsRef.current[selectedId]
+    if (cached !== undefined && cached.sourceFingerprint === selectedSourceFingerprint) {
       setSessionError(null)
-      setMountRetry(current => current.id === selectedId && current.failures === 0
-        ? current
-        : { id: selectedId, failures: 0 })
+      setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
       return
+    }
+    // Defense in depth for the interval before the roster-sweep effect has
+    // published its filtered cache state.
+    if (cached !== undefined) {
+      const next = { ...sessionsRef.current }
+      delete next[selectedId]
+      sessionsRef.current = next
+      setSessions(next)
+      void cached.dispose().catch(() => {})
     }
     let cancelled = false
     // Explicit DOM timer id: `ReturnType<typeof window.setTimeout>` picks the
     // node global overload via the `Window & typeof globalThis` intersection.
     let retryTimer: number | undefined
     setSessionError(null)
-    mountBridgeSession(selectedId).then((mounted) => {
-      if (cancelled) {
+    mountBridgeSession(selectedId, selectedSourceFingerprint).then((mounted) => {
+      const currentServer = serversRef.current.find(server => server.id === selectedId)
+      if (
+        cancelled
+        || !sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
+        || currentServer?.connected !== true
+      ) {
         void mounted.dispose().catch(() => {})
         return
       }
+      // A newer same-owner attempt may already have filled the cache. Never
+      // let a later-settling Promise overwrite that committed child ctx.
+      const incumbent = sessionsRef.current[selectedId]
+      if (incumbent !== undefined && incumbent.sourceFingerprint === selectedSourceFingerprint) {
+        void mounted.dispose().catch(() => {})
+        return
+      }
+      if (incumbent !== undefined) void incumbent.dispose().catch(() => {})
       sessionsRef.current = { ...sessionsRef.current, [selectedId]: mounted }
       setSessions(sessionsRef.current)
       // Mount succeeded: reset the retry ledger (no-op when already reset) —
       // a LATER failure starts a fresh budget instead of inheriting this
       // one's burned attempts.
-      setMountRetry(current => current.id === selectedId && current.failures === 0
-        ? current
-        : { id: selectedId, failures: 0 })
+      setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
     }).catch((error: unknown) => {
-      if (cancelled) return
+      if (
+        cancelled
+        || !sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
+      ) return
       setSessionError(errorMessage(error))
       // Bounded-backoff auto-retry of the SAME mount path (issue 6 彻底修复,
       // W2 residual gap P2): a transient not-ready burst (the selected host
@@ -656,7 +721,10 @@ export function SettingsShell(props: SettingsShellProps) {
       // total attempts), so a genuinely dead target still fails loud. Every
       // exit path — success, unmount, panel close, selection change,
       // connection transition — clears the pending timer (cleanup below).
-      const failures = mountRetry.id === selectedId ? mountRetry.failures + 1 : 1
+      const failures = mountRetry.id === selectedId
+        && mountRetry.sourceFingerprint === selectedSourceFingerprint
+        ? mountRetry.failures + 1
+        : 1
       const delay = nextMountRetryDelayMs(failures)
       if (delay !== null) {
         retryTimer = window.setTimeout(() => {
@@ -664,7 +732,12 @@ export function SettingsShell(props: SettingsShellProps) {
           // → the SAME mount path is re-attempted. The ledger read in the
           // NEXT catch is this bumped value, so the backoff advances
           // 1s → 2s → 4s → 8s across consecutive failures.
-          if (!cancelled) setMountRetry({ id: selectedId, failures })
+          if (
+            !cancelled
+            && sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
+          ) {
+            setMountRetry({ id: selectedId, sourceFingerprint: selectedSourceFingerprint, failures })
+          }
         }, delay)
       }
     })
@@ -672,7 +745,15 @@ export function SettingsShell(props: SettingsShellProps) {
       cancelled = true
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
     }
-  }, [open, selectedId, selectedConnected, retryNonce, mountRetry, releaseAllSessions])
+  }, [
+    open,
+    selectedId,
+    selectedConnected,
+    selectedSourceFingerprint,
+    retryNonce,
+    mountRetry,
+    releaseAllSessions,
+  ])
 
   const selectServer = useCallback((id: string) => {
     // Offline rows remain selectable: the content column owns the explicit
@@ -682,12 +763,12 @@ export function SettingsShell(props: SettingsShellProps) {
       // flashing an undefined selection (no noServers frame). The retry
       // ledger resets too — a user-initiated retry restarts the auto-retry
       // budget (no-op when already reset).
-      setMountRetry(current => current.id === id && current.failures === 0 ? current : { id, failures: 0 })
+      setMountRetry(current => resetMountRetryLedger(current, id, selectedSourceFingerprint ?? ''))
       setRetryNonce(nonce => nonce + 1)
       return
     }
     setSelectedId(id)
-  }, [selectedId, sessionError])
+  }, [selectedId, selectedSourceFingerprint, sessionError])
 
   const close = useCallback(() => {
     setOpen(false)

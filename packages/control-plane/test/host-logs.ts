@@ -14,9 +14,8 @@
  *   claim files never resolve; corrupt records skipped;
  * - explicit-port keys (number and numeric string) bypass the registry;
  * - listDiagnostics: lastSpawn = newest record, per-record logFile facts;
- * - writer (createHostLogWriter): round-trip through readManagedLog with a
- *   non-null ISO ts; async open failure (dir removed) is swallowed instead
- *   of an uncaughtException, and the next write recreates the stream.
+ * - writer (createHostLogWriter): enqueue-only hot path, bounded high-water
+ *   dropping, flush/close, cross-handle serialization and generation recovery.
  */
 
 import { test } from 'node:test'
@@ -24,8 +23,11 @@ import type { TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { hostLogs, readLogTail, logPathFor, createHostLogWriter, DEFAULT_LIMIT, MAX_LIMIT, MAX_LOG_LINES } from '../src/host-logs.ts'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  hostLogs, readLogTail, logPathFor, createHostLogWriter,
+  DEFAULT_LIMIT, MAX_LIMIT, MAX_LOG_LINES, MAX_PENDING_LOG_BYTES, MAX_PENDING_LOG_ENTRIES,
+} from '../src/host-logs.ts'
 import { writePidRecord, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { Logger } from '../src/types.ts'
 
@@ -358,10 +360,13 @@ test('writer→reader round-trip: ts is a non-null ISO string, lines/stream pres
   const stateDir = tempDir(t)
   const port = 17778
   const writer = createHostLogWriter(stateDir, port)
-  writer.write('line one', 'stdout')
-  writer.write('line two', 'stderr')
-  writer.close()
-  await new Promise(resolve => setTimeout(resolve, 100)) // let the stream flush
+  assert.equal(writer.write('line one', 'stdout'), true)
+  assert.equal(writer.write('line two', 'stderr'), true)
+  // write() only enqueues: even first-use mkdir/open happens after this stack.
+  assert.equal(existsSync(logPathFor(stateDir, port)), false)
+  await writer.close()
+  assert.equal(writer.write('late after close', 'stdout'), false)
+  await writer.close()
 
   const { readManagedLog } = hostLogs({ stateDir, logger: silentLogger })
   const result = await readManagedLog(port)
@@ -381,28 +386,27 @@ test('writer: a write landing on a removed dir is swallowed, not an uncaughtExce
   const stateDir = tempDir(t)
   const port = 17779
   const writer = createHostLogWriter(stateDir, port)
-  // Sync-append writer (2026 round-3 review): a write that lands while the
-  // log dir is dead is LOST silently — a dead log file must never become an
-  // uncaughtException or take the host pipes down; the NEXT write lazily
-  // recreates dir + file.
-  writer.write('first line', 'stdout')
+  // A write that lands while the log dir is dead is LOST silently — a dead
+  // log file must never become an uncaughtException or take the host pipes
+  // down; a later NEW write lazily recreates dir + file.
+  assert.equal(writer.write('first line', 'stdout'), true)
+  await writer.flush()
 
   const uncaught: Error[] = []
   const onUncaught = (error: Error) => uncaught.push(error)
   process.on('uncaughtException', onUncaught)
   try {
     rmSync(join(stateDir, 'host-logs'), { recursive: true, force: true })
-    writer.write('second line', 'stderr') // lost, swallowed
-    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(writer.write('second line', 'stderr'), true) // accepted, then lost on disk failure
+    await writer.flush()
     assert.deepEqual(uncaught, [], 'a dead log must not become an uncaughtException')
   } finally {
     process.removeListener('uncaughtException', onUncaught)
   }
 
   // the lost write marked the writer for setup; the next write recreates
-  writer.write('third line', 'stdout')
-  writer.close()
-  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(writer.write('third line', 'stdout'), true)
+  await writer.close()
 
   const { readManagedLog } = hostLogs({ stateDir, logger: silentLogger })
   const result = await readManagedLog(port)
@@ -416,15 +420,20 @@ test('writer: a removed backing file near the compaction threshold never resurre
   const stateDir = tempDir(t)
   const port = 17781
   const writer = createHostLogWriter(stateDir, port)
-  for (let i = 0; i < MAX_LOG_LINES; i++) writer.write(`old ${i}`, 'stdout')
+  for (let i = 0; i < MAX_LOG_LINES; i++) {
+    assert.equal(writer.write(`old ${i}`, 'stdout'), true)
+    if ((i + 1) % 128 === 0) await writer.flush()
+  }
+  await writer.flush()
 
   // Lose the entire backing generation. The next write fails; the following
   // write recreates the directory/file. The pre-fix writer retained its old
   // ring and immediately compacted it over the new file, reviving 400 lines.
   rmSync(join(stateDir, 'host-logs'), { recursive: true, force: true })
-  writer.write('lost while absent', 'stderr')
-  writer.write('new generation', 'stdout')
-  writer.close()
+  assert.equal(writer.write('lost while absent', 'stderr'), true)
+  await writer.flush()
+  assert.equal(writer.write('new generation', 'stdout'), true)
+  await writer.close()
 
   const result = await hostLogs({ stateDir, logger: silentLogger }).readManagedLog(port)
   assert.deepEqual(result.lines.map(line => line.line), ['new generation'])
@@ -439,22 +448,88 @@ test('writer: rolling ring cap — beyond MAX_LOG_LINES the file stays bounded, 
   // Cross the cap twice (with an interleaved second batch) so both the first
   // compaction and the re-armed counter are exercised: the file must never
   // grow unbounded and the newest lines must always survive.
-  for (let i = 0; i < MAX_LOG_LINES + 60; i++) writer.write(`line ${i}`, 'stdout')
-  for (let i = 0; i < MAX_LOG_LINES + 10; i++) writer.write(`more ${i}`, 'stderr')
-  writer.close()
-  // The WriteStream flush is asynchronous; a fixed sleep is flaky under load
-  // (round-3 review: tail lines may still be buffered) — poll until the
-  // newest line is observable on disk.
-  const { readManagedLog } = hostLogs({ stateDir, logger: silentLogger })
-  let result = await readManagedLog(port)
-  const deadline = Date.now() + 3000
-  while (Date.now() < deadline && (result.lines.length === 0 || result.lines[result.lines.length - 1].line !== `more ${MAX_LOG_LINES + 9}`)) {
-    await new Promise(resolve => setTimeout(resolve, 50))
-    result = await readManagedLog(port)
+  for (let i = 0; i < MAX_LOG_LINES + 60; i++) {
+    assert.equal(writer.write(`line ${i}`, 'stdout'), true)
+    if ((i + 1) % 128 === 0) await writer.flush()
   }
+  for (let i = 0; i < MAX_LOG_LINES + 10; i++) {
+    assert.equal(writer.write(`more ${i}`, 'stderr'), true)
+    if ((i + 1) % 128 === 0) await writer.flush()
+  }
+  await writer.close()
+  const { readManagedLog } = hostLogs({ stateDir, logger: silentLogger })
+  const result = await readManagedLog(port)
   assert.ok(result.lines.length <= MAX_LOG_LINES, `got ${result.lines.length} lines (cap ${MAX_LOG_LINES})`)
   // newest line survives whole; the very first lines are long gone
   assert.equal(result.lines[result.lines.length - 1].line, `more ${MAX_LOG_LINES + 9}`)
   assert.ok(!result.lines.some(entry => entry.line === 'line 0'), 'oldest line compacted away')
   assert.ok(result.lines.some(entry => entry.line.startsWith('more ')), 'newest batch survives')
+})
+
+test('writer: rolling cap includes lines written by earlier writer lifetimes', async t => {
+  const stateDir = tempDir(t)
+  const port = 17782
+  const first = createHostLogWriter(stateDir, port)
+  for (let index = 0; index < MAX_LOG_LINES; index += 1) {
+    assert.equal(first.write(`old ${index}`, 'stdout'), true)
+    if ((index + 1) % 128 === 0) await first.flush()
+  }
+  // Do not await before constructing the replacement: the shared path lane
+  // must serialize its hydration behind the first handle's final batch.
+  const firstClose = first.close()
+
+  const replacement = createHostLogWriter(stateDir, port)
+  assert.equal(replacement.write('new lifetime', 'stderr'), true)
+  await Promise.all([firstClose, replacement.close()])
+
+  const result = await hostLogs({ stateDir, logger: silentLogger }).readManagedLog(port, { limit: MAX_LOG_LINES })
+  assert.ok(result.lines.length <= MAX_LOG_LINES)
+  assert.equal(result.lines[result.lines.length - 1].line, 'new lifetime')
+  assert.equal(result.lines.some(entry => entry.line === 'old 0'), false)
+})
+
+test('writer: simultaneous stdout and lifecycle handles share one serialized compaction lane', async t => {
+  const stateDir = tempDir(t)
+  const port = 17784
+  const stdout = createHostLogWriter(stateDir, port)
+  const lifecycle = createHostLogWriter(stateDir, port)
+
+  for (let index = 0; index < 300; index += 1) {
+    assert.equal(stdout.write(`stdout ${index}`, 'stdout'), true)
+    assert.equal(lifecycle.write(`control ${index}`, 'control'), true)
+    // Stay below the deliberate 256-entry high-water mark while crossing the
+    // on-disk compaction threshold through two independently owned handles.
+    if ((index + 1) % 100 === 0) await Promise.all([stdout.flush(), lifecycle.flush()])
+  }
+  await Promise.all([stdout.close(), lifecycle.close()])
+
+  const result = await hostLogs({ stateDir, logger: silentLogger }).readManagedLog(port, { limit: MAX_LOG_LINES })
+  assert.ok(result.lines.length <= MAX_LOG_LINES)
+  assert.equal(result.lines[result.lines.length - 2].line, 'stdout 299')
+  assert.equal(result.lines[result.lines.length - 1].line, 'control 299')
+  assert.ok(result.lines.some(entry => entry.line.startsWith('stdout ')))
+  assert.ok(result.lines.some(entry => entry.line.startsWith('control ')))
+})
+
+test('writer: pending queue is bounded and drops the newest entry without synchronous filesystem work', async t => {
+  const stateDir = tempDir(t)
+  const port = 17783
+  const writer = createHostLogWriter(stateDir, port)
+
+  // No await: the drain cannot run until this stack yields, so admission at
+  // the exact entry high-water mark is deterministic.
+  for (let index = 0; index < MAX_PENDING_LOG_ENTRIES; index += 1) {
+    assert.equal(writer.write(`queued ${index}`, 'stdout'), true)
+  }
+  assert.equal(writer.write('dropped at entry high-water', 'stderr'), false)
+  assert.equal(existsSync(logPathFor(stateDir, port)), false, 'write() must not touch disk synchronously')
+
+  await writer.flush()
+  assert.equal(writer.write('x'.repeat(MAX_PENDING_LOG_BYTES), 'stderr'), false, 'one oversized encoded entry is dropped')
+  await writer.close()
+
+  const result = await hostLogs({ stateDir, logger: silentLogger }).readManagedLog(port, { limit: MAX_LOG_LINES })
+  assert.equal(result.lines.length, MAX_PENDING_LOG_ENTRIES)
+  assert.equal(result.lines[result.lines.length - 1].line, `queued ${MAX_PENDING_LOG_ENTRIES - 1}`)
+  assert.equal(result.lines.some(entry => entry.line === 'dropped at entry high-water'), false)
 })

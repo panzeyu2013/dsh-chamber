@@ -14,7 +14,10 @@ async function freshCoordinator() {
   return import(`../src/shared/coordinator.ts?test=${importNonce}`)
 }
 
-function setBridge(apps: () => Promise<unknown>): void {
+function setBridge(apps: () => Promise<unknown>, events?: {
+  addEventListener(type: string, listener: () => void): void
+  removeEventListener(type: string, listener: () => void): void
+}): void {
   Object.assign(globalThis, {
     window: {
       dshChamber: {
@@ -24,6 +27,8 @@ function setBridge(apps: () => Promise<unknown>): void {
           open: async () => ({ ok: true as const }),
         },
       },
+      addEventListener: events?.addEventListener ?? (() => {}),
+      removeEventListener: events?.removeEventListener ?? (() => {}),
     },
   })
 }
@@ -105,12 +110,14 @@ test('a transient first IPC rejection recovers inside the bounded shared flight'
   assert.equal(calls, 2)
 })
 
-test('a persistently failing app probe stops at the retry limit and stays fail-closed', async () => {
+test('a persistently failing probe stays bounded until an explicit refresh recovers', async () => {
   const coordinator = await freshCoordinator()
   let calls = 0
+  let recovered = false
   const delays: number[] = []
   setBridge(async () => {
     calls += 1
+    if (recovered) return validApps
     throw new Error('ipc remains unavailable')
   })
 
@@ -123,6 +130,37 @@ test('a persistently failing app probe stops at the retry limit and stays fail-c
       () => coordinator.OPEN_IN_APP_PROBE_RETRY_MS,
     ),
   )
-  assert.equal(await coordinator.getApps(), null, 'final exhaustion is memoized, not an unbounded retry loop')
+  recovered = true
+  assert.equal(await coordinator.getApps(), null, 'ordinary N-ctx callers do not create retry waves')
   assert.equal(calls, coordinator.OPEN_IN_APP_PROBE_RETRY_LIMIT)
+  assert.deepEqual(await coordinator.refreshApps(), validApps)
+  assert.equal(calls, coordinator.OPEN_IN_APP_PROBE_RETRY_LIMIT + 1)
+})
+
+test('window focus refreshes an empty capability list without per-button polling', async () => {
+  const coordinator = await freshCoordinator()
+  let focusListener: (() => void) | null = null
+  let current: unknown = []
+  let calls = 0
+  setBridge(async () => {
+    calls += 1
+    return current
+  }, {
+    addEventListener(type, listener) {
+      if (type === 'focus') focusListener = listener
+    },
+    removeEventListener(type, listener) {
+      if (type === 'focus' && focusListener === listener) focusListener = null
+    },
+  })
+
+  const unsubscribe = coordinator.subscribeOpenIn(() => {})
+  assert.deepEqual(await coordinator.getApps(), [])
+  current = validApps
+  focusListener?.()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.deepEqual(coordinator.getOpenInApps(), validApps)
+  assert.equal(calls, 2)
+  unsubscribe()
+  assert.equal(focusListener, null)
 })

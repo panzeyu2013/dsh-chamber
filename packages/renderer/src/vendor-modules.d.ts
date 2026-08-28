@@ -326,6 +326,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   }
   export interface ChamberServerAggregate {
     id: string
+    sourceFingerprint: string
     kind: 'local' | 'ssh'
     label: string
     connected: boolean

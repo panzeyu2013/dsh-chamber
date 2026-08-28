@@ -240,18 +240,9 @@ test('ChamberInjectionState / ChamberHostGraphState / ChamberSettings stay in lo
 
 const { IPC_CHANNELS } = await import('./ipc-events.ts')
 
-/** The main-process files that register IPC channels (main.ts assembly +
- *  the wiring modules). */
-const MAIN_SIDE_FILES = [
-  'main.ts',
-  'ipc-settings.ts',
-  'ipc-notifications.ts',
-  'ipc-ssh.ts',
-  'ipc-plugin-sync.ts',
-  'ipc-open-in.ts',
-  'ipc-update.ts',
-  'ipc-deep-link.ts',
-]
+/** main.ts is the sole IPC registration owner. Keeping one executable owner
+ * avoids a second, unimported handler implementation drifting beside it. */
+const MAIN_SIDE_FILES = ['main.ts']
 
 function mainSideSource(): string {
   return MAIN_SIDE_FILES

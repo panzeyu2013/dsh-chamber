@@ -75,6 +75,8 @@ function buildRemoteStub(api: BridgeApiClient) {
 export interface BridgeSession {
   /** The instance this session was assembled for ('local' or 'ssh-<id>'). */
   instanceId: string
+  /** Opaque authoritative lifecycle proof captured when this session was assembled. */
+  sourceFingerprint: string
   /** The independent child context (the rendering React tree must not call ctx methods outside the plugin fibers). */
   ctx: Context
   /** The child slot registry instance (read faces only: entries/entriesOfSlot/getVersion/subscribe/spec). */
@@ -185,8 +187,9 @@ async function waitForActive(fibers: readonly { state: number; await(): Promise<
  * waiting for ACTIVE yields the fully-registered ledger); the bridge UI then
  * renders through `slots` version ticks.
  * @param instanceId - 'local' or 'ssh-<id>' (the /api/i/<id> prefix key).
+ * @param sourceFingerprint - authoritative proof for this exact source incarnation.
  */
-export async function mountBridgeSession(instanceId: string): Promise<BridgeSession> {
+export async function mountBridgeSession(instanceId: string, sourceFingerprint: string): Promise<BridgeSession> {
   const ctx = new Context()
   try {
     const api = getBridgeApiClient(instanceId)
@@ -221,6 +224,7 @@ export async function mountBridgeSession(instanceId: string): Promise<BridgeSess
     return {
       ctx,
       instanceId,
+      sourceFingerprint,
       slots: ctx.get('slots') as SlotRegistry,
       locale: ctx.get('locale') as LocaleFace | undefined,
       dispose: () => ctx.fiber.dispose(),

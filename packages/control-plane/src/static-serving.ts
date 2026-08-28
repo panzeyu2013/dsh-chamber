@@ -87,20 +87,26 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
    * per request (manifest rev can change without index.html's mtime moving),
    * so it is gzipped per request from the in-memory (already-injected) buffer
    * instead.
-   */
+  */
   const gzipCache = new Map<string, Buffer>()
-  function gzipCached(path: string): Buffer {
+  function readGzipCached(path: string): { data: Buffer; encoded: boolean; error?: unknown } {
     const stat = statSync(path)
     const key = `${path}:${stat.mtimeMs}:${stat.size}`
     const hit = gzipCache.get(key)
-    if (hit !== undefined) return hit
-    const compressed = gzipSync(readFileSync(path))
+    if (hit !== undefined) return { data: hit, encoded: true }
+    const source = readFileSync(path)
+    let compressed: Buffer
+    try {
+      compressed = gzipSync(source)
+    } catch (error) {
+      return { data: source, encoded: false, error }
+    }
     if (gzipCache.size >= GZIP_CACHE_MAX) {
       const oldest = gzipCache.keys().next().value
       if (oldest !== undefined) gzipCache.delete(oldest)
     }
     gzipCache.set(key, compressed)
-    return compressed
+    return { data: compressed, encoded: true }
   }
 
   /**
@@ -156,8 +162,23 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
       return
     }
     let data: Buffer | null = null
+    let gzipAttempted = false
+    let gzipEncoded = false
     try {
-      data = readFileSync(path)
+      const wantsCachedGzip = candidate !== '/index.html'
+        && COMPRESSIBLE_TYPES.has(extname(candidate).toLowerCase())
+        && acceptsGzip(req)
+      if (wantsCachedGzip) {
+        gzipAttempted = true
+        const payload = readGzipCached(path)
+        data = payload.data
+        gzipEncoded = payload.encoded
+        if (payload.error !== undefined) {
+          logger?.warn(`static gzip failed for ${candidate}: ${String(payload.error)}`)
+        }
+      } else {
+        data = readFileSync(path)
+      }
     } catch {
       const ext = extname(candidate)
       if (ext !== '' && ext !== '.html') {
@@ -176,6 +197,8 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
         return
       }
       candidate = '/index.html'
+      gzipAttempted = false
+      gzipEncoded = false
     }
     const type = MIME_TYPES[extname(candidate).toLowerCase()] ?? 'application/octet-stream'
     if (candidate === '/index.html') {
@@ -216,17 +239,18 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
     const compressible = COMPRESSIBLE_TYPES.has(extname(candidate).toLowerCase())
     if (compressible) headers['vary'] = 'accept-encoding'
     if (compressible && acceptsGzip(req)) {
-      try {
+      if (gzipEncoded) {
         headers['content-encoding'] = 'gzip'
-        data = candidate === '/index.html' ? gzipSync(data) : gzipCached(path)
-      } catch (gzipError) {
-        // Rare file race (the asset vanished between read and gzip) or a
-        // corrupt asset: serve the already-read bytes identity-compressed
-        // rather than crash the plane — the frontend still loads, just
-        // without gzip. The owning handler catch below is the last-resort
-        // 500 for anything else that throws in the static path.
-        logger?.warn(`static gzip failed for ${candidate}: ${String(gzipError)}`)
-        delete headers['content-encoding']
+      } else if (!gzipAttempted) {
+        try {
+          data = gzipSync(data)
+          headers['content-encoding'] = 'gzip'
+        } catch (gzipError) {
+          // index.html is injected per request and cannot use the file cache.
+          // If that one compression fails, serve the already-read identity
+          // bytes so the shell remains available.
+          logger?.warn(`static gzip failed for ${candidate}: ${String(gzipError)}`)
+        }
       }
     }
     // Explicit Content-Length: keeps static responses non-chunked and gives

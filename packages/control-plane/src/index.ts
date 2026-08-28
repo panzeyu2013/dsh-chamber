@@ -138,6 +138,8 @@ export interface ControlPlaneOptions {
   corsOrigins?: string[]
   /** Injectable local-connection wire deps (test seams: fake spawn/describe). */
   localConnectionDeps?: LocalConnectionDeps
+  /** Injectable orphan reaper (test seam for lifecycle interleavings). */
+  reaper?: typeof runReaper
   /**
    * Module-A host package source dir (design 09 方案 A, module B): the package
    * seeded into the local profile so the spawned host resolves the
@@ -199,6 +201,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const webDistDir = options.webDistDir
   // The console default satisfies every module's logger option ({log,warn,error}).
   const logger = (options.logger ?? console) as Logger
+  const reapManagedHosts = options.reaper ?? runReaper
 
   // Module-A host package source (design 09 module B); may be absent — the seed
   // skips it gracefully and the plane keeps working without the host graph.
@@ -433,6 +436,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   let server: Server | null = null
   let serverPort: number | null = null
+  let startPromise: Promise<void> | null = null
+  let stopPromise: Promise<void> | null = null
+  let lifecycleEpoch = 0
 
   // ---------------------------------------------------------------------------
   // Static frontend service (design 05 §3.3 / 04 §5): dist/ + __DSH_BOOT__,
@@ -444,195 +450,244 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ? null
     : createStaticServing({ webDistDir, logger })
 
+  /** Close one candidate/active server without letting long-lived proxy
+   * streams strand stop(). Candidate failures do not own proxy streams. */
+  async function closeHttpServer(srv: Server, closeProxyStreams: boolean): Promise<void> {
+    if (closeProxyStreams) instanceProxy.closeAllStreams()
+    srv.closeAllConnections?.()
+    srv.closeIdleConnections?.()
+    if (!srv.listening) return
+    await new Promise<void>(resolveClose => {
+      const force = setTimeout(resolveClose, 500)
+      force.unref?.()
+      srv.close(() => {
+        clearTimeout(force)
+        resolveClose()
+      })
+    })
+  }
+
   return {
     /** Bind the HTTP surface and prepare the state layout. */
     async start() {
+      if (stopPromise !== null) await stopPromise
+      // A start requested during stop belongs to the next lifecycle. Only
+      // after that stop settles may it share/create a start flight.
       if (server !== null) return
-      mkdirSync(join(stateDir, 'managed-dsh'), { recursive: true })
-      mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-      // First-run default locale for the managed local host (zh); the user's
-      // explicit settings choice always wins from then on.
-      if (seedDshHomeDefaults(dshHome)) {
-        logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
-      }
-      // Host-graph seed (design 09 方案 A, module B): distribute the chamber
-      // host package into the local profile (idempotent, content-hash skip)
-      // and materialize the --patch overlay that mounts it. The initial run
-      // here is for early exposure (logs + fail-loud on a broken module A);
-      // the spawn-time thunk re-runs the same idempotent seed before every
-      // spawn, restarts included — a seed pruned by a profile-internal pnpm
-      // operation self-heals on the next spawn, not only at plane start.
-      // dist/index.js is a COMMITTED artifact (design 09 §3.5, .gitignore
-      // negation), so a fresh clone has it; the gate only skips when the
-      // artifact is genuinely absent (module A not built/bundled in this
-      // runtime) or damaged — the overlay is gated on the artifact because a
-      // --patch overlay whose inserted row cannot resolve fails the host boot
-      // loudly (dsh-app-boot loadOverlayPatches): an absent module A must
-      // leave the spawn command line exactly the v4 base. A pre-existing
-      // running local instance is unaffected until its next restart — the
-      // overlay applies at host boot, the official plugin-set-change cadence.
-      resolveHostGraphPatch()
-      if (!existsSync(hostGraphArtifact)) {
-        logger.log(`host-graph: host package build artifact ${hostGraphArtifact} not present; seed skipped (module A not built)`)
-      }
-      if (!existsSync(hostGitWorktreeArtifact)) {
-        logger.log(`git-worktree: host package build artifact ${hostGitWorktreeArtifact} not present; seed skipped (package not built)`)
-      }
-      if (webDistDir !== undefined) {
+      if (startPromise !== null) return startPromise
+
+      const epoch = ++lifecycleEpoch
+      let candidate: Server | null = null
+      const pending = (async () => {
         try {
-          if (!statSync(webDistDir).isDirectory()) {
-            throw new Error('not a directory')
+          mkdirSync(join(stateDir, 'managed-dsh'), { recursive: true })
+          mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+          // First-run default locale for the managed local host (zh); the user's
+          // explicit settings choice always wins from then on.
+          if (seedDshHomeDefaults(dshHome)) {
+            logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
           }
-        } catch (distError) {
-          // Fail-loud: a configured-but-missing dist is a packaging bug,
-          // never a silent empty shell.
-          throw new Error(`webDistDir is not a directory: ${String(distError)}`)
-        }
-      }
-      // Orphan reclamation (design 02 §3.4): a control plane that died and
-      // restarted reclaims its detached hosts before any new spawn — safe by
-      // construction (triple verification, owner-dead only).
-      const reaped = await runReaper({ stateDir, logger })
-      if (reaped.reclaimed > 0) logger.log(`reaper: reclaimed ${reaped.reclaimed} orphaned dsh host(s)`)
-      // Failure isolation must be visible: entry errors are surfaced, never
-      // silently dropped (one bad record never blocks the rest).
-      if (Array.isArray(reaped.errors) && reaped.errors.length > 0) {
-        for (const reaperError of reaped.errors) logger.error(`reaper: ${String(reaperError)}`)
-      }
-      await new Promise<void>((resolveListen, reject) => {
-        server = createServer((req, res) => {
-          // Set before dispatch so proxy and every early/error response inherit
-          // the same browser boundary. Route-specific writeHead calls retain
-          // headers already set on ServerResponse.
-          for (const [name, value] of Object.entries(CONTROL_PLANE_SECURITY_HEADERS)) {
-            res.setHeader(name, value)
+          // Host-graph seed (design 09 方案 A, module B): distribute the chamber
+          // host package into the local profile (idempotent, content-hash skip)
+          // and materialize the --patch overlay that mounts it. The initial run
+          // here is for early exposure (logs + fail-loud on a broken module A);
+          // the spawn-time thunk re-runs the same idempotent seed before every
+          // spawn, restarts included — a seed pruned by a profile-internal pnpm
+          // operation self-heals on the next spawn, not only at plane start.
+          // dist/index.js is a COMMITTED artifact (design 09 §3.5, .gitignore
+          // negation), so a fresh clone has it; the gate only skips when the
+          // artifact is genuinely absent (module A not built/bundled in this
+          // runtime) or damaged — the overlay is gated on the artifact because a
+          // --patch overlay whose inserted row cannot resolve fails the host boot
+          // loudly (dsh-app-boot loadOverlayPatches): an absent module A must
+          // leave the spawn command line exactly the v4 base. A pre-existing
+          // running local instance is unaffected until its next restart — the
+          // overlay applies at host boot, the official plugin-set-change cadence.
+          resolveHostGraphPatch()
+          if (!existsSync(hostGraphArtifact)) {
+            logger.log(`host-graph: host package build artifact ${hostGraphArtifact} not present; seed skipped (module A not built)`)
           }
-          const cspNonce = randomBytes(18).toString('base64')
-          ;(res as ApiResponse)._cspNonce = cspNonce
-          // script-src keeps 'unsafe-inline' closed (every inline script must
-          // carry the per-response nonce) but MUST open 'unsafe-eval': the
-          // official dsh module loader (vendored @deepseek-ai/loader, config
-          // utils) evaluates boot-manifest `__jsExpr` config via
-          // `new Function('ctx','expr', 'with (ctx) { return eval(expr) }')`
-          // at module evaluation time — without 'unsafe-eval' the renderer
-          // bundle dies with an EvalError and the skeleton never boots.
-          res.setHeader(
-            'content-security-policy',
-            `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
-          )
-          // A malformed request line (e.g. a `//`-leading path — treated as a
-          // protocol-relative URL with an empty host, which `new URL` rejects)
-          // must never take the whole control plane down: answer 400 and keep
-          // serving (proxy honesty — an invalid request is an explicit
-          // rejection, never a crash or a silent empty success).
-          let url: URL
-          try {
-            url = new URL(req.url ?? '/', 'http://localhost')
-          } catch {
-            res.writeHead(400, { 'content-type': 'application/json' })
-            res.end('{"error":"invalid-url"}')
-            return
+          if (!existsSync(hostGitWorktreeArtifact)) {
+            logger.log(`git-worktree: host package build artifact ${hostGitWorktreeArtifact} not present; seed skipped (package not built)`)
           }
-          const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
-          if (surface === 'api' || surface === 'health') {
-            void api.handle(req as ApiRequest, res as ApiResponse).catch(error => {
-              logger.error(`api handler failure: ${String(error)}`)
-              if (!res.headersSent) {
-                res.writeHead(500, { 'content-type': 'application/json' })
-                res.end('{"error":"internal"}')
-              } else {
-                res.end()
-              }
-            })
-            return
-          }
-          if (staticServing !== null) {
+          if (webDistDir !== undefined) {
             try {
-              staticServing.serve(req as ApiRequest, res as ApiResponse, url.pathname)
-            } catch (staticError) {
-              // A throw in the static path (beyond the gzip race guarded
-              // inside the service) must answer 500, never crash the plane
-              // child process — same pattern as the api.handle catch above.
-              logger.error(`static handler failure: ${String(staticError)}`)
-              if (!res.headersSent) {
-                res.writeHead(500, { 'content-type': 'application/json' })
-                res.end('{"error":"internal"}')
-              } else {
-                res.end()
+              if (!statSync(webDistDir).isDirectory()) {
+                throw new Error('not a directory')
               }
+            } catch (distError) {
+              // Fail-loud: a configured-but-missing dist is a packaging bug,
+              // never a silent empty shell.
+              throw new Error(`webDistDir is not a directory: ${String(distError)}`)
             }
-            return
           }
-          res.writeHead(404, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: 'not_found', code: 'not_found' }))
-        })
-        // Bound pre-routing slowloris/socket pressure as well as route-level
-        // work. requestTimeout covers receiving the request, while the proxy
-        // adds a stricter 30s inter-chunk body idle timeout. The connection
-        // ceiling still leaves headroom for the documented HTTP/WS/SSE caps.
-        server.headersTimeout = 10_000
-        server.requestTimeout = 35_000
-        server.keepAliveTimeout = 5_000
-        server.maxRequestsPerSocket = 1_000
-        server.maxConnections = 192
-        // WS upgrade dispatcher (design 03 §3.1/§3.2): the instance proxy
-        // handles /api/i/<id>/api/events.mux|host — explicit rejections
-        // only, never a silent drop.
-        server.on('upgrade', (req, socket, head) => {
-          // WebSocket ignores browser CORS response handling. Apply the same
-          // origin fence before the proxy replaces Host and strips browser
-          // markers; otherwise the upstream sees a trusted loopback request.
-          if (!api.getCorsHeaders(req as ApiRequest).allowed) {
-            socket.end(
-              'HTTP/1.1 403 Forbidden\r\n'
-              + 'Content-Type: application/json\r\n'
-              + 'Connection: close\r\n'
-              + '\r\n'
-              + '{"error":"request origin is not allowed","code":"origin_forbidden"}',
+          // Orphan reclamation (design 02 §3.4): a control plane that died and
+          // restarted reclaims its detached hosts before any new spawn — safe by
+          // construction (triple verification, owner-dead only).
+          const reaped = await reapManagedHosts({ stateDir, logger })
+          if (reaped.reclaimed > 0) logger.log(`reaper: reclaimed ${reaped.reclaimed} orphaned dsh host(s)`)
+          // Failure isolation must be visible: entry errors are surfaced, never
+          // silently dropped (one bad record never blocks the rest).
+          if (Array.isArray(reaped.errors) && reaped.errors.length > 0) {
+            for (const reaperError of reaped.errors) logger.error(`reaper: ${String(reaperError)}`)
+          }
+          if (epoch !== lifecycleEpoch) throw new Error('control plane start cancelled by stop')
+          candidate = createServer((req, res) => {
+            // Set before dispatch so proxy and every early/error response inherit
+            // the same browser boundary. Route-specific writeHead calls retain
+            // headers already set on ServerResponse.
+            for (const [name, value] of Object.entries(CONTROL_PLANE_SECURITY_HEADERS)) {
+              res.setHeader(name, value)
+            }
+            const cspNonce = randomBytes(18).toString('base64')
+            ;(res as ApiResponse)._cspNonce = cspNonce
+            // script-src keeps 'unsafe-inline' closed (every inline script must
+            // carry the per-response nonce) but MUST open 'unsafe-eval': the
+            // official dsh module loader (vendored @deepseek-ai/loader, config
+            // utils) evaluates boot-manifest `__jsExpr` config via
+            // `new Function('ctx','expr', 'with (ctx) { return eval(expr) }')`
+            // at module evaluation time — without 'unsafe-eval' the renderer
+            // bundle dies with an EvalError and the skeleton never boots.
+            res.setHeader(
+              'content-security-policy',
+              `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
             )
-            return
-          }
-          void instanceProxy.handleUpgrade(req as never, socket as never, head).catch((error: unknown) => {
-            logger.error(`upgrade handler failure: ${String(error)}`)
-            socket.destroy()
+            // A malformed request line (e.g. a `//`-leading path — treated as a
+            // protocol-relative URL with an empty host, which `new URL` rejects)
+            // must never take the whole control plane down: answer 400 and keep
+            // serving (proxy honesty — an invalid request is an explicit
+            // rejection, never a crash or a silent empty success).
+            let url: URL
+            try {
+              url = new URL(req.url ?? '/', 'http://localhost')
+            } catch {
+              res.writeHead(400, { 'content-type': 'application/json' })
+              res.end('{"error":"invalid-url"}')
+              return
+            }
+            const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
+            if (surface === 'api' || surface === 'health') {
+              void api.handle(req as ApiRequest, res as ApiResponse).catch(error => {
+                logger.error(`api handler failure: ${String(error)}`)
+                if (!res.headersSent) {
+                  res.writeHead(500, { 'content-type': 'application/json' })
+                  res.end('{"error":"internal"}')
+                } else {
+                  res.end()
+                }
+              })
+              return
+            }
+            if (staticServing !== null) {
+              try {
+                staticServing.serve(req as ApiRequest, res as ApiResponse, url.pathname)
+              } catch (staticError) {
+                // A throw in the static path (beyond the gzip race guarded
+                // inside the service) must answer 500, never crash the plane
+                // child process — same pattern as the api.handle catch above.
+                logger.error(`static handler failure: ${String(staticError)}`)
+                if (!res.headersSent) {
+                  res.writeHead(500, { 'content-type': 'application/json' })
+                  res.end('{"error":"internal"}')
+                } else {
+                  res.end()
+                }
+              }
+              return
+            }
+            res.writeHead(404, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: 'not_found', code: 'not_found' }))
           })
-        })
-        server.once('error', reject)
-        server.listen(port, host, () => {
-          const address = server!.address()
+          const listeningServer = candidate
+          // Bound pre-routing slowloris/socket pressure as well as route-level
+          // work. requestTimeout covers receiving the request, while the proxy
+          // adds a stricter 30s inter-chunk body idle timeout. The connection
+          // ceiling still leaves headroom for the documented HTTP/WS/SSE caps.
+          listeningServer.headersTimeout = 10_000
+          listeningServer.requestTimeout = 35_000
+          listeningServer.keepAliveTimeout = 5_000
+          listeningServer.maxRequestsPerSocket = 1_000
+          listeningServer.maxConnections = 192
+          // WS upgrade dispatcher (design 03 §3.1/§3.2): the instance proxy
+          // handles /api/i/<id>/api/events.mux|host — explicit rejections
+          // only, never a silent drop.
+          listeningServer.on('upgrade', (req, socket, head) => {
+            // WebSocket ignores browser CORS response handling. Apply the same
+            // origin fence before the proxy replaces Host and strips browser
+            // markers; otherwise the upstream sees a trusted loopback request.
+            if (!api.getCorsHeaders(req as ApiRequest).allowed) {
+              socket.end(
+                'HTTP/1.1 403 Forbidden\r\n'
+                + 'Content-Type: application/json\r\n'
+                + 'Connection: close\r\n'
+                + '\r\n'
+                + '{"error":"request origin is not allowed","code":"origin_forbidden"}',
+              )
+              return
+            }
+            void instanceProxy.handleUpgrade(req as never, socket as never, head).catch((error: unknown) => {
+              logger.error(`upgrade handler failure: ${String(error)}`)
+              socket.destroy()
+            })
+          })
+          await new Promise<void>((resolveListen, rejectListen) => {
+            const onListenError = (error: Error): void => rejectListen(error)
+            listeningServer.once('error', onListenError)
+            listeningServer.listen(port, host, () => {
+              listeningServer.removeListener('error', onListenError)
+              resolveListen()
+            })
+          })
+          if (epoch !== lifecycleEpoch) throw new Error('control plane start cancelled by stop')
+          const address = listeningServer.address()
           serverPort = typeof address === 'object' && address !== null ? address.port : null
+          server = listeningServer
+          candidate = null
+          listeningServer.on('error', error => logger.error(`control plane server error: ${String(error)}`))
           logger.log(`control plane listening on http://${host}:${serverPort}`)
-          resolveListen()
-        })
-      })
+        } finally {
+          if (candidate !== null) await closeHttpServer(candidate, false)
+        }
+      })()
+      startPromise = pending
+      try {
+        await pending
+      } finally {
+        if (startPromise === pending) startPromise = null
+      }
     },
 
     /** Stop the local dsh connection and close the HTTP surface. */
     async stop() {
-      await local.stop()
-      if (server !== null) {
-        const srv = server
-        server = null
-        // Node's server.close() waits for every active connection to end — a
-        // lingering renderer SSE/WS/proxy connection (e.g. after a crashed
-        // local host left the page mid-reconnect) would otherwise hang the
-        // close forever and strand the desktop app in a half-exited state.
-        // Force-close first so close() resolves promptly: spliced WS streams
-        // are tracked by the proxy (upgraded sockets leave the HTTP server's
-        // connection tracking), HTTP/SSE/keep-alive by closeAllConnections/
-        // closeIdleConnections. The 500ms window is a last-resort against any
-        // straggler — the process exit then releases the remaining fds.
-        instanceProxy.closeAllStreams()
-        srv.closeAllConnections?.()
-        srv.closeIdleConnections?.()
-        await new Promise<void>(resolve => {
-          const force = setTimeout(resolve, 500)
-          force.unref?.()
-          srv.close(() => {
-            clearTimeout(force)
-            resolve()
-          })
-        })
+      if (stopPromise !== null) return stopPromise
+      lifecycleEpoch += 1
+      const pending = (async () => {
+        const starting = startPromise
+        if (starting !== null) {
+          try { await starting } catch { /* a failed/cancelled start is already settled */ }
+        }
+        await local.stop()
+        if (server !== null) {
+          const srv = server
+          server = null
+          serverPort = null
+          // Node's server.close() waits for every active connection to end — a
+          // lingering renderer SSE/WS/proxy connection (e.g. after a crashed
+          // local host left the page mid-reconnect) would otherwise hang the
+          // close forever and strand the desktop app in a half-exited state.
+          // Force-close first so close() resolves promptly: spliced WS streams
+          // are tracked by the proxy (upgraded sockets leave the HTTP server's
+          // connection tracking), HTTP/SSE/keep-alive by closeAllConnections/
+          // closeIdleConnections. The 500ms window is a last-resort against any
+          // straggler — the process exit then releases the remaining fds.
+          await closeHttpServer(srv, true)
+        }
+      })()
+      stopPromise = pending
+      try {
+        await pending
+      } finally {
+        if (stopPromise === pending) stopPromise = null
       }
     },
 

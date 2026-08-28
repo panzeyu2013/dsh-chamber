@@ -10,7 +10,7 @@
 export const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 export const SSH_HOST_PATTERN = /^[a-zA-Z0-9.:\[][a-zA-Z0-9._:\[\]-]*$/
 export const SSH_USER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
-export const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9_.-]+$/
+export const SERVICE_NAME_PATTERN = /^(?!-)[a-zA-Z0-9_.:@-]+$/
 export const REMOTE_DSH_HOME_PATTERN = /^~?(?:\/(?!\.{1,2}(?:\/|$))[a-zA-Z0-9._-]+)+$/
 
 export const MAX_INSTANCE_LABEL_CHARS = 128

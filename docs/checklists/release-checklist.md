@@ -29,11 +29,12 @@
 
 ## 3. 测试与类型检查（AGENTS.md 清单）
 
-- [ ] 控制面 9 套：`node packages/control-plane/test/{protocol,storage,m1-dsh-client,host-logs,manager-api,instance-proxy,ws-frames,static-serving,host-graph-seed}.ts`
-- [ ] `pnpm run test:desktop`（transport/ssh/config/trust/plugin-sync/settings/notifications/deep-link/open-in；已知偶发事件循环 flake，失败重跑即可）
+- [ ] `pnpm run test:control-plane`（以根脚本为唯一清单，含生命周期、reaper、RPC/cordis 等门）。
+- [ ] `pnpm run test:desktop`（transport/ssh/config/trust/plugin-sync/settings/notifications/deep-link/open-in；失败必须定位，不能用重跑代替结论）
 - [ ] `pnpm run test:renderer-shell`、`test:git`、`test:host-git`、`test:sidebar`、
-      `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`
-- [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/host-graph/host-git`
+      `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`、
+      `test:open-in`、`test:cli`
+- [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/connection/host-graph/host-git`
 
 ## 4. 构建
 
@@ -55,8 +56,9 @@
 
 ## 6. 签名/公证（2026-08 起全部由 CI 处理）
 
-- [ ] 本地不配置任何签名密钥；macOS 签名/公证、Windows 签名由 release.yml 的
-      afterPack/发布腿处理（缺凭据或验签失败时 fail-closed 不发布，见 design 11 §7）。
+- [ ] 本地不配置任何签名密钥；macOS Developer ID 签名/公证由 release.yml 发布腿
+      处理（缺凭据或验签失败时在 draft 变更前 fail-closed）。Windows 首版仍未签名，
+      SmartScreen 提示是 design 11 §7 的明确让步，不把 sha512 误称为签名。
 
 ## 7. 提交、tag 与 CI
 

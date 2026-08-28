@@ -174,7 +174,13 @@ function deriveServers(
   // The proxy contract is /api/i/ssh-<id>/*, so every remote source id that
   // reaches the sidebar / shell paths carries the 'ssh-' prefix (05 §3);
   // remoteStatus is keyed by the raw registry id (the IPC projection's id).
-  const push = (kind: 'local' | 'ssh', id: string, label: string, rawId?: string): void => {
+  const push = (
+    kind: 'local' | 'ssh',
+    id: string,
+    label: string,
+    sourceFingerprint: string,
+    rawId?: string,
+  ): void => {
     const statusKey = kind === 'local' ? id : (rawId ?? id)
     const phase = kind === 'local'
       ? (health?.dsh?.status ?? 'unknown')
@@ -191,6 +197,7 @@ function deriveServers(
     }
     const entry: ChamberServerAggregate = {
       id,
+      sourceFingerprint,
       kind,
       label,
       connected,
@@ -214,8 +221,10 @@ function deriveServers(
     if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
     servers.push(entry)
   }
-  push('local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例')
-  for (const instance of remoteInstances) push('ssh', `ssh-${instance.id}`, instance.label, instance.id)
+  push('local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例', 'local')
+  for (const instance of remoteInstances) {
+    push('ssh', `ssh-${instance.id}`, instance.label, instance.sourceFingerprint, instance.id)
+  }
   return servers
 }
 
