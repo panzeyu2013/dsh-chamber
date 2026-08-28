@@ -1,4 +1,4 @@
-# 发布前 Checklist（v0.1.5 起沉淀；2026-09 起含机械门禁）
+# 发布前 Checklist
 
 > 面向发布者：按序执行，任何 ❌ 都阻断发布。依据：`.github/workflows/release.yml`、
 > `docs/DEVELOPMENT.md` §5、AGENTS.md 验证清单。命令前先
@@ -76,10 +76,14 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 
 - [ ] `pnpm install --frozen-lockfile` 通过（锁文件含 vendor importer 记录）。
 - [ ] `pnpm run build:renderer`、`pnpm run build:host-packages`、`pnpm run build:desktop` 通过。
+- [ ] **打包链校验在 tag 触发的 release.yml 构建腿执行**（afterPack 断言：vendor
+      dsh 平台、pnpm 模块、asar 内 dsh-runtime；跨平台路径形态见
+      packaging-closure-checklist §3）。改动打包链/构建脚本后，先用 §7b 的
+      `workflow_dispatch` dry_run 跑完整构建腿验证，再上正式 tag。
 - [ ] **打包完整性自检**（`docs/checklists/packaging-closure-checklist.md` §1–§2）：
       main.ts 传递 import 闭包 ⊆ `build.files`；构建链产物齐全
       （dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。
-- [ ] **本地不做打包/签名/公证**（2026-08 决策）：安装包/更新源由 release.yml 的
+- [ ] **本地不做打包/签名/公证**：安装包/更新源由 release.yml 的
       build-macos / build-windows 在 CI 生成，发布者本机无需 hdiutil/密钥。
 - [ ] `pnpm run smoke` 通过（dsh 已封装时真跑；未安装时 SKIP 属正常）。
 
@@ -91,7 +95,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] 旧 dsh pin 残留扫描：`grep -rn "141eb6f\|0\.1\.0-rc\.8" packages/ scripts/ harness.commit`
       （非 vendor/node_modules）仅剩历史文档/迁移条目。
 
-## 6. 签名/公证（2026-08 起全部由 CI 处理）
+## 6. 签名/公证（全部由 CI 处理）
 
 - [ ] 本地不配置任何签名密钥；macOS 签名/公证、Windows 签名由 release.yml 的
       afterPack/发布腿处理（缺凭据或验签失败时 fail-closed 不发布，见 design 11 §7）。

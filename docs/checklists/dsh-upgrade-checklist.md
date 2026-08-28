@@ -30,9 +30,8 @@
 - [ ] `bundle-dsh.mjs` `DEFAULT_DSH_VERSION` + `packages/desktop/vendor/dsh/package.json`
       `"@deepseek-ai/dsh"` → 目标版本（先确认 npm 已发布）。
 - [ ] **CI 环境变量**：`.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`
-      同步（教训①：曾漏改导致产物捆绑旧版 dsh；教训② v0.1.4 时 ci.yml 也硬编码
-      了一份并漏改，CI 打包 job 全红——2026-08 起 CI 不再打包，此 env 仅存在于
-      release.yml；若将来把打包 job 加回 ci.yml，必须连同 ci.yml 一起同步）。
+      同步（此 env 仅存在于 release.yml，CI 不打包；若将来把打包 job 加回
+      ci.yml，必须连同 ci.yml 一起同步）。
 - [ ] **安装脚本常量同步**：`scripts/install-gateway.sh` 内置
       `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.1-rc.2`）→ 目标版本（与 release.yml
       的 env 同步；脚本默认安装该版本，用户可交互覆盖）。

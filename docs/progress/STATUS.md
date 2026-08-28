@@ -36,6 +36,13 @@
 - **发布基础设施目标态**：ci.yml 的 test job 抽 reusable workflow 供
   release.yml 的 validation 复用（当前 validation 为 ci.yml 弱化镜像，缺
   test:gateway/test:runtime/typecheck:gateway 等）。
+- **desktop 打包闭包已知 P2（非阻塞）**：托盘图标死候选（`tray.png` 两处
+  路径永不存在，仅靠第三条兜底）；`dist/**/*.map` 未排除；preload 回退分支
+  （`dist/preload.cjs` 缺失时回退 `preload.cts`）打包态沙箱内会 SyntaxError，
+  建议回退改 loud 报错；共享 dist 目录（vite `emptyOutDir` 会清空
+  desktop/dist，单跑 `build:renderer` 会删其他产物，dev 有懒构建自愈）。
+- **打包闭包自检脚本（长期建议）**：CI 加「main.ts 模块闭包 vs build.files
+  清单」自检，替代手工核对。
 
 ## 部分完成（剩余验收 / 剩余实现）
 
