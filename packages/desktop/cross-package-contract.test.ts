@@ -26,6 +26,7 @@ import assert from 'node:assert/strict'
 // control-plane, dev/tests → workspace source).
 import {
   buildClientRequest as desktopBuildClientRequest,
+  isPackagedElectronRuntime,
   renderCordisInserts as desktopRenderCordisInserts,
 } from './control-plane-module.ts'
 // The control-plane authoritative package (the cross-package contract target).
@@ -43,6 +44,25 @@ import {
 
 const CLIENT_GRAPH = { id: CLIENT_GRAPH_INSERT_ID, name: CLIENT_GRAPH_PACKAGE_NAME }
 const GIT_WORKTREE = { id: GIT_WORKTREE_INSERT_ID, name: GIT_WORKTREE_PACKAGE_NAME }
+
+test('the control-plane facade selects packaged artifacts without importing Electron in pure Node', () => {
+  assert.equal(isPackagedElectronRuntime({}), false, 'pure Node must use the workspace package')
+  assert.equal(
+    isPackagedElectronRuntime({ electronVersion: '43.4.0', defaultApp: true }),
+    false,
+    'an unpackaged Electron app must use the workspace package',
+  )
+  assert.equal(
+    isPackagedElectronRuntime({ electronVersion: '43.4.0', defaultApp: false }),
+    true,
+    'a packaged Electron app must use the compiled artifact',
+  )
+  assert.equal(
+    isPackagedElectronRuntime({ electronVersion: '43.4.0' }),
+    true,
+    'packaged Electron may leave defaultApp undefined',
+  )
+})
 
 /** Golden wire bytes of the chamber loader overlay (dsh-app-boot
  *  loadOverlayPatches format: a top-level YAML array of `- insert:` loader

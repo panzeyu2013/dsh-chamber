@@ -10,8 +10,7 @@
  * through the pnpm symlink. This module lifts the dual-path resolution (the
  * former main.ts controlPlaneModule block) into one shared module:
  *
- *   - main.ts consumes createControlPlane (and CONTROL_PLANE_ENTRY for the
- *     packaged-artifact presence check);
+ *   - main.ts consumes createControlPlane;
  *   - ssh-provider.ts consumes the RPC envelope primitives
  *     (buildClientRequest / parseServerResponse / postClientRequest) for
  *     verifyDshEndpoint / probeRemoteMethod;
@@ -19,28 +18,47 @@
  *     (renderCordisInserts / parseLoaderRows / hasExactInsert / fieldCount /
  *     insertConflict) for the remote cordis.patch.yml seed merge.
  *
- * The isPackaged gate mirrors main.ts exactly. The electron reference is
- * made test-safe: in a pure-node test process the `electron` package
- * resolves to its launcher (no `app` member), which falls through to the
- * workspace branch — the same branch dev uses, and exactly what the tests
- * need. Inside the real Electron main process the gate is the genuine
- * app.isPackaged.
+ * The packaged-runtime gate deliberately uses process metadata rather than
+ * importing `electron`: this facade is also consumed by pure-node modules
+ * and tests, which must not require Electron's downloaded binary merely to
+ * load shared protocol helpers. Electron sets `process.versions.electron` in
+ * every main process and `process.defaultApp` when an unpackaged app is run
+ * through the default Electron executable.
  */
 
-import * as electronNs from 'electron'
 import path from 'node:path'
+import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 /**
- * The packaged-build compiled entry (build:control-plane output). Exported
- * for main.ts's packaged-artifact presence check (a packaged app without the
- * compiled entry is a broken build: loud dialog, not a cryptic failure).
+ * The packaged-build compiled entry (build:control-plane output). A packaged
+ * app without it is a broken build; fail with an explicit artifact error
+ * before attempting the dynamic import.
  */
 const pkgDir = path.dirname(fileURLToPath(import.meta.url))
-export const CONTROL_PLANE_ENTRY = path.join(pkgDir, 'dist', 'control-plane', 'index.js')
+const CONTROL_PLANE_ENTRY = path.join(pkgDir, 'dist', 'control-plane', 'index.js')
 const controlPlaneEntrySpecifier = './dist/control-plane/index.js'
 
-const isPackaged = (electronNs as unknown as { app?: { isPackaged?: boolean } }).app?.isPackaged === true
+export function isPackagedElectronRuntime(runtime: {
+  electronVersion?: string
+  defaultApp?: boolean
+}): boolean {
+  return typeof runtime.electronVersion === 'string'
+    && runtime.electronVersion.length > 0
+    && runtime.defaultApp !== true
+}
+
+const runtimeProcess = process as NodeJS.Process & { defaultApp?: boolean }
+const isPackaged = isPackagedElectronRuntime({
+  electronVersion: process.versions.electron,
+  defaultApp: runtimeProcess.defaultApp,
+})
+
+if (isPackaged && !existsSync(CONTROL_PLANE_ENTRY)) {
+  throw new Error(
+    `missing packaged control-plane artifact: ${CONTROL_PLANE_ENTRY} (run pnpm --filter @dsh-chamber/desktop run build:control-plane before packaging)`,
+  )
+}
 
 /**
  * The resolved control-plane module: the compiled artifact when packaged,

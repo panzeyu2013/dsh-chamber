@@ -43,7 +43,7 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane';
 // dev → workspace source) is single-sourced in control-plane-module.ts (A2
 // cross-package protocol single-sourcing) — the same module ssh-provider.ts
 // and plugin-sync.ts consume their shared envelope/cordis primitives from.
-import { CONTROL_PLANE_ENTRY, createControlPlane } from './control-plane-module.ts';
+import { createControlPlane } from './control-plane-module.ts';
 import { createTrustedIpc, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
 import {
@@ -456,13 +456,13 @@ if (!gotTheLock) {
   // 终止信号（终端 Ctrl+C / Activity Monitor「退出」/ 进程管理器 SIGTERM）：
   // 转 app.quit() 优雅路径——will-quit 会先回收传输层/控制面/本地 dsh 实例，
   // 而不是让 Electron 直接终止，把 detached 的 dsh 子进程留成孤儿。
-  // **2026-08 实机验证**：macOS Electron 43 主进程的 `process.on('SIGTERM')`
-  // **不触发**——Chromium 消费信号并走自身的默认优雅退出（同样触发
-  // before-quit → will-quit，资源回收完整）；本 handler 在 macOS 上是死代码，
-  // 保留作为 linux/win 等 process.on 生效平台的兜底。信号场景（macOS）因此走
-  // 正常退出确认（quitConfirmation=true 且本地实例在跑时会弹确认框，等待用户
-  // 确认后走 will-quit 清理——不是卡死）。信号本身是明确的退出意图，handler
-  // 触发时跳过确认框（quitConfirmed 提前置位）。
+  // **2026-08 实机验证**：macOS 与 Linux 的 Electron 43 主进程收到 SIGTERM
+  // 时，`process.on('SIGTERM')` **不触发**——Chromium 消费信号并走自身的默认
+  // 优雅退出（同样触发 before-quit → will-quit，资源回收完整）；本 handler
+  // 保留作为其他运行时/平台上 process.on 生效时的兜底。Chromium 接管的信号
+  // 场景因此走正常退出确认（quitConfirmation=true 且本地实例在跑时会弹确认
+  // 框，等待用户确认后走 will-quit 清理——不是卡死）。信号本身是明确的退出
+  // 意图，handler 真正触发时跳过确认框（quitConfirmed 提前置位）。
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
       if (quitRequested) return;
@@ -638,15 +638,6 @@ if (!gotTheLock) {
     } catch (err) {
       const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
       dialog.showErrorBox('dsh-chamber 启动失败', `控制面启动失败：\n${detail}`);
-      app.exit(1);
-      return;
-    }
-
-    if (app.isPackaged && !existsSync(CONTROL_PLANE_ENTRY)) {
-      dialog.showErrorBox(
-        'dsh-chamber 启动失败',
-        `未找到控制面编译产物：${CONTROL_PLANE_ENTRY}\n请先执行 pnpm --filter @dsh-chamber/desktop run build:control-plane`,
-      );
       app.exit(1);
       return;
     }
