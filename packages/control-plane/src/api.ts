@@ -305,10 +305,10 @@ export function createApi(deps: ApiDeps) {
 
   /** Resolve a route from {pathname, method}; returns {handler} or null. */
   function route(method: string | undefined, segments: string[], res: ApiResponse, req: ApiRequest): RouteHandler | null {
-    if (segments[0] === 'health' && method === 'GET') return async () => json(res, 200, deps.getHealth())
+    if (segments[0] === 'health' && segments.length === 1 && method === 'GET') return async () => json(res, 200, deps.getHealth())
     if (segments[0] === 'api') {
       const [a, b] = [segments[1], segments[2]]
-      if (a === 'host' && b === 'health-events' && method === 'GET' && deps.subscribeHealthEvents !== undefined) {
+      if (a === 'host' && b === 'health-events' && segments.length === 3 && method === 'GET' && deps.subscribeHealthEvents !== undefined) {
         return async () => {
           if (activeHealthEventStreams >= MAX_HEALTH_EVENT_STREAMS) {
             return jsonError(res, 503, { code: 'resource_exhausted', message: 'too many health-event streams' })
@@ -449,7 +449,7 @@ export function createApi(deps: ApiDeps) {
             }
           }
         }
-        if (b === 'local' && method === 'DELETE') {
+        if (b === 'local' && segments.length === 3 && method === 'DELETE') {
           return async () => {
             try {
               await deps.stopConnection(b)
@@ -462,7 +462,7 @@ export function createApi(deps: ApiDeps) {
             }
           }
         }
-        if (b === 'local' && method === 'PATCH') {
+        if (b === 'local' && segments.length === 3 && method === 'PATCH') {
           return async (body: any) => {
             if (body === null || typeof body !== 'object') return jsonError(res, 400, 'bad_request')
             try {
@@ -493,7 +493,7 @@ export function createApi(deps: ApiDeps) {
         instanceHandler.ownBody = true
         return instanceHandler
       }
-      if (a === 'host' && b === 'logs' && method === 'GET') {
+      if (a === 'host' && b === 'logs' && segments.length === 3 && method === 'GET') {
         // Managed-host rolling logs (design 02 §3.8 read side).
         return async () => {
           if (deps.hostLogs === undefined) return jsonError(res, 404, 'not_found')

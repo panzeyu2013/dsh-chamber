@@ -131,7 +131,7 @@ export const cp = {
   health: (): Promise<HealthResponse> => request('/health'),
 
   /** SSE push channel (设计 05 §3): 当前快照 + 每次状态迁移。 */
-  healthEvents: (): EventSource => new EventSource('/api/host/health-events'),
+  healthEvents: (): EventSource => new EventSource(controlPlaneUrl() + '/api/host/health-events'),
 
   /** GET /api/connections → 本地连接行（无行 404 → null）。 */
   connectionsList: async (): Promise<ConnectionSummary | null> => {

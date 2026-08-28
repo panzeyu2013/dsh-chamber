@@ -26,8 +26,6 @@ import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 
-const CHAMBER_BOOT = '@dsh-chamber/app'
-
 /** How long a session open waits for the runtime list before failing loud. */
 const OPEN_WAIT_MS = 8000
 const OPEN_RETRY_MS = 400
@@ -466,6 +464,3 @@ export function disposeAllShells(): void {
   }
   pendingOpens.rejectAll(new Error('全部实例 shell 已释放，排队的会话未打开'))
 }
-
-/** The boot-graph row id this page's manifest must carry (gen-boot-manifest.mjs). */
-export const BOOT_PLUGIN_ID = CHAMBER_BOOT

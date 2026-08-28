@@ -1,9 +1,10 @@
 /**
  * Renderer REST client — narrowed to the design 05 §3.1 surface:
- * health, connections (local), host logs. Auth/audit routes were removed
+ * health, connections (local). Auth/audit routes were removed
  * with the control-plane auth removal (v1 consolidation); everything else
- * (sessions/projects/interactions/SSE/config/… passthrough) was deleted
- * with the thin-shell chat UI.
+ * (sessions/projects/interactions/SSE/config/… passthrough, and the host
+ * logs REST surface — the settings-connections plugin owns its own
+ * control-plane client) was deleted with the thin-shell chat UI.
  *
  * 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。
  */
@@ -103,20 +104,6 @@ export interface ConnectionSummary {
   error?: string
 }
 
-/** 一行主机滚动日志（04 §3.3；P2 连接设备页恢复）。 */
-export interface HostLogLine {
-  ts: number
-  stream: 'stdout' | 'stderr'
-  line: string
-}
-
-/** GET /api/host/logs 响应（04 §3.3；P2 连接设备页恢复）。 */
-export interface HostLogsResponse {
-  port: number
-  lines: HostLogLine[]
-  truncated: boolean
-}
-
 /** wire 行 → renderer 摘要（kind 恒为 'local'；connectionId 即行 id）。 */
 function toSummary(row: ConnectionRowWire): ConnectionSummary {
   const summary: ConnectionSummary = { connectionId: row.id, kind: 'local', status: row.status }
@@ -142,15 +129,7 @@ export const api = {
      * instance's status never waits for a poll tick (the remote roster
      * already rides desktop pushes).
      */
-    healthEvents: (): EventSource => new EventSource('/api/host/health-events'),
-    /** GET /api/host/logs?limit=&offset=（04 §3.3；缺省 limit 200，上限 1000） */
-    logs: async (limit?: number, offset?: number): Promise<HostLogsResponse> => {
-      const params: string[] = []
-      if (typeof limit === 'number' && Number.isFinite(limit)) params.push(`limit=${limit}`)
-      if (typeof offset === 'number' && Number.isFinite(offset)) params.push(`offset=${offset}`)
-      const qs = params.length === 0 ? '' : `?${params.join('&')}`
-      return request(`/api/host/logs${qs}`)
-    },
+    healthEvents: (): EventSource => new EventSource(controlPlaneUrl() + '/api/host/health-events'),
   },
   connections: {
     /** GET /api/connections → {connection}（04 §3.2）；无连接行 404 → 空数组 */

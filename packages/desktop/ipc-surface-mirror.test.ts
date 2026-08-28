@@ -99,6 +99,26 @@ function interfaceFieldSignatures(source: string, typeName: string): string[] {
 const preload = readFileSync(join(ROOT, 'packages/desktop/preload.cts'), 'utf8')
 const renderer = readFileSync(join(ROOT, 'packages/renderer/src/global.d.ts'), 'utf8')
 const settings = readFileSync(join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src/global.d.ts'), 'utf8')
+const rendererApp = readFileSync(join(ROOT, 'packages/renderer/src/App.tsx'), 'utf8')
+
+test('system-resume channel name stays in lockstep across all three sites (H2)', async () => {
+  // The desktop side is single-sourced in ipc-events.ts (main.ts imports it);
+  // preload.cts is a self-contained single-file build (build-preload.mjs) and
+  // cannot import the shared constant — the literal is duplicated on purpose.
+  // The renderer App layer re-dispatches the same IPC push as a window event.
+  // Pin all three sites to the same string so a rename can never drift
+  // silently. The preload assertion is anchored on the ACTUAL subscription
+  // call (not a bare includes) so the literal cannot hide in a comment.
+  const { SYSTEM_RESUME_EVENT } = await import('./ipc-events.ts')
+  assert.ok(
+    preload.includes(`ipcRenderer.on('${SYSTEM_RESUME_EVENT}'`),
+    'preload.cts no longer subscribes with the same system-resume channel literal as ipc-events.ts',
+  )
+  assert.ok(
+    rendererApp.includes(`new Event('${SYSTEM_RESUME_EVENT}')`),
+    'App.tsx no longer re-dispatches the same system-resume window event as ipc-events.ts',
+  )
+})
 
 test('DesktopSshSurface stays in lockstep across preload / renderer mirrors (L3)', () => {
   const authoritative = interfaceMethodNames(preload, 'DesktopSshSurface')

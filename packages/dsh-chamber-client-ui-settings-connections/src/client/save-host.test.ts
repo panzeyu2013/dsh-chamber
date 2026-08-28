@@ -126,3 +126,32 @@ test('new host: a ROLLBACK throw must never masquerade as the password error (ro
   assert.match(result.error, /host metadata rollback failed/)
   assert.equal(result.metadataCommitted, true)
 })
+
+test('new host: a REFUSED registry save (instances_set returns the original list) is a loud failure, not a silent success', async () => {
+  const bridge = gatedBridge({ registry: () => [oldHost] }) // 主进程拒绝：返回当前 registry，无错误通道
+  const result = await saveHostWithPassword(bridge, [oldHost], [oldHost, newHost], 'new', 'pw')
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.match(result.error, /保存未生效/, `refusal error surfaced: ${result.error}`)
+  assert.equal(result.metadataCommitted, false)
+  assert.deepEqual(result.instances, [oldHost])
+  assert.deepEqual(bridge.calls, ['instances_set'], 'set_password must not run for a save that never landed')
+  assert.deepEqual(bridge.state, [oldHost])
+})
+
+test('edit: a REFUSED registry save (stale entry returned) is a loud failure', async () => {
+  const bridge = gatedBridge({ registry: () => [oldHost] }) // 拒绝编辑：返回旧条目
+  const result = await saveHostWithPassword(bridge, [oldHost], [{ ...oldHost, host: 'moved.example.com' }], 'old', '')
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.match(result.error, /保存未生效/, `refusal error surfaced: ${result.error}`)
+  assert.equal(result.metadataCommitted, false)
+  assert.deepEqual(bridge.calls, ['instances_set'])
+})
+
+test('edit: submitting the CURRENT values (no actual change) still reports ok:true', async () => {
+  const bridge = gatedBridge()
+  const result = await saveHostWithPassword(bridge, [oldHost], [{ ...oldHost }], 'old', '')
+  assert.equal(result.ok, true)
+  assert.deepEqual(bridge.calls, ['instances_set'])
+})

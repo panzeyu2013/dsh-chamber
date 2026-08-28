@@ -4,6 +4,22 @@
 > `CHANGELOG.md` 与 `docs/design/`（设计契约与样式定稿）为权威，不再在此
 > 复述实现过程与验证日志。本文档是 dsh-chamber 进度追踪的唯一记录。
 
+## 性能/卫生延后项（2026-11 批次评审，未排期）
+
+- **P0 渲染进程内存定位**：CDP 堆快照 + DOM 节点统计，对比 JS 堆 vs DOM 占比，
+  需打包版运行时实测。
+- **P3 长会话虚拟化**：`dsh-client-ui-conversation` ChatView 全量渲染
+  （todo/10 §6.1 已记录）；拷贝上游 + `@tanstack/react-virtual`（renderer 已有
+  依赖）与 todo/10「保持上游纯净」立场冲突，需先改立场再立项。
+- **P4 shiki 语言包产物核对**：构建已按需分包（BOOT_GRAMMAR_FILES 仅
+  ts/shellscript/json），仅需对构建产物核实 langs 按需加载，无代码改动。
+- **P6 控制面移入 utilityProcess**：中期重构（transport 注册面跨进程、spawn 孙
+  进程清理链、test:desktop 全回归）。
+
+> 2026-11 批次已实施项（A 类 10 项 + 3 项防御性 + P1/P2/P5 + 顺带项）以 git 历史
+> 与设计文档修订（02 §3.5 探活缺省 30s、05 §4 预热视图闲置回收例外条款）为权威
+> 记录，本文件不保留批次日志。
+
 ## 未完成 / 待执行
 
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游

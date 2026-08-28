@@ -10,7 +10,7 @@
  *
  * - spawn via spawn-dsh.ts (web profile, fixed port + P+1 retry, pid record);
  * - readiness = the spawn's TCP + host.describe handshake (spawn-dsh owns it);
- * - health monitoring (design 02 §3.5): a periodic host.describe probe (10s
+ * - health monitoring (design 02 §3.5): a periodic host.describe probe (30s
  *   default, 5s unary timeout, single-flight with a 750ms result cache)
  *   shares one failure counter with the transport triggers (child exit,
  *   probe failures). Failures 1..N-1 land on degraded; the Nth failure
@@ -140,7 +140,7 @@ export interface LocalConnection {
 export const FAILURE_THROTTLE_MS = 15_000
 
 /** Periodic health probe interval (design 02 §3.5, ms). */
-export const HEALTH_INTERVAL_MS = 10_000
+export const HEALTH_INTERVAL_MS = 30_000
 
 /** Periodic health probe unary timeout (ms). */
 export const HEALTH_PROBE_TIMEOUT_MS = 5_000

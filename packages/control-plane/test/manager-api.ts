@@ -304,9 +304,20 @@ test('DELETE stops the instance, keeps the row, and 404s for unknown ids', async
 test('unknown management paths answer 404 not_found', async () => {
   const holder = await makePlane()
   try {
-    for (const path of ['/api/projects', '/api/sessions', '/api/events', '/api/projects/capabilities', '/api/session/x/message']) {
+    for (const path of [
+      '/api/projects', '/api/sessions', '/api/events', '/api/projects/capabilities', '/api/session/x/message',
+      // Route segment-count violations (2026-11, H3): extra segments on
+      // exact-length routes must not reach the handler.
+      '/health/x', '/api/host/logs/extra', '/api/host/health-events/x',
+    ]) {
       const response = await fetchJson(holder.base, path)
       assert.equal(response.status, 404, `${path} should be 404`)
+    }
+    for (const path of ['/api/connections/local/extra']) {
+      const del = await fetchJson(holder.base, path, { method: 'DELETE' })
+      assert.equal(del.status, 404, `${path} DELETE should be 404`)
+      const patch = await fetchJson(holder.base, path, { method: 'PATCH', body: JSON.stringify({ label: 'x' }) })
+      assert.equal(patch.status, 404, `${path} PATCH should be 404`)
     }
   } finally {
     await holder.plane.stop()

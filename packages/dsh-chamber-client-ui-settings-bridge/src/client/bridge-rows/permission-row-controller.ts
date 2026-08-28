@@ -164,12 +164,3 @@ export class PermissionPresetSettingsController {
     })
   }
 }
-
-/**
- * Refetch only after the row has opened once.
- * @param controller - permission settings controller.
- */
-export function refreshPermissionIfLoaded(controller: PermissionPresetSettingsController): void {
-  if (controller.store.getSnapshot().status === 'idle') return
-  void controller.load()
-}

@@ -25,7 +25,6 @@ export const TRANSPORT_KINDS = ['ssh'] as const
 
 /** Renderer/registry resource budgets, enforced again in the main process. */
 export const MAX_TRANSPORT_INSTANCES = 32
-export const MAX_INSTANCE_ID_CHARS = 64
 export const MAX_INSTANCE_LABEL_CHARS = 128
 
 /**
@@ -189,6 +188,14 @@ export interface StderrClassification {
  *  `run` = a whitelisted remote command, design 13 §4.1). */
 export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
 
+/** The `run`-channel remote command whitelist (design 13 §4.1). Single source
+ *  of truth — plugin-sync's contract A types import this instead of copying
+ *  (the copy used to drift). The union equals the EXECUTABLE set enforced by
+ *  buildRemoteExecArgv (ssh-provider.ts): 'base64'/'mkdir' are NOT exec
+ *  commands — write-file builds them internally into its remote shell
+ *  template — so they are deliberately absent here. */
+export type TransportRunCommand = 'dsh' | 'cat' | 'printf'
+
 /**
  * The `run` action payload (design 13 §4.1): either a whitelisted remote
  * command (`exec`) or a file write over ssh stdin (`write-file`).
@@ -196,7 +203,7 @@ export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | '
 export interface TransportRunPayload {
   op: 'exec' | 'write-file'
   /** op='exec': remote command name (whitelisted). */
-  command?: 'dsh' | 'cat' | 'base64' | 'mkdir' | 'printf'
+  command?: TransportRunCommand
   /** op='exec': argv after the command name (whitelisted per command). */
   argv?: string[]
   /** op='write-file': target path (whitelisted prefixes, design 13 §7.2). */

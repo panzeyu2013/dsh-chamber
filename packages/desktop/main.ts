@@ -46,6 +46,7 @@ import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
 import { listOpenInApps, normalizeOpenPathError, runOpenInLaunch } from './open-in.ts';
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController } from './updater.ts';
+import { SYSTEM_RESUME_EVENT } from './ipc-events.ts';
 import {
   applyPlugins,
   CLIENT_GRAPH_INSERT_ID,
@@ -768,7 +769,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 恢复可见时一次性补发（design 14 D4）。
   win.on('show', () => {
     if (lastResume !== null) {
-      win.webContents.send('dsh-chamber:system-resume', { timestamp: lastResume });
+      win.webContents.send(SYSTEM_RESUME_EVENT, { timestamp: lastResume });
       lastResume = null;
     }
   });
@@ -1086,7 +1087,7 @@ if (!gotTheLock) {
     powerMonitor.on('resume', () => {
       lastResume = Date.now();
       if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('dsh-chamber:system-resume', { timestamp: lastResume });
+        mainWindow.webContents.send(SYSTEM_RESUME_EVENT, { timestamp: lastResume });
         // 窗口存活（含隐藏）已即时收到：清空 held 值，避免 hide→show 补发过期事件。
         lastResume = null;
       }
@@ -1142,11 +1143,10 @@ if (!gotTheLock) {
     // Plugin-sync dependency injection (design 13 M2+M3, contract A): the
     // orchestration in plugin-sync.ts is decoupled from the transport runtime,
     // so it is adapted here onto transport-manager.exec(id, action, payload?).
-    // plugin-sync re-declares the exec/status contract locally (no transport
-    // import); the `as unknown as ExecFn` cast bridges that contract onto the
-    // transport manager's structurally-identical runtime surface. `status`
-    // matches the runtime status(id) projection directly.
-    const execTransport = sm.exec as unknown as ExecFn;
+    // The contract types (TransportExecAction / TransportRunPayload) are
+    // SHARED from transport-provider.ts — the compiler checks this assignment
+    // (no cast): plugin-sync's ExecFn is structurally the manager's exec.
+    const execTransport: ExecFn = sm.exec;
     const statusTransport: StatusFn = (id) => sm.status(id);
     // Live-effect probe for the chamber host-graph state (design 09 module A):
     // adapts probeClientGraphLive (ssh-provider.ts, tunnel RPC) onto

@@ -65,7 +65,7 @@ jobs:
         run: pnpm run test:desktop
       - name: Renderer shell unit tests
         run: pnpm run test:renderer-shell
-      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / open-in)
+      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / connection / open-in)
         run: |
           pnpm run typecheck:sidebar
           pnpm run typecheck:git
@@ -73,6 +73,7 @@ jobs:
           pnpm run typecheck:connections
           pnpm run typecheck:settings-bridge
           pnpm run typecheck:client-web
+          pnpm run typecheck:connection
           pnpm run typecheck:open-in
       - name: Client and host plugin unit tests (sidebar / git / settings-bridge / connections / client-web / connection)
         run: |
@@ -83,11 +84,14 @@ jobs:
           pnpm run test:connections
           pnpm run test:client-web
           pnpm run test:connection
-      # SKIPs when the checkout carries no bundled dsh runtime — normal here,
-      # since only packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
-      # node_modules is never committed; the gate requires a real dsh CLI entry
-      # (2026-08 fix). A real SMOKE PASS happens in release.yml's build-macos
-      # job against the freshly bundled runtime.
+      # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
+      # dsh runtime — normal here, since only
+      # packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
+      # node_modules is never committed; the gate requires a real dsh CLI
+      # entry (2026-08 fix). The release path currently has NO smoke either:
+      # release.yml's build jobs only package and structurally verify the
+      # bundle (vendor/dsh presence + platform) — a smoke pass against the
+      # freshly bundled runtime is not wired up anywhere.
       - name: Smoke test
         run: pnpm run smoke
       - name: Renderer build

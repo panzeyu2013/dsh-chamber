@@ -21,8 +21,8 @@
  * proxy (design 03 §3.1) forwards.
  *
  * Port strategy: fixed base 17510, one attempt per port; a failed attempt
- * (process exit within 15s, or no TCP listener within 90s, or a failed
- * host.describe probe) advances port+1 and respawns, at most 5 attempts.
+ * (process exit, or no TCP listener within 90s, or a failed host.describe
+ * probe) advances port+1 and respawns, at most 5 attempts.
  * Spawn uses detached=true (own process group, design 02 §3.5.5: the host
  * survives a control-plane crash and the orphan reaper reclaims it, §3.4.2);
  * stdout/stderr are forwarded to the control-plane log and the per-port
@@ -75,9 +75,6 @@ export const TERMINATE_GRACE_MS = 1_000
 
 /** Maximum spawn attempts (port +1 per retry). */
 export const MAX_SPAWN_ATTEMPTS = 5
-
-/** A child that exits this quickly is treated as a failed attempt. */
-export const EARLY_EXIT_GRACE_MS = 15_000
 
 /** How long a spawned host gets to open its TCP listener. */
 export const LISTEN_WAIT_MS = 90_000

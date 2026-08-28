@@ -307,8 +307,6 @@ export function missingHostPackageInserts(
   return missing
 }
 
-export const HOST_GRAPH_PATCH_OVERLAY = renderPatchOverlay([HOST_GRAPH_INSERT])
-
 /** Files seeded from each chamber host package (its complete runtime surface). */
 const HOST_PACKAGE_SEED_FILES = ['package.json', 'dist/index.js'] as const
 

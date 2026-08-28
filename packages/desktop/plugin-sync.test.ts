@@ -20,7 +20,6 @@ import {
   classifyDependencyValue,
   classifyLocalDependency,
   classifySpec,
-  CLIENT_GRAPH_INSERT,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
@@ -46,7 +45,8 @@ import {
   PLUGIN_SPEC_PATTERN,
   PLUGIN_NAME_PATTERN,
 } from './plugin-sync.ts'
-import type { ChamberHostPackageSeed, ExecFn, ExecResult, StatusFn, RemoteSpec, TransportRunPayload } from './plugin-sync.ts'
+import type { ChamberHostPackageSeed, ExecFn, ExecResult, StatusFn, RemoteSpec } from './plugin-sync.ts'
+import type { TransportRunPayload } from './transport-provider.ts'
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'dsh-plugin-sync-'))
@@ -881,7 +881,13 @@ test('seed: two chamber host rows merge together and only a missing row is appen
   assert.ok(first.content.includes('id: git-worktree'))
   assert.deepEqual(computeCordisPatchUpdate(first.content, inserts), { write: false })
 
-  const graphOnly = CLIENT_GRAPH_INSERT
+  // A pre-existing patch carrying ONLY the client-graph insert (the canonical
+  // single-row shape; the exported CLIENT_GRAPH_INSERT constant was removed
+  // as dead code, this literal preserves the test's intent).
+  const graphOnly = `- insert:
+    - id: client-graph
+      name: '@dsh-chamber/dsh-host-client-graph'
+`
   const second = computeCordisPatchUpdate(graphOnly, inserts)
   assert.equal('error' in second, false)
   if ('error' in second || !second.write) return

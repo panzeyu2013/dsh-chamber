@@ -15,6 +15,34 @@ function sameInstances(left: SshInstanceSpec[], right: SshInstanceSpec[]): boole
 }
 
 /**
+ * Whether the submitted change actually LANDED in the registry. instances_set
+ * carries NO error channel (main.ts desktop_ssh_instances_set): a refused
+ * save — non-array input, registry/state-dir write failure, instance-count
+ * cap — returns the CURRENT registry unchanged instead of throwing, so a
+ * save must verify its effect instead of trusting the resolved call (same
+ * loud-failure invariant as the deletion path in ConnectionsSection).
+ * - NEW host: the registry must contain an entry with id === instanceId.
+ * - EDIT: the stored entry must reflect the submitted fields
+ *   (label/host/remotePort/sshPort/user/serviceName/remoteDshHome;
+ *   undefined/null normalized before comparing).
+ */
+function landed(saved: SshInstanceSpec[], next: SshInstanceInput[], instanceId: string, exists: boolean): boolean {
+  const submitted = next.find(entry => entry.id === instanceId)
+  const stored = saved.find(spec => spec.id === instanceId)
+  if (submitted === undefined || stored === undefined) return false
+  if (!exists) return true // 新主机：注册表出现该 id 即落地
+  return (
+    stored.label === submitted.label &&
+    stored.host === submitted.host &&
+    stored.remotePort === submitted.remotePort &&
+    stored.user === (submitted.user ?? null) &&
+    stored.sshPort === (submitted.sshPort ?? null) &&
+    stored.serviceName === (submitted.serviceName ?? null) &&
+    stored.remoteDshHome === (submitted.remoteDshHome ?? null)
+  )
+}
+
+/**
  * Save non-secret host metadata and its optional secret as one user-visible
  * operation. ORDER DEPENDS ON REGISTRY EXISTENCE (2026 final review fix):
  * - EXISTING host: password FIRST, registry SECOND — a password failure
@@ -49,6 +77,18 @@ export async function saveHostWithPassword(
     saved = await bridge.instances_set(next)
   } catch (error) {
     return { ok: false, instances: before, error: message(error), metadataCommitted: false }
+  }
+  // A refused save returns the current registry (no error channel) — verify
+  // the change landed BEFORE reporting success or committing the password.
+  // The password error text would otherwise be fabricated by a save that
+  // never happened (silent no-op); the refusal error keeps the form open.
+  if (!landed(saved, next, instanceId, exists)) {
+    return {
+      ok: false,
+      instances: saved,
+      error: '保存未生效：主进程拒绝了该变更（实例数量上限或状态目录不可写？）',
+      metadataCommitted: false,
+    }
   }
   if (password === '') return { ok: true, instances: saved }
   if (exists) return { ok: true, instances: saved }

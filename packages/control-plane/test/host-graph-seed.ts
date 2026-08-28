@@ -43,8 +43,9 @@ const silentLogger = { log() {}, warn() {}, error() {} }
  * The canonical overlay content the seed writes (mirror of the module).
  *
  * Validation note (④): the assertions below are byte-exact against the
- * module's single-sourced constant HOST_GRAPH_PATCH_OVERLAY — the strongest
- * check available here, because the overlay's boot-time authority
+ * module's canonical overlay renderer output (renderPatchOverlay over the
+ * HOST_GRAPH_INSERT row) — the strongest check available here, because the
+ * overlay's boot-time authority
  * (@deepseek-ai/dsh-app-boot loadOverlayPatches → parsePatchList, a YAML
  * parser over the top-level loader-patch array) is NOT importable from this
  * test: control-plane's runtime node graph resolves neither

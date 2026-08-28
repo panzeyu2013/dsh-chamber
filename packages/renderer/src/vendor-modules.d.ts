@@ -325,6 +325,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export function runtimeReportSignature(
     report: InstanceRuntimeReport | undefined,
     onlyIds?: ReadonlySet<string>,
+    includeRunning?: boolean,
   ): string
   export function serversProjectionSignature(servers: readonly ChamberServerAggregate[]): string
   export const SEARCH_QUERY_MAX_CODE_UNITS: number
@@ -357,6 +358,16 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     folded: Record<string, boolean>
     ungroupedOrder: Record<string, string[]>
     seenSources: string[]
+    /** Design 06 §3.1 — per-source session ordering preference ('manual' | 'updated'). */
+    orderBy?: Record<string, 'manual' | 'updated'>
+    /** Design 06 §3.1 — updated-mode session order accounts (key: `${sourceId}/${workspaceId}`). */
+    updatedOrder?: Record<string, string[]>
+    /** Design 06 §3.1 — updated-mode activity bookkeeping (sessionId → last observed updatedAt). */
+    sessionUpdatedAtByAccount?: Record<string, Record<string, number>>
+    /** Design 06 §2.4 — source-level fold (key: sourceId). */
+    sourceFolded?: Record<string, boolean>
+    /** Design 06 §2.4 — source display order (sourceIds in sidebar order). */
+    serverOrder?: string[]
     /** Page-wide sidebar width preference in px (design 06 ui-layout fork); absent = never dragged. */
     sidebarWidth?: number
   }

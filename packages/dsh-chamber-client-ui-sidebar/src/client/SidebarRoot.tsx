@@ -955,7 +955,10 @@ export function SidebarRoot({
       workspace.sessions.some(session => session.id === current && session.blank === true))
     if (!isBlankCurrent) return
     armBlankGhost(active.id, current)
-    ghostExpiry.current.set(current, Date.now() + BLANK_GHOST_GRACE_MS)
+    // Source-scoped key (L2), isomorphic with derive.ts sessionVisible's
+    // `serverId:sessionId` ghost key: cloned UUIDs across sources must not
+    // share render-side grace either.
+    ghostExpiry.current.set(`${active.id}:${current}`, Date.now() + BLANK_GHOST_GRACE_MS)
     // chamber (third-wave review, R2-1#5): the one-shot timer is trimmed from
     // the ref after it fires, so repeated armings (rare, but each timer
     // outlives the 450ms grace) cannot grow ghostTimers unboundedly.
@@ -1186,14 +1189,15 @@ export function SidebarRoot({
     const orderBy = getViewPrefs().orderBy?.[server.id] ?? viewPrefs.orderBy?.[server.id] ?? 'manual'
     const wireIds = workspace.sessions.map(session => session.id)
     const accountKey = `${server.id}/${workspace.id}`
-    // Updated branch reads the LIVE store (like the derivation effect, not
-    // this render's viewPrefs snapshot): a promotion write can land between
-    // this render and the drop, and stale anchor math would then clobber the
-    // un-rendered promotion on the same account key.
+    // Updated AND manual-ungrouped branches read the LIVE store (like the
+    // derivation effect, not this render's viewPrefs snapshot): a concurrent
+    // write (promotion, or a drag from another shell) can land between this
+    // render and the drop, and stale anchor math would then clobber the
+    // un-rendered order on the same account key.
     const renderedOrder = orderBy === 'updated'
       ? reconciledSessionOrder(getViewPrefs().updatedOrder?.[accountKey] ?? [], wireIds)
       : workspace.ungrouped === true
-        ? reconciledSessionOrder(viewPrefs.ungroupedOrder[server.id] ?? [], wireIds)
+        ? reconciledSessionOrder(getViewPrefs().ungroupedOrder[server.id] ?? [], wireIds)
         : sessionOrderOverride[accountKey] ?? wireIds
     const targetIndex = renderedOrder.findIndex(id => id === over.id)
     if (targetIndex === -1) return
@@ -2519,9 +2523,13 @@ export function SidebarRoot({
                                 // dropped even if the App has not re-derived yet
                                 // (the next publish drops it from the projection
                                 // for good — the row is invisible either way, so
-                                // skipping it never shows a stale row).
+                                // skipping it never shows a stale row). Keyed
+                                // `${server.id}:${session.id}` — source-scoped (L2),
+                                // isomorphic with derive.ts sessionVisible's ghost
+                                // key: cloned UUIDs across sources must not share
+                                // render-side grace.
                                 const ghost = isGhostSession(session)
-                                const ghostLive = ghost && (ghostExpiry.current.get(session.id) ?? 0) > Date.now()
+                                const ghostLive = ghost && (ghostExpiry.current.get(`${server.id}:${session.id}`) ?? 0) > Date.now()
                                 if (ghost && !ghostLive) return null
                                 // chamber (06, P2-11 — 2026-08): the session row
                                 // (hoisted so the HoverCard can wrap it). The

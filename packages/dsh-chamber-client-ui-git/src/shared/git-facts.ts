@@ -126,8 +126,3 @@ export function collectSessionClosure(
   }
   return [...seen]
 }
-
-/** Stable short head for compact sidebar rows. */
-export function shortHead(head: string): string {
-  return head.length > 8 ? head.slice(0, 8) : head
-}

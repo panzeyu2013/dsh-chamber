@@ -32,6 +32,24 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **Reverse proxy mis-aborting every bodyless request and WS handshake (03 §3.3
+  disconnection detection)** — the control plane's `instance-proxy` HTTP
+  forwarding and WS upgrade paths treated `req.on('close')` as a client
+  disconnect signal, but Node 16+ fires `IncomingMessage 'close'` as soon as
+  the request body is consumed (immediately for bodyless GET/HEAD), so every
+  proxied GET/HEAD request and WS handshake was mis-aborted right after being
+  sent: 30s bundle-load timeouts ("instance failed to start"), the web runtime
+  looping `connection lost, retry #N` forever, and every instance boot timing
+  out — local and remote alike. POST happened to work because `'close'` fires
+  during the `readBody` await (the listener is not yet attached), which long
+  masked the issue behind "POST probes all pass". Fix: the disconnect
+  detection moved to the response leg (`res 'close'` + `writableEnded` guard,
+  the same discipline as the api.ts SSE), and the WS upgrade now listens on
+  the browser socket's `'close'` (only a genuine disconnect fires pre-101; the
+  splice tearDown takes over post-101); the api.ts health-events SSE received
+  the same fix. Added 4 real Node stream integration regression tests (fake
+  requests do not model real `'close'` semantics; red-green verified:
+  reverting the bug hangs the tests with a timeout).
 - **Main-process confirmation for plugin actions (design 09 §4 v1 security
   mitigation)** — `desktop_ssh_plugin_materialize_add` / `desktop_local_plugin_add`
   / `desktop_local_plugin_remove` now require a main-process confirmation

@@ -41,32 +41,19 @@ import { homedir, tmpdir } from 'node:os'
 // `.ssh*`-named home path), so the provider-side classification and this
 // caller-side error-text test can never drift apart.
 import { ENOENT_PATTERN, MAX_PLUGIN_SPEC_CHARS, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
+// Contract A types (design 13 §4.1) are SHARED from transport-provider.ts —
+// the provider's single source of truth (transport-provider has no runtime
+// imports, so this pulls no transport-manager/electron surface). The copied
+// union used to drift ('base64'/'mkdir' went missing from the copy).
+import type { TransportExecAction, TransportRunPayload } from './transport-provider.ts'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 
 // ============================================================================
-// Contract A types (self-contained; transport-manager is not imported)
+// Contract A types: TransportExecAction / TransportRunPayload imported from
+// transport-provider.ts (single source, see the import note above).
 // ============================================================================
 
-export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
-
-export type TransportRunCommand = 'dsh' | 'cat' | 'printf'
-
-export interface TransportRunPayload {
-  op: 'exec' | 'write-file'
-  command?: TransportRunCommand
-  argv?: string[]
-  path?: string
-  contentBase64?: string
-  sha256?: string
-  /**
-   * True = a non-zero exit is EXPECTED (a first-seed probe of a file that
-   * does not exist yet, design 13 §4.6): the ssh provider suppresses the
-   * "run command failed" ERROR log and the raw-stderr INFO echo, while the
-   * `ok:false` error text (ENOENT classification) still rides the result.
-   */
-  quiet?: boolean
-}
 
 /** The non-secret status surface `applyPlugins` needs for the ready recheck. */
 export interface StatusLike {
@@ -1047,9 +1034,6 @@ const GIT_WORKTREE_HOST_INSERT: ChamberHostInsert = {
 function renderCordisInserts(inserts: readonly ChamberHostInsert[]): string {
   return `- insert:\n${inserts.map(entry => `    - id: ${entry.insertId}\n      name: '${entry.packageName}'\n`).join('')}`
 }
-
-/** Backwards-compatible single-row canonical insert. */
-export const CLIENT_GRAPH_INSERT = renderCordisInserts([CLIENT_GRAPH_HOST_INSERT])
 
 export type CordisPatchUpdate =
   | { write: false }

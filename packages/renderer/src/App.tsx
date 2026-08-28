@@ -42,6 +42,7 @@ import {
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
+import { isIdleEvictable, isWithinCooldown } from './eviction-policy.ts'
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
@@ -63,6 +64,14 @@ const AGGREGATE_POLL_CONCURRENCY = 4
 const AGGREGATE_RETRY_MS = 3_000
 const AGGREGATE_RETRY_LIMIT = 5
 const MAX_PREWARMED_REMOTE_VIEWS = 3
+/** 闲置预热 shell 回收（P2）：auto-prewarmed 视图 settle 后闲置超过该时长即
+ *  逐出（dispose shell + release client），释放 N-ctx 常驻成本。 */
+const IDLE_EVICT_MS = 15 * 60_000
+/** 逐出扫描周期（P2；不受 visibility 门控——隐藏态逐出是纯内存收益）。 */
+const EVICT_SCAN_MS = 60_000
+/** 逐出冷却（P2）：逐出后该 id 在冷却期内不再被空闲预热，防「逐出 → 立即
+ *  重新预热」抖动；用户点击打开不受冷却限制（selectView 不查冷却）。 */
+const PREWARM_COOLDOWN_MS = 10 * 60_000
 /** 连接行（label/dshPort）低频轮询：状态本身走推送，行字段极少变化。 */
 const CONNECTIONS_POLL_MS = 30_000
 
@@ -234,13 +243,20 @@ export default function App() {
   const [connections, setConnections] = useState<ConnectionSummary[] | null>(null)
   const [remoteInstances, setRemoteInstances] = useState<SshInstanceSpec[]>([])
   const [remoteStatus, setRemoteStatus] = useState<Record<string, SshStatusProjection>>({})
-  // 视图：'local' | 'ssh-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
+  // 视图：'local' | 'ssh-<id>'；用户主动打开过的实例视图保留（N-ctx 常驻，
+  // 会话保活）；auto-prewarmed 视图可被闲置回收（P2，见 teardownView）。
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
   // Views mounted only by background prewarm. User selection removes the id
   // from this set, freeing one of the three idle-prewarm slots while keeping
   // the user-opened N-ctx shell resident.
   const autoPrewarmedRef = useRef<Set<string>>(new Set())
+  // P2 闲置回收簿记：预热视图 settle 时间（ms epoch）。只在视图仍留在
+  // autoPrewarmedRef（未被用户打开）时记录；用户打开后常驻、不回收。
+  const prewarmSettledAtRef = useRef<Record<string, number>>({})
+  // P2 冷却簿记：被逐出/注册表删除的 id → 时间戳；冷却期内 prewarmEligible
+  // 排除该 id（用户点击打开不受影响）。
+  const prewarmCooldownRef = useRef<Record<string, number>>({})
   // chamber (2026-08 失败呈现修订, 05 §4)：每视图 shell 终态（InstanceView
   // 经 onStateChange 上报）——活动视图 boot 失败时由 App 渲染统一失败覆盖层
   // （失败报告 + 重试 + 服务器切换）。retryTokens 驱动 InstanceView 的重试
@@ -342,40 +358,52 @@ export default function App() {
    * 设计意图相悖。local 常驻。被回收的视图若是当前视图则回落到 local。
    * identity-preserving：无变化时两个 setter 都返回原值（servers 每轮
    * 轮询/推送都重建，不能借此触发无谓重渲染）。
+   *
+   * 共享 teardown（P2 闲置回收）：注册表删除与闲置逐出共用同一回收路径
+   * ——dispose shell（disposeInstanceShell）、释放 unary client
+   * （releaseInstanceClient）、清插件诊断、过滤 mountedViews、收敛
+   * shellStates/retryTokens，并记录逐出冷却（防「逐出 → 立即重新预热」
+   * 抖动）。dispose 是副作用，不能放进 setState updater（React 19 渲染期
+   * 可能急切求值 updater，StrictMode 还会双调用）；setMountedViews 保持
+   * identity-preserving。调用方保证只对非 local 视图调用（local 常驻）。
    */
+  const teardownView = useCallback((viewId: string) => {
+    autoPrewarmedRef.current.delete(viewId)
+    // 回收在途预热的实例：inflight 标记必须同步清除（2026 audit M8）——
+    // 卸载后 settle 回调被 InstanceView 丢弃，handleInstanceSettled 不会
+    // 再为此 id 触发，残留标记会让 drainPrewarm 永久早退、预热队列卡死。
+    if (prewarmInflightRef.current === viewId) prewarmInflightRef.current = null
+    disposeInstanceShell(viewId)
+    releaseInstanceClient(viewId)
+    chamberBridge.clearPluginDiagnostic(viewId)
+    setMountedViews(prev => (prev.includes(viewId) ? prev.filter(id => id !== viewId) : prev))
+    // 视图已回收：失败覆盖层状态与重试令牌随视图收敛（重加同名 id 由新
+    // boot 重建）。
+    setShellStates(prev => {
+      if (prev[viewId] === undefined) return prev
+      const next = { ...prev }
+      delete next[viewId]
+      return next
+    })
+    setRetryTokens(prev => {
+      if (prev[viewId] === undefined) return prev
+      const next = { ...prev }
+      delete next[viewId]
+      return next
+    })
+    delete prewarmSettledAtRef.current[viewId]
+    prewarmCooldownRef.current[viewId] = Date.now()
+  }, [])
+
   useEffect(() => {
     const live = new Set(servers.map(server => server.id))
     // dispose 是副作用，不能放进 setState updater（React 19 渲染期可能急切
     // 求值 updater，StrictMode 还会双调用）——先从当前 mountedViews 算出
-    // 被回收的 id 再统一处置；setMountedViews 保持 identity-preserving。
+    // 被回收的 id 再统一处置（teardownView 内部 setMountedViews 保持
+    // identity-preserving）。
     const removed = mountedViews.filter(id => !live.has(id))
     if (removed.length > 0) {
-      for (const id of removed) {
-        autoPrewarmedRef.current.delete(id)
-        // 回收在途预热的实例：inflight 标记必须同步清除（2026 audit M8）——
-        // 卸载后 settle 回调被 InstanceView 丢弃，handleInstanceSettled 不会
-        // 再为此 id 触发，残留标记会让 drainPrewarm 永久早退、预热队列卡死。
-        if (prewarmInflightRef.current === id) prewarmInflightRef.current = null
-        disposeInstanceShell(id)
-        releaseInstanceClient(id)
-        chamberBridge.clearPluginDiagnostic(id)
-      }
-      setMountedViews(prev => {
-        const next = prev.filter(id => live.has(id))
-        return next.length === prev.length ? prev : next
-      })
-      // 视图已回收：失败覆盖层状态与重试令牌随视图收敛（重加同名 id 由新
-      // boot 重建）。
-      setShellStates(prev => {
-        const next = { ...prev }
-        for (const id of removed) delete next[id]
-        return next
-      })
-      setRetryTokens(prev => {
-        const next = { ...prev }
-        for (const id of removed) delete next[id]
-        return next
-      })
+      for (const id of removed) teardownView(id)
     }
     setActiveView(prev => {
       if (prev === LOCAL_INSTANCE_ID) return prev
@@ -488,7 +516,7 @@ export default function App() {
     })
     // 回收后立即推进预热队列（2026 audit M8）：inflight 已清，排队项应继续。
     drainPrewarm()
-  }, [servers, mountedViews])
+  }, [servers, mountedViews, teardownView])
 
   const refreshConnections = useCallback(async () => {
     try {
@@ -703,6 +731,18 @@ export default function App() {
     pollAggregatesRef.current()
   }, [health, remoteStatus, remoteInstances, snapshotSources])
 
+  // One staleness-watchdog wave: pull every ready source whose last PUSHED
+  // snapshot is older than the threshold. Shared by the periodic watchdog
+  // tick and the hidden→visible compensation (P1) so both run the same
+  // bounded wave; the ref mirror keeps the visibility listener stable.
+  const runStalenessWave = useCallback(() => {
+    const staleIds = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
+      .filter(id => isSnapshotStale(snapshotAtRef.current[id], Date.now(), AGGREGATE_FALLBACK_POLL_MS))
+    if (staleIds.length > 0) runBoundedAggregateWave(staleIds)
+  }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
+  const runStalenessWaveRef = useRef(runStalenessWave)
+  runStalenessWaveRef.current = runStalenessWave
+
   // Staleness watchdog: the edge logic above only pulls newly-ready or
   // never-pushed sources, so a mounted producer whose push channel silently
   // dies (no withdrawal — aggregate-store clear() never fires) would leave
@@ -711,14 +751,15 @@ export default function App() {
   // sources are never pulled; the bounded wave keeps quiet-fleet cost at a
   // handful of loopback requests per minute and the signature dedup keeps
   // unchanged state churn-free.
+  // 隐藏态降频（P1）：document 隐藏时早退、不调度任何工作——窗口不可见时
+  // 兜底拉取没有消费者；可见时由 visibilitychange 补偿立即补一次波次。
   useEffect(() => {
     const timer = setInterval(() => {
-      const staleIds = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
-        .filter(id => isSnapshotStale(snapshotAtRef.current[id], Date.now(), AGGREGATE_FALLBACK_POLL_MS))
-      if (staleIds.length > 0) runBoundedAggregateWave(staleIds)
+      if (document.visibilityState === 'hidden') return
+      runStalenessWave()
     }, AGGREGATE_FALLBACK_POLL_MS)
     return () => { clearInterval(timer) }
-  }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
+  }, [runStalenessWave])
 
   useEffect(() => () => {
     for (const timer of retryTimersRef.current) clearTimeout(timer)
@@ -756,16 +797,19 @@ export default function App() {
     }
 
     // 连接行低频刷新（label/dshPort 极少变化；行状态在启动判定后不再敏感）。
+    // 隐藏态降频（P1）：document 隐藏时早退、不调度任何工作。
     const connectionsTimer = setInterval(() => {
       if (cancelled) return
+      if (document.visibilityState === 'hidden') return
       void refreshConnections()
     }, CONNECTIONS_POLL_MS)
 
     // 注册表低频轮询（与连接行同节奏）：兜底桌面侧任何来源的注册表变化
     // （主进程 instances_set 推送通道之外；隧道状态本身走 onStatusChanged
-    // 推送，不依赖此轮询）。
+    // 推送，不依赖此轮询）。隐藏态降频同连接行（P1）。
     const remotesTimer = setInterval(() => {
       if (cancelled) return
+      if (document.visibilityState === 'hidden') return
       void refreshRemotes()
     }, CONNECTIONS_POLL_MS)
 
@@ -779,6 +823,25 @@ export default function App() {
       window.removeEventListener('beforeunload', disposeAllShells)
     }
   }, [refreshHealth, refreshConnections, refreshRemotes])
+
+  /**
+   * 隐藏态轮询降频补偿（P1）：document 隐藏时 chamber 自有 30s 定时器
+   * （聚合看门狗 + 连接行 + 注册表）全部早退；变为 visible 时立即补一次
+   * （refreshConnections + refreshRemotes + 一次看门狗波次），定时器随后
+   * 自然恢复节奏。health SSE（自带重连）、桌面桥订阅（onStatusChanged /
+   * onInstancesChanged 推送）与 backgroundThrottling（设计 14 D1）不受
+   * 影响。卸载时移除监听。
+   */
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      void refreshConnections()
+      void refreshRemotes()
+      runStalenessWaveRef.current()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [refreshConnections, refreshRemotes])
 
   /**
    * 桌面桥订阅（05 §7.4）：preload 经异步 dsh-chamber:info 往返后才暴露
@@ -1024,14 +1087,26 @@ export default function App() {
       if (!liveRemoteIds.has(id)) autoPrewarmedRef.current.delete(id)
     }
     const remaining = Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
+    const now = Date.now()
     const eligible = remoteInstances
       .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
       .map(instance => `ssh-${instance.id}`)
       .filter(id => !mountedViews.includes(id))
+      // P2 冷却：被逐出/注册表删除的 id 在冷却期内不再被空闲预热（防
+      // 「逐出 → 立即重新预热」抖动）；用户点击打开不受冷却限制
+      // （selectView 不查冷却）。冷却随本 memo 的周期重算（30s 轮询
+      // 驱动依赖变化）自然过期。
+      .filter(id => !isWithinCooldown(prewarmCooldownRef.current[id], now, PREWARM_COOLDOWN_MS))
       .slice(0, remaining)
     return new Set(eligible)
   }, [remoteInstances, remoteStatus, mountedViews])
   prewarmEligibleRef.current = prewarmEligible
+
+  // P2 逐出安全判定的运行事实镜像（渲染期赋值，同 prewarmEligibleRef 的
+  // 纪律）：逐出扫描 effect（依赖稳定）经它读取最新 runtimeFacts，不因
+  // 事实上报重建定时器。
+  const runtimeFactsRef = useRef(runtimeFacts)
+  runtimeFactsRef.current = runtimeFacts
 
   const drainPrewarm = useCallback(() => {
     if (prewarmInflightRef.current !== null) return
@@ -1048,7 +1123,15 @@ export default function App() {
 
   const handleInstanceSettled = useCallback((instanceId: string) => {
     if (instanceId === LOCAL_INSTANCE_ID) localSettledRef.current = true
-    if (prewarmInflightRef.current === instanceId) prewarmInflightRef.current = null
+    if (prewarmInflightRef.current === instanceId) {
+      prewarmInflightRef.current = null
+      // P2：记录预热视图 settle 时间——仍留在 autoPrewarmedRef（未被用户
+      // 打开）的视图从此刻起进入闲置计时；用户已打开（selectView 已移出）
+      // 的视图常驻、不记录、不回收。
+      if (autoPrewarmedRef.current.has(instanceId)) {
+        prewarmSettledAtRef.current[instanceId] = Date.now()
+      }
+    }
     // 无条件 drain：任何 settle 都可能是"在途预热完成"或"本地首次 settle"
     // 的触发器（后者在状态先于本地就绪时不会因依赖变化而触发队列推进）。
     drainPrewarm()
@@ -1070,6 +1153,41 @@ export default function App() {
     }
     drainPrewarm()
   }, [remoteInstances, remoteStatus, mountedViews, drainPrewarm])
+
+  /**
+   * 闲置预热 shell 回收（P2）：auto-prewarmed（从未被用户打开）视图在
+   * settle 后闲置超过 IDLE_EVICT_MS 时逐出（teardownView：dispose shell +
+   * release client），释放 N-ctx 常驻成本；回收后该来源落入既有 30s unary
+   * 兜底与点击重挂路径（05 §4 例外条款）。定时器**不受 visibility 门控**
+   * （P1）——隐藏态逐出是纯内存收益。用户主动打开过的视图不在
+   * autoPrewarmedRef 内，天然跳过（常驻）。
+   *
+   * 通知边沿安全（依赖设计 19 §3.2）：逐出只在零 running 且零 pending 时
+   * 执行——complete/ask/request 边沿全部由已挂载 ctx 的运行时事实上报驱动
+   * （design 19 §3.2 的事件定义），任何 running===true 或 pending 非
+   * undefined 的会话都意味着未来可能触发边沿（running→idle 完成 /
+   * pending 武装）；此时逐出会让该来源失去事实源而漏发通知。零 running 且
+   * 零 pending 才无边沿可发，逐出不丢任何通知（vendor completed 已武装的
+   * 会话其边沿已在逐出前处理，或首次上报静默播种不补发，design 19 §3.2）。
+   */
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now()
+      for (const id of [...autoPrewarmedRef.current]) {
+        // Pure policy (eviction-policy.ts, unit-tested): settled ≥
+        // IDLE_EVICT_MS ∧ not the active view ∧ zero running/pending.
+        if (!isIdleEvictable({
+          settledAt: prewarmSettledAtRef.current[id],
+          now,
+          idleEvictMs: IDLE_EVICT_MS,
+          isActiveView: id === activeViewRef.current,
+          facts: runtimeFactsRef.current[id],
+        })) continue
+        teardownView(id)
+      }
+    }, EVICT_SCAN_MS)
+    return () => { clearInterval(timer) }
+  }, [teardownView])
 
   /** 打开某来源的会话：切到该来源 shell（未挂载先挂载）并分发到运行时。 */
   const openSession = useCallback(async (instanceId: string, sessionId: string) => {

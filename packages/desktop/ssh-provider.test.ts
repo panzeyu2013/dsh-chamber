@@ -68,6 +68,42 @@ test('the askpass helper answers host-key prompts with yes and password prompts 
     assert.equal(password.stdout, "s3cr't\n", 'password prompt answers the stored password (line-terminated)')
     const passphrase = spawnSync(path, ["Enter passphrase for key '/Users/x/.ssh/id_ed25519':"], { encoding: 'utf8' })
     assert.equal(passphrase.stdout, "s3cr't\n", 'key passphrase prompts reuse the stored password')
+    // 2026-11 review: "Password for <user>:" (no colon right after "password")
+    // is a REAL password prompt and must receive the password.
+    const passwordFor = spawnSync(path, ['Password for user@h.example.com:'], { encoding: 'utf8' })
+    assert.equal(passwordFor.stdout, "s3cr't\n", 'Password for <user>: prompts answer the stored password')
+    // Fail-closed (2026-11): a prompt that is NOT provably a host-key or
+    // password prompt (OTP/verification code, password change) gets NO
+    // answer — the stored password must never leave the helper for it.
+    const otp = spawnSync(path, ['Verification code:'], { encoding: 'utf8' })
+    assert.equal(otp.status, 0)
+    assert.equal(otp.stdout, '', 'fail-closed: a non-credential prompt receives no answer')
+    assert.ok(!otp.stdout.includes("s3cr't"), 'fail-closed: the password never reaches an OTP prompt')
+    // 2026-11 review hardening: OTP wording that ALSO contains "assword:"
+    // must still fail closed (explicit exclusion branch, not the password one).
+    const otpWording = spawnSync(path, ['One-time password:'], { encoding: 'utf8' })
+    assert.equal(otpWording.stdout, '', 'fail-closed: "One-time password:" receives no answer')
+    const change = spawnSync(path, ['Enter new password:'], { encoding: 'utf8' })
+    assert.equal(change.stdout, '', 'fail-closed: a password-change prompt receives no answer')
+    // 2026-11 round-2: the prompt is normalized to lowercase before matching,
+    // so ANY casing variant behaves identically (the pre-normalization
+    // version leaked the password for "One-time Password:").
+    const mixedCase = spawnSync(path, ['One-time Password:'], { encoding: 'utf8' })
+    assert.equal(mixedCase.stdout, '', 'fail-closed: "One-time Password:" (mixed case) receives no answer')
+    const upperCase = spawnSync(path, ['ONE-TIME PASSWORD:'], { encoding: 'utf8' })
+    assert.equal(upperCase.stdout, '', 'fail-closed: "ONE-TIME PASSWORD:" receives no answer')
+    const newPasswordUpper = spawnSync(path, ['Enter New Password:'], { encoding: 'utf8' })
+    assert.equal(newPasswordUpper.stdout, '', 'fail-closed: "Enter New Password:" receives no answer')
+    const changeUpper = spawnSync(path, ['Please change your password:'], { encoding: 'utf8' })
+    assert.equal(changeUpper.stdout, '', 'fail-closed: a change-password prompt receives no answer')
+    // All-caps REAL password prompts now work too (normalized positive match).
+    const capsPassword = spawnSync(path, ['PASSWORD:'], { encoding: 'utf8' })
+    assert.equal(capsPassword.stdout, "s3cr't\n", 'an all-caps password prompt still answers the password')
+    const capsPasswordFor = spawnSync(path, ['PASSWORD for user@h.example.com:'], { encoding: 'utf8' })
+    assert.equal(capsPasswordFor.stdout, "s3cr't\n", 'an all-caps "Password for <user>:" prompt still answers')
+    // Boundary: an "otp"-named host/user must NOT trip the otp exclusion.
+    const otpHost = spawnSync(path, ["user@otp-host's password:"], { encoding: 'utf8' })
+    assert.equal(otpHost.stdout, "s3cr't\n", 'a host named "otp-host" still answers a real password prompt')
     // OpenSSH runs SSH_ASKPASS directly: it must be executable but stay owner-only.
     assert.equal(statSync(path).mode & 0o777, 0o700, 'helper is executable and owner-only')
   } finally {

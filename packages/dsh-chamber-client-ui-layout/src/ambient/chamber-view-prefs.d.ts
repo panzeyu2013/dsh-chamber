@@ -20,6 +20,11 @@ export interface ChamberSidebarViewPrefs {
   folded: Record<string, boolean>
   ungroupedOrder: Record<string, string[]>
   orderBy?: Record<string, 'manual' | 'updated'>
+  /** Updated-mode session order accounts (design 06 §3.1, mirror of
+   *  view-prefs.ts): key = the `${sourceId}/${workspaceId}` account key,
+   *  value = the updated-mode display order; absent for sources that never
+   *  entered updated mode. */
+  updatedOrder?: Record<string, string[]>
   /** Updated-mode activity bookkeeping (account key → sessionId → updatedAt). */
   sessionUpdatedAtByAccount?: Record<string, Record<string, number>>
   /** Source-level fold: sourceId → its workspace LIST is collapsed. */

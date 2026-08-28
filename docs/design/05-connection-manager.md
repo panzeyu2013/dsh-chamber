@@ -222,6 +222,15 @@ export const chamberBridge: {
   遗留僵尸 ctx）；被回收的视图若是当前视图则回落到 local（常驻）。
   插件图诊断同样受 boot generation 门控：已取消/已被重试取代的旧 boot
   即使迟到完成 graph 请求，也不能覆盖新一代的诊断。
+  **例外（2026-10，闲置预热回收）**：auto-prewarmed（从未被用户主动打开，
+  `autoPrewarmedRef`）的视图可在**零 running 且零 pending**（运行时事实
+  通道 06 §4；有运行/待交互会话即可能触发通知边沿，逐出不得丢通知——
+  设计 19 §3.2 边沿定义依赖）且**闲置超过 IDLE_EVICT_MS（15 分钟）**后
+  闲置回收（与注册表删除共用 `teardownView`：dispose shell + release
+  client；逐出写 PREWARM_COOLDOWN_MS 冷却、冷却期内不重新预热防抖动），
+  回收后该来源落入既有 30s unary 兜底与点击重挂路径；**用户主动打开过
+  的视图保持常驻**（视图生命周期 = 注册表条目生命周期的语义对用户打开
+  的视图不变）。
 - **boot 预算与串行化（2026 audit H1/M1，契约）**：整个 boot 任务（含
   host-graph 通道与 `AppWebEntry.run()` 各阶段）受 `BOOT_TIMEOUT_MS` 预算
   约束——超时即取消（记录 cancelledBoots、立即 dispose 已构造的 entry、

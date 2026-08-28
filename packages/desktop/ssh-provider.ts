@@ -725,22 +725,48 @@ export function sshPasswordSupported(): boolean {
 /**
  * The ephemeral askpass helper body (design 05 §8): a sh script that
  * answers ssh's non-TTY prompts — host-key confirmations with `yes` (so a
- * first connect to a new host works), everything else (password/passphrase)
- * with the stored password. ssh passes the prompt text as argv[1] and reads
- * the answer from stdout; `yes`-style prompts are matched textually, not by
- * position, so reordered prompt strings stay covered.
+ * first connect to a new host works), password/passphrase prompts with the
+ * stored password, and EVERYTHING ELSE with NO answer (fail-closed): a
+ * prompt that is not provably a credential prompt (OTP/verification-code,
+ * password-change, unknown host-key wording) must never receive the
+ * password. ssh passes the prompt text as argv[1] and reads the answer
+ * from stdout; prompts are matched textually, not by position, so
+ * reordered prompt strings stay covered.
  */
 export function buildAskpassScript(password: string): string {
   const escaped = password.replace(/'/g, `'\\''`)
   return [
     '#!/bin/sh',
     '# dsh-chamber ssh password helper (ephemeral, 0700, deleted on transport stop)',
-    'case "$1" in',
+    // Normalize the prompt to lowercase ONCE (tr is POSIX, present on the
+    // local macOS/Linux host): every pattern below matches the NORMALIZED
+    // text, so all branches are case-insensitive for any casing variant
+    // ("Password:", "PASSWORD:", "One-time Password:", "ONE-TIME PASSWORD:"
+    // …). Non-ASCII text passes through unchanged (patterns are ASCII).
+    // 2026-11 round-2 review: a per-word bracket-expression approach only
+    // covered the first character and leaked the password for
+    // "One-time Password:" — normalization fixes the whole matrix.
+    'case "$(printf "%s" "$1" | tr "A-Z" "a-z")" in',
     '  *"yes/no"*|*"fingerprint"*|*"authenticity"*|*"continue connecting"*)',
     '    echo yes',
     '    ;;',
-    '  *)',
+    // Explicit non-credential exclusions BEFORE the password branch: prompts
+    // whose wording also contains "password:" (OTP/verification-code,
+    // password change) must never receive the stored password (fail-closed,
+    // 2026-11 reviews — "One-time Password:" would otherwise match below).
+    // The otp match is boundary-scoped (colon or space) so a host/user name
+    // like "otp-host" cannot shadow a real password prompt.
+    '  *"one-time password"*|*"otp:"*|*"otp "*|*"verification code"*|*"new password"*|*"change your password"*)',
+    '    exit 0',
+    '    ;;',
+    '  *"password:"*|*"password for "*|*"passphrase"*)',
     `    printf '%s\\n' '${escaped}'`,
+    '    ;;',
+    '  *)',
+    '    # Fail closed: any prompt that is not a host-key or password prompt',
+    '    # (OTP/verification code, password change, unknown wording) gets NO',
+    '    # answer — ssh fails auth instead of receiving the password.',
+    '    exit 0',
     '    ;;',
     'esac',
     '',

@@ -16,6 +16,10 @@ import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
 import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
+// Hidden-tab polling gate + injectable visibility face (P1, 2026-11) — the
+// module is dependency-free so the node suite covers it (see
+// test/visibility-gate.ts).
+import { isPollEligible, visibilityEvents } from './visibility-gate.ts'
 import {
   GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
@@ -29,11 +33,14 @@ const listeners = new Set<() => void>()
 const states = new Map<string, GitSourceState>()
 const refreshFlights = new SerializedRefreshes<GitSourceState>()
 const actionLedger = new GitActionLedger()
+
 /** Connection-generation fence: a response from before disconnect/reconnect is stale. */
 const sourceEpochs = new Map<string, number>()
 let revision = 0
 let retainCount = 0
 let stopBridge: (() => void) | undefined
+let onVisibilityChange: (() => void) | undefined
+let stopVisibility: (() => void) | undefined
 let pollTimer: ReturnType<typeof setInterval> | undefined
 
 const SINGLETON_KEY = Symbol.for('dsh-chamber.git-worktree.coordinator')
@@ -786,7 +793,17 @@ export function clearActionError(sourceId: string): void {
 function start(): void {
   stopBridge = chamberBridge.subscribe(syncServers)
   syncServers()
+  // Hidden-tab polling gate (design 08 §4): a backgrounded page must not keep
+  // refreshing every 30s — the timer keeps running but skips while hidden, and
+  // becoming visible re-syncs immediately through the same entry the bridge
+  // subscription uses (workspace roster changes refresh right away; the next
+  // tick covers unchanged sources).
+  onVisibilityChange = () => {
+    if (visibilityEvents.read() === 'visible') syncServers()
+  }
+  stopVisibility = visibilityEvents.onChange(onVisibilityChange)
   pollTimer = globalThis.setInterval(() => {
+    if (!isPollEligible(visibilityEvents.read())) return
     for (const server of chamberBridge.getServers()) {
       if (server.connected && states.get(server.id)?.busy === undefined) void refreshSource(server.id)
     }
@@ -796,6 +813,9 @@ function start(): void {
 function stop(): void {
   stopBridge?.()
   stopBridge = undefined
+  stopVisibility?.()
+  stopVisibility = undefined
+  onVisibilityChange = undefined
   if (pollTimer !== undefined) globalThis.clearInterval(pollTimer)
   pollTimer = undefined
 }

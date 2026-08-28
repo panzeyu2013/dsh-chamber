@@ -428,6 +428,11 @@ function systemResumeApi(): SystemResumeSurface {
     onResume: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event: IpcRendererEvent, payload: { timestamp: number }) => callback(payload);
+      // NOTE: this literal is the desktop-side twin of SYSTEM_RESUME_EVENT in
+      // ./ipc-events.ts (which main.ts imports). The preload build contract is
+      // a SELF-CONTAINED single file (build-preload.mjs), so the channel name
+      // is duplicated here on purpose — ipc-surface-mirror.test.ts pins both
+      // sides to the same string.
       ipcRenderer.on('dsh-chamber:system-resume', listener);
       return () => ipcRenderer.removeListener('dsh-chamber:system-resume', listener);
     },
