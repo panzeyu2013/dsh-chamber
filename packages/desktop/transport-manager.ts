@@ -14,9 +14,7 @@
  *   local port accepts a TCP connection AND the provider's endpoint identity
  *   verification passes — verifyUp, e.g. the ssh provider's host.describe
  *   handshake, so a non-dsh service on the destination port never presents
- *   as ready) and DIRECT ENDPOINT mode
- *   (buildStartArgs → null: no child, the runtime probes
- *   provider.probeTarget() and exposes provider.endpointUrl()).
+ *   as ready).
  * - Phase machine: idle → connecting → ready ⇄ degraded → error, with
  *   TWO-TIER retry: a fast burst of bounded jittered exponential backoff
  *   (retryBaseMs * 2^n, half-open jitter, capped) followed — when the burst
@@ -35,12 +33,12 @@
  *   tracked per child).
  *
  * Security discipline (design 05 §8): the transport URL
- * (http://127.0.0.1:<localPort> or a provider endpoint) NEVER leaves this
- * module raw. status() projects {kind, phase, localPort, sshPort,
- * remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}
- * only — the renderer builds webview URLs from localPort alone. No
- * credential material ever rides the command line (provider-owned) and
- * stderr is redacted by the provider before it enters the ring buffer.
+ * (http://127.0.0.1:<localPort>) NEVER leaves this module raw. status()
+ * projects {kind, phase, localPort, sshPort, remotePort, retryAttempt,
+ * requiresUserAction, serviceActive, logSummary} only — the renderer builds
+ * webview URLs from localPort alone. No credential material ever rides the
+ * command line (provider-owned) and stderr is redacted by the provider
+ * before it enters the ring buffer.
  *
  * Testability: the provider, the spawn, the port probe, the port allocator
  * and the RNG are injectable, so pure-Node tests drive the phase machine
@@ -539,8 +537,8 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   /**
    * Start one transport attempt and drive it to ready/degraded/error. The
    * readiness detection polls the probe target (probeIntervalMs) up to
-   * readyTimeoutMs: the port accepting a connection (tunnel mode) — or the
-   * direct endpoint answering (endpoint mode) — is the honest "up" signal.
+   * readyTimeoutMs: the local port accepting a connection is the honest "up"
+   * signal.
    */
   async function startTransport(id: string) {
     const spec = instances.get(id)
@@ -573,176 +571,147 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     transition(id, 'connecting', 'starting transport')
 
     let localPort: number | null = null
-    // Capability: a provider with buildStartArgs gets a local tunnel port;
-    // a provider without it is DIRECT ENDPOINT mode (no child, no port).
-    if (provider.buildStartArgs !== undefined) {
-      try {
-        localPort = await doAllocate()
-      } catch (allocateError) {
-        // disconnect()/failTerminal/restart may have landed while the port was
-        // being allocated: never arm recovery for a machine that moved on —
-        // a manual disconnect must cancel the slow re-probe (2026 final
-        // review, same guard as the success path below).
-        if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
-        transition(id, 'error', `failed to allocate a local port: ${String(allocateError)}`)
-        appendLogInternal(state, 'error', `port allocation failed: ${String(allocateError)}`)
-        // A transient allocation failure (ephemeral-port exhaustion) must not
-        // leave the instance stuck in error forever: arm the slow periodic
-        // re-probe, same pattern as the max-retry recovery (2026 audit M10).
-        state.reconnectTimer = setTimeout(() => {
-          state.reconnectTimer = null
-          void startTransport(id).catch(error => warn(`transport-manager: slow re-probe rejected: ${String(error)}`))
-        }, slowRetryMs)
-        state.reconnectTimer.unref?.()
-        return
-      }
+    // Every provider owns a local tunnel (buildStartArgs is required): the
+    // runtime always allocates a loopback port for the child.
+    try {
+      localPort = await doAllocate()
+    } catch (allocateError) {
       // disconnect()/failTerminal/restart may have landed while the port was
-      // being allocated; the phase or the epoch tells us — abort, never start.
+      // being allocated: never arm recovery for a machine that moved on —
+      // a manual disconnect must cancel the slow re-probe (2026 final
+      // review, same guard as the success path below).
       if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
-      state.localPort = localPort
+      transition(id, 'error', `failed to allocate a local port: ${String(allocateError)}`)
+      appendLogInternal(state, 'error', `port allocation failed: ${String(allocateError)}`)
+      // A transient allocation failure (ephemeral-port exhaustion) must not
+      // leave the instance stuck in error forever: arm the slow periodic
+      // re-probe, same pattern as the max-retry recovery (2026 audit M10).
+      state.reconnectTimer = setTimeout(() => {
+        state.reconnectTimer = null
+        void startTransport(id).catch(error => warn(`transport-manager: slow re-probe rejected: ${String(error)}`))
+      }, slowRetryMs)
+      state.reconnectTimer.unref?.()
+      return
     }
+    // disconnect()/failTerminal/restart may have landed while the port was
+    // being allocated; the phase or the epoch tells us — abort, never start.
+    if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
+    state.localPort = localPort
 
-    let args: readonly string[] | null = null
-    if (provider.buildStartArgs !== undefined) {
+    let args: readonly string[]
+    try {
+      args = provider.buildStartArgs(spec, localPort)
+    } catch (buildError) {
+      // A throwing provider must never leave the machine stuck in
+      // connecting with no child and no recovery machinery.
+      warn(`transport-manager: provider.buildStartArgs threw: ${String(buildError)}`)
+      transition(id, 'error', `provider build failed: ${String(buildError)}`)
+      appendLogInternal(state, 'error', `provider buildStartArgs threw: ${String(buildError)}`)
+      return
+    }
+    const probeTarget = { host: '127.0.0.1', port: localPort }
+
+    // Provider-owned extra environment (ssh: the askpass env for password
+    // auth, design 05 §8) is merged over process.env — never replaces it
+    // (the child must keep HOME, PATH, …). A throwing provider lands on a
+    // loud error, never a stuck connecting with no child.
+    let transportEnv: NodeJS.ProcessEnv | null = null
+    if (provider.buildStartEnv !== undefined) {
       try {
-        args = provider.buildStartArgs(spec, localPort as number)
-      } catch (buildError) {
-        // A throwing provider must never leave the machine stuck in
-        // connecting with no child and no recovery machinery.
-        warn(`transport-manager: provider.buildStartArgs threw: ${String(buildError)}`)
-        transition(id, 'error', `provider build failed: ${String(buildError)}`)
-        appendLogInternal(state, 'error', `provider buildStartArgs threw: ${String(buildError)}`)
+        transportEnv = provider.buildStartEnv(spec)
+      } catch (envError) {
+        warn(`transport-manager: provider.buildStartEnv threw: ${String(envError)}`)
+        transition(id, 'error', `provider buildStartEnv threw: ${String(envError)}`)
+        appendLogInternal(state, 'error', `provider buildStartEnv threw: ${String(envError)}`)
         return
       }
     }
-    const directEndpoint = args === null
-    // A contradictory provider (buildStartArgs present but returning null)
-    // must not leak the allocated-but-never-bound port into the projection
-    // or readyUrl — direct endpoint mode owns neither.
-    if (directEndpoint) state.localPort = null
-    const probeTarget = (() => {
-      try {
-        return directEndpoint
-          ? (provider.probeTarget?.(spec) ?? { host: spec.host, port: spec.remotePort })
-          : { host: '127.0.0.1', port: localPort as number }
-      } catch (probeError) {
-        // A throwing probeTarget must not leave the machine stuck in
-        // connecting (no child, no recovery) — loud error instead.
-        warn(`transport-manager: provider.probeTarget threw: ${String(probeError)}`)
-        transition(id, 'error', `provider probeTarget threw: ${String(probeError)}`)
-        appendLogInternal(state, 'error', `provider probeTarget threw: ${String(probeError)}`)
-        return null
-      }
-    })()
-    if (probeTarget === null) return
-
-    if (directEndpoint) {
-      // DIRECT ENDPOINT mode: no child process — the endpoint is reached
-      // as-is (e.g. a tailnet host); only the probe loop below runs.
-      transition(id, 'connecting', `reaching ${spec.host}:${probeTarget.port} directly`)
-    } else {
-      // Provider-owned extra environment (ssh: the askpass env for password
-      // auth, design 05 §8) is merged over process.env — never replaces it
-      // (the child must keep HOME, PATH, …). A throwing provider lands on a
-      // loud error, never a stuck connecting with no child.
-      let transportEnv: NodeJS.ProcessEnv | null = null
-      if (provider.buildStartEnv !== undefined) {
-        try {
-          transportEnv = provider.buildStartEnv(spec)
-        } catch (envError) {
-          warn(`transport-manager: provider.buildStartEnv threw: ${String(envError)}`)
-          transition(id, 'error', `provider buildStartEnv threw: ${String(envError)}`)
-          appendLogInternal(state, 'error', `provider buildStartEnv threw: ${String(envError)}`)
-          return
-        }
-      }
-      let child: SpawnedProcess
-      try {
-        child = doSpawn('ssh', args!, {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env: transportEnv === null ? undefined : { ...process.env, ...transportEnv },
-        })
-      } catch (spawnError) {
-        state.requiresUserAction = true
-        failTerminal(id, `failed to spawn transport: ${String(spawnError)}`)
-        return
-      }
-      if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) {
-        signalChild(child, 'SIGTERM')
-        return
-      }
-      state.child = child
-      transition(id, 'connecting', `spawning ${args![0]} ${args!.slice(1).join(' ')}`)
-      if (child.stdout !== null) {
-        child.stdout.on('data', chunk => {
-          if (state.child !== child) return
-          // Same provider redaction as stderr (2026 review): the tunnel's
-          // stdout must not leak credential-shaped material into the ring
-          // buffer either. Guarded like the stderr path — a throwing
-          // classifier must never take the transport down.
-          let log: string
-          try {
-            log = provider.classifyStderr(String(chunk)).log
-          } catch (classifyError) {
-            warn(`transport-manager: provider.classifyStderr threw on stdout: ${String(classifyError)}`)
-            log = String(chunk)
-          }
-          appendLogInternal(state, 'info', log.trimEnd())
-        })
-      }
-      // Line-buffered stderr (per child): provider classification (redaction
-      // + auth detection) runs on COMPLETE lines only — node chunk boundaries
-      // are arbitrary, and a key path or an auth phrase straddling two chunks
-      // must never bypass either. The data guard mirrors the exit handler: a
-      // REPLACED child's late stderr must not poison the fresh attempt.
-      let stderrPending = ''
-      const processStderr = (text: string) => {
-        stderrPending += text
-        const lines = stderrPending.split(/\r?\n/)
-        stderrPending = lines.pop() ?? ''
-        for (const line of lines) {
-          // A throwing provider must never kill the main process from an
-          // event handler (uncaughtException) — guard the classification.
-          let logLine: string
-          let terminalAuth: boolean
-          try {
-            const classified = provider.classifyStderr(line)
-            logLine = classified.log
-            terminalAuth = classified.terminalAuth
-          } catch (classifyError) {
-            warn(`transport-manager: provider.classifyStderr threw: ${String(classifyError)}`)
-            continue
-          }
-          if (logLine === '') continue
-          appendLogInternal(state, 'info', logLine)
-          if (terminalAuth) {
-            state.authFailed = true
-            appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
-          }
-        }
-      }
-      if (child.stderr !== null) {
-        child.stderr.on('data', chunk => {
-          if (state.child !== child) return
-          processStderr(String(chunk))
-        })
-      }
-      child.on('exit', (code, exitSignal) => {
-        // Flush the unterminated stderr line before the exit handler decides —
-        // an auth pattern may live on the final (newline-less) line.
-        if (state.child === child) processStderr('\n')
-        onChildExit(id, child, code, exitSignal)
+    let child: SpawnedProcess
+    try {
+      child = doSpawn('ssh', args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: transportEnv === null ? undefined : { ...process.env, ...transportEnv },
       })
-      child.on('error', error => {
-        // Spawn failure (e.g. the transport binary is missing): terminal,
-        // user action. Guarded: a REPLACED child's late spawn-error must
-        // never failTerminal the fresh transport.
+    } catch (spawnError) {
+      state.requiresUserAction = true
+      failTerminal(id, `failed to spawn transport: ${String(spawnError)}`)
+      return
+    }
+    if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) {
+      signalChild(child, 'SIGTERM')
+      return
+    }
+    state.child = child
+    transition(id, 'connecting', `spawning ${args[0]} ${args.slice(1).join(' ')}`)
+    if (child.stdout !== null) {
+      child.stdout.on('data', chunk => {
         if (state.child !== child) return
-        appendLogInternal(state, 'error', `transport spawn error: ${String(error)}`)
-        state.requiresUserAction = true
-        failTerminal(id, `failed to spawn transport: ${String(error)}`)
+        // Same provider redaction as stderr (2026 review): the tunnel's
+        // stdout must not leak credential-shaped material into the ring
+        // buffer either. Guarded like the stderr path — a throwing
+        // classifier must never take the transport down.
+        let log: string
+        try {
+          log = provider.classifyStderr(String(chunk)).log
+        } catch (classifyError) {
+          warn(`transport-manager: provider.classifyStderr threw on stdout: ${String(classifyError)}`)
+          log = String(chunk)
+        }
+        appendLogInternal(state, 'info', log.trimEnd())
       })
     }
+    // Line-buffered stderr (per child): provider classification (redaction
+    // + auth detection) runs on COMPLETE lines only — node chunk boundaries
+    // are arbitrary, and a key path or an auth phrase straddling two chunks
+    // must never bypass either. The data guard mirrors the exit handler: a
+    // REPLACED child's late stderr must not poison the fresh attempt.
+    let stderrPending = ''
+    const processStderr = (text: string) => {
+      stderrPending += text
+      const lines = stderrPending.split(/\r?\n/)
+      stderrPending = lines.pop() ?? ''
+      for (const line of lines) {
+        // A throwing provider must never kill the main process from an
+        // event handler (uncaughtException) — guard the classification.
+        let logLine: string
+        let terminalAuth: boolean
+        try {
+          const classified = provider.classifyStderr(line)
+          logLine = classified.log
+          terminalAuth = classified.terminalAuth
+        } catch (classifyError) {
+          warn(`transport-manager: provider.classifyStderr threw: ${String(classifyError)}`)
+          continue
+        }
+        if (logLine === '') continue
+        appendLogInternal(state, 'info', logLine)
+        if (terminalAuth) {
+          state.authFailed = true
+          appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
+        }
+      }
+    }
+    if (child.stderr !== null) {
+      child.stderr.on('data', chunk => {
+        if (state.child !== child) return
+        processStderr(String(chunk))
+      })
+    }
+    child.on('exit', (code, exitSignal) => {
+      // Flush the unterminated stderr line before the exit handler decides —
+      // an auth pattern may live on the final (newline-less) line.
+      if (state.child === child) processStderr('\n')
+      onChildExit(id, child, code, exitSignal)
+    })
+    child.on('error', error => {
+      // Spawn failure (e.g. the transport binary is missing): terminal,
+      // user action. Guarded: a REPLACED child's late spawn-error must
+      // never failTerminal the fresh transport.
+      if (state.child !== child) return
+      appendLogInternal(state, 'error', `transport spawn error: ${String(error)}`)
+      state.requiresUserAction = true
+      failTerminal(id, `failed to spawn transport: ${String(error)}`)
+    })
 
     const controller = new AbortController()
     state.readyLoop = controller
@@ -791,12 +760,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
               return scheduleReconnect(id, reason)
             }
           }
-          if (directEndpoint) {
-            state.retryAttempt = 0
-            state.requiresUserAction = false
-            transition(id, 'ready', 'endpoint is reachable')
-            appendLogInternal(state, 'info', `endpoint reachable: ${spec.host}:${probeTarget.port}`)
-          } else if (!state.childExited && state.child !== null) {
+          if (!state.childExited && state.child !== null) {
             state.retryAttempt = 0
             state.requiresUserAction = false
             transition(id, 'ready', 'transport is up')
@@ -1081,16 +1045,14 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   /**
    * The ready transport URL — INTERNAL ONLY, never exposed through status()
    * or the IPC surface (design 05 §8: the renderer builds webview URLs from
-   * localPort alone). Tunnel mode: the local listener; endpoint mode: the
-   * provider's endpoint URL. Returns null unless the transport is ready.
+   * localPort alone). The local tunnel listener; null unless the transport
+   * is ready.
    */
   function readyUrl(id: string): string | null {
     const state = states.get(id)
     if (state?.phase !== 'ready') return null
-    if (state.localPort !== null) return `http://127.0.0.1:${state.localPort}`
-    const spec = instances.get(id)
-    if (spec === undefined) return null
-    return provider.endpointUrl?.(spec) ?? null
+    if (state.localPort === null) return null
+    return `http://127.0.0.1:${state.localPort}`
   }
 
   /** Ring-buffer log lines for one instance (copies; newest last). */

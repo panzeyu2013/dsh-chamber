@@ -1,5 +1,5 @@
 import type { IpcRendererEvent } from 'electron';
-import type { SshInstanceInput, SshInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
+import type { TransportInstanceInput, TransportInstanceSpec, TransportLogEntry, TransportStatusProjection } from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
 
@@ -15,8 +15,8 @@ const { contextBridge, ipcRenderer } = require('electron');
  * success.
  */
 export interface DesktopSshSurface {
-  instances_get(): Promise<SshInstanceSpec[]>
-  instances_set(instances: SshInstanceInput[]): Promise<SshInstanceSpec[]>
+  instances_get(): Promise<TransportInstanceSpec[]>
+  instances_set(instances: TransportInstanceInput[]): Promise<TransportInstanceSpec[]>
   /**
    * Forward the SSH password to the main process, which holds it in memory
    * and mirrors it to the documented 0600 password store (design 05 §8).
@@ -26,10 +26,10 @@ export interface DesktopSshSurface {
   set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
-  connect(id: string): Promise<SshStatusProjection | null>
-  disconnect(id: string): Promise<SshStatusProjection | null>
-  status(id: string): Promise<SshStatusProjection | null>
-  logs(id: string): Promise<SshLogEntry[]>
+  connect(id: string): Promise<TransportStatusProjection | null>
+  disconnect(id: string): Promise<TransportStatusProjection | null>
+  status(id: string): Promise<TransportStatusProjection | null>
+  logs(id: string): Promise<TransportLogEntry[]>
   logs_clear(id: string): Promise<boolean>
   start_service(id: string): Promise<SshExecIpcResult>
   stop_service(id: string): Promise<SshExecIpcResult>
@@ -74,11 +74,11 @@ export interface DesktopSshSurface {
 /** Main-process push payload for status changes ({id, status projection}). */
 export interface SshStatusChangedPayload {
   id: string
-  status: SshStatusProjection
+  status: TransportStatusProjection
 }
 
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
-export type SshExecIpcResult = SshStatusProjection | { error: string }
+export type SshExecIpcResult = TransportStatusProjection | { error: string }
 
 /** Remote plugin manifest projection (design 13 §4.3). */
 /** Chamber host-graph injection state (design 09 module A) — the same

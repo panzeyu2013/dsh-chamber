@@ -10,7 +10,7 @@
  * migration, duplicate-id dedup), the provider exec channel
  * (start/stop/is-active command shapes, serviceName whitelist, timeout,
  * serviceActive projection, auth-failure semantics), line-buffered stderr
- * redaction, per-child guards, the direct-endpoint provider mode, and the
+ * redaction, per-child guards, and the
  * endpoint identity verification (a port that merely accepts TCP is never
  * ready; a real dsh host.describe handshake is required — covered against
  * real loopback HTTP servers).
@@ -29,7 +29,7 @@ import type { SpawnOptions } from 'node:child_process'
 import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
 import type { TransportManagerOptions } from './transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
-import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
+import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
 import { sshProvider, verifyDshEndpoint, probeClientGraphLive, probeGitWorktreeLive, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -1413,95 +1413,36 @@ test('loadInstances drops duplicate persisted ids loudly (first wins)', () => {
   assert.equal(instances[0].label, 'first')
 })
 
-/** A process-less DIRECT ENDPOINT provider: the abstraction proof. */
-const fakeEndpointProvider: TransportProvider = {
-  kind: 'fake',
-  validateSpec(input: unknown): TransportInstanceSpec | null {
-    if (input === null || typeof input !== 'object') return null
-    const record = input as Record<string, unknown>
-    if (typeof record.id !== 'string' || typeof record.label !== 'string'
-      || typeof record.host !== 'string' || typeof record.remotePort !== 'number') return null
-    if (record.kind !== undefined && record.kind !== null && record.kind !== 'fake') return null
-    return {
-      id: record.id,
-      label: record.label,
-      kind: 'fake',
-      host: record.host,
-      user: null,
-      sshPort: null,
-      remotePort: record.remotePort,
-      serviceName: null,
-      remoteDshHome: null,
-    }
-  },
-  // no buildStartArgs → direct endpoint mode
-  probeTarget: spec => ({ host: 'fake.local', port: spec.remotePort }),
-  endpointUrl: spec => `http://fake.local:${spec.remotePort}`,
-  classifyStderr: line => ({ log: line, terminalAuth: false, enoent: false }),
-  // no exec → exec returns an explicit unsupported error
-}
-
-test('direct-endpoint provider: no child, probe-driven ready, endpoint URL, kind routing', async t => {
-  const { manager, spawnCalls, setProbe } = makeManager(t, {
-    provider: fakeEndpointProvider,
-    instances: [{ id: 'f1', label: 'tailnet-host', kind: 'fake', host: 'host1.tailnet', remotePort: 8080 }],
-  })
-  setProbe(false)
-  const connecting = manager.connect('f1')!
-  assert.equal(connecting.phase, 'connecting')
-  assert.equal(spawnCalls.length, 0, 'direct endpoint mode spawns no process')
-  setProbe(true)
-  await waitFor(() => manager.status('f1')!.phase === 'ready', 3000, 'endpoint ready')
-  const status = manager.status('f1')! as StatusWithNoUrlLeak
-  assert.equal(status.kind, 'fake')
-  assert.equal(status.localPort, null)
-  assert.equal(status.localUrl, undefined)
-  assert.equal(manager.readyUrl('f1'), 'http://fake.local:8080')
-  // Disconnect lands on idle and leaves no child behind.
-  manager.disconnect('f1')
-  assert.equal(manager.status('f1')!.phase, 'idle')
-  assert.equal(manager.readyUrl('f1'), null)
-})
-
-test('direct-endpoint provider: probe failure lands on degraded and reconnects (no child to kill)', async t => {
-  const { manager, setProbe } = makeManager(t, {
-    provider: fakeEndpointProvider,
-    options: { readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 10, retryMaxMs: 40 },
-    instances: [{ id: 'f2', label: 'flaky', kind: 'fake', host: 'flaky.tailnet', remotePort: 9090 }],
-  })
-  setProbe(false)
-  manager.connect('f2')
-  await waitFor(() => manager.status('f2')!.phase === 'degraded', 3000, 'degraded after timeout')
-  setProbe(true)
-  await waitFor(() => manager.status('f2')!.phase === 'ready', 3000, 'reconnected ready')
-  assert.equal(manager.readyUrl('f2'), 'http://fake.local:9090')
-})
-
-test('exec for a provider without an exec channel is an explicit error', async t => {
-  const { manager, spawnCalls } = makeManager(t, {
-    provider: fakeEndpointProvider,
-    instances: [{ id: 'f3', label: 'noexec', kind: 'fake', host: 'x.tailnet', remotePort: 8080 }],
-  })
-  const result = await manager.exec('f3', 'start')
-  assert.equal(result.ok, false)
-  if (!result.ok) assert.match(result.error, /not supported by transport kind fake/)
-  assert.equal(spawnCalls.length, 0)
-})
+// The direct-endpoint provider mode was removed (transport-provider.ts): a
+// provider ALWAYS owns a local tunnel (buildStartArgs is required), so the
+// fake endpoint provider and its tests are gone. The kind-routing and
+// no-exec contracts are still covered below with the fake-env tunnel provider.
 
 test('entries whose kind mismatches the provider kind are dropped on save and load', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
-  const manager = createTransportManager({ provider: fakeEndpointProvider, instancesFile: file, logger: silentLogger })
+  const manager = createTransportManager({ provider: fakeEnvProvider, instancesFile: file, logger: silentLogger })
   const saved = manager.saveInstances([
     { id: 'ssh-one', label: 'wrong kind', kind: 'ssh', host: 'h.example.com', remotePort: 22 },
-    { id: 'f4', label: 'right kind', kind: 'fake', host: 'x.tailnet', remotePort: 8080 },
+    { id: 'f4', label: 'right kind', kind: 'fake-env' as TransportKind, host: 'x.tailnet', remotePort: 8080 },
   ])
   assert.deepEqual(saved.map(entry => entry.id), ['f4'])
   writeFileSync(file, JSON.stringify([
     { id: 'ssh-two', label: 'wrong kind', kind: 'ssh', host: 'h.example.com', remotePort: 22 },
   ]))
-  const reopened = createTransportManager({ provider: fakeEndpointProvider, instancesFile: file, logger: silentLogger })
+  const reopened = createTransportManager({ provider: fakeEnvProvider, instancesFile: file, logger: silentLogger })
   assert.deepEqual(reopened.loadInstances().map(entry => entry.id), [])
+})
+
+test('exec for a provider without an exec channel is an explicit error', async t => {
+  const { manager, spawnCalls } = makeManager(t, {
+    provider: fakeEnvProvider,
+    instances: [{ id: 'f3', label: 'noexec', kind: 'fake-env' as TransportKind, host: 'x.tailnet', remotePort: 8080 }],
+  })
+  const result = await manager.exec('f3', 'start')
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /not supported by transport kind fake-env/)
+  assert.equal(spawnCalls.length, 0)
 })
 
 test('a pending SIGKILL escalation for one child survives another child\u2019s failure', async t => {
@@ -1534,9 +1475,11 @@ test('dispose() SIGTERMs in-flight exec children (app quit)', async t => {
   assert.equal(result.ok, false)
 })
 
-/** A tunnel provider whose buildStartEnv injects an askpass-style env. */
+/** A tunnel provider whose buildStartEnv injects an askpass-style env. The
+ *  fake kind is cast: the shipped kind union is CLOSED ('ssh'), while the
+ *  runtime still routes by string comparison at runtime. */
 const fakeEnvProvider: TransportProvider = {
-  kind: 'fake-env',
+  kind: 'fake-env' as TransportKind,
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (input === null || typeof input !== 'object') return null
     const record = input as Record<string, unknown>
@@ -1546,7 +1489,7 @@ const fakeEnvProvider: TransportProvider = {
     return {
       id: record.id,
       label: record.label,
-      kind: 'fake-env',
+      kind: 'fake-env' as TransportKind,
       host: record.host,
       user: null,
       sshPort: null,
@@ -1563,7 +1506,7 @@ const fakeEnvProvider: TransportProvider = {
 test('a provider buildStartEnv is merged over process.env for the transport spawn', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {
     provider: fakeEnvProvider,
-    instances: [{ id: 'e1', label: 'envhost', kind: 'fake-env', host: 'env.example.com', remotePort: 8080 }],
+    instances: [{ id: 'e1', label: 'envhost', kind: 'fake-env' as TransportKind, host: 'env.example.com', remotePort: 8080 }],
   })
   setProbe(true)
   manager.connect('e1')
@@ -1584,7 +1527,7 @@ test('disposeAuth is called when a live transport is disconnected', async t => {
   }
   const { manager, setProbe } = makeManager(t, {
     provider,
-    instances: [{ id: 'e2', label: 'envhost2', kind: 'fake-env', host: 'env2.example.com', remotePort: 8080 }],
+    instances: [{ id: 'e2', label: 'envhost2', kind: 'fake-env' as TransportKind, host: 'env2.example.com', remotePort: 8080 }],
   })
   setProbe(true)
   manager.connect('e2')
@@ -1600,7 +1543,7 @@ test('a throwing provider buildStartEnv lands on a loud error, never a stuck con
   }
   const { manager, spawnCalls } = makeManager(t, {
     provider,
-    instances: [{ id: 'e3', label: 'envhost3', kind: 'fake-env', host: 'env3.example.com', remotePort: 8080 }],
+    instances: [{ id: 'e3', label: 'envhost3', kind: 'fake-env' as TransportKind, host: 'env3.example.com', remotePort: 8080 }],
   })
   manager.connect('e3')
   await waitFor(() => manager.status('e3')!.phase === 'error', 3000, 'terminal error')
