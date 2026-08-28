@@ -32,6 +32,15 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { spawn } from 'node:child_process'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
+// The cordis loader insert render/parse/conflict logic is single-sourced in
+// control-plane (cordis-inserts.ts, A2 cross-package protocol single-
+// sourcing) — consumed through control-plane-module.ts (the desktop
+// dual-path facade: packaged → compiled dist/control-plane, dev → workspace
+// source). The insert wire format can never drift from the local overlay
+// seed (host-graph-seed.ts); only the fold semantics (deterministic rewrite
+// / append / fail-loud) and message wording stay here.
+import { hasExactInsert, insertConflict, renderCordisInserts } from './control-plane-module.ts'
+import type { CordisInsert, InsertConflictKind } from './control-plane-module.ts'
 // Canonical whitelists (design 13 §7.2) — reused from ssh-provider.ts so the
 // orchestration-side二次校验 and the exec-side argv whitelist share one source
 // of truth and can never drift. Importing ssh-provider only pulls these pure
@@ -109,11 +118,14 @@ const SEED_FILES = ['package.json', 'dist/index.js'] as const
 /**
  * The local `--patch` overlay filename (design 09 方案 A, module B). The
  * single source of truth is `packages/control-plane/src/host-graph-seed.ts`
- * (`HOST_GRAPH_PATCH_FILENAME`) — the desktop mirrors the constant here
- * because plugin-sync.ts is a self-contained pure module that must not import
- * the control-plane package (DI-only contract A). The overlay lives next to
- * the dsh home (`<stateDir>/dsh-chamber-graph.patch.yml` where the managed
- * dsh home is `<stateDir>/dsh-home`), so `dirname(localDshHome)` locates it.
+ * (`HOST_GRAPH_PATCH_FILENAME`); the desktop mirrors the constant here
+ * because it is not part of the control-plane package's public index (the
+ * package exports the seed functions, not the filename) and the local
+ * overlay probe (localPluginList) is a pure-module surface — the mirror is
+ * pinned by the overlay probes in plugin-sync.test.ts. The overlay lives
+ * next to the dsh home (`<stateDir>/dsh-chamber-graph.patch.yml` where the
+ * managed dsh home is `<stateDir>/dsh-home`), so `dirname(localDshHome)`
+ * locates it.
  */
 const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
 
@@ -618,7 +630,7 @@ function localOverlayCarriesGitWorktree(localDshHome: string): boolean {
   const overlayPath = join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)
   if (!existsSync(overlayPath)) return false
   try {
-    return hasCordisInsert(readFileSync(overlayPath, 'utf8'), GIT_WORKTREE_HOST_INSERT)
+    return hasExactInsert(readFileSync(overlayPath, 'utf8'), toCordisInsert(GIT_WORKTREE_HOST_INSERT))
   } catch {
     return false
   }
@@ -1031,8 +1043,13 @@ const GIT_WORKTREE_HOST_INSERT: ChamberHostInsert = {
   packageName: GIT_WORKTREE_PACKAGE_NAME,
 }
 
-function renderCordisInserts(inserts: readonly ChamberHostInsert[]): string {
-  return `- insert:\n${inserts.map(entry => `    - id: ${entry.insertId}\n      name: '${entry.packageName}'\n`).join('')}`
+/**
+ * Adapt the local {insertId, packageName} pair to the shared CordisInsert
+ * ({id, name}) — the insert render/parse/conflict logic is single-sourced in
+ * control-plane (cordis-inserts.ts).
+ */
+function toCordisInsert(insert: ChamberHostInsert): CordisInsert {
+  return { id: insert.insertId, name: insert.packageName }
 }
 
 export type CordisPatchUpdate =
@@ -1045,197 +1062,24 @@ export type CordisPatchUpdate =
  * (design 13 §4.6): dedup when already present; deterministic rewrite for the
  * `initProfile` template (comments + `[]`); append for a user block-sequence
  * list (never overwriting user rows); fail-loud for a non-list.
+ *
+ * The insert render/parse/conflict classification is single-sourced in
+ * control-plane (cordis-inserts.ts, consumed through control-plane-module.ts);
+ * the fold semantics and message wording stay here.
  * @param existing - the file content, or null when the file does not exist
  *   (profile not initialized).
  */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
 
-/**
- * Loader ids and package names are global within the composed Cordis config.
- * Ignore YAML comments, then count an exact scalar wherever it appears (block
- * or flow style). A same-id/different-name or same-name/different-id row must
- * fail before seed writes: appending our row would make the next host boot
- * reject duplicate ids or mount the same Remote twice.
- */
-function cordisFieldCount(existing: string, field: 'id' | 'name', value: string): number {
-  const searchable = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
-  const escaped = escapeRegExp(value)
-  const trailing = field === 'id' ? '[a-zA-Z0-9_.-]' : '[a-zA-Z0-9_.@/-]'
-  const pattern = new RegExp(`\\b${field}:\\s*(?:'${escaped}'|"${escaped}"|${escaped})(?!${trailing})`, 'gu')
-  return searchable.match(pattern)?.length ?? 0
-}
-
-interface ParsedCordisInsertRow {
-  readonly ids: string[]
-  readonly names: string[]
-}
-
-function cordisYamlScalar(raw: string): string | undefined {
-  const value = raw.trim().replace(/,$/u, '').trim()
-  const single = value.match(/^'([^']*)'$/u)
-  if (single !== null) return single[1]
-  const double = value.match(/^"([^"\\]*)"$/u)
-  if (double !== null) return double[1]
-  return /^[a-zA-Z0-9_.@/-]+$/u.test(value) ? value : undefined
-}
-
-function addCordisLoaderField(row: ParsedCordisInsertRow, text: string): void {
-  const field = text.trim().match(/^(id|name)\s*:\s*(.*?)\s*$/u)
-  if (field === null) return
-  const value = cordisYamlScalar(field[2]!)
-  if (value === undefined) return
-  const values = field[1] === 'id' ? row.ids : row.names
-  values.push(value)
-}
-
-function splitCordisFlowFields(content: string): string[] {
-  const fields: string[] = []
-  let start = 0
-  let quote: "'" | '"' | undefined
-  let escaped = false
-  let depth = 0
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index]!
-    if (quote !== undefined) {
-      if (quote === '"' && escaped) escaped = false
-      else if (quote === '"' && char === '\\') escaped = true
-      else if (char === quote) quote = undefined
-      continue
-    }
-    if (char === "'" || char === '"') quote = char
-    else if (char === '{' || char === '[') depth += 1
-    else if (char === '}' || char === ']') depth -= 1
-    else if (char === ',' && depth === 0) {
-      fields.push(content.slice(start, index))
-      start = index + 1
-    }
-  }
-  fields.push(content.slice(start))
-  return fields
-}
-
-function cordisFlowLoaderRow(mapping: string): ParsedCordisInsertRow {
-  const row: ParsedCordisInsertRow = { ids: [], names: [] }
-  const content = mapping.trim().replace(/^\{/u, '').replace(/\}$/u, '')
-  for (const field of splitCordisFlowFields(content)) addCordisLoaderField(row, field)
-  return row
-}
-
-function inlineCordisInsertRows(text: string): ParsedCordisInsertRow[] {
-  const rows: ParsedCordisInsertRow[] = []
-  const open = text.indexOf('[')
-  if (open < 0) return rows
-  let quote: "'" | '"' | undefined
-  let escaped = false
-  let bracketDepth = 0
-  let braceDepth = 0
-  let mappingStart = -1
-  for (let index = open; index < text.length; index += 1) {
-    const char = text[index]!
-    if (quote !== undefined) {
-      if (quote === '"' && escaped) escaped = false
-      else if (quote === '"' && char === '\\') escaped = true
-      else if (char === quote) quote = undefined
-      continue
-    }
-    if (char === "'" || char === '"') quote = char
-    else if (char === '[') bracketDepth += 1
-    else if (char === ']') {
-      bracketDepth -= 1
-      if (bracketDepth === 0) break
-    } else if (char === '{') {
-      if (bracketDepth === 1 && braceDepth === 0) mappingStart = index
-      braceDepth += 1
-    } else if (char === '}') {
-      braceDepth -= 1
-      if (bracketDepth === 1 && braceDepth === 0 && mappingStart >= 0) {
-        rows.push(cordisFlowLoaderRow(text.slice(mappingStart, index + 1)))
-        mappingStart = -1
-      }
-    }
-  }
-  return rows
-}
-
-/** Direct loader rows only; nested config mappings can never complete a pair. */
-function cordisLoaderRows(existing: string): ParsedCordisInsertRow[] {
-  const text = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
-  const lines = text.split('\n')
-  const rows: ParsedCordisInsertRow[] = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!
-    const insert = line.match(/^(\s*)-\s+insert\s*:\s*(.*)$/u)
-    if (insert === null) continue
-    const insertIndent = insert[1]!.length
-    if (insert[2]!.trimStart().startsWith('[')) {
-      rows.push(...inlineCordisInsertRows(lines.slice(index).join('\n')))
-      continue
-    }
-    if (insert[2]!.trimStart().startsWith('{')) {
-      rows.push(cordisFlowLoaderRow(insert[2]!.trim()))
-      continue
-    }
-    let rowIndent: number | undefined
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const candidate = lines[cursor]!
-      if (candidate.trim() === '') continue
-      const indent = candidate.match(/^\s*/u)![0].length
-      if (indent <= insertIndent) break
-      const sequence = candidate.match(/^(\s*)-\s+(.*)$/u)
-      if (sequence === null) continue
-      if (rowIndent === undefined) rowIndent = sequence[1]!.length
-      if (sequence[1]!.length !== rowIndent) continue
-      const row: ParsedCordisInsertRow = { ids: [], names: [] }
-      const first = sequence[2]!.trim()
-      if (first.startsWith('{') && first.endsWith('}')) {
-        rows.push(cordisFlowLoaderRow(first))
-        continue
-      }
-      addCordisLoaderField(row, first)
-      for (let next = cursor + 1; next < lines.length; next += 1) {
-        const continuation = lines[next]!
-        if (continuation.trim() === '') continue
-        const continuationIndent = continuation.match(/^\s*/u)![0].length
-        if (continuationIndent <= rowIndent) break
-        if (continuationIndent === rowIndent + 2) addCordisLoaderField(row, continuation.trim())
-      }
-      rows.push(row)
-    }
-  }
-  return rows
-}
-
-/** Match only when id/name belong to the same direct insert mapping. */
-function hasCordisInsert(existing: string, insert: ChamberHostInsert): boolean {
-  return cordisLoaderRows(existing).some(row => row.ids.length === 1
-    && row.names.length === 1
-    && row.ids[0] === insert.insertId
-    && row.names[0] === insert.packageName)
-}
-
-function cordisInsertConflict(existing: string, insert: ChamberHostInsert): string | undefined {
-  const exact = hasCordisInsert(existing, insert)
-  const idCount = cordisFieldCount(existing, 'id', insert.insertId)
-  const nameCount = cordisFieldCount(existing, 'name', insert.packageName)
-  if (exact && idCount === 1 && nameCount === 1) return undefined
-  if (exact || idCount > 1 || nameCount > 1) {
+/** The cordis.patch.yml conflict wording for one desired insert (the shared
+ *  insertConflict classification mapped onto this module's error surface). */
+function cordisConflictMessage(conflict: InsertConflictKind, insert: ChamberHostInsert): string {
+  if (conflict === 'duplicate-identity') {
     return `cordis.patch.yml contains duplicate chamber loader identity for id '${insert.insertId}' or package '${insert.packageName}'`
   }
-  if (idCount > 0) {
+  if (conflict === 'id-bound') {
     return `cordis.patch.yml loader id '${insert.insertId}' is already bound to a different package`
   }
-  if (nameCount > 0) {
-    return `cordis.patch.yml package '${insert.packageName}' is already mounted under a different loader id`
-  }
-  return undefined
+  return `cordis.patch.yml package '${insert.packageName}' is already mounted under a different loader id`
 }
 
 export function computeCordisPatchUpdate(
@@ -1246,12 +1090,12 @@ export function computeCordisPatchUpdate(
     return { error: 'remote profile is not initialized (cordis.patch.yml missing) — run a plugin add first' }
   }
   for (const insert of inserts) {
-    const conflict = cordisInsertConflict(existing, insert)
-    if (conflict !== undefined) return { error: conflict }
+    const conflict = insertConflict(existing, toCordisInsert(insert))
+    if (conflict !== null) return { error: cordisConflictMessage(conflict, insert) }
   }
-  const missing = inserts.filter(insert => !hasCordisInsert(existing, insert))
+  const missing = inserts.filter(insert => !hasExactInsert(existing, toCordisInsert(insert)))
   if (missing.length === 0) return { write: false }
-  const rendered = renderCordisInserts(missing)
+  const rendered = renderCordisInserts(missing.map(toCordisInsert))
   const significant = existing.split('\n')
     .map(line => line.trim())
     .filter(line => line !== '' && !line.startsWith('#'))

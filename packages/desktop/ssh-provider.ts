@@ -50,6 +50,12 @@ import { request as httpRequest } from 'node:http'
 import { chmodSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+// The dsh RPC wire envelope is single-sourced in control-plane
+// (rpc-envelope.ts, A2 cross-package protocol single-sourcing) — consumed
+// through control-plane-module.ts (the desktop dual-path facade: packaged →
+// compiled dist/control-plane, dev → workspace source). The envelope shape
+// can never drift from the control-plane unary client's.
+import { buildClientRequest, mintRpcId, parseServerResponse, postClientRequest } from './control-plane-module.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
 import type {
   SpawnedProcess,
@@ -281,8 +287,10 @@ export function probeDshSignature(
  * performs on attach. A port that merely accepts TCP — a non-dsh service
  * on the remote dsh port — answers differently and is rejected, so the
  * runtime never presents a fake connection as ready. The envelope is built
- * inline (no control-plane import: desktop transport files ship raw in the
- * packaged app while the control plane is a separate bundle).
+ * and validated by the shared rpc-envelope module (single-sourced in
+ * control-plane, consumed through control-plane-module.ts — the packaged
+ * app loads the compiled control-plane bundle, dev runs the workspace
+ * source).
  *
  * Failure classification (honest, never guessed): when the handshake fails
  * at the HTTP level, a secondary dsh-signature probe (probeDshSignature)
@@ -302,87 +310,46 @@ export function probeDshSignature(
  *   otherwise (renderer-safe reason: hostnames/ports only, never
  *   credentials; terminal = deterministic non-dsh evidence).
  */
-export function verifyDshEndpoint(
+export async function verifyDshEndpoint(
   endpoint: { host: string; port: number },
   timeoutMs = VERIFY_UP_TIMEOUT_MS,
   maxBodyBytes = VERIFY_UP_MAX_BODY_BYTES,
 ): Promise<TransportVerifyResult> {
-  return new Promise(resolve => {
-    // Bracketed IPv6 literals already carry their brackets in the URL.
-    const url = `http://${endpoint.host}:${endpoint.port}/api/host.describe`
-    const deadline = Date.now() + timeoutMs
-    const remaining = () => Math.max(1, deadline - Date.now())
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const done = (ok: boolean, detail?: string, terminal?: boolean) => {
-      if (settled) return
-      settled = true
-      if (timer !== null) {
-        clearTimeout(timer)
-        timer = null
-      }
-      // Destroy after settle: any late 'error' on the request is consumed
-      // by its own handler below (settled guard makes it a no-op).
-      req.destroy()
-      resolve(ok ? { ok: true } : { ok: false, detail, terminal })
-    }
-    const rpcId = randomUUID()
-    const req = httpRequest(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    }, res => {
-      // A premature close after our destroy must never escape as an
-      // uncaught error (main-process safety discipline).
-      res.on('error', () => {})
-      // A non-200 answer (404 from a non-dsh web server or from an older
-      // dsh that does not register host.describe, 403, 5xx, …): classify
-      // with the dsh-signature probe before choosing the message.
-      if (res.statusCode !== 200) {
-        res.resume()
-        void probeDshSignature(endpoint, Math.min(VERIFY_UP_SIGNATURE_TIMEOUT_MS, remaining())).then(signature => {
-          if (signature !== 'none') {
-            done(false, 'the destination is a dsh instance, but its version does not answer the host.describe handshake — upgrade the remote dsh', true)
-          } else {
-            done(false, `the destination answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe — it does not appear to be a dsh instance`, true)
-          }
-        })
-        return
-      }
-      const chunks: Buffer[] = []
-      let size = 0
-      res.on('data', chunk => {
-        if (settled) return
-        size += chunk.length
-        if (size > maxBodyBytes) {
-          done(false, 'the destination answered an oversized dsh identity probe response — it does not appear to be a dsh instance', true)
-          return
-        }
-        chunks.push(chunk)
-      })
-      res.on('end', () => {
-        let envelope: { type?: unknown; rpcId?: unknown; result?: { ok?: unknown } } | null = null
-        try {
-          envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        } catch {
-          envelope = null
-        }
-        if (envelope?.type !== 'server-response'
-          || envelope.rpcId !== rpcId
-          || typeof envelope.result !== 'object' || envelope.result === null
-          || envelope.result.ok !== true) {
-          done(false, 'the destination answered an unexpected dsh identity probe response — it does not appear to be a dsh instance', true)
-          return
-        }
-        done(true)
-      })
-    })
-    // TOTAL deadline, not the socket-idle timeout: an endpoint that answers
-    // slowly (a byte every few seconds) must never hang the verification.
-    timer = setTimeout(() => done(false, `the destination did not answer the dsh identity probe within ${timeoutMs}ms`), timeoutMs)
-    timer.unref?.()
-    req.on('error', () => done(false, 'the destination did not answer the dsh identity probe'))
-    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'host.describe', payload: {} }))
+  // Bracketed IPv6 literals already carry their brackets in the URL.
+  const url = `http://${endpoint.host}:${endpoint.port}/api/host.describe`
+  const deadline = Date.now() + timeoutMs
+  const remaining = () => Math.max(1, deadline - Date.now())
+  const rpcId = mintRpcId()
+  const outcome = await postClientRequest({
+    url,
+    envelope: buildClientRequest(rpcId, 'host.describe', {}),
+    timeoutMs,
+    maxBodyBytes,
   })
+  if (outcome.timeout) {
+    return { ok: false, detail: `the destination did not answer the dsh identity probe within ${timeoutMs}ms` }
+  }
+  if (outcome.status === null) {
+    return { ok: false, detail: 'the destination did not answer the dsh identity probe' }
+  }
+  // A non-200 answer (404 from a non-dsh web server or from an older dsh
+  // that does not register host.describe, 403, 5xx, …): classify with the
+  // dsh-signature probe before choosing the message.
+  if (outcome.status !== 200) {
+    const signature = await probeDshSignature(endpoint, Math.min(VERIFY_UP_SIGNATURE_TIMEOUT_MS, remaining()))
+    if (signature !== 'none') {
+      return { ok: false, detail: 'the destination is a dsh instance, but its version does not answer the host.describe handshake — upgrade the remote dsh', terminal: true }
+    }
+    return { ok: false, detail: `the destination answered HTTP ${outcome.status ?? '?'} to the dsh identity probe — it does not appear to be a dsh instance`, terminal: true }
+  }
+  if (outcome.oversized) {
+    return { ok: false, detail: 'the destination answered an oversized dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
+  }
+  const parsed = parseServerResponse(outcome.body, rpcId)
+  if (parsed.kind !== 'ok' || parsed.envelope.result.ok !== true) {
+    return { ok: false, detail: 'the destination answered an unexpected dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
+  }
+  return { ok: true }
 }
 
 /**
@@ -417,83 +384,41 @@ export function verifyDshEndpoint(
  */
 export type LiveProbeResult = 'live' | 'not-live' | 'unknown'
 
-function probeRemoteMethod(
+async function probeRemoteMethod(
   endpoint: { host: string; port: number },
   method: string,
   args: unknown,
   timeoutMs: number,
   maxBodyBytes: number,
 ): Promise<LiveProbeResult> {
-  return new Promise(resolve => {
-    const url = `http://${endpoint.host}:${endpoint.port}/api/${method}`
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const done = (result: LiveProbeResult) => {
-      if (settled) return
-      settled = true
-      if (timer !== null) {
-        clearTimeout(timer)
-        timer = null
-      }
-      req.destroy()
-      resolve(result)
-    }
-    const rpcId = randomUUID()
-    const req = httpRequest(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    }, res => {
-      // A premature close after our destroy must never escape as an
-      // uncaught error (main-process safety discipline).
-      res.on('error', () => {})
-      if (res.statusCode !== 200) {
-        res.resume()
-        // The dsh gateway routes only claimed Remote namespaces (vendored
-        // gateway test: an unclaimed route answers 404) — on a ready
-        // instance that is deterministic "not loaded yet", never an
-        // unclassifiable answer.
-        done(res.statusCode === 404 ? 'not-live' : 'unknown')
-        return
-      }
-      const chunks: Buffer[] = []
-      let size = 0
-      res.on('data', chunk => {
-        if (settled) return
-        size += chunk.length
-        if (size > maxBodyBytes) {
-          // Oversized body: not an RPC envelope — unclassifiable, never a
-          // claimed 'live'/'not-live'.
-          done('unknown')
-          return
-        }
-        chunks.push(chunk)
-      })
-      res.on('end', () => {
-        let envelope: { type?: unknown; rpcId?: unknown; result?: { ok?: unknown } } | null = null
-        try {
-          envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        } catch {
-          envelope = null
-        }
-        // Any well-formed server-response envelope is a deterministic answer:
-        // ok:true → the remote resolved the method; anything else (error
-        // envelope for an unresolved method) → not loaded yet.
-        if (envelope?.type === 'server-response'
-          && envelope.rpcId === rpcId
-          && typeof envelope.result === 'object' && envelope.result !== null) {
-          done(envelope.result.ok === true ? 'live' : 'not-live')
-          return
-        }
-        done('unknown')
-      })
-    })
-    // TOTAL deadline, not the socket-idle timeout: an endpoint that answers
-    // slowly must never hang the probe.
-    timer = setTimeout(() => done('unknown'), timeoutMs)
-    timer.unref?.()
-    req.on('error', () => done('unknown'))
-    req.end(JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }))
+  const url = `http://${endpoint.host}:${endpoint.port}/api/${method}`
+  const rpcId = mintRpcId()
+  const outcome = await postClientRequest({
+    url,
+    // The client-request envelope is single-sourced in rpc-envelope.ts
+    // (consumed through control-plane-module.ts) — the exact wire shape the
+    // renderer's module-C boot uses (design 09 §3.5).
+    envelope: buildClientRequest(rpcId, method, { args }),
+    timeoutMs,
+    maxBodyBytes,
   })
+  // No answer (timeout / connection failure / premature close): never a
+  // claimed 'live'/'not-live' from a non-answer.
+  if (outcome.status === null) return 'unknown'
+  if (outcome.status !== 200) {
+    // The dsh gateway routes only claimed Remote namespaces (vendored
+    // gateway test: an unclaimed route answers 404) — on a ready instance
+    // that is deterministic "not loaded yet", never an unclassifiable answer.
+    return outcome.status === 404 ? 'not-live' : 'unknown'
+  }
+  // Oversized body: not an RPC envelope — unclassifiable, never a claim.
+  if (outcome.oversized) return 'unknown'
+  const parsed = parseServerResponse(outcome.body, rpcId)
+  if (parsed.kind !== 'ok') return 'unknown'
+  // Any well-formed server-response envelope is a deterministic answer:
+  // ok:true → the remote resolved the method; anything else (error envelope
+  // for an unresolved method) → not loaded yet.
+  return parsed.envelope.result.ok === true ? 'live' : 'not-live'
 }
 
 /**
@@ -904,7 +829,7 @@ export const sshProvider: TransportProvider = {
     }
   },
 
-  buildStartArgs(spec: TransportInstanceSpec, localPort: number): readonly string[] | null {
+  buildStartArgs(spec: TransportInstanceSpec, localPort: number): readonly string[] {
     const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
     // SSH-level keepalive (SERVER_ALIVE_*): a dead/half-open connection makes
     // ssh exit on its own within interval * countMax (~90s), feeding the
