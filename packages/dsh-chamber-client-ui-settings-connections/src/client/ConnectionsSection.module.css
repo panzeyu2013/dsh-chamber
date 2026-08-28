@@ -345,6 +345,15 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* Non-blocking security-posture hint (design 17 §13.1 诚实状态): the http
+   plaintext notice is a warn-colored note, never a validation error. */
+.warnHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-state-warn-label);
+}
+
 .error {
   margin: 0;
   font-size: 12px;
