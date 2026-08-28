@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { runReaper } from '../src/reaper.ts'
 import type { ReaperDeps } from '../src/reaper.ts'
 
-const DSH_COMMAND = '/opt/deepseek/dsh/lib/bin.js --profile web'
+const DSH_COMMAND = '/usr/bin/node /opt/deepseek/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web --host 127.0.0.1 --port 17510'
 
 function tempStateDir(t: any): string {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-reaper-'))
@@ -62,7 +62,7 @@ const spawnRecord = {
   ownerPid: 99999, // dead by default (alive returns false for it below)
   ownerInstanceId: 'instance-1',
   port: 17510,
-  binary: '/opt/deepseek/dsh/lib/bin.js',
+  binary: '/opt/deepseek/node_modules/@deepseek-ai/dsh/lib/bin.js',
   profile: 'web',
   source: 'managed',
   startedAt: Date.now(),
@@ -71,13 +71,73 @@ const spawnRecord = {
 test('reaper: identity mismatch keeps the record untouched', async t => {
   const dir = tempStateDir(t)
   writeRecord(dir, '4242.json', spawnRecord)
+  const logs: string[] = []
   const deps = dshDeps({
-    // Command line contains neither `dsh` nor `bin.ts` → identity fails.
-    psIdentity: () => ({ ppid: '1', command: '/usr/bin/python3 /srv/whatever.py' }),
+    // Command line contains none of the recorded entry/profile/port identity.
+    psIdentity: () => ({ ppid: '1', command: '/usr/bin/python3 /srv/whatever.py --password super-secret' }),
+  })
+  const result = await runReaper({
+    stateDir: dir,
+    deps,
+    logger: {
+      log: value => { logs.push(String(value)) },
+      warn: () => {},
+      error: () => {},
+    },
+  })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.ok(recordExists(dir, '4242.json'), 'identity mismatch must leave the record and process untouched')
+  assert.equal(logs.some(line => line.includes('super-secret')), false, 'an unrelated argv must never enter logs')
+  assert.deepEqual(logs, ['reaper: 4242 identity mismatch; record kept'])
+})
+
+test('reaper: an unrelated bin.ts process with the same profile and port is never killed', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const signals: NodeJS.Signals[] = []
+  const deps = dshDeps({
+    // This is the exact stale-record/PID-reuse shape that the old broad
+    // `command.includes("bin.ts")` heuristic accepted.
+    psIdentity: () => ({
+      ppid: '1',
+      command: '/usr/bin/node /srv/unrelated/bin.ts --profile web --port 17510',
+    }),
+    signal: (_pid, sig) => { signals.push(sig); return true },
   })
   const result = await runReaper({ stateDir: dir, deps })
   assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
-  assert.ok(recordExists(dir, '4242.json'), 'identity mismatch must leave the record and process untouched')
+  assert.deepEqual(signals, [], 'identity mismatch must be decided before any signal')
+  assert.ok(recordExists(dir, '4242.json'))
+})
+
+test('reaper: the exact absolute source checkout entry is eligible for reclaim', async t => {
+  const dir = tempStateDir(t)
+  const binary = '/work/deepseek-harness/apps/cli/src/bin.ts'
+  writeRecord(dir, '4242.json', { ...spawnRecord, binary })
+  const signals: NodeJS.Signals[] = []
+  const deps = dshDeps({
+    psIdentity: () => ({
+      ppid: '1',
+      command: `/usr/bin/node --import tsx/esm ${binary} --profile web --host 127.0.0.1 --port 17510`,
+    }),
+    signal: (_pid, sig) => { signals.push(sig); return true },
+    alive: (pid: number) => pid === 4242 && signals.length === 0,
+  })
+  const result = await runReaper({ stateDir: dir, deps })
+  assert.deepEqual(result, { reclaimed: 1, kept: 0, errors: [] })
+  assert.deepEqual(signals, ['SIGTERM'])
+})
+
+test('reaper: legacy basename-only records fail closed', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', { ...spawnRecord, binary: 'dsh' })
+  const signals: NodeJS.Signals[] = []
+  const result = await runReaper({
+    stateDir: dir,
+    deps: dshDeps({ signal: (_pid, sig) => { signals.push(sig); return true } }),
+  })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.deepEqual(signals, [])
 })
 
 test('reaper: unverifiable port ownership (every probe unavailable) keeps the record', async t => {

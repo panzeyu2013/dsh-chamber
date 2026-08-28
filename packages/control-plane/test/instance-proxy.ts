@@ -527,6 +527,7 @@ test('registerTransport validates connectionId/baseUrl fail-loud', () => {
   assert.throws(() => proxy.registerTransport('', 'http://127.0.0.1:1'), TypeError)
   assert.throws(() => proxy.registerTransport('ssh:x', 'not-a-url'), TypeError)
   assert.throws(() => proxy.registerTransport('ssh:x', 'file:///etc/passwd'), TypeError)
+  assert.throws(() => proxy.registerTransport('ssh:x', 'https://127.0.0.1:8080'), /HTTP URL/)
   assert.throws(() => proxy.registerTransport('ssh:x', 'http://example.com:8080'), /loopback/)
   assert.throws(() => proxy.registerTransport('ssh:x', 'http://127.0.0.1:8080/path'), /loopback/)
 })

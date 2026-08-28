@@ -29,6 +29,7 @@ import {
   reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
+  retainMembershipGraceSources,
   runningRingVisible,
   runtimeReportSignature,
   sanitizeSearchQuery,
@@ -325,7 +326,7 @@ test('the ghost grace is SOURCE-scoped — a cloned UUID on another source never
   assert.deepEqual(resultA[0].sessions, [{ id: 'clone-uuid', title: '', running: false, updatedAt: 2, blank: true }])
 })
 
-// ---- membership grace (2026-10: create ungrouped-flash fix) + parent-accounted fork rule ----
+// ---- membership grace (create + bounded first-observation fork grace) ----
 
 test('a just-created session is skipped from the ungrouped bucket while the membership grace is live', () => {
   __resetMembershipGracesForTests()
@@ -440,12 +441,10 @@ test('the membership grace is source-scoped: an arm on one source never suppress
   assert.deepEqual(result[1].sessions, [{ id: 'session-5', title: '', running: false, updatedAt: 500 }])
 })
 
-test('a fork child of a workspace-accounted parent is skipped from the ungrouped bucket (parent-accounted rule, no grace)', () => {
+test('a fork child of a workspace-accounted parent is initially skipped by a bounded first-observation grace', () => {
   __resetMembershipGracesForTests()
-  // Host fork attachment follows the source session: the child of an
-  // accounted parent provably lands in that workspace, so its unaccounted
-  // state can only be the session-added/workspace-changed frame gap. Pure
-  // snapshot judgment — no arm, no timer, no arming-timing window.
+  // The host-minted child can be published before the fork response, so this
+  // grace is armed from the first snapshot rather than by the action caller.
   const result = deriveServerWorkspaces(
     snapshot(
       [workspace('w1', 'Work', ['parent'])],
@@ -461,6 +460,91 @@ test('a fork child of a workspace-accounted parent is skipped from the ungrouped
   )
   assert.equal(result.length, 1)
   assert.deepEqual(result[0].sessions, [{ id: 'parent', title: '', running: false, updatedAt: 10 }])
+})
+
+test('a published fork child surfaces ungrouped when workspace attach has not landed by grace expiry', () => {
+  __resetMembershipGracesForTests()
+  const pendingAttach = snapshot(
+    [workspace('w1', 'Work', ['parent'])],
+    [
+      session('parent', 10),
+      session('child', 500, { parentSessionId: 'parent' }),
+    ],
+  )
+  // First observation arms the grace.
+  const first = deriveServerWorkspaces(pendingAttach, 'srv-a', '', undefined, 1000)
+  assert.equal(first.length, 1)
+
+  // Upstream can return workspace-attach-failed after already publishing the
+  // child. The same partial-success snapshot must become discoverable after
+  // the bounded grace instead of being hidden forever.
+  const expired = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  assert.equal(expired.length, 2)
+  assert.equal(expired[1].ungrouped, true)
+  assert.deepEqual(expired[1].sessions, [{ id: 'child', title: '', running: false, updatedAt: 500 }])
+
+  // An expired candidate remains expired while present; repeated derives
+  // must not silently re-arm another three-second hiding window.
+  const later = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS * 2,
+  )
+  assert.equal(later.length, 2)
+  assert.deepEqual(later[1].sessions.map(row => row.id), ['child'])
+})
+
+test('the first-observation fork grace is source-scoped for cloned child ids', () => {
+  __resetMembershipGracesForTests()
+  const pendingAttach = snapshot(
+    [workspace('w1', 'Work', ['parent'])],
+    [session('parent', 10), session('child', 500, { parentSessionId: 'parent' })],
+  )
+  deriveServerWorkspaces(pendingAttach, 'srv-a', '', undefined, 1000)
+  deriveServerWorkspaces(pendingAttach, 'srv-b', '', undefined, 2000)
+
+  const expiredOnlyOnA = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  const stillHiddenOnB = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-b',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  assert.equal(expiredOnlyOnA.length, 2)
+  assert.equal(stillHiddenOnB.length, 1)
+})
+
+test('removing a source clears its fork grace so a same-id re-add starts a fresh generation', () => {
+  __resetMembershipGracesForTests()
+  const pendingAttach = snapshot(
+    [workspace('w1', 'Work', ['parent'])],
+    [session('parent', 10), session('child', 500, { parentSessionId: 'parent' })],
+  )
+  deriveServerWorkspaces(pendingAttach, 'srv-a', '', undefined, 1000)
+  retainMembershipGraceSources(new Set())
+  const readded = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS * 2,
+  )
+  assert.equal(readded.length, 1, 'the re-added source receives a new bounded grace')
 })
 
 test('a fork child of an UNACCOUNTED parent stays visible in the ungrouped bucket (genuinely ungrouped)', () => {

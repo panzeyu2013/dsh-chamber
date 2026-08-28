@@ -470,17 +470,48 @@ export default function App() {
     }
   }, [])
 
+  // Registry generations are independent from the per-source pull sequence:
+  // the latter is intentionally pruned on removal, so remove -> same-id
+  // re-add could otherwise reuse a sequence value and accept an old endpoint's
+  // late response. Every authoritative registry-change event invalidates the
+  // generation immediately; the signature comparison also covers the 30s
+  // polling fallback when an event was missed.
+  const aggregateSourceGenerationRef = useRef(0)
+  const remoteRegistryPullSeqRef = useRef(0)
+  const remoteRegistrySignatureRef = useRef<string | null>(null)
+  const aggregateSeqRef = useRef<Record<string, number>>({})
+  const mutationRefreshSeqRef = useRef<Record<string, number>>({})
+  const aggregatePollRunningRef = useRef(false)
+  const aggregateFailuresRef = useRef<Record<string, number>>({})
+  const retryTimersRef = useRef<Map<string, Set<ReturnType<typeof setTimeout>>>>(new Map())
+  const invalidateAggregateSources = useCallback(() => {
+    aggregateSourceGenerationRef.current += 1
+    aggregateFailuresRef.current = {}
+    for (const timers of retryTimersRef.current.values()) {
+      for (const timer of timers) clearTimeout(timer)
+    }
+    retryTimersRef.current.clear()
+  }, [])
   const refreshRemotes = useCallback(async () => {
     const ssh = window.dshChamber?.desktopSsh
     if (ssh === undefined) return
+    const seq = remoteRegistryPullSeqRef.current + 1
+    remoteRegistryPullSeqRef.current = seq
     try {
       const instances = await ssh.instances_get()
+      // A slow roster read must not overwrite a newer registry generation.
+      if (remoteRegistryPullSeqRef.current !== seq) return
+      const signature = JSON.stringify(instances)
+      if (remoteRegistrySignatureRef.current !== null && remoteRegistrySignatureRef.current !== signature) {
+        invalidateAggregateSources()
+      }
+      remoteRegistrySignatureRef.current = signature
       setRemoteInstances(instances)
       for (const instance of instances) void refreshRemoteStatus(instance.id)
     } catch {
       // 桌面 SSH 面不可达时保持现状；实例列表由下次刷新重试
     }
-  }, [refreshRemoteStatus])
+  }, [refreshRemoteStatus, invalidateAggregateSources])
 
   /**
    * 拉取一个实例的 workspace/session 快照（失败落 error 态，由轮询重试）。
@@ -499,15 +530,27 @@ export default function App() {
    * push（更新的 store 事实）或更新的拉取必须能作废更旧的拉取，防止其最后
    * 落地回退聚合。判定逻辑为纯函数 refreshPullStillCurrent（单测覆盖）。
    */
-  const aggregateSeqRef = useRef<Record<string, number>>({})
-  const mutationRefreshSeqRef = useRef<Record<string, number>>({})
-  const aggregatePollRunningRef = useRef(false)
-  const aggregateFailuresRef = useRef<Record<string, number>>({})
-  const retryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
+  // Registry churn must not leave retry bookkeeping behind. Timers are
+  // self-removing after they fire; the failure counters are pruned as soon as
+  // their source disappears (the aggregate/sequence maps are pruned above).
+  useEffect(() => {
+    const live = new Set(servers.map(server => server.id))
+    for (const id of deadKeys(aggregateFailuresRef.current, live)) {
+      delete aggregateFailuresRef.current[id]
+    }
+    for (const [id, timers] of retryTimersRef.current) {
+      if (live.has(id)) continue
+      for (const timer of timers) clearTimeout(timer)
+      retryTimersRef.current.delete(id)
+    }
+  }, [servers])
   const refreshAggregate = useCallback(async (instanceId: string, mutationTag?: number) => {
     const seq = (aggregateSeqRef.current[instanceId] ?? 0) + 1
     aggregateSeqRef.current[instanceId] = seq
+    const sourceGeneration = aggregateSourceGenerationRef.current
     const stillCurrent = (): boolean => refreshPullStillCurrent({
+      sourceGeneration,
+      currentSourceGeneration: aggregateSourceGenerationRef.current,
       mutationTag,
       mutationSeq: mutationRefreshSeqRef.current[instanceId],
       pollSeq: aggregateSeqRef.current[instanceId],
@@ -518,9 +561,14 @@ export default function App() {
       if (failures < AGGREGATE_RETRY_LIMIT) {
         aggregateFailuresRef.current[instanceId] = failures + 1
         const retryTimer = setTimeout(() => {
+          const timers = retryTimersRef.current.get(instanceId)
+          timers?.delete(retryTimer)
+          if (timers?.size === 0) retryTimersRef.current.delete(instanceId)
           if (stillCurrent()) void refreshAggregate(instanceId, mutationTag)
         }, AGGREGATE_RETRY_MS)
-        retryTimersRef.current.push(retryTimer)
+        const timers = retryTimersRef.current.get(instanceId) ?? new Set<ReturnType<typeof setTimeout>>()
+        timers.add(retryTimer)
+        retryTimersRef.current.set(instanceId, timers)
       } else {
         aggregateFailuresRef.current[instanceId] = 0
       }
@@ -528,6 +576,15 @@ export default function App() {
     try {
       const snapshot = await fetchInstanceSnapshot(getInstanceClient(instanceId))
       if (!stillCurrent()) return
+      // A healthy pull starts a fresh retry budget. Keeping the previous
+      // failure count would make a later, unrelated outage skip its bounded
+      // first retries.
+      delete aggregateFailuresRef.current[instanceId]
+      const pendingRetries = retryTimersRef.current.get(instanceId)
+      if (pendingRetries !== undefined) {
+        for (const timer of pendingRetries) clearTimeout(timer)
+        retryTimersRef.current.delete(instanceId)
+      }
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
@@ -684,8 +741,10 @@ export default function App() {
   }, [runStalenessWave])
 
   useEffect(() => () => {
-    for (const timer of retryTimersRef.current) clearTimeout(timer)
-    retryTimersRef.current = []
+    for (const timers of retryTimersRef.current.values()) {
+      for (const timer of timers) clearTimeout(timer)
+    }
+    retryTimersRef.current.clear()
   }, [])
   useEffect(() => {
     let cancelled = false
@@ -796,6 +855,10 @@ export default function App() {
     // 注册表变更推送：设置页增/删/改实例即时重拉 roster（自动连接新 id、
     // 回收已删视图），不等 30s 轮询周期。
     const unsubscribeInstances = ssh.onInstancesChanged(() => {
+      // Invalidate immediately, before the async roster read. Two rapid
+      // remove/re-add events with an identical final snapshot must still
+      // retire every request started against the old source generation.
+      invalidateAggregateSources()
       void refreshRemotes()
     })
     // OS 唤醒分发（design 14 D4）：主进程 push system-resume → 本页面所有
@@ -831,7 +894,7 @@ export default function App() {
     // openSession 依赖链稳定到 []（selectView/ensureRemoteConnected 均
     // useCallback([])），函数引用恒定——effect 单次订阅捕获的闭包永不过期，
     // 无需（也不能——声明在其后，deps 立即求值会 TDZ）列入依赖。
-  }, [sshBridgeReady, refreshRemotes])
+  }, [sshBridgeReady, refreshRemotes, invalidateAggregateSources])
 
   /**
    * 本地实例幂等启动（05 §3）：首轮连接行装载后（null = 尚未拉到）行缺失/
@@ -1010,6 +1073,14 @@ export default function App() {
     }
     const remaining = Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
     const now = Date.now()
+    // Cooldown entries intentionally survive a temporary registry removal so
+    // a same-id re-add cannot immediately thrash. Once expired they have no
+    // semantic value and must be swept to keep the key space bounded.
+    for (const [id, startedAt] of Object.entries(prewarmCooldownRef.current)) {
+      if (!isWithinCooldown(startedAt, now, PREWARM_COOLDOWN_MS)) {
+        delete prewarmCooldownRef.current[id]
+      }
+    }
     const eligible = remoteInstances
       .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
       .map(instance => `ssh-${instance.id}`)

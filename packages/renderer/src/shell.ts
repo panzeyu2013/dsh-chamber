@@ -117,7 +117,7 @@ export function shellStateIdle(instanceId: string, basePath: string): ShellState
  * validates the id against its own list, so wait until the session surfaces
  * there before calling open.
  */
-function dispatchOpen(entry: AppWebEntry, sessionId: string): Promise<void> {
+function dispatchOpen(entry: AppWebEntry, sessionId: string, isCurrent: () => boolean): Promise<void> {
   return new Promise((resolve, reject) => {
     const sessions = entry.runtimeCtx?.sessions
     if (sessions === undefined) {
@@ -126,6 +126,13 @@ function dispatchOpen(entry: AppWebEntry, sessionId: string): Promise<void> {
     }
     const deadline = Date.now() + OPEN_WAIT_MS
     const attempt = (): void => {
+      // A registry removal or same-id replacement invalidates an already
+      // active list poll as well as queued opens. Never call sessions.open()
+      // on a disposed/stale ctx after its source left the registry.
+      if (!isCurrent()) {
+        reject(new Error('实例 shell 已释放，会话未打开'))
+        return
+      }
       let listed = false
       try {
         listed = sessions.list?.getSnapshot()?.byId?.[sessionId] !== undefined
@@ -134,6 +141,10 @@ function dispatchOpen(entry: AppWebEntry, sessionId: string): Promise<void> {
         return
       }
       if (listed) {
+        if (!isCurrent()) {
+          reject(new Error('实例 shell 已释放，会话未打开'))
+          return
+        }
         try {
           sessions.open(sessionId)
           resolve()
@@ -202,6 +213,13 @@ class ShellRegistry {
 
   /** The per-boot budget (test-overridable: node tests cannot wait 60s). */
   #bootTimeoutMs = BOOT_TIMEOUT_MS
+
+  /** Cancel every generation through `gen`. The threshold is monotonic:
+   *  an older timeout settling after a newer registry removal must never
+   *  lower the floor and revive a boot that removal already cancelled. */
+  #cancelThrough(instanceId: string, gen: number): void {
+    this.#cancelledBoots.set(instanceId, Math.max(this.#cancelledBoots.get(instanceId) ?? 0, gen))
+  }
 
   /** Test-only: override the per-boot budget. */
   setBootTimeoutMs(ms: number): void {
@@ -401,7 +419,7 @@ class ShellRegistry {
       let timer: ReturnType<typeof setTimeout> | undefined
       const timeoutBranch = (): void => {
         console.error(`[shell] instance ${instanceId} boot timed out after ${this.#bootTimeoutMs}ms — cancelled`)
-        this.#cancelledBoots.set(instanceId, gen)
+        this.#cancelThrough(instanceId, gen)
         chamberBridge.reserveInstanceProducerGeneration(instanceId, gen + 1)
         if (staleEntry !== undefined) this.#disposeEntry(instanceId, staleEntry)
         this.#rejectPendingOpens(instanceId, `boot timed out after ${this.#bootTimeoutMs}ms`)
@@ -433,7 +451,9 @@ class ShellRegistry {
    */
   openSession(instanceId: string, sessionId: string): Promise<void> {
     const holder = this.#entries.get(instanceId)
-    if (holder !== undefined) return dispatchOpen(holder.entry, sessionId)
+    if (holder !== undefined) {
+      return dispatchOpen(holder.entry, sessionId, () => this.#entries.get(instanceId) === holder)
+    }
     return this.#pendingOpens.enqueue(instanceId, sessionId)
   }
 
@@ -441,7 +461,8 @@ class ShellRegistry {
   #flushPendingOpens(instanceId: string): void {
     const holder = this.#entries.get(instanceId)
     if (holder === undefined) return
-    this.#pendingOpens.flush(instanceId, sessionId => dispatchOpen(holder.entry, sessionId))
+    this.#pendingOpens.flush(instanceId, sessionId =>
+      dispatchOpen(holder.entry, sessionId, () => this.#entries.get(instanceId) === holder))
   }
 
   /** Boot failed: the queued opens can never dispatch — drop them loud. */
@@ -464,6 +485,11 @@ class ShellRegistry {
   dispose(instanceId: string): void {
     const generation = this.#bootGenerations.get(instanceId) ?? 0
     chamberBridge.reserveInstanceProducerGeneration(instanceId, generation + 1)
+    // Cancel queued/in-flight boots even when an older live entry also exists.
+    // Registry removal owns the whole source id, not just the currently
+    // registered holder; otherwise a concurrent retry could register after
+    // the live holder was disposed and recreate a zombie source.
+    this.#cancelThrough(instanceId, generation)
     const holder = this.#entries.get(instanceId)
     if (holder !== undefined) {
       this.#entries.delete(instanceId)
@@ -473,10 +499,6 @@ class ShellRegistry {
       } catch (error) {
         console.error(`[shell] dispose of instance ${instanceId} threw:`, error)
       }
-    } else {
-      // No live entry: cancel every boot queued or in flight for the instance —
-      // none of them may register afterwards (generation threshold, see above).
-      this.#cancelledBoots.set(instanceId, this.#bootGenerations.get(instanceId) ?? 0)
     }
     this.#rejectPendingOpens(instanceId, 'shell disposed (instance left ready)')
   }
@@ -499,7 +521,7 @@ class ShellRegistry {
     }
     this.#entries.clear()
     for (const [instanceId, gen] of this.#bootGenerations) {
-      this.#cancelledBoots.set(instanceId, gen)
+      this.#cancelThrough(instanceId, gen)
       chamberBridge.reserveInstanceProducerGeneration(instanceId, gen + 1)
     }
     this.#pendingOpens.rejectAll(new Error('全部实例 shell 已释放，排队的会话未打开'))

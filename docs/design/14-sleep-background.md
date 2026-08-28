@@ -101,8 +101,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 - 关窗分支（`browserWindow.on('close')`）：设置 = hide-to-tray 且非显式退出 →
   `event.preventDefault(); win.hide()`（不 destroy）；控制面/传输层/dsh 子进程
   继续运行。显式退出（托盘「退出」/ Cmd+Q / 应用菜单）走现有
-  `will-quit` → `transportManager.disposeAsync()` → `controlPlane.stop()` 完整
-  清理路径，顺序不变。
+  `will-quit` → plugin-sync 本地 pack/install 子进程回收 +
+  `transportManager.disposeAsync()` + `controlPlane.stop()` 并行完整清理路径。
 - 设置 = `quit` 时关窗仍受 D2 退出确认保护（有活动隧道/本地实例先确认再退出），
   非 darwin 行为与现状一致（关窗即退出）。
 - 三平台一致：macOS/win/linux 同走 `windowCloseBehavior`；macOS 系统惯例
@@ -137,7 +137,11 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   「退出时安装」），**跳过退出确认直接退出**（对齐 OpenChamber
   `if (state.installingUpdate) return;`），避免确认框阻塞/误导已确认的安装流程。
 - **单飞**：`quitRequested` 标志置位后不再重复弹确认（防连点/双路径触发两次
-  对话框）。
+  对话框）；异步 will-quit 清理也有独立 single-flight，第二次 quit 事件继续
+  `preventDefault`，不能因首轮已把 controlPlane holder 清空而提前退出。
+- renderer 崩溃/无响应恢复 timer 全部由窗口生命周期持有：新导航、恢复或窗口
+  close 会清旧 timer，quit 在途禁止 reload/show/loadURL 失败路径复活窗口或重入
+  teardown。
 
 ### D3 托盘增强（P1，可选）
 
@@ -214,7 +218,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 | 面 | 改动 |
 |---|---|
-| `packages/desktop/main.ts` + `ipc-settings.ts` | main 保留关窗分支（hide vs quit，**托盘可用门控**）、`backgroundThrottling: false`、`powerMonitor.on('resume')` → push 与退出确认（活动隧道/本地实例投影，**含更新安装豁免 + 单飞**）；ipc-settings 拥有 `powerSaveBlocker`、`chamber-settings.json` store、`dsh-chamber:settings-get/set` IPC + push |
+| `packages/desktop/main.ts` + `ipc-settings.ts` | main 保留关窗分支（hide vs quit，**托盘可用门控**）、`backgroundThrottling: false`、`powerMonitor.on('resume')` → push 与退出确认（活动隧道/本地实例投影，**含更新安装豁免 + 单飞**），will-quit 并行等待 plugin-sync 本地子进程、transport 与控制面；ipc-settings 拥有 `powerSaveBlocker`、`chamber-settings.json` store、`dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 windowCloseBehavior / launchAtLogin / keepAwake）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
@@ -225,8 +229,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 - 无新秘密面：托盘/设置只投影非秘密状态（连接数/phase/版本），传输 URL 与
   SSH 材料永不进 renderer（05 §8 不变）。
-- close-to-tray **不改变 will-quit 清理顺序**：退出仍完整 dispose 传输层 +
-  停止控制面，不留孤儿隧道/子进程。
+- close-to-tray **不改变 will-quit 清理所有权**：退出完整 dispose plugin-sync
+  本地子进程 + 传输层并停止控制面，不留孤儿 pack/install、隧道或 dsh 子进程。
 - keep-awake 仅 prevent-app-suspension，无后台执行面。
 - 退出确认是唯一新增 dialog，与 01 §4 移出项（notifications 等）无冲突。
 

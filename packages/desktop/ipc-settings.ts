@@ -125,6 +125,27 @@ export function registerSettings(ctx: SettingsWiringCtx): SettingsWiring {
     }
   }
 
+  /** Best-effort rollback for OS side effects. Each domain is isolated so a
+   *  failing keep-awake API cannot prevent launch-at-login from being
+   *  restored (or vice versa). The holder and file still remain unchanged. */
+  function rollbackSettingsEffects(patch: Partial<ChamberSettings>, context: string): void {
+    if (patch.keepAwake !== undefined) {
+      try {
+        setKeepAwakeActive(chamberSettings.keepAwake)
+      } catch (error) {
+        console.error(`[dsh-chamber] ${context}后的 keep-awake 回滚失败：`, error)
+      }
+    }
+    if (patch.launchAtLogin !== undefined && process.platform !== 'win32') {
+      try {
+        const rollback = applyLaunchAtLogin(chamberSettings.launchAtLogin)
+        if (!rollback.ok) console.error(`[dsh-chamber] ${context}后的登录自启回滚失败：${rollback.error}`)
+      } catch (error) {
+        console.error(`[dsh-chamber] ${context}后的登录自启回滚异常：`, error)
+      }
+    }
+  }
+
   /**
    * 应用一个已校验的设置 patch（design 14 D7）：先应用副作用（keep-awake /
    * 登录自启），**全部成功并持久化成功后才更新 holder**——任何失败 loud 返回
@@ -148,18 +169,16 @@ export function registerSettings(ctx: SettingsWiringCtx): SettingsWiring {
       if (patch.launchAtLogin !== undefined) {
         const result = applyLaunchAtLogin(patch.launchAtLogin)
         if (!result.ok) {
-          // 副作用失败：回滚已应用的 keepAwake（保持原状），绝不持久化。
-          if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake)
+          // A platform API/file write may fail after a partial side effect.
+          // Restore both touched domains before returning; the holder/disk
+          // remain old, so the OS behavior must converge to the old value too.
+          rollbackSettingsEffects(patch, '登录自启失败')
           return result
         }
       }
     } catch (error) {
       console.error('[dsh-chamber] 应用 chamber 设置副作用失败：', error)
-      try {
-        if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake)
-      } catch {
-        // 回滚失败也 loud 已记日志，不再叠加异常。
-      }
+      rollbackSettingsEffects(patch, '设置副作用异常')
       return { ok: false, error: 'settings apply failed' }
     }
     try {
@@ -167,11 +186,7 @@ export function registerSettings(ctx: SettingsWiringCtx): SettingsWiring {
     } catch (error) {
       console.error('[dsh-chamber] 写入 chamber 设置失败：', error)
       // 持久化失败：回滚已应用的副作用，holder 保持旧值——内存/磁盘/实际行为一致。
-      if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake)
-      if (patch.launchAtLogin !== undefined) {
-        const rollback = applyLaunchAtLogin(chamberSettings.launchAtLogin)
-        if (!rollback.ok) console.error(`[dsh-chamber] 登录自启回滚失败：${rollback.error}`)
-      }
+      rollbackSettingsEffects(patch, '设置持久化失败')
       return { ok: false, error: 'settings persist failed' }
     }
     chamberSettings = next

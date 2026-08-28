@@ -15,8 +15,8 @@ type Bridge = Pick<DesktopSshSurface, 'instances_get' | 'instances_set' | 'set_p
 /**
  * A bridge replicating the MAIN-PROCESS gate (main.ts desktop_ssh_set_password):
  * set_password REFUSES ids that are not in the current registry
- * ('invalid or unknown instance id') — the new-host password-first order must
- * therefore never reach set_password before the registry write.
+ * ('invalid or unknown instance id') — every save must land and verify the
+ * registry before it reaches set_password.
  */
 function gatedBridge(overrides: {
   initial?: SshInstanceSpec[]
@@ -49,20 +49,20 @@ function gatedBridge(overrides: {
   }
 }
 
-test('edit: password commits FIRST, then the registry (M9 — password failure leaves the registry untouched)', async () => {
+test('edit: metadata lands first; password failure restores the previous registry', async () => {
   const bridge = gatedBridge({ password: () => ({ error: 'password write failed' }) })
   const result = await saveHostWithPassword(bridge, [oldHost], [{ ...oldHost, label: 'Old2' }], 'old', 'pw')
   assert.deepEqual(result, { ok: false, instances: [oldHost], error: 'password write failed', metadataCommitted: false })
-  assert.deepEqual(bridge.calls, ['set_password'], 'instances_set must not run when the password failed')
+  assert.deepEqual(bridge.calls, ['instances_set', 'set_password', 'instances_set'])
   assert.deepEqual(bridge.state, [oldHost])
 })
 
-test('edit: success commits password then registry, in that order', async () => {
+test('edit: success commits registry then password, in that order', async () => {
   const bridge = gatedBridge()
   const edited = { ...oldHost, label: 'Old2' }
   const result = await saveHostWithPassword(bridge, [oldHost], [edited], 'old', 'pw')
   assert.equal(result.ok, true)
-  assert.deepEqual(bridge.calls, ['set_password', 'instances_set'])
+  assert.deepEqual(bridge.calls, ['instances_set', 'set_password'])
 })
 
 test('new host: the registry lands FIRST (set_password refuses unknown ids), then the password (M9)', async () => {
@@ -98,6 +98,25 @@ test('new host: a failed rollback reports metadataCommitted=true so the form tur
   assert.equal(result.metadataCommitted, true)
   assert.deepEqual(result.instances, [oldHost, savedNew])
   assert.match(result.error, /disk full; host metadata rollback failed/)
+})
+
+test('new host: a REFUSED rollback is verified and keeps the committed row in edit mode', async () => {
+  let registryCalls = 0
+  const bridge = gatedBridge({
+    password: () => ({ error: 'password denied' }),
+    registry: (next) => {
+      registryCalls += 1
+      if (registryCalls >= 2) return [oldHost, savedNew]
+      return next.map(input => ({ ...input, kind: 'ssh' as const, user: null, sshPort: null, serviceName: null, remoteDshHome: null }))
+    },
+  })
+  const result = await saveHostWithPassword(bridge, [oldHost], [oldHost, newHost], 'new', 'pw')
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.metadataCommitted, true)
+  assert.deepEqual(result.instances, [oldHost, savedNew])
+  assert.match(result.error, /password denied; host metadata rollback was refused/)
+  assert.deepEqual(bridge.calls, ['instances_set', 'set_password', 'instances_set'])
 })
 
 test('empty password skips set_password entirely and commits the registry', async () => {
@@ -139,14 +158,51 @@ test('new host: a REFUSED registry save (instances_set returns the original list
   assert.deepEqual(bridge.state, [oldHost])
 })
 
-test('edit: a REFUSED registry save (stale entry returned) is a loud failure', async () => {
+test('new host: a same-id row with different metadata is not accepted and never receives this form password', async () => {
+  const collidingHost: SshInstanceSpec = {
+    ...savedNew,
+    label: 'Another caller',
+    host: 'other.example.com',
+  }
+  const bridge = gatedBridge({ registry: () => [oldHost, collidingHost] })
+  const result = await saveHostWithPassword(bridge, [oldHost], [oldHost, newHost], 'new', 'pw')
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.match(result.error, /保存未生效/)
+  assert.equal(result.metadataCommitted, false)
+  assert.deepEqual(result.instances, [oldHost, collidingHost])
+  assert.deepEqual(bridge.calls, ['instances_set'], 'a colliding row must never receive this form password')
+})
+
+test('edit: a REFUSED registry save never reaches the password write', async () => {
   const bridge = gatedBridge({ registry: () => [oldHost] }) // 拒绝编辑：返回旧条目
-  const result = await saveHostWithPassword(bridge, [oldHost], [{ ...oldHost, host: 'moved.example.com' }], 'old', '')
+  const result = await saveHostWithPassword(bridge, [oldHost], [{ ...oldHost, host: 'moved.example.com' }], 'old', 'new-password')
   assert.equal(result.ok, false)
   if (result.ok) return
   assert.match(result.error, /保存未生效/, `refusal error surfaced: ${result.error}`)
   assert.equal(result.metadataCommitted, false)
   assert.deepEqual(bridge.calls, ['instances_set'])
+})
+
+test('edit: a throwing registry write leaves the stored password untouched', async () => {
+  const bridge = gatedBridge({
+    registry: () => { throw new Error('registry disk full') },
+  })
+  const result = await saveHostWithPassword(
+    bridge,
+    [oldHost],
+    [{ ...oldHost, label: 'Edited' }],
+    'old',
+    'new-password',
+  )
+  assert.deepEqual(result, {
+    ok: false,
+    instances: [oldHost],
+    error: 'registry disk full',
+    metadataCommitted: false,
+  })
+  assert.deepEqual(bridge.calls, ['instances_set'], 'set_password must not run after registry persistence failed')
+  assert.deepEqual(bridge.state, [oldHost])
 })
 
 test('edit: submitting the CURRENT values (no actual change) still reports ok:true', async () => {

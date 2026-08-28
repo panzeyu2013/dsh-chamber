@@ -250,7 +250,7 @@ ready
   "ownerPid": 27182,
   "ownerInstanceId": "3f2b…-uuid",
   "port": 17510,
-  "binary": "/opt/deepseek/dsh/bin/dsh",
+  "binary": "/opt/deepseek/node_modules/@deepseek-ai/dsh/lib/bin.js",
   "profile": "web",
   "source": "spawn",
   "startedAt": "2026-08-14T07:00:00.000Z"
@@ -274,15 +274,19 @@ ready
 2. 条目解析失败 / pid 非整数 → 删文件
 3. pid 已死（kill(pid,0) 失败且非 EPERM）→ 删文件，无事可做
 4. 身份重验（Unix：ps -p <pid> -o ppid=,command=）：
-   a. 命令串包含 binary 的 basename（'dsh'）且含 '--profile web'
-      （固定 profile 形态，可直接命令串匹配）
-   a′. 命令身份：安装产物路径含 `dsh` 或 `bin.ts`（源码 tsx dev 启动路径）
-   ——dev-only 兼容，fail-closed（不匹配 → 保留不杀）；
-   b. 端口归属：记录的 port 存在时，探测该端口的监听 pid == 记录 pid
+   a. 记录的 `binary` 必须是绝对路径，且只认可两个受管入口后缀：安装产物
+      `node_modules/@deepseek-ai/dsh/lib/bin.js` 或源码 dev
+      `apps/cli/src/bin.ts`；该**完整绝对路径**必须作为独立 argv token 出现在
+      活命令串中。旧版 basename-only（`dsh` / `bin.ts`）记录无法证明身份，
+      fail-closed 保留不杀；
+   b. profile/port token 必须与记录逐项一致：命令含精确
+      `--profile web` 与 `--port <recordedPort>`（不做 substring 猜测）；
+   c. 端口归属：探测该端口的监听 pid == 记录 pid
       （lsof → ss → /proc 三级探测；全部不可用或 port 缺失/非法时 **fail-closed
       保留不杀**——无法证明归属就不动；Windows：tasklist 镜像名匹配，见 §5）
       —— 防 pid 复用：回收的 pid 指向无关进程（哪怕它恰巧也是 dsh）时放行
-   c. a/b 任一不成立 → 不杀，保留文件
+   d. a/b/c 任一不成立 → 不杀，保留文件；诊断只记 pid/判定，不回显被复用
+      pid 的完整命令行（它可能属于无关进程并携带凭据）
 5. 孤儿判定：ppid == 1（被 reparent 到 init）或 ownerPid 已死
    —— 不成立（owner 仍活）→ 不杀，保留文件【多实例安全】
 6. 杀：进程组 SIGTERM → 轮询 1.5s → SIGKILL（killOrphan 序列）；删文件
@@ -350,12 +354,25 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    start 在途时到达的失败判定一律惰性（不计数、不触发重启——start 在途时
    重启被抑制，防止双 spawn）；spawn 失败落在 stop() 之后（epoch 已变）也不得
    把 `stopped` 改回 `error`。
+8. **手工启动代次（2026-08 merge review）**：候选端口预检和 TCP 就绪轮询的
+   每次 loopback connect 均有 1s 上限；预检超时按“端口归属不明/忙”保守跳过，
+   不在未知端口上拉 detached host。stop() abort 当前 spawn 代次（端口预检、
+   TCP 等待、`host.describe` 就绪等待及最后 browse 能力探测均消费同一取消
+   信号、销毁在途 socket 并清理 detached 尝试），等待旧代收尾后释放该代的
+   single-flight 槽；迟到结果以
+   epoch 判旧，若已产出子进程则
+   自行终止，若失败则不得清空新代的 `child/dshPort`。因此
+   start→stop→start 会创建全新 spawn，不复用旧 promise，也不被旧代反写。
 ```
 
 ### 3.7 优雅停止
 
 - `DELETE /api/connections/local`（04 §3.2）/ 桌面退出 / systemd stop：
   SIGTERM 进程组 → 1s → SIGKILL；确认退出后注销记录，状态回 `stopped`；
+- stop 单飞行：并发或紧邻的停止调用共享同一 promise；已完全静止时为无日志的
+  no-op，因此同一代生命周期只落一条 `state=stopped`；
+- 停止同时取消在途手工 spawn，等待其 owner 清理后释放 single-flight 槽；任何不响应取消的迟到
+  测试 seam/适配器仍由 epoch 守卫隔离，不能复活或覆盖随后启动的新代；
 - **崩溃路径**：控制面被 SIGKILL → 宿主成为孤儿 → 下次启动 reaper 回收
   （§3.4）——`detached: true` 保证宿主不连带，孤儿回收保证不泄漏；
 - **会话数据不丢**：dsh 侧 JSONL 持久化在 `$DSH_HOME/sessions`，重启后由
@@ -369,6 +386,9 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 - 读取面：`GET /api/host/logs`（04 §3.3，local-only）——桌面
   chamber-settings 插件展示"本地实例日志"；远程实例日志经
   `desktop_ssh_logs` IPC（03 §2.2）；
+- 写入或压缩失败会切换到新的日志代次（清空旧内存 ring/计数并重新 setup）；
+  旧 backing file 被删除后绝不由临界压缩把历史 ring 复活，失败写也不在下次
+  重建时重复；
 - 纪律：日志永不含凭据/令牌（05 §8 安全不变量）。
 
 ### 3.9 systemd 单元（远程实例部署参考）

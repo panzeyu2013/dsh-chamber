@@ -563,14 +563,21 @@ test('DELETE during an in-flight start does not resurrect the connection (2026-0
     })
     await new Promise(resolve => setTimeout(resolve, 30))
     // Stop while the spawn is still pending.
-    const del = await fetch(`${base}/api/connections/local`, { method: 'DELETE' })
-    assert.equal(del.status, 200)
-    const mid = await fetchJson(base, '/api/connections')
-    assert.equal(mid.body.connection.status, 'stopped')
-    // Let the pending spawn resolve — the guard must tear it down, not adopt.
-    spawnControl.release!()
-    await startP
+    const deleteRequest = fetch(`${base}/api/connections/local`, { method: 'DELETE' })
+    // A truthful DELETE cannot acknowledge `stopped` while the owner of a
+    // deliberately non-cooperative spawn may still return a detached child.
+    // Give the handler one turn and prove that it remains in flight until the
+    // cancelled generation has completed its own cleanup.
+    let deleteSettled = false
+    void deleteRequest.finally(() => { deleteSettled = true })
     await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(deleteSettled, false)
+    // Let the pending spawn resolve — the guard must tear it down, not adopt;
+    // DELETE may return success only after that teardown has finished.
+    spawnControl.release!()
+    const del = await deleteRequest
+    assert.equal(del.status, 200)
+    await startP
     const after = await fetchJson(base, '/api/connections')
     assert.equal(after.body.connection.status, 'stopped', 'late spawn must not resurrect the connection')
     assert.equal(teardownCount, 1, 'the late spawn must be torn down, not leaked')

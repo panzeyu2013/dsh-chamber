@@ -19,6 +19,8 @@ let disposedCount = 0
 const eventLog = []
 const lifecycleLog = []
 const chamberContextLog = []
+const runtimeSessionIds = new Set()
+const runtimeOpenLog = []
 
 export class AppWebEntry {
   constructor(el, options) {
@@ -52,7 +54,16 @@ export class AppWebEntry {
   }
 
   get runtimeCtx() {
-    return undefined
+    return {
+      sessions: {
+        list: {
+          getSnapshot: () => ({
+            byId: Object.fromEntries([...runtimeSessionIds].map(id => [id, { id }])),
+          }),
+        },
+        open: id => { runtimeOpenLog.push(id) },
+      },
+    }
   }
 }
 
@@ -117,6 +128,19 @@ export function __testDisposedCount() {
 
 export function __testResetDisposed() {
   disposedCount = 0
+}
+
+export function __testSetRuntimeSessions(ids) {
+  runtimeSessionIds.clear()
+  for (const id of ids) runtimeSessionIds.add(id)
+}
+
+export function __testRuntimeOpenLog() {
+  return runtimeOpenLog
+}
+
+export function __testResetRuntimeOpenLog() {
+  runtimeOpenLog.length = 0
 }
 
 /** Event log: 'ensure' (module-system install) vs 'fetch' (host-graph channel) call order. */

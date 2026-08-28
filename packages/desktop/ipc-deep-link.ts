@@ -15,11 +15,10 @@
 
 import { app, dialog } from 'electron'
 import type { BrowserWindow } from 'electron'
-import path from 'node:path'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts'
 import { parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts'
-import { DRAIN_QUEUE_LIMIT, recordDeepLinkSeen } from './wiring.ts'
+import { DRAIN_QUEUE_LIMIT, enqueueBounded, recordDeepLinkSeen } from './wiring.ts'
 
 /** Dependencies injected by main.ts (register called in whenReady, after
  *  registerOpenIn built the vscodeCtx). */
@@ -75,7 +74,10 @@ export function enqueueDeepLink(rawUrl: string): void {
     console.error(`[dsh-chamber] 深链解析失败：${parsed.error}`)
     return
   }
-  pendingIntents.push(parsed.intent)
+  // The seen-set cap bounds dedupe memory, not the cold-start work queue.
+  // Bound the queue independently so repeated external protocol launches
+  // before whenReady cannot grow main-process memory without limit.
+  pendingIntents = enqueueBounded(pendingIntents, parsed.intent, DRAIN_QUEUE_LIMIT)
   drain?.()
 }
 
@@ -83,20 +85,16 @@ export function enqueueDeepLink(rawUrl: string): void {
  * 深链协议注册（design 16 §4.3）：`app.isPackaged` 门控——开发态注册会把裸
  * Electron 注册成 scheme handler，污染 LaunchServices，与打包版 bundle id
  * （com.dshchamber.desktop）冲突（镜像托盘先例）。win32 首版门控（暂缓一致性，
- * 镜像 ssh 密码 askpass 门控）；linux 需显式 execPath + relaunch args
- * （Electron 文档）；macOS 打包版由 electron-builder `protocols` 键自动生成
- * CFBundleURLTypes，此处 setAsDefaultProtocolClient 兜底。失败 loud，绝不
- * 打断启动。
+ * 镜像 ssh 密码 askpass 门控）；打包 Linux/macOS 直接注册当前应用。Electron
+ * 文档里的 execPath + argv[1] 仅用于 process.defaultApp 开发态，不能带进
+ * 打包 Linux。macOS 的 electron-builder `protocols` 仍生成 CFBundleURLTypes，
+ * 此处 setAsDefaultProtocolClient 兜底。失败 loud，绝不打断启动。
  */
 function registerDeepLinkProtocol(): void {
   if (!app.isPackaged || process.platform === 'win32') return
   try {
-    if (process.platform === 'linux') {
-      const relaunchArgs = process.argv.length >= 2 ? [path.resolve(process.argv[1])] : []
-      app.setAsDefaultProtocolClient('dsh-chamber', process.execPath, relaunchArgs)
-    } else {
-      app.setAsDefaultProtocolClient('dsh-chamber')
-    }
+    const registered = app.setAsDefaultProtocolClient('dsh-chamber')
+    if (!registered) console.error('[dsh-chamber] 深链协议注册失败：平台拒绝了注册请求')
   } catch (error) {
     console.error('[dsh-chamber] 深链协议注册失败：', error)
   }

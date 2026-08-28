@@ -27,10 +27,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
 import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
-import type { TransportManagerOptions } from './transport-manager.ts'
+import type { TransportManagerDeps, TransportManagerOptions } from './transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
 import { sshProvider, verifyDshEndpoint, probeClientGraphLive, probeGitWorktreeLive, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
+import { CHILD_LINE_MAX_CHARS } from './bounded-lines.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -83,7 +84,7 @@ class FakeChild extends EventEmitter implements SpawnedProcess {
   }
 }
 
-function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult>; allocatePort?: () => Promise<number> } = {}) {
+function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult>; allocatePort?: () => Promise<number>; logger?: TransportManagerDeps['logger'] } = {}) {
   const spawnCalls: Array<{ command: string; args: readonly string[]; options: SpawnOptions; child: FakeChild }> = []
   const children: FakeChild[] = []
   const spawnTimes: number[] = []
@@ -98,7 +99,7 @@ function makeManager(t: TestContext, overrides: { options?: TransportManagerOpti
       return child
     },
     instancesFile: join(tempDir(t), 'ssh-instances.json'),
-    logger: silentLogger,
+    logger: overrides.logger ?? silentLogger,
     portProbe: async () => probeOk,
     allocatePort: overrides.allocatePort,
     // Fake the provider's own endpoint verification when it has one (the
@@ -169,7 +170,7 @@ test('instances persistence round-trips through the atomic-write file', () => {
   assert.deepEqual(reopened.loadInstances(), saved)
 })
 
-test('saveInstances drops invalid entries loudly and disconnects removed instances', t => {
+test('saveInstances atomically replaces a valid set and disconnects removed instances', t => {
   const { manager } = makeManager(t)
   manager.connect('s1')
   const saved = manager.saveInstances([{ id: 'other', label: 'x', host: 'h', remotePort: 22 }])
@@ -245,25 +246,42 @@ test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`'
   if (result.ok) assert.equal(result.status.serviceActive, true)
 })
 
-test('invalid sshPort values are dropped from the registry on save', () => {
+test('invalid sshPort rejects the whole save without creating a partial registry', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  assert.throws(() => manager.saveInstances([
     { id: 'zero', label: 'x', host: 'h', sshPort: 0, remotePort: 3080 },
     { id: 'huge', label: 'y', host: 'h2', sshPort: 70000, remotePort: 3080 },
     { id: 'float', label: 'z', host: 'h3', sshPort: 22.5, remotePort: 3080 },
     { id: 'ok', label: 'w', host: 'h4', sshPort: 2202, remotePort: 3080 },
+  ]), /instance at index 0 is invalid/)
+  assert.deepEqual(manager.listInstances(), [])
+  assert.equal(existsSync(file), false)
+})
+
+test('an invalid edit cannot delete the existing host from memory or disk', () => {
+  const dir = tempDir()
+  const file = join(dir, 'ssh-instances.json')
+  const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
+  const before = manager.saveInstances([
+    { id: 's1', label: 'home', host: 'home.example.com', remotePort: 3080, remoteDshHome: '/srv/dsh' },
   ])
-  assert.deepEqual(saved.map(entry => entry.id), ['ok'])
-  assert.equal(saved[0].sshPort, 2202)
+  assert.throws(
+    () => manager.saveInstances([
+      { ...before[0], remoteDshHome: '/srv/../tmp' },
+    ]),
+    /instance at index 0 is invalid/,
+  )
+  assert.deepEqual(manager.listInstances(), before)
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), before)
 })
 
 test('option-injection guards: id/host/user must match the whitelists (no leading -)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  assert.throws(() => manager.saveInstances([
     { id: 'bad id', label: 'x', host: 'h', remotePort: 3080 },
     { id: 'slash/id', label: 'x', host: 'h', remotePort: 3080 },
     { id: 'local', label: 'x', host: 'h', remotePort: 3080 },
@@ -271,9 +289,8 @@ test('option-injection guards: id/host/user must match the whitelists (no leadin
     { id: 'dash-user', label: 'x', host: 'h', user: '-o', remotePort: 3080 },
     { id: 'spaces', label: 'x', host: 'h two words', remotePort: 3080 },
     { id: 'good', label: 'x', host: '192.168.1.10', user: 'root', remotePort: 3080 },
-  ])
-  assert.deepEqual(saved.map(entry => entry.id), ['good'])
-  assert.equal(saved[0].host, '192.168.1.10')
+  ]), /instance at index 0 is invalid/)
+  assert.deepEqual(manager.listInstances(), [])
 })
 
 test('hyphenated hostnames and bracketed IPv6 literals are accepted', () => {
@@ -283,9 +300,13 @@ test('hyphenated hostnames and bracketed IPv6 literals are accepted', () => {
   const saved = manager.saveInstances([
     { id: 'hy', label: 'x', host: 'my-server.example.com', remotePort: 3080 },
     { id: 'v6', label: 'y', host: '[::1]', remotePort: 3080 },
-    { id: 'v6zone', label: 'z', host: '[fe80::1%eth0]', remotePort: 3080 },
   ])
   assert.deepEqual(saved.map(entry => entry.id), ['hy', 'v6'])
+  assert.throws(
+    () => manager.saveInstances([...saved, { id: 'v6zone', label: 'z', host: '[fe80::1%eth0]', remotePort: 3080 }]),
+    /instance at index 2 is invalid/,
+  )
+  assert.deepEqual(manager.listInstances(), saved, 'a refused follow-up save preserves the previous registry')
 })
 
 test('ssh stderr lines with key/passphrase material are redacted from the ring buffer', async t => {
@@ -301,6 +322,30 @@ test('ssh stderr lines with key/passphrase material are redacted from the ring b
   assert.ok(lines.some(entry => entry.message === '[ssh material redacted]'), 'passphrase line redacted')
   assert.ok(lines.every(entry => !entry.message.includes('.ssh/') && !entry.message.includes('id_ed25519')), 'no key path in logs')
   assert.ok(lines.some(entry => entry.message.includes('Permission denied')), 'non-sensitive stderr kept')
+})
+
+test('a throwing provider classifier drops stdout/stderr fail-closed without logging its sensitive input', async t => {
+  const warnings: string[] = []
+  const throwingProvider: TransportProvider = {
+    ...sshProvider,
+    classifyStderr: line => {
+      throw new Error(`classifier saw ${line}`)
+    },
+  }
+  const { manager, children, spawnCalls } = makeManager(t, {
+    provider: throwingProvider,
+    logger: { warn: message => warnings.push(message) },
+  })
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  const secret = "Enter passphrase for key '/Users/private/.ssh/id_ed25519'"
+  children[0].stdout.emit('data', Buffer.from(secret))
+  children[0].stderrWrite(`${secret}\n`)
+
+  const visible = [...warnings, ...manager.logs('s1').map(entry => entry.message)]
+  assert.ok(visible.some(line => line.includes('output dropped')), 'classification failure stays loud')
+  assert.ok(visible.every(line => !line.includes(secret) && !line.includes('.ssh/')), 'raw output and quoting exceptions never reach logs')
+  manager.disconnect('s1')
 })
 
 test('redactSshStderr covers key-path diagnostics without over-redacting banners', () => {
@@ -1054,6 +1099,33 @@ test('stderr redaction reassembles lines split across chunks (no bypass)', async
   assert.ok(lines.every(entry => !entry.message.includes('/.ssh') || entry.message === '[ssh material redacted]'), 'no raw key-path fragment in logs')
 })
 
+test('stdout redaction also reassembles lines split across chunks (no bypass)', async t => {
+  const { manager, children, spawnCalls, setProbe } = makeManager(t)
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  children[0].stdout.emit('data', Buffer.from('debug1: identity file /Users/x/.s'))
+  children[0].stdout.emit('data', Buffer.from('sh/id_ed25519 type 3\n'))
+  await sleep(30)
+  const lines = manager.logs('s1')
+  assert.ok(lines.some(entry => entry.message === '[ssh material redacted]'), 'straddling stdout key path is redacted as one complete line')
+  assert.ok(lines.every(entry => !entry.message.includes('/.ssh') || entry.message === '[ssh material redacted]'), 'no raw stdout key-path fragment in logs')
+})
+
+test('unterminated transport output is bounded, dropped fail-closed, and resumes at the next line', async t => {
+  const { manager, children, spawnCalls, setProbe } = makeManager(t)
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  children[0].stderrWrite('x'.repeat(CHILD_LINE_MAX_CHARS + 1))
+  children[0].stderrWrite('\nordinary line\n')
+  await sleep(30)
+  const lines = manager.logs('s1')
+  assert.ok(lines.some(entry => entry.message.includes('output line dropped')), 'overflow is reported with a fixed summary')
+  assert.ok(lines.some(entry => entry.message === 'ordinary line'), 'classification resumes after the discarded line')
+  assert.ok(lines.every(entry => !entry.message.includes('xxxxx')), 'the overlong raw line never reaches the renderer-visible ring')
+})
+
 test('disconnect stops the process (SIGTERM) and lands on idle', async t => {
   const { manager, children, spawnCalls, setProbe } = makeManager(t)
   setProbe(true)
@@ -1210,10 +1282,14 @@ test('is-active distinguishes unit-not-found and ssh-exec failures from inactive
   if (!killed.ok) assert.match(killed.error, /could not reach/)
 })
 
-test('registry refuses an invalid serviceName before it can reach exec', async t => {
-  const { manager, spawnCalls } = makeManager(t, {
-    instances: [{ ...EXEC_INSTANCE, serviceName: 'bad;rm -rf /' }],
-  })
+test('registry atomically refuses an invalid serviceName before it can reach exec', async t => {
+  const { manager, spawnCalls } = makeManager(t)
+  const before = manager.listInstances()
+  assert.throws(
+    () => manager.saveInstances([...before, { ...EXEC_INSTANCE, serviceName: 'bad;rm -rf /' }]),
+    (error: unknown) => (error as { code?: string }).code === 'ssh_instances_invalid',
+  )
+  assert.deepEqual(manager.listInstances(), before)
   const result = await manager.exec('s2', 'start')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /instance not found/)
@@ -1386,18 +1462,16 @@ test('a replaced child\u2019s late spawn error never failTerminals the fresh tra
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'fresh transport ready')
 })
 
-test('saveInstances dedups duplicate ids (first wins) so the file never disagrees with the set', () => {
+test('saveInstances rejects duplicate ids atomically', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  assert.throws(() => manager.saveInstances([
     { id: 's1', label: 'first', host: 'a.example.com', remotePort: 2222 },
     { id: 's1', label: 'second', host: 'b.example.com', remotePort: 2222 },
-  ])
-  assert.equal(saved.length, 1)
-  assert.equal(saved[0].label, 'first')
-  const onDisk = JSON.parse(readFileSync(file, 'utf8'))
-  assert.deepEqual(onDisk, saved)
+  ]), /duplicate instance id at index 1/)
+  assert.deepEqual(manager.listInstances(), [])
+  assert.equal(existsSync(file), false)
 })
 
 test('loadInstances drops duplicate persisted ids loudly (first wins)', () => {
@@ -1418,15 +1492,15 @@ test('loadInstances drops duplicate persisted ids loudly (first wins)', () => {
 // fake endpoint provider and its tests are gone. The kind-routing and
 // no-exec contracts are still covered below with the fake-env tunnel provider.
 
-test('entries whose kind mismatches the provider kind are dropped on save and load', () => {
+test('kind mismatches reject saves atomically while load-time recovery still drops them', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: fakeEnvProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  assert.throws(() => manager.saveInstances([
     { id: 'ssh-one', label: 'wrong kind', kind: 'ssh', host: 'h.example.com', remotePort: 22 },
     { id: 'f4', label: 'right kind', kind: 'fake-env' as TransportKind, host: 'x.tailnet', remotePort: 8080 },
-  ])
-  assert.deepEqual(saved.map(entry => entry.id), ['f4'])
+  ]), /instance at index 0 is invalid/)
+  assert.deepEqual(manager.listInstances(), [])
   writeFileSync(file, JSON.stringify([
     { id: 'ssh-two', label: 'wrong kind', kind: 'ssh', host: 'h.example.com', remotePort: 22 },
   ]))

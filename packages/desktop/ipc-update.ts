@@ -14,7 +14,7 @@ import { ipcMain, shell } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import type { TrustedIpc } from './renderer-trust.ts'
-import { createUpdateController } from './updater.ts'
+import { createUpdateController, openReleasePage } from './updater.ts'
 
 /** Dependencies injected by main.ts at startup (whenReady assembly). */
 export interface UpdateWiringCtx {
@@ -29,35 +29,6 @@ export interface UpdateWiring {
   /** Current controller state subset read by the quit-confirmation exemption
    *  (undefined = the controller was never created). */
   updateState(): { phase: string; installBlockedReason: string | null } | undefined
-}
-
-/**
- * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
- * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
- * startsWith string check) so scheme/host/path-root are pinned exactly.
- *
- * Two extra defenses (2026-08 review):
- * - `new URL` does NOT decode percent-encoded path segments, so an encoded
- *   `..%2f..%2f` traversal would pass a raw pathname prefix check yet land on
- *   an arbitrary github.com path (the browser decodes on request). Decode the
- *   pathname and re-normalize through a fresh URL before the prefix check.
- * - userinfo (`https://user:pass@github.com/...`) is ignored by `origin`;
- *   reject any non-empty username/password so the allowlist can never be
- *   pointed at a credentialed github.com URL.
- */
-function isAllowedReleaseUrl(raw: unknown): boolean {
-  if (typeof raw !== 'string') return false
-  try {
-    const url = new URL(raw)
-    if (url.origin !== 'https://github.com') return false
-    if (url.username !== '' || url.password !== '') return false
-    // Decode + re-normalize the pathname: an encoded traversal then normalizes
-    // like a literal one and fails the prefix check instead of escaping it.
-    const normalized = new URL(`https://github.com${decodeURIComponent(url.pathname)}`).pathname
-    return normalized.startsWith('/panzeyu2013/dsh-chamber/')
-  } catch {
-    return false
-  }
 }
 
 export function registerUpdate(ctx: UpdateWiringCtx): UpdateWiring {
@@ -95,12 +66,13 @@ export function registerUpdate(ctx: UpdateWiringCtx): UpdateWiring {
   // page must go through the main process. Strict allowlist — parsed, not
   // prefix-string matched: only this repo's GitHub pages can ever be opened
   // (never an arbitrary URL, subdomain, userinfo or path-root trick).
-  ipcMain.handle(IPC_CHANNELS.OPEN_RELEASE, trustedIpc(({ url }) => {
-    if (!isAllowedReleaseUrl(url)) {
-      return { ok: false, error: 'url not allowed' }
+  ipcMain.handle(IPC_CHANNELS.OPEN_RELEASE, trustedIpc(async ({ url }) => {
+    const result = await openReleasePage(url, value => shell.openExternal(value))
+    if (!result.ok && result.error === 'open release page failed') {
+      // Do not print the thrown error: an OS handler can include a local path.
+      console.error('[dsh-chamber] 打开下载页失败')
     }
-    void shell.openExternal(url).catch(err => console.error('[dsh-chamber] 打开下载页失败：', err))
-    return { ok: true }
+    return result
   }))
   updater.start()
 

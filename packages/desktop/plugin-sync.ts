@@ -650,8 +650,8 @@ export function resolveLocalMaterializeDirectory(
   let manifest: LocalPluginManifest
   try {
     manifest = localPluginList(localDshHome)
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } catch {
+    return { ok: false, error: 'local plugin manifest is unreadable' }
   }
   const spec = manifest.dependencies[name]
   if (typeof spec !== 'string' || classifyDependencyValue(spec).kind !== 'materialize') {
@@ -670,8 +670,10 @@ export function resolveLocalMaterializeDirectory(
     const pkg = JSON.parse(readFileSync(join(real, 'package.json'), 'utf8')) as { name?: unknown }
     if (pkg.name !== name) return { ok: false, error: 'plugin package name does not match the local manifest entry' }
     return { ok: true, path: real }
-  } catch (error) {
-    return { ok: false, error: `plugin directory is unreadable: ${String(error)}` }
+  } catch {
+    // This result crosses into the renderer. Keep the selected/resolved local
+    // path inside the main process even on ENOENT/permission failures.
+    return { ok: false, error: 'plugin directory is unreadable' }
   }
 }
 
@@ -1339,16 +1341,96 @@ export async function materializeAbsolutePath(
 
 const MATERIALIZED_TARBALL_MAX_BYTES = 50 * 1024 * 1024
 const CHILD_OUTPUT_MAX_CHARS = 64 * 1024
+const PLUGIN_CHILD_TERMINATE_GRACE_MS = 2_000
+
+type PluginChild = ReturnType<typeof spawn>
+
+/** Local pack / dsh-plugin subprocesses are outside the transport manager,
+ * so they need their own app-quit ownership. POSIX children get a dedicated
+ * process group (pnpm/dsh may spawn descendants); Windows uses taskkill /T.
+ */
+const activePluginChildren = new Map<PluginChild, Promise<void>>()
+let pluginChildrenDisposing = false
+let pluginChildrenDisposePromise: Promise<void> | null = null
+
+function trackPluginChild(child: PluginChild): void {
+  let markExited!: () => void
+  const exited = new Promise<void>(resolveExited => {
+    markExited = () => {
+      activePluginChildren.delete(child)
+      resolveExited()
+    }
+  })
+  activePluginChildren.set(child, exited)
+  // `close` follows either a normal exit or a spawn error and also proves
+  // the stdio handles are closed. An arbitrary ChildProcess `error` is not
+  // itself proof that an already-spawned process is dead.
+  child.once('close', markExited)
+}
+
+function signalPluginChild(child: PluginChild, signal: NodeJS.Signals): void {
+  const pid = child.pid
+  if (process.platform === 'win32' && pid !== undefined) {
+    // Node cannot signal a Windows process group. taskkill /T resolves the
+    // whole pnpm/dsh descendant tree; /F is intentional on both phases since
+    // leaving a grandchild behind is worse than skipping a graceful window.
+    try {
+      const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      killer.on('error', () => {
+        try { child.kill(signal) } catch { /* already gone */ }
+      })
+      killer.unref()
+      return
+    } catch { /* fall through to child.kill */ }
+  }
+  if (process.platform !== 'win32' && pid !== undefined) {
+    try {
+      process.kill(-pid, signal)
+      return
+    } catch { /* child may have exited or group creation may have failed */ }
+  }
+  try { child.kill(signal) } catch { /* already gone */ }
+}
+
+/** Stop every local pack/plugin subprocess and wait for its exit. Single-flight
+ * so repeated will-quit events cannot start competing termination passes. */
+export function disposePluginSyncChildren(graceMs = PLUGIN_CHILD_TERMINATE_GRACE_MS): Promise<void> {
+  if (pluginChildrenDisposePromise !== null) return pluginChildrenDisposePromise
+  pluginChildrenDisposing = true
+  pluginChildrenDisposePromise = (async () => {
+    const snapshot = [...activePluginChildren.entries()]
+    if (snapshot.length === 0) return
+    for (const [child] of snapshot) signalPluginChild(child, 'SIGTERM')
+    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      Promise.all(snapshot.map(([, exited]) => exited)),
+      new Promise<void>(resolveGrace => { graceTimer = setTimeout(resolveGrace, graceMs) }),
+    ])
+    if (graceTimer !== undefined) clearTimeout(graceTimer)
+    const survivors = [...activePluginChildren.entries()]
+    for (const [child] of survivors) signalPluginChild(child, 'SIGKILL')
+    await Promise.all(survivors.map(([, exited]) => exited))
+  })().finally(() => {
+    pluginChildrenDisposing = false
+    pluginChildrenDisposePromise = null
+  })
+  return pluginChildrenDisposePromise
+}
 
 /** Run a bounded child without blocking Electron's main event loop. */
-function runChild(
+export function runChild(
   command: string,
   args: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (pluginChildrenDisposing) return Promise.resolve({ ok: false, error: 'plugin sync is shutting down' })
   return new Promise(resolveResult => {
     let settled = false
     let timedOut = false
+    let childError: string | null = null
     let detail = ''
     let timer: ReturnType<typeof setTimeout> | null = null
     let forceTimer: ReturnType<typeof setTimeout> | null = null
@@ -1366,33 +1448,50 @@ function runChild(
         env: options.env,
         stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true,
+        detached: process.platform !== 'win32',
       })
     } catch (error) {
       resolveResult({ ok: false, error: String(error) })
       return
     }
+    trackPluginChild(child)
     child.stderr?.setEncoding('utf8')
     child.stderr?.on('data', chunk => {
       if (detail.length < CHILD_OUTPUT_MAX_CHARS) detail += String(chunk).slice(0, CHILD_OUTPUT_MAX_CHARS - detail.length)
     })
-    child.on('error', error => finish({ ok: false, error: String(error) }))
-    child.on('exit', (code, signal) => {
+    // Node emits `close` after `error` for a spawn failure. Remember the
+    // diagnosis but keep the caller joined to `close`, which is the boundary
+    // that proves stdio/inherited handles are no longer using the staging dir.
+    child.on('error', error => { childError = String(error) })
+    // `close`, not merely `exit`: it proves inherited stdio handles have
+    // closed too. packDirectory must not remove its staging directory while
+    // a pnpm descendant can still be draining output against this child.
+    child.on('close', (code, signal) => {
       if (timedOut) finish({ ok: false, error: `child timed out after ${options.timeoutMs}ms` })
+      else if (childError !== null) finish({ ok: false, error: childError })
       else if (code === 0) finish({ ok: true })
       else finish({ ok: false, error: detail.trim() || `child exited ${code ?? signal ?? 'unknown'}` })
     })
     timer = setTimeout(() => {
       timedOut = true
-      try { child.kill('SIGTERM') } catch { /* already gone */ }
+      signalPluginChild(child, 'SIGTERM')
       forceTimer = setTimeout(() => {
-        try { child.kill('SIGKILL') } catch { /* already gone */ }
+        signalPluginChild(child, 'SIGKILL')
       }, 2_000)
       forceTimer.unref?.()
-      // Resolve only after the child exits. In particular, packDirectory must
-      // not remove its staging directory while pnpm is still writing there.
+      // Resolve only after the child's `close`. In particular, packDirectory
+      // must not remove its staging directory while pnpm or an inherited
+      // stdio holder is still writing there.
     }, options.timeoutMs)
     timer.unref?.()
   })
+}
+
+/** Build the fixed pack argv. `pnpm pack` otherwise runs prepack/prepare/
+ * postpack from the selected directory; folder selection is consent to read
+ * and transfer a package, not consent to execute that package's code. */
+export function buildPnpmPackArgs(outDir: string): string[] {
+  return ['pack', '--config.ignore-scripts=true', '--pack-destination', outDir]
 }
 
 async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null> {
@@ -1402,7 +1501,7 @@ async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null
     const env = pnpmBin === null
       ? process.env
       : { ...process.env, PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` }
-    const result = await runChild(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['pack', '--pack-destination', outDir], {
+    const result = await runChild(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', buildPnpmPackArgs(outDir), {
       cwd: localDir,
       timeoutMs: 120_000,
       env,
@@ -1445,11 +1544,11 @@ export async function materializeAndAdd(
   try {
     const pkg = JSON.parse(readFileSync(join(localDir, 'package.json'), 'utf8')) as Record<string, unknown>
     if (typeof pkg.name !== 'string' || !PLUGIN_NAME_PATTERN.test(pkg.name)) {
-      return { ok: false, error: `materialize: invalid package name in ${join(localDir, 'package.json')}` }
+      return { ok: false, error: 'materialize: invalid package name' }
     }
     name = pkg.name
-  } catch (error) {
-    return { ok: false, error: `materialize: cannot read ${join(localDir, 'package.json')}: ${String(error)}` }
+  } catch {
+    return { ok: false, error: 'materialize: cannot read package.json' }
   }
   const packed = await (pack ?? packDirectory)(localDir)
   if (packed === null) return { ok: false, error: 'materialize: pnpm pack failed' }
@@ -1529,21 +1628,35 @@ export interface LocalPluginExecResult {
  * pnpm, which a Finder-launched app cannot find otherwise). Specs are
  * whitelist-checked before spawn (defense in depth).
  */
-/** Local-only `file:` spec (absolute path) accepted for the folder-import path
- *  (design 13 §5.8). Local spawn uses an argv array (no remote shell), so a
- *  plain absolute path is safe — spaces are allowed, but shell metacharacters
- *  are still conservatively refused; the remote channel never accepts `file:`
- *  (it goes through the materialize path with its own whitelist). */
-const LOCAL_FILE_SPEC_PATTERN = /^file:\/[a-zA-Z0-9._\/ -]+$/
+/**
+ * Local-only `file:` spec accepted for the MAIN-PROCESS folder-picker path
+ * (design 13 §5.8). The selected path rides an argv array, never a shell, so
+ * ordinary Unicode/punctuation is safe and must work. Accept POSIX absolute,
+ * Windows drive and UNC paths; refuse relative/control-character input.
+ * `allowFileSpec` below is still required, so renderer-submitted specs cannot
+ * use this capability even if they spell a valid absolute path.
+ */
+export function isAllowedLocalFileSpec(spec: string): boolean {
+  if (!spec.startsWith('file:') || spec.length > 4096) return false
+  const selectedPath = spec.slice('file:'.length)
+  if (selectedPath === '' || /[\0\r\n]/.test(selectedPath)) return false
+  return isAbsolute(selectedPath)
+    || /^[a-zA-Z]:[\\/]/.test(selectedPath)
+    || /^\\\\[^\\]+\\[^\\]+/.test(selectedPath)
+}
 
 export async function runLocalDshPlugin(
   dshWorkspace: string,
   localDshHome: string,
   action: 'add' | 'remove',
   spec: string,
+  options: { allowFileSpec?: boolean } = {},
 ): Promise<LocalPluginExecResult> {
   if (typeof spec !== 'string') return { ok: false, error: 'plugin spec must be a string' }
-  const addOk = spec.length <= 4096 && ((spec.length <= MAX_PLUGIN_SPEC_CHARS && PLUGIN_SPEC_PATTERN.test(spec) && !hasXWildcardVersion(spec)) || LOCAL_FILE_SPEC_PATTERN.test(spec))
+  const addOk = spec.length <= 4096 && (
+    (spec.length <= MAX_PLUGIN_SPEC_CHARS && PLUGIN_SPEC_PATTERN.test(spec) && !hasXWildcardVersion(spec))
+    || (options.allowFileSpec === true && isAllowedLocalFileSpec(spec))
+  )
   if (action === 'add' && !addOk) return { ok: false, error: `invalid add spec: ${JSON.stringify(spec)}` }
   if (action === 'remove' && (spec.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(spec))) return { ok: false, error: `invalid remove name: ${JSON.stringify(spec)}` }
 

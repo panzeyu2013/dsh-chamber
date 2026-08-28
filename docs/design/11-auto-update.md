@@ -166,6 +166,10 @@
     PublishManager 仅在 `isPublish` 时执行 `createUpdateInfoTasks`）——发布必须走
     `--publish`。
 - **`release.yml` 双 leg 改造（已实现）**：
+  - CI/release 中 `actions/checkout`、`pnpm/action-setup`、`actions/setup-node`
+    一律钉死完整 40 位 commit SHA；`pnpm run verify:workflows` 离线核对两份
+    workflow 的 pin 完整且逐 action 一致，validation job 在安装依赖前执行，
+    防无效/漂移 SHA 让发布验证腿根本无法启动；
   - build 步骤改 `--publish=always`（`GH_TOKEN`）——electron-builder 把全部产物
     **包括 feed 文件**上传进 create-release 创建的 draft release（softprops 上传步骤
     移除；create-release 建 draft + finalize 翻转公开的流程不变）；
@@ -174,8 +178,11 @@
   - workflow_dispatch 的 `version` 输入必须等于 `packages/desktop/package.json`
     版本（create-release 先断言，防 electron-builder 上传到幻影 v<package.json>
     draft 而 finalize 空 release）；draft 的 `prerelease` 由版本 prerelease 后缀
-    推导；`dry_run` 时回退 `--publish=never`（build-only 检查；create-release 仍会
-    建一个空 draft——与既有行为一致，已在 workflow 输入描述注明）；
+    推导；create-release 显式 `needs: validation`，任何删除/创建 GitHub Release
+    的写操作都在 release-local 验证通过之后；workflow 顶层 concurrency 统一按
+    release tag 建键（tag `vX` 与手动 version `X` 同组，异版本互不取消）；
+    `dry_run` 时回退 `--publish=never` 且跳过既有 Release 删除、draft 创建与
+    finalize 写操作，是真正的 build+validate-only；
   - CI 验证步骤新增：非 dry-run 时断言 channel yml 存在、**无** blockmap 产物；
   - finalize 前新增清理步骤：经 GitHub API 删除 draft release 里的
     `*.zip.blockmap`（mac zip 的 blockmap 由 electron-builder 硬编码生成，无配置

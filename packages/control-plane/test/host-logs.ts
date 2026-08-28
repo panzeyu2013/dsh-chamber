@@ -412,6 +412,26 @@ test('writer: a write landing on a removed dir is swallowed, not an uncaughtExce
   assert.ok(typeof result.lines[0].ts === 'string' && result.lines[0].ts !== '')
 })
 
+test('writer: a removed backing file near the compaction threshold never resurrects the old ring', async t => {
+  const stateDir = tempDir(t)
+  const port = 17781
+  const writer = createHostLogWriter(stateDir, port)
+  for (let i = 0; i < MAX_LOG_LINES; i++) writer.write(`old ${i}`, 'stdout')
+
+  // Lose the entire backing generation. The next write fails; the following
+  // write recreates the directory/file. The pre-fix writer retained its old
+  // ring and immediately compacted it over the new file, reviving 400 lines.
+  rmSync(join(stateDir, 'host-logs'), { recursive: true, force: true })
+  writer.write('lost while absent', 'stderr')
+  writer.write('new generation', 'stdout')
+  writer.close()
+
+  const result = await hostLogs({ stateDir, logger: silentLogger }).readManagedLog(port)
+  assert.deepEqual(result.lines.map(line => line.line), ['new generation'])
+  assert.equal(result.lines.some(line => line.line.startsWith('old ')), false)
+  assert.equal(result.lines.some(line => line.line === 'lost while absent'), false)
+})
+
 test('writer: rolling ring cap — beyond MAX_LOG_LINES the file stays bounded, newest lines kept', async t => {
   const stateDir = tempDir(t)
   const port = 17780

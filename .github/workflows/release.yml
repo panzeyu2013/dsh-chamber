@@ -46,7 +46,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'Dry run (skip publishing — build-only; note: an empty draft release is still created)'
+        description: 'Dry run (build and validate only; do not create, update, or publish a GitHub Release)'
         required: false
         default: false
         type: boolean
@@ -59,7 +59,10 @@ permissions:
 # so the tag always has exactly one coherent draft→finalize sequence
 # (2026-08 review NIT).
 concurrency:
-  group: release-${{ github.ref }}
+  # Normalize both trigger shapes to the RELEASE TAG. A tag push for v0.2.0
+  # and a manual dispatch for 0.2.0 must share one group (they mutate the same
+  # GitHub Release), while unrelated manual versions remain independent.
+  group: release-${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -67,6 +70,10 @@ env:
 
 jobs:
   create-release:
+    # All GitHub Release mutations happen only after this commit passes the
+    # release-local validation gate. A broken tag/manual run must not delete
+    # or replace an existing release before tests finish.
+    needs: validation
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,12 +94,20 @@ jobs:
           RELEASE_REF: ${{ github.ref }}
         run: |
           if [[ -n "$RELEASE_INPUT_VERSION" ]]; then
-            echo "version=$RELEASE_INPUT_VERSION" >> "$GITHUB_OUTPUT"
+            VERSION="$RELEASE_INPUT_VERSION"
           elif [[ "$RELEASE_REF" == refs/tags/* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            VERSION="${RELEASE_REF#refs/tags/v}"
           else
-            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+            VERSION="0.0.0-dev"
           fi
+          # Validate before writing the value to GITHUB_OUTPUT or interpolating
+          # it into later shell steps. Manual workflow inputs are data, never
+          # shell syntax or output-file control records.
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::invalid release version: expected SemVer (for example 0.2.0 or 0.2.0-beta.1)"
+            exit 1
+          fi
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Assert version matches package.json
         # electron-builder uploads to tag v<BUILT version> (from
@@ -176,6 +191,7 @@ jobs:
 
       - name: Create GitHub Release (draft)
         id: create_release
+        if: ${{ github.event.inputs.dry_run != 'true' }}
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
         with:
           tag_name: v${{ steps.get_version.outputs.version }}
@@ -198,15 +214,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    concurrency:
-      group: release-${{ github.ref }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify workflow action pins
+        run: node scripts/verify-workflow-action-pins.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
-      - uses: actions/setup-node@1d0a4696b7d49f21e82fb2a5395270ae1984f0db # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm

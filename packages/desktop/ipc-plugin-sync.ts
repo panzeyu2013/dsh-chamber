@@ -30,9 +30,11 @@ import {
   describeMaterializeConfirmation,
   describePluginApplyConfirmation,
   describeSeedConfirmation,
+  disposePluginSyncChildren,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
+  isMaterializeSpec,
   materializeAndAdd,
   redactLocalPluginManifest,
   remoteHome,
@@ -56,10 +58,16 @@ export interface PluginSyncWiringCtx {
   userDataPath: string
 }
 
+export interface PluginSyncWiring {
+  /** Unsubscribe ready-time seeding, terminate local pack/plugin children and
+   * wait for them to exit before Electron quits. */
+  disposeAsync(): Promise<void>
+}
+
 const pkgDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(pkgDir, '..', '..')
 
-export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
+export function registerPluginSync(ctx: PluginSyncWiringCtx): PluginSyncWiring {
   const { trustedIpc, transportManager, mainWindow, dshWorkspace, userDataPath } = ctx
 
   // The authoritative local dsh home is <userData>/state/dsh-home (the real
@@ -90,7 +98,7 @@ export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
   ]
 
   const sm = transportManager()
-  if (sm === null) return
+  if (sm === null) return { disposeAsync: disposePluginSyncChildren }
 
   // Plugin-sync dependency injection (design 13 M2+M3, contract A): the
   // orchestration in plugin-sync.ts is decoupled from the transport runtime,
@@ -193,7 +201,7 @@ export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
   // idempotent, content-hash skip). Idempotency also makes the guard a
   // pure in-flight Set: reconnects re-run a cheap no-op seed instead of
   // tracking a persisted "seeded" flag that could drift from the remote.
-  sm.onStatusChanged((id, status) => {
+  const unsubscribeStatus = sm.onStatusChanged((id, status) => {
     if (status.kind === 'ssh' && status.phase === 'ready' && !hostPackageSeeding.has(id)) {
       hostPackageSeeding.add(id)
       void (async () => {
@@ -293,7 +301,10 @@ export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
       // into the renderer — a remote bundle could read them.
       return { ok: true, manifest: redactLocalPluginManifest(localPluginList(localDshHome)) }
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      // The dsh-home/profile path is main-process-only. Preserve the full
+      // diagnosis locally but return a path-free projection to the renderer.
+      console.error('[dsh-chamber] 读取本地插件清单失败：', error)
+      return { ok: false, error: 'local plugin manifest is unreadable' }
     }
   }))
   ipcMain.handle(IPC_CHANNELS.NPM_SEARCH, trustedIpc(async ({ query }) => {
@@ -419,8 +430,16 @@ export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
     if (win === null || win.isDestroyed()) return { ok: false, error: 'no main window' }
     const picked = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
     if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true }
-    const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`)
-    return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' }
+    const result = await runLocalDshPlugin(
+      dshWorkspace,
+      localDshHome,
+      'add',
+      `file:${picked.filePaths[0]}`,
+      { allowFileSpec: true },
+    )
+    if (result.ok) return { ok: true }
+    console.error('[dsh-chamber] 本地路径插件安装失败：', result.error)
+    return { ok: false, error: 'local file plugin add failed' }
   }))
   ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, trustedIpc(async ({ spec: specArg }) => {
     if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' }
@@ -429,7 +448,7 @@ export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
     // specs so a compromised renderer can never drive the local pack surface
     // to an arbitrary directory (design 13 §5.8 hardening).
     if (typeof specArg !== 'string') return { ok: false, error: 'invalid plugin spec' }
-    if (specArg.startsWith('file:')) {
+    if (isMaterializeSpec(specArg)) {
       return { ok: false, error: 'local file imports must use the folder picker' }
     }
     // User confirmation (design 09 §4 v1 mitigation): installing a registry
@@ -439,7 +458,9 @@ export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
     if ('cancelled' in confirm) return { ok: true, cancelled: true }
     if (!confirm.ok) return { ok: false, error: confirm.error }
     const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg)
-    return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' }
+    if (result.ok) return { ok: true }
+    console.error('[dsh-chamber] 本地 registry 插件安装失败：', result.error)
+    return { ok: false, error: 'local plugin add failed' }
   }))
   ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_REMOVE, trustedIpc(async ({ name }) => {
     if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' }
@@ -450,6 +471,19 @@ export function registerPluginSync(ctx: PluginSyncWiringCtx): void {
     if ('cancelled' in confirm) return { ok: true, cancelled: true }
     if (!confirm.ok) return { ok: false, error: confirm.error }
     const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name)
-    return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' }
+    if (result.ok) return { ok: true }
+    console.error('[dsh-chamber] 本地插件卸载失败：', result.error)
+    return { ok: false, error: 'local plugin remove failed' }
   }))
+
+  let disposed = false
+  return {
+    async disposeAsync(): Promise<void> {
+      if (!disposed) {
+        disposed = true
+        unsubscribeStatus()
+      }
+      await disposePluginSyncChildren()
+    },
+  }
 }

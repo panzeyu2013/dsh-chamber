@@ -35,7 +35,7 @@
  */
 
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
-import { detectVscodeAvailability, runVscodeLaunch, validateRemotePath } from './deep-link.ts'
+import { detectVscodeAvailability, runVscodeLaunch, validateLocalPath, validateRemotePath } from './deep-link.ts'
 
 /** A normalized open-in launch request (renderer IPC payload, untrusted). */
 export interface OpenInRequest {
@@ -105,7 +105,7 @@ const finderApp: OpenInApp = {
     if (req.instanceId !== 'local') {
       return { ok: false, error: 'finder is only available for the local instance' }
     }
-    const validated = validateRemotePath(req.path)
+    const validated = validateLocalPath(req.path)
     if (!validated.ok) return validated
     const entry = await ctx.stat(validated.path)
     if (entry === null) {
@@ -172,11 +172,11 @@ export function listOpenInApps(platform: string, deps: { vscodeAvailable?: () =>
 /**
  * Electron `shell.openPath` result normalization: the API resolves '' on
  * success and an error string on failure. '' / non-string → null (success);
- * a non-empty string → the error text. Extracted as an electron-free pure
- * function so the boundary is unit-testable (the wrapper lives in main.ts).
+ * a non-empty string → a fixed, path-free renderer projection. Electron's
+ * raw error may embed the selected local path and stays main-process-only.
  */
 export function normalizeOpenPathError(err: unknown): string | null {
-  return typeof err === 'string' && err.length > 0 ? err : null
+  return typeof err === 'string' && err.length > 0 ? 'open path failed' : null
 }
 
 /**
@@ -207,7 +207,9 @@ export async function runOpenInLaunch(
   if (typeof req.instanceId !== 'string' || (req.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(req.instanceId))) {
     return { ok: false, error: 'invalid instance id' }
   }
-  const validatedPath = validateRemotePath(req.path)
+  const validatedPath = req.instanceId === 'local'
+    ? validateLocalPath(req.path)
+    : validateRemotePath(req.path)
   if (!validatedPath.ok) return validatedPath
   if (req.instanceId !== 'local' && !app.remoteCapable) {
     return { ok: false, error: `${app.id} is not available for remote instances` }

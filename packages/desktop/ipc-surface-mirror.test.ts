@@ -19,7 +19,8 @@ const ROOT = join(import.meta.dirname, '..', '..')
  *  aliases (`type X = | {…} | {…}`) the block spans ALL members: after a
  *  depth-0 closing brace, a `|` continuation keeps the scan going. */
 function interfaceBlock(source: string, typeName: string): string {
-  // -anchored: `ChamberSettings` must not prefix-match `ChamberSettingsStatus`.
+  // Word-boundary anchored: `ChamberSettings` must not prefix-match
+  // `ChamberSettingsStatus`.
   const start = source.search(new RegExp(`\\binterface ${typeName}\\b`))
   const startType = start === -1 ? source.search(new RegExp(`\\btype ${typeName}\\b`)) : start
   assert.notEqual(startType, -1, `${typeName} not found in the source`)

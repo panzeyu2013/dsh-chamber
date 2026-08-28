@@ -17,9 +17,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   applyPlugins,
+  buildPnpmPackArgs,
   classifyDependencyValue,
   classifyLocalDependency,
   classifySpec,
+  isAllowedLocalFileSpec,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
@@ -28,6 +30,7 @@ import {
   describeMaterializeConfirmation,
   describePluginApplyConfirmation,
   describeSeedConfirmation,
+  disposePluginSyncChildren,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
@@ -40,6 +43,7 @@ import {
   remotePluginList,
   resolveLocalMaterializeDirectory,
   resetApplyInFlight,
+  runChild,
   seedRemoteChamberHostPackages,
   seedRemoteHostGraph,
   PLUGIN_SPEC_PATTERN,
@@ -102,6 +106,49 @@ test('classifySpec: registry specs sync, file/link/path materialize, ranges unsy
   assert.equal(unsyncable.kind, 'unsyncable')
   assert.equal(classifySpec('git+https://example.com/x.git').kind, 'unsyncable')
   assert.equal(classifySpec('npm:alias@^1.0.0').kind, 'unsyncable')
+})
+
+test('local materialize pack disables package lifecycle scripts', () => {
+  assert.deepEqual(buildPnpmPackArgs('/tmp/out'), [
+    'pack',
+    '--config.ignore-scripts=true',
+    '--pack-destination',
+    '/tmp/out',
+  ])
+})
+
+test('app-quit disposal terminates and awaits a local plugin subprocess', async () => {
+  const cwd = tempDir()
+  const running = runChild(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], {
+    cwd,
+    env: process.env,
+    timeoutMs: 60_000,
+  })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  await disposePluginSyncChildren(20)
+  const result = await running
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /child exited/)
+})
+
+test('runChild reports a spawn failure only after the child close boundary', async () => {
+  const result = await runChild('/definitely/missing/dsh-chamber-command', [], {
+    cwd: tempDir(),
+    env: process.env,
+    timeoutMs: 1_000,
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /ENOENT|spawn/i)
+})
+
+test('folder-picker file specs accept real POSIX/Windows paths but never relative or control-character input', () => {
+  assert.equal(isAllowedLocalFileSpec('file:/tmp/插件 (dev)@1'), true)
+  assert.equal(isAllowedLocalFileSpec('file:C:\\Users\\Alice\\插件 (dev)'), true)
+  assert.equal(isAllowedLocalFileSpec('file:\\\\server\\share\\plugin'), true)
+  assert.equal(isAllowedLocalFileSpec('file:../plugin'), false)
+  assert.equal(isAllowedLocalFileSpec('file:relative'), false)
+  assert.equal(isAllowedLocalFileSpec('FILE:/tmp/plugin'), false, 'only the main-created lowercase file: form is accepted')
+  assert.equal(isAllowedLocalFileSpec('file:/tmp/plugin\nspoof'), false)
 })
 
 test('classifySpec / classifyDependencyValue reject semver x-wildcards (ranges)', () => {
@@ -223,6 +270,27 @@ test('resolveLocalMaterializeDirectory: MAIN resolves the manifest entry and enf
   const mismatched = resolveLocalMaterializeDirectory(root, 'local-path-pkg')
   assert.equal(mismatched.ok, false)
   if (!mismatched.ok) assert.match(mismatched.error, /does not match/)
+})
+
+test('local materialize failures never project absolute paths', async () => {
+  const root = tempDir()
+  const unreadable = resolveLocalMaterializeDirectory(join(root, 'absent-home'), 'missing')
+  assert.equal(unreadable.ok, false)
+  if (!unreadable.ok) assert.equal(unreadable.error.includes(root), false)
+
+  const profileDir = writeLocalProfile(root, { missing: 'file:/definitely/missing/plugin' }, [])
+  const missing = resolveLocalMaterializeDirectory(root, 'missing')
+  assert.equal(missing.ok, false)
+  if (!missing.ok) {
+    assert.equal(missing.error.includes(root), false)
+    assert.equal(missing.error.includes('/definitely/missing/plugin'), false)
+  }
+
+  const emptyDir = join(profileDir, 'empty-plugin-dir')
+  mkdirSync(emptyDir, { recursive: true })
+  const packed = await materializeAndAdd(async () => ok(), { id: 'ssh-1', remoteDshHome: null }, emptyDir)
+  assert.equal(packed.ok, false)
+  if (!packed.ok) assert.equal(packed.error.includes(emptyDir), false)
 })
 
 test('localPluginList: chamber host-graph state — installed + patched', () => {

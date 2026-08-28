@@ -790,23 +790,29 @@ export function clearActionError(sourceId: string): void {
   if (states.get(sourceId)?.actionError !== undefined) patchSource(sourceId, { actionError: undefined })
 }
 
+/** Refresh every connected, action-idle source; existing pulls are joined. */
+function refreshConnectedSources(): void {
+  for (const server of chamberBridge.getServers()) {
+    if (server.connected && states.get(server.id)?.busy === undefined) void refreshSource(server.id)
+  }
+}
+
 function start(): void {
   stopBridge = chamberBridge.subscribe(syncServers)
   syncServers()
   // Hidden-tab polling gate (design 08 §4): a backgrounded page must not keep
   // refreshing every 30s — the timer keeps running but skips while hidden, and
-  // becoming visible re-syncs immediately through the same entry the bridge
-  // subscription uses (workspace roster changes refresh right away; the next
-  // tick covers unchanged sources).
+  // becoming visible re-syncs the roster AND immediately refreshes every
+  // connected source (not only sources whose workspace key changed).
   onVisibilityChange = () => {
-    if (visibilityEvents.read() === 'visible') syncServers()
+    if (visibilityEvents.read() !== 'visible') return
+    syncServers()
+    refreshConnectedSources()
   }
   stopVisibility = visibilityEvents.onChange(onVisibilityChange)
   pollTimer = globalThis.setInterval(() => {
     if (!isPollEligible(visibilityEvents.read())) return
-    for (const server of chamberBridge.getServers()) {
-      if (server.connected && states.get(server.id)?.busy === undefined) void refreshSource(server.id)
-    }
+    refreshConnectedSources()
   }, POLL_MS)
 }
 

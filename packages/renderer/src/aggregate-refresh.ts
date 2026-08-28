@@ -76,11 +76,19 @@ export function isSnapshotStale(
  *   pull so it cannot land last and regress the aggregate.
  */
 export function refreshPullStillCurrent(opts: {
+  /** Registry/source generation captured when the pull started. */
+  sourceGeneration: number
+  /** Current registry/source generation at settle time. */
+  currentSourceGeneration: number
   mutationTag?: number
   mutationSeq: number | undefined
   pollSeq: number
   startedPollSeq: number
 }): boolean {
+  // Sequence counters are pruned when a source leaves the registry. Without
+  // an independent monotonic generation, remove -> same-id re-add can reuse
+  // the same counter value and admit a response from the old endpoint (ABA).
+  if (opts.sourceGeneration !== opts.currentSourceGeneration) return false
   if (opts.mutationTag !== undefined) return opts.mutationSeq === opts.mutationTag
   return opts.pollSeq === opts.startedPollSeq
 }

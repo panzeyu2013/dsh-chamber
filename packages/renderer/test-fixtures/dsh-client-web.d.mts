@@ -29,5 +29,8 @@ export function __testChamberContextLog(): Array<{ instanceId: string; basePath:
 export function __testResetChamberContextLog(): void
 export function __testDisposedCount(): number
 export function __testResetDisposed(): void
+export function __testSetRuntimeSessions(ids: string[]): void
+export function __testRuntimeOpenLog(): string[]
+export function __testResetRuntimeOpenLog(): void
 export function __testEventLog(): string[]
 export function __testResetEventLog(): void

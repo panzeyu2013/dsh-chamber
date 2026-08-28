@@ -92,11 +92,30 @@
   `projectionReady`（`aggregateReady`）：投影就绪后可见集是权威，空集过滤
   全部远程命中（archived/subagent/blank 不再回流可点击结果）；仅未就绪时
   保留不过滤降级。
-- **新建主机原子性（2026 audit M9，2026 final review 修正）** —— 保存顺序
-  按注册表存在性：编辑既有主机密码先行（失败则注册表不动）；新增主机注册表
-  先行再落密码（主进程拒绝为未注册 id 存密码），密码失败回滚元数据、回滚
-  失败时按权威注册表保留编辑态（不再被 duplicate 校验拒绝）；测试复刻主进程
-  未知-id 门禁。
+- **主机保存补偿式原子性（2026 audit M9，2026 merge review 修正）** —— 新增
+  与编辑统一先提交并核验权威注册表，只有元数据确实落地才写密码；注册表
+  拒绝/抛错时密码保持不变，密码失败则回滚提交前完整注册表快照；回滚返回值
+  同样核验，静默拒绝或抛错时按权威注册表保留编辑态（不再被 duplicate 校验
+  拒绝）。主进程注册表保存也
+  改为 whole-set 校验：任一非法/kind 不匹配/重复 id 即整体拒绝，避免非法编辑
+  静默删除既有主机；加载旧文件仍容错丢弃并告警。
+- **architecture 合并安全审查修复（2026-08-28）** —— reaper 仅凭 pid 记录中
+  受管 CLI 的完整绝对路径、精确 `--profile web`/`--port` token、端口归属和
+  owner 死亡四重证据回收（basename/任意 `bin.ts` 均 fail-closed，身份不匹配
+  日志不回显无关进程 argv）；本地
+  start→stop→start 释放旧 single-flight 代次且迟到失败不能清新代；host-logs
+  写/压缩失败切新代，不再复活已删除 backing file；`stopped` 生命周期行只写
+  一次；fork parent-accounted 隐藏改为 3s first-observation 有界宽限，attach
+  部分成功最终显式落未分组；连接表单路径/长度门禁与 desktop 权威对齐；
+  CI/release action pin 增加离线一致性检查并修复无效 setup-node SHA。后续彻底
+  复审进一步收紧：本地 spawn 端口预检/TCP 就绪与 unary body 读取全链可取消；
+  transport 只注册 loopback HTTP；SSH 未终止行、捕获 stdout 与 stderr detail
+  均有增量内存上界；本地插件 pack 禁生命周期脚本且 pack/install 子进程纳入
+  will-quit 进程组/树回收；renderer 会话打开、聚合重试/来源删除及删除→同 ID
+  重建的 source-generation ABA、恢复 timer 与 quit 代次隔离；深链队列/协议注册、
+  Windows 本地路径、外部打开错误与设置副作用回滚均 fail-loud 且不向 renderer
+  泄露宿主路径；release concurrency 将 tag `vX` 与手动 version `X` 归到同一
+  写入组（不同版本仍可并行）。
 - **来源域键（2026 audit L2）** —— 双击 pending 与 blank-ghost 宽限按
   `(serverId, sessionId)` 建键：克隆实例相同 UUID 跨来源点击/幽灵槽不再串
   状态（跨来源双击改名仍工作——两次点击键到行所属来源）。
@@ -159,7 +178,7 @@
   `signalCode`（信号杀死的子进程不再误报存活）；restart-exhausted 落地前
   终止残留子进程并清 `child/dshPort`（与「stops automatically」契约对齐）；
   `setState` 的 `error` 显式删除（内存/磁盘投影一致）；`→ stopped` 终态行
-  显式落滚动日志；reaper 身份匹配兼容源码 tsx 启动路径；host-logs 改同步追加写
+  经 `setState` 单一路径落滚动日志；reaper 身份匹配兼容源码 tsx 启动路径；host-logs 改同步追加写
   + 内存环带压缩（消除异步流缓冲/异步打开与压缩 rename 的竞态——原先会重复并
   交错内容）并修空行分隔；offset 越界返回空；
   proxy 对带 body 的 GET/HEAD 排空（keep-alive 复用不串帧）。桌面/客户端：

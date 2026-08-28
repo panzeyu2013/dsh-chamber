@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import {
   buildAskpassScript,
   buildRemoteExecArgv,
+  clearSshPasswords,
   configureSshPasswordStore,
   cleanupStaleAskpassHelpers,
   createAskpassHelper,
@@ -30,9 +31,11 @@ import {
   sshPasswordSupported,
   sshProvider,
   MAX_SSH_PASSWORD_CHARS,
+  RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './ssh-provider.ts'
 import type { TransportExecDeps, TransportInstanceSpec, TransportStatusProjection, SpawnedProcess } from './transport-provider.ts'
+import { CHILD_LINE_MAX_CHARS } from './bounded-lines.ts'
 
 /** A minimal valid ssh spec for provider-surface tests. */
 function spec(id: string): TransportInstanceSpec {
@@ -252,9 +255,16 @@ test('a syntactically valid password file with an invalid schema is preserved an
 test('password persistence failure rolls back memory and removes the plaintext tmp file', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
+  let helper: string | null = null
+  let secondHelper: string | null = null
   try {
     configureSshPasswordStore(file)
     setSshPassword('t-rollback', 'old')
+    setSshPassword('t-rollback-2', 'old-2')
+    helper = sshAuthEnv(spec('t-rollback'))?.SSH_ASKPASS ?? null
+    secondHelper = sshAuthEnv(spec('t-rollback-2'))?.SSH_ASKPASS ?? null
+    assert.ok(helper !== null && existsSync(helper), 'old committed auth helper exists')
+    assert.ok(secondHelper !== null && existsSync(secondHelper), 'second committed auth helper exists')
     // Replacing the target file with a directory makes the final atomic rename
     // fail after the tmp payload was written, deterministically across CI.
     rmSync(file)
@@ -262,8 +272,29 @@ test('password persistence failure rolls back memory and removes the plaintext t
     assert.throws(() => setSshPassword('t-rollback', 'new'))
     assert.equal(getSshPassword('t-rollback'), 'old', 'failed update does not publish new memory state')
     assert.equal(existsSync(`${file}.tmp`), false, 'failed update leaves no extra plaintext tmp')
-    assert.throws(() => setSshPassword('t-rollback', null))
+    assert.throws(() => clearSshPasswords(['t-rollback', 't-rollback-2']))
     assert.equal(getSshPassword('t-rollback'), 'old', 'failed clear does not erase live auth state')
+    assert.equal(getSshPassword('t-rollback-2'), 'old-2', 'multi-clear is all-or-nothing')
+    assert.equal(existsSync(helper!), true, 'failed clear preserves the helper used by in-flight ssh')
+    assert.equal(existsSync(secondHelper!), true, 'failed batch clear preserves every helper')
+  } finally {
+    disposeSshAuth(spec('t-rollback'))
+    disposeSshAuth(spec('t-rollback-2'))
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('clearing an id with no stored password is a true no-op even when the store is unwritable', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    configureSshPasswordStore(file)
+    setSshPassword('t-kept', 'old')
+    rmSync(file)
+    mkdirSync(file)
+    assert.doesNotThrow(() => clearSshPasswords(['t-never-stored']))
+    assert.equal(getSshPassword('t-kept'), 'old')
   } finally {
     configureSshPasswordStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -592,6 +623,61 @@ test('write-file: content over the 50MiB cap is refused before any spawn', async
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /exceeds the .*byte limit/)
   assert.equal(remote.spawns.length, 0, 'no ssh process may spawn for an oversized write')
+})
+
+test('run: captured remote stdout is bounded before buffering', async () => {
+  const remote = makeRemoteHost()
+  const path = '~/.dsh/profiles/web/package.json'
+  remote.files.set(path, Buffer.alloc(RUN_STDOUT_MAX_BYTES + 1, 0x61))
+  const result = await sshProvider.exec!(spec('wf-stdout-cap'), 'run', runDeps(remote.spawnFn), {
+    op: 'exec',
+    command: 'cat',
+    argv: [path],
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /stdout exceeds the .*byte limit/)
+  assert.ok(remote.spawns[0].child.killCalls.includes('SIGTERM'), 'oversized producer is terminated')
+})
+
+test('run: an unterminated stderr line is bounded and discarded before redaction detail assembly', async () => {
+  const child = new FakeRunChild()
+  const logs: Array<{ level: string; message: string }> = []
+  const deps = runDeps(() => child)
+  deps.log = (level, message) => { logs.push({ level, message }) }
+  const running = sshProvider.exec!(spec('wf-stderr-cap'), 'run', deps, {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/web/package.json'],
+  })
+  child.stderrWrite('x'.repeat(CHILD_LINE_MAX_CHARS + 1))
+  child.stderrWrite('\nordinary failure\n')
+  child.simulateExit(1)
+  const result = await running
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /output line dropped/)
+    assert.match(result.error, /ordinary failure/)
+    assert.ok(result.error.length < 4096, 'failure detail remains bounded')
+  }
+  assert.ok(logs.some(entry => entry.level === 'error' && entry.message.includes('output line dropped')))
+  assert.ok(logs.every(entry => !entry.message.includes('xxxxx')), 'raw overlong stderr never reaches logs')
+})
+
+test('run: many newline-delimited stderr lines are bounded while the process is still running', async () => {
+  const child = new FakeRunChild()
+  const running = sshProvider.exec!(spec('wf-stderr-count-cap'), 'run', runDeps(() => child), {
+    op: 'exec',
+    command: 'cat',
+    argv: ['~/.dsh/profiles/web/package.json'],
+  })
+  for (let index = 0; index < 5_000; index += 1) child.stderrWrite(`failure-${index}\n`)
+  child.simulateExit(1)
+  const result = await running
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.ok(result.error.length < 4096, 'detail storage is capped incrementally, not only sliced after join')
+    assert.match(result.error, /failure-0/)
+  }
 })
 
 test('run: a non-zero exit carries the REDACTED remote stderr text (ENOENT → profile not initialized)', async () => {

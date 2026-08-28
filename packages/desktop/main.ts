@@ -61,6 +61,7 @@ import type { NotificationsWiring } from './ipc-notifications.ts';
 import { registerSsh } from './ipc-ssh.ts';
 import type { SshWiring } from './ipc-ssh.ts';
 import { registerPluginSync } from './ipc-plugin-sync.ts';
+import type { PluginSyncWiring } from './ipc-plugin-sync.ts';
 import { registerOpenIn } from './ipc-open-in.ts';
 import { enqueueDeepLink, registerDeepLink, scanDeepLinkUrls } from './ipc-deep-link.ts';
 import type { DeepLinkWiring } from './ipc-deep-link.ts';
@@ -173,6 +174,11 @@ let mainWindowUrl: string | null = null;
 let quitRequested = false;
 let quitConfirmed = false;
 let confirmingQuit = false;
+// will-quit cleanup is asynchronous. A second app.quit()/OS quit event while
+// it is running must remain prevented; otherwise `controlPlane = null` from
+// the first pass would let the second event exit immediately and orphan the
+// still-draining SSH/dsh children.
+let quitCleanupInProgress = false;
 // 最近一次 OS 唤醒时间戳：无窗口常驻（托盘态）期间 held，窗口 show 时补发。
 let lastResume: number | null = null;
 
@@ -181,6 +187,7 @@ let lastResume: number | null = null;
 let settingsWiring: SettingsWiring | null = null;
 let notificationsWiring: NotificationsWiring | null = null;
 let sshWiring: SshWiring | null = null;
+let pluginSyncWiring: PluginSyncWiring | null = null;
 let deepLinkWiring: DeepLinkWiring | null = null;
 let updateWiring: UpdateWiring | null = null;
 
@@ -250,6 +257,10 @@ function maybeCreateTray(cp: PlaneHandle) {
  * 点任何入口都毫无反应。
  */
 function showMainWindow(): void {
+  // Notification clicks, Dock activation and a second-instance event can
+  // race before/will-quit. Never resurrect or reload the privileged renderer
+  // after teardown has begun.
+  if (quitRequested) return;
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
@@ -271,7 +282,20 @@ function installRendererRecovery(win: BrowserWindow): void {
   // 主线程长时间忙碌是合法的，unresponsive 只在"已成功加载过"之后才触发
   // 重载，避免打断正常启动。
   let loadedOnce = false;
+  let unresponsiveTimer: NodeJS.Timeout | null = null;
+  let crashReloadTimer: NodeJS.Timeout | null = null;
+  const clearUnresponsiveTimer = (): void => {
+    if (unresponsiveTimer === null) return;
+    clearTimeout(unresponsiveTimer);
+    unresponsiveTimer = null;
+  };
+  const clearCrashReloadTimer = (): void => {
+    if (crashReloadTimer === null) return;
+    clearTimeout(crashReloadTimer);
+    crashReloadTimer = null;
+  };
   const reload = () => {
+    if (quitRequested || win.isDestroyed()) return;
     const now = Date.now();
     if (now - reloadWindowStart > 60_000) {
       reloadWindowStart = now;
@@ -286,11 +310,20 @@ function installRendererRecovery(win: BrowserWindow): void {
       dialog.showErrorBox('dsh-chamber 前端异常', '前端渲染进程反复崩溃，已停止自动恢复。请重新启动应用。');
     }
   };
+  win.webContents.on('did-start-loading', () => {
+    // A reload starts a fresh boot. A timer owned by the previous renderer
+    // must never reload its healthy replacement later.
+    loadedOnce = false;
+    clearUnresponsiveTimer();
+    clearCrashReloadTimer();
+  });
   win.webContents.on('did-finish-load', () => {
     loadedOnce = true;
   });
   win.webContents.on('render-process-gone', (_event, details) => {
-    if (details.reason === 'clean-exit') return; // 用户关窗等正常退出
+    clearUnresponsiveTimer();
+    clearCrashReloadTimer();
+    if (details.reason === 'clean-exit' || quitRequested) return; // 用户关窗/退出等正常路径
     // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
     // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
     notificationsWiring?.resetDrainReady();
@@ -298,29 +331,27 @@ function installRendererRecovery(win: BrowserWindow): void {
       `[dsh-chamber] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}`,
     );
     // 稍候重载，避开崩溃拆除期（崩溃后立即 reload 偶发与拆除竞争）。
-    setTimeout(() => {
-      if (!win.isDestroyed()) reload();
+    crashReloadTimer = setTimeout(() => {
+      crashReloadTimer = null;
+      reload();
     }, 500);
   });
-  let unresponsiveTimer: NodeJS.Timeout | null = null;
   win.webContents.on('unresponsive', () => {
     if (!loadedOnce) {
       console.warn('[dsh-chamber] 渲染进程无响应（首次加载中，仅记录不重载）');
       return;
     }
+    if (unresponsiveTimer !== null) return;
     console.warn('[dsh-chamber] 渲染进程无响应，15s 内未恢复将重载');
     unresponsiveTimer = setTimeout(() => {
-      if (!win.isDestroyed()) reload();
+      unresponsiveTimer = null;
+      reload();
     }, 15_000);
   });
-  win.webContents.on('responsive', () => {
-    if (unresponsiveTimer !== null) {
-      clearTimeout(unresponsiveTimer);
-      unresponsiveTimer = null;
-    }
-  });
+  win.webContents.on('responsive', clearUnresponsiveTimer);
   win.on('closed', () => {
-    if (unresponsiveTimer !== null) clearTimeout(unresponsiveTimer);
+    clearUnresponsiveTimer();
+    clearCrashReloadTimer();
   });
 }
 
@@ -414,6 +445,10 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     }
   });
   void win.loadURL(url).catch((loadError) => {
+    // Closing/quitting aborts outstanding navigation by design; that is not
+    // a startup failure and must not show a spurious fatal dialog or re-enter
+    // teardown through app.exit().
+    if (quitRequested || win.isDestroyed()) return;
     const detail = loadError instanceof Error ? (loadError.stack ?? loadError.message) : String(loadError);
     if (fatalOnLoadFailure) {
       dialog.showErrorBox('dsh-chamber 启动失败', `前端加载失败：\n${detail}`);
@@ -580,9 +615,14 @@ if (!gotTheLock) {
       } catch { /* already gone */ }
       tray = null;
     }
+    if (quitCleanupInProgress) {
+      event.preventDefault();
+      return;
+    }
     const cp = controlPlane;
     if (cp === null) return;
     event.preventDefault();
+    quitCleanupInProgress = true;
     // 传输层（SSH 隧道/在途 exec）与控制面（本地 dsh + HTTP 门面）的回收互不
     // 依赖，并行等待（总耗时 = max 而非 sum）。各自的 SIGTERM→SIGKILL 窗口已
     // 压到 1s（transport-manager / spawn-dsh），正常 ~1-2s 完成。disposeAsync
@@ -598,11 +638,15 @@ if (!gotTheLock) {
       app.exit(1);
     }, QUIT_CLEANUP_TIMEOUT_MS);
     controlPlane = null;
+    const pluginSync = pluginSyncWiring;
+    pluginSyncWiring = null;
     void Promise.allSettled([
+      pluginSync?.disposeAsync().catch((err) => console.error('[dsh-chamber] 插件子进程关闭失败：', err)),
       sshWiring?.transportManager()?.disposeAsync().catch((err) => console.error('[dsh-chamber] 传输层关闭失败：', err)),
       cp.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
     ]).finally(() => {
       clearTimeout(cleanupTimer);
+      quitCleanupInProgress = false;
       app.quit();
     });
   });
@@ -717,7 +761,7 @@ if (!gotTheLock) {
 
     // 插件管理（design 13 M2+M3）：远端/本地插件 IPC + chamber host 包
     // ready-time seed（与 ipc-ssh 的 status listener 并行注册）。
-    registerPluginSync({
+    pluginSyncWiring = registerPluginSync({
       trustedIpc,
       transportManager: () => sm.transportManager(),
       mainWindow: () => mainWindow,

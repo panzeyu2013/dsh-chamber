@@ -21,11 +21,46 @@
 
 import { readdir, readFile, readlink, unlink } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
-import { join } from 'node:path'
+import { isAbsolute, join, normalize, sep } from 'node:path'
 import type { Logger } from './types.ts'
 
 const TERM_WAIT_MS = 1500
 const TERM_POLL_MS = 100
+
+const INSTALLED_ENTRY_SUFFIX = join('node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+const SOURCE_ENTRY_SUFFIX = join('apps', 'cli', 'src', 'bin.ts')
+
+/** Escape a literal for a fail-closed command-line token regexp. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Whether ps's rendered command contains one exact argv-like token. Quotes
+ * and whitespace are accepted as token boundaries; suffix matches such as
+ * `/unrelated/bin.ts.backup` are not. If ps renders an unusual/ambiguous
+ * form, this deliberately returns false and the reaper keeps the process.
+ */
+function commandHasToken(command: string, token: string): boolean {
+  if (token === '') return false
+  return new RegExp(`(?:^|[\\s"'])${escapeRegExp(token)}(?=$|[\\s"'])`, 'u').test(command)
+}
+
+/** Require an exact adjacent `--flag value` pair in ps's command rendering. */
+function commandHasFlagValue(command: string, flag: string, value: string): boolean {
+  return new RegExp(
+    `(?:^|[\\s"'])${escapeRegExp(flag)}[\\s"']+${escapeRegExp(value)}(?=$|[\\s"'])`,
+    'u',
+  ).test(command)
+}
+
+/** Only the two entry shapes spawn-dsh.ts can record are eligible to kill. */
+function recognizedDshEntry(binary: unknown): binary is string {
+  if (typeof binary !== 'string' || !isAbsolute(binary)) return false
+  const entry = normalize(binary)
+  return entry.endsWith(`${sep}${INSTALLED_ENTRY_SUFFIX}`)
+    || entry.endsWith(`${sep}${SOURCE_ENTRY_SUFFIX}`)
+}
 
 /**
  * Injectable reaper dependencies (test seams; all optional, defaults are the
@@ -248,23 +283,28 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     log(`reaper: ${pid} dead; record removed`)
     return { status: 'removed' }
   }
+  const portNum = Number(record.port)
   const identity = deps.psIdentity(pid)
   const profile = typeof record.profile === 'string' && record.profile !== '' ? record.profile : null
-  // The installed entry is `…/@deepseek-ai/dsh/lib/bin.js`; the SOURCE-tsx
-  // dev path is `node --import tsx/esm …/apps/cli/src/bin.ts` — neither a
-  // `dsh` literal nor the packaged path (2026 round-3 review). Both forms
-  // carry the profile flag when one is recorded, so the profile check is
-  // the strong half; the binary-form check is the weak half.
-  const looksLikeDsh = identity.command.includes('dsh') || identity.command.includes('bin.ts')
-  const commandOk = profile === null
-    ? looksLikeDsh
-    : looksLikeDsh && identity.command.includes(`--profile ${profile}`)
-  const portNum = Number(record.port)
+  // Exact identity, not a basename heuristic: the record carries the
+  // absolute entry path that spawn-dsh actually passed to Node. Requiring
+  // that token plus the exact profile and port flags makes stale-record PID
+  // reuse fail closed even when the unrelated process also runs `bin.ts`.
+  const commandOk = recognizedDshEntry(record.binary)
+    && profile === 'web'
+    && Number.isInteger(portNum)
+    && portNum > 0
+    && commandHasToken(identity.command, normalize(record.binary))
+    && commandHasFlagValue(identity.command, '--profile', profile)
+    && commandHasFlagValue(identity.command, '--port', String(portNum))
   // Missing/invalid port ⇒ cannot verify the listener belongs to this pid;
   // fail-closed (kept) instead of the previous fail-open default.
   const portOk = Number.isInteger(portNum) && portNum > 0 ? await portOwnedBy(pid, portNum, deps) : false
   if (!commandOk || !portOk) {
-    log(`reaper: ${pid} identity mismatch (command='${identity.command}'); record kept`)
+    // A stale record may now point at an unrelated process whose argv carries
+    // credentials. The command is inspection-only evidence and must never be
+    // copied into chamber logs.
+    log(`reaper: ${pid} identity mismatch; record kept`)
     return { status: 'kept' }
   }
   const ownerPid = Number.isInteger(record.ownerPid) ? record.ownerPid : null

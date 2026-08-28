@@ -136,7 +136,9 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   不得被 error 覆盖）。判定逻辑为纯函数
   `renderer/src/aggregate-refresh.ts` `refreshPullStillCurrent`（单测覆盖）；
   创建/fork 会话的「未分类」瞬时摆放由 06 §2.2 的成员宽限与
-  parent-accounted 规则抑制。
+  parent-accounted first-observation 有界宽限抑制。聚合失败重试计数与 timer
+  均按来源键控：成功拉取清零并取消同源冗余 timer；来源从注册表删除时清除
+  该来源全部 timer/计数，防同名重加被旧代重试击中；组件卸载清全部 timer。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
@@ -214,6 +216,11 @@ export const chamberBridge: {
   （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。
 - 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
   失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与插件设置页详情。
+- desktop 注册表变更另有单调 source generation：变更 push 在异步 roster 回读前
+  立即推进，30s 轮询发现签名变化时也推进；所有 aggregate pull 在 settle 时同时
+  校验该代次，删除→同 ID 重加或同 ID endpoint 编辑不能用复用的 per-id seq
+  接纳旧 endpoint 的迟到响应（ABA）。roster 回读本身亦按请求序号 latest-wins，
+  慢旧列表不能覆盖新列表。
 
 ## 4. N-ctx 与切换（沿用，机制不变）
 
@@ -227,6 +234,8 @@ export const chamberBridge: {
   遗留僵尸 ctx）；被回收的视图若是当前视图则回落到 local（常驻）。
   插件图诊断同样受 boot generation 门控：已取消/已被重试取代的旧 boot
   即使迟到完成 graph 请求，也不能覆盖新一代的诊断。
+  活跃的会话打开轮询同样绑定 entry holder 身份；来源删除或 same-id replacement
+  会立即拒绝该轮询，绝不在已 dispose 的 runtimeCtx 上迟到 `sessions.open()`。
   **例外（2026-10，闲置预热回收）**：auto-prewarmed（从未被用户主动打开，
   `autoPrewarmedRef`）的视图可在**零 running 且零 pending**（运行时事实
   通道 06 §4；有运行/待交互会话即可能触发通知边沿，逐出不得丢通知——
@@ -338,7 +347,12 @@ export const chamberBridge: {
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/host/user/sshPort/remotePort/serviceName，id 白名单
   `^(?!local$)[a-zA-Z0-9_-]{1,64}$`（禁 `local`、限长 1–64，transport-provider
-  常量），端口 1–65535），SSH 认证默认走系统 ssh-agent/
+  常量），端口 1–65535）。表单 UX 门禁逐项镜像 desktop 权威：label≤128、
+  host≤253、user≤64、serviceName≤255、remoteDshHome≤1024、瞬时 password≤4096；
+  `remoteDshHome` 只接受 `~/<segments>` 或绝对 `/segments`，每段只含
+  `[a-zA-Z0-9._-]` 且不得为 `.` / `..`、不得空段或尾随 `/`。对应 parity
+  测试读取 desktop 导出声明防未来漂移；真正安全边界仍在主进程。SSH 认证
+  默认走系统 ssh-agent/
   默认密钥；**可选密码字段**（§8 例外）：经 `desktop_ssh_set_password`
   转发主进程（内存 + `<userData>/ssh-passwords.json` 明文镜像，0600 原子写），
   表单永不记录、编辑时永不回填——**SSH 材料（除该瞬时输入外）永不进
@@ -522,7 +536,9 @@ instanceId}` +
   半开 jitter 退避突发 + 突发耗尽后的慢速周期重探——瞬时故障是时变的，
   error 绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）/
   环形日志 / 非秘密投影与推送 / 子进程监督（SIGTERM→SIGKILL per-child）/
-  注册表（kind 迁移、重复 id 首胜丢弃）/ 就绪探测（隧道本地端口 + 端点身份
+  注册表（**写入**为 whole-set 原子校验：任一非法/kind 不匹配/重复 id 即全拒，
+  写盘与运行态不变；仅**加载**旧文件时 kind 迁移、非法/重复 id 首胜丢弃）/
+  就绪探测（隧道本地端口 + 端点身份
   验证）。就绪判据（TCP + dsh 身份握手）、两段式重连与 `verifyUp`
   **确定性验证失败免重试**（`terminal` 分类——目标应答了探测但证明不是
   兼容 dsh → 第一次失败即落 error 终态，仅瞬时失败走重连）的机制细节见
@@ -578,10 +594,13 @@ instanceId}` +
   fchmod 0600 再写秘密；写成功后才发布内存状态、启动时严格
   校验 schema——密码主机重启后自动连接可用；损坏/结构非法文件保留为
   `*.corrupt` 并响亮报告，绝不静默当空集）；
-  保存顺序按注册表存在性（2026 final review）：**编辑**既有主机时密码先行、
-  密码失败则注册表不动（无需回滚）；**新增**主机时注册表先行（主进程拒绝
-  为未注册 id 存密码）再落密码，密码失败回滚本次元数据保存；回滚 IPC
-  异常时重新读取权威注册表并按真实状态保留编辑态，避免重复新增；
+  保存对用户呈现为一个补偿式原子操作（2026 merge review）：新增与编辑均先
+  提交并重新核验权威注册表，只有元数据确实落地后才写密码；注册表拒绝/抛错
+  时密码保持不变。随后密码写失败则把注册表回滚到提交前完整快照；回滚 IPC
+  返回值也必须核验为完整旧快照；回滚被无错误通道拒绝或 IPC 异常时重新读取
+  权威注册表并按真实状态保留编辑态，避免重复新增。该顺序也
+  满足主进程拒绝为未注册 id 存密码的门禁，并杜绝“密码已改、编辑却报失败”
+  的部分提交；
   永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
   exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH
   直接执行该脚本；`<tmp>/

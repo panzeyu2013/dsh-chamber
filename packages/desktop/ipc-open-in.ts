@@ -63,9 +63,8 @@ export function registerOpenIn(ctx: OpenInWiringCtx): OpenInWiring {
         await shell.openExternal(url)
         return { ok: true }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
         console.error('[dsh-chamber] 打开 vscode URL 失败：', error)
-        return { ok: false, error: `open vscode url failed: ${message}` }
+        return { ok: false, error: 'open vscode url failed' }
       }
     },
   }
@@ -90,11 +89,14 @@ export function registerOpenIn(ctx: OpenInWiringCtx): OpenInWiring {
       // openVscodeUrl 封装同款纪律：reject 归一为错误串（loud），绝不落
       // transport rejection。
       try {
-        return normalizeOpenPathError(await shell.openPath(p))
+        const rawError = await shell.openPath(p)
+        if (typeof rawError === 'string' && rawError !== '') {
+          console.error('[dsh-chamber] 打开路径失败：', rawError)
+        }
+        return normalizeOpenPathError(rawError)
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
         console.error('[dsh-chamber] 打开路径失败：', error)
-        return `open path failed: ${message}`
+        return 'open path failed'
       }
     },
     showItemInFolder: (p) => shell.showItemInFolder(p),

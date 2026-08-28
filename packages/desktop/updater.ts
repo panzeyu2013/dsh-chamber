@@ -89,6 +89,45 @@ export interface ElectronAppLike {
   isPackaged: boolean
 }
 
+/**
+ * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
+ * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
+ * startsWith string check) so scheme/host/path-root are pinned exactly.
+ * Encoded traversal is decoded and normalized before the path check, and
+ * credentialed URLs are refused even though URL.origin ignores userinfo.
+ */
+export function isAllowedReleaseUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false
+  try {
+    const url = new URL(raw)
+    if (url.origin !== 'https://github.com') return false
+    if (url.username !== '' || url.password !== '') return false
+    // One decode is sufficient only when the original path does not contain
+    // an encoded percent. Reject nested encoding outright: `%252f` can become
+    // `%2f` at one layer and `/` at another, defeating a single-pass
+    // traversal check in downstream URL/server stacks.
+    if (/%25/i.test(url.pathname)) return false
+    const normalized = new URL(`https://github.com${decodeURIComponent(url.pathname)}`).pathname
+    return normalized.startsWith('/panzeyu2013/dsh-chamber/')
+  } catch {
+    return false
+  }
+}
+
+/** Await the OS handoff and report its real outcome to the renderer. */
+export async function openReleasePage(
+  raw: unknown,
+  openExternal: (url: string) => Promise<unknown>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isAllowedReleaseUrl(raw)) return { ok: false, error: 'url not allowed' }
+  try {
+    await openExternal(raw)
+    return { ok: true }
+  } catch {
+    return { ok: false, error: 'open release page failed' }
+  }
+}
+
 /** The subset of electron-updater's `AppUpdater` surface the controller uses
  *  (test-injectable; the real autoUpdater is structurally compatible). */
 export interface AutoUpdaterLike {

@@ -31,6 +31,10 @@
   Buffer）——二进制内容校验在字节域进行。
 - `'write-file'`：stdin base64 流式写 + **字节域 SHA-256 回读校验** + 目标
   前缀白名单 + **50MiB 大小上限**。
+- `run` 捕获 stdout 在追加 Buffer 前执行 50MiB 总字节上限；stderr/隧道与
+  systemd stdout/stderr 先按完整行重组再脱敏，每条未终止行最多 64Ki 字符，
+  超限整行丢弃且只记固定摘要。失败详情在接收每行时即限制为 2048 字符，不能
+  先无界积累再在进程退出时截断。
 
 ## 3. 编排（plugin-sync.ts）
 
@@ -44,7 +48,9 @@
   install-level fallback `profiles/node_modules`，再合并 web profile 的
   `cordis.patch.yml`。`seedRemoteHostGraph` 保留为旧手动 IPC 的单包兼容 wrapper。
 - `materialize`：本地路径包物化（pack → ssh 传输 → 远端 `add file:`）；
-  `add file:` 走独立目录约束白名单分支（仅物化目录内绝对路径）。
+  `add file:` 走独立目录约束白名单分支（仅物化目录内绝对路径）。本地
+  `pnpm pack` 固定 `--config.ignore-scripts=true`，选择目录只授权读取/传输，
+  不授权执行包的 prepack/prepare/postpack 生命周期脚本。
 
 双包 seed 的顺序与失败语义固定：
 
@@ -82,7 +88,8 @@
 
 ### 4.2 remoteDshHome（远端 dsh home 路径基准）
 
-- 非秘密元数据：`~/.dsh` 或绝对路径，`null` = 远端默认 `~/.dsh`；
+- 非秘密元数据：`~/.dsh` 或绝对路径，`null` = 远端默认 `~/.dsh`；每个路径段
+  只含 `[a-zA-Z0-9._-]` 且不得为 `.` / `..`，不接受空段或尾随 `/`；
 - 贯穿 schema（`TransportInstanceSpec.remoteDshHome`）/ 状态投影 / IPC / 双
   ambient 类型；所有远端路径从它派生（白名单、shell 安全值，见 §7.2）；
 - ENOENT 在原始 stderr 上分类：`.ssh*` 命名的 remoteDshHome 不再因整行脱敏
@@ -149,7 +156,9 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
   来自固定命令形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全
   边界；
 - 服务名：`^[a-zA-Z0-9_.-]+$`（systemctl 目标）；
-- remoteDshHome：白名单 + shell 安全值（null = 远端默认 `~/.dsh`）；
+- remoteDshHome：`^~?(?:\/(?!\.{1,2}(?:\/|$))[a-zA-Z0-9._-]+)+$` +
+  1024 字符上限（null = 远端默认 `~/.dsh`）；renderer UX 门禁与主进程权威
+  由 parity 测试防漂移；
 - `write-file` 目标前缀白名单 + 50MiB 大小上限。
 
 ### 7.3 字节域校验
@@ -168,5 +177,10 @@ UTF-8 文本视图。
 - **设计 08 扩展已落地（2026-08-20）**：通用双 host-package seed、精确
   id/name pair merge、ready-time 单飞注入与 packaged 双包复制；未改变
   TransportExecAction/run 形状或普通插件 manifest schema。
+- **退出所有权（2026-08-28 merge review）**：本地 `pnpm pack` / `dsh plugin`
+  子进程由 plugin-sync 独立跟踪；will-quit 先注销 ready-time seed listener，
+  再终止并等待全部本地子进程（POSIX 独立进程组，Windows `taskkill /T /F`
+  进程树）。退出开始后拒绝新 local child；与 transport-manager 对远端 SSH
+  exec 的 disposeAsync 并行，统一受桌面 5s 退出硬上限兜底。
 - **剩余**：本地 `dsh plugin` / `pnpm pack` 依赖本机 pnpm
   （`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。

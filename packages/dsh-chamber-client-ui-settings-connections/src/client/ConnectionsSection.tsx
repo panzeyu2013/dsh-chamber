@@ -43,6 +43,19 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
 import { saveHostWithPassword } from './save-host.ts'
+import {
+  INSTANCE_ID_PATTERN,
+  MAX_INSTANCE_LABEL_CHARS,
+  MAX_REMOTE_DSH_HOME_CHARS,
+  MAX_SERVICE_NAME_CHARS,
+  MAX_SSH_HOST_CHARS,
+  MAX_SSH_PASSWORD_CHARS,
+  MAX_SSH_USER_CHARS,
+  REMOTE_DSH_HOME_PATTERN,
+  SERVICE_NAME_PATTERN,
+  SSH_HOST_PATTERN,
+  SSH_USER_PATTERN,
+} from './host-validation.ts'
 import css from './ConnectionsSection.module.css'
 
 /** Registration-side business face for the connections section. */
@@ -445,22 +458,23 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // the render-closure `instances` snapshot may lag an external push.
       const current = await bridge.instances_get()
       const next = current.filter(instance => instance.id !== pendingDelete.id)
-      // The main process is authoritative (it drops invalid entries loudly);
-      // adopt its saved list instead of trusting the local filter.
+      // The main process is authoritative (it rejects an invalid whole set);
+      // adopt its saved/current list instead of trusting the local filter.
       const saved = await bridge.instances_set(next)
       setInstances(saved)
-      setPendingDelete(null)
-      setStatuses(prev => {
-        const copy = { ...prev }
-        delete copy[pendingDelete.id]
-        return copy
-      })
       // Loud-failure invariant (2026 review): instances_set carries NO error
       // channel — a refused save returns the current registry. If the
-      // deletion did not land, say so instead of a silent no-op.
+      // deletion did not land, keep the confirmation/status intact and say so
+      // instead of presenting a host that vanished locally but still exists.
       if (saved.some(instance => instance.id === pendingDelete.id)) {
         setOpError(prev => ({ ...prev, [pendingDelete.id]: '删除未生效：主进程拒绝了该变更（实例数量上限或状态目录不可写？）' }))
       } else {
+        setPendingDelete(null)
+        setStatuses(prev => {
+          const copy = { ...prev }
+          delete copy[pendingDelete.id]
+          return copy
+        })
         clearOpError(pendingDelete.id)
       }
     } catch (err) {
@@ -603,15 +617,16 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     const id = value.id.trim()
     if (id === '') errors.id = t('validationIdRequired')
     else if (id === 'local') errors.id = t('validationIdReserved')
-    else if (!/^[a-zA-Z0-9_-]+$/.test(id)) errors.id = t('validationIdInvalid')
+    else if (!INSTANCE_ID_PATTERN.test(id)) errors.id = t('validationIdInvalid')
     else if (editing === 'new' && instances.some(instance => instance.id === id)) errors.id = t('validationIdDuplicate')
     if (value.label.trim() === '') errors.label = t('validationLabelRequired')
+    else if (value.label.trim().length > MAX_INSTANCE_LABEL_CHARS) errors.label = t('validationLabelInvalid')
     const host = value.host.trim()
     if (host === '') errors.host = t('validationHostRequired')
-    else if (!/^[a-zA-Z0-9.:\[][a-zA-Z0-9._:[\]-]*$/.test(host)) errors.host = t('validationHostInvalid')
+    else if (host.length > MAX_SSH_HOST_CHARS || !SSH_HOST_PATTERN.test(host)) errors.host = t('validationHostInvalid')
     if (value.user.trim() !== '') {
       const user = value.user.trim()
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(user)) errors.user = t('validationUserInvalid')
+      if (user.length > MAX_SSH_USER_CHARS || !SSH_USER_PATTERN.test(user)) errors.user = t('validationUserInvalid')
     }
     const parsePort = (raw: string): number | null => {
       const trimmed = raw.trim()
@@ -624,9 +639,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     const sshPort = parsePort(value.sshPort)
     if (sshPort !== null && (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535)) errors.sshPort = t('validationPortRange')
     const serviceName = value.serviceName.trim()
-    if (serviceName !== '' && !/^[a-zA-Z0-9_.-]+$/.test(serviceName)) errors.serviceName = t('validationServiceNameInvalid')
+    if (serviceName !== '' && (serviceName.length > MAX_SERVICE_NAME_CHARS || !SERVICE_NAME_PATTERN.test(serviceName))) errors.serviceName = t('validationServiceNameInvalid')
     const remoteDshHome = value.remoteDshHome.trim()
-    if (remoteDshHome !== '' && !/^~?\/[a-zA-Z0-9._/-]+$/.test(remoteDshHome)) errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
+    if (remoteDshHome !== '' && (remoteDshHome.length > MAX_REMOTE_DSH_HOME_CHARS || !REMOTE_DSH_HOME_PATTERN.test(remoteDshHome))) errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
+    if (value.password.length > MAX_SSH_PASSWORD_CHARS) errors.password = t('validationPasswordInvalid')
     return errors
   }, [editing, instances, t])
 
@@ -1097,6 +1113,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.id}
+                  maxLength={64}
                   disabled={editing !== 'new'}
                   autoFocus
                   spellCheck={false}
@@ -1110,6 +1127,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.label}
+                  maxLength={MAX_INSTANCE_LABEL_CHARS}
                   spellCheck={false}
                   placeholder={t('fieldLabelPlaceholder')}
                   onChange={event => { setDraft({ ...draft, label: event.target.value }) }}
@@ -1121,6 +1139,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.host}
+                  maxLength={MAX_SSH_HOST_CHARS}
                   spellCheck={false}
                   placeholder={t('fieldHostPlaceholder')}
                   onChange={event => { setDraft({ ...draft, host: event.target.value }) }}
@@ -1132,6 +1151,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.user}
+                  maxLength={MAX_SSH_USER_CHARS}
                   spellCheck={false}
                   placeholder={t('fieldUserPlaceholder')}
                   onChange={event => { setDraft({ ...draft, user: event.target.value }) }}
@@ -1157,11 +1177,13 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                   className={css.input}
                   type="password"
                   value={draft.password}
+                  maxLength={MAX_SSH_PASSWORD_CHARS}
                   autoComplete="new-password"
                   spellCheck={false}
                   placeholder={t('fieldPasswordPlaceholder')}
                   onChange={event => { setDraft({ ...draft, password: event.target.value }) }}
                 />
+                {fieldErrors.password === undefined ? null : <span className={css.error} role="alert">{fieldErrors.password}</span>}
                 <span className={css.dim}>{t('passwordHint')}</span>
               </label>
               <label className={css.field}>
@@ -1193,16 +1215,19 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.serviceName}
+                  maxLength={MAX_SERVICE_NAME_CHARS}
                   spellCheck={false}
                   placeholder={t('fieldServiceNamePlaceholder')}
                   onChange={event => { setDraft({ ...draft, serviceName: event.target.value }) }}
                 />
+                {fieldErrors.serviceName === undefined ? null : <span className={css.error} role="alert">{fieldErrors.serviceName}</span>}
               </label>
               <label className={css.field}>
                 <span className={css.fieldLabel}>{t('fieldRemoteDshHome')}</span>
                 <input
                   className={css.input}
                   value={draft.remoteDshHome}
+                  maxLength={MAX_REMOTE_DSH_HOME_CHARS}
                   spellCheck={false}
                   placeholder={t('fieldRemoteDshHomePlaceholder')}
                   onChange={event => { setDraft({ ...draft, remoteDshHome: event.target.value }) }}

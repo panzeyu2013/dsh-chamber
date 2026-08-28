@@ -32,13 +32,14 @@
   与 renderer 侧 base-path 构造（dsh-client-connection base-path 补丁）对新
   kind 需同步扩展（05 §7.6 存量耦合点）；统一路径映射单源化的远期方案未排期。
 
-## 2026 架构重构批次（A1–A6 / B1–B10，行为不变重构 + 卫生项）
+## 2026 架构重构批次（A1–A6 / B1–B10，重构 + 卫生项 + 合并前修复）
 
-> 本批次为评审报告 P0–P4 的落地执行（工作树 `.workflow-refactor.mjs` 编排：
+> 本批次为评审报告 P0–P4 的落地执行（按阶段化编排：
 > 常量导出基线 → 并行包重构 → 跨包共享协议 → 文档同步）。全部为行为不变
-> 重构或纯卫生项——wire 形状 / IPC 通道名 / 消息形状逐字节不变；唯一有意的
+> 重构或纯卫生项——wire 形状 / IPC 通道名 / 消息形状逐字节不变；最初有意的
 > 行为变更是 control-plane standalone 与 cli serve 默认端口统一为 17500
-> （B1-eng）。B9/B10 为收尾批次（打包态验证 + 文档同步，对应本文档与设计
+> （B1-eng）。合并前多轮安全审查另修复了一组可观察正确性/安全问题（见下列
+> “merge review”项，均不新增 wire/IPC 面）。B9/B10 为收尾批次（打包态验证 + 文档同步，对应本文档与设计
 > 文档修订；其遗留验证项见下「遗留」）。与本文件「已实现基线不保留批次
 > 日志」的惯例不同，本节按编排要求留档本次完成项；代码位置为权威，简述只
 > 指方向。
@@ -125,12 +126,23 @@
   （build-preload.mjs）不 import 常量模块——重复字面量由 ipc-surface-mirror.test.ts
   字符串级守卫（主侧 handle/send 集合 == 预加载侧 invoke/on 集合、主侧无裸
   字面量、预加载字面量均为 IPC_CHANNELS 已知值）。
+- **合并前安全审查修复（2026-08-28，已完成）**：release/CI action pin 与
+  validation-before-release-mutation、dry-run 零 Release 写入及 tag/手动同版本
+  concurrency 归一；reaper 精确绝对入口 + profile/port token +
+  端口归属 + owner 死亡四重证据；本地 spawn 端口探测/就绪/describe/browse 全链
+  取消与 start→stop→start 代次隔离；host-logs 失败切新代与 stopped 单行；实例
+  反代注册 HTTP-only；transport registry whole-set 原子拒绝及密码/元数据补偿；
+  SSH 捕获 stdout/stderr/未终止行的增量内存上界与 fail-closed 脱敏；本地插件
+  pack 禁生命周期脚本并纳入 will-quit 进程组/树回收；renderer shell 打开轮询、
+  聚合重试 timer、roster latest-wins 与 registry source-generation ABA 门、恢复
+  timer 与 quit 代次隔离；fork parent-accounted 3s 有界
+  first-observation 宽限及来源删除回收；Git visible 恢复立即刷新；深链队列、
+  本地 Windows path、协议注册、open-external/本地路径错误投影与设置副作用回滚；
+  连接表单 `remoteDshHome`/长度门禁与 desktop 权威对齐。关键路径均有复现原问题
+  的回归用例；完整 Linux 验证矩阵在本次合并前重跑，macOS Developer ID/公证与
+  Windows NSIS/实机仍由 release CI/对应平台验收。
 
 遗留（本次文档核对发现，未修）：
-- **02 §3.3 binary 字段语义**：spawn-dsh.ts 的 pid 记录仍写常量
-  `binary: 'dsh'`（basename 标记），与 02 §3.3 示例的绝对路径形态不一致；
-  reaper.ts 身份重验从命令串直接重推导（`command.includes('dsh')`）不消费该
-  字段——非行为问题，文档未同步，留待后续统一。
 - **设计未决项解决情况**：响应头白名单双处同步（03 §3.4 / 04 §4.3）本次未动，
   保留原条目（见「设计未决」）。
 - **desktop 打包态跨平台验收（部分完成）**：Linux x64 已完成真实
@@ -180,7 +192,8 @@
   Developer ID 时 settings 响亮提示手动安装。契约见 `docs/design/11-auto-update.md`。
 - **会话创建/fork 侧边栏收敛延迟修复（2026-10，已实现）**：变更拉取改独立
   mutation 域（推送不作废；失败路径保留共享序号守卫）；创建/fork 会话的
-  「未分类」瞬时摆放由成员宽限 + parent-accounted 规则抑制（05 §2.3 /
+  「未分类」瞬时摆放由显式成员宽限 + parent-accounted first-observation 有界
+  宽限抑制，fork attach 部分失败到期后仍会显式落未分组（05 §2.3 /
   06 §2.2）。剩余：本地 + 远程 SSH 实例实机验收（行出现延迟、状态图标
   延迟、位置跳动三类症状的改善确认）。
 

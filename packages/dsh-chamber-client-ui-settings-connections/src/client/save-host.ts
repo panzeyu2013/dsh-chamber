@@ -21,16 +21,19 @@ function sameInstances(left: SshInstanceSpec[], right: SshInstanceSpec[]): boole
  * cap — returns the CURRENT registry unchanged instead of throwing, so a
  * save must verify its effect instead of trusting the resolved call (same
  * loud-failure invariant as the deletion path in ConnectionsSection).
- * - NEW host: the registry must contain an entry with id === instanceId.
- * - EDIT: the stored entry must reflect the submitted fields
- *   (label/host/remotePort/sshPort/user/serviceName/remoteDshHome;
- *   undefined/null normalized before comparing).
+ * For both NEW and EDIT, the stored row must reflect every submitted field
+ * (label/host/remotePort/sshPort/user/serviceName/remoteDshHome;
+ * undefined/null normalized before comparing). Presence-only acknowledgement
+ * is unsafe for a same-id concurrent-create race.
  */
-function landed(saved: SshInstanceSpec[], next: SshInstanceInput[], instanceId: string, exists: boolean): boolean {
+function landed(saved: SshInstanceSpec[], next: SshInstanceInput[], instanceId: string): boolean {
   const submitted = next.find(entry => entry.id === instanceId)
   const stored = saved.find(spec => spec.id === instanceId)
   if (submitted === undefined || stored === undefined) return false
-  if (!exists) return true // 新主机：注册表出现该 id 即落地
+  // Presence alone is insufficient for a NEW host: another caller may have
+  // won a same-id race with different metadata. Writing this form's password
+  // to that row would bind a secret to the wrong destination. New and edit
+  // therefore use the same full-field acknowledgement.
   return (
     stored.label === submitted.label &&
     stored.host === submitted.host &&
@@ -44,16 +47,15 @@ function landed(saved: SshInstanceSpec[], next: SshInstanceInput[], instanceId: 
 
 /**
  * Save non-secret host metadata and its optional secret as one user-visible
- * operation. ORDER DEPENDS ON REGISTRY EXISTENCE (2026 final review fix):
- * - EXISTING host: password FIRST, registry SECOND — a password failure
- *   leaves the registry untouched and the form can retry directly.
- * - NEW host: the main process REFUSES `set_password` for unregistered ids
- *   (desktop_ssh_set_password → 'invalid or unknown instance id'), so the
- *   registry MUST land first; a subsequent password failure is compensated
- *   by restoring the previous registry (design 05 §8 rollback), and
- *   `metadataCommitted` reports whether that rollback itself failed (the
- *   form then turns the committed row into an edit target so a retry can
- *   never be rejected by the duplicate check).
+ * operation. Metadata ALWAYS lands first and is verified before the secret
+ * write. This order is required for both shapes:
+ * - NEW host: the main process refuses passwords for unregistered ids;
+ * - EXISTING host: writing the password first would leave an invisible
+ *   partial commit when the later registry write is refused.
+ * A subsequent password failure is compensated by restoring the previous
+ * registry. `metadataCommitted` reports whether that rollback itself failed
+ * (for a new host the form then turns the committed row into an edit target,
+ * so a retry cannot be rejected by the duplicate check).
  */
 export async function saveHostWithPassword(
   bridge: SaveBridge,
@@ -62,16 +64,6 @@ export async function saveHostWithPassword(
   instanceId: string,
   password: string,
 ): Promise<HostSaveResult> {
-  const exists = before.some(spec => spec.id === instanceId)
-  if (exists && password !== '') {
-    // Edit: password first — a refusal leaves the registry untouched.
-    try {
-      const result = await bridge.set_password(instanceId, password)
-      if ('error' in result) return { ok: false, instances: before, error: result.error, metadataCommitted: false }
-    } catch (error) {
-      return { ok: false, instances: before, error: message(error), metadataCommitted: false }
-    }
-  }
   let saved: SshInstanceSpec[]
   try {
     saved = await bridge.instances_set(next)
@@ -82,7 +74,7 @@ export async function saveHostWithPassword(
   // the change landed BEFORE reporting success or committing the password.
   // The password error text would otherwise be fabricated by a save that
   // never happened (silent no-op); the refusal error keeps the form open.
-  if (!landed(saved, next, instanceId, exists)) {
+  if (!landed(saved, next, instanceId)) {
     return {
       ok: false,
       instances: saved,
@@ -91,26 +83,40 @@ export async function saveHostWithPassword(
     }
   }
   if (password === '') return { ok: true, instances: saved }
-  if (exists) return { ok: true, instances: saved }
 
-  // New host: the registry landed (set_password requires a registered id);
-  // commit the password, rolling the registry back on failure so a retry
-  // never hits the duplicate check with a half-committed row. The password
-  // error text survives even when the rollback itself fails (2026 round-3
-  // review — the rollback failure must never masquerade as the password error).
+  // The registry landed (set_password requires a registered id). Commit the
+  // password only now; on failure restore the pre-operation registry. The
+  // password error text survives even if compensation itself fails.
   try {
     const result = await bridge.set_password(instanceId, password)
-    if ('error' in result) return await rollbackNewHost(result.error, saved)
+    if ('error' in result) return await rollbackMetadata(result.error, saved)
     return { ok: true, instances: saved }
   } catch (error) {
-    return await rollbackNewHost(message(error), saved)
+    return await rollbackMetadata(message(error), saved)
   }
 
-  /** New-host password failure compensation (design 05 §8). */
-  async function rollbackNewHost(passwordError: string, saved: SshInstanceSpec[]): Promise<HostSaveResult> {
+  /** Password-failure metadata compensation (design 05 §8). */
+  async function rollbackMetadata(passwordError: string, saved: SshInstanceSpec[]): Promise<HostSaveResult> {
     try {
       const rolledBack = await bridge.instances_set(before)
-      return { ok: false, instances: rolledBack, error: passwordError, metadataCommitted: false }
+      if (sameInstances(rolledBack, before)) {
+        return { ok: false, instances: rolledBack, error: passwordError, metadataCommitted: false }
+      }
+      // instances_set has no error branch: the main process may refuse the
+      // rollback and return the still-current registry. Verify compensation
+      // exactly as strictly as the forward save.
+      let authoritative = rolledBack
+      try {
+        authoritative = await bridge.instances_get()
+      } catch {
+        // The returned registry is still the strongest available fact.
+      }
+      return {
+        ok: false,
+        instances: authoritative,
+        error: `${passwordError}; host metadata rollback was refused`,
+        metadataCommitted: !sameInstances(authoritative, before),
+      }
     } catch (rollbackError) {
       let authoritative = saved
       try {

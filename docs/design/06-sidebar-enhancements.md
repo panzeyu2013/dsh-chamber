@@ -193,12 +193,15 @@
     来源作用域键控——host 部分路径按进程计数器铸造会话 id，sessionId 单键
     会跨来源误伤）——create 成功后同步 arm、App derive 在宽限内跳过该会话的
     未分组摆放；只由 create 路径 arm（create 必带 workspaceId），绝不隐藏真正
-    未分组的会话。**parent-accounted 规则**——fork 子会话的 id 由 host 铸造、
-    帧可先于 fork 应答到达，宽限的 arm 时序有缺口，故对 fork 用纯快照状态
-    规则：父会话已被某工作区记账的 fork 子会话（host fork 挂接跟随源会话），
-    其未记账态必然是双帧间的瞬时截面，从未分组桶隐藏；父未记账（真正未分组）
-    的子会话照常立即显示。配合 05 §2.3 的 mutation 域拉取（推送不作废变更
-    拉取），行出现/收敛不再依赖下一条帧或 30s 兜底。
+    未分组的会话。**parent-accounted 有界宽限**——fork 子会话的 id 由 host
+    铸造、帧可先于 fork 应答到达，显式 arm 有时序缺口；因此当快照第一次看到
+    “父已被工作区记账、子尚未记账”的 fork 时，按 `(sourceId, childId)` 自动
+    arm 同样 3s 的 first-observation 宽限。宽限内从未分组桶隐藏；同一候选到期
+    后不重新 arm，若 attach 最终失败，子会话会明确出现在未分组桶，而不是被
+    永久吞掉。父未记账（真正未分组）的子会话仍立即显示，已记账子会话立即进
+    工作区。宽限 map 随 live server registry 收敛：来源删除即清该来源状态，
+    same-id 重加从新代开始，注册表反复增删不会积累旧 candidate。配合 05 §2.3 的 mutation 域拉取（推送不作废变更拉取），正常路径
+    行出现/收敛不再依赖下一条帧或 30s 兜底，部分成功路径也保持可见。
   - **跨 shell 滚动锚点同步（2026-08，`renderer/src/sidebar-scroll-sync.ts`，
     App selectView 接线）**：切换来源（N-ctx）时恢复该来源上次的侧边栏滚动
     位置；ghost 行带 `data-chamber-ghost`，锚点捕获跳过之（仅 arming shell

@@ -83,6 +83,17 @@ export function createHostLogWriter(stateDir: string, port: number): HostLogWrit
   // source (the file is never re-read for compaction, so no read-vs-write
   // race exists at all).
   const ring: string[] = []
+  /**
+   * Drop all in-memory knowledge of the current backing-file generation.
+   * After any append/compaction failure we cannot prove that the file still
+   * contains the ring; retaining it could resurrect deleted content when a
+   * later compaction replaces a newly-created file.
+   */
+  function resetGeneration(): void {
+    ring.length = 0
+    linesWritten = 0
+    needsSetup = true
+  }
   /** (Re)create the log directory; the next append then lands. */
   function setup(): void {
     try {
@@ -102,7 +113,10 @@ export function createHostLogWriter(stateDir: string, port: number): HostLogWrit
       writeFileSync(tmp, ring.join(''))
       renameSync(tmp, logPathFor(stateDir, port))
       linesWritten = ring.length
-    } catch { /* swallow — see header note */ }
+    } catch {
+      resetGeneration()
+      /* swallow — see header note */
+    }
   }
   return {
     write(line, streamName) {
@@ -116,16 +130,14 @@ export function createHostLogWriter(stateDir: string, port: number): HostLogWrit
         // compaction; 2026 review hardening).
         ring.push(entry)
         if (ring.length > COMPACT_KEEP_LINES) ring.splice(0, ring.length - COMPACT_KEEP_LINES)
+        // Count only writes known to have landed in this backing generation.
+        linesWritten += 1
+        if (linesWritten > MAX_LOG_LINES) compact()
       } catch {
-        // The write is lost; mark for setup so the NEXT write lazily
-        // recreates the dir/file (a dead log must not resurrect mid-write).
-        needsSetup = true
+        // The write is lost and the backing generation is now uncertain.
+        // Forget its ring/counter so a later recreation cannot resurrect it.
+        resetGeneration()
       }
-      // Ring cap (design 02 §3.8): a long-lived host must not grow an
-      // unbounded log file. Count lines written since the last compaction and
-      // compact back to COMPACT_KEEP_LINES once the cap is crossed.
-      linesWritten += 1
-      if (linesWritten > MAX_LOG_LINES) compact()
     },
     close() {
       // Sync appends are already durable; nothing to flush.

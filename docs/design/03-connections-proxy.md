@@ -106,6 +106,12 @@
 }
 ```
 
+- **注册表写入原子性**：renderer 提交的是完整候选集；任一条目非法、kind
+  不匹配或 id 重复时，主进程在写盘/断连/内存替换前拒绝**整个**候选集，原
+  文件、运行中隧道与内存注册表均保持不变。只有启动加载旧文件时采用容错恢复：
+  非法/kind 不匹配/重复条目响亮告警后丢弃（重复 id 首胜）。写路径不得复用
+  加载路径的“尽量恢复”语义，否则一次非法编辑会把既有主机静默删掉。
+
 - **生命周期**：SSH 隧道（`ssh -N [-p <sshPort>] -L <localPort>:127.0.0.1:
   <remotePort> <user@host>`，sshPort null 时不传 `-p`，走 ssh 默认/config）+
   systemd exec（`start/stop/is_active`，serviceName 校验
@@ -157,6 +163,10 @@
 ### 3.1 挂载与路径映射
 
 - 控制面挂载 `/api/i/<id>` 前缀；`id ∈ {local, ssh-<sshInstanceId>}`。
+- transport 注册只接受无 userinfo/path/query/hash 的 loopback **HTTP** origin
+  （`http://127.0.0.1:<port>` / localhost / `::1`）；实现统一使用 `node:http`
+  转发 unary 与 WS upgrade，因此 `https:` 在注册时即 fail-loud，不能先呈现
+  “已注册”再在首个请求时报协议错误。
 - **HTTP 全量透传**：任意方法（**无方法白名单**——05 §1），保持
   method/body/headers；**WS upgrade** 直通（`events.mux` / `events.host`
   双下行流）；**SSE 直通**（`text/event-stream` 响应不缓冲、不逐条解析、

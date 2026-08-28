@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildVscodeFileUrl, buildVscodeRemoteUrl, detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts'
+import { buildVscodeFileUrl, buildVscodeRemoteUrl, detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch, validateLocalPath } from './deep-link.ts'
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts'
 
 /** A minimal valid ssh instance for runVscodeLaunch context fakes. */
@@ -63,6 +63,14 @@ test('parseOpenVscodeIntent accepts the reserved local instance id (user decisio
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=local&path=/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.intent.instanceId, 'local')
+})
+
+test('parseOpenVscodeIntent accepts Windows drive and UNC paths only for the local instance', () => {
+  const drive = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=local&path=C%3A%5CUsers%5CAlice%5Cproject')
+  assert.equal(drive.ok, true)
+  const unc = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=local&path=%5C%5Cserver%5Cshare%5Cproject')
+  assert.equal(unc.ok, true)
+  assert.equal(parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=ssh-1&path=C%3A%5CUsers%5CAlice').ok, false)
 })
 
 test('parseOpenVscodeIntent rejects userinfo in the authority (P2-2)', () => {
@@ -325,6 +333,18 @@ test('buildVscodeFileUrl builds a local file target with encoded path', () => {
   const result = buildVscodeFileUrl('/home/user/我的 项目')
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.url, 'vscode://file/home/user/%E6%88%91%E7%9A%84%20%E9%A1%B9%E7%9B%AE')
+})
+
+test('buildVscodeFileUrl supports Windows drive and UNC absolute paths', () => {
+  assert.deepEqual(buildVscodeFileUrl('C:\\Users\\Alice\\My Project'), {
+    ok: true,
+    url: 'vscode://file/C:/Users/Alice/My%20Project',
+  })
+  assert.deepEqual(buildVscodeFileUrl('\\\\server\\share\\My Project'), {
+    ok: true,
+    url: 'vscode://file//server/share/My%20Project',
+  })
+  assert.equal(validateLocalPath('C:relative').ok, false)
 })
 
 test('buildVscodeFileUrl rejects a relative path', () => {

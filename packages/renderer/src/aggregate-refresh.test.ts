@@ -53,6 +53,8 @@ test('a mutation-triggered pull stays committable across pushes (the interim fra
   // the mutation. Frame-driven pushes bump the shared poll seq — the mutation
   // pull must ignore that and check only its own tag.
   assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 3,
+    currentSourceGeneration: 3,
     mutationTag: 7,
     mutationSeq: 7,
     pollSeq: 42, // bumped by an interim host-frame push
@@ -62,6 +64,8 @@ test('a mutation-triggered pull stays committable across pushes (the interim fra
 
 test('a newer mutation pull supersedes an older one (same source, rapid actions)', () => {
   assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 3,
+    currentSourceGeneration: 3,
     mutationTag: 7,
     mutationSeq: 8,
     pollSeq: 8,
@@ -74,6 +78,8 @@ test('the not-ready sweep invalidates an in-flight mutation pull (it bumps both 
   // the transport died and the sweep bumped BOTH domains to 9 — the late
   // tunnel answer must never resurrect the ok aggregate.
   assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 3,
+    currentSourceGeneration: 3,
     mutationTag: 7,
     mutationSeq: 9,
     pollSeq: 9,
@@ -83,12 +89,16 @@ test('the not-ready sweep invalidates an in-flight mutation pull (it bumps both 
 
 test('an ordinary pull is still invalidated by a push or a newer pull (shared seq, unchanged semantics)', () => {
   assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 3,
+    currentSourceGeneration: 3,
     mutationTag: undefined,
     mutationSeq: undefined,
     pollSeq: 42,
     startedPollSeq: 3,
   }), false)
   assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 3,
+    currentSourceGeneration: 3,
     mutationTag: undefined,
     mutationSeq: undefined,
     pollSeq: 3,
@@ -101,9 +111,30 @@ test('a mutation tag with no recorded mutation seq fails closed (defensive; unre
   // shape cannot occur — but if a future caller passes a tag without the ref
   // write, the pull must NOT commit (never resurrect a dead generation).
   assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 3,
+    currentSourceGeneration: 3,
     mutationTag: 5,
     mutationSeq: undefined,
     pollSeq: 5,
     startedPollSeq: 5,
+  }), false)
+})
+
+test('remove -> same-id re-add invalidates old pulls even when their per-id sequence value is reused (ABA guard)', () => {
+  assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 8,
+    currentSourceGeneration: 10,
+    mutationTag: undefined,
+    mutationSeq: undefined,
+    pollSeq: 1,
+    startedPollSeq: 1,
+  }), false)
+  assert.equal(refreshPullStillCurrent({
+    sourceGeneration: 8,
+    currentSourceGeneration: 10,
+    mutationTag: 4,
+    mutationSeq: 4,
+    pollSeq: 1,
+    startedPollSeq: 1,
   }), false)
 })

@@ -10,10 +10,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { killFailedSpawn, readPidRecord, spawnDsh, writePidRecord, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
+import { killFailedSpawn, probePortBusy, readPidRecord, spawnDsh, writePidRecord, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -29,6 +30,31 @@ function writeFakeDshEntry(dshWorkspacePath: string, body: string): string {
   return entry
 }
 
+class FakeProbeSocket extends EventEmitter {
+  destroyed = false
+
+  destroy(): this {
+    this.destroyed = true
+    return this
+  }
+}
+
+test('probePortBusy: abort destroys an inconclusive socket and rejects promptly', async () => {
+  const socket = new FakeProbeSocket()
+  const controller = new AbortController()
+  const probing = probePortBusy(DEFAULT_DSH_START_PORT, controller.signal, 60_000, () => socket as never)
+  controller.abort()
+  await assert.rejects(() => probing, /spawn aborted/)
+  assert.equal(socket.destroyed, true)
+})
+
+test('probePortBusy: a timed-out connect is conservatively treated as busy', async () => {
+  const socket = new FakeProbeSocket()
+  const busy = await probePortBusy(DEFAULT_DSH_START_PORT, undefined, 5, () => socket as never)
+  assert.equal(busy, true)
+  assert.equal(socket.destroyed, true)
+})
+
 test('killFailedSpawn: SIGKILLs the process group, waits for the exit, then removes the pid record', async () => {
   const stateDir = tempDir()
   try {
@@ -39,6 +65,17 @@ test('killFailedSpawn: SIGKILLs the process group, waits for the exit, then remo
     await killFailedSpawn(stateDir, child)
     assert.notEqual(child.exitCode ?? child.signalCode, null, 'child is dead after killFailedSpawn')
     assert.equal(readPidRecord(stateDir, child.pid!), null, 'record removed only after the confirmed exit')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('writePidRecord persists the exact CLI entry used for reaper identity checks', () => {
+  const stateDir = tempDir()
+  try {
+    const binary = '/opt/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
+    writePidRecord(stateDir, 4242, DEFAULT_DSH_START_PORT, process.pid, { binary })
+    assert.equal(readPidRecord(stateDir, 4242)?.binary, binary)
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -86,6 +123,52 @@ test('spawnDsh: a pid-record write failure still cleans the spawned child up (no
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
+
+test('spawnDsh: abort during the post-TCP host.describe wait kills the detached attempt promptly', async () => {
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const listeningMarker = join(stateDir, 'listening')
+  const describeMarker = join(stateDir, 'describe-requested')
+  const entryPath = writeFakeDshEntry(dshWorkspacePath, [
+    "const { writeFileSync } = require('node:fs')",
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    "createServer((req) => { if (req.url === '/api/host.describe') writeFileSync(" + JSON.stringify(describeMarker) + ", 'yes') }).listen(port, '127.0.0.1', () => writeFileSync(" + JSON.stringify(listeningMarker) + ", 'yes'))",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    const startedAt = Date.now()
+    const spawning = spawnDsh({
+      stateDir,
+      dshHome: join(stateDir, 'home'),
+      dshWorkspacePath,
+      logger: silentLogger,
+      signal: controller.signal,
+    })
+    await waitUntil(() => existsSync(listeningMarker), 3000)
+    await waitUntil(() => existsSync(describeMarker), 3000)
+    controller.abort()
+    await assert.rejects(() => spawning, /spawn aborted/)
+    assert.ok(Date.now() - startedAt < 5000, 'abort must not wait for the 90s readiness window')
+    const recordsDir = join(stateDir, 'managed-dsh')
+    const leftovers = existsSync(recordsDir) ? readdirSync(recordsDir).filter(file => file.endsWith('.json')) : []
+    assert.deepEqual(leftovers, [])
+    await waitForNoEntryProcess(entryPath, 3000)
+  } finally {
+    controller.abort()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for condition')
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
 
 /** Poll the POSIX process table until no process runs the given script path. */
 async function waitForNoEntryProcess(entryPath: string, timeoutMs: number): Promise<void> {

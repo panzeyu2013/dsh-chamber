@@ -57,6 +57,7 @@ import { dirname, join } from 'node:path'
 // can never drift from the control-plane unary client's.
 import { buildClientRequest, mintRpcId, parseServerResponse, postClientRequest } from './control-plane-module.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
+import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -141,6 +142,12 @@ export const MATERIALIZE_FILE_SPEC_PATTERN = /^file:\/([a-zA-Z0-9._-]+\/)*\.dsh-
  * orchestration payloads that flow through write-file.
  */
 export const WRITE_FILE_MAX_BYTES = 50 * 1024 * 1024
+
+/** Captured stdout cap for whitelisted remote reads. Remote profile files
+ * are not trusted to be small; without a byte budget a corrupt/malicious
+ * remote `cat` could exhaust Electron's main-process memory. The cap also
+ * admits the largest write-file read-back exactly. */
+export const RUN_STDOUT_MAX_BYTES = WRITE_FILE_MAX_BYTES
 
 /** Bound of the redacted stderr detail attached to failed `run` errors. */
 const RUN_STDERR_DETAIL_MAX_CHARS = 2048
@@ -586,19 +593,51 @@ export function setSshPassword(id: string, password: string | null): void {
   if (password !== null && password.length > MAX_SSH_PASSWORD_CHARS) {
     throw new Error(`refusing SSH password longer than ${MAX_SSH_PASSWORD_CHARS} characters`)
   }
-  if (password === null || password === '') {
-    // Cleared passwords must not leave baked secrets on disk (2026 review).
-    clearAskpassHelpers(id)
+  const clearing = password === null || password === ''
+  if (clearing) {
+    clearSshPasswords([id])
+    return
   }
   const next = new Map(passwords)
-  if (password === null || password === '') next.delete(id)
-  else next.set(id, password)
+  next.set(id, password)
   // Write-through commit: the live auth state changes only after its durable
   // mirror succeeds, so a reported persistence failure cannot leave a secret
   // active in memory but absent on disk (or vice versa).
   persistSshPasswords(next)
   passwords.clear()
   for (const [entryId, entryPassword] of next) passwords.set(entryId, entryPassword)
+}
+
+/**
+ * Clear multiple removed instances in ONE password-file transaction. Either
+ * every requested secret is durably removed and then unpublished from
+ * memory/helpers, or none is. This prevents a multi-host registry deletion
+ * from clearing only its first password when the file replace later fails.
+ */
+export function clearSshPasswords(ids: readonly string[]): void {
+  const unique = [...new Set(ids)]
+  for (const id of unique) {
+    if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
+      throw new Error(`refusing password clear for invalid instance id ${JSON.stringify(id)}`)
+    }
+  }
+  if (unique.length === 0) return
+  const present = unique.filter(id => passwords.has(id))
+  if (present.length === 0) {
+    // There is no durable secret to rewrite. A registry deletion must not be
+    // refused merely because an unrelated/empty password file is unwritable.
+    for (const id of unique) clearAskpassHelpers(id)
+    return
+  }
+  const next = new Map(passwords)
+  for (const id of present) next.delete(id)
+  persistSshPasswords(next)
+  passwords.clear()
+  for (const [entryId, entryPassword] of next) passwords.set(entryId, entryPassword)
+  // Helper cleanup is part of the committed clear, not its preparation: if
+  // the durable replace above fails, the old passwords remain authoritative
+  // and in-flight ssh spawns keep their existing helpers too.
+  for (const id of unique) clearAskpassHelpers(id)
 }
 
 /** The stored password for one instance, or null. */
@@ -965,23 +1004,27 @@ function runExec(
     timer.unref?.()
     // Line-buffered stderr, mirroring the tunnel channel: redaction and
     // auth detection run on complete lines, never on arbitrary chunks.
-    let stderrPending = ''
-    const processStderr = (text: string) => {
-      stderrPending += text
-      const lines = stderrPending.split(/\r?\n/)
-      stderrPending = lines.pop() ?? ''
-      for (const line of lines) {
+    const processStderr = createBoundedLineProcessor(
+      line => {
         const { log, terminalAuth } = sshProvider.classifyStderr(line)
-        if (log === '') continue
+        if (log === '') return
         deps.log('info', log)
         if (terminalAuth) {
           authFailed = true
           deps.log('error', 'authentication failure detected (requires user action)')
         }
-      }
-    }
+      },
+      () => deps.log('error', `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`),
+    )
+    const processStdout = createBoundedLineProcessor(
+      line => {
+        const redacted = redactSshStderr(line)
+        if (redacted !== '') deps.log('info', redacted)
+      },
+      () => deps.log('error', `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`),
+    )
     if (child.stdout !== null) {
-      child.stdout.on('data', chunk => deps.log('info', redactSshStderr(String(chunk)).trimEnd()))
+      child.stdout.on('data', chunk => processStdout(String(chunk)))
     }
     if (child.stderr !== null) {
       child.stderr.on('data', chunk => processStderr(String(chunk)))
@@ -994,6 +1037,7 @@ function runExec(
     })
     child.on('exit', (code, exitSignal) => {
       if (timedOut || settled) return
+      processStdout('\n')
       processStderr('\n')
       if (authFailed) {
         finish({ ok: false, error: 'authentication failure — requires user action' })
@@ -1169,6 +1213,7 @@ function spawnRemote(
     let timer: ReturnType<typeof setTimeout> | null = null
     let killTimer: ReturnType<typeof setTimeout> | null = null
     const stdoutChunks: Buffer[] = []
+    let stdoutBytes = 0
     const finish = (result: TransportExecResult) => {
       if (settled) return
       settled = true
@@ -1200,19 +1245,21 @@ function spawnRemote(
       killTimer.unref?.()
     }, timeoutMs)
     timer.unref?.()
-    let stderrPending = ''
     // Redacted stderr lines collected for the failure detail (never raw —
     // classifyStderr already applies redactSshStderr, so no key/password
     // material can ride the error string).
-    const stderrLines: string[] = []
-    const processStderr = (text: string) => {
-      stderrPending += text
-      const lines = stderrPending.split(/\r?\n/)
-      stderrPending = lines.pop() ?? ''
-      for (const line of lines) {
+    let stderrDetail = ''
+    const appendStderrDetail = (line: string) => {
+      if (stderrDetail.length >= RUN_STDERR_DETAIL_MAX_CHARS) return
+      const separator = stderrDetail === '' ? '' : ' | '
+      const remaining = RUN_STDERR_DETAIL_MAX_CHARS - stderrDetail.length
+      stderrDetail += `${separator}${line}`.slice(0, remaining)
+    }
+    const processStderr = createBoundedLineProcessor(
+      line => {
         const { log, terminalAuth, enoent } = sshProvider.classifyStderr(line)
-        if (log === '') continue
-        stderrLines.push(log)
+        if (log === '') return
+        appendStderrDetail(log)
         // Quiet runs (expected-failure probes): the redacted stderr still
         // rides the failure detail, but the raw INFO echo is suppressed so
         // an expected ENOENT probe cannot pollute the instance log panel.
@@ -1222,10 +1269,28 @@ function spawnRemote(
           deps.log('error', 'authentication failure detected (requires user action)')
         }
         if (enoent) enoentDetected = true
-      }
-    }
+      },
+      () => {
+        const summary = `ssh output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`
+        appendStderrDetail(summary)
+        if (opts.quiet !== true) deps.log('error', summary)
+      },
+    )
     if (child.stdout !== null) {
-      child.stdout.on('data', chunk => { if (opts.captureStdout === true) stdoutChunks.push(chunk) })
+      child.stdout.on('data', chunk => {
+        if (opts.captureStdout !== true || settled) return
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        if (stdoutBytes + bytes.length > RUN_STDOUT_MAX_BYTES) {
+          deps.log('error', `run stdout exceeds the ${RUN_STDOUT_MAX_BYTES}-byte limit`)
+          signalChild(child, 'SIGTERM')
+          finish({ ok: false, error: `run stdout exceeds the ${RUN_STDOUT_MAX_BYTES}-byte limit` })
+          killTimer = setTimeout(() => signalChild(child, 'SIGKILL'), deps.disconnectGraceMs)
+          killTimer.unref?.()
+          return
+        }
+        stdoutBytes += bytes.length
+        stdoutChunks.push(bytes)
+      })
     }
     if (child.stderr !== null) {
       child.stderr.on('data', chunk => processStderr(String(chunk)))
@@ -1249,7 +1314,7 @@ function spawnRemote(
         // still an `ok:false` with the same error text — the caller's ENOENT
         // classification keeps working — but the ERROR-level log is skipped:
         // an expected probe failure must not pollute the instance log panel.
-        let detail = stderrLines.join(' | ').slice(0, RUN_STDERR_DETAIL_MAX_CHARS)
+        let detail = stderrDetail
         // ENOENT is classified on the RAW stderr; a redacted detail may have
         // lost the signal (a `.ssh*`-named home path, design 13 §7.2, makes
         // redactSshStderr replace the whole line). Re-attach the marker so
@@ -1272,12 +1337,12 @@ function spawnRemote(
       // Keep the RAW captured bytes alongside the UTF-8 view: binary stdout
       // (a `.tgz` read-back) is lossy through `toString('utf8')` (U+FFFD
       // replacement chars), so byte-domain consumers hash `stdoutBytes`.
-      const stdoutBytes = opts.captureStdout === true ? Buffer.concat(stdoutChunks) : undefined
+      const capturedStdout = opts.captureStdout === true ? Buffer.concat(stdoutChunks, stdoutBytes) : undefined
       finish({
         ok: true,
         status: projection,
-        stdout: stdoutBytes !== undefined ? stdoutBytes.toString('utf8') : undefined,
-        stdoutBytes,
+        stdout: capturedStdout !== undefined ? capturedStdout.toString('utf8') : undefined,
+        stdoutBytes: capturedStdout,
       })
     })
   })

@@ -53,6 +53,7 @@ import net from 'node:net'
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
+import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -643,34 +644,38 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     }
     state.child = child
     transition(id, 'connecting', `spawning ${args[0]} ${args.slice(1).join(' ')}`)
+    // Line-buffered stdout/stderr (per child): provider classification
+    // (redaction + auth detection) runs on COMPLETE lines only — node chunk
+    // boundaries are arbitrary, and a key path or auth phrase straddling two
+    // chunks must never bypass either. The data guards mirror the exit
+    // handler: a REPLACED child's late output must not poison the fresh
+    // attempt. (`ssh -N` normally has no stdout, but the logging boundary
+    // must still fail closed for wrapper/custom binaries.)
+    const processStdout = createBoundedLineProcessor(
+      line => {
+        let logLine: string
+        try {
+          logLine = provider.classifyStderr(line).log
+        } catch {
+          // Fail closed: the classifier is also the provider's credential
+          // redaction boundary. Neither raw output nor an exception that may
+          // quote it may enter any log when that boundary fails.
+          warn('transport-manager: provider.classifyStderr threw on stdout; output dropped')
+          appendLogInternal(state, 'error', 'transport output dropped: provider classifier failed')
+          return
+        }
+        if (logLine !== '') appendLogInternal(state, 'info', logLine)
+      },
+      () => appendLogInternal(state, 'error', `transport output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`),
+    )
     if (child.stdout !== null) {
       child.stdout.on('data', chunk => {
         if (state.child !== child) return
-        // Same provider redaction as stderr (2026 review): the tunnel's
-        // stdout must not leak credential-shaped material into the ring
-        // buffer either. Guarded like the stderr path — a throwing
-        // classifier must never take the transport down.
-        let log: string
-        try {
-          log = provider.classifyStderr(String(chunk)).log
-        } catch (classifyError) {
-          warn(`transport-manager: provider.classifyStderr threw on stdout: ${String(classifyError)}`)
-          log = String(chunk)
-        }
-        appendLogInternal(state, 'info', log.trimEnd())
+        processStdout(String(chunk))
       })
     }
-    // Line-buffered stderr (per child): provider classification (redaction
-    // + auth detection) runs on COMPLETE lines only — node chunk boundaries
-    // are arbitrary, and a key path or an auth phrase straddling two chunks
-    // must never bypass either. The data guard mirrors the exit handler: a
-    // REPLACED child's late stderr must not poison the fresh attempt.
-    let stderrPending = ''
-    const processStderr = (text: string) => {
-      stderrPending += text
-      const lines = stderrPending.split(/\r?\n/)
-      stderrPending = lines.pop() ?? ''
-      for (const line of lines) {
+    const processStderr = createBoundedLineProcessor(
+      line => {
         // A throwing provider must never kill the main process from an
         // event handler (uncaughtException) — guard the classification.
         let logLine: string
@@ -679,18 +684,22 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
           const classified = provider.classifyStderr(line)
           logLine = classified.log
           terminalAuth = classified.terminalAuth
-        } catch (classifyError) {
-          warn(`transport-manager: provider.classifyStderr threw: ${String(classifyError)}`)
-          continue
+        } catch {
+          // Same fail-closed rule as stdout: a provider exception can quote
+          // the sensitive input, so log only a fixed diagnostic.
+          warn('transport-manager: provider.classifyStderr threw; output dropped')
+          appendLogInternal(state, 'error', 'transport output dropped: provider classifier failed')
+          return
         }
-        if (logLine === '') continue
+        if (logLine === '') return
         appendLogInternal(state, 'info', logLine)
         if (terminalAuth) {
           state.authFailed = true
           appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
         }
-      }
-    }
+      },
+      () => appendLogInternal(state, 'error', `transport output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`),
+    )
     if (child.stderr !== null) {
       child.stderr.on('data', chunk => {
         if (state.child !== child) return
@@ -698,9 +707,12 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       })
     }
     child.on('exit', (code, exitSignal) => {
-      // Flush the unterminated stderr line before the exit handler decides —
-      // an auth pattern may live on the final (newline-less) line.
-      if (state.child === child) processStderr('\n')
+      // Flush unterminated output before the exit handler decides — an auth
+      // pattern or credential-shaped path may live on the final line.
+      if (state.child === child) {
+        processStdout('\n')
+        processStderr('\n')
+      }
       onChildExit(id, child, code, exitSignal)
     })
     child.on('error', error => {
@@ -881,9 +893,10 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   /**
    * Persist a new instance set (atomic write) and align the registry:
    * instances that disappeared from the set have their transports
-   * disconnected and are removed; the set becomes exactly `next`. Invalid
-   * entries are dropped with a warning; duplicate ids keep the FIRST entry
-   * (loud, never silent) so the file and the returned set never disagree.
+   * disconnected and are removed; the set becomes exactly `next`. A save is
+   * an atomic replacement: any invalid/kind-mismatched entry or duplicate id
+   * rejects the WHOLE proposal before persistence or transport mutation.
+   * (Load-time recovery remains lenient and may drop corrupt persisted rows.)
    * Instances whose transport parameters (host/user/sshPort/remotePort)
    * changed while their transport is live are restarted so the transport
    * and the projection never disagree (no stale-parameters drift).
@@ -901,18 +914,19 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       throw error
     }
     const kept: TransportInstanceSpec[] = []
-    const dropped: TransportInstanceInput[] = []
     const restartIds: string[] = []
     const seenIds = new Set<string>()
-    for (const entry of next) {
+    for (const [index, entry] of next.entries()) {
       const normalized = provider.validateSpec(entry)
       if (normalized === null || normalized.kind !== provider.kind) {
-        dropped.push(entry)
-        continue
+        const error: CodedError = new Error(`instance at index ${index} is invalid for transport kind ${provider.kind}`)
+        error.code = 'ssh_instances_invalid'
+        throw error
       }
       if (seenIds.has(normalized.id)) {
-        dropped.push(entry)
-        continue
+        const error: CodedError = new Error(`duplicate instance id at index ${index}`)
+        error.code = 'ssh_instances_duplicate'
+        throw error
       }
       seenIds.add(normalized.id)
       const previous = instances.get(normalized.id)
@@ -926,7 +940,6 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       }
       kept.push(normalized)
     }
-    if (dropped.length > 0) warn(`transport-manager: dropped ${dropped.length} invalid or duplicate instance(s) from save`)
     // Persist BEFORE mutating the in-memory registry: a failed write throws
     // while the registry (and every live transport) stays untouched, so the
     // runtime and the UI never diverge on a partial save.

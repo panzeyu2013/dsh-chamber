@@ -279,7 +279,18 @@ export async function call(
   try {
     envelope = await response.json()
   } catch (error) {
+    const cancellation = composed.fired()
+    if (cancellation !== null) {
+      throw fail(`dsh unary ${method}: request cancelled while reading response`, 0, cancellation)
+    }
     throw fail(`dsh unary ${method}: response body is not JSON: ${String(error)}`, response.status, 'protocol_violation')
+  }
+  // Fetch can finish buffering at the same edge as a caller/generation abort.
+  // Cancellation owns the lifecycle: never accept or cache a response after
+  // its connection generation has already died.
+  const cancellation = composed.fired()
+  if (cancellation !== null) {
+    throw fail(`dsh unary ${method}: request cancelled before response settled`, 0, cancellation)
   }
   // The server-response validation is single-sourced in rpc-envelope.ts; the
   // unary client additionally requires result.ok to be a boolean (the desktop

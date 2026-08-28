@@ -696,8 +696,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
 
   /** Forward a WS upgrade to the instance (events.mux / events.host). */
   async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer, parsed: InstancePath, baseUrl: string, releaseHandshake: () => void): Promise<void> {
-    // The upstream request stays on http(s) — node's http.request performs
-    // the upgrade handshake internally (it never accepts a ws: URL).
+    // The upstream request stays on http — node's http.request performs the
+    // upgrade handshake internally (it never accepts a ws: URL).
     const wsTarget = new URL(`${baseUrl}${parsed.rest}${parsed.search}`)
     const headers: Record<string, string> = { host: new URL(baseUrl).host }
     const take = new Set(['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions'])
@@ -940,8 +940,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       } catch (urlError) {
         throw new TypeError(`registerInstanceTransport: invalid baseUrl: ${String(urlError)}`)
       }
-      if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-        throw new TypeError('registerInstanceTransport: baseUrl must be an http(s) URL')
+      // The proxy deliberately uses node:http for both unary requests and
+      // WebSocket upgrades. Accepting https here would appear to register a
+      // usable transport but every forward would then fail with a protocol
+      // error. Tunnel endpoints are loopback HTTP origins by contract.
+      if (target.protocol !== 'http:') {
+        throw new TypeError('registerInstanceTransport: baseUrl must be an HTTP URL')
       }
       if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)
         || target.username !== '' || target.password !== '' || target.pathname !== '/'

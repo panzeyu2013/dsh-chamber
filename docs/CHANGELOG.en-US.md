@@ -121,13 +121,41 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   is ready the visible set is authoritative — an empty set filters ALL remote
   hits (archived/subagent/blank sessions never resurface in clickable
   results); only a not-ready projection keeps the no-filter degrade.
-- **New-host save atomicity (2026 audit M9, 2026 final-review correction)** —
-  the save order now depends on registry existence: for EXISTING hosts the
-  password commits first (a failure leaves the registry untouched); for NEW
-  hosts the registry lands first (the main process refuses set_password for
-  unregistered ids) and a password failure rolls the metadata back, keeping
-  the edit state on a failed rollback (no duplicate-rejection on retry); the
-  tests now replicate the main-process unknown-id gate.
+- **Compensating host-save atomicity (2026 audit M9, 2026 merge-review
+  correction)** — new and existing hosts now commit and re-read the
+  authoritative registry first, and write the password only after metadata
+  demonstrably landed. A refused/thrown registry save leaves the password
+  untouched; a password failure restores the complete pre-submit registry
+  snapshot; the rollback result is verified too, and a refused/thrown
+  rollback keeps the form in edit mode from the
+  authoritative registry. Main-process registry saves also validate the
+  whole proposed set: one invalid/kind-mismatched/duplicate row rejects all
+  of it, so an invalid edit cannot silently delete an existing host; legacy
+  file loading remains lenient-with-warning.
+- **Architecture merge-safety review fixes (2026-08-28)** — the reaper now
+  requires the pid record's exact managed CLI absolute path, exact
+  `--profile web`/`--port` tokens, port ownership, and a dead owner
+  (basename/any-`bin.ts` identities fail closed, and mismatch logs never echo
+  an unrelated process argv); local start→stop→start
+  releases the old single-flight generation and late failures cannot clear
+  the new one; host-log write/compaction failures start a fresh generation
+  instead of resurrecting a removed backing file; `stopped` is logged once;
+  fork parent-accounted hiding is a bounded 3s first-observation grace so a
+  partial attach failure eventually appears ungrouped; form path/length gates
+  match desktop authority; CI/release action pins have an offline consistency
+  guard and the invalid setup-node SHA was corrected. The subsequent thorough
+  pass also made local spawn port/TCP probes and unary body reads cancellable;
+  restricted transports to loopback HTTP; incrementally bounded SSH
+  unterminated lines, captured stdout, and stderr detail; disabled package
+  lifecycle scripts during local packing and put local pack/install process
+  groups or trees under will-quit ownership; isolated renderer session-open,
+  aggregate retry/source removal plus remove→same-id source-generation ABA,
+  recovery timers, and quit generations; and
+  made deep-link queues/protocol registration, Windows local paths, external
+  open failures, and settings side-effect rollback fail loudly without
+  projecting host paths to the renderer. Release concurrency now maps tag
+  `vX` and manual version `X` to the same mutation group while allowing
+  unrelated versions to proceed independently.
 - **Source-scoped keys (2026 audit L2)** — the double-click pending and the
   blank-ghost grace are keyed by `(serverId, sessionId)`: cloned instances
   carrying the same UUID can no longer cross-trigger rename or share ghost
@@ -211,7 +239,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   restart-exhausted landing stops the residual child and clears
   `child/dshPort` (matching the "stops automatically" contract); `setState`
   deletes `error` instead of writing `undefined` (memory/disk parity); the
-  final `→ stopped` transition line is written explicitly; the reaper command
+  final `→ stopped` transition line is written once through `setState`; the reaper command
   identity also matches the source-tsx dev path; host-logs writes became
   synchronous appends with an in-memory ring compaction (eliminating the
   async-stream buffer/open race that duplicated and interleaved content, plus

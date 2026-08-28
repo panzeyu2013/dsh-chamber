@@ -22,6 +22,7 @@ import { createTransportManager, INSTANCE_ID_PATTERN } from './transport-manager
 import type { TransportManager } from './transport-manager.ts'
 import {
   MAX_SSH_PASSWORD_CHARS,
+  clearSshPasswords,
   cleanupStaleAskpassHelpers,
   configureSshPasswordStore,
   setSshPassword,
@@ -152,7 +153,8 @@ export function registerSsh(ctx: SshWiringCtx): SshWiring {
       console.warn('[dsh-chamber] desktop_ssh_instances_set: non-array input refused')
       return sm.listInstances()
     }
-    const before = new Set(sm.listInstances().map(instance => instance.id))
+    const beforeInstances = sm.listInstances()
+    const before = new Set(beforeInstances.map(instance => instance.id))
     let saved
     try {
       saved = sm.saveInstances(instances)
@@ -160,10 +162,27 @@ export function registerSsh(ctx: SshWiringCtx): SshWiring {
       console.warn('[dsh-chamber] desktop_ssh_instances_set: save refused: ', saveError)
       return sm.listInstances()
     }
-    // A removed instance's in-memory password dies with its registry entry
-    // (memory-only credentials never outlive the instance they belong to).
-    for (const id of before) {
-      if (!saved.some(instance => instance.id === id)) setSshPassword(id, null)
+    // A removed instance's persisted/in-memory password dies with its
+    // registry entry. Clear every removed secret in one password-file commit;
+    // if it fails, restore the old registry so the caller never receives a
+    // fake successful deletion that left orphaned credentials behind.
+    const removedIds = [...before].filter(id => !saved.some(instance => instance.id === id))
+    try {
+      clearSshPasswords(removedIds)
+    } catch {
+      try {
+        const restored = sm.saveInstances(beforeInstances)
+        const restoredIds = restored.map(instance => instance.id)
+        if (restoredIds.length !== beforeInstances.length
+          || restoredIds.some((id, index) => id !== beforeInstances[index].id)) {
+          throw new Error('registry rollback verification failed')
+        }
+        console.error('[dsh-chamber] instance deletion rolled back because password cleanup failed')
+        return restored
+      } catch {
+        console.error('[dsh-chamber] instance deletion and password-cleanup rollback both failed')
+        throw new Error('instance registry/password cleanup failed with an incomplete rollback')
+      }
     }
     // Registry-change push: the renderer App layer re-pulls immediately
     // (roster/auto-connect/reap), so add/edit/delete propagates without
@@ -181,23 +200,33 @@ export function registerSsh(ctx: SshWiringCtx): SshWiring {
   // and the renderer only ever holds it transiently in the form input
   // before forwarding it here. '' / null clears it (and removes the file
   // entry). The IPC is the platform gate: Win32-OpenSSH askpass support is
-  // not reliable, so Windows refuses password auth loudly (keys/agent
-  // remain the universal path) instead of silently failing at connect time.
+  // not reliable, so Windows refuses SETTING a password loudly (keys/agent
+  // remain the universal path) instead of silently failing at connect time;
+  // explicit clear is still allowed so a migrated/stale secret can always
+  // be removed on every platform.
   ipcMain.handle(IPC_CHANNELS.SSH_SET_PASSWORD, trustedIpc(({ id, password }) => {
     if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
       return { error: 'invalid or unknown instance id' }
     }
-    if (!sshPasswordSupported()) {
+    if (password !== null && typeof password !== 'string') {
+      return { error: 'password must be a string or null' }
+    }
+    const normalizedPassword = password === '' ? null : password
+    if (normalizedPassword !== null && !sshPasswordSupported()) {
       return { error: 'SSH password auth is not supported on this platform yet — use a key or ssh-agent' }
     }
-    if (typeof password === 'string' && password.length > MAX_SSH_PASSWORD_CHARS) {
+    if (normalizedPassword !== null && normalizedPassword.length > MAX_SSH_PASSWORD_CHARS) {
       return { error: `SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters` }
     }
     try {
-      setSshPassword(id, typeof password === 'string' && password !== '' ? password : null)
+      setSshPassword(id, normalizedPassword)
       return { ok: true }
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) }
+    } catch {
+      // Filesystem errors can contain the private user-data/password-store
+      // path. Keep the diagnosis in the main process and project a fixed,
+      // path-free failure to the renderer.
+      console.error('[dsh-chamber] SSH password persistence failed')
+      return { error: 'SSH password persistence failed' }
     }
   }))
   // ~/.ssh/config discovery (design 05 §5): non-secret host projections
@@ -226,18 +255,30 @@ export function registerSsh(ctx: SshWiringCtx): SshWiring {
   // failure — loud, never a silent empty success, never an unhandled
   // rejection.
   ipcMain.handle(IPC_CHANNELS.SSH_START_SERVICE, trustedIpc(({ id }) =>
-    sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
+    sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(() => {
+      console.error('[dsh-chamber] SSH service start failed unexpectedly')
+      return { error: 'transport exec failed' }
+    }),
   ))
   ipcMain.handle(IPC_CHANNELS.SSH_STOP_SERVICE, trustedIpc(({ id }) =>
-    sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
+    sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(() => {
+      console.error('[dsh-chamber] SSH service stop failed unexpectedly')
+      return { error: 'transport exec failed' }
+    }),
   ))
   ipcMain.handle(IPC_CHANNELS.SSH_IS_ACTIVE, trustedIpc(({ id }) =>
-    sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
+    sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(() => {
+      console.error('[dsh-chamber] SSH service status probe failed unexpectedly')
+      return { error: 'transport exec failed' }
+    }),
   ))
   ipcMain.handle(IPC_CHANNELS.SSH_RESTART_SERVICE, trustedIpc(({ id }) =>
     sm.exec(id, 'restart').then(result =>
       (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
-    ).catch(err => ({ error: `exec failed: ${String(err)}` })),
+    ).catch(() => {
+      console.error('[dsh-chamber] SSH service restart failed unexpectedly')
+      return { error: 'transport exec failed' }
+    }),
   ))
 
   return {

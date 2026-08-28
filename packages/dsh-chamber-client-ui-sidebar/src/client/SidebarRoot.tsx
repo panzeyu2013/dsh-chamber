@@ -119,7 +119,7 @@ import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace
 import {
   armBlankGhost, armMembershipGrace, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, hashString, increasedForkTitle,
   mergeSearchResults, nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, reconciledSessionOrder,
-  relativeTimeBucket, runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS,
+  relativeTimeBucket, retainMembershipGraceSources, runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS,
   workspaceAccentStyle,
   type SessionOrderBy,
 } from '../shared/derive.ts'
@@ -562,6 +562,9 @@ export function SidebarRoot({
     () => orderServersForDisplay(servers, viewPrefs.serverOrder),
     [servers, viewPrefs.serverOrder],
   )
+  useEffect(() => {
+    retainMembershipGraceSources(new Set(servers.map(server => server.id)))
+  }, [servers])
 
   // chamber (06 §3.1, 2026-08 C档 alignment): explicit per-source sort
   // selection through the source-header menu (official ViewOptionsMenu

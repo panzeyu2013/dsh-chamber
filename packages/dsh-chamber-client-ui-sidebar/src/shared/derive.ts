@@ -13,13 +13,14 @@
  * `armBlankGhost` (called by the sidebar synchronously when a click moves the
  * current away from a blank row) and read only by `sessionVisible`, which
  * also lazily SWEEPS expired entries on read (third-wave, R2-1#3) so the map
- * cannot accumulate across armings without a derive in between. A SECOND
- * mutable exception of the same shape (2026-10 fix): the module-level
- * membership-grace map — written only by `armMembershipGrace` (the sidebar,
- * synchronously after a successful CREATE) and read only by
- * `deriveServerWorkspaces`'s stray filter, lazily swept on write and read.
- * Both maps only ever suppress a row placement; the derive functions stay
- * deterministic for a given (snapshot, current, now) triple plus the two
+ * cannot accumulate across armings without a derive in between. Two more
+ * mutable exceptions of the same shape are the CREATE membership-grace map
+ * and the bounded, first-observation FORK membership-grace map. Both are read
+ * only by `deriveServerWorkspaces`; the former is armed explicitly by the
+ * create action, while the latter is armed by the first unaccounted snapshot
+ * and retained only while that exact candidate remains unaccounted.
+ * All maps only ever suppress a row placement; the derive functions stay
+ * deterministic for a given (snapshot, current, now) triple plus the three
  * grace maps, and tests inject `now` so the grace behavior is fully
  * unit-tested.
  *
@@ -164,10 +165,12 @@ export function sanitizeSearchQuery(query: string): string {
  *
  * The grace is armed ONLY by the create path (which always carries an
  * explicit workspaceId), so it can never hide a genuinely ungrouped session.
- * The FORK path is covered by the parent-accounted rule instead (see
- * deriveServerWorkspaces): host fork attachment follows the source session,
- * so a fork child of a workspace-accounted parent is provably transient when
- * unaccounted — no timer, no arming-timing window. The grace must cover the
+ * The FORK path uses a separate first-observation grace (see
+ * deriveServerWorkspaces): the child id is host-minted and its session-added
+ * frame may precede the mutation response, so it cannot be armed by the UI.
+ * That grace is bounded by the same duration; if workspace attach fails after
+ * the child was published, the child becomes visible under ungrouped instead
+ * of remaining hidden forever. The create grace must cover the
  * mutation-triggered aggregate pull's round trip (the App's refresh is
  * guaranteed post-mutation — see renderer aggregate-refresh); 3s covers even
  * a slow SSH-tunneled pull.
@@ -189,6 +192,16 @@ export const MEMBERSHIP_GRACE_MS = 3_000
  * each arm (the read-side sweep only drops the queried id).
  */
 const membershipGraceUntil = new Map<string, number>()
+
+/**
+ * Source-scoped fork grace, armed on the first snapshot where a fork child is
+ * unaccounted while its parent is workspace-accounted. An expired entry is
+ * deliberately retained while the candidate remains present, so repeated
+ * derives cannot re-arm it forever; it is removed as soon as the child is
+ * accounted, disappears, or stops being a qualifying candidate. The map is
+ * therefore bounded by the current snapshot's candidate set.
+ */
+const forkMembershipGraceByServer = new Map<string, Map<string, number>>()
 
 /**
  * Arm (or refresh) the membership grace for a session the sidebar just
@@ -226,9 +239,45 @@ function membershipGraceActive(serverId: string, sessionId: string, now: number)
   return true
 }
 
-/** Test-only: clear the membership-grace map (node tests share the module instance). */
+function forkMembershipGraceActive(serverId: string, sessionId: string, now: number): boolean {
+  let source = forkMembershipGraceByServer.get(serverId)
+  if (source === undefined) {
+    source = new Map<string, number>()
+    forkMembershipGraceByServer.set(serverId, source)
+  }
+  const existing = source.get(sessionId)
+  if (existing !== undefined) return now < existing
+  source.set(sessionId, now + MEMBERSHIP_GRACE_MS)
+  return true
+}
+
+function retainForkMembershipCandidates(serverId: string, candidates: ReadonlySet<string>): void {
+  const source = forkMembershipGraceByServer.get(serverId)
+  if (source === undefined) return
+  for (const sessionId of source.keys()) {
+    if (!candidates.has(sessionId)) source.delete(sessionId)
+  }
+  if (source.size === 0) forkMembershipGraceByServer.delete(serverId)
+}
+
+/** Converge grace state with the live server registry. A removed source will
+ * never derive another snapshot, so candidate-based pruning alone cannot
+ * reclaim it; same-id re-adds must start with a fresh generation. */
+export function retainMembershipGraceSources(liveServerIds: ReadonlySet<string>): void {
+  for (const key of membershipGraceUntil.keys()) {
+    const separator = key.indexOf(':')
+    const serverId = separator === -1 ? key : key.slice(0, separator)
+    if (!liveServerIds.has(serverId)) membershipGraceUntil.delete(key)
+  }
+  for (const serverId of forkMembershipGraceByServer.keys()) {
+    if (!liveServerIds.has(serverId)) forkMembershipGraceByServer.delete(serverId)
+  }
+}
+
+/** Test-only: clear both membership-grace maps (node tests share the module instance). */
 export function __resetMembershipGracesForTests(): void {
   membershipGraceUntil.clear()
+  forkMembershipGraceByServer.clear()
 }
 
 /**
@@ -1084,9 +1133,9 @@ export function increasedForkTitle(title: string): string {
  *   The membership grace (armMembershipGrace) is measured against the same
  *   clock: a just-created session whose workspace membership has not landed
  *   yet is skipped from the ungrouped bucket (see above). Fork children of
- *   workspace-accounted parents are additionally skipped by the
- *   parent-accounted rule (host fork attachment follows the source) — a pure
- *   snapshot-state judgment with no timer or arming-timing window.
+ *   workspace-accounted parents receive a first-observation bounded grace;
+ *   if membership still has not landed at expiry (including the host's
+ *   documented publish-then-attach-failure path), they surface ungrouped.
  * @returns real workspaces in wire order (visible members in sessionIds order),
  *   plus one synthetic trailing ungrouped group when visible stray sessions
  *   exist; [] for an empty snapshot.
@@ -1121,28 +1170,27 @@ export function deriveServerWorkspaces(
     }
     workspaces.push({ id: workspace.workspaceId, title: workspace.title, sessions })
   }
-  const stray = snapshot.sessions
-    .filter(session => !accounted.has(session.sessionId)
-      && sessionVisible(serverId, session, currentSessionId, archivedIds, now)
-      // 2026-10 fix (1/2): a just-CREATED session whose workspace membership
-      // has not landed yet must NOT flash through the ungrouped bucket — the
-      // host publishes session-added and workspace-changed as two ordered
-      // frames, and the interim projection would place the row under 未分类
-      // for one frame, then yank it into its workspace (位置乱跳). The
-      // membership grace (armed synchronously after create; source-scoped)
-      // hides the stray placement until membership lands — armed only by
-      // create-with-workspaceId, so nothing real is ever hidden.
-      && !membershipGraceActive(serverId, session.sessionId, now)
-      // 2026-10 fix (2/2): the parent-accounted rule for FORK children — host
-      // fork attachment follows the source session (the fork contract), so a
-      // fork child of a workspace-accounted parent is provably transient when
-      // unaccounted: its membership WILL land, and the interim ungrouped
-      // placement is suppressed. Pure snapshot-state judgment — no timer, no
-      // arming-timing window (the grace cannot cover fork: the child id is
-      // host-minted and the session-added frame can beat the arm). A fork of
-      // an UNACCOUNTED (genuinely ungrouped) parent stays visible immediately.
-      && !(session.parentSessionId !== undefined && accounted.has(session.parentSessionId)))
-    .sort(byRecency)
+  const forkCandidates = new Set<string>()
+  const stray = snapshot.sessions.filter(session => {
+    if (accounted.has(session.sessionId)) return false
+    if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now)) return false
+
+    // Fork responses can arrive after the host's session-added frame, so the
+    // UI cannot pre-arm a child-id grace. Arm it on first observation instead.
+    // Crucially this is bounded: attach can fail after publication, in which
+    // case the still-unaccounted child surfaces when the grace expires.
+    const parentAccounted = session.parentSessionId !== undefined && accounted.has(session.parentSessionId)
+    if (parentAccounted) {
+      forkCandidates.add(session.sessionId)
+      if (forkMembershipGraceActive(serverId, session.sessionId, now)) return false
+    }
+
+    // A just-CREATED session whose workspace membership has not landed yet
+    // must not flash through the ungrouped bucket. This map is explicitly
+    // armed only by create-with-workspaceId, so genuine strays are unaffected.
+    return !membershipGraceActive(serverId, session.sessionId, now)
+  }).sort(byRecency)
+  retainForkMembershipCandidates(serverId, forkCandidates)
   if (stray.length > 0) {
     workspaces.push({
       id: UNGROUPED_WORKSPACE_ID,

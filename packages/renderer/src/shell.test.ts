@@ -25,9 +25,10 @@ import {
   __testResetDisposed, __testResetEventLog,
   __testLifecycleLog, __testResetLifecycleLog, __testSetBootError, __testSetDisposeDelayMs,
   __testSetModuleSystemError, __testSetRunDelayMs, __testSetRunError, __testSetRunHang,
+  __testResetRuntimeOpenLog, __testRuntimeOpenLog, __testSetRuntimeSessions,
 } from '../test-fixtures/dsh-client-web.mjs'
 
-const { bootInstanceShell, disposeInstanceShell, __testSetBootTimeoutMs } = await import('./shell.ts')
+const { bootInstanceShell, disposeInstanceShell, openInstanceSession, __testSetBootTimeoutMs } = await import('./shell.ts')
 
 // ── Plumbing ───────────────────────────────────────────────────────────────
 
@@ -373,6 +374,116 @@ test('H1: a timed-out boot that LATE-settles must never register over a newer bo
     __testSetDisposeDelayMs(0)
     __testSetBootTimeoutMs(60_000)
     console.error = originalConsoleError
+    globalThis.fetch = originalFetch
+    restoreWindow()
+  }
+})
+
+test('an older timeout cannot lower a newer registry-removal cancellation threshold', async () => {
+  const sourceId = 't-monotonic-remove'
+  const originalFetch = globalThis.fetch
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  const releases: Array<() => void> = []
+  globalThis.fetch = (() => new Promise<Response>(resolve => {
+    releases.push(() => resolve(new Response('{}', { status: 404 })))
+  })) as typeof fetch
+  __testResetDisposed()
+  __testResetLifecycleLog()
+  __testSetBootError(undefined)
+  __testSetRunError(undefined)
+  __testSetBootTimeoutMs(40)
+  const keepAlive = setInterval(() => {}, 500)
+  try {
+    const older = bootInstanceShell(sourceId, `/api/i/${sourceId}`, {} as HTMLElement, () => {})
+    await waitUntil(() => releases.length === 1)
+
+    // Generation 2 starts its graph request before joining the serialized
+    // chain. Registry removal now cancels BOTH pending generations.
+    __testSetBootTimeoutMs(1_000)
+    const newer = bootInstanceShell(sourceId, `/api/i/${sourceId}`, {} as HTMLElement, () => {})
+    await waitUntil(() => releases.length === 2)
+    disposeInstanceShell(sourceId)
+
+    // Generation 1's timeout lands after the generation-2 cancellation. The
+    // threshold must stay at 2; lowering it to 1 would let generation 2 boot.
+    const olderState = await older
+    assert.match(olderState.error ?? '', /timed out/)
+    releases[1]!()
+    const newerState = await newer
+    assert.equal(newerState.booted, false)
+    assert.notEqual(newerState.error, null)
+    assert.deepEqual(__testLifecycleLog(), [], 'the cancelled newer generation must never construct an entry')
+
+    // Let the old background graph task unwind as well; it remains cancelled.
+    releases[0]!()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  } finally {
+    clearInterval(keepAlive)
+    disposeInstanceShell(sourceId)
+    __testSetBootTimeoutMs(60_000)
+    console.error = originalConsoleError
+    globalThis.fetch = originalFetch
+    restoreWindow()
+  }
+})
+
+test('registry removal cancels a pending retry even when an older live entry exists', async () => {
+  const sourceId = 't-live-plus-pending'
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    rpcId: 't', result: { ok: true, value: { entries: [] } },
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  __testResetDisposed()
+  __testResetLifecycleLog()
+  __testSetRunDelayMs(0)
+  try {
+    const first = await bootInstanceShell(sourceId, `/api/i/${sourceId}`, {} as HTMLElement, () => {})
+    assert.equal(first.booted, true)
+
+    __testSetRunDelayMs(80)
+    const retry = bootInstanceShell(sourceId, `/api/i/${sourceId}`, {} as HTMLElement, () => {})
+    await waitUntil(() => __testLifecycleLog().filter(event => event === 'construct').length === 2)
+    disposeInstanceShell(sourceId)
+    const retryState = await retry
+    assert.equal(retryState.booted, false)
+    assert.notEqual(retryState.error, null)
+  } finally {
+    disposeInstanceShell(sourceId)
+    __testSetRunDelayMs(0)
+    console.error = originalConsoleError
+    globalThis.fetch = originalFetch
+    restoreWindow()
+  }
+})
+
+test('registry removal cancels an active session-list poll before it can open on the disposed ctx', async () => {
+  const sourceId = 't-open-after-remove'
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    rpcId: 't', result: { ok: true, value: { entries: [] } },
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+  const restoreWindow = stubWindow()
+  __testSetBootError(undefined)
+  __testSetRunError(undefined)
+  __testSetRuntimeSessions([])
+  __testResetRuntimeOpenLog()
+  try {
+    const state = await bootInstanceShell(sourceId, `/api/i/${sourceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    const opening = openInstanceSession(sourceId, 'late-session')
+    disposeInstanceShell(sourceId)
+    __testSetRuntimeSessions(['late-session'])
+    await assert.rejects(opening, /shell 已释放/)
+    assert.deepEqual(__testRuntimeOpenLog(), [], 'a disposed runtime must never receive the late open')
+  } finally {
+    disposeInstanceShell(sourceId)
+    __testSetRuntimeSessions([])
+    __testResetRuntimeOpenLog()
     globalThis.fetch = originalFetch
     restoreWindow()
   }

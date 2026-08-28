@@ -34,29 +34,44 @@ const CONFIGS = [
 
 let chamberErrors = 0
 let vendorErrors = 0
+let unexpectedErrors = 0
 
 for (const [name, config] of CONFIGS) {
-  const result = spawnSync(process.execPath, [TSC, '-p', config, '--noEmit'], {
+  const result = spawnSync(process.execPath, [TSC, '-p', config, '--noEmit', '--pretty', 'false'], {
     cwd: ROOT,
     encoding: 'utf8',
   })
   const lines = String(result.stdout + result.stderr).split('\n').filter(Boolean)
-  const configChamber = lines.filter(line => line.startsWith('packages/dsh-client-connection/'))
-  const configVendor = lines.filter(line => line.startsWith('vendor/harness-packages/'))
+  const diagnostics = lines.filter(line => /\berror TS\d+:/.test(line))
+  const configChamber = diagnostics.filter(line => line.startsWith('packages/dsh-client-connection/'))
+  const configVendor = diagnostics.filter(line => line.startsWith('vendor/harness-packages/'))
+  const configUnexpected = diagnostics.filter(line => !configChamber.includes(line) && !configVendor.includes(line))
   chamberErrors += configChamber.length
   vendorErrors += configVendor.length
+  unexpectedErrors += configUnexpected.length
 
-  if (result.status !== 0 && configChamber.length === 0 && configVendor.length === 0) {
-    // Non-zero with no file-scoped errors: tsc itself failed (config / crash).
+  if (configUnexpected.length > 0) {
+    console.error(`[${name} sub-config: unexpected diagnostics]`)
+    for (const line of configUnexpected) console.error(line)
+  }
+  if (result.status === null) {
     for (const line of lines) console.error(line)
-    console.error(`\ntypecheck:connection FAILED — tsc exited without chamber-owned diagnostics (${name} sub-config)`)
+    const cause = result.error?.message ?? (result.signal ? `terminated by ${result.signal}` : 'terminated without an exit status')
+    console.error(`\ntypecheck:connection FAILED — tsc ${cause} (${name} sub-config)`)
+    process.exit(1)
+  }
+  if (result.status !== 0 && diagnostics.length === 0) {
+    // Non-zero with no TypeScript diagnostic: tsc itself failed (config /
+    // signal / startup crash). Vendor errors in another run cannot mask it.
+    for (const line of lines) console.error(line)
+    console.error(`\ntypecheck:connection FAILED — tsc exited without TypeScript diagnostics (${name} sub-config)`)
     process.exit(1)
   }
 }
 
-if (chamberErrors > 0) {
+if (chamberErrors > 0 || unexpectedErrors > 0) {
   for (const [name, config] of CONFIGS) {
-    const result = spawnSync(process.execPath, [TSC, '-p', config, '--noEmit'], {
+    const result = spawnSync(process.execPath, [TSC, '-p', config, '--noEmit', '--pretty', 'false'], {
       cwd: ROOT,
       encoding: 'utf8',
     })
@@ -67,7 +82,7 @@ if (chamberErrors > 0) {
       for (const line of configChamber) console.error(line)
     }
   }
-  console.error(`\ntypecheck:connection FAILED — ${chamberErrors} error(s) in packages/dsh-client-connection/`)
+  console.error(`\ntypecheck:connection FAILED — ${chamberErrors} chamber error(s), ${unexpectedErrors} unexpected error(s)`)
   if (vendorErrors > 0) {
     console.error(`(filtered ${vendorErrors} pre-existing vendor-graph error lines)`)
   }

@@ -133,6 +133,19 @@ test('runOpenInLaunch opens a directory via openPath for local + finder (origina
   assert.equal(openedPath, '/home/user/proj')
 })
 
+test('runOpenInLaunch accepts a Windows absolute path for local finder', async () => {
+  let opened: string | null = null
+  const result = await runOpenInLaunch(
+    { appId: 'finder', instanceId: 'local', path: 'C:\\Users\\Alice\\project' },
+    context({
+      stat: async () => ({ kind: 'dir' }),
+      openPath: async path => { opened = path; return null },
+    }),
+  )
+  assert.deepEqual(result, { ok: true })
+  assert.equal(opened, 'C:\\Users\\Alice\\project')
+})
+
 test('runOpenInLaunch surfaces an openPath failure loudly', async () => {
   const result = await runOpenInLaunch(
     { appId: 'finder', instanceId: 'local', path: '/home/user/proj' },
@@ -224,5 +237,5 @@ test('normalizeOpenPathError maps the shell.openPath boundary (success/error)', 
   assert.equal(normalizeOpenPathError(''), null, "Electron's success convention (empty string) is success")
   assert.equal(normalizeOpenPathError(undefined), null)
   assert.equal(normalizeOpenPathError(null), null)
-  assert.equal(normalizeOpenPathError('The file does not exist.'), 'The file does not exist.')
+  assert.equal(normalizeOpenPathError('The file does not exist at /Users/example/private.'), 'open path failed')
 })

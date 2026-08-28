@@ -12,10 +12,37 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createUpdateController, sanitizeErrorText } from './updater.ts'
+import { createUpdateController, isAllowedReleaseUrl, openReleasePage, sanitizeErrorText } from './updater.ts'
 import type { AutoUpdaterLike, UpdateController, UpdateControllerDeps, UpdatePhase, UpdateState } from './updater.ts'
 
 const silentLogger = { log: () => {}, warn: () => {}, error: () => {} }
+
+test('release-page allowlist pins scheme/origin/repository and rejects encoded traversal or userinfo', () => {
+  assert.equal(isAllowedReleaseUrl('https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.0'), true)
+  assert.equal(isAllowedReleaseUrl('http://github.com/panzeyu2013/dsh-chamber/releases'), false)
+  assert.equal(isAllowedReleaseUrl('https://evil.example/panzeyu2013/dsh-chamber/releases'), false)
+  assert.equal(isAllowedReleaseUrl('https://user:pass@github.com/panzeyu2013/dsh-chamber/releases'), false)
+  assert.equal(isAllowedReleaseUrl('https://github.com/panzeyu2013/dsh-chamber/%2e%2e/%2e%2e/settings'), false)
+  assert.equal(isAllowedReleaseUrl('https://github.com/panzeyu2013/dsh-chamber/..%252f..%252fsettings'), false)
+  assert.equal(isAllowedReleaseUrl(null), false)
+})
+
+test('openReleasePage awaits the OS handoff and reports rejection instead of false success', async () => {
+  const url = 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.0'
+  let opened: string | null = null
+  assert.deepEqual(await openReleasePage(url, async value => { opened = value }), { ok: true })
+  assert.equal(opened, url)
+  assert.deepEqual(await openReleasePage(url, async () => { throw new Error('/private/path') }), {
+    ok: false,
+    error: 'open release page failed',
+  })
+  opened = null
+  assert.deepEqual(await openReleasePage('https://evil.example/', async value => { opened = value }), {
+    ok: false,
+    error: 'url not allowed',
+  })
+  assert.equal(opened, null, 'a refused URL never reaches the OS')
+})
 
 /** The electron-updater surface the controller touches, faked. */
 class FakeAutoUpdater extends EventEmitter implements AutoUpdaterLike {
@@ -195,7 +222,7 @@ test('update-not-available transitions to up-to-date and clears latestVersion/re
 test('error event: phase error, message sanitized, latestVersion KEPT (download-retry semantics)', () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
-  fake.emit('error', new Error('Cannot read /Users/panzeyu2013/Library/Caches/dsh-chamber-updater/x'))
+  fake.emit('error', new Error('Cannot read /Users/example/Library/Caches/dsh-chamber-updater/x'))
   const state = controller.state()
   assert.equal(state.phase, 'error')
   assert.equal(state.error, 'Cannot read [path]')
@@ -374,7 +401,7 @@ test('start() on linux is inert (no timers, just a log)', () => {
 })
 
 test('sanitizeErrorText replaces POSIX absolute paths', () => {
-  assert.equal(sanitizeErrorText('Cannot read /Users/panzeyu2013/Library/Caches/dsh-chamber-updater/x'), 'Cannot read [path]')
+  assert.equal(sanitizeErrorText('Cannot read /Users/example/Library/Caches/dsh-chamber-updater/x'), 'Cannot read [path]')
   assert.equal(sanitizeErrorText('a /opt/x and /usr/local/bin/y'), 'a [path] and [path]')
   assert.equal(sanitizeErrorText('/root/x at start'), '[path] at start')
 })

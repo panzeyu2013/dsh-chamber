@@ -165,6 +165,62 @@ test('generation abort settles the in-flight unary with connection_offline', asy
   }
 })
 
+test('generation abort during response-body read is not misclassified as a protocol error', async () => {
+  const originalFetch = globalThis.fetch
+  const bodyStarted = deferred<void>()
+  const generation = new AbortController()
+  globalThis.fetch = async (_url, init) => {
+    return {
+      ok: true,
+      status: 200,
+      json: () => new Promise((_resolve, reject) => {
+        bodyStarted.resolve()
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+      }),
+    } as Response
+  }
+  try {
+    const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
+    await bodyStarted.promise
+    generation.abort()
+    await assert.rejects(attempt, error =>
+      error instanceof RpcTransportError && error.code === 'connection_offline' && error.status === 0)
+    assert.equal(pendingStats().size, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('a body completing after generation abort is never accepted as a live response', async () => {
+  const originalFetch = globalThis.fetch
+  const bodyStarted = deferred<void>()
+  const body = deferred<unknown>()
+  const generation = new AbortController()
+  let rpcId = ''
+  globalThis.fetch = async (_url, init) => {
+    rpcId = JSON.parse(init!.body as string).rpcId
+    return {
+      ok: true,
+      status: 200,
+      json: async () => {
+        bodyStarted.resolve()
+        return body.promise
+      },
+    } as Response
+  }
+  try {
+    const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
+    await bodyStarted.promise
+    generation.abort()
+    body.resolve({ type: 'server-response', rpcId, result: { ok: true, value: {} } })
+    await assert.rejects(attempt, error =>
+      error instanceof RpcTransportError && error.code === 'connection_offline' && error.status === 0)
+    assert.equal(pendingStats().size, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('unknown business error code passes through code/message/details verbatim', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = echoFetch({
