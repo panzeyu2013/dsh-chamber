@@ -20,9 +20,9 @@
  * is the instance's own 127.0.0.1:<P> — exactly what the per-instance reverse
  * proxy (design 03 §3.1) forwards.
  *
- * Port strategy: fixed base 17510, one attempt per port; a failed attempt
- * (process exit, or no TCP listener within 90s, or a failed host.describe
- * probe) advances port+1 and respawns, at most 5 attempts.
+ * Port strategy: fixed base DEFAULT_DSH_START_PORT (17510), one attempt per
+ * port; a failed attempt (process exit, or no TCP listener within 90s, or a
+ * failed host.describe probe) advances port+1 and respawns, at most 5 attempts.
  * Spawn uses detached=true (own process group, design 02 §3.5.5: the host
  * survives a control-plane crash and the orphan reaper reclaims it, §3.4.2);
  * stdout/stderr are forwarded to the control-plane log and the per-port
@@ -61,8 +61,12 @@ import { call, RpcBusinessError } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
 import type { Logger } from './types.ts'
 
-/** First port attempted for a managed dsh host. */
-export const BASE_DHSPORT = 17510
+/**
+ * Default first port attempted for a managed local dsh host (the local
+ * instance start port baseline; spawns advance +1 per retry). Distant from
+ * DEFAULT_CONTROL_PLANE_PORT (17500) so the two surfaces never collide.
+ */
+export const DEFAULT_DSH_START_PORT = 17510
 
 /**
  * Grace window between SIGTERM and SIGKILL when stopping a managed host
@@ -482,7 +486,7 @@ export interface SpawnedHost {
 }
 
 /**
- * Spawn a ready dsh host on a free port from BASE_DHSPORT upward.
+ * Spawn a ready dsh host on a free port from DEFAULT_DSH_START_PORT upward.
  * @param options - {stateDir, dshHome, dshWorkspacePath, logger, patchPath?,
  *   signal}.
  * @returns {child, port, baseUrl, stop()}.
@@ -490,7 +494,7 @@ export interface SpawnedHost {
 export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, patchPath, signal }: SpawnDshOptions): Promise<SpawnedHost> {
   let lastError: unknown
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
-    const port = BASE_DHSPORT + attempt
+    const port = DEFAULT_DSH_START_PORT + attempt
     if (signal?.aborted) throw new Error('spawn aborted')
     // Port pre-check: skip a port that is already taken (a stray process from
     // an earlier run would otherwise make this attempt die with EADDRINUSE).

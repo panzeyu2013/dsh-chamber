@@ -6,10 +6,14 @@
  * (design 03 §2.1). Persisted at <stateDir>/catalog.json on top of
  * json-store.ts — the storage protocol from design 04 §6 / 03 §2.1:
  * synchronous write-through mutations, backup-first atomic writes (.bak →
- * .tmp+fsync → rename), revision + If-Match (409), an explicit recovery state, and
- * "corrupt is never a fake-empty". A schemaVersion-less file is treated as
- * v1 and migrated in place to v2 at load, with the original v1 document
- * preserved as the .bak (the backup-first protocol handles the ordering).
+ * .tmp+fsync → rename), a monotonic revision, an explicit recovery state, and
+ * "corrupt is never a fake-empty". (The store-level If-Match/409 protocol —
+ * json-store mutateIfMatch — is no longer surfaced through the catalog row
+ * APIs; the catalog mutates unconditionally, revision-protected by the
+ * store's serialized write-through transactions.) A schemaVersion-less file
+ * is treated as v1 and migrated in place to v2 at load, with the original v1
+ * document preserved as the .bak (the backup-first protocol handles the
+ * ordering).
  *
  * v4 narrowing (01 §4/§5): projects/bindings/adapters are gone — the dsh
  * frontend runtime owns session business and the desktop main process owns
@@ -30,16 +34,12 @@
  */
 
 import { join } from 'node:path'
-import {
-  createJsonStore,
-  JsonStoreRevisionConflictError,
-} from './json-store.ts'
+import { createJsonStore } from './json-store.ts'
 import type {
   JsonStore,
   JsonStoreDroppedCounts,
   JsonStoreLogger,
   JsonStoreMutator,
-  JsonStoreRecoveryState,
   JsonStoreValidateResult,
 } from './json-store.ts'
 
@@ -95,35 +95,15 @@ export type UpdateConnectionFieldsResult =
   | { row: CatalogConnectionRow | null; updated: boolean }
   | null
 
-/** Diagnostics projection (catalog block of the health/diagnostics surface). */
-export interface CatalogHealth {
-  schemaVersion: number
-  revision: number
-  loaded: boolean
-  lastPersistSucceededAt: number | null
-  recoveryState: JsonStoreRecoveryState
-  dropped: JsonStoreDroppedCounts
-  connectionCount: number
-}
-
 /** The catalog surface returned by createCatalog(). */
 export interface Catalog {
   load(): { connections: CatalogConnectionRow[] }
-  save(): Promise<boolean>
-  listConnections(): CatalogConnectionRow[]
   getConnection(connectionId: string): CatalogConnectionRow | null
   upsertConnection(row: CatalogConnectionRow): CatalogConnectionRow
   updateConnectionFields(
     connectionId: string,
     fields: Record<string, unknown>,
   ): UpdateConnectionFieldsResult
-  removeConnection(connectionId: string): boolean
-  mutate(
-    ifMatchRevision: number | undefined,
-    mutator: (doc: CatalogDocument) => { next: CatalogDocument; changed: boolean },
-  ): Promise<{ next: CatalogDocument; changed: boolean }>
-  getSnapshot(): Promise<CatalogDocument>
-  snapshotHealth(): CatalogHealth
 }
 
 /**
@@ -230,10 +210,8 @@ function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
 /**
  * Create the registry.
  * @param options - {stateDir, logger}.
- * @returns {load(), save(), listConnections(), getConnection(id),
- *   upsertConnection(row), updateConnectionFields(id, fields),
- *   removeConnection(id), mutate(ifMatchRevision, mutator),
- *   getSnapshot(), snapshotHealth()}.
+ * @returns {load(), getConnection(id), upsertConnection(row),
+ *   updateConnectionFields(id, fields)}.
  */
 export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
   const file = join(stateDir, CATALOG_FILE)
@@ -269,11 +247,6 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
     return row === undefined ? null : structuredClone(row)
   }
 
-  /** All connection rows in registration order. */
-  function listConnections(): CatalogConnectionRow[] {
-    return structuredClone(doc().connections)
-  }
-
   /**
    * Insert or replace one connection row while preserving registration order.
    * The input is cloned so callers can never mutate the live document before
@@ -289,24 +262,6 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
       return { next: { ...doc, connections }, changed: true }
     })
     return getConnection(row.connectionId) ?? row
-  }
-
-  /** Remove a connection row; returns whether it existed. */
-  function removeConnection(connectionId: string): boolean {
-    const before = doc().connections.length
-    mutateDoc(doc => {
-      if (!doc.connections.some(row => row.connectionId === connectionId)) {
-        return { next: doc, changed: false }
-      }
-      return {
-        next: {
-          ...doc,
-          connections: doc.connections.filter(row => row.connectionId !== connectionId),
-        },
-        changed: true,
-      }
-    })
-    return doc().connections.length !== before
   }
 
   /**
@@ -350,60 +305,10 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
     return { row: getConnection(connectionId), updated: changed }
   }
 
-  /**
-   * Mutate with an optional If-Match guard: a revision mismatch throws a
-   * typed error tagged code 'catalog_revision_conflict' (message
-   * 'revision conflict') — the 409 contract. Pass undefined to skip the
-   * check (all row methods above do exactly that, preserving current
-   * behavior). The mutator receives the current document and returns
-   * {next, changed}; resolves with {next, changed} after the persist.
-   */
-  function mutate(ifMatchRevision: number | undefined, mutator: CatalogMutator): Promise<CatalogMutateResult> {
-    const attempt = store.mutateIfMatch(ifMatchRevision, mutator as unknown as JsonStoreMutator)
-    const typedAttempt = attempt as unknown as Promise<CatalogMutateResult>
-    return typedAttempt.catch(error => {
-      if (error instanceof JsonStoreRevisionConflictError) {
-        error.code = 'catalog_revision_conflict'
-      }
-      throw error
-    })
-  }
-
-  /** Deep-cloned snapshot of the whole document (never the internal rows). */
-  function getSnapshot(): Promise<CatalogDocument> {
-    return store.getSnapshot() as unknown as Promise<CatalogDocument>
-  }
-
-  /** Persist the current document (compat; the row methods persist already). */
-  function save(): Promise<boolean> {
-    return store.persist()
-  }
-
-  /** Diagnostics projection (catalog block of the health/diagnostics surface). */
-  function snapshotHealth(): CatalogHealth {
-    const status = store.getStatus()
-    const current = doc()
-    return {
-      schemaVersion: current.schemaVersion,
-      revision: current.revision ?? 0,
-      loaded: status.loaded,
-      lastPersistSucceededAt: status.lastPersistSucceededAt,
-      recoveryState: status.recoveryState,
-      dropped: status.dropped,
-      connectionCount: current.connections.length,
-    }
-  }
-
   return {
     load,
-    save,
-    listConnections,
     getConnection,
     upsertConnection,
     updateConnectionFields,
-    removeConnection,
-    mutate,
-    getSnapshot,
-    snapshotHealth,
   }
 }

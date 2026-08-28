@@ -37,6 +37,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+// The loader `insert` row render/parse/conflict logic is single-sourced in
+// cordis-inserts.ts (A2 cross-package protocol single-sourcing) — shared with
+// the desktop remote seed (plugin-sync.ts); only the fail-loud message
+// wording stays here.
+import { hasExactInsert, insertConflict, renderCordisInserts } from './cordis-inserts.ts'
 
 /** The patch overlay file under <stateDir> (design 09 §3.1 方案 A). */
 export const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
@@ -71,203 +76,11 @@ export const HOST_GIT_WORKTREE_INSERT: HostPackageInsert = {
  * The canonical overlay content: a top-level YAML array of loader patch
  * entries — `[{ insert: [{ id: 'client-graph', name: '@dsh-chamber/…' }] }]`
  * — matching @deepseek-ai/dsh-app-boot's loadOverlayPatches format exactly
- * (a `--patch` overlay and a bundle's cordis.patch.yml share the format).
- * `name` resolves through the profile's node_modules anchor, which
- * ensureHostGraphPackage fills.
+ * (a `--patch` overlay and a bundle's cordis.patch.yml share the format;
+ * rendered by the shared renderCordisInserts, single-sourced in
+ * cordis-inserts.ts). `name` resolves through the profile's node_modules
+ * anchor, which ensureHostGraphPackage fills.
  */
-function renderPatchOverlay(inserts: readonly HostPackageInsert[]): string {
-  if (inserts.length === 0) throw new Error('host package seed: overlay requires at least one row')
-  const ids = new Set<string>()
-  const names = new Set<string>()
-  for (const entry of inserts) {
-    if (!/^[a-zA-Z0-9._-]+$/.test(entry.id)
-      || !/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(entry.name)) {
-      throw new Error(`host package seed: invalid overlay row ${JSON.stringify(entry)}`)
-    }
-    if (ids.has(entry.id) || names.has(entry.name)) {
-      throw new Error(`host package seed: duplicate overlay row ${JSON.stringify(entry)}`)
-    }
-    ids.add(entry.id)
-    names.add(entry.name)
-  }
-  return `- insert:\n${inserts.map(entry => `    - id: ${entry.id}\n      name: '${entry.name}'\n`).join('')}`
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-/** Count an exact loader scalar while ignoring YAML comments. */
-function profileFieldCount(existing: string, field: 'id' | 'name', value: string): number {
-  const searchable = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
-  const escaped = escapeRegExp(value)
-  const trailing = field === 'id' ? '[a-zA-Z0-9_.-]' : '[a-zA-Z0-9_.@/-]'
-  const pattern = new RegExp(`\\b${field}:\\s*(?:'${escaped}'|"${escaped}"|${escaped})(?!${trailing})`, 'gu')
-  return searchable.match(pattern)?.length ?? 0
-}
-
-interface ParsedLoaderRow {
-  readonly ids: string[]
-  readonly names: string[]
-}
-
-function yamlScalar(raw: string): string | undefined {
-  const value = raw.trim().replace(/,$/u, '').trim()
-  const single = value.match(/^'([^']*)'$/u)
-  if (single !== null) return single[1]
-  const double = value.match(/^"([^"\\]*)"$/u)
-  if (double !== null) return double[1]
-  return /^[a-zA-Z0-9_.@/-]+$/u.test(value) ? value : undefined
-}
-
-function addLoaderField(row: ParsedLoaderRow, text: string): void {
-  const field = text.trim().match(/^(id|name)\s*:\s*(.*?)\s*$/u)
-  if (field === null) return
-  const value = yamlScalar(field[2]!)
-  if (value === undefined) return
-  const values = field[1] === 'id' ? row.ids : row.names
-  values.push(value)
-}
-
-/** Split a flat flow mapping without treating quoted/nested commas as fields. */
-function splitFlowFields(content: string): string[] {
-  const fields: string[] = []
-  let start = 0
-  let quote: "'" | '"' | undefined
-  let escaped = false
-  let depth = 0
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index]!
-    if (quote !== undefined) {
-      if (quote === '"' && escaped) escaped = false
-      else if (quote === '"' && char === '\\') escaped = true
-      else if (char === quote) quote = undefined
-      continue
-    }
-    if (char === "'" || char === '"') quote = char
-    else if (char === '{' || char === '[') depth += 1
-    else if (char === '}' || char === ']') depth -= 1
-    else if (char === ',' && depth === 0) {
-      fields.push(content.slice(start, index))
-      start = index + 1
-    }
-  }
-  fields.push(content.slice(start))
-  return fields
-}
-
-function flowLoaderRow(mapping: string): ParsedLoaderRow {
-  const row: ParsedLoaderRow = { ids: [], names: [] }
-  const content = mapping.trim().replace(/^\{/u, '').replace(/\}$/u, '')
-  for (const field of splitFlowFields(content)) addLoaderField(row, field)
-  return row
-}
-
-/** Parse direct mapping elements of an inline `insert: [...]` array. */
-function inlineInsertRows(text: string): ParsedLoaderRow[] {
-  const rows: ParsedLoaderRow[] = []
-  const open = text.indexOf('[')
-  if (open < 0) return rows
-  let quote: "'" | '"' | undefined
-  let escaped = false
-  let bracketDepth = 0
-  let braceDepth = 0
-  let mappingStart = -1
-  for (let index = open; index < text.length; index += 1) {
-    const char = text[index]!
-    if (quote !== undefined) {
-      if (quote === '"' && escaped) escaped = false
-      else if (quote === '"' && char === '\\') escaped = true
-      else if (char === quote) quote = undefined
-      continue
-    }
-    if (char === "'" || char === '"') quote = char
-    else if (char === '[') bracketDepth += 1
-    else if (char === ']') {
-      bracketDepth -= 1
-      if (bracketDepth === 0) break
-    } else if (char === '{') {
-      if (bracketDepth === 1 && braceDepth === 0) mappingStart = index
-      braceDepth += 1
-    } else if (char === '}') {
-      braceDepth -= 1
-      if (bracketDepth === 1 && braceDepth === 0 && mappingStart >= 0) {
-        rows.push(flowLoaderRow(text.slice(mappingStart, index + 1)))
-        mappingStart = -1
-      }
-    }
-  }
-  return rows
-}
-
-/**
- * Parse only direct sequence mappings under a block `insert:` key. This
- * deliberately ignores deeper config mappings, and a sibling beginning with
- * `- name:` ends the previous row just as `- id:` does. Inline flow rows are
- * supported only when they are direct elements of that insert array; any
- * target scalar in an unsupported YAML shape is caught by the raw counts and
- * fails loud rather than being mistaken for an exact loader identity.
- */
-function profileLoaderRows(existing: string): ParsedLoaderRow[] {
-  const text = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
-  const lines = text.split('\n')
-  const rows: ParsedLoaderRow[] = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!
-    const insert = line.match(/^(\s*)-\s+insert\s*:\s*(.*)$/u)
-    if (insert === null) continue
-    const insertIndent = insert[1]!.length
-    if (insert[2]!.trimStart().startsWith('[')) {
-      rows.push(...inlineInsertRows(lines.slice(index).join('\n')))
-      continue
-    }
-    if (insert[2]!.trimStart().startsWith('{')) {
-      rows.push(flowLoaderRow(insert[2]!.trim()))
-      continue
-    }
-    let rowIndent: number | undefined
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const candidate = lines[cursor]!
-      if (candidate.trim() === '') continue
-      const indent = candidate.match(/^\s*/u)![0].length
-      if (indent <= insertIndent) break
-      const sequence = candidate.match(/^(\s*)-\s+(.*)$/u)
-      if (sequence === null) continue
-      if (rowIndent === undefined) rowIndent = sequence[1]!.length
-      if (sequence[1]!.length !== rowIndent) continue
-      const row: ParsedLoaderRow = { ids: [], names: [] }
-      const first = sequence[2]!.trim()
-      if (first.startsWith('{') && first.endsWith('}')) {
-        rows.push(flowLoaderRow(first))
-        continue
-      }
-      addLoaderField(row, first)
-      for (let next = cursor + 1; next < lines.length; next += 1) {
-        const continuation = lines[next]!
-        if (continuation.trim() === '') continue
-        const continuationIndent = continuation.match(/^\s*/u)![0].length
-        if (continuationIndent <= rowIndent) break
-        if (continuationIndent === rowIndent + 2) addLoaderField(row, continuation.trim())
-      }
-      rows.push(row)
-    }
-  }
-  return rows
-}
-
-/** Match an id/name pair only when both fields belong to one loader row. */
-function profileHasExactInsert(existing: string, insert: HostPackageInsert): boolean {
-  return profileLoaderRows(existing).some(row => row.ids.length === 1
-    && row.names.length === 1
-    && row.ids[0] === insert.id
-    && row.names[0] === insert.name)
-}
 
 /**
  * Reconcile chamber loader rows with the user's profile patch before writing
@@ -282,27 +95,26 @@ export function missingHostPackageInserts(
 ): HostPackageInsert[] {
   // Reuse the canonical renderer as the single validation point for desired
   // rows (valid syntax plus unique ids/names).
-  renderPatchOverlay(inserts)
+  renderCordisInserts(inserts)
   if (profilePatch === null) return inserts.map(entry => ({ ...entry }))
 
   const missing: HostPackageInsert[] = []
   for (const insert of inserts) {
-    const exact = profileHasExactInsert(profilePatch, insert)
-    const idCount = profileFieldCount(profilePatch, 'id', insert.id)
-    const nameCount = profileFieldCount(profilePatch, 'name', insert.name)
-    if (exact && idCount === 1 && nameCount === 1) continue
-    if (exact || idCount > 1 || nameCount > 1) {
-      throw new Error(
-        `host package seed: profile patch contains duplicate loader identity for id '${insert.id}' or package '${insert.name}'`,
-      )
-    }
-    if (idCount > 0) {
-      throw new Error(`host package seed: loader id '${insert.id}' is already bound to a different package`)
-    }
-    if (nameCount > 0) {
+    const conflict = insertConflict(profilePatch, insert)
+    if (conflict !== null) {
+      if (conflict === 'duplicate-identity') {
+        throw new Error(
+          `host package seed: profile patch contains duplicate loader identity for id '${insert.id}' or package '${insert.name}'`,
+        )
+      }
+      if (conflict === 'id-bound') {
+        throw new Error(`host package seed: loader id '${insert.id}' is already bound to a different package`)
+      }
       throw new Error(`host package seed: package '${insert.name}' is already mounted under a different loader id`)
     }
-    missing.push({ ...insert })
+    // No conflict: the row is either exactly present (reused, omitted from
+    // the overlay) or has no trace at all (still missing).
+    if (!hasExactInsert(profilePatch, insert)) missing.push({ ...insert })
   }
   return missing
 }
@@ -345,7 +157,7 @@ export function buildPatchOverlay(
   inserts: readonly HostPackageInsert[] = [HOST_GRAPH_INSERT],
 ): string {
   const path = join(stateDir, HOST_GRAPH_PATCH_FILENAME)
-  const content = renderPatchOverlay(inserts)
+  const content = renderCordisInserts(inserts)
   if (existsSync(path) && readFileSync(path, 'utf8') === content) {
     return path
   }

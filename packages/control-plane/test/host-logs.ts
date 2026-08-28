@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { hostLogs, readLogTail, logPathFor, createHostLogWriter, DEFAULT_LIMIT, MAX_LIMIT, MAX_LOG_LINES } from '../src/host-logs.ts'
-import { writePidRecord } from '../src/spawn-dsh.ts'
+import { writePidRecord, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { Logger } from '../src/types.ts'
 
 const silentLogger: Logger = { log() {}, warn() {}, error() {} }
@@ -64,7 +64,7 @@ function writeJsonlLines(path: string, count: number, { start = 0, prefix = 'msg
 test('reads the newest limit lines, oldest first, preserving ts/stream', async t => {
   const stateDir = tempDir(t)
   makeLogs(stateDir)
-  const port = 17510
+  const port = DEFAULT_DSH_START_PORT
   writeJsonlLines(logPathFor(stateDir, port), 300)
   writePidRecord(stateDir, 4242, port, process.pid)
 

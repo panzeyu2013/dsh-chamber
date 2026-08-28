@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { killFailedSpawn, readPidRecord, spawnDsh, writePidRecord } from '../src/spawn-dsh.ts'
+import { killFailedSpawn, readPidRecord, spawnDsh, writePidRecord, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -34,7 +34,7 @@ test('killFailedSpawn: SIGKILLs the process group, waits for the exit, then remo
   try {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
     assert.ok(child.pid !== undefined)
-    writePidRecord(stateDir, child.pid!, 17510, process.pid)
+    writePidRecord(stateDir, child.pid!, DEFAULT_DSH_START_PORT, process.pid)
     assert.ok(readPidRecord(stateDir, child.pid!) !== null)
     await killFailedSpawn(stateDir, child)
     assert.notEqual(child.exitCode ?? child.signalCode, null, 'child is dead after killFailedSpawn')

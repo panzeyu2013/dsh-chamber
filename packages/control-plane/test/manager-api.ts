@@ -13,8 +13,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { connect } from 'node:net'
-import { createControlPlane } from '../src/index.ts'
+import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT } from '../src/index.ts'
 import { createApi } from '../src/api.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -26,7 +27,7 @@ function fakeWire() {
     spawns += 1
     return {
       child: { on: () => {}, exitCode: null },
-      port: 17510,
+      port: DEFAULT_DSH_START_PORT,
       stop: async () => {},
     }
   }
@@ -120,14 +121,14 @@ test('health + connections: idempotent create, ready projection, no double spawn
     assert.equal(created.status, 200)
     assert.equal(created.body.connection.id, 'local')
     assert.equal(created.body.connection.status, 'ready')
-    assert.equal(created.body.connection.dshPort, 17510)
+    assert.equal(created.body.connection.dshPort, DEFAULT_DSH_START_PORT)
     assert.equal(created.body.spawned, true)
 
     // Idempotent: a running instance never respawns.
     const again = await fetchJson(holder.base, '/api/connections', postJson({ kind: 'local' }))
     assert.equal(again.status, 200)
     assert.equal(again.body.spawned, false)
-    assert.equal(again.body.connection.dshPort, 17510)
+    assert.equal(again.body.connection.dshPort, DEFAULT_DSH_START_PORT)
     assert.equal(holder.wire.spawns, 1)
 
     const read = await fetchJson(holder.base, '/api/connections')
@@ -388,7 +389,7 @@ test('health-events streams the current snapshot and pushes every transition', a
     assert.equal(starting.dsh.status, 'starting')
     const ready = await nextFrame()
     assert.equal(ready.dsh.status, 'ready')
-    assert.equal(ready.dsh.port, 17510)
+    assert.equal(ready.dsh.port, DEFAULT_DSH_START_PORT)
 
     await reader.cancel()
   } finally {
@@ -409,7 +410,7 @@ test('health-events: write backpressure drains in order and bounded overflow rel
   const req = {
     url: '/api/host/health-events',
     method: 'GET',
-    headers: { host: '127.0.0.1:17500' },
+    headers: { host: `127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}` },
     async *[Symbol.asyncIterator]() {},
     on: reqEvents.on.bind(reqEvents),
     once: reqEvents.once.bind(reqEvents),
@@ -456,7 +457,7 @@ test('health-events: write backpressure drains in order and bounded overflow rel
   assert.equal(writes.length, 2)
   assert.match(writes[1], /"status":"starting"/)
 
-  healthListener!({ status: 'ready', port: 17510, error: null })
+  healthListener!({ status: 'ready', port: DEFAULT_DSH_START_PORT, error: null })
   assert.equal(writes.length, 3, 'a later false write enters backpressure again')
   assert.equal(resEvents.listenerCount('drain'), 1)
   for (let i = 0; i < 32; i += 1) {
@@ -471,7 +472,7 @@ test('health-events: write backpressure drains in order and bounded overflow rel
   reqEvents.emit('close')
   assert.equal(unsubscribeCalls, 1, 'a later close cannot clean up twice')
   assert.equal(endCalls, 1)
-  healthListener!({ status: 'after-teardown', port: 17510, error: null })
+  healthListener!({ status: 'after-teardown', port: DEFAULT_DSH_START_PORT, error: null })
   assert.equal(writes.length, 3, 'a detached listener cannot write again')
 })
 
@@ -539,7 +540,7 @@ test('DELETE during an in-flight start does not resurrect the connection (2026-0
       await new Promise<void>(resolve => { spawnControl.release = resolve })
       return {
         child: { on: () => {}, exitCode: null },
-        port: 17510,
+        port: DEFAULT_DSH_START_PORT,
         stop: async () => { teardownCount += 1 },
       }
     },

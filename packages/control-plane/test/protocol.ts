@@ -13,12 +13,13 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { call, respond, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
+import { call, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
 import { createLocalConnection } from '../src/local-connection.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { seedDshHomeDefaults } from '../src/index.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 
-const HOST = 'http://127.0.0.1:17510'
+const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
 /** A JSON Response body for the mock fetch. */
 function jsonResponse(body: unknown, status = 200): Response {
@@ -159,26 +160,6 @@ test('generation abort settles the in-flight unary with connection_offline', asy
       error instanceof RpcTransportError && error.code === 'connection_offline' && error.status === 0)
     assert.equal(pendingStats().size, 0)
     assert.equal(pendingStats().settled - settledBefore, 1)
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-})
-
-test('respond honors the generation signal (connection_offline)', async () => {
-  const originalFetch = globalThis.fetch
-  const started = deferred()
-  const generation = new AbortController()
-  globalThis.fetch = hangingFetch(() => started.resolve())
-  try {
-    const attempt = respond(HOST, { rpcId: 'server-minted-1', result: { ok: true, value: {} } }, {
-      generationSignal: generation.signal,
-      timeoutMs: null,
-    })
-    await started.promise
-    generation.abort()
-    await assert.rejects(attempt, error =>
-      error instanceof RpcTransportError && error.code === 'connection_offline')
-    assert.equal(pendingStats().size, 0)
   } finally {
     globalThis.fetch = originalFetch
   }

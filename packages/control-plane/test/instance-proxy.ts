@@ -15,6 +15,7 @@ import {
   MAX_REQUEST_BODY_BYTES,
 } from '../src/instance-proxy.ts'
 import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { InstanceProxy, ProxyRequest, ProxyResponse, ProxySocket } from '../src/instance-proxy.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
@@ -152,7 +153,7 @@ function fakeSocket(): ProxySocket & { written: string; writtenBuffers: Buffer[]
 
 /** A default local-instance deps set. */
 function makeProxy(options: { state?: string; port?: number | null } = {}) {
-  const { state = 'ready', port = 17510 } = options
+  const { state = 'ready', port = DEFAULT_DSH_START_PORT } = options
   const upstream = fakeHttpRequest(() => ({
     response: { status: 200, headers: { 'content-type': 'application/json' }, body: '{"ok":true}' },
   }))
@@ -185,7 +186,7 @@ test('parseInstancePath maps local and ssh-<id> and strips the prefix', () => {
 // ---------------------------------------------------------------------------
 
 test('local mapping: prefix stripped, forwarded to the derived baseUrl with the instance Host', async () => {
-  const { proxy, upstream } = makeProxy({ state: 'ready', port: 17510 })
+  const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
   const res = fakeResponse()
   await proxy.handleHttp(
     fakeRequest('/api/i/local/api/session.list?foo=bar', 'POST', { 'content-type': 'application/json' }, '{"rpcId":"r1","method":"session.list"}'),
@@ -194,16 +195,16 @@ test('local mapping: prefix stripped, forwarded to the derived baseUrl with the 
   assert.equal(res.status, 200)
   assert.equal(upstream.calls.length, 1)
   const call = upstream.calls[0]
-  assert.equal(call.url.origin, 'http://127.0.0.1:17510')
+  assert.equal(call.url.origin, `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
   assert.equal(call.url.pathname, '/api/session.list')
   assert.equal(call.url.search, '?foo=bar')
   assert.equal(call.options.method, 'POST')
-  assert.equal((call.options.headers as Record<string, string>).host, '127.0.0.1:17510')
+  assert.equal((call.options.headers as Record<string, string>).host, `127.0.0.1:${DEFAULT_DSH_START_PORT}`)
   assert.equal(call.body.join(''), '{"rpcId":"r1","method":"session.list"}')
 })
 
 test('request convergence strips framing and proxy headers, then emits the accepted body length', async () => {
-  const { proxy, upstream } = makeProxy({ state: 'ready', port: 17510 })
+  const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
   const res = fakeResponse()
   await proxy.handleHttp(
     fakeRequest('/api/i/local/api/upload', 'POST', {
@@ -290,7 +291,7 @@ test('response header whitelist: only content-type/cache-control/x-* ride throug
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
   })
   const res = fakeResponse()
@@ -317,7 +318,7 @@ test('http: a content-encoding upstream header rides through so the browser deco
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
   })
   const res = fakeResponse()
@@ -339,11 +340,11 @@ test('request body over the 300MiB cap answers 413 body_too_large', async () => 
 })
 
 test('upstream connect failure answers 502 upstream_failed (masked)', async () => {
-  const upstream = fakeHttpRequest(() => ({ error: new Error('ECONNREFUSED 127.0.0.1:17510') }))
+  const upstream = fakeHttpRequest(() => ({ error: new Error(`ECONNREFUSED 127.0.0.1:${DEFAULT_DSH_START_PORT}`) }))
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
   })
   const res = fakeResponse()
@@ -351,7 +352,7 @@ test('upstream connect failure answers 502 upstream_failed (masked)', async () =
   assert.equal(res.status, 502)
   assert.equal(JSON.parse(res.body).code, 'upstream_failed')
   // Masked: the upstream host:port never rides the wire.
-  assert.ok(!res.body.includes('17510'))
+  assert.ok(!res.body.includes(String(DEFAULT_DSH_START_PORT)))
 })
 
 // ---------------------------------------------------------------------------
@@ -374,7 +375,7 @@ test('upgrade: only the two downlink stream paths forward; others answer 404', a
   assert.equal(call.url.protocol, 'http:')
   assert.equal(call.url.pathname, '/api/events.mux')
   assert.equal((call.options.headers as Record<string, string>).upgrade, 'websocket')
-  assert.equal((call.options.headers as Record<string, string>).host, '127.0.0.1:17510')
+  assert.equal((call.options.headers as Record<string, string>).host, `127.0.0.1:${DEFAULT_DSH_START_PORT}`)
 
   proxy.registerTransport('ssh:rem', 'http://127.0.0.1:22003')
   const hostSocket = fakeSocket()
@@ -410,7 +411,7 @@ test('upgrade: a non-101 upstream reply rejects explicitly (no unhandled stream)
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
   })
   const socket = fakeSocket()
@@ -452,7 +453,7 @@ test('upgrade splice: an error on the upstream end tears both down exactly once'
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: factory.fn,
   })
   const down = fakeSocket()
@@ -478,7 +479,7 @@ test('upgrade splice: an error on the downstream end tears both down exactly onc
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: factory.fn,
   })
   const down = fakeSocket()
@@ -546,7 +547,7 @@ test('upgrade response forwards only WebSocket handshake headers', async () => {
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
   })
   const socket = fakeSocket()
@@ -566,7 +567,7 @@ test('http: an upstream that never answers headers → explicit 504 upstream_tim
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
     upstreamTimeoutMs: 40,
   })
@@ -595,7 +596,7 @@ test('http: concurrent request budget rejects excess work before opening another
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
     maxConcurrentHttpRequests: 1,
     upstreamTimeoutMs: 30,
@@ -635,7 +636,7 @@ test('http: a stalled client upload releases its body and request budgets with 4
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
     clientBodyIdleTimeoutMs: 30,
   })
@@ -676,7 +677,7 @@ test('http: non-SSE timeout is idle-based and re-arms on every body chunk', asyn
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: fn,
     upstreamTimeoutMs: 35,
   })
@@ -693,7 +694,7 @@ test('upgrade: a WebSocket handshake that never completes → explicit 504 on th
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: upstream.fn,
     upstreamTimeoutMs: 40,
   })
@@ -756,7 +757,7 @@ test('heartbeat: pings the browser only and keeps a ponging stream alive', async
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: factory.fn,
     wsPingIntervalMs: 20,
     wsPingMissesBeforeTeardown: 1,
@@ -794,7 +795,7 @@ test('heartbeat: missed pongs tear the splice down so the browser reconnects', a
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: factory.fn,
     wsPingIntervalMs: 20,
     wsPingMissesBeforeTeardown: 1,
@@ -816,7 +817,7 @@ test('heartbeat: teardown by other means stops the heartbeat (no stray pings aft
   const proxy = createInstanceProxy({
     logger: quietLogger,
     getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
     httpRequest: factory.fn,
     wsPingIntervalMs: 20,
     wsPingMissesBeforeTeardown: 1,

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../src/json-store.ts'
 import { createCatalog, CATALOG_BACKUP_FILE, CATALOG_FILE } from '../src/catalog.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { CatalogConnectionRow } from '../src/catalog.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -74,7 +75,6 @@ test('catalog synchronous row APIs propagate persist failure and keep no phantom
     JsonStorePersistError,
   )
   assert.equal(catalog.getConnection('local'), null)
-  assert.equal(catalog.snapshotHealth().revision, 0)
 })
 
 test('a fresh dir loads the initial document with no recovery state', t => {
@@ -150,7 +150,7 @@ test('legacy schemaVersion-less catalog migrates in place with connections prese
   const dir = tempDir(t)
   const file = join(dir, CATALOG_FILE)
   const v1 = {
-    connections: [{ connectionId: 'local', kind: 'local', status: 'ready', dshPort: 17510 }],
+    connections: [{ connectionId: 'local', kind: 'local', status: 'ready', dshPort: DEFAULT_DSH_START_PORT }],
     // Thin-shell-era projects array: stripped at load (v4 has no project table).
     projects: [{ projectId: 'w1', connectionId: 'local', name: 'W', canonicalPath: '/tmp/w', sessionCount: 2 }],
   }
@@ -167,7 +167,7 @@ test('legacy schemaVersion-less catalog migrates in place with connections prese
   const backup = readJson(join(dir, CATALOG_BACKUP_FILE))
   assert.equal(backup.schemaVersion, undefined)
   assert.deepEqual(backup.connections, v1.connections)
-  assert.equal(catalog.snapshotHealth().recoveryState, null)
+  assert.equal(catalog.getConnection('local')?.status, 'ready')
 })
 
 test('invalid rows are dropped with counts surfaced in the recovery state', t => {
@@ -188,12 +188,13 @@ test('invalid rows are dropped with counts surfaced in the recovery state', t =>
   }, undefined, 2)}\n`)
   const catalog = createCatalog({ stateDir: dir, logger: silentLogger })
   catalog.load()
-  assert.equal(catalog.listConnections().length, 1)
-  assert.equal(catalog.listConnections()[0].connectionId, 'local')
-  const health = catalog.snapshotHealth()
-  assert.deepEqual(health.dropped, { connections: 4, projects: 0 })
-  assert.equal(health.recoveryState!.source, 'main')
-  assert.equal(health.recoveryState!.dropped.connections, 4)
+  // The surviving valid row is readable; the dropped rows are gone from the
+  // in-memory document (load-time drop counts live in the store's recovery
+  // status; the file is only rewritten by the next write-through mutation).
+  assert.equal(catalog.getConnection('local')?.connectionId, 'local')
+  assert.equal(catalog.getConnection('local')?.status, 'ready')
+  assert.equal(catalog.getConnection('ssh-1'), null)
+  assert.equal(catalog.getConnection(''), null)
 })
 
 test('write-through transactions: 50 parallel callers do not interleave or lose updates', async t => {
@@ -217,43 +218,26 @@ test('catalog rows keep the wire shapes across persist and reload', async t => {
   const row: CatalogConnectionRow = { connectionId: 'local', kind: 'local', status: 'starting', dshPort: null }
   catalog.upsertConnection(row)
   row.status = 'ready'
-  row.dshPort = 17510
+  row.dshPort = DEFAULT_DSH_START_PORT
   catalog.upsertConnection(row)
-  assert.equal(catalog.removeConnection('missing'), false)
-  await catalog.save()
   const reopened = createCatalog({ stateDir: dir, logger: silentLogger })
   const { connections } = reopened.load()
-  assert.deepEqual(connections, [{ connectionId: 'local', kind: 'local', status: 'ready', dshPort: 17510 }])
+  assert.deepEqual(connections, [{ connectionId: 'local', kind: 'local', status: 'ready', dshPort: DEFAULT_DSH_START_PORT }])
   assert.equal(readJson(join(dir, CATALOG_FILE)).revision, 2)
-})
-
-test('catalog mutate surfaces the If-Match conflict as catalog_revision_conflict', async t => {
-  const dir = tempDir(t)
-  const catalog = createCatalog({ stateDir: dir, logger: silentLogger })
-  catalog.load()
-  catalog.upsertConnection({ connectionId: 'local', kind: 'local', status: 'starting' })
-  await catalog.mutate(undefined, (doc: any) => ({ next: { ...doc, connections: [...doc.connections] }, changed: true }))
-  await assert.rejects(
-    () => catalog.mutate(0, (doc: any) => ({ next: doc, changed: false })),
-    error => error instanceof JsonStoreRevisionConflictError
-      && error.code === 'catalog_revision_conflict'
-      && error.message === 'revision conflict',
-  )
 })
 
 test('updateConnectionFields edits label/accentColor only, leaves the rest untouched', async t => {
   const dir = tempDir(t)
   const catalog = createCatalog({ stateDir: dir, logger: silentLogger })
   catalog.load()
-  catalog.upsertConnection({ connectionId: 'local', kind: 'local', status: 'ready', label: 'old', dshPort: 17510 })
+  catalog.upsertConnection({ connectionId: 'local', kind: 'local', status: 'ready', label: 'old', dshPort: DEFAULT_DSH_START_PORT })
   const outcome = catalog.updateConnectionFields('local', { label: 'Local dsh', accentColor: '#1a1a2e' })
   assert.equal(outcome?.updated, true)
   const row = catalog.getConnection('local')!
   assert.equal(row.label, 'Local dsh')
   assert.equal(row.accentColor, '#1a1a2e')
   assert.equal(row.status, 'ready')
-  assert.equal(row.dshPort, 17510)
-  await catalog.save()
+  assert.equal(row.dshPort, DEFAULT_DSH_START_PORT)
   const reopened = createCatalog({ stateDir: dir, logger: silentLogger })
   reopened.load()
   assert.equal(reopened.getConnection('local')!.accentColor, '#1a1a2e')

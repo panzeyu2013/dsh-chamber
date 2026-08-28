@@ -7,7 +7,9 @@
  * shell, missing-asset 404, q-value-aware Accept-Encoding, and /health
  * untouched — against a real HTTP server on an ephemeral port with a
  * fixture dist in a temp dir (never the real dist). The dsh host is never
- * spawned (fake spawn seam, same as manager-api.ts).
+ * spawned (fake spawn seam, same as manager-api.ts). The module under test
+ * is src/static-serving.ts (createStaticServing), exercised both directly
+ * with fake req/res doubles and through the assembled plane.
  *
  * Static assertions use raw-socket requests: undici's fetch transparently
  * decompresses gzip bodies and may add its own accept-encoding, which would
@@ -22,6 +24,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { connect } from 'node:net'
 import { createControlPlane } from '../src/index.ts'
+import { createStaticServing } from '../src/static-serving.ts'
+import type { ApiRequest, ApiResponse } from '../src/api.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -33,7 +38,7 @@ function fakeWire() {
     spawns += 1
     return {
       child: { on: () => {}, exitCode: null },
-      port: 17510,
+      port: DEFAULT_DSH_START_PORT,
       stop: async () => {},
     }
   }
@@ -336,5 +341,131 @@ test('static: a `//`-leading request line answers 400 and never crashes the serv
     assert.equal(health.status, 200)
   } finally {
     await cleanup(holder)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// createStaticServing direct tests (fake req/res doubles — no HTTP server)
+// ---------------------------------------------------------------------------
+
+/** Minimal ApiResponse double capturing status/headers/body. */
+class FakeRes {
+  headersSent = false
+  writableEnded = false
+  status = 0
+  headers: Record<string, string> = {}
+  body: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+  _cspNonce?: string
+  _corsHeaders?: Record<string, string>
+  writeHead(status: number, headers?: Record<string, string | number | string[] | undefined>) {
+    this.status = status
+    this.headers = {}
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      this.headers[name.toLowerCase()] = String(value)
+    }
+  }
+  end(payload?: unknown) {
+    if (payload === undefined) this.body = Buffer.alloc(0)
+    else if (typeof payload === 'string') this.body = Buffer.from(payload, 'utf8')
+    else this.body = Buffer.from(payload as Uint8Array)
+  }
+  on() { return this }
+  once() { return this }
+  removeListener() { return this }
+  write() { return true }
+  setHeader() { return undefined }
+  destroy() { return undefined }
+}
+
+/** Minimal ApiRequest double; serve() only reads headers. */
+function fakeReq(headers: Record<string, string> = {}): ApiRequest {
+  return { headers } as unknown as ApiRequest
+}
+
+/** Serve one path through the module directly. */
+function serveOnce(
+  serving: ReturnType<typeof createStaticServing>,
+  req: ApiRequest,
+  pathname: string,
+): FakeRes {
+  const res = new FakeRes() as unknown as ApiResponse
+  res._cspNonce = 'dsh-nonce-test'
+  serving.serve(req, res, pathname)
+  return res as unknown as FakeRes
+}
+
+test('static module: gzip negotiation is q-value aware (gzip;q=0 refuses, multi-token accepts)', () => {
+  const fixture = fixtureDist()
+  try {
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+    const refused = serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip;q=0, deflate' }), fixture.assetUrl)
+    assert.equal(refused.status, 200)
+    assert.equal(refused.headers['content-encoding'], undefined)
+    assert.equal(refused.headers['vary'], 'accept-encoding')
+    assert.deepEqual(refused.body, fixture.asset)
+
+    const accepted = serveOnce(serving, fakeReq({ 'accept-encoding': 'deflate, gzip, br' }), fixture.assetUrl)
+    assert.equal(accepted.status, 200)
+    assert.equal(accepted.headers['content-encoding'], 'gzip')
+    assert.deepEqual(gunzipSync(accepted.body), fixture.asset)
+
+    const noHeader = serveOnce(serving, fakeReq(), fixture.assetUrl)
+    assert.equal(noHeader.headers['content-encoding'], undefined)
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+test('static module: MIME resolution, SPA fallback, missing-asset 404 and path-escape 404', () => {
+  const fixture = fixtureDist()
+  try {
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+
+    // Unknown extension → octet-stream; known extension → its MIME type.
+    writeFileSync(join(fixture.dir, 'app.xyz'), 'data')
+    const unknown = serveOnce(serving, fakeReq(), '/app.xyz')
+    assert.equal(unknown.status, 200)
+    assert.equal(unknown.headers['content-type'], 'application/octet-stream')
+    const asset = serveOnce(serving, fakeReq(), fixture.assetUrl)
+    assert.equal(asset.headers['content-type'], 'text/javascript; charset=utf-8')
+
+    // SPA fallback serves the injected shell for an unknown HTML-ish path.
+    const fallback = serveOnce(serving, fakeReq(), '/some/unknown/route')
+    assert.equal(fallback.status, 200)
+    assert.match(fallback.headers['content-type'] ?? '', /text\/html/)
+    assert.ok(fallback.body.toString('utf8').includes('window.__DSH_BOOT__='))
+
+    // Missing assets answer JSON 404, never the shell.
+    const missing = serveOnce(serving, fakeReq(), '/assets/missing-xyz.js')
+    assert.equal(missing.status, 404)
+    assert.match(missing.headers['content-type'] ?? '', /application\/json/)
+    assert.ok(missing.body.toString('utf8').includes('not_found'))
+
+    // A traversal path is rejected (never served from outside webDistDir).
+    const escape = serveOnce(serving, fakeReq(), '/../outside.txt')
+    assert.equal(escape.status, 404)
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+test('static module: __DSH_BOOT__ injection requires the CSP nonce (missing → throw)', () => {
+  const fixture = fixtureDist()
+  try {
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+    const res = new FakeRes() as unknown as ApiResponse
+    res._cspNonce = 'dsh-nonce-test'
+    serving.serve(fakeReq(), res, '/')
+    const text = (res as unknown as FakeRes).body.toString('utf8')
+    assert.match(text, /<script nonce="dsh-nonce-test">window\.__DSH_BOOT__=/)
+    assert.ok(text.includes('</script></head>'), 'the injected script lands before </head>')
+
+    const noNonce = new FakeRes() as unknown as ApiResponse
+    assert.throws(
+      () => serving.serve(fakeReq(), noNonce, '/'),
+      /missing CSP nonce for static response/,
+    )
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
   }
 })

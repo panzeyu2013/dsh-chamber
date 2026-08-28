@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createLocalConnection } from '../src/local-connection.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { CatalogLike, DescribeCapabilitiesFn, SpawnedDsh } from '../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -47,7 +48,7 @@ test('H2: a health-probe failure landing during stop() never resurrects the conn
   const probeGate = new Promise<never>((_resolve, reject) => { rejectProbe = reject })
   const spawnDsh = async (): Promise<SpawnedDsh> => {
     spawns += 1
-    return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
+    return { child: { on: () => {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
   }
   const describeCapabilities: DescribeCapabilitiesFn = async (_baseUrl, options) => {
     // Honor the generation abort at entry; an already-in-flight probe stays
@@ -130,7 +131,7 @@ test('M13: a catalog persist failure never blocks the state machine', async () =
     },
   }
   const spawnDsh = async (): Promise<SpawnedDsh> => {
-    return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
+    return { child: { on: () => {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
   }
   const local = createLocalConnection({
     stateDir,
