@@ -4,12 +4,11 @@
  * `node <file>.ts` child with inherited stdio (the same semantics as the
  * former inline CI chain: a failure in one file stops the run non-zero).
  *
- * `reaper.ts` joins the set once it exists (agent-cp's orphan-reaper unit
- * test); it is skipped with a notice while absent so the script stays
- * runnable in the interim.
+ * Every listed file is required: silently skipping a deleted/renamed test
+ * would make the aggregate command pass with less coverage than AGENTS.md and
+ * CI claim.
  */
 
-import { existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,15 +34,11 @@ const FILES = [
   // control-plane-module.ts).
   'rpc-envelope.ts',
   'cordis-inserts.ts',
-  'reaper.ts', // agent-cp: joins the set once the orphan-reaper test exists
+  'reaper.ts',
 ]
 
 for (const file of FILES) {
   const path = join(TEST_DIR, file)
-  if (!existsSync(path)) {
-    console.log(`[test:control-plane] skip ${file} (not present)`)
-    continue
-  }
   const result = spawnSync(process.execPath, [path], { stdio: 'inherit' })
   if (result.status !== 0) {
     console.error(`[test:control-plane] ${file} failed (exit ${result.status ?? `signal ${result.signal}`})`)
