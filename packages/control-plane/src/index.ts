@@ -37,7 +37,11 @@ import { createLocalConnection } from './local-connection.ts'
 import type { LocalConnectionDeps } from './local-connection.ts'
 import { createApi } from './api.ts'
 import { runReaper } from './reaper.ts'
-import { createInstanceProxy, type InstanceProxy } from './instance-proxy.ts'
+import {
+  createInstanceProxy,
+  type InstanceProxy,
+  type InstanceTransportRegistrationOptions,
+} from './instance-proxy.ts'
 import { ensureInstanceId } from './instance-id.ts'
 import { hostLogs } from './host-logs.ts'
 import {
@@ -215,9 +219,10 @@ export interface PlaneHandle {
   /** The managed local dsh host's port, or null when not ready (design 17
    * §2.1 改动①: exposed for the gateway-proxy's single-target resolution). */
   getLocalDshPort(): number | null
-  /** `opts.tls.spkiPin` (S23) rides through to the instance proxy's
-   * registerTransport: the optional gateway-only https SPKI certificate pin. */
-  registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: { tls?: { spkiPin?: string }; authority?: string }): void
+  /** The target kind lives in connectionId; `opts.transport` carries the
+   * independent SSH/HTTP dimension. TLS pin and Host authority remain
+   * gateway-only bounded capabilities. */
+  registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
   unregisterInstanceTransport(connectionId: string): void
   /**
    * Pre-start the local instance (desktop pre-spawn, 05 §7.5): idempotent —
@@ -1083,13 +1088,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     /**
      * Register a remote instance transport (design 05 §3.3 + design 17 §9.3):
      * the desktop main process reports a ready target as connectionId
-     * `dsh:<id>` (ssh tunnel, legacy `ssh:<id>` spelling accepted) or
-     * `gateway:<id>` (ssh tunnel or http(s) direct origin) — the
+     * `dsh:<id>` or `gateway:<id>` plus `opts.transport` (legacy
+     * `ssh:<id>` spelling remains SSH-only) — the
      * /api/i/<kind>-<id>/* proxy target. `extraHeaders`/`opts.tls.spkiPin`
      * ride through to the instance proxy's validated gateway record. Tunnel
      * URLs never leave the main process / proxy.
      */
-    registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: { tls?: { spkiPin?: string }; authority?: string }) {
+    registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions) {
       instanceProxy.registerTransport(connectionId, baseUrl, extraHeaders, opts)
     },
 

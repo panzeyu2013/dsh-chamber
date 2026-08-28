@@ -24,9 +24,13 @@ const prepare = between(
   '      - name: Create GitHub Release (draft)',
 )
 const create = between('      - name: Create GitHub Release (draft)', '\n  build-gateway:')
+const validation = between('\n  validation:', '\n  build-gateway:')
 
 assert.match(tagBinding, /git rev-parse "\$\{TAG\}\^\{commit\}"/)
 assert.match(tagBinding, /TAG_SHA.*RELEASE_SHA/)
+assert.match(workflow, /node scripts\/dev\/release-preflight\.mjs "\$VERSION" --versions-only/)
+assert.doesNotMatch(workflow, /for PKG in/)
+assert.doesNotMatch(workflow, /all \d+ chamber packages/i)
 assert.match(workflow, /release version must be canonical SemVer/)
 assert.doesNotMatch(workflow, /VERSION="\$\{\{[^\n]*outputs\.version/)
 assert.match(workflow, /group: release-publish/)
@@ -48,6 +52,21 @@ assert.match(workflow, /npm publish "\$TGZ" --access public --tag "\$CHANNEL"/)
 assert.match(workflow, /npm dist-tag add/)
 assert.match(workflow, /refusing to move npm \$\{CHANNEL\} backward/)
 assert.match(workflow, /make_latest:/)
+for (const requiredGate of [
+  'pnpm run typecheck:gateway',
+  'pnpm run typecheck:runtime',
+  'pnpm run test:gateway',
+  'pnpm run test:runtime',
+  'pnpm run test:release-workflow',
+  'pnpm run test:cli',
+  'node packages/control-plane/test/gateway-transport.test.ts',
+  'node packages/control-plane/test/restart-local.ts',
+]) {
+  assert.ok(
+    validation.includes(requiredGate),
+    `release validation must include the CI gate: ${requiredGate}`,
+  )
+}
 assert.equal(releaseChannel('1.2.3'), 'latest')
 assert.equal(releaseChannel('1.2.3-beta.1'), 'beta')
 assert.equal(compareReleaseVersions('1.2.3-beta.2', '1.2.3-beta.10'), -1)

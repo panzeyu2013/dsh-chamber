@@ -438,8 +438,9 @@ WantedBy=multi-user.target
 
 - **起停/状态**：经桌面 transport-manager（ssh provider）的 systemd exec IPC
   （`desktop_ssh_start_service/stop_service/is_active`，serviceName 白名单
-  `^[a-zA-Z0-9_.-]+$`）驱动（03 §2.2）——控制面不直连远程进程，只经隧道
-  消费其 API 面；
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`，首字符必须为字母或数字）驱动（03 §2.2）；
+  provider 固定以参数数组执行 `systemctl <action> -- <serviceName>`，`--` 明确终止
+  option 解析——控制面不直连远程进程，只经隧道消费其 API 面；
 - **停止**：`systemctl stop` → SIGTERM → dsh profile-boot 优雅退出（exit 0）；
 - **崩溃**：`Restart=on-failure` + `RestartSec=3` 拉起；用户侧单元示例与
   README「服务器端部署」一节一致。常见崩溃原因：systemd 默认 PATH 不含 nvm

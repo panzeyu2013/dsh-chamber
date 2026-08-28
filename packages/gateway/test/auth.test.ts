@@ -6,6 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHmac } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +21,13 @@ function tempStore() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-auth-'))
   const store = createGatewayStore(dir, silentLogger)
   return { dir, store, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+}
+
+function signSessionPayload(secret: string, payloadJson: string): string {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+  const body = Buffer.from(payloadJson).toString('base64url')
+  const signature = createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')
+  return `${header}.${body}.${signature}`
 }
 
 test('token provider accepts a matching bearer (hash-stored)', async () => {
@@ -58,6 +66,41 @@ test('token provider rejects a missing header', async () => {
     const auth = createAuth({ kind: 'token', token: TOKEN }, store)
     const principal = await auth.verify({ headers: {}, socketAddr: '' })
     assert.equal(principal, null)
+  } finally { cleanup() }
+})
+
+test('token provider enforces the inbound Bearer bounds before persisted-hash or scrypt work', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
+    const originalGetTokenHash = store.getTokenHash.bind(store)
+    let hashReads = 0
+    store.getTokenHash = () => {
+      hashReads += 1
+      return originalGetTokenHash()
+    }
+
+    const malformed: Array<string | string[]> = [
+      `Bearer ${'x'.repeat(31)}`,
+      `Bearer ${'x'.repeat(4097)}`,
+      `Bearer ${'x'.repeat(31)}\x7f`,
+      `Bearer\t${TOKEN}`,
+      [`Bearer ${TOKEN}`, 'Bearer attacker-controlled-second-value'],
+    ]
+    for (const authorization of malformed) {
+      assert.equal(await auth.verify({ headers: { authorization }, socketAddr: '' }), null)
+    }
+    assert.equal(hashReads, 0, 'malformed wire credentials must not reach the verifier/scrypt path')
+  } finally { cleanup() }
+})
+
+test('token provider accepts the exact 4096-character inbound maximum', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const token = 'x'.repeat(4096)
+    const auth = createAuth({ kind: 'token', token }, store)
+    const principal = await auth.verify({ headers: { authorization: `Bearer ${token}` }, socketAddr: '' })
+    assert.equal(principal?.kind, 'token')
   } finally { cleanup() }
 })
 
@@ -107,6 +150,43 @@ test('password: revoke rotates the secret and invalidates the session', async ()
   } finally { cleanup() }
 })
 
+test('password: crafted signed sessions require an integral finite exp inside the 12h horizon', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
+    const now = Math.floor(Date.now() / 1000)
+    const invalidPayloads: Array<[string, string]> = [
+      ['missing exp', JSON.stringify({ sub: 'user', iat: now })],
+      ['string exp', JSON.stringify({ sub: 'user', iat: now, exp: String(now + 60) })],
+      ['null exp', JSON.stringify({ sub: 'user', iat: now, exp: null })],
+      ['non-finite exp', `{"sub":"user","iat":${now},"exp":1e400}`],
+      ['fractional exp', JSON.stringify({ sub: 'user', iat: now, exp: now + 60.5 })],
+      ['unsafe exp', JSON.stringify({ sub: 'user', iat: now, exp: Number.MAX_SAFE_INTEGER + 1 })],
+      ['expired exp', JSON.stringify({ sub: 'user', iat: now, exp: now })],
+      ['negative exp', JSON.stringify({ sub: 'user', iat: now, exp: -1 })],
+      ['beyond 12h exp', JSON.stringify({ sub: 'user', iat: now, exp: now + 12 * 3600 + 1 })],
+    ]
+    for (const [label, payload] of invalidPayloads) {
+      const jwt = signSessionPayload(store.getJwtSecret(), payload)
+      const principal = await auth.verify({
+        headers: { cookie: `dsh_gateway_session=${jwt}` },
+        socketAddr: '',
+      })
+      assert.equal(principal, null, label)
+    }
+
+    const boundaryJwt = signSessionPayload(store.getJwtSecret(), JSON.stringify({
+      sub: 'user',
+      iat: now,
+      exp: now + 12 * 3600,
+    }))
+    assert.equal((await auth.verify({
+      headers: { cookie: `dsh_gateway_session=${boundaryJwt}` },
+      socketAddr: '',
+    }))?.kind, 'password')
+  } finally { cleanup() }
+})
+
 test('password: changing configuration across restart invalidates old cookies', async () => {
   const { dir, store, cleanup } = tempStore()
   try {
@@ -137,6 +217,46 @@ test('password+token composition accepts both bearer and cookie principals', asy
     assert.ok(cookie !== undefined)
     const browser = await auth.verify({ headers: { cookie: `dsh_gateway_session=${cookie}` }, socketAddr: '203.0.113.8' })
     assert.equal(browser?.kind, 'password')
+  } finally { cleanup() }
+})
+
+test('password+token composition preserves a valid cookie when the bearer verifier is saturated', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'password+token', password: PASSWORD, token: TOKEN }, store)
+    const login = await auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8' })
+    const cookie = /dsh_gateway_session=([^;]+)/.exec(login.setCookie ?? '')?.[1]
+    assert.ok(cookie !== undefined)
+
+    const wrongToken = `${TOKEN.slice(0, -1)}${TOKEN.endsWith('x') ? 'y' : 'x'}`
+    // The provider owns a 2-active + 32-queued scrypt gate. Invoke all 34
+    // blockers before yielding so the following request deterministically
+    // reaches auth_busy without timing assumptions about scrypt completion.
+    const blockers = Array.from({ length: 34 }, () => auth.verify({
+      headers: { authorization: `Bearer ${wrongToken}` },
+      socketAddr: '203.0.113.9',
+    }))
+
+    const cookieFallback = await auth.verify({
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        cookie: `dsh_gateway_session=${cookie}`,
+      },
+      socketAddr: '203.0.113.8',
+    })
+    assert.equal(cookieFallback?.kind, 'password')
+
+    await assert.rejects(
+      auth.verify({
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          cookie: 'dsh_gateway_session=invalid',
+        },
+        socketAddr: '203.0.113.8',
+      }),
+      (error: Error & { code?: string }) => error.code === 'auth_busy',
+    )
+    await Promise.all(blockers)
   } finally { cleanup() }
 })
 

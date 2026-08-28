@@ -1,7 +1,8 @@
 /**
  * gateway-provider unit tests (design 17 §2/§7/§12): the write-only
- * credential store (schemaVersion 2 `gateway-secrets.json`, 0600 atomic
- * mirror, safeStorage-adapter encrypt/decrypt + plaintext fallback, v1→v2
+ * credential store (bound schemaVersion 3 `gateway-secrets.json`, 0600 atomic
+ * mirror, safeStorage-adapter encrypt/decrypt + plaintext fallback, legacy
+ * non-empty fail-closed preservation,
  * migration, corrupt-preserve fail-loud, never readable by the renderer),
  * token/password validation, host pattern, the HTTP failure classification
  * that drives terminal-vs-transient connect verdicts, the v2 spec
@@ -12,7 +13,7 @@
  * session hooks: login → probe WITH the Cookie, the cached-session fast path
  * (no re-login on reconnect), probe-401 → invalidate + ONE automatic re-login
  * (§9.3) with terminal password-refused only after the fresh session is
- * refused too, token priority (Bearer alone when both exist), and the
+ * refused too, independent Bearer+Cookie coexistence/fallback, and the
  * inert default (no hooks → no credential header).
  *
  * AGENTS.md listed gateway-provider as covered by test:desktop for a long
@@ -34,15 +35,16 @@ import { createServer } from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { createHash, X509Certificate } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  configureGatewaySecretStore,
+  configureGatewaySecretStore as configureGatewaySecretStoreRaw,
   configureGatewaySessionProvider,
-  configureGatewayTokenStore,
+  configureGatewayTokenStore as configureGatewayTokenStoreRaw,
   DEFAULT_GATEWAY_HTTP_PORT,
   DEFAULT_GATEWAY_PORT,
+  GATEWAY_RUNTIME_IDENTITY,
   GATEWAY_HOST_PATTERN,
   gatewayHttpFailureIsTerminal,
   gatewayPasswordValidationError,
@@ -50,6 +52,7 @@ import {
   gatewaySecretStorageMode,
   gatewayTokenValidationError,
   getGatewayPassword,
+  getGatewaySessionHooks,
   getGatewayToken,
   setGatewayPassword,
   setGatewayToken,
@@ -58,9 +61,64 @@ import {
 import type { SecretCryptoAdapter, GatewaySessionProviderHooks } from './gateway-provider.ts'
 import type { GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
 import { createGatewaySessionManager } from './gateway-session.ts'
+import { gatewayCredentialBinding } from './credential-binding.ts'
+import type { TransportInstanceSpec } from './transport-provider.ts'
 
 const TOKEN = '0123456789abcdef0123456789abcdef'
 const PASSWORD = 'gateway-login-password-123'
+const UNICODE_PASSWORD = '正确的网关密码-安全🔐-2026'
+const GATEWAY_RUNTIME_STATUS = { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'stopped' }
+
+function completeTestSessionHooks(partial: GatewaySessionProviderHooks): GatewaySessionProviderHooks {
+  if (partial.ensureSession === undefined) throw new TypeError('test session hooks require ensureSession')
+  let generation = 0
+  let proof: import('./gateway-session.ts').GatewayRegistrationAuthProof | null = null
+  let cached: string | null = null
+  return {
+    ensureSession: async (origin, password) => {
+      const result = await partial.ensureSession!(origin, password)
+      if (result.ok) cached = result.cookie
+      return result
+    },
+    generation: partial.generation ?? (() => generation),
+    registrationAuthProof: partial.registrationAuthProof ?? (() => proof),
+    setRegistrationAuthProof: partial.setRegistrationAuthProof ?? ((_origin, next) => { proof = next }),
+    cachedCookie: origin => partial.cachedCookie?.(origin) ?? cached,
+    invalidate: origin => {
+      generation += 1
+      proof = null
+      cached = null
+      partial.invalidate?.(origin)
+    },
+  }
+}
+
+function storedGatewaySpec(id: string): TransportInstanceSpec {
+  return {
+    id, label: id, kind: 'gateway', transport: 'http', host: 'gw.example.com',
+    user: null, sshPort: null, remotePort: 443, serviceName: null,
+    remoteDshHome: null, insecureHttp: false,
+  }
+}
+
+function configureGatewaySecretStore(file: string | null, crypto?: SecretCryptoAdapter): string | null {
+  return configureGatewaySecretStoreRaw(file, crypto, id => storedGatewaySpec(id))
+}
+
+function configureGatewayTokenStore(file: string | null): string | null {
+  return configureGatewayTokenStoreRaw(file, id => storedGatewaySpec(id))
+}
+
+function boundPlaintextFile(tokens: Record<string, string>, passwords: Record<string, string>) {
+  return {
+    schemaVersion: 3,
+    storage: 'plaintext',
+    tokens,
+    passwords,
+    tokenBindings: Object.fromEntries(Object.keys(tokens).map(id => [id, gatewayCredentialBinding(storedGatewaySpec(id))])),
+    passwordBindings: Object.fromEntries(Object.keys(passwords).map(id => [id, gatewayCredentialBinding(storedGatewaySpec(id))])),
+  }
+}
 
 test('the gateway secrets store persists to and reloads from the mirror file (0600, atomic)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-'))
@@ -70,17 +128,22 @@ test('the gateway secrets store persists to and reloads from the mirror file (06
     setGatewayToken('t-token-1', TOKEN)
     setGatewayToken('t-token-2', `${TOKEN}2`)
     setGatewayPassword('t-pw-1', PASSWORD)
+    setGatewayPassword('t-pw-unicode', UNICODE_PASSWORD)
     assert.ok(existsSync(file), 'file is written on the first set')
     assert.equal(statSync(file).mode & 0o777, 0o600, 'the secrets file is 0600')
     const stored = JSON.parse(readFileSync(file, 'utf8'))
-    assert.equal(stored.schemaVersion, 2)
+    assert.equal(stored.schemaVersion, 3)
+    assert.equal(stored.storage, 'plaintext', 'the fallback is explicitly tagged; readers never guess from credential characters')
     assert.equal(stored.tokens['t-token-1'], TOKEN, 'default crypto = plaintext mirror (旧测试语义)')
     assert.equal(stored.passwords['t-pw-1'], PASSWORD)
+    assert.equal(stored.passwords['t-pw-unicode'], UNICODE_PASSWORD, 'Unicode survives JSON persistence unchanged')
+    assert.equal(stored.passwordBindings['t-pw-unicode'], gatewayCredentialBinding(storedGatewaySpec('t-pw-unicode')))
     // The store reloads the file into memory.
     assert.equal(configureGatewaySecretStore(file), null)
     assert.equal(getGatewayToken('t-token-1'), TOKEN)
     assert.equal(getGatewayToken('t-token-2'), `${TOKEN}2`)
     assert.equal(getGatewayPassword('t-pw-1'), PASSWORD)
+    assert.equal(getGatewayPassword('t-pw-unicode'), UNICODE_PASSWORD, 'Unicode password round-trips through reload')
     assert.equal(getGatewayPassword('t-token-1'), null, 'token and password are independent entries')
     // An explicit password clear removes ONLY the password entry (design 17
     // §2.3: independent credentials — the token survives).
@@ -90,9 +153,9 @@ test('the gateway secrets store persists to and reloads from the mirror file (06
     const afterPwClear = JSON.parse(readFileSync(file, 'utf8'))
     assert.equal(afterPwClear.passwords['t-pw-1'], undefined)
     assert.equal(afterPwClear.tokens['t-token-1'], TOKEN)
-    // The whole-instance scrub is the EXPLICIT dual-clear primitive
-    // (setInstanceSecrets — main.ts clearStoredSecrets, design 17 §12 删除实
-    // 例/显式清除即删); the per-dimension setters stay independent (§2.3).
+    // The whole-instance scrub is the explicit dual-clear primitive used by
+    // the main-owned save/delete transactions; per-dimension clear actions
+    // remain independent (§2.3).
     setGatewayPassword('t-scrub', PASSWORD)
     assert.equal(getGatewayPassword('t-scrub'), PASSWORD)
     setInstanceSecrets('t-scrub', null, null)
@@ -107,7 +170,64 @@ test('the gateway secrets store persists to and reloads from the mirror file (06
     setInstanceSecrets('t-token-1', null, null)
     setInstanceSecrets('t-token-2', null, null)
     setInstanceSecrets('t-pw-1', null, null)
+    setInstanceSecrets('t-pw-unicode', null, null)
     setInstanceSecrets('t-scrub', null, null)
+    configureGatewaySecretStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('gateway bindings fail closed across the secret-fsync → registry-fsync crash window and survive transport-only switches', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-binding-'))
+  const file = join(dir, 'gateway-secrets.json')
+  const oldSpec = storedGatewaySpec('crash-gateway')
+  const newSpec = { ...oldSpec, host: 'new-gateway.example.com', remotePort: 8443 }
+  let current: TransportInstanceSpec | null = oldSpec
+  try {
+    configureGatewaySecretStoreRaw(file, undefined, () => current)
+    setInstanceSecrets(oldSpec.id, TOKEN, UNICODE_PASSWORD, newSpec)
+    assert.equal(getGatewayToken(oldSpec.id), null, 'new-target token is hidden under old registry metadata')
+    assert.equal(getGatewayPassword(oldSpec.id), null, 'new-target password is hidden under old registry metadata')
+    configureGatewaySecretStoreRaw(null)
+    configureGatewaySecretStoreRaw(file, undefined, () => current)
+    assert.equal(getGatewayToken(oldSpec.id), null, 'restart after the crash remains fail-closed')
+    current = { ...newSpec, transport: 'ssh', user: 'alice', sshPort: 22 }
+    assert.equal(getGatewayToken(oldSpec.id), TOKEN)
+    assert.equal(getGatewayPassword(oldSpec.id), UNICODE_PASSWORD)
+    current = { ...newSpec, transport: 'http', user: null, sshPort: null }
+    assert.equal(getGatewayToken(oldSpec.id), TOKEN, 'gateway ssh→http in the same domain preserves auth')
+    assert.equal(getGatewayPassword(oldSpec.id), UNICODE_PASSWORD)
+  } finally {
+    configureGatewaySecretStoreRaw(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('gateway credential load tightens an existing regular file before reading and refuses symlinks', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-load-mode-'))
+  const file = join(dir, 'gateway-secrets.json')
+  const target = join(dir, 'target.json')
+  const link = join(dir, 'linked-secrets.json')
+  const payload = JSON.stringify(boundPlaintextFile({ 'mode-token': TOKEN }, {}))
+  try {
+    writeFileSync(file, payload, { mode: 0o644 })
+    chmodSync(file, 0o644)
+    assert.equal(configureGatewaySecretStore(file), null)
+    assert.equal(statSync(file).mode & 0o777, 0o600, 'mode is tightened before the secret is admitted to memory')
+    assert.equal(getGatewayToken('mode-token'), TOKEN)
+
+    // Creating symlinks is privilege-gated on many Windows installations.
+    // The production boundary still refuses them there via lstat/inode checks;
+    // exercise the concrete link path on platforms where CI can create one.
+    if (process.platform !== 'win32') {
+      writeFileSync(target, payload, { mode: 0o644 })
+      symlinkSync(target, link)
+      const notice = configureGatewaySecretStore(link)
+      assert.match(notice ?? '', /cannot read|regular file|symlink/)
+      assert.equal(getGatewayToken('mode-token'), null, 'a symlink target is never loaded as a credential mirror')
+      assert.equal(statSync(target).mode & 0o777, 0o644, 'refusing the link never mutates its target')
+    }
+  } finally {
     configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })
   }
@@ -174,24 +294,24 @@ test('a corrupt gateway secrets file is preserved as *.corrupt and fails loudly,
     // Well-formed files with INVALID entries are equally corrupt — BOTH
     // tables are validated (design 17 §12 corrupt 检测按新 schema 扩展).
     const file2 = join(dir, 'gateway-secrets-2.json')
-    writeFileSync(file2, JSON.stringify({ schemaVersion: 2, tokens: { 't-bad': 'short' }, passwords: {} }))
+    writeFileSync(file2, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: { 't-bad': 'short' }, passwords: {} }))
     assert.notEqual(configureGatewaySecretStore(file2), null)
     assert.ok(existsSync(`${file2}.corrupt`))
 
     const file3 = join(dir, 'gateway-secrets-3.json')
-    writeFileSync(file3, JSON.stringify({ schemaVersion: 2, tokens: {}, passwords: { 'p-bad': 'short' } }))
+    writeFileSync(file3, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: {}, passwords: { 'p-bad': 'short' } }))
     assert.notEqual(configureGatewaySecretStore(file3), null, 'an invalid password entry corrupts the whole file')
 
     const file4 = join(dir, 'gateway-secrets-4.json')
-    writeFileSync(file4, JSON.stringify({ schemaVersion: 2, tokens: { 't-bad': `${'a'.repeat(32)}中` }, passwords: {} }))
+    writeFileSync(file4, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: { 't-bad': `${'a'.repeat(32)}中` }, passwords: {} }))
     assert.notEqual(configureGatewaySecretStore(file4), null, 'non-visible-ASCII tokens are refused on load')
 
     const file5 = join(dir, 'gateway-secrets-5.json')
-    writeFileSync(file5, JSON.stringify({ schemaVersion: 2, tokens: { 't-ok': 'a'.repeat(32) } }))
+    writeFileSync(file5, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: { 't-ok': 'a'.repeat(32) } }))
     assert.notEqual(configureGatewaySecretStore(file5), null, 'a v2 file missing the passwords table is corrupt')
 
     const file6 = join(dir, 'gateway-secrets-6.json')
-    writeFileSync(file6, JSON.stringify({ schemaVersion: 2, tokens: {}, passwords: { 'local': 'a'.repeat(12) } }))
+    writeFileSync(file6, JSON.stringify({ schemaVersion: 2, storage: 'plaintext', tokens: {}, passwords: { 'local': 'a'.repeat(12) } }))
     assert.notEqual(configureGatewaySecretStore(file6), null, 'the reserved id "local" is refused in the passwords table too')
 
     const file7 = join(dir, 'gateway-secrets-7.json')
@@ -211,13 +331,12 @@ test('gatewayTokenValidationError / gatewayPasswordValidationError mirror the ma
   assert.match(gatewayTokenValidationError('short') ?? '', /at least 32/)
   assert.match(gatewayTokenValidationError(`${TOKEN}中`) ?? '', /visible ASCII/)
   assert.match(gatewayTokenValidationError('a'.repeat(4097)) ?? '', /limited to 4096/)
-  // Password gate (镜像服务器 config 门, design 17 §5.1): 12-1024 visible
-  // ASCII.
+  // Password gate mirrors the server: 12-1024 JS characters, Unicode valid.
   assert.equal(gatewayPasswordValidationError(null), null)
   assert.equal(gatewayPasswordValidationError(''), null)
   assert.equal(gatewayPasswordValidationError(PASSWORD), null)
   assert.match(gatewayPasswordValidationError('short') ?? '', /at least 12/)
-  assert.match(gatewayPasswordValidationError(`${PASSWORD}中`) ?? '', /visible ASCII/)
+  assert.equal(gatewayPasswordValidationError(`${PASSWORD}中文😀`), null)
   assert.match(gatewayPasswordValidationError('a'.repeat(1025)) ?? '', /limited to 1024/)
   assert.equal(gatewayPasswordValidationError('a'.repeat(1024)), null, '1024 chars is the upper bound')
   assert.equal(gatewayPasswordValidationError('a'.repeat(12)), null, '12 chars is the lower bound')
@@ -244,18 +363,19 @@ test('an available crypto adapter encrypts the mirror and decrypts both tables o
   try {
     assert.equal(configureGatewaySecretStore(file, crypto), null)
     setGatewayToken('c-token-1', TOKEN)
-    setGatewayPassword('c-pw-1', PASSWORD)
-    const stored = JSON.parse(readFileSync(file, 'utf8')) as { schemaVersion: number; tokens: Record<string, string>; passwords: Record<string, string> }
-    assert.equal(stored.schemaVersion, 2)
+    setGatewayPassword('c-pw-1', UNICODE_PASSWORD)
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as { schemaVersion: number; storage: string; tokens: Record<string, string>; passwords: Record<string, string> }
+    assert.equal(stored.schemaVersion, 3)
+    assert.equal(stored.storage, 'safeStorage')
     assert.notEqual(stored.tokens['c-token-1'], TOKEN, 'the token is never persisted in plaintext')
     assert.ok(stored.tokens['c-token-1'].startsWith('enc:'), 'the persisted value is the encrypted blob')
     assert.ok(stored.passwords['c-pw-1'].startsWith('enc:'))
     assert.equal(crypto.decrypt(stored.tokens['c-token-1']), TOKEN, 'the blob round-trips through the adapter')
-    assert.equal(crypto.decrypt(stored.passwords['c-pw-1']), PASSWORD)
+    assert.equal(crypto.decrypt(stored.passwords['c-pw-1']), UNICODE_PASSWORD)
     // Reload decrypts both tables back to the plaintext credentials.
     assert.equal(configureGatewaySecretStore(file, crypto), null)
     assert.equal(getGatewayToken('c-token-1'), TOKEN)
-    assert.equal(getGatewayPassword('c-pw-1'), PASSWORD)
+    assert.equal(getGatewayPassword('c-pw-1'), UNICODE_PASSWORD, 'safeStorage preserves Unicode exactly')
   } finally {
     configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -270,20 +390,24 @@ test('a plaintext mirror written without crypto still loads when crypto becomes 
     assert.equal(configureGatewaySecretStore(file), null)
     setGatewayToken('f-token', TOKEN)
     setGatewayPassword('f-pw', PASSWORD)
-    const plaintext = JSON.parse(readFileSync(file, 'utf8')) as { tokens: Record<string, string>; passwords: Record<string, string> }
+    const plaintext = JSON.parse(readFileSync(file, 'utf8')) as { storage: string; tokens: Record<string, string>; passwords: Record<string, string> }
+    assert.equal(plaintext.storage, 'plaintext')
     assert.equal(plaintext.tokens['f-token'], TOKEN, 'no crypto → the mirror stays plaintext')
     assert.equal(plaintext.passwords['f-pw'], PASSWORD)
-    // Reloaded with an AVAILABLE crypto whose decrypt throws on plaintext
-    // values: the per-value fallback keeps the credentials usable — it never
-    // corrupts the file and never silently drops a credential.
+    // Reloaded with an AVAILABLE crypto: the explicit plaintext tag keeps the
+    // credentials unambiguous and startup immediately upgrades the complete
+    // mirror before projecting safeStorage.
     assert.equal(configureGatewaySecretStore(file, prefixedBase64Crypto()), null)
     assert.equal(getGatewayToken('f-token'), TOKEN)
     assert.equal(getGatewayPassword('f-pw'), PASSWORD)
-    // A subsequent write-through with the available crypto encrypts from now
-    // on (new values are blobs, existing values stay plaintext until their
-    // next rewrite).
+    const upgraded = JSON.parse(readFileSync(file, 'utf8')) as { storage: string; tokens: Record<string, string>; passwords: Record<string, string> }
+    assert.equal(upgraded.storage, 'safeStorage')
+    assert.ok(upgraded.tokens['f-token'].startsWith('enc:'), 'the existing token is encrypted during startup convergence')
+    assert.ok(upgraded.passwords['f-pw'].startsWith('enc:'), 'the existing password is encrypted during startup convergence')
+    // A subsequent write-through keeps the whole payload consistently tagged.
     setGatewayPassword('f-pw2', PASSWORD)
-    const mixed = JSON.parse(readFileSync(file, 'utf8')) as { tokens: Record<string, string>; passwords: Record<string, string> }
+    const mixed = JSON.parse(readFileSync(file, 'utf8')) as { storage: string; tokens: Record<string, string>; passwords: Record<string, string> }
+    assert.equal(mixed.storage, 'safeStorage')
     assert.ok(mixed.passwords['f-pw2'].startsWith('enc:'), 'a new value is written encrypted when crypto is available')
   } finally {
     configureGatewaySecretStore(null)
@@ -315,8 +439,7 @@ test('P1-1: an encrypted mirror written while crypto was available is CORRUPT on
     const stored = JSON.parse(readFileSync(file, 'utf8')) as { tokens: Record<string, string>; passwords: Record<string, string> }
     assert.notEqual(stored.tokens['flip-token'], TOKEN, 'with crypto available the mirror never holds plaintext')
     assert.match(stored.tokens['flip-token'] ?? '', /^[A-Za-z0-9+/=]+$/, 'the stored value is base64 ciphertext shape')
-    assert.ok((stored.tokens['flip-token'] ?? '').length >= 32 && /[+/=]/.test(stored.tokens['flip-token'] ?? ''), 'the blob shape is exactly what the S22 detection keys on')
-    assert.ok((stored.passwords['flip-pw'] ?? '').length >= 32 && /[+/=]/.test(stored.passwords['flip-pw'] ?? ''), 'the password blob is flagged too')
+    assert.equal((stored as { storage?: unknown }).storage, 'safeStorage', 'the explicit discriminator, not blob punctuation, controls decoding')
     // Startup 2: crypto UNAVAILABLE (the safeStorage availability flip) — the
     // blobs must NOT silently load as the plaintext credentials (their base64
     // passes the ASCII/length gates — the exact violation this fixes).
@@ -327,6 +450,48 @@ test('P1-1: an encrypted mirror written while crypto was available is CORRUPT on
     assert.equal(existsSync(file), false, 'the original is renamed away')
     assert.equal(getGatewayToken('flip-token'), null, 'the blob is NEVER adopted as the token')
     assert.equal(getGatewayPassword('flip-pw'), null, 'the blob is NEVER adopted as the password')
+  } finally {
+    configureGatewaySecretStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('S22: a pure-alphanumeric safeStorage ciphertext is still never mistaken for plaintext', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-alpha-cipher-'))
+  const file = join(dir, 'gateway-secrets.json')
+  const alphaCipher = 'A'.repeat(64)
+  const crypto: SecretCryptoAdapter = {
+    isAvailable: () => true,
+    encrypt: () => alphaCipher,
+    decrypt: () => TOKEN,
+  }
+  try {
+    assert.equal(configureGatewaySecretStore(file, crypto), null)
+    setGatewayToken('alpha-cipher', TOKEN)
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as { storage: unknown; tokens: Record<string, string> }
+    assert.equal(stored.storage, 'safeStorage')
+    assert.equal(stored.tokens['alpha-cipher'], alphaCipher)
+    assert.doesNotMatch(alphaCipher, /[+/=]/, 'regression fixture defeats the old punctuation heuristic')
+
+    const notice = configureGatewaySecretStore(file)
+    assert.notEqual(notice, null, 'crypto unavailable + safeStorage tag fails closed')
+    assert.ok(existsSync(`${file}.corrupt`))
+    assert.equal(getGatewayToken('alpha-cipher'), null, 'ciphertext never becomes a wire credential')
+  } finally {
+    configureGatewaySecretStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('S22: a non-empty historical v2 file without a storage discriminator fails closed as ambiguous', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-unlabeled-'))
+  const file = join(dir, 'gateway-secrets.json')
+  try {
+    writeFileSync(file, JSON.stringify({ schemaVersion: 2, tokens: { ambiguous: TOKEN }, passwords: {} }))
+    const notice = configureGatewaySecretStore(file)
+    assert.notEqual(notice, null)
+    assert.ok(existsSync(`${file}.corrupt`), 'ambiguous legacy bytes are preserved for recovery')
+    assert.equal(getGatewayToken('ambiguous'), null)
   } finally {
     configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -374,7 +539,29 @@ test('gatewaySecretStorageMode projects the active adapter: safeStorage vs the d
   }
 })
 
-test('a legacy gateway-tokens.json (schemaVersion 1) migrates to the v2 secrets file on first load', () => {
+test('gatewaySecretStorageMode reports the durable file honestly when a plaintext-to-safeStorage upgrade fails', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-mode-honesty-'))
+  const file = join(dir, 'gateway-secrets.json')
+  try {
+    assert.equal(configureGatewaySecretStore(file), null)
+    setGatewayToken('mode-honesty', TOKEN)
+    const failingCrypto: SecretCryptoAdapter = {
+      isAvailable: () => true,
+      encrypt: () => { throw new Error('keychain write unavailable') },
+      decrypt: () => { throw new Error('not ciphertext') },
+    }
+    const notice = configureGatewaySecretStore(file, failingCrypto)
+    assert.match(notice ?? '', /safeStorage upgrade failed/)
+    assert.equal(gatewaySecretStorageMode(), 'plaintext', 'the UI warning follows the on-disk fact, not adapter capability')
+    assert.equal(getGatewayToken('mode-honesty'), TOKEN, 'validated plaintext remains usable after the loud upgrade failure')
+    assert.equal((JSON.parse(readFileSync(file, 'utf8')) as { storage: unknown }).storage, 'plaintext')
+  } finally {
+    configureGatewaySecretStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a non-empty legacy gateway-tokens.json is preserved and disabled until explicit credential re-entry', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-'))
   const dir2 = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-fail-'))
   const dir3 = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-invalid-'))
@@ -383,23 +570,14 @@ test('a legacy gateway-tokens.json (schemaVersion 1) migrates to the v2 secrets 
   const crypto = prefixedBase64Crypto()
   try {
     writeFileSync(legacy, JSON.stringify({ schemaVersion: 1, tokens: { 'm-token-1': TOKEN, 'm-token-2': `${TOKEN}2` } }))
-    assert.equal(configureGatewaySecretStore(file, crypto), null, 'a successful migration is not a notice')
-    assert.ok(existsSync(file), 'the v2 file is written')
-    assert.equal(existsSync(legacy), false, 'the legacy file is deleted after migration')
-    assert.equal(statSync(file).mode & 0o777, 0o600, 'the migrated v2 file is 0600')
-    const stored = JSON.parse(readFileSync(file, 'utf8')) as { schemaVersion: number; tokens: Record<string, string>; passwords: Record<string, string> }
-    assert.equal(stored.schemaVersion, 2)
-    assert.ok(stored.tokens['m-token-1'].startsWith('enc:'), 'migrated tokens are encrypted via the active crypto')
-    assert.equal(crypto.decrypt(stored.tokens['m-token-1']), TOKEN)
-    assert.deepEqual(stored.passwords, {}, 'the legacy file carries no passwords')
-    assert.equal(getGatewayToken('m-token-1'), TOKEN, 'migrated tokens are live in memory')
-    assert.equal(getGatewayToken('m-token-2'), `${TOKEN}2`)
-    // A later startup reloads the migrated v2 file (no legacy left to re-migrate).
-    assert.equal(configureGatewaySecretStore(file, crypto), null)
-    assert.equal(getGatewayToken('m-token-1'), TOKEN)
+    const unboundNotice = configureGatewaySecretStore(file, crypto)
+    assert.match(unboundNotice ?? '', /no target bindings|re-enter/)
+    assert.equal(existsSync(file), false, 'no bound credential file is guessed from legacy values')
+    assert.equal(existsSync(legacy), true, 'legacy evidence is kept for explicit recovery')
+    assert.equal(getGatewayToken('m-token-1'), null, 'unbound legacy values are never live')
 
     // Migration FAILURE: a corrupt legacy file is KEPT, reported loudly, and
-    // never blocks startup (empty store, no v2 file manufactured from garbage).
+    // never blocks startup (empty store, no current credential file manufactured from garbage).
     const legacy2 = join(dir2, 'gateway-tokens.json')
     const file2 = join(dir2, 'gateway-secrets.json')
     writeFileSync(legacy2, '{broken')
@@ -407,7 +585,7 @@ test('a legacy gateway-tokens.json (schemaVersion 1) migrates to the v2 secrets 
     assert.notEqual(notice, null, 'a failed migration is loud')
     assert.match(notice ?? '', /legacy gateway token file/)
     assert.ok(existsSync(legacy2), 'the legacy file is kept for a later retry')
-    assert.equal(existsSync(file2), false, 'no v2 file is manufactured from garbage')
+    assert.equal(existsSync(file2), false, 'no current credential file is manufactured from garbage')
     assert.equal(getGatewayToken('anything'), null, 'startup continues with an empty store')
 
     // Migration REFUSAL: a well-formed legacy file with an invalid token
@@ -426,39 +604,39 @@ test('a legacy gateway-tokens.json (schemaVersion 1) migrates to the v2 secrets 
   }
 })
 
-test('a legacy gateway-tokens.json left over from a failed migration unlink is retried on every startup with a valid v2 file (idempotent, silent)', () => {
+test('a legacy gateway-tokens.json beside a valid bound v3 file stays preserved and inert', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-retry-'))
   const dir2 = mkdtempSync(join(tmpdir(), 'dsh-gw-migrate-retry-corrupt-'))
   const legacy = join(dir, 'gateway-tokens.json')
   const file = join(dir, 'gateway-secrets.json')
   const crypto = prefixedBase64Crypto()
   try {
-    // Simulate the residue of a migration whose v2 write succeeded but whose
-    // legacy rmSync failed: BOTH files exist, the v2 file is authoritative.
+    // Simulate the residue of a migration whose current bound write succeeded
+    // but whose legacy rmSync failed: BOTH files exist, the v3 file is authoritative.
     // (The store cannot manufacture this state itself — a migration only runs
-    // on a MISSING v2 file, which is exactly the bug being fixed: the leftover
-    // was never retried because later startups loaded the v2 file directly.)
+    // on a MISSING current file, which is exactly the bug being fixed: the leftover
+    // was never retried because later startups loaded the bound v3 file directly.)
     writeFileSync(legacy, JSON.stringify({ schemaVersion: 1, tokens: { 'r-token-1': TOKEN } }))
-    writeFileSync(file, JSON.stringify({ schemaVersion: 2, tokens: { 'r-token-2': `${TOKEN}2` }, passwords: {} }))
-    assert.equal(configureGatewaySecretStore(file, crypto), null, 'a valid v2 load with leftover-legacy cleanup is not a notice')
-    assert.equal(existsSync(legacy), false, 'the leftover legacy file is unlinked on this startup')
-    assert.equal(getGatewayToken('r-token-2'), `${TOKEN}2`, 'the v2 file is authoritative')
+    writeFileSync(file, JSON.stringify(boundPlaintextFile({ 'r-token-2': `${TOKEN}2` }, {})))
+    assert.equal(configureGatewaySecretStore(file, crypto), null, 'the bound v3 file remains authoritative')
+    assert.equal(existsSync(legacy), true, 'unbound legacy evidence is never overwritten or silently deleted')
+    assert.equal(getGatewayToken('r-token-2'), `${TOKEN}2`, 'the bound v3 file is authoritative')
     assert.equal(getGatewayToken('r-token-1'), null, 'legacy-only tokens are not reloaded — already migrated')
-    // Idempotent: a second startup with no legacy file left is a plain v2 load.
+    // Idempotent: a second startup still ignores the legacy file.
     assert.equal(configureGatewaySecretStore(file, crypto), null)
     assert.equal(getGatewayToken('r-token-2'), `${TOKEN}2`)
-    assert.equal(existsSync(legacy), false)
+    assert.equal(existsSync(legacy), true)
 
-    // A CORRUPT v2 file does NOT trigger the legacy cleanup: the legacy tokens
+    // A CORRUPT current file does NOT trigger the legacy cleanup: the legacy tokens
     // are the only recoverable copy and must survive until a clean load.
     const legacy2 = join(dir2, 'gateway-tokens.json')
     const file2 = join(dir2, 'gateway-secrets.json')
     writeFileSync(legacy2, JSON.stringify({ schemaVersion: 1, tokens: { 'r-token-1': TOKEN } }))
     writeFileSync(file2, 'not json at all')
     const notice = configureGatewaySecretStore(file2, crypto)
-    assert.notEqual(notice, null, 'the corrupt v2 file fails loudly')
-    assert.ok(existsSync(`${file2}.corrupt`), 'the corrupt v2 file is preserved')
-    assert.ok(existsSync(legacy2), 'a corrupt v2 file keeps the legacy file (the only recoverable copy)')
+    assert.notEqual(notice, null, 'the corrupt current file fails loudly')
+    assert.ok(existsSync(`${file2}.corrupt`), 'the corrupt current file is preserved')
+    assert.ok(existsSync(legacy2), 'a corrupt current file keeps the legacy file (the only recoverable copy)')
   } finally {
     configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -466,26 +644,24 @@ test('a legacy gateway-tokens.json left over from a failed migration unlink is r
   }
 })
 
-test('configureGatewayTokenStore stays a working plaintext alias (current main.ts call site) and loads v1 files in place', () => {
+test('configureGatewayTokenStore stays a working plaintext alias and refuses non-empty unbound v1 files', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-alias-'))
   const file = join(dir, 'gateway-tokens.json')
   try {
-    // Fresh v2 write through the legacy alias (what main.ts calls today).
+    // Fresh bound v3 write through the backward-compatible plaintext alias.
     assert.equal(configureGatewayTokenStore(file), null)
     setGatewayToken('a-token', TOKEN)
-    assert.equal(JSON.parse(readFileSync(file, 'utf8')).schemaVersion, 2, 'the alias persists schemaVersion 2')
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).schemaVersion, 3, 'the alias persists bound schemaVersion 3')
     assert.equal(configureGatewayTokenStore(file), null)
     assert.equal(getGatewayToken('a-token'), TOKEN)
-    // In-place v1 load: a pre-existing schemaVersion 1 file AT the configured
-    // path loads its tokens (restart auto-connect keeps working) without
-    // renaming/deleting; the next persist rewrites the mirror as v2.
+    // In-place v1 has no endpoint binding and cannot be adopted safely.
     const v1file = join(dir, 'v1-in-place.json')
     writeFileSync(v1file, JSON.stringify({ schemaVersion: 1, tokens: { 'a-legacy': TOKEN } }))
-    assert.equal(configureGatewayTokenStore(v1file), null, 'a valid v1 file at the configured path is a successful load')
-    assert.equal(getGatewayToken('a-legacy'), TOKEN)
-    assert.ok(existsSync(v1file), 'the v1 file is not renamed or deleted by the in-place load')
-    setGatewayToken('a-legacy', `${TOKEN}2`)
-    assert.equal(JSON.parse(readFileSync(v1file, 'utf8')).schemaVersion, 2, 'the next persist rewrites the mirror as v2')
+    const notice = configureGatewayTokenStore(v1file)
+    assert.match(notice ?? '', /no target bindings|re-enter/)
+    assert.equal(getGatewayToken('a-legacy'), null)
+    assert.equal(existsSync(v1file), false, 'the unbound file is moved aside under a unique recovery name')
+    assert.equal(readdirSync(dir).some(name => name.startsWith('v1-in-place.json.unbound-')), true)
   } finally {
     configureGatewayTokenStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -525,7 +701,7 @@ test('DEFAULT_GATEWAY_PORT is 443 and DEFAULT_GATEWAY_HTTP_PORT is 80', () => {
   assert.equal(DEFAULT_GATEWAY_HTTP_PORT, 80)
 })
 
-test('gateway validateSpec normalizes the v2 spec: http transport for any kind, transport inferred from kind (design 17 §2/§9.1)', () => {
+test('gateway validateSpec normalizes http for shipped kinds and refuses future kinds without their own provider', () => {
   // kind 'gateway', transport omitted → inferred http (design 17 §2.2).
   const viaKind = gatewayProvider.validateSpec({ id: 'g1', label: 'g', kind: 'gateway', host: 'gw.example.com', remotePort: 443 })
   assert.ok(viaKind !== null)
@@ -556,11 +732,10 @@ test('gateway validateSpec normalizes the v2 spec: http transport for any kind, 
   // serves http only); a missing kind defaults to {dsh, ssh} → refused.
   assert.equal(gatewayProvider.validateSpec({ id: 'g4', label: 'g', kind: 'dsh', host: 'dsh.example.com', remotePort: 3080 }), null)
   assert.equal(gatewayProvider.validateSpec({ id: 'g5', label: 'g', host: 'gw.example.com', remotePort: 443 }), null)
-  // A future target kind over http is accepted (kind-agnostic transport
-  // provider, design 17 §2.2 open union) and returned as-is.
+  // A future target needs its own provider: accepting it here would let the
+  // transport reach ready before proxy registration rejects the unknown kind.
   const futureKind = gatewayProvider.validateSpec({ id: 'g6', label: 'g', kind: 'future-target', transport: 'http', host: 'gw.example.com', remotePort: 443 })
-  assert.ok(futureKind !== null)
-  if (futureKind !== null) assert.equal(futureKind.kind, 'future-target')
+  assert.equal(futureKind, null)
   // endpointUrl honors the origin scheme: https default (443 elided), http
   // plaintext (80 elided), explicit non-default ports kept.
   assert.equal(gatewayProvider.endpointUrl!(viaKind!), 'https://gw.example.com')
@@ -619,22 +794,22 @@ function httpSpec(id: string, port: number, extra: Record<string, unknown> = {})
   return gatewayProvider.validateSpec({ id, label: 'g', kind: 'gateway', transport: 'http', host: '127.0.0.1', remotePort: port, insecureHttp: true, ...extra })
 }
 
-test('verifyUp: a real host.describe envelope answers ok (design 17 §7)', async () => {
+test('verifyUp: the gateway-owned runtime identity answers ok even while managed dsh is stopped (design 17 §7 / design 18 §9.3)', async () => {
+  let seenMethod: string | undefined
+  let seenUrl: string | undefined
   const server = await startHttpProbeServer((req, res) => {
-    let body = ''
-    req.on('data', chunk => { body += chunk })
-    req.on('end', () => {
-      let parsed: { rpcId?: unknown } = {}
-      try { parsed = JSON.parse(body) } catch { /* non-JSON probe body */ }
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ type: 'server-response', rpcId: parsed.rpcId, result: { ok: true } }))
-    })
+    seenMethod = req.method
+    seenUrl = req.url
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
   try {
     const spec = httpSpec('env-ok', server.port)
     assert.ok(spec !== null)
     const result = await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port })
-    assert.equal(result.ok, true, 'a correct server-response echo proves the dsh identity')
+    assert.equal(result.ok, true, 'the gateway boundary remains serviceable independently of managed dsh')
+    assert.equal(seenMethod, 'GET')
+    assert.equal(seenUrl, '/chamber/runtime/status')
     // P2-5: a direct-probe SUCCESS is the pure {ok:true} shape (the ssh
     // provider's contract) — never a stray statusCode:undefined key that
     // deep-compare callers would trip on.
@@ -644,7 +819,7 @@ test('verifyUp: a real host.describe envelope answers ok (design 17 §7)', async
   }
 })
 
-test('verifyUp: a 200 non-envelope answer is terminal (not a dsh target)', async () => {
+test('verifyUp: a 200 response without the gateway runtime identity is terminal', async () => {
   const server = await startHttpProbeServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'text/plain' })
     res.end('hello, this is not dsh')
@@ -656,7 +831,7 @@ test('verifyUp: a 200 non-envelope answer is terminal (not a dsh target)', async
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.equal(result.terminal, true, 'a destination that ANSWERED is deterministic: retrying cannot change the answer')
-      assert.match(result.detail ?? '', /does not appear to be a dsh-gateway/)
+      assert.match(result.detail ?? '', /does not appear to be a compatible dsh-chamber gateway/)
     }
   } finally {
     await server.close()
@@ -692,7 +867,8 @@ test('verifyUp: 403/421 stay terminal and 5xx stays transient (design 17 §7.3 s
 
 test('verifyUp: a dsh-kind target never carries auth, even with a stored token (design 17 §2.1/§9.3)', async () => {
   let sawAuthorization: string | undefined
-  const server = await startHttpProbeServer((_req, res) => {
+  const server = await startHttpProbeServer((req, res) => {
+    sawAuthorization = req.headers.authorization
     res.writeHead(401)
     res.end()
   })
@@ -704,9 +880,7 @@ test('verifyUp: a dsh-kind target never carries auth, even with a stored token (
     assert.equal(sawAuthorization, undefined, 'a dsh target never injects the Authorization header')
     if (!result.ok) {
       assert.equal(result.terminal, true)
-      // No credentials were sent, so the guidance must say the gateway
-      // requires authentication, never that a token was rejected.
-      assert.match(result.detail ?? '', /requires authentication/)
+      assert.match(result.detail ?? '', /dsh identity probe/)
     }
   } finally {
     setGatewayToken('dsh-auth-probe', null)
@@ -733,26 +907,20 @@ test('the secrets store dir has no stray files after a full lifecycle', () => {
 // Password-session flow (design 17 §7.3/§9.3): verifyUp consults the
 // injected session hooks (configureGatewaySessionProvider) for a password-
 // configured gateway target with no token — login → probe WITH the Cookie,
-// cached-session fast path, probe-401 → invalidate + terminal, token
-// priority, inert default.
+// cached-session fast path, probe-401 → invalidate + terminal, independent
+// Bearer+Cookie coexistence/fallback, inert default.
 // ---------------------------------------------------------------------------
 
 const SESSION_COOKIE = 'dsh_gateway_session=fake-jwt'
 
-/** A real gateway stub answering host.describe with the 200 envelope echo,
+/** A real gateway stub answering the gateway runtime identity endpoint,
  * recording the probe's cookie/authorization headers. */
 function envelopeHandler(seen: { cookie?: string; authorization?: string }) {
   return (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): void => {
     seen.cookie = req.headers.cookie
     seen.authorization = req.headers.authorization
-    let body = ''
-    req.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
-    req.on('end', () => {
-      let parsed: { rpcId?: unknown } = {}
-      try { parsed = JSON.parse(body) } catch { /* non-JSON probe body */ }
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ type: 'server-response', rpcId: parsed.rpcId, result: { ok: true } }))
-    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   }
 }
 
@@ -766,7 +934,7 @@ test('verifyUp: a password-configured gateway with session hooks logs in once an
     cachedCookie: () => cached,
     invalidate: () => {},
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestSessionHooks(hooks))
   try {
     setGatewayPassword('pw-probe-1', PASSWORD)
     const spec = httpSpec('pw-probe-1', server.port)
@@ -807,7 +975,7 @@ test('verifyUp: a probe 401 with the session cookie invalidates, re-logs in ONCE
     cachedCookie: () => null,
     invalidate: origin => { invalidated.push(origin) },
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestSessionHooks(hooks))
   try {
     setGatewayPassword('pw-401-1', PASSWORD)
     const spec = httpSpec('pw-401-1', server.port)
@@ -840,14 +1008,8 @@ test('verifyUp: a probe 401 self-heals through the one automatic re-login — th
       res.end()
       return
     }
-    let body = ''
-    req.on('data', chunk => { body += chunk })
-    req.on('end', () => {
-      let parsed: { rpcId?: unknown } = {}
-      try { parsed = JSON.parse(body) } catch { /* non-JSON probe body */ }
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ type: 'server-response', rpcId: parsed.rpcId, result: { ok: true } }))
-    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
   const invalidated: GatewaySessionOrigin[] = []
   let logins = 0
@@ -856,7 +1018,7 @@ test('verifyUp: a probe 401 self-heals through the one automatic re-login — th
     cachedCookie: () => null,
     invalidate: origin => { invalidated.push(origin) },
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestSessionHooks(hooks))
   try {
     setGatewayPassword('pw-relogin-1', PASSWORD)
     const spec = httpSpec('pw-relogin-1', server.port)
@@ -873,34 +1035,62 @@ test('verifyUp: a probe 401 self-heals through the one automatic re-login — th
   }
 })
 
-test('verifyUp: token priority — with both credentials the Bearer alone authenticates, the session flow is never consulted (design 17 §2.3)', async () => {
+test('verifyUp: token and password are independent — with both configured the probe carries Bearer AND Cookie (design 17 §2.3)', async () => {
   const seen: { cookie?: string; authorization?: string } = {}
   const server = await startHttpProbeServer((req, res) => {
     seen.cookie = req.headers.cookie
     seen.authorization = req.headers.authorization
-    res.writeHead(401)
-    res.end()
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
-  let sessionConsulted = false
+  let sessionConsulted = 0
   const hooks: GatewaySessionProviderHooks = {
-    ensureSession: () => { sessionConsulted = true; return Promise.resolve({ ok: true, cookie: SESSION_COOKIE }) },
-    cachedCookie: () => { sessionConsulted = true; return null },
-    invalidate: () => { sessionConsulted = true },
+    ensureSession: () => { sessionConsulted += 1; return Promise.resolve({ ok: true, cookie: SESSION_COOKIE }) },
+    cachedCookie: () => null,
+    invalidate: () => { sessionConsulted += 1 },
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestSessionHooks(hooks))
   try {
     setGatewayToken('pw-both-1', TOKEN)
     setGatewayPassword('pw-both-1', PASSWORD)
     const spec = httpSpec('pw-both-1', server.port)
     assert.ok(spec !== null)
     const result = await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port })
+    assert.equal(result.ok, true)
     assert.equal(seen.authorization, `Bearer ${TOKEN}`, 'the Bearer token rides the probe')
-    assert.equal(seen.cookie, undefined, 'no Cookie when the token authenticates')
-    assert.equal(sessionConsulted, false, 'the password/session flow is skipped entirely while a token exists')
-    if (!result.ok) assert.match(result.detail ?? '', /rejected the token/)
+    assert.equal(seen.cookie, SESSION_COOKIE, 'the independently configured password session also rides the probe')
+    assert.equal(sessionConsulted, 1, 'the password/session flow is not shadowed by the token')
   } finally {
     setGatewayToken('pw-both-1', null)
     setGatewayPassword('pw-both-1', null)
+    configureGatewaySessionProvider({})
+    await server.close()
+  }
+})
+
+test('verifyUp: a refused password login still falls back to a valid configured Bearer', async () => {
+  let probes = 0
+  const server = await startHttpProbeServer((req, res) => {
+    probes += 1
+    assert.equal(req.headers.authorization, `Bearer ${TOKEN}`)
+    assert.equal(req.headers.cookie, undefined)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
+  })
+  configureGatewaySessionProvider(completeTestSessionHooks({
+    ensureSession: async () => ({ ok: false, code: 'invalid_credentials', error: 'password rejected' }),
+    cachedCookie: () => null,
+  }))
+  try {
+    setGatewayToken('pw-bearer-fallback', TOKEN)
+    setGatewayPassword('pw-bearer-fallback', PASSWORD)
+    const spec = httpSpec('pw-bearer-fallback', server.port)
+    assert.ok(spec !== null)
+    assert.deepEqual(await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port }), { ok: true })
+    assert.equal(probes, 1, 'one bearer-only fallback probe is sufficient')
+  } finally {
+    setGatewayToken('pw-bearer-fallback', null)
+    setGatewayPassword('pw-bearer-fallback', null)
     configureGatewaySessionProvider({})
     await server.close()
   }
@@ -919,7 +1109,7 @@ test('verifyUp: a refused login is terminal, rate_limited stays transient (desig
     ensureSession: () => Promise.resolve(failures.shift() ?? { ok: false, code: 'network', error: 'the gateway did not answer the login request' }),
     cachedCookie: () => null,
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestSessionHooks(hooks))
   try {
     const spec = httpSpec('pw-fail-1', server.port)
     assert.ok(spec !== null)
@@ -969,6 +1159,23 @@ test('verifyUp: without session hooks a password-configured target probes WITHOU
     configureGatewaySessionProvider({})
     await server.close()
   }
+})
+
+test('configureGatewaySessionProvider accepts only disabled or complete security hooks', async () => {
+  const complete = completeTestSessionHooks({
+    ensureSession: async () => ({ ok: true, cookie: SESSION_COOKIE }),
+  })
+  configureGatewaySessionProvider(complete)
+  assert.throws(
+    () => configureGatewaySessionProvider({ ensureSession: async () => ({ ok: false, code: 'network', error: 'unused' }) }),
+    /all-or-none/,
+    'a partial hook update cannot silently remove generation/proof fences',
+  )
+  assert.equal(getGatewaySessionHooks(), complete, 'a rejected partial update leaves the previous complete hooks installed')
+  assert.equal(await getGatewaySessionHooks().ensureSession!({ baseUrl: 'http://gw.example.com:3080', insecureHttp: true, scope: 'test:complete-hooks' }, PASSWORD).then(result => result.ok), true,
+    'the previously installed complete hooks remain usable after a rejected partial update')
+  configureGatewaySessionProvider({})
+  assert.deepEqual(getGatewaySessionHooks(), {}, 'an empty hook object explicitly disables integration')
 })
 
 // ---------------------------------------------------------------------------
@@ -1134,7 +1341,12 @@ function httpsSpec(id: string, port: number, extra: Record<string, unknown> = {}
 }
 
 test('verifyUp over https: pin match probes ok, pin mismatch is terminal, no pin keeps the legacy path (S23)', async () => {
-  const server = await startHttpsProbeServer(KEY_A, CERT_A, envelopeHandler({}))
+  let receivedRequests = 0
+  const handleEnvelope = envelopeHandler({})
+  const server = await startHttpsProbeServer(KEY_A, CERT_A, (req, res) => {
+    receivedRequests += 1
+    handleEnvelope(req, res)
+  })
   try {
     // Pin match: the fixture cert's own pin is the trust anchor — the probe
     // succeeds against the self-signed server with NO CA trust (the Caddy
@@ -1143,17 +1355,20 @@ test('verifyUp over https: pin match probes ok, pin mismatch is terminal, no pin
     assert.ok(specOk !== null)
     const ok = await gatewayProvider.verifyUp!(specOk!, { host: '127.0.0.1', port: server.port })
     assert.equal(ok.ok, true, 'a peer whose SPKI matches the pin is trusted')
+    assert.equal(receivedRequests, 1)
 
     // Pin mismatch: the server presents cert A, the pin is cert B's — the
     // peer's key is not the pinned key → TERMINAL with the S23 detail.
     const specBad = httpsSpec('tls-pin-bad', server.port, { spkiPin: PIN_B })
     assert.ok(specBad !== null)
+    setGatewayToken('tls-pin-bad', TOKEN)
     const bad = await gatewayProvider.verifyUp!(specBad!, { host: '127.0.0.1', port: server.port })
     assert.equal(bad.ok, false)
     if (!bad.ok) {
       assert.equal(bad.terminal, true, 'a pinned mismatch is deterministic — retrying cannot change the answer')
       assert.match(bad.detail ?? '', /证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误/)
     }
+    assert.equal(receivedRequests, 1, 'a wrong-key peer receives zero HTTP requests or credential headers')
 
     // No pin: the pin machinery is inert — the legacy https probe runs, and
     // against this self-signed server the unpinned chain is untrusted →
@@ -1167,19 +1382,22 @@ test('verifyUp over https: pin match probes ok, pin mismatch is terminal, no pin
       assert.match(plain.detail ?? '', /did not answer/)
     }
   } finally {
+    setGatewayToken('tls-pin-bad', null)
     await server.close()
   }
 })
 
 test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a mismatched peer login is terminal (never forever-network), a matching pin succeeds (design 17 §7.3/§13.4.2/S23)', async () => {
   // A real gateway stub over the self-signed fixture cert: POST /auth/login
-  // answers the 3xx + session cookie, everything else (the host.describe
-  // probe) answers the 200 envelope — so the whole password flow is real TLS.
+  // answers the 3xx + session cookie, everything else (the gateway-owned
+  // runtime identity probe) answers 200 — so the whole password flow is real TLS.
+  const receivedLoginBodies: string[] = []
   const server = await startHttpsProbeServer(KEY_A, CERT_A, (req, res) => {
     if (req.url === '/auth/login') {
       let body = ''
       req.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
       req.on('end', () => {
+        receivedLoginBodies.push(body)
         res.writeHead(302, { 'set-cookie': [`dsh_gateway_session=fake-jwt; HttpOnly; Path=/; SameSite=Strict`] })
         res.end()
       })
@@ -1188,7 +1406,7 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
     envelopeHandler({})(req, res)
   })
   const mgr = createGatewaySessionManager()
-  const origin: GatewaySessionOrigin = { baseUrl: `https://127.0.0.1:${server.port}`, insecureHttp: false }
+  const origin: GatewaySessionOrigin = { baseUrl: `https://127.0.0.1:${server.port}`, insecureHttp: false, scope: 'test:tls-login' }
   try {
     // Matching pin: the login succeeds against the self-signed server — the
     // pin IS the trust anchor (the internal-CA case that used to fail as
@@ -1196,6 +1414,7 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
     const match = await mgr.ensureSession({ ...origin, spkiPin: PIN_A }, PASSWORD)
     assert.equal(match.ok, true, 'a login against the pinned peer succeeds')
     if (match.ok) assert.equal(match.cookie, SESSION_COOKIE)
+    assert.deepEqual(receivedLoginBodies, [JSON.stringify({ password: PASSWORD })])
     assert.equal(mgr.cachedCookie(origin), SESSION_COOKIE, 'the pinned login caches the session like any other')
     mgr.invalidate(origin)
 
@@ -1209,6 +1428,7 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
       assert.match(mismatch.error, /证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误/)
     }
     assert.equal(mgr.cachedCookie(origin), null, 'a failed pinned login caches nothing')
+    assert.equal(receivedLoginBodies.length, 1, 'a wrong-key peer receives zero login requests or password-body bytes')
 
     // No pin: the legacy unpinned login runs — against the self-signed server
     // the untrusted chain is a transient network failure (the pin is what
@@ -1222,6 +1442,9 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
     // instead of cycling 'network' forever (the 永不 ready bug P1-2 fixes).
     configureGatewaySessionProvider({
       ensureSession: (o, password) => mgr.ensureSession(o, password),
+      generation: o => mgr.generation(o),
+      registrationAuthProof: o => mgr.registrationAuthProof(o),
+      setRegistrationAuthProof: (o, proof) => mgr.setRegistrationAuthProof(o, proof),
       cachedCookie: o => mgr.cachedCookie(o),
       invalidate: o => mgr.invalidate(o),
     })
@@ -1234,6 +1457,7 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
       assert.equal(verdictBad.terminal, true, 'a pin-mismatched login is terminal — the three-state password flow never spins as network')
       assert.match(verdictBad.detail ?? '', /证书固定不匹配（SPKI）/)
     }
+    assert.equal(receivedLoginBodies.length, 1, 'end-to-end mismatch also keeps the stored password behind the pin gate')
     // Matching pin end-to-end: the pinned login mints the session and the
     // pinned probe answers the envelope → ready.
     setGatewayPassword('tls-login-ok', PASSWORD)

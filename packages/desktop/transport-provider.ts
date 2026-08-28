@@ -150,6 +150,32 @@ export interface TransportInstanceSpec {
   spkiPin?: string
 }
 
+/** Canonical v1→v2 input normalization shared by registry load/save and the
+ * authoritative save IPC. Keeping this in one place makes the optional
+ * `transport` wire contract real instead of accepting it in TypeScript while
+ * rejecting it at the main-process boundary. */
+export function canonicalizeTransportInstanceInput(entry: unknown): unknown {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return entry
+  const record = entry as Record<string, unknown>
+  const kind = record.kind
+  const hasTransport = record.transport !== undefined && record.transport !== null
+  let nextKind: unknown = kind
+  let nextTransport: unknown = record.transport
+  if (kind === 'ssh') {
+    nextKind = 'dsh'
+    nextTransport = 'ssh'
+  } else if (kind === 'gateway') {
+    nextKind = 'gateway'
+    if (!hasTransport) nextTransport = 'http'
+  } else if (kind === undefined || kind === null) {
+    nextKind = 'dsh'
+    nextTransport = 'ssh'
+  } else if (!hasTransport) {
+    nextTransport = kind === 'dsh' ? 'ssh' : undefined
+  }
+  return { ...record, kind: nextKind, transport: nextTransport }
+}
+
 /**
  * The non-secret status projection (design 05 §8): phase, local ports,
  * retryAttempt, requiresUserAction, serviceActive, logSummary. Never a
@@ -309,6 +335,18 @@ export interface TransportExecDeps {
 }
 
 /**
+ * Provider-owned environment material leased to exactly one transport
+ * child. Some environment values name ephemeral resources (ssh:
+ * SSH_ASKPASS); the runtime must keep that resource alive until the child
+ * exits or reports a spawn error, and must release it when spawn throws.
+ * `release` must be idempotent because Node may report both error and exit.
+ */
+export interface TransportSpawnLease {
+  env: NodeJS.ProcessEnv
+  release(): void
+}
+
+/**
  * The provider surface the runtime drives. A provider is pure transport
  * know-how: it never sees timers, phases or the registry — the runtime does.
  */
@@ -320,9 +358,11 @@ export interface TransportProvider {
   /**
    * Whitelist-gated spec validation (option-injection safe). Null = reject
    * the entry (dropped loudly by the registry, never silently half-kept).
-   * INVARIANT: the returned spec's `kind` MUST equal this provider's kind —
-   * the runtime drops any entry whose kind mismatches (defense in depth).
-   * The provider also normalizes `transport` (its mechanism) and
+   * A transport-selected provider may serve multiple shipped target kinds
+   * (ssh and http both serve dsh|gateway); `kind` is only the legacy provider
+   * lookup key when an old spec has no explicit transport. The provider
+   * must preserve/whitelist the target kind and normalize its `transport`
+   * mechanism, and
    * `insecureHttp`; a spec whose kind/transport the provider cannot serve
    * (e.g. the direct-endpoint gateway provider receiving transport 'ssh')
    * is rejected loudly rather than mis-served.
@@ -338,27 +378,28 @@ export interface TransportProvider {
    */
   buildStartArgs?(spec: TransportInstanceSpec, localPort: number): readonly string[] | null
   /**
-   * Optional extra environment for the transport process (merged over
-   * process.env by the runtime). Providers use it to inject per-instance
-   * non-argv material such as SSH_ASKPASS (ssh: password auth, design 05
-   * §8). Absent/null = the child inherits the main process environment
-   * unchanged.
+   * Optional leased extra environment for the transport process (merged
+   * over process.env by the runtime). Providers use it to inject
+   * per-instance non-argv material such as SSH_ASKPASS (ssh: password auth,
+   * design 05 §8). The runtime releases the lease only after child
+   * exit/error, or immediately when spawn itself throws. Absent/null = the
+   * child inherits the main process environment unchanged.
    */
-  buildStartEnv?(spec: TransportInstanceSpec): NodeJS.ProcessEnv | null
+  buildStartEnv?(spec: TransportInstanceSpec): TransportSpawnLease | null
   /**
-   * Optional per-instance resource cleanup (ssh: retire the ephemeral
-   * askpass helper). Called by the runtime when an instance's transport is
-   * stopped (disconnect, removal, app quit). Never called for an instance
-   * the provider does not know.
+   * Optional per-instance resource retirement (ssh: stop handing out old
+   * askpass generations without invalidating live child leases). Called by
+   * the runtime when an instance's transport is stopped (disconnect,
+   * removal, app quit). Never called for an instance the provider does not
+   * know.
    */
   disposeAuth?(spec: TransportInstanceSpec): void
   /**
-   * Optional FINAL per-instance resource deletion (ssh: delete ALL askpass
-   * helper generations). Called by the runtime ONLY when an instance is
-   * REMOVED from the registry — never on a plain disconnect, where an
-   * in-flight exec may still reference provider-owned resources (the ssh
-   * askpass current generation). Absent = disposeAuth already covers
-   * removal.
+   * Optional FINAL per-instance cleanup request (ssh: purge every unleased
+   * askpass generation and defer live generations to their child-scoped
+   * release). Called by the runtime ONLY when an instance is REMOVED from
+   * the registry — never on a plain disconnect. Absent = disposeAuth already
+   * covers removal.
    */
   purgeAuth?(spec: TransportInstanceSpec): void
   /** Probe target for DIRECT ENDPOINT providers (ignored in tunnel mode). */
@@ -407,29 +448,14 @@ export type SshPhase = TransportPhase
  * True when two specs point at a different transport TARGET — kind or any
  * host/user/port field. Label-only edits are not target changes.
  *
- * `transport` is deliberately EXCLUDED (design 17 §9.1, same family as the
- * D3 `insecureHttp` decision): credentials are bound to the host:port:kind
- * TARGET, NOT to the transport mechanism — an ssh↔http switch on the same
- * gateway target keeps the token/password valid, so the switch never forces
- * re-entry. The LIVE transport still restarts on a mechanism switch
- * (transport-manager's own transportFieldsChanged tears down and rebuilds
- * it — the transport is re-registered under the new origin), but the
- * provider-held secret survives the switch untouched.
+ * Compatibility semantic helper for the pre-v3 target model. Kind, host,
+ * user, SSH/remote ports, serviceName, and remoteDshHome are included;
+ * transport, HTTP scheme, and SPKI are excluded. The main-owned connection
+ * transaction does NOT use this helper for credential ownership: gateway and
+ * SSH secrets have separate binding fingerprints and retarget rules.
  *
- * `insecureHttp` is also EXCLUDED (design 17 §9.1, D3 decision): an
- * http↔https switch on the same host:port:kind target keeps the same
- * credential valid — the token/password is bound to the TARGET, not to the
- * wire encryption, so protocol switches preserve credentials and never
- * force re-entry.
- *
- * The main process uses this to invalidate provider-held credentials: the
- * secret stores are keyed by instance id only, so without this check an
- * edit of `host` from A to B would silently reuse A's SSH password (or
- * gateway token) against B (P1 regression, locked by
- * transport-target.test.ts). Kind switches are deliberately EXCLUDED from
- * the caller's clear decision — the form keeps the old provider secret
- * until the new secret commits so a failed commit can roll the metadata
- * back (save-host.ts compensation).
+ * It remains exported only to lock the compatibility comparison and prevent
+ * accidental drift in callers that reason about whole execution targets.
  */
 export function transportTargetChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
   return a.kind !== b.kind

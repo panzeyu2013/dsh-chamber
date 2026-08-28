@@ -2,6 +2,7 @@
  * control-plane shell; the rest of the boundary matrix stays no-listen. */
 
 import { request as httpRequest } from 'node:http'
+import { createConnection } from 'node:net'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -32,6 +33,33 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
     })
     req.on('error', reject)
     req.end()
+  })
+}
+
+function rawRequest(port: number, payload: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let response = ''
+    let settled = false
+    const socket = createConnection({ host: '127.0.0.1', port }, () => socket.write(payload))
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      resolve(response)
+    }
+    socket.setTimeout(5_000, () => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      reject(new Error('raw gateway request timed out'))
+    })
+    socket.on('data', chunk => { response += chunk.toString('utf8') })
+    socket.on('end', finish)
+    socket.on('close', hadError => { if (!hadError) finish() })
+    socket.on('error', error => {
+      if (settled) return
+      settled = true
+      reject(error)
+    })
   })
 }
 
@@ -92,6 +120,37 @@ test('public Host health/preflight pass while an unknown authority is rejected',
     })
     assert.equal(preflight.status, 204)
     assert.match(String(preflight.headers['access-control-allow-headers']), /authorization/)
+
+    // Use literal duplicate field lines rather than node:http's normalized
+    // header object: Node keeps a single Authorization value, so only the
+    // shared raw request policy can prevent first-value masking.
+    const duplicateHttp = await rawRequest(plane.port!, [
+      'GET /health HTTP/1.1',
+      'Host: gateway.example:3000',
+      'Authorization: Bearer secret',
+      'Authorization: Bearer attacker-controlled-second-value',
+      'Connection: close',
+      '',
+      '',
+    ].join('\r\n'))
+    assert.match(duplicateHttp, /^HTTP\/1\.1 400 Bad Request/)
+    assert.match(duplicateHttp, /"code":"bad_request"/)
+
+    const duplicateWs = await rawRequest(plane.port!, [
+      'GET /api/i/missing/api/events.mux HTTP/1.1',
+      'Host: gateway.example:3000',
+      'Origin: http://gateway.example:3000',
+      'Connection: Upgrade',
+      'Upgrade: websocket',
+      'Sec-WebSocket-Version: 13',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+      'Authorization: Bearer secret',
+      'Authorization: Bearer attacker-controlled-second-value',
+      '',
+      '',
+    ].join('\r\n'))
+    assert.match(duplicateWs, /^HTTP\/1\.1 400 Bad Request/)
+    assert.match(duplicateWs, /"code":"bad_request"/)
   } finally {
     await plane.stop()
     rmSync(stateDir, { recursive: true, force: true })

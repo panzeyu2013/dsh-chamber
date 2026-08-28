@@ -13,12 +13,13 @@ import { spawnSync } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
+  acquireSshAuthLease,
   buildAskpassScript,
   buildRemoteExecArgv,
   chmodAskpassDirOwnerOnly,
@@ -31,17 +32,43 @@ import {
   probeDshSignature,
   resolveWriteTarget,
   setSshPassword,
-  sshAuthEnv,
   sshPasswordSupported,
   sshProvider,
   verifyGatewayEndpointViaTunnel,
   MAX_SSH_PASSWORD_CHARS,
   WRITE_FILE_MAX_BYTES,
 } from './ssh-provider.ts'
-import { configureGatewaySessionProvider, setGatewayPassword, setGatewayToken } from './gateway-provider.ts'
+import { configureGatewaySessionProvider, GATEWAY_RUNTIME_IDENTITY, setGatewayPassword, setGatewayToken } from './gateway-provider.ts'
 import type { GatewaySessionProviderHooks } from './gateway-provider.ts'
-import type { GatewaySessionOrigin } from './gateway-session.ts'
+import type { GatewayRegistrationAuthProof, GatewaySessionOrigin } from './gateway-session.ts'
 import type { TransportExecDeps, TransportInstanceSpec, TransportStatusProjection, SpawnedProcess } from './transport-provider.ts'
+import { sshCredentialBinding } from './credential-binding.ts'
+
+const GATEWAY_RUNTIME_STATUS = { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'stopped' }
+
+function completeTestGatewaySessionHooks(partial: GatewaySessionProviderHooks): GatewaySessionProviderHooks {
+  if (partial.ensureSession === undefined) throw new TypeError('test session hooks require ensureSession')
+  let generation = 0
+  let proof: GatewayRegistrationAuthProof | null = null
+  let cached: string | null = null
+  return {
+    ensureSession: async (origin, password) => {
+      const result = await partial.ensureSession!(origin, password)
+      if (result.ok) cached = result.cookie
+      return result
+    },
+    generation: partial.generation ?? (() => generation),
+    registrationAuthProof: partial.registrationAuthProof ?? (() => proof),
+    setRegistrationAuthProof: partial.setRegistrationAuthProof ?? ((_origin, next) => { proof = next }),
+    cachedCookie: origin => partial.cachedCookie?.(origin) ?? cached,
+    invalidate: origin => {
+      generation += 1
+      proof = null
+      cached = null
+      partial.invalidate?.(origin)
+    },
+  }
+}
 
 /** A minimal valid ssh spec for provider-surface tests (v2: kind = target
  *  type 'dsh', transport = mechanism 'ssh' — design 17 §2). */
@@ -80,6 +107,13 @@ test('the askpass helper answers host-key prompts with yes and password prompts 
     assert.equal(passphrase.stdout, "s3cr't\n", 'key passphrase prompts reuse the stored password')
     // OpenSSH runs SSH_ASKPASS directly: it must be executable but stay owner-only.
     assert.equal(statSync(path).mode & 0o777, 0o700, 'helper is executable and owner-only')
+    const helperDir = dirname(path)
+    assert.notEqual(helperDir, join(tmpdir(), 'dsh-chamber-ssh'), 'the historical globally pre-claimable directory is never used')
+    assert.match(helperDir, new RegExp(`dsh-chamber-ssh-${process.pid}-[^/\\\\]+$`), 'the helper lives in an unguessable process-private leaf')
+    assert.equal(statSync(helperDir).mode & 0o777, 0o700, 'the process-private leaf is owner-only')
+    if (typeof process.getuid === 'function') {
+      assert.equal(statSync(helperDir).uid, process.getuid(), 'the current OS user owns the helper directory')
+    }
   } finally {
     rmSync(path, { force: true })
   }
@@ -100,37 +134,19 @@ test('startup cleanup preserves helpers owned by this live process', () => {
   }
 })
 
-test('askpass dir chmod EPERM downgrades instead of failing password auth (multi-user machine)', () => {
-  // On a shared machine a second OS user cannot chmod the askpass directory
-  // the first user created (EPERM). The downgrade keeps the existing mode
-  // and logs LOUDLY — password auth must not fail wholesale (review 2026-08).
-  // /dev/null is root-owned on macOS/Linux, so chmodSync on it raises a
-  // genuine EPERM (verified; no root required).
-  let eperm = false
+test('askpass directory gate tightens an owned directory and fails closed on an untrusted path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-askpass-mode-test-'))
   try {
-    chmodSync('/dev/null', 0o700)
-  } catch (error) {
-    eperm = (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-  if (!eperm) return // platform without the EPERM trigger (e.g. win32) — nothing to downgrade
-  const warnings: string[] = []
-  const originalWarn = console.warn
-  console.warn = (message?: unknown, ...args: unknown[]) => {
-    warnings.push(String(message))
-    originalWarn(message, ...args)
-  }
-  try {
-    chmodAskpassDirOwnerOnly('/dev/null')
+    chmodSync(dir, 0o777)
+    chmodAskpassDirOwnerOnly(dir)
+    assert.equal(statSync(dir).mode & 0o777, 0o700)
+    // A file/symlink/non-owned directory can never be downgraded to a warning:
+    // createAskpassHelper would execute password-bearing code from this path.
+    assert.throws(() => chmodAskpassDirOwnerOnly('/dev/null'), /private directory|owned by uid|EPERM/)
+    assert.throws(() => chmodAskpassDirOwnerOnly(join(process.cwd(), 'definitely-missing-askpass-dir')), /ENOENT|ENOTDIR/)
   } finally {
-    console.warn = originalWarn
+    rmSync(dir, { recursive: true, force: true })
   }
-  assert.ok(
-    warnings.some(text => /EPERM/.test(text) && /askpass directory/.test(text)),
-    'the EPERM downgrade logs loudly',
-  )
-  // A NON-EPERM chmod failure still throws: the caller must not proceed
-  // blind (only the shared-directory multi-user case downgrades).
-  assert.throws(() => chmodAskpassDirOwnerOnly(join(process.cwd(), 'definitely-missing-askpass-dir')), /ENOENT|ENOTDIR/)
 })
 
 test('setSshPassword/getSshPassword round-trip and clear (empty string and null both clear)', () => {
@@ -143,103 +159,101 @@ test('setSshPassword/getSshPassword round-trip and clear (empty string and null 
   assert.equal(getSshPassword('t-store-1'), null, 'null clears')
 })
 
-test('sshAuthEnv returns the askpass env only when a password is stored', () => {
+test('acquireSshAuthLease returns a child-scoped askpass env only when a password is stored', () => {
   setSshPassword('t-env-1', 'pw')
+  let lease: ReturnType<typeof acquireSshAuthLease> = null
   try {
-    const env = sshAuthEnv(spec('t-env-1'))
-    assert.ok(env !== null, 'a stored password yields an askpass env')
-    assert.equal(env!.SSH_ASKPASS_REQUIRE, 'force', 'askpass is forced (no TTY needed)')
-    assert.ok(typeof env!.SSH_ASKPASS === 'string' && env!.SSH_ASKPASS.length > 0)
-    assert.ok(existsSync(env!.SSH_ASKPASS!), 'the helper exists before the spawn')
-    assert.equal(sshAuthEnv(spec('t-env-2')), null, 'no stored password = key/agent auth (null env)')
+    lease = acquireSshAuthLease(spec('t-env-1'))
+    assert.ok(lease !== null, 'a stored password yields an askpass lease')
+    assert.equal(lease.env.SSH_ASKPASS_REQUIRE, 'force', 'askpass is forced (no TTY needed)')
+    assert.ok(typeof lease.env.SSH_ASKPASS === 'string' && lease.env.SSH_ASKPASS.length > 0)
+    const path = lease.env.SSH_ASKPASS
+    assert.ok(existsSync(path), 'the helper exists before the spawn')
+    assert.equal(acquireSshAuthLease(spec('t-env-2')), null, 'no stored password = key/agent auth (null lease)')
+    lease.release()
+    assert.ok(!existsSync(path), 'child lease release removes its helper')
+    lease.release()
+    assert.ok(!existsSync(path), 'release is idempotent')
   } finally {
+    lease?.release()
     setSshPassword('t-env-1', null)
     purgeSshAuth('t-env-1')
     purgeSshAuth('t-env-2')
   }
 })
 
-test('disposeSshAuth keeps the current helper for in-flight execs; purgeSshAuth deletes it', () => {
-  // Review 2026-08: a plain disconnect must NOT delete the generation an
-  // in-flight exec (systemctl / run, up to runTimeoutMs) may still hold as
-  // SSH_ASKPASS — deleting it fails that exec's password auth (the same P1
-  // regression the retirement discipline fixes). dispose retires the current
-  // generation (kept on disk); the FINAL deletion happens on instance
-  // removal (purgeSshAuth).
+test('dispose/purge never delete a helper before its child lease releases', () => {
   setSshPassword('t-env-3', 'pw')
+  let lease: ReturnType<typeof acquireSshAuthLease> = null
   try {
-    const env = sshAuthEnv(spec('t-env-3'))
-    assert.ok(env !== null && env!.SSH_ASKPASS !== undefined)
-    const path = env!.SSH_ASKPASS
+    lease = acquireSshAuthLease(spec('t-env-3'))
+    assert.ok(lease !== null && lease.env.SSH_ASKPASS !== undefined)
+    const path = lease.env.SSH_ASKPASS
     assert.ok(existsSync(path))
     disposeSshAuth(spec('t-env-3'))
-    assert.ok(existsSync(path), 'dispose keeps the current helper: an in-flight exec may still execute it')
+    assert.ok(existsSync(path), 'plain disconnect keeps the in-flight child helper')
     assert.equal(statSync(path).mode & 0o777, 0o700, 'the retained helper stays owner-executable')
-    // A later sshAuthEnv (reconnect) writes a FRESH helper; the retained one
-    // moves into retirement and stays on disk (never deleted by dispose).
-    const next = sshAuthEnv(spec('t-env-3'))
-    assert.ok(next !== null && next!.SSH_ASKPASS !== path, 'a fresh helper replaces the disposed one')
-    assert.ok(existsSync(path), 'the retained generation is NOT deleted by the next recreation')
-    // The FINAL deletion is the explicit purge (instance removal path).
+    setSshPassword('t-env-3', null)
+    assert.equal(getSshPassword('t-env-3'), null, 'explicit clear blocks every future password-backed spawn')
+    assert.equal(acquireSshAuthLease(spec('t-env-3')), null)
+    assert.ok(existsSync(path), 'explicit password clear cannot invalidate the already-live child path')
     purgeSshAuth('t-env-3')
-    assert.ok(!existsSync(path), 'purge deletes the retained generation')
+    assert.ok(existsSync(path), 'instance removal still cannot invalidate a live child path')
+    lease.release()
+    assert.ok(!existsSync(path), 'the helper is removed exactly when the child lease releases')
   } finally {
+    lease?.release()
     setSshPassword('t-env-3', null)
     purgeSshAuth('t-env-3')
   }
 })
 
-test('recreating the askpass env RETIRES the previous helper instead of deleting it (concurrent-exec race)', () => {
-  // P1 regression: the old implementation deleted the previous helper on
-  // every sshAuthEnv call — a tunnel spawned first, then an exec (systemd
-  // start) recreated the helper and deleted the file the tunnel's ssh was
-  // still about to execute for its first prompt, failing password auth.
+test('more than five concurrent askpass generations stay alive and clean up by child lifecycle', () => {
+  // Regression: the old fixed cap deleted the tunnel helper once enough
+  // concurrent systemd/run children created newer generations.
   setSshPassword('t-env-4', 'pw')
+  const leases: NonNullable<ReturnType<typeof acquireSshAuthLease>>[] = []
   try {
-    const first = sshAuthEnv(spec('t-env-4'))
-    assert.ok(first !== null && first!.SSH_ASKPASS !== undefined)
-    const firstPath = first!.SSH_ASKPASS
-    const second = sshAuthEnv(spec('t-env-4'))
-    assert.ok(second !== null && second!.SSH_ASKPASS !== undefined)
-    const secondPath = second!.SSH_ASKPASS
-    assert.notEqual(secondPath, firstPath, 'a fresh helper is baked for the new spawn')
-    // The in-flight child's helper must still be on disk, executable.
-    assert.ok(existsSync(firstPath), 'the retired (in-flight) helper survives the recreation')
-    assert.equal(statSync(firstPath).mode & 0o777, 0o700, 'retired helper stays owner-executable')
-    // Dispose deletes the RETIRED generation but keeps the current one
-    // (an in-flight child may still execute it): only the final purge
-    // removes the whole generation list.
+    for (let i = 0; i < 7; i += 1) {
+      const lease = acquireSshAuthLease(spec('t-env-4'))
+      assert.ok(lease !== null)
+      leases.push(lease)
+    }
+    const paths = leases.map(lease => lease.env.SSH_ASKPASS!)
+    assert.equal(new Set(paths).size, 7, 'each child gets a fresh password generation')
+    assert.ok(paths.every(path => existsSync(path)), 'tunnel + six concurrent exec generations all survive')
     disposeSshAuth(spec('t-env-4'))
-    assert.ok(!existsSync(firstPath), 'dispose deletes the retired generation')
-    assert.ok(existsSync(secondPath), 'dispose KEEPS the current generation for in-flight execs')
     purgeSshAuth('t-env-4')
-    assert.ok(!existsSync(firstPath) && !existsSync(secondPath), 'purge deletes current AND retained generations')
+    assert.ok(paths.every(path => existsSync(path)), 'dispose/purge cannot delete any live child helper')
+    for (let i = 0; i < leases.length; i += 1) {
+      leases[i].release()
+      assert.ok(!existsSync(paths[i]), `exited child ${i + 1} cleans its own helper`)
+      assert.ok(paths.slice(i + 1).every(path => existsSync(path)), 'other live children keep their helpers')
+    }
+    assert.ok(paths.every(path => !existsSync(path)), 'all child exits leave no helper residue')
   } finally {
+    for (const lease of leases) lease.release()
     setSshPassword('t-env-4', null)
     purgeSshAuth('t-env-4')
   }
 })
 
-test('askpass helper retirement is bounded by the generation cap', () => {
-  setSshPassword('t-env-5', 'pw')
+test('a synchronous exec spawn failure releases its freshly-created askpass helper', async () => {
+  configureSshPasswordStore(null)
+  const execSpec = { ...spec('t-env-spawn-fail'), serviceName: 'dsh-chamber' }
+  setSshPassword(execSpec.id, 'pw')
+  let helperPath: string | null = null
   try {
-    const paths: string[] = []
-    // Cap = 4 retired + 1 current. Generation N+1 pushes generation N into
-    // retirement; the overflow (oldest beyond the cap) is deleted on the
-    // next recreation. With 7 calls, generations 1–2 are pruned, 3–6
-    // retired, 7 current.
-    for (let i = 0; i < 7; i += 1) {
-      const env = sshAuthEnv(spec('t-env-5'))
-      assert.ok(env !== null && env!.SSH_ASKPASS !== undefined)
-      paths.push(env!.SSH_ASKPASS)
-    }
-    assert.ok(!existsSync(paths[0]), 'oldest generation is pruned beyond the cap')
-    assert.ok(!existsSync(paths[1]), 'second-oldest generation is pruned beyond the cap')
-    assert.ok(existsSync(paths[2]) && existsSync(paths[3]) && existsSync(paths[4]) && existsSync(paths[5]), 'recent retired generations survive')
-    assert.ok(existsSync(paths[6]), 'current generation survives')
+    const result = await sshProvider.exec!(execSpec, 'start', runDeps((_command, _args, options) => {
+      helperPath = typeof options.env?.SSH_ASKPASS === 'string' ? options.env.SSH_ASKPASS : null
+      throw new Error('synthetic spawn failure')
+    }))
+    assert.equal(result.ok, false)
+    assert.ok(helperPath !== null, 'the lease was acquired before spawn')
+    assert.ok(!existsSync(helperPath), 'failed spawn releases the helper immediately')
   } finally {
-    setSshPassword('t-env-5', null)
-    purgeSshAuth('t-env-5')
+    setSshPassword(execSpec.id, null)
+    purgeSshAuth(execSpec.id)
   }
 })
 
@@ -251,7 +265,7 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
   try {
-    assert.equal(configureSshPasswordStore(file), null, 'missing file = first run, no notice')
+    assert.equal(configureSshPasswordStore(file, id => spec(id)), null, 'missing file = first run, no notice')
     setSshPassword('t-file-1', 'pw-1')
     setSshPassword('t-file-2', 'pw-2')
     assert.ok(existsSync(file), 'file is written on the first set')
@@ -262,7 +276,7 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
     // Simulate a restart: reconfigure away (clears the memory map), reload.
     configureSshPasswordStore(null)
     assert.equal(getSshPassword('t-file-1'), null, 'memory cleared by reconfiguration')
-    assert.equal(configureSshPasswordStore(file), null, 'reload is clean')
+    assert.equal(configureSshPasswordStore(file, id => spec(id)), null, 'reload is clean')
     assert.equal(getSshPassword('t-file-1'), 'pw-1', 'password survives a restart via the file')
     assert.equal(getSshPassword('t-file-2'), 'pw-2')
     // Explicit clear removes the entry from the file too.
@@ -276,12 +290,83 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
   }
 })
 
+test('SSH password binding fails closed across the secret-fsync → registry-fsync crash window', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-binding-'))
+  const file = join(dir, 'ssh-passwords.json')
+  const oldSpec = spec('crash-ssh')
+  const newSpec = { ...oldSpec, host: 'new.example.com', user: 'new-user', sshPort: 2222 }
+  let current: TransportInstanceSpec | null = oldSpec
+  try {
+    configureSshPasswordStore(file, () => current)
+    setSshPassword(oldSpec.id, 'new-target-password', newSpec)
+    assert.equal(getSshPassword(oldSpec.id), null, 'new-target secret is invisible while old registry metadata remains')
+    configureSshPasswordStore(null)
+    configureSshPasswordStore(file, () => current)
+    assert.equal(getSshPassword(oldSpec.id), null, 'restart after the crash remains fail-closed')
+    current = newSpec
+    assert.equal(getSshPassword(oldSpec.id), 'new-target-password', 'the binding becomes visible only under its exact SSH endpoint')
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('non-empty legacy SSH password files are uniquely preserved and never auto-bound', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-legacy-'))
+  const file = join(dir, 'ssh-passwords.json')
+  try {
+    writeFileSync(file, JSON.stringify({ schemaVersion: 1, passwords: { legacy: 'password' } }))
+    const notice = configureSshPasswordStore(file, id => spec(id))
+    assert.match(notice ?? '', /no endpoint bindings|re-enter/)
+    assert.equal(getSshPassword('legacy'), null)
+    assert.equal(existsSync(file), false)
+    assert.equal(readdirSync(dir).some(name => name.startsWith('ssh-passwords.json.unbound-')), true)
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('SSH password load tightens an existing regular file before reading and refuses symlinks', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-load-mode-'))
+  const file = join(dir, 'ssh-passwords.json')
+  const target = join(dir, 'target.json')
+  const link = join(dir, 'linked-passwords.json')
+  const payload = JSON.stringify({
+    schemaVersion: 2,
+    passwords: { 'load-mode': 'pw' },
+    bindings: { 'load-mode': sshCredentialBinding(spec('load-mode')) },
+  })
+  try {
+    writeFileSync(file, payload, { mode: 0o644 })
+    chmodSync(file, 0o644)
+    assert.equal(configureSshPasswordStore(file, id => spec(id)), null)
+    assert.equal(statSync(file).mode & 0o777, 0o600, 'mode is tightened before the password enters memory')
+    assert.equal(getSshPassword('load-mode'), 'pw')
+
+    // Creating symlinks is privilege-gated on many Windows installations.
+    // Keep the load-mode regression portable while exercising the concrete
+    // link refusal wherever CI can create one.
+    if (process.platform !== 'win32') {
+      writeFileSync(target, payload, { mode: 0o644 })
+      symlinkSync(target, link)
+      const notice = configureSshPasswordStore(link)
+      assert.match(notice ?? '', /cannot read|regular file|symlink/)
+      assert.equal(getSshPassword('load-mode'), null, 'a symlink target is never adopted as the live password store')
+      assert.equal(statSync(target).mode & 0o777, 0o644)
+    }
+  } finally {
+    configureSshPasswordStore(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('password persistence tightens a pre-existing plaintext tmp file before replacing the store', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
   const tmp = `${file}.tmp`
   try {
-    configureSshPasswordStore(file)
+    configureSshPasswordStore(file, id => spec(id))
     writeFileSync(tmp, 'stale plaintext')
     chmodSync(tmp, 0o644)
     setSshPassword('t-mode', 'pw')
@@ -326,7 +411,7 @@ test('password persistence failure rolls back memory and removes the plaintext t
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
   try {
-    configureSshPasswordStore(file)
+    configureSshPasswordStore(file, id => spec(id))
     setSshPassword('t-rollback', 'old')
     // Replacing the target file with a directory makes the final atomic rename
     // fail after the tmp payload was written, deterministically across CI.
@@ -354,6 +439,9 @@ test('password and instance metadata limits are enforced in the provider', () =>
   assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'x'.repeat(129), host: 'h', remotePort: 3080 }), null)
   assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'x'.repeat(254), remotePort: 3080 }), null)
   assert.equal(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080, serviceName: 'x'.repeat(256) }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'dash-unit', label: 'h', host: 'h', remotePort: 3080, serviceName: '-x' }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'option-unit', label: 'h', host: 'h', remotePort: 3080, serviceName: '--user' }), null)
+  assert.ok(sshProvider.validateSpec({ id: 'hyphen-unit', label: 'h', host: 'h', remotePort: 3080, serviceName: 'my-unit.service' }) !== null)
   assert.ok(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080 }) !== null)
 })
 
@@ -387,6 +475,19 @@ test('the ssh provider serves both target kinds over the ssh transport (v2, desi
   // false/absent normalize to false.
   assert.equal(sshProvider.validateSpec({ id: 'e', label: 'h', host: 'h', remotePort: 3080, insecureHttp: true }), null)
   assert.equal(sshProvider.validateSpec({ id: 'e2', label: 'h', kind: 'gateway', host: 'h', remotePort: 30801, insecureHttp: true }), null)
+})
+
+test('the ssh provider refuses an S23 pin instead of silently dropping an inapplicable trust anchor', () => {
+  assert.equal(sshProvider.validateSpec({
+    id: 'ssh-pin',
+    label: 'ssh pin',
+    kind: 'gateway',
+    transport: 'ssh',
+    host: 'gateway.example.com',
+    user: 'alice',
+    remotePort: 30801,
+    spkiPin: 'ab'.repeat(32),
+  }), null)
 })
 
 // --- design 13 §7.2 exec whitelist tests (M1) ---
@@ -570,6 +671,41 @@ function runDeps(spawnFn: TransportExecDeps['spawnFn']): TransportExecDeps {
     projection: () => projection,
   }
 }
+
+test('a run timeout resolves without releasing askpass before the real child exit', async () => {
+  configureSshPasswordStore(null)
+  const runSpec = spec('t-run-timeout-lease')
+  setSshPassword(runSpec.id, 'pw')
+  const child = new FakeRunChild()
+  let helperPath: string | null = null
+  let exited = false
+  try {
+    const deps = runDeps((_command, _args, options) => {
+      helperPath = typeof options.env?.SSH_ASKPASS === 'string' ? options.env.SSH_ASKPASS : null
+      return child
+    })
+    deps.runTimeoutMs = 5
+    deps.disconnectGraceMs = 1_000
+    const resultPromise = sshProvider.exec!(runSpec, 'run', deps, {
+      op: 'exec', command: 'printf', argv: ['%s', '$HOME'],
+    })
+    // Production timeout timers are intentionally unref'ed. Keep the test
+    // process alive long enough to observe that timeout-resolved state.
+    const keepAlive = setTimeout(() => {}, 1_000)
+    const result = await resultPromise.finally(() => clearTimeout(keepAlive))
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.match(result.error, /timed out/)
+    assert.ok(child.killCalls.includes('SIGTERM'), 'timeout asks the real child to terminate')
+    assert.ok(helperPath !== null && existsSync(helperPath), 'promise resolution alone cannot release the live child helper')
+    child.simulateExit(143, 'SIGTERM')
+    exited = true
+    assert.ok(!existsSync(helperPath), 'the later real child exit releases the helper')
+  } finally {
+    if (!exited) child.simulateExit(143, 'SIGTERM')
+    setSshPassword(runSpec.id, null)
+    purgeSshAuth(runSpec.id)
+  }
+})
 
 /**
  * A fake remote host for the `run` channel: records every spawn and answers
@@ -958,10 +1094,8 @@ test('ssh provider verifyUp: a gateway target with a stored token probes WITH an
     let seenAuth: string | null = null
     const server = describeServer((req, res, body) => {
       seenAuth = req.headers.authorization ?? null
-      let rpcId: string | null = null
-      try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+      res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as AddressInfo).port
@@ -1103,14 +1237,12 @@ test('ssh provider verifyUp: a password-configured gateway-over-ssh target (no t
     cachedCookie: () => cached,
     invalidate: () => {},
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestGatewaySessionHooks(hooks))
   const server = tunnelGatewayServer((req, res, body) => {
     seen.cookie = req.headers.cookie
     seen.authorization = req.headers.authorization
-    let rpcId: string | null = null
-    try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -1129,6 +1261,8 @@ test('ssh provider verifyUp: a password-configured gateway-over-ssh target (no t
     assert.equal(exchanged[0].password, GATEWAY_PASSWORD, 'the STORED password is what the login exchanges — never the cookie')
     assert.equal(exchanged[0].origin.baseUrl, `http://127.0.0.1:${port}`, 'the session is keyed to the TUNNEL endpoint origin')
     assert.equal(exchanged[0].origin.insecureHttp, true, 'the tunnel origin is plain http (the session manager scheme selector)')
+    assert.equal(exchanged[0].origin.authority, '127.0.0.1:30801', 'the session key uses the remote loopback HTTP authority, not the SSH alias')
+    assert.match(exchanged[0].origin.scope, /^v1:gw-tunnel-pw-1:/, 'the session key is owned by this exact connection and SSH target binding')
     // Second verifyUp with a live cached session: NO re-login — bounded
     // reconnect cycles must never hammer the login endpoint (429 discipline).
     cached = SESSION_COOKIE
@@ -1158,7 +1292,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 with the session cookie invalida
     cachedCookie: () => null,
     invalidate: origin => { invalidated.push(origin) },
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestGatewaySessionHooks(hooks))
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
@@ -1188,10 +1322,8 @@ test('ssh provider verifyUp: a tunnel-probe 401 self-heals through the one autom
       res.end('unauthorized')
       return
     }
-    let rpcId: string | null = null
-    try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
   const invalidated: GatewaySessionOrigin[] = []
   let logins = 0
@@ -1203,7 +1335,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 self-heals through the one autom
     cachedCookie: () => null,
     invalidate: origin => { invalidated.push(origin) },
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestGatewaySessionHooks(hooks))
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
@@ -1220,33 +1352,65 @@ test('ssh provider verifyUp: a tunnel-probe 401 self-heals through the one autom
   }
 })
 
-test('ssh provider verifyUp: token priority — with both credentials the Bearer alone authenticates, the session flow is never consulted (design 17 §2.3)', async () => {
+test('ssh provider verifyUp: token and password coexist — the tunnel probe carries Bearer AND Cookie (design 17 §2.3)', async () => {
   const TOKEN = 'q'.repeat(32)
   setGatewayToken('gw-tunnel-both-1', TOKEN)
-  let sessionConsulted = false
+  let sessionConsulted = 0
   const hooks: GatewaySessionProviderHooks = {
-    ensureSession: () => { sessionConsulted = true; return Promise.resolve({ ok: true, cookie: SESSION_COOKIE } as const) },
-    cachedCookie: () => { sessionConsulted = true; return null },
-    invalidate: () => { sessionConsulted = true },
+    ensureSession: () => { sessionConsulted += 1; return Promise.resolve({ ok: true, cookie: SESSION_COOKIE } as const) },
+    cachedCookie: () => null,
+    invalidate: () => { sessionConsulted += 1 },
   }
-  configureGatewaySessionProvider(hooks)
+  configureGatewaySessionProvider(completeTestGatewaySessionHooks(hooks))
   let seenAuth: string | null = null
+  let seenCookie: string | null = null
   const server = tunnelGatewayServer((req, res) => {
     seenAuth = req.headers.authorization ?? null
-    res.writeHead(401)
-    res.end('unauthorized')
+    seenCookie = req.headers.cookie ?? null
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
     setGatewayPassword('gw-tunnel-both-1', GATEWAY_PASSWORD)
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-both-1'), { host: '127.0.0.1', port })
+    assert.equal(result.ok, true)
     assert.equal(seenAuth, `Bearer ${TOKEN}`, 'the Bearer token rides the tunnel probe')
-    assert.equal(sessionConsulted, false, 'the password/session flow is skipped entirely while a token exists')
-    if (!result.ok) assert.match(result.detail ?? '', /rejected the token/)
+    assert.equal(seenCookie, SESSION_COOKIE, 'the independent password session also rides the tunnel probe')
+    assert.equal(sessionConsulted, 1, 'the token never shadows the password/session flow')
   } finally {
     setGatewayToken('gw-tunnel-both-1', null)
     setGatewayPassword('gw-tunnel-both-1', null)
+    configureGatewaySessionProvider({})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('ssh provider verifyUp: a refused password login falls back to a valid tunnel Bearer', async () => {
+  const TOKEN = 'r'.repeat(32)
+  configureGatewaySessionProvider(completeTestGatewaySessionHooks({
+    ensureSession: async () => ({ ok: false, code: 'invalid_credentials', error: 'password rejected' }),
+    cachedCookie: () => null,
+  }))
+  let probes = 0
+  const server = tunnelGatewayServer((req, res) => {
+    probes += 1
+    assert.equal(req.headers.authorization, `Bearer ${TOKEN}`)
+    assert.equal(req.headers.cookie, undefined)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    setGatewayToken('gw-tunnel-fallback', TOKEN)
+    setGatewayPassword('gw-tunnel-fallback', GATEWAY_PASSWORD)
+    assert.deepEqual(await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-fallback'), { host: '127.0.0.1', port }), { ok: true })
+    assert.equal(probes, 1)
+  } finally {
+    setGatewayToken('gw-tunnel-fallback', null)
+    setGatewayPassword('gw-tunnel-fallback', null)
     configureGatewaySessionProvider({})
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
@@ -1303,22 +1467,20 @@ test('verifyGatewayEndpointViaTunnel: a 401 with a session Cookie is classified 
   }
 })
 
-test('ssh provider verifyUp: a gateway-over-ssh probe presents the REMOTE gateway authority in the Host header (design 17 §9.3 隧道 Host 覆盖)', async () => {
+test('ssh provider verifyUp: a gateway-over-ssh probe presents the remote loopback authority, never the SSH hostname/alias (design 17 §9.3)', async () => {
   setGatewayToken('gw-host', null)
   let seenHost: string | null = null
   const server = describeServer((req, res, body) => {
     seenHost = req.headers.host ?? null
-    let rpcId: string | null = null
-    try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+    res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-host'), { host: '127.0.0.1', port })
     assert.deepEqual(result, { ok: true })
-    assert.equal(seenHost, 'h.example.com:30801', 'the probe CONNECTS to the tunnel loopback but presents the remote gateway authority')
+    assert.equal(seenHost, '127.0.0.1:30801', 'the forward terminates at remote loopback; an SSH alias is not an HTTP authority')
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }

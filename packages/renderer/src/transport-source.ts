@@ -23,21 +23,17 @@ const LEGACY_SSH_PREFIX = 'ssh-'
 /** v2 target kinds (design 17 §2.1), mirroring the desktop TARGET_KINDS. */
 const TARGET_KINDS = ['dsh', 'gateway'] as const
 
-/** A v2 target kind ('dsh' | 'gateway'). */
-type TargetKind = (typeof TARGET_KINDS)[number]
-
-/** An instance identity with a kind: the renderer's SshInstanceSpec still
- *  spells the ssh-transport kind 'ssh' (pre-migration), while the live
- *  registry carries the v2 target kinds 'dsh' | 'gateway' — both are
- *  accepted here. */
-type KindedInstance = { id: string; kind: TransportKind | TargetKind }
+/** Legacy source-id input remains parseable even though normalized registry
+ * specs crossing IPC now use TransportKind (`dsh | gateway`) exclusively. */
+type LegacyTransportKind = 'ssh'
+type KindedInstance = { id: string; kind: TransportKind | LegacyTransportKind }
 
 const RAW_INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 
-export function sourceIdForTransport(kind: TransportKind | TargetKind, rawId: string): string {
+export function sourceIdForTransport(kind: TransportKind | LegacyTransportKind, rawId: string): string {
   // v2 (design 17 §2.1): the kind must be a TARGET_KINDS member. The legacy
-  // 'ssh' spelling — the renderer's TransportKind before the v2 migration
-  // (the connections form still edits with it) — is the one carve-out: it
+  // 'ssh' spelling — accepted only for legacy deep-link/source-id callers —
+  // is the one carve-out: it
   // produces the legacy `ssh-<id>` source id, which the control plane still
   // routes as a dsh-kind alias (design 17 §2.2). Anything else is refused
   // loudly so a future unknown kind can never masquerade as a routable id.

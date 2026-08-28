@@ -22,7 +22,11 @@
 import type { SettingsBridgeKey } from '../locales.ts'
 
 export const REMOTE_STATUS_POLL_INTERVAL_MS = 2_000
-export const REMOTE_STATUS_POLL_TIMEOUT_MS = 120_000
+// The shared installer has one 10-minute wall-clock budget. A legitimate slow
+// install must not be reported as timed out while its background job is still
+// authoritative, so the settle poll leaves a one-minute delivery margin.
+export const REMOTE_STATUS_POLL_TIMEOUT_MS = 11 * 60_000
+export const GATEWAY_RUNTIME_STATUS_KIND = 'dsh-chamber-gateway-runtime' as const
 
 export interface GatewayRuntimeApiDeps {
   fetchImpl?: typeof fetch
@@ -32,6 +36,8 @@ export interface GatewayRuntimeApiDeps {
 }
 
 export type RemoteRuntimePhase =
+  | 'installing'
+  | 'pending'
   | 'applying'
   | 'snapshot-failed'
   | 'swap-attempted'
@@ -40,19 +46,66 @@ export type RemoteRuntimePhase =
 export type RemoteRuntimeSource = 'user-selected' | 'env' | 'builtin-anchor'
 export type RemoteRestartOutcome = 'running' | 'ok' | 'failed'
 
+export interface RemoteRuntimeFailure {
+  version: string
+  at: string
+  reason: string
+}
+
+export interface RemoteRuntimeDiskUsage {
+  versionTrees: number
+  versionTreeBytes: number
+  storeBytes: number
+  cacheBytes: number
+  installHomeBytes: number
+  xdgCacheBytes: number
+  workBytes: number
+  failureBytes: number
+  snapshotBytes: number
+  preRollbackBytes: number
+  restoreBackupBytes: number
+  totalBytes: number
+  storePruneNeeded: boolean
+}
+
+export interface RemoteRuntimeProgress {
+  stage: 'download' | 'install' | 'prune' | 'smoke' | 'publish' | 'done' | (string & {})
+  received?: number
+  total?: number | null
+}
+
 /** `GET /chamber/runtime/status` (design 18 §9.3) — verbatim projection. */
 export interface RemoteRuntimeStatus {
+  kind: typeof GATEWAY_RUNTIME_STATUS_KIND
   activeVersion: string | null
+  builtinVersion: string | null
+  currentVersion: string | null
+  selectedVersion: string | null
+  hasOverride: boolean
   source: RemoteRuntimeSource | null
   phase: RemoteRuntimePhase
   startupBlockedReason: string | null
   pending: string | null
   connectionState: string | null
   registry: string | null
+  registryError: string | null
   platform: string | null
   mutationsAllowed: boolean
   operationError: string | null
   restart: RemoteRestartOutcome | null
+  restoreOutcome: string | null
+  snapshotCount: number | null
+  latestSnapshotAt: string | null
+  snapshotError: string | null
+  restoreInProgress: boolean | null
+  preRollbackCount: number | null
+  preRollbackLatestName: string | null
+  failure: RemoteRuntimeFailure | null
+  diskUsage: RemoteRuntimeDiskUsage | null
+  diskError: string | null
+  diskLimitBytes: number | null
+  diskLimitExceeded: boolean | null
+  progress: RemoteRuntimeProgress | null
 }
 
 export interface RemoteVersionEntry {
@@ -70,7 +123,7 @@ export interface RemoteVersions {
 }
 
 const REMOTE_PHASES: readonly RemoteRuntimePhase[] = [
-  'applying', 'snapshot-failed', 'swap-attempted', 'restore-blocked', 'idle',
+  'installing', 'pending', 'applying', 'snapshot-failed', 'swap-attempted', 'restore-blocked', 'idle',
 ]
 const REMOTE_SOURCES: readonly RemoteRuntimeSource[] = [
   'user-selected', 'env', 'builtin-anchor',
@@ -116,6 +169,62 @@ function booleanOr(
   return value
 }
 
+function nullableBoolean(row: Record<string, unknown>, key: string, label: string): boolean | null {
+  const value = row[key]
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'boolean') throw new Error(`Gateway returned malformed ${label}.${key}`)
+  return value
+}
+
+function nullableNumber(row: Record<string, unknown>, key: string, label: string): number | null {
+  const value = row[key]
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`Gateway returned malformed ${label}.${key}`)
+  }
+  return value
+}
+
+function parseFailure(value: unknown): RemoteRuntimeFailure | null {
+  if (value === undefined || value === null) return null
+  const row = record(value, 'runtime status.failure')
+  return {
+    version: stringField(row, 'version', 'runtime status.failure'),
+    at: stringField(row, 'at', 'runtime status.failure'),
+    reason: stringField(row, 'reason', 'runtime status.failure'),
+  }
+}
+
+const DISK_NUMBER_FIELDS = [
+  'versionTrees', 'versionTreeBytes', 'storeBytes', 'cacheBytes', 'installHomeBytes',
+  'xdgCacheBytes', 'workBytes', 'failureBytes', 'snapshotBytes', 'preRollbackBytes',
+  'restoreBackupBytes', 'totalBytes',
+] as const
+
+function parseDiskUsage(value: unknown): RemoteRuntimeDiskUsage | null {
+  if (value === undefined || value === null) return null
+  const row = record(value, 'runtime status.diskUsage')
+  const numbers = Object.fromEntries(DISK_NUMBER_FIELDS.map((key) => {
+    const parsed = nullableNumber(row, key, 'runtime status.diskUsage')
+    if (parsed === null) throw new Error(`Gateway returned malformed runtime status.diskUsage.${key}`)
+    return [key, parsed]
+  })) as unknown as Omit<RemoteRuntimeDiskUsage, 'storePruneNeeded'>
+  return { ...numbers, storePruneNeeded: booleanField(row, 'storePruneNeeded', 'runtime status.diskUsage') }
+}
+
+function parseProgress(value: unknown): RemoteRuntimeProgress | null {
+  if (value === undefined || value === null) return null
+  const row = record(value, 'runtime status.progress')
+  const stage = stringField(row, 'stage', 'runtime status.progress') as RemoteRuntimeProgress['stage']
+  const received = nullableNumber(row, 'received', 'runtime status.progress')
+  const total = nullableNumber(row, 'total', 'runtime status.progress')
+  return {
+    stage,
+    ...(received !== null ? { received } : {}),
+    ...(row.total !== undefined ? { total } : {}),
+  }
+}
+
 /** Enum field with a version-skew pass-through: an unknown value from a newer
  *  gateway is returned as-is (the status view treats unknown phases as idle)
  *  instead of failing the whole section. */
@@ -149,14 +258,23 @@ function enumField<T extends string>(
 
 export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus {
   const row = record(value, 'runtime status')
+  if (row.kind !== GATEWAY_RUNTIME_STATUS_KIND) {
+    throw new Error('Gateway returned malformed runtime status.kind')
+  }
   return {
+    kind: GATEWAY_RUNTIME_STATUS_KIND,
     activeVersion: nullableString(row, 'activeVersion', 'runtime status'),
+    builtinVersion: nullableString(row, 'builtinVersion', 'runtime status'),
+    currentVersion: nullableString(row, 'currentVersion', 'runtime status'),
+    selectedVersion: nullableString(row, 'selectedVersion', 'runtime status'),
+    hasOverride: booleanOr(row, 'hasOverride', false, 'runtime status'),
     source: enumOr(row, 'source', REMOTE_SOURCES, null, 'runtime status'),
     phase: enumField(row, 'phase', REMOTE_PHASES, 'idle', 'runtime status'),
     startupBlockedReason: nullableString(row, 'startupBlockedReason', 'runtime status'),
     pending: nullableString(row, 'pending', 'runtime status'),
     connectionState: nullableString(row, 'connectionState', 'runtime status'),
     registry: nullableString(row, 'registry', 'runtime status'),
+    registryError: nullableString(row, 'registryError', 'runtime status'),
     platform: nullableString(row, 'platform', 'runtime status'),
     // A gateway predating the win32 read-only gate projects no field; version
     // mutations were allowed then, so absence defaults to true — never a fake
@@ -166,6 +284,19 @@ export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus {
     // Version-skew fallback: older gateways without the restart-outcome field
     // project null; the restart poll keeps its connectionState contract.
     restart: enumOr(row, 'restart', REMOTE_RESTART, null, 'runtime status'),
+    restoreOutcome: nullableString(row, 'restoreOutcome', 'runtime status'),
+    snapshotCount: nullableNumber(row, 'snapshotCount', 'runtime status'),
+    latestSnapshotAt: nullableString(row, 'latestSnapshotAt', 'runtime status'),
+    snapshotError: nullableString(row, 'snapshotError', 'runtime status'),
+    restoreInProgress: nullableBoolean(row, 'restoreInProgress', 'runtime status'),
+    preRollbackCount: nullableNumber(row, 'preRollbackCount', 'runtime status'),
+    preRollbackLatestName: nullableString(row, 'preRollbackLatestName', 'runtime status'),
+    failure: parseFailure(row.failure),
+    diskUsage: parseDiskUsage(row.diskUsage),
+    diskError: nullableString(row, 'diskError', 'runtime status'),
+    diskLimitBytes: nullableNumber(row, 'diskLimitBytes', 'runtime status'),
+    diskLimitExceeded: nullableBoolean(row, 'diskLimitExceeded', 'runtime status'),
+    progress: parseProgress(row.progress),
   }
 }
 
@@ -366,7 +497,7 @@ export async function remoteRuntimeSetRegistry(
 
 /** Render three-state projection of the remote status (design 18 §3.6
  *  status/文案口径 via the §9.3 status contract):
- *   - busy    = phase applying (install job in flight) or restart running;
+ *   - busy    = phase installing/applying or restart running;
  *   - failed  = operationError (failed async job) or terminal restart failed;
  *   - blocked = startupBlockedReason / restore-blocked / swap-attempted /
  *               snapshot-failed (blocked startup keeps the surface alive);
@@ -380,6 +511,36 @@ export interface RemoteRuntimeStatusView {
   detail: string | null
 }
 
+export interface RemoteRuntimeActionGates {
+  mutationDisabled: boolean
+  restoreBuiltinDisabled: boolean
+  restartDisabled: boolean
+}
+
+/** Pure UI mirror of the gateway's authoritative mutation fences. Pending
+ * permits only restore-builtin; installing/applying/restart-in-flight permit
+ * no runtime action. Restart remains a source-independent process refresh. */
+export function remoteRuntimeActionGates(
+  status: RemoteRuntimeStatus | null,
+  clientBusy = false,
+): RemoteRuntimeActionGates {
+  if (status === null) {
+    return { mutationDisabled: true, restoreBuiltinDisabled: true, restartDisabled: true }
+  }
+  const taskBusy = clientBusy
+    || status.phase === 'installing'
+    || status.phase === 'applying'
+    || status.restart === 'running'
+  const versionBaseBlocked = taskBusy || !status.mutationsAllowed || status.source === 'env'
+  const pending = status.phase === 'pending'
+  return {
+    mutationDisabled: versionBaseBlocked || pending,
+    restoreBuiltinDisabled: versionBaseBlocked,
+    restartDisabled: taskBusy || pending
+      || (status.connectionState !== 'ready' && status.connectionState !== 'degraded'),
+  }
+}
+
 const BLOCKED_PHASES: ReadonlySet<RemoteRuntimePhase> = new Set([
   'snapshot-failed', 'swap-attempted', 'restore-blocked',
 ])
@@ -387,9 +548,11 @@ const BLOCKED_PHASES: ReadonlySet<RemoteRuntimePhase> = new Set([
 export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRuntimeStatusView {
   // Busy outranks everything: an in-flight apply/restart is the live state even
   // when a stale failure record lingers.
-  if (status.phase === 'applying' || status.restart === 'running') {
+  if (status.phase === 'installing' || status.phase === 'applying' || status.restart === 'running') {
     return status.restart === 'running'
       ? { kind: 'busy', titleKey: 'dshRuntimeRemoteStatusRestarting', params: undefined, detail: null }
+      : status.phase === 'installing'
+        ? { kind: 'busy', titleKey: 'dshRuntimeProgressInstalling', params: undefined, detail: null }
       : { kind: 'busy', titleKey: 'dshRuntimeRemoteStatusApplying', params: { version: status.pending ?? '—' }, detail: null }
   }
   // Terminal restart failure or a failed async job surfaces with the server's
@@ -417,14 +580,18 @@ export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRunt
           : 'dshRuntimeRemoteStatusBlocked'
     return { kind: 'blocked', titleKey, params: undefined, detail: status.startupBlockedReason }
   }
+  if (status.phase === 'pending') {
+    return { kind: 'idle', titleKey: 'dshRuntimeStatusPending', params: { version: status.pending ?? '—' }, detail: null }
+  }
   return { kind: 'idle', titleKey: 'dshRuntimeRemoteStatusIdle', params: undefined, detail: null }
 }
 
 /** Poll `status` after a 202 action until the job settles — phase left
- *  'applying' AND restart left 'running' — or fails/timeouts honestly.
+ *  'installing'/'applying' AND restart left 'running' — or fails/timeouts honestly.
  *  A terminal failure (restart failed / operationError set at settle) rejects
  *  with the server's copy; a timeout rejects with an honest timeout message.
- *  Interval/timeout are parameters (defaults 2s / 120s). */
+ *  Interval/timeout are parameters (defaults 2s / 11min, matching the shared
+ *  installer's 10-minute deadline plus a delivery margin). */
 export async function pollRemoteRuntimeUntilSettled(
   chamberInstanceId: string,
   deps: GatewayRuntimeApiDeps = {},
@@ -436,7 +603,7 @@ export async function pollRemoteRuntimeUntilSettled(
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const status = await fetchRemoteRuntimeStatus(chamberInstanceId, { fetchImpl })
-    if (status.phase !== 'applying' && status.restart !== 'running') {
+    if (status.phase !== 'installing' && status.phase !== 'applying' && status.restart !== 'running') {
       if (status.restart === 'failed') {
         throw new RemoteRuntimeApiError(`runtime action failed: ${status.operationError ?? 'unknown runtime failure'}`, 200)
       }

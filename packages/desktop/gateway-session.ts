@@ -3,7 +3,7 @@
  *
  * A gateway deployment (`packages/gateway`) may require a UI password
  * (design 17 §5.1/§7.1). The desktop main process holds that password in the
- * gateway-secrets store (design 17 §12, schema v2) and trades it for the
+ * gateway-secrets store (design 17 §12, bound schema v3) and trades it for the
  * gateway's 12-hour HS256 JWT cookie (`dsh_gateway_session`, HttpOnly;
  * `SameSite=Strict; Path=/`, `Secure` added only once an HTTPS boundary is
  * confirmed — design 17 §7.1) via `POST /auth/login`. This module owns that
@@ -26,8 +26,9 @@
  * Security discipline (design 17 §7.3/§9.3/§13.5, invariants S5/S24): the
  * password and the session cookie NEVER enter logs and are NEVER written to
  * any file — they live only in this manager's main-process memory, keyed by
- * gateway origin. The cookie is injected only into that origin's transport
- * and is never visible to the renderer. A 401 (12h expiry / revoked cookie)
+ * gateway origin/Host plus a stable connection-and-target scope. The cookie is
+ * injected only into that scoped transport and is never visible to the
+ * renderer. A 401 (12h expiry / revoked cookie)
  * is reported as invalid_credentials so the caller can retry ONCE with the
  * stored password (respecting 429 backoff); a second failure is terminal
  * (design 17 §7.3 three-state). Audit (S24) records only non-secret events
@@ -40,14 +41,16 @@
  * and a peer whose SPKI does not match is classified `other` (deterministic,
  * terminal in the verifyUp three-state), never the transient `network` that
  * would keep the password flow retrying forever against an internal-CA
- * gateway. The verifier is the shared gateway-provider helper (the same
- * byte-for-byte copy discipline as proxy-forward.ts).
+ * gateway. The shared gateway-provider pre-write gate verifies the peer
+ * before the request body (and therefore the password) is dispatched.
  */
 
 import { request as nodeHttpRequest } from 'node:http'
 import { request as nodeHttpsRequest } from 'node:https'
+import { createHash } from 'node:crypto'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import { attachSpkiPinVerifier, SPKI_PIN_MISMATCH_CODE } from './gateway-provider.ts'
+import type { TransportInstanceSpec } from './transport-provider.ts'
 
 /** The injectable outbound request factory — the same shape as
  * proxy-forward's `HttpRequestFactory` (`typeof node:http request`, design
@@ -66,7 +69,7 @@ export interface GatewaySessionOrigin {
   insecureHttp: boolean
   /** Optional SPKI certificate pin (S23, design 17 §13.4.2; P1-2): an https
    * login is pinned like the identity probe (rejectUnauthorized:false +
-   * agent:false + the socket-level secureConnect verifier), so an
+   * agent:false + the secureConnect pre-write verifier), so an
    * internal-CA gateway login can succeed and a mismatched peer is a
    * deterministic `other` failure (terminal in the verifyUp three-state),
    * never a forever-transient `network`. http origins never carry a pin (no
@@ -82,6 +85,54 @@ export interface GatewaySessionOrigin {
    * verifyUp probe and the proxy registration reuse. Absent = the URL's own
    * authority (direct http(s) endpoints). */
   authority?: string
+  /** Stable connection/target generation scope used ONLY in the in-memory
+   * cache key. It is never sent as an HTTP header. Tunnel origins require it:
+   * local-port reuse and the shared remote loopback authority must not let a
+   * cookie cross SSH hosts or connection ids. */
+  scope: string
+}
+
+/** Stable, non-secret session ownership scope. The id distinguishes parallel
+ * connections; the digest binds the scope to the actual direct/SSH target so
+ * a same-id retarget cannot inherit a prior generation's session. Local
+ * tunnel ports are deliberately excluded, allowing refresh/registration to
+ * find the verifyUp cookie for that one target generation. */
+export function gatewaySessionScopeForConnection(
+  spec: Pick<TransportInstanceSpec, 'id' | 'transport' | 'host' | 'user' | 'sshPort' | 'remotePort'>,
+): string {
+  const target = spec.transport === 'ssh'
+    ? ['ssh', spec.host, spec.user, spec.sshPort, spec.remotePort]
+    : ['http', spec.host, spec.remotePort]
+  const digest = createHash('sha256').update(JSON.stringify(target)).digest('hex')
+  return `v1:${spec.id}:${digest}`
+}
+
+export type GatewayRegistrationAuthDecision =
+  | { ok: true; headers: Record<string, string> }
+  | { ok: false; reason: 'password_session_missing' }
+
+export type GatewayRegistrationAuthProof = 'cookie' | 'bearer'
+
+/** Fail-closed ready-registration auth decision. Password-only targets may
+ * register only with the exact scoped cookie proven by verifyUp. A configured
+ * bearer is an independent OR-principal, so token+password may intentionally
+ * register bearer-only when password login fell back to the valid token. */
+export function gatewayRegistrationAuthHeaders(
+  token: string | null,
+  passwordConfigured: boolean,
+  cookie: string | null,
+  proof: GatewayRegistrationAuthProof | null,
+): GatewayRegistrationAuthDecision {
+  if (passwordConfigured && cookie === null && !(token !== null && proof === 'bearer')) {
+    return { ok: false, reason: 'password_session_missing' }
+  }
+  if (passwordConfigured && cookie !== null && proof !== 'cookie') {
+    return { ok: false, reason: 'password_session_missing' }
+  }
+  const headers: Record<string, string> = {}
+  if (token !== null) headers.authorization = `Bearer ${token}`
+  if (passwordConfigured && cookie !== null) headers.cookie = cookie
+  return { ok: true, headers }
 }
 
 /** Outcome of one login attempt. On success `cookie` is the header-ready
@@ -89,7 +140,7 @@ export interface GatewaySessionOrigin {
  * memory only, never logged or persisted. */
 export type GatewaySessionResult =
   | { ok: true; cookie: string }
-  | { ok: false; error: string; code: 'invalid_credentials' | 'rate_limited' | 'auth_busy' | 'network' | 'other' }
+  | { ok: false; error: string; code: 'invalid_credentials' | 'rate_limited' | 'auth_busy' | 'network' | 'other' | 'stale' }
 
 /** The session manager surface (design 17 §2.3 auth slot). */
 export interface GatewaySessionManager {
@@ -99,6 +150,15 @@ export interface GatewaySessionManager {
    * a structurally invalid origin (programmer error, mirroring
    * instance-proxy's baseUrl gate). */
   ensureSession(origin: GatewaySessionOrigin, password: string): Promise<GatewaySessionResult>
+  /** Monotonic invalidation generation for the exact session key. Callers
+   * that span multiple awaits use it to stop an old credential flow before
+   * any probe, bearer fallback, or re-login after delete/retarget/clear. */
+  generation(origin: GatewaySessionOrigin): number
+  /** Exact-key, current-generation non-secret authentication proof produced
+   * by verifyUp. Main consumes it to distinguish a proven bearer fallback
+   * from a cookie proof whose cache entry vanished before registration. */
+  registrationAuthProof(origin: GatewaySessionOrigin): GatewayRegistrationAuthProof | null
+  setRegistrationAuthProof(origin: GatewaySessionOrigin, proof: GatewayRegistrationAuthProof | null): void
   /** The cached header-ready cookie for the origin, or null when absent or
    * past its 12h − 5min expiry. Synchronous — the proxy's fast path. */
   cachedCookie(origin: GatewaySessionOrigin): string | null
@@ -112,6 +172,9 @@ export interface GatewaySessionManager {
   /** Drop the cached cookie (called after a proxied 401, design 17 §9.3:
    * re-login once with the stored password). */
   invalidate(origin: GatewaySessionOrigin): void
+  /** Drop every direct/tunnel origin owned by one exact connection target
+   * scope, across historical local ports. */
+  invalidateScope(scope: string): void
   /** Clear every cached session (main-process shutdown). */
   dispose(): void
 }
@@ -159,7 +222,37 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
   /** Per-origin 429 backoff deadline (epoch ms); entries past the deadline
    * are treated as expired and cleared lazily. */
   const throttledUntil = new Map<string, number>()
+  /** Per-key invalidation epochs outlive the cookie/login entry itself. A
+   * deleted connection can therefore never become current again merely
+   * because an old async verifier resumes after its cache entry was cleared. */
+  const generations = new Map<string, number>()
+  const registrationProofs = new Map<string, { generation: number; proof: GatewayRegistrationAuthProof }>()
+  /** Login attempts whose late result could otherwise repopulate an
+   * invalidated connection generation. Invalidating an origin/scope marks
+   * every matching attempt stale; the request may still settle for its caller,
+   * but can no longer mutate the shared cookie/backoff state. */
+  interface LoginAttempt { invalidated: boolean; generation: number }
+  const activeLogins = new Map<string, Set<LoginAttempt>>()
   let disposed = false
+
+  const generationForKey = (key: string): number => generations.get(key) ?? 0
+
+  const staleResult = (): Extract<GatewaySessionResult, { ok: false }> => ({
+    ok: false,
+    code: 'stale',
+    error: 'the gateway session operation was superseded by connection invalidation',
+  })
+
+  const invalidateKey = (key: string): void => {
+    generations.set(key, generationForKey(key) + 1)
+    cache.delete(key)
+    throttledUntil.delete(key)
+    registrationProofs.delete(key)
+    const attempts = activeLogins.get(key)
+    if (attempts !== undefined) {
+      for (const attempt of attempts) attempt.invalidated = true
+    }
+  }
 
   /** Validate the origin and derive the cache key + login URL. Mirrors
    * instance-proxy's origin gate (design 17 §9.3) and the scheme = transport
@@ -193,10 +286,16 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
         throw new TypeError('gateway authority must be a host[:port] without path/query/credentials')
       }
     }
-    // The cache key includes the Host override: two tunnels to the same
-    // gateway (different local ports) must never share a cookie, and a
-    // tunnel session must never collide with the direct-endpoint session.
-    return { key: origin.authority === undefined ? parsed.origin : `${parsed.origin}|host:${origin.authority}`, url: new URL('/auth/login', parsed) }
+    if (typeof origin.scope !== 'string'
+      || origin.scope.length > 160 || !/^[a-zA-Z0-9._:-]+$/.test(origin.scope)) {
+      throw new TypeError('gateway session scope must be a bounded identifier')
+    }
+    // The key includes both network origin/Host and the exact connection
+    // scope. The scope prevents direct same-origin sharing and tunnel
+    // local-port/authority reuse from crossing ids or SSH targets.
+    const authorityPart = origin.authority === undefined ? '' : `|host:${origin.authority}`
+    const scopePart = `|scope:${origin.scope}`
+    return { key: `${parsed.origin}${authorityPart}${scopePart}`, url: new URL('/auth/login', parsed) }
   }
 
   /** Extract the header-ready `dsh_gateway_session=<value>` cookie from the
@@ -234,6 +333,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
 
   function ensureSession(origin: GatewaySessionOrigin, password: string): Promise<GatewaySessionResult> {
     const { key, url } = resolveOrigin(origin)
+    if (disposed) return Promise.resolve(staleResult())
     // 429 courtesy backoff (design 17 §13.5): while the origin is throttled
     // the manager answers the cached rate_limited failure WITHOUT touching
     // the network — a reconnect loop must not hammer /auth/login.
@@ -244,7 +344,11 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
     if (until !== undefined) throttledUntil.delete(key)
     const request = deps.request ?? (origin.insecureHttp ? nodeHttpRequest : nodeHttpsRequest)
     const body = JSON.stringify({ password })
-    return new Promise(resolve => {
+    const attempt: LoginAttempt = { invalidated: false, generation: generationForKey(key) }
+    const attempts = activeLogins.get(key) ?? new Set<LoginAttempt>()
+    attempts.add(attempt)
+    activeLogins.set(key, attempts)
+    const result = new Promise<GatewaySessionResult>(resolve => {
       let settled = false
       let timer: ReturnType<typeof setTimeout> | null = null
       let req: ClientRequest | null = null
@@ -252,18 +356,24 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
         if (settled) return
         settled = true
         if (timer !== null) { clearTimeout(timer); timer = null }
-        if (result.ok && !disposed) {
+        const mayMutateSharedState = !disposed && !attempt.invalidated
+          && generationForKey(key) === attempt.generation
+        if (result.ok && mayMutateSharedState) {
           // Cache with the 12h TTL minus a 5-minute skew (design 17 §7.1).
           cache.set(key, { cookie: result.cookie, expiresAt: now() + GATEWAY_SESSION_TTL_MS - GATEWAY_SESSION_EXPIRY_SKEW_MS })
           throttledUntil.delete(key)
-        } else if (!result.ok && result.code === 'rate_limited') {
+        } else if (!result.ok && mayMutateSharedState && result.code === 'rate_limited') {
           throttledUntil.set(key, now() + GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS)
-        } else if (!result.ok && result.code === 'invalid_credentials') {
+        } else if (!result.ok && mayMutateSharedState && result.code === 'invalid_credentials') {
           // A rejected password is deterministic — no backoff, no retry.
           throttledUntil.delete(key)
         }
         req?.destroy()
-        resolve(result)
+        // Invalidation is not merely a cache-write fence. The old caller must
+        // learn that its whole verification generation is dead; returning a
+        // late cookie/failure would let it probe, fall back to a captured
+        // bearer, or initiate a fresh password login after the clear/delete.
+        resolve(mayMutateSharedState ? result : staleResult())
       }
       const onResponse = (res: IncomingMessage): void => {
         // Always drain the body so the socket is released.
@@ -294,7 +404,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
           'content-length': String(Buffer.byteLength(body)),
           accept: 'application/json',
           // Tunnel Host override (design 17 §9.3): an ssh-tunneled target
-          // presents the REMOTE gateway authority so the gateway's request
+          // presents the REMOTE loopback-listener authority so the gateway's request
           // policy (authority port == listen port) accepts the login.
           ...(origin.authority === undefined ? {} : { host: origin.authority }),
         },
@@ -302,16 +412,18 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
         // login into a PINNED connection exactly like the identity probe —
         // rejectUnauthorized:false (the pin replaces CA trust for the
         // internal-CA case) + agent:false (a fresh connection, so the
-        // socket-level 'secureConnect' verifier always fires). The pin is
+        // secureConnect pre-write verifier always fires). The pin is
         // inert for http origins and pin-less https origins (no options
         // added, exactly the probe's `insecure || spkiPin === null` guard).
         ...(origin.insecureHttp || origin.spkiPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
       }, onResponse)
-      // S23: attach the socket-level pin gate synchronously after request()
-      // (mechanism note in gateway-provider.ts — the pin alone decides trust;
-      // a mismatch destroys the request with ERR_SPKI_PIN_MISMATCH, which the
-      // 'error' handler below classifies 'other', never 'network').
-      if (!origin.insecureHttp && origin.spkiPin !== undefined) attachSpkiPinVerifier(req, origin.spkiPin)
+      const dispatch = (): void => { req!.end(body) }
+      // S23: the request body and its password are not written until the
+      // fresh TLS connection's peer key matches the pin. A mismatch destroys
+      // the still-undispatched request and is classified below as `other`.
+      if (!origin.insecureHttp && origin.spkiPin !== undefined) {
+        attachSpkiPinVerifier(req, origin.spkiPin, dispatch)
+      }
       timer = setTimeout(() => done({ ok: false, code: 'network', error: `the gateway did not answer the login request within ${GATEWAY_LOGIN_TIMEOUT_MS}ms` }), GATEWAY_LOGIN_TIMEOUT_MS)
       timer.unref()
       req.on('error', (error: NodeJS.ErrnoException) => {
@@ -325,18 +437,45 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
         }
         done({ ok: false, code: 'network', error: 'the gateway login request failed (network error)' })
       })
-      req.end(body)
+      if (origin.insecureHttp || origin.spkiPin === undefined) dispatch()
+    })
+    return result.finally(() => {
+      attempts.delete(attempt)
+      if (attempts.size === 0) activeLogins.delete(key)
     })
   }
 
   return {
     ensureSession,
+    generation(origin: GatewaySessionOrigin): number {
+      const { key } = resolveOrigin(origin)
+      // Materialize the observed key even at generation zero. A verifier may
+      // finish a failed password login (leaving no cache/throttle/active
+      // entry) and then await a bearer fallback; invalidateScope must still
+      // find and bump that observed generation before the fallback returns.
+      if (!generations.has(key)) generations.set(key, 0)
+      return generationForKey(key)
+    },
+    registrationAuthProof(origin: GatewaySessionOrigin): GatewayRegistrationAuthProof | null {
+      const { key } = resolveOrigin(origin)
+      const entry = registrationProofs.get(key)
+      return entry !== undefined && entry.generation === generationForKey(key) ? entry.proof : null
+    },
+    setRegistrationAuthProof(origin: GatewaySessionOrigin, proof: GatewayRegistrationAuthProof | null): void {
+      const { key } = resolveOrigin(origin)
+      if (proof === null) {
+        registrationProofs.delete(key)
+        return
+      }
+      registrationProofs.set(key, { generation: generationForKey(key), proof })
+    },
     cachedCookie(origin: GatewaySessionOrigin): string | null {
       const { key } = resolveOrigin(origin)
       const entry = cache.get(key)
       if (entry === undefined) return null
       if (now() >= entry.expiresAt) {
         cache.delete(key)
+        if (registrationProofs.get(key)?.proof === 'cookie') registrationProofs.delete(key)
         return null
       }
       return entry.cookie
@@ -347,18 +486,34 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
       if (entry === undefined) return null
       if (now() >= entry.expiresAt) {
         cache.delete(key)
+        if (registrationProofs.get(key)?.proof === 'cookie') registrationProofs.delete(key)
         return null
       }
       return entry.expiresAt
     },
     invalidate(origin: GatewaySessionOrigin): void {
       const { key } = resolveOrigin(origin)
-      cache.delete(key)
+      invalidateKey(key)
+    },
+    invalidateScope(scope: string): void {
+      if (typeof scope !== 'string' || scope.length > 160 || !/^[a-zA-Z0-9._:-]+$/.test(scope)) {
+        throw new TypeError('gateway session scope must be a bounded identifier')
+      }
+      const suffix = `|scope:${scope}`
+      const keys = new Set([...cache.keys(), ...throttledUntil.keys(), ...activeLogins.keys(), ...generations.keys(), ...registrationProofs.keys()])
+      for (const key of keys) if (key.endsWith(suffix)) invalidateKey(key)
     },
     dispose(): void {
       disposed = true
+      const keys = new Set([...cache.keys(), ...throttledUntil.keys(), ...activeLogins.keys(), ...generations.keys(), ...registrationProofs.keys()])
+      for (const key of keys) generations.set(key, generationForKey(key) + 1)
+      for (const attempts of activeLogins.values()) {
+        for (const attempt of attempts) attempt.invalidated = true
+      }
+      activeLogins.clear()
       cache.clear()
       throttledUntil.clear()
+      registrationProofs.clear()
     },
   }
 }

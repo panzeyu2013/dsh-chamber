@@ -58,6 +58,7 @@ export interface GatewayOptions {
     createPlane?: typeof createControlPlane
     createProxy?: typeof createGatewayProxy
     createFeatures?: (options: Parameters<typeof createFeatureHost>[0]) => FeatureHost
+    createRuntimeManager?: typeof createGatewayRuntimeManager
   }
 }
 
@@ -211,7 +212,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   let featuresAttached = false
 
   function syncFeatures(status: string): void {
-    if (status === 'ready') {
+    // A candidate (and any rollback candidate) may emit ready before the
+    // activation probe verdict. Keep every dsh-derived consumer detached for
+    // the full quarantine window; the manager explicitly calls back after the
+    // verdict so a consumed ready edge is never the only attach trigger.
+    if (status === 'ready' && !(runtimeManager?.activationInProgress() ?? false)) {
       if (featuresAttached) return
       features.start()
       featuresAttached = true
@@ -229,7 +234,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       try {
         await createdPlane.start()
         // Runtime manager construction (single-owner guard + state root).
-        runtimeManager = createGatewayRuntimeManager({ config: options.config, plane: createdPlane, logger })
+        runtimeManager = (options.deps?.createRuntimeManager ?? createGatewayRuntimeManager)({
+          config: options.config,
+          plane: createdPlane,
+          logger,
+          onActivationQuarantineChange: () => syncFeatures(createdPlane.connectionState),
+        })
         // design 17 §2.1 step 4: the runtime startup transaction runs BEFORE the
         // first startLocal() — cleanup → eviction → restore completion →
         // (pending) snapshot → pointer switch → spawn candidate → probe gate.

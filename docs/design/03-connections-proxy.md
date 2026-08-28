@@ -119,9 +119,15 @@
 }
 ```
 
-- **凭据不进注册表**：`tokenSet`/`passwordSet` 是主进程凭据存储的实时
+- **凭据不进注册表**：`sshPasswordSet`/`tokenSet`/`passwordSet` 是主进程凭据存储的实时
   **非秘密投影**（`instances_get` 读时合并，UI 徽标/编辑回填用）；
-  `transportTargetChanged` 不含 `insecureHttp` 与凭据投影（17 §9.1）。
+  凭据 retarget 按域比较而非复用 transport 全字段：gateway auth 绑定
+  kind+host+remotePort，SSH password 绑定 host+user+sshPort；元数据与三凭据由
+  主进程单次补偿事务保存（17 §9.1）。两类 durable mirror 把 binding 与 secret
+  同次原子写，读取/注入时复验当前 registry；因此 secret→registry 两次 fsync 间崩溃
+  只会隐藏新值，不会把它发给旧目标。同 id 新增/进入/离开/retarget 留空也会强制
+  clear/rebind，防止半事务 secret 复活；非空 legacy 无 binding 文件 fail closed 并保留
+  唯一 `.unbound-*` 恢复副本、要求重录。
 - **迁移规则（17 §2.2/§9.1）**：旧 `kind:'ssh'` 条目载入时映射为
   `{kind:'dsh', transport:'ssh'}`；旧 `kind:'gateway'` 条目映射为
   `{transport:'http'}`；source id 的 `ssh-` 前缀保留 legacy 兼容映射
@@ -130,17 +136,28 @@
 - **生命周期（transport=ssh）**：SSH 隧道（`ssh -N [-p <sshPort>] -L
   <localPort>:127.0.0.1:<remotePort> <user@host>`，sshPort null 时不传
   `-p`，走 ssh 默认/config）+ systemd exec（`start/stop/is_active`，
-  serviceName 校验 `^[a-zA-Z0-9_.-]+$`；复用 host-logs 的 RING_BUFFER 日志环与
-  AUTH_FAILURE_PATTERNS）；**transport=http 无子进程**——直接 http(s) 访问
+  固定 argv `systemctl <action> -- <serviceName>`，serviceName 校验
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`、首字符必须为字母或数字；复用 host-logs 的
+  RING_BUFFER 日志环与 AUTH_FAILURE_PATTERNS）；**transport=http 无子进程**——直接 http(s) 访问
   目标端点（dsh 目标需用户自建穿透，gateway 目标即其入口，17 §2.2/§9.2）；
   隧道 / 服务 / 直连状态 → **phase** 投影给 renderer
   （idle / connecting / ready / degraded / error）；
   **隧道 URL 与直连端点 URL 永不进 renderer**——renderer 只见
   localPort / phase 投影（05 §7.4；直连端点仅主进程持有，17 §9.3）。
+- **连接/exec generation**：`serviceName` 与 `remoteDshHome` 的编辑同时属于 transport
+  与 exec identity 变化。主进程先提升 generation/`execEpoch`，撤销旧 live transport、
+  重连/探针与全部 exec child（SIGTERM→SIGKILL），再按旧连接是否非 idle 决定以新参数
+  重启；多步 exec 每次下一次 spawn 前复验 generation，迟到日志、状态投影、
+  `serviceActive` 与结果都不能跨代提交。kind/serviceName 变化还会把旧
+  `serviceActive` 复位为未知。
 - **IPC 白名单**（renderer ↔ main，preload 限定）：全集见 05 §7.4（2026-08
   已扩展插件编排面 `desktop_ssh_plugin_*`、`restart_service`、
   `seed_host_graph`、`status_changed` 等，不再在此枚举）。要点：
-  `desktop_ssh_set_password`（主进程内存 + 0600 明文文件兜底，05 §8 例外）、
+  `desktop_ssh_save_connection` 是 add/edit/非空凭据写的唯一入口；删除只走精确
+  id-addressed `desktop_ssh_delete_connection(id)`（不存在 id 为幂等 no-op）；legacy
+  `desktop_ssh_instances_set` 只接受与当前规范化 roster 同长度、同顺序、逐字段完全相同
+  的 exact no-op，任何删除/add/edit/reorder 都拒绝；`desktop_ssh_set_password` 与 gateway
+  两个单项 setter 仅接受 clear（主进程内存 + 0600 文件兜底，05 §8 例外）、
   `desktop_ssh_config_list`（`~/.ssh/config` 自动发现，非秘密投影：
   alias/hostName/user/port；IdentityFile/ProxyCommand/凭据绝不进 renderer）。
 - **liveness 纪律**（AGENTS.md 正确性不变量）：隧道 / 服务事实只来自
@@ -154,6 +171,10 @@
   探测但证明不是（兼容的）目标（HTTP 非 200 / 错误信封 / 版本过老）→
   验证结果带 `terminal` 标记，第一次失败即落 error 终态（重试无法改变
   应答）；仅连接错误/超时等瞬时失败走重连。
+- **SPKI pin 的 pre-write 门**：gateway+HTTPS 配置 pin 时，桌面登录/探针与控制面
+  HTTP/WS 反代都必须在 TLS `secureConnect` 后先匹配 peer SPKI，匹配前不调用请求
+  `write/end`、不发送 HTTP/WS handshake/header/credential/body 等任何应用层字节；
+  mismatch 显式失败，目标服务看不到请求。无 pin 的标准 CA 路径不改变。
 - **两段式重连（2026-08 修订）**：瞬时失败先走**快速有界突发**（半开
   jitter 指数退避，1s→30s，至多 N=5 次），突发耗尽落 error（诚实红态）
   **但不停摆**——进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限）：
@@ -203,6 +224,11 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   头保持实例自身 `127.0.0.1:<port>`（与 `--trusted-host` 一致）；
   **gateway 目标 0..2 个**可注入头（`Authorization` Bearer /
   `Cookie` `dsh_gateway_session`），白名单逐项校验、绝不允许其他头；
+  Cookie 按网络 origin + `Host` authority + stable connection-target scope 隔离，
+  authority 只负责路由；session generation、current `cookie|bearer` auth proof 与 refresh
+  epoch 阻止 invalidate/retarget/delete 后的迟到登录/探针/fallback/刷新注册。密码型
+  gateway 若当前 Cookie/proof 消失且无已验证 Bearer fallback，注册 fail closed 重连，
+  绝不静默变成 headerless；provider session hooks 必须 all-or-none；
   上游 Host 改写为目标 origin（ssh 隧道 = loopback origin；http 直连 =
   用户配置的 http(s) origin，非 loopback 放行——穿透由用户自建，
   SSRF 面 = 用户配置面，17 §13.4）。
@@ -271,8 +297,8 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   只保留原则并指向之，不再枚举具体码表/头列表）；
 - `02-host-management-deployment.md`：local 实例进程托管（本文只引用其
   状态投影与端口语义）；
-- `05-connection-manager.md` §8：安全不变量（loopback-only、隧道 URL 与
-  SSH 材料永不进 renderer/日志）；
+- `05-connection-manager.md` §8：安全不变量（loopback-only；隧道 URL、私钥与
+  代理配置永不进 renderer/日志；密码仅表单瞬时 write-only 输入且绝不返回/回填）；
 - `17-server-side-gateway.md`：远程连接模型 v2 的权威（kind × transport ×
   认证 × 通道四维正交，§2；注册表 schema §9.1；反代头注入规则 §9.3；
   凭据 / safeStorage / 审计 §12/§13.4；安全不变量 S21–S24 §17）。

@@ -52,14 +52,25 @@ See the development docs at [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
 - **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
 - **Chamber settings page** — fixed Settings-shell entries: Connections / General; chamber-global settings stay strictly separate from per-instance config planes
 - **Backend version tolerance (rc.2 compatible)** — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash); headless-verified against an rc.2 backend
-- **Security & privacy** — the control plane listens on loopback only (127.0.0.1); SSH passwords and gateway tokens use write-only 0600 storage injected via an ephemeral askpass helper — never in logs, the registry, or the UI; public reachability exists only in the explicitly started, mandatory-auth gateway process (by default; `--no-auth` is a trusted-network bounded deviation)
+- **Security & privacy** — the control plane listens on loopback only
+  (127.0.0.1). SSH passwords reach ssh through owner-only askpass leases;
+  a Gateway token enters only a bounded Authorization header, while the raw
+  login password enters only that bound Gateway's `/auth/login` JSON body and
+  only the derived Cookie enters proxy headers. Credentials are transient form inputs, never
+  prefilled or returned to the renderer, and persist only in owner-only,
+  target-bound mirrors—never in logs or the registry. Public reachability exists
+  only in the explicitly started, mandatory-auth Gateway process by default
+  (`--no-auth` is a trusted-network bounded deviation).
 - **Plugin actions need a main-process confirmation (design 09 §4)** — local/remote plugin installs & removals and the materialize transfer require a user confirmation dialog; local plugin-manifest dependency values are path-redacted
 
 ## Server-side deployment
 
 ### Authenticated gateway (Design 17)
 
-The gateway hosts one loopback dsh and proxies HTTP/WS/SSE through a single authenticated boundary. In production, keep the gateway listener on loopback and terminate TLS at Nginx/Caddy; Desktop accepts HTTPS gateway URLs only.
+The Gateway hosts one loopback dsh and proxies HTTP/WS/SSE through a single
+authenticated boundary. In production, keep it on loopback and terminate TLS
+at Nginx/Caddy. Desktop defaults to HTTPS; explicit plaintext HTTP is a bounded
+trusted-network choice with a persistent risk indicator.
 
 **Install (one-shot script)** — pulls the package from GitHub Releases (works before npm publishing), with an interactive wizard (defaults: gateway listens on **30801**, managed dsh on **30800**; both editable):
 
@@ -70,7 +81,11 @@ bash install-gateway.sh          # interactive wizard (Enter = default, type to 
 ```
 
 The script auto-detects/installs dsh (reuses an existing one), downloads the tgz + sha256 check, npm-global install, writes credentials to a 0600 env file, sets up systemd (root) / foreground (non-root), and health-checks; management: `install-gateway.sh status|logs|update|uninstall`.
-Public access: reverse-proxy HTTPS to `127.0.0.1:30801` and configure `--origin` / `--trusted-proxy` (see [docs/deploy-gateway.md](docs/deploy-gateway.md)). Desktop: Settings → Connections → HTTPS Gateway with the proxy address and the shared token.
+Public access: reverse-proxy HTTPS to `127.0.0.1:30801` and configure `--origin` /
+`--trusted-proxy` (see [docs/deploy-gateway.md](docs/deploy-gateway.md)). Desktop:
+Settings → Connections → Gateway + HTTP transport, enter the proxy address,
+and optionally configure the shared token and/or login password (HTTPS by
+default; plaintext HTTP requires an explicit choice).
 
 ### Remote dsh instance (systemd)
 
@@ -201,21 +216,29 @@ The remote server only needs the dsh API-side web profile on loopback — no web
    machines (bypassing the chamber tunnel) — and then you must pair it with
    real auth (v1 instances are anonymous) or put a reverse proxy in front.
 
-4. **Attach from the chamber desktop** — add the remote host in the connections
-   settings (label / host / user / SSH port / dsh port (default 30800) / service name `dsh`). The desktop handles the rest: `ssh -N -L` tunnel +
-   `systemctl start|stop|is-active dsh` (service name allowlist `^[a-zA-Z0-9_.-]+$`). Unit form follows design 02 §3.9; the instance contract is in 03 §2.2.
+4. **Attach from the chamber desktop** — choose a `dsh|gateway` target and an
+   `ssh|http` transport (all four combinations ship), then enter its endpoint.
+   SSH may carry user/port/systemd metadata and an optional password; Gateway
+   independently accepts a token and/or Unicode login password, with optional
+   SPKI pinning for HTTPS. Desktop owns SSH tunnels and on-demand systemd;
+   main connects HTTP directly while the renderer still sees only same-origin
+   proxying. See designs 03 §2.2 and 17 §9.
 
 ## Security
 
 - **v1 has no auth boundary** — the control plane listens on loopback only (127.0.0.1); all `/api/*` routes and the per-instance proxy are anonymously reachable; HTTP/WS origins must exactly match the current Host or an explicit development allowlist, while other loopback ports and `Origin: null` are rejected
-- **Tunnel URLs and SSH material never reach the renderer** — the renderer only sees non-secret projections (phase/localPort), never tunnel URLs or SSH credentials; logs are equally free of tunnel/SSH material. The one sanctioned exception ([design 05 §8](design/05-connection-manager.md)): an optional per-host SSH password — entered transiently in the form, held in main-process memory, mirrored to `<userData>/ssh-passwords.json` (0600, atomic write), injected into system ssh via an ephemeral owner-only 0700 askpass helper — never on the command line, never in the registry/logs, never back to the renderer; gated off on Windows in v1
-- **systemctl is spawned with an argument array** (no shell) + serviceName allowlist (`^[a-zA-Z0-9_.-]+$`)
+- **Transport URLs never reach the renderer; credentials are transient write-only inputs** — renderer returns, events, and projections are non-secret. Bounded exceptions ([design 05 §8](design/05-connection-manager.md), [design 17 §12](design/17-server-side-gateway.md)) keep SSH passwords in 0600 `ssh-passwords.json` schema v2 endpoint bindings and inject them through one owner-only 0700 askpass lease per real ssh child. Gateway token/password values live in `gateway-secrets.json` schema v3 target bindings (safeStorage preferred, honest 0600 fallback) and are injected only into that Gateway transport. Both are collected transiently by the form, owned by main, registry-checked before use, never returned/prefilled or persisted by the renderer, and never enter argv, logs, or the registry; nonempty unbound legacy files fail closed and require re-entry. Gateway cookie sessions are isolated by network origin, `Host` authority, and a stable connection-id-plus-target scope; generations and refresh epochs fence late login, fallback, and refresh results after invalidation. With an HTTPS SPKI pin, login, probes, and HTTP/WS proxying complete the certificate match before sending any application request byte. Add/edit/nonempty credential writes use main's `desktop_ssh_save_connection`; deletion uses exact `desktop_ssh_delete_connection(id)` (an absent id is an idempotent no-op). Legacy `instances_set` permits only the exact unchanged normalized current roster, and all three old setters are clear-only. SSH passwords remain disabled on Windows v1.
+- **systemctl is spawned with an argument array** (no shell), with fixed argv `systemctl <action> -- <serviceName>` and serviceName allowlist `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` (the first character must be alphanumeric)
 - **Git is not relayed through Desktop/SSH commands** — the Git host plugin runs inside each dsh instance process, under the same OS user and filesystem as the workspace authority; it exposes only fixed worktree-domain operations with `shell:false` and bounded output/time, and provides no network Git verbs such as fetch, pull, or push. Checkout during creation still honors repository filters configured by that OS user (for example Git LFS, which may access the network); the confirmation UI states this trusted boundary explicitly
 
 ## FAQ
 
 - **Why does `pnpm run smoke` print SKIP?** — the smoke test needs a dsh install; when it can't find one it prints SKIP and exits 0. This is normal, not a failure.
-- **What does a remote instance need?** — an API-side-profile dsh instance + SSH access. No web frontend is needed on the remote server: the UI comes from the locally reused frontend via the `/api/i/ssh-<id>/*` tunnel.
+- **What does a remote instance need?** — a reachable API-profile dsh target, or
+  a deployed `@dsh-chamber/gateway` target. Either may use an SSH tunnel or an
+  explicitly configured HTTP(S) endpoint. No separate remote web frontend is
+  needed: the reused local UI reaches it through `/api/i/dsh-<id>/*` or
+  `/api/i/gateway-<id>/*` same-origin proxying.
 - **How do agent presets / profiles work across instances?** — per-instance authoritative. Each instance's `settings`/`credentials`/`llm`/`agentPreset` config plane lives only on that instance's side (local = this machine, remote = the far server). All reads/writes land on that instance's own API through the `/api/i/<id>/*` proxy — the new-session preset picker lists the roster of the session's owning instance and writes back to it. There is no cross-source profile matching/merging; to edit a remote preset, switch to that source's shell and use its Settings → Agent presets page.
 - **Where does the frontend come from?** — the dsh official frontend, source-reused and self-built; every instance keeps its native UI.
 

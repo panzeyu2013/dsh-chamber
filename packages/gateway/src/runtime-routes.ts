@@ -19,16 +19,31 @@ function json(res: ApiResponse, status: number, body: unknown): true {
 function readJsonBody(req: ApiRequest): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
+    let size = 0
+    let finished = false
+    const fail = (error: unknown): void => {
+      if (finished) return
+      finished = true
+      // Release retained input immediately and make every later stream event
+      // a no-op. The caller writes the 413 before destroying the socket.
+      chunks.length = 0
+      reject(error)
+    }
     req.on('data', (chunk: Buffer) => {
-      chunks.push(chunk)
-      if (chunks.reduce((sum, c) => sum + c.length, 0) > 64 * 1024) {
+      if (finished) return
+      size += chunk.length
+      if (size > 64 * 1024) {
         // No destroy here: the caller must WRITE the 413 first, then destroy
         // the socket (dispatch.ts does the same) — destroying first drops the
         // response on a real socket (review fix).
-        reject(Object.assign(new Error('request body too large'), { code: 'body_too_large' }))
+        fail(Object.assign(new Error('request body too large'), { code: 'body_too_large' }))
+        return
       }
+      chunks.push(chunk)
     })
     req.on('end', () => {
+      if (finished) return
+      finished = true
       if (chunks.length === 0) { resolve(undefined); return }
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
@@ -36,13 +51,14 @@ function readJsonBody(req: ApiRequest): Promise<unknown> {
         reject(Object.assign(new Error('invalid JSON body'), { code: 'bad_request' }))
       }
     })
-    req.on('error', reject)
+    req.on('error', fail)
   })
 }
 
 function codeToStatus(code: string | undefined): number {
   switch (code) {
     case 'runtime_busy': return 409
+    case 'runtime_pending': return 409
     case 'connection_busy': return 409
     case 'no_retry_target': return 409
     case 'invalid_target': return 409
@@ -50,6 +66,9 @@ function codeToStatus(code: string | undefined): number {
     case 'bad_registry_origin': return 400
     case 'no_selection': return 409
     case 'env_override_active': return 409
+    case 'runtime_disk_unavailable': return 409
+    case 'runtime_disk_limit': return 409
+    case 'runtime_activation_failed': return 409
     case 'body_too_large': return 413
     case 'bad_request': return 400
     default: return 500
@@ -77,7 +96,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
     const suffix = pathname.slice('/chamber/runtime'.length) || '/'
     try {
       if (suffix === '/status' && req.method === 'GET') {
-        return json(res, 200, m.status())
+        return json(res, 200, await m.status())
       }
       if (suffix === '/versions' && req.method === 'GET') {
         return json(res, 200, await m.listVersions())
@@ -89,19 +108,17 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         }
         // Honest acceptance (R7 review): synchronous refusals are answered
         // synchronously, not swallowed behind a fake 202.
-        if (m.activationInProgress()) {
-          return json(res, 409, { error: 'runtime activation in progress', code: 'runtime_busy' })
+        if (m.mutationInProgress()) {
+          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
         }
-        // Review fix: a select clicked during a restart (up to ~90s window)
-        // must refuse synchronously — the fire-and-forget 202 path below would
-        // otherwise 'accept' a job the manager fence then rejects silently.
-        if (m.restartInFlight()) {
-          return json(res, 409, { error: 'a restart is in flight; runtime mutations are refused', code: 'runtime_busy' })
+        const status = await m.status()
+        if (status.phase === 'pending') {
+          return json(res, 409, { error: `runtime version ${status.pending ?? 'unknown'} is pending; only restore-builtin is allowed until the next startup`, code: 'runtime_pending' })
         }
-        if (m.status().source === 'env') {
+        if (status.source === 'env') {
           return json(res, 409, { error: 'runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled', code: 'env_override_active' })
         }
-        if (m.status().mutationsAllowed === false) {
+        if (status.mutationsAllowed === false) {
           return json(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
         }
         // Async install job: 202 immediately; progress/failure surfaces via
@@ -137,15 +154,19 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // 202: restart acceptance never blocks on readiness (design 18 §9.3);
         // the transactional restart runs in the background and progress is
         // polled via /status. Synchronous refusals are answered synchronously:
-        // applying refuses 409; a dsh that never reached ready refuses 409
+        // installing/applying/pending refuse 409; a dsh that never reached ready refuses 409
         // (an in-flight restart is single-flight merged by restartLocal).
-        if (m.status().phase === 'applying') {
-          return json(res, 409, { error: 'runtime activation in progress; restart refused', code: 'runtime_busy' })
+        const status = await m.status()
+        if (status.phase === 'applying' || status.phase === 'installing') {
+          return json(res, 409, { error: 'runtime mutation in progress; restart refused', code: 'runtime_busy' })
         }
-        if (m.status().connectionState !== 'ready' && m.status().connectionState !== 'degraded') {
+        if (status.phase === 'pending') {
+          return json(res, 409, { error: `runtime version ${status.pending ?? 'unknown'} is pending; only restore-builtin is allowed until the next startup`, code: 'runtime_pending' })
+        }
+        if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
           // Round-4 wording: no start route exists — recovery is restore-builtin
           // / retry-apply / retry-restore (or a gateway restart), not a start.
-          return json(res, 409, { error: `managed dsh is not running (${m.status().connectionState}); restore the builtin or retry the interrupted apply/restore before restarting`, code: 'runtime_busy' })
+          return json(res, 409, { error: `managed dsh is not running (${status.connectionState}); restore the builtin or retry the interrupted apply/restore before restarting`, code: 'runtime_busy' })
         }
         if (m.restartInFlight()) {
           return json(res, 409, { error: 'a restart is already in flight', code: 'runtime_busy' })

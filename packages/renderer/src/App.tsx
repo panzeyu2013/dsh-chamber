@@ -37,6 +37,7 @@ import {
   serversProjectionSignature,
   type ChamberServerAggregate,
   type InstanceAggregate,
+  type InstanceHostReport,
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
@@ -130,6 +131,7 @@ function deriveServers(
   remoteInstances: SshInstanceSpec[],
   remoteStatus: Record<string, SshStatusProjection>,
   aggregates: Record<string, InstanceAggregate>,
+  hostFacts: Record<string, InstanceHostReport | undefined>,
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
   completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
@@ -139,14 +141,26 @@ function deriveServers(
   const now = Date.now()
   // The proxy contract is /api/i/<kind>-<id>/*; remoteStatus remains keyed by
   // the raw registry id from the IPC projection.
-  const push = (kind: 'local' | TransportKind, id: string, label: string, rawId?: string): void => {
+  const push = (
+    kind: ChamberServerAggregate['kind'],
+    transport: ChamberServerAggregate['transport'],
+    id: string,
+    label: string,
+    rawId?: string,
+    statusKind?: TransportKind,
+  ): void => {
     const statusKey = kind === 'local' ? id : (rawId ?? id)
     const phase = kind === 'local'
       ? (health?.dsh?.status ?? 'unknown')
       : (remoteStatus[statusKey]?.phase ?? 'idle')
     let workspaces: ChamberServerAggregate['workspaces'] = []
     const aggregate = aggregates[id]
-    const connected = instanceConnected(kind, health, remoteStatus, statusKey)
+    const connected = instanceConnected(
+      kind === 'local' ? 'local' : (statusKind ?? kind),
+      health,
+      remoteStatus,
+      statusKey,
+    )
     if (connected && aggregate !== undefined && aggregate.state === 'ok') {
       // 当前会话事实只给活动来源：blank（新建未首发的）会话行只在正在查看的
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
@@ -157,6 +171,8 @@ function deriveServers(
     const entry: ChamberServerAggregate = {
       id,
       kind,
+      transport,
+      ...(rawId === undefined ? {} : { rawId }),
       label,
       connected,
       phase,
@@ -170,6 +186,8 @@ function deriveServers(
     // vendor 的 completed 作兜底保留。合并为纯函数 mergeRuntimeFacts（shared/
     // derive.ts，单测覆盖）。
     if (connected) {
+      const dshVersion = hostFacts[id]?.dshVersion
+      if (dshVersion !== undefined) entry.dshVersion = dshVersion
       const merged = mergeRuntimeFacts(runtimeFacts[id], completedBySource[id])
       if (merged !== undefined) entry.runtime = merged
     }
@@ -179,8 +197,13 @@ function deriveServers(
     if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
     servers.push(entry)
   }
-  push('local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例')
-  for (const instance of remoteInstances) push(instance.kind, sourceIdForInstance(instance), instance.label, instance.id)
+  push('local', 'local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例')
+  for (const instance of remoteInstances) {
+    // The persisted/runtime target kind is independent of the transport.
+    // `ssh` is accepted only as the legacy spelling of a dsh target.
+    const targetKind: 'dsh' | 'gateway' = instance.kind === 'gateway' ? 'gateway' : 'dsh'
+    push(targetKind, instance.transport, sourceIdForInstance(instance), instance.label, instance.id, instance.kind)
+  }
   return servers
 }
 
@@ -281,6 +304,7 @@ export default function App() {
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
+  const [hostFacts, setHostFacts] = useState<Record<string, InstanceHostReport | undefined>>({})
   // chamber (06 §4.1, 2026-08)：App 自持的「完成未读」蓝点（completedBySource）
   // 与边沿记忆（prevRunningRef）。蓝点不依赖各来源 shell 的 selected——后台
   // 来源的陈旧 selected 会让 vendor 提醒错误压制「完成但未读」——而是由 App
@@ -304,8 +328,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView, pluginDiagnostics),
-    [health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView, pluginDiagnostics],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -704,6 +728,19 @@ export default function App() {
         }
         return changed ? next : prev
       })
+      // host.describe is generation-scoped too: a disconnected source must
+      // not retain a version from the previous connection generation.
+      setHostFacts(prev => {
+        let changed = false
+        const next = { ...prev }
+        for (const id of notReady) {
+          if (next[id] !== undefined) {
+            delete next[id]
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
     }
   }, [health, remoteStatus, remoteInstances, refreshAggregate, runBoundedAggregateWave])
 
@@ -778,7 +815,7 @@ export default function App() {
     }, CONNECTIONS_POLL_MS)
 
     // 注册表低频轮询（与连接行同节奏）：兜底桌面侧任何来源的注册表变化
-    // （主进程 instances_set 推送通道之外；隧道状态本身走 onStatusChanged
+    // （主进程 save/delete 的 instances_changed 推送之外；隧道状态本身走 onStatusChanged
     // 推送，不依赖此轮询）。
     const remotesTimer = setInterval(() => {
       if (cancelled) return
@@ -1221,6 +1258,22 @@ export default function App() {
           return next
         }
         return { ...prev, [sourceId]: diagnostic }
+      })
+    })
+  }, [])
+
+  /** Live host.describe projection from each mounted instance ctx. */
+  useEffect(() => {
+    return chamberBridge.onInstanceHost((sourceId, report) => {
+      setHostFacts(prev => {
+        if (report === undefined) {
+          if (prev[sourceId] === undefined) return prev
+          const next = { ...prev }
+          delete next[sourceId]
+          return next
+        }
+        if (prev[sourceId]?.dshVersion === report.dshVersion) return prev
+        return { ...prev, [sourceId]: report }
       })
     })
   }, [])

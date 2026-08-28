@@ -36,11 +36,10 @@
  * unknown-length body over 32MiB, or response over 300MiB → 413
  * body_too_large (+ upstream abort).
  *
- * Response headers are converged to a whitelist (03 §3.4): content-type,
- * cache-control, content-encoding (compression labels ride through so the
- * browser decodes correctly, 2026 audit M3b), x-next-cursor, x-ratelimit-*;
- * nothing else rides through (hop-by-hop and potential credential surfaces
- * stay server-side).
+ * Response headers are converged to the exact 04 §4.2 whitelist (content
+ * metadata/ranges, validators, retry/rate-limit hints, location and vary;
+ * location is rewritten only when same-origin-safe). Nothing else rides
+ * through: hop-by-hop and potential credential surfaces stay server-side.
  *
  * Diagnostics: plain counters (requests / failures / activeStreams) — no
  * sensitive data, no URLs.
@@ -157,16 +156,26 @@ export interface InstanceProxyDeps {
 export interface InstanceProxy {
   handleHttp(req: ProxyRequest, res: ProxyResponse): Promise<void>
   handleUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer): Promise<void>
-  /** `opts.tls.spkiPin` (S23): optional gateway-only https SPKI certificate
-   * pin — forwarded with the target so proxy-forward gates the outbound
-   * https connection on it (a mismatch is an explicit 502 upstream_failed). */
-  registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: { tls?: { spkiPin?: string }; authority?: string }): void
+  /** `opts.transport` preserves the target/transport split from design 17:
+   * dsh+http may use a direct non-loopback origin, while dsh+ssh and the
+   * legacy ssh spelling stay loopback-only. `opts.tls.spkiPin` (S23) is the
+   * optional gateway+http+https certificate pin forwarded to proxy-forward. */
+  registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
   unregisterTransport(connectionId: string): void
   getDiagnostics(): InstanceProxyDiagnostics
   /** Force-close every spliced WS stream (control-plane stop): an upgraded
    * socket leaves the HTTP server's connection tracking, so a lingering
    * half-open downlink would otherwise hang server.close() forever. */
   closeAllStreams(): void
+}
+
+/** Main-process-only facts used to validate a ready transport registration.
+ * The dimension is explicit because a canonical `dsh:<id>` identifies target
+ * semantics, not whether its ready URL came from an SSH tunnel or HTTP direct. */
+export interface InstanceTransportRegistrationOptions {
+  transport?: 'ssh' | 'http'
+  tls?: { spkiPin?: string }
+  authority?: string
 }
 
 /** Whether an id is a valid /api/i/<id> segment ('local', 'dsh-<id>' or
@@ -193,6 +202,37 @@ export function parseInstancePath(raw: string): InstancePath | null {
   if (parseInstanceId(id) === null) return null
   const rest = parts.length === 3 ? '/' : `/${parts.slice(3).join('/')}`
   return { id, rest, search }
+}
+
+/** Design 17 reserves the root `/chamber` namespace for gateway targets.
+ * Normalize URL dot segments, backslashes and a bounded number of percent-
+ * encoding layers so a dsh target cannot reach the namespace through an
+ * alternate request-target spelling that `new URL()` later canonicalizes. */
+function targetsChamberNamespace(rawPath: string): boolean {
+  let candidate = rawPath
+  for (let depth = 0; depth < 4; depth += 1) {
+    candidate = candidate.replace(/\\/g, '/')
+    let pathname: string
+    try {
+      // Concatenate under a fixed dummy authority instead of resolving a
+      // `//...` path as a protocol-relative URL (repeated/backslash-derived
+      // slashes are path syntax here, never an authority switch).
+      pathname = new URL(`http://instance.invalid${candidate.startsWith('/') ? '' : '/'}${candidate}`).pathname
+    } catch {
+      return false
+    }
+    const first = pathname.split('/').find(segment => segment !== '')
+    if (first === 'chamber') return true
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(pathname)
+    } catch {
+      return false
+    }
+    if (decoded === candidate || decoded === pathname) return false
+    candidate = decoded
+  }
+  return false
 }
 
 /**
@@ -341,6 +381,15 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       counters.requests += 1
+      // Target semantics are enforced in the proxy core, not only by hiding
+      // settings rows (design 17 §2.1/§3): local/dsh/legacy-ssh sources have
+      // no gateway-owned `/chamber/*` capability. A user-configured dsh+http
+      // endpoint therefore cannot smuggle that namespace into the renderer.
+      if (parseInstanceId(parsed.id) !== 'gateway' && targetsChamberNamespace(parsed.rest)) {
+        counters.failures += 1
+        writeError(res, 404, 'capability_not_found', 'the dsh target does not expose gateway capabilities', logger)
+        return
+      }
       if (activeHttpRequests >= maxConcurrentHttpRequests) {
         counters.failures += 1
         writeError(res, 503, 'resource_exhausted', 'too many concurrent proxy requests', logger)
@@ -437,12 +486,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     /**
      * Register a remote instance transport (design 05 §3.3 + design 17 §9.3):
      * the desktop main process reports a ready target as connectionId
-     * `dsh:<id>` (ssh tunnel, legacy `ssh:<id>` spelling accepted) or
-     * `gateway:<id>` (ssh tunnel or http(s) direct origin). Re-registration
+     * `dsh:<id>` or `gateway:<id>` plus the independent `opts.transport`
+     * dimension (legacy `ssh:<id>` spelling remains SSH-only). Re-registration
      * replaces the previous baseUrl/headers (tunnel re-established on a new
      * port) and revokes traffic already authenticated through the old record.
      */
-    registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: { tls?: { spkiPin?: string }; authority?: string }) {
+    registerTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions) {
       if (typeof connectionId !== 'string' || connectionId === '' || typeof baseUrl !== 'string' || baseUrl === '') {
         throw new TypeError('registerInstanceTransport: connectionId and baseUrl must be non-empty strings')
       }
@@ -459,16 +508,31 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         throw new TypeError(`registerInstanceTransport: invalid baseUrl: ${String(urlError)}`)
       }
       const isGateway = connectionId.startsWith('gateway:')
+      const isLegacySsh = connectionId.startsWith('ssh:')
+      const transport = opts?.transport
+      if (transport !== undefined && transport !== 'ssh' && transport !== 'http') {
+        throw new TypeError('registerInstanceTransport: transport must be "ssh" or "http"')
+      }
+      if (isLegacySsh && transport === 'http') {
+        throw new TypeError('registerInstanceTransport: the legacy "ssh:<id>" spelling cannot register an http transport')
+      }
       if (target.protocol !== 'http:' && target.protocol !== 'https:') {
         throw new TypeError('registerInstanceTransport: baseUrl must be an http(s) URL')
       }
+      const isOrigin = target.username === '' && target.password === ''
+        && target.pathname === '/' && target.search === '' && target.hash === ''
       if (!isGateway) {
-        // ssh tunnel shape (the dsh kind, incl. the legacy ssh spelling):
-        // loopback origin only (design 05 §3.3) — one combined check keeps
-        // the historical message (the test asserts /loopback/).
-        if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)
-          || target.username !== '' || target.password !== '' || target.pathname !== '/'
-          || target.search !== '' || target.hash !== '') {
+        // Target kind and transport are independent (design 17 §2.1/§7):
+        // dsh+http is a direct origin and may be non-loopback; dsh+ssh and
+        // the legacy ssh spelling remain a loopback tunnel. Missing transport
+        // intentionally keeps the historical fail-closed SSH interpretation.
+        if (!isOrigin) {
+          throw new TypeError(transport === 'http'
+            ? 'registerInstanceTransport: dsh baseUrl must be an origin (no credentials/path/query)'
+            : 'registerInstanceTransport: ssh baseUrl must be a loopback origin')
+        }
+        if (transport !== 'http'
+          && !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)) {
           throw new TypeError('registerInstanceTransport: ssh baseUrl must be a loopback origin')
         }
         // dsh targets never carry credentials: no header injection, ever
@@ -479,9 +543,12 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       } else {
         // gateway: http(s) origin, non-loopback allowed (design 17 §9.3; http
         // = the user's explicit insecureHttp choice, https = the default).
-        if (target.username !== '' || target.password !== '' || target.pathname !== '/'
-          || target.search !== '' || target.hash !== '') {
+        if (!isOrigin) {
           throw new TypeError('registerInstanceTransport: gateway baseUrl must be an origin (no credentials/path/query)')
+        }
+        if (transport === 'ssh'
+          && !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)) {
+          throw new TypeError('registerInstanceTransport: ssh baseUrl must be a loopback origin')
         }
         // 0..2 sanctioned headers, each bounded and whitelist-checked:
         // Authorization (Bearer) and Cookie (dsh_gateway_session) — anything
@@ -494,10 +561,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
             if (injected.authorization !== undefined) {
               throw new TypeError('registerInstanceTransport: gateway Authorization may be given at most once')
             }
-            if (typeof rawValue !== 'string' || !rawValue.startsWith('Bearer ')
-              || rawValue.length <= 'Bearer '.length || rawValue.length > 'Bearer '.length + 4096
-              || /[\r\n\0]/.test(rawValue)) {
-              throw new TypeError('registerInstanceTransport: gateway Authorization must be a bounded Bearer credential')
+            if (typeof rawValue !== 'string' || !/^Bearer [\x20-\x7e]{32,4096}$/.test(rawValue)) {
+              throw new TypeError('registerInstanceTransport: gateway Authorization Bearer credential must contain 32–4096 visible-ASCII characters')
             }
             injected.authorization = rawValue
           } else if (lower === 'cookie') {
@@ -536,21 +601,27 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): an ssh-tunneled
       // gateway target connects to the loopback tunnel endpoint but must
-      // present the REMOTE gateway authority in the Host header — the
+      // present the gateway's REMOTE loopback-listener authority in Host — the
       // gateway's request policy requires the authority port to equal its own
       // listen port, which the tunnel's local port can never satisfy. The
       // override is gateway-only (a dsh target has no Host policy to satisfy)
       // and shape-bounded: a host[:port] authority without path/query/
       // userinfo/fragment.
       const authority = opts?.authority
+      if (isGateway && transport === 'ssh' && authority === undefined) {
+        throw new TypeError('registerInstanceTransport: an ssh-tunneled gateway requires its remote loopback authority')
+      }
       if (authority !== undefined) {
         if (!isGateway) {
           throw new TypeError('registerInstanceTransport: dsh transports cannot override the upstream Host authority')
         }
-        if (typeof authority !== 'string' || authority.length > 253
-          || !/^(?:[a-zA-Z0-9._-]+|\[[0-9a-fA-F:.]+\])(?::\d{1,5})?$/.test(authority)
-          || authority.includes('://')) {
-          throw new TypeError('registerInstanceTransport: gateway authority must be a host[:port] without path/query/credentials')
+        if (transport !== 'ssh') {
+          throw new TypeError('registerInstanceTransport: a gateway Host authority override requires an ssh transport')
+        }
+        const loopback = typeof authority === 'string' ? /^127\.0\.0\.1:(\d{1,5})$/.exec(authority) : null
+        const authorityPort = loopback === null ? 0 : Number(loopback[1])
+        if (loopback === null || authorityPort < 1 || authorityPort > 65535) {
+          throw new TypeError('registerInstanceTransport: an ssh gateway authority must be remote 127.0.0.1:<port>')
         }
       }
       // Clone the only sanctioned headers so caller mutation cannot alter a

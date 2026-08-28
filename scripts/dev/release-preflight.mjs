@@ -15,6 +15,8 @@
  *       默认 fork 副本基线 0.1.1-rc.2。--fork-version 可覆盖。
  *   node scripts/dev/release-preflight.mjs --actions-only   # CI 模式：只验
  *       证 .github/workflows/*.yml 的 action SHA（网络解析），其余跳过。
+ *   node scripts/dev/release-preflight.mjs <version> --versions-only
+ *       # release.yml 早期门：动态核对根、全部 packages 与 dsh 常量。
  *   逃生舱：--offline 跳过网络 SHA 解析；--skip-install 跳过
  *       pnpm install --frozen-lockfile（耗时步骤，网络受限/无 store 时）。
  *       两者都会打印 SKIP 提示——发布前建议完整跑一遍。
@@ -42,11 +44,12 @@ const SELF_PATH = relative(REPO_ROOT, fileURLToPath(import.meta.url))
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2)
-const flags = { actionsOnly: false, offline: false, skipInstall: false, forkVersion: undefined }
+const flags = { actionsOnly: false, versionsOnly: false, offline: false, skipInstall: false, forkVersion: undefined }
 const positional = []
 for (let i = 0; i < args.length; i++) {
   const arg = args[i]
   if (arg === '--actions-only') flags.actionsOnly = true
+  else if (arg === '--versions-only') flags.versionsOnly = true
   else if (arg === '--offline') flags.offline = true
   else if (arg === '--skip-install') flags.skipInstall = true
   else if (arg === '--fork-version') {
@@ -409,12 +412,30 @@ async function runActionShaOnly() {
   console.log('\n✓ action SHA preflight passed — safe to run the release workflow.')
 }
 
+function runVersionsOnly() {
+  console.log(`release version preflight for ${VERSION} (fork baseline ${FORK_VERSION})\n`)
+  try {
+    parseReleaseVersion(VERSION)
+  } catch (error) {
+    console.error(`✗ version: ${error.message}`)
+    process.exit(1)
+  }
+  checkVersionUniformity()
+}
+
 if (IS_MAIN) {
   if (flags.actionsOnly) {
     await runActionShaOnly()
+  } else if (flags.versionsOnly) {
+    if (VERSION === undefined) {
+      console.error('usage: node scripts/dev/release-preflight.mjs <version> --versions-only')
+      process.exit(2)
+    }
+    runVersionsOnly()
   } else {
     if (VERSION === undefined) {
       console.error('usage: node scripts/dev/release-preflight.mjs <version> [--fork-version <v>] [--offline] [--skip-install]')
+      console.error('       node scripts/dev/release-preflight.mjs <version> --versions-only')
       console.error('       node scripts/dev/release-preflight.mjs --actions-only')
       process.exit(2)
     }

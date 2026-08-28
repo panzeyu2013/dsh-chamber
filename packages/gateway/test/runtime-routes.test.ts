@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -15,14 +15,35 @@ import { createRequire } from 'node:module'
 import type { ApiRequest, ApiResponse, Logger, PlaneHandle } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from '../src/config.ts'
 import { createGatewayRuntimeManager, readBuiltinVersion } from '../src/runtime-manager.ts'
-import { readActivationJournalState, readOverride, writeActivationIntent, writeOverride } from '@dsh-chamber/dsh-runtime'
+import {
+  REQUIRED_ACTIVATION_PROBES,
+  readActivationJournalState,
+  readCurrentPointer,
+  readOverride,
+  recordRuntimeFailure,
+  writeActivationIntent,
+  writeCurrentPointer,
+  writeOverride,
+} from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes, sanitizeRouteError, type RuntimeRoutes } from '../src/runtime-routes.ts'
 
 const silentLogger: Logger = { log() {}, warn() {}, error() {} }
 
+const TEST_BUILTIN_VERSION = '0.9.0'
+
 function config(stateDir: string): GatewayConfig {
+  const anchor = join(stateDir, 'builtin-anchor')
+  const packageDir = join(anchor, 'node_modules', '@deepseek-ai', 'dsh')
+  mkdirSync(packageDir, { recursive: true })
+  writeFileSync(join(anchor, 'package.json'), JSON.stringify({
+    name: 'gateway-test-anchor',
+    dependencies: { '@deepseek-ai/dsh': TEST_BUILTIN_VERSION },
+  }))
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+    name: '@deepseek-ai/dsh', version: TEST_BUILTIN_VERSION,
+  }))
   return {
-    plane: { host: '127.0.0.1', port: 3000, stateDir, dshWorkspacePath: '/tmp/anchor-dsh' },
+    plane: { host: '127.0.0.1', port: 3000, stateDir, dshWorkspacePath: anchor },
     auth: { kind: 'none' },
     channels: { direct: false, ssh: false },
     corsOrigins: [],
@@ -107,7 +128,7 @@ async function runRoute(routes: RuntimeRoutes, method: string, path: string, bod
 test('status is pollable while dsh is stopped (not ready-gated) and reports applying phase', async () => {
   let phase = 'idle'
   const manager = {
-    status: () => ({ activeVersion: 'builtin-anchor', source: 'builtin-anchor', phase, pending: null, connectionState: 'stopped', registry: 'https://registry.npmjs.org', platform: 'darwin', mutationsAllowed: true }),
+    status: async () => ({ kind: 'dsh-chamber-gateway-runtime', activeVersion: '0.9.0', source: 'builtin-anchor', phase, pending: null, connectionState: 'stopped', registry: 'https://registry.npmjs.org', platform: 'darwin', mutationsAllowed: true }),
     listVersions: async () => ({}),
     select: async () => ({ accepted: true, version: 'x' }),
     apply: async () => ({ pending: true }),
@@ -121,6 +142,8 @@ test('status is pollable while dsh is stopped (not ready-gated) and reports appl
   const idle = await runRoute(routes, 'GET', '/chamber/runtime/status')
   assert.equal(idle.status, 200)
   assert.equal((idle.json as { phase: string }).phase, 'idle')
+  assert.equal((idle.json as { kind: string }).kind, 'dsh-chamber-gateway-runtime',
+    'the async status snapshot is awaited and serialized, never rendered as {}')
   phase = 'applying'
   const applying = await runRoute(routes, 'GET', '/chamber/runtime/status')
   assert.equal((applying.json as { phase: string }).phase, 'applying')
@@ -151,6 +174,14 @@ test('restart returns 202 when ready, 409 while applying, and 409 when dsh never
   assert.equal(busy.status, 409)
   assert.equal((busy.json as { code: string }).code, 'runtime_busy')
   assert.equal(restarts, 1)
+  phase = 'installing'
+  const installing = await runRoute(routes, 'POST', '/chamber/runtime/restart')
+  assert.equal(installing.status, 409)
+  assert.equal((installing.json as { code: string }).code, 'runtime_busy')
+  phase = 'pending'
+  const pending = await runRoute(routes, 'POST', '/chamber/runtime/restart')
+  assert.equal(pending.status, 409)
+  assert.equal((pending.json as { code: string }).code, 'runtime_pending')
   phase = 'idle'
   connectionState = 'degraded'
   const degraded = await runRoute(routes, 'POST', '/chamber/runtime/restart')
@@ -167,6 +198,7 @@ test('select/rollback require a version body and registry PUT validates the orig
   const manager = {
     status: () => ({ phase: 'idle', mutationsAllowed: !readOnly }),
     activationInProgress: () => busy,
+    mutationInProgress: () => busy,
     select: async () => ({ accepted: true, version: 'x' }),
     rollback: async () => ({ accepted: true }),
     setRegistry: async (origin: string) => ({ origin }),
@@ -206,7 +238,7 @@ test('resolution chain: env → override (valid tree) → builtin anchor', () =>
   try {
     process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    assert.deepEqual(manager.resolveWorkspace(), { path: '/tmp/env-dsh', source: 'env' })
+    assert.deepEqual(manager.resolveWorkspace(), { path: '/tmp/env-dsh', version: null, source: 'env' })
   } finally {
     if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
     else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
@@ -220,7 +252,9 @@ test('resolution falls back to the builtin anchor without env or pointer', () =>
   try {
     delete process.env.DSH_GATEWAY_DSH_PATH
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    assert.deepEqual(manager.resolveWorkspace(), { path: '/tmp/anchor-dsh', source: 'builtin' })
+    assert.deepEqual(manager.resolveWorkspace(), {
+      path: join(stateDir, 'builtin-anchor'), version: TEST_BUILTIN_VERSION, source: 'builtin',
+    })
   } finally {
     if (oldEnv !== undefined) process.env.DSH_GATEWAY_DSH_PATH = oldEnv
     rmSync(stateDir, { recursive: true, force: true })
@@ -254,13 +288,250 @@ test('registry origin validation lives in the manager (bad origin rejected)', as
   }
 })
 
+test('corrupt registry configuration fails loud, preserves evidence, and never falls back to npmjs', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-registry-corrupt-'))
+  try {
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    assert.equal(manager.getRegistry().origin, 'https://registry.npmjs.org', 'only a genuinely missing file uses the default')
+    const file = join(stateDir, 'dsh-runtime', 'registry.json')
+    writeFileSync(file, '{broken-json', { mode: 0o600 })
+    const projected = await manager.status()
+    assert.equal(projected.registry, null)
+    assert.match(projected.registryError ?? '', /corrupt/)
+    assert.ok(!existsSync(file), 'the corrupt primary file is quarantined')
+    const evidence = readdirSync(join(stateDir, 'dsh-runtime')).find(name => name.startsWith('registry.json.corrupt-'))
+    assert.ok(evidence)
+    assert.equal(readFileSync(join(stateDir, 'dsh-runtime', evidence!), 'utf8'), '{broken-json')
+    assert.throws(() => manager.getRegistry(), /remains quarantined/,
+      'quarantine evidence prevents a silent default on subsequent reads')
+    assert.deepEqual(await manager.setRegistry('https://registry.npmmirror.com'), { origin: 'https://registry.npmmirror.com' })
+    assert.equal(manager.getRegistry().origin, 'https://registry.npmmirror.com')
+    assert.ok(existsSync(join(stateDir, 'dsh-runtime', evidence!)), 'recovery never destroys the preserved corrupt bytes')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('quarantining a hard-linked registry never chmods or rewrites the external inode', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-registry-hardlink-'))
+  try {
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const external = join(stateDir, 'external-registry-bytes')
+    writeFileSync(external, '{"origin":"https://registry.npmjs.org"}')
+    chmodSync(external, 0o644)
+    linkSync(external, join(stateDir, 'dsh-runtime', 'registry.json'))
+    const status = await manager.status()
+    assert.match(status.registryError ?? '', /corrupt/)
+    assert.equal(readFileSync(external, 'utf8'), '{"origin":"https://registry.npmjs.org"}')
+    assert.equal(statSync(external).mode & 0o777, 0o644,
+      'quarantine must not chmod a multiply-linked inode outside its evidence entry')
+    assert.ok(readdirSync(join(stateDir, 'dsh-runtime')).some(name => name.startsWith('registry.json.corrupt-')))
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('offline version listing retains every valid local cache tree', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-offline-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    let fetches = 0
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      fetchMetadata: async () => { fetches += 1; throw new Error('registry offline') },
+    })
+    const result = await manager.listVersions() as {
+      versions: Array<{ version: string; cached: boolean }>
+      error: string
+    }
+    assert.match(result.error, /registry offline/)
+    assert.deepEqual(
+      result.versions.filter(entry => entry.version === '1.0.0' || entry.version === '2.0.0')
+        .map(entry => [entry.version, entry.cached]),
+      [['1.0.0', true], ['2.0.0', true]],
+    )
+    assert.equal(result.versions.find(entry => entry.version === TEST_BUILTIN_VERSION)?.cached, false,
+      'the active builtin anchor stays visible but is not mislabeled as an installed cache tree')
+    assert.equal((await manager.select(TEST_BUILTIN_VERSION)).accepted, true,
+      'selecting the active builtin row is a no-op')
+    assert.equal(fetches, 1, 'the builtin no-op never performs another offline registry request')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('fresh installs fail closed at the logical disk soft limit while cached versions remain selectable', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-quota-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const sparse = join(stateDir, 'dsh-runtime', '.pnpm-store', 'logical-10-gib')
+    mkdirSync(dirname(sparse), { recursive: true })
+    writeFileSync(sparse, '')
+    truncateSync(sparse, 10 * 1024 ** 3)
+    let fetches = 0
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      fetchMetadata: async () => { fetches += 1; throw new Error('must not fetch above quota') },
+    })
+    await assert.rejects(manager.select('2.0.0'), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_disk_limit')
+    assert.equal(fetches, 0, 'quota is checked before registry/network work')
+    assert.equal((await manager.select('1.0.0')).accepted, true,
+      'cached recovery/switching remains available above the soft limit')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('status projects effective override selection plus snapshot, failure, and gateway-layout disk facts', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-status-full-'))
+  try {
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '2.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.2', chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied', restoreOutcome: 'complete',
+    })
+    const snapshotAt = Date.now()
+    const snapshotFile = join(stateDir, 'dsh-runtime', 'snapshots', `2.0.0-${snapshotAt}`, 'data')
+    mkdirSync(dirname(snapshotFile), { recursive: true })
+    writeFileSync(snapshotFile, 'snapshot-bytes')
+    const restoreBackup = join(stateDir, 'dsh-home.old-123', 'data')
+    mkdirSync(dirname(restoreBackup), { recursive: true })
+    writeFileSync(restoreBackup, 'gateway-restore-backup')
+    recordRuntimeFailure(stateDir, { version: '3.0.0', phase: 'install', error: 'registry install failed' })
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const status = await manager.status()
+    assert.equal(status.kind, 'dsh-chamber-gateway-runtime')
+    assert.equal(status.activeVersion, '2.0.0')
+    assert.equal(status.builtinVersion, TEST_BUILTIN_VERSION)
+    assert.equal(status.currentVersion, '2.0.0')
+    assert.equal(status.selectedVersion, '2.0.0')
+    assert.equal(status.hasOverride, true)
+    assert.equal(status.source, 'user-selected')
+    assert.equal(status.restoreOutcome, 'complete')
+    assert.equal(status.snapshotCount, 1)
+    assert.equal(status.latestSnapshotAt, new Date(snapshotAt).toISOString())
+    assert.equal(status.snapshotError, null)
+    assert.equal(status.restoreInProgress, false)
+    assert.equal(status.preRollbackCount, 0)
+    assert.equal(status.preRollbackLatestName, null)
+    assert.equal(status.failure?.version, '3.0.0')
+    assert.equal(status.failure?.reason, 'registry install failed')
+    assert.ok((status.diskUsage?.snapshotBytes ?? 0) > 0)
+    assert.ok((status.diskUsage?.restoreBackupBytes ?? 0) > 0,
+      'gateway sibling dsh-home.old backups are included in disk accounting')
+    assert.equal(status.diskError, null)
+    assert.equal(status.diskLimitBytes, 10 * 1024 ** 3)
+    assert.equal(status.diskLimitExceeded, false)
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('status reads the real version from an effective env workspace', async () => {
+  const previous = process.env.DSH_GATEWAY_DSH_PATH
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-status-env-'))
+  const envAnchor = join(stateDir, 'env-anchor')
+  try {
+    const pkg = join(envAnchor, 'node_modules', '@deepseek-ai', 'dsh')
+    mkdirSync(pkg, { recursive: true })
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '4.5.6' }))
+    process.env.DSH_GATEWAY_DSH_PATH = envAnchor
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const status = await manager.status()
+    assert.equal(status.activeVersion, '4.5.6')
+    assert.equal(status.source, 'env')
+    assert.equal(status.builtinVersion, TEST_BUILTIN_VERSION)
+    await manager.dispose()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = previous
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('same-process duplicate managers cannot share one runtime stateDir', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-same-process-'))
+  try {
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    assert.throws(
+      () => createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger }),
+      /already owns/,
+    )
+    await manager.dispose()
+    const replacement = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    await replacement.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('an owner record with this pid is rejected even without a module-local lease', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-same-pid-record-'))
+  try {
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true, mode: 0o700 })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'owner.json'), JSON.stringify({ pid: process.pid }), { mode: 0o600 })
+    assert.throws(
+      () => createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger }),
+      /already owns/,
+    )
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('registry source changes are fenced while an install is in flight', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-registry-fence-'))
+  let rejectFetch!: (error: Error) => void
+  try {
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      fetchMetadata: async () => new Promise((_, reject) => { rejectFetch = reject }),
+    })
+    const install = manager.select('2.0.0')
+    assert.equal(manager.mutationInProgress(), true, 'the full install window is single-flight')
+    assert.equal(manager.activationInProgress(), false, 'install must not quarantine the already-active runtime')
+    const installing = await manager.status()
+    assert.equal(installing.phase, 'installing')
+    assert.equal(installing.connectionState, 'ready')
+    assert.equal(installing.activeVersion, TEST_BUILTIN_VERSION, 'the current runtime stays authoritative while downloading')
+    await assert.rejects(
+      manager.setRegistry('https://registry.npmmirror.com'),
+      (error: unknown) => (error as { code?: string }).code === 'runtime_busy',
+    )
+    rejectFetch(new Error('test install cancelled'))
+    await assert.rejects(install, /test install cancelled/)
+    assert.equal(manager.mutationInProgress(), false)
+    assert.equal((await manager.status()).phase, 'idle')
+    assert.equal(manager.getRegistry().origin, 'https://registry.npmjs.org')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('startup transaction with no pending switches nothing and does not block', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-startup-'))
   try {
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
     const result = await manager.startupTransaction()
     assert.equal(result.blockedReason, null)
-    assert.equal(manager.status().phase, 'idle')
+    assert.equal((await manager.status()).phase, 'idle')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -272,6 +543,57 @@ test('select→apply semantics: apply without a selection rejects; rollback reje
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
     await assert.rejects(manager.apply(), /no runtime version selected/)
     await assert.rejects(manager.rollback('9.9.9'), /no valid version tree/)
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('ordinary pending is a core+route terminal gate: every action except restore-builtin is 409 and non-mutating', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-pending-gate-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.2', chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+    })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    assert.equal((await manager.status()).phase, 'pending')
+
+    const blocked: Array<[string, string, string | undefined]> = [
+      ['select', 'POST', JSON.stringify({ version: '1.0.0' })],
+      ['apply', 'POST', undefined],
+      ['rollback', 'POST', JSON.stringify({ version: '1.0.0' })],
+      ['retry-apply', 'POST', undefined],
+      ['retry-restore', 'POST', undefined],
+      ['restart', 'POST', undefined],
+      ['registry', 'PUT', JSON.stringify({ origin: 'https://registry.npmmirror.com' })],
+    ]
+    for (const [suffix, method, body] of blocked) {
+      const response = await runRoute(routes, method, `/chamber/runtime/${suffix}`, body)
+      assert.equal(response.status, 409, `${suffix} must be refused while pending`)
+      assert.equal((response.json as { code: string }).code, 'runtime_pending', `${suffix} exposes the stable pending code`)
+      assert.equal(readOverride(stateDir)?.pending, '1.0.0', `${suffix} must not clear or rewrite pending`)
+    }
+
+    const restored = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin')
+    assert.equal(restored.status, 200, 'restore-builtin is the sole pending escape')
+    assert.equal(readOverride(stateDir), null)
+    assert.equal((await manager.status()).phase, 'idle')
+    await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -290,27 +612,111 @@ test('single-process guard: a stale owner record from a dead pid is taken over',
   }
 })
 
-test('restoreBuiltin clears the activation journal (R7: journal-mismatch FATAL regression)', async () => {
+test('restoreBuiltin runs the full shared activation transaction before deleting override metadata', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-restore-journal-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
-    writeActivationIntent(stateDir, { targetVersion: '9.9.9', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch' })
-    assert.equal(readActivationJournalState(stateDir).kind, 'valid')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '2.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.2', chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"kept":true}')
+    const order: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop') },
+      startLocal: async () => { order.push('start') },
+    })
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async ({ isBuiltin }) => {
+        order.push(`probe:${isBuiltin ? 'builtin' : 'override'}`)
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+      },
+      onActivationQuarantineChange: (active) => { order.push(`quarantine:${active ? 'on' : 'off'}`) },
+    })
     await manager.restoreBuiltin()
+    assert.equal(order[0], 'quarantine:on', 'derived consumers detach before the host is quiesced')
+    assert.ok(order.indexOf('stop') < order.indexOf('probe:builtin'), 'DSH_HOME is quiesced before snapshot/switch/probe')
+    assert.ok(order.indexOf('probe:builtin') < order.indexOf('quarantine:off'),
+      'candidate ready remains quarantined through the complete probe verdict')
+    assert.ok(order.includes('probe:builtin'), 'the builtin anchor passes the complete activation gate')
+    assert.ok(readdirSync(join(stateDir, 'dsh-runtime', 'snapshots')).some(name => name.startsWith('2.0.0-')),
+      'the switching-from DSH_HOME is snapshotted under its real source version')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"kept":true}')
+    assert.equal(readCurrentPointer(stateDir), null, 'the pointer clears only inside the activation transaction')
+    assert.equal(readOverride(stateDir), null, 'override is deleted only after the builtin probe passes')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'restore-builtin must not leave a mismatching journal behind')
+    const status = await manager.status()
+    assert.equal(status.kind, 'dsh-chamber-gateway-runtime')
+    assert.equal(status.activeVersion, TEST_BUILTIN_VERSION)
+    assert.equal(status.builtinVersion, TEST_BUILTIN_VERSION)
+    await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
 
-test('status suppresses pending under an env override (R7: env defers the switch)', () => {
+test('restoreBuiltin preserves the override and rolls data back when the builtin probe fails', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-restore-fail-'))
+  try {
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '2.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.2', chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"preserved"}')
+    const probed: string[] = []
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      probeCandidate: async ({ isBuiltin }) => {
+        probed.push(isBuiltin ? 'builtin' : 'override')
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: !isBuiltin, ...(!isBuiltin ? {} : { error: 'rejected' }) }))
+      },
+    })
+    await assert.rejects(manager.restoreBuiltin(), /previous runtime and data were restored/)
+    assert.deepEqual(probed, ['builtin', 'builtin', 'override'], 'failed builtin is observed twice, then the source tree is probed')
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.equal(readOverride(stateDir)?.resolvedVersion, '2.0.0', 'failed reset never deletes the recoverable override')
+    assert.equal(readOverride(stateDir)?.lastOutcome, 'rolled-back')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"preserved"}')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('env override is a healthy startup bypass: pending is deferred without blocked/error status', async () => {
   const previous = process.env.DSH_GATEWAY_DSH_PATH
   process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-env-pending-'))
+  const errors: string[] = []
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: { log() {}, warn() {}, error(message) { errors.push(String(message)) } },
+    })
     writeOverride(stateDir, { shellVersion: '0.2.0-beta.2', chosenVersion: '1.0.0', resolvedVersion: '1.0.0', pending: '1.0.0', swapAttempted: false })
-    assert.equal(manager.status().pending, null)
+    assert.deepEqual(await manager.startupTransaction(), { blockedReason: null })
+    const status = await manager.status()
+    assert.equal(status.pending, null)
+    assert.equal(status.phase, 'idle')
+    assert.equal(status.startupBlockedReason, null)
+    assert.equal(status.source, 'env')
+    assert.deepEqual(errors, [], 'env bypass is not logged as a runtime startup error')
+    await manager.dispose()
   } finally {
     if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
     else process.env.DSH_GATEWAY_DSH_PATH = previous
@@ -358,6 +764,11 @@ test('readBuiltinVersion reads the anchor package version (F1 regression)', () =
     mkdirSync(pkgDir, { recursive: true })
     writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9' }))
     assert.equal(readBuiltinVersion(dir), '9.9.9')
+    rmSync(join(dir, 'node_modules'), { recursive: true, force: true })
+    const sourceDir = join(dir, 'apps', 'cli')
+    mkdirSync(sourceDir, { recursive: true })
+    writeFileSync(join(sourceDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '8.8.8' }))
+    assert.equal(readBuiltinVersion(dir), '8.8.8', 'a source-checkout anchor reads apps/cli/package.json')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -384,7 +795,7 @@ test('activationFacts uses the anchor semver as the builtin snapshot source (F1 
   }
 })
 
-test('select on an installed-but-inactive tree records the choice instead of refusing (F2)', async () => {
+test('builtin-active cached selection stays staged across restart without weakening pointer loss', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-reselect-'))
   try {
     makeValidTree(stateDir, '1.0.0')
@@ -395,6 +806,38 @@ test('select on an installed-but-inactive tree records the choice instead of ref
     const override = readOverride(stateDir)
     assert.equal(override?.chosenVersion, '1.0.0')
     assert.equal(override?.pending, null)
+    assert.equal(override?.selectedOnly, true, 'builtin remains the explicit active authority until apply')
+    assert.equal(manager.resolveWorkspace().source, 'builtin')
+    await manager.dispose()
+
+    const restarted = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    assert.deepEqual(await restarted.startupTransaction(), { blockedReason: null })
+    assert.equal(restarted.resolveWorkspace().source, 'builtin', 'staged selection survives a healthy gateway restart')
+    assert.equal((await restarted.status()).selectedVersion, '1.0.0')
+    await restarted.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('staging v2 from active user v1 never authorizes builtin if v1 current pointer disappears', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stage-from-user-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.2', chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied', selectedOnly: false,
+    })
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    await manager.select('2.0.0')
+    assert.equal(readOverride(stateDir)?.selectedOnly, false)
+    assert.equal(manager.resolveWorkspace().version, '1.0.0', 'the active pointer, not the staged choice, remains authoritative')
+    rmSync(join(stateDir, 'dsh-runtime', 'current'))
+    assert.throws(() => manager.resolveWorkspace(), /missing its authoritative current pointer/,
+      'lost active v1 pointer must quarantine instead of falling back to builtin')
+    await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -425,6 +868,9 @@ test('version mutations refuse while the env anchor is active (env always wins)'
     await assert.rejects(manager.apply(), /env always wins/)
     await assert.rejects(manager.rollback('1.2.3'), /env always wins/)
     await assert.rejects(manager.restoreBuiltin(), /env always wins/)
+    await assert.rejects(manager.setRegistry('https://registry.npmmirror.com'), /env always wins/)
+    await manager.restart()
+    assert.equal((await manager.status()).restart, 'ok', 'process restart remains available for env-pinned runtimes')
   } finally {
     if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
     else process.env.DSH_GATEWAY_DSH_PATH = previous
@@ -432,16 +878,16 @@ test('version mutations refuse while the env anchor is active (env always wins)'
   }
 })
 
-test('manager.status() projects the live plane connectionState (ready/restarting/stopped)', () => {
+test('manager.status() projects the live plane connectionState (ready/restarting/stopped)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-live-conn-'))
   try {
     const plane = fakePlane()
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
-    assert.equal(manager.status().connectionState, 'stopped')
+    assert.equal((await manager.status()).connectionState, 'stopped')
     plane._state.connectionState = 'restarting'
-    assert.equal(manager.status().connectionState, 'restarting')
+    assert.equal((await manager.status()).connectionState, 'restarting')
     plane._state.connectionState = 'ready'
-    assert.equal(manager.status().connectionState, 'ready')
+    assert.equal((await manager.status()).connectionState, 'ready')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -454,7 +900,7 @@ test('a rejected plane.restartLocal() surfaces as status().operationError (sanit
     plane._state.restartError = 'spawn denied /secret/token=abc'
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
     await assert.rejects(manager.restart(), /spawn denied/)
-    const operationError = manager.status().operationError
+    const operationError = (await manager.status()).operationError
     assert.equal(typeof operationError, 'string')
     assert.ok((operationError as string).includes('spawn denied'))
     assert.ok(!(operationError as string).includes('/secret'), 'paths must be redacted')
@@ -495,6 +941,7 @@ test('env anchor active: /select refuses 409 synchronously, awaited mutations an
   const manager = {
     status: () => ({ phase: 'idle', mutationsAllowed: true, source: 'env' }),
     activationInProgress: () => false,
+    mutationInProgress: () => false,
     restartInFlight: () => false,
     select: async () => { throw Object.assign(new Error('env always wins'), { code: 'env_override_active' }) },
     apply: async () => { throw Object.assign(new Error('env always wins'), { code: 'env_override_active' }) },
@@ -517,10 +964,12 @@ test('env anchor active: /select refuses 409 synchronously, awaited mutations an
 test('select refuses 409 while activation is in flight and 403 on read-only platforms (honest acceptance)', async () => {
   let busy = false
   let readOnly = false
+  let phase = 'idle'
   let selects = 0
   const manager = {
-    status: () => ({ phase: 'idle', mutationsAllowed: !readOnly }),
+    status: () => ({ phase, pending: phase === 'pending' ? '1.2.3' : null, mutationsAllowed: !readOnly }),
     activationInProgress: () => busy,
+    mutationInProgress: () => busy,
     restartInFlight: () => false,
     select: async () => { selects += 1; return { accepted: true, version: 'x' } },
   }
@@ -533,6 +982,12 @@ test('select refuses 409 while activation is in flight and 403 on read-only plat
   assert.equal(during.status, 409)
   assert.equal(selects, 1, 'a refused select must not enqueue')
   busy = false
+  phase = 'pending'
+  const pending = await runRoute(routes, 'POST', '/chamber/runtime/select', JSON.stringify({ version: '1.2.3' }))
+  assert.equal(pending.status, 409)
+  assert.equal((pending.json as { code: string }).code, 'runtime_pending')
+  assert.equal(selects, 1)
+  phase = 'idle'
   readOnly = true
   const ro = await runRoute(routes, 'POST', '/chamber/runtime/select', JSON.stringify({ version: '1.2.3' }))
   assert.equal(ro.status, 403)
@@ -576,23 +1031,23 @@ test('restart outcome lifecycle: status().restart projects running → ok, and f
     // restart accepted but rejected at entry (operationError set, connection
     // state still 'ready') is distinguishable from success by this field.
     const inflight = manager.restart()
-    assert.equal(manager.status().restart, 'running')
+    assert.equal((await manager.status()).restart, 'running')
     release()
     await inflight
-    assert.equal(manager.status().restart, 'ok')
+    assert.equal((await manager.status()).restart, 'ok')
     // Failed restart projects 'failed' + the sanitized operationError.
     plane._state.restartError = 'spawn denied /secret/token=abc'
     await assert.rejects(manager.restart(), /spawn denied/)
-    assert.equal(manager.status().restart, 'failed')
-    const operationError = manager.status().operationError as string
+    assert.equal((await manager.status()).restart, 'failed')
+    const operationError = (await manager.status()).operationError as string
     assert.ok(!operationError.includes('/secret'), 'paths redacted')
     assert.ok(!operationError.includes('token=abc'), 'credentials redacted')
     // RESOLVE ≠ SUCCESS (design 18 §9.3): restartLocal() also resolves from
     // restart-exhausted — that must be 'failed', never 'ok' (review fix).
     plane.restartLocal = async () => { plane._state.connectionState = 'restart-exhausted' }
     await assert.rejects(manager.restart(), /did not reach ready \(restart-exhausted\)/)
-    assert.equal(manager.status().restart, 'failed')
-    assert.ok((manager.status().operationError as string).includes('restart-exhausted'))
+    assert.equal((await manager.status()).restart, 'failed')
+    assert.ok(((await manager.status()).operationError as string).includes('restart-exhausted'))
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -619,6 +1074,7 @@ test('version mutations are refused while a restart is in flight (review fix: bo
     const restarting = {
       status: () => ({ phase: 'idle', mutationsAllowed: true, source: 'builtin-anchor' }),
       activationInProgress: () => false,
+      mutationInProgress: () => true,
       restartInFlight: () => true,
       select: async () => { throw new Error('must not be called') },
     }
@@ -666,7 +1122,7 @@ test('retry-apply / retry-restore routes answer 200 with blockedReason, 409 no_r
   assert.equal(r.status, 409)
 })
 
-test('rollback → re-select → apply: the journal agrees with the pending target (round-4 stale-intent regression)', async () => {
+test('rollback pending cannot be silently superseded by re-select/apply', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stale-intent-'))
   try {
     makeValidTree(stateDir, '1.0.0')
@@ -679,22 +1135,18 @@ test('rollback → re-select → apply: the journal agrees with the pending targ
     if (journalAfterRollback.kind === 'valid') {
       assert.equal(journalAfterRollback.journal.targetVersion, '1.0.0')
     }
-    // The user changes their mind: re-select the installed 2.0.0, then apply.
-    await manager.select('2.0.0')
-    // A fresh selection cancels the stale rollback intent (round-4 fix) —
-    // otherwise the next boot's journal-vs-pending mismatch check FATALs.
-    const journalAfterSelect = readActivationJournalState(stateDir)
-    assert.equal(journalAfterSelect.kind, 'missing', 'select cancels the stale intent journal')
-    await manager.apply()
-    // Apply writes an intent that AGREES with pending: boot must not block.
-    const journalAfterApply = readActivationJournalState(stateDir)
-    assert.equal(journalAfterApply.kind, 'valid')
-    if (journalAfterApply.kind === 'valid') {
-      assert.equal(journalAfterApply.journal.targetVersion, '2.0.0')
-      assert.equal(journalAfterApply.journal.manualRollback, false)
+    await assert.rejects(manager.select('2.0.0'), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_pending')
+    await assert.rejects(manager.apply(), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_pending')
+    const journalAfterRefusals = readActivationJournalState(stateDir)
+    assert.equal(journalAfterRefusals.kind, 'valid')
+    if (journalAfterRefusals.kind === 'valid') {
+      assert.equal(journalAfterRefusals.journal.targetVersion, '1.0.0')
+      assert.equal(journalAfterRefusals.journal.manualRollback, true)
     }
     const override = readOverride(stateDir)
-    assert.equal(override?.pending, '2.0.0')
+    assert.equal(override?.pending, '1.0.0')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -741,7 +1193,7 @@ test('real manager: retry-apply/retry-restore refuse without a matching blocked 
   }
 })
 
-test('connection_busy maps to 409; oversized bodies get a written 413 then a destroyed socket', async () => {
+test('connection_busy maps to 409; oversized bodies release input, write 413, then destroy the socket', async () => {
   const busyManager = {
     status: () => ({ phase: 'idle', mutationsAllowed: true, source: 'builtin-anchor' }),
     rollback: async () => { throw Object.assign(new Error('local restart was invalidated by stop'), { code: 'connection_busy' }) },
@@ -760,4 +1212,28 @@ test('connection_busy maps to 409; oversized bodies get a written 413 then a des
   assert.equal(fakeRes.statusCode, 413)
   assert.ok((fakeRes.body ?? '').includes('body too large'))
   assert.equal((req as unknown as { destroyed: boolean }).destroyed, true, 'socket destroyed only after the 413 was written')
+
+  // Streaming regression: once the cap trips, later data is not inspected or
+  // retained while the route unwinds to its write-then-destroy error path.
+  const streamingReq = new EventEmitter() as EventEmitter & Partial<ApiRequest> & { destroyed: boolean }
+  streamingReq.method = 'POST'
+  streamingReq.url = '/chamber/runtime/select'
+  streamingReq.headers = { authorization: 'Bearer x' }
+  streamingReq.destroyed = false
+  streamingReq.destroy = () => { streamingReq.destroyed = true; return streamingReq as never }
+  const streamingRes = new FakeResponse()
+  const handling = routes.handle(
+    streamingReq as unknown as ApiRequest,
+    streamingRes as unknown as ApiResponse,
+    '/chamber/runtime/select',
+  )
+  streamingReq.emit('data', Buffer.alloc(64 * 1024 + 1))
+  const poison = Object.defineProperty({}, 'length', {
+    get() { throw new Error('a post-limit runtime chunk was inspected') },
+  })
+  assert.doesNotThrow(() => streamingReq.emit('data', poison))
+  streamingReq.emit('end')
+  assert.equal(await handling, true)
+  assert.equal(streamingRes.statusCode, 413)
+  assert.equal(streamingReq.destroyed, true)
 })

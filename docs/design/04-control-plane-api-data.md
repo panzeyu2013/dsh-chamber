@@ -193,8 +193,14 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 ### 4.3 响应头白名单
 
-`content-type`、`cache-control`、`x-next-cursor`、`x-ratelimit-*`；
-其余上游头不直通（WS upgrade 101 所需头除外）。
+`content-type`、`content-encoding`、`content-language`、`content-range`、
+`content-disposition`、`accept-ranges`、`cache-control`、`etag`、`expires`、
+`last-modified`、`location`、`vary`、`x-next-cursor`、`x-ratelimit-limit`、
+`x-ratelimit-remaining`、`x-ratelimit-reset`。其中 `location` 解析后仍指向同一
+上游 origin 的相对或绝对重定向会重写到实例反代前缀，`vary` 会与控制面的 CORS
+`Origin` 收敛合并；其余上游头不直通
+（WS upgrade 101 所需头除外）。该列表与 03 §3.4 及
+`proxy-forward.ts` 的 `RESPONSE_HEADER_WHITELIST` 同步维护。
 
 ---
 
@@ -247,7 +253,7 @@ interface WebBootGraph {
 | 载体 | 路径 | 内容 | 权威方 |
 |---|---|---|---|
 | JSON 单行 | `<stateDir>/catalog.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写） | `{schemaVersion: 2, revision, connections: [{connectionId, kind, status, dshPort, label, accentColor}]}`（status / dshPort 为运行态投影） | 控制面（03 §2.1） |
-| JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, kind, transport, label, host, user, sshPort, remotePort, serviceName, remoteDshHome, insecureHttp}`（schema v2 以 03 §2.2 = 17 §9.1 为准；凭据不进注册表，`tokenSet`/`passwordSet` 为主进程实时非秘密投影） | 桌面主进程（03 §2.2） |
+| JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, kind, transport, label, host, user, sshPort, remotePort, serviceName, remoteDshHome, insecureHttp, spkiPin}`（schema v2 以 03 §2.2 = 17 §9.1 为准；凭据不进注册表，`sshPasswordSet`/`tokenSet`/`passwordSet`/`secretStorage` 为主进程实时非秘密投影） | 桌面主进程（03 §2.2） |
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
 - **原子写协议**（catalog.json）：同步 write-through + `tmp + fsync +

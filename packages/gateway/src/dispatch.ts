@@ -174,7 +174,9 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     const decision = requestPolicy.evaluate(req)
     if (!decision.allowed) {
       json(res, decision.status, {
-        error: decision.code === 'misdirected_request' ? 'misdirected request' : 'request origin is not allowed',
+        error: decision.code === 'bad_request' ? 'malformed request headers'
+          : decision.code === 'misdirected_request' ? 'misdirected request'
+            : 'request origin is not allowed',
         code: decision.code,
       })
       return true
@@ -341,7 +343,9 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     // 0. The exact same public boundary applies before every WS route.
     const decision = requestPolicy.evaluate(req)
     if (!decision.allowed) {
-      rejectWs(socket, decision.status, decision.code === 'misdirected_request' ? 'misdirected request' : 'request origin is not allowed', decision.code)
+      rejectWs(socket, decision.status, decision.code === 'bad_request' ? 'malformed request headers'
+        : decision.code === 'misdirected_request' ? 'misdirected request'
+          : 'request origin is not allowed', decision.code)
       return true
     }
     // 1. Auth gate (WS auth == HTTP auth, S2). A saturated scrypt work gate

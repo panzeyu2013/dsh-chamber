@@ -7,6 +7,7 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane'
 import { writeOverride } from '@dsh-chamber/dsh-runtime'
 import { createGateway } from '../src/index.ts'
 import type { GatewayConfig } from '../src/config.ts'
+import type { GatewayRuntimeManager, GatewayRuntimeManagerOptions } from '../src/runtime-manager.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -93,8 +94,14 @@ test('gateway start: metadata corruption fails loud and rolls the plane back (FA
 
 
 function config(stateDir: string): GatewayConfig {
+  const builtinWorkspace = join(stateDir, 'builtin-dsh')
+  mkdirSync(builtinWorkspace, { recursive: true })
+  writeFileSync(join(builtinWorkspace, 'package.json'), JSON.stringify({
+    private: true,
+    dependencies: { '@deepseek-ai/dsh': '1.0.0' },
+  }))
   return {
-    plane: { host: '127.0.0.1', port: 3000, stateDir, dshWorkspacePath: '/tmp/dsh' },
+    plane: { host: '127.0.0.1', port: 3000, stateDir, dshWorkspacePath: builtinWorkspace },
     auth: { kind: 'none' },
     channels: { direct: false, ssh: false },
     corsOrigins: [],
@@ -198,6 +205,135 @@ test('gateway start owns local readiness and attaches features on ready transiti
     assert.deepEqual(order.slice(3, 5), ['features:stop', 'features:start'])
     await gateway.stop()
     assert.deepEqual(order.slice(-3), ['proxy:close', 'features:stop', 'plane:stop'])
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('install single-flight does not quarantine the active proxy exposure seam', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-install-exposure-'))
+  let capturedPlaneOptions: { canExposeLocal(): boolean; canStartLocal(): { ok: boolean } } | null = null
+  let activation = false
+  let mutation = false
+  const state = { connectionState: 'stopped' }
+  const order: string[] = []
+  const plane = compositionPlane(state, order)
+  const runtime = {
+    transactionWorkspace: null,
+    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
+    startupTransaction: async () => ({ blockedReason: null }),
+    activationInProgress: () => activation,
+    mutationInProgress: () => mutation,
+    internalSpawnActive: () => false,
+    dispose: async () => {},
+  } as unknown as GatewayRuntimeManager
+  try {
+    const gateway = createGateway({
+      config: config(stateDir),
+      logger: silentLogger,
+      deps: {
+        createPlane: ((options: unknown) => {
+          capturedPlaneOptions = options as typeof capturedPlaneOptions
+          return plane
+        }) as never,
+        createRuntimeManager: (() => runtime) as never,
+        createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+        createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
+      },
+    })
+    await gateway.start()
+    mutation = true // models manager.phase === installing
+    assert.equal(runtime.mutationInProgress(), true)
+    assert.equal(runtime.activationInProgress(), false)
+    assert.equal(capturedPlaneOptions!.canExposeLocal(), true,
+      'a 2–10 minute install must keep the current dsh proxy visible')
+    assert.equal(capturedPlaneOptions!.canStartLocal().ok, true,
+      'install is a writer fence, not an activation/spawn quarantine')
+    activation = true
+    assert.equal(capturedPlaneOptions!.canExposeLocal(), false,
+      'only the activation verdict window closes exposure')
+    activation = false
+    await gateway.stop()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('live activation keeps candidate and rollback ready edges detached, then explicitly resyncs after verdict', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-candidate-isolation-'))
+  const order: string[] = []
+  const listeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
+  let connectionState = 'stopped'
+  let activation = false
+  let quarantineChange: GatewayRuntimeManagerOptions['onActivationQuarantineChange']
+  const emit = (status: string) => {
+    connectionState = status
+    for (const listener of listeners) listener({ status, port: 17510, error: null })
+  }
+  const plane: PlaneHandle = {
+    async start() { order.push('plane:start') },
+    async startLocal() { order.push('local:start'); emit('ready') },
+    async stop() { order.push('plane:stop'); emit('stopped') },
+    async stopLocal() { emit('stopped') },
+    async restartLocal() {},
+    onLocalStateChange(listener) { listeners.add(listener); return () => listeners.delete(listener) },
+    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {},
+    getLocalDshPort() { return 17510 }, get port() { return 3000 },
+    get connectionState() { return connectionState }, get localProcessAlive() { return connectionState === 'ready' },
+    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test',
+  }
+  const runtime = {
+    transactionWorkspace: null,
+    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
+    startupTransaction: async () => ({ blockedReason: null }),
+    activationInProgress: () => activation,
+    mutationInProgress: () => activation,
+    internalSpawnActive: () => false,
+    restoreBuiltin: async () => {
+      activation = true
+      quarantineChange?.(true)
+      order.push('candidate:ready')
+      emit('ready')
+      order.push('candidate:rejected')
+      emit('starting')
+      order.push('rollback:ready')
+      emit('ready')
+      order.push('verdict:rollback-pass')
+      activation = false
+      quarantineChange?.(false)
+      return { accepted: true }
+    },
+    dispose: async () => {},
+  } as unknown as GatewayRuntimeManager
+  try {
+    const gateway = createGateway({
+      config: config(stateDir), logger: silentLogger,
+      deps: {
+        createPlane: (() => plane) as never,
+        createRuntimeManager: ((options: GatewayRuntimeManagerOptions) => {
+          quarantineChange = options.onActivationQuarantineChange
+          return runtime
+        }) as never,
+        createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+        createFeatures: () => ({
+          async handle() { return true },
+          start() { order.push('features:start') },
+          stop() { order.push('features:stop') },
+        }),
+      },
+    })
+    await gateway.start()
+    order.length = 0
+    await runtime.restoreBuiltin()
+    assert.deepEqual(order, [
+      'features:stop',
+      'candidate:ready',
+      'candidate:rejected',
+      'rollback:ready',
+      'verdict:rollback-pass',
+      'features:start',
+    ], 'no ready edge attaches before verdict; end-quarantine callback performs the authoritative resync')
+    await gateway.stop()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

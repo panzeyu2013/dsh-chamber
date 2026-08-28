@@ -186,13 +186,10 @@ export type RuntimeAction =
 
 /**
  * 终态门（§3.6）：
- *   - pending 可恢复内建；applying 是持久事务临界区，所有新动作禁用；
- *   - idle/checking/available 允许 check + select-version（available 加 install）；
- *   - downloading/installing 在安装窗口内无可见动作（单飞守卫覆盖整个 install
- *     窗口，UI 只显示进度，即 'none'）；
- *   - applied/rollback/failed 允许 check + select-version（回滚后可再选）+
- *     reset-builtin；
- *   - error 允许 retry-apply（= check）+ reset-builtin。
+ *   - pending/applying 是持久事务临界区，只允许唯一逃生动作“恢复内建”；
+ *   - idle/available/applied/rollback/failed/error 提供其各自的稳定态动作；
+ *     retry-apply/retry-restore/recover-metadata 只由显式 capability 增补；
+ *   - checking/downloading/installing 在单飞窗口内无可见动作，UI 只显示进度；
  */
 export function allowedActions(
   state: RuntimePhase,

@@ -23,6 +23,7 @@ import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import {
   createGatewaySessionManager,
+  gatewayRegistrationAuthHeaders,
   GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS,
   GATEWAY_SESSION_COOKIE_NAME,
   GATEWAY_SESSION_EXPIRY_SKEW_MS,
@@ -34,13 +35,19 @@ import {
 import {
   createGatewaySessionRefresh,
   gatewaySessionOriginForUrl,
+  gatewayTunnelAuthority,
   GATEWAY_SESSION_REFRESH_LEAD_MS,
   type GatewaySessionRefreshDeps,
 } from './gateway-session-refresh.ts'
+import {
+  configureGatewaySessionProvider,
+  verifyGatewayPasswordSession,
+} from './gateway-provider.ts'
 
 const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZXNzaW9uIn0.signature'
 const COOKIE = `${GATEWAY_SESSION_COOKIE_NAME}=${JWT}`
 const PASSWORD = 'correct horse battery staple'
+let gatewayScopeSequence = 0
 
 interface LoginRecord {
   path: string
@@ -70,7 +77,7 @@ async function startGateway(handler: (req: IncomingMessage, res: ServerResponse)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   return {
-    origin: { baseUrl: `http://127.0.0.1:${port}`, insecureHttp: true },
+    origin: { baseUrl: `http://127.0.0.1:${port}`, insecureHttp: true, scope: `test:gateway:${gatewayScopeSequence += 1}` },
     close: () => new Promise<void>(resolve => server.close(() => resolve())),
   }
 }
@@ -111,6 +118,34 @@ function stubRequestFactory(opts: { seenUrl?: (url: unknown) => void; status?: n
     return req
   }) as unknown as GatewayHttpRequest
   return factory
+}
+
+/** Request factory whose responses are released explicitly by the test. */
+function deferredLoginFactory(responders: Array<() => void>): GatewayHttpRequest {
+  interface StubClientRequest {
+    on(event: string, listener: (...args: unknown[]) => void): unknown
+    end(): void
+    destroy(): void
+  }
+  interface StubIncomingMessage {
+    statusCode: number
+    headers: Record<string, string | string[] | undefined>
+    resume(): StubIncomingMessage
+    on(event: string, listener: (...args: unknown[]) => void): unknown
+  }
+  return ((_: unknown, _options: unknown, cb: (res: StubIncomingMessage) => void) => {
+    const req = new EventEmitter() as unknown as StubClientRequest
+    req.end = () => {}
+    req.destroy = () => {}
+    responders.push(() => {
+      const res = new EventEmitter() as unknown as StubIncomingMessage
+      res.statusCode = 302
+      res.headers = { 'set-cookie': [COOKIE] }
+      res.resume = () => res
+      cb(res)
+    })
+    return req
+  }) as unknown as GatewayHttpRequest
 }
 
 type FailureCode = Extract<GatewaySessionResult, { ok: false }>['code']
@@ -301,9 +336,9 @@ test('a 3xx login answer without the session cookie is an other-failure, never a
 test('a network-level failure classifies as network (unreachable gateway)', async () => {
   const mgr = createGatewaySessionManager({ request: stubRequestFactory({ networkError: true }) })
   try {
-    const result = await mgr.ensureSession({ baseUrl: 'http://127.0.0.1:1', insecureHttp: true }, PASSWORD)
+    const result = await mgr.ensureSession({ baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:network' }, PASSWORD)
     assertFailure(result, 'network')
-    assert.equal(mgr.cachedCookie({ baseUrl: 'http://127.0.0.1:1', insecureHttp: true }), null)
+    assert.equal(mgr.cachedCookie({ baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 'test:network' }), null)
   } finally {
     mgr.dispose()
   }
@@ -327,7 +362,7 @@ test('insecureHttp selects plain http end-to-end; a https origin builds an https
   const seen: string[] = []
   const httpsMgr = createGatewaySessionManager({ request: stubRequestFactory({ seenUrl: url => seen.push(String(url)) }) })
   try {
-    const result = await httpsMgr.ensureSession({ baseUrl: 'https://gw.example.com:8443', insecureHttp: false }, PASSWORD)
+    const result = await httpsMgr.ensureSession({ baseUrl: 'https://gw.example.com:8443', insecureHttp: false, scope: 'test:https' }, PASSWORD)
     assert.equal(result.ok, true)
     if (result.ok) assert.equal(result.cookie, COOKIE)
     assert.deepEqual(seen, ['https://gw.example.com:8443/auth/login'])
@@ -348,16 +383,21 @@ test('insecureHttp selects plain http end-to-end; a https origin builds an https
 
 test('ensureSession: an https origin with an SPKI pin requests with rejectUnauthorized:false + agent:false (the pinned login, S23/P1-2)', async () => {
   const seen: Array<{ url: unknown; options: Record<string, unknown> }> = []
-  const factory = stubRequestFactory()
+  // This unit only inspects request options. The real certificate match and
+  // pre-write dispatch path is exercised against real TLS below/in
+  // gateway-provider.test.ts; emit a network failure so the fake socket need
+  // not counterfeit a certificate.
+  const factory = stubRequestFactory({ networkError: true })
   const wrapped = ((url: unknown, options: unknown, cb: unknown) => {
     seen.push({ url, options: (options ?? {}) as Record<string, unknown> })
     return (factory as unknown as (u: unknown, o: unknown, c: unknown) => unknown)(url, options, cb)
   }) as unknown as GatewayHttpRequest
   const mgr = createGatewaySessionManager({ request: wrapped })
   try {
-    const origin: GatewaySessionOrigin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false, spkiPin: 'a'.repeat(64) }
+    const origin: GatewaySessionOrigin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false, spkiPin: 'a'.repeat(64), scope: 'test:pin-a' }
     const result = await mgr.ensureSession(origin, PASSWORD)
-    assert.equal(result.ok, true, 'the pinned login answers the stub redirect')
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.code, 'network')
     assert.equal(seen.length, 1)
     assert.equal(seen[0].options.rejectUnauthorized, false, 'the pin replaces CA trust — the internal-CA case')
     assert.equal(seen[0].options.agent, false, 'agent:false opens a fresh connection so the secureConnect verifier always fires')
@@ -391,7 +431,7 @@ test('ensureSession: a peer failing the SPKI pin check is classified other (term
   }) as unknown as GatewayHttpRequest
   const mgr = createGatewaySessionManager({ request: factory })
   try {
-    const origin: GatewaySessionOrigin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false, spkiPin: 'b'.repeat(64) }
+    const origin: GatewaySessionOrigin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false, spkiPin: 'b'.repeat(64), scope: 'test:pin-b' }
     const result = await mgr.ensureSession(origin, PASSWORD)
     assert.equal(result.ok, false)
     if (!result.ok) {
@@ -413,7 +453,7 @@ test('ensureSession: an http origin with a pin stays unpinned (no TLS layer — 
   }) as unknown as GatewayHttpRequest
   const mgr = createGatewaySessionManager({ request: wrapped })
   try {
-    const origin: GatewaySessionOrigin = { baseUrl: 'http://gw.example.com:8080', insecureHttp: true, spkiPin: 'a'.repeat(64) }
+    const origin: GatewaySessionOrigin = { baseUrl: 'http://gw.example.com:8080', insecureHttp: true, spkiPin: 'a'.repeat(64), scope: 'test:http-pin' }
     const result = await mgr.ensureSession(origin, PASSWORD)
     assert.equal(result.ok, true, 'an http login with a stray pin still succeeds (the pin cannot apply)')
     assert.equal('rejectUnauthorized' in seen[0], false, 'an http login never requests pin options')
@@ -445,7 +485,7 @@ test('the session cookie is parsed among other set-cookie headers, attributes st
   }
 })
 
-test('invalidate drops the cached cookie so the next proxy request re-logs in (design 17 §9.3 401 flow)', async () => {
+test('delete → recreate same id/origin invalidation never reuses the old cookie and logs in with the new password', async () => {
   const logins: LoginRecord[] = []
   const gw = await startGateway(loginHandler(logins))
   const mgr = createGatewaySessionManager()
@@ -454,11 +494,280 @@ test('invalidate drops the cached cookie so the next proxy request re-logs in (d
     assert.equal(mgr.cachedCookie(gw.origin), COOKIE)
     mgr.invalidate(gw.origin)
     assert.equal(mgr.cachedCookie(gw.origin), null, 'invalidate removes the session')
-    assert.equal((await mgr.ensureSession(gw.origin, PASSWORD)).ok, true)
-    assert.equal(logins.length, 2, 'invalidate forces a fresh login on the next ensureSession')
+    const newPassword = 'new correct horse battery staple'
+    assert.equal((await mgr.ensureSession(gw.origin, newPassword)).ok, true)
+    assert.equal(logins.length, 2, 'recreated connection forces a fresh login instead of reusing the deleted cookie')
+    assert.deepEqual(logins.map(entry => JSON.parse(entry.body).password), [PASSWORD, newPassword])
   } finally {
     mgr.dispose()
     await gw.close()
+  }
+})
+
+test('invalidateScope clears every historical tunnel local-port generation for one exact target', async () => {
+  const mgr = createGatewaySessionManager({ request: stubRequestFactory() })
+  const authority = gatewayTunnelAuthority(30801)
+  const scope = 'v1:target-a:' + 'a'.repeat(64)
+  const l1 = { baseUrl: 'http://127.0.0.1:40001', insecureHttp: true, authority, scope }
+  const l2 = { baseUrl: 'http://127.0.0.1:40002', insecureHttp: true, authority, scope }
+  const proofOnly = { baseUrl: 'http://127.0.0.1:40003', insecureHttp: true, authority, scope }
+  const unrelated = { ...l1, authority: gatewayTunnelAuthority(30802), scope: 'v1:target-b:' + 'b'.repeat(64) }
+  try {
+    assert.equal((await mgr.ensureSession(l1, PASSWORD)).ok, true)
+    assert.equal((await mgr.ensureSession(l2, PASSWORD)).ok, true)
+    assert.equal((await mgr.ensureSession(unrelated, PASSWORD)).ok, true)
+    assert.notEqual(mgr.cachedCookie(l1), null)
+    assert.notEqual(mgr.cachedCookie(l2), null)
+    mgr.setRegistrationAuthProof(l2, 'cookie')
+    mgr.setRegistrationAuthProof(proofOnly, 'bearer')
+    mgr.invalidateScope(scope)
+    assert.equal(mgr.cachedCookie(l1), null, 'deleted connection local port L1 is gone')
+    assert.equal(mgr.cachedCookie(l2), null, 'recreated connection local port L2 is gone too')
+    assert.equal(mgr.registrationAuthProof(l2), null, 'scope cleanup also removes an exact registration proof')
+    assert.equal(mgr.registrationAuthProof(proofOnly), null, 'a proof-only key is included in scope cleanup')
+    assert.notEqual(mgr.cachedCookie(unrelated), null, 'another connection scope is isolated')
+    assert.throws(() => mgr.invalidateScope('bad/path'), /scope/)
+  } finally {
+    mgr.dispose()
+  }
+})
+
+test('scope invalidation makes an old in-flight login unable to repopulate a recreated tunnel generation', async () => {
+  const responders: Array<() => void> = []
+  const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
+  const authority = gatewayTunnelAuthority(30801)
+  const scope = 'v1:target-old:' + 'c'.repeat(64)
+  const oldOrigin = { baseUrl: 'http://127.0.0.1:41001', insecureHttp: true, authority, scope }
+  const recreatedOrigin = { baseUrl: 'http://127.0.0.1:41002', insecureHttp: true, authority, scope }
+  try {
+    const oldLogin = mgr.ensureSession(oldOrigin, PASSWORD)
+    assert.equal(responders.length, 1)
+    mgr.invalidateScope(scope)
+    responders.shift()!()
+    const oldResult = await oldLogin
+    assertFailure(oldResult, 'stale')
+    assert.equal(mgr.cachedCookie(oldOrigin), null, 'its late cookie cannot repopulate deleted generation L1')
+
+    const recreatedLogin = mgr.ensureSession(recreatedOrigin, 'new generation password')
+    assert.equal(responders.length, 1, 'L2 performs its own login')
+    responders.shift()!()
+    assert.equal((await recreatedLogin).ok, true)
+    assert.equal(mgr.cachedCookie(recreatedOrigin), COOKIE, 'only the recreated L2 generation may cache its cookie')
+  } finally {
+    mgr.dispose()
+  }
+})
+
+test('scoped tunnel sessions isolate local-port reuse and exact cleanup across SSH targets sharing one authority', async () => {
+  const responders: Array<() => void> = []
+  const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
+  const authority = gatewayTunnelAuthority(30801)
+  const baseUrl = 'http://127.0.0.1:42001'
+  const scopeA = 'v1:connection-a:' + 'd'.repeat(64)
+  const scopeB = 'v1:connection-b:' + 'e'.repeat(64)
+  const a = { baseUrl, insecureHttp: true, authority, scope: scopeA }
+  const b = { baseUrl, insecureHttp: true, authority, scope: scopeB }
+  try {
+    const loginA = mgr.ensureSession(a, PASSWORD)
+    responders.shift()!()
+    assert.equal((await loginA).ok, true)
+    assert.equal(mgr.cachedCookie(a), COOKIE)
+    assert.equal(mgr.cachedCookie(b), null, 'same local port/authority cannot expose A cookie to B scope')
+
+    const loginB = mgr.ensureSession(b, 'password for B target')
+    assert.equal(responders.length, 1, 'B must perform its own login after local-port reuse')
+    mgr.invalidateScope(scopeA)
+    responders.shift()!()
+    assert.equal((await loginB).ok, true, 'exact A cleanup cannot stale B in-flight login')
+    assert.equal(mgr.cachedCookie(a), null)
+    assert.equal(mgr.cachedCookie(b), COOKIE, 'B cookie remains cached under its own target scope')
+  } finally {
+    mgr.dispose()
+  }
+})
+
+test('direct sessions at one network origin remain per-connection and exact invalidation does not clear peers', async () => {
+  const responders: Array<() => void> = []
+  const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
+  const baseUrl = 'https://gateway.example.com'
+  const scopeA = 'v1:direct-a:' + '1'.repeat(64)
+  const scopeB = 'v1:direct-b:' + '2'.repeat(64)
+  const a = { baseUrl, insecureHttp: false, scope: scopeA }
+  const b = { baseUrl, insecureHttp: false, scope: scopeB }
+  try {
+    const loginA = mgr.ensureSession(a, PASSWORD)
+    responders.shift()!()
+    assert.equal((await loginA).ok, true)
+    assert.equal(mgr.cachedCookie(b), null, 'B cannot reuse A cookie at the same direct origin')
+    const loginB = mgr.ensureSession(b, 'different B password')
+    responders.shift()!()
+    assert.equal((await loginB).ok, true)
+    mgr.invalidateScope(scopeA)
+    assert.equal(mgr.cachedCookie(a), null)
+    assert.equal(mgr.cachedCookie(b), COOKIE, 'clearing A does not clear B at the same origin')
+  } finally {
+    mgr.dispose()
+  }
+})
+
+test('ready registration auth fails closed only for password-only missing-cookie and preserves bearer fallback', () => {
+  assert.deepEqual(gatewayRegistrationAuthHeaders(null, true, null, null), {
+    ok: false,
+    reason: 'password_session_missing',
+  })
+  assert.deepEqual(gatewayRegistrationAuthHeaders('token', true, null, 'bearer'), {
+    ok: true,
+    headers: { authorization: 'Bearer token' },
+  }, 'token+password may intentionally register the verified bearer fallback')
+  assert.deepEqual(gatewayRegistrationAuthHeaders(null, true, COOKIE, 'cookie'), {
+    ok: true,
+    headers: { cookie: COOKIE },
+  })
+  assert.deepEqual(gatewayRegistrationAuthHeaders('token', true, COOKIE, 'cookie'), {
+    ok: true,
+    headers: { authorization: 'Bearer token', cookie: COOKIE },
+  })
+  assert.equal(gatewayRegistrationAuthHeaders('unproven-token', true, null, null).ok, false, 'token existence alone is not fallback evidence')
+  assert.equal(gatewayRegistrationAuthHeaders('invalid-token', true, null, 'cookie').ok, false, 'a vanished cookie proof cannot silently downgrade to bearer')
+})
+
+test('invalidation of a held login returns stale and prevents cookie probe, bearer fallback, and re-login', async () => {
+  const responders: Array<() => void> = []
+  const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
+  const origin = { baseUrl: 'http://gateway.example.com:30801', insecureHttp: true, scope: 'test:held-login' }
+  let probes = 0
+  let bearerFallbacks = 0
+  configureGatewaySessionProvider({
+    ensureSession: (target, password) => mgr.ensureSession(target, password),
+    generation: target => mgr.generation(target),
+    registrationAuthProof: target => mgr.registrationAuthProof(target),
+    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
+    cachedCookie: target => mgr.cachedCookie(target),
+    invalidate: target => mgr.invalidate(target),
+  })
+  try {
+    const verification = verifyGatewayPasswordSession(
+      origin,
+      PASSWORD,
+      async () => { probes += 1; return { ok: false, statusCode: 401 } },
+      async () => { bearerFallbacks += 1; return { ok: true } },
+    )
+    assert.equal(responders.length, 1, 'one old-generation password login is held')
+    mgr.invalidate(origin)
+    responders.shift()!()
+    const result = await verification
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.match(result.detail ?? '', /superseded/)
+    assert.equal(probes, 0, 'the invalidated cookie is never sent to the target')
+    assert.equal(bearerFallbacks, 0, 'stale is not a password failure and cannot send the captured bearer')
+    assert.equal(responders.length, 0, 'the old verifier cannot initiate a second login')
+    assert.equal(mgr.cachedCookie(origin), null, 'no stale cookie reaches cache')
+  } finally {
+    configureGatewaySessionProvider({})
+    mgr.dispose()
+  }
+})
+
+test('scope invalidation during a held bearer fallback supersedes the old captured token proof', async () => {
+  const mgr = createGatewaySessionManager({ request: stubRequestFactory({ status: 401, setCookie: null }) })
+  const origin = { baseUrl: 'http://gateway.example.com:30804', insecureHttp: true, scope: 'test:held-fallback' }
+  configureGatewaySessionProvider({
+    ensureSession: (target, password) => mgr.ensureSession(target, password),
+    generation: target => mgr.generation(target),
+    registrationAuthProof: target => mgr.registrationAuthProof(target),
+    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
+    cachedCookie: target => mgr.cachedCookie(target),
+    invalidate: target => mgr.invalidate(target),
+  })
+  try {
+    let markFallbackStarted!: () => void
+    const fallbackStarted = new Promise<void>(resolve => { markFallbackStarted = resolve })
+    let finishFallback!: (result: { ok: true }) => void
+    const fallbackGate = new Promise<{ ok: true }>(resolve => { finishFallback = resolve })
+    const verification = verifyGatewayPasswordSession(
+      origin,
+      PASSWORD,
+      async () => assert.fail('a refused login must not run the cookie probe'),
+      async () => { markFallbackStarted(); return fallbackGate },
+    )
+    await fallbackStarted
+    mgr.invalidateScope(origin.scope)
+    finishFallback({ ok: true })
+    const result = await verification
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.match(result.detail ?? '', /superseded/)
+  } finally {
+    configureGatewaySessionProvider({})
+    mgr.dispose()
+  }
+})
+
+test('external invalidation while the first cookie probe is pending prevents a 401 re-login', async () => {
+  const responders: Array<() => void> = []
+  const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
+  const origin = { baseUrl: 'http://gateway.example.com:30802', insecureHttp: true, scope: 'test:pending-probe' }
+  configureGatewaySessionProvider({
+    ensureSession: (target, password) => mgr.ensureSession(target, password),
+    generation: target => mgr.generation(target),
+    registrationAuthProof: target => mgr.registrationAuthProof(target),
+    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
+    cachedCookie: target => mgr.cachedCookie(target),
+    invalidate: target => mgr.invalidate(target),
+  })
+  try {
+    const initial = mgr.ensureSession(origin, PASSWORD)
+    responders.shift()!()
+    assert.equal((await initial).ok, true)
+
+    let finishProbe!: (result: { ok: false; statusCode: number }) => void
+    const probeGate = new Promise<{ ok: false; statusCode: number }>(resolve => { finishProbe = resolve })
+    let probes = 0
+    const verification = verifyGatewayPasswordSession(origin, PASSWORD, async () => {
+      probes += 1
+      return probeGate
+    })
+    assert.equal(probes, 1)
+    mgr.invalidate(origin)
+    finishProbe({ ok: false, statusCode: 401 })
+    const result = await verification
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.match(result.detail ?? '', /superseded/)
+    assert.equal(responders.length, 0, 'the old 401 cannot trigger a new password exchange')
+    assert.equal(mgr.cachedCookie(origin), null)
+  } finally {
+    configureGatewaySessionProvider({})
+    mgr.dispose()
+  }
+})
+
+test('a successful cookie probe is not accepted after its scoped cache proof was invalidated', async () => {
+  const responders: Array<() => void> = []
+  const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
+  const origin = { baseUrl: 'http://gateway.example.com:30803', insecureHttp: true, scope: 'v1:proof:' + '9'.repeat(64) }
+  configureGatewaySessionProvider({
+    ensureSession: (target, password) => mgr.ensureSession(target, password),
+    generation: target => mgr.generation(target),
+    registrationAuthProof: target => mgr.registrationAuthProof(target),
+    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
+    cachedCookie: target => mgr.cachedCookie(target),
+    invalidate: target => mgr.invalidate(target),
+  })
+  try {
+    const initial = mgr.ensureSession(origin, PASSWORD)
+    responders.shift()!()
+    assert.equal((await initial).ok, true)
+
+    let finishProbe!: (result: { ok: true }) => void
+    const probeGate = new Promise<{ ok: true }>(resolve => { finishProbe = resolve })
+    const verification = verifyGatewayPasswordSession(origin, PASSWORD, async () => probeGate)
+    mgr.invalidateScope(origin.scope)
+    finishProbe({ ok: true })
+    const result = await verification
+    assert.equal(result.ok, false, 'ready proof is bound to the still-cached scoped cookie')
+    if (!result.ok) assert.match(result.detail ?? '', /superseded/)
+  } finally {
+    configureGatewaySessionProvider({})
+    mgr.dispose()
   }
 })
 
@@ -485,8 +794,10 @@ test('dispose clears every cached session', async () => {
   try {
     assert.equal((await mgr.ensureSession(gw.origin, PASSWORD)).ok, true)
     assert.equal(mgr.cachedCookie(gw.origin), COOKIE)
+    mgr.setRegistrationAuthProof(gw.origin, 'cookie')
     mgr.dispose()
     assert.equal(mgr.cachedCookie(gw.origin), null)
+    assert.equal(mgr.registrationAuthProof(gw.origin), null)
   } finally {
     await gw.close()
   }
@@ -495,13 +806,15 @@ test('dispose clears every cached session', async () => {
 test('a structurally invalid origin is refused with a TypeError (mirrors instance-proxy baseUrl gate)', () => {
   const mgr = createGatewaySessionManager()
   try {
-    assert.throws(() => mgr.ensureSession({ baseUrl: 'https://gw.example.com', insecureHttp: true }, PASSWORD), /does not match/)
-    assert.throws(() => mgr.ensureSession({ baseUrl: 'http://gw.example.com', insecureHttp: false }, PASSWORD), /does not match/)
-    assert.throws(() => mgr.ensureSession({ baseUrl: 'ftp://gw.example.com', insecureHttp: false }, PASSWORD), /http\(s\) origin/)
-    assert.throws(() => mgr.ensureSession({ baseUrl: 'https://user:pass@gw.example.com', insecureHttp: false }, PASSWORD), /no credentials/)
-    assert.throws(() => mgr.ensureSession({ baseUrl: 'https://gw.example.com/path', insecureHttp: false }, PASSWORD), /no credentials/)
-    assert.throws(() => mgr.ensureSession({ baseUrl: 'not a url', insecureHttp: false }, PASSWORD), /invalid gateway baseUrl/)
-    assert.throws(() => mgr.cachedCookie({ baseUrl: 'https://gw.example.com', insecureHttp: true }), /does not match/)
+    const scope = 'test:invalid'
+    assert.throws(() => mgr.ensureSession({ baseUrl: 'https://gw.example.com', insecureHttp: true, scope }, PASSWORD), /does not match/)
+    assert.throws(() => mgr.ensureSession({ baseUrl: 'http://gw.example.com', insecureHttp: false, scope }, PASSWORD), /does not match/)
+    assert.throws(() => mgr.ensureSession({ baseUrl: 'ftp://gw.example.com', insecureHttp: false, scope }, PASSWORD), /http\(s\) origin/)
+    assert.throws(() => mgr.ensureSession({ baseUrl: 'https://user:pass@gw.example.com', insecureHttp: false, scope }, PASSWORD), /no credentials/)
+    assert.throws(() => mgr.ensureSession({ baseUrl: 'https://gw.example.com/path', insecureHttp: false, scope }, PASSWORD), /no credentials/)
+    assert.throws(() => mgr.ensureSession({ baseUrl: 'not a url', insecureHttp: false, scope }, PASSWORD), /invalid gateway baseUrl/)
+    assert.throws(() => mgr.cachedCookie({ baseUrl: 'https://gw.example.com', insecureHttp: true, scope }), /does not match/)
+    assert.throws(() => mgr.cachedCookie({ baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 'bad/path' }), /scope/)
   } finally {
     mgr.dispose()
   }
@@ -544,33 +857,43 @@ test('expiresAt reports the cached session\'s expiry instant and null when absen
 // ---------------------------------------------------------------------------
 
 test('gatewaySessionOriginForUrl derives the session origin from a ready transport URL (design 17 §9.3)', () => {
+  const DIRECT_SCOPE = 'v1:direct:' + 'd'.repeat(64)
   assert.deepEqual(
-    gatewaySessionOriginForUrl('http://127.0.0.1:40000'),
-    { baseUrl: 'http://127.0.0.1:40000', insecureHttp: true },
+    gatewaySessionOriginForUrl('http://127.0.0.1:40000', undefined, undefined, DIRECT_SCOPE),
+    { baseUrl: 'http://127.0.0.1:40000', insecureHttp: true, scope: DIRECT_SCOPE },
     'an ssh tunnel endpoint is a loopback http origin (insecureHttp = scheme selector, not a judgement)',
   )
   assert.deepEqual(
-    gatewaySessionOriginForUrl('https://gw.example.com:8443'),
-    { baseUrl: 'https://gw.example.com:8443', insecureHttp: false },
+    gatewaySessionOriginForUrl('https://gw.example.com:8443', undefined, undefined, DIRECT_SCOPE),
+    { baseUrl: 'https://gw.example.com:8443', insecureHttp: false, scope: DIRECT_SCOPE },
     'an https direct endpoint keeps insecureHttp false',
   )
   assert.deepEqual(
-    gatewaySessionOriginForUrl('http://gw.example.com:8080'),
-    { baseUrl: 'http://gw.example.com:8080', insecureHttp: true },
+    gatewaySessionOriginForUrl('http://gw.example.com:8080', undefined, undefined, DIRECT_SCOPE),
+    { baseUrl: 'http://gw.example.com:8080', insecureHttp: true, scope: DIRECT_SCOPE },
     'an http direct endpoint (explicit insecureHttp) is http',
   )
   // P1-2: a configured SPKI pin rides the derived origin so the refresh login
   // is pinned exactly like the verifyUp login.
   const PIN = 'c'.repeat(64)
   assert.deepEqual(
-    gatewaySessionOriginForUrl('https://gw.example.com:8443', PIN),
-    { baseUrl: 'https://gw.example.com:8443', insecureHttp: false, spkiPin: PIN },
+    gatewaySessionOriginForUrl('https://gw.example.com:8443', PIN, undefined, DIRECT_SCOPE),
+    { baseUrl: 'https://gw.example.com:8443', insecureHttp: false, spkiPin: PIN, scope: DIRECT_SCOPE },
     'the pin rides the https origin for the pinned refresh login',
   )
-  assert.equal(gatewaySessionOriginForUrl('ftp://gw.example.com'), null, 'a non-http(s) scheme is refused')
-  assert.equal(gatewaySessionOriginForUrl('http://user:pass@127.0.0.1:1'), null, 'credentials are refused')
-  assert.equal(gatewaySessionOriginForUrl('http://127.0.0.1:1/path'), null, 'a path is refused')
-  assert.equal(gatewaySessionOriginForUrl('not a url'), null, 'an unparsable URL is refused')
+  const TUNNEL_SCOPE = 'v1:gw-1:' + 'f'.repeat(64)
+  assert.deepEqual(
+    gatewaySessionOriginForUrl('http://127.0.0.1:40000', undefined, gatewayTunnelAuthority(30801), TUNNEL_SCOPE),
+    { baseUrl: 'http://127.0.0.1:40000', insecureHttp: true, authority: '127.0.0.1:30801', scope: TUNNEL_SCOPE },
+    'an ssh tunnel session carries the remote Host authority plus its exact connection scope',
+  )
+  assert.equal(gatewaySessionOriginForUrl('http://127.0.0.1:40000', undefined, gatewayTunnelAuthority(30801)), null, 'an unscoped tunnel origin fails closed')
+  assert.equal(gatewaySessionOriginForUrl('https://gw.example.com:8443'), null, 'an unscoped direct origin also fails closed')
+  assert.throws(() => gatewayTunnelAuthority(0), /1\.\.65535/)
+  assert.equal(gatewaySessionOriginForUrl('ftp://gw.example.com', undefined, undefined, DIRECT_SCOPE), null, 'a non-http(s) scheme is refused')
+  assert.equal(gatewaySessionOriginForUrl('http://user:pass@127.0.0.1:1', undefined, undefined, DIRECT_SCOPE), null, 'credentials are refused')
+  assert.equal(gatewaySessionOriginForUrl('http://127.0.0.1:1/path', undefined, undefined, DIRECT_SCOPE), null, 'a path is refused')
+  assert.equal(gatewaySessionOriginForUrl('not a url', undefined, undefined, DIRECT_SCOPE), null, 'an unparsable URL is refused')
 })
 
 // ---------------------------------------------------------------------------
@@ -607,19 +930,21 @@ function refreshHarness(overrides: Partial<GatewaySessionRefreshDeps> = {}) {
     passwords: new Map<string, string>(),
     pins: new Map<string, string>(),
     authorities: new Map<string, string>(),
+    scopes: new Map<string, string>(),
   }
-  const keyFor = (origin: GatewaySessionOrigin) => `${origin.insecureHttp ? 'http' : 'https'}|${origin.baseUrl}`
+  const keyFor = (origin: Pick<GatewaySessionOrigin, 'insecureHttp' | 'baseUrl'>) => `${origin.insecureHttp ? 'http' : 'https'}|${origin.baseUrl}`
   const deps: GatewaySessionRefreshDeps = {
     sessionManager: {
       ensureSession: (origin, password) => {
         state.logins.push({ origin, password })
+        let result: GatewaySessionResult
         if (state.failNextLogin !== null) {
-          const failure = state.failNextLogin
+          result = state.failNextLogin
           state.failNextLogin = null
-          return Promise.resolve(failure)
+        } else {
+          state.expiries.set(keyFor(origin), state.nowMs + state.TTL)
+          result = { ok: true, cookie: COOKIE }
         }
-        state.expiries.set(keyFor(origin), state.nowMs + state.TTL)
-        const result: GatewaySessionResult = { ok: true, cookie: COOKIE }
         if (state.holdLogins) {
           return new Promise(resolve => { state.releaseLogin = () => resolve(result) })
         }
@@ -639,6 +964,7 @@ function refreshHarness(overrides: Partial<GatewaySessionRefreshDeps> = {}) {
     readyUrlFor: id => state.readyUrls.get(id) ?? null,
     tlsPinFor: id => state.pins.get(id) ?? null,
     authorityFor: id => state.authorities.get(id),
+    scopeFor: id => state.scopes.get(id) ?? `test:${id}`,
     register: (id, url, headers, tls, authority) => state.registered.push({ id, url, headers, tls, authority }),
     reconnect: id => state.reconnects.push(id),
     warn: message => state.warned.push(message),
@@ -662,10 +988,11 @@ function refreshHarness(overrides: Partial<GatewaySessionRefreshDeps> = {}) {
   return { deps, refresh, state, keyFor, fireNext }
 }
 
-test('session refresh: arm schedules the re-login at expiresAt − 60s lead and no-ops without a password session (design 17 §9.3)', () => {
+test('session refresh: arm schedules the re-login at expiresAt − 60s lead, including when a token coexists (design 17 §9.3)', () => {
   const h = refreshHarness()
   h.state.readyUrls.set('gw-1', 'http://127.0.0.1:40000')
   h.state.passwords.set('gw-1', PASSWORD)
+  h.state.tokens.set('gw-1', 'x'.repeat(32))
   h.state.expiries.set(h.keyFor({ baseUrl: 'http://127.0.0.1:40000', insecureHttp: true }), h.state.nowMs + h.state.TTL)
   h.refresh.arm('gw-1')
   assert.equal(h.state.scheduled.length, 1)
@@ -674,11 +1001,16 @@ test('session refresh: arm schedules the re-login at expiresAt − 60s lead and 
     h.state.TTL - GATEWAY_SESSION_REFRESH_LEAD_MS,
     'the refresh fires 60s before the cached session expires',
   )
-  // No-ops: a token-authenticated target, a no-password target, a not-ready
-  // target and a target without a cached session never schedule.
+  // Token + password is NOT a no-op: both auth principals coexist and the
+  // cookie still needs refresh.
   h.state.tokens.set('gw-2', 'x'.repeat(32))
   h.state.passwords.set('gw-2', PASSWORD)
+  h.state.readyUrls.set('gw-2', 'http://127.0.0.1:40003')
+  h.state.expiries.set(h.keyFor({ baseUrl: 'http://127.0.0.1:40003', insecureHttp: true }), h.state.nowMs + h.state.TTL)
   h.refresh.arm('gw-2')
+  assert.equal(h.state.scheduled.length, 2, 'a bearer never shadows the independent password session')
+  // No-ops: a no-password target, a not-ready target and a target without a
+  // cached session never schedule.
   h.state.readyUrls.set('gw-3', 'http://127.0.0.1:40001')
   h.refresh.arm('gw-3') // no password
   h.state.passwords.set('gw-4', PASSWORD)
@@ -686,13 +1018,14 @@ test('session refresh: arm schedules the re-login at expiresAt − 60s lead and 
   h.state.readyUrls.set('gw-5', 'http://127.0.0.1:40002')
   h.state.passwords.set('gw-5', PASSWORD)
   h.refresh.arm('gw-5') // no cached session → expiresAt null
-  assert.equal(h.state.scheduled.length, 1, 'only the armed-with-session case schedules')
+  assert.equal(h.state.scheduled.length, 2, 'only the two armed-with-session cases schedule')
 })
 
 test('session refresh: the fired refresh re-logs in with the stored password, re-registers the fresh Cookie, and re-arms for the new expiry (design 17 §9.3)', async () => {
   const h = refreshHarness()
   h.state.readyUrls.set('gw-1', 'http://127.0.0.1:40000')
   h.state.passwords.set('gw-1', PASSWORD)
+  h.state.tokens.set('gw-1', 'x'.repeat(32))
   h.state.expiries.set(h.keyFor({ baseUrl: 'http://127.0.0.1:40000', insecureHttp: true }), h.state.nowMs + h.state.TTL)
   h.refresh.arm('gw-1')
   await h.fireNext()
@@ -701,8 +1034,8 @@ test('session refresh: the fired refresh re-logs in with the stored password, re
   assert.equal(h.state.logins[0].origin.baseUrl, 'http://127.0.0.1:40000', 'the login targets the tunnel origin')
   assert.equal(h.state.registered.length, 1)
   assert.deepEqual(h.state.registered[0], {
-    id: 'gw-1', url: 'http://127.0.0.1:40000', headers: { cookie: COOKIE }, tls: undefined, authority: undefined,
-  }, 'the transport is re-registered with the fresh header-ready Cookie')
+    id: 'gw-1', url: 'http://127.0.0.1:40000', headers: { authorization: `Bearer ${'x'.repeat(32)}`, cookie: COOKIE }, tls: undefined, authority: undefined,
+  }, 'the transport is re-registered with the fresh Cookie and preserves the independent Bearer')
   assert.equal(h.state.scheduled.length, 1, 'a fresh session re-arms the next refresh')
   assert.equal(h.state.scheduled[0].delayMs, h.state.TTL - GATEWAY_SESSION_REFRESH_LEAD_MS, 'the next refresh is 60s before the NEW expiry')
   assert.equal(h.state.warned.length, 0)
@@ -783,10 +1116,12 @@ test('session refresh: the dead-cookie recovery does NOT reconnect a transport t
   entry.fn()
   h.state.expiries.delete(h.keyFor(origin40000))
   h.state.readyUrls.set('gw-1', 'http://127.0.0.1:40011')
+  h.state.expiries.set(h.keyFor({ baseUrl: 'http://127.0.0.1:40011', insecureHttp: true }), h.state.nowMs + h.state.TTL)
+  h.refresh.arm('gw-1') // the fresh ready handler owns/bump-generates L2
   await new Promise(resolve => setTimeout(resolve, 0))
-  assert.equal(h.state.warned.length, 1, 'still warned (the refresh failed on a dead cookie)')
+  assert.equal(h.state.warned.length, 0, 'a stale generation cannot report a failure against the fresh connection')
   assert.equal(h.state.reconnects.length, 0, 'no recovery reconnect — the fresh ready already re-authenticated')
-  assert.equal(h.state.scheduled.length, 0, 'no re-arm — the ready handler owns the new origin')
+  assert.equal(h.state.scheduled.length, 1, 'only the fresh ready generation remains armed')
 })
 
 test('session refresh: the dead-cookie recovery does NOT reconnect a transport that left ready mid-login (nothing to recover)', async () => {
@@ -806,8 +1141,9 @@ test('session refresh: the dead-cookie recovery does NOT reconnect a transport t
   entry.fn()
   h.state.expiries.delete(h.keyFor(origin40000))
   h.state.readyUrls.delete('gw-1')
+  h.refresh.disarm('gw-1')
   await new Promise(resolve => setTimeout(resolve, 0))
-  assert.equal(h.state.warned.length, 1, 'still warned (the refresh failed on a dead cookie)')
+  assert.equal(h.state.warned.length, 0, 'a disarmed generation cannot report a stale failure')
   assert.equal(h.state.reconnects.length, 0, 'a non-ready transport has nothing for the recovery to reconnect')
   assert.equal(h.state.scheduled.length, 0)
 })
@@ -831,6 +1167,95 @@ test('session refresh: disarm cancels the pending refresh (disconnect / removal 
   assert.equal(h.state.cancelled.length, 3, 'dispose cancels every pending timer')
 })
 
+test('session refresh: delete/recreate at the same direct URL makes an old held success unable to register', async () => {
+  const h = refreshHarness()
+  const id = 'gw-same'
+  const origin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false }
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.state.holdLogins = true
+  h.refresh.arm(id)
+  const oldFire = h.state.scheduled.shift()
+  assert.ok(oldFire !== undefined)
+  h.state.nowMs += oldFire.delayMs
+  oldFire.fn()
+  assert.equal(typeof h.state.releaseLogin, 'function')
+
+  // Delete/clear then recreate with byte-identical visible facts. URL/fact
+  // equality cannot distinguish this; only the disarm+arm epoch can.
+  h.refresh.disarm(id)
+  h.state.readyUrls.delete(id)
+  h.state.passwords.delete(id)
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.refresh.arm(id)
+  h.state.releaseLogin?.()
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  assert.equal(h.state.registered.length, 0, 'the deleted generation cookie never registers on the recreated id')
+  assert.equal(h.state.scheduled.length, 1, 'only the recreated generation timer remains')
+})
+
+test('session refresh: delete/recreate at the same direct URL makes an old held failure unable to reconnect', async () => {
+  const h = refreshHarness()
+  const id = 'gw-same'
+  const origin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false }
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.state.failNextLogin = { ok: false, code: 'network', error: 'held old-generation network failure' }
+  h.state.holdLogins = true
+  h.refresh.arm(id)
+  const oldFire = h.state.scheduled.shift()
+  assert.ok(oldFire !== undefined)
+  h.state.nowMs += oldFire.delayMs
+  oldFire.fn()
+  assert.equal(typeof h.state.releaseLogin, 'function')
+
+  h.refresh.disarm(id)
+  h.state.expiries.delete(h.keyFor(origin))
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.refresh.arm(id)
+  h.state.releaseLogin?.()
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  assert.equal(h.state.warned.length, 0, 'the old failure cannot warn against the recreated generation')
+  assert.equal(h.state.reconnects.length, 0, 'the old failure cannot reconnect the recreated generation')
+  assert.equal(h.state.scheduled.length, 1)
+})
+
+test('session refresh: in-flight result is bound to password, token, SPKI pin, tunnel authority, and exact target scope facts', async () => {
+  const cases: Array<{ name: string; seed(h: ReturnType<typeof refreshHarness>): void; mutate(h: ReturnType<typeof refreshHarness>): void }> = [
+    { name: 'password', seed: () => {}, mutate: h => { h.state.passwords.set('gw-facts', 'replacement password value') } },
+    { name: 'token', seed: h => { h.state.tokens.set('gw-facts', 'x'.repeat(32)) }, mutate: h => { h.state.tokens.set('gw-facts', 'y'.repeat(32)) } },
+    { name: 'SPKI pin', seed: h => { h.state.pins.set('gw-facts', 'a'.repeat(64)) }, mutate: h => { h.state.pins.set('gw-facts', 'b'.repeat(64)) } },
+    { name: 'authority', seed: h => { h.state.authorities.set('gw-facts', '127.0.0.1:30801') }, mutate: h => { h.state.authorities.set('gw-facts', '127.0.0.1:30802') } },
+    { name: 'target scope', seed: h => { h.state.scopes.set('gw-facts', 'v1:gw-facts:' + 'a'.repeat(64)) }, mutate: h => { h.state.scopes.set('gw-facts', 'v1:gw-facts:' + 'b'.repeat(64)) } },
+  ]
+  for (const entry of cases) {
+    const h = refreshHarness()
+    const origin = { baseUrl: 'http://127.0.0.1:40000', insecureHttp: true }
+    h.state.readyUrls.set('gw-facts', origin.baseUrl)
+    h.state.passwords.set('gw-facts', PASSWORD)
+    entry.seed(h)
+    h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+    h.state.holdLogins = true
+    h.refresh.arm('gw-facts')
+    const fire = h.state.scheduled.shift()
+    assert.ok(fire !== undefined, `${entry.name}: timer armed`)
+    h.state.nowMs += fire.delayMs
+    fire.fn()
+    entry.mutate(h)
+    h.state.releaseLogin?.()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(h.state.registered.length, 0, `${entry.name}: stale fact-bound login cannot register`)
+  }
+})
+
 test('session refresh: a reconnect mid-login never re-registers a stale tunnel URL (the ready handler owns the new origin)', async () => {
   const h = refreshHarness()
   const origin40000 = { baseUrl: 'http://127.0.0.1:40000', insecureHttp: true }
@@ -850,6 +1275,7 @@ test('session refresh: a reconnect mid-login never re-registers a stale tunnel U
   h.state.expiries.set(h.keyFor(origin40011), h.state.nowMs + h.state.TTL)
   entry.fn()
   h.state.readyUrls.set('gw-1', origin40011.baseUrl)
+  h.refresh.arm('gw-1') // the new ready status owns its own epoch/timer
   h.state.releaseLogin?.()
   await new Promise(resolve => setTimeout(resolve, 0))
   assert.equal(h.state.registered.length, 0, 'the stale-URL re-registration is skipped')
@@ -871,6 +1297,7 @@ test('session refresh: the full cycle against a REAL session manager and gateway
     readyUrlFor: id => readyUrls.get(id) ?? null,
     tlsPinFor: () => null,
     authorityFor: () => undefined,
+    scopeFor: () => 'test:gw-1',
     register: (id, url, headers, tls, authority) => registered.push({ url, headers, authority }),
     reconnect: () => assert.fail('the happy path never needs the recovery reconnect'),
     warn: () => assert.fail('no warning expected on the happy path'),
@@ -880,7 +1307,7 @@ test('session refresh: the full cycle against a REAL session manager and gateway
   try {
     // Establish the session first (the real flow mints it in verifyUp BEFORE
     // the ready registration arms the refresh).
-    assert.equal((await mgr.ensureSession(gw.origin, PASSWORD)).ok, true)
+    assert.equal((await mgr.ensureSession({ ...gw.origin, scope: 'test:gw-1' }, PASSWORD)).ok, true)
     readyUrls.set('gw-1', gw.origin.baseUrl)
     refresh.arm('gw-1')
     assert.equal(scheduled.length, 1, 'armed with a real expiry from the manager')

@@ -20,9 +20,10 @@ import type { GatewayConfig } from './config.ts'
 
 export interface GatewayRequestDecision {
   allowed: boolean
-  /** Host/authority failures are 421; initiator-origin failures are 403. */
-  status: 200 | 403 | 421
-  code: 'ok' | 'misdirected_request' | 'origin_forbidden'
+  /** Malformed raw headers are 400; Host/authority failures are 421;
+   * initiator-origin failures are 403. */
+  status: 200 | 400 | 403 | 421
+  code: 'ok' | 'bad_request' | 'misdirected_request' | 'origin_forbidden'
   headers: Record<string, string>
   /** Boundary-derived facts consumed by auth. Never read XFF again downstream. */
   clientAddress: string
@@ -134,6 +135,14 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
   function evaluateUncached(req: ApiRequest): GatewayRequestDecision {
     const peerAddress = normalizeIp(req.socket?.remoteAddress)
     const trustedProxy = peerAddress !== '' && trustedProxies.has(peerAddress)
+    // Node intentionally keeps only one normalized Authorization value for
+    // duplicate field lines. Inspect the original pairs before any auth work
+    // so a valid first value can never mask a second attacker-controlled one.
+    // IncomingMessage.rawHeaders is present on every real HTTP and upgrade
+    // request; structural test doubles without it remain supported.
+    if (hasDuplicateRawHeader(req, 'authorization')) {
+      return { allowed: false, status: 400, code: 'bad_request', headers: {}, clientAddress: '', secure: false }
+    }
     if (hasDuplicateRawHeader(req, 'host')
       || (trustedProxy && (hasDuplicateRawHeader(req, 'x-forwarded-host')
         || hasDuplicateRawHeader(req, 'x-forwarded-proto')

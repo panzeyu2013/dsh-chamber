@@ -10,7 +10,10 @@
 
 /** Transport lifecycle phase machine（隧道生命周期 phase 机）. */
 export type SshPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
-export type TransportKind = 'ssh' | 'gateway'
+/** Target type (design 17 §2.1), orthogonal to TransportMethod. Legacy
+ * `kind:'ssh'` entries are normalized to `dsh` in the desktop registry and
+ * never cross the renderer IPC boundary. */
+export type TransportKind = 'dsh' | 'gateway'
 
 /**
  * Transport method (design 17 §2.2): the mechanism a connection uses — `ssh`
@@ -23,7 +26,7 @@ export type TransportMethod = 'ssh' | 'http'
 export interface SshInstanceSpec {
   id: string
   label: string
-  /** Transport provider kind. */
+  /** Target type: a plain dsh web profile or a gateway deployment. */
   kind: TransportKind
   /** Transport method (design 17 §2.2): 'ssh' tunnel | 'http' direct endpoint. */
   transport: TransportMethod
@@ -31,7 +34,7 @@ export interface SshInstanceSpec {
   user: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
   sshPort: number | null
-  /** SSH: remote dsh loopback port; gateway: HTTPS origin port. */
+  /** SSH: tunnel destination port; HTTP: direct endpoint origin port. */
   remotePort: number
   serviceName: string | null
   /**
@@ -43,21 +46,29 @@ export interface SshInstanceSpec {
    * https). Non-secret; never part of transportTargetChanged — an http↔https
    * switch keeps the target's credentials (design 17 §9.1). */
   insecureHttp: boolean
+  /** Optional S23 certificate pin (64 hex SHA-256 of SPKI DER). Only present
+   * for gateway + HTTP transport + HTTPS endpoints. Non-secret registry
+   * metadata; safe to round-trip through the renderer. */
+  spkiPin?: string
+  /** Read-time non-secret SSH-password existence projection. It is true only
+   * for transport='ssh' rows whose password store entry exists; the password
+   * value never leaves the main process. */
+  sshPasswordSet?: boolean
   /**
    * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
    * when the main process holds a gateway token for this instance. Merged on
-   * instances_get AND instances_set results (main.ts projects the stores onto
-   * every registry return — never persisted, never a secret value). Absent
-   * on older payloads.
+   * instances_get, instances_set, save_connection, and delete_connection results (main.ts
+   * projects the stores onto every registry return — never persisted, never
+   * a secret value). Absent on older payloads.
    */
   tokenSet?: boolean
   /**
    * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
    * when the main process holds a gateway login password for this instance.
-   * Merged on instances_get AND instances_set results (main.ts projects the
-   * stores onto every registry return — never persisted, never a secret
-   * value). Only a gateway-kind target can ever report true. Absent on
-   * older payloads.
+   * Merged on instances_get, instances_set, save_connection, and delete_connection results
+   * (main.ts projects the stores onto every registry return — never persisted,
+   * never a secret value). Only a gateway-kind target can ever report true.
+   * Absent on older payloads.
    */
   passwordSet?: boolean
   /**
@@ -65,9 +76,9 @@ export interface SshInstanceSpec {
    * how the main process's credential mirror is stored — 'safeStorage' =
    * OS-keychain-encrypted blobs (Electron safeStorage), 'plaintext' = the
    * documented 0600 plaintext fallback (OS keychain unavailable). Global per
-   * store. Merged on instances_get AND instances_set results (main.ts
-   * projects it onto every registry return — never persisted, never a
-   * secret value). Absent on older payloads.
+   * store. Merged on instances_get, instances_set, save_connection, and delete_connection
+   * results (main.ts projects it onto every registry return — never persisted,
+   * never a secret value). Absent on older payloads.
    */
   secretStorage?: 'safeStorage' | 'plaintext'
 }
@@ -76,7 +87,7 @@ export interface SshInstanceSpec {
 export interface SshInstanceInput {
   id: string
   label: string
-  /** Transport provider kind; omitted/legacy entries default to 'ssh'. */
+  /** Target type; omitted/legacy entries normalize to dsh in the main process. */
   kind?: TransportKind
   /** Transport method; omitted → inferred from kind (dsh→ssh, gateway→http). */
   transport?: TransportMethod
@@ -89,12 +100,29 @@ export interface SshInstanceInput {
   remoteDshHome?: string | null
   /** transport='http' only: true = plaintext http (default false = https). */
   insecureHttp?: boolean
+  /** Optional S23 certificate pin. Main rejects malformed pins and pins on
+   * HTTP plaintext, non-gateway targets, or non-HTTP transports. */
+  spkiPin?: string
 }
+
+/** Transient write-only credential mutations accepted by one main-owned
+ * connection save. Empty/omitted values keep the stored dimension; explicit
+ * clears remain on the individual setters. */
+export interface ConnectionCredentialMutations {
+  sshPassword?: string
+  gatewayToken?: string
+  gatewayPassword?: string
+}
+
+/** Atomic/compensated registry + credential save result. Secret values are
+ * never returned; failure carries only the authoritative metadata snapshot. */
+export type SaveConnectionResult =
+  | { ok: true; instances: SshInstanceSpec[] }
+  | { ok: false; instances: SshInstanceSpec[]; error: string; metadataCommitted: boolean }
 
 /** The non-secret status projection (design 05 §8): never a transport URL. */
 export interface SshStatusProjection {
-  /** Target kind ('dsh' | 'gateway'; mirrors the desktop TARGET_KINDS —
-   *  the renderer wire union keeps the legacy 'ssh' spelling, design 17 §2.2). */
+  /** Target kind ('dsh' | 'gateway'; mirrors desktop TARGET_KINDS). */
   kind: TransportKind
   /** Transport method (design 17 §2.2): 'ssh' tunnel | 'http' direct endpoint. */
   transport: TransportMethod
@@ -226,25 +254,31 @@ export interface NpmSearchPackage {
 }
 
 /**
- * The desktop_ssh_* IPC surface (design 05 §3.3) — non-secret only: never a
- * transport URL, never SSH material or gateway tokens. The systemd/plugin
+ * The desktop_ssh_* IPC surface (design 05 §3.3) — returns, events, and
+ * projections are non-secret: never a transport URL, SSH material, or gateway
+ * token. The sole credential-bearing direction is save_connection's transient
+ * write-only input. The systemd/plugin
  * operations are SSH-only and fail explicitly for providers without exec.
  *
  * Mirrors packages/desktop/preload.cts structurally (interface merging).
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  instances_set(instances: SshInstanceInput[]): Promise<SshInstanceSpec[]>
+  /** Legacy compatibility channel: exact unchanged no-op roster only. */
+  instances_set(instances: SshInstanceSpec[]): Promise<SshInstanceSpec[]>
+  /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
+  delete_connection(id: string): Promise<SshInstanceSpec[]>
+  /** Main-owned registry + all applicable credential dimensions transaction.
+   * previousId=null adds; otherwise edits that immutable id. */
+  save_connection(previousId: string | null, input: SshInstanceInput, credentials: ConnectionCredentialMutations): Promise<SaveConnectionResult>
   /**
-   * Store the SSH password in main-process memory plus the owner-only
-   * plaintext fallback (design 05 §8); never logged; '' / null clears it.
-   * Resolves {ok:true} or {error} (unknown id / platform not supported).
+   * Explicit clear only; non-empty credential writes use save_connection.
    */
-  set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
-  /** Gateway token is renderer-write-only; never returned by any bridge API. */
-  set_gateway_token(id: string, token: string | null): Promise<{ ok: true } | { error: string }>
-  /** Gateway login password is renderer-write-only; never returned by any bridge API. */
-  set_gateway_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  set_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
+  /** Explicit clear only; non-empty writes use save_connection. */
+  set_gateway_token(id: string, token: null): Promise<{ ok: true } | { error: string }>
+  /** Explicit clear only; non-empty writes use save_connection. */
+  set_gateway_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -280,7 +314,7 @@ export interface DesktopSshSurface {
   /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
-  /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
+  /** Registry changed (add/edit via save_connection; delete via delete_connection): re-pull the roster. */
   onInstancesChanged(callback: () => void): () => void
 }
 

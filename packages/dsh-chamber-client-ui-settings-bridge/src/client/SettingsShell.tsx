@@ -49,6 +49,7 @@ import {
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import css from './SettingsShell.module.css'
 import { filterServerRows, serverDropdownPlacement } from './server-selector.ts'
+import { runtimeServerProjectionKey } from './runtime-source.ts'
 
 /** Registration-side business face for the chamber settings shell. */
 export interface SettingsShellInjected {
@@ -595,6 +596,16 @@ export function SettingsShell(props: SettingsShellProps) {
   // server's ledger falls back to its first row via the derived `active`.
   const selected = servers.find(server => server.id === selectedId)
   const selectedConnected = selected?.connected ?? false
+  const selectedRuntimeProjection = useMemo(() => selected === undefined ? null : ({
+    id: selected.id,
+    kind: selected.kind,
+    transport: selected.transport,
+    ...(selected.rawId === undefined ? {} : { rawId: selected.rawId }),
+    ...(selected.dshVersion === undefined ? {} : { dshVersion: selected.dshVersion }),
+  }), [selected?.id, selected?.kind, selected?.transport, selected?.rawId, selected?.dshVersion])
+  const selectedRuntimeProjectionKey = selectedRuntimeProjection === null
+    ? null
+    : runtimeServerProjectionKey(selectedRuntimeProjection)
 
   // Child ctx keep-alive: sessions assemble lazily per server while the
   // panel is open; closing (or an unreachable target) releases everything.
@@ -612,7 +623,7 @@ export function SettingsShell(props: SettingsShellProps) {
   useEffect(() => () => { releaseAllSessions() }, [releaseAllSessions])
 
   useEffect(() => {
-    if (!open || selectedId === undefined) {
+    if (!open || selectedId === undefined || selectedRuntimeProjection === null || selectedRuntimeProjectionKey === null) {
       // Panel closed (or the selection is being re-anchored): release every
       // child ctx and clear the projection-facing state. The retry ledger
       // resets too — a reopen is a fresh context (no-op when already reset).
@@ -648,19 +659,30 @@ export function SettingsShell(props: SettingsShellProps) {
     // clear any error left by a PREVIOUS server's failed mount so the
     // cached content is never shadowed by a foreign error. The ledger resets
     // as well (content is live again: any later failure starts fresh).
-    if (sessionsRef.current[selectedId] !== undefined) {
-      setSessionError(null)
-      setMountRetry(current => current.id === selectedId && current.failures === 0
-        ? current
-        : { id: selectedId, failures: 0 })
-      return
+    const cached = sessionsRef.current[selectedId]
+    if (cached !== undefined) {
+      if (cached.runtimeProjectionKey === selectedRuntimeProjectionKey) {
+        setSessionError(null)
+        setMountRetry(current => current.id === selectedId && current.failures === 0
+          ? current
+          : { id: selectedId, failures: 0 })
+        return
+      }
+      // Target transport / raw identity / live version changed under the
+      // same source id. Rebuild the child ledger so dsh+http removes the
+      // runtime section and ssh actions never retain an old host id.
+      const next = { ...sessionsRef.current }
+      delete next[selectedId]
+      sessionsRef.current = next
+      setSessions(next)
+      void cached.dispose().catch(() => {})
     }
     let cancelled = false
     // Explicit DOM timer id: `ReturnType<typeof window.setTimeout>` picks the
     // node global overload via the `Window & typeof globalThis` intersection.
     let retryTimer: number | undefined
     setSessionError(null)
-    mountBridgeSession(selectedId).then((mounted) => {
+    mountBridgeSession(selectedRuntimeProjection).then((mounted) => {
       if (cancelled) {
         void mounted.dispose().catch(() => {})
         return
@@ -704,7 +726,16 @@ export function SettingsShell(props: SettingsShellProps) {
       cancelled = true
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
     }
-  }, [open, selectedId, selectedConnected, retryNonce, mountRetry, releaseAllSessions])
+  }, [
+    open,
+    selectedId,
+    selectedRuntimeProjection,
+    selectedConnected,
+    selectedRuntimeProjectionKey,
+    retryNonce,
+    mountRetry,
+    releaseAllSessions,
+  ])
 
   const selectServer = useCallback((id: string) => {
     // Offline rows remain selectable: the content column owns the explicit

@@ -25,6 +25,7 @@ import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
 import type { InstanceProxy, ProxyRequest, ProxyResponse, ProxySocket } from '../src/instance-proxy.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
+const GATEWAY_AUTHORIZATION = `Bearer ${'t'.repeat(32)}`
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -321,12 +322,46 @@ test('dsh-<id> mapping: the dsh kind resolves via dsh:<id>, legacy ssh-<id> via 
   assert.equal(missing.status, 503)
 })
 
+test('dsh and local targets reject the gateway-owned /chamber namespace in the proxy core', async () => {
+  const { proxy, upstream } = makeProxy()
+  proxy.registerTransport('dsh:direct', 'https://dsh.example.com', undefined, { transport: 'http' })
+  proxy.registerTransport('ssh:legacy', 'http://127.0.0.1:22012')
+
+  // Alternate spellings are normalized before the capability decision: URL
+  // dot segments, percent encoding and backslashes cannot bypass the gate.
+  const refused = [
+    '/api/i/dsh-direct/chamber/runtime/status',
+    '/api/i/dsh-direct/%63hamber/runtime/status',
+    '/api/i/dsh-direct/%2fchamber/runtime/status',
+    '/api/i/dsh-direct/x/../chamber/runtime/status',
+    '/api/i/dsh-direct/x/%2e%2e/chamber/runtime/status',
+    '/api/i/ssh-legacy/\\chamber/runtime/status',
+    '/api/i/local/chamber/settings',
+  ]
+  for (const path of refused) {
+    const res = fakeResponse()
+    await proxy.handleHttp(fakeRequest(path, 'GET'), res)
+    assert.equal(res.status, 404, path)
+    assert.equal(JSON.parse(res.body).code, 'capability_not_found', path)
+  }
+  assert.equal(upstream.calls.length, 0, 'no dsh/local chamber request reaches an upstream')
+
+  // The same namespace is a first-class gateway capability and remains a
+  // generic passthrough for a gateway-kind registration.
+  proxy.registerTransport('gateway:allowed', 'https://gateway.example.com', undefined, { transport: 'http' })
+  const allowed = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/gateway-allowed/chamber/runtime/status', 'GET'), allowed)
+  assert.equal(allowed.status, 200)
+  assert.equal(upstream.calls.length, 1)
+  assert.equal(upstream.calls[0].url.pathname, '/chamber/runtime/status')
+})
+
 test('gateway http direct origin: registered and forwarded with its injected headers', async () => {
   const { proxy, upstream } = makeProxy()
   // http direct = the user-configurable insecureHttp origin (design 17 §9.3),
   // non-loopback allowed — plus both sanctioned headers.
   proxy.registerTransport('gateway:gw-http', 'http://gw.internal:8080', {
-    authorization: 'Bearer secret',
+    authorization: GATEWAY_AUTHORIZATION,
     cookie: 'dsh_gateway_session=abc.def',
   })
   const res = fakeResponse()
@@ -337,7 +372,7 @@ test('gateway http direct origin: registered and forwarded with its injected hea
   assert.equal(call.url.origin, 'http://gw.internal:8080')
   assert.equal(call.url.pathname, '/api/session.list')
   const headers = call.options.headers as Record<string, string>
-  assert.equal(headers.authorization, 'Bearer secret')
+  assert.equal(headers.authorization, GATEWAY_AUTHORIZATION)
   assert.equal(headers.cookie, 'dsh_gateway_session=abc.def')
   assert.equal(headers.host, 'gw.internal:8080')
 })
@@ -790,12 +825,14 @@ test('registerTransport validates connectionId/baseUrl fail-loud', () => {
   assert.throws(() => proxy.registerTransport('ssh:x', 'file:///etc/passwd'), TypeError)
   assert.throws(() => proxy.registerTransport('ssh:x', 'http://example.com:8080'), /loopback/)
   assert.throws(() => proxy.registerTransport('ssh:x', 'http://127.0.0.1:8080/path'), /loopback/)
+  assert.throws(() => proxy.registerTransport('dsh:x', 'http://127.0.0.1:8080', undefined, { transport: 'ftp' as 'http' }), /transport/)
   // dsh:<id> is the canonical dsh-kind connectionId; ssh:<id> is its legacy
   // alias; both are accepted, everything else fails.
   assert.throws(() => proxy.registerTransport('weird:x', 'http://127.0.0.1:1'), /connectionId/)
   proxy.registerTransport('dsh:ok', 'http://127.0.0.1:22001')
   proxy.registerTransport('ssh:ok', 'http://127.0.0.1:22002')
   proxy.registerTransport('gateway:ok', 'http://gw.example.com:8080')
+  proxy.registerTransport('dsh:http-direct', 'https://dsh.example.com:8443', undefined, { transport: 'http' })
   // dsh targets (incl. the legacy ssh spelling) never accept headers.
   assert.throws(() => proxy.registerTransport('dsh:x', 'http://127.0.0.1:1', { authorization: 'Bearer s' }), /cannot inject/)
   assert.throws(() => proxy.registerTransport('ssh:x', 'http://127.0.0.1:1', { cookie: 'dsh_gateway_session=a' }), /cannot inject/)
@@ -1542,10 +1579,29 @@ test('the SPKI pin fixtures are self-consistent in the proxy tests too', () => {
 })
 
 test('gateway https forward with SPKI pin: match forwards, mismatch is an explicit 502 (S23)', async () => {
-  const server = createHttpsServer({ key: KEY_A, cert: CERT_A }, (_req, res) => {
+  let handlerCalls = 0
+  let receivedBodyBytes = 0
+  const receivedCredentials: Array<{ authorization?: string; cookie?: string }> = []
+  const tlsApplicationBytes: number[] = []
+  let tcpConnections = 0
+  const server = createHttpsServer({ key: KEY_A, cert: CERT_A }, (req, res) => {
+    handlerCalls += 1
+    receivedCredentials.push({
+      ...(typeof req.headers.authorization === 'string' ? { authorization: req.headers.authorization } : {}),
+      ...(typeof req.headers.cookie === 'string' ? { cookie: req.headers.cookie } : {}),
+    })
+    req.on('data', chunk => { receivedBodyBytes += chunk.length })
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end('{"ok":true}')
   })
+  // `secureConnection` exposes decrypted TLS application data. Recording it
+  // proves the negative case did not merely avoid the HTTP handler: no
+  // request line/header/body byte was written after the mismatched handshake.
+  server.on('secureConnection', tlsSocket => {
+    const index = tlsApplicationBytes.push(0) - 1
+    tlsSocket.on('data', chunk => { tlsApplicationBytes[index] += chunk.length })
+  })
+  server.on('connection', () => { tcpConnections += 1 })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
@@ -1567,17 +1623,47 @@ test('gateway https forward with SPKI pin: match forwards, mismatch is an explic
     await proxy.handleHttp(fakeRequest('/api/i/gateway-pinned/api/session.list', 'GET'), okRes)
     await okDone
     assert.equal(okRes.status, 200)
+    assert.equal(handlerCalls, 1)
 
     // Pin mismatch → explicit 502 upstream_failed (proxy honesty: a peer that
     // does not match the pinned key is an upstream failure, never a silent
-    // pass-through).
-    proxy.registerTransport('gateway:pinned', `https://127.0.0.1:${port}`, undefined, { tls: { spkiPin: PIN_B } })
+    // pass-through). Include both sanctioned credentials and a business body:
+    // the pre-write gate must hold all of them behind the pin verdict.
+    handlerCalls = 0
+    receivedBodyBytes = 0
+    receivedCredentials.length = 0
+    const tlsConnectionsBeforeMismatch = tlsApplicationBytes.length
+    const tcpConnectionsBeforeMismatch = tcpConnections
+    proxy.registerTransport('gateway:pinned', `https://127.0.0.1:${port}`, {
+      authorization: GATEWAY_AUTHORIZATION,
+      cookie: 'dsh_gateway_session=must-not-reach-the-wrong-peer',
+    }, { tls: { spkiPin: PIN_B } })
+    const businessBody = '{"secret":"must-not-reach-the-wrong-peer"}'
     const badRes = fakeResponse()
+    let badFinishes = 0
+    ;(badRes as unknown as EventEmitter).on('finish', () => { badFinishes += 1 })
     const badDone = new Promise<void>(resolve => (badRes as unknown as EventEmitter).once('finish', () => resolve()))
-    await proxy.handleHttp(fakeRequest('/api/i/gateway-pinned/api/session.list', 'GET'), badRes)
+    await proxy.handleHttp(fakeRequest('/api/i/gateway-pinned/api/session.list', 'POST', {
+      'content-type': 'application/json',
+      'content-length': String(Buffer.byteLength(businessBody)),
+    }, businessBody), badRes)
     await badDone
+    await sleep(20)
     assert.equal(badRes.status, 502)
     assert.equal(JSON.parse(badRes.body).code, 'upstream_failed')
+    assert.equal(handlerCalls, 0, 'a mismatched pin never reaches the TLS server HTTP handler')
+    assert.equal(receivedBodyBytes, 0, 'no business body byte reaches a mismatched peer')
+    assert.deepEqual(receivedCredentials, [], 'Authorization/Cookie never reach a mismatched peer')
+    assert.equal(tcpConnections, tcpConnectionsBeforeMismatch + 1, 'the negative case reached a real TLS server connection')
+    assert.equal(
+      tlsApplicationBytes.slice(tlsConnectionsBeforeMismatch).reduce((total, bytes) => total + bytes, 0),
+      0,
+      'no decrypted HTTP request byte is written before the pin matches',
+    )
+    assert.equal(proxy.getDiagnostics().activeHttpRequests, 0, 'the failed request lease is released exactly once')
+    assert.equal(proxy.getDiagnostics().bufferedRequestBytes, 0, 'the rejected body reservation is released')
+    assert.equal(proxy.getDiagnostics().failures, 1, 'the pin failure is counted once')
+    assert.equal(badFinishes, 1, 'the loud 502 response is finished once')
 
     // No pin → the pin machinery is inert: the unpinned https forward against
     // this self-signed chain fails chain validation (502) — the unpinned
@@ -1597,7 +1683,21 @@ test('gateway https forward with SPKI pin: match forwards, mismatch is an explic
 
 test('gateway WS upgrade with SPKI pin: match upgrades, mismatch rejects with 502 (S23)', async () => {
   const server = createHttpsServer({ key: KEY_A, cert: CERT_A })
-  server.on('upgrade', (_req, socket) => {
+  let upgradeCalls = 0
+  const receivedCredentials: Array<{ authorization?: string; cookie?: string }> = []
+  const tlsApplicationBytes: number[] = []
+  let tcpConnections = 0
+  server.on('secureConnection', tlsSocket => {
+    const index = tlsApplicationBytes.push(0) - 1
+    tlsSocket.on('data', chunk => { tlsApplicationBytes[index] += chunk.length })
+  })
+  server.on('connection', () => { tcpConnections += 1 })
+  server.on('upgrade', (req, socket) => {
+    upgradeCalls += 1
+    receivedCredentials.push({
+      ...(typeof req.headers.authorization === 'string' ? { authorization: req.headers.authorization } : {}),
+      ...(typeof req.headers.cookie === 'string' ? { cookie: req.headers.cookie } : {}),
+    })
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
     socket.end()
   })
@@ -1630,13 +1730,34 @@ test('gateway WS upgrade with SPKI pin: match upgrades, mismatch rejects with 50
     await proxy.handleUpgrade(fakeRequest('/api/i/gateway-pinned-ws/api/events.mux', 'GET', wsHeaders), okSocket, Buffer.alloc(0))
     await waitForWrite(okSocket)
     assert.match(okSocket.written, /101/)
+    assert.equal(upgradeCalls, 1)
 
-    // Pin mismatch → the handshake is rejected with an explicit 502.
-    proxy.registerTransport('gateway:pinned-ws', `https://127.0.0.1:${port}`, undefined, { tls: { spkiPin: PIN_B } })
+    // Pin mismatch → the handshake is rejected with an explicit 502, and no
+    // HTTP upgrade line/header (including credentials) reaches the peer.
+    upgradeCalls = 0
+    receivedCredentials.length = 0
+    const tlsConnectionsBeforeMismatch = tlsApplicationBytes.length
+    const tcpConnectionsBeforeMismatch = tcpConnections
+    proxy.registerTransport('gateway:pinned-ws', `https://127.0.0.1:${port}`, {
+      authorization: GATEWAY_AUTHORIZATION,
+      cookie: 'dsh_gateway_session=must-not-reach-the-wrong-peer',
+    }, { tls: { spkiPin: PIN_B } })
     const badSocket = fakeSocket()
     await proxy.handleUpgrade(fakeRequest('/api/i/gateway-pinned-ws/api/events.mux', 'GET', wsHeaders), badSocket, Buffer.alloc(0))
     await waitForWrite(badSocket)
+    await sleep(20)
     assert.match(badSocket.written, /502/)
+    assert.equal((badSocket.written.match(/HTTP\/1\.1 502/g) ?? []).length, 1, 'the loud WS rejection is written once')
+    assert.equal(upgradeCalls, 0, 'a mismatched pin never reaches the TLS server upgrade handler')
+    assert.deepEqual(receivedCredentials, [], 'Authorization/Cookie never reach a mismatched WS peer')
+    assert.equal(tcpConnections, tcpConnectionsBeforeMismatch + 1, 'the negative case reached a real TLS server connection')
+    assert.equal(
+      tlsApplicationBytes.slice(tlsConnectionsBeforeMismatch).reduce((total, bytes) => total + bytes, 0),
+      0,
+      'no decrypted WS handshake byte is written before the pin matches',
+    )
+    assert.equal(proxy.getDiagnostics().pendingUpgrades, 0, 'the rejected handshake lease is released exactly once')
+    assert.equal(proxy.getDiagnostics().failures, 1, 'the pin failure is counted once')
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }

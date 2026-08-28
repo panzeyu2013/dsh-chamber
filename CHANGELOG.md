@@ -14,43 +14,119 @@
 
 ### 新增
 
-- **凭据存储 safeStorage v2（S22）** —— `<userData>/gateway-secrets.json` schema
-  v2：tokens+passwords 双表，`SecretCryptoAdapter` 接线 Electron safeStorage
-  （`isEncryptionAvailable()` 不可用时 0600 明文回退）；v1 `gateway-tokens.json`
-  启动自动迁移（失败响亮保留旧文件）；密码 12–1024 visible ASCII 门；双表
-  corrupt 检测（`.corrupt` 保留）；凭据永不进注册表/日志/renderer。**token 与
+- **凭据存储 safeStorage v3（S22）** —— `<userData>/gateway-secrets.json` schema
+  v3：tokens+passwords 双表、各维度 gateway-target binding + 文件级
+  `storage:'safeStorage'|'plaintext'` 权威判别
+  （密文不再按字符形状猜测），`SecretCryptoAdapter` 接线 Electron safeStorage
+  （`isEncryptionAvailable()` 不可用时 0600 明文回退）；密码允许 12–1024 Unicode
+  JavaScript 字符，token 保持 32–4096 visible ASCII；双表
+  corrupt 检测（`.corrupt` 保留）；凭据仅作为表单瞬时 write-only 输入，永不由主进程
+  返回/回填或持久化到 renderer，也不进注册表/日志。**token 与
   密码两个独立可空维度**（17 §2.3，清除互不影响），整实例双清走显式
   `setInstanceSecrets(id, null, null)`；**`instances_get` 投影合并
-  `secretStorage`（`'safeStorage' | 'plaintext'`）**——safeStorage 不可用时 UI
-  设置页可见明文回退路径。
+  `secretStorage`（`'safeStorage' | 'plaintext'`）**。plaintext 镜像在 keychain 后来
+  可用时立即原子升级，只有落盘成功才声称 safeStorage；非空无 discriminator 的旧 v2
+  fail closed。gateway/SSH 凭据载入都先拒绝 symlink/非普通文件、复验 inode，并以
+  打开 fd 收紧 0600 后才读取秘密。当前配置路径内结构合法的 v1、带合法 storage 的
+  非空 v2 与 SSH password v1 因缺少可信目标 binding 均 fail closed，唯一
+  `.unbound-*` 保留并要求显式重录；旁路旧 `gateway-tokens.json` 非空 v1 保留原文件并
+  禁用，不猜测绑定。
 - **密码登录会话** —— gateway `/auth/login`（GET 最小登录页 / POST 校验密码 →
   `dsh_gateway_session` cookie → 302 `/`）；桌面 `gateway-session.ts` 管理器
-  （12h `dsh_gateway_session` cookie，仅主进程内存，按 gateway origin 键控——
-  ssh 隧道目标 = 隧道端点 loopback http origin）经
-  `configureGatewaySessionProvider` 接线：verifyUp 对无 token 的密码型 gateway
-  目标 ensureSession、带 Cookie 探针（缓存会话快速路径，401 → invalidate +
-  terminal「重新输入密码」）、ready 注册按 token→Bearer / 密码→Cookie / 都空→0
-  头注入（0..2 白名单由 instance-proxy 复验）；`desktop_gateway_set_password`
+  （12h `dsh_gateway_session` cookie，仅主进程内存，按网络 origin + `Host` authority +
+  稳定 connection-id/target scope 键控；localPort 不参与 ownership）经
+  `configureGatewaySessionProvider` 六个 all-or-none hooks 接线：verifyUp 独立维护密码
+  会话、带 Cookie 探针（缓存会话快速路径，401 → invalidate + 有界重登）。scope
+  invalidation 覆盖全部历史 origin 并提升 generation；登录、Cookie probe、Bearer
+  fallback、401 relogin 每次 await 后都拦截迟到结果，不能继续联网或改 cache/backoff/
+  auth proof。当前 generation 的 `cookie|bearer` proof 为 ready 注册门：密码型目标缺
+  Cookie/proof 时 fail closed，只有已验证的 Bearer fallback 可有意 Bearer-only；token
+  与密码同时存在时探针、
+  ready 与 refresh 重注册同时携带 Bearer+Cookie，gateway 接受任一合法 principal，
+  不再由 token 遮蔽密码；都空→0 头（0..2 白名单由 instance-proxy 复验）；凭据
   IPC（write-only，变更撤销缓存会话）。**预过期会话刷新
   （`gateway-session-refresh.ts`，TTL−60s 定时重登+重注册）**——每个已注册
   密码型目标在缓存会话过期前 ~60s 定时重登并以新 cookie 重注册 transport、
-  重 arm（armed on ready / disarmed on 离开 ready/移除/退出；隧道重连换端点 →
-  新 origin 重新登录）；刷新失败保持旧注册并在过期时刻重试，已过期仍失败如实
+  重 arm（armed on ready / disarmed on 离开 ready/移除/退出，每个动作提升按 id epoch；
+  await 后复验 password/token/URL/pin/authority/scope；隧道重连换端点 → 新 origin
+  重新登录）；刷新失败保持旧注册并在过期时刻重试，已过期仍失败如实
   告警、残余窗口走有界重连（verifyUp 用存储密码重登），绝不静默。
 - **SPKI 证书固定（S23）** —— 可选 `spkiPin`（hex sha256 of SPKI DER）作为
   https 直连信任锚：verifyGatewayEndpoint socket 层 'secureConnect' 校验，不匹配
   terminal「证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误」；
   instance-proxy registerTransport / forwardHttp / forwardUpgrade 带 pin 转发
-  （不匹配 → 显式 502 upstream_failed）；http 模式拒绝 pin；真实 node:https
+  （不匹配 → 显式 502 upstream_failed）。desktop 登录/探针与 control-plane HTTP/WS
+  反代都在 peer 匹配后才 `write/end`/发送 upgrade；匹配前不发送 header、凭据、密码
+  body 或任何应用层字节，mismatch 的上游 handler/upgrade 为零；http 模式拒绝 pin；真实 node:https
   自签证书 fixture 测试（pin 匹配探针成功 / 不匹配 terminal / 无 pin 正常）。
 - **轻量非秘密审计（S24）** —— 桌面 `packages/desktop/audit-log.ts`（JSONL 追加
   + fsync、0600（遗留松权限回紧）、5 MiB 轮转到 `<file>.1`、白名单序列化——
   凭据字段即使误传也绝不落盘）记 phase 迁移（connecting/ready/error 含
-  requiresUserAction terminal）/ transport 注册注销（认证模式 token|password|
-  none + insecureHttp，不记值）/ 凭据 set-clear（不记值）；gateway
+  requiresUserAction terminal）/ transport 注册注销（认证存在性 token+password|
+  token|password|none + insecureHttp，不记值）/ 凭据 set-clear（不记值）；gateway
   `packages/gateway/src/audit.ts`（`<stateDir>/audit.log`，0700 stateDir 内）+
   dispatch.ts login 事件分类（成功/invalid_credentials/rate_limited/busy，含
   客户端来源，绝不含密码与 cookie）；双端单元测试。
+
+### 修复
+
+- **连接保存的主进程 crash-safe 事务** —— renderer 不再串联多个 write-only setter；
+  `desktop_ssh_save_connection` 在主进程快照 registry 与 SSH password/gateway token/
+  gateway password，任一步失败即补偿全部旧值，补偿失败则安全 scrub 并响亮返回。
+  gateway 凭据只绑定 kind+host+remotePort，SSH 密码单独绑定 host+user+sshPort，
+  binding 与 secret 同次落盘且每次注入复验 registry，因而 secret→registry 两次 fsync
+  间硬崩溃也不会把新值发给旧目标；新增/进入/离开/retarget 留空会清隐藏半事务值。
+  删除只走精确 `desktop_ssh_delete_connection(id)`：先断开/撤销 exact scope session/
+  清 secret 再删 metadata，不存在 id 为幂等 no-op；legacy `instances_set` 收窄为仅接受
+  当前规范化 roster 的 exact unchanged no-op，三个单项 setter 收窄为 clear-only。真实 gateway ssh↔http 切换不会被
+  SSH-only 字段误判为认证 retarget。
+- **连接重配置代际隔离与 systemd 参数边界** —— `serviceName`、`remoteDshHome` 编辑
+  同时提升 transport generation 与 `execEpoch`，撤销旧 live/retry/probe 和 exec child；
+  多步 exec 下一次 spawn 与迟到日志/投影/结果都复验 generation，旧连接非 idle 才按
+  新参数重启。systemd 固定使用 `systemctl <action> -- <serviceName>` 参数数组，服务名
+  采用 `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`，首字符必须为字母或数字。
+- **Gateway 恢复面与认证正交性** —— gateway transport 以认证后
+  `/chamber/runtime/status` 固定 identity 判定服务边界，不再被 managed dsh
+  `host.describe` 的 blocked/down 反向闸死；SSH tunnel 的 Host/session authority
+  固定远端 `127.0.0.1:<remotePort>`，SSH alias/DNS 不再触发 421 或缓存 key 漂移。
+  token+password 联合注入和 OR-principal 回退均有 direct/SSH/refresh 回归。
+- **SSH askpass 跨用户目录抢占** —— 移除可由其他 OS 用户预建的共享
+  `<tmp>/dsh-chamber-ssh` 写入路径；helper 改入 `mkdtemp` 每进程不可猜 0700 私有目录，
+  复验 uid/type/inode/mode，EPERM 或属主异常 fail closed；helper 以 O_EXCL 创建，完整
+  fsync 后才设为 0700 可执行。每个 tunnel/systemd/run child 独占 lease，真实
+  exit/error/spawn-fail 才删对应 helper；移除/clear 延迟清理仍在途 lease，不再用固定
+  代际上限提前删除并发子进程仍引用的路径。启动清理只处理本用户可信目录。
+- **实例反代能力边界** —— local/dsh/legacy 来源对规范化后的 `/chamber/*`（含编码、
+  点段、反斜杠变体）统一拒绝，仅 gateway 来源可访问；与 dsh HTTP 直连的无认证边界
+  一起防止目标 kind/transport 混淆扩大能力。
+- **Gateway 认证协议硬化** —— HTTP/WS 共用 request policy 基于 `rawHeaders` 在认证前
+  拒绝重复 Authorization；Bearer 在 hash/scrypt 前严格限制单值、32–4096 visible
+  ASCII。JWT `exp` 必须是未过期且不超过当前+12h 的 safe integer，缺失/非数字/
+  Infinity/小数/unsafe/越界全部拒绝。桌面 instance-proxy 同步复验 Bearer 下限，且
+  gateway+ssh 只接受必填远端 `127.0.0.1:<port>` authority（含端口范围门）。token
+  scrypt work gate 饱和产生 `auth_busy` 时仍验证独立 Cookie：有效密码会话继续成功，
+  Cookie 无效才保留 503，落实任一 principal 有效即成功。
+
+- **dsh HTTP 直连注册边界** —— canonical
+  `{kind:'dsh', transport:'http'}` 将显式 transport 维度贯穿到 instance-proxy
+  注册，允许用户配置的公网 `http(s)` origin；目标仍严格禁止鉴权头与
+  `/chamber/*` 能力。`{kind:'dsh', transport:'ssh'}` 与未提供 transport 的 legacy
+  注册继续强制 loopback，绝不把原 SSH/本地信任边界静默放宽。
+- **Gateway runtime JSON 请求体有界读取** —— `/chamber/runtime` 的 64 KiB
+  JSON reader 改为累计字节计数；一旦超限立即释放已保留 chunks，后续 `data`
+  事件 no-op，并保持先返回 413 再销毁请求。消除逐块 `reduce` 带来的 O(n²)
+  扫描及 poison chunk 后继续占用 CPU/内存的风险，补充恶意后续 chunk 回归。
+- **Gateway runtime 恢复与状态完整性** —— `restore-builtin` 不再直接删除选择元数据，
+  而是复用停机、快照、原子指针切换、全量探针及失败回滚/数据恢复事务，仅成功后清理
+  override/journal。registry 配置只有真实缺失时才回默认源，损坏/符号链接/硬链接会
+  隔离保留并响亮失败，写入原子化且安装期间禁止换源；离线版本列表保留全部有效缓存。
+  `/chamber/runtime/status` 以固定 identity 投影实际 env/override/current/builtin 来源、
+  failure/restore/pre-rollback、快照、进度与全分类磁盘统计；Desktop settings 与独立
+  `/chamber/` 管理页均提供完整动作和状态，managed dsh blocked/down 时恢复面仍可达。
+  builtin 上 staged selection 以持久 `selectedOnly` 区分合法空 pointer，活跃用户树丢
+  pointer 仍 fail closed；install writer single-flight 与 activation quarantine 分离，
+  下载期间现有 proxy/features 不下线，候选 ready 在探针裁决前不 attach；健康 env
+  override 不再误报 blocked。普通 pending 在 core/route/两套 UI 仅允许 restore-builtin。
 
 ### 变更
 

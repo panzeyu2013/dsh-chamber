@@ -1105,6 +1105,10 @@ function parseOverrideRecord(parsed) {
     pending,
     swapAttempted: record.swapAttempted
   };
+  if (record.selectedOnly !== void 0) {
+    if (typeof record.selectedOnly !== "boolean") return null;
+    out.selectedOnly = record.selectedOnly;
+  }
   for (const field of [
     "invalidatedAt",
     "invalidatedReason",
@@ -1172,6 +1176,9 @@ function writeOverride(baseDir, record) {
     if (version !== null) assertSafeVersion(version);
   }
   if (typeof record.swapAttempted !== "boolean") throw new Error("override.swapAttempted \u5FC5\u987B\u662F boolean");
+  if (record.selectedOnly !== void 0 && typeof record.selectedOnly !== "boolean") {
+    throw new Error("override.selectedOnly \u5FC5\u987B\u662F boolean");
+  }
   assertOptionalText(record.invalidatedAt, "invalidatedAt");
   assertOptionalText(record.invalidatedReason, "invalidatedReason");
   assertOptionalText(record.lastInvalidatedAt, "lastInvalidatedAt");
@@ -1193,6 +1200,7 @@ function writeOverride(baseDir, record) {
     pending: record.pending,
     swapAttempted: record.swapAttempted
   };
+  if (record.selectedOnly !== void 0) payload.selectedOnly = record.selectedOnly;
   for (const field of [
     "invalidatedAt",
     "invalidatedReason",
@@ -1962,7 +1970,7 @@ function isRuntimePublishBackupName(name) {
   const version = match[1];
   return version === version.trim() && isSafeVersion(version);
 }
-function runtimeDiskSummary(baseDir) {
+function runtimeDiskSummary(baseDir, dshHome = join(baseDir, "state", "dsh-home")) {
   const runtime = runtimeDirPath(baseDir);
   const trees = listVersionTrees(baseDir);
   const runtimeEntries = (() => {
@@ -1976,10 +1984,11 @@ function runtimeDiskSummary(baseDir) {
   const workDirs = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.startsWith(".work-")).map((entry) => join(runtime, entry.name));
   const failedTrees = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.endsWith(".failed")).map((entry) => join(runtime, entry.name));
   const publishBackups = runtimeEntries.filter((entry) => isRuntimePublishBackupName(entry.name)).map((entry) => join(runtime, entry.name));
-  const stateDir = join(baseDir, "state");
+  const dshHomeParent = dirname(dshHome);
+  const dshHomeName = basename2(dshHome);
   const restoreBackups = (() => {
     try {
-      return readdirSync(stateDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && (entry.name === "dsh-home.old" || entry.name.startsWith("dsh-home.old-"))).map((entry) => join(stateDir, entry.name));
+      return readdirSync(dshHomeParent, { withFileTypes: true }).filter((entry) => entry.isDirectory() && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`))).map((entry) => join(dshHomeParent, entry.name));
     } catch (error) {
       if (error.code === "ENOENT") return [];
       throw error;

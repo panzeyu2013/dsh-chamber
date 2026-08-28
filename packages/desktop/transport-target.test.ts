@@ -1,20 +1,13 @@
 /**
- * transportTargetChanged unit tests: a same-kind edit of host/user/ports must
- * be detected so the main process can invalidate provider-held credentials —
- * without this, an edit of host A→B would silently reuse A's SSH password /
- * gateway token against B (P1 regression). v2 (design 17 §2/§9.1): the
- * TARGET is {kind, host, user, ports, service, remoteDshHome} — BOTH the
- * transport method (ssh↔http) and the http↔https `insecureHttp` toggle are
- * NOT target changes: the credential is bound to the host:port:kind target,
- * never to the wire mechanism or transport (design 17 §9.1, D3 family), so
- * mechanism switches keep the credential valid. The LIVE transport still
- * restarts on a mechanism switch (transport-manager transportFieldsChanged),
- * but the secret survives — locked here.
+ * transportTargetChanged compatibility-semantic tests. The helper compares
+ * the old whole execution target (kind, host, user, ports, service and home)
+ * while excluding transport/scheme/SPKI. Credential ownership no longer uses
+ * it: the main save transaction has independent gateway and SSH fingerprints.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { transportTargetChanged } from './transport-provider.ts'
+import { canonicalizeTransportInstanceInput, transportTargetChanged } from './transport-provider.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
 
 function spec(overrides: Partial<TransportInstanceSpec> = {}): TransportInstanceSpec {
@@ -72,4 +65,22 @@ test('insecureHttp change (http↔https) is NOT a target change — protocol swi
 test('identical specs are not a target change', () => {
   const a = spec()
   assert.equal(transportTargetChanged(a, { ...a }), false)
+})
+
+test('canonical input normalization keeps the typed optional-transport IPC contract', () => {
+  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'a', kind: 'dsh' }), {
+    id: 'a', kind: 'dsh', transport: 'ssh',
+  })
+  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'b', kind: 'gateway' }), {
+    id: 'b', kind: 'gateway', transport: 'http',
+  })
+  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'c', kind: 'ssh' }), {
+    id: 'c', kind: 'dsh', transport: 'ssh',
+  })
+  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'd' }), {
+    id: 'd', kind: 'dsh', transport: 'ssh',
+  })
+  assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'e', kind: 'future-target' }), {
+    id: 'e', kind: 'future-target', transport: undefined,
+  }, 'future kinds stay unclaimed until a provider defines their default transport')
 })

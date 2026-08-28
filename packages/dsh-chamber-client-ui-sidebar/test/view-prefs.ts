@@ -258,6 +258,7 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
     {
       id: 'local',
       kind: 'local',
+      transport: 'local',
       label: 'L',
       connected: true,
       phase: 'ready',
@@ -266,7 +267,8 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
     },
     {
       id: 'ssh-b',
-      kind: 'ssh',
+      kind: 'dsh',
+      transport: 'ssh',
       label: 'B',
       connected: false,
       phase: 'stopped',
@@ -307,6 +309,7 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
     {
       id: 'local',
       kind: 'local',
+      transport: 'local',
       label: 'L',
       connected: true,
       phase: 'ready',
@@ -369,6 +372,7 @@ test('a fresh session under a local-only projection never prunes unloaded remote
     {
       id: 'local',
       kind: 'local',
+      transport: 'local',
       label: 'L',
       connected: true,
       phase: 'ready',
@@ -562,6 +566,7 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
     {
       id: 'local',
       kind: 'local',
+      transport: 'local',
       label: 'L',
       connected: true,
       phase: 'ready',
@@ -646,6 +651,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
     {
       id: 'local',
       kind: 'local',
+      transport: 'local',
       label: 'L',
       connected: true,
       phase: 'ready',
@@ -654,7 +660,8 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
     },
     {
       id: 'ssh-b',
-      kind: 'ssh',
+      kind: 'dsh',
+      transport: 'ssh',
       label: 'B',
       connected: true,
       phase: 'ready',
@@ -674,6 +681,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
     {
       id: 'local',
       kind: 'local',
+      transport: 'local',
       label: 'L',
       connected: true,
       phase: 'ready',

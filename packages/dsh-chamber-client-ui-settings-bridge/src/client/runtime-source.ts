@@ -1,36 +1,83 @@
 /**
- * Pure per-server source derivation (design 18 §3.6, design 17 §3): no JSX so
- * the node test harness can import it directly. Maps a canonical chamber
- * instance id to its dsh-runtime source kind:
- *
- *   - 'local'        → 'local'    full local management surface
- *   - 'gateway-<id>' → 'gateway'  proxied /chamber/runtime (design 17 §3)
- *   - 'ssh-<id>'     → 'ssh'      legacy v1 ssh-tunnel id (kind='ssh' migration
- *                                 keeps the ssh- prefix, design 17 §2.2)
- *   - 'dsh-<id>'     → 'ssh'      v2 dsh target (kind='dsh') over an ssh
- *                                 tunnel OR http direct. Neither shape exposes
- *                                 a /chamber/* management surface (design
- *                                 17 §3), so the section stays version
- *                                 read-only with the restart-service action.
- *                                 This revision carries no per-instance
- *                                 transport projection, so an http-direct dsh
- *                                 source cannot be told apart and is treated
- *                                 read-only as well — the safe side of the
- *                                 two: never a full management surface
- *                                 without a management channel.
- *
- * Unknown prefixes (and undefined) FAIL LOUD: the function returns null and
- * the caller must not mount any dsh-runtime surface. It never falls back to
- * 'local' — that would render the full local runtime management surface
- * against an unidentified target.
+ * Pure per-server runtime capability derivation (design 17 §2/§3,
+ * design 18 §3.6). Capability comes from the explicitly projected target
+ * kind AND transport — never from a source-id prefix heuristic.
  */
+
 export type DshRuntimeSource = 'local' | 'gateway' | 'ssh'
 
-export function deriveRuntimeSource(instanceId: string | undefined): DshRuntimeSource | null {
-  if (instanceId === undefined) return null
-  if (instanceId === 'local') return 'local'
-  if (instanceId.startsWith('gateway-')) return 'gateway'
-  if (instanceId.startsWith('ssh-')) return 'ssh'
-  if (instanceId.startsWith('dsh-')) return 'ssh'
+export interface RuntimeServerProjection {
+  id: string
+  kind: 'local' | 'dsh' | 'gateway'
+  transport: 'local' | 'ssh' | 'http'
+  /** Raw desktop registry id. Required for remote rows in the v2 producer. */
+  rawId?: string
+  /** Live host.describe.version; absent means honestly unknown. */
+  dshVersion?: string
+}
+
+const RAW_ID = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
+
+/**
+ * Runtime section mounting matrix:
+ * - local/local: complete local management;
+ * - gateway over either transport: complete proxied management;
+ * - dsh/ssh: read-only version + systemd restart;
+ * - dsh/http: no section (no /chamber and no systemd channel).
+ *
+ * `null` is also the fail-closed result for malformed/impossible tuples; the
+ * plugin factory distinguishes the intentional dsh/http no-mount tuple from
+ * malformed input and throws for the latter.
+ */
+export function deriveRuntimeSource(server: RuntimeServerProjection | undefined): DshRuntimeSource | null {
+  if (server === undefined) return null
+  if (server.kind === 'local') {
+    return server.id === 'local' && server.transport === 'local' ? 'local' : null
+  }
+  if (server.kind === 'gateway') {
+    return server.transport === 'ssh' || server.transport === 'http' ? 'gateway' : null
+  }
+  if (server.kind === 'dsh') {
+    if (server.transport === 'ssh') return 'ssh'
+    if (server.transport === 'http') return null
+  }
   return null
+}
+
+/** The one intentional `null` capability: a direct dsh HTTP target. */
+export function runtimeSectionIntentionallyAbsent(server: RuntimeServerProjection): boolean {
+  return server.kind === 'dsh' && server.transport === 'http'
+}
+
+/**
+ * Resolve the desktop IPC host id for the dsh/ssh branch. Prefer the explicit
+ * raw registry projection. The exact-prefix fallback only supports older
+ * producers and handles canonical `dsh-` and legacy `ssh-` independently —
+ * it never relies on their coincidentally equal prefix lengths.
+ */
+export function runtimeSshHostId(server: RuntimeServerProjection): string | null {
+  if (server.kind !== 'dsh' || server.transport !== 'ssh') return null
+
+  const fromSourceId = (): string | null => {
+    let candidate: string | null = null
+    if (server.id.startsWith('dsh-')) candidate = server.id.slice('dsh-'.length)
+    else if (server.id.startsWith('ssh-')) candidate = server.id.slice('ssh-'.length)
+    return candidate !== null && RAW_ID.test(candidate) ? candidate : null
+  }
+
+  if (server.rawId === undefined) return fromSourceId()
+  if (!RAW_ID.test(server.rawId)) return null
+  const parsed = fromSourceId()
+  return parsed === server.rawId ? server.rawId : null
+}
+
+/** Identity of every fact captured by the per-server runtime plugin props. */
+export function runtimeServerProjectionKey(server: RuntimeServerProjection): string {
+  return JSON.stringify({
+    id: server.id,
+    kind: server.kind,
+    transport: server.transport,
+    rawId: server.rawId ?? null,
+    dshVersion: server.dshVersion ?? null,
+  })
 }

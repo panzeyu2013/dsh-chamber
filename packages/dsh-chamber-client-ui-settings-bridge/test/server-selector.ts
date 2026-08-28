@@ -36,7 +36,8 @@ test('portal placement shrinks to a tiny viewport instead of overflowing it', ()
 
 test('settings roster signature tracks rendered pluginId but ignores timestamp-only changes', () => {
   const base = {
-    id: 'ssh-alpha', kind: 'ssh' as const, label: 'Alpha', connected: true, phase: 'ready',
+    id: 'dsh-alpha', kind: 'dsh' as const, transport: 'ssh' as const, rawId: 'alpha',
+    label: 'Alpha', connected: true, phase: 'ready',
     pluginDiagnostic: { state: 'bundle-load-failed', message: 'load failed', pluginId: 'plugin-a' },
   }
   const signature = serverProjectionSignature([{ ...base, updatedAt: 1 }])
@@ -48,7 +49,7 @@ test('settings roster signature tracks rendered pluginId but ignores timestamp-o
 
 test('settings roster signature cannot collide through separator-like user text', () => {
   const row = (id: string, label: string) => ({
-    id, kind: 'ssh' as const, label, connected: true, phase: 'ready',
+    id, kind: 'dsh' as const, transport: 'ssh' as const, label, connected: true, phase: 'ready',
   })
   assert.notEqual(
     serverProjectionSignature([row('a', 'b\u0000ssh\nnext')]),
@@ -56,10 +57,29 @@ test('settings roster signature cannot collide through separator-like user text'
   )
 })
 
-test('settings roster signature preserves gateway as a first-class transport kind', () => {
+test('settings roster signature preserves target kind and transport as independent dimensions', () => {
   const base = { id: 'gateway-prod', label: 'Prod', connected: true, phase: 'ready' }
   assert.notEqual(
-    serverProjectionSignature([{ ...base, kind: 'gateway' }]),
-    serverProjectionSignature([{ ...base, kind: 'ssh' }]),
+    serverProjectionSignature([{ ...base, kind: 'gateway', transport: 'http' }]),
+    serverProjectionSignature([{ ...base, kind: 'dsh', transport: 'http' }]),
+  )
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, kind: 'gateway', transport: 'http' }]),
+    serverProjectionSignature([{ ...base, kind: 'gateway', transport: 'ssh' }]),
+  )
+})
+
+test('settings roster signature tracks raw IPC identity and live dsh version', () => {
+  const base = {
+    id: 'dsh-prod', kind: 'dsh' as const, transport: 'ssh' as const,
+    label: 'Prod', connected: true, phase: 'ready',
+  }
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, rawId: 'prod' }]),
+    serverProjectionSignature([{ ...base, rawId: 'prod-2' }]),
+  )
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, rawId: 'prod', dshVersion: '1.0.0' }]),
+    serverProjectionSignature([{ ...base, rawId: 'prod', dshVersion: '1.1.0' }]),
   )
 })

@@ -594,6 +594,19 @@ export function runningRingVisible(channelRunning: boolean | undefined, polledRu
 }
 
 /**
+ * Project the live connection handshake's host.describe version without
+ * guessing. Malformed, empty, control-character or implausibly large values
+ * become `undefined`, which every consumer renders as an honest “unknown”.
+ */
+export function dshVersionFromHostDescription(description: unknown): string | undefined {
+  if (description === null || typeof description !== 'object') return undefined
+  const version = (description as { version?: unknown }).version
+  if (typeof version !== 'string' || version === '' || version.length > 128) return undefined
+  if (version !== version.trim() || /[\u0000-\u001f\u007f]/.test(version)) return undefined
+  return version
+}
+
+/**
  * Content signature of one runtime-facts report (current + per-session
  * facts). Every listed session carries its live `running` bit (the App's
  * completed-dot edge memory), with `completed`/`pending`/`runningSubagents`
@@ -676,9 +689,12 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
     return {
       id: server.id,
       kind: server.kind,
+      transport: server.transport,
+      rawId: server.rawId ?? null,
       label: server.label,
       connected: server.connected,
       phase: server.phase,
+      dshVersion: server.dshVersion ?? null,
       aggregateError: server.aggregateError ?? null,
       pluginDiagnostic: server.pluginDiagnostic === undefined ? null : {
         state: server.pluginDiagnostic.state,

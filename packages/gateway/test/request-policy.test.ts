@@ -141,6 +141,24 @@ test('missing, duplicate and malformed authority values fail closed', () => {
   assert.equal(duplicate.status, 421)
 })
 
+test('duplicate raw Authorization fails closed before a normalized first value can authenticate', () => {
+  const boundary = policy({ host: '0.0.0.0', port: 3000, publicOrigin: 'http://gateway.example:3000' })
+  const decision = boundary.evaluate(request(
+    { host: 'gateway.example:3000', authorization: `Bearer ${TOKEN}` },
+    '203.0.113.8',
+    [
+      'Host', 'gateway.example:3000',
+      'Authorization', `Bearer ${TOKEN}`,
+      'Authorization', 'Bearer attacker-controlled-second-value',
+    ],
+  ))
+  assert.deepEqual({ allowed: decision.allowed, status: decision.status, code: decision.code }, {
+    allowed: false,
+    status: 400,
+    code: 'bad_request',
+  })
+})
+
 test('packaged origins require explicit allowlisting and literal null is rejected', () => {
   const boundary = policy({
     host: '0.0.0.0',

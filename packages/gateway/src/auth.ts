@@ -109,7 +109,10 @@ function verifyJwt(token: string, secret: string): Record<string, unknown> | nul
 
 function headerValue(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
   const v = headers[name]
-  return typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined
+  // Never choose a first value from an ambiguous credential field. The real
+  // raw-header duplicate check lives in the shared HTTP/WS request policy;
+  // this guard also keeps direct AuthProvider callers fail-closed.
+  return typeof v === 'string' ? v : undefined
 }
 
 function parseCookie(header: string | undefined): Record<string, string> {
@@ -127,6 +130,15 @@ function parseCookie(header: string | undefined): Record<string, string> {
 
 const SESSION_COOKIE = 'dsh_gateway_session'
 const SESSION_TTL_SECONDS = 12 * 3600 // 12h
+
+function validSessionExpiry(value: unknown, nowSeconds: number): value is number {
+  // NumericDate is an integral epoch-second value. Keeping it inside the
+  // issued-session horizon enforces the 12h contract even for a correctly
+  // signed but malformed/crafted payload and avoids unsafe multiplication.
+  return Number.isSafeInteger(value)
+    && (value as number) > nowSeconds
+    && (value as number) <= nowSeconds + SESSION_TTL_SECONDS
+}
 
 interface LoginRateLimiter {
   consume(key: string): { allowed: boolean; retryAfterMs: number }
@@ -257,11 +269,19 @@ function createTokenProvider(store: GatewayStore, plainToken: string): AuthProvi
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
       const value = headerValue(req.headers, 'authorization')
       if (value === undefined) return null
-      const match = /^Bearer[ \t]+(.+)$/i.exec(value)
-      if (match === null) return null
+      // Bound and validate the wire credential before reading the persisted
+      // verifier or entering the scrypt work gate. One literal SP separates
+      // the case-insensitive scheme; the token itself follows the same
+      // 32..4096 visible-ASCII contract as configured tokens.
+      const prefix = 'Bearer '
+      if (value.length < prefix.length + MIN_GATEWAY_TOKEN_CHARS
+        || value.length > prefix.length + MAX_GATEWAY_TOKEN_CHARS
+        || value.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) return null
+      const candidate = value.slice(prefix.length)
+      if (!/^[\x20-\x7e]+$/.test(candidate)) return null
       const stored = store.getTokenHash()
       if (stored === null) return null
-      const ok = await verifyBounded(() => verifyCredentialAsync(match[1], stored))
+      const ok = await verifyBounded(() => verifyCredentialAsync(candidate, stored))
       if (!ok) return null
       return { kind: 'token', id: 'shared-token', issuedAt: Date.now() }
     },
@@ -289,7 +309,8 @@ function createPasswordProvider(store: GatewayStore, plainPassword: string): Aut
       const payload = verifyJwt(session, store.getJwtSecret())
       if (payload === null) return null
       const exp = payload.exp
-      if (typeof exp === 'number' && exp * 1000 < Date.now()) return null
+      const nowSeconds = Math.floor(Date.now() / 1000)
+      if (!validSessionExpiry(exp, nowSeconds)) return null
       const sub = typeof payload.sub === 'string' ? payload.sub : 'user'
       const iat = typeof payload.iat === 'number' ? payload.iat * 1000 : Date.now()
       return { kind: 'password', id: sub, issuedAt: iat }
@@ -340,8 +361,19 @@ export function createAuth(config: AuthConfig, store: GatewayStore): AuthProvide
     kind: 'password+token',
     async verify(req): Promise<AuthPrincipal | null> {
       // Authorization is explicit machine intent; check it before the ambient
-      // browser cookie so a valid bearer retains its token principal.
-      return await token.verify(req) ?? await password.verify(req)
+      // browser cookie so a valid bearer retains its token principal. A
+      // saturated scrypt gate is not an authentication verdict, though: the
+      // independently valid cookie principal must remain usable under bearer
+      // load. Preserve auth_busy only when the cookie also cannot authenticate
+      // so overload is never disguised as an ordinary 401.
+      try {
+        return await token.verify(req) ?? await password.verify(req)
+      } catch (error) {
+        if ((error as Error & { code?: string }).code !== 'auth_busy') throw error
+        const cookiePrincipal = await password.verify(req)
+        if (cookiePrincipal !== null) return cookiePrincipal
+        throw error
+      }
     },
     login: (body, req) => password.login!(body, req),
     async revoke(principal): Promise<void> {

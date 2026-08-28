@@ -14,6 +14,7 @@ import {
   parseRemoteVersions,
   pollRemoteRuntimeUntilSettled,
   remoteRuntimeAction,
+  remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
   remoteRuntimeStatusView,
   type RemoteRuntimeStatus,
@@ -21,17 +22,36 @@ import {
 
 function status(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {
   return {
+    kind: 'dsh-chamber-gateway-runtime',
     activeVersion: '1.0.0',
+    builtinVersion: '0.9.0',
+    currentVersion: '1.0.0',
+    selectedVersion: '1.0.0',
+    hasOverride: true,
     source: 'builtin-anchor',
     phase: 'idle',
     startupBlockedReason: null,
     pending: null,
     connectionState: 'ready',
     registry: 'https://registry.npmjs.org',
+    registryError: null,
     platform: 'darwin',
     mutationsAllowed: true,
     operationError: null,
     restart: null,
+    restoreOutcome: null,
+    snapshotCount: 0,
+    latestSnapshotAt: null,
+    snapshotError: null,
+    restoreInProgress: false,
+    preRollbackCount: 0,
+    preRollbackLatestName: null,
+    failure: null,
+    diskUsage: null,
+    diskError: null,
+    diskLimitBytes: 10 * 1024 ** 3,
+    diskLimitExceeded: false,
+    progress: null,
     ...overrides,
   }
 }
@@ -58,6 +78,12 @@ test('remoteRuntimeStatusView maps the remote status to the four render kinds wi
   })
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'applying', pending: null })), {
     kind: 'busy', titleKey: 'dshRuntimeRemoteStatusApplying', params: { version: '—' }, detail: null,
+  })
+  assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'installing' })), {
+    kind: 'busy', titleKey: 'dshRuntimeProgressInstalling', params: undefined, detail: null,
+  })
+  assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'pending', pending: '1.1.0' })), {
+    kind: 'idle', titleKey: 'dshRuntimeStatusPending', params: { version: '1.1.0' }, detail: null,
   })
   assert.deepEqual(remoteRuntimeStatusView(status({ restart: 'running' })), {
     kind: 'busy', titleKey: 'dshRuntimeRemoteStatusRestarting', params: undefined, detail: null,
@@ -90,6 +116,29 @@ test('remoteRuntimeStatusView maps the remote status to the four render kinds wi
   // Precedence: an in-flight apply outranks a stale failure record.
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'applying', operationError: 'stale failure' })), {
     kind: 'busy', titleKey: 'dshRuntimeRemoteStatusApplying', params: { version: '—' }, detail: null,
+  })
+})
+
+test('remote action gates lock pending/installing in step with the server and preserve the sole pending escape', () => {
+  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0' })), {
+    mutationDisabled: true,
+    restoreBuiltinDisabled: false,
+    restartDisabled: true,
+  })
+  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'installing' })), {
+    mutationDisabled: true,
+    restoreBuiltinDisabled: true,
+    restartDisabled: true,
+  })
+  assert.deepEqual(remoteRuntimeActionGates(status({ source: 'env' })), {
+    mutationDisabled: true,
+    restoreBuiltinDisabled: true,
+    restartDisabled: false,
+  }, 'env pins version management but still permits the source-independent dsh restart')
+  assert.deepEqual(remoteRuntimeActionGates(status(), true), {
+    mutationDisabled: true,
+    restoreBuiltinDisabled: true,
+    restartDisabled: true,
   })
 })
 
@@ -212,7 +261,7 @@ test('remoteRuntimeSetRegistry PUTs the origin and passes bad-registry rejection
   )
 })
 
-test('pollRemoteRuntimeUntilSettled resolves when phase leaves applying / restart leaves running', async () => {
+test('pollRemoteRuntimeUntilSettled resolves when install/apply phase or restart settles', async () => {
   // applying → idle.
   let calls = 0
   const settling = (async () => {
@@ -222,6 +271,14 @@ test('pollRemoteRuntimeUntilSettled resolves when phase leaves applying / restar
   const settled = await pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: settling, pollIntervalMs: 0, timeoutMs: 5_000 })
   assert.equal(settled.phase, 'idle')
   assert.equal(calls, 2, 'polls until settled')
+
+  let installCalls = 0
+  const installSettling = (async () => {
+    installCalls += 1
+    return statusResponse(status({ phase: installCalls === 1 ? 'installing' : 'idle' }))
+  }) as unknown as typeof fetch
+  await pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: installSettling, pollIntervalMs: 0, timeoutMs: 5_000 })
+  assert.equal(installCalls, 2, 'the async select poll does not settle while phase is installing')
 
   // restart running → ok.
   let restartCalls = 0
@@ -274,34 +331,67 @@ test('pollRemoteRuntimeUntilSettled reports terminal failure and timeout honestl
 
 test('status parsing: documented contract, version-skew defaults, unknown enums pass through, malformed fails loud', () => {
   const parsed = parseRemoteRuntimeStatus({
+    kind: 'dsh-chamber-gateway-runtime',
     activeVersion: '1.0.0',
+    builtinVersion: '0.9.0',
+    currentVersion: '1.0.0',
+    selectedVersion: '1.0.0',
+    hasOverride: true,
     source: 'user-selected',
     phase: 'future-phase', // a newer gateway's phase must not take the section down
     startupBlockedReason: null,
     pending: '1.1.0',
     connectionState: 'starting',
     registry: 'https://registry.npmjs.org',
+    registryError: null,
     platform: 'linux',
     mutationsAllowed: false,
     operationError: null,
     restart: 'ok',
+    restoreOutcome: 'complete',
+    snapshotCount: 2,
+    latestSnapshotAt: '2026-08-28T00:00:00.000Z',
+    snapshotError: null,
+    restoreInProgress: false,
+    preRollbackCount: 1,
+    preRollbackLatestName: '1735344000000',
+    failure: { version: '0.8.0', at: '2026-08-27T00:00:00.000Z', reason: 'probe failed' },
+    diskUsage: {
+      versionTrees: 2, versionTreeBytes: 100, storeBytes: 200, cacheBytes: 30,
+      installHomeBytes: 4, xdgCacheBytes: 5, workBytes: 6, failureBytes: 7,
+      snapshotBytes: 8, preRollbackBytes: 9, restoreBackupBytes: 10,
+      totalBytes: 379, storePruneNeeded: false,
+    },
+    diskError: null,
+    diskLimitBytes: 10 * 1024 ** 3,
+    diskLimitExceeded: false,
+    progress: { stage: 'download', received: 50, total: 100 },
   })
   assert.equal(parsed.phase, 'future-phase')
   assert.equal(parsed.source, 'user-selected')
   assert.equal(parsed.mutationsAllowed, false)
   assert.equal(parsed.restart, 'ok')
+  assert.equal(parsed.kind, 'dsh-chamber-gateway-runtime')
+  assert.equal(parsed.builtinVersion, '0.9.0')
+  assert.equal(parsed.snapshotCount, 2)
+  assert.equal(parsed.preRollbackCount, 1)
+  assert.equal(parsed.preRollbackLatestName, '1735344000000')
+  assert.equal(parsed.failure?.reason, 'probe failed')
+  assert.equal(parsed.diskUsage?.totalBytes, 379)
+  assert.deepEqual(parsed.progress, { stage: 'download', received: 50, total: 100 })
 
   // Older gateways: absent restart → null, absent mutationsAllowed → true
   // (mutations were allowed before the win32 read-only gate).
   const legacy = parseRemoteRuntimeStatus({
-    activeVersion: '1.0.0', source: 'builtin-anchor', phase: 'idle',
+    kind: 'dsh-chamber-gateway-runtime', activeVersion: '1.0.0', source: 'builtin-anchor', phase: 'idle',
     startupBlockedReason: null, pending: null, connectionState: 'ready',
     registry: 'r', platform: 'darwin', operationError: null,
   })
   assert.equal(legacy.restart, null)
   assert.equal(legacy.mutationsAllowed, true)
 
-  assert.throws(() => parseRemoteRuntimeStatus({ activeVersion: 1 }), /malformed runtime status\.activeVersion/)
+  assert.throws(() => parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', activeVersion: 1 }), /malformed runtime status\.activeVersion/)
+  assert.throws(() => parseRemoteRuntimeStatus({ activeVersion: '1.0.0' }), /malformed runtime status\.kind/)
   assert.throws(() => parseRemoteRuntimeStatus([]), /malformed runtime status/)
 })
 

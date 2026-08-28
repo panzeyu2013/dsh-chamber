@@ -5,7 +5,12 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveRuntimeSource } from '../src/client/runtime-source.ts'
+import {
+  deriveRuntimeSource,
+  runtimeSectionIntentionallyAbsent,
+  runtimeServerProjectionKey,
+  runtimeSshHostId,
+} from '../src/client/runtime-source.ts'
 import { pollGatewayReady } from '../src/client/gateway-runtime-poll.ts'
 import {
   RuntimeStateStore,
@@ -153,19 +158,34 @@ test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported r
   }
 })
 
-test('per-server source derivation: local / gateway-<id> / ssh-<id> / dsh-<id>; unknown ids fail loud', () => {
-  assert.equal(deriveRuntimeSource('local'), 'local')
-  assert.equal(deriveRuntimeSource('gateway-inst-7'), 'gateway')
-  assert.equal(deriveRuntimeSource('ssh-inst-3'), 'ssh')
-  // v2 dsh-<id> (kind='dsh', ssh tunnel or http direct) has no /chamber/*
-  // management surface (design 17 §3) — version read-only, never the full
-  // local management surface.
-  assert.equal(deriveRuntimeSource('dsh-inst-9'), 'ssh')
-  // Unknown ids and undefined FAIL LOUD — they must never fall back to 'local'
-  // (which would render the full runtime management surface).
+test('per-server source derivation uses target kind × transport, not id prefixes', () => {
+  assert.equal(deriveRuntimeSource({ id: 'local', kind: 'local', transport: 'local' }), 'local')
+  assert.equal(deriveRuntimeSource({ id: 'gateway-inst-7', kind: 'gateway', transport: 'http', rawId: 'inst-7' }), 'gateway')
+  assert.equal(deriveRuntimeSource({ id: 'gateway-tunnel', kind: 'gateway', transport: 'ssh', rawId: 'tunnel' }), 'gateway')
+  assert.equal(deriveRuntimeSource({ id: 'ssh-inst-3', kind: 'dsh', transport: 'ssh', rawId: 'inst-3' }), 'ssh')
+  assert.equal(deriveRuntimeSource({ id: 'dsh-inst-9', kind: 'dsh', transport: 'ssh', rawId: 'inst-9' }), 'ssh')
+  const direct = { id: 'dsh-direct', kind: 'dsh' as const, transport: 'http' as const, rawId: 'direct' }
+  assert.equal(deriveRuntimeSource(direct), null)
+  assert.equal(runtimeSectionIntentionallyAbsent(direct), true)
+  assert.equal(deriveRuntimeSource({ id: 'local', kind: 'local', transport: 'ssh' }), null)
+  assert.equal(runtimeSectionIntentionallyAbsent({ id: 'local', kind: 'local', transport: 'ssh' }), false)
   assert.equal(deriveRuntimeSource(undefined), null)
-  assert.equal(deriveRuntimeSource(''), null)
-  assert.equal(deriveRuntimeSource('weird'), null)
+})
+
+test('ssh restart host id uses explicit raw identity with exact canonical/legacy fallback', () => {
+  assert.equal(runtimeSshHostId({ id: 'dsh-east', kind: 'dsh', transport: 'ssh', rawId: 'east' }), 'east')
+  assert.equal(runtimeSshHostId({ id: 'ssh-legacy', kind: 'dsh', transport: 'ssh', rawId: 'legacy' }), 'legacy')
+  assert.equal(runtimeSshHostId({ id: 'dsh-east', kind: 'dsh', transport: 'ssh' }), 'east')
+  assert.equal(runtimeSshHostId({ id: 'ssh-legacy', kind: 'dsh', transport: 'ssh' }), 'legacy')
+  assert.equal(runtimeSshHostId({ id: 'dsh-east', kind: 'dsh', transport: 'ssh', rawId: 'west' }), null)
+  assert.equal(runtimeSshHostId({ id: 'gateway-east', kind: 'gateway', transport: 'ssh', rawId: 'east' }), null)
+})
+
+test('runtime projection identity tracks transport, raw host id and live version', () => {
+  const base = { id: 'dsh-east', kind: 'dsh' as const, transport: 'ssh' as const, rawId: 'east' }
+  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, transport: 'http' }))
+  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, rawId: 'west' }))
+  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, dshVersion: '1.2.3' }))
 })
 
 test('restart-dsh gate (design 18 §3.6 项 8): allowed in non-busy phases, blocked while applying/busy/blocked', () => {

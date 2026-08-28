@@ -44,7 +44,7 @@
 | 更新产物 | 显式关闭：`dmg.writeUpdateInfo: false`、`nsis.differentialPackage: false` | 实现前 desktop package.json `build` |
 | 发布 feed | `--publish=never`，每平台只传安装器（mac dmg / win exe）——「no zip/blockmap sidecars」 | 实现前 `.github/workflows/release.yml` |
 | 签名 | macOS **ad-hoc**（afterPack 钩子）；Windows 未签名 | `after-pack-adhoc-sign.mjs`、STATUS.md |
-| 版本 | chamber 版本分布于根/desktop/control-plane/renderer/cli 五包；4 个 chamber 插件包跟随 vendored dsh（**实现前基线**；现状见 §8：12 个 `@dsh-chamber/*` 包一致 bump） | 各 package.json |
+| 版本 | chamber 版本分布于根/desktop/control-plane/renderer/cli 五包；4 个 chamber 插件包跟随 vendored dsh（**实现前基线**；现状见 §8：14 个 `@dsh-chamber/*` 包一致 bump） | 各 package.json |
 
 ## 2. 目标与边界
 
@@ -210,16 +210,16 @@
   dsh-chamber-host-git-worktree/gateway + **6 个客户端插件包** sidebar/layout/
   settings-connections/settings-bridge/git/open-in），发版时**一致 bump**（semver 比较；`main.ts`
   读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入
-  更新控制器）。**release.yml 断言集（8 包：根 + desktop/control-plane/
-  renderer/cli/dsh-host-client-graph/dsh-chamber-host-git-worktree/gateway——
-  2026-08 review 补入 gateway，见 `Assert version matches package.json` step）
-  为唯一硬校验权威**；发布 checklist（`docs/checklists/release-checklist.md`
-  §1）另人工核对全部 14 包 + 2 个 fork 副本（`@deepseek-ai/dsh-client-connection`
-  / `dsh-client-web` 保持上游基线版本 0.1.1-rc.2，不随 chamber 发版移动）。
+  更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用
+  `release-preflight.mjs --versions-only` 数据驱动扫描器**：根 + 全部 14 个
+  `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；两个 fork 副本
+  （`@deepseek-ai/dsh-client-connection` / `dsh-client-web`）必须保持上游基线版本
+  0.1.1-rc.2，不随 chamber 发版移动。发布 checklist §1/§1.5 与该硬门同口径。
   vendored dsh 源为 0.1.1-rc.2——插件版本只在 chamber 侧参与 workspace 解析，
   从不与 dsh 源逐位对齐，也从不参与任何比较/展示。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、
-  `ssh-passwords.json`、`gateway-secrets.json`（schema v2 桌面凭据存储：
+  `ssh-passwords.json`（schema v2 endpoint binding）、`gateway-secrets.json`
+  （schema v3 target binding 桌面凭据存储：
   safeStorage 加密 / 0600 明文回退，design 17 §12））天然保留。未来若改变
   注册表/状态格式 → 首启迁移（幂等、失败响亮不冒充成功）。
 - 升级不要求升级远端 dsh；与旧版本 chamber 的远端实例握手兼容（`verifyUp`）。

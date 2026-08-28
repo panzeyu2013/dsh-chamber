@@ -26,11 +26,11 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 ## 1. 版本断言（release.yml create-release 会硬校验）
 
 - [ ] 根 `package.json` + 全部 `@dsh-chamber/*` 包（当前 14 个）version = 目标版本
-      （数据驱动，见 §1.5；release.yml 硬断言其中 8 个发版包：根 +
-      desktop/control-plane/renderer/cli/dsh-host-client-graph/
-      dsh-chamber-host-git-worktree/gateway）。
+      （数据驱动，见 §1.5；release.yml 复用同一 preflight 扫描器硬断言根 +
+      全部非 fork chamber 包，新增包自动纳入）。
 - [ ] fork 副本例外：`@deepseek-ai/dsh-client-connection` / `dsh-client-web`
-      版本 = 上游基线版本（如 `0.1.1-rc.2`），**不随发布版本**。
+      版本 = 上游基线版本（如 `0.1.1-rc.2`），**不随发布版本**；release.yml
+      同样经 preflight 硬断言该基线。
 - [ ] **安装脚本 dsh 版本常量**：`scripts/install-gateway.sh` 内置的
       `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.1-rc.2`）与
       `.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION` 一致

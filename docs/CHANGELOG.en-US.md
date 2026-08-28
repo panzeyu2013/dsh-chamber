@@ -12,6 +12,192 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Added
+
+- **safeStorage v3 credential storage (S22)** — `<userData>/gateway-secrets.json`
+  schema v3 stores tokens and passwords in independent maps, per-dimension
+  Gateway-target bindings, plus an authoritative
+  file-level `storage:'safeStorage'|'plaintext'` discriminator (ciphertext is
+  never guessed from its character shape), and wires
+  `SecretCryptoAdapter` to Electron safeStorage, with a 0600 plaintext fallback
+  when `isEncryptionAvailable()` is false. Passwords accept 12–1024 Unicode
+  JavaScript characters while tokens remain 32–4096 visible ASCII; corrupt
+  entries are preserved as `.corrupt`. Credentials are transient write-only form
+  inputs, are never returned/prefilled or persisted by the renderer, and never
+  enter the registry or logs. **Token and password are independent nullable dimensions**
+  (design 17 §2.3; clearing one never clears the other), while whole-instance
+  removal explicitly calls `setInstanceSecrets(id, null, null)`. The
+  `instances_get` projection now includes the actual durable `secretStorage`.
+  A plaintext mirror is atomically upgraded as soon as a keychain becomes
+  available and claims safeStorage only after the rewrite succeeds; a nonempty
+  unlabeled historical v2 file fails closed. Gateway and SSH credential loads
+  reject symlinks/non-regular files, verify the opened inode, and tighten it to
+  0600 before reading secret bytes. Nonempty legacy Gateway v1/v2 and SSH
+  password v1 files lack trustworthy target bindings. A structurally valid v1 at
+  the current path, a nonempty v2 with a valid storage discriminator, and SSH v1
+  therefore fail closed under unique `.unbound-*` names and require explicit
+  re-entry; a nonempty sidecar `gateway-tokens.json` v1 remains in place and is
+  disabled rather than being assigned a guessed binding.
+- **Password-login sessions** — Gateway `/auth/login` (minimal GET page; POST
+  verifies the password, issues the `dsh_gateway_session` cookie, and redirects
+  to `/`) plus the desktop `gateway-session.ts` manager. The 12-hour cookie is
+  kept only in main-process memory and keyed by network origin, `Host`
+  authority, and a stable connection-id/target scope; localPort is not session
+  ownership. Six all-or-none `configureGatewaySessionProvider` hooks maintain
+  the password session independently and probe with its cookie, invalidating
+  and retrying after 401. Scope invalidation covers every historical origin and
+  advances its generations; login, cookie probe, bearer fallback, and 401
+  relogin fence late results after every await so they cannot continue network
+  work or mutate cache/backoff/auth proof. A current-generation `cookie|bearer`
+  proof gates ready registration: password targets fail closed without their
+  cookie/proof, except for an intentionally verified bearer fallback. When token and password coexist, verifyUp, ready, and
+  refresh registration carry both Bearer and Cookie and Gateway accepts either
+  valid principal; token no longer shadows password. Empty credentials still
+  inject no auth header, and instance-proxy revalidates the 0..2 header allowlist.
+  **Pre-expiry refresh** (`gateway-session-refresh.ts`) logs in and re-registers
+  the transport about 60 seconds before expiry, re-arming on ready and
+  disarming on non-ready/removal/quit. Each action advances a per-id refresh
+  epoch, and post-await work rechecks password/token/URL/pin/authority/scope;
+  a changed tunnel endpoint logs in at its
+  new origin. Refresh failure preserves the still-valid registration and
+  retries at expiry; persistent failure is reported honestly and falls through
+  to bounded reconnect/verifyUp instead of being hidden.
+- **SPKI certificate pinning (S23)** — optional `spkiPin` (hex SHA-256 of SPKI
+  DER) is an HTTPS-direct trust anchor. `verifyGatewayEndpoint` checks it on the
+  socket `secureConnect` event and reports a terminal certificate-pin mismatch;
+  instance-proxy carries the pin through registerTransport, forwardHttp, and
+  forwardUpgrade, returning explicit `502 upstream_failed` on mismatch.
+  Desktop login/probes and control-plane HTTP/WS proxying call `write/end` or
+  send the upgrade only after the peer matches; no header, credential, password
+  body, or other application byte reaches the upstream before that match, and
+  a mismatch invokes no upstream handler/upgrade. HTTP
+  rejects a pin. Real `node:https` self-signed-certificate fixtures cover a
+  matching pin, a terminal mismatch, and ordinary HTTPS without a pin.
+- **Lightweight non-secret audit (S24)** — desktop
+  `packages/desktop/audit-log.ts` appends and fsyncs JSONL, enforces 0600 even on
+  inherited loose files, rotates at 5 MiB to `<file>.1`, and serializes only an
+  allowlist so accidentally supplied credentials never reach disk. It records
+  connecting/ready/error transitions (including terminal user-action errors),
+  transport register/unregister with only auth presence token+password|token|password|none and
+  insecureHttp, and credential set/clear without values. Gateway
+  `packages/gateway/src/audit.ts` writes under the 0700 state directory and
+  classifies login results as success/invalid_credentials/rate_limited/busy
+  with client source but never password, cookie, or session body. Both sides
+  have unit coverage.
+
+### Fixed
+
+- **Crash-safe main-process connection save** — the renderer no longer chains
+  write-only setters. `desktop_ssh_save_connection` snapshots registry metadata plus
+  SSH password, Gateway token, and Gateway password in main, compensates every
+  old value after any failed step, and safely scrubs with a loud error if
+  compensation itself fails. Gateway credentials bind only to
+  kind+host+remotePort while SSH passwords bind separately to host+user+sshPort.
+  Each binding is committed with its secret and rechecked against the current
+  registry before injection, so a hard crash between secret and registry fsyncs
+  cannot send a new value to the old target. Blank add/enter/leave/retarget also
+  clears hidden half-transaction values. Exact `desktop_ssh_delete_connection(id)`
+  disconnects, invalidates the exact-scope sessions, and clears secrets before
+  metadata; an absent id is an idempotent no-op. Legacy `instances_set` accepts
+  only the exact unchanged normalized current roster, and
+  all three individual setters are clear-only. Real Gateway ssh↔http changes are
+  therefore not mistaken for auth retargets.
+- **Connection reconfiguration generations and systemd argv boundary** — edits
+  to `serviceName` or `remoteDshHome` advance both the transport generation and
+  `execEpoch`, cancel old live/retry/probe work and exec children, and fence the
+  next multi-step spawn plus late logs/projections/results; a formerly non-idle
+  connection alone restarts with the new values. systemd uses the fixed argument
+  array `systemctl <action> -- <serviceName>`, with
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` requiring an alphanumeric first character.
+- **Gateway recovery reachability and orthogonal authentication** — a Gateway
+  transport now proves the authenticated `/chamber/runtime/status` identity
+  instead of being gated by managed-dsh `host.describe`, keeping recovery
+  reachable while dsh is blocked/down. SSH-tunnel Host and session authority use
+  remote `127.0.0.1:<remotePort>`, so SSH aliases/DNS no longer cause 421 or cache
+  key drift. Direct/SSH/refresh regressions cover dual-header OR-principal fallback.
+- **Cross-user SSH askpass directory pre-claim** — password-bearing helpers no
+  longer use the globally pre-claimable `<tmp>/dsh-chamber-ssh`. Each process
+  gets an unguessable 0700 `mkdtemp` directory whose uid/type/inode/mode are
+  verified; EPERM or owner mismatch fails closed. Helpers use O_EXCL and become
+  executable only after a complete fsync. Every tunnel/systemd/run child owns a
+  lease deleted only on its real exit/error/spawn failure; removal/clear delays
+  cleanup of live leases instead of evicting paths by a fixed generation cap.
+  Startup cleanup touches only trusted directories owned by the current user.
+- **Instance-proxy capability boundary** — local/dsh/legacy sources now reject
+  normalized `/chamber/*` paths, including encoded, dot-segment, and backslash
+  variants; only Gateway sources may reach that surface. Together with the
+  no-auth dsh HTTP-direct rule, this prevents kind/transport confusion from
+  widening capabilities.
+- **Gateway authentication protocol hardening** — the shared HTTP/WS request
+  policy rejects duplicate Authorization from `rawHeaders` before auth work;
+  Bearer is single-valued and limited to 32–4096 visible ASCII before any
+  hash/scrypt. JWT `exp` must be an unexpired safe integer no later than now+12h;
+  missing, nonnumeric, infinite, fractional, unsafe, expired, and over-window
+  values are rejected. Desktop instance-proxy mirrors the Bearer lower bound
+  and requires Gateway-over-SSH authority to be remote
+  `127.0.0.1:<port>` with a valid port range. If the token scrypt work gate is
+  saturated, an independent valid Cookie still authenticates successfully;
+  only an invalid Cookie preserves the original 503 `auth_busy`, enforcing OR
+  principal semantics under overload too.
+
+- **dsh HTTP-direct registration boundary** — canonical
+  `{kind:'dsh', transport:'http'}` now carries its explicit transport dimension
+  into instance-proxy registration and may use a user-configured public
+  `http(s)` origin, while the target still strictly forbids auth headers and
+  `/chamber/*` capabilities. `{kind:'dsh', transport:'ssh'}` and legacy
+  registrations with no transport remain loopback-only, so the existing SSH
+  and local trust boundary is never widened silently.
+- **Bounded Gateway runtime JSON-body reader** — the 64 KiB
+  `/chamber/runtime` JSON reader now uses a cumulative byte counter. On overflow
+  it immediately releases retained chunks, ignores all later `data` events,
+  and still sends 413 before destroying the request. This removes the O(n²)
+  per-chunk `reduce` scan and prevents poison chunks from consuming more CPU or
+  memory after rejection; a malicious trailing-chunk regression covers it.
+- **Gateway runtime recovery and projection integrity** — `restore-builtin` no
+  longer deletes selection metadata directly. It reuses the stop, snapshot,
+  atomic pointer switch, full probe, and rollback/data-restore transaction, and
+  clears override/journal only after success. Registry configuration falls back
+  to the default only when truly absent; corrupt, symlinked, or hard-linked
+  files are quarantined and fail loud, writes are atomic, and source changes are
+  fenced during installation. Offline version lists retain every valid cached
+  tree. `/chamber/runtime/status` uses a fixed identity and reports the actual
+  env/override/current/builtin source plus failure/restore/pre-rollback,
+  snapshots, progress, and classified disk usage. Desktop settings and the
+  standalone `/chamber/` page expose the complete action/status surface, which
+  remains reachable while managed dsh is blocked or down. A durable
+  `selectedOnly` marker distinguishes a legitimate staged selection over the
+  builtin anchor from a missing active-user pointer. Install writer single-flight
+  is separate from activation quarantine, so downloads keep the current proxy and
+  features online while candidate-ready edges stay detached until probe verdict.
+  Healthy env overrides no longer appear blocked, and ordinary pending permits
+  only restore-builtin in core, routes, and both UIs.
+
+### Changed
+
+- **Design 17 rewrite (2026-09 connection model v2)** —
+  `docs/design/17-server-side-gateway.md` now makes remote connections a
+  first-class surface with four orthogonal dimensions (dsh/gateway target ×
+  ssh/http transport × nullable token/password credentials × server channel).
+  Explicit plaintext HTTP and unauthenticated use are a bounded user decision
+  (S21): the client does not pre-reject them and the server remains the auth
+  authority. Security extensions are decided individually: S22 safeStorage,
+  S23 SPKI pinning, and S24 lightweight audit are integrated, while mTLS and
+  per-connection network policy retain extension slots. The design is
+  self-contained and no longer derives orchestration rules from design 01.
+- **Connection-model v2 migration decision (design 17 §2.2/§9.1)** — source IDs
+  move from `ssh-<id>` to `dsh-<id>` / `gateway-<id>`, with the old `ssh-`
+  prefix retained for legacy deep-link mapping. Old `kind:'ssh'` loads as
+  `{kind:'dsh', transport:'ssh'}` and old `kind:'gateway'` gains
+  `{transport:'http'}`. Kind controls target semantics: dsh never receives auth
+  headers or `/chamber/*`, while gateway may inject independently nullable token
+  and password credentials. Related docs now align design 01 references and
+  bounded S22/S24 exceptions, designs 08/19 source-ID enumerations, design 11
+  package counts and userData retention, design 14 tray connection counts and
+  quit confirmation, and designs 16/20 legacy wording. **S22/S23/S24 and the
+  password-login session shipped with PR2/PR3** as listed above; remaining
+  real-machine release gates are recorded honestly in
+  `docs/progress/STATUS.md`.
+
 ## [0.2.0-beta.2] - 2026-08-27
 
 ### Added

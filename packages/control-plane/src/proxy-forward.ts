@@ -66,17 +66,21 @@ export function spkiPinOfPeerCertificate(rawDer: Buffer): string {
     .digest('hex')
 }
 
-/** Attach the SPKI pin gate to an outbound https request (S23): on TLS
+/** Attach the pre-write SPKI pin gate to an outbound https request (S23): on TLS
  * handshake completion the peer certificate's SPKI digest is compared
  * case-insensitively with the pinned value; a mismatch destroys the request
- * with SPKI_PIN_MISMATCH_CODE. Callers must ALSO pass `rejectUnauthorized:
+ * with SPKI_PIN_MISMATCH_CODE, while a match invokes `dispatch` exactly once.
+ * The caller MUST NOT write/end the request anywhere else: this is what keeps
+ * HTTP headers and bodies behind the authenticated handshake. Callers must
+ * ALSO pass `rejectUnauthorized:
  * false` (the pin replaces CA trust for this connection — the internal-CA use
  * case) and `agent: false` (so 'secureConnect' always fires). MUST stay
  * byte-for-byte consistent with gateway-provider.ts's copy of this helper —
  * the packaged desktop cannot import the control plane (workspace TS sources
  * are excluded from the asar), so the two files keep identical
  * implementations. */
-export function attachSpkiPinVerifier(req: ClientRequest, pin: string): void {
+export function attachSpkiPinVerifier(req: ClientRequest, pin: string, dispatch: () => void): void {
+  let dispatched = false
   req.on('socket', (socket: NodeJS.Socket) => {
     ;(socket as TLSSocket).once('secureConnect', () => {
       let digest: string
@@ -92,7 +96,11 @@ export function attachSpkiPinVerifier(req: ClientRequest, pin: string): void {
         const error: NodeJS.ErrnoException = new Error('SPKI pin mismatch')
         error.code = SPKI_PIN_MISMATCH_CODE
         req.destroy(error)
+        return
       }
+      if (req.destroyed || dispatched) return
+      dispatched = true
+      dispatch()
     })
   })
 }
@@ -710,7 +718,6 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     releaseBodyReservation()
     throw error
   }
-  if (tlsSpkiPin !== undefined) attachSpkiPinVerifier(upstream, tlsSpkiPin)
   stopBodySource = (): void => {
     source?.stop(upstream)
     releaseBodyReservation()
@@ -820,16 +827,28 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       res.end()
     })
   })
-  try {
-    source?.send(upstream)
-    if (source === null) upstream.end()
-  } catch (error) {
-    stopBodySource()
-    clearTimeoutGuards()
-    cleanupClientListeners()
-    controller.abort()
-    throw error
+  // A pinned request must remain completely undispatched until secureConnect
+  // proves the peer key. Constructing ClientRequest starts the TLS handshake,
+  // but headers/body are not queued until write()/end(); keeping both calls
+  // exclusively behind this gate therefore prevents Authorization, Cookie,
+  // request headers and business bytes from reaching a mismatched peer.
+  let requestDispatched = false
+  const dispatchRequest = (): void => {
+    if (requestDispatched || controller.signal.aborted || upstream.destroyed) return
+    requestDispatched = true
+    try {
+      source?.send(upstream)
+      if (source === null) upstream.end()
+    } catch (error) {
+      // A pinned dispatch runs asynchronously from secureConnect, outside the
+      // forwardHttp setup try/catch. Route synchronous write failures through
+      // the ordinary ClientRequest error path so cleanup/release and the loud
+      // 502 response still happen exactly once.
+      upstream.destroy(error instanceof Error ? error : new Error(String(error)))
+    }
   }
+  if (tlsSpkiPin !== undefined) attachSpkiPinVerifier(upstream, tlsSpkiPin, dispatchRequest)
+  else dispatchRequest()
 }
 
 /** Forward a WS upgrade to a fully-resolved target (events.mux / events.host).
@@ -881,7 +900,19 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     signal: controller.signal,
     ...(tlsSpkiPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
   })
-  if (tlsSpkiPin !== undefined) attachSpkiPinVerifier(upstream, tlsSpkiPin)
+  let requestDispatched = false
+  const dispatchRequest = (): void => {
+    if (requestDispatched || controller.signal.aborted || upstream.destroyed) return
+    requestDispatched = true
+    try {
+      upstream.end()
+    } catch (error) {
+      // Pinned dispatch occurs from secureConnect; preserve the ordinary
+      // upstream error/rejection path instead of throwing from an event
+      // listener into the process.
+      upstream.destroy(error instanceof Error ? error : new Error(String(error)))
+    }
+  }
   upstream.on('error', upstreamError => {
     clearUpgradeTimeout()
     releaseHandshake()
@@ -985,5 +1016,6 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
       },
     })
   })
-  upstream.end()
+  if (tlsSpkiPin !== undefined) attachSpkiPinVerifier(upstream, tlsSpkiPin, dispatchRequest)
+  else dispatchRequest()
 }

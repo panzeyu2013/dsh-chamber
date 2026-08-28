@@ -341,8 +341,9 @@ export const chamberBridge: {
   `^(?!local$)[a-zA-Z0-9_-]{1,64}$`（禁 `local`、限长 1–64，transport-provider
   常量），端口 1–65535；transport 表单 schema 按注册表驱动，17 §2.2），
   SSH 认证默认走系统 ssh-agent/
-  默认密钥；**可选密码字段**（§8 例外）：经 `desktop_ssh_set_password`
-  转发主进程（内存 + `<userData>/ssh-passwords.json` 明文镜像，0600 原子写），
+  默认密钥；**可选密码字段**（§8 例外）：与元数据一起经
+  `desktop_ssh_save_connection` 转发主进程（内存 +
+  `<userData>/ssh-passwords.json` schema v2 binding 明文镜像，0600 原子写），
   表单永不记录、编辑时永不回填——**SSH 材料（除该瞬时输入外）永不进
   renderer**。
 - **`~/.ssh/config` 自动发现**：主进程读取并投影非秘密字段
@@ -454,16 +455,22 @@ instanceId}` +
 
 ### 7.4 IPC（preload 白名单；2026-08 扩展插件编排面，设计 13）
 
-- `dsh-chamber:info`；`desktop_ssh_instances_get/set`（spec v2：kind/
+- `dsh-chamber:info`；`desktop_ssh_instances_get`（spec v2：kind/
   transport/insecureHttp、sshPort、serviceName 与 remoteDshHome，03 §2.2）、
-  `desktop_ssh_set_password`（主进程内存 + 0600
-  明文文件兜底，§8）、`desktop_ssh_config_list`（`~/.ssh/config` 非秘密投影）、
+  `desktop_ssh_save_connection`（元数据 + SSH password + gateway token/password 的主进程
+  crash-safe 原子/补偿事务；write-only 旧值只在主进程快照，renderer 不可读）、
+  `desktop_ssh_delete_connection(id)`（精确 id-addressed 主进程删除事务；不存在 id 为幂等
+  no-op）、legacy `desktop_ssh_instances_set`（只接受与当前规范化 roster 同长度、同顺序、
+  逐字段完全相同的 exact no-op，任何删除/add/edit/reorder 都拒绝）；三个单项 credential
+  setter 仅接受显式 clear；add/edit/delete/非空凭据写不能绕过各自主进程事务；`desktop_ssh_config_list`
+  （`~/.ssh/config` 非秘密投影）、
   `desktop_ssh_connect/disconnect/status/logs/logs_clear`、
-  `desktop_ssh_start_service/stop_service/is_active/restart_service`（systemctl，
-  serviceName 白名单 `^[a-zA-Z0-9_.-]+$`）；
-- gateway 凭据 IPC（write-only，design 17 §9.1/§7.2/§12）：
-  `set_gateway_token`/`set_gateway_password`——表单瞬时收集、经受信 IPC 转发
-  主进程（内存持有 + `<userData>/gateway-secrets.json` 0600 原子写、
+  `desktop_ssh_start_service/stop_service/is_active/restart_service`（固定参数数组
+  `systemctl <action> -- <serviceName>`，serviceName 白名单
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`、首字符必须为字母或数字）；
+- gateway 凭据（write-only，design 17 §9.1/§7.2/§12）：表单瞬时收集并作为
+  `desktop_ssh_save_connection` 的 write-only 字段经受信 IPC 转发主进程（内存持有 +
+  `<userData>/gateway-secrets.json` 0600 原子写、
   safeStorage 加密 blob 优先，17 §12）；永不返回 renderer、不进注册表/日志，
   删除实例/显式清除即删；只注入已注册 gateway transport 的 0..2 白名单头
   （§8 / 17 §9.3）；
@@ -518,21 +525,27 @@ instanceId}` +
   endpoint 模式**：无子进程，运行时探测 `probeTarget()` 并暴露
   `endpointUrl()`，如 tailnet 直连宿主）、`classifyStderr`（整行分类：
   脱敏 + 终态认证判定）、可选 `verifyUp`（端点身份验证：TCP 探测通过后、
-  置 ready 前验证远端真是 dsh——ssh 实现为 `host.describe` 信封探测，
-  与本地 02 §3.2 同判据，非 dsh 服务端口绝不呈现已连接）、可选 `exec`
+  置 ready 前验证目标身份——dsh 使用 `host.describe` 信封探测，与本地 02 §3.2
+  同判据；gateway 使用认证后 `/chamber/runtime/status` 固定 identity，使 managed
+  dsh blocked/down 时恢复面仍可达；非目标服务端口绝不呈现已连接）、可选 `exec`
   （远程服务通道）。
 - `transport-manager.ts` 是通用运行时：phase 机 / **两段式重连**（快速有界
   半开 jitter 退避突发 + 突发耗尽后的慢速周期重探——瞬时故障是时变的，
   error 绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）/
   环形日志 / 非秘密投影与推送 / 子进程监督（SIGTERM→SIGKILL per-child）/
   注册表（kind 迁移、重复 id 首胜丢弃）/ 就绪探测（隧道端口或直连端点 +
-  端点身份验证）。就绪判据（TCP + dsh 身份握手）、两段式重连与 `verifyUp`
+  端点身份验证）。就绪判据（TCP + 目标身份握手）、两段式重连与 `verifyUp`
   **确定性验证失败免重试**（`terminal` 分类——目标应答了探测但证明不是
   兼容 dsh → 第一次失败即落 error 终态，仅瞬时失败走重连）的机制细节见
   03 §2.2。**加固（2026 audit M2/M10）**：exec 子进程与隧道子进程同款
   SIGTERM→SIGKILL 升级且 `disposeAsync` 等待两者全部退出（SIGTERM 忽略型
   ssh exec 不残留孤儿）；本地端口分配瞬时失败（临时端口耗尽）进入慢速
   周期重探，不再永久停在 error。
+- registry 编辑以 transport + exec generation 隔离旧异步工作：`serviceName` 与
+  `remoteDshHome` 都属于 live transport fields 和 exec identity，变化时先提升
+  generation/`execEpoch`，撤销旧隧道/直连尝试与所有 exec child（SIGTERM→SIGKILL），
+  旧连接原先非 idle 才以新参数重启；多步 exec 下一次 spawn 以及迟到日志、状态投影、
+  `serviceActive`/结果提交前都复验 generation，不能让旧代工作污染新配置。
 - `ssh-provider.ts` 与 `gateway-provider.ts` 是两个 transport provider
   （按 transport 注册，17 §2.2/§9.2）：`ssh-provider.ts` 实现 `ssh`
   （`ssh -N -o ServerAliveInterval=30 -o
@@ -585,30 +598,42 @@ instanceId}` +
   投影**与 localPort/phase；ssh stderr 含密钥路径的行入环前脱敏（按行缓冲，
   跨 chunk 不绕过）；
 - **可选密码认证（唯一例外，2026-08 用户需求；明文文件兜底——用户决策）**：
-  表单密码字段为瞬时输入（编辑时永不回填），经 `desktop_ssh_set_password`
+  表单密码字段为瞬时输入（编辑时永不回填），经 `desktop_ssh_save_connection`
   转发后主进程**内存持有 + 明文镜像 `<userData>/ssh-passwords.json`**
   （0600、`.tmp`+fsync+rename 原子写；残留 `.tmp` 无论原 mode 为何都先
   fchmod 0600 再写秘密；写成功后才发布内存状态、启动时严格
-  校验 schema——密码主机重启后自动连接可用；损坏/结构非法文件保留为
+  校验 schema；现存文件先 no-follow/普通文件/inode 校验，以打开 fd 收紧 0600 后
+  才读取——密码主机重启后自动连接可用；损坏/结构非法文件保留为
   `*.corrupt` 并响亮报告，绝不静默当空集）；
-  保存顺序按注册表存在性（2026 final review）：**编辑**既有主机时密码先行、
-  密码失败则注册表不动（无需回滚）；**新增**主机时注册表先行（主进程拒绝
-  为未注册 id 存密码）再落密码，密码失败回滚本次元数据保存；回滚 IPC
-  异常时重新读取权威注册表并按真实状态保留编辑态，避免重复新增；
+  保存已收敛为主进程 `desktop_ssh_save_connection` 单事务：registry 与三类 write-only
+  凭据先在主进程拍快照，按目标域验证并提交，任一步失败补偿恢复全部旧值；补偿失败
+  安全 scrub 相关凭据且响亮返回，renderer 不再靠串联 setter 假装可回滚。SSH 镜像
+  schema v2 将每个值绑定 `host+user+sshPort` 并在读取/注入时复验当前 registry；secret
+  先落盘、registry 后落盘的崩溃只会失去可用性，不会把新口令发给旧 SSH endpoint。
+  非空 legacy schema v1 无法安全证明目标，移动为唯一 `.unbound-*` 恢复文件并要求重录；
+  新增/进入/离开/retarget 即使留空也强制清理隐藏的半事务值。删除只走精确
+  `desktop_ssh_delete_connection(id)`：先停活连接、撤销 exact connection-target scope 的
+  gateway 会话、清 durable secrets，最后删 metadata；不存在 id 为幂等 no-op；legacy
+  `instances_set` 只能原样提交当前规范化 roster，不能删除；
   永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
   exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH
-  直接执行该脚本；`<tmp>/
-  dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即退役、实例删除/应用
-  退出才最终删除（2026-08 审查修订：disconnect 时在途 exec 可能仍持有指向该文件的
-  SSH_ASKPASS，立即删除会使其密码认证失败，故 disconnect 只退役保留在盘，由
-  purgeAuth/启动清理回收）；启动清理仅删除
+  直接执行该脚本；助手位于 `mkdtemp` 创建的每进程不可猜 0700 私有目录，目录必须
+  为当前 uid 的普通目录且 inode/mode 复验通过；历史全局 `<tmp>/dsh-chamber-ssh`
+  永不用于写入，EPERM/属主异常 fail closed，不在他人可替换目录继续；`<tmp>/
+  dsh-chamber-ssh-<pid>-<random>/askpass-<id>.pid-<pid>.<uuid>.sh`。每次 tunnel/systemd/run
+  spawn 独占一个 lease，真实 child 的 exit/error/spawn-fail 才释放并删除对应 helper；
+  disconnect/removal/显式 clear 先阻止新 lease 并请求 purge，仍被 child 引用的文件延迟
+  到引用归零，绝不用固定代际上限提前删在途 helper。异常进程退出后的残留由下一次
+  启动清理；启动清理仅删除
   已退出进程或旧格式遗留，绝不误删并行 dev/打包实例的助手）把密码喂给系统 ssh
   ——**永不上命令行**；助手按提示文本区分「主机密钥确认 → yes」与「密码/
   口令 → 密码」，首次连接无需预先接受主机密钥。无可靠 askpass 的平台
-  （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在 `desktop_ssh_set_password`
+  （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在 `desktop_ssh_save_connection`
   IPC 门禁处**显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
   通用路径。
-- systemctl 以参数数组 spawn（无 shell 拼接）+ serviceName 白名单；
+- systemctl 以固定参数数组 `systemctl <action> -- <serviceName>` spawn（无 shell 拼接，
+  `--` 终止 option 解析）+ serviceName 白名单
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`（首字符必须为字母或数字）；
 - 控制面 HTTP 监听仅 loopback——v1 无认证边界，不变量靠监听面与 HTTP/WS
   来源门禁（Host 仅规范 loopback authority；Origin 仅限与当前 Host 精确同源
   或显式开发 allowlist，其他 localhost 端口也默认拒绝；`null` 一律拒绝；
@@ -619,13 +644,27 @@ instanceId}` +
   `new Function(…eval…)`，缺它渲染层主包在模块求值期即抛 EvalError、静态骨架
   永不进入 React，2026-08-20 实机排查）、`nosniff`、`DENY` frame、no-referrer
   与 COOP 安全头。
-- **gateway 凭据（design 17 v2 例外，同款 write-only 纪律）**：settings 表单
-  可瞬时收集 gateway token/密码并经受信 IPC（`set_gateway_token`/
-  `set_gateway_password`，§7.4）转发主进程；主进程仅内存持有 +
-  `<userData>/gateway-secrets.json`（0600 原子写，safeStorage 加密 blob
+- **gateway 凭据（design 17 v2 连接模型例外，同款 write-only 纪律）**：settings 表单
+  可瞬时收集 gateway token/密码并经受信 IPC（新增/更新走
+  `desktop_ssh_save_connection`，单项 setter 只清除，§7.4）转发主进程；主进程仅内存持有 +
+  `<userData>/gateway-secrets.json`（schema v3，0600 原子写，safeStorage 加密 blob
   优先、不可用时 0600 明文回退，17 §12），永不返回 renderer、不进注册表/
   日志；只注入已注册 gateway transport 的 `Authorization`/`Cookie` 头
-  （0..2 白名单，17 §9.3）；删除实例/显式清除即删。对应安全不变量
+  （0..2 白名单，17 §9.3）。Cookie/session key = 网络 origin + `Host` authority +
+  稳定的 connection-target scope（connection id 与目标摘要）；authority 只负责路由，
+  不是 ownership，因此相同 origin 的不同 direct id、复用 localPort 的不同 SSH 目标也
+  绝不共享 session。exact-scope invalidation 会提升每个历史 key 的 generation，并在
+  登录、Cookie 探针、Bearer fallback、401 重登每次 await 后阻止旧结果改 cache/backoff/
+  auth proof 或继续联网；refresh 另有按 id 的 arm/disarm/dispose epoch，并在重试、重注册、
+  重连前复验密码/token/URL/pin/authority/scope，阻止同 id 重建的迟到结果。
+  `configureGatewaySessionProvider` 的 `ensureSession` / `generation` /
+  `registrationAuthProof` / `setRegistrationAuthProof` / `cachedCookie` / `invalidate` hooks
+  必须 all-or-none；ready 注册要求
+  当前 generation 的 `cookie|bearer` auth proof，密码型目标若
+  Cookie 消失且没有已验证的 Bearer fallback 则 fail closed 重连，绝不无头注册。
+  gateway+HTTPS 配置 SPKI pin 时，登录、探针及 HTTP/WS 反代在 peer SPKI 匹配前不调用
+  请求 `write/end`，不发送 handshake/header/credential/body 等任何应用层字节；mismatch
+  显式失败。删除实例/显式清除即删凭据并撤销对应 scope。对应安全不变量
   S22（safeStorage 加密落盘）/ S23（SPKI 证书固定）/ S24（审计只记非秘密
   事件）见 design 17 §17。
 

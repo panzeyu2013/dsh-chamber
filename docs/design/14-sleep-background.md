@@ -224,8 +224,9 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 ## 5. 安全与纪律
 
-- 无新秘密面：托盘/设置只投影非秘密状态（连接数/phase/版本），传输 URL 与
-  SSH 材料永不进 renderer（05 §8 不变）。
+- 无新秘密面：托盘/设置只投影非秘密状态（连接数/phase/版本）；传输 URL、私钥与
+  代理配置永不进 renderer，密码只有表单瞬时 write-only 输入且绝不返回/回填
+  （05 §8 不变）。
 - close-to-tray **不改变 will-quit 清理顺序**：退出仍完整 dispose 传输层 +
   停止控制面，不留孤儿隧道/子进程。
 - keep-awake 仅 prevent-app-suspension，无后台执行面。

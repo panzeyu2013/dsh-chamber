@@ -145,31 +145,16 @@ jobs:
         # packages/desktop/package.json), and the softprops draft above uses
         # tag v<workflow version> — a mismatch would silently redirect every
         # artifact to a phantom v<package.json version> draft and finalize an
-        # EMPTY release. Fail fast: the developer bumps the chamber packages
-        # (design 11 §8: root/desktop/control-plane/renderer/cli +
-        # dsh-host-client-graph + dsh-host-git-worktree + gateway — 8 packages) before
-        # releasing, so the input version must equal EVERY package's version.
-        # (2026-08 review: extended from desktop-only so a partial bump of the
-        # siblings fails the run instead of shipping a version-skewed app.)
+        # EMPTY release. Fail fast: design 11 §8 requires the root and every
+        # non-fork chamber package to be bumped together, while the
+        # @deepseek-ai/* source forks retain their pinned upstream version.
+        # The input version must therefore match every package it owns.
+        # The preflight scanner is data-driven: new packages are automatically
+        # covered, while @deepseek-ai/* fork copies stay on their pinned upstream
+        # baseline. Do not replace this with a hard-coded package list.
         env:
           VERSION: ${{ steps.get_version.outputs.version }}
-        run: |
-          for PKG in \
-            ./package.json \
-            ./packages/desktop/package.json \
-            ./packages/control-plane/package.json \
-            ./packages/renderer/package.json \
-            ./packages/cli/package.json \
-            ./packages/dsh-host-client-graph/package.json \
-            ./packages/dsh-chamber-host-git-worktree/package.json \
-            ./packages/gateway/package.json; do
-            PKG_VERSION=$(node -p "require('${PKG}').version")
-            if [[ "$VERSION" != "$PKG_VERSION" ]]; then
-              echo "::error::release version ${VERSION} != ${PKG} version ${PKG_VERSION} — bump all 8 chamber packages (root/desktop/control-plane/renderer/cli/dsh-host-client-graph/dsh-host-git-worktree/gateway) to match before releasing"
-              exit 1
-            fi
-          done
-          echo "release version ${VERSION} matches all 8 chamber packages ✓"
+        run: node scripts/dev/release-preflight.mjs "$VERSION" --versions-only
 
       - name: Extract CHANGELOG section for the release body
         # The release page must show OUR changelog entry (CHANGELOG.md), not
@@ -290,13 +275,19 @@ jobs:
       - name: Bootstrap vendor tree
         run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
-      - name: Type check (tsc + chamber host packages)
+      - name: Type check (tsc + chamber host packages + gateway + runtime)
         run: |
           pnpm run typecheck
           pnpm run typecheck:host-graph
           pnpm run typecheck:host-git
+          pnpm run typecheck:gateway
+          pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      - name: Release workflow safety policy
+        run: pnpm run test:release-workflow
+      - name: Shared runtime core unit tests
+        run: pnpm run test:runtime
       - name: Control-plane unit tests
         run: |
           node packages/control-plane/test/protocol.ts
@@ -307,9 +298,13 @@ jobs:
           node packages/control-plane/test/local-connection.ts
           node packages/control-plane/test/spawn-dsh.ts
           node packages/control-plane/test/instance-proxy.ts
+          node packages/control-plane/test/gateway-transport.test.ts
           node packages/control-plane/test/ws-frames.ts
           node packages/control-plane/test/static-serving.ts
           node packages/control-plane/test/host-graph-seed.ts
+          node packages/control-plane/test/restart-local.ts
+      - name: Gateway unit tests
+        run: pnpm run test:gateway
       - name: Desktop / renderer / plugin unit tests and type checks
         run: |
           pnpm run test:desktop
@@ -328,6 +323,7 @@ jobs:
           pnpm run test:connections
           pnpm run test:client-web
           pnpm run test:connection
+          pnpm run test:cli
       - name: Renderer + host package builds
         run: |
           pnpm run build:renderer

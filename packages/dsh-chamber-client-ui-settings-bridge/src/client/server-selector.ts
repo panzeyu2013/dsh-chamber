@@ -4,9 +4,12 @@ export interface ServerSelectorRow {
 }
 
 export interface ServerProjectionRow extends ServerSelectorRow {
-  kind: 'local' | 'ssh' | 'gateway'
+  kind: 'local' | 'dsh' | 'gateway'
+  transport: 'local' | 'ssh' | 'http'
+  rawId?: string
   connected: boolean
   phase: string
+  dshVersion?: string
   /** Transport refresh stamp; deliberately excluded from the rendered signature. */
   updatedAt?: number
   pluginDiagnostic?: {
@@ -23,9 +26,12 @@ export function serverProjectionSignature(rows: readonly ServerProjectionRow[]):
   return JSON.stringify(rows.map(row => ({
     id: row.id,
     kind: row.kind,
+    transport: row.transport,
+    rawId: row.rawId ?? null,
     label: row.label,
     connected: row.connected,
     phase: row.phase,
+    dshVersion: row.dshVersion ?? null,
     pluginDiagnostic: row.pluginDiagnostic === undefined ? null : {
       state: row.pluginDiagnostic.state,
       message: row.pluginDiagnostic.message ?? null,

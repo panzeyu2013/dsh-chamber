@@ -1,8 +1,9 @@
 /**
  * The window.dshChamber page bridge as consumed by the connections section
  * (desktop preload.cts, design 05 §3.3). Mirrors the renderer's
- * global.d.ts declaration structurally (interface merging): non-secret
- * projections only — never a tunnel URL, never SSH material.
+ * global.d.ts declaration structurally (interface merging): returns/events/
+ * projections are non-secret — never a tunnel URL or credential material;
+ * save_connection alone accepts transient write-only credential input.
  */
 
 import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
@@ -12,21 +13,23 @@ import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
  * global.d.ts — the single source of truth (settings-bridge pattern). A
  * structural mirror here would drift silently (2026 review T1); the
  * ipc-surface-mirror test guards the renderer side against the preload.
- * `TransportKind` (dev addition: gateway transport kind) is exported by the
- * merged renderer global.d.ts alongside the ssh-only face. The gateway
- * login-password setter (`set_gateway_password`) and the read-time
+ * `TransportKind` is the v2 target union (`dsh | gateway`) and
+ * `TransportMethod` is the orthogonal mechanism union (`ssh | http`). The gateway
+ * legacy clear-only login-password setter (`set_gateway_password`) and the read-time
  * `passwordSet` projection live on the authoritative renderer surface too
  * (desktop gateway-secrets task, design 17 §7.1/§9.1) — the former
  * plugin-local seams (GatewayPasswordSurface / PasswordSetProjection) were
- * retired when they landed there. The `tokenSet`/`passwordSet`/
- * `secretStorage` projections are merged by the main process on BOTH
- * `instances_get` AND `instances_set` results (main.ts projects every
- * registry return), so callers may rely on them in both paths — the
- * renderer/global.d.ts field comments state this (P4-2 alignment).
+ * retired when they landed there. The `sshPasswordSet`/`tokenSet`/
+ * `passwordSet`/`secretStorage` projections are merged by the main process
+ * on `instances_get`, `instances_set`, `save_connection`, and
+ * `delete_connection` results
+ * (main.ts projects every registry return), so callers may rely on them in
+ * every registry-returning path.
  */
 export type {
   ChamberHostGraphState,
   ChamberInjectionState,
+  ConnectionCredentialMutations,
   ChamberNotificationSettings,
   ChamberSettings,
   ChamberSettingsStatus,
@@ -37,6 +40,7 @@ export type {
   PluginApplyInput,
   PluginApplyResult,
   RemotePluginManifest,
+  SaveConnectionResult,
   SettingsSurface,
   SshConfigDiscovery,
   SshConfigHost,

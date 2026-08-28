@@ -1,14 +1,35 @@
 import type { IpcRendererEvent } from 'electron';
-import type { SshInstanceInput, SshInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
+import type { SshInstanceInput, SshInstanceSpec as TransportInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
 import type { RuntimeState } from './dsh-runtime-controller.ts';
 const { contextBridge, ipcRenderer } = require('electron');
 
+/** Main's read-time connection projection. Credential VALUES never cross
+ * IPC; these optional fields only report existence/storage mode and are not
+ * members of the persisted TransportInstanceSpec registry row. */
+export interface SshInstanceSpec extends TransportInstanceSpec {
+  sshPasswordSet?: boolean
+  tokenSet?: boolean
+  passwordSet?: boolean
+  secretStorage?: 'safeStorage' | 'plaintext'
+}
+
+export interface ConnectionCredentialMutations {
+  sshPassword?: string
+  gatewayToken?: string
+  gatewayPassword?: string
+}
+
+export type SaveConnectionResult =
+  | { ok: true; instances: SshInstanceSpec[] }
+  | { ok: false; instances: SshInstanceSpec[]; error: string; metadataCommitted: boolean }
+
 /**
  * The window.dshChamber bridge contract (design 05 §7.4) — the typed
- * surface the renderer consumes. The desktop_ssh_* surface is non-secret
- * only: never a transport URL, never credential material. onStatusChanged
+ * surface the renderer consumes. Its returns/events/projections are non-secret:
+ * never a transport URL or credential material. The sole credential-bearing
+ * direction is save_connection's transient write-only input. onStatusChanged
  * subscribes to the main-process push and returns an unsubscribe. The
  * provider exec channels (ssh: systemd) resolve the fresh status projection
  * (serviceActive included) or {error} — loud failures, never silent empty
@@ -16,27 +37,26 @@ const { contextBridge, ipcRenderer } = require('electron');
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  instances_set(instances: SshInstanceInput[]): Promise<SshInstanceSpec[]>
+  /** Legacy compatibility channel: exact unchanged no-op roster only. */
+  instances_set(instances: SshInstanceSpec[]): Promise<SshInstanceSpec[]>
+  /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
+  delete_connection(id: string): Promise<SshInstanceSpec[]>
+  /** Main-owned registry + write-only credential transaction. */
+  save_connection(previousId: string | null, input: SshInstanceInput, credentials: ConnectionCredentialMutations): Promise<SaveConnectionResult>
   /**
-   * Forward the SSH password to the main process, which holds it in memory
-   * and mirrors it to the documented 0600 password store (design 05 §8).
-   * The value is never returned or logged; '' / null clears it.
-   * Resolves {ok:true} or {error} (unknown id / platform not supported).
+   * Explicitly clear the SSH password. Non-empty writes are authoritative
+   * only through save_connection's main-owned transaction.
    */
-  set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  set_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
   /**
-   * Forward a gateway bearer token to the main process. The token is write-
-   * only from the renderer's perspective: it is never returned/prefilled;
-   * '' / null clears it and forces any live gateway transport to re-auth.
+   * Explicitly clear the gateway token; non-empty writes use save_connection.
    */
-  set_gateway_token(id: string, token: string | null): Promise<{ ok: true } | { error: string }>
+  set_gateway_token(id: string, token: null): Promise<{ ok: true } | { error: string }>
   /**
-   * Forward a gateway login password to the main process (design 17 §7.1).
-   * Write-only like the token: never returned/prefilled; '' / null clears it
-   * (and drops any cached login session so the next connect re-authenticates
-   * with the stored credentials).
+   * Explicitly clear the gateway login password; non-empty writes use
+   * save_connection. Clearing also invalidates cached login sessions.
    */
-  set_gateway_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  set_gateway_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -80,7 +100,7 @@ export interface DesktopSshSurface {
    *  main-process user confirmation (design 09 §4); cancel → {ok, cancelled}. */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
-  /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
+  /** Registry changed (add/edit via save_connection; delete via delete_connection): re-pull the roster. */
   onInstancesChanged(callback: () => void): () => void
 }
 
@@ -379,14 +399,17 @@ export interface RuntimeSurface {
 }
 
 /**
- * The desktop_ssh_* IPC surface (design 05 §7.4) — non-secret only:
- * never a transport URL, never credential material. onStatusChanged
+ * The desktop_ssh_* IPC surface (design 05 §7.4) — returns/events/projections
+ * are non-secret: never a transport URL or credential material. The sole
+ * credential-bearing direction is save_connection's transient write-only input. onStatusChanged
  * subscribes to the main-process push and returns an unsubscribe.
  */
 function desktopSshApi(): DesktopSshSurface {
   return {
     instances_get: () => ipcRenderer.invoke('desktop_ssh_instances_get'),
     instances_set: instances => ipcRenderer.invoke('desktop_ssh_instances_set', instances),
+    delete_connection: id => ipcRenderer.invoke('desktop_ssh_delete_connection', { id }),
+    save_connection: (previousId, input, credentials) => ipcRenderer.invoke('desktop_ssh_save_connection', { previousId, input, credentials }),
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),
     set_gateway_token: (id, token) => ipcRenderer.invoke('desktop_gateway_set_token', { id, token }),
     set_gateway_password: (id, password) => ipcRenderer.invoke('desktop_gateway_set_password', { id, password }),

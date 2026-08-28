@@ -5,8 +5,8 @@
  * gateway = full per-server segment proxied through `/chamber/runtime`
  * (status/versions/select/apply/rollback/restore-builtin/retry-apply/
  * retry-restore/registry/restart, design 18 §9.3 + design 17 §3); ssh =
- * `restart_service` systemd restart (版本只读行属后续阶段，当前 ssh 分支只
- * 渲染重启动作与提示)。Every source gets the「重启 dsh」
+ * live host.describe version (read-only) + `restart_service` systemd restart.
+ * Every mounted source gets the「重启 dsh」
  * action (design 18 §3.6 项 8) to refresh mounted plugins.
  *
  * Runtime facts and mutations remain main-process/gateway-authoritative. The
@@ -40,6 +40,7 @@ import {
   fetchRemoteRuntimeVersions,
   pollRemoteRuntimeUntilSettled,
   remoteRuntimeAction,
+  remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
   remoteRuntimeStatusView,
   type RemoteRuntimeStatus,
@@ -104,6 +105,10 @@ export interface DshRuntimeSectionProps {
   instanceSource?: DshRuntimeSource
   /** The canonical per-instance id (local | ssh-<id> | gateway-<id>). */
   chamberInstanceId?: string
+  /** Raw desktop registry id for the dsh/ssh systemd IPC branch. */
+  sshHostId?: string
+  /** Generation-scoped host.describe.version; absent renders unknown. */
+  remoteDshVersion?: string
 }
 
 /**
@@ -157,7 +162,7 @@ function GatewayRuntimeSection({
 
   // Remote status poll (design 18 §9.3 mounting discipline): the section stays
   // live through dsh-down windows. A transient fetch failure keeps the last
-  // status beside an honest error line; a phase transition out of 'applying'
+  // status beside an honest error line; a phase transition out of installing
   // re-pulls the version list (the install may have added a cached tree).
   useEffect(() => {
     let cancelled = false
@@ -166,7 +171,8 @@ function GatewayRuntimeSection({
       try {
         const status = await fetchRemoteRuntimeStatus(chamberInstanceId)
         if (!cancelled) {
-          if (lastPhaseRef.current === 'applying' && status.phase !== 'applying') {
+          if ((lastPhaseRef.current === 'installing' || lastPhaseRef.current === 'applying')
+            && status.phase !== 'installing' && status.phase !== 'applying') {
             setVersionsEpoch((epoch) => epoch + 1)
           }
           lastPhaseRef.current = status.phase
@@ -187,7 +193,7 @@ function GatewayRuntimeSection({
   }, [chamberInstanceId])
 
   // Version list: pulled once on entry and re-pulled after a status change
-  // (versionsEpoch bumps on an applying→settled transition or after select).
+  // (versionsEpoch bumps on an install/apply→settled transition or after select).
   useEffect(() => {
     let cancelled = false
     fetchRemoteRuntimeVersions(chamberInstanceId)
@@ -238,18 +244,13 @@ function GatewayRuntimeSection({
   )
   const isActiveRemote = chosenRemote !== null && chosenRemote === remoteActive
 
-  const mutationsAllowed = remoteStatus?.mutationsAllowed !== false
   const envGatedRemote = remoteStatus?.source === 'env'
-  // Task-gated mutation window: applying / restart-in-flight refuse 409
-  // server-side — the buttons mirror that gate instead of waiting for it.
-  const mutationBusy = remoteStatus === null
-    || !mutationsAllowed
-    || envGatedRemote
-    || remoteStatus.phase === 'applying'
-    || remoteStatus.restart === 'running'
-    || actionBusy
-    || restarting
-  const mutationDisabled = mutationBusy
+  // Pure mirror of the server fences: pending permits only restore-builtin;
+  // install/apply/restart-in-flight permit no action. Registry editing is a
+  // version mutation; restart stays source-independent (including env).
+  const remoteGates = remoteRuntimeActionGates(remoteStatus, actionBusy || registryBusy || restarting)
+  const mutationDisabled = remoteGates.mutationDisabled
+  const restoreBuiltinDisabled = remoteGates.restoreBuiltinDisabled
 
   const runRemoteAction = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
     setActionBusy(true)
@@ -264,7 +265,7 @@ function GatewayRuntimeSection({
   }, [setActionError])
 
   const onApplySelected = useCallback(() => {
-    if (chosenRemote === null || isActiveRemote || mutationBusy) return
+    if (chosenRemote === null || isActiveRemote || mutationDisabled) return
     void runRemoteAction(async () => {
       // select = async install job (202, progress via status).phase; after it
       // settles, apply() arms the next-startup switch — the gateway analog of
@@ -281,38 +282,38 @@ function GatewayRuntimeSection({
       // The install may have added a cached tree — refresh the selector.
       setVersionsEpoch((epoch) => epoch + 1)
     })
-  }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationBusy, remoteActive, runRemoteAction])
+  }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationDisabled, remoteActive, runRemoteAction])
 
   const onRollback = useCallback(() => {
-    if (chosenRemote === null || isActiveRemote || mutationBusy) return
+    if (chosenRemote === null || isActiveRemote || mutationDisabled) return
     void runRemoteAction(async () => {
       // rollback arms the pending switch itself (pre-rollback stash + snapshot
       // semantics, design 18 §3.7/§9.3); the switch lands on the next gateway
       // restart.
       await remoteRuntimeAction(chamberInstanceId, { kind: 'rollback', version: chosenRemote })
     })
-  }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationBusy, runRemoteAction])
+  }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationDisabled, runRemoteAction])
 
   const onRestoreBuiltin = useCallback(() => {
-    if (mutationBusy) return
+    if (restoreBuiltinDisabled) return
     void runRemoteAction(async () => {
       await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-builtin' })
     })
-  }, [chamberInstanceId, mutationBusy, runRemoteAction])
+  }, [chamberInstanceId, restoreBuiltinDisabled, runRemoteAction])
 
   const onRetryApply = useCallback(() => {
-    if (mutationBusy) return
+    if (mutationDisabled) return
     void runRemoteAction(async () => {
       await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-apply' })
     })
-  }, [chamberInstanceId, mutationBusy, runRemoteAction])
+  }, [chamberInstanceId, mutationDisabled, runRemoteAction])
 
   const onRetryRestore = useCallback(() => {
-    if (mutationBusy) return
+    if (mutationDisabled) return
     void runRemoteAction(async () => {
       await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-restore' })
     })
-  }, [chamberInstanceId, mutationBusy, runRemoteAction])
+  }, [chamberInstanceId, mutationDisabled, runRemoteAction])
 
   const registryOrigin = remoteStatus?.registry ?? ''
   const registryMode = registryOrigin === NPMJS || registryOrigin === NPMMIRROR
@@ -349,8 +350,12 @@ function GatewayRuntimeSection({
   const view = remoteStatus === null ? null : remoteRuntimeStatusView(remoteStatus)
   const phaseBadgeKey = remoteStatus === null
     ? null
-    : remoteStatus.phase === 'applying'
-      ? 'dshRuntimeRemotePhaseApplying'
+    : remoteStatus.phase === 'installing'
+      ? 'dshRuntimeRemotePhaseInstalling'
+      : remoteStatus.phase === 'pending'
+        ? 'dshRuntimeRemotePhasePending'
+        : remoteStatus.phase === 'applying'
+          ? 'dshRuntimeRemotePhaseApplying'
       : remoteStatus.phase === 'snapshot-failed'
         ? 'dshRuntimeRemotePhaseSnapshotFailed'
         : remoteStatus.phase === 'swap-attempted'
@@ -374,6 +379,47 @@ function GatewayRuntimeSection({
       : title
   }, [view, t])
 
+  const remoteProgress = remoteStatus?.progress ?? null
+  const remoteShowProgress = remoteProgress !== null
+    || remoteStatus?.phase === 'installing' || remoteStatus?.phase === 'applying'
+  const remoteProgressPercent = remoteProgress?.stage === 'download'
+    && typeof remoteProgress.total === 'number' && remoteProgress.total > 0
+    ? Math.min(100, Math.max(0, Math.round(((remoteProgress.received ?? 0) / remoteProgress.total) * 100)))
+    : null
+  const remoteProgressLabel = useMemo(() => {
+    if (remoteProgress?.stage === 'download') {
+      return remoteProgressPercent !== null
+        ? t('dshRuntimeProgressDownloading', { percent: remoteProgressPercent })
+        : t('dshRuntimeProgressDownloadingIndeterminate')
+    }
+    switch (remoteProgress?.stage) {
+      case 'install': return t('dshRuntimeProgressInstalling')
+      case 'prune': return t('dshRuntimeProgressPruning')
+      case 'smoke': return t('dshRuntimeProgressSmoke')
+      case 'publish': return t('dshRuntimeProgressPublishing')
+      default: return t('dshRuntimeProgressApplying')
+    }
+  }, [remoteProgress, remoteProgressPercent, t])
+
+  const remoteSnapshotText = remoteStatus === null
+    ? null
+    : remoteStatus.snapshotError !== null
+      ? t('dshRuntimeSnapshotFailed', { error: remoteStatus.snapshotError })
+      : remoteStatus.restoreOutcome === 'half'
+        ? t('dshRuntimeSnapshotRestoreHalf')
+        : remoteStatus.restoreOutcome === 'incomplete' || remoteStatus.restoreInProgress === true
+          ? t('dshRuntimeSnapshotRestoreIncomplete')
+          : remoteStatus.snapshotCount === null
+            ? t('dshRuntimeSnapshotUnknown')
+            : t('dshRuntimeSnapshotSummary', {
+                count: remoteStatus.snapshotCount,
+                at: remoteStatus.latestSnapshotAt !== null
+                  ? formatTimestamp(remoteStatus.latestSnapshotAt)
+                  : t('dshRuntimeSnapshotNever'),
+              })
+
+  const remoteRestartDisabled = remoteGates.restartDisabled
+
   const restartActions = (
     <>
       <div className={css.updateStatusLine}>
@@ -381,7 +427,7 @@ function GatewayRuntimeSection({
           type="button"
           className={css.updateButton}
           onClick={() => { void onRestartDsh() }}
-          disabled={restarting}
+          disabled={remoteRestartDisabled}
         >
           {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
         </button>
@@ -431,6 +477,21 @@ function GatewayRuntimeSection({
       <div className={css.updateStatus} aria-live="polite">
         <p className={css.updateStatusText}>{statusText}</p>
       </div>
+      {remoteShowProgress && (
+        <div className={css.runtimeProgressBlock} role="status" aria-live="polite">
+          <span className={css.runtimeProgressLabel}>{remoteProgressLabel}</span>
+          <div className={css.runtimeProgressTrack}>
+            <div
+              className={remoteProgressPercent === null ? css.runtimeProgressBarIndeterminate : css.runtimeProgressBar}
+              style={remoteProgressPercent === null ? undefined : { width: `${remoteProgressPercent}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {remoteStatus.activeVersion !== null && remoteStatus.builtinVersion !== null
+        && remoteStatus.activeVersion !== remoteStatus.builtinVersion && (
+        <p className={css.generalHint}>{t('dshRuntimeBundledRow')} v{remoteStatus.builtinVersion}</p>
+      )}
 
       {statusError !== null && <p className={css.generalHint} role="status">{statusError}</p>}
       {remoteStatus.connectionState !== null && remoteStatus.connectionState !== 'ready' && (
@@ -442,6 +503,7 @@ function GatewayRuntimeSection({
       {remoteStatus.pending !== null && remoteStatus.phase !== 'applying' && (
         <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: remoteStatus.pending })}</p>
       )}
+      {remoteSnapshotText !== null && <p className={css.generalHint}>{remoteSnapshotText}</p>}
       {/* Failure rows stay honest and separate when the status line does not
           already carry them (a failed view renders operationError in its
           title; a blocked view renders startupBlockedReason in its detail). */}
@@ -512,7 +574,7 @@ function GatewayRuntimeSection({
           type="button"
           className={css.updateButton}
           onClick={() => { void onRestoreBuiltin() }}
-          disabled={mutationDisabled}
+          disabled={restoreBuiltinDisabled || !remoteStatus.hasOverride}
         >
           {t('dshRuntimeResetBuiltin')}
         </button>
@@ -529,6 +591,16 @@ function GatewayRuntimeSection({
       </div>
 
       {restartActions}
+
+      {remoteStatus.failure !== null && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeFailureRecord', {
+            version: remoteStatus.failure.version,
+            at: formatTimestamp(remoteStatus.failure.at),
+            reason: remoteStatus.failure.reason,
+          })}
+        </p>
+      )}
 
       <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupSource')}</h4>
 
@@ -600,11 +672,52 @@ function GatewayRuntimeSection({
       </label>
 
       {registryError !== null && <p className={css.generalError} role="alert">{registryError}</p>}
+      {remoteStatus.registryError !== null && (
+        <p className={css.generalError} role="alert">{remoteStatus.registryError}</p>
+      )}
+      {remoteStatus.diskUsage !== null && (
+        <p className={css.generalHint}>
+          {t('dshRuntimeDiskSummary', {
+            total: formatRuntimeBytes(remoteStatus.diskUsage.totalBytes),
+            trees: remoteStatus.diskUsage.versionTrees,
+            treeBytes: formatRuntimeBytes(remoteStatus.diskUsage.versionTreeBytes),
+            storeBytes: formatRuntimeBytes(remoteStatus.diskUsage.storeBytes),
+            cacheBytes: formatRuntimeBytes(
+              remoteStatus.diskUsage.cacheBytes
+              + remoteStatus.diskUsage.installHomeBytes
+              + remoteStatus.diskUsage.xdgCacheBytes
+              + remoteStatus.diskUsage.workBytes,
+            ),
+            snapshotBytes: formatRuntimeBytes(remoteStatus.diskUsage.snapshotBytes),
+            recoveryBytes: formatRuntimeBytes(
+              remoteStatus.diskUsage.preRollbackBytes
+              + remoteStatus.diskUsage.restoreBackupBytes
+              + remoteStatus.diskUsage.failureBytes,
+            ),
+          })}
+        </p>
+      )}
+      {remoteStatus.diskError !== null && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeDiskError', { error: remoteStatus.diskError })}
+        </p>
+      )}
+      {remoteStatus.diskLimitExceeded === true && remoteStatus.diskLimitBytes !== null && (
+        <p className={css.generalError} role="status">
+          {t('dshRuntimeDiskQuotaWarning', { limit: formatRuntimeBytes(remoteStatus.diskLimitBytes) })}
+        </p>
+      )}
     </div>
   )
 }
 
-export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstanceId }: DshRuntimeSectionProps) {
+export function DshRuntimeSection({
+  t,
+  instanceSource = 'local',
+  chamberInstanceId,
+  sshHostId,
+  remoteDshVersion,
+}: DshRuntimeSectionProps) {
   const state = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
   const settingsStatus = useSyncExternalStore(subscribeSettings, getSettingsStatus)
   const [busy, setBusy] = useState(false)
@@ -731,11 +844,10 @@ export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstance
           const pollController = new AbortController()
           restartPollAbort.current = pollController
           await pollGatewayReady(chamberInstanceId, pollController.signal)
-        } else if (instanceSource === 'ssh' && chamberInstanceId !== undefined) {
-          const hostId = chamberInstanceId.slice('ssh-'.length)
+        } else if (instanceSource === 'ssh' && sshHostId !== undefined) {
           const desktopSsh = window.dshChamber?.desktopSsh
           if (desktopSsh === undefined) throw new Error('desktop ssh surface unavailable')
-          const result = await desktopSsh.restart_service(hostId)
+          const result = await desktopSsh.restart_service(sshHostId)
           if (result !== null && typeof result === 'object' && 'error' in result) {
             throw new Error(String((result as { error: unknown }).error))
           }
@@ -752,7 +864,7 @@ export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstance
         setRestarting(false)
       }
     }
-  }, [t, instanceSource, chamberInstanceId])
+  }, [t, instanceSource, chamberInstanceId, sshHostId])
 
   const onInstall = useCallback(() => {
     if (runtime === null || chosen === null || isActive || envGated || !actions.has('install')) return
@@ -961,13 +1073,18 @@ export function DshRuntimeSection({ t, instanceSource = 'local', chamberInstance
     return (
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
+        <div className={css.updateVersionRow}>
+          <p className={css.updateRow}>
+            {t('dshRuntimeRemoteVersion')}: {remoteDshVersion ?? t('dshRuntimeVersionUnknown')}
+          </p>
+        </div>
         <p className={css.generalHint}>{t('dshRuntimeRemoteSshNote')}</p>
         <div className={css.updateStatusLine}>
           <button
             type="button"
             className={css.updateButton}
             onClick={() => { void onRestartDsh() }}
-            disabled={restarting}
+            disabled={restarting || sshHostId === undefined}
           >
             {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartRemoteAction')}
           </button>

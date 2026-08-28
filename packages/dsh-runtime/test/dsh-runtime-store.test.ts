@@ -151,6 +151,7 @@ test('override: 缺失 → null; 写读 round-trip（含 null 字段）; 原子�
     resolvedVersion: '0.1.1-rc.2',
     pending: '1.0.0',
     swapAttempted: false,
+    selectedOnly: true,
   };
   writeOverride(base, record);
   assert.deepEqual(readOverride(base), record);
@@ -164,6 +165,11 @@ test('override: 缺失 → null; 写读 round-trip（含 null 字段）; 原子�
   };
   writeOverride(base, noPending);
   assert.deepEqual(readOverride(base), noPending);
+  assert.throws(
+    () => writeOverride(base, { ...noPending, selectedOnly: 'yes' as never }),
+    /selectedOnly/,
+    'the staged-selection authority marker is strictly boolean',
+  );
 });
 
 test('override: 损坏 → 保留 *.corrupt 并返回 null（可逆，绝不静默当默认）', () => {
@@ -898,6 +904,18 @@ test('runtimeDiskSummary counts a publish-backup symlink itself without followin
   assert.ok(summary.failureBytes > 0);
   assert.ok(summary.failureBytes < 1024 * 1024,
     'quota walk must account the link entry but never follow the external target');
+});
+
+test('runtimeDiskSummary accepts the gateway DSH_HOME layout for restore-backup accounting', () => {
+  const base = freshBase();
+  const gatewayHome = path.join(base, 'dsh-home');
+  const backup = path.join(base, 'dsh-home.old-123', 'data');
+  mkdirSync(path.dirname(backup), { recursive: true });
+  writeFileSync(backup, 'gateway-restore-backup');
+  assert.equal(runtimeDiskSummary(base).restoreBackupBytes, 0,
+    'the desktop default must not claim gateway sibling backups');
+  assert.ok(runtimeDiskSummary(base, gatewayHome).restoreBackupBytes > 0,
+    'the gateway owner explicitly accounts sibling restore backups');
 });
 
 test('runtimeDiskSummary propagates non-ENOENT accounting errors instead of reporting zero', () => {

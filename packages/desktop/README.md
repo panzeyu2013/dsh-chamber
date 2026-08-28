@@ -1,15 +1,16 @@
 # @dsh-chamber/desktop
 
-dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控制面 origin 上的 dsh 官方前端；主进程承担传输管理（v1：SSH 隧道 + 远端 systemd 起停，TransportProvider 抽象可扩展其他来源）、实例注册表与 IPC。
+dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控制面 origin 上的 dsh 官方前端；主进程承担正交目标/传输管理（`dsh|gateway × ssh|http`）、实例注册表、write-only 凭据事务与 IPC。
 
 ## 目录
 
-- `main.ts` — Electron 主进程：单窗口单 frame（`loadURL` 控制面 origin）、`createControlPlane`、transport-manager + ssh provider、IPC、更新控制器接线（updater.ts）
+- `main.ts` — Electron 主进程：单窗口单 frame（`loadURL` 控制面 origin）、`createControlPlane`、transport-manager + ssh/http providers、IPC、更新控制器接线（updater.ts）
 - `updater.ts` — 更新控制器（设计 11）：electron-updater（github provider）静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
 - `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 传输 argv / stderr 分类 / 可选 exec；direct-endpoint 直连模式）
 - `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 两段式重连（快速有界 jitter 退避突发 + 慢速周期重探）+ 环形日志 + 子进程监督 + 非秘密投影
-- `ssh-provider.ts` — v1 唯一 provider：SSH 隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec（start/stop/is-active）
+- `ssh-provider.ts` — SSH transport：隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec（start/stop/is-active）
+- `gateway-provider.ts` — HTTP direct transport + gateway 认证/SPKI/session；同一 provider 的 dsh 目标分支严格无认证
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` 编译为 JS（`dist/control-plane/`，见下）
 - `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
@@ -85,18 +86,19 @@ pnpm run dist:desktop
 
 `createControlPlane({ stateDir: <userData>/state, dshWorkspacePath })`：`stateDir` 固定为 `app.getPath('userData')/state`；`dshWorkspacePath` 为 dsh 工作区解析结果（打包态 `<resources>/vendor/dsh`；开发态环境变量 `DSH_CHAMBER_DSH_PATH` → `<repoRoot>/ref-dsh` → `<pkg>/vendor/dsh`；找不到时为 null，控制面内部回退到默认解析）。port 默认 17500、host 默认 127.0.0.1，start 后经 `controlPlane.port` 读取实际绑定端口。**dev 隔离**：`electron-dev.mjs` 以独立 `--user-data-dir`（`packages/desktop/.dev-user-data`，gitignored）启动，且 dev 模式控制面端口回落为 17520（`DSH_CHAMBER_CP_PORT` 可覆盖）——与运行中的打包版实例（共享同一应用名 `@dsh-chamber/desktop` → 同一 userData 与单实例锁、占用 17500）互不冲突；dev 的注册表/密码/状态独立存放，绝不触碰打包版线上数据。
 
-### transport-manager + ssh provider（transport-provider.ts / transport-manager.ts / ssh-provider.ts）
+### transport-manager + providers（transport-provider.ts / transport-manager.ts / ssh-provider.ts / gateway-provider.ts）
 
-- **来源无关运行时**：`TransportProvider` 接口定义来源边界（v1 仅 `ssh`；tailscale/remote-tunnel 等新来源 = 新 provider + kind 注册，运行时与 UI 零改动）。`buildStartArgs` 缺省 = **direct endpoint 模式**（无子进程，运行时探测 `probeTarget()`、暴露 `endpointUrl()`，如 tailnet 直连宿主）。
-- **SSH 隧道**：`ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort> <user@host>`——SSH 层保活（半死连接由 ssh 自身约 90s 判定退出并喂给重连机，探活同时保活 NAT 映射）；`remotePort` = 远端 127.0.0.1 上 dsh web 监听端口（隧道目标）；`sshPort`（可选）= SSH 守护端口（null = 不传 `-p`，走 ssh 默认 22 / config Port，systemd exec 同理）；localPort 由 `net listen(0)` 分配；**就绪 = 本地端口可 TCP 连接 + dsh 身份握手通过**（`verifyUp`：`host.describe` 信封探测，5s 总超时 + 1MiB 响应上限——目标端口上是非 dsh 服务时显式报错/降级，**绝不呈现已连接**，与本地就绪判据同源 02 §3.2）。握手失败时按 dsh 特征签名分类提示：目标若携带 connection 插件的 426 臂或 apiProxy 的 SSE 臂（GET /api/events.mux），判为「dsh 版本过老/不兼容——请升级远端 dsh」；无任何 dsh 特征时保持「不是 dsh 实例」的通用文案（绝不无证据猜测）。
+- **来源无关运行时**：目标 kind（`dsh|gateway`）与 transport（`ssh|http`）正交；provider 按 transport 注册。`buildStartArgs` 缺省 = **direct endpoint 模式**（无子进程，运行时探测 `probeTarget()`、暴露 `endpointUrl()`）。
+- **SSH 隧道**：`ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort> <user@host>`；localPort 由 `net listen(0)` 分配。dsh 目标以 `host.describe` 身份握手；gateway 目标以认证后 `/chamber/runtime/status` 固定 marker 握手，使 managed dsh blocked/down 时恢复面仍可达。gateway tunnel 的 HTTP Host/session authority 固定远端 `127.0.0.1:<remotePort>`，绝不复用 SSH alias。非目标服务均显式失败，绝不呈现假 ready。
 - **phase 机**：`idle → connecting → ready ⇄ degraded → error`，**两段式重连**：快速**半开 jitter** 指数退避突发（保留下界 0.5×、上界 1×，多实例/唤醒后错峰；至多 5 次 ≈31s）+ 突发耗尽后落 error（诚实红态）但进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限——瞬时故障是时变的，「放弃」绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）。认证失败置 `requiresUserAction`，**终态不自动重试**（用户须修复凭据/host key）。**确定性验证失败免重试**：`verifyUp` 结果带 `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 第一次失败即 error 终态（requiresUserAction，重试无法改变应答）；仅连接错误/超时等瞬时失败走重连。子进程监督 per-child：SIGTERM → 宽限后 SIGKILL。
-- **远端 systemd exec**：`ssh user@host systemctl start|stop|is-active <serviceName>`——参数数组 spawn（**无 shell**），serviceName 先过白名单 `^[a-zA-Z0-9_.-]+$` 再执行（注入防护）；有界超时（`execTimeoutMs`，默认 15s）；失败写入实例环形日志并作为错误结果返回（响亮，绝不吞掉）；认证失败复用 `AUTH_FAILURE_PATTERNS`，只经结果错误显式返回（**不写隧道终态**）。结果按需写入状态投影的 `serviceActive`（不轮询）。`systemctl` 默认目标为远端 system 级 unit 管理器。
+- **远端 systemd exec**：`ssh user@host systemctl <action> -- <serviceName>`——固定参数数组 spawn（**无 shell**，`--` 终止 option 解析），serviceName 先过白名单 `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`（首字符必须为字母或数字）再执行；有界超时（`execTimeoutMs`，默认 15s）；失败写入实例环形日志并作为错误结果返回（响亮，绝不吞掉）；认证失败复用 `AUTH_FAILURE_PATTERNS`，只经结果错误显式返回（**不写隧道终态**）。结果按需写入状态投影的 `serviceActive`（不轮询）。`systemctl` 默认目标为远端 system 级 unit 管理器。
 - stderr 按行缓冲后脱敏 + 终态认证判定（跨 chunk 不绕过）；每实例环形日志（约 200 行）。
-- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。保存顺序按注册表存在性：编辑时密码先行（失败则注册表不动）；新增时注册表先行再落密码（主进程拒绝未注册 id），密码失败回滚元数据；回滚 IPC 异常时重新读取权威注册表，避免把半提交的新主机再次按新增提交。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
+- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：密码只在主进程内存 + `<userData>/ssh-passwords.json`（schema v2：password + SSH endpoint binding；no-follow/普通文件/inode 校验、读前收紧 0600、原子写）。非空 legacy v1 无可信 binding，唯一 `.unbound-*` 保留并禁用至重录。askpass helper 位于每进程 `mkdtemp` 私有 0700 目录，复验 uid/type/inode/mode，O_EXCL 创建且完整 fsync 后才设 0700；历史共享 tmp 目录永不写入，EPERM/异主 fail closed。每个 tunnel/systemd/run child 独占 helper lease，只有真实 exit/error/spawn-fail 才释放；disconnect/removal/clear 请求 purge，但仍在途的 lease 延迟至引用归零，崩溃残留由下一启动回收。元数据与 SSH password/gateway token/password 由 `desktop_ssh_save_connection` 在主进程 crash-safe 提交；renderer 不读旧秘密。Gateway token 限 32–4096 visible ASCII，Gateway 登录密码允许 12–1024 Unicode JavaScript 字符。`sshPasswordSupported()`（非 win32）为 false 时显式拒绝。
+- **Gateway session / SPKI 门**：Cookie key = 网络 origin + `Host` authority + 稳定 connection-id/target scope，localPort 不代表 ownership；scope invalidation 的 generation 在登录、Cookie probe、Bearer fallback 与 401 relogin 每次 await 后拦截迟到结果。session provider 六个 hooks 必须 all-or-none；当前 generation 的 `cookie|bearer` proof 门控 ready 注册，缺失时 fail closed。refresh arm/disarm/dispose 另提升按 id epoch，并在提交前复验凭据、URL、pin、authority 与 scope。Gateway+HTTPS 配置 pin 时，登录/探针在 peer SPKI 匹配前不 `write/end`、不发送凭据或 body；control-plane 的 HTTP/WS 反代遵循同一零应用字节门。
 
 ### 实例注册表
 
-`<userData>/ssh-instances.json`，字段：`{id, label, kind, host, user, sshPort, remotePort, serviceName, remoteDshHome}`（`kind` = 传输来源，旧文件缺失时迁移为 `ssh`；`sshPort`/`serviceName` 为 `number | null` / `string | null`，null = 走 ssh 默认端口 / 不管理起停）。**元数据白名单在核心逻辑强制**（provider `validateSpec`）：id `^[a-zA-Z0-9_-]+$`（反代路径段/传输键），host `^[a-zA-Z0-9._:[\]]+$`、user `^[a-zA-Z0-9._-]+$` 且均不以 `-` 开头（防 ssh 选项注入，如 `-oProxyCommand=…`）；serviceName 格式在 exec 前强制。原子写（`.tmp` → fsync → rename）；**损坏文件响亮失败，绝不伪装成空集**（启动时先改名保留 `*.corrupt`）；写入时非法条目丢弃并告警，**重复 id 首胜丢弃**（文件与返回集永不一致漂移）；**隧道参数（host/user/sshPort/remotePort）变更且隧道存活时自动重启隧道**（投影与隧道永不一致漂移）。
+`<userData>/ssh-instances.json`，核心字段：`{id,label,kind,transport,host,user,sshPort,remotePort,serviceName,remoteDshHome,insecureHttp,spkiPin}`；kind=`dsh|gateway` 是目标，transport=`ssh|http` 是机制，旧 kind 载入时迁移。凭据不进注册表，只投影 `sshPasswordSet/tokenSet/passwordSet/secretStorage`。SSH mirror schema v2 与 gateway mirror schema v3 分别持久化 endpoint/target binding，读取/注入时复验当前 registry；secret→registry 崩溃窗口 fail closed。元数据白名单、原子写、损坏保留、重复 id 首胜都在核心强制。`serviceName`/`remoteDshHome` 等 live+exec identity 编辑会提升 transport generation 与 `execEpoch`，先撤销旧传输/重连/探针及 exec child（SIGTERM→SIGKILL），再按旧状态决定是否以新参数重启；多步 exec 下一次 spawn 和迟到日志/投影/结果均复验 generation。
 
 ### ~/.ssh/config 发现（ssh-config.ts）
 
@@ -106,8 +108,8 @@ pnpm run dist:desktop
 
 - **打包态**：`userData = ~/Library/Application Support/dsh-chamber`（macOS；Windows `%APPDATA%\dsh-chamber`、Linux `~/.config/dsh-chamber`）。
 - **dev 态**：Electron 按桌面包 package.json 的身份解析 userData，本仓库实际为 `~/Library/Application Support/@dsh-chamber/desktop`（scoped name → 嵌套目录；启动器 `electron .` 未传 `--user-data-dir`、主进程未改 path）——**dev 与打包态目录不同、状态互不共享**（注册表/密码/目录各自独立）。
-- userData 下内容：`ssh-instances.json`、`ssh-passwords.json`（05 §8 明文镜像）、`state/`（catalog.json、instance-id、server-id、managed-dsh/、host-logs/、dsh-home/）+ Electron 自身缓存（Cache/GPUCache/…）。
-- **不在 userData 下**：askpass 助手在 `os.tmpdir()/dsh-chamber-ssh/`（一次性，传输停止即删）；独立控制面（`packages/cli` / `control-plane standalone`）默认 `~/.dsh-chamber` 或 `$DSH_CHAMBER_STATE`，与桌面互不相干。
+- userData 下内容：`ssh-instances.json`、`ssh-passwords.json`（schema v2 binding）、`gateway-secrets.json`（schema v3 binding；safeStorage 优先、诚实 0600 plaintext fallback）与 `state/` + Electron 自身缓存。
+- **不在 userData 下**：askpass 助手位于 `os.tmpdir()/dsh-chamber-ssh-<pid>-<random>/`；独立控制面默认 `~/.dsh-chamber` 或 `$DSH_CHAMBER_STATE`。
 
 ### IPC 清单（preload 白名单）
 
@@ -115,12 +117,15 @@ pnpm run dist:desktop
 |---|---|---|
 | `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform}`（不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
-| `desktop_ssh_instances_set` | invoke | 持久化新实例集（原子写） |
-| `desktop_ssh_set_password` | invoke | SSH 密码（05 §8 例外）：内存 + `ssh-passwords.json` 明文镜像（0600 原子写），`{id, password}`，'' / null 清除；未知 id 或平台不支持 → `{error}` |
+| `desktop_ssh_instances_set` | invoke | legacy exact-no-op-only：只接受与当前规范化 roster 同长度、同顺序、逐字段完全相同的列表；delete/add/edit/reorder 全部拒绝 |
+| `desktop_ssh_save_connection` | invoke | add/edit/非空凭据写唯一入口；元数据 + 三类 write-only 凭据的主进程 crash-safe binding/补偿事务，旧值不返回 renderer |
+| `desktop_ssh_delete_connection` | invoke | 精确 id-addressed 删除；先断开/撤销 exact-scope session/清凭据，再删 metadata；不存在 id 为幂等 no-op |
+| `desktop_ssh_set_password` | invoke | legacy clear-only：仅接受 '' / null 清除 SSH 密码；非空写必须走 save_connection，未知 id → `{error}` |
+| `desktop_gateway_set_token` / `desktop_gateway_set_password` | invoke | legacy clear-only：仅清除单个 gateway 凭据维度；非空写必须走 save_connection |
 | `desktop_ssh_config_list` | invoke | `~/.ssh/config` 非秘密投影 `{hosts:[{alias,hostName,user,port}]}` 或 `{error}` |
 | `desktop_ssh_connect` | invoke | 启动/重启隧道 |
 | `desktop_ssh_disconnect` | invoke | 停止隧道（SIGTERM → 宽限后 SIGKILL） |
-| `desktop_ssh_status` | invoke | 非秘密状态投影 `{kind, phase, localPort, sshPort, remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}` |
+| `desktop_ssh_status` | invoke | 非秘密状态投影 `{kind, transport, phase, localPort, sshPort, remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}` |
 | `desktop_ssh_logs` / `desktop_ssh_logs_clear` | invoke | 环形日志读取/清空 |
 | `desktop_ssh_start_service` / `stop_service` / `is_active` / `restart_service` | invoke | 远端 systemctl 起停/查询/重启 |
 | `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析） |
@@ -151,8 +156,8 @@ preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, platf
 ## 安全
 
 - **传输 URL 只在主进程**：`readyUrl()` 仅限内部使用，永不经过 `status()` 或 IPC 面；renderer 只见 phase/localPort 投影，自行用 localPort 构造访问 URL。
-- **systemctl 无 shell 拼接**：参数数组 spawn；serviceName 白名单先校验后执行。
-- **凭据不出主进程**：默认 ssh key/agent 认证；可选密码存于**主进程内存 + 05 §8 明确允许的 owner-only 明文镜像**（见上），经临时 owner-only 0700 askpass 助手注入——永不上命令行；日志只含主机名/端口，不含任何凭据材料；ssh stderr 按行脱敏（跨 chunk 不绕过）。
+- **systemctl 无 shell 拼接**：固定参数数组 `systemctl <action> -- <serviceName>`；serviceName 以 `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` 校验，首字符必须为字母或数字。
+- **凭据不出主进程**：默认 ssh key/agent；可选 SSH 密码与 gateway token/password 只经 write-only IPC 进入主进程及上述 owner-only 镜像；askpass 永不上命令行，Gateway 仅向 exact connection-target scope 对应的注册 transport 注入白名单头；generation/proof/refresh epoch 阻止撤销后的迟到认证结果。HTTPS pin 匹配前登录/探针/HTTP/WS 反代发送零应用层字节；日志只含非秘密存在性/主机端口。
 - **插件动作主进程确认（设计 09 §4 v1 缓解）**：materialize 外传、本地插件安装/卸载、远端 `plugin_apply` registry 增删均须用户确认对话框（取消 `{ok,cancelled}`；无窗口 fail-closed；单飞防堆叠）；`local_plugin_list` 依赖值路径脱敏。
 
 ## 桌面环境验收清单

@@ -51,6 +51,14 @@ export interface OverrideRecord {
   resolvedVersion: string | null
   pending: string | null
   swapAttempted: boolean
+  /** Durable distinction for a version selected while builtin (no current
+   * pointer) remains active. Hosts that split select from apply (the gateway)
+   * may set this true only when selection started from builtin, and clear it
+   * before publishing pending. A selection staged from an active user tree
+   * must keep this false so later pointer loss still fails closed. Older
+   * five-field records remain valid but intentionally cannot weaken that
+   * pointer-loss check. */
+  selectedOnly?: boolean
   invalidatedAt?: string | null
   invalidatedReason?: string | null
   /** Durable user-visible F4 history. Unlike invalidatedAt, this survives a
@@ -503,6 +511,10 @@ function parseOverrideRecord(parsed: unknown): OverrideRecord | null {
     pending,
     swapAttempted: record.swapAttempted,
   }
+  if (record.selectedOnly !== undefined) {
+    if (typeof record.selectedOnly !== 'boolean') return null
+    out.selectedOnly = record.selectedOnly
+  }
   for (const field of [
     'invalidatedAt',
     'invalidatedReason',
@@ -579,6 +591,9 @@ export function writeOverride(baseDir: string, record: OverrideRecord): void {
     if (version !== null) assertSafeVersion(version)
   }
   if (typeof record.swapAttempted !== 'boolean') throw new Error('override.swapAttempted 必须是 boolean')
+  if (record.selectedOnly !== undefined && typeof record.selectedOnly !== 'boolean') {
+    throw new Error('override.selectedOnly 必须是 boolean')
+  }
   assertOptionalText(record.invalidatedAt, 'invalidatedAt')
   assertOptionalText(record.invalidatedReason, 'invalidatedReason')
   assertOptionalText(record.lastInvalidatedAt, 'lastInvalidatedAt')
@@ -603,6 +618,7 @@ export function writeOverride(baseDir: string, record: OverrideRecord): void {
     pending: record.pending,
     swapAttempted: record.swapAttempted,
   }
+  if (record.selectedOnly !== undefined) payload.selectedOnly = record.selectedOnly
   for (const field of [
     'invalidatedAt',
     'invalidatedReason',
@@ -1593,8 +1609,14 @@ function isRuntimePublishBackupName(name: string): boolean {
 }
 
 /** On-demand disk accounting. It performs a full tree walk and is not for a
- * hot UI loop; callers should run it only after install/cleanup or on demand. */
-export function runtimeDiskSummary(baseDir: string): RuntimeDiskSummary {
+ * hot UI loop; callers should run it only after install/cleanup or on demand.
+ * `dshHome` defaults to the desktop owner layout; the separately invoked
+ * gateway passes its sibling `<stateDir>/dsh-home` explicitly so interrupted
+ * restore backups are charged to the same logical runtime quota. */
+export function runtimeDiskSummary(
+  baseDir: string,
+  dshHome: string = join(baseDir, 'state', 'dsh-home'),
+): RuntimeDiskSummary {
   const runtime = runtimeDirPath(baseDir)
   const trees = listVersionTrees(baseDir)
   const runtimeEntries = (() => {
@@ -1610,13 +1632,14 @@ export function runtimeDiskSummary(baseDir: string): RuntimeDiskSummary {
   const publishBackups = runtimeEntries
     .filter((entry) => isRuntimePublishBackupName(entry.name))
     .map((entry) => join(runtime, entry.name))
-  const stateDir = join(baseDir, 'state')
+  const dshHomeParent = dirname(dshHome)
+  const dshHomeName = basename(dshHome)
   const restoreBackups = (() => {
     try {
-      return readdirSync(stateDir, { withFileTypes: true })
+      return readdirSync(dshHomeParent, { withFileTypes: true })
         .filter((entry) => entry.isDirectory()
-          && (entry.name === 'dsh-home.old' || entry.name.startsWith('dsh-home.old-')))
-        .map((entry) => join(stateDir, entry.name))
+          && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`)))
+        .map((entry) => join(dshHomeParent, entry.name))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw error

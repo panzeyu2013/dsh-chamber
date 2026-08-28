@@ -31,7 +31,9 @@
 
 ### 3 · 添加远程主机
 
-「设置 → 连接」可添加 SSH 主机，或填写 HTTPS Gateway URL + 共享 token。SSH 形态由应用自动建立隧道并管理远端 systemd；Gateway 形态直接连接 Design 17 的认证服务端。两种服务器部署见「服务器端部署」。
+「设置 → 连接」以目标 `dsh|gateway` × 传输 `ssh|http` 四组合接入。SSH 由应用建立
+隧道并可管理远端 systemd；HTTP(S) 由主进程直连（默认 HTTPS，显式 HTTP 会常驻风险
+提示）；Gateway token/密码可独立配置。服务器部署见「服务器端部署」。
 
 ### 4 · 从源码运行？
 
@@ -52,13 +54,20 @@
 - **睡眠/后台常驻** — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（mac/linux）；OS 唤醒即时重连；保持唤醒开关
 - **Chamber 设置页** — 设置壳固定入口：连接 / 通用；chamber 全局设置与各实例配置严格分离
 - **后端版本容忍（rc.2 兼容）** — 实例后端 dsh 官方前端版本与 chamber 壳不同步时照常可用：壳未覆盖的额外插件行以「特性缺席」降级（绝不整 boot 崩溃），rc.2 后端已无头验证
-- **安全与隐私** — 普通桌面控制面仅监听 loopback（127.0.0.1）；SSH 密码与 Gateway token 以 0600 权限、只写方式保存，永不进入注册表或日志；公网能力只存在于显式启动且强制认证的独立 gateway（默认；`--no-auth` 为可信网络的有界偏差）
+- **安全与隐私** — 普通桌面控制面仅监听 loopback（127.0.0.1）；SSH 密码经
+  owner-only askpass lease 注入 ssh；Gateway token 只进有界 Authorization 头，原始
+  登录密码只进绑定 gateway 的 `/auth/login` JSON body，反代仅注入派生 Cookie。凭据仅
+  表单瞬时输入、永不回填/返回 renderer，并以绑定目标的 owner-only
+  镜像保存，永不进入注册表或日志；公网能力只存在于显式启动且强制认证的独立 gateway
+  （默认；`--no-auth` 为可信网络的有界偏差）
 
 ## 服务器端部署
 
 ### 认证 Gateway（Design 17）
 
-Gateway 自己托管一个 loopback dsh，并通过认证边界统一代理 HTTP/WS/SSE。生产环境应让 gateway 仍监听 loopback，由 Nginx/Caddy 终止 TLS；Desktop 只接受 HTTPS Gateway URL。
+Gateway 自己托管一个 loopback dsh，并通过认证边界统一代理 HTTP/WS/SSE。生产环境应让
+gateway 仍监听 loopback，由 Nginx/Caddy 终止 TLS；Desktop 默认 HTTPS，显式 HTTP
+仅作为可信网络的有界选择并持续显示明文风险。
 
 **安装（一键脚本）**——从 GitHub release 拉取安装包（npm 未发布也能装），
 交互式确认配置（默认：gateway 监听 **30801**、托管 dsh 监听 **30800**，均可改）：
@@ -74,7 +83,8 @@ bash install-gateway.sh          # 交互向导（回车接受默认值，可逐
 管理命令 `install-gateway.sh status|logs|update|uninstall`。
 公网接入：反代将 HTTPS 转到 `127.0.0.1:30801` 并配置 `--origin` 与
 `--trusted-proxy`（详见 [docs/deploy-gateway.md](docs/deploy-gateway.md)）。
-Desktop 接入：「设置 → 连接」选择 HTTPS Gateway，填反代地址与共享 token。
+Desktop 接入：「设置 → 连接」选择 Gateway + HTTP transport，填反代地址，并按需配置
+共享 token 和/或登录密码（默认 HTTPS；明文 HTTP 必须显式选择）。
 
 ### 远程 dsh 实例（systemd）
 
@@ -201,20 +211,45 @@ Desktop 接入：「设置 → 连接」选择 HTTPS Gateway，填反代地址�
    chamber 隧道）时才需改成 `--host 0.0.0.0`——且必须配套真实鉴权（v1
    实例是匿名的），或改用反向代理前置。
 
-4. **从 chamber 桌面接入** — 在连接设置页添加远程主机（label / host / user / SSH 端口 / dsh 端口（默认 30800）/ 服务名 `dsh`）。其余由桌面接管：`ssh -N -L` 隧道 + `systemctl start|stop|is-active dsh`（服务名白名单 `^[a-zA-Z0-9_.-]+$`）。单元形态遵循设计 02 §3.9，实例契约见 03 §2.2。
+4. **从 chamber 桌面接入** — 在连接设置页选择目标 `dsh|gateway` 与传输
+   `ssh|http`（四组合均支持），填写目标端点；SSH 可配 user/SSH 端口/systemd
+   服务与可选密码，Gateway 可独立配置 token 和/或 Unicode 登录密码，HTTPS 可选
+   SPKI pin。SSH 形态由桌面接管 `ssh -N -L` 与按需 systemd；HTTP 形态由主进程
+   直连，renderer 始终只见同源反代。单元形态遵循设计 02 §3.9，完整契约见
+   03 §2.2 / 17 §9。
 
 ## 安全
 
 - **v1 无认证边界** — 控制面仅监听 loopback（127.0.0.1）；全部 `/api/*` 路由与每实例反代匿名可达；HTTP/WS 来源必须与当前 Host 精确同源或命中显式开发 allowlist，其他回环端口与 `Origin: null` 均拒绝
-- **隧道 URL 与 SSH 材料不进 renderer** — renderer 只见到非秘密投影（phase/localPort），永远看不到隧道 URL 或 SSH 凭据；日志同样不含隧道/SSH 材料。唯一许可例外（[设计 05 §8](docs/design/05-connection-manager.md)）：可选的主机 SSH 密码——表单瞬时输入、主进程内存持有、镜像到 `<userData>/ssh-passwords.json`（0600、原子写）、经临时 owner-only 0700 askpass 助手注入系统 ssh——永不上命令行、永不进注册表/日志、永不回传 renderer；Windows v1 门禁关闭
-- **systemctl 用参数数组 spawn**（无 shell）+ serviceName 白名单（`^[a-zA-Z0-9_.-]+$`）
+- **传输 URL 不进 renderer；凭据仅瞬时写入** — renderer 的返回值、事件与投影
+  均非秘密。受限 write-only 例外（[设计 05 §8](docs/design/05-connection-manager.md) / [设计 17 §12](docs/design/17-server-side-gateway.md)）：SSH 密码镜像到 0600 `ssh-passwords.json`
+  schema v2 endpoint binding，并由每个真实 ssh child 独占的 0700 askpass lease 注入；
+  Gateway token/密码镜像到 `gateway-secrets.json` schema v3 target binding
+  （safeStorage 优先、诚实 0600 回退），只注入对应 gateway transport。两者均瞬时
+  表单输入、主进程持有、注入前复验 registry，永不由主进程返回/回填或持久化到
+  renderer，也永不上命令行/日志/注册表；
+  非空无 binding 旧文件 fail closed 并要求重录。Gateway cookie 会话按网络 origin、
+  `Host` authority 与稳定的「连接 id + 目标」scope 共同隔离；generation/刷新 epoch
+  会拦住撤销后的迟到登录、fallback 与 refresh 结果。配置 HTTPS SPKI pin 时，登录、
+  探针及 HTTP/WS 反代必须先完成证书匹配，匹配前不发送任何应用层请求字节。
+  add/edit/非空凭据写走主进程 `desktop_ssh_save_connection`；删除走精确
+  `desktop_ssh_delete_connection(id)`（不存在 id 为幂等 no-op）；legacy
+  `instances_set` 只允许当前规范化 roster 的 exact unchanged no-op，三个旧 setter
+  只允许 clear。
+  Windows v1 关闭 SSH 密码门。
+- **systemctl 用参数数组 spawn**（无 shell），固定 argv 为
+  `systemctl <action> -- <serviceName>`；serviceName 白名单为
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`（首字符必须为字母或数字）
 - **插件动作主进程确认（[设计 09 §4](docs/design/09-client-plugin-runtime-loading.md)）**：materialize 外传、本地/远端插件安装与卸载均须用户确认对话框；本地插件清单依赖值路径脱敏
 - **Git 不经过 Desktop/SSH 命令转发** — Git host 插件运行在每个 dsh 实例进程内，与 workspace 权威使用同一 OS 用户和文件系统；只开放固定 worktree 领域操作、`shell:false` 参数数组和有界输出/超时，不提供 fetch/pull/push 等网络 Git 动词。创建时的 checkout 仍会遵从该 OS 用户已配置的仓库 filter（例如 Git LFS，可能访问网络），确认界面会显式提示这一受信边界
 
 ## 常见问题
 
 - **`pnpm run smoke` 为什么打印 SKIP？** — 冒烟测试需要 dsh 安装；找不到时打印 SKIP 并以 0 退出。这属正常，不是失败。
-- **远程实例需要什么？** — 一个 API 面 profile 的 dsh 实例 + SSH 访问。远程服务器无需安装 web 前端：UI 来自本地复用的前端，经 `/api/i/ssh-<id>/*` 隧道访问。
+- **远程实例需要什么？** — dsh 目标需要可达的 API profile；gateway 目标需要已部署
+  `@dsh-chamber/gateway`。两者都可经 SSH 隧道或显式 HTTP(S) 直连；远端无需单独安装
+  web 前端，UI 来自本地复用前端并经 `/api/i/dsh-<id>/*` 或
+  `/api/i/gateway-<id>/*` 同源反代。
 - **agent preset / profile 在各实例间怎么工作？** — 按实例权威。每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只存在于该实例一侧（本地 = 本机，远程 = 远端服务器）。所有读写都经 `/api/i/<id>/*` 反代落到该实例自己的 API——新会话界面的 preset 选择器列出的是该 session 所属实例的 roster，选择也写回该实例。不存在跨来源的 profile 匹配/融合；编辑远程预设 = 切到该来源的 shell，在其 设置 → Agent presets 页操作。
 - **前端从哪来？** — dsh 官方前端源码复用自建；每个实例保持原生 UI。
 

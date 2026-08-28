@@ -1,13 +1,13 @@
 /**
  * The `http` transport provider (design 17 §2.2/§9.2): a DIRECT ENDPOINT
  * provider — no local tunnel child process. v2 semantics: it serves the
- * `http` TRANSPORT for ANY target kind (`dsh` | `gateway`, returned as-is —
+ * `http` TRANSPORT for the shipped target kinds (`dsh` | `gateway` —
  * design 17 §2.2: one provider per transport, serving both target kinds; the
  * kind decides target semantics, auth-header injection etc., §2.1). The
  * "endpoint" is the target's http(s) URL (scheme from `insecureHttp`,
  * default https), reached as-is. A gateway target may be authenticated with
  * a shared bearer token and/or a login password, held in main-process memory
- * (mirrored to `<userData>/gateway-secrets.json`, schemaVersion 2, 0600, for
+ * (mirrored to `<userData>/gateway-secrets.json`, bound schemaVersion 3, 0600, for
  * restart auto-connect — safeStorage-encrypted blobs with a documented 0600
  * plaintext fallback, design 17 §12); a dsh target NEVER injects auth
  * headers (design 17 §2.1/§9.3). An over-ssh spec (transport 'ssh') is
@@ -25,8 +25,9 @@
  * Authorization header, the password becomes a login session Cookie, both
  * injected by the control-plane proxy, §7).
  *
- * Security discipline (design 17 §11 S5/S12/S22): credentials never enter the
- * registry, logs, or any renderer projection; the mirror file is 0600 +
+ * Security discipline (design 17 §11 S5/S12/S22): credentials are transient
+ * write-only renderer inputs and never return in a projection or enter the
+ * registry/logs; the mirror file is 0600 +
  * atomic write; a corrupt file fails loudly (preserved as `.corrupt`), never
  * silently treated as empty. S22 availability flip (P1-1): a value written as
  * an ENCRYPTED blob while crypto was available is CORRUPT when a later
@@ -47,13 +48,13 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
-  readFileSync,
   renameSync,
   rmSync,
   writeSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
+import { gatewayCredentialBinding, isCredentialBinding } from './credential-binding.ts'
 import type {
   TransportInstanceSpec,
   TransportKind,
@@ -61,7 +62,9 @@ import type {
   TransportProvider,
   TransportVerifyResult,
 } from './transport-provider.ts'
-import type { GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
+import { gatewaySessionScopeForConnection } from './gateway-session.ts'
+import type { GatewayRegistrationAuthProof, GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
+import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
 
 /** Gateway hostname whitelist: a bare hostname/IPv4 (NO colon — the port is
  * carried separately in `remotePort`, never embedded in the host) or a fully
@@ -91,9 +94,9 @@ const GATEWAY_CREDENTIAL_HEADER_PATTERN = /^[\x20-\x7e]+$/
 // an internal CA. The pin check therefore runs on the TLS socket's
 // 'secureConnect' event with `rejectUnauthorized: false` (the pin alone
 // decides trust) and `agent: false` (every pinned request opens a fresh
-// connection, so 'secureConnect' always fires): a mismatch destroys the
-// request with SPKI_PIN_MISMATCH_CODE, which the caller classifies (probe →
-// terminal, proxy → 502 upstream_failed).
+// connection, so 'secureConnect' always fires). Crucially, callers do not
+// call `end`/`write` until this gate invokes `dispatch`: a wrong-key peer sees
+// zero HTTP headers, credential bytes, or login body.
 // ---------------------------------------------------------------------------
 
 /** A valid SPKI pin: exactly 64 hex chars (hex sha256 of the SPKI DER). */
@@ -112,16 +115,17 @@ export function spkiPinOfPeerCertificate(rawDer: Buffer): string {
     .digest('hex')
 }
 
-/** Attach the SPKI pin gate to an outbound https request (S23): on TLS
+/** Attach the pre-write SPKI pin gate to an outbound https request (S23): on TLS
  * handshake completion the peer certificate's SPKI digest is compared
  * case-insensitively with the pinned value; a mismatch destroys the request
- * with SPKI_PIN_MISMATCH_CODE. Callers must ALSO pass `rejectUnauthorized:
+ * with SPKI_PIN_MISMATCH_CODE, while a match invokes `dispatch` exactly once.
+ * The caller MUST NOT write/end the request anywhere else: this is what keeps
+ * HTTP headers and bodies behind the authenticated handshake. Callers must
+ * ALSO pass `rejectUnauthorized:
  * false` (the pin replaces CA trust for this connection — the internal-CA use
- * case) and `agent: false` (so 'secureConnect' always fires). MUST stay
- * byte-for-byte consistent with proxy-forward.ts's copy of this helper — the
- * packaged desktop cannot import the control plane (workspace TS sources are
- * excluded from the asar), so the two files keep identical implementations. */
-export function attachSpkiPinVerifier(req: ClientRequest, pin: string): void {
+ * case) and `agent: false` (so 'secureConnect' always fires). */
+export function attachSpkiPinVerifier(req: ClientRequest, pin: string, dispatch: () => void): void {
+  let dispatched = false
   req.on('socket', (socket: NodeJS.Socket) => {
     ;(socket as TLSSocket).once('secureConnect', () => {
       let digest: string
@@ -137,7 +141,11 @@ export function attachSpkiPinVerifier(req: ClientRequest, pin: string): void {
         const error: NodeJS.ErrnoException = new Error('SPKI pin mismatch')
         error.code = SPKI_PIN_MISMATCH_CODE
         req.destroy(error)
+        return
       }
+      if (req.destroyed || dispatched) return
+      dispatched = true
+      dispatch()
     })
   })
 }
@@ -157,13 +165,11 @@ export function gatewayTokenValidationError(token: string | null): string | null
   return null
 }
 
-/** Validate a login password — mirrors the gateway config gate (design 17
- * §5.1: 密码长度 12–1024，visible ASCII). */
+/** Validate a login password — mirrors the gateway server/config gate
+ * exactly: 12–1024 JavaScript characters. Unlike bearer tokens, passwords
+ * are JSON request-body data and may contain Unicode. */
 export function gatewayPasswordValidationError(password: string | null): string | null {
   if (password === null || password === '') return null
-  if (!GATEWAY_CREDENTIAL_HEADER_PATTERN.test(password)) {
-    return 'gateway password must contain visible ASCII characters only'
-  }
   if (password.length < MIN_GATEWAY_PASSWORD_CHARS) {
     return `gateway password must contain at least ${MIN_GATEWAY_PASSWORD_CHARS} characters`
   }
@@ -181,7 +187,7 @@ export const DEFAULT_GATEWAY_PORT = 443
  * `insecureHttp` origin, 明文 http 直连). */
 export const DEFAULT_GATEWAY_HTTP_PORT = 80
 
-/** Timeout of the one-shot gateway dsh identity probe (verifyUp). */
+/** Timeout of the one-shot gateway-owned runtime identity probe (verifyUp). */
 export const GATEWAY_VERIFY_TIMEOUT_MS = 5_000
 
 /** Response-body cap of the gateway identity probe. */
@@ -204,21 +210,23 @@ export function gatewayHttpFailureIsTerminal(statusCode: number): boolean {
 // Per-instance gateway credentials (design 17 §2.3/§7/§12): a gateway target
 // may carry a shared bearer TOKEN and/or a login PASSWORD (independent, both
 // nullable — §2.3). Held in main-process memory, mirrored to
-// `<userData>/gateway-secrets.json` (schemaVersion 2, 0600, atomic write) so
-// a token/password gateway auto-connects after restart. Values are encrypted
-// via the configured SecretCryptoAdapter when available (Electron safeStorage
-// in the shell; base64 blobs), plaintext when not (the documented fallback).
+// `<userData>/gateway-secrets.json` (bound schemaVersion 3, 0600, atomic write) so
+// a token/password gateway auto-connects after restart. The file carries one
+// explicit `storage: safeStorage | plaintext` discriminator: values are
+// encrypted via the configured SecretCryptoAdapter when available (Electron
+// safeStorage in the shell; base64 blobs), plaintext when not (the documented
+// fallback). The discriminator is security-critical — ciphertext is never
+// guessed from its characters and can therefore never be sent as plaintext.
 // Never in the registry, never logged, never exposed to the renderer. Entries
 // are dropped on instance removal / explicit clear (§12 删除实例/显式清除即删).
 // ---------------------------------------------------------------------------
 
 /** Encryption boundary for the credential mirror (design 17 §13.4.1):
  * `encrypt`/`decrypt` translate between a plaintext credential and its
- * durable blob. `decrypt` must THROW when given a non-blob: the store reads
- * a throwing decrypt as "this value was written while encryption was
- * unavailable" and falls back to the raw value — the documented plaintext
- * fallback, never a silent failure or a false corrupt. The default adapter
- * reports unavailable and never encrypts. */
+ * durable blob. `decrypt` must THROW when given a non-blob: a file explicitly
+ * tagged `safeStorage` is then unreadable/corrupt and is never retried as raw
+ * plaintext. A file explicitly tagged `plaintext` bypasses decryption. The
+ * default adapter reports unavailable and never encrypts. */
 export interface SecretCryptoAdapter {
   isAvailable(): boolean
   encrypt(plain: string): string
@@ -235,14 +243,17 @@ const plaintextSecretCrypto: SecretCryptoAdapter = {
 
 const tokens = new Map<string, string>()
 const passwords = new Map<string, string>()
+const tokenBindings = new Map<string, string>()
+const passwordBindings = new Map<string, string>()
 
 /** The credentials mirror path; null = memory-only (tests). */
 let secretFile: string | null = null
 /** The active crypto adapter (defaults to plaintext). */
 let secretCrypto: SecretCryptoAdapter = plaintextSecretCrypto
+let secretSpecResolver: ((id: string) => TransportInstanceSpec | null) | null = null
 
-/** The legacy (schemaVersion 1) mirror file name, migrated from on first
- * load (design 17 §12): `<userData>/gateway-tokens.json` → the new file. */
+/** The legacy (schemaVersion 1) mirror file name. Non-empty values cannot be
+ * auto-bound safely and therefore remain preserved + disabled. */
 const LEGACY_TOKEN_FILE_NAME = 'gateway-tokens.json'
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -259,44 +270,40 @@ function preserveInvalidSecretFile(file: string): string {
   }
 }
 
-/** A loaded credential must pass its table's gate exactly like a fresh one
- * (length + visible ASCII). '' is INVALID here — the null-able validation
- * entry points treat '' as "no credential", but an empty stored value is
- * corrupt. */
-function isValidCredentialValue(value: string, minChars: number, maxChars: number): boolean {
-  return value.length >= minChars && value.length <= maxChars && GATEWAY_CREDENTIAL_HEADER_PATTERN.test(value)
+function preserveUnboundSecretFile(file: string): string {
+  const stem = `${file}.unbound-${Date.now()}-${process.pid}`
+  let unboundPath = stem
+  for (let index = 1; existsSync(unboundPath); index += 1) unboundPath = `${stem}-${index}`
+  try {
+    renameSync(file, unboundPath)
+    return `legacy gateway secrets have no target bindings and were preserved at ${unboundPath}; re-enter credentials to use them`
+  } catch (error) {
+    return `legacy gateway secrets at ${file} have no target bindings and are disabled; preserve failed: ${String(error)}`
+  }
 }
 
-/**
- * Does a stored value have the SHAPE of an encrypted blob rather than a
- * plaintext credential (S22, P1-1)? The Electron safeStorage mirror stores
- * `base64(encryptString(plain))` — a long, pure-base64 string carrying at
- * least one base64-only punctuation char (`+` `/` `=`): ciphertext is uniform
- * random bytes, so a real blob almost always contains `+`/`/`, and any
- * ciphertext length not divisible by 3 adds `=` padding. Typical plaintext
- * credentials (hex, alphanumeric, `-` `_` `.` — the shapes the credential
- * gate is designed for) never trip this. Deliberately CONSERVATIVE: a false
- * positive turns the whole file corrupt (loud, preserved, the user re-enters
- * the credential), while a false negative would silently hand a blob to the
- * login as the token/password — the S22 violation this exists to prevent.
- *
- * Length floor: the shortest REAL ciphertext (safeStorage of the minimum
- * 12-char password — AES-GCM iv+ciphertext+tag overhead) is ~56 base64
- * chars, so anything below the floor cannot be a genuine blob and short
- * plaintext credentials are never at risk.
- */
-function looksLikeEncryptedBlob(value: string): boolean {
-  if (value.length < 32) return false
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false
-  return /[+/=]/.test(value)
+type GatewaySecretFileStorage = 'safeStorage' | 'plaintext'
+
+/** Honest durable mode of the currently loaded mirror. This intentionally
+ * differs from `secretCrypto.isAvailable()`: a plaintext file remains a
+ * plaintext fact until its atomic safeStorage rewrite succeeds. */
+let durableSecretStorage: GatewaySecretFileStorage = 'plaintext'
+
+/** A loaded credential must pass its table's gate exactly like a fresh one:
+ * tokens are length-bounded visible ASCII, while passwords are length-bounded
+ * JavaScript strings and may contain Unicode. '' is invalid in either durable
+ * table — nullable entry points reserve it for "no credential". */
+function isValidCredentialValue(value: string, minChars: number, maxChars: number, visibleAscii: boolean): boolean {
+  return value.length >= minChars && value.length <= maxChars
+    && (!visibleAscii || GATEWAY_CREDENTIAL_HEADER_PATTERN.test(value))
 }
 
 /** Load and validate ONE credential table into plaintext, or null when any
  * entry is structurally invalid (reserved id / bad id / non-string value), is
  * an UNREADABLE ENCRYPTED BLOB (`resolve` → null), or fails the credential
  * gate. `resolve` maps a stored value to the plaintext credential BEFORE the
- * value gate: decrypt-or-raw for v2 (S22 flip detection), identity for v1
- * (schemaVersion 1 values are always plaintext — never encrypted). A null
+ * value gate: discriminator-directed decrypt-or-raw for v2/v3, identity for
+ * v1 (schemaVersion 1 values are always plaintext — never encrypted). A null
  * result drives the caller's preserveInvalidSecretFile — the WHOLE file is
  * corrupt (loud, never silently empty). */
 function loadCredentialTable(
@@ -304,71 +311,66 @@ function loadCredentialTable(
   minChars: number,
   maxChars: number,
   resolve: (blob: string) => string | null,
+  visibleAscii = true,
 ): Map<string, string> | null {
   const out = new Map<string, string>()
   for (const [id, value] of Object.entries(table)) {
     if (id === 'local' || !INSTANCE_ID_PATTERN.test(id) || typeof value !== 'string') return null
     const plaintext = resolve(value)
-    if (plaintext === null || !isValidCredentialValue(plaintext, minChars, maxChars)) return null
+    if (plaintext === null || !isValidCredentialValue(plaintext, minChars, maxChars, visibleAscii)) return null
     out.set(id, plaintext)
   }
   return out
 }
 
-/** Resolve a stored value to the plaintext credential, or null when the value
- * is an UNREADABLE ENCRYPTED BLOB — the corrupt-file signal (S22, P1-1). The
- * documented plaintext fallback (design 17 §12) stays EXACTLY as designed for
- * values written while encryption was unavailable: with a working crypto a
- * NON-blob-shaped value that fails to decrypt is that fallback, and with
- * crypto unavailable a non-blob-shaped value IS the fallback text. A
- * BLOB-SHAPED value is never returned raw: when crypto is available it must
- * decrypt (a throwing decrypt on a blob is a corrupted/unreadable blob, not
- * plaintext), and when crypto is unavailable it is the residue of an
- * encrypted write that can no longer be read (the safeStorage availability
- * flip) — using either as a plaintext credential would silently send
- * ciphertext as the token/password. */
-function resolveStoredValue(blob: string): string | null {
-  if (secretCrypto.isAvailable()) {
-    try {
-      return secretCrypto.decrypt(blob)
-    } catch {
-      // Decrypt failed: a plaintext value written while encryption was
-      // unavailable is the documented fallback; a blob-shaped value that
-      // cannot be decrypted is CORRUPT (解密尝试失败, S22).
-      return looksLikeEncryptedBlob(blob) ? null : blob
-    }
+/** Resolve one v2/v3 stored value according to the FILE'S explicit storage
+ * discriminator (S22). A safeStorage file is unreadable when encryption is
+ * unavailable or decryption fails; it is never interpreted as plaintext.
+ * Conversely, a plaintext-tagged file deliberately uses the documented 0600
+ * fallback and never attempts heuristic decryption. */
+function resolveStoredValue(blob: string, storage: GatewaySecretFileStorage): string | null {
+  if (storage === 'plaintext') return blob
+  if (!secretCrypto.isAvailable()) return null
+  try {
+    return secretCrypto.decrypt(blob)
+  } catch {
+    return null
   }
-  // Crypto unavailable: plaintext values (written in fallback mode) load
-  // as-is; a blob-shaped value (written while crypto WAS available — the
-  // availability flip) is CORRUPT, never a plaintext credential (S22).
-  return looksLikeEncryptedBlob(blob) ? null : blob
 }
 
 /**
  * Point the gateway credentials store at its mirror file (main.ts, once at
  * startup) and load existing entries. Missing file = empty set (first run),
- * except a schemaVersion 1 `gateway-tokens.json` beside the target file is
- * MIGRATED (design 17 §12): tokens read → v2 written (encrypted via `crypto`)
- * → legacy file deleted; a migration failure is LOUD but never blocks startup
- * (the legacy file is kept — and once the v2 write succeeded, every later
- * startup with a valid v2 file present retries the leftover unlink, see
- * `retryLegacyTokenFileRemoval`). A corrupt file fails LOUDLY (preserved as
+ * except an EMPTY schemaVersion 1 `gateway-tokens.json` can be converged.
+ * Non-empty v1/v2 files have no credential-domain binding, so they are
+ * preserved and disabled with a loud re-entry notice. A corrupt file fails
+ * LOUDLY (preserved as
  * `<file>.corrupt`), never silently empty — including the S22 availability
- * flip: encrypted blobs written while crypto was available are corrupt when
- * loaded without working crypto (or when they fail to decrypt), and are
- * NEVER adopted as plaintext credentials (P1-1). `crypto` defaults to the
+ * flip: `storage: "safeStorage"` blobs written while crypto was available are
+ * corrupt when loaded without working crypto (or when they fail to decrypt),
+ * and are NEVER adopted as plaintext credentials. `crypto` defaults to the
  * plaintext adapter (no encryption — old-test semantics).
  * @returns a loud notice string (corrupt-preserved / migration failure) or null.
  */
-export function configureGatewaySecretStore(file: string | null, crypto?: SecretCryptoAdapter): string | null {
+export function configureGatewaySecretStore(
+  file: string | null,
+  crypto?: SecretCryptoAdapter,
+  resolveSpec?: (id: string) => TransportInstanceSpec | null,
+): string | null {
   secretFile = file
   secretCrypto = crypto ?? plaintextSecretCrypto
+  secretSpecResolver = resolveSpec ?? null
+  // Missing/memory-only stores will use this on their first write. An
+  // existing bound v3 file replaces it below with its explicit durable fact.
+  durableSecretStorage = secretCrypto.isAvailable() ? 'safeStorage' : 'plaintext'
   tokens.clear()
   passwords.clear()
+  tokenBindings.clear()
+  passwordBindings.clear()
   if (file === null) return null
   let text: string
   try {
-    text = readFileSync(file, 'utf8')
+    text = readOwnerOnlySecretFile(file)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return migrateLegacyTokenFile(file)
     return `cannot read ${file}: ${String(error)}`
@@ -381,59 +383,113 @@ export function configureGatewaySecretStore(file: string | null, crypto?: Secret
   }
   if (!isPlainRecord(parsed)) return preserveInvalidSecretFile(file)
   if (parsed.schemaVersion === 1) {
-    // Legacy schemaVersion 1 file AT the configured path (main.ts still
-    // points at <userData>/gateway-tokens.json today): load the tokens in
-    // place — restart auto-connect keeps working; the next persist rewrites
-    // the mirror as schemaVersion 2. v1 values are always plaintext (never
-    // encrypted), so the identity resolver applies — no blob detection.
     if (!isPlainRecord(parsed.tokens)) return preserveInvalidSecretFile(file)
     const v1Tokens = loadCredentialTable(parsed.tokens, MIN_GATEWAY_TOKEN_CHARS, MAX_GATEWAY_TOKEN_CHARS, blob => blob)
     if (v1Tokens === null) return preserveInvalidSecretFile(file)
-    for (const [id, value] of v1Tokens) tokens.set(id, value)
+    if (v1Tokens.size > 0) return preserveUnboundSecretFile(file)
+    persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
     return null
   }
-  // schemaVersion 2: BOTH tables are required and validated (design 17 §12
-  // corrupt 检测按新 schema 扩展 — tokens AND passwords). Each stored value is
-  // resolved to plaintext (decrypt-or-raw with the S22 flip detection)
-  // before the value gate.
-  if (parsed.schemaVersion !== 2 || !isPlainRecord(parsed.tokens) || !isPlainRecord(parsed.passwords)) {
+  if ((parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3)
+    || !isPlainRecord(parsed.tokens) || !isPlainRecord(parsed.passwords)) {
     return preserveInvalidSecretFile(file)
   }
-  const loadedTokens = loadCredentialTable(parsed.tokens, MIN_GATEWAY_TOKEN_CHARS, MAX_GATEWAY_TOKEN_CHARS, resolveStoredValue)
-  const loadedPasswords = loadCredentialTable(parsed.passwords, MIN_GATEWAY_PASSWORD_CHARS, MAX_GATEWAY_PASSWORD_CHARS, resolveStoredValue)
+  const storage = parsed.storage
+  const emptyLegacyV2 = parsed.schemaVersion === 2 && storage === undefined
+    && Object.keys(parsed.tokens).length === 0
+    && Object.keys(parsed.passwords).length === 0
+  if (storage !== 'safeStorage' && storage !== 'plaintext' && !emptyLegacyV2) {
+    return preserveInvalidSecretFile(file)
+  }
+  const effectiveStorage: GatewaySecretFileStorage = storage === 'safeStorage' ? 'safeStorage' : 'plaintext'
+  durableSecretStorage = effectiveStorage
+  const loadedTokens = loadCredentialTable(
+    parsed.tokens,
+    MIN_GATEWAY_TOKEN_CHARS,
+    MAX_GATEWAY_TOKEN_CHARS,
+    blob => resolveStoredValue(blob, effectiveStorage),
+  )
+  const loadedPasswords = loadCredentialTable(
+    parsed.passwords,
+    MIN_GATEWAY_PASSWORD_CHARS,
+    MAX_GATEWAY_PASSWORD_CHARS,
+    blob => resolveStoredValue(blob, effectiveStorage),
+    false,
+  )
   if (loadedTokens === null || loadedPasswords === null) return preserveInvalidSecretFile(file)
+  if (parsed.schemaVersion === 2) {
+    // No safe automatic adoption exists: this file may be the new-target
+    // credential half left by a crash before the registry commit. Empty is
+    // harmless; non-empty is preserved for explicit user recovery/re-entry.
+    if (loadedTokens.size > 0 || loadedPasswords.size > 0) return preserveUnboundSecretFile(file)
+    persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
+    return null
+  }
+  if (!isPlainRecord(parsed.tokenBindings) || !isPlainRecord(parsed.passwordBindings)) {
+    return preserveInvalidSecretFile(file)
+  }
+  const loadedTokenBindings = new Map<string, string>()
+  const loadedPasswordBindings = new Map<string, string>()
+  const loadBindings = (
+    values: ReadonlyMap<string, string>,
+    table: Record<string, unknown>,
+    out: Map<string, string>,
+  ): boolean => {
+    const entries = Object.entries(table)
+    if (entries.length !== values.size) return false
+    for (const [id, binding] of entries) {
+      if (!values.has(id) || !isCredentialBinding(binding)) return false
+      out.set(id, binding)
+    }
+    return true
+  }
+  if (!loadBindings(loadedTokens, parsed.tokenBindings, loadedTokenBindings)
+    || !loadBindings(loadedPasswords, parsed.passwordBindings, loadedPasswordBindings)) {
+    return preserveInvalidSecretFile(file)
+  }
+  // Upgrade a documented plaintext fallback immediately when a keychain is
+  // now available. Claim safeStorage only after the atomic rewrite succeeds;
+  // on failure the validated plaintext remains usable and visibly plaintext.
+  if (effectiveStorage === 'plaintext' && secretCrypto.isAvailable()) {
+    try {
+      persistGatewaySecrets(loadedTokens, loadedPasswords, loadedTokenBindings, loadedPasswordBindings)
+    } catch (error) {
+      for (const [id, value] of loadedTokens) tokens.set(id, value)
+      for (const [id, value] of loadedPasswords) passwords.set(id, value)
+      for (const [id, value] of loadedTokenBindings) tokenBindings.set(id, value)
+      for (const [id, value] of loadedPasswordBindings) passwordBindings.set(id, value)
+      return `loaded plaintext gateway credentials, but safeStorage upgrade failed: ${String(error)}; the mirror remains plaintext`
+    }
+  }
   for (const [id, value] of loadedTokens) tokens.set(id, value)
   for (const [id, value] of loadedPasswords) passwords.set(id, value)
-  // A legacy file left behind by a migration whose v2 write succeeded but
-  // whose unlink failed is retried on every startup that loads a VALID v2
-  // file (design 17 §12: idempotent, failure kept silent — the v2 file is
-  // authoritative). NOT run for a corrupt v2 file: the legacy tokens are the
-  // only recoverable copy and must survive until a clean load.
-  retryLegacyTokenFileRemoval(file)
+  for (const [id, value] of loadedTokenBindings) tokenBindings.set(id, value)
+  for (const [id, value] of loadedPasswordBindings) passwordBindings.set(id, value)
   return null
 }
 
-/** Backward-compatible alias for the shell's current call site (main.ts and
- * the transport-manager tests still name the token store): the credentials
- * store with the default plaintext adapter. Remove once main.ts switches to
- * `configureGatewaySecretStore(<userData>/gateway-secrets.json)`. */
-export function configureGatewayTokenStore(file: string | null): string | null {
-  return configureGatewaySecretStore(file, undefined)
+/** Backward-compatible test/embedding alias for callers that still name the
+ * former token-only store. The Electron shell uses
+ * `configureGatewaySecretStore(<userData>/gateway-secrets.json)` with its
+ * safeStorage adapter and live registry resolver. */
+export function configureGatewayTokenStore(
+  file: string | null,
+  resolveSpec?: (id: string) => TransportInstanceSpec | null,
+): string | null {
+  return configureGatewaySecretStore(file, undefined, resolveSpec)
 }
 
-/** Migrate a schemaVersion 1 `gateway-tokens.json` beside the configured v2
- * file (design 17 §12): tokens → v2 (encrypted via the active crypto) →
- * delete the legacy file. Any failure is LOUD and non-blocking: the legacy
- * file is KEPT (never renamed, never silently ignored — the next startup
- * retries). */
+/** Safely handle a schemaVersion 1 `gateway-tokens.json` beside the bound v3
+ * file. Empty legacy state can converge automatically; non-empty values are
+ * kept but disabled because no endpoint binding can be inferred safely. */
 function migrateLegacyTokenFile(file: string): string | null {
   const legacyPath = join(dirname(file), LEGACY_TOKEN_FILE_NAME)
-  // The configured path IS the legacy file (current main.ts wiring): the v1
-  // in-place load above handles it; nothing separate to migrate.
+  // If an embedding deliberately configures the legacy path itself, the v1
+  // in-place load above handles it; there is no sibling file to inspect.
   if (legacyPath === file) return null
   let text: string
   try {
-    text = readFileSync(legacyPath, 'utf8')
+    text = readOwnerOnlySecretFile(legacyPath)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     return `cannot read legacy gateway token file ${legacyPath}: ${String(error)}; keeping it`
@@ -453,12 +509,14 @@ function migrateLegacyTokenFile(file: string): string | null {
   if (migrated === null) {
     return `legacy gateway token file ${legacyPath} is not a valid schemaVersion 1 token file; keeping it (no migration)`
   }
-  try {
-    persistGatewaySecrets(migrated, new Map())
-  } catch (error) {
-    return `migrating the legacy gateway token file failed: ${String(error)}; the legacy file is kept at ${legacyPath}`
+  if (migrated.size > 0) {
+    return `legacy gateway token file ${legacyPath} has no target bindings and is disabled; re-enter credentials to migrate safely`
   }
-  for (const [id, value] of migrated) tokens.set(id, value)
+  try {
+    persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
+  } catch (error) {
+    return `migrating the empty legacy gateway token file failed: ${String(error)}; the legacy file is kept at ${legacyPath}`
+  }
   try {
     rmSync(legacyPath)
   } catch (error) {
@@ -467,38 +525,14 @@ function migrateLegacyTokenFile(file: string): string | null {
   return null
 }
 
-/** Retry the legacy v1 file deletion (design 17 §12): when a migration's v2
- * write succeeded but its `rmSync` failed, the legacy file survives (loud
- * notice, non-blocking) — and `configureGatewaySecretStore` only ran the
- * migration on a MISSING v2 file, so that failure was never retried. Every
- * later startup that loads a valid v2 file calls this: a leftover legacy file
- * is unlinked again. Idempotent and best-effort — a missing legacy file is a
- * no-op and a persistent removal failure is SILENT (the v2 file is
- * authoritative; the retry must not spam or block startup). Only runs on a
- * VALID v2 load: a corrupt v2 file keeps the legacy tokens as the only
- * recoverable copy. */
-function retryLegacyTokenFileRemoval(file: string): void {
-  const legacyPath = join(dirname(file), LEGACY_TOKEN_FILE_NAME)
-  // The configured path IS the legacy file (the in-place v1 load path): there
-  // is no separate file beside it to remove.
-  if (legacyPath === file) return
-  if (!existsSync(legacyPath)) return
-  try {
-    rmSync(legacyPath)
-  } catch {
-    // Best-effort, silent — the v2 file is authoritative.
-  }
-}
-
 /** Set or clear the token for one instance (null/'' = clear). Persists the
  * durable mirror when configured (write-through: the live state changes only
  * after its durable mirror succeeds). Design 17 §2.3: token and password are
  * INDEPENDENT nullable credentials — a token clear NEVER touches the
- * instance's password. The whole-instance scrub (instance removal /
- * same-kind retarget, design 17 §12 删除实例/显式清除即删) is the explicit
- * `setInstanceSecrets(id, null, null)` primitive, used by main.ts's
- * `clearStoredSecrets`. */
-export function setGatewayToken(id: string, token: string | null): void {
+ * instance's password. Transactional add/edit/delete flows use the grouped
+ * `setInstanceSecrets` primitive to atomically commit or scrub both gateway
+ * credential dimensions for a target-domain generation. */
+export function setGatewayToken(id: string, token: string | null, spec?: TransportInstanceSpec | null): void {
   if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
     throw new Error(`refusing token for invalid instance id ${JSON.stringify(id)}`)
   }
@@ -511,17 +545,28 @@ export function setGatewayToken(id: string, token: string | null): void {
   if ((token === null || token === '') && !tokens.has(id)) return
   const nextTokens = new Map(tokens)
   const nextPasswords = new Map(passwords)
-  if (token === null || token === '') nextTokens.delete(id)
-  else nextTokens.set(id, token)
-  persistGatewaySecrets(nextTokens, nextPasswords)
-  commitGatewaySecrets(nextTokens, nextPasswords)
+  const nextTokenBindings = new Map(tokenBindings)
+  const nextPasswordBindings = new Map(passwordBindings)
+  if (token === null || token === '') {
+    nextTokens.delete(id)
+    nextTokenBindings.delete(id)
+  } else {
+    const bindingSpec = spec ?? secretSpecResolver?.(id) ?? null
+    const binding = bindingSpec === null ? null : gatewayCredentialBinding(bindingSpec)
+    if (binding === null && secretFile !== null) throw new Error('refusing to persist a gateway token without a matching gateway target binding')
+    nextTokens.set(id, token)
+    if (binding === null) nextTokenBindings.delete(id)
+    else nextTokenBindings.set(id, binding)
+  }
+  persistGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
+  commitGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
 }
 
 /** Set or clear the login password for one instance (null/'' = clear) —
  * design 17 §2.3: token and password are INDEPENDENT credentials, so an
  * explicit password clear never touches the token. Write-through like the
  * token setter. */
-export function setGatewayPassword(id: string, password: string | null): void {
+export function setGatewayPassword(id: string, password: string | null, spec?: TransportInstanceSpec | null): void {
   if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
     throw new Error(`refusing password for invalid instance id ${JSON.stringify(id)}`)
   }
@@ -530,20 +575,35 @@ export function setGatewayPassword(id: string, password: string | null): void {
   if ((password === null || password === '') && !passwords.has(id)) return
   const nextTokens = new Map(tokens)
   const nextPasswords = new Map(passwords)
-  if (password === null || password === '') nextPasswords.delete(id)
-  else nextPasswords.set(id, password)
-  persistGatewaySecrets(nextTokens, nextPasswords)
-  commitGatewaySecrets(nextTokens, nextPasswords)
+  const nextTokenBindings = new Map(tokenBindings)
+  const nextPasswordBindings = new Map(passwordBindings)
+  if (password === null || password === '') {
+    nextPasswords.delete(id)
+    nextPasswordBindings.delete(id)
+  } else {
+    const bindingSpec = spec ?? secretSpecResolver?.(id) ?? null
+    const binding = bindingSpec === null ? null : gatewayCredentialBinding(bindingSpec)
+    if (binding === null && secretFile !== null) throw new Error('refusing to persist a gateway password without a matching gateway target binding')
+    nextPasswords.set(id, password)
+    if (binding === null) nextPasswordBindings.delete(id)
+    else nextPasswordBindings.set(id, binding)
+  }
+  persistGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
+  commitGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
 }
 
 /** Set or clear BOTH credentials for one instance in a SINGLE atomic persist
- * (null/'' = clear each dimension) — the whole-instance scrub primitive for
- * main.ts's `clearStoredSecrets` (instance removal / same-kind retarget,
- * design 17 §12 删除实例/显式清除即删). The per-dimension setters keep token
- * and password independent (§2.3); this explicit dual-set/clear is the ONLY
- * path that writes both at once. Write-through like the single setters; a
- * clear of an id that owns neither credential is a disk no-op. */
-export function setInstanceSecrets(id: string, token: string | null, password: string | null): void {
+ * (null/'' = clear each dimension). Main-owned save/delete transactions use
+ * this primitive for target-domain entry, retarget, removal, compensation,
+ * and crash-residue scrubbing. The per-dimension explicit-clear setters keep
+ * token and password independent (§2.3). Write-through like the single
+ * setters; a clear of an id that owns neither credential is a disk no-op. */
+export function setInstanceSecrets(
+  id: string,
+  token: string | null,
+  password: string | null,
+  spec?: TransportInstanceSpec | null,
+): void {
   if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
     throw new Error(`refusing secrets for invalid instance id ${JSON.stringify(id)}`)
   }
@@ -558,42 +618,90 @@ export function setInstanceSecrets(id: string, token: string | null, password: s
     && (password === null || password === '') && !passwords.has(id)) return
   const nextTokens = new Map(tokens)
   const nextPasswords = new Map(passwords)
-  if (token === null || token === '') nextTokens.delete(id)
-  else nextTokens.set(id, token)
-  if (password === null || password === '') nextPasswords.delete(id)
-  else nextPasswords.set(id, password)
-  persistGatewaySecrets(nextTokens, nextPasswords)
-  commitGatewaySecrets(nextTokens, nextPasswords)
+  const nextTokenBindings = new Map(tokenBindings)
+  const nextPasswordBindings = new Map(passwordBindings)
+  const bindingSpec = spec ?? secretSpecResolver?.(id) ?? null
+  const binding = bindingSpec === null ? null : gatewayCredentialBinding(bindingSpec)
+  if ((token !== null && token !== '' || password !== null && password !== '') && binding === null && secretFile !== null) {
+    throw new Error('refusing to persist gateway credentials without a matching gateway target binding')
+  }
+  if (token === null || token === '') {
+    nextTokens.delete(id)
+    nextTokenBindings.delete(id)
+  } else {
+    nextTokens.set(id, token)
+    if (binding === null) nextTokenBindings.delete(id)
+    else nextTokenBindings.set(id, binding)
+  }
+  if (password === null || password === '') {
+    nextPasswords.delete(id)
+    nextPasswordBindings.delete(id)
+  } else {
+    nextPasswords.set(id, password)
+    if (binding === null) nextPasswordBindings.delete(id)
+    else nextPasswordBindings.set(id, binding)
+  }
+  persistGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
+  commitGatewaySecrets(nextTokens, nextPasswords, nextTokenBindings, nextPasswordBindings)
 }
 
 /** The stored token for one instance, or null. */
 export function getGatewayToken(id: string): string | null {
-  return tokens.get(id) ?? null
+  const token = tokens.get(id)
+  if (token === undefined) return null
+  const binding = tokenBindings.get(id)
+  if (binding === undefined) return secretFile === null ? token : null
+  const current = secretSpecResolver?.(id) ?? null
+  return current !== null && gatewayCredentialBinding(current) === binding ? token : null
 }
 
 /** The stored login password for one instance, or null. */
 export function getGatewayPassword(id: string): string | null {
-  return passwords.get(id) ?? null
+  const password = passwords.get(id)
+  if (password === undefined) return null
+  const binding = passwordBindings.get(id)
+  if (binding === undefined) return secretFile === null ? password : null
+  const current = secretSpecResolver?.(id) ?? null
+  return current !== null && gatewayCredentialBinding(current) === binding ? password : null
 }
 
-function commitGatewaySecrets(nextTokens: ReadonlyMap<string, string>, nextPasswords: ReadonlyMap<string, string>): void {
+function commitGatewaySecrets(
+  nextTokens: ReadonlyMap<string, string>,
+  nextPasswords: ReadonlyMap<string, string>,
+  nextTokenBindings: ReadonlyMap<string, string>,
+  nextPasswordBindings: ReadonlyMap<string, string>,
+): void {
   tokens.clear()
   for (const [entryId, entryToken] of nextTokens) tokens.set(entryId, entryToken)
   passwords.clear()
   for (const [entryId, entryPassword] of nextPasswords) passwords.set(entryId, entryPassword)
+  tokenBindings.clear()
+  for (const [entryId, binding] of nextTokenBindings) tokenBindings.set(entryId, binding)
+  passwordBindings.clear()
+  for (const [entryId, binding] of nextPasswordBindings) passwordBindings.set(entryId, binding)
 }
 
-/** Mirror the in-memory credential maps to the durable file (schemaVersion 2,
+/** Mirror the in-memory credential maps to the durable file (schemaVersion 3,
  * 0600, atomic: tmp → fsync → rename — the repo's atomic-write convention;
- * rename keeps the tmp's 0600). Values are encrypted when the active crypto
- * is available, plaintext otherwise (the documented fallback). */
-function persistGatewaySecrets(nextTokens: ReadonlyMap<string, string>, nextPasswords: ReadonlyMap<string, string>): void {
+ * rename keeps the tmp's 0600). The file-level storage discriminator is
+ * written in the same atomic payload as the values, so a later startup never
+ * has to infer whether a string is ciphertext. */
+function persistGatewaySecrets(
+  nextTokens: ReadonlyMap<string, string>,
+  nextPasswords: ReadonlyMap<string, string>,
+  nextTokenBindings: ReadonlyMap<string, string>,
+  nextPasswordBindings: ReadonlyMap<string, string>,
+): void {
   if (secretFile === null) return
-  const encode = (value: string): string => secretCrypto.isAvailable() ? secretCrypto.encrypt(value) : value
+  const storage: GatewaySecretFileStorage = secretCrypto.isAvailable() ? 'safeStorage' : 'plaintext'
+  const encode = (value: string): string => storage === 'safeStorage' ? secretCrypto.encrypt(value) : value
   const payload = `${JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
+    storage,
     tokens: Object.fromEntries([...nextTokens].map(([id, value]) => [id, encode(value)])),
     passwords: Object.fromEntries([...nextPasswords].map(([id, value]) => [id, encode(value)])),
+    tokenBindings: Object.fromEntries(nextTokenBindings),
+    passwordBindings: Object.fromEntries(nextPasswordBindings),
   }, undefined, 2)}\n`
   const tmpPath = `${secretFile}.tmp`
   mkdirSync(dirname(secretFile), { recursive: true })
@@ -607,6 +715,7 @@ function persistGatewaySecrets(nextTokens: ReadonlyMap<string, string>, nextPass
       closeSync(fd)
     }
     renameSync(tmpPath, secretFile)
+    durableSecretStorage = storage
   } catch (error) {
     try { rmSync(tmpPath, { force: true }) } catch { /* best effort */ }
     throw error
@@ -624,17 +733,23 @@ function persistGatewaySecrets(nextTokens: ReadonlyMap<string, string>, nextPass
 // the stored password before reporting the terminal password-refused state
 // (design 17 §7.3 密码被拒 / §9.3 重登一次后仍失败才 terminal). Default = no
 // hooks: the password-session flow is INERT and a password-configured target
-// probes without auth (the old behavior) until the shell wires the manager
-// in.
+// probes without auth (the old behavior) until the shell wires the complete
+// all-or-none manager surface in; partial hooks are rejected at configuration.
 // ---------------------------------------------------------------------------
 
-/** The session hooks surface (mirrors GatewaySessionManager's three
- * operations, gateway-session.ts). Each method is optional: a partially
- * wired provider degrades to what it has. */
+/** The session hooks surface mirrors GatewaySessionManager. An empty object
+ * disables password-session integration; any active configuration must
+ * provide the complete set so generation/proof fences cannot silently drop. */
 export interface GatewaySessionProviderHooks {
   /** POST /auth/login with the stored password; resolves the header-ready
    * cookie or a classified failure. Absent = the password flow is off. */
   ensureSession?(origin: GatewaySessionOrigin, password: string): Promise<GatewaySessionResult>
+  /** Exact-key invalidation generation. When supplied, the verifier fences
+   * every post-await network step so a cleared/deleted generation cannot use
+   * its captured password, cookie, or bearer after invalidation. */
+  generation?(origin: GatewaySessionOrigin): number
+  registrationAuthProof?(origin: GatewaySessionOrigin): GatewayRegistrationAuthProof | null
+  setRegistrationAuthProof?(origin: GatewaySessionOrigin, proof: GatewayRegistrationAuthProof | null): void
   /** The cached header-ready cookie for the origin, or null. Synchronous —
    * the fast path: a live session (12h − 5min) probes directly. */
   cachedCookie?(origin: GatewaySessionOrigin): string | null
@@ -648,7 +763,20 @@ let sessionHooks: GatewaySessionProviderHooks = {}
 /** Wire the shell's gateway-session manager onto the provider (main.ts).
  * An empty argument disables the flow (tests reset between cases). */
 export function configureGatewaySessionProvider(hooks: GatewaySessionProviderHooks): void {
-  sessionHooks = hooks ?? {}
+  const candidate = hooks ?? {}
+  const methods: Array<keyof GatewaySessionProviderHooks> = [
+    'ensureSession',
+    'generation',
+    'registrationAuthProof',
+    'setRegistrationAuthProof',
+    'cachedCookie',
+    'invalidate',
+  ]
+  const present = methods.filter(method => typeof candidate[method] === 'function')
+  if (present.length !== 0 && present.length !== methods.length) {
+    throw new TypeError('gateway session provider hooks must be configured all-or-none')
+  }
+  sessionHooks = candidate
 }
 
 /** Read access to the active session hooks (design 17 §9.2/§9.3): the ssh
@@ -660,27 +788,106 @@ export function getGatewaySessionHooks(): GatewaySessionProviderHooks {
   return sessionHooks
 }
 
-/** The credential mirror's storage mode (design 17 §13.4.1 / S22): whether
- * the active crypto adapter is available — values are written as safeStorage-
- * encrypted blobs ('safeStorage') or as the documented 0600 plaintext
- * fallback ('plaintext'). Read-only, global per store, never persisted;
+/** The credential mirror's ACTUAL durable storage mode (design 17 §13.4.1 /
+ * S22), read from/written with the file-level discriminator. It never claims
+ * safeStorage merely because the adapter is currently available: a plaintext
+ * mirror stays visibly plaintext until its atomic encryption upgrade succeeds.
+ * Read-only, global per store;
  * merged into instances_get as a non-secret projection so the fallback path
  * is visible in the settings UI. Defaults to 'plaintext' (the inert adapter)
  * until main.ts configures a real one. */
 export function gatewaySecretStorageMode(): 'safeStorage' | 'plaintext' {
-  return secretCrypto.isAvailable() ? 'safeStorage' : 'plaintext'
+  return durableSecretStorage
 }
 
 // ---------------------------------------------------------------------------
-// Gateway endpoint identity verification (design 17 §7 step 4): the gateway
-// URL must answer the dsh host.describe wire handshake WITH the bearer token
-// before the runtime may declare the instance ready. Mirrors ssh-provider's
-// verifyDshEndpoint, but over https and with an Authorization header.
+
+/** Direct http(s) dsh identity probe. Unlike a gateway target, a dsh target
+ * owns no /chamber surface and never receives authentication headers; its
+ * authoritative identity remains the host.describe RPC handshake. */
+function verifyDirectDshEndpoint(
+  spec: TransportInstanceSpec,
+  timeoutMs = GATEWAY_VERIFY_TIMEOUT_MS,
+  maxBodyBytes = GATEWAY_VERIFY_MAX_BODY_BYTES,
+): Promise<TransportVerifyResult> {
+  return new Promise(resolve => {
+    const request = spec.insecureHttp ? httpRequest : httpsRequest
+    const url = `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}/api/host.describe`
+    const rpcId = randomUUID()
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const done = (ok: boolean, detail?: string, terminal?: boolean): void => {
+      if (settled) return
+      settled = true
+      if (timer !== null) { clearTimeout(timer); timer = null }
+      req.destroy()
+      resolve(ok ? { ok: true } : { ok: false, detail, terminal })
+    }
+    const req = request(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    }, res => {
+      res.on('error', () => {})
+      if (res.statusCode !== 200) {
+        const code = res.statusCode ?? 0
+        res.resume()
+        done(false, `the destination answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe`, gatewayHttpFailureIsTerminal(code))
+        return
+      }
+      const chunks: Buffer[] = []
+      let size = 0
+      res.on('data', chunk => {
+        if (settled) return
+        size += chunk.length
+        if (size > maxBodyBytes) {
+          chunks.length = 0
+          done(false, 'the destination answered an oversized dsh identity probe response', true)
+          return
+        }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        if (settled) return
+        let envelope: { type?: unknown; rpcId?: unknown; result?: { ok?: unknown } } | null = null
+        try { envelope = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { envelope = null }
+        if (envelope?.type !== 'server-response'
+          || envelope.rpcId !== rpcId
+          || typeof envelope.result !== 'object' || envelope.result === null
+          || envelope.result.ok !== true) {
+          done(false, 'the destination answered an unexpected dsh identity response — it does not appear to be a compatible dsh instance', true)
+          return
+        }
+        done(true)
+      })
+    })
+    timer = setTimeout(() => done(false, `the destination did not answer the dsh identity probe within ${timeoutMs}ms`), timeoutMs)
+    timer.unref?.()
+    req.on('error', () => done(false, 'the destination did not answer the dsh identity probe'))
+    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'host.describe', payload: {} }))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Gateway endpoint identity verification (design 17 §7 / design 18 §9.3): a
+// gateway transport is serviceable when its authenticated, gateway-owned
+// runtime controller answers — independently of the managed dsh lifecycle.
+// This distinction keeps /chamber/runtime reachable for recovery while dsh is
+// blocked/down. A plain dsh target still uses host.describe in ssh-provider.
 // ---------------------------------------------------------------------------
 
+export const GATEWAY_RUNTIME_IDENTITY = 'dsh-chamber-gateway-runtime'
+
+export function isGatewayRuntimeStatus(value: unknown): value is { kind: typeof GATEWAY_RUNTIME_IDENTITY } {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as { kind?: unknown }).kind === GATEWAY_RUNTIME_IDENTITY
+}
+
 /**
- * POST /api/host.describe to the gateway and require a valid server-response
- * echo (result.ok === true). The token may be null: a NO-CREDENTIAL probe is
+ * GET /chamber/runtime/status and require the gateway runtime identity marker.
+ * The route is gateway-owned and deliberately remains mounted while managed
+ * dsh is stopped/blocked, so recovery actions stay reachable. The token may be null: a NO-CREDENTIAL probe is
  * deliberately sent WITHOUT an Authorization header (design 17 §2.3/§9.3 —
  * "都空 → 无认证头直接请求，由 gateway 校验"): a `--no-auth` deployment
  * answers 200 and is ready; an auth-requiring deployment answers 401, which
@@ -713,7 +920,7 @@ function verifyGatewayEndpoint(
 ): Promise<TransportVerifyResult & { statusCode?: number }> {
   return new Promise(resolve => {
     const request = insecure ? httpRequest : httpsRequest
-    const url = `${insecure ? 'http' : 'https'}://${host}:${port}/api/host.describe`
+    const url = `${insecure ? 'http' : 'https'}://${host}:${port}/chamber/runtime/status`
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
     const done = (ok: boolean, detail?: string, terminal?: boolean, statusCode?: number) => {
@@ -731,18 +938,18 @@ function verifyGatewayEndpoint(
       if (statusCode !== undefined) result.statusCode = statusCode
       resolve(result)
     }
-    const rpcId = randomUUID()
-    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    const headers: Record<string, string> = {}
     // No credentials → NO Authorization header on the probe (design 17
     // §2.3): the gateway itself is the authority on whether auth is needed.
     if (token !== null) headers.authorization = `Bearer ${token}`
     if (cookie !== null) headers.cookie = cookie
     const req = request(url, {
-      method: 'POST',
+      method: 'GET',
       headers,
       // S23: with a configured pin the probe opens a FRESH https connection
       // with the pin as its trust anchor (rejectUnauthorized: false — the
-      // internal-CA case) and the socket verifier destroys it on mismatch.
+      // internal-CA case); request dispatch stays gated until that socket's
+      // peer key matches, so even credential headers are never queued early.
       ...(insecure || spkiPin === null ? {} : { rejectUnauthorized: false, agent: false }),
     }, res => {
       res.on('error', () => {})
@@ -777,7 +984,7 @@ function verifyGatewayEndpoint(
         // remains transient so the manager's bounded/slow retry machinery can
         // recover without a manual reconnect.
         const terminal = gatewayHttpFailureIsTerminal(statusCode)
-        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe`, terminal)
+        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the runtime identity probe`, terminal)
         return
       }
       const chunks: Buffer[] = []
@@ -786,37 +993,35 @@ function verifyGatewayEndpoint(
         if (settled) return
         size += chunk.length
         if (size > maxBodyBytes) {
-          done(false, 'the gateway answered an oversized dsh identity probe response', true)
+          done(false, 'the gateway answered an oversized runtime identity response', true)
           return
         }
         chunks.push(chunk)
       })
       res.on('end', () => {
-        let envelope: { type?: unknown; rpcId?: unknown; result?: { ok?: unknown } } | null = null
-        try { envelope = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { envelope = null }
-        if (envelope?.type !== 'server-response'
-          || envelope.rpcId !== rpcId
-          || typeof envelope.result !== 'object' || envelope.result === null
-          || envelope.result.ok !== true) {
-          done(false, 'the gateway answered an unexpected dsh identity probe response — it does not appear to be a dsh-gateway', true)
+        let status: unknown = null
+        try { status = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { status = null }
+        if (!isGatewayRuntimeStatus(status)) {
+          done(false, 'the gateway answered an unexpected runtime identity response — it does not appear to be a compatible dsh-chamber gateway', true)
           return
         }
         done(true)
       })
     })
-    // S23: the socket-level pin gate (see the mechanism note above). Attached
-    // synchronously after request() so the mismatch destroy is observed below.
-    if (!insecure && spkiPin !== null) attachSpkiPinVerifier(req, spkiPin)
-    timer = setTimeout(() => done(false, `the gateway did not answer the dsh identity probe within ${timeoutMs}ms`), timeoutMs)
+    const dispatch = (): void => { req.end() }
+    // S23: the secureConnect pre-write pin gate (see the mechanism note above). A pinned
+    // request is deliberately NOT ended until the peer key matches.
+    if (!insecure && spkiPin !== null) attachSpkiPinVerifier(req, spkiPin, dispatch)
+    timer = setTimeout(() => done(false, `the gateway did not answer the runtime identity probe within ${timeoutMs}ms`), timeoutMs)
     timer.unref?.()
     req.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === SPKI_PIN_MISMATCH_CODE) {
         done(false, '证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误', true)
         return
       }
-      done(false, 'the gateway did not answer the dsh identity probe')
+      done(false, 'the gateway did not answer the runtime identity probe')
     })
-    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'host.describe', payload: {} }))
+    if (insecure || spkiPin === null) dispatch()
   })
 }
 
@@ -826,8 +1031,8 @@ function verifyGatewayEndpoint(
  * held in the token store, never in the spec/registry. `user`/`sshPort`/
  * `serviceName`/`remoteDshHome` are accepted-but-ignored (normalized to null)
  * so the form/registry shape stays uniform across kinds. v2 (design 17
- * §2.2): this is the `http` TRANSPORT provider — it accepts ANY target kind
- * (`dsh` | `gateway`, kept as-is), gated on `transport === 'http'` only. A
+ * §2.2): this is the `http` TRANSPORT provider — it accepts the shipped target
+ * kinds (`dsh` | `gateway`), gated on `transport === 'http'` only. A
  * transport 'ssh' spec is REFUSED (the tunnel provider is the separate ssh
  * provider, design 17 §9.2; mis-serving it as a direct endpoint would bypass
  * the tunnel). When `transport` is missing it is inferred from the kind
@@ -838,11 +1043,14 @@ function verifyGatewayEndpoint(
 function isValidGatewayInstance(instance: unknown): instance is TransportInstanceSpec {
   if (instance === null || typeof instance !== 'object') return false
   const record = instance as Record<string, unknown>
-  // v2 kind gating: this provider serves the http TRANSPORT for any target
-  // kind. A missing kind defaults to {dsh, ssh} (registry migration, design
+  // v2 kind gating: this provider serves the http TRANSPORT for shipped target
+  // kinds. A missing kind defaults to {dsh, ssh} (registry migration, design
   // 17 §2.2) — not this provider's mechanism; a missing transport is
   // inferred from kind (gateway→http; anything else → not ours).
-  if (typeof record.kind !== 'string') return false
+  // The shipped HTTP provider knows exactly the semantics of these two
+  // targets. An open-ended future kind must register its own provider rather
+  // than reaching ready here and failing later at proxy registration.
+  if (record.kind !== 'dsh' && record.kind !== 'gateway') return false
   const transport = record.transport
   if (transport !== undefined && transport !== null && transport !== 'http') return false
   if ((transport === undefined || transport === null) && record.kind !== 'gateway') return false
@@ -876,6 +1084,7 @@ function gatewaySessionOriginFor(spec: TransportInstanceSpec): GatewaySessionOri
   return {
     baseUrl: `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}`,
     insecureHttp: spec.insecureHttp,
+    scope: gatewaySessionScopeForConnection(spec),
     ...(spec.spkiPin === undefined || spec.spkiPin === null ? {} : { spkiPin: spec.spkiPin }),
   }
 }
@@ -891,6 +1100,10 @@ function gatewaySessionFailureToVerify(result: Extract<GatewaySessionResult, { o
     return { ok: false, detail: result.error, terminal: true }
   }
   return { ok: false, detail: result.error }
+}
+
+function gatewaySessionSuperseded(): TransportVerifyResult {
+  return { ok: false, detail: 'gateway session verification superseded by connection invalidation' }
 }
 
 /**
@@ -917,26 +1130,72 @@ export async function verifyGatewayPasswordSession(
   origin: GatewaySessionOrigin,
   password: string,
   probe: (cookie: string | null) => Promise<TransportVerifyResult & { statusCode?: number }>,
+  fallbackProbe?: () => Promise<TransportVerifyResult & { statusCode?: number }>,
 ): Promise<TransportVerifyResult> {
+  sessionHooks.setRegistrationAuthProof?.(origin, null)
+  let generation = sessionHooks.generation?.(origin)
+  const generationIsCurrent = (): boolean => generation === undefined
+    || sessionHooks.generation?.(origin) === generation
+  const verifiedCookieIsCurrent = (cookie: string): boolean => generation === undefined
+    || (generationIsCurrent() && sessionHooks.cachedCookie?.(origin) === cookie)
+  const adoptCurrentGeneration = (): void => {
+    generation = sessionHooks.generation?.(origin)
+  }
   const cached = sessionHooks.cachedCookie !== undefined ? sessionHooks.cachedCookie(origin) : null
   let cookie: string
   if (cached !== null) {
     cookie = cached
   } else {
     const login = await sessionHooks.ensureSession!(origin, password)
-    if (!login.ok) return gatewaySessionFailureToVerify(login)
+    if (!generationIsCurrent() || (!login.ok && login.code === 'stale')) {
+      return gatewaySessionSuperseded()
+    }
+    if (!login.ok) {
+      // Token and password are independent OR-principals (design 17 §2.3 /
+      // gateway auth.ts): when both are configured, a refused/unavailable
+      // password login must not hide a still-valid bearer token. The caller's
+      // fallback probe carries ONLY the bearer; success is authoritative. A
+      // failed bearer does not replace the password flow's more actionable
+      // classification (invalid password vs transient login service).
+      if (fallbackProbe !== undefined) {
+        if (!generationIsCurrent()) return gatewaySessionSuperseded()
+        const fallback = await fallbackProbe()
+        if (!generationIsCurrent()) return gatewaySessionSuperseded()
+        if (fallback.ok) {
+          sessionHooks.setRegistrationAuthProof?.(origin, 'bearer')
+          return fallback
+        }
+      }
+      return gatewaySessionFailureToVerify(login)
+    }
     cookie = login.cookie
   }
+  if (!generationIsCurrent()) return gatewaySessionSuperseded()
   const first = await probe(cookie)
+  if (!generationIsCurrent()) return gatewaySessionSuperseded()
+  if (first.ok && !verifiedCookieIsCurrent(cookie)) return gatewaySessionSuperseded()
+  if (first.ok) sessionHooks.setRegistrationAuthProof?.(origin, 'cookie')
   if (first.ok || first.statusCode !== 401) return first
   // 401 with the session cookie: invalidate, then ONE automatic re-login with
   // the stored password (design 17 §9.3). A refused re-login classifies via
   // gatewaySessionFailureToVerify (invalid_credentials/other → terminal,
   // rate_limited/auth_busy/network → transient — the 429 backoff discipline).
   sessionHooks.invalidate?.(origin)
+  // This invalidation is owned by the current verifier (a cookie 401), so its
+  // one allowed re-login adopts the new generation. Any later external
+  // invalidation will change it again and trip the same post-await fences.
+  adoptCurrentGeneration()
+  if (!generationIsCurrent()) return gatewaySessionSuperseded()
   const relogin = await sessionHooks.ensureSession!(origin, password)
+  if (!generationIsCurrent() || (!relogin.ok && relogin.code === 'stale')) {
+    return gatewaySessionSuperseded()
+  }
   if (!relogin.ok) return gatewaySessionFailureToVerify(relogin)
+  if (!generationIsCurrent()) return gatewaySessionSuperseded()
   const reprobe = await probe(relogin.cookie)
+  if (!generationIsCurrent()) return gatewaySessionSuperseded()
+  if (reprobe.ok && !verifiedCookieIsCurrent(relogin.cookie)) return gatewaySessionSuperseded()
+  if (reprobe.ok) sessionHooks.setRegistrationAuthProof?.(origin, 'cookie')
   if (reprobe.ok || reprobe.statusCode !== 401) return reprobe
   // Even the freshly minted session is refused — the stored password cannot
   // authenticate this deployment; the user must re-enter it (§7.3 密码被拒).
@@ -945,7 +1204,7 @@ export async function verifyGatewayPasswordSession(
 }
 
 /** The http transport provider: validate → direct-endpoint (no child) →
- * http(s) probe. Serves both target kinds (design 17 §2.2); `kind` stays the
+ * http(s) probe. Serves both shipped target kinds (design 17 §2.2); `kind` stays the
  * legacy registry key this provider is registered under (main.ts
  * `providers: { gateway: … }`; transport-keyed `{ http: … }` also works). */
 export const gatewayProvider: TransportProvider = {
@@ -995,7 +1254,10 @@ export const gatewayProvider: TransportProvider = {
       : `https://${spec.host}:${spec.remotePort}`
   },
 
-  /** Identity verification: the target must answer host.describe. A missing
+  /** Identity verification: a gateway target must answer the authenticated
+   * gateway-owned runtime status identity, which remains available while its
+   * managed dsh is blocked/down; a plain dsh target must answer host.describe.
+   * A missing
    * token is NOT a pre-flight refusal (design 17 §2.3): the probe is sent
    * WITHOUT an Authorization header and the gateway's own answer is
    * classified (a `--no-auth` deployment is ready; a 401 = terminal "configure
@@ -1003,32 +1265,32 @@ export const gatewayProvider: TransportProvider = {
    * whether auth applies (dsh target: never; gateway target: optional,
    * design 17 §2.1) — the token store is keyed by instance id, so a dsh
    * target with a stale token entry still probes without auth. A gateway
-   * target with a configured password (and no token) rides the password
-   * login session's Cookie instead (token priority: when both exist the
-   * Bearer authenticates alone, §2.3). Uses spec.host (BRACKETED IPv6 — URL
+   * target with a configured password rides the password login session's
+   * Cookie. When both exist the probe carries BOTH independent headers; the
+   * gateway accepts either principal, so a rotated token can fall back to a
+   * valid session and a refused password login can still fall back to a valid
+   * bearer (§2.3). Uses spec.host (BRACKETED IPv6 — URL
    * form), NOT endpoint.host (which probeTarget unbrackets for net.connect):
    * the verify URL needs the bracketed literal. */
   verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint): Promise<TransportVerifyResult> {
     void endpoint
+    if (spec.kind !== 'gateway') return verifyDirectDshEndpoint(spec)
     const token = spec.kind === 'gateway' ? getGatewayToken(spec.id) : null
-    // Token priority (design 17 §2.3): when both credentials are configured
-    // the Bearer token authenticates alone — the password/session flow is
-    // skipped entirely.
-    if (token !== null) {
-      return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
-    }
     const password = spec.kind === 'gateway' ? getGatewayPassword(spec.id) : null
-    // No token + a configured password + wired session hooks: ensure a login
-    // session and probe with its Cookie (the shared verifyGatewayPasswordSession
+    // A configured password + wired session hooks: ensure a login session and
+    // probe with its Cookie plus the independent Bearer when present (the
+    // shared verifyGatewayPasswordSession
     // flow — the ssh provider's tunnel branch uses the same implementation,
     // design 17 §9.2/§9.3). Without hooks the probe stays credential-free
     // (the old no-auth behavior — the flow is inert until main.ts wires the
     // gateway-session manager in).
     if (password !== null && sessionHooks.ensureSession !== undefined) {
       return verifyGatewayPasswordSession(gatewaySessionOriginFor(spec), password, cookie =>
-        verifyGatewayEndpoint(spec.host, spec.remotePort, null, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, cookie, spec.spkiPin ?? null))
+        verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, cookie, spec.spkiPin ?? null),
+      token === null ? undefined : () =>
+        verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null))
     }
-    return verifyGatewayEndpoint(spec.host, spec.remotePort, null, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
+    return verifyGatewayEndpoint(spec.host, spec.remotePort, token, spec.insecureHttp, GATEWAY_VERIFY_TIMEOUT_MS, GATEWAY_VERIFY_MAX_BODY_BYTES, null, spec.spkiPin ?? null)
   },
 
   /** No child process → no stderr stream. Never called for direct endpoints,

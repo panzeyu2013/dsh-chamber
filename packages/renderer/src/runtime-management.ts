@@ -188,8 +188,8 @@ const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
   error: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
 }
 
-/** Restart-dsh gate (design 18 §3.6 项 8): usable in any non-busy,
- *  non-applying state; the transactional control-plane restart is
+/** Restart-dsh gate (design 18 §3.6 项 8): usable only in a non-busy,
+ *  non-pending/non-applying/non-installing state; the transactional control-plane restart is
  *  single-flight and re-seeds mounted plugins on every spawn. */
 export function runtimeRestartAllowed(state: RuntimeState | null): boolean {
   if (state === null) return false

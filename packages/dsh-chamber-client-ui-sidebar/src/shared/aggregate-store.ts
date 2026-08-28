@@ -23,9 +23,14 @@ export interface ChamberServerWorkspace {
 }
 
 export interface ChamberServerAggregate {
-  /** 'local' | '<transport-kind>-<id>' */
+  /** 'local' | '<target-kind>-<id>' (`ssh-<id>` remains a legacy dsh id). */
   id: string
-  kind: 'local' | 'ssh' | 'gateway'
+  /** Target semantics, independent from the transport mechanism (design 17 §2). */
+  kind: 'local' | 'dsh' | 'gateway'
+  /** How this target is reached. Local has no remote transport. */
+  transport: 'local' | 'ssh' | 'http'
+  /** Registry identity used by desktop IPC. Never derive it by slicing a source-id prefix. */
+  rawId?: string
   label: string
   /** Local: dsh ready; remote: tunnel phase ready. */
   connected: boolean
@@ -41,6 +46,8 @@ export interface ChamberServerAggregate {
   aggregateError?: string
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
+  /** Live host.describe version from this instance's own connection generation. */
+  dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
   updatedAt: number
@@ -95,6 +102,12 @@ export interface InstanceRuntimeReport {
   }>
 }
 
+/** Generation-scoped, read-only host facts from one mounted instance ctx. */
+export interface InstanceHostReport {
+  /** Exact non-empty host.describe.version; absent means honestly unknown. */
+  dshVersion?: string
+}
+
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
 type RefreshListener = (sourceId: string) => void
@@ -102,6 +115,7 @@ type SourceListener = (sourceId: string) => void
 type RuntimeReportListener = (sourceId: string, report: InstanceRuntimeReport | undefined) => void
 type SnapshotReportListener = (sourceId: string, snapshot: InstanceSnapshot | undefined) => void
 type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void
+type HostReportListener = (sourceId: string, report: InstanceHostReport | undefined) => void
 
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
@@ -110,12 +124,16 @@ const activateSourceListeners = new Set<SourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
+const hostReportListeners = new Set<HostReportListener>()
 let servers: ChamberServerAggregate[] = []
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
 const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
 const pluginDiagnostics: Record<string, PluginGraphDiagnostic> = {}
+const hostReports: Record<string, InstanceHostReport> = {}
+const hostProducerTokens: Record<string, number> = {}
 let nextSnapshotProducerToken = 0
+let nextHostProducerToken = 0
 
 export const chamberBridge = {
   /** Latest published projection (non-authoritative; renderer-owned store). */
@@ -194,6 +212,53 @@ export const chamberBridge = {
     runtimeReportListeners.add(listener)
     return () => {
       runtimeReportListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Register the live host-description producer owned by one mounted ctx.
+   * The token prevents a late teardown from an old shell clearing a newer
+   * generation's version fact for the same source.
+   */
+  registerInstanceHostProducer(sourceId: string): {
+    report: (report: InstanceHostReport | undefined) => void
+    clear: () => void
+  } {
+    const token = ++nextHostProducerToken
+    hostProducerTokens[sourceId] = token
+    if (hostReports[sourceId] !== undefined) {
+      delete hostReports[sourceId]
+      for (const listener of [...hostReportListeners]) listener(sourceId, undefined)
+    }
+    return {
+      report(report): void {
+        if (hostProducerTokens[sourceId] !== token) return
+        if (report === undefined) {
+          if (hostReports[sourceId] === undefined) return
+          delete hostReports[sourceId]
+        } else {
+          const previous = hostReports[sourceId]
+          if (previous?.dshVersion === report.dshVersion) return
+          hostReports[sourceId] = report
+        }
+        for (const listener of [...hostReportListeners]) listener(sourceId, report)
+      },
+      clear(): void {
+        if (hostProducerTokens[sourceId] !== token) return
+        delete hostProducerTokens[sourceId]
+        if (hostReports[sourceId] === undefined) return
+        delete hostReports[sourceId]
+        for (const listener of [...hostReportListeners]) listener(sourceId, undefined)
+      },
+    }
+  },
+
+  /** App-layer subscription to generation-scoped host facts. */
+  onInstanceHost(listener: HostReportListener): () => void {
+    hostReportListeners.add(listener)
+    for (const [sourceId, report] of Object.entries(hostReports)) listener(sourceId, report)
+    return () => {
+      hostReportListeners.delete(listener)
     }
   },
 

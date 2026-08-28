@@ -784,10 +784,11 @@ const CHAMBER_APP_HTML = `<!doctype html>
     *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#0b0f14}header{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem max(1rem,calc((100vw - 74rem)/2));border-bottom:1px solid #30363d;background:rgba(11,15,20,.96)}
     h1,h2,h3,p{margin:0}h1{font-size:1.15rem}h2{font-size:1rem}h3{font-size:.9rem}.subtle,.status,small{color:#8b949e}.header-actions,.actions{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
     main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;max-width:74rem;margin:0 auto;padding:1rem}.panel{min-width:0;display:flex;flex-direction:column;gap:.75rem;padding:1rem;border:1px solid #30363d;border-radius:.75rem;background:#161b22}.wide{grid-column:1/-1}
-    button,a.button{display:inline-flex;align-items:center;justify-content:center;min-height:2rem;padding:.35rem .75rem;border:1px solid #484f58;border-radius:1rem;background:#21262d;color:#e6edf3;font:inherit;font-size:.82rem;text-decoration:none;cursor:pointer}button.primary{border-color:#238636;background:#238636}button.danger{border-color:#da3633;color:#ff7b72}button:disabled{opacity:.5;cursor:default}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
+    button,a.button{display:inline-flex;align-items:center;justify-content:center;min-height:2rem;padding:.35rem .75rem;border:1px solid #484f58;border-radius:1rem;background:#21262d;color:#e6edf3;font:inherit;font-size:.82rem;text-decoration:none;cursor:pointer}button.primary{border-color:#238636;background:#238636}button.danger{border-color:#da3633;color:#ff7b72}button:disabled{opacity:.5;cursor:default}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
     fieldset{display:flex;flex-direction:column;gap:.55rem;margin:0;padding:.75rem;border:1px solid #30363d;border-radius:.6rem}legend{padding:0 .3rem;font-weight:600}.toggle,.choice{display:flex;align-items:flex-start;gap:.5rem;font-size:.9rem}.choice small{display:block;margin-top:.15rem}.custom{display:flex;flex-direction:column;gap:.3rem;font-size:.8rem;color:#8b949e}.custom input{width:100%;padding:.45rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3}
+    select,.text-input{min-height:2rem;padding:.35rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3;font:inherit}.runtime-controls{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-controls .actions{grid-column:1/-1}.runtime-registry{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.runtime-facts .item{padding:.6rem}
     .list{display:flex;flex-direction:column;gap:.6rem}.item{display:flex;flex-direction:column;gap:.35rem;padding:.75rem;border-radius:.55rem;background:#0d1117;overflow-wrap:anywhere}.item-head{display:flex;justify-content:space-between;gap:.75rem;align-items:baseline}.item-head strong{min-width:0}.meta,code{color:#8b949e;font-size:.75rem;overflow-wrap:anywhere;white-space:pre-wrap}.body{font-size:.86rem;white-space:pre-wrap;overflow-wrap:anywhere}.status{min-height:1.2rem;font-size:.8rem}.status.error,.error{color:#ff7b72}.empty{padding:.5rem 0;color:#8b949e;font-size:.85rem}
-    @media(max-width:760px){header{align-items:flex-start}main{grid-template-columns:1fr}.wide{grid-column:auto}.header-actions{justify-content:flex-end}}
+    @media(max-width:760px){header{align-items:flex-start}main{grid-template-columns:1fr}.wide{grid-column:auto}.header-actions{justify-content:flex-end}.runtime-controls,.runtime-registry,.runtime-facts{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -805,6 +806,29 @@ const CHAMBER_APP_HTML = `<!doctype html>
         <label class="toggle"><input id="setting-schedule" type="checkbox">Cross-session scheduling</label>
       </fieldset>
       <div class="actions"><button id="save-settings" class="primary" type="button" disabled>Save settings</button></div>
+    </section>
+    <section class="panel wide" aria-labelledby="runtime-title">
+      <h2 id="runtime-title">dsh runtime</h2>
+      <p id="runtime-status" class="status" role="status">Loading…</p>
+      <div id="runtime-facts" class="runtime-facts"></div>
+      <div class="runtime-controls">
+        <label class="custom"><span>Runtime version</span><select id="runtime-version" disabled><option value="">Loading versions…</option></select></label>
+        <button id="runtime-select" class="primary" type="button" disabled>Install / select</button>
+        <div class="actions">
+          <button id="runtime-apply" type="button" disabled>Apply on next start</button>
+          <button id="runtime-rollback" type="button" disabled>Rollback</button>
+          <button id="runtime-restore" type="button" disabled>Restore builtin</button>
+          <button id="runtime-retry-apply" type="button" disabled>Retry apply</button>
+          <button id="runtime-retry-restore" type="button" disabled>Retry restore</button>
+          <button id="runtime-restart" type="button" disabled>Restart dsh</button>
+        </div>
+      </div>
+      <p id="runtime-versions-status" class="status" role="status"></p>
+      <div class="runtime-registry">
+        <label class="custom"><span>Registry origin</span><input id="runtime-registry" class="text-input" type="url" autocomplete="off" spellcheck="false" disabled></label>
+        <button id="runtime-registry-save" type="button" disabled>Save registry</button>
+      </div>
+      <p id="runtime-action-status" class="status" role="status"></p>
     </section>
     <section class="panel" aria-labelledby="sessions-title">
       <h2 id="sessions-title">Sessions</h2><p id="sessions-status" class="status" role="status">Loading…</p><div id="sessions" class="list"></div>
@@ -828,6 +852,22 @@ const CHAMBER_APP_JS = `(function () {
   'use strict';
   var MAX_ROWS = 200;
   var liveRefreshRunning = false;
+  var runtimeRefreshRunning = false;
+  var runtimeActionRunning = false;
+  var runtimeSelectionTouched = false;
+  var runtimeSnapshot = null;
+  var RUNTIME_PATHS = {
+    status: '/chamber/runtime/status',
+    versions: '/chamber/runtime/versions',
+    select: '/chamber/runtime/select',
+    apply: '/chamber/runtime/apply',
+    rollback: '/chamber/runtime/rollback',
+    restore: '/chamber/runtime/restore-builtin',
+    retryApply: '/chamber/runtime/retry-apply',
+    retryRestore: '/chamber/runtime/retry-restore',
+    restart: '/chamber/runtime/restart',
+    registry: '/chamber/runtime/registry'
+  };
   function byId(id) { return document.getElementById(id); }
   function ownRecord(value, label) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Malformed ' + label + ' response');
@@ -844,6 +884,11 @@ const CHAMBER_APP_JS = `(function () {
   }
   function optionalText(row, key, label) {
     if (row[key] === undefined) return undefined;
+    if (typeof row[key] !== 'string') throw new Error('Malformed ' + label + ' response');
+    return row[key];
+  }
+  function nullableText(row, key, label) {
+    if (row[key] === undefined || row[key] === null) return null;
     if (typeof row[key] !== 'string') throw new Error('Malformed ' + label + ' response');
     return row[key];
   }
@@ -873,7 +918,7 @@ const CHAMBER_APP_JS = `(function () {
   async function request(path, options) {
     var input = options || {};
     var controller = new AbortController();
-    var timer = setTimeout(function () { controller.abort(); }, 15000);
+    var timer = setTimeout(function () { controller.abort(); }, typeof input.timeoutMs === 'number' ? input.timeoutMs : 15000);
     var hasBody = Object.prototype.hasOwnProperty.call(input, 'body');
     try {
       var response = await fetch(path, {
@@ -884,8 +929,14 @@ const CHAMBER_APP_JS = `(function () {
         body: hasBody ? JSON.stringify(input.body) : undefined,
         signal: controller.signal
       });
-      if (!response.ok) throw new Error('Request failed (HTTP ' + response.status + ')');
-      return await response.json();
+      var payload;
+      try { payload = await response.json(); } catch (_) { payload = undefined; }
+      if (!response.ok) {
+        var detail = payload !== null && typeof payload === 'object' && !Array.isArray(payload) && typeof payload.error === 'string'
+          ? ': ' + bounded(payload.error, 1000) : '';
+        throw new Error('Request failed (HTTP ' + response.status + ')' + detail);
+      }
+      return payload;
     } finally {
       clearTimeout(timer);
     }
@@ -899,6 +950,152 @@ const CHAMBER_APP_JS = `(function () {
     return item;
   }
   function appendMeta(item, text) { if (text) item.appendChild(element('code', text)); }
+
+  function formatBytes(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 'unknown';
+    var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    var size = value; var unit = 0;
+    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+    return (unit === 0 ? String(Math.round(size)) : size.toFixed(size >= 10 ? 1 : 2)) + ' ' + units[unit];
+  }
+
+  function parseRuntimeStatus(value) {
+    var row = ownRecord(value, 'runtime status');
+    if (row.kind !== 'dsh-chamber-gateway-runtime') throw new Error('Malformed runtime status identity');
+    if (typeof row.phase !== 'string' || typeof row.mutationsAllowed !== 'boolean') throw new Error('Malformed runtime status response');
+    return row;
+  }
+
+  function runtimeVersion() { return byId('runtime-version').value || null; }
+
+  function setRuntimeControls() {
+    var row = runtimeSnapshot;
+    var selected = runtimeVersion();
+    var busy = row === null || runtimeActionRunning || row.phase === 'installing' || row.phase === 'applying' || row.restart === 'running';
+    var pendingBlocked = row !== null && row.phase === 'pending';
+    var baseMutationBlocked = busy || row.mutationsAllowed !== true || row.source === 'env';
+    var mutationBlocked = baseMutationBlocked || pendingBlocked;
+    byId('runtime-version').disabled = mutationBlocked;
+    byId('runtime-select').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
+    byId('runtime-apply').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
+    byId('runtime-rollback').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
+    // Design 18 pending terminal gate: restore-builtin is the sole escape.
+    // It remains disabled for live install/apply/restart and env/read-only.
+    byId('runtime-restore').disabled = baseMutationBlocked || row.hasOverride !== true;
+    byId('runtime-retry-apply').disabled = mutationBlocked || (row.phase !== 'swap-attempted' && row.phase !== 'snapshot-failed');
+    byId('runtime-retry-restore').disabled = mutationBlocked || row.phase !== 'restore-blocked';
+    byId('runtime-restart').disabled = pendingBlocked || busy || (row.connectionState !== 'ready' && row.connectionState !== 'degraded');
+    byId('runtime-registry').disabled = mutationBlocked;
+    byId('runtime-registry-save').disabled = mutationBlocked || byId('runtime-registry').value.trim().length === 0;
+  }
+
+  function renderRuntime(value) {
+    var row = parseRuntimeStatus(value);
+    runtimeSnapshot = row;
+    var active = nullableText(row, 'activeVersion', 'runtime status') || 'unknown';
+    var builtin = nullableText(row, 'builtinVersion', 'runtime status') || 'unknown';
+    var source = nullableText(row, 'source', 'runtime status') || 'unresolved';
+    var connection = nullableText(row, 'connectionState', 'runtime status') || 'unknown';
+    var summary = 'Active v' + active + ' · builtin v' + builtin + ' · ' + source + ' · ' + row.phase + ' · ' + connection;
+    var failed = row.operationError || row.startupBlockedReason || row.registryError;
+    status('runtime', summary + (failed ? ' — ' + bounded(failed, 1000) : ''), Boolean(failed));
+
+    var fragment = document.createDocumentFragment();
+    var progress = row.progress !== null && typeof row.progress === 'object' ? row.progress : null;
+    if (progress) {
+      var progressText = 'Stage: ' + bounded(progress.stage, 50);
+      if (progress.stage === 'download' && typeof progress.received === 'number') {
+        progressText += ' · ' + formatBytes(progress.received) + (typeof progress.total === 'number' ? ' / ' + formatBytes(progress.total) : '');
+      }
+      fragment.appendChild(itemShell('Install progress', progressText));
+    }
+    var snapshotMeta = typeof row.snapshotCount === 'number' ? String(row.snapshotCount) + ' snapshot(s)' : 'unavailable';
+    if (typeof row.latestSnapshotAt === 'string') snapshotMeta += ' · latest ' + new Date(row.latestSnapshotAt).toLocaleString();
+    if (typeof row.preRollbackCount === 'number') snapshotMeta += ' · ' + String(row.preRollbackCount) + ' rollback stash(es)';
+    if (typeof row.restoreOutcome === 'string') snapshotMeta += ' · restore ' + bounded(row.restoreOutcome, 40);
+    var snapshotCard = itemShell('Data snapshots', snapshotMeta);
+    if (row.snapshotError) snapshotCard.appendChild(element('p', row.snapshotError, 'error'));
+    if (row.restoreInProgress === true) snapshotCard.appendChild(element('p', 'Restore is incomplete; recovery evidence is retained.', 'error'));
+    fragment.appendChild(snapshotCard);
+    if (row.failure !== null && typeof row.failure === 'object') {
+      var failure = ownRecord(row.failure, 'runtime failure');
+      var failureCard = itemShell('Latest failure: v' + requiredText(failure, 'version', 'runtime failure'), nullableText(failure, 'at', 'runtime failure'));
+      failureCard.appendChild(element('p', requiredText(failure, 'reason', 'runtime failure'), 'error'));
+      fragment.appendChild(failureCard);
+    }
+    if (row.diskUsage !== null && typeof row.diskUsage === 'object') {
+      var disk = ownRecord(row.diskUsage, 'runtime disk usage');
+      var diskCard = itemShell('Runtime disk', formatBytes(disk.totalBytes));
+      appendMeta(diskCard, String(disk.versionTrees) + ' tree(s) · snapshots ' + formatBytes(disk.snapshotBytes) + ' · recovery/failures ' + formatBytes((disk.preRollbackBytes || 0) + (disk.restoreBackupBytes || 0) + (disk.failureBytes || 0)));
+      if (row.diskLimitExceeded === true) diskCard.appendChild(element('p', 'The logical disk soft limit has been reached; new downloads are paused.', 'error'));
+      fragment.appendChild(diskCard);
+    } else if (row.diskError) {
+      var diskError = itemShell('Runtime disk', 'unavailable'); diskError.appendChild(element('p', row.diskError, 'error')); fragment.appendChild(diskError);
+    }
+    byId('runtime-facts').replaceChildren(fragment);
+    if (typeof row.registry === 'string' && document.activeElement !== byId('runtime-registry')) byId('runtime-registry').value = row.registry;
+    setRuntimeControls();
+  }
+
+  async function loadRuntimeStatus() {
+    try { renderRuntime(await request(RUNTIME_PATHS.status)); }
+    catch (error) {
+      runtimeSnapshot = null;
+      status('runtime', error instanceof Error ? error.message : 'Runtime status unavailable', true);
+      setRuntimeControls();
+    }
+  }
+
+  async function loadRuntimeVersions() {
+    try {
+      var payload = ownRecord(await request(RUNTIME_PATHS.versions), 'runtime versions');
+      if (!Array.isArray(payload.versions)) throw new Error('Malformed runtime versions response');
+      var select = byId('runtime-version');
+      var previous = runtimeSelectionTouched ? select.value : '';
+      var fragment = document.createDocumentFragment();
+      payload.versions.forEach(function (value) {
+        var row = ownRecord(value, 'runtime version');
+        var version = requiredText(row, 'version', 'runtime version');
+        var option = document.createElement('option'); option.value = version;
+        option.textContent = 'v' + version + (row.latest === true ? ' · latest' : '') + (row.cached === true ? ' · cached' : '');
+        fragment.appendChild(option);
+      });
+      select.replaceChildren(fragment);
+      var preferred = previous || (runtimeSnapshot && (runtimeSnapshot.selectedVersion || runtimeSnapshot.activeVersion));
+      if (preferred && Array.from(select.options).some(function (option) { return option.value === preferred; })) select.value = preferred;
+      status('runtime-versions', typeof payload.error === 'string' ? payload.error : String(payload.versions.length) + ' version(s)', typeof payload.error === 'string');
+      setRuntimeControls();
+    } catch (error) { status('runtime-versions', error instanceof Error ? error.message : 'Runtime versions unavailable', true); }
+  }
+
+  async function runtimeAction(path, body, label) {
+    if (runtimeActionRunning) return;
+    runtimeActionRunning = true; setRuntimeControls(); status('runtime-action', label + '…', false);
+    try {
+      await request(path, { method: 'POST', timeoutMs: 11 * 60 * 1000, ...(body === undefined ? {} : { body: body }) });
+      status('runtime-action', label + ' accepted.', false);
+      await Promise.allSettled([loadRuntimeStatus(), loadRuntimeVersions()]);
+    } catch (error) {
+      status('runtime-action', error instanceof Error ? error.message : label + ' failed', true);
+    } finally { runtimeActionRunning = false; setRuntimeControls(); }
+  }
+
+  async function saveRuntimeRegistry() {
+    if (runtimeActionRunning) return;
+    runtimeActionRunning = true; setRuntimeControls(); status('runtime-action', 'Saving registry…', false);
+    try {
+      await request(RUNTIME_PATHS.registry, { method: 'PUT', body: { origin: byId('runtime-registry').value.trim() } });
+      status('runtime-action', 'Registry saved.', false); await Promise.allSettled([loadRuntimeStatus(), loadRuntimeVersions()]);
+    } catch (error) { status('runtime-action', error instanceof Error ? error.message : 'Registry save failed', true); }
+    finally { runtimeActionRunning = false; setRuntimeControls(); }
+  }
+
+  async function refreshRuntime() {
+    if (runtimeRefreshRunning) return;
+    runtimeRefreshRunning = true;
+    try { await Promise.allSettled([loadRuntimeStatus(), loadRuntimeVersions()]); }
+    finally { runtimeRefreshRunning = false; }
+  }
 
   function applySettings(value) {
     var row = ownRecord(value, 'settings');
@@ -1070,8 +1267,23 @@ const CHAMBER_APP_JS = `(function () {
     finally { liveRefreshRunning = false; }
   }
   byId('save-settings').addEventListener('click', function () { void saveSettings(); });
-  byId('refresh').addEventListener('click', function () { void Promise.allSettled([loadSettings(), refreshLive()]); });
-  void Promise.allSettled([loadSettings(), refreshLive()]);
+  byId('runtime-version').addEventListener('change', function () { runtimeSelectionTouched = true; setRuntimeControls(); });
+  byId('runtime-registry').addEventListener('input', setRuntimeControls);
+  byId('runtime-select').addEventListener('click', function () {
+    var version = runtimeVersion(); if (version) void runtimeAction(RUNTIME_PATHS.select, { version: version }, 'Runtime install/select');
+  });
+  byId('runtime-apply').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.apply, undefined, 'Runtime apply'); });
+  byId('runtime-rollback').addEventListener('click', function () {
+    var version = runtimeVersion(); if (version) void runtimeAction(RUNTIME_PATHS.rollback, { version: version }, 'Runtime rollback');
+  });
+  byId('runtime-restore').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.restore, undefined, 'Builtin restore'); });
+  byId('runtime-retry-apply').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.retryApply, undefined, 'Apply retry'); });
+  byId('runtime-retry-restore').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.retryRestore, undefined, 'Restore retry'); });
+  byId('runtime-restart').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.restart, undefined, 'dsh restart'); });
+  byId('runtime-registry-save').addEventListener('click', function () { void saveRuntimeRegistry(); });
+  byId('refresh').addEventListener('click', function () { void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive()]); });
+  void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive()]);
+  setInterval(function () { void loadRuntimeStatus(); }, 3000);
   setInterval(function () { void refreshLive(); }, 10000);
 }());
 `

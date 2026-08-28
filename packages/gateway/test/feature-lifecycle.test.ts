@@ -1307,6 +1307,9 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
   assert.equal(csp.split(';').map(value => value.trim()).find(value => value.startsWith('script-src')), "script-src 'self'")
   const html = page.chunks.join('')
   assert.match(html, /<script defer src="\/chamber\/app\.js"><\/script>/)
+  assert.match(html, /id="runtime-title"/)
+  assert.match(html, /id="runtime-version"/)
+  assert.match(html, /id="runtime-restart"/)
   assert.equal([...html.matchAll(/<script\b([^>]*)>/g)].every(match => /\bsrc=/.test(match[1] ?? '')), true,
     'the page has no inline script body')
 
@@ -1319,7 +1322,11 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
   assert.doesNotThrow(() => new Function(source), 'the served classic script must parse')
   for (const path of [
     '/chamber/settings', '/chamber/sessions', '/chamber/approvals',
-    '/chamber/schedule', '/chamber/git/worktrees',
+    '/chamber/schedule', '/chamber/git/worktrees', '/chamber/runtime/status',
+    '/chamber/runtime/versions', '/chamber/runtime/select', '/chamber/runtime/apply',
+    '/chamber/runtime/rollback', '/chamber/runtime/restore-builtin',
+    '/chamber/runtime/retry-apply', '/chamber/runtime/retry-restore',
+    '/chamber/runtime/restart', '/chamber/runtime/registry',
   ]) assert.match(source, new RegExp(path.replaceAll('/', '\\/')))
   assert.doesNotMatch(source, /\b(?:localStorage|sessionStorage|authorization|token)\b/i)
   assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|document\.write/)
@@ -1327,6 +1334,18 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
   assert.match(source, /method: 'PUT'/)
   assert.match(source, /outcome: 'allowed-once'/)
   assert.match(source, /answer: \{ answers: answers \}/)
+  assert.match(source, /dsh-chamber-gateway-runtime/,
+    'the dashboard refuses a non-gateway status payload instead of rendering unrelated JSON')
+  assert.match(source, /setInterval\(function \(\) \{ void loadRuntimeStatus\(\); \}, 3000\)/,
+    'runtime status keeps polling independently while the dsh-derived feature host is down')
+  assert.match(source, /payload\.error/,
+    'runtime action failures render the authenticated API error instead of only a status code')
+  assert.match(source, /row\.phase === 'installing'/,
+    'the standalone dashboard disables mutations throughout the install single-flight')
+  assert.match(source, /row\.phase === 'pending'/,
+    'the standalone dashboard mirrors the pending terminal gate')
+  assert.match(source, /runtime-restore'\)\.disabled = baseMutationBlocked/,
+    'restore-builtin remains the sole pending escape instead of inheriting the pending block')
 
   const head = new FakeResponse()
   await host.handle(new FakeRequest('HEAD') as unknown as ApiRequest,

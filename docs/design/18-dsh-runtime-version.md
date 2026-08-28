@@ -128,8 +128,9 @@ dsh-runtime-updater.ts（客户端）
   逐出；**用户显式选择安装过的版本树保留到显式清理**（registry yank 后缓存树仍
   可用——「自由回滚」的物理基础）。即：「自动清理」只逐出**不受保护**类版本，
   不与「保留到显式清理」冲突。
-- **恢复内建**：删除 override（连带 pending）→ 回落内建链（§3.5）。dev/env
-  覆盖下的语义见 §3.5/§3.6。
+- **恢复内建**：写 `reset-builtin` intent → 停机/快照 → 原子清 `current` →
+  内建锚全量探针；失败回旧指针并恢复快照，成功才删除 override/journal（连带
+  pending）。dev/env 覆盖下的语义见 §3.5/§3.6。
 
 ### 3.3 应用时机 = 下次启动的异步相位（R3-1 P2-7）
 
@@ -187,17 +188,24 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 
 优先级：`DSH_CHAMBER_DSH_PATH`（env）→ userData override（未失效时）→
 `resourcesPath/vendor/dsh`（dev：ref-dsh → pkgDir/vendor/dsh → null）。override
-记录 `{shellVersion, chosenVersion, resolvedVersion, pending, swapAttempted}`。
+记录 `{shellVersion, chosenVersion, resolvedVersion, pending, swapAttempted, selectedOnly?}`。
 
 **gateway 解析链（§9.3）**：`DSH_GATEWAY_DSH_PATH`（env，恒最高）→
 override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）。失效基准
-`shellVersion` = gateway 包版本；"恢复内建" = 删除 override 回落锚链。既有
+`shellVersion` = gateway 包版本；"恢复内建" = 经 §3.3/§3.7 完整激活事务回落
+锚链，成功裁决才删除 override/journal。既有
 "仅设 `DSH_GATEWAY_DSH_PATH`"的部署行为不变（env 恒最高）。
+
+- **gateway staged selection 证明**：gateway 的 select/apply 分步。仅当 select 当下
+  `current` 本来就缺失（内建锚是权威）时写 `selectedOnly:true`，允许“已缓存/已安装但
+  尚未 apply”的选择与空 pointer 共存；若用户树 v1 正在生效而只 stage v2，必须写
+  false/省略，随后 v1 pointer 丢失仍 fail closed，绝不能借 staged v2 静默回落内建。
+  apply/rollback 会清除此证明并写 pending；解析器只接受完整、未失效的 staged 形态。
 
 - **失效规则（覆盖 override 与 pending）**：启动时 `shellVersion ≠ 当前壳版本`
   → override 与 pending **一并失效**。**失效 = 标记失效（保留记录、版本树与快照）**
-  而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」才是显式
-  删除。
+  而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」仅在
+  内建锚探针通过后显式删除。
 - **回落保护（F4）**：回落内建树后跑数据可读性探测——用户曾用较新运行时并迁移
   过数据、内建 pin（默认 0.1.1-rc.2，不随壳移动）可能读不了新格式数据；探测失败
   → **自动恢复上一 override 树（受保护类，仍在）+ 响亮提示**。「单调向前」**仅对
@@ -209,7 +217,8 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
   单一事务）；重放幂等——当前指针版本 == pending 版本 → 跳过切换直接探针；快照
   记录 pre-swap 时间戳。
 - **恢复内建在 dev/env**：`DSH_CHAMBER_DSH_PATH` 优先于 override → UI 对 env 来源
-  显示标记「(env)」；恢复内建 = 删除 override 回落现有 fallback 链。
+  显示标记「(env)」且禁用版本 mutation；非 env 的 dev 来源仍走 reset-builtin
+  完整事务，成功后回落现有 fallback 链。
 - **dev 工作流边界（2026-08 补）**：override 统一优先于 dev 的 ref-dsh 回退——dev
   下若用户选/装了运行时版本，实例将从「跑 ref-dsh 源码」切换为「跑 npm 装好的树」；
   要持续用 ref-dsh 源码开发的，显式设 `DSH_CHAMBER_DSH_PATH`（env 恒最高优先）即可
@@ -233,6 +242,11 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - **pending / applying 为终态门**：pending 期间除 [恢复内建]（连带清 pending）
   外其余动作禁用；选择当前激活版本为无操作；**单飞守卫覆盖整个 install 窗口**；
   apply 期间挂起周期/手动检查。
+- **gateway 安装与激活隔离分层**：`installing` 只锁 runtime writer/registry 变更并投影
+  下载进度，当前 dsh proxy 与 feature consumers 保持可用；只有 snapshot→switch→probe
+  的 activation quarantine 才令 `canExposeLocal=false` 并 detach dsh 派生 feature。
+  candidate/rollback candidate 的瞬时 ready 在 probe verdict 前不得 attach，裁决结束
+  必须显式按权威 connectionState 重同步，不能依赖可能已被消费的 ready edge。
 - **applying 相位门控（R3-3 UX-P1-F2）**：applying（快照分钟级）期间，connections
   本地卡片「启动」按钮与任何实例 spawn 入口**门控禁用**（状态行「应用 dsh vY…」），
   杜绝与「未决切换前绝不 spawn」竞态。
@@ -279,14 +293,16 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    - 副行（仅当激活 ≠ 内建）「随应用内建 v0.1.1-rc.2」；gateway 宿主副行口径
      「部署锚 vX（`--dsh-path`/`DSH_GATEWAY_DSH_PATH`）」——gateway 的"内建"
      是部署者提供的锚，不是随包版本（§9.3/§7 口径）；
-   - env 来源时 tag 显 `(env)`，选择器与动作禁用，提示「由 env 路径指定」
+   - env 来源时 tag 显 `(env)`，版本选择/registry/restore mutation 禁用，提示
+     「由 env 路径指定」；来源无关的 `[重启 dsh]` 在进程 ready/degraded 时仍可用
      （desktop = `DSH_CHAMBER_DSH_PATH`；gateway = `DSH_GATEWAY_DSH_PATH`）。
 2. **版本选择器**（下拉）：置顶当前版本（「当前」）→ `dist-tags.latest`（「推荐」）→
    其余 registry 版本降序 → 离线时追加缓存版本（「已缓存」）；兼容基线以下版本加
    「可能无法 boot」警示。
 3. **动作**（依状态切换）：`[更新到 vY]`（较新）/ `[回滚到 vZ]`（较旧）/
-   `[恢复内建]`（清 override 含 pending）/ `[重启 dsh]`（见 8；运行中可用——applying/pending/checking/downloading/
-   installing 拒绝；env 源与 snapshot-failed 为保守禁用，STATUS 记录的刻意口径）；pending/applying 期间除 `[恢复内建]` 外禁用；选当前版本 = 无操作。
+   `[恢复内建]`（清 override 含 pending）/ `[重启 dsh]`（见 8；运行中可用——
+   applying/pending/checking/downloading/installing 拒绝；env 源不禁 restart）；
+   pending/applying 期间除 `[恢复内建]` 外禁用；选当前版本 = 无操作。
 4. **版本源设置行**（registry 源用户自设）：下拉 `npmjs（默认）` / `npmmirror` /
    `自定义…`；自定义走 §6 URL 白名单校验（origin 精确、拒绝 userinfo、decode
    归一化）；附 `[检查更新]`（宿主进程执行一次检查：desktop 主进程 / gateway 进程，
@@ -340,10 +356,10 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
   - **gateway**：同一段内容，但事实与动作经该实例反代触达 gateway 的
     `/chamber/runtime`（`/api/i/gateway-<id>/chamber/runtime/*`，§9.3），
     不接触 token（design 17 §7.2/§12 纪律）；状态机文案矩阵同口径；
-    重启 = `POST /chamber/runtime/restart`。**分期注记（STATUS M7）**：
-    当前 gateway settings 分支为**缩减视图**（remote 版本行 + 重启按钮 +
-    轮询），完整 per-server 段（版本选择器/状态/快照/变更经反代代理）属
-    后续阶段——登记于 STATUS 的 M7 剩余门禁（§9.5）；
+    重启 = `POST /chamber/runtime/restart`。gateway 分支已落地完整 per-server
+    管理面：版本选择器、状态/失败、快照、更新/回滚/恢复内建、registry 与
+    restart 均经认证反代代理；剩余仅为 STATUS 登记的组件级与实机验收门禁
+    （§9.5），不再以缩减视图作为产品契约；
   - **ssh**：版本只读——显示远端 dsh 版本行（实例面可得时）与「运行时由远端
     systemd 部署管理」说明，无版本 mutation 控件（远端运行时版本随 systemd，
     设计 13/18 口径）；**唯一动作 `[重启远端 dsh]`** = 既有 `restart_service`
@@ -546,7 +562,8 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
   └─ 失败（metadata/绑定/下载/SRI/安装/探测）→ 「无法检查更新/安装失败/已回退」
       （静默日志或响亮，绝不假成功）
 用户主动 [选择版本]（任意 registry 或缓存版本，含回滚）→ 同一条路径
-[恢复内建版本] → 删除 override（连带 pending），回落内建链（§3.5 回落保护）
+[恢复内建版本] → reset-builtin intent → 停机/快照/清指针/内建锚全探针 →
+  成功后删除 override+journal；失败回旧指针并恢复快照（§3.5/§3.7）
 失败现场：<userData>/dsh-runtime/failures/<version>.json + .failed 树
 数据快照：<userData>/dsh-runtime/snapshots/<源版本>-<时间戳>/
 回滚暂存：<userData>/dsh-runtime/pre-rollback/<时间戳>/（上限 1 份）
@@ -728,7 +745,9 @@ TOCTOU；违反部署纪律（如克隆 stateDir）仍是损坏风险）。
 
 **解析链**（§3.5 已并入）：`DSH_GATEWAY_DSH_PATH`（env 恒最高）→ override
 （未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）。`--dsh-path` 从
-"唯一路径"降级为"内建/回退锚"；"恢复内建" = 删除 override 回落锚链。兼容
+"唯一路径"降级为"内建/回退锚"；"恢复内建" = 先写 `reset-builtin` intent，
+再走停机 → 快照 → 原子清指针 → 内建锚全量探针 → 失败回滚/恢复的完整激活事务，
+仅探针成功后删除 override/journal。兼容
 规则：既有"仅设 `DSH_GATEWAY_DSH_PATH`"的部署行为不变（env 恒最高）；CLI
 仅在锚缺失时报错。失效规则同 §3.5（shellVersion = gateway 包版本），失效有
 可见记录。
@@ -765,6 +784,10 @@ consumers，再停 plane。`spawnAndProbe`/`stopHost` = `plane.startLocal()`/
 `plane.stopLocal()`（既有 `PlaneHandle` seam）。探针清单同 §3.4 全量，共享包
 提供，gateway 零新探针。
 
+Gateway 在 `DSH_GATEWAY_DSH_PATH` env 来源下，startup core 的 `env-override` bypass
+标记归一为健康结果：status 不得显示 blocked/error。env 只禁止版本、registry 与
+restore mutation；来源无关的受控 `restartLocal()` 仍可用。
+
 **重启 dsh 事务接口（增量，`PlaneHandle.restartLocal()`）**：用户触发的
 「重启 dsh」**不得**用 `stopLocal()`+`startLocal()` 裸组合——优雅停止会让
 健康监控看到"进程死亡"并触发自动重启分支（02 §3.5 进程死亡 → 直接重启），
@@ -778,27 +801,35 @@ desktop 与 gateway 均经 control-plane 的 `PlaneHandle.restartLocal()`（§9.
 共享同一原语（`RuntimeHostAdapter.restartHost()` 仅为 §9.1 草图口径）。HTTP
 语义：`POST /chamber/runtime/restart` 返回 **202**（接受即返回，不阻塞等
 ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/status` 轮询
-或 SSE 推送；applying/已有 restart 在途时 409。
+或 SSE 推送；installing/applying/pending/已有 restart 在途时 409。
 
 **管理面 `/chamber/runtime`（gateway 自有 runtime 控制器，认证后，design 17
 §4/§8.4 已登记）**：
 
 | 路由 | 语义 |
 |---|---|
-| `GET /chamber/runtime/status` | 当前版本 + 来源 tag（内建锚/用户选择/env）+ 状态机态 + pending + 失败记录（脱敏）+ 快照数 + 磁盘统计 |
-| `GET /chamber/runtime/versions` | registry metadata（简略 packument）+ 缓存版本；离线含缓存 |
+| `GET /chamber/runtime/status` | 固定身份 `kind:'dsh-chamber-gateway-runtime'` + 实际生效版本/来源 tag（内建锚/用户选择/env）+ 状态机态 + pending + operation/restart + 失败记录（脱敏）+ restore/pre-rollback + 快照 + 安装进度 + 全分类磁盘统计 |
+| `GET /chamber/runtime/versions` | registry metadata（简略 packument）+ 全部有效缓存版本；离线仍返回缓存，当前 builtin 只标 active、不误标 cached |
 | `POST /chamber/runtime/select` | 绑定源/版本/tarball/SRI → 下载+SRI → pnpm `file:` install → prune → 冒烟 → 只读原子发布（异步 job，进度经 SSE/poll） |
 | `POST /chamber/runtime/apply` | 置 pending（下次 gateway 重启应用） |
 | `POST /chamber/runtime/rollback` | 手动回滚（pre-rollback 暂存 + 快照语义同 §3.7） |
-| `POST /chamber/runtime/restore-builtin` | 删除 override（连带 pending），回落内建锚；blocked 启动态（swap-attempted/restore-half/restore-incomplete）经此清内存 blocked 投影，dsh 仍停（由 gateway 服务重启拉起） |
+| `POST /chamber/runtime/restore-builtin` | 写 `reset-builtin` intent 后执行与版本切换相同的数据安全事务：停机 → 快照 → 原子清指针 → 内建锚全量探针；失败切回旧指针并恢复快照，只有成功才删除 override/journal。snapshot-failed 恢复未改动来源，其余硬恢复阻塞保持 dsh 停机且管理面可轮询 |
 | `POST /chamber/runtime/retry-apply` | 恢复被中断的指针切换（swap-attempted）或快照失败（snapshot-failed）：清标志 → 重跑启动事务 → 干净时拉起 dsh（desktop retry-apply 对齐） |
 | `POST /chamber/runtime/retry-restore` | 从持久 journal 继续被中断的快照恢复（restore-half/restore-incomplete）：重跑启动事务续作 |
 | `POST /chamber/runtime/restart` | 受控重启 gateway 托管的 dsh 进程（§3.6 项 8：刷新插件挂载；指针不动、无快照/探针；`syncFeatures` 随 ready 变化 detach/attach）；202 接受、结果经 status().restart（running/ok/failed）+ operationError 轮询，resolve ≠ success |
-| `GET/PUT /chamber/runtime/registry` | registry 源设置（owner-only 0600；URL 白名单校验同 §6） |
+| `GET/PUT /chamber/runtime/registry` | registry 源设置（owner-only 0600；URL 白名单校验同 §6；仅文件真实缺失时回默认 npmjs；损坏/符号链接/硬链接隔离保留并响亮失败；原子写，激活/安装期间禁止换源） |
 
-状态机 × 可见动作 × 文案矩阵沿用 §3.6 M4 口径；`/chamber/` 浏览器页新增
-runtime 块（版本概览/选择器/动作/状态行/失败行/快照行，组件与文案规格同
-§3.6）。**blocked 启动保持存活（2026-09 评审落地）**：启动事务返回
+普通 `phase:'pending'` 是 core + route + 两套 UI 的一致终态门：除
+`restore-builtin` 外，select/apply/rollback/retry/restart/registry mutation 全部拒绝
+`409 runtime_pending`；snapshot-failed/swap-attempted/restore-half 等持久记录虽可能仍含
+pending，但属于显式 recovery phase，只开放各自 retry 与 restore-builtin，不能被普通
+pending 分支吞掉或被 select 清除。
+
+状态机 × 可见动作 × 文案矩阵沿用 §3.6 M4 口径；`/chamber/` 浏览器页提供
+完整 runtime 块（实际/内建/选择版本、select/apply/rollback/restore/retry/restart、
+registry、进度、失败、restore/pre-rollback、快照与磁盘，规格同 §3.6）。Desktop
+settings-bridge 对固定身份做精确校验并透传同一投影，不能把普通 dsh 响应误认成
+Gateway runtime。**blocked 启动保持存活（2026-09 评审落地）**：启动事务返回
 `swap-attempted`/`restore-half`/`restore-incomplete` 时 gateway **不**中止
 启动——管理面保持可轮询、托管 dsh 停机，`status().startupBlockedReason`
 投影原因，恢复面为 `retry-apply`/`retry-restore`（镜像 desktop
@@ -814,7 +845,8 @@ gateway dispatch 面的自有 runtime 控制器（与 auth/dispatch 同级），
 每次 spawn 前 chamber host 包 seed thunk 重新求值、dsh boot 重读插件清单 →
 插件挂载刷新；`syncFeatures` 随 ready 过渡 detach/attach **dsh 派生** feature
 面（runtime 控制器不 detach）。安全：全部认证后；
-token/password 不进 runtime 日志；install 子进程
+token/password 不进 runtime 日志；registry 配置损坏不得静默改用 npmjs（信任锚
+只能由用户显式修复），离线版本列表仍保留所有通过树校验的缓存版本；install 子进程
 env scrubbing + `NPM_CONFIG_USERCONFIG` 空文件 + 显式 `--registry`（§4 源钉死
 原样适用）；registry 源切换即信任边界切换。**出网面**：仅 gateway 进程访问
 npm registry（§6 已并入）；spawn 的 dsh 子进程与控制面保持零出网。gateway

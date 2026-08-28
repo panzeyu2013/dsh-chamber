@@ -14,6 +14,8 @@ import { createInstanceProxy } from '../src/instance-proxy.ts'
 import type { ProxyRequest, ProxyResponse } from '../src/proxy-forward.ts'
 
 const quietLogger = { log() {}, warn() {}, error() {} }
+const TOKEN = 't'.repeat(32)
+const AUTHORIZATION = `Bearer ${TOKEN}`
 
 function fakeHttpRequest() {
   const calls: Array<{ url: URL; options: Record<string, unknown> }> = []
@@ -76,7 +78,7 @@ function makeGatewayProxy() {
 test('registerTransport accepts a gateway https non-loopback origin + Authorization', () => {
   const { proxy } = makeGatewayProxy()
   // Non-loopback https origin with an Authorization header (design 17 §9.3).
-  proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', { authorization: 'Bearer secret' })
+  proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', { authorization: AUTHORIZATION })
   assert.equal(proxy.getDiagnostics().transports, 1)
 })
 
@@ -86,6 +88,31 @@ test('registerTransport accepts a gateway http origin (insecureHttp direct)', ()
   // origin constraints still apply, only the protocol is relaxed.
   proxy.registerTransport('gateway:plain', 'http://gw.internal:8080')
   assert.equal(proxy.getDiagnostics().transports, 1)
+})
+
+test('registerTransport accepts dsh+http direct while dsh+ssh stays loopback-only', async () => {
+  const { proxy, upstream } = makeGatewayProxy()
+  // `dsh` is the target kind; HTTP is an independent transport dimension.
+  // Direct mode may therefore use a non-loopback origin, but never gains the
+  // gateway target's credential/header capabilities.
+  proxy.registerTransport('dsh:direct', 'https://dsh.example.com:8443', undefined, { transport: 'http' })
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-direct/api/host.describe'), fakeResponse())
+  assert.equal(upstream.calls.length, 1)
+  const headers = upstream.calls[0].options.headers as Record<string, string>
+  assert.equal(headers.host, 'dsh.example.com:8443')
+  assert.equal(headers.authorization, undefined)
+  assert.equal(headers.cookie, undefined)
+
+  // Missing transport remains fail-closed as the historical SSH shape, and
+  // an explicit SSH transport may only register its loopback tunnel origin.
+  assert.throws(() => proxy.registerTransport('dsh:legacy-default', 'https://dsh.example.com'), /loopback/)
+  assert.throws(() => proxy.registerTransport('dsh:tunnel', 'https://dsh.example.com', undefined, { transport: 'ssh' }), /loopback/)
+  assert.throws(() => proxy.registerTransport('ssh:legacy', 'https://dsh.example.com', undefined, { transport: 'http' }), /legacy/)
+  assert.throws(() => proxy.registerTransport('dsh:path', 'https://dsh.example.com/api', undefined, { transport: 'http' }), /origin/)
+  assert.throws(
+    () => proxy.registerTransport('dsh:inject-direct', 'https://dsh.example.com', { authorization: 'Bearer secret' }, { transport: 'http' }),
+    /cannot inject/,
+  )
 })
 
 test('registerTransport rejects a gateway non-http(s) URL', () => {
@@ -103,6 +130,7 @@ test('registerTransport rejects a gateway URL with a path/credentials', () => {
 test('registerTransport still rejects a non-loopback ssh baseUrl', () => {
   const { proxy } = makeGatewayProxy()
   assert.throws(() => proxy.registerTransport('ssh:x', 'https://example.com'), /loopback/)
+  assert.throws(() => proxy.registerTransport('gateway:x', 'https://example.com', undefined, { transport: 'ssh' }), /loopback/)
 })
 
 test('gateway transport injects 0..2 bounded whitelist headers (Authorization/Cookie) and rejects the rest', () => {
@@ -113,20 +141,20 @@ test('gateway transport injects 0..2 bounded whitelist headers (Authorization/Co
   assert.equal(proxy.getDiagnostics().transports, 1)
 
   // 1 header: either Authorization or Cookie alone.
-  proxy.registerTransport('gateway:auth', 'https://gateway.example.com', { authorization: 'Bearer secret' })
+  proxy.registerTransport('gateway:auth', 'https://gateway.example.com', { authorization: AUTHORIZATION })
   proxy.registerTransport('gateway:cookie', 'https://gateway.example.com', { cookie: 'dsh_gateway_session=abc.def' })
   assert.equal(proxy.getDiagnostics().transports, 3)
 
   // 2 headers: Authorization + Cookie together.
   proxy.registerTransport('gateway:both', 'https://gateway.example.com', {
-    authorization: 'Bearer secret',
+    authorization: AUTHORIZATION,
     cookie: 'dsh_gateway_session=abc.def',
   })
   assert.equal(proxy.getDiagnostics().transports, 4)
 
   // Anything outside the whitelist is rejected.
   assert.throws(
-    () => proxy.registerTransport('gateway:multi', 'https://gateway.example.com', { authorization: 'Bearer secret', host: 'evil' }),
+    () => proxy.registerTransport('gateway:multi', 'https://gateway.example.com', { authorization: AUTHORIZATION, host: 'evil' }),
     /Authorization\/Cookie/,
   )
   assert.throws(
@@ -141,6 +169,12 @@ test('gateway transport injects 0..2 bounded whitelist headers (Authorization/Co
     () => proxy.registerTransport('gateway:crlf', 'https://gateway.example.com', { authorization: 'Bearer good\r\nx-evil: yes' }),
     /Bearer credential/,
   )
+  for (const authorization of [`Bearer ${'x'.repeat(31)}`, `Bearer ${'x'.repeat(4097)}`, `Bearer ${'x'.repeat(31)}\t`]) {
+    assert.throws(
+      () => proxy.registerTransport('gateway:bad-bearer', 'https://gateway.example.com', { authorization }),
+      /Bearer credential/,
+    )
+  }
   // Cookie bounds: wrong name, CRLF, extra cookie pair, overlong value.
   assert.throws(
     () => proxy.registerTransport('gateway:badname', 'https://gateway.example.com', { cookie: 'evil=1' }),
@@ -155,7 +189,11 @@ test('gateway transport injects 0..2 bounded whitelist headers (Authorization/Co
     /dsh_gateway_session/,
   )
   assert.throws(
-    () => proxy.registerTransport('gateway:dup', 'https://gateway.example.com', { authorization: 'Bearer a', Authorization: 'Bearer b' }),
+    () => proxy.registerTransport('gateway:long-cookie', 'https://gateway.example.com', { cookie: `dsh_gateway_session=${'x'.repeat(4097)}` }),
+    /dsh_gateway_session/,
+  )
+  assert.throws(
+    () => proxy.registerTransport('gateway:dup', 'https://gateway.example.com', { authorization: AUTHORIZATION, Authorization: `Bearer ${'b'.repeat(32)}` }),
     /at most once/,
   )
   // dsh targets (incl. the legacy ssh spelling) never inject headers.
@@ -171,11 +209,11 @@ test('gateway transport injects 0..2 bounded whitelist headers (Authorization/Co
 
 test('validated Authorization is injected at forward time without changing authority', async () => {
   const { proxy, upstream } = makeGatewayProxy()
-  proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', { Authorization: 'Bearer secret' })
+  proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', { Authorization: AUTHORIZATION })
   await proxy.handleHttp(fakeRequest('/api/i/gateway-server-1/api/session.list'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
-  assert.equal(headers.authorization, 'Bearer secret')
+  assert.equal(headers.authorization, AUTHORIZATION)
   assert.equal(headers.host, 'gateway.example.com:8443')
   assert.equal(headers.origin, undefined)
 })
@@ -183,13 +221,13 @@ test('validated Authorization is injected at forward time without changing autho
 test('Authorization + Cookie both ride the forward, and a 0-header gateway injects neither', async () => {
   const { proxy, upstream } = makeGatewayProxy()
   proxy.registerTransport('gateway:both', 'https://gateway.example.com', {
-    authorization: 'Bearer secret',
+    authorization: AUTHORIZATION,
     cookie: 'dsh_gateway_session=abc.def',
   })
   await proxy.handleHttp(fakeRequest('/api/i/gateway-both/api/session.list'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
-  assert.equal(headers.authorization, 'Bearer secret')
+  assert.equal(headers.authorization, AUTHORIZATION)
   assert.equal(headers.cookie, 'dsh_gateway_session=abc.def')
 
   // A credential-less gateway target injects neither header.
@@ -202,25 +240,26 @@ test('Authorization + Cookie both ride the forward, and a 0-header gateway injec
 
 test('an ssh-tunneled gateway transport overrides the upstream Host with the remote authority (design 17 §9.3 隧道 Host 覆盖)', async () => {
   const { proxy, upstream } = makeGatewayProxy()
-  // Tunnel shape: loopback baseUrl + the REMOTE gateway authority override.
-  proxy.registerTransport('gateway:tunnel', 'http://127.0.0.1:43123', { authorization: 'Bearer secret' }, { authority: '192.168.110.172:30801' })
+  // Tunnel shape: loopback baseUrl + the REMOTE loopback-listener authority.
+  proxy.registerTransport('gateway:tunnel', 'http://127.0.0.1:43123', { authorization: AUTHORIZATION }, { transport: 'ssh', authority: '127.0.0.1:30801' })
   await proxy.handleHttp(fakeRequest('/api/i/gateway-tunnel/api/host.describe'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
-  assert.equal(headers.host, '192.168.110.172:30801', 'the remote authority rides the Host header')
-  assert.equal(headers.authorization, 'Bearer secret', 'the credential still rides')
+  assert.equal(headers.host, '127.0.0.1:30801', 'the remote loopback authority rides the Host header')
+  assert.equal(headers.authorization, AUTHORIZATION, 'the credential still rides')
 })
 
-test('registerTransport authority validation: gateway-only, host[:port] shape (design 17 §9.3)', () => {
+test('registerTransport authority validation: gateway+ssh requires remote 127.0.0.1:<port> (design 17 §9.3)', () => {
   const { proxy } = makeGatewayProxy()
-  // Bracket-free IPv6 is accepted like the host whitelists.
-  proxy.registerTransport('gateway:v6', 'http://127.0.0.1:43124', undefined, { authority: '[2001:db8::1]:30801' })
+  proxy.registerTransport('gateway:loopback', 'http://127.0.0.1:43124', undefined, { transport: 'ssh', authority: '127.0.0.1:30801' })
+  assert.throws(() => proxy.registerTransport('gateway:missing', 'http://127.0.0.1:43125', undefined, { transport: 'ssh' }), /requires its remote loopback authority/)
   // dsh targets can never override the Host (no Host policy to satisfy).
-  assert.throws(() => proxy.registerTransport('dsh:x', 'http://127.0.0.1:43125', undefined, { authority: 'gw:30801' }), /cannot override/)
-  // Shape gates: path, scheme, credentials, spaces, oversized.
-  assert.throws(() => proxy.registerTransport('gateway:x', 'http://127.0.0.1:43126', undefined, { authority: 'gw.example.com/path' }), /host\[:port\]/)
-  assert.throws(() => proxy.registerTransport('gateway:x', 'http://127.0.0.1:43127', undefined, { authority: 'https://gw.example.com' }), /host\[:port\]/)
-  assert.throws(() => proxy.registerTransport('gateway:x', 'http://127.0.0.1:43128', undefined, { authority: 'user@host:30801' }), /host\[:port\]/)
-  assert.throws(() => proxy.registerTransport('gateway:x', 'http://127.0.0.1:43129', undefined, { authority: 'a b:30801' }), /host\[:port\]/)
-  assert.throws(() => proxy.registerTransport('gateway:x', 'http://127.0.0.1:43130', undefined, { authority: 'h'.repeat(300) }), /host\[:port\]/)
+  assert.throws(() => proxy.registerTransport('dsh:x', 'http://127.0.0.1:43125', undefined, { transport: 'ssh', authority: 'gw:30801' }), /cannot override/)
+  // Direct HTTP mode cannot claim the SSH tunnel's Host-override capability.
+  assert.throws(() => proxy.registerTransport('gateway:direct', 'https://gw.example.com', undefined, { transport: 'http', authority: 'gw.example.com' }), /requires an ssh transport/)
+  // The SSH forward always terminates at remote 127.0.0.1; aliases, public
+  // names, IPv6 and invalid/range-broken ports cannot become Host authority.
+  for (const authority of ['gw.example.com:30801', '192.168.1.2:30801', '[::1]:30801', '127.0.0.1:0', '127.0.0.1:65536', '127.0.0.1:99999']) {
+    assert.throws(() => proxy.registerTransport('gateway:x', 'http://127.0.0.1:43126', undefined, { transport: 'ssh', authority }), /remote 127\.0\.0\.1/)
+  }
 })

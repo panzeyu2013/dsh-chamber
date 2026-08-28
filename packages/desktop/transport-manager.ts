@@ -1,8 +1,9 @@
 /**
  * Generic transport runtime (design 03 §2.2, transport-provider.ts): the
  * source-agnostic half of the connection manager. Every registry instance
- * carries a `kind`; the runtime drives the ONE TransportProvider given at
- * creation (v1: `ssh`, ssh-provider.ts) and owns everything generic:
+ * carries orthogonal `kind` and `transport`; the runtime resolves the provider
+ * registered for that transport (`ssh` or `http`, with a legacy fallback) and
+ * owns everything generic:
  *
  * - Persisted instance registry (<userData>/ssh-instances.json, written with
  *   the repo's atomic-write convention: write .tmp → fsync → rename; corrupt
@@ -37,9 +38,10 @@
  *
  * Security discipline (design 05 §8): the transport URL
  * (http://127.0.0.1:<localPort> or a provider endpoint) NEVER leaves this
- * module raw. status() projects {kind, phase, localPort, sshPort,
- * remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}
- * only — the renderer builds webview URLs from localPort alone. No
+ * module raw. status() projects {kind, transport, insecureHttp, phase,
+ * localPort, sshPort, remotePort, remoteDshHome, retryAttempt,
+ * requiresUserAction, serviceActive, logSummary} only — the renderer builds
+ * webview URLs from localPort alone. No
  * credential material ever rides the command line (provider-owned) and
  * stderr is redacted by the provider before it enters the ring buffer.
  *
@@ -55,7 +57,7 @@ import type { SpawnOptions } from 'node:child_process'
 import net from 'node:net'
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
+import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -68,6 +70,7 @@ import type {
   TransportProbeEndpoint,
   TransportProvider,
   TransportRunPayload,
+  TransportSpawnLease,
   TransportStatusProjection,
   TransportVerifyResult,
 } from './transport-provider.ts'
@@ -215,10 +218,13 @@ export function commitTransportCredentialUpdate(
   commit: () => void,
 ): void {
   const previousStatus = transport.status(id)
-  const shouldReconnect = previousStatus !== null
-    && belongsTo(previousStatus)
-    && previousStatus.phase !== 'idle'
-  if (shouldReconnect) transport.disconnect(id)
+  const applicable = previousStatus !== null && belongsTo(previousStatus)
+  const shouldReconnect = applicable && previousStatus.phase !== 'idle'
+  // An exec may run while the transport itself is idle. It still belongs to
+  // the old credential generation and must be stopped before a clear/write,
+  // but an exec-only generation is not auto-connected after the mutation.
+  const shouldDisconnect = applicable
+  if (shouldDisconnect) transport.disconnect(id)
   try {
     commit()
   } catch (error) {
@@ -228,6 +234,20 @@ export function commitTransportCredentialUpdate(
     throw error
   }
   if (shouldReconnect) transport.connect(id)
+}
+
+/** Fields that bind provider exec work to one connection generation. Label,
+ * HTTP scheme and SPKI do not change an SSH exec target; the remote service
+ * and dsh home do. saveInstances disconnects/bump-epochs on the same set. */
+function execIdentityChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
+  return a.kind !== b.kind
+    || a.transport !== b.transport
+    || a.host !== b.host
+    || a.user !== b.user
+    || a.sshPort !== b.sshPort
+    || a.remotePort !== b.remotePort
+    || a.serviceName !== b.serviceName
+    || a.remoteDshHome !== b.remoteDshHome
 }
 
 /** Internal per-instance runtime state (phase machine + logs; never persisted). */
@@ -393,6 +413,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    *  get the same grace escalation as tunnel children, and disposeAsync waits
    *  for both — a SIGTERM-ignoring ssh exec must not survive app quit. */
   const execKillEscalations = new Map<SpawnedProcess, ReturnType<typeof setTimeout>>()
+  /** Global tunnel escalation tracker. Instance state may be deleted as soon
+   * as its registry row is removed, but app shutdown must still wait for that
+   * removed generation's SIGKILL/real exit and askpass-lease release. */
+  const tunnelKillEscalations = new Map<SpawnedProcess, ReturnType<typeof setTimeout>>()
   const bus = new EventEmitter()
 
   function ensureState(id: string): InstanceState {
@@ -476,14 +500,46 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * child always gets its SIGKILL).
    */
   function armKillEscalation(state: InstanceState, child: SpawnedProcess) {
-    const previous = state.killEscalations.get(child)
-    if (previous !== undefined) clearTimeout(previous)
+    // One non-renewable deadline per child. A repeated disconnect or an
+    // immediate dispose cannot postpone a removed generation's SIGKILL.
+    if (tunnelKillEscalations.has(child)) return
     const timer = setTimeout(() => {
       state.killEscalations.delete(child)
+      // Keep the GLOBAL entry until the actual child exit/error. disposeAsync
+      // therefore cannot return between sending SIGKILL and releasing the
+      // child-bound provider/askpass lease.
       signalChild(child, 'SIGKILL')
     }, disconnectGraceMs)
     timer.unref?.()
     state.killEscalations.set(child, timer)
+    tunnelKillEscalations.set(child, timer)
+  }
+
+  /** A child lifecycle terminal event owns both escalation indexes. This is
+   * also used for a spawn `error`, which Node may emit without a later
+   * `exit`; retaining that entry would make app shutdown wait for a process
+   * that was never successfully created. */
+  function clearTunnelKillEscalation(state: InstanceState | undefined, child: SpawnedProcess) {
+    const escalation = tunnelKillEscalations.get(child)
+    if (escalation !== undefined) {
+      clearTimeout(escalation)
+      tunnelKillEscalations.delete(child)
+    }
+    state?.killEscalations.delete(child)
+  }
+
+  /** Arm one non-renewable SIGTERM → SIGKILL deadline for an exec child.
+   * disconnect(), repeated disconnects, and dispose() all share this map, so
+   * none can postpone the deadline or deliver a second manager-owned KILL. */
+  function armExecKillEscalation(child: SpawnedProcess) {
+    if (execKillEscalations.has(child)) return
+    const timer = setTimeout(() => {
+      // Like tunnel leases, keep tracking until the child lifecycle reports
+      // exit/error; the grace timer merely requests termination.
+      signalChild(child, 'SIGKILL')
+    }, disconnectGraceMs)
+    timer.unref?.()
+    execKillEscalations.set(child, timer)
   }
 
   /**
@@ -592,14 +648,11 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    */
   function onChildExit(id: string, child: SpawnedProcess, code: number | null, signal: NodeJS.Signals | null) {
     const state = states.get(id)
+    // Clear global tracking BEFORE consulting state: removal deliberately
+    // deletes the state immediately, while this old child/lease may still be
+    // terminating. An unrelated child's exit never cancels another's entry.
+    clearTunnelKillEscalation(state, child)
     if (state === undefined) return
-    // Clear the SIGKILL escalation ONLY for THIS exiting child (per-child
-    // tracking — an unrelated child's exit never cancels another's).
-    const escalation = state.killEscalations.get(child)
-    if (escalation !== undefined) {
-      clearTimeout(escalation)
-      state.killEscalations.delete(child)
-    }
     if (state.child !== child) return
     state.child = null
     state.childExited = true
@@ -729,10 +782,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       // auth, design 05 §8) is merged over process.env — never replaces it
       // (the child must keep HOME, PATH, …). A throwing provider lands on a
       // loud error, never a stuck connecting with no child.
-      let transportEnv: NodeJS.ProcessEnv | null = null
+      let transportLease: TransportSpawnLease | null = null
       if (providerForSpec.buildStartEnv !== undefined) {
         try {
-          transportEnv = providerForSpec.buildStartEnv(spec)
+          transportLease = providerForSpec.buildStartEnv(spec)
         } catch (envError) {
           warn(`transport-manager: providerForSpec.buildStartEnv threw: ${String(envError)}`)
           transition(id, 'error', `provider buildStartEnv threw: ${String(envError)}`)
@@ -740,17 +793,33 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
           return
         }
       }
+      let leaseReleased = false
+      const releaseTransportLease = () => {
+        if (leaseReleased || transportLease === null) return
+        leaseReleased = true
+        try {
+          transportLease.release()
+        } catch (releaseError) {
+          warn(`transport-manager: provider transport lease release threw: ${String(releaseError)}`)
+        }
+      }
       let child: SpawnedProcess
       try {
         child = doSpawn('ssh', args!, {
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: transportEnv === null ? undefined : { ...process.env, ...transportEnv },
+          env: transportLease === null ? undefined : { ...process.env, ...transportLease.env },
         })
       } catch (spawnError) {
+        releaseTransportLease()
         state.requiresUserAction = true
         failTerminal(id, `failed to spawn transport: ${String(spawnError)}`)
         return
       }
+      // Bind provider-owned ephemeral resources to the ACTUAL child
+      // lifetime before any stale-epoch handling can signal it. Node may
+      // emit both error and exit, so the one-shot wrapper owns idempotency.
+      child.on('exit', releaseTransportLease)
+      child.on('error', releaseTransportLease)
       if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) {
         // A stale epoch (a newer attempt took over while this spawn was in
         // flight): the freshly spawned child must still get the SIGKILL
@@ -826,11 +895,17 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       child.on('error', error => {
         // Spawn failure (e.g. the transport binary is missing): terminal,
         // user action. Guarded: a REPLACED child's late spawn-error must
-        // never failTerminal the fresh transport.
-        if (state.child !== child) return
+        // never failTerminal the fresh transport. A spawn error may have no
+        // following exit event, so it is also an authoritative end to this
+        // child's global shutdown/escalation tracking.
+        if (state.child !== child) {
+          clearTunnelKillEscalation(state, child)
+          return
+        }
         appendLogInternal(state, 'error', `transport spawn error: ${String(error)}`)
         state.requiresUserAction = true
         failTerminal(id, `failed to spawn transport: ${String(error)}`)
+        clearTunnelKillEscalation(state, child)
       })
     }
 
@@ -923,31 +998,50 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // late callback of an exec started before the disconnect recognizes it
     // is stale and drops its write (a removed-and-reused id, a kind switch,
     // or a field-edit restart must never be polluted by the old instance's
-    // in-flight exec — review 2026-08). Label/serviceName-only edits do not
-    // disconnect, so their execs keep writing.
+    // in-flight exec — review 2026-08). Label-only edits do not disconnect;
+    // the identity comparison
+    // below is the authoritative fence even between children in a multi-step
+    // exec, when the per-child set may momentarily be empty.
     const execEpoch = state.execEpoch
+    const execIsCurrent = (): boolean => {
+      const current = instances.get(id)
+      return !disposed && state.execEpoch === execEpoch
+        && current !== undefined && !execIdentityChanged(spec, current)
+    }
     // Wrap the spawn so in-flight exec children are tracked per instance
     // (SIGTERMed by disconnect — a disconnect cancels the execs it owns)
     // and globally (SIGTERMed by dispose/app quit).
     const trackedSpawn = (command: string, args: readonly string[], spawnOptions: SpawnOptions) => {
+      // Multi-stage provider execs (notably write-file then read-back) may
+      // request another child after an await. Never let an old-spec saga spawn
+      // its next step after retarget/delete/dispose; throwing lets the provider
+      // release the just-acquired askpass lease through its spawn-failure path.
+      if (!execIsCurrent()) throw new Error('exec superseded by connection change')
       const child = doSpawn(command, args, spawnOptions)
       execChildren.add(child)
       state.execChildren.add(child)
-      child.on('exit', () => {
+      let trackingReleased = false
+      const releaseTracking = () => {
+        if (trackingReleased) return
+        trackingReleased = true
         execChildren.delete(child)
         state.execChildren.delete(child)
-        // The child exited on its own: cancel any pending escalation (the
-        // dispose-time timer would otherwise linger until it fires).
+        // A real exit or spawn failure cancels the pending manager escalation.
+        // Askpass has its own per-child lease and uses the same actual child
+        // lifecycle; no disconnect path releases that lease prematurely.
         const escalation = execKillEscalations.get(child)
         if (escalation !== undefined) {
           clearTimeout(escalation)
           execKillEscalations.delete(child)
         }
-      })
+      }
+      child.on('exit', releaseTracking)
+      child.on('error', releaseTracking)
       return child
     }
+    let operation: Promise<TransportExecResult>
     try {
-      return providerForSpec.exec(spec, action, {
+      operation = providerForSpec.exec(spec, action, {
         spawnFn: trackedSpawn,
         execTimeoutMs,
         runTimeoutMs: runExecTimeoutMs,
@@ -956,25 +1050,31 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
           // Stale-exec guard: an exec that outlived its instance's
           // disconnect must never write into the ring buffer of a reused
           // (or kind-switched) instance.
-          if (state.execEpoch !== execEpoch) return
+          if (!execIsCurrent()) return
           appendLogInternal(state, level, message)
         },
         setProjection: (execId, key, value) => {
           if (key === 'serviceActive') {
             // Stale-exec guard (same rationale as log): an ssh-specific
             // projection must never leak onto a kind-switched or reused id.
-            if (state.execEpoch !== execEpoch) return
+            if (!execIsCurrent()) return
             state.serviceActive = value
             emitStatus(execId)
           }
         },
-        projection: execId => status(execId),
+        projection: execId => execId === id && execIsCurrent() ? status(execId) : null,
       }, payload)
     } catch (execError) {
       // A throwing provider must never surface as a sync rejection through
       // the IPC layer — loud error result instead.
       return Promise.resolve({ ok: false, error: `exec failed: ${String(execError)}` })
     }
+    return Promise.resolve(operation).then(
+      result => execIsCurrent()
+        ? result
+        : { ok: false, error: 'exec superseded by connection change' },
+      execError => ({ ok: false, error: `exec failed: ${String(execError)}` }),
+    )
   }
 
   /**
@@ -990,28 +1090,6 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * The source id `ssh-<id>` legacy mapping stays a control-plane concern
    * (design 17 §2.1); the desktop registry carries the v2 kind.
    */
-  function migrateInstanceEntry(entry: unknown): unknown {
-    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return entry
-    const record = entry as Record<string, unknown>
-    const kind = record.kind
-    const hasTransport = record.transport !== undefined && record.transport !== null
-    let nextKind: unknown = kind
-    let nextTransport: unknown = record.transport
-    if (kind === 'ssh') {
-      nextKind = 'dsh'
-      nextTransport = 'ssh'
-    } else if (kind === 'gateway') {
-      nextKind = 'gateway'
-      if (!hasTransport) nextTransport = 'http'
-    } else if (kind === undefined || kind === null) {
-      nextKind = 'dsh'
-      nextTransport = 'ssh'
-    } else if (!hasTransport) {
-      nextTransport = kind === 'dsh' ? 'ssh' : kind === 'gateway' ? 'http' : undefined
-    }
-    return { ...record, kind: nextKind, transport: nextTransport }
-  }
-
   /** Load the persisted instance set; a missing file is an empty set. */
   function loadInstances(): TransportInstanceSpec[] {
     let parsed: unknown
@@ -1050,7 +1128,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       }
       // v2 migration first (design 17 §2.2): legacy kinds normalize before
       // provider selection so the provider is resolved by the v2 transport.
-      const migrated = migrateInstanceEntry(entry)
+      const migrated = canonicalizeTransportInstanceInput(entry)
       const providerFor = resolveProvider(migrated as { kind?: unknown; transport?: unknown })
       const normalized = providerFor.validateSpec(migrated)
       if (normalized === null) {
@@ -1101,7 +1179,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const dropped: TransportInstanceInput[] = []
     const restartIds: string[] = []
     const stopBeforeReplaceIds: string[] = []
-    const kindChangedIds: string[] = []
+    const projectionResetIds: string[] = []
     const seenIds = new Set<string>()
     for (const entry of next) {
       // A null/non-object entry must never throw inside provider resolution —
@@ -1113,7 +1191,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       }
       // v2 migration first (design 17 §2.2): legacy kinds normalize before
       // provider selection so the provider is resolved by the v2 transport.
-      const migrated = migrateInstanceEntry(entry)
+      const migrated = canonicalizeTransportInstanceInput(entry)
       const providerFor = resolveProvider(migrated as { kind?: unknown; transport?: unknown })
       const normalized = providerFor.validateSpec(migrated)
       if (normalized === null) {
@@ -1128,7 +1206,9 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       const previous = instances.get(normalized.id)
       const state = previous === undefined ? undefined : states.get(normalized.id)
       const kindChanged = previous !== undefined && previous.kind !== normalized.kind
-      if (kindChanged) kindChangedIds.push(normalized.id)
+      if (previous !== undefined && (kindChanged || previous.serviceName !== normalized.serviceName)) {
+        projectionResetIds.push(normalized.id)
+      }
       // transport and insecureHttp are part of the live-transport identity:
       // switching ssh↔http (or http↔https) while live must tear down and
       // restart the transport so the projection/proxy URL never disagrees
@@ -1146,12 +1226,18 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         || previous.host !== normalized.host
         || previous.user !== normalized.user
         || previous.sshPort !== normalized.sshPort
-        || previous.remotePort !== normalized.remotePort)
+        || previous.remotePort !== normalized.remotePort
+        || previous.serviceName !== normalized.serviceName
+        || previous.remoteDshHome !== normalized.remoteDshHome)
       if (transportFieldsChanged && state !== undefined) {
-        // A kind switch must dispose the old provider even while idle (there
-        // may still be provider-owned auth material). Other field-only edits
-        // need no teardown when the transport is already idle.
-        if (kindChanged || state.phase !== 'idle') stopBeforeReplaceIds.push(normalized.id)
+        // A kind switch must dispose the old provider even while idle. An
+        // exec-only generation is activity too: it may have been started
+        // without connect(), so phase can still be idle while an old-target
+        // child is live. Tear it down before the registry points at the new
+        // endpoint; only an actually non-idle TRANSPORT is restarted.
+        if (kindChanged || state.phase !== 'idle' || state.execChildren.size > 0) {
+          stopBeforeReplaceIds.push(normalized.id)
+        }
         if (state.phase !== 'idle') restartIds.push(normalized.id)
       }
       kept.push(normalized)
@@ -1174,9 +1260,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         // already stale via the execEpoch bump; this is the authoritative
         // cleanup, review 2026-08).
         states.delete(id)
-        // Provider-owned resources that must be deleted only on REMOVAL (not
-        // on a plain disconnect): ssh purges the retained askpass generation
-        // an in-flight exec may still reference during a disconnect.
+        // Request final cleanup of every provider-owned generation on
+        // REMOVAL (not a plain disconnect). SSH keeps each tunnel/exec
+        // askpass path until that generation's live child lease releases;
+        // purge never invalidates a still-running child's environment.
         if (removedSpec !== undefined) resolveProvider(removedSpec).purgeAuth?.(removedSpec)
       }
     }
@@ -1192,7 +1279,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     for (const entry of kept) instances.set(entry.id, entry)
     // Provider-specific projection fields cannot cross a kind boundary. For
     // example, an SSH systemd result must never appear on a gateway status.
-    for (const id of kindChangedIds) {
+    for (const id of projectionResetIds) {
       const state = states.get(id)
       if (state !== undefined) state.serviceActive = null
     }
@@ -1268,14 +1355,19 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // In-flight provider execs (ssh: systemctl / run) belong to this
     // transport: a disconnect cancels them too, instead of leaving them
     // running against a torn-down transport (their late callbacks are
-    // already stale via the execEpoch bump). SIGTERM now; the provider's own
-    // exec timeout escalates to SIGKILL if the child ignores it.
-    for (const child of state.execChildren) signalChild(child, 'SIGTERM')
-    // Provider-owned per-instance resources (ssh: the ephemeral askpass
-    // helper) are released with the transport; the in-memory password
-    // itself survives a plain disconnect so the user can reconnect without
-    // retyping — it is only cleared by setSshPassword(null), instance
-    // removal, or app quit.
+    // already stale via the execEpoch bump). SIGTERM now and enforce the
+    // manager's short disconnect grace; the provider's normal run timeout can
+    // be 120s and is not an acceptable deletion/retarget teardown boundary.
+    for (const child of state.execChildren) {
+      signalChild(child, 'SIGTERM')
+      armExecKillEscalation(child)
+    }
+    // Provider-owned per-instance resources are retired with the transport.
+    // SSH askpass generations remain available to SIGTERM-pending tunnel/
+    // exec children and are deleted by their child leases on exit/error. The
+    // password itself survives disconnect and app quit; its bound persistent
+    // mirror is reloaded at startup. Only an explicit clear or the
+    // main-owned save/delete transaction removes it.
     const spec = instances.get(id)
     if (spec !== undefined) resolveProvider(spec).disposeAuth?.(spec)
     state.localPort = null
@@ -1365,14 +1457,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       // Exec children get the same SIGTERM → SIGKILL escalation as tunnel
       // children (2026 audit M2): disposeAsync waits for these to drain, so a
       // SIGTERM-ignoring ssh exec cannot be orphaned at app quit.
-      const timer = setTimeout(() => {
-        execKillEscalations.delete(child)
-        signalChild(child, 'SIGKILL')
-      }, disconnectGraceMs)
-      timer.unref?.()
-      execKillEscalations.set(child, timer)
+      armExecKillEscalation(child)
     }
-    execChildren.clear()
     bus.removeAllListeners('status-changed')
   }
 
@@ -1389,8 +1475,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const deadline = Date.now() + disconnectGraceMs + 1000
     await new Promise<void>((resolve) => {
       const check = () => {
-        const pending = [...states.values()].some(state => state.killEscalations.size > 0)
-          || execKillEscalations.size > 0
+        const pending = tunnelKillEscalations.size > 0 || execKillEscalations.size > 0
         if (!pending || Date.now() >= deadline) resolve()
         else setTimeout(check, 25)
       }

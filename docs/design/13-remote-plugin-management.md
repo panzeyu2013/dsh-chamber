@@ -88,6 +88,9 @@
 - 非秘密元数据：`~/.dsh` 或绝对路径，`null` = 远端默认 `~/.dsh`；
 - 贯穿 schema（`TransportInstanceSpec.remoteDshHome`）/ 状态投影 / IPC / 双
   ambient 类型；所有远端路径从它派生（白名单、shell 安全值，见 §7.2）；
+- 编辑 `remoteDshHome` 是 transport + exec identity 的 generation 边界：旧隧道、
+  重连/探针与 exec child 先被撤销，迟到的多步 exec spawn、日志、投影与结果均被
+  generation fence 丢弃，原先非 idle 的连接再用新路径重启；
 - ENOENT 在原始 stderr 上分类：`.ssh*` 命名的 remoteDshHome 不再因整行脱敏
   而把"文件不存在"误判为 ssh 故障。
 
@@ -151,7 +154,8 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
   + shell 元字符拒绝。OpenSSH 的远端命令最终仍由远端 shell 解释，因此安全性
   来自固定命令形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全
   边界；
-- 服务名：`^[a-zA-Z0-9_.-]+$`（systemctl 目标）；
+- 服务名：`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`（首字符必须为字母或数字）；systemd
+  固定 argv 为 `systemctl <action> -- <serviceName>`，以 `--` 终止 option 解析；
 - remoteDshHome：白名单 + shell 安全值（null = 远端默认 `~/.dsh`）；
 - `write-file` 目标前缀白名单 + 50MiB 大小上限。
 

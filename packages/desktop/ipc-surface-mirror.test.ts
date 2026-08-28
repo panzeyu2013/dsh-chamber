@@ -99,6 +99,34 @@ function interfaceFieldSignatures(source: string, typeName: string): string[] {
 const preload = readFileSync(join(ROOT, 'packages/desktop/preload.cts'), 'utf8')
 const renderer = readFileSync(join(ROOT, 'packages/renderer/src/global.d.ts'), 'utf8')
 const settings = readFileSync(join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src/global.d.ts'), 'utf8')
+const transportProvider = readFileSync(join(ROOT, 'packages/desktop/transport-provider.ts'), 'utf8')
+const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save.ts'), 'utf8')
+const desktopMain = readFileSync(join(ROOT, 'packages/desktop/main.ts'), 'utf8')
+
+test('renderer connection target/input/spec mirrors desktop v2 fields including S23', () => {
+  assert.match(renderer, /export type TransportKind = 'dsh' \| 'gateway'/, 'renderer target kind must be the normalized v2 union')
+  assert.deepEqual(
+    interfaceFieldNames(renderer, 'SshInstanceInput'),
+    interfaceFieldNames(transportProvider, 'TransportInstanceInput'),
+    'renderer input mirror drifted from desktop transport input',
+  )
+  const projectionFields = new Set(['sshPasswordSet', 'tokenSet', 'passwordSet', 'secretStorage'])
+  assert.deepEqual(
+    interfaceFieldNames(renderer, 'SshInstanceSpec').filter(field => !projectionFields.has(field)),
+    interfaceFieldNames(transportProvider, 'TransportInstanceSpec'),
+    'renderer normalized spec mirror drifted from desktop transport spec',
+  )
+  for (const field of projectionFields) {
+    assert.ok(interfaceFieldNames(renderer, 'SshInstanceSpec').includes(field), `renderer spec missing ${field}`)
+  }
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'SshInstanceSpec'),
+    [...projectionFields].sort(),
+    'preload connection projection markers drifted from the renderer contract',
+  )
+  assert.match(desktopMain, /sshPasswordSet:\s*instance\.transport === 'ssh'\s*&&\s*getSshPassword\(instance\.id\) !== null/,
+    'main must project SSH password existence without its value')
+})
 
 test('DesktopSshSurface stays in lockstep across preload / renderer mirrors (L3)', () => {
   const authoritative = interfaceMethodNames(preload, 'DesktopSshSurface')
@@ -115,15 +143,62 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
   // method is genuinely removed; a synchronized three-way deletion otherwise
   // stays green in the pairwise comparison above).
   const golden = [
-    'config_list', 'connect', 'disconnect', 'instances_get', 'instances_set',
+    'config_list', 'connect', 'delete_connection', 'disconnect', 'instances_get', 'instances_set',
     'is_active', 'local_plugin_add', 'local_plugin_add_file', 'local_plugin_list',
     'local_plugin_remove', 'logs', 'logs_clear', 'npm_search', 'onInstancesChanged',
     'onStatusChanged', 'plugin_apply', 'plugin_list', 'plugin_materialize_add',
     'plugin_materialize_add_pick', 'restart_service', 'seed_host_graph',
-    'set_gateway_password', 'set_gateway_token', 'set_password', 'start_service',
+    'save_connection', 'set_gateway_password', 'set_gateway_token', 'set_password', 'start_service',
     'status', 'stop_service',
   ].sort()
   assert.deepEqual(interfaceMethodNames(preload, 'DesktopSshSurface'), golden, 'DesktopSshSurface drifted from the golden baseline')
+})
+
+test('main-owned connection transaction is wired through the preload without returning credentials', () => {
+  const credentialFields = interfaceFieldSignatures(connectionSave, 'ConnectionCredentialMutations')
+  assert.deepEqual(interfaceFieldSignatures(preload, 'ConnectionCredentialMutations'), credentialFields,
+    'preload credential mutations drifted from the main transaction')
+  assert.deepEqual(interfaceFieldSignatures(renderer, 'ConnectionCredentialMutations'), credentialFields,
+    'renderer credential mutations drifted from the main transaction')
+  assert.deepEqual(interfaceFieldNames(renderer, 'SaveConnectionResult'), interfaceFieldNames(preload, 'SaveConnectionResult'),
+    'save_connection result drifted across preload/renderer')
+  assert.match(preload, /save_connection:\s*\(previousId, input, credentials\)\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_save_connection',\s*\{ previousId, input, credentials \}\)/)
+  assert.match(desktopMain, /ipcMain\.handle\('desktop_ssh_save_connection'/)
+  assert.match(desktopMain, /canonicalizeTransportInstanceInput\(candidate\)/,
+    'the save IPC must honor the typed optional transport through canonical v1/v2 normalization')
+  assert.match(
+    desktopMain,
+    /gatewaySessionOriginForUrl\(\s*readyUrl,\s*spec\.spkiPin \?\? undefined,\s*spec\.transport === 'ssh' \? gatewayTunnelAuthority\(spec\.remotePort\) : undefined,\s*gatewaySessionScopeForConnection\(spec\),\s*\)/,
+    'save_connection session invalidation must key SSH gateway sessions by the tunneled destination authority, never an SSH alias',
+  )
+  assert.doesNotMatch(interfaceBlock(renderer, 'SaveConnectionResult'), /sshPassword|gatewayToken|gatewayPassword/,
+    'save result must never return credential values')
+})
+
+test('legacy credential setters are clear-only, deletion is exact-id, and instances_set is no-op-only in main', () => {
+  for (const signature of [
+    'set_password(id: string, password: null)',
+    'set_gateway_token(id: string, token: null)',
+    'set_gateway_password(id: string, password: null)',
+  ]) {
+    assert.match(preload, new RegExp(signature.replace(/[()]/g, '\\$&')))
+    assert.match(renderer, new RegExp(signature.replace(/[()]/g, '\\$&')))
+  }
+  assert.match(desktopMain, /desktop_ssh_set_password is clear-only/)
+  assert.match(desktopMain, /desktop_gateway_set_token is clear-only/)
+  assert.match(desktopMain, /desktop_gateway_set_password is clear-only/)
+  assert.match(preload, /delete_connection:\s*id\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_delete_connection',\s*\{ id \}\)/)
+  assert.match(desktopMain, /ipcMain\.handle\('desktop_ssh_delete_connection'/)
+  assert.match(desktopMain, /deleteConnectionTransaction\(/)
+  assert.match(desktopMain, /desktop_ssh_instances_set: only an exact unchanged no-op roster is allowed/)
+})
+
+test('gateway ready registration and session invalidation use exact connection scope and fail-closed auth decisions', () => {
+  assert.match(desktopMain, /gatewaySessionScopeForConnection\(registered\)/)
+  assert.match(desktopMain, /gatewayRegistrationAuthHeaders\(token, password !== null, cookie, authProof\)/)
+  assert.match(desktopMain, /if \(!auth\.ok\)[\s\S]*gateway session changed before proxy registration; re-authenticating/)
+  assert.match(desktopMain, /invalidateScope\(gatewaySessionScopeForConnection\(spec\)\)/)
+  assert.doesNotMatch(desktopMain, /invalidateAuthority\(/, 'remote Host authority is not a credential/session owner')
 })
 
 test('UpdateSurface and SettingsSurface stay in lockstep across preload and renderer mirrors (L3)', () => {
@@ -193,7 +268,7 @@ test('settings-connections re-exports the whole IPC face from the renderer (sing
   const start = settings.indexOf('export type {')
   assert.ok(start !== -1, 'settings-connections must re-export the IPC face')
   const exportBlock = settings.slice(start, settings.indexOf("} from '../../renderer/src/global.d.ts'", start))
-  for (const name of ['DesktopSshSurface', 'SshInstanceSpec', 'SshStatusProjection', 'ChamberSettings', 'PluginApplyResult']) {
+  for (const name of ['ConnectionCredentialMutations', 'DesktopSshSurface', 'SaveConnectionResult', 'SshInstanceSpec', 'SshStatusProjection', 'ChamberSettings', 'PluginApplyResult']) {
     assert.ok(exportBlock.includes(name), `settings-connections must re-export ${name}`)
   }
 })

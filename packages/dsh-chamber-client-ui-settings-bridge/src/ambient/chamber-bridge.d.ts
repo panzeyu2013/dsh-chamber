@@ -14,9 +14,11 @@
  *  REAL aggregate-store.ts ChamberServerAggregate — 2026 review T2: the old
  *  mirror carried a phantom `hint` and missed workspaces / aggregate / runtime). */
 export interface ChamberServerAggregate {
-  /** 'local' | '<transport-kind>-<id>' */
+  /** 'local' | '<target-kind>-<id>' (`ssh-` remains a legacy dsh id). */
   id: string
-  kind: 'local' | 'ssh' | 'gateway'
+  kind: 'local' | 'dsh' | 'gateway'
+  transport: 'local' | 'ssh' | 'http'
+  rawId?: string
   label: string
   /** Local: dsh ready; remote: tunnel phase ready. */
   connected: boolean
@@ -43,6 +45,8 @@ export interface ChamberServerAggregate {
       runningSubagents?: number
     }>
   }
+  /** Live host.describe version; absent means unknown/not mounted. */
+  dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: {
     state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
