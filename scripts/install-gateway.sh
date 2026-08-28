@@ -217,22 +217,26 @@ download_verify() {
   local url sha_url tmp tgz sha_file
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
+  # release 的 .sha256 条目名与资产同名 dsh-chamber-gateway-<ver>.tgz：
+  # 下载目标必须与条目一致，sha256sum -c 才能命中（否则必然 fail）。
+  tgz="dsh-chamber-gateway-${VERSION}.tgz"
+  sha_file="${tgz}.sha256"
   log "下载 gateway v${VERSION} …"
-  if ! curl -fL --connect-timeout 10 -m 300 -o "$tmp/gateway.tgz" "$(asset_url)"; then
+  if ! curl -fL --connect-timeout 10 -m 300 -o "$tmp/$tgz" "$(asset_url)"; then
     rm -rf "$tmp"
     die "下载失败：$(asset_url)（v${VERSION} 可能没有 gateway 资产——gateway 从 0.2.0-beta 起随 release 发布；稳定通道可用 --channel beta 或 --version 精确指定）"
   fi
   log "下载校验和 …"
-  if ! curl -fL --connect-timeout 10 -m 30 -o "$tmp/gateway.tgz.sha256" "$(asset_sha_url)"; then
+  if ! curl -fL --connect-timeout 10 -m 30 -o "$tmp/$sha_file" "$(asset_sha_url)"; then
     rm -rf "$tmp"
     die "校验和资产缺失：$(asset_sha_url)（release 应附带 .sha256）"
   fi
-  ( cd "$tmp" && sha256sum -c gateway.tgz.sha256 >/dev/null 2>&1 ) || {
+  ( cd "$tmp" && sha256sum -c "$sha_file" >/dev/null 2>&1 ) || {
     rm -rf "$tmp"
     die "sha256 校验失败：下载包与 release 资产不一致，已中止（现场保留于 $tmp 之外）"
   }
   mkdir -p "$dest_dir"
-  mv "$tmp/gateway.tgz" "$dest_dir/dsh-chamber-gateway-${VERSION}.tgz"
+  mv "$tmp/$tgz" "$dest_dir/$tgz"
   rm -rf "$tmp"
 }
 
@@ -357,6 +361,8 @@ write_env() {
         printf 'DSH_GATEWAY_TOKEN=%q\n' "$API_TOKEN"
       fi
     fi
+    # NO_AUTH 记录（gateway CLI 无对应 env，实际生效靠 serve argv 的 --no-auth）
+    printf '# NO_AUTH=%s\n' "$NO_AUTH"
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
 }
@@ -375,6 +381,14 @@ gateway_exec() {
 anchor_args() {
   if [[ -n "$DSH_WS" && "$ENV_ANCHOR" != "1" ]]; then
     printf ' --dsh-path %q' "$DSH_WS"
+  fi
+}
+
+# --no-auth 参数（S1 override）：gateway CLI 无对应 env，NO_AUTH=1 时必须显式
+# 追加到 serve argv，否则 config 硬门（design 17 §11）会 exit 2。
+auth_args() {
+  if [[ "$NO_AUTH" == "1" ]]; then
+    printf ' --no-auth'
   fi
 }
 
@@ -398,7 +412,7 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=${ENV_FILE}
-ExecStart=${exec_path} serve$(anchor_args)
+ExecStart=${exec_path} serve$(anchor_args)$(auth_args)
 Restart=on-failure
 RestartSec=3
 
@@ -445,7 +459,7 @@ start_foreground() {
   # shellcheck disable=SC1090
   . "$ENV_FILE"
   set +a
-  nohup "$(gateway_exec)" serve$(anchor_args) >"$out" 2>&1 &
+  nohup "$(gateway_exec)" serve$(anchor_args)$(auth_args) >"$out" 2>&1 &
   local pid=$!
   printf '%s\n' "$pid" > "${BASE_DIR}/run/gateway.pid"
   if ! health_wait "$GATEWAY_PORT" 30; then
@@ -522,26 +536,33 @@ wizard() {
   prompt PUBLIC_ORIGIN "公网 origin（HTTPS 反代地址，留空=仅内网）" ""
   prompt TRUSTED_PROXY "trusted proxy（反代精确 IP，逗号分隔，留空=无）" ""
 
-  # [6] 凭据（S1：外部绑定必须）
-  NO_AUTH=0
+  # [6] 凭据（S1：外部绑定必须；--no-auth 显式传入时跳过自动生成且不重置，
+  #      由 [9] 危险项二次确认放行）
+  if [[ "$NO_AUTH" != "1" ]]; then
+    NO_AUTH=0
+  fi
   if [[ "$BIND_HOST" == "0.0.0.0" || -n "$PUBLIC_ORIGIN" || -n "$TRUSTED_PROXY" ]]; then
-    log "外部部署形态：必须配置凭据（S1）"
-    if [[ -z "$UI_PASSWORD" && -z "$API_TOKEN" ]]; then
-      if [[ "$NONINTERACTIVE" == "1" || ! -t 0 ]]; then
-        UI_PASSWORD=$(openssl rand -base64 18 2>/dev/null | tr -d '\n')
-        API_TOKEN=$(openssl rand -hex 32 2>/dev/null | tr -d '\n')
-        warn "已自动生成凭据（写入 0600 gateway.env）"
-      else
-        local choice
-        printf '凭据：a) 自动生成（推荐） b) 手动输入 [a]: '
-        IFS= read -r choice || true
-        if [[ "${choice:-a}" == "b" ]]; then
-          prompt_secret UI_PASSWORD "浏览器密码（12-1024 字符）"
-          prompt_secret API_TOKEN "共享 token（32-4096 visible ASCII）"
-        else
+    if [[ "$NO_AUTH" == "1" ]]; then
+      log "外部部署形态：--no-auth 已显式指定，跳过凭据自动生成（S1 由 gateway 的 --no-auth 放行）"
+    else
+      log "外部部署形态：必须配置凭据（S1）"
+      if [[ -z "$UI_PASSWORD" && -z "$API_TOKEN" ]]; then
+        if [[ "$NONINTERACTIVE" == "1" || ! -t 0 ]]; then
           UI_PASSWORD=$(openssl rand -base64 18 2>/dev/null | tr -d '\n')
           API_TOKEN=$(openssl rand -hex 32 2>/dev/null | tr -d '\n')
-          log "已自动生成凭据（0600 gateway.env；可在安装后用 cat 查看）"
+          warn "已自动生成凭据（写入 0600 gateway.env）"
+        else
+          local choice
+          printf '凭据：a) 自动生成（推荐） b) 手动输入 [a]: '
+          IFS= read -r choice || true
+          if [[ "${choice:-a}" == "b" ]]; then
+            prompt_secret UI_PASSWORD "浏览器密码（12-1024 字符）"
+            prompt_secret API_TOKEN "共享 token（32-4096 visible ASCII）"
+          else
+            UI_PASSWORD=$(openssl rand -base64 18 2>/dev/null | tr -d '\n')
+            API_TOKEN=$(openssl rand -hex 32 2>/dev/null | tr -d '\n')
+            log "已自动生成凭据（0600 gateway.env；可在安装后用 cat 查看）"
+          fi
         fi
       fi
     fi
@@ -560,16 +581,16 @@ wizard() {
     log "未检测到 systemd，使用前台模式"
   fi
 
-  # [9] 危险项
+  # [9] 危险项：外部绑定 + 无凭据（design 17：--no-auth 有二次确认步骤；
+  #     交互确认，-y 放行）
   if [[ -z "$UI_PASSWORD" && -z "$API_TOKEN" && "$BIND_HOST" == "0.0.0.0" ]]; then
-    if [[ "$NO_AUTH" == "1" || "$NONINTERACTIVE" == "1" ]]; then
+    if [[ "$NONINTERACTIVE" == "1" ]]; then
+      NO_AUTH=1
+      warn "--no-auth 已放行：外部绑定无认证运行（仅限可信网络）"
+    elif confirm "允许 --no-auth 无认证外部绑定？（危险，仅限可信网络）" "n"; then
       NO_AUTH=1
     else
-      if confirm "允许 --no-auth 无认证外部绑定？（危险，仅限可信网络）" "n"; then
-        NO_AUTH=1
-      else
-        die "外部绑定必须有凭据；请提供 --ui-password/--api-token 或改 bind 为 127.0.0.1"
-      fi
+      die "外部绑定必须有凭据；请提供 --ui-password/--api-token 或改 bind 为 127.0.0.1"
     fi
   fi
 
