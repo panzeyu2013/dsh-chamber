@@ -17,7 +17,7 @@ import type { OpenInLaunchContext } from './open-in.ts'
 /** A context fake: every host capability is injected, nothing touches the OS. */
 function context(overrides: Partial<OpenInLaunchContext> = {}): OpenInLaunchContext {
   return {
-    lookupInstance: overrides.lookupInstance ?? (() => ({ id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, kind: 'ssh' })),
+    lookupInstance: overrides.lookupInstance ?? (() => ({ id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, transport: 'ssh' })),
     vscodeAvailable: overrides.vscodeAvailable ?? (() => true),
     openVscodeUrl: overrides.openVscodeUrl ?? (async () => ({ ok: true })),
     stat: overrides.stat ?? (async () => ({ kind: 'dir' })),

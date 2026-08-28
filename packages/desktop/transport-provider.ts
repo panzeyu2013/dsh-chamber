@@ -1,8 +1,19 @@
 /**
- * Transport-provider abstraction (design 03 §2.2 / 05 §7-§8): the
+ * Transport-provider abstraction (design 03 §2.2 / 05 §7-§8 / 17 §2): the
  * connection-manager runtime (`transport-manager.ts`) is source-agnostic.
- * Every registry instance carries a `kind`; the runtime drives ONE
- * TransportProvider per manager (v1 ships `ssh`, `ssh-provider.ts`), and the
+ *
+ * v2 four-dimensional model (design 17 §2): the spec's TARGET TYPE (`kind`)
+ * and TRANSPORT METHOD (`transport`) are ORTHOGONAL dimensions:
+ * - `kind` = the target's semantics: `dsh` (a dsh web profile, loopback,
+ *   no auth surface — never injects auth headers, never mounts `/chamber/*`)
+ *   or `gateway` (a gateway deployment with an auth surface — may inject
+ *   `Authorization`/`Cookie` headers and mounts gateway capabilities);
+ * - `transport` = the mechanism: `ssh` (tunnel subprocess + systemd exec)
+ *   or `http` (direct endpoint, no child process).
+ * Every registry instance carries both; the runtime resolves ONE
+ * TransportProvider per spec BY TRANSPORT (design 17 §2.2: providers are
+ * registered `{ ssh, http }` and a single provider serves both target kinds),
+ * with a legacy kind-keyed fallback retained (transport-manager.ts). The
  * provider owns everything source-specific:
  * - spec validation (whitelist-gated, option-injection safe),
  * - the transport process argv — or `null` for a DIRECT ENDPOINT provider
@@ -17,13 +28,29 @@
  *
  * v1 compat: the preload/renderer wire typings keep the `Ssh*` names (the
  * `SshInstanceInput`/`SshInstanceSpec`/`SshStatusProjection`/`SshLogEntry`
- * aliases below); desktop internals use the `Transport*` names.
+ * aliases below); desktop internals use the `Transport*` names. Legacy
+ * persisted entries (`kind:'ssh'` conflating transport with target) migrate
+ * in transport-manager.ts (design 17 §2.2/§9.1).
  */
 
-/** Transport kinds shipped. `gateway` (design 17 §7) is a DIRECT
- * ENDPOINT kind: no tunnel child; the endpoint is a dsh-gateway's https URL
- * authenticated with a shared bearer token. Future kinds extend the union. */
-export const TRANSPORT_KINDS = ['ssh', 'gateway'] as const
+/** Target kinds shipped (design 17 §2.1): the spec `kind` field — `dsh`
+ * (web profile, no auth surface) or `gateway` (authenticated server shape,
+ * design 17 §7). Future targets extend the union. */
+export const TARGET_KINDS = ['dsh', 'gateway'] as const
+
+/** Transport methods shipped (design 17 §2.2): the spec `transport` field —
+ * `ssh` (tunnel subprocess + systemd exec) or `http` (direct endpoint).
+ * Providers register BY transport (`providers: { ssh, http }`); the spec's
+ * `kind` decides target semantics (auth-header injection, `/chamber/*`). */
+export const TRANSPORT_METHODS = ['ssh', 'http'] as const
+
+/**
+ * Legacy v1 name: `kind` used to conflate the transport with the target
+ * ('ssh' | 'gateway'). Kept as a compat alias of TARGET_KINDS for any
+ * external mirror still referencing the symbol — nothing ships against the
+ * old meaning anymore (the transport dimension is `transport`).
+ */
+export const TRANSPORT_KINDS = TARGET_KINDS
 
 /** Renderer/registry resource budgets, enforced again in the main process. */
 export const MAX_TRANSPORT_INSTANCES = 32
@@ -31,29 +58,44 @@ export const MAX_INSTANCE_ID_CHARS = 64
 export const MAX_INSTANCE_LABEL_CHARS = 128
 
 /**
- * The registry id whitelist (design 03 §2.2): id rides
- * /api/i/<transport-kind>-<id> path segments and transport keys, so it must
- * be a plain identifier and must
- * not collide with the reserved 'local' source id. Single source of truth —
- * enforced by every provider's validateSpec via the shared check.
+ * The registry id whitelist (design 03 §2.2): id rides the per-instance
+ * reverse-proxy connectionId (`<kind>:<id>` → source id `dsh-<id>` /
+ * `gateway-<id>`, design 17 §2.1/§9.3) and transport keys, so it must be a
+ * plain identifier and must not collide with the reserved 'local' source id.
+ * Single source of truth — enforced by every provider's validateSpec via the
+ * shared check.
  */
 export const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 
 /**
- * Open-ended kind union: autocompletes the shipped kinds while still
- * accepting a future kind string (provider registry extensibility).
+ * Open-ended kind union: the TARGET TYPE (design 17 §2.1) — autocompletes
+ * the shipped kinds while still accepting a future target string. The
+ * provider `kind` field and the providers registry reuse this union via the
+ * open end (a provider declares the target/transport it serves; the runtime
+ * resolves the registry by `spec.transport` first, transport-manager.ts).
  */
-export type TransportKind = (typeof TRANSPORT_KINDS)[number] | (string & {})
+export type TransportKind = (typeof TARGET_KINDS)[number] | (string & {})
+
+/** Open-ended transport-method union (design 17 §2.2): autocompletes the
+ * shipped methods while accepting a future transport string. */
+export type TransportMethod = (typeof TRANSPORT_METHODS)[number] | (string & {})
 
 /** Tunnel lifecycle phase machine（隧道生命周期 phase 机）. */
 export type TransportPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
 
-/** Instance spec as accepted on save (kind, user, sshPort and serviceName are optional input). */
+/** Instance spec as accepted on save (kind, transport, user, sshPort,
+ * serviceName and insecureHttp are optional input; legacy kinds migrate in
+ * transport-manager). */
 export interface TransportInstanceInput {
   id: string
   label: string
-  /** Provider kind; omitted / legacy entries default to the manager's provider kind. */
+  /** Target type (design 17 §2.1): 'dsh' | 'gateway'. Omitted / legacy
+   * entries migrate in transport-manager (kind:'ssh'→dsh, missing→dsh). */
   kind?: TransportKind
+  /** Transport method (design 17 §2.2): 'ssh' | 'http'. Optional input —
+   * inferred from kind when omitted (dsh→ssh, gateway→http); legacy kinds
+   * migrate. */
+  transport?: TransportMethod
   host: string
   user?: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
@@ -63,13 +105,31 @@ export interface TransportInstanceInput {
   serviceName?: string | null
   /** Remote dsh home (design 13 §4.2); `~/.dsh` or an absolute path, null = remote default `~/.dsh`. Non-secret. */
   remoteDshHome?: string | null
+  /** transport='http' only: true = plaintext http origin (default false =
+   * https). Non-secret; never part of transportTargetChanged — an http↔https
+   * switch keeps the target's credentials (design 17 §9.1, D3 decision). */
+  insecureHttp?: boolean
+  /** transport='http' gateway targets only (S23): optional SPKI certificate
+   * pin — hex sha256 of the peer certificate's SPKI DER, format
+   * `^[0-9a-fA-F]{64}$` (validateSpec refuses anything else). https-only:
+   * the pin makes the peer's public key the connection's trust anchor, so an
+   * internal CA (e.g. Caddy `tls internal`) needs no NODE_EXTRA_CA_CERTS;
+   * a mismatch is terminal (「gateway 证书已更换或 pin 错误」). Never part of
+   * transportTargetChanged — it is not a credential. */
+  spkiPin?: string
 }
 
 /** Normalized non-secret instance spec as held by the registry. */
 export interface TransportInstanceSpec {
   id: string
   label: string
+  /** Target type (design 17 §2.1): 'dsh' | 'gateway'. Decides target
+   * semantics (auth-header injection, /chamber/* mounting), NOT the
+   * transport — see `transport`. */
   kind: TransportKind
+  /** Transport method (design 17 §2.2): 'ssh' | 'http'. The runtime resolves
+   * the provider by this field (legacy kind-keyed fallback retained). */
+  transport: TransportMethod
   host: string
   user: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
@@ -80,16 +140,31 @@ export interface TransportInstanceSpec {
   serviceName: string | null
   /** Remote dsh home (design 13 §4.2); normalized `~/.dsh` or absolute path, null = default `~/.dsh`. Non-secret. */
   remoteDshHome: string | null
+  /** transport='http' only: true = plaintext http origin (default false =
+   * https). Non-secret, normalized required. Excluded from
+   * transportTargetChanged (http↔https keeps credentials, design 17 §9.1). */
+  insecureHttp: boolean
+  /** transport='http' gateway targets only (S23): optional SPKI certificate
+   * pin (hex sha256 of the peer cert's SPKI DER); absent = no pinning. See
+   * TransportInstanceInput.spkiPin. Non-secret, normalized optional. */
+  spkiPin?: string
 }
 
 /**
  * The non-secret status projection (design 05 §8): phase, local ports,
  * retryAttempt, requiresUserAction, serviceActive, logSummary. Never a
  * tunnel URL, never credential material. `kind` lets the renderer branch
- * per provider.
+ * per target type; `transport` per mechanism (design 17 §2); `insecureHttp`
+ * enters the projection for the honest 明文 badge (design 17 §13.1).
  */
 export interface TransportStatusProjection {
   kind: TransportKind
+  /** Transport method (design 17 §2.2): the mechanism of the live transport
+   * ('ssh' tunnel vs 'http' direct endpoint). Non-secret. */
+  transport: TransportMethod
+  /** transport='http': true = plaintext http origin (design 17 §13.1 诚实
+   * 状态 — the 明文 badge stays visible after configuring). Non-secret. */
+  insecureHttp: boolean
   phase: TransportPhase
   localPort: number | null
   sshPort: number | null
@@ -238,12 +313,19 @@ export interface TransportExecDeps {
  * know-how: it never sees timers, phases or the registry — the runtime does.
  */
 export interface TransportProvider {
+  /** The registry key this provider declares (the target kind it serves, or
+   * a test/future key). The runtime resolves the registry BY spec.transport
+   * first, with a legacy kind-keyed fallback (transport-manager.ts). */
   kind: TransportKind
   /**
    * Whitelist-gated spec validation (option-injection safe). Null = reject
    * the entry (dropped loudly by the registry, never silently half-kept).
    * INVARIANT: the returned spec's `kind` MUST equal this provider's kind —
    * the runtime drops any entry whose kind mismatches (defense in depth).
+   * The provider also normalizes `transport` (its mechanism) and
+   * `insecureHttp`; a spec whose kind/transport the provider cannot serve
+   * (e.g. the direct-endpoint gateway provider receiving transport 'ssh')
+   * is rejected loudly rather than mis-served.
    */
   validateSpec(input: unknown): TransportInstanceSpec | null
   /**
@@ -324,6 +406,21 @@ export type SshPhase = TransportPhase
 /**
  * True when two specs point at a different transport TARGET — kind or any
  * host/user/port field. Label-only edits are not target changes.
+ *
+ * `transport` is deliberately EXCLUDED (design 17 §9.1, same family as the
+ * D3 `insecureHttp` decision): credentials are bound to the host:port:kind
+ * TARGET, NOT to the transport mechanism — an ssh↔http switch on the same
+ * gateway target keeps the token/password valid, so the switch never forces
+ * re-entry. The LIVE transport still restarts on a mechanism switch
+ * (transport-manager's own transportFieldsChanged tears down and rebuilds
+ * it — the transport is re-registered under the new origin), but the
+ * provider-held secret survives the switch untouched.
+ *
+ * `insecureHttp` is also EXCLUDED (design 17 §9.1, D3 decision): an
+ * http↔https switch on the same host:port:kind target keeps the same
+ * credential valid — the token/password is bound to the TARGET, not to the
+ * wire encryption, so protocol switches preserve credentials and never
+ * force re-entry.
  *
  * The main process uses this to invalidate provider-held credentials: the
  * secret stores are keyed by instance id only, so without this check an

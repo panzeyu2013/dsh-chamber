@@ -1358,7 +1358,7 @@ test('exec run: the write-file payload drives the provider flow (stdin write + b
   assert.equal(result.ok, true)
 })
 
-test('legacy persisted instances without serviceName/sshPort migrate to null', () => {
+test('legacy persisted instances without serviceName/sshPort migrate to null (v2 kind/transport)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   writeFileSync(file, JSON.stringify([{ id: 'legacy', label: 'old', host: 'h.example.com', user: null, remotePort: 22 }]))
@@ -1367,7 +1367,54 @@ test('legacy persisted instances without serviceName/sshPort migrate to null', (
   assert.equal(instances.length, 1)
   assert.equal(instances[0].serviceName, null)
   assert.equal(instances[0].sshPort, null)
-  assert.equal(instances[0].kind, 'ssh')
+  // v2 migration (design 17 §2.2): kind missing → { kind:'dsh', transport:'ssh' }.
+  assert.equal(instances[0].kind, 'dsh')
+  assert.equal(instances[0].transport, 'ssh')
+  assert.equal(instances[0].insecureHttp, false)
+})
+
+test('v2 migration: legacy kinds normalize on load and save (design 17 §2.2)', () => {
+  const dir = tempDir()
+  const file = join(dir, 'ssh-instances.json')
+  // Legacy v1 file: kind 'ssh' / kind 'gateway' / kind missing / v2-form with
+  // transport missing — each must normalize before provider validation.
+  writeFileSync(file, JSON.stringify([
+    { id: 'legacy-ssh', label: 'a', kind: 'ssh', host: 'a.example.com', user: 'u', remotePort: 22 },
+    { id: 'legacy-gw', label: 'b', kind: 'gateway', host: 'gw.example.com', remotePort: 443 },
+    { id: 'no-kind', label: 'c', host: 'c.example.com', remotePort: 3080 },
+    { id: 'no-transport', label: 'd', kind: 'gateway', host: 'd.example.com', remotePort: 8443 },
+  ]))
+  const manager = createTransportManager({
+    provider: sshProvider,
+    // v2 (design 17 §2.2): providers register BY TRANSPORT — mirrors the
+    // main.ts assembly ({ ssh: sshProvider, http: gatewayProvider }).
+    providers: { ssh: sshProvider, http: gatewayProvider },
+    instancesFile: file,
+    logger: silentLogger,
+  })
+  const instances = manager.loadInstances()
+  const byId = new Map(instances.map(instance => [instance.id, instance]))
+  // kind:'ssh' → { kind:'dsh', transport:'ssh' }; source-id legacy mapping
+  // (ssh-<id>) is a control-plane concern, the registry carries the v2 kind.
+  assert.equal(byId.get('legacy-ssh')?.kind, 'dsh')
+  assert.equal(byId.get('legacy-ssh')?.transport, 'ssh')
+  // kind:'gateway' → { kind:'gateway', transport:'http' } (v1 gateway = direct https).
+  assert.equal(byId.get('legacy-gw')?.kind, 'gateway')
+  assert.equal(byId.get('legacy-gw')?.transport, 'http')
+  assert.equal(byId.get('legacy-gw')?.insecureHttp, false)
+  // kind missing → default { kind:'dsh', transport:'ssh' }.
+  assert.equal(byId.get('no-kind')?.kind, 'dsh')
+  assert.equal(byId.get('no-kind')?.transport, 'ssh')
+  // transport missing → inferred from kind (gateway→http).
+  assert.equal(byId.get('no-transport')?.kind, 'gateway')
+  assert.equal(byId.get('no-transport')?.transport, 'http')
+  // The save path migrates identically (a legacy kind:'ssh' input normalizes).
+  const saved = manager.saveInstances([
+    { id: 'save-legacy', label: 'e', kind: 'ssh', host: 'e.example.com', remotePort: 22 },
+  ])
+  assert.equal(saved[0].kind, 'dsh')
+  assert.equal(saved[0].transport, 'ssh')
+  assert.equal(saved[0].insecureHttp, false)
 })
 
 test('an auth phrase on the final newline-less stderr line is flushed before exit (tunnel)', async t => {
@@ -1457,17 +1504,23 @@ test('desktop package includes the gateway provider required by main.ts', () => 
   assert.match(preload, /set_gateway_token:\s*\(id, token\)\s*=>\s*ipcRenderer\.invoke\('desktop_gateway_set_token'/)
   assert.doesNotMatch(preload, /get_gateway_token|gateway_token_get/, 'renderer receives no token getter')
   const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-  assert.match(main, /commitTransportCredentialUpdate\(sm, id, 'ssh'/, 'SSH password updates rebuild a live SSH transport')
-  assert.match(main, /commitTransportCredentialUpdate\(sm, id, 'gateway'/, 'gateway token updates use the same live replacement transaction')
+  assert.match(main, /providers:\s*\{\s*ssh: sshProvider,\s*http: gatewayProvider/, 'main.ts registers providers BY TRANSPORT (design 17 §2.2)')
+  assert.match(main, /commitTransportCredentialUpdate\(sm, id, status => status\.transport === 'ssh'/, 'SSH password updates rebuild a live SSH transport')
+  assert.match(main, /commitTransportCredentialUpdate\(sm, id, status => status\.kind === 'gateway'/, 'gateway token updates use the same live replacement transaction')
+  assert.match(main, /spec\.transport !== 'ssh'/, 'the ssh password IPC gate keys on the transport (v2)')
+  assert.match(main, /status\.kind === 'dsh' && status\.transport === 'ssh'/, 'the chamber host seed gate keys on dsh+ssh (v2)')
 })
 
 test('credential updates reconnect live transports and restore the old transport after a failed write', () => {
   const events: string[] = []
   let status: TransportStatusProjection | null = {
-    kind: 'ssh', phase: 'ready', localPort: 1234, sshPort: 22, remotePort: 17500,
+    kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'ready', localPort: 1234, sshPort: 22, remotePort: 17500,
     retryAttempt: 0, requiresUserAction: false, serviceActive: null,
     remoteDshHome: null, logSummary: '',
   }
+  // The ssh PASSWORD is an SSH-TRANSPORT credential (design 17 §2): only a
+  // live ssh transport consumes it.
+  const belongsToSsh = (projection: TransportStatusProjection) => projection.transport === 'ssh'
   const transport: Pick<TransportManager, 'status' | 'disconnect' | 'connect'> = {
     status: () => status,
     disconnect: () => {
@@ -1481,13 +1534,13 @@ test('credential updates reconnect live transports and restore the old transport
     },
   }
 
-  commitTransportCredentialUpdate(transport, 'host', 'ssh', () => { events.push('commit:new') })
+  commitTransportCredentialUpdate(transport, 'host', belongsToSsh, () => { events.push('commit:new') })
   assert.deepEqual(events, ['disconnect', 'commit:new', 'connect'])
 
   events.length = 0
   status = status === null ? null : { ...status, phase: 'error', requiresUserAction: true }
   assert.throws(() => {
-    commitTransportCredentialUpdate(transport, 'host', 'ssh', () => {
+    commitTransportCredentialUpdate(transport, 'host', belongsToSsh, () => {
       events.push('commit:failed')
       throw new Error('disk full')
     })
@@ -1495,9 +1548,16 @@ test('credential updates reconnect live transports and restore the old transport
   assert.deepEqual(events, ['disconnect', 'commit:failed', 'connect'], 'failed persistence restores the prior credential transport')
 
   events.length = 0
-  status = status === null ? null : { ...status, kind: 'gateway', phase: 'ready' }
-  commitTransportCredentialUpdate(transport, 'host', 'ssh', () => { events.push('clear-old-ssh') })
+  // The instance was kind-switched to a gateway (transport 'http'): the ssh
+  // credential update must never rebuild the replacement gateway transport.
+  status = status === null ? null : { ...status, kind: 'gateway', transport: 'http', phase: 'ready' }
+  commitTransportCredentialUpdate(transport, 'host', belongsToSsh, () => { events.push('clear-old-ssh') })
   assert.deepEqual(events, ['clear-old-ssh'], 'clearing the old kind secret never interrupts the replacement provider')
+  // A GATEWAY-TARGET credential (the token) matches the live gateway
+  // transport and rebuilds it (design 17 §2 — any transport).
+  const belongsToGateway = (projection: TransportStatusProjection) => projection.kind === 'gateway'
+  commitTransportCredentialUpdate(transport, 'host', belongsToGateway, () => { events.push('commit:token') })
+  assert.deepEqual(events, ['clear-old-ssh', 'disconnect', 'commit:token', 'connect'], 'a gateway token update rebuilds a live gateway transport')
 })
 
 test('gateway identity HTTP classification keeps every 5xx transient', () => {
@@ -1561,12 +1621,14 @@ const fakeEndpointProvider: TransportProvider = {
       id: record.id,
       label: record.label,
       kind: 'fake',
+      transport: 'fake',
       host: record.host,
       user: null,
       sshPort: null,
       remotePort: record.remotePort,
       serviceName: null,
       remoteDshHome: null,
+      insecureHttp: false,
     }
   },
   // no buildStartArgs → direct endpoint mode
@@ -1588,12 +1650,14 @@ function directKindProvider(kind: string, events: string[]): TransportProvider {
         id: record.id,
         label: record.label,
         kind,
+        transport: kind,
         host: record.host,
         user: null,
         sshPort: null,
         remotePort: record.remotePort,
         serviceName: null,
         remoteDshHome: null,
+        insecureHttp: false,
       }
     },
     probeTarget: spec => ({ host: spec.host, port: spec.remotePort }),
@@ -1644,6 +1708,34 @@ test('kind switch unregisters and disposes the old provider before the replaceme
   assert.ok(events.includes('status:new-kind:ready'))
   assert.equal(manager.readyUrl('switch'), 'https://new.example.com:443')
   assert.equal(manager.status('switch')?.serviceActive, null, 'old provider projections do not cross the kind boundary')
+})
+
+test('resolveProvider prefers the TRANSPORT-keyed provider, then the legacy kind key, then the default (design 17 §2.2)', async t => {
+  const dir = tempDir(t)
+  const manager = createTransportManager({
+    provider: sshProvider,
+    // Design 17 §2.2 registration: providers keyed BY TRANSPORT (a gateway
+    // http spec resolves this provider even though the kind key is absent).
+    providers: { http: gatewayProvider },
+    instancesFile: join(dir, 'instances.json'),
+    logger: silentLogger,
+    portProbe: async () => true,
+    verifyProbe: async () => ({ ok: true }),
+    options: { readyTimeoutMs: 100, probeIntervalMs: 5 },
+  })
+  // Gateway/http spec (v2 form): the transport key 'http' wins.
+  manager.saveInstances([{ id: 'gw', label: 'gw', kind: 'gateway', transport: 'http', host: 'gw.example.com', remotePort: 443 }])
+  assert.equal(manager.status('gw')!.transport, 'http')
+  manager.connect('gw')
+  await waitFor(() => manager.status('gw')?.phase === 'ready', 3000, 'transport-keyed provider ready')
+  assert.equal(manager.readyUrl('gw'), 'https://gw.example.com')
+  // An ssh/dsh spec: no 'ssh' key, no 'dsh' kind key → the default provider.
+  manager.saveInstances([
+    { id: 'gw', label: 'gw', kind: 'gateway', transport: 'http', host: 'gw.example.com', remotePort: 443 },
+    { id: 's1', label: 's', kind: 'dsh', transport: 'ssh', host: 'h.example.com', remotePort: 3080 },
+  ])
+  assert.equal(manager.status('s1')!.kind, 'dsh')
+  assert.equal(manager.status('s1')!.transport, 'ssh')
 })
 
 test('direct-endpoint provider: no child, probe-driven ready, endpoint URL, kind routing', async t => {
@@ -1752,12 +1844,14 @@ const fakeEnvProvider: TransportProvider = {
       id: record.id,
       label: record.label,
       kind: 'fake-env',
+      transport: 'fake-env',
       host: record.host,
       user: null,
       sshPort: null,
       remotePort: record.remotePort,
       serviceName: null,
       remoteDshHome: null,
+      insecureHttp: false,
     }
   },
   buildStartArgs: (spec, localPort) => ['-N', '-L', `${localPort}:127.0.0.1:${spec.remotePort}`, spec.host],

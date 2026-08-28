@@ -13,7 +13,16 @@ import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
  * structural mirror here would drift silently (2026 review T1); the
  * ipc-surface-mirror test guards the renderer side against the preload.
  * `TransportKind` (dev addition: gateway transport kind) is exported by the
- * merged renderer global.d.ts alongside the ssh-only face.
+ * merged renderer global.d.ts alongside the ssh-only face. The gateway
+ * login-password setter (`set_gateway_password`) and the read-time
+ * `passwordSet` projection live on the authoritative renderer surface too
+ * (desktop gateway-secrets task, design 17 §7.1/§9.1) — the former
+ * plugin-local seams (GatewayPasswordSurface / PasswordSetProjection) were
+ * retired when they landed there. The `tokenSet`/`passwordSet`/
+ * `secretStorage` projections are merged by the main process on BOTH
+ * `instances_get` AND `instances_set` results (main.ts projects every
+ * registry return), so callers may rely on them in both paths — the
+ * renderer/global.d.ts field comments state this (P4-2 alignment).
  */
 export type {
   ChamberHostGraphState,
@@ -43,6 +52,7 @@ export type {
   SshStatusProjection,
   SystemResumeSurface,
   TransportKind,
+  TransportMethod,
   UpdatePhase,
   UpdateState,
   UpdateSurface,

@@ -34,14 +34,19 @@ import {
   sshAuthEnv,
   sshPasswordSupported,
   sshProvider,
+  verifyGatewayEndpointViaTunnel,
   MAX_SSH_PASSWORD_CHARS,
   WRITE_FILE_MAX_BYTES,
 } from './ssh-provider.ts'
+import { configureGatewaySessionProvider, setGatewayPassword, setGatewayToken } from './gateway-provider.ts'
+import type { GatewaySessionProviderHooks } from './gateway-provider.ts'
+import type { GatewaySessionOrigin } from './gateway-session.ts'
 import type { TransportExecDeps, TransportInstanceSpec, TransportStatusProjection, SpawnedProcess } from './transport-provider.ts'
 
-/** A minimal valid ssh spec for provider-surface tests. */
+/** A minimal valid ssh spec for provider-surface tests (v2: kind = target
+ *  type 'dsh', transport = mechanism 'ssh' — design 17 §2). */
 function spec(id: string): TransportInstanceSpec {
-  return { id, label: 'h', kind: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome: null }
+  return { id, label: 'h', kind: 'dsh', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome: null, insecureHttp: false }
 }
 
 test('buildAskpassScript escapes single quotes and keeps password/passphrase prompts apart from host-key confirmations', () => {
@@ -352,10 +357,42 @@ test('password and instance metadata limits are enforced in the provider', () =>
   assert.ok(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080 }) !== null)
 })
 
+test('the ssh provider serves both target kinds over the ssh transport (v2, design 17 §2)', () => {
+  // Accepted v2 forms: kind 'dsh' / transport 'ssh' normalize into the
+  // canonical { kind:'dsh', transport:'ssh', insecureHttp:false } spec.
+  const viaKind = sshProvider.validateSpec({ id: 'a', label: 'h', kind: 'dsh', host: 'h', remotePort: 3080 })
+  assert.ok(viaKind !== null)
+  if (viaKind !== null) {
+    assert.equal(viaKind.kind, 'dsh')
+    assert.equal(viaKind.transport, 'ssh')
+    assert.equal(viaKind.insecureHttp, false)
+  }
+  const viaTransport = sshProvider.validateSpec({ id: 'b', label: 'h', host: 'h', transport: 'ssh', remotePort: 3080 })
+  assert.ok(viaTransport !== null)
+  // v2 (design 17 §2.1/§2.2): a GATEWAY target over the ssh transport is
+  // served by this provider — the tunnel + exec machinery is transport-
+  // specific, the kind only decides verifyUp/header semantics.
+  const gatewayViaSsh = sshProvider.validateSpec({ id: 'c', label: 'h', kind: 'gateway', transport: 'ssh', host: 'h', user: 'u', remotePort: 30801 })
+  assert.ok(gatewayViaSsh !== null)
+  if (gatewayViaSsh !== null) {
+    assert.equal(gatewayViaSsh.kind, 'gateway')
+    assert.equal(gatewayViaSsh.transport, 'ssh')
+    assert.equal(gatewayViaSsh.insecureHttp, false)
+  }
+  // A direct-http transport (the http provider's job) is refused loudly,
+  // never mis-served by the tunnel provider.
+  assert.equal(sshProvider.validateSpec({ id: 'd', label: 'h', kind: 'dsh', transport: 'http', host: 'h', remotePort: 3080 }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'd2', label: 'h', kind: 'gateway', transport: 'http', host: 'h', remotePort: 443 }), null)
+  // insecureHttp is meaningless for a loopback tunnel: true is refused,
+  // false/absent normalize to false.
+  assert.equal(sshProvider.validateSpec({ id: 'e', label: 'h', host: 'h', remotePort: 3080, insecureHttp: true }), null)
+  assert.equal(sshProvider.validateSpec({ id: 'e2', label: 'h', kind: 'gateway', host: 'h', remotePort: 30801, insecureHttp: true }), null)
+})
+
 // --- design 13 §7.2 exec whitelist tests (M1) ---
 
 function specWithHome(id: string, remoteDshHome: string): TransportInstanceSpec {
-  return { id, label: 'h', kind: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome }
+  return { id, label: 'h', kind: 'dsh', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome, insecureHttp: false }
 }
 
 test('buildRemoteExecArgv accepts a whitelisted dsh plugin add/remove', () => {
@@ -519,7 +556,7 @@ class FakeRunChild extends EventEmitter implements SpawnedProcess {
 /** Minimal TransportExecDeps driving the provider's `run` channel. */
 function runDeps(spawnFn: TransportExecDeps['spawnFn']): TransportExecDeps {
   const projection: TransportStatusProjection = {
-    kind: 'ssh', phase: 'idle', localPort: null, sshPort: null, remotePort: 3080,
+    kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'idle', localPort: null, sshPort: null, remotePort: 3080,
     retryAttempt: 0, requiresUserAction: false, serviceActive: null, remoteDshHome: null,
     logSummary: '',
   }
@@ -890,5 +927,399 @@ test('probeDshSignature answers none on connection failure and timeout', async (
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port: silentPort }, 120), 'none', 'timeout → none')
   } finally {
     await new Promise<void>(resolve => silent.close(() => resolve()))
+  }
+})
+
+// ---------------------------------------------------------------------------
+// verifyUp kind branching (design 17 §9.2): dsh targets never carry auth
+// headers; gateway targets may — a stored token rides the tunnel probe as
+// Bearer, a missing token is NO pre-flight refusal (the probe goes out
+// without a header and the gateway's own 401 is classified terminal, §2.3).
+// ---------------------------------------------------------------------------
+
+/** A gateway-over-ssh spec (kind 'gateway', transport 'ssh'). */
+function gatewaySshSpec(id: string): TransportInstanceSpec {
+  return { id, label: 'h', kind: 'gateway', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 30801, serviceName: null, remoteDshHome: null, insecureHttp: false }
+}
+
+/** A loopback server answering the host.describe envelope (echoing rpcId). */
+function describeServer(handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, body: string) => void) {
+  return createServer((req, res) => {
+    let body = ''
+    req.on('data', chunk => { body += chunk })
+    req.on('end', () => handler(req, res, body))
+  })
+}
+
+test('ssh provider verifyUp: a gateway target with a stored token probes WITH an Authorization header', async () => {
+  const TOKEN = 'x'.repeat(32)
+  setGatewayToken('gw-auth', TOKEN)
+  try {
+    let seenAuth: string | null = null
+    const server = describeServer((req, res, body) => {
+      seenAuth = req.headers.authorization ?? null
+      let rpcId: string | null = null
+      try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as AddressInfo).port
+    try {
+      const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-auth'), { host: '127.0.0.1', port })
+      assert.deepEqual(result, { ok: true })
+      assert.equal(seenAuth, `Bearer ${TOKEN}`, 'the stored token rides the tunnel probe as Authorization')
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+  } finally {
+    setGatewayToken('gw-auth', null)
+  }
+})
+
+test('ssh provider verifyUp: a gateway target WITHOUT a token probes with NO header; a 401 is terminal', async () => {
+  setGatewayToken('gw-noauth', null)
+  let seenAuth: string | null = null
+  const server = describeServer((req, res) => {
+    seenAuth = req.headers.authorization ?? null
+    res.writeHead(401)
+    res.end('unauthorized')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-noauth'), { host: '127.0.0.1', port })
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.equal(result.terminal, true, '401 = deterministic (terminal), never auto-retried')
+      assert.match(result.detail ?? '', /requires authentication \(401\) — configure the shared token/)
+    }
+    assert.equal(seenAuth, null, 'no credentials → the probe carries NO Authorization header (no pre-flight refusal)')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('ssh provider verifyUp: a rejected token answers 401 terminal with the token message', async () => {
+  setGatewayToken('gw-bad', 'z'.repeat(32))
+  try {
+    const server = describeServer((req, res) => {
+      res.writeHead(401)
+      res.end('unauthorized')
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as AddressInfo).port
+    try {
+      const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-bad'), { host: '127.0.0.1', port })
+      assert.equal(result.ok, false)
+      if (!result.ok) {
+        assert.equal(result.terminal, true)
+        assert.match(result.detail ?? '', /rejected the token \(401\) — check the shared token/)
+      }
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+  } finally {
+    setGatewayToken('gw-bad', null)
+  }
+})
+
+test('ssh provider verifyUp: a dsh target NEVER carries an auth header, even when a token exists for its id', async () => {
+  const TOKEN = 'y'.repeat(32)
+  setGatewayToken('dsh-with-token', TOKEN)
+  try {
+    let seenAuth: string | null = null
+    const server = describeServer((req, res, body) => {
+      seenAuth = req.headers.authorization ?? null
+      let rpcId: string | null = null
+      try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as AddressInfo).port
+    try {
+      // A dsh-kind spec whose id happens to have a stored token: dsh target
+      // semantics forbid auth injection (design 17 §2.1) — the header must
+      // never leak even in the collision case.
+      const dshSpec: TransportInstanceSpec = { id: 'dsh-with-token', label: 'h', kind: 'dsh', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome: null, insecureHttp: false }
+      const result = await sshProvider.verifyUp!(dshSpec, { host: '127.0.0.1', port })
+      assert.deepEqual(result, { ok: true })
+      assert.equal(seenAuth, null, 'dsh targets never inject auth headers')
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+  } finally {
+    setGatewayToken('dsh-with-token', null)
+  }
+})
+
+test('verifyGatewayEndpointViaTunnel classifies a 403 origin/Host policy rejection as terminal', async () => {
+  const server = describeServer((req, res) => {
+    res.writeHead(403)
+    res.end('forbidden')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    const result = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null)
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.equal(result.terminal, true, '403 origin/Host policy rejection = terminal')
+      assert.match(result.detail ?? '', /origin\/Host policy \(403\)/)
+    }
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+// ---------------------------------------------------------------------------
+// verifyUp password-session flow over the SSH TUNNEL (design 17 §9.2/§9.3,
+// S1 gap): a gateway-over-ssh target with a stored password and NO token
+// uses the SAME session-hook pattern as the direct-endpoint gateway provider
+// — ensure a login session keyed to the TUNNEL origin, probe WITH its
+// Cookie, and on a rejected 401 invalidate + re-login exactly once before the
+// terminal password-refused state. main.ts wires configureGatewaySessionProvider
+// once; the ssh provider reads the SAME hooks (getGatewaySessionHooks).
+// ---------------------------------------------------------------------------
+
+const SESSION_COOKIE = 'dsh_gateway_session=fake-jwt-for-tunnel'
+const GATEWAY_PASSWORD = 'gateway-login-password-456'
+
+/** A loopback gateway stub recording the probe's cookie/authorization. */
+function tunnelGatewayServer(handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, body: string) => void) {
+  return describeServer(handler)
+}
+
+test('ssh provider verifyUp: a password-configured gateway-over-ssh target (no token) logs in via the TUNNEL origin and probes WITH the Cookie (design 17 §9.2/§9.3, S1)', async () => {
+  const seen: { cookie?: string; authorization?: string } = {}
+  const exchanged: Array<{ origin: GatewaySessionOrigin; password: string }> = []
+  let cached: string | null = null
+  const hooks: GatewaySessionProviderHooks = {
+    ensureSession: (origin: GatewaySessionOrigin, password: string) => {
+      exchanged.push({ origin, password })
+      return Promise.resolve({ ok: true, cookie: SESSION_COOKIE } as const)
+    },
+    cachedCookie: () => cached,
+    invalidate: () => {},
+  }
+  configureGatewaySessionProvider(hooks)
+  const server = tunnelGatewayServer((req, res, body) => {
+    seen.cookie = req.headers.cookie
+    seen.authorization = req.headers.authorization
+    let rpcId: string | null = null
+    try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    setGatewayPassword('gw-tunnel-pw-1', GATEWAY_PASSWORD)
+    const spec = gatewaySshSpec('gw-tunnel-pw-1')
+    const endpoint = { host: '127.0.0.1', port }
+    // First verifyUp: no cached session → the STORED password is exchanged
+    // against the LOOPBACK tunnel origin (NOT the remote spec host:port) and
+    // the probe rides the session Cookie.
+    const first = await sshProvider.verifyUp!(spec, endpoint)
+    assert.equal(first.ok, true)
+    assert.equal(seen.cookie, SESSION_COOKIE, 'the tunnel probe carries the session Cookie')
+    assert.equal(seen.authorization, undefined, 'no Authorization when the session authenticates')
+    assert.equal(exchanged.length, 1)
+    assert.equal(exchanged[0].password, GATEWAY_PASSWORD, 'the STORED password is what the login exchanges — never the cookie')
+    assert.equal(exchanged[0].origin.baseUrl, `http://127.0.0.1:${port}`, 'the session is keyed to the TUNNEL endpoint origin')
+    assert.equal(exchanged[0].origin.insecureHttp, true, 'the tunnel origin is plain http (the session manager scheme selector)')
+    // Second verifyUp with a live cached session: NO re-login — bounded
+    // reconnect cycles must never hammer the login endpoint (429 discipline).
+    cached = SESSION_COOKIE
+    const second = await sshProvider.verifyUp!(spec, endpoint)
+    assert.equal(second.ok, true)
+    assert.equal(seen.cookie, SESSION_COOKIE)
+    assert.equal(exchanged.length, 1, 'a live cached session is never re-exchanged')
+  } finally {
+    setGatewayPassword('gw-tunnel-pw-1', null)
+    configureGatewaySessionProvider({})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('ssh provider verifyUp: a tunnel-probe 401 with the session cookie invalidates, re-logs in ONCE, and only then reports the terminal password-refused state (design 17 §7.3/§9.3)', async () => {
+  const invalidated: GatewaySessionOrigin[] = []
+  let logins = 0
+  const server = tunnelGatewayServer((_req, res) => {
+    res.writeHead(401)
+    res.end('unauthorized')
+  })
+  const hooks: GatewaySessionProviderHooks = {
+    ensureSession: (_origin: GatewaySessionOrigin) => {
+      logins += 1
+      return Promise.resolve({ ok: true, cookie: SESSION_COOKIE } as const)
+    },
+    cachedCookie: () => null,
+    invalidate: origin => { invalidated.push(origin) },
+  }
+  configureGatewaySessionProvider(hooks)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    setGatewayPassword('gw-tunnel-401-1', GATEWAY_PASSWORD)
+    const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-401-1'), { host: '127.0.0.1', port })
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.equal(result.terminal, true, 'a session rejected even after the one re-login is deterministic')
+      assert.match(result.detail ?? '', /rejected the password authentication \(401\) — re-enter the password/)
+    }
+    assert.equal(logins, 2, 'the 401 triggered exactly ONE automatic re-login (bounded, §9.3 重登一次)')
+    assert.equal(invalidated.length, 2, 'both the stale and the freshly minted session are invalidated')
+    assert.equal(invalidated[0].baseUrl, `http://127.0.0.1:${port}`, 'the invalidation targets the tunnel origin')
+  } finally {
+    setGatewayPassword('gw-tunnel-401-1', null)
+    configureGatewaySessionProvider({})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('ssh provider verifyUp: a tunnel-probe 401 self-heals through the one automatic re-login — the fresh session probes ok (design 17 §9.3)', async () => {
+  let probes = 0
+  const server = tunnelGatewayServer((req, res, body) => {
+    probes += 1
+    if (probes === 1) {
+      res.writeHead(401)
+      res.end('unauthorized')
+      return
+    }
+    let rpcId: string | null = null
+    try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+  })
+  const invalidated: GatewaySessionOrigin[] = []
+  let logins = 0
+  const hooks: GatewaySessionProviderHooks = {
+    ensureSession: (_origin: GatewaySessionOrigin) => {
+      logins += 1
+      return Promise.resolve({ ok: true, cookie: SESSION_COOKIE } as const)
+    },
+    cachedCookie: () => null,
+    invalidate: origin => { invalidated.push(origin) },
+  }
+  configureGatewaySessionProvider(hooks)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    setGatewayPassword('gw-tunnel-relogin-1', GATEWAY_PASSWORD)
+    const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-relogin-1'), { host: '127.0.0.1', port })
+    assert.equal(result.ok, true, 'the fresh session after the one automatic re-login is accepted')
+    assert.equal(probes, 2, 'exactly two probes: the stale-cookie probe and the fresh-session re-probe')
+    assert.equal(logins, 2, 'the initial login plus exactly ONE automatic re-login')
+    assert.equal(invalidated.length, 1, 'only the stale session was invalidated — the fresh one is kept')
+  } finally {
+    setGatewayPassword('gw-tunnel-relogin-1', null)
+    configureGatewaySessionProvider({})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('ssh provider verifyUp: token priority — with both credentials the Bearer alone authenticates, the session flow is never consulted (design 17 §2.3)', async () => {
+  const TOKEN = 'q'.repeat(32)
+  setGatewayToken('gw-tunnel-both-1', TOKEN)
+  let sessionConsulted = false
+  const hooks: GatewaySessionProviderHooks = {
+    ensureSession: () => { sessionConsulted = true; return Promise.resolve({ ok: true, cookie: SESSION_COOKIE } as const) },
+    cachedCookie: () => { sessionConsulted = true; return null },
+    invalidate: () => { sessionConsulted = true },
+  }
+  configureGatewaySessionProvider(hooks)
+  let seenAuth: string | null = null
+  const server = tunnelGatewayServer((req, res) => {
+    seenAuth = req.headers.authorization ?? null
+    res.writeHead(401)
+    res.end('unauthorized')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    setGatewayPassword('gw-tunnel-both-1', GATEWAY_PASSWORD)
+    const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-both-1'), { host: '127.0.0.1', port })
+    assert.equal(seenAuth, `Bearer ${TOKEN}`, 'the Bearer token rides the tunnel probe')
+    assert.equal(sessionConsulted, false, 'the password/session flow is skipped entirely while a token exists')
+    if (!result.ok) assert.match(result.detail ?? '', /rejected the token/)
+  } finally {
+    setGatewayToken('gw-tunnel-both-1', null)
+    setGatewayPassword('gw-tunnel-both-1', null)
+    configureGatewaySessionProvider({})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('ssh provider verifyUp: without session hooks a password-configured gateway-over-ssh target probes WITHOUT auth (inert default, design 17 §2.3)', async () => {
+  const seen: { cookie?: string; authorization?: string } = {}
+  const server = tunnelGatewayServer((req, res) => {
+    seen.cookie = req.headers.cookie
+    seen.authorization = req.headers.authorization
+    res.writeHead(401)
+    res.end('unauthorized')
+  })
+  configureGatewaySessionProvider({})
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    setGatewayPassword('gw-tunnel-inert-1', GATEWAY_PASSWORD)
+    const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-inert-1'), { host: '127.0.0.1', port })
+    assert.equal(seen.cookie, undefined, 'no hooks → the tunnel probe carries no Cookie')
+    assert.equal(seen.authorization, undefined, 'no hooks → the tunnel probe carries no Authorization')
+    if (!result.ok) assert.match(result.detail ?? '', /requires authentication/)
+  } finally {
+    setGatewayPassword('gw-tunnel-inert-1', null)
+    configureGatewaySessionProvider({})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('verifyGatewayEndpointViaTunnel: a 401 with a session Cookie is classified as the password being refused, never as a token problem', async () => {
+  const server = tunnelGatewayServer((req, res) => {
+    res.writeHead(401)
+    res.end('unauthorized')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    // Cookie-carrying probe: password-refused message (design 17 §7.3 密码被拒).
+    const withCookie = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null, undefined, undefined, SESSION_COOKIE)
+    assert.equal(withCookie.ok, false)
+    if (!withCookie.ok) {
+      assert.equal(withCookie.terminal, true)
+      assert.equal(withCookie.statusCode, 401, 'the raw status rides the result for the session flow')
+      assert.match(withCookie.detail ?? '', /rejected the password authentication \(401\) — re-enter the password/)
+    }
+    // Cookie-less, token-less probe: "configure the shared token or password".
+    const noCredential = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null)
+    if (!noCredential.ok) assert.match(noCredential.detail ?? '', /requires authentication \(401\) — configure the shared token/)
+    // Token-carrying probe: "check the shared token".
+    const withToken = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, 'z'.repeat(32))
+    if (!withToken.ok) assert.match(withToken.detail ?? '', /rejected the token \(401\) — check the shared token/)
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('ssh provider verifyUp: a gateway-over-ssh probe presents the REMOTE gateway authority in the Host header (design 17 §9.3 隧道 Host 覆盖)', async () => {
+  setGatewayToken('gw-host', null)
+  let seenHost: string | null = null
+  const server = describeServer((req, res, body) => {
+    seenHost = req.headers.host ?? null
+    let rpcId: string | null = null
+    try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-host'), { host: '127.0.0.1', port })
+    assert.deepEqual(result, { ok: true })
+    assert.equal(seenHost, 'h.example.com:30801', 'the probe CONNECTS to the tunnel loopback but presents the remote gateway authority')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
   }
 })

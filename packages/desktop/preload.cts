@@ -30,6 +30,13 @@ export interface DesktopSshSurface {
    * '' / null clears it and forces any live gateway transport to re-auth.
    */
   set_gateway_token(id: string, token: string | null): Promise<{ ok: true } | { error: string }>
+  /**
+   * Forward a gateway login password to the main process (design 17 §7.1).
+   * Write-only like the token: never returned/prefilled; '' / null clears it
+   * (and drops any cached login session so the next connect re-authenticates
+   * with the stored credentials).
+   */
+  set_gateway_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -382,6 +389,7 @@ function desktopSshApi(): DesktopSshSurface {
     instances_set: instances => ipcRenderer.invoke('desktop_ssh_instances_set', instances),
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),
     set_gateway_token: (id, token) => ipcRenderer.invoke('desktop_gateway_set_token', { id, token }),
+    set_gateway_password: (id, password) => ipcRenderer.invoke('desktop_gateway_set_password', { id, password }),
     config_list: () => ipcRenderer.invoke('desktop_ssh_config_list'),
     connect: id => ipcRenderer.invoke('desktop_ssh_connect', { id }),
     disconnect: id => ipcRenderer.invoke('desktop_ssh_disconnect', { id }),

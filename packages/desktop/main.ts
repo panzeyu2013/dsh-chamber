@@ -26,7 +26,7 @@
  * - Tray (packaged only, defensive), single-instance lock.
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, session, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
@@ -38,8 +38,13 @@ import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
 import { transportTargetChanged, type TransportInstanceSpec } from './transport-provider.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
-import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
-import { configureGatewayTokenStore, gatewayProvider, gatewayTokenValidationError, getGatewayToken, setGatewayToken } from './gateway-provider.ts';
+import { cleanupStaleAskpassHelpers, configureSshPasswordStore, getSshPassword, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from './gateway-provider.ts';
+import { createGatewaySessionManager } from './gateway-session.ts';
+import { createGatewaySessionRefresh, gatewaySessionOriginForUrl } from './gateway-session-refresh.ts';
+import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
+import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts';
+import type { GatewaySessionManager, GatewaySessionOrigin } from './gateway-session.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
@@ -366,6 +371,19 @@ function isAllowedReleaseUrl(raw: unknown): boolean {
 let mainWindow: BrowserWindow | null = null;
 let controlPlane: PlaneHandle | null = null;
 let transportManager: TransportManager | null = null;
+// Gateway password-session manager (design 17 §7.1/§9.3, gateway-session.ts):
+// the login exchange + the 12h session cookie, held in main-process memory
+// only (never logged, never persisted, never renderer-visible). Created at
+// startup, disposed on will-quit (cookie cache is pure memory — the dispose
+// is hygiene, not a secret-persistence concern).
+let gatewaySessions: GatewaySessionManager | null = null;
+// Pre-expiry session refresh (design 17 §9.3 live-proxy self-healing,
+// gateway-session-refresh.ts): re-logins each REGISTERED password-authenticated
+// gateway target ~60s before its session expires and re-registers the
+// transport with the fresh cookie — a healthy transport never rides an
+// expired cookie (the ready registration's headers would otherwise answer 401
+// until a reconnect). Armed on ready, disarmed on leaving ready/removal/quit.
+let sessionRefresh: GatewaySessionRefresh | null = null;
 let tray: Tray | null = null;
 // 当前窗口 URL（控制面 origin，控制面启动后赋值）。窗口被关闭后可据此
 // 重建（macOS activate 路径）——没有它，窗口一旦关闭应用就永久无窗。
@@ -1143,6 +1161,15 @@ if (!gotTheLock) {
       disposeLocalPluginChildren().catch((err) => console.error('[dsh-chamber] 本地插件子进程关闭失败：', err)),
       runtimeOperation?.catch((err) => console.error('[dsh-chamber] 运行时事务关闭失败：', err)),
     ]).finally(() => {
+      // Drop every cached gateway login session (pure-memory hygiene; the
+      // cookies are gone with the process anyway — the dispose keeps the
+      // manager honest, design 17 §13.5 会话仅主进程内存) and cancel every
+      // pending pre-expiry refresh timer (the transports are already down).
+      // Timers first: a refresh fire must never race a disposed manager.
+      sessionRefresh?.dispose();
+      sessionRefresh = null;
+      gatewaySessions?.dispose();
+      gatewaySessions = null;
       clearTimeout(cleanupTimer);
       willQuitCleanupComplete = true;
       app.quit();
@@ -1415,11 +1442,61 @@ if (!gotTheLock) {
     if (askpassNotice !== null) console.error(`[dsh-chamber] ${askpassNotice}`);
     const passwordNotice = configureSshPasswordStore(path.join(app.getPath('userData'), 'ssh-passwords.json'));
     if (passwordNotice !== null) console.error(`[dsh-chamber] ssh password store: ${passwordNotice}`);
-    const gatewayTokenNotice = configureGatewayTokenStore(path.join(app.getPath('userData'), 'gateway-tokens.json'));
-    if (gatewayTokenNotice !== null) console.error(`[dsh-chamber] gateway token store: ${gatewayTokenNotice}`);
+    // Gateway credentials store (design 17 §12): token + password secrets
+    // mirror to <userData>/gateway-secrets.json (schemaVersion 2, 0600,
+    // atomic write) — encrypted via Electron safeStorage (macOS Keychain /
+    // Windows DPAPI / Linux libsecret) when available, else the documented
+    // 0600 plaintext fallback (user decision 2026-08). Never in the registry,
+    // never logged, never in the renderer. A legacy schemaVersion 1
+    // <userData>/gateway-tokens.json beside the target file is migrated on
+    // first load (v1 → v2, encrypted via the active adapter, legacy deleted).
+    const gatewaySecretsCrypto = safeStorage.isEncryptionAvailable()
+      ? {
+        isAvailable: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (plain: string) => safeStorage.encryptString(plain).toString('base64'),
+        decrypt: (blob: string) => safeStorage.decryptString(Buffer.from(blob, 'base64')),
+      }
+      : undefined;
+    if (gatewaySecretsCrypto === undefined) {
+      // S22 (design 17 §13.4.1): the OS keychain is unavailable — the store
+      // falls back to the documented 0600 plaintext mirror. LOUD registration
+      // (never silent) AND a renderer-visible read-only projection
+      // (instances_get merges secretStorage: 'plaintext') so the settings
+      // page shows the fallback path.
+      console.warn('[dsh-chamber] OS keychain (Electron safeStorage) is unavailable — gateway credentials will be mirrored to the 0600 plaintext file fallback (design 17 §12/S22)');
+    }
+    const gatewaySecretNotice = configureGatewaySecretStore(path.join(app.getPath('userData'), 'gateway-secrets.json'), gatewaySecretsCrypto);
+    if (gatewaySecretNotice !== null) console.error(`[dsh-chamber] gateway secrets store: ${gatewaySecretNotice}`);
+    // Gateway password-session manager (design 17 §7.1/§9.3): the login
+    // exchange (POST /auth/login → 3xx + dsh_gateway_session cookie) and the
+    // 12h session cookie live ONLY in this manager's main-process memory. The
+    // provider probes with the session Cookie (verifyUp) and the ready
+    // registration injects it as the bounded Cookie header — the cookie never
+    // leaves the main process, never enters a log or file (S24).
+    gatewaySessions = createGatewaySessionManager();
+    configureGatewaySessionProvider({
+      ensureSession: (origin, password) => gatewaySessions!.ensureSession(origin, password),
+      cachedCookie: origin => gatewaySessions!.cachedCookie(origin),
+      invalidate: origin => gatewaySessions!.invalidate(origin),
+    });
+    // S24 lightweight non-secret audit log (design 17 §13.4.4): JSONL append
+    // at <userData>/audit-log.jsonl (0600, 5 MiB rotation) recording ONLY
+    // non-secret facts — time/source/auth result. Credentials, cookies and
+    // session bodies NEVER enter: the audit-log serializer is a fixed field
+    // whitelist, and the callers below pass existence markers (token|password|
+    // none) and phases, never values (S24).
+    const auditLogPath = path.join(app.getPath('userData'), 'audit-log.jsonl');
+    const auditLogNotice = configureAuditLog(auditLogPath);
+    if (auditLogNotice !== null) console.error(`[dsh-chamber] audit log: ${auditLogNotice}`);
+    const audit = (event: AuditEvent) => appendAuditEvent({ file: auditLogPath }, event);
     transportManager = createTransportManager({
       provider: sshProvider,
-      providers: { gateway: gatewayProvider },
+      // v2 (design 17 §2.2): providers register BY TRANSPORT — `ssh` (tunnel
+      // subprocess + systemd exec, serving both the dsh and gateway target
+      // kinds) and `http` (the gateway provider's direct endpoint). The
+      // default `provider` stays the ssh provider so legacy kind-keyed
+      // entries and unknown transports resolve there.
+      providers: { ssh: sshProvider, http: gatewayProvider },
       instancesFile: path.join(app.getPath('userData'), 'ssh-instances.json'),
       logger: {
         log: (...args) => console.log('[transport-manager]', ...args),
@@ -1445,6 +1522,66 @@ if (!gotTheLock) {
     // Capture the non-null manager before registering closures over it (the
     // ipc handlers run later, after startup).
     const sm = transportManager;
+    // Live-proxy session self-healing (design 17 §9.3): for every REGISTERED
+    // password-authenticated gateway target (ssh tunnel AND http direct), arm
+    // a pre-expiry re-login ~60s before the session's expiry instant and
+    // re-register the transport with the fresh cookie — without this a
+    // healthy transport rides its registration-time Cookie past expiry and
+    // the proxy answers 401 until a reconnect (the S2 gap fixed here). The
+    // controller is armed/disarmed by the ready-phase status transitions
+    // below; the residual window (a refresh that fails after the old cookie
+    // died) is honestly warned and recovers through the disconnect→reconnect
+    // verifyUp re-login path.
+    sessionRefresh = createGatewaySessionRefresh({
+      sessionManager: gatewaySessions!,
+      passwordFor: id => getGatewayPassword(id),
+      tokenFor: id => getGatewayToken(id),
+      readyUrlFor: id => sm.readyUrl(id),
+      tlsPinFor: id => sm.listInstances().find(instance => instance.id === id)?.spkiPin ?? null,
+      // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): an ssh-tunneled
+      // gateway target re-registers with the REMOTE gateway authority so the
+      // proxy's Host header (and the refresh login origin key) match the
+      // verifyUp-minted session.
+      authorityFor: id => {
+        const instance = sm.listInstances().find(candidate => candidate.id === id);
+        return instance !== undefined && instance.kind === 'gateway' && instance.transport === 'ssh'
+          ? `${instance.host}:${instance.remotePort}`
+          : undefined;
+      },
+      register: (id, url, headers, tls, authority) => {
+        const livePlane = controlPlane;
+        if (livePlane !== null) livePlane.registerInstanceTransport(`gateway:${id}`, url, headers, {
+          ...(tls === undefined ? {} : tls),
+          ...(authority === undefined ? {} : { authority }),
+        });
+      },
+      // Bounded dead-cookie recovery (design 17 §9.3, P2-1): a re-login that
+      // failed AFTER the old cookie died would otherwise leave a healthy
+      // transport riding it, so the proxy answers 401 indefinitely.
+      // transport-manager has no single "reconnect" entry, so this uses its
+      // EXISTING public API: disconnect (emits idle → the control plane
+      // unregisters gateway:<id> and this refresh disarms) then connect (a
+      // fresh transport whose verifyUp re-authenticates with the stored
+      // password — the single re-login → terminal path). The refresh
+      // controller calls this at most once per refresh fire and only while
+      // the transport is still ready on the same origin, so there is no
+      // reconnect storm; a throwing disconnect/connect must never take the
+      // refresh controller down.
+      reconnect: (id) => {
+        try {
+          sm.disconnect(id);
+          sm.connect(id);
+        } catch (error) {
+          console.warn(`[dsh-chamber] session-refresh recovery reconnect failed for ${id}: ${String(error)}`);
+        }
+      },
+      warn: message => console.warn(`[dsh-chamber] ${message}`),
+    });
+    // S24 audit transition dedupe (design 17 §13.4.4): record PHASE
+    // TRANSITIONS only (a summary-only status push keeps the same phase and is
+    // not a transition) and one register/unregister edge per instance.
+    const lastAuditedPhase = new Map<string, string>();
+    const auditRegistered = new Set<string>();
     // Plugin-sync dependency injection (design 13 M2+M3, contract A): the
     // orchestration in plugin-sync.ts is decoupled from the transport runtime,
     // so it is adapted here onto transport-manager.exec(id, action, payload?).
@@ -1531,6 +1668,32 @@ if (!gotTheLock) {
     const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
       `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`;
     sm.onStatusChanged((id, status) => {
+      // S24 audit (design 17 §13.4.4): record non-secret phase TRANSITIONS
+      // only (connecting/ready/error, incl. the requiresUserAction terminal
+      // classification) — a summary-only push with the same phase is not a
+      // transition. Never a credential, cookie or session body.
+      const prevPhase = lastAuditedPhase.get(id);
+      if (prevPhase !== status.phase) {
+        lastAuditedPhase.set(id, status.phase);
+        audit({
+          ts: new Date().toISOString(),
+          event: 'transport_phase',
+          sourceId: id,
+          kind: status.kind,
+          transport: status.transport,
+          detail: status.phase === 'error' && status.requiresUserAction
+            ? 'error:requires_user_action'
+            : status.phase,
+        });
+      }
+      // Non-secret auth-mode marker for the registration audit (design 17
+      // §2.3): token | password | none — an EXISTENCE projection, never the
+      // value (S24). dsh targets have no auth surface → always none.
+      const auditAuth = status.kind === 'gateway'
+        ? getGatewayToken(id) !== null ? 'token'
+          : getGatewayPassword(id) !== null ? 'password' : 'none'
+        : 'none';
+      const auditDetail = `auth:${auditAuth}${status.insecureHttp ? ',http_plaintext' : ''}`;
       // Ready transport → per-instance reverse proxy (design 05 §7.1):
       // register the instance transport while it is ready, unregister the
       // moment it leaves ready. The transport URL only exists in the main
@@ -1541,28 +1704,121 @@ if (!gotTheLock) {
           const url = sm.readyUrl(id);
           if (url !== null) {
             if (status.kind === 'gateway') {
-              // The gateway transport is https + bearer-token authenticated
-              // (design 17 §7): inject the shared token as an Authorization
-              // header — the instance-proxy forwards it to the gateway auth gate.
+              // The gateway target is authenticated (design 17 §7/§9.3):
+              // inject 0..2 sanctioned headers — the shared token as
+              // Authorization Bearer when configured (priority: when both
+              // credentials exist the token alone authenticates), else a
+              // configured password's login session as the Cookie header
+              // (verifyUp ensured the session before this registration, so
+              // the cached cookie is header-ready). Neither → register
+              // headerless (0 headers is legal — a --no-auth deployment).
+              // dsh targets never inject auth headers (transport-
+              // independent, §2.1/§9.3); the instance-proxy re-validates
+              // the 0..2 whitelist on every registration.
               const token = getGatewayToken(id);
-              cp.registerInstanceTransport(`${status.kind}:${id}`, url, token === null ? undefined : { authorization: `Bearer ${token}` });
+              const headers: Record<string, string> = {};
+              const registered = sm.listInstances().find(instance => instance.id === id);
+              if (token !== null) {
+                headers.authorization = `Bearer ${token}`;
+              } else if (getGatewayPassword(id) !== null) {
+                // The login session is keyed to the TRANSPORT's origin
+                // (design 17 §9.3), which for an ssh tunnel is the loopback
+                // endpoint `http://127.0.0.1:<localPort>` — NOT the remote
+                // spec host:port (the ssh provider's verifyUp minted the
+                // session under the tunnel origin, gateway-session-refresh.ts
+                // tunnelSessionOrigin). Deriving the key from the ready URL
+                // (instead of the spec) is exactly what makes gateway-over-
+                // ssh + password-only inject the Cookie at registration —
+                // without it the lookup misses and the password never reaches
+                // the proxy (S1 gap fixed here). An ssh tunnel additionally
+                // keys on the REMOTE gateway authority (design 17 §9.3 隧道
+                // Host 覆盖) — the same key the ssh provider's verifyUp uses.
+                // verifyUp ensured the session before this registration, so
+                // the cached cookie is header-ready; a direct http(s)
+                // endpoint derives the same key as before (URL.origin
+                // normalizes default-port elision).
+                const tunnelAuthority = registered !== undefined && registered.transport === 'ssh'
+                  ? `${registered.host}:${registered.remotePort}`
+                  : undefined;
+                const origin = gatewaySessionOriginForUrl(url, undefined, tunnelAuthority);
+                if (origin !== null) {
+                  const cookie = gatewaySessions?.cachedCookie(origin);
+                  if (cookie !== null && cookie !== undefined) headers.cookie = cookie;
+                }
+              }
+              // S23: the configured SPKI certificate pin rides the
+              // registration so the reverse proxy gates every outbound https
+              // connection on it (the identity probe already enforced it in
+              // verifyUp). A pin edit while live restarts the transport
+              // (transport-manager transportFieldsChanged), so this
+              // registration always carries the current pin.
+              const spkiPin = registered !== undefined ? registered.spkiPin : undefined;
+              const tunnelAuthority = registered !== undefined && registered.transport === 'ssh'
+                ? `${registered.host}:${registered.remotePort}`
+                : undefined;
+              cp.registerInstanceTransport(
+                `${status.kind}:${id}`,
+                url,
+                Object.keys(headers).length === 0 ? undefined : headers,
+                {
+                  ...(spkiPin === undefined ? {} : { tls: { spkiPin } }),
+                  ...(tunnelAuthority === undefined ? {} : { authority: tunnelAuthority }),
+                },
+              );
             } else {
               cp.registerInstanceTransport(`${status.kind}:${id}`, url);
+            }
+            // Live-proxy session self-healing (design 17 §9.3): arm the
+            // pre-expiry refresh for every gateway target — the controller
+            // no-ops for token/no-password targets and re-arms idempotently
+            // (a reconnect re-arms under the new tunnel origin). dsh targets
+            // have no auth surface → nothing to refresh.
+            if (status.kind === 'gateway') sessionRefresh?.arm(id);
+            // S24: one registration edge per instance (ready-phase summary
+            // pushes are not re-audited); the marker carries auth mode +
+            // insecureHttp honesty, never a credential value.
+            if (!auditRegistered.has(id)) {
+              auditRegistered.add(id);
+              audit({
+                ts: new Date().toISOString(),
+                event: 'transport_registered',
+                sourceId: id,
+                kind: status.kind,
+                transport: status.transport,
+                detail: auditDetail,
+              });
             }
           }
         } else {
           cp.unregisterInstanceTransport(`${status.kind}:${id}`);
+          // Leaving ready cancels the pre-expiry refresh — a disconnected /
+          // removed transport must not re-login or re-register (a later ready
+          // re-arms with the fresh session).
+          sessionRefresh?.disarm(id);
+          if (auditRegistered.delete(id)) {
+            audit({
+              ts: new Date().toISOString(),
+              event: 'transport_unregistered',
+              sourceId: id,
+              kind: status.kind,
+              transport: status.transport,
+              detail: auditDetail,
+            });
+          }
         }
       }
-      // Remote chamber host-package seed: when an SSH instance comes ready,
-      // materialize every built package and merge their loader rows together.
+      // Remote chamber host-package seed: when an SSH-transport dsh target
+      // comes ready, materialize every built package and merge their loader
+      // rows together (v2 semantics, design 17 §2: kind 'dsh' + transport
+      // 'ssh' is the v1 kind 'ssh' shape — the seed runs over the ssh exec
+      // channel, so http-direct and gateway targets are excluded).
       // NOT silent — the plugin management UI probes the live state and shows
       // the injection block verbatim (installed/patched), and the seed result
       // is logged here; a failure is retried on the next ready (the seed is
       // idempotent, content-hash skip). Idempotency also makes the guard a
       // pure in-flight Set: reconnects re-run a cheap no-op seed instead of
       // tracking a persisted "seeded" flag that could drift from the remote.
-      if (status.kind === 'ssh' && status.phase === 'ready' && !hostPackageSeeding.has(id)) {
+      if (status.kind === 'dsh' && status.transport === 'ssh' && status.phase === 'ready' && !hostPackageSeeding.has(id)) {
         hostPackageSeeding.add(id);
         void (async () => {
           try {
@@ -1617,21 +1873,62 @@ if (!gotTheLock) {
       } catch (error) {
         console.error(`[dsh-chamber] clearing ssh password for ${id} failed:`, error);
       }
+      // The whole-instance gateway scrub: setInstanceSecrets(id, null, null)
+      // clears BOTH the token and the password in one atomic persist. The
+      // per-dimension setters are independent (design 17 §2.3) — only this
+      // explicit dual-clear is the removed/retargeted-id scrub (design 17
+      // §12 删除实例/显式清除即删).
       try {
-        setGatewayToken(id, null);
+        setInstanceSecrets(id, null, null);
       } catch (error) {
-        console.error(`[dsh-chamber] clearing gateway token for ${id} failed:`, error);
+        console.error(`[dsh-chamber] clearing gateway secrets for ${id} failed:`, error);
       }
+      // The login session cache is NOT scrubbed here: it is keyed per gateway
+      // origin (design 17 §9.3), consulted only while a password remains
+      // configured, expires in 12h, and a stale cookie self-heals through the
+      // verifyUp 401 → invalidate → re-login flow. A removed/retargeted id's
+      // origin is no longer reachable from any registration, so its entry is
+      // inert by construction.
     }
 
-    ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => sm.listInstances()));
+    /** The gateway-session origin for a registered instance (design 17 §9.3
+     * per-origin session key): scheme from `insecureHttp`, explicit port —
+     * URL.origin normalizes default-port elision, so the cache key matches
+     * the registration baseUrl and the provider's probe origin. */
+    function gatewayOriginFor(spec: { host: string; remotePort: number; insecureHttp: boolean }): GatewaySessionOrigin {
+      return {
+        baseUrl: `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}`,
+        insecureHttp: spec.insecureHttp,
+      };
+    }
+
+    /**
+     * Read-time NON-SECRET projections merged onto the registry list (design
+     * 17 §2.3/§9.1/§13.4.1): tokenSet/passwordSet are boolean existence
+     * markers from the main-process credential stores (never a secret VALUE,
+     * never persisted — the registry stays credential-free metadata), and
+     * secretStorage is the credential mirror's storage mode ('safeStorage' =
+     * OS-keychain-encrypted blobs, 'plaintext' = the documented 0600 fallback,
+     * S22). Only a gateway-kind target can ever report tokenSet/passwordSet
+     * true (a dsh target has no auth surface, design 17 §2.1).
+     */
+    const projectInstanceSecrets = (instance: TransportInstanceSpec) => ({
+      ...instance,
+      tokenSet: instance.kind === 'gateway' && getGatewayToken(instance.id) !== null,
+      passwordSet: instance.kind === 'gateway' && getGatewayPassword(instance.id) !== null,
+      secretStorage: gatewaySecretStorageMode(),
+    });
+
+    ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() =>
+      sm.listInstances().map(projectInstanceSecrets)
+    ));
     ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
       // Non-array input (a page script) must not become an IPC rejection —
       // refuse the change and return the CURRENT registry (same family as
       // the {error}/null shapes of the other channels; 2026 review).
       if (!Array.isArray(instances)) {
         console.warn('[dsh-chamber] desktop_ssh_instances_set: non-array input refused');
-        return sm.listInstances();
+        return sm.listInstances().map(projectInstanceSecrets);
       }
       const before = sm.listInstances();
       let saved: TransportInstanceSpec[];
@@ -1639,7 +1936,7 @@ if (!gotTheLock) {
         saved = sm.saveInstances(instances);
       } catch (saveError) {
         console.warn('[dsh-chamber] desktop_ssh_instances_set: save refused: ', saveError);
-        return sm.listInstances();
+        return sm.listInstances().map(projectInstanceSecrets);
       }
       // Secrets are provider-owned and never part of the registry. Removal
       // clears BOTH stores (also scrubs residue from a historical kind switch).
@@ -1675,7 +1972,7 @@ if (!gotTheLock) {
       if (mainWindow !== null && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('desktop_ssh_instances_changed');
       }
-      return saved;
+      return saved.map(projectInstanceSecrets);
     }));
     // Password auth (design 05 §8, plaintext-file fallback): the password is
     // held in MAIN-PROCESS memory and mirrored to <userData>/ssh-passwords.json
@@ -1693,7 +1990,7 @@ if (!gotTheLock) {
       const clearing = password === null || password === '';
       if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
         || (password !== null && typeof password !== 'string')
-        || (!clearing && spec.kind !== 'ssh')) {
+        || (!clearing && spec.transport !== 'ssh')) {
         return { error: 'invalid or unknown instance id' };
       }
       // Clearing is always permitted so a completed ssh → gateway kind
@@ -1710,17 +2007,36 @@ if (!gotTheLock) {
         // A new password can race the renderer's registry-change auto-connect
         // (especially gateway -> ssh): rebuild any non-idle SSH transport so
         // an early terminal auth failure recovers without a manual click.
-        commitTransportCredentialUpdate(sm, id, 'ssh', () => {
+        // The password is an SSH-TRANSPORT credential: only a live ssh
+        // transport consumes it (a gateway/http live transport is left alone).
+        // S24 audit: set/clear only — the marker names the credential kind
+        // (ssh_password), never the value (the audit-log serializer is a
+        // whitelist anyway, and the gateway token/password setters audit the
+        // same way).
+        const hadPassword = getSshPassword(id) !== null;
+        const changed = !clearing || hadPassword;
+        commitTransportCredentialUpdate(sm, id, status => status.transport === 'ssh', () => {
           setSshPassword(id, normalizedPassword);
         });
+        if (changed) {
+          audit({
+            ts: new Date().toISOString(),
+            event: clearing ? 'credential_cleared' : 'credential_set',
+            sourceId: id,
+            kind: spec.kind,
+            transport: spec.transport,
+            detail: 'ssh_password',
+          });
+        }
         return { ok: true };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     }));
     // Gateway shared token (design 17 §7): held in main-process memory +
-    // mirrored to <userData>/gateway-tokens.json (0600) — never in the
-    // registry, never logged, never exposed back to the renderer.
+    // mirrored to <userData>/gateway-secrets.json (schemaVersion 2, 0600,
+    // safeStorage-encrypted blobs or the documented plaintext fallback) —
+    // never in the registry, never logged, never exposed back to the renderer.
     ipcMain.handle('desktop_gateway_set_token', trustedIpc(({ id, token }) => {
       const spec = typeof id === 'string'
         ? sm.listInstances().find(instance => instance.id === id)
@@ -1739,9 +2055,89 @@ if (!gotTheLock) {
         // mutating the token. disconnect() synchronously emits the old
         // gateway idle projection, so the control plane unregisters
         // gateway:<id> before a replacement transport can register.
-        commitTransportCredentialUpdate(sm, id, 'gateway', () => {
+        // The token is a GATEWAY-TARGET credential: only a live gateway
+        // transport consumes it (design 17 §2 — any transport).
+        // S24 audit: set/clear only — the marker names the credential kind,
+        // never the value (the audit-log serializer is a whitelist anyway).
+        const hadToken = getGatewayToken(id) !== null;
+        const changed = !clearing || hadToken;
+        commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
           setGatewayToken(id, normalizedToken);
         });
+        if (changed) {
+          audit({
+            ts: new Date().toISOString(),
+            event: clearing ? 'credential_cleared' : 'credential_set',
+            sourceId: id,
+            kind: spec.kind,
+            transport: spec.transport,
+            detail: 'token',
+          });
+        }
+        return { ok: true };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    }));
+    // Gateway login password (design 17 §7.1/§12): same write-only discipline
+    // as the token — main-process memory + the encrypted 0600 secrets mirror,
+    // never in the registry, never logged, never exposed back to the renderer.
+    // The password is exchanged for the gateway's 12h session cookie by the
+    // session manager (verifyUp / ready registration); the renderer only ever
+    // forwards it transiently from the form (write-only IPC).
+    ipcMain.handle('desktop_gateway_set_password', trustedIpc(({ id, password }) => {
+      const spec = typeof id === 'string'
+        ? sm.listInstances().find(instance => instance.id === id)
+        : undefined;
+      const clearing = password === null || password === '';
+      // Same id whitelist + registry-existence gate as desktop_gateway_set_token;
+      // a non-clearing set is gateway-kind-only (design 17 §2.1: only a
+      // gateway target has an auth surface to consume the credential).
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
+        || (password !== null && typeof password !== 'string')
+        || (!clearing && spec.kind !== 'gateway')) {
+        return { error: 'invalid or unknown instance id' };
+      }
+      const normalizedPassword = typeof password === 'string' && password !== '' ? password : null;
+      // Client-mirrored config gate (design 17 §5.1): 12-1024 visible ASCII —
+      // the server refuses anything else, so the client must never send it.
+      const passwordError = gatewayPasswordValidationError(normalizedPassword);
+      if (passwordError !== null) return { error: passwordError };
+      try {
+        // A password change invalidates any cached login session so the next
+        // verifyUp exchanges it for a session minted with the NEW password
+        // (design 17 §7.1: a server-side password change rotates jwt-secret
+        // and kills old cookies — the stored password must take effect
+        // immediately, never a stale-cookie grace window). The spec-based
+        // origin covers a direct http(s) endpoint; an ssh tunnel's session is
+        // keyed to the CURRENT tunnel origin (http://127.0.0.1:<localPort>),
+        // so the live ready URL is invalidated too.
+        gatewaySessions?.invalidate(gatewayOriginFor(spec));
+        const liveReadyUrl = sm.readyUrl(id);
+        if (liveReadyUrl !== null) {
+          const liveOrigin = gatewaySessionOriginForUrl(liveReadyUrl);
+          if (liveOrigin !== null) gatewaySessions?.invalidate(liveOrigin);
+        }
+        // Same disconnect-before-mutate discipline as the token setter: the
+        // live gateway transport is rebuilt so the new password (or its
+        // absence) takes effect through a fresh verifyUp, never a stale
+        // registered header.
+        // S24 audit: set/clear only — never the password value.
+        const hadPassword = getGatewayPassword(id) !== null;
+        const changed = !clearing || hadPassword;
+        commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
+          setGatewayPassword(id, normalizedPassword);
+        });
+        if (changed) {
+          audit({
+            ts: new Date().toISOString(),
+            event: clearing ? 'credential_cleared' : 'credential_set',
+            sourceId: id,
+            kind: spec.kind,
+            transport: spec.transport,
+            detail: 'password',
+          });
+        }
         return { ok: true };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
@@ -2081,7 +2477,9 @@ if (!gotTheLock) {
       lookupInstance: (id) => {
         const instance = sm.listInstances().find(entry => entry.id === id);
         if (instance === undefined) return null;
-        return { id: instance.id, host: instance.host, user: instance.user, sshPort: instance.sshPort, kind: instance.kind };
+        // v2 (design 17 §2): the vscode-remote URL is an ssh-TRANSPORT
+        // feature — expose the transport, not the target kind.
+        return { id: instance.id, host: instance.host, user: instance.user, sshPort: instance.sshPort, transport: instance.transport };
       },
       vscodeAvailable: () => detectVscodeAvailability(process.platform).available,
       openVscodeUrl: async (url) => {

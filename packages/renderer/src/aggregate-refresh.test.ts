@@ -53,27 +53,33 @@ test('isSnapshotStale: silence past the threshold is stale (push channel presume
   assert.equal(isSnapshotStale(1_000, 31_001, 30_000), true)
 })
 
-test('transport source ids preserve the registry kind across N-ctx and proxy routing', () => {
+test('transport source ids preserve the registry kind across N-ctx and proxy routing (v2, design 17 §2.1)', () => {
   const instances = [
-    { id: 'ssh-east', kind: 'ssh' as const },
+    { id: 'east', kind: 'dsh' as const },
     { id: 'edge-west', kind: 'gateway' as const },
   ]
-  assert.equal(sourceIdForInstance(instances[0]), 'ssh-ssh-east')
+  assert.equal(sourceIdForInstance(instances[0]), 'dsh-east')
   assert.equal(sourceIdForInstance(instances[1]), 'gateway-edge-west')
   assert.equal(sourceIdForRawInstance('edge-west', instances), 'gateway-edge-west')
   assert.equal(sourceIdForRawInstance('local', instances), 'local')
   assert.equal(sourceIdForRawInstance('missing', instances), null)
-  assert.equal(rawInstanceIdFromSourceId('ssh-ssh-east'), 'ssh-east')
+  assert.equal(rawInstanceIdFromSourceId('dsh-east'), 'east')
   assert.equal(rawInstanceIdFromSourceId('gateway-edge-west'), 'edge-west')
+  // The legacy ssh-<id> spelling keeps parsing (design 17 §2.2 — deep links
+  // and older persisted source ids stay routable).
+  assert.equal(rawInstanceIdFromSourceId('ssh-east'), 'east')
+  assert.equal(rawInstanceIdFromSourceId('ssh-ssh-east'), 'ssh-east')
   assert.equal(rawInstanceIdFromSourceId('local'), null)
   assert.equal(instanceBasePath('gateway-edge-west'), '/api/i/gateway-edge-west')
+  assert.equal(instanceBasePath('dsh-east'), '/api/i/dsh-east')
+  assert.equal(instanceBasePath('ssh-east'), '/api/i/ssh-east')
 })
 
-test('chamber source-id validation accepts gateway but rejects unknown/malformed prefixes', () => {
-  for (const sourceId of [undefined, 'local', 'ssh-east', 'gateway-west']) {
+test('chamber source-id validation accepts canonical and legacy prefixes but rejects unknown/malformed ones', () => {
+  for (const sourceId of [undefined, 'local', 'dsh-east', 'ssh-east', 'gateway-west']) {
     assert.equal(isChamberSourceId(sourceId), true, String(sourceId))
   }
-  for (const sourceId of ['', 'ssh-', 'gateway-', 'gateway-../east', 'http-east', '../gateway-east']) {
+  for (const sourceId of ['', 'ssh-', 'gateway-', 'dsh-', 'gateway-../east', 'dsh-../east', 'http-east', '../gateway-east']) {
     assert.equal(isChamberSourceId(sourceId), false, sourceId)
     assert.throws(() => instanceBasePath(sourceId), /invalid chamber source id/)
   }

@@ -1,7 +1,16 @@
 /**
- * The `ssh` transport provider (design 03 §2.2, transport-provider.ts):
+ * The `ssh` transport provider (design 03 §2.2, 17 §2.2, transport-provider.ts):
  * everything source-specific about SSH tunnels and remote systemd exec,
- * packaged as a TransportProvider for the generic runtime.
+ * packaged as a TransportProvider for the generic runtime. v2 semantics
+ * (design 17 §2): this provider serves BOTH TARGET kinds — `dsh` and
+ * `gateway` — over the `ssh` TRANSPORT method (the tunnel + exec machinery).
+ * The target kind decides the verifyUp semantics only: a `dsh` target never
+ * carries auth headers (design 17 §2.1), a `gateway` target may (a stored
+ * bearer token rides the tunnel probe as Authorization; a missing token is
+ * NO pre-flight refusal — the probe goes out without a header and the
+ * gateway's own 401 is classified terminal, §2.3/§9.2). The direct-endpoint
+ * `http` transport is a separate provider (gateway-provider.ts) and is
+ * refused here loudly rather than mis-served.
  *
  * - Tunnels via the system `ssh` binary:
  *   `ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 [-p <sshPort>]
@@ -50,6 +59,7 @@ import { request as httpRequest } from 'node:http'
 import { chmodSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { gatewayHttpFailureIsTerminal, getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession } from './gateway-provider.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
 import type {
   SpawnedProcess,
@@ -62,16 +72,17 @@ import type {
   TransportRunPayload,
   TransportVerifyResult,
 } from './transport-provider.ts'
+import type { GatewaySessionOrigin } from './gateway-session.ts'
 
 /**
  * Registry metadata whitelists (design 03 §2.2 / 05 §8). id lands in
- * /api/i/ssh-<id> path segments and transport keys; host/user are placed on
- * the ssh command line as the connection target — a leading '-' would be
- * parsed as an ssh option by getopt (e.g. -oProxyCommand=... → arbitrary
- * command execution), so host/user must never start with '-' (enforced by
- * the character class: the first character is never '-'). host allows
- * dots/hyphens (hostnames) and [ ] for bracketed IPv6 literals; user allows
- * dots/underscores/hyphens. id additionally reserves 'local' (the
+ * /api/i/dsh-<id> / gateway-<id> path segments and transport keys; host/user
+ * are placed on the ssh command line as the connection target — a leading '-'
+ * would be parsed as an ssh option by getopt (e.g. -oProxyCommand=... →
+ * arbitrary command execution), so host/user must never start with '-'
+ * (enforced by the character class: the first character is never '-'). host
+ * allows dots/hyphens (hostnames) and [ ] for bracketed IPv6 literals; user
+ * allows dots/underscores/hyphens. id additionally reserves 'local' (the
  * local-instance source id) and is validated by the runtime before the
  * provider sees it.
  */
@@ -386,6 +397,178 @@ export function verifyDshEndpoint(
 }
 
 /**
+ * One-shot GATEWAY identity probe over an SSH TUNNEL endpoint (design 17
+ * §9.2: kind 'gateway' + transport 'ssh'): POST /api/host.describe to the
+ * loopback tunnel endpoint — ALWAYS plain http (the tunnel carries its own
+ * encryption; `insecureHttp` is meaningless for a loopback tunnel) — with the
+ * gateway's bearer token when one is stored for the instance, and/or the
+ * password-session Cookie (design 17 §9.3: the ssh provider's tunnel branch
+ * uses the SAME session-hook flow as the direct-endpoint provider).
+ *
+ * Classification mirrors the gateway provider's direct-endpoint probe
+ * (gateway-provider.ts verifyGatewayEndpoint, design 17 §9.3):
+ * - 401 → TERMINAL, message split by what was sent: a session Cookie was
+ *   carried (password-refused: "re-enter the password"), or no cookie and no
+ *   token ("configure the shared token or password"), or a token was sent
+ *   ("check the shared token") — the cases are never conflated;
+ * - 403 → terminal (origin/Host policy rejection);
+ * - any other non-200 → gatewayHttpFailureIsTerminal (every 5xx transient:
+ *   gateway startup/overload/upstream windows are time-dependent);
+ * - 200 with a valid server-response envelope (result.ok === true) → ready.
+ *
+ * A missing token is NEVER a pre-flight refusal (design 17 §2.3): the probe
+ * goes out WITHOUT an Authorization header and the gateway's own answer is
+ * classified — a `--no-auth` deployment answers 200 and is ready, an
+ * auth-requiring deployment answers 401 terminal. Connection failures stay
+ * transient. The result carries `statusCode` so the caller can act on the
+ * raw 401 (the verifyUp session flow invalidates the rejected cookie).
+ */
+export function verifyGatewayEndpointViaTunnel(
+  endpoint: TransportProbeEndpoint,
+  token: string | null,
+  timeoutMs = VERIFY_UP_TIMEOUT_MS,
+  maxBodyBytes = VERIFY_UP_MAX_BODY_BYTES,
+  cookie: string | null = null,
+  authority: string | undefined = undefined,
+): Promise<TransportVerifyResult & { statusCode?: number }> {
+  return new Promise(resolve => {
+    const url = `http://${endpoint.host}:${endpoint.port}/api/host.describe`
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const done = (ok: boolean, detail?: string, terminal?: boolean, statusCode?: number) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      req.destroy()
+      // statusCode rides the result only when a real answer produced it — an
+      // undefined key must never change the probe's wire shape for callers
+      // that deep-compare the plain {ok:true} success form.
+      const result: TransportVerifyResult & { statusCode?: number } = ok
+        ? { ok: true }
+        : { ok: false, detail, terminal }
+      if (statusCode !== undefined) result.statusCode = statusCode
+      resolve(result)
+    }
+    const rpcId = randomUUID()
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): the probe
+    // CONNECTS to the loopback tunnel endpoint but presents the REMOTE
+    // gateway authority in the Host header — the gateway's request policy
+    // requires the authority port to equal its listen port, which the
+    // tunnel's local port can never satisfy.
+    if (authority !== undefined) headers.host = authority
+    // No credentials → NO Authorization header on the probe (design 17 §2.3):
+    // the gateway itself is the authority on whether auth is needed. A
+    // password-session Cookie rides alongside (never a credential VALUE in
+    // logs — the cookie is main-process memory only, design 17 §9.4).
+    if (token !== null) headers.authorization = `Bearer ${token}`
+    if (cookie !== null) headers.cookie = cookie
+    const req = httpRequest(url, {
+      method: 'POST',
+      headers,
+    }, res => {
+      // A premature close after our destroy must never escape as an
+      // uncaught error (main-process safety discipline).
+      res.on('error', () => {})
+      if (res.statusCode === 401) {
+        res.resume()
+        done(false, cookie !== null
+          ? 'the gateway rejected the password authentication (401) — re-enter the password'
+          : token === null
+            ? 'the gateway requires authentication (401) — configure the shared token or password'
+            : 'the gateway rejected the token (401) — check the shared token', true, 401)
+        return
+      }
+      if (res.statusCode === 403) {
+        res.resume()
+        done(false, 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings', true, 403)
+        return
+      }
+      if (res.statusCode !== 200) {
+        const statusCode = res.statusCode ?? 0
+        res.resume()
+        // Deterministic client/protocol mistakes require user action; every
+        // 5xx is a time-dependent condition the bounded retry can recover.
+        const terminal = gatewayHttpFailureIsTerminal(statusCode)
+        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe`, terminal, statusCode)
+        return
+      }
+      const chunks: Buffer[] = []
+      let size = 0
+      res.on('data', chunk => {
+        if (settled) return
+        size += chunk.length
+        if (size > maxBodyBytes) {
+          done(false, 'the gateway answered an oversized dsh identity probe response', true)
+          return
+        }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        let envelope: { type?: unknown; rpcId?: unknown; result?: { ok?: unknown } } | null = null
+        try {
+          envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        } catch {
+          envelope = null
+        }
+        if (envelope?.type !== 'server-response'
+          || envelope.rpcId !== rpcId
+          || typeof envelope.result !== 'object' || envelope.result === null
+          || envelope.result.ok !== true) {
+          done(false, 'the gateway answered an unexpected dsh identity probe response — it does not appear to be a dsh-gateway', true)
+          return
+        }
+        done(true)
+      })
+    })
+    // TOTAL deadline, not the socket-idle timeout: an endpoint that answers
+    // slowly must never hang the verification.
+    timer = setTimeout(() => done(false, `the gateway did not answer the dsh identity probe within ${timeoutMs}ms`), timeoutMs)
+    timer.unref?.()
+    req.on('error', () => done(false, 'the gateway did not answer the dsh identity probe'))
+    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'host.describe', payload: {} }))
+  })
+}
+
+/**
+ * The password-session origin for an SSH TUNNEL endpoint (design 17 §9.3):
+ * the login and the session cookie are keyed to the LOOPBACK tunnel origin
+ * (`http://127.0.0.1:<localPort>`) — the only origin the tunnel ever
+ * reaches. `insecureHttp: true` is the SCHEME selector the session manager
+ * requires for plain http (gateway-session.ts resolveOrigin gate), NOT an
+ * "insecure" judgement: the tunnel's own ssh encryption protects the loopback
+ * hop, and the ssh spec's insecureHttp stays false in the projection. The
+ * registration-time cookie lookup (main.ts) derives the SAME origin from the
+ * ready transport URL, so the session minted here is exactly the one the
+ * proxy injects. A reconnect allocates a new local port → a new origin → a
+ * fresh login (design 17 §9.3 重连即重登) — the session is never keyed to the
+ * remote host so a stale tunnel can never receive another tunnel's cookie.
+ */
+function tunnelSessionOrigin(endpoint: TransportProbeEndpoint, authority: string | undefined): GatewaySessionOrigin {
+  return {
+    baseUrl: `http://${endpoint.host}:${endpoint.port}`,
+    insecureHttp: true,
+    ...(authority === undefined ? {} : { authority }),
+  }
+}
+
+/** verifyUp for a password-configured gateway-over-ssh target with NO token:
+ * the shared password-session flow (gateway-provider.ts
+ * verifyGatewayPasswordSession — the same 401 → invalidate → single re-login
+ * → terminal contract as the direct-endpoint provider) probing the loopback
+ * tunnel endpoint WITH the session Cookie. `authority` is the remote gateway
+ * host:port the tunnel presents in the Host header (design 17 §9.3 隧道 Host
+ * 覆盖 — the gateway's request policy requires the authority port to equal
+ * its listen port). */
+async function verifyGatewayWithPasswordViaTunnel(endpoint: TransportProbeEndpoint, password: string, authority: string | undefined): Promise<TransportVerifyResult> {
+  return verifyGatewayPasswordSession(tunnelSessionOrigin(endpoint, authority), password, cookie =>
+    verifyGatewayEndpointViaTunnel(endpoint, null, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, cookie, authority))
+}
+
+/**
  * One-shot RPC liveness probe of a chamber host Remote over the tunnel
  * endpoint (the exact wire shape the renderer's module-C boot uses, design
  * 09 §3.5 / design 08 §11.6). Shared by probeClientGraphLive (module A:
@@ -540,14 +723,21 @@ export function probeGitWorktreeLive(
 
 /**
  * Instance spec validation (non-secret metadata only). id must match the
- * runtime whitelist (it rides /api/i/ssh-<id> path segments); host/user must
- * match the identifier whitelists and never start with '-' (a leading '-' on
- * the ssh command line would be parsed as an option — option-injection guard,
- * enforced here in core logic, not only in the UI). serviceName is only
- * type-checked here (string | null); the format whitelist is enforced at
- * exec time, where the value is actually placed on a command line.
+ * runtime whitelist (it rides /api/i/dsh-<id> / gateway-<id> path segments);
+ * host/user must match the identifier whitelists and never start with '-' (a
+ * leading '-' on the ssh command line would be parsed as an option —
+ * option-injection guard, enforced here in core logic, not only in the UI).
+ * serviceName is only type-checked here (string | null); the format whitelist
+ * is enforced at exec time, where the value is actually placed on a command
+ * line.
+ *
+ * v2 (design 17 §2): the ssh provider serves BOTH target kinds (`dsh` and
+ * `gateway`) over the `ssh` transport only — a spec with transport 'http' is
+ * refused (the direct-endpoint semantics belong to gateway-provider.ts), and
+ * insecureHttp is meaningless for a loopback tunnel (normalized to false).
+ * The provider's kind dimension (design 17 §2.1) is decided by the spec.
  */
-function isValidInstance(instance: unknown, kind: TransportProvider['kind']): instance is TransportInstanceSpec {
+function isValidInstance(instance: unknown): instance is TransportInstanceSpec {
   if (instance === null || typeof instance !== 'object') return false
   const record = instance as Record<string, unknown>
   return typeof record.id === 'string' && INSTANCE_ID_PATTERN.test(record.id)
@@ -565,7 +755,9 @@ function isValidInstance(instance: unknown, kind: TransportProvider['kind']): in
       || (typeof record.serviceName === 'string' && record.serviceName.length <= MAX_SERVICE_NAME_CHARS && SERVICE_NAME_PATTERN.test(record.serviceName)))
     && (record.remoteDshHome === undefined || record.remoteDshHome === null
       || (typeof record.remoteDshHome === 'string' && record.remoteDshHome.length <= MAX_REMOTE_DSH_HOME_CHARS && REMOTE_DSH_HOME_PATTERN.test(record.remoteDshHome)))
-    && (record.kind === undefined || record.kind === null || record.kind === kind)
+    && (record.kind === undefined || record.kind === null || record.kind === 'dsh' || record.kind === 'gateway')
+    && (record.transport === undefined || record.transport === null || record.transport === 'ssh')
+    && (record.insecureHttp === undefined || record.insecureHttp === null || record.insecureHttp === false)
 }
 
 /**
@@ -938,22 +1130,26 @@ export function purgeSshAuth(id: string): void {
 
 /** The ssh provider: validate → spawn args → stderr classification → exec. */
 export const sshProvider: TransportProvider = {
-  kind: 'ssh',
+  kind: 'dsh',
   redactOutput: redactSshStderr,
 
   validateSpec(input: unknown): TransportInstanceSpec | null {
-    if (!isValidInstance(input, 'ssh')) return null
+    if (!isValidInstance(input)) return null
     const record = input as unknown as Record<string, unknown>
     return {
       id: record.id as string,
       label: record.label as string,
-      kind: 'ssh',
+      // v2 (design 17 §2.1): the provider serves both target kinds over the
+      // ssh transport — the spec's kind is preserved (default dsh).
+      kind: record.kind === 'gateway' ? 'gateway' : 'dsh',
+      transport: 'ssh',
       host: record.host as string,
       user: record.user === undefined || record.user === null ? null : (record.user as string),
       sshPort: record.sshPort === undefined || record.sshPort === null ? null : (record.sshPort as number),
       remotePort: record.remotePort as number,
       serviceName: record.serviceName === undefined || record.serviceName === null ? null : (record.serviceName as string),
       remoteDshHome: record.remoteDshHome === undefined || record.remoteDshHome === null ? null : (record.remoteDshHome as string),
+      insecureHttp: false,
     }
   },
 
@@ -1012,12 +1208,52 @@ export const sshProvider: TransportProvider = {
   },
 
   /**
-   * Endpoint identity verification: the tunnel destination (or direct
-   * endpoint) must answer the dsh host.describe wire handshake before the
-   * runtime may declare the instance ready — a non-dsh service on the
-   * destination port never presents as a fake connection.
+   * Endpoint identity verification (design 17 §9.2): the tunnel destination
+   * must answer the dsh host.describe wire handshake before the runtime may
+   * declare the instance ready — a non-dsh service on the destination port
+   * never presents as a fake connection. The probe semantics branch on the
+   * TARGET kind:
+   * - kind 'dsh': NEVER carries auth headers (design 17 §2.1) — plain
+   *   verifyDshEndpoint over the loopback tunnel endpoint;
+   * - kind 'gateway': a stored bearer token rides the probe as Authorization;
+   *   a MISSING token is no pre-flight refusal — the probe goes out without
+   *   a header and the gateway's own answer is classified (a `--no-auth`
+   *   deployment is ready; an auth-requiring deployment answers 401
+   *   terminal, design 17 §2.3/§7.3). No token + a stored password + wired
+   *   session hooks (configureGatewaySessionProvider, main.ts) rides the
+   *   SHARED password-session flow instead (verifyGatewayPasswordSession,
+   *   gateway-provider.ts): ensure a login session keyed to the TUNNEL
+   *   endpoint origin, probe WITH its Cookie, and on a rejected 401
+   *   invalidate + re-login exactly once before the terminal password-
+   *   refused state (§9.3 — the gateway-over-ssh + password-only form shape,
+   *   S1 gap fixed here).
    */
   verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) {
+    if (spec.kind === 'gateway') {
+      // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): every request
+      // through the tunnel presents the REMOTE gateway authority — the
+      // gateway's request policy (authority port == listen port) rejects the
+      // tunnel's local port otherwise (verified on the 172 实机: 421).
+      const authority = `${spec.host}:${spec.remotePort}`
+      const token = getGatewayToken(spec.id)
+      // Token priority (design 17 §2.3): when both credentials are configured
+      // the Bearer token authenticates alone — the password/session flow is
+      // skipped entirely.
+      if (token !== null) {
+        return verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
+      }
+      const password = getGatewayPassword(spec.id)
+      // No token + a configured password + wired session hooks: the login
+      // session is keyed to the LOOPBACK tunnel origin (the only origin the
+      // tunnel ever reaches) + the remote authority (the Host the gateway
+      // sees) and the probe carries its Cookie. Without hooks the probe stays
+      // credential-free (the inert default — the flow is disabled until
+      // main.ts wires the gateway-session manager in).
+      if (password !== null && getGatewaySessionHooks().ensureSession !== undefined) {
+        return verifyGatewayWithPasswordViaTunnel(endpoint, password, authority)
+      }
+      return verifyGatewayEndpointViaTunnel(endpoint, null, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
+    }
     return verifyDshEndpoint(endpoint)
   },
 

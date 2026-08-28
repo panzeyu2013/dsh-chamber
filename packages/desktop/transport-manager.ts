@@ -7,8 +7,9 @@
  * - Persisted instance registry (<userData>/ssh-instances.json, written with
  *   the repo's atomic-write convention: write .tmp → fsync → rename; corrupt
  *   files fail loudly, never masquerade as an empty set — the desktop main
- *   process preserves the corrupt file before starting empty). Legacy files
- *   without `kind` migrate to the provider kind on load.
+ *   process preserves the corrupt file before starting empty). v2 migration
+ *   on load/save (design 17 §2.2): legacy `kind:'ssh'`/`kind:'gateway'`
+ *   entries normalize to {kind, transport} before provider validation.
  * - Transport lifecycle per instance: tunnel mode (providerForSpec.buildStartArgs →
  *   a child process, local port bound via net listen(0), readiness = the
  *   local port accepts a TCP connection AND the provider's endpoint identity
@@ -145,9 +146,11 @@ export interface TransportManagerOptions {
 /** createTransportManager dependencies (provider/spawn/probe/allocator injectable). */
 export interface TransportManagerDeps {
   provider: TransportProvider
-  /** Optional per-kind overrides (design 17 §7): a kind present here
-   * (e.g. 'gateway') resolves to that provider; every other kind falls back to
-   * `provider`. */
+  /** Optional per-spec overrides (design 17 §2.2/§7): the registry is
+   * resolved BY TRANSPORT first (`{ ssh, http }` — one provider per
+   * mechanism, serving both target kinds), then by the legacy kind key
+   * (`{ gateway }`, v1 style), then the default `provider`. A key present
+   * here wins for every spec whose transport/kind matches it. */
   providers?: Partial<Record<TransportKind, TransportProvider>>
   spawnFn?: (command: string, args: readonly string[], options: SpawnOptions) => SpawnedProcess
   portProbe?: (port: number, opts?: { timeoutMs?: number; host?: string }) => Promise<boolean>
@@ -195,19 +198,25 @@ export interface TransportManager {
  * Replace provider-owned credentials without leaving a live transport bound
  * to the previous value. The credential writer is write-through: if it
  * throws, its old in-memory value remains authoritative, so reconnecting
- * restores the prior transport. A mismatched kind is intentionally left
- * alone — kind-switch cleanup may clear the OLD provider's secret after the
+ * restores the prior transport.
+ *
+ * `belongsTo` answers "is the LIVE transport the one that consumes this
+ * credential?": ssh passwords match the SSH TRANSPORT, gateway tokens match
+ * the GATEWAY TARGET (design 17 §2 — a gateway-over-http and a gateway-over-
+ * ssh transport both consume the token; a dsh target never does). A kind or
+ * transport switch leaves the replacement provider's live transport alone —
+ * kind-switch cleanup may clear the OLD provider's secret after the
  * replacement provider is already live.
  */
 export function commitTransportCredentialUpdate(
   transport: Pick<TransportManager, 'status' | 'disconnect' | 'connect'>,
   id: string,
-  kind: TransportKind,
+  belongsTo: (status: TransportStatusProjection) => boolean,
   commit: () => void,
 ): void {
   const previousStatus = transport.status(id)
   const shouldReconnect = previousStatus !== null
-    && previousStatus.kind === kind
+    && belongsTo(previousStatus)
     && previousStatus.phase !== 'idle'
   if (shouldReconnect) transport.disconnect(id)
   try {
@@ -334,17 +343,33 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const ringBufferLimit = options.ringBufferLimit ?? RING_BUFFER_LIMIT
   const execTimeoutMs = options.execTimeoutMs ?? 15_000
   const runExecTimeoutMs = options.runExecTimeoutMs ?? 120_000
+  // The registry is keyed by TransportKind; resolveProvider looks up BOTH the
+  // spec's transport ('ssh'|'http') and its legacy kind key — widen for the
+  // transport-keyed lookup (a TransportMethod is a string, not a TransportKind).
+  const providersByKey = providers as Partial<Record<string, TransportProvider>> | undefined
   // Explicit annotation: `spawnFn ?? default` would otherwise infer a UNION
   // of call signatures (SpawnedProcess | ChildProcess), making `child.on`
   // uncallable at the call sites.
   const doSpawn: (command: string, args: readonly string[], opts: SpawnOptions) => SpawnedProcess =
     spawnFn ?? ((command: string, args: readonly string[], opts: SpawnOptions) => spawn(command, args, opts))
   const doProbe = portProbe ?? defaultPortProbe
-  /** Resolve the provider for a spec's kind (design 17 §7): a per-kind
-   * override wins; otherwise the default provider. */
-  const resolveProvider = (kind: TransportKind): TransportProvider => providers?.[kind] ?? provider
+  /** Resolve the provider for a spec (design 17 §2.2): the TRANSPORT-keyed
+   * override wins (`providers: { ssh, http }` — one provider per mechanism,
+   * serving both target kinds), then the legacy kind-keyed override
+   * (`providers: { gateway }`, v1 style), then the default provider. */
+  const resolveProvider = (entry: { kind?: unknown; transport?: unknown }): TransportProvider => {
+    if (typeof entry.transport === 'string') {
+      const byTransport = providersByKey?.[entry.transport]
+      if (byTransport !== undefined) return byTransport
+    }
+    if (typeof entry.kind === 'string') {
+      const byKind = providersByKey?.[entry.kind]
+      if (byKind !== undefined) return byKind
+    }
+    return provider
+  }
   const doVerify = verifyProbe ?? ((spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) => {
-    const verify = resolveProvider(spec.kind).verifyUp
+    const verify = resolveProvider(spec).verifyUp
     // A provider without verifyUp has no destination-identity check: pass.
     return verify === undefined ? Promise.resolve({ ok: true }) : verify(spec, endpoint)
   })
@@ -603,7 +628,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     if (spec === undefined) return
     // The provider for THIS instance's kind (design 17 §7) — a gateway
     // instance resolves to gatewayProvider, an ssh instance to sshProvider.
-    const providerForSpec = resolveProvider(spec.kind)
+    const providerForSpec = resolveProvider(spec)
     const state = ensureState(id)
     // A ready transport is not re-started; an already-connecting invocation
     // is idempotent (connect() is the only other entry and it refuses while
@@ -889,7 +914,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     if (spec === undefined) {
       return Promise.resolve({ ok: false, error: 'ssh instance not found' })
     }
-    const providerForSpec = resolveProvider(spec.kind)
+    const providerForSpec = resolveProvider(spec)
     if (providerForSpec.exec === undefined) {
       return Promise.resolve({ ok: false, error: `exec not supported by transport kind ${spec.kind}` })
     }
@@ -952,6 +977,41 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
   }
 
+  /**
+   * v2 registry migration (design 17 §2.2/§9.1): the v1 `kind` conflated the
+   * transport with the target type ('ssh' | 'gateway'). Entries are rewritten
+   * BEFORE provider validation so providers only ever see the v2 form:
+   * - kind:'ssh'     → { kind:'dsh', transport:'ssh' }
+   * - kind:'gateway' → { kind:'gateway', transport:'http' }
+   * - kind missing   → { kind:'dsh', transport:'ssh' } (the v1 default)
+   * - transport missing → inferred from kind (dsh→ssh, gateway→http);
+   *   an unknown kind (test fixtures, future targets) keeps its kind and no
+   *   transport — resolveProvider falls back to the kind-keyed provider.
+   * The source id `ssh-<id>` legacy mapping stays a control-plane concern
+   * (design 17 §2.1); the desktop registry carries the v2 kind.
+   */
+  function migrateInstanceEntry(entry: unknown): unknown {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return entry
+    const record = entry as Record<string, unknown>
+    const kind = record.kind
+    const hasTransport = record.transport !== undefined && record.transport !== null
+    let nextKind: unknown = kind
+    let nextTransport: unknown = record.transport
+    if (kind === 'ssh') {
+      nextKind = 'dsh'
+      nextTransport = 'ssh'
+    } else if (kind === 'gateway') {
+      nextKind = 'gateway'
+      if (!hasTransport) nextTransport = 'http'
+    } else if (kind === undefined || kind === null) {
+      nextKind = 'dsh'
+      nextTransport = 'ssh'
+    } else if (!hasTransport) {
+      nextTransport = kind === 'dsh' ? 'ssh' : kind === 'gateway' ? 'http' : undefined
+    }
+    return { ...record, kind: nextKind, transport: nextTransport }
+  }
+
   /** Load the persisted instance set; a missing file is an empty set. */
   function loadInstances(): TransportInstanceSpec[] {
     let parsed: unknown
@@ -980,9 +1040,11 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const seenIds = new Set<string>()
     let duplicates = 0
     for (const entry of parsed) {
-      const entryKind = (entry as { kind?: unknown }).kind
-      const providerForKind = typeof entryKind === 'string' ? resolveProvider(entryKind as TransportKind) : provider
-      const normalized = providerForKind.validateSpec(entry)
+      // v2 migration first (design 17 §2.2): legacy kinds normalize before
+      // provider selection so the provider is resolved by the v2 transport.
+      const migrated = migrateInstanceEntry(entry)
+      const providerFor = resolveProvider(migrated as { kind?: unknown; transport?: unknown })
+      const normalized = providerFor.validateSpec(migrated)
       if (normalized === null) {
         dropped.push(entry)
         continue
@@ -1007,9 +1069,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * disconnected and are removed; the set becomes exactly `next`. Invalid
    * entries are dropped with a warning; duplicate ids keep the FIRST entry
    * (loud, never silent) so the file and the returned set never disagree.
-   * Instances whose transport kind or parameters
-   * (host/user/sshPort/remotePort) changed while their transport is live are
-   * restarted so the transport and the projection never disagree. Teardown
+   * Instances whose target kind, transport method or parameters
+   * (host/user/sshPort/remotePort/insecureHttp) changed while their
+   * transport is live are restarted so the transport and the projection
+   * never disagree. Teardown
    * always runs while the OLD spec is still authoritative: provider-owned
    * resources and status listeners must observe/unregister the old kind before
    * the registry starts projecting the replacement kind.
@@ -1033,9 +1096,11 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const kindChangedIds: string[] = []
     const seenIds = new Set<string>()
     for (const entry of next) {
-      const entryKind = (entry as { kind?: unknown }).kind
-      const providerForKind = typeof entryKind === 'string' ? resolveProvider(entryKind as TransportKind) : provider
-      const normalized = providerForKind.validateSpec(entry)
+      // v2 migration first (design 17 §2.2): legacy kinds normalize before
+      // provider selection so the provider is resolved by the v2 transport.
+      const migrated = migrateInstanceEntry(entry)
+      const providerFor = resolveProvider(migrated as { kind?: unknown; transport?: unknown })
+      const normalized = providerFor.validateSpec(migrated)
       if (normalized === null) {
         dropped.push(entry)
         continue
@@ -1049,7 +1114,20 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       const state = previous === undefined ? undefined : states.get(normalized.id)
       const kindChanged = previous !== undefined && previous.kind !== normalized.kind
       if (kindChanged) kindChangedIds.push(normalized.id)
+      // transport and insecureHttp are part of the live-transport identity:
+      // switching ssh↔http (or http↔https) while live must tear down and
+      // restart the transport so the projection/proxy URL never disagrees
+      // with the mechanism. (insecureHttp is NOT part of transportTargetChanged
+      // — the secret survives the switch, design 17 §9.1 — but the LIVE
+      // transport still restarts to re-register the new origin.) The same
+      // applies to the SPKI pin (S23): a pin edit while live must restart so
+      // verifyUp + the proxy registration pick up the new pin (the pin is not
+      // a credential — transportTargetChanged stays untouched, so the token/
+      // password survive the edit).
       const transportFieldsChanged = previous !== undefined && (kindChanged
+        || previous.transport !== normalized.transport
+        || previous.insecureHttp !== normalized.insecureHttp
+        || previous.spkiPin !== normalized.spkiPin
         || previous.host !== normalized.host
         || previous.user !== normalized.user
         || previous.sshPort !== normalized.sshPort
@@ -1084,7 +1162,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         // Provider-owned resources that must be deleted only on REMOVAL (not
         // on a plain disconnect): ssh purges the retained askpass generation
         // an in-flight exec may still reference during a disconnect.
-        if (removedSpec !== undefined) resolveProvider(removedSpec.kind).purgeAuth?.(removedSpec)
+        if (removedSpec !== undefined) resolveProvider(removedSpec).purgeAuth?.(removedSpec)
       }
     }
     // Stop changed transports BEFORE replacing `instances`. disconnect()
@@ -1184,7 +1262,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // retyping — it is only cleared by setSshPassword(null), instance
     // removal, or app quit.
     const spec = instances.get(id)
-    if (spec !== undefined) resolveProvider(spec.kind).disposeAuth?.(spec)
+    if (spec !== undefined) resolveProvider(spec).disposeAuth?.(spec)
     state.localPort = null
     state.retryAttempt = 0
     state.requiresUserAction = false
@@ -1193,10 +1271,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   }
 
   /**
-   * The non-secret status projection (design 05 §8): kind, phase, localPort,
-   * sshPort, remotePort, retryAttempt, requiresUserAction, serviceActive,
-   * logSummary. Never a transport URL, never credential material. null for
-   * an unknown instance.
+   * The non-secret status projection (design 05 §8): kind, transport,
+   * insecureHttp, phase, localPort, sshPort, remotePort, retryAttempt,
+   * requiresUserAction, serviceActive, logSummary. Never a transport URL,
+   * never credential material. null for an unknown instance.
    */
   function status(id: string): TransportStatusProjection | null {
     const spec = instances.get(id)
@@ -1204,6 +1282,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const state = ensureState(id)
     return {
       kind: spec.kind,
+      transport: spec.transport,
+      insecureHttp: spec.insecureHttp,
       phase: state.phase,
       localPort: state.localPort,
       sshPort: spec.sshPort,
@@ -1228,7 +1308,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     if (state.localPort !== null) return `http://127.0.0.1:${state.localPort}`
     const spec = instances.get(id)
     if (spec === undefined) return null
-    return resolveProvider(spec.kind).endpointUrl?.(spec) ?? null
+    return resolveProvider(spec).endpointUrl?.(spec) ?? null
   }
 
   /** Ring-buffer log lines for one instance (copies; newest last). */

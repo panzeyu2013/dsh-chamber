@@ -2,18 +2,46 @@
  * Canonical registry-kind ↔ chamber source-id mapping.
  *
  * Registry/status IPC keys stay raw (`id`); every browser-facing N-ctx and
- * reverse-proxy key is `<kind>-<id>`. Keeping the conversion in one pure
- * module prevents an SSH fallback from silently routing a gateway instance
+ * reverse-proxy key is `<kind>-<id>`. v2 (design 17 §2.1): the canonical
+ * source ids are `dsh-<id>` / `gateway-<id>`; `ssh-<id>` remains accepted as
+ * the LEGACY spelling of the dsh kind (deep links and older persisted source
+ * ids keep working, design 17 §2.2). Keeping the conversion in one pure
+ * module prevents a legacy fallback from silently routing a gateway instance
  * through `/api/i/ssh-*`.
  */
 
-import type { SshInstanceSpec, TransportKind } from './global.d.ts'
+import type { TransportKind } from './global.d.ts'
 
-const SOURCE_PREFIXES = ['ssh-', 'gateway-'] as const
+/** Canonical source-id prefixes (design 17 §2.1): `dsh-<id>` / `gateway-<id>`. */
+const SOURCE_PREFIXES = ['dsh-', 'gateway-'] as const
+
+/** `ssh-<id>` — the legacy spelling of the dsh kind (design 17 §2.2): parsed
+ *  for deep links and older persisted source ids, never produced for v2
+ *  specs. */
+const LEGACY_SSH_PREFIX = 'ssh-'
+
+/** v2 target kinds (design 17 §2.1), mirroring the desktop TARGET_KINDS. */
+const TARGET_KINDS = ['dsh', 'gateway'] as const
+
+/** A v2 target kind ('dsh' | 'gateway'). */
+type TargetKind = (typeof TARGET_KINDS)[number]
+
+/** An instance identity with a kind: the renderer's SshInstanceSpec still
+ *  spells the ssh-transport kind 'ssh' (pre-migration), while the live
+ *  registry carries the v2 target kinds 'dsh' | 'gateway' — both are
+ *  accepted here. */
+type KindedInstance = { id: string; kind: TransportKind | TargetKind }
+
 const RAW_INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 
-export function sourceIdForTransport(kind: TransportKind, rawId: string): string {
-  if (kind !== 'ssh' && kind !== 'gateway') {
+export function sourceIdForTransport(kind: TransportKind | TargetKind, rawId: string): string {
+  // v2 (design 17 §2.1): the kind must be a TARGET_KINDS member. The legacy
+  // 'ssh' spelling — the renderer's TransportKind before the v2 migration
+  // (the connections form still edits with it) — is the one carve-out: it
+  // produces the legacy `ssh-<id>` source id, which the control plane still
+  // routes as a dsh-kind alias (design 17 §2.2). Anything else is refused
+  // loudly so a future unknown kind can never masquerade as a routable id.
+  if (kind !== 'ssh' && !(TARGET_KINDS as readonly string[]).includes(kind)) {
     throw new Error(`invalid transport kind ${JSON.stringify(kind)}`)
   }
   if (!RAW_INSTANCE_ID_PATTERN.test(rawId)) {
@@ -22,11 +50,13 @@ export function sourceIdForTransport(kind: TransportKind, rawId: string): string
   return `${kind}-${rawId}`
 }
 
-export function sourceIdForInstance(instance: Pick<SshInstanceSpec, 'id' | 'kind'>): string {
+export function sourceIdForInstance(instance: KindedInstance): string {
   return sourceIdForTransport(instance.kind, instance.id)
 }
 
-/** Raw registry id from a remote source id; null for local/malformed ids. */
+/** Raw registry id from a remote source id; null for local/malformed ids.
+ *  Recognizes the canonical `dsh-`/`gateway-` prefixes AND the legacy `ssh-`
+ *  spelling (design 17 §2.2 — deep links keep working). */
 export function rawInstanceIdFromSourceId(sourceId: string): string | null {
   for (const prefix of SOURCE_PREFIXES) {
     if (sourceId.startsWith(prefix)) {
@@ -34,11 +64,15 @@ export function rawInstanceIdFromSourceId(sourceId: string): string | null {
       return RAW_INSTANCE_ID_PATTERN.test(rawId) ? rawId : null
     }
   }
+  if (sourceId.startsWith(LEGACY_SSH_PREFIX)) {
+    const rawId = sourceId.slice(LEGACY_SSH_PREFIX.length)
+    return RAW_INSTANCE_ID_PATTERN.test(rawId) ? rawId : null
+  }
   return null
 }
 
 /** Resolve a raw deep-link/IPC id through the live registry kind. */
-export function sourceIdForRawInstance(rawId: string, instances: readonly Pick<SshInstanceSpec, 'id' | 'kind'>[]): string | null {
+export function sourceIdForRawInstance(rawId: string, instances: readonly KindedInstance[]): string | null {
   if (rawId === 'local') return 'local'
   const instance = instances.find(candidate => candidate.id === rawId)
   return instance === undefined ? null : sourceIdForInstance(instance)

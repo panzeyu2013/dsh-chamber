@@ -120,7 +120,8 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
     'local_plugin_remove', 'logs', 'logs_clear', 'npm_search', 'onInstancesChanged',
     'onStatusChanged', 'plugin_apply', 'plugin_list', 'plugin_materialize_add',
     'plugin_materialize_add_pick', 'restart_service', 'seed_host_graph',
-    'set_gateway_token', 'set_password', 'start_service', 'status', 'stop_service',
+    'set_gateway_password', 'set_gateway_token', 'set_password', 'start_service',
+    'status', 'stop_service',
   ].sort()
   assert.deepEqual(interfaceMethodNames(preload, 'DesktopSshSurface'), golden, 'DesktopSshSurface drifted from the golden baseline')
 })

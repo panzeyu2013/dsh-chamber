@@ -12,12 +12,21 @@
 export type SshPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
 export type TransportKind = 'ssh' | 'gateway'
 
+/**
+ * Transport method (design 17 §2.2): the mechanism a connection uses — `ssh`
+ * (tunnel subprocess + systemd exec) or `http` (direct endpoint). Mirrors the
+ * desktop TRANSPORT_METHODS.
+ */
+export type TransportMethod = 'ssh' | 'http'
+
 /** Normalized non-secret instance spec as held by the registry (design 05 §8). */
 export interface SshInstanceSpec {
   id: string
   label: string
   /** Transport provider kind. */
   kind: TransportKind
+  /** Transport method (design 17 §2.2): 'ssh' tunnel | 'http' direct endpoint. */
+  transport: TransportMethod
   host: string
   user: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
@@ -30,6 +39,37 @@ export interface SshInstanceSpec {
    * whitelisted `^~?/[a-zA-Z0-9._/-]+$` on the main side.
    */
   remoteDshHome: string | null
+  /** transport='http' only: true = plaintext http origin (default false =
+   * https). Non-secret; never part of transportTargetChanged — an http↔https
+   * switch keeps the target's credentials (design 17 §9.1). */
+  insecureHttp: boolean
+  /**
+   * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
+   * when the main process holds a gateway token for this instance. Merged on
+   * instances_get AND instances_set results (main.ts projects the stores onto
+   * every registry return — never persisted, never a secret value). Absent
+   * on older payloads.
+   */
+  tokenSet?: boolean
+  /**
+   * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
+   * when the main process holds a gateway login password for this instance.
+   * Merged on instances_get AND instances_set results (main.ts projects the
+   * stores onto every registry return — never persisted, never a secret
+   * value). Only a gateway-kind target can ever report true. Absent on
+   * older payloads.
+   */
+  passwordSet?: boolean
+  /**
+   * Read-time NON-SECRET storage-mode projection (design 17 §13.4.1 / S22):
+   * how the main process's credential mirror is stored — 'safeStorage' =
+   * OS-keychain-encrypted blobs (Electron safeStorage), 'plaintext' = the
+   * documented 0600 plaintext fallback (OS keychain unavailable). Global per
+   * store. Merged on instances_get AND instances_set results (main.ts
+   * projects it onto every registry return — never persisted, never a
+   * secret value). Absent on older payloads.
+   */
+  secretStorage?: 'safeStorage' | 'plaintext'
 }
 
 /** Instance spec as accepted on save (kind/user/sshPort/serviceName are optional inputs). */
@@ -38,6 +78,8 @@ export interface SshInstanceInput {
   label: string
   /** Transport provider kind; omitted/legacy entries default to 'ssh'. */
   kind?: TransportKind
+  /** Transport method; omitted → inferred from kind (dsh→ssh, gateway→http). */
+  transport?: TransportMethod
   host: string
   user?: string | null
   sshPort?: number | null
@@ -45,12 +87,19 @@ export interface SshInstanceInput {
   serviceName?: string | null
   /** Remote DSH_HOME; omitted/legacy entries default to ~/.dsh. */
   remoteDshHome?: string | null
+  /** transport='http' only: true = plaintext http (default false = https). */
+  insecureHttp?: boolean
 }
 
 /** The non-secret status projection (design 05 §8): never a transport URL. */
 export interface SshStatusProjection {
-  /** Transport provider kind. */
+  /** Target kind ('dsh' | 'gateway'; mirrors the desktop TARGET_KINDS —
+   *  the renderer wire union keeps the legacy 'ssh' spelling, design 17 §2.2). */
   kind: TransportKind
+  /** Transport method (design 17 §2.2): 'ssh' tunnel | 'http' direct endpoint. */
+  transport: TransportMethod
+  /** transport='http': true = plaintext http origin (design 17 §13.1 诚实状态). */
+  insecureHttp: boolean
   phase: SshPhase
   localPort: number | null
   sshPort: number | null
@@ -194,6 +243,8 @@ export interface DesktopSshSurface {
   set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
   /** Gateway token is renderer-write-only; never returned by any bridge API. */
   set_gateway_token(id: string, token: string | null): Promise<{ ok: true } | { error: string }>
+  /** Gateway login password is renderer-write-only; never returned by any bridge API. */
+  set_gateway_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>

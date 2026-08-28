@@ -49,8 +49,10 @@ export interface OpenInRequest {
  *  unit-testable. A superset of VscodeLaunchContext — structurally
  *  compatible, so the vscode provider delegates to runVscodeLaunch directly. */
 export interface OpenInLaunchContext {
-  /** Registry lookup; null = the instance does not exist. */
-  lookupInstance(id: string): { id: string; host: string; user: string | null; sshPort: number | null; kind: string } | null
+  /** Registry lookup; null = the instance does not exist. `transport` must be
+   * 'ssh' for the vscode provider (the vscode-remote URL is an ssh-transport
+   * feature — v2 semantics, design 17 §2; runVscodeLaunch re-checks it). */
+  lookupInstance(id: string): { id: string; host: string; user: string | null; sshPort: number | null; transport: string } | null
   /** VS Code availability (the main-process probe, see detectVscodeAvailability). */
   vscodeAvailable(): boolean
   /** Open a vscode:// URL (main-process shell.openExternal wrapper; loud failure). */

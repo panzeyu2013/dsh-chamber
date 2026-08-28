@@ -2,7 +2,14 @@
  * transportTargetChanged unit tests: a same-kind edit of host/user/ports must
  * be detected so the main process can invalidate provider-held credentials —
  * without this, an edit of host A→B would silently reuse A's SSH password /
- * gateway token against B (P1 regression).
+ * gateway token against B (P1 regression). v2 (design 17 §2/§9.1): the
+ * TARGET is {kind, host, user, ports, service, remoteDshHome} — BOTH the
+ * transport method (ssh↔http) and the http↔https `insecureHttp` toggle are
+ * NOT target changes: the credential is bound to the host:port:kind target,
+ * never to the wire mechanism or transport (design 17 §9.1, D3 family), so
+ * mechanism switches keep the credential valid. The LIVE transport still
+ * restarts on a mechanism switch (transport-manager transportFieldsChanged),
+ * but the secret survives — locked here.
  */
 
 import { test } from 'node:test'
@@ -14,13 +21,15 @@ function spec(overrides: Partial<TransportInstanceSpec> = {}): TransportInstance
   return {
     id: 'ssh-1',
     label: 'prod',
-    kind: 'ssh',
+    kind: 'dsh',
+    transport: 'ssh',
     host: 'example.com',
     user: 'root',
     sshPort: 22,
     remotePort: 17500,
     serviceName: null,
     remoteDshHome: null,
+    insecureHttp: false,
     ...overrides,
   }
 }
@@ -42,7 +51,22 @@ test('user / sshPort / remotePort / serviceName / remoteDshHome changes are targ
 })
 
 test('kind change is a target change (caller excludes it from the clear decision)', () => {
-  assert.equal(transportTargetChanged(spec({ kind: 'ssh' }), spec({ kind: 'gateway', sshPort: null, user: null, serviceName: null, remoteDshHome: null })), true)
+  assert.equal(transportTargetChanged(
+    spec(),
+    spec({ kind: 'gateway', transport: 'http', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
+  ), true)
+})
+
+test('transport change (ssh↔http) is NOT a target change — the credential binds to the host:port:kind target, not the mechanism (design 17 §9.1)', () => {
+  assert.equal(transportTargetChanged(spec(), spec({ transport: 'http' })), false)
+  assert.equal(transportTargetChanged(
+    spec({ kind: 'gateway', transport: 'http', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
+    spec({ kind: 'gateway', transport: 'ssh', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
+  ), false)
+})
+
+test('insecureHttp change (http↔https) is NOT a target change — protocol switch keeps credentials (design 17 §9.1, D3)', () => {
+  assert.equal(transportTargetChanged(spec(), spec({ insecureHttp: true })), false)
 })
 
 test('identical specs are not a target change', () => {
