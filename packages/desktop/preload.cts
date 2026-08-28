@@ -1,5 +1,10 @@
 import type { IpcRendererEvent } from 'electron';
-import type { SshInstanceInput, SshInstanceSpec as RegistrySshInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
+import type {
+  TransportInstanceInput as SshInstanceInput,
+  TransportInstanceSpec as RegistrySshInstanceSpec,
+  TransportLogEntry as SshLogEntry,
+  TransportStatusProjection as SshStatusProjection,
+} from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
 
@@ -100,12 +105,29 @@ export interface InstancesChangedPayload {
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
 export type SshExecIpcResult = SshStatusProjection | { error: string }
 
+/** Chamber-owned host packages installed into and loaded by one dsh profile. */
+export interface ChamberHostGraphState {
+  installed: boolean
+  patched: boolean
+  version: string | null
+  live: boolean | null
+}
+
+export type ChamberInjectionState =
+  | {
+    ok: true
+    hostGraph: ChamberHostGraphState
+    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
+  }
+  | { ok: false; error: string }
+
 /** Remote plugin manifest projection (design 13 §4.3). */
 export interface SshRemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
   profileExists: boolean
   error?: string
+  chamber: ChamberInjectionState
 }
 export type SshRemotePluginListResult =
   | { ok: true; manifest: SshRemotePluginManifest }
@@ -119,6 +141,7 @@ export interface SshLocalPluginManifest {
   /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
   bundleLines: string[]
   unsyncable: { name: string; reason: string }[]
+  chamber: ChamberInjectionState
 }
 export type SshLocalPluginListResult =
   | { ok: true; manifest: SshLocalPluginManifest }

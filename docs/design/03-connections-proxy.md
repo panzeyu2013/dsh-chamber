@@ -47,22 +47,27 @@
 
 ### 2.1 本地实例：控制面 catalog 单行（connectionId 'local'）
 
-文件：`$XDG_STATE_HOME/dsh-chamber/connections.json`（04 §6）：
+文件：`<stateDir>/catalog.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE`
+可覆写；04 §6）：
 
 ```jsonc
 {
-  "schemaVersion": 1,
-  "connection": {
-    "id": "local",
-    "label": "Local dsh",
-    "accentColor": "#1a1a2e",
-    "status": "ready",            // PlaneHandle.connectionState 投影（05 §7.3）
-    "dshPort": 17501              // 实际监听端口（就绪后写入）
-  }
+  "schemaVersion": 2,          // CATALOG_SCHEMA_VERSION
+  "revision": 7,               // 每次持久化递增（原子写协议，§2.1 末）
+  "connections": [
+    {
+      "connectionId": "local",
+      "kind": "local",
+      "status": "ready",        // PlaneHandle.connectionState 投影（05 §7.3）
+      "dshPort": 17510,         // 实际监听端口（就绪后写入）
+      "label": "Local dsh",
+      "accentColor": "#1a1a2e"
+    }
+  ]
 }
 ```
 
-- **单行固定**：`local` 恒存在（不可删除；DELETE = 停止实例，§2.1.2）；
+- **单行固定**：`local` 恒存在（不可删除；DELETE = 停止实例，§2.1.1）；
   无 kind 分支、无 projects 子表——"本地实例"就是唯一一行。
 - **status / dshPort 是投影**：status 派生自 PlaneHandle（02 §3.5 七态），
   `dshPort` 在就绪后写入；控制面在文件里只持久化 `label / accentColor`
@@ -100,6 +105,12 @@
                                  // （null = ssh 默认 home；白名单见 13 §7.2，2026-08 新增）
 }
 ```
+
+- **注册表写入原子性**：renderer 提交的是完整候选集；任一条目非法、kind
+  不匹配或 id 重复时，主进程在写盘/断连/内存替换前拒绝**整个**候选集，原
+  文件、运行中隧道与内存注册表均保持不变。只有启动加载旧文件时采用容错恢复：
+  非法/kind 不匹配/重复条目响亮告警后丢弃（重复 id 首胜）。写路径不得复用
+  加载路径的“尽量恢复”语义，否则一次非法编辑会把既有主机静默删掉。
 
 - **生命周期**：SSH 隧道（`ssh -N [-p <sshPort>] -L <localPort>:127.0.0.1:
   <remotePort> <user@host>`，sshPort null 时不传 `-p`，走 ssh 默认/config）+
@@ -152,6 +163,10 @@
 ### 3.1 挂载与路径映射
 
 - 控制面挂载 `/api/i/<id>` 前缀；`id ∈ {local, ssh-<sshInstanceId>}`。
+- transport 注册只接受无 userinfo/path/query/hash 的 loopback **HTTP** origin
+  （`http://127.0.0.1:<port>` / localhost / `::1`）；实现统一使用 `node:http`
+  转发 unary 与 WS upgrade，因此 `https:` 在注册时即 fail-loud，不能先呈现
+  “已注册”再在首个请求时报协议错误。
 - **HTTP 全量透传**：任意方法（**无方法白名单**——05 §1），保持
   method/body/headers；**WS upgrade** 直通（`events.mux` / `events.host`
   双下行流）；**SSE 直通**（`text/event-stream` 响应不缓冲、不逐条解析、
@@ -201,7 +216,9 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
 - **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端
   `content-length` 与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节
-  重建 `content-length`。
+  重建 `content-length`。**压缩协商不跨代理（2026 audit M3b）**：请求侧剥离
+  `accept-encoding`（上游恒 identity），响应白名单放行 `content-encoding`
+  ——压缩标签必须随行，浏览器才能正确解码；反代不经手压缩字节。
 - **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、
   在缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503
   `resource_exhausted`，计数在断连/超时/错误/完成时幂等释放；HTTP server 在
@@ -211,6 +228,11 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   计时会在 host 已提交后截断慢速 `git worktree remove` 为 504，见设计 08
   §6 修订与 STATUS），既阻止停滞流，也不误杀持续有进展的大响应；SSE/已
   升级 WS 保持长连接语义。
+- **代理 WS 心跳（仅下游浏览器腿）**：splice 建立后向浏览器周期发免掩码
+  ping（`WS_PING_INTERVAL_MS=30s`、`WS_PING_MISSES_BEFORE_TEARDOWN=1`，
+  与 `ws` README 官方心跳示例对齐）；PongScanner 被动扫描、不消费字节；
+  上游（宿主）腿刻意无心跳（活性由 SSH keepalive / socket error 覆盖）——
+  契约与参数见 14-sleep-background.md D4 扩展与 `ws-frames.ts`/`ws-heartbeat.ts`。
 - 写路径背压（Node 双流适配，`res.write === false → waitForDrain`）；
   浏览器断连 → abort 上游（不泄漏 socket / 流资源）。
 

@@ -28,7 +28,7 @@ Desktop 的新执行面。**
 
 ```text
 ┌─ @dsh-chamber/dsh-client-ui-git ────────────────────┐
-│ sidebar.git 座位、拓扑、创建/删除 saga、30s 单飞协调器     │
+│ sidebar.workspace.git 座位、拓扑、创建/删除 saga、30s 单飞协调器     │
 └──────────────────────────┬──────────────────────┘
                            │ 每实例反代 + dsh 现有 unary
                            ▼
@@ -395,7 +395,7 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
 ### 11.4 后端对齐
 
 - **统一 worktree 根**：所有 chamber 创建的 worktree 落在
-  `<DSH_HOME>/worktrees/<仓库名>-<sha256(commonDir) 前8位>/<目录名>`——
+  `<DSH_HOME>/worktrees/<仓库名>-<sha256(commonDir) 前12位>/<目录名>`——
   集中、跨同名仓库无冲突、完全在仓库工作树外（git status 不受污染）；
   host 自动 mkdir（fs 抽象新增 mkdir）；DSH_HOME 缺失兜底 ~/.dsh；
   构造期校验绝对路径。

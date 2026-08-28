@@ -14,18 +14,6 @@ import type { PermissionSettingsState } from './permission-row-controller.ts'
 import { FULL_ACCESS_PRESET } from './permission-decode.ts'
 import css from './PermissionRow.module.css'
 
-/** Registration-side business face (bridge inject). */
-export interface PermissionRowInjected {
-  hooks: {
-    /** Permission settings snapshot bound as usePermission. */
-    permission: { getSnapshot(): PermissionSettingsState; subscribe(fn: () => void): () => void }
-  }
-  /** Load the descriptor when the row first renders. */
-  load: () => Promise<void>
-  /** Persist one advertised preset. */
-  select: (preset: string) => Promise<void>
-}
-
 /** Full Settings-row props (bridge-outlet kit + the injected face). */
 export interface PermissionRowProps {
   usePermission: SnapshotSelectorHook<PermissionSettingsState>

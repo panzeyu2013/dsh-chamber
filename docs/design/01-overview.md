@@ -78,7 +78,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 05 | [05-connection-manager.md](05-connection-manager.md) | 现行（表面/架构，v1 权威） | 多来源会话统一导航、侧边栏插件、桥接层、N-ctx、控制面/桌面契约（§7）、安全不变量（§8） |
 | 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（已实现，2026-08） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道 |
 | 07 | [07-models-params.md](07-models-params.md) | 推迟（设计定稿，待上游解锁） | 模型额外参数 + 默认推理等级：链路事实、上游阻塞点、更新复查清单、实现蓝本 |
-| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（v1 实现，2026-08-20 自 docs/todo/ 移入） | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.git` 座位 + 安全创建/无归档删除 saga |
+| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（v1 实现，2026-08-20 自 docs/todo/ 移入） | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 安全创建/无归档删除 saga |
 | 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行（已实现，2026-08 方案 A；自 docs/todo/ 移入） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 信任边界/分期 |
 | 10 | [../todo/10-todo-event-driven-aggregation.md](../todo/10-todo-event-driven-aggregation.md) | 已实现（2026-08；历史设计记录仍在 todo/） | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）+ 05 §3 契约修订；不改上游 dsh |
 | 11 | [11-auto-update.md](11-auto-update.md) | 现行（已实现，2026-08；自 docs/todo/ 移入） | 桌面端更新提示（dsh-chamber 自身，无弹窗、低打扰）：settings chamber 全局「更新」部分 + 静默检查、用户确认后下载、退出时安装（win/mac 一致，mac 安装腿需 Developer ID）、beta → stable 通道 |
@@ -89,6 +89,8 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code OS 深链基线：`dsh-chamber://` 快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；应用内按钮/IPC 已演进为设计 17 的 open-in 面，无 host 插件/seed |
 | 17 | [17-open-in-registry.md](17-open-in-registry.md) | 现行（M0–M2 已实现；M3 自动化完成、macOS 实机待验，2026-08） | open-in 打开注册表（design 16 演进）：本地来源 Finder + 本地/远程 VS Code 的统一打开面；主进程 OpenInApp provider 注册表 + 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-client-ui-open-in`，旧 vscode IPC 收敛删除 |
 | 19 | [19-notifications.md](19-notifications.md) | M1–M2 已实现；竞态自动化已完成，M3 macOS 权限/打包态实机待验（2026-09） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
+
+> 编号 18 未分配（10/12 保留在 docs/todo/，见上表）；文档地图以本表为唯一索引。
 
 ---
 

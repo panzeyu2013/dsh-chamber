@@ -5,6 +5,12 @@
 > 上游更新阶段（harness.commit 升级）须按 §5 清单复查，条件满足即按
 > §6 蓝本实现。本文档 + 05 为实现契约（05 的 settings.section 槽位契约见
 > 05 §5；官方 Models 页为 vendor `dsh-client-ui-settings-models`）。
+> **vendor 证据时效提示（2026-10）**：文中引用的上游机制
+> （`exposedNamespaces` / settings-not-exposed 等）与 api-proxy.ts 行号基于
+> rc.2（0.1.1-rc.2）前基线；rc.2 设置 API 重构（describe 返回全部注册
+> namespace + update/replace/mutate）后部分机制已删除——§5 复查清单须按
+> 当前 vendor 源码重新核对（结论不变：serialize.ts 白名单字段仍在、
+> per-model effort 字段仍缺失，推迟成立）。
 
 ## 0. 范围与状态
 
@@ -30,61 +36,64 @@
 ### 2.1 新会话默认模型选择：官方机制已存在
 
 - `sessions.selectModel` 每次选择（含 reasoningEffort）都会顺带保存为默认：
-  api-proxy.ts:2307-2321 `saveDefaultModelSelection` → `agent-default-model`
+  api-proxy `saveDefaultModelSelection` → `agent-default-model`
   设置节 `{provider, model, reasoningEffort}`（dsh-agent-default-model/src/
-  index.ts:34-38,98-104）。
+  index.ts）。
 - 新会话（create/resume）取回顺序：本会话选择 → 会话日志 request/header →
-  默认选择（api-proxy.ts:1154-1177）；`installModelSelection` 经
+  默认选择（api-proxy）；`installModelSelection` 经
   `agent/request` waterfall 把 provider/model/reasoningEffort 注入首个请求
-  （dsh-agent/src/model-selection.ts:54-70）。
+  （dsh-agent/src/model-selection）。
 - **结论**：选择器里选过一次，新会话自动继承——"避免每次选择"官方已满足，
   缺的只是设置页回显/设置入口。
 
 ### 2.2 设置页可写的默认等级：`llm-deepseek.reasoningEffort`（profile 级）
 
-- schema 字段（dsh-llm-deepseek/src/index.ts:70,94-95），已暴露给客户端
-  （exposedNamespaces = 模型 provider 命名空间，dsh-host-apiproxy/src/
-  api-proxy.ts:1953-1958），设置 UI 可读可写。
+- schema 字段（dsh-llm-deepseek/src/index.ts），已暴露给客户端
+  （rc.2 起 settings `describe` 返回全部注册 namespace——模型 provider 命名空间
+  经 `settingsNamespace` 注册，旧 `exposedNamespaces` 机制已随设置 API 重构
+  移除），设置 UI 可读可写。
 - 生效路径：profile `reasoningEffort` → 每模型 `defaultEffort`
-  （dsh-llm-deepseek/src/adapter.ts:194-210）→ 无显式 effort 的请求自动套用
-  （dsh-llm/src/index.ts:754-762）→ wire `reasoning_effort`
-  （dsh-llm-deepseek/src/serialize.ts:179-181）。
+  （dsh-llm-deepseek/src/adapter）→ 无显式 effort 的请求自动套用
+  （dsh-llm/src/index）→ wire `reasoning_effort`
+  （dsh-llm-deepseek/src/serialize）。
 - 联动约束：`thinking: disabled` 时仅允许 `off`/Default，否则适配器拒收并
-  保留旧配置（dsh-llm-deepseek/src/index.ts:162-166）。
-- **注意**：deepseek 模型目录类型（DeepSeekCatalogModel，adapter.ts:30-41）
+  保留旧配置（dsh-llm-deepseek/src/index）。
+- **注意**：deepseek 模型目录类型（DeepSeekCatalogModel，adapter）
   **没有 per-model effort 字段**——该默认是 profile 级，非 per-model。
 
 ### 2.3 wire 请求是封闭白名单：extra 键不会泛化透传
 
-- deepseek 序列化器只发固定字段（serialize.ts:173-186）：
+- deepseek 序列化器只发固定字段（serialize）：
   `model / messages / stream / stream_options / thinking / reasoning_effort /
   tools / temperature / max_tokens / stop`。
 - extra 键上 wire 的唯一途径是**适配器从配置读它并映射到这些字段**
-  （适配器 = vendor 只读）；请求由 host 进程构造（agent-loop agent.ts:407-470，
+  （适配器 = vendor 只读）；请求由 host 进程构造（agent-loop agent，
   `agent/request` waterfall 是唯一注入点），host 组合是上游 `--profile web`
-  （control-plane spawn-dsh.ts:59），chamber 无法注入 host 插件。
+  （control-plane spawn-dsh），chamber 无法注入 host 插件。
 - 逐层透传事实表（2026-08-15 核）：
 
 | 键落在 | 是否上 wire | 证据 |
 |---|---|---|
-| deepseek profile `reasoningEffort`/`thinking`/`maxTokens` | 是 | §2.2 + resolveCallFor 默认物化（dsh-llm/src/index.ts:740-742） |
-| pi-ai profile `headers`（dict） | 是（作为请求头，保留名除外） | dsh-llm-pi-ai/src/adapter.ts:172-176,319-321 |
-| pi-ai per-model `reasoningEfforts`/`input`/`compat` | 是 | dsh-llm-pi-ai/src/config.ts:203-221 |
-| deepseek per-model 非目录字段 | **否**（resolveModels 重建条目时丢弃） | dsh-llm-deepseek/src/index.ts:139-145 |
+| deepseek profile `reasoningEffort`/`thinking`/`maxTokens` | 是 | §2.2 + resolveCallFor 默认物化（dsh-llm/src/index） |
+| pi-ai profile `headers`（dict） | 是（作为请求头，保留名除外） | dsh-llm-pi-ai/src/adapter |
+| pi-ai per-model `reasoningEfforts`/`input`/`compat` | 是 | dsh-llm-pi-ai/src/config |
+| deepseek per-model 非目录字段 | **否**（resolveModels 重建条目时丢弃） | dsh-llm-deepseek/src/index |
 | `temperature` | **否（从设置无法到达）** | serializer 支持，但仅 GenerateOptions 携带，无配置消费方 |
 | `top_p` 等其余任何键 | **否** | serializer 根本不发 |
 
-- schemastery `z.object` 非严格模式保留未知键（schemastery/src/index.ts:
-  752-763；`schema(x)` 直调 strict=false，index.ts:240-242）——未知键能
+- schemastery `z.object` 非严格模式保留未知键（schemastery/src/index.ts，
+  `schema(x)` 直调 strict=false）——未知键能
   持久化并出现在 resolved 设置文档里，但**不影响请求**。
 
 ### 2.4 客户端访问边界
 
-- `agent-default-model` 命名空间**不在** exposedNamespaces（api-proxy.ts:
-  1953-1958，仅模型 provider + WEB_SETTINGS_NAMESPACES +
-  PRODUCT_SETTINGS_NAMESPACES）——设置 API 对客户端读写它均拒绝
-  （`settings-not-exposed`，api-proxy.ts:2009）；也无专用读 RPC。
-  → chamber 无法回显"当前默认选择"。
+- `agent-default-model` 命名空间（dsh-agent-default-model 注册）——rc.2 设置
+  API 重构前以 `exposedNamespaces` 白名单（仅模型 provider +
+  WEB_SETTINGS_NAMESPACES + PRODUCT_SETTINGS_NAMESPACES）拒绝客户端读写
+  （`settings-not-exposed`）；rc.2 起 settings `describe` 返回全部注册
+  namespace，该命名空间是否对客户端可读/可写**需按当前 vendor 实测**
+  （见文首时效提示）；若无专用读 RPC 仍不可回显。
+  → chamber 无法回显"当前默认选择"（结论不变）。
 - 可用数据面：`settings.mutate/describe`（模型 provider 命名空间）、
   `llm.models`（session 无关目录）、`sessions.selectModel` 副作用写默认。
 
@@ -94,8 +103,8 @@
 |---|---|---|---|
 | 1 | 泛化透传/任意 extra 键生效 | 适配器从 profile/models 读取额外字段并映射到 wire（或新增配置面），或 host 侧出现消费 `agent/request` 的官方/可注入插件 | `dsh-llm-deepseek/src/{index,serialize}.ts`、`dsh-llm-pi-ai/src/provider.ts` |
 | 2 | `temperature` 等采样参数从设置到达请求 | 上述消费方把配置采样参数并入 GenerateOptions | 同上 + `dsh-agent-loop/src/agent.ts` |
-| 3 | 设置页回显/设置默认选择（agent-default-model） | 该命名空间进入 exposedNamespaces，或新增专用 RPC | `dsh-host-apiproxy/src/api-proxy.ts:1953-1958`、`src/api/llm.ts` |
-| 4 | per-model 默认推理等级（deepseek） | `DeepSeekCatalogModel` 增加 effort 字段，或模型条目标注 reasoning 元数据 | `dsh-llm-deepseek/src/adapter.ts:30-41` |
+| 3 | 设置页回显/设置默认选择（agent-default-model） | 该命名空间经 `settingsNamespace` 注册后由 settings `describe` 对客户端可读（rc.2 语义），或新增专用 RPC | `dsh-host-apiproxy/src/api-proxy.ts`（settings describe/update/mutate/replace）、`src/api/settings.schema.ts` |
+| 4 | per-model 默认推理等级（deepseek） | `DeepSeekCatalogModel` 增加 effort 字段，或模型条目标注 reasoning 元数据 | `dsh-llm-deepseek/src/adapter` |
 
 ## 4. 更新阶段复查清单（每次 harness.commit 升级）
 
@@ -118,7 +127,7 @@
 - **不 fork 官方 Models 页**：vendor 页活跃演进，fork 维护成本高；且默认
   等级是 profile 级，独立 section 可统一覆盖 deepseek/pi-ai 全部路由；
   两页写入互不冲突（vendor pathOps 只写其渲染键、draft 结构开放保留未知键，
-  ProviderEditor.tsx:105-122）。
+  ProviderEditor）。
 - 数据面：`ctx.remote`（IApiClient：settings.mutate/describe、llm.models、
   credentials），与 vendor ModelsSection 同一 wire 面。
 

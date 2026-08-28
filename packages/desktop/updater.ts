@@ -26,7 +26,6 @@
  * Linux is not covered: the release target is `dir` (no installer feed), so
  * the controller is inert there (installBlockedReason set, no checks).
  */
-import { app } from 'electron'
 import { execFile } from 'node:child_process'
 import { createRequire } from 'node:module'
 import type { UpdateInfo } from 'electron-updater'
@@ -35,9 +34,32 @@ import type { UpdateInfo } from 'electron-updater'
 // Object.defineProperty getter — cjs-module-lexer cannot detect it, so an ESM
 // named import (`import { autoUpdater }`) would typecheck but resolve to
 // undefined at runtime. require() preserves the getter; the cast keeps the
-// package's own d.ts types.
+// package's own d.ts types. Resolved LAZILY (first real use only): the
+// factory must not touch it when an injected fake is provided (design 11
+// §3.2 testability — see UpdateControllerDeps).
 const require = createRequire(import.meta.url)
-const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
+let realAutoUpdater: AutoUpdaterLike | null = null
+function getRealAutoUpdater(): AutoUpdaterLike {
+  if (realAutoUpdater === null) {
+    realAutoUpdater = (require('electron-updater') as typeof import('electron-updater')).autoUpdater
+  }
+  return realAutoUpdater
+}
+
+// electron's package main is CJS and exports the binary path STRING under
+// plain node — a static `import { app } from 'electron'` would fail to LINK
+// this module there (the named export does not exist) and a dynamic one
+// yields undefined; require() returns the real electron module in the
+// Electron runtime and the path string under plain node (`app` → undefined)
+// — either way it never throws. Also resolved LAZILY: an injected test never
+// touches the real app.
+let realApp: ElectronAppLike | null = null
+function getRealApp(): ElectronAppLike {
+  if (realApp === null) {
+    realApp = (require('electron') as typeof import('electron')).app
+  }
+  return realApp
+}
 
 /** Update lifecycle phase (design 11 §3.2). `up-to-date` = a check ran and
  *  found nothing newer (distinct from `idle`, which means not checked yet). */
@@ -60,6 +82,82 @@ export interface UpdateState {
   installBlockedReason: string | null
   /** Non-secret error text (check/download failure); null = none. */
   error: string | null
+}
+
+/** The subset of electron's `App` the controller reads (test-injectable). */
+export interface ElectronAppLike {
+  isPackaged: boolean
+}
+
+/**
+ * Open-external allowlist for the settings「前往下载页」link (design 11 §7):
+ * only this repo's GitHub pages may ever be opened. Parsed with URL (not a
+ * startsWith string check) so scheme/host/path-root are pinned exactly.
+ * Encoded traversal is decoded and normalized before the path check, and
+ * credentialed URLs are refused even though URL.origin ignores userinfo.
+ */
+export function isAllowedReleaseUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false
+  try {
+    const url = new URL(raw)
+    if (url.origin !== 'https://github.com') return false
+    if (url.username !== '' || url.password !== '') return false
+    // One decode is sufficient only when the original path does not contain
+    // an encoded percent. Reject nested encoding outright: `%252f` can become
+    // `%2f` at one layer and `/` at another, defeating a single-pass
+    // traversal check in downstream URL/server stacks.
+    if (/%25/i.test(url.pathname)) return false
+    const normalized = new URL(`https://github.com${decodeURIComponent(url.pathname)}`).pathname
+    return normalized.startsWith('/panzeyu2013/dsh-chamber/')
+  } catch {
+    return false
+  }
+}
+
+/** Await the OS handoff and report its real outcome to the renderer. */
+export async function openReleasePage(
+  raw: unknown,
+  openExternal: (url: string) => Promise<unknown>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isAllowedReleaseUrl(raw)) return { ok: false, error: 'url not allowed' }
+  try {
+    await openExternal(raw)
+    return { ok: true }
+  } catch {
+    return { ok: false, error: 'open release page failed' }
+  }
+}
+
+/** The subset of electron-updater's `AppUpdater` surface the controller uses
+ *  (test-injectable; the real autoUpdater is structurally compatible). */
+export interface AutoUpdaterLike {
+  on(event: string, listener: (...args: any[]) => void): unknown
+  autoDownload: boolean
+  autoInstallOnAppQuit: boolean
+  allowPrerelease: boolean
+  allowDowngrade: boolean
+  channel: string | null
+  forceDevUpdateConfig: boolean
+  /** `any` (not `Record<string, unknown>`): the real AppUpdater's parameter
+   *  is `PublishConfiguration | AllPublishOptions` and a narrower interface
+   *  type would break the structural assignment of the real autoUpdater. */
+  setFeedURL(options: any): void
+  checkForUpdates(): Promise<unknown>
+  downloadUpdate(): Promise<unknown>
+}
+
+/** Test-injection seam (design 11 §3.2 testability): each member falls back
+ *  to the real value — the electron `app`, the require'd electron-updater
+ *  `autoUpdater`, `process.platform` — resolved LAZILY inside the factory and
+ *  only when the member is absent; an injected value is never touched by the
+ *  real path (the module stays loadable under plain node for unit tests). */
+export interface UpdateControllerDeps {
+  /** Electron `app` (only `isPackaged` is read); default: the real app. */
+  app?: { isPackaged: boolean }
+  /** electron-updater's `autoUpdater`; default: the real instance. */
+  autoUpdater?: AutoUpdaterLike
+  /** `process.platform`; default: the real platform. */
+  platform?: NodeJS.Platform
 }
 
 /** Controller surface wired into main.ts (IPC handlers) and started at boot. */
@@ -100,16 +198,18 @@ function releaseUrlFor(version: string): string {
  * contract); the full detail stays in the main-process log. Covers Windows
  * drive paths and POSIX absolute paths rooted at any component (2026-08
  * review: broadened from the fixed root list — /opt, /usr/local, /Library,
- * /run, /root etc. all carry path material too). The POSIX branch uses a
- * lookbehind so a URL's `//host/...` (the non-secret feed/release URL) is
- * NOT mangled — only real path tokens are redacted; the Windows branch
- * rejects `x://` (a scheme, e.g. `https://` — the drive letter is followed
- * by TWO slashes) so URLs survive it too.
+ * /run, /root etc. all carry path material too). The POSIX branch refuses a
+ * `/` preceded by `:`, `/`, OR a word char: that keeps a URL's `//host/...`
+ * AND its path segments (`github.com/panzeyu2013/releases/...` — the
+ * non-secret feed/release URL) intact, while real absolute-path roots
+ * (preceded by whitespace, string start, or punctuation) are still redacted;
+ * the Windows branch rejects `x://` (a scheme, e.g. `https://` — the drive
+ * letter is followed by TWO slashes) so URLs survive it too.
  */
-function sanitizeErrorText(message: string): string {
+export function sanitizeErrorText(message: string): string {
   return message
     .replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, '[path]')
-    .replace(/(?<![:/])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, '[path]')
+    .replace(/(?<![:/\w])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, '[path]')
 }
 
 /**
@@ -119,9 +219,9 @@ function sanitizeErrorText(message: string): string {
  * fail-closed: a renderer call racing startup cannot begin a download before
  * the Developer ID verdict exists.
  */
-function platformBlockedReason(): string | null {
-  if (process.platform === 'linux') return 'auto-update is not supported on this platform'
-  if (process.platform !== 'darwin') return null
+function platformBlockedReason(platform: NodeJS.Platform, app: ElectronAppLike): string | null {
+  if (platform === 'linux') return 'auto-update is not supported on this platform'
+  if (platform !== 'darwin') return null
   if (!app.isPackaged) return 'development build'
   return 'verifying Developer ID signature'
 }
@@ -154,8 +254,16 @@ export interface UpdateControllerOptions {
   }
 }
 
-export function createUpdateController(options: UpdateControllerOptions): UpdateController {
+export function createUpdateController(options: UpdateControllerOptions, deps?: UpdateControllerDeps): UpdateController {
   const { version, logger } = options
+  // Real values are resolved LAZILY inside the factory and only when the
+  // corresponding dep is absent (design 11 §3.2 testability): an injected
+  // test never touches the real electron app, the real electron-updater
+  // instance, or process.platform — and the module itself stays loadable
+  // under plain node (no electron named imports at module top).
+  const app = deps?.app ?? getRealApp()
+  const autoUpdater = deps?.autoUpdater ?? getRealAutoUpdater()
+  const platform = deps?.platform ?? process.platform
   const channel = resolveChannel()
 
   let state: UpdateState = {
@@ -165,7 +273,7 @@ export function createUpdateController(options: UpdateControllerOptions): Update
     channel,
     downloadPercent: null,
     releaseUrl: null,
-    installBlockedReason: platformBlockedReason(),
+    installBlockedReason: platformBlockedReason(platform, app),
     error: null,
   }
   const listeners = new Set<(state: UpdateState) => void>()
@@ -175,7 +283,7 @@ export function createUpdateController(options: UpdateControllerOptions): Update
   }
   // macOS packaged: probe asynchronously without blocking startup, but keep
   // download fail-closed until a valid Developer ID verdict clears the gate.
-  if (process.platform === 'darwin' && app.isPackaged) {
+  if (platform === 'darwin' && app.isPackaged) {
     void probeMacDeveloperIdSignature().then((hasDeveloperId) => {
       setState({ installBlockedReason: hasDeveloperId ? null : 'missing Developer ID signature' })
     })
@@ -220,6 +328,11 @@ export function createUpdateController(options: UpdateControllerOptions): Update
     setState({ phase: 'up-to-date', latestVersion: null, downloadPercent: null, releaseUrl: null, error: null })
   })
   autoUpdater.on('download-progress', (progress) => {
+    // `downloaded` is terminal (the checkNow/download phase gates rely on
+    // it): a progress event racing AFTER update-downloaded (electron-updater
+    // normally never emits one, but an out-of-order delivery costs nothing to
+    // guard) must not regress the phase back to `downloading`.
+    if (state.phase === 'downloaded') return
     setState({ phase: 'downloading', downloadPercent: progress.percent })
   })
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
@@ -280,7 +393,7 @@ export function createUpdateController(options: UpdateControllerOptions): Update
       return () => listeners.delete(listener)
     },
     start() {
-      if (state.installBlockedReason !== null && process.platform === 'linux') {
+      if (state.installBlockedReason !== null && platform === 'linux') {
         logger.log('[updater] 跳过更新检查：当前平台不支持（linux dir target）');
         return
       }
@@ -293,7 +406,7 @@ export function createUpdateController(options: UpdateControllerOptions): Update
     async checkNow() {
       // Linux is inert (dir target — no installer feed): refuse loudly
       // instead of letting the feed lookup fail obscurely.
-      if (process.platform === 'linux') {
+      if (platform === 'linux') {
         logger.log('[updater] 手动检查更新被跳过：当前平台不支持（linux dir target）')
         return { ok: false, error: 'auto-update is not supported on this platform' }
       }

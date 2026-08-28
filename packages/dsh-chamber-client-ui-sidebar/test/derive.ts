@@ -10,12 +10,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   armBlankGhost,
+  armMembershipGrace,
   BLANK_GHOST_GRACE_MS,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
   hashString,
   increasedForkTitle,
   instanceSnapshotSignature,
+  MEMBERSHIP_GRACE_MS,
   mergeRuntimeFacts,
   mergeSearchResults,
   nextServerOrder,
@@ -27,6 +29,7 @@ import {
   reconcileCompletedFacts,
   reconciledSessionOrder,
   relativeTimeBucket,
+  retainMembershipGraceSources,
   runningRingVisible,
   runtimeReportSignature,
   sanitizeSearchQuery,
@@ -35,6 +38,7 @@ import {
   UNGROUPED_WORKSPACE_ID,
   workspaceAccentStyle,
   __resetBlankGhostsForTests,
+  __resetMembershipGracesForTests,
 } from '../src/shared/derive.ts'
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../src/shared/instance-api.ts'
 import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/shared/aggregate-store.ts'
@@ -42,7 +46,7 @@ import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/share
 function session(
   id: string,
   updatedAt = 0,
-  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'running'>> = {},
+  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'running' | 'parentSessionId'>> = {},
 ): SessionRow {
   return { sessionId: id, updatedAt, running: false, blank: false, ...extra }
 }
@@ -110,6 +114,7 @@ test('blank sessions are hidden from workspaces and from the ungrouped bucket wh
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -123,6 +128,7 @@ test('a blank session surfaces while it is the current session (official !blank 
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b',
   )
@@ -138,6 +144,7 @@ test('a blank-current session not accounted by any workspace trails in the ungro
       [workspace('w1', 'Work', ['a'])],
       [session('a', 1), session('blank', 300, { blank: true })],
     ),
+    'srv-a',
     '',
     'blank',
   )
@@ -151,6 +158,7 @@ test('blank rows carry the sparse blank flag; ordinary rows never do', () => {
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b',
   )
@@ -164,6 +172,7 @@ test('a non-current blank session stays hidden even when another blank session i
       [workspace('w1', 'Work', ['b1', 'b2'])],
       [session('b1', 1, { blank: true }), session('b2', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b2',
   )
@@ -179,12 +188,13 @@ test('a departed blank session keeps its layout slot (ghost) while the grace is 
   // App re-derives a moment later with current='a'; within the grace the
   // departed blank row STAYS in the projection (a non-interactive ghost) so
   // every row below keeps its position inside the 350ms double-click window.
-  armBlankGhost('b', 1000)
+  armBlankGhost('srv-a', 'b', 1000)
   const result = deriveServerWorkspaces(
     snapshot(
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     1000 + BLANK_GHOST_GRACE_MS - 1,
@@ -197,7 +207,7 @@ test('a departed blank session keeps its layout slot (ghost) while the grace is 
 
 test('the ghost grace expires at BLANK_GHOST_GRACE_MS: the departed blank row then hides', () => {
   __resetBlankGhostsForTests()
-  armBlankGhost('b', 1000)
+  armBlankGhost('srv-a', 'b', 1000)
   // Boundary is exclusive (expiry > now): exactly BLANK_GHOST_GRACE_MS later
   // the ghost is gone and the list may shift — safely after the window.
   const result = deriveServerWorkspaces(
@@ -205,6 +215,7 @@ test('the ghost grace expires at BLANK_GHOST_GRACE_MS: the departed blank row th
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     1000 + BLANK_GHOST_GRACE_MS,
@@ -219,6 +230,7 @@ test('a departed blank row hides immediately when no ghost was armed (pre-grace 
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
   )
@@ -227,12 +239,13 @@ test('a departed blank row hides immediately when no ghost was armed (pre-grace 
 
 test('the ghost also holds a departed blank stray in the ungrouped bucket', () => {
   __resetBlankGhostsForTests()
-  armBlankGhost('blank', 1000)
+  armBlankGhost('srv-a', 'blank', 1000)
   const result = deriveServerWorkspaces(
     snapshot(
       [workspace('w1', 'Work', ['a'])],
       [session('a', 1), session('blank', 300, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     1200,
@@ -243,12 +256,13 @@ test('the ghost also holds a departed blank stray in the ungrouped bucket', () =
 
 test('arming the ghost never surfaces a NON-blank session (the map only affects blank rows)', () => {
   __resetBlankGhostsForTests()
-  armBlankGhost('a', 1000) // `a` is a real session — the arm must be ignored
+  armBlankGhost('srv-a', 'a', 1000) // `a` is a real session — the arm must be ignored
   const result = deriveServerWorkspaces(
     snapshot(
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'b',
     1200,
@@ -265,13 +279,14 @@ test('a refreshed arm extends the ghost (a later real transition wins over an ea
   __resetBlankGhostsForTests()
   // A click on the blank row itself armed a stale ghost at t=1000 (expires
   // t=1450); the real transition click at t=2000 re-arms with a fresh expiry.
-  armBlankGhost('b', 1000)
-  armBlankGhost('b', 2000)
+  armBlankGhost('srv-a', 'b', 1000)
+  armBlankGhost('srv-a', 'b', 2000)
   const result = deriveServerWorkspaces(
     snapshot(
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { blank: true })],
     ),
+    'srv-a',
     '',
     'a',
     2100, // inside the FRESH grace, past the stale one
@@ -282,12 +297,310 @@ test('a refreshed arm extends the ghost (a later real transition wins over an ea
   ])
 })
 
+test('the ghost grace is SOURCE-scoped — a cloned UUID on another source never shares it (L2)', () => {
+  __resetBlankGhostsForTests()
+  // Source A arms the ghost for its clone row; source B's derive (same UUID,
+  // different source) must NOT see the grace — its departed blank row hides.
+  armBlankGhost('srv-a', 'clone-uuid', 1000)
+  const resultB = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['clone-uuid'])],
+      [session('clone-uuid', 2, { blank: true })],
+    ),
+    'srv-b',
+    '',
+    undefined,
+    1200,
+  )
+  assert.deepEqual(resultB[0].sessions, [], 'source B must not inherit source A\'s ghost grace')
+  const resultA = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['clone-uuid'])],
+      [session('clone-uuid', 2, { blank: true })],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1200,
+  )
+  assert.deepEqual(resultA[0].sessions, [{ id: 'clone-uuid', title: '', running: false, updatedAt: 2, blank: true }])
+})
+
+// ---- membership grace (create + bounded first-observation fork grace) ----
+
+test('a just-created session is skipped from the ungrouped bucket while the membership grace is live', () => {
+  __resetMembershipGracesForTests()
+  // The host publishes session-added BEFORE workspace-changed: the interim
+  // store cross-section lists the new session while no workspace accounts it.
+  // The sidebar armed the grace synchronously after the create resolved; the
+  // App's derive must NOT surface the row under 未分类 during the grace.
+  armMembershipGrace('srv-a', 'new', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('new', 500, { blank: true })],
+    ),
+    'srv-a',
+    '',
+    'new',
+    1500,
+  )
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+})
+
+test('the membership grace never hides a session its workspace already accounts', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'new', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['new', 'a'])],
+      [session('new', 500), session('a', 1)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  // Membership landed: the row renders in its workspace even inside the grace
+  // window (the grace only suppresses the STRAY placement).
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions, [
+    { id: 'new', title: '', running: false, updatedAt: 500 },
+    { id: 'a', title: '', running: false, updatedAt: 1 },
+  ])
+})
+
+test('the membership grace expires at MEMBERSHIP_GRACE_MS: the stray then surfaces in the ungrouped bucket', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'new', 1000)
+  const atExpiry = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('new', 500)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  assert.equal(atExpiry.length, 2)
+  assert.equal(atExpiry[1].ungrouped, true)
+  assert.deepEqual(atExpiry[1].sessions, [{ id: 'new', title: '', running: false, updatedAt: 500 }])
+})
+
+test('an unarmed session still surfaces as a stray (grace only affects armed ids)', () => {
+  __resetMembershipGracesForTests()
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('stray', 500)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1].sessions, [{ id: 'stray', title: '', running: false, updatedAt: 500 }])
+})
+
+test('a refreshed arm extends the membership grace (a later mutation wins over an earlier stale arm)', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'new', 1000)
+  armMembershipGrace('srv-a', 'new', 4000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('new', 500)],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    4100, // past the stale expiry, inside the fresh one
+  )
+  assert.equal(result.length, 1)
+})
+
+test('the membership grace is source-scoped: an arm on one source never suppresses another source strays', () => {
+  __resetMembershipGracesForTests()
+  // Host session ids mint from per-process counters on some paths
+  // (`session-<n>`), so a same-id session legitimately exists on two sources.
+  armMembershipGrace('srv-a', 'session-5', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [session('a', 1), session('session-5', 500)],
+    ),
+    'srv-b', // a DIFFERENT source derives: its stray must stay visible
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1].sessions, [{ id: 'session-5', title: '', running: false, updatedAt: 500 }])
+})
+
+test('a fork child of a workspace-accounted parent is initially skipped by a bounded first-observation grace', () => {
+  __resetMembershipGracesForTests()
+  // The host-minted child can be published before the fork response, so this
+  // grace is armed from the first snapshot rather than by the action caller.
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['parent'])],
+      [
+        session('parent', 10),
+        session('child', 500, { parentSessionId: 'parent' }),
+      ],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions, [{ id: 'parent', title: '', running: false, updatedAt: 10 }])
+})
+
+test('a published fork child surfaces ungrouped when workspace attach has not landed by grace expiry', () => {
+  __resetMembershipGracesForTests()
+  const pendingAttach = snapshot(
+    [workspace('w1', 'Work', ['parent'])],
+    [
+      session('parent', 10),
+      session('child', 500, { parentSessionId: 'parent' }),
+    ],
+  )
+  // First observation arms the grace.
+  const first = deriveServerWorkspaces(pendingAttach, 'srv-a', '', undefined, 1000)
+  assert.equal(first.length, 1)
+
+  // Upstream can return workspace-attach-failed after already publishing the
+  // child. The same partial-success snapshot must become discoverable after
+  // the bounded grace instead of being hidden forever.
+  const expired = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  assert.equal(expired.length, 2)
+  assert.equal(expired[1].ungrouped, true)
+  assert.deepEqual(expired[1].sessions, [{ id: 'child', title: '', running: false, updatedAt: 500 }])
+
+  // An expired candidate remains expired while present; repeated derives
+  // must not silently re-arm another three-second hiding window.
+  const later = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS * 2,
+  )
+  assert.equal(later.length, 2)
+  assert.deepEqual(later[1].sessions.map(row => row.id), ['child'])
+})
+
+test('the first-observation fork grace is source-scoped for cloned child ids', () => {
+  __resetMembershipGracesForTests()
+  const pendingAttach = snapshot(
+    [workspace('w1', 'Work', ['parent'])],
+    [session('parent', 10), session('child', 500, { parentSessionId: 'parent' })],
+  )
+  deriveServerWorkspaces(pendingAttach, 'srv-a', '', undefined, 1000)
+  deriveServerWorkspaces(pendingAttach, 'srv-b', '', undefined, 2000)
+
+  const expiredOnlyOnA = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  const stillHiddenOnB = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-b',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS,
+  )
+  assert.equal(expiredOnlyOnA.length, 2)
+  assert.equal(stillHiddenOnB.length, 1)
+})
+
+test('removing a source clears its fork grace so a same-id re-add starts a fresh generation', () => {
+  __resetMembershipGracesForTests()
+  const pendingAttach = snapshot(
+    [workspace('w1', 'Work', ['parent'])],
+    [session('parent', 10), session('child', 500, { parentSessionId: 'parent' })],
+  )
+  deriveServerWorkspaces(pendingAttach, 'srv-a', '', undefined, 1000)
+  retainMembershipGraceSources(new Set())
+  const readded = deriveServerWorkspaces(
+    pendingAttach,
+    'srv-a',
+    '',
+    undefined,
+    1000 + MEMBERSHIP_GRACE_MS * 2,
+  )
+  assert.equal(readded.length, 1, 'the re-added source receives a new bounded grace')
+})
+
+test('a fork child of an UNACCOUNTED parent stays visible in the ungrouped bucket (genuinely ungrouped)', () => {
+  __resetMembershipGracesForTests()
+  // Forking a stray: the host skips the attach (workspace-less source), so
+  // the child is genuinely ungrouped — the parent-accounted rule must NOT
+  // hide it (the flows reviewer's fork-of-stray case).
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['a'])],
+      [
+        session('a', 1),
+        session('stray-parent', 40),
+        session('stray-child', 500, { parentSessionId: 'stray-parent' }),
+      ],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1].sessions, [
+    { id: 'stray-child', title: '', running: false, updatedAt: 500 },
+    { id: 'stray-parent', title: '', running: false, updatedAt: 40 },
+  ])
+})
+
+test('an accounted fork child renders in its workspace even while an unrelated grace is armed', () => {
+  __resetMembershipGracesForTests()
+  armMembershipGrace('srv-a', 'other', 1000)
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['parent', 'child'])],
+      [
+        session('parent', 10),
+        session('child', 500, { parentSessionId: 'parent' }),
+        session('other', 600),
+      ],
+    ),
+    'srv-a',
+    '',
+    undefined,
+    1500,
+  )
+  assert.equal(result.length, 1)
+  assert.deepEqual(result[0].sessions.map(row => row.id), ['parent', 'child'])
+})
+
 test('subagent sessions are hidden from workspaces and from the ungrouped bucket', () => {
   const result = deriveServerWorkspaces(
     snapshot(
       [workspace('w1', 'Work', ['a', 'b'])],
       [session('a', 1), session('b', 2, { origin: 'subagent' })],
     ),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -304,6 +617,7 @@ test('workspace membership maps in sessionIds order with titles from the snapsho
         session('s3', 30, { title: 'Three' }),
       ],
     ),
+    'srv-a',
     '',
   )
   assert.deepEqual(result, [
@@ -332,6 +646,7 @@ test('visible sessions not accounted by any workspace trail in one ungrouped buc
         session('sub-stray', 300, { origin: 'subagent' }),
       ],
     ),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 2)
@@ -349,6 +664,7 @@ test('visible sessions not accounted by any workspace trail in one ungrouped buc
 test('the ungrouped bucket carries the caller-provided title', () => {
   const result = deriveServerWorkspaces(
     snapshot([workspace('w1', 'Work', ['a'])], [session('x', 100), session('a', 1)]),
+    'srv-a',
     'Ungrouped',
   )
   assert.equal(result[1].title, 'Ungrouped')
@@ -358,6 +674,7 @@ test('the ungrouped bucket carries the caller-provided title', () => {
 test('no stray sessions means no ungrouped bucket', () => {
   const result = deriveServerWorkspaces(
     snapshot([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2)]),
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -365,7 +682,7 @@ test('no stray sessions means no ungrouped bucket', () => {
 })
 
 test('empty snapshot derives to an empty list', () => {
-  assert.deepEqual(deriveServerWorkspaces(snapshot([], []), ''), [])
+  assert.deepEqual(deriveServerWorkspaces(snapshot([], []), 'srv-a', ''), [])
 })
 
 test('members not present in the session list are skipped without breaking workspace order', () => {
@@ -374,6 +691,7 @@ test('members not present in the session list are skipped without breaking works
       [workspace('w1', 'Work', ['missing', 'a'])],
       [session('a', 1, { title: 'A' })],
     ),
+    'srv-a',
     '',
   )
   assert.deepEqual(result[0].sessions, [{ id: 'a', title: 'A', running: false, updatedAt: 1 }])
@@ -386,6 +704,7 @@ test('archived sessions are hidden from workspaces and from the ungrouped bucket
       sessions: [session('a', 1), session('b', 2), session('archived-stray', 3)],
       archivedSessionIds: ['b', 'archived-stray'],
     },
+    'srv-a',
     '',
   )
   assert.equal(result.length, 1)
@@ -400,6 +719,7 @@ test('archived members keep their accounting slot: only non-archived strays surf
       sessions: [session('a', 1), session('archived', 2), session('x', 3)],
       archivedSessionIds: ['archived'],
     },
+    'srv-a',
     '',
   )
   assert.equal(result.length, 2)
@@ -417,6 +737,7 @@ test('running and updatedAt pass through to workspace members and strays', () =>
         session('s', 99, { running: true }),
       ],
     ),
+    'srv-a',
     '',
   )
   assert.deepEqual(result[0].sessions, [
@@ -1317,7 +1638,7 @@ test('mergeSearchResults leads with local hits then appends remote-only rows', (
     ],
     hasMore: false,
   }
-  const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE)
+  const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE, true)
   assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2', 'r1', 'r2'])
   assert.equal(merged.hasMore, false)
 })
@@ -1334,7 +1655,7 @@ test('mergeSearchResults adopts the remote snippet for sessions hit in both legs
     ],
     hasMore: false,
   }
-  const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE)
+  const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE, true)
   assert.deepEqual(merged.items, [
     { sessionId: 'l1', snippet: '' },
     { sessionId: 'both', snippet: 'content snippet' },
@@ -1351,7 +1672,7 @@ test('mergeSearchResults dedupes sessionIds within the remote leg', () => {
     ],
     hasMore: false,
   }
-  const merged = mergeSearchResults([], remote, 20, ALL_VISIBLE)
+  const merged = mergeSearchResults([], remote, 20, ALL_VISIBLE, true)
   assert.deepEqual(merged.items, [
     { sessionId: 'x', snippet: 'first' },
     { sessionId: 'y', snippet: 'other' },
@@ -1363,8 +1684,7 @@ test('mergeSearchResults sets hasMore from the remote hint', () => {
     [],
     { items: [{ sessionId: 'x', snippet: '' }], hasMore: true },
     20,
-    ALL_VISIBLE,
-  )
+    ALL_VISIBLE, true)
   assert.equal(merged.hasMore, true)
 })
 
@@ -1376,8 +1696,7 @@ test('mergeSearchResults sets hasMore when the merged result exceeds the limit',
     ],
     { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false },
     2,
-    ALL_VISIBLE,
-  )
+    ALL_VISIBLE, true)
   assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2'])
   assert.equal(merged.hasMore, true) // 3 merged rows > limit 2
 })
@@ -1391,8 +1710,7 @@ test('mergeSearchResults bounds the items to the limit', () => {
     ],
     { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false },
     2,
-    ALL_VISIBLE,
-  )
+    ALL_VISIBLE, true)
   assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2'])
 })
 
@@ -1408,7 +1726,7 @@ test('mergeSearchResults drops remote hits outside the visible set (archived/sub
     ],
     hasMore: false,
   }
-  const merged = mergeSearchResults([], remote, 20, new Set(['visible-hit']))
+  const merged = mergeSearchResults([], remote, 20, new Set(['visible-hit']), true)
   assert.deepEqual(merged.items, [{ sessionId: 'visible-hit', snippet: 'kept' }])
   assert.equal(merged.hasMore, false)
 })
@@ -1423,15 +1741,26 @@ test('mergeSearchResults keeps visible remote hits and adopts their snippet for 
     ],
     hasMore: false,
   }
-  const merged = mergeSearchResults(local, remote, 20, new Set(['both', 'visible-only']))
+  const merged = mergeSearchResults(local, remote, 20, new Set(['both', 'visible-only']), true)
   assert.deepEqual(merged.items, [
     { sessionId: 'both', snippet: 'content snippet' },
     { sessionId: 'visible-only', snippet: 'remote snippet' },
   ])
 })
 
-test('mergeSearchResults keeps remote hits when the visible set is empty (projection not ready)', () => {
-  // 断连/投影未就绪：可见集为空必须降级为不过滤——绝不能误杀全部远程命中。
+test('mergeSearchResults: a READY projection with an empty visible set filters ALL remote hits (M7 — 合法空集合不再放行隐藏会话)', () => {
+  const remote = {
+    items: [
+      { sessionId: 'x', snippet: 'hidden' },
+      { sessionId: 'y', snippet: 'also hidden' },
+    ],
+    hasMore: false,
+  }
+  const merged = mergeSearchResults([], remote, 20, new Set(), true)
+  assert.deepEqual(merged.items, [])
+})
+
+test('mergeSearchResults: a NOT-ready projection keeps remote hits (degrade — 投影未就绪不误杀命中)', () => {
   const remote = {
     items: [
       { sessionId: 'x', snippet: 'kept' },
@@ -1439,239 +1768,9 @@ test('mergeSearchResults keeps remote hits when the visible set is empty (projec
     ],
     hasMore: false,
   }
-  const merged = mergeSearchResults([], remote, 20, new Set())
+  const merged = mergeSearchResults([], remote, 20, new Set(), false)
   assert.deepEqual(merged.items, [
     { sessionId: 'x', snippet: 'kept' },
     { sessionId: 'y', snippet: 'also kept' },
   ])
-})
-
-test('mergeSearchResults hasMore reflects the post-filter merged result', () => {
-  // 被过滤掉的远程行既不出现、也不计入 limit 溢出判断。
-  const filtered = mergeSearchResults(
-    [],
-    {
-      items: [
-        { sessionId: 'visible', snippet: 'kept' },
-        { sessionId: 'hidden', snippet: 'dropped' },
-      ],
-      hasMore: false,
-    },
-    1,
-    new Set(['visible']),
-  )
-  assert.deepEqual(filtered.items, [{ sessionId: 'visible', snippet: 'kept' }])
-  assert.equal(filtered.hasMore, false) // 1 merged row ≤ limit 1
-  // 后端 hasMore 提示基于过滤后的列表保留（官方 content.hasMore 公式）。
-  const hinted = mergeSearchResults(
-    [],
-    { items: [{ sessionId: 'visible', snippet: '' }], hasMore: true },
-    20,
-    new Set(['visible']),
-  )
-  assert.equal(hinted.hasMore, true)
-})
-
-// ---- increasedForkTitle (P1-4, official runtime service port) ----
-
-test('increasedForkTitle starts an unnumbered title at (1)', () => {
-  assert.equal(increasedForkTitle('DeepSeek R1'), 'DeepSeek R1 (1)')
-  assert.equal(increasedForkTitle(''), ' (1)')
-})
-
-test('increasedForkTitle increments a trailing half-width parenthesized number', () => {
-  assert.equal(increasedForkTitle('DeepSeek R1 (1)'), 'DeepSeek R1 (2)')
-  assert.equal(increasedForkTitle('a (9)'), 'a (10)')
-  assert.equal(increasedForkTitle('a (0)'), 'a (1)')
-})
-
-test('increasedForkTitle increments a trailing full-width parenthesized number', () => {
-  assert.equal(increasedForkTitle('研究（3）'), '研究（4）')
-  assert.equal(increasedForkTitle('计划（1）'), '计划（2）')
-})
-
-test('increasedForkTitle appends (1) when the trailing parenthesis is not numeric', () => {
-  assert.equal(increasedForkTitle('a (x)'), 'a (x) (1)')
-  assert.equal(increasedForkTitle('a (1b)'), 'a (1b) (1)')
-  assert.equal(increasedForkTitle('a 1'), 'a 1 (1)')
-  assert.equal(increasedForkTitle('a（x）'), 'a（x） (1)')
-})
-
-test('increasedForkTitle increments without precision loss (BigInt)', () => {
-  assert.equal(increasedForkTitle(`huge (${'9'.repeat(40)})`), `huge (1${'0'.repeat(40)})`)
-})
-
-// ---- server display order (2026-09, docs/todo/server-drag-sort.md — option 1) ----
-
-test('orderServersForDisplay returns the projection order unchanged when no preference exists', () => {
-  const projection = [server('local'), server('ssh-a'), server('ssh-b')]
-  assert.equal(orderServersForDisplay(projection, undefined), projection)
-  assert.equal(orderServersForDisplay(projection, []), projection)
-})
-
-test('orderServersForDisplay applies the stored order first, then trails the rest in projection order', () => {
-  const projection = [server('local'), server('ssh-a'), server('ssh-b'), server('ssh-c')]
-  const ordered = orderServersForDisplay(projection, ['ssh-b', 'local', 'ssh-c'])
-  assert.deepEqual(ordered.map(item => item.id), ['ssh-b', 'local', 'ssh-c', 'ssh-a'])
-  // A partial preference only reorders the listed ids — the rest keep their
-  // relative projection order after the listed ones.
-  assert.deepEqual(orderServersForDisplay(projection, ['ssh-c']).map(item => item.id), ['ssh-c', 'local', 'ssh-a', 'ssh-b'])
-})
-
-test('orderServersForDisplay skips unknown stored ids and never duplicates a server', () => {
-  const projection = [server('local'), server('ssh-a')]
-  // A vanished source (ghost id) is skipped — no phantom group; duplicates
-  // in a corrupt payload are collapsed (first occurrence wins).
-  const ordered = orderServersForDisplay(projection, ['ssh-a', 'ghost', 'local', 'ssh-a'])
-  assert.deepEqual(ordered.map(item => item.id), ['ssh-a', 'local'])
-})
-
-test('nextServerOrder computes the drop order for moves in both directions', () => {
-  const order = ['local', 'ssh-a', 'ssh-b', 'ssh-c']
-  // Move down: drag local before ssh-b.
-  assert.deepEqual(nextServerOrder(order, 'local', { id: 'ssh-b', half: 'before' }), ['ssh-a', 'local', 'ssh-b', 'ssh-c'])
-  // Move down past more than one: drag local after ssh-b (anchor = ssh-c).
-  assert.deepEqual(nextServerOrder(order, 'local', { id: 'ssh-b', half: 'after' }), ['ssh-a', 'ssh-b', 'local', 'ssh-c'])
-  // Move up: drag ssh-c after local (anchor = ssh-a).
-  assert.deepEqual(nextServerOrder(order, 'ssh-c', { id: 'local', half: 'after' }), ['local', 'ssh-c', 'ssh-a', 'ssh-b'])
-  // Append at the end: after the last element.
-  assert.deepEqual(nextServerOrder(order, 'ssh-a', { id: 'ssh-c', half: 'after' }), ['local', 'ssh-b', 'ssh-c', 'ssh-a'])
-  // Insert at the top: before the first element.
-  assert.deepEqual(nextServerOrder(order, 'ssh-c', { id: 'local', half: 'before' }), ['ssh-c', 'local', 'ssh-a', 'ssh-b'])
-})
-
-test('nextServerOrder returns null for every no-op drop', () => {
-  const order = ['local', 'ssh-a', 'ssh-b', 'ssh-c']
-  // The dragged source IS the anchor.
-  assert.equal(nextServerOrder(order, 'ssh-a', { id: 'ssh-a', half: 'before' }), null)
-  // Dropping right after itself = the current position.
-  assert.equal(nextServerOrder(order, 'ssh-b', { id: 'ssh-b', half: 'after' }), null)
-  // Already in place (ssh-a sits right before ssh-b).
-  assert.equal(nextServerOrder(order, 'ssh-a', { id: 'ssh-b', half: 'before' }), null)
-  // Already last (append at the end of the last element).
-  assert.equal(nextServerOrder(order, 'ssh-c', { id: 'ssh-c', half: 'after' }), null)
-  // The target vanished from the rendered order.
-  assert.equal(nextServerOrder(order, 'local', { id: 'ghost', half: 'before' }), null)
-  // The dragged source vanished from the rendered order (no ghost writes).
-  assert.equal(nextServerOrder(order, 'ghost', { id: 'local', half: 'before' }), null)
-  // A single-element order can never move.
-  assert.equal(nextServerOrder(['local'], 'local', { id: 'local', half: 'before' }), null)
-  assert.equal(nextServerOrder(['local'], 'local', { id: 'local', half: 'after' }), null)
-})
-
-// ---- singleton guard (third-wave review, R2-1#2) ----
-
-test('importing derive registers exactly one entry in the shared-singleton registry', () => {
-  // derive.ts calls assertSingletonModule('derive') at module scope; the
-  // module is evaluated ONCE per process (node module cache) and derives only
-  // from singleton.ts at runtime (the other imports are type-only), so a
-  // fresh test process must find exactly this one entry registered — proving
-  // the guard does not break node tests. A bundling drift that duplicated the
-  // module would instead log the diagnostic and silently split the
-  // cross-boundary ghost-slot state (armBlankGhost in the sidebar bundle vs
-  // sessionVisible in the App's derive).
-  const registry = (globalThis as unknown as Record<symbol, Record<string, boolean>>)[
-    Symbol.for('dsh-chamber.singleton.instances')
-  ]
-  assert.ok(registry !== undefined, 'the singleton registry must exist after importing derive.ts')
-  assert.deepEqual(Object.keys(registry), ['derive'])
-})
-
-// ---- per-workspace icon accent (2026-09) ----
-
-interface ParsedHsl {
-  hue: number
-  saturation: number
-  lightness: number
-}
-
-function parseAccent(accent: { '--dsh-workspace-accent': string }): ParsedHsl {
-  const match = /^hsl\((\d+(?:\.\d+)?) (\d+)% (\d+)%\)$/.exec(accent['--dsh-workspace-accent'])
-  assert.ok(match !== null, `unexpected accent format: ${accent['--dsh-workspace-accent']}`)
-  return { hue: Number(match[1]), saturation: Number(match[2]), lightness: Number(match[3]) }
-}
-
-test('workspaceAccentStyle is deterministic, single-keyed and well-formed', () => {
-  const first = workspaceAccentStyle('srv', 'w1')
-  assert.ok(first !== undefined, 'a real workspace must always receive an accent')
-  assert.deepEqual(workspaceAccentStyle('srv', 'w1'), first)
-  assert.deepEqual(Object.keys(first), ['--dsh-workspace-accent'])
-  parseAccent(first) // throws on a malformed hsl string
-  // Deterministic across calls and servers — never a random color.
-  assert.deepEqual(workspaceAccentStyle('srv-a', 'w1'), workspaceAccentStyle('srv-a', 'w1'))
-})
-
-test('workspaceAccentStyle returns undefined for the ungrouped bucket', () => {
-  assert.equal(workspaceAccentStyle('srv', UNGROUPED_WORKSPACE_ID), undefined)
-  assert.equal(workspaceAccentStyle('srv', UNGROUPED_WORKSPACE_ID, { isWorktree: true, repoKey: 'r' }), undefined)
-})
-
-test('distinct workspace ids get distinct, well-spread accents', () => {
-  const colors = Array.from({ length: 24 }, (_, i) => {
-    const accent = workspaceAccentStyle('srv', `workspace-${i}`)
-    assert.ok(accent !== undefined)
-    return parseAccent(accent)
-  })
-  // Golden-angle hues of distinct hash inputs are distinct unless the hashes
-  // differ by a multiple of 30000 (see derive.ts WORKSPACE_HUE_STEP) — never
-  // the case for these fixed ids — and the second-hash lightness jitter
-  // (56/61/66) breaks up near-hue pairs anyway.
-  const seen = new Set(colors.map(color => `${color.hue.toFixed(1)}/${color.lightness}`))
-  assert.equal(seen.size, colors.length, 'every sample workspace must have a unique accent')
-  // The jitter must actually vary — plain hue-only spacing is not enough to
-  // guarantee eye-distinguishability for near pairs.
-  assert.ok(new Set(colors.map(color => color.lightness)).size >= 2, 'lightness jitter must vary across workspaces')
-})
-
-test('worktree workspaces inherit the repository family hue (registered main)', () => {
-  const main = workspaceAccentStyle('srv', 'main-checkout', { isMain: true, repoKey: 'repo-1' })
-  const derived = workspaceAccentStyle('srv', 'worktree-a', { isWorktree: true, mainWorkspaceId: 'main-checkout', repoKey: 'repo-1' })
-  const sibling = workspaceAccentStyle('srv', 'worktree-b', { isWorktree: true, mainWorkspaceId: 'main-checkout', repoKey: 'repo-1' })
-  const otherRepo = workspaceAccentStyle('srv', 'worktree-x', { isWorktree: true, mainWorkspaceId: 'other-main', repoKey: 'repo-2' })
-  const plain = workspaceAccentStyle('srv', 'plain-workspace')
-  assert.ok(main && derived && sibling && otherRepo && plain)
-  const mainHsl = parseAccent(main)
-  const derivedHsl = parseAccent(derived)
-  const siblingHsl = parseAccent(sibling)
-  const otherHsl = parseAccent(otherRepo)
-  // Same family seed → same hue; a different repo → a different hue; a plain
-  // workspace has no family seed, so its hue differs from the family too.
-  assert.equal(derivedHsl.hue, mainHsl.hue)
-  assert.equal(siblingHsl.hue, mainHsl.hue)
-  assert.notEqual(otherHsl.hue, mainHsl.hue)
-  assert.notEqual(parseAccent(plain).hue, mainHsl.hue)
-  // Derived members demote to the muted saturation; the main keeps the full
-  // one. Soft palette (user feedback 2026-10): 34% regular / 21% worktree.
-  assert.equal(mainHsl.saturation, 34)
-  assert.equal(derivedHsl.saturation, 21)
-  assert.equal(siblingHsl.saturation, 21)
-})
-
-test('worktrees share the family hue through repoKey when the main is unregistered', () => {
-  const a = workspaceAccentStyle('srv', 'worktree-a', { isWorktree: true, repoKey: 'repo-1' })
-  const b = workspaceAccentStyle('srv', 'worktree-b', { isWorktree: true, repoKey: 'repo-1' })
-  const c = workspaceAccentStyle('srv', 'worktree-c', { isWorktree: true, repoKey: 'repo-3' })
-  assert.ok(a && b && c)
-  assert.equal(parseAccent(a).hue, parseAccent(b).hue)
-  assert.notEqual(parseAccent(c).hue, parseAccent(a).hue)
-  // The family hue depends on the repoKey alone: a worktree carrying a
-  // mainWorkspaceId still shares the hue, and a RENAMED main (different
-  // workspace id, same repoKey) never shifts the family.
-  const withMain = workspaceAccentStyle('srv', 'worktree-d', {
-    isWorktree: true, mainWorkspaceId: 'renamed-main', repoKey: 'repo-1',
-  })
-  assert.ok(withMain)
-  assert.equal(parseAccent(withMain).hue, parseAccent(a).hue)
-  const renamedMain = workspaceAccentStyle('srv', 'renamed-main', { isMain: true, repoKey: 'repo-1' })
-  assert.ok(renamedMain)
-  assert.equal(parseAccent(renamedMain).hue, parseAccent(a).hue)
-})
-
-test('hashString matches the historical sourceHue arithmetic', () => {
-  // The sidebar source hue is `hashString(id) % 360` — lock the 32-bit hash
-  // shape so a future refactor cannot silently change server dot colors.
-  assert.equal(hashString(''), 0)
-  assert.equal(hashString('a'), 97)
-  assert.equal(hashString('ab'), 3105)
-  assert.equal(hashString('local'), 103145323)
 })

@@ -12,7 +12,7 @@
 *用户主界面——单窗口，dsh 原生侧边栏平等列出各来源（本地 + 远程实例）的 session/workspace，主区为活动实例的纯 dsh shell。*
 
 > [!WARNING]
-> **开发者预览（v0.1）**——协议与 API 正在快速迭代，将存在破坏性变更。
+> **开发者预览（v0.1.x）**——协议与 API 正在快速迭代，将存在破坏性变更。
 
 > English: [docs/README.en-US.md](docs/README.en-US.md) · 开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · 设计入口 [docs/design/01-overview.md](docs/design/01-overview.md) · 进度 [docs/progress/STATUS.md](docs/progress/STATUS.md)
 
@@ -44,6 +44,9 @@
 - **统一侧边栏多来源导航** — 本地 + 远程各实例的 session/workspace 在同一个 dsh 原生侧边栏内平等列出、按来源分组（远程来源带颜色徽标）；单击打开会话、双击重命名
 - **Git Worktree 生命周期** — chamber 内建独立插件在侧边栏按实例展示仓库拓扑，并闭环创建 worktree → workspace → session；删除采用 Git-first 可重试事务，拒绝主工作树、dirty/locked/运行中目标，不归档会话、不 force、不删分支
 - **多实例并行（N-ctx）** — 一个窗口内多个 dsh shell 共存，随时切换活动实例
+- **Open in（Finder / VS Code）** — 会话头部一键打开对应目录：本地用 Finder
+  显示/打开，本地与远程均可用 VS Code Remote-SSH 拉起（`dsh-chamber://` OS
+  深链，需本机安装 VS Code）
 - **桌面端更新** — 静默检查新版本，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
 - **睡眠/后台常驻** — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（mac/linux）；OS 唤醒即时重连；保持唤醒开关
 - **Chamber 设置页** — 设置壳固定入口：连接 / 通用 / 更新；chamber 全局设置与各实例配置严格分离
@@ -184,6 +187,7 @@
 - **v1 无认证边界** — 控制面仅监听 loopback（127.0.0.1）；全部 `/api/*` 路由与每实例反代匿名可达；HTTP/WS 来源必须与当前 Host 精确同源或命中显式开发 allowlist，其他回环端口与 `Origin: null` 均拒绝
 - **隧道 URL 与 SSH 材料不进 renderer** — renderer 只见到非秘密投影（phase/localPort），永远看不到隧道 URL 或 SSH 凭据；日志同样不含隧道/SSH 材料。唯一许可例外（[设计 05 §8](docs/design/05-connection-manager.md)）：可选的主机 SSH 密码——表单瞬时输入、主进程内存持有、镜像到 `<userData>/ssh-passwords.json`（0600、原子写）、经临时 owner-only 0700 askpass 助手注入系统 ssh——永不上命令行、永不进注册表/日志、永不回传 renderer；Windows v1 门禁关闭
 - **systemctl 用参数数组 spawn**（无 shell）+ serviceName 白名单（`^[a-zA-Z0-9_.-]+$`）
+- **插件动作主进程确认（[设计 09 §4](docs/design/09-client-plugin-runtime-loading.md)）**：materialize 外传、本地/远端插件安装与卸载均须用户确认对话框；本地插件清单依赖值路径脱敏
 - **Git 不经过 Desktop/SSH 命令转发** — Git host 插件运行在每个 dsh 实例进程内，与 workspace 权威使用同一 OS 用户和文件系统；只开放固定 worktree 领域操作、`shell:false` 参数数组和有界输出/超时，不提供 fetch/pull/push 等网络 Git 动词。创建时的 checkout 仍会遵从该 OS 用户已配置的仓库 filter（例如 Git LFS，可能访问网络），确认界面会显式提示这一受信边界
 
 ## 常见问题

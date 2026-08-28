@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  AggregateRefreshQueue,
   invalidateRemovedAggregateSources,
   isSnapshotStale,
   planAggregateRefreshes,
@@ -40,6 +41,26 @@ test('each source is planned independently across mixed connection generations',
     { local: true, 'ssh-a': true, 'ssh-b': true },
   )
   assert.deepEqual(plan.refreshSourceIds, ['ssh-b'])
+})
+
+test('a refresh edge arriving during a wave is retained for the successor wave', () => {
+  const queue = new AggregateRefreshQueue()
+  queue.enqueue(['local'])
+  assert.deepEqual(queue.take(), ['local'])
+
+  // The first wave is now in flight. A newly-ready remote source is queued
+  // independently and therefore cannot be consumed by the first take().
+  queue.enqueue(['ssh-late', 'ssh-late'])
+  assert.equal(queue.size, 1)
+  assert.deepEqual(queue.take(), ['ssh-late'])
+  assert.equal(queue.size, 0)
+})
+
+test('sources that become not-ready before the successor wave are removed', () => {
+  const queue = new AggregateRefreshQueue()
+  queue.enqueue(['ssh-ready', 'ssh-dropped'])
+  queue.delete(['ssh-dropped'])
+  assert.deepEqual(queue.take(), ['ssh-ready'])
 })
 
 test('isSnapshotStale: never-pushed sources are stale (unmounted / dead push)', () => {

@@ -111,7 +111,11 @@ export interface ChamberHostGraphState {
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh
  *  exec failure / unparseable patch) — loud, never a silent "not injected". */
 export type ChamberInjectionState =
-  | { ok: true; hostGraph: ChamberHostGraphState }
+  | {
+    ok: true
+    hostGraph: ChamberHostGraphState
+    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
+  }
   | { ok: false; error: string }
 
 /** Remote plugin manifest projection (design 13 §4.3): the remote profile
@@ -254,6 +258,7 @@ export type SshConfigDiscovery =
  *  patched = cordis.patch.yml gained the insert line. */
 export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
+  | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
 /** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed

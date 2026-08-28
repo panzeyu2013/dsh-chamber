@@ -32,6 +32,15 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { spawn } from 'node:child_process'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
+// The cordis loader insert render/parse/conflict logic is single-sourced in
+// control-plane (cordis-inserts.ts, A2 cross-package protocol single-
+// sourcing) — consumed through control-plane-module.ts (the desktop
+// dual-path facade: packaged → compiled dist/control-plane, dev → workspace
+// source). The insert wire format can never drift from the local overlay
+// seed (host-graph-seed.ts); only the fold semantics (deterministic rewrite
+// / append / fail-loud) and message wording stay here.
+import { hasExactInsert, insertConflict, renderCordisInserts } from './control-plane-module.ts'
+import type { CordisInsert, InsertConflictKind } from './control-plane-module.ts'
 // Canonical whitelists (design 13 §7.2) — reused from ssh-provider.ts so the
 // orchestration-side二次校验 and the exec-side argv whitelist share one source
 // of truth and can never drift. Importing ssh-provider only pulls these pure
@@ -41,32 +50,19 @@ import { homedir, tmpdir } from 'node:os'
 // `.ssh*`-named home path), so the provider-side classification and this
 // caller-side error-text test can never drift apart.
 import { ENOENT_PATTERN, MAX_PLUGIN_SPEC_CHARS, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
+// Contract A types (design 13 §4.1) are SHARED from transport-provider.ts —
+// the provider's single source of truth (transport-provider has no runtime
+// imports, so this pulls no transport-manager/electron surface). The copied
+// union used to drift ('base64'/'mkdir' went missing from the copy).
+import type { TransportExecAction, TransportRunPayload } from './transport-provider.ts'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 
 // ============================================================================
-// Contract A types (self-contained; transport-manager is not imported)
+// Contract A types: TransportExecAction / TransportRunPayload imported from
+// transport-provider.ts (single source, see the import note above).
 // ============================================================================
 
-export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
-
-export type TransportRunCommand = 'dsh' | 'cat' | 'base64' | 'mkdir' | 'printf'
-
-export interface TransportRunPayload {
-  op: 'exec' | 'write-file'
-  command?: TransportRunCommand
-  argv?: string[]
-  path?: string
-  contentBase64?: string
-  sha256?: string
-  /**
-   * True = a non-zero exit is EXPECTED (a first-seed probe of a file that
-   * does not exist yet, design 13 §4.6): the ssh provider suppresses the
-   * "run command failed" ERROR log and the raw-stderr INFO echo, while the
-   * `ok:false` error text (ENOENT classification) still rides the result.
-   */
-  quiet?: boolean
-}
 
 /** The non-secret status surface `applyPlugins` needs for the ready recheck. */
 export interface StatusLike {
@@ -229,11 +225,14 @@ const SEED_FILES = ['package.json', 'dist/index.js'] as const
 /**
  * The local `--patch` overlay filename (design 09 方案 A, module B). The
  * single source of truth is `packages/control-plane/src/host-graph-seed.ts`
- * (`HOST_GRAPH_PATCH_FILENAME`) — the desktop mirrors the constant here
- * because plugin-sync.ts is a self-contained pure module that must not import
- * the control-plane package (DI-only contract A). The overlay lives next to
- * the dsh home (`<stateDir>/dsh-chamber-graph.patch.yml` where the managed
- * dsh home is `<stateDir>/dsh-home`), so `dirname(localDshHome)` locates it.
+ * (`HOST_GRAPH_PATCH_FILENAME`); the desktop mirrors the constant here
+ * because it is not part of the control-plane package's public index (the
+ * package exports the seed functions, not the filename) and the local
+ * overlay probe (localPluginList) is a pure-module surface — the mirror is
+ * pinned by the overlay probes in plugin-sync.test.ts. The overlay lives
+ * next to the dsh home (`<stateDir>/dsh-chamber-graph.patch.yml` where the
+ * managed dsh home is `<stateDir>/dsh-home`), so `dirname(localDshHome)`
+ * locates it.
  */
 const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
 
@@ -632,6 +631,100 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
   }
 }
 
+// ============================================================================
+// 1.5 Renderer projection + confirmation copy (design 09 §4 v1 mitigations)
+// ============================================================================
+
+/**
+ * Mask for local-path dependency values in the renderer-facing projection.
+ * The IPC surface must never echo local absolute paths: a remote instance's
+ * client bundle executes in the chamber page (declared trust boundary, design
+ * 09 §4) and could read them. The mask keeps a `file:` prefix so BOTH sides'
+ * spec classifiers (main `isMaterializeSpec` / client `isPathSpec`) still
+ * classify the value as materialize and the name-based diff matching
+ * (plugin-diff.ts §4.5) keeps working unchanged.
+ */
+export const MATERIALIZED_VALUE_MASK = 'file:<hidden>'
+
+/**
+ * Project the LOCAL manifest for the renderer: dependency VALUES that are
+ * local-path specs (file:/link:/relative/absolute/`~/` — classified
+ * materialize) are replaced with MATERIALIZED_VALUE_MASK. Names, kinds,
+ * bundle lines, unsyncable entries and the chamber block pass through
+ * untouched. The main-process-internal full manifest (used by
+ * resolveLocalMaterializeDirectory, applyPlugins knownBundles, the seed
+ * paths) is never projected — only the IPC response is redacted.
+ */
+export function redactLocalPluginManifest(manifest: LocalPluginManifest): LocalPluginManifest {
+  const dependencies: Record<string, string> = {}
+  for (const [name, spec] of Object.entries(manifest.dependencies)) {
+    dependencies[name] = classifyDependencyValue(spec).kind === 'materialize' ? MATERIALIZED_VALUE_MASK : spec
+  }
+  return { ...manifest, dependencies }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): pack-and-transfer. */
+export function describeMaterializeConfirmation(info: {
+  pluginName: string
+  pluginPath: string
+  targetLabel: string | null
+  targetId: string
+}): { message: string; detail: string } {
+  const target = info.targetLabel ?? info.targetId
+  return {
+    message: `将本地插件 ${info.pluginName} 发送到远程实例？`,
+    detail: `插件目录：${info.pluginPath}\n目标实例：${target}\n\n该插件的源码将被打包并上传到目标服务器。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): local install. */
+export function describeLocalPluginAddConfirmation(spec: string): { message: string; detail: string } {
+  return {
+    message: `安装插件 ${spec} 到本地 dsh？`,
+    detail: `将从 npm registry 安装 ${spec} 到本地 dsh profile。\n该插件的客户端代码将在下次本地实例启动时于本应用内执行。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): local remove. */
+export function describeLocalPluginRemoveConfirmation(name: string): { message: string; detail: string } {
+  return {
+    message: `从本地 dsh 移除插件 ${name}？`,
+    detail: `将从本地 dsh profile 卸载 ${name}。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): manual chamber host
+ *  seed (persistent remote modification — packages + boot-layer merge;
+ *  2026 review). */
+export function describeSeedConfirmation(info: { targetLabel: string | null; targetId: string }): { message: string; detail: string } {
+  const target = info.targetLabel ?? info.targetId
+  return {
+    message: `向远程实例 ${target} 注入 chamber 宿主组件？`,
+    detail: `将在远端实例 ${target} 上写入 chamber host 包并挂载 boot 层（幂等，已是最新则跳过）。\n注入内容来自本机已构建的 chamber 包，重启远端 dsh 后生效。`,
+  }
+}
+
+/** Confirmation-dialog copy builder (pure, tested): remote plugin apply
+ *  (registry add/remove on a remote instance — a persistent execution
+ *  surface, same class as the local install; 2026 final review). */
+export function describePluginApplyConfirmation(info: {
+  targetLabel: string | null
+  targetId: string
+  add: string[]
+  remove: string[]
+  restart: boolean
+}): { message: string; detail: string } {
+  const target = info.targetLabel ?? info.targetId
+  const parts: string[] = []
+  if (info.add.length > 0) parts.push(`安装 ${info.add.length} 个插件（${info.add.slice(0, 3).join('、')}${info.add.length > 3 ? ' 等' : ''}）`)
+  if (info.remove.length > 0) parts.push(`移除 ${info.remove.length} 个插件（${info.remove.slice(0, 3).join('、')}${info.remove.length > 3 ? ' 等' : ''}）`)
+  if (info.restart) parts.push('并重启远端 dsh 实例')
+  return {
+    message: `修改远程实例 ${target} 的插件？`,
+    detail: `将在远端实例 ${target} 上${parts.join('，')}。\n这些插件安装自 npm registry，将在远端以该实例用户身份执行。`,
+  }
+}
+
 /**
  * Whether the local `--patch` overlay (control-plane host-graph-seed.ts
  * `dsh-chamber-graph.patch.yml`, beside the managed dsh home) actually
@@ -644,7 +737,7 @@ function localOverlayCarriesGitWorktree(localDshHome: string): boolean {
   const overlayPath = join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)
   if (!existsSync(overlayPath)) return false
   try {
-    return hasCordisInsert(readFileSync(overlayPath, 'utf8'), GIT_WORKTREE_HOST_INSERT)
+    return hasExactInsert(readFileSync(overlayPath, 'utf8'), toCordisInsert(GIT_WORKTREE_HOST_INSERT))
   } catch {
     return false
   }
@@ -664,8 +757,8 @@ export function resolveLocalMaterializeDirectory(
   let manifest: LocalPluginManifest
   try {
     manifest = localPluginList(localDshHome)
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } catch {
+    return { ok: false, error: 'local plugin manifest is unreadable' }
   }
   const spec = manifest.dependencies[name]
   if (typeof spec !== 'string' || classifyDependencyValue(spec).kind !== 'materialize') {
@@ -684,8 +777,10 @@ export function resolveLocalMaterializeDirectory(
     const pkg = JSON.parse(readFileSync(join(real, 'package.json'), 'utf8')) as { name?: unknown }
     if (pkg.name !== name) return { ok: false, error: 'plugin package name does not match the local manifest entry' }
     return { ok: true, path: real }
-  } catch (error) {
-    return { ok: false, error: `plugin directory is unreadable: ${String(error)}` }
+  } catch {
+    // This result crosses into the renderer. Keep the selected/resolved local
+    // path inside the main process even on ENOENT/permission failures.
+    return { ok: false, error: 'plugin directory is unreadable' }
   }
 }
 
@@ -1060,12 +1155,14 @@ const GIT_WORKTREE_HOST_INSERT: ChamberHostInsert = {
   packageName: GIT_WORKTREE_PACKAGE_NAME,
 }
 
-function renderCordisInserts(inserts: readonly ChamberHostInsert[]): string {
-  return `- insert:\n${inserts.map(entry => `    - id: ${entry.insertId}\n      name: '${entry.packageName}'\n`).join('')}`
+/**
+ * Adapt the local {insertId, packageName} pair to the shared CordisInsert
+ * ({id, name}) — the insert render/parse/conflict logic is single-sourced in
+ * control-plane (cordis-inserts.ts).
+ */
+function toCordisInsert(insert: ChamberHostInsert): CordisInsert {
+  return { id: insert.insertId, name: insert.packageName }
 }
-
-/** Backwards-compatible single-row canonical insert. */
-export const CLIENT_GRAPH_INSERT = renderCordisInserts([CLIENT_GRAPH_HOST_INSERT])
 
 export type CordisPatchUpdate =
   | { write: false }
@@ -1077,197 +1174,24 @@ export type CordisPatchUpdate =
  * (design 13 §4.6): dedup when already present; deterministic rewrite for the
  * `initProfile` template (comments + `[]`); append for a user block-sequence
  * list (never overwriting user rows); fail-loud for a non-list.
+ *
+ * The insert render/parse/conflict classification is single-sourced in
+ * control-plane (cordis-inserts.ts, consumed through control-plane-module.ts);
+ * the fold semantics and message wording stay here.
  * @param existing - the file content, or null when the file does not exist
  *   (profile not initialized).
  */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
 
-/**
- * Loader ids and package names are global within the composed Cordis config.
- * Ignore YAML comments, then count an exact scalar wherever it appears (block
- * or flow style). A same-id/different-name or same-name/different-id row must
- * fail before seed writes: appending our row would make the next host boot
- * reject duplicate ids or mount the same Remote twice.
- */
-function cordisFieldCount(existing: string, field: 'id' | 'name', value: string): number {
-  const searchable = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
-  const escaped = escapeRegExp(value)
-  const trailing = field === 'id' ? '[a-zA-Z0-9_.-]' : '[a-zA-Z0-9_.@/-]'
-  const pattern = new RegExp(`\\b${field}:\\s*(?:'${escaped}'|"${escaped}"|${escaped})(?!${trailing})`, 'gu')
-  return searchable.match(pattern)?.length ?? 0
-}
-
-interface ParsedCordisInsertRow {
-  readonly ids: string[]
-  readonly names: string[]
-}
-
-function cordisYamlScalar(raw: string): string | undefined {
-  const value = raw.trim().replace(/,$/u, '').trim()
-  const single = value.match(/^'([^']*)'$/u)
-  if (single !== null) return single[1]
-  const double = value.match(/^"([^"\\]*)"$/u)
-  if (double !== null) return double[1]
-  return /^[a-zA-Z0-9_.@/-]+$/u.test(value) ? value : undefined
-}
-
-function addCordisLoaderField(row: ParsedCordisInsertRow, text: string): void {
-  const field = text.trim().match(/^(id|name)\s*:\s*(.*?)\s*$/u)
-  if (field === null) return
-  const value = cordisYamlScalar(field[2]!)
-  if (value === undefined) return
-  const values = field[1] === 'id' ? row.ids : row.names
-  values.push(value)
-}
-
-function splitCordisFlowFields(content: string): string[] {
-  const fields: string[] = []
-  let start = 0
-  let quote: "'" | '"' | undefined
-  let escaped = false
-  let depth = 0
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index]!
-    if (quote !== undefined) {
-      if (quote === '"' && escaped) escaped = false
-      else if (quote === '"' && char === '\\') escaped = true
-      else if (char === quote) quote = undefined
-      continue
-    }
-    if (char === "'" || char === '"') quote = char
-    else if (char === '{' || char === '[') depth += 1
-    else if (char === '}' || char === ']') depth -= 1
-    else if (char === ',' && depth === 0) {
-      fields.push(content.slice(start, index))
-      start = index + 1
-    }
-  }
-  fields.push(content.slice(start))
-  return fields
-}
-
-function cordisFlowLoaderRow(mapping: string): ParsedCordisInsertRow {
-  const row: ParsedCordisInsertRow = { ids: [], names: [] }
-  const content = mapping.trim().replace(/^\{/u, '').replace(/\}$/u, '')
-  for (const field of splitCordisFlowFields(content)) addCordisLoaderField(row, field)
-  return row
-}
-
-function inlineCordisInsertRows(text: string): ParsedCordisInsertRow[] {
-  const rows: ParsedCordisInsertRow[] = []
-  const open = text.indexOf('[')
-  if (open < 0) return rows
-  let quote: "'" | '"' | undefined
-  let escaped = false
-  let bracketDepth = 0
-  let braceDepth = 0
-  let mappingStart = -1
-  for (let index = open; index < text.length; index += 1) {
-    const char = text[index]!
-    if (quote !== undefined) {
-      if (quote === '"' && escaped) escaped = false
-      else if (quote === '"' && char === '\\') escaped = true
-      else if (char === quote) quote = undefined
-      continue
-    }
-    if (char === "'" || char === '"') quote = char
-    else if (char === '[') bracketDepth += 1
-    else if (char === ']') {
-      bracketDepth -= 1
-      if (bracketDepth === 0) break
-    } else if (char === '{') {
-      if (bracketDepth === 1 && braceDepth === 0) mappingStart = index
-      braceDepth += 1
-    } else if (char === '}') {
-      braceDepth -= 1
-      if (bracketDepth === 1 && braceDepth === 0 && mappingStart >= 0) {
-        rows.push(cordisFlowLoaderRow(text.slice(mappingStart, index + 1)))
-        mappingStart = -1
-      }
-    }
-  }
-  return rows
-}
-
-/** Direct loader rows only; nested config mappings can never complete a pair. */
-function cordisLoaderRows(existing: string): ParsedCordisInsertRow[] {
-  const text = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
-  const lines = text.split('\n')
-  const rows: ParsedCordisInsertRow[] = []
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!
-    const insert = line.match(/^(\s*)-\s+insert\s*:\s*(.*)$/u)
-    if (insert === null) continue
-    const insertIndent = insert[1]!.length
-    if (insert[2]!.trimStart().startsWith('[')) {
-      rows.push(...inlineCordisInsertRows(lines.slice(index).join('\n')))
-      continue
-    }
-    if (insert[2]!.trimStart().startsWith('{')) {
-      rows.push(cordisFlowLoaderRow(insert[2]!.trim()))
-      continue
-    }
-    let rowIndent: number | undefined
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const candidate = lines[cursor]!
-      if (candidate.trim() === '') continue
-      const indent = candidate.match(/^\s*/u)![0].length
-      if (indent <= insertIndent) break
-      const sequence = candidate.match(/^(\s*)-\s+(.*)$/u)
-      if (sequence === null) continue
-      if (rowIndent === undefined) rowIndent = sequence[1]!.length
-      if (sequence[1]!.length !== rowIndent) continue
-      const row: ParsedCordisInsertRow = { ids: [], names: [] }
-      const first = sequence[2]!.trim()
-      if (first.startsWith('{') && first.endsWith('}')) {
-        rows.push(cordisFlowLoaderRow(first))
-        continue
-      }
-      addCordisLoaderField(row, first)
-      for (let next = cursor + 1; next < lines.length; next += 1) {
-        const continuation = lines[next]!
-        if (continuation.trim() === '') continue
-        const continuationIndent = continuation.match(/^\s*/u)![0].length
-        if (continuationIndent <= rowIndent) break
-        if (continuationIndent === rowIndent + 2) addCordisLoaderField(row, continuation.trim())
-      }
-      rows.push(row)
-    }
-  }
-  return rows
-}
-
-/** Match only when id/name belong to the same direct insert mapping. */
-function hasCordisInsert(existing: string, insert: ChamberHostInsert): boolean {
-  return cordisLoaderRows(existing).some(row => row.ids.length === 1
-    && row.names.length === 1
-    && row.ids[0] === insert.insertId
-    && row.names[0] === insert.packageName)
-}
-
-function cordisInsertConflict(existing: string, insert: ChamberHostInsert): string | undefined {
-  const exact = hasCordisInsert(existing, insert)
-  const idCount = cordisFieldCount(existing, 'id', insert.insertId)
-  const nameCount = cordisFieldCount(existing, 'name', insert.packageName)
-  if (exact && idCount === 1 && nameCount === 1) return undefined
-  if (exact || idCount > 1 || nameCount > 1) {
+/** The cordis.patch.yml conflict wording for one desired insert (the shared
+ *  insertConflict classification mapped onto this module's error surface). */
+function cordisConflictMessage(conflict: InsertConflictKind, insert: ChamberHostInsert): string {
+  if (conflict === 'duplicate-identity') {
     return `cordis.patch.yml contains duplicate chamber loader identity for id '${insert.insertId}' or package '${insert.packageName}'`
   }
-  if (idCount > 0) {
+  if (conflict === 'id-bound') {
     return `cordis.patch.yml loader id '${insert.insertId}' is already bound to a different package`
   }
-  if (nameCount > 0) {
-    return `cordis.patch.yml package '${insert.packageName}' is already mounted under a different loader id`
-  }
-  return undefined
+  return `cordis.patch.yml package '${insert.packageName}' is already mounted under a different loader id`
 }
 
 export function computeCordisPatchUpdate(
@@ -1278,12 +1202,12 @@ export function computeCordisPatchUpdate(
     return { error: 'remote profile is not initialized (cordis.patch.yml missing) — run a plugin add first' }
   }
   for (const insert of inserts) {
-    const conflict = cordisInsertConflict(existing, insert)
-    if (conflict !== undefined) return { error: conflict }
+    const conflict = insertConflict(existing, toCordisInsert(insert))
+    if (conflict !== null) return { error: cordisConflictMessage(conflict, insert) }
   }
-  const missing = inserts.filter(insert => !hasCordisInsert(existing, insert))
+  const missing = inserts.filter(insert => !hasExactInsert(existing, toCordisInsert(insert)))
   if (missing.length === 0) return { write: false }
-  const rendered = renderCordisInserts(missing)
+  const rendered = renderCordisInserts(missing.map(toCordisInsert))
   const significant = existing.split('\n')
     .map(line => line.trim())
     .filter(line => line !== '' && !line.startsWith('#'))
@@ -1527,16 +1451,96 @@ export async function materializeAbsolutePath(
 
 const MATERIALIZED_TARBALL_MAX_BYTES = 50 * 1024 * 1024
 const CHILD_OUTPUT_MAX_CHARS = 64 * 1024
+const PLUGIN_CHILD_TERMINATE_GRACE_MS = 2_000
+
+type PluginChild = ReturnType<typeof spawn>
+
+/** Local pack / dsh-plugin subprocesses are outside the transport manager,
+ * so they need their own app-quit ownership. POSIX children get a dedicated
+ * process group (pnpm/dsh may spawn descendants); Windows uses taskkill /T.
+ */
+const activePluginChildren = new Map<PluginChild, Promise<void>>()
+let pluginChildrenDisposing = false
+let pluginChildrenDisposePromise: Promise<void> | null = null
+
+function trackPluginChild(child: PluginChild): void {
+  let markExited!: () => void
+  const exited = new Promise<void>(resolveExited => {
+    markExited = () => {
+      activePluginChildren.delete(child)
+      resolveExited()
+    }
+  })
+  activePluginChildren.set(child, exited)
+  // `close` follows either a normal exit or a spawn error and also proves
+  // the stdio handles are closed. An arbitrary ChildProcess `error` is not
+  // itself proof that an already-spawned process is dead.
+  child.once('close', markExited)
+}
+
+function signalPluginChild(child: PluginChild, signal: NodeJS.Signals): void {
+  const pid = child.pid
+  if (process.platform === 'win32' && pid !== undefined) {
+    // Node cannot signal a Windows process group. taskkill /T resolves the
+    // whole pnpm/dsh descendant tree; /F is intentional on both phases since
+    // leaving a grandchild behind is worse than skipping a graceful window.
+    try {
+      const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      killer.on('error', () => {
+        try { child.kill(signal) } catch { /* already gone */ }
+      })
+      killer.unref()
+      return
+    } catch { /* fall through to child.kill */ }
+  }
+  if (process.platform !== 'win32' && pid !== undefined) {
+    try {
+      process.kill(-pid, signal)
+      return
+    } catch { /* child may have exited or group creation may have failed */ }
+  }
+  try { child.kill(signal) } catch { /* already gone */ }
+}
+
+/** Stop every local pack/plugin subprocess and wait for its exit. Single-flight
+ * so repeated will-quit events cannot start competing termination passes. */
+export function disposePluginSyncChildren(graceMs = PLUGIN_CHILD_TERMINATE_GRACE_MS): Promise<void> {
+  if (pluginChildrenDisposePromise !== null) return pluginChildrenDisposePromise
+  pluginChildrenDisposing = true
+  pluginChildrenDisposePromise = (async () => {
+    const snapshot = [...activePluginChildren.entries()]
+    if (snapshot.length === 0) return
+    for (const [child] of snapshot) signalPluginChild(child, 'SIGTERM')
+    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      Promise.all(snapshot.map(([, exited]) => exited)),
+      new Promise<void>(resolveGrace => { graceTimer = setTimeout(resolveGrace, graceMs) }),
+    ])
+    if (graceTimer !== undefined) clearTimeout(graceTimer)
+    const survivors = [...activePluginChildren.entries()]
+    for (const [child] of survivors) signalPluginChild(child, 'SIGKILL')
+    await Promise.all(survivors.map(([, exited]) => exited))
+  })().finally(() => {
+    pluginChildrenDisposing = false
+    pluginChildrenDisposePromise = null
+  })
+  return pluginChildrenDisposePromise
+}
 
 /** Run a bounded child without blocking Electron's main event loop. */
-function runChild(
+export function runChild(
   command: string,
   args: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (pluginChildrenDisposing) return Promise.resolve({ ok: false, error: 'plugin sync is shutting down' })
   return new Promise(resolveResult => {
     let settled = false
     let timedOut = false
+    let childError: string | null = null
     let detail = ''
     let timer: ReturnType<typeof setTimeout> | null = null
     let forceTimer: ReturnType<typeof setTimeout> | null = null
@@ -1554,33 +1558,50 @@ function runChild(
         env: options.env,
         stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true,
+        detached: process.platform !== 'win32',
       })
     } catch (error) {
       resolveResult({ ok: false, error: String(error) })
       return
     }
+    trackPluginChild(child)
     child.stderr?.setEncoding('utf8')
     child.stderr?.on('data', chunk => {
       if (detail.length < CHILD_OUTPUT_MAX_CHARS) detail += String(chunk).slice(0, CHILD_OUTPUT_MAX_CHARS - detail.length)
     })
-    child.on('error', error => finish({ ok: false, error: String(error) }))
-    child.on('exit', (code, signal) => {
+    // Node emits `close` after `error` for a spawn failure. Remember the
+    // diagnosis but keep the caller joined to `close`, which is the boundary
+    // that proves stdio/inherited handles are no longer using the staging dir.
+    child.on('error', error => { childError = String(error) })
+    // `close`, not merely `exit`: it proves inherited stdio handles have
+    // closed too. packDirectory must not remove its staging directory while
+    // a pnpm descendant can still be draining output against this child.
+    child.on('close', (code, signal) => {
       if (timedOut) finish({ ok: false, error: `child timed out after ${options.timeoutMs}ms` })
+      else if (childError !== null) finish({ ok: false, error: childError })
       else if (code === 0) finish({ ok: true })
       else finish({ ok: false, error: detail.trim() || `child exited ${code ?? signal ?? 'unknown'}` })
     })
     timer = setTimeout(() => {
       timedOut = true
-      try { child.kill('SIGTERM') } catch { /* already gone */ }
+      signalPluginChild(child, 'SIGTERM')
       forceTimer = setTimeout(() => {
-        try { child.kill('SIGKILL') } catch { /* already gone */ }
+        signalPluginChild(child, 'SIGKILL')
       }, 2_000)
       forceTimer.unref?.()
-      // Resolve only after the child exits. In particular, packDirectory must
-      // not remove its staging directory while pnpm is still writing there.
+      // Resolve only after the child's `close`. In particular, packDirectory
+      // must not remove its staging directory while pnpm or an inherited
+      // stdio holder is still writing there.
     }, options.timeoutMs)
     timer.unref?.()
   })
+}
+
+/** Build the fixed pack argv. `pnpm pack` otherwise runs prepack/prepare/
+ * postpack from the selected directory; folder selection is consent to read
+ * and transfer a package, not consent to execute that package's code. */
+export function buildPnpmPackArgs(outDir: string): string[] {
+  return ['pack', '--config.ignore-scripts=true', '--pack-destination', outDir]
 }
 
 async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null> {
@@ -1590,7 +1611,7 @@ async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null
     const env = pnpmBin === null
       ? process.env
       : { ...process.env, PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` }
-    const result = await runChild(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['pack', '--pack-destination', outDir], {
+    const result = await runChild(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', buildPnpmPackArgs(outDir), {
       cwd: localDir,
       timeoutMs: 120_000,
       env,
@@ -1633,11 +1654,11 @@ export async function materializeAndAdd(
   try {
     const pkg = JSON.parse(readFileSync(join(localDir, 'package.json'), 'utf8')) as Record<string, unknown>
     if (typeof pkg.name !== 'string' || !PLUGIN_NAME_PATTERN.test(pkg.name)) {
-      return { ok: false, error: `materialize: invalid package name in ${join(localDir, 'package.json')}` }
+      return { ok: false, error: 'materialize: invalid package name' }
     }
     name = pkg.name
-  } catch (error) {
-    return { ok: false, error: `materialize: cannot read ${join(localDir, 'package.json')}: ${String(error)}` }
+  } catch {
+    return { ok: false, error: 'materialize: cannot read package.json' }
   }
   const packed = await (pack ?? packDirectory)(localDir)
   if (packed === null) return { ok: false, error: 'materialize: pnpm pack failed' }
@@ -1717,21 +1738,35 @@ export interface LocalPluginExecResult {
  * pnpm, which a Finder-launched app cannot find otherwise). Specs are
  * whitelist-checked before spawn (defense in depth).
  */
-/** Local-only `file:` spec (absolute path) accepted for the folder-import path
- *  (design 13 §5.8). Local spawn uses an argv array (no remote shell), so a
- *  plain absolute path is safe — spaces are allowed, but shell metacharacters
- *  are still conservatively refused; the remote channel never accepts `file:`
- *  (it goes through the materialize path with its own whitelist). */
-const LOCAL_FILE_SPEC_PATTERN = /^file:\/[a-zA-Z0-9._\/ -]+$/
+/**
+ * Local-only `file:` spec accepted for the MAIN-PROCESS folder-picker path
+ * (design 13 §5.8). The selected path rides an argv array, never a shell, so
+ * ordinary Unicode/punctuation is safe and must work. Accept POSIX absolute,
+ * Windows drive and UNC paths; refuse relative/control-character input.
+ * `allowFileSpec` below is still required, so renderer-submitted specs cannot
+ * use this capability even if they spell a valid absolute path.
+ */
+export function isAllowedLocalFileSpec(spec: string): boolean {
+  if (!spec.startsWith('file:') || spec.length > 4096) return false
+  const selectedPath = spec.slice('file:'.length)
+  if (selectedPath === '' || /[\0\r\n]/.test(selectedPath)) return false
+  return isAbsolute(selectedPath)
+    || /^[a-zA-Z]:[\\/]/.test(selectedPath)
+    || /^\\\\[^\\]+\\[^\\]+/.test(selectedPath)
+}
 
 export async function runLocalDshPlugin(
   dshWorkspace: string,
   localDshHome: string,
   action: 'add' | 'remove',
   spec: string,
+  options: { allowFileSpec?: boolean } = {},
 ): Promise<LocalPluginExecResult> {
   if (typeof spec !== 'string') return { ok: false, error: 'plugin spec must be a string' }
-  const addOk = spec.length <= 4096 && ((spec.length <= MAX_PLUGIN_SPEC_CHARS && PLUGIN_SPEC_PATTERN.test(spec) && !hasXWildcardVersion(spec)) || LOCAL_FILE_SPEC_PATTERN.test(spec))
+  const addOk = spec.length <= 4096 && (
+    (spec.length <= MAX_PLUGIN_SPEC_CHARS && PLUGIN_SPEC_PATTERN.test(spec) && !hasXWildcardVersion(spec))
+    || (options.allowFileSpec === true && isAllowedLocalFileSpec(spec))
+  )
   if (action === 'add' && !addOk) return { ok: false, error: `invalid add spec: ${JSON.stringify(spec)}` }
   if (action === 'remove' && (spec.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(spec))) return { ok: false, error: `invalid remove name: ${JSON.stringify(spec)}` }
 

@@ -10,6 +10,281 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Added
+
+- **Desktop notifications (design 19)** — native notifications on session
+  complete / ask / request (opt-in, in the settings shell's General page
+  notification control group; detection reuses the sidebar runtime-facts
+  edge detection, zero control-plane changes).
+- **Source-level collapse + server drag ordering (06 §2.4, plan 1)** —
+  sidebar source-header collapse toggle (folds the whole source workspace
+  list) + source-header drag ordering (display preference persisted in
+  `dsh-chamber.sidebar.v1`, live-synced across ctx).
+- **Workspace icon identity coloring (06)** — icon hue derived from
+  `(serverId, family seed)` hashing with stable accent; worktrees share the
+  main checkout's family hue; softened palette in 2026-10.
+- **Open-in registry (design 17)** — the VS Code deep-link plugin evolved
+  into a general open surface: local Finder + local/remote VS Code in one
+  button (`conversation.session.header.utilities` slot); plugin renamed to
+  `@dsh-chamber/dsh-client-ui-open-in`; legacy vscode IPC removed.
+
+### Fixed
+
+- **Reverse proxy mis-aborting every bodyless request and WS handshake (03 §3.3
+  disconnection detection)** — the control plane's `instance-proxy` HTTP
+  forwarding and WS upgrade paths treated `req.on('close')` as a client
+  disconnect signal, but Node 16+ fires `IncomingMessage 'close'` as soon as
+  the request body is consumed (immediately for bodyless GET/HEAD), so every
+  proxied GET/HEAD request and WS handshake was mis-aborted right after being
+  sent: 30s bundle-load timeouts ("instance failed to start"), the web runtime
+  looping `connection lost, retry #N` forever, and every instance boot timing
+  out — local and remote alike. POST happened to work because `'close'` fires
+  during the `readBody` await (the listener is not yet attached), which long
+  masked the issue behind "POST probes all pass". Fix: the disconnect
+  detection moved to the response leg (`res 'close'` + `writableEnded` guard,
+  the same discipline as the api.ts SSE), and the WS upgrade now listens on
+  the browser socket's `'close'` (only a genuine disconnect fires pre-101; the
+  splice tearDown takes over post-101); the api.ts health-events SSE received
+  the same fix. Added 4 real Node stream integration regression tests (fake
+  requests do not model real `'close'` semantics; red-green verified:
+  reverting the bug hangs the tests with a timeout).
+- **Main-process confirmation for plugin actions (design 09 §4 v1 security
+  mitigation)** — `desktop_ssh_plugin_materialize_add` / `desktop_local_plugin_add`
+  / `desktop_local_plugin_remove` now require a main-process confirmation
+  dialog: a remote instance's client bundle shares the chamber page and must
+  not silently drive local-source exfiltration, arbitrary registry-package
+  installation (persistent execution surface) or destructive removal. Cancel
+  resolves `{ok:true, cancelled:true}`; fail-closed without a window;
+  single-flight guard against dialog stacking; the three UI call sites now
+  handle `cancelled` (a dismissal is never reported as success).
+- **Local plugin manifest path redaction (design 09 §4 v1 security
+  mitigation)** — `desktop_local_plugin_list` no longer echoes local absolute
+  paths: file:/link:/relative/absolute/`~/` dependency values are masked as
+  `file:<hidden>` (materialize classification and name matching preserved;
+  client-side diff unchanged).
+- **Control-plane lifecycle race guards (2026 audit H2)** — health probes
+  carry a generation AbortSignal: stop()/start() abort an in-flight probe and
+  wait for its verdict; failure verdicts landing in `stopped`/`error` or while
+  a start is in flight are inert (no connection resurrection, no double
+  spawn); a spawn failure landing after stop() (epoch changed) no longer flips
+  `stopped` back to `error`.
+- **Uniform failed-spawn cleanup (2026 audit H3)** — every spawnAttempt failure
+  path (including a pid-record write failure) converges on `killFailedSpawn`:
+  process-group SIGKILL → confirmed exit → record removal (design 02 §3.3), so
+  an untracked detached process can never leak.
+- **Catalog persistence no longer blocks the state machine (2026 audit M13)** —
+  the status/dshPort/error runtime projections persist best-effort: a disk
+  failure logs loud, the machine still advances, the next transition
+  self-heals; user-editable fields (label/accentColor) keep strict
+  write-through.
+- **Proxy compression consistency (2026 audit M3b)** — `accept-encoding` is
+  stripped upstream (identity always), and `content-encoding` rides the
+  response whitelist so any compression stays correctly labeled for the
+  browser.
+- **Boot budget cancellation + serialized chain (2026 audit H1)** — the whole
+  boot task (host-graph channel and `AppWebEntry.run()` phases included) is
+  bounded by a timeout budget: expiry cancels the boot (disposes the
+  constructed entry, rejects queued opens), and both the caller and the
+  admission chain settle within budget. Underlying async work from an expired
+  entry may resume late, so routing facts are immutable on that entry's own
+  Cordis root context and the connection gets an explicit basePath — no mutable
+  page-global routing knob is shared. Dispose acts as cancellation, blocks a
+  late mount, and repeats the root sweep; the timer is cleared when the task
+  wins, so a successful boot is never cancelled by a stale timer.
+- **Serialized dispose (2026 audit M1)** — `AppWebEntry.dispose()` is an async
+  teardown: a same-id re-boot awaits the old teardown (pendingDisposes)
+  before constructing a fresh ctx; duplicate disposal of the same entry joins
+  the same promise and cannot replace the real teardown with an already-settled
+  promise. The shell reserves a producer-generation floor when async boot
+  starts or is cancelled, and runtime/snapshot producers carry the explicit
+  boot generation, so an old ctx's late registration/report/clear cannot
+  displace or clear the new shell's shared state.
+- **Exec-child exit wait (2026 audit M2)** — exec children (systemd/remote
+  command ssh) get the same SIGTERM → SIGKILL escalation as tunnel children
+  at quit, and `disposeAsync` waits for all of them — a SIGTERM-ignoring ssh
+  exec can no longer be orphaned.
+- **Prewarm queue unstick (2026 audit M8)** — removing an instance that is
+  mid-prewarm now clears the inflight marker and advances the queue
+  immediately (previously the dropped settle left the marker forever and the
+  whole prewarm queue wedged).
+- **Port-allocation failure recovery (2026 audit M10)** — a transient local
+  port-allocation failure enters the slow periodic re-probe (same as the
+  max-retry path) instead of parking the instance in error forever.
+- **Missing-plugin visibility (2026 audit M6)** — when the host boot-graph
+  channel fails (graph-unreachable / not-injected) the boot still succeeds
+  but the settled state carries `pluginDegraded` and the instance view shows
+  a warning banner — never the same presentation as a fully successful boot.
+- **Search visible-set semantics (2026 audit M7)** — `mergeSearchResults`
+  takes an explicit `projectionReady` (`aggregateReady`): once the projection
+  is ready the visible set is authoritative — an empty set filters ALL remote
+  hits (archived/subagent/blank sessions never resurface in clickable
+  results); only a not-ready projection keeps the no-filter degrade.
+- **Compensating host-save atomicity (2026 audit M9, 2026 merge-review
+  correction)** — new and existing hosts now commit and re-read the
+  authoritative registry first, and write the password only after metadata
+  demonstrably landed. A refused/thrown registry save leaves the password
+  untouched; a password failure restores the complete pre-submit registry
+  snapshot; the rollback result is verified too, and a refused/thrown
+  rollback keeps the form in edit mode from the
+  authoritative registry. Main-process registry saves also validate the
+  whole proposed set: one invalid/kind-mismatched/duplicate row rejects all
+  of it, so an invalid edit cannot silently delete an existing host; legacy
+  file loading remains lenient-with-warning.
+- **Architecture merge-safety review fixes (2026-08-28)** — the reaper now
+  requires the pid record's exact managed CLI absolute path, exact
+  `--profile web`/`--port` tokens, port ownership, and a dead owner
+  (basename/any-`bin.ts` identities fail closed, and mismatch logs never echo
+  an unrelated process argv); local start→stop→start
+  releases the old single-flight generation and late failures cannot clear
+  the new one; host-log write/compaction failures start a fresh generation
+  instead of resurrecting a removed backing file; `stopped` is logged once;
+  fork parent-accounted hiding is a bounded 3s first-observation grace so a
+  partial attach failure eventually appears ungrouped; form path/length gates
+  match desktop authority; CI/release action pins have an offline consistency
+  guard and the invalid setup-node SHA was corrected. The subsequent thorough
+  pass also made local spawn port/TCP probes and unary body reads cancellable;
+  restricted transports to loopback HTTP; incrementally bounded SSH
+  unterminated lines, captured stdout, and stderr detail; disabled package
+  lifecycle scripts during local packing and put local pack/install process
+  groups or trees under will-quit ownership; isolated renderer session-open,
+  aggregate retry/source removal plus remove→same-id source-generation ABA,
+  recovery timers, and quit generations; and
+  made deep-link queues/protocol registration, Windows local paths, external
+  open failures, and settings side-effect rollback fail loudly without
+  projecting host paths to the renderer. Release concurrency now maps tag
+  `vX` and manual version `X` to the same mutation group while allowing
+  unrelated versions to proceed independently.
+- **Source-scoped keys (2026 audit L2)** — the double-click pending and the
+  blank-ghost grace are keyed by `(serverId, sessionId)`: cloned instances
+  carrying the same UUID can no longer cross-trigger rename or share ghost
+  slots across sources (cross-source double-click rename still works — both
+  clicks key to the row's owning source via `data-chamber-section`).
+- **IPC mirror drift guard (2026 audit L3, final-review hardening)** —
+  `ipc-surface-mirror.test.ts` now also compares FIELD SETS (covering the
+  manifest / chamber / gitWorktree / notifications helper types), and three
+  real drifts were fixed (preload's two manifests missing `chamber`, the
+  renderer `ChamberInjectionState` missing `gitWorktree`, the settings
+  `ChamberSettings` missing `notifications`).
+- **Remote plugin-apply confirmation (2026 final review)** —
+  `desktop_ssh_plugin_apply` registry add/remove now requires a main-process
+  confirmation dialog (a remote persistent execution surface, same gate as
+  local installs); `SshPluginApplyIpcResult` gained `{ok:true, cancelled:true}`
+  (all three mirrors synced), and both sync/add view call sites treat a
+  dismissal as a skip, never a success.
+- **Quit guards (2026 final review)** — `trustedIpc` refuses every IPC while
+  quit is in progress (`app_quitting`); transport-manager `dispose()` sets an
+  internal gate so `exec()`/`connect()` refuse new work after teardown (no
+  theoretical orphan spawn into shutdown).
+- **Double-side materialize classification parity (2026 final review)** — the
+  client `isPathSpec` file:/link: prefix checks are now case-insensitive,
+  aligned with the main process `isMaterializeSpec` (uppercase `FILE:`/`LINK:`
+  remote values no longer classify differently on the two sides).
+- **Cleanup-review fixes (2026)** — `settings-set` validation failures now
+  return the uniform `{ok:false,error}` shape; tunnel stdout goes through the
+  provider's redaction before entering the ring buffer; `writeSettingsFile`
+  gained fsync + an explicit 0600 chmod (matching the atomic-write
+  discipline); `bundle-dsh` derives its default dsh version from the COMMITTED
+  runtime lockfile (the hardcoded twin of release.yml can no longer drift);
+  the management API body reads got a 10s per-chunk idle timeout; the pid
+  record and seed overlay atomic writes gained fsync; the shell's
+  `pluginDegraded` declaration moved above the closure that references it
+  (TDZ fragility gone); the sidebar drag commits now read the live store /
+  live roster; connections save/remove became read-modify-write against the
+  authoritative registry (render-closure snapshot race gone); the git
+  unregistered-worktree remove surfaces a refresh failure explicitly instead
+  of swallowing it; the mirror test's comment stripping is anchored at line
+  start (`//` inside string literals survives). Real-machine smoke still
+  needs a real environment.
+- **Independent-review fixes (2026)** — desktop: the askpass helper is now
+  REUSED while the password is unchanged (the old delete-and-recreate raced a
+  concurrent tunnel+exec into fake auth failures), and clearing the password /
+  removing an instance removes the baked helpers; the manual
+  `desktop_ssh_seed_host_graph` path gained a main-process confirmation (the
+  auto path is unaffected) with a `{ok,cancelled}` result variant synced
+  across the three mirrors; `connect`/`instances_set` converge unknown/invalid
+  input to the null/current shapes instead of throwing IPC rejections;
+  `TransportRunCommand` narrowed to the actually dispatchable set. Validation:
+  release.yml gained a `validation` job wired into both packaging jobs (a tag
+  release can no longer bypass the test gates); ci.yml now runs the desktop
+  build sub-steps and checks the third-party notices stay current; the shell
+  serialization test lost its false-negative (B's knob zeroed + a macrotask
+  yield); the spawn-cleanup test now asserts at the process-table level (the
+  pid-log marker raced the cleanup SIGKILL; switched to `ps`); golden
+  baselines added for Update/SettingsSurface; host-package builds verify the
+  output exists; boot-rows gained an extras-dedupe boundary test;
+  `instance-mutation-values` moved back under test:sidebar. Docs: 05 §7.6
+  whitelist aligned with 13 §7.2, 02 §3.4 notes the dev-path identity, 09 §4
+  marks the baseline as historical, desktop README exit semantics and field
+  lists corrected, spawn-dsh comment fixed.
+- **Fresh-review fixes (2026)** — control plane: spawn now listens for the
+  async `error` event (an ENOENT/Electron-fuse spawn failure no longer crashes
+  the whole process with an uncaughtException); the proxy body-budget
+  reservation is held until the upstream request completes (releasing it
+  right after readBody let 64×300MiB concurrent bodies exhaust process
+  memory while the counter said zero); `dshPort` is cleared before entering
+  `starting`; `noteHealthFailure` treats a signal-killed child as dead. Types:
+  settings-connections now RE-EXPORTS the whole IPC face from the renderer's
+  global.d.ts (the triple hand-mirror drift source is gone); the
+  settings-bridge chamber-bridge mirror matches the real
+  ChamberServerAggregate (phantom `hint` removed, workspaces/aggregate*/
+  runtime added); the connections-section mirror declares the real
+  `pluginDiagnostics` consumption; the layout view-prefs mirror gained four
+  missing optional fields; preload normalizes absent info fields to null; the
+  enter-row adopter validates the wire value (fallback to the default); the
+  mirror test now asserts the re-export model (9/9).
+- **Round-3 review fixes (2026)** — control plane: liveness now checks
+  `signalCode` (signal-killed children no longer report alive); the
+  restart-exhausted landing stops the residual child and clears
+  `child/dshPort` (matching the "stops automatically" contract); `setState`
+  deletes `error` instead of writing `undefined` (memory/disk parity); the
+  final `→ stopped` transition line is written once through `setState`; the reaper command
+  identity also matches the source-tsx dev path; host-logs writes became
+  synchronous appends with an in-memory ring compaction (eliminating the
+  async-stream buffer/open race that duplicated and interleaved content, plus
+  a blank-line separator bug) and an out-of-range offset now returns empty; the proxy drains GET/HEAD bodies so
+  keep-alive reuse never misparses frames. Desktop/client: save-host no
+  longer lets a rollback throw masquerade as the password error; the
+  connection client's stop() aborts the pending backoff sleep; the App
+  reclamation effect reaps the parallel per-instance refs. Validation: tag
+  pushes (v*) trigger the full CI validation chain and host-package esbuild
+  builds joined the push path; a cross-instance serialization shell test and
+  a 25-method golden baseline for the mirror test were added.
+- **Round-2 review hardening (2026)** — the IPC mirror test now compares
+  TYPE-SENSITIVE `name:type` signatures (covering PluginApplyResult /
+  ChamberNotificationSettings / ChamberSettings) and fixed parser fragility
+  (\b-anchored type lookup); the settings-connections `Window.dshChamber`
+  imports the authoritative `DshChamberBridge` instead of a self-described
+  mirror missing four fields; the transport M2 test now really proves
+  `disposeAsync` does not settle before the SIGKILL escalation, and a new M10
+  guard case covers "disconnect during allocation arms no slow re-probe"; the
+  shell late-settle test timing margins were widened (80ms budget / 250ms
+  delay).
+- **Session-runtime export cleanup (2026 audit M12)** — the control-plane index
+  re-exports only the production unary surface (call / RpcBusinessError /
+  RpcTransportError); respond / openEventStream are no longer public.
+- **Audit review registry (2026 audit S19)** — the following audit findings
+  were re-verified as ALREADY FIXED, no change needed: H7 (Origin:null is
+  rejected by corsFor with 403), M3a (proxy idle timeout re-arms per chunk,
+  45s), M5 (pnpm pack / local plugin CLI are async runChild), M11
+  (uncaughtException fails closed with app.exit(1)), L1 (layout WeakRef
+  fan-out), L4 (all CI actions pinned to commit SHAs).
+- **Packaging integrity** — `notifications.ts` added to the electron-builder
+  `build.files` (the packaged app would otherwise fail to start); the preload
+  build now emits into a temp dir and moves only `preload.cjs` (three dead
+  files no longer ship in the asar); `build.files` excludes `dist/.vite/**`.
+- **Dead dependency cleanup** — removed `@simplewebauthn/server` from the
+  control plane (vestige of the removed v1 auth surface); lockfile and
+  third-party notices synced.
+
+### Changed
+
+- **Docs consolidation** — `docs/progress/STATUS.md` rewritten to track only
+  incomplete/partially-complete items and scope deviations (implemented
+  baselines live in git history / CHANGELOG); AGENTS.md and design docs
+  synced (open-in package, ws-frames tests, new packaging-closure checklist).
+
 ## [0.1.5] - 2026-08-23
 
 ### Added
@@ -273,7 +548,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ### Added
 
 - **Desktop auto-update (design 11)** — silent update checks (startup delay +
-  6h interval), a low-key Settings「更新」section, download only after explicit
+  6h interval), a low-key Settings "Update" section, download only after explicit
   user confirmation, install on quit. Update feed shipped for both platforms
   (`latest.yml` / `latest-mac.yml`; beta channel via a semver prerelease
   version). macOS install leg reports honestly when a Developer ID signature
@@ -298,7 +573,8 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   server switches; explicit sort menu with official updated-order semantics
   (manual order + activity promotion).
 - **Host-graph visibility** — the chamber-injected host package row shows the
-  module A version and a live-effect tri-state (已生效 / 重启后生效 / 未知)
+  module A version and a live-effect tri-state (Effective / Effective after
+  restart / Unknown)
   probed over the tunnel RPC.
 - **Boot hardening** — union-table completion for covered packages,
   chamber-level failure overlay (report + retry + server switching),
@@ -385,6 +661,8 @@ Initial release — local desktop connection manager for dsh:
 
 v1 scope: no authentication/audit surface (loopback-only control plane).
 
+[0.1.5]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.5
+[0.1.4]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.4
 [0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1

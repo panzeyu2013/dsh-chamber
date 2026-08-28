@@ -1,7 +1,7 @@
 # todo · server 之间的拖拽排序
 
-> 状态：**已实现（2026-09，方案 1）**——见 `docs/progress/STATUS.md`
-> （server 折叠 + 显示序拖拽）。记录于 2026-08-16。
+> 状态：**已实现（2026-09，方案 1）**——契约见 `docs/design/06-sidebar-enhancements.md`
+> §2.4（server 折叠 + 显示序拖拽）。记录于 2026-08-16。
 >
 > 2026-10 review 收窄（F1/F2，契约见 06 §2.4）：ESC 取消守卫对 dragend
 > 时 `dataTransfer` 为 null（Safari 曾有）同样视为取消；拖拽期间指针离开

@@ -13,12 +13,24 @@
  * plus the read/write/subscribe entry points are mirrored.
  */
 
-/** Page-wide sidebar view preferences (loose mirror of the real face). */
+/** Page-wide sidebar view preferences (mirror of the real face — the
+ *  optional fields below match view-prefs.ts exactly; 2026 review T5). */
 export interface ChamberSidebarViewPrefs {
   v: 1
   folded: Record<string, boolean>
   ungroupedOrder: Record<string, string[]>
   orderBy?: Record<string, 'manual' | 'updated'>
+  /** Updated-mode session order accounts (design 06 §3.1, mirror of
+   *  view-prefs.ts): key = the `${sourceId}/${workspaceId}` account key,
+   *  value = the updated-mode display order; absent for sources that never
+   *  entered updated mode. */
+  updatedOrder?: Record<string, string[]>
+  /** Updated-mode activity bookkeeping (account key → sessionId → updatedAt). */
+  sessionUpdatedAtByAccount?: Record<string, Record<string, number>>
+  /** Source-level fold: sourceId → its workspace LIST is collapsed. */
+  sourceFolded?: Record<string, boolean>
+  /** Source display order (server drag-sort); absent = projection order. */
+  serverOrder?: string[]
   /** Page-wide sidebar width preference in px; absent = never dragged. */
   sidebarWidth?: number
   seenSources: string[]

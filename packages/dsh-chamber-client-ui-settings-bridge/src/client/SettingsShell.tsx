@@ -27,7 +27,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
-import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/src/client/ConnectionsSection.tsx'
+import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/section'
 import { GeneralView } from './GeneralView.tsx'
 import {
   CONNECTIONS_SECTION_ID,

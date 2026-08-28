@@ -73,6 +73,7 @@ import {
   resolveLocalMaterializeDirectory,
   runLocalDshPlugin,
   seedRemoteChamberHostPackages,
+  disposePluginSyncChildren,
   scopeExecToOwnership,
   runWithFinalOwnership,
 } from './plugin-sync.ts';
@@ -103,6 +104,7 @@ import {
   validateNotificationRequest,
 } from './notifications.ts';
 import type { NotificationOpenIntent, NotificationSettingsLike, NotificationSourceToken } from './notifications.ts';
+import { IPC_CHANNELS } from './ipc-events.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
@@ -271,6 +273,7 @@ let lastResume: number | null = null;
 let quitRequested = false;
 let quitConfirmed = false;
 let confirmingQuit = false;
+let quitCleanupInProgress = false;
 // 本地实例「运行中/在途」状态（design 14 D2，2026-08 修订）：进程存活
 // （ready/degraded）或 spawn/重启在途（starting/restarting）——退出会中断
 // 它们，需确认。stopped / error / restart-exhausted 无进程可中断，不触发
@@ -406,7 +409,7 @@ function drainPendingRendererDeepLinkIntents(): boolean {
         ) {
           throw new Error('deep-link renderer changed while draining');
         }
-        win.webContents.send('dsh-chamber:deep-link-intent', {
+        win.webContents.send(IPC_CHANNELS.DEEP_LINK_INTENT, {
           instanceId: intent.instanceId,
           path: intent.path,
           sourceFingerprint: intent.sourceFingerprint,
@@ -578,7 +581,7 @@ function pushSettingsChanged(): void {
   if (win === null) return;
   const pushed = attemptCommittedRegistryPush(() => {
     if (mainWindow !== win || win.isDestroyed()) throw new Error('settings renderer changed before push');
-    win.webContents.send('dsh-chamber:settings-changed', chamberSettingsStatus());
+    win.webContents.send(IPC_CHANNELS.SETTINGS_CHANGED, chamberSettingsStatus());
   });
   if (!pushed.sent) {
     try { console.warn(`[dsh-chamber] settings 已保存但变更 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* best effort */ }
@@ -588,7 +591,7 @@ function pushSettingsChanged(): void {
 function pushHeldSystemResume(win: BrowserWindow, timestamp: number): boolean {
   const pushed = attemptCommittedRegistryPush(() => {
     if (mainWindow !== win || win.isDestroyed()) throw new Error('system-resume renderer changed before push');
-    win.webContents.send('dsh-chamber:system-resume', { timestamp });
+    win.webContents.send(IPC_CHANNELS.SYSTEM_RESUME, { timestamp });
   });
   if (!pushed.sent) {
     try { console.warn(`[dsh-chamber] system-resume push 失败，保留待重试：${pushed.error}`); } catch { /* best effort */ }
@@ -858,7 +861,20 @@ function installRendererRecovery(win: BrowserWindow): void {
   // 主线程长时间忙碌是合法的，unresponsive 只在"已成功加载过"之后才触发
   // 重载，避免打断正常启动。
   let loadedOnce = false;
+  let unresponsiveTimer: NodeJS.Timeout | null = null;
+  let crashReloadTimer: NodeJS.Timeout | null = null;
+  const clearUnresponsiveTimer = (): void => {
+    if (unresponsiveTimer === null) return;
+    clearTimeout(unresponsiveTimer);
+    unresponsiveTimer = null;
+  };
+  const clearCrashReloadTimer = (): void => {
+    if (crashReloadTimer === null) return;
+    clearTimeout(crashReloadTimer);
+    crashReloadTimer = null;
+  };
   const reload = () => {
+    if (quitRequested || win.isDestroyed()) return;
     const now = Date.now();
     if (now - reloadWindowStart > 60_000) {
       reloadWindowStart = now;
@@ -873,6 +889,11 @@ function installRendererRecovery(win: BrowserWindow): void {
       dialog.showErrorBox('dsh-chamber 前端异常', '前端渲染进程反复崩溃，已停止自动恢复。请重新启动应用。');
     }
   };
+  win.webContents.on('did-start-loading', () => {
+    loadedOnce = false;
+    clearUnresponsiveTimer();
+    clearCrashReloadTimer();
+  });
   win.webContents.on('did-finish-load', () => {
     loadedOnce = true;
     // ready() can run while late subresources still keep isLoading() true.
@@ -885,7 +906,9 @@ function installRendererRecovery(win: BrowserWindow): void {
     }
   });
   win.webContents.on('render-process-gone', (_event, details) => {
-    if (details.reason === 'clean-exit') return; // 用户关窗等正常退出
+    clearUnresponsiveTimer();
+    clearCrashReloadTimer();
+    if (details.reason === 'clean-exit' || quitRequested) return; // 用户关窗/退出等正常路径
     // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
     // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
     if (mainWindow === win) {
@@ -898,29 +921,27 @@ function installRendererRecovery(win: BrowserWindow): void {
       `[dsh-chamber] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}`,
     );
     // 稍候重载，避开崩溃拆除期（崩溃后立即 reload 偶发与拆除竞争）。
-    setTimeout(() => {
-      if (!win.isDestroyed()) reload();
+    crashReloadTimer = setTimeout(() => {
+      crashReloadTimer = null;
+      reload();
     }, 500);
   });
-  let unresponsiveTimer: NodeJS.Timeout | null = null;
   win.webContents.on('unresponsive', () => {
     if (!loadedOnce) {
       console.warn('[dsh-chamber] 渲染进程无响应（首次加载中，仅记录不重载）');
       return;
     }
+    if (unresponsiveTimer !== null) return;
     console.warn('[dsh-chamber] 渲染进程无响应，15s 内未恢复将重载');
     unresponsiveTimer = setTimeout(() => {
-      if (!win.isDestroyed()) reload();
+      unresponsiveTimer = null;
+      reload();
     }, 15_000);
   });
-  win.webContents.on('responsive', () => {
-    if (unresponsiveTimer !== null) {
-      clearTimeout(unresponsiveTimer);
-      unresponsiveTimer = null;
-    }
-  });
+  win.webContents.on('responsive', clearUnresponsiveTimer);
   win.on('closed', () => {
-    if (unresponsiveTimer !== null) clearTimeout(unresponsiveTimer);
+    clearUnresponsiveTimer();
+    clearCrashReloadTimer();
   });
 }
 
@@ -1025,7 +1046,10 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     }
   });
   void win.loadURL(url).catch((loadError) => {
-      const detail = describeUnknownError(loadError);
+    // Closing/quitting intentionally aborts navigation; it is not a startup
+    // failure and must not show a fatal dialog or re-enter teardown.
+    if (quitRequested || win.isDestroyed()) return;
+    const detail = describeUnknownError(loadError);
     if (fatalOnLoadFailure) {
       dialog.showErrorBox('dsh-chamber 启动失败', `前端加载失败：\n${detail}`);
       void controlPlane?.stop().catch(err => console.error('[dsh-chamber] 控制面停止失败：', err));
@@ -1193,8 +1217,13 @@ if (!gotTheLock) {
       } catch { /* already gone */ }
       tray = null;
     }
+    if (quitCleanupInProgress) {
+      event.preventDefault();
+      return;
+    }
     if (!controlPlane) return;
     event.preventDefault();
+    quitCleanupInProgress = true;
     // 传输层（SSH 隧道/在途 exec）与控制面（本地 dsh + HTTP 门面）的回收互不
     // 依赖，并行等待（总耗时 = max 而非 sum）。各自的 SIGTERM→SIGKILL 窗口已
     // 压到 1s（transport-manager / spawn-dsh），正常 ~1-2s 完成。disposeAsync
@@ -1212,10 +1241,12 @@ if (!gotTheLock) {
     const cp = controlPlane;
     controlPlane = null;
     void Promise.allSettled([
+      disposePluginSyncChildren().catch((err) => console.error('[dsh-chamber] 插件子进程关闭失败：', err)),
       transportManager?.disposeAsync().catch((err) => console.error('[dsh-chamber] 传输层关闭失败：', err)),
       cp.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
     ]).finally(() => {
       clearTimeout(cleanupTimer);
+      quitCleanupInProgress = false;
       app.quit();
     });
   });
@@ -1278,7 +1309,7 @@ if (!gotTheLock) {
         }
         return handler(...args);
       };
-    ipcMain.handle('dsh-chamber:info', trustedIpc(() => ({
+    ipcMain.handle(IPC_CHANNELS.INFO, trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
       dshVersion: readDshVersion(dshWorkspace),
       version,
@@ -1300,8 +1331,8 @@ if (!gotTheLock) {
 
     // Chamber settings IPC 面：get 查询 / set 应用并持久化 / 变更推送。全部走
     // trustedIpc 围栏；失败 loud {error}，绝不静默假成功。
-    ipcMain.handle('dsh-chamber:settings-get', trustedIpc(() => chamberSettingsStatus()));
-    ipcMain.handle('dsh-chamber:settings-set', trustedIpc(({ patch }) => {
+    ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, trustedIpc(() => chamberSettingsStatus()));
+    ipcMain.handle(IPC_CHANNELS.SETTINGS_SET, trustedIpc(({ patch }) => {
       const validated = validatePatch(patch);
       if (!validated.ok) return { error: validated.error };
       const applied = applySettingsPatch(validated.patch);
@@ -1313,18 +1344,18 @@ if (!gotTheLock) {
     // 桌面通知（design 19 §3.3）：渲染端检测会话边沿并组装 payload → notify
     // （invoke，返回是否实际显示）→ 主进程白名单/去重/裁决 + 原生通知。click →
     // notification-open 推送 → 渲染端 openSession（既有路径）。
-    ipcMain.handle('dsh-chamber:notify', trustedIpc(({ payload }) => maybeShowNativeNotification(payload)));
+    ipcMain.handle(IPC_CHANNELS.NOTIFY, trustedIpc(({ payload }) => maybeShowNativeNotification(payload)));
     // Renderer 通知就绪信号（design 19 §3.3）：onOpen 监听注册后调用——通知点击
     // 的推送只在就绪后放行（did-finish-load 早于监听注册，见 drain 条件）。
     // 返回 true 与 preload 的 Promise<boolean> 声明一致（成功置位信号）。
-    ipcMain.handle('dsh-chamber:notifications-ready', trustedIpc(() => {
+    ipcMain.handle(IPC_CHANNELS.NOTIFICATIONS_READY, trustedIpc(() => {
       notificationOpenDrainReady = true;
       const drainAccepted = drainPendingNotificationOpens?.() ?? true;
       // A send race revokes ready inside the drain. Returning false makes the
       // renderer's bounded readiness retry establish the next handshake.
       return drainAccepted && notificationOpenDrainReady;
     }));
-    ipcMain.handle('dsh-chamber:notification-open-ack', trustedIpc((payload: unknown) => {
+    ipcMain.handle(IPC_CHANNELS.NOTIFICATION_OPEN_ACK, trustedIpc((payload: unknown) => {
       if (payload === null || typeof payload !== 'object') return false;
       const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
       return pendingNotificationOpens.acknowledge(deliveryId as number, attempt as number);
@@ -1332,12 +1363,12 @@ if (!gotTheLock) {
     // Deep-link renderer readiness (design 16 hold/replay): App invokes this
     // only after installing deepLink.onIntent. Successful cold-start launches
     // held before that point are replayed now; navigation/crash resets the bit.
-    ipcMain.handle('dsh-chamber:deep-link-ready', trustedIpc(() => {
+    ipcMain.handle(IPC_CHANNELS.DEEP_LINK_READY, trustedIpc(() => {
       deepLinkRendererReady = true;
       const drainAccepted = drainPendingRendererDeepLinkIntents();
       return drainAccepted && deepLinkRendererReady;
     }));
-    ipcMain.handle('dsh-chamber:deep-link-ack', trustedIpc((payload: unknown) => {
+    ipcMain.handle(IPC_CHANNELS.DEEP_LINK_ACK, trustedIpc((payload: unknown) => {
       if (payload === null || typeof payload !== 'object') return false;
       const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
       return pendingRendererIntents.acknowledge(deliveryId as number, attempt as number);
@@ -1608,7 +1639,7 @@ if (!gotTheLock) {
       if (statusWindow !== null) {
         const pushed = attemptCommittedRegistryPush(() => {
           if (mainWindow !== statusWindow || statusWindow.isDestroyed()) throw new Error('status renderer changed before push');
-          statusWindow.webContents.send('desktop_ssh_status_changed', { id, status });
+          statusWindow.webContents.send(IPC_CHANNELS.SSH_STATUS_CHANGED, { id, status });
         });
         if (!pushed.sent) {
           try { console.warn(`[dsh-chamber] transport 状态已更新但 renderer push 失败：${pushed.error}`); } catch { /* callback boundary */ }
@@ -1616,8 +1647,8 @@ if (!gotTheLock) {
       }
     });
 
-    ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => projectRemoteInstances(sm.listInstances())));
-    ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_INSTANCES_GET, trustedIpc(() => projectRemoteInstances(sm.listInstances())));
+    ipcMain.handle(IPC_CHANNELS.SSH_INSTANCES_SET, trustedIpc((instances) => {
       const before = sm.listInstances();
       const saved = sm.saveInstances(instances);
       const projectedSaved = projectRemoteInstances(saved);
@@ -1665,7 +1696,7 @@ if (!gotTheLock) {
       if (registryWindow !== null) {
         const pushed = attemptCommittedRegistryPush(() => {
           if (mainWindow !== registryWindow || registryWindow.isDestroyed()) throw new Error('registry renderer changed before push');
-          registryWindow.webContents.send('desktop_ssh_instances_changed', { removedIds, retiredIds });
+          registryWindow.webContents.send(IPC_CHANNELS.SSH_INSTANCES_CHANGED, { removedIds, retiredIds });
         });
         if (!pushed.sent) {
           console.warn(`[dsh-chamber] registry 已保存但 lifecycle push 失败（等待 renderer 重拉）：${pushed.error}`);
@@ -1682,7 +1713,7 @@ if (!gotTheLock) {
     // entry). The IPC is the platform gate: Win32-OpenSSH askpass support is
     // not reliable, so Windows refuses password auth loudly (keys/agent
     // remain the universal path) instead of silently failing at connect time.
-    ipcMain.handle('desktop_ssh_set_password', trustedIpc(({ id, password }) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_SET_PASSWORD, trustedIpc(({ id, password }) => {
       if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || !sm.listInstances().some(instance => instance.id === id)) {
         return { error: 'invalid or unknown instance id' };
       }
@@ -1702,26 +1733,26 @@ if (!gotTheLock) {
     // ~/.ssh/config discovery (design 05 §5): non-secret host projections
     // only (alias/hostName/user/port) — keys/proxies/credentials never leave
     // the main process.
-    ipcMain.handle('desktop_ssh_config_list', trustedIpc(() => discoverSshConfigHosts()));
-    ipcMain.handle('desktop_ssh_connect', trustedIpc(({ id }) => sm.connect(id)));
-    ipcMain.handle('desktop_ssh_disconnect', trustedIpc(({ id }) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_CONFIG_LIST, trustedIpc(() => discoverSshConfigHosts()));
+    ipcMain.handle(IPC_CHANNELS.SSH_CONNECT, trustedIpc(({ id }) => sm.connect(id)));
+    ipcMain.handle(IPC_CHANNELS.SSH_DISCONNECT, trustedIpc(({ id }) => {
       sm.disconnect(id);
       return sm.status(id);
     }));
-    ipcMain.handle('desktop_ssh_status', trustedIpc(({ id }) => sm.status(id)));
-    ipcMain.handle('desktop_ssh_logs', trustedIpc(({ id }) => sm.logs(id)));
-    ipcMain.handle('desktop_ssh_logs_clear', trustedIpc(({ id }) => sm.clearLogs(id)));
+    ipcMain.handle(IPC_CHANNELS.SSH_STATUS, trustedIpc(({ id }) => sm.status(id)));
+    ipcMain.handle(IPC_CHANNELS.SSH_LOGS, trustedIpc(({ id }) => sm.logs(id)));
+    ipcMain.handle(IPC_CHANNELS.SSH_LOGS_CLEAR, trustedIpc(({ id }) => sm.clearLogs(id)));
     // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
     // status projection on success (serviceActive included), {error} on
     // failure — loud, never a silent empty success, never an unhandled
     // rejection.
-    ipcMain.handle('desktop_ssh_start_service', trustedIpc(({ id }) =>
+    ipcMain.handle(IPC_CHANNELS.SSH_START_SERVICE, trustedIpc(({ id }) =>
       sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
-    ipcMain.handle('desktop_ssh_stop_service', trustedIpc(({ id }) =>
+    ipcMain.handle(IPC_CHANNELS.SSH_STOP_SERVICE, trustedIpc(({ id }) =>
       sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
-    ipcMain.handle('desktop_ssh_is_active', trustedIpc(({ id }) =>
+    ipcMain.handle(IPC_CHANNELS.SSH_IS_ACTIVE, trustedIpc(({ id }) =>
       sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
     // Plugin management surface (design 13 M2+M3, contract B): restart the remote
@@ -1731,12 +1762,12 @@ if (!gotTheLock) {
     // {error} / {ok:...} shapes — never a silent empty success, never an
     // unhandled rejection. renderer-supplied specs are re-validated inside
     // applyPlugins (defense in depth).
-    ipcMain.handle('desktop_ssh_restart_service', trustedIpc(({ id }) =>
+    ipcMain.handle(IPC_CHANNELS.SSH_RESTART_SERVICE, trustedIpc(({ id }) =>
       execTransport(id, 'restart').then(result =>
         (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
       ).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
-    ipcMain.handle('desktop_ssh_plugin_list', trustedIpc(async ({ id }) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_LIST, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
       return runWithFinalOwnership(
@@ -1747,7 +1778,7 @@ if (!gotTheLock) {
         }),
       );
     }));
-    ipcMain.handle('desktop_ssh_plugin_apply', trustedIpc(async ({ id, add, remove, restart }) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_APPLY, trustedIpc(async ({ id, add, remove, restart }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
       // A non-boolean `restart` (e.g. the string 'false') must never be
@@ -1779,14 +1810,14 @@ if (!gotTheLock) {
         ),
       );
     }));
-    ipcMain.handle('desktop_local_plugin_list', trustedIpc(() => {
+    ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, trustedIpc(() => {
       try {
         return { ok: true, manifest: localPluginList(localDshHome) };
       } catch (error) {
         return { ok: false, error: describeUnknownError(error) };
       }
     }));
-    ipcMain.handle('desktop_npm_search', trustedIpc(async ({ query }) => {
+    ipcMain.handle(IPC_CHANNELS.NPM_SEARCH, trustedIpc(async ({ query }) => {
       if (typeof query !== 'string' || query.trim() === '') return { ok: false, error: 'empty search query' };
       const text = query.trim();
       if (text.length > 256) return { ok: false, error: 'search query is too long' };
@@ -1824,7 +1855,7 @@ if (!gotTheLock) {
     // through materialize_add (dir resolved from the local manifest, validated
     // here as absolute + directory); local add/remove run `dsh plugin` against
     // the LOCAL dsh home (05 §5.1).
-    ipcMain.handle('desktop_ssh_seed_host_graph', trustedIpc(async ({ id }) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_SEED_HOST_GRAPH, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
       // Not shipped is a loud error on the MANUAL path (the button must never
@@ -1864,7 +1895,7 @@ if (!gotTheLock) {
     // materialize_add (sync view): renderer supplies only the dependency NAME.
     // Main re-reads the authoritative local manifest and resolves/canonicalizes
     // its path; an IPC caller can never choose an arbitrary local directory.
-    ipcMain.handle('desktop_ssh_plugin_materialize_add', trustedIpc(async ({ id, name }) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD, trustedIpc(async ({ id, name }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
       if (typeof name !== 'string') return { ok: false, error: 'invalid plugin name' };
@@ -1878,7 +1909,7 @@ if (!gotTheLock) {
     // materialize_add_pick (add view): PICK-ONLY — the folder picker runs here in
     // the main process, so a compromised renderer can never drive the pack surface
     // to an arbitrary local directory (design 13 §5.8 hardening).
-    ipcMain.handle('desktop_ssh_plugin_materialize_add_pick', trustedIpc(async ({ id }) => {
+    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD_PICK, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
@@ -1890,7 +1921,7 @@ if (!gotTheLock) {
         () => materializeAndAdd(scopedExecForTarget(target), target.spec, picked.filePaths[0]),
       );
     }));
-    ipcMain.handle('desktop_local_plugin_add_file', trustedIpc(async () => {
+    ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD_FILE, trustedIpc(async () => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
       const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
@@ -1898,7 +1929,7 @@ if (!gotTheLock) {
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
     }));
-    ipcMain.handle('desktop_local_plugin_add', trustedIpc(async ({ spec: specArg }) => {
+    ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, trustedIpc(async ({ spec: specArg }) => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
       // `file:` imports must go through the main-process folder picker
       // (desktop_local_plugin_add_file); this spec channel only accepts registry
@@ -1910,7 +1941,7 @@ if (!gotTheLock) {
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
     }));
-    ipcMain.handle('desktop_local_plugin_remove', trustedIpc(async ({ name }) => {
+    ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_REMOVE, trustedIpc(async ({ name }) => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
       const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
@@ -1970,12 +2001,12 @@ if (!gotTheLock) {
       },
       showItemInFolder: (p) => shell.showItemInFolder(p),
     }
-    ipcMain.handle('dsh-chamber:open-in-apps', trustedIpc(() => ({
+    ipcMain.handle(IPC_CHANNELS.OPEN_IN_APPS, trustedIpc(() => ({
       apps: listOpenInApps(openInCtx, (appId, error) => {
         console.error(`[dsh-chamber] open-in provider ${appId} 可用性探测失败：${error}`)
       }),
     })))
-    ipcMain.handle('dsh-chamber:open-in', trustedIpc(async (payload: unknown) => {
+    ipcMain.handle(IPC_CHANNELS.OPEN_IN, trustedIpc(async (payload: unknown) => {
       // 载荷形状守卫（复核 P2）：不可信渲染载荷直接解构会以 TypeError 落到
       // transport rejection——统一为 loud {error}，与其余失败面一致。
       const req = payload as Partial<OpenInRequest> | null
@@ -2038,22 +2069,22 @@ if (!gotTheLock) {
       if (updateWindow !== null) {
         const pushed = attemptCommittedRegistryPush(() => {
           if (mainWindow !== updateWindow || updateWindow.isDestroyed()) throw new Error('updater renderer changed before push');
-          updateWindow.webContents.send('dsh-chamber:update-state-changed', updateState);
+          updateWindow.webContents.send(IPC_CHANNELS.UPDATE_STATE_CHANGED, updateState);
         });
         if (!pushed.sent) {
           try { console.warn(`[dsh-chamber] updater 状态 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* callback boundary */ }
         }
       }
     });
-    ipcMain.handle('dsh-chamber:update-state', trustedIpc(() => updater.state()));
-    ipcMain.handle('dsh-chamber:update-check', trustedIpc(() => updater.checkNow()));
-    ipcMain.handle('dsh-chamber:update-download', trustedIpc(() => updater.download()));
+    ipcMain.handle(IPC_CHANNELS.UPDATE_STATE, trustedIpc(() => updater.state()));
+    ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, trustedIpc(() => updater.checkNow()));
+    ipcMain.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, trustedIpc(() => updater.download()));
     // The settings update section's「前往下载页」link: popups are denied and
     // navigation is pinned to the control-plane origin, so opening a release
     // page must go through the main process. Strict allowlist — parsed, not
     // prefix-string matched: only this repo's GitHub pages can ever be opened
     // (never an arbitrary URL, subdomain, userinfo or path-root trick).
-    ipcMain.handle('dsh-chamber:open-release', trustedIpc(({ url }) => {
+    ipcMain.handle(IPC_CHANNELS.OPEN_RELEASE, trustedIpc(({ url }) => {
       if (!isAllowedReleaseUrl(url)) {
         return { ok: false, error: 'url not allowed' };
       }
@@ -2157,7 +2188,7 @@ if (!gotTheLock) {
               || win.webContents.isLoading()
               || win.webContents.isCrashed()
             ) throw new Error('notification renderer changed while draining');
-            win.webContents.send('dsh-chamber:notification-open', {
+            win.webContents.send(IPC_CHANNELS.NOTIFICATION_OPEN, {
               sourceId: delivery.payload.sourceId,
               sourceFingerprint: delivery.payload.sourceFingerprint,
               sessionId: delivery.payload.sessionId,

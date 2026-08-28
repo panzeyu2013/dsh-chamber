@@ -10,6 +10,210 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 新增
+
+- **桌面通知（设计 19）** —— session complete / ask / request 时推送桌面原生
+  通知（设置可选项，并入设置壳「通用」页通知控制组；检测复用侧边栏运行时事实
+  通道边沿，零控制面改动）。
+- **来源级收拢 + server 拖拽排序（06 §2.4 方案 1）** —— 侧边栏来源头折叠
+  开关（收拢整来源 workspace 列表）+ 来源头拖拽排序（显示偏好，持久化于
+  `dsh-chamber.sidebar.v1`，跨 ctx 实时联动）。
+- **workspace 图标按身份着色（06）** —— 图标色相按 `(serverId, 家族种子)`
+  哈希派生稳定 accent，worktree 与主检出共享家族色；2026-10 柔和化色板。
+- **Open in 打开注册表（设计 17）** —— VS Code 深链插件演进为通用打开面：
+  本地来源 Finder + 本地/远程 VS Code 统一按钮（`conversation.session.header.
+  utilities` 槽），插件重命名 `@dsh-chamber/dsh-client-ui-open-in`，旧 vscode
+  IPC 收敛删除。
+
+### 修复
+
+- **反代误杀全部无 body 请求与 WS 握手（03 §3.3 断连检测）** —— 控制面
+  `instance-proxy` 的 HTTP 转发与 WS upgrade 路径把 `req.on('close')` 当作
+  客户端断连信号，但 Node 16+ 的 `IncomingMessage 'close'` 在请求体消费完
+  时即触发（无 body GET/HEAD 立即触发），导致每个经反代的 GET/HEAD 请求与
+  WS 握手都在发出后被误 abort：bundle 加载 30s 超时（「实例启动失败」）、
+  web-runtime 无限 `connection lost, retry #N`、实例 boot 全部超时——local
+  与远程无差别受害。POST 因 `'close'` 在 `readBody` await 期间触发（监听器
+  尚未注册）而侥幸正常，使问题长期掩盖在「POST 探测一切正常」之下。修复：
+  断连检测改挂响应腿（`res 'close'` + `writableEnded` 守卫，与 api.ts SSE
+  同纪律）、WS upgrade 改挂浏览器 socket `'close'`（101 前仅真实断开触发，
+  101 后由 splice tearDown 接管）；api.ts health-events SSE 同款修复。
+  新增 4 个真实 Node 流集成回归测试（fake 请求不模拟真实 `'close'` 语义，
+  红-绿验证过：还原 bug 即挂起超时）。
+- **插件动作主进程确认（09 §4 v1 安全缓解）** —— `desktop_ssh_plugin_materialize_add` /
+  `desktop_local_plugin_add` / `desktop_local_plugin_remove` 增加主进程确认
+  对话框：远端 bundle 与 chamber 页面同上下文，脚本不能静默驱动本地源码外传、
+  任意 registry 包安装（持久执行面）或破坏性卸载。取消返回 `{ok:true,
+  cancelled:true}`；无窗口 fail-closed；单飞防堆叠；UI 侧三个消费点补齐
+  `cancelled` 分支（不再把取消误报为成功）。
+- **本地插件清单路径脱敏（09 §4 v1 安全缓解）** —— `desktop_local_plugin_list`
+  的依赖值投影不再回显本地绝对路径：file:/link:/相对/绝对/`~/` 值掩码为
+  `file:<hidden>`（保持 materialize 分类与名称匹配语义，客户端 diff 不变）。
+- **控制面生命周期竞态守卫（2026 audit H2）** —— 健康探针携带代次
+  AbortSignal：stop()/start() abort 在途探针并等待其落定；`stopped`/`error`
+  态或 start 在途时到达的失败判定一律惰性（不复活连接、不双 spawn）；spawn
+  失败落在 stop() 之后（epoch 已变）不再把 `stopped` 改回 `error`。
+- **spawn 失败统一清理（2026 audit H3）** —— spawnAttempt 全部失败路径（含
+  PID 记录写入失败）统一收敛到 `killFailedSpawn`：进程组 SIGKILL → 确认退出
+  → 删除记录（对齐设计 02 §3.3），不再遗留无记录可追踪的 detached 进程。
+- **catalog 持久化不再阻断状态机（2026 audit M13）** —— status/dshPort/error
+  运行时投影写盘改为 best-effort：磁盘失败 loud log、状态照常迁移、下次迁移
+  自愈；用户可编辑字段（label/accentColor）保持严格写穿。
+- **反代压缩一致性（2026 audit M3b）** —— 请求侧剥离 `accept-encoding`（上游
+  恒 identity），响应头白名单放行 `content-encoding`（压缩标签随行，浏览器
+  正确解码）。
+- **boot 预算取消 + 串行链（2026 audit H1）** —— 整个 boot 任务（含宿主图
+  通道与 `AppWebEntry.run()` 各阶段）受超时预算约束：超时即取消（dispose
+  已构造 entry、拒绝排队 opens），调用方与 admission 链都在预算内 settle；
+  超时 entry 的底层异步工作可能迟到恢复，因此路由事实固化在每个 entry 自己
+  的 Cordis root context，connection 收到显式 basePath，绝不共享页面级可变
+  旋钮；dispose 作为取消信号阻止迟到 mount，并重复 root sweep。任务先
+  settle 时清除计时器，成功 boot 不会被过期计时器误取消。
+- **dispose 串行化（2026 audit M1）** —— `AppWebEntry.dispose()` 是异步
+  teardown：同 ID 重 boot 必须先 await 旧 teardown 完成（pendingDisposes），
+  同 entry 重复 dispose 共享同一 Promise、不会用已完成 Promise 覆盖真实
+  teardown；shell 在异步 boot 开始/取消时预留 producer generation floor，
+  runtime 与 snapshot producer 均携带显式 boot generation，旧 ctx 的迟到
+  注册/report/clear 均不能抢占或清掉新 shell 的共享状态。
+- **exec 子进程退出等待（2026 audit M2）** —— 退出时 exec 子进程（systemd/
+  远端命令 ssh）与隧道子进程同款 SIGTERM→SIGKILL 升级，`disposeAsync` 等待
+  全部退出，SIGTERM 忽略型 ssh 不再残留孤儿进程。
+- **预热队列解卡（2026 audit M8）** —— 删除正在预热的实例时同步清除
+  inflight 标记并立即推进队列（此前卸载后 settle 被丢弃、标记永久残留，
+  预热队列整体卡死）。
+- **端口分配失败自动恢复（2026 audit M10）** —— 隧道本地端口瞬时分配失败
+  进入慢速周期重探（与 max-retry 同款），不再永久停在 error 等待人工。
+- **插件缺失可见化（2026 audit M6）** —— 宿主启动图通道失败（graph-unreachable/
+  not-injected）时 boot 仍成功但 settle 状态携带 `pluginDegraded`，实例视图
+  显示警告条（"部分插件未能加载"），不再与完全成功同态。
+- **搜索可见集语义修正（2026 audit M7）** —— `mergeSearchResults` 增加
+  `projectionReady`（`aggregateReady`）：投影就绪后可见集是权威，空集过滤
+  全部远程命中（archived/subagent/blank 不再回流可点击结果）；仅未就绪时
+  保留不过滤降级。
+- **主机保存补偿式原子性（2026 audit M9，2026 merge review 修正）** —— 新增
+  与编辑统一先提交并核验权威注册表，只有元数据确实落地才写密码；注册表
+  拒绝/抛错时密码保持不变，密码失败则回滚提交前完整注册表快照；回滚返回值
+  同样核验，静默拒绝或抛错时按权威注册表保留编辑态（不再被 duplicate 校验
+  拒绝）。主进程注册表保存也
+  改为 whole-set 校验：任一非法/kind 不匹配/重复 id 即整体拒绝，避免非法编辑
+  静默删除既有主机；加载旧文件仍容错丢弃并告警。
+- **architecture 合并安全审查修复（2026-08-28）** —— reaper 仅凭 pid 记录中
+  受管 CLI 的完整绝对路径、精确 `--profile web`/`--port` token、端口归属和
+  owner 死亡四重证据回收（basename/任意 `bin.ts` 均 fail-closed，身份不匹配
+  日志不回显无关进程 argv）；本地
+  start→stop→start 释放旧 single-flight 代次且迟到失败不能清新代；host-logs
+  写/压缩失败切新代，不再复活已删除 backing file；`stopped` 生命周期行只写
+  一次；fork parent-accounted 隐藏改为 3s first-observation 有界宽限，attach
+  部分成功最终显式落未分组；连接表单路径/长度门禁与 desktop 权威对齐；
+  CI/release action pin 增加离线一致性检查并修复无效 setup-node SHA。后续彻底
+  复审进一步收紧：本地 spawn 端口预检/TCP 就绪与 unary body 读取全链可取消；
+  transport 只注册 loopback HTTP；SSH 未终止行、捕获 stdout 与 stderr detail
+  均有增量内存上界；本地插件 pack 禁生命周期脚本且 pack/install 子进程纳入
+  will-quit 进程组/树回收；renderer 会话打开、聚合重试/来源删除及删除→同 ID
+  重建的 source-generation ABA、恢复 timer 与 quit 代次隔离；深链队列/协议注册、
+  Windows 本地路径、外部打开错误与设置副作用回滚均 fail-loud 且不向 renderer
+  泄露宿主路径；release concurrency 将 tag `vX` 与手动 version `X` 归到同一
+  写入组（不同版本仍可并行）。
+- **来源域键（2026 audit L2）** —— 双击 pending 与 blank-ghost 宽限按
+  `(serverId, sessionId)` 建键：克隆实例相同 UUID 跨来源点击/幽灵槽不再串
+  状态（跨来源双击改名仍工作——两次点击键到行所属来源）。
+- **IPC 镜像防漂移（2026 audit L3，最终审查强化）** ——
+  `ipc-surface-mirror.test.ts` 在方法集比对之外增加**字段集比对**（覆盖
+  manifest/chamber/gitWorktree/notifications 等辅助类型），并修复了三处
+  真实漂移（preload 两个 manifest 缺 `chamber`、renderer
+  `ChamberInjectionState` 缺 `gitWorktree`、settings `ChamberSettings` 缺
+  `notifications`）。
+- **远端插件 apply 主进程确认（2026 final review）** ——
+  `desktop_ssh_plugin_apply` 的 registry add/remove 增加主进程确认对话框
+  （远端持久执行面，与本地安装同门控）；`SshPluginApplyIpcResult` 增补
+  `{ok:true,cancelled:true}`（三处镜像同步），同步/添加视图两处消费方处理
+  取消为跳过而非误报。
+- **退出守卫（2026 final review）** —— `trustedIpc` 在 quit 在途时拒绝全部
+  IPC（`app_quitting`）；transport-manager `dispose()` 置内部门，`exec()`/
+  `connect()` 退出后拒绝新工作（不再有 quit 在途理论孤儿 spawn 窗口）。
+- **双端 materialize 分类一致性（2026 final review）** —— 客户端 `isPathSpec`
+  的 file:/link: 前缀改为大小写不敏感，与主进程 `isMaterializeSpec` 对齐
+  （远端 manifest 大写 `FILE:`/`LINK:` 不再双端分类偏差）。
+- **遗留问题修复轮（2026 cleanup-review）** —— `settings-set` 校验失败
+  形状统一为 `{ok:false,error}`；隧道 stdout 入环形日志前同样过提供者脱敏；
+  `writeSettingsFile` 补 fsync+显式 0600（原子写纪律对齐）；`bundle-dsh` 的
+  默认 dsh 版本改为**从已提交 runtime lockfile 派生**（与 release.yml 的
+  硬编码不再可能漂移）；管理面 body 补 10s 逐块 idle 超时（不再占连接槽到
+  35s 总限）；pid 记录与 seed overlay 原子写补 fsync；shell.ts 的
+  `pluginDegraded` 声明移到闭包之前（消除 TDZ 脆弱点）；sidebar 拖拽提交
+  改用活 store/活 roster（两处排序模式 + server 拖拽）；connections 保存/
+  删除改为**对权威注册表读-改-写**（消除渲染闭包快照竞态）；git 未注册工作树
+  删除前刷新失败显式上浮（不再吞错）；镜像测试 `stripComments` 行首锚定
+  （字符串字面量内 `//` 不再误删）。实机冒烟仍待真实环境。
+- **独立检查轮修复（2026 independent-review）** —— 桌面：askpass 助手改为
+  密码不变即复用（不再每次删除重建——并发隧道+exec 互删对方在用助手的虚假
+  认证失败竞态消除），清密码/删实例即清除已落盘助手；`desktop_ssh_seed_
+  host_graph` 手动路径补主进程确认（自动路径不受影响），结果类型增补
+  `{ok,cancelled}`（三处镜像同步 + UI 静默处理）；`connect`/`instances_set`
+  对未知/非法输入收敛为 null/现状形状（不再 throw→rejection）；`TransportRun
+  Command` 收窄为实际可分发集。验证体系：release.yml 新增 `validation` job
+  并接入两个打包 job 的 needs（tag 发布无法再绕过验证门禁）；ci.yml 补桌面
+  构建子步骤（control-plane/preload/host-graph-package）与第三方声明一致性
+  校验；shell 串行化测试消除假阴性（B 清零旋钮 + 宏任务让出）；spawn 清理
+  测试补进程表级断言（pid 日志方案与 SIGKILL 竞态，改用 ps）；镜像测试补
+  Update/SettingsSurface 金基线；host 包构建校验产物存在；boot-rows 补
+  extras 去重边界测试；`instance-mutation-values` 登记归位 test:sidebar。
+  文档：05 §7.6 白名单与 13 §7.2 对齐、02 §3.4 补 dev 路径身份、09 §4 基线
+  标注历史、desktop README 退出语义/字段清单、spawn-dsh 注释修正。
+- **全新审查轮修复（2026 fresh-review）** —— 控制面：spawn 补 `error` 监听
+  （ENOENT/Electron fuse 等异步 spawn 失败不再以未捕获异常崩溃整个进程）；
+  反代 body 内存预算持有到上游请求完成（原先 readBody 后即释放，64×300MiB
+  并发可耗尽进程内存）；进入 starting 前清 `dshPort`（投影不再短暂携带死
+  端口）；`noteHealthFailure` 补 `signalCode` 死亡判定。类型面：settings-
+  connections 的整套 IPC 声明改为从 renderer `global.d.ts` **re-export**（消除
+  三处手工镜像漂移源）；settings-bridge 的 `chamber-bridge` 镜像对齐真实
+  `ChamberServerAggregate`（删幻影 `hint`、补 workspaces/aggregate*/runtime）；
+  `connections-section` 镜像补真实消费的 `pluginDiagnostics`；layout
+  view-prefs 镜像补 4 个缺失可选字段；preload 暴露值归一化为 `null`；
+  enter-row 采纳校验 wire 值（越界回退默认行为）；`composeBootRows` 对
+  extraIds 去重；镜像测试适配 re-export 模型（9/9）。
+- **第三轮审查修复（2026 round-3 review）** —— 控制面：存活判定补
+  `signalCode`（信号杀死的子进程不再误报存活）；restart-exhausted 落地前
+  终止残留子进程并清 `child/dshPort`（与「stops automatically」契约对齐）；
+  `setState` 的 `error` 显式删除（内存/磁盘投影一致）；`→ stopped` 终态行
+  经 `setState` 单一路径落滚动日志；reaper 身份匹配兼容源码 tsx 启动路径；host-logs 改同步追加写
+  + 内存环带压缩（消除异步流缓冲/异步打开与压缩 rename 的竞态——原先会重复并
+  交错内容）并修空行分隔；offset 越界返回空；
+  proxy 对带 body 的 GET/HEAD 排空（keep-alive 复用不串帧）。桌面/客户端：
+  save-host 密码失败后的回滚抛错不再串扰报错文案（保留密码错误）；连接客户端
+  `stop()` 现在中止在途退避睡眠；App 回收 effect 同步裁剪其余 per-instance
+  refs。验证体系：CI tag 推送（v*）触发全量验证链 + host 包 esbuild 构建进
+  入 push 路径；shell 新增跨实例串行 boot 测试；镜像测试补 25 方法金基线。
+- **第二轮审查加固（2026 round-2 review）** —— 镜像测试升级为**类型敏感**
+  比对（字段名之外还比对 `name:type` 签名，覆盖 PluginApplyResult /
+  ChamberNotificationSettings / ChamberSettings 等）并修复解析脆弱性
+  （`\b` 锚定防 `ChamberSettingsStatus` 前缀错配）；settings-connections 的
+  `Window.dshChamber` 改导入权威 `DshChamberBridge`（不再自述镜像却缺 4 字段）；
+  transport-manager 的 M2 测试改为真验证 `disposeAsync` 在 SIGKILL 前不 settle、
+  新增 M10「分配期间断连不臂慢重探」守卫用例；shell 迟到 settle 测试时序裕量
+  加宽（80ms 预算 / 250ms 延迟）。
+- **session runtime 导出收敛（2026 audit M12）** —— 控制面 index 只 re-export
+  生产符号（call/RpcBusinessError/RpcTransportError），respond/openEventStream
+  不再对外（测试仍经 dsh-client.ts 直连）。
+- **审计复核登记（2026 audit S19）** —— 以下审计项经复核确认**已修复、
+  无需改动**：H7（Origin:null 已被 corsFor 拒绝，403）、M3a（proxy 空闲
+  超时每 chunk 刷新、45s）、M5（pnpm pack/本地插件 CLI 均为异步 runChild）、
+  M11（uncaughtException fail-closed 退出）、L1（layout WeakRef 扇出）、
+  L4（CI 全部 action 以 commit SHA 固定）。
+- **打包完整性** —— `notifications.ts` 补入 electron-builder `build.files`
+  （此前打包产物缺该模块会启动失败）；preload 编译改为临时目录 emit 只搬入
+  `preload.cjs`（消除 3 个死文件进 asar）；`build.files` 排除 `dist/.vite/**`。
+- **死依赖清理** —— 移除控制面 `@simplewebauthn/server`（v1 认证面移除后的
+  残留），锁文件与第三方声明同步。
+
+### 变更
+
+- **文档收口** —— `docs/progress/STATUS.md` 重写为只记录未完成/部分完成项与
+  范围偏差（已实现基线以 git 历史与 CHANGELOG 为准）；AGENTS.md 与设计文档
+  同步（open-in 包、ws-frames 测试、打包完整性 checklist 新增）。
+
 ## [0.1.5] - 2026-08-23
 
 ### 新增
@@ -264,6 +468,8 @@
 
 v1 范围：无认证/审计面（仅 loopback 控制面）。
 
+[0.1.5]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.5
+[0.1.4]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.4
 [0.1.3]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.3
 [0.1.2]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.2
 [0.1.1]: https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.1.1

@@ -253,9 +253,9 @@ export default defineConfig({
       { find: /^@dsh-chamber\/dsh-client-ui-settings-bridge$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/index.ts') },
       { find: /^@dsh-chamber\/dsh-client-ui-settings-bridge\/client$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/client/index.ts') },
       // The settings shell embeds the connections section component directly
-      // (sub-path source import — explicit alias so the resolution does not
-      // ride the generic npm fallback).
-      { find: /^@dsh-chamber\/dsh-client-ui-settings-connections\/src\/client\/ConnectionsSection\.tsx$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx') },
+      // (stable `./section` exports subpath — A6; explicit alias so the
+      // resolution does not ride the generic npm fallback).
+      { find: /^@dsh-chamber\/dsh-client-ui-settings-connections\/section$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx') },
       // CSS `@import` of workspace stylesheets bypasses the resolveId plugin
       // container (vite's back-compat CSS resolver runs alias + node
       // resolution only), and the packages' `./styles` export points at the

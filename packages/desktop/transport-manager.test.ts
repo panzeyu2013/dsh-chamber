@@ -10,8 +10,8 @@
  * migration, duplicate-id dedup), the provider exec channel
  * (start/stop/is-active command shapes, serviceName whitelist, timeout,
  * serviceActive projection, auth-failure semantics), line-buffered stderr
- * redaction, per-child guards, the direct-endpoint provider mode, and the
- * endpoint identity verification (a port that merely accepts TCP is never
+ * redaction, per-child guards, provider environment injection, and endpoint
+ * identity verification (a port that merely accepts TCP is never
  * ready; a real dsh host.describe handshake is required — covered against
  * real loopback HTTP servers).
  */
@@ -27,9 +27,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
 import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
+import { CHILD_LINE_MAX_CHARS } from './bounded-lines.ts'
 import type { TransportManagerOptions } from './transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
-import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
+import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
 import { sshProvider, verifyDshEndpoint, probeClientGraphLive, probeGitWorktreeLive, redactSshStderr, SERVER_ALIVE_INTERVAL_SECONDS, SERVER_ALIVE_COUNT_MAX } from './ssh-provider.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -83,7 +84,7 @@ class FakeChild extends EventEmitter implements SpawnedProcess {
   }
 }
 
-function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult>; allocatePort?: () => Promise<number> } = {}) {
+function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult>; allocatePort?: () => Promise<number>; logger?: { log?(message: string): void; warn?(message: string): void; error?(message: string): void } } = {}) {
   const spawnCalls: Array<{ command: string; args: readonly string[]; options: SpawnOptions; child: FakeChild }> = []
   const children: FakeChild[] = []
   const spawnTimes: number[] = []
@@ -98,7 +99,7 @@ function makeManager(t: TestContext, overrides: { options?: TransportManagerOpti
       return child
     },
     instancesFile: join(tempDir(t), 'ssh-instances.json'),
-    logger: silentLogger,
+    logger: overrides.logger ?? silentLogger,
     portProbe: async () => probeOk,
     // Fake the provider's own endpoint verification when it has one (the
     // real ssh provider would open a real HTTP connection to the fake
@@ -233,7 +234,7 @@ test('renderer lifecycle proofs are never accepted into or persisted with regist
   assert.equal(readFileSync(file, 'utf8').includes('sourceFingerprint'), false)
 })
 
-test('saveInstances drops invalid entries loudly and disconnects removed instances', t => {
+test('saveInstances atomically replaces a valid set and disconnects removed instances', t => {
   const { manager } = makeManager(t)
   manager.connect('s1')
   const saved = manager.saveInstances([{ id: 'other', label: 'x', host: 'h', remotePort: 22 }])
@@ -435,25 +436,40 @@ test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`'
   if (result.ok) assert.equal(result.status.serviceActive, true)
 })
 
-test('invalid sshPort values are dropped from the registry on save', () => {
+test('invalid sshPort rejects the whole save without creating a partial registry', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  assert.throws(() => manager.saveInstances([
     { id: 'zero', label: 'x', host: 'h', sshPort: 0, remotePort: 3080 },
     { id: 'huge', label: 'y', host: 'h2', sshPort: 70000, remotePort: 3080 },
     { id: 'float', label: 'z', host: 'h3', sshPort: 22.5, remotePort: 3080 },
     { id: 'ok', label: 'w', host: 'h4', sshPort: 2202, remotePort: 3080 },
+  ]), /instance at index 0 is invalid/)
+  assert.deepEqual(manager.listInstances(), [])
+  assert.equal(existsSync(file), false)
+})
+
+test('an invalid edit cannot delete the existing host from memory or disk', () => {
+  const dir = tempDir()
+  const file = join(dir, 'ssh-instances.json')
+  const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
+  const before = manager.saveInstances([
+    { id: 's1', label: 'home', host: 'home.example.com', remotePort: 3080, remoteDshHome: '/srv/dsh' },
   ])
-  assert.deepEqual(saved.map(entry => entry.id), ['ok'])
-  assert.equal(saved[0].sshPort, 2202)
+  assert.throws(
+    () => manager.saveInstances([{ ...before[0], remoteDshHome: '/srv/../tmp' }]),
+    /instance at index 0 is invalid/,
+  )
+  assert.deepEqual(manager.listInstances(), before)
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), before)
 })
 
 test('option-injection guards: id/host/user must match the whitelists (no leading -)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  assert.throws(() => manager.saveInstances([
     { id: 'bad id', label: 'x', host: 'h', remotePort: 3080 },
     { id: 'slash/id', label: 'x', host: 'h', remotePort: 3080 },
     { id: 'local', label: 'x', host: 'h', remotePort: 3080 },
@@ -461,9 +477,8 @@ test('option-injection guards: id/host/user must match the whitelists (no leadin
     { id: 'dash-user', label: 'x', host: 'h', user: '-o', remotePort: 3080 },
     { id: 'spaces', label: 'x', host: 'h two words', remotePort: 3080 },
     { id: 'good', label: 'x', host: '192.168.1.10', user: 'root', remotePort: 3080 },
-  ])
-  assert.deepEqual(saved.map(entry => entry.id), ['good'])
-  assert.equal(saved[0].host, '192.168.1.10')
+  ]), /instance at index 0 is invalid/)
+  assert.deepEqual(manager.listInstances(), [])
 })
 
 test('hyphenated hostnames and bracketed IPv6 literals are accepted', () => {
@@ -473,9 +488,13 @@ test('hyphenated hostnames and bracketed IPv6 literals are accepted', () => {
   const saved = manager.saveInstances([
     { id: 'hy', label: 'x', host: 'my-server.example.com', remotePort: 3080 },
     { id: 'v6', label: 'y', host: '[::1]', remotePort: 3080 },
-    { id: 'v6zone', label: 'z', host: '[fe80::1%eth0]', remotePort: 3080 },
   ])
   assert.deepEqual(saved.map(entry => entry.id), ['hy', 'v6'])
+  assert.throws(
+    () => manager.saveInstances([...saved, { id: 'v6zone', label: 'z', host: '[fe80::1%eth0]', remotePort: 3080 }]),
+    /instance at index 2 is invalid/,
+  )
+  assert.deepEqual(manager.listInstances(), saved)
 })
 
 test('ssh stderr lines with key/passphrase material are redacted from the ring buffer', async t => {
@@ -491,6 +510,28 @@ test('ssh stderr lines with key/passphrase material are redacted from the ring b
   assert.ok(lines.some(entry => entry.message === '[ssh material redacted]'), 'passphrase line redacted')
   assert.ok(lines.every(entry => !entry.message.includes('.ssh/') && !entry.message.includes('id_ed25519')), 'no key path in logs')
   assert.ok(lines.some(entry => entry.message.includes('Permission denied')), 'non-sensitive stderr kept')
+})
+
+test('a throwing provider classifier drops output without logging its sensitive input', async t => {
+  const warnings: string[] = []
+  const throwingProvider: TransportProvider = {
+    ...sshProvider,
+    classifyStderr: () => { throw new Error('classifier failed') },
+  }
+  const { manager, children, spawnCalls } = makeManager(t, {
+    provider: throwingProvider,
+    logger: { warn: message => warnings.push(message) },
+  })
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  const secret = "Enter passphrase for key '/Users/private/.ssh/id_ed25519'"
+  children[0].stdout.emit('data', Buffer.from(`${secret}\n`))
+  children[0].stderrWrite(`${secret}\n`)
+
+  const visible = [...warnings, ...manager.logs('s1').map(entry => entry.message)]
+  assert.ok(visible.some(line => line.includes('output dropped')))
+  assert.ok(visible.every(line => !line.includes(secret) && !line.includes('.ssh/')))
+  manager.disconnect('s1')
 })
 
 test('redactSshStderr covers key-path diagnostics without over-redacting banners', () => {
@@ -1245,6 +1286,33 @@ test('stderr redaction reassembles lines split across chunks (no bypass)', async
   assert.ok(lines.every(entry => !entry.message.includes('/.ssh') || entry.message === '[ssh material redacted]'), 'no raw key-path fragment in logs')
 })
 
+test('stdout redaction also reassembles lines split across chunks', async t => {
+  const { manager, children, spawnCalls, setProbe } = makeManager(t)
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  children[0].stdout.emit('data', Buffer.from('debug1: identity file /Users/x/.s'))
+  children[0].stdout.emit('data', Buffer.from('sh/id_ed25519 type 3\n'))
+  await sleep(30)
+  const lines = manager.logs('s1')
+  assert.ok(lines.some(entry => entry.message === '[ssh material redacted]'))
+  assert.ok(lines.every(entry => !entry.message.includes('/.ssh') || entry.message === '[ssh material redacted]'))
+})
+
+test('unterminated transport output is bounded, dropped, and resumes at the next line', async t => {
+  const { manager, children, spawnCalls, setProbe } = makeManager(t)
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => spawnCalls.length === 1)
+  children[0].stderrWrite('x'.repeat(CHILD_LINE_MAX_CHARS + 1))
+  children[0].stderrWrite('\nordinary line\n')
+  await sleep(30)
+  const lines = manager.logs('s1')
+  assert.ok(lines.some(entry => entry.message.includes('output line dropped')))
+  assert.ok(lines.some(entry => entry.message === 'ordinary line'))
+  assert.ok(lines.every(entry => !entry.message.includes('xxxxx')))
+})
+
 test('disconnect stops the process (SIGTERM) and lands on idle', async t => {
   const { manager, children, spawnCalls, setProbe } = makeManager(t)
   setProbe(true)
@@ -1402,9 +1470,13 @@ test('is-active distinguishes unit-not-found and ssh-exec failures from inactive
 })
 
 test('registry refuses an invalid serviceName before it can reach exec', async t => {
-  const { manager, spawnCalls } = makeManager(t, {
-    instances: [{ ...EXEC_INSTANCE, serviceName: 'bad;rm -rf /' }],
-  })
+  const { manager, spawnCalls } = makeManager(t)
+  const before = manager.listInstances()
+  assert.throws(
+    () => manager.saveInstances([...before, { ...EXEC_INSTANCE, serviceName: 'bad;rm -rf /' }]),
+    (error: unknown) => (error as { code?: string }).code === 'ssh_instances_invalid',
+  )
+  assert.deepEqual(manager.listInstances(), before)
   const result = await manager.exec('s2', 'start')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /instance not found/)
@@ -1577,18 +1649,16 @@ test('a replaced child\u2019s late spawn error never failTerminals the fresh tra
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'fresh transport ready')
 })
 
-test('saveInstances dedups duplicate ids (first wins) so the file never disagrees with the set', () => {
+test('saveInstances rejects duplicate ids atomically', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
+  assert.throws(() => manager.saveInstances([
     { id: 's1', label: 'first', host: 'a.example.com', remotePort: 2222 },
     { id: 's1', label: 'second', host: 'b.example.com', remotePort: 2222 },
-  ])
-  assert.equal(saved.length, 1)
-  assert.equal(saved[0].label, 'first')
-  const onDisk = JSON.parse(readFileSync(file, 'utf8'))
-  assert.deepEqual(onDisk, saved)
+  ]), /duplicate instance id at index 1/)
+  assert.deepEqual(manager.listInstances(), [])
+  assert.equal(existsSync(file), false)
 })
 
 test('loadInstances drops duplicate persisted ids loudly (first wins)', () => {
@@ -1604,95 +1674,32 @@ test('loadInstances drops duplicate persisted ids loudly (first wins)', () => {
   assert.equal(instances[0].label, 'first')
 })
 
-/** A process-less DIRECT ENDPOINT provider: the abstraction proof. */
-const fakeEndpointProvider: TransportProvider = {
-  kind: 'fake',
-  validateSpec(input: unknown): TransportInstanceSpec | null {
-    if (input === null || typeof input !== 'object') return null
-    const record = input as Record<string, unknown>
-    if (typeof record.id !== 'string' || typeof record.label !== 'string'
-      || typeof record.host !== 'string' || typeof record.remotePort !== 'number') return null
-    if (record.kind !== undefined && record.kind !== null && record.kind !== 'fake') return null
-    return {
-      id: record.id,
-      label: record.label,
-      kind: 'fake',
-      host: record.host,
-      user: null,
-      sshPort: null,
-      remotePort: record.remotePort,
-      serviceName: null,
-      remoteDshHome: null,
-    }
-  },
-  // no buildStartArgs → direct endpoint mode
-  probeTarget: spec => ({ host: 'fake.local', port: spec.remotePort }),
-  endpointUrl: spec => `http://fake.local:${spec.remotePort}`,
-  classifyStderr: line => ({ log: line, terminalAuth: false, enoent: false }),
-  // no exec → exec returns an explicit unsupported error
-}
-
-test('direct-endpoint provider: no child, probe-driven ready, endpoint URL, kind routing', async t => {
-  const { manager, spawnCalls, setProbe } = makeManager(t, {
-    provider: fakeEndpointProvider,
-    instances: [{ id: 'f1', label: 'tailnet-host', kind: 'fake', host: 'host1.tailnet', remotePort: 8080 }],
-  })
-  setProbe(false)
-  const connecting = manager.connect('f1')!
-  assert.equal(connecting.phase, 'connecting')
-  assert.equal(spawnCalls.length, 0, 'direct endpoint mode spawns no process')
-  setProbe(true)
-  await waitFor(() => manager.status('f1')!.phase === 'ready', 3000, 'endpoint ready')
-  const status = manager.status('f1')! as StatusWithNoUrlLeak
-  assert.equal(status.kind, 'fake')
-  assert.equal(status.localPort, null)
-  assert.equal(status.localUrl, undefined)
-  assert.equal(manager.readyUrl('f1'), 'http://fake.local:8080')
-  // Disconnect lands on idle and leaves no child behind.
-  manager.disconnect('f1')
-  assert.equal(manager.status('f1')!.phase, 'idle')
-  assert.equal(manager.readyUrl('f1'), null)
-})
-
-test('direct-endpoint provider: probe failure lands on degraded and reconnects (no child to kill)', async t => {
-  const { manager, setProbe } = makeManager(t, {
-    provider: fakeEndpointProvider,
-    options: { readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 10, retryMaxMs: 40 },
-    instances: [{ id: 'f2', label: 'flaky', kind: 'fake', host: 'flaky.tailnet', remotePort: 9090 }],
-  })
-  setProbe(false)
-  manager.connect('f2')
-  await waitFor(() => manager.status('f2')!.phase === 'degraded', 3000, 'degraded after timeout')
-  setProbe(true)
-  await waitFor(() => manager.status('f2')!.phase === 'ready', 3000, 'reconnected ready')
-  assert.equal(manager.readyUrl('f2'), 'http://fake.local:9090')
+// Direct-endpoint mode was removed: every provider owns a local tunnel.
+test('kind mismatches reject saves atomically while load-time recovery still drops them', () => {
+  const dir = tempDir()
+  const file = join(dir, 'ssh-instances.json')
+  const manager = createTransportManager({ provider: fakeEnvProvider, instancesFile: file, logger: silentLogger })
+  assert.throws(() => manager.saveInstances([
+    { id: 'wrong', label: 'wrong kind', kind: 'fake-env' as unknown as TransportKind, host: 'h.example.com', remotePort: 22 },
+    { id: 'right', label: 'right kind', kind: 'ssh', host: 'x.tailnet', remotePort: 8080 },
+  ]), /instance at index 0 is invalid/)
+  assert.deepEqual(manager.listInstances(), [])
+  writeFileSync(file, JSON.stringify([
+    { id: 'wrong-two', label: 'wrong kind', kind: 'fake-env', host: 'h.example.com', remotePort: 22 },
+  ]))
+  const reopened = createTransportManager({ provider: fakeEnvProvider, instancesFile: file, logger: silentLogger })
+  assert.deepEqual(reopened.loadInstances().map(entry => entry.id), [])
 })
 
 test('exec for a provider without an exec channel is an explicit error', async t => {
   const { manager, spawnCalls } = makeManager(t, {
-    provider: fakeEndpointProvider,
-    instances: [{ id: 'f3', label: 'noexec', kind: 'fake', host: 'x.tailnet', remotePort: 8080 }],
+    provider: fakeEnvProvider,
+    instances: [{ id: 'f3', label: 'noexec', kind: 'ssh', host: 'x.tailnet', remotePort: 8080 }],
   })
   const result = await manager.exec('f3', 'start')
   assert.equal(result.ok, false)
-  if (!result.ok) assert.match(result.error, /not supported by transport kind fake/)
+  if (!result.ok) assert.match(result.error, /not supported by transport kind ssh/)
   assert.equal(spawnCalls.length, 0)
-})
-
-test('entries whose kind mismatches the provider kind are dropped on save and load', () => {
-  const dir = tempDir()
-  const file = join(dir, 'ssh-instances.json')
-  const manager = createTransportManager({ provider: fakeEndpointProvider, instancesFile: file, logger: silentLogger })
-  const saved = manager.saveInstances([
-    { id: 'ssh-one', label: 'wrong kind', kind: 'ssh', host: 'h.example.com', remotePort: 22 },
-    { id: 'f4', label: 'right kind', kind: 'fake', host: 'x.tailnet', remotePort: 8080 },
-  ])
-  assert.deepEqual(saved.map(entry => entry.id), ['f4'])
-  writeFileSync(file, JSON.stringify([
-    { id: 'ssh-two', label: 'wrong kind', kind: 'ssh', host: 'h.example.com', remotePort: 22 },
-  ]))
-  const reopened = createTransportManager({ provider: fakeEndpointProvider, instancesFile: file, logger: silentLogger })
-  assert.deepEqual(reopened.loadInstances().map(entry => entry.id), [])
 })
 
 test('a pending SIGKILL escalation for one child survives another child\u2019s failure', async t => {
@@ -1729,17 +1736,17 @@ test('disposeAsync SIGTERMs, SIGKILLs and settles an in-flight exec child that i
 
 /** A tunnel provider whose buildStartEnv injects an askpass-style env. */
 const fakeEnvProvider: TransportProvider = {
-  kind: 'fake-env',
+  kind: 'ssh',
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (input === null || typeof input !== 'object') return null
     const record = input as Record<string, unknown>
     if (typeof record.id !== 'string' || typeof record.label !== 'string'
       || typeof record.host !== 'string' || typeof record.remotePort !== 'number') return null
-    if (record.kind !== undefined && record.kind !== null && record.kind !== 'fake-env') return null
+    if (record.kind !== undefined && record.kind !== null && record.kind !== 'ssh') return null
     return {
       id: record.id,
       label: record.label,
-      kind: 'fake-env',
+      kind: 'ssh',
       host: record.host,
       user: null,
       sshPort: null,
@@ -1756,7 +1763,7 @@ const fakeEnvProvider: TransportProvider = {
 test('a provider buildStartEnv is merged over process.env for the transport spawn', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {
     provider: fakeEnvProvider,
-    instances: [{ id: 'e1', label: 'envhost', kind: 'fake-env', host: 'env.example.com', remotePort: 8080 }],
+    instances: [{ id: 'e1', label: 'envhost', kind: 'ssh', host: 'env.example.com', remotePort: 8080 }],
   })
   setProbe(true)
   manager.connect('e1')
@@ -1777,7 +1784,7 @@ test('disposeAuth is called when a live transport is disconnected', async t => {
   }
   const { manager, setProbe } = makeManager(t, {
     provider,
-    instances: [{ id: 'e2', label: 'envhost2', kind: 'fake-env', host: 'env2.example.com', remotePort: 8080 }],
+    instances: [{ id: 'e2', label: 'envhost2', kind: 'ssh', host: 'env2.example.com', remotePort: 8080 }],
   })
   setProbe(true)
   manager.connect('e2')
@@ -1793,7 +1800,7 @@ test('a throwing provider buildStartEnv lands on a loud error, never a stuck con
   }
   const { manager, spawnCalls } = makeManager(t, {
     provider,
-    instances: [{ id: 'e3', label: 'envhost3', kind: 'fake-env', host: 'env3.example.com', remotePort: 8080 }],
+    instances: [{ id: 'e3', label: 'envhost3', kind: 'ssh', host: 'env3.example.com', remotePort: 8080 }],
   })
   manager.connect('e3')
   await waitFor(() => manager.status('e3')!.phase === 'error', 3000, 'terminal error')

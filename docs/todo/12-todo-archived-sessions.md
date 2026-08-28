@@ -14,19 +14,19 @@
 用户报告：所有已归档的 session 无法清除，且前端看不到。
 
 - **归档单向**：宿主 `WorkspaceRegistry.archiveSession`（`deepseek-harness/
-  packages/workspace/workspace/src/index.ts` L244-255）只做「追加进
+  packages/workspace/workspace/src/index.ts`）只做「追加进
   `archivedSessionIds` + 幂等去重」，无反向操作；宿主 wire（`api-proxy.ts`
   workspace 处理器）只有 `archiveSession`，无 unarchive/delete-session；整个
-  rpc-map 无会话删除方法。上游注释 `api/workspace.ts` L102 自述 unarchive 是
+  rpc-map 无会话删除方法。上游注释 `api/workspace.ts` 自述 unarchive 是
   "a future unarchive restores its position"——**上游缺口，不是 chamber bug**。
-- **归档不可见**：官方 `ui-workspace/src/client/tree.ts` L118-120 `sessionVisible`
-  与 chamber `packages/dsh-chamber-client-ui-sidebar/src/shared/derive.ts` L346-354
+- **归档不可见**：官方 `ui-workspace/src/client/tree.ts` 的 `sessionVisible`
+  与 chamber `packages/dsh-chamber-client-ui-sidebar/src/shared/derive.ts`
   同规则：`!archived.has(id)`；workspace 分组、未分组桶、搜索全部排除。归档行从
   App 层投影起就被丢弃（`ChamberServerAggregate` 无 archived 字段，05 §3）。
 - **数据未丢**：`sessions.list`（`listVisibleSessionSummaries`）与宿主
-  `sessions.search`（api-proxy.ts L2040-2110，授权集 = 可见摘要，不按归档过滤）
-  都返回归档会话；chamber 聚合已拉到 `archivedSessionIds`（`instance-api.ts`
-  L283-285），只是投影丢弃。归档集合持久化于 workspace 域全局态
+  `sessions.search`（api-proxy.ts，授权集 = 可见摘要，不按归档过滤）
+  都返回归档会话；chamber 聚合已拉到 `archivedSessionIds`（`instance-api.ts`），
+  只是投影丢弃。归档集合持久化于 workspace 域全局态
   （`<DSH_HOME>/profiles/web/**/workspace.json` 的 `global.archivedSessionIds`）。
 
 ## 2. 调研：成熟 harness（OpenCode/OpenChamber）范式
@@ -42,7 +42,7 @@
   分批加载 PAGE_SIZE=100）；侧边栏批量 archive/unarchive/delete
   （`useSidebarBulkActions`）；确认对话框（含子任务计数）；
   `SessionRetentionSettings`（默认动作 = 归档 or 删除）。动作实现全走
-  `OpencodeService`（`packages/ui/src/lib/opencode/client.ts` L581-633）的
+  `OpencodeService`（`packages/ui/src/lib/opencode/client.ts`）的
   `session.list/update/delete`。
 - **结论**：范式 = **harness 提供可逆归档 + 删除 + 归档可见的查询，manager 只做
   UI 与编排**。dsh 三项全缺，chamber 无法只靠前端补全。
@@ -87,7 +87,7 @@ interface ChamberServerAggregate {
 - 搜索：本地标题匹配允许命中归档桶（现有 `deriveLocalSearchMatches` 排除
   归档——归档视图用独立查询或参数放开）；远程内容搜索**直接复用**
   `sessions.search`（宿主不排除归档，官方过滤在客户端 derive——chamber 侧
-  归档视图不过滤即可，已核实 api-proxy.ts L2040-2110）。
+  归档视图不过滤即可，已核实 api-proxy.ts）。
 - blank / subagent 起源行不投影（沿用官方规则）。
 
 ### 4.3 侧边栏 UI（`packages/dsh-chamber-client-ui-sidebar`）
@@ -113,7 +113,7 @@ interface ChamberServerAggregate {
   （wire 序不可得），与 OpenChamber 按 `time.archived` 排序的语义近似。
 - 打开归档会话后 current 高亮：沿用既有 `server.runtime?.current` 通道，无需
   特殊处理；官方 workspaces service 对「当前会话被归档」会清除 selection
-  （`workspaces/service.ts` L342）——chamber 跟随投影即可，不重复实现。
+  （`workspaces/service.ts`）——chamber 跟随投影即可，不重复实现。
 - 断连来源：归档桶随聚合快照走同一生命周期（未连接来源无数据，只有分组头）。
 
 ## 5. 上游 wire 契约草案（C：根治，对齐 OpenCode 模型）

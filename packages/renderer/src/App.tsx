@@ -62,6 +62,7 @@ import { openInstanceSession, disposeAllShells, disposeInstanceShell, type Shell
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
+  AggregateRefreshQueue,
   invalidateRemovedAggregateSources,
   isSnapshotStale,
   planAggregateRefreshes,
@@ -366,6 +367,14 @@ export default function App() {
   const aggregateRequestOwnersRef = useRef<SourceOwnershipRegistry | null>(null)
   aggregateRequestOwnersRef.current ??= new SourceOwnershipRegistry()
   const aggregateFailuresRef = useRef<Record<string, number>>({})
+  const aggregateRetryTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const aggregateRefreshQueueRef = useRef(new AggregateRefreshQueue())
+  const clearAggregateRetry = useCallback((sourceId: string): void => {
+    const timer = aggregateRetryTimersRef.current.get(sourceId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    aggregateRetryTimersRef.current.delete(sourceId)
+  }, [])
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
@@ -656,6 +665,8 @@ export default function App() {
     // Identity edits deliberately reach this path even though the registry id
     // remains present; label/service/home-only edits do not retire the shell.
     for (const sourceId of retired) {
+      clearAggregateRetry(sourceId)
+      aggregateRefreshQueueRef.current.delete([sourceId])
       autoPrewarmedRef.current.delete(sourceId)
       chamberBridge.retireInstanceProducers(sourceId)
       disposeInstanceShell(sourceId)
@@ -713,6 +724,7 @@ export default function App() {
   }, [
     acknowledgeDeepLink,
     acknowledgeNotificationOpen,
+    clearAggregateRetry,
     reportDeepLinkAckFailure,
     reportNotificationAckFailure,
   ])
@@ -769,7 +781,6 @@ export default function App() {
    * （拖拽 commit 前的兜底快照可能晚于 refresh 拉取到达，造成陈旧排序）。
    */
   const aggregatePollRunningRef = useRef(false)
-  const retryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const refreshAggregate = useCallback(async (instanceId: string) => {
     const sourceOwner = sourceLifecyclesRef.current!.capture(instanceId)
     if (sourceOwner === null) return
@@ -780,6 +791,8 @@ export default function App() {
     try {
       const snapshot = await fetchInstanceSnapshot(getInstanceClient(instanceId))
       if (!stillOwns()) return
+      delete aggregateFailuresRef.current[instanceId]
+      clearAggregateRetry(instanceId)
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
@@ -805,15 +818,19 @@ export default function App() {
       const failures = aggregateFailuresRef.current[instanceId] ?? 0
       if (failures < AGGREGATE_RETRY_LIMIT) {
         aggregateFailuresRef.current[instanceId] = failures + 1
+        clearAggregateRetry(instanceId)
         const retryTimer = setTimeout(() => {
+          if (aggregateRetryTimersRef.current.get(instanceId) === retryTimer) {
+            aggregateRetryTimersRef.current.delete(instanceId)
+          }
           if (stillOwns()) void refreshAggregate(instanceId)
         }, AGGREGATE_RETRY_MS)
-        retryTimersRef.current.push(retryTimer)
+        aggregateRetryTimersRef.current.set(instanceId, retryTimer)
       } else {
-        aggregateFailuresRef.current[instanceId] = 0
+        delete aggregateFailuresRef.current[instanceId]
       }
     }
-  }, [refreshHealth])
+  }, [clearAggregateRetry, refreshHealth])
 
   /**
    * Run a bounded refresh wave: at most AGGREGATE_POLL_CONCURRENCY concurrent
@@ -821,19 +838,26 @@ export default function App() {
    * staleness watchdog so neither can burst N pulls or overlap each other.
    */
   const runBoundedAggregateWave = useCallback((sourceIds: string[]) => {
-    if (sourceIds.length === 0 || aggregatePollRunningRef.current) return
+    aggregateRefreshQueueRef.current.enqueue(sourceIds)
+    if (aggregateRefreshQueueRef.current.size === 0 || aggregatePollRunningRef.current) return
     aggregatePollRunningRef.current = true
     void (async () => {
-      let cursor = 0
-      const worker = async () => {
-        while (cursor < sourceIds.length) {
-          const sourceId = sourceIds[cursor]
-          cursor += 1
-          await refreshAggregate(sourceId)
-        }
-      }
       try {
-        await Promise.all(Array.from({ length: Math.min(AGGREGATE_POLL_CONCURRENCY, sourceIds.length) }, () => worker()))
+        while (aggregateRefreshQueueRef.current.size > 0) {
+          const queuedSourceIds = aggregateRefreshQueueRef.current.take()
+          let cursor = 0
+          const worker = async () => {
+            while (cursor < queuedSourceIds.length) {
+              const sourceId = queuedSourceIds[cursor]
+              cursor += 1
+              await refreshAggregate(sourceId)
+            }
+          }
+          await Promise.all(Array.from(
+            { length: Math.min(AGGREGATE_POLL_CONCURRENCY, queuedSourceIds.length) },
+            () => worker(),
+          ))
+        }
       } finally {
         aggregatePollRunningRef.current = false
       }
@@ -853,6 +877,7 @@ export default function App() {
     readyAggregateSourcesRef.current = refreshPlan.nextReady
     runBoundedAggregateWave(refreshPlan.refreshSourceIds)
     if (notReady.length > 0) {
+      aggregateRefreshQueueRef.current.delete(notReady)
       // A pull started in the dying generation must never restore an `ok`
       // aggregate after the authoritative transport state became not-ready.
       aggregateRequestOwnersRef.current!.retire(notReady)
@@ -916,8 +941,8 @@ export default function App() {
   }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
 
   useEffect(() => () => {
-    for (const timer of retryTimersRef.current) clearTimeout(timer)
-    retryTimersRef.current = []
+    for (const timer of aggregateRetryTimersRef.current.values()) clearTimeout(timer)
+    aggregateRetryTimersRef.current.clear()
   }, [])
   useEffect(() => {
     let cancelled = false

@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # Tag pushes (v*) run the SAME validation chain — a release cannot be
+    # published from an untested commit (2026 round-3 review: release.yml
+    # itself only packages, never validates).
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -17,12 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify workflow action pins
+        run: node scripts/verify-workflow-action-pins.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: lts/*
+          node-version: 22
           cache: pnpm
       # Bootstrap the vendor symlink tree BEFORE pnpm install: pnpm captures the
       # workspace snapshot before preinstall runs, so the links must already
@@ -45,16 +51,7 @@ jobs:
       - name: i18n pair consistency
         run: pnpm run verify:i18n
       - name: Control-plane unit tests
-        run: |
-          node packages/control-plane/test/protocol.ts
-          node packages/control-plane/test/storage.ts
-          node packages/control-plane/test/m1-dsh-client.ts
-          node packages/control-plane/test/host-logs.ts
-          node packages/control-plane/test/manager-api.ts
-          node packages/control-plane/test/instance-proxy.ts
-          node packages/control-plane/test/ws-frames.ts
-          node packages/control-plane/test/static-serving.ts
-          node packages/control-plane/test/host-graph-seed.ts
+        run: pnpm run test:control-plane
       - name: Desktop unit tests (transport / ssh)
         run: pnpm run test:desktop
       - name: Renderer shell unit tests
@@ -79,14 +76,34 @@ jobs:
           pnpm run test:client-web
           pnpm run test:connection
           pnpm run test:open-in
-      # SKIPs when the checkout carries no bundled dsh runtime — normal here,
-      # since only packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
-      # node_modules is never committed; the gate requires a real dsh CLI entry
-      # (2026-08 fix). A real SMOKE PASS happens in release.yml's build-macos
-      # job against the freshly bundled runtime.
+      # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
+      # dsh runtime — normal here, since only
+      # packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
+      # node_modules is never committed; the gate requires a real dsh CLI
+      # entry (2026-08 fix). The release path currently has NO smoke either:
+      # release.yml's build jobs only package and structurally verify the
+      # bundle (vendor/dsh presence + platform) — a smoke pass against the
+      # freshly bundled runtime is not wired up anywhere.
       - name: Smoke test
         run: pnpm run smoke
       - name: Renderer build
         run: pnpm run build:renderer
-      - name: Desktop preload build
-        run: pnpm --filter @dsh-chamber/desktop run build:preload
+      # Host-package esbuild bundles (dsh-host-client-graph / host-git-worktree
+      # dist/index.js) only used to build in release — their esbuild entry/
+      # external mapping is an independent failure mode, so the push path
+      # validates them too (2026 round-3 review).
+      - name: Host package builds
+        run: pnpm run build:host-packages
+      # Desktop packaging sub-steps (control-plane bundle / preload / host
+      # package) run in CI too — a PR breaking them must not wait for a
+      # release to surface (bundle:dsh stays release-only: it bakes the host
+      # platform's dsh runtime).
+      - name: Desktop build sub-steps
+        run: |
+          pnpm --filter @dsh-chamber/desktop run build:control-plane
+          pnpm --filter @dsh-chamber/desktop run build:preload
+          pnpm --filter @dsh-chamber/desktop run build:host-graph-package
+      # Third-party notices must track the installed dependency set; a
+      # stale committed file fails the push (2026 review).
+      - name: Third-party notices current
+        run: node scripts/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md

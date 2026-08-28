@@ -13,12 +13,13 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { call, respond, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
+import { call, RpcBusinessError, RpcTransportError, pendingStats } from '../src/dsh-client.ts'
 import { createLocalConnection } from '../src/local-connection.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { seedDshHomeDefaults } from '../src/index.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 
-const HOST = 'http://127.0.0.1:17510'
+const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
 /** A JSON Response body for the mock fetch. */
 function jsonResponse(body: unknown, status = 200): Response {
@@ -164,20 +165,56 @@ test('generation abort settles the in-flight unary with connection_offline', asy
   }
 })
 
-test('respond honors the generation signal (connection_offline)', async () => {
+test('generation abort during response-body read is not misclassified as a protocol error', async () => {
   const originalFetch = globalThis.fetch
-  const started = deferred()
+  const bodyStarted = deferred<void>()
   const generation = new AbortController()
-  globalThis.fetch = hangingFetch(() => started.resolve())
+  globalThis.fetch = async (_url, init) => {
+    return {
+      ok: true,
+      status: 200,
+      json: () => new Promise((_resolve, reject) => {
+        bodyStarted.resolve()
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+      }),
+    } as Response
+  }
   try {
-    const attempt = respond(HOST, { rpcId: 'server-minted-1', result: { ok: true, value: {} } }, {
-      generationSignal: generation.signal,
-      timeoutMs: null,
-    })
-    await started.promise
+    const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
+    await bodyStarted.promise
     generation.abort()
     await assert.rejects(attempt, error =>
-      error instanceof RpcTransportError && error.code === 'connection_offline')
+      error instanceof RpcTransportError && error.code === 'connection_offline' && error.status === 0)
+    assert.equal(pendingStats().size, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('a body completing after generation abort is never accepted as a live response', async () => {
+  const originalFetch = globalThis.fetch
+  const bodyStarted = deferred<void>()
+  const body = deferred<unknown>()
+  const generation = new AbortController()
+  let rpcId = ''
+  globalThis.fetch = async (_url, init) => {
+    rpcId = JSON.parse(init!.body as string).rpcId
+    return {
+      ok: true,
+      status: 200,
+      json: async () => {
+        bodyStarted.resolve()
+        return body.promise
+      },
+    } as Response
+  }
+  try {
+    const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
+    await bodyStarted.promise
+    generation.abort()
+    body.resolve({ type: 'server-response', rpcId, result: { ok: true, value: {} } })
+    await assert.rejects(attempt, error =>
+      error instanceof RpcTransportError && error.code === 'connection_offline' && error.status === 0)
     assert.equal(pendingStats().size, 0)
   } finally {
     globalThis.fetch = originalFetch
@@ -295,7 +332,7 @@ test('a spawn failure is fail-loud: state lands on error and start() rejects', a
   assert.match(connection.getError() ?? '', /port occupied/)
 })
 
-test('a catalog write failure prevents publishing the next lifecycle state', async () => {
+test('a catalog write failure never blocks the lifecycle state machine (M13)', async () => {
   let spawns = 0
   const connection = createLocalConnection({
     stateDir: '/tmp/none',
@@ -311,9 +348,13 @@ test('a catalog write failure prevents publishing the next lifecycle state', asy
       describeCapabilities: mockDescribe().describeCapabilities,
     },
   })
-  await assert.rejects(connection.start(), /catalog disk unavailable/)
-  assert.equal(connection.getState(), 'stopped')
-  assert.equal(spawns, 0)
+  // Runtime projections (status/dshPort/error) persist BEST-EFFORT: a disk
+  // failure is loud in the log but must never block the in-memory machine
+  // (2026 audit M13; previously this test asserted the write-through reject).
+  const row = await connection.start()
+  assert.equal(connection.getState(), 'ready', 'the machine advances despite the persist failure')
+  assert.equal(spawns, 1)
+  assert.equal(row?.connectionId, 'local')
 })
 
 test('health failures count into degraded; success resets; threshold triggers a restart', async () => {

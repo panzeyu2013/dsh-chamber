@@ -44,7 +44,7 @@
 | 更新产物 | 显式关闭：`dmg.writeUpdateInfo: false`、`nsis.differentialPackage: false` | 实现前 desktop package.json `build` |
 | 发布 feed | `--publish=never`，每平台只传安装器（mac dmg / win exe）——「no zip/blockmap sidecars」 | 实现前 `.github/workflows/release.yml` |
 | 签名 | macOS **ad-hoc**（afterPack 钩子）；Windows 未签名 | `after-pack-adhoc-sign.mjs`、STATUS.md |
-| 版本 | chamber 版本分布于根/desktop/control-plane/renderer/cli 五包；4 个 chamber 插件包跟随 vendored dsh | 各 package.json |
+| 版本 | chamber 版本分布于根/desktop/control-plane/renderer/cli 五包；4 个 chamber 插件包跟随 vendored dsh（**实现前基线**；现状见 §8：12 个 `@dsh-chamber/*` 包一致 bump） | 各 package.json |
 
 ## 2. 目标与边界
 
@@ -166,6 +166,10 @@
     PublishManager 仅在 `isPublish` 时执行 `createUpdateInfoTasks`）——发布必须走
     `--publish`。
 - **`release.yml` 双 leg 改造（已实现）**：
+  - CI/release 中 `actions/checkout`、`pnpm/action-setup`、`actions/setup-node`
+    一律钉死完整 40 位 commit SHA；`pnpm run verify:workflows` 离线核对两份
+    workflow 的 pin 完整且逐 action 一致，validation job 在安装依赖前执行，
+    防无效/漂移 SHA 让发布验证腿根本无法启动；
   - build 步骤改 `--publish=always`（`GH_TOKEN`）——electron-builder 把全部产物
     **包括 feed 文件**上传进 create-release 创建的 draft release（softprops 上传步骤
     移除；create-release 建 draft + finalize 翻转公开的流程不变）；
@@ -174,8 +178,11 @@
   - workflow_dispatch 的 `version` 输入必须等于 `packages/desktop/package.json`
     版本（create-release 先断言，防 electron-builder 上传到幻影 v<package.json>
     draft 而 finalize 空 release）；draft 的 `prerelease` 由版本 prerelease 后缀
-    推导；`dry_run` 时回退 `--publish=never`（build-only 检查；create-release 仍会
-    建一个空 draft——与既有行为一致，已在 workflow 输入描述注明）；
+    推导；create-release 显式 `needs: validation`，任何删除/创建 GitHub Release
+    的写操作都在 release-local 验证通过之后；workflow 顶层 concurrency 统一按
+    release tag 建键（tag `vX` 与手动 version `X` 同组，异版本互不取消）；
+    `dry_run` 时回退 `--publish=never` 且跳过既有 Release 删除、draft 创建与
+    finalize 写操作，是真正的 build+validate-only；
   - CI 验证步骤新增：非 dry-run 时断言 channel yml 存在、**无** blockmap 产物；
   - finalize 前新增清理步骤：经 GitHub API 删除 draft release 里的
     `*.zip.blockmap`（mac zip 的 blockmap 由 electron-builder 硬编码生成，无配置
@@ -206,18 +213,21 @@
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于 **7 包**（根/desktop/control-plane/renderer/cli/
-  dsh-host-client-graph/dsh-chamber-host-git-worktree——host-graph 与
-  host-git-worktree 是 chamber 自有宿主包，版本随 chamber 发版且经插件管理 UI
-  展示，2026-08 review 补入 §8；**计数以 release.yml 断言集为唯一权威**），发版时
-  **一致 bump**（semver 比较；`main.ts` 读 desktop package.json 的 version 并经
-  `dsh-chamber:info` 透传渲染层、注入更新控制器；release.yml 断言全部 7 包
-  与发布版本一致）。**5 个客户端插件包**（sidebar/connections/settings-bridge/
-  layout/git）**不随 chamber 发版移动**——保持各自 fork 时的版本（2026-08
-  rc.8 对齐后统一 bump 到 chamber 发版版本 0.1.3，与 7 个发版包一致；
-  vendored dsh 源为 0.1.1-rc.2——插件版本只在 chamber 侧参与 workspace
-  解析，从不与 dsh 源逐位对齐，也从不参与任何比较/展示；2026-08
-  review 澄清措辞，2026-08 最终轮扫描同步现状）。
+- chamber 版本分布于 **12 个 chamber 包**（根 `dsh-chamber` + 11 个
+  `@dsh-chamber/*` 包：desktop/control-plane/
+  renderer/cli/dsh-host-client-graph/dsh-chamber-host-git-worktree +
+  **6 个客户端插件包** sidebar/layout/settings-connections/settings-bridge/
+  git/open-in），发版时**一致 bump**（semver 比较；`main.ts` 读 desktop
+  package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入更新
+  控制器）。**release.yml 断言集（7 包：根 + 6 个发版包，见
+  `Assert version matches package.json` step）为唯一硬校验权威**；发布
+  checklist（`docs/checklists/release-checklist.md` §1）另人工核对全部
+  12 包 + 2 个 fork 副本（`@deepseek-ai/dsh-client-connection` /
+  `dsh-client-web` 保持上游基线版本 0.1.1-rc.2，不随 chamber 发版移动）。
+  2026-08 rc.8 对齐后插件包统一 bump 到 chamber 发版版本（当前基线
+  0.1.5，与发版包一致）；vendored dsh 源为 0.1.1-rc.2——插件版本只在
+  chamber 侧参与 workspace 解析，从不与 dsh 源逐位对齐，也从不参与任何
+  比较/展示。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、`ssh-passwords.json`）
   天然保留。未来若改变注册表/状态格式 → 首启迁移（幂等、失败响亮不冒充成功）。
 - 升级不要求升级远端 dsh；与旧版本 chamber 的远端实例握手兼容（`verifyUp`）。
@@ -293,7 +303,7 @@
 
 - `01-overview.md` §3 文档地图（本文档编号 11，2026-08 自 `docs/todo/` 移入）；
   `docs/progress/STATUS.md`（本文档由「未完成 / 待执行」移入「已实现」记录）。
-- 涉及面：`packages/desktop`（`main.ts`、`preload.cts`、`updater.ts`、
+- 涉及面：`packages/desktop`（`main.ts`、`ipc-update.ts`、`preload.cts`、`updater.ts`、
   `package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳
   `__general` 视图内的 `UpdateSection` + `update-store` + `update-gate`）、
   `.github/workflows/release.yml`。

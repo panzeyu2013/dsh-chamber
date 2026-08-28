@@ -6,7 +6,7 @@
       "@dsh-chamber/dsh-client-ui-sidebar/shared": [
         "./src/ambient/chamber-bridge.d.ts"
       ],
-      "@dsh-chamber/dsh-client-ui-settings-connections/src/client/ConnectionsSection.tsx": [
+      "@dsh-chamber/dsh-client-ui-settings-connections/section": [
         "./src/ambient/connections-section.d.ts"
       ]
     }

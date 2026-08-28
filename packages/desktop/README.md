@@ -4,12 +4,29 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 
 ## 目录
 
-- `main.ts` — Electron 主进程：单窗口单 frame（`loadURL` 控制面 origin）、`createControlPlane`、transport-manager + ssh provider、IPC、更新控制器接线（updater.ts）
+- `main.ts` — Electron 主进程（薄引导）：单窗口单 frame（`loadURL` 控制面 origin）、窗口生命周期/退出清理（before-quit 确认、will-quit 并行回收 + 5s 强退）、wiring 装配
+- `wiring.ts` — 主进程纯决策函数（enqueueBounded / recordDeepLinkSeen / shouldDrainNotificationOpen / isLocalProcessRunning / isUpdateDownloadReady 等，`wiring.test.ts` 覆盖）
+- `ipc-ssh.ts` — transport-manager 创建/装载 + `desktop_ssh_*` 通道 + 状态推送监听 + 唤醒重探
+- `ipc-plugin-sync.ts` — 插件编排 `desktop_*_plugin_*` 通道 + 主进程确认对话框 + ready-time chamber host 包 seed
+- `ipc-settings.ts` — chamber 设置 holder（keep-awake / 登录自启副作用）+ `dsh-chamber:settings-*` 通道
+- `ipc-notifications.ts` — 桌面通知链 + `dsh-chamber:notify` 族通道 + pendingNotificationOpens 队列/drain
+- `ipc-update.ts` — 更新控制器接线 + `dsh-chamber:update-*` 通道 + open-release 白名单
+- `ipc-open-in.ts` — open-in 通道 + VS Code 上下文构建（`dsh-chamber:open-in*`）
+- `ipc-deep-link.ts` — `dsh-chamber://` 深链队列/去重 + 协议注册（`dsh-chamber:deep-link-intent`）
+- `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 ipc-surface-mirror.test.ts 字符串级守卫钉住）
+- `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/` 编译产物），导出 `createControlPlane` 与共享协议工具（rpc-envelope / cordis-inserts）
 - `updater.ts` — 更新控制器（设计 11）：electron-updater（github provider）静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
-- `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 传输 argv / stderr 分类 / 可选 exec；direct-endpoint 直连模式）
+- `renderer-trust.ts` — IPC 围栏（`createTrustedIpc`：sender/frame/origin 校验，语义不变抛 `ipc_sender_forbidden`）+ 渲染进程 URL 信任判定
+- `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 传输 argv / stderr 分类 / 可选 exec + verifyUp；v1 无 direct-endpoint 直连模式——provider 恒拥有本地隧道）
 - `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 两段式重连（快速有界 jitter 退避突发 + 慢速周期重探）+ 环形日志 + 子进程监督 + 非秘密投影
-- `ssh-provider.ts` — v1 唯一 provider：SSH 隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec（start/stop/is-active）
+- `ssh-provider.ts` — v1 唯一 provider：SSH 隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec（start/stop/is-active）+ 主机密钥/密码 askpass 注入 + RPC 探测（经 control-plane-module 共享信封）
+- `ssh-config.ts` — `~/.ssh/config` 非秘密投影解析
+- `chamber-settings.ts` — chamber 全局设置 holder（`chamber-settings.json`，原子写，`dsh-chamber:settings-*` 数据面）
+- `notifications.ts` — 通知决策纯逻辑（validateNotificationRequest / decideNotification / claimNotification，electron-free）
+- `deep-link.ts` — 深链解析/VS Code 启动（electron-free 决策 + 主进程执行）
+- `open-in.ts` — OpenInApp 注册表 + 六步 loud 执行管线（electron-free 决策 + 主进程执行）
+- `plugin-sync.ts` — 插件编排纯逻辑：manifest 解析/spec 分类/远端 probe/apply/seed/materialize（cordis insert 渲染经 control-plane-module 共享实现）
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` 编译为 JS（`dist/control-plane/`，见下）
 - `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
@@ -87,16 +104,18 @@ pnpm run dist:desktop
 
 ### transport-manager + ssh provider（transport-provider.ts / transport-manager.ts / ssh-provider.ts）
 
-- **来源无关运行时**：`TransportProvider` 接口定义来源边界（v1 仅 `ssh`；tailscale/remote-tunnel 等新来源 = 新 provider + kind 注册，运行时与 UI 零改动）。`buildStartArgs` 缺省 = **direct endpoint 模式**（无子进程，运行时探测 `probeTarget()`、暴露 `endpointUrl()`，如 tailnet 直连宿主）。
+- **来源无关运行时**：`TransportProvider` 接口定义来源边界（v1 仅 `ssh`，kind 联合已收窄为闭集；tailscale/remote-tunnel 等新来源 = 新 provider + kind 注册，运行时与 UI 零改动）。`buildStartArgs` 必填——每个 provider 都拥有一个本地隧道子进程（无 direct-endpoint 模式）。
 - **SSH 隧道**：`ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort> <user@host>`——SSH 层保活（半死连接由 ssh 自身约 90s 判定退出并喂给重连机，探活同时保活 NAT 映射）；`remotePort` = 远端 127.0.0.1 上 dsh web 监听端口（隧道目标）；`sshPort`（可选）= SSH 守护端口（null = 不传 `-p`，走 ssh 默认 22 / config Port，systemd exec 同理）；localPort 由 `net listen(0)` 分配；**就绪 = 本地端口可 TCP 连接 + dsh 身份握手通过**（`verifyUp`：`host.describe` 信封探测，5s 总超时 + 1MiB 响应上限——目标端口上是非 dsh 服务时显式报错/降级，**绝不呈现已连接**，与本地就绪判据同源 02 §3.2）。握手失败时按 dsh 特征签名分类提示：目标若携带 connection 插件的 426 臂或 apiProxy 的 SSE 臂（GET /api/events.mux），判为「dsh 版本过老/不兼容——请升级远端 dsh」；无任何 dsh 特征时保持「不是 dsh 实例」的通用文案（绝不无证据猜测）。
 - **phase 机**：`idle → connecting → ready ⇄ degraded → error`，**两段式重连**：快速**半开 jitter** 指数退避突发（保留下界 0.5×、上界 1×，多实例/唤醒后错峰；至多 5 次 ≈31s）+ 突发耗尽后落 error（诚实红态）但进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限——瞬时故障是时变的，「放弃」绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）。认证失败置 `requiresUserAction`，**终态不自动重试**（用户须修复凭据/host key）。**确定性验证失败免重试**：`verifyUp` 结果带 `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 第一次失败即 error 终态（requiresUserAction，重试无法改变应答）；仅连接错误/超时等瞬时失败走重连。子进程监督 per-child：SIGTERM → 宽限后 SIGKILL。
 - **远端 systemd exec**：`ssh user@host systemctl start|stop|is-active <serviceName>`——参数数组 spawn（**无 shell**），serviceName 先过白名单 `^[a-zA-Z0-9_.-]+$` 再执行（注入防护）；有界超时（`execTimeoutMs`，默认 15s）；失败写入实例环形日志并作为错误结果返回（响亮，绝不吞掉）；认证失败复用 `AUTH_FAILURE_PATTERNS`，只经结果错误显式返回（**不写隧道终态**）。结果按需写入状态投影的 `serviceActive`（不轮询）。`systemctl` 默认目标为远端 system 级 unit 管理器。
-- stderr 按行缓冲后脱敏 + 终态认证判定（跨 chunk 不绕过）；每实例环形日志（约 200 行）。
-- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。新增/编辑主机时若密码保存失败，设置页补偿回滚元数据；回滚 IPC 异常时重新读取权威注册表，避免把半提交的新主机再次按新增提交。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
+- stdout/stderr 按完整行缓冲后脱敏 + 终态认证判定（跨 chunk 不绕过）；未终止行
+  64Ki 字符上限，超限整行 fail-closed 丢弃并记固定摘要；远端 run stdout 总量
+  50MiB、失败 stderr detail 2048 字符上限；每实例环形日志约 200 行。
+- **可选密码认证**（design 05 §8 例外，明文文件兜底——用户决策）：`desktop_ssh_set_password` 把密码存进**主进程内存 + `<userData>/ssh-passwords.json` 明文镜像**（0600、`.tmp`+fsync+rename 原子写；即使残留 `.tmp` 原为宽权限也先强制 fchmod 0600 再写秘密；写成功后才发布内存状态；启动严格校验 schema；不记日志/不进注册表/非法文件保留 `*.corrupt`，实例删除或显式清除即删条目）；隧道与 systemd exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（提示文本区分「主机密钥确认 → yes」与「密码/口令 → 密码」，首次连接自动接受主机密钥；`disposeAuth` 在断开/删除/退出时删除）注入系统 ssh——**永不上命令行**。新增/编辑统一先提交并核验权威注册表，再写密码；注册表拒绝时密码不动，密码失败则把注册表回滚到提交前完整快照；回滚返回值同样核验，回滚被静默拒绝或 IPC 异常时重新读取权威注册表，避免把半提交的新主机再次按新增提交。`sshPasswordSupported()`（非 win32）为 false 时 IPC 显式拒绝。
 
 ### 实例注册表
 
-`<userData>/ssh-instances.json`，字段：`{id, label, kind, host, user, sshPort, remotePort, serviceName}`（`kind` = 传输来源，旧文件缺失时迁移为 `ssh`；`sshPort`/`serviceName` 为 `number | null` / `string | null`，null = 走 ssh 默认端口 / 不管理起停）。**元数据白名单在核心逻辑强制**（provider `validateSpec`）：id `^[a-zA-Z0-9_-]+$`（反代路径段/传输键），host `^[a-zA-Z0-9._:[\]]+$`、user `^[a-zA-Z0-9._-]+$` 且均不以 `-` 开头（防 ssh 选项注入，如 `-oProxyCommand=…`）；serviceName 格式在 exec 前强制。原子写（`.tmp` → fsync → rename）；**损坏文件响亮失败，绝不伪装成空集**（启动时先改名保留 `*.corrupt`）；写入时非法条目丢弃并告警，**重复 id 首胜丢弃**（文件与返回集永不一致漂移）；**隧道参数（host/user/sshPort/remotePort）变更且隧道存活时自动重启隧道**（投影与隧道永不一致漂移）。
+`<userData>/ssh-instances.json`，字段：`{id, label, kind, host, user, sshPort, remotePort, serviceName, remoteDshHome}`（`kind` = 传输来源，旧文件缺失时迁移为 `ssh`；`sshPort`/`serviceName` 为 `number | null` / `string | null`，null = 走 ssh 默认端口 / 不管理起停）。**元数据白名单在核心逻辑强制**（provider `validateSpec`）：id `^(?!local$)[a-zA-Z0-9_-]{1,64}$`（反代路径段/传输键），host/user/serviceName/remoteDshHome 均执行格式与长度门禁，其中 remoteDshHome 禁止 `.`/`..`、空段与尾随 `/`；renderer 表单镜像同一门禁并有源码 parity 测试，主进程仍是权威。原子写（`.tmp` → fsync → rename）；**损坏文件响亮失败，绝不伪装成空集**（启动时先改名保留 `*.corrupt`）。写入完整候选集时任一非法/kind 不匹配/重复 id 都在写盘与运行态变更前**整体拒绝**；只有加载旧文件时才告警丢弃非法项、重复 id 首胜。**隧道参数（host/user/sshPort/remotePort）变更且隧道存活时自动重启隧道**（投影与隧道永不一致漂移）。
 
 ### ~/.ssh/config 发现（ssh-config.ts）
 
@@ -113,7 +132,7 @@ pnpm run dist:desktop
 
 | 通道 | 方向 | 说明 |
 |---|---|---|
-| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version}`（不向 renderer 暴露本机工作区/状态目录） |
+| `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform}`（不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
 | `desktop_ssh_instances_set` | invoke | 持久化新实例集（原子写） |
 | `desktop_ssh_set_password` | invoke | SSH 密码（05 §8 例外）：内存 + `ssh-passwords.json` 明文镜像（0600 原子写），`{id, password}`，'' / null 清除；未知 id 或平台不支持 → `{error}` |
@@ -122,7 +141,16 @@ pnpm run dist:desktop
 | `desktop_ssh_disconnect` | invoke | 停止隧道（SIGTERM → 宽限后 SIGKILL） |
 | `desktop_ssh_status` | invoke | 非秘密状态投影 `{kind, phase, localPort, sshPort, remotePort, retryAttempt, requiresUserAction, serviceActive, logSummary}` |
 | `desktop_ssh_logs` / `desktop_ssh_logs_clear` | invoke | 环形日志读取/清空 |
-| `desktop_ssh_start_service` / `stop_service` / `is_active` | invoke | 远端 systemctl 起停/查询 |
+| `desktop_ssh_start_service` / `stop_service` / `is_active` / `restart_service` | invoke | 远端 systemctl 起停/查询/重启 |
+| `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析） |
+| `desktop_ssh_plugin_apply` | invoke | 远端插件增删（**registry add/remove 须主进程确认**，设计 09 §4；取消 `{ok,cancelled}`） |
+| `desktop_ssh_seed_host_graph` | invoke | 向远端注入 chamber host 包（idempotent，hash-skip） |
+| `desktop_ssh_plugin_materialize_add` | invoke | 本地 manifest 依赖打包上传远端（**主进程确认**；name-only，路径由主进程解析） |
+| `desktop_ssh_plugin_materialize_add_pick` | invoke | 文件夹选择器打包上传远端（pick-only） |
+| `desktop_local_plugin_list` | invoke | 本地插件清单（依赖值路径**脱敏**为 `file:<hidden>`） |
+| `desktop_local_plugin_add` / `local_plugin_remove` | invoke | 本地插件安装/卸载（**主进程确认**；`file:` 拒收，走 picker） |
+| `desktop_local_plugin_add_file` | invoke | 本地文件夹选择器安装（pick-only） |
+| `desktop_npm_search` | invoke | npm registry 搜索（主进程 fetch，best-effort） |
 | `dsh-chamber:update-state` | invoke | 更新状态快照（设计 11）：`{phase, currentVersion, latestVersion, channel, downloadPercent, releaseUrl, installBlockedReason, error}`——非秘密投影 |
 | `dsh-chamber:update-download` | invoke | 用户确认的「更新」动作：触发后台下载（`autoDownload=false`，不点击永不下载）；`{ok}` 或 `{error}` |
 | `dsh-chamber:open-release` | invoke | 「前往下载页」：经主进程 `shell.openExternal` 打开，仅允许本仓库 GitHub 页（严格白名单） |
@@ -130,11 +158,11 @@ pnpm run dist:desktop
 | `desktop_ssh_status_changed` | 主进程推送 | 状态变化事件 `{id, status}` |
 | `desktop_ssh_instances_changed` | 主进程推送 | 注册表增删改后触发（renderer 重拉 roster；另有 30s 轮询兜底） |
 
-preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, desktopSsh, update}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
+preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, platform, desktopSsh, update, settings, systemResume, openIn, deepLink, notifications}`（`update` 为设计 11 的更新面：`state/download/openReleasePage/onChanged`）。
 
 ### 退出 / 单实例 / 错误处理
 
-- 退出时 `will-quit` 中先 `transportManager.dispose()`（终止所有隧道与在途 exec，传输生命周期归运行时），再 `await cp.stop()` 级联终止 dsh 子进程。
+- 退出时 `will-quit` 中 `transportManager.disposeAsync()`（终止所有隧道与在途 exec，等待 SIGKILL 升级完成，传输生命周期归运行时）与 `cp.stop()` 级联终止 dsh 子进程以 `Promise.allSettled` **并行**执行。
 - 单实例锁：`requestSingleInstanceLock`；二次启动只 focus 已存在的窗口。
 - 出错不静默：控制面启动失败 / 渲染层产物（`dist/index.html`）缺失 / 打包态控制面编译产物（`dist/control-plane/index.js`）缺失 / 前端 loadURL 失败时 `dialog.showErrorBox` 并以退出码 1 退出；损坏实例文件先改名保留 `*.corrupt` 再置空。
 - 打包态且图标资源存在时创建托盘（状态 tooltip + 显示/退出菜单）；任何失败只记日志，不阻塞启动。
@@ -144,6 +172,7 @@ preload 暴露 `window.dshChamber = {controlPlaneUrl, dshVersion, version, deskt
 - **传输 URL 只在主进程**：`readyUrl()` 仅限内部使用，永不经过 `status()` 或 IPC 面；renderer 只见 phase/localPort 投影，自行用 localPort 构造访问 URL。
 - **systemctl 无 shell 拼接**：参数数组 spawn；serviceName 白名单先校验后执行。
 - **凭据不出主进程**：默认 ssh key/agent 认证；可选密码存于**主进程内存 + 05 §8 明确允许的 owner-only 明文镜像**（见上），经临时 owner-only 0700 askpass 助手注入——永不上命令行；日志只含主机名/端口，不含任何凭据材料；ssh stderr 按行脱敏（跨 chunk 不绕过）。
+- **插件动作主进程确认（设计 09 §4 v1 缓解）**：materialize 外传、本地插件安装/卸载、远端 `plugin_apply` registry 增删均须用户确认对话框（取消 `{ok,cancelled}`；无窗口 fail-closed；单飞防堆叠）；`local_plugin_list` 依赖值路径脱敏。
 
 ## 桌面环境验收清单
 

@@ -3,30 +3,30 @@
  * v4 refactor:
  *   - describeCapabilities: generation-scoped host.describe snapshot cache
  *     (hit/force/refetch, generation abort invalidation, in-flight abort,
- *     no caching of failures, invalidateCapabilities);
+ *     no caching of failures);
  *   - the unary default 30s timeout policy (control).
  * Run directly: node packages/control-plane/test/m1-dsh-client.ts
- * Run by CI directly (ci.yml) and listed in AGENTS.md; not a root npm script — the
- * coordinator runs smoke.mjs separately.
+ * Also run via the root test:control-plane script (pnpm run test:control-plane)
+ * per AGENTS.md Validation; the integration smoke test lives at
+ * test/smoke.ts and runs separately via pnpm run smoke.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   describeCapabilities,
-  invalidateCapabilities,
   call,
   RpcTransportError,
-  pendingStats,
 } from '../src/dsh-client.ts'
+import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 
-const HOST = 'http://127.0.0.1:17510'
+const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
 /** Unique baseUrl per test — the capability cache is module-global and keyed by baseUrl. */
 let portCounter = 0
 function uniqueHost(): string {
   portCounter += 1
-  return `http://127.0.0.1:${17510 + portCounter}`
+  return `http://127.0.0.1:${DEFAULT_DSH_START_PORT + portCounter}`
 }
 
 function jsonResponse(body: any, status = 200): Response {
@@ -193,19 +193,6 @@ test('describeCapabilities: an in-flight fetch aborted by generation death leave
   } finally {
     recorder.restore()
   }
-})
-
-test('invalidateCapabilities drops cached snapshots', async () => {
-  const host = uniqueHost()
-  await withFetchHandler(echoResult({ ok: true, value: describeValue() }), async recorder => {
-    const generation = new AbortController()
-    const first = await describeCapabilities(host, { generationSignal: generation.signal })
-    assert.equal(recorder.calls.length, 1)
-    invalidateCapabilities()
-    const second = await describeCapabilities(host, { generationSignal: generation.signal })
-    assert.equal(recorder.calls.length, 2)
-    assert.notEqual(second.value, first.value)
-  })
 })
 
 test('describeCapabilities never caches transport failures', async () => {

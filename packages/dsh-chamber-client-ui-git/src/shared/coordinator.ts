@@ -16,6 +16,10 @@ import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
 import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
+// Hidden-tab polling gate + injectable visibility face (P1, 2026-11) — the
+// module is dependency-free so the node suite covers it (see
+// test/visibility-gate.ts).
+import { isPollEligible, visibilityEvents } from './visibility-gate.ts'
 import {
   GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
@@ -29,11 +33,14 @@ const listeners = new Set<() => void>()
 const states = new Map<string, GitSourceState>()
 const refreshFlights = new SerializedRefreshes<GitSourceState>()
 const actionLedger = new GitActionLedger()
+
 /** Connection-generation fence: a response from before disconnect/reconnect is stale. */
 const sourceEpochs = new Map<string, number>()
 let revision = 0
 let retainCount = 0
 let stopBridge: (() => void) | undefined
+let onVisibilityChange: (() => void) | undefined
+let stopVisibility: (() => void) | undefined
 let pollTimer: ReturnType<typeof setInterval> | undefined
 
 const SINGLETON_KEY = Symbol.for('dsh-chamber.git-worktree.coordinator')
@@ -676,7 +683,10 @@ export async function removeUnregisteredWorktree(
   const operationId = nextId('remove')
   // Fresh refresh first (P2-3): the row identity may be up to 30s stale —
   // an expected-mismatch on a stale snapshot would needlessly fail.
-  await refreshSource(sourceId, true).catch(() => {})
+  const refreshFailure = await refreshSource(sourceId, true).catch((error: unknown) => error)
+  if (refreshFailure !== undefined) {
+    throw new Error(`刷新工作树状态失败：${refreshFailure instanceof Error ? refreshFailure.message : String(refreshFailure)}`)
+  }
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
     const input = {
       operationId,
@@ -780,19 +790,38 @@ export function clearActionError(sourceId: string): void {
   if (states.get(sourceId)?.actionError !== undefined) patchSource(sourceId, { actionError: undefined })
 }
 
+/** Refresh every connected, action-idle source; existing pulls are joined. */
+function refreshConnectedSources(): void {
+  for (const server of chamberBridge.getServers()) {
+    if (server.connected && states.get(server.id)?.busy === undefined) void refreshSource(server.id)
+  }
+}
+
 function start(): void {
   stopBridge = chamberBridge.subscribe(syncServers)
   syncServers()
+  // Hidden-tab polling gate (design 08 §4): a backgrounded page must not keep
+  // refreshing every 30s — the timer keeps running but skips while hidden, and
+  // becoming visible re-syncs the roster AND immediately refreshes every
+  // connected source (not only sources whose workspace key changed).
+  onVisibilityChange = () => {
+    if (visibilityEvents.read() !== 'visible') return
+    syncServers()
+    refreshConnectedSources()
+  }
+  stopVisibility = visibilityEvents.onChange(onVisibilityChange)
   pollTimer = globalThis.setInterval(() => {
-    for (const server of chamberBridge.getServers()) {
-      if (server.connected && states.get(server.id)?.busy === undefined) void refreshSource(server.id)
-    }
+    if (!isPollEligible(visibilityEvents.read())) return
+    refreshConnectedSources()
   }, POLL_MS)
 }
 
 function stop(): void {
   stopBridge?.()
   stopBridge = undefined
+  stopVisibility?.()
+  stopVisibility = undefined
+  onVisibilityChange = undefined
   if (pollTimer !== undefined) globalThis.clearInterval(pollTimer)
   pollTimer = undefined
 }

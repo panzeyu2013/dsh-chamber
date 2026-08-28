@@ -20,6 +20,33 @@ export function planAggregateRefreshes(
 }
 
 /**
+ * Coalescing queue for aggregate refresh waves. A readiness edge that arrives
+ * while another wave is running stays pending for the next drain instead of
+ * being silently consumed by the edge-memory update in App.
+ */
+export class AggregateRefreshQueue {
+  readonly #pending = new Set<string>()
+
+  enqueue(sourceIds: readonly string[]): void {
+    for (const sourceId of sourceIds) this.#pending.add(sourceId)
+  }
+
+  take(): string[] {
+    const sourceIds = [...this.#pending]
+    this.#pending.clear()
+    return sourceIds
+  }
+
+  delete(sourceIds: Iterable<string>): void {
+    for (const sourceId of sourceIds) this.#pending.delete(sourceId)
+  }
+
+  get size(): number {
+    return this.#pending.size
+  }
+}
+
+/**
  * Staleness predicate for the aggregate watchdog (the fallback net for a
  * mounted producer whose push channel silently died). A source is stale when
  * it never pushed a snapshot or its last push is older than the threshold —

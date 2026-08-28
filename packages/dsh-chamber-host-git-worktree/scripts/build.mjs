@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Bundle the host plugin once in the chamber tree; managed profiles receive dist/index.js. */
 import { createRequire } from 'node:module'
+import { existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -25,4 +26,10 @@ if (result.errors.length > 0) {
   console.error('build.mjs: esbuild reported errors')
   process.exit(1)
 }
-console.log(`build.mjs: bundled ${join(packageRoot, 'dist/index.js')}`)
+// The committed artifact must exist after a successful build (2026 review).
+const outfile = join(packageRoot, 'dist/index.js')
+if (!existsSync(outfile)) {
+  console.error(`build.mjs: esbuild reported success but ${outfile} is missing`)
+  process.exit(1)
+}
+console.log(`build.mjs: bundled ${outfile}`)

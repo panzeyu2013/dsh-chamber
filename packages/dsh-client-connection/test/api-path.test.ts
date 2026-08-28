@@ -31,7 +31,7 @@ test('base-path: explicit empty or stock /api collapses to no-prefix', () => {
 
 // ── window.__DSH_BASE_PATH__ compatibility fallback ──────────────────────
 
-test('base-path: window knob applies when no explicit argument is given', () => {
+test('base-path: the window compatibility fallback applies when no explicit argument is given', () => {
   const prev = (globalThis as { window?: unknown }).window
   ;(globalThis as Record<string, unknown>).window = { __DSH_BASE_PATH__: '/api/i/ssh-x' }
   try {

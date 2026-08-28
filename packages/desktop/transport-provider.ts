@@ -5,27 +5,22 @@
  * TransportProvider per manager (v1 ships `ssh`, `ssh-provider.ts`), and the
  * provider owns everything source-specific:
  * - spec validation (whitelist-gated, option-injection safe),
- * - the transport process argv — or `null` for a DIRECT ENDPOINT provider
- *   (no local tunnel process; the runtime probes `probeTarget()` and exposes
- *   `endpointUrl()`; e.g. a tailnet host that is reachable as-is),
+ * - the transport process argv (every v1 transport is a local tunnel child;
+ *   there is no direct-endpoint mode — a provider always owns a tunnel),
  * - stderr classification (terminal auth vs transient) and redaction,
  * - the optional remote-service exec channel (`ssh`: systemd over ssh).
  *
  * The generic runtime owns the phase machine, bounded jittered reconnect,
  * ring-buffer logs, non-secret status projection, status pushes, child
  * supervision (SIGTERM → SIGKILL escalation) and the instance registry.
- *
- * v1 compat: the preload/renderer wire typings keep the `Ssh*` names (the
- * `SshInstanceInput`/`SshInstanceSpec`/`SshStatusProjection`/`SshLogEntry`
- * aliases below); desktop internals use the `Transport*` names.
  */
 
-/** Transport kinds shipped in v1. Future kinds (tailscale, remote-tunnel …) extend the union. */
+/** Transport kinds shipped in v1 — the CLOSED union: adding a future kind
+ *  (tailscale, remote-tunnel …) means editing this constant. */
 export const TRANSPORT_KINDS = ['ssh'] as const
 
 /** Renderer/registry resource budgets, enforced again in the main process. */
 export const MAX_TRANSPORT_INSTANCES = 32
-export const MAX_INSTANCE_ID_CHARS = 64
 export const MAX_INSTANCE_LABEL_CHARS = 128
 
 /**
@@ -37,10 +32,11 @@ export const MAX_INSTANCE_LABEL_CHARS = 128
 export const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 
 /**
- * Open-ended kind union: autocompletes the shipped kinds while still
- * accepting a future kind string (provider registry extensibility).
+ * Closed kind union over the shipped kinds (no open-ended `(string & {})`
+ * escape hatch — every provider and every registry entry is one of the
+ * declared kinds, so kind routing can never accept an arbitrary string).
  */
-export type TransportKind = (typeof TRANSPORT_KINDS)[number] | (string & {})
+export type TransportKind = (typeof TRANSPORT_KINDS)[number]
 
 /** Tunnel lifecycle phase machine（隧道生命周期 phase 机）. */
 export type TransportPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
@@ -55,7 +51,7 @@ export interface TransportInstanceInput {
   user?: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
   sshPort?: number | null
-  /** The remote dsh web profile port on the host (the tunnel / direct endpoint destination). */
+  /** The remote dsh web profile port on the host (the tunnel destination). */
   remotePort: number
   serviceName?: string | null
   /** Remote dsh home (design 13 §4.2); `~/.dsh` or an absolute path, null = remote default `~/.dsh`. Non-secret. */
@@ -140,7 +136,7 @@ export interface SpawnedProcess {
 }
 
 /** The endpoint a transport exposes for the readiness/identity probes
- * (tunnel mode: 127.0.0.1:<localPort>; direct endpoint mode: probeTarget). */
+ *  (always the local tunnel listener: 127.0.0.1:<localPort>). */
 export interface TransportProbeEndpoint {
   host: string
   port: number
@@ -189,6 +185,14 @@ export interface StderrClassification {
  *  `run` = a whitelisted remote command, design 13 §4.1). */
 export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | 'run'
 
+/** The `run`-channel remote command whitelist (design 13 §4.1). Single source
+ *  of truth — plugin-sync's contract A types import this instead of copying
+ *  (the copy used to drift). The union equals the EXECUTABLE set enforced by
+ *  buildRemoteExecArgv (ssh-provider.ts): 'base64'/'mkdir' are NOT exec
+ *  commands — write-file builds them internally into its remote shell
+ *  template — so they are deliberately absent here. */
+export type TransportRunCommand = 'dsh' | 'cat' | 'printf'
+
 /**
  * The `run` action payload (design 13 §4.1): either a whitelisted remote
  * command (`exec`) or a file write over ssh stdin (`write-file`).
@@ -196,7 +200,7 @@ export type TransportExecAction = 'start' | 'stop' | 'restart' | 'is-active' | '
 export interface TransportRunPayload {
   op: 'exec' | 'write-file'
   /** op='exec': remote command name (whitelisted). */
-  command?: 'dsh' | 'cat' | 'base64' | 'mkdir' | 'printf'
+  command?: TransportRunCommand
   /** op='exec': argv after the command name (whitelisted per command). */
   argv?: string[]
   /** op='write-file': target path (whitelisted prefixes, design 13 §7.2). */
@@ -245,13 +249,12 @@ export interface TransportProvider {
   validateSpec(input: unknown): TransportInstanceSpec | null
   /**
    * argv of the transport process for one start, given the allocated local
-   * port. ABSENT (or returning null) selects the DIRECT ENDPOINT mode: no
-   * child process, the runtime probes `probeTarget()` and exposes
-   * `endpointUrl()`. CONTRACT: the returned argv is DISPLAY-SAFE — the
+   * port — REQUIRED: every provider owns a local tunnel child (there is no
+   * direct-endpoint mode). CONTRACT: the returned argv is DISPLAY-SAFE — the
    * runtime logs it verbatim into the renderer-visible projection summary
    * (host/user/ports only; never credentials or tokens).
    */
-  buildStartArgs?(spec: TransportInstanceSpec, localPort: number): readonly string[] | null
+  buildStartArgs(spec: TransportInstanceSpec, localPort: number): readonly string[]
   /**
    * Optional extra environment for the transport process (merged over
    * process.env by the runtime). Providers use it to inject per-instance
@@ -267,10 +270,6 @@ export interface TransportProvider {
    * the provider does not know.
    */
   disposeAuth?(spec: TransportInstanceSpec): void
-  /** Probe target for DIRECT ENDPOINT providers (ignored in tunnel mode). */
-  probeTarget?(spec: TransportInstanceSpec): { host: string; port: number }
-  /** Ready URL for DIRECT ENDPOINT providers (ignored in tunnel mode). */
-  endpointUrl?(spec: TransportInstanceSpec): string | null
   /** Classify one COMPLETE stderr line of the transport process. */
   classifyStderr(line: string): StderrClassification
   /**
@@ -290,13 +289,3 @@ export interface TransportProvider {
     payload?: TransportRunPayload,
   ): Promise<TransportExecResult>
 }
-
-/**
- * v1 wire-surface compat names (preload / renderer / connections typings
- * keep these; desktop internals use the Transport* names above).
- */
-export type SshInstanceInput = TransportInstanceInput
-export type SshInstanceSpec = TransportInstanceSpec
-export type SshStatusProjection = TransportStatusProjection
-export type SshLogEntry = TransportLogEntry
-export type SshPhase = TransportPhase

@@ -14,7 +14,6 @@ import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
   PermissionPresetSettingsController,
-  refreshPermissionIfLoaded,
   type PermissionSettingsApi,
   type PermissionSettingsState,
   type PermissionViewDecoder,
@@ -264,11 +263,4 @@ test('dispose stops in-flight responses from publishing', async () => {
   release?.()
   await pending
   assert.equal(snapshot(controller).status, 'loading', 'a disposed controller publishes nothing')
-})
-
-test('refreshIfLoaded skips an untouched row', () => {
-  const api = new FakeApi()
-  const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
-  refreshPermissionIfLoaded(controller)
-  assert.equal(snapshot(controller).status, 'idle')
 })

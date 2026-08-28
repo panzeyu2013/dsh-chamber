@@ -43,3 +43,10 @@ test('rows: an extra row whose id equals a kernel id is still listed once (union
   assert.equal(rows[0], MODULES_ID)
   assert.equal(rows[1], UI_RENDERER_ID)
 })
+
+test('rows: duplicate EXTRA ids collapse; manifest-overlapping extras stay (union model, first wins)', () => {
+  const rows = composeBootRows(['pkg-a'], ['pkg-x', 'pkg-x', 'pkg-a'])
+  // 'pkg-x' deduped; 'pkg-a' appears once per source (manifest + extra) —
+  // the loader creates kernel/manifest rows first and union-first-wins.
+  assert.deepEqual(rows, [MODULES_ID, UI_RENDERER_ID, 'pkg-a', 'pkg-x', 'pkg-a'])
+})

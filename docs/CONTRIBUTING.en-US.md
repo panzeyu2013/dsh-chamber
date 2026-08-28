@@ -27,12 +27,13 @@ node packages/control-plane/test/m1-dsh-client.ts  # describe/health client beha
 node packages/control-plane/test/host-logs.ts   # host logs ring buffer
 node packages/control-plane/test/manager-api.ts # management REST (/health, /api/connections)
 node packages/control-plane/test/instance-proxy.ts  # per-instance reverse proxy (HTTP/WS/SSE, 503)
+node packages/control-plane/test/ws-frames.ts       # proxy WS frame parsing and heartbeat
 node packages/control-plane/test/static-serving.ts  # first-screen static serving and boot manifest
 node packages/control-plane/test/host-graph-seed.ts # chamber host-package seed/overlay
 pnpm run smoke                                  # integration smoke
 ```
 
-These eight control-plane test files are exactly what CI's `test` job runs, together with desktop transport, renderer-shell, and client/host plugin tests — the same set CI runs, driven by the root scripts:
+These nine control-plane test files are exactly what CI's `test` job runs, together with desktop transport, renderer-shell, and client/host plugin tests — the same set CI runs, driven by the root scripts:
 
 ```bash
 pnpm run test:desktop        # desktop transport / ssh unit tests
@@ -41,6 +42,9 @@ pnpm run test:sidebar        # sidebar derive / view-prefs unit tests
 pnpm run test:git            # Git worktree client / saga unit tests
 pnpm run test:host-git       # in-instance Git host core unit tests
 pnpm run test:settings-bridge  # settings shell policy unit tests
+pnpm run test:connections    # connections settings plugin (plugin-diff / save-host)
+pnpm run test:client-web     # web-shell boot tolerance decision rules
+pnpm run test:connection     # connection client base-path patch decision rules
 ```
 
 `pnpm run smoke` prints SKIP and exits 0 when dsh is not installed; this is expected, not a failure.
@@ -52,15 +56,19 @@ pnpm run typecheck                            # tsc --noEmit (0 errors)
 pnpm run typecheck:host-graph
 pnpm run typecheck:host-git
 pnpm run typecheck:sidebar                    # client plugin type checks
+pnpm run typecheck:layout
 pnpm run typecheck:git
 pnpm run typecheck:connections
 pnpm run typecheck:settings-bridge
+pnpm run typecheck:open-in
+pnpm run typecheck:client-web
 node packages/control-plane/test/protocol.ts  # focused unit tests (see Testing above)
 node packages/control-plane/test/storage.ts
 node packages/control-plane/test/m1-dsh-client.ts
 node packages/control-plane/test/host-logs.ts
 node packages/control-plane/test/manager-api.ts
 node packages/control-plane/test/instance-proxy.ts
+node packages/control-plane/test/ws-frames.ts
 node packages/control-plane/test/static-serving.ts
 node packages/control-plane/test/host-graph-seed.ts
 pnpm run test:desktop                         # desktop transport / ssh unit tests
@@ -69,6 +77,9 @@ pnpm run test:sidebar                         # sidebar unit tests
 pnpm run test:git                             # Git client unit tests
 pnpm run test:host-git                        # Git host unit tests
 pnpm run test:settings-bridge                 # settings shell unit tests
+pnpm run test:connections                     # connections settings plugin unit tests
+pnpm run test:client-web                      # web-shell boot tolerance unit tests
+pnpm run test:connection                      # connection base-path patch unit tests
 pnpm run smoke                                # PASS (or SKIP, which is normal)
 pnpm run build:renderer                       # renderer build succeeds
 ```
@@ -111,6 +122,7 @@ One logical change per commit; keep diffs focused. Commits bundling unrelated ch
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is **attached or served, never re-implemented**.
 - Domains removed from scope (walkthrough, notification center, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** to the roadmap in any form. The sole exception is the design-08 Git worktree plugin: it may only be a chamber-bundled client plugin plus a domain-limited in-instance host Remote, never a Git execution surface in the control plane or Desktop.
+  Note: design 19's **desktop OS notifications** (native notifications for session complete/ask/request) are a different surface from the removed dsh "notification center" UI domain — they do not constitute a return of that domain.
 - For any new domain feature proposal, first ask: does dsh native, the plugin ecosystem, or the host web frontend already cover it? If yes → don't build it.
 
 ## Pull Requests
@@ -148,4 +160,4 @@ You can still help:
 
 ## Questions?
 
-Open an [issue](https://github.com/<YOUR-ORG>/dsh-chamber/issues) or read the design docs in [`docs/design/`](design/).
+Open an [issue](https://github.com/panzeyu2013/dsh-chamber/issues) or read the design docs in [`docs/design/`](design/).

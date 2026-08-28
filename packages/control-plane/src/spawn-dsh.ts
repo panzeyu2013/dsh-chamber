@@ -20,9 +20,9 @@
  * is the instance's own 127.0.0.1:<P> — exactly what the per-instance reverse
  * proxy (design 03 §3.1) forwards.
  *
- * Port strategy: fixed base 17510, one attempt per port; a failed attempt
- * (process exit within 15s, or no TCP listener within 90s, or a failed
- * host.describe probe) advances port+1 and respawns, at most 5 attempts.
+ * Port strategy: fixed base DEFAULT_DSH_START_PORT (17510), one attempt per
+ * port; a failed attempt (process exit, or no TCP listener within 90s, or a
+ * failed host.describe probe) advances port+1 and respawns, at most 5 attempts.
  * Spawn uses detached=true (own process group, design 02 §3.5.5: the host
  * survives a control-plane crash and the orphan reaper reclaims it, §3.4.2);
  * stdout/stderr are forwarded to the control-plane log and the per-port
@@ -52,7 +52,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { mkdirSync, writeFileSync, rmSync, readFileSync, renameSync, existsSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -61,8 +61,12 @@ import { call, RpcBusinessError } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
 import type { Logger } from './types.ts'
 
-/** First port attempted for a managed dsh host. */
-export const BASE_DHSPORT = 17510
+/**
+ * Default first port attempted for a managed local dsh host (the local
+ * instance start port baseline; spawns advance +1 per retry). Distant from
+ * DEFAULT_CONTROL_PLANE_PORT (17500) so the two surfaces never collide.
+ */
+export const DEFAULT_DSH_START_PORT = 17510
 
 /**
  * Grace window between SIGTERM and SIGKILL when stopping a managed host
@@ -76,11 +80,86 @@ export const TERMINATE_GRACE_MS = 1_000
 /** Maximum spawn attempts (port +1 per retry). */
 export const MAX_SPAWN_ATTEMPTS = 5
 
-/** A child that exits this quickly is treated as a failed attempt. */
-export const EARLY_EXIT_GRACE_MS = 15_000
-
 /** How long a spawned host gets to open its TCP listener. */
 export const LISTEN_WAIT_MS = 90_000
+
+/** Bound every loopback connect attempt so startup and shutdown cannot hang
+ * behind a socket that neither connects nor errors (for example, a local
+ * firewall rule that drops packets instead of rejecting them). */
+export const PORT_PROBE_TIMEOUT_MS = 1_000
+
+/** A retry delay that wakes immediately when its lifecycle is cancelled. */
+function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    const timer = setTimeout(done, ms)
+    const onAbort = () => done()
+    signal.addEventListener('abort', onAbort, { once: true })
+    function done() {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }
+  })
+}
+
+interface PortProbeSocket {
+  once(event: 'connect', listener: () => void): this
+  once(event: 'error', listener: (error: Error) => void): this
+  removeListener(event: 'connect', listener: () => void): this
+  removeListener(event: 'error', listener: (error: Error) => void): this
+  destroy(): this
+}
+
+type PortProbeConnect = (options: { host: string; port: number }) => PortProbeSocket
+
+/**
+ * Check whether a candidate loopback port is occupied. A connect timeout is
+ * treated conservatively as busy: an inconclusive probe must not launch a
+ * detached host on a port whose ownership is unknown. Abort always wins and
+ * destroys the in-flight socket so LocalHostManager.stop() can settle.
+ */
+export function probePortBusy(
+  port: number,
+  signal?: AbortSignal,
+  timeoutMs = PORT_PROBE_TIMEOUT_MS,
+  connect: PortProbeConnect = options => createConnection(options),
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.reject(new Error('spawn aborted'))
+  return new Promise<boolean>((resolve, reject) => {
+    let socket: PortProbeSocket | undefined
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cleanup = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      if (socket !== undefined) {
+        socket.removeListener('connect', onConnect)
+        socket.removeListener('error', onError)
+        socket.destroy()
+      }
+    }
+    const finish = (busy: boolean, error?: Error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error === undefined) resolve(busy)
+      else reject(error)
+    }
+    const onConnect = () => finish(true)
+    const onError = () => finish(false)
+    const onAbort = () => finish(false, new Error('spawn aborted'))
+    signal?.addEventListener('abort', onAbort, { once: true })
+    timer = setTimeout(() => finish(true), timeoutMs)
+    try {
+      socket = connect({ host: '127.0.0.1', port })
+      socket.once('connect', onConnect)
+      socket.once('error', onError)
+    } catch (error) {
+      finish(false, error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+}
 
 /** The fixed web-profile flag set (design 02 §3.1/§3.5); --trusted-host and
  * --port always agree (127.0.0.1:<P>) so the trust fence and the forwarded
@@ -124,12 +203,17 @@ export interface PidRecord {
 export function writePidRecord(stateDir: string, pid: number, port: number, ownerPid: number, extra: Record<string, unknown> = {}): void {
   const dir = join(stateDir, 'managed-dsh')
   mkdirSync(dir, { recursive: true })
+  const binary = typeof extra.binary === 'string' && extra.binary !== '' ? extra.binary : 'dsh'
+  const { binary: _binary, ...additional } = extra
   const record = {
     pid,
     ownerPid,
-    ...extra,
+    ...additional,
     port,
-    binary: 'dsh',
+    // Record the exact CLI entry used for this process. The reaper compares
+    // this absolute path against the live command line; a basename marker
+    // such as `dsh`/`bin.ts` is too broad under stale-record PID reuse.
+    binary,
     profile: 'web',
     source: 'spawn',
     startedAt: new Date().toISOString(),
@@ -165,15 +249,17 @@ function readInstanceId(stateDir: string): string | null {
  * @param patchPath - optional `--patch` overlay (design 09 module B); null/absent when none.
  * @returns {args} node arguments to spawn.
  */
-function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: string | null): { args: string[] } {
+function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: string | null): { args: string[]; binary: string } {
   const profileFlags = webProfileArgs(port, patchPath ?? undefined)
   const installed = join(dshWorkspacePath, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   if (existsSync(installed)) {
-    return { args: [installed, ...profileFlags] }
+    return { args: [installed, ...profileFlags], binary: installed }
   }
   const source = join(dshWorkspacePath, 'apps', 'cli', 'src', 'bin.ts')
   if (existsSync(source)) {
-    return { args: ['--import', 'tsx/esm', 'apps/cli/src/bin.ts', ...profileFlags] }
+    // Use the absolute source entry in argv as well as in the pid record so
+    // the orphan reaper can re-verify one exact token without a cwd guess.
+    return { args: ['--import', 'tsx/esm', source, ...profileFlags], binary: source }
   }
   throw new Error(`no dsh CLI entry found in ${dshWorkspacePath} (neither node_modules/@deepseek-ai/dsh/lib/bin.js nor apps/cli/src/bin.ts)`)
 }
@@ -267,6 +353,9 @@ interface SpawnAttemptResult {
 }
 
 async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, patchPath, signal }: SpawnAttemptOptions): Promise<SpawnAttemptResult> {
+  // The caller performs an async port preflight. stop() may abort while that
+  // await is in flight, so re-check at the actual spawn boundary as well.
+  if (signal?.aborted) throw new Error('spawn aborted')
   const baseUrl = `http://127.0.0.1:${port}`
   const log = (line: string) => logger.log(`[dsh:${port}] ${line}`)
   // Per-port rolling log (design 02 §3.8 / host-logs.ts): stdout/stderr go
@@ -300,6 +389,13 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
     // orphan reaper (design 02 §3.4.2) reclaims it.
     detached: true,
   })
+  // A spawn failure (ENOENT/EACCES/Electron fuse) arrives as an async
+  // 'error' event. Attach a listener BEFORE the pid check: if the pid check
+  // throws, the pending event would otherwise be unhandled and crash the
+  // whole control plane with an uncaughtException. The listener converges
+  // into the outcome failure once the outcome promise exists (2026 review).
+  let onSpawnError: ((error: Error) => void) | undefined
+  child.on('error', error => onSpawnError?.(error))
   const pid = child.pid
   if (pid === undefined) {
     child.kill('SIGKILL')
@@ -317,49 +413,95 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
   })
   child.once('exit', () => hostLog.close())
   const instanceId = readInstanceId(stateDir)
-  writePidRecord(stateDir, pid, port, process.pid, instanceId === null ? {} : { ownerInstanceId: instanceId })
+  // The pid record is best-effort for the REAPER (a missing record can be
+  // re-derived) — but a FAILED WRITE still cleans the spawned child up and
+  // makes this spawn attempt FAIL (design 02 §3.3): never leave an untracked
+  // detached process behind (2026 audit H3).
+  try {
+    writePidRecord(stateDir, pid, port, process.pid, {
+      ...(instanceId === null ? {} : { ownerInstanceId: instanceId }),
+      binary: entry.binary,
+    })
+  } catch (recordError) {
+    await killFailedSpawn(stateDir, child)
+    throw recordError
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined
+  let tcpProbeTimer: ReturnType<typeof setTimeout> | undefined
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
+  let activeSocket: ReturnType<typeof createConnection> | undefined
   let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
   let onAbort: (() => void) | undefined
   const outcome = await new Promise<string>(resolve => {
-    timer = setTimeout(() => resolve('timeout'), LISTEN_WAIT_MS)
-    onExit = (code, sig) => resolve(`exit(${code ?? sig})`)
+    let settled = false
+    const finish = (value: string) => {
+      if (settled) return
+      settled = true
+      if (tcpProbeTimer !== undefined) clearTimeout(tcpProbeTimer)
+      if (retryTimer !== undefined) clearTimeout(retryTimer)
+      activeSocket?.destroy()
+      activeSocket = undefined
+      resolve(value)
+    }
+    timer = setTimeout(() => finish('timeout'), LISTEN_WAIT_MS)
+    onExit = (code, sig) => finish(`exit(${code ?? sig})`)
     child.once('exit', onExit)
-    onAbort = () => resolve('aborted')
+    onAbort = () => finish('aborted')
     signal?.addEventListener('abort', onAbort, { once: true })
+    onSpawnError = error => {
+      // Converge into the regular non-tcp failure path: the caller's
+      // killFailedSpawn cleanup + loud throw take over.
+      finish(`spawn-error: ${error.message}`)
+    }
     const probe = () => {
-      if (child.exitCode !== null || child.signalCode !== null) return
+      if (settled || child.exitCode !== null || child.signalCode !== null) return
       const socket = createConnection({ host: '127.0.0.1', port })
-      socket.once('connect', () => {
+      activeSocket = socket
+      const finishProbe = (connected: boolean) => {
+        if (activeSocket !== socket) return
+        if (tcpProbeTimer !== undefined) clearTimeout(tcpProbeTimer)
+        activeSocket = undefined
         socket.destroy()
-        resolve('tcp')
+        if (connected) finish('tcp')
+        else if (!settled) retryTimer = setTimeout(probe, 250)
+      }
+      tcpProbeTimer = setTimeout(() => finishProbe(false), PORT_PROBE_TIMEOUT_MS)
+      socket.once('connect', () => {
+        finishProbe(true)
       })
       socket.once('error', () => {
-        socket.destroy()
-        setTimeout(probe, 250)
+        finishProbe(false)
       })
     }
     probe()
   }).finally(() => {
     clearTimeout(timer)
+    if (tcpProbeTimer !== undefined) clearTimeout(tcpProbeTimer)
+    if (retryTimer !== undefined) clearTimeout(retryTimer)
+    activeSocket?.destroy()
     if (onExit !== undefined) child.removeListener('exit', onExit)
     if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
   })
   if (outcome !== 'tcp') {
-    child.kill('SIGKILL')
-    removePidRecord(stateDir, pid)
+    await killFailedSpawn(stateDir, child)
     throw new Error(`dsh spawn attempt on port ${port} failed: ${outcome} before TCP listen`)
   }
   // The TCP listener comes up before the connection plugin's /api routes are
   // mounted; describe can 404 briefly. Retry the probe until it succeeds or
   // the listen window expires.
   const controller = new AbortController()
+  const onGenerationAbort = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  else signal?.addEventListener('abort', onGenerationAbort, { once: true })
   const probeTimer = setTimeout(() => controller.abort(), LISTEN_WAIT_MS)
   let lastProbeError: unknown
   try {
     for (;;) {
-      if (controller.signal.aborted) throw lastProbeError ?? new Error('probe window expired')
+      if (controller.signal.aborted) {
+        if (signal?.aborted) throw new Error('spawn aborted')
+        throw lastProbeError ?? new Error('probe window expired')
+      }
       try {
         await call(baseUrl, 'host.describe', {}, { signal: controller.signal })
         break
@@ -368,16 +510,16 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
           throw new Error(`dsh spawn attempt on port ${port} failed: child exited: ${String(probeError)}`)
         }
         lastProbeError = probeError
-        await new Promise(resolve => setTimeout(resolve, 500))
+        await waitForRetry(500, controller.signal)
       }
     }
   } catch (error) {
-    clearTimeout(probeTimer)
-    child.kill('SIGKILL')
-    removePidRecord(stateDir, pid)
+    await killFailedSpawn(stateDir, child)
     throw new Error(`dsh spawn attempt on port ${port} failed: host.describe: ${String(error)}`)
+  } finally {
+    clearTimeout(probeTimer)
+    signal?.removeEventListener('abort', onGenerationAbort)
   }
-  clearTimeout(probeTimer)
   // Best-effort browse-capability probe (design 05 §4): the in-app directory
   // dialog needs the host to serve `browse`. A native-capability host — a
   // dsh version predating the SSH_CONNECTION resolver arm, or a deployment
@@ -385,14 +527,22 @@ async function spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger,
   // loud in the log instead of a silent dialog failure. Never fails the
   // spawn (the host is otherwise healthy); other failures are ignored.
   try {
-    await call(baseUrl, 'host.listDirectory', {}, { timeoutMs: 10_000 })
+    await call(baseUrl, 'host.listDirectory', {}, { timeoutMs: 10_000, signal })
   } catch (probeError) {
+    if (signal?.aborted) {
+      await killFailedSpawn(stateDir, child)
+      throw new Error(`dsh spawn attempt on port ${port} failed: spawn aborted`)
+    }
     if (probeError instanceof RpcBusinessError && probeError.code === 'directory-picker-unavailable') {
       logger.warn(
         `[dsh:${port}] host serves the native directory picker — the in-app directory dialog (design 05 §4) will fail; `
         + 'expected when the dsh version predates the SSH_CONNECTION resolver arm or the spawn env was overridden',
       )
     }
+  }
+  if (signal?.aborted) {
+    await killFailedSpawn(stateDir, child)
+    throw new Error(`dsh spawn attempt on port ${port} failed: spawn aborted`)
   }
   return { child, port, baseUrl }
 }
@@ -406,6 +556,27 @@ function killGroup(pid: number, signal: NodeJS.Signals): void {
       process.kill(pid, signal)
     } catch { /* already gone */ }
   }
+}
+
+/**
+ * Abandon a FAILED spawn attempt: process-group SIGKILL → wait for the exit →
+ * remove the pid record. Every spawnAttempt failure path converges here so a
+ * broken attempt can never leave an untracked detached process behind (2026
+ * audit H3 — writePidRecord failures and the TCP/describe failure paths used
+ * to kill only the pid and remove the record before exit). Mirror of
+ * terminateChild's group discipline; the record is removed only after the
+ * process is confirmed dead (design 02 §3.3: 注销只在确认进程已退出后) — a
+ * child that somehow survives the SIGKILL stays tracked for the orphan reaper.
+ */
+export async function killFailedSpawn(stateDir: string, child: ChildProcess): Promise<void> {
+  const pid = child.pid
+  if (pid === undefined) return
+  if (child.exitCode === null && child.signalCode === null) {
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+    killGroup(pid, 'SIGKILL')
+    await exited
+  }
+  removePidRecord(stateDir, pid)
 }
 
 /** Stop a managed child: process-group SIGTERM, escalate to SIGKILL after
@@ -443,7 +614,7 @@ export interface SpawnedHost {
 }
 
 /**
- * Spawn a ready dsh host on a free port from BASE_DHSPORT upward.
+ * Spawn a ready dsh host on a free port from DEFAULT_DSH_START_PORT upward.
  * @param options - {stateDir, dshHome, dshWorkspacePath, logger, patchPath?,
  *   signal}.
  * @returns {child, port, baseUrl, stop()}.
@@ -451,19 +622,18 @@ export interface SpawnedHost {
 export async function spawnDsh({ stateDir, dshHome, dshWorkspacePath, logger, patchPath, signal }: SpawnDshOptions): Promise<SpawnedHost> {
   let lastError: unknown
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
-    const port = BASE_DHSPORT + attempt
+    const port = DEFAULT_DSH_START_PORT + attempt
     if (signal?.aborted) throw new Error('spawn aborted')
     // Port pre-check: skip a port that is already taken (a stray process from
     // an earlier run would otherwise make this attempt die with EADDRINUSE).
-    const busy = await new Promise<boolean>(resolve => {
-      const socket = createConnection({ host: '127.0.0.1', port })
-      socket.once('connect', () => { socket.destroy(); resolve(true) })
-      socket.once('error', () => { socket.destroy(); resolve(false) })
-    })
+    const busy = await probePortBusy(port, signal)
     if (busy) {
       logger.log(`port ${port} already in use; skipping`)
       continue
     }
+    // stop() can win during the asynchronous port pre-check. Never create a
+    // detached child for a lifecycle generation that is already cancelled.
+    if (signal?.aborted) throw new Error('spawn aborted')
     try {
       const spawned = await spawnAttempt({ dshHome, stateDir, dshWorkspacePath, port, logger, patchPath, signal })
       return {
@@ -495,6 +665,14 @@ export function readPidRecord(stateDir: string, pid: number): PidRecord | null {
 /** Atomic JSON write (tmp + rename): catalog/pid durability without partial files. */
 export function atomicWriteJson(path: string, value: unknown): void {
   const tmp = `${path}.${randomUUID()}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(value, undefined, 2)}\n`)
+  // fsync before the rename (2026 review): a crash between write and rename
+  // must not leave a zero-length/partial record at the final path.
+  const fd = openSync(tmp, 'w', 0o600)
+  try {
+    writeSync(fd, `${JSON.stringify(value, undefined, 2)}\n`)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
   renameSync(tmp, path)
 }

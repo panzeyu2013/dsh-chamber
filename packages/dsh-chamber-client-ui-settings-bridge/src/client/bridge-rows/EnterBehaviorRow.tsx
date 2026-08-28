@@ -14,16 +14,6 @@ import type { BusyEnterBehavior } from './enter-row-controller.ts'
 import { BUSY_ENTER_BEHAVIORS, DEFAULT_BUSY_ENTER_BEHAVIOR } from './enter-row-controller.ts'
 import css from './EnterBehaviorRow.module.css'
 
-/** Registration-side preference face (bridge inject). */
-export interface EnterBehaviorRowInjected {
-  hooks: {
-    /** Persisted busy-state preference bound as useBusyEnter. */
-    busyEnter: { getSnapshot(): BusyEnterBehavior; subscribe(fn: () => void): () => void }
-  }
-  /** Change the busy-state plain-Enter behavior. */
-  setBusyEnter: (behavior: BusyEnterBehavior) => void
-}
-
 /** Full Settings-row props (bridge-outlet kit + the injected face). */
 export interface EnterBehaviorRowProps {
   useBusyEnter: SnapshotSelectorHook<BusyEnterBehavior>

@@ -2,7 +2,12 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "lib/types"
+    "outDir": "lib/types",
+    "paths": {
+      "@dsh-chamber/dsh-client-ui-sidebar/shared": [
+        "./src/ambient/sidebar-shared.d.ts"
+      ]
+    }
   },
   "include": [
     "src"

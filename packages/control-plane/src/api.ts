@@ -45,6 +45,8 @@ import type { Logger } from './types.ts'
 
 /** Body read cap for POST payloads (10 MiB; the instance proxy has its own 300MiB cap). */
 const MAX_BODY_BYTES = 10 * 1024 * 1024
+/** Management body per-chunk idle timeout (2026 review). */
+const BODY_IDLE_TIMEOUT_MS = 10_000
 const MAX_HEALTH_EVENT_STREAMS = 32
 /** Per-client frames retained while its SSE socket is backpressured. */
 const MAX_HEALTH_EVENT_PENDING_FRAMES = 32
@@ -66,6 +68,8 @@ export interface ApiRequest {
   removeListener(event: string, listener: (...args: any[]) => void): unknown
   once(event: string, fn: () => void): unknown
   off(event: string, fn: () => void): unknown
+  /** Abort the request stream (IncomingMessage.destroy); optional for fakes. */
+  destroy?(): unknown
 }
 
 /**
@@ -84,6 +88,9 @@ export interface ApiResponse {
   setHeader(name: string, value: unknown): unknown
   destroy(): unknown
   headersSent: boolean
+  /** True once end() has been called (Node's ServerResponse; distinguishes a
+   *  normal end from a mid-stream client disconnect on 'close'). */
+  writableEnded: boolean
   _corsHeaders?: Record<string, string>
   /** Per-response CSP nonce minted by the owning HTTP server. */
   _cspNonce?: string
@@ -255,16 +262,38 @@ export function createApi(deps: ApiDeps) {
     const chunks = []
     let size = 0
     let oversize = false
-    for await (const chunk of req) {
-      size += chunk.length
-      if (size > MAX_BODY_BYTES) {
-        // Keep draining the remainder so a keep-alive socket
-        // (maxRequestsPerSocket=1000) is not left with unread body bytes that
-        // would be misparsed as the next request line.
-        oversize = true
-        continue
+    let idleTimer: NodeJS.Timeout | undefined
+    let idleExpired = false
+    // Per-chunk idle timeout (2026 review): a slow body must not hold a
+    // connection slot for the whole 35s requestTimeout — management bodies
+    // are small JSON, 10s of silence means the client is gone.
+    const armIdle = (): void => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        idleExpired = true
+        req.destroy?.()
+      }, BODY_IDLE_TIMEOUT_MS)
+      idleTimer.unref?.()
+    }
+    armIdle()
+    try {
+      for await (const chunk of req) {
+        if (idleExpired) return null
+        armIdle()
+        size += chunk.length
+        if (size > MAX_BODY_BYTES) {
+          // Keep draining the remainder so a keep-alive socket
+          // (maxRequestsPerSocket=1000) is not left with unread body bytes
+          // that would be misparsed as the next request line.
+          oversize = true
+          continue
+        }
+        chunks.push(chunk)
       }
-      chunks.push(chunk)
+    } catch {
+      return null
+    } finally {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
     }
     if (oversize || chunks.length === 0) return null
     try {
@@ -276,10 +305,10 @@ export function createApi(deps: ApiDeps) {
 
   /** Resolve a route from {pathname, method}; returns {handler} or null. */
   function route(method: string | undefined, segments: string[], res: ApiResponse, req: ApiRequest): RouteHandler | null {
-    if (segments[0] === 'health' && method === 'GET') return async () => json(res, 200, deps.getHealth())
+    if (segments[0] === 'health' && segments.length === 1 && method === 'GET') return async () => json(res, 200, deps.getHealth())
     if (segments[0] === 'api') {
       const [a, b] = [segments[1], segments[2]]
-      if (a === 'host' && b === 'health-events' && method === 'GET' && deps.subscribeHealthEvents !== undefined) {
+      if (a === 'host' && b === 'health-events' && segments.length === 3 && method === 'GET' && deps.subscribeHealthEvents !== undefined) {
         return async () => {
           if (activeHealthEventStreams >= MAX_HEALTH_EVENT_STREAMS) {
             return jsonError(res, 503, { code: 'resource_exhausted', message: 'too many health-event streams' })
@@ -316,7 +345,6 @@ export function createApi(deps: ApiDeps) {
             if (keepalive !== null) clearInterval(keepalive)
             pendingFrames.length = 0
             res.removeListener('drain', flushPending)
-            req.removeListener('close', teardown)
             releaseSubscription()
             try {
               res.end()
@@ -359,7 +387,14 @@ export function createApi(deps: ApiDeps) {
             }
             writeFrame(`data: ${JSON.stringify(payload)}\n\n`)
           }
-          req.on('close', teardown)
+          // Node 16+: IncomingMessage 'close' fires as soon as the request
+          // body is consumed (immediately for a bodyless GET) — not on client
+          // disconnect — so a req listener would tear this SSE stream down
+          // right after it opens. Detect real disconnects on the response
+          // leg: 'close' fires on connection teardown, and writableEnded
+          // separates a normal end() from an aborted one (teardown is
+          // idempotent via tornDown).
+          res.on('close', () => { if (!res.writableEnded) teardown() })
           const health = deps.getHealth()
           send({ status: health.dsh.status, port: health.dsh.port, error: health.dsh.error ?? null })
           if (tornDown) return
@@ -414,7 +449,7 @@ export function createApi(deps: ApiDeps) {
             }
           }
         }
-        if (b === 'local' && method === 'DELETE') {
+        if (b === 'local' && segments.length === 3 && method === 'DELETE') {
           return async () => {
             try {
               await deps.stopConnection(b)
@@ -427,7 +462,7 @@ export function createApi(deps: ApiDeps) {
             }
           }
         }
-        if (b === 'local' && method === 'PATCH') {
+        if (b === 'local' && segments.length === 3 && method === 'PATCH') {
           return async (body: any) => {
             if (body === null || typeof body !== 'object') return jsonError(res, 400, 'bad_request')
             try {
@@ -458,7 +493,7 @@ export function createApi(deps: ApiDeps) {
         instanceHandler.ownBody = true
         return instanceHandler
       }
-      if (a === 'host' && b === 'logs' && method === 'GET') {
+      if (a === 'host' && b === 'logs' && segments.length === 3 && method === 'GET') {
         // Managed-host rolling logs (design 02 §3.8 read side).
         return async () => {
           if (deps.hostLogs === undefined) return jsonError(res, 404, 'not_found')

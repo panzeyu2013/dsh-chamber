@@ -22,8 +22,7 @@
  */
 
 import { open, readdir, stat } from 'node:fs/promises'
-import { createWriteStream, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import type { WriteStream } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readPidRecord } from './spawn-dsh.ts'
 import type { PidRecord } from './spawn-dsh.ts'
@@ -67,69 +66,81 @@ interface HostLogWriter {
   close(): void
 }
 
-/**
- * Appending JSONL writer for one managed host (the write side of the
+/** Appending JSONL writer for one managed host (the write side of the
  * rolling-log convention above — attached by spawn-dsh.ts to the host's
- * stdout/stderr). Failures are swallowed (the control-plane logger already
- * carried the line; a dead log file must never wedge the host pipe).
+ * stdout/stderr). Writes are SYNCHRONOUS appendFileSync calls: an async
+ * WriteStream would race compaction's rename (a pending async open appends
+ * its buffered backlog into the renamed file, duplicating and interleaving
+ * content — 2026 round-3 review). The volume is tiny (the web-profile host
+ * is silent on stdio; the observable content is lifecycle transitions), so
+ * sync appends are free. Failures are swallowed (the control-plane logger
+ * already carried the line; a dead log file must never wedge the host pipe).
  */
 export function createHostLogWriter(stateDir: string, port: number): HostLogWriter {
-  let stream: WriteStream | null = null
+  let needsSetup = true
   let linesWritten = 0
-  /** Compaction: keep the trailing COMPACT_KEEP_LINES, reopen the stream
-   * (rename invalidates the old fd — without the reopen, further writes would
-   * land on the renamed-away inode). Failures are swallowed: logging must
-   * never wedge the host pipe. */
+  // In-memory ring of the last COMPACT_KEEP_LINES lines — the compaction
+  // source (the file is never re-read for compaction, so no read-vs-write
+  // race exists at all).
+  const ring: string[] = []
+  /**
+   * Drop all in-memory knowledge of the current backing-file generation.
+   * After any append/compaction failure we cannot prove that the file still
+   * contains the ring; retaining it could resurrect deleted content when a
+   * later compaction replaces a newly-created file.
+   */
+  function resetGeneration(): void {
+    ring.length = 0
+    linesWritten = 0
+    needsSetup = true
+  }
+  /** (Re)create the log directory; the next append then lands. */
+  function setup(): void {
+    try {
+      mkdirSync(join(stateDir, LOG_DIR), { recursive: true })
+      needsSetup = false
+    } catch {
+      /* swallow — the write is lost; the next write retries */
+    }
+  }
+  /** Compaction: keep the trailing COMPACT_KEEP_LINES. Failures are
+   * swallowed: logging must never wedge the host pipe. */
   function compact(): void {
     try {
-      const text = readFileSync(logPathFor(stateDir, port), 'utf8')
-      const lines = text.split('\n').filter(line => line !== '')
-      const kept = lines.slice(-COMPACT_KEEP_LINES)
       const tmp = `${logPathFor(stateDir, port)}.compact.tmp`
-      writeFileSync(tmp, kept.length === 0 ? '' : `${kept.join('\n')}\n`)
+      // Ring entries already end with '\n' — join with '' (a '\n' join
+      // would double the separators and leave blank lines between entries).
+      writeFileSync(tmp, ring.join(''))
       renameSync(tmp, logPathFor(stateDir, port))
-      if (stream !== null) {
-        try { stream.end() } catch { /* ignore */ }
-        stream = null
-      }
-      linesWritten = kept.length
-    } catch { /* swallow — see header note */ }
+      linesWritten = ring.length
+    } catch {
+      resetGeneration()
+      /* swallow — see header note */
+    }
   }
   return {
     write(line, streamName) {
-      if (stream === null) {
-        try {
-          mkdirSync(join(stateDir, LOG_DIR), { recursive: true })
-          const fresh = createWriteStream(logPathFor(stateDir, port), { flags: 'a' })
-          // An async open failure (ENOSPC/EACCES/removed dir) emits 'error'
-          // on the stream — without a listener it becomes an uncaughtException
-          // and kills the plane. Swallow it, drop the stream, and lazily
-          // recreate on the next write (the write is already lost; logging
-          // must never take the host pipes or the plane down).
-          fresh.on('error', () => {
-            try { fresh.end() } catch { /* ignore */ }
-            stream = null
-          })
-          stream = fresh
-        } catch {
-          return
-        }
-      }
+      if (needsSetup) setup()
+      const entry = `${JSON.stringify({ ts: new Date().toISOString(), stream: streamName, line })}\n`
       try {
-        stream.write(`${JSON.stringify({ ts: new Date().toISOString(), stream: streamName, line })}\n`)
+        appendFileSync(logPathFor(stateDir, port), entry)
+        // The ring is the compaction source and compaction REPLACES the file
+        // with it — push only on success so the invariant ring == file holds
+        // exactly (a swallowed write must never be resurrected by a later
+        // compaction; 2026 review hardening).
+        ring.push(entry)
+        if (ring.length > COMPACT_KEEP_LINES) ring.splice(0, ring.length - COMPACT_KEEP_LINES)
+        // Count only writes known to have landed in this backing generation.
+        linesWritten += 1
+        if (linesWritten > MAX_LOG_LINES) compact()
       } catch {
-        /* swallow — see header note */
+        // The write is lost and the backing generation is now uncertain.
+        // Forget its ring/counter so a later recreation cannot resurrect it.
+        resetGeneration()
       }
-      // Ring cap (design 02 §3.8): a long-lived host must not grow an
-      // unbounded log file. Count lines written since the last compaction and
-      // compact back to COMPACT_KEEP_LINES once the cap is crossed.
-      linesWritten += 1
-      if (linesWritten > MAX_LOG_LINES) compact()
     },
     close() {
-      if (stream === null) return
-      stream.end()
-      stream = null
+      // Sync appends are already durable; nothing to flush.
     },
   }
 }
@@ -279,8 +290,10 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
     const truncated = text !== '' && lines.length < needed && info.size > MAX_WHOLE_READ_BYTES
     if (lines.length > needed) lines = lines.slice(lines.length - needed)
-    // offset: drop the newest `offset` lines (only when they actually exist)
-    if (offset > 0 && lines.length > offset) lines = lines.slice(0, lines.length - offset)
+    // offset: drop the newest `offset` lines — offset >= available skips
+    // EVERYTHING (never "return all lines", which would violate the limit
+    // and the skip semantics; 2026 round-3 review).
+    if (offset > 0) lines = lines.length > offset ? lines.slice(0, lines.length - offset) : []
     return { lines: lines.map(parseLogLine).filter((entry): entry is LogLine => entry !== null), truncated }
   } finally {
     await fd.close()

@@ -26,7 +26,7 @@
     }
   },
   "scripts": {
-    "test": "node test/git-api.ts && node ../dsh-chamber-client-ui-sidebar/test/instance-mutation-values.ts && node test/snapshot-facts.ts && node test/saga.ts && node test/slot-contract.ts"
+    "test": "node test/git-api.ts && node test/snapshot-facts.ts && node test/saga.ts && node test/slot-contract.ts && node test/visibility-gate.ts"
   },
   "license": "MIT",
   "dependencies": {

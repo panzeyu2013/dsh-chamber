@@ -32,7 +32,7 @@ import {
   HOST_GRAPH_PACKAGE_NAME,
   HOST_GRAPH_PATCH_FILENAME,
 } from '../src/host-graph-seed.ts'
-import { webProfileArgs } from '../src/spawn-dsh.ts'
+import { webProfileArgs, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import { createLocalConnection } from '../src/local-connection.ts'
 import { createControlPlane } from '../src/index.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
@@ -43,8 +43,9 @@ const silentLogger = { log() {}, warn() {}, error() {} }
  * The canonical overlay content the seed writes (mirror of the module).
  *
  * Validation note (④): the assertions below are byte-exact against the
- * module's single-sourced constant HOST_GRAPH_PATCH_OVERLAY — the strongest
- * check available here, because the overlay's boot-time authority
+ * module's canonical overlay renderer output (renderPatchOverlay over the
+ * HOST_GRAPH_INSERT row) — the strongest check available here, because the
+ * overlay's boot-time authority
  * (@deepseek-ai/dsh-app-boot loadOverlayPatches → parsePatchList, a YAML
  * parser over the top-level loader-patch array) is NOT importable from this
  * test: control-plane's runtime node graph resolves neither
@@ -267,17 +268,19 @@ test('ensureHostPackage reuses the seed path for the Git worktree host package',
 // ---------------------------------------------------------------------------
 
 test('webProfileArgs keeps the v4 flag set when no patch overlay is given', () => {
-  assert.deepEqual(webProfileArgs(17510), [
-    '--profile', 'web', '--host', '127.0.0.1', '--port', '17510', '--trusted-host', '127.0.0.1:17510',
+  assert.deepEqual(webProfileArgs(DEFAULT_DSH_START_PORT), [
+    '--profile', 'web', '--host', '127.0.0.1', '--port', String(DEFAULT_DSH_START_PORT),
+    '--trusted-host', `127.0.0.1:${DEFAULT_DSH_START_PORT}`,
   ])
   // Empty string is treated as absent (callers may resolve a nullable config).
-  assert.deepEqual(webProfileArgs(17510, ''), webProfileArgs(17510))
+  assert.deepEqual(webProfileArgs(DEFAULT_DSH_START_PORT, ''), webProfileArgs(DEFAULT_DSH_START_PORT))
 })
 
 test('webProfileArgs injects --patch before the web app flags when a patch overlay is given', () => {
-  assert.deepEqual(webProfileArgs(17511, '/tmp/dsh-chamber-graph.patch.yml'), [
+  assert.deepEqual(webProfileArgs(DEFAULT_DSH_START_PORT + 1, '/tmp/dsh-chamber-graph.patch.yml'), [
     '--profile', 'web', '--patch', '/tmp/dsh-chamber-graph.patch.yml',
-    '--host', '127.0.0.1', '--port', '17511', '--trusted-host', '127.0.0.1:17511',
+    '--host', '127.0.0.1', '--port', String(DEFAULT_DSH_START_PORT + 1),
+    '--trusted-host', `127.0.0.1:${DEFAULT_DSH_START_PORT + 1}`,
   ])
 })
 
@@ -294,7 +297,7 @@ function mockCatalog() {
 }
 
 function mockSpawned(): SpawnedDsh {
-  return { child: { on() {}, exitCode: null }, port: 17510, stop: async () => {} }
+  return { child: { on() {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
 }
 
 test('createLocalConnection passes the resolved patchPath to the spawn fn', async t => {
@@ -334,7 +337,7 @@ function mockSpawnedWithExit(): SpawnedDsh & { fireExit(): void } {
       },
       exitCode: null,
     },
-    port: 17510,
+    port: DEFAULT_DSH_START_PORT,
     stop: async () => {},
     fireExit() {
       exitListener?.(1, null)

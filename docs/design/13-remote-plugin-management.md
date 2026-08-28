@@ -1,7 +1,8 @@
 # 13 · 远程实例插件管理（远程 dsh plugin 编排；已实现，2026-08；设计 08 双包 seed 更新 2026-08-20）
 
-> **状态：已实现（2026-08，M1–M4 落地）**——实现记录与验证见
-> `docs/progress/STATUS.md`（设计 13 条目）。本文档补全此前散落于
+> **状态：已实现（2026-08，M1–M4 落地）**——实现基线以 git 历史与
+> CHANGELOG 为准；剩余项（本机 pnpm 依赖）见 `docs/progress/STATUS.md`。
+> 本文档补全此前散落于
 > 05 §7.4/§7.6、03 §2.2 与 STATUS 中的契约实体，成为该面的设计权威。
 > 范围纪律：只做**编排**（远端 dsh plugin CLI 经 exec 通道驱动），不重造
 > dsh 宿主插件系统本身。设计 08 增加的 Git 执行仍在远端 dsh 实例内；本设计
@@ -23,11 +24,17 @@
 `TransportExecPayload.op`（05 §7.6）：
 
 - `'exec'`：systemctl `start/stop/is-active/restart`；远端命令 `run`——命令名
-  白名单 `dsh|cat|printf|base64|mkdir` + argv/路径白名单 + shell 元字符拒绝
+  白名单 `dsh|cat|printf`（可分发命令；`base64`/`mkdir` 仅内联于 write-file
+  的固定远端管线 `mkdir -p && base64 -d`，不可单独分发）+ argv/路径白名单 +
+  shell 元字符拒绝
   （见 §7.2）。成功结果同时携带 stdout（UTF-8 视图）与 stdoutBytes（原始
   Buffer）——二进制内容校验在字节域进行。
 - `'write-file'`：stdin base64 流式写 + **字节域 SHA-256 回读校验** + 目标
   前缀白名单 + **50MiB 大小上限**。
+- `run` 捕获 stdout 在追加 Buffer 前执行 50MiB 总字节上限；stderr/隧道与
+  systemd stdout/stderr 先按完整行重组再脱敏，每条未终止行最多 64Ki 字符，
+  超限整行丢弃且只记固定摘要。失败详情在接收每行时即限制为 2048 字符，不能
+  先无界积累再在进程退出时截断。
 
 ## 3. 编排（plugin-sync.ts）
 
@@ -41,7 +48,9 @@
   install-level fallback `profiles/node_modules`，再合并 web profile 的
   `cordis.patch.yml`。`seedRemoteHostGraph` 保留为旧手动 IPC 的单包兼容 wrapper。
 - `materialize`：本地路径包物化（pack → ssh 传输 → 远端 `add file:`）；
-  `add file:` 走独立目录约束白名单分支（仅物化目录内绝对路径）。
+  `add file:` 走独立目录约束白名单分支（仅物化目录内绝对路径）。本地
+  `pnpm pack` 固定 `--config.ignore-scripts=true`，选择目录只授权读取/传输，
+  不授权执行包的 prepack/prepare/postpack 生命周期脚本。
 
 双包 seed 的顺序与失败语义固定：
 
@@ -69,7 +78,9 @@
 
 ### 4.1 远端插件清单
 
-`desktop_ssh_plugin_list` → 远端 `dsh plugin --profile web list` 解析。现有
+`desktop_ssh_plugin_list` → 远端 `cat <home>/profiles/web/package.json` +
+主进程本地 JSON 解析（`remotePluginList`；白名单固定 cat 目标，无远端命令
+分发面）。现有
 `chamber.hostGraph.installed` 投影的本地/远端语义保持**两文件定义**
 （package.json + dist/index.js，`SEED_FILES`）；设计 08 没有把 Git host 包塞进
 普通插件 manifest schema。Git 客户端以每实例 `gitWorktree` Remote 的实际应答
@@ -77,7 +88,8 @@
 
 ### 4.2 remoteDshHome（远端 dsh home 路径基准）
 
-- 非秘密元数据：`~/.dsh` 或绝对路径，`null` = 远端默认 `~/.dsh`；
+- 非秘密元数据：`~/.dsh` 或绝对路径，`null` = 远端默认 `~/.dsh`；每个路径段
+  只含 `[a-zA-Z0-9._-]` 且不得为 `.` / `..`，不接受空段或尾随 `/`；
 - 贯穿 schema（`TransportInstanceSpec.remoteDshHome`）/ 状态投影 / IPC / 双
   ambient 类型；所有远端路径从它派生（白名单、shell 安全值，见 §7.2）；
 - ENOENT 在原始 stderr 上分类：`.ssh*` 命名的 remoteDshHome 不再因整行脱敏
@@ -88,9 +100,10 @@
 - 远程：`desktop_ssh_plugin_list`、`desktop_ssh_plugin_apply`（add/remove/
   restart）、`desktop_ssh_seed_host_graph`、`desktop_ssh_plugin_materialize_add`
   （`add file:`）、`desktop_ssh_plugin_materialize_add_pick`；
-- 本地：`desktop_local_plugin_list/add/remove`；
-- 其他：`desktop_npm_search`（npm 搜索，best-effort）、`desktop_pick_directory`
-  （主进程目录选择）。
+- 本地：`desktop_local_plugin_list/add/remove` + `desktop_local_plugin_add_file`
+  （本地路径包物化——目录选择收敛后取代旧 `desktop_pick_directory` 通道，
+  2026-08 起不存在）；
+- 其他：`desktop_npm_search`（npm 搜索，best-effort）。
 
 ## 6. UI（连接设置页 · 插件管理）
 
@@ -112,6 +125,23 @@
 
 ## 7. 安全
 
+### 7.0 主进程确认与路径脱敏（2026-11 审计复核，09 §4 v1 缓解）
+
+- `desktop_ssh_plugin_materialize_add` / `desktop_local_plugin_add` /
+  `desktop_local_plugin_remove` 在真正动作前须经主进程 `dialog.showMessageBox`
+  确认（远程 bundle 与 chamber 页面同上下文，脚本不能静默驱动外传/安装/卸载）；
+  取消返回 `{ok:true,cancelled:true}`（与 picker 取消同形）；无窗口 fail-closed；
+  单飞防弹窗堆叠。文案构造为纯函数（`describe*Confirmation`，可单测）。
+- `desktop_ssh_plugin_apply` 的 **registry add/remove**（2026 final review）同样
+  须主进程确认——远端安装是持久执行面，与本地安装同类；取消返回
+  `{ok:true,cancelled:true}`（`SshPluginApplyIpcResult` 增补该变体，三处镜像
+  同步）。空 add/remove 的 apply 是 **no-op**（`applyPlugins` 仅在存在变更时
+  重启），脚本无法借 plugin_apply 触发无变更重启。
+- `desktop_local_plugin_list` 的依赖值投影脱敏：materialize 类（file:/link:/
+  相对/绝对/`~/`）值掩码为 `file:<hidden>`（保持双端 materialize 分类与名称
+  匹配语义），本地绝对路径不回显 renderer。主进程内部仍持有完整 manifest
+  （`resolveLocalMaterializeDirectory` 等不受影响）。
+
 ### 7.1 双侧二次校验
 
 renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exec argv）
@@ -119,11 +149,16 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
 
 ### 7.2 白名单（权威）
 
-- 远端命令名：`dsh|cat|printf|base64|mkdir`；argv/路径白名单 + shell 元字符
-  拒绝。OpenSSH 的远端命令最终仍由远端 shell 解释，因此安全性来自固定命令
-  形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全边界；
+- 可分发远端命令名：`dsh|cat|printf`（`buildRemoteExecArgv` 按命令分发并
+  逐参数白名单）；`base64 -d`/`mkdir -p` 仅内联于 write-file 管线（固定
+  `mkdir -p <dir> && base64 -d > <path>` 形状，非可分发命令）。argv/路径白名单
+  + shell 元字符拒绝。OpenSSH 的远端命令最终仍由远端 shell 解释，因此安全性
+  来自固定命令形状与 shell-safe 值白名单，不能把本地 argv 数组本身当成安全
+  边界；
 - 服务名：`^[a-zA-Z0-9_.-]+$`（systemctl 目标）；
-- remoteDshHome：白名单 + shell 安全值（null = 远端默认 `~/.dsh`）；
+- remoteDshHome：`^~?(?:\/(?!\.{1,2}(?:\/|$))[a-zA-Z0-9._-]+)+$` +
+  1024 字符上限（null = 远端默认 `~/.dsh`）；renderer UX 门禁与主进程权威
+  由 parity 测试防漂移；
 - `write-file` 目标前缀白名单 + 50MiB 大小上限。
 
 ### 7.3 字节域校验
@@ -134,11 +169,18 @@ UTF-8 文本视图。
 ## 8. 分期
 
 - **M1–M4 已落地（2026-08）**：exec `restart/run/write-file` + §7.2 白名单、
-  remoteDshHome 贯穿、plugin-sync 编排、10 个 IPC 通道、前端
+  remoteDshHome 贯穿、plugin-sync 编排、10 个 IPC 通道（远端
+  plugin_list/plugin_apply/seed_host_graph/materialize_add/materialize_add_pick
+  + 本地 local_plugin_list/add/remove/add_file + npm_search）、前端
   PluginSyncModal/PluginAddView/plugin-diff、chamber 内建注入可见化 +
   生效三态。
 - **设计 08 扩展已落地（2026-08-20）**：通用双 host-package seed、精确
   id/name pair merge、ready-time 单飞注入与 packaged 双包复制；未改变
   TransportExecAction/run 形状或普通插件 manifest schema。
+- **退出所有权（2026-08-28 merge review）**：本地 `pnpm pack` / `dsh plugin`
+  子进程由 plugin-sync 独立跟踪；will-quit 先注销 ready-time seed listener，
+  再终止并等待全部本地子进程（POSIX 独立进程组，Windows `taskkill /T /F`
+  进程树）。退出开始后拒绝新 local child；与 transport-manager 对远端 SSH
+  exec 的 disposeAsync 并行，统一受桌面 5s 退出硬上限兜底。
 - **剩余**：本地 `dsh plugin` / `pnpm pack` 依赖本机 pnpm
   （`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。

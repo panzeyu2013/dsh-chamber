@@ -9,14 +9,12 @@
  *   files fail loudly, never masquerade as an empty set — the desktop main
  *   process preserves the corrupt file before starting empty). Legacy files
  *   without `kind` migrate to the provider kind on load.
- * - Transport lifecycle per instance: tunnel mode (provider.buildStartArgs →
- *   a child process, local port bound via net listen(0), readiness = the
+ * - Transport lifecycle per instance: provider.buildStartArgs starts a child
+ *   tunnel on a local port bound via net listen(0), readiness = the
  *   local port accepts a TCP connection AND the provider's endpoint identity
  *   verification passes — verifyUp, e.g. the ssh provider's host.describe
  *   handshake, so a non-dsh service on the destination port never presents
- *   as ready) and DIRECT ENDPOINT mode
- *   (buildStartArgs → null: no child, the runtime probes
- *   provider.probeTarget() and exposes provider.endpointUrl()).
+ *   as ready).
  * - Phase machine: idle → connecting → ready ⇄ degraded → error, with
  *   TWO-TIER retry: a fast burst of bounded jittered exponential backoff
  *   (retryBaseMs * 2^n, half-open jitter, capped) followed — when the burst
@@ -55,6 +53,7 @@ import net from 'node:net'
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
+import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -379,6 +378,8 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   const states = new Map<string, InstanceState>()
   /** In-flight provider exec children, SIGTERMed by dispose() (app quit). */
   const execChildren = new Set<SpawnedProcess>()
+  /** Teardown gate: after dispose starts, no path may create a new child. */
+  let disposed = false
   /** Transport-child SIGTERM → SIGKILL timers outlive registry retirement.
    * Keeping them manager-global means deleting an InstanceState cannot lose
    * cleanup ownership during immediate same-id re-add or app quit. */
@@ -633,11 +634,12 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
 
   /**
    * Start one transport attempt and drive it to ready/degraded/error. The
-   * readiness detection polls the probe target (probeIntervalMs) up to
-   * readyTimeoutMs: the port accepting a connection (tunnel mode) — or the
-   * direct endpoint answering (endpoint mode) — is the honest "up" signal.
+   * readiness detection polls the local tunnel (probeIntervalMs) up to
+   * readyTimeoutMs; accepting a connection plus protocol verification is the
+   * honest "up" signal.
    */
   async function startTransport(id: string) {
+    if (disposed) return
     const spec = instances.get(id)
     if (spec === undefined) return
     const state = ensureState(id)
@@ -667,158 +669,117 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
     // readiness-detection loop have a stable anchor.
     transition(id, 'connecting', 'starting transport', state)
 
-    let localPort: number | null = null
-    // Capability: a provider with buildStartArgs gets a local tunnel port;
-    // a provider without it is DIRECT ENDPOINT mode (no child, no port).
-    if (provider.buildStartArgs !== undefined) {
-      try {
-        localPort = await doAllocate()
-      } catch (allocateError) {
-        const detail = describeTransportError(allocateError)
-        transition(id, 'error', `failed to allocate a local port: ${detail}`, state)
-        if (isCurrentState(id, state)) appendLogInternal(state, 'error', `port allocation failed: ${detail}`)
-        return
-      }
-      // disconnect()/failTerminal/restart may have landed while the port was
-      // being allocated; the phase or the epoch tells us — abort, never start.
+    let localPort: number
+    try {
+      localPort = await doAllocate()
+    } catch (allocateError) {
       if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
-      state.localPort = localPort
+      const detail = describeTransportError(allocateError)
+      transition(id, 'error', `failed to allocate a local port: ${detail}`, state)
+      appendLogInternal(state, 'error', `port allocation failed: ${detail}`)
+      // Port exhaustion is transient. Keep one slow retry instead of leaving
+      // the instance permanently wedged in error.
+      state.reconnectTimer = setTimeout(() => {
+        state.reconnectTimer = null
+        if (!isCurrentState(id, state)) return
+        void startTransport(id).catch(error => warn(`transport-manager: slow re-probe rejected: ${describeTransportError(error)}`))
+      }, slowRetryMs)
+      state.reconnectTimer.unref?.()
+      return
     }
+    if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
+    state.localPort = localPort
 
-    let args: readonly string[] | null = null
-    if (provider.buildStartArgs !== undefined) {
-      try {
-        args = provider.buildStartArgs(spec, localPort as number)
-      } catch (buildError) {
-        // A throwing provider must never leave the machine stuck in
-        // connecting with no child and no recovery machinery.
-        const detail = describeTransportError(buildError)
-        warn(`transport-manager: provider.buildStartArgs threw: ${detail}`)
-        transition(id, 'error', `provider build failed: ${detail}`, state)
-        if (isCurrentState(id, state)) appendLogInternal(state, 'error', `provider buildStartArgs threw: ${detail}`)
-        return
-      }
+    let args: readonly string[]
+    try {
+      args = provider.buildStartArgs(spec, localPort)
+    } catch (buildError) {
+      const detail = describeTransportError(buildError)
+      warn(`transport-manager: provider.buildStartArgs threw: ${detail}`)
+      transition(id, 'error', `provider build failed: ${detail}`, state)
+      if (isCurrentState(id, state)) appendLogInternal(state, 'error', `provider buildStartArgs threw: ${detail}`)
+      return
     }
-    const directEndpoint = args === null
-    // A contradictory provider (buildStartArgs present but returning null)
-    // must not leak the allocated-but-never-bound port into the projection
-    // or readyUrl — direct endpoint mode owns neither.
-    if (directEndpoint) state.localPort = null
-    const probeTarget = (() => {
-      try {
-        return directEndpoint
-          ? (provider.probeTarget?.(spec) ?? { host: spec.host, port: spec.remotePort })
-          : { host: '127.0.0.1', port: localPort as number }
-      } catch (probeError) {
-        // A throwing probeTarget must not leave the machine stuck in
-        // connecting (no child, no recovery) — loud error instead.
-        const detail = describeTransportError(probeError)
-        warn(`transport-manager: provider.probeTarget threw: ${detail}`)
-        transition(id, 'error', `provider probeTarget threw: ${detail}`, state)
-        if (isCurrentState(id, state)) appendLogInternal(state, 'error', `provider probeTarget threw: ${detail}`)
-        return null
-      }
-    })()
-    if (probeTarget === null) return
+    const probeTarget = { host: '127.0.0.1', port: localPort }
 
-    if (directEndpoint) {
-      // DIRECT ENDPOINT mode: no child process — the endpoint is reached
-      // as-is (e.g. a tailnet host); only the probe loop below runs.
-      transition(id, 'connecting', `reaching ${spec.host}:${probeTarget.port} directly`, state)
-    } else {
-      // Provider-owned extra environment (ssh: the askpass env for password
-      // auth, design 05 §8) is merged over process.env — never replaces it
-      // (the child must keep HOME, PATH, …). A throwing provider lands on a
-      // loud error, never a stuck connecting with no child.
-      let transportEnv: NodeJS.ProcessEnv | null = null
-      if (provider.buildStartEnv !== undefined) {
-        try {
-          transportEnv = provider.buildStartEnv(spec)
-        } catch (envError) {
-          const detail = describeTransportError(envError)
-          warn(`transport-manager: provider.buildStartEnv threw: ${detail}`)
-          transition(id, 'error', `provider buildStartEnv threw: ${detail}`, state)
-          if (isCurrentState(id, state)) appendLogInternal(state, 'error', `provider buildStartEnv threw: ${detail}`)
-          return
-        }
-      }
-      let child: SpawnedProcess
+    let transportEnv: NodeJS.ProcessEnv | null = null
+    if (provider.buildStartEnv !== undefined) {
       try {
-        child = doSpawn('ssh', args!, {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env: transportEnv === null ? undefined : { ...process.env, ...transportEnv },
-        })
-      } catch (spawnError) {
-        state.requiresUserAction = true
-        failTerminal(id, state, `failed to spawn transport: ${describeTransportError(spawnError)}`)
+        transportEnv = provider.buildStartEnv(spec)
+      } catch (envError) {
+        const detail = describeTransportError(envError)
+        warn(`transport-manager: provider.buildStartEnv threw: ${detail}`)
+        transition(id, 'error', `provider buildStartEnv threw: ${detail}`, state)
+        if (isCurrentState(id, state)) appendLogInternal(state, 'error', `provider buildStartEnv threw: ${detail}`)
         return
       }
-      if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) {
-        signalChild(child, 'SIGTERM')
-        return
-      }
-      state.child = child
-      transition(id, 'connecting', `spawning ${args![0]} ${args!.slice(1).join(' ')}`, state)
-      if (child.stdout !== null) {
-        child.stdout.on('data', chunk => {
-          if (state.child !== child) return
-          appendLogInternal(state, 'info', describeTransportError(chunk).trimEnd())
-        })
-      }
-      // Line-buffered stderr (per child): provider classification (redaction
-      // + auth detection) runs on COMPLETE lines only — node chunk boundaries
-      // are arbitrary, and a key path or an auth phrase straddling two chunks
-      // must never bypass either. The data guard mirrors the exit handler: a
-      // REPLACED child's late stderr must not poison the fresh attempt.
-      let stderrPending = ''
-      const processStderr = (text: string) => {
-        stderrPending += text
-        const lines = stderrPending.split(/\r?\n/)
-        stderrPending = lines.pop() ?? ''
-        for (const line of lines) {
-          // A throwing provider must never kill the main process from an
-          // event handler (uncaughtException) — guard the classification.
-          let logLine: string
-          let terminalAuth: boolean
-          try {
-            const classified = provider.classifyStderr(line)
-            logLine = classified.log
-            terminalAuth = classified.terminalAuth
-          } catch (classifyError) {
-            warn(`transport-manager: provider.classifyStderr threw: ${describeTransportError(classifyError)}`)
-            continue
-          }
-          if (logLine === '') continue
-          appendLogInternal(state, 'info', logLine)
-          if (terminalAuth) {
-            state.authFailed = true
-            appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
-          }
-        }
-      }
-      if (child.stderr !== null) {
-        child.stderr.on('data', chunk => {
-          if (state.child !== child) return
-          processStderr(describeTransportError(chunk))
-        })
-      }
-      child.on('exit', (code, exitSignal) => {
-        // Flush the unterminated stderr line before the exit handler decides —
-        // an auth pattern may live on the final (newline-less) line.
-        if (state.child === child) processStderr('\n')
-        onChildExit(id, state, child, code, exitSignal)
-      })
-      child.on('error', error => {
-        // Spawn failure (e.g. the transport binary is missing): terminal,
-        // user action. Guarded: a REPLACED child's late spawn-error must
-        // never failTerminal the fresh transport.
-        if (state.child !== child) return
-        const detail = describeTransportError(error)
-        appendLogInternal(state, 'error', `transport spawn error: ${detail}`)
-        state.requiresUserAction = true
-        failTerminal(id, state, `failed to spawn transport: ${detail}`)
-      })
     }
+    let child: SpawnedProcess
+    try {
+      child = doSpawn('ssh', args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: transportEnv === null ? undefined : { ...process.env, ...transportEnv },
+      })
+    } catch (spawnError) {
+      state.requiresUserAction = true
+      failTerminal(id, state, `failed to spawn transport: ${describeTransportError(spawnError)}`)
+      return
+    }
+    if (state.phase !== 'connecting' || epoch !== state.tunnelEpoch) {
+      signalChild(child, 'SIGTERM')
+      return
+    }
+    state.child = child
+    transition(id, 'connecting', `spawning ${args[0]} ${args.slice(1).join(' ')}`, state)
+
+    const outputOverflow = () => appendLogInternal(
+      state,
+      'error',
+      `transport output line dropped: exceeds ${CHILD_LINE_MAX_CHARS} characters`,
+    )
+    const classifyOutput = (line: string, detectAuth: boolean): void => {
+      let logLine: string
+      let terminalAuth = false
+      try {
+        const classified = provider.classifyStderr(line)
+        logLine = classified.log
+        terminalAuth = detectAuth && classified.terminalAuth
+      } catch {
+        // The classifier is the credential-redaction boundary. Its exception
+        // may quote the sensitive input, so emit only a fixed diagnostic.
+        warn('transport-manager: provider.classifyStderr threw; output dropped')
+        appendLogInternal(state, 'error', 'transport output dropped: provider classifier failed')
+        return
+      }
+      if (logLine === '') return
+      appendLogInternal(state, 'info', logLine)
+      if (terminalAuth) {
+        state.authFailed = true
+        appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
+      }
+    }
+    const processStdout = createBoundedLineProcessor(line => classifyOutput(line, false), outputOverflow)
+    const processStderr = createBoundedLineProcessor(line => classifyOutput(line, true), outputOverflow)
+    child.stdout?.on('data', chunk => {
+      if (state.child === child) processStdout(String(chunk))
+    })
+    child.stderr?.on('data', chunk => {
+      if (state.child === child) processStderr(String(chunk))
+    })
+    child.on('exit', (code, exitSignal) => {
+      if (state.child === child) {
+        processStdout('\n')
+        processStderr('\n')
+      }
+      onChildExit(id, state, child, code, exitSignal)
+    })
+    child.on('error', error => {
+      if (state.child !== child) return
+      const detail = describeTransportError(error)
+      appendLogInternal(state, 'error', `transport spawn error: ${detail}`)
+      state.requiresUserAction = true
+      failTerminal(id, state, `failed to spawn transport: ${detail}`)
+    })
 
     const controller = new AbortController()
     state.readyLoop = controller
@@ -867,12 +828,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
               return scheduleReconnect(id, state, reason)
             }
           }
-          if (directEndpoint) {
-            state.retryAttempt = 0
-            state.requiresUserAction = false
-            transition(id, 'ready', 'endpoint is reachable', state)
-            appendLogInternal(state, 'info', `endpoint reachable: ${spec.host}:${probeTarget.port}`)
-          } else if (!state.childExited && state.child !== null) {
+          if (!state.childExited && state.child !== null) {
             state.retryAttempt = 0
             state.requiresUserAction = false
             transition(id, 'ready', 'transport is up', state)
@@ -895,6 +851,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
 
   /** Provider exec channel (ssh: one remote systemd exec). */
   async function exec(id: string, action: TransportExecAction, payload?: TransportRunPayload): Promise<TransportExecResult> {
+    if (disposed) return { ok: false, error: 'transport manager is disposed' }
     const spec = instances.get(id)
     if (spec === undefined) {
       return { ok: false, error: 'ssh instance not found' }
@@ -1001,9 +958,10 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   /**
    * Persist a new instance set (atomic write) and align the registry:
    * instances that disappeared from the set have their transports
-   * disconnected and are removed; the set becomes exactly `next`. Invalid
-   * entries are dropped with a warning; duplicate ids keep the FIRST entry
-   * (loud, never silent) so the file and the returned set never disagree.
+   * disconnected and are removed; the set becomes exactly `next`. Save is an
+   * atomic proposal: one invalid/kind-mismatched entry or duplicate id rejects
+   * the whole replacement before persistence or live transport mutation.
+   * (Load-time recovery remains lenient for a damaged existing file.)
    * Instances whose operational parameters (host/user/ports/service/home)
    * changed retire their old async ownership; a previously-live transport is
    * restarted so the transport and projection never disagree.
@@ -1021,20 +979,21 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       throw error
     }
     const kept: TransportInstanceSpec[] = []
-    const dropped: TransportInstanceInput[] = []
     const restartIds: string[] = []
     const replaceStateIds: string[] = []
     const resetExecIds: string[] = []
     const seenIds = new Set<string>()
-    for (const entry of next) {
+    for (const [index, entry] of next.entries()) {
       const normalized = provider.validateSpec(entry)
       if (normalized === null || normalized.kind !== provider.kind) {
-        dropped.push(entry)
-        continue
+        const error: CodedError = new Error(`instance at index ${index} is invalid for transport kind ${provider.kind}`)
+        error.code = 'ssh_instances_invalid'
+        throw error
       }
       if (seenIds.has(normalized.id)) {
-        dropped.push(entry)
-        continue
+        const error: CodedError = new Error(`duplicate instance id at index ${index}`)
+        error.code = 'ssh_instances_duplicate'
+        throw error
       }
       seenIds.add(normalized.id)
       const previous = instances.get(normalized.id)
@@ -1057,7 +1016,6 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
       }
       kept.push(normalized)
     }
-    if (dropped.length > 0) warn(`transport-manager: dropped ${dropped.length} invalid or duplicate instance(s) from save`)
     // Persist BEFORE mutating the in-memory registry: a failed write throws
     // while the registry (and every live transport) stays untouched, so the
     // runtime and the UI never diverge on a partial save.
@@ -1105,6 +1063,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
    * @returns the status projection.
    */
   function connect(id: string): TransportStatusProjection | null {
+    if (disposed) return status(id)
     if (!instances.has(id)) {
       const error: CodedError = new Error('ssh instance not found')
       error.code = 'ssh_instance_not_found'
@@ -1220,16 +1179,12 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
   /**
    * The ready transport URL — INTERNAL ONLY, never exposed through status()
    * or the IPC surface (design 05 §8: the renderer builds webview URLs from
-   * localPort alone). Tunnel mode: the local listener; endpoint mode: the
-   * provider's endpoint URL. Returns null unless the transport is ready.
+   * localPort alone). Returns null unless the local tunnel is ready.
    */
   function readyUrl(id: string): string | null {
     const state = states.get(id)
     if (state?.phase !== 'ready') return null
-    if (state.localPort !== null) return `http://127.0.0.1:${state.localPort}`
-    const spec = instances.get(id)
-    if (spec === undefined) return null
-    return provider.endpointUrl?.(spec) ?? null
+    return state.localPort === null ? null : `http://127.0.0.1:${state.localPort}`
   }
 
   /** Ring-buffer log lines for one instance (copies; newest last). */
@@ -1264,6 +1219,7 @@ export function createTransportManager({ provider, spawnFn, portProbe, verifyPro
 
   /** Stop every transport, cancel in-flight execs, drop all listeners (app quit). */
   function dispose() {
+    disposed = true
     for (const id of [...states.keys()]) disconnect(id)
     for (const child of execChildren) {
       signalChild(child, 'SIGTERM')

@@ -10,20 +10,25 @@
  * /api/connections) rather than eagerly at boot — both documented
  * deviations of the v1 assembly.
  *
- * CLI: --port (default 3001), --bind (default 127.0.0.1), --state-dir
+ * CLI: --port (default 17500 — unified with the cli serve default via
+ * DEFAULT_CONTROL_PLANE_PORT), --bind (default 127.0.0.1), --state-dir
  * (default ~/.dsh-chamber / $DSH_CHAMBER_STATE), --dsh-path (optional
- * dshWorkspacePath override), --no-spawn (reserved flag; with an on-demand
- * host it changes nothing today), --help.
+ * dshWorkspacePath override), --help.
  *
  * Exit codes: 0 clean shutdown (SIGTERM) / --help, 1 startup failure,
  * 2 configuration error, 130 SIGINT.
  */
 
 import { statSync } from 'node:fs'
-import { createControlPlane, DEFAULT_STATE_DIR, defaultDshWorkspacePath } from './index.ts'
+import {
+  createControlPlane,
+  DEFAULT_CONTROL_PLANE_PORT,
+  DEFAULT_STATE_DIR,
+  defaultDshWorkspacePath,
+} from './index.ts'
 import type { Logger } from './types.ts'
 
-const DEFAULT_PORT = 3001
+const DEFAULT_PORT = DEFAULT_CONTROL_PLANE_PORT
 const DEFAULT_BIND = '127.0.0.1'
 
 const HELP = `dsh-chamber serve — standalone control plane (server deployment shape, design 02 §3.8)
@@ -42,8 +47,6 @@ Options:
                     (default $DSH_CHAMBER_STATE or ${DEFAULT_STATE_DIR})
   --dsh-path PATH   dsh workspace path override
                     (default $DSH_CHAMBER_DSH_PATH or <repo>/ref-dsh)
-  --no-spawn        do not host a dsh (reserved: with the current contract the
-                    host is on-demand, so this flag changes nothing today)
   -h, --help        show this help
 
 Exit codes: 0 clean shutdown/help, 1 startup failure, 2 configuration error,
@@ -58,7 +61,6 @@ export interface ParsedArgs {
   bind: string
   stateDir: string | undefined
   dshPath: string | undefined
-  noSpawn: boolean
   help: boolean
 }
 
@@ -68,7 +70,7 @@ export interface ParsedArgs {
  * configuration error (exit 2).
  */
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { port: DEFAULT_PORT, bind: DEFAULT_BIND, stateDir: undefined, dshPath: undefined, noSpawn: false, help: false }
+  const args: ParsedArgs = { port: DEFAULT_PORT, bind: DEFAULT_BIND, stateDir: undefined, dshPath: undefined, help: false }
   let positional = false
   for (let i = 0; i < argv.length; i++) {
     let arg = argv[i]
@@ -78,10 +80,6 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === '-h' || arg === '--help') {
       args.help = true
-      continue
-    }
-    if (arg === '--no-spawn') {
-      args.noSpawn = true
       continue
     }
     let name = arg
@@ -175,9 +173,6 @@ async function main(): Promise<number | null> {
   logger.log(`boot: state dir ${stateDir}`)
   logger.log(`boot: dsh workspace ${dshWorkspacePath}`)
   logger.log(`boot: bind ${args.bind}:${args.port}`)
-  if (args.noSpawn) {
-    logger.log('boot: --no-spawn (reserved: today the host spawns on first POST /api/connections; eager boot-spawn is a future contract)')
-  }
 
   const plane = createControlPlane({
     logger,

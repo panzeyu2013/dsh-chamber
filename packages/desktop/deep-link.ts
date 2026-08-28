@@ -356,6 +356,28 @@ export function validateRemotePath(path: string): { ok: true; path: string } | {
   return { ok: true, path }
 }
 
+/** Local workspace path validation. Chamber ships on Windows as well as
+ * POSIX platforms, so local paths accept POSIX absolute, drive-absolute and
+ * UNC forms. Remote dsh paths continue to use validateRemotePath and remain
+ * POSIX-only. */
+export function validateLocalPath(localPath: string): { ok: true; path: string } | { ok: false; error: string } {
+  if (typeof localPath !== 'string' || localPath.length === 0) {
+    return { ok: false, error: 'path is required' }
+  }
+  if (localPath.length > MAX_REMOTE_PATH_CHARS) {
+    return { ok: false, error: `path exceeds ${MAX_REMOTE_PATH_CHARS} characters` }
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(localPath)) {
+    return { ok: false, error: 'path contains control characters' }
+  }
+  const absolute = localPath.startsWith('/')
+    || /^[a-zA-Z]:[\\/]/.test(localPath)
+    || /^\\\\[^\\]+\\[^\\]+/.test(localPath)
+  if (!absolute) return { ok: false, error: 'path must be an absolute path' }
+  return { ok: true, path: localPath }
+}
+
 /**
  * Minimal IPv6 literal check (no node:net import — the module stays within
  * its sanctioned node built-ins). Accepts the standard 8-group,
@@ -445,7 +467,9 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
   if (pathParam === null) {
     return { ok: false, error: 'missing path' }
   }
-  const validatedPath = validateRemotePath(pathParam)
+  const validatedPath = instance === 'local'
+    ? validateLocalPath(pathParam)
+    : validateRemotePath(pathParam)
   if (!validatedPath.ok) return validatedPath
   return { ok: true, intent: { instanceId: instance, path: validatedPath.path } }
 }
@@ -510,9 +534,15 @@ export function buildVscodeRemoteUrl(
  * segment-wise encoded; the scheme is hardcoded `vscode:`.
  */
 export function buildVscodeFileUrl(remotePath: string): { ok: true; url: string } | { ok: false; error: string } {
-  const validatedPath = validateRemotePath(remotePath)
+  const validatedPath = validateLocalPath(remotePath)
   if (!validatedPath.ok) return validatedPath
-  return { ok: true, url: `vscode://file${encodeRemotePath(validatedPath.path)}` }
+  const windowsStyle = /^[a-zA-Z]:[\\/]/.test(validatedPath.path) || validatedPath.path.startsWith('\\\\')
+  const normalized = windowsStyle ? validatedPath.path.replace(/\\/g, '/') : validatedPath.path
+  const absolute = normalized.startsWith('/') ? normalized : `/${normalized}`
+  // VS Code documents drive targets as vscode://file/c:/...; keep only that
+  // drive colon literal while encoding every user-controlled segment.
+  const encoded = encodeRemotePath(absolute).replace(/^\/([a-zA-Z])%3A(?=\/|$)/i, '/$1:')
+  return { ok: true, url: `vscode://file${encoded}` }
 }
 
 /** Default executable-FILE check: access(X_OK) + isFile(). On POSIX a

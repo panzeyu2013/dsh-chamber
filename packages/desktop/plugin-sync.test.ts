@@ -20,7 +20,6 @@ import {
   classifyDependencyValue,
   classifyLocalDependency,
   classifySpec,
-  CLIENT_GRAPH_INSERT,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
@@ -43,7 +42,8 @@ import {
   PLUGIN_SPEC_PATTERN,
   PLUGIN_NAME_PATTERN,
 } from './plugin-sync.ts'
-import type { ChamberHostPackageSeed, ExecFn, ExecResult, StatusFn, RemoteSpec, TransportRunPayload } from './plugin-sync.ts'
+import type { ChamberHostPackageSeed, ExecFn, ExecResult, StatusFn, RemoteSpec } from './plugin-sync.ts'
+import type { TransportRunPayload } from './transport-provider.ts'
 import { NotificationSourceIncarnations } from './notifications.ts'
 
 function tempDir(): string {
@@ -120,7 +120,7 @@ test('remote saga ownership cannot revive after byte-identical same-id re-add', 
     calls += 1
     return await new Promise<ExecResult>(resolve => { settle = resolve })
   }, 'same', owns)
-  const firstStep = scoped('same', 'run', { op: 'exec', command: 'first', argv: [] })
+  const firstStep = scoped('same', 'run', { op: 'exec', command: 'cat', argv: ['first'] })
 
   sources.replaceRemoteSources([])
   sources.replaceRemoteSources([{ sourceId, fingerprint }])
@@ -129,7 +129,7 @@ test('remote saga ownership cannot revive after byte-identical same-id re-add', 
   settle(ok())
   assert.deepEqual(await firstStep, { ok: false, error: 'ssh instance changed while operation was in progress' })
   assert.deepEqual(
-    await scoped('same', 'run', { op: 'exec', command: 'second', argv: [] }),
+    await scoped('same', 'run', { op: 'exec', command: 'cat', argv: ['second'] }),
     { ok: false, error: 'ssh instance changed while operation was in progress' },
   )
   assert.equal(calls, 1, 'a later saga step never runs on the replacement host')
@@ -995,7 +995,12 @@ test('seed: two chamber host rows merge together and only a missing row is appen
   assert.ok(first.content.includes('id: git-worktree'))
   assert.deepEqual(computeCordisPatchUpdate(first.content, inserts), { write: false })
 
-  const graphOnly = CLIENT_GRAPH_INSERT
+  const graphSeed = computeCordisPatchUpdate(TEMPLATE, [
+    { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
+  ])
+  assert.equal('error' in graphSeed, false)
+  if ('error' in graphSeed || !graphSeed.write) return
+  const graphOnly = graphSeed.content
   const second = computeCordisPatchUpdate(graphOnly, inserts)
   assert.equal('error' in second, false)
   if ('error' in second || !second.write) return
@@ -1561,7 +1566,7 @@ function makeMaterializeExec() {
   const calls: Array<{ op: string; argv?: string[] }> = []
   const written: Array<{ path: string; bytes: Buffer }> = []
   const exec: ExecFn = async (_id, action, payload) => {
-    const record = { op: payload?.op ?? action }
+    const record: { op: string; argv?: string[] } = { op: payload?.op ?? action }
     calls.push(record)
     if (action === 'run' && payload?.op === 'write-file') {
       written.push({ path: payload.path ?? '?', bytes: Buffer.from(payload.contentBase64 ?? '', 'base64') })
