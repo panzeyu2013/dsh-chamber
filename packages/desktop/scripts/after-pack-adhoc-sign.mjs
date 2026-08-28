@@ -146,7 +146,11 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
       return normalized === runtimeCoreDist || normalized === `/${runtimeCoreDist}`;
     });
     if (!packed) {
-      throw new Error(`packaged app.asar is missing ${runtimeCoreDist} — rebuild with build:dsh-runtime before dist:desktop`);
+      const chamberCount = files.filter((entry) => entry.includes('@dsh-chamber')).length;
+      throw new Error(
+        `packaged app.asar is missing ${runtimeCoreDist} — rebuild with build:dsh-runtime before dist:desktop `
+        + `(asar has ${chamberCount} @dsh-chamber entries; Windows hosts list backslash paths — normalize before comparing)`,
+      );
     }
   }
   console.log(`[after-pack-adhoc-sign] runtime installer support verified: pnpm@${pnpmManifest.version}, ${PACKAGED_RUNTIME_MODULES.length} modules`);
