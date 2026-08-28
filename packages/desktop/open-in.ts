@@ -19,7 +19,7 @@
  *
  * Responsibilities:
  * - getOpenInApp / listOpenInApps: id lookup + capability negotiation
- *   (id / remoteCapable / available) for the renderer UI.
+ *   (id / displayKind / remoteCapable / available) for the renderer UI.
  * - runOpenInLaunch: the single execution pipeline shared by any IPC entry
  *   point — appId whitelist → instanceId validation (mirror of
  *   runVscodeLaunch's symmetric gate) → path validation (validateRemotePath
@@ -35,13 +35,15 @@
  */
 
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
-import { detectVscodeAvailability, runVscodeLaunch, validateRemotePath } from './deep-link.ts'
+import { describeUnknownError, runVscodeLaunch, validateRemotePath } from './deep-link.ts'
 
 /** A normalized open-in launch request (renderer IPC payload, untrusted). */
 export interface OpenInRequest {
   appId: string
   instanceId: string
   path: string
+  /** IPC producer's exact non-secret source identity (validated by main). */
+  sourceFingerprint?: string
 }
 
 /** Host capabilities injected by main.ts (stat/openPath/showItemInFolder are
@@ -49,13 +51,15 @@ export interface OpenInRequest {
  *  unit-testable. A superset of VscodeLaunchContext — structurally
  *  compatible, so the vscode provider delegates to runVscodeLaunch directly. */
 export interface OpenInLaunchContext {
+  /** Host platform (`process.platform` in production). */
+  platform: string
   /** Registry lookup; null = the instance does not exist. */
   lookupInstance(id: string): { id: string; host: string; user: string | null; sshPort: number | null; kind: string } | null
   /** VS Code availability (the main-process probe, see detectVscodeAvailability). */
   vscodeAvailable(): boolean
   /** Open a vscode:// URL (main-process shell.openExternal wrapper; loud failure). */
   openVscodeUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }>
-  /** stat wrapper: directory → {kind:'dir'}, file → {kind:'file'}, missing/failure → null. */
+  /** Host stat wrapper (follows symlinks in production). */
   stat(path: string): Promise<{ kind: 'dir' | 'file' } | null>
   /** shell.openPath wrapper: success (null or empty string) → null, failure → error string. */
   openPath(path: string): Promise<string | null>
@@ -69,22 +73,38 @@ export type OpenInResult = { ok: true } | { ok: false; error: string }
 /** Non-secret capability projection for the renderer (apps() negotiation). */
 export interface OpenInAppInfo {
   id: string
+  displayKind: string
   remoteCapable: boolean
   available: boolean
 }
 
+export type OpenInProbeErrorReporter = (appId: string, error: string) => void
+
 /** One "how to launch" provider. available is a pure probe (no side effects —
- *  never spawns, never executes); host facts come from the injected ctx, so
- *  the availability gate stays unit-testable on any machine. Constant /
- *  OS-resident apps ignore the arg; a provider that cannot answer without the
- *  ctx must return false for null (the negotiation-time call in apps()). */
+ *  never spawns, never executes); host facts come from the injected ctx for
+ *  both negotiation and execution, so every provider follows one path and the
+ *  gate stays unit-testable on any machine. OS-resident apps ignore the arg. */
 export interface OpenInApp {
-  id: string
+  readonly id: string
+  /** Renderer presentation category; unlike id, this is intentionally
+   * extensible and keeps future providers from being mislabeled as Finder. */
+  readonly displayKind: string
   /** Whether remote-instance (ssh-source) paths can be opened: only the vscode
    *  family is true (vscode://vscode-remote/). */
-  remoteCapable: boolean
-  available(ctx: OpenInLaunchContext | null): boolean
+  readonly remoteCapable: boolean
+  available(ctx: OpenInLaunchContext): boolean
   open(req: { instanceId: string; path: string }, ctx: OpenInLaunchContext): Promise<OpenInResult>
+}
+
+/**
+ * Electron opens a directory through the desktop's default handler. On macOS,
+ * LaunchServices may classify a directory as a package through an arbitrary
+ * registered extension or package metadata, so no suffix deny-list can prove
+ * it is an ordinary folder. The only complete safe policy is to reveal every
+ * Darwin directory in Finder. Other platforms retain directory openPath.
+ */
+export function shouldRevealDirectoryInsteadOfOpen(platform: string): boolean {
+  return platform === 'darwin'
 }
 
 /**
@@ -94,11 +114,13 @@ export interface OpenInApp {
  * instanceId is refused loudly (defense in depth: the pipeline's
  * remoteCapable gate would already have refused, but the provider re-checks).
  * Path discipline mirrors deep-link (absolute / control-char-free / ≤ 4096 via
- * validateRemotePath); the stat probe decides directory → openPath vs
- * file → showItemInFolder (reveal the file in its folder, the OS convention).
+ * validateRemotePath); files are revealed. Directories use openPath outside
+ * macOS; every macOS directory is revealed because LaunchServices package
+ * classification cannot be exhaustively predicted from a suffix list.
  */
-const finderApp: OpenInApp = {
+const finderApp = Object.freeze<OpenInApp>({
   id: 'finder',
+  displayKind: 'file-manager',
   remoteCapable: false,
   available: () => true,
   async open(req, ctx) {
@@ -112,6 +134,10 @@ const finderApp: OpenInApp = {
       return { ok: false, error: `path does not exist: ${validated.path}` }
     }
     if (entry.kind === 'dir') {
+      if (shouldRevealDirectoryInsteadOfOpen(ctx.platform)) {
+        ctx.showItemInFolder(validated.path)
+        return { ok: true }
+      }
       const error = await ctx.openPath(validated.path)
       if (error !== null) {
         return { ok: false, error: `open path failed: ${error}` }
@@ -121,7 +147,7 @@ const finderApp: OpenInApp = {
     ctx.showItemInFolder(validated.path)
     return { ok: true }
   },
-}
+})
 
 /**
  * The vscode provider: wraps runVscodeLaunch with zero behavior change — the
@@ -130,18 +156,19 @@ const finderApp: OpenInApp = {
  * OpenInLaunchContext is a structural superset of VscodeLaunchContext, so the
  * context passes straight through.
  */
-const vscodeApp: OpenInApp = {
+const vscodeApp = Object.freeze<OpenInApp>({
   id: 'vscode',
+  displayKind: 'vscode',
   remoteCapable: true,
   // The probe is the injected main-process fact (same real detection as the
   // renderer-facing apps() negotiation) — injectable in tests, so the ok-path
   // cases never depend on whether the machine has VS Code installed.
-  available: (ctx) => ctx !== null && ctx.vscodeAvailable(),
+  available: (ctx) => ctx.vscodeAvailable(),
   open: (req, ctx) => runVscodeLaunch(req, ctx),
-}
+})
 
 /** The fixed-order registry — [finder, vscode] is the documented list order. */
-const openInApps: OpenInApp[] = [finderApp, vscodeApp]
+const openInApps: readonly OpenInApp[] = Object.freeze([finderApp, vscodeApp])
 
 /** Whitelist lookup by id; a non-string appId (untrusted IPC payload) is
  *  never guessed — it resolves to null like any unknown id. */
@@ -152,21 +179,57 @@ export function getOpenInApp(appId: string): OpenInApp | null {
 
 /**
  * Capability negotiation for the renderer (apps()): the full registry in
- * fixed order, each app projected to {id, remoteCapable, available}. The
- * vscode entry's availability uses deps.vscodeAvailable when injected (tests
- * must not depend on whether the machine has VS Code installed); production
- * calls it with the platform alone and probes for real.
+ * fixed order, each app projected to
+ * {id, displayKind, remoteCapable, available}. Every provider receives the
+ * same injected context; negotiation never
+ * branches on a provider id. This preserves the registry contract that a new
+ * provider is added in one place without editing the dispatcher.
  */
-export function listOpenInApps(platform: string, deps: { vscodeAvailable?: () => boolean } = {}): OpenInAppInfo[] {
-  const vscodeAvailable = deps.vscodeAvailable ?? (() => detectVscodeAvailability(platform).available)
+export function listOpenInApps(
+  ctx: OpenInLaunchContext,
+  reportProbeError: OpenInProbeErrorReporter = () => {},
+): OpenInAppInfo[] {
   return openInApps.map(app => ({
     id: app.id,
+    displayKind: app.displayKind,
     remoteCapable: app.remoteCapable,
-    // vscode's availability comes from the injected deps (tests must not
-    // depend on the machine); every other app answers the constant probe
-    // (null ctx — OS-resident apps ignore it).
-    available: app.id === 'vscode' ? vscodeAvailable() : app.available(null),
+    // A broken provider probe fails closed independently; one provider never
+    // erases the complete capability projection for unrelated providers.
+    available: (() => {
+      try {
+        return app.available(ctx)
+      } catch (error) {
+        // apps() has no per-entry error field. A broken probe therefore fails
+        // closed for that app without rejecting the whole capability list.
+        try { reportProbeError(app.id, describeUnknownError(error)) } catch { /* logging must not erase the list */ }
+        return false
+      }
+    })(),
   }))
+}
+
+/** Production stat adapter semantics: only a genuinely absent path maps to
+ * null. Permission, I/O and hostile failures propagate to runOpenInLaunch's
+ * structured provider boundary instead of masquerading as non-existence. */
+export async function classifyLocalPath(
+  stat: (path: string) => Promise<{ isDirectory(): boolean }>,
+  path: string,
+): Promise<{ kind: 'dir' | 'file' } | null> {
+  try {
+    const entry = await stat(path)
+    return entry.isDirectory() ? { kind: 'dir' } : { kind: 'file' }
+  } catch (error) {
+    let code: unknown
+    try {
+      code = error !== null && typeof error === 'object'
+        ? (error as { code?: unknown }).code
+        : undefined
+    } catch {
+      throw error
+    }
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null
+    throw error
+  }
 }
 
 /**
@@ -177,6 +240,20 @@ export function listOpenInApps(platform: string, deps: { vscodeAvailable?: () =>
  */
 export function normalizeOpenPathError(err: unknown): string | null {
   return typeof err === 'string' && err.length > 0 ? err : null
+}
+
+/** Complete Electron openPath adapter boundary, including its documented
+ * resolved error string and platform-specific rejection paths. Returning only
+ * the raw host error leaves the public prefix to finderApp exactly once. */
+export async function invokeOpenPath(
+  openPath: (path: string) => Promise<unknown>,
+  path: string,
+): Promise<string | null> {
+  try {
+    return normalizeOpenPathError(await openPath(path))
+  } catch (error) {
+    return describeUnknownError(error)
+  }
 }
 
 /**
@@ -202,7 +279,10 @@ export async function runOpenInLaunch(
 ): Promise<OpenInResult> {
   const app = getOpenInApp(req.appId)
   if (app === null) {
-    return { ok: false, error: `unknown open-in app: ${String(req.appId)}` }
+    // Never stringify an untrusted non-string value: a Proxy/toString trap
+    // must not turn the structured error channel into a rejection.
+    const appIdLabel = typeof req.appId === 'string' ? req.appId : '<invalid>'
+    return { ok: false, error: `unknown open-in app: ${appIdLabel}` }
   }
   if (typeof req.instanceId !== 'string' || (req.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(req.instanceId))) {
     return { ok: false, error: 'invalid instance id' }
@@ -212,8 +292,18 @@ export async function runOpenInLaunch(
   if (req.instanceId !== 'local' && !app.remoteCapable) {
     return { ok: false, error: `${app.id} is not available for remote instances` }
   }
-  if (!app.available(ctx)) {
+  let available: boolean
+  try {
+    available = app.available(ctx)
+  } catch (error) {
+    return { ok: false, error: `${app.id} availability check failed: ${describeUnknownError(error)}` }
+  }
+  if (!available) {
     return { ok: false, error: `${app.id} not detected` }
   }
-  return app.open({ instanceId: req.instanceId, path: validatedPath.path }, ctx)
+  try {
+    return await app.open({ instanceId: req.instanceId, path: validatedPath.path }, ctx)
+  } catch (error) {
+    return { ok: false, error: `${app.id} open failed: ${describeUnknownError(error)}` }
+  }
 }

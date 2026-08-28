@@ -26,6 +26,8 @@ export interface SshInstanceSpec {
    * whitelisted `^~?/[a-zA-Z0-9._/-]+$` on the main side.
    */
   remoteDshHome: string | null
+  /** Opaque main-process lifecycle proof; never persisted or renderer-minted. */
+  sourceFingerprint: string
 }
 
 /** Instance spec as accepted on save (kind/user/sshPort/serviceName are optional inputs). */
@@ -71,6 +73,10 @@ export interface SshLogEntry {
 export interface SshStatusChangedPayload {
   id: string
   status: SshStatusProjection
+}
+
+export interface SshInstancesChangedPayload {
+  removedIds: string[]
 }
 
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
@@ -258,7 +264,7 @@ export interface DesktopSshSurface {
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
-  onInstancesChanged(callback: () => void): () => void
+  onInstancesChanged(callback: (payload: SshInstancesChangedPayload) => void): () => void
 }
 
 /** Update lifecycle phase (design 11 §3.2). `up-to-date` = a check ran and

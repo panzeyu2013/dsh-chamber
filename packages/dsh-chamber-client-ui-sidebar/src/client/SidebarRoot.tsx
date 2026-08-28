@@ -83,7 +83,7 @@
  * commit failed; a stale poll never resets it), while the ungrouped order
  * persists through view prefs. The current-session highlight is now
  * channel-based (06 §4): each ctx's plugin reports its own
- * runtime facts through chamberBridge.reportInstanceRuntime, the App layer
+ * runtime facts through a tokenized chamberBridge runtime producer, the App layer
  * merges them into server.runtime, and this shell highlights the matching
  * row (official selected tint) and marks its workspace group with an accent
  * chevron — without subscribing to any store. The highlight is

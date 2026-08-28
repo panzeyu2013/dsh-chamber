@@ -44,8 +44,7 @@
  *
  * This constant lives in its own module (re-exported by chamber-entry.ts) on
  * purpose: shell.ts must import it without pulling chamber-entry.ts's
- * top-level module-table handoff into the main chunk (same pattern as
- * chamber-knob.ts — see its header comment).
+ * top-level module-table handoff into the main chunk.
  */
 
 export const CHAMBER_COVERED_IDS: readonly string[] = [

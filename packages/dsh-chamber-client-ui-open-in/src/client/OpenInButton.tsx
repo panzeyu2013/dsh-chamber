@@ -37,8 +37,8 @@
  * tokens.
  */
 import { useEffect, useState } from 'react'
-import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import vscodeIcon from './vscode-icon.png'
+import { AccessibleAppMenu } from './AccessibleAppMenu.tsx'
 import {
   bridgePlatform,
   getApps,
@@ -46,15 +46,24 @@ import {
   openInBridgeReady,
   refreshApps,
   subscribeOpenIn,
-  type OpenInApp,
   type Translate,
 } from '../shared/coordinator.ts'
+import {
+  buildOpenInLaunchRequest,
+  describeOpenInError,
+  parseOpenInResult,
+  usableOpenInApps,
+  type OpenInApp,
+  type OpenInSource,
+} from '../shared/capabilities.ts'
 import styles from './OpenInButton.module.css'
 
 /** Injected face the plugin supplies: per-boot source id + bound translator. */
 export interface OpenInInjected {
-  /** Per-boot source id ('local' | 'ssh-<id>'), read from ctx.chamberInstanceId. */
-  sourceId: string
+  /** Strictly parsed per-boot source (local or one raw SSH registry id). */
+  source: OpenInSource
+  /** Immutable identity of this exact boot, never read from a latest-roster global. */
+  sourceFingerprint: string
   /** Bound translator for the plugin namespace. */
   t: Translate
 }
@@ -106,6 +115,20 @@ function FolderMark() {
   )
 }
 
+/** Neutral application mark for future providers whose presentation family is
+ * unknown to this client version. It deliberately does not impersonate the
+ * file manager. */
+function GenericAppMark() {
+  return (
+    <svg className={styles.genericMark} viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+      <rect x="3" y="3" width="6" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="11" y="3" width="6" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="3" y="11" width="6" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="11" y="11" width="6" height="6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  )
+}
+
 /** Platform-appropriate wording for the "file manager" app: Finder on macOS,
  *  Explorer on Windows, generic file manager elsewhere. */
 function finderLabel(t: Translate, platform: string | null): string {
@@ -117,13 +140,20 @@ function finderLabel(t: Translate, platform: string | null): string {
 /** Per-app title used for both the button tooltip/aria-label and the dropdown
  *  row label. */
 function appLabel(app: OpenInApp, t: Translate, platform: string | null): string {
-  return app.id === 'vscode' ? t('titleVscode') : finderLabel(t, platform)
+  if (app.displayKind === 'vscode') return t('titleVscode')
+  if (app.displayKind === 'file-manager') return finderLabel(t, platform)
+  return t('titleGeneric', { app: app.id })
 }
 
-export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInProps) {
+function appMark(app: OpenInApp) {
+  if (app.displayKind === 'vscode') return <VscodeMark />
+  if (app.displayKind === 'file-manager') return <FolderMark />
+  return <GenericAppMark />
+}
+
+export function OpenInButton({ source, sourceFingerprint, t, sessionId, useWorkspaces }: OpenInProps) {
   const [appList, setAppList] = useState<OpenInApp[] | null>(getOpenInApps())
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
     // The preload exposes the bridge after an async info round-trip, so a
@@ -137,7 +167,7 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
       if (cancelled) return
       if (!openInBridgeReady()) {
         attempts += 1
-        if (attempts > 40) clearInterval(timer)
+        if (attempts >= 40) clearInterval(timer)
         return
       }
       clearInterval(timer)
@@ -158,10 +188,7 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
   // filtered to what this source may actually use. LOCAL sources get every
   // available app; REMOTE (ssh-<id>) sources only remote-capable ones. The
   // bridge's `available` flag is honored as a hard filter (fail-closed).
-  const availableApps = (appList ?? []).filter(app => app.available)
-  const usableApps = sourceId === 'local'
-    ? availableApps
-    : availableApps.filter(app => app.remoteCapable)
+  const usableApps = usableOpenInApps(appList, source)
   if (usableApps.length === 0) return null
 
   // Gate 2: THIS header's session must live in a workspace with a concrete
@@ -174,27 +201,31 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
 
   // Default selection (this mount's memory only, no localStorage): VS Code
   // when present, else the first app.
-  const defaultApp = usableApps.find(app => app.id === 'vscode') ?? usableApps[0]
+  const defaultApp = usableApps.find(app => app.displayKind === 'vscode') ?? usableApps[0]
   const activeApp = usableApps.find(app => app.id === selectedAppId) ?? defaultApp
 
   const platform = bridgePlatform()
 
   const openApp = (app: OpenInApp): void => {
-    // View id → raw instance id: the sourceId is the per-boot VIEW id
-    // ('local' | 'ssh-<id>'), but the main-process launch keys on the RAW
-    // registry id — the 'ssh-' prefix is stripped here ('local' stays as-is;
-    // security-review P1-1 / user decision 2026-08).
-    const instanceId = sourceId.startsWith('ssh-') ? sourceId.slice(4) : sourceId
-    void (window as unknown as {
-      dshChamber?: { openIn?: { open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }> } }
-    }).dshChamber?.openIn?.open(app.id, instanceId, path).then((result) => {
-      if (result !== undefined && !result.ok) {
+    const bridge = (window as unknown as {
+      dshChamber?: { openIn?: { open(appId: string, instanceId: string, path: string, sourceFingerprint: string): Promise<unknown> } }
+    }).dshChamber?.openIn
+    if (bridge === undefined) {
+      console.error(`[dsh-chamber] ${t('openFailed')}${t('bridgeUnavailable')}`)
+      return
+    }
+    const request = buildOpenInLaunchRequest(app.id, source, path, sourceFingerprint)
+    void bridge.open(request.appId, request.instanceId, request.path, request.sourceFingerprint).then((rawResult) => {
+      const result = parseOpenInResult(rawResult)
+      if (result === null) {
+        console.error(`[dsh-chamber] ${t('openFailed')}${t('invalidResponse')}`)
+      } else if (!result.ok) {
         console.error(`[dsh-chamber] ${t('openFailed')}${result.error}`)
       }
     }).catch((error: unknown) => {
       // Transport-level rejection (IPC fence / handler throw): loud, never
       // an unhandled rejection (frontend-review P2-3).
-      console.error(`[dsh-chamber] ${t('openFailed')}${error instanceof Error ? error.message : String(error)}`)
+      console.error(`[dsh-chamber] ${t('openFailed')}${describeOpenInError(error)}`)
     })
   }
 
@@ -210,7 +241,7 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
         aria-label={label}
         title={label}
       >
-        {app.id === 'vscode' ? <VscodeMark /> : <FolderMark />}
+        {appMark(app)}
       </button>
     )
   }
@@ -227,45 +258,24 @@ export function OpenInButton({ sourceId, t, sessionId, useWorkspaces }: OpenInPr
         aria-label={activeLabel}
         title={activeLabel}
       >
-        {activeApp.id === 'vscode' ? <VscodeMark /> : <FolderMark />}
+        {appMark(activeApp)}
       </button>
-      <Menu
-        portal
-        align="end"
-        open={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onSelect={(id: string) => {
-          setMenuOpen(false)
+      <AccessibleAppMenu
+        items={items}
+        selectedId={activeApp.id}
+        triggerLabel={t('chooseAppAria')}
+        triggerClassName={styles.chevron}
+        triggerIcon={(
+          <svg className={styles.chevronMark} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+        onOpening={() => { void refreshApps() }}
+        onSelect={(id) => {
           setSelectedAppId(id)
           const chosen = usableApps.find(app => app.id === id)
           if (chosen !== undefined) openApp(chosen)
         }}
-        items={items}
-        anchor={(
-          <button
-            type="button"
-            className={styles.chevron}
-            aria-label={t('chooseAppAria')}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            onClick={() => {
-              // Toggle-close on an already-open menu (restores the original
-              // chevron semantics; the Menu's outside-click/Escape/select
-              // paths close as well). Opening is IMMEDIATE with a background
-              // refresh — waiting for the probe before opening created a
-              // reopen race with a quick item selection; the list updates in
-              // place via the coordinator subscription once the fresh result
-              // lands (epoch-guarded, fail-closed).
-              if (menuOpen) { setMenuOpen(false); return }
-              void refreshApps()
-              setMenuOpen(true)
-            }}
-          >
-            <svg className={styles.chevronMark} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
-              <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-        )}
       />
     </span>
   )

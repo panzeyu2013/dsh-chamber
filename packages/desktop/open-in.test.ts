@@ -11,12 +11,21 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { getOpenInApp, listOpenInApps, normalizeOpenPathError, runOpenInLaunch } from './open-in.ts'
+import {
+  classifyLocalPath,
+  getOpenInApp,
+  invokeOpenPath,
+  listOpenInApps,
+  normalizeOpenPathError,
+  runOpenInLaunch,
+  shouldRevealDirectoryInsteadOfOpen,
+} from './open-in.ts'
 import type { OpenInLaunchContext } from './open-in.ts'
 
 /** A context fake: every host capability is injected, nothing touches the OS. */
 function context(overrides: Partial<OpenInLaunchContext> = {}): OpenInLaunchContext {
   return {
+    platform: overrides.platform ?? 'linux',
     lookupInstance: overrides.lookupInstance ?? (() => ({ id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, kind: 'ssh' })),
     vscodeAvailable: overrides.vscodeAvailable ?? (() => true),
     openVscodeUrl: overrides.openVscodeUrl ?? (async () => ({ ok: true })),
@@ -27,12 +36,13 @@ function context(overrides: Partial<OpenInLaunchContext> = {}): OpenInLaunchCont
 }
 
 test('listOpenInApps returns finder and vscode in the fixed order [finder, vscode]', () => {
-  const apps = listOpenInApps('darwin', { vscodeAvailable: () => true })
+  const apps = listOpenInApps(context({ platform: 'darwin', vscodeAvailable: () => true }))
   assert.deepEqual(apps.map(app => app.id), ['finder', 'vscode'])
+  assert.deepEqual(apps.map(app => app.displayKind), ['file-manager', 'vscode'])
 })
 
 test('listOpenInApps finder projection: remoteCapable false and always available', () => {
-  const apps = listOpenInApps('linux', { vscodeAvailable: () => false })
+  const apps = listOpenInApps(context({ vscodeAvailable: () => false }))
   const finder = apps.find(app => app.id === 'finder')
   assert.ok(finder !== undefined)
   assert.equal(finder.remoteCapable, false)
@@ -40,7 +50,7 @@ test('listOpenInApps finder projection: remoteCapable false and always available
 })
 
 test('listOpenInApps vscode projection: remoteCapable true', () => {
-  const apps = listOpenInApps('linux', { vscodeAvailable: () => true })
+  const apps = listOpenInApps(context({ vscodeAvailable: () => true }))
   const vscode = apps.find(app => app.id === 'vscode')
   assert.ok(vscode !== undefined)
   assert.equal(vscode.remoteCapable, true)
@@ -48,10 +58,43 @@ test('listOpenInApps vscode projection: remoteCapable true', () => {
 })
 
 test('listOpenInApps vscode availability follows the injected deps (true/false)', () => {
-  const withTrue = listOpenInApps('linux', { vscodeAvailable: () => true })
+  const withTrue = listOpenInApps(context({ vscodeAvailable: () => true }))
   assert.equal(withTrue.find(app => app.id === 'vscode')!.available, true)
-  const withFalse = listOpenInApps('linux', { vscodeAvailable: () => false })
+  const withFalse = listOpenInApps(context({ vscodeAvailable: () => false }))
   assert.equal(withFalse.find(app => app.id === 'vscode')!.available, false)
+})
+
+test('listOpenInApps fails a throwing availability probe closed without rejecting the list', () => {
+  const reported: Array<{ appId: string; error: string }> = []
+  const apps = listOpenInApps(
+    context({ vscodeAvailable: () => { throw new Error('probe exploded') } }),
+    (appId, error) => reported.push({ appId, error }),
+  )
+  assert.deepEqual(apps, [
+    { id: 'finder', displayKind: 'file-manager', remoteCapable: false, available: true },
+    { id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: false },
+  ])
+  assert.deepEqual(reported, [{ appId: 'vscode', error: 'probe exploded' }], 'provider failure is loud per entry')
+})
+
+test('classifyLocalPath maps only ENOENT/ENOTDIR to missing and propagates other stat errors', async () => {
+  assert.deepEqual(
+    await classifyLocalPath(async () => ({ isDirectory: () => true }), '/dir'),
+    { kind: 'dir' },
+  )
+  assert.deepEqual(
+    await classifyLocalPath(async () => ({ isDirectory: () => false }), '/file'),
+    { kind: 'file' },
+  )
+  for (const code of ['ENOENT', 'ENOTDIR']) {
+    const error = Object.assign(new Error(code), { code })
+    assert.equal(await classifyLocalPath(async () => Promise.reject(error), '/missing'), null)
+  }
+  const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+  await assert.rejects(
+    classifyLocalPath(async () => Promise.reject(denied), '/secret'),
+    error => error === denied,
+  )
 })
 
 test('runOpenInLaunch fails loudly for an unknown appId', async () => {
@@ -62,8 +105,19 @@ test('runOpenInLaunch fails loudly for an unknown appId', async () => {
 
 test('runOpenInLaunch fails loudly for a non-string appId (never guessed)', async () => {
   const result = await runOpenInLaunch({ appId: undefined as unknown as string, instanceId: 'local', path: '/foo' }, context())
-  assert.equal(result.ok, false)
-  if (!result.ok) assert.match(result.error, /unknown open-in app/)
+  assert.deepEqual(result, { ok: false, error: 'unknown open-in app: <invalid>' })
+})
+
+test('runOpenInLaunch never stringifies a hostile non-string appId', async () => {
+  const hostile = new Proxy({}, {
+    getPrototypeOf() { throw new Error('getPrototypeOf trap') },
+    get() { throw new Error('get trap') },
+  })
+  const result = await runOpenInLaunch(
+    { appId: hostile as unknown as string, instanceId: 'local', path: '/foo' },
+    context(),
+  )
+  assert.deepEqual(result, { ok: false, error: 'unknown open-in app: <invalid>' })
 })
 
 test('runOpenInLaunch rejects an instanceId that fails INSTANCE_ID_PATTERN (bad/id)', async () => {
@@ -127,10 +181,42 @@ test('runOpenInLaunch opens a directory via openPath for local + finder (origina
   let openedPath: string | null = null
   const result = await runOpenInLaunch(
     { appId: 'finder', instanceId: 'local', path: '/home/user/proj' },
-    context({ openPath: async path => { openedPath = path; return null } }),
+    context({ platform: 'linux', openPath: async path => { openedPath = path; return null } }),
   )
   assert.equal(result.ok, true)
   assert.equal(openedPath, '/home/user/proj')
+})
+
+test('macOS reveals every directory and never passes package-like or symlink directories to openPath', async () => {
+  let opened = 0
+  const revealed: string[] = []
+  const candidates = [
+    '/tmp/ordinary-project',
+    '/tmp/Unknown.third-party-package',
+    // Production fsp.stat follows symlinks. A symlink to any directory is
+    // therefore covered by the same Darwin-wide reveal-only decision.
+    '/tmp/neutral-symlink',
+  ]
+  for (const candidate of candidates) {
+    const result = await runOpenInLaunch(
+      { appId: 'finder', instanceId: 'local', path: candidate },
+      context({
+        platform: 'darwin',
+        stat: async () => ({ kind: 'dir' }),
+        openPath: async () => { opened += 1; return null },
+        showItemInFolder: path => { revealed.push(path) },
+      }),
+    )
+    assert.deepEqual(result, { ok: true })
+  }
+  assert.equal(opened, 0, 'shell.openPath must never receive any macOS directory')
+  assert.deepEqual(revealed, candidates)
+})
+
+test('directory reveal policy is Darwin-wide and stays platform-scoped', () => {
+  assert.equal(shouldRevealDirectoryInsteadOfOpen('darwin'), true)
+  assert.equal(shouldRevealDirectoryInsteadOfOpen('linux'), false)
+  assert.equal(shouldRevealDirectoryInsteadOfOpen('win32'), false)
 })
 
 test('runOpenInLaunch surfaces an openPath failure loudly', async () => {
@@ -138,8 +224,27 @@ test('runOpenInLaunch surfaces an openPath failure loudly', async () => {
     { appId: 'finder', instanceId: 'local', path: '/home/user/proj' },
     context({ openPath: async () => 'boom' }),
   )
-  assert.equal(result.ok, false)
-  if (!result.ok) assert.match(result.error, /open path failed/)
+  assert.deepEqual(result, { ok: false, error: 'open path failed: boom' })
+})
+
+test('runOpenInLaunch converts a rejected finder host adapter into a structured failure', async () => {
+  const result = await runOpenInLaunch(
+    { appId: 'finder', instanceId: 'local', path: '/home/user/proj' },
+    context({ stat: async () => { throw new Error('stat exploded') } }),
+  )
+  assert.deepEqual(result, { ok: false, error: 'finder open failed: stat exploded' })
+})
+
+test('runOpenInLaunch survives a hostile thrown value whose traps and toString throw', async () => {
+  const hostile = new Proxy({}, {
+    getPrototypeOf() { throw new Error('getPrototypeOf trap') },
+    get() { throw new Error('get trap') },
+  })
+  const result = await runOpenInLaunch(
+    { appId: 'finder', instanceId: 'local', path: '/home/user/proj' },
+    context({ stat: async () => Promise.reject(hostile) }),
+  )
+  assert.deepEqual(result, { ok: false, error: 'finder open failed: unknown error' })
 })
 
 test('runOpenInLaunch reveals a file via showItemInFolder for local + finder', async () => {
@@ -150,6 +255,17 @@ test('runOpenInLaunch reveals a file via showItemInFolder for local + finder', a
   )
   assert.equal(result.ok, true)
   assert.equal(revealed, '/home/user/file.txt')
+})
+
+test('runOpenInLaunch converts a synchronous reveal exception into a structured failure', async () => {
+  const result = await runOpenInLaunch(
+    { appId: 'finder', instanceId: 'local', path: '/home/user/file.txt' },
+    context({
+      stat: async () => ({ kind: 'file' }),
+      showItemInFolder: () => { throw new Error('reveal exploded') },
+    }),
+  )
+  assert.deepEqual(result, { ok: false, error: 'finder open failed: reveal exploded' })
 })
 
 test('runOpenInLaunch fails loudly when the stat probe reports the path missing', async () => {
@@ -172,6 +288,19 @@ test('runOpenInLaunch fails loudly when vscode is not detected (injected ctx, an
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /not detected/)
   assert.equal(opened, 0, 'the provider must never run when the availability gate fails')
+})
+
+test('runOpenInLaunch converts an availability exception into a structured failure', async () => {
+  let opened = 0
+  const result = await runOpenInLaunch(
+    { appId: 'vscode', instanceId: 'local', path: '/home/user/ws' },
+    context({
+      vscodeAvailable: () => { throw new Error('availability exploded') },
+      openVscodeUrl: async () => { opened += 1; return { ok: true } },
+    }),
+  )
+  assert.deepEqual(result, { ok: false, error: 'vscode availability check failed: availability exploded' })
+  assert.equal(opened, 0, 'the provider must never run when its availability probe throws')
 })
 
 test('runOpenInLaunch rejects a non-string path (untrusted payload, never guessed)', async () => {
@@ -220,9 +349,30 @@ test('getOpenInApp resolves finder and vscode, returns null for unknown ids', ()
   assert.equal(getOpenInApp(undefined as unknown as string), null)
 })
 
+test('open-in providers are runtime-frozen and cannot mutate whitelist policy', () => {
+  const finder = getOpenInApp('finder')!
+  assert.equal(Object.isFrozen(finder), true)
+  assert.equal(Reflect.set(finder, 'remoteCapable', true), false)
+  assert.equal(getOpenInApp('finder')!.remoteCapable, false)
+})
+
 test('normalizeOpenPathError maps the shell.openPath boundary (success/error)', () => {
   assert.equal(normalizeOpenPathError(''), null, "Electron's success convention (empty string) is success")
   assert.equal(normalizeOpenPathError(undefined), null)
   assert.equal(normalizeOpenPathError(null), null)
   assert.equal(normalizeOpenPathError('The file does not exist.'), 'The file does not exist.')
+})
+
+test('invokeOpenPath normalizes Electron resolve/reject without duplicating the provider prefix', async () => {
+  assert.equal(await invokeOpenPath(async () => '', '/ok'), null)
+  assert.equal(await invokeOpenPath(async () => 'desktop error', '/bad'), 'desktop error')
+  assert.equal(
+    await invokeOpenPath(async () => { throw new Error('rejected') }, '/reject'),
+    'rejected',
+  )
+  const result = await runOpenInLaunch(
+    { appId: 'finder', instanceId: 'local', path: '/reject' },
+    context({ openPath: path => invokeOpenPath(async () => { throw new Error('rejected') }, path) }),
+  )
+  assert.deepEqual(result, { ok: false, error: 'open path failed: rejected' })
 })

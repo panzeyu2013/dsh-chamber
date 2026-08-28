@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.check-base.json",
+  "files": [
+    "src/api-path.ts",
+    "src/api-request-trust.ts",
+    "src/http-bridge.ts",
+    "src/index.ts",
+    "src/invariant.ts",
+    "src/loopback-hostname.ts",
+    "src/rpc-host.ts",
+    "src/rpc.ts",
+    "src/websocket-downlink.ts"
+  ]
+}

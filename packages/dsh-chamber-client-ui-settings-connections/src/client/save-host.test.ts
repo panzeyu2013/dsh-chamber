@@ -6,9 +6,18 @@ import { saveHostWithPassword } from './save-host.ts'
 const oldHost: SshInstanceSpec = {
   id: 'old', label: 'Old', kind: 'ssh', host: 'old.example.com', user: null,
   sshPort: null, remotePort: 30800, serviceName: null, remoteDshHome: null,
+  sourceFingerprint: 'a'.repeat(64),
 }
 const newHost: SshInstanceInput = { id: 'new', label: 'New', host: 'new.example.com', remotePort: 30800 }
-const savedNew: SshInstanceSpec = { ...newHost, kind: 'ssh', user: null, sshPort: null, serviceName: null, remoteDshHome: null }
+const savedNew: SshInstanceSpec = {
+  ...newHost,
+  kind: 'ssh',
+  user: null,
+  sshPort: null,
+  serviceName: null,
+  remoteDshHome: null,
+  sourceFingerprint: 'b'.repeat(64),
+}
 
 type Bridge = Pick<DesktopSshSurface, 'instances_get' | 'instances_set' | 'set_password'>
 
@@ -53,6 +62,27 @@ test('saveHostWithPassword re-reads authoritative state when rollback rejects af
   assert.equal(result.metadataCommitted, false)
   assert.deepEqual(result.instances, [oldHost])
   assert.match(result.error, /disk full; host metadata rollback failed/)
+})
+
+test('saveHostWithPassword ignores a rotated lifecycle proof when confirming rollback', async () => {
+  let setCalls = 0
+  let rollbackInput: SshInstanceInput[] | null = null
+  const reprojectedOldHost: SshInstanceSpec = { ...oldHost, sourceFingerprint: 'c'.repeat(64) }
+  const bridge: Bridge = {
+    instances_set: async (instances) => {
+      setCalls += 1
+      if (setCalls === 1) return [oldHost, savedNew]
+      rollbackInput = instances
+      throw new Error('renderer changed after committed registry rollback')
+    },
+    instances_get: async () => [reprojectedOldHost],
+    set_password: async () => ({ error: 'password denied' }),
+  }
+  const result = await saveHostWithPassword(bridge, [oldHost], [oldHost, newHost], 'new', 'pw')
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.metadataCommitted, false)
+  assert.equal(Object.hasOwn(rollbackInput?.[0] ?? {}, 'sourceFingerprint'), false)
 })
 
 test('saveHostWithPassword reports a real partial commit so a new host is not blindly duplicated', async () => {

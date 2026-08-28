@@ -10,8 +10,22 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function persistedInstance(instance: SshInstanceSpec): SshInstanceInput {
+  return {
+    id: instance.id,
+    label: instance.label,
+    kind: instance.kind,
+    host: instance.host,
+    user: instance.user,
+    sshPort: instance.sshPort,
+    remotePort: instance.remotePort,
+    serviceName: instance.serviceName,
+    remoteDshHome: instance.remoteDshHome,
+  }
+}
+
 function sameInstances(left: SshInstanceSpec[], right: SshInstanceSpec[]): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return JSON.stringify(left.map(persistedInstance)) === JSON.stringify(right.map(persistedInstance))
 }
 
 /**
@@ -41,7 +55,9 @@ export async function saveHostWithPassword(
   if (passwordError === null) return { ok: true, instances: saved }
 
   try {
-    const rolledBack = await bridge.instances_set(before)
+    // sourceFingerprint is an in-memory main-process lifecycle proof, not
+    // registry input. A rollback must restore only the persisted fields.
+    const rolledBack = await bridge.instances_set(before.map(persistedInstance))
     return { ok: false, instances: rolledBack, error: passwordError, metadataCommitted: false }
   } catch (rollbackError) {
     let authoritative = saved

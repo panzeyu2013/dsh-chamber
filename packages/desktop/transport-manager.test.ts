@@ -26,7 +26,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
-import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
+import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT } from './transport-manager.ts'
 import type { TransportManagerOptions } from './transport-manager.ts'
 import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
@@ -83,7 +83,7 @@ class FakeChild extends EventEmitter implements SpawnedProcess {
   }
 }
 
-function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult> } = {}) {
+function makeManager(t: TestContext, overrides: { options?: TransportManagerOptions; instances?: TransportInstanceInput[]; random?: () => number; provider?: TransportProvider; verifyProbe?: (spec: TransportInstanceSpec, endpoint: { host: string; port: number }) => Promise<TransportVerifyResult>; allocatePort?: () => Promise<number> } = {}) {
   const spawnCalls: Array<{ command: string; args: readonly string[]; options: SpawnOptions; child: FakeChild }> = []
   const children: FakeChild[] = []
   const spawnTimes: number[] = []
@@ -107,6 +107,7 @@ function makeManager(t: TestContext, overrides: { options?: TransportManagerOpti
       ?? ((overrides.provider === undefined || overrides.provider.verifyUp !== undefined)
         ? async () => ({ ok: true })
         : undefined),
+    allocatePort: overrides.allocatePort ?? (async () => 43123),
     random: overrides.random,
     options: {
       readyTimeoutMs: 100,
@@ -143,6 +144,55 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+test('registry delta preserves removals while same-id edits are not tombstones', () => {
+  assert.deepEqual(
+    computeRemovedInstanceIds(
+      [{ id: 'alpha' }, { id: 'same' }, { id: 'removed' }],
+      [{ id: 'same' }, { id: 'alpha' }, { id: 'added' }],
+    ),
+    ['removed'],
+  )
+  assert.deepEqual(computeRemovedInstanceIds([{ id: 'same' }], [{ id: 'same' }]), [])
+  assert.deepEqual(
+    computeRemovedInstanceIds([{ id: 'first' }, { id: 'second' }], []),
+    ['first', 'second'],
+  )
+})
+
+test('registry lifecycle retires deletion and transport identity edits, but not presentation/service/home edits', () => {
+  const before: TransportInstanceSpec[] = [{
+    id: 'same', label: 'old label', kind: 'ssh', host: 'old.example.com', user: 'alice',
+    sshPort: 22, remotePort: 3080, serviceName: 'dsh-old', remoteDshHome: '~/.old',
+  }]
+  const nonIdentityEdit: TransportInstanceSpec[] = [{
+    ...before[0], label: 'new label', serviceName: 'dsh-new', remoteDshHome: '~/.new',
+  }]
+  assert.deepEqual(computeRetiredInstanceIds(before, nonIdentityEdit), [])
+  assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], host: 'new.example.com' }]), ['same'])
+  assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], user: 'bob' }]), ['same'])
+  assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], sshPort: 2222 }]), ['same'])
+  assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], remotePort: 4080 }]), ['same'])
+  assert.deepEqual(computeRetiredInstanceIds(before, []), ['same'])
+})
+
+test('a renderer send throw after registry commit is a loud delivery miss, never a save failure', () => {
+  const hostile = new Proxy({}, {
+    get() { throw new Error('formatter trap') },
+    getPrototypeOf() { throw new Error('instanceof trap') },
+  })
+  assert.deepEqual(attemptCommittedRegistryPush(() => { throw new Error('window destroyed') }), {
+    sent: false,
+    error: 'window destroyed',
+  })
+  assert.deepEqual(attemptCommittedRegistryPush(() => { throw hostile }), {
+    sent: false,
+    error: 'unknown error',
+  })
+  let delivered = false
+  assert.deepEqual(attemptCommittedRegistryPush(() => { delivered = true }), { sent: true })
+  assert.equal(delivered, true)
+})
+
 async function waitFor(predicate: () => boolean, timeoutMs = 3000, what = 'condition') {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -168,6 +218,21 @@ test('instances persistence round-trips through the atomic-write file', () => {
   assert.deepEqual(reopened.loadInstances(), saved)
 })
 
+test('renderer lifecycle proofs are never accepted into or persisted with registry data', () => {
+  const dir = tempDir()
+  const file = join(dir, 'ssh-instances.json')
+  const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
+  const saved = manager.saveInstances([{
+    id: 'proofless',
+    label: 'proofless',
+    host: 'host.example.com',
+    remotePort: 3080,
+    sourceFingerprint: 'a'.repeat(64),
+  } as TransportInstanceInput & { sourceFingerprint: string }])
+  assert.equal('sourceFingerprint' in saved[0], false)
+  assert.equal(readFileSync(file, 'utf8').includes('sourceFingerprint'), false)
+})
+
 test('saveInstances drops invalid entries loudly and disconnects removed instances', t => {
   const { manager } = makeManager(t)
   manager.connect('s1')
@@ -176,6 +241,132 @@ test('saveInstances drops invalid entries loudly and disconnects removed instanc
   assert.equal(manager.status('s1'), null)
   assert.equal(manager.listInstances().length, 1)
   assert.throws(() => manager.saveInstances('nope' as unknown as TransportInstanceInput[]), /array/)
+})
+
+test('unique-id registry churn retires every runtime state instead of retaining an unbounded history', t => {
+  const { manager } = makeManager(t)
+  const base = manager.listInstances()[0]
+  for (let index = 0; index < 128; index += 1) {
+    const id = `churn-${index}`
+    manager.saveInstances([base, { id, label: id, host: 'churn.example.com', remotePort: 22 }])
+    assert.equal(manager.status(id)?.phase, 'idle', 'status materializes this incarnation')
+    assert.equal(manager.appendLog(id, 'info', `old-${index}`), true)
+    manager.saveInstances([base])
+    assert.equal(manager.clearLogs(id), false, `retired state ${id} is no longer retained`)
+    assert.equal(manager.appendLog(id, 'info', 'zombie'), false)
+  }
+})
+
+test('same-id re-add starts with fresh status, service projection, and logs', async t => {
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const base = manager.listInstances().find(instance => instance.id === 's1')!
+  const resultPromise = manager.exec('s2', 'start')
+  spawnCalls[0].child.simulateExit(0)
+  const result = await resultPromise
+  assert.equal(result.ok, true)
+  assert.equal(manager.status('s2')?.serviceActive, true)
+  assert.ok(manager.logs('s2').length > 0)
+  assert.equal(manager.appendLog('s2', 'error', 'old incarnation marker'), true)
+
+  manager.saveInstances([base])
+  manager.saveInstances([base, { ...EXEC_INSTANCE, label: 're-added' }])
+  assert.deepEqual(manager.status('s2'), {
+    kind: 'ssh',
+    phase: 'idle',
+    localPort: null,
+    sshPort: null,
+    remotePort: 3080,
+    retryAttempt: 0,
+    requiresUserAction: false,
+    serviceActive: null,
+    remoteDshHome: null,
+    logSummary: '',
+  })
+  assert.deepEqual(manager.logs('s2'), [])
+})
+
+test('a late exec from a removed incarnation cannot write into a same-id re-add', async t => {
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const base = manager.listInstances().find(instance => instance.id === 's1')!
+  const oldExec = manager.exec('s2', 'start')
+  const oldChild = spawnCalls[0].child
+
+  manager.saveInstances([base])
+  assert.ok(oldChild.killCalls.includes('SIGTERM'), 'registry retirement terminates its exec child')
+  manager.saveInstances([base, { ...EXEC_INSTANCE, label: 'new incarnation' }])
+  assert.equal(manager.appendLog('s2', 'info', 'fresh incarnation marker'), false, 'state remains lazy before first projection')
+  assert.equal(manager.status('s2')?.serviceActive, null)
+  assert.equal(manager.appendLog('s2', 'info', 'fresh incarnation marker'), true)
+
+  oldChild.simulateExit(0)
+  assert.deepEqual(await oldExec, { ok: false, error: 'ssh instance changed while exec was in progress' })
+  assert.equal(manager.status('s2')?.serviceActive, null, 'old setProjection is generation-fenced')
+  assert.deepEqual(
+    manager.logs('s2').map(entry => entry.message),
+    ['fresh incarnation marker'],
+    'old exec logs are generation-fenced',
+  )
+})
+
+test('a same-id transport edit retires old exec ownership and the next exec uses a fresh spec', async t => {
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  const base = manager.listInstances().find(instance => instance.id === 's1')!
+  const oldExec = manager.exec('s2', 'start')
+  const oldChild = spawnCalls[0].child
+
+  manager.saveInstances([
+    base,
+    { ...EXEC_INSTANCE, host: 'replacement.example.com', user: 'carol' },
+  ])
+  assert.ok(oldChild.killCalls.includes('SIGTERM'), 'same-id ownership edit terminates the old exec child')
+  assert.equal(manager.status('s2')?.serviceActive, null, 'edited instance gets a fresh projection state')
+  assert.deepEqual(manager.logs('s2'), [], 'edited instance does not inherit the previous incarnation logs')
+
+  await waitFor(() => oldChild.killCalls.includes('SIGKILL'), 3000, 'transport edit escalates an ignoring exec child')
+  oldChild.simulateExit(0)
+  assert.deepEqual(await oldExec, { ok: false, error: 'ssh instance changed while exec was in progress' })
+  assert.equal(manager.status('s2')?.serviceActive, null, 'late old result cannot project onto the edited host')
+  assert.deepEqual(manager.logs('s2'), [], 'late old result cannot log onto the edited host')
+
+  const freshExec = manager.exec('s2', 'start')
+  assert.equal(spawnCalls.length, 2)
+  assert.deepEqual(spawnCalls[1].args, ['carol@replacement.example.com', 'systemctl', 'start', 'dsh-chamber'])
+  spawnCalls[1].child.simulateExit(0)
+  assert.equal((await freshExec).ok, true)
+  assert.equal(manager.status('s2')?.serviceActive, true)
+})
+
+test('service/home edit revokes exec ownership without restarting the live tunnel', async t => {
+  const { manager, spawnCalls, setProbe } = makeManager(t, { instances: [EXEC_INSTANCE] })
+  setProbe(true)
+  manager.connect('s2')
+  await waitFor(() => manager.status('s2')?.phase === 'ready')
+  const tunnelChild = spawnCalls[0].child
+  const localPort = manager.status('s2')?.localPort
+  const oldExec = manager.exec('s2', 'start')
+  const oldExecChild = spawnCalls[1].child
+  const base = manager.listInstances().find(instance => instance.id === 's1')!
+
+  manager.saveInstances([
+    base,
+    { ...EXEC_INSTANCE, serviceName: 'dsh-replacement', remoteDshHome: '~/.dsh-next' },
+  ])
+  assert.ok(oldExecChild.killCalls.includes('SIGTERM'), 'old operational exec is terminated')
+  assert.equal(tunnelChild.killCalls.includes('SIGTERM'), false, 'unchanged endpoint keeps its live tunnel')
+  assert.equal(manager.status('s2')?.phase, 'ready')
+  assert.equal(manager.status('s2')?.localPort, localPort)
+  assert.equal(manager.status('s2')?.serviceActive, null)
+
+  await waitFor(() => oldExecChild.killCalls.includes('SIGKILL'), 3000, 'service/home edit escalates an ignoring exec child')
+  oldExecChild.simulateExit(0)
+  assert.deepEqual(await oldExec, { ok: false, error: 'ssh instance changed while exec was in progress' })
+  assert.equal(manager.status('s2')?.serviceActive, null)
+
+  const freshExec = manager.exec('s2', 'start')
+  assert.deepEqual(spawnCalls[2].args, ['bob@lab.example.com', 'systemctl', 'start', 'dsh-replacement'])
+  spawnCalls[2].child.simulateExit(0)
+  assert.equal((await freshExec).ok, true)
+  assert.equal(manager.status('s2')?.serviceActive, true)
 })
 
 test('saveInstances refuses an oversized registry before validation or persistence', () => {
@@ -1023,6 +1214,7 @@ test('an auth failure landing while the final probe is in flight stays terminal'
     },
     instancesFile: join(dir, 'ssh-instances.json'),
     logger: silentLogger,
+    allocatePort: async () => 43123,
     // A probe that stays in flight past the ready deadline: the auth line
     // lands while the loop awaits, and the deadline branch must re-check
     // authFailed instead of falling through to a reconnect.
@@ -1522,13 +1714,15 @@ test('a pending SIGKILL escalation for one child survives another child\u2019s f
   assert.ok(!children[1].killCalls.includes('SIGKILL'), 'a cleanly-exited child never gets SIGKILL')
 })
 
-test('dispose() SIGTERMs in-flight exec children (app quit)', async t => {
+test('disposeAsync SIGTERMs, SIGKILLs and settles an in-flight exec child that ignores TERM', async t => {
   const { manager, spawnCalls, children } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
   assert.equal(spawnCalls.length, 1)
-  manager.dispose()
+  const disposing = manager.disposeAsync()
   assert.ok(children[0].killCalls.includes('SIGTERM'), 'in-flight exec child is SIGTERMed on dispose')
-  children[0].simulateExit(143, 'SIGTERM')
+  await waitFor(() => children[0].killCalls.includes('SIGKILL'), 3000, 'TERM-ignoring exec gets SIGKILL')
+  children[0].simulateExit(null, 'SIGKILL')
+  await disposing
   const result = await resultPromise
   assert.equal(result.ok, false)
 })
@@ -1605,4 +1799,28 @@ test('a throwing provider buildStartEnv lands on a loud error, never a stuck con
   await waitFor(() => manager.status('e3')!.phase === 'error', 3000, 'terminal error')
   assert.equal(spawnCalls.length, 0, 'no transport spawns after a throwing buildStartEnv')
   assert.equal(manager.status('e3')!.requiresUserAction, false, 'a provider bug is not a user-action failure')
+})
+
+test('hostile thrown values from allocation and provider start hooks still settle loudly', async t => {
+  const hostile = new Proxy({}, {
+    get() { throw new Error('formatter trap') },
+    getPrototypeOf() { throw new Error('instanceof trap') },
+  })
+  const allocation = makeManager(t, {
+    allocatePort: async () => { throw hostile },
+  })
+  allocation.manager.connect('s1')
+  await waitFor(() => allocation.manager.status('s1')?.phase === 'error', 3000, 'hostile allocation error')
+  assert.match(allocation.manager.status('s1')!.logSummary, /unknown error/)
+  assert.ok(allocation.manager.logs('s1').some(entry => entry.message.includes('unknown error')))
+
+  const throwingProvider: TransportProvider = {
+    ...sshProvider,
+    buildStartArgs: () => { throw hostile },
+  }
+  const providerStart = makeManager(t, { provider: throwingProvider })
+  providerStart.manager.connect('s1')
+  await waitFor(() => providerStart.manager.status('s1')?.phase === 'error', 3000, 'hostile provider start error')
+  assert.match(providerStart.manager.status('s1')!.logSummary, /unknown error/)
+  assert.equal(providerStart.spawnCalls.length, 0)
 })

@@ -42,10 +42,34 @@ import {
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
+import {
+  acknowledgeRendererDelivery,
+  authoritativeSourceRetirements,
+  canReplayRosterIntents,
+  classifyRosterGatedSource,
+  deliveryMatchesCurrentSource,
+  enqueueBoundedRosterIntent,
+  parseAuthoritativeSourceFingerprint,
+  routeDeepLinkActivation,
+  SerialIntentRunner,
+  SourceOwnershipRegistry,
+  settlePendingDeepLinkActivation,
+  subscribeRosterBeforeRefresh,
+  type RendererDeliveryCoordinates,
+  type SourceOwnershipToken,
+} from './deep-link-activation.ts'
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
-import { isSnapshotStale, planAggregateRefreshes } from './aggregate-refresh.ts'
+import {
+  invalidateRemovedAggregateSources,
+  isSnapshotStale,
+  planAggregateRefreshes,
+  remoteRetiredSourceIds,
+  retireSelectedSource,
+  withoutRemovedSourceIds,
+  withoutRemovedSourceKeys,
+} from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
 import InstanceView from './components/InstanceView.tsx'
@@ -65,8 +89,22 @@ const AGGREGATE_RETRY_LIMIT = 5
 const MAX_PREWARMED_REMOTE_VIEWS = 3
 /** 连接行（label/dshPort）低频轮询：状态本身走推送，行字段极少变化。 */
 const CONNECTIONS_POLL_MS = 30_000
+/** Cold-start roster failures retry quickly before the 30s steady-state poll. */
+const REMOTE_ROSTER_RETRY_MS = 1_000
+const REMOTE_ROSTER_RETRY_LIMIT = 5
+/** A transient listener-ready IPC failure must not strand main's held intent forever. */
+const LISTENER_READY_RETRY_MS = 500
+const LISTENER_READY_RETRY_LIMIT = 5
+const MAX_PENDING_ROSTER_NOTIFICATION_OPENS = 64
 
 const LOCAL_INSTANCE_ID = 'local'
+
+type DeepLinkDelivery = RendererDeliveryCoordinates & { sourceId: string; sourceFingerprint: string }
+type NotificationOpenDelivery = RendererDeliveryCoordinates & {
+  sourceId: string
+  sourceFingerprint: string
+  sessionId: string
+}
 
 function instanceBasePath(instanceId: string): string {
   return `/api/i/${instanceId}`
@@ -233,6 +271,59 @@ export default function App() {
   // 两种状态区分后，首启（无行）才会触发本地实例自动启动。
   const [connections, setConnections] = useState<ConnectionSummary[] | null>(null)
   const [remoteInstances, setRemoteInstances] = useState<SshInstanceSpec[]>([])
+  // false means no authoritative desktop instances_get result belongs to the
+  // current roster generation yet. Deep-link remote activation is held until
+  // this becomes true; a rejection leaves it false so a later retry can replay.
+  const [remoteRosterSettled, setRemoteRosterSettled] = useState(false)
+  const remoteRosterSettledRef = useRef(false)
+  // At most one renderer activation is useful: view switching is
+  // last-intent-wins. This fixed-size slot prevents a failed roster from
+  // growing a second unbounded queue behind main's already-bounded queue.
+  const pendingDeepLinkDeliveryRef = useRef<DeepLinkDelivery | null>(null)
+  // Notification opens carry a session id and cannot collapse to a source-only
+  // last intent. Preserve them in order, but mirror main's 64-entry bound.
+  const pendingRosterNotificationOpensRef = useRef<NotificationOpenDelivery[]>([])
+  // Last-started roster pull wins. An instances-changed event increments this
+  // generation before the replacement pull so an older response cannot revive
+  // a removed source or prematurely settle the new generation.
+  const remoteRosterRefreshSeqRef = useRef(0)
+  // Async work that has left the roster-pending FIFO captures an exact object
+  // owner. Only active sources occupy the registry; retirement deletes the
+  // current object and an authoritative re-add activates a fresh one.
+  const sourceLifecyclesRef = useRef<SourceOwnershipRegistry | null>(null)
+  sourceLifecyclesRef.current ??= new SourceOwnershipRegistry([LOCAL_INSTANCE_ID])
+
+  const acknowledgeDeepLink = useCallback(async (delivery: RendererDeliveryCoordinates): Promise<void> => {
+    const deepLink = window.dshChamber?.deepLink
+    if (deepLink === undefined) throw new Error('deep-link ACK bridge unavailable')
+    const acknowledged = await acknowledgeRendererDelivery(
+      delivery,
+      (deliveryId, attempt) => deepLink.ack(deliveryId, attempt),
+    )
+    if (!acknowledged) {
+      console.warn(`[renderer] ignored stale deep-link ACK ${delivery.deliveryId}/${delivery.attempt}`)
+    }
+  }, [])
+
+  const acknowledgeNotificationOpen = useCallback(async (delivery: RendererDeliveryCoordinates): Promise<void> => {
+    const notifications = window.dshChamber?.notifications
+    if (notifications === undefined) throw new Error('notification ACK bridge unavailable')
+    const acknowledged = await acknowledgeRendererDelivery(
+      delivery,
+      (deliveryId, attempt) => notifications.ack(deliveryId, attempt),
+    )
+    if (!acknowledged) {
+      console.warn(`[notifications] ignored stale open ACK ${delivery.deliveryId}/${delivery.attempt}`)
+    }
+  }, [])
+
+  const reportDeepLinkAckFailure = useCallback((delivery: RendererDeliveryCoordinates, error: unknown): void => {
+    console.error(`[renderer] deep-link ACK exhausted retries (${delivery.deliveryId}/${delivery.attempt}):`, error)
+  }, [])
+
+  const reportNotificationAckFailure = useCallback((delivery: RendererDeliveryCoordinates, error: unknown): void => {
+    console.error(`[notifications] open ACK exhausted retries (${delivery.deliveryId}/${delivery.attempt}):`, error)
+  }, [])
   const [remoteStatus, setRemoteStatus] = useState<Record<string, SshStatusProjection>>({})
   // 视图：'local' | 'ssh-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
@@ -269,6 +360,12 @@ export default function App() {
   // replaced its aggregate with not-connected; one authoritative pull on each
   // not-ready -> ready edge closes that gap without restoring periodic RPCs.
   const readyAggregateSourcesRef = useRef<Set<string>>(new Set())
+  // Unary aggregate pulls and bounded retries use latest-owner object tokens.
+  // The table is active-only: retirement/disconnect deletes ownership, while
+  // a later same-id pull receives a never-reused object.
+  const aggregateRequestOwnersRef = useRef<SourceOwnershipRegistry | null>(null)
+  aggregateRequestOwnersRef.current ??= new SourceOwnershipRegistry()
+  const aggregateFailuresRef = useRef<Record<string, number>>({})
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
@@ -311,12 +408,13 @@ export default function App() {
     chamberBridge.publish(servers)
   }, [servers])
 
-  // 渲染期注册表 id 镜像（与 commit 同步，微任务/事件回调安全）：selectView
-  // 与 openSession 在 apply 时用它拒绝已回收来源（视图生命周期 = 注册表条目
-  // 生命周期，05 §4）——效果同 prewarmEligibleRef 的镜像纪律。
-  const liveServerIdsRef = useRef<Set<string>>(new Set())
+  // 注册表 id 的命令式权威集合：selectView 与 openSession 在 apply 时用它拒绝
+  // 已回收来源（视图生命周期 = 注册表条目生命周期，05 §4）。This is not a render
+  // mirror. Event-side invalidate/success edges must not be overwritten by a
+  // concurrent or stale render. refreshRemotes replaces it synchronously when
+  // the matching registry generation succeeds; local is always authoritative.
+  const liveServerIdsRef = useRef<Set<string>>(new Set([LOCAL_INSTANCE_ID]))
   const liveServerIds = useMemo(() => new Set(servers.map(server => server.id)), [servers])
-  liveServerIdsRef.current = liveServerIds
 
   // 隧道相位镜像（按原始注册表 id 键控，onStatusChanged 推送的 payload.id）：
   // ensureRemoteConnected 经它读最新相位而不进依赖——selectView/openSession 的
@@ -353,7 +451,6 @@ export default function App() {
       for (const id of removed) {
         autoPrewarmedRef.current.delete(id)
         disposeInstanceShell(id)
-        releaseInstanceClient(id)
         chamberBridge.clearPluginDiagnostic(id)
       }
       setMountedViews(prev => {
@@ -492,25 +589,178 @@ export default function App() {
   const refreshRemoteStatus = useCallback(async (id: string) => {
     const ssh = window.dshChamber?.desktopSsh
     if (ssh === undefined) return
+    const sourceId = `ssh-${id}`
+    const sourceOwner = sourceLifecyclesRef.current!.capture(sourceId)
+    if (sourceOwner === null) return
     try {
       const projection = await ssh.status(id)
-      if (projection !== null) setRemoteStatus(prev => ({ ...prev, [id]: projection }))
+      if (
+        projection !== null
+        && liveServerIdsRef.current.has(sourceId)
+        && sourceLifecyclesRef.current!.owns(sourceOwner)
+      ) {
+        remoteStatusRef.current = { ...remoteStatusRef.current, [id]: projection }
+        setRemoteStatus(prev => ({ ...prev, [id]: projection }))
+      }
     } catch {
       // 状态读取失败时保持已有投影（权威状态来自 onStatusChanged 推送）
     }
   }, [])
 
-  const refreshRemotes = useCallback(async () => {
+  /** Invalidate the roster synchronously before an instances-changed refresh.
+   * The ref closes the event→React-commit gap in which a deep-link push can
+   * otherwise observe the previous generation as settled. */
+  const invalidateRemoteRoster = useCallback(() => {
+    remoteRosterRefreshSeqRef.current += 1
+    remoteRosterSettledRef.current = false
+    setRemoteRosterSettled(false)
+  }, [])
+
+  /** Synchronously retire every renderer owner of an authoritative lifecycle
+   * edge (deletion or transport-identity edit). This is event-side on purpose:
+   * passive effects can be skipped when React batches a same-id replacement. */
+  const retireSources = useCallback((sourceIds: ReadonlySet<string>): void => {
+    const retired = new Set([...sourceIds].filter(sourceId => sourceId !== LOCAL_INSTANCE_ID))
+    if (retired.size === 0) return
+    sourceLifecyclesRef.current!.retire(retired)
+    aggregateRequestOwnersRef.current!.retire(retired)
+
+    // Force the supplied authoritative delta through the aggregate generation
+    // transition even when a newer roster snapshot already contains the same
+    // id. That is the exact two-pull remove/re-add race the delta closes.
+    const previousLive = new Set(liveServerIdsRef.current)
+    const nextLive = new Set(liveServerIdsRef.current)
+    for (const sourceId of retired) {
+      previousLive.add(sourceId)
+      nextLive.delete(sourceId)
+    }
+    const aggregateInvalidation = invalidateRemovedAggregateSources(
+      previousLive,
+      nextLive,
+      {
+        failuresBySource: aggregateFailuresRef.current,
+        snapshotAtBySource: snapshotAtRef.current,
+        snapshotSources: snapshotSourcesRef.current,
+        readySources: readyAggregateSourcesRef.current,
+      },
+    )
+    aggregateFailuresRef.current = aggregateInvalidation.failuresBySource
+    snapshotAtRef.current = aggregateInvalidation.snapshotAtBySource
+    snapshotSourcesRef.current = aggregateInvalidation.snapshotSources
+    readyAggregateSourcesRef.current = aggregateInvalidation.readySources
+    // Event authority is immediate: delayed view/deep-link callbacks must see
+    // the source absent before the replacement instances_get resolves.
+    liveServerIdsRef.current = nextLive
+
+    // Record shell.ts's async teardown barrier before any replacement mount.
+    // Identity edits deliberately reach this path even though the registry id
+    // remains present; label/service/home-only edits do not retire the shell.
+    for (const sourceId of retired) {
+      autoPrewarmedRef.current.delete(sourceId)
+      chamberBridge.retireInstanceProducers(sourceId)
+      disposeInstanceShell(sourceId)
+      releaseInstanceClient(sourceId)
+      chamberBridge.clearPluginDiagnostic(sourceId)
+      delete prevRunningRef.current[sourceId]
+      delete prevRuntimeFactsRef.current[sourceId]
+      delete notifiedCompleteRef.current[sourceId]
+    }
+    const pendingDeepLink = pendingDeepLinkDeliveryRef.current
+    if (pendingDeepLink !== null && retired.has(pendingDeepLink.sourceId)) {
+      pendingDeepLinkDeliveryRef.current = null
+      void acknowledgeDeepLink(pendingDeepLink).catch(error => {
+        reportDeepLinkAckFailure(pendingDeepLink, error)
+      })
+    }
+    const retainedNotificationOpens: NotificationOpenDelivery[] = []
+    for (const open of pendingRosterNotificationOpensRef.current) {
+      if (!retired.has(open.sourceId)) {
+        retainedNotificationOpens.push(open)
+        continue
+      }
+      void acknowledgeNotificationOpen(open).catch(error => {
+        reportNotificationAckFailure(open, error)
+      })
+    }
+    pendingRosterNotificationOpensRef.current = retainedNotificationOpens
+    pendingViewRef.current = retireSelectedSource(pendingViewRef.current, retired, null)
+    if (retired.has(activeViewRef.current)) activeViewRef.current = LOCAL_INSTANCE_ID
+    prewarmQueueRef.current = withoutRemovedSourceIds(prewarmQueueRef.current, retired)
+    prewarmEligibleRef.current = new Set(
+      [...prewarmEligibleRef.current].filter(sourceId => !retired.has(sourceId)),
+    )
+    if (prewarmInflightRef.current !== null && retired.has(prewarmInflightRef.current)) {
+      prewarmInflightRef.current = null
+    }
+
+    // Queue every React owner deletion before any roster render. A replacement
+    // id only returns through a fresh view mount/producer generation.
+    setMountedViews(prev => withoutRemovedSourceIds(prev, retired))
+    setActiveView(prev => retireSelectedSource(prev, retired, LOCAL_INSTANCE_ID))
+    setShellStates(prev => withoutRemovedSourceKeys(prev, retired))
+    setRetryTokens(prev => withoutRemovedSourceKeys(prev, retired))
+    setAggregates(prev => withoutRemovedSourceKeys(prev, retired))
+    setSnapshotSources(prev => withoutRemovedSourceKeys(prev, retired))
+    setRuntimeFacts(prev => withoutRemovedSourceKeys(prev, retired))
+    setPluginDiagnostics(prev => withoutRemovedSourceKeys(prev, retired))
+    setCompletedBySource(prev => withoutRemovedSourceKeys(prev, retired))
+    const removedRawIds = new Set([...retired]
+      .filter(sourceId => sourceId.startsWith('ssh-'))
+      .map(sourceId => sourceId.slice('ssh-'.length)))
+    remoteStatusRef.current = withoutRemovedSourceKeys(remoteStatusRef.current, removedRawIds)
+    for (const rawId of removedRawIds) knownRemoteIdsRef.current.delete(rawId)
+    setRemoteStatus(prev => withoutRemovedSourceKeys(prev, removedRawIds))
+  }, [
+    acknowledgeDeepLink,
+    acknowledgeNotificationOpen,
+    reportDeepLinkAckFailure,
+    reportNotificationAckFailure,
+  ])
+
+  const refreshRemotes = useCallback(async (): Promise<boolean> => {
     const ssh = window.dshChamber?.desktopSsh
-    if (ssh === undefined) return
+    if (ssh === undefined) return false
+    const seq = remoteRosterRefreshSeqRef.current + 1
+    remoteRosterRefreshSeqRef.current = seq
     try {
       const instances = await ssh.instances_get()
-      setRemoteInstances(instances)
-      for (const instance of instances) void refreshRemoteStatus(instance.id)
+      if (remoteRosterRefreshSeqRef.current !== seq) return false
+      const acceptedInstances = instances.flatMap((instance) => {
+        const sourceId = `ssh-${instance.id}`
+        const fingerprint = parseAuthoritativeSourceFingerprint(sourceId, instance.sourceFingerprint)
+        if (fingerprint === null) {
+          console.error(`[renderer] remote source ${sourceId} omitted: invalid authoritative lifecycle proof`)
+          return []
+        }
+        return [{ instance, sourceId, fingerprint }]
+      })
+      const nextSources = [
+        { sourceId: LOCAL_INSTANCE_ID, fingerprint: 'local' },
+        ...acceptedInstances.map(({ sourceId, fingerprint }) => ({ sourceId, fingerprint })),
+      ]
+      const nextLiveServerIds = new Set(nextSources.map(source => source.sourceId))
+      const retired = authoritativeSourceRetirements(
+        liveServerIdsRef.current,
+        sourceLifecyclesRef.current!,
+        nextSources,
+      )
+      retireSources(retired)
+      sourceLifecyclesRef.current!.activate(LOCAL_INSTANCE_ID, 'local')
+      for (const { sourceId, fingerprint } of acceptedInstances) {
+        sourceLifecyclesRef.current!.activate(sourceId, fingerprint)
+      }
+      liveServerIdsRef.current = nextLiveServerIds
+      remoteRosterSettledRef.current = true
+      setRemoteInstances(acceptedInstances.map(({ instance }) => instance))
+      setRemoteRosterSettled(true)
+      for (const { instance } of acceptedInstances) void refreshRemoteStatus(instance.id)
+      return true
     } catch {
-      // 桌面 SSH 面不可达时保持现状；实例列表由下次刷新重试
+      // 桌面 SSH 面不可达时保持现状；首次权威结果前 settled 仍为 false，
+      // deep-link intent 继续 held，并由快速重试/30s 稳态轮询再次拉取。
+      return false
     }
-  }, [refreshRemoteStatus])
+  }, [refreshRemoteStatus, retireSources])
 
   /**
    * 拉取一个实例的 workspace/session 快照（失败落 error 态，由轮询重试）。
@@ -518,16 +768,18 @@ export default function App() {
    * 落 state——避免慢轮询在拖拽提交后的即时刷新之后落地、用旧序覆盖新序
    * （拖拽 commit 前的兜底快照可能晚于 refresh 拉取到达，造成陈旧排序）。
    */
-  const aggregateSeqRef = useRef<Record<string, number>>({})
   const aggregatePollRunningRef = useRef(false)
-  const aggregateFailuresRef = useRef<Record<string, number>>({})
   const retryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const refreshAggregate = useCallback(async (instanceId: string) => {
-    const seq = (aggregateSeqRef.current[instanceId] ?? 0) + 1
-    aggregateSeqRef.current[instanceId] = seq
+    const sourceOwner = sourceLifecyclesRef.current!.capture(instanceId)
+    if (sourceOwner === null) return
+    const requestOwner = aggregateRequestOwnersRef.current!.renew(instanceId)
+    const stillOwns = (): boolean =>
+      sourceLifecyclesRef.current!.owns(sourceOwner)
+      && aggregateRequestOwnersRef.current!.owns(requestOwner)
     try {
       const snapshot = await fetchInstanceSnapshot(getInstanceClient(instanceId))
-      if (aggregateSeqRef.current[instanceId] !== seq) return
+      if (!stillOwns()) return
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
@@ -541,7 +793,7 @@ export default function App() {
         return { ...prev, [instanceId]: { state: 'ok', ...snapshot, error: null } }
       })
     } catch (err) {
-      if (aggregateSeqRef.current[instanceId] !== seq) return
+      if (!stillOwns()) return
       setAggregates(prev => ({ ...prev, [instanceId]: emptyAggregate('error', errorMessage(err)) }))
       // 反代 503 = 权威"未就绪"信号（03 §3.3）：本地 /health 可能还停留在
       // 旧 ready（最多一个健康轮询周期的陈旧窗口），立即刷新使连接判定
@@ -554,7 +806,7 @@ export default function App() {
       if (failures < AGGREGATE_RETRY_LIMIT) {
         aggregateFailuresRef.current[instanceId] = failures + 1
         const retryTimer = setTimeout(() => {
-          if (aggregateSeqRef.current[instanceId] === seq) void refreshAggregate(instanceId)
+          if (stillOwns()) void refreshAggregate(instanceId)
         }, AGGREGATE_RETRY_MS)
         retryTimersRef.current.push(retryTimer)
       } else {
@@ -603,9 +855,7 @@ export default function App() {
     if (notReady.length > 0) {
       // A pull started in the dying generation must never restore an `ok`
       // aggregate after the authoritative transport state became not-ready.
-      for (const id of notReady) {
-        aggregateSeqRef.current[id] = (aggregateSeqRef.current[id] ?? 0) + 1
-      }
+      aggregateRequestOwnersRef.current!.retire(notReady)
       setAggregates(prev => {
         let changed = false
         const next = { ...prev }
@@ -674,7 +924,6 @@ export default function App() {
 
     void refreshHealth()
     void refreshConnections()
-    void refreshRemotes()
     pollAggregatesRef.current()
 
     // Local status push channel (设计 05 §3): the control plane streams every
@@ -711,6 +960,7 @@ export default function App() {
     // 推送，不依赖此轮询）。
     const remotesTimer = setInterval(() => {
       if (cancelled) return
+      if (!rosterListenerReadyRef.current) return
       void refreshRemotes()
     }, CONNECTIONS_POLL_MS)
 
@@ -733,6 +983,8 @@ export default function App() {
    * 同款 bridgeUp 守卫）。卸载时退订。
    */
   const [sshBridgeReady, setSshBridgeReady] = useState(false)
+  const [rosterListenerReady, setRosterListenerReady] = useState(false)
+  const rosterListenerReadyRef = useRef(false)
   useEffect(() => {
     if (sshBridgeReady) return
     const timer = setInterval(() => {
@@ -744,20 +996,71 @@ export default function App() {
     return () => { clearInterval(timer) }
   }, [sshBridgeReady])
 
+  /** First authoritative roster acquisition: retry transient IPC failures on
+   * a short bounded cadence. Exhaustion keeps the one pending activation held;
+   * the existing 30s registry poll remains the long-tail recovery path. */
+  useEffect(() => {
+    if (
+      !sshBridgeReady
+      || !rosterListenerReady
+      || !rosterListenerReadyRef.current
+      || remoteRosterSettled
+    ) return
+    let cancelled = false
+    let attempts = 0
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const attempt = (): void => {
+      attempts += 1
+      void refreshRemotes().then((settled) => {
+        if (cancelled || settled) return
+        if (attempts >= REMOTE_ROSTER_RETRY_LIMIT) {
+          console.error('[renderer] remote instances roster unavailable; pending deep-link activation remains held')
+          return
+        }
+        retryTimer = setTimeout(attempt, REMOTE_ROSTER_RETRY_MS)
+      })
+    }
+    attempt()
+    return () => {
+      cancelled = true
+      if (retryTimer !== null) clearTimeout(retryTimer)
+    }
+  }, [sshBridgeReady, rosterListenerReady, remoteRosterSettled, refreshRemotes])
+
   useEffect(() => {
     if (!sshBridgeReady) return
     const ssh = window.dshChamber?.desktopSsh
     if (ssh === undefined) return
-    // 桥到达即装载一次 roster（挂载时的装载可能发生在桥之前）。
-    void refreshRemotes()
     const unsubscribe = ssh.onStatusChanged((payload) => {
+      // A removed transport may emit one final phase while main tears it down.
+      // The delta already retired this incarnation; refreshRemoteStatus after
+      // a real re-add supplies the replacement's first accepted projection.
+      if (!liveServerIdsRef.current.has(`ssh-${payload.id}`)) return
+      remoteStatusRef.current = { ...remoteStatusRef.current, [payload.id]: payload.status }
       setRemoteStatus(prev => ({ ...prev, [payload.id]: payload.status }))
     })
     // 注册表变更推送：设置页增/删/改实例即时重拉 roster（自动连接新 id、
     // 回收已删视图），不等 30s 轮询周期。
-    const unsubscribeInstances = ssh.onInstancesChanged(() => {
+    const refreshAuthoritativeRoster = (): void => {
+      invalidateRemoteRoster()
       void refreshRemotes()
-    })
+    }
+    // Listener-before-snapshot closes the bridge-hydration lost-update window:
+    // a registry mutation can no longer land between a successful initial
+    // instances_get and onInstancesChanged subscription while the old roster
+    // remains marked authoritative.
+    const unsubscribeInstances = subscribeRosterBeforeRefresh(
+      listener => ssh.onInstancesChanged(({ retiredIds }) => {
+        // The trusted desktop delta is the only observation that survives two
+        // overlapping pulls both seeing the final same-id re-add. Retirement
+        // must happen before invalidating/refreshing the roster generation.
+        retireSources(remoteRetiredSourceIds(retiredIds))
+        listener()
+      }),
+      refreshAuthoritativeRoster,
+    )
+    rosterListenerReadyRef.current = true
+    setRosterListenerReady(true)
     // OS 唤醒分发（design 14 D4）：主进程 push system-resume → 本页面所有
     // dsh 前端连接（N-ctx 单页共享 window）立即重连——dsh-client-connection
     // 的 chamber 补丁监听该 window 事件。事件名以该包的共享常量
@@ -774,24 +1077,93 @@ export default function App() {
     // 则 notifications 必存在（与上方 SYSTEM_RESUME_EVENT 同款锁定纪律）。
     // 监听注册后立即发就绪信号：主进程只在就绪后放行推送（did-finish-load
     // 早于本监听注册，窗口重建路径的事件不能丢）。
-    const unsubscribeNotifications = window.dshChamber?.notifications?.onOpen(({ sourceId, sessionId }) => {
-      void openSession(sourceId, sessionId).catch(err => {
-        console.error('[notifications] 打开会话失败:', err)
-      })
+    const notifications = window.dshChamber?.notifications
+    const unsubscribeNotifications = notifications?.onOpen((open) => {
+      const { sourceId, sessionId } = open
+      const classification = classifyRosterGatedSource(
+        sourceId,
+        remoteRosterSettledRef.current,
+        liveServerIdsRef.current,
+      )
+      // A successful roster pull updates the imperative authority ref before
+      // React commits the replay effect. Keep a later remote click behind any
+      // already-held payloads during that small window; local remains immediate
+      // per the roster-gate contract.
+      if (
+        classification === 'hold'
+        || (sourceId !== LOCAL_INSTANCE_ID && pendingRosterNotificationOpensRef.current.length > 0)
+      ) {
+        const queued = enqueueBoundedRosterIntent(
+          pendingRosterNotificationOpensRef.current,
+          open,
+          MAX_PENDING_ROSTER_NOTIFICATION_OPENS,
+        )
+        pendingRosterNotificationOpensRef.current = queued.pending
+        if (queued.dropped !== null) {
+          console.warn(`[notifications] roster pending queue full; dropped oldest open (${queued.dropped.sourceId}/${queued.dropped.sessionId})`)
+          void acknowledgeNotificationOpen(queued.dropped).catch(error => {
+            reportNotificationAckFailure(queued.dropped!, error)
+          })
+        }
+        return
+      }
+      if (classification === 'missing') {
+        console.warn(`[notifications] ignored source absent from the authoritative roster: ${sourceId}`)
+        void acknowledgeNotificationOpen(open).catch(error => {
+          reportNotificationAckFailure(open, error)
+        })
+        return
+      }
+      void enqueueNotificationOpen(open, 'live')
     })
+    // Listener-before-ready mirrors the deep-link contract. A transient
+    // sender-fence/navigation race must not leave main's click queue held for
+    // the lifetime of the renderer, so retry on a small bounded budget and
+    // make final exhaustion loud.
+    let notificationReadyCancelled = false
+    let notificationReadyAttempts = 0
+    let notificationReadyRetryTimer: ReturnType<typeof setTimeout> | null = null
+    const signalNotificationReady = (): void => {
+      if (notifications?.ready === undefined) return
+      notificationReadyAttempts += 1
+      void Promise.resolve()
+        .then(() => notifications.ready())
+        .then((ready) => {
+          if (ready !== true) throw new Error('notifications ready returned false')
+        })
+        .catch((error: unknown) => {
+          if (notificationReadyCancelled) return
+          if (notificationReadyAttempts >= LISTENER_READY_RETRY_LIMIT) {
+            console.error('[notifications] readiness handshake exhausted its retry budget:', error)
+            return
+          }
+          notificationReadyRetryTimer = setTimeout(signalNotificationReady, LISTENER_READY_RETRY_MS)
+        })
+    }
     if (unsubscribeNotifications !== undefined) {
-      void window.dshChamber?.notifications?.ready?.().catch(() => {})
+      signalNotificationReady()
     }
     return () => {
+      rosterListenerReadyRef.current = false
+      notificationReadyCancelled = true
+      if (notificationReadyRetryTimer !== null) clearTimeout(notificationReadyRetryTimer)
       unsubscribe()
       unsubscribeInstances()
       unsubscribeResume?.()
       unsubscribeNotifications?.()
     }
     // openSession 依赖链稳定到 []（selectView/ensureRemoteConnected 均
-    // useCallback([])），函数引用恒定——effect 单次订阅捕获的闭包永不过期，
-    // 无需（也不能——声明在其后，deps 立即求值会 TDZ）列入依赖。
-  }, [sshBridgeReady, refreshRemotes])
+    // useCallback([])），enqueueNotificationOpen 仅包装该稳定引用与页面级
+    // serial tail；effect 单次订阅捕获的闭包永不过期。两者都声明在其后，
+    // 不能列入此处立即求值的 deps（会触发 TDZ）。
+  }, [
+    sshBridgeReady,
+    acknowledgeNotificationOpen,
+    invalidateRemoteRoster,
+    refreshRemotes,
+    reportNotificationAckFailure,
+    retireSources,
+  ])
 
   /**
    * 本地实例幂等启动（05 §3）：首轮连接行装载后（null = 尚未拉到）行缺失/
@@ -902,6 +1274,11 @@ export default function App() {
     const scrollAnchor = captureSidebarScrollAnchor(activeViewRef.current)
     pendingViewRef.current = viewId
     runViewTransition(() => {
+      // A roster-removal retirement or a newer click clears/replaces this
+      // intent while a View Transition callback is deferred. Membership alone
+      // is insufficient: a rapid same-id re-add is live again but belongs to a
+      // new source generation, so the old callback must not activate it.
+      if (pendingViewRef.current !== viewId) return
       if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) {
         // 过渡在途期间来源被删除：放弃本次切换并清掉意图（绝不把已回收的
         // 视图重新挂成僵尸：一次完整 boot 很贵，且回收 effect 的回滚会造成
@@ -917,6 +1294,48 @@ export default function App() {
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
     })
   }, [ensureRemoteConnected])
+
+  /** Replay the one cold-start remote activation only after the first
+   * authoritative instances_get result committed the same roster generation.
+   * A missing target is an authoritative removal/nonexistence decision, so it
+   * is dropped instead of bypassing selectView's zombie-view guard. */
+  useEffect(() => {
+    // The state schedules this passive effect; the imperative ref is the final
+    // authority check. An instances-changed event can invalidate the roster
+    // after commit but before this effect flushes, in which case the intent
+    // must remain held for the replacement generation.
+    if (!canReplayRosterIntents(remoteRosterSettled, remoteRosterSettledRef.current)) return
+    const pending = pendingDeepLinkDeliveryRef.current
+    if (pending === null) return
+    const decision = settlePendingDeepLinkActivation(
+      pending.sourceId,
+      liveServerIdsRef.current,
+    )
+    pendingDeepLinkDeliveryRef.current = null
+    if (decision.discarded?.reason === 'missing') {
+      console.warn(`[renderer] deep-link source is no longer in the authoritative roster: ${decision.discarded.sourceId}`)
+    }
+    if (decision.activateSourceId !== null) {
+      if (deliveryMatchesCurrentSource(
+        sourceLifecyclesRef.current!,
+        pending.sourceId,
+        pending.sourceFingerprint,
+      )) {
+        selectView(decision.activateSourceId)
+      } else {
+        console.warn(`[renderer] ignored stale deep-link source proof: ${pending.sourceId}`)
+      }
+    }
+    void acknowledgeDeepLink(pending).catch(error => {
+      reportDeepLinkAckFailure(pending, error)
+    })
+  }, [
+    remoteRosterSettled,
+    liveServerIds,
+    acknowledgeDeepLink,
+    reportDeepLinkAckFailure,
+    selectView,
+  ])
 
   /** 服务器显示名（骨架屏文案；缺失回落 instanceId）。 */
   const serverLabels = useMemo(() => {
@@ -947,9 +1366,9 @@ export default function App() {
   /**
    * 空闲预热（设计 05 §4）：ready 的注册表远程实例按序、一次一个地在后台
    * boot（settle 后推进下一个），使多数首次切换在点击时已就绪——骨架屏只
-   * 在预热未覆盖时出现。boot 本身经 shell.ts 的全局串行队列（`__DSH_BASE_PATH__`
-   * 旋钮纪律），与用户触发的 boot 共享一条链（用户请求经同一链排队，最坏
-   * 等一个在途 boot）。预热视图为 instance-pending 态（仅 visibility 隐藏、
+   * 在预热未覆盖时出现。boot 本身经 shell.ts 的全局串行队列，与用户触发的
+   * boot 共享一条链（用户请求经同一链排队，最坏等一个在途 boot）；每个 entry
+   * 的实例事实独立注入，不随队列超时后的重叠而串线。预热视图为 instance-pending 态（仅 visibility 隐藏、
    * 保留 layout——vendor 测量/IntersectionObserver 在 boot 期间正常）。
    */
   const localSettledRef = useRef(false)
@@ -1033,6 +1452,79 @@ export default function App() {
     }
   }, [selectView, ensureRemoteConnected])
 
+  type NotificationOpen = NotificationOpenDelivery & {
+    phase: 'live' | 'held'
+    sourceOwner: SourceOwnershipToken | null
+  }
+  const notificationOpenRunnerRef = useRef<SerialIntentRunner<NotificationOpen> | null>(null)
+  notificationOpenRunnerRef.current ??= new SerialIntentRunner<NotificationOpen>()
+  const enqueueNotificationOpen = useCallback((delivery: NotificationOpenDelivery, phase: NotificationOpen['phase']) => {
+    const sourceOwner = sourceLifecyclesRef.current!.capture(delivery.sourceId)
+    if (!deliveryMatchesCurrentSource(
+      sourceLifecyclesRef.current!,
+      delivery.sourceId,
+      delivery.sourceFingerprint,
+    )) {
+      console.warn(`[notifications] ignored stale source proof (${delivery.sourceId}/${delivery.sessionId})`)
+      return acknowledgeNotificationOpen(delivery).catch(error => {
+        reportNotificationAckFailure(delivery, error)
+      })
+    }
+    const settled = notificationOpenRunnerRef.current!.enqueue(
+      {
+        ...delivery,
+        phase,
+        sourceOwner,
+      },
+      open => {
+        if (!sourceLifecyclesRef.current!.owns(open.sourceOwner)) {
+          throw new Error(`来源 ${open.sourceId} 已被移除并以新代重建，旧通知未打开`)
+        }
+        return openSession(open.sourceId, open.sessionId)
+      },
+      (error, open) => {
+        console.error(`[notifications] 打开 ${open.phase} 会话失败 (${open.sourceId}/${open.sessionId}):`, error)
+      },
+    )
+    return settled.then(async () => {
+      try {
+        await acknowledgeNotificationOpen(delivery)
+      } catch (error) {
+        reportNotificationAckFailure(delivery, error)
+      }
+    })
+  }, [acknowledgeNotificationOpen, openSession, reportNotificationAckFailure])
+
+  /** Notification clicks can be released by main before the initial remote
+   * roster arrives, just like deep-link activation. Replay their full payloads
+   * after authority settles; a removed source is loud-dropped and never enters
+   * shell.ts's pending-open queue. */
+  useEffect(() => {
+    if (
+      !canReplayRosterIntents(remoteRosterSettled, remoteRosterSettledRef.current)
+      || pendingRosterNotificationOpensRef.current.length === 0
+    ) return
+    const pending = pendingRosterNotificationOpensRef.current
+    pendingRosterNotificationOpensRef.current = []
+    for (const open of pending) {
+      const classification = classifyRosterGatedSource(open.sourceId, true, liveServerIdsRef.current)
+      if (classification === 'missing') {
+        console.warn(`[notifications] pending source is no longer in the authoritative roster: ${open.sourceId}`)
+        void acknowledgeNotificationOpen(open).catch(error => {
+          reportNotificationAckFailure(open, error)
+        })
+        continue
+      }
+      void enqueueNotificationOpen(open, 'held')
+    }
+  }, [
+    remoteRosterSettled,
+    liveServerIds,
+    acknowledgeNotificationOpen,
+    enqueueNotificationOpen,
+    reportNotificationAckFailure,
+  ])
+
   /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消；单向通道，失败仅 console.error。 */
   useEffect(() => {
     const unsubscribe = chamberBridge.onOpenSession(({ sourceId, sessionId }) => {
@@ -1050,20 +1542,116 @@ export default function App() {
     })
   }, [selectView])
 
-  /** VS Code OS 深链（design 16 §2，best-effort）：主进程推送归一化 intent →
-   *  激活对应来源 shell。raw id → 视图 id 契约（P1-4）：'local' 原样，
-   *  注册表 id 拼 `ssh-` 前缀。窗口未就绪时推送已被主进程跳过（VS Code
-   *  启动由主进程独立完成，渲染层激活从不阻塞它）。桥与 desktopSsh 同一批
-   *  expose，sshBridgeReady 即 deepLink 可用。 */
+  /** VS Code OS 深链（design 16 §2，hold/replay）：先注册监听，再以 ready()
+   *  通知主进程放行归一化 intent；冷启动/重载期间的成功启动不会丢失来源激活。
+   *  raw id → 视图 id 契约（P1-4）：'local' 原样，注册表 id 拼 `ssh-` 前缀。
+   *  远程来源在首次 authoritative instances_get settle 前进入单槽 pending，
+   *  roster 成功后再由上方 effect replay；local 不依赖 roster，立即激活。
+   *  VS Code 启动由主进程独立完成，渲染层激活从不阻塞它。桥与 desktopSsh
+   *  同一批 expose，sshBridgeReady 即 deepLink 可用。 */
   useEffect(() => {
     if (!sshBridgeReady) return
     const deepLink = window.dshChamber?.deepLink
     if (deepLink === undefined) return
-    return deepLink.onIntent((intent) => {
+    const unsubscribe = deepLink.onIntent((intent) => {
+      if (typeof intent.instanceId !== 'string'
+        || typeof intent.sourceFingerprint !== 'string'
+        || !Number.isSafeInteger(intent.deliveryId) || intent.deliveryId < 1
+        || !Number.isSafeInteger(intent.attempt) || intent.attempt < 1) {
+        console.error('[renderer] ignored malformed deep-link activation intent')
+        return
+      }
       const sourceId = intent.instanceId === 'local' ? 'local' : `ssh-${intent.instanceId}`
-      selectView(sourceId)
+      // If authority for this source is already installed, reject a stale IPC
+      // pipe delivery before it can supersede a legitimate held intent. When
+      // no owner exists yet, preserve the delivery until the roster settles
+      // and perform the same exact-proof check in the replay effect.
+      if (
+        sourceLifecyclesRef.current!.capture(sourceId) !== null
+        && !deliveryMatchesCurrentSource(
+          sourceLifecyclesRef.current!,
+          sourceId,
+          intent.sourceFingerprint,
+        )
+      ) {
+        console.warn(`[renderer] ignored stale deep-link source proof before routing: ${sourceId}`)
+        void acknowledgeDeepLink(intent).catch(error => {
+          reportDeepLinkAckFailure(intent, error)
+        })
+        return
+      }
+      const previous = pendingDeepLinkDeliveryRef.current
+      const decision = routeDeepLinkActivation(
+        sourceId,
+        remoteRosterSettledRef.current,
+        liveServerIdsRef.current,
+        previous?.sourceId ?? null,
+      )
+      const current: DeepLinkDelivery = {
+        sourceId,
+        sourceFingerprint: intent.sourceFingerprint,
+        deliveryId: intent.deliveryId,
+        attempt: intent.attempt,
+      }
+      pendingDeepLinkDeliveryRef.current = decision.pendingSourceId === null ? null : current
+      if (previous !== null && previous.deliveryId !== current.deliveryId) {
+        // View activation is explicitly last-intent-wins. A newer delivery
+        // deliberately supersedes the older held item, so commit the old id
+        // instead of leaving main's single-flight key retained forever.
+        void acknowledgeDeepLink(previous).catch(error => {
+          reportDeepLinkAckFailure(previous, error)
+        })
+      }
+      if (decision.discarded?.reason === 'missing') {
+        console.warn(`[renderer] ignored deep-link source absent from the authoritative roster: ${decision.discarded.sourceId}`)
+      }
+      if (decision.activateSourceId !== null) {
+        if (deliveryMatchesCurrentSource(
+          sourceLifecyclesRef.current!,
+          sourceId,
+          current.sourceFingerprint,
+        )) {
+          selectView(decision.activateSourceId)
+        } else {
+          console.warn(`[renderer] ignored stale deep-link source proof: ${sourceId}`)
+        }
+      }
+      if (decision.pendingSourceId === null) {
+        void acknowledgeDeepLink(current).catch(error => {
+          reportDeepLinkAckFailure(current, error)
+        })
+      }
     })
-  }, [sshBridgeReady, selectView])
+    // Listener-before-ready is the ordering contract: ready synchronously
+    // unlocks the main-process drain, whose first send may happen immediately.
+    // Retry a transient IPC failure on a bounded budget; main keeps its intent
+    // held until one invocation succeeds.
+    let cancelled = false
+    let readyAttempts = 0
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const signalReady = (): void => {
+      readyAttempts += 1
+      void Promise.resolve()
+        .then(() => deepLink.ready())
+        .then((ready) => {
+          if (ready !== true) throw new Error('deep-link ready returned false')
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return
+          if (readyAttempts >= LISTENER_READY_RETRY_LIMIT) {
+            console.error('[renderer] deep-link readiness handshake exhausted its retry budget:', error)
+            return
+          }
+          retryTimer = setTimeout(signalReady, LISTENER_READY_RETRY_MS)
+        })
+    }
+    signalReady()
+    return () => {
+      cancelled = true
+      if (retryTimer !== null) clearTimeout(retryTimer)
+      unsubscribe()
+    }
+  }, [sshBridgeReady, acknowledgeDeepLink, reportDeepLinkAckFailure, selectView])
 
   /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。
    *  Always pull on a mutation: the mounted producer's push can lag the host's
@@ -1072,6 +1660,7 @@ export default function App() {
    *  head until the next 30s poll (2026-08 user report). */
   useEffect(() => {
     return chamberBridge.onRefresh((sourceId) => {
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
       void refreshAggregate(sourceId)
     })
   }, [refreshAggregate])
@@ -1083,8 +1672,15 @@ export default function App() {
    * immediate fallback reevaluation above takes over.
    */
   useEffect(() => {
-    return chamberBridge.onInstanceSnapshot((sourceId, snapshot: InstanceSnapshot | undefined) => {
-      aggregateSeqRef.current[sourceId] = (aggregateSeqRef.current[sourceId] ?? 0) + 1
+    return chamberBridge.onInstanceSnapshot((
+      sourceId,
+      snapshot: InstanceSnapshot | undefined,
+      sourceFingerprint,
+    ) => {
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
+      if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
+      aggregateRequestOwnersRef.current!.retire([sourceId])
       if (snapshot === undefined) {
         delete snapshotSourcesRef.current[sourceId]
         delete snapshotAtRef.current[sourceId]
@@ -1119,6 +1715,7 @@ export default function App() {
 
   useEffect(() => {
     return chamberBridge.onPluginDiagnostic((sourceId, diagnostic) => {
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
       setPluginDiagnostics(prev => {
         if (diagnostic === undefined) {
           if (prev[sourceId] === undefined) return prev
@@ -1134,7 +1731,10 @@ export default function App() {
   /** 每来源 ctx 的运行时事实上报（06 §4）：report 覆盖、clear 删除；同时
    *  对账该来源的「完成未读」蓝点（completedBySource）。无需额外依赖。 */
   useEffect(() => {
-    return chamberBridge.onRuntimeReport((sourceId, report) => {
+    return chamberBridge.onRuntimeReport((sourceId, report, sourceFingerprint) => {
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
+      if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
       setRuntimeFacts(prev => {
         if (report === undefined) {
           if (prev[sourceId] === undefined) return prev
@@ -1225,6 +1825,7 @@ export default function App() {
                 document.hasFocus()
               void bridge.notify({
                 sourceId,
+                sourceFingerprint,
                 sessionId: edge.sessionId,
                 kind: edge.kind,
                 title,
@@ -1311,18 +1912,23 @@ export default function App() {
         {/* 视图始终挂载：致命屏改为覆盖层——卸载视图而不 dispose shell 会
             遗留僵尸 ctx（entries 被新 boot 覆盖、旧 ctx 永不清除，违反
             05 §4 无僵尸不变量），且恢复后要重 boot 丢会话连续性。 */}
-        {mountedViews.map((viewId) => (
-          <InstanceView
-            key={viewId}
-            instanceId={viewId}
-            basePath={instanceBasePath(viewId)}
-            active={activeView === viewId}
-            label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? '本地实例' : viewId)}
-            onSettled={handleInstanceSettled}
-            onStateChange={handleShellState}
-            retryToken={retryTokens[viewId]}
-          />
-        ))}
+        {mountedViews.map((viewId) => {
+          const sourceFingerprint = sourceLifecyclesRef.current!.capture(viewId)?.fingerprint
+          if (sourceFingerprint === undefined) return null
+          return (
+            <InstanceView
+              key={viewId}
+              instanceId={viewId}
+              basePath={instanceBasePath(viewId)}
+              sourceFingerprint={sourceFingerprint}
+              active={activeView === viewId}
+              label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? '本地实例' : viewId)}
+              onSettled={handleInstanceSettled}
+              onStateChange={handleShellState}
+              retryToken={retryTokens[viewId]}
+            />
+          )
+        })}
         {/* chamber (2026-08 失败呈现修订, 05 §4)：活动视图 boot 失败 = 该视图
             的 dsh shell 从未挂载——导航（侧边栏在 shell 内）随之不可用，若不
             提供逃生通道，用户会被失败报告困在当前视图（只能整页刷新）。

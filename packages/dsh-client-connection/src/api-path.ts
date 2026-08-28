@@ -10,9 +10,9 @@
  * control-plane's same-origin per-instance proxy prefix (`/api/i/<id>`), which
  * strips the prefix and forwards the remainder to the instance's own `/api`
  * tree (design 03 §3.1). The default is empty (stock behaviour: paths carry
- * `/api` as authored below). The deployment knob is `window.__DSH_BASE_PATH__`,
- * set by the chamber shell before each instance boot (sequential boots make
- * the read-at-construction deterministic); an explicit argument overrides it.
+ * `/api` as authored below). An explicit argument (used by chamber's private
+ * per-entry Context) is authoritative; `window.__DSH_BASE_PATH__` remains a
+ * compatibility fallback for other embedders.
  */
 
 /** Route prefix owning every api request (`/api` and `/api/<anything>`). */
@@ -27,8 +27,8 @@ export const HOST_EVENTS_PATH = `${API_PATH}/events.host`
 declare global {
   interface Window {
     /**
-     * chamber patch: per-instance api base path set by the chamber shell before
-     * each AppWebEntry boot (`/api/i/<id>`); undefined = stock same-origin /api.
+     * chamber patch compatibility fallback for legacy embedders
+     * (`/api/i/<id>`); undefined = stock same-origin /api.
      */
     __DSH_BASE_PATH__?: string
   }

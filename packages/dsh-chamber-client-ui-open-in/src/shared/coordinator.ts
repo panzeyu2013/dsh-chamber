@@ -10,14 +10,9 @@
  * to `null` — the button never renders on uncertainty.
  */
 
-/** One launchable app as reported by the main-process bridge. */
-export interface OpenInApp {
-  id: string
-  /** True when the app can open a REMOTE (ssh-<id>) source's workspace. */
-  remoteCapable: boolean
-  /** True when the app is installed/available right now. */
-  available: boolean
-}
+import { parseOpenInApps, type OpenInApp } from './capabilities.ts'
+
+export type { OpenInApp, OpenInSource } from './capabilities.ts'
 
 /** The window.dshChamber slice this plugin consumes (structural subset of the
  *  desktop preload bridge; local interface on purpose — the plugin stays out
@@ -28,8 +23,8 @@ export interface OpenInBridgeSurface {
   dshChamber?: {
     platform?: string | null
     openIn?: {
-      apps(): Promise<Array<OpenInApp>>
-      open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+      apps(): Promise<unknown>
+      open(appId: string, instanceId: string, path: string, sourceFingerprint: string): Promise<unknown>
     }
   }
 }
@@ -44,6 +39,17 @@ let appsPromise: Promise<OpenInApp[] | null> | null = null
  *  flights — see refreshApps). */
 let probeEpoch = 0
 const listeners = new Set<() => void>()
+export const OPEN_IN_APP_PROBE_RETRY_LIMIT = 3
+export const OPEN_IN_APP_PROBE_RETRY_MS = 500
+
+export interface OpenInAppProbeOptions {
+  /** Test seam: production uses a real bounded delay between IPC attempts. */
+  wait?: (delayMs: number) => Promise<void>
+}
+
+function waitForProbeRetry(delayMs: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, delayMs))
+}
 
 function emit(): void {
   for (const listener of [...listeners]) listener()
@@ -63,26 +69,41 @@ export function getOpenInApps(): OpenInApp[] | null {
  *  an absent bridge returns a fresh resolved null and leaves `appsPromise`
  *  untouched, so later callers re-probe (an earlier version nulled the promise
  *  INSIDE the cached IIFE, which the outer assignment overwrote — a silent
- *  no-op). A REAL probe result (list or failure) is memoized. */
-export function getApps(): Promise<OpenInApp[] | null> {
+ *  no-op). A real IPC rejection gets three delayed attempts inside the same
+ *  page-wide flight; this recovers a transient first-call sender/handler race
+ *  even while the fail-closed button is hidden and has no manual refresh
+ *  affordance. Success or final exhaustion is memoized. */
+export function getApps(options: OpenInAppProbeOptions = {}): Promise<OpenInApp[] | null> {
   if (appsPromise !== null) return appsPromise
   const bridge = (window as unknown as OpenInBridgeSurface).dshChamber?.openIn
   if (bridge === undefined) {
     // Bridge not hydrated yet: keep the unknown state and allow a retry.
+    const changed = apps !== null
     apps = null
+    if (changed) emit()
     return Promise.resolve(null)
   }
   appsPromise = (async () => {
     const epoch = probeEpoch
-    try {
-      const result = await bridge.apps()
-      if (epoch !== probeEpoch) return apps // superseded by a refresh — newer flight owns the write
-      apps = Array.isArray(result) ? result : null
-    } catch {
-      if (epoch !== probeEpoch) return apps
-      // A real probe failure is fail-closed (hidden), and it IS memoized —
-      // retrying a broken channel in the same session cannot change the answer.
-      apps = null
+    const wait = options.wait ?? waitForProbeRetry
+    for (let attempt = 1; attempt <= OPEN_IN_APP_PROBE_RETRY_LIMIT; attempt += 1) {
+      try {
+        const result = await bridge.apps()
+        if (epoch !== probeEpoch) return apps // superseded by a refresh — newer flight owns the write
+        apps = parseOpenInApps(result)
+        emit()
+        return apps
+      } catch {
+        if (epoch !== probeEpoch) return apps
+        if (attempt < OPEN_IN_APP_PROBE_RETRY_LIMIT) {
+          await wait(OPEN_IN_APP_PROBE_RETRY_MS)
+          if (epoch !== probeEpoch) return apps
+          continue
+        }
+        // Exhaustion remains fail-closed and memoized: the coordinator never
+        // loops forever against a genuinely broken/forbidden IPC channel.
+        apps = null
+      }
     }
     emit()
     return apps

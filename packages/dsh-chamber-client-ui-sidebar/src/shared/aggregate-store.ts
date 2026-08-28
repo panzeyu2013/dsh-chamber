@@ -14,6 +14,14 @@ import type { InstanceSnapshot } from './instance-api.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('aggregate-store')
+
+/** Fail-closed validation for the immutable Context proof bound by shell.ts. */
+export function isValidProducerSourceFingerprint(sourceId: string, value: unknown): value is string {
+  return sourceId === 'local'
+    ? value === 'local'
+    : typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+}
+
 export interface ChamberServerWorkspace {
   id: string
   title: string
@@ -99,8 +107,16 @@ type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
 type RefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
-type RuntimeReportListener = (sourceId: string, report: InstanceRuntimeReport | undefined) => void
-type SnapshotReportListener = (sourceId: string, snapshot: InstanceSnapshot | undefined) => void
+type RuntimeReportListener = (
+  sourceId: string,
+  report: InstanceRuntimeReport | undefined,
+  sourceFingerprint: string | undefined,
+) => void
+type SnapshotReportListener = (
+  sourceId: string,
+  snapshot: InstanceSnapshot | undefined,
+  sourceFingerprint: string | undefined,
+) => void
 type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void
 
 const listeners = new Set<Listener>()
@@ -112,9 +128,13 @@ const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
 let servers: ChamberServerAggregate[] = []
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
+const runtimeProducerTokens: Record<string, number> = {}
+const runtimeProducerFingerprints: Record<string, string> = {}
 const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
+const snapshotProducerFingerprints: Record<string, string> = {}
 const pluginDiagnostics: Record<string, PluginGraphDiagnostic> = {}
+let nextRuntimeProducerToken = 0
 let nextSnapshotProducerToken = 0
 
 export const chamberBridge = {
@@ -176,17 +196,59 @@ export const chamberBridge = {
     }
   },
 
-  /** Per-ctx sidebar plugin write: publish the source's runtime facts (design 06 §4.2). */
-  reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void {
-    runtimeReports[sourceId] = report
-    for (const listener of [...runtimeReportListeners]) listener(sourceId, report)
+  /**
+   * Synchronously revoke every producer owned by one registry incarnation.
+   * Shell disposal is async, so waiting for plugin cleanup leaves a window in
+   * which the old ctx can report after the authoritative roster has already
+   * re-added the same id. Delete both current tokens and caches now, then emit
+   * explicit withdrawals. Old producer closures subsequently fail their
+   * token checks even before a replacement producer registers.
+   */
+  retireInstanceProducers(sourceId: string): void {
+    const runtimeFingerprint = runtimeProducerFingerprints[sourceId]
+    const snapshotFingerprint = snapshotProducerFingerprints[sourceId]
+    delete runtimeProducerTokens[sourceId]
+    delete snapshotProducerTokens[sourceId]
+    delete runtimeProducerFingerprints[sourceId]
+    delete snapshotProducerFingerprints[sourceId]
+    delete runtimeReports[sourceId]
+    delete instanceSnapshots[sourceId]
+    for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, runtimeFingerprint)
+    for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, snapshotFingerprint)
   },
 
-  /** Per-ctx sidebar plugin write: drop the source's runtime facts (effect teardown). */
-  clearInstanceRuntime(sourceId: string): void {
-    if (runtimeReports[sourceId] === undefined) return
-    delete runtimeReports[sourceId]
-    for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined)
+  /**
+   * Register the runtime-facts producer owned by one mounted instance ctx.
+   * Token gating makes async teardown generation-safe: an old ctx's late
+   * clear/report can never erase or overwrite the replacement ctx's facts.
+   */
+  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): {
+    report: (report: InstanceRuntimeReport) => void
+    clear: () => void
+  } {
+    const token = ++nextRuntimeProducerToken
+    const previousFingerprint = runtimeProducerFingerprints[sourceId]
+    runtimeProducerTokens[sourceId] = token
+    runtimeProducerFingerprints[sourceId] = sourceFingerprint
+    if (runtimeReports[sourceId] !== undefined) {
+      delete runtimeReports[sourceId]
+      for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, previousFingerprint)
+    }
+    return {
+      report(report): void {
+        if (runtimeProducerTokens[sourceId] !== token) return
+        runtimeReports[sourceId] = report
+        for (const listener of [...runtimeReportListeners]) listener(sourceId, report, sourceFingerprint)
+      },
+      clear(): void {
+        if (runtimeProducerTokens[sourceId] !== token) return
+        delete runtimeProducerTokens[sourceId]
+        delete runtimeProducerFingerprints[sourceId]
+        if (runtimeReports[sourceId] === undefined) return
+        delete runtimeReports[sourceId]
+        for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, sourceFingerprint)
+      },
+    }
   },
 
   /** App-layer subscription to runtime-fact reports (report or clear); returns the unsubscribe. */
@@ -202,15 +264,17 @@ export const chamberBridge = {
    * token makes teardown generation-safe: a late cleanup from an old shell
    * cannot clear a newer shell's report for the same source.
    */
-  registerInstanceSnapshotProducer(sourceId: string): {
+  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string): {
     report: (snapshot: InstanceSnapshot | undefined) => void
     clear: () => void
   } {
     const token = ++nextSnapshotProducerToken
+    const previousFingerprint = snapshotProducerFingerprints[sourceId]
     snapshotProducerTokens[sourceId] = token
+    snapshotProducerFingerprints[sourceId] = sourceFingerprint
     if (instanceSnapshots[sourceId] !== undefined) {
       delete instanceSnapshots[sourceId]
-      for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined)
+      for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, previousFingerprint)
     }
     return {
       report(snapshot): void {
@@ -221,14 +285,15 @@ export const chamberBridge = {
         } else {
           instanceSnapshots[sourceId] = snapshot
         }
-        for (const listener of [...snapshotReportListeners]) listener(sourceId, snapshot)
+        for (const listener of [...snapshotReportListeners]) listener(sourceId, snapshot, sourceFingerprint)
       },
       clear(): void {
         if (snapshotProducerTokens[sourceId] !== token) return
         delete snapshotProducerTokens[sourceId]
+        delete snapshotProducerFingerprints[sourceId]
         if (instanceSnapshots[sourceId] === undefined) return
         delete instanceSnapshots[sourceId]
-        for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined)
+        for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, sourceFingerprint)
       },
     }
   },
@@ -241,7 +306,9 @@ export const chamberBridge = {
   /** Subscribe and synchronously replay all complete reports. */
   onInstanceSnapshot(listener: SnapshotReportListener): () => void {
     snapshotReportListeners.add(listener)
-    for (const [sourceId, snapshot] of Object.entries(instanceSnapshots)) listener(sourceId, snapshot)
+    for (const [sourceId, snapshot] of Object.entries(instanceSnapshots)) {
+      listener(sourceId, snapshot, snapshotProducerFingerprints[sourceId])
+    }
     return () => {
       snapshotReportListeners.delete(listener)
     }

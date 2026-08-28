@@ -63,6 +63,29 @@ import './base.css'
 /** Module transport hook replaced by jsdom tests. */
 export type BootSeams = Pick<ClientModuleCreateOptions, 'loadBundle'>
 
+/** Stable boot diagnostics for arbitrary thrown values. The configureContext
+ * seam and plugin/runtime graph are external execution boundaries; their
+ * catch handler must not itself reject when reflection or String coercion on
+ * a hostile Error-like value throws. */
+function describeBootError(reason: unknown): string {
+  try {
+    if (reason instanceof Error) {
+      const message = typeof reason.message === 'string' ? reason.message : ''
+      if (message !== '') return message
+      const name = typeof reason.name === 'string' ? reason.name : ''
+      if (name !== '') return name
+    }
+  } catch {
+    // Fall through to the separately guarded primitive conversion.
+  }
+  try {
+    const text = String(reason)
+    return text === '' ? 'unknown error' : text
+  } catch {
+    return 'unknown error'
+  }
+}
+
 /**
  * AppWebEntry construction options: the module-transport seams plus the
  * chamber patch's per-instance extra boot rows. Backward compatible with the
@@ -82,6 +105,16 @@ export interface AppWebEntryOptions extends BootSeams {
    * pre-loads the whole extra set uniformly).
    */
   extraRows?: BootModuleRow[]
+  /**
+   * ## chamber patch (dsh-chamber connection manager, design 05 §4)
+   *
+   * Per-entry context initializer. N-ctx boots may overlap after the shell's
+   * bounded queue timeout, so instance identity and connection base paths must
+   * never ride page-global mutable knobs. The shell supplies a closure bound to
+   * THIS entry; run() invokes it synchronously immediately after constructing
+   * the Context and before any loader/plugin work can suspend.
+   */
+  configureContext?: (ctx: Context) => void
 }
 
 /**
@@ -94,6 +127,7 @@ export class AppWebEntry {
   private readonly container: HTMLElement
   private readonly seams: BootSeams | undefined
   private readonly extraRows: BootModuleRow[] | undefined
+  private readonly configureContext: ((ctx: Context) => void) | undefined
   private readonly page: BootPage
   // Assigned by run() before any private method reads them; dispose() nulls
   // ctx, and reads must handle the pre-run / post-dispose state.
@@ -114,6 +148,7 @@ export class AppWebEntry {
     this.container = container
     this.seams = options
     this.extraRows = options?.extraRows
+    this.configureContext = options?.configureContext
     this.page = new BootPage(container)
   }
 
@@ -135,12 +170,17 @@ export class AppWebEntry {
       const prefetching = this.prefetchImmediateTier()
       const ctx = new Context()
       this.ctx = ctx
+      // Per-entry facts are installed before the first await/plugin
+      // materialization. A previous boot that settles after the shell queue's
+      // timeout therefore keeps its own immutable closure values even while a
+      // later instance is booting concurrently.
+      this.configureContext?.(ctx)
       await this.runPluginBoot(ctx, prefetching)
       await this.mountApp(ctx)
     } catch (reason) {
       // Stay on the loading page; surface the sweep report (fail loud).
       console.error(reason)
-      this.bootFailure = reason instanceof Error ? reason.message : String(reason)
+      this.bootFailure = describeBootError(reason)
       this.page.fail(this.bootFailure)
     }
   }
@@ -148,7 +188,8 @@ export class AppWebEntry {
   /**
    * Dispose the client plugin tree and whichever page owns the mount point.
    * Resolves once the teardown settled (never rejects — teardown errors are
-   * logged; the chamber shell calls this fire-and-forget).
+   * logged). Shell lifecycle paths await/fold this Promise into the source's
+   * per-id teardown barrier; unload-only callers may invoke it fire-and-forget.
    */
   async dispose(): Promise<void> {
     const ctx = this.ctx

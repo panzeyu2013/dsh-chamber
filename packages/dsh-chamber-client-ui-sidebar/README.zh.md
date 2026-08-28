@@ -66,8 +66,17 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 
 - 外壳只订阅 chamberBridge 投影；renderer App 层持有并发布它（状态走
   推送：/health 由 health-events 流驱动、隧道相位 onStatusChanged、注册表
-  onInstancesChanged + 30s 轮询兜底；聚合 10s 轮询 + requestRefresh）。
+  onInstancesChanged + 30s 轮询兜底；已挂载 ctx 的 runtime/snapshot producer
+  事件级推送聚合，30s unary 仅兜底无完整 producer 的来源，动作后的
+  requestRefresh 仍即时）。
   控制面不持有任何会话事实。
+- 每个已挂载 ctx 都用 `(sourceId, sourceFingerprint)` 注册 runtime/snapshot
+  producer。fingerprint 是桌面主进程投影的 opaque、非秘密来源代 proof
+  （本地为 `local`，远程 proof 只存在主进程内存），renderer 不自行推导。
+  注册表删除或传输身份编辑经 `retiredIds` 到达后，App 在异步 dispose shell 前
+  同步调用 `chamberBridge.retireInstanceProducers(sourceId)`，同时撤销两类 token
+  与缓存投影；旧 ctx 的迟到 report/clear 即使发生在 replacement producer 注册前，
+  也不能污染同 id 新代。
 
 ## 第三轮（设计 06）
 
@@ -98,7 +107,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   三角，优先级高于实时子 agent 运行环、已完成圆点与轮询运行脉冲）走
   运行时事实通道：每个来源自己的 ctx 把 `sessions.list` 投影（含 vendor
   血缘索引的每父会话运行中子 agent 计数）经
-  `chamberBridge.reportInstanceRuntime` 上报，App 层合并进
+  `chamberBridge.registerInstanceRuntimeProducer(sourceId, sourceFingerprint)` 返回的
+  generation-safe producer 上报，App 层合并进
   `server.runtime`，本外壳为所有来源渲染状态指示，不再订阅任何 store。
   当前会话高亮为**全局单选**：仅拥有可见 ctx 的来源（正在查看的视图）
   渲染高亮，全局只有一个会话被选中标记。

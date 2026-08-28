@@ -1,9 +1,31 @@
 import type { IpcRendererEvent } from 'electron';
-import type { SshInstanceInput, SshInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
+import type { SshInstanceInput, SshInstanceSpec as RegistrySshInstanceSpec, SshLogEntry, SshStatusProjection } from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
 
 const { contextBridge, ipcRenderer } = require('electron');
+
+// Keep preload runtime self-contained: importing a value from a TypeScript ESM
+// module crosses the emitted CommonJS preload boundary. This strict mirror is
+// intentionally local; main remains authoritative for the delta contents.
+const INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/;
+const REMOTE_SOURCE_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
+
+function validSourceFingerprint(sourceId: string, value: unknown): value is string {
+  return sourceId === 'local'
+    ? value === 'local'
+    : REMOTE_SOURCE_FINGERPRINT_PATTERN.test(typeof value === 'string' ? value : '');
+}
+
+function validDeliveryCoordinate(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1;
+}
+
+/** Main-process registry projection. sourceFingerprint is an opaque,
+ * non-persisted lifecycle proof and is never accepted as registry data. */
+export interface SshInstanceSpec extends RegistrySshInstanceSpec {
+  sourceFingerprint: string
+}
 
 /**
  * The window.dshChamber bridge contract (design 05 §7.4) — the typed
@@ -60,13 +82,19 @@ export interface DesktopSshSurface {
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
-  onInstancesChanged(callback: () => void): () => void
+  onInstancesChanged(callback: (payload: InstancesChangedPayload) => void): () => void
 }
 
 /** Main-process push payload for status changes ({id, status projection}). */
 export interface SshStatusChangedPayload {
   id: string
   status: SshStatusProjection
+}
+
+/** Authoritative synchronous registry delta accompanying a roster refresh. */
+export interface InstancesChangedPayload {
+  removedIds: string[]
+  retiredIds: string[]
 }
 
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
@@ -238,24 +266,35 @@ export interface SystemResumeSurface {
  */
 export interface OpenInAppInfo {
   id: string
+  displayKind: string
   remoteCapable: boolean
   available: boolean
 }
 export interface OpenInSurface {
   apps(): Promise<OpenInAppInfo[]>
-  open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+  open(appId: string, instanceId: string, path: string, sourceFingerprint: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** Normalized deep-link intent push payload (design 16 §2). */
 export interface DeepLinkIntent {
   instanceId: string
   path: string
+  /** Exact non-secret lifecycle proof captured before the native launch. */
+  sourceFingerprint: string
+  /** Stable across replay; attempt changes for each renderer generation. */
+  deliveryId: number
+  attempt: number
 }
 
 /** The deep-link intent push surface (design 16 §2): onIntent subscribes to the
  *  main-process push and returns an unsubscribe. */
 export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
+  /** Signal only after onIntent is installed; the main process holds successful
+   * cold-start intents until this handshake, so renderer activation is replayed. */
+  ready(): Promise<boolean>
+  /** Commit only after App has accepted/routed this exact attempt. */
+  ack(deliveryId: number, attempt: number): Promise<boolean>
 }
 
 /** 通知事件种类（design 19 §3.2）：complete / ask / request + test（设置页测试按钮）。 */
@@ -264,6 +303,7 @@ export type NotificationKind = 'complete' | 'ask' | 'request' | 'test'
 /** 通知 payload（design 19 §3.3）——渲染端组装，主进程白名单校验 + 裁决。 */
 export interface NotificationRequest {
   sourceId: string
+  sourceFingerprint: string
   sessionId: string
   kind: NotificationKind
   title: string
@@ -275,7 +315,12 @@ export interface NotificationRequest {
 /** 通知点击打开事件的载荷（design 19 §3.3）：渲染端据此 openSession。 */
 export interface NotificationOpenRequest {
   sourceId: string
+  /** Exact non-secret lifecycle proof captured by the native banner. */
+  sourceFingerprint: string
   sessionId: string
+  /** Stable across replay; attempt changes for each renderer generation. */
+  deliveryId: number
+  attempt: number
 }
 
 /** The dsh-chamber notification surface (design 19 §3.3): notify() invokes the
@@ -287,6 +332,8 @@ export interface NotificationOpenRequest {
 export interface NotificationSurface {
   notify(payload: NotificationRequest): Promise<boolean>
   ready(): Promise<boolean>
+  /** Commit only after App has accepted/queued this exact click. */
+  ack(deliveryId: number, attempt: number): Promise<boolean>
   onOpen(callback: (req: NotificationOpenRequest) => void): () => void
 }
 
@@ -344,7 +391,25 @@ function desktopSshApi(): DesktopSshSurface {
     },
     onInstancesChanged: callback => {
       if (typeof callback !== 'function') return () => {};
-      const listener = (_event: IpcRendererEvent) => callback();
+      const listener = (_event: IpcRendererEvent, payload: unknown) => {
+        if (payload === null || typeof payload !== 'object') {
+          console.error('[dsh-chamber] ignored malformed instances-changed payload');
+          callback({ removedIds: [], retiredIds: [] });
+          return;
+        }
+        const { removedIds, retiredIds } = payload as { removedIds?: unknown; retiredIds?: unknown };
+        const validIds = (ids: unknown): ids is string[] =>
+          Array.isArray(ids) && ids.every(id => typeof id === 'string' && INSTANCE_ID_PATTERN.test(id));
+        if (!validIds(removedIds) || !validIds(retiredIds)) {
+          console.error('[dsh-chamber] ignored malformed instances-changed lifecycle delta');
+          callback({ removedIds: [], retiredIds: [] });
+          return;
+        }
+        callback({
+          removedIds: [...new Set(removedIds)],
+          retiredIds: [...new Set(retiredIds)],
+        });
+      };
       ipcRenderer.on('desktop_ssh_instances_changed', listener);
       return () => ipcRenderer.removeListener('desktop_ssh_instances_changed', listener);
     },
@@ -413,7 +478,7 @@ function openInApi(): OpenInSurface {
       const payload = await ipcRenderer.invoke('dsh-chamber:open-in-apps') as { apps: OpenInAppInfo[] };
       return payload.apps;
     },
-    open: (appId, instanceId, path) => ipcRenderer.invoke('dsh-chamber:open-in', { appId, instanceId, path }),
+    open: (appId, instanceId, path, sourceFingerprint) => ipcRenderer.invoke('dsh-chamber:open-in', { appId, instanceId, path, sourceFingerprint }),
   };
 }
 
@@ -422,10 +487,30 @@ function deepLinkApi(): DeepLinkSurface {
   return {
     onIntent: callback => {
       if (typeof callback !== 'function') return () => {};
-      const listener = (_event: IpcRendererEvent, intent: DeepLinkIntent) => callback(intent);
+      const listener = (_event: IpcRendererEvent, payload: unknown) => {
+        if (payload === null || typeof payload !== 'object') {
+          console.error('[dsh-chamber] ignored malformed deep-link delivery');
+          return;
+        }
+        const intent = payload as Partial<DeepLinkIntent>;
+        if (
+          typeof intent.instanceId !== 'string'
+          || (intent.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(intent.instanceId))
+          || typeof intent.path !== 'string'
+          || !validSourceFingerprint(intent.instanceId, intent.sourceFingerprint)
+          || !validDeliveryCoordinate(intent.deliveryId)
+          || !validDeliveryCoordinate(intent.attempt)
+        ) {
+          console.error('[dsh-chamber] ignored malformed deep-link delivery');
+          return;
+        }
+        callback(intent as DeepLinkIntent);
+      };
       ipcRenderer.on('dsh-chamber:deep-link-intent', listener);
       return () => ipcRenderer.removeListener('dsh-chamber:deep-link-intent', listener);
     },
+    ready: () => ipcRenderer.invoke('dsh-chamber:deep-link-ready'),
+    ack: (deliveryId, attempt) => ipcRenderer.invoke('dsh-chamber:deep-link-ack', { deliveryId, attempt }),
   };
 }
 
@@ -442,9 +527,33 @@ function notificationsApi(): NotificationSurface {
   return {
     notify: payload => ipcRenderer.invoke('dsh-chamber:notify', { payload }),
     ready: () => ipcRenderer.invoke('dsh-chamber:notifications-ready'),
+    ack: (deliveryId, attempt) => ipcRenderer.invoke('dsh-chamber:notification-open-ack', { deliveryId, attempt }),
     onOpen: callback => {
       if (typeof callback !== 'function') return () => {};
-      const listener = (_event: IpcRendererEvent, req: NotificationOpenRequest) => callback(req);
+      const listener = (_event: IpcRendererEvent, payload: unknown) => {
+        if (payload === null || typeof payload !== 'object') {
+          console.error('[dsh-chamber] ignored malformed notification-open delivery');
+          return;
+        }
+        const req = payload as Partial<NotificationOpenRequest>;
+        const sourceId = req.sourceId;
+        const validSourceId = typeof sourceId === 'string' && (
+          sourceId === 'local'
+          || (sourceId.startsWith('ssh-') && INSTANCE_ID_PATTERN.test(sourceId.slice(4)))
+        );
+        if (
+          !validSourceId
+          || !validSourceFingerprint(sourceId as string, req.sourceFingerprint)
+          || typeof req.sessionId !== 'string'
+          || req.sessionId.length === 0
+          || !validDeliveryCoordinate(req.deliveryId)
+          || !validDeliveryCoordinate(req.attempt)
+        ) {
+          console.error('[dsh-chamber] ignored malformed notification-open delivery');
+          return;
+        }
+        callback(req as NotificationOpenRequest);
+      };
       ipcRenderer.on('dsh-chamber:notification-open', listener);
       return () => ipcRenderer.removeListener('dsh-chamber:notification-open', listener);
     },

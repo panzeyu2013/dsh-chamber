@@ -24,6 +24,7 @@ import {
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
+  ExactOwnershipRegistry,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
@@ -32,14 +33,18 @@ import {
   materializePluginsDir,
   packageNameFromSpec,
   remotePluginList,
+  ReadyPhaseEdges,
   resolveLocalMaterializeDirectory,
   resetApplyInFlight,
+  scopeExecToOwnership,
+  runWithFinalOwnership,
   seedRemoteChamberHostPackages,
   seedRemoteHostGraph,
   PLUGIN_SPEC_PATTERN,
   PLUGIN_NAME_PATTERN,
 } from './plugin-sync.ts'
 import type { ChamberHostPackageSeed, ExecFn, ExecResult, StatusFn, RemoteSpec, TransportRunPayload } from './plugin-sync.ts'
+import { NotificationSourceIncarnations } from './notifications.ts'
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'dsh-plugin-sync-'))
@@ -59,6 +64,100 @@ function err(error: string): ExecResult {
 }
 
 const readyStatus: StatusFn = () => ({ phase: 'ready' })
+
+test('exact ownership lets a changed incarnation supersede and stale finally cannot clear it', () => {
+  const owners = new ExactOwnershipRegistry()
+  const first = owners.begin('same', 'host-a')
+  assert.equal(first.accepted, true)
+  const duplicate = owners.begin('same', 'host-a')
+  assert.equal(duplicate.accepted, false, 'same incarnation remains single-flight')
+  const replacement = owners.begin('same', 'host-b')
+  assert.equal(replacement.accepted, true, 'changed incarnation starts immediately')
+  assert.equal(owners.owns(first.token), false)
+  assert.equal(owners.finish(first.token), false, 'old finally cannot delete new ownership')
+  assert.equal(owners.owns(replacement.token), true)
+  assert.equal(owners.finish(replacement.token), true)
+
+  const removed = owners.begin('same', 'host-b')
+  assert.equal(removed.accepted, true)
+  assert.equal(owners.revoke('same'), true)
+  assert.equal(owners.owns(removed.token), false)
+  assert.equal(owners.begin('same', 'host-b').accepted, true, 'remove/re-add gets fresh ownership even with same fingerprint')
+})
+
+test('scoped exec checks exact ownership before and after every remote step', async () => {
+  let owner = true
+  let calls = 0
+  let settle!: (result: ReturnType<typeof ok>) => void
+  const underlying: ExecFn = async () => {
+    calls += 1
+    return await new Promise(resolve => { settle = resolve })
+  }
+  const scoped = scopeExecToOwnership(underlying, 'same', () => owner)
+  const inFlight = scoped('same', 'run', { op: 'exec', command: 'cat', argv: ['/tmp/x'] })
+  owner = false
+  settle(ok())
+  assert.deepEqual(await inFlight, { ok: false, error: 'ssh instance changed while operation was in progress' })
+  assert.deepEqual(await scoped('same', 'restart'), { ok: false, error: 'ssh instance changed while operation was in progress' })
+  assert.deepEqual(await scoped('other', 'restart'), { ok: false, error: 'ssh instance changed while operation was in progress' })
+  assert.equal(calls, 1, 'stale ownership never starts another saga step')
+})
+
+test('remote saga ownership cannot revive after byte-identical same-id re-add', async () => {
+  const sources = new NotificationSourceIncarnations()
+  const sourceId = 'ssh-same'
+  const fingerprint = 'a'.repeat(64)
+  sources.replaceRemoteSources([{ sourceId, fingerprint }])
+  const sourceToken = sources.capture(sourceId)!
+  const operationalFingerprint = 'same-operational-fields'
+  let currentOperationalFingerprint = operationalFingerprint
+  const owns = (): boolean =>
+    sources.owns(sourceToken) && currentOperationalFingerprint === operationalFingerprint
+
+  let calls = 0
+  let settle!: (result: ExecResult) => void
+  const scoped = scopeExecToOwnership(async () => {
+    calls += 1
+    return await new Promise<ExecResult>(resolve => { settle = resolve })
+  }, 'same', owns)
+  const firstStep = scoped('same', 'run', { op: 'exec', command: 'first', argv: [] })
+
+  sources.replaceRemoteSources([])
+  sources.replaceRemoteSources([{ sourceId, fingerprint }])
+  assert.equal(currentOperationalFingerprint, operationalFingerprint)
+  assert.equal(owns(), false, 'reusable fields do not restore exact lifecycle ownership')
+  settle(ok())
+  assert.deepEqual(await firstStep, { ok: false, error: 'ssh instance changed while operation was in progress' })
+  assert.deepEqual(
+    await scoped('same', 'run', { op: 'exec', command: 'second', argv: [] }),
+    { ok: false, error: 'ssh instance changed while operation was in progress' },
+  )
+  assert.equal(calls, 1, 'a later saga step never runs on the replacement host')
+})
+
+test('final ownership fence rejects a deferred completion after same-id replacement', async () => {
+  let owner = true
+  let settle!: (value: { ok: true; manifest: string }) => void
+  const pending = runWithFinalOwnership(
+    () => owner,
+    () => new Promise(resolve => { settle = resolve }),
+  )
+  owner = false
+  settle({ ok: true, manifest: 'old-host' })
+  assert.deepEqual(await pending, { ok: false, error: 'ssh instance changed while operation was in progress' })
+})
+
+test('ready edge tracker fires only non-ready to ready and forgets removed ids', () => {
+  const edges = new ReadyPhaseEdges()
+  assert.equal(edges.observe('same', 'connecting'), false)
+  assert.equal(edges.observe('same', 'ready'), true)
+  assert.equal(edges.observe('same', 'ready'), false, 'service/status projections while ready never reseed')
+  assert.equal(edges.observe('same', 'degraded'), false)
+  assert.equal(edges.observe('same', 'ready'), true)
+  edges.forget('same')
+  assert.equal(edges.activeCount, 0)
+  assert.equal(edges.observe('same', 'ready'), true, 'same-id re-add has a fresh edge history')
+})
 
 function writeLocalProfile(root: string, dependencies: Record<string, string>, bundles: string[]): string {
   const profileDir = join(root, 'profiles', 'web')
@@ -792,6 +891,28 @@ test('applyPlugins: single-flight refuses a concurrent apply for the same instan
   auto = true
   for (const resolve of pending) resolve(ok())
   await first
+  resetApplyInFlight()
+})
+
+test('applyPlugins: a changed operational owner is not blocked by the reusable id', async () => {
+  resetApplyInFlight()
+  const pending: Array<(r: ExecResult) => void> = []
+  let auto = false
+  const exec: ExecFn = () => auto
+    ? Promise.resolve(ok('{}'))
+    : new Promise(resolve => { pending.push(resolve) })
+  const spec: RemoteSpec = { id: 'same', remoteDshHome: null }
+  const oldApply = applyPlugins(exec, readyStatus, spec, { add: ['old@1.0.0'], remove: [] }, { ownershipKey: 'host-a' })
+  const newApply = applyPlugins(exec, readyStatus, spec, { add: ['new@1.0.0'], remove: [] }, { ownershipKey: 'host-b' })
+  await Promise.resolve()
+  assert.equal(pending.length, 2, 'replacement owner starts immediately')
+  assert.deepEqual(
+    await applyPlugins(exec, readyStatus, spec, { add: ['duplicate@1.0.0'], remove: [] }, { ownershipKey: 'host-b' }),
+    { ok: false, error: 'apply in progress' },
+  )
+  auto = true
+  for (const resolve of pending) resolve(ok())
+  await Promise.all([oldApply, newApply])
   resetApplyInFlight()
 })
 

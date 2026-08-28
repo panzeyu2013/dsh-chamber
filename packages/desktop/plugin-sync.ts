@@ -93,6 +93,113 @@ export interface RemoteSpec {
   remoteDshHome: string | null
 }
 
+/** Exact owner for one long-running, same-id-sensitive remote saga. Object
+ * identity prevents an old `finally` from clearing a newer incarnation. */
+export interface ExactOwnershipToken {
+  readonly id: string
+  readonly fingerprint: string
+  readonly generation: number
+}
+
+/** Per-id single-flight ownership that permits a changed incarnation to
+ * supersede immediately. This is deliberately in the Electron-free module so
+ * remove/re-add and stale-finally behavior is directly unit-testable. */
+export class ExactOwnershipRegistry {
+  #generation = 0
+  readonly #owners = new Map<string, ExactOwnershipToken>()
+
+  begin(id: string, fingerprint: string):
+    | { accepted: true; token: ExactOwnershipToken }
+    | { accepted: false; token: ExactOwnershipToken } {
+    const current = this.#owners.get(id)
+    if (current !== undefined && current.fingerprint === fingerprint) {
+      return { accepted: false, token: current }
+    }
+    this.#generation += 1
+    const token = Object.freeze({ id, fingerprint, generation: this.#generation })
+    this.#owners.set(id, token)
+    return { accepted: true, token }
+  }
+
+  owns(token: ExactOwnershipToken): boolean {
+    return this.#owners.get(token.id) === token
+  }
+
+  revoke(id: string): boolean {
+    return this.#owners.delete(id)
+  }
+
+  finish(token: ExactOwnershipToken): boolean {
+    if (!this.owns(token)) return false
+    this.#owners.delete(token.id)
+    return true
+  }
+}
+
+/** Edge tracker for ready-triggered work. Repeated status projections while
+ * already ready are not lifecycle edges and must not restart a saga. */
+export class ReadyPhaseEdges {
+  readonly #phases = new Map<string, string>()
+
+  observe(id: string, phase: string): boolean {
+    const previous = this.#phases.get(id) ?? 'idle'
+    this.#phases.set(id, phase)
+    return phase === 'ready' && previous !== 'ready'
+  }
+
+  forget(id: string): void {
+    this.#phases.delete(id)
+  }
+
+  get activeCount(): number {
+    return this.#phases.size
+  }
+}
+
+/** Final completion fence for remote sagas. Per-step scoped exec protects the
+ * mutation path; this fence prevents a late probe/status/read result from
+ * being returned as success for a same-id replacement. */
+export async function runWithFinalOwnership<T>(
+  owns: () => boolean,
+  operation: () => Promise<T>,
+): Promise<T | { ok: false; error: string }> {
+  if (!owns()) return { ok: false, error: 'ssh instance changed while operation was in progress' }
+  let result: T
+  try {
+    result = await operation()
+  } catch (error) {
+    let detail = 'unknown error'
+    try { detail = String(error) } catch { /* hostile thrown value */ }
+    return { ok: false, error: `remote operation failed: ${detail}` }
+  }
+  return owns()
+    ? result
+    : { ok: false, error: 'ssh instance changed while operation was in progress' }
+}
+
+/** Wrap every exec step in an ownership check. Multi-step sagas therefore
+ * cannot continue on a same-id replacement after an await; the transport
+ * runtime independently terminates and rejects the currently-running step. */
+export function scopeExecToOwnership(
+  exec: ExecFn,
+  id: string,
+  owns: () => boolean,
+): ExecFn {
+  return async (execId, action, payload) => {
+    if (execId !== id || !owns()) return { ok: false, error: 'ssh instance changed while operation was in progress' }
+    let result: ExecResult
+    try {
+      result = await exec(execId, action, payload)
+    } catch (error) {
+      let detail = 'unknown error'
+      try { detail = String(error) } catch { /* hostile thrown value */ }
+      return { ok: false, error: `exec failed: ${detail}` }
+    }
+    if (!owns()) return { ok: false, error: 'ssh instance changed while operation was in progress' }
+    return result
+  }
+}
+
 // ============================================================================
 // Whitelists (design 13 §7.2 — contract C): re-exported from ssh-provider.ts;
 // ENOENT_PATTERN is likewise imported from there (see the import note above).
@@ -831,12 +938,15 @@ export async function applyPlugins(
   status: StatusFn,
   spec: RemoteSpec,
   actions: ApplyActions,
-  opts?: { verifyReadyTimeoutMs?: number; verifyReadyIntervalMs?: number; knownBundles?: string[] },
+  opts?: { verifyReadyTimeoutMs?: number; verifyReadyIntervalMs?: number; knownBundles?: string[]; ownershipKey?: string },
 ): Promise<ApplyPluginsResult> {
   const id = spec.id
+  const inFlightKey = `${id}\u0000${opts?.ownershipKey ?? ''}`
 
-  // ⑥ single-flight: a second apply for the same instance is refused outright.
-  if (applyInFlight.has(id)) return { ok: false, error: 'apply in progress' }
+  // ⑥ single-flight: exact operational incarnation, not merely the reusable
+  // registry id. A changed target may start immediately and stale finally
+  // removes only its own key.
+  if (applyInFlight.has(inFlightKey)) return { ok: false, error: 'apply in progress' }
 
   // ① re-validate (defense in depth — renderer input is untrusted).
   const add = Array.isArray(actions.add) ? actions.add : []
@@ -858,7 +968,7 @@ export async function applyPlugins(
     return { ok: false, error: 'restart must be a boolean' }
   }
 
-  applyInFlight.add(id)
+  applyInFlight.add(inFlightKey)
   try {
     const failed: { spec: string; error: string }[] = []
     let applied = 0
@@ -917,7 +1027,7 @@ export async function applyPlugins(
     if (readyNote !== undefined) result.readyNote = readyNote
     return { ok: true, result }
   } finally {
-    applyInFlight.delete(id)
+    applyInFlight.delete(inFlightKey)
   }
 }
 

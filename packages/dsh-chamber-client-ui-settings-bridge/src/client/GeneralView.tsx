@@ -110,6 +110,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
     setNotifyResult(null)
     void surface.notify({
       sourceId: 'local',
+      sourceFingerprint: 'local',
       sessionId: '',
       kind: 'test',
       title: t('generalNotificationsTestTitle'),

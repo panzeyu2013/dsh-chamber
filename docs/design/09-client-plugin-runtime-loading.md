@@ -127,6 +127,14 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 
 - 额外 entry **按实例**加载：本地与远程宿主插件集不同，各自 ctx 只激活自己的
   子集；共享模块表可容纳并集（表已共享，05 §4）。
+- 页面级模块物化的 60s queue 护栏只允许**其他 instance**绕过一个不 settle 的
+  boot；相同 instance 由 per-id boot tail 严格等前代 `run()` settle + 异步
+  `ctx.fiber.dispose()` 完成才建新 Context；有同 id 前代时，后继连 host graph fetch /
+  extra-bundle 执行也须延后到该 tail 释放（它们会修改共享模块表），无同 id 前代的
+  不同来源仍可 eager prefetch。这样跨来源保留并发，却不会让同容器出现双 React root、
+  也不会让旧/新 ctx 的 producer 注册顺序反转。
+  迟到 graph 诊断受 current-generation 门控；runtime/snapshot 投影则由每 ctx 注册的
+  producer token 门控，旧 ctx 的异步 report/cleanup 不得覆盖或清掉新代。
 - 去重规则在合并层做死：entry id ∈ chamber 复合注册集（chamber-entry.ts import
   清单）或页面自有 id（被 chamber 替换的官方 ui-sidebar 注册、被 shell 内核收编
   的 `@deepseek-ai/dsh-client-modules`）→ 跳过；重复注册会 cordis 冲突（复合
@@ -181,8 +189,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   chamber-entry.ts 加插件时**同批**追加）；② 页面自有 id：`@deepseek-ai/
   dsh-client-ui-sidebar`（官方注册被 chamber 侧边栏替换，加载会撞 sidebar 槽）
   与 `@deepseek-ai/dsh-client-modules`（shell 内核自行收编该 entry，二次 provide
-  `modules` 冲突）。独立成模块（chamber-entry.ts 仅 re-export）是为避免 shell.ts
-  把 chamber-entry 的模块表交接拉进主 chunk（同 chamber-knob.ts 模式）。
+  `modules` 冲突）。独立成叶模块（chamber-entry.ts 仅 re-export）是为避免 shell.ts
+  把 chamber-entry 的模块表交接及整棵复合插件图拉进主 chunk。
   与 §3.2 的 union-table 修复锁步：chamber-entry.ts 的 `COVERED_FACTORIES`
   （首屏静态导入族的模块表 factory 注册）中每个 id 必须在覆盖集内（执行期断言）。
 - **extraRows seam（模块 D）**：`AppWebEntryOptions.extraRows`（`boot.ts`，可选、
@@ -194,6 +202,12 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   页面级一次加载保证由 host-graph.ts 的 `preloadedExtraBundles` Map 显式维护
   （成功后才标记：失败不标记 → 重试可重新预加载；同 id 异 rev 先到先得并
   上报 `restart-required`，用户不再面对静默版本复用）。
+- **同包 N-ctx 生命周期 seam（05 §4，2026-08-28）**：`AppWebEntryOptions`
+  另有同步 `configureContext(ctx)`，在 Context 构造后、任何 await/plugin
+  materialization 前执行；`dispose()` 返回 Promise 并等待 root fiber teardown，
+  `runtimeCtx` 在 dispose 开始即失效。该顺序由 `test:client-web` 的真实
+  `AppWebEntry.run()` configure-context 用例固定，shell 的 same-id boot tail/
+  per-id teardown barrier 再保证下一代不会与旧 Context 重叠；它不是页面级 knob。
 - **构建期 generated Remote seam（renderer glue）**：复合壳源码复用官方
   `dsh-api-remotes/client`，但受管 vendor 只有源码、没有上游 tsdown 生成的
   `lib/typert.remote-client.js`。`gen-typert-remotes.mjs` 因而以该官方 client
@@ -228,7 +242,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   诊断状态统一为：成功 `ok`，host gateway 未注入 `not-injected`，图通道失败
   `graph-unreachable`，额外 bundle 加载失败 `bundle-load-failed`，同 id 异 rev
   `restart-required`。来源标题只显示异常标记，设置的 Plugins 页显示状态、插件 id
-  与原因。
+  与原因。诊断发布还必须同时命中 boot 的 current generation 与未取消阈值；同 id
+  retry 已开始后，旧 graph Promise 的迟到成功/失败都没有发布权。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
 

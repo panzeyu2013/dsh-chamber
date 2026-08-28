@@ -19,8 +19,8 @@
  * > replacement, 05 §2); the bridge host (health/connection polling + the
  * > session aggregation loop that publishes chamberBridge, App.tsx) remains
  * > an entry-level React implementation in the shell entry (main.tsx) — the
- * > wire crosser is the shared chamberBridge + the per-boot instance knob
- * > (see chamber-knob.ts).
+ * > wire crosser is the shared chamberBridge; instance identity and proxy
+ * > base path are immutable per-entry Context facts installed by shell.ts.
  *
  * ## First-screen / deferred split (LCP perf pass, P4)
  *
@@ -96,12 +96,15 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-import { getChamberInstanceId } from './chamber-knob.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Per-boot instance id (05 §4): provided by this entry, read by the sidebar plugin. */
+    /** Per-entry instance id (05 §4): shell-bound before plugin materialization. */
     chamberInstanceId?: string
+    /** Per-entry control-plane proxy base path; never read from a page-global knob. */
+    chamberBasePath?: string
+    /** Immutable, non-secret registry incarnation bound before plugin materialization. */
+    chamberSourceFingerprint?: string
   }
 }
 
@@ -239,9 +242,8 @@ async function registerDeferred(ctx: Context): Promise<void> {
  * dedupe set the per-instance host-graph merge filters against (shell.ts →
  * host-graph.ts). Re-exported from the leaf module `chamber-covered.ts` (the
  * constant is DEFINED there): shell.ts must import it without pulling this
- * bundle's top-level module-table handoff into the main chunk — same pattern
- * as chamber-knob.ts (see its header comment). Maintenance: keep the two
- * lists in lockstep (see chamber-covered.ts header).
+ * bundle's top-level module-table handoff into the main chunk. Maintenance:
+ * keep the two lists in lockstep (see chamber-covered.ts header).
  */
 export { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 
@@ -310,12 +312,26 @@ export function apply(ctx: Context): void {
   // Union-table lockstep guard FIRST (see assertCoveredFactoryLockstep): a
   // COVERED_FACTORIES drift must fail this entry before any plugin registers.
   assertCoveredFactoryLockstep()
-  // chamber patch (05 §4): the per-boot instance id, set by shell.ts through
-  // the chamber knob for the duration of the boot — the sidebar plugin reads
-  // it to highlight the current source. Declared via ctx.provide: cordis
-  // rejects assigning undeclared context properties at runtime.
-  ctx.provide('chamberInstanceId', getChamberInstanceId())
-  ctx.plugin(ConnectionPlugin)
+  // chamber patch (05 §4): shell.ts installs immutable per-entry identity and
+  // base-path facts through AppWebEntry.configureContext before any plugin can
+  // materialize. Do not fall back to page-global knobs: a timed-out boot may
+  // settle while a later instance is also booting.
+  const chamberInstanceId = ctx.chamberInstanceId
+  const chamberBasePath = ctx.chamberBasePath
+  const chamberSourceFingerprint = ctx.chamberSourceFingerprint
+  if (typeof chamberInstanceId !== 'string' || chamberInstanceId.trim() === '') {
+    throw new Error('chamber-entry: missing per-entry chamberInstanceId')
+  }
+  if (typeof chamberBasePath !== 'string' || chamberBasePath !== `/api/i/${chamberInstanceId}`) {
+    throw new Error(`chamber-entry: invalid per-entry chamberBasePath ${JSON.stringify(chamberBasePath)}`)
+  }
+  const validSourceFingerprint = chamberInstanceId === 'local'
+    ? chamberSourceFingerprint === 'local'
+    : typeof chamberSourceFingerprint === 'string' && /^[a-f0-9]{64}$/.test(chamberSourceFingerprint)
+  if (!validSourceFingerprint) {
+    throw new Error('chamber-entry: invalid per-entry chamberSourceFingerprint')
+  }
+  ctx.plugin(ConnectionPlugin, { basePath: chamberBasePath })
   ctx.plugin(TypertRegistry)
   ctx.plugin(ApiGateway)
   ctx.plugin(ApiRemotes)
@@ -342,8 +358,7 @@ export function apply(ctx: Context): void {
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
-  const chamberInstanceId = getChamberInstanceId()
-  if (chamberInstanceId !== undefined && !chamberInstanceId.startsWith('ssh-') && chamberInstanceId !== 'local') {
+  if (!chamberInstanceId.startsWith('ssh-') && chamberInstanceId !== 'local') {
     throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
   }
   ctx.plugin(UiDirectoryPickerBrowse)

@@ -80,8 +80,19 @@ place of the official ui-sidebar (which stays untouched in
 - The shell subscribes to the chamberBridge projection only; the renderer App
   layer owns and publishes it (state via push: /health health-events stream,
   tunnel phase onStatusChanged, registry onInstancesChanged + 30s poll
-  fallback; aggregate 10s poll + requestRefresh). The control plane holds no
+  fallback; mounted ctx runtime/snapshot producers push aggregates, while a
+  30s unary fallback covers only sources without a complete producer, and
+  requestRefresh keeps action refreshes immediate). The control plane holds no
   session facts.
+- Every mounted ctx registers its runtime and snapshot producers with
+  `(sourceId, sourceFingerprint)`. The fingerprint is the opaque, non-secret
+  lifecycle proof projected by the desktop main process (`local` for local;
+  an in-memory proof for remotes), not a value derived by the renderer. A
+  registry removal or transport-identity edit arrives in `retiredIds`; the App
+  synchronously calls `chamberBridge.retireInstanceProducers(sourceId)` before
+  async shell disposal, revoking both producer tokens and cached projections.
+  Late reports/clears from the old ctx therefore cannot affect a same-id
+  replacement, even before the replacement producer registers.
 
 ## Chamber third round (design 06)
 
@@ -123,7 +134,8 @@ place of the official ui-sidebar (which stays untouched in
   running-subagent ring, the completed dots, then the polled running pulse);
   each source's own ctx reports its
   `sessions.list` projection (including the vendor lineage index's running
-  subagent count per parent) through `chamberBridge.reportInstanceRuntime`,
+  subagent count per parent) through the generation-safe producer returned by
+  `chamberBridge.registerInstanceRuntimeProducer(sourceId, sourceFingerprint)`,
   the App layer merges it into `server.runtime`, and this shell renders the
   indicators for every source without subscribing to any store. The
   current-session

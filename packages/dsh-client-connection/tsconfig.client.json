@@ -5,9 +5,11 @@
     "outDir": "lib/types",
     "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo"
   },
+  "include": [],
   "files": [
     "src/api-path.ts",
     "src/client/api.ts",
+    "src/client/carrier-assembly.ts",
     "src/client/connection.ts",
     "src/client/fixture.ts",
     "src/client/index.ts",

@@ -121,9 +121,9 @@ export type SidebarRootInjected = {
   /** Toggle the sidebar column through the layout service. */
   toggleSidebar: () => void
   /**
-   * chamber: the per-boot instance id this ctx's shell belongs to (set by the
-   * renderer shell through the chamber knob while the boot owns
-   * `window.__DSH_BASE_PATH__`). The multi-source list highlights this source.
+   * chamber: the immutable per-entry instance id this ctx's shell belongs to
+   * (installed by AppWebEntry.configureContext before plugin materialization).
+   * The multi-source list highlights this source.
    */
   chamberInstanceId?: string
   /**

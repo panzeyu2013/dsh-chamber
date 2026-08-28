@@ -22,6 +22,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
 import { en, zh, type OpenInKey } from '../locales.ts'
+import { parseOpenInSource, parseOpenInSourceFingerprint } from '../shared/capabilities.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -42,8 +43,13 @@ export function apply(ctx: ClientContext): void {
   // plugin uses the same `as any` seam — the vendor cordis face stays loose).
   // Bail on an absent id (frontend-review P2-4): without it the gate-2 local
   // check would let a bogus '' source render a button that can only fail.
-  const sourceId = (ctx as { chamberInstanceId?: string }).chamberInstanceId
-  if (sourceId === undefined) return
+  const source = parseOpenInSource((ctx as { chamberInstanceId?: string }).chamberInstanceId)
+  if (source === null) return
+  const sourceFingerprint = parseOpenInSourceFingerprint(
+    source,
+    (ctx as { chamberSourceFingerprint?: string }).chamberSourceFingerprint,
+  )
+  if (sourceFingerprint === null) return
 
   const t = ctx.locale.bind(NS)
 
@@ -51,7 +57,7 @@ export function apply(ctx: ClientContext): void {
   // session-log entry): it hands the component this ctx's source id and the
   // bound translator; the per-header session id and the workspace rows come
   // from the framework standard kit (see OpenInButton props).
-  const injected = (): OpenInInjected => ({ sourceId, t })
+  const injected = (): OpenInInjected => ({ source, sourceFingerprint, t })
 
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
     name: OPEN_IN_HEADER_SLOT,

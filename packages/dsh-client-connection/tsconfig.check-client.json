@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.check-base.json",
+  "files": [
+    "src/api-path.ts",
+    "src/client/api.ts",
+    "src/client/carrier-assembly.ts",
+    "src/client/connection.ts",
+    "src/client/fixture.ts",
+    "src/client/index.ts",
+    "src/client/liveness-triggers.ts",
+    "src/client/random-uuid.ts",
+    "src/client/rpc.ts",
+    "src/client/web-api-client.ts",
+    "src/loopback-hostname.ts",
+    "src/rpc.ts"
+  ]
+}

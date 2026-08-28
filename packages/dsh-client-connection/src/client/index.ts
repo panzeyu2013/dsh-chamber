@@ -10,8 +10,9 @@
  * (default `/api` = stock) is resolved at carrier construction and handed to
  * both the HTTP/WS carrier and the generic RPC caller, so every api path
  * lands under the control-plane per-instance proxy prefix (`/api/i/<id>`).
- * When no config is passed, `window.__DSH_BASE_PATH__` (set by the chamber
- * shell before each sequential instance boot) is the fallback knob.
+ * Chamber always supplies the per-entry config explicitly. When no config is
+ * passed, `window.__DSH_BASE_PATH__` remains a compatibility fallback for
+ * other embedding environments.
  *
  * merged: upstream rc.2 transport hook (__DSH_TRANSPORT__).
  */
@@ -22,8 +23,8 @@ import { attachLivenessTriggers } from './liveness-triggers.ts'
 import { FixtureApiClient } from './fixture.ts'
 import { WebApiClient } from './web-api-client.ts'
 import { createWebConnectionRpc, type RpcFetch } from './rpc.ts'
+import { assembleConnectionCarriers } from './carrier-assembly.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
-import { resolveInstanceBasePath } from '../api-path.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
 
 // ---- Contract re-exports (browser-safe apiproxy channels + core types) ----
@@ -136,20 +137,27 @@ export interface ConnectionHandle {
 export function apply(ctx: Context, config?: ConnectionConfig): void {
   const pageLocation = typeof location === 'undefined' ? undefined : location
   const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
-  // chamber patch: resolve the per-instance base path once, at construction
-  // (explicit config wins, then window.__DSH_BASE_PATH__ — deterministic under
-  // the chamber shell's sequential instance boots).
-  const basePath = resolveInstanceBasePath(config?.basePath)
   // merged: upstream rc.2 transport hook — a shell owning a different physical
   // transport installs it on the page global before plugin boot (chamber's
   // basePath patch still takes precedence for the HTTP carrier).
   const transport = (globalThis as ClientTransportGlobal).__DSH_TRANSPORT__
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
-  const api: IApiClient = fixtureClient ?? transport?.createApiClient() ?? new WebApiClient({ basePath })
+  // chamber patch: resolve the per-entry path once and fan the same immutable
+  // value into WebApiClient (HTTP + WS) and the generic RPC carrier. The pure
+  // assembly policy is behavior-tested without loading the source-only vendor
+  // graph; production supplies the real constructors here.
+  const { basePath, api, rpc } = assembleConnectionCarriers<IApiClient, ClientConnectionRpc, RpcFetch>(
+    config?.basePath,
+    fixtureClient,
+    transport,
+    {
+      createHttpAndWebSocketApi: options => new WebApiClient(options),
+      createRpc: options => createWebConnectionRpc(options),
+    },
+  )
   // Published by the readiness handshake (host.describe) once the connection
   // is established; observable through handle.hostDescription.
   let description: HostDescription | undefined
-  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc({ basePath, doFetch: transport?.fetch })
   let started = false
   const descriptionListeners = new Set<() => void>()
   const publishDescription = (next: HostDescription | undefined): void => {

@@ -4,6 +4,30 @@
 > `docs/design/`（设计契约与样式定稿）为准，工程细节在代码注释——不记录
 > 历史日志/每日验证记录。本文档是 dsh-chamber 进度追踪的唯一记录。
 
+## 当前冻结 HEAD 合并验证（2026-08-28，第二轮独立检查）
+
+- **结论性代码审查**：完成相较 main 与 design 01/03/05/16/17/19 的第二轮独立
+  静态复核；冻结树无遗留代码 P0/P1/P2。第二轮修复重点包括：transport/exec/seed
+  多步异步操作绑定精确实例 incarnation；删除与传输身份编辑统一退役旧来源代；
+  renderer runtime/snapshot producer 同步撤销；open-in、深链与原生通知全链携带
+  主进程签发的 opaque source proof，并在异步边界复验；notification/deep-link
+  renderer handoff 改为 deliveryId+attempt retain-until-ACK；主进程 fatal 与已提交
+  状态 push 边界收敛 hostile thrown value，已提交保存不因 renderer send 失败反报失败。
+- **最终冻结树自动化**：control-plane 9 套合计 **142/142**；desktop 全套
+  **371/371**；renderer shell **113/113**；客户端/插件测试合计 **410/410**。
+  四类自动化总计 **1036/1036**。
+  根 typecheck、全部专项 typecheck、`build:renderer`、desktop preload、两项 host
+  package build、`verify:i18n`、`git diff --check` 全绿；`pnpm run smoke` 使用已装配
+  dsh 实际 **PASS**（非 SKIP）。
+- **依赖与分发**：`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ pnpm
+  install --frozen-lockfile` **PASS**，Electron 镜像可用，安装未使用代理。Linux
+  `dist:desktop` 首跑受环境代理失败；使用用户提供的备用代理重跑并 **PASS**。
+  代理配置未进入 renderer、日志持久化契约或产品配置。
+- **仍未代证**：当前执行宿主不是 macOS；`dist:desktop:mac` 会按内嵌 runtime
+  平台保护拒绝在 Linux 组装 darwin 包。因此 macOS M3 实机（Apple Silicon、系统
+  通知权限/点击、Finder/VS Code 拉起、深链冷/热启动、托盘/退出与 dmg/zip）仍须在
+  macOS/release CI 完成，不能由上述 Linux 自动化替代。
+
 ## 未完成 / 待执行
 
 - **来源级收拢 + server 拖拽排序（2026-09，todo/server-drag-sort.md 方案 1，已实现）**：
@@ -49,7 +73,7 @@
   头部右端）。柔和化色板同上条（workspace accent 34%/21% + 56/61/66%，
   来源 accent 34% 61%）。验证：typecheck:sidebar、test:sidebar（饱和度
   断言随新色板更新）、build:renderer。
-- **桌面通知（设计 19，已实现 2026-09）**：session 在 complete / ask（question）/
+- **桌面通知（设计 19，M1–M2 已实现；竞态自动化完成，M3 macOS 实机未完成，2026-09）**：session 在 complete / ask（question）/
   request（approval/plan-review）时推送桌面原生通知，设置中可选项（并入通用页
   「通知」控制组 + 四组分割线）。检测 = renderer 复用 06 §4 运行时事实通道边沿
   检测（`renderer/src/notification-edges.ts` 纯函数：首报播种/断连补发/同 tick
@@ -60,7 +84,7 @@
   pending 队列 + drain 防窗口重建竞态——design 16 模式）；设置 =
   chamber-settings.json 嵌套 `notifications` 键 + settings 壳通用页通知组
   （notifications-settings.ts 纯函数 + GeneralView 接线 + i18n zh/en +
-  测试按钮）。验证：test:desktop 全绿（chamber-settings 16 + notifications 19 +
+  测试按钮）。实现轮历史验证：test:desktop 全绿（chamber-settings 16 + notifications 19 +
   既有全链）、test:renderer-shell 全绿（notification-edges 26 + 既有）、
   test:settings-bridge 全绿（notifications-settings 7 + 既有 37）、根 typecheck +
   typecheck:settings-bridge/sidebar、verify:i18n 无 DRIFTED、build:renderer 成功。
@@ -77,10 +101,32 @@
   就绪信号（dsh-chamber:notifications-ready）解决重建路径点击丢失、onOpen
   deps 稳定化注释、测试通知专用文案 key、未知键过滤、分割线反向组合、
   默认值镜像断言。契约见 `docs/design/19-notifications.md`（含 OpenChamber
-  调研；§3.4 已同步 2026-09 用户拍板（并入通用页，无新入口））。剩余：
-  macOS 系统通知权限实机验收（M3，打包态冒烟）。
+  调研；§3.4 已同步 2026-09 用户拍板（并入通用页，无新入口））。
+  **2026-08-28 合并前竞态加固**：① notification-open 主进程改为 ready 后的
+  64 上限 FIFO drain；send 抛错只提交已发送前缀，失败项+未发送后缀恢复到并发
+  新点击之前，恢复超限保留旧待发/较早项、loud 丢最新并发尾；仅仍为 current 的
+  失败窗口可撤销 ready，renderer 以 5×500ms 有界重握手；② renderer 对远程点击
+  增 current-generation 权威 roster 二级门，完整 payload 以 64 FIFO hold，settle
+  后按序 replay、权威缺失才逐项 loud 丢弃；③ payload `sourceId` 收紧为精确
+  `local | ssh-<raw registry id>`；④ sidebar runtime/snapshot 均改为 tokenized
+  producer，旧 ctx 异步 report/clear 不得覆盖新代事实。focused notification 套件
+  **24/24**；这是第一轮历史 focused 记录，不作为当前冻结 HEAD 合并数字。
+  **2026-08-28 第二轮安全/生命周期加固**：notification claim 改为 5s/64 条硬上限
+  的有界时间序列（不再由任意新 sessionId 触发全 Map 扫描）；`test` 与真实事件共享
+  5s/8 次全局 show-attempt 预算（容纳适度多来源 burst、限制为 1.6 次/秒），跨窗口
+  存活的 active Notification 另设 16 cap。`notify()` 只在
+  Electron 原生 `show` 事件后返回 true，异步 `failed`/show 前 close/5s timeout/hostile
+  error 均 loud false 并释放 claim。notification request/claim/click-open 全链加入
+  主进程签发的 `sourceFingerprint`：claim key 含 proof，删除或传输身份编辑会关闭旧
+  banner、丢弃旧 pending/in-flight，renderer proof + generation 双门不能跨同 id
+  replacement。notification-open 改为稳定 `deliveryId` + 每代
+  `attempt` 的 retain-until-ACK：send-return 不消费，reload/crash 重发全部未 ACK 前缀，
+  旧 attempt ACK 无效，pending+in-flight 总 cap/FIFO 不变。Darwin 点击恢复先
+  `app.focus`，所有恢复入口受 terminal quit guard。focused notifications **26/26**；
+  该 focused 数字是实现阶段记录，当前冻结 HEAD 矩阵见本文顶部。剩余：
+  macOS 系统通知权限/拒绝行为实机验收、未授权时设置页提示与打包态冒烟（M3）。
 - **VS Code 深链 + open-in 打开注册表（设计 16 + 2026-08 扩展，M0–M2 已实现；
-  独立复核/实机验收进行中）**：
+  自动化覆盖与独立复核已完成，macOS 实机验收未完成）**：
   `dsh-chamber://` OS 深链 + 应用内按钮快速拉起本机 VS Code Remote-SSH 打开对应 server
   实例目录。形态：主进程 `packages/desktop/deep-link.ts`（electron-free 核心：
   parseOpenVscodeIntent / buildVscodeRemoteUrl（authority 与 SSH_HOST_PATTERN 解耦、
@@ -106,11 +152,12 @@
   注册表——包重命名 `@dsh-chamber/dsh-client-ui-open-in`（组件 OpenInButton，会话头部
   utilities 槽单条目 `open-in` order -1）；主进程新增 `packages/desktop/open-in.ts`
   （electron-free：OpenInApp 注册表 [finder, vscode]，finder provider 仅 local
-  （validateRemotePath + stat → 目录 `shell.openPath` / 文件 `shell.showItemInFolder`，
-  openchamber reveal 同款语义），vscode provider 包装 runVscodeLaunch 零行为变化；
+  （validateRemotePath + stat → 非 macOS 目录 `shell.openPath`；文件及 macOS 所有目录
+  `shell.showItemInFolder`，避免 LaunchServices 将任意 package 目录作为应用启动），
+  vscode provider 包装 runVscodeLaunch 零行为变化；
   `runOpenInLaunch` 六步 loud 管线：appId 白名单 → instanceId 校验 → **path 校验上移
   管线**（validateRemotePath，防未来 provider 漏检）→ remoteCapable 门（远程来源只
-  放行 vscode 家族）→ 可用性二次校验（经注入 ctx，任意机器可测）→ 分发，24 用例全绿）；
+  放行 vscode 家族）→ 可用性二次校验（经注入 ctx，任意机器可测）→ 分发，28 用例全绿）；
   `dsh-chamber:open-in-apps`（能力协商）/`dsh-chamber:open-in` 两 IPC（**原 design 16
   的 vscode-availability/open-vscode 两 IPC 已随旧插件删除**，渲染层唯一入口收敛；
   open-in 对 vscode 成功后保留 deep-link-intent 推送，与 OS 深链对齐）+ info 载荷
@@ -118,7 +165,7 @@
   本地来源（sourceId==='local'）显示 [finder, vscode]（≥2 → 图标 + Menu 下拉，默认
   vscode 保持单键行为；**vscode 未装时显示单 finder 按钮为净新增能力**），远程来源仅
   vscode（行为不变）；平台文案 Finder/资源管理器/文件管理器按 `platform` 选键。
-  验证：test:desktop 全链 **287 用例**（含 deep-link 43 + open-in 24）、typecheck:open-in
+  上一轮验证基线：test:desktop 全链 **313 用例**（含 notifications 19 + deep-link 43 + open-in 28）、typecheck:open-in
   及全部插件 typecheck 回归、build:renderer、test:renderer-shell（锁步断言）、
   test:sidebar/test:git、verify:i18n、frozen-lockfile（锁文件 = HEAD + 仅 importer
   重命名与 primitives peer 的最小 diff，无再生漂移）全绿。
@@ -135,6 +182,60 @@
   打开下拉时 `refreshApps()` 重探（会话中途装/卸 app 无需刷新页面），点击时主进程
   活体复检兜底（loud）；⑤ slot 条目 label 为 vendor 诊断标识（非用户可见），已用
   中性文案。
+  **2026-08-28 第一轮合并前复核/修复**：执行期 provider 探测与宿主 adapter 的普通
+  `Error` throw/reject 统一收敛为 loud `{ok:false,error}`，apps 协商中单 app 探测异常 fail-closed 且不抹掉
+  其他 app；修复真实 Electron `shell.openPath` reject 路径的重复 `open path failed`
+  前缀；Menu 通过 `selectedId` 显示当前默认 app；插件拒绝空 sourceId。新增 4 条异常
+  回归（open-in 28/28）。该轮基线复验覆盖当时记录的控制面 8 套、test:desktop 313、
+  全部主客插件测试、renderer-shell、根及全部专项 typecheck、renderer/preload/host 包
+  构建、i18n、frozen install、Linux 同平台 `dist:desktop`；smoke 因本机无 dsh 按契约
+  SKIP。
+  `dist:desktop:mac` 在当前 Linux-x64 主机上被内嵌运行时平台保护正确拒绝（禁止把
+  linux-x64 runtime 装入 darwin 包）；macOS dmg/zip 仍须在文档规定的 macOS 宿主/
+  `macos-latest` release CI 复验，未绕过该安全门。
+  **2026-08-28 全面契约复核（代码修复完成，最终矩阵交接）**：① 根 AGENTS
+  Runtime Boundaries/可修改包清单与 05 §6/§7 已补登记 open-in、通知 carve-out 与
+  copied-client 行为/typecheck 门；CI 控制面精确清单为 **9 套**（含
+  `ws-frames.ts`），desktop 清单含 notifications/deep-link/open-in 与两项打包脚本；
+  ② provider 错误描述器已覆盖 hostile message getter/Proxy/toString 二次 throw，所有
+  adapter rejection 收敛为 `{error}`；③ capability 增稳定 `displayKind`，未知 provider
+  中性呈现；来源/能力条目/open result 严格解析，owned ARIA menu 补焦点/Tab/隐藏 owner
+  生命周期，bridge hydration 轮询严格 40 次；④ open-in 真实 `apps()` 首次 reject 在
+  同一 single-flight 内最多尝试 3 次、相邻尝试间隔 500ms，成功或耗尽才 memoize，
+  epoch 隔离 refresh 旧 flight（`test:open-in` **15/15**）；⑤ N-ctx 参数经真实
+  `AppWebEntry.configureContext` 在任何 await/plugin 前注入，ConnectionPlugin 将同一
+  basePath 分发到 HTTP/WS/generic RPC；真实 boot seam + carrier-assembly 行为门与
+  `typecheck:client-web/connection` 已并入 CI；⑥ deep-link renderer send 失败
+  rollback 到队首且不释放 tracked key，A 失败后的重试仍 A→B（focused deep-link
+  **52/52**）；⑦ shell 的 60s 全局 queue timeout 只放行**不同 source id**，same-id
+  由 strict boot tail 等前代 task 完整 settle + async dispose，连本代 host-graph/
+  extra-bundle 副作用也在 tail 后才启动；外部 teardown 另经 per-id
+  barrier；runtime/snapshot producer token 防旧 cleanup，但绝不是放行同 id 两代重叠的
+  理由；active session dispatch 绑定精确 holder，replacement/dispose 同步取消，queued
+  open 保留 enqueue 时的 68s absolute deadline（flush 后不重置，且 list poll 最多 8s）；
+  ⑧ shell 的 boot/run 与 session runtimeCtx/list/open catch 边界以 never-throw
+  描述器收敛任意 thrown value（含反射/字符串化也抛错的 Proxy），失败会 loud settle，
+  不再把 boot 或 timer-driven open Promise 永久悬挂。focused shell **20/20** 与根
+  typecheck 已通过；该段记录的第一轮历史矩阵已由本文顶部第二轮冻结 HEAD 矩阵取代；
+  `pnpm run smoke` 当轮使用已装配的 dsh实际 **PASS**
+  （非 SKIP）；`pnpm install --frozen-lockfile` 使用 Electron 镜像 **PASS**，备用代理
+  未启用/未使用；hostile thrown-value 修复后 Linux 同平台 `dist:desktop` 再次
+  **PASS**。历史 313 与第一轮 smoke SKIP 同样不作当前合并证据。
+  **2026-08-28 第二轮 desktop 安全/生命周期加固**：① 深链 renderer handoff 与
+  notification-open 同步升级为 deliveryId+attempt retain-until-ACK，send-return 后
+  renderer crash/reload 不丢、旧代 ACK 不提交，64 cap 覆盖 sent-but-unacknowledged，
+  FIFO/single-flight 在 ACK 前持续；② 打包 Linux 协议注册固定无 relaunch args，避免
+  将冷启动 URL（argv[1]）固化；③ open-in capability provider 探测失败逐项 loud，
+  Finder stat 仅 ENOENT/ENOTDIR 映射缺失，权限/I/O/hostile 错误走结构化失败；④ quit
+  guard 覆盖窗口恢复，Darwin 恢复先 focus；⑤ `desktop_ssh_instances_changed` 携带主进程
+  从保存前/后权威 roster 同步计算的 `{removedIds,retiredIds}`：`removedIds` 只含删除，
+  `retiredIds` 还包含 kind/host/user/sshPort/remotePort 传输身份编辑；same-id 传输编辑
+  必须先退役旧 shell，label/service/home-only 编辑保留隧道与视图。remove→
+  快速 re-add 即使 async pull 被后继覆盖也保留旧来源代退役事实。focused
+  deep-link **58/58**、open-in **35/35**、notifications **26/26**；这些是实现阶段
+  focused 记录，已由本文顶部冻结 HEAD 全量结果取代。root typecheck 与 preload CJS
+  build 通过；协议/通知/Finder 的 macOS
+  实机边界仍不由 Linux 自动化代证。
   剩余：实机验收（macOS 深链冷/热启动、打包态、托盘/退出在途、
   N-ctx、VS Code 缺失、sshPort≠22、dev 深链 argv 注入测试路径、Finder 下拉在 vendor
   头部的定位/层叠、远程来源仅 vscode）。深链契约见
@@ -653,9 +754,10 @@
   checkout 首次封装也能执行 frozen install，其余 runtime 产物仍全部忽略。
 - **移出项**（P3 硬纪律，永不回流）：认证/审计（密码/Passkey/会话 cookie/client token/
   限流/审计 SQLite）、控制面薄壳聊天/会话列表/审批弹窗、控制面会话运行时/统一索引/
-  交互管线、连接注入适配器/broker/绑定、walkthrough、notifications、cron、文件夹/笔记、
-  web 预览、MCP、目标/终端等宿主 UI 职责面（处置映射见 01 §4；git/GitHub 例外：插件化，
-  见 01 §4 / 设计 08）。
+  交互管线、连接注入适配器/broker/绑定、walkthrough、通知中心/历史/控制面通知 runtime、
+  cron、文件夹/笔记、web 预览、MCP、目标/终端等宿主 UI 职责面（处置映射见 01 §4；
+  design 19 仅允许 renderer 既有事实到 Electron 原生通知的受限投影，不建中心/历史；
+  git/GitHub 例外：插件化，见 01 §4 / 设计 08）。
 - **默认排序 manual（06 §3.1）**：每来源会话排序默认 `manual`（保持 wire 序），与官方
   默认 `updated` 不同——有意取舍；`orderBy[sourceId]` 持久化于 `dsh-chamber.sidebar.v1`。
   **2026-08 C档对齐**：排序按钮改为显式菜单（官方 ViewOptionsMenu 模式，勾选当前项）；
@@ -717,7 +819,8 @@
   报告统一经 `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见失败态（shell.ts
   失败分支 dispose entry，重试干净重 boot）。
 - **v1 实现形态（代码内声明，与 05 契约无实质偏差）**：自研侧边栏 + 纯 dsh 首屏即基线；
-  renderer entry 级 React 面仅剩纯 dsh 桥接宿主；当前来源判定经 knob 注入；拷贝包
+  renderer entry 级 React 面仅剩纯 dsh 桥接宿主；当前来源/basePath 经每个
+  `AppWebEntry.configureContext` 私有注入，不存在页面级来源 knob；拷贝包
   `tests/` 为上游 vitest spec 惰性拷贝（chamber 侧验证走各自 node:test 门）；`chamber-auth` 随认证移除；settings 页 `ns.inject('settings.section')` 通道可用于
   后续插件化。
 - **窗口标题冻结（桌面壳故意偏差）**：桌面壳冻结原生标题栏为 `dsh-chamber`（单 frame 品牌

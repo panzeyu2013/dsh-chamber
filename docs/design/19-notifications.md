@@ -1,20 +1,24 @@
 # 19 · 桌面通知：会话 complete / ask / request（设置可选项）
 
-> **状态：已实现（2026-09；实现与验证记录见 `docs/progress/STATUS.md`，入口
-> 形态以 §3.4 的 2026-09 用户拍板为准）**。需求来源：用户要求「一个 session
-> 在 complete、ask、request 时给用户推送通知」，做成设置中的可选项。本文先给出
+> **状态：M1–M2 已实现，合并前竞态加固与自动化复验已完成；M3 的 macOS
+> 权限/打包态实机验收仍未完成（2026-09；实现与验证记录见
+> `docs/progress/STATUS.md`，入口形态以 §3.4 的 2026-09 用户拍板为准）**。
+> 需求来源：用户要求「一个 session 在 complete、ask、request 时给用户推送通知」，
+> 做成设置中的可选项。本文先给出
 > **OpenChamber 通知功能调研**（外部参考，本地源码
 > `/Users/panzeyu2013/Desktop/code/develop/OpenChamber`，同设计 14 的调研体例），
 > 再给出 dsh-chamber 的移植设计契约。
 
 ---
 
-## 1. 需求与现状对照（dsh-chamber）
+## 1. 需求与设计前现状对照（dsh-chamber）
+
+> 本节保留立项时的差距分析；现行实现以 §3–§5 为准。
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 桌面通知 | **无任何通知能力**：main.ts 无 `Notification` 导入、无通知 IPC、无权限处理 | `packages/desktop/main.ts` 全量 |
-| 会话状态检测 | **已具备事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件经 `chamberBridge.reportInstanceRuntime` 上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` L104–155；`packages/renderer/src/App.tsx` L1090–1145 |
+| 桌面通知 | **当时无任何通知能力**：main.ts 无 `Notification` 导入、无通知 IPC、无权限处理 | 设计前 `packages/desktop/main.ts` |
+| 会话状态检测 | **已具备事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
 | 会话标题/来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
 | 窗口隐藏场景 | 设计 14 已落地：关窗 hide 到托盘 / macOS 无窗常驻 / 后台启动——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
 | 设置存储 | chamber 全局设置 `chamber-settings.json`（主进程权威、`dsh-chamber:settings-get/set` IPC + push、`validatePatch` 白名单） | `packages/desktop/chamber-settings.ts` |
@@ -56,7 +60,8 @@
 - `Notification.isSupported()` 检查；
 - **去重 claim**：`nativeNotificationClaims` Map + 5s TTL，key = `workspaceId|tag`
   或 `workspaceId|sessionId|kind|title|body`——同键 5s 内只发一次（防事件风暴/双发）；
-- `activeNotifications` Set 持有存活引用（防 GC 吞 click 事件，macOS 已知坑）；
+- OpenChamber 参考实现用 `activeNotifications` 存活集合防 GC 吞 click 事件
+  （macOS 已知坑）；dsh-chamber 的现行 token-aware Map 见 §3.3；
 - `new Notification({title, body, silent: false, sound: 'Glass'(darwin)})`；
 - click → `focusForegroundWindow()`（macOS 先 `app.focus`）+ 广播
   `openchamber:open-session` 打开对应会话。
@@ -90,7 +95,7 @@
 ```
 各实例 dsh 前端 runtime（每来源一个 ctx shell）
   └─ 侧边栏插件（chamber 自研，每 ctx 挂载）—— 06 §4 事实通道（现成，不改）
-       reportInstanceRuntime: {current, sessions: {id: {running, completed, pending}}}
+       registerInstanceRuntimeProducer(sourceId, sourceFingerprint).report({current, sessions: …})
             ↓ chamberBridge（renderer 共享单例，现成）
 renderer App 层
   ├─ 通知边沿检测（新增纯函数模块，App effect 接线）→ 事件组装（title/body/requireHidden）
@@ -149,6 +154,7 @@ function detectNotificationEdges(
 ```ts
 interface NotificationRequest {
   sourceId: string            // 'local' | 'ssh-<id>'
+  sourceFingerprint: string   // 主进程签发的当前来源代 opaque proof
   sessionId: string
   kind: NotificationKind | 'test'
   title: string
@@ -169,12 +175,20 @@ interface NotificationRequest {
   - 会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」）。
 - 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪静默跳过 +
   console.warn（与 desktopSsh 桥探测同节奏，500ms 探测已有先例）。
+- `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定为 `local`，远程
+  是主进程随 roster 投影的 64 位小写十六进制 opaque proof。App 只接受 proof 与当前
+  权威来源代相等的 producer report；renderer 不从可复用 registry 字段推导 proof。
 
 **主进程**（`packages/desktop/main.ts` + 新增 `packages/desktop/notifications.ts`
 纯逻辑模块，electron-free 便于单测）：
 
 - 新 IPC：`dsh-chamber:notify`（`trustedIpc` invoke，payload 字段白名单校验
-  sourceId/sessionId/kind/title/body/requireHidden，长度上限）；
+  sourceId/sourceFingerprint/sessionId/kind/title/body/requireHidden，长度上限；sourceId 只接受精确
+  `local` 或 `ssh-<INSTANCE_ID_PATTERN raw id>`，显式拒绝 `ssh-local`/空/非法字符/
+  超过 64 位 raw id；proof 还必须与主进程当前来源代精确匹配）；
+- 主进程以两组**仅保留 active roster** 的 Map 管理远程 proof 与 ownership token：
+  删除即删项，传输身份编辑轮换 proof/generation，同 id 重建也不会复用旧 proof；
+  历史 id 不留 tombstone，内存上界随当前远程实例数而非历史 churn 增长；
 - `maybeShowNativeNotification(payload)` 裁决链（设置权威在主进程内存状态，随
   `dsh-chamber:settings-changed` 更新）：
   1. `kind === 'test'` 跳过设置门禁（设置页「发送测试通知」按钮）；
@@ -182,22 +196,49 @@ interface NotificationRequest {
   3. `requireHidden && isAnyWindowFocused()` → 跳过；
   4. `mode === 'hidden-only' && isAnyWindowFocused()` → 跳过（`always` 放行）；
   5. `Notification.isSupported()` → 否则跳过（记日志）；
-  6. **去重 claim**：key = `JSON.stringify([sourceId, sessionId, kind])`，5s TTL
-     （防同一事件双路径/重放双发；claim 在裁决之后——被设置/焦点跳过的请求
-     不消费去重槽；'test' 不走 claim）；
-  7. `new Notification({title, body, silent: false, sound: 'Glass'(darwin)})`，
-     `activeNotifications` Set 持引用（防 GC 吞 click，OpenChamber 同款坑）；
-  8. click → 聚焦/显示窗口（macOS 先 `app.focus`，同设计 14 恢复路径；'test'
+  6. **去重 claim**：key =
+     `JSON.stringify([sourceId, sourceFingerprint, sessionId, kind])`，5s TTL、
+     64 条硬上限，Map + 时间序列只清理过期前缀（防同一事件双路径/重放双发，
+     不再对每个新 key 全表扫描；claim 在裁决之后；'test' 不走 claim）；
+  7. **全局呈现预算**：所有实际呈现尝试（**含 `test`**）共享 5s/8 次滑窗硬上限
+     （1.6 次/秒，容纳适度多来源同时完成但不允许 banner 风暴）；
+     `activeNotifications` 另设 16 条硬上限，覆盖通知对象跨多个速率窗口仍不 close 的
+     OS 生命周期。饱和 loud/fail-closed。该宿主预算不读取 session roster（控制面/
+     主进程仍不成为 session consumer）；
+  8. `new Notification({title, body, silent: false, sound: 'Glass'(darwin)})`，
+     `activeNotifications` Map 持有 notification → 来源 token（既防 GC 吞 click，
+     又允许按退役来源关闭旧 banner）；IPC 的 `true` 只在原生
+     `show` 事件后返回，异步 `failed`、同步 throw、show 前 close 或 5s 超时均返回
+     `false` 并释放 claim，绝不把“调用了 void show()”冒充“已显示”；
+  9. click → 先复验创建 banner 时捕获的 ownership token，再聚焦/显示窗口（macOS
+     先 `app.focus`，同设计 14 恢复路径；退出在途
+     `quitRequested` 则终止恢复/重建；'test'
      通知只聚焦不打开会话）+ 推送 `dsh-chamber:notification-open`
-     `{sourceId, sessionId}`。
+     `{sourceId, sourceFingerprint, sessionId, deliveryId, attempt}`。来源删除或传输身份
+     编辑会同步 close 旧 banner，并丢弃该来源全部 pending/in-flight open；旧 click
+     closure 即使迟到也不能打开 replacement。
 
 **点击打开会话**（renderer）：App 订阅 `window.dshChamber.notifications.onOpen` →
 `openSession(sourceId, sessionId)`（既有路径：挂载视图 → `ensureRemoteConnected` →
-`openInstanceSession`）。**窗口重建竞态**：主进程对 notification-open 用
-pending 队列 + drain（照搬 design 16 `pendingIntents` 模式）——renderer 注册
-监听后 invoke `dsh-chamber:notifications-ready` 置位就绪标志（`did-start-loading`
-与 `render-process-gone` 时重置），就绪后才放行推送，窗口关闭/重建/崩溃期间
-点击通知不丢事件。
+`openInstanceSession`）。**窗口重建竞态**：主进程对 notification-open 使用 64 条
+硬上限 FIFO + reentrancy guard——renderer 注册监听后 invoke
+`dsh-chamber:notifications-ready` 置位（`did-start-loading` 与
+`render-process-gone` 时重置），就绪后才放行。一次 drain 只提交成功发送的前缀；
+  每条 push 携带稳定 `deliveryId`、逐次递增 `attempt` 与来源 proof；`webContents.send` 返回只把
+  记录移入 in-flight，**不算消费成功**。renderer 在完整 payload 已执行/入有界 roster
+  队列后调用 trusted `notification-open-ack(deliveryId,attempt)`；仅精确当前 attempt
+  释放容量。reload/crash/start-loading/closed 把全部未 ACK 前缀按 FIFO 放回队首，旧
+  document 的迟到 ACK 因 attempt 不匹配而无效；同步 send throw 只 rollback 当前项，
+  早先已发送项继续等各自 ACK。pending+in-flight 总计 64；满时 loud 淘汰最旧 pending，
+  若全为 in-flight 则 loud 拒绝新点击。
+
+主进程 replay 之后还有 renderer 的**权威 roster + proof 二级门**：`local` 立即打开；远程
+`ssh-<id>` 在当前 generation 首次 `instances_get` 成功前以完整
+`{sourceId,sourceFingerprint,sessionId,deliveryId,attempt}` 的 64 条有界 FIFO hold，
+roster settle 后按序 replay，目标缺失或 proof 已过期才逐项 loud 丢弃并 ACK。串行
+runner 捕获精确来源 token，旧代排队项不能在 same-id replacement 上执行。该门与深链
+的单槽 last-intent-wins 不同：每一次通知点击都必须保留。`deliveryId` 是 ACK/重放
+坐标，不建立 renderer 持久去重账本；精确 `attempt` 防止旧 document 的 ACK 误提交新发送。
 
 **preload / 类型**（`preload.cts` + `renderer/src/global.d.ts`）：
 
@@ -206,7 +247,10 @@ pending 队列 + drain（照搬 design 16 `pendingIntents` 模式）——render
 interface NotificationSurface {
   notify(payload: NotificationRequest): Promise<boolean>          // invoke 'dsh-chamber:notify'
   ready(): Promise<boolean>                                       // invoke 'dsh-chamber:notifications-ready'
-  onOpen(listener: (req: { sourceId: string; sessionId: string }) => void): () => void
+  ack(deliveryId: number, attempt: number): Promise<boolean>       // accepted/queued 后精确提交
+  onOpen(listener: (req: { sourceId: string; sessionId: string;
+                           sourceFingerprint: string;
+                           deliveryId: number; attempt: number }) => void): () => void
                                                                   // 'dsh-chamber:notification-open' push
 }
 ```
@@ -244,7 +288,8 @@ interface ChamberSettings {
   - 控制组「通知」：主开关行；
   - 「通知时机」：模式单选（仅窗口隐藏时 / 始终）+ 事件开关 ×3（完成 / 提问 /
     审批请求）；「始终」下注明「正在查看的会话除外」；
-  - 「发送测试通知」按钮（调 `notifications.notify({kind:'test', …})`，主进程
+  - 「发送测试通知」按钮（调 `notifications.notify({sourceId:'local',
+    sourceFingerprint:'local', kind:'test', …})`，主进程
     绕过门禁直接显示；'test' 豁免空 sessionId 白名单，click 不触发打开会话）；
   - i18n zh/en（`locales.ts` 扩展；配对由 `typecheck:settings-bridge` 的
     `Record<keyof typeof zh, string>` 编译期强制）。
@@ -266,13 +311,20 @@ interface ChamberSettings {
   vendor 若在子代理全部结束后才武装 completed，届时正常补发）。
 - 通知失败（isSupported false / 系统权限拒绝）**静默降级不误报**：会话业务不受
   影响，蓝点照常。
+- notification-open 的 `send()` 返回不等于消费成功：所有未 ACK 项跨 renderer
+  rebuild replay；稳定 deliveryId + attempt 只作为精确 ACK 坐标，来源 proof 隔离
+  same-id replacement，FIFO 不因并发 click 或窗口替换乱序。
+- renderer 的来源 ownership/producer 账本同样只保留 active Map 项，退役即删除；
+  单调 serial 只生成 token，不按历史 sourceId 留 generation tombstone。权威 delta 到达时
+  `retireInstanceProducers` 同步撤销 runtime/snapshot token 与缓存，再异步 dispose shell。
 
 ### 3.6 安全与纪律
 
 - IPC 沿用 `trustedIpc` 全部门禁（sender = 主窗口 mainFrame + 控制面 origin）；
   payload 白名单 + 长度上限（防异常 title/body 刷屏）。
-- 载荷全为非秘密投影（会话 id/标题/来源 label——侧边栏同源数据，无隧道 URL、
-  无 SSH 材料）。
+- 载荷全为非秘密投影（会话 id/标题/来源 label + 主进程签发的 opaque 生命周期
+  proof——侧边栏同源数据，无隧道 URL、无 SSH 材料）；proof 不持久化，也不含可逆
+  host/user/port 信息。
 - 控制面零改动；无新 host 插件；不消费宿主帧；设置不落实例 dsh home。
 
 ---
@@ -289,10 +341,13 @@ interface ChamberSettings {
 - **M3 打磨**：macOS 通知权限（未授权时的设置页提示）、文案定稿、
   打包态实机验收（关窗/托盘/后台三形态 + 点击打开 + 窗口重建）。
 
-## 5. 测试与验证
+## 5. 测试与验证门
 
 - `test:desktop`：chamber-settings 新键 normalize/validate/corrupt 用例；
-  notifications 裁决链单测（enabled/kind/mode/requireHidden/去重 claim）。
+  notifications 覆盖裁决链 enabled/kind/mode/requireHidden、claim/rate/active
+  hard cap、honest show/failed/timeout/hostile error、严格 `local | ssh-<raw-id>` 来源、
+  opaque proof 校验与 same-id replacement、active-only Map churn、notification-open
+  retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；最终 HEAD 数字只见 STATUS。
 - `test:renderer-shell`：`notification-edges` 纯函数单测（complete 边沿与
   dedupe 去重、ask/request 值变化边沿（含直切）、首报播种、断连补发、
   同 tick 去重）。

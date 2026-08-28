@@ -29,6 +29,8 @@ export interface SshInstanceSpec {
    * whitelisted `^~?/[a-zA-Z0-9._/-]+$` on the main side.
    */
   remoteDshHome: string | null
+  /** Opaque main-process lifecycle proof; never persisted or renderer-minted. */
+  sourceFingerprint: string
 }
 
 /** Instance spec as accepted on save (kind/user/sshPort/serviceName are optional inputs). */
@@ -78,6 +80,14 @@ export interface SshLogEntry {
 export interface SshStatusChangedPayload {
   id: string
   status: SshStatusProjection
+}
+
+/** Authoritative registry lifecycle delta. A later roster snapshot cannot
+ * reveal a remove -> same-id re-add edge once the id exists again. */
+export interface SshInstancesChangedPayload {
+  removedIds: string[]
+  /** Deleted ids plus stable-id transport identity replacements. */
+  retiredIds: string[]
 }
 
 /** Remote systemd exec result over IPC: the fresh projection or {error}. */
@@ -223,8 +233,8 @@ export interface DesktopSshSurface {
   /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
-  /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
-  onInstancesChanged(callback: () => void): () => void
+  /** Registry changed (add/edit/delete via instances_set): retire removals, then re-pull the roster. */
+  onInstancesChanged(callback: (payload: SshInstancesChangedPayload) => void): () => void
 }
 
 /** One discovered ~/.ssh/config host — non-secret projection only. */
@@ -357,6 +367,8 @@ export interface SystemResumeSurface {
 export interface NotificationRequest {
   /** 来源 id（'local' | 'ssh-<id>'）。 */
   sourceId: string
+  /** Exact non-secret transport identity captured by this source generation. */
+  sourceFingerprint: string
   sessionId: string
   /** 'test' 由设置页「发送测试通知」直调（主进程跳过门禁直接显示）。 */
   kind: 'complete' | 'ask' | 'request' | 'test'
@@ -375,13 +387,23 @@ export interface NotificationSurface {
    *  调用——主进程只在就绪后放行 notification-open 推送（did-finish-load 早于
    *  监听注册，窗口重建路径的事件不能丢）。 */
   ready(): Promise<boolean>
+  /** Commit only after App has routed or deliberately discarded this exact attempt. */
+  ack(deliveryId: number, attempt: number): Promise<boolean>
   /** 主进程推送通知点击（'dsh-chamber:notification-open'）→ renderer 打开会话。 */
-  onOpen(listener: (req: { sourceId: string; sessionId: string }) => void): () => void
+  onOpen(listener: (req: {
+    sourceId: string
+    sourceFingerprint: string
+    sessionId: string
+    deliveryId: number
+    attempt: number
+  }) => void): () => void
 }
 
 /** window.dshChamber.openIn — registry capability negotiation + unified open action (open-in.ts). */
 export interface OpenInAppInfo {
   id: string
+  /** Stable presentation family (`vscode` / `file-manager` / future neutral kinds). */
+  displayKind: string
   remoteCapable: boolean
   available: boolean
 }
@@ -389,7 +411,7 @@ export interface OpenInSurface {
   /** Registry capability negotiation (fixed order); availability re-probed in the main process on every call. */
   apps(): Promise<OpenInAppInfo[]>
   /** The renderer trigger — the same runOpenInLaunch pipeline every entry point shares. */
-  open(appId: string, instanceId: string, path: string): Promise<{ ok: true } | { ok: false; error: string }>
+  open(appId: string, instanceId: string, path: string, sourceFingerprint: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** Normalized deep-link intent pushed from the main process (design 16 §2). */
@@ -397,11 +419,20 @@ export interface DeepLinkIntent {
   /** Raw registry id ('local' | registry id); the App layer prefixes 'ssh-' for remote sources. */
   instanceId: string
   path: string
+  /** Exact non-secret lifecycle proof captured before the native launch. */
+  sourceFingerprint: string
+  /** Stable across reload replay; attempt increments for each renderer send. */
+  deliveryId: number
+  attempt: number
 }
 
-/** window.dshChamber.deepLink — best-effort source-activation push for OS deep links. */
+/** window.dshChamber.deepLink — held/replayed source activation for OS deep links. */
 export interface DeepLinkSurface {
   onIntent(callback: (intent: DeepLinkIntent) => void): () => void
+  /** Signal after onIntent is installed; the main process drains only then. */
+  ready(): Promise<boolean>
+  /** Commit only after App has routed or deliberately discarded this exact attempt. */
+  ack(deliveryId: number, attempt: number): Promise<boolean>
 }
 
 /** The full bridge: app info + platform + ssh + update + chamber settings

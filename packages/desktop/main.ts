@@ -34,33 +34,49 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
-import { createTransportManager } from './transport-manager.ts';
+import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager } from './transport-manager.ts';
 import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
+import type { TransportInstanceSpec } from './transport-provider.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
-import { detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts';
+import {
+  attemptDeepLinkProtocolRegistration,
+  BoundedAckDeliveryQueue,
+  BoundedVscodeIntentQueue,
+  canDeliverRendererDeepLink,
+  canRestoreMainWindow,
+  decideDeepLinkProtocolRegistration,
+  describeUnknownError,
+  detectVscodeAvailability,
+  parseOpenVscodeIntent,
+  runVscodeLaunch,
+} from './deep-link.ts';
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
-import { listOpenInApps, normalizeOpenPathError, runOpenInLaunch } from './open-in.ts';
+import { classifyLocalPath, invokeOpenPath, listOpenInApps, runOpenInLaunch } from './open-in.ts';
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController } from './updater.ts';
 import {
   applyPlugins,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
+  ExactOwnershipRegistry,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
   materializeAndAdd,
   remoteHome,
   remotePluginList,
+  ReadyPhaseEdges,
   resolveLocalMaterializeDirectory,
   runLocalDshPlugin,
   seedRemoteChamberHostPackages,
+  scopeExecToOwnership,
+  runWithFinalOwnership,
 } from './plugin-sync.ts';
-import type { ChamberHostPackageSeed, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
+import type { ChamberHostPackageSeed, ExactOwnershipToken, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
   computeQuitRisk,
@@ -71,26 +87,52 @@ import {
   writeSettingsFile,
 } from './chamber-settings.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
-import { claimNotification, decideNotification, validateNotificationRequest } from './notifications.ts';
-import type { NotificationSettingsLike } from './notifications.ts';
+import {
+  BoundedRateLimiter,
+  claimNotificationDetailed,
+  decideNotification,
+  MAX_ACTIVE_NATIVE_NOTIFICATIONS,
+  MAX_PENDING_NOTIFICATION_OPENS,
+  NotificationSourceIncarnations,
+  NotificationSourceProofs,
+  isValidNotificationSourceFingerprint,
+  readNotificationHostBoolean,
+  releaseNotificationClaim,
+  shouldFocusApplicationBeforeShowing,
+  showNativeNotificationHonestly,
+  validateNotificationRequest,
+} from './notifications.ts';
+import type { NotificationOpenIntent, NotificationSettingsLike, NotificationSourceToken } from './notifications.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
 // process may be inconsistent and must fail closed rather than keep serving
 // IPC, transports and persistence from an indeterminate state.
 let fatalExceptionInProgress = false;
-process.on('uncaughtException', (error) => {
-  console.error('[dsh-chamber] fatal uncaught exception:', error instanceof Error ? error.stack : String(error));
+function fatalMainError(reason: unknown): void {
   if (fatalExceptionInProgress) {
-    process.abort();
+    try { process.abort(); } catch { /* no further recovery is trustworthy */ }
     return;
   }
+  // Claim terminal ownership before any formatting/logging/host call: every
+  // one of those boundaries can itself throw and must not recurse through an
+  // apparently-unclaimed fatal path.
   fatalExceptionInProgress = true;
-  app.exit(1);
+  let detail = 'unknown error';
+  try { detail = describeUnknownError(reason); } catch { /* formatter is intended safe; retain belt-and-suspenders fallback */ }
+  try { console.error('[dsh-chamber] fatal main-process error:', detail); } catch { /* console host boundary */ }
+  try {
+    app.exit(1);
+    return;
+  } catch {
+    try { process.abort(); } catch { /* process is already terminally inconsistent */ }
+  }
+}
+process.on('uncaughtException', (error) => {
+  fatalMainError(error);
 });
 process.on('unhandledRejection', (reason) => {
-  const error = reason instanceof Error ? reason : new Error(String(reason));
-  process.emit('uncaughtException', error, 'unhandledRejection');
+  fatalMainError(reason);
 });
 
 // Control-plane port (design 05 §3.3): the packaged app keeps the documented
@@ -242,27 +284,44 @@ let confirmingQuit = false;
 const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
 
 // VS Code 深链（design 16 §4.2）：OS 级深链（macOS open-url / Win+Linux
-// second-instance argv / 冷启动 argv）统一入 pendingIntents 队列，startup 完成
-// （transportManager 装载 + 主窗口就绪）后统一 drain。seenDeepLinkUrls 去重
-// （macOS open-url 与 argv 双触发同一 URL）；超过 64 条整体清空防无限增长
-// （非 LRU——清空后同 URL 可重放，打开 VS Code 幂等，无害；security-review
-// P2-4 注释与实现语义对齐）。
+// second-instance argv / 冷启动 argv）统一入有界、归一化 single-flight 队列，
+// startup 完成后顺序 drain。key = (instanceId,path)，因此 open-url/argv 的不同
+// URL 拼写仍会合并；complete 后允许用户稍后主动再次打开同一目标。
 // drainPendingIntents 在 whenReady 内赋值（依赖 wiredCtx/transportManager），
 // 冷启动到达的深链只入队、drain 就绪后消费。
-let pendingIntents: VscodeLaunchRequest[] = [];
-const seenDeepLinkUrls = new Set<string>();
+const pendingIntents = new BoundedVscodeIntentQueue(64);
 let drainPendingIntents: (() => void) | null = null;
+let drainingPendingIntents = false;
+
+// 成功启动 VS Code 与 renderer 来源激活是两条独立链：前者不等待 UI，后者
+// 必须等 App 安装 onIntent 后通过 deep-link-ready 握手才能发送。窗口加载/崩溃
+// 会复位 ready；成功 intent 在有界队列中 hold/replay，绝不发给 about:blank 或
+// 尚未订阅的 renderer。
+type RendererVscodeIntent = VscodeLaunchRequest & {
+  sourceId: string
+  sourceFingerprint: string
+  sourceGeneration: number
+}
+const pendingRendererIntents = new BoundedAckDeliveryQueue<RendererVscodeIntent>(
+  64,
+  intent => BoundedVscodeIntentQueue.key(intent),
+);
+let deepLinkRendererReady = false;
+let drainingRendererDeepLinkIntents = false;
 
 // 桌面通知（design 19 §3.3）：pendingNotificationOpens 照搬 pendingIntents 的
 // 队列 + drain 模式——点击通知时窗口可能正在重建/加载，事件不能丢；active
 // Notifications Set 持有存活引用防 GC 吞 click（macOS 已知坑，OpenChamber 同款）。
-let pendingNotificationOpens: Array<{ sourceId: string; sessionId: string }> = [];
-let drainPendingNotificationOpens: (() => void) | null = null;
+const pendingNotificationOpens = new BoundedAckDeliveryQueue<NotificationOpenIntent>(MAX_PENDING_NOTIFICATION_OPENS);
+const notificationSourceIncarnations = new NotificationSourceIncarnations();
+let drainPendingNotificationOpens: (() => boolean) | null = null;
+let drainingNotificationOpens = false;
 /** Renderer 就绪标志（design 19 §3.3）：renderer 注册 onOpen 监听后 invoke
  *  dsh-chamber:notifications-ready 置位——did-finish-load 早于监听注册，推送
  *  必须在就绪后才放行，否则窗口重建路径的点击事件会被 IPC 丢弃。 */
 let notificationOpenDrainReady = false;
-const activeNotifications = new Set<Notification>();
+const activeNotifications = new Map<Notification, NotificationSourceToken | null>();
+const nativeNotificationRateLimiter = new BoundedRateLimiter();
 
 /** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
 function scanDeepLinkUrls(argv: readonly string[]): string[] {
@@ -273,29 +332,119 @@ function scanDeepLinkUrls(argv: readonly string[]): string[] {
   return urls;
 }
 
-/** 深链入队：quit 在途 ignore（不启动 VS Code）；同 URL 去重；解析失败 loud。 */
+/** 深链入队：quit 在途 ignore（不启动 VS Code）；归一化目标 single-flight；解析失败 loud。 */
 function enqueueDeepLink(rawUrl: string): void {
   if (quitRequested) return;
-  if (seenDeepLinkUrls.has(rawUrl)) return;
-  seenDeepLinkUrls.add(rawUrl);
-  if (seenDeepLinkUrls.size > 64) seenDeepLinkUrls.clear();
   const parsed = parseOpenVscodeIntent(rawUrl);
   if (!parsed.ok) {
     console.error(`[dsh-chamber] 深链解析失败：${parsed.error}`);
     return;
   }
-  pendingIntents.push(parsed.intent);
+  const queued = pendingIntents.enqueue(parsed.intent);
+  if (!queued.accepted) {
+    if (queued.reason === 'saturated') {
+      console.warn(`[dsh-chamber] 深链启动队列容量全部被在途 intent 占用，拒绝新 intent：${parsed.intent.instanceId}`);
+    }
+    return;
+  }
+  if (queued.dropped !== null) {
+    console.warn(`[dsh-chamber] 深链启动队列已满，丢弃最旧 intent：${queued.dropped.instanceId}`);
+  }
   drainPendingIntents?.();
+}
+
+/** Hold a successful launch intent until the current renderer explicitly says
+ * its onIntent listener is installed. Used by both OS deep links and open-in. */
+function captureVscodeSource(instanceId: string): NotificationSourceToken | null {
+  return notificationSourceIncarnations.capture(instanceId === 'local' ? 'local' : `ssh-${instanceId}`);
+}
+
+function enqueueRendererDeepLinkIntent(intent: VscodeLaunchRequest, sourceToken: NotificationSourceToken): void {
+  if (!notificationSourceIncarnations.owns(sourceToken)) return;
+  const queued = pendingRendererIntents.enqueue({
+    ...intent,
+    sourceId: sourceToken.sourceId,
+    sourceFingerprint: sourceToken.fingerprint,
+    sourceGeneration: sourceToken.generation,
+  });
+  if (!queued.accepted) {
+    if (queued.reason === 'saturated') {
+      console.warn(`[dsh-chamber] renderer 深链队列容量全部被在途 intent 占用，拒绝新 intent：${intent.instanceId}`);
+    }
+    return;
+  }
+  if (queued.dropped !== null) {
+    console.warn(`[dsh-chamber] renderer 深链队列已满，丢弃最旧 intent：${queued.dropped.instanceId}`);
+  }
+  drainPendingRendererDeepLinkIntents();
+}
+
+function drainPendingRendererDeepLinkIntents(): boolean {
+  if (drainingRendererDeepLinkIntents) return true;
+  const win = mainWindow;
+  const destroyed = win === null || win.isDestroyed();
+  if (win === null || !canDeliverRendererDeepLink({
+    ready: deepLinkRendererReady,
+    currentWindow: mainWindow === win,
+    destroyed,
+    loading: destroyed ? true : win.webContents.isLoading(),
+    crashed: destroyed ? true : win.webContents.isCrashed(),
+  })) return true;
+
+  drainingRendererDeepLinkIntents = true;
+  try {
+    for (;;) {
+      const delivery = pendingRendererIntents.shift();
+      if (delivery === null) return true;
+      const intent = delivery.payload;
+      try {
+        if (
+          mainWindow !== win
+          || win.isDestroyed()
+          || win.webContents.isLoading()
+          || win.webContents.isCrashed()
+        ) {
+          throw new Error('deep-link renderer changed while draining');
+        }
+        win.webContents.send('dsh-chamber:deep-link-intent', {
+          instanceId: intent.instanceId,
+          path: intent.path,
+          sourceFingerprint: intent.sourceFingerprint,
+          deliveryId: delivery.deliveryId,
+          attempt: delivery.attempt,
+        });
+      } catch (error) {
+        // Preserve the failed item for the next renderer handshake instead of
+        // converting a transient send race into a lost/reordered activation.
+        if (!pendingRendererIntents.rollback(delivery)) {
+          console.error(`[dsh-chamber] renderer 深链 intent 回滚失败：${intent.instanceId}`);
+        }
+        if (mainWindow === win) deepLinkRendererReady = false;
+        console.error('[dsh-chamber] 深链 intent 推送失败，等待 renderer 重试：', describeUnknownError(error));
+        return false;
+      }
+    }
+  } finally {
+    drainingRendererDeepLinkIntents = false;
+  }
 }
 
 /** 通知点击入队（design 19 §3.3）：quit 在途 ignore；入队后立即 drain（窗口
  *  已加载则直接推送，重建/加载中由 did-finish-load 补发——窗口关闭期间点击
  *  通知不丢事件，照搬 pendingIntents 模式）。有界队列（64 条上限，与
- *  seenDeepLinkUrls 同款防御）：窗口长期无法加载时超限丢弃最旧，绝不无限增长。 */
-function enqueueNotificationOpen(sourceId: string, sessionId: string): void {
+ *  renderer 深链队列同款防御）：窗口长期无法加载时超限丢弃最旧，绝不无限增长。 */
+function enqueueNotificationOpen(sourceToken: NotificationSourceToken, sessionId: string): void {
   if (quitRequested) return;
-  pendingNotificationOpens.push({ sourceId, sessionId });
-  if (pendingNotificationOpens.length > 64) pendingNotificationOpens.shift();
+  if (!notificationSourceIncarnations.owns(sourceToken)) return;
+  const { sourceId, fingerprint: sourceFingerprint, generation: sourceGeneration } = sourceToken;
+  const queued = pendingNotificationOpens.enqueue({ sourceId, sourceFingerprint, sessionId, sourceGeneration });
+  if (!queued.accepted) {
+    console.warn(`[dsh-chamber] 通知打开队列容量全部被未确认事件占用，拒绝新事件：${sourceId}/${sessionId}`);
+    return;
+  }
+  if (queued.dropped !== null) {
+    console.warn(`[dsh-chamber] 通知打开队列已满，丢弃最旧待发事件：${queued.dropped.sourceId}/${queued.dropped.sessionId}`);
+  }
   drainPendingNotificationOpens?.();
 }
 
@@ -353,7 +502,7 @@ function maybeCreateTray(cp: PlaneHandle) {
     console.log('[dsh-chamber] 托盘已创建');
   } catch (error) {
     tray = null;
-    console.warn('[dsh-chamber] 托盘创建失败，跳过：', String(error));
+    console.warn('[dsh-chamber] 托盘创建失败，跳过：', describeUnknownError(error));
   }
 }
 
@@ -361,22 +510,22 @@ function maybeCreateTray(cp: PlaneHandle) {
  * 深链协议注册（design 16 §4.3）：`app.isPackaged` 门控——开发态注册会把裸
  * Electron 注册成 scheme handler，污染 LaunchServices，与打包版 bundle id
  * （com.dshchamber.desktop）冲突（镜像托盘先例）。win32 首版门控（暂缓一致性，
- * 镜像 ssh 密码 askpass 门控）；linux 需显式 execPath + relaunch args
- * （Electron 文档）；macOS 打包版由 electron-builder `protocols` 键自动生成
+ * 镜像 ssh 密码 askpass 门控）；打包 Linux/macOS 都使用无 relaunch args 形态——
+ * argv[1] 可能正是本次冷启动 URL，绝不能将它固化到后续协议启动；macOS 打包版
+ * 另由 electron-builder `protocols` 键自动生成
  * CFBundleURLTypes，此处 setAsDefaultProtocolClient 兜底。失败 loud，绝不
  * 打断启动。
  */
 function registerDeepLinkProtocol(): void {
-  if (!app.isPackaged || process.platform === 'win32') return;
-  try {
-    if (process.platform === 'linux') {
-      const relaunchArgs = process.argv.length >= 2 ? [path.resolve(process.argv[1])] : [];
-      app.setAsDefaultProtocolClient('dsh-chamber', process.execPath, relaunchArgs);
-    } else {
-      app.setAsDefaultProtocolClient('dsh-chamber');
-    }
-  } catch (error) {
-    console.error('[dsh-chamber] 深链协议注册失败：', error);
+  const decision = decideDeepLinkProtocolRegistration({ isPackaged: app.isPackaged, platform: process.platform });
+  if (decision.action === 'skip') return;
+  // Packaged Linux is the same no-args form as packaged macOS. argv[1] may be
+  // the cold-start protocol URL; persisting it as a relaunch arg poisons all
+  // subsequent launches. The executable+script form is only for defaultApp
+  // development, and development registration is deliberately gated off.
+  const result = attemptDeepLinkProtocolRegistration(() => app.setAsDefaultProtocolClient('dsh-chamber'));
+  if (!result.ok) {
+    console.error(`[dsh-chamber] 深链协议注册失败：${result.error}`);
   }
 }
 
@@ -386,14 +535,26 @@ function registerDeepLinkProtocol(): void {
  * 这一条恢复路径——没有重建分支时，窗口一旦关闭应用就以无窗口状态常驻，
  * 点任何入口都毫无反应。
  */
-function showMainWindow(): void {
+function showMainWindow(): boolean {
+  if (!canRestoreMainWindow(quitRequested)) return false;
+  if (shouldFocusApplicationBeforeShowing(process.platform)) {
+    try {
+      app.focus({ steal: true });
+    } catch (error) {
+      console.warn('[dsh-chamber] macOS 应用聚焦失败，继续恢复窗口：', describeUnknownError(error));
+    }
+  }
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
-    return;
+    return true;
   }
-  if (mainWindowUrl !== null) createMainWindow(mainWindowUrl, false);
+  if (mainWindowUrl !== null) {
+    createMainWindow(mainWindowUrl, false);
+    return true;
+  }
+  return false;
 }
 
 /** 单窗口聚焦判定（通知裁决的权威复查，design 19 §3.3）：渲染端 document.hasFocus
@@ -413,73 +574,146 @@ function chamberSettingsStatus(): ChamberSettingsStatus {
 
 /** 设置变更推送（主窗口存活时；无窗口常驻期间由下次查询兜底）。 */
 function pushSettingsChanged(): void {
-  if (mainWindow !== null && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('dsh-chamber:settings-changed', chamberSettingsStatus());
+  const win = mainWindow;
+  if (win === null) return;
+  const pushed = attemptCommittedRegistryPush(() => {
+    if (mainWindow !== win || win.isDestroyed()) throw new Error('settings renderer changed before push');
+    win.webContents.send('dsh-chamber:settings-changed', chamberSettingsStatus());
+  });
+  if (!pushed.sent) {
+    try { console.warn(`[dsh-chamber] settings 已保存但变更 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* best effort */ }
   }
 }
 
+function pushHeldSystemResume(win: BrowserWindow, timestamp: number): boolean {
+  const pushed = attemptCommittedRegistryPush(() => {
+    if (mainWindow !== win || win.isDestroyed()) throw new Error('system-resume renderer changed before push');
+    win.webContents.send('dsh-chamber:system-resume', { timestamp });
+  });
+  if (!pushed.sent) {
+    try { console.warn(`[dsh-chamber] system-resume push 失败，保留待重试：${pushed.error}`); } catch { /* best effort */ }
+  }
+  return pushed.sent;
+}
+
 /**
- * 桌面原生通知主链路（design 19 §3.3）：payload 白名单 → 去重 claim → 平台
- * 支持 → 设置裁决 → 显示。返回是否实际显示（IPC 调用方/渲染端可据此判断）。
- * 'test' 绕过 claim 与全部设置门禁（设置页「发送测试通知」）；通知失败静默
- * 降级不误报——会话业务不受影响，侧边栏蓝点照常。
+ * 桌面原生通知主链路（design 19 §3.3）：payload 白名单 → 平台支持 → 设置裁决
+ * → 有界 claim / 全局速率 / active cap → 显示。返回是否收到原生 `show` 事件
+ * （异步 failed/close/timeout 均为 false）。'test' 绕过 claim 与设置门禁，但仍受
+ * 全局宿主预算约束；通知失败降级且 loud，不误报成功，会话业务/侧边栏蓝点不受影响。
  */
-function maybeShowNativeNotification(payload: unknown): boolean {
+async function maybeShowNativeNotification(payload: unknown): Promise<boolean> {
   const validated = validateNotificationRequest(payload);
   if (!validated.ok) {
     console.warn(`[dsh-chamber] 拒绝非法通知 payload：${validated.error}`);
     return false;
   }
   const request = validated.request;
-  if (!Notification.isSupported()) {
-    console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
-    return false;
-  }
   // 设置权威在主进程内存（chamberSettings.notifications，settings-set 即时更新）；
   // 旧文件缺字段时用 DEFAULT 兜底（normalizeSettings 已归一，此处仅防御）。
   const settings: NotificationSettingsLike = {
     ...DEFAULT_CHAMBER_SETTINGS.notifications,
     ...(chamberSettings.notifications ?? {}),
   };
+  const focused = readNotificationHostBoolean(() => isAnyWindowFocused());
+  if (!focused.ok) {
+    console.warn(`[dsh-chamber] 通知窗口焦点探测失败：${focused.error}`);
+    return false;
+  }
   const decision = decideNotification({
     request,
     settings,
-    anyWindowFocused: isAnyWindowFocused(),
+    anyWindowFocused: focused.value,
   });
   if (decision.action === 'skip') return false;
-  // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
-  // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
-  if (request.kind !== 'test' && !claimNotification(request)) {
+  if (!notificationSourceIncarnations.matches(request.sourceId, request.sourceFingerprint)) {
+    console.warn(`[dsh-chamber] 通知来源 fingerprint 已过期：${request.sourceId}`);
     return false;
   }
+  const sourceToken = request.kind === 'test' ? null : notificationSourceIncarnations.capture(request.sourceId);
+  if (request.kind !== 'test' && sourceToken === null) {
+    console.warn(`[dsh-chamber] 通知来源已不在当前 registry：${request.sourceId}`);
+    return false;
+  }
+  // A disabled/kind/focus decision is terminal before consulting the host.
+  // Unsupported-platform logging should describe an actual show attempt, not
+  // every deliberately suppressed renderer edge.
+  const supported = readNotificationHostBoolean(() => Notification.isSupported());
+  if (!supported.ok) {
+    console.warn(`[dsh-chamber] 原生通知能力探测失败：${supported.error}`);
+    return false;
+  }
+  if (!supported.value) {
+    console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
+    return false;
+  }
+  // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
+  // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
+  const claim = claimNotificationDetailed(request);
+  if (!claim.accepted) {
+    if (claim.reason === 'saturated') {
+      console.warn('[dsh-chamber] 通知去重窗口已达硬上限，拒绝新通知');
+    }
+    return false;
+  }
+  if (activeNotifications.size >= MAX_ACTIVE_NATIVE_NOTIFICATIONS) {
+    releaseNotificationClaim(claim.token);
+    console.warn(`[dsh-chamber] 活跃原生通知已达 ${MAX_ACTIVE_NATIVE_NOTIFICATIONS} 条硬上限，拒绝新通知`);
+    return false;
+  }
+  if (!nativeNotificationRateLimiter.tryAcquire()) {
+    releaseNotificationClaim(claim.token);
+    console.warn('[dsh-chamber] 原生通知发送速率达到硬上限，拒绝新通知');
+    return false;
+  }
+  let notification: Notification | null = null;
   try {
-    const notification = new Notification({
+    const created = new Notification({
       title: request.title,
       body: request.body,
       silent: false,
       // macOS 系统提示音（OpenChamber 同款）；其余平台交给系统默认。
       ...(process.platform === 'darwin' ? { sound: 'Glass' } : {}),
     });
+    notification = created;
     // activeNotifications 持有存活引用防 GC 吞 click（macOS 已知坑）。
-    activeNotifications.add(notification);
-    notification.on('click', () => {
-      // 聚焦/显示窗口（存在则 restore+focus，无窗则重建）+ 打开对应会话：先把
-      // 打开意图入队并 drain，窗口未就绪时由 did-finish-load 补发。'test'
-      // 通知（设置页测试按钮）没有会话上下文，click 只聚焦不打开。
-      showMainWindow();
-      if (request.kind !== 'test') enqueueNotificationOpen(request.sourceId, request.sessionId);
+    activeNotifications.set(created, sourceToken);
+    created.on('click', () => {
+      try {
+        // The native object can outlive registry removal + same-id re-add. Its
+        // captured generation must still own the source before either focusing
+        // the replacement shell or enqueueing a session-open intent.
+        if (sourceToken !== null && !notificationSourceIncarnations.owns(sourceToken)) {
+          console.warn(`[dsh-chamber] 忽略旧来源代际的通知点击：${request.sourceId}`);
+          return;
+        }
+        // 聚焦/显示窗口（存在则 restore+focus，无窗则重建）+ 打开对应会话：先把
+        // 打开意图入队并 drain，窗口未就绪时由 did-finish-load 补发。'test'
+        // 通知（设置页测试按钮）没有会话上下文，click 只聚焦不打开。
+        if (!showMainWindow()) return;
+        if (sourceToken !== null) enqueueNotificationOpen(sourceToken, request.sessionId);
+      } catch (error) {
+        try { console.warn(`[dsh-chamber] 原生通知点击处理失败：${describeUnknownError(error)}`); } catch { /* event boundary must never throw */ }
+      }
     });
-    notification.on('close', () => {
-      activeNotifications.delete(notification);
+    created.on('close', () => {
+      activeNotifications.delete(created);
     });
-    notification.on('failed', (_event, error) => {
-      console.warn('[dsh-chamber] 原生通知显示失败：', error);
-      activeNotifications.delete(notification);
-    });
-    notification.show();
+    const outcome = await showNativeNotificationHonestly(created);
+    if (!outcome.shown) {
+      activeNotifications.delete(created);
+      releaseNotificationClaim(claim.token);
+      console.warn(`[dsh-chamber] 原生通知显示失败：${outcome.error}`);
+      return false;
+    }
     return true;
   } catch (error) {
-    console.warn('[dsh-chamber] 创建原生通知失败：', error);
+    if (notification !== null) {
+      activeNotifications.delete(notification);
+      try { notification.close(); } catch { /* best-effort host cleanup */ }
+    }
+    releaseNotificationClaim(claim.token);
+    try { console.warn('[dsh-chamber] 创建/监听原生通知失败：', describeUnknownError(error)); } catch { /* IPC must still settle false */ }
     return false;
   }
 }
@@ -529,7 +763,7 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
     }
     return { ok: true };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: describeUnknownError(error) };
   }
 }
 
@@ -641,12 +875,25 @@ function installRendererRecovery(win: BrowserWindow): void {
   };
   win.webContents.on('did-finish-load', () => {
     loadedOnce = true;
+    // ready() can run while late subresources still keep isLoading() true.
+    // The first drain then correctly holds; finish is the deterministic replay
+    // edge. Guard window identity so an old window cannot drain/reset a newer
+    // main window's queues.
+    if (mainWindow === win) {
+      drainPendingRendererDeepLinkIntents();
+      drainPendingNotificationOpens?.();
+    }
   });
   win.webContents.on('render-process-gone', (_event, details) => {
     if (details.reason === 'clean-exit') return; // 用户关窗等正常退出
     // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
     // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
-    notificationOpenDrainReady = false;
+    if (mainWindow === win) {
+      notificationOpenDrainReady = false;
+      deepLinkRendererReady = false;
+      pendingNotificationOpens.requeueInFlight();
+      pendingRendererIntents.requeueInFlight();
+    }
     console.error(
       `[dsh-chamber] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}`,
     );
@@ -741,11 +988,22 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 到 ready() invoke 之后——若在 finish 时重置会把已置位的标志 clobber 成永久
   // false。start-loading 必先于页面脚本执行（invoke 恒在其后），顺序保证成立。
   win.webContents.on('did-start-loading', () => {
-    notificationOpenDrainReady = false;
-    drainPendingNotificationOpens?.();
+    if (mainWindow === win) {
+      notificationOpenDrainReady = false;
+      deepLinkRendererReady = false;
+      pendingNotificationOpens.requeueInFlight();
+      pendingRendererIntents.requeueInFlight();
+      drainPendingNotificationOpens?.();
+    }
   });
   win.on('closed', () => {
-    if (mainWindow === win) mainWindow = null;
+    if (mainWindow === win) {
+      notificationOpenDrainReady = false;
+      deepLinkRendererReady = false;
+      pendingNotificationOpens.requeueInFlight();
+      pendingRendererIntents.requeueInFlight();
+      mainWindow = null;
+    }
   });
   // 关窗到托盘（design 14 D1）：设置 = hide-to-tray 且存在恢复入口（win/linux
   // 需托盘；macOS Dock 常驻）且非真正退出在途 → hide（不 destroy），控制面/
@@ -761,13 +1019,13 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 无窗口常驻（托盘态）期间的唤醒事件由主进程 held（lastResume），窗口
   // 恢复可见时一次性补发（design 14 D4）。
   win.on('show', () => {
-    if (lastResume !== null) {
-      win.webContents.send('dsh-chamber:system-resume', { timestamp: lastResume });
-      lastResume = null;
+    const heldResume = lastResume;
+    if (heldResume !== null && pushHeldSystemResume(win, heldResume)) {
+      if (lastResume === heldResume) lastResume = null;
     }
   });
   void win.loadURL(url).catch((loadError) => {
-    const detail = loadError instanceof Error ? (loadError.stack ?? loadError.message) : String(loadError);
+      const detail = describeUnknownError(loadError);
     if (fatalOnLoadFailure) {
       dialog.showErrorBox('dsh-chamber 启动失败', `前端加载失败：\n${detail}`);
       void controlPlane?.stop().catch(err => console.error('[dsh-chamber] 控制面停止失败：', err));
@@ -798,7 +1056,7 @@ if (!gotTheLock) {
   });
 
   // macOS 深链（design 16 §4.2）：冷启动深链先于 startup 完成到达，必须入
-  // pendingIntents 队列；与冷启动 argv 扫描的双触发由 seenDeepLinkUrls 去重。
+  // pendingIntents 队列；与冷启动 argv 扫描的双触发由归一化 intent key 去重。
   // 在模块顶层（whenReady 之前）注册，冷启动 URL 不丢。
   app.on('open-url', (event, url) => {
     event.preventDefault();
@@ -991,7 +1249,7 @@ if (!gotTheLock) {
       });
       await controlPlane.start();
     } catch (err) {
-      const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      const detail = describeUnknownError(err);
       dialog.showErrorBox('dsh-chamber 启动失败', `控制面启动失败：\n${detail}`);
       app.exit(1);
       return;
@@ -1061,18 +1319,39 @@ if (!gotTheLock) {
     // 返回 true 与 preload 的 Promise<boolean> 声明一致（成功置位信号）。
     ipcMain.handle('dsh-chamber:notifications-ready', trustedIpc(() => {
       notificationOpenDrainReady = true;
-      drainPendingNotificationOpens?.();
-      return true;
+      const drainAccepted = drainPendingNotificationOpens?.() ?? true;
+      // A send race revokes ready inside the drain. Returning false makes the
+      // renderer's bounded readiness retry establish the next handshake.
+      return drainAccepted && notificationOpenDrainReady;
+    }));
+    ipcMain.handle('dsh-chamber:notification-open-ack', trustedIpc((payload: unknown) => {
+      if (payload === null || typeof payload !== 'object') return false;
+      const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
+      return pendingNotificationOpens.acknowledge(deliveryId as number, attempt as number);
+    }));
+    // Deep-link renderer readiness (design 16 hold/replay): App invokes this
+    // only after installing deepLink.onIntent. Successful cold-start launches
+    // held before that point are replayed now; navigation/crash resets the bit.
+    ipcMain.handle('dsh-chamber:deep-link-ready', trustedIpc(() => {
+      deepLinkRendererReady = true;
+      const drainAccepted = drainPendingRendererDeepLinkIntents();
+      return drainAccepted && deepLinkRendererReady;
+    }));
+    ipcMain.handle('dsh-chamber:deep-link-ack', trustedIpc((payload: unknown) => {
+      if (payload === null || typeof payload !== 'object') return false;
+      const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
+      return pendingRendererIntents.acknowledge(deliveryId as number, attempt as number);
     }));
 
     // OS 唤醒即时重探 + 推送（design 14 D4）：主进程对 error/degraded 实例
     // 立即重探（绝不触碰 idle），并向渲染端 push（dsh 前端连接立即重连）。
     powerMonitor.on('resume', () => {
       lastResume = Date.now();
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('dsh-chamber:system-resume', { timestamp: lastResume });
+      const win = mainWindow;
+      const heldResume = lastResume;
+      if (win !== null && heldResume !== null && pushHeldSystemResume(win, heldResume)) {
         // 窗口存活（含隐藏）已即时收到：清空 held 值，避免 hide→show 补发过期事件。
-        lastResume = null;
+        if (lastResume === heldResume) lastResume = null;
       }
       reconnectStaleTransports();
     });
@@ -1123,6 +1402,31 @@ if (!gotTheLock) {
     // Capture the non-null manager before registering closures over it (the
     // ipc handlers run later, after startup).
     const sm = transportManager;
+    const transportIdentityFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
+      instance.kind,
+      instance.host,
+      instance.user,
+      instance.sshPort,
+      instance.remotePort,
+    ]);
+    const operationalFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
+      transportIdentityFingerprint(instance),
+      instance.serviceName,
+      instance.remoteDshHome,
+    ]);
+    type ProjectedTransportInstanceSpec = TransportInstanceSpec & { sourceFingerprint: string }
+    const notificationSourceProofs = new NotificationSourceProofs();
+    const projectRemoteInstances = (instances: readonly TransportInstanceSpec[]): ProjectedTransportInstanceSpec[] =>
+      notificationSourceProofs.replaceRemoteInstances(instances);
+    const syncNotificationSources = (instances: readonly ProjectedTransportInstanceSpec[]): string[] =>
+      notificationSourceIncarnations.replaceRemoteSources(instances.map(instance => ({
+        sourceId: `${instance.kind}-${instance.id}`,
+        fingerprint: instance.sourceFingerprint,
+      })));
+    // Native notifications can be requested only for sources in the loaded
+    // authoritative registry. This also establishes the initial incarnation
+    // before the notify IPC handler can run.
+    syncNotificationSources(projectRemoteInstances(sm.listInstances()));
     // Plugin-sync dependency injection (design 13 M2+M3, contract A): the
     // orchestration in plugin-sync.ts is decoupled from the transport runtime,
     // so it is adapted here onto transport-manager.exec(id, action, payload?).
@@ -1168,11 +1472,11 @@ if (!gotTheLock) {
         return Promise.resolve(null);
       }
     };
-    // In-flight guard for the ready-time chamber host-package seed (design 09 §6
-    // 遗留 1): a Set of instance ids whose seed is currently running — pure
-    // concurrency guard, not a "seeded" flag (the seed is idempotent, so
-    // reconnects re-run a cheap content-hash no-op instead).
-    const hostPackageSeeding = new Set<string>();
+    // Exact-incarnation single-flight for ready/manual host-package seeds. A
+    // changed same-id target supersedes immediately; stale finally/log/result
+    // paths cannot clear or write into its replacement.
+    const hostPackageSeeding = new ExactOwnershipRegistry();
+    const readySeedEdges = new ReadyPhaseEdges();
     // The authoritative local dsh home is <userData>/state/dsh-home (the real
     // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
     const localDshHome = path.join(app.getPath('userData'), 'state', 'dsh-home');
@@ -1199,14 +1503,85 @@ if (!gotTheLock) {
         label: 'git-worktree',
       },
     ];
-    const findRemoteSpec = (id: string): RemoteSpec | null => {
+    type RemoteTarget = {
+      spec: RemoteSpec
+      fingerprint: string
+      sourceToken: NotificationSourceToken
+    }
+    const findRemoteTarget = (id: string): RemoteTarget | null => {
       const instance = sm.listInstances().find((entry) => entry.id === id);
       if (instance === undefined) return null;
-      return { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null };
+      const sourceToken = notificationSourceIncarnations.capture(`${instance.kind}-${instance.id}`);
+      if (sourceToken === null) return null;
+      return {
+        spec: { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null },
+        fingerprint: operationalFingerprint(instance),
+        sourceToken,
+      };
+    };
+    const ownsRemoteTarget = (target: RemoteTarget): boolean =>
+      notificationSourceIncarnations.owns(target.sourceToken)
+      && findRemoteTarget(target.spec.id)?.fingerprint === target.fingerprint;
+    const scopedExecForTarget = (target: RemoteTarget, extraOwner: () => boolean = () => true): ExecFn =>
+      scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target));
+    const scopedStatusForTarget = (target: RemoteTarget): StatusFn => id =>
+      id === target.spec.id && ownsRemoteTarget(target) ? statusTransport(id) : null;
+    const scopedProbeForTarget = (target: RemoteTarget, probe: () => Promise<boolean | null>): (() => Promise<boolean | null>) => async () => {
+      if (!ownsRemoteTarget(target)) return null;
+      const result = await probe();
+      return ownsRemoteTarget(target) ? result : null;
     };
     // Remote install-level fallback path shared by both chamber host packages.
     const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
       `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`;
+    const startAutomaticHostSeed = (id: string): void => {
+      const target = findRemoteTarget(id);
+      if (target === null) return;
+      const begun = hostPackageSeeding.begin(id, target.fingerprint);
+      if (!begun.accepted) return;
+      const token = begun.token;
+      const ownsSeed = () => hostPackageSeeding.owns(token) && ownsRemoteTarget(target);
+      const appendSeedLog = (level: 'info' | 'error', message: string): void => {
+        if (ownsSeed()) sm.appendLog(id, level, message);
+      };
+      void (async () => {
+        try {
+          const builtSeeds = chamberHostPackageSeeds.filter(seed => existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+          if (builtSeeds.length === 0) {
+            if (ownsSeed()) console.log(`[dsh-chamber] chamber host seed skipped for ${id}: no built host package artifacts`);
+            appendSeedLog('info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用');
+            return;
+          }
+          const missingSeeds = chamberHostPackageSeeds.filter(seed => !builtSeeds.includes(seed));
+          if (missingSeeds.length > 0) {
+            appendSeedLog('info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`);
+          }
+          const result = await seedRemoteChamberHostPackages(
+            scopedExecForTarget(target, ownsSeed),
+            target.spec,
+            chamberHostPackageSeeds,
+          );
+          if (!ownsSeed()) return;
+          if (result.ok) {
+            const seeded = result.packages.map(entry => entry.insertId).join(',');
+            console.log(`[dsh-chamber] chamber host packages seeded onto ${id} (${seeded}; wrote=${result.wrote}, patched=${result.patched})`);
+            const packageSummary = result.packages.map(entry =>
+              `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}（${remoteHostPackageDir(target.spec, entry.packageName)}）`).join('；');
+            appendSeedLog('info', `chamber host 包注入完成：${packageSummary}；boot 层${result.patched ? '已合并挂载' : '无需改动'}（重启后生效）`);
+          } else {
+            console.warn(`[dsh-chamber] chamber host seed failed for ${id}: ${result.error}`);
+            appendSeedLog('error', `chamber host 包注入失败：${result.error}`);
+          }
+        } catch (err) {
+          if (!ownsSeed()) return;
+          const detail = describeUnknownError(err);
+          console.warn(`[dsh-chamber] chamber host seed error for ${id}: ${detail}`);
+          appendSeedLog('error', `chamber host 包注入异常：${detail}`);
+        } finally {
+          hostPackageSeeding.finish(token);
+        }
+      })();
+    };
     sm.onStatusChanged((id, status) => {
       // Ready transport → per-instance reverse proxy (design 05 §7.1):
       // register the instance transport while it is ready, unregister the
@@ -1226,67 +1601,77 @@ if (!gotTheLock) {
       // NOT silent — the plugin management UI probes the live state and shows
       // the injection block verbatim (installed/patched), and the seed result
       // is logged here; a failure is retried on the next ready (the seed is
-      // idempotent, content-hash skip). Idempotency also makes the guard a
-      // pure in-flight Set: reconnects re-run a cheap no-op seed instead of
-      // tracking a persisted "seeded" flag that could drift from the remote.
-      if (status.kind === 'ssh' && status.phase === 'ready' && !hostPackageSeeding.has(id)) {
-        hostPackageSeeding.add(id);
-        void (async () => {
-          try {
-            const builtSeeds = chamberHostPackageSeeds.filter(seed => existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
-            if (builtSeeds.length === 0) {
-              console.log(`[dsh-chamber] chamber host seed skipped for ${id}: no built host package artifacts`);
-              sm.appendLog(id, 'info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用');
-              return;
-            }
-            const missingSeeds = chamberHostPackageSeeds.filter(seed => !builtSeeds.includes(seed));
-            if (missingSeeds.length > 0) {
-              sm.appendLog(id, 'info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`);
-            }
-            const spec = findRemoteSpec(id);
-            if (spec === null) return;
-            const result = await seedRemoteChamberHostPackages(execTransport, spec, chamberHostPackageSeeds);
-            if (result.ok) {
-              const seeded = result.packages.map(entry => entry.insertId).join(',');
-              const message = `chamber host packages seeded onto ${id} (${seeded}; wrote=${result.wrote}, patched=${result.patched})`;
-              console.log(`[dsh-chamber] ${message}`);
-              const packageSummary = result.packages.map(entry =>
-                `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}（${remoteHostPackageDir(spec, entry.packageName)}）`).join('；');
-              sm.appendLog(id, 'info', `chamber host 包注入完成：${packageSummary}；boot 层${result.patched ? '已合并挂载' : '无需改动'}（重启后生效）`);
-            } else {
-              console.warn(`[dsh-chamber] chamber host seed failed for ${id}: ${result.error}`);
-              sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
-            }
-          } catch (err) {
-            const message = `chamber host seed error for ${id}: ${String(err)}`;
-            console.warn(`[dsh-chamber] ${message}`);
-            sm.appendLog(id, 'error', `chamber host 包注入异常：${String(err)}`);
-          } finally {
-            hostPackageSeeding.delete(id);
-          }
-        })();
-      }
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('desktop_ssh_status_changed', { id, status });
+      // idempotent, content-hash skip). The exact token is only an in-flight
+      // owner, never a persisted "seeded" claim.
+      if (status.kind === 'ssh' && readySeedEdges.observe(id, status.phase)) startAutomaticHostSeed(id);
+      const statusWindow = mainWindow;
+      if (statusWindow !== null) {
+        const pushed = attemptCommittedRegistryPush(() => {
+          if (mainWindow !== statusWindow || statusWindow.isDestroyed()) throw new Error('status renderer changed before push');
+          statusWindow.webContents.send('desktop_ssh_status_changed', { id, status });
+        });
+        if (!pushed.sent) {
+          try { console.warn(`[dsh-chamber] transport 状态已更新但 renderer push 失败：${pushed.error}`); } catch { /* callback boundary */ }
+        }
       }
     });
 
-    ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => sm.listInstances()));
+    ipcMain.handle('desktop_ssh_instances_get', trustedIpc(() => projectRemoteInstances(sm.listInstances())));
     ipcMain.handle('desktop_ssh_instances_set', trustedIpc((instances) => {
-      const before = new Set(sm.listInstances().map(instance => instance.id));
+      const before = sm.listInstances();
       const saved = sm.saveInstances(instances);
+      const projectedSaved = projectRemoteInstances(saved);
+      const removedIds = computeRemovedInstanceIds(before, saved);
+      const retiredIds = computeRetiredInstanceIds(before, saved);
+      const savedById = new Map(saved.map(instance => [instance.id, instance]));
+      const reseedIds: string[] = [];
+      for (const id of removedIds) readySeedEdges.forget(id);
+      // Revoke every multi-step remote operation owner whose exact target was
+      // deleted or operationally edited. A replacement can begin immediately;
+      // old finally/results cannot clear or log into it.
+      for (const previous of before) {
+        const current = savedById.get(previous.id);
+        if (current === undefined || operationalFingerprint(previous) !== operationalFingerprint(current)) {
+          hostPackageSeeding.revoke(previous.id);
+          if (current !== undefined) reseedIds.push(previous.id);
+        }
+      }
+      const retiredNotificationSources = new Set(syncNotificationSources(projectedSaved));
+      if (retiredNotificationSources.size > 0) {
+        pendingNotificationOpens.discardWhere(intent => retiredNotificationSources.has(intent.sourceId));
+        pendingRendererIntents.discardWhere(intent => retiredNotificationSources.has(intent.sourceId));
+        for (const [notification, token] of activeNotifications) {
+          if (token === null || !retiredNotificationSources.has(token.sourceId)) continue;
+          activeNotifications.delete(notification);
+          try { notification.close(); } catch { /* best-effort stale banner retirement */ }
+        }
+      }
       // A removed instance's in-memory password dies with its registry entry
       // (memory-only credentials never outlive the instance they belong to).
-      for (const id of before) {
+      for (const { id } of before) {
         if (!saved.some(instance => instance.id === id)) setSshPassword(id, null);
+      }
+      // service/home-only edits intentionally preserve a ready tunnel, so no
+      // new status transition will trigger the ready-time seed. Start the new
+      // exact-owner seed explicitly; transport edits remain connecting here
+      // and are picked up by their later ready transition.
+      for (const id of reseedIds) {
+        if (sm.status(id)?.phase === 'ready') startAutomaticHostSeed(id);
       }
       // Registry-change push: the renderer App layer re-pulls immediately
       // (roster/auto-connect/reap), so add/edit/delete propagates without
       // waiting for the 30s roster poll fallback.
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('desktop_ssh_instances_changed');
+      const registryWindow = mainWindow;
+      if (registryWindow !== null) {
+        const pushed = attemptCommittedRegistryPush(() => {
+          if (mainWindow !== registryWindow || registryWindow.isDestroyed()) throw new Error('registry renderer changed before push');
+          registryWindow.webContents.send('desktop_ssh_instances_changed', { removedIds, retiredIds });
+        });
+        if (!pushed.sent) {
+          console.warn(`[dsh-chamber] registry 已保存但 lifecycle push 失败（等待 renderer 重拉）：${pushed.error}`);
+        }
       }
-      return saved;
+      return projectedSaved;
     }));
     // Password auth (design 05 §8, plaintext-file fallback): the password is
     // held in MAIN-PROCESS memory and mirrored to <userData>/ssh-passwords.json
@@ -1311,7 +1696,7 @@ if (!gotTheLock) {
         setSshPassword(id, typeof password === 'string' && password !== '' ? password : null);
         return { ok: true };
       } catch (error) {
-        return { error: error instanceof Error ? error.message : String(error) };
+        return { error: describeUnknownError(error) };
       }
     }));
     // ~/.ssh/config discovery (design 05 §5): non-secret host projections
@@ -1331,13 +1716,13 @@ if (!gotTheLock) {
     // failure — loud, never a silent empty success, never an unhandled
     // rejection.
     ipcMain.handle('desktop_ssh_start_service', trustedIpc(({ id }) =>
-      sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
+      sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
     ipcMain.handle('desktop_ssh_stop_service', trustedIpc(({ id }) =>
-      sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
+      sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
     ipcMain.handle('desktop_ssh_is_active', trustedIpc(({ id }) =>
-      sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${String(err)}` })),
+      sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
     // Plugin management surface (design 13 M2+M3, contract B): restart the remote
     // service, read the remote/local plugin manifests, apply a plugin-set change,
@@ -1349,16 +1734,22 @@ if (!gotTheLock) {
     ipcMain.handle('desktop_ssh_restart_service', trustedIpc(({ id }) =>
       execTransport(id, 'restart').then(result =>
         (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
-      ).catch(err => ({ error: `exec failed: ${String(err)}` })),
+      ).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
     ));
     ipcMain.handle('desktop_ssh_plugin_list', trustedIpc(async ({ id }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
-      return remotePluginList(execTransport, spec, { liveProbe: liveProbeFor(id), gitWorktreeLiveProbe: gitWorktreeLiveProbeFor(id) });
+      const target = findRemoteTarget(id);
+      if (target === null) return { ok: false, error: 'ssh instance not found' };
+      return runWithFinalOwnership(
+        () => ownsRemoteTarget(target),
+        () => remotePluginList(scopedExecForTarget(target), target.spec, {
+          liveProbe: scopedProbeForTarget(target, liveProbeFor(id)),
+          gitWorktreeLiveProbe: scopedProbeForTarget(target, gitWorktreeLiveProbeFor(id)),
+        }),
+      );
     }));
     ipcMain.handle('desktop_ssh_plugin_apply', trustedIpc(async ({ id, add, remove, restart }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      const target = findRemoteTarget(id);
+      if (target === null) return { ok: false, error: 'ssh instance not found' };
       // A non-boolean `restart` (e.g. the string 'false') must never be
       // treated as truthy and trigger an unwanted restart — refused here
       // before any exec (applyPlugins re-checks too, defense in depth).
@@ -1377,13 +1768,22 @@ if (!gotTheLock) {
         console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
         knownBundles = undefined;
       }
-      return applyPlugins(execTransport, statusTransport, spec, { add, remove, restart }, { knownBundles });
+      return runWithFinalOwnership(
+        () => ownsRemoteTarget(target),
+        () => applyPlugins(
+          scopedExecForTarget(target),
+          scopedStatusForTarget(target),
+          target.spec,
+          { add, remove, restart },
+          { knownBundles, ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}` },
+        ),
+      );
     }));
     ipcMain.handle('desktop_local_plugin_list', trustedIpc(() => {
       try {
         return { ok: true, manifest: localPluginList(localDshHome) };
       } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        return { ok: false, error: describeUnknownError(error) };
       }
     }));
     ipcMain.handle('desktop_npm_search', trustedIpc(async ({ query }) => {
@@ -1410,7 +1810,7 @@ if (!gotTheLock) {
           }));
         return { ok: true, packages };
       } catch (error) {
-        return { ok: false, error: `npm search failed: ${String(error)}` };
+        return { ok: false, error: `npm search failed: ${describeUnknownError(error)}` };
       } finally {
         clearTimeout(timer);
       }
@@ -1425,8 +1825,8 @@ if (!gotTheLock) {
     // here as absolute + directory); local add/remove run `dsh plugin` against
     // the LOCAL dsh home (05 §5.1).
     ipcMain.handle('desktop_ssh_seed_host_graph', trustedIpc(async ({ id }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      const target = findRemoteTarget(id);
+      if (target === null) return { ok: false, error: 'ssh instance not found' };
       // Not shipped is a loud error on the MANUAL path (the button must never
       // look like it succeeded while writing nothing) — the auto path skips
       // with an info log instead. The manual resend covers BOTH chamber host
@@ -1437,44 +1837,58 @@ if (!gotTheLock) {
       if (missing.length > 0) {
         return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
       }
-      if (hostPackageSeeding.has(id)) return { ok: false, error: 'chamber host seed in progress' };
-      hostPackageSeeding.add(id);
+      const begun = hostPackageSeeding.begin(id, target.fingerprint);
+      if (!begun.accepted) return { ok: false, error: 'chamber host seed in progress' };
+      const token: ExactOwnershipToken = begun.token;
+      const ownsSeed = () => hostPackageSeeding.owns(token) && ownsRemoteTarget(target);
       try {
-        const result = await seedRemoteChamberHostPackages(execTransport, spec, chamberHostPackageSeeds);
+        const result = await seedRemoteChamberHostPackages(
+          scopedExecForTarget(target, ownsSeed),
+          target.spec,
+          chamberHostPackageSeeds,
+        );
+        if (!ownsSeed()) return { ok: false, error: 'ssh instance changed while host seed was in progress' };
         // Surface the outcome in the instance's ring-buffer log (the connections
         // UI log panel) — the injection is never a silent modification.
         if (result.ok) {
           const summary = result.packages.map(entry => `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}`).join('、');
-          sm.appendLog(id, 'info', `chamber host 包注入完成：${summary}；boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+          if (ownsSeed()) sm.appendLog(id, 'info', `chamber host 包注入完成：${summary}；boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
         } else {
-          sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
+          if (ownsSeed()) sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
         }
         return result;
       } finally {
-        hostPackageSeeding.delete(id);
+        hostPackageSeeding.finish(token);
       }
     }));
     // materialize_add (sync view): renderer supplies only the dependency NAME.
     // Main re-reads the authoritative local manifest and resolves/canonicalizes
     // its path; an IPC caller can never choose an arbitrary local directory.
     ipcMain.handle('desktop_ssh_plugin_materialize_add', trustedIpc(async ({ id, name }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      const target = findRemoteTarget(id);
+      if (target === null) return { ok: false, error: 'ssh instance not found' };
       if (typeof name !== 'string') return { ok: false, error: 'invalid plugin name' };
       const resolved = resolveLocalMaterializeDirectory(localDshHome, name);
       if (!resolved.ok) return resolved;
-      return materializeAndAdd(execTransport, spec, resolved.path);
+      return runWithFinalOwnership(
+        () => ownsRemoteTarget(target),
+        () => materializeAndAdd(scopedExecForTarget(target), target.spec, resolved.path),
+      );
     }));
     // materialize_add_pick (add view): PICK-ONLY — the folder picker runs here in
     // the main process, so a compromised renderer can never drive the pack surface
     // to an arbitrary local directory (design 13 §5.8 hardening).
     ipcMain.handle('desktop_ssh_plugin_materialize_add_pick', trustedIpc(async ({ id }) => {
-      const spec = findRemoteSpec(id);
-      if (spec === null) return { ok: false, error: 'ssh instance not found' };
+      const target = findRemoteTarget(id);
+      if (target === null) return { ok: false, error: 'ssh instance not found' };
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
       const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
       if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
-      return materializeAndAdd(execTransport, spec, picked.filePaths[0]);
+      if (!ownsRemoteTarget(target)) return { ok: false, error: 'ssh instance changed while folder selection was open' };
+      return runWithFinalOwnership(
+        () => ownsRemoteTarget(target),
+        () => materializeAndAdd(scopedExecForTarget(target), target.spec, picked.filePaths[0]),
+      );
     }));
     ipcMain.handle('desktop_local_plugin_add_file', trustedIpc(async () => {
       if (dshWorkspace === null) return { ok: false, error: 'dsh workspace not found' };
@@ -1529,7 +1943,7 @@ if (!gotTheLock) {
           await shell.openExternal(url);
           return { ok: true };
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = describeUnknownError(error);
           console.error('[dsh-chamber] 打开 vscode URL 失败：', error);
           return { ok: false, error: `open vscode url failed: ${message}` };
         }
@@ -1542,43 +1956,58 @@ if (!gotTheLock) {
     // vscode IPC（vscode-availability / open-vscode）随旧插件删除而移除——渲染
     // 层唯一入口收敛为 open-in 两个通道（复核 2026-08）。
     const openInCtx: OpenInLaunchContext = {
+      platform: process.platform,
       lookupInstance: wiredCtx.lookupInstance,
       vscodeAvailable: wiredCtx.vscodeAvailable,
       openVscodeUrl: wiredCtx.openVscodeUrl,
-      stat: async (p) => {
-        try {
-          const s = await fsp.stat(p)
-          return s.isDirectory() ? { kind: 'dir' } : { kind: 'file' }
-        } catch { return null }
-      },
+      stat: p => classifyLocalPath(value => fsp.stat(value), p),
       openPath: async (p) => {
         // shell.openPath 部分失败模式（win32/linux）存在 reject 路径——与
         // openVscodeUrl 封装同款纪律：reject 归一为错误串（loud），绝不落
-        // transport rejection。
-        try {
-          return normalizeOpenPathError(await shell.openPath(p))
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          console.error('[dsh-chamber] 打开路径失败：', error)
-          return `open path failed: ${message}`
-        }
+        // transport rejection。invokeOpenPath 只返回原始宿主错误，公共
+        // "open path failed" 前缀由 provider 添加一次。
+        return invokeOpenPath(value => shell.openPath(value), p)
       },
       showItemInFolder: (p) => shell.showItemInFolder(p),
     }
-    ipcMain.handle('dsh-chamber:open-in-apps', trustedIpc(() => ({ apps: listOpenInApps(process.platform) })))
+    ipcMain.handle('dsh-chamber:open-in-apps', trustedIpc(() => ({
+      apps: listOpenInApps(openInCtx, (appId, error) => {
+        console.error(`[dsh-chamber] open-in provider ${appId} 可用性探测失败：${error}`)
+      }),
+    })))
     ipcMain.handle('dsh-chamber:open-in', trustedIpc(async (payload: unknown) => {
       // 载荷形状守卫（复核 P2）：不可信渲染载荷直接解构会以 TypeError 落到
       // transport rejection——统一为 loud {error}，与其余失败面一致。
       const req = payload as Partial<OpenInRequest> | null
-      if (req === null || typeof req !== 'object' || typeof req.appId !== 'string' || typeof req.instanceId !== 'string' || typeof req.path !== 'string') {
+      if (req === null || typeof req !== 'object' || typeof req.appId !== 'string' || typeof req.instanceId !== 'string' || typeof req.path !== 'string' || typeof req.sourceFingerprint !== 'string') {
         return { ok: false, error: 'invalid open-in payload' }
       }
-      const result = await runOpenInLaunch({ appId: req.appId, instanceId: req.instanceId, path: req.path }, openInCtx)
-      // vscode 启动成功后 best-effort 推送 intent 激活渲染层对应来源（与 OS
-      // 深链路径对齐，维持「vscode 启动→激活源」不变量；finder 无对应激活
-      // 语义不推送；窗口未就绪/销毁则跳过，不阻塞启动）。
-      if (result.ok && req.appId === 'vscode' && mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('dsh-chamber:deep-link-intent', { instanceId: req.instanceId, path: req.path });
+      const sourceId = req.instanceId === 'local' ? 'local' : `ssh-${req.instanceId}`;
+      if (!isValidNotificationSourceFingerprint(sourceId, req.sourceFingerprint)) {
+        return { ok: false, error: 'invalid source fingerprint' };
+      }
+      if (!notificationSourceIncarnations.matches(sourceId, req.sourceFingerprint)) {
+        return { ok: false, error: 'source changed before open-in request was accepted' };
+      }
+      const sourceToken = captureVscodeSource(req.instanceId);
+      if (sourceToken === null) return { ok: false, error: 'source not found' };
+      const ownsSource = () => notificationSourceIncarnations.owns(sourceToken);
+      const scopedOpenInCtx: OpenInLaunchContext = {
+        ...openInCtx,
+        lookupInstance: id => ownsSource() ? openInCtx.lookupInstance(id) : null,
+        openVscodeUrl: async url => {
+          if (!ownsSource()) return { ok: false, error: 'source changed before VS Code launch' };
+          const opened = await openInCtx.openVscodeUrl(url);
+          return ownsSource() ? opened : { ok: false, error: 'source changed while VS Code launch was in progress' };
+        },
+      };
+      const result = await runOpenInLaunch({ appId: req.appId, instanceId: req.instanceId, path: req.path }, scopedOpenInCtx)
+      if (!ownsSource()) return { ok: false, error: 'source changed while open-in was in progress' };
+      // vscode 启动成功后将 intent 放入 renderer hold/replay 队列（与 OS
+      // 深链路径对齐）；finder 无对应激活语义。窗口未就绪也不丢，renderer
+      // 安装监听并 ready 后再推送；该 UI 联动从不阻塞 vscode 启动。
+      if (result.ok && req.appId === 'vscode') {
+        enqueueRendererDeepLinkIntent({ instanceId: req.instanceId, path: req.path }, sourceToken);
       }
       return result;
     }))
@@ -1605,8 +2034,15 @@ if (!gotTheLock) {
     // confirmation exemption (design 14 D2).
     updateController = updater;
     updater.subscribe((updateState) => {
-      if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('dsh-chamber:update-state-changed', updateState);
+      const updateWindow = mainWindow;
+      if (updateWindow !== null) {
+        const pushed = attemptCommittedRegistryPush(() => {
+          if (mainWindow !== updateWindow || updateWindow.isDestroyed()) throw new Error('updater renderer changed before push');
+          updateWindow.webContents.send('dsh-chamber:update-state-changed', updateState);
+        });
+        if (!pushed.sent) {
+          try { console.warn(`[dsh-chamber] updater 状态 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* callback boundary */ }
+        }
       }
     });
     ipcMain.handle('dsh-chamber:update-state', trustedIpc(() => updater.state()));
@@ -1652,53 +2088,98 @@ if (!gotTheLock) {
     // activate/托盘/second-instance 恢复路径共用同一创建函数。
     createMainWindow(rendererOrigin, true);
 
-    // 深链统一 drain（design 16 §4.2）：startup 完成（transportManager 装载 +
-    // 主窗口就绪）后消费 pendingIntents。深链执行（VS Code 启动）不阻塞窗口；
-    // 成功后 best-effort 推送 intent（窗口未就绪/销毁则跳过）；失败 loud
-    // （对话框 + 日志）。quit 在途的深链已在 enqueueDeepLink 被 ignore。
+    // 深链统一 drain（design 16 §4.2）：startup 完成（transportManager 装载）
+    // 后顺序消费有界队列。VS Code 启动不等待 renderer；成功 intent 进入独立的
+    // renderer hold/replay 队列，直到 onIntent + ready 握手完成。失败 loud
+    // （对话框 + 日志）。quit 在途的新深链已在 enqueueDeepLink 被 ignore。
     drainPendingIntents = () => {
-      const intents = pendingIntents;
-      pendingIntents = [];
-      for (const intent of intents) {
-        if (quitRequested) return;
-        void (async () => {
-          const result = await runVscodeLaunch(intent, wiredCtx);
-          if (result.ok) {
-            if (mainWindow !== null && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('dsh-chamber:deep-link-intent', intent);
+      if (drainingPendingIntents || quitRequested) return;
+      drainingPendingIntents = true;
+      void (async () => {
+        for (;;) {
+          if (quitRequested) return;
+          const intent = pendingIntents.shift();
+          if (intent === null) return;
+          try {
+            const sourceToken = captureVscodeSource(intent.instanceId);
+            const result = await runVscodeLaunch(intent, wiredCtx);
+            if (result.ok && sourceToken !== null && notificationSourceIncarnations.owns(sourceToken)) {
+              enqueueRendererDeepLinkIntent(intent, sourceToken);
+            } else {
+              const error = result.ok ? 'instance changed while VS Code launch was in progress' : result.error;
+              console.error(`[dsh-chamber] 深链执行失败：${error}`);
+              dialog.showErrorBox('打开 VS Code 失败', error);
             }
-          } else {
-            console.error(`[dsh-chamber] 深链执行失败：${result.error}`);
-            dialog.showErrorBox('打开 VS Code 失败', result.error);
+          } catch (error) {
+            // runVscodeLaunch is exception-safe; retain a last-resort boundary
+            // for Electron dialog/send regressions without leaking the key.
+            console.error('[dsh-chamber] 深链执行异常：', describeUnknownError(error));
+          } finally {
+            pendingIntents.complete(intent);
           }
-        })().catch((error) => {
-          // runVscodeLaunch 内部已兜底，此处只防意外 rejection 成为
-          // unhandled（security-review：drain 的 async IIFE 无 catch）。
-          console.error('[dsh-chamber] 深链执行异常：', error);
-        });
-      }
+        }
+      })().finally(() => {
+        drainingPendingIntents = false;
+        if (!quitRequested && pendingIntents.pendingCount > 0) drainPendingIntents?.();
+      });
     };
     drainPendingIntents();
 
-    // 通知打开事件统一 drain（design 19 §3.3，照搬 pendingIntents 模式）：窗口
+    // 通知打开事件统一 drain（design 19 §3.3，retain-until-ACK）：窗口
     // 存在、已完成加载且 renderer 已就绪（onOpen 监听注册后经
     // dsh-chamber:notifications-ready 置位）→ 直接推送；任一条件不满足 → 重新
-    // 入队，did-finish-load / ready IPC 后再补发（窗口关闭期间点击通知不丢事件）。
+    // hold，did-finish-load / ready IPC 后再补发。send 返回只转为 in-flight，renderer
+    // 精确 ACK deliveryId+attempt 后才消费；reload/crash 会重发所有未 ACK 项。
     drainPendingNotificationOpens = () => {
-      const opens = pendingNotificationOpens;
-      pendingNotificationOpens = [];
-      for (const open of opens) {
-        if (quitRequested) return;
-        if (
-          mainWindow !== null && !mainWindow.isDestroyed()
-          && !mainWindow.webContents.isLoading()
-          && !mainWindow.webContents.isCrashed()
-          && notificationOpenDrainReady
-        ) {
-          mainWindow.webContents.send('dsh-chamber:notification-open', open);
-        } else {
-          pendingNotificationOpens.push(open);
+      if (drainingNotificationOpens) return true;
+      const win = mainWindow;
+      const destroyed = win === null || win.isDestroyed();
+      if (
+        !notificationOpenDrainReady
+        || win === null
+        || mainWindow !== win
+        || destroyed
+        || win.webContents.isLoading()
+        || win.webContents.isCrashed()
+      ) return true;
+      drainingNotificationOpens = true;
+      try {
+        for (;;) {
+          if (quitRequested) return true;
+          const delivery = pendingNotificationOpens.shift();
+          if (delivery === null) return true;
+          try {
+            // Re-check every item: Electron can synchronously tear down/replace
+            // a window while send() crosses the native boundary.
+            if (
+              mainWindow !== win
+              || win.isDestroyed()
+              || win.webContents.isLoading()
+              || win.webContents.isCrashed()
+            ) throw new Error('notification renderer changed while draining');
+            win.webContents.send('dsh-chamber:notification-open', {
+              sourceId: delivery.payload.sourceId,
+              sourceFingerprint: delivery.payload.sourceFingerprint,
+              sessionId: delivery.payload.sessionId,
+              deliveryId: delivery.deliveryId,
+              attempt: delivery.attempt,
+            });
+            // Deliberately retain in-flight ownership until renderer ACK.
+          } catch (error) {
+            const restored = pendingNotificationOpens.rollback(delivery);
+            if (!restored && mainWindow === win) {
+              console.error(`[dsh-chamber] 通知打开事件回滚失败：delivery=${delivery.deliveryId}`);
+            }
+            // Only the window whose send failed may lose its handshake. A stale
+            // callback must not clobber readiness already established by a newer
+            // BrowserWindow.
+            if (mainWindow === win) notificationOpenDrainReady = false;
+            console.error('[dsh-chamber] 通知打开推送失败，等待 renderer 重试：', describeUnknownError(error));
+            return false;
+          }
         }
+      } finally {
+        drainingNotificationOpens = false;
       }
     };
     drainPendingNotificationOpens();

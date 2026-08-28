@@ -13,8 +13,21 @@ import assert from 'node:assert/strict'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildVscodeFileUrl, buildVscodeRemoteUrl, detectVscodeAvailability, parseOpenVscodeIntent, runVscodeLaunch } from './deep-link.ts'
+import {
+  attemptDeepLinkProtocolRegistration,
+  BoundedAckDeliveryQueue,
+  BoundedVscodeIntentQueue,
+  buildVscodeFileUrl,
+  buildVscodeRemoteUrl,
+  canDeliverRendererDeepLink,
+  canRestoreMainWindow,
+  decideDeepLinkProtocolRegistration,
+  detectVscodeAvailability,
+  parseOpenVscodeIntent,
+  runVscodeLaunch,
+} from './deep-link.ts'
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts'
+import { NotificationSourceIncarnations } from './notifications.ts'
 
 /** A minimal valid ssh instance for runVscodeLaunch context fakes. */
 const sshInstance = { id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, kind: 'ssh' }
@@ -106,6 +119,259 @@ test('parseOpenVscodeIntent rejects malformed URLs without throwing', () => {
   const result = parseOpenVscodeIntent('not a url')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /invalid deep-link/i)
+})
+
+test('BoundedVscodeIntentQueue deduplicates normalized intents while pending/in-flight and allows a later retry', () => {
+  const first = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=local&path=/foo')
+  const equivalent = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=local&path=%2Ffoo#ignored')
+  assert.equal(first.ok, true)
+  assert.equal(equivalent.ok, true)
+  if (!first.ok || !equivalent.ok) return
+
+  const queue = new BoundedVscodeIntentQueue(2)
+  assert.deepEqual(queue.enqueue(first.intent), { accepted: true, dropped: null })
+  assert.deepEqual(queue.enqueue(equivalent.intent), { accepted: false, dropped: null, reason: 'duplicate' })
+  const inFlight = queue.shift()
+  assert.deepEqual(inFlight, first.intent)
+  assert.deepEqual(
+    queue.enqueue(equivalent.intent),
+    { accepted: false, dropped: null, reason: 'duplicate' },
+    'key stays tracked while in flight',
+  )
+  queue.complete(inFlight!)
+  assert.deepEqual(queue.enqueue(equivalent.intent), { accepted: true, dropped: null }, 'later deliberate reopen is accepted')
+})
+
+test('BoundedVscodeIntentQueue drops the oldest pending intent at its hard limit', () => {
+  const queue = new BoundedVscodeIntentQueue(2)
+  const one = { instanceId: 'local', path: '/one' }
+  const two = { instanceId: 'local', path: '/two' }
+  const three = { instanceId: 'local', path: '/three' }
+  queue.enqueue(one)
+  queue.enqueue(two)
+  const result = queue.enqueue(three)
+  assert.deepEqual(result, { accepted: true, dropped: one })
+  assert.equal(queue.pendingCount, 2)
+  assert.deepEqual(queue.shift(), two)
+  assert.deepEqual(queue.shift(), three)
+})
+
+test('BoundedVscodeIntentQueue hard limit covers pending plus in-flight keys', () => {
+  const queue = new BoundedVscodeIntentQueue(2)
+  const one = { instanceId: 'local', path: '/one' }
+  const two = { instanceId: 'local', path: '/two' }
+  const three = { instanceId: 'local', path: '/three' }
+  queue.enqueue(one)
+  queue.enqueue(two)
+  assert.deepEqual(queue.shift(), one)
+  assert.equal(queue.trackedCount, 2, 'shifted intent remains part of capacity while in flight')
+  assert.deepEqual(queue.enqueue(three), { accepted: true, dropped: two })
+  assert.equal(queue.trackedCount, 2, 'pending + in-flight must never exceed the hard limit')
+  assert.deepEqual(queue.shift(), three)
+  queue.complete(one)
+  queue.complete(three)
+  assert.equal(queue.trackedCount, 0)
+})
+
+test('BoundedVscodeIntentQueue reports saturated when capacity is entirely in flight', () => {
+  const queue = new BoundedVscodeIntentQueue(1)
+  const inFlight = { instanceId: 'local', path: '/one' }
+  queue.enqueue(inFlight)
+  assert.deepEqual(queue.shift(), inFlight)
+  assert.deepEqual(
+    queue.enqueue({ instanceId: 'local', path: '/two' }),
+    { accepted: false, dropped: null, reason: 'saturated' },
+  )
+  assert.equal(queue.pendingCount, 0)
+  assert.equal(queue.trackedCount, 1)
+  queue.complete(inFlight)
+  assert.deepEqual(
+    queue.enqueue({ instanceId: 'local', path: '/two' }),
+    { accepted: true, dropped: null },
+  )
+})
+
+test('BoundedVscodeIntentQueue retries a failed send A before pending B', () => {
+  const queue = new BoundedVscodeIntentQueue(2)
+  const a = { instanceId: 'local', path: '/a' }
+  const b = { instanceId: 'local', path: '/b' }
+  queue.enqueue(a)
+  queue.enqueue(b)
+
+  const delivered: VscodeLaunchRequest[] = []
+  let failAOnce = true
+  const drain = (): boolean => {
+    for (;;) {
+      const intent = queue.shift()
+      if (intent === null) return true
+      try {
+        if (failAOnce && intent.path === '/a') {
+          failAOnce = false
+          throw new Error('renderer disappeared')
+        }
+        delivered.push(intent)
+        queue.complete(intent)
+      } catch {
+        assert.deepEqual(queue.rollbackShift(intent), { restored: true })
+        return false
+      }
+    }
+  }
+
+  assert.equal(drain(), false, 'first A send fails and rolls back')
+  assert.deepEqual(delivered, [])
+  assert.equal(queue.trackedCount, 2, 'rollback does not release or duplicate the tracked key')
+  assert.equal(queue.pendingCount, 2, 'rollback remains inside the original hard limit')
+
+  assert.equal(drain(), true)
+  assert.deepEqual(delivered, [a, b], 'the retry order remains A then B')
+  assert.equal(queue.trackedCount, 0)
+})
+
+test('renderer intent hold/replay waits when ready arrives before did-finish-load', () => {
+  const queue = new BoundedVscodeIntentQueue(2)
+  queue.enqueue({ instanceId: 'local', path: '/cold-start' })
+  const base = { ready: true, currentWindow: true, destroyed: false, crashed: false }
+  assert.equal(canDeliverRendererDeepLink({ ...base, loading: true }), false)
+  assert.equal(queue.pendingCount, 1, 'ready-before-finish must hold the intent')
+  assert.equal(canDeliverRendererDeepLink({ ...base, loading: false }), true)
+  const replayed = queue.shift()
+  assert.deepEqual(replayed, { instanceId: 'local', path: '/cold-start' })
+  queue.complete(replayed!)
+
+  assert.equal(canDeliverRendererDeepLink({ ...base, loading: false, currentWindow: false }), false, 'old windows cannot drain a new window queue')
+  assert.equal(canDeliverRendererDeepLink({ ...base, loading: false, destroyed: true }), false)
+  assert.equal(canDeliverRendererDeepLink({ ...base, loading: false, crashed: true }), false)
+})
+
+test('BoundedAckDeliveryQueue retains sent work until the exact attempt is acknowledged', () => {
+  const queue = new BoundedAckDeliveryQueue<VscodeLaunchRequest>(2, BoundedVscodeIntentQueue.key)
+  const a = { instanceId: 'local', path: '/a' }
+  const b = { instanceId: 'local', path: '/b' }
+  assert.equal(queue.enqueue(a).accepted, true)
+  assert.equal(queue.enqueue(b).accepted, true)
+  const first = queue.shift()!
+  const second = queue.shift()!
+  assert.deepEqual([first.payload, second.payload], [a, b])
+  assert.equal(queue.pendingCount, 0)
+  assert.equal(queue.inFlightCount, 2, 'send-return does not commit delivery')
+  assert.equal(queue.acknowledge(first.deliveryId, first.attempt + 1), false, 'wrong attempt is stale')
+  assert.equal(queue.acknowledge(first.deliveryId, first.attempt), true)
+  assert.equal(queue.trackedCount, 1)
+  assert.equal(queue.acknowledge(second.deliveryId, second.attempt), true)
+  assert.equal(queue.trackedCount, 0)
+})
+
+test('BoundedAckDeliveryQueue reload replay preserves FIFO and rejects an old-frame ACK', () => {
+  const queue = new BoundedAckDeliveryQueue<VscodeLaunchRequest>(3, BoundedVscodeIntentQueue.key)
+  const a = { instanceId: 'local', path: '/a' }
+  const b = { instanceId: 'local', path: '/b' }
+  const c = { instanceId: 'local', path: '/c' }
+  queue.enqueue(a)
+  queue.enqueue(b)
+  const oldA = queue.shift()!
+  const oldB = queue.shift()!
+  queue.enqueue(c)
+  assert.equal(queue.requeueInFlight(), 2)
+  const replayA = queue.shift()!
+  const replayB = queue.shift()!
+  const firstC = queue.shift()!
+  assert.deepEqual([replayA.payload, replayB.payload, firstC.payload], [a, b, c])
+  assert.equal(replayA.deliveryId, oldA.deliveryId)
+  assert.equal(replayA.attempt, oldA.attempt + 1)
+  assert.equal(queue.acknowledge(oldA.deliveryId, oldA.attempt), false, 'dying document cannot commit replay')
+  assert.equal(queue.acknowledge(replayA.deliveryId, replayA.attempt), true)
+  assert.equal(queue.acknowledge(replayB.deliveryId, replayB.attempt), true)
+  assert.equal(queue.acknowledge(firstC.deliveryId, firstC.attempt), true)
+  assert.equal(queue.trackedCount, 0)
+  assert.equal(oldB.attempt + 1, replayB.attempt)
+})
+
+test('BoundedAckDeliveryQueue cap covers unacknowledged sends and single-flight keys', () => {
+  const queue = new BoundedAckDeliveryQueue<VscodeLaunchRequest>(1, BoundedVscodeIntentQueue.key)
+  const a = { instanceId: 'local', path: '/a' }
+  const accepted = queue.enqueue(a)
+  assert.equal(accepted.accepted, true)
+  const sent = queue.shift()!
+  assert.deepEqual(queue.enqueue(a), { accepted: false, dropped: null, reason: 'duplicate' })
+  assert.deepEqual(
+    queue.enqueue({ instanceId: 'local', path: '/b' }),
+    { accepted: false, dropped: null, reason: 'saturated' },
+  )
+  assert.equal(queue.acknowledge(sent.deliveryId, sent.attempt), true)
+  assert.equal(queue.enqueue({ instanceId: 'local', path: '/b' }).accepted, true)
+})
+
+test('BoundedAckDeliveryQueue synchronous send rollback keeps the failed item at FIFO head', () => {
+  const queue = new BoundedAckDeliveryQueue<VscodeLaunchRequest>(2)
+  queue.enqueue({ instanceId: 'local', path: '/a' })
+  queue.enqueue({ instanceId: 'local', path: '/b' })
+  const failed = queue.shift()!
+  assert.equal(queue.rollback(failed), true)
+  const retried = queue.shift()!
+  assert.equal(retried.deliveryId, failed.deliveryId)
+  assert.equal(retried.attempt, failed.attempt + 1)
+  assert.equal(retried.payload.path, '/a')
+})
+
+test('registry identity edit retires held and in-flight renderer activations', () => {
+  type Activation = VscodeLaunchRequest & { sourceId: string; sourceFingerprint: string; sourceGeneration: number }
+  const sources = new NotificationSourceIncarnations()
+  sources.replaceRemoteSources([{ sourceId: 'ssh-same', fingerprint: 'host-a' }])
+  const old = sources.capture('ssh-same')!
+  const queue = new BoundedAckDeliveryQueue<Activation>(4, BoundedVscodeIntentQueue.key)
+  queue.enqueue({ instanceId: 'same', path: '/pending', sourceId: old.sourceId, sourceFingerprint: old.fingerprint, sourceGeneration: old.generation })
+  queue.enqueue({ instanceId: 'same', path: '/sent', sourceId: old.sourceId, sourceFingerprint: old.fingerprint, sourceGeneration: old.generation })
+  const sent = queue.shift()!
+
+  sources.replaceRemoteSources([{ sourceId: 'ssh-same', fingerprint: 'host-b' }])
+  assert.equal(queue.discardWhere(intent => intent.sourceId === old.sourceId), 2)
+  assert.equal(queue.trackedCount, 0)
+  assert.equal(sent.payload.sourceFingerprint, 'host-a', 'an already-sent renderer intent stays tied to the old proof')
+  assert.equal(queue.acknowledge(sent.deliveryId, sent.attempt), false)
+})
+
+test('an identity edit while VS Code launch awaits prevents post-success renderer enqueue', async () => {
+  const sources = new NotificationSourceIncarnations()
+  sources.replaceRemoteSources([{ sourceId: 'ssh-same', fingerprint: 'host-a' }])
+  const captured = sources.capture('ssh-same')!
+  let finishLaunch!: () => void
+  const launch = new Promise<void>(resolve => { finishLaunch = resolve })
+  const queued: VscodeLaunchRequest[] = []
+  const continuation = launch.then(() => {
+    if (sources.owns(captured)) queued.push({ instanceId: 'same', path: '/workspace' })
+  })
+  sources.replaceRemoteSources([{ sourceId: 'ssh-same', fingerprint: 'host-b' }])
+  finishLaunch()
+  await continuation
+  assert.deepEqual(queued, [], 'old launch success never activates the replacement source')
+})
+
+test('packaged protocol registration never persists a cold-start URL as a fixed relaunch arg', () => {
+  assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'linux' }), { action: 'register' })
+  assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'darwin' }), { action: 'register' })
+  assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'win32' }), { action: 'skip' })
+  assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: false, platform: 'linux' }), { action: 'skip' })
+  // The decision intentionally exposes no executable/args fields: packaged
+  // registration always calls Electron's no-args form.
+  assert.deepEqual(Object.keys(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'linux' })), ['action'])
+})
+
+test('window restore is terminally fenced once quit is requested', () => {
+  assert.equal(canRestoreMainWindow(false), true)
+  assert.equal(canRestoreMainWindow(true), false)
+})
+
+test('attemptDeepLinkProtocolRegistration reports false/throw without throwing itself', () => {
+  assert.deepEqual(attemptDeepLinkProtocolRegistration(() => true), { ok: true })
+  assert.deepEqual(
+    attemptDeepLinkProtocolRegistration(() => false),
+    { ok: false, error: 'setAsDefaultProtocolClient returned false' },
+  )
+  assert.deepEqual(
+    attemptDeepLinkProtocolRegistration(() => { throw new Error('registry denied') }),
+    { ok: false, error: 'setAsDefaultProtocolClient failed: registry denied' },
+  )
 })
 
 test('buildVscodeRemoteUrl omits the user when null', () => {
@@ -355,4 +621,30 @@ test('runVscodeLaunch local branch still re-checks availability', async () => {
   )
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /vscode not detected/i)
+})
+
+test('runVscodeLaunch converts availability and registry adapter exceptions into structured failures', async () => {
+  const availability = await runVscodeLaunch(
+    { instanceId: 'local', path: '/home/user/local-ws' },
+    context({ vscodeAvailable: () => { throw new Error('probe exploded') } }),
+  )
+  assert.deepEqual(availability, { ok: false, error: 'vscode launch failed: probe exploded' })
+
+  const registry = await runVscodeLaunch(
+    { instanceId: 'web-1', path: '/home/user/remote-ws' },
+    context({ lookupInstance: () => { throw new Error('registry exploded') } }),
+  )
+  assert.deepEqual(registry, { ok: false, error: 'vscode launch failed: registry exploded' })
+})
+
+test('runVscodeLaunch cannot be made to reject by a hostile thrown value', async () => {
+  const hostile = new Proxy({}, {
+    getPrototypeOf() { throw new Error('getPrototypeOf trap') },
+    get() { throw new Error('get trap') },
+  })
+  const result = await runVscodeLaunch(
+    { instanceId: 'local', path: '/home/user/local-ws' },
+    context({ openVscodeUrl: async () => Promise.reject(hostile) }),
+  )
+  assert.deepEqual(result, { ok: false, error: 'open vscode url failed: unknown error' })
 })

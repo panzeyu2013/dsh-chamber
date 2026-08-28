@@ -86,9 +86,9 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 13 | [13-remote-plugin-management.md](13-remote-plugin-management.md) | 现行（已实现，2026-08；M1–M4 落地） | 远程实例插件管理：一键应用本地插件清单 + 可视化添加（provider exec 通道 + spec 白名单 + remoteDshHome 远端路径基准） |
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
-| 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code 深链插件：`dsh-chamber://` OS 深链 + `shell.overlay` 主区右上按钮快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed，现有包改动 = 0 |
-| 17 | [17-open-in-registry.md](17-open-in-registry.md) | 现行（已实现（M0–M3），2026-08） | open-in 打开注册表（design 16 演进）：本地来源 Finder + 本地/远程 VS Code 的统一打开面；主进程 OpenInApp provider 注册表 + 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-client-ui-open-in`，旧 vscode IPC 收敛删除 |
-| 19 | [19-notifications.md](19-notifications.md) | 已实现（2026-09；四路 review 轮后） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
+| 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code OS 深链基线：`dsh-chamber://` 快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；应用内按钮/IPC 已演进为设计 17 的 open-in 面，无 host 插件/seed |
+| 17 | [17-open-in-registry.md](17-open-in-registry.md) | 现行（M0–M2 已实现；M3 自动化完成、macOS 实机待验，2026-08） | open-in 打开注册表（design 16 演进）：本地来源 Finder + 本地/远程 VS Code 的统一打开面；主进程 OpenInApp provider 注册表 + 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-client-ui-open-in`，旧 vscode IPC 收敛删除 |
+| 19 | [19-notifications.md](19-notifications.md) | M1–M2 已实现；竞态自动化已完成，M3 macOS 权限/打包态实机待验（2026-09） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
 
 ---
 
@@ -110,6 +110,10 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 > （"不得以'后续版本'名义回到 backlog"仅约束其余行）。插件形态仍受 §5 原则
 > 约束：控制面不建立 git 索引、不消费宿主会话，git 事实与执行只来自各实例内的
 > chamber host plugin；Desktop 仅分发该包，不运行 Git（设计 08 §2/§5/§6）。
+
+这里移出的是宿主已经覆盖的“通知中心”UI/历史/管理域；设计 19 的桌面原生边沿
+通知只投影 renderer 已有的每实例运行时事实，不建立控制面通知消费者、历史或中心，
+因此不属于该移出域。
 
 ---
 

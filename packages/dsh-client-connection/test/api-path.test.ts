@@ -29,7 +29,7 @@ test('base-path: explicit empty or stock /api collapses to no-prefix', () => {
   assert.equal(resolveInstanceBasePath(API_PATH), '')
 })
 
-// ── window.__DSH_BASE_PATH__ knob (sequential instance boots) ─────────────
+// ── window.__DSH_BASE_PATH__ compatibility fallback ──────────────────────
 
 test('base-path: window knob applies when no explicit argument is given', () => {
   const prev = (globalThis as { window?: unknown }).window

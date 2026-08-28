@@ -32,3 +32,42 @@ test('a synchronously-throwing dispatch rejects the original promise (never stra
   assert.equal(queue.flush('d', () => { throw new Error('sync dispatch failure') }), 1)
   await assert.rejects(opened, /sync dispatch failure/)
 })
+
+test('a hostile synchronous thrown value still rejects instead of stranding the promise', async () => {
+  const queue = new PendingOpenQueue(1000)
+  const opened = queue.enqueue('hostile', 's-hostile')
+  const hostile = new Proxy({}, {
+    getPrototypeOf() {
+      throw new Error('prototype coercion exploded')
+    },
+    get(_target, key) {
+      if (key === Symbol.toPrimitive || key === 'toString') {
+        throw new Error('string coercion exploded')
+      }
+      return undefined
+    },
+  })
+
+  assert.doesNotThrow(() => queue.flush('hostile', () => { throw hostile }))
+  await assert.rejects(opened, /unknown error/)
+})
+
+test('flush carries the enqueue-time absolute deadline instead of resetting the total wait budget', async () => {
+  const originalNow = Date.now
+  let now = 10_000
+  Date.now = () => now
+  const queue = new PendingOpenQueue(68_000)
+  try {
+    const opened = queue.enqueue('e', 's5')
+    now = 77_500
+    let dispatchedDeadline: number | undefined
+    assert.equal(queue.flush('e', async (sessionId, deadline) => {
+      assert.equal(sessionId, 's5')
+      dispatchedDeadline = deadline
+    }), 1)
+    await opened
+    assert.equal(dispatchedDeadline, 78_000)
+  } finally {
+    Date.now = originalNow
+  }
+})

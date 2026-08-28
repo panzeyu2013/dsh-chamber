@@ -55,6 +55,282 @@ export interface VscodeLaunchContext {
 /** Remote path budget (design 16 §3.1). */
 const MAX_REMOTE_PATH_CHARS = 4096
 
+/** Convert an arbitrary thrown value into a stable, non-empty diagnostic.
+ * Even hostile proxies/getters/toString implementations must not make an
+ * exception handler throw a second time and escape the structured result
+ * channel. */
+export function describeUnknownError(error: unknown): string {
+  try {
+    if (error instanceof Error) {
+      const message = typeof error.message === 'string' ? error.message : ''
+      if (message !== '') return message
+      const name = typeof error.name === 'string' ? error.name : ''
+      if (name !== '') return name
+    }
+  } catch {
+    // Fall through to the guarded String conversion below.
+  }
+  try {
+    const text = String(error)
+    return text === '' ? 'unknown error' : text
+  } catch {
+    return 'unknown error'
+  }
+}
+
+/** A bounded, normalized single-flight queue for OS deep-link launches.
+ * Keys remain tracked after shift() while the launch is in flight and are
+ * released only by complete(), so argv/open-url duplicates cannot race past
+ * each other. The hard limit covers pending + in-flight keys. Once complete,
+ * a later deliberate invocation is accepted. */
+export class BoundedVscodeIntentQueue {
+  readonly #limit: number
+  readonly #trackedKeys = new Set<string>()
+  readonly #pending: Readonly<VscodeLaunchRequest>[] = []
+
+  constructor(limit = 64) {
+    if (!Number.isInteger(limit) || limit < 1) throw new RangeError('intent queue limit must be a positive integer')
+    this.#limit = limit
+  }
+
+  static key(intent: VscodeLaunchRequest): string {
+    return JSON.stringify([intent.instanceId, intent.path])
+  }
+
+  enqueue(intent: VscodeLaunchRequest):
+    | { accepted: true; dropped: Readonly<VscodeLaunchRequest> | null }
+    | { accepted: false; dropped: null; reason: 'duplicate' | 'saturated' } {
+    const normalized = Object.freeze({ instanceId: intent.instanceId, path: intent.path })
+    const key = BoundedVscodeIntentQueue.key(normalized)
+    if (this.#trackedKeys.has(key)) return { accepted: false, dropped: null, reason: 'duplicate' }
+
+    let dropped: Readonly<VscodeLaunchRequest> | null = null
+    // Capacity covers pending + in-flight keys, not only the array. Prefer
+    // evicting the oldest pending item; an all-in-flight queue cannot safely
+    // evict ownership and therefore rejects the newcomer explicitly.
+    if (this.#trackedKeys.size >= this.#limit) {
+      dropped = this.#pending.shift() ?? null
+      if (dropped === null) return { accepted: false, dropped: null, reason: 'saturated' }
+      this.#trackedKeys.delete(BoundedVscodeIntentQueue.key(dropped))
+    }
+    this.#pending.push(normalized)
+    this.#trackedKeys.add(key)
+    return { accepted: true, dropped }
+  }
+
+  /** Removes the next pending item but deliberately retains its tracked key
+   * until complete() so an equivalent intent stays single-flight. */
+  shift(): Readonly<VscodeLaunchRequest> | null {
+    return this.#pending.shift() ?? null
+  }
+
+  /** Roll back the most recently shifted in-flight item to the FIFO head.
+   * Its key deliberately remains tracked across shift/rollback, so this does
+   * not consume capacity or open a duplicate-admission window. */
+  rollbackShift(intent: VscodeLaunchRequest):
+    | { restored: true }
+    | { restored: false; reason: 'untracked' | 'already-pending' } {
+    const key = BoundedVscodeIntentQueue.key(intent)
+    if (!this.#trackedKeys.has(key)) return { restored: false, reason: 'untracked' }
+    if (this.#pending.some(candidate => BoundedVscodeIntentQueue.key(candidate) === key)) {
+      return { restored: false, reason: 'already-pending' }
+    }
+    this.#pending.unshift(Object.freeze({ instanceId: intent.instanceId, path: intent.path }))
+    return { restored: true }
+  }
+
+  complete(intent: VscodeLaunchRequest): void {
+    this.#trackedKeys.delete(BoundedVscodeIntentQueue.key(intent))
+  }
+
+  get pendingCount(): number {
+    return this.#pending.length
+  }
+
+  get trackedCount(): number {
+    return this.#trackedKeys.size
+  }
+}
+
+/** A renderer delivery remains owned by the main process until the current
+ * renderer explicitly acknowledges the exact send attempt. `deliveryId` is
+ * stable across reloads; `attempt` increments on every replay so a late ACK
+ * from a dying document cannot commit work sent to its replacement. */
+export interface AckDelivery<T> {
+  deliveryId: number
+  attempt: number
+  payload: Readonly<T>
+}
+
+interface AckDeliveryRecord<T> {
+  deliveryId: number
+  attempt: number
+  payload: Readonly<T>
+  key: string | null
+}
+
+/** Bounded FIFO handoff queue with optional normalized single-flight keys.
+ * Capacity covers pending plus sent-but-unacknowledged records. A renderer
+ * generation change requeues the complete in-flight prefix before work that
+ * arrived later, preserving global FIFO. */
+export class BoundedAckDeliveryQueue<T extends object> {
+  readonly #limit: number
+  readonly #keyOf: ((payload: Readonly<T>) => string) | null
+  readonly #trackedKeys = new Set<string>()
+  #nextDeliveryId = 1
+  #pending: AckDeliveryRecord<T>[] = []
+  #inFlight: AckDeliveryRecord<T>[] = []
+
+  constructor(limit = 64, keyOf: ((payload: Readonly<T>) => string) | null = null) {
+    if (!Number.isInteger(limit) || limit < 1) throw new RangeError('delivery queue limit must be a positive integer')
+    this.#limit = limit
+    this.#keyOf = keyOf
+  }
+
+  enqueue(payload: T):
+    | { accepted: true; deliveryId: number; dropped: Readonly<T> | null }
+    | { accepted: false; dropped: null; reason: 'duplicate' | 'saturated' } {
+    const frozen = Object.freeze({ ...payload }) as Readonly<T>
+    const key = this.#keyOf?.(frozen) ?? null
+    if (key !== null && this.#trackedKeys.has(key)) {
+      return { accepted: false, dropped: null, reason: 'duplicate' }
+    }
+
+    let dropped: Readonly<T> | null = null
+    if (this.trackedCount >= this.#limit) {
+      const evicted = this.#pending.shift() ?? null
+      if (evicted === null) return { accepted: false, dropped: null, reason: 'saturated' }
+      dropped = evicted.payload
+      if (evicted.key !== null) this.#trackedKeys.delete(evicted.key)
+    }
+
+    const deliveryId = this.#nextDeliveryId
+    this.#nextDeliveryId += 1
+    const record: AckDeliveryRecord<T> = { deliveryId, attempt: 0, payload: frozen, key }
+    this.#pending.push(record)
+    if (key !== null) this.#trackedKeys.add(key)
+    return { accepted: true, deliveryId, dropped }
+  }
+
+  /** Move the FIFO head to in-flight ownership and mint a fresh attempt. */
+  shift(): AckDelivery<T> | null {
+    const record = this.#pending.shift() ?? null
+    if (record === null) return null
+    record.attempt += 1
+    this.#inFlight.push(record)
+    return { deliveryId: record.deliveryId, attempt: record.attempt, payload: record.payload }
+  }
+
+  /** A synchronous send failure was not handed off. Restore only that record
+   * ahead of the still-pending suffix; earlier successful sends stay in-flight
+   * awaiting their own ACKs. */
+  rollback(delivery: Pick<AckDelivery<T>, 'deliveryId' | 'attempt'>): boolean {
+    const index = this.#inFlight.findIndex(record =>
+      record.deliveryId === delivery.deliveryId && record.attempt === delivery.attempt)
+    if (index === -1) return false
+    const [record] = this.#inFlight.splice(index, 1)
+    this.#pending.unshift(record)
+    return true
+  }
+
+  /** Commit only the exact current attempt. A stale ACK is a harmless false. */
+  acknowledge(deliveryId: number, attempt: number): boolean {
+    if (!Number.isSafeInteger(deliveryId) || deliveryId < 1 || !Number.isSafeInteger(attempt) || attempt < 1) return false
+    const index = this.#inFlight.findIndex(record =>
+      record.deliveryId === deliveryId && record.attempt === attempt)
+    if (index === -1) return false
+    const [record] = this.#inFlight.splice(index, 1)
+    if (record.key !== null) this.#trackedKeys.delete(record.key)
+    return true
+  }
+
+  /** Renderer reload/crash: replay every unacknowledged send before newer
+   * pending work. Their stable ids remain tracked; the next shift increments
+   * attempt, invalidating any ACK still arriving from the old document. */
+  requeueInFlight(): number {
+    if (this.#inFlight.length === 0) return 0
+    const count = this.#inFlight.length
+    this.#pending = [...this.#inFlight, ...this.#pending]
+    this.#inFlight = []
+    return count
+  }
+
+  /** Retire matching work from both pending and already-sent ownership. Used
+   * when an authoritative registry lifecycle edge invalidates a source; a
+   * same-id replacement must not inherit held work from the old incarnation. */
+  discardWhere(predicate: (payload: Readonly<T>) => boolean): number {
+    let discarded = 0
+    const keep = (record: AckDeliveryRecord<T>) => {
+      if (!predicate(record.payload)) return true
+      discarded += 1
+      if (record.key !== null) this.#trackedKeys.delete(record.key)
+      return false
+    }
+    this.#pending = this.#pending.filter(keep)
+    this.#inFlight = this.#inFlight.filter(keep)
+    return discarded
+  }
+
+  get pendingCount(): number {
+    return this.#pending.length
+  }
+
+  get inFlightCount(): number {
+    return this.#inFlight.length
+  }
+
+  get trackedCount(): number {
+    return this.#pending.length + this.#inFlight.length
+  }
+}
+
+/** Runtime protocol registration is packaged-only in this app. A packaged
+ * Linux launch must not persist argv[1]: on a cold protocol start argv[1] can
+ * itself be the URL. Electron's executable+script args form is only for the
+ * `process.defaultApp` development shape, which this app deliberately skips. */
+export function decideDeepLinkProtocolRegistration(input: {
+  isPackaged: boolean
+  platform: string
+}): { action: 'skip' } | { action: 'register' } {
+  if (!input.isPackaged || input.platform === 'win32') return { action: 'skip' }
+  return { action: 'register' }
+}
+
+/** Every restore entry point shares the same terminal quit fence. */
+export function canRestoreMainWindow(quitRequested: boolean): boolean {
+  return !quitRequested
+}
+
+/** Wrap Electron's boolean protocol-registration API in the same loud,
+ * exception-safe result discipline as the launch pipeline. */
+export function attemptDeepLinkProtocolRegistration(register: () => boolean):
+  { ok: true } | { ok: false; error: string } {
+  try {
+    return register()
+      ? { ok: true }
+      : { ok: false, error: 'setAsDefaultProtocolClient returned false' }
+  } catch (error) {
+    return { ok: false, error: `setAsDefaultProtocolClient failed: ${describeUnknownError(error)}` }
+  }
+}
+
+/** Pure readiness decision shared by the renderer hold/replay drain and its
+ * race tests. A ready handshake may legally arrive before did-finish-load;
+ * that state must hold (not drop) the intent until loading becomes false. */
+export function canDeliverRendererDeepLink(state: {
+  ready: boolean
+  currentWindow: boolean
+  destroyed: boolean
+  loading: boolean
+  crashed: boolean
+}): boolean {
+  return state.ready
+    && state.currentWindow
+    && !state.destroyed
+    && !state.loading
+    && !state.crashed
+}
+
 /**
  * Remote path validation shared by both entry points (the parsed deep link
  * and the renderer-button IPC — the renderer path is equally untrusted,
@@ -343,7 +619,7 @@ export function detectVscodeAvailability(
  * (buildVscodeRemoteUrl) → availability re-check (defense in depth, §5.2) →
  * openVscodeUrl. Every failure is loud; there is no silent success path.
  */
-export async function runVscodeLaunch(req: VscodeLaunchRequest, ctx: VscodeLaunchContext): Promise<{ ok: true } | { ok: false; error: string }> {
+async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLaunchContext): Promise<{ ok: true } | { ok: false; error: string }> {
   // Symmetric validation for the renderer-button IPC path (security-review
   // P2-3): the OS deep link already pattern-checks instance at parse time;
   // the IPC carries an equally untrusted string and must not skip the gate.
@@ -363,7 +639,7 @@ export async function runVscodeLaunch(req: VscodeLaunchRequest, ctx: VscodeLaunc
     try {
       return await ctx.openVscodeUrl(built.url)
     } catch (error) {
-      return { ok: false, error: `open vscode url failed: ${error instanceof Error ? error.message : String(error)}` }
+      return { ok: false, error: `open vscode url failed: ${describeUnknownError(error)}` }
     }
   }
   const instance = ctx.lookupInstance(req.instanceId)
@@ -383,6 +659,17 @@ export async function runVscodeLaunch(req: VscodeLaunchRequest, ctx: VscodeLaunc
   try {
     return await ctx.openVscodeUrl(built.url)
   } catch (error) {
-    return { ok: false, error: `open vscode url failed: ${error instanceof Error ? error.message : String(error)}` }
+    return { ok: false, error: `open vscode url failed: ${describeUnknownError(error)}` }
+  }
+}
+
+/** Public exception boundary for every host adapter and URI-construction step.
+ * The OS deep-link path calls this function directly (without open-in's outer
+ * provider boundary), so it must never reject on its own. */
+export async function runVscodeLaunch(req: VscodeLaunchRequest, ctx: VscodeLaunchContext): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    return await runVscodeLaunchUnchecked(req, ctx)
+  } catch (error) {
+    return { ok: false, error: `vscode launch failed: ${describeUnknownError(error)}` }
   }
 }

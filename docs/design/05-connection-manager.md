@@ -172,15 +172,23 @@ export const chamberBridge: {
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
-  reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void  // 每 ctx 插件写入（06 §4.2）
-  clearInstanceRuntime(sourceId: string): void                                  // 插件 effect 清理/断连即清（06 §4.2）
-  onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined) => void): () => void  // App 层订阅
-  registerInstanceSnapshotProducer(sourceId: string): { // 每个已挂载 ctx 一代生产者
+  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): { // 每个已挂载 ctx 一代生产者
+    report(report: InstanceRuntimeReport): void         // token 命中才发布
+    clear(): void                                       // generation-safe teardown
+  }
+  onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined,
+                             sourceFingerprint: string | undefined) => void): () => void
+  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string): { // 每个已挂载 ctx 一代生产者
     report(snapshot: InstanceSnapshot | undefined): void // undefined = baseline 不完整，恢复兜底
     clear(): void                                         // generation-safe teardown
   }
-  onInstanceSnapshot(listener: (sourceId: string, snapshot: InstanceSnapshot | undefined) => void): () => void
+  retireInstanceProducers(sourceId: string): void          // roster 退役时同步撤销 token/cache
+  getInstanceSnapshots(): Readonly<Record<string, InstanceSnapshot>>
+  onInstanceSnapshot(listener: (sourceId: string, snapshot: InstanceSnapshot | undefined,
+                                sourceFingerprint: string | undefined) => void): () => void
   reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void
+  clearPluginDiagnostic(sourceId: string): void
+  getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
   onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
 }
 ```
@@ -198,22 +206,41 @@ export const chamberBridge: {
 - 订阅 `onRefresh` → 仅无完整生产者的来源立即重拉；已挂载完整生产者由同一
   host-store 变更直接推送，避免操作后重复 RPC。
 - 订阅 `onRuntimeReport` → 把各来源的运行时事实合并进 `server.runtime`
-  （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。
+  （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。runtime 与 snapshot 两条
+  producer 均以注册时单调 token + 主进程下发的 opaque `sourceFingerprint` 认领
+  **精确来源代**：App 只接收仍与当前权威 roster proof 相等的报告。来源删除或传输
+  身份编辑时，App 在等待异步 shell dispose 前先同步调用
+  `retireInstanceProducers(sourceId)` 撤销 token/cache 并广播 withdraw；旧 ctx 随后的
+  异步 `report/clear` 全部失效，即使 replacement 尚未注册也不能污染同 id 新代。
 - 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
   失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与插件设置页详情。
 
 ## 4. N-ctx 与切换（沿用，机制不变）
 
 - N 个 AppWebEntry（共享一份静态模块表，v1 允许各自创建）；每来源一个 shell，
-  hide/show 切换，会话保活。**视图生命周期 = 注册表条目生命周期**：只有
-  来源从注册表删除才卸载其视图并 dispose shell（`disposeInstanceShell`，
-  shell.ts）——连接失败/手动断开是瞬时事实（投影为图标/徽标），不回收
+  hide/show 切换，会话保活。**视图生命周期 = 注册表来源代生命周期**：来源删除，
+  或 `kind/host/user/sshPort/remotePort` 任一传输身份字段变化，都会通过权威
+  `retiredIds` 同步退役旧视图并 dispose shell（`disposeInstanceShell`，shell.ts）；
+  label/serviceName/remoteDshHome 等呈现或 exec 字段编辑不重建隧道身份，也不退役
+  shell。连接失败/手动断开只是瞬时事实（投影为图标/徽标），不回收
   视图：设置页卡片与侧边栏分组都锚定注册表，视图若随瞬时状态消失会
   造成三面不匹配（侧边栏分组头仍可激活一个立即被回收的视图）。boot
   排队/在途时被删除的实例在 settle 时拆掉新 entry（cancelledBoots，绝不
   遗留僵尸 ctx）；被回收的视图若是当前视图则回落到 local（常驻）。
   插件图诊断同样受 boot generation 门控：已取消/已被重试取代的旧 boot
   即使迟到完成 graph 请求，也不能覆盖新一代的诊断。
+- **boot 串行与 teardown 纪律（2026-08-28）**：页面级模块物化仍由全局 boot
+  chain 串行；某次 `run()` 60s 不 settle 时，全局 chain 只放行**其他 instance**，
+  避免一个坏来源永久阻塞无关来源。相同 instance 另有 per-id boot tail：新代必须
+  等前代 `run()` settle，并等其 `AppWebEntry.dispose()` 的异步 `ctx.fiber.dispose()`
+  完成后才可启动本代 host-graph/extra-bundle 副作用并构造新 Context；60s 护栏不得让
+  same-id 两代重叠，避免共享模块表交错、同容器双 React root 与 producer 注册顺序反转。
+  无同 id 前代的其他来源仍可 eager prefetch。每 id teardown barrier 在 dispose 一开始即登记，
+  replacement/重试/删除路径都等待它；disposer 抛错或 reject 会 loud 记录但被收敛，
+  不把该来源永久楔死。取消阈值 + current generation 继续守住迟到 graph/boot 结果，
+  runtime/snapshot producer token 则守住异步 effect cleanup。boot/run catch 必须用
+  never-throw 描述器收敛任意 thrown value（含自身反射/字符串化也抛错的 Proxy），
+  不能让 boot Promise 悬挂。
 - **切换实现（修正：即时隐藏 + View Transition + 骨架屏，content-visibility）**：
   非活动视图用 `visibility:hidden + opacity:0 + pointer-events:none` 即时隐藏，
   且 `.instance-shell` 同时置 `content-visibility:hidden`——跳过整棵 shell 的
@@ -250,18 +277,29 @@ export const chamberBridge: {
    ready 远程实例**空闲预热**：按序一次一个后台
   boot（`instance-pending` 态仅 visibility 隐藏、保留 layout——vendor
   测量/IntersectionObserver 在 boot 期间正常），settle 推进下一个，使多数
-  首次切换在点击时已就绪；预热与用户触发 boot 共享 shell.ts 串行队列。
+  首次切换在点击时已就绪；预热与用户触发复用同一 entry 的 boot promise，
+  不依赖页面级 base-path/source 全局旋钮。
   不支持 content-visibility 的浏览器降级为保留 layout 的 visibility 方案
   （同样无闪烁）（styles.css `.instance-view.instance-hidden`）。
 - `openInstanceSession(sourceId, sessionId)`（shell.ts）：boot 未就绪先入队，
-  原调用 Promise 保持 pending；settle 后经 `AppWebEntry.runtimeCtx.sessions`
-  （拷贝包 seam，§6）分发，只有 runtime 接受才 resolve，dispatch/boot/dispose/
-  68s 总等待超时均 reject；每实例 boot 串行（`__DSH_BASE_PATH__` 窗口旋钮在
-  boot 期间独占）。
-- 当前来源判定：chamber-entry 在每次 boot 时注入 `ctx.chamberInstanceId`
-  （与 `__DSH_BASE_PATH__` 同节奏的模块级变量；注入经
-  `renderer/src/chamber-knob.ts`——shell.ts 在 boot 期间
-  `setChamberInstanceId`，chamber-entry `apply()` 读入）。
+  原调用 Promise 保持 pending；enqueue 当刻固定 **68s absolute deadline**（60s boot
+  queue 预算 + 最多 8s session-list 可见性轮询），flush 不重置预算，只使用剩余时间
+  且上限 8s。settle 后经 `AppWebEntry.runtimeCtx.sessions`（拷贝包 seam，§6）分发，
+  只有 runtime 接受才 resolve；dispatch poller 归属精确 `ShellHolder`，每次 snapshot/
+  重试/最终 `sessions.open()` 前复验 holder 身份，replacement/dispose/disposeAll 会同步
+  清 timer 并 reject 全部 holder-owned 在途 dispatch。boot/dispose/总截止时间到达同样
+  loud reject，旧 runtime 永不能在 teardown 后迟到执行 open；runtimeCtx/list/open 的
+  getter/调用若抛任意 hostile value，也必须经同一 never-throw 描述器 reject 并清理
+  timer/cancel handle，不能把 timer-driven open 永久挂起。
+- **每 entry Context 私有注入（2026-08-28 N-ctx 复核）**：`AppWebEntry`
+  提供 `configureContext(ctx)` seam；shell.ts 创建 entry 时用闭包把该视图自己的
+  `chamberInstanceId`、`chamberBasePath` 与主进程签发的
+  `chamberSourceFingerprint` 写入其 cordis Context，chamber-entry
+  再从该 Context 读取 basePath 并显式配置 `ConnectionPlugin`。不同 entry 不再通过
+  `window.__DSH_BASE_PATH__` 或页面级 `chamber-knob.ts` 交换 boot 参数，因此并行/
+  交错 boot 不会串用来源或代理前缀；shell 在任何 graph/module 副作用之前仅接受
+  精确 `local` 或 `ssh-<raw-id>`（raw id 明确排除保留字 `local`）且强制 basePath
+  等于 `/api/i/<instanceId>`；`chamber-knob.ts` 随该修复删除。
 - 目录选择面统一为应用内浏览对话框（browse）：**所有实例一律注册
   `UiDirectoryPickerBrowse`**，与宿主能力恒一致——本地宿主经 spawn 环境
   pin `SSH_CONNECTION`（02 §3.1）令其 directory-picker-auto 解析
@@ -304,15 +342,24 @@ export const chamberBridge: {
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 5 个 + 宿主包 2 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 2 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。
 - 拷贝补丁包（保持官方包名 `@deepseek-ai/*`，遮蔽 vendor workspace 条目）：
-  - `packages/dsh-client-connection/`——base 路径参数化补丁（`resolveInstanceBasePath`：
-    显式参数 → `window.__DSH_BASE_PATH__` → 默认 `/api`）；
+  - `packages/dsh-client-connection/`——base 路径参数化补丁；chamber N-ctx 由
+    chamber-entry 从每个 `AppWebEntry` 私有 Context 的 `chamberBasePath` 显式配置
+    `ConnectionPlugin`，构造时一次解析不可变 prefix，并同时传给 HTTP unary、两条
+    WebSocket downlink 与 generic RPC/Typert carrier；页面 transport 覆盖 HTTP/WS 时，
+    generic RPC 仍收到同一 prefix 与该 transport 的 fetch。未配置时保留官方 web
+    兼容顺序（legacy `window.__DSH_BASE_PATH__`，再回落空 prefix 直连 `/api`），但
+    chamber 运行链不再写该全局。该接缝由
+    `test:connection` 的 carrier-assembly 行为门与独立 `typecheck:connection` 源码门
+    固定，不能只靠字符串/AST 检查；
   - `packages/dsh-client-web/`——`boot.ts` N-ctx 模块表共享 seam + 公开
-    `runtimeCtx` getter（实例 shell 打开会话的 seam）。
+    `runtimeCtx` getter（实例 shell 打开会话的 seam）+ `configureContext` 同步注入
+    seam + 可等待的异步 `dispose()`。真实 `AppWebEntry.run()` 的 Context 注入顺序由
+    `test:client-web` 的 configure-context boot 用例固定（不是模拟 shell 文本断言）。
 - 自研插件包（`@dsh-chamber/*` 前缀，替换/扩展官方插件注册）：
   - `packages/dsh-chamber-client-ui-sidebar/`——**chamber 自研侧边栏插件**（包名
     `@dsh-chamber/dsh-client-ui-sidebar`，拷贝官方 ui-sidebar 结构改造：保留
@@ -331,6 +378,10 @@ export const chamberBridge: {
     Worktree 插件：占用 `sidebar.git`，页面级 singleton 以 30s 单飞读取各实例
     topology，并编排 create/workspace/session 与 Git-first remove saga；它不把
     Git 事实塞进 App aggregate，也不暴露任意 argv/path mutation。
+  - `packages/dsh-chamber-client-ui-open-in/`——设计 17 的 chamber 内建桌面打开
+    插件：占用 `conversation.session.header.utilities`，按当前 N-ctx 的 source/workspace
+    选择本机 Finder 或 VS Code；能力探测与执行只经 preload 的 trusted IPC 到
+    Desktop 主进程，无 host 插件、无 seed、无控制面执行面。
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
   - `packages/dsh-host-client-graph/`——设计 09 的只读 client boot graph Remote；
   - `packages/dsh-chamber-host-git-worktree/`——设计 08 的领域限定 Git Remote，
@@ -340,7 +391,7 @@ export const chamberBridge: {
   `chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换
   官方注册）**→**chamber 侧边栏（替换官方）**→**Git Worktree 插件**→
-  settings×4→conversation→…→全量 ui-*）。
+  **open-in 插件**→settings×4→conversation→…→全量 ui-*）。
 - **启动图清单 = 单 entry + 每实例宿主图额外 entry（设计 09）**：
   - 页面清单 `__DSH_BOOT__` = `{rev, entries:[{id, url, rev, immediately?}]}`
     （wire 契约以 vendor `dsh-client-modules/src/client/manifest.ts` 为权威）；
@@ -398,7 +449,36 @@ export const chamberBridge: {
   `dsh-chamber:settings-set`（应用并持久化 `<userData>/chamber-settings.json`，
   失败 loud `{error}`，绝不落半个设置）、推送 `dsh-chamber:settings-changed`、
   推送 `dsh-chamber:system-resume`（OS 唤醒，载荷 `{timestamp}`，渲染端立即
-  重连——设计 14 D4）；
+  重连——设计 14 D4）；设计 19 的 notifications 嵌套设置仍属于该 chamber 全局面，
+  不进入任何实例配置平面；
+- 桌面 open-in 面（设计 16/17，无实例内执行面）：
+  `dsh-chamber:open-in-apps`（本机 app 能力协商，非秘密投影）与
+  `dsh-chamber:open-in`（appId/instanceId/path/sourceFingerprint 主进程统一校验后
+  拉起 Finder/VS Code）。`sourceFingerprint` 是主进程内存签发、随 roster 投影的
+  非秘密 opaque proof（local 固定为 `local`，远程为 64 位小写十六进制）；renderer
+  不得自行构造。主进程在接受请求、异步宿主调用边界及排入 renderer intent 前复验
+  精确来源所有权，旧 shell 按钮不能操作同 id replacement；
+  app 能力首次真实 IPC reject 在同一 page-wide single-flight 内最多 3 次、间隔
+  500ms，最终仍 fail-closed；vscode 成功 intent 进入 64 上限有界 ACK 队列，push
+  携带 `{instanceId,path,sourceFingerprint,deliveryId,attempt}`，send 只转 in-flight；
+  renderer 完成/有意放弃激活后用精确 deliveryId+attempt ACK，reload/crash 会重发未
+  ACK 项，旧 attempt 或旧 proof 不能提交 replacement；
+  renderer 先注册 `dsh-chamber:deep-link-intent` 监听、再 invoke
+  `dsh-chamber:deep-link-ready` 才放行（握手失败 5×500ms 有界重试）。主进程 send
+  抛错把失败项 rollback 到未发送队首、保持 key 在途与 FIFO/去重，且仅失败的当前
+  窗口可撤销 ready；远程激活在 renderer 等当前 generation 权威 roster + proof，期间
+  单槽 last-intent-wins（被替换的旧 delivery 也须 ACK），目标权威缺失或 proof 过期才
+  loud 丢弃。激活失败不回滚已经完成的本机拉起；
+- 桌面原生通知面（设计 19 受限 carve-out，无通知中心/历史/控制面 runtime）：
+  `dsh-chamber:notify`（严格 `local | ssh-<raw-id>` 来源、事件/文本/长度白名单后由
+  主进程设置与焦点裁决；请求必须携带与当前来源代匹配的 `sourceFingerprint`）+
+  `dsh-chamber:notifications-ready` 握手 +
+  `dsh-chamber:notification-open` push。click payload 在主进程用 64 上限 FIFO hold；
+  每条 push 携带 `{sourceId,sourceFingerprint,sessionId,deliveryId,attempt}`；send 只转
+  in-flight，renderer 完成路由或有意丢弃后用精确 deliveryId+attempt ACK 才消费。
+  send 失败只回滚当前项；reload/crash 把未 ACK 项按 FIFO 重发，旧 attempt ACK 无效。
+  renderer listener-before-ready（5×500ms 有界重握手）后仍以 proof + 当前 generation
+  权威 roster 作二级门，权威缺失或 proof 过期才逐项 loud 丢弃；
 - 插件同步面（设计 13，远端 dsh plugin 编排经 provider exec 通道，spec 白名单
   见 13 §7.2）：`desktop_ssh_plugin_list/plugin_apply`（add/remove/restart，
   restart 需布尔值）、`desktop_local_plugin_list/add/remove`（本地实例插件）、
@@ -407,10 +487,13 @@ export const chamberBridge: {
   （本地路径包物化：pack → ssh 传输 → 远端 `add file:`）、`desktop_pick_directory`
   （主进程目录选择）；
 - `desktop_ssh_status_changed` 推送（隧道相位即时投影）、
-  `desktop_ssh_instances_changed` 推送（注册表增删改后即时重拉 roster；
-  renderer 另有 30s 轮询兜底）。
+  `desktop_ssh_instances_changed` 推送（载荷 `{removedIds,retiredIds}`；`removedIds`
+  仅物理删除，`retiredIds` = 删除 + 传输身份编辑，renderer 先同步退役旧来源代再重拉
+  roster；另有 30s 轮询兜底）。
 - 传输 URL 永不进 renderer；renderer 只见 localPort/phase 投影（含 `kind`）。
-- 所有 `dsh-chamber:info` / `desktop_ssh_*` invoke 必须同时满足：sender 是当前
+- 所有 invoke（含 `dsh-chamber:info` / `desktop_ssh_*` / chamber settings /
+  `dsh-chamber:open-in-apps` / `dsh-chamber:open-in` / `dsh-chamber:deep-link-ready` /
+  `dsh-chamber:notify` / `dsh-chamber:notifications-ready`）必须同时满足：sender 是当前
   主窗口 WebContents、senderFrame 是其 mainFrame、frame URL 精确属于当前
   控制面 origin；否则抛 `ipc_sender_forbidden`。窗口拒绝新窗口，并在
   `will-navigate` / `will-redirect` 阶段阻断离开控制面 origin，防止 preload

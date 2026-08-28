@@ -72,6 +72,12 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+.genericMark {
+  display: block;
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
 /* Chevron dropdown trigger (only when ≥2 apps are usable): a 16px chevron
    inside the same pill, with a hairline divider on its leading edge. */
 .chevron {

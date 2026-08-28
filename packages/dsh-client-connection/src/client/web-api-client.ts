@@ -9,9 +9,9 @@
  * (`/api/i/<id>`), which strips the prefix and forwards the remainder to the
  * instance (design 03 §3.1: `/api/i/<id>/api/...` → instance `/api/...`).
  * The stock value `/api` means no prefix injection (unchanged behaviour); the
- * per-instance value is resolved at construction from
- * `window.__DSH_BASE_PATH__` (set by the chamber shell before each sequential
- * instance boot) or from an explicit `basePath` option.
+ * per-instance value is resolved at construction from an explicit `basePath`
+ * option (used by chamber), with `window.__DSH_BASE_PATH__` retained only as
+ * a compatibility fallback for other embedders.
  *
  * Unary/respond/SSE all flow through `doFetch`, so prefixing there covers
  * `callUnary` (whose path is built in the unmodifiable apiproxy base class)

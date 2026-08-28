@@ -4,8 +4,11 @@
 > 插件重命名 `@dsh-chamber/dsh-client-ui-open-in`，`dsh-chamber:open-vscode`/
 > `vscode-availability` 两 IPC 与 `window.dshChamber.vscode` 桥面已随旧插件
 > 删除（渲染层唯一入口收敛为 `open-in-apps`/`open-in`）；OS 深链
-> `dsh-chamber://open-vscode` 管线**不变**。本文保留为 OS 深链与 vscode 拉起的
+> `dsh-chamber://open-vscode` 的 URI/拉起语义不变，生命周期已加固为有界归一化
+> single-flight 队列与 renderer ready + retain-until-ACK hold/replay。本文保留为 OS 深链与 vscode 拉起的
 > 契约；文中旧 IPC/桥面/包名描述属历史基线，以设计 17 §6 演进表为准。
+> M3 仍包含 macOS 打包态、冷/热启动与 N-ctx 等实机验收；这些项目未完成前，
+> 不把 open-in 演进后的整条链路写成 M3 已完成，最新状态以 STATUS 与设计 17 §8/§9 为准。
 
 > **状态：设计定稿并已实现（M0–M2，2026-08）**。经两轮反思 + 一轮独立对抗复核收敛
 > （复核发现无 P0；5 项 P1 必改与 P2 边界均已并入本文），实现后另经一轮安全契约
@@ -65,10 +68,17 @@
 - `packages/control-plane` 零改动（深链与实例执行无关，不经过实例反代）；
 - `packages/desktop` 持有深链核心与可用性探测（宿主能力）；新 IPC 走既有
   `trustedIpc` 围栏（05 §7.4）；
-- 与 dsh shell 的联动为 **best-effort**：VS Code 启动由主进程独立完成；深链可附带
-  归一化 intent 推送渲染层激活对应来源（`deepLink.onIntent` + App 订阅 +
-  `selectView`），窗口未就绪时按 hold/replay 纪律（仿 `lastResume`，main.ts:581），
-  shell 激活失败不阻塞 VS Code 启动。
+- VS Code 启动与 dsh shell 激活为两条独立链：启动由主进程直接完成、不等待 UI；
+  成功后的归一化 intent 进入有界 hold/replay 队列，App **先**安装
+  `deepLink.onIntent`、再调用 `deepLink.ready()`（失败按 5×500ms 有界重试），主进程
+  此后才推送；每条 push 带主进程签发的 `sourceFingerprint`、稳定 `deliveryId` 与
+  逐次递增 `attempt`，renderer 接受/入队后精确 ACK，主进程才释放记录。远程来源还要
+  在 renderer 等当前 generation 的首次权威 `instances_get` 成功后，以 roster + proof
+  双门确认才 `selectView`；此间单槽 last-intent-wins，local 立即激活，注册表缺少目标或
+  proof 过期才 loud 丢弃。冷启动/重载不会因监听或 roster 尚未就绪而丢激活；
+  shell 自身激活失败仍不回滚已经完成的 VS Code 拉起。通知点击采用同构 roster/proof
+  门，但保留完整 `{sourceId,sourceFingerprint,sessionId,deliveryId,attempt}` 的 64 条
+  有界 FIFO。
 
 ## 3. 深链契约
 
@@ -86,8 +96,12 @@ dsh-chamber://open-vscode?instance=<id>&path=<远端绝对路径>
   不查注册表）；
 - `path`：必须以 `/` 开头（绝对路径），拒绝控制字符 / CR / LF / NUL，长度 ≤ 4096；
   缺失/非法 → loud 错误；
-- 幂等/去重：macOS `open-url` 与 argv 可能双触发同一 URL → single-flight 已处理
-  集合去重；重复实例引用以首次为准。
+- 幂等/去重：macOS `open-url` 与 argv 可能以不同 raw URL 拼写双触发同一目标；
+  parse 后以 `(instanceId,path)` 归一化 key 做 pending+in-flight single-flight。
+  启动队列与 renderer replay 队列各有 64 条硬上限，容量覆盖 pending + sent-but-unacknowledged；
+  满时 loud 丢弃最旧 pending，若 64 条全在 in-flight 则 loud 拒绝新 intent（绝不冒充
+  已接收）。renderer 投递队列的 key 直到精确 ACK 才 complete，因此 send-return 后的
+  reload 窗口仍保持 single-flight；ACK 后允许用户稍后主动再次打开相同目标。
 
 ### 3.2 authority 构造（与 SSH_HOST_PATTERN 解耦）
 
@@ -146,9 +160,24 @@ vscode handler 为第一个实现；未来"在终端打开/浏览器打开"等�
 
 - `app.on('open-url')` **在模块顶层注册**（whenReady 之前，与 second-instance 同层）
   ——冷启动深链先于 startup 完成到达，必须入 `pendingIntents` 队列；
-- `pendingIntents` 在 startup 完成（transportManager 装载 + 主窗口就绪）后统一
-  drain；冷启动 argv 在 `whenReady` 内解析（macOS argv 含 `-psn_` 噪声，防御式：
-  非深链 argv 零副作用、绝不 throw 打断启动）；
+- `pendingIntents` 在 startup 完成（transportManager 装载 + 主窗口创建）后顺序
+  drain；成功拉起只把 intent 交给独立 `pendingRendererIntents`，不直接向尚未订阅的
+  frame 发送。冷启动 argv 在 `whenReady` 内解析（macOS argv 含 `-psn_` 噪声，
+  防御式：非深链 argv 零副作用、绝不 throw 打断启动）；
+- preload 暴露 `deepLink.onIntent()` + `ready()`；App 按 listener-before-ready
+  顺序握手。导航开始/renderer crash/窗口关闭会复位 ready；`did-finish-load` 与
+  ready handler 都尝试 drain，覆盖“React 已握手但慢子资源仍令 isLoading=true”的
+  顺序；App 对 ready 的瞬时失败做 5×500ms 有界重试并在耗尽时 loud；旧窗口事件
+  不得改变新窗口状态。`webContents.send` 返回只把记录转成 in-flight，**不代表消费
+  成功**；renderer 在完整 intent 已接受/入有界 roster 队列后调用 trusted
+  `deep-link-ack(deliveryId,attempt)`，仅精确当前 attempt 释放容量与 single-flight key。
+  reload/crash/start-loading/closed 将全部未 ACK 前缀按 FIFO 放回队首，下一次发送递增
+  attempt，旧 document 的迟到 ACK 无效；同步 send throw 只 rollback 当前 intent，
+  早先成功发送的前缀继续逐项等待 ACK，后继不得越过。仅仍为 current 的失败窗口可
+  撤销 ready，ready IPC 返回 false 令 renderer 进入下一次有界握手。主进程完成这一级
+  replay 后，远程 intent 仍按 §2 的权威 roster generation + sourceFingerprint 二级
+  hold/replay，避免冷启动 roster 尚未返回时被视为已删除，也避免旧来源代激活同 id
+  replacement；
 - Win/Linux：`second-instance(event, commandLine, …)` 扫描 argv；**无深链 argv →
   仅 `showMainWindow()`**（现有行为保持；handler 签名变更不可避免，语义不变）；
 - `quitRequested` 置位后（before-quit 确认在途 / will-quit 清理）到达的深链直接
@@ -159,6 +188,11 @@ vscode handler 为第一个实现；未来"在终端打开/浏览器打开"等�
 - **`app.isPackaged` 门控** `setAsDefaultProtocolClient('dsh-chamber')`（镜像托盘
   先例 main.ts:258）——开发态注册会把裸 Electron 注册成 scheme handler，污染
   LaunchServices，与打包版（bundle id `com.dshchamber.desktop`）冲突；
+- `setAsDefaultProtocolClient` 的 `false` 返回值与 throw 都经
+  `attemptDeepLinkProtocolRegistration` 变成 loud 失败日志，绝不把“未注册”写成成功；
+- **打包 Linux/macOS 均使用无 relaunch args 形态**；冷启动时 `argv[1]` 可能就是
+  本次 `dsh-chamber://` URL，绝不把它作为固定参数写进协议注册。Electron 的
+  executable+script 参数形态仅属于 `process.defaultApp` 开发启动，而本应用已门控开发态注册；
 - 打包态：electron-builder `protocols: [{ schemes: ['dsh-chamber'] }]`（自动生成
   mac `CFBundleURLTypes` / linux desktop `MimeType` / Windows 注册表项）；
 - dev 深链测试：`electron-dev.mjs` 支持透传 argv 注入（URL 作为冷启动 argv），
@@ -303,6 +337,9 @@ detectVscodeAvailability(platform): { available: boolean }
 - 探测零副作用、绝不执行 PATH 中的 `code`（仅文件/可执行位检查）；
 - 失败全 loud（对话框/日志/`{error}`），绝不静默假成功；fail-closed 优先
   （探测未知 → 按钮隐藏）。
+- `runVscodeLaunch` 在 registry/availability/URL 构造/openExternal 全链外设异常边界；
+  `describeUnknownError` 对 hostile message getter/Proxy/toString 二次 throw 仍返回稳定
+  `unknown error`，公共 Promise 不落 transport rejection。
 
 ## 9. 分期（里程碑）
 
@@ -340,20 +377,45 @@ detectVscodeAvailability(platform): { available: boolean }
   （复位可重试，镜像 App.tsx 的桥就绪守卫），按钮侧有界轮询桥就绪后再探测。P2 已修：
   `/shared` barrel 补齐、`open()` 补 `.catch`、`chamberInstanceId` 缺失时 bail 不注册、
   删除未用 `ui-primitives` peer、`:focus-visible` 焦点环。
-- **验收执行**：构建产物（control-plane / preload / chamber bundle / manifest 单 entry）
-  与自动化门（test:desktop 263 用例含 deep-link 43、typecheck、typecheck:vscode、
-  build:renderer、verify:i18n、frozen-lockfile）全绿；dev:desktop 有界冒烟受本会话沙箱
+- **验收执行（历史实现轮）**：构建产物（control-plane / preload / chamber bundle /
+  manifest 单 entry）与自动化门（test:desktop 的 deep-link 套件、typecheck、
+  typecheck:vscode、build:renderer、verify:i18n、frozen-lockfile）全绿；精确冻结 HEAD
+  数字只见 STATUS。dev:desktop 有界冒烟受本会话沙箱
   限制（Chromium 沙箱无法初始化）未整窗 boot，控制面/主进程启动日志正常、缺 dsh CLI 的
   本地实例错误态非致命。
 - **如实记录的剩余边界**：① `openExternal` resolve ≠ VS Code 真打开（未注册 handler 的
   平台可能静默 no-op——Electron 固有局限，打开成功判定无法在模块内证明）；② Linux
-  打包态 `setAsDefaultProtocolClient` 的 relaunch args 未经实机验证；③ 深链 path 的
+  打包态无参数 `setAsDefaultProtocolClient` 仍未经实机协议注册验证；③ 深链 path 的
   `+` 按表单编码解为空格为标准行为；④ 路径段 `..` 不额外编码（合法路径段，无穿越
   沙箱/无法逃逸 scheme-host——VS Code 在远端解析，终审核实无绕过面）；⑤ 插件以局部 `VscodeBridgeSurface` 结构子集 cast
   消费桥（未声明全局 Window 增强——避免与 renderer 桥契约的 interface-merging 冲突，
   属 §7.2 第 7 条的文档化偏离）；⑥ 按钮 top 偏移（标题栏行高 vendor 决定）与 macOS
   深链冷/热启动、打包态协议注册、N-ctx 实机显示、托盘/退出在途等仍需打包态/人工实机
   验证。
+
+### 10.3 2026-08-28 全面合并前复核
+
+- 深链启动队列从 raw URL 集合改为 64 条有界、归一化、pending+in-flight
+  single-flight；协议注册的 `false` 返回值不再被忽略；
+- `runVscodeLaunch` 补全外层 exception boundary，并以 hostile Proxy 回归固定错误
+  描述器永不二次抛错；availability/registry adapter throw 均结构化返回；
+- 冷启动成功 intent 不再在 `loadURL` 后抢跑发送：主进程 hold，renderer
+  listener-before-ready 握手后 replay；ready-before-did-finish 与 renderer reload/
+  crash 路径均有补 drain/复位纪律；ready 瞬时失败按 5×500ms 重试。远程来源在 renderer
+  再等当前 generation 权威 roster，消除冷启动目标被 `selectView` 守卫永久吞掉的竞态；
+- renderer push 改为稳定 `deliveryId` + 每代 `attempt` 的 retain-until-ACK：send 返回
+  只转 in-flight，reload/crash 会将全部未 ACK 前缀按 FIFO 重发，旧 attempt ACK 无效；
+  同步发送失败不释放 tracked key 或把失败的 A 排到后来的 B 之后，rollback 后重握手
+  仍严格 A→B；旧窗口的失败回调不能清新窗口 ready；
+- 每个成功 launch 在主进程捕获当前来源 ownership token，renderer push 携带
+  `{instanceId,path,sourceFingerprint,deliveryId,attempt}`。远程 proof 是主进程内存签发
+  的 opaque 值；删除或传输身份编辑会轮换来源代并丢弃旧 pending/in-flight，renderer
+  在激活/ACK 前用权威 roster + proof 复验，同 id replacement 不继承旧 intent；
+- 两个 64 条队列的硬上限覆盖 pending + sent-but-unacknowledged；无 pending 可淘汰时明确返回
+  `saturated`。同构 notification click 路径保留完整 payload 的有界 FIFO，并在 roster
+  settle 后按序 replay；notification 同样精确 ACK、跨 reload 重发；
+- 自动化最终数字只见 STATUS；设计 17 §8 只定义验证门。macOS 协议注册和 VS Code 实际拉起仍属于
+  M3 实机验收，不能由 Linux 构建替代。
 
 ## 11. 相关文档
 

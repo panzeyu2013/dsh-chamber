@@ -5,6 +5,7 @@
     "outDir": "lib/types",
     "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo"
   },
+  "include": [],
   "files": [
     "src/api-path.ts",
     "src/api-request-trust.ts",

@@ -34,11 +34,10 @@ const CHAMBER_ID = '@dsh-chamber/app'
  * The vite 6 manifest keys chunks by facade-relative source path (not the
  * rollupOptions.input key), so the chamber row is located by its emitted
  * file pattern: the input name drives chunkFileNames (`assets/chamber-*.js`).
- * The pattern ALONE is not sufficient: a shared chunk named after the input
- * module (chamber-knob.ts is imported by both the main and chamber entries,
- * so rollup hoists it into `assets/chamber-knob-*.js`) also matches it. The
- * row must therefore also be a real entry (isEntry === true) — shared chunks
- * carry no `__ModuleLoader__.load` registration and must never be picked.
+ * The pattern ALONE is not sufficient: Rollup may emit shared chunks whose
+ * generated names also begin with `chamber-`. The row must therefore also be
+ * a real entry (isEntry === true) — shared chunks carry no
+ * `__ModuleLoader__.load` registration and must never be picked.
  */
 const CHAMBER_FILE_PATTERN = /^assets\/chamber-[^/]+\.js$/
 

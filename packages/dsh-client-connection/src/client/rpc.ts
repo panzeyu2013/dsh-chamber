@@ -7,9 +7,9 @@
  * every generic RPC call lands under the control-plane's per-instance proxy
  * prefix. The origin resolution stays same-origin (`location.origin`, with the
  * `dsh.internal` fallback for no-location environments). With the stock base
- * path `/api` the URL is byte-identical to upstream. The base path is resolved
- * at construction from `window.__DSH_BASE_PATH__` (chamber sets it before each
- * sequential instance boot) or from an explicit option.
+ * path `/api` the URL is byte-identical to upstream. Chamber supplies the
+ * explicit option from each entry's private Context; `window.__DSH_BASE_PATH__`
+ * remains only as a compatibility fallback for other embedders.
  *
  * merged with upstream rc.2 transport override（RpcFetch/doFetch）.
  */
