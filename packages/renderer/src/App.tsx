@@ -43,6 +43,7 @@ import {
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { isIdleEvictable, isWithinCooldown } from './eviction-policy.ts'
+import { deadKeys, deadSetKeys, nextActiveView, planViewRecycle, pruneRecordKeys, rawStatusLiveIds } from './recycle-policy.ts'
 import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
@@ -397,123 +398,44 @@ export default function App() {
 
   useEffect(() => {
     const live = new Set(servers.map(server => server.id))
-    // dispose 是副作用，不能放进 setState updater（React 19 渲染期可能急切
-    // 求值 updater，StrictMode 还会双调用）——先从当前 mountedViews 算出
-    // 被回收的 id 再统一处置（teardownView 内部 setMountedViews 保持
-    // identity-preserving）。
-    const removed = mountedViews.filter(id => !live.has(id))
-    if (removed.length > 0) {
-      for (const id of removed) teardownView(id)
-    }
-    setActiveView(prev => {
-      if (prev === LOCAL_INSTANCE_ID) return prev
-      const server = servers.find(candidate => candidate.id === prev)
-      if (server !== undefined) return prev
-      return LOCAL_INSTANCE_ID
-    })
+    // 回收/驱逐决策全部外提为纯函数（recycle-policy.ts，单测覆盖），本 effect
+    // 只做调用与副作用处置：dispose 是副作用，不能放进 setState updater（React
+    // 19 渲染期可能急切求值 updater，StrictMode 还会双调用）——先从当前
+    // mountedViews 与注册表投影算出被回收的 id 再统一处置（teardownView 内部
+    // setMountedViews 保持 identity-preserving）。
+    const plan = planViewRecycle({ mountedViews, liveViewIds: live })
+    for (const id of plan.removedViews) teardownView(id)
+    // 活动视图随回收回落 local。nextActiveView 是纯函数（单测覆盖），经功能性
+    // updater 调用——读取最新 committed 的 activeView，绝不读陈旧闭包（本
+    // effect 的依赖不含 activeView）。
+    setActiveView(prev => nextActiveView(prev, live, LOCAL_INSTANCE_ID))
     // 注册表删除的实例同时清掉其数据面残留（聚合/运行时事实/状态投影）——
     // 视图已回收，键空间应随注册表收敛（重加同名 id 由刷新重建）。
-    setAggregates(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    setRuntimeFacts(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    setSnapshotSources(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    for (const id of Object.keys(snapshotSourcesRef.current)) {
-      if (!servers.some(server => server.id === id)) delete snapshotSourcesRef.current[id]
-    }
+    // pruneRecordKeys 保持 identity-preserving：无死键时 next === prev，
+    // state 对象不变、不触发重渲染。
+    setAggregates(prev => pruneRecordKeys(prev, live).next)
+    setRuntimeFacts(prev => pruneRecordKeys(prev, live).next)
+    setSnapshotSources(prev => pruneRecordKeys(prev, live).next)
+    for (const id of deadKeys(snapshotSourcesRef.current, live)) delete snapshotSourcesRef.current[id]
     // Reap the parallel per-instance refs too (2026 round-3 review) — dead
     // keys only, the values self-heal, but the registry must stay converged.
-    for (const id of Object.keys(snapshotAtRef.current)) {
-      if (!servers.some(server => server.id === id)) delete snapshotAtRef.current[id]
-    }
-    for (const id of [...readyAggregateSourcesRef.current]) {
-      if (!servers.some(server => server.id === id)) readyAggregateSourcesRef.current.delete(id)
-    }
-    for (const id of Object.keys(aggregateSeqRef.current)) {
-      if (!servers.some(server => server.id === id)) delete aggregateSeqRef.current[id]
-    }
-    for (const id of Object.keys(mutationRefreshSeqRef.current)) {
-      if (!servers.some(server => server.id === id)) delete mutationRefreshSeqRef.current[id]
-    }
-    setPluginDiagnostics(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    setCompletedBySource(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
+    for (const id of deadKeys(snapshotAtRef.current, live)) delete snapshotAtRef.current[id]
+    for (const id of deadSetKeys(readyAggregateSourcesRef.current, live)) readyAggregateSourcesRef.current.delete(id)
+    for (const id of deadKeys(aggregateSeqRef.current, live)) delete aggregateSeqRef.current[id]
+    for (const id of deadKeys(mutationRefreshSeqRef.current, live)) delete mutationRefreshSeqRef.current[id]
+    setPluginDiagnostics(prev => pruneRecordKeys(prev, live).next)
+    setCompletedBySource(prev => pruneRecordKeys(prev, live).next)
     // prevRunning 是 ref：同步裁剪，随注册表收敛（重加同名 id 由刷新重建）。
-    for (const id of Object.keys(prevRunningRef.current)) {
-      if (!servers.some(server => server.id === id)) delete prevRunningRef.current[id]
-    }
+    for (const id of deadKeys(prevRunningRef.current, live)) delete prevRunningRef.current[id]
     // 通知边沿记忆同款收敛（设计 19 §3.2）：与 prevRunningRef 对称，
     // 随注册表收敛，重加同名 id 由刷新重建。
-    for (const id of Object.keys(prevRuntimeFactsRef.current)) {
-      if (!servers.some(server => server.id === id)) delete prevRuntimeFactsRef.current[id]
-    }
-    for (const id of Object.keys(notifiedCompleteRef.current)) {
-      if (!servers.some(server => server.id === id)) delete notifiedCompleteRef.current[id]
-    }
-    setRemoteStatus(prev => {
-      // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
-      // 与 servers 的 ssh-<id> 前缀 id 不同——按前缀剥离还原再比较。
-      const liveRaw = new Set<string>()
-      for (const server of servers) {
-        liveRaw.add(server.kind === 'local' ? 'local' : server.id.slice(4))
-      }
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!liveRaw.has(id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
+    for (const id of deadKeys(prevRuntimeFactsRef.current, live)) delete prevRuntimeFactsRef.current[id]
+    for (const id of deadKeys(notifiedCompleteRef.current, live)) delete notifiedCompleteRef.current[id]
+    // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
+    // 与 servers 的 ssh-<id> 前缀 id 不同——rawStatusLiveIds 按前缀剥离还原
+    // 再比较（纯函数，单测覆盖）。
+    const liveRaw = rawStatusLiveIds(servers)
+    setRemoteStatus(prev => pruneRecordKeys(prev, liveRaw).next)
     // 回收后立即推进预热队列（2026 audit M8）：inflight 已清，排队项应继续。
     drainPrewarm()
   }, [servers, mountedViews, teardownView])
