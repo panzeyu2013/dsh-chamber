@@ -296,7 +296,7 @@
 
 - `01-overview.md` §3 文档地图（本文档编号 11，2026-08 自 `docs/todo/` 移入）；
   `docs/progress/STATUS.md`（本文档由「未完成 / 待执行」移入「已实现」记录）。
-- 涉及面：`packages/desktop`（`main.ts`、`preload.cts`、`updater.ts`、
+- 涉及面：`packages/desktop`（`main.ts`、`ipc-update.ts`、`preload.cts`、`updater.ts`、
   `package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳
   `__general` 视图内的 `UpdateSection` + `update-store` + `update-gate`）、
   `.github/workflows/release.yml`。

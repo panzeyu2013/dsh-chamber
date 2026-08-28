@@ -66,12 +66,17 @@
   正确解码）。
 - **boot 预算取消 + 串行链（2026 audit H1）** —— 整个 boot 任务（含宿主图
   通道与 `AppWebEntry.run()` 各阶段）受超时预算约束：超时即取消（dispose
-  已构造 entry、拒绝排队 opens），调用方与串行链都在预算内 settle，两个
-  boot 永不并发覆盖 `__DSH_BASE_PATH__` 旋钮（消除跨实例流量混淆）；
-  任务先 settle 时清除计时器，成功 boot 不会被过期计时器误取消。
+  已构造 entry、拒绝排队 opens），调用方与 admission 链都在预算内 settle；
+  超时 entry 的底层异步工作可能迟到恢复，因此路由事实固化在每个 entry 自己
+  的 Cordis root context，connection 收到显式 basePath，绝不共享页面级可变
+  旋钮；dispose 作为取消信号阻止迟到 mount，并重复 root sweep。任务先
+  settle 时清除计时器，成功 boot 不会被过期计时器误取消。
 - **dispose 串行化（2026 audit M1）** —— `AppWebEntry.dispose()` 是异步
   teardown：同 ID 重 boot 必须先 await 旧 teardown 完成（pendingDisposes），
-  新旧 ctx 永不重叠、旧 teardown 不再清掉新 shell 的共享状态。
+  同 entry 重复 dispose 共享同一 Promise、不会用已完成 Promise 覆盖真实
+  teardown；shell 在异步 boot 开始/取消时预留 producer generation floor，
+  runtime 与 snapshot producer 均携带显式 boot generation，旧 ctx 的迟到
+  注册/report/clear 均不能抢占或清掉新 shell 的共享状态。
 - **exec 子进程退出等待（2026 audit M2）** —— 退出时 exec 子进程（systemd/
   远端命令 ssh）与隧道子进程同款 SIGTERM→SIGKILL 升级，`disposeAsync` 等待
   全部退出，SIGTERM 忽略型 ssh 不再残留孤儿进程。

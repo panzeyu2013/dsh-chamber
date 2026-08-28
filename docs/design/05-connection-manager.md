@@ -182,10 +182,13 @@ export const chamberBridge: {
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
-  reportInstanceRuntime(sourceId: string, report: InstanceRuntimeReport): void  // 每 ctx 插件写入（06 §4.2）
-  clearInstanceRuntime(sourceId: string): void                                  // 插件 effect 清理/断连即清（06 §4.2）
+  reserveInstanceProducerGeneration(sourceId: string, generation: number): void // 异步 boot 前占代
+  registerInstanceRuntimeProducer(sourceId: string, generation: number): { // 每个已挂载 ctx 一代生产者
+    report(report: InstanceRuntimeReport): void        // generation + token 命中才发布（06 §4.2）
+    clear(): void                                      // generation-safe teardown
+  }
   onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined) => void): () => void  // App 层订阅
-  registerInstanceSnapshotProducer(sourceId: string): { // 每个已挂载 ctx 一代生产者
+  registerInstanceSnapshotProducer(sourceId: string, generation: number): { // 每个已挂载 ctx 一代生产者
     report(snapshot: InstanceSnapshot | undefined): void // undefined = baseline 不完整，恢复兜底
     clear(): void                                         // generation-safe teardown
   }
@@ -236,13 +239,25 @@ export const chamberBridge: {
 - **boot 预算与串行化（2026 audit H1/M1，契约）**：整个 boot 任务（含
   host-graph 通道与 `AppWebEntry.run()` 各阶段）受 `BOOT_TIMEOUT_MS` 预算
   约束——超时即取消（记录 cancelledBoots、立即 dispose 已构造的 entry、
-  拒绝排队 opens），调用方与串行链都在预算内 settle；两个 boot 永不并发，
-  也就不会并发覆盖 `window.__DSH_BASE_PATH__` 旋钮（跨实例流量混淆的
-  根因）。取消阈值**单调、永不删除**（与 bootGenerations 同范式——注册成功
-  清阈值依赖队列 FIFO，被超时打破；迟到 settle 观察阈值后拆除而非注册）。
+  拒绝排队 opens），调用方与 admission 链都在预算内 settle；正常 boot 仍
+  串行进入，但超时任务的底层异步工作可能在后台迟到恢复。路由事实因此绝不
+  存在页面级可变旋钮中：shell 把 `{instanceId, basePath, generation}` 作为
+  `AppWebEntryOptions.chamberContext` 传入，boot.ts 校验二者精确对应后，在任何
+  loader entry 创建前绑定到**该 entry 自己的 Cordis root context**；
+  chamber-entry 再把同一 `basePath` 显式传给 connection client。新 boot 与迟到
+  的旧 continuation 即使短暂重叠，也不可能串用来源。`dispose()` 同时充当
+  AppWebEntry 的取消信号：每个异步阶段恢复后都检查，已取消 entry 不得重新
+  mount；迟到恢复再做一次幂等 root sweep。取消阈值**单调、永不删除**（与
+  bootGenerations 同范式——注册成功清阈值依赖队列 FIFO，被超时打破；迟到
+  settle 观察阈值后拆除而非注册）。
   dispose 串行化：
   `AppWebEntry.dispose()` 是异步 teardown，同 ID 重 boot 必须先 await 旧
-  teardown 完成（pendingDisposes），新旧 ctx 永不重叠。
+  teardown 完成（pendingDisposes）；旧 boot 的底层 continuation 仍可能迟到，
+  因此 shell 在 boot 开始/超时/销毁时先占单调 producer generation floor，
+  ctx 内 runtime/snapshot producer 必须携带同一 generation，旧代迟到注册本身
+  即为 no-op（不只防旧 clear）。timeout 与迟到 settle 对同一个 entry 的重复
+  dispose 按 entry 身份去重且共享同一 Promise，绝不能用第二次调用覆盖仍在
+  执行的真实 teardown Promise。
   **L2（来源域键）**：双击 pending 与 blank-ghost 宽限均按
   `(serverId, sessionId)` 建键——克隆实例携带相同 UUID 时跨来源点击/幽灵槽
   绝不串状态（`data-chamber-section` 提供点击目标的来源归属）。
@@ -288,12 +303,14 @@ export const chamberBridge: {
 - `openInstanceSession(sourceId, sessionId)`（shell.ts）：boot 未就绪先入队，
   原调用 Promise 保持 pending；settle 后经 `AppWebEntry.runtimeCtx.sessions`
   （拷贝包 seam，§6）分发，只有 runtime 接受才 resolve，dispatch/boot/dispose/
-  68s 总等待超时均 reject；每实例 boot 串行（`__DSH_BASE_PATH__` 窗口旋钮在
-  boot 期间独占）。
-- 当前来源判定：chamber-entry 在每次 boot 时注入 `ctx.chamberInstanceId`
-  （与 `__DSH_BASE_PATH__` 同节奏的模块级变量；注入经
-  `renderer/src/chamber-knob.ts`——shell.ts 在 boot 期间
-  `setChamberInstanceId`，chamber-entry `apply()` 读入）。
+  68s 总等待超时均 reject；正常 boot 经共享 admission 链串行进入，预算过期
+  后按上面的 immutable per-entry routing + cancellation 契约安全推进后续 boot。
+- 当前来源判定：shell 在构造 AppWebEntry 时传入精确匹配的
+  `{instanceId, basePath, generation}`；`packages/dsh-client-web/src/chamber-context.ts`
+  在该 entry 的 Cordis root context 上提供 `ctx.chamberInstanceId` 与
+  `ctx.chamberConnectionBasePath`、`ctx.chamberBootGeneration`。chamber-entry 在
+  注册任何插件前 fail-closed 校验三者，并将 basePath 显式交给 connection
+  plugin；不存在模块级或 window 级的 chamber 路由状态。
 - 目录选择面统一为应用内浏览对话框（browse）：**所有实例一律注册
   `UiDirectoryPickerBrowse`**，与宿主能力恒一致——本地宿主经 spawn 环境
   pin `SSH_CONNECTION`（02 §3.1）令其 directory-picker-auto 解析
@@ -343,7 +360,8 @@ export const chamberBridge: {
   要修改的包必须拷入本仓 `packages/`。
 - 拷贝补丁包（保持官方包名 `@deepseek-ai/*`，遮蔽 vendor workspace 条目）：
   - `packages/dsh-client-connection/`——base 路径参数化补丁（`resolveInstanceBasePath`：
-    显式参数 → `window.__DSH_BASE_PATH__` → 默认 `/api`）；
+    显式参数 → `window.__DSH_BASE_PATH__` 兼容兜底 → 默认 `/api`；chamber
+    一律从 entry root context 传显式参数，不读取 window 兜底）；
   - `packages/dsh-client-web/`——`boot.ts` N-ctx 模块表共享 seam + 公开
     `runtimeCtx` getter（实例 shell 打开会话的 seam）。
 - 自研插件包（`@dsh-chamber/*` 前缀，替换/扩展官方插件注册）：

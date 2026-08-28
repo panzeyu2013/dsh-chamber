@@ -61,8 +61,8 @@
 │  └ vscode：remoteCapable=true；available=ctx.vscodeAvailable（注入可测）    │
 │            open=runVscodeLaunch（零行为变化，深链管线原样复用）             │
 │  runOpenInLaunch 六步 loud 管线 + normalizeOpenPathError（shell 边界纯函数）│
-│  main.ts：info 载荷 +platform；open-in-apps / open-in 两 IPC（含载荷形状     │
-│    守卫；vscode 成功时保留 deep-link-intent 推送）                          │
+│  main.ts：info 载荷 +platform；ipc-open-in.ts：open-in-apps / open-in 两    │
+│    IPC（含载荷形状守卫；vscode 成功时保留 deep-link-intent 推送）           │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 

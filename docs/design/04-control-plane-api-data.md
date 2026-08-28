@@ -53,7 +53,7 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 
 ### D3 · 连接唯一：catalog 单行（local）
 
-- 数据权威 = `connections.json` 单行（03 §2.1）；status / dshPort 为
+- 数据权威 = `catalog.json` 单行（03 §2.1）；status / dshPort 为
   PlaneHandle 投影（02 §3.5），控制面只持久化 label / accentColor；
 - `POST` 只接受 `kind:'local'`（幂等启动）；远程实例在桌面注册表，不进本面。
 
@@ -245,7 +245,7 @@ interface WebBootGraph {
 | JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, label, kind, host, user, sshPort, remotePort, serviceName, remoteDshHome}`（schema 以 03 §2.2 为准） | 桌面主进程（03 §2.2） |
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
-- **原子写协议**（connections.json）：同步 write-through + `tmp + fsync +
+- **原子写协议**（catalog.json）：同步 write-through + `tmp + fsync +
   rename`；成功后才发布内存状态，失败回滚并抛出
   `json_store_persist_failed`，任何 catalog/API 调用都不得回报成功；损坏 →
   回退备份并进入显式 recovery 态，绝不冒充空行（03 §2.1 同款）。

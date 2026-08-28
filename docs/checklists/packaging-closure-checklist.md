@@ -52,12 +52,16 @@
 
 ## 4. 快速清单速查（当前基线，2026-09）
 
-`build.files` 必须包含的根级 TS 模块（随 1 增删）：
+`build.files` 以根级 `*.ts` / `*.cts` glob 收取，并用 `!*.test.ts` 排除测试；
+当前运行闭包包括：
 
-- `main.ts`、`preload.cts`、`updater.ts`、`chamber-settings.ts`、
-  `transport-provider.ts`、`transport-manager.ts`、`ssh-provider.ts`、
-  `ssh-config.ts`、`renderer-trust.ts`、`plugin-sync.ts`、`deep-link.ts`、
-  `notifications.ts`、`open-in.ts` + `dist/**/*` + `package.json`。
+- `main.ts`、`preload.cts`、`control-plane-module.ts`、`wiring.ts`、
+  `ipc-events.ts`、全部 `ipc-*.ts`，以及 `updater.ts`、
+  `chamber-settings.ts`、`transport-provider.ts`、`transport-manager.ts`、
+  `ssh-provider.ts`、`ssh-config.ts`、`renderer-trust.ts`、`plugin-sync.ts`、
+  `deep-link.ts`、`notifications.ts`、`open-in.ts`；另含 `dist/**/*` 与
+  `package.json`。新增根级运行模块会自动进入，新增测试必须保持
+  `*.test.ts` 后缀。
 
 已生效的排除（勿删）：
 

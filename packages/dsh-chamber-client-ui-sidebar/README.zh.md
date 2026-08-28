@@ -98,7 +98,9 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   三角，优先级高于实时子 agent 运行环、已完成圆点与轮询运行脉冲）走
   运行时事实通道：每个来源自己的 ctx 把 `sessions.list` 投影（含 vendor
   血缘索引的每父会话运行中子 agent 计数）经
-  `chamberBridge.reportInstanceRuntime` 上报，App 层合并进
+  generation-safe 的 `chamberBridge.registerInstanceRuntimeProducer` 上报；
+  shell 在异步 boot 前预留代际，过期 ctx 即使迟到注册也只能得到 inert producer，
+  App 层合并进
   `server.runtime`，本外壳为所有来源渲染状态指示，不再订阅任何 store。
   当前会话高亮为**全局单选**：仅拥有可见 ctx 的来源（正在查看的视图）
   渲染高亮，全局只有一个会话被选中标记。

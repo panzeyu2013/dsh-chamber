@@ -87,14 +87,20 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   boot task (host-graph channel and `AppWebEntry.run()` phases included) is
   bounded by a timeout budget: expiry cancels the boot (disposes the
   constructed entry, rejects queued opens), and both the caller and the
-  serialized chain settle within budget — two boots never run concurrently,
-  so the `__DSH_BASE_PATH__` knob is never overwritten mid-boot (the root of
-  cross-instance traffic confusion); the timer is cleared when the task wins,
-  so a successful boot is never cancelled by a stale timer.
+  admission chain settle within budget. Underlying async work from an expired
+  entry may resume late, so routing facts are immutable on that entry's own
+  Cordis root context and the connection gets an explicit basePath — no mutable
+  page-global routing knob is shared. Dispose acts as cancellation, blocks a
+  late mount, and repeats the root sweep; the timer is cleared when the task
+  wins, so a successful boot is never cancelled by a stale timer.
 - **Serialized dispose (2026 audit M1)** — `AppWebEntry.dispose()` is an async
   teardown: a same-id re-boot awaits the old teardown (pendingDisposes)
-  before constructing a fresh ctx — old and new ctx never overlap, and an old
-  teardown can no longer clear a new shell's shared state.
+  before constructing a fresh ctx; duplicate disposal of the same entry joins
+  the same promise and cannot replace the real teardown with an already-settled
+  promise. The shell reserves a producer-generation floor when async boot
+  starts or is cancelled, and runtime/snapshot producers carry the explicit
+  boot generation, so an old ctx's late registration/report/clear cannot
+  displace or clear the new shell's shared state.
 - **Exec-child exit wait (2026 audit M2)** — exec children (systemd/remote
   command ssh) get the same SIGTERM → SIGKILL escalation as tunnel children
   at quit, and `disposeAsync` waits for all of them — a SIGTERM-ignoring ssh

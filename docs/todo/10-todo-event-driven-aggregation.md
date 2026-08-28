@@ -29,14 +29,14 @@
 
 ## 2. 机制：各来源 ctx 推投影，轮询降级为兜底
 
-通道基建 = **06 §4 已实现的 `reportInstanceRuntime` 模式**（每来源插件
+通道基建 = **06 §4 已实现的 generation-safe runtime producer 模式**（每来源插件
 `inject` 订阅 `sessions.list` → 投影 → chamberBridge → App 层
 `aggregate-store.ts`）。本次落地沿用并扩展同一通道：侧边栏插件（每来源 shell 各一份，
 `inject` 含 `sessions`/`workspaces`）同时订阅 `sessions.list` 与 `workspaces.list`，
 把事实投影通道推广为全量快照通道 `reportInstanceSnapshot`，不另造订阅机制：
 
 1. **`packages/dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts`**：新增
-   generation-safe `registerInstanceSnapshotProducer(sourceId)` / `onInstanceSnapshot(listener)`
+   generation-safe `registerInstanceSnapshotProducer(sourceId, generation)` / `onInstanceSnapshot(listener)`
    通道——旧 shell 的迟到 cleanup 不会清除同 id 新 shell 的快照。
 2. **`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`** `sync()`：除
    runtime facts 外，把两个 store 经纯函数 `projectInstanceSnapshot` 投影；只有两份

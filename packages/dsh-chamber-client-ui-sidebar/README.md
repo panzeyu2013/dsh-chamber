@@ -123,7 +123,10 @@ place of the official ui-sidebar (which stays untouched in
   running-subagent ring, the completed dots, then the polled running pulse);
   each source's own ctx reports its
   `sessions.list` projection (including the vendor lineage index's running
-  subagent count per parent) through `chamberBridge.reportInstanceRuntime`,
+  subagent count per parent) through a generation-safe
+  `chamberBridge.registerInstanceRuntimeProducer`; the shell reserves the
+  generation before async boot, so even late registration from an expired ctx
+  is inert,
   the App layer merges it into `server.runtime`, and this shell renders the
   indicators for every source without subscribing to any store. The
   current-session

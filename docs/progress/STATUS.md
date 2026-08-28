@@ -60,7 +60,10 @@
   导出；desktop 新建 `control-plane-module.ts` 双路径 facade（打包态 →
   `dist/control-plane/` 编译产物，dev/测试 → workspace 源码），main.ts /
   ssh-provider.ts / plugin-sync.ts 统一经它取用；`cross-package-contract.test.ts`
-  断言桌面消费输出与控制面输出对同一输入**逐字节一致**。
+  断言桌面消费输出与控制面输出对同一输入**逐字节一致**。合并审查修正 facade
+  的顶层 Electron import（纯 Node 单测不再依赖 Electron 二进制）：打包态以
+  `process.versions.electron + process.defaultApp` 判定，并在动态 import 前检查
+  编译产物存在，四分支纯函数测试覆盖。
 - **A3 control-plane dsh-client 死代码删除**：`src/dsh-client.ts` 删 v2 会话
   运行时遗留（respond / openEventStream / pendingEnvelope 观察 /
   PendingCapExceededError），收敛为仅 unary `call` + `describeCapabilities`；
@@ -73,8 +76,15 @@
   服务拆为 `src/static-serving.ts`（`createStaticServing`，响应行为逐字节一致，
   CSP/安全头仍由 index.ts 装配）；renderer `src/recycle-policy.ts` 纯函数
   （App.tsx 回收/驱逐决策提出，可测）+ `src/shell.ts` 模块级单例封装为
-  `ShellRegistry` 类（boot 串行 / cancelledBoots / pendingDisposes / 排队语义
-  不变；BUNDLE_LOAD_TIMEOUT_MS 声明顺序修正）。
+  `ShellRegistry` 类（cancelledBoots / pendingDisposes / 排队语义；
+  BUNDLE_LOAD_TIMEOUT_MS 声明顺序修正）。合并审查补齐超时边界：每 entry 的
+  `{instanceId, basePath, generation}` 固化在自身 Cordis root context（不再使用 window/模块
+  级可变旋钮），dispose 作为取消信号阻止迟到 mount；重复 dispose 按 entry
+  去重且共享真实 teardown Promise，同 ID 重试不会越过未完成释放；shell 在
+  boot 开始/取消时预留 producer generation floor，sidebar runtime-facts 与
+  snapshot producer 同时校验显式 generation + token，旧代迟到注册/report/clear
+  都不能抢占或清除新代状态。对应超时/迟到 settle/延迟 teardown/代际上报均有
+  回归测试。
 - **A6 settings-bridge 幽灵依赖修复**：settings-connections package.json exports
   增加稳定子路径 `"./section"`（→ src/client/ConnectionsSection.tsx），
   settings-bridge 声明对该包的 workspace 依赖，SettingsShell.tsx 改 import
@@ -99,8 +109,8 @@
   （scripts/test-control-plane.mjs，按 AGENTS.md Validation 权威清单，纳入
   rpc-envelope.ts / cordis-inserts.ts / reaper.ts）；ci.yml / release.yml 两处
   control-plane 测试清单改走该脚本；test:desktop 纳入
-  cross-package-contract.test.ts；m1-dsh-client.ts 头注释幽灵 smoke.mjs 引用
-  修正。
+  cross-package-contract.test.ts 与 wiring.test.ts；m1-dsh-client.ts 头注释幽灵
+  smoke.mjs 引用修正。
 - **B6 reaper 测试**：`packages/control-plane/test/reaper.ts` 新增——身份不匹配
   保留 / 端口归属失败保留 / owner 存活保留 / 孤儿回收 / killAndConfirm
   （SIGTERM→SIGKILL）序列；ps/lsof/ss 依赖经 `ReaperDeps` 注入（DI seam，
@@ -123,28 +133,17 @@
   字段——非行为问题，文档未同步，留待后续统一。
 - **设计未决项解决情况**：响应头白名单双处同步（03 §3.4 / 04 §4.3）本次未动，
   保留原条目（见「设计未决」）。
-- **desktop 打包态 isPackaged 分支实机验证（未排期）**：
-  `packages/desktop/control-plane-module.ts` 的 isPackaged 门控（打包态 →
-  `dist/control-plane/` 编译产物，dev/测试 → workspace 源码）与 main.ts 的
-  isPackaged 分支（托盘、hostGraph/hostGit 源目录、编译产物缺失 loud 检查）
-  只经 dev/测试态路径运行过；打包分支需真实 dist 冒烟（`pnpm run
-  dist:desktop:mac` 产物实机启动）验证。
-- **electron-builder files glob 需 release 实跑复核（未排期）**：B4 将
-  desktop `build.files` 改为 glob（`"*.ts"` / `"*.cts"` + 显式 `!*.test.ts`
-  排除，`packages/desktop/package.json` `build.files`），未在真实打包产物上
-  实跑复核（如 glob 是否误收测试文件 / 漏收 `.cts` 资源），随 release CI
-  实跑确认。
+- **desktop 打包态跨平台验收（部分完成）**：Linux x64 已完成真实
+  electron-builder unpacked 打包、asar 内容抽查（运行模块/`preload.cjs`/
+  `dist/control-plane` 齐全，测试/`.vite`/workspace control-plane 源码未误收）与
+  Xvfb 启动冒烟（控制面监听、本地 bundled dsh ready、退出后无残留进程/端口）；
+  因当前环境非 macOS/Windows，`dist:desktop:mac`、签名/公证、NSIS 与两平台
+  实机启动仍由 release CI/对应实机验收。
 - **plugin-sync computeCordisPatchUpdate 的 fold 语义未单源化**：cordis
   loader insert 的**渲染/解析/冲突**已单源至 control-plane `cordis-inserts.ts`
   （A2），但 desktop `plugin-sync.ts` 的 `computeCordisPatchUpdate`（远端
   cordis.patch.yml 合并的确定性改写/fold 语义，见该文件头注释）仍为本地
   实现——与 host-graph-seed 侧的同名合并逻辑未统一，留待后续单源化。
-- **wiring.test.ts 未纳入 test:desktop（代码侧缺口）**：`packages/desktop/
-  wiring.test.ts` 已存在（覆盖 enqueueBounded / recordDeepLinkSeen /
-  shouldDrainNotificationOpen / isLocalProcessRunning / isUpdateDownloadReady），
-  但根 `test:desktop` 脚本未列入——AGENTS.md Validation 按实际脚本清单同步，
-  未列该文件；纳入与否待排期。
-
 ## 未完成 / 待执行
 
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游

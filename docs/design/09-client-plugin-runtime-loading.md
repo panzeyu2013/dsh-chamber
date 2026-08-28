@@ -182,7 +182,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   dsh-client-ui-sidebar`（官方注册被 chamber 侧边栏替换，加载会撞 sidebar 槽）
   与 `@deepseek-ai/dsh-client-modules`（shell 内核自行收编该 entry，二次 provide
   `modules` 冲突）。独立成模块（chamber-entry.ts 仅 re-export）是为避免 shell.ts
-  把 chamber-entry 的模块表交接拉进主 chunk（同 chamber-knob.ts 模式）。
+  把 chamber-entry 的模块表交接拉进主 chunk（独立叶模块隔离模式）。
   与 §3.2 的 union-table 修复锁步：chamber-entry.ts 的 `COVERED_FACTORIES`
   （首屏静态导入族的模块表 factory 注册）中每个 id 必须在覆盖集内（执行期断言）。
 - **extraRows seam（模块 D）**：`AppWebEntryOptions.extraRows`（`boot.ts`，可选、

@@ -349,17 +349,21 @@
 
 ### 4.2 通道 API（chamberBridge 扩展）
 
-> 接口定义（`InstanceRuntimeReport` / `reportInstanceRuntime` /
-> `clearInstanceRuntime` / `onRuntimeReport`）以 **05 §3** 为权威（v1 契约），
+> 接口定义（`InstanceRuntimeReport` / `registerInstanceRuntimeProducer` /
+> `onRuntimeReport`）以 **05 §3** 为权威（v1 契约），
 > 本节只描述**上报时机与对账规则**（不再重复 TS 定义）。
 
-- 每 ctx 插件 apply 内新增 effect：订阅 `ctx.sessions.list`，订阅后立即
+- 每 ctx 插件 apply 内新增 effect：以 AppWebEntry root ctx 携带的显式 boot
+  generation 注册一代 token 化 runtime producer，再
+  订阅 `ctx.sessions.list`，订阅后立即
   上报一次当前快照（zustand subscribe 不即时触发），其后每次变更上报
   投影（`{ current, sessions: { id: { running, completed?, pending?,
   runningSubagents? } } }`，每个列出会话都有 running 行；runningSubagents
   仅 >0 时出现——vendor `indexSubagentDescendants` 的 runningCount，插件在
-  vendor 边界直接复用该纯函数，见 §4.5）；effect 清理时
-  `clearInstanceRuntime`。
+  vendor 边界直接复用该纯函数，见 §4.5）；effect 清理时调用 producer 的
+  `clear()`。shell 在异步 boot 前已预留 generation floor；旧 ctx 即使在新 boot
+  之后才迟到注册也只能拿到 inert producer，其 register/report/clear 均不能
+  覆盖或清除同来源重 boot 后的新一代事实。
 - App 侧：`runtimeFacts` state；**`completedBySource` state + `prevRunning`
   ref——App 自持的完成未读蓝点状态机**（06 §4.1）：每次上报对账——
   - 武装：running→idle 边沿，且该会话不是活动视图的 current（后台来源

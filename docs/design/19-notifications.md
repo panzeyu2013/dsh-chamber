@@ -15,7 +15,7 @@
 | 项 | 现状 | 证据 |
 |---|---|---|
 | 桌面通知 | **无任何通知能力**：main.ts 无 `Notification` 导入、无通知 IPC、无权限处理 | `packages/desktop/main.ts` 全量 |
-| 会话状态检测 | **已具备事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件经 `chamberBridge.reportInstanceRuntime` 上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`（`reportInstanceRuntime` 上报点）；`packages/renderer/src/App.tsx`（`reconcileCompletedFacts` 蓝点边沿机） |
+| 会话状态检测 | **已具备事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件经 generation-safe runtime producer 上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`（`registerInstanceRuntimeProducer` 上报点）；`packages/renderer/src/App.tsx`（`reconcileCompletedFacts` 蓝点边沿机） |
 | 会话标题/来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
 | 窗口隐藏场景 | 设计 14 已落地：关窗 hide 到托盘 / macOS 无窗常驻 / 后台启动——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
 | 设置存储 | chamber 全局设置 `chamber-settings.json`（主进程权威、`dsh-chamber:settings-get/set` IPC + push、`validatePatch` 白名单） | `packages/desktop/chamber-settings.ts` |
@@ -91,7 +91,7 @@
 ```
 各实例 dsh 前端 runtime（每来源一个 ctx shell）
   └─ 侧边栏插件（chamber 自研，每 ctx 挂载）—— 06 §4 事实通道（现成，不改）
-       reportInstanceRuntime: {current, sessions: {id: {running, completed, pending}}}
+       runtimeProducer.report: {current, sessions: {id: {running, completed, pending}}}
             ↓ chamberBridge（renderer 共享单例，现成）
 renderer App 层
   ├─ 通知边沿检测（新增纯函数模块，App effect 接线）→ 事件组装（title/body/requireHidden）
@@ -171,8 +171,9 @@ interface NotificationRequest {
 - 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪静默跳过 +
   console.warn（与 desktopSsh 桥探测同节奏，500ms 探测已有先例）。
 
-**主进程**（`packages/desktop/main.ts` + 新增 `packages/desktop/notifications.ts`
-纯逻辑模块，electron-free 便于单测）：
+**主进程**（`packages/desktop/ipc-notifications.ts` 接线 +
+`packages/desktop/notifications.ts` 纯逻辑模块，electron-free 便于单测；
+main.ts 只注入窗口/设置/深链依赖）：
 
 - 新 IPC：`dsh-chamber:notify`（`trustedIpc` invoke，payload 字段白名单校验
   sourceId/sessionId/kind/title/body/requireHidden，长度上限）；
@@ -281,7 +282,7 @@ interface ChamberSettings {
 ## 4. 分期
 
 - **M1 主链路**：`desktop/notifications.ts`（裁决/去重/决策纯逻辑 + 单测）→
-  main.ts IPC 接线（notify + notification-open + pending drain +
+  `ipc-notifications.ts` 接线（notify + notification-open + pending drain +
   notifications-ready 就绪信号）→ preload + global.d.ts → renderer
   `notification-edges.ts`（边沿检测 + complete 去重）+ App effect 接线 →
   chamber-settings 扩展 + 测试。
