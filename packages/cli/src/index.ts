@@ -8,9 +8,9 @@
  * - 输出：人读表格；--json 时 JSON.stringify 原样输出。
  */
 
-import { createControlPlane } from '@dsh-chamber/control-plane'
+import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT } from '@dsh-chamber/control-plane'
 
-const DEFAULT_URL = 'http://127.0.0.1:17500'
+const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_CONTROL_PLANE_PORT}`
 
 /** 命令标志：--flag VALUE → string；布尔 --flag → true。 */
 type FlagValue = string | boolean
@@ -185,7 +185,7 @@ function printKeyValue(data: unknown) {
 }
 
 async function serveCommand({ flags }: ParsedArgs) {
-  const port = flags.has('port') ? Number(flags.get('port')) : 17500
+  const port = flags.has('port') ? Number(flags.get('port')) : DEFAULT_CONTROL_PLANE_PORT
   if (flags.has('port') && !Number.isInteger(port)) {
     throw new Error(`--port 必须是整数（收到 ${JSON.stringify(flags.get('port'))}）`)
   }

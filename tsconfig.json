@@ -23,23 +23,8 @@
     "packages/cli/src/**/*.ts",
     "packages/renderer/src/**/*.ts",
     "packages/renderer/src/**/*.tsx",
-    "packages/desktop/main.ts",
-    "packages/desktop/preload.cts",
-    "packages/desktop/updater.ts",
-    "packages/desktop/updater.test.ts",
-    "packages/desktop/transport-provider.ts",
-    "packages/desktop/transport-manager.ts",
-    "packages/desktop/transport-manager.test.ts",
-    "packages/desktop/ssh-provider.ts",
-    "packages/desktop/ssh-provider.test.ts",
-    "packages/desktop/ssh-config.ts",
-    "packages/desktop/ssh-config.test.ts",
-    "packages/desktop/renderer-trust.ts",
-    "packages/desktop/renderer-trust.test.ts",
-    "packages/desktop/deep-link.ts",
-    "packages/desktop/deep-link.test.ts",
-    "packages/desktop/open-in.ts",
-    "packages/desktop/open-in.test.ts"
+    "packages/desktop/*.ts",
+    "packages/desktop/*.cts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }

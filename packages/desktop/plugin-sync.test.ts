@@ -1453,7 +1453,7 @@ function makeMaterializeExec() {
   const calls: Array<{ op: string; argv?: string[] }> = []
   const written: Array<{ path: string; bytes: Buffer }> = []
   const exec: ExecFn = async (_id, action, payload) => {
-    const record = { op: payload?.op ?? action }
+    const record: { op: string; argv?: string[] } = { op: payload?.op ?? action }
     calls.push(record)
     if (action === 'run' && payload?.op === 'write-file') {
       written.push({ path: payload.path ?? '?', bytes: Buffer.from(payload.contentBase64 ?? '', 'base64') })

@@ -49,18 +49,7 @@ jobs:
       - name: i18n pair consistency
         run: pnpm run verify:i18n
       - name: Control-plane unit tests
-        run: |
-          node packages/control-plane/test/protocol.ts
-          node packages/control-plane/test/storage.ts
-          node packages/control-plane/test/m1-dsh-client.ts
-          node packages/control-plane/test/host-logs.ts
-          node packages/control-plane/test/manager-api.ts
-          node packages/control-plane/test/local-connection.ts
-          node packages/control-plane/test/spawn-dsh.ts
-          node packages/control-plane/test/instance-proxy.ts
-          node packages/control-plane/test/ws-frames.ts
-          node packages/control-plane/test/static-serving.ts
-          node packages/control-plane/test/host-graph-seed.ts
+        run: pnpm run test:control-plane
       - name: Desktop unit tests (transport / ssh)
         run: pnpm run test:desktop
       - name: Renderer shell unit tests
