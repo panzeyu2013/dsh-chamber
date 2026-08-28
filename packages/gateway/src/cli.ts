@@ -34,7 +34,8 @@ Options:
   --api-token TOK     shared bearer token (32-4096 visible ASCII; use a CSPRNG)
                       for API/Desktop clients — a token-only deployment has NO
                       browser login/frontend; add --ui-password for browser use
-  --public-origin URL expected public authority (S11: reject unknown Host with 421)
+  --public-origin URL expected public authority (design 17 §6 request policy / S3 族:
+                      reject unknown Host with 421)
   --trusted-proxy IP exact reverse-proxy peer allowed to supply X-Forwarded-* (repeatable)
   --cors-origin O     extra allowed origin (repeatable)
   --no-auth

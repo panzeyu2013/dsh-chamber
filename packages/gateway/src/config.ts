@@ -38,8 +38,9 @@ export interface GatewayConfig {
   /** Exact proxy peer IPs whose Forwarded/X-Forwarded facts may be trusted.
    * Empty by default: a direct client can never self-assert its address/TLS. */
   trustedProxies: string[]
-  /** The operator's expected public authority (S11), e.g. `https://gateway.example.com`.
-   * When set, requests with an unrecognized Host are rejected (421). */
+  /** The operator's expected public authority (design 17 §6 request policy /
+   * S3 族), e.g. `https://gateway.example.com`. When set, requests with an
+   * unrecognized Host are rejected (421). */
   publicOrigin?: string
   tls?: { cert: string; key: string }
   /** Explicit operator opt-in (design 17 §3.1 S1 deviation): bind externally

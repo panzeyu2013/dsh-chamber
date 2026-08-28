@@ -157,7 +157,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     if (runtimeManager === null) throw new Error('gateway runtime manager not initialized')
     return runtimeManager
   }, logger)
-  const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, () => runtimeRoutes, logger, requestPolicy)
+  // S24 lightweight non-secret audit projection (design 17 §13.4.4): JSONL
+  // append at <stateDir>/audit.log (0600, 5 MiB rotation) recording login
+  // results (success/invalid/rate-limited/busy) — never a password, cookie or
+  // session body. The file lives under the 0700 stateDir discipline (S15).
+  const auditFile = join(options.config.plane.stateDir, 'audit.log')
+  const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, () => runtimeRoutes, logger, requestPolicy, auditFile)
   // Chamber host packages ship inside the gateway package (build.mjs copies
   // them into host-packages/); the control-plane seeds them into the managed
   // dsh profile so the full runtime activation probe set (which verifies

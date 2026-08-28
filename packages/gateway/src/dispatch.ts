@@ -24,6 +24,7 @@ import type { GatewayProxy } from './gateway-proxy.ts'
 import type { FeatureHost } from './routes.ts'
 import type { RuntimeRoutes } from './runtime-routes.ts'
 import type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
+import { appendAuditEvent } from './audit.ts'
 
 function isPublicRequest(method: string | undefined, pathname: string): boolean {
   // HEAD is the no-body twin of GET; a monitoring HEAD /health must not be
@@ -165,7 +166,7 @@ function authRequest(req: ApiRequest, decision: GatewayRequestDecision) {
   }
 }
 
-export function createGatewayDispatch(auth: AuthProvider, getProxy: () => GatewayProxy, getFeatures: () => FeatureHost, getRuntime: () => RuntimeRoutes, logger: Logger, requestPolicy: GatewayRequestPolicy): GatewayDispatch {
+export function createGatewayDispatch(auth: AuthProvider, getProxy: () => GatewayProxy, getFeatures: () => FeatureHost, getRuntime: () => RuntimeRoutes, logger: Logger, requestPolicy: GatewayRequestPolicy, auditFile?: string | null): GatewayDispatch {
   const middleware: GatewayDispatch['middleware'] = async (req, res, url) => {
     const pathname = url.pathname
     // -1. One authority/origin boundary for every HTTP surface, including
@@ -194,8 +195,9 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       return true
     }
     // 1. Auth gate (public paths exempt). socketAddr is not available through
-    // the middleware ctx — the token/password providers do not use it (S11's
-    // Host authority decision is a post-MVP hardening).
+    // the middleware ctx — the token/password providers do not use it (the
+    // Host authority decision belongs to the request policy, design 17 §6 /
+    // S3 族, already evaluated at step −1).
     if (pathname === '/auth/login'
       && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') {
       res.writeHead(405, {
@@ -241,14 +243,35 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         return true
       }
       if (req.method === 'POST' && auth.login !== undefined) {
+        // S24 (design 17 §13.4.4): the login branch audits ONLY the non-secret
+        // auth RESULT — never the submitted password, never the session cookie
+        // (setCookie stays out of the audit event by construction).
+        const loginReq = authRequest(req, decision)
+        const loginSource = loginReq.clientAddress !== undefined && loginReq.clientAddress !== ''
+          ? `client:${loginReq.clientAddress}`
+          : `client:${loginReq.socketAddr}`
         try {
           const body = await readBody(req)
-          const { setCookie } = await auth.login(body, authRequest(req, decision))
+          const { setCookie } = await auth.login(body, loginReq)
           if (setCookie !== undefined) res.setHeader('set-cookie', setCookie)
           res.writeHead(302, { location: '/', 'cache-control': 'no-store' })
           res.end()
+          if (auditFile !== undefined && auditFile !== null) {
+            appendAuditEvent(auditFile, { ts: new Date().toISOString(), event: 'login_success', kind: 'gateway', detail: loginSource })
+          }
         } catch (error) {
           const code = (error as Error & { code?: string }).code
+          if (auditFile !== undefined && auditFile !== null) {
+            appendAuditEvent(auditFile, {
+              ts: new Date().toISOString(),
+              event: code === 'rate_limited' ? 'login_rate_limited'
+                : code === 'auth_busy' ? 'login_busy'
+                : code === 'body_too_large' || code === 'bad_request' ? 'login_rejected'
+                : 'login_invalid_credentials',
+              kind: 'gateway',
+              detail: `${loginSource},code:${code ?? 'invalid_credentials'}`,
+            })
+          }
           if (code === 'rate_limited') json(res, 429, { error: 'too many login attempts', code: 'rate_limited' })
           else if (code === 'auth_busy') json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
           else if (code === 'body_too_large') {
