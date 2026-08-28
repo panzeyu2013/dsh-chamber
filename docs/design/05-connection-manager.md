@@ -31,16 +31,18 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         │    v1 无认证门禁：匿名可达（仅 loopback 监听）
         ├─ 本地实例托管：spawn/健康状态机/reaper/host-logs
         └─ 管理 REST：/health、/api/connections(local)、/api/host/logs
-        桌面主进程（main.ts）
+        桌面主进程（main.ts 薄引导 + ipc-*.ts 领域 wiring 装配；A1 拆分后
+        IPC 面在各 ipc-*.ts，通道名与契约不变）
         ├─ transport-manager：通用传输运行时（phase 机 / 两段式重连 —
         │    快速有界 jitter 退避突发 + 慢速周期重探 /
         │    环形日志 / 非秘密投影 / 子进程监督 SIGTERM→SIGKILL）
         ├─ TransportProvider 接口（transport-provider.ts）：来源无关契约 —
-        │    spec 校验 / 传输进程 argv（或 direct-endpoint 直连模式）/
+        │    spec 校验 / 传输进程 argv（**必填**——无 direct-endpoint 直连
+        │    模式，provider 恒拥有本地隧道子进程）/
         │    stderr 分类与脱敏 / 可选 exec 通道；v1 仅实现 `ssh` provider
         │    （ssh-provider.ts：ssh -N -o ServerAlive… -L 隧道 + systemd exec）
         ├─ 实例注册表：<userData>/ssh-instances.json {id,label,kind,host,user,sshPort,remotePort,serviceName,remoteDshHome}（schema 以 03 §2.2 为准）
-        └─ IPC（preload 白名单）
+        └─ IPC（preload 白名单；通道名常量单源 ipc-events.ts，§7.4）
         远程服务器：dsh（API 面 profile，无需 web 前端）+ systemd + SSH
 ```
 
@@ -400,6 +402,12 @@ export const chamberBridge: {
     `<stateDir>/dsh-chamber-graph.patch.yml`。每次 spawn 注入同一 `--patch`
     （`webProfileArgs(port, patchPath?)`）；任一产物缺失只跳过对应行，不产生
     悬空 insert。远程 ready-time seed 同样一次探测/一次 overlay 合并写，见设计 13。
+- **桌面消费控制面共享协议（A2，2026 重构批次）**：control-plane 的
+  `rpc-envelope.ts` / `cordis-inserts.ts` 从 `src/index.ts` 导出；desktop 经
+  `control-plane-module.ts` 双路径 facade 消费（打包态 → `build-control-plane.mjs`
+  编译产物 `dist/control-plane/`，dev/测试 → workspace 源码）——ssh-provider 的
+  信封探测与 plugin-sync 的 insert 渲染不再本地复刻，跨包逐字节一致由
+  `cross-package-contract.test.ts` 守卫。
 
 ## 7. 控制面 / 桌面契约（沿用，无认证面）
 
@@ -463,6 +471,12 @@ instanceId}` +
   `ipc_sender_forbidden`。窗口拒绝新窗口，并在
   `will-navigate` / `will-redirect` 阶段阻断离开控制面 origin，防止 preload
   主机能力暴露给被导航页面。
+- **通道名常量单源（2026 重构批次 B8）**：主进程侧通道名集中为
+  `packages/desktop/ipc-events.ts` 的 `IPC_CHANNELS` 常量（handle 与 send
+  全部通道）；preload 受单文件自包含构建约束（build-preload.mjs）不 import
+  该模块，同名重复字面量由 `ipc-surface-mirror.test.ts` 字符串级守卫（主侧
+  handle/send 集合 == 预加载侧 invoke/on 集合；主侧无裸字面量；预加载字面量
+  均为已知常量值）。本节清单以该常量为准维护。
 
 ### 7.5 本地实例
 
@@ -479,9 +493,9 @@ instanceId}` +
 ### 7.6 TransportProvider 契约（来源无关抽象，v1 仅 `ssh`）
 
 - `transport-provider.ts` 定义 `TransportProvider`：`kind`、`validateSpec`
-  （白名单收口，option-injection 安全）、`buildStartArgs`（**缺省 = direct
-  endpoint 模式**：无子进程，运行时探测 `probeTarget()` 并暴露
-  `endpointUrl()`，如 tailnet 直连宿主）、`classifyStderr`（整行分类：
+  （白名单收口，option-injection 安全）、`buildStartArgs`（**必填**——每个
+  provider 恒拥有一个本地隧道子进程；v1 无 direct-endpoint 直连模式，运行时
+  不探测 probeTarget、不暴露 endpointUrl）、`classifyStderr`（整行分类：
   脱敏 + 终态认证判定）、可选 `verifyUp`（端点身份验证：TCP 探测通过后、
   置 ready 前验证远端真是 dsh——ssh 实现为 `host.describe` 信封探测，
   与本地 02 §3.2 同判据，非 dsh 服务端口绝不呈现已连接）、可选 `exec`
@@ -490,8 +504,8 @@ instanceId}` +
   半开 jitter 退避突发 + 突发耗尽后的慢速周期重探——瞬时故障是时变的，
   error 绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）/
   环形日志 / 非秘密投影与推送 / 子进程监督（SIGTERM→SIGKILL per-child）/
-  注册表（kind 迁移、重复 id 首胜丢弃）/ 就绪探测（隧道端口或直连端点 +
-  端点身份验证）。就绪判据（TCP + dsh 身份握手）、两段式重连与 `verifyUp`
+  注册表（kind 迁移、重复 id 首胜丢弃）/ 就绪探测（隧道本地端口 + 端点身份
+  验证）。就绪判据（TCP + dsh 身份握手）、两段式重连与 `verifyUp`
   **确定性验证失败免重试**（`terminal` 分类——目标应答了探测但证明不是
   兼容 dsh → 第一次失败即落 error 终态，仅瞬时失败走重连）的机制细节见
   03 §2.2。**加固（2026 audit M2/M10）**：exec 子进程与隧道子进程同款
@@ -533,8 +547,8 @@ instanceId}` +
 ## 8. 安全不变量（沿用 AGENTS.md）
 
 - 前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort），任何实例流量不直接出网；
-  direct-endpoint provider 的端点 URL 同样只在主进程（`readyUrl`），永不进
-  renderer；
+  就绪后的传输 URL（隧道 localPort 监听地址）同样只在主进程内部使用
+  （`readyUrl`，transport-manager.ts），永不进 renderer；
 - 传输 URL 与**私密 SSH 材料**（凭据/私钥/代理配置/IdentityFile/ProxyCommand）
   永不进 renderer/日志/持久层——renderer 只见 host/user/端口等**非秘密元数据
   投影**与 localPort/phase；ssh stderr 含密钥路径的行入环前脱敏（按行缓冲，

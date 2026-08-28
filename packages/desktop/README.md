@@ -4,12 +4,29 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 
 ## 目录
 
-- `main.ts` — Electron 主进程：单窗口单 frame（`loadURL` 控制面 origin）、`createControlPlane`、transport-manager + ssh provider、IPC、更新控制器接线（updater.ts）
+- `main.ts` — Electron 主进程（薄引导）：单窗口单 frame（`loadURL` 控制面 origin）、窗口生命周期/退出清理（before-quit 确认、will-quit 并行回收 + 5s 强退）、wiring 装配
+- `wiring.ts` — 主进程纯决策函数（enqueueBounded / recordDeepLinkSeen / shouldDrainNotificationOpen / isLocalProcessRunning / isUpdateDownloadReady 等，`wiring.test.ts` 覆盖）
+- `ipc-ssh.ts` — transport-manager 创建/装载 + `desktop_ssh_*` 通道 + 状态推送监听 + 唤醒重探
+- `ipc-plugin-sync.ts` — 插件编排 `desktop_*_plugin_*` 通道 + 主进程确认对话框 + ready-time chamber host 包 seed
+- `ipc-settings.ts` — chamber 设置 holder（keep-awake / 登录自启副作用）+ `dsh-chamber:settings-*` 通道
+- `ipc-notifications.ts` — 桌面通知链 + `dsh-chamber:notify` 族通道 + pendingNotificationOpens 队列/drain
+- `ipc-update.ts` — 更新控制器接线 + `dsh-chamber:update-*` 通道 + open-release 白名单
+- `ipc-open-in.ts` — open-in 通道 + VS Code 上下文构建（`dsh-chamber:open-in*`）
+- `ipc-deep-link.ts` — `dsh-chamber://` 深链队列/去重 + 协议注册（`dsh-chamber:deep-link-intent`）
+- `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 ipc-surface-mirror.test.ts 字符串级守卫钉住）
+- `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/` 编译产物），导出 `createControlPlane` 与共享协议工具（rpc-envelope / cordis-inserts）
 - `updater.ts` — 更新控制器（设计 11）：electron-updater（github provider）静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
-- `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 传输 argv / stderr 分类 / 可选 exec；direct-endpoint 直连模式）
+- `renderer-trust.ts` — IPC 围栏（`createTrustedIpc`：sender/frame/origin 校验，语义不变抛 `ipc_sender_forbidden`）+ 渲染进程 URL 信任判定
+- `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 传输 argv / stderr 分类 / 可选 exec + verifyUp；v1 无 direct-endpoint 直连模式——provider 恒拥有本地隧道）
 - `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 两段式重连（快速有界 jitter 退避突发 + 慢速周期重探）+ 环形日志 + 子进程监督 + 非秘密投影
-- `ssh-provider.ts` — v1 唯一 provider：SSH 隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec（start/stop/is-active）
+- `ssh-provider.ts` — v1 唯一 provider：SSH 隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec（start/stop/is-active）+ 主机密钥/密码 askpass 注入 + RPC 探测（经 control-plane-module 共享信封）
+- `ssh-config.ts` — `~/.ssh/config` 非秘密投影解析
+- `chamber-settings.ts` — chamber 全局设置 holder（`chamber-settings.json`，原子写，`dsh-chamber:settings-*` 数据面）
+- `notifications.ts` — 通知决策纯逻辑（validateNotificationRequest / decideNotification / claimNotification，electron-free）
+- `deep-link.ts` — 深链解析/VS Code 启动（electron-free 决策 + 主进程执行）
+- `open-in.ts` — OpenInApp 注册表 + 六步 loud 执行管线（electron-free 决策 + 主进程执行）
+- `plugin-sync.ts` — 插件编排纯逻辑：manifest 解析/spec 分类/远端 probe/apply/seed/materialize（cordis insert 渲染经 control-plane-module 共享实现）
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` 编译为 JS（`dist/control-plane/`，见下）
 - `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
@@ -87,7 +104,7 @@ pnpm run dist:desktop
 
 ### transport-manager + ssh provider（transport-provider.ts / transport-manager.ts / ssh-provider.ts）
 
-- **来源无关运行时**：`TransportProvider` 接口定义来源边界（v1 仅 `ssh`；tailscale/remote-tunnel 等新来源 = 新 provider + kind 注册，运行时与 UI 零改动）。`buildStartArgs` 缺省 = **direct endpoint 模式**（无子进程，运行时探测 `probeTarget()`、暴露 `endpointUrl()`，如 tailnet 直连宿主）。
+- **来源无关运行时**：`TransportProvider` 接口定义来源边界（v1 仅 `ssh`，kind 联合已收窄为闭集；tailscale/remote-tunnel 等新来源 = 新 provider + kind 注册，运行时与 UI 零改动）。`buildStartArgs` 必填——每个 provider 都拥有一个本地隧道子进程（无 direct-endpoint 模式）。
 - **SSH 隧道**：`ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort> <user@host>`——SSH 层保活（半死连接由 ssh 自身约 90s 判定退出并喂给重连机，探活同时保活 NAT 映射）；`remotePort` = 远端 127.0.0.1 上 dsh web 监听端口（隧道目标）；`sshPort`（可选）= SSH 守护端口（null = 不传 `-p`，走 ssh 默认 22 / config Port，systemd exec 同理）；localPort 由 `net listen(0)` 分配；**就绪 = 本地端口可 TCP 连接 + dsh 身份握手通过**（`verifyUp`：`host.describe` 信封探测，5s 总超时 + 1MiB 响应上限——目标端口上是非 dsh 服务时显式报错/降级，**绝不呈现已连接**，与本地就绪判据同源 02 §3.2）。握手失败时按 dsh 特征签名分类提示：目标若携带 connection 插件的 426 臂或 apiProxy 的 SSE 臂（GET /api/events.mux），判为「dsh 版本过老/不兼容——请升级远端 dsh」；无任何 dsh 特征时保持「不是 dsh 实例」的通用文案（绝不无证据猜测）。
 - **phase 机**：`idle → connecting → ready ⇄ degraded → error`，**两段式重连**：快速**半开 jitter** 指数退避突发（保留下界 0.5×、上界 1×，多实例/唤醒后错峰；至多 5 次 ≈31s）+ 突发耗尽后落 error（诚实红态）但进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限——瞬时故障是时变的，「放弃」绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）。认证失败置 `requiresUserAction`，**终态不自动重试**（用户须修复凭据/host key）。**确定性验证失败免重试**：`verifyUp` 结果带 `terminal` 分类——目标**应答了**探测但证明不是（兼容的）dsh（HTTP 非 200 / 错误信封 / 版本过老）→ 第一次失败即 error 终态（requiresUserAction，重试无法改变应答）；仅连接错误/超时等瞬时失败走重连。子进程监督 per-child：SIGTERM → 宽限后 SIGKILL。
 - **远端 systemd exec**：`ssh user@host systemctl start|stop|is-active <serviceName>`——参数数组 spawn（**无 shell**），serviceName 先过白名单 `^[a-zA-Z0-9_.-]+$` 再执行（注入防护）；有界超时（`execTimeoutMs`，默认 15s）；失败写入实例环形日志并作为错误结果返回（响亮，绝不吞掉）；认证失败复用 `AUTH_FAILURE_PATTERNS`，只经结果错误显式返回（**不写隧道终态**）。结果按需写入状态投影的 `serviceActive`（不轮询）。`systemctl` 默认目标为远端 system 级 unit 管理器。

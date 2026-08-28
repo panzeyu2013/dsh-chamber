@@ -20,6 +20,131 @@
 > 与设计文档修订（02 §3.5 探活缺省 30s、05 §4 预热视图闲置回收例外条款）为权威
 > 记录，本文件不保留批次日志。
 
+### 2026 重构批次新增延后项（同一评审报告 P0–P4，未排期）
+
+- **SidebarRoot.tsx 拆分**：`packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx`
+  2891 行（拖拽状态/事件/marker 渲染/多来源统一列表同文件），渲染路径行为
+  不变重构，需单独批次。
+- **App.tsx 后续深化**：回收/驱逐决策已抽为 `recycle-policy.ts`、shell 模块级
+  单例已封装为 `ShellRegistry`（A5-renderer）；App.tsx（约 1500 行）UI 渲染与
+  视图切换逻辑的进一步拆分延后。
+- **paths 映射远期方案**：反代路径映射（instance-proxy 硬编码 `ssh-<id>` 段）
+  与 renderer 侧 base-path 构造（dsh-client-connection base-path 补丁）对新
+  kind 需同步扩展（05 §7.6 存量耦合点）；统一路径映射单源化的远期方案未排期。
+
+## 2026 架构重构批次（A1–A6 / B1–B10，行为不变重构 + 卫生项）
+
+> 本批次为评审报告 P0–P4 的落地执行（工作树 `.workflow-refactor.mjs` 编排：
+> 常量导出基线 → 并行包重构 → 跨包共享协议 → 文档同步）。全部为行为不变
+> 重构或纯卫生项——wire 形状 / IPC 通道名 / 消息形状逐字节不变；唯一有意的
+> 行为变更是 control-plane standalone 与 cli serve 默认端口统一为 17500
+> （B1-eng）。B9/B10 为收尾批次（打包态验证 + 文档同步，对应本文档与设计
+> 文档修订；其遗留验证项见下「遗留」）。与本文件「已实现基线不保留批次
+> 日志」的惯例不同，本节按编排要求留档本次完成项；代码位置为权威，简述只
+> 指方向。
+
+已完成：
+- **A1 桌面主进程拆分**（packages/desktop）：`main.ts`（约 1840 → 约 800 行）
+  收敛为窗口生命周期 + 退出清理 + wiring 装配的薄引导；IPC 面按领域拆为
+  `ipc-ssh.ts` / `ipc-plugin-sync.ts` / `ipc-settings.ts` / `ipc-notifications.ts` /
+  `ipc-update.ts` / `ipc-open-in.ts` / `ipc-deep-link.ts`（各导出 `register*(ctx)`）；
+  drain 队列 / close-to-tray 门控 / 退出状态机的纯决策抽为 `wiring.ts`
+  （`enqueueBounded` / `shouldDrainNotificationOpen` / `isLocalProcessRunning` /
+  `isUpdateDownloadReady`，`wiring.test.ts` 覆盖）；trustedIpc 围栏抽为
+  `renderer-trust.ts`（`createTrustedIpc`，sender 校验语义不变）。通道名与契约
+  不变。
+- **A2 跨包协议单源化**：control-plane 新增 `src/rpc-envelope.ts`（unary
+  client-request 信封 + server-response 解析校验，吸收 dsh-client.ts 与
+  ssh-provider 三处实现）与 `src/cordis-inserts.ts`（insert 渲染/解析/冲突判定，
+  吸收 host-graph-seed.ts 与 plugin-sync.ts 两处实现），均从 `src/index.ts`
+  导出；desktop 新建 `control-plane-module.ts` 双路径 facade（打包态 →
+  `dist/control-plane/` 编译产物，dev/测试 → workspace 源码），main.ts /
+  ssh-provider.ts / plugin-sync.ts 统一经它取用；`cross-package-contract.test.ts`
+  断言桌面消费输出与控制面输出对同一输入**逐字节一致**。
+- **A3 control-plane dsh-client 死代码删除**：`src/dsh-client.ts` 删 v2 会话
+  运行时遗留（respond / openEventStream / pendingEnvelope 观察 /
+  PendingCapExceededError），收敛为仅 unary `call` + `describeCapabilities`；
+  test/protocol.ts 与 test/m1-dsh-client.ts 同步裁剪。
+- **A4 PluginGraphDiagnostic 类型收敛**：三份定义（sidebar aggregate-store /
+  renderer host-graph / renderer vendor-modules.d.ts）收敛为 sidebar
+  `src/shared/aggregate-store.ts` 单一来源，renderer `src/host-graph.ts` 从
+  `@dsh-chamber/dsh-client-ui-sidebar/shared` 导入（re-export 保留给既有消费方）。
+- **A5 静态服务拆分 + renderer 编排层重构**：control-plane `index.ts` 内嵌静态
+  服务拆为 `src/static-serving.ts`（`createStaticServing`，响应行为逐字节一致，
+  CSP/安全头仍由 index.ts 装配）；renderer `src/recycle-policy.ts` 纯函数
+  （App.tsx 回收/驱逐决策提出，可测）+ `src/shell.ts` 模块级单例封装为
+  `ShellRegistry` 类（boot 串行 / cancelledBoots / pendingDisposes / 排队语义
+  不变；BUNDLE_LOAD_TIMEOUT_MS 声明顺序修正）。
+- **A6 settings-bridge 幽灵依赖修复**：settings-connections package.json exports
+  增加稳定子路径 `"./section"`（→ src/client/ConnectionsSection.tsx），
+  settings-bridge 声明对该包的 workspace 依赖，SettingsShell.tsx 改 import
+  子路径；两包独立 typecheck（typecheck:settings-bridge / typecheck:connections）
+  均通过。
+- **B1 死导出 / 端口常量**：control-plane `catalog.ts` 删仅测试消费的
+  save / listConnections / removeConnection / mutate / getSnapshot /
+  snapshotHealth（test/storage.ts 同步裁剪，If-Match/409 头部承诺同步修正）；
+  cli 与 control-plane standalone 端口统一引用 `DEFAULT_CONTROL_PLANE_PORT`
+  （17500；standalone 旧 3001 默认**有意改为 17500**，与 cli serve 对齐）；
+  renderer / settings-connections 的 DEFAULT_CONTROL_PLANE_URL 随 B2 收敛。
+- **B2 REST 客户端共享化**：renderer `src/api.ts` 与 settings-connections
+  `src/client/control-plane.ts` 两份同源控制面 REST 客户端收敛为 sidebar
+  `src/shared/control-plane-client.ts`（ApiError / ApiErrorBody / controlPlaneUrl /
+  request + health/connections 方法面；浏览器纯实现）；renderer api.ts 改薄
+  封装（App.tsx import 面不变）。
+- **B4 清单 glob 化**：根 tsconfig.json desktop 逐文件白名单改目录 glob
+  （`packages/desktop/*.ts`、`packages/desktop/*.cts`——此前 4 个测试文件漏检）；
+  desktop electron-builder build.files 改 glob（`"*.ts"` / `"*.cts"` + 显式
+  `!*.test.ts` 排除）。
+- **B5 测试入口收敛**：根 package.json 新增 `test:control-plane`
+  （scripts/test-control-plane.mjs，按 AGENTS.md Validation 权威清单，纳入
+  rpc-envelope.ts / cordis-inserts.ts / reaper.ts）；ci.yml / release.yml 两处
+  control-plane 测试清单改走该脚本；test:desktop 纳入
+  cross-package-contract.test.ts；m1-dsh-client.ts 头注释幽灵 smoke.mjs 引用
+  修正。
+- **B6 reaper 测试**：`packages/control-plane/test/reaper.ts` 新增——身份不匹配
+  保留 / 端口归属失败保留 / owner 存活保留 / 孤儿回收 / killAndConfirm
+  （SIGTERM→SIGKILL）序列；ps/lsof/ss 依赖经 `ReaperDeps` 注入（DI seam，
+  默认行为不变）。
+- **B7 砍 direct-endpoint 投机面**：transport-provider.ts 删 direct-endpoint 模式
+  （buildStartArgs 缺省 direct 分支、probeTarget / endpointUrl、开放 kind 联合
+  收窄为 `['ssh']` 闭集、Ssh* 兼容别名）；transport-manager.ts 直连运行时分支
+  删除；**verifyUp 保留**（ssh `host.describe` 探测有真实消费）；
+  transport-manager.test.ts 同步删 direct-endpoint 用例。
+- **B8 IPC 通道常量单源**：packages/desktop/ipc-events.ts 导出 `IPC_CHANNELS`
+  常量（主进程全部 handle/send 通道）；preload.cts 受单文件自包含构建约束
+  （build-preload.mjs）不 import 常量模块——重复字面量由 ipc-surface-mirror.test.ts
+  字符串级守卫（主侧 handle/send 集合 == 预加载侧 invoke/on 集合、主侧无裸
+  字面量、预加载字面量均为 IPC_CHANNELS 已知值）。
+
+遗留（本次文档核对发现，未修）：
+- **02 §3.3 binary 字段语义**：spawn-dsh.ts 的 pid 记录仍写常量
+  `binary: 'dsh'`（basename 标记），与 02 §3.3 示例的绝对路径形态不一致；
+  reaper.ts 身份重验从命令串直接重推导（`command.includes('dsh')`）不消费该
+  字段——非行为问题，文档未同步，留待后续统一。
+- **设计未决项解决情况**：响应头白名单双处同步（03 §3.4 / 04 §4.3）本次未动，
+  保留原条目（见「设计未决」）。
+- **desktop 打包态 isPackaged 分支实机验证（未排期）**：
+  `packages/desktop/control-plane-module.ts` 的 isPackaged 门控（打包态 →
+  `dist/control-plane/` 编译产物，dev/测试 → workspace 源码）与 main.ts 的
+  isPackaged 分支（托盘、hostGraph/hostGit 源目录、编译产物缺失 loud 检查）
+  只经 dev/测试态路径运行过；打包分支需真实 dist 冒烟（`pnpm run
+  dist:desktop:mac` 产物实机启动）验证。
+- **electron-builder files glob 需 release 实跑复核（未排期）**：B4 将
+  desktop `build.files` 改为 glob（`"*.ts"` / `"*.cts"` + 显式 `!*.test.ts`
+  排除，`packages/desktop/package.json` `build.files`），未在真实打包产物上
+  实跑复核（如 glob 是否误收测试文件 / 漏收 `.cts` 资源），随 release CI
+  实跑确认。
+- **plugin-sync computeCordisPatchUpdate 的 fold 语义未单源化**：cordis
+  loader insert 的**渲染/解析/冲突**已单源至 control-plane `cordis-inserts.ts`
+  （A2），但 desktop `plugin-sync.ts` 的 `computeCordisPatchUpdate`（远端
+  cordis.patch.yml 合并的确定性改写/fold 语义，见该文件头注释）仍为本地
+  实现——与 host-graph-seed 侧的同名合并逻辑未统一，留待后续单源化。
+- **wiring.test.ts 未纳入 test:desktop（代码侧缺口）**：`packages/desktop/
+  wiring.test.ts` 已存在（覆盖 enqueueBounded / recordDeepLinkSeen /
+  shouldDrainNotificationOpen / isLocalProcessRunning / isUpdateDownloadReady），
+  但根 `test:desktop` 脚本未列入——AGENTS.md Validation 按实际脚本清单同步，
+  未列该文件；纳入与否待排期。
+
 ## 未完成 / 待执行
 
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游
