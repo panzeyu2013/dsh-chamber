@@ -381,6 +381,63 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export function getViewPrefs(): ChamberSidebarViewPrefs
   export function subscribeViewPrefs(listener: () => void): () => void
   export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => ChamberSidebarViewPrefs): void
+  /**
+   * Shared control-plane REST client (sidebar shared/control-plane-client.ts,
+   * design 04 §3 / 05 §3.1 — B2 convergence): the renderer's api.ts and the
+   * settings-connections plugin's control-plane client consume this single
+   * copy. Loose mirror of the real exports (wire contract 04 §3 verbatim).
+   */
+  export interface ApiErrorBody {
+    error?: string
+    code?: string
+    message?: string
+  }
+  export interface ApiError extends Error {
+    status?: number
+    body?: ApiErrorBody | null
+    retryAfter?: number
+  }
+  export const DEFAULT_CONTROL_PLANE_URL: string
+  export function controlPlaneUrl(): string
+  export interface RequestOptions {
+    method?: string
+    headers?: Record<string, string>
+    body?: string
+  }
+  export function request<T = unknown>(path: string, options?: RequestOptions): Promise<T>
+  export function post<T = unknown>(path: string, body: unknown): Promise<T>
+  export interface HealthResponse {
+    ok: boolean
+    dsh: { status: string; port: number; error?: string | null }
+  }
+  export interface ConnectionRowWire {
+    id: string
+    label?: string
+    accentColor?: string
+    status: string
+    dshPort?: number
+    error?: string
+  }
+  export interface ConnectionSummary {
+    connectionId: string
+    kind: 'local'
+    label?: string
+    accentColor?: string
+    status: string
+    dshPort?: number | null
+    error?: string
+  }
+  export function toConnectionSummary(row: ConnectionRowWire): ConnectionSummary
+  export interface HostLogLine {
+    ts: number
+    stream: 'stdout' | 'stderr'
+    line: string
+  }
+  export interface HostLogsResponse {
+    port: number
+    lines: HostLogLine[]
+    truncated: boolean
+  }
   export interface SourceSearchState {
     expanded: boolean
     query: string

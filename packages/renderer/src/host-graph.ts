@@ -25,19 +25,16 @@
  * Self-contained on purpose (no dsh package types, mirroring bridge-api.ts):
  * the wire shapes here are the fetch-carrier envelope and the graph rows
  * (vendor dsh-client-modules src/client/manifest.ts `WebBootEntry` /
- * `WebBootGraph` are the authoritative shapes).
+ * `WebBootGraph` are the authoritative shapes). The plugin-graph diagnostic
+ * types are the chamber shared face (sidebar shared/aggregate-store.ts, A4
+ * single source) — imported below and re-exported, never re-declared.
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 
-export type PluginGraphDiagnosticState =
-  | 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
-export interface PluginGraphDiagnostic {
-  state: PluginGraphDiagnosticState
-  message?: string
-  pluginId?: string
-  updatedAt: number
-}
+/** Re-exported for existing consumers (the type lives in the chamber shared face). */
+export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
 
 /** One composed client entry row of the host boot graph (mirror of WebBootEntry).
  *  rc.8 adds `external?: string[]` to WebBootEntry; this mirror deliberately
@@ -73,6 +70,15 @@ interface HostGraphEnvelope {
     error?: { code?: string; message?: string }
   }
 }
+
+// The client-request / server-response envelope shape is AUTHORITATIVE in
+// the control-plane Node package (packages/control-plane/src/rpc-envelope.ts,
+// A2 cross-package protocol single-sourcing) — this renderer (browser-side)
+// cannot import a Node package, so the envelope is hand-built here to the
+// same wire shape; any change to the shared contract must land in
+// rpc-envelope.ts first and be mirrored here (the desktop main-process
+// probes consume the shared module directly through
+// packages/desktop/control-plane-module.ts).
 
 /** Bounded unary (mirror of bridge-api's 30s): a silently hung host must not wedge a boot. */
 const GRAPH_TIMEOUT_MS = 30000

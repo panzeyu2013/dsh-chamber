@@ -19,6 +19,7 @@
       "default": "./lib/index.js"
     },
     "./client": "./src/client/index.ts",
+    "./section": "./src/client/ConnectionsSection.tsx",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -36,6 +37,7 @@
     "clsx": "^2.0.0"
   },
   "peerDependencies": {
+    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",
     "@deepseek-ai/dsh-client-runtime": "workspace:^",
@@ -44,6 +46,7 @@
     "react": "^18.2.0"
   },
   "devDependencies": {
+    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",
     "@deepseek-ai/dsh-client-runtime": "workspace:^",
     "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",

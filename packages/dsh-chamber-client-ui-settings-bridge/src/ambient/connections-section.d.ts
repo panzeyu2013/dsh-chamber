@@ -2,9 +2,11 @@
  * Local declaration for the connections settings section component
  * (packages/dsh-client-ui-settings-connections): the bridge section embeds
  * it as the page-bottom connection management surface (create/delete
- * connections). Resolved via tsconfig paths — the connections package's own
- * sources are never compiled here; at runtime vite resolves the specifier
- * through the explicit renderer alias to the real TSX.
+ * connections). Resolved via tsconfig paths for the stable
+ * `@dsh-chamber/dsh-client-ui-settings-connections/section` subpath (A6 —
+ * never a deep `./src/*` import) — the connections package's own sources are
+ * never compiled here; at runtime vite resolves the specifier through the
+ * explicit renderer alias to the real TSX.
  *
  * MIRROR WARNING: this face mirrors the REAL component's consumption
  * surface (ConnectionsSection.tsx destructures `t` + `pluginDiagnostics`;
