@@ -294,8 +294,11 @@ function checkConflictMarkers() {
 /** (f) git 工作区健康：无已修改/未跟踪（排除本脚本自身路径），stash 为空。 */
 function checkGitStatus() {
   const c = check('git status clean + no untracked + empty stash')
+  // porcelain v1 每行是 `XY PATH`（X/Y 各 1 字符含空格占位 + 1 空格分隔）。
+  // 不能先 trim 整行再 slice(3)：前导空格被吃掉后路径会错位（如
+  // ` M vendor/...` 会切出 'endor/...'）。
   const porcelain = execFileSync('git', ['status', '--porcelain'], { cwd: REPO_ROOT, encoding: 'utf8' })
-    .split('\n').map((l) => l.trim()).filter(Boolean)
+    .split('\n').filter(Boolean)
   const dirty = porcelain.filter((l) => {
     const path = l.slice(3).trim()
     if (path === SELF_PATH) return false
