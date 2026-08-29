@@ -423,6 +423,8 @@ export interface RuntimeSurface {
   check(): Promise<RuntimeState>
   install(version: string): Promise<RuntimeState>
   resetBuiltin(): Promise<RuntimeState>
+  /** Apply the pending version in the current session (design 18 addendum). */
+  applyNow(): Promise<RuntimeState>
   retryApply(): Promise<RuntimeState>
   retryRestore(): Promise<RuntimeState>
   recoverMetadata(): Promise<RuntimeState>
@@ -562,6 +564,7 @@ function runtimeApi(): RuntimeSurface {
     check: () => ipcRenderer.invoke('dsh-chamber:runtime-check'),
     install: version => ipcRenderer.invoke('dsh-chamber:runtime-install', { version }),
     resetBuiltin: () => ipcRenderer.invoke('dsh-chamber:runtime-reset-builtin'),
+    applyNow: () => ipcRenderer.invoke('dsh-chamber:runtime-apply-now'),
     retryApply: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-apply'),
     retryRestore: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-restore'),
     recoverMetadata: () => ipcRenderer.invoke('dsh-chamber:runtime-recover-metadata'),

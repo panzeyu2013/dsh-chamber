@@ -191,6 +191,19 @@ async function safeProbe(probe) {
     return [{ name: "probe", ok: false, error: errorText(error) }];
   }
 }
+function abortedOutcome() {
+  return makeOutcome({
+    status: "failed",
+    retainPending: true,
+    runtimeBlocked: false,
+    retryAction: null,
+    failureKind: null,
+    error: "\u8FD0\u884C\u65F6\u6FC0\u6D3B\u4E8B\u52A1\u5DF2\u88AB\u5BBF\u4E3B\u4E2D\u6B62\uFF1B\u6301\u4E45\u5316\u73B0\u573A\u5C06\u5728\u4E0B\u6B21\u542F\u52A8\u7EED\u4F5C"
+  });
+}
+function rollbackProbeSignal(signal) {
+  return signal !== void 0 && signal.aborted ? void 0 : signal;
+}
 function advance(journal, phase, deps, patch = {}) {
   let next = {
     ...journal,
@@ -344,7 +357,7 @@ async function prepareJournal(opts) {
 async function delayedVerdict(opts) {
   const nowMs = opts.deps.nowMs ?? Date.now;
   const firstStartedAt = nowMs();
-  const probeTarget = () => opts.deps.probe(opts.pendingVersion, opts.targetIsBuiltin === true);
+  const probeTarget = () => opts.deps.probe(opts.pendingVersion, opts.targetIsBuiltin === true, opts.signal);
   let verdict = decideVerdict(await safeProbe(probeTarget), {
     elapsedMs: nowMs() - firstStartedAt,
     observedOnce: false
@@ -371,6 +384,7 @@ async function restoreJournalSnapshot(snapshotName, deps) {
   }
 }
 async function continueRollback(opts, initial) {
+  if (opts.signal?.aborted) return abortedOutcome();
   const { deps } = opts;
   let journal = initial;
   const preSwapPath = await resolvePreSwap(journal, deps);
@@ -513,7 +527,7 @@ async function continueRollback(opts, initial) {
     }
     const fallbackVersion = journal.rollbackTarget ?? opts.builtinVersion;
     const fallbackVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null)),
+      await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal))),
       { elapsedMs: 0, observedOnce: true }
     );
     if (fallbackVerdict === "pass") {
@@ -584,7 +598,7 @@ async function continueRollback(opts, initial) {
       });
     }
     const builtinVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(opts.builtinVersion, true)),
+      await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal))),
       { elapsedMs: 0, observedOnce: true }
     );
     return makeOutcome({
@@ -610,6 +624,7 @@ async function continueRollback(opts, initial) {
   });
 }
 async function runApplyTransaction(opts) {
+  if (opts.signal?.aborted) return abortedOutcome();
   const { deps, pendingVersion } = opts;
   const prepared = await prepareJournal(opts);
   if (!("schemaVersion" in prepared)) return prepared;
@@ -6043,7 +6058,7 @@ function corruptMetadataReason(journal, pointer, override) {
   if (override.kind === "corrupt") return "override-corrupt";
   return null;
 }
-async function runStartupPhase(deps) {
+async function runStartupPhase(deps, signal) {
   let journalState = deps.readActivationJournal();
   let pointerState = deps.readCurrentPointerState();
   let overrideState = deps.readOverrideState();
@@ -6230,6 +6245,7 @@ async function runStartupPhase(deps) {
     knownGoodVersion: facts.knownGoodVersion,
     journal,
     manualRollback: journal?.manualRollback ?? false,
+    signal,
     deps: {
       snapshot: deps.snapshot,
       resolveSnapshotName: deps.resolveSnapshotName,
@@ -6351,7 +6367,7 @@ async function runStartupPhase(deps) {
     monitoringJournal
   };
 }
-async function runDelayedRollback(deps, monitoring) {
+async function runDelayedRollback(deps, monitoring, signal) {
   if (deps.envOverrideActive?.() === true) throw new Error("env override active; persisted F7 rollback is deferred");
   const durableState = deps.readActivationJournal();
   if (durableState.kind !== "valid" || durableState.journal.phase !== "applied-monitoring") {
@@ -6378,6 +6394,7 @@ async function runDelayedRollback(deps, monitoring) {
     sourceWasKnownGood: journal.sourceWasKnownGood === true,
     knownGoodVersion: journal.knownGoodVersion,
     journal,
+    signal,
     deps: {
       snapshot: deps.snapshot,
       resolveSnapshotName: deps.resolveSnapshotName,
@@ -6572,7 +6589,7 @@ function allowedActions(state, capabilities = {}) {
     case "installing":
       return [];
     case "pending":
-      return ["reset-builtin"];
+      return ["apply-now", "reset-builtin"];
     case "applying":
       return ["reset-builtin"];
     case "applied":

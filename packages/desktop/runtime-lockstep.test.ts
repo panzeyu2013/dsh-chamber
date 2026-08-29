@@ -44,6 +44,7 @@ function rendererState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {
     hasOverride: true,
     restoreOutcome: 'none',
     metadataHealth: 'healthy',
+    connectionState: 'ready',
     active: null,
     bundled: null,
     latest: null,

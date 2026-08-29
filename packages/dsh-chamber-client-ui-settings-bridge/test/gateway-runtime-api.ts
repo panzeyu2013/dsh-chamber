@@ -72,12 +72,14 @@ function fetchSequence(responses: Array<{ payload: unknown; status?: number }>) 
 }
 
 test('remoteRuntimeStatusView maps the remote status to the four render kinds without inventing fields', () => {
-  // busy: in-flight apply (pending is the version param) / restart running.
+  // busy: in-flight apply (pending is the version param; the applying window
+  // uses the immediate-restart copy shared with the local branch) / restart
+  // running / installing.
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'applying', pending: '1.1.0' })), {
-    kind: 'busy', titleKey: 'dshRuntimeRemoteStatusApplying', params: { version: '1.1.0' }, detail: null,
+    kind: 'busy', titleKey: 'dshRuntimeStatusApplyingNow', params: { version: '1.1.0' }, detail: null,
   })
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'applying', pending: null })), {
-    kind: 'busy', titleKey: 'dshRuntimeRemoteStatusApplying', params: { version: '—' }, detail: null,
+    kind: 'busy', titleKey: 'dshRuntimeStatusApplyingNow', params: { version: '—' }, detail: null,
   })
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'installing' })), {
     kind: 'busy', titleKey: 'dshRuntimeProgressInstalling', params: undefined, detail: null,
@@ -88,7 +90,8 @@ test('remoteRuntimeStatusView maps the remote status to the four render kinds wi
   assert.deepEqual(remoteRuntimeStatusView(status({ restart: 'running' })), {
     kind: 'busy', titleKey: 'dshRuntimeRemoteStatusRestarting', params: undefined, detail: null,
   })
-  // failed: operationError (failed async job) / terminal restart failure.
+  // failed: operationError (failed async job) / terminal restart failure —
+  // only when no blocked phase/reason is present.
   assert.deepEqual(remoteRuntimeStatusView(status({ operationError: 'install failed: ENOSPC' })), {
     kind: 'failed', titleKey: 'dshRuntimeRemoteStatusFailed', params: { error: 'install failed: ENOSPC' }, detail: null,
   })
@@ -115,7 +118,20 @@ test('remoteRuntimeStatusView maps the remote status to the four render kinds wi
   })
   // Precedence: an in-flight apply outranks a stale failure record.
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'applying', operationError: 'stale failure' })), {
-    kind: 'busy', titleKey: 'dshRuntimeRemoteStatusApplying', params: { version: '—' }, detail: null,
+    kind: 'busy', titleKey: 'dshRuntimeStatusApplyingNow', params: { version: '—' }, detail: null,
+  })
+  // P2-C: a durable recovery phase outranks operationError (an F3 apply-now
+  // failure leaves BOTH startupBlockedReason and operationError set — the
+  // phase names the resume route, so the blocked copy wins, never 'failed').
+  assert.deepEqual(remoteRuntimeStatusView(status({
+    phase: 'swap-attempted', startupBlockedReason: 'swap-attempted', operationError: 'swap-attempted',
+  })), {
+    kind: 'blocked', titleKey: 'dshRuntimeRemoteStatusSwapAttempted', params: undefined, detail: 'swap-attempted',
+  })
+  assert.deepEqual(remoteRuntimeStatusView(status({
+    phase: 'snapshot-failed', startupBlockedReason: 'snapshot-failed', operationError: 'snapshot failed: ENOSPC',
+  })), {
+    kind: 'blocked', titleKey: 'dshRuntimeRemoteStatusSnapshotFailed', params: undefined, detail: 'snapshot-failed',
   })
 })
 
@@ -126,6 +142,7 @@ test('remote action gates lock pending/installing in step with the server and pr
     retryApplyDisabled: true,
     retryRestoreDisabled: true,
     restartDisabled: true,
+    applyNowDisabled: false,
   })
   assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'installing' })), {
     mutationDisabled: true,
@@ -133,6 +150,7 @@ test('remote action gates lock pending/installing in step with the server and pr
     retryApplyDisabled: true,
     retryRestoreDisabled: true,
     restartDisabled: true,
+    applyNowDisabled: true,
   })
   assert.deepEqual(remoteRuntimeActionGates(status({ source: 'env' })), {
     mutationDisabled: true,
@@ -140,6 +158,7 @@ test('remote action gates lock pending/installing in step with the server and pr
     retryApplyDisabled: true,
     retryRestoreDisabled: true,
     restartDisabled: false,
+    applyNowDisabled: true,
   }, 'env pins version management but still permits the source-independent dsh restart')
   assert.deepEqual(remoteRuntimeActionGates(status(), true), {
     mutationDisabled: true,
@@ -147,6 +166,7 @@ test('remote action gates lock pending/installing in step with the server and pr
     retryApplyDisabled: true,
     retryRestoreDisabled: true,
     restartDisabled: true,
+    applyNowDisabled: true,
   })
   assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0' })), {
     mutationDisabled: true,
@@ -154,6 +174,7 @@ test('remote action gates lock pending/installing in step with the server and pr
     retryApplyDisabled: false,
     retryRestoreDisabled: true,
     restartDisabled: true,
+    applyNowDisabled: true,
   })
   assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'restore-blocked', pending: '1.1.0' })), {
     mutationDisabled: true,
@@ -161,7 +182,43 @@ test('remote action gates lock pending/installing in step with the server and pr
     retryApplyDisabled: true,
     retryRestoreDisabled: false,
     restartDisabled: true,
+    applyNowDisabled: true,
   })
+})
+
+test('applyNowDisabled mirrors the apply-now refusal gates (design 18 addendum §5.1)', () => {
+  // Plain pending with the managed dsh live → enabled.
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0' })).applyNowDisabled, false)
+  // Busy tasks (installing/applying/restart running) → disabled.
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'installing' })).applyNowDisabled, true)
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'applying', pending: '1.1.0' })).applyNowDisabled, true)
+  assert.equal(remoteRuntimeActionGates(status({ restart: 'running' })).applyNowDisabled, true)
+  // Recovery phases → disabled (the durable recovery routes own those states).
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'snapshot-failed', pending: '1.1.0' })).applyNowDisabled, true)
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0' })).applyNowDisabled, true)
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'restore-blocked', pending: '1.1.0' })).applyNowDisabled, true)
+  // env source → disabled (version mutation, design 18 addendum D5).
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0', source: 'env' })).applyNowDisabled, true)
+  // mutationsAllowed=false (read-only platform) → disabled.
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0', mutationsAllowed: false })).applyNowDisabled, true)
+  // connectionState outside ready/degraded → disabled (409 runtime_busy mirror;
+  // degraded stays enabled like the server's connectionState gate).
+  for (const connectionState of ['starting', 'stopped', 'restart-exhausted', null] as const) {
+    assert.equal(
+      remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0', connectionState })).applyNowDisabled,
+      true,
+      `connectionState ${String(connectionState)} disables apply-now`,
+    )
+  }
+  assert.equal(
+    remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0', connectionState: 'degraded' })).applyNowDisabled,
+    false,
+    'degraded stays apply-now enabled (server connectionState gate accepts degraded)',
+  )
+  // clientBusy (any in-flight renderer action) → disabled.
+  assert.equal(remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0' }), true).applyNowDisabled, true)
+  // Null status → every gate disabled.
+  assert.equal(remoteRuntimeActionGates(null).applyNowDisabled, true)
 })
 
 test('remoteRuntimeAction classifies refusals: 409/400 pass the server error through, 401/403/5xx are classified', async () => {
@@ -230,6 +287,42 @@ test('remoteRuntimeAction: 200/202 are accepted and the request body carries the
     return statusResponse({ pending: true }, 200)
   }) as unknown as typeof fetch
   await remoteRuntimeAction('gateway-x', { kind: 'apply' }, { fetchImpl: noBody })
+})
+
+test('remoteRuntimeAction apply-now POSTs /chamber/runtime/apply-now and accepts 202', async () => {
+  // Container object: TS7 narrows closure-assigned `let` bindings aggressively,
+  // so capture the request through a stable property container.
+  const seen: { url: string | null; method: string | null; body: unknown } = {
+    url: null, method: null, body: undefined,
+  }
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    seen.url = String(input)
+    seen.method = init?.method ?? null
+    seen.body = init?.body
+    return statusResponse({ accepted: true }, 202)
+  }) as unknown as typeof fetch
+  const result = await remoteRuntimeAction('gateway-x', { kind: 'apply-now' }, { fetchImpl })
+  assert.deepEqual(result, { accepted: true, status: 202 })
+  assert.equal(seen.url, '/api/i/gateway-x/chamber/runtime/apply-now')
+  assert.equal(seen.method, 'POST')
+  assert.equal(seen.body, undefined, 'apply-now carries no body')
+
+  // The 202 async job is polled to settlement by the caller; a synchronous
+  // 409 refusal still passes the server copy through verbatim.
+  const refused = fetchSequence([{
+    status: 409,
+    payload: { error: 'managed dsh is not running (stopped)', code: 'runtime_busy' },
+  }])
+  await assert.rejects(
+    remoteRuntimeAction('gateway-x', { kind: 'apply-now' }, { fetchImpl: refused.fetchImpl }),
+    (error: unknown) => {
+      if (!(error instanceof RemoteRuntimeApiError)) return false
+      assert.equal(error.message, 'managed dsh is not running (stopped)')
+      assert.equal(error.code, 'runtime_busy')
+      assert.equal(error.status, 409)
+      return true
+    },
+  )
 })
 
 test('the canonical gateway chamber id is validated before any request leaves the client', async () => {

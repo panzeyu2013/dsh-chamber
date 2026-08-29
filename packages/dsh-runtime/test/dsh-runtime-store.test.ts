@@ -516,6 +516,36 @@ test('reset-builtin can be durably queued without overwriting an in-flight activ
   }), /拒绝覆盖/);
 });
 
+test('single-flight: writeActivationIntent refuses to overwrite an in-flight prepared transaction', () => {
+  const base = freshBase();
+  writeActivationIntent(base, { targetVersion: '2.0.0', manualRollback: false, intentKind: 'version-switch' });
+  writeActivationJournal(base, journalFixture('prepared'));
+  // A second selection while the activation transaction is already prepared
+  // (snapshot taken, pointer about to switch) must never overwrite it.
+  assert.throws(() => writeActivationIntent(base, {
+    targetVersion: '3.0.0', manualRollback: false, intentKind: 'version-switch',
+  }), /已有运行时激活事务，拒绝覆盖/);
+  assert.deepEqual(readActivationJournalState(base), { kind: 'valid', journal: journalFixture('prepared') });
+});
+
+test('single-flight: queueActivationIntent is idempotent for the same intent and refuses a different one', () => {
+  const base = freshBase();
+  const monitoring = journalFixture('applied-monitoring');
+  writeActivationJournal(base, monitoring);
+  const queued = { targetVersion: '3.0.0', targetIsBuiltin: false, manualRollback: true, intentKind: 'version-switch' as const };
+  const first = queueActivationIntent(base, queued);
+  assert.deepEqual(first.nextIntent, queued);
+  // Re-queueing the identical intent returns the existing journal unchanged
+  // (no write: updatedAt stays put) instead of throwing.
+  const second = queueActivationIntent(base, queued);
+  assert.deepEqual(second.nextIntent, queued);
+  assert.equal(second.updatedAt, first.updatedAt);
+  assert.equal(second.phase, 'applied-monitoring');
+  assert.throws(() => queueActivationIntent(base, {
+    targetVersion: '4.0.0', manualRollback: false, intentKind: 'version-switch',
+  }), /拒绝覆盖用户选择/);
+});
+
 test('legacy journal without intentKind defaults only to version-switch', () => {
   const base = freshBase();
   const { intentKind: _legacyOmitted, ...legacy } = journalFixture('prepared');

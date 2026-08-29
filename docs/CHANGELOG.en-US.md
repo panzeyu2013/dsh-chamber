@@ -12,7 +12,37 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Fixed
+
+- **The chamber shell no longer loads the official dev-only `dsh-client-hmr` entry** —
+  its client fiber unconditionally opens `new EventSource('/plugins/events')` (an
+  instance-origin relative path), which on chamber pages (control-plane origin)
+  hits the control-plane SPA fallback's `index.html` (`text/html`), triggering
+  "MIME type is not text/event-stream" abort errors on every boot and every
+  EventSource reconnect; the web profile has no usable hmr client channel
+  (design 09). It is now added to `CHAMBER_COVERED_IDS` (page-own, no factory)
+  to skip loading. The same known issue `dsh-session-log-export` (the chamber
+  view cannot export session logs while the instance's official UI works) is
+  deferred by decision, see `STATUS.md`.
+- **Host-graph 503 retry budget widened from 6 to 10 attempts (2.5s → 4.5s
+  summed delay)** — measured local instance spawn→ready takes about 2.8–3.0s
+  (control-plane host logs); the old budget could not cover the scenario where
+  the shell starts exactly inside the spawn window, and after exhaustion it
+  silently degraded per the existing contract (no extra plugins this boot).
+  Non-503 channel failures still fail fast; the budget only affects the
+  fast-503 path.
+
 ### Changed
+
+- **dsh runtime "Apply now" (design 18 addendum)** — the pending phase gains a
+  user-triggered "Apply now" action that runs the existing activation
+  transaction (stop → snapshot → pointer switch → probe gate →
+  verdict/rollback) in the current session instead of waiting for the next
+  launch; the desktop host uses a native confirm, the gateway host exposes
+  `POST /chamber/runtime/apply-now` (202 + status polling), and the gateway
+  single-target proxy gains an activation-aware gate (no forwarding to an
+  unverified candidate during the probe window). Zero new terminal states, zero
+  new crash windows. See `docs/design/18-addendum-apply-now.md`.
 
 - **Gateway login page aligned with the dsh design language** — the `/auth/login`
   pre-auth page went from a bare minimal form to a self-contained dark card page

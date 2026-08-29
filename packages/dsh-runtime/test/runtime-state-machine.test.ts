@@ -1,8 +1,9 @@
 /**
  * runtime-state-machine.ts tests (design 18 §3.6) — node:test, pure logic.
  * Covers the full transition table: main chain, probe-fail/rollback-exhausted,
- * reset-builtin, error recovery, terminal judgement, and the terminal gate
- * (pending only reset-builtin; applying is an atomic critical section).
+ * reset-builtin, apply-now, error recovery, terminal judgement, and the
+ * terminal gate (pending exposes apply-now + reset-builtin; applying is an
+ * atomic critical section).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -61,8 +62,24 @@ test('isTerminal: rollback/failed terminal, applied not', () => {
   assert.equal(isTerminal('pending'), false);
 });
 
+test('apply-now: pending exposes the immediate-apply action and nothing else (design 18 addendum)', () => {
+  // allowedActions('pending') must contain exactly apply-now + reset-builtin.
+  const actions = allowedActions('pending');
+  assert.ok(actions.includes('apply-now'), 'pending must expose apply-now');
+  assert.deepEqual([...actions].sort(), ['apply-now', 'reset-builtin']);
+  // The pending → applying edge is unchanged: next-launch and apply-now share
+  // the same apply-start event (the controller chooses the trigger).
+  assert.equal(transition('pending', { type: 'apply-start' }), 'applying');
+  // reset-builtin remains available from pending.
+  assert.equal(transition('pending', { type: 'reset-builtin' }), 'idle');
+  // apply-now is a pending-only action — no other phase exposes it.
+  for (const phase of ['idle', 'available', 'checking', 'downloading', 'installing', 'applying', 'applied', 'rollback', 'snapshot-failed', 'failed', 'error'] as const) {
+    assert.equal(allowedActions(phase).includes('apply-now'), false, `${phase} must not allow apply-now`);
+  }
+});
+
 test('allowedActions is the complete privileged action matrix', () => {
-  assert.deepEqual(allowedActions('pending'), ['reset-builtin']);
+  assert.deepEqual(allowedActions('pending'), ['apply-now', 'reset-builtin']);
   assert.deepEqual(allowedActions('applying'), ['reset-builtin']);
   assert.deepEqual(allowedActions('checking'), []);
   assert.deepEqual(allowedActions('downloading'), []);

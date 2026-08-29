@@ -74,6 +74,10 @@ export interface RuntimeState {
   pending: string | null
   phase: RuntimePhase
   error: string | null
+  /** Live control-plane connection state (ready/degraded/…), read at every
+   *  getState via the injected getter; 'unknown' when no getter is wired. The
+   *  renderer mirrors the main apply-now gate off this field. */
+  connectionState?: string
   targetVersion?: string | null
   sourceVersion?: string | null
   rollbackTarget?: string | null
@@ -170,6 +174,10 @@ export interface ControllerDeps {
   }
   /** The chamber shell version recorded in override records (§3.5 invalidation). */
   shellVersion: string
+  /** Live control-plane connection state (ready/degraded/…) for the renderer
+   *  projection; evaluated at every getState so the apply-now mirror never
+   *  goes stale. Absence projects 'unknown' (no gating in the renderer). */
+  connectionState?: () => string
 }
 
 export interface ControllerOptions {
@@ -360,6 +368,7 @@ export class DshRuntimeController {
         : null,
       phase: this.phase,
       error: this.error,
+      connectionState: this.deps.connectionState?.() ?? 'unknown',
       ...this.lifecycle,
       targetVersion: this.lifecycle.targetVersion ?? override?.pending ?? null,
       swapAttempted: this.lifecycle.swapAttempted === true || override?.swapAttempted === true,

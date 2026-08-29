@@ -86,6 +86,9 @@ export interface RuntimeState {
   pending: string | null
   phase: RuntimePhase
   error: string | null
+  /** Live control-plane connection state (ready/degraded/…) projected by main.
+   *  Absent (older main) means no connectionState gate is enforced. */
+  connectionState?: string
   /** Version being installed/applied when it differs from active/pending. */
   targetVersion?: string | null
   /** Version active before the pending swap. */
@@ -143,6 +146,10 @@ export interface RuntimeSurface {
   check(): Promise<RuntimeState>
   install(version: string): Promise<RuntimeState>
   resetBuiltin(): Promise<RuntimeState>
+  /** Apply the pending version in the current session (design 18 addendum
+   *  §2.1): runs the existing activation transaction immediately instead of
+   *  waiting for the next launch. Main gates + native confirmation apply. */
+  applyNow(): Promise<RuntimeState>
   retryApply(): Promise<RuntimeState>
   retryRestore(): Promise<RuntimeState>
   /** No renderer-controlled path/version input is accepted. */
@@ -160,6 +167,7 @@ export type RuntimeAction =
   | 'check'
   | 'select-version'
   | 'install'
+  | 'apply-now'
   | 'reset-builtin'
   | 'retry-apply'
   | 'retry-restore'
@@ -170,8 +178,9 @@ export type RuntimeAction =
 
 /**
  * The strict visible-action matrix. Busy phases expose no mutation; pending
- * and applying expose only the escape hatch required by design 18. Retry
- * actions are added separately from explicit controller capability bits.
+ * exposes the immediate-apply action plus the reset escape hatch, applying
+ * exposes only the escape hatch required by design 18. Retry actions are
+ * added separately from explicit controller capability bits.
  */
 const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
   idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
@@ -179,7 +188,7 @@ const BASE_ACTIONS: Record<RuntimePhase, readonly RuntimeAction[]> = {
   available: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   downloading: [],
   installing: [],
-  pending: ['reset-builtin'],
+  pending: ['apply-now', 'reset-builtin'],
   applying: ['reset-builtin'],
   applied: ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
   rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
@@ -252,17 +261,37 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
   // 是持久化事务的逃生口（正常必有 pending override），但显式 hasOverride:false
   // （override 被外部删除）时同样不得显示必然 no-op 的按钮；其余相位无 override
   // 时移除该按钮——包括 error/failed/rollback/applied，而不只是 idle/available。
+  // apply-now 与 reset-builtin 同构：它同样依赖持久化 pending 事务，main 侧 F5
+  // 门（apply-now-gate 的 no-pending）在无 durable pending 时一律拒绝；显式
+  // hasOverride:false 时 UI 必须同样隐藏，否则出现 UI 显示而 main 拒绝的
+  // UI⊄main 方向违例（与 reset-builtin 的 hasOverride 过滤对称）。
   if (state.hasOverride === false
     || (state.phase !== 'pending' && state.phase !== 'applying' && state.phase !== 'snapshot-failed'
       && !(state.hasOverride ?? state.source === 'user'))) {
-    const index = actions.indexOf('reset-builtin')
-    if (index >= 0) actions.splice(index, 1)
+    const resetIndex = actions.indexOf('reset-builtin')
+    if (resetIndex >= 0) actions.splice(resetIndex, 1)
+    // apply-now 只出现在 pending 相位；此过滤对非 pending 相位是无操作，但保持
+    // 与 reset-builtin 同一处、同一条件的对称性。
+    const applyNowIndex = actions.indexOf('apply-now')
+    if (applyNowIndex >= 0) actions.splice(applyNowIndex, 1)
   }
   if ((state.phase === 'snapshot-failed' || state.phase === 'failed') && state.canRetryApply === true) {
     actions.unshift('retry-apply')
   }
   if (canRetryRestore) {
     actions.unshift('retry-restore')
+  }
+  // Apply-now connectionState mirror (P2-A, UI⊄main fix): the main-side gate
+  // (apply-now-gate.ts) refuses every connectionState outside ready/degraded —
+  // a local dsh that is stopped/crashed would make main silently no-op while
+  // the durable pending remains. Only apply-now is gated: reset-builtin is the
+  // persistent-transaction escape hatch and stays visible regardless of
+  // connection state. Absence (older main without the projection) never gates.
+  if (state.connectionState !== undefined
+    && state.connectionState !== 'ready'
+    && state.connectionState !== 'degraded') {
+    const applyNowIndex = actions.indexOf('apply-now')
+    if (applyNowIndex >= 0) actions.splice(applyNowIndex, 1)
   }
   return actions
 }

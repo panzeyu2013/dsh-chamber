@@ -390,6 +390,17 @@ export interface GatewayRuntimeManager {
   listVersions(): Promise<unknown>
   select(version: string): Promise<{ accepted: boolean; version: string }>
   apply(): Promise<{ pending: boolean }>
+  /** Immediately apply the pending/staged version switch inside the current
+   * session (design 18 addendum · apply-now): stop → activation transaction →
+   * resume. 202 semantics — the caller receives `{ accepted: true }`
+   * synchronously and the outcome is projected via status(). */
+  applyNow(): Promise<{ accepted: boolean }>
+  /** Synchronous apply-now gate (review fix): every manager refusal
+   * (platform / busy / env / target resolution / tree validation / no-op)
+   * runs here so the route answers a 409/403 BEFORE any 202 can go out —
+   * a preflight throw must never be swallowed into a fake 202 whose status
+   * never settles. Returns the resolved target version. */
+  applyNowPreflight(): string
   rollback(version: string): Promise<{ accepted: boolean }>
   restoreBuiltin(): Promise<{ accepted: boolean }>
   /** Resume an interrupted pointer switch (swap-attempted) by re-running the
@@ -401,6 +412,8 @@ export interface GatewayRuntimeManager {
   retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }>
   restart(): Promise<void>
   restartInFlight(): boolean
+  /** True while an apply-now transaction is running (route gate + status). */
+  applyNowInFlight(): boolean
   getRegistry(): { origin: string }
   setRegistry(origin: string): Promise<{ origin: string }>
   dispose(): Promise<void>
@@ -447,6 +460,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   let internalSpawn = false
   let activationDepth = 0
   let installInFlight = false
+  /** Set by dispose(): an in-flight apply-now job must never resurrect the
+   * managed dsh after the gateway has been stopped (P2 review fix). */
+  let disposed = false
   /** Last select/restart failure, surfaced in status (R7 review: async job
    *  failures must stay observable; cleared by the next successful action). */
   let operationError: string | null = null
@@ -709,7 +725,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function mutationInProgress(): boolean {
-    return activationInProgress() || installInFlight || restartInFlight
+    return activationInProgress() || installInFlight || restartInFlight || applyNowInFlight
   }
 
   function persistedPendingVersion(): string | null {
@@ -755,6 +771,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (activationInProgress()) throw Object.assign(new Error('runtime activation in progress'), { code: 'runtime_busy' })
     if (installInFlight) throw Object.assign(new Error('a runtime install is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
     if (restartInFlight) throw Object.assign(new Error('a restart is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
+    // Review fix: apply-now is a full writer fence from the moment it is
+    // accepted (applyNowInFlight=true) — before that the fence only existed
+    // via activationDepth, which is a timing coincidence, not a contract.
+    if (applyNowInFlight) throw Object.assign(new Error('an apply-now transaction is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
   }
 
   function internalSpawnActive(): boolean {
@@ -1206,6 +1226,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   let restartInFlight = false
+  let applyNowInFlight = false
   /** Last restart outcome, projected in status() (review fix): the settings
    * poll must be able to distinguish a post-202 entry rejection from success
    * even when connectionState has already returned to 'ready'. */
@@ -1245,6 +1266,211 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     } finally {
       restartInFlight = false
     }
+  }
+
+  /**
+   * Synchronous apply-now preflight (review R3/R5): every manager gate that
+   * can refuse the action runs here, synchronously, so the route can answer a
+   * 409/403 BEFORE any 202 goes out — a preflight throw must never be
+   * swallowed into a fake 202 whose status never settles (F3).
+   *
+   * Order: platform → assertMutationIdle (incl. applyNowInFlight) → env →
+   * fail-closed metadata/state gates (P2 review fix: corrupt activation
+   * journal / in-memory startup block / managed dsh not ready — each mirrors a
+   * route-level refusal so a DIRECT manager call refuses identically) → target
+   * resolution (ordinary pending, else a NON-invalidated staged chosenVersion;
+   * both empty → no_selection) → installed-tree validation → no-op rejection
+   * (target already active with no in-flight transaction to continue) → F2 arm
+   * of the pending switch when only a selection is staged (journal-first,
+   * apply() ordering; manualRollback mirrors apply() :1084).
+   *
+   * Returns the resolved target version.
+   */
+  function applyNowPreflight(): string {
+    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    assertMutationIdle()
+    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+
+    // P2-1 (review fix): a corrupt activation journal must fail closed BEFORE
+    // any 202/stop can go out. The startup transaction cannot read it either
+    // (runStartupPhase answers journal-corrupt), so proceeding would stop a
+    // healthy managed dsh and leave it down. Recovery is the retry/restore
+    // surface, never apply-now.
+    if (readActivationJournalState(baseDir).kind === 'corrupt') {
+      throw Object.assign(new Error('runtime activation journal is corrupt; apply-now refused (recovery required)'), { code: 'runtime_busy' })
+    }
+    // Direct-call parity with the route's recovery gate: an in-memory startup
+    // block (snapshot-failed / swap-attempted / restore-half / restore-
+    // incomplete / corrupt metadata) refuses apply-now identically when the
+    // manager is called directly, not only through /chamber/runtime/apply-now.
+    if (startupBlockReason !== null) {
+      throw Object.assign(new Error(`runtime recovery ${startupBlockReason} is required; only the matching retry and restore-builtin are allowed`), { code: 'runtime_recovery_required' })
+    }
+    // Direct-call parity with the route's connection gate: a managed dsh that
+    // never reached ready cannot be switched in-session (mirrors /restart).
+    if (plane.connectionState !== 'ready' && plane.connectionState !== 'degraded') {
+      throw Object.assign(new Error(`managed dsh is not running (${plane.connectionState}); restore the builtin or retry the interrupted apply/restore before applying now`), { code: 'runtime_busy' })
+    }
+
+    // F2: the target is the ordinary pending version when one exists, else the
+    // staged chosenVersion (a selectedOnly selection with no pending yet).
+    // Both empty → no_selection (never a no-op dsh stop/start cycle). An
+    // invalidated record (gateway upgrade, shellVersion mismatch) keeps its
+    // chosenVersion but is NOT a valid target — the selection gate must filter
+    // it HERE, not at the route's status projection, whose selectedVersion
+    // field does not see the invalidation (review R3/R5: a status-based
+    // no_selection gate mis-let the stale choice through to a fake 202).
+    let target = ordinaryPendingVersion()
+    if (target === null) {
+      const record = readOverride(baseDir)
+      if (record === null || record.chosenVersion === null || shouldInvalidate(record, shellVersion)) {
+        throw Object.assign(new Error('no runtime version selected or pending'), { code: 'no_selection' })
+      }
+      target = record.chosenVersion
+    }
+    if (!listValidVersionTrees(baseDir).includes(target)) {
+      throw Object.assign(new Error(`no valid version tree for ${target}`), { code: 'invalid_target' })
+    }
+
+    // No-op rejection: the target is already the active runtime and no
+    // transaction is in flight — applying again would run a pointless
+    // stop → snapshot → spawn → probe cycle. P2-2 (review fix): the exception
+    // was too wide — applied-monitoring (no nextIntent) is the durable end
+    // state of every successful apply (pending=null, chosen==active), and the
+    // old gate let apply-now through to that empty stop/start loop on the
+    // ALREADY-ACTIVE version. Only the crash-continuation phases (prepared /
+    // switched / manual-restoring / manual-restored / rollback-needed /
+    // restoring / restore-complete / fallback-builtin) still pass — those are
+    // real interrupted transactions that apply-now must continue. An
+    // applied-monitoring journal WITH nextIntent needs no special case: its
+    // nextIntent arms a pending that differs from current, so target !==
+    // current above and the transaction proceeds naturally.
+    const current = currentPointerVersion()
+    if (target === current) {
+      const journal = readActivationJournalState(baseDir)
+      if (journal.kind === 'missing'
+        || (journal.kind === 'valid'
+          && (journal.journal.phase === 'intent' || journal.journal.phase === 'applied-monitoring'))) {
+        throw Object.assign(new Error(`dsh v${target} is already the active runtime; apply-now has nothing to do`), { code: 'noop_target' })
+      }
+    }
+
+    // F2 (continuation): when only the selection is staged (no pending yet),
+    // arm the pending switch journal-first — the exact apply() ordering — so
+    // runStartupPhase sees effectivePending === targetVersion. assertNoPending
+    // is deliberately NOT used: a pending/selection existing is the semantic
+    // premise of apply-now.
+    if (persistedPendingVersion() === null) {
+      const record: OverrideRecord = readOverride(baseDir) ?? {
+        shellVersion,
+        chosenVersion: null,
+        resolvedVersion: null,
+        pending: null,
+        swapAttempted: false,
+      }
+      clearStaleIntent()
+      try {
+        writeActivationIntent(baseDir, {
+          targetVersion: target,
+          targetIsBuiltin: false,
+          // Review fix: mirror apply() :1084's downgrade-aware formula instead
+          // of a hardcoded false — a staged downgrade (chosen < current) arms
+          // a real manual rollback intent so runStartupPhase prepares the
+          // pre-rollback stash, exactly like a rollback()-armed switch.
+          manualRollback: current !== null && compareRuntimeVersions(target, current) === -1,
+          intentKind: 'version-switch',
+        })
+      } catch (error) {
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: 'runtime_busy' })
+      }
+      writeOverride(baseDir, {
+        ...record,
+        shellVersion,
+        chosenVersion: target,
+        resolvedVersion: target,
+        pending: target,
+        swapAttempted: false,
+        selectedOnly: false,
+        // Round-3 fix: a fresh apply-now transaction supersedes a failed
+        // snapshot's durable lastOutcome marker (desktop parity).
+        lastOutcome: null,
+        lastError: null,
+      })
+      // Round-4 fix: a fresh transaction supersedes the in-memory blocked
+      // phase marker; the durable writes above are the authority.
+      startupBlockReason = null
+      operationError = null
+      restartOutcome = null
+    }
+    return target
+  }
+
+  /**
+   * Immediately apply the pending/staged version switch inside the current
+   * session (design 18 addendum · apply-now, §5.1): the version-switch twin of
+   * restoreBuiltin — durable intent → quiesce DSH_HOME → snapshot → atomic
+   * pointer switch → spawn candidate → full probe gate → verdict/rollback.
+   * 202 semantics (F3): the caller receives `{ accepted: true }` synchronously;
+   * the async job's outcome is projected into status() (operationError /
+   * startupBlockReason), never only into the log. Every synchronous refusal
+   * happens in applyNowPreflight() BEFORE applyNowInFlight is armed — the
+   * route answers 409/403 from the preflight and never sends a fake 202.
+   */
+  async function applyNow(): Promise<{ accepted: boolean }> {
+    // The preflight arms the pending switch (F2) when only a selection is
+    // staged; the transaction body below relies on that persisted pending —
+    // runStartupPhase derives effectivePending === targetVersion from the
+    // override/journal, so `target` needs no separate plumbing into it.
+    const target = applyNowPreflight()
+    applyNowInFlight = true
+    void (async () => {
+      // P0 (review fix): the recovery segment (startLocal + exposure resync)
+      // and the F3 projection run AFTER endActivation() closes the quarantine
+      // window — restoreBuiltin order (mirror restoreBuiltin :1180-1192). The
+      // OLD placement ran the recovery startLocal INSIDE
+      // beginActivation()…endActivation(), where index.ts's canStartLocal gate
+      // (activationInProgress() && !internalSpawnActive() → connection_busy)
+      // refuses every non-internal spawn → every production apply-now recovery
+      // threw connection_busy and the operationError was overwritten with the
+      // misleading 'dsh runtime activation in progress'.
+      let result: Awaited<ReturnType<typeof runStartupPhase>> | null = null
+      try {
+        // P2-4 (review fix): a new transaction supersedes any stale projection
+        // from a previous select/restart/apply-now the moment it is accepted —
+        // the 202 window must not keep echoing the last failure's text.
+        operationError = null
+        beginActivation()
+        try {
+          await plane.stopLocal()
+          result = await executeStartupTransaction()
+        } finally {
+          endActivation()
+          invalidateDiskCache()
+        }
+        // P2-5 (review fix): stop()/dispose() during the in-flight job must
+        // never let the recovery startLocal resurrect the managed dsh.
+        if (disposed) return
+        if (result.blockedReason === null || result.blockedReason === 'snapshot-failed') {
+          await plane.startLocal()
+          plane.refreshLocalExposure()
+        }
+        // F3: the 202 job's failure must project into manager state (restart
+        // parity) — the settings poll reads these fields, not the log. Hard
+        // recovery/metadata blocks stay stopped and pollable (restoreBuiltin
+        // :1180-1192 semantics); executeStartupTransaction already projected
+        // startupBlockReason = result.blockedReason.
+        if (result.applyOutcome?.status !== 'applied') {
+          operationError = sanitizeRouteError(result.applyOutcome?.error ?? result.blockedReason ?? 'runtime apply-now did not commit')
+        } else {
+          operationError = null
+        }
+      } catch (error) {
+        operationError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
+      } finally {
+        applyNowInFlight = false
+      }
+    })()
+    return { accepted: true }
   }
 
   /** Shared tail of retry-apply / retry-restore: re-run the startup
@@ -1319,6 +1545,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function dispose(): Promise<void> {
+    // P2-5 (review fix): an in-flight apply-now job checks this right after the
+    // activation window closes and must not resurrect the managed dsh once the
+    // gateway is being stopped.
+    disposed = true
     // Reap install children (design 17 §2.1 stop order / S17): a pnpm child
     // left behind would make the next startup's cleanupStaleInstalls refuse
     // to clean a live writer and block boot. The caller MUST await this —
@@ -1346,12 +1576,15 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     listVersions,
     select,
     apply,
+    applyNow,
+    applyNowPreflight,
     rollback,
     restoreBuiltin,
     retryApply,
     retryRestore,
     restart,
     restartInFlight: () => restartInFlight,
+    applyNowInFlight: () => applyNowInFlight,
     getRegistry,
     setRegistry,
     dispose,

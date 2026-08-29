@@ -37,6 +37,12 @@ export interface GatewayProxyDeps {
   getLocalDshPort(): number | null
   /** The managed local dsh state ('ready' when serviceable). */
   getLocalState(): string
+  /** Activation-aware exposure gate (design 18 addendum D3/F4, 必做): false
+   * while an activation transaction is in flight, so an unverdict-candidate
+   * never serves online users. The gate covers the startup path and
+   * restore-builtin the same way it covers apply-now. Defaults to open for
+   * callers that do not compose a runtime manager. */
+  canExposeLocal?: () => boolean
 }
 
 export interface GatewayProxyDiagnostics {
@@ -83,10 +89,12 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
   }
 
   /** Resolve the single target (the local dsh loopback origin). Loud 503 when
-   * the instance is not ready (proxy honesty — never a silent empty success). */
+   * the instance is not ready (proxy honesty — never a silent empty success)
+   * or while an activation transaction is in flight (D3/F4): the candidate
+   * tree must not serve online users before the probe verdict. */
   function resolveTarget(res: ProxyResponse | null): URL | null {
     const port = getLocalDshPort()
-    if (getLocalState() === 'ready' && Number.isInteger(port) && (port ?? 0) > 0) {
+    if (getLocalState() === 'ready' && Number.isInteger(port) && (port ?? 0) > 0 && (deps.canExposeLocal?.() ?? true)) {
       return new URL(`http://127.0.0.1:${port}`)
     }
     if (res !== null) writeError(res, 503, 'instance_unavailable', 'the local dsh instance is not ready', logger)

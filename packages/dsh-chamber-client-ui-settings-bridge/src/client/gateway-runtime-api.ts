@@ -442,6 +442,7 @@ export type RemoteRuntimeAction =
   | { kind: 'restore-builtin' }
   | { kind: 'retry-apply' }
   | { kind: 'retry-restore' }
+  | { kind: 'apply-now' }
 
 export interface RemoteRuntimeActionResult {
   accepted: true
@@ -456,6 +457,7 @@ function actionSuffix(action: RemoteRuntimeAction): string {
     case 'restore-builtin': return 'restore-builtin'
     case 'retry-apply': return 'retry-apply'
     case 'retry-restore': return 'retry-restore'
+    case 'apply-now': return 'apply-now'
   }
 }
 
@@ -498,9 +500,12 @@ export async function remoteRuntimeSetRegistry(
 /** Render three-state projection of the remote status (design 18 §3.6
  *  status/文案口径 via the §9.3 status contract):
  *   - busy    = phase installing/applying or restart running;
- *   - failed  = operationError (failed async job) or terminal restart failed;
  *   - blocked = startupBlockedReason / restore-blocked / swap-attempted /
- *               snapshot-failed (blocked startup keeps the surface alive);
+ *               snapshot-failed (blocked startup keeps the surface alive) —
+ *               OUTRANKS operationError so a durable recovery phase names its
+ *               resume route instead of a stale failure line;
+ *   - failed  = operationError (failed async job) or terminal restart failed,
+ *               only when no blocked phase/reason is present;
  *   - idle    = otherwise.
  * `titleKey` is a settings-bridge dictionary key; `params` feeds `t()`; a
  *  non-null `detail` is the server's verbatim copy to append. */
@@ -517,6 +522,11 @@ export interface RemoteRuntimeActionGates {
   retryApplyDisabled: boolean
   retryRestoreDisabled: boolean
   restartDisabled: boolean
+  /** Apply-now (design 18 addendum §5.1/§6.1): the pending immediate-switch
+   *  action mirrors the route's synchronous refusals — a plain pending with a
+   *  live instance is enabled; busy tasks, recovery phases, env sources,
+   *  read-only platforms and non-ready/degraded connection states disable it. */
+  applyNowDisabled: boolean
 }
 
 /** Pure UI mirror of the gateway's authoritative mutation fences. Pending
@@ -534,6 +544,7 @@ export function remoteRuntimeActionGates(
       retryApplyDisabled: true,
       retryRestoreDisabled: true,
       restartDisabled: true,
+      applyNowDisabled: true,
     }
   }
   const taskBusy = clientBusy
@@ -554,6 +565,11 @@ export function remoteRuntimeActionGates(
     retryRestoreDisabled: versionBaseBlocked || !restoreRecovery,
     restartDisabled: taskBusy || pending || recovery
       || (status.connectionState !== 'ready' && status.connectionState !== 'degraded'),
+    // The route refuses apply-now with 409 connection_busy while the managed
+    // dsh is not live; the UI mirrors the same ready/degraded check as
+    // restart (design 18 addendum §5.1).
+    applyNowDisabled: versionBaseBlocked || !pending
+      || (status.connectionState !== 'ready' && status.connectionState !== 'degraded'),
   }
 }
 
@@ -569,23 +585,17 @@ export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRunt
       ? { kind: 'busy', titleKey: 'dshRuntimeRemoteStatusRestarting', params: undefined, detail: null }
       : status.phase === 'installing'
         ? { kind: 'busy', titleKey: 'dshRuntimeProgressInstalling', params: undefined, detail: null }
-      : { kind: 'busy', titleKey: 'dshRuntimeRemoteStatusApplying', params: { version: status.pending ?? '—' }, detail: null }
-  }
-  // Terminal restart failure or a failed async job surfaces with the server's
-  // operationError copy (a restart that never reached ready must never render
-  // as success).
-  if (status.restart === 'failed' || (status.operationError !== null && status.operationError !== '')) {
-    return {
-      kind: 'failed',
-      titleKey: 'dshRuntimeRemoteStatusFailed',
-      params: { error: status.operationError ?? '—' },
-      detail: null,
-    }
+        // The gateway applying window uses the same immediate-restart copy as
+        // the local apply-now window (and the /chamber/ browser page), not the
+        // next-launch applying wording.
+        : { kind: 'busy', titleKey: 'dshRuntimeStatusApplyingNow', params: { version: status.pending ?? '—' }, detail: null }
   }
   // Blocked startup (design 18 §9.3: the runtime surface stays pollable while
-  // the managed dsh is down). The phase names the resume route; the raw reason
+  // the managed dsh is down) OUTRANKS operationError (P2-C): an F3 failure
+  // leaves both startupBlockedReason and operationError set — the phase names
+  // the resume route, so the blocked copy wins and the raw reason
   // (swap-attempted / restore-half / restore-incomplete / snapshot-failed /
-  // journal-corrupt / journal-mismatch) is appended verbatim.
+  // journal-corrupt / journal-mismatch) is appended verbatim as the detail.
   if (BLOCKED_PHASES.has(status.phase) || (status.startupBlockedReason !== null && status.startupBlockedReason !== '')) {
     const titleKey = status.phase === 'swap-attempted'
       ? 'dshRuntimeRemoteStatusSwapAttempted'
@@ -595,6 +605,17 @@ export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRunt
           ? 'dshRuntimeRemoteStatusRestoreBlocked'
           : 'dshRuntimeRemoteStatusBlocked'
     return { kind: 'blocked', titleKey, params: undefined, detail: status.startupBlockedReason }
+  }
+  // Terminal restart failure or a failed async job surfaces with the server's
+  // operationError copy (a restart that never reached ready must never render
+  // as success) — only when no blocked phase/reason is present.
+  if (status.restart === 'failed' || (status.operationError !== null && status.operationError !== '')) {
+    return {
+      kind: 'failed',
+      titleKey: 'dshRuntimeRemoteStatusFailed',
+      params: { error: status.operationError ?? '—' },
+      detail: null,
+    }
   }
   if (status.phase === 'pending') {
     return { kind: 'idle', titleKey: 'dshRuntimeStatusPending', params: { version: status.pending ?? '—' }, detail: null }

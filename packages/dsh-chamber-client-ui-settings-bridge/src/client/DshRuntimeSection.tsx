@@ -317,6 +317,26 @@ function GatewayRuntimeSection({
     })
   }, [chamberInstanceId, retryRestoreDisabled, runRemoteAction])
 
+  // Apply now on the gateway (design 18 addendum §5.1/§6.3): the pending
+  // immediate-switch action goes through the 202 route, polls the applying
+  // window to settlement, then refreshes the version list — mirroring
+  // onApplySelected. The UI owns the second confirmation here (the gateway
+  // has no native dialog): title + body in one confirm message.
+  const onApplyNowRemote = useCallback(() => {
+    const target = remoteStatus?.pending
+    if (remoteStatus === null || target === null || remoteGates.applyNowDisabled) return
+    const message = `${t('dshRuntimeApplyNowConfirmTitle', { version: target })}\n\n${t('dshRuntimeApplyNowConfirmBody', { version: target })}`
+    if (!window.confirm(message)) return
+    void runRemoteAction(async () => {
+      const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'apply-now' })
+      if (result.status === 202) {
+        await pollRemoteRuntimeUntilSettled(chamberInstanceId)
+      }
+      // The applied version may have changed the cached-tree list.
+      setVersionsEpoch((epoch) => epoch + 1)
+    })
+  }, [chamberInstanceId, remoteStatus, remoteGates.applyNowDisabled, t, runRemoteAction])
+
   const registryOrigin = remoteStatus?.registry ?? ''
   const registryMode = registryOrigin === NPMJS || registryOrigin === NPMMIRROR
     ? registryOrigin
@@ -550,7 +570,7 @@ function GatewayRuntimeSection({
             onClick={() => { void onApplySelected() }}
             disabled={mutationDisabled || isActiveRemote || chosenRemote === null}
           >
-            {actionBusy ? t('dshRuntimeRemoteApplying') : t('dshRuntimeRemoteApplyAction')}
+            {actionBusy ? t('dshRuntimeRemoteApplying') : t('dshRuntimeApplyNextLaunchOnly')}
           </button>
         </div>
       </label>
@@ -562,6 +582,20 @@ function GatewayRuntimeSection({
       )}
 
       <div className={css.updateStatusLine}>
+        {/* Pending = the gateway's apply-now window (design 18 addendum
+            §5.1/§6.1): the immediate-switch primary action appears only while
+            the server-side gates are open (not busy/recovery/env/read-only
+            and the managed dsh live). */}
+        {remoteStatus.phase === 'pending' && remoteStatus.pending !== null && !remoteGates.applyNowDisabled && (
+          <button
+            type="button"
+            className={css.updatePrimaryButton}
+            onClick={() => { void onApplyNowRemote() }}
+            disabled={remoteGates.applyNowDisabled}
+          >
+            {t('dshRuntimeApplyNowAction')}
+          </button>
+        )}
         {!isActiveRemote && chosenRemote !== null && (
           <button
             type="button"
@@ -725,6 +759,9 @@ export function DshRuntimeSection({
   const [busy, setBusy] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const [restartNote, setRestartNote] = useState<string | null>(null)
+  // True only while a user-triggered apply-now transaction is in flight — the
+  // honest window copy for the applying phase (design 18 addendum §6.2/§6.3).
+  const [applyNowInFlight, setApplyNowInFlight] = useState(false)
   const restartPollAbort = useRef<AbortController | null>(null)
   // Synchronous re-entry gate: the async state update cannot stop a double
   // click in the same frame (V2 review M3).
@@ -878,6 +915,29 @@ export function DshRuntimeSection({
     void runRuntimeAction(() => runtime.resetBuiltin())
   }, [runtime, envGated, actions, runRuntimeAction])
 
+  // Apply now (design 18 addendum §2.1/§4.1): run the pending activation
+  // transaction in the current session. The desktop main owns the native
+  // second confirmation (confirmRuntimeMutation) and the whole transaction
+  // window (phase 'applying' + runtimeBlocked), so no renderer confirm is
+  // shown here — a UI confirm on top of the native dialog would double-prompt
+  // (§6.3: desktop = native dialog, gateway = UI window.confirm). The native
+  // dialog is async, so a synchronous ref gate prevents a same-frame
+  // double-click from stacking a second IPC/confirm (design 18 addendum §6.2).
+  const applyNowRef = useRef(false)
+  const onApplyNow = useCallback(() => {
+    if (applyNowRef.current) return
+    // Re-resolve the surface at click time: a bridge torn down between render
+    // and click must never claim an apply that cannot run.
+    const surface = currentRuntimeSurface()
+    if (surface === null || envGated || !actions.has('apply-now') || pending === null) return
+    applyNowRef.current = true
+    setApplyNowInFlight(true)
+    void runRuntimeAction(() => surface.applyNow()).finally(() => {
+      setApplyNowInFlight(false)
+      applyNowRef.current = false
+    })
+  }, [envGated, actions, pending, runRuntimeAction])
+
   const onRetryApply = useCallback(() => {
     if (runtime === null || envGated || state?.canRetryApply !== true || !actions.has('retry-apply')) return
     void runRuntimeAction(() => runtime.retryApply())
@@ -971,7 +1031,13 @@ export function DshRuntimeSection({
       case 'downloading': return t('dshRuntimeStatusDownloading', { version })
       case 'installing': return t('dshRuntimeStatusInstalling', { version })
       case 'pending': return t('dshRuntimeStatusPending', { version })
-      case 'applying': return t('dshRuntimeStatusApplying', { version })
+      // Honest window copy (design 18 addendum §6.2): while a user-triggered
+      // apply-now transaction runs, the status line names the immediate
+      // restart instead of the next-launch applying wording; terminal states
+      // (applied/rollback/failed) always take over through their own kinds.
+      case 'applying': return applyNowInFlight
+        ? t('dshRuntimeStatusApplyingNow', { version })
+        : t('dshRuntimeStatusApplying', { version })
       case 'applied': return t('dshRuntimeStatusApplied', { version })
       case 'rollback': return t('dshRuntimeStatusRollback', { version, error: detail })
       case 'rollback-complete': return t('dshRuntimeStatusRollbackComplete', { version })
@@ -982,7 +1048,7 @@ export function DshRuntimeSection({
       case 'failed': return t('dshRuntimeStatusFailed', { version, error: detail })
       case 'error': return t('dshRuntimeStatusError', { error: detail })
     }
-  }, [status, t])
+  }, [status, t, applyNowInFlight])
 
   const snapshotText = useMemo(() => {
     switch (snapshot.kind) {
@@ -1000,6 +1066,10 @@ export function DshRuntimeSection({
   const canSelect = actions.has('select-version')
   const canInstall = actions.has('install')
   const canReset = actions.has('reset-builtin')
+  // Immediate-apply (design 18 addendum §6.1): visible only in the pending
+  // phase; env/runtimeBlocked/managementSupported gates are already folded
+  // into the action set by runtimeAllowedActions.
+  const canApplyNow = actions.has('apply-now')
   const canRetryApply = actions.has('retry-apply') && state?.canRetryApply === true
   const canRetryRestore = actions.has('retry-restore') && state?.canRetryRestore === true
   const canRecoverMetadata = actions.has('recover-metadata') && state?.canRecoverMetadata === true
@@ -1215,6 +1285,24 @@ export function DshRuntimeSection({
       </label>
 
       <p className={css.generalHint}>{snapshotText}</p>
+      {/* Pending = the apply-now window (design 18 addendum §6.1): the main
+          [立即应用 v{version}] action plus the hint that the alternative is
+          next launch; [恢复内建] stays in the recovery row below. */}
+      {phase === 'pending' && pending !== null && canApplyNow && (
+        <>
+          <div className={css.updateStatusLine}>
+            <button
+              type="button"
+              className={css.updatePrimaryButton}
+              onClick={onApplyNow}
+              disabled={mutationDisabled}
+            >
+              {t('dshRuntimeApplyNowActionWithVersion', { version: pending })}
+            </button>
+          </div>
+          <p className={css.generalHint}>{t('dshRuntimeApplyNowHint')}</p>
+        </>
+      )}
       {pending !== null && phase !== 'pending' && phase !== 'applying' && (
         <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: pending })}</p>
       )}
