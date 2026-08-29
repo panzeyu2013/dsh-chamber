@@ -11,7 +11,13 @@
  * - a failed user restart counts into the shared restart-exhausted window;
  * - a closed runtime gate (canStartLocal / canSpawn) rejects without spawning;
  * - restartLocal vs stop(): one rejects / the other waits, final state is
- *   consistent and nothing leaks.
+ *   consistent and nothing leaks;
+ * - design 18 addendum D2 / test plan 8.2 (apply-now desktop host): the
+ *   stopping window never treats a process death as "restart me" (R3 health
+ *   interleave), a closed canSpawn gate rejects start()/restartLocal from
+ *   stopped, and the shared restart window counts only triggerRestart —
+ *   start() never consumes it, stop()/start() clears it, M=5 health restarts
+ *   exhaust, and recovery is start().
  */
 
 import { test } from 'node:test'
@@ -606,5 +612,266 @@ test('createControlPlane.restartLocal restarts the local host end-to-end', async
   } finally {
     await plane.stop()
     rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// design 18 addendum (apply-now desktop host) test plan 8.2 — health
+// interleave, applying-window gates, and D2 restart-window ownership.
+// ---------------------------------------------------------------------------
+
+test('R3: a process-death exit during the stop() window is inert (no restart respawn), and after stop the restart path stays closed', async () => {
+  let spawnCalls = 0
+  let releaseStop!: () => void
+  const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+  const exitHook: { fire?: (code: number | null, sig: string | null) => void } = {}
+  const connection = createLocalConnection({
+    stateDir: '/tmp/none',
+    dshHome: '/tmp/none',
+    dshWorkspacePath: '/tmp/none',
+    catalog: mockCatalog(),
+    logger: quietLogger,
+    options: { healthIntervalMs: 0 },
+    deps: {
+      spawnDsh: async () => {
+        spawnCalls += 1
+        return {
+          child: {
+            on: (event: string, listener: any) => { if (event === 'exit') exitHook.fire = listener },
+            exitCode: null as number | null,
+          },
+          port: 18800,
+          stop: async () => { await stopGate },
+        }
+      },
+      describeCapabilities: mockDescribe().describeCapabilities,
+    },
+  })
+  try {
+    await connection.start()
+    assert.equal(connection.getState(), 'ready')
+    assert.equal(spawnCalls, 1)
+
+    // The stop() window is open (child.stop gated). The stop sequence itself
+    // SIGTERMs the child, so its death event arrives while stopping === true
+    // — the "process death" restart trigger must be inert (state guard).
+    const pendingStop = connection.stop()
+    exitHook.fire?.(null, 'SIGTERM')
+    releaseStop()
+    await pendingStop
+    assert.equal(connection.getState(), 'stopped')
+    assert.equal(spawnCalls, 1, 'the exit during stopping must not trigger a restart respawn')
+
+    // After stop completes state stays stopped; both the stale death event
+    // and restartLocal are inert (triggerRestart early-exits on stopped).
+    exitHook.fire?.(1, null)
+    assert.equal(spawnCalls, 1, 'a stale death event after stop must not resurrect the connection')
+    await assert.rejects(connection.restartLocal(), /not running/)
+    assert.equal(spawnCalls, 1, 'restartLocal from stopped must not spawn')
+  } finally {
+    releaseStop?.()
+    await connection.stop()
+  }
+})
+
+test('a closed canSpawn gate (applying window) rejects start() and restartLocal with connection_busy, from stopped', async () => {
+  let spawns = 0
+  const connection = createLocalConnection({
+    stateDir: '/tmp/none',
+    dshHome: '/tmp/none',
+    dshWorkspacePath: '/tmp/none',
+    catalog: mockCatalog(),
+    logger: quietLogger,
+    options: { canSpawn: () => ({ ok: false, reason: 'applying dsh vY' }) },
+    deps: {
+      spawnDsh: async () => {
+        spawns += 1
+        return { child: { on: () => {}, exitCode: null }, port: 18900, stop: async () => {} }
+      },
+      describeCapabilities: mockDescribe().describeCapabilities,
+    },
+  })
+  await assert.rejects(connection.start(), (error: unknown) =>
+    (error as Error & { code?: string }).code === 'connection_busy'
+    && /applying dsh vY/.test(String(error)))
+  assert.equal(spawns, 0, 'start must not spawn behind a closed gate')
+  assert.equal(connection.getState(), 'stopped')
+  // From stopped the closed gate still outranks the not-running refusal.
+  await assert.rejects(connection.restartLocal(), (error: unknown) =>
+    (error as Error & { code?: string }).code === 'connection_busy'
+    && /applying dsh vY/.test(String(error)))
+  assert.equal(spawns, 0)
+  await connection.stop()
+})
+
+test('createControlPlane.startLocal rejects connection_busy under a closed canStartLocal (applying window), from stopped', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-start-gate-'))
+  let spawns = 0
+  const spawnDsh = async (): Promise<SpawnedDsh> => {
+    spawns += 1
+    return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
+  }
+  const describeCapabilities = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: quietLogger,
+    canStartLocal: () => ({ ok: false, reason: 'applying dsh vY' }),
+    localConnectionDeps: { spawnDsh, describeCapabilities },
+  })
+  try {
+    await plane.start()
+    await assert.rejects(plane.startLocal(), (error: unknown) =>
+      (error as Error & { code?: string }).code === 'connection_busy'
+      && /applying dsh vY/.test(String(error)))
+    assert.equal(spawns, 0, 'no spawn behind a closed canStartLocal')
+    assert.equal(plane.connectionState, 'stopped')
+    await assert.rejects(plane.restartLocal(), (error: unknown) =>
+      (error as Error & { code?: string }).code === 'connection_busy'
+      && /applying dsh vY/.test(String(error)))
+    assert.equal(spawns, 0, 'restartLocal stays behind the same closed gate')
+  } finally {
+    await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('D2: the restart window counts only triggerRestart (start()/stop() never push into it; recovery consumes nothing) — M=5 exhausts, start() recovers', async () => {
+  const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
+  let spawnCalls = 0
+  const connection = createLocalConnection({
+    stateDir: '/tmp/none',
+    dshHome: '/tmp/none',
+    dshWorkspacePath: '/tmp/none',
+    catalog: mockCatalog(),
+    logger: quietLogger,
+    options: {
+      healthIntervalMs: 0,
+      restartBackoffFloorMs: 5,
+      restartBackoffCeilMs: 10,
+      restartWindowMs: 60_000,
+      maxRestartsInWindow: 5,
+    },
+    deps: {
+      spawnDsh: async () => {
+        spawnCalls += 1
+        const hook: { fire?: (code: number | null, sig: string | null) => void } = {}
+        hooks.push(hook)
+        return controllableChild(19000 + spawnCalls, hook)
+      },
+      describeCapabilities: mockDescribe().describeCapabilities,
+    },
+  })
+  try {
+    await connection.start()
+    assert.equal(connection.getState(), 'ready')
+    assert.equal(spawnCalls, 1)
+
+    // Five process-death health restarts each land back on ready. The state
+    // alone is not a completion proof: attempts ≥ 2 await their backoff
+    // BEFORE entering 'restarting', so the machine still reads 'ready' right
+    // after the trigger fires. Wait for the spawn count to advance too.
+    for (let i = 1; i <= 5; i += 1) {
+      hooks[i - 1]?.fire?.(1, null)
+      await waitFor(
+        () => spawnCalls === i + 1 && connection.getState() === 'ready',
+        3000,
+        `ready after health restart ${i}`,
+      )
+    }
+    assert.equal(spawnCalls, 6, 'start + five health-restart respawns')
+    assert.equal(connection.getState(), 'ready')
+
+    // The sixth death hits the M=5 window → restart-exhausted, no respawn.
+    hooks[5]?.fire?.(1, null)
+    await waitFor(() => connection.getState() === 'restart-exhausted', 3000, 'restart-exhausted after M=5 health restarts')
+    assert.equal(spawnCalls, 6, 'the exhausted trigger must not respawn')
+
+    // Recovery requires start(); restartLocal is refused while exhausted.
+    await assert.rejects(connection.restartLocal(), /recover with start/)
+    await connection.start()
+    assert.equal(connection.getState(), 'ready')
+    assert.equal(spawnCalls, 7, 'recovery start respawns once')
+
+    // D2: a start() spawn never consumes the window — the cleared window is
+    // empty, so one more death restarts immediately instead of exhausting.
+    hooks[6]?.fire?.(1, null)
+    await waitFor(
+      () => spawnCalls === 8 && connection.getState() === 'ready',
+      3000,
+      'ready after post-recovery health restart',
+    )
+    assert.equal(spawnCalls, 8, 'the post-recovery health restart must still be allowed')
+  } finally {
+    await connection.stop()
+  }
+})
+
+test('D2: restart counts do not survive a stop()/start() cycle (stop clears the window)', async () => {
+  const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
+  let spawnCalls = 0
+  const connection = createLocalConnection({
+    stateDir: '/tmp/none',
+    dshHome: '/tmp/none',
+    dshWorkspacePath: '/tmp/none',
+    catalog: mockCatalog(),
+    logger: quietLogger,
+    options: {
+      healthIntervalMs: 0,
+      restartBackoffFloorMs: 5,
+      restartBackoffCeilMs: 10,
+      restartWindowMs: 60_000,
+      maxRestartsInWindow: 5,
+    },
+    deps: {
+      spawnDsh: async () => {
+        spawnCalls += 1
+        const hook: { fire?: (code: number | null, sig: string | null) => void } = {}
+        hooks.push(hook)
+        return controllableChild(19100 + spawnCalls, hook)
+      },
+      describeCapabilities: mockDescribe().describeCapabilities,
+    },
+  })
+  try {
+    await connection.start()
+    assert.equal(spawnCalls, 1)
+
+    // Two health restarts count into the window (same spawn-count completion
+    // proof as above — 'ready' alone can still be the pre-backoff state).
+    hooks[0]?.fire?.(1, null)
+    await waitFor(() => spawnCalls === 2 && connection.getState() === 'ready', 3000, 'ready after health restart 1')
+    hooks[1]?.fire?.(1, null)
+    await waitFor(() => spawnCalls === 3 && connection.getState() === 'ready', 3000, 'ready after health restart 2')
+    assert.equal(spawnCalls, 3, 'start + two pre-stop health-restart respawns')
+
+    // stop() clears the window; start() opens a fresh lifecycle.
+    await connection.stop()
+    assert.equal(connection.getState(), 'stopped')
+    await connection.start()
+    assert.equal(connection.getState(), 'ready')
+    assert.equal(spawnCalls, 4, 'the post-stop start respawns once')
+
+    // Five more health restarts are all fine (the window was reset by
+    // stop/start). Had the two pre-stop counts survived, the 4th post-stop
+    // death would already have exhausted.
+    let hookIndex = 3
+    for (let i = 1; i <= 5; i += 1) {
+      hooks[hookIndex]?.fire?.(1, null)
+      await waitFor(
+        () => spawnCalls === 4 + i && connection.getState() === 'ready',
+        3000,
+        `ready after post-restart health restart ${i}`,
+      )
+      hookIndex += 1
+    }
+    assert.equal(spawnCalls, 9, 'start + 2 pre-stop + start + 5 post-stop respawns')
+
+    // The sixth post-stop death hits the fresh M=5 window.
+    hooks[8]?.fire?.(1, null)
+    await waitFor(() => connection.getState() === 'restart-exhausted', 3000, 'restart-exhausted after a fresh window of M=5')
+    assert.equal(spawnCalls, 9, 'the exhausted trigger must not respawn')
+  } finally {
+    await connection.stop()
   }
 })

@@ -80,6 +80,7 @@ export const IPC_CHANNELS = {
   RUNTIME_RECOVER_METADATA: 'dsh-chamber:runtime-recover-metadata',
   RUNTIME_RESET_BUILTIN: 'dsh-chamber:runtime-reset-builtin',
   RUNTIME_RESTART: 'dsh-chamber:runtime-restart',
+  RUNTIME_APPLY_NOW: 'dsh-chamber:runtime-apply-now',
   RUNTIME_RETRY_APPLY: 'dsh-chamber:runtime-retry-apply',
   RUNTIME_RETRY_RESTORE: 'dsh-chamber:runtime-retry-restore',
   RUNTIME_RESTORE_PRE_ROLLBACK: 'dsh-chamber:runtime-restore-pre-rollback',

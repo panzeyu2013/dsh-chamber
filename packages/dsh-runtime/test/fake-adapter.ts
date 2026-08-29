@@ -12,7 +12,11 @@
  * The existing runtime-startup/apply-phase tests already build their own
  * `StartupDeps`/`ApplyDeps` fakes (the concrete seams this adapter will front in
  * the M6 wiring); this class is the canonical shared fixture for host-agnostic
- * tests and the adapter seam itself.
+ * tests and the adapter seam itself. The apply-now run-phase tests (design 18
+ * addendum, `test/apply-now.test.ts`) drive it through the shared thin bridge
+ * `test/run-phase-fixture.ts`, which adapts the adapter's clock/spawn/stop
+ * fakes to `StartupDeps`/`ApplyDeps` and models host orchestration + crash
+ * re-entry.
  */
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'

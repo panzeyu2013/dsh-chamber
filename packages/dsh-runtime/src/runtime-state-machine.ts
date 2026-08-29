@@ -10,6 +10,7 @@
  *
  *   idle → checking → available → downloading → installing → pending
  *     →（下次启动）applying → applied | rollback | failed
+ *   pending → [立即应用]（当前会话执行同一激活事务，design 18 增补）→ applying
  *   pending → [恢复内建]（清 pending）→ idle
  *   applying → 回退连续失败 → failed（落内建树终态）
  *   applied → 下一周期 checking；rollback/failed → 终态（回滚后可再选）
@@ -58,7 +59,7 @@ export type RuntimeEvent =
   | { type: 'check-done'; available: boolean }
   | { type: 'install-confirm' }
   | { type: 'install-done' }        // → pending（下次启动应用）
-  | { type: 'apply-start' }         // 下次启动应用相位
+  | { type: 'apply-start' }         // 下次启动或立即应用（apply-now）共用该事件 → applying
   | { type: 'probe-pass' }          // → applied
   | { type: 'probe-fail' }          // → rollback
   | { type: 'rollback-exhausted' }  // 回退连续失败 → failed（落内建树终态）
@@ -176,6 +177,7 @@ export type RuntimeAction =
   | 'check'
   | 'select-version'
   | 'install'
+  | 'apply-now'
   | 'reset-builtin'
   | 'retry-apply'
   | 'retry-restore'
@@ -186,7 +188,9 @@ export type RuntimeAction =
 
 /**
  * 终态门（§3.6）：
- *   - pending/applying 是持久事务临界区，只允许唯一逃生动作“恢复内建”；
+ *   - pending 是待执行事务：主动作 [立即应用]（当前会话执行激活事务，design 18
+ *     增补 §2.1）＋ 唯一逃生动作 [恢复内建]；
+ *   - applying 是持久事务临界区，只允许唯一逃生动作“恢复内建”；
  *   - idle/available/applied/rollback/failed/error 提供其各自的稳定态动作；
  *     retry-apply/retry-restore/recover-metadata 只由显式 capability 增补；
  *   - checking/downloading/installing 在单飞窗口内无可见动作，UI 只显示进度；
@@ -214,7 +218,9 @@ export function allowedActions(
     case 'installing':
       return [];
     case 'pending':
-      return ['reset-builtin'];
+      // design 18 增补：pending 是待执行事务——[立即应用]（当前会话执行激活
+      // 事务，与下次启动共用 apply-start 事件）+ [恢复内建]（逃生）。
+      return ['apply-now', 'reset-builtin'];
     case 'applying':
       return ['reset-builtin'];
     case 'applied':
@@ -258,7 +264,8 @@ export function isTerminal(state: RuntimePhase): boolean {
  *   available --install-confirm--> installing              （简化：合并 download+install）
  *   downloading --install-done--> pending                  （外部置相位后的退出边）
  *   installing --install-done--> pending
- *   pending --apply-start--> applying
+ *   pending --apply-start--> applying   （下次启动与 [立即应用] 共用同一事件；
+ *                                       动作选择在控制器层）
  *   applying --probe-pass--> applied
  *   applying --probe-fail--> rollback
  *   applying --rollback-exhausted--> failed

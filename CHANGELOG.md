@@ -29,6 +29,13 @@
 
 ### 变更
 
+- **dsh 运行时「立即应用」（设计 18 增补）** —— pending 相位新增用户触发的
+  「立即应用」动作：在当前会话内执行既有激活事务（停机 → 快照 → 切指针 → 探针
+  门控 → 裁决/回退），不再等待下次启动；desktop 宿主原生二次确认，gateway 宿主
+  新增 `POST /chamber/runtime/apply-now`（202 + status 轮询），gateway 单目标
+  proxy 增加激活感知门（探针窗口内不把在线请求转发到未裁决候选）。零新终态、
+  零新崩溃窗口。见 `docs/design/18-addendum-apply-now.md`。
+
 - **Gateway 登录页与 dsh 设计语言全面对齐** —— `/auth/login` 预认证页从最小裸表单
   升级为自包含深色卡片页（`--dsw-alias-*` token 层取值与 `/chamber/` 编排页同源）：
   密码管理器输入卫生（`autocomplete="current-password"`、`required`、

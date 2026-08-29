@@ -205,6 +205,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     logger,
     getLocalDshPort: () => createdPlane.getLocalDshPort(),
     getLocalState: () => createdPlane.connectionState,
+    // D3/F4 (design 18 addendum §5.3): while an activation transaction is in
+    // flight the candidate tree must not serve online users — the same
+    // predicate the control plane uses for local exposure.
+    canExposeLocal: () => runtimeManager === null || !runtimeManager.activationInProgress(),
   })
   let started = false
   let startPromise: Promise<void> | null = null

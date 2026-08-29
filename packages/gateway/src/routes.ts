@@ -816,6 +816,7 @@ const CHAMBER_APP_HTML = `<!doctype html>
         <button id="runtime-select" class="primary" type="button" disabled>Install / select</button>
         <div class="actions">
           <button id="runtime-apply" type="button" disabled>Apply on next start</button>
+          <button id="runtime-apply-now" type="button" disabled>Apply now</button>
           <button id="runtime-rollback" type="button" disabled>Rollback</button>
           <button id="runtime-restore" type="button" disabled>Restore builtin</button>
           <button id="runtime-retry-apply" type="button" disabled>Retry apply</button>
@@ -861,6 +862,7 @@ const CHAMBER_APP_JS = `(function () {
     versions: '/chamber/runtime/versions',
     select: '/chamber/runtime/select',
     apply: '/chamber/runtime/apply',
+    applyNow: '/chamber/runtime/apply-now',
     rollback: '/chamber/runtime/rollback',
     restore: '/chamber/runtime/restore-builtin',
     retryApply: '/chamber/runtime/retry-apply',
@@ -978,6 +980,22 @@ const CHAMBER_APP_JS = `(function () {
     byId('runtime-version').disabled = mutationBlocked;
     byId('runtime-select').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
     byId('runtime-apply').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
+    // Apply now (design 18 addendum §5.1): the in-session execution of the
+    // armed/staged switch. It is pending's own semantic premise, so the
+    // pending terminal gate must NOT disable it (unlike apply). It needs a
+    // target that differs from the active version or an armed pending, a
+    // serviceable dsh (the route's connection gate), and no recovery phase
+    // (those refuse apply-now with runtime_recovery_required). The manager's
+    // sync preflight rejects the remaining no-op cases with 409 noop_target.
+    // P2 review fix: the enablement must mirror the SERVER's persisted target
+    // (row.selectedVersion = override.chosenVersion), NOT the dropdown's local
+    // value — a merely highlighted dropdown row has no persisted selection, so
+    // preflight would answer 409 noop_target/no_selection for it.
+    var recoveryPhase = row !== null && (row.phase === 'swap-attempted' || row.phase === 'snapshot-failed' || row.phase === 'restore-blocked');
+    var applyNowBlocked = baseMutationBlocked || recoveryPhase
+      || (row.connectionState !== 'ready' && row.connectionState !== 'degraded');
+    var applyNowAvailable = row !== null && (row.phase === 'pending' || (row.selectedVersion != null && row.selectedVersion !== row.activeVersion));
+    byId('runtime-apply-now').disabled = applyNowBlocked || !applyNowAvailable;
     byId('runtime-rollback').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
     // Design 18 pending terminal gate: restore-builtin is the sole escape.
     // It remains disabled for live install/apply/restart and env/read-only.
@@ -996,7 +1014,11 @@ const CHAMBER_APP_JS = `(function () {
     var builtin = nullableText(row, 'builtinVersion', 'runtime status') || 'unknown';
     var source = nullableText(row, 'source', 'runtime status') || 'unresolved';
     var connection = nullableText(row, 'connectionState', 'runtime status') || 'unknown';
-    var summary = 'Active v' + active + ' · builtin v' + builtin + ' · ' + source + ' · ' + row.phase + ' · ' + connection;
+    // Design 18 addendum §6.3: the activation window (apply-now / startup /
+    // restore-builtin) is an honest in-session restart — the status line says
+    // so instead of the bare phase label.
+    var phaseText = row.phase === 'applying' ? 'Applying… restarting' : row.phase;
+    var summary = 'Active v' + active + ' · builtin v' + builtin + ' · ' + source + ' · ' + phaseText + ' · ' + connection;
     var failed = row.operationError || row.startupBlockedReason || row.registryError;
     status('runtime', summary + (failed ? ' — ' + bounded(failed, 1000) : ''), Boolean(failed));
 
@@ -1273,6 +1295,10 @@ const CHAMBER_APP_JS = `(function () {
     var version = runtimeVersion(); if (version) void runtimeAction(RUNTIME_PATHS.select, { version: version }, 'Runtime install/select');
   });
   byId('runtime-apply').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.apply, undefined, 'Runtime apply'); });
+  // Apply now: same single-flight runtimeAction machinery — POST returns 202
+  // and the accepted handler reloads status/versions, then the 3s poll keeps
+  // showing the applying window until the transaction settles.
+  byId('runtime-apply-now').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.applyNow, undefined, 'Apply now'); });
   byId('runtime-rollback').addEventListener('click', function () {
     var version = runtimeVersion(); if (version) void runtimeAction(RUNTIME_PATHS.rollback, { version: version }, 'Runtime rollback');
   });

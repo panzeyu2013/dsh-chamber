@@ -96,3 +96,36 @@ test('WS: an unknown WebSocket path is rejected with 404', async () => {
   await proxy.handleUpgrade(fakeRequest('/api/not-a-stream'), socket, Buffer.alloc(0))
   assert.match(socket.written, /404/)
 })
+
+test('activation window: canExposeLocal=false refuses HTTP and WS upgrade with 503 instance_unavailable', async () => {
+  const proxy = createGatewayProxy({
+    logger: quietLogger,
+    getLocalDshPort: () => 17510,
+    getLocalState: () => 'ready',
+    canExposeLocal: () => false,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/'), res)
+  assert.equal(res.status, 503)
+  assert.match(res.body, /instance_unavailable/)
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/events.mux'), socket, Buffer.alloc(0))
+  assert.match(socket.written, /503/)
+  assert.match(socket.written, /instance_unavailable/)
+})
+
+test('canExposeLocal=true keeps the ready proxy behavior unchanged', async () => {
+  const proxy = createGatewayProxy({
+    logger: quietLogger,
+    getLocalDshPort: () => 17510,
+    getLocalState: () => 'ready',
+    canExposeLocal: () => true,
+  })
+  const res = fakeResponse()
+  // dsh is "ready" but the real upstream (127.0.0.1:17510) is not listening —
+  // the request must NOT be rejected by the activation gate (it should reach
+  // the upstream setup and fail later as 502/503, not a target rejection).
+  await proxy.handleHttp(fakeRequest('/api/session.list'), res)
+  assert.notEqual(res.status, 503)
+  assert.notEqual(res.status, 400)
+})

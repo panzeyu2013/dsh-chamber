@@ -1,6 +1,11 @@
 /**
  * Design 18 startup transaction. Reaper has completed and public local-host
  * starts remain gated while this module completes restore/journal recovery.
+ *
+ * Both entries accept an optional transaction-level AbortSignal (apply-now
+ * S1): a pre-aborted signal arriving at the apply entry cancels the attempt
+ * with zero side effects and leaves the durable journal for the next startup
+ * (see apply-phase's abort semantics). Hosts that never abort simply omit it.
  */
 import { applyPendingVersion, beginDelayedRollback, type ApplyOutcome } from './apply-phase.ts'
 import type { ManualRollbackPreparation } from './apply-phase.ts'
@@ -45,7 +50,16 @@ export interface StartupDeps {
   prepareManualRollback: (targetVersion: string) => Promise<ManualRollbackPreparation>
   validateTarget: (version: string, isBuiltin: boolean) => { ok: true } | { ok: false; error: string }
   switchPointer: (version: string | null) => void
-  spawnAndProbe: (version: string, isBuiltin: boolean) => Promise<ProbeResult[]>
+  /**
+   * Spawn the candidate tree and run the activation probes. `signal`
+   * (apply-now S1) is optional so existing two-argument implementers keep
+   * compiling unchanged. runStartupPhase/runDelayedRollback forward their own
+   * optional transaction-level signal here, so hosts wire the abort at the
+   * orchestration seam instead of inside the probe closure (apply-phase abort
+   * semantics: candidate probes keep the passthrough signal; rollback
+   * verification probes null an already-aborted one).
+   */
+  spawnAndProbe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
   stopHost: () => Promise<void>
   restore: (snapshotPath: string) => Promise<'complete' | 'half' | 'incomplete'>
   recordProbePass: (version: string) => void
@@ -178,8 +192,14 @@ function corruptMetadataReason(
   return null
 }
 
-/** Execute recovery and, when safe, exactly one pending/builtin activation. */
-export async function runStartupPhase(deps: StartupDeps): Promise<StartupResult> {
+/**
+ * Execute recovery and, when safe, exactly one pending/builtin activation.
+ * `signal` (apply-now S1) is an optional transaction-level abort forwarded to
+ * the apply phase: a pre-aborted signal at the apply entry cancels the
+ * attempt with zero side effects and leaves the durable journal for the next
+ * startup to resume idempotently.
+ */
+export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): Promise<StartupResult> {
   // Read recovery metadata before cleanup/eviction. The store also protects
   // every journal version, including the fail-closed corrupt state.
   let journalState = deps.readActivationJournal()
@@ -425,6 +445,7 @@ export async function runStartupPhase(deps: StartupDeps): Promise<StartupResult>
     knownGoodVersion: facts.knownGoodVersion,
     journal,
     manualRollback: journal?.manualRollback ?? false,
+    signal,
     deps: {
       snapshot: deps.snapshot,
       resolveSnapshotName: deps.resolveSnapshotName,
@@ -598,6 +619,7 @@ export async function runStartupPhase(deps: StartupDeps): Promise<StartupResult>
 export async function runDelayedRollback(
   deps: StartupDeps,
   monitoring: ActivationJournal,
+  signal?: AbortSignal,
 ): Promise<ApplyOutcome> {
   if (deps.envOverrideActive?.() === true) throw new Error('env override active; persisted F7 rollback is deferred')
   const durableState = deps.readActivationJournal()
@@ -628,6 +650,7 @@ export async function runDelayedRollback(
     sourceWasKnownGood: journal.sourceWasKnownGood === true,
     knownGoodVersion: journal.knownGoodVersion,
     journal,
+    signal,
     deps: {
       snapshot: deps.snapshot,
       resolveSnapshotName: deps.resolveSnapshotName,

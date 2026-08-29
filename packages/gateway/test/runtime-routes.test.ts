@@ -22,8 +22,10 @@ import {
   readOverride,
   recordRuntimeFailure,
   writeActivationIntent,
+  writeActivationJournal,
   writeCurrentPointer,
   writeOverride,
+  type ActivationJournal,
 } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes, sanitizeRouteError, type RuntimeRoutes } from '../src/runtime-routes.ts'
 
@@ -126,6 +128,14 @@ async function runRoute(routes: RuntimeRoutes, method: string, path: string, bod
   const claimed = await routes.handle(req, res, path)
   assert.equal(claimed, true, `${method} ${path} must be claimed`)
   return { status: fakeRes.statusCode, json: fakeRes.body === '' ? null : JSON.parse(fakeRes.body) }
+}
+
+/** Poll until the apply-now async job settles (202 semantics expose no promise
+ * handle — the outcome arrives via status()/applyNowInFlight). */
+async function waitForSettle(manager: { applyNowInFlight(): boolean }): Promise<void> {
+  for (let i = 0; i < 400 && manager.applyNowInFlight(); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
 }
 
 test('status is pollable while dsh is stopped (not ready-gated) and reports applying phase', async () => {
@@ -551,7 +561,7 @@ test('select→apply semantics: apply without a selection rejects; rollback reje
   }
 })
 
-test('ordinary pending is a core+route terminal gate: every action except restore-builtin is 409 and non-mutating', async () => {
+test('ordinary pending is a core+route terminal gate: apply-now is allowed (202, pending untouched), every other action is 409 and non-mutating', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-pending-gate-'))
   try {
     makeValidTree(stateDir, '1.0.0')
@@ -565,7 +575,11 @@ test('ordinary pending is a core+route terminal gate: every action except restor
       shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
       pending: '1.0.0', swapAttempted: false, selectedOnly: false,
     })
-    const plane = fakePlane()
+    // The apply-now transaction must not race the assertions below: hold the
+    // quiesce step until the durable pending/override are verified untouched.
+    let releaseStop!: () => void
+    const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+    const plane = fakePlane({ stopLocal: async () => { await stopGate } })
     plane._state.connectionState = 'ready'
     const manager = createGatewayRuntimeManager({
       config: config(stateDir),
@@ -592,10 +606,368 @@ test('ordinary pending is a core+route terminal gate: every action except restor
       assert.equal(readOverride(stateDir)?.pending, '1.0.0', `${suffix} must not clear or rewrite pending`)
     }
 
+    // apply-now is pending's own semantic premise (design 18 addendum §5.1):
+    // allowed with 202, and the durable pending/override stay untouched while
+    // the async transaction is held at the quiesce step.
+    const now = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(now.status, 202)
+    assert.equal((now.json as { accepted: boolean }).accepted, true)
+    assert.equal((now.json as { version: string }).version, '1.0.0', 'the 202 body carries the preflighted target')
+    assert.equal(readOverride(stateDir)?.pending, '1.0.0', 'the 202 answer must not clear or rewrite pending')
+    assert.equal(readOverride(stateDir)?.chosenVersion, '1.0.0')
+    assert.equal(readActivationJournalState(stateDir).kind, 'valid', 'the armed intent journal is preserved')
+    assert.equal(manager.applyNowInFlight(), true, 'the apply-now job is in flight')
+    assert.equal((await manager.status()).phase, 'applying', 'the 202 window polls as applying')
+    releaseStop()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.equal((await manager.status()).phase, 'idle')
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'apply-now committed the armed switch')
+
     const restored = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin')
-    assert.equal(restored.status, 200, 'restore-builtin is the sole pending escape')
+    assert.equal(restored.status, 200, 'restore-builtin remains the recovery escape after apply-now')
     assert.equal(readOverride(stateDir), null)
     assert.equal((await manager.status()).phase, 'idle')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now route matrix: 202 with pending, 409 recovery/busy/env/read-only/no-selection/not-running/in-flight', async () => {
+  let phase = 'pending'
+  let pending: string | null = '1.0.0'
+  let selectedVersion: string | null = '1.0.0'
+  let connectionState = 'ready'
+  let source = 'user-selected'
+  let mutationsAllowed = true
+  let mutationBusy = false
+  let applyNowBusy = false
+  let applyNowCalls = 0
+  let preflightCalls = 0
+  const manager = {
+    status: () => ({ phase, pending, selectedVersion, connectionState, source, mutationsAllowed }),
+    mutationInProgress: () => mutationBusy,
+    applyNowInFlight: () => applyNowBusy,
+    // The real manager's preflight contract: target = ordinary pending, else
+    // a valid (non-invalidated) chosenVersion; both empty → no_selection.
+    // The route relies on THIS for the no_selection gate now — a status-based
+    // precheck can no longer mis-let an invalidated selection through (R3/R5).
+    applyNowPreflight: () => {
+      preflightCalls += 1
+      if (pending === null && selectedVersion === null) {
+        throw Object.assign(new Error('no runtime version selected or pending'), { code: 'no_selection' })
+      }
+      return (pending ?? selectedVersion) as string
+    },
+    applyNow: async () => { applyNowCalls += 1; return { accepted: true } },
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+
+  const ok = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+  assert.equal(ok.status, 202, 'ready + pending is the apply-now semantic premise')
+  assert.equal((ok.json as { accepted: boolean }).accepted, true)
+  assert.equal((ok.json as { version: string }).version, '1.0.0', 'the 202 body carries the preflighted target')
+  assert.equal(applyNowCalls, 1)
+
+  // Recovery phases refuse apply-now (only their exact retry + restore-builtin).
+  for (const recoveryPhase of ['snapshot-failed', 'swap-attempted', 'restore-blocked']) {
+    phase = recoveryPhase
+    const recovery = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(recovery.status, 409, `${recoveryPhase} must refuse apply-now`)
+    assert.equal((recovery.json as { code: string }).code, 'runtime_recovery_required')
+  }
+  phase = 'pending'
+
+  // installing/applying in flight → runtime_busy (single-flight, honest 409).
+  for (const busyPhase of ['installing', 'applying']) {
+    phase = busyPhase
+    mutationBusy = true
+    const busy = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(busy.status, 409)
+    assert.equal((busy.json as { code: string }).code, 'runtime_busy')
+    mutationBusy = false
+  }
+  phase = 'pending'
+
+  // A restart in flight is the same writer fence.
+  mutationBusy = true
+  const restarting = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+  assert.equal(restarting.status, 409)
+  assert.equal((restarting.json as { code: string }).code, 'runtime_busy')
+  mutationBusy = false
+
+  source = 'env'
+  const env = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+  assert.equal(env.status, 409)
+  assert.equal((env.json as { code: string }).code, 'env_override_active')
+  source = 'user-selected'
+
+  mutationsAllowed = false
+  const readOnly = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+  assert.equal(readOnly.status, 403)
+  assert.equal((readOnly.json as { code: string }).code, 'platform_read_only')
+  mutationsAllowed = true
+
+  pending = null
+  selectedVersion = null
+  phase = 'idle'
+  const none = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+  assert.equal(none.status, 409)
+  assert.equal((none.json as { code: string }).code, 'no_selection')
+  selectedVersion = '1.0.0'
+  phase = 'pending'
+  pending = '1.0.0'
+
+  connectionState = 'stopped'
+  const notRunning = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+  assert.equal(notRunning.status, 409, 'sync refusal must be honest, not a fake 202 (R7)')
+  assert.equal((notRunning.json as { code: string }).code, 'runtime_busy')
+  connectionState = 'ready'
+
+  applyNowBusy = true
+  const inflight = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+  assert.equal(inflight.status, 409)
+  assert.equal((inflight.json as { code: string }).code, 'runtime_busy')
+  applyNowBusy = false
+  assert.equal(applyNowCalls, 1, 'a refused apply-now must not enqueue')
+  assert.equal(preflightCalls, 2,
+    'preflight runs only where no earlier route gate short-circuits: the initial 202 and the no_selection case')
+})
+
+test('apply-now preflight refuses an invalidated (stale-shell) selection synchronously — 409 no_selection, never a fake 202 (R3/R5)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-invalidated-'))
+  try {
+    makeValidTree(stateDir, '2.0.0')
+    // A gateway upgrade invalidates the override (shellVersion mismatch) but
+    // RETAINS chosenVersion: status.selectedVersion is still set while
+    // status.pending is null (effectivePending filters the invalidation). The
+    // old status-based no_selection gate let this through to a fake 202.
+    writeOverride(stateDir, {
+      shellVersion: '0.0.1', chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
+      pending: null, swapAttempted: false,
+    })
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const status = await manager.status()
+    assert.equal(status.selectedVersion, '2.0.0', 'the invalidated record retains its choice')
+    assert.equal(status.pending, null, 'effective pending filters the invalidation')
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 409)
+    assert.equal((response.json as { code: string }).code, 'no_selection')
+    assert.equal(manager.applyNowInFlight(), false, 'a refused apply-now must not arm in-flight state')
+    assert.equal(readOverride(stateDir)?.pending, null, 'no pending switch is armed')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'no journal is written')
+    await assert.rejects(manager.applyNow(), (error: unknown) =>
+      (error as { code?: string }).code === 'no_selection', 'the direct manager call refuses identically')
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.equal(readCurrentPointer(stateDir), null, 'no transaction was armed')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now preflight refuses a pending target with no valid version tree synchronously — 409 invalid_target, no 202', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-notree-'))
+  try {
+    // pending points at a version whose tree is gone (e.g. evicted). The old
+    // flow 202'd first and only then failed inside the async job — the
+    // preflight must refuse before any 202 can go out.
+    writeActivationIntent(stateDir, {
+      targetVersion: '3.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '3.0.0', resolvedVersion: '3.0.0',
+      pending: '3.0.0', swapAttempted: false,
+    })
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    assert.equal((await manager.status()).phase, 'pending')
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 409)
+    assert.equal((response.json as { code: string }).code, 'invalid_target')
+    assert.equal(manager.applyNowInFlight(), false, 'a refused apply-now must not arm in-flight state')
+    await assert.rejects(manager.applyNow(), (error: unknown) =>
+      (error as { code?: string }).code === 'invalid_target', 'the direct manager call refuses identically')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now preflight rejects a no-op re-application of the active runtime — 409 noop_target, nothing armed', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-noop-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied',
+    })
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 409)
+    assert.equal((response.json as { code: string }).code, 'noop_target')
+    assert.equal((response.json as { error: string }).error, 'dsh v1.0.0 is already the active runtime; apply-now has nothing to do')
+    assert.equal(manager.applyNowInFlight(), false, 'a no-op rejection arms nothing')
+    assert.equal(readOverride(stateDir)?.pending, null, 'no pending switch is armed')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'no journal is written')
+    await assert.rejects(manager.applyNow(), (error: unknown) =>
+      (error as { code?: string }).code === 'noop_target', 'the direct manager call refuses identically')
+    assert.equal(manager.applyNowInFlight(), false)
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNowInFlight fences every other runtime mutation at the manager level (assertMutationIdle, R3/R5)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-fence-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    let releaseStop!: () => void
+    const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+    const plane = fakePlane({ stopLocal: async () => { await stopGate } })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+    })
+    await manager.applyNow()
+    assert.equal(manager.applyNowInFlight(), true)
+    // applyNowInFlight feeds assertMutationIdle directly — the fence no longer
+    // depends on activationDepth's timing coincidence (review R3/R5).
+    for (const refuse of [
+      () => manager.select('1.0.0'),
+      () => manager.apply(),
+      () => manager.rollback('1.0.0'),
+      () => manager.restoreBuiltin(),
+      () => manager.restart(),
+    ]) {
+      await assert.rejects(refuse(), (error: unknown) =>
+        (error as { code?: string }).code === 'runtime_busy', 'apply-now in flight fences every mutation with runtime_busy')
+    }
+    releaseStop()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the fenced window still committed its own switch')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNow F2 arm mirrors the apply() manualRollback formula: a staged downgrade (chosen < current) arms manualRollback=true', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-f2-downgrade-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '2.0.0')
+    // Active v2, staged selection of v1 (a downgrade), no pending yet — the
+    // preflight arms the pending switch journal-first and must record the
+    // downgrade as a manual rollback, exactly like apply() :1084 (review fix:
+    // it used to be hardcoded false).
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    let releaseStop!: () => void
+    const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+    const plane = fakePlane({ stopLocal: async () => { await stopGate } })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+    })
+    const accepted = await manager.applyNow()
+    assert.equal(accepted.accepted, true)
+    const armed = readOverride(stateDir)
+    assert.equal(armed?.pending, '1.0.0')
+    const journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.manualRollback, true,
+        'a staged downgrade arms manualRollback=true (compareRuntimeVersions(target, current) === -1)')
+      assert.equal(journal.journal.intentKind, 'version-switch')
+      assert.equal(journal.journal.targetVersion, '1.0.0')
+    }
+    releaseStop()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the downgrade switch committed')
+    assert.equal((await manager.status()).activeVersion, '1.0.0')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now 202: the window polls as applying with connectionState stopped, then the switch commits', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-window-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    let releaseStop!: () => void
+    const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+    const plane = fakePlane({
+      stopLocal: async () => { plane._state.connectionState = 'stopped'; await stopGate },
+      startLocal: async () => { plane._state.connectionState = 'ready' },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+    })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    assert.equal((await manager.status()).phase, 'pending')
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 202)
+    assert.equal((response.json as { accepted: boolean }).accepted, true)
+    assert.equal((response.json as { version: string }).version, '1.0.0', 'the 202 body carries the preflighted target')
+    const window = await manager.status()
+    assert.equal(window.phase, 'applying', 'the 202 window polls as applying (restart-parity)')
+    assert.equal(window.connectionState, 'stopped', 'the managed dsh is honestly stopped inside the window')
+    releaseStop()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    const settled = await manager.status()
+    assert.equal(settled.phase, 'idle')
+    assert.equal(settled.connectionState, 'ready')
+    assert.equal(settled.activeVersion, '1.0.0')
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the apply-now transaction committed the switch')
     await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
@@ -694,6 +1066,519 @@ test('restoreBuiltin preserves the override and rolls data back when the builtin
     assert.equal(readOverride(stateDir)?.lastOutcome, 'rolled-back')
     assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"preserved"}')
     assert.equal(readActivationJournalState(stateDir).kind, 'missing')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNow runs the version-switch activation transaction in stop → transaction → start order', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-order-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    const order: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop') },
+      startLocal: async () => { order.push('start') },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => {
+        order.push('probe:override')
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+      },
+      onActivationQuarantineChange: (active) => { order.push(`quarantine:${active ? 'on' : 'off'}`) },
+    })
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.equal(order[0], 'quarantine:on', 'derived consumers detach before the host is quiesced')
+    assert.ok(order.indexOf('stop') < order.indexOf('probe:override'), 'DSH_HOME is quiesced before snapshot/switch/probe')
+    assert.ok(order.indexOf('probe:override') < order.indexOf('quarantine:off'),
+      'candidate ready remains quarantined through the complete probe verdict')
+    assert.equal(order.filter(entry => entry === 'start').length, 2,
+      'one start spawns the candidate inside the transaction (internal spawn), one resumes the verdict winner')
+    // P0 regression: the verdict-winner resume must happen AFTER the activation
+    // window closes. Inside the window index.ts's canStartLocal gate refuses
+    // every non-internal spawn (activationInProgress() && !internalSpawnActive()
+    // → connection_busy) — the old apply-now therefore threw on every recovery.
+    assert.ok(order.indexOf('quarantine:off') < order.lastIndexOf('start'),
+      'the verdict-winner resume happens only after the activation window closes (restoreBuiltin parity)')
+    assert.ok(readdirSync(join(stateDir, 'dsh-runtime', 'snapshots')).some(name => name.startsWith(`${TEST_BUILTIN_VERSION}-`)),
+      'the switching-from builtin DSH_HOME is snapshotted under its real source version')
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the pointer switched inside the activation transaction')
+    const journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.phase, 'applied-monitoring',
+        'a successful version switch keeps the known-good monitoring journal (unlike reset-builtin)')
+    }
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"pending":true}')
+    const status = await manager.status()
+    assert.equal(status.phase, 'idle')
+    assert.equal(status.activeVersion, '1.0.0')
+    assert.equal(status.operationError, null, 'a clean apply-now clears the operationError projection')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNow with only a staged selection (selectedOnly, no pending) arms the pending switch journal-first (F2)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-f2-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, selectedOnly: true,
+    })
+    let releaseStop!: () => void
+    const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+    const order: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop'); await stopGate },
+      startLocal: async () => { order.push('start') },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => {
+        order.push('probe')
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+      },
+    })
+    const accepted = await manager.applyNow()
+    assert.equal(accepted.accepted, true)
+    // F2: the pending switch is armed journal-first, synchronously, before the
+    // transaction — runStartupPhase requires effectivePending === targetVersion.
+    const armed = readOverride(stateDir)
+    assert.equal(armed?.pending, '1.0.0')
+    assert.equal(armed?.chosenVersion, '1.0.0')
+    assert.equal(armed?.selectedOnly, false)
+    assert.equal(armed?.lastOutcome, null)
+    const journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.targetVersion, '1.0.0')
+      assert.equal(journal.journal.targetIsBuiltin, false)
+      assert.equal(journal.journal.manualRollback, false)
+      assert.equal(journal.journal.intentKind, 'version-switch')
+    }
+    releaseStop()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the armed switch committed')
+    assert.ok(order.indexOf('stop') < order.indexOf('probe'), 'host quiesced before the transaction')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNow snapshot failure stays snapshot-failed, resumes the untouched source, and projects operationError (F3)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-snapfail-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    // A regular FILE where the snapshots dir must live makes the snapshot
+    // seam throw → shared core projects snapshot-failed (never a pointer touch).
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'snapshots'), 'not a directory', { mode: 0o600 })
+    const order: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop') },
+      startLocal: async () => { order.push('start') },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const accepted = await manager.applyNow()
+    assert.equal(accepted.accepted, true)
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    const status = await manager.status()
+    assert.equal(status.phase, 'snapshot-failed', 'the terminal snapshot-failed phase is projected')
+    assert.equal(status.startupBlockedReason, 'snapshot-failed')
+    assert.equal(typeof status.operationError, 'string', 'F3: the 202 job failure projects into status, not only the log')
+    assert.notEqual(status.operationError, '')
+    assert.equal(readCurrentPointer(stateDir), null, 'a failed snapshot never touches the pointer')
+    assert.equal(readOverride(stateDir)?.pending, '1.0.0', 'snapshot-failed retains the pending switch for retry-apply')
+    assert.equal(readOverride(stateDir)?.lastOutcome, 'snapshot-failed')
+    assert.deepEqual(order, ['stop', 'start'],
+      'the source is quiesced, the snapshot fails without spawning, then the untouched source is resumed (restoreBuiltin :1180-1192 parity)')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-aware plane): clean switch path (P0 regression)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-gate-clean-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    // Gate-aware fake plane (P0 regression): models index.ts canStartLocal —
+    // activationInProgress() && !internalSpawnActive() → connection_busy. The
+    // candidate spawn inside the transaction passes (the manager sets
+    // internalSpawn during spawnAndProbeCandidate); the OLD recovery
+    // startLocal ran INSIDE the window with internalSpawn=false, so the real
+    // gate rejected it → every production apply-now recovery threw
+    // connection_busy and the managed dsh stayed down.
+    let quarantineActive = false
+    let managerRef: { internalSpawnActive(): boolean } | null = null
+    const order: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop'); plane._state.connectionState = 'stopped' },
+      startLocal: async () => {
+        if (quarantineActive && !(managerRef?.internalSpawnActive() ?? false)) {
+          throw Object.assign(new Error('dsh runtime activation in progress'), { code: 'connection_busy' })
+        }
+        order.push('start')
+        plane._state.connectionState = 'ready'
+      },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => {
+        order.push('probe:override')
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+      },
+      onActivationQuarantineChange: (active) => {
+        order.push(`quarantine:${active ? 'on' : 'off'}`)
+        quarantineActive = active
+      },
+    })
+    managerRef = manager
+    const accepted = await manager.applyNow()
+    assert.equal(accepted.accepted, true)
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.ok(order.indexOf('quarantine:off') < order.lastIndexOf('start'),
+      'the recovery startLocal runs only after the activation window closes (quarantine:off)')
+    assert.deepEqual(order, ['quarantine:on', 'stop', 'start', 'probe:override', 'quarantine:off', 'start'],
+      'the candidate spawns inside the window (internal spawn), the verdict-winner resume after it closes')
+    const status = await manager.status()
+    assert.equal(status.phase, 'idle')
+    assert.equal(status.connectionState, 'ready')
+    assert.equal(status.activeVersion, '1.0.0')
+    assert.equal(status.operationError, null, 'a clean apply-now must not project the canStartLocal refusal')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-aware plane): snapshot-failure path (P0 regression)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-gate-snapfail-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    // The snapshot seam throws (regular file where the snapshots dir must
+    // live) → snapshot-failed → NO candidate spawn happens, so the ONLY
+    // startLocal is the recovery one — the gate-aware plane pins that it runs
+    // after quarantine:off (the old implementation ran it inside the window,
+    // where the real canStartLocal gate throws connection_busy).
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'snapshots'), 'not a directory', { mode: 0o600 })
+    let quarantineActive = false
+    let managerRef: { internalSpawnActive(): boolean } | null = null
+    const order: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop'); plane._state.connectionState = 'stopped' },
+      startLocal: async () => {
+        if (quarantineActive && !(managerRef?.internalSpawnActive() ?? false)) {
+          throw Object.assign(new Error('dsh runtime activation in progress'), { code: 'connection_busy' })
+        }
+        order.push('start')
+        plane._state.connectionState = 'ready'
+      },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      onActivationQuarantineChange: (active) => {
+        order.push(`quarantine:${active ? 'on' : 'off'}`)
+        quarantineActive = active
+      },
+    })
+    managerRef = manager
+    const accepted = await manager.applyNow()
+    assert.equal(accepted.accepted, true)
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.deepEqual(order, ['quarantine:on', 'stop', 'quarantine:off', 'start'],
+      'the snapshot fails without spawning; the untouched source resumes only after the window closes')
+    const status = await manager.status()
+    assert.equal(status.phase, 'snapshot-failed', 'the terminal snapshot-failed phase is projected')
+    assert.equal(status.connectionState, 'ready', 'the gate must not reject the recovery: it runs after quarantine:off')
+    assert.equal(typeof status.operationError, 'string', 'F3: the snapshot failure projects operationError')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now preflight fails closed on a corrupt activation journal — 409 runtime_busy, no 202, no stop (P2-1)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-corrupt-journal-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    // target === current + corrupt journal: the OLD preflight fell through the
+    // no-op check (corrupt is neither missing nor valid-intent) to a 202 →
+    // stopLocal → runStartupPhase answers journal-corrupt → the healthy
+    // managed dsh was left down with no recovery route armed.
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied',
+    })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{broken-json', { mode: 0o600 })
+    const stops: string[] = []
+    const plane = fakePlane({ stopLocal: async () => { stops.push('stop') } })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 409)
+    assert.equal((response.json as { code: string }).code, 'runtime_busy')
+    assert.equal((response.json as { error: string }).error,
+      'runtime activation journal is corrupt; apply-now refused (recovery required)')
+    assert.equal(manager.applyNowInFlight(), false, 'a corrupt-journal refusal arms nothing')
+    assert.deepEqual(stops, [], 'the healthy managed dsh is never stopped')
+    await assert.rejects(manager.applyNow(), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_busy', 'the direct manager call refuses identically')
+    assert.deepEqual(stops, [], 'the direct call refuses before any stop')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now preflight rejects an applied-monitoring no-op — 409 noop_target, nothing armed (P2-2)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-applied-noop-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied',
+    })
+    // Every successful apply-now/startup leaves the applied-monitoring
+    // journal. With no nextIntent, pending stays null and chosen == active —
+    // the OLD no-op gate (missing/intent only) let this through to a pointless
+    // stop → snapshot → spawn → probe cycle on the ALREADY-ACTIVE version.
+    const monitoring: ActivationJournal = {
+      schemaVersion: 1,
+      phase: 'applied-monitoring',
+      targetVersion: '1.0.0',
+      targetIsBuiltin: false,
+      manualRollback: false,
+      intentKind: 'version-switch',
+      sourceVersion: TEST_BUILTIN_VERSION,
+      sourceIsBuiltin: true,
+      sourceWasKnownGood: true,
+      knownGoodVersion: '1.0.0',
+      preSwapSnapshotName: `${TEST_BUILTIN_VERSION}-123`,
+      manualDataSnapshotName: null,
+      preRollbackStashName: null,
+      rollbackTarget: null,
+      nextIntent: null,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    writeActivationJournal(stateDir, monitoring)
+    const stops: string[] = []
+    const plane = fakePlane({ stopLocal: async () => { stops.push('stop') } })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 409)
+    assert.equal((response.json as { code: string }).code, 'noop_target')
+    assert.equal((response.json as { error: string }).error,
+      'dsh v1.0.0 is already the active runtime; apply-now has nothing to do')
+    assert.equal(manager.applyNowInFlight(), false, 'a no-op rejection arms nothing')
+    assert.deepEqual(stops, [], 'no stop/start cycle on the already-active version')
+    assert.equal(readOverride(stateDir)?.pending, null, 'no pending switch is armed')
+    assert.equal(readActivationJournalState(stateDir).kind, 'valid', 'the monitoring journal is left untouched')
+    await assert.rejects(manager.applyNow(), (error: unknown) =>
+      (error as { code?: string }).code === 'noop_target', 'the direct manager call refuses identically')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now preflight refuses synchronously while a startup recovery block is in memory — direct manager parity (P2-1)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-recovery-gate-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    // The snapshot seam throws → startupTransaction leaves the in-memory
+    // startupBlockReason = 'snapshot-failed' (phase snapshot-failed). The route
+    // already refuses apply-now here; the DIRECT manager call must refuse
+    // identically (contract parity) instead of arming a 202 that stops the
+    // healthy dsh a second time.
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'snapshots'), 'not a directory', { mode: 0o600 })
+    const stops: string[] = []
+    const plane = fakePlane({ stopLocal: async () => { stops.push('stop') } })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const blocked = await manager.startupTransaction()
+    assert.equal(blocked.blockedReason, 'snapshot-failed')
+    assert.equal((await manager.status()).phase, 'snapshot-failed')
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 409)
+    assert.equal((response.json as { code: string }).code, 'runtime_recovery_required')
+    await assert.rejects(manager.applyNow(), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_recovery_required', 'the direct manager call refuses identically')
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.deepEqual(stops, [], 'no stop is ever issued for a blocked runtime')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply-now preflight refuses synchronously when the managed dsh never reached ready — direct manager parity (P2-1)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-notready-gate-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    const stops: string[] = []
+    // Default fake plane connectionState is 'stopped' — the managed dsh never
+    // reached ready, so apply-now cannot switch it in-session (route mirror).
+    const plane = fakePlane({ stopLocal: async () => { stops.push('stop') } })
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(response.status, 409)
+    assert.equal((response.json as { code: string }).code, 'runtime_busy')
+    assert.match((response.json as { error: string }).error, /managed dsh is not running \(stopped\)/)
+    await assert.rejects(manager.applyNow(), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_busy', 'the direct manager call refuses identically')
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.deepEqual(stops, [], 'no stop is issued for a dsh that is already down')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('applyNow rolled-back runs the rolled-back version and projects operationError (F3)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-rollback-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    // The active v1 source must be known-good (applied + resolvedVersion ===
+    // pointer) so the automatic rollback targets v1 instead of falling to the
+    // builtin anchor (activation-gate rollbackTarget, §3.4).
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
+      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"preserved"}')
+    const probed: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => {},
+      startLocal: async () => {},
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      probeCandidate: async ({ version }) => {
+        probed.push(version)
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: version === '1.0.0', ...(version === '1.0.0' ? {} : { error: 'candidate rejected' }) }))
+      },
+    })
+    const accepted = await manager.applyNow()
+    assert.equal(accepted.accepted, true)
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.deepEqual(probed, ['2.0.0', '2.0.0', '1.0.0'],
+      'failed candidate is observed twice, then the rollback target is probed')
+    const status = await manager.status()
+    assert.equal(status.activeVersion, '1.0.0', 'the rolled-back version is the running version')
+    assert.equal(status.phase, 'idle')
+    assert.equal(typeof status.operationError, 'string', 'F3: a rolled-back apply-now projects operationError')
+    assert.equal(readCurrentPointer(stateDir), '1.0.0')
+    assert.equal(readOverride(stateDir)?.lastOutcome, 'rolled-back')
+    assert.equal(readOverride(stateDir)?.pending, null, 'a rolled-back transaction clears the pending switch')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"preserved"}', 'data is restored from the pre-swap snapshot')
     await manager.dispose()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })

@@ -1310,6 +1310,8 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
   assert.match(html, /id="runtime-title"/)
   assert.match(html, /id="runtime-version"/)
   assert.match(html, /id="runtime-restart"/)
+  assert.match(html, /id="runtime-apply-now"/, 'the apply-now button exists (design 18 addendum §6.4)')
+  assert.match(html, />Apply now<\/button>/)
   assert.equal([...html.matchAll(/<script\b([^>]*)>/g)].every(match => /\bsrc=/.test(match[1] ?? '')), true,
     'the page has no inline script body')
 
@@ -1324,7 +1326,7 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
     '/chamber/settings', '/chamber/sessions', '/chamber/approvals',
     '/chamber/schedule', '/chamber/git/worktrees', '/chamber/runtime/status',
     '/chamber/runtime/versions', '/chamber/runtime/select', '/chamber/runtime/apply',
-    '/chamber/runtime/rollback', '/chamber/runtime/restore-builtin',
+    '/chamber/runtime/apply-now', '/chamber/runtime/rollback', '/chamber/runtime/restore-builtin',
     '/chamber/runtime/retry-apply', '/chamber/runtime/retry-restore',
     '/chamber/runtime/restart', '/chamber/runtime/registry',
   ]) assert.match(source, new RegExp(path.replaceAll('/', '\\/')))
@@ -1344,6 +1346,16 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
     'the standalone dashboard disables mutations throughout the install single-flight')
   assert.match(source, /row\.phase === 'pending'/,
     'the standalone dashboard mirrors the pending terminal gate')
+  assert.match(source, /runtime-apply-now'\)\.disabled/,
+    'apply-now is wired into the control-disable matrix (design 18 addendum §6.4)')
+  assert.match(source, /row\.selectedVersion !== row\.activeVersion/,
+    'apply-now enablement mirrors the SERVER-persisted selection (row.selectedVersion), not the dropdown value (P2 review fix)')
+  assert.doesNotMatch(source, /applyNowAvailable = row !== null && \(row\.phase === 'pending' \|\| \(selected !== null && selected !== row\.activeVersion\)\)/,
+    'the stale dropdown-based apply-now enablement is gone')
+  assert.match(source, /RUNTIME_PATHS\.applyNow/,
+    'the apply-now click handler posts through the runtime single-flight action machinery')
+  assert.match(source, /Applying… restarting/,
+    'the activation window renders the honest applying/restarting status copy (§6.3)')
   assert.match(source, /runtime-restore'\)\.disabled = baseMutationBlocked/,
     'restore-builtin remains the sole pending escape instead of inheriting the pending block')
 

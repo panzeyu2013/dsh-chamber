@@ -39,6 +39,13 @@
   - 该机 ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`；当前失败投影诚实且
     可重试，系统化并发缓解未排期。
   契约见 `docs/design/18-dsh-runtime-version.md` §3.6/§9。
+- **apply-now 立即应用（18 增补，2026-03）**：pending 相位新增用户触发的
+  「立即应用」（复用既有激活事务与 restartLocal 停机窗口，零新终态、零新崩溃
+  窗口）。契约见 `docs/design/18-addendum-apply-now.md`。**剩余验收（§9.2
+  实机门禁）**：macOS 打包态 `.app` 运行中「立即应用」全链；Linux server gateway
+  生产 TLS 下 POST apply-now → 202 → 停机窗口轮询 → 探针 → 故障注入回退；
+  `restartLocal()` 真实 1s grace × 健康计时器交错；Gateway restart 窗口前端
+  重连；Windows 只读投影。
 - **发布基础设施长期目标态**：把 `ci.yml` 的 test job 抽为 reusable workflow，
   由 `release.yml` validation 直接复用。当前两份 YAML 已覆盖 gateway/runtime、
   control-plane、desktop、renderer、插件、CLI 与 policy 关键门，但仍靠策略测试和

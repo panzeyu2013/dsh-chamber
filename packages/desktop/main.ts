@@ -71,6 +71,7 @@ import type { RuntimeMetadataComponent, RuntimeMetadataHealthProjection } from '
 import { fetchRegistryMetadata } from './registry-metadata.ts';
 import { isAllowedRegistryUrl } from './registry-url.ts';
 import { sanitizeErrorText } from './sanitize-error.ts';
+import { evaluateApplyNowGate, type ApplyNowGateInput } from './apply-now-gate.ts';
 import { disposeRuntimeInstaller, installRuntimeVersion, pruneRuntimeStore } from './runtime-installer.ts';
 import {
   cleanupStaleInstalls,
@@ -3186,6 +3187,10 @@ if (!gotTheLock) {
           },
         },
         shellVersion: version,
+        // Live control-plane connection state projected to the renderer so it
+        // can mirror the apply-now gate (ready/degraded only). controlPlane may
+        // still be null here — the closure re-evaluates at every getState.
+        connectionState: () => controlPlane?.connectionState ?? 'unknown',
       },
     });
     runtimeController = runtimeInstance;
@@ -3442,10 +3447,16 @@ if (!gotTheLock) {
           if (runtimeVersion === null) clearCurrentPointer(runtimeBaseDir);
           else writeCurrentPointer(runtimeBaseDir, runtimeVersion);
         },
-        spawnAndProbe: (runtimeVersion, isBuiltin) => startAndProbeRuntime(
+        // The transaction-level signal flows through spawnAndProbe from
+        // runStartupPhase/runDelayedRollback (apply-now S1). Never fall back
+        // to a module-level aborted signal here: that would re-inject an
+        // aborted signal into rollback verification probes, forging a
+        // "candidate + fallback + builtin all failed" terminal state when the
+        // abort lands inside the apply-now rollback window.
+        spawnAndProbe: (runtimeVersion, isBuiltin, signal) => startAndProbeRuntime(
           runtimeVersion,
           isBuiltin,
-          runtimeOperationAbort?.signal,
+          signal,
         ),
         stopHost: () => cp.stopLocal(),
         restore: snapshotPath => restoreSnapshot(runtimeBaseDir, localDshHome, snapshotPath),
@@ -3900,7 +3911,7 @@ if (!gotTheLock) {
         }
 
         const deps = buildStartupDeps();
-        const result = await runStartupPhase(deps);
+        const result = await runStartupPhase(deps, runtimeOperationAbort?.signal);
         const outcomeTarget = intentBefore?.targetVersion
           ?? result.monitoringJournal?.targetVersion
           ?? pendingBefore;
@@ -3980,7 +3991,7 @@ if (!gotTheLock) {
           if (monitoring !== null && monitoring.targetIsBuiltin === false && !envOverrideActive) {
             try {
               removeKnownGoodCandidate(runtimeBaseDir, monitoring.targetVersion);
-              const rollbackOutcome = await runDelayedRollback(deps, monitoring);
+              const rollbackOutcome = await runDelayedRollback(deps, monitoring, runtimeOperationAbort?.signal);
               await publishApplyOutcome(
                 rollbackOutcome,
                 monitoring.targetVersion,
@@ -4055,7 +4066,7 @@ if (!gotTheLock) {
           canRetryRestore: false,
         });
         removeKnownGoodCandidate(runtimeBaseDir, failedVersion);
-        const result = await runStartupPhase(buildStartupDeps());
+        const result = await runStartupPhase(buildStartupDeps(), runtimeOperationAbort?.signal);
         if (result.applyOutcome === null) {
           await publishBlockedStartup(`restart-exhausted 回退未完成${result.blockedReason === null ? '' : `：${result.blockedReason}`}`);
           return result;
@@ -4468,6 +4479,79 @@ if (!gotTheLock) {
           lastError: null,
         });
       }
+      await runRuntimeStartup();
+      return runtimeInstance.getState();
+    }));
+    // Apply-now (design 18 addendum §4.1): run the existing activation
+    // transaction in the CURRENT session instead of waiting for the next
+    // launch. Entry pattern mirrors RUNTIME_RETRY_APPLY (F1): no outer
+    // writer-fence lease is held across the transaction — runRuntimeStartup
+    // acquires 'runtime:startup' itself, and an outer lease would deadlock
+    // with it. The transaction window is the existing applying projection;
+    // publishApplyOutcome settles the terminal state.
+    // The gate is the pure evaluateApplyNowGate (apply-now-gate.ts), evaluated
+    // BEFORE and AFTER the native confirm dialog from the SAME input builder
+    // (TOCTOU parity, review R5). Both gates resolve the target identically —
+    // pending ?? journalTarget ?? overridePending — and preflight the target
+    // tree, so the second gate can never accept something the first would
+    // reject, and a corrupt tree never starts a doomed stop/respawn cycle.
+    const readApplyNowGateInput = (): ApplyNowGateInput => {
+      const state = runtimeInstance.getState();
+      const journalState = readActivationJournalState(runtimeBaseDir);
+      const overrideState = readOverrideState(runtimeBaseDir);
+      const journalTarget = selectedJournalIntent(journalState)?.targetVersion ?? null;
+      // Same predicate as state.pending's projection (dsh-runtime-controller):
+      // an invalidated or old-shell override's raw pending must not resolve a
+      // durable target for apply-now.
+      const overridePending = overrideState.kind === 'valid'
+        && !envOverrideActive
+        && overrideState.record.shellVersion === version
+        && overrideState.record.invalidatedAt == null
+        ? overrideState.record.pending
+        : null;
+      const target = state.pending ?? journalTarget ?? overridePending;
+      const override = readOverride(runtimeBaseDir);
+      return {
+        phase: state.phase,
+        source: state.source,
+        runtimeBlocked: state.runtimeBlocked === true,
+        managementSupported: state.managementSupported !== false,
+        hasOverride: state.hasOverride === true,
+        pending: state.pending,
+        journalTarget,
+        overridePending,
+        connectionState: controlPlane === null ? 'none' : controlPlane.connectionState,
+        operationBusy: runtimeOperation !== null,
+        fenceBusy: runtimeWriterFence.busy,
+        snapshotFailed: override?.lastOutcome === 'snapshot-failed',
+        treeValid: target === null || validateVersionTree(runtimeBaseDir, target).ok,
+      };
+    };
+    ipcMain.handle(IPC_CHANNELS.RUNTIME_APPLY_NOW, trustedIpc(async () => {
+      const before = runtimeInstance.getState();
+      // Quit is in flight: never start a transaction that the quit path will
+      // immediately abort (same gate as runRuntimeCheck).
+      if (quitRequested) return before;
+      const gate = evaluateApplyNowGate(readApplyNowGateInput());
+      // F5: without a durable pending transaction a startup would only stop
+      // and respawn the instance pointlessly. A snapshot-failed override must
+      // be retried through the dedicated retry-apply path instead; a corrupt
+      // target tree is rejected before any stopLocal is attempted.
+      if (!gate.ok) return before;
+      if (!await confirmRuntimeMutation(
+        `立即切换到 dsh ${gate.target}？`,
+        'dsh 将立即重启并切换到该版本（约 30–90 秒）。进行中的会话会中断，你的数据不受影响；若切换失败，dsh 会自动回滚并保留现场。',
+        '立即应用并重启',
+      )) return runtimeInstance.getState();
+      // TOCTOU: re-read the full gate after the modal, exactly like retry-apply.
+      // The input builder is identical to the first gate, so the second gate
+      // covers the override.pending fallback and tree preflight too.
+      const current = runtimeInstance.getState();
+      const secondGate = evaluateApplyNowGate(readApplyNowGateInput());
+      // The confirm dialog named gate.target: a re-read that resolves a
+      // different target must not start a transaction for a version the user
+      // never confirmed.
+      if (!secondGate.ok || secondGate.target !== gate.target) return current;
       await runRuntimeStartup();
       return runtimeInstance.getState();
     }));

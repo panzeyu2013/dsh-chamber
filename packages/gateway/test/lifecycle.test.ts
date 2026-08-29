@@ -345,6 +345,80 @@ test('live activation keeps candidate and rollback ready edges detached, then ex
   }
 })
 
+test('apply-now keeps candidate ready edges detached and explicitly resyncs features after the verdict', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-applynow-isolation-'))
+  const order: string[] = []
+  const listeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
+  let connectionState = 'stopped'
+  let activation = false
+  let quarantineChange: GatewayRuntimeManagerOptions['onActivationQuarantineChange']
+  const emit = (status: string) => {
+    connectionState = status
+    for (const listener of listeners) listener({ status, port: 17510, error: null })
+  }
+  const plane: PlaneHandle = {
+    async start() { order.push('plane:start') },
+    async startLocal() { order.push('local:start'); emit('ready') },
+    async stop() { order.push('plane:stop'); emit('stopped') },
+    async stopLocal() { emit('stopped') },
+    async restartLocal() {},
+    onLocalStateChange(listener) { listeners.add(listener); return () => listeners.delete(listener) },
+    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {},
+    getLocalDshPort() { return 17510 }, get port() { return 3000 },
+    get connectionState() { return connectionState }, get localProcessAlive() { return connectionState === 'ready' },
+    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test',
+  }
+  const runtime = {
+    transactionWorkspace: null,
+    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
+    startupTransaction: async () => ({ blockedReason: null }),
+    activationInProgress: () => activation,
+    mutationInProgress: () => activation,
+    internalSpawnActive: () => false,
+    applyNow: async () => {
+      activation = true
+      quarantineChange?.(true)
+      order.push('candidate:ready')
+      emit('ready')
+      order.push('candidate:applied')
+      activation = false
+      quarantineChange?.(false)
+      return { accepted: true }
+    },
+    dispose: async () => {},
+  } as unknown as GatewayRuntimeManager
+  try {
+    const gateway = createGateway({
+      config: config(stateDir), logger: silentLogger,
+      deps: {
+        createPlane: (() => plane) as never,
+        createRuntimeManager: ((options: GatewayRuntimeManagerOptions) => {
+          quarantineChange = options.onActivationQuarantineChange
+          return runtime
+        }) as never,
+        createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+        createFeatures: () => ({
+          async handle() { return true },
+          start() { order.push('features:start') },
+          stop() { order.push('features:stop') },
+        }),
+      },
+    })
+    await gateway.start()
+    order.length = 0
+    await runtime.applyNow()
+    assert.deepEqual(order, [
+      'features:stop',
+      'candidate:ready',
+      'candidate:applied',
+      'features:start',
+    ], 'no ready edge attaches before the apply-now verdict; end-quarantine callback performs the authoritative resync')
+    await gateway.stop()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('a local startup failure rolls back the listening plane', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-fail-'))
   let planeStops = 0

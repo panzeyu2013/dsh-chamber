@@ -63,6 +63,7 @@ function codeToStatus(code: string | undefined): number {
     case 'connection_busy': return 409
     case 'no_retry_target': return 409
     case 'invalid_target': return 409
+    case 'noop_target': return 409
     case 'platform_read_only': return 403
     case 'bad_registry_origin': return 400
     case 'no_selection': return 409
@@ -79,6 +80,7 @@ function codeToStatus(code: string | undefined): number {
 type RuntimeMutationAction =
   | 'select'
   | 'apply'
+  | 'apply-now'
   | 'rollback'
   | 'retry-apply'
   | 'retry-restore'
@@ -115,6 +117,10 @@ function recoveryGateRefusal(
 
   if ((status.pending !== null && status.pending !== undefined) || phase === 'pending') {
     if (action === 'restore-builtin') return null
+    // apply-now's semantic premise is exactly this pending/selection state —
+    // it is the in-session execution of the armed switch, not a competing
+    // mutation (design 18 addendum §5.1). Recovery phases above still refuse it.
+    if (action === 'apply-now') return null
     const version = typeof status.pending === 'string' && status.pending !== ''
       ? status.pending
       : 'unknown'
@@ -192,6 +198,42 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         if (rejectRecoveryGate(res, status, 'apply')) return true
         return json(res, 200, await m.apply())
       }
+      if (suffix === '/apply-now' && req.method === 'POST') {
+        // 202: apply-now accepts immediately (mirrors /restart) — the
+        // version-switch activation transaction runs in the background and
+        // progress is polled via /status (phase 'applying' + honest
+        // connectionState). Synchronous refusals are answered synchronously.
+        // The manager's synchronous preflight runs INSIDE this try so any
+        // throw (platform/env/busy/no_selection/invalid_target/noop_target)
+        // lands in the outer catch → fail() writes the 409/403 BEFORE a 202
+        // can ever go out (F3 review fix: a preflight throw must project into
+        // the response, never be swallowed into a fake 202 whose status never
+        // settles). The status-based no_selection precheck is gone: the
+        // preflight filters invalidated selections/trees itself.
+        const status = await m.status()
+        if (rejectRecoveryGate(res, status, 'apply-now')) return true
+        if (m.mutationInProgress()) {
+          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+        }
+        if (status.source === 'env') {
+          return json(res, 409, { error: 'runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled', code: 'env_override_active' })
+        }
+        if (status.mutationsAllowed === false) {
+          return json(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
+        }
+        if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
+          // Mirror /restart: a dsh that never reached ready cannot be switched
+          // in-session; recovery is restore-builtin / retry-apply / retry-restore.
+          // restart-exhausted is NOT a dedicated refusal (D2) — this gate covers it.
+          return json(res, 409, { error: `managed dsh is not running (${status.connectionState}); restore the builtin or retry the interrupted apply/restore before applying now`, code: 'runtime_busy' })
+        }
+        if (m.applyNowInFlight()) {
+          return json(res, 409, { error: 'a runtime apply-now is already in flight', code: 'runtime_busy' })
+        }
+        const target = m.applyNowPreflight()
+        void m.applyNow().catch(error => logger.error(`runtime apply-now failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
+        return json(res, 202, { accepted: true, version: target })
+      }
       if (suffix === '/rollback' && req.method === 'POST') {
         const body = (await readJsonBody(req)) as { version?: unknown } | undefined
         if (body === undefined || typeof body.version !== 'string' || body.version === '') {
@@ -254,7 +296,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return json(res, 200, await m.setRegistry(body.origin))
       }
       if (suffix === '/' || suffix === '') {
-        return json(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'rollback', 'restore-builtin', 'restart', 'retry-apply', 'retry-restore', 'registry'] })
+        return json(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'apply-now', 'rollback', 'restore-builtin', 'restart', 'retry-apply', 'retry-restore', 'registry'] })
       }
       return json(res, 404, { error: 'unknown /chamber/runtime route', code: 'not_found' })
     } catch (error) {

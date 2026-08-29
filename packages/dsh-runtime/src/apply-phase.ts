@@ -22,7 +22,15 @@ export interface ApplyDeps {
   readCurrentPointerState: () => CurrentPointerState
   validateTarget: (version: string, isBuiltin: boolean) => { ok: true } | { ok: false; error: string }
   switchPointer: (version: string | null) => void
-  probe: (version: string, isBuiltin: boolean) => Promise<ProbeResult[]>
+  /**
+   * Probe the candidate tree. `signal` (apply-now S1) lets a host abort an
+   * in-flight activation probe; it is optional so existing two-argument
+   * implementers keep compiling unchanged. Host abort is transaction-level
+   * cancellation: candidate probes keep the passthrough signal (abort takes
+   * effect immediately), while rollback verification probes null an
+   * already-aborted signal (see `rollbackProbeSignal`).
+   */
+  probe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
   restore: (snapshotPath: string) => Promise<'complete' | 'half' | 'incomplete'>
   stopHost: () => Promise<void>
   waitBeforeRetry?: (delayMs: number) => Promise<void>
@@ -75,6 +83,12 @@ export interface ApplyOptions {
   journal?: ActivationJournal | null
   manualRollback?: boolean
   retryDelayMs?: number
+  /**
+   * apply-now (S1) host abort: transaction-level cancellation. A pre-aborted
+   * signal at a transaction entry returns the abort outcome with zero side
+   * effects; rollback verification probes null an already-aborted signal.
+   */
+  signal?: AbortSignal
   deps: ApplyDeps
 }
 
@@ -109,6 +123,33 @@ async function safeProbe(probe: () => Promise<ProbeResult[]>): Promise<ProbeResu
   } catch (error) {
     return [{ name: 'probe', ok: false, error: errorText(error) }]
   }
+}
+
+/**
+ * Host abort (apply-now S1) = transaction-level cancellation. A pre-aborted
+ * signal arriving at a transaction entry cancels the attempt: no new
+ * candidate probe and no rollback verification is started, the durable
+ * journal is left untouched so the next startup resumes idempotently (same
+ * family as the crash semantics).
+ */
+function abortedOutcome(): ApplyOutcome {
+  return makeOutcome({
+    status: 'failed', retainPending: true, runtimeBlocked: false,
+    retryAction: null, failureKind: null,
+    error: '运行时激活事务已被宿主中止；持久化现场将在下次启动续作',
+  })
+}
+
+/**
+ * Rollback verification probes another tree / data integrity and must be
+ * completed honestly even when the candidate probe was host-aborted: a
+ * pre-aborted signal is nulled here, never forwarded — the host abort only
+ * cancels new candidate probes. An abort that happens *during* a rollback
+ * verification probe is left to the probe implementation, which already
+ * handles its own signal.
+ */
+function rollbackProbeSignal(signal: AbortSignal | undefined): AbortSignal | undefined {
+  return signal !== undefined && signal.aborted ? undefined : signal
 }
 
 function advance(
@@ -267,7 +308,7 @@ async function prepareJournal(opts: ApplyOptions): Promise<ActivationJournal | A
 async function delayedVerdict(opts: ApplyOptions): Promise<'pass' | 'fail'> {
   const nowMs = opts.deps.nowMs ?? Date.now
   const firstStartedAt = nowMs()
-  const probeTarget = () => opts.deps.probe(opts.pendingVersion, opts.targetIsBuiltin === true)
+  const probeTarget = () => opts.deps.probe(opts.pendingVersion, opts.targetIsBuiltin === true, opts.signal)
   let verdict = decideVerdict(await safeProbe(probeTarget), {
     elapsedMs: nowMs() - firstStartedAt,
     observedOnce: false,
@@ -301,6 +342,12 @@ async function restoreJournalSnapshot(
 }
 
 async function continueRollback(opts: ApplyOptions, initial: ActivationJournal): Promise<ApplyOutcome> {
+  // Defensive for direct calls: an already-aborted signal arriving at the
+  // rollback entry also cancels the attempt (the durable journal stays put
+  // for the next startup). Mid-transaction aborts — the candidate verdict
+  // already failed and the rollback committed — only null the signal for the
+  // verification probes below.
+  if (opts.signal?.aborted) return abortedOutcome()
   const { deps } = opts
   let journal = initial
   const preSwapPath = await resolvePreSwap(journal, deps)
@@ -398,7 +445,7 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
     }
     const fallbackVersion = journal.rollbackTarget ?? opts.builtinVersion
     const fallbackVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null)),
+      await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal))),
       { elapsedMs: 0, observedOnce: true },
     )
     if (fallbackVerdict === 'pass') {
@@ -444,7 +491,7 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
       })
     }
     const builtinVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(opts.builtinVersion, true)),
+      await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal))),
       { elapsedMs: 0, observedOnce: true },
     )
     return makeOutcome({
@@ -465,6 +512,10 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
 }
 
 async function runApplyTransaction(opts: ApplyOptions): Promise<ApplyOutcome> {
+  // Host abort (apply-now S1): check before prepareJournal so an aborted
+  // entry never even snapshots — zero side effects, the durable journal stays
+  // untouched, and the next startup resumes the pending activation.
+  if (opts.signal?.aborted) return abortedOutcome()
   const { deps, pendingVersion } = opts
   const prepared = await prepareJournal(opts)
   if (!('schemaVersion' in prepared)) return prepared
