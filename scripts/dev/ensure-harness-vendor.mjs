@@ -97,7 +97,24 @@ function verifyPin() {
     throw new Error(`submodule HEAD=${head.slice(0, 12)} != harness.commit pin=${pin.slice(0, 12)} — 禁止从漂移检出建链;` +
       ` pin 升级请走 node scripts/update-vendor.mjs <tag>`)
   }
+  // gitlink（index 里的 160000 条目）与声明 pin 一致：把"手改 harness.commit
+  // 而 gitlink 未动"的洞从 CI（checkout 物化后硬失败）提前到本地。
+  const gitlink = gitLinkCommit()
+  if (gitlink !== null && gitlink !== pin) {
+    throw new Error(`submodule gitlink=${gitlink.slice(0, 12)} != harness.commit pin=${pin.slice(0, 12)} — 请用 node scripts/update-vendor.mjs <tag> 升级（gitlink 与 pin 同批提交）`)
+  }
   return pin
+}
+
+/** 读取 index 中 submodule 的 gitlink commit；未跟踪/无 submodule 时返回 null。 */
+function gitLinkCommit() {
+  try {
+    const line = run('git', ['-C', REPO_ROOT, 'ls-files', '-s', '--', 'vendor/harness-checkout'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const m = /^160000\s+([0-9a-f]{40})\s/.exec(line)
+    return m !== null ? m[1] : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -195,6 +212,9 @@ function lockfileVendorMembers() {
 
 /** 链接集合 vs 锁文件 importer 集合一致性断言（对称差非空即失败）。 */
 function assertLockfileMatches(packages) {
+  if (!existsSync(LOCKFILE)) {
+    throw new Error(`pnpm-lock.yaml 缺失（${LOCKFILE}）— 请先 pnpm install 生成锁文件，或走 update-vendor.mjs 重生成`)
+  }
   const linked = new Set(packages.map((p) => p.suffix))
   const recorded = lockfileVendorMembers()
   const missing = [...linked].filter((s) => !recorded.has(s))
@@ -278,7 +298,26 @@ function rebuildLinks(source, packages) {
   }
   for (const suffix of [...toFix, ...toAdd]) {
     const t = targets.get(suffix)
-    symlinkSync(t.rel, join(LINK_DIR, suffix), process.platform === 'win32' ? 'junction' : 'dir')
+    const link = join(LINK_DIR, suffix)
+    try {
+      symlinkSync(t.rel, link, process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (err) {
+      // 并发容错：另一进程可能已抢先建好同一链接。重读校验——指向正确则
+      // 视为已完成，否则 loud 报错（绝不静默覆盖）。
+      if (err.code === 'EEXIST') {
+        let current
+        try {
+          current = readlinkSync(link)
+        } catch {
+          current = null
+        }
+        if (current !== null && resolve(dirname(link), current) === resolve(dirname(link), t.rel)) {
+          continue
+        }
+        throw new Error(`${link} 并发创建冲突且目标不一致（${current ?? '不可读'} vs ${t.rel}）— 人工检查`)
+      }
+      throw err
+    }
   }
   return { changed: true, count: targets.size, removed: toRemove.length, fixed: toFix.length, added: toAdd.length }
 }
@@ -297,10 +336,13 @@ function rebuildLinks(source, packages) {
  * （Windows + pnpm 11.22）下不可靠；根 node_modules 是安装的主要产物，任何
  * 平台都存在且根依赖恒被链接。submodule 物化后由 ensure 幂等补齐。
  */
+function shimLink() {
+  return { shim: join(MANAGED_DIR, 'node_modules'), target: join(REPO_ROOT, 'node_modules') }
+}
+
 function ensureManagedResolutionShim() {
   if (!existsSync(MANAGED_DIR)) return
-  const shim = join(MANAGED_DIR, 'node_modules')
-  const target = join(REPO_ROOT, 'node_modules')
+  const { shim, target } = shimLink()
   let st
   try {
     st = lstatSync(shim)
@@ -308,8 +350,22 @@ function ensureManagedResolutionShim() {
     if (err.code !== 'ENOENT') throw err
   }
   if (st !== undefined) {
-    if (st.isSymbolicLink()) return
-    throw new Error(`${shim} 已存在且不是符号链接 — 拒绝覆盖,请人工检查`)
+    if (!st.isSymbolicLink()) {
+      throw new Error(`${shim} 已存在且不是符号链接 — 拒绝覆盖,请人工检查`)
+    }
+    // 已存在则校验目标（与 rebuildLinks 同款比对）——指向错误/悬空的 shim
+    // 会被修复，避免"零操作"放行错误目标。
+    let current
+    try {
+      current = readlinkSync(shim)
+    } catch {
+      current = null
+    }
+    const expected = process.platform === 'win32' ? target : relative(dirname(shim), target)
+    if (current !== null && resolve(dirname(shim), current) === resolve(dirname(shim), expected)) {
+      return
+    }
+    rmSync(shim, { recursive: true, force: true })
   }
   symlinkSync(
     process.platform === 'win32' ? target : relative(dirname(shim), target),
@@ -321,6 +377,9 @@ function ensureManagedResolutionShim() {
 
 /** --check：只校验不写盘。任一失败 throw。 */
 function checkOnly(pin, packages) {
+  if (!existsSync(LINK_DIR)) {
+    throw new Error(`链接目录 ${LINK_DIR} 缺失 — 请先运行 node scripts/dev/ensure-harness-vendor.mjs（ensure 模式）建立链接`)
+  }
   const targets = planTargets(packages)
   const linked = new Set()
   for (const entry of readdirSync(LINK_DIR)) {
@@ -355,6 +414,34 @@ function checkOnly(pin, packages) {
   }
   for (const suffix of targets.keys()) {
     if (!linked.has(suffix)) problems.push(`缺失链接 ${suffix}`)
+  }
+  // 解析 shim 与 ensure 模式同款校验（存在性 + 目标），保证 --check 与
+  // ensure 的验收集合一致（--check 只读：仅报告，不修复）。
+  if (existsSync(MANAGED_DIR)) {
+    const { shim, target } = shimLink()
+    const expected = process.platform === 'win32' ? target : relative(dirname(shim), target)
+    let shimState = '缺失'
+    try {
+      const st = lstatSync(shim)
+      if (!st.isSymbolicLink()) {
+        shimState = '非符号链接'
+      } else {
+        let current
+        try {
+          current = readlinkSync(shim)
+        } catch {
+          current = null
+        }
+        if (current !== null && resolve(dirname(shim), current) === resolve(dirname(shim), expected)) {
+          shimState = null
+        } else {
+          shimState = `目标错误(${current ?? '不可读'})`
+        }
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err
+    }
+    if (shimState !== null) problems.push(`解析 shim ${relative(REPO_ROOT, shim)}: ${shimState}`)
   }
   if (problems.length > 0) {
     throw new Error(`--check 失败（${problems.length}）:\n  ${problems.slice(0, 10).join('\n  ')}${problems.length > 10 ? '\n  …' : ''}`)

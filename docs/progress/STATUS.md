@@ -48,7 +48,7 @@
   gitlink 即 pin、`ensure-harness-vendor.mjs` 硬校验
   submodule HEAD == `harness.commit` 并断言链接集合 == 锁文件 vendor importer
   集合（`--check`）、幂等差量建链（集合未变零操作）、`verifyDepsBeforeRun:
-  false` 掐断隐式 install、CI 四处 checkout `submodules: true` + frozen 后
+  false` 掐断隐式 install、CI 五处 checkout `submodules: true` + frozen 后
   `git diff --exit-code -- pnpm-lock.yaml` 漂移断言、升级唯一入口
   `scripts/update-vendor.mjs <tag>`（原子重生成锁文件）。本地已验证：frozen
   install / 幂等 / --check / 漂移演练（详见迁移提交）。**剩余验收**：Windows

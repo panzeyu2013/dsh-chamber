@@ -22,7 +22,6 @@ const sharedActions = [
   'actions/checkout',
   'pnpm/action-setup',
   'actions/setup-node',
-  'actions/cache',
 ]
 
 const sources = workflows.map(path => ({ path, text: readFileSync(path, 'utf8') }))

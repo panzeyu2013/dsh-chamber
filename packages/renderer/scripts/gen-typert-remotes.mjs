@@ -71,9 +71,9 @@ function isFile(path) {
 /**
  * The external dsh checkout root: walk up from a vendored package through its
  * realpath until the repo-root aggregate (tsconfig.host.json) is found. Works
- * for every source the preinstall bootstrap (ensure-harness-vendor.mjs) may
- * resolve — managed clone, sibling checkout, DSH_CHAMBER_HARNESS_ROOT — so no
- * machine-specific path is hardcoded here.
+ * for the submodule source the preinstall bootstrap (ensure-harness-vendor.mjs)
+ * resolves — vendor/harness-checkout, pinned by gitlink — so no machine-specific
+ * path is hardcoded here.
  */
 function findHarnessRoot() {
   const probe = join(VENDOR, 'dsh-agent')

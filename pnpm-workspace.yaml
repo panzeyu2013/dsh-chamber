@@ -23,7 +23,7 @@ allowBuilds:
   # 工作区成员 dsh-subprocess-local 自身的 postinstall（恢复 node-pty
   # spawn-helper 可执行位）不受 allowBuilds 约束——pnpm 对 workspace 项目
   # 自身脚本在全新安装时无条件执行，其 node-pty 解析失败由
-  # scripts/ensure-harness-vendor.mjs 的快照解析 shim 兜底（解析成功后为
+  # scripts/dev/ensure-harness-vendor.mjs 的解析 shim 兜底（解析成功后为
   # 无害 no-op）。此处否认的是它作为"依赖节点"的构建（成员间 workspace:
   # 引用时的防御），同时避免 pnpm 报 ignored builds。运行时用 bundle:dsh
   # 的发布包、不构建上游源码，该脚本非必需。

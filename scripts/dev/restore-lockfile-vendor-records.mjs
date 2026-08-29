@@ -2,8 +2,9 @@
 /**
  * Restore the pnpm 11 lockfile pruning side-effect for the vendor workspace.
  *
- * 背景：vendor/harness-packages/@deepseek-ai/* 是 symlink 指向外部 harness
- * 检出（见 AGENTS.md「Always-On Constraints」与 pnpm-workspace.yaml 注释）。
+ * 背景：vendor/harness-packages/@deepseek-ai/* 是 symlink 指向固定 commit 的
+ * git submodule（vendor/harness-checkout，见 AGENTS.md「Always-On Constraints」
+ * 与 pnpm-workspace.yaml 注释）。
  * pnpm 11 在 lockfile 需要结构性重解时（增删依赖、升降版本、pnpm add/remove/
  * update）会把这一整段 `importers:` 记录裁剪掉——即使 vendor 树在场也一样
  * （实测 pnpm 11.21.0）。裁剪后 `pnpm install --frozen-lockfile` 会立即失败

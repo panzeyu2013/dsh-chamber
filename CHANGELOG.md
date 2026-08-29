@@ -12,6 +12,17 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **构建期 vendor 源 submodule 化**：`vendor/harness-checkout` 从多源回退
+  （env 覆盖 / 兄弟检出 / codeload 下载）迁移为固定 commit 的 git submodule
+  ——gitlink 即 pin（单一事实来源），`ensure-harness-vendor` 硬校验
+  submodule HEAD == `harness.commit`、幂等差量建链（集合未变零操作）、断言
+  链接集合与锁文件 vendor importer 集合一致（`--check`）；
+  `verifyDepsBeforeRun: false` 掐断 pnpm 隐式非 frozen install；CI 各构建腿
+  checkout 改为 submodules 物化并在 frozen install 后断言锁文件零漂移；
+  新增 `scripts/update-vendor.mjs <tag>` 作为上游 pin 唯一升级入口。
+
 ## [0.2.0-beta.3] - 2026-08-29
 
 ### 新增

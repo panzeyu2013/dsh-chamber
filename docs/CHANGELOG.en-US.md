@@ -12,6 +12,19 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Changed
+
+- **Build-time vendor source submoduled**: `vendor/harness-checkout` migrated
+  from multi-source fallbacks (env override / sibling checkout / codeload
+  download) to a fixed-commit git submodule — the gitlink is the pin (single
+  source of truth); `ensure-harness-vendor` hard-verifies submodule HEAD ==
+  `harness.commit`, rebuilds links idempotently (no-op when the link set is
+  unchanged), and asserts the link set matches the lockfile's vendor importers
+  (`--check`); `verifyDepsBeforeRun: false` kills pnpm's implicit non-frozen
+  installs; CI checkouts materialize the submodule and assert zero lockfile
+  drift after frozen installs; new `scripts/update-vendor.mjs <tag>` is the
+  only upgrade entry for the upstream pin.
+
 ## [0.2.0-beta.3] - 2026-08-29
 
 ### Added
