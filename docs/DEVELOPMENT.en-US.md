@@ -79,9 +79,14 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 ### 2.2 Clone and install
 
 ```bash
-git clone <REPO-URL>
+git clone <REPO-URL> --recurse-submodules   # materialize the vendor/harness-checkout submodule in one step
 cd dsh-chamber
 ```
+
+If you already cloned without `--recurse-submodules`, materialize with
+`git submodule update --init` (the submodule is a 240-package monorepo and a
+full fetch is slow; `--depth 1` is safe here — the gitlink pins an exact
+commit, so a shallow fetch is sufficient).
 
 `vendor/harness-packages` is a **gitignored symlink directory** — one symlink per dsh package, named after the package, pointing at the fixed-commit **git submodule** (`vendor/harness-checkout`; gitlink = upstream commit, **single source of truth with no fallbacks** — no env vars, no sibling checkout, no codeload download). It is never committed and must exist **before** `pnpm install` (the workspace resolves unmodified dsh packages through it). `scripts/dev/ensure-harness-vendor.mjs` bootstraps it: it hard-fails when submodule HEAD != `harness.commit`, rebuilds links idempotently (no-op when the link set is unchanged), and asserts the link set matches the lockfile's vendor importer records; `--check` validates without writing. On a fresh clone (after submodule materialization) run it explicitly **before** `pnpm install`:
 

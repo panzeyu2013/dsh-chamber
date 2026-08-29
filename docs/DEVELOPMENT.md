@@ -73,9 +73,13 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 ### 2.2 克隆与安装
 
 ```bash
-git clone <REPO-URL>
+git clone <REPO-URL> --recurse-submodules   # 一步物化 vendor/harness-checkout submodule
 cd dsh-chamber
 ```
+
+已 clone 而未带 `--recurse-submodules` 时，用 `git submodule update --init` 物化
+（submodule 是 240 包大仓库，全量拉取较慢；可加 `--depth 1` 浅拉加速——gitlink
+固定 commit，浅拉足够）。
 
 `vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向固定 commit 的 **git submodule**（`vendor/harness-checkout`，gitlink = 上游 commit，**单一事实来源、无任何回退**：不读环境变量、不复用兄弟检出、不从 codeload 下载）。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/dev/ensure-harness-vendor.mjs` 负责引导：硬校验 submodule HEAD == `harness.commit`（不一致即失败）、幂等差量建链（集合未变时零操作）、断言链接集合与锁文件 vendor importer 集合一致；`--check` 模式只校验不写盘。全新克隆（含 submodule 物化）后需在 `pnpm install` **之前**显式运行一次：
 
