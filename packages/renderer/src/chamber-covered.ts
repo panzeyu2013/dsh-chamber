@@ -111,6 +111,17 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // second slot renderer / provide `uiRenderer` twice. NOT part of the
   // composite: chamber-entry never imports it (page-own only, no factory).
   '@deepseek-ai/dsh-client-ui-renderer',
+  // The official dev-only HMR entry (dsh-client-hmr): its client fiber
+  // unconditionally opens `new EventSource('/plugins/events')` — an
+  // instance-origin-relative path the chamber page (control-plane origin)
+  // must never hit: the control plane's SPA fallback answers it with
+  // index.html (text/html), so every boot — and every EventSource
+  // reconnect, which never stops — logs the "MIME type is not
+  // text/event-stream" abort in the console. The chamber web profile has no
+  // usable hmr client channel (design 09; composite reloads are
+  // chamber-owned, chamber-entry.ts header), so the row is skipped, never
+  // loaded — page-own, no factory.
+  '@deepseek-ai/dsh-client-hmr',
 ]
 
 /**

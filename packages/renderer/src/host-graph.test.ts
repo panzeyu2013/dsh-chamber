@@ -392,6 +392,7 @@ test('collectExtraRows: a 503 that resolves on retry loads the rows (spawn-windo
 test('collectExtraRows: keeps non-covered rows and preloads each once (real covered list)', async () => {
   const stub = stubFetch(200, envelope([
     row('@deepseek-ai/dsh-client-ui-conversation'), // composite-covered → dropped by the merge
+    row('@deepseek-ai/dsh-client-hmr'), // page-own covered → dropped: its /plugins/events EventSource must never hit the control-plane origin (SPA fallback text/html)
     row('@scope/p1'),
     row('@scope/p2'),
   ]))
