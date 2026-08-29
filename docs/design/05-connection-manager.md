@@ -6,6 +6,10 @@
 > 式"导航统一、执行按来源路由"）。首屏 = 本地实例的完整 dsh shell
 > （纯 dsh UI，无 chamber 外壳）。
 > 控制面 = 托管 + 反代 + 静态服务（v1 无认证/审计，loopback-only）。
+> **连接模型 / 凭据 / 安全面以 `17-server-side-gateway.md`（2026-09
+> 连接模型 v2）为权威**：kind dsh|gateway × transport ssh|http × 认证 ×
+> 通道四维正交（17 §2）、注册表 schema v2（17 §9.1）、桌面凭据
+> safeStorage（17 §12）与安全不变量 S21–S24（17 §17）。
 > 本文档是 control-plane / desktop / renderer / 侧边栏插件四方契约。
 
 ## 1. 形态
@@ -27,7 +31,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         ├─ 前端静态服务：dist/ + 启动图清单 __DSH_BOOT__
         ├─ 通用反代（每实例路径前缀，HTTP+WS+SSE 全量透传，无方法白名单）
         │    /api/i/local/*  → 本地 dsh（--profile web --port X）
-        │    /api/i/ssh-<id>/* → 隧道 localPort
+        │    /api/i/dsh-<id>/* → 隧道 localPort（ssh-<id> legacy 段）
+        │    /api/i/gateway-<id>/* → 隧道/直连端点（认证头主进程注入，17 §9.3）
         │    v1 无认证门禁：匿名可达（仅 loopback 监听）
         ├─ 本地实例托管：spawn/健康状态机/reaper/host-logs
         └─ 管理 REST：/health、/api/connections(local)、/api/host/logs
@@ -37,11 +42,13 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         │    环形日志 / 非秘密投影 / 子进程监督 SIGTERM→SIGKILL）
         ├─ TransportProvider 接口（transport-provider.ts）：来源无关契约 —
         │    spec 校验 / 传输进程 argv（或 direct-endpoint 直连模式）/
-        │    stderr 分类与脱敏 / 可选 exec 通道；v1 仅实现 `ssh` provider
-        │    （ssh-provider.ts：ssh -N -o ServerAlive… -L 隧道 + systemd exec）
-        ├─ 实例注册表：<userData>/ssh-instances.json {id,label,kind,host,user,sshPort,remotePort,serviceName,remoteDshHome}（schema 以 03 §2.2 为准）
+        │    stderr 分类与脱敏 / 可选 exec 通道；实现 `ssh` 与 `http`
+        │    两个 transport provider（ssh-provider.ts：ssh -N -o ServerAlive…
+        │    -L 隧道 + systemd exec；gateway-provider.ts：http 直连
+        │    direct endpoint，17 §2.2/§9.2）
+        ├─ 实例注册表：<userData>/ssh-instances.json {id,kind,transport,label,host,user,sshPort,remotePort,serviceName,remoteDshHome,insecureHttp,spkiPin}（schema v2 以 03 §2.2 = 17 §9.1 为准；凭据不进注册表）
         └─ IPC（preload 白名单）
-        远程服务器：dsh（API 面 profile，无需 web 前端）+ systemd + SSH
+        远程目标：dsh（API 面 profile）或 gateway；按需使用 SSH+systemd 或 HTTP(S) 直连
 ```
 
 ## 2. 侧边栏契约（核心：多来源会话统一导航）
@@ -141,9 +148,9 @@ interface ChamberServerWorkspace {
   sessions: { id: string; title: string }[]
 }
 interface ChamberServerAggregate {
-  id: string                      // 'local' | 'ssh-<id>'
+  id: string                      // 'local' | 'dsh-<id>' | 'gateway-<id>'（ssh-<id> legacy）
   sourceFingerprint: string       // 该精确来源代的权威 proof（local='local'）
-  kind: 'local' | 'ssh'
+  kind: 'local' | 'dsh' | 'gateway'
   label: string
   connected: boolean              // 本地：dsh ready；远程：隧道 phase ready
   phase: string                   // 状态文本（ready/connecting/… 投影）
@@ -224,8 +231,10 @@ export const chamberBridge: {
   hide/show 切换，会话保活。**视图生命周期 = 注册表来源代生命周期**：来源删除，
   或 `kind/host/user/sshPort/remotePort` 任一传输身份字段变化，都会通过权威
   `retiredIds` 同步退役旧视图并 dispose shell（`disposeInstanceShell`，shell.ts）；
-  label/serviceName/remoteDshHome 等呈现或 exec 字段编辑不重建隧道身份，也不退役
-  shell。连接失败/手动断开只是瞬时事实（投影为图标/徽标），不回收
+  label 编辑不触碰运行时。`serviceName`/`remoteDshHome` 编辑虽不轮换 renderer 的
+  来源 proof、也不退役 shell，却属于 live transport + exec generation 字段：必须按
+  §7.6 撤销旧 transport/exec 工作、清理子进程并隔离迟到结果。连接失败/手动断开只是
+  瞬时事实（投影为图标/徽标），不回收
   视图：设置页卡片与侧边栏分组都锚定注册表，视图若随瞬时状态消失会
   造成三面不匹配（侧边栏分组头仍可激活一个立即被回收的视图）。boot
   排队/在途时被删除的实例在 settle 时拆掉新 entry（cancelledBoots，绝不
@@ -301,8 +310,9 @@ export const chamberBridge: {
   再从该 Context 读取 basePath 并显式配置 `ConnectionPlugin`。不同 entry 不再通过
   `window.__DSH_BASE_PATH__` 或页面级 `chamber-knob.ts` 交换 boot 参数，因此并行/
   交错 boot 不会串用来源或代理前缀；shell 在任何 graph/module 副作用之前仅接受
-  精确 `local` 或 `ssh-<raw-id>`（raw id 明确排除保留字 `local`）且强制 basePath
-  等于 `/api/i/<instanceId>`；`chamber-knob.ts` 随该修复删除。
+  精确 `local`、规范 `dsh-<raw-id>` / `gateway-<raw-id>` 或兼容迁移的 legacy
+  `ssh-<raw-id>`（raw id 明确排除保留字 `local`），且强制 basePath 等于
+  `/api/i/<instanceId>`；`chamber-knob.ts` 随该修复删除。
 - 目录选择面统一为应用内浏览对话框（browse）：**所有实例一律注册
   `UiDirectoryPickerBrowse`**，与宿主能力恒一致——本地宿主经 spawn 环境
   pin `SSH_CONNECTION`（02 §3.1）令其 directory-picker-auto 解析
@@ -322,26 +332,49 @@ export const chamberBridge: {
 - chamber 自研插件包 `packages/dsh-chamber-client-ui-settings-connections`
   （`@dsh-chamber/dsh-client-ui-settings-connections`），注册进 dsh 设置模态
   的 `settings.section` 槽（id `connections`，order 30，在 agent-presets 之后）。
+- 「dsh 运行时」段（design 18 §3.6/§9，2026-09 per-server 修订）：同为
+  chamber 自研 `settings.section`（id `dsh-runtime`，order 31），注册在选中
+  服务器的子上下文 ledger、紧随 agent-presets 渲染；**connections 是壳的
+  固定 nav 入口**（在分隔线之下、不占 ledger order），故「dsh 运行时」在
+  视觉上位于 server 段列表内 agent-presets 之后。local = 完整运行时管理面，
+  gateway = 经反代触达该 gateway 的 `/chamber/runtime`，ssh = 版本只读行，
+  **dsh（http 直连）= 不挂载**（无管理面、无 ssh 通道、无 `/chamber` 面，
+  design 17 §3 能力差异表——该来源设置段不渲染 dsh-runtime 分节）。
+  **不再位于 chamber 全局「通用」视图**（design 15 的 `__general` 控制组不含
+  运行时块）。
+- 三种来源均含**「重启 dsh」动作**（design 18 §3.6 项 8，刷新插件挂载）：
+  local = 控制面事务接口 `restartLocal()`（design 18 §9.3，与健康状态机重启
+  单飞行串行化——**不是**连接页裸 启动/停止 的组合）；gateway =
+  `POST /chamber/runtime/restart`（经 `/api/i/gateway-<id>/chamber/*` 反代，
+  202 + status 轮询）；ssh = 既有 `restart_service` systemd IPC（03 §2.2，
+  重启窗口内隧道 phase 保持 ready、目标连接拒绝显式 503）。二次确认 +
+  状态行，与健康状态机 `restarting` 单飞行互斥、applying 期间禁用。
+  （dsh http 直连来源不挂载本段、无重启动作，design 17 §3。）
+- **职责划分**：连接页本地卡的 启动/停止 = 连接生命周期（开机常驻与否）；
+  「dsh 运行时」段的 重启 dsh = 运行时维护（刷新插件挂载、恢复服务）——两者
+  不合并、文案不混用（起停不改运行时事实，重启不改指针/版本）。
 - 内容：本地实例卡（/health 状态徽标 + /api/connections 行端口/label +
   启动/停止（二次确认）+ host 日志只读）+ 远程主机卡片列表（label +
   user@host:port + phase 徽标 + 隧道 localPort + serviceName + logSummary；
   连接/断开 + systemd 起停/查询 + 日志 Modal（logs/logs_clear）+ 编辑 +
   删除 + dashed"添加主机"卡 → Modal 表单）。
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
-  元数据（id/label/host/user/sshPort/remotePort/serviceName，id 白名单
-  `^[a-zA-Z0-9_-]+$`，端口 1–65535），SSH 认证默认走系统 ssh-agent/
-  默认密钥；**可选密码字段**（§8 例外）：与本次元数据作为
-  `desktop_ssh_instances_set` 的可选参数一次提交到主进程（内存 +
-  `<userData>/ssh-passwords.json` 明文镜像，0600 原子写；显式清除仍走
-  `desktop_ssh_set_password`），
+  元数据（id/label/kind/transport/insecureHttp/host/user/sshPort/remotePort/
+  serviceName，id 白名单
+  `^(?!local$)[a-zA-Z0-9_-]{1,64}$`（禁 `local`、限长 1–64，transport-provider
+  常量），端口 1–65535；transport 表单 schema 按注册表驱动，17 §2.2），
+  SSH 认证默认走系统 ssh-agent/
+  默认密钥；**可选密码字段**（§8 例外）：与元数据一起经
+  `desktop_ssh_save_connection` 转发主进程（内存 +
+  `<userData>/ssh-passwords.json` schema v2 binding 明文镜像，0600 原子写），
   表单永不记录、编辑时永不回填——**SSH 材料（除该瞬时输入外）永不进
   renderer**。
 - **`~/.ssh/config` 自动发现**：主进程读取并投影非秘密字段
   （alias/hostName/user/port，跳过通配符条目；IdentityFile/ProxyCommand/
   凭据不投影），经 `desktop_ssh_config_list` 供添加表单选择填充；
   手写解析器（无依赖），文件缺失 = 空集、不可读 = 响亮 {error}。
-- **端口语义**：`remotePort` = 远端 127.0.0.1 上 dsh web 监听端口（隧道
-  目标，必填）；`sshPort`（可选）= SSH 守护端口（null = ssh 默认 22 /
+- **端口语义**：`remotePort` = 远端目标端口（ssh 隧道远端 / http 直连
+  端口，必填）；`sshPort`（可选）= SSH 守护端口（null = ssh 默认 22 /
   config Port，非空时隧道与 systemd exec 均带 `-p`）。
 - 样式遵循 dsh 设计语言：CSS modules + `--dsw-alias-*` token +
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
@@ -426,7 +459,9 @@ export const chamberBridge: {
 
 ### 7.1 代理路径（唯一入口面）
 
-- `/api/i/local/*` → 本地实例；`/api/i/ssh-<id>/*` → 该实例隧道。
+- `/api/i/local/*` → 本地实例；`/api/i/dsh-<id>/*` → 该实例隧道
+  （ssh-<id> legacy 段）；`/api/i/gateway-<id>/*` → 该 gateway
+  （隧道/直连端点，认证头由主进程注入，17 §9.3）。
 - HTTP 全量透传（响应头白名单收敛）、WS upgrade（events.mux/events.host）、
   SSE 直通；路径剥前缀转发；**v1 无认证边界**（loopback-only，03 §3.2）。
 - 无隧道（phase != ready）→ 503 明确错误（不静默）。
@@ -438,21 +473,39 @@ export const chamberBridge: {
 
 ### 7.3 PlaneHandle
 
-`{start(), stop(), port, connectionState, instanceId}` +
+`{start(), stop(), startLocal(), localProcessAlive(), port, connectionState,
+instanceId}` +
+`restartLocal()`（design 18 §9.3 事务化用户重启：与健康状态机重启单飞行
+串行化、canStartLocal 门控、restart-exhausted 窗口共享）+
+`refreshLocalExposure()`（重新发布本地公共快照，供事务后解除 quarantine）+
 `registerInstanceTransport(connectionId, baseUrl)` /
 `unregisterInstanceTransport(connectionId)`（隧道 ready/断开时主进程上报
-`ssh:<id>` → `http://127.0.0.1:<隧道 localPort>`）；`webDistDir?` 静态服务
+`${kind}:<id>` → baseUrl——ssh 隧道 = loopback http origin；http 直连 =
+用户配置的 http(s) origin；connectionId 由 kind 派生
+（`dsh:<id>` / `gateway:<id>`，17 §9.3））；`webDistDir?` 静态服务
 （`/`、`/assets/*`、`/manifest.json`、index.html 注入 `__DSH_BOOT__`）。
 
 ### 7.4 IPC（preload 白名单；2026-08 扩展插件编排面，设计 13）
 
-- `dsh-chamber:info`；`desktop_ssh_instances_get/set`（spec 含 kind/sshPort、
-  serviceName 与 remoteDshHome）、`desktop_ssh_set_password`（主进程内存 + 0600
-  明文文件兜底，§8）、`desktop_ssh_config_list`（`~/.ssh/config` 非秘密投影）、
+- `dsh-chamber:info`；`desktop_ssh_instances_get`（spec v2：kind/
+  transport/insecureHttp、sshPort、serviceName 与 remoteDshHome，03 §2.2）、
+  `desktop_ssh_save_connection`（元数据 + SSH password + gateway token/password 的主进程
+  crash-safe 原子/补偿事务；write-only 旧值只在主进程快照，renderer 不可读）、
+  `desktop_ssh_delete_connection(id)`（精确 id-addressed 主进程删除事务；不存在 id 为幂等
+  no-op）、legacy `desktop_ssh_instances_set`（只接受与当前规范化 roster 同长度、同顺序、
+  逐字段完全相同的 exact no-op，任何删除/add/edit/reorder 都拒绝）；三个单项 credential
+  setter 仅接受显式 clear；add/edit/delete/非空凭据写不能绕过各自主进程事务；`desktop_ssh_config_list`
+  （`~/.ssh/config` 非秘密投影）、
   `desktop_ssh_connect/disconnect/status/logs/logs_clear`、
-  `desktop_ssh_start_service/stop_service/is_active/restart_service`（systemctl，
-  serviceName 白名单 `^(?!-)[a-zA-Z0-9_.-]+$`（只额外拒绝会被 systemctl
-  解释为选项的前导 `-`，不收紧既有普通 unit 字符范围））；
+  `desktop_ssh_start_service/stop_service/is_active/restart_service`（固定参数数组
+  `systemctl <action> -- <serviceName>`，serviceName 白名单
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`、首字符必须为字母或数字）；
+- gateway 凭据（write-only，design 17 §9.1/§7.2/§12）：表单瞬时收集并作为
+  `desktop_ssh_save_connection` 的 write-only 字段经受信 IPC 转发主进程（内存持有 +
+  `<userData>/gateway-secrets.json` 0600 原子写、
+  safeStorage 加密 blob 优先，17 §12）；永不返回 renderer、不进注册表/日志，
+  删除实例/显式清除即删；只注入已注册 gateway transport 的 0..2 白名单头
+  （§8 / 17 §9.3）；
 - chamber 设置面（设计 14 D7，chamber 全局运行设置，非秘密）：
   `dsh-chamber:settings-get`（查询当前设置 + 平台能力门控）、
   `dsh-chamber:settings-set`（应用并持久化 `<userData>/chamber-settings.json`，
@@ -460,7 +513,7 @@ export const chamberBridge: {
   推送 `dsh-chamber:system-resume`（OS 唤醒，载荷 `{timestamp}`，渲染端立即
   重连——设计 14 D4）；设计 19 的 notifications 嵌套设置仍属于该 chamber 全局面，
   不进入任何实例配置平面；
-- 桌面 open-in 面（设计 16/17，无实例内执行面）：
+- 桌面 open-in 面（设计 16/20，无实例内执行面）：
   `dsh-chamber:open-in-apps`（本机 app 能力协商，非秘密投影）与
   `dsh-chamber:open-in`（appId/instanceId/path/sourceFingerprint 主进程统一校验后
   拉起 Finder/VS Code）。`sourceFingerprint` 是主进程内存签发、随 roster 投影的
@@ -479,7 +532,8 @@ export const chamberBridge: {
   单槽 last-intent-wins（被替换的旧 delivery 也须 ACK），目标权威缺失或 proof 过期才
   loud 丢弃。激活失败不回滚已经完成的本机拉起；
 - 桌面原生通知面（设计 19 受限 carve-out，无通知中心/历史/控制面 runtime）：
-  `dsh-chamber:notify`（严格 `local | ssh-<raw-id>` 来源、事件/文本/长度白名单后由
+  `dsh-chamber:notify`（严格 `local | dsh-<raw-id> | gateway-<raw-id>` 规范来源，
+  并仅为迁移兼容接受 legacy `ssh-<raw-id>`；事件/文本/长度白名单后由
   主进程设置与焦点裁决；请求必须携带与当前来源代匹配的 `sourceFingerprint`）+
   `dsh-chamber:notifications-ready` 握手 +
   `dsh-chamber:notification-open` push。click payload 在主进程用 64 上限 FIFO hold；
@@ -520,28 +574,43 @@ export const chamberBridge: {
   （renderer 仍会自行尝试，实例错误态照常呈现）。CLI/standalone 形态不预启动
   （控制面契约保持按需 spawn）。
 
-### 7.6 TransportProvider 契约（来源无关抽象，v1 仅 `ssh`）
+### 7.6 TransportProvider 契约（来源无关抽象，双 transport provider）
 
 - `transport-provider.ts` 定义 `TransportProvider`：`kind`、`validateSpec`
   （白名单收口，option-injection 安全）、`buildStartArgs`（**缺省 = direct
   endpoint 模式**：无子进程，运行时探测 `probeTarget()` 并暴露
   `endpointUrl()`，如 tailnet 直连宿主）、`classifyStderr`（整行分类：
   脱敏 + 终态认证判定）、可选 `verifyUp`（端点身份验证：TCP 探测通过后、
-  置 ready 前验证远端真是 dsh——ssh 实现为 `host.describe` 信封探测，
-  与本地 02 §3.2 同判据，非 dsh 服务端口绝不呈现已连接）、可选 `exec`
+  置 ready 前验证目标身份——dsh 使用 `host.describe` 信封探测，与本地 02 §3.2
+  同判据；gateway 使用认证后 `/chamber/runtime/status` 固定 identity，使 managed
+  dsh blocked/down 时恢复面仍可达；非目标服务端口绝不呈现已连接）、可选 `exec`
   （远程服务通道）。
 - `transport-manager.ts` 是通用运行时：phase 机 / **两段式重连**（快速有界
   半开 jitter 退避突发 + 突发耗尽后的慢速周期重探——瞬时故障是时变的，
   error 绝不停摆，条件修复自动恢复；手动 connect/disconnect 取消在途重探）/
   环形日志 / 非秘密投影与推送 / 子进程监督（SIGTERM→SIGKILL per-child）/
   注册表（kind 迁移、重复 id 首胜丢弃）/ 就绪探测（隧道端口或直连端点 +
-  端点身份验证）。就绪判据（TCP + dsh 身份握手）、两段式重连与 `verifyUp`
+  端点身份验证）。就绪判据（TCP + 目标身份握手）、两段式重连与 `verifyUp`
   **确定性验证失败免重试**（`terminal` 分类——目标应答了探测但证明不是
   兼容 dsh → 第一次失败即落 error 终态，仅瞬时失败走重连）的机制细节见
-  03 §2.2。
-- `ssh-provider.ts` 是 v1 唯一实现：`ssh -N -o ServerAliveInterval=30 -o
+  03 §2.2。**加固（2026 audit M2/M10）**：exec 子进程与隧道子进程同款
+  SIGTERM→SIGKILL 升级且 `disposeAsync` 等待两者全部退出（SIGTERM 忽略型
+  ssh exec 不残留孤儿）；本地端口分配瞬时失败（临时端口耗尽）进入慢速
+  周期重探，不再永久停在 error。
+- registry 编辑以 transport + exec generation 隔离旧异步工作：`serviceName` 与
+  `remoteDshHome` 都属于 live transport fields 和 exec identity，变化时先提升
+  generation/`execEpoch`，撤销旧隧道/直连尝试与所有 exec child（SIGTERM→SIGKILL），
+  旧连接原先非 idle 才以新参数重启；多步 exec 下一次 spawn 以及迟到日志、状态投影、
+  `serviceActive`/结果提交前都复验 generation，不能让旧代工作污染新配置。
+- `ssh-provider.ts` 与 `gateway-provider.ts` 是两个 transport provider
+  （按 transport 注册，17 §2.2/§9.2）：`ssh-provider.ts` 实现 `ssh`
+  （`ssh -N -o ServerAliveInterval=30 -o
   ServerAliveCountMax=3 [-p <sshPort>] -L <localPort>:127.0.0.1:<remotePort>`
-  隧道 + systemctl exec；认证特征/脱敏/白名单全在 provider 内。
+  隧道 + systemctl exec；认证特征/脱敏/白名单全在 provider 内）；
+  `gateway-provider.ts` 实现 `http`（direct endpoint 直连，无子进程：
+  端点 = 目标的 http(s) URL，scheme 由 `insecureHttp` 决定，两种 kind
+  都服务——dsh 目标不注入认证头、gateway 目标按 spec kind 可注入
+  `Authorization`，17 §2.1/§9.2）。
 - **exec 通道（2026-08 扩展，设计 13）**：`TransportExecPayload.op` 为
   `'exec'`（systemctl `start/stop/is-active/restart`、远端命令 `run`——命令名
   白名单 `dsh|cat|printf` + argv/路径白名单 + shell 元字符拒绝（`base64 -d`/
@@ -554,11 +623,12 @@ export const chamberBridge: {
   白名单校验（applyPlugins + buildRemoteExecArgv）；materialize 的 `add file:`
   走独立的目录约束白名单分支（仅物化目录内绝对路径）。
 - 新来源接入 = 新 provider + kind 注册；运行时与 UI 按 `kind` 分支即接。
-  注意存量耦合点：反代路径映射（/api/i/<segment>/*，instance-proxy 目前
-  硬编码 `ssh-<id>` 段）与 renderer 侧 base-path 构造（dsh-client-connection
-  base-path patch）对新 kind 需要同步扩展。
+  反代路径段按 kind 派生（connectionId `${kind}:${id}` → `/api/i/dsh-<id>` /
+  `/api/i/gateway-<id>`，`ssh-` legacy 映射保留，17 §9.3）；renderer 侧
+  base-path 构造（dsh-client-connection base-path patch）随 kind 同步。
   边界：tailscale 等网络层身份引入的是网络层访问控制，不构成 dsh 应用层
-  认证面（v1 无认证边界不变）。
+  认证面（v1 无认证边界不变；gateway 目标的认证由注册 transport 头注入
+  承载，17 §9.3）。
 
 ### 7.7 窗口生命周期与崩溃恢复（2026-08-17 落地）
 
@@ -575,46 +645,54 @@ export const chamberBridge: {
 
 ## 8. 安全不变量（沿用 AGENTS.md）
 
-- 前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort），任何实例流量不直接出网；
-  direct-endpoint provider 的端点 URL 同样只在主进程（`readyUrl`），永不进
-  renderer；
+- 前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort），**任何实例流量不直接
+  出网（限定 renderer）**——renderer 只见非秘密投影，任何出网仅由主进程
+  承载；**gateway http 直连例外**：直连端点为用户配置的 http(s) origin，
+  由主进程 transport 直接访问，renderer 仍只见 localPort/phase 投影
+  （17 §9.3）；direct-endpoint provider 的端点 URL 同样只在主进程
+  （`readyUrl`），永不进 renderer；
 - 传输 URL 与**私密 SSH 材料**（凭据/私钥/代理配置/IdentityFile/ProxyCommand）
   永不进 renderer/日志/持久层——renderer 只见 host/user/端口等**非秘密元数据
   投影**与 localPort/phase；ssh stderr 含密钥路径的行入环前脱敏（按行缓冲，
   跨 chunk 不绕过）；分类器可检查的单行上限为 64KiB，脱敏/分类后真正保留到每实例
   200 行 ring 的展示文本再裁到 4KiB，避免 32 个实例的最坏驻留内存按 64KiB/行放大；
 - **可选密码认证（唯一例外，2026-08 用户需求；明文文件兜底——用户决策）**：
-  表单密码字段为瞬时输入（编辑时永不回填）；新增/编辑时作为
-  `desktop_ssh_instances_set` 的可选 replacement 与元数据同次转发，主进程
-  **内存持有 + 明文镜像 `<userData>/ssh-passwords.json`**
+  表单密码字段为瞬时输入（编辑时永不回填），经 `desktop_ssh_save_connection`
+  转发后主进程**内存持有 + 明文镜像 `<userData>/ssh-passwords.json`**
   （0600、`.tmp`+fsync+rename 原子写；残留 `.tmp` 无论原 mode 为何都先
-  fchmod 0600 再写秘密；写成功后才发布内存状态；启动读取拒绝 symlink/非普通文件/
-  非当前用户 owner，并在读取前把过宽 mode 收敛到 0600，同时严格校验 schema；
-  schema v2 的每个密码项同时持久化其精确 `(host,user,sshPort)` owner，任何 SSH
-  spawn 前均与当前权威实例 spec 再匹配，跨注册表/密码文件两次原子提交之间即使崩溃
-  也只会使密码认证失效，不会把旧密码转发给同 id 的新端点；无 owner 的 schema v1
-  文件保留为 `*.v1-retired` 并响亮要求重新输入，绝不从当前注册表猜测迁移——
-  密码主机重启后自动连接可用；损坏/结构非法文件保留为
+  fchmod 0600 再写秘密；写成功后才发布内存状态、启动时严格
+  校验 schema；现存文件先 no-follow/普通文件/inode 校验，以打开 fd 收紧 0600 后
+  才读取——密码主机重启后自动连接可用；损坏/结构非法文件保留为
   `*.corrupt` 并响亮报告，绝不静默当空集）；
-  主进程先验证完整归一化 registry 与 replacement owner；注册表文件落盘后，以
-  **一次密码 map 写入**同时完成全部旧 owner 退役及可选 replacement，成功后才发布
-  新内存 registry / 重启 transport。密码写入失败则在该同步提交屏障内恢复旧
-  registry，旧运行态与旧 secret 均不发布变化，renderer 不再执行第二次 IPC 或补偿；
-  永不进注册表、永不记日志；密码 owner 是 `(id, host, user, sshPort)`，实例删除或
-  host/user/sshPort 变化会以一次密码文件事务退役旧 secret（失败则回滚注册表），
-  label/remotePort/service/home 编辑不误清；显式清除同样删条目；隧道与 systemd
+  保存已收敛为主进程 `desktop_ssh_save_connection` 单事务：registry 与三类 write-only
+  凭据先在主进程拍快照，按目标域验证并提交，任一步失败补偿恢复全部旧值；补偿失败
+  安全 scrub 相关凭据且响亮返回，renderer 不再靠串联 setter 假装可回滚。SSH 镜像
+  schema v2 将每个值绑定 `host+user+sshPort` 并在读取/注入时复验当前 registry；secret
+  先落盘、registry 后落盘的崩溃只会失去可用性，不会把新口令发给旧 SSH endpoint。
+  非空 legacy schema v1 无法安全证明目标，移动为唯一 `.unbound-*` 恢复文件并要求重录；
+  新增/进入/离开/retarget 即使留空也强制清理隐藏的半事务值。删除只走精确
+  `desktop_ssh_delete_connection(id)`：先停活连接、撤销 exact connection-target scope 的
+  gateway 会话、清 durable secrets，最后删 metadata；不存在 id 为幂等 no-op；legacy
+  `instances_set` 只能原样提交当前规范化 roster，不能删除；
+  永不进注册表、永不记日志、实例删除/显式清除即删条目；隧道与 systemd
   exec 经 `SSH_ASKPASS_REQUIRE=force` + 临时 owner-only 0700 askpass 助手（OpenSSH
-  直接执行该脚本；`<tmp>/
-  dsh-chamber-ssh/askpass-<id>.pid-<pid>.<uuid>.sh`，传输停止即删；启动清理仅删除
+  直接执行该脚本；助手位于 `mkdtemp` 创建的每进程不可猜 0700 私有目录，目录必须
+  为当前 uid 的普通目录且 inode/mode 复验通过；历史全局 `<tmp>/dsh-chamber-ssh`
+  永不用于写入，EPERM/属主异常 fail closed，不在他人可替换目录继续；`<tmp>/
+  dsh-chamber-ssh-<pid>-<random>/askpass-<id>.pid-<pid>.<uuid>.sh`。每次 tunnel/systemd/run
+  spawn 独占一个 lease，真实 child 的 exit/error/spawn-fail 才释放并删除对应 helper；
+  disconnect/removal/显式 clear 先阻止新 lease 并请求 purge，仍被 child 引用的文件延迟
+  到引用归零，绝不用固定代际上限提前删在途 helper。异常进程退出后的残留由下一次
+  启动清理；启动清理仅删除
   已退出进程或旧格式遗留，绝不误删并行 dev/打包实例的助手）把密码喂给系统 ssh
   ——**永不上命令行**；助手按提示文本区分「主机密钥确认 → yes」与「密码/
   口令 → 密码」，首次连接无需预先接受主机密钥。无可靠 askpass 的平台
-  （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在带 replacement 的
-  `desktop_ssh_instances_set` 与显式 `desktop_ssh_set_password` IPC 门禁处
-  **显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
+  （v1 的 Windows：Win32-OpenSSH 助手须为 PE 可执行）在 `desktop_ssh_save_connection`
+  IPC 门禁处**显式拒绝**（返回错误，绝不静默走重试死循环），密钥/agent 为
   通用路径。
-- systemctl 以参数数组 spawn（无 shell 拼接）+ serviceName 白名单，名称不得以 `-`
-  开头，避免被 systemctl 解释为 `--help`/`--version` 等选项并假成功；
+- systemctl 以固定参数数组 `systemctl <action> -- <serviceName>` spawn（无 shell 拼接，
+  `--` 终止 option 解析）+ serviceName 白名单
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`（首字符必须为字母或数字）；
 - 控制面 HTTP 监听仅 loopback——v1 无认证边界，不变量靠监听面与 HTTP/WS
   来源门禁（Host 仅规范 loopback authority；Origin 仅限与当前 Host 精确同源
   或显式开发 allowlist，其他 localhost 端口也默认拒绝；`null` 一律拒绝；
@@ -625,6 +703,29 @@ export const chamberBridge: {
   `new Function(…eval…)`，缺它渲染层主包在模块求值期即抛 EvalError、静态骨架
   永不进入 React，2026-08-20 实机排查）、`nosniff`、`DENY` frame、no-referrer
   与 COOP 安全头。
+- **gateway 凭据（design 17 v2 连接模型例外，同款 write-only 纪律）**：settings 表单
+  可瞬时收集 gateway token/密码并经受信 IPC（新增/更新走
+  `desktop_ssh_save_connection`，单项 setter 只清除，§7.4）转发主进程；主进程仅内存持有 +
+  `<userData>/gateway-secrets.json`（schema v3，0600 原子写，safeStorage 加密 blob
+  优先、不可用时 0600 明文回退，17 §12），永不返回 renderer、不进注册表/
+  日志；只注入已注册 gateway transport 的 `Authorization`/`Cookie` 头
+  （0..2 白名单，17 §9.3）。Cookie/session key = 网络 origin + `Host` authority +
+  稳定的 connection-target scope（connection id 与目标摘要）；authority 只负责路由，
+  不是 ownership，因此相同 origin 的不同 direct id、复用 localPort 的不同 SSH 目标也
+  绝不共享 session。exact-scope invalidation 会提升每个历史 key 的 generation，并在
+  登录、Cookie 探针、Bearer fallback、401 重登每次 await 后阻止旧结果改 cache/backoff/
+  auth proof 或继续联网；refresh 另有按 id 的 arm/disarm/dispose epoch，并在重试、重注册、
+  重连前复验密码/token/URL/pin/authority/scope，阻止同 id 重建的迟到结果。
+  `configureGatewaySessionProvider` 的 `ensureSession` / `generation` /
+  `registrationAuthProof` / `setRegistrationAuthProof` / `cachedCookie` / `invalidate` hooks
+  必须 all-or-none；ready 注册要求
+  当前 generation 的 `cookie|bearer` auth proof，密码型目标若
+  Cookie 消失且没有已验证的 Bearer fallback 则 fail closed 重连，绝不无头注册。
+  gateway+HTTPS 配置 SPKI pin 时，登录、探针及 HTTP/WS 反代在 peer SPKI 匹配前不调用
+  请求 `write/end`，不发送 handshake/header/credential/body 等任何应用层字节；mismatch
+  显式失败。删除实例/显式清除即删凭据并撤销对应 scope。对应安全不变量
+  S22（safeStorage 加密落盘）/ S23（SPKI 证书固定）/ S24（审计只记非秘密
+  事件）见 design 17 §17。
 
 ## 9. 分期
 

@@ -24,7 +24,7 @@
  * IntersectionObserver machinery works during boot.
  */
 import { useEffect, useRef, useState } from 'react'
-import { bootInstanceShell, shellStateIdle, type ShellState } from '../shell.ts'
+import { bootInstanceShell, shellStateIdle, type ChamberTransport, type ShellState } from '../shell.ts'
 import { runViewTransition } from '../view-transition.ts'
 
 export interface InstanceViewProps {
@@ -32,6 +32,8 @@ export interface InstanceViewProps {
   basePath: string
   /** Immutable non-secret transport identity bound to this exact boot ctx. */
   sourceFingerprint: string
+  /** Immutable transport mechanism for open-in and other per-entry capability gates. */
+  transport: ChamberTransport
   active: boolean
   /** 服务器显示名（骨架屏文案）。 */
   label: string
@@ -53,7 +55,7 @@ export interface InstanceViewProps {
 }
 
 export default function InstanceView({
-  instanceId, basePath, sourceFingerprint, active, label, onSettled, onStateChange, retryToken,
+  instanceId, basePath, sourceFingerprint, transport, active, label, onSettled, onStateChange, retryToken,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
@@ -78,7 +80,7 @@ export default function InstanceView({
     // 否则容器一旦为 null，本视图永远不再尝试 boot。
     if (el === null) return
     startedRef.current = true
-    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint).then((next) => {
+    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport).then((next) => {
       // 卸载后到达的 settle 一律丢弃（视图已回收，App 已清理该视图状态；
       // 陈旧上报会污染重加视图的失败覆盖层判定）。
       if (!aliveRef.current) return
@@ -90,7 +92,7 @@ export default function InstanceView({
       // 失败呈现由 App 统一负责（覆盖层）：每次 settle 上报最终状态。
       onStateChange?.(instanceId, next)
     })
-  }, [instanceId, basePath, sourceFingerprint, shell, onSettled, onStateChange])
+  }, [instanceId, basePath, sourceFingerprint, transport, shell, onSettled, onStateChange])
 
   // 重试令牌：App 失败覆盖层的「重试」→ 递增令牌 → 复位 boot 状态，boot
   // effect 观察 shell 变化重新启动。

@@ -73,6 +73,7 @@ const controlPlaneModule: typeof import('@dsh-chamber/control-plane') = await (i
 
 /** The control-plane factory (former main.ts `const { createControlPlane }`). */
 export const createControlPlane = controlPlaneModule.createControlPlane
+export const call = controlPlaneModule.call
 
 // RPC wire envelope primitives (rpc-envelope.ts) — consumed by ssh-provider.
 export const buildClientRequest = controlPlaneModule.buildClientRequest

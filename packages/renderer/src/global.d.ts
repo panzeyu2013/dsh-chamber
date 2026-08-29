@@ -10,18 +10,31 @@
 
 /** Transport lifecycle phase machine（隧道生命周期 phase 机）. */
 export type SshPhase = 'idle' | 'connecting' | 'ready' | 'degraded' | 'error'
+/** Target type (design 17 §2.1), orthogonal to TransportMethod. Legacy
+ * `kind:'ssh'` entries are normalized to `dsh` in the desktop registry and
+ * never cross the renderer IPC boundary. */
+export type TransportKind = 'dsh' | 'gateway'
+
+/**
+ * Transport method (design 17 §2.2): the mechanism a connection uses — `ssh`
+ * (tunnel subprocess + systemd exec) or `http` (direct endpoint). Mirrors the
+ * desktop TRANSPORT_METHODS.
+ */
+export type TransportMethod = 'ssh' | 'http'
 
 /** Normalized non-secret instance spec as held by the registry (design 05 §8). */
 export interface SshInstanceSpec {
   id: string
   label: string
-  /** Transport provider kind (v1: 'ssh'). */
-  kind: string
+  /** Target type: a plain dsh web profile or a gateway deployment. */
+  kind: TransportKind
+  /** Transport method (design 17 §2.2): 'ssh' tunnel | 'http' direct endpoint. */
+  transport: TransportMethod
   host: string
   user: string | null
   /** SSH daemon port; null = ssh default (22 or the host's ~/.ssh/config Port). */
   sshPort: number | null
-  /** The remote dsh web profile port on 127.0.0.1 (the tunnel destination). */
+  /** SSH: tunnel destination port; HTTP: direct endpoint origin port. */
   remotePort: number
   serviceName: string | null
   /**
@@ -31,14 +44,55 @@ export interface SshInstanceSpec {
   remoteDshHome: string | null
   /** Opaque main-process lifecycle proof; never persisted or renderer-minted. */
   sourceFingerprint: string
+  /** transport='http' only: true = plaintext http origin (default false =
+   * https). Non-secret; never part of transportTargetChanged — an http↔https
+   * switch keeps the target's credentials (design 17 §9.1). */
+  insecureHttp: boolean
+  /** Optional S23 certificate pin (64 hex SHA-256 of SPKI DER). Only present
+   * for gateway + HTTP transport + HTTPS endpoints. Non-secret registry
+   * metadata; safe to round-trip through the renderer. */
+  spkiPin?: string
+  /** Read-time non-secret SSH-password existence projection. It is true only
+   * for transport='ssh' rows whose password store entry exists; the password
+   * value never leaves the main process. */
+  sshPasswordSet?: boolean
+  /**
+   * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
+   * when the main process holds a gateway token for this instance. Merged on
+   * instances_get, instances_set, save_connection, and delete_connection results (main.ts
+   * projects the stores onto every registry return — never persisted, never
+   * a secret value). Absent on older payloads.
+   */
+  tokenSet?: boolean
+  /**
+   * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
+   * when the main process holds a gateway login password for this instance.
+   * Merged on instances_get, instances_set, save_connection, and delete_connection results
+   * (main.ts projects the stores onto every registry return — never persisted,
+   * never a secret value). Only a gateway-kind target can ever report true.
+   * Absent on older payloads.
+   */
+  passwordSet?: boolean
+  /**
+   * Read-time NON-SECRET storage-mode projection (design 17 §13.4.1 / S22):
+   * how the main process's credential mirror is stored — 'safeStorage' =
+   * OS-keychain-encrypted blobs (Electron safeStorage), 'plaintext' = the
+   * documented 0600 plaintext fallback (OS keychain unavailable). Global per
+   * store. Merged on instances_get, instances_set, save_connection, and delete_connection
+   * results (main.ts projects it onto every registry return — never persisted,
+   * never a secret value). Absent on older payloads.
+   */
+  secretStorage?: 'safeStorage' | 'plaintext'
 }
 
 /** Instance spec as accepted on save (kind/user/sshPort/serviceName are optional inputs). */
 export interface SshInstanceInput {
   id: string
   label: string
-  /** Transport provider kind; omitted/legacy entries default to 'ssh'. */
-  kind?: string
+  /** Target type; omitted/legacy entries normalize to dsh in the main process. */
+  kind?: TransportKind
+  /** Transport method; omitted → inferred from kind (dsh→ssh, gateway→http). */
+  transport?: TransportMethod
   host: string
   user?: string | null
   sshPort?: number | null
@@ -46,17 +100,41 @@ export interface SshInstanceInput {
   serviceName?: string | null
   /** Remote DSH_HOME; omitted/legacy entries default to ~/.dsh. */
   remoteDshHome?: string | null
+  /** transport='http' only: true = plaintext http (default false = https). */
+  insecureHttp?: boolean
+  /** Optional S23 certificate pin. Main rejects malformed pins and pins on
+   * HTTP plaintext, non-gateway targets, or non-HTTP transports. */
+  spkiPin?: string
 }
+
+/** Transient write-only credential mutations accepted by one main-owned
+ * connection save. Empty/omitted values keep the stored dimension; explicit
+ * clears remain on the individual setters. */
+export interface ConnectionCredentialMutations {
+  sshPassword?: string
+  gatewayToken?: string
+  gatewayPassword?: string
+}
+
+/** Atomic/compensated registry + credential save result. Secret values are
+ * never returned; failure carries only the authoritative metadata snapshot. */
+export type SaveConnectionResult =
+  | { ok: true; instances: SshInstanceSpec[] }
+  | { ok: false; instances: SshInstanceSpec[]; error: string; metadataCommitted: boolean }
 
 /** The non-secret status projection (design 05 §8): never a transport URL. */
 export interface SshStatusProjection {
-  /** Transport provider kind (v1: 'ssh'). */
-  kind: string
+  /** Target kind ('dsh' | 'gateway'; mirrors desktop TARGET_KINDS). */
+  kind: TransportKind
+  /** Transport method (design 17 §2.2): 'ssh' tunnel | 'http' direct endpoint. */
+  transport: TransportMethod
+  /** transport='http': true = plaintext http origin (design 17 §13.1 诚实状态). */
+  insecureHttp: boolean
   phase: SshPhase
   localPort: number | null
   sshPort: number | null
   remotePort: number
-  /** Configured remote dsh home ($DSH_HOME); null = ssh default. */
+  /** Configured remote dsh home ($DSH_HOME); gateway always reports null. */
   remoteDshHome: string | null
   retryAttempt: number
   requiresUserAction: boolean
@@ -192,23 +270,31 @@ export interface NpmSearchPackage {
 }
 
 /**
- * The desktop_ssh_* IPC surface (design 05 §3.3): results never expose a
- * tunnel URL or SSH material. Password arguments are transient write-only
- * inputs and are never returned. start_service/stop_service/is_active drive
- * remote systemd control (serviceName comes from the registry spec; format
- * whitelist `^[a-zA-Z0-9_.-]+$` enforced on the main side).
+ * The desktop_ssh_* IPC surface (design 05 §3.3) — returns, events, and
+ * projections are non-secret: never a transport URL, SSH material, or gateway
+ * token. The sole credential-bearing direction is save_connection's transient
+ * write-only input. The systemd/plugin
+ * operations are SSH-only and fail explicitly for providers without exec.
  *
  * Mirrors packages/desktop/preload.cts structurally (interface merging).
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  instances_set(instances: SshInstanceInput[], password?: SshPasswordSubmission): Promise<SshInstanceSpec[]>
+  /** Legacy compatibility channel: exact unchanged no-op roster only. */
+  instances_set(instances: SshInstanceSpec[]): Promise<SshInstanceSpec[]>
+  /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
+  delete_connection(id: string): Promise<SshInstanceSpec[]>
+  /** Main-owned registry + all applicable credential dimensions transaction.
+   * previousId=null adds; otherwise edits that immutable id. */
+  save_connection(previousId: string | null, input: SshInstanceInput, credentials: ConnectionCredentialMutations): Promise<SaveConnectionResult>
   /**
-   * Store the SSH password in main-process memory plus the owner-only
-   * plaintext fallback (design 05 §8); never logged; '' / null clears it.
-   * Resolves {ok:true} or {error} (unknown id / platform not supported).
+   * Explicit clear only; non-empty credential writes use save_connection.
    */
-  set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  set_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
+  /** Explicit clear only; non-empty writes use save_connection. */
+  set_gateway_token(id: string, token: null): Promise<{ ok: true } | { error: string }>
+  /** Explicit clear only; non-empty writes use save_connection. */
+  set_gateway_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -244,7 +330,7 @@ export interface DesktopSshSurface {
   /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
-  /** Registry changed (add/edit/delete via instances_set): retire removals, then re-pull the roster. */
+  /** Registry changed: retire trusted lifecycle deltas before re-pulling the roster. */
   onInstancesChanged(callback: (payload: SshInstancesChangedPayload) => void): () => void
 }
 
@@ -332,6 +418,9 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
+   *  user-selected mirror/custom https origin (trust anchor). */
+  registryOrigin: string
   /** 桌面通知设置（design 19 §3.4）：嵌套键，默认值镜像 desktop
    *  chamber-settings.ts 的 DEFAULT_CHAMBER_SETTINGS.notifications。 */
   notifications: ChamberNotificationSettings
@@ -365,7 +454,10 @@ export interface ChamberSettingsStatus {
 
 export interface SettingsSurface {
   get(): Promise<ChamberSettingsStatus>
-  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string }>
+  /** Failure carries a stable machine-readable `code` where the renderer must
+   *  branch (e.g. 'cancelled', 'invalid-registry-origin'); `error` is a
+   *  user-facing fallback text only, never a branching key. */
+  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string; code?: string }>
   onChanged(callback: (status: ChamberSettingsStatus) => void): () => void
 }
 
@@ -377,7 +469,8 @@ export interface SystemResumeSurface {
 /** 桌面原生通知请求（design 19 §3.3）：renderer 组装 → 主进程裁决/呈现。
  *  载荷全为非秘密投影（会话 id/标题/来源 label），无隧道 URL、无 SSH 材料。 */
 export interface NotificationRequest {
-  /** 来源 id（'local' | 'ssh-<id>'）。 */
+  /** 来源 id：`local` 或 canonical `dsh-<id>` / `gateway-<id>`；旧
+   * `ssh-<id>` 仅作为迁移输入别名。 */
   sourceId: string
   /** Exact non-secret transport identity captured by this source generation. */
   sourceFingerprint: string
@@ -428,7 +521,7 @@ export interface OpenInSurface {
 
 /** Normalized deep-link intent pushed from the main process (design 16 §2). */
 export interface DeepLinkIntent {
-  /** Raw registry id ('local' | registry id); the App layer prefixes 'ssh-' for remote sources. */
+  /** Raw registry id ('local' | registry id); App resolves the live transport kind. */
   instanceId: string
   path: string
   /** Exact non-secret lifecycle proof captured before the native launch. */
@@ -447,8 +540,24 @@ export interface DeepLinkSurface {
   ack(deliveryId: number, attempt: number): Promise<boolean>
 }
 
+/** dsh runtime management types and complete design-18 state projection. */
+import type { RuntimeSurface } from './runtime-management.ts'
+export type {
+  RuntimeAction,
+  RuntimeFailure,
+  RuntimeMetadataComponent,
+  RuntimeMetadataHealth,
+  RuntimePhase,
+  RuntimeRestoreOutcome,
+  RuntimeState,
+  RuntimeSurface,
+  RuntimeVersionEntry,
+} from './runtime-management.ts'
+
 /** The full bridge: app info + platform + ssh + update + chamber settings
- *  + system resume + open-in + deep-link + notifications surfaces. */
+ *  + system resume + open-in + deep-link + notifications + dsh runtime
+ *  management surfaces. */
+
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -460,6 +569,7 @@ export interface DshChamberBridge {
   systemResume: SystemResumeSurface
   openIn: OpenInSurface
   deepLink: DeepLinkSurface
+  runtime: RuntimeSurface
   notifications: NotificationSurface
 }
 

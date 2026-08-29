@@ -460,8 +460,11 @@ test('validateNotificationRequest: accepts a valid payload', () => {
   const valid = validateNotificationRequest(makeRequest());
   assert.ok(valid.ok);
   if (valid.ok) assert.deepEqual(valid.request, makeRequest());
-  assert.ok(validateNotificationRequest(makeRequest({ sourceId: 'ssh-dev_01' })).ok);
-  assert.ok(validateNotificationRequest(makeRequest({ sourceId: `ssh-${'a'.repeat(64)}` })).ok);
+  assert.ok(validateNotificationRequest(makeRequest({ sourceId: 'dsh-dev_01' })).ok);
+  assert.ok(validateNotificationRequest(makeRequest({ sourceId: `gateway-${'a'.repeat(64)}` })).ok);
+  const legacy = validateNotificationRequest(makeRequest({ sourceId: 'ssh-dev_01' }));
+  assert.equal(legacy.ok, true);
+  if (legacy.ok) assert.equal(legacy.request.sourceId, 'dsh-dev_01', 'legacy ssh alias is canonicalized before ownership lookup');
   // test kind 同样合法。
   assert.ok(validateNotificationRequest(makeRequest({ kind: 'test' })).ok);
 });
@@ -480,9 +483,17 @@ test('notification host boolean probes contain throws, hostile values, and inval
   assert.deepEqual(readNotificationHostBoolean(() => { throw hostile }), { ok: false, error: 'unknown error' })
 });
 
-test('validateNotificationRequest: sourceId is strictly local or ssh-<registry id>', () => {
+test('validateNotificationRequest: sourceId is local, canonical dsh/gateway, or the exact legacy ssh alias', () => {
   for (const sourceId of [
     'remote-1',
+    'http-valid',
+    'future-valid',
+    'dsh-',
+    'dsh-local',
+    'dsh-bad/id',
+    'gateway-',
+    'gateway-local',
+    'gateway-with space',
     'ssh-',
     'ssh-local',
     'ssh-bad/id',
@@ -498,9 +509,11 @@ test('validateNotificationRequest: sourceId is strictly local or ssh-<registry i
 test('validateNotificationRequest accepts only the authoritative proof wire format', () => {
   assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'local', sourceFingerprint: 'local' })).ok, true)
   assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'local', sourceFingerprint: 'a'.repeat(64) })).ok, false)
+  assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'dsh-valid', sourceFingerprint: 'a'.repeat(64) })).ok, true)
+  assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'gateway-valid', sourceFingerprint: 'a'.repeat(64) })).ok, true)
   assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'ssh-valid', sourceFingerprint: 'a'.repeat(64) })).ok, true)
   for (const sourceFingerprint of ['', 'local', 'A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), 'g'.repeat(64)]) {
-    assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'ssh-valid', sourceFingerprint })).ok, false, sourceFingerprint)
+    assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'gateway-valid', sourceFingerprint })).ok, false, sourceFingerprint)
   }
 });
 

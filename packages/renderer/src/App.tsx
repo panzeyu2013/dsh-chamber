@@ -37,6 +37,7 @@ import {
   serversProjectionSignature,
   type ChamberServerAggregate,
   type InstanceAggregate,
+  type InstanceHostReport,
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
@@ -66,13 +67,21 @@ import {
   invalidateRemovedAggregateSources,
   isSnapshotStale,
   planAggregateRefreshes,
+  refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
 } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
-import type { SshInstanceSpec, SshStatusProjection } from './global.d.ts'
+import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
+import {
+  instanceBasePath,
+  rawInstanceIdFromSourceId,
+  sourceIdForInstance,
+  sourceIdForRawInstance,
+  sourceIdForTransport,
+} from './transport-source.ts'
 import InstanceView from './components/InstanceView.tsx'
 
 /**
@@ -100,24 +109,25 @@ const MAX_PENDING_ROSTER_NOTIFICATION_OPENS = 64
 
 const LOCAL_INSTANCE_ID = 'local'
 
-type DeepLinkDelivery = RendererDeliveryCoordinates & { sourceId: string; sourceFingerprint: string }
+type DeepLinkDelivery = RendererDeliveryCoordinates & {
+  /** Raw id is retained while the first authoritative v2 kind roster is unavailable. */
+  rawInstanceId: string
+  /** Canonical source id once resolved through the authoritative roster. */
+  sourceId: string | null
+  sourceFingerprint: string
+}
 type NotificationOpenDelivery = RendererDeliveryCoordinates & {
   sourceId: string
   sourceFingerprint: string
   sessionId: string
 }
-
-function instanceBasePath(instanceId: string): string {
-  return `/api/i/${instanceId}`
-}
-
 /**
  * 实例可被聚合轮询：对齐反代契约（03 §3.3）——只有 `ready` 才放行，否则
  * 显式 503。starting/degraded/connecting 期间轮询只会收获 503，故一律按
  * 未连接呈现（分组头 + 相位文本，不轮询、无错误刷屏）。
  */
 function instanceConnected(
-  kind: 'local' | 'ssh',
+  kind: 'local' | TransportKind,
   health: HealthResponse | null,
   remoteStatus: Record<string, SshStatusProjection>,
   instanceId: string,
@@ -126,8 +136,11 @@ function instanceConnected(
     const status = health?.dsh?.status
     return status === 'ready'
   }
-  const phase = remoteStatus[instanceId]?.phase
-  return phase === 'ready'
+  const status = remoteStatus[instanceId]
+  // A registry kind switch and its IPC pushes are separate messages. Never
+  // treat a briefly-stale READY projection from the old provider as proof
+  // that the replacement provider is ready.
+  return status?.kind === kind && status.phase === 'ready'
 }
 
 /**
@@ -145,8 +158,8 @@ function collectReadySourceIds(
   if (instanceConnected('local', health, remoteStatus, LOCAL_INSTANCE_ID)) ready.push(LOCAL_INSTANCE_ID)
   else notReady.push(LOCAL_INSTANCE_ID)
   for (const instance of remoteInstances) {
-    const id = `ssh-${instance.id}`
-    if (instanceConnected('ssh', health, remoteStatus, instance.id)) ready.push(id)
+    const id = sourceIdForInstance(instance)
+    if (instanceConnected(instance.kind, health, remoteStatus, instance.id)) ready.push(id)
     else notReady.push(id)
   }
   return { ready, notReady }
@@ -164,6 +177,7 @@ function deriveServers(
   remoteInstances: SshInstanceSpec[],
   remoteStatus: Record<string, SshStatusProjection>,
   aggregates: Record<string, InstanceAggregate>,
+  hostFacts: Record<string, InstanceHostReport | undefined>,
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
   completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
@@ -171,15 +185,14 @@ function deriveServers(
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const now = Date.now()
-  // The proxy contract is /api/i/ssh-<id>/*, so every remote source id that
-  // reaches the sidebar / shell paths carries the 'ssh-' prefix (05 §3);
-  // remoteStatus is keyed by the raw registry id (the IPC projection's id).
   const push = (
-    kind: 'local' | 'ssh',
+    kind: ChamberServerAggregate['kind'],
+    transport: ChamberServerAggregate['transport'],
     id: string,
     label: string,
     sourceFingerprint: string,
     rawId?: string,
+    statusKind?: TransportKind,
   ): void => {
     const statusKey = kind === 'local' ? id : (rawId ?? id)
     const phase = kind === 'local'
@@ -187,7 +200,12 @@ function deriveServers(
       : (remoteStatus[statusKey]?.phase ?? 'idle')
     let workspaces: ChamberServerAggregate['workspaces'] = []
     const aggregate = aggregates[id]
-    const connected = instanceConnected(kind, health, remoteStatus, statusKey)
+    const connected = instanceConnected(
+      kind === 'local' ? 'local' : (statusKind ?? kind),
+      health,
+      remoteStatus,
+      statusKey,
+    )
     if (connected && aggregate !== undefined && aggregate.state === 'ok') {
       // 当前会话事实只给活动来源：blank（新建未首发的）会话行只在正在查看的
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
@@ -199,6 +217,8 @@ function deriveServers(
       id,
       sourceFingerprint,
       kind,
+      transport,
+      ...(rawId === undefined ? {} : { rawId }),
       label,
       connected,
       phase,
@@ -212,6 +232,8 @@ function deriveServers(
     // vendor 的 completed 作兜底保留。合并为纯函数 mergeRuntimeFacts（shared/
     // derive.ts，单测覆盖）。
     if (connected) {
+      const dshVersion = hostFacts[id]?.dshVersion
+      if (dshVersion !== undefined) entry.dshVersion = dshVersion
       const merged = mergeRuntimeFacts(runtimeFacts[id], completedBySource[id])
       if (merged !== undefined) entry.runtime = merged
     }
@@ -221,9 +243,20 @@ function deriveServers(
     if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
     servers.push(entry)
   }
-  push('local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例', 'local')
+  push('local', 'local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例', 'local')
   for (const instance of remoteInstances) {
-    push('ssh', `ssh-${instance.id}`, instance.label, instance.sourceFingerprint, instance.id)
+    // The persisted/runtime target kind is independent of the transport.
+    // `ssh` is accepted only as the legacy spelling of a dsh target.
+    const targetKind: 'dsh' | 'gateway' = instance.kind === 'gateway' ? 'gateway' : 'dsh'
+    push(
+      targetKind,
+      instance.transport,
+      sourceIdForInstance(instance),
+      instance.label,
+      instance.sourceFingerprint,
+      instance.id,
+      instance.kind,
+    )
   }
   return servers
 }
@@ -335,7 +368,7 @@ export default function App() {
     console.error(`[notifications] open ACK exhausted retries (${delivery.deliveryId}/${delivery.attempt}):`, error)
   }, [])
   const [remoteStatus, setRemoteStatus] = useState<Record<string, SshStatusProjection>>({})
-  // 视图：'local' | 'ssh-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
+  // 视图：'local' | '<kind>-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
   // Views mounted only by background prewarm. User selection removes the id
@@ -375,6 +408,8 @@ export default function App() {
   // a later same-id pull receives a never-reused object.
   const aggregateRequestOwnersRef = useRef<SourceOwnershipRegistry | null>(null)
   aggregateRequestOwnersRef.current ??= new SourceOwnershipRegistry()
+  const aggregatePollSeqRef = useRef<Record<string, number>>({})
+  const mutationRefreshSeqRef = useRef<Record<string, number>>({})
   const aggregateFailuresRef = useRef<Record<string, number>>({})
   const aggregateRetryTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const aggregateRefreshQueueRef = useRef(new AggregateRefreshQueue())
@@ -387,6 +422,7 @@ export default function App() {
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
+  const [hostFacts, setHostFacts] = useState<Record<string, InstanceHostReport | undefined>>({})
   // chamber (06 §4.1, 2026-08)：App 自持的「完成未读」蓝点（completedBySource）
   // 与边沿记忆（prevRunningRef）。蓝点不依赖各来源 shell 的 selected——后台
   // 来源的陈旧 selected 会让 vendor 提醒错误压制「完成但未读」——而是由 App
@@ -410,8 +446,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView, pluginDiagnostics),
-    [health, connections, remoteInstances, remoteStatus, aggregates, runtimeFacts, completedBySource, activeView, pluginDiagnostics],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -439,6 +475,8 @@ export default function App() {
   // 身份保持稳定（本文件既有 ref 镜像纪律），相位变化不重建这些回调。
   const remoteStatusRef = useRef(remoteStatus)
   remoteStatusRef.current = remoteStatus
+  const remoteInstancesRef = useRef(remoteInstances)
+  remoteInstancesRef.current = remoteInstances
 
   // 切换意图镜像：activeViewRef = 已落地的当前视图（渲染期镜像），
   // pendingViewRef = 在途/顺延中的最新切换意图（过渡链 apply 前有效）。
@@ -568,10 +606,11 @@ export default function App() {
     }
     setRemoteStatus(prev => {
       // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
-      // 与 servers 的 ssh-<id> 前缀 id 不同——按前缀剥离还原再比较。
+      // 与 servers 的 <kind>-<id> 不同——按 kind 前缀还原再比较。
       const liveRaw = new Set<string>()
       for (const server of servers) {
-        liveRaw.add(server.kind === 'local' ? 'local' : server.id.slice(4))
+        const rawId = server.kind === 'local' ? 'local' : rawInstanceIdFromSourceId(server.id)
+        if (rawId !== null) liveRaw.add(rawId)
       }
       const next = { ...prev }
       let changed = false
@@ -604,16 +643,18 @@ export default function App() {
     }
   }, [])
 
-  const refreshRemoteStatus = useCallback(async (id: string) => {
+  const refreshRemoteStatus = useCallback(async (id: string, expectedSourceId?: string) => {
     const ssh = window.dshChamber?.desktopSsh
     if (ssh === undefined) return
-    const sourceId = `ssh-${id}`
+    const sourceId = expectedSourceId ?? sourceIdForRawInstance(id, remoteInstancesRef.current)
+    if (sourceId === null) return
     const sourceOwner = sourceLifecyclesRef.current!.capture(sourceId)
     if (sourceOwner === null) return
     try {
       const projection = await ssh.status(id)
       if (
         projection !== null
+        && sourceIdForTransport(projection.kind, id) === sourceId
         && liveServerIdsRef.current.has(sourceId)
         && sourceLifecyclesRef.current!.owns(sourceOwner)
       ) {
@@ -642,6 +683,10 @@ export default function App() {
     if (retired.size === 0) return
     sourceLifecyclesRef.current!.retire(retired)
     aggregateRequestOwnersRef.current!.retire(retired)
+    for (const sourceId of retired) {
+      delete aggregatePollSeqRef.current[sourceId]
+      delete mutationRefreshSeqRef.current[sourceId]
+    }
 
     // Force the supplied authoritative delta through the aggregate generation
     // transition even when a newer roster snapshot already contains the same
@@ -686,7 +731,11 @@ export default function App() {
       delete notifiedCompleteRef.current[sourceId]
     }
     const pendingDeepLink = pendingDeepLinkDeliveryRef.current
-    if (pendingDeepLink !== null && retired.has(pendingDeepLink.sourceId)) {
+    if (
+      pendingDeepLink !== null
+      && pendingDeepLink.sourceId !== null
+      && retired.has(pendingDeepLink.sourceId)
+    ) {
       pendingDeepLinkDeliveryRef.current = null
       void acknowledgeDeepLink(pendingDeepLink).catch(error => {
         reportDeepLinkAckFailure(pendingDeepLink, error)
@@ -725,8 +774,8 @@ export default function App() {
     setPluginDiagnostics(prev => withoutRemovedSourceKeys(prev, retired))
     setCompletedBySource(prev => withoutRemovedSourceKeys(prev, retired))
     const removedRawIds = new Set([...retired]
-      .filter(sourceId => sourceId.startsWith('ssh-'))
-      .map(sourceId => sourceId.slice('ssh-'.length)))
+      .map(rawInstanceIdFromSourceId)
+      .filter((rawId): rawId is string => rawId !== null))
     remoteStatusRef.current = withoutRemovedSourceKeys(remoteStatusRef.current, removedRawIds)
     for (const rawId of removedRawIds) knownRemoteIdsRef.current.delete(rawId)
     setRemoteStatus(prev => withoutRemovedSourceKeys(prev, removedRawIds))
@@ -747,7 +796,7 @@ export default function App() {
       const instances = await ssh.instances_get()
       if (remoteRosterRefreshSeqRef.current !== seq) return false
       const acceptedInstances = instances.flatMap((instance) => {
-        const sourceId = `ssh-${instance.id}`
+        const sourceId = sourceIdForInstance(instance)
         const fingerprint = parseAuthoritativeSourceFingerprint(sourceId, instance.sourceFingerprint)
         if (fingerprint === null) {
           console.error(`[renderer] remote source ${sourceId} omitted: invalid authoritative lifecycle proof`)
@@ -772,9 +821,13 @@ export default function App() {
       }
       liveServerIdsRef.current = nextLiveServerIds
       remoteRosterSettledRef.current = true
-      setRemoteInstances(acceptedInstances.map(({ instance }) => instance))
+      const acceptedSpecs = acceptedInstances.map(({ instance }) => instance)
+      remoteInstancesRef.current = acceptedSpecs
+      setRemoteInstances(acceptedSpecs)
       setRemoteRosterSettled(true)
-      for (const { instance } of acceptedInstances) void refreshRemoteStatus(instance.id)
+      for (const { instance, sourceId } of acceptedInstances) {
+        void refreshRemoteStatus(instance.id, sourceId)
+      }
       return true
     } catch {
       // 桌面 SSH 面不可达时保持现状；首次权威结果前 settled 仍为 false，
@@ -790,16 +843,50 @@ export default function App() {
    * （拖拽 commit 前的兜底快照可能晚于 refresh 拉取到达，造成陈旧排序）。
    */
   const aggregatePollRunningRef = useRef(false)
-  const refreshAggregate = useCallback(async (instanceId: string) => {
+  const refreshAggregate = useCallback(async (instanceId: string, mutationTag?: number) => {
     const sourceOwner = sourceLifecyclesRef.current!.capture(instanceId)
     if (sourceOwner === null) return
-    const requestOwner = aggregateRequestOwnersRef.current!.renew(instanceId)
-    const stillOwns = (): boolean =>
-      sourceLifecyclesRef.current!.owns(sourceOwner)
-      && aggregateRequestOwnersRef.current!.owns(requestOwner)
+    const startedPollSeq = (aggregatePollSeqRef.current[instanceId] ?? 0) + 1
+    aggregatePollSeqRef.current[instanceId] = startedPollSeq
+    if (mutationTag !== undefined) aggregateRequestOwnersRef.current!.retire([instanceId])
+    const requestOwner = mutationTag === undefined
+      ? aggregateRequestOwnersRef.current!.renew(instanceId)
+      : null
+    const stillOwnsSource = (): boolean => sourceLifecyclesRef.current!.owns(sourceOwner)
+    const stillCurrent = (): boolean => stillOwnsSource()
+      && refreshPullStillCurrent({
+        mutationTag,
+        mutationSeq: mutationRefreshSeqRef.current[instanceId],
+        pollSeq: aggregatePollSeqRef.current[instanceId] ?? 0,
+        startedPollSeq,
+      })
+      && (requestOwner === null || aggregateRequestOwnersRef.current!.owns(requestOwner))
+    const scheduleRetry = (): void => {
+      const mutationStillCurrent = mutationTag === undefined
+        ? stillCurrent()
+        : stillOwnsSource() && mutationRefreshSeqRef.current[instanceId] === mutationTag
+      if (!mutationStillCurrent) return
+      const failures = aggregateFailuresRef.current[instanceId] ?? 0
+      if (failures >= AGGREGATE_RETRY_LIMIT) {
+        delete aggregateFailuresRef.current[instanceId]
+        return
+      }
+      aggregateFailuresRef.current[instanceId] = failures + 1
+      clearAggregateRetry(instanceId)
+      const retryTimer = setTimeout(() => {
+        if (aggregateRetryTimersRef.current.get(instanceId) === retryTimer) {
+          aggregateRetryTimersRef.current.delete(instanceId)
+        }
+        const mayRetry = mutationTag === undefined
+          ? stillCurrent()
+          : stillOwnsSource() && mutationRefreshSeqRef.current[instanceId] === mutationTag
+        if (mayRetry) void refreshAggregate(instanceId, mutationTag)
+      }, AGGREGATE_RETRY_MS)
+      aggregateRetryTimersRef.current.set(instanceId, retryTimer)
+    }
     try {
       const snapshot = await fetchInstanceSnapshot(getInstanceClient(instanceId))
-      if (!stillOwns()) return
+      if (!stillCurrent()) return
       delete aggregateFailuresRef.current[instanceId]
       clearAggregateRetry(instanceId)
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
@@ -815,7 +902,14 @@ export default function App() {
         return { ...prev, [instanceId]: { state: 'ok', ...snapshot, error: null } }
       })
     } catch (err) {
-      if (!stillOwns()) return
+      if (!stillOwnsSource()) return
+      // A push/newer pull supersedes an error fact. Mutation success may cross
+      // an interim push, but a stale failure must never replace that healthy push.
+      if ((aggregatePollSeqRef.current[instanceId] ?? 0) !== startedPollSeq) {
+        scheduleRetry()
+        return
+      }
+      if (!stillCurrent()) return
       setAggregates(prev => ({ ...prev, [instanceId]: emptyAggregate('error', errorMessage(err)) }))
       // 反代 503 = 权威"未就绪"信号（03 §3.3）：本地 /health 可能还停留在
       // 旧 ready（最多一个健康轮询周期的陈旧窗口），立即刷新使连接判定
@@ -824,20 +918,7 @@ export default function App() {
       // 首屏加速：一次瞬时失败不等到 30s 兜底轮询——限次快速重试（工作区
       // 单元冷启动期间 workspace.list 可能短暂 503/超时；git 快照先到会让
       // 未注册块抢在 workspace 列表前渲染，2026-08 用户反馈）。
-      const failures = aggregateFailuresRef.current[instanceId] ?? 0
-      if (failures < AGGREGATE_RETRY_LIMIT) {
-        aggregateFailuresRef.current[instanceId] = failures + 1
-        clearAggregateRetry(instanceId)
-        const retryTimer = setTimeout(() => {
-          if (aggregateRetryTimersRef.current.get(instanceId) === retryTimer) {
-            aggregateRetryTimersRef.current.delete(instanceId)
-          }
-          if (stillOwns()) void refreshAggregate(instanceId)
-        }, AGGREGATE_RETRY_MS)
-        aggregateRetryTimersRef.current.set(instanceId, retryTimer)
-      } else {
-        delete aggregateFailuresRef.current[instanceId]
-      }
+      scheduleRetry()
     }
   }, [clearAggregateRetry, refreshHealth])
 
@@ -890,6 +971,10 @@ export default function App() {
       // A pull started in the dying generation must never restore an `ok`
       // aggregate after the authoritative transport state became not-ready.
       aggregateRequestOwnersRef.current!.retire(notReady)
+      for (const sourceId of notReady) {
+        aggregatePollSeqRef.current[sourceId] = (aggregatePollSeqRef.current[sourceId] ?? 0) + 1
+        mutationRefreshSeqRef.current[sourceId] = (mutationRefreshSeqRef.current[sourceId] ?? 0) + 1
+      }
       setAggregates(prev => {
         let changed = false
         const next = { ...prev }
@@ -907,6 +992,19 @@ export default function App() {
       })
       // 断连即清该来源的运行时事实（06 §4.2：generation 级事实随断连失效）
       setRuntimeFacts(prev => {
+        let changed = false
+        const next = { ...prev }
+        for (const id of notReady) {
+          if (next[id] !== undefined) {
+            delete next[id]
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+      // host.describe is generation-scoped too: a disconnected source must
+      // not retain a version from the previous connection generation.
+      setHostFacts(prev => {
         let changed = false
         const next = { ...prev }
         for (const id of notReady) {
@@ -990,7 +1088,7 @@ export default function App() {
     }, CONNECTIONS_POLL_MS)
 
     // 注册表低频轮询（与连接行同节奏）：兜底桌面侧任何来源的注册表变化
-    // （主进程 instances_set 推送通道之外；隧道状态本身走 onStatusChanged
+    // （主进程 save/delete 的 instances_changed 推送之外；隧道状态本身走 onStatusChanged
     // 推送，不依赖此轮询）。
     const remotesTimer = setInterval(() => {
       if (cancelled) return
@@ -1069,7 +1167,10 @@ export default function App() {
       // A removed transport may emit one final phase while main tears it down.
       // The delta already retired this incarnation; refreshRemoteStatus after
       // a real re-add supplies the replacement's first accepted projection.
-      if (!liveServerIdsRef.current.has(`ssh-${payload.id}`)) return
+      const sourceId = sourceIdForRawInstance(payload.id, remoteInstancesRef.current)
+      if (sourceId === null
+        || sourceIdForTransport(payload.status.kind, payload.id) !== sourceId
+        || !liveServerIdsRef.current.has(sourceId)) return
       remoteStatusRef.current = { ...remoteStatusRef.current, [payload.id]: payload.status }
       setRemoteStatus(prev => ({ ...prev, [payload.id]: payload.status }))
     })
@@ -1267,7 +1368,8 @@ export default function App() {
     if (viewId === LOCAL_INSTANCE_ID) return
     const ssh = window.dshChamber?.desktopSsh
     if (ssh === undefined) return
-    const rawId = viewId.slice('ssh-'.length)
+    const rawId = rawInstanceIdFromSourceId(viewId)
+    if (rawId === null) return
     const phase = remoteStatusRef.current[rawId]?.phase
     if (phase !== 'error' && phase !== 'degraded') return
     void ssh.connect(rawId).catch(err => {
@@ -1341,8 +1443,18 @@ export default function App() {
     if (!canReplayRosterIntents(remoteRosterSettled, remoteRosterSettledRef.current)) return
     const pending = pendingDeepLinkDeliveryRef.current
     if (pending === null) return
+    const sourceId = pending.sourceId
+      ?? sourceIdForRawInstance(pending.rawInstanceId, remoteInstancesRef.current)
+    if (sourceId === null) {
+      pendingDeepLinkDeliveryRef.current = null
+      console.warn(`[renderer] deep-link raw source is absent from the authoritative roster: ${pending.rawInstanceId}`)
+      void acknowledgeDeepLink(pending).catch(error => {
+        reportDeepLinkAckFailure(pending, error)
+      })
+      return
+    }
     const decision = settlePendingDeepLinkActivation(
-      pending.sourceId,
+      sourceId,
       liveServerIdsRef.current,
     )
     pendingDeepLinkDeliveryRef.current = null
@@ -1352,12 +1464,12 @@ export default function App() {
     if (decision.activateSourceId !== null) {
       if (deliveryMatchesCurrentSource(
         sourceLifecyclesRef.current!,
-        pending.sourceId,
+        sourceId,
         pending.sourceFingerprint,
       )) {
         selectView(decision.activateSourceId)
       } else {
-        console.warn(`[renderer] ignored stale deep-link source proof: ${pending.sourceId}`)
+        console.warn(`[renderer] ignored stale deep-link source proof: ${sourceId}`)
       }
     }
     void acknowledgeDeepLink(pending).catch(error => {
@@ -1384,7 +1496,7 @@ export default function App() {
     // 空 label 不入表（与本地行同规）：InstanceView 的 `?? viewId` 回落
     // 只认 undefined——空串会渲染出无名的骨架标题。
     for (const instance of remoteInstances) {
-      if (instance.label !== '') map[`ssh-${instance.id}`] = instance.label
+      if (instance.label !== '') map[sourceIdForInstance(instance)] = instance.label
     }
     return map
   }, [connections, remoteInstances])
@@ -1417,14 +1529,14 @@ export default function App() {
    */
   const prewarmEligibleRef = useRef<Set<string>>(new Set())
   const prewarmEligible = useMemo(() => {
-    const liveRemoteIds = new Set(remoteInstances.map(instance => `ssh-${instance.id}`))
+    const liveRemoteIds = new Set(remoteInstances.map(sourceIdForInstance))
     for (const id of autoPrewarmedRef.current) {
       if (!liveRemoteIds.has(id)) autoPrewarmedRef.current.delete(id)
     }
     const remaining = Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
     const eligible = remoteInstances
       .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
-      .map(instance => `ssh-${instance.id}`)
+      .map(sourceIdForInstance)
       .filter(id => !mountedViews.includes(id))
       .slice(0, remaining)
     return new Set(eligible)
@@ -1461,7 +1573,7 @@ export default function App() {
     const eligible = prewarmEligibleRef.current
     prewarmQueueRef.current = prewarmQueueRef.current.filter(id => eligible.has(id))
     for (const instance of remoteInstances) {
-      const id = `ssh-${instance.id}`
+      const id = sourceIdForInstance(instance)
       if (!eligible.has(id)) continue
       const queue = prewarmQueueRef.current
       if (!queue.includes(id)) queue.push(id)
@@ -1578,7 +1690,8 @@ export default function App() {
 
   /** VS Code OS 深链（design 16 §2，hold/replay）：先注册监听，再以 ready()
    *  通知主进程放行归一化 intent；冷启动/重载期间的成功启动不会丢失来源激活。
-   *  raw id → 视图 id 契约（P1-4）：'local' 原样，注册表 id 拼 `ssh-` 前缀。
+   *  raw id → 视图 id 通过当前权威 kind roster 解析为 dsh-/gateway-；
+   *  legacy ssh- 只作为输入兼容，绝不由 v2 roster 新产生。
    *  远程来源在首次 authoritative instances_get settle 前进入单槽 pending，
    *  roster 成功后再由上方 effect replay；local 不依赖 roster，立即激活。
    *  VS Code 启动由主进程独立完成，渲染层激活从不阻塞它。桥与 desktopSsh
@@ -1595,13 +1708,25 @@ export default function App() {
         console.error('[renderer] ignored malformed deep-link activation intent')
         return
       }
-      const sourceId = intent.instanceId === 'local' ? 'local' : `ssh-${intent.instanceId}`
+      const sourceId = intent.instanceId === 'local'
+        ? LOCAL_INSTANCE_ID
+        : remoteRosterSettledRef.current
+          ? sourceIdForRawInstance(intent.instanceId, remoteInstancesRef.current)
+          : null
+      if (intent.instanceId !== 'local' && remoteRosterSettledRef.current && sourceId === null) {
+        console.warn(`[renderer] ignored deep-link raw source absent from the authoritative roster: ${intent.instanceId}`)
+        void acknowledgeDeepLink(intent).catch(error => {
+          reportDeepLinkAckFailure(intent, error)
+        })
+        return
+      }
       // If authority for this source is already installed, reject a stale IPC
       // pipe delivery before it can supersede a legitimate held intent. When
       // no owner exists yet, preserve the delivery until the roster settles
       // and perform the same exact-proof check in the replay effect.
       if (
-        sourceLifecyclesRef.current!.capture(sourceId) !== null
+        sourceId !== null
+        && sourceLifecyclesRef.current!.capture(sourceId) !== null
         && !deliveryMatchesCurrentSource(
           sourceLifecyclesRef.current!,
           sourceId,
@@ -1615,18 +1740,28 @@ export default function App() {
         return
       }
       const previous = pendingDeepLinkDeliveryRef.current
+      const current: DeepLinkDelivery = {
+        rawInstanceId: intent.instanceId,
+        sourceId,
+        sourceFingerprint: intent.sourceFingerprint,
+        deliveryId: intent.deliveryId,
+        attempt: intent.attempt,
+      }
+      if (sourceId === null) {
+        pendingDeepLinkDeliveryRef.current = current
+        if (previous !== null && previous.deliveryId !== current.deliveryId) {
+          void acknowledgeDeepLink(previous).catch(error => {
+            reportDeepLinkAckFailure(previous, error)
+          })
+        }
+        return
+      }
       const decision = routeDeepLinkActivation(
         sourceId,
         remoteRosterSettledRef.current,
         liveServerIdsRef.current,
         previous?.sourceId ?? null,
       )
-      const current: DeepLinkDelivery = {
-        sourceId,
-        sourceFingerprint: intent.sourceFingerprint,
-        deliveryId: intent.deliveryId,
-        attempt: intent.attempt,
-      }
       pendingDeepLinkDeliveryRef.current = decision.pendingSourceId === null ? null : current
       if (previous !== null && previous.deliveryId !== current.deliveryId) {
         // View activation is explicitly last-intent-wins. A newer delivery
@@ -1695,7 +1830,9 @@ export default function App() {
   useEffect(() => {
     return chamberBridge.onRefresh((sourceId) => {
       if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      void refreshAggregate(sourceId)
+      const tag = (mutationRefreshSeqRef.current[sourceId] ?? 0) + 1
+      mutationRefreshSeqRef.current[sourceId] = tag
+      void refreshAggregate(sourceId, tag)
     })
   }, [refreshAggregate])
 
@@ -1714,6 +1851,7 @@ export default function App() {
       if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
       const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
       if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
+      aggregatePollSeqRef.current[sourceId] = (aggregatePollSeqRef.current[sourceId] ?? 0) + 1
       aggregateRequestOwnersRef.current!.retire([sourceId])
       if (snapshot === undefined) {
         delete snapshotSourcesRef.current[sourceId]
@@ -1758,6 +1896,25 @@ export default function App() {
           return next
         }
         return { ...prev, [sourceId]: diagnostic }
+      })
+    })
+  }, [])
+
+  /** Live host.describe projection from each mounted instance ctx. */
+  useEffect(() => {
+    return chamberBridge.onInstanceHost((sourceId, report, sourceFingerprint) => {
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
+      if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
+      setHostFacts(prev => {
+        if (report === undefined) {
+          if (prev[sourceId] === undefined) return prev
+          const next = { ...prev }
+          delete next[sourceId]
+          return next
+        }
+        if (prev[sourceId]?.dshVersion === report.dshVersion) return prev
+        return { ...prev, [sourceId]: report }
       })
     })
   }, [])
@@ -1948,13 +2105,15 @@ export default function App() {
             05 §4 无僵尸不变量），且恢复后要重 boot 丢会话连续性。 */}
         {mountedViews.map((viewId) => {
           const sourceFingerprint = sourceLifecyclesRef.current!.capture(viewId)?.fingerprint
-          if (sourceFingerprint === undefined) return null
+          const transport = servers.find(server => server.id === viewId)?.transport
+          if (sourceFingerprint === undefined || transport === undefined) return null
           return (
             <InstanceView
               key={viewId}
               instanceId={viewId}
               basePath={instanceBasePath(viewId)}
               sourceFingerprint={sourceFingerprint}
+              transport={transport}
               active={activeView === viewId}
               label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? '本地实例' : viewId)}
               onSettled={handleInstanceSettled}

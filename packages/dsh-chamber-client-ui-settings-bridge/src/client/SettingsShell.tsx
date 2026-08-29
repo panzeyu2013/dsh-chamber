@@ -29,8 +29,10 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/section'
 import { GeneralView } from './GeneralView.tsx'
+import { GatewayOrchestrationView } from './GatewayOrchestrationView.tsx'
 import {
   CONNECTIONS_SECTION_ID,
+  GATEWAY_SECTION_ID,
   GENERAL_SECTION_ID,
   resolveActiveSection,
   type SectionNavRow,
@@ -52,6 +54,7 @@ import {
   sourceFingerprintIsCurrent,
   staleOwnedSessionIds,
 } from './server-selector.ts'
+import { runtimeServerProjectionKey } from './runtime-source.ts'
 
 /** Registration-side business face for the chamber settings shell. */
 export interface SettingsShellInjected {
@@ -59,7 +62,7 @@ export interface SettingsShellInjected {
   t: (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
   /** Bound translate over the connections section's dictionary ('dsh-chamber.settings.connections'). */
   connectionsT: (key: string) => string
-  /** The hosting boot's instance id ('local' | 'ssh-<id>'), when known. */
+  /** The hosting boot's instance id ('local' | '<kind>-<id>'), when known. */
   chamberInstanceId?: string
 }
 
@@ -351,7 +354,10 @@ function SettingsPanel({
   // synchronous render guard prevents even one frame of old settings from
   // appearing after a same-id replacement.
   const selectedCandidate = selectedId === undefined ? undefined : sessions[selectedId]
-  const selectedSession = selectedCandidate?.sourceFingerprint === selected?.sourceFingerprint
+  const selectedSession = selectedCandidate !== undefined
+    && selected !== undefined
+    && selectedCandidate.sourceFingerprint === selected.sourceFingerprint
+    && selectedCandidate.runtimeProjectionKey === runtimeServerProjectionKey(selected)
     ? selectedCandidate
     : undefined
 
@@ -373,9 +379,10 @@ function SettingsPanel({
   )
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
-  const active = resolveActiveSection(activeId, rows)
+  const gatewayAvailable = selected?.kind === 'gateway'
+  const active = resolveActiveSection(activeId, rows, gatewayAvailable)
   // Per-source client-plugin runtime diagnostics, keyed by source id
-  // ('local' | 'ssh-<id>'), handed to the chamber-global connections surface.
+  // ('local' | '<kind>-<id>'), handed to the chamber-global connections surface.
   // The diagnostic is a chamber-owned fact (design 09) and belongs in the
   // connections page, NOT on top of the official dsh「插件」section.
   const pluginDiagnostics = useMemo(() => {
@@ -410,6 +417,18 @@ function SettingsPanel({
                 <span className={css.navLabel}>{row.label}</span>
               </button>
             ))}
+            {gatewayAvailable && (
+              <button
+                key={GATEWAY_SECTION_ID}
+                type="button"
+                className={clsx(css.navCell, active === GATEWAY_SECTION_ID && css.active)}
+                aria-current={active === GATEWAY_SECTION_ID ? 'true' : undefined}
+                onClick={() => onSelectSection(GATEWAY_SECTION_ID)}
+              >
+                <IconDataOutline16 className={css.navIcon} size={16} />
+                <span className={css.navLabel}>{t('gatewayNav')}</span>
+              </button>
+            )}
           </div>
           <div className={css.navDivider} />
           <div className={css.navList}>
@@ -478,6 +497,23 @@ function SettingsPanel({
                  independent of the selected server. The update status (design
                  11) lives inside this section too. */
               <GeneralView t={t} />
+            ) : active === GATEWAY_SECTION_ID ? (
+              selectedId === undefined || selected === undefined ? (
+                <p className={css.placeholder}>{t('noServers')}</p>
+              ) : !selected.connected ? (
+                <div className={css.unavailableView}>
+                  <p className={css.placeholder}>{t('targetUnavailable')}</p>
+                  <button type="button" className={css.inlineAction} onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}>
+                    {t('manageConnections')}
+                  </button>
+                </div>
+              ) : (
+                /* This is the gateway's own authenticated orchestration API,
+                   not an official dsh settings child-context slot. The view
+                   derives a same-origin path from the canonical source id;
+                   its bearer token stays in Desktop main. */
+                <GatewayOrchestrationView key={selectedId} sourceId={selectedId} t={t} />
+              )
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (
@@ -589,6 +625,17 @@ export function SettingsShell(props: SettingsShellProps) {
   const selected = servers.find(server => server.id === selectedId)
   const selectedConnected = selected?.connected ?? false
   const selectedSourceFingerprint = selected?.sourceFingerprint
+  const selectedRuntimeProjection = useMemo(() => selected === undefined ? null : ({
+    id: selected.id,
+    sourceFingerprint: selected.sourceFingerprint,
+    kind: selected.kind,
+    transport: selected.transport,
+    ...(selected.rawId === undefined ? {} : { rawId: selected.rawId }),
+    ...(selected.dshVersion === undefined ? {} : { dshVersion: selected.dshVersion }),
+  }), [selected?.id, selected?.sourceFingerprint, selected?.kind, selected?.transport, selected?.rawId, selected?.dshVersion])
+  const selectedRuntimeProjectionKey = selectedRuntimeProjection === null
+    ? null
+    : runtimeServerProjectionKey(selectedRuntimeProjection)
 
   // Child ctx keep-alive: sessions assemble lazily per server while the
   // panel is open; closing (or an unreachable target) releases everything.
@@ -623,7 +670,11 @@ export function SettingsShell(props: SettingsShellProps) {
   }, [servers])
 
   useEffect(() => {
-    if (!open || selectedId === undefined || selectedSourceFingerprint === undefined) {
+    if (!open
+      || selectedId === undefined
+      || selectedSourceFingerprint === undefined
+      || selectedRuntimeProjection === null
+      || selectedRuntimeProjectionKey === null) {
       // Panel closed (or the selection is being re-anchored): release every
       // child ctx and clear the projection-facing state. The retry ledger
       // resets too — a reopen is a fresh context (no-op when already reset).
@@ -660,14 +711,16 @@ export function SettingsShell(props: SettingsShellProps) {
     // cached content is never shadowed by a foreign error. The ledger resets
     // as well (content is live again: any later failure starts fresh).
     const cached = sessionsRef.current[selectedId]
-    if (cached !== undefined && cached.sourceFingerprint === selectedSourceFingerprint) {
-      setSessionError(null)
-      setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
-      return
-    }
-    // Defense in depth for the interval before the roster-sweep effect has
-    // published its filtered cache state.
     if (cached !== undefined) {
+      if (cached.sourceFingerprint === selectedSourceFingerprint
+        && cached.runtimeProjectionKey === selectedRuntimeProjectionKey) {
+        setSessionError(null)
+        setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
+        return
+      }
+      // Target transport / raw identity / live version changed under the
+      // same source id. Rebuild the child ledger so dsh+http removes the
+      // runtime section and ssh actions never retain an old host id.
       const next = { ...sessionsRef.current }
       delete next[selectedId]
       sessionsRef.current = next
@@ -679,20 +732,23 @@ export function SettingsShell(props: SettingsShellProps) {
     // node global overload via the `Window & typeof globalThis` intersection.
     let retryTimer: number | undefined
     setSessionError(null)
-    mountBridgeSession(selectedId, selectedSourceFingerprint).then((mounted) => {
+    const projectionStillCurrent = (): boolean => {
       const currentServer = serversRef.current.find(server => server.id === selectedId)
-      if (
-        cancelled
-        || !sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
-        || currentServer?.connected !== true
-      ) {
+      return currentServer?.connected === true
+        && sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
+        && runtimeServerProjectionKey(currentServer) === selectedRuntimeProjectionKey
+    }
+    mountBridgeSession(selectedRuntimeProjection).then((mounted) => {
+      if (cancelled || !projectionStillCurrent()) {
         void mounted.dispose().catch(() => {})
         return
       }
       // A newer same-owner attempt may already have filled the cache. Never
       // let a later-settling Promise overwrite that committed child ctx.
       const incumbent = sessionsRef.current[selectedId]
-      if (incumbent !== undefined && incumbent.sourceFingerprint === selectedSourceFingerprint) {
+      if (incumbent !== undefined
+        && incumbent.sourceFingerprint === selectedSourceFingerprint
+        && incumbent.runtimeProjectionKey === selectedRuntimeProjectionKey) {
         void mounted.dispose().catch(() => {})
         return
       }
@@ -704,10 +760,7 @@ export function SettingsShell(props: SettingsShellProps) {
       // one's burned attempts.
       setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
     }).catch((error: unknown) => {
-      if (
-        cancelled
-        || !sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
-      ) return
+      if (cancelled || !projectionStillCurrent()) return
       setSessionError(errorMessage(error))
       // Bounded-backoff auto-retry of the SAME mount path (issue 6 彻底修复,
       // W2 residual gap P2): a transient not-ready burst (the selected host
@@ -734,7 +787,7 @@ export function SettingsShell(props: SettingsShellProps) {
           // 1s → 2s → 4s → 8s across consecutive failures.
           if (
             !cancelled
-            && sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
+            && projectionStillCurrent()
           ) {
             setMountRetry({ id: selectedId, sourceFingerprint: selectedSourceFingerprint, failures })
           }
@@ -750,6 +803,8 @@ export function SettingsShell(props: SettingsShellProps) {
     selectedId,
     selectedConnected,
     selectedSourceFingerprint,
+    selectedRuntimeProjection,
+    selectedRuntimeProjectionKey,
     retryNonce,
     mountRetry,
     releaseAllSessions,

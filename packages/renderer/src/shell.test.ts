@@ -138,6 +138,7 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
       chamberInstanceId: 'ssh-test-clean-2',
       chamberBasePath: '/api/i/ssh-test-clean-2',
       chamberSourceFingerprint: testSourceFingerprint('ssh-test-clean-2'),
+      chamberTransport: 'ssh',
     }])
   } finally {
     __testResetConfiguredContexts()
@@ -172,11 +173,13 @@ test('createChamberContextSetup: immutable entry facts cannot cross when boots a
     chamberInstanceId: 'ssh-instance-a',
     chamberBasePath: '/api/i/ssh-instance-a',
     chamberSourceFingerprint: testSourceFingerprint('ssh-instance-a'),
+    chamberTransport: 'ssh',
   })
   assert.deepEqual(b.facts, {
     chamberInstanceId: 'ssh-instance-b',
     chamberBasePath: '/api/i/ssh-instance-b',
     chamberSourceFingerprint: testSourceFingerprint('ssh-instance-b'),
+    chamberTransport: 'ssh',
   })
   assert.throws(() => createChamberContextSetup(' ', '/api/i/ '), /empty instance id/)
   for (const sourceId of [

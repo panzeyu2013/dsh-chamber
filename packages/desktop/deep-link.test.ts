@@ -29,8 +29,9 @@ import {
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts'
 import { NotificationSourceIncarnations } from './notifications.ts'
 
-/** A minimal valid ssh instance for runVscodeLaunch context fakes. */
-const sshInstance = { id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, kind: 'ssh' }
+/** A minimal valid ssh instance for runVscodeLaunch context fakes (v2: the
+ *  vscode-remote URL is an ssh-TRANSPORT feature — design 17 §2). */
+const sshInstance = { id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, transport: 'ssh' }
 
 function context(overrides: Partial<VscodeLaunchContext> & { lookup?: VscodeLaunchContext['lookupInstance'] } = {}): VscodeLaunchContext {
   return {
@@ -544,13 +545,13 @@ test('runVscodeLaunch rejects an instanceId that fails INSTANCE_ID_PATTERN (P2-3
   if (!result.ok) assert.match(result.error, /instance/i)
 })
 
-test('runVscodeLaunch fails loudly for a non-ssh instance kind', async () => {
+test('runVscodeLaunch fails loudly for a non-ssh instance transport', async () => {
   const result = await runVscodeLaunch(
     { instanceId: 'web-1', path: '/foo' },
-    context({ lookupInstance: () => ({ ...sshInstance, kind: 'tailscale' }) }),
+    context({ lookupInstance: () => ({ ...sshInstance, transport: 'http' }) }),
   )
   assert.equal(result.ok, false)
-  if (!result.ok) assert.match(result.error, /not an ssh instance/i)
+  if (!result.ok) assert.match(result.error, /not an ssh transport/i)
 })
 
 test('runVscodeLaunch fails loudly when VS Code is not detected', async () => {
@@ -576,7 +577,7 @@ test('runVscodeLaunch succeeds end-to-end and opens the constructed URL', async 
   const result = await runVscodeLaunch(
     { instanceId: 'web-1', path: '/home/user/proj' },
     context({
-      lookupInstance: () => ({ id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, kind: 'ssh' }),
+      lookupInstance: () => ({ id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, transport: 'ssh' }),
       openVscodeUrl: async url => {
         opened = url
         return { ok: true }

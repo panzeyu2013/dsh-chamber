@@ -300,6 +300,11 @@ function mockSpawned(): SpawnedDsh {
   return { child: { on() {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
 }
 
+const healthyLocalConnectionDeps = {
+  spawnDsh: async () => mockSpawned(),
+  describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+}
+
 test('createLocalConnection passes the resolved patchPath to the spawn fn', async t => {
   const dir = tempDir(t)
   const spawnOptions: Array<{ patchPath?: string | null }> = []
@@ -395,11 +400,12 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
 })
 
 // ---------------------------------------------------------------------------
-// createControlPlane.start(): the seed orchestration gate (dist present /
-// absent — a fake hostGraphPackageSourceDir covers both branches)
+// createControlPlane local spawn: the seed orchestration gate (dist present /
+// absent — a fake hostGraphPackageSourceDir covers both branches). plane.start
+// only reaps writers; DSH_HOME remains untouched until the fenced spawn path.
 // ---------------------------------------------------------------------------
 
-test('createControlPlane.start() seeds the host package and materializes the overlay when dist/index.js exists', async t => {
+test('createControlPlane.startLocal() seeds the host package and materializes the overlay when dist/index.js exists', async t => {
   const dir = tempDir(t)
   const source = stageSource(t, 'export const v = 1\n')
   const plane = createControlPlane({
@@ -409,9 +415,12 @@ test('createControlPlane.start() seeds the host package and materializes the ove
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
+    assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false, 'plane start leaves DSH_HOME seed-free')
+    await plane.startLocal()
     // The --patch overlay materialized under the state root…
     assert.equal(readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8'), EXPECTED_OVERLAY)
     assert.equal(statSync(join(dir, HOST_GRAPH_PATCH_FILENAME)).mode & 0o777, 0o600)
@@ -424,7 +433,7 @@ test('createControlPlane.start() seeds the host package and materializes the ove
   }
 })
 
-test('createControlPlane.start() seeds both host packages behind one merged overlay', async t => {
+test('createControlPlane.startLocal() seeds both host packages behind one merged overlay', async t => {
   const dir = tempDir(t)
   const graphSource = stageSource(t, 'export const graph = 1\n')
   const gitSource = tempDir(t)
@@ -438,9 +447,11 @@ test('createControlPlane.start() seeds both host packages behind one merged over
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: gitSource,
     logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
+    await plane.startLocal()
     assert.equal(readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8'), EXPECTED_BOTH_OVERLAY)
     assert.equal(
       readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
@@ -451,7 +462,7 @@ test('createControlPlane.start() seeds both host packages behind one merged over
   }
 })
 
-test('createControlPlane.start() reuses an exact user profile row without a duplicate overlay', async t => {
+test('createControlPlane.startLocal() reuses an exact user profile row without a duplicate overlay', async t => {
   const dir = tempDir(t)
   const source = stageSource(t, 'export const graph = 1\n')
   const profileDir = join(dir, 'dsh-home', 'profiles', 'web')
@@ -464,9 +475,11 @@ test('createControlPlane.start() reuses an exact user profile row without a dupl
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
+    await plane.startLocal()
     assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false)
     assert.equal(
       readFileSync(join(seedTarget(join(dir, 'dsh-home')), 'dist', 'index.js'), 'utf8'),
@@ -477,7 +490,7 @@ test('createControlPlane.start() reuses an exact user profile row without a dupl
   }
 })
 
-test('createControlPlane.start() rejects a profile loader collision before package writes', async t => {
+test('createControlPlane.startLocal() rejects a profile loader collision before package writes', async t => {
   const dir = tempDir(t)
   const source = stageSource(t, 'export const graph = 1\n')
   const profileDir = join(dir, 'dsh-home', 'profiles', 'web')
@@ -490,13 +503,18 @@ test('createControlPlane.start() rejects a profile loader collision before packa
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
   })
-  await assert.rejects(() => plane.start(), /already bound to a different package/)
-  assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false)
-  await plane.stop()
+  try {
+    await plane.start()
+    await assert.rejects(() => plane.startLocal(), /already bound to a different package/)
+    assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false)
+  } finally {
+    await plane.stop()
+  }
 })
 
-test('createControlPlane.start() keeps the v4 baseline when dist/index.js is absent', async t => {
+test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js is absent', async t => {
   const dir = tempDir(t)
   // A fake source dir that EXISTS but has no built artifact — the gate is the
   // artifact, not the directory: an unbuilt module A must behave exactly like
@@ -510,9 +528,11 @@ test('createControlPlane.start() keeps the v4 baseline when dist/index.js is abs
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
+    await plane.startLocal()
     assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false)
     assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false)
   } finally {

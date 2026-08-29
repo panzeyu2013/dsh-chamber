@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/desktop",
-  "version": "0.1.5",
+  "version": "0.2.0-beta.3",
   "type": "module",
   "main": "main.ts",
   "scripts": {
@@ -9,15 +9,18 @@
     "build:control-plane": "node scripts/build-control-plane.mjs",
     "build:host-graph-package": "node scripts/build-host-graph-package.mjs",
     "build:preload": "node scripts/build-preload.mjs",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win --x64"
+    "dist": "node ./node_modules/electron-builder/cli.js",
+    "dist:mac": "node ./node_modules/electron-builder/cli.js --mac",
+    "dist:win": "node ./node_modules/electron-builder/cli.js --win --x64"
   },
   "dependencies": {
     "@dsh-chamber/control-plane": "workspace:^",
-    "electron-updater": "^6.8.9"
+    "@dsh-chamber/dsh-runtime": "workspace:^",
+    "electron-updater": "^6.8.9",
+    "pnpm": "11.21.0"
   },
   "devDependencies": {
+    "@electron/asar": "^3.2.1",
     "electron": "43.4.0",
     "electron-builder": "^26.0.12"
   },
@@ -39,6 +42,7 @@
     "files": [
       "*.ts",
       "*.cts",
+      "*.mjs",
       "!*.test.ts",
       "dist/**/*",
       "package.json",
@@ -47,6 +51,30 @@
       "!vendor/**",
       "!scripts/**",
       "!README.md"
+    ],
+    "asarUnpack": [
+      "sanitize-error.ts",
+      "registry-url.ts",
+      "registry-integrity.ts",
+      "registry-metadata.ts",
+      "version-safety.ts",
+      "dsh-runtime-updater.ts",
+      "runtime-installer.ts",
+      "dsh-runtime-controller.ts",
+      "dsh-runtime-store.ts",
+      "runtime-startup.ts",
+      "runtime-probes.ts",
+      "restart-exhausted-rollback.ts",
+      "runtime-operation-fence.ts",
+      "runtime-metadata-recovery.ts",
+      "activation-gate.ts",
+      "override-lifecycle.ts",
+      "snapshot-store.ts",
+      "apply-phase.ts",
+      "runtime-state-machine.ts",
+      "known-good-monitor.ts",
+      "allow-builds.mjs",
+      "prune-runtime.mjs"
     ],
     "extraResources": [
       {
@@ -66,13 +94,20 @@
         ]
       },
       {
+        "from": "node_modules/pnpm",
+        "to": "pnpm",
+        "filter": [
+          "package.json",
+          "bin/pnpm.cjs",
+          "bin/pnpm.mjs",
+          "dist/**/*"
+        ]
+      },
+      {
         "from": "resources/icon.png",
         "to": "icon.png"
       }
     ],
-    "electronDownload": {
-      "mirror": "https://npmmirror.com/mirrors/electron/"
-    },
     "electronLanguages": [
       "en-US",
       "zh-CN"
@@ -80,6 +115,8 @@
     "mac": {
       "icon": "resources/icon.icns",
       "notarize": true,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
       "extendInfo": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
@@ -127,6 +164,7 @@
       "target": [
         "dir"
       ]
-    }
+    },
+    "beforePack": "./scripts/before-pack.mjs"
   }
 }

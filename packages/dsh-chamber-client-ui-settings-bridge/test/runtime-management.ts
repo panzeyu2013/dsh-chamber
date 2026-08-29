@@ -1,0 +1,575 @@
+/**
+ * Design 18 runtime renderer policy tests: full state/action/copy matrix,
+ * SemVer 2.0 precedence, local-spawn applying gate, and the page-wide bridge
+ * subscription/hydration race.
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  deriveRuntimeSource,
+  runtimeSectionIntentionallyAbsent,
+  runtimeServerProjectionKey,
+  runtimeSshHostId,
+} from '../src/client/runtime-source.ts'
+import { pollGatewayReady } from '../src/client/gateway-runtime-poll.ts'
+import {
+  RuntimeStateStore,
+  compareSemver,
+  formatRuntimeBytes,
+  preferredRuntimeVersion,
+  projectRuntimeSnapshot,
+  projectRuntimeStatus,
+  runtimeAllowedActions,
+  runtimeBlocksLocalStart,
+  runtimeRestartAllowed,
+  runtimeSelectionDirection,
+  type RuntimePhase,
+  type RuntimeState,
+  type RuntimeSurface,
+} from '../../renderer/src/runtime-management.ts'
+
+function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}): RuntimeState {
+  return {
+    active: '1.0.0',
+    bundled: '1.0.0',
+    source: 'bundled',
+    latest: '1.1.0',
+    versions: [{ version: '1.1.0', latest: true, cached: false, belowBaseline: false }],
+    pending: null,
+    phase,
+    error: null,
+    ...overrides,
+  }
+}
+
+test('runtime action matrix covers every design-18 phase and keeps busy/terminal gates strict', () => {
+  const expected: Record<RuntimePhase, readonly string[]> = {
+    idle: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+    checking: [],
+    available: ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+    downloading: [],
+    installing: [],
+    pending: ['reset-builtin'],
+    applying: ['reset-builtin'],
+    applied: ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+    rollback: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+    'snapshot-failed': ['reset-builtin'],
+    failed: ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+    error: ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'],
+  }
+  for (const [phase, actions] of Object.entries(expected) as [RuntimePhase, readonly string[]][]) {
+    assert.deepEqual(runtimeAllowedActions(runtimeState(phase)), actions, phase)
+  }
+})
+
+
+test('pollGatewayReady resolves on ready, times out honestly, and honours abort', async () => {
+  let calls = 0
+  const readyFetch = (async () => {
+    calls += 1
+    return { status: 200, json: async () => ({ connectionState: calls >= 2 ? 'ready' : 'starting' }) }
+  }) as unknown as typeof fetch
+  await pollGatewayReady('gateway-x', undefined, { fetchImpl: readyFetch, pollIntervalMs: 0, timeoutMs: 5_000 })
+  assert.equal(calls, 2, 'polls until ready')
+
+  const stuckFetch = (async () => ({ status: 500, json: async () => ({}) })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: stuckFetch, pollIntervalMs: 0, timeoutMs: 10 }),
+    /did not reach ready/,
+  )
+
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(
+    pollGatewayReady('gateway-x', controller.signal, { fetchImpl: readyFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    /cancelled/,
+  )
+
+  // R7: a failed restart must be distinguishable from a slow one — the poll
+  // surfaces terminal failure states with the gateway's operationError.
+  const failedFetch = (async () => ({
+    status: 200,
+    json: async () => ({ connectionState: 'restart-exhausted', operationError: 'spawn denied' }),
+  })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: failedFetch, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    /restart failed: spawn denied/,
+  )
+})
+
+test('pollGatewayReady fails fast on auth/support config errors instead of blind-polling', async () => {
+  // 401: gateway token invalid/missing through the desktop gateway transport.
+  const unauthorized = (async () => ({ status: 401, json: async () => ({}) })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: unauthorized, pollIntervalMs: 0, timeoutMs: 90_000 }),
+    /restart failed: unauthorized \(401\)/,
+  )
+  // 404: the gateway predates the /chamber/runtime surface.
+  const unsupported = (async () => ({ status: 404, json: async () => ({}) })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: unsupported, pollIntervalMs: 0, timeoutMs: 90_000 }),
+    /restart failed: gateway does not expose \/chamber\/runtime \(404\)/,
+  )
+  // Transient 5xx during the down-window still keeps polling.
+  let calls = 0
+  const transient = (async () => {
+    calls += 1
+    if (calls < 3) return { status: 502, json: async () => ({}) }
+    return { status: 200, json: async () => ({ connectionState: 'ready', restart: 'ok' }) }
+  }) as unknown as typeof fetch
+  await pollGatewayReady('gateway-x', undefined, { fetchImpl: transient, pollIntervalMs: 0, timeoutMs: 5_000 })
+  assert.equal(calls, 3, '5xx tolerated until ready')
+})
+
+test('pollGatewayReady: a post-202 entry rejection (restart:failed + ready connectionState) is a failure, not success', async () => {
+  // The gateway manager records restart:'failed' + operationError when
+  // plane.restartLocal() rejects at its entry checks after the route already
+  // answered 202; connectionState can still read 'ready' at that point.
+  const entryRejected = (async () => ({
+    status: 200,
+    json: async () => ({ connectionState: 'ready', operationError: 'restart-exhausted: recover with start()', restart: 'failed' }),
+  })) as unknown as typeof fetch
+  await assert.rejects(
+    pollGatewayReady('gateway-x', undefined, { fetchImpl: entryRejected, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    /restart failed: restart-exhausted: recover with start\(\)/,
+  )
+  // And restart:'ok' resolves even when the connectionState projection lags.
+  const okFetch = (async () => ({
+    status: 200,
+    json: async () => ({ connectionState: 'starting', restart: 'ok' }),
+  })) as unknown as typeof fetch
+  await pollGatewayReady('gateway-x', undefined, { fetchImpl: okFetch, pollIntervalMs: 0, timeoutMs: 5_000 })
+})
+
+test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported restart:ok', async () => {
+  // Round-3 ordering regression: the terminal-state check must run BEFORE the
+  // restart:'ok' resolve — resolve ≠ success (restartLocal also resolves from
+  // restart-exhausted/error/stopped). A future reordering would fail here.
+  for (const terminal of ['restart-exhausted', 'error', 'stopped'] as const) {
+    const fetchImpl = (async () => ({
+      status: 200,
+      json: async () => ({ connectionState: terminal, operationError: `landed ${terminal}`, restart: 'ok' }),
+    })) as unknown as typeof fetch
+    await assert.rejects(
+      pollGatewayReady('gateway-x', undefined, { fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 }),
+      new RegExp(`restart failed: landed ${terminal}`),
+      `${terminal} must outrank restart:ok`,
+    )
+  }
+})
+
+test('per-server source derivation uses target kind × transport, not id prefixes', () => {
+  assert.equal(deriveRuntimeSource({ id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'local' }), 'local')
+  assert.equal(deriveRuntimeSource({ id: 'gateway-inst-7', sourceFingerprint: 'proof:inst-7', kind: 'gateway', transport: 'http', rawId: 'inst-7' }), 'gateway')
+  assert.equal(deriveRuntimeSource({ id: 'gateway-tunnel', sourceFingerprint: 'proof:tunnel', kind: 'gateway', transport: 'ssh', rawId: 'tunnel' }), 'gateway')
+  assert.equal(deriveRuntimeSource({ id: 'ssh-inst-3', sourceFingerprint: 'proof:inst-3', kind: 'dsh', transport: 'ssh', rawId: 'inst-3' }), 'ssh')
+  assert.equal(deriveRuntimeSource({ id: 'dsh-inst-9', sourceFingerprint: 'proof:inst-9', kind: 'dsh', transport: 'ssh', rawId: 'inst-9' }), 'ssh')
+  const direct = { id: 'dsh-direct', sourceFingerprint: 'proof:direct', kind: 'dsh' as const, transport: 'http' as const, rawId: 'direct' }
+  assert.equal(deriveRuntimeSource(direct), null)
+  assert.equal(runtimeSectionIntentionallyAbsent(direct), true)
+  assert.equal(deriveRuntimeSource({ id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'ssh' }), null)
+  assert.equal(runtimeSectionIntentionallyAbsent({ id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'ssh' }), false)
+  assert.equal(deriveRuntimeSource(undefined), null)
+})
+
+test('ssh restart host id uses explicit raw identity with exact canonical/legacy fallback', () => {
+  assert.equal(runtimeSshHostId({ id: 'dsh-east', sourceFingerprint: 'proof:east', kind: 'dsh', transport: 'ssh', rawId: 'east' }), 'east')
+  assert.equal(runtimeSshHostId({ id: 'ssh-legacy', sourceFingerprint: 'proof:legacy', kind: 'dsh', transport: 'ssh', rawId: 'legacy' }), 'legacy')
+  assert.equal(runtimeSshHostId({ id: 'dsh-east', sourceFingerprint: 'proof:east', kind: 'dsh', transport: 'ssh' }), 'east')
+  assert.equal(runtimeSshHostId({ id: 'ssh-legacy', sourceFingerprint: 'proof:legacy', kind: 'dsh', transport: 'ssh' }), 'legacy')
+  assert.equal(runtimeSshHostId({ id: 'dsh-east', sourceFingerprint: 'proof:east', kind: 'dsh', transport: 'ssh', rawId: 'west' }), null)
+  assert.equal(runtimeSshHostId({ id: 'gateway-east', sourceFingerprint: 'proof:east', kind: 'gateway', transport: 'ssh', rawId: 'east' }), null)
+})
+
+test('runtime projection identity tracks transport, raw host id and live version', () => {
+  const base = { id: 'dsh-east', sourceFingerprint: 'proof:east:a', kind: 'dsh' as const, transport: 'ssh' as const, rawId: 'east' }
+  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, sourceFingerprint: 'proof:east:b' }))
+  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, transport: 'http' }))
+  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, rawId: 'west' }))
+  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, dshVersion: '1.2.3' }))
+})
+
+test('restart-dsh gate (design 18 §3.6 项 8): allowed in non-busy phases, blocked while applying/busy/blocked', () => {
+  assert.equal(runtimeRestartAllowed(runtimeState('idle')), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('available')), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('failed')), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('applying')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('checking')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('downloading')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('installing')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('pending')), false)
+  assert.equal(runtimeRestartAllowed(runtimeState('idle', { runtimeBlocked: true })), false)
+  assert.equal(runtimeRestartAllowed(null), false)
+})
+
+test('reset-builtin stays visible on error/failed/rollback/applied only when an override exists', () => {
+  const withOverride = (phase: RuntimePhase, overrides: Partial<RuntimeState> = {}) =>
+    runtimeAllowedActions(runtimeState(phase, { hasOverride: true, source: 'user', ...overrides }))
+  assert.deepEqual(withOverride('error'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
+  assert.deepEqual(withOverride('failed'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
+  assert.deepEqual(withOverride('rollback'), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
+  assert.deepEqual(withOverride('applied'), ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'])
+  // A clean bundled install without any override must not show a no-op reset
+  // (main rejects reset-builtin unless hasOverride — the button would be dead).
+  assert.deepEqual(runtimeAllowedActions(runtimeState('error', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', { hasOverride: false })), ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'restart-dsh'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('applied', { hasOverride: false })), ['check', 'select-version', 'install', 'cleanup-version', 'restart-dsh'])
+})
+
+test('retry actions require explicit capabilities and never pierce pending/applying gates', () => {
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('snapshot-failed', { canRetryApply: true })),
+    ['retry-apply', 'reset-builtin'],
+  )
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('failed', { canRetryRestore: true, restoreOutcome: 'incomplete', hasOverride: true, source: 'user' })),
+    ['retry-restore', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
+  )
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('failed', { canRetryApply: true, hasOverride: true, source: 'user' })),
+    ['retry-apply', 'check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
+  )
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('applying', { canRetryApply: true, canRetryRestore: true })),
+    ['reset-builtin'],
+  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('idle', { source: 'env' })), ['check'])
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('failed', { source: 'env', canRetryRestore: true })),
+    ['retry-restore', 'check'],
+    'env source still exposes the mandatory interrupted-data recovery action',
+  )
+  assert.equal(
+    runtimeAllowedActions(runtimeState('idle', { canRetryRestore: true })).includes('retry-restore'),
+    false,
+    'a stale capability bit cannot expose restore outside rollback/failed',
+  )
+})
+
+test('authoritative runtimeBlocked state hides actions main will reject', () => {
+  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', {
+    runtimeBlocked: true,
+    runtimeBlockedReason: 'journal corrupt',
+  })), [])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('failed', {
+    runtimeBlocked: true,
+    canRetryRestore: true,
+  })), ['retry-restore'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('applying', {
+    source: 'user', hasOverride: true, runtimeBlocked: true,
+  })), ['reset-builtin'])
+})
+
+test('metadata recovery is the sole blocked action and restore retry has priority', () => {
+  const corrupt = runtimeState('failed', {
+    runtimeBlocked: true,
+    metadataHealth: 'selection-corrupt',
+    metadataComponents: ['current', 'retained-evidence'],
+    canRecoverMetadata: true,
+  })
+  assert.deepEqual(runtimeAllowedActions(corrupt), ['recover-metadata'])
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    canRetryRestore: true,
+    restoreOutcome: 'half',
+  }), ['retry-restore'], 'restore-half must finish before metadata archival')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    canRetryRestore: true,
+    restoreOutcome: 'incomplete',
+  }), ['retry-restore', 'recover-metadata'], 'permanent incomplete restore keeps retry and adds the terminal metadata recovery escape')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    canRetryRestore: true,
+    restoreOutcome: 'incomplete',
+    metadataHealth: 'healthy',
+  }), ['retry-restore'], 'incomplete restore without recoverable metadata keeps only the retry action')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    metadataHealth: 'healthy',
+  }), [], 'a forged capability bit cannot manufacture corrupt metadata')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    source: 'env',
+  }), [], 'env-selected runtime never exposes managed metadata mutation')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    managementSupported: false,
+  }), [], 'unsupported platforms remain read-only')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    metadataHealth: 'recovery-in-progress',
+  }), ['recover-metadata'], 'probe failure keeps the durable transaction retryable')
+  assert.deepEqual(runtimeAllowedActions({
+    ...corrupt,
+    metadataHealth: 'recovery-marker-corrupt',
+  }), ['recover-metadata'], 'a safely inspectable corrupt marker exposes only explicit second-order recovery')
+  assert.equal(runtimeAllowedActions(runtimeState('idle', {
+    runtimeBlocked: false,
+    metadataHealth: 'recovery-finalized',
+    canRecoverMetadata: false,
+  })).includes('recover-metadata'), false, 'probe success/finalization removes the recovery action')
+})
+
+test('unsupported platform is read-only except for mandatory interrupted restore recovery', () => {
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('available', { managementSupported: false })),
+    [],
+  )
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('failed', {
+      source: 'env',
+      managementSupported: false,
+      canRetryApply: true,
+      canRetryRestore: true,
+      restoreOutcome: 'incomplete',
+    })),
+    ['retry-restore'],
+  )
+})
+
+test('version selection prefers latest initially and preserves an explicit choice', () => {
+  const versions = [
+    { version: '1.0.0', latest: false, cached: true, belowBaseline: false },
+    { version: '1.2.0', latest: true, cached: false, belowBaseline: false },
+    { version: '0.9.0', latest: false, cached: true, belowBaseline: true },
+  ]
+  assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', '1.0.0'), '1.2.0')
+  assert.equal(preferredRuntimeVersion('0.9.0', versions, '1.2.0', '1.0.0'), '0.9.0')
+  assert.equal(preferredRuntimeVersion('gone', versions, '1.2.0', '1.0.0'), '1.2.0')
+  assert.equal(preferredRuntimeVersion(null, versions, null, '1.0.0'), '1.0.0')
+  assert.equal(preferredRuntimeVersion(null, versions, null, null), '1.0.0')
+})
+
+test('an unknown active runtime is labeled as a forward install, never rollback', () => {
+  assert.equal(runtimeSelectionDirection('1.2.0', null), 'upgrade')
+  assert.equal(runtimeSelectionDirection('1.2.0', '1.2.0'), 'current')
+  assert.equal(runtimeSelectionDirection('1.1.0', '1.2.0'), 'rollback')
+})
+
+test('active user override keeps the restore-builtin exit after periodic checks settle', () => {
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('idle', { source: 'user', hasOverride: true })),
+    ['check', 'restore-pre-rollback', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
+  )
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('available', { source: 'user', hasOverride: true })),
+    ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'],
+  )
+})
+
+test('status and snapshot projections distinguish complete, half and incomplete restore outcomes', () => {
+  const complete = runtimeState('rollback', { rollbackTarget: '0.9.0', restoreOutcome: 'complete' })
+  assert.deepEqual(projectRuntimeStatus(complete), {
+    kind: 'rollback-complete', version: '0.9.0', detail: null,
+  })
+
+  const half = runtimeState('rollback', { rollbackTarget: '0.9.0', restoreOutcome: 'half', error: 'copy failed' })
+  assert.deepEqual(projectRuntimeStatus(half), {
+    kind: 'rollback-half', version: '0.9.0', detail: 'copy failed',
+  })
+  assert.equal(projectRuntimeSnapshot(half).kind, 'restore-half')
+
+  const incomplete = runtimeState('failed', { restoreOutcome: 'incomplete', error: 'snapshot missing' })
+  assert.equal(projectRuntimeStatus(incomplete).kind, 'restore-incomplete')
+  assert.equal(projectRuntimeSnapshot(incomplete).kind, 'restore-incomplete')
+
+  const snapshotFailed = runtimeState('snapshot-failed', {
+    targetVersion: '1.1.0', snapshotError: 'ENOSPC', canRetryApply: true,
+  })
+  assert.deepEqual(projectRuntimeStatus(snapshotFailed), {
+    kind: 'snapshot-failed', version: '1.1.0', detail: 'ENOSPC',
+  })
+  assert.equal(projectRuntimeSnapshot(snapshotFailed).kind, 'failed')
+
+  const swapAttempted = runtimeState('failed', {
+    targetVersion: '1.1.0', swapAttempted: true, error: 'pointer rename denied',
+  })
+  assert.deepEqual(projectRuntimeStatus(swapAttempted), {
+    kind: 'swap-attempted', version: '1.1.0', detail: 'pointer rename denied',
+  })
+  assert.equal(
+    projectRuntimeStatus(runtimeState('checking', { swapAttempted: true })).kind,
+    'checking',
+    'historical swap state must not mask a later live operation',
+  )
+})
+
+test('status projection covers all phases without silently calling an unknown phase idle', () => {
+  const expected: Record<RuntimePhase, string> = {
+    idle: 'idle',
+    checking: 'checking',
+    available: 'available',
+    downloading: 'downloading',
+    installing: 'installing',
+    pending: 'pending',
+    applying: 'applying',
+    applied: 'applied',
+    rollback: 'rollback',
+    'snapshot-failed': 'snapshot-failed',
+    failed: 'failed',
+    error: 'error',
+  }
+  for (const [phase, kind] of Object.entries(expected) as [RuntimePhase, string][]) {
+    assert.equal(projectRuntimeStatus(runtimeState(phase)).kind, kind, phase)
+  }
+  assert.equal(
+    projectRuntimeStatus(runtimeState('idle', { latest: null })).kind,
+    'not-checked',
+    'cached versions before a successful registry read do not mean up to date',
+  )
+})
+
+test('SemVer comparison follows numeric/alphanumeric prerelease rules and ignores build metadata', () => {
+  assert.equal(compareSemver('1.0.0', '1.0.0-rc.1'), 1)
+  assert.equal(compareSemver('1.0.0-1', '1.0.0-alpha'), -1, 'numeric prerelease sorts before text')
+  assert.equal(compareSemver('1.0.0-alpha.1', '1.0.0-alpha.beta'), -1)
+  assert.equal(compareSemver('1.0.0-alpha', '1.0.0-alpha.1'), -1)
+  assert.equal(compareSemver('1.0.0+build.1', '1.0.0+build.99'), 0)
+  assert.equal(compareSemver('999999999999999999999.0.0', '2.0.0'), 1, 'no Number precision loss')
+  assert.equal(compareSemver('01.0.0', '1.0.0'), null)
+})
+
+test('runtime byte formatter is bounded and uses binary units', () => {
+  assert.equal(formatRuntimeBytes(0), '0 B')
+  assert.equal(formatRuntimeBytes(1024), '1.0 KiB')
+  assert.equal(formatRuntimeBytes(10 * 1024 ** 3), '10 GiB')
+  assert.equal(formatRuntimeBytes(-1), '—')
+})
+
+test('local start follows the authoritative runtime gate plus unsafe restore phases', () => {
+  assert.equal(runtimeBlocksLocalStart(null, false), false, 'web/no-runtime surface stays usable')
+  assert.equal(runtimeBlocksLocalStart(null, true), true, 'desktop bridge hydration is fail-closed')
+  assert.equal(runtimeBlocksLocalStart(runtimeState('applying'), true), true)
+  assert.equal(runtimeBlocksLocalStart(runtimeState('pending'), true), false)
+  assert.equal(runtimeBlocksLocalStart(runtimeState('failed'), true), false)
+  assert.equal(runtimeBlocksLocalStart(runtimeState('failed', { runtimeBlocked: true }), true), true)
+  assert.equal(runtimeBlocksLocalStart(runtimeState('failed', { canRetryRestore: true }), true), true)
+  assert.equal(runtimeBlocksLocalStart(runtimeState('rollback', { restoreOutcome: 'half' }), true), true)
+})
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+function surfaceHarness(initial: Promise<RuntimeState>) {
+  let push: ((state: RuntimeState) => void) | null = null
+  let subscriptions = 0
+  let unsubscriptions = 0
+  const surface: RuntimeSurface = {
+    state: () => initial,
+    check: async () => runtimeState('idle'),
+    install: async () => runtimeState('pending'),
+    resetBuiltin: async () => runtimeState('idle'),
+    retryApply: async () => runtimeState('applying'),
+    retryRestore: async () => runtimeState('rollback'),
+    recoverMetadata: async () => runtimeState('applying'),
+    restorePreRollback: async () => runtimeState('idle'),
+    cleanupVersion: async () => runtimeState('idle'),
+    restart: async () => runtimeState('idle'),
+    onChanged: (callback) => {
+      subscriptions += 1
+      push = callback
+      return () => {
+        unsubscriptions += 1
+        push = null
+      }
+    },
+  }
+  return {
+    surface,
+    push: (state: RuntimeState) => push?.(state),
+    counts: () => ({ subscriptions, unsubscriptions }),
+  }
+}
+
+test('runtime store subscribes once, push wins a stale hydration query, and last unsubscribe detaches', async () => {
+  const initial = deferred<RuntimeState>()
+  const harness = surfaceHarness(initial.promise)
+  const store = new RuntimeStateStore({ resolveSurface: () => harness.surface })
+  let notifications = 0
+  const offA = store.subscribe(() => { notifications += 1 })
+  const offB = store.subscribe(() => { notifications += 1 })
+  assert.deepEqual(harness.counts(), { subscriptions: 1, unsubscriptions: 0 })
+
+  const pushed = runtimeState('applying', { targetVersion: '1.1.0' })
+  harness.push(pushed)
+  initial.resolve(runtimeState('idle'))
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(store.getSnapshot(), pushed, 'late state() result must not overwrite a newer push')
+  assert.equal(notifications, 2, 'one push notifies both React subscribers once')
+
+  offA()
+  assert.deepEqual(harness.counts(), { subscriptions: 1, unsubscriptions: 0 })
+  offB()
+  assert.deepEqual(harness.counts(), { subscriptions: 1, unsubscriptions: 1 })
+  assert.equal(store.getSnapshot(), null, 'remount cannot render a stale terminal snapshot')
+})
+
+test('runtime store ignores hydration that resolves after its subscriber unmounts', async () => {
+  const initial = deferred<RuntimeState>()
+  const harness = surfaceHarness(initial.promise)
+  const store = new RuntimeStateStore({ resolveSurface: () => harness.surface })
+  let notifications = 0
+  const off = store.subscribe(() => { notifications += 1 })
+  off()
+  initial.resolve(runtimeState('applied'))
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(store.getSnapshot(), null)
+  assert.equal(notifications, 0)
+  assert.deepEqual(harness.counts(), { subscriptions: 1, unsubscriptions: 1 })
+})
+
+test('runtime store tears down and retries after a transient hydration failure', async () => {
+  const scheduled: Array<() => void> = []
+  let stateCalls = 0
+  let subscriptions = 0
+  let unsubscriptions = 0
+  const surface: RuntimeSurface = {
+    state: () => {
+      stateCalls += 1
+      return stateCalls === 1
+        ? Promise.reject(new Error('transient IPC failure'))
+        : Promise.resolve(runtimeState('idle'))
+    },
+    check: async () => runtimeState('idle'),
+    install: async () => runtimeState('pending'),
+    resetBuiltin: async () => runtimeState('idle'),
+    retryApply: async () => runtimeState('applying'),
+    retryRestore: async () => runtimeState('rollback'),
+    recoverMetadata: async () => runtimeState('applying'),
+    restorePreRollback: async () => runtimeState('idle'),
+    cleanupVersion: async () => runtimeState('idle'),
+    restart: async () => runtimeState('idle'),
+    onChanged: () => {
+      subscriptions += 1
+      return () => { unsubscriptions += 1 }
+    },
+  }
+  const store = new RuntimeStateStore({
+    resolveSurface: () => surface,
+    schedule: (callback) => {
+      scheduled.push(callback)
+      return 1 as unknown as ReturnType<typeof setTimeout>
+    },
+    cancel: () => {},
+    retryAttempts: 2,
+  })
+  const off = store.subscribe(() => {})
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(scheduled.length, 1)
+  assert.deepEqual({ subscriptions, unsubscriptions }, { subscriptions: 1, unsubscriptions: 1 })
+
+  scheduled.shift()?.()
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(store.getSnapshot()?.phase, 'idle')
+  assert.deepEqual({ subscriptions, unsubscriptions }, { subscriptions: 2, unsubscriptions: 1 })
+  off()
+  assert.equal(unsubscriptions, 2)
+})

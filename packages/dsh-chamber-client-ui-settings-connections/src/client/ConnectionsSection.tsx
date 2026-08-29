@@ -1,9 +1,9 @@
 /**
  * Connections settings section (design 05 §5): the local instance card —
  * /health status, the /api/connections row, graceful stop behind a confirm,
- * and the host rolling log — beside the remote host roster: registry CRUD
- * (non-secret metadata only), connect/disconnect over the tunnel IPC, and
- * on-demand systemd control plus the ring-buffer logs.
+ * and the host rolling log — beside the remote connection roster: registry
+ * CRUD (non-secret metadata only), connect/disconnect over the transport IPC,
+ * and SSH-only systemd control plus the ring-buffer logs.
  *
  * Everything rides page-level surfaces: window.dshChamber.desktopSsh (IPC,
  * 05 §7.4) and the control-plane REST client (05 §7.2). No host frames and
@@ -13,10 +13,13 @@
  * mirrors it to an owner-readable file (plaintext-file fallback, user
  * decision 2026-08) so auto-connect works after restart — the form itself
  * never logs it, and the field is never prefilled (the stored value never
- * returns to the renderer).
+ * returns to the renderer). Gateway credentials follow the same write-only
+ * renderer contract — the shared token (design 17 §7.2) and the login
+ * password (§7.1) — stored in a separate owner-readable main-process mirror;
+ * they are never placed in the registry or returned by IPC.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
@@ -37,25 +40,37 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {
-  DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceInput, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection,
+  DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection, TransportKind, TransportMethod,
 } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
-import { saveHostWithPassword } from './save-host.ts'
+import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 import {
-  INSTANCE_ID_PATTERN,
-  MAX_INSTANCE_LABEL_CHARS,
-  MAX_REMOTE_DSH_HOME_CHARS,
-  MAX_SERVICE_NAME_CHARS,
-  MAX_SSH_HOST_CHARS,
-  MAX_SSH_PASSWORD_CHARS,
-  MAX_SSH_USER_CHARS,
-  REMOTE_DSH_HOME_PATTERN,
+  changeDraftEndpointUrl,
+  changeDraftKind,
+  changeDraftTransport,
+  draftFromSpec,
+  draftToInput,
+  EMPTY_DRAFT,
   SERVICE_NAME_PATTERN,
-  SSH_HOST_PATTERN,
-  SSH_USER_PATTERN,
-} from './host-validation.ts'
+  spkiPinEligible,
+  spkiPinValidationError,
+  TRANSPORT_FORM_OPTIONS,
+  transportFormSchema,
+  type HostDraft,
+} from './connection-form.ts'
+import {
+  credentialReentryFor,
+  gatewayPasswordValidationError,
+  saveHostWithConnectionCredentials,
+} from './save-host.ts'
+import {
+  currentRuntimeSurface,
+  getRuntimeState,
+  runtimeBlocksLocalStart,
+  subscribeRuntimeState,
+} from '../../../../packages/renderer/src/runtime-management.ts'
 import css from './ConnectionsSection.module.css'
 
 /** Registration-side business face for the connections section. */
@@ -63,7 +78,6 @@ export interface ConnectionsSectionInjected {
   /** Bound translate over the section's own dictionary namespace. */
   t: (key: SettingsConnectionsKey) => string
 }
-
 /**
  * Client-plugin runtime-loading diagnostic for one instance (design 09),
  * projected from the renderer chamberBridge aggregate. The connections page
@@ -82,42 +96,41 @@ export type ConnectionsSectionProps =
   & PropsLocale<'dsh-chamber.settings.connections'>
   & InjectFace<ConnectionsSectionInjected>
   & {
-    /** Per-instance diagnostics keyed by source id ('local' | 'ssh-<id>'); optional (absent outside the chamber shell). */
+    /** Per-instance diagnostics keyed by source id ('local' | '<kind>-<id>'); optional outside the chamber shell. */
     pluginDiagnostics?: Readonly<Record<string, PluginDiagnostic | undefined>>
   }
 
 /** Host-log page size (04 §3.3: default 200, cap 1000). */
 const HOST_LOG_LIMIT = 200
+const MIN_GATEWAY_TOKEN_CHARS = 32
 
 /** Local-card connection-row poll cadence: 状态由 /api/host/health-events
  * 推送（05 §3），此处只兜底行字段（label/dshPort）与流异常收敛。 */
 const LOCAL_ROW_POLL_MS = 30_000
 
-/**
- * The add/edit form draft; every field starts as text (ports validated on
- * save). sshPort empty = ssh default (port 22 or the host's ~/.ssh/config
- * Port); remotePort is the remote dsh web profile port on 127.0.0.1.
- * `password` (design 05 §8) is NEVER sent to the registry (instances_set is
- * metadata-only) — it is forwarded to the main process over set_password,
- * held in memory there, and never prefilled on edit.
- */
-interface HostDraft {
-  id: string
-  label: string
-  host: string
-  user: string
-  sshPort: string
-  remotePort: string
-  serviceName: string
-  remoteDshHome: string
-  password: string
-}
-
-const EMPTY_DRAFT: HostDraft = { id: '', label: '', host: '', user: '', sshPort: '', remotePort: '30800', serviceName: '', remoteDshHome: '', password: '' }
-
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
 function slugifyAlias(alias: string): string {
   return alias.toLowerCase().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+function credentialReentryEdit(editing: SshInstanceSpec | 'new' | null, value: HostDraft): { sshPassword: boolean; gatewayToken: boolean; gatewayPassword: boolean } {
+  if (editing === null || editing === 'new') return { sshPassword: false, gatewayToken: false, gatewayPassword: false }
+  if (value.transport === 'http' && !parseGatewayUrl(value.gatewayUrl).ok) {
+    return { sshPassword: false, gatewayToken: false, gatewayPassword: false }
+  }
+  return credentialReentryFor(editing, draftToInput(value))
+}
+
+/** Localize a URL-parse failure — shared by validation and the defensive
+ *  save-time re-check (P3-3) so both report the same loud error. */
+function gatewayUrlErrorText(parsed: Extract<ReturnType<typeof parseGatewayUrl>, { ok: false }>, t: (key: SettingsConnectionsKey) => string): string {
+  return parsed.error === 'required'
+    ? t('validationDirectUrlRequired')
+    : parsed.error === 'https'
+      ? t('validationDirectUrlHttps')
+      : parsed.error === 'host'
+        ? t('validationDirectUrlHost')
+        : t('validationDirectUrlOrigin')
 }
 
 function errorMessage(error: unknown): string {
@@ -193,12 +206,150 @@ function PluginDiagnosticLine({ diagnostic, t }: {
 }
 
 /**
+ * The gateway authentication area (design 17 §7): BOTH write-only credentials
+ * — the shared token (§7.2) and the login password (§7.1) — each optional and
+ * independently committable. The hint copy distinguishes the three states
+ * (P3-1): NEW = "both empty sends the request without auth"; plain EDIT =
+ * "leave empty keeps the stored credential"; TARGET-CHANGED edit = "the old
+ * credential is cleared, re-enter" — the last also carries the top-of-form
+ * warning and a required-credential validation (P2). The explicit clear
+ * button is the wipe path for plain edits. Rendered once for every gateway
+ * transport (http direct and ssh tunnel).
+ */
+function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChanged, onClearToken, onClearPassword, t }: {
+  draft: HostDraft
+  onChange: (patch: Partial<HostDraft>) => void
+  fieldErrors: Partial<Record<keyof HostDraft, string>>
+  editing: SshInstanceSpec | 'new' | null
+  /** True while editing a row whose transport target changed (P2/P3-1). */
+  targetChanged: boolean
+  onClearToken: () => void
+  onClearPassword: () => void
+  t: (key: SettingsConnectionsKey) => string
+}): ReactNode {
+  // Stored credentials never return to the renderer — clearing goes straight
+  // to the main process. The button only exists while EDITING a registry
+  // gateway row (a new row has nothing stored yet).
+  const canClear = editing !== null && editing !== 'new' && editing.kind === 'gateway'
+  const hint = editing === null || editing === 'new'
+    ? t('gatewayCredentialsHintAdd')
+    : targetChanged
+      ? t('gatewayCredentialsHintRetarget')
+      : t('gatewayCredentialsHintEdit')
+  return (
+    <>
+      <label className={css.field}>
+        <span className={css.fieldLabelRow}>
+          <span className={css.fieldLabel}>{t('fieldGatewayToken')}</span>
+          {canClear
+            ? (
+              <button
+                type="button"
+                className={css.clearPassword}
+                onClick={() => { void onClearToken() }}
+              >
+                {t('gatewayTokenClear')}
+              </button>
+            )
+            : null}
+        </span>
+        <input
+          className={css.input}
+          type="password"
+          value={draft.gatewayToken}
+          maxLength={4096}
+          autoComplete="new-password"
+          spellCheck={false}
+          placeholder={t('fieldGatewayTokenPlaceholder')}
+          onChange={event => { onChange({ gatewayToken: event.target.value }) }}
+        />
+        {fieldErrors.gatewayToken === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayToken}</span>}
+      </label>
+      <label className={css.field}>
+        <span className={css.fieldLabelRow}>
+          <span className={css.fieldLabel}>{t('fieldGatewayPassword')}</span>
+          {canClear
+            ? (
+              <button
+                type="button"
+                className={css.clearPassword}
+                onClick={() => { void onClearPassword() }}
+              >
+                {t('gatewayPasswordClear')}
+              </button>
+            )
+            : null}
+        </span>
+        <input
+          className={css.input}
+          type="password"
+          value={draft.gatewayPassword}
+          maxLength={1024}
+          autoComplete="new-password"
+          spellCheck={false}
+          placeholder={t('fieldGatewayPasswordPlaceholder')}
+          onChange={event => { onChange({ gatewayPassword: event.target.value }) }}
+        />
+        {fieldErrors.gatewayPassword === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayPassword}</span>}
+      </label>
+      <span className={css.dim}>{hint}</span>
+    </>
+  )
+}
+
+/** Optional S23 certificate pin. Unlike credentials this is non-secret
+ * registry metadata, so edit prefill and ordinary input binding are required
+ * to preserve it. The caller renders this only for gateway+http+https. */
+function GatewaySpkiField({ draft, onChange, fieldError, t }: {
+  draft: HostDraft
+  onChange: (spkiPin: string) => void
+  fieldError: string | undefined
+  t: (key: SettingsConnectionsKey) => string
+}): ReactNode {
+  return (
+    <label className={css.field}>
+      <span className={css.fieldLabelRow}>
+        <span className={css.fieldLabel}>{t('fieldSpkiPin')}</span>
+        {draft.spkiPin === ''
+          ? null
+          : (
+            <button
+              type="button"
+              className={css.clearPassword}
+              onClick={() => { onChange('') }}
+            >
+              {t('spkiPinClear')}
+            </button>
+          )}
+      </span>
+      <input
+        className={css.input}
+        value={draft.spkiPin}
+        maxLength={64}
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        placeholder={t('fieldSpkiPinPlaceholder')}
+        onChange={event => { onChange(event.target.value) }}
+      />
+      {fieldError === undefined ? null : <span className={css.error} role="alert">{fieldError}</span>}
+      <span className={css.dim}>{t('spkiPinHint')}</span>
+    </label>
+  )
+}
+
+/**
  * Render the connections section content column.
  * @param props - composed slot props.
  * @returns the section.
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const { t, pluginDiagnostics } = props
+  const runtimeState = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
+  const runtimeSurfacePresent = currentRuntimeSurface() !== null
+  // Fail closed while the desktop runtime bridge hydrates; once hydrated,
+  // applying is the one design-18 phase that forbids every local spawn entry.
+  const runtimeStartBlocked = runtimeBlocksLocalStart(runtimeState, runtimeSurfacePresent)
 
   // ---- local instance card ----
   const [health, setHealth] = useState<HealthResponse | null>(null)
@@ -285,6 +436,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   /** 幂等启动本地实例（POST /api/connections；启动后立即回读 /health）。 */
   const startLocal = useCallback(async (): Promise<void> => {
+    if (runtimeStartBlocked) return
     setLocalBusy(true)
     try {
       setConnection(await cp.createLocal())
@@ -295,7 +447,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setLocalBusy(false)
     }
     void loadLocal()
-  }, [loadLocal])
+  }, [loadLocal, runtimeStartBlocked])
 
   /** 优雅停止本地实例（DELETE /api/connections/local）。 */
   const stopLocal = useCallback(async (): Promise<void> => {
@@ -454,27 +606,23 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     if (bridge === null || pendingDelete === null) return
     setDeleting(true)
     try {
-      // Read-modify-write against the AUTHORITATIVE list (2026 review S5):
-      // the render-closure `instances` snapshot may lag an external push.
-      const current = await bridge.instances_get()
-      const next = current.filter(instance => instance.id !== pendingDelete.id)
-      // The main process is authoritative (it rejects an invalid whole set);
-      // adopt its saved/current list instead of trusting the local filter.
-      const saved = await bridge.instances_set(next)
+      // Exact id-addressed main transaction: never send a roster snapshot.
+      // A stale read-modify-write could otherwise delete a connection added
+      // concurrently after this dialog opened.
+      const saved = await bridge.delete_connection(pendingDelete.id)
       setInstances(saved)
-      // Loud-failure invariant (2026 review): instances_set carries NO error
-      // channel — a refused save returns the current registry. If the
-      // deletion did not land, keep the confirmation/status intact and say so
-      // instead of presenting a host that vanished locally but still exists.
+      setPendingDelete(null)
+      setStatuses(prev => {
+        const copy = { ...prev }
+        delete copy[pendingDelete.id]
+        return copy
+      })
+      // Loud-failure invariant: delete_connection returns the authoritative
+      // current registry. If the
+      // deletion did not land, say so instead of a silent no-op.
       if (saved.some(instance => instance.id === pendingDelete.id)) {
-        setOpError(prev => ({ ...prev, [pendingDelete.id]: '删除未生效：主进程拒绝了该变更（实例数量上限或状态目录不可写？）' }))
+        setOpError(prev => ({ ...prev, [pendingDelete.id]: '删除未生效：主进程拒绝了该变更（连接状态变化或状态目录不可写？）' }))
       } else {
-        setPendingDelete(null)
-        setStatuses(prev => {
-          const copy = { ...prev }
-          delete copy[pendingDelete.id]
-          return copy
-        })
         clearOpError(pendingDelete.id)
       }
     } catch (err) {
@@ -566,19 +714,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   const openEdit = useCallback((spec: SshInstanceSpec): void => {
     setEditing(spec)
-    setDraft({
-      id: spec.id,
-      label: spec.label,
-      host: spec.host,
-      user: spec.user ?? '',
-      sshPort: spec.sshPort === null ? '' : String(spec.sshPort),
-      remotePort: String(spec.remotePort),
-      serviceName: spec.serviceName ?? '',
-      remoteDshHome: spec.remoteDshHome ?? '',
-      // The stored password is never exposed back to the renderer — the
-      // field always starts empty.
-      password: '',
-    })
+    // Pure normalization covers all four target/transport combinations and
+    // preserves the non-secret SPKI pin. Credential fields remain empty by
+    // construction because their values never cross the IPC boundary.
+    setDraft(draftFromSpec(spec))
     setFieldErrors({})
     setFormError(null)
     setConfigHosts(null)
@@ -594,6 +733,53 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setFormError(result.error)
     } else {
       setDraft(prev => (prev === null ? prev : { ...prev, password: '' }))
+      setInstances(prev => prev.map(instance => instance.id === editing.id
+        ? { ...instance, sshPasswordSet: false }
+        : instance))
+      setEditing(prev => prev === null || prev === 'new'
+        ? prev
+        : { ...prev, sshPasswordSet: false })
+      setFormError(null)
+    }
+  }, [editing])
+
+  /** Clear a stored gateway token without ever reading it into the renderer. */
+  const clearGatewayToken = useCallback(async (): Promise<void> => {
+    const bridge = ssh()
+    if (bridge === null || editing === null || editing === 'new') return
+    const result = await bridge.set_gateway_token(editing.id, null)
+    if ('error' in result) {
+      setFormError(result.error)
+    } else {
+      setDraft(prev => (prev === null ? prev : { ...prev, gatewayToken: '' }))
+      setInstances(prev => prev.map(instance => instance.id === editing.id
+        ? { ...instance, tokenSet: false }
+        : instance))
+      setEditing(prev => prev === null || prev === 'new'
+        ? prev
+        : { ...prev, tokenSet: false })
+      setFormError(null)
+    }
+  }, [editing])
+
+  /** Clear a stored gateway login password (design 17 §7.1) without ever
+   *  reading it into the renderer. */
+  const clearGatewayPassword = useCallback(async (): Promise<void> => {
+    const bridge = ssh()
+    if (bridge === null || editing === null || editing === 'new') return
+    // set_gateway_password is on the authoritative DesktopSshSurface (design
+    // 17 §7.1, desktop gateway-secrets task).
+    const result = await bridge.set_gateway_password(editing.id, null)
+    if ('error' in result) {
+      setFormError(result.error)
+    } else {
+      setDraft(prev => (prev === null ? prev : { ...prev, gatewayPassword: '' }))
+      setInstances(prev => prev.map(instance => instance.id === editing.id
+        ? { ...instance, passwordSet: false }
+        : instance))
+      setEditing(prev => prev === null || prev === 'new'
+        ? prev
+        : { ...prev, passwordSet: false })
       setFormError(null)
     }
   }, [editing])
@@ -610,23 +796,67 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
    * 表单只收非秘密元数据；id 格式 ^[a-zA-Z0-9_-]+$（新增时查重、'local'
    * 为本地来源保留字）、端口十进制 1–65535、host/user 与主进程同源白名单
    * （首字符不得为 '-'，防 ssh 选项注入）、serviceName 白名单
-   * ^[a-zA-Z0-9_.-]+$。
+   * ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$（首字符必须为字母或数字）。
    */
   const validate = useCallback((value: HostDraft): Partial<Record<keyof HostDraft, string>> => {
     const errors: Partial<Record<keyof HostDraft, string>> = {}
     const id = value.id.trim()
     if (id === '') errors.id = t('validationIdRequired')
     else if (id === 'local') errors.id = t('validationIdReserved')
-    else if (!INSTANCE_ID_PATTERN.test(id)) errors.id = t('validationIdInvalid')
+    else if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) errors.id = t('validationIdInvalid')
     else if (editing === 'new' && instances.some(instance => instance.id === id)) errors.id = t('validationIdDuplicate')
     if (value.label.trim() === '') errors.label = t('validationLabelRequired')
-    else if (value.label.trim().length > MAX_INSTANCE_LABEL_CHARS) errors.label = t('validationLabelInvalid')
+    else if (value.label.length > 128) errors.label = t('validationLabelTooLong')
+    // Credential dimensions are independent. Re-entry is driven by the main
+    // process's non-secret existence projections plus the exact retarget rule:
+    // gateway+ssh may require both its tunnel password and gateway auth, while
+    // key/agent and --no-auth rows remain unblocked.
+    if (editing !== null && editing !== 'new') {
+      const reentry = credentialReentryEdit(editing, value)
+      if (reentry.gatewayToken && value.gatewayToken === '') errors.gatewayToken = t('validationGatewayCredentialsRequired')
+      if (reentry.gatewayPassword && value.gatewayPassword === '') errors.gatewayPassword = t('validationGatewayCredentialsRequired')
+      if (reentry.sshPassword && value.password === '') {
+        errors.password = t('validationPasswordRequired')
+      }
+    }
+    if (value.kind === 'gateway') {
+      // The token is OPTIONAL (design 17 §2.3 — auth is never a mode; an
+      // empty token sends no auth header and the gateway decides, §7.3).
+      // ASCII/length checks apply only when a value is present.
+      if (value.gatewayToken !== '' && !/^[\x20-\x7e]+$/.test(value.gatewayToken)) {
+        // Mirror the main-process gate (gatewayTokenValidationError): a
+        // token with non-visible-ASCII bytes would pass the renderer but be
+        // rejected by the main process with a vague write failure.
+        errors.gatewayToken = t('validationGatewayTokenAscii')
+      } else if (value.gatewayToken !== '' && value.gatewayToken.length < MIN_GATEWAY_TOKEN_CHARS) {
+        errors.gatewayToken = t('validationGatewayTokenLength')
+      }
+      // The login password (design 17 §7.1) is likewise optional; when a
+      // value IS present it mirrors the server config gate — 12–1024 JS
+      // characters, including Unicode. The shared helper returns a machine
+      // code that the dictionary localizes.
+      const passwordError = gatewayPasswordValidationError(value.gatewayPassword)
+      if (passwordError === 'length') errors.gatewayPassword = t('validationGatewayPasswordLength')
+    }
+    if (transportFormSchema(value.transport).fieldGroup === 'url') {
+      // transport='http' validates/derives the URL for EVERY kind (P3-3): a
+      // defensive dsh+http row must not silently skip the URL gate (the
+      // target is URL-derived for http) nor fall through to host validation
+      // for fields the form does not render. A dsh+http draft has no auth
+      // surface (design 17 §2.1), but its URL is still validated loudly.
+      const parsed = parseGatewayUrl(value.gatewayUrl)
+      if (!parsed.ok) errors.gatewayUrl = gatewayUrlErrorText(parsed, t)
+      if (spkiPinEligible(value) && spkiPinValidationError(value.spkiPin) !== null) {
+        errors.spkiPin = t('validationSpkiPinFormat')
+      }
+      return errors
+    }
     const host = value.host.trim()
     if (host === '') errors.host = t('validationHostRequired')
-    else if (host.length > MAX_SSH_HOST_CHARS || !SSH_HOST_PATTERN.test(host)) errors.host = t('validationHostInvalid')
+    else if (!/^[a-zA-Z0-9.:\[][a-zA-Z0-9._:[\]-]*$/.test(host)) errors.host = t('validationHostInvalid')
     if (value.user.trim() !== '') {
       const user = value.user.trim()
-      if (user.length > MAX_SSH_USER_CHARS || !SSH_USER_PATTERN.test(user)) errors.user = t('validationUserInvalid')
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(user)) errors.user = t('validationUserInvalid')
     }
     const parsePort = (raw: string): number | null => {
       const trimmed = raw.trim()
@@ -639,14 +869,13 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     const sshPort = parsePort(value.sshPort)
     if (sshPort !== null && (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535)) errors.sshPort = t('validationPortRange')
     const serviceName = value.serviceName.trim()
-    if (serviceName !== '' && (serviceName.length > MAX_SERVICE_NAME_CHARS || !SERVICE_NAME_PATTERN.test(serviceName))) errors.serviceName = t('validationServiceNameInvalid')
+    if (serviceName !== '' && !SERVICE_NAME_PATTERN.test(serviceName)) errors.serviceName = t('validationServiceNameInvalid')
     const remoteDshHome = value.remoteDshHome.trim()
-    if (remoteDshHome !== '' && (remoteDshHome.length > MAX_REMOTE_DSH_HOME_CHARS || !REMOTE_DSH_HOME_PATTERN.test(remoteDshHome))) errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
-    if (value.password.length > MAX_SSH_PASSWORD_CHARS) errors.password = t('validationPasswordInvalid')
+    if (remoteDshHome !== '' && !/^~?\/[a-zA-Z0-9._/-]+$/.test(remoteDshHome)) errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
     return errors
   }, [editing, instances, t])
 
-  /** 新增/编辑走 instances_set；编辑时 id 不可改（其余字段以表单为准）。 */
+  /** 新增/编辑走主进程的 save_connection 事务；编辑时 id 不可改。 */
   const saveDraft = useCallback(async (): Promise<void> => {
     const bridge = ssh()
     if (bridge === null || draft === null || editing === null) return
@@ -655,33 +884,46 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     if (Object.keys(errors).length > 0) return
     setSaving(true)
     try {
-      const input: SshInstanceInput = {
-        id: draft.id.trim(),
-        label: draft.label.trim(),
-        host: draft.host.trim(),
-        remotePort: Number(draft.remotePort),
+      const input = draftToInput(draft)
+      // transport='http' derives the target from the URL for EVERY kind
+      // (P3-3 — defensive dsh+http rows included): validate() already
+      // rejected a malformed URL loudly; this re-check turns a parse failure
+      // at save time (draft mutated after validation) into an explicit field
+      // error instead of a silent no-op.
+      if (draft.transport === 'http') {
+        const parsed = parseGatewayUrl(draft.gatewayUrl)
+        if (!parsed.ok) {
+          setFieldErrors(prev => ({ ...prev, gatewayUrl: gatewayUrlErrorText(parsed, t) }))
+          return
+        }
       }
-      if (draft.user.trim() !== '') input.user = draft.user.trim()
-      if (draft.sshPort.trim() !== '') input.sshPort = Number(draft.sshPort)
-      if (draft.serviceName.trim() !== '') input.serviceName = draft.serviceName.trim()
-      if (draft.remoteDshHome.trim() !== '') input.remoteDshHome = draft.remoteDshHome.trim()
-      // Read-modify-write against the AUTHORITATIVE list (2026 review S5).
-      const current = await bridge.instances_get()
-      const next = editing === 'new'
-        ? [...current, input]
-        : current.map(instance => instance.id === editing.id ? { ...input, id: instance.id } : instance)
-      // Password auth (design 05 §8): forward the form's TRANSIENT password
-      // to the main process (held there in memory + plaintext mirror for
-      // restart auto-connect; never in the registry above, never logged).
-      // An empty field leaves a stored password untouched for unrelated
-      // edits. Main clears it when host/user/SSH port changes so a credential
-      // can never follow the same id to a different authentication peer; the
-      // user may enter the replacement password in this same save.
-      const savedId = editing === 'new' ? input.id : editing.id
-      const result = await saveHostWithPassword(bridge, current, next, savedId, draft.password)
+      // One main-owned transaction receives the replacement metadata and all
+      // applicable NEW write-only values. Old credentials never return to
+      // renderer; main snapshots and restores them on any registry/store
+      // failure. Empty fields leave their stored dimensions untouched.
+      const result = await saveHostWithConnectionCredentials(
+        bridge,
+        editing === 'new' ? null : editing.id,
+        editing === 'new' ? input : { ...input, id: editing.id },
+        // The save helper filters these values through the independent
+        // capability matrix. gateway+ssh can commit both credential layers;
+        // dsh+http commits none, even if stale component state were injected.
+        {
+          sshPassword: draft.password,
+          token: draft.gatewayToken,
+          password: draft.gatewayPassword,
+        },
+      )
       setInstances(result.instances)
       if (!result.ok) {
         setFormError(result.error)
+        // If rollback genuinely failed, turn a newly-created row into an edit
+        // target so retry cannot submit a duplicate id. The password field
+        // remains in the current draft for an explicit retry.
+        if (result.metadataCommitted && editing === 'new') {
+          const committed = result.instances.find(instance => instance.id === input.id)
+          if (committed !== undefined) setEditing(committed)
+        }
         return
       }
       setEditing(null)
@@ -692,7 +934,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     } finally {
       setSaving(false)
     }
-  }, [draft, editing, instances, t, validate])
+  }, [draft, editing, instances, validate])
 
   // 挂载：装载本地卡 / 注册表；订阅隧道状态推送（实时更新徽标）。
   // 主机日志默认折叠，首次展开时懒加载，挂载不拉取。
@@ -761,10 +1003,24 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'
   const starting = dsh?.status === 'starting' || dsh?.status === 'restarting'
 
+  // dsh 运行时版本（design 18 §3.6 B）：优先读同一个 runtime state；旧壳
+  // 尚未提供完整状态时才回退 M0 的 info 投影，null/空串时不编造 chip。
+  const dshVersion = runtimeState?.active
+    ?? (typeof window !== 'undefined' ? (window.dshChamber?.dshVersion ?? null) : null)
+
   return (
     <div className={css.section}>
       <h2 className={css.title}>{t('nav')}</h2>
       <p className={css.intro}>{t('sectionIntro')}</p>
+      {/* S22 fallback visibility (design 17 §13.4.1): when the OS keychain is
+          unavailable the main process mirrors gateway credentials as the
+          documented 0600 plaintext fallback — the fallback path must be
+          visible on the settings page. The main process merges the
+          read-only secretStorage projection onto every instances_get row
+          (global per store), so any plaintext row shows the hint line. */}
+      {instances.some(spec => spec.secretStorage === 'plaintext')
+        ? <p className={css.hint} role="status">{t('secretStoragePlaintextHint')}</p>
+        : null}
       {ssh() === null ? <p className={css.error} role="alert">{t('desktopOnly')}</p> : null}
 
       <section className={css.group}>
@@ -782,15 +1038,23 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           <div className={css.localMeta}>
             <span>{t('localPort')}：<span className={css.mono}>{dsh?.port ?? '—'}</span></span>
             {connection?.label !== undefined && connection.label !== '' ? <span>{connection.label}</span> : null}
+            {dshVersion != null && dshVersion !== '' ? <span className={css.mono}>dsh v{dshVersion}</span> : null}
           </div>
           {dsh?.error != null && dsh.error !== '' ? <p className={css.error}>{dsh.error}</p> : null}
           {localError !== null ? <p className={css.error} role="alert">{localError}</p> : null}
+          {runtimeState?.phase === 'applying'
+            ? <p className={css.hint}>{t('localRuntimeApplying')}</p>
+            : runtimeSurfacePresent && runtimeState === null
+              ? <p className={css.hint}>{t('localRuntimeHydrating')}</p>
+              : runtimeState?.runtimeBlocked === true
+                ? <p className={css.hint}>{runtimeState.runtimeBlockedReason ?? t('localRuntimeBlocked')}</p>
+                : null}
           <PluginDiagnosticLine diagnostic={pluginDiagnostics?.['local']} t={t} />
           <div className={css.localActions}>
             <Button
               variant="primary"
               size="sm"
-              disabled={healthy || starting || localBusy || stopping}
+              disabled={healthy || starting || localBusy || stopping || runtimeStartBlocked}
               onClick={() => { void startLocal() }}
             >
               {t('localStart')}
@@ -877,16 +1141,24 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           : (
             <ul className={css.cards}>
               {instances.map(spec => {
-                const status = statuses[spec.id]
+                // Registry and status pushes are independent. Suppress a
+                // stale old-provider projection during a kind switch instead
+                // of showing the replacement connection as falsely ready.
+                const projectedStatus = statuses[spec.id]
+                const status = projectedStatus?.kind === spec.kind ? projectedStatus : undefined
                 const phase = status?.phase
                 const connected = phase === 'ready' || phase === 'degraded'
                 const specBusy = busy[spec.id] === true
                 const serviceActive = status?.serviceActive
-                const serviceConfigured = spec.serviceName !== null
+                // systemd control rides the ssh transport (dsh or gateway
+                // over a tunnel both exec systemctl over ssh); http direct
+                // endpoints have no service channel.
+                const serviceConfigured = spec.transport === 'ssh' && spec.serviceName !== null
                 return (
                   <li key={spec.id} className={css.card}>
                     <div className={css.cardHead}>
                       <span className={css.cardName} title={spec.label}>{spec.label}</span>
+                      <span className={css.kindBadge}>{spec.kind === 'gateway' ? t('kindGateway') : t('kindDsh')}</span>
                       <span className={clsx(
                         css.badge,
                         (phase === 'error' || phase === 'degraded') && css.badgeBad,
@@ -894,12 +1166,31 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       )}>
                         {t(phaseKey(phase))}
                       </span>
+                      {/* 诚实状态 (design 17 §13.1): the plaintext and no-auth
+                          postures stay visible on the card after configuring.
+                          「无认证」 only when NEITHER gateway credential is
+                          stored — the passwordSet projection is the
+                          authoritative SshInstanceSpec member (design 17
+                          §9.1, desktop gateway-secrets task). */}
+                      {spec.insecureHttp
+                        ? <span className={clsx(css.badge, css.badgeBad)}>{t('badgeHttpPlaintext')}</span>
+                        : null}
+                      {spec.kind === 'gateway' && spec.tokenSet === false
+                        && spec.passwordSet === false
+                        ? <span className={css.badge}>{t('badgeNoAuth')}</span>
+                        : null}
+                      {spec.kind === 'gateway' && spec.transport === 'http'
+                        && !spec.insecureHttp && spec.spkiPin !== undefined
+                        ? <span className={clsx(css.badge, css.badgeOk)}>{t('badgeSpkiPinned')}</span>
+                        : null}
                     </div>
                     <div className={css.cardMeta}>
-                      <code className={css.cardHost}>
-                        {spec.user !== null && spec.user !== '' ? `${spec.user}@` : ''}{spec.host}{spec.sshPort !== null ? `:${spec.sshPort}` : ''}
-                      </code>
-                      <span className={css.mono}>{t('dshPort')}：{spec.remotePort}</span>
+                      <code className={css.cardHost}>{spec.transport === 'http'
+                        ? formatGatewayUrl(spec.host, spec.remotePort, spec.insecureHttp)
+                        : `${spec.user !== null && spec.user !== '' ? `${spec.user}@` : ''}${spec.host}${spec.sshPort !== null ? `:${spec.sshPort}` : ''}`}</code>
+                      {spec.transport === 'ssh'
+                        ? <span className={css.mono}>{spec.kind === 'gateway' ? t('gatewayPort') : t('dshPort')}：{spec.remotePort}</span>
+                        : null}
                       {status?.localPort !== null && status?.localPort !== undefined
                         ? <span className={css.mono}>{t('tunnelPort')}：{status.localPort}</span>
                         : null}
@@ -915,10 +1206,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       : null}
                     {status?.logSummary !== '' ? <p className={css.hint}>{status?.logSummary}</p> : null}
                     {status?.requiresUserAction === true && (phase === 'error' || phase === 'degraded')
-                      ? <p className={css.hint}>{t('authActionHint')}</p>
+                      ? <p className={css.hint}>{t(spec.kind === 'gateway'
+                          ? 'gatewayAuthActionHint'
+                          : spec.transport === 'http' ? 'directActionHint' : 'authActionHint')}</p>
                       : null}
                     {opError[spec.id] !== undefined ? <p className={css.error} role="alert">{opError[spec.id]}</p> : null}
-                    <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`ssh-${spec.id}`]} t={t} />
+                    <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]} t={t} />
                     <Button
                       variant={connected ? 'outline' : 'primary'}
                       size="sm"
@@ -929,7 +1222,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     >
                       {connected ? t('disconnect') : phase === 'connecting' ? t('phaseConnecting') : t('connect')}
                     </Button>
-                    {spec.kind === 'ssh' && (
+                    {spec.transport === 'ssh' && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -942,37 +1235,47 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       </Button>
                     )}
                     <div className={css.cardFoot}>
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={specBusy}
-                        data-tip={t('pluginsOpen')}
-                        aria-label={`${t('pluginsOpen')}: ${spec.label}`}
-                        onClick={() => { setPluginFor(spec) }}
-                      >
-                        <IconChecklistOutline14 />
-                      </button>
+                      {spec.transport === 'ssh'
+                        ? (
+                          <button
+                            type="button"
+                            className={css.iconButton}
+                            disabled={specBusy}
+                            data-tip={t('pluginsOpen')}
+                            aria-label={`${t('pluginsOpen')}: ${spec.label}`}
+                            onClick={() => { setPluginFor(spec) }}
+                          >
+                            <IconChecklistOutline14 />
+                          </button>
+                        )
+                        : null}
                       <span className={css.footSpacer} />
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={!serviceConfigured || specBusy}
-                        data-tip={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
-                        aria-label={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
-                        onClick={() => { void runServiceOp(spec.id, serviceActive === true ? 'stop_service' : 'start_service') }}
-                      >
-                        {serviceActive === true ? <IconStopFill16 /> : <IconPlayOutline16 />}
-                      </button>
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={!serviceConfigured || specBusy}
-                        data-tip={t('serviceCheck')}
-                        aria-label={`${t('serviceCheck')}: ${spec.label}`}
-                        onClick={() => { void runServiceOp(spec.id, 'is_active') }}
-                      >
-                        <IconRefreshOutline16 />
-                      </button>
+                      {spec.transport === 'ssh'
+                        ? (
+                          <>
+                            <button
+                              type="button"
+                              className={css.iconButton}
+                              disabled={!serviceConfigured || specBusy}
+                              data-tip={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
+                              aria-label={!serviceConfigured ? t('serviceUnconfigured') : serviceActive === true ? t('serviceStop') : t('serviceStart')}
+                              onClick={() => { void runServiceOp(spec.id, serviceActive === true ? 'stop_service' : 'start_service') }}
+                            >
+                              {serviceActive === true ? <IconStopFill16 /> : <IconPlayOutline16 />}
+                            </button>
+                            <button
+                              type="button"
+                              className={css.iconButton}
+                              disabled={!serviceConfigured || specBusy}
+                              data-tip={t('serviceCheck')}
+                              aria-label={`${t('serviceCheck')}: ${spec.label}`}
+                              onClick={() => { void runServiceOp(spec.id, 'is_active') }}
+                            >
+                              <IconRefreshOutline16 />
+                            </button>
+                          </>
+                        )
+                        : null}
                       <button
                         type="button"
                         className={css.iconButton}
@@ -1056,7 +1359,55 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           ? null
           : (
             <div className={css.dialogFields}>
-              {editing === 'new'
+              {/* Target edit: the main-owned transaction refuses credential
+                  reuse and requires each stored dimension independently;
+                  warn before save (see validation). */}
+              {(() => {
+                const reentry = credentialReentryEdit(editing, draft)
+                return reentry.sshPassword || reentry.gatewayToken || reentry.gatewayPassword
+              })()
+                ? <p className={css.warnHint} role="alert">{t('targetChangedHint')}</p>
+                : null}
+              <label className={css.field}>
+                <span className={css.fieldLabel}>{t('kindLabel')}</span>
+                <select
+                  className={css.input}
+                  value={draft.kind}
+                  onChange={event => {
+                    // Target and transport are independent dimensions. The
+                    // pure helper preserves the selected transport, adjusts
+                    // only still-defaulted ports, and clears transient values
+                    // that belong to the old target.
+                    setDraft(changeDraftKind(draft, event.target.value as TransportKind))
+                    setFieldErrors({})
+                    setFormError(null)
+                  }}
+                >
+                  <option value="dsh">{t('kindDsh')}</option>
+                  <option value="gateway">{t('kindGateway')}</option>
+                </select>
+              </label>
+              <label className={css.field}>
+                <span className={css.fieldLabel}>{t('transportLabel')}</span>
+                <select
+                  className={css.input}
+                  value={draft.transport}
+                  onChange={event => {
+                    setDraft(changeDraftTransport(draft, event.target.value as TransportMethod))
+                    setFieldErrors({})
+                    setFormError(null)
+                  }}
+                >
+                  {TRANSPORT_FORM_OPTIONS
+                    .filter(schema => schema.targetKinds.includes(draft.kind))
+                    .map(schema => (
+                      <option key={schema.method} value={schema.method}>
+                        {t(schema.method === 'ssh' ? 'transportSsh' : 'transportHttp')}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {editing === 'new' && draft.transport === 'ssh'
                 ? (
                   <div className={css.configPicker}>
                     <div className={css.configHead}>
@@ -1105,9 +1456,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.id}
-                  maxLength={64}
                   disabled={editing !== 'new'}
                   autoFocus
+                  maxLength={64}
                   spellCheck={false}
                   placeholder={t('fieldIdPlaceholder')}
                   onChange={event => { setDraft({ ...draft, id: event.target.value }) }}
@@ -1119,113 +1470,181 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <input
                   className={css.input}
                   value={draft.label}
-                  maxLength={MAX_INSTANCE_LABEL_CHARS}
+                  maxLength={128}
                   spellCheck={false}
                   placeholder={t('fieldLabelPlaceholder')}
                   onChange={event => { setDraft({ ...draft, label: event.target.value }) }}
                 />
                 {fieldErrors.label === undefined ? null : <span className={css.error} role="alert">{fieldErrors.label}</span>}
               </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldHost')}</span>
-                <input
-                  className={css.input}
-                  value={draft.host}
-                  maxLength={MAX_SSH_HOST_CHARS}
-                  spellCheck={false}
-                  placeholder={t('fieldHostPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, host: event.target.value }) }}
-                />
-                {fieldErrors.host === undefined ? null : <span className={css.error} role="alert">{fieldErrors.host}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldUser')}</span>
-                <input
-                  className={css.input}
-                  value={draft.user}
-                  maxLength={MAX_SSH_USER_CHARS}
-                  spellCheck={false}
-                  placeholder={t('fieldUserPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, user: event.target.value }) }}
-                />
-                {fieldErrors.user === undefined ? null : <span className={css.error} role="alert">{fieldErrors.user}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabelRow}>
-                  <span className={css.fieldLabel}>{t('fieldPassword')}</span>
-                  {editing !== 'new'
-                    ? (
-                      <button
-                        type="button"
-                        className={css.clearPassword}
-                        onClick={() => { void clearPassword() }}
-                      >
-                        {t('passwordClear')}
-                      </button>
-                    )
-                    : null}
-                </span>
-                <input
-                  className={css.input}
-                  type="password"
-                  value={draft.password}
-                  maxLength={MAX_SSH_PASSWORD_CHARS}
-                  autoComplete="new-password"
-                  spellCheck={false}
-                  placeholder={t('fieldPasswordPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, password: event.target.value }) }}
-                />
-                {fieldErrors.password === undefined ? null : <span className={css.error} role="alert">{fieldErrors.password}</span>}
-                <span className={css.dim}>{t('passwordHint')}</span>
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldSshPort')}</span>
-                <input
-                  className={css.input}
-                  value={draft.sshPort}
-                  inputMode="numeric"
-                  spellCheck={false}
-                  placeholder={t('fieldSshPortPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, sshPort: event.target.value }) }}
-                />
-                {fieldErrors.sshPort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.sshPort}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldRemotePort')}</span>
-                <input
-                  className={css.input}
-                  value={draft.remotePort}
-                  inputMode="numeric"
-                  spellCheck={false}
-                  placeholder={t('fieldRemotePortPlaceholder')}
-                  onChange={event => { setDraft({ ...draft, remotePort: event.target.value }) }}
-                />
-                {fieldErrors.remotePort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remotePort}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldServiceName')}</span>
-                <input
-                  className={css.input}
-                  value={draft.serviceName}
-                  maxLength={MAX_SERVICE_NAME_CHARS}
-                  spellCheck={false}
-                  placeholder={t('fieldServiceNamePlaceholder')}
-                  onChange={event => { setDraft({ ...draft, serviceName: event.target.value }) }}
-                />
-                {fieldErrors.serviceName === undefined ? null : <span className={css.error} role="alert">{fieldErrors.serviceName}</span>}
-              </label>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('fieldRemoteDshHome')}</span>
-                <input
-                  className={css.input}
-                  value={draft.remoteDshHome}
-                  maxLength={MAX_REMOTE_DSH_HOME_CHARS}
-                  spellCheck={false}
-                  placeholder={t('fieldRemoteDshHomePlaceholder')}
-                  onChange={event => { setDraft({ ...draft, remoteDshHome: event.target.value }) }}
-                />
-                {fieldErrors.remoteDshHome === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remoteDshHome}</span>}
-              </label>
+              {transportFormSchema(draft.transport).fieldGroup === 'url'
+                ? (
+                  <>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldDirectUrl')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.gatewayUrl}
+                        inputMode="url"
+                        autoComplete="url"
+                        spellCheck={false}
+                        placeholder={t(draft.kind === 'gateway' ? 'fieldGatewayUrlPlaceholder' : 'fieldDshUrlPlaceholder')}
+                        onChange={event => { setDraft(changeDraftEndpointUrl(draft, event.target.value)) }}
+                      />
+                      {fieldErrors.gatewayUrl === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayUrl}</span>}
+                      {/* 非拦截安全姿态提示 (design 17 §13.1 S21)：http 明文是
+                          显式用户决策，如实注明、绝不前置拦截。 */}
+                      {/^http:\/\//i.test(draft.gatewayUrl.trim())
+                        ? <span className={css.warnHint}>{t('gatewayUrlHttpHint')}</span>
+                        : null}
+                    </label>
+                    {spkiPinEligible(draft)
+                      ? (
+                        <GatewaySpkiField
+                          draft={draft}
+                          fieldError={fieldErrors.spkiPin}
+                          onChange={spkiPin => { setDraft({ ...draft, spkiPin }) }}
+                          t={t}
+                        />
+                      )
+                      : null}
+                    {/* Gateway authentication is target-owned and works over
+                        both transports. dsh+http deliberately has no auth or
+                        SPKI surface. */}
+                    {draft.kind === 'gateway'
+                      ? (
+                        <GatewayAuthFields
+                          draft={draft}
+                          onChange={patch => { setDraft(prev => (prev === null ? prev : { ...prev, ...patch })) }}
+                          fieldErrors={fieldErrors}
+                          editing={editing}
+                          targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
+                          onClearToken={() => { void clearGatewayToken() }}
+                          onClearPassword={() => { void clearGatewayPassword() }}
+                          t={t}
+                        />
+                      )
+                      : null}
+                  </>
+                )
+                : (
+                  <>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldHost')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.host}
+                        spellCheck={false}
+                        placeholder={t('fieldHostPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, host: event.target.value }) }}
+                      />
+                      {fieldErrors.host === undefined ? null : <span className={css.error} role="alert">{fieldErrors.host}</span>}
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldUser')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.user}
+                        spellCheck={false}
+                        placeholder={t('fieldUserPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, user: event.target.value }) }}
+                      />
+                      {fieldErrors.user === undefined ? null : <span className={css.error} role="alert">{fieldErrors.user}</span>}
+                    </label>
+                    {/* SSH transport authentication is independent of target
+                        authentication. gateway+ssh therefore renders this
+                        field AND the GatewayAuthFields below. */}
+                    <label className={css.field}>
+                      <span className={css.fieldLabelRow}>
+                        <span className={css.fieldLabel}>{t('fieldPassword')}</span>
+                        {editing !== null && editing !== 'new' && editing.transport === 'ssh'
+                          ? (
+                            <button
+                              type="button"
+                              className={css.clearPassword}
+                              onClick={() => { void clearPassword() }}
+                            >
+                              {t('passwordClear')}
+                            </button>
+                          )
+                          : null}
+                      </span>
+                      <input
+                        className={css.input}
+                        type="password"
+                        value={draft.password}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        placeholder={t('fieldPasswordPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, password: event.target.value }) }}
+                      />
+                      {fieldErrors.password === undefined ? null : <span className={css.error} role="alert">{fieldErrors.password}</span>}
+                      <span className={css.dim}>{t('passwordHint')}</span>
+                    </label>
+                    {draft.kind === 'gateway'
+                      ? (
+                        <GatewayAuthFields
+                          draft={draft}
+                          onChange={patch => { setDraft(prev => (prev === null ? prev : { ...prev, ...patch })) }}
+                          fieldErrors={fieldErrors}
+                          editing={editing}
+                          targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
+                          onClearToken={() => { void clearGatewayToken() }}
+                          onClearPassword={() => { void clearGatewayPassword() }}
+                          t={t}
+                        />
+                      )
+                      : null}
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldSshPort')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.sshPort}
+                        inputMode="numeric"
+                        spellCheck={false}
+                        placeholder={t('fieldSshPortPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, sshPort: event.target.value }) }}
+                      />
+                      {fieldErrors.sshPort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.sshPort}</span>}
+                    </label>
+                    <label className={css.field}>
+                      {/* The ssh remote port label/placeholder follows the
+                          TARGET kind (P3-2): dsh listens on 30800, a gateway
+                          on 30801 next to it. */}
+                      <span className={css.fieldLabel}>{draft.kind === 'gateway' ? t('gatewayPort') : t('fieldRemotePort')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.remotePort}
+                        inputMode="numeric"
+                        spellCheck={false}
+                        placeholder={draft.kind === 'gateway' ? t('fieldGatewayRemotePortPlaceholder') : t('fieldRemotePortPlaceholder')}
+                        onChange={event => { setDraft({ ...draft, remotePort: event.target.value }) }}
+                      />
+                      {fieldErrors.remotePort === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remotePort}</span>}
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldServiceName')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.serviceName}
+                        spellCheck={false}
+                        placeholder={t('fieldServiceNamePlaceholder')}
+                        onChange={event => { setDraft({ ...draft, serviceName: event.target.value }) }}
+                      />
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('fieldRemoteDshHome')}</span>
+                      <input
+                        className={css.input}
+                        value={draft.remoteDshHome}
+                        spellCheck={false}
+                        placeholder={t('fieldRemoteDshHomePlaceholder')}
+                        onChange={event => { setDraft({ ...draft, remoteDshHome: event.target.value }) }}
+                      />
+                      {fieldErrors.remoteDshHome === undefined ? null : <span className={css.error} role="alert">{fieldErrors.remoteDshHome}</span>}
+                    </label>
+                  </>
+                )}
               {formError === null ? null : <p className={css.error} role="alert">{formError}</p>}
             </div>
           )}

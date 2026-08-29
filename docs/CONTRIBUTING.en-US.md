@@ -1,6 +1,6 @@
 # Contributing to dsh-chamber
 
-Thank you for contributing! dsh-chamber is the local desktop **connection manager** for dsh: the local dsh instance (web profile) is hosted by the control plane, remote instances attach over SSH tunnels, and the UI is the dsh official frontend, source-reused and self-built. This guide covers the contribution process, validation, and what a good pull request looks like.
+Thank you for contributing! dsh-chamber is the local desktop **connection manager** for dsh: the control plane hosts the local dsh instance (web profile), remote connections independently compose `dsh|gateway` targets with `ssh|http` transports, and the UI is the dsh official frontend, source-reused and self-built. The explicitly started Gateway is a separate authenticated-by-default server shape. This guide covers the contribution process, validation, and what a good pull request looks like.
 
 > 中文版: [CONTRIBUTING.md](../CONTRIBUTING.md)
 
@@ -11,40 +11,28 @@ Environment setup (requirements, clone, vendor bootstrap, `pnpm install`, `bundl
 ```bash
 git clone <REPO-URL>
 cd dsh-chamber
-node scripts/ensure-harness-vendor.mjs   # must run before pnpm install
+node scripts/dev/ensure-harness-vendor.mjs   # must run before pnpm install
 pnpm install
 pnpm run dev:desktop                     # full window (control plane + dsh frontend + desktop shell)
 ```
 
 ## Testing
 
-Unit tests run directly with node (the project currently has no test framework):
+The root `package.json` scripts are the sole authority for CI's test roster; do not maintain a separate hand-written list of control-plane test files:
 
 ```bash
-node packages/control-plane/test/protocol.ts    # dsh client protocol
-node packages/control-plane/test/storage.ts     # storage & recovery
-node packages/control-plane/test/m1-dsh-client.ts  # describe/health client behavior
-node packages/control-plane/test/host-logs.ts   # host logs ring buffer
-node packages/control-plane/test/manager-api.ts # management REST (/health, /api/connections)
-node packages/control-plane/test/instance-proxy.ts  # per-instance reverse proxy (HTTP/WS/SSE, 503)
-node packages/control-plane/test/ws-frames.ts       # proxy WS frame parsing and heartbeat
-node packages/control-plane/test/static-serving.ts  # first-screen static serving and boot manifest
-node packages/control-plane/test/host-graph-seed.ts # chamber host-package seed/overlay
-pnpm run smoke                                  # integration smoke
-```
-
-These nine control-plane test files are exactly what CI's `test` job runs, together with desktop transport, renderer-shell, and client/host plugin tests — the same set CI runs, driven by the root scripts:
-
-```bash
-pnpm run test:desktop        # desktop transport / ssh unit tests
-pnpm run test:renderer-shell # composite entry / host-graph lockstep
-pnpm run test:sidebar        # sidebar derive / view-prefs unit tests
-pnpm run test:git            # Git worktree client / saga unit tests
-pnpm run test:host-git       # in-instance Git host core unit tests
-pnpm run test:settings-bridge  # settings shell policy unit tests
-pnpm run test:connections    # connections settings plugin (plugin-diff / save-host)
-pnpm run test:client-web     # web-shell boot tolerance decision rules
-pnpm run test:connection     # connection client base-path patch decision rules
+pnpm run test:control-plane
+pnpm run test:runtime
+pnpm run test:desktop
+pnpm run test:gateway
+pnpm run test:renderer-shell
+pnpm run test:git && pnpm run test:host-git
+pnpm run test:sidebar && pnpm run test:layout
+pnpm run test:settings-bridge && pnpm run test:connections
+pnpm run test:client-web && pnpm run test:connection
+pnpm run test:open-in && pnpm run test:cli
+pnpm run test:release-workflow
+pnpm run smoke
 ```
 
 `pnpm run smoke` prints SKIP and exits 0 when dsh is not installed; this is expected, not a failure.
@@ -53,6 +41,8 @@ pnpm run test:connection     # connection client base-path patch decision rules
 
 ```bash
 pnpm run typecheck                            # tsc --noEmit (0 errors)
+pnpm run typecheck:runtime
+pnpm run typecheck:gateway
 pnpm run typecheck:host-graph
 pnpm run typecheck:host-git
 pnpm run typecheck:sidebar                    # client plugin type checks
@@ -62,26 +52,21 @@ pnpm run typecheck:connections
 pnpm run typecheck:settings-bridge
 pnpm run typecheck:open-in
 pnpm run typecheck:client-web
-node packages/control-plane/test/protocol.ts  # focused unit tests (see Testing above)
-node packages/control-plane/test/storage.ts
-node packages/control-plane/test/m1-dsh-client.ts
-node packages/control-plane/test/host-logs.ts
-node packages/control-plane/test/manager-api.ts
-node packages/control-plane/test/instance-proxy.ts
-node packages/control-plane/test/ws-frames.ts
-node packages/control-plane/test/static-serving.ts
-node packages/control-plane/test/host-graph-seed.ts
-pnpm run test:desktop                         # desktop transport / ssh unit tests
-pnpm run test:renderer-shell                  # renderer shell / coverage-table lockstep
-pnpm run test:sidebar                         # sidebar unit tests
-pnpm run test:git                             # Git client unit tests
-pnpm run test:host-git                        # Git host unit tests
-pnpm run test:settings-bridge                 # settings shell unit tests
-pnpm run test:connections                     # connections settings plugin unit tests
-pnpm run test:client-web                      # web-shell boot tolerance unit tests
-pnpm run test:connection                      # connection base-path patch unit tests
+pnpm run typecheck:connection
+pnpm run test:control-plane && pnpm run test:runtime
+pnpm run test:desktop && pnpm run test:gateway
+pnpm run test:renderer-shell
+pnpm run test:git && pnpm run test:host-git
+pnpm run test:sidebar && pnpm run test:layout
+pnpm run test:settings-bridge && pnpm run test:connections
+pnpm run test:client-web && pnpm run test:connection
+pnpm run test:open-in && pnpm run test:cli
+pnpm run test:release-workflow
 pnpm run smoke                                # PASS (or SKIP, which is normal)
 pnpm run build:renderer                       # renderer build succeeds
+pnpm run build:gateway                        # gateway + dsh-runtime build succeeds
+pnpm --filter @dsh-chamber/desktop run build:preload
+pnpm run verify:i18n
 ```
 
 For changes that touch runtime, auth, protocol, or desktop-shell behavior, add or update focused tests — static checks alone do not prove runtime correctness.
@@ -112,7 +97,7 @@ Examples:
 ```
 feat(control-plane): add per-instance health endpoint
 fix(desktop): await tunnel dispose before quit
-chore(ci): ad-hoc sign the macOS app in the afterPack hook
+ci(release): enforce channel-specific update assets
 docs: document the commit message convention
 ```
 
@@ -121,8 +106,7 @@ One logical change per commit; keep diffs focused. Commits bundling unrelated ch
 ## Scope Discipline
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is **attached or served, never re-implemented**.
-- Domains removed from scope (walkthrough, notification center, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** to the roadmap in any form. The sole exception is the design-08 Git worktree plugin: it may only be a chamber-bundled client plugin plus a domain-limited in-instance host Remote, never a Git execution surface in the control plane or Desktop.
-  Note: design 19's **desktop OS notifications** (native notifications for session complete/ask/request) are a different surface from the removed dsh "notification center" UI domain — they do not constitute a return of that domain.
+- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** in any form. The only ratified bounded exceptions are Design 08's in-instance Git worktree plugin, Design 17's standalone Gateway orchestration, Design 18's shared dsh runtime-management core, Design 19's Electron-native notification edge projection, and Design 20's trusted open-in edge capability. None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
 - For any new domain feature proposal, first ask: does dsh native, the plugin ecosystem, or the host web frontend already cover it? If yes → don't build it.
 
 ## Pull Requests

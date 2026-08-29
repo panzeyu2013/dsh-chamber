@@ -12,44 +12,390 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+## [0.2.0-beta.3] - 2026-08-29
+
 ### Added
 
-- **Desktop notifications (design 19)** — native notifications on session
-  complete / ask / request (opt-in, in the settings shell's General page
-  notification control group; detection reuses the sidebar runtime-facts
-  edge detection, zero control-plane changes).
-- **Source-level collapse + server drag ordering (06 §2.4, plan 1)** —
-  sidebar source-header collapse toggle (folds the whole source workspace
-  list) + source-header drag ordering (display preference persisted in
-  `dsh-chamber.sidebar.v1`, live-synced across ctx).
-- **Workspace icon identity coloring (06)** — icon hue derived from
-  `(serverId, family seed)` hashing with stable accent; worktrees share the
-  main checkout's family hue; softened palette in 2026-10.
-- **Open-in registry (design 17)** — the VS Code deep-link plugin evolved
-  into a general open surface: local Finder + local/remote VS Code in one
-  button (`conversation.session.header.utilities` slot); plugin renamed to
-  `@dsh-chamber/dsh-client-ui-open-in`; legacy vscode IPC removed.
+- **safeStorage v3 credential storage (S22)** — `<userData>/gateway-secrets.json`
+  schema v3 stores tokens and passwords in independent maps, per-dimension
+  Gateway-target bindings, plus an authoritative
+  file-level `storage:'safeStorage'|'plaintext'` discriminator (ciphertext is
+  never guessed from its character shape), and wires
+  `SecretCryptoAdapter` to Electron safeStorage, with a 0600 plaintext fallback
+  when `isEncryptionAvailable()` is false. Passwords accept 12–1024 Unicode
+  JavaScript characters while tokens remain 32–4096 visible ASCII; corrupt
+  entries are preserved as `.corrupt`. Credentials are transient write-only form
+  inputs, are never returned/prefilled or persisted by the renderer, and never
+  enter the registry or logs. **Token and password are independent nullable dimensions**
+  (design 17 §2.3; clearing one never clears the other), while whole-instance
+  removal explicitly calls `setInstanceSecrets(id, null, null)`. The
+  `instances_get` projection now includes the actual durable `secretStorage`.
+  A plaintext mirror is atomically upgraded as soon as a keychain becomes
+  available and claims safeStorage only after the rewrite succeeds; a nonempty
+  unlabeled historical v2 file fails closed. Gateway and SSH credential loads
+  reject symlinks/non-regular files, verify the opened inode, and tighten it to
+  0600 before reading secret bytes. Nonempty legacy Gateway v1/v2 and SSH
+  password v1 files lack trustworthy target bindings. A structurally valid v1 at
+  the current path, a nonempty v2 with a valid storage discriminator, and SSH v1
+  therefore fail closed under unique `.unbound-*` names and require explicit
+  re-entry; a nonempty sidecar `gateway-tokens.json` v1 remains in place and is
+  disabled rather than being assigned a guessed binding.
+- **Password-login sessions** — Gateway `/auth/login` (minimal GET page; POST
+  verifies the password, issues the `dsh_gateway_session` cookie, and redirects
+  to `/`) plus the desktop `gateway-session.ts` manager. The 12-hour cookie is
+  kept only in main-process memory and keyed by network origin, `Host`
+  authority, and a stable connection-id/target scope; localPort is not session
+  ownership. Six all-or-none `configureGatewaySessionProvider` hooks maintain
+  the password session independently and probe with its cookie, invalidating
+  and retrying after 401. Scope invalidation covers every historical origin and
+  advances its generations; login, cookie probe, bearer fallback, and 401
+  relogin fence late results after every await so they cannot continue network
+  work or mutate cache/backoff/auth proof. A current-generation `cookie|bearer`
+  proof gates ready registration: password targets fail closed without their
+  cookie/proof, except for an intentionally verified bearer fallback. When token and password coexist, verifyUp, ready, and
+  refresh registration carry both Bearer and Cookie and Gateway accepts either
+  valid principal; token no longer shadows password. Empty credentials still
+  inject no auth header, and instance-proxy revalidates the 0..2 header allowlist.
+  **Pre-expiry refresh** (`gateway-session-refresh.ts`) logs in and re-registers
+  the transport about 60 seconds before expiry, re-arming on ready and
+  disarming on non-ready/removal/quit. Each action advances a per-id refresh
+  epoch, and post-await work rechecks password/token/URL/pin/authority/scope;
+  a changed tunnel endpoint logs in at its
+  new origin. Refresh failure preserves the still-valid registration and
+  retries at expiry; persistent failure is reported honestly and falls through
+  to bounded reconnect/verifyUp instead of being hidden.
+- **SPKI certificate pinning (S23)** — optional `spkiPin` (hex SHA-256 of SPKI
+  DER) is an HTTPS-direct trust anchor. `verifyGatewayEndpoint` checks it on the
+  socket `secureConnect` event and reports a terminal certificate-pin mismatch;
+  instance-proxy carries the pin through registerTransport, forwardHttp, and
+  forwardUpgrade, returning explicit `502 upstream_failed` on mismatch.
+  Desktop login/probes and control-plane HTTP/WS proxying call `write/end` or
+  send the upgrade only after the peer matches; no header, credential, password
+  body, or other application byte reaches the upstream before that match, and
+  a mismatch invokes no upstream handler/upgrade. HTTP
+  rejects a pin. Real `node:https` self-signed-certificate fixtures cover a
+  matching pin, a terminal mismatch, and ordinary HTTPS without a pin.
+- **Lightweight non-secret audit (S24)** — desktop
+  `packages/desktop/audit-log.ts` appends and fsyncs JSONL, enforces 0600 even on
+  inherited loose files, rotates at 5 MiB to `<file>.1`, and serializes only an
+  allowlist so accidentally supplied credentials never reach disk. It records
+  connecting/ready/error transitions (including terminal user-action errors),
+  transport register/unregister with only auth presence token+password|token|password|none and
+  insecureHttp, and credential set/clear without values. Gateway
+  `packages/gateway/src/audit.ts` writes under the 0700 state directory and
+  classifies login results as success/invalid_credentials/rate_limited/busy
+  with client source but never password, cookie, or session body. Both sides
+  have unit coverage.
 
 ### Fixed
 
-- **Reverse proxy mis-aborting every bodyless request and WS handshake (03 §3.3
-  disconnection detection)** — the control plane's `instance-proxy` HTTP
-  forwarding and WS upgrade paths treated `req.on('close')` as a client
-  disconnect signal, but Node 16+ fires `IncomingMessage 'close'` as soon as
-  the request body is consumed (immediately for bodyless GET/HEAD), so every
-  proxied GET/HEAD request and WS handshake was mis-aborted right after being
-  sent: 30s bundle-load timeouts ("instance failed to start"), the web runtime
-  looping `connection lost, retry #N` forever, and every instance boot timing
-  out — local and remote alike. POST happened to work because `'close'` fires
-  during the `readBody` await (the listener is not yet attached), which long
-  masked the issue behind "POST probes all pass". Fix: the disconnect
+- **Crash-safe main-process connection save** — the renderer no longer chains
+  write-only setters. `desktop_ssh_save_connection` snapshots registry metadata plus
+  SSH password, Gateway token, and Gateway password in main, compensates every
+  old value after any failed step, and safely scrubs with a loud error if
+  compensation itself fails. Gateway credentials bind only to
+  kind+host+remotePort while SSH passwords bind separately to host+user+sshPort.
+  Each binding is committed with its secret and rechecked against the current
+  registry before injection, so a hard crash between secret and registry fsyncs
+  cannot send a new value to the old target. Blank add/enter/leave/retarget also
+  clears hidden half-transaction values. Exact `desktop_ssh_delete_connection(id)`
+  disconnects, invalidates the exact-scope sessions, and clears secrets before
+  metadata; an absent id is an idempotent no-op. Legacy `instances_set` accepts
+  only the exact unchanged normalized current roster, and
+  all three individual setters are clear-only. Real Gateway ssh↔http changes are
+  therefore not mistaken for auth retargets.
+- **Connection reconfiguration generations and systemd argv boundary** — edits
+  to `serviceName` or `remoteDshHome` advance both the transport generation and
+  `execEpoch`, cancel old live/retry/probe work and exec children, and fence the
+  next multi-step spawn plus late logs/projections/results; a formerly non-idle
+  connection alone restarts with the new values. systemd uses the fixed argument
+  array `systemctl <action> -- <serviceName>`, with
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` requiring an alphanumeric first character.
+- **Gateway recovery reachability and orthogonal authentication** — a Gateway
+  transport now proves the authenticated `/chamber/runtime/status` identity
+  instead of being gated by managed-dsh `host.describe`, keeping recovery
+  reachable while dsh is blocked/down. SSH-tunnel Host and session authority use
+  remote `127.0.0.1:<remotePort>`, so SSH aliases/DNS no longer cause 421 or cache
+  key drift. Direct/SSH/refresh regressions cover dual-header OR-principal fallback.
+- **Cross-user SSH askpass directory pre-claim** — password-bearing helpers no
+  longer use the globally pre-claimable `<tmp>/dsh-chamber-ssh`. Each process
+  gets an unguessable 0700 `mkdtemp` directory whose uid/type/inode/mode are
+  verified; EPERM or owner mismatch fails closed. Helpers use O_EXCL and become
+  executable only after a complete fsync. Every tunnel/systemd/run child owns a
+  lease deleted only on its real exit/error/spawn failure; removal/clear delays
+  cleanup of live leases instead of evicting paths by a fixed generation cap.
+  Startup cleanup touches only trusted directories owned by the current user.
+- **Instance-proxy capability boundary** — local/dsh/legacy sources now reject
+  normalized `/chamber/*` paths, including encoded, dot-segment, and backslash
+  variants; only Gateway sources may reach that surface. Together with the
+  no-auth dsh HTTP-direct rule, this prevents kind/transport confusion from
+  widening capabilities.
+- **Gateway authentication protocol hardening** — the shared HTTP/WS request
+  policy rejects duplicate Authorization from `rawHeaders` before auth work;
+  Bearer is single-valued and limited to 32–4096 visible ASCII before any
+  hash/scrypt. JWT `exp` must be an unexpired safe integer no later than now+12h;
+  missing, nonnumeric, infinite, fractional, unsafe, expired, and over-window
+  values are rejected. Desktop instance-proxy mirrors the Bearer lower bound
+  and requires Gateway-over-SSH authority to be remote
+  `127.0.0.1:<port>` with a valid port range. If the token scrypt work gate is
+  saturated, an independent valid Cookie still authenticates successfully;
+  only an invalid Cookie preserves the original 503 `auth_busy`, enforcing OR
+  principal semantics under overload too.
+
+- **dsh HTTP-direct registration boundary** — canonical
+  `{kind:'dsh', transport:'http'}` now carries its explicit transport dimension
+  into instance-proxy registration and may use a user-configured public
+  `http(s)` origin, while the target still strictly forbids auth headers and
+  `/chamber/*` capabilities. `{kind:'dsh', transport:'ssh'}` and legacy
+  registrations with no transport remain loopback-only, so the existing SSH
+  and local trust boundary is never widened silently.
+- **Bounded Gateway runtime JSON-body reader** — the 64 KiB
+  `/chamber/runtime` JSON reader now uses a cumulative byte counter. On overflow
+  it immediately releases retained chunks, ignores all later `data` events,
+  and still sends 413 before destroying the request. This removes the O(n²)
+  per-chunk `reduce` scan and prevents poison chunks from consuming more CPU or
+  memory after rejection; a malicious trailing-chunk regression covers it.
+- **Gateway runtime recovery and projection integrity** — `restore-builtin` no
+  longer deletes selection metadata directly. It reuses the stop, snapshot,
+  atomic pointer switch, full probe, and rollback/data-restore transaction, and
+  clears override/journal only after success. Registry configuration falls back
+  to the default only when truly absent; corrupt, symlinked, or hard-linked
+  files are quarantined and fail loud, writes are atomic, and source changes are
+  fenced during installation. Offline version lists retain every valid cached
+  tree. `/chamber/runtime/status` uses a fixed identity and reports the actual
+  env/override/current/builtin source plus failure/restore/pre-rollback,
+  snapshots, progress, and classified disk usage. Desktop settings and the
+  standalone `/chamber/` page expose the complete action/status surface, which
+  remains reachable while managed dsh is blocked or down. A durable
+  `selectedOnly` marker distinguishes a legitimate staged selection over the
+  builtin anchor from a missing active-user pointer. Install writer single-flight
+  is separate from activation quarantine, so downloads keep the current proxy and
+  features online while candidate-ready edges stay detached until probe verdict.
+  Healthy env overrides no longer appear blocked, and ordinary pending permits
+  only restore-builtin in core, routes, and both UIs.
+
+### Changed
+
+- **Design 17 rewrite (2026-09 connection model v2)** —
+  `docs/design/17-server-side-gateway.md` now makes remote connections a
+  first-class surface with four orthogonal dimensions (dsh/gateway target ×
+  ssh/http transport × nullable token/password credentials × server channel).
+  Explicit plaintext HTTP and unauthenticated use are a bounded user decision
+  (S21): the client does not pre-reject them and the server remains the auth
+  authority. Security extensions are decided individually: S22 safeStorage,
+  S23 SPKI pinning, and S24 lightweight audit are integrated, while mTLS and
+  per-connection network policy retain extension slots. The design is
+  self-contained and no longer derives orchestration rules from design 01.
+- **Connection-model v2 migration decision (design 17 §2.2/§9.1)** — source IDs
+  move from `ssh-<id>` to `dsh-<id>` / `gateway-<id>`, with the old `ssh-`
+  prefix retained for legacy deep-link mapping. Old `kind:'ssh'` loads as
+  `{kind:'dsh', transport:'ssh'}` and old `kind:'gateway'` gains
+  `{transport:'http'}`. Kind controls target semantics: dsh never receives auth
+  headers or `/chamber/*`, while gateway may inject independently nullable token
+  and password credentials. Related docs now align design 01 references and
+  bounded S22/S24 exceptions, designs 08/19 source-ID enumerations, design 11
+  package counts and userData retention, design 14 tray connection counts and
+  quit confirmation, and designs 16/20 legacy wording. **S22/S23/S24 and the
+  password-login session ship in this release** as listed above; remaining
+  real-machine release gates are recorded honestly in
+  `docs/progress/STATUS.md`.
+- **Release-channel and Gateway distribution closure** — stable desktop builds
+  use the package configuration and generate only `latest.yml` /
+  `latest-mac.yml`; beta builds use the independent
+  `packages/desktop/electron-builder.beta.yml` and generate only `beta.yml` /
+  `beta-mac.yml`, with negative assertions preventing either feed from
+  overwriting the other. The release gate accepts only canonical stable
+  `X.Y.Z` or beta `X.Y.Z-beta.N`; `alpha`, `rc`, and every other prerelease fail
+  closed, and only an exact `-beta.N` app selects beta from its own version.
+  Each check uses the bounded Releases API to select only the highest canonical
+  published `vX.Y.Z-beta.N`, then switches to that exact-tag Generic feed and
+  stops on discovery failure instead of invoking a stable `latest*` fallback.
+  Formal macOS publication checks all five signing and
+  notarization credentials before any Release mutation, then requires Developer
+  ID, stapler, and Gatekeeper verification before public finalization. Only
+  `dry_run` may produce an ad-hoc mac build; even when formal secrets exist it
+  unconditionally clears all signing/notarization variables and `GH_TOKEN`,
+  creates or modifies no Release, and uploads no artifacts. Gateway distribution is limited to a
+  clean-prefix-smoked `.tgz` plus its `.tgz.sha256` on GitHub Releases; npm
+  publish and dist-tags are deferred.
+
+## [0.2.0-beta.2] - 2026-08-27
+
+### Added
+
+- **Serverized gateway runtime management (design 18 M5–M7)** — authenticated
+  `/chamber/runtime` surface (status / versions / select / apply / rollback /
+  restore-builtin / retry-apply / retry-restore / restart / registry, exempt from
+  the not-ready gate): startup transaction (cleanup → snapshot → atomic pointer
+  switch → candidate spawn → full activation probe set) with two-phase
+  rollback/restore; runtime-manager (env → override → builtin anchor resolution,
+  intent journal, fail-loud owner takeover, 409 mutation exclusion,
+  blocked-but-alive / FATAL projection); restart endpoint whitelist
+  (ready / degraded) with honest failure (resolve ≠ success: stopped /
+  restart-exhausted never reports ok).
+- **Shared pure-Node runtime core `packages/dsh-runtime`** — the desktop main
+  process and the gateway server adapt the same core through real DI seams
+  (StartupDeps / ApplyDeps / InstallerDeps / ControllerDeps; `RuntimeHostAdapter`
+  remains a documented sketch); runtime state and version trees are never shared
+  between owners.
+- **`dsh-runtime` settings section (design 18 §3.6)** — local = full runtime
+  management, gateway = proxied `/chamber/runtime`, ssh = version read-only;
+  every source gets a restart-dsh action (control-plane `restartLocal()` /
+  `/chamber/runtime/restart` / `restart_service` systemd IPC) without restarting
+  the Electron shell.
+- **Controlled installer anchor** — install-gateway.sh installs the dsh builtin
+  anchor into the gateway-controlled directory (`${BASE_DIR}/gateway/dsh-anchor`,
+  `npm install --prefix` workspace shape) instead of the npm global tree; runtime
+  versions are still installed by the gateway's embedded pnpm into
+  `<stateDir>/dsh-runtime/` via `/chamber/runtime/select`.
+- **Chamber host packages ship with the gateway tarball** — the build copies
+  `dsh-host-client-graph` / `dsh-chamber-host-git-worktree` (package.json +
+  committed dist) into the gateway package and injects them into the
+  control-plane seed (`hostGraphPackageSourceDir` /
+  `hostGitWorktreePackageSourceDir`); managed dsh instances expose the chamber
+  RPCs so the full activation probe set passes server-side (verified live).
+
+### Fixed
+
+- **install-gateway.sh npm-global anchor path semantics** — `verify_dsh` expects
+  the workspace shape (`<ws>/node_modules/@deepseek-ai/dsh`) but the global
+  branch passed `npm root -g` (itself the node_modules directory), so
+  post-install verification always failed and the anchor pointed at the wrong
+  place; both paths now convert to `dirname(npmRoot)` (live-test finding).
+- **Response-leg disconnect detection (main 6791f84 merged)** — `IncomingMessage
+  'close'` fires as soon as the request body is consumed (immediately for a
+  bodyless GET), so request-leg detection aborted every GET/WS forward and SSE;
   detection moved to the response leg (`res 'close'` + `writableEnded` guard,
-  the same discipline as the api.ts SSE), and the WS upgrade now listens on
-  the browser socket's `'close'` (only a genuine disconnect fires pre-101; the
-  splice tearDown takes over post-101); the api.ts health-events SSE received
-  the same fix. Added 4 real Node stream integration regression tests (fake
-  requests do not model real `'close'` semantics; red-green verified:
-  reverting the bug hangs the tests with a timeout).
+  raw browser socket for WS upgrades).
+- **M3b compression headers** — `accept-encoding` is stripped upstream (the
+  proxy never negotiates compression); response `content-encoding` rides through
+  the header whitelist so the browser decodes correctly.
+- **Main-process plugin action confirmation (design 09 §4)** — local/remote
+  plugin installs & removals and the materialize transfer require a confirmation
+  dialog; a dismissal is never reported as success
+  (`{ok:true, cancelled:true}`).
+- **H2 generation-aborted health probes / killFailedSpawn host-log writer /
+  reaper command identity / fsync'd atomic writes** (audit rounds merged).
+- **Spawn pid-record failure is fail-closed** — the child is reclaimed and the
+  spawn throws `dsh_spawn_non_retryable` (never retried on another port;
+  resolution kept when merging with main's retryable semantics).
+- **Sidebar create/fork convergence without the ungrouped flash** and
+  **open-in dropdown icon + short app name**.
+- **Release-gate fixes (2026-09 beta.2 incident)** — preload.cts restores the
+  local `ChamberInjectionState` declaration (L3 lockstep guard regression);
+  workflow action-SHA gate (`release-preflight --actions-only`) + script path
+  fixes; **shared-core F4 fix**: `writeActivationIntent` and the journal
+  round-trip parsers accept the `builtin-anchor` sentinel (previously any
+  machine with an existing override record crashed at shell upgrade startup);
+  tests' hardcoded versions decoupled.
+
+
+## [0.2.0-beta.1] - 2026-08-25
+
+### Added
+
+- **Authenticated server Gateway (design 17)** — adds the independently
+  publishable `@dsh-chamber/gateway`: it manages a loopback dsh and exposes the
+  official frontend/API behind one HTTP/WS Host/Origin policy, mandatory auth,
+  and bounded proxying. Desktop gains a `gateway` transport, write-only token,
+  and per-server orchestration settings. Gateway also ships a browser
+  orchestration page, derived session index, approval/question handling,
+  scheduler, and a workspace-authority-bound Git worktree saga. CI/release
+  cover build, typecheck, tests, and tgz pack+install smoke (npm publishing is
+  deferred, 2026-08).
+- **dsh runtime version management (design 18)** — installs/switches the dsh
+  runtime at runtime: registry-origin binding + SRI verification + embedded pnpm
+  `file:` install, probe-gated switching with a two-phase rollback/recovery loop
+  (M0/M2/M4 done; M1/M3 partial — packaged-machine acceptance awaits a real
+  `.app`); data-safety gap fixes — journal-mismatch classified as
+  `selection-corrupt`, pre-rollback stash restore, and `incomplete` restores
+  unblocking `recover-metadata`.
+- **Open-in registry (design 20)** — evolution of the VS Code deep-link
+  (design 16) into one unified open surface: Finder / local / remote VS Code via
+  the main-process OpenInApp provider registry plus a six-step loud execution
+  pipeline; the plugin package is renamed `dsh-chamber-client-ui-open-in` and
+  the legacy vscode IPC is removed.
+- **Desktop notifications (design 19)** — native notifications for session
+  completion / agent questions / approval requests (opt-in setting); detection =
+  renderer edge detection over the runtime fact channel, presentation =
+  main-process Electron Notification + click-to-open; settings merged into the
+  general-page "Notifications" control group.
+- **Sidebar enhancements (design 06 §2.4/§3.1)** — source-level collapse
+  (source-header collapse toggle, folds the whole source workspace list) +
+  server drag ordering (display preference persisted in
+  `dsh-chamber.sidebar.v1`, live-synced across ctx) + workspace icon identity
+  coloring (hue derived from `(serverId, family seed)` hashing with stable
+  accent; worktrees share the main checkout's family hue).
+- **Lazy Electron binary bootstrap** — the root postinstall no longer downloads
+  the Electron binary (~100MB) by default; it is fetched only with
+  `DSH_CHAMBER_ELECTRON=1` (or auto-installed on the first `electron-dev` launch);
+  server deployments (gateway/control-plane/CLI) install without the desktop
+  dependency.
+
+### Fixed
+
+- **Packaging closure** — `notifications.ts` added to electron-builder
+  `build.files` (the packaged artifact previously missed the module and would
+  fail at startup); preload compilation now emits into a temp dir and copies
+  only `preload.cjs` (three dead files no longer enter the asar);
+  `build.files` excludes `dist/.vite/**`.
+- **Dead dependency cleanup** — the control-plane's `@simplewebauthn/server`
+  (a leftover from the removed v1 auth surface) is dropped; lockfile and
+  third-party declarations synced.
+- **Gateway ESM bundle require shim** — ws's static `require('events')` hit
+  "Dynamic require not supported" in the pure-ESM bundle, wedging the derived
+  session index / approval streams in an endless reconnect loop with an
+  always-empty `/chamber/sessions` (live finding on Linux + macOS); the build.mjs
+  banner now injects `createRequire`, locked by a build smoke test.
+- **Scheduler `session.prompt` wire shape** — the old `{sessionId, prompt}`
+  payload was rejected by dsh 0.1.1-rc.2 (schema reverse-engineered live: the
+  discriminator is `mode`); switched to
+  `{sessionId, mode:'queue', content:[{type:'text',text}]}` with a regression test.
+- **Review hardening round (2026-08 full review)** — business rejections now
+  terminate scheduled jobs (no infinite backoff); dirty-worktree git deletes roll
+  back to `ready` with an `error` field (retryable); `removedSessionIds` cap;
+  request streams destroyed after body-limit rejection; WS upgrade `auth_busy` →
+  503; explicit JWT alg check; scheduler job/prompt limits; gateway-source open-in
+  buttons fail closed (dead control removed); open-in/layout client packages gain
+  tests (29 cases); askpass generation retirement semantics (disconnect keeps the
+  in-flight helper, final deletion on removal); exec epoch guards against stale
+  projection pollution; settings file validation covers the notifications block;
+  EPERM degradation; etc.
+
+### Security
+
+- Gateway rejects absolute/protocol-relative/backslash authorities, forged
+  forwarded identity, weak credentials, and anonymous external deployment
+  (anonymous external is refused by default; the `--no-auth` flag is an explicit,
+  loudly-warned operator override for trusted networks).
+  Password changes revoke old cookies across restarts and token replacement closes
+  established streams. Credential values are transient write-only connection-form
+  inputs; otherwise they are never returned or prefilled by main, persisted by the
+  renderer, or placed in logs, managed dsh, or Git environments. The shared proxy enforces a real process-wide
+  300 MiB body budget (unknown/chunked 32 MiB per request), a backpressure
+  lifecycle, and forwarding-header scrubbing; login bodies, raw dsh event
+  frames/queues, and the derived index all have pre-filter hard caps, and all
+  Gateway state is owner-only.
+- Git compensation is "keep ambiguous and record recovery": only live-workspace
+  canonical main checkouts are allowed; Git children have inherited `GIT_*`
+  stripped and mutations re-verify live authority right before create/delete;
+  unverified records cannot be deleted, running/symlinked cwd fails closed,
+  deletes are non-force and never drop branches, and deleting-recovery records
+  cannot be removed after a new workspaceId takes the path or the workspace
+  vanishes; approvals/questions leave pending only on an explicit accepted dsh
+  receipt. Feature flags are off by default and enforced server-side; the
+  scheduler has timer caps, single-flight, failure backoff, and cancel/reconnect
+  generation guards.
+- The release workflow binds tags to checkout SHAs, rejects untrusted-version
+  shell injection, published-release deletion, dry-run writes, and npm channel
+  downgrades (the npm step is commented out while publishing is deferred,
+  2026-08); stable/prerelease use `latest`/`beta` channels, and official builds
+  do not pin third-party Electron mirrors. Existing Gateway secrets refuse
+  symlink/non-regular files and are chmodded to 0600 before reads.
+- notify answer/approval client-response envelope shapes verified live against
+  the real dsh wire (unknown rpcId → `not-pending` receipt; failure surfaces as
+  explicit 409 + pending row kept).
+
 - **Main-process confirmation for plugin actions (design 09 §4 v1 security
   mitigation)** — `desktop_ssh_plugin_materialize_add` / `desktop_local_plugin_add`
   / `desktop_local_plugin_remove` now require a main-process confirmation
@@ -280,10 +626,10 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Changed
 
-- **Docs consolidation** — `docs/progress/STATUS.md` rewritten to track only
+- **Documentation closure** — `docs/progress/STATUS.md` rewritten to track only
   incomplete/partially-complete items and scope deviations (implemented
-  baselines live in git history / CHANGELOG); AGENTS.md and design docs
-  synced (open-in package, ws-frames tests, new packaging-closure checklist).
+  baselines live in git history / CHANGELOG); AGENTS.md and design docs synced
+  (open-in package, ws-frames tests, packaging-closure checklist added).
 
 ## [0.1.5] - 2026-08-23
 

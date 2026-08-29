@@ -101,9 +101,11 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 - 关窗分支（`browserWindow.on('close')`）：设置 = hide-to-tray 且非显式退出 →
   `event.preventDefault(); win.hide()`（不 destroy）；控制面/传输层/dsh 子进程
   继续运行。显式退出（托盘「退出」/ Cmd+Q / 应用菜单）走现有
-  `will-quit` → plugin-sync 本地 pack/install 子进程回收 +
-  `transportManager.disposeAsync()` + `controlPlane.stop()` 并行完整清理路径。
-- 设置 = `quit` 时关窗仍受 D2 退出确认保护（有活动隧道/本地实例先确认再退出），
+  `will-quit` cleanup single-flight：先阻止新的 runtime 启动并中止在途 runtime
+  operation，再并行等待 plugin-sync/本地插件子进程、transport、control-plane、
+  runtime installer 与在途 runtime transaction；有界超时 fail-loud，不留下孤儿进程。
+- 设置 = `quit` 时关窗仍受 D2 退出确认保护（本地实例运行中先确认再退出；
+  远程隧道/连接不影响关闭——2026-08 修订，D2），
   非 darwin 行为与现状一致（关窗即退出）。
 - 三平台一致：macOS/win/linux 同走 `windowCloseBehavior`；macOS 系统惯例
   （红点/Cmd+W = hide、Cmd+Q = 退出）在 hide-to-tray 语义下天然一致。
@@ -146,9 +148,9 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 ### D3 托盘增强（P1，可选）
 
 - 状态 tooltip：`dsh-chamber · 控制面 http://127.0.0.1:<port> · <connectionState>
-  · 隧道 N/本地实例运行中`（非秘密投影，来自 transport-manager status push +
+  · 连接 N/本地实例运行中`（非秘密投影，来自 transport-manager status push +
   control plane `/health`）。
-- 菜单：显示窗口 / 退出（现状）+ 可选「N 个远程隧道活动」只读行。
+- 菜单：显示窗口 / 退出（现状）+ 可选「N 个远程连接活动」只读行。
 - 保持防御式构造（沿用 `maybeCreateTray` 的 try/catch 跳过语义：无图标资源/
   失败 → 跳过并日志，绝不阻塞启动）。
 - **不做** OpenChamber 式会话级托盘（会话业务归各实例前端 runtime，P2 纪律）。
@@ -218,7 +220,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 | 面 | 改动 |
 |---|---|
-| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）、`backgroundThrottling: false`、`powerMonitor.on('resume')` → push 与退出确认（活动隧道/本地实例投影，**含更新安装豁免 + 单飞**），will-quit 并行等待 plugin-sync 本地子进程、transport 与控制面；同一装配入口拥有 `powerSaveBlocker`、`chamber-settings.json` store、`dsh-chamber:settings-get/set` IPC + push |
+| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；`backgroundThrottling: false`；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 windowCloseBehavior / launchAtLogin / keepAwake）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
@@ -227,10 +229,12 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 ## 5. 安全与纪律
 
-- 无新秘密面：托盘/设置只投影非秘密状态（连接数/phase/版本），传输 URL 与
-  SSH 材料永不进 renderer（05 §8 不变）。
-- close-to-tray **不改变 will-quit 清理所有权**：退出完整 dispose plugin-sync
-  本地子进程 + 传输层并停止控制面，不留孤儿 pack/install、隧道或 dsh 子进程。
+- 无新秘密面：托盘/设置只投影非秘密状态（连接数/phase/版本）；传输 URL、私钥与
+  代理配置永不进 renderer，密码只有表单瞬时 write-only 输入且绝不返回/回填
+  （05 §8 不变）。
+- close-to-tray **不改变 will-quit 清理所有权**：退出完整 dispose plugin-sync/
+  本地插件子进程、传输层、控制面及 runtime 工作，不留孤儿 pack/install、隧道、
+  installer 或 dsh 子进程。
 - keep-awake 仅 prevent-app-suspension，无后台执行面。
 - 退出确认是唯一新增 dialog，与 01 §4 移出项（notifications 等）无冲突。
 

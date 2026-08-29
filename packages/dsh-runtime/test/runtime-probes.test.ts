@@ -1,0 +1,270 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { REQUIRED_ACTIVATION_PROBES } from '../src/activation-gate.ts'
+import {
+  SETTINGS_FILE_MAX_BYTES,
+  runRuntimeActivationProbes,
+  type RuntimeProbeCall,
+} from '../src/runtime-probes.ts'
+
+interface Fixture {
+  root: string
+  dshHome: string
+  settingsPath: string
+  calls: Array<{ method: string; payload: unknown }>
+}
+
+function fixture(): Fixture {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-runtime-probes-'))
+  const dshHome = join(dir, 'dsh-home')
+  mkdirSync(dshHome)
+  const settingsPath = join(dshHome, 'settings.yaml')
+  writeFileSync(settingsPath, 'locale:\n  preference: zh\n')
+  return { root: dir, dshHome, settingsPath, calls: [] }
+}
+
+function successfulValue(method: string): unknown {
+  if (method === 'host.describe') return { version: '1.2.3', attachedSessions: 1 }
+  if (method === 'session.list') return { items: [{ sessionId: 's1' }] }
+  if (method === 'workspace.list') return { items: [] }
+  if (method === 'clientGraph/graph') return { rev: 1, entries: [] }
+  if (method === 'settings.describe') return { writable: true, namespaces: [] }
+  if (method === 'gitWorktree/previewCreate') {
+    return { ok: false, error: { code: 'invalid-input', message: 'input.sourceWorkspaceId is required' } }
+  }
+  return {}
+}
+
+function successfulCall(fx: Fixture): RuntimeProbeCall {
+  return async (_base, method, payload, options) => {
+    fx.calls.push({ method, payload })
+    assert.ok((options?.timeoutMs ?? 0) > 0)
+    assert.equal(options?.signal?.aborted, false)
+    if (method === 'commands/execute') {
+      const error = new Error('missing probe session') as Error & { code: string }
+      error.code = 'session-not-found'
+      throw error
+    }
+    return { result: { value: successfulValue(method) } }
+  }
+}
+
+test('real probe runner executes the closed read-only set with bounded RPCs', async () => {
+  const fx = fixture()
+  try {
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call: successfulCall(fx),
+      windowMs: 1_000,
+      rpcTimeoutMs: 100,
+    })
+    assert.deepEqual(results.map(result => result.name), [...REQUIRED_ACTIVATION_PROBES])
+    assert.ok(results.every(result => result.ok))
+    const command = fx.calls.find(entry => entry.method === 'commands/execute')
+    assert.deepEqual(command?.payload, {
+      args: {
+        agentId: '__dsh_chamber_missing_session_probe__',
+        line: 'dsh-chamber-activation-probe',
+        images: [],
+      },
+    })
+    assert.deepEqual(fx.calls.find(entry => entry.method === 'clientGraph/graph')?.payload, { args: {} })
+    assert.deepEqual(fx.calls.find(entry => entry.method === 'gitWorktree/previewCreate')?.payload, { args: { input: {} } })
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('malformed lists and unreadable settings fail explicit data probes', async () => {
+  const fx = fixture()
+  try {
+    writeFileSync(fx.settingsPath, Buffer.from([0xff]))
+    const call: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        const error = new Error('missing') as Error & { code: string }
+        error.code = 'session-not-found'
+        throw error
+      }
+      if (method === 'session.list' || method === 'workspace.list') return { result: { value: {} } }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call })
+    const failed = new Set(results.filter(result => !result.ok).map(result => result.name))
+    assert.ok(failed.has('session.list'))
+    assert.ok(failed.has('workspace.list'))
+    assert.ok(failed.has('data.settings'))
+    assert.ok(failed.has('data.sessions'))
+    assert.equal(results.find(result => result.name === 'commands.execute')?.ok, true)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('commands and git probes accept only their statically side-effect-free miss paths', async () => {
+  const fx = fixture()
+  try {
+    const call: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        return { result: { value: { commandId: 'unexpected-execution' } } }
+      }
+      if (method === 'gitWorktree/previewCreate') {
+        return { result: { value: { ok: true, value: { previewToken: 'unexpected' } } } }
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call,
+    })
+    assert.equal(results.find(result => result.name === 'commands.execute')?.ok, false)
+    assert.equal(results.find(result => result.name === 'gitWorktree/previewCreate')?.ok, false)
+
+    const wrongBusinessCode: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        const error = new Error('generic miss') as Error & { code: string }
+        error.code = 'not_found'
+        throw error
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const wrongCodeResults = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: wrongBusinessCode,
+    })
+    assert.equal(wrongCodeResults.find(result => result.name === 'commands.execute')?.ok, false)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('settings.yaml size is rejected from fstat before any unbounded read', async () => {
+  const fx = fixture()
+  try {
+    // Sparse growth avoids allocating the attacker-controlled file size in the test too.
+    truncateSync(fx.settingsPath, SETTINGS_FILE_MAX_BYTES + 1)
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx),
+    })
+    const settings = results.find(result => result.name === 'data.settings')
+    assert.equal(settings?.ok, false)
+    assert.match(settings?.error ?? '', /unexpectedly large/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('settings.yaml rejects directories and symlinks instead of following non-regular inputs', async () => {
+  for (const kind of ['directory', 'symlink'] as const) {
+    const fx = fixture()
+    try {
+      rmSync(fx.settingsPath)
+      if (kind === 'directory') {
+        mkdirSync(fx.settingsPath)
+      } else {
+        const target = join(fx.root, 'outside-settings.yaml')
+        writeFileSync(target, 'locale: {}\n')
+        symlinkSync(target, fx.settingsPath)
+      }
+      const results = await runRuntimeActivationProbes({
+        baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx),
+      })
+      assert.equal(results.find(result => result.name === 'data.settings')?.ok, false, kind)
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('probe layer enforces per-RPC and whole-window timeouts when call ignores its signal', async () => {
+  const fx = fixture()
+  try {
+    const never: RuntimeProbeCall = () => new Promise(() => {})
+    const startedAt = Date.now()
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1',
+      dshHome: fx.dshHome,
+      call: never,
+      windowMs: 80,
+      rpcTimeoutMs: 10,
+    })
+    assert.ok(Date.now() - startedAt < 500, 'ignored AbortSignal must not hang the runner')
+    for (const name of [
+      'host.describe', 'commands.execute', 'session.list', 'workspace.list',
+      'clientGraph/graph', 'settings.describe', 'gitWorktree/previewCreate',
+    ]) {
+      assert.equal(results.find(result => result.name === name)?.ok, false, name)
+    }
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('a pre-aborted whole-window signal prevents every RPC invocation', async () => {
+  const fx = fixture()
+  try {
+    const controller = new AbortController()
+    controller.abort(new Error('cancel before probe'))
+    let calls = 0
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1',
+      dshHome: fx.dshHome,
+      signal: controller.signal,
+      call: async () => {
+        calls += 1
+        return { result: { value: {} } }
+      },
+    })
+    assert.equal(calls, 0)
+    assert.ok(results.every(result => !result.ok))
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('settings errors are path-redacted and projected error text is bounded', async () => {
+  const fx = fixture()
+  try {
+    rmSync(fx.settingsPath)
+    const call: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'host.describe') {
+        throw new Error(`failed at '${fx.root}/Secret Folder/${'x'.repeat(4_000)}'`)
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call,
+    })
+    const hostError = results.find(result => result.name === 'host.describe')?.error ?? ''
+    const settingsError = results.find(result => result.name === 'data.settings')?.error ?? ''
+    assert.ok(hostError.length <= 2_000)
+    assert.equal(hostError.includes(fx.root), false)
+    assert.match(hostError, /\[path\]/)
+    assert.equal(settingsError.includes(fx.root), false)
+    assert.match(settingsError, /^settings\.yaml could not be opened(?: \([A-Z0-9_]+\))?$/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('timeout options reject fractional and timer-overflow values', async () => {
+  const fx = fixture()
+  try {
+    await assert.rejects(runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), windowMs: 1.5,
+    }), /timer-safe integer/)
+    await assert.rejects(runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: successfulCall(fx), rpcTimeoutMs: 2_147_483_648,
+    }), /timer-safe integer/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})

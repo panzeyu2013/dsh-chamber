@@ -8,7 +8,12 @@ import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { en, zh, type SidebarKey } from './locales.ts'
 import { chamberBridge, isValidProducerSourceFingerprint } from '../shared/aggregate-store.ts'
-import { instanceSnapshotSignature, projectInstanceSnapshot, projectRuntimeFacts } from '../shared/derive.ts'
+import {
+  dshVersionFromHostDescription,
+  instanceSnapshotSignature,
+  projectInstanceSnapshot,
+  projectRuntimeFacts,
+} from '../shared/derive.ts'
 
 export type {
   SidebarFooterActionOwnerProps, SidebarRootComponentProps, SidebarRootInjected,
@@ -27,7 +32,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'sidebar'
 
 /** Services required by the sidebar plugin. */
-export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'locale']
+export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'locale', 'connection']
 
 /**
  * Registers the sidebar shell and its service callbacks. The hole
@@ -110,6 +115,15 @@ export function apply(ctx: ClientContext): void {
     const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceListState> }).list
     const runtimeProducer = chamberBridge.registerInstanceRuntimeProducer(chamberInstanceId, chamberSourceFingerprint)
     const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(chamberInstanceId, chamberSourceFingerprint)
+    const hostProducer = chamberBridge.registerInstanceHostProducer(chamberInstanceId, chamberSourceFingerprint)
+    const hostDescription = (ctx as unknown as {
+      connection: {
+        hostDescription: {
+          getSnapshot(): unknown
+          subscribe(listener: () => void): () => void
+        }
+      }
+    }).connection.hostDescription
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
@@ -144,16 +158,24 @@ export function apply(ctx: ClientContext): void {
       runtimeProducer.report(projectRuntimeFacts(snapshot, subagentRunning))
       queueSnapshot()
     }
+    const syncHost = (): void => {
+      const dshVersion = dshVersionFromHostDescription(hostDescription.getSnapshot())
+      hostProducer.report(dshVersion === undefined ? undefined : { dshVersion })
+    }
     sync()
+    syncHost()
     queueSnapshot()
     const unsubscribeSessions = sessionsList.subscribe(sync)
     const unsubscribeWorkspaces = workspacesList.subscribe(queueSnapshot)
+    const unsubscribeHost = hostDescription.subscribe(syncHost)
     return () => {
       disposed = true
       unsubscribeSessions()
       unsubscribeWorkspaces()
+      unsubscribeHost()
       snapshotProducer.clear()
       runtimeProducer.clear()
+      hostProducer.clear()
     }
   }, 'dsh-chamber: sidebar runtime facts report')
 }

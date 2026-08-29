@@ -25,21 +25,21 @@
 │ Control plane (127.0.0.1:17500)                                        │
 │  ├─ Management REST: /health · /api/connections · /api/host/logs       │
 │  ├─ Per-instance proxy: /api/i/local/* → local dsh (web profile)       │
-│  │                     /api/i/ssh-<id>/* → tunnel localPort            │
-│  │                     (v1 anonymously reachable, loopback-only)       │
+│  │       /api/i/dsh-<id>/*, /api/i/gateway-<id>/* → registered transport│
+│  │       (ordinary desktop v1 is anonymous and loopback-only)          │
 │  ├─ Local host hosting + two-host-package seed / one overlay           │
 │  └─ Static frontend serving (dist + __DSH_BOOT__ manifest)             │
 ├───────────────────────────────────────────────────────────────────────┤
 │ Desktop main process (desktop)                                         │
-│  ├─ transport-manager + ssh provider (TransportProvider interface)     │
-│  │    ssh -N -o ServerAlive… -L tunnel + systemctl start/stop/is-active │
+│  ├─ transport-manager: target dsh|gateway × transport ssh|http         │
+│  │    SSH tunnel/systemd or main-process HTTP(S), generation-isolated  │
 │  ├─ Ready-time remote host-package seed (never SSH-executes Git)       │
 │  ├─ Instance registry: <userData>/ssh-instances.json                   │
 │  └─ IPC (preload allowlist): dsh-chamber:info · desktop_ssh_*          │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-**In one sentence**: the control plane (connection-manager core) owns connection management, per-instance same-origin reverse proxying, and static frontend serving; the renderer is the dsh official frontend, source-reused and self-built (single window, single frame, multiple instances coexisting as N-ctx shells); the desktop shell attaches remote instances over SSH tunnels.
+**In one sentence**: the control plane (connection-manager core) owns connection management, per-instance same-origin reverse proxying, and static frontend serving; the renderer is the dsh official frontend, source-reused and self-built (single window, single frame, multiple instances coexisting as N-ctx shells); the desktop independently composes `dsh|gateway` targets with `ssh|http` transports, while the explicitly started Gateway reuses the same local-host core behind an authenticated-by-default public boundary.
 
 Git worktree support pairs a chamber-bundled client plugin with an **in-instance**
 host plugin. The control plane and desktop only distribute the host package and
@@ -51,8 +51,10 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 |---|---|
 | `packages/control-plane` | Connection-manager core: web-profile host hosting, local two-host-package seed/overlay, management REST, per-instance proxy, static frontend serving |
 | `packages/renderer` | Self-built dsh frontend (source reuse): entry build, pure-dsh first-screen bridge host, N-ctx orchestration, boot manifest |
-| `packages/desktop` | Electron shell: single frame, transport-manager + ssh provider (tunnels + systemd), ready-time remote host-package seed, instance registry, IPC |
+| `packages/desktop` | Electron shell: single frame, orthogonal target/transport providers, ready-time remote host-package seed, instance registry, IPC, runtime management, and native edge capabilities |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
+| `packages/gateway` | Standalone authenticated server shape (Design 17): mandatory-auth public boundary, one local dsh proxy, and derived orchestration |
+| `packages/dsh-runtime` | Pure-Node dsh version-tree, install, activation, probe, and two-phase rollback core shared by desktop and Gateway while each host owns separate state |
 | `packages/dsh-client-connection` | In-repo copy of the official connection client + base-path patch |
 | `packages/dsh-client-web` | In-repo copy of the official web shell + boot.ts N-ctx module-table sharing seam |
 | `packages/dsh-chamber-client-ui-sidebar` | Self-built sidebar plugin: multi-source session navigation + chamberBridge (replaces the official ui-sidebar registration) |
@@ -81,10 +83,10 @@ git clone <REPO-URL>
 cd dsh-chamber
 ```
 
-`vendor/harness-packages` is a **gitignored symlink directory** — one symlink per dsh package, named after the package, pointing at the [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) source tree. It is never committed and must exist **before** `pnpm install` (the workspace resolves unmodified dsh packages through it). `scripts/ensure-harness-vendor.mjs` bootstraps it; on a fresh clone run it explicitly **before** `pnpm install`:
+`vendor/harness-packages` is a **gitignored symlink directory** — one symlink per dsh package, named after the package, pointing at the [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) source tree. It is never committed and must exist **before** `pnpm install` (the workspace resolves unmodified dsh packages through it). `scripts/dev/ensure-harness-vendor.mjs` bootstraps it; on a fresh clone run it explicitly **before** `pnpm install`:
 
 ```bash
-node scripts/ensure-harness-vendor.mjs
+node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 
@@ -95,7 +97,7 @@ The script resolves the source tree in this order:
 3. sibling checkout `<repo>/../deepseek-harness` (zero-network local dev; warns when HEAD differs from the pin);
 4. otherwise download a snapshot from codeload at the pinned commit (pinned in `harness.commit`, overridable via `DSH_CHAMBER_HARNESS_COMMIT`).
 
-The root `.npmrc` is a gitignored local convenience config that can point Electron binary downloads at the npmmirror mirror; without it they come from the official source. The packaging-time mirror is committed in `packages/desktop/package.json` (`electronDownload.mirror`).
+The root `.npmrc` is a gitignored local convenience config, so local development may opt into a binary mirror. Formal build configuration commits no third-party `electronDownload.mirror` and always uses Electron's official source, preventing one mirror from replacing both a binary and its checksum before formal signing.
 
 ### 2.3 Bundle the dsh runtime
 
@@ -124,7 +126,7 @@ pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
 pnpm run dist:desktop:win    # package the Windows app (nsis + zip; must run on Windows — dsh runtime bundling is platform-specific)
 ```
 
-Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). Publication model (since 2026-08): the repo configures no Apple Developer ID / Windows Authenticode secrets — the macOS app is ad-hoc signed by the afterPack hook (`packages/desktop/scripts/after-pack-adhoc-sign.mjs`; structurally valid signature, so Gatekeeper-relaxed systems open it directly while a default Gatekeeper still requires right-click/open or "allow anywhere"), and the Windows exe goes out unsigned (SmartScreen warning; documented tradeoff, design 11 §7); the macOS auto-install step stays blocked without a Developer ID signature (design 11 §3.1). If `MAC_CSC_LINK`/`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`/`WIN_CSC_LINK` are later configured in GitHub Secrets, the signed + notarized publication path can be restored.
+Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). A formal macOS release requires all five Apple/Developer ID credentials: a missing value fails closed before any GitHub Release mutation, and the built app must then pass Developer ID signing, notarization, stapler, and spctl checks before its draft can be finalized publicly. Even when formal secrets exist, `workflow_dispatch dry_run` unconditionally clears all signing/notarization variables and `GH_TOKEN`, uses `--publish=never`, performs no Release creation/update or asset upload, and produces an ad-hoc-signed validation package through the afterPack hook. The first Windows release remains unsigned (the SmartScreen warning is the explicit Design 11 §7 tradeoff).
 
 `build:desktop` copies the two built host packages into
 `packages/desktop/dist/host-graph-package/` and
@@ -136,8 +138,10 @@ artifacts.
 
 ## 5. CI & releases
 
-- `.github/workflows/ci.yml`: runs on every push/PR — validation chain only (frozen install → root/two-host-package/client-plugin type checks → i18n → control-plane/desktop/renderer/client/host tests, including `test:git` and `test:host-git` → smoke [SKIPs without a bundled runtime] → renderer build); **no packaging**. Desktop packaging plus the real smoke run live in `release.yml` (tag/manual trigger).
-- `.github/workflows/release.yml`: produces distributable releases — push a `v*` tag (or run manually with a version and optional dry-run). Creates a draft GitHub Release, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, uploads artifacts into the draft, then flips it public. Version assertions cover the chamber packages in the release matrix; the `## [<version>]` section of `CHANGELOG.md` is extracted as the release body (a missing section fails loudly).
+- `.github/workflows/ci.yml`: runs on every push/PR — validation chain only (frozen install → root/gateway/runtime/two-host-package/client-plugin type checks → i18n → control-plane/runtime/desktop/gateway/renderer/client/host tests, including `test:git` and `test:host-git` → **workflow action-SHA gate** (`release-preflight --actions-only`, since 2026-09) → smoke [SKIPs without a bundled runtime] → renderer/host/desktop sub-builds → gateway pack-and-install smoke [`pack` → temporary prefix install → `gateway --help`]); it **does not produce release artifacts**. Desktop packaging and the real smoke run live in `release.yml` (tag/manual trigger).
+- `.github/workflows/release.yml`: produces distributable releases — push a `v*` tag (or run manually with a version without `v` and an optional dry-run). Publishable versions are limited to canonical stable `X.Y.Z` or beta `X.Y.Z-beta.N`; `alpha`, `rc`, and every other prerelease fail closed. Stable uses the default desktop build configuration and publishes only `latest.yml`/`latest-mac.yml`; beta uses the independent `packages/desktop/electron-builder.beta.yml` and publishes only `beta.yml`/`beta-mac.yml`, with mutually exclusive channel assets. A formal run creates a draft, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, and makes it public only after the fail-closed macOS checks above; dry-run performs zero Release writes. `release-preflight --versions-only` dynamically checks the root, every non-fork chamber package, and both fork baselines; the matching `## [<version>]` section of `CHANGELOG.md` becomes the release body and is mandatory. The `validation` job self-validates gateway/runtime type checks and tests plus critical control-plane/desktop/renderer/plugin/CLI/policy gates; `build-gateway` publishes only a clean-prefix-smoked `.tgz` plus matching `.tgz.sha256` to GitHub Releases, with npm publish/dist-tags deferred.
+- **Pre-release mechanical gate (since 2026-09)**: `pnpm run release:preflight <version>` (`scripts/dev/release-preflight.mjs`) — version uniformity (incl. fork copies and the installer dsh constant), changelog zh/en parity, i18n, **every workflow action SHA resolves upstream**, conflict markers, clean git status, frozen install, test:release-workflow; the release checklist §1.5/§7 mandates it before commit and again before push.
+- **Release flow (2026-09 optimization)**: local preflight + full battery on the exact release commit → commit+tag → **workflow_dispatch dry-run first** (new/modified workflows, script paths and action SHAs must pass one dry-run) → real tag push. Full steps in the release checklist.
 - Both workflows bootstrap the vendor source tree at the `harness.commit` pin before installing.
 
 ## 6. Repository layout
@@ -147,8 +151,10 @@ packages/
   control-plane/            Control plane: host hosting, management REST,
                             per-instance proxy, frontend serving
   renderer/                 Self-built dsh frontend (source reuse + bridge host + N-ctx)
-  desktop/                  Electron shell: single frame, transport-manager + ssh provider, instance registry, IPC
+  desktop/                  Electron shell: single frame, orthogonal target/transport providers, instance registry, IPC
   cli/                      CLI thin shell
+  gateway/                  Standalone authenticated server shape + one local dsh + derived orchestration
+  dsh-runtime/              Pure-Node dsh runtime-management core shared by desktop and Gateway
   dsh-client-connection/    Modified dsh source #1 (base-path patch)
   dsh-client-web/           Modified dsh source #2 (boot.tsx N-ctx seam)
   dsh-chamber-client-ui-sidebar/     Self-built sidebar plugin: multi-source session navigation + chamberBridge

@@ -8,7 +8,9 @@
 > （静态 dist + `__DSH_BOOT__` 启动图清单）。
 > **[v1 收敛（2026-08-14）]** 认证/审计面（`/api/auth/*`、`/api/passkeys*`、
 > `/api/audit`）随模块整体移除——v1 无认证边界，全部端点匿名可达（仅
-> loopback 监听，05 §8 安全不变量）。
+> loopback 监听，05 §8 安全不变量）。**该匿名边界只约束普通 loopback
+> 控制面**；gateway 部署的认证面/凭据/审计见 `17-server-side-gateway.md`
+> （§7/§12/§13.4，2026-09 v2）。
 > 权威契约：`05-connection-manager.md` §7（控制面/桌面契约）；连接模型见
 > `03-connections-proxy.md`。
 
@@ -27,7 +29,9 @@
 **明确不在本文档范围**：宿主进程托管（02）、连接模型细节（03）、
 会话业务（dsh 前端 runtime，本仓不承载）、远程隧道与 systemd（desktop
 transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Passkey / 限流 / JWT / 审计）
-随 v1 收敛整体移除**，不再有对应文档。
+随 v1 收敛整体移除**，不再有对应文档——**该移除限定匿名 loopback 控制面**；
+gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStorage）
+与审计见 17 §7/§12/§13.4。
 
 ---
 
@@ -170,7 +174,7 @@ transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Pa
 ### 4.1 路径与方法
 
 ```
-挂载：/api/i/<id>/*      id ∈ {local, ssh-<sshInstanceId>}
+挂载：/api/i/<id>/*      id ∈ {local, dsh-<id>, gateway-<id>}（ssh-<id> legacy，17 §9.1）
 任意方法（GET/POST/PATCH/DELETE/…）全量透传，无方法白名单（05 §1）
 WS upgrade：/api/i/<id>/api/events.mux | events.host（剥前缀 → 实例 /api/…）
 SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
@@ -180,7 +184,8 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 > v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 对获准来源匿名可达（仅
 > loopback 监听 + HTTP/WS 来源门禁，03 §3.2 / 05 §8），不再有 401 认证
-> 失败面。
+> 失败面——**该边界限定匿名 loopback 控制面**；gateway 连接经注册
+> transport 的认证头注入（0..2 白名单）与 401 三态分类见 17 §7.3/§9.3。
 
 | 情形 | 结果 |
 |---|---|
@@ -191,12 +196,18 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | 上游连接拒绝 / 请求失败 | 502 `{error, code:'upstream_failed'}`（脱敏） |
 | 上游空闲超时（默认 45s） | 504 `{error, code:'upstream_timeout'}` |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
-| 请求体 > 300MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
+| 已声明请求体 > 300MiB、未知长度请求体 > 32MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
 
 ### 4.3 响应头白名单
 
-`content-type`、`cache-control`、`x-next-cursor`、`x-ratelimit-*`；
-其余上游头不直通（WS upgrade 101 所需头除外）。
+`content-type`、`content-encoding`、`content-language`、`content-range`、
+`content-disposition`、`accept-ranges`、`cache-control`、`etag`、`expires`、
+`last-modified`、`location`、`vary`、`x-next-cursor`、`x-ratelimit-limit`、
+`x-ratelimit-remaining`、`x-ratelimit-reset`。其中 `location` 解析后仍指向同一
+上游 origin 的相对或绝对重定向会重写到实例反代前缀，`vary` 会与控制面的 CORS
+`Origin` 收敛合并；其余上游头不直通
+（WS upgrade 101 所需头除外）。该列表与 03 §3.4 及
+`proxy-forward.ts` 的 `RESPONSE_HEADER_WHITELIST` 同步维护。
 
 ---
 
@@ -249,7 +260,7 @@ interface WebBootGraph {
 | 载体 | 路径 | 内容 | 权威方 |
 |---|---|---|---|
 | JSON 单行 | `<stateDir>/catalog.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写） | `{schemaVersion: 2, revision, connections: [{connectionId, kind, status, dshPort, label, accentColor}]}`（status / dshPort 为运行态投影） | 控制面（03 §2.1） |
-| JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, label, kind, host, user, sshPort, remotePort, serviceName, remoteDshHome}`（schema 以 03 §2.2 为准） | 桌面主进程（03 §2.2） |
+| JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, kind, transport, label, host, user, sshPort, remotePort, serviceName, remoteDshHome, insecureHttp, spkiPin}`（schema v2 以 03 §2.2 = 17 §9.1 为准；凭据不进注册表，`sshPasswordSet`/`tokenSet`/`passwordSet`/`secretStorage` 为主进程实时非秘密投影） | 桌面主进程（03 §2.2） |
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
 - **原子写协议**（catalog.json）：同步 write-through + `tmp + fsync +

@@ -47,10 +47,19 @@ importers:
       '@dsh-chamber/control-plane':
         specifier: workspace:^
         version: link:../control-plane
+      '@dsh-chamber/dsh-runtime':
+        specifier: workspace:^
+        version: link:../dsh-runtime
       electron-updater:
         specifier: ^6.8.9
         version: 6.8.9(supports-color@9.4.0)
+      pnpm:
+        specifier: 11.21.0
+        version: 11.21.0
     devDependencies:
+      '@electron/asar':
+        specifier: ^3.2.1
+        version: 3.2.1
       electron:
         specifier: 43.4.0
         version: 43.4.0(supports-color@9.4.0)
@@ -392,6 +401,31 @@ importers:
       '@standard-schema/spec':
         specifier: ^1.1.0
         version: 1.1.0
+
+  packages/dsh-runtime:
+    devDependencies:
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/gateway:
+    dependencies:
+      pnpm:
+        specifier: 11.21.0
+        version: 11.21.0
+    devDependencies:
+      '@dsh-chamber/control-plane':
+        specifier: workspace:^
+        version: link:../control-plane
+      '@dsh-chamber/dsh-runtime':
+        specifier: workspace:^
+        version: link:../dsh-runtime
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
 
   packages/renderer:
     dependencies:
@@ -9030,6 +9064,7 @@ packages:
   '@electron/asar@3.4.1':
     resolution: {integrity: sha512-i4/rNPRS84t0vSRa2HorerGRXWyF4vThfHesw0dmcWHp+cspK743UanA0suA5Q5y8kzY2y6YKrvbIUn69BCAiA==}
     engines: {node: '>=10.12.0'}
+    hasBin: true
 
   '@electron/fuses@1.8.0':
     resolution: {integrity: sha512-zx0EIq78WlY/lBb1uXlziZmDZI4ubcCXIMJ4uGjXzZW0nS19TjSPeXPAjzzTmKQlJUZm0SbmZhPKP7tuQ1SsEw==}
@@ -11006,6 +11041,7 @@ packages:
   esbuild@0.25.0:
     resolution: {integrity: sha512-BXq5mqc8ltbaN34cDqWuYKyNhX8D/Z0J1xdtdQ8UcIIIyJyz+ZMKUt58tF3SrZ85jcfN/PZYhjR5uDQAYNVbuw==}
     engines: {node: '>=18'}
+    hasBin: true
 
   esbuild@0.28.2:
     resolution: {integrity: sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==}
@@ -11997,6 +12033,11 @@ packages:
   plist@3.1.1:
     resolution: {integrity: sha512-ZIfcLJC+7E7FBFnDxm9MPmt7D+DidyQ26lewieO75AdhA2ayMtsJSES0iWzqJQbcVRSrTufQoy0DR94xHue0oA==}
     engines: {node: '>=10.4.0'}
+
+  pnpm@11.21.0:
+    resolution: {integrity: sha512-UhcFvOaJkk6scvWjWHEi82JonvZXHlW6gAdv1jfBETLs/62ib61Op5xIW/3b/T1aKlsFgFp36JPeceyKbMo7sQ==}
+    engines: {node: '>=22.13'}
+    hasBin: true
 
   postcss@8.5.26:
     resolution: {integrity: sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ==}
@@ -16331,6 +16372,8 @@ snapshots:
       '@xmldom/xmldom': 0.9.11
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
+
+  pnpm@11.21.0: {}
 
   postcss@8.5.26:
     dependencies:

@@ -202,7 +202,7 @@ test('reaper: killAndConfirm gives up after SIGTERM + SIGKILL grace windows and 
   assert.ok(recordExists(dir, '4242.json'), 'a process that refused to die keeps its record')
 })
 
-test('reaper: dead pid records and corrupt records are removed without killing', async t => {
+test('reaper: dead pid records are removed while corrupt/invalid records remain as writer evidence', async t => {
   const dir = tempStateDir(t)
   writeRecord(dir, '1111.json', { ...spawnRecord, pid: 1111 })
   writeFileSync(join(dir, 'managed-dsh', '2222.json'), '{not-json')
@@ -211,10 +211,10 @@ test('reaper: dead pid records and corrupt records are removed without killing',
     alive: () => false, // every recorded pid is dead
   })
   const result = await runReaper({ stateDir: dir, deps })
-  assert.deepEqual(result, { reclaimed: 0, kept: 0, errors: [] })
+  assert.deepEqual(result, { reclaimed: 0, kept: 2, errors: [] })
   assert.equal(recordExists(dir, '1111.json'), false, 'dead pid → record removed')
-  assert.equal(recordExists(dir, '2222.json'), false, 'corrupt record → removed')
-  assert.equal(recordExists(dir, '3333.json'), false, 'non-integer pid → removed')
+  assert.equal(recordExists(dir, '2222.json'), true, 'corrupt record → kept as durable recovery evidence')
+  assert.equal(recordExists(dir, '3333.json'), true, 'non-integer pid → kept as durable recovery evidence')
 })
 
 test('reaper: a claim record is only removed once its owner is dead; a live owner keeps it', async t => {

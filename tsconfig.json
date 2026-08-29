@@ -24,7 +24,9 @@
     "packages/renderer/src/**/*.ts",
     "packages/renderer/src/**/*.tsx",
     "packages/desktop/*.ts",
-    "packages/desktop/*.cts"
+    "packages/desktop/*.cts",
+    "packages/gateway/src/**/*.ts",
+    "packages/gateway/test/**/*.ts"
   ],
   "exclude": ["node_modules", "**/dist/**", "**/vendor/**", "packages/desktop/scripts"]
 }

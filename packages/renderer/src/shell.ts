@@ -26,14 +26,13 @@ import { AppWebEntry, ensureWebModuleSystem } from '@deepseek-ai/dsh-client-web'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
+import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { BundleLoadTimeoutError, collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 
 const CHAMBER_BOOT = '@dsh-chamber/app'
-/** Raw remote registry id contract shared with desktop/open-in. `local` is
- * reserved for the privileged local source and may never appear after ssh-. */
-const REMOTE_INSTANCE_ID = /^(?!local$)[A-Za-z0-9_-]{1,64}$/
+export type ChamberTransport = 'local' | 'ssh' | 'http'
 
 /** Convert an arbitrary thrown value into a stable diagnostic without ever
  * throwing again. External runtime stores/plugins may throw proxies whose
@@ -153,13 +152,16 @@ export function createChamberContextSetup(
   instanceId: string,
   basePath: string,
   sourceFingerprint: string,
+  transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
 ): (ctx: Pick<Context, 'provide'>) => void {
   if (instanceId.trim() === '') throw new Error('shell: empty instance id')
-  if (instanceId !== 'local') {
-    const remoteId = instanceId.startsWith('ssh-') ? instanceId.slice(4) : ''
-    if (!REMOTE_INSTANCE_ID.test(remoteId)) {
-      throw new Error(`shell: invalid instance id ${JSON.stringify(instanceId)}`)
-    }
+  if (!isChamberSourceId(instanceId)
+    || (instanceId !== 'local' && rawInstanceIdFromSourceId(instanceId) === null)) {
+    throw new Error(`shell: invalid instance id ${JSON.stringify(instanceId)}`)
+  }
+  if ((instanceId === 'local' && transport !== 'local')
+    || (instanceId !== 'local' && transport !== 'ssh' && transport !== 'http')) {
+    throw new Error(`shell: invalid transport ${JSON.stringify(transport)} for ${JSON.stringify(instanceId)}`)
   }
   const expectedBasePath = `/api/i/${instanceId}`
   if (basePath !== expectedBasePath) {
@@ -172,6 +174,7 @@ export function createChamberContextSetup(
     ctx.provide('chamberInstanceId', instanceId)
     ctx.provide('chamberBasePath', basePath)
     ctx.provide('chamberSourceFingerprint', sourceFingerprint)
+    ctx.provide('chamberTransport', transport)
   }
 }
 
@@ -264,11 +267,12 @@ export function bootInstanceShell(
   el: HTMLElement,
   onState: (next: ShellState) => void,
   sourceFingerprint: string,
+  transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
 ): Promise<ShellState> {
   // Validate the source/base-path pair before installing module globals or
   // starting the host-graph request. An invalid source must not be able to
   // steer even a same-origin probe through a crafted /api/i/... prefix.
-  const configureContext = createChamberContextSetup(instanceId, basePath, sourceFingerprint)
+  const configureContext = createChamberContextSetup(instanceId, basePath, sourceFingerprint, transport)
   // 取序必须在入队前：dispose 记录的阈值与 settle 检查都按本次 boot 的代。
   const gen = (bootGenerations.get(instanceId) ?? 0) + 1
   bootGenerations.set(instanceId, gen)

@@ -151,3 +151,16 @@ export function subscribeOpenIn(listener: () => void): () => void {
 function refreshAppsOnFocus(): void {
   void refreshApps()
 }
+
+/** Test-only: reset the shared probe state (list, in-flight promise, epoch
+ *  and listeners) for isolation — same pattern as the sidebar's
+ *  `__resetViewPrefsForTests`. */
+export function __resetOpenInForTests(): void {
+  if (listeners.size > 0 && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+    window.removeEventListener('focus', refreshAppsOnFocus)
+  }
+  apps = null
+  appsPromise = null
+  probeEpoch = 0
+  listeners.clear()
+}

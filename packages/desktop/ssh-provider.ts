@@ -1,7 +1,16 @@
 /**
- * The `ssh` transport provider (design 03 §2.2, transport-provider.ts):
+ * The `ssh` transport provider (design 03 §2.2, 17 §2.2, transport-provider.ts):
  * everything source-specific about SSH tunnels and remote systemd exec,
- * packaged as a TransportProvider for the generic runtime.
+ * packaged as a TransportProvider for the generic runtime. v2 semantics
+ * (design 17 §2): this provider serves BOTH TARGET kinds — `dsh` and
+ * `gateway` — over the `ssh` TRANSPORT method (the tunnel + exec machinery).
+ * The target kind decides the verifyUp semantics only: a `dsh` target never
+ * carries auth headers (design 17 §2.1), a `gateway` target may (a stored
+ * bearer token rides the tunnel probe as Authorization; a missing token is
+ * NO pre-flight refusal — the probe goes out without a header and the
+ * gateway's own 401 is classified terminal, §2.3/§9.2). The direct-endpoint
+ * `http` transport is a separate provider (gateway-provider.ts) and is
+ * refused here loudly rather than mis-served.
  *
  * - Tunnels via the system `ssh` binary:
  *   `ssh -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 [-p <sshPort>]
@@ -10,20 +19,21 @@
  *   which feeds the runtime's reconnect machinery, and the probes keep NAT
  *   mappings alive).
  * - systemctl exec (design 02 §3.9): `ssh user@host systemctl
- *   start|stop|is-active <serviceName>` — argument-array spawn (no shell),
- *   serviceName whitelisted `^(?!-)[a-zA-Z0-9_.:@-]+$` before anything runs
- *   (injection guard), bounded timeout, failures loud. Auth failures surface
+ *   start|stop|is-active -- <serviceName>` — argument-array spawn (no shell),
+ *   serviceName whitelisted `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` before anything
+ *   runs and separated from options by `--` (injection guard), bounded timeout,
+ *   failures loud. Auth failures surface
  *   through the result error only — the exec channel never writes the tunnel
  *   state (a later routine drop is never mislabeled terminal). is-active is
  *   classified honestly from the exit code: 0 active, 4 = no such unit
  *   (explicit error, serviceActive falls back to null), 255/signal death =
  *   ssh exec failure (explicit error, never "inactive"), anything else =
  *   inactive — a failed exec must never masquerade as a stopped service.
- * - Endpoint identity verification (verifyUp): the tunnel destination must
- *   answer the dsh host.describe wire handshake before the runtime may
- *   declare the instance ready — a non-dsh service on the destination port
- *   never presents as a fake connection (same criterion as the local
- *   instance's readiness, design 02 §3.2).
+ * - Endpoint identity verification (verifyUp): a `dsh` target must answer the
+ *   host.describe wire handshake; a `gateway` target must answer its
+ *   authenticated, gateway-owned `/chamber/runtime/status` identity, which
+ *   deliberately stays available while managed dsh is blocked/down. An
+ *   unrelated service never presents as a fake connection.
  * - Security discipline (design 05 §8): no credential material is ever
  *   placed on the command line (default ssh key/agent auth); stderr lines
  *   with key/passphrase material are redacted before they enter the ring
@@ -40,7 +50,7 @@
  *   via an ephemeral askpass helper (SSH_ASKPASS_REQUIRE=force — no TTY and
  *   no command line involvement; the helper is a 0700 sh script that answers
  *   host-key confirmations with `yes` and password/passphrase prompts with
- *   the stored value, deleted on transport stop). Platform note:
+ *   the stored value, leased until its ssh child terminates). Platform note:
  *   Win32-OpenSSH askpass support is not reliable, so password auth is
  *   refused at the IPC gate on Windows (keys/agent remain the universal
  *   path).
@@ -49,7 +59,7 @@
 import type { SpawnOptions } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
-import { chmodSync, closeSync, constants as fsConstants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 // The dsh RPC wire envelope is single-sourced in control-plane
@@ -58,8 +68,10 @@ import { dirname, join } from 'node:path'
 // compiled dist/control-plane, dev → workspace source). The envelope shape
 // can never drift from the control-plane unary client's.
 import { buildClientRequest, mintRpcId, parseServerResponse, postClientRequest } from './control-plane-module.ts'
-import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
+import { gatewayHttpFailureIsTerminal, getGatewayPassword, getGatewaySessionHooks, getGatewayToken, isGatewayRuntimeStatus, verifyGatewayPasswordSession } from './gateway-provider.ts'
+import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
+import { isCredentialBinding, sshCredentialBinding, sshCredentialBindingForEndpoint } from './credential-binding.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -69,18 +81,23 @@ import type {
   TransportProbeEndpoint,
   TransportProvider,
   TransportRunPayload,
+  TransportSpawnLease,
   TransportVerifyResult,
 } from './transport-provider.ts'
+import { gatewaySessionScopeForConnection } from './gateway-session.ts'
+import type { GatewaySessionOrigin } from './gateway-session.ts'
+import { gatewayTunnelAuthority } from './gateway-session-refresh.ts'
+import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
 
 /**
  * Registry metadata whitelists (design 03 §2.2 / 05 §8). id lands in
- * /api/i/ssh-<id> path segments and transport keys; host/user are placed on
- * the ssh command line as the connection target — a leading '-' would be
- * parsed as an ssh option by getopt (e.g. -oProxyCommand=... → arbitrary
- * command execution), so host/user must never start with '-' (enforced by
- * the character class: the first character is never '-'). host allows
- * dots/hyphens (hostnames) and [ ] for bracketed IPv6 literals; user allows
- * dots/underscores/hyphens. id additionally reserves 'local' (the
+ * /api/i/dsh-<id> / gateway-<id> path segments and transport keys; host/user
+ * are placed on the ssh command line as the connection target — a leading '-'
+ * would be parsed as an ssh option by getopt (e.g. -oProxyCommand=... →
+ * arbitrary command execution), so host/user must never start with '-'
+ * (enforced by the character class: the first character is never '-'). host
+ * allows dots/hyphens (hostnames) and [ ] for bracketed IPv6 literals; user
+ * allows dots/underscores/hyphens. id additionally reserves 'local' (the
  * local-instance source id) and is validated by the runtime before the
  * provider sees it.
  */
@@ -93,10 +110,7 @@ export const SSH_USER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
  * injection). A leading '-' is specifically refused because systemctl would
  * parse an otherwise valid-looking name such as '--help' as an option.
  */
-// `@` (template instances) and `:` are valid, shell-safe systemd unit-name
-// characters. Backslash escapes remain out because OpenSSH joins the remote
-// argv through a shell; a leading '-' remains an option-injection shape.
-export const SERVICE_NAME_PATTERN = /^(?!-)[a-zA-Z0-9_.:@-]+$/
+export const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
 
 /**
  * Remote dsh home whitelist (design 13 §7.2): `~/.dsh` or an absolute path,
@@ -366,6 +380,189 @@ export async function verifyDshEndpoint(
 }
 
 /**
+ * One-shot GATEWAY identity probe over an SSH TUNNEL endpoint (design 17
+ * §9.2: kind 'gateway' + transport 'ssh'): GET /chamber/runtime/status at the
+ * loopback tunnel endpoint — ALWAYS plain http (the tunnel carries its own
+ * encryption; `insecureHttp` is meaningless for a loopback tunnel) — with the
+ * gateway's bearer token when one is stored for the instance, and/or the
+ * password-session Cookie (design 17 §9.3: the ssh provider's tunnel branch
+ * uses the SAME session-hook flow as the direct-endpoint provider).
+ *
+ * Classification mirrors the gateway provider's direct-endpoint probe
+ * (gateway-provider.ts verifyGatewayEndpoint, design 17 §9.3):
+ * - 401 → TERMINAL, message split by what was sent: a session Cookie was
+ *   carried (password-refused: "re-enter the password"), or no cookie and no
+ *   token ("configure the shared token or password"), or a token was sent
+ *   ("check the shared token") — the cases are never conflated;
+ * - 403 → terminal (origin/Host policy rejection);
+ * - any other non-200 → gatewayHttpFailureIsTerminal (every 5xx transient:
+ *   gateway startup/overload/upstream windows are time-dependent);
+ * - 200 with the gateway runtime identity marker → ready, even while managed
+ *   dsh is blocked/down (design 18 §9.3 recovery mounting discipline).
+ *
+ * A missing token is NEVER a pre-flight refusal (design 17 §2.3): the probe
+ * goes out WITHOUT an Authorization header and the gateway's own answer is
+ * classified — a `--no-auth` deployment answers 200 and is ready, an
+ * auth-requiring deployment answers 401 terminal. Connection failures stay
+ * transient. The result carries `statusCode` so the caller can act on the
+ * raw 401 (the verifyUp session flow invalidates the rejected cookie).
+ */
+export function verifyGatewayEndpointViaTunnel(
+  endpoint: TransportProbeEndpoint,
+  token: string | null,
+  timeoutMs = VERIFY_UP_TIMEOUT_MS,
+  maxBodyBytes = VERIFY_UP_MAX_BODY_BYTES,
+  cookie: string | null = null,
+  authority: string | undefined = undefined,
+): Promise<TransportVerifyResult & { statusCode?: number }> {
+  return new Promise(resolve => {
+    const url = `http://${endpoint.host}:${endpoint.port}/chamber/runtime/status`
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const done = (ok: boolean, detail?: string, terminal?: boolean, statusCode?: number) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      req.destroy()
+      // statusCode rides the result only when a real answer produced it — an
+      // undefined key must never change the probe's wire shape for callers
+      // that deep-compare the plain {ok:true} success form.
+      const result: TransportVerifyResult & { statusCode?: number } = ok
+        ? { ok: true }
+        : { ok: false, detail, terminal }
+      if (statusCode !== undefined) result.statusCode = statusCode
+      resolve(result)
+    }
+    const headers: Record<string, string> = {}
+    // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): the probe
+    // CONNECTS to the loopback tunnel endpoint but presents the REMOTE
+    // gateway authority in the Host header — the gateway's request policy
+    // requires the authority port to equal its listen port, which the
+    // tunnel's local port can never satisfy.
+    if (authority !== undefined) headers.host = authority
+    // No credentials → NO Authorization header on the probe (design 17 §2.3):
+    // the gateway itself is the authority on whether auth is needed. A
+    // password-session Cookie rides alongside (never a credential VALUE in
+    // logs — the cookie is main-process memory only, design 17 §9.4).
+    if (token !== null) headers.authorization = `Bearer ${token}`
+    if (cookie !== null) headers.cookie = cookie
+    const req = httpRequest(url, {
+      method: 'GET',
+      headers,
+    }, res => {
+      // A premature close after our destroy must never escape as an
+      // uncaught error (main-process safety discipline).
+      res.on('error', () => {})
+      if (res.statusCode === 401) {
+        res.resume()
+        done(false, cookie !== null
+          ? 'the gateway rejected the password authentication (401) — re-enter the password'
+          : token === null
+            ? 'the gateway requires authentication (401) — configure the shared token or password'
+            : 'the gateway rejected the token (401) — check the shared token', true, 401)
+        return
+      }
+      if (res.statusCode === 403) {
+        res.resume()
+        done(false, 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings', true, 403)
+        return
+      }
+      if (res.statusCode !== 200) {
+        const statusCode = res.statusCode ?? 0
+        res.resume()
+        // Deterministic client/protocol mistakes require user action; every
+        // 5xx is a time-dependent condition the bounded retry can recover.
+        const terminal = gatewayHttpFailureIsTerminal(statusCode)
+        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the runtime identity probe`, terminal, statusCode)
+        return
+      }
+      const chunks: Buffer[] = []
+      let size = 0
+      res.on('data', chunk => {
+        if (settled) return
+        size += chunk.length
+        if (size > maxBodyBytes) {
+          done(false, 'the gateway answered an oversized runtime identity response', true)
+          return
+        }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        let status: unknown = null
+        try {
+          status = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        } catch {
+          status = null
+        }
+        if (!isGatewayRuntimeStatus(status)) {
+          done(false, 'the gateway answered an unexpected runtime identity response — it does not appear to be a compatible dsh-chamber gateway', true)
+          return
+        }
+        done(true)
+      })
+    })
+    // TOTAL deadline, not the socket-idle timeout: an endpoint that answers
+    // slowly must never hang the verification.
+    timer = setTimeout(() => done(false, `the gateway did not answer the runtime identity probe within ${timeoutMs}ms`), timeoutMs)
+    timer.unref?.()
+    req.on('error', () => done(false, 'the gateway did not answer the runtime identity probe'))
+    req.end()
+  })
+}
+
+/**
+ * The password-session origin for an SSH TUNNEL endpoint (design 17 §9.3):
+ * the login and the session cookie are keyed to the LOOPBACK tunnel origin
+ * (`http://127.0.0.1:<localPort>`) — the only origin the tunnel ever
+ * reaches. `insecureHttp: true` is the SCHEME selector the session manager
+ * requires for plain http (gateway-session.ts resolveOrigin gate), NOT an
+ * "insecure" judgement: the tunnel's own ssh encryption protects the loopback
+ * hop, and the ssh spec's insecureHttp stays false in the projection. The
+ * registration-time cookie lookup (main.ts) derives the SAME origin from the
+ * ready transport URL, so the session minted here is exactly the one the
+ * proxy injects. The exact connection/SSH-target scope additionally prevents
+ * recycled local ports and shared remote authorities from crossing cookies
+ * between ids or hosts. A reconnect allocates a new local port → a fresh
+ * origin/login (design 17 §9.3 重连即重登).
+ */
+function tunnelSessionOrigin(
+  spec: TransportInstanceSpec,
+  endpoint: TransportProbeEndpoint,
+  authority: string | undefined,
+): GatewaySessionOrigin {
+  return {
+    baseUrl: `http://${endpoint.host}:${endpoint.port}`,
+    insecureHttp: true,
+    scope: gatewaySessionScopeForConnection(spec),
+    ...(authority === undefined ? {} : { authority }),
+  }
+}
+
+/** verifyUp for a password-configured gateway-over-ssh target:
+ * the shared password-session flow (gateway-provider.ts
+ * verifyGatewayPasswordSession — the same 401 → invalidate → single re-login
+ * → terminal contract as the direct-endpoint provider) probing the loopback
+ * tunnel endpoint WITH the session Cookie. `authority` is the remote gateway
+ * host:port the tunnel presents in the Host header (design 17 §9.3 隧道 Host
+ * 覆盖 — the gateway's request policy requires the authority port to equal
+ * its listen port). */
+async function verifyGatewayWithPasswordViaTunnel(
+  spec: TransportInstanceSpec,
+  endpoint: TransportProbeEndpoint,
+  password: string,
+  authority: string | undefined,
+  token: string | null,
+): Promise<TransportVerifyResult> {
+  return verifyGatewayPasswordSession(tunnelSessionOrigin(spec, endpoint, authority), password, cookie =>
+    verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, cookie, authority),
+  token === null ? undefined : () =>
+    verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority))
+}
+
+/**
  * One-shot RPC liveness probe of a chamber host Remote over the tunnel
  * endpoint (the exact wire shape the renderer's module-C boot uses, design
  * 09 §3.5 / design 08 §11.6). Shared by probeClientGraphLive (module A:
@@ -478,14 +675,21 @@ export function probeGitWorktreeLive(
 
 /**
  * Instance spec validation (non-secret metadata only). id must match the
- * runtime whitelist (it rides /api/i/ssh-<id> path segments); host/user must
- * match the identifier whitelists and never start with '-' (a leading '-' on
- * the ssh command line would be parsed as an option — option-injection guard,
- * enforced here in core logic, not only in the UI). serviceName is only
- * type-checked here (string | null); the format whitelist is enforced at
- * exec time, where the value is actually placed on a command line.
+ * runtime whitelist (it rides /api/i/dsh-<id> / gateway-<id> path segments);
+ * host/user must match the identifier whitelists and never start with '-' (a
+ * leading '-' on the ssh command line would be parsed as an option —
+ * option-injection guard, enforced here in core logic, not only in the UI).
+ * serviceName is only type-checked here (string | null); the format whitelist
+ * is enforced at exec time, where the value is actually placed on a command
+ * line.
+ *
+ * v2 (design 17 §2): the ssh provider serves BOTH target kinds (`dsh` and
+ * `gateway`) over the `ssh` transport only — a spec with transport 'http' is
+ * refused (the direct-endpoint semantics belong to gateway-provider.ts), and
+ * insecureHttp is meaningless for a loopback tunnel (normalized to false).
+ * The provider's kind dimension (design 17 §2.1) is decided by the spec.
  */
-function isValidInstance(instance: unknown, kind: TransportProvider['kind']): instance is TransportInstanceSpec {
+function isValidInstance(instance: unknown): instance is TransportInstanceSpec {
   if (instance === null || typeof instance !== 'object') return false
   const record = instance as Record<string, unknown>
   return typeof record.id === 'string' && INSTANCE_ID_PATTERN.test(record.id)
@@ -503,7 +707,12 @@ function isValidInstance(instance: unknown, kind: TransportProvider['kind']): in
       || (typeof record.serviceName === 'string' && record.serviceName.length <= MAX_SERVICE_NAME_CHARS && SERVICE_NAME_PATTERN.test(record.serviceName)))
     && (record.remoteDshHome === undefined || record.remoteDshHome === null
       || (typeof record.remoteDshHome === 'string' && record.remoteDshHome.length <= MAX_REMOTE_DSH_HOME_CHARS && REMOTE_DSH_HOME_PATTERN.test(record.remoteDshHome)))
-    && (record.kind === undefined || record.kind === null || record.kind === kind)
+    && (record.kind === undefined || record.kind === null || record.kind === 'dsh' || record.kind === 'gateway')
+    && (record.transport === undefined || record.transport === null || record.transport === 'ssh')
+    && (record.insecureHttp === undefined || record.insecureHttp === null || record.insecureHttp === false)
+    // S23 pins apply only to direct gateway HTTPS. Silently dropping a pin
+    // from an SSH spec would claim protection the tunnel provider never uses.
+    && (record.spkiPin === undefined || record.spkiPin === null)
 }
 
 /**
@@ -525,31 +734,28 @@ function isValidInstance(instance: unknown, kind: TransportProvider['kind']): in
  * crashes between their commits. The entry is dropped on instance removal
  * and on explicit clear; app quit leaves the file in place by design.
  */
-export type SshPasswordOwner = Pick<TransportInstanceSpec, 'id' | 'host' | 'user' | 'sshPort'>
-
-export interface SshPasswordReplacement {
-  owner: SshPasswordOwner
-  password: string
-}
-
-interface StoredSshPassword extends SshPasswordOwner {
-  password: string
-}
-
-const passwords = new Map<string, StoredSshPassword>()
+const passwords = new Map<string, string>()
+const passwordBindings = new Map<string, string>()
 
 /** The plaintext persistence mirror path; null = memory-only (tests, or a
  * platform without persistence). Configured once at startup. */
 let passwordFile: string | null = null
+let passwordSpecResolver: ((id: string) => TransportInstanceSpec | null) | null = null
 
-/** id → path of the live ephemeral askpass helper (0700, deleted on dispose). */
-// id → every helper file ever baked for it (a password change creates a new
-// helper; the old one stays until dispose/clear so an in-flight spawn that
-// already captured its env keeps working — 2026 review: deleting the previous
-// helper on every sshAuthEnv call raced concurrent tunnel+exec).
-const askpassHelpers = new Map<string, string[]>()
-/** The password each id's helpers were baked with (reuse key). */
-const askpassHelperPasswords = new Map<string, string>()
+/** One helper generation leased by one or more live ssh children. */
+interface AskpassGeneration {
+  path: string
+  leases: number
+}
+
+/**
+ * id → every helper generation still referenced by an actual ssh child.
+ * Each spawn gets a fresh helper so a password change cannot affect an
+ * already-built environment. Unlike the historical fixed retired-generation
+ * cap, cleanup is driven solely by child lifecycle: no amount of concurrent
+ * tunnel/systemd/run work can delete a path another child still references.
+ */
+const askpassHelpers = new Map<string, Set<AskpassGeneration>>()
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -565,40 +771,36 @@ function preserveInvalidPasswordFile(file: string): string {
   }
 }
 
-/** Schema v1 stored only id → password and therefore cannot prove which SSH
- * peer owns a credential. Preserve it for manual recovery but never guess an
- * owner from the current registry: that registry may be the newer half of an
- * interrupted cross-file commit. */
-function retireUnownedPasswordFile(file: string): string {
-  const retiredPath = `${file}.v1-retired`
+function preserveUnboundPasswordFile(file: string): string {
+  const stem = `${file}.unbound-${Date.now()}-${process.pid}`
+  let unboundPath = stem
+  for (let index = 1; existsSync(unboundPath); index += 1) unboundPath = `${stem}-${index}`
   try {
-    renameSync(file, retiredPath)
-    return `legacy password file without endpoint ownership retired at ${retiredPath}; re-enter SSH passwords`
+    renameSync(file, unboundPath)
+    return `legacy SSH password file has no endpoint bindings and was preserved at ${unboundPath}; re-enter passwords to use them`
   } catch (error) {
-    return `legacy password file has no endpoint ownership and was not loaded; preserve failed: ${String(error)}; re-enter SSH passwords`
+    return `legacy SSH password file at ${file} has no endpoint bindings and is disabled; preserve failed: ${String(error)}`
   }
 }
 
-function isValidPasswordOwner(owner: unknown): owner is SshPasswordOwner {
-  if (!isPlainRecord(owner)) return false
-  return typeof owner.id === 'string'
-    && owner.id !== 'local'
-    && INSTANCE_ID_PATTERN.test(owner.id)
-    && typeof owner.host === 'string'
-    && owner.host.length <= MAX_SSH_HOST_CHARS
-    && SSH_HOST_PATTERN.test(owner.host)
-    && (owner.user === null
-      || (typeof owner.user === 'string' && owner.user.length <= MAX_SSH_USER_CHARS && SSH_USER_PATTERN.test(owner.user)))
-    && (owner.sshPort === null
-      || (typeof owner.sshPort === 'number' && Number.isInteger(owner.sshPort)
-        && owner.sshPort >= 1 && owner.sshPort <= 65535))
-}
-
-function samePasswordOwner(stored: StoredSshPassword, owner: SshPasswordOwner): boolean {
-  return stored.id === owner.id
-    && stored.host === owner.host
-    && stored.user === owner.user
-    && stored.sshPort === owner.sshPort
+function isLegacyOwnedPasswordEntry(id: string, value: unknown): value is {
+  password: string
+  host: string
+  user: string | null
+  sshPort: number | null
+} {
+  if (id === 'local' || !INSTANCE_ID_PATTERN.test(id) || !isPlainRecord(value)) return false
+  return typeof value.password === 'string'
+    && value.password !== ''
+    && value.password.length <= MAX_SSH_PASSWORD_CHARS
+    && typeof value.host === 'string'
+    && value.host.length <= MAX_SSH_HOST_CHARS
+    && SSH_HOST_PATTERN.test(value.host)
+    && (value.user === null
+      || (typeof value.user === 'string' && value.user.length <= MAX_SSH_USER_CHARS && SSH_USER_PATTERN.test(value.user)))
+    && (value.sshPort === null
+      || (typeof value.sshPort === 'number' && Number.isInteger(value.sshPort)
+        && value.sshPort >= 1 && value.sshPort <= 65535))
 }
 
 /**
@@ -609,40 +811,23 @@ function samePasswordOwner(stored: StoredSshPassword, owner: SshPasswordOwner): 
  * corrupt-file discipline). Passing null keeps the store memory-only. The
  * return value is a loud notice string (corrupt-preserved path) or null.
  */
-export function configureSshPasswordStore(file: string | null): string | null {
+export function configureSshPasswordStore(
+  file: string | null,
+  resolveSpec?: (id: string) => TransportInstanceSpec | null,
+): string | null {
   passwordFile = file
+  passwordSpecResolver = resolveSpec ?? null
   passwords.clear()
+  passwordBindings.clear()
   if (file === null) return null
   let text: string
-  let fd: number | null = null
   try {
-    // O_NOFOLLOW prevents a local symlink from redirecting credential reads.
-    // Windows password auth is disabled; lstat still rejects a symlink there
-    // because O_NOFOLLOW is not consistently supported by Win32 filesystems.
-    if (process.platform === 'win32' && lstatSync(file).isSymbolicLink()) {
-      return `refusing non-regular password file ${file}`
-    }
-    const noFollow = process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW
-    fd = openSync(file, fsConstants.O_RDONLY | noFollow)
-    const info = fstatSync(fd)
-    if (!info.isFile()) return `refusing non-regular password file ${file}`
-    const getuid = process.getuid
-    if (typeof getuid === 'function' && info.uid !== getuid()) {
-      return `refusing password file not owned by the current user: ${file}`
-    }
-    if (process.platform !== 'win32' && (info.mode & 0o777) !== 0o600) {
-      // A legacy/manual 0644 store is already exposed. Tighten the opened
-      // inode before reading any secret and continue only if chmod succeeds.
-      fchmodSync(fd, 0o600)
-    }
-    text = readFileSync(fd, 'utf8')
+    text = readOwnerOnlySecretFile(file)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     // Unreadable for another reason (permissions…): loud, non-fatal — the
     // app starts and password hosts fail auth until the user re-enters.
     return `cannot read ${file}: ${String(error)}`
-  } finally {
-    if (fd !== null) closeSync(fd)
   }
   let parsed: unknown
   try {
@@ -650,106 +835,119 @@ export function configureSshPasswordStore(file: string | null): string | null {
   } catch {
     return preserveInvalidPasswordFile(file)
   }
-  if (isPlainRecord(parsed) && parsed.schemaVersion === 1) {
-    return retireUnownedPasswordFile(file)
-  }
-  if (!isPlainRecord(parsed) || parsed.schemaVersion !== 2 || !isPlainRecord(parsed.passwords)) {
+  if (!isPlainRecord(parsed) || !isPlainRecord(parsed.passwords)) {
     return preserveInvalidPasswordFile(file)
   }
   const entries = Object.entries(parsed.passwords)
-  const loaded = new Map<string, StoredSshPassword>()
-  for (const [id, value] of entries) {
-    if (!isPlainRecord(value)) return preserveInvalidPasswordFile(file)
-    const owner = { id, host: value.host, user: value.user, sshPort: value.sshPort }
-    if (!isValidPasswordOwner(owner)
-      || typeof value.password !== 'string'
-      || value.password === ''
-      || value.password.length > MAX_SSH_PASSWORD_CHARS) {
-      return preserveInvalidPasswordFile(file)
-    }
-    loaded.set(id, { ...owner, password: value.password })
+  if (parsed.schemaVersion === 1) {
+    // A non-empty legacy file cannot be bound safely from the current
+    // registry: it may be the new-target half of a pre-registry crash. Never
+    // guess. Preserve it for manual recovery and require explicit re-entry.
+    if (entries.length > 0) return preserveUnboundPasswordFile(file)
+    persistSshPasswords(new Map(), new Map())
+    return null
   }
-  for (const [id, value] of loaded) passwords.set(id, value)
+  // The main lifecycle branch previously shipped schema v2 with endpoint
+  // ownership embedded beside each password. That shape is already safely
+  // bound, so convert it in-place to the fingerprint representation instead
+  // of disabling credentials or guessing from the current registry.
+  if (parsed.schemaVersion === 2 && parsed.bindings === undefined
+    && entries.every(([id, value]) => isLegacyOwnedPasswordEntry(id, value))) {
+    const migratedPasswords = new Map<string, string>()
+    const migratedBindings = new Map<string, string>()
+    for (const [id, value] of entries) {
+      const owned = value as { password: string; host: string; user: string | null; sshPort: number | null }
+      migratedPasswords.set(id, owned.password)
+      migratedBindings.set(id, sshCredentialBindingForEndpoint(owned.host, owned.user, owned.sshPort))
+    }
+    persistSshPasswords(migratedPasswords, migratedBindings)
+    for (const [id, value] of migratedPasswords) passwords.set(id, value)
+    for (const [id, binding] of migratedBindings) passwordBindings.set(id, binding)
+    return null
+  }
+  if (parsed.schemaVersion !== 2 || !isPlainRecord(parsed.bindings)) {
+    return preserveInvalidPasswordFile(file)
+  }
+  if (entries.some(([id, value]) => id === 'local'
+    || !INSTANCE_ID_PATTERN.test(id)
+    || typeof value !== 'string'
+    || value === ''
+    || value.length > MAX_SSH_PASSWORD_CHARS)) {
+    return preserveInvalidPasswordFile(file)
+  }
+  const bindingEntries = Object.entries(parsed.bindings)
+  if (bindingEntries.length !== entries.length
+    || bindingEntries.some(([id, binding]) => !Object.hasOwn(parsed.passwords as Record<string, unknown>, id) || !isCredentialBinding(binding))) {
+    return preserveInvalidPasswordFile(file)
+  }
+  for (const [id, value] of entries) passwords.set(id, value as string)
+  for (const [id, binding] of bindingEntries) passwordBindings.set(id, binding as string)
   return null
 }
 
 /** Set or clear the password for one instance (null/'' = clear). Persists
- * the plaintext mirror when configured. A non-empty password always receives
- * the current authoritative SSH authentication owner from main.ts. */
-export function setSshPassword(owner: SshPasswordOwner, password: string | null): void {
-  if (!isValidPasswordOwner(owner)) {
-    throw new Error(`refusing password for invalid SSH owner ${JSON.stringify(owner)}`)
+ * the plaintext mirror when configured. A non-empty durable value must carry
+ * the exact current SSH endpoint binding. */
+export function setSshPassword(
+  idOrSpec: string | TransportInstanceSpec,
+  password: string | null,
+  spec?: TransportInstanceSpec | null,
+): void {
+  const id = typeof idOrSpec === 'string' ? idOrSpec : idOrSpec.id
+  if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
+    throw new Error(`refusing password for invalid instance id ${JSON.stringify(id)}`)
   }
   if (password !== null && (typeof password !== 'string' || password.length > MAX_SSH_PASSWORD_CHARS)) {
     throw new Error(`refusing SSH password longer than ${MAX_SSH_PASSWORD_CHARS} characters`)
   }
-  const clearing = password === null || password === ''
-  if (clearing) {
-    updateSshPasswords([owner.id])
-    return
-  }
-  updateSshPasswords([], { owner, password })
-}
-
-/**
- * Apply retirements plus an optional replacement in ONE password-file write.
- * Either the complete next credential map is durable and then published, or
- * the old map/helpers remain untouched. Setting happens after clears, so an
- * authentication-peer edit may retire and replace the same id atomically.
- */
-export function updateSshPasswords(
-  ids: readonly string[],
-  replacement?: SshPasswordReplacement,
-): void {
-  const unique = [...new Set(ids)]
-  for (const id of unique) {
-    if (id === 'local' || !INSTANCE_ID_PATTERN.test(id)) {
-      throw new Error(`refusing password clear for invalid instance id ${JSON.stringify(id)}`)
-    }
-  }
-  if (replacement !== undefined) {
-    if (!isValidPasswordOwner(replacement.owner)) {
-      throw new Error(`refusing password for invalid SSH owner ${JSON.stringify(replacement.owner)}`)
-    }
-    if (typeof replacement.password !== 'string'
-      || replacement.password === ''
-      || replacement.password.length > MAX_SSH_PASSWORD_CHARS) {
-      throw new Error(`refusing invalid SSH replacement password`)
-    }
-  }
-  if (unique.length === 0 && replacement === undefined) return
-  const present = unique.filter(id => passwords.has(id))
-  if (present.length === 0 && replacement === undefined) {
-    // There is no durable secret to rewrite. A registry deletion must not be
-    // refused merely because an unrelated/empty password file is unwritable.
-    for (const id of unique) clearAskpassHelpers(id)
-    return
-  }
+  // Kind-agnostic instance deletion clears both credential stores. A gateway
+  // id with no SSH password must not force an unnecessary password-file write.
+  if ((password === null || password === '') && !passwords.has(id) && !passwordBindings.has(id)) return
   const next = new Map(passwords)
-  for (const id of present) next.delete(id)
-  if (replacement !== undefined) {
-    const { owner, password } = replacement
-    next.set(owner.id, { ...owner, password })
+  const nextBindings = new Map(passwordBindings)
+  if (password === null || password === '') {
+    next.delete(id)
+    nextBindings.delete(id)
+  } else {
+    const bindingSpec = spec ?? (typeof idOrSpec === 'string' ? passwordSpecResolver?.(id) : idOrSpec) ?? null
+    const binding = bindingSpec === null ? null : sshCredentialBinding(bindingSpec)
+    if (binding === null && passwordFile !== null) {
+      throw new Error('refusing to persist an SSH password without a matching SSH endpoint binding')
+    }
+    next.set(id, password)
+    if (binding === null) nextBindings.delete(id)
+    else nextBindings.set(id, binding)
   }
-  persistSshPasswords(next)
+  // Write-through commit: the live auth state changes only after its durable
+  // mirror succeeds, so a reported persistence failure cannot leave a secret
+  // active in memory but absent on disk (or vice versa).
+  persistSshPasswords(next, nextBindings)
   passwords.clear()
   for (const [entryId, entryPassword] of next) passwords.set(entryId, entryPassword)
-  // Helper cleanup is part of the committed clear, not its preparation: if
-  // the durable replace above fails, the old passwords remain authoritative
-  // and in-flight ssh spawns keep their existing helpers too.
-  for (const id of unique) clearAskpassHelpers(id)
+  passwordBindings.clear()
+  for (const [entryId, binding] of nextBindings) passwordBindings.set(entryId, binding)
+  if (password === null || password === '') {
+    // Cleanup begins only after the durable clear commits. A live ssh child
+    // still owns its leased path until exit/error; new spawns can no longer
+    // acquire a password-backed helper.
+    purgeSshAuth(id)
+  }
 }
 
-/** Clear multiple removed instances in one password-file transaction. */
-export function clearSshPasswords(ids: readonly string[]): void {
-  updateSshPasswords(ids)
-}
-
-/** The stored password for the exact authentication peer, or null. This is
- * the final fail-closed gate used immediately before every ssh spawn. */
-export function getSshPassword(owner: SshPasswordOwner): string | null {
-  const stored = passwords.get(owner.id)
-  return stored !== undefined && samePasswordOwner(stored, owner) ? stored.password : null
+/** The stored password for the exact current SSH endpoint, or null. Passing a
+ * spec performs the last-moment binding comparison used before every spawn;
+ * id-only callers resolve the authoritative registry spec configured by main. */
+export function getSshPassword(idOrSpec: string | TransportInstanceSpec): string | null {
+  const id = typeof idOrSpec === 'string' ? idOrSpec : idOrSpec.id
+  const password = passwords.get(id)
+  if (password === undefined) return null
+  const binding = passwordBindings.get(id)
+  // Memory-only tests retain the historical id-keyed behavior. Every durable
+  // production value has a binding and is invisible until the current
+  // registry spec matches it exactly.
+  if (binding === undefined) return passwordFile === null ? password : null
+  const current = typeof idOrSpec === 'string' ? (passwordSpecResolver?.(id) ?? null) : idOrSpec
+  return current !== null && sshCredentialBinding(current) === binding ? password : null
 }
 
 /**
@@ -758,15 +956,13 @@ export function getSshPassword(owner: SshPasswordOwner): string | null {
  * convention — the rename keeps the tmp file's 0600 mode). Empty maps still
  * write an empty file; the file is only created on the first set/clear.
  */
-function persistSshPasswords(next: ReadonlyMap<string, StoredSshPassword>): void {
+function persistSshPasswords(next: ReadonlyMap<string, string>, nextBindings: ReadonlyMap<string, string>): void {
   if (passwordFile === null) return
-  const persistedEntries = [...next].map(([id, entry]) => [id, {
-    password: entry.password,
-    host: entry.host,
-    user: entry.user,
-    sshPort: entry.sshPort,
-  }])
-  const payload = `${JSON.stringify({ schemaVersion: 2, passwords: Object.fromEntries(persistedEntries) }, undefined, 2)}\n`
+  const payload = `${JSON.stringify({
+    schemaVersion: 2,
+    passwords: Object.fromEntries(next),
+    bindings: Object.fromEntries(nextBindings),
+  }, undefined, 2)}\n`
   const tmpPath = `${passwordFile}.tmp`
   mkdirSync(dirname(passwordFile), { recursive: true })
   try {
@@ -814,7 +1010,7 @@ export function buildAskpassScript(password: string): string {
   const escaped = password.replace(/'/g, `'\\''`)
   return [
     '#!/bin/sh',
-    '# dsh-chamber ssh password helper (ephemeral, 0700, deleted on transport stop)',
+    '# dsh-chamber ssh password helper (ephemeral, 0700, deleted after child exit)',
     // Normalize the prompt to lowercase ONCE (tr is POSIX, present on the
     // local macOS/Linux host): every pattern below matches the NORMALIZED
     // text, so all branches are case-insensitive for any casing variant
@@ -850,6 +1046,58 @@ export function buildAskpassScript(password: string): string {
   ].join('\n')
 }
 
+const ASKPASS_DIR_PREFIX = 'dsh-chamber-ssh-'
+const LEGACY_ASKPASS_DIR_NAME = 'dsh-chamber-ssh'
+let processAskpassDir: string | null = null
+
+/**
+ * Fail-closed ownership/type/mode gate for an askpass directory. A helper is
+ * password-bearing executable code: merely attempting chmod on a directory
+ * pre-created by another OS user is not enough, and EPERM must never degrade
+ * into continuing inside that untrusted directory. The before/after inode
+ * check detects replacement around chmod; standard sticky temp-directory
+ * semantics then prevent a different OS user from swapping our owned leaf.
+ */
+export function chmodAskpassDirOwnerOnly(dir: string): void {
+  const before = lstatSync(dir)
+  if (!before.isDirectory() || before.isSymbolicLink()) {
+    throw new Error(`SSH askpass path must be a private directory (symlinks/non-directories are refused): ${dir}`)
+  }
+  const currentUid = typeof process.getuid === 'function' ? process.getuid() : null
+  if (currentUid !== null && before.uid !== currentUid) {
+    throw new Error(`SSH askpass directory is owned by uid ${before.uid}, expected ${currentUid}: ${dir}`)
+  }
+  // Deliberately let EPERM propagate: continuing would let the directory owner
+  // replace our helper between creation and OpenSSH execution.
+  chmodSync(dir, 0o700)
+  const after = lstatSync(dir)
+  if (!after.isDirectory() || after.isSymbolicLink()
+    || after.dev !== before.dev || after.ino !== before.ino
+    || (currentUid !== null && after.uid !== currentUid)
+    || (after.mode & 0o077) !== 0) {
+    throw new Error(`SSH askpass directory failed owner-only inode verification: ${dir}`)
+  }
+}
+
+/** Create one unguessable process-private leaf. We never reuse the historical
+ * global `<tmpdir>/dsh-chamber-ssh`, so another OS user cannot pre-claim the
+ * directory in which password-bearing executables are published. */
+function privateAskpassDir(): string {
+  if (processAskpassDir !== null) {
+    chmodAskpassDirOwnerOnly(processAskpassDir)
+    return processAskpassDir
+  }
+  const created = mkdtempSync(join(tmpdir(), `${ASKPASS_DIR_PREFIX}${process.pid}-`))
+  try {
+    chmodAskpassDirOwnerOnly(created)
+  } catch (error) {
+    try { rmSync(created, { recursive: true, force: true }) } catch { /* best effort */ }
+    throw error
+  }
+  processAskpassDir = created
+  return created
+}
+
 /** Write one ephemeral askpass helper for an instance; returns its path. */
 export function createAskpassHelper(id: string, password: string): string {
   // The id lands in the temp filename — refuse anything outside the registry
@@ -858,9 +1106,7 @@ export function createAskpassHelper(id: string, password: string): string {
   if (!INSTANCE_ID_PATTERN.test(id)) {
     throw new Error(`refusing askpass helper for invalid instance id ${JSON.stringify(id)}`)
   }
-  const dir = join(tmpdir(), 'dsh-chamber-ssh')
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
-  chmodSync(dir, 0o700)
+  const dir = privateAskpassDir()
   // Include the owner PID so startup cleanup can distinguish crash leftovers
   // from a simultaneously running dev/packaged chamber process.
   const path = join(dir, `askpass-${id}.pid-${process.pid}.${randomUUID()}.sh`)
@@ -868,8 +1114,18 @@ export function createAskpassHelper(id: string, password: string): string {
     // Keep a partially written helper non-executable, then publish it as an
     // owner-only executable. The explicit chmod also defeats a restrictive
     // process umask that would otherwise strip the owner execute bit.
-    writeFileSync(path, buildAskpassScript(password), { mode: 0o600 })
-    chmodSync(path, 0o700)
+    // O_EXCL prevents even a same-name collision from replacing a file. Keep
+    // it non-executable until the complete script is durable, then publish the
+    // exact owner-only executable mode on the already-open inode.
+    const fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600)
+    try {
+      fchmodSync(fd, 0o600)
+      writeSync(fd, buildAskpassScript(password))
+      fsyncSync(fd)
+      fchmodSync(fd, 0o700)
+    } finally {
+      closeSync(fd)
+    }
     return path
   } catch (error) {
     // Never strand an untracked password-bearing helper after a failed write
@@ -881,31 +1137,47 @@ export function createAskpassHelper(id: string, password: string): string {
 
 /** Remove password-bearing helpers left by a hard crash before transports start. */
 export function cleanupStaleAskpassHelpers(): string | null {
-  const dir = join(tmpdir(), 'dsh-chamber-ssh')
+  const tempRoot = tmpdir()
+  const notices: string[] = []
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    chmodSync(dir, 0o700)
-    for (const name of readdirSync(dir)) {
-      const current = /^askpass-[a-zA-Z0-9_-]{1,64}\.pid-(\d+)\.[0-9a-f-]+\.sh$/i.exec(name)
-      // Legacy names predate PID ownership and can only be crash leftovers:
-      // every normal shutdown already deletes them.
-      if (current === null) {
-        if (/^askpass-[a-zA-Z0-9_-]{1,64}-[0-9a-f-]+\.sh$/i.test(name)) rmSync(join(dir, name), { force: true })
+    for (const dirName of readdirSync(tempRoot)) {
+      if (dirName !== LEGACY_ASKPASS_DIR_NAME && !dirName.startsWith(ASKPASS_DIR_PREFIX)) continue
+      const dir = join(tempRoot, dirName)
+      try {
+        // Cross-user/pre-claimed directories are reported and skipped. They
+        // are never used by privateAskpassDir and we never mutate their files.
+        chmodAskpassDirOwnerOnly(dir)
+      } catch (error) {
+        notices.push(`refused untrusted SSH askpass directory ${dir}: ${String(error)}`)
         continue
       }
-      const pid = Number(current[1])
-      let ownerAlive = false
-      try {
-        process.kill(pid, 0)
-        ownerAlive = true
-      } catch (probeError) {
-        // EPERM means a live process we may not signal; only ESRCH proves the
-        // owner is gone and makes deletion safe.
-        ownerAlive = (probeError as NodeJS.ErrnoException).code !== 'ESRCH'
+      for (const name of readdirSync(dir)) {
+        const current = /^askpass-[a-zA-Z0-9_-]{1,64}\.pid-(\d+)\.[0-9a-f-]+\.sh$/i.exec(name)
+        // Legacy names predate PID ownership and can only be crash leftovers:
+        // every normal shutdown already deletes them.
+        if (current === null) {
+          if (/^askpass-[a-zA-Z0-9_-]{1,64}-[0-9a-f-]+\.sh$/i.test(name)) rmSync(join(dir, name), { force: true })
+          continue
+        }
+        const pid = Number(current[1])
+        let ownerAlive = false
+        try {
+          process.kill(pid, 0)
+          ownerAlive = true
+        } catch (probeError) {
+          // EPERM means a live process we may not signal; only ESRCH proves the
+          // owner is gone and makes deletion safe.
+          ownerAlive = (probeError as NodeJS.ErrnoException).code !== 'ESRCH'
+        }
+        if (!ownerAlive) rmSync(join(dir, name), { force: true })
       }
-      if (!ownerAlive) rmSync(join(dir, name), { force: true })
+      // Reclaim an empty crash directory, but keep this process's private leaf
+      // stable for later helpers.
+      if (dir !== processAskpassDir && readdirSync(dir).length === 0) {
+        try { rmSync(dir) } catch { /* a concurrent owner may have populated it */ }
+      }
     }
-    return null
+    return notices.length === 0 ? null : notices.join('; ')
   } catch (error) {
     return `cannot clean stale SSH askpass helpers: ${String(error)}`
   }
@@ -918,16 +1190,25 @@ function deleteAskpassHelper(path: string) {
   } catch { /* best effort */ }
 }
 
+function releaseAskpassGeneration(id: string, generation: AskpassGeneration): void {
+  if (generation.leases === 0) return
+  generation.leases -= 1
+  if (generation.leases !== 0) return
+  deleteAskpassHelper(generation.path)
+  const generations = askpassHelpers.get(id)
+  if (generations === undefined) return
+  generations.delete(generation)
+  if (generations.size === 0) askpassHelpers.delete(id)
+}
+
 /**
- * The askpass environment for one instance's ssh spawn (tunnel AND systemd
- * exec): null when the instance has no stored password or the platform does
- * not support it. The helper is REUSED while the password is unchanged —
- * never deleted and recreated per call (a concurrent tunnel+exec would
- * delete each other's in-use helper and produce a fake auth failure; 2026
- * review). A changed password bakes a NEW helper; the old file stays until
- * dispose/clear so an in-flight spawn keeps working.
+ * Acquire the askpass environment for exactly one ssh spawn (tunnel,
+ * systemd, or run). Null means key/agent auth. The returned helper is fresh
+ * for this spawn and remains on disk until the idempotent lease release;
+ * disconnect/removal/password-clear may request cleanup, but the live child
+ * lease remains authoritative and none can invalidate its SSH_ASKPASS path.
  */
-export function sshAuthEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | null {
+export function acquireSshAuthLease(spec: TransportInstanceSpec): TransportSpawnLease | null {
   if (!sshPasswordSupported()) return null
   // The password file and instance registry are separately atomic. Compare
   // the persisted owner at the last possible moment so a crash between their
@@ -935,53 +1216,86 @@ export function sshAuthEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | nul
   // new endpoint behind the same id.
   const password = getSshPassword(spec)
   if (password === null) return null
-  const existing = askpassHelpers.get(spec.id) ?? []
-  if (existing.length > 0 && askpassHelperPasswords.get(spec.id) === password) {
-    return { SSH_ASKPASS: existing[existing.length - 1], SSH_ASKPASS_REQUIRE: 'force' }
+  const generation: AskpassGeneration = {
+    path: createAskpassHelper(spec.id, password),
+    leases: 1,
   }
-  const helper = createAskpassHelper(spec.id, password)
-  askpassHelpers.set(spec.id, [...existing, helper])
-  askpassHelperPasswords.set(spec.id, password)
-  return { SSH_ASKPASS: helper, SSH_ASKPASS_REQUIRE: 'force' }
-}
-
-/** Remove every baked helper for one instance (password clear / removal / quit). */
-export function clearAskpassHelpers(id: string): void {
-  const helpers = askpassHelpers.get(id)
-  if (helpers !== undefined) {
-    for (const helper of helpers) deleteAskpassHelper(helper)
-    askpassHelpers.delete(id)
+  let generations = askpassHelpers.get(spec.id)
+  if (generations === undefined) {
+    generations = new Set()
+    askpassHelpers.set(spec.id, generations)
   }
-  askpassHelperPasswords.delete(id)
+  generations.add(generation)
+  let released = false
+  return {
+    env: { SSH_ASKPASS: generation.path, SSH_ASKPASS_REQUIRE: 'force' },
+    release() {
+      if (released) return
+      released = true
+      releaseAskpassGeneration(spec.id, generation)
+    },
+  }
 }
 
 /**
- * Delete the instance's ephemeral askpass helper (transport stop / removal
- * / app quit). The in-memory password itself survives a plain disconnect
- * (the user may reconnect without retyping) and is only cleared by
- * setSshPassword(owner, null), instance removal, or app quit.
+ * Handle a plain transport-stop cleanup request without deleting any
+ * generation leased by a tunnel or an in-flight exec. Every generation is
+ * single-spawn and removes itself as soon as that child terminates.
  */
 export function disposeSshAuth(spec: TransportInstanceSpec): void {
-  clearAskpassHelpers(spec.id)
+  const generations = askpassHelpers.get(spec.id)
+  if (generations === undefined) return
+  // Normally every tracked generation has a live lease. Keep the defensive
+  // zero-count sweep so a future multi-retain implementation cannot strand
+  // an already-unreferenced helper at disconnect.
+  for (const generation of generations) {
+    if (generation.leases !== 0) continue
+    deleteAskpassHelper(generation.path)
+    generations.delete(generation)
+  }
+  if (generations.size === 0) askpassHelpers.delete(spec.id)
+}
+
+/**
+ * Request final cleanup for instance removal / explicit password clear.
+ * A live child remains authoritative: its helper is deleted only when its
+ * lease releases. The cleared credential (or removed registry entry) blocks
+ * legitimate future acquisition; crash leftovers are reclaimed at startup.
+ */
+export function purgeSshAuth(id: string): void {
+  const generations = askpassHelpers.get(id)
+  if (generations === undefined) return
+  for (const generation of generations) {
+    if (generation.leases === 0) {
+      deleteAskpassHelper(generation.path)
+      generations.delete(generation)
+    }
+  }
+  if (generations.size === 0) askpassHelpers.delete(id)
 }
 
 /** The ssh provider: validate → spawn args → stderr classification → exec. */
 export const sshProvider: TransportProvider = {
-  kind: 'ssh',
+  kind: 'dsh',
+  redactOutput: redactSshStderr,
 
   validateSpec(input: unknown): TransportInstanceSpec | null {
-    if (!isValidInstance(input, 'ssh')) return null
+    if (!isValidInstance(input)) return null
     const record = input as unknown as Record<string, unknown>
     return {
       id: record.id as string,
       label: record.label as string,
-      kind: 'ssh',
+      // v2 (design 17 §2.1): the provider serves both target kinds over the
+      // ssh transport — the spec's kind is preserved (default dsh).
+      kind: record.kind === 'gateway' ? 'gateway' : 'dsh',
+      transport: 'ssh',
       host: record.host as string,
       user: record.user === undefined || record.user === null ? null : (record.user as string),
       sshPort: record.sshPort === undefined || record.sshPort === null ? null : (record.sshPort as number),
       remotePort: record.remotePort as number,
       serviceName: record.serviceName === undefined || record.serviceName === null ? null : (record.serviceName as string),
       remoteDshHome: record.remoteDshHome === undefined || record.remoteDshHome === null ? null : (record.remoteDshHome as string),
+      insecureHttp: false,
     }
   },
 
@@ -1003,18 +1317,28 @@ export const sshProvider: TransportProvider = {
    * without a TTY or the command line. Null = key/agent auth (the universal
    * default) or an unsupported platform.
    */
-  buildStartEnv(spec: TransportInstanceSpec): NodeJS.ProcessEnv | null {
-    return sshAuthEnv(spec)
+  buildStartEnv(spec: TransportInstanceSpec): TransportSpawnLease | null {
+    return acquireSshAuthLease(spec)
   },
 
   /**
-   * Delete the instance's ephemeral askpass helper (transport stop /
-   * removal / app quit). The in-memory password itself survives a plain
-   * disconnect (the user may reconnect without retyping) and is only
-   * cleared by setSshPassword(owner, null), instance removal, or app quit.
+   * Process an askpass cleanup request (transport stop / removal / app quit)
+   * without deleting any child-leased generation (see disposeSshAuth). The
+   * password itself survives disconnect and app quit: its bound persistent
+   * mirror is intentionally reloaded on the next startup. Only an explicit
+   * clear or the main-owned save/delete transaction removes it.
    */
   disposeAuth(spec: TransportInstanceSpec): void {
     disposeSshAuth(spec)
+  },
+
+  /**
+   * Request final askpass helper cleanup — called by the runtime ONLY on
+   * instance removal (never on a plain disconnect). Live child leases still
+   * win and remove their own paths at termination (see purgeSshAuth).
+   */
+  purgeAuth(spec: TransportInstanceSpec): void {
+    purgeSshAuth(spec.id)
   },
 
   classifyStderr(line: string) {
@@ -1029,12 +1353,50 @@ export const sshProvider: TransportProvider = {
   },
 
   /**
-   * Endpoint identity verification: the tunnel destination (or direct
-   * endpoint) must answer the dsh host.describe wire handshake before the
-   * runtime may declare the instance ready — a non-dsh service on the
-   * destination port never presents as a fake connection.
+   * Endpoint identity verification (design 17 §9.2 / design 18 §9.3): the
+   * tunnel destination must answer the target-kind identity before the runtime
+   * may declare it ready — a non-target service never presents as a fake
+   * connection. The probe semantics branch on the
+   * TARGET kind:
+   * - kind 'dsh': NEVER carries auth headers (design 17 §2.1) — plain
+   *   verifyDshEndpoint over the loopback tunnel endpoint;
+   * - kind 'gateway': the authenticated gateway-owned runtime status marker
+   *   proves the gateway boundary independently of managed-dsh health, keeping
+   *   recovery actions reachable. A stored bearer token rides the probe as Authorization;
+   *   a MISSING token is no pre-flight refusal — the probe goes out without
+   *   a header and the gateway's own answer is classified (a `--no-auth`
+   *   deployment is ready; an auth-requiring deployment answers 401
+   *   terminal, design 17 §2.3/§7.3). No token + a stored password + wired
+   *   session hooks (configureGatewaySessionProvider, main.ts) rides the
+   *   SHARED password-session flow instead (verifyGatewayPasswordSession,
+   *   gateway-provider.ts): ensure a login session keyed to the TUNNEL
+   *   endpoint origin, probe WITH its Cookie, and on a rejected 401
+   *   invalidate + re-login exactly once before the terminal password-
+   *   refused state (§9.3 — the gateway-over-ssh + password-only form shape,
+   *   S1 gap fixed here).
    */
   verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint) {
+    if (spec.kind === 'gateway') {
+      // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): every request
+      // through the tunnel presents the remote LOOPBACK destination authority
+      // — never spec.host, which may only be an SSH alias. The
+      // gateway's request policy (authority port == listen port) rejects the
+      // tunnel's local port otherwise (verified on the 172 实机: 421).
+      const authority = gatewayTunnelAuthority(spec.remotePort)
+      const token = getGatewayToken(spec.id)
+      const password = getGatewayPassword(spec.id)
+      // A configured password + wired session hooks: the login
+      // session is keyed to the LOOPBACK tunnel origin (the only origin the
+      // tunnel ever reaches) + exact connection/SSH-target scope; the remote
+      // authority is only the Host the gateway sees. The probe carries its
+      // Cookie plus the independent Bearer
+      // when present. Without hooks, the token still probes normally and a
+      // password-only target stays credential-free (the inert default).
+      if (password !== null && getGatewaySessionHooks().ensureSession !== undefined) {
+        return verifyGatewayWithPasswordViaTunnel(spec, endpoint, password, authority, token)
+      }
+      return verifyGatewayEndpointViaTunnel(endpoint, token, VERIFY_UP_TIMEOUT_MS, VERIFY_UP_MAX_BODY_BYTES, null, authority)
+    }
     return verifyDshEndpoint(endpoint)
   },
 
@@ -1045,9 +1407,10 @@ export const sshProvider: TransportProvider = {
 
 /**
  * One remote systemd exec (design 02 §3.9): `ssh user@host systemctl
- * <action> <serviceName>`, argument-array spawn (no shell), serviceName
- * whitelist-checked BEFORE anything spawns (injection guard; a name that
- * fails is refused with a log entry and an error result). Failures are
+ * <action> -- <serviceName>`, argument-array spawn (no shell), serviceName
+ * whitelist-checked BEFORE anything spawns and separated from systemctl
+ * options by `--` (defense in depth; a name that fails is refused with a log
+ * entry and an error result). Failures are
  * loud: logged to the instance ring buffer and returned as an error
  * result, never swallowed. Auth failures (AUTH_FAILURE_PATTERNS) surface
  * through the result error only — the exec channel NEVER writes the
@@ -1075,8 +1438,8 @@ function runExec(
   }
   const target = spec.user ? `${spec.user}@${spec.host}` : spec.host
   const args = spec.sshPort === null
-    ? [target, 'systemctl', action, spec.serviceName]
-    : ['-p', String(spec.sshPort), target, 'systemctl', action, spec.serviceName]
+    ? [target, 'systemctl', action, '--', spec.serviceName]
+    : ['-p', String(spec.sshPort), target, 'systemctl', action, '--', spec.serviceName]
   return new Promise(resolve => {
     let settled = false
     let timedOut = false
@@ -1101,14 +1464,19 @@ function runExec(
     // Password auth (design 05 §8): the exec spawn gets the same askpass env
     // as the tunnel — a password-only host must answer `systemctl` over ssh
     // just like the tunnel connects. Null = key/agent auth, no env merge.
-    const authEnv = sshAuthEnv(spec)
-    if (authEnv !== null) spawnOptions.env = { ...process.env, ...authEnv }
+    const authLease = acquireSshAuthLease(spec)
+    if (authLease !== null) spawnOptions.env = { ...process.env, ...authLease.env }
     try {
       child = deps.spawnFn('ssh', args, spawnOptions)
     } catch (spawnError) {
+      authLease?.release()
       deps.log('error', `failed to spawn ssh for systemctl ${action}: ${String(spawnError)}`)
       finish({ ok: false, error: `failed to spawn ssh: ${String(spawnError)}` })
       return
+    }
+    if (authLease !== null) {
+      child.on('error', () => authLease.release())
+      child.on('exit', () => authLease.release())
     }
     timer = setTimeout(() => {
       timedOut = true
@@ -1346,14 +1714,19 @@ function spawnRemote(
     }
     let child: SpawnedProcess
     const spawnOptions: SpawnOptions = { stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'] }
-    const authEnv = sshAuthEnv(spec)
-    if (authEnv !== null) spawnOptions.env = { ...process.env, ...authEnv }
+    const authLease = acquireSshAuthLease(spec)
+    if (authLease !== null) spawnOptions.env = { ...process.env, ...authLease.env }
     try {
       child = deps.spawnFn('ssh', args, spawnOptions)
     } catch (spawnError) {
+      authLease?.release()
       deps.log('error', `failed to spawn ssh for run: ${String(spawnError)}`)
       finish({ ok: false, error: `failed to spawn ssh: ${String(spawnError)}` })
       return
+    }
+    if (authLease !== null) {
+      child.on('error', () => authLease.release())
+      child.on('exit', () => authLease.release())
     }
     if (opts.stdin !== undefined && child.stdin !== null) {
       child.stdin.write(opts.stdin)

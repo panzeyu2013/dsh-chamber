@@ -1,7 +1,8 @@
 /**
  * Chamber open-in client plugin (design 16 + open-in extension): a header
  * utility button that opens the current session's workspace in an installed
- * app — Finder (local sources) and/or VS Code (local + remote SSH).
+ * app — Finder (local sources) and/or VS Code (local + any SSH-transport
+ * remote target, whether dsh or gateway).
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
@@ -43,7 +44,10 @@ export function apply(ctx: ClientContext): void {
   // plugin uses the same `as any` seam — the vendor cordis face stays loose).
   // Bail on an absent id (frontend-review P2-4): without it the gate-2 local
   // check would let a bogus '' source render a button that can only fail.
-  const source = parseOpenInSource((ctx as { chamberInstanceId?: string }).chamberInstanceId)
+  const source = parseOpenInSource(
+    (ctx as { chamberInstanceId?: string }).chamberInstanceId,
+    (ctx as { chamberTransport?: 'local' | 'ssh' | 'http' }).chamberTransport,
+  )
   if (source === null) return
   const sourceFingerprint = parseOpenInSourceFingerprint(
     source,

@@ -30,10 +30,12 @@
 - [ ] `bundle-dsh.mjs` `DEFAULT_DSH_VERSION` + `packages/desktop/vendor/dsh/package.json`
       `"@deepseek-ai/dsh"` → 目标版本（先确认 npm 已发布）。
 - [ ] **CI 环境变量**：`.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`
-      同步（教训①：曾漏改导致产物捆绑旧版 dsh；教训② v0.1.4 时 ci.yml 也硬编码
-      了一份并漏改，CI 打包 job 全红——2026-08 起 CI 不再打包，此 env 仅存在于
-      release.yml；若将来把打包 job 加回 ci.yml，必须连同 ci.yml 一起同步）。
-- [ ] 重建 vendor 树：`node scripts/ensure-harness-vendor.mjs` → 链接数 = 目标
+      同步（此 env 仅存在于 release.yml，CI 不打包；若将来把打包 job 加回
+      ci.yml，必须连同 ci.yml 一起同步）。
+- [ ] **安装脚本常量同步**：`scripts/install-gateway.sh` 内置
+      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.1-rc.2`）→ 目标版本（与 release.yml
+      的 env 同步；脚本默认安装该版本，用户可交互覆盖）。
+- [ ] 重建 vendor 树：`node scripts/dev/ensure-harness-vendor.mjs` → 链接数 = 目标
       版本包数（240 之类），确认无告警（HEAD==pin）。
 
 ## 3. fork 副本 rebase（chamber 侧适配）
@@ -50,7 +52,7 @@
 ## 4. 锁文件（AGENTS.md 关键注意）
 
 - [ ] **带 vendor 树**运行 pnpm 生成（preinstall 会重建链接）。
-- [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/restore-lockfile-vendor-records.mjs`
+- [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/dev/restore-lockfile-vendor-records.mjs`
       补回；**新增 vendor 包**（如 dsh-authorization）若不在 HEAD 锁文件中需手工补齐
       importer 记录（参照既有 vendor 记录格式）。
 - [ ] `pnpm install --frozen-lockfile` 通过；`grep -c "dsh-authorization" pnpm-lock.yaml` > 0。
@@ -65,7 +67,8 @@
 
 ## 6. 回归（迁移相关全量）
 
-- [ ] 测试：控制面 9 套（含 ws-frames.ts）+ `test:desktop` + `test:renderer-shell` + `test:git` +
+- [ ] 测试：控制面 9 套（含 ws-frames.ts）+ `test:desktop` + `test:gateway` + `test:cli` +
+      `test:renderer-shell` + `test:git` +
       `test:host-git` + `test:sidebar` + `test:settings-bridge` + `test:connections` +
       `test:client-web` + `test:connection`。
 - [ ] 类型检查全套（根 + 各插件 + host 包 + client-web）。

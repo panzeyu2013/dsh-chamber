@@ -43,7 +43,11 @@ export const IPC_CHANNELS = {
 
   SSH_INSTANCES_GET: 'desktop_ssh_instances_get',
   SSH_INSTANCES_SET: 'desktop_ssh_instances_set',
+  SSH_SAVE_CONNECTION: 'desktop_ssh_save_connection',
+  SSH_DELETE_CONNECTION: 'desktop_ssh_delete_connection',
   SSH_SET_PASSWORD: 'desktop_ssh_set_password',
+  GATEWAY_SET_TOKEN: 'desktop_gateway_set_token',
+  GATEWAY_SET_PASSWORD: 'desktop_gateway_set_password',
   SSH_CONFIG_LIST: 'desktop_ssh_config_list',
   SSH_CONNECT: 'desktop_ssh_connect',
   SSH_DISCONNECT: 'desktop_ssh_disconnect',
@@ -68,6 +72,18 @@ export const IPC_CHANNELS = {
 
   SSH_STATUS_CHANGED: 'desktop_ssh_status_changed',
   SSH_INSTANCES_CHANGED: 'desktop_ssh_instances_changed',
+
+  RUNTIME_STATE: 'dsh-chamber:runtime-state',
+  RUNTIME_CHECK: 'dsh-chamber:runtime-check',
+  RUNTIME_INSTALL: 'dsh-chamber:runtime-install',
+  RUNTIME_CLEANUP_VERSION: 'dsh-chamber:runtime-cleanup-version',
+  RUNTIME_RECOVER_METADATA: 'dsh-chamber:runtime-recover-metadata',
+  RUNTIME_RESET_BUILTIN: 'dsh-chamber:runtime-reset-builtin',
+  RUNTIME_RESTART: 'dsh-chamber:runtime-restart',
+  RUNTIME_RETRY_APPLY: 'dsh-chamber:runtime-retry-apply',
+  RUNTIME_RETRY_RESTORE: 'dsh-chamber:runtime-retry-restore',
+  RUNTIME_RESTORE_PRE_ROLLBACK: 'dsh-chamber:runtime-restore-pre-rollback',
+  RUNTIME_STATE_CHANGED: 'dsh-chamber:runtime-state-changed',
 } as const
 
 /** OS wake-from-sleep push channel (design 14 D4). Kept as a named export for

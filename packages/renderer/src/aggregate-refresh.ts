@@ -61,6 +61,22 @@ export function isSnapshotStale(
   return lastSnapshotAt === undefined || now - lastSnapshotAt > stalenessMs
 }
 
+/**
+ * Decide whether an aggregate pull still owns its commit. Mutation-triggered
+ * pulls use a dedicated sequence because a producer push can expose the
+ * mutation's interim host-frame cross-section; ordinary pulls remain fenced
+ * by the shared poll sequence so a newer push cannot be overwritten.
+ */
+export function refreshPullStillCurrent(opts: {
+  mutationTag?: number
+  mutationSeq: number | undefined
+  pollSeq: number
+  startedPollSeq: number
+}): boolean {
+  if (opts.mutationTag !== undefined) return opts.mutationSeq === opts.mutationTag
+  return opts.pollSeq === opts.startedPollSeq
+}
+
 /** Renderer-local generation/ownership facts whose lifetime is exactly one
  * authoritative roster entry. Kept separate from React state so a roster
  * removal can invalidate an old unary result synchronously, before the render
@@ -148,5 +164,11 @@ export function retireSelectedSource<T extends string | null>(
  * delta, rather than a later roster snapshot, preserves a remove -> same-id
  * re-add edge when both overlapping pulls observe only the final roster. */
 export function remoteRetiredSourceIds(retiredRawIds: readonly string[]): Set<string> {
-  return new Set(retiredRawIds.map(id => `ssh-${id}`))
+  const retired = new Set<string>()
+  for (const id of retiredRawIds) {
+    retired.add(`dsh-${id}`)
+    retired.add(`gateway-${id}`)
+    retired.add(`ssh-${id}`)
+  }
+  return retired
 }

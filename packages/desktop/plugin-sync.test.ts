@@ -12,7 +12,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -23,16 +24,25 @@ import {
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
+  describeLocalPluginAddConfirmation,
+  describeLocalPluginRemoveConfirmation,
+  describeMaterializeConfirmation,
+  describePluginApplyConfirmation,
+  describeSeedConfirmation,
   ExactOwnershipRegistry,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
+  localPluginWriterLedgerPath,
+  MATERIALIZED_VALUE_MASK,
   materializeAbsolutePath,
   materializeAndAdd,
   materializePluginsDir,
   packageNameFromSpec,
+  redactLocalPluginManifest,
   remotePluginList,
   ReadyPhaseEdges,
+  reapStaleLocalPluginWriters,
   resolveLocalMaterializeDirectory,
   resetApplyInFlight,
   scopeExecToOwnership,
@@ -1639,4 +1649,170 @@ test('materializeAndAdd: a write-file failure fails loud before the add', async 
   const result = await materializeAndAdd(exec, SEED_SPEC, pkgDir, () => ({ bytes: Buffer.from('x') }))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /write-file failed/)
+})
+test('local plugin writer reaper fail-closes on PID identity reuse', async () => {
+  const root = tempDir()
+  const home = join(root, 'state', 'dsh-home')
+  mkdirSync(join(root, 'state'), { recursive: true })
+  writeFileSync(localPluginWriterLedgerPath(home), JSON.stringify({
+    schemaVersion: 1,
+    pid: 41001,
+    ownerPid: 41000,
+    ownerStartToken: 'old-owner',
+    childStartToken: 'old-child',
+    childCommandHash: 'old-command',
+    createdAt: new Date().toISOString(),
+  }))
+  const signals: string[] = []
+  const result = await reapStaleLocalPluginWriters(home, {
+    inspectProcess: pid => pid === 41001
+      ? { startToken: 'reused-child', commandHash: 'different-command' }
+      : null,
+    processAlive: pid => pid === 41001,
+    signalGroup: (_pid, signal) => { signals.push(signal) },
+    wait: async () => {},
+  })
+  assert.deepEqual(result, { ok: false, error: 'local plugin writer PID identity changed; refusing to signal it' })
+  assert.deepEqual(signals, [])
+  assert.equal(existsSync(localPluginWriterLedgerPath(home)), true)
+})
+
+test('local plugin writer reaper kills a daemonized descendant after its group leader exited', {
+  skip: process.platform === 'win32',
+  timeout: 15_000,
+}, async () => {
+  const root = tempDir()
+  const home = join(root, 'state', 'dsh-home')
+  mkdirSync(join(root, 'state'), { recursive: true })
+  const leader = spawn(process.execPath, ['-e', [
+    "const {spawn}=require('node:child_process')",
+    "const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref()",
+    "process.stdout.write(String(child.pid))",
+  ].join(';')], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+  let output = ''
+  leader.stdout?.setEncoding('utf8')
+  leader.stdout?.on('data', chunk => { output += chunk })
+  await new Promise<void>((resolve, reject) => {
+    leader.once('close', () => resolve())
+    leader.once('error', reject)
+  })
+  const descendantPid = Number(output)
+  assert.ok(Number.isInteger(leader.pid) && leader.pid! > 0)
+  assert.ok(Number.isInteger(descendantPid) && descendantPid > 0)
+  writeFileSync(localPluginWriterLedgerPath(home), JSON.stringify({
+    schemaVersion: 1,
+    pid: leader.pid,
+    ownerPid: 2_000_000_000,
+    ownerStartToken: null,
+    childStartToken: 'leader-exited',
+    childCommandHash: 'leader-exited',
+    createdAt: new Date().toISOString(),
+  }))
+  try {
+    const result = await reapStaleLocalPluginWriters(home)
+    assert.deepEqual(result, { ok: true, reaped: true })
+    assert.equal(existsSync(localPluginWriterLedgerPath(home)), false)
+    assert.throws(() => process.kill(descendantPid, 0), /ESRCH/)
+  } finally {
+    try { process.kill(-leader.pid!, 'SIGKILL') } catch { /* already reaped */ }
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ============================================================================
+// 1.5 Renderer projection redaction + confirmation copy (design 09 §4 v1
+// mitigations — a remote bundle shares the page and must never see local
+// absolute paths, nor drive pack/install/remove silently).
+// ============================================================================
+
+test('redactLocalPluginManifest: local-path spec values are masked, registry values untouched', () => {
+  const manifest = {
+    dependencies: {
+      'file-dep': 'file:/Users/x/pkg',
+      'link-dep': 'link:../pkg',
+      'rel-dep': './pkg',
+      'abs-dep': '/opt/pkg',
+      'home-dep': '~/pkg',
+      'registry-dep': '^1.2.3',
+      'pinned-dep': '1.2.3',
+      'tag-dep': 'latest',
+      'workspace-dep': 'workspace:*',
+      'npm-dep': 'npm:some-alias',
+      'git-dep': 'git+ssh://git@example.com/x/y.git',
+      'github-dep': 'github:user/repo',
+      'url-dep': 'https://example.com/pkg.tgz',
+    },
+    bundles: ['file-dep'],
+    clientLines: ['link-dep'],
+    bundleLines: ['file-dep'],
+    unsyncable: [{ name: 'workspace-dep', reason: 'workspace protocol' }],
+    chamber: { ok: true, hostGraph: { installed: true, patched: true, version: '1.0.0', live: null }, gitWorktree: { installed: true, patched: true, version: '1.0.0', live: null } },
+  }
+  const redacted = redactLocalPluginManifest(manifest as never)
+  assert.equal(redacted.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['link-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['rel-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['abs-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['home-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['registry-dep'], '^1.2.3')
+  assert.equal(redacted.dependencies['pinned-dep'], '1.2.3')
+  assert.equal(redacted.dependencies['tag-dep'], 'latest')
+  // Unsyncable values pass through (their reason carries no path) — npm
+  // aliases, git/URL specs and workspaces are never masked.
+  assert.equal(redacted.dependencies['workspace-dep'], 'workspace:*')
+  assert.equal(redacted.dependencies['npm-dep'], 'npm:some-alias')
+  assert.equal(redacted.dependencies['git-dep'], 'git+ssh://git@example.com/x/y.git')
+  assert.equal(redacted.dependencies['github-dep'], 'github:user/repo')
+  assert.equal(redacted.dependencies['url-dep'], 'https://example.com/pkg.tgz')
+  // Non-dependency fields are untouched.
+  assert.deepEqual(redacted.bundles, ['file-dep'])
+  assert.deepEqual(redacted.clientLines, ['link-dep'])
+  assert.deepEqual(redacted.bundleLines, ['file-dep'])
+  assert.deepEqual(redacted.unsyncable, [{ name: 'workspace-dep', reason: 'workspace protocol' }])
+  assert.equal(redacted.chamber.ok, true)
+})
+
+test('redactLocalPluginManifest: the mask still classifies as materialize on both sides (client isPathSpec parity)', () => {
+  // The client-side diff (plugin-diff.ts isPathSpec) keys on the `file:`
+  // prefix — the mask must keep classification identical to the raw path.
+  assert.equal(classifyDependencyValue(MATERIALIZED_VALUE_MASK).kind, 'materialize')
+})
+
+test('describeMaterializeConfirmation carries the plugin name, resolved path and target', () => {
+  const copy = describeMaterializeConfirmation({ pluginName: '@scope/pkg', pluginPath: '/Users/x/pkg', targetLabel: 'prod-server', targetId: 'ssh-1' })
+  assert.match(copy.message, /@scope\/pkg/)
+  assert.match(copy.detail, /\/Users\/x\/pkg/)
+  assert.match(copy.detail, /prod-server/)
+  const fallback = describeMaterializeConfirmation({ pluginName: 'pkg', pluginPath: '/p', targetLabel: null, targetId: 'ssh-2' })
+  assert.match(fallback.detail, /ssh-2/, 'target falls back to the instance id')
+})
+
+test('describeLocalPluginAddConfirmation / describeLocalPluginRemoveConfirmation name the action', () => {
+  const add = describeLocalPluginAddConfirmation('some-pkg@^1.2.3')
+  assert.match(add.message, /some-pkg@\^1\.2\.3/)
+  assert.match(add.detail, /本地 dsh profile/)
+  const remove = describeLocalPluginRemoveConfirmation('some-pkg')
+  assert.match(remove.message, /some-pkg/)
+  assert.match(remove.detail, /卸载/)
+})
+
+test('describePluginApplyConfirmation names the target and the add/remove/restart parts', () => {
+  const copy = describePluginApplyConfirmation({
+    targetLabel: 'prod-server', targetId: 'ssh-1',
+    add: ['pkg-a', 'pkg-b', 'pkg-c', 'pkg-d'], remove: ['old-pkg'], restart: true,
+  })
+  assert.match(copy.message, /prod-server/)
+  assert.match(copy.detail, /安装 4 个插件（pkg-a、pkg-b、pkg-c 等）/)
+  assert.match(copy.detail, /移除 1 个插件（old-pkg）/)
+  assert.match(copy.detail, /重启远端 dsh/)
+  const fallback = describePluginApplyConfirmation({ targetLabel: null, targetId: 'ssh-2', add: ['x'], remove: [], restart: false })
+  assert.match(fallback.message, /ssh-2/, 'target falls back to the instance id')
+})
+
+test('describeSeedConfirmation names the target and the write/restart effect', () => {
+  const copy = describeSeedConfirmation({ targetLabel: 'prod-server', targetId: 'ssh-1' })
+  assert.match(copy.message, /prod-server/)
+  assert.match(copy.detail, /写入 chamber host 包/)
+  const fallback = describeSeedConfirmation({ targetLabel: null, targetId: 'ssh-2' })
+  assert.match(fallback.message, /ssh-2/, 'target falls back to the instance id')
 })

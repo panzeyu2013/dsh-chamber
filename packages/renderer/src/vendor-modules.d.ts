@@ -317,6 +317,9 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
       runningSubagents?: number
     }>
   }
+  export interface InstanceHostReport {
+    dshVersion?: string
+  }
   export type PluginGraphDiagnosticState = 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
   export interface PluginGraphDiagnostic {
     state: PluginGraphDiagnosticState
@@ -327,7 +330,9 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export interface ChamberServerAggregate {
     id: string
     sourceFingerprint: string
-    kind: 'local' | 'ssh'
+    kind: 'local' | 'dsh' | 'gateway'
+    transport: 'local' | 'ssh' | 'http'
+    rawId?: string
     label: string
     connected: boolean
     phase: string
@@ -335,6 +340,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     aggregateReady?: boolean
     aggregateError?: string
     runtime?: InstanceRuntimeReport
+    dshVersion?: string
     pluginDiagnostic?: PluginGraphDiagnostic
     updatedAt: number
   }
@@ -469,6 +475,15 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     onInstanceSnapshot(listener: (
       sourceId: string,
       snapshot: InstanceSnapshot | undefined,
+      sourceFingerprint: string | undefined,
+    ) => void): () => void
+    registerInstanceHostProducer(sourceId: string, sourceFingerprint: string): {
+      report(report: InstanceHostReport | undefined): void
+      clear(): void
+    }
+    onInstanceHost(listener: (
+      sourceId: string,
+      report: InstanceHostReport | undefined,
       sourceFingerprint: string | undefined,
     ) => void): () => void
     reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void

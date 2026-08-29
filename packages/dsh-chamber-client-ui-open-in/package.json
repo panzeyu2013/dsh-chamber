@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-client-ui-open-in",
   "description": "Chamber-bundled open-in client plugin: open the current source's workspace in Finder (local) or VS Code (local/remote SSH), design 16 + open-in extension",
-  "version": "0.1.5",
+  "version": "0.2.0-beta.3",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -26,7 +26,7 @@
     }
   },
   "scripts": {
-    "test": "node test/capabilities.ts && node test/coordinator.ts && node test/menu-navigation.ts"
+    "test": "node test/capabilities.ts && node test/coordinator.ts && node test/menu-navigation.ts && node test/open-in-gates.ts"
   },
   "license": "MIT",
   "peerDependencies": {

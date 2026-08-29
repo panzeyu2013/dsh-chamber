@@ -7,7 +7,7 @@ import type {
 } from './transport-provider.ts';
 import type { SshConfigDiscovery } from './ssh-config.ts';
 import type { UpdateState } from './updater.ts';
-
+import type { RuntimeState } from './dsh-runtime-controller.ts';
 const { contextBridge, ipcRenderer } = require('electron');
 
 // Keep preload runtime self-contained: importing a value from a TypeScript ESM
@@ -30,34 +30,54 @@ function validDeliveryCoordinate(value: unknown): value is number {
  * non-persisted lifecycle proof and is never accepted as registry data. */
 export interface SshInstanceSpec extends RegistrySshInstanceSpec {
   sourceFingerprint: string
+  sshPasswordSet?: boolean
+  tokenSet?: boolean
+  passwordSet?: boolean
+  secretStorage?: 'safeStorage' | 'plaintext'
 }
 
-/** Transient replacement credential committed with one registry save. */
-export interface SshPasswordSubmission {
-  id: string
-  password: string
+export interface ConnectionCredentialMutations {
+  sshPassword?: string
+  gatewayToken?: string
+  gatewayPassword?: string
 }
+
+export type SaveConnectionResult =
+  | { ok: true; instances: SshInstanceSpec[] }
+  | { ok: false; instances: SshInstanceSpec[]; error: string; metadataCommitted: boolean }
 
 /**
  * The window.dshChamber bridge contract (design 05 §7.4) — the typed
- * surface the renderer consumes. Registry/status RESULTS are non-secret and
- * never contain a transport URL or credential; the only credential inputs
- * are the documented transient password arguments below, never returned.
- * onStatusChanged subscribes to the main-process push and returns an unsubscribe. The
+ * surface the renderer consumes. Its returns/events/projections are non-secret:
+ * never a transport URL or credential material. The sole credential-bearing
+ * direction is save_connection's transient write-only input. onStatusChanged
+ * subscribes to the main-process push and returns an unsubscribe. The
  * provider exec channels (ssh: systemd) resolve the fresh status projection
  * (serviceActive included) or {error} — loud failures, never silent empty
  * success.
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  instances_set(instances: SshInstanceInput[], password?: SshPasswordSubmission): Promise<SshInstanceSpec[]>
+  /** Legacy compatibility channel: exact unchanged no-op roster only. */
+  instances_set(instances: SshInstanceSpec[]): Promise<SshInstanceSpec[]>
+  /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
+  delete_connection(id: string): Promise<SshInstanceSpec[]>
+  /** Main-owned registry + write-only credential transaction. */
+  save_connection(previousId: string | null, input: SshInstanceInput, credentials: ConnectionCredentialMutations): Promise<SaveConnectionResult>
   /**
-   * Forward the SSH password to the main process, which holds it in memory
-   * and mirrors it to the documented 0600 password store (design 05 §8).
-   * The value is never returned or logged; '' / null clears it.
-   * Resolves {ok:true} or {error} (unknown id / platform not supported).
+   * Explicitly clear the SSH password. Non-empty writes are authoritative
+   * only through save_connection's main-owned transaction.
    */
-  set_password(id: string, password: string | null): Promise<{ ok: true } | { error: string }>
+  set_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
+  /**
+   * Explicitly clear the gateway token; non-empty writes use save_connection.
+   */
+  set_gateway_token(id: string, token: null): Promise<{ ok: true } | { error: string }>
+  /**
+   * Explicitly clear the gateway login password; non-empty writes use
+   * save_connection. Clearing also invalidates cached login sessions.
+   */
+  set_gateway_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -93,7 +113,8 @@ export interface DesktopSshSurface {
   /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
-  /** Registry changed (add/edit/delete via instances_set): re-pull the roster. */
+  /** Registry changed via the main-owned save/delete transaction. The
+   * synchronous delta retires exact source generations before async re-pull. */
   onInstancesChanged(callback: (payload: InstancesChangedPayload) => void): () => void
 }
 
@@ -119,7 +140,9 @@ export interface ChamberHostGraphState {
   version: string | null
   live: boolean | null
 }
-
+/** Chamber-injected component state (design 09): ok:false = unreadable (loud,
+ *  never a silent "not injected"). The preload mirror of plugin-sync.ts /
+ *  renderer global.d.ts — the L3 lockstep test guards shape drift. */
 export type ChamberInjectionState =
   | {
     ok: true
@@ -127,13 +150,15 @@ export type ChamberInjectionState =
     gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
   }
   | { ok: false; error: string }
-
 /** Remote plugin manifest projection (design 13 §4.3). */
 export interface SshRemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
   profileExists: boolean
   error?: string
+  /** Chamber-injected component state (design 09), probed over the wire —
+   *  mirror of plugin-sync.ts (the wire producer); renderer global.d.ts
+   *  mirrors the same shape. */
   chamber: ChamberInjectionState
 }
 export type SshRemotePluginListResult =
@@ -247,6 +272,9 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
+   *  user-selected mirror/custom https origin (trust anchor). */
+  registryOrigin: string
   /** 桌面通知设置（design 19 §3.4）：嵌套键，与 chamber-settings.ts 权威 store
    *  及 renderer global.d.ts 的结构镜像保持一致（镜像同步纪律）。 */
   notifications: ChamberNotificationSettings
@@ -275,7 +303,10 @@ export interface ChamberSettingsStatus {
 
 export interface SettingsSurface {
   get(): Promise<ChamberSettingsStatus>
-  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string }>
+  /** Failure carries a stable machine-readable `code` where the renderer must
+   *  branch (e.g. 'cancelled', 'invalid-registry-origin'); `error` is a
+   *  user-facing fallback text only, never a branching key. */
+  set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string; code?: string }>
   onChanged(callback: (status: ChamberSettingsStatus) => void): () => void
 }
 
@@ -332,6 +363,8 @@ export type NotificationKind = 'complete' | 'ask' | 'request' | 'test'
 
 /** 通知 payload（design 19 §3.3）——渲染端组装，主进程白名单校验 + 裁决。 */
 export interface NotificationRequest {
+  /** `local` or canonical `dsh-<id>` / `gateway-<id>`; main also accepts the
+   * legacy `ssh-<id>` input alias and normalizes it to `dsh-<id>`. */
   sourceId: string
   sourceFingerprint: string
   sessionId: string
@@ -380,19 +413,43 @@ export interface DshChamberBridge {
   systemResume: SystemResumeSurface
   openIn: OpenInSurface
   deepLink: DeepLinkSurface
+  runtime: RuntimeSurface
   notifications: NotificationSurface
 }
 
+/** dsh runtime version management surface (design 18 M2 IPC). */
+export interface RuntimeSurface {
+  state(): Promise<RuntimeState>
+  check(): Promise<RuntimeState>
+  install(version: string): Promise<RuntimeState>
+  resetBuiltin(): Promise<RuntimeState>
+  retryApply(): Promise<RuntimeState>
+  retryRestore(): Promise<RuntimeState>
+  recoverMetadata(): Promise<RuntimeState>
+  cleanupVersion(version: string): Promise<RuntimeState>
+  /** Write-only data-restore action: the main process validates the stash name
+   *  against its private pre-rollback listing; no path is ever accepted. */
+  restorePreRollback(stashName: string): Promise<RuntimeState>
+  /** Transactional managed-dsh restart (design 18 §3.6 项 8). */
+  restart(): Promise<RuntimeState>
+  onChanged(callback: (state: RuntimeState) => void): () => void
+}
+
 /**
- * The desktop_ssh_* IPC surface (design 05 §7.4) — non-secret only:
- * never a transport URL, never credential material. onStatusChanged
+ * The desktop_ssh_* IPC surface (design 05 §7.4) — returns/events/projections
+ * are non-secret: never a transport URL or credential material. The sole
+ * credential-bearing direction is save_connection's transient write-only input. onStatusChanged
  * subscribes to the main-process push and returns an unsubscribe.
  */
 function desktopSshApi(): DesktopSshSurface {
   return {
     instances_get: () => ipcRenderer.invoke('desktop_ssh_instances_get'),
-    instances_set: (instances, password) => ipcRenderer.invoke('desktop_ssh_instances_set', instances, password),
+    instances_set: instances => ipcRenderer.invoke('desktop_ssh_instances_set', instances),
+    delete_connection: id => ipcRenderer.invoke('desktop_ssh_delete_connection', { id }),
+    save_connection: (previousId, input, credentials) => ipcRenderer.invoke('desktop_ssh_save_connection', { previousId, input, credentials }),
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),
+    set_gateway_token: (id, token) => ipcRenderer.invoke('desktop_gateway_set_token', { id, token }),
+    set_gateway_password: (id, password) => ipcRenderer.invoke('desktop_gateway_set_password', { id, password }),
     config_list: () => ipcRenderer.invoke('desktop_ssh_config_list'),
     connect: id => ipcRenderer.invoke('desktop_ssh_connect', { id }),
     disconnect: id => ipcRenderer.invoke('desktop_ssh_disconnect', { id }),
@@ -496,6 +553,30 @@ function systemResumeApi(): SystemResumeSurface {
   };
 }
 
+/** The dsh-chamber:runtime-* IPC surface (design 18 M2). Non-secret projection
+ *  only (version strings / list / phase / short error); install/check/reset run
+ *  in the main process. onChanged subscribes to the main-process push. */
+function runtimeApi(): RuntimeSurface {
+  return {
+    state: () => ipcRenderer.invoke('dsh-chamber:runtime-state'),
+    check: () => ipcRenderer.invoke('dsh-chamber:runtime-check'),
+    install: version => ipcRenderer.invoke('dsh-chamber:runtime-install', { version }),
+    resetBuiltin: () => ipcRenderer.invoke('dsh-chamber:runtime-reset-builtin'),
+    retryApply: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-apply'),
+    retryRestore: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-restore'),
+    recoverMetadata: () => ipcRenderer.invoke('dsh-chamber:runtime-recover-metadata'),
+    cleanupVersion: version => ipcRenderer.invoke('dsh-chamber:runtime-cleanup-version', { version }),
+    restorePreRollback: stashName => ipcRenderer.invoke('dsh-chamber:runtime-restore-pre-rollback', { stashName }),
+    restart: () => ipcRenderer.invoke('dsh-chamber:runtime-restart'),
+    onChanged: callback => {
+      if (typeof callback !== 'function') return () => {};
+      const listener = (_event: IpcRendererEvent, state: RuntimeState) => callback(state);
+      ipcRenderer.on('dsh-chamber:runtime-state-changed', listener);
+      return () => ipcRenderer.removeListener('dsh-chamber:runtime-state-changed', listener);
+    },
+  };
+}
+
 /**
  * The dsh-chamber:open-in-apps / dsh-chamber:open-in IPC surface (open-in.ts):
  * apps() resolves the registry capability negotiation ({apps} payload unwrapped
@@ -567,9 +648,14 @@ function notificationsApi(): NotificationSurface {
         }
         const req = payload as Partial<NotificationOpenRequest>;
         const sourceId = req.sourceId;
+        const validRemoteSourceId = typeof sourceId === 'string'
+          && ['dsh-', 'gateway-', 'ssh-'].some((prefix) => {
+            if (!sourceId.startsWith(prefix)) return false;
+            return INSTANCE_ID_PATTERN.test(sourceId.slice(prefix.length));
+          });
         const validSourceId = typeof sourceId === 'string' && (
           sourceId === 'local'
-          || (sourceId.startsWith('ssh-') && INSTANCE_ID_PATTERN.test(sourceId.slice(4)))
+          || validRemoteSourceId
         );
         if (
           !validSourceId
@@ -631,6 +717,7 @@ requestAppInfo().then(
       systemResume: systemResumeApi(),
       openIn: openInApi(),
       deepLink: deepLinkApi(),
+      runtime: runtimeApi(),
       notifications: notificationsApi(),
     });
   },
@@ -647,6 +734,7 @@ requestAppInfo().then(
       systemResume: systemResumeApi(),
       openIn: openInApi(),
       deepLink: deepLinkApi(),
+      runtime: runtimeApi(),
       notifications: notificationsApi(),
     });
   },

@@ -20,21 +20,21 @@
 │ 控制面（127.0.0.1:17500）                                               │
 │  ├─ 管理 REST：/health · /api/connections · /api/host/logs              │
 │  ├─ 每实例反代：/api/i/local/* → 本地 dsh（web profile）                 │
-│  │              /api/i/ssh-<id>/* → 隧道 localPort                      │
-│  │              （v1 匿名可达，仅 loopback 监听）                        │
+│  │              /api/i/dsh-<id>/*、/api/i/gateway-<id>/* → 已注册传输    │
+│  │              （普通桌面 v1 匿名可达，仅 loopback 监听）               │
 │  ├─ 本地实例托管（spawn/健康/reaper）+ 双 host 包 seed/单一 overlay       │
 │  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）                             │
 ├───────────────────────────────────────────────────────────────────────┤
 │ 桌面主进程（desktop）                                                   │
-│  ├─ transport-manager + ssh provider（TransportProvider 接口）          │
-│  │    ssh -N -o ServerAlive… -L 隧道 + systemctl start/stop/is-active    │
+│  ├─ transport-manager：目标 dsh|gateway × 传输 ssh|http                 │
+│  │    SSH 隧道/systemd 或主进程 HTTP(S)，生命周期按 generation 隔离       │
 │  ├─ 远端 ready-time 双 host 包分发（不经 SSH 执行 Git）                  │
 │  ├─ 实例注册表：<userData>/ssh-instances.json                           │
 │  └─ IPC（preload 白名单）：dsh-chamber:info · desktop_ssh_*             │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-**一句话**：控制面（连接管理器核心）负责连接管理、每实例同源反代与静态前端服务；渲染层是 dsh 官方前端源码复用自建（单窗口单 frame，多实例以 N-ctx 共存）；桌面壳经 SSH 隧道接入远程实例。
+**一句话**：控制面（连接管理器核心）负责连接管理、每实例同源反代与静态前端服务；渲染层是 dsh 官方前端源码复用自建（单窗口单 frame，多实例以 N-ctx 共存）；桌面壳以彼此独立的 `dsh|gateway` 目标和 `ssh|http` 传输接入远程实例，显式启动的 gateway 则在认证默认开启的公网边界后复用同一宿主管理核心。
 
 Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插件配对；
 控制面/桌面只分发 host 包和挂 loader row，不解析 Git 事实，也不经 SSH 执行 Git。
@@ -45,8 +45,10 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 |---|---|
 | `packages/control-plane` | 连接管理器核心：web profile 宿主托管、双 host 包本地 seed/overlay、管理 REST、每实例反代、静态前端服务 |
 | `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主、N-ctx 编排、启动图清单 |
-| `packages/desktop` | Electron 壳：单 frame、transport-manager + ssh provider（隧道 + systemd）、远端 ready-time host 包分发、实例注册表、IPC |
+| `packages/desktop` | Electron 壳：单 frame、正交目标/传输 provider、远端 ready-time host 包分发、实例注册表、IPC、运行时管理与原生边缘能力 |
 | `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
+| `packages/gateway` | 独立认证 server 形态（design 17）：强制认证公网边界 + 单本地 dsh 反代 + 派生编排 |
+| `packages/dsh-runtime` | desktop/gateway 共用的纯 Node dsh 版本树、安装、激活、探针与两阶段回滚核心；状态仍由两个宿主各自拥有 |
 | `packages/dsh-client-connection` | 官方连接客户端仓库内拷贝 + base 路径补丁 |
 | `packages/dsh-client-web` | 官方 web shell 仓库内拷贝 + boot.ts N-ctx 模块表共享 seam |
 | `packages/dsh-chamber-client-ui-sidebar` | 自研侧边栏插件：多来源会话导航 + chamberBridge（替换官方 ui-sidebar 注册） |
@@ -75,10 +77,10 @@ git clone <REPO-URL>
 cd dsh-chamber
 ```
 
-`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次：
+`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/dev/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次：
 
 ```bash
-node scripts/ensure-harness-vendor.mjs
+node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 
@@ -89,7 +91,7 @@ pnpm install
 3. 兄弟检出 `<repo>/../deepseek-harness`（零网络本地开发；HEAD 与固定提交不一致时警告）；
 4. 否则从 codeload 按固定提交下载快照（固定于 `harness.commit`，可用 `DSH_CHAMBER_HARNESS_COMMIT` 覆盖）。
 
-根目录 `.npmrc` 是 gitignored 的本地便利配置，可将 Electron 二进制下载指向 npmmirror 镜像；没有它则从官方源下载。打包期的镜像已提交在 `packages/desktop/package.json`（`electronDownload.mirror`）。
+根目录 `.npmrc` 是 gitignored 的本地便利配置，本地开发可自行把 Electron 二进制下载指向镜像；正式构建配置不提交第三方 `electronDownload.mirror`，始终使用 Electron 官方源，避免镜像同时替换二进制与校验表后被正式签名。
 
 ### 2.3 封装 dsh 运行时
 
@@ -118,7 +120,7 @@ pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
 pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分）
 ```
 
-打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。发布模型（2026-08 起）：仓库未配置 Apple Developer ID / Windows Authenticode 密钥——macOS 由 afterPack 钩子（`packages/desktop/scripts/after-pack-adhoc-sign.mjs`）ad-hoc 签名（结构合法签名，Gatekeeper 宽松系统可直开，默认 Gatekeeper 需右键打开/「仍要打开」）、Windows 未签名（SmartScreen 警告，design 11 §7 记录权衡）；macOS 自动安装腿因无 Developer ID 签名被阻塞（design 11 §3.1）。若日后在 GitHub Secrets 配置 `MAC_CSC_LINK`/`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`/`WIN_CSC_LINK`，可恢复正式签名 + 公证发布路径。
+打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。正式发布的 macOS 腿必须具备五项 Apple/Developer ID 凭据：缺项会在任何 GitHub Release 变更前 fail-closed；构建后还必须通过 Developer ID 签名、公证、stapler 与 spctl 校验，任一失败都阻断 draft 公开 finalize。`workflow_dispatch dry_run` 即使仓库配置了正式 secrets，也会无条件清空签名/公证环境与 `GH_TOKEN`，使用 `--publish=never`，不创建/修改 Release、不上传资产，并由 afterPack 钩子产生 ad-hoc 签名验证包。Windows 首版仍未签名（SmartScreen 警告，design 11 §7 的明确权衡）。
 
 `build:desktop` 会把两个已构建 host 包复制到
 `packages/desktop/dist/host-graph-package/` 与
@@ -129,8 +131,17 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 
 ## 5. CI 与发布
 
-- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/两个 host 包/client 插件 typecheck → i18n → 控制面/desktop/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ smoke〔未捆绑运行时 SKIP〕→ renderer 构建），**不打包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
-- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，带版本与可选 dry-run）。先建 draft GitHub Release，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，产物上传进 draft 后翻转公开发布。版本断言覆盖 release matrix 中的 chamber 包；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。
+- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/runtime/两个 host 包/client 插件 typecheck → i18n → 控制面/runtime/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ **workflow action SHA 门禁**（`release-preflight --actions-only`，2026-09 起）→ smoke〔未捆绑运行时 SKIP〕→ renderer/host/desktop 子构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不产出发布包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
+- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，版本输入不带 `v`，可选 dry-run）。发布版本只允许 canonical stable `X.Y.Z` 或 beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他 prerelease fail closed；stable 使用默认 desktop 打包配置且只发布 `latest.yml`/`latest-mac.yml`，beta 使用独立 `packages/desktop/electron-builder.beta.yml` 且只发布 `beta.yml`/`beta-mac.yml`，两通道资产互斥。正式流程先建 draft，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，完成上述 macOS fail-closed 校验后才翻转公开；dry-run 全程零 Release 写入。版本断言经 `release-preflight --versions-only` 动态覆盖根、全部非 fork chamber 包及两个 fork 基线；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。`validation` job 自验证 gateway/runtime typecheck+tests、关键 control-plane/desktop/renderer/plugin/CLI/policy 门禁；`build-gateway` 只在 GitHub Release 发布经干净临时前缀安装冒烟的 `.tgz` 与同名 `.tgz.sha256`，npm publish/dist-tag 延后。
+- **发布机械门禁（2026-09 起）**：`pnpm run release:preflight <版本>`
+  （`scripts/dev/release-preflight.mjs`）——版本统一性（含 fork 副本与安装器 dsh
+  常量）、changelog 中英对等、i18n、**workflow action SHA 上游可解析**、冲突标记、
+  git 干净、frozen install、test:release-workflow；发布 checklist §1.5/§7 强制
+  commit 前与 push 前各跑一次。
+- **发布流程（2026-09 优化）**：本地 preflight + 全量炮组（精确发布提交）→
+  commit+tag → **workflow_dispatch dry_run 先行**（新增/修改的 workflow/脚本
+  路径/action SHA 必须先 dry-run 验证过一次）→ 正式 tag push。
+  详细步骤见发布 checklist。
 - 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
 
 ## 6. 仓库结构
@@ -140,8 +151,10 @@ packages/
   control-plane/            控制面：宿主托管、管理 REST、
                             每实例反代、静态前端服务
   renderer/                 自建 dsh 前端（源码复用 + 桥接宿主 + N-ctx）
-  desktop/                  Electron 壳：单 frame、transport-manager + ssh provider、实例注册表、IPC
+  desktop/                  Electron 壳：单 frame、正交目标/传输 providers、实例注册表、IPC
   cli/                      CLI 薄壳
+  gateway/                  独立认证 server 形态 + 单本地 dsh + 派生编排
+  dsh-runtime/              desktop/gateway 共用的纯 Node dsh 运行时管理核心
   dsh-client-connection/    被修改的 dsh 源码 #1（base 路径补丁）
   dsh-client-web/           被修改的 dsh 源码 #2（boot.tsx N-ctx seam）
   dsh-chamber-client-ui-sidebar/    自研侧边栏插件：多来源会话导航 + chamberBridge

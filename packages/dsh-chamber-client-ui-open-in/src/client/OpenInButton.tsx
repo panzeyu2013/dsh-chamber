@@ -12,9 +12,9 @@
  * chosen per source: LOCAL sources (sourceId === 'local') can open in any
  * reported app (Finder + VS Code on a typical mac) — ≥2 apps render the main
  * icon button (default = VS Code when present) plus a chevron dropdown;
- * REMOTE sources (ssh-<id>) only get remote-capable apps (VS Code) — exactly
- * one app renders the plain icon button, behavior unchanged from the VS
- * Code-only days.
+ * REMOTE sources whose transport is SSH (whether target kind is dsh or
+ * gateway) only get remote-capable apps (VS Code). HTTP transports get no
+ * vscode-remote action. Exactly one usable app renders the plain icon button.
  *
  * Three gates (design 16 §6.3), ANY failure → render null (never a dead
  * button):
@@ -56,11 +56,12 @@ import {
   type OpenInApp,
   type OpenInSource,
 } from '../shared/capabilities.ts'
+import { workspacePathForSession } from './open-in-gates.ts'
 import styles from './OpenInButton.module.css'
 
 /** Injected face the plugin supplies: per-boot source id + bound translator. */
 export interface OpenInInjected {
-  /** Strictly parsed per-boot source (local or one raw SSH registry id). */
+  /** Strictly parsed per-boot source with orthogonal target id and transport. */
   source: OpenInSource
   /** Immutable identity of this exact boot, never read from a latest-roster global. */
   sourceFingerprint: string
@@ -186,17 +187,17 @@ export function OpenInButton({ source, sourceFingerprint, t, sessionId, useWorks
 
   // Gate 1: the probed app list, fail-closed (null/undefined/empty all hide),
   // filtered to what this source may actually use. LOCAL sources get every
-  // available app; REMOTE (ssh-<id>) sources only remote-capable ones. The
+  // available app; REMOTE sources over SSH get only remote-capable ones,
+  // irrespective of dsh/gateway target kind. HTTP transports get none. The
   // bridge's `available` flag is honored as a hard filter (fail-closed).
   const usableApps = usableOpenInApps(appList, source)
   if (usableApps.length === 0) return null
 
   // Gate 2: THIS header's session must live in a workspace with a concrete
   // path. Both remote and local sources show (user decision 2026-08); the
-  // launch branch (ssh-remote vs file) is decided in the main process by
-  // instanceId.
-  const workspace = workspaces.find(item => item.sessionIds.includes(String(sessionId)))
-  const path = workspace?.path
+  // launch branch (ssh-remote vs file) is decided in the main process from
+  // the authoritative instance transport behind instanceId.
+  const path = workspacePathForSession(workspaces, sessionId)
   if (path === undefined || path === '') return null
 
   // Default selection (this mount's memory only, no localStorage): VS Code

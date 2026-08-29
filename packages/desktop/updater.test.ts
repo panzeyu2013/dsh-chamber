@@ -12,7 +12,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createUpdateController, isAllowedReleaseUrl, openReleasePage, sanitizeErrorText } from './updater.ts'
+import {
+  betaReleaseDownloadBase,
+  createUpdateController,
+  isAllowedReleaseUrl,
+  openReleasePage,
+  resolveGithubBetaFeed,
+  sanitizeErrorText,
+} from './updater.ts'
 import type { AutoUpdaterLike, UpdateController, UpdateControllerDeps, UpdatePhase, UpdateState } from './updater.ts'
 
 const silentLogger = { log: () => {}, warn: () => {}, error: () => {} }
@@ -164,10 +171,86 @@ test('beta env opt-in: channel + allowPrerelease set, allowDowngrade re-asserted
   assert.equal(fake.allowDowngrade, false)
 })
 
-test('a prerelease running version enables allowPrerelease on the stable channel too', () => {
-  const { fake } = makeController({ version: '0.2.0-beta.1' })
+test('a prerelease running version is intrinsically pinned to the beta channel', () => {
+  const { fake, controller } = makeController({ version: '0.2.0-beta.1' })
+  assert.equal(controller.state().channel, 'beta')
   assert.equal(fake.allowPrerelease, true)
-  assert.equal(fake.channel, null)
+  assert.equal(fake.channel, 'beta')
+})
+
+test('beta release discovery selects numeric beta.10 over beta.2 and rejects non-canonical tags', () => {
+  assert.equal(betaReleaseDownloadBase([
+    { tag_name: 'v9.0.0', draft: false, prerelease: false },
+    { tag_name: 'v0.2.0-beta.2', draft: false, prerelease: true },
+    { tag_name: 'v0.2.0-beta.99', draft: true, prerelease: true },
+    { tag_name: '0.2.0-beta.100', draft: false, prerelease: true },
+    { tag_name: 'v0.2.0-beta.10', draft: false, prerelease: true },
+    { tag_name: 'v0.2.0-beta.11/../../latest', draft: false, prerelease: true },
+  ]), 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.10/')
+  assert.throws(() => betaReleaseDownloadBase([
+    { tag_name: 'v0.2.0', draft: false, prerelease: false },
+  ]), /no published beta release/)
+})
+
+test('beta discovery uses only the bounded releases-list API', async () => {
+  let requestedUrl = ''
+  const feed = await resolveGithubBetaFeed(async (input, init) => {
+    requestedUrl = String(input)
+    assert.ok(init?.signal instanceof AbortSignal)
+    return {
+      ok: true,
+      status: 200,
+      json: async () => [{ tag_name: 'v0.2.0-beta.3', draft: false, prerelease: true }],
+    } as Response
+  })
+  assert.equal(requestedUrl, 'https://api.github.com/repos/panzeyu2013/dsh-chamber/releases?per_page=100')
+  assert.equal(feed, 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.3/')
+  assert.doesNotMatch(requestedUrl + feed, /\/latest(?:[./?]|$)|latest[-.]\w+\.yml/)
+})
+
+test('beta check switches to an exact generic beta feed and never offers the GitHub latest fallback', async () => {
+  let resolutions = 0
+  const { fake, controller } = makeController({
+    version: '0.2.0-beta.3',
+    deps: {
+      resolveBetaFeed: async () => {
+        resolutions += 1
+        return 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.4/'
+      },
+    },
+  })
+  await controller.checkNow()
+  assert.equal(resolutions, 1)
+  assert.equal(fake.checkCalls, 1)
+  assert.deepEqual(fake.feedUrl, {
+    provider: 'generic',
+    url: 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.4/',
+    channel: 'beta',
+  })
+  assert.equal(fake.channel, 'beta')
+  assert.equal(fake.allowDowngrade, false)
+})
+
+test('beta discovery failure is fail-closed before updater check; stable never invokes beta discovery', async () => {
+  const beta = makeController({
+    version: '0.2.0-beta.3',
+    deps: { resolveBetaFeed: async () => { throw new Error('beta feed unavailable') } },
+  })
+  await beta.controller.checkNow()
+  assert.equal(beta.fake.checkCalls, 0)
+  assert.equal(beta.controller.state().phase, 'error')
+  assert.match(beta.controller.state().error ?? '', /beta feed unavailable/)
+
+  let stableResolutions = 0
+  const stable = makeController({
+    version: '0.2.0',
+    deps: { resolveBetaFeed: async () => { stableResolutions += 1; throw new Error('must not run') } },
+  })
+  await stable.controller.checkNow()
+  assert.equal(stableResolutions, 0)
+  assert.equal(stable.fake.checkCalls, 1)
+  assert.equal(stable.fake.channel, null)
+  assert.deepEqual(stable.fake.feedUrl, { provider: 'github', owner: 'panzeyu2013', repo: 'dsh-chamber' })
 })
 
 test('checking-for-update transitions to checking and clears error', () => {

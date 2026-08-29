@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CONNECTIONS_SECTION_ID,
+  GATEWAY_SECTION_ID,
   GENERAL_SECTION_ID,
   resolveActiveSection,
   type SectionNavRow,
@@ -27,6 +28,12 @@ test('resolveActiveSection: chamber-global fixed ids always win', () => {
 
 test('resolveActiveSection: server-section id passes through when in the ledger', () => {
   assert.equal(resolveActiveSection('models', rows), 'models');
+});
+
+test('resolveActiveSection: gateway orchestration is valid only for a selected gateway', () => {
+  assert.equal(resolveActiveSection(GATEWAY_SECTION_ID, rows, true), GATEWAY_SECTION_ID);
+  assert.equal(resolveActiveSection(GATEWAY_SECTION_ID, rows, false), 'models');
+  assert.equal(resolveActiveSection(GATEWAY_SECTION_ID, [], false), undefined);
 });
 
 test('resolveActiveSection: a section id that left the ledger falls back to the first row', () => {

@@ -19,7 +19,8 @@ export type NotificationKind = 'complete' | 'ask' | 'request' | 'test';
 
 /** 渲染端组装的通知请求（design 19 §3.3）——纯非秘密投影。 */
 export interface NotificationRequest {
-  /** 'local' | 'ssh-<id>' */
+  /** `local` or canonical `dsh-<id>` / `gateway-<id>`; legacy `ssh-<id>`
+   * input is normalized to `dsh-<id>` at the privileged boundary. */
   sourceId: string
   /** Exact non-secret registry transport identity captured by the producer. */
   sourceFingerprint: string
@@ -213,6 +214,13 @@ export interface NotificationSettingsLike {
  *    （'always' 放行聚焦状态）；
  * 6. 否则 'show'。
  * 'test' 不受 requireHidden 影响（绕过全部门禁）。
+ *
+ * 信任切分（review 2026-08）：主进程的 anyWindowFocused 只回答「是否有窗口
+ * 聚焦」，无法知道用户正在查看哪个会话——会话级焦点只有渲染端可见。因此在
+ * 'always' 模式下（步骤 5 放行聚焦状态），「正在查看的会话不打扰」的豁免
+ * 完全依赖渲染端上报的 requireHidden（步骤 4 的 on-screen 判定）；主进程
+ * isAnyWindowFocused 不参与 'always' 的独立豁免。'hidden-only' 模式下两者
+ * 叠加：步骤 4 保护被查看会话，步骤 5 保护任何聚焦状态下的打扰。
  */
 export function decideNotification(input: {
   request: NotificationRequest
@@ -230,6 +238,10 @@ export function decideNotification(input: {
   if (!kindSwitch[request.kind]) return { action: 'skip', reason: 'kind-off' };
   if (request.requireHidden && anyWindowFocused) return { action: 'skip', reason: 'on-screen' };
   if (settings.mode === 'hidden-only' && anyWindowFocused) {
+    // 'always' 放行聚焦状态：此处不拦截。焦点豁免（正在查看的会话不打扰）
+    // 在 'always' 模式下完全依赖渲染端 requireHidden（上面的 on-screen 判定）
+    // ——主进程 isAnyWindowFocused 不参与 'always' 的独立豁免（信任切分见
+    // 模块头注释，review 2026-08）。
     return { action: 'skip', reason: 'focused-hidden-only' };
   }
   return { action: 'show' };
@@ -466,7 +478,8 @@ export function readNotificationHostBoolean(read: () => unknown):
 }
 
 /** 字段长度上限（防异常 title/body 刷屏，design 19 §3.6）。sourceId 另受
- * local | ssh-<registry id> 语义白名单约束。 */
+ * local | dsh-<registry id> | gateway-<registry id>（及 legacy ssh- alias）
+ * 语义白名单约束。 */
 const MAX_SOURCE_ID_LENGTH = 256;
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_TITLE_LENGTH = 256;
@@ -474,12 +487,31 @@ const MAX_BODY_LENGTH = 512;
 
 const NOTIFICATION_KINDS: ReadonlySet<string> = new Set(['complete', 'ask', 'request', 'test']);
 
+/** Normalize the one documented v1 alias before lifecycle-proof lookup. This
+ * is essential compatibility rather than a wider trust rule: `ssh-<id>` can
+ * only name the canonical dsh target for the same validated raw registry id.
+ * New/future prefixes remain fail-closed. */
+function canonicalNotificationSourceId(sourceId: string): string | null {
+  if (sourceId === 'local') return sourceId;
+  for (const prefix of ['dsh-', 'gateway-'] as const) {
+    if (!sourceId.startsWith(prefix)) continue;
+    const rawId = sourceId.slice(prefix.length);
+    return INSTANCE_ID_PATTERN.test(rawId) ? sourceId : null;
+  }
+  if (sourceId.startsWith('ssh-')) {
+    const rawId = sourceId.slice(4);
+    return INSTANCE_ID_PATTERN.test(rawId) ? `dsh-${rawId}` : null;
+  }
+  return null;
+}
+
 /**
  * IPC payload 白名单校验（design 19 §3.6）：sourceId/sessionId/title/body 必须
  * 为非空 string（前三个 ≤256、body ≤512），sourceId 只能是保留的 local 或
- * `ssh-${registryId}`（registryId 复用 INSTANCE_ID_PATTERN），kind 四选一、
- * requireHidden 为 boolean。未知/多余字段忽略（校验只做白名单必要字段，
- * 不做全等断言）。
+ * canonical `dsh-${registryId}` / `gateway-${registryId}`；迁移期输入
+ * `ssh-${registryId}` 被规范化为 `dsh-${registryId}`（registryId 复用
+ * INSTANCE_ID_PATTERN）。kind 四选一、requireHidden 为 boolean。未知/多余
+ * 字段忽略（校验只做白名单必要字段，不做全等断言）。
  */
 export function validateNotificationRequest(
   raw: unknown,
@@ -494,15 +526,13 @@ export function validateNotificationRequest(
   if (record.sourceId.length > MAX_SOURCE_ID_LENGTH) {
     return { ok: false, error: `sourceId is too long (max ${MAX_SOURCE_ID_LENGTH})` };
   }
-  if (
-    record.sourceId !== 'local'
-    && (!record.sourceId.startsWith('ssh-') || !INSTANCE_ID_PATTERN.test(record.sourceId.slice(4)))
-  ) {
-    return { ok: false, error: 'sourceId must be "local" or "ssh-<registry id>"' };
+  const sourceId = canonicalNotificationSourceId(record.sourceId);
+  if (sourceId === null) {
+    return { ok: false, error: 'sourceId must be "local", "dsh-<registry id>", or "gateway-<registry id>"' };
   }
   if (
     typeof record.sourceFingerprint !== 'string'
-    || !isValidNotificationSourceFingerprint(record.sourceId, record.sourceFingerprint)
+    || !isValidNotificationSourceFingerprint(sourceId, record.sourceFingerprint)
   ) {
     return { ok: false, error: 'sourceFingerprint must be "local" for local or a 64-character lowercase hex remote proof' };
   }
@@ -538,7 +568,7 @@ export function validateNotificationRequest(
   return {
     ok: true,
     request: {
-      sourceId: record.sourceId,
+      sourceId,
       sourceFingerprint: record.sourceFingerprint,
       sessionId: record.sessionId,
       kind: record.kind as NotificationKind,

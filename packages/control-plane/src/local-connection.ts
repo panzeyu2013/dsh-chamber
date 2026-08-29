@@ -37,7 +37,7 @@
  * instance is always managed.
  */
 
-import { spawnDsh } from './spawn-dsh.ts'
+import { isWriterQuiescenceUnknown, spawnDsh } from './spawn-dsh.ts'
 import { describeCapabilities as describeCapabilitiesFn } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
 import type { Logger } from './types.ts'
@@ -79,11 +79,22 @@ export interface LocalConnectionDeps {
     logger: Logger
     /** Optional `--patch` overlay for the dsh launcher (design 09 module B); null/absent when none. */
     patchPath?: string | null
-    /** Lifecycle-generation abort; stop() cancels an in-flight spawn. */
+    /** First port attempted (design 17 §3 server override); absent = BASE_DHSPORT. */
+    dshPortBase?: number
+    /** Aborted by stop() so a readiness wait cannot outlive writer quiescence. */
     signal?: AbortSignal
   }) => Promise<SpawnedDsh>
   describeCapabilities?: DescribeCapabilitiesFn
+  /**
+   * Test-only scheduling seam. Production leaves this absent; race tests use
+   * it to suspend a start after the public entry gate but before any
+   * DSH_HOME seed or process spawn.
+   */
+  beforeSpawnCheckpoint?: (kind: 'start' | 'restart') => void | Promise<void>
 }
+
+/** A dynamic spawn fence shared by manual starts and automatic restarts. */
+export type LocalSpawnGate = () => { ok: true } | { ok: false; reason: string }
 
 /** createLocalConnection tuning options (see the function docblock). */
 export interface LocalConnectionOptions {
@@ -96,11 +107,21 @@ export interface LocalConnectionOptions {
   restartBackoffCeilMs?: number
   restartWindowMs?: number
   maxRestartsInWindow?: number
+  /** First port attempted for the managed dsh host (design 17 §3 server
+   *  deployments; absent = BASE_DHSPORT 17510). */
+  dshPortBase?: number
+  /**
+   * Re-read immediately before DSH_HOME seeding and immediately before the
+   * process spawn. This is deliberately dynamic: runtime apply/restore can
+   * close the gate after an earlier management-entry check.
+   */
+  canSpawn?: LocalSpawnGate
+  /** Permanently close the owning plane's writer-safety latch on ambiguity. */
+  onWriterQuiescenceUnknown?: (error: Error) => void
   /**
    * Optional host-graph patch overlay passed to every spawn as `--patch`
-   * (design 09 module B). A function is resolved at spawn time: the seed runs
-   * in the plane's start(), after the connection is constructed, so a thunk
-   * lets every spawn — initial and restarts — read the then-current path.
+   * (design 09 module B). A function is resolved behind the spawn fence so
+   * every initial start/restart can seed the then-current profile safely.
    */
   patchPath?: string | (() => string | null)
 }
@@ -127,6 +148,21 @@ export interface LocalConnection {
   hasLiveProcess(): boolean
   start(): Promise<ConnectionRow | null>
   stop(): Promise<void>
+  /**
+   * Transactional user-triggered dsh restart (design 18 §9.3): refresh
+   * mounted plugins without a stop()+start() pairing. Shares the health
+   * state machine's restart single-flight, so a user restart never stacks a
+   * second respawn on top of an in-flight automatic restart (and an
+   * automatic trigger while a user restart is in flight suspends instead of
+   * double-spawning). Entry-time differences from the automatic path
+   * (connection_busy rejection instead of a silent resolve): an in-progress
+   * stop, a closed runtime gate (canStartLocal — applying/restore), or
+   * restart-exhausted. The restart transaction itself — process-group
+   * SIGTERM → 1s → SIGKILL, same-port/P+1 respawn behind the spawn fence,
+   * readiness probe, failure-counter reset, and the shared bounded backoff +
+   * restart-exhausted window — is identical for user and health triggers.
+   */
+  restartLocal(): Promise<void>
   /**
    * Lifecycle-change subscription (the push channel behind GET
    * /api/host/health-events, design 05 §3): every machine transition fires
@@ -177,7 +213,12 @@ export const MAX_RESTARTS_IN_WINDOW = 5
 export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, catalog, logger, options = {}, deps = {} }: {
   stateDir: string
   dshHome: string
-  dshWorkspacePath: string
+  /**
+   * Workspace used by the next spawn. Runtime updates switch the active tree
+   * without reconstructing the control plane, so the thunk form is resolved
+   * for every initial spawn and automatic restart.
+   */
+  dshWorkspacePath: string | (() => string)
   catalog: CatalogLike
   logger: Logger
   options?: LocalConnectionOptions
@@ -192,17 +233,52 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   const restartBackoffCeilMs = options.restartBackoffCeilMs ?? RESTART_BACKOFF_CEIL_MS
   const restartWindowMs = options.restartWindowMs ?? RESTART_WINDOW_MS
   const maxRestartsInWindow = options.maxRestartsInWindow ?? MAX_RESTARTS_IN_WINDOW
+  const dshPortBase = options.dshPortBase
   const spawnDshFn = (deps.spawnDsh ?? spawnDsh) as NonNullable<LocalConnectionDeps['spawnDsh']>
   const describeCapabilities = deps.describeCapabilities ?? describeCapabilitiesFn
 
+  function connectionBusy(reason: string): Error & { code: string } {
+    const busy = new Error(reason) as Error & { code: string }
+    busy.code = 'connection_busy'
+    return busy
+  }
+
+  function isConnectionBusy(value: unknown): value is Error & { code: string } {
+    return value instanceof Error && (value as Error & { code?: string }).code === 'connection_busy'
+  }
+
+  /**
+   * A failed process-group termination proof is qualitatively different from
+   * a port/readiness failure: another start could overlap an unknown writer.
+   * Notify the owning plane exactly on that coded path; callback failure is
+   * isolated so it cannot replace the lifecycle error being propagated.
+   */
+  function noteWriterQuiescenceUnknown(value: unknown): value is Error {
+    if (!isWriterQuiescenceUnknown(value)) return false
+    try {
+      options.onWriterQuiescenceUnknown?.(value)
+    } catch (callbackError) {
+      logger.error(`writer-quiescence latch callback failed: ${String(callbackError)}`)
+    }
+    return true
+  }
+
   /**
    * Resolve the `--patch` overlay path at spawn time (design 09 module B). The
-   * thunk form is resolved lazily so the plane's start() seed — which lands
-   * after this connection is constructed — is visible to every spawn.
+   * thunk form is resolved lazily behind the spawn fence, so each start and
+   * restart sees (and may idempotently repair) the current profile seed.
    */
   function resolvePatchPath(): string | null {
     const value = options.patchPath
     return typeof value === 'function' ? value() : value ?? null
+  }
+
+  function resolveDshWorkspacePath(): string {
+    const value = typeof dshWorkspacePath === 'function' ? dshWorkspacePath() : dshWorkspacePath
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new Error('dsh workspace resolver returned an empty path')
+    }
+    return value
   }
 
   let state: ConnectionState = 'stopped'
@@ -213,9 +289,6 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   let child: SpawnedDsh | null = null
   let stopping = false
   let startPromise: Promise<ConnectionRow | null> | null = null
-  let stopPromise: Promise<void> | null = null
-  /** Abort for the current manual-start spawn generation. */
-  let spawnGeneration = new AbortController()
   let consecutiveFailures = 0
   let lastFailureAt = 0
   /** The latest host.describe snapshot (health probe side effect). */
@@ -235,8 +308,54 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   let healthResultCache: { at: number; ok: boolean; reason?: string } | null = null
   /** Single-flight restart sequence (design 02 §3.5.3). */
   let restartPromise: Promise<void> | null = null
+  /** The spawn/readiness attempt currently capable of writing DSH_HOME. */
+  let spawnAbortController: AbortController | null = null
+  /** Single-flight stop waits for every in-flight start/restart writer. */
+  let stopPromise: Promise<void> | null = null
   /** Timestamps of restarts inside the current sliding window. */
   const restartTimes: number[] = []
+
+  /**
+   * Validate the lifecycle epoch and the external runtime gate as one fence.
+   * stop() bumps epoch before it awaits anything, so a queued start that had
+   * already passed the management-entry check cannot later seed or spawn.
+   */
+  function assertSpawnAllowed(expectedEpoch: number): void {
+    if (stopping || epoch !== expectedEpoch) {
+      throw connectionBusy('local start was invalidated by stop')
+    }
+    const gate = options.canSpawn?.()
+    if (gate?.ok === false) throw connectionBusy(gate.reason)
+  }
+
+  /**
+   * Invoke the spawn dependency under an abortable ownership token. stop()
+   * aborts this controller and then awaits the owning start/restart promise;
+   * it cannot report quiescence while a child is still booting or being
+   * reclaimed after a stale epoch.
+   */
+  async function spawnWithOwnership(options: {
+    stateDir: string
+    dshHome: string
+    dshWorkspacePath: string
+    logger: Logger
+    patchPath: string | null
+  }): Promise<SpawnedDsh> {
+    const controller = new AbortController()
+    if (spawnAbortController !== null) {
+      throw new Error('local connection invariant violated: concurrent spawn ownership')
+    }
+    spawnAbortController = controller
+    try {
+      return await spawnDshFn({
+        ...options,
+        ...(dshPortBase === undefined ? {} : { dshPortBase }),
+        signal: controller.signal,
+      })
+    } finally {
+      if (spawnAbortController === controller) spawnAbortController = null
+    }
+  }
 
   /** Per-port rolling-log writer (host-logs.ts): lazy, failure-swallowing —
    * a dead log file must never take the connection state machine down.
@@ -244,9 +363,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
    * the old writer is closed and recreated. */
   let hostLogWriter: { write(line: string, kind?: string): void; close(): Promise<void> } | null = null
   let hostLogWriterPort: number | null = null
-  function noteHostLog(line: string) {
+  function noteHostLog(line: string, portOverride: number | null = null) {
     if (typeof line !== 'string' || line === '') return
-    const port = dshPort
+    const port = portOverride ?? dshPort
     if (port !== null && port > 0 && (hostLogWriter === null || hostLogWriterPort !== port)) {
       if (hostLogWriter !== null) {
         try {
@@ -337,6 +456,12 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
    * resurrected or re-counted.
    */
   function noteHealthFailure(reason: string) {
+    // A probe that was already in flight when the restart began observes the
+    // torn-down child; its verdict must not count into the shared window.
+    if (restartPromise !== null) return
+    // State-guarded (2026 audit H2): a verdict that lands after stop()/error
+    // must be inert — the machine is no longer running and must not be
+    // resurrected or re-counted.
     if (stopping || state === 'stopped' || state === 'error') return
     if (child === null || child.child.exitCode !== null || child.child.signalCode != null) {
       // signalCode set = the child was signal-killed (exitCode stays null) —
@@ -354,6 +479,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
 
   /** Any probe success clears the counter and returns to ready. */
   function onHealthSuccess() {
+    // A probe that was already in flight when the restart began observes the
+    // torn-down child; its verdict must not clear state mid-transaction.
+    if (restartPromise !== null) return
     consecutiveFailures = 0
     if (state === 'degraded') setState('ready')
   }
@@ -492,13 +620,21 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
         try {
           if (child !== null && child.child.exitCode === null) await child.stop()
           child = null
-          const spawned = await spawnDshFn({
+          await deps.beforeSpawnCheckpoint?.('restart')
+          // First fence: resolvePatchPath() may seed chamber packages into
+          // DSH_HOME, so runtime apply/restore must still be open here.
+          assertSpawnAllowed(restartEpoch)
+          const resolvedWorkspacePath = resolveDshWorkspacePath()
+          const resolvedPatchPath = resolvePatchPath()
+          // Second fence: a test seam or future async resolver must never let
+          // a gate closed after the seed checkpoint reach the actual spawn.
+          assertSpawnAllowed(restartEpoch)
+          const spawned = await spawnWithOwnership({
             stateDir,
             dshHome,
-            dshWorkspacePath,
+            dshWorkspacePath: resolvedWorkspacePath,
             logger,
-            patchPath: resolvePatchPath(),
-            signal: spawnGeneration.signal,
+            patchPath: resolvedPatchPath,
           })
           if (stopping || epoch !== restartEpoch) {
             await spawned.stop()
@@ -516,11 +652,26 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
           child = null
           dshPort = null
           logger.log(`restart failed: ${String(restartError)}`)
+          if (noteWriterQuiescenceUnknown(restartError)) {
+            stopHealthTimer()
+            setState('error', restartError.message)
+            return
+          }
           if (stopping || epoch !== restartEpoch) return
+          if (isConnectionBusy(restartError)) {
+            stopHealthTimer()
+            setState('stopped', restartError.message)
+            return
+          }
         }
       }
     })().finally(() => {
       restartPromise = null
+    }).catch((error: unknown) => {
+      // The only escape path is a synchronous setState/catalog write failure.
+      // Never let it reach an unhandled rejection — the desktop treats those
+      // as fatal (app.exit(1)); project the honest error state instead.
+      try { setState('error', error instanceof Error ? error.message : String(error)) } catch { /* nothing left to write */ }
     })
     return restartPromise
   }
@@ -555,24 +706,26 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     // A start racing an authoritative stop must fail loudly. Returning the
     // cancelled generation's single-flight promise would resolve with a row
     // while the connection actually lands on `stopped`.
-    if (stopping) throw new Error('connection is stopping')
+    if (stopping) throw connectionBusy('local connection is stopping')
     if (startPromise !== null) return startPromise
     const ownedStart = (async () => {
       if (state === 'ready') return catalog.getConnection('local')
       epoch += 1
-      spawnGeneration.abort()
-      spawnGeneration = new AbortController()
-      const startSignal = spawnGeneration.signal
       // Abort any in-flight health probe from the previous generation: its
       // verdict must not land on this new lifecycle (2026 H2).
       healthGeneration.abort()
       healthGeneration = new AbortController()
-      // The epoch captured at entry remains the second line of defence behind
-      // the abort signal: even a non-cooperative injected adapter can never
-      // land a child into a newer lifecycle generation.
+      // Capture the epoch, not just the mutable `stopping` flag. stop() bumps
+      // it before aborting/awaiting this owner, so the start cannot seed after
+      // a queued stop or adopt a child returned by a stale readiness attempt.
+      // The epoch guard (same as triggerRestart) survives stop() resetting
+      // `stopping` in its finally: a late-resolving spawn is torn down
+      // instead of adopted. (2026-08 review)
       const startEpoch = epoch
       if (restartPromise !== null) await restartPromise
-      if (stopping || epoch !== startEpoch) return catalog.getConnection('local')
+      if (stopping || epoch !== startEpoch) {
+        throw connectionBusy('local start was invalidated by stop')
+      }
       if (child !== null && child.child.exitCode === null) {
         await child.stop()
       }
@@ -586,14 +739,24 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
       // 'starting' projection (2026 review).
       dshPort = null
       setState('starting')
+      let spawnAttempted = false
       try {
-        const spawned = await spawnDshFn({
+        await deps.beforeSpawnCheckpoint?.('start')
+        // First fence: patch resolution is the first pre-spawn operation
+        // allowed to write DSH_HOME (default/profile seeds).
+        assertSpawnAllowed(startEpoch)
+        const resolvedWorkspacePath = resolveDshWorkspacePath()
+        const resolvedPatchPath = resolvePatchPath()
+        // Second fence: re-read both epoch and runtime gate at the actual
+        // spawn boundary, not only at the management/API entry.
+        assertSpawnAllowed(startEpoch)
+        spawnAttempted = true
+        const spawned = await spawnWithOwnership({
           stateDir,
           dshHome,
-          dshWorkspacePath,
+          dshWorkspacePath: resolvedWorkspacePath,
           logger,
-          patchPath: resolvePatchPath(),
-          signal: startSignal,
+          patchPath: resolvedPatchPath,
         })
         if (stopping || epoch !== startEpoch) {
           await spawned.stop()
@@ -606,15 +769,30 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
         startHealthTimer()
         return catalog.getConnection('local')
       } catch (spawnError) {
-        // A stop() that won the race must not be overwritten by a spawn
-        // failure landing late: the machine stays on whatever stop() set
-        // (epoch guard, 2026 H2) — same shape as the post-spawn stop guard.
-        // Check BEFORE touching child/dshPort: a newer start generation may
-        // already own those globals when an old, non-cooperative test seam
-        // or adapter finally rejects.
-        if (stopping || epoch !== startEpoch) return catalog.getConnection('local')
+        if (noteWriterQuiescenceUnknown(spawnError)) {
+          setState('error', spawnError.message)
+          throw spawnError
+        }
+        if (stopping || epoch !== startEpoch) {
+          // Once spawn ownership was entered, stop() awaits this promise as a
+          // writer barrier. An abort-aware or late-failing adapter belongs to
+          // the cancelled generation, so resolve with the current row after
+          // its cleanup instead of leaking an expected rejection to callers.
+          // A pre-spawn fence closure is different: no writer was acquired,
+          // and the management caller must receive connection_busy rather
+          // than a false successful start acknowledgement.
+          if (spawnAttempted) return catalog.getConnection('local')
+          if (isConnectionBusy(spawnError)) throw spawnError
+          throw connectionBusy('local start was invalidated by stop')
+        }
         child = null
         dshPort = null
+        if (isConnectionBusy(spawnError)) {
+          // An expected fence closure is a stopped lifecycle, not a broken
+          // runtime. Preserve a concurrent stop() transition when it won.
+          if (state !== 'stopped') setState('stopped', spawnError.message)
+          throw spawnError
+        }
         setState('error', String(spawnError))
         throw spawnError
       }
@@ -686,29 +864,28 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     /**
      * Stop the connection: terminate the child (process-group SIGTERM → 1s →
      * SIGKILL), stop the health probe, and land on 'stopped'. Any in-flight
-     * restart loop is aborted via the epoch bump.
+     * start/restart is invalidated, aborted, and awaited; resolving stop()
+     * therefore proves that no managed local writer remains in flight.
      */
     stop(): Promise<void> {
       if (stopPromise !== null) return stopPromise
       if (state === 'stopped' && child === null && startPromise === null && restartPromise === null) {
         return Promise.resolve()
       }
+      stopping = true
+      epoch += 1
+      // Abort the in-flight health probe and WAIT for its (promptly
+      // rejecting) verdict: a late failure must never land after stop()
+      // returned and resurrect the connection (2026 H2). runHealthCheck
+      // never rejects, so the await is safe.
+      healthGeneration.abort()
+      healthGeneration = new AbortController()
+      // Capture the owners after bumping the epoch. Neither promise can
+      // publish/adopt a spawned child for this lifecycle now.
+      const pendingStart = startPromise
+      const pendingRestart = restartPromise
+      spawnAbortController?.abort()
       const work = (async () => {
-        stopping = true
-        epoch += 1
-        // Cancel every spawn in this lifecycle (manual start or automatic
-        // restart), then WAIT for its owner to finish killing any detached
-        // attempt. Publishing `stopped` before that cleanup would let app quit
-        // return while an untracked dsh process was still being torn down.
-        const pendingStart = startPromise
-        const pendingRestart = restartPromise
-        spawnGeneration.abort()
-        // Abort the in-flight health probe and WAIT for its (promptly
-        // rejecting) verdict: a late failure must never land after stop()
-        // returned and resurrect the connection (2026 H2). runHealthCheck
-        // never rejects, so the await is safe.
-        healthGeneration.abort()
-        healthGeneration = new AbortController()
         try {
           stopHealthTimer()
           if (healthInFlight !== null) {
@@ -716,13 +893,20 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
               await healthInFlight
             } catch { /* defensive — runHealthCheck swallows */ }
           }
-          // startImpl/triggerRestart are epoch-guarded and own cleanup of a
-          // process they spawned. allSettled is defensive: stop still performs
-          // the final authoritative child check below if either owner failed.
-          await Promise.allSettled([
+          // start/restart own cleanup for any process launched before the
+          // abort. Await both owners without a timeout: stopLocal is the
+          // runtime writer barrier and must not claim quiescence early.
+          const ownerResults = await Promise.allSettled([
             ...(pendingStart === null ? [] : [pendingStart]),
             ...(pendingRestart === null ? [] : [pendingRestart]),
           ])
+          const unknownOwner = ownerResults.find((result): result is PromiseRejectedResult =>
+            result.status === 'rejected' && isWriterQuiescenceUnknown(result.reason))
+          if (unknownOwner !== undefined) {
+            throw unknownOwner.reason
+          }
+          // Defensive second look: a promise might have adopted immediately
+          // before this stop bumped epoch but after the first child snapshot.
           if (child !== null && child.child.exitCode === null) {
             await child.stop()
           }
@@ -733,13 +917,19 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
           // later start and re-count a failure the new lifecycle never had.
           healthResultCache = null
           lastDescribe = null
-          // setState writes the final line through the existing per-port writer
-          // even though dshPort is already null; close it immediately after.
+          // setState writes the final line through the existing per-port
+          // writer even though dshPort is now null; close it immediately after.
           setState('stopped', null)
-          const writerToClose = hostLogWriter
-          hostLogWriter = null
+          if (hostLogWriter !== null) {
+            await hostLogWriter.close()
+            hostLogWriter = null
+          }
           hostLogWriterPort = null
-          if (writerToClose !== null) await writerToClose.close()
+        } catch (stopError) {
+          if (noteWriterQuiescenceUnknown(stopError)) {
+            setState('error', stopError.message)
+          }
+          throw stopError
         } finally {
           stopping = false
         }
@@ -750,6 +940,45 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
       })
       stopPromise = tracked
       return tracked
+    },
+
+    /**
+     * Transactional user-triggered dsh restart (design 18 §9.3), serialized
+     * on the same single-flight as the health state machine's automatic
+     * restart. The entry checks are the only difference from the automatic
+     * path: they reject with a coded connection_busy error (instead of
+     * silently resolving) when a stop is in progress, when a start is still
+     * in flight (a concurrent restart would race the start's spawn ownership
+     * and pollute the shared backoff window with pseudo-failures), when the
+     * runtime gate is closed (canStartLocal — applying/restore), when the
+     * instance was never started, or from restart-exhausted (recovery stays
+     * on start()). Otherwise it delegates to triggerRestart — merging into an
+     * in-flight restart when one exists, or running the same stop→respawn→
+     * ready transaction with the shared bounded backoff and
+     * restart-exhausted window.
+     *
+     * CONTRACT (design 18 §9.3): resolving does NOT promise success. A
+     * restart that exhausts the shared window settles into
+     * 'restart-exhausted' and resolves — callers must read connectionState
+     * (or subscribe to onStateChange) to report an honest outcome.
+     */
+    restartLocal(): Promise<void> {
+      if (stopping) return Promise.reject(connectionBusy('local restart was invalidated by stop'))
+      if (startPromise !== null || state === 'starting') {
+        return Promise.reject(connectionBusy('local start in progress; wait for readiness before restarting'))
+      }
+      // The dynamic spawn gate stays authoritative across every state: an
+      // applying/restore window must report its own reason even from stopped.
+      const gate = options.canSpawn?.()
+      if (gate?.ok === false) return Promise.reject(connectionBusy(gate.reason))
+      if (state === 'stopped' || state === 'error') {
+        return Promise.reject(connectionBusy('local dsh is not running; start() before restarting'))
+      }
+      if (restartPromise !== null) return restartPromise
+      if (state === 'restart-exhausted') {
+        return Promise.reject(connectionBusy('restart-exhausted: automatic restarting stopped; recover with start() before restarting'))
+      }
+      return triggerRestart('user-requested dsh restart')
     },
 
     /** Subscribe to lifecycle transitions (see the interface docblock). */

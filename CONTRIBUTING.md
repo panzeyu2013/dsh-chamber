@@ -1,6 +1,6 @@
 # 参与 dsh-chamber 贡献
 
-感谢你参与贡献！dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web profile）由控制面托管，远程实例经 SSH 隧道接入，界面 = dsh 官方前端源码复用自建。本指南涵盖贡献流程、验证与一份合格的 PR 长什么样。
+感谢你参与贡献！dsh-chamber 是 dsh 的本地桌面**连接管理器**：本地 dsh 实例（web profile）由控制面托管，远程连接把 `dsh|gateway` 目标与 `ssh|http` 传输正交组合，界面 = dsh 官方前端源码复用自建；显式启动的 Gateway 是认证默认开启的独立 server 形态。本指南涵盖贡献流程、验证与一份合格的 PR 长什么样。
 
 > English: [docs/CONTRIBUTING.en-US.md](docs/CONTRIBUTING.en-US.md)
 
@@ -11,40 +11,28 @@
 ```bash
 git clone <REPO-URL>
 cd dsh-chamber
-node scripts/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
+node scripts/dev/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
 pnpm install
 pnpm run dev:desktop                     # 完整窗口（控制面 + dsh 前端 + 桌面壳）
 ```
 
 ## 测试
 
-单测直接以 node 运行（当前无测试框架）：
+根 `package.json` 脚本是 CI 测试清单的唯一权威；不要手工维护一份控制面测试文件枚举：
 
 ```bash
-node packages/control-plane/test/protocol.ts       # dsh 客户端协议
-node packages/control-plane/test/storage.ts        # 存储与恢复
-node packages/control-plane/test/m1-dsh-client.ts  # describe/health 客户端行为
-node packages/control-plane/test/host-logs.ts      # 宿主日志环形缓冲
-node packages/control-plane/test/manager-api.ts    # 管理 REST（/health、/api/connections）
-node packages/control-plane/test/instance-proxy.ts # 每实例反代（HTTP/WS/SSE、503）
-node packages/control-plane/test/ws-frames.ts       # 代理 WS 帧解析与心跳
-node packages/control-plane/test/static-serving.ts # 首屏静态服务与 boot manifest
-node packages/control-plane/test/host-graph-seed.ts # chamber host 包 seed/overlay
-pnpm run smoke                                      # 集成冒烟
-```
-
-这九个控制面测试文件正是 CI `test` job 执行的那套（见 `.github/workflows/ci.yml`），连同桌面传输层、renderer shell 与客户端/host 插件测试一起——与 CI 同一套，经根脚本驱动：
-
-```bash
-pnpm run test:desktop        # 桌面传输/ssh 单测
-pnpm run test:renderer-shell # 复合 entry / host graph 锁步
-pnpm run test:sidebar        # 侧边栏 derive/view-prefs 单测
-pnpm run test:git            # Git worktree 客户端/事务单测
-pnpm run test:host-git       # 实例内 Git host core 单测
-pnpm run test:settings-bridge  # 设置壳策略单测
-pnpm run test:connections    # 连接设置插件（plugin-diff/save-host）
-pnpm run test:client-web     # web shell boot 容忍决策规则
-pnpm run test:connection     # 连接客户端 base-path 补丁决策规则
+pnpm run test:control-plane
+pnpm run test:runtime
+pnpm run test:desktop
+pnpm run test:gateway
+pnpm run test:renderer-shell
+pnpm run test:git && pnpm run test:host-git
+pnpm run test:sidebar && pnpm run test:layout
+pnpm run test:settings-bridge && pnpm run test:connections
+pnpm run test:client-web && pnpm run test:connection
+pnpm run test:open-in && pnpm run test:cli
+pnpm run test:release-workflow
+pnpm run smoke
 ```
 
 `pnpm run smoke` 在未安装 dsh 时打印 SKIP 并退出 0，属正常而非失败。
@@ -53,35 +41,32 @@ pnpm run test:connection     # 连接客户端 base-path 补丁决策规则
 
 ```bash
 pnpm run typecheck                            # tsc --noEmit（0 错误）
+pnpm run typecheck:runtime
+pnpm run typecheck:gateway
 pnpm run typecheck:host-graph
 pnpm run typecheck:host-git
 pnpm run typecheck:sidebar                    # 客户端插件类型检查
 pnpm run typecheck:layout
 pnpm run typecheck:git
+pnpm run typecheck:open-in
 pnpm run typecheck:connections
 pnpm run typecheck:settings-bridge
-pnpm run typecheck:open-in
-pnpm run typecheck:client-web
-node packages/control-plane/test/protocol.ts  # 聚焦单测（见上方"测试"节）
-node packages/control-plane/test/storage.ts
-node packages/control-plane/test/m1-dsh-client.ts
-node packages/control-plane/test/host-logs.ts
-node packages/control-plane/test/manager-api.ts
-node packages/control-plane/test/instance-proxy.ts
-node packages/control-plane/test/ws-frames.ts
-node packages/control-plane/test/static-serving.ts
-node packages/control-plane/test/host-graph-seed.ts
-pnpm run test:desktop                         # 桌面传输/ssh 单测
-pnpm run test:renderer-shell                  # renderer shell/覆盖表锁步
-pnpm run test:sidebar                         # 侧边栏单测
-pnpm run test:git                             # Git 客户端单测
-pnpm run test:host-git                        # Git host 单测
-pnpm run test:settings-bridge                 # 设置壳单测
-pnpm run test:connections                     # 连接设置插件单测
-pnpm run test:client-web                      # web shell boot 容忍单测
-pnpm run test:connection                      # 连接客户端 base-path 补丁单测
+pnpm run typecheck:client-web                 # dsh-client-web 拷贝类型检查
+pnpm run typecheck:connection                 # dsh-client-connection 拷贝类型检查
+pnpm run test:control-plane && pnpm run test:runtime
+pnpm run test:desktop && pnpm run test:gateway
+pnpm run test:renderer-shell
+pnpm run test:git && pnpm run test:host-git
+pnpm run test:sidebar && pnpm run test:layout
+pnpm run test:settings-bridge && pnpm run test:connections
+pnpm run test:client-web && pnpm run test:connection
+pnpm run test:open-in && pnpm run test:cli
+pnpm run test:release-workflow
 pnpm run smoke                                # PASS（或 SKIP，属正常）
 pnpm run build:renderer                       # 渲染层构建成功
+pnpm run build:gateway                        # gateway + dsh-runtime 构建成功
+pnpm --filter @dsh-chamber/desktop run build:preload
+pnpm run verify:i18n
 ```
 
 改动涉及运行时、认证、协议或桌面壳行为时，请补充或更新聚焦测试——静态检查不能证明运行时正确性。
@@ -112,7 +97,7 @@ type(scope): subject
 ```
 feat(control-plane): add per-instance health endpoint
 fix(desktop): await tunnel dispose before quit
-chore(ci): ad-hoc sign the macOS app in the afterPack hook
+ci(release): enforce channel-specific update assets
 docs: document the commit message convention
 ```
 
@@ -121,8 +106,7 @@ docs: document the commit message convention
 ## 范围纪律
 
 - 凡 dsh 宿主、插件生态或复用的 dsh 前端已提供的能力，控制面只做**接入或服务，绝不重造**。
-- 被移出范围的域（walkthrough、通知中心、终端渲染/输入、web 预览、MCP、薄壳聊天 UI、控制面会话运行时等）**以任何形式不得回流**。唯一例外是设计 08 已定稿的 Git worktree 插件：只能是 chamber 强制打包的 client 插件 + 实例内领域限定 host Remote，绝不能回流为控制面/Desktop 的 Git 执行面。
-  注意：设计 19 的**桌面 OS 通知**（session complete/ask/request 推送原生通知）不属于被移除的 dsh「通知中心」UI 域——两者不同面，不构成回流。
+- 被移出范围的域（walkthrough、通知中心/历史、终端渲染/输入、web 预览、MCP、薄壳聊天 UI、控制面会话运行时等）**以任何形式不得回流**。已定稿的有界例外只有：设计 08 的实例内 Git worktree 插件、设计 17 的独立 Gateway 编排、设计 18 的共享 dsh 运行时管理核心、设计 19 的 Electron 原生通知边缘投影，以及设计 20 的可信 open-in 边缘能力；它们都不得把执行面、session 消费者、通知历史或事实权威带进 `packages/control-plane` 或 renderer。
 - 任何新领域功能提案先回答：dsh 原生、插件生态或宿主 web 前端是否已覆盖？有 → 不开发。
 
 ## Pull Requests

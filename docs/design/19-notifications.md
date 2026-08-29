@@ -153,7 +153,7 @@ function detectNotificationEdges(
 
 ```ts
 interface NotificationRequest {
-  sourceId: string            // 'local' | 'ssh-<id>'
+  sourceId: string            // 'local' | 'dsh-<id>' | 'gateway-<id>'（'ssh-<id>' 为 v2 迁移前 legacy，17 §2.2/§9.1）
   sourceFingerprint: string   // 主进程签发的当前来源代 opaque proof
   sessionId: string
   kind: NotificationKind | 'test'
@@ -184,10 +184,14 @@ interface NotificationRequest {
 
 - 新 IPC：`dsh-chamber:notify`（`trustedIpc` invoke，payload 字段白名单校验
   sourceId/sourceFingerprint/sessionId/kind/title/body/requireHidden，长度上限；sourceId 只接受精确
-  `local` 或 `ssh-<INSTANCE_ID_PATTERN raw id>`，显式拒绝 `ssh-local`/空/非法字符/
-  超过 64 位 raw id；proof 还必须与主进程当前来源代精确匹配）；
+  `local`、规范 `dsh-<raw-id>` / `gateway-<raw-id>`，以及迁移兼容的 legacy
+  `ssh-<raw-id>`；raw id 必须匹配 `INSTANCE_ID_PATTERN`，显式拒绝保留字 `local`、空值、
+  非法字符或超过 64 位；proof 还必须与主进程当前来源代精确匹配）；
 - 主进程以两组**仅保留 active roster** 的 Map 管理远程 proof 与 ownership token：
-  删除即删项，传输身份编辑轮换 proof/generation，同 id 重建也不会复用旧 proof；
+  删除即删项；renderer 来源身份（kind/host/user/sshPort/remotePort）编辑轮换
+  proof/generation，同 id 重建也不会复用旧 proof。`transport`、`serviceName`、
+  `remoteDshHome` 可触发各自 live/exec generation teardown，但不单独退役 N-ctx
+  来源 proof（05 §4/§7.6）；
   历史 id 不留 tombstone，内存上界随当前远程实例数而非历史 churn 增长；
 - `maybeShowNativeNotification(payload)` 裁决链（设置权威在主进程内存状态，随
   `dsh-chamber:settings-changed` 更新）：
@@ -214,8 +218,8 @@ interface NotificationRequest {
      先 `app.focus`，同设计 14 恢复路径；退出在途
      `quitRequested` 则终止恢复/重建；'test'
      通知只聚焦不打开会话）+ 推送 `dsh-chamber:notification-open`
-     `{sourceId, sourceFingerprint, sessionId, deliveryId, attempt}`。来源删除或传输身份
-     编辑会同步 close 旧 banner，并丢弃该来源全部 pending/in-flight open；旧 click
+     `{sourceId, sourceFingerprint, sessionId, deliveryId, attempt}`。来源删除或上述 renderer
+     来源身份编辑会同步 close 旧 banner，并丢弃该来源全部 pending/in-flight open；旧 click
      closure 即使迟到也不能打开 replacement。
 
 **点击打开会话**（renderer）：App 订阅 `window.dshChamber.notifications.onOpen` →
@@ -232,8 +236,9 @@ interface NotificationRequest {
   早先已发送项继续等各自 ACK。pending+in-flight 总计 64；满时 loud 淘汰最旧 pending，
   若全为 in-flight 则 loud 拒绝新点击。
 
-主进程 replay 之后还有 renderer 的**权威 roster + proof 二级门**：`local` 立即打开；远程
-`ssh-<id>` 在当前 generation 首次 `instances_get` 成功前以完整
+主进程 replay 之后还有 renderer 的**权威 roster + proof 二级门**：`local` 立即打开；规范
+`dsh-<id>` / `gateway-<id>`（及迁移兼容的 legacy `ssh-<id>`）远程来源在当前
+generation 首次 `instances_get` 成功前以完整
 `{sourceId,sourceFingerprint,sessionId,deliveryId,attempt}` 的 64 条有界 FIFO hold，
 roster settle 后按序 replay，目标缺失或 proof 已过期才逐项 loud 丢弃并 ACK。串行
 runner 捕获精确来源 token，旧代排队项不能在 same-id replacement 上执行。该门与深链

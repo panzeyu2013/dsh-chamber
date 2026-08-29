@@ -18,6 +18,8 @@
 >
 > 权威契约：`05-connection-manager.md`（架构 / PlaneHandle）；管理面端点见
 > `04-control-plane-api-data.md`；连接模型见 `03-connections-proxy.md`。
+> 服务端部署形态（gateway 单元 / http 直连）与远程连接模型 v2 见
+> `17-server-side-gateway.md`（2026-09 v2）。
 
 ---
 
@@ -44,7 +46,8 @@
 - **out**：会话/目标/终端等宿主能力（宿主原生，前端经每实例反代消费，
   03 §3）；dsh 连接协议（wire 以 vendor dsh-host-apiproxy 为权威，控制面仅用
   describe/健康探活面）；认证/审计
-  （随 v1 收敛整体移除）；远程实例的隧道与 systemd 编排（03 §2.2：桌面
+  （匿名 loopback 控制面随 v1 收敛整体移除；gateway 部署的认证/凭据/审计
+  见 17 §7/§13.4）；远程实例的隧道与 systemd 编排（03 §2.2：桌面
   主进程 transport-manager（ssh provider）+ 注册表）。
 
 ### 1.3 原则
@@ -162,7 +165,10 @@ host package：
    损坏，启动 fail-loud。文件与 overlay 都原子写入并保持 0600。
 4. seed thunk 在**每次 spawn（含自动重启）之前**重新求值。`dsh plugin`
    导致 pnpm 重链并裁掉 extraneous host 包后，下一次 spawn 会自动补回；overlay
-   也按当时实际可用产物重建，不留下悬空 row。
+   也按当时实际可用产物重建，不留下悬空 row。用户触发的「重启 dsh」动作
+   （design 18 §3.6 项 8，刷新插件挂载）走同一条 spawn 路径：seed 重求值与
+   overlay 重建语义一致，插件挂载在每次 dsh 进程 boot 时重新确定——不是
+   Electron 会话级事实，重启 dsh 即刷新，无需重启壳。
 
 这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`
 或 `gitWorktree` 的领域结果，只做受控文件分发与 loader 挂载。
@@ -307,7 +313,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    │                                            │  └──fail(N)┐
    │                                            └─────restarting──────┐
    └──── graceful stop ────────────────────────────────────────────────┘
-                                  └─ kill → 端口释放 → respawn → starting
+                                  └─ kill → 端口释放 → respawn → ready（spawnDsh 内建 TCP+describe 就绪探测）
    spawn 失败 ──► error（fail-loud）──start() 重试──► starting
 ```
 
@@ -347,7 +353,8 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    （实现：无独立等待轮询——spawn 侧端口预检 + P+1 退让覆盖占用窗口，§2.2）
 4. respawn（§3.1，同端口 P；若端口仍被占走 §2.2 的 P+1 路径）
    → 新 pid.json → 就绪探测（§3.2）
-5. 计数清零；失败 → 指数退避（1s→60s，jitter）
+5. 健康失败计数 N 清零（注意：与 restart 背压窗口 M 不同——design 18
+   §9.3(5) 的 M 对每次重启（含成功）计数）；失败 → 指数退避（1s→60s，jitter）
 6. 窗口内（10min）重启次数 ≥ M（5）→ restart-exhausted：停止自动重启，
    状态对 surface 暴露（catalog status），等待人工介入（POST /api/connections
    幂等启动或桌面设置页操作）；绝不无限重启循环
@@ -466,8 +473,9 @@ WantedBy=multi-user.target
 
 - **起停/状态**：经桌面 transport-manager（ssh provider）的 systemd exec IPC
   （`desktop_ssh_start_service/stop_service/is_active`，serviceName 白名单
-  `^[a-zA-Z0-9_.-]+$`）驱动（03 §2.2）——控制面不直连远程进程，只经隧道
-  消费其 API 面；
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`，首字符必须为字母或数字）驱动（03 §2.2）；
+  provider 固定以参数数组执行 `systemctl <action> -- <serviceName>`，`--` 明确终止
+  option 解析——控制面不直连远程进程，只经隧道消费其 API 面；
 - **停止**：`systemctl stop` → SIGTERM → dsh profile-boot 优雅退出（exit 0）；
 - **崩溃**：`Restart=on-failure` + `RestartSec=3` 拉起；用户侧单元示例与
   README「服务器端部署」一节一致。常见崩溃原因：systemd 默认 PATH 不含 nvm
@@ -475,13 +483,31 @@ WantedBy=multi-user.target
   须显式 `Environment=PATH=<node-bin-dir>:/usr/local/sbin:...`（整行字面赋值，
   无追加语法、无变量展开）；
 - **绑定面**：恒 `--host 127.0.0.1`（loopback）——chamber 隧道是唯一入口，
-  不额外暴露面；绕过隧道直连（0.0.0.0）须配套鉴权（v1 实例匿名）或反代前置。
+  不额外暴露面；绕过隧道直连（0.0.0.0）须配套鉴权（v1 实例匿名）或反代前置
+  （dsh 目标匿名 loopback 直连须反代/TLS 前置；gateway 目标自带认证边界与
+  公网请求策略，17 §5.1/§6）。
 - **远端 chamber host 包**：SSH transport 进入 `ready` 后，桌面主进程调用
   `seedRemoteChamberHostPackages`，把本次实际已构建的 host-graph + Git worktree
   两包写到 `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`，并对
   `<remoteDshHome>/profiles/web/cordis.patch.yml` 做一次合并写。它复用受限
   `cat/write-file` 通道，仅做分发，**不经 SSH 执行 Git**；已运行的远端 dsh
   需重启后才加载新 row，完整原子顺序、去重与失败语义见设计 13 §3。
+
+**gateway 目标单元形态（design 17，2026-09 v2）**：远程 gateway 部署以
+`dsh-chamber-gateway.service` 单元持久化（`install-gateway.sh` 一键安装器
+生成，17 §5），默认监听远端 30801（gateway 目标 `remotePort` 缺省；dsh 目标
+30800 不变，17 §2.2）：`ExecStart=<GATEWAY_BIN> serve --host 127.0.0.1
+--port 30801 …`，服务账号 / `NoNewPrivileges` / `PrivateTmp` / PATH 环境
+要求同本单元；凭据经 owner-only systemd `EnvironmentFile` 注入（17 §5）。
+ssh transport 的 systemd exec 起停目标按 `serviceName` 在该单元与
+`dsh.service` 间选择（03 §2.2 schema v2 注）。
+
+**http 直连形态（transport=http）**：无隧道子进程、无 systemd exec——桌面
+直接以 http(s) 访问目标端点。dsh 目标需**用户自建穿透**（TLS 反代 /
+tailscale / SSH 隧道 / frp，17 §1.1）把 loopback 实例暴露为可直连端点；
+gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形态下 systemd
+单元只作服务器侧部署参考，桌面侧不再编排远端服务起停（`serviceName`
+留空，03 §2.2）。
 
 ---
 

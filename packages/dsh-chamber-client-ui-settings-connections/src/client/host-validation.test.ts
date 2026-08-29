@@ -55,6 +55,6 @@ test('service names cannot be parsed as systemctl options', () => {
   assert.equal(UI_SERVICE_NAME_PATTERN.test('--help'), false)
   assert.equal(UI_SERVICE_NAME_PATTERN.test('-Hattacker'), false)
   assert.equal(UI_SERVICE_NAME_PATTERN.test('dsh-chamber.service'), true)
-  assert.equal(UI_SERVICE_NAME_PATTERN.test('dsh@worker.service'), true)
-  assert.equal(UI_SERVICE_NAME_PATTERN.test('team:worker.service'), true)
+  assert.equal(UI_SERVICE_NAME_PATTERN.test('dsh@worker.service'), false)
+  assert.equal(UI_SERVICE_NAME_PATTERN.test('team:worker.service'), false)
 })

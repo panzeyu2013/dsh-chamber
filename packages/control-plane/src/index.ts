@@ -26,6 +26,7 @@
  */
 
 import { createServer, type Server } from 'node:http'
+import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -36,7 +37,11 @@ import { createLocalConnection } from './local-connection.ts'
 import type { LocalConnectionDeps } from './local-connection.ts'
 import { createApi } from './api.ts'
 import { runReaper } from './reaper.ts'
-import { createInstanceProxy } from './instance-proxy.ts'
+import {
+  createInstanceProxy,
+  type InstanceProxy,
+  type InstanceTransportRegistrationOptions,
+} from './instance-proxy.ts'
 import { ensureInstanceId } from './instance-id.ts'
 import { hostLogs } from './host-logs.ts'
 import { createStaticServing } from './static-serving.ts'
@@ -50,7 +55,7 @@ import {
   HOST_GRAPH_PACKAGE_NAME,
 } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
-import type { ApiRequest, ApiResponse } from './api.ts'
+import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
 /** Browser hardening shared by static, API, proxy, and error responses. */
 export const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
@@ -133,9 +138,26 @@ export interface ControlPlaneOptions {
   host?: string
   stateDir?: string
   dshWorkspacePath?: string
+  /** Resolve the workspace for each local spawn/restart (runtime switching). */
+  getDshWorkspacePath?: () => string
+  /**
+   * Optional dynamic lifecycle gate. It is checked at management entry and
+   * again before every start/restart seed and process spawn.
+   */
+  canStartLocal?: () => { ok: true } | { ok: false; reason: string }
+  /** Dynamic public exposure gate. The desktop keeps this closed from spawn
+   * through the full activation-probe verdict. */
+  canExposeLocal?: () => boolean
+  /** First port attempted for the managed dsh host (design 17 §3 server
+   *  deployments; absent = BASE_DHSPORT 17510). */
+  dshPortBase?: number
   webDistDir?: string
   logger?: Logger
   corsOrigins?: string[]
+  /** Explicit request boundary for an authenticated external composer. Its
+   * presence is also the opt-in that permits a non-loopback bind; the normal
+   * anonymous control plane never supplies it and remains loopback-only. */
+  corsEvaluator?: ApiCorsEvaluator
   /** Injectable local-connection wire deps (test seams: fake spawn/describe). */
   localConnectionDeps?: LocalConnectionDeps
   /** Injectable orphan reaper (test seam for lifecycle interleavings). */
@@ -154,6 +176,38 @@ export interface ControlPlaneOptions {
    * artifact gate and profile seed lifecycle as hostGraphPackageSourceDir.
    */
   hostGitWorktreePackageSourceDir?: string
+  /**
+   * Optional request middleware (design 17 §2.1 改动③): runs after the
+   * security headers + CSP + URL parse and BEFORE the default dispatch. A
+   * truthy return CLAIMS the request (the default dispatch is skipped); a
+   * falsy return falls through. The gateway uses it to inject its auth gate
+   * and route `/auth/*`, `/chamber/*`, `/plugins/*`, `/` and non-management
+   * `/api/*` to its own handlers while letting the management surface fall
+   * through to the default dispatch.
+   */
+  middleware?: (
+    req: ApiRequest,
+    res: ApiResponse,
+    url: URL,
+    ctx: PlaneMiddlewareContext,
+  ) => boolean | void | Promise<boolean | void>
+  /**
+   * Optional upgrade middleware: runs BEFORE the default origin fence +
+   * instance-proxy upgrade dispatch. A truthy return CLAIMS the upgrade.
+   */
+  upgradeMiddleware?: (
+    req: ApiRequest,
+    socket: Duplex,
+    head: Buffer,
+    ctx: PlaneMiddlewareContext,
+  ) => boolean | void | Promise<boolean | void>
+}
+
+/** The internal surfaces handed to a composing gateway's middleware (design 17
+ * §2.1 改动③): the management REST handle + CORS decision + per-instance proxy. */
+export interface PlaneMiddlewareContext {
+  api: ApiSurface
+  instanceProxy: InstanceProxy
 }
 
 /** The assembled control-plane handle returned by createControlPlane. */
@@ -167,8 +221,19 @@ export interface PlaneHandle {
    * (state-string independent — see local-connection hasLiveProcess).
    */
   readonly localProcessAlive: boolean
+  /** True only when startup reaping proved there are no kept/failed managed
+   * host records that could still be writing the shared DSH_HOME. */
+  readonly localWritersQuiescent: boolean
+  /** Live port of the managed local host; null while it is not serving. */
+  readonly localDshPort: number | null
   readonly instanceId: string
-  registerInstanceTransport(connectionId: string, baseUrl: string): void
+  /** The managed local dsh host's port, or null when not ready (design 17
+   * §2.1 改动①: exposed for the gateway-proxy's single-target resolution). */
+  getLocalDshPort(): number | null
+  /** The target kind lives in connectionId; `opts.transport` carries the
+   * independent SSH/HTTP dimension. TLS pin and Host authority remain
+   * gateway-only bounded capabilities. */
+  registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions): void
   unregisterInstanceTransport(connectionId: string): void
   /**
    * Pre-start the local instance (desktop pre-spawn, 05 §7.5): idempotent —
@@ -178,6 +243,23 @@ export interface PlaneHandle {
    * instance already ready.
    */
   startLocal(): Promise<void>
+  /** Stop the managed local host without tearing down the control plane.
+   * Resolves only after queued/in-flight start and restart writers settle. */
+  stopLocal(): Promise<void>
+  /**
+   * Transactional user-triggered dsh restart (design 18 §9.3): refresh
+   * mounted plugins without a stopLocal()+startLocal() pairing. Shares the
+   * health state machine's restart single-flight; rejects (connection_busy)
+   * when the runtime gate (canStartLocal — applying/restore) is closed, when
+   * a stop is in progress, or from restart-exhausted.
+   */
+  restartLocal(): Promise<void>
+  /** Re-publish the public local lifecycle after canExposeLocal changes. */
+  refreshLocalExposure(): void
+  /** Subscribe to authoritative local-host lifecycle transitions. Gateway
+   * consumers use this to attach only while the managed dsh is ready; the
+   * desktop also uses it for delayed rollback policy. */
+  onLocalStateChange(listener: (snapshot: { status: string; port: number | null; error: string | null }) => void): () => void
 }
 
 /**
@@ -190,18 +272,41 @@ export interface PlaneHandle {
 export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHandle {
   const port = options.port ?? DEFAULT_CONTROL_PLANE_PORT
   const host = options.host ?? '127.0.0.1'
-  if (host !== '127.0.0.1' && host !== '::1') {
+  if (host !== '127.0.0.1' && host !== '::1'
+    && (options.corsEvaluator === undefined || options.middleware === undefined || options.upgradeMiddleware === undefined)) {
     // loopback-only is a v1 invariant, not merely a default: a non-loopback
     // bind would expose the anonymous management API + reverse proxy to the
     // network, and the Host/Origin fence (api.ts corsFor) is browser-only.
-    throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)}; loopback-only is a v1 invariant`)
+    throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)} without an external request-boundary evaluator plus HTTP/upgrade middleware; loopback-only is the anonymous v1 invariant`)
   }
   const stateDir = options.stateDir ?? process.env.DSH_CHAMBER_STATE ?? DEFAULT_STATE_DIR
-  const dshWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
-  const webDistDir = options.webDistDir
+  const defaultWorkspacePath = options.dshWorkspacePath ?? process.env.DSH_CHAMBER_DSH_PATH ?? defaultDshWorkspacePath()
+  const getDshWorkspacePath = options.getDshWorkspacePath ?? (() => defaultWorkspacePath)
+  const webDistDir = options.webDistDir === undefined ? undefined : options.webDistDir
   // The console default satisfies every module's logger option ({log,warn,error}).
   const logger = (options.logger ?? console) as Logger
   const reapManagedHosts = options.reaper ?? runReaper
+  let localWritersQuiescent = false
+
+  /**
+   * Combine the external runtime-apply gate with the internal process-writer
+   * safety latch. The latch begins closed until startup reaping succeeds and
+   * closes permanently for this plane lifecycle if any termination cannot
+   * prove the detached process group is gone.
+   */
+  function localStartGate(): { ok: true } | { ok: false; reason: string } {
+    if (!localWritersQuiescent) {
+      return {
+        ok: false,
+        reason: 'local DSH_HOME writer quiescence is not proven; restart and reaper recovery are required',
+      }
+    }
+    return options.canStartLocal?.() ?? { ok: true }
+  }
+
+  function localExposureAllowed(): boolean {
+    return localWritersQuiescent && (options.canExposeLocal?.() ?? true)
+  }
 
   // Module-A host package source (design 09 module B); may be absent — the seed
   // skips it gracefully and the plane keeps working without the host graph.
@@ -250,13 +355,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * runLocalDshPlugin included) re-links profile node_modules, which prunes
    * such packages: without the per-spawn re-seed the next instance restart
    * would boot with a --patch row that cannot resolve and fail loudly, the
-   * only self-heal being a desktop-app restart (plane start()). Both this
-   * thunk and the plane's start() initial run are idempotent (content-hash
-   * skip in ensureHostGraphPackage, content-compare in buildPatchOverlay), so
-   * they never conflict. Returns the --patch overlay path, or null when
+   * only self-heal being a desktop-app restart. This thunk is idempotent
+   * (content-hash skip in ensureHostGraphPackage, content-compare in
+   * buildPatchOverlay). Returns the --patch overlay path, or null when
    * module A's built artifact is absent (v4 baseline command line, nothing
    * to mount). Failure semantics: a seed throw on the initial-spawn path
-   * lands the instance in error state (next plane start() retries); on the
+   * lands the instance in error state (the next local start retries); on the
    * restart path it rides the connection's existing bounded backoff loop and
    * ends in restart-exhausted — the same fail-loud surface as any spawn
    * failure (a broken shipped module A is a packaging bug, never silent).
@@ -307,21 +411,63 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // The managed local connection adapter (design 02): spawn/health/reaper
   // owner; readiness = TCP + host.describe inside spawn-dsh.
   const local = createLocalConnection({
-    stateDir, dshHome, dshWorkspacePath, catalog, logger,
-    // patchPath is a thunk: the seed may land after construction (the plane's
-    // start()), and resolving it per spawn (restarts included) re-runs the
-    // idempotent seed, self-healing a pruned one (see resolveHostGraphPatch).
-    options: { patchPath: resolveHostGraphPatch },
+    stateDir, dshHome, dshWorkspacePath: getDshWorkspacePath, catalog, logger,
+    // patchPath is a thunk resolved only behind the per-spawn fence. Re-read
+    // it for starts and restarts so a profile-internal prune self-heals
+    // without allowing a DSH_HOME write during runtime apply/restore.
+    options: {
+      ...(options.dshPortBase === undefined ? {} : { dshPortBase: options.dshPortBase }),
+      canSpawn: localStartGate,
+      onWriterQuiescenceUnknown: (writerError) => {
+        localWritersQuiescent = false
+        logger.error(`local writer quiescence became unknown; further starts are blocked until restart/reaper: ${writerError.message}`)
+      },
+      patchPath: () => {
+        // This thunk is reached only after local-connection's spawn fence.
+        // Keeping every DSH_HOME seed here prevents runtime snapshot/restore
+        // from racing a start that passed an earlier API-entry check.
+        if (seedDshHomeDefaults(dshHome)) {
+          logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
+        }
+        return resolveHostGraphPatch()
+      },
+    },
     deps: options.localConnectionDeps,
   })
-  // Health-events push fan-out (05 §3): the connection's lifecycle
-  // subscription reaches every SSE client of GET /api/host/health-events.
-  local.onStateChange((snapshot) => {
+  // Candidate lifecycle is an internal fact until the desktop's full probe
+  // verdict opens exposure. A candidate can move from ready to degraded,
+  // restarting, or error while the full probe is still running; none of those
+  // states (nor its port/error detail) may escape through public REST/SSE.
+  const publicLocalSnapshot = (snapshot: { status: string; port: number | null; error: string | null }) => {
+    if (!localExposureAllowed()) {
+      return { status: 'starting', port: null, error: null }
+    }
+    return snapshot
+  }
+  const currentPublicLocalSnapshot = () => publicLocalSnapshot({
+    status: local.getState(),
+    port: local.getDshPort(),
+    error: local.getError(),
+  })
+  const publishPublicLocalSnapshot = () => {
+    const snapshot = currentPublicLocalSnapshot()
     for (const listener of healthListeners) listener(snapshot)
+  }
+  // Health-events push fan-out (05 §3): the connection's lifecycle
+  // subscription reaches every SSE client through the same quarantine view.
+  local.onStateChange((snapshot) => {
+    const projected = publicLocalSnapshot(snapshot)
+    for (const listener of healthListeners) listener(projected)
   })
 
   // Managed-host rolling logs (design 02 §3.8): the read side of the
   // per-port JSONL files written by spawn-dsh.ts / local-connection.ts.
+  // While the desktop activation verdict is pending, the 'local' alias
+  // resolves to the most recent spawn record — the quarantined candidate —
+  // and its rolling log contains the candidate port and a "ready" line.
+  // That is an internal fact like every other public surface, so the alias
+  // read is gated by the same exposure latch (an explicit port query is an
+  // internal/diagnostic read and stays available).
   const hostLogsModule = hostLogs({ stateDir, logger })
 
   // Per-instance reverse proxy (design 03 §3): /api/i/<id>/* HTTP/WS/SSE
@@ -332,6 +478,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     logger,
     getLocalState: () => local.getState(),
     getLocalDshPort: () => local.getDshPort(),
+    canExposeLocal: localExposureAllowed,
   })
 
   /** The connection-row projection on the wire (04 §3.2): status/dshPort/error
@@ -342,15 +489,16 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   function connectionRowView() {
     const row = catalog.getConnection('local')
     if (row === null) return null
+    const publicSnapshot = currentPublicLocalSnapshot()
     const view: { id: string; label?: string; accentColor?: string; status: string; dshPort?: number; error?: string } = {
       id: row.connectionId,
-      status: local.getState(),
+      status: publicSnapshot.status,
     }
     if (typeof row.label === 'string' && row.label !== '') view.label = row.label
     if (typeof row.accentColor === 'string' && row.accentColor !== '') view.accentColor = row.accentColor
-    const livePort = local.getDshPort()
+    const livePort = publicSnapshot.port
     if (Number.isInteger(livePort) && livePort !== null && livePort > 0) view.dshPort = livePort
-    const liveError = local.getError()
+    const liveError = publicSnapshot.error
     if (typeof liveError === 'string' && liveError !== '') view.error = liveError
     return view
   }
@@ -359,6 +507,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * existing state — never a duplicate spawn. Shared by the POST route and
    * the handle's startLocal pre-spawn. */
   const startLocalConnection = async (label?: string, accentColor?: string) => {
+    const gate = localStartGate()
+    if (gate?.ok === false) {
+      const error = new Error(gate.reason) as Error & { code: string }
+      error.code = 'connection_busy'
+      throw error
+    }
     let row = catalog.getConnection('local')
     if (row === null) {
       row = { connectionId: 'local', kind: 'local', status: 'starting', dshPort: null }
@@ -374,7 +528,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const api = createApi({
     logger,
     corsOrigins: explicitOrigins,
-    getHealth: () => ({ ok: true, dsh: { status: local.getState(), port: local.getDshPort() ?? 0, error: local.getError() ?? undefined } }),
+    ...(options.corsEvaluator !== undefined ? { corsEvaluator: options.corsEvaluator } : {}),
+    getHealth: () => {
+      const snapshot = currentPublicLocalSnapshot()
+      return { ok: true, dsh: { status: snapshot.status, port: snapshot.port ?? 0, error: snapshot.error ?? undefined } }
+    },
     subscribeHealthEvents: (listener) => {
       healthListeners.add(listener)
       return () => { healthListeners.delete(listener) }
@@ -430,7 +588,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       await local.stop()
       // The row stays (03 §2.1: DELETE stops the instance, the row persists).
     },
-    hostLogs: (query: { port?: number; limit?: number; offset?: number }) => hostLogsModule.readManagedLog(query?.port ?? 'local', { limit: query?.limit, offset: query?.offset }),
+    hostLogs: (query: { port?: number; limit?: number; offset?: number }) => {
+      // An explicit port is an internal/diagnostic read; the 'local' alias is
+      // the public surface and must not leak the quarantined candidate's
+      // port/ready state before the activation verdict (same latch as the
+      // proxy and health surfaces). Fail closed with a loud 503 rather than a
+      // silent empty log.
+      if (query?.port === undefined && !localExposureAllowed()) {
+        const error = new Error('local instance is quarantined behind activation probes') as Error & { code: string }
+        error.code = 'quarantined'
+        throw error
+      }
+      return hostLogsModule.readManagedLog(query?.port ?? 'local', { limit: query?.limit, offset: query?.offset })
+    },
     instanceProxy,
   })
 
@@ -469,10 +639,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   return {
     /** Bind the HTTP surface and prepare the state layout. */
+
     async start() {
       if (stopPromise !== null) await stopPromise
-      // A start requested during stop belongs to the next lifecycle. Only
-      // after that stop settles may it share/create a start flight.
       if (server !== null) return
       if (startPromise !== null) return startPromise
 
@@ -482,28 +651,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         try {
           mkdirSync(join(stateDir, 'managed-dsh'), { recursive: true })
           mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-          // First-run default locale for the managed local host (zh); the user's
-          // explicit settings choice always wins from then on.
-          if (seedDshHomeDefaults(dshHome)) {
-            logger.log('dsh-home: seeded default settings.yaml (locale: zh)')
-          }
-          // Host-graph seed (design 09 方案 A, module B): distribute the chamber
-          // host package into the local profile (idempotent, content-hash skip)
-          // and materialize the --patch overlay that mounts it. The initial run
-          // here is for early exposure (logs + fail-loud on a broken module A);
-          // the spawn-time thunk re-runs the same idempotent seed before every
-          // spawn, restarts included — a seed pruned by a profile-internal pnpm
-          // operation self-heals on the next spawn, not only at plane start.
-          // dist/index.js is a COMMITTED artifact (design 09 §3.5, .gitignore
-          // negation), so a fresh clone has it; the gate only skips when the
-          // artifact is genuinely absent (module A not built/bundled in this
-          // runtime) or damaged — the overlay is gated on the artifact because a
-          // --patch overlay whose inserted row cannot resolve fails the host boot
-          // loudly (dsh-app-boot loadOverlayPatches): an absent module A must
-          // leave the spawn command line exactly the v4 base. A pre-existing
-          // running local instance is unaffected until its next restart — the
-          // overlay applies at host boot, the official plugin-set-change cadence.
-          resolveHostGraphPatch()
+          // DSH_HOME writes stay behind the per-spawn runtime gate. At plane
+          // startup only report unavailable optional packages; the spawn-time
+          // patch thunk seeds them after the reaper has proved quiescence.
           if (!existsSync(hostGraphArtifact)) {
             logger.log(`host-graph: host package build artifact ${hostGraphArtifact} not present; seed skipped (module A not built)`)
           }
@@ -512,62 +662,25 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           }
           if (webDistDir !== undefined) {
             try {
-              if (!statSync(webDistDir).isDirectory()) {
-                throw new Error('not a directory')
-              }
+              if (!statSync(webDistDir).isDirectory()) throw new Error('not a directory')
             } catch (distError) {
-              // Fail-loud: a configured-but-missing dist is a packaging bug,
-              // never a silent empty shell.
               throw new Error(`webDistDir is not a directory: ${String(distError)}`)
             }
           }
-          // Orphan reclamation (design 02 §3.4): a control plane that died and
-          // restarted reclaims its detached hosts before any new spawn — safe by
-          // construction (triple verification, owner-dead only).
+
           const reaped = await reapManagedHosts({ stateDir, logger })
+          localWritersQuiescent = reaped.kept === 0 && reaped.errors.length === 0
           if (reaped.reclaimed > 0) logger.log(`reaper: reclaimed ${reaped.reclaimed} orphaned dsh host(s)`)
-          // Failure isolation must be visible: entry errors are surfaced, never
-          // silently dropped (one bad record never blocks the rest).
-          if (Array.isArray(reaped.errors) && reaped.errors.length > 0) {
+          if (reaped.errors.length > 0) {
             for (const reaperError of reaped.errors) logger.error(`reaper: ${String(reaperError)}`)
           }
           if (epoch !== lifecycleEpoch) throw new Error('control plane start cancelled by stop')
-          candidate = createServer((req, res) => {
-            // Set before dispatch so proxy and every early/error response inherit
-            // the same browser boundary. Route-specific writeHead calls retain
-            // headers already set on ServerResponse.
-            for (const [name, value] of Object.entries(CONTROL_PLANE_SECURITY_HEADERS)) {
-              res.setHeader(name, value)
-            }
-            const cspNonce = randomBytes(18).toString('base64')
-            ;(res as ApiResponse)._cspNonce = cspNonce
-            // script-src keeps 'unsafe-inline' closed (every inline script must
-            // carry the per-response nonce) but MUST open 'unsafe-eval': the
-            // official dsh module loader (vendored @deepseek-ai/loader, config
-            // utils) evaluates boot-manifest `__jsExpr` config via
-            // `new Function('ctx','expr', 'with (ctx) { return eval(expr) }')`
-            // at module evaluation time — without 'unsafe-eval' the renderer
-            // bundle dies with an EvalError and the skeleton never boots.
-            res.setHeader(
-              'content-security-policy',
-              `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
-            )
-            // A malformed request line (e.g. a `//`-leading path — treated as a
-            // protocol-relative URL with an empty host, which `new URL` rejects)
-            // must never take the whole control plane down: answer 400 and keep
-            // serving (proxy honesty — an invalid request is an explicit
-            // rejection, never a crash or a silent empty success).
-            let url: URL
-            try {
-              url = new URL(req.url ?? '/', 'http://localhost')
-            } catch {
-              res.writeHead(400, { 'content-type': 'application/json' })
-              res.end('{"error":"invalid-url"}')
-              return
-            }
+
+          const middlewareCtx: PlaneMiddlewareContext = { api, instanceProxy }
+          function dispatchRest(req: ApiRequest, res: ApiResponse, url: URL): void {
             const surface = url.pathname.split('/').filter(Boolean)[0] ?? ''
             if (surface === 'api' || surface === 'health') {
-              void api.handle(req as ApiRequest, res as ApiResponse).catch(error => {
+              void api.handle(req, res).catch(error => {
                 logger.error(`api handler failure: ${String(error)}`)
                 if (!res.headersSent) {
                   res.writeHead(500, { 'content-type': 'application/json' })
@@ -580,11 +693,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             }
             if (staticServing !== null) {
               try {
-                staticServing.serve(req as ApiRequest, res as ApiResponse, url.pathname)
+                staticServing.serve(req, res, url.pathname)
               } catch (staticError) {
-                // A throw in the static path (beyond the gzip race guarded
-                // inside the service) must answer 500, never crash the plane
-                // child process — same pattern as the api.handle catch above.
                 logger.error(`static handler failure: ${String(staticError)}`)
                 if (!res.headersSent) {
                   res.writeHead(500, { 'content-type': 'application/json' })
@@ -597,25 +707,56 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             }
             res.writeHead(404, { 'content-type': 'application/json' })
             res.end(JSON.stringify({ error: 'not_found', code: 'not_found' }))
+          }
+
+          candidate = createServer((req, res) => {
+            for (const [name, value] of Object.entries(CONTROL_PLANE_SECURITY_HEADERS)) {
+              res.setHeader(name, value)
+            }
+            const cspNonce = randomBytes(18).toString('base64')
+            ;(res as ApiResponse)._cspNonce = cspNonce
+            res.setHeader(
+              'content-security-policy',
+              `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
+            )
+            let url: URL
+            try {
+              const rawTarget = req.url ?? '/'
+              if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+                || rawTarget.includes('\\') || rawTarget.includes('#')) {
+                throw new Error('non-origin-form request target')
+              }
+              url = new URL(rawTarget, 'http://localhost')
+            } catch {
+              res.writeHead(400, { 'content-type': 'application/json' })
+              res.end('{"error":"invalid-url"}')
+              return
+            }
+            if (options.middleware !== undefined) {
+              void Promise.resolve(options.middleware(req as ApiRequest, res as ApiResponse, url, middlewareCtx)).then(claimed => {
+                if (!claimed) dispatchRest(req as ApiRequest, res as ApiResponse, url)
+              }).catch((middlewareError: unknown) => {
+                logger.error(`middleware failure: ${String(middlewareError)}`)
+                if (!res.headersSent) {
+                  res.writeHead(500, { 'content-type': 'application/json' })
+                  res.end('{"error":"internal"}')
+                } else {
+                  res.end()
+                }
+              })
+              return
+            }
+            dispatchRest(req as ApiRequest, res as ApiResponse, url)
           })
           const listeningServer = candidate
-          // Bound pre-routing slowloris/socket pressure as well as route-level
-          // work. requestTimeout covers receiving the request, while the proxy
-          // adds a stricter 30s inter-chunk body idle timeout. The connection
-          // ceiling still leaves headroom for the documented HTTP/WS/SSE caps.
           listeningServer.headersTimeout = 10_000
           listeningServer.requestTimeout = 35_000
           listeningServer.keepAliveTimeout = 5_000
           listeningServer.maxRequestsPerSocket = 1_000
           listeningServer.maxConnections = 192
-          // WS upgrade dispatcher (design 03 §3.1/§3.2): the instance proxy
-          // handles /api/i/<id>/api/events.mux|host — explicit rejections
-          // only, never a silent drop.
-          listeningServer.on('upgrade', (req, socket, head) => {
-            // WebSocket ignores browser CORS response handling. Apply the same
-            // origin fence before the proxy replaces Host and strips browser
-            // markers; otherwise the upstream sees a trusted loopback request.
-            if (!api.getCorsHeaders(req as ApiRequest).allowed) {
+
+          function defaultUpgrade(req: ApiRequest, socket: Duplex, head: Buffer): void {
+            if (!api.getCorsHeaders(req).allowed) {
               socket.end(
                 'HTTP/1.1 403 Forbidden\r\n'
                 + 'Content-Type: application/json\r\n'
@@ -629,7 +770,33 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               logger.error(`upgrade handler failure: ${String(error)}`)
               socket.destroy()
             })
+          }
+
+          listeningServer.on('upgrade', (req, socket, head) => {
+            const rawTarget = req.url ?? '/'
+            if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
+              || rawTarget.includes('\\') || rawTarget.includes('#')) {
+              socket.end(
+                'HTTP/1.1 400 Bad Request\r\n'
+                + 'Content-Type: application/json\r\n'
+                + 'Connection: close\r\n'
+                + '\r\n'
+                + '{"error":"invalid-url","code":"bad_request"}',
+              )
+              return
+            }
+            if (options.upgradeMiddleware !== undefined) {
+              void Promise.resolve(options.upgradeMiddleware(req as ApiRequest, socket as Duplex, head, middlewareCtx)).then(claimed => {
+                if (!claimed) defaultUpgrade(req as ApiRequest, socket as Duplex, head)
+              }).catch((middlewareError: unknown) => {
+                logger.error(`upgrade middleware failure: ${String(middlewareError)}`)
+                socket.destroy()
+              })
+              return
+            }
+            defaultUpgrade(req as ApiRequest, socket as Duplex, head)
           })
+
           await new Promise<void>((resolveListen, rejectListen) => {
             const onListenError = (error: Error): void => rejectListen(error)
             listeningServer.once('error', onListenError)
@@ -657,31 +824,28 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       }
     },
 
-    /** Stop the local dsh connection and close the HTTP surface. */
+    /** Stop every local writer before releasing the HTTP surface. */
     async stop() {
       if (stopPromise !== null) return stopPromise
       lifecycleEpoch += 1
       const pending = (async () => {
         const starting = startPromise
         if (starting !== null) {
-          try { await starting } catch { /* a failed/cancelled start is already settled */ }
+          try { await starting } catch { /* failed/cancelled start already settled */ }
         }
-        await local.stop()
+        let localStopError: unknown
+        try {
+          await local.stop()
+        } catch (error) {
+          localStopError = error
+        }
         if (server !== null) {
           const srv = server
           server = null
           serverPort = null
-          // Node's server.close() waits for every active connection to end — a
-          // lingering renderer SSE/WS/proxy connection (e.g. after a crashed
-          // local host left the page mid-reconnect) would otherwise hang the
-          // close forever and strand the desktop app in a half-exited state.
-          // Force-close first so close() resolves promptly: spliced WS streams
-          // are tracked by the proxy (upgraded sockets leave the HTTP server's
-          // connection tracking), HTTP/SSE/keep-alive by closeAllConnections/
-          // closeIdleConnections. The 500ms window is a last-resort against any
-          // straggler — the process exit then releases the remaining fds.
           await closeHttpServer(srv, true)
         }
+        if (localStopError !== undefined) throw localStopError
       })()
       stopPromise = pending
       try {
@@ -706,6 +870,15 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       return local.hasLiveProcess()
     },
 
+    get localWritersQuiescent() {
+      return localWritersQuiescent
+    },
+
+    /** The live local dsh port, used only by main-process activation probes. */
+    get localDshPort() {
+      return local.getDshPort()
+    },
+
     /**
      * The control-plane instance identity (design 02 §2.5); spawn records
      * carry it for multi-instance diagnostics.
@@ -714,14 +887,22 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       return instanceId
     },
 
+    /** The managed local dsh host's port (design 17 §2.1 改动①). */
+    getLocalDshPort() {
+      return local.getDshPort()
+    },
+
     /**
-     * Register a remote instance transport (design 05 §3.3): the desktop
-     * main process reports a ready tunnel as connectionId `ssh:<id>` with
-     * baseUrl `http://127.0.0.1:<tunnel localPort>` — the /api/i/ssh-<id>/*
-     * proxy target. Tunnel URLs never leave the main process / proxy.
+     * Register a remote instance transport (design 05 §3.3 + design 17 §9.3):
+     * the desktop main process reports a ready target as connectionId
+     * `dsh:<id>` or `gateway:<id>` plus `opts.transport` (legacy
+     * `ssh:<id>` spelling remains SSH-only) — the
+     * /api/i/<kind>-<id>/* proxy target. `extraHeaders`/`opts.tls.spkiPin`
+     * ride through to the instance proxy's validated gateway record. Tunnel
+     * URLs never leave the main process / proxy.
      */
-    registerInstanceTransport(connectionId: string, baseUrl: string) {
-      instanceProxy.registerTransport(connectionId, baseUrl)
+    registerInstanceTransport(connectionId: string, baseUrl: string, extraHeaders?: Record<string, string>, opts?: InstanceTransportRegistrationOptions) {
+      instanceProxy.registerTransport(connectionId, baseUrl, extraHeaders, opts)
     },
 
     /** Unregister a remote instance transport (tunnel torn down). */
@@ -733,15 +914,34 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     startLocal: async () => {
       await startLocalConnection()
     },
+
+    /** Stop only the local managed host (the HTTP control plane stays up). */
+    stopLocal: async () => {
+      await local.stop()
+    },
+
+    /** Transactional user-triggered dsh restart (design 18 §9.3). */
+    restartLocal: async () => {
+      await local.restartLocal()
+    },
+
+    refreshLocalExposure() {
+      publishPublicLocalSnapshot()
+    },
+
+    /** Subscribe to the authoritative local-host lifecycle stream. */
+    onLocalStateChange(listener) {
+      return local.onStateChange(listener)
+    },
   } satisfies PlaneHandle
 }
 
-export { spawnDsh } from './spawn-dsh.ts'
-// Only the PRODUCTION unary surface is re-exported: the v2-era session-runtime
-// leftovers (respond / openEventStream / pendingEnvelope / soft-cap machinery)
-// were DELETED with the v4 consolidation — dsh-client.ts is a unary-only
-// client (its remaining exports serve control-plane tests directly).
-export { call, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
+// Unary RPC remains the ordinary control-plane client. Design 17's separately
+// invoked gateway also composes the bounded server-response and event-stream
+// helpers; exporting those helpers does not add a desktop session consumer.
+export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+export type { ServerRequest } from './dsh-client.ts'
 // The dsh RPC wire envelope single source (A2 cross-package protocol
 // single-sourcing): envelope construction, server-response parse/validation
 // and the raw node:http unary carrier shared with the desktop probes
@@ -773,3 +973,11 @@ export type {
   InsertConflictKind,
   ParsedInsertRow,
 } from './cordis-inserts.ts'
+export type { Logger } from './types.ts'
+export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
+// Shared forwarding core (design 17 §6.2, 方案 A): extracted from
+// instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
+// rewrite + WS splice + limits/errors without forking.
+export * from './proxy-forward.ts'
+export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
+export type { JsonStore, JsonStoreDocument, JsonStoreMutator, JsonStoreOptions } from './json-store.ts'

@@ -24,7 +24,8 @@ function server(id: string, connected: boolean): ChamberServerAggregate {
   return {
     id,
     sourceFingerprint: 'a'.repeat(64),
-    kind: 'ssh',
+    kind: 'dsh',
+    transport: 'ssh',
     label: id,
     connected,
     phase: connected ? 'ready' : 'stopped',

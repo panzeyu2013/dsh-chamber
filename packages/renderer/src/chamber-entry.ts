@@ -96,6 +96,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import { isChamberSourceId } from './transport-source.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -105,6 +106,8 @@ declare module '@deepseek-ai/cordis' {
     chamberBasePath?: string
     /** Immutable, non-secret registry incarnation bound before plugin materialization. */
     chamberSourceFingerprint?: string
+    /** Immutable transport mechanism bound before plugin materialization. */
+    chamberTransport?: 'local' | 'ssh' | 'http'
   }
 }
 
@@ -319,8 +322,12 @@ export function apply(ctx: Context): void {
   const chamberInstanceId = ctx.chamberInstanceId
   const chamberBasePath = ctx.chamberBasePath
   const chamberSourceFingerprint = ctx.chamberSourceFingerprint
+  const chamberTransport = ctx.chamberTransport
   if (typeof chamberInstanceId !== 'string' || chamberInstanceId.trim() === '') {
     throw new Error('chamber-entry: missing per-entry chamberInstanceId')
+  }
+  if (!isChamberSourceId(chamberInstanceId)) {
+    throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
   }
   if (typeof chamberBasePath !== 'string' || chamberBasePath !== `/api/i/${chamberInstanceId}`) {
     throw new Error(`chamber-entry: invalid per-entry chamberBasePath ${JSON.stringify(chamberBasePath)}`)
@@ -330,6 +337,10 @@ export function apply(ctx: Context): void {
     : typeof chamberSourceFingerprint === 'string' && /^[a-f0-9]{64}$/.test(chamberSourceFingerprint)
   if (!validSourceFingerprint) {
     throw new Error('chamber-entry: invalid per-entry chamberSourceFingerprint')
+  }
+  if ((chamberInstanceId === 'local' && chamberTransport !== 'local')
+    || (chamberInstanceId !== 'local' && chamberTransport !== 'ssh' && chamberTransport !== 'http')) {
+    throw new Error('chamber-entry: invalid per-entry chamberTransport')
   }
   ctx.plugin(ConnectionPlugin, { basePath: chamberBasePath })
   ctx.plugin(TypertRegistry)
@@ -358,9 +369,6 @@ export function apply(ctx: Context): void {
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
-  if (!chamberInstanceId.startsWith('ssh-') && chamberInstanceId !== 'local') {
-    throw new Error(`chamber-entry: unexpected chamberInstanceId ${JSON.stringify(chamberInstanceId)}`)
-  }
   ctx.plugin(UiDirectoryPickerBrowse)
   ctx.plugin(UiSettingsConnections)
   ctx.plugin(UiSettingsBridge)

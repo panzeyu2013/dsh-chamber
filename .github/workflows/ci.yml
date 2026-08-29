@@ -4,8 +4,10 @@ on:
   push:
     branches: [main]
     # Tag pushes (v*) run the SAME validation chain — a release cannot be
-    # published from an untested commit (2026 round-3 review: release.yml
-    # itself only packages, never validates).
+    # published from an untested commit. release.yml also carries its own
+    # release-local validation gate because tag-triggered workflows run in
+    # parallel; keeping both paths aligned prevents either workflow from being
+    # treated as proof for a different commit.
     tags: ['v*']
   pull_request:
 
@@ -41,19 +43,31 @@ jobs:
           path: vendor/harness-checkout
           key: harness-${{ hashFiles('harness.commit') }}
       - name: Bootstrap vendor tree
-        run: node scripts/ensure-harness-vendor.mjs
+        run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
-      - name: Type check (tsc + chamber host packages)
+      - name: Type check (tsc + chamber host packages + gateway)
         run: |
           pnpm run typecheck
           pnpm run typecheck:host-graph
           pnpm run typecheck:host-git
+          pnpm run typecheck:gateway
+          pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      - name: Workflow action pins resolve upstream (release-preflight --actions-only)
+        run: node scripts/dev/release-preflight.mjs --actions-only
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Release workflow safety policy
+        run: pnpm run test:release-workflow
+      - name: Shared runtime core unit tests (packages/dsh-runtime)
+        run: pnpm run test:runtime
       - name: Control-plane unit tests
         run: pnpm run test:control-plane
-      - name: Desktop unit tests (transport / ssh)
+      - name: Desktop unit tests (lifecycle / transports / credentials / runtime / native edges)
         run: pnpm run test:desktop
+      - name: Gateway unit tests
+        run: pnpm run test:gateway
       - name: Renderer shell unit tests
         run: pnpm run test:renderer-shell
       - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / connection / open-in)
@@ -69,6 +83,7 @@ jobs:
       - name: Client and host plugin unit tests (sidebar / git / settings-bridge / connections / client-web / connection / open-in)
         run: |
           pnpm run test:sidebar
+          pnpm run test:layout
           pnpm run test:git
           pnpm run test:host-git
           pnpm run test:settings-bridge
@@ -107,4 +122,11 @@ jobs:
       # Third-party notices must track the installed dependency set; a
       # stale committed file fails the push (2026 review).
       - name: Third-party notices current
-        run: node scripts/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
+        run: node scripts/dev/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
+      - name: Gateway package build and installed CLI smoke
+        run: |
+          pnpm run build:dsh-runtime
+          mkdir -p /tmp/dsh-gateway-pack /tmp/dsh-gateway-install
+          pnpm --filter @dsh-chamber/gateway pack --pack-destination /tmp/dsh-gateway-pack
+          npm install --ignore-scripts --prefix /tmp/dsh-gateway-install /tmp/dsh-gateway-pack/*.tgz
+          /tmp/dsh-gateway-install/node_modules/.bin/gateway --help

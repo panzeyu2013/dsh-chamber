@@ -3,7 +3,6 @@
  * ISO timestamps are only millisecond-precise, so they cannot be a lossless
  * cursor. Compare the previous suffix with the current prefix instead.
  */
-
 export interface HostLogFollowEntry {
   ts?: unknown
   stream?: unknown

@@ -22,21 +22,23 @@ import { fileURLToPath } from 'node:url';
 
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(desktopDir, '..', '..');
-const tscBin = path.join(repoRoot, 'node_modules', '.bin', 'tsc');
+// Use the JS entry directly; do not make a distributable build depend on
+// package-manager-specific `.bin` shim materialization.
+const tscEntry = path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc');
 const project = path.join(desktopDir, 'tsconfig.preload.build.json');
 const tempOut = path.join(desktopDir, 'dist', '.preload-build');
 const entry = path.join(tempOut, 'preload.cjs');
 const finalEntry = path.join(desktopDir, 'dist', 'preload.cjs');
 
-if (!existsSync(tscBin)) {
-  console.error('[build-preload] 未找到 tsc。请先在仓库根目录执行 pnpm install。');
+if (!existsSync(tscEntry)) {
+  console.error('[build-preload] 未找到 TypeScript。请先在仓库根目录执行 pnpm install。');
   process.exit(1);
 }
 
 mkdirSync(tempOut, { recursive: true });
-const result = spawnSync(tscBin, ['-p', project, '--outDir', tempOut], {
+const result = spawnSync(process.execPath, [tscEntry, '-p', project, '--outDir', tempOut], {
   stdio: 'inherit',
-  shell: process.platform === 'win32',
+  shell: false,
 });
 if (result.error || result.status !== 0) {
   console.error(`[build-preload] 编译失败（exit ${result.status ?? 'null'}）`);

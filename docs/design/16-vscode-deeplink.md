@@ -1,14 +1,19 @@
 # 16 · VS Code 深链插件（deeplink 快速拉起本机 VS Code 打开对应 server 目录）
 
-> **更新（2026-08）**：应用内按钮已演进为 open-in 通用打开注册表（设计 17）——
+> **更新（2026-08）**：应用内按钮已演进为 open-in 通用打开注册表（设计 20）——
 > 插件重命名 `@dsh-chamber/dsh-client-ui-open-in`，`dsh-chamber:open-vscode`/
 > `vscode-availability` 两 IPC 与 `window.dshChamber.vscode` 桥面已随旧插件
 > 删除（渲染层唯一入口收敛为 `open-in-apps`/`open-in`）；OS 深链
 > `dsh-chamber://open-vscode` 的 URI/拉起语义不变，生命周期已加固为有界归一化
 > single-flight 队列与 renderer ready + retain-until-ACK hold/replay。本文保留为 OS 深链与 vscode 拉起的
-> 契约；文中旧 IPC/桥面/包名描述属历史基线，以设计 17 §6 演进表为准。
+> 契约；文中旧 IPC/桥面/包名描述属历史基线，以设计 20 §6 演进表为准。
 > M3 仍包含 macOS 打包态、冷/热启动与 N-ctx 等实机验收；这些项目未完成前，
-> 不把 open-in 演进后的整条链路写成 M3 已完成，最新状态以 STATUS 与设计 17 §8/§9 为准。
+> 不把 open-in 演进后的整条链路写成 M3 已完成，最新状态以 STATUS 与设计 20 §8/§9 为准。
+>
+> **连接模型 v2 注记**：现行来源 id 为 `dsh-<id>` / `gateway-<id>`，`ssh-<id>`
+> 仅保留 legacy 兼容映射；kind 是目标类型，是否能使用 VS Code Remote-SSH 由
+> `transport === 'ssh'` 决定（17 §2.2/§9.1）。本文的 v1 `kind === 'ssh'`
+> 叙述仅是历史基线，现行执行门已按 transport 落地。
 
 > **状态：设计定稿并已实现（M0–M2，2026-08）**。经两轮反思 + 一轮独立对抗复核收敛
 > （复核发现无 P0；5 项 P1 必改与 P2 边界均已并入本文），实现后另经一轮安全契约
@@ -91,7 +96,8 @@ dsh-chamber://open-vscode?instance=<id>&path=<远端绝对路径>
 - 用 `new URL()` 解析；`hostname` 必须精确等于 `open-vscode`（其余 host 一律拒绝，
   不猜测、不归一化）；
 - `instance`：`INSTANCE_ID_PATTERN`（`/^(?!local$)[a-zA-Z0-9_-]{1,64}$/`）+
-  注册表实查（`transportManager.listInstances()`），`kind !== 'ssh'` 或查无 →
+  注册表实查（`transportManager.listInstances()`），查无或
+  `transport !== 'ssh'` →
   确定性拒绝 + loud；**`local` 显式放行**（用户决策 2026-08：走 §3.4 的 local 分支，
   不查注册表）；
 - `path`：必须以 `/` 开头（绝对路径），拒绝控制字符 / CR / LF / NUL，长度 ≤ 4096；
@@ -366,7 +372,8 @@ detectVscodeAvailability(platform): { available: boolean }
 
 ### 10.2 实现后审查记录（2026-08，两轮独立审查 + 修复）
 
-- **安全契约审查**（无 P0）：P1 两必改已修复——① 按钮侧视图 id（`ssh-<id>`）→ 裸注册表
+- **安全契约审查**（无 P0）：P1 两必改已修复——① 按钮侧视图 id（`ssh-<id>`，
+  v1 legacy 视图 id 表述，见文首注记）→ 裸注册表
   id 的映射（此前按钮传 `ssh-<id>`，主进程按裸 id 实查恒不命中，M2 核心功能不可用）；
   ② `detectVscodeAvailability` 的 X_OK 判定补 `isFile()`（POSIX 目录带执行位会被误判为
   可执行 `code`），Windows `Code.exe` 分支同补。P2 已修：parse 拒绝 userinfo/port、

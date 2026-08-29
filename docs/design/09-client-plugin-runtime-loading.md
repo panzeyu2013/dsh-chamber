@@ -287,7 +287,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   行；settings 系包迁 `dsh-client-ui-renderer/src/client/bind` 与
   `SettingsSchemaService`）。rc.7 宿主（无 `images` 参数）随对齐移出支持面
   （rc.8 客户端自带 `images` 参数，rc.7 宿主会拒绝多余字段）——与版本容忍
-  §3.3 的"特性缺席"语义一致：壳与后端版本必须同代。
+  §3.5 的"特性缺席"语义一致：壳与后端版本必须同代。
 
 ## 5. 实施分期（M1–M4 均已落地；验证记录见 STATUS）
 

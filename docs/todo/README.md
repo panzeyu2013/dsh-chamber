@@ -15,8 +15,9 @@
 | 4 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） | 设计待评审，实现未排期（2026-08） |
 
 > 现行设计均已落地（除 07 推迟待上游、12 设计待评审外）；已实现并移入
-> `docs/design/` 的：08/09/11/14/15/16/17/19（编号与状态以
-> `docs/design/01-overview.md` §3 文档地图为准）。
+> `docs/design/` 的：08/09/11/14/15/16/17/19/20（编号与状态以
+> `docs/design/01-overview.md` §3 文档地图为准；open-in 在 dev 侧编号为 20）。
+
 
 ## 纪律
 

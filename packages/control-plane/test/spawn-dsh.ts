@@ -153,7 +153,10 @@ test('spawnDsh: a pid-record write failure still cleans the spawned child up (no
   try {
     await assert.rejects(
       () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger }),
-      /failed to start after 5 attempts/,
+      // Fail-closed design-18 semantics (merged): a pid-ledger publication
+      // failure is never retried on another port — the child is reclaimed
+      // and the spawn throws non-retryable (protocol.ts asserts the code).
+      /dsh pid ledger publication failed/,
     )
     // The cleanup assertion the name promises: NO process may still be
     // running the fake entry (a leaked detached process would survive).

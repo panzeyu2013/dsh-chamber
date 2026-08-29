@@ -54,25 +54,42 @@ test('parseOpenInResult accepts only the documented success/error union', () => 
   assert.equal(describeOpenInError(hostile), 'unknown error')
 })
 
-test('parseOpenInSource accepts only local or ssh-<registry id>', () => {
-  assert.deepEqual(parseOpenInSource('local'), {
+test('parseOpenInSource accepts canonical kind × transport pairs plus the legacy ssh source alias', () => {
+  assert.deepEqual(parseOpenInSource('local', 'local'), {
     sourceId: 'local',
     instanceId: 'local',
     local: true,
+    transport: 'local',
   })
-  assert.deepEqual(parseOpenInSource('ssh-dev_01'), {
+  assert.deepEqual(parseOpenInSource('dsh-dev_01', 'ssh'), {
+    sourceId: 'dsh-dev_01',
+    instanceId: 'dev_01',
+    local: false,
+    transport: 'ssh',
+  })
+  assert.deepEqual(parseOpenInSource('gateway-dev_01', 'http'), {
+    sourceId: 'gateway-dev_01',
+    instanceId: 'dev_01',
+    local: false,
+    transport: 'http',
+  })
+  assert.deepEqual(parseOpenInSource('ssh-dev_01', 'ssh'), {
     sourceId: 'ssh-dev_01',
     instanceId: 'dev_01',
     local: false,
+    transport: 'ssh',
   })
 
   for (const sourceId of [undefined, null, '', 'remote-1', 'ssh-', 'ssh-local', 'ssh-bad/id', 'ssh-a.b', `ssh-${'a'.repeat(65)}`]) {
-    assert.equal(parseOpenInSource(sourceId), null, `expected ${String(sourceId)} to be rejected`)
+    assert.equal(parseOpenInSource(sourceId, 'ssh'), null, `expected ${String(sourceId)} to be rejected`)
   }
+  assert.equal(parseOpenInSource('local', 'ssh'), null)
+  assert.equal(parseOpenInSource('dsh-dev', 'local'), null)
+  assert.equal(parseOpenInSource('gateway-dev', undefined), null)
 })
 
 test('open-in launch preserves the boot-bound proof across a same-id same-fields re-add', () => {
-  const source = parseOpenInSource('ssh-dev')
+  const source = parseOpenInSource('dsh-dev', 'ssh')
   assert.ok(source !== null)
   const oldFingerprint = 'a'.repeat(64)
   const replacementFingerprint = 'b'.repeat(64)
@@ -89,14 +106,17 @@ test('open-in launch preserves the boot-bound proof across a same-id same-fields
   })
   assert.notEqual(oldButtonRequest.sourceFingerprint, replacementFingerprint,
     'an old mounted button never reads the replacement roster fingerprint')
-  assert.equal(parseOpenInSourceFingerprint(parseOpenInSource('local')!, 'local'), 'local')
-  assert.equal(parseOpenInSourceFingerprint(parseOpenInSource('local')!, oldFingerprint), null)
+  assert.equal(parseOpenInSourceFingerprint(parseOpenInSource('local', 'local')!, 'local'), 'local')
+  assert.equal(parseOpenInSourceFingerprint(parseOpenInSource('local', 'local')!, oldFingerprint), null)
 })
 
-test('usableOpenInApps filters unavailable and local-only apps for remote sources', () => {
-  const local = parseOpenInSource('local')
-  const remote = parseOpenInSource('ssh-dev')
-  assert.ok(local !== null && remote !== null)
+test('usableOpenInApps filters by transport, independently of dsh/gateway target kind', () => {
+  const local = parseOpenInSource('local', 'local')
+  const dshSsh = parseOpenInSource('dsh-dev', 'ssh')
+  const gatewaySsh = parseOpenInSource('gateway-gw', 'ssh')
+  const dshHttp = parseOpenInSource('dsh-direct', 'http')
+  const gatewayHttp = parseOpenInSource('gateway-direct', 'http')
+  assert.ok(local !== null && dshSsh !== null && gatewaySsh !== null && dshHttp !== null && gatewayHttp !== null)
 
   const unavailable: OpenInApp = {
     id: 'future',
@@ -105,6 +125,9 @@ test('usableOpenInApps filters unavailable and local-only apps for remote source
     available: false,
   }
   assert.deepEqual(usableOpenInApps([...validApps, unavailable], local), validApps)
-  assert.deepEqual(usableOpenInApps([...validApps, unavailable], remote), [validApps[1]])
+  assert.deepEqual(usableOpenInApps([...validApps, unavailable], dshSsh), [validApps[1]])
+  assert.deepEqual(usableOpenInApps([...validApps, unavailable], gatewaySsh), [validApps[1]])
+  assert.deepEqual(usableOpenInApps([...validApps, unavailable], dshHttp), [])
+  assert.deepEqual(usableOpenInApps([...validApps, unavailable], gatewayHttp), [])
   assert.deepEqual(usableOpenInApps(null, local), [])
 })

@@ -27,9 +27,11 @@ const FILES = [
   'local-connection.ts',
   'spawn-dsh.ts',
   'instance-proxy.ts',
+  'gateway-transport.test.ts',
   'ws-frames.ts',
   'static-serving.ts',
   'host-graph-seed.ts',
+  'restart-local.ts',
   // A2 cross-package protocol single-sourcing: the shared RPC envelope and
   // cordis insert modules (also consumed by the desktop through
   // control-plane-module.ts).

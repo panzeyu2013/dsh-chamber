@@ -12,20 +12,237 @@
 
 ## [Unreleased]
 
+## [0.2.0-beta.3] - 2026-08-29
+
 ### 新增
 
-- **桌面通知（设计 19）** —— session complete / ask / request 时推送桌面原生
-  通知（设置可选项，并入设置壳「通用」页通知控制组；检测复用侧边栏运行时事实
-  通道边沿，零控制面改动）。
-- **来源级收拢 + server 拖拽排序（06 §2.4 方案 1）** —— 侧边栏来源头折叠
-  开关（收拢整来源 workspace 列表）+ 来源头拖拽排序（显示偏好，持久化于
-  `dsh-chamber.sidebar.v1`，跨 ctx 实时联动）。
-- **workspace 图标按身份着色（06）** —— 图标色相按 `(serverId, 家族种子)`
-  哈希派生稳定 accent，worktree 与主检出共享家族色；2026-10 柔和化色板。
-- **Open in 打开注册表（设计 17）** —— VS Code 深链插件演进为通用打开面：
-  本地来源 Finder + 本地/远程 VS Code 统一按钮（`conversation.session.header.
-  utilities` 槽），插件重命名 `@dsh-chamber/dsh-client-ui-open-in`，旧 vscode
-  IPC 收敛删除。
+- **凭据存储 safeStorage v3（S22）** —— `<userData>/gateway-secrets.json` schema
+  v3：tokens+passwords 双表、各维度 gateway-target binding + 文件级
+  `storage:'safeStorage'|'plaintext'` 权威判别
+  （密文不再按字符形状猜测），`SecretCryptoAdapter` 接线 Electron safeStorage
+  （`isEncryptionAvailable()` 不可用时 0600 明文回退）；密码允许 12–1024 Unicode
+  JavaScript 字符，token 保持 32–4096 visible ASCII；双表
+  corrupt 检测（`.corrupt` 保留）；凭据仅作为表单瞬时 write-only 输入，永不由主进程
+  返回/回填或持久化到 renderer，也不进注册表/日志。**token 与
+  密码两个独立可空维度**（17 §2.3，清除互不影响），整实例双清走显式
+  `setInstanceSecrets(id, null, null)`；**`instances_get` 投影合并
+  `secretStorage`（`'safeStorage' | 'plaintext'`）**。plaintext 镜像在 keychain 后来
+  可用时立即原子升级，只有落盘成功才声称 safeStorage；非空无 discriminator 的旧 v2
+  fail closed。gateway/SSH 凭据载入都先拒绝 symlink/非普通文件、复验 inode，并以
+  打开 fd 收紧 0600 后才读取秘密。当前配置路径内结构合法的 v1、带合法 storage 的
+  非空 v2 与 SSH password v1 因缺少可信目标 binding 均 fail closed，唯一
+  `.unbound-*` 保留并要求显式重录；旁路旧 `gateway-tokens.json` 非空 v1 保留原文件并
+  禁用，不猜测绑定。
+- **密码登录会话** —— gateway `/auth/login`（GET 最小登录页 / POST 校验密码 →
+  `dsh_gateway_session` cookie → 302 `/`）；桌面 `gateway-session.ts` 管理器
+  （12h `dsh_gateway_session` cookie，仅主进程内存，按网络 origin + `Host` authority +
+  稳定 connection-id/target scope 键控；localPort 不参与 ownership）经
+  `configureGatewaySessionProvider` 六个 all-or-none hooks 接线：verifyUp 独立维护密码
+  会话、带 Cookie 探针（缓存会话快速路径，401 → invalidate + 有界重登）。scope
+  invalidation 覆盖全部历史 origin 并提升 generation；登录、Cookie probe、Bearer
+  fallback、401 relogin 每次 await 后都拦截迟到结果，不能继续联网或改 cache/backoff/
+  auth proof。当前 generation 的 `cookie|bearer` proof 为 ready 注册门：密码型目标缺
+  Cookie/proof 时 fail closed，只有已验证的 Bearer fallback 可有意 Bearer-only；token
+  与密码同时存在时探针、
+  ready 与 refresh 重注册同时携带 Bearer+Cookie，gateway 接受任一合法 principal，
+  不再由 token 遮蔽密码；都空→0 头（0..2 白名单由 instance-proxy 复验）；凭据
+  IPC（write-only，变更撤销缓存会话）。**预过期会话刷新
+  （`gateway-session-refresh.ts`，TTL−60s 定时重登+重注册）**——每个已注册
+  密码型目标在缓存会话过期前 ~60s 定时重登并以新 cookie 重注册 transport、
+  重 arm（armed on ready / disarmed on 离开 ready/移除/退出，每个动作提升按 id epoch；
+  await 后复验 password/token/URL/pin/authority/scope；隧道重连换端点 → 新 origin
+  重新登录）；刷新失败保持旧注册并在过期时刻重试，已过期仍失败如实
+  告警、残余窗口走有界重连（verifyUp 用存储密码重登），绝不静默。
+- **SPKI 证书固定（S23）** —— 可选 `spkiPin`（hex sha256 of SPKI DER）作为
+  https 直连信任锚：verifyGatewayEndpoint socket 层 'secureConnect' 校验，不匹配
+  terminal「证书固定不匹配（SPKI）——gateway 证书已更换或 pin 错误」；
+  instance-proxy registerTransport / forwardHttp / forwardUpgrade 带 pin 转发
+  （不匹配 → 显式 502 upstream_failed）。desktop 登录/探针与 control-plane HTTP/WS
+  反代都在 peer 匹配后才 `write/end`/发送 upgrade；匹配前不发送 header、凭据、密码
+  body 或任何应用层字节，mismatch 的上游 handler/upgrade 为零；http 模式拒绝 pin；真实 node:https
+  自签证书 fixture 测试（pin 匹配探针成功 / 不匹配 terminal / 无 pin 正常）。
+- **轻量非秘密审计（S24）** —— 桌面 `packages/desktop/audit-log.ts`（JSONL 追加
+  + fsync、0600（遗留松权限回紧）、5 MiB 轮转到 `<file>.1`、白名单序列化——
+  凭据字段即使误传也绝不落盘）记 phase 迁移（connecting/ready/error 含
+  requiresUserAction terminal）/ transport 注册注销（认证存在性 token+password|
+  token|password|none + insecureHttp，不记值）/ 凭据 set-clear（不记值）；gateway
+  `packages/gateway/src/audit.ts`（`<stateDir>/audit.log`，0700 stateDir 内）+
+  dispatch.ts login 事件分类（成功/invalid_credentials/rate_limited/busy，含
+  客户端来源，绝不含密码与 cookie）；双端单元测试。
+
+### 修复
+
+- **连接保存的主进程 crash-safe 事务** —— renderer 不再串联多个 write-only setter；
+  `desktop_ssh_save_connection` 在主进程快照 registry 与 SSH password/gateway token/
+  gateway password，任一步失败即补偿全部旧值，补偿失败则安全 scrub 并响亮返回。
+  gateway 凭据只绑定 kind+host+remotePort，SSH 密码单独绑定 host+user+sshPort，
+  binding 与 secret 同次落盘且每次注入复验 registry，因而 secret→registry 两次 fsync
+  间硬崩溃也不会把新值发给旧目标；新增/进入/离开/retarget 留空会清隐藏半事务值。
+  删除只走精确 `desktop_ssh_delete_connection(id)`：先断开/撤销 exact scope session/
+  清 secret 再删 metadata，不存在 id 为幂等 no-op；legacy `instances_set` 收窄为仅接受
+  当前规范化 roster 的 exact unchanged no-op，三个单项 setter 收窄为 clear-only。真实 gateway ssh↔http 切换不会被
+  SSH-only 字段误判为认证 retarget。
+- **连接重配置代际隔离与 systemd 参数边界** —— `serviceName`、`remoteDshHome` 编辑
+  同时提升 transport generation 与 `execEpoch`，撤销旧 live/retry/probe 和 exec child；
+  多步 exec 下一次 spawn 与迟到日志/投影/结果都复验 generation，旧连接非 idle 才按
+  新参数重启。systemd 固定使用 `systemctl <action> -- <serviceName>` 参数数组，服务名
+  采用 `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`，首字符必须为字母或数字。
+- **Gateway 恢复面与认证正交性** —— gateway transport 以认证后
+  `/chamber/runtime/status` 固定 identity 判定服务边界，不再被 managed dsh
+  `host.describe` 的 blocked/down 反向闸死；SSH tunnel 的 Host/session authority
+  固定远端 `127.0.0.1:<remotePort>`，SSH alias/DNS 不再触发 421 或缓存 key 漂移。
+  token+password 联合注入和 OR-principal 回退均有 direct/SSH/refresh 回归。
+- **SSH askpass 跨用户目录抢占** —— 移除可由其他 OS 用户预建的共享
+  `<tmp>/dsh-chamber-ssh` 写入路径；helper 改入 `mkdtemp` 每进程不可猜 0700 私有目录，
+  复验 uid/type/inode/mode，EPERM 或属主异常 fail closed；helper 以 O_EXCL 创建，完整
+  fsync 后才设为 0700 可执行。每个 tunnel/systemd/run child 独占 lease，真实
+  exit/error/spawn-fail 才删对应 helper；移除/clear 延迟清理仍在途 lease，不再用固定
+  代际上限提前删除并发子进程仍引用的路径。启动清理只处理本用户可信目录。
+- **实例反代能力边界** —— local/dsh/legacy 来源对规范化后的 `/chamber/*`（含编码、
+  点段、反斜杠变体）统一拒绝，仅 gateway 来源可访问；与 dsh HTTP 直连的无认证边界
+  一起防止目标 kind/transport 混淆扩大能力。
+- **Gateway 认证协议硬化** —— HTTP/WS 共用 request policy 基于 `rawHeaders` 在认证前
+  拒绝重复 Authorization；Bearer 在 hash/scrypt 前严格限制单值、32–4096 visible
+  ASCII。JWT `exp` 必须是未过期且不超过当前+12h 的 safe integer，缺失/非数字/
+  Infinity/小数/unsafe/越界全部拒绝。桌面 instance-proxy 同步复验 Bearer 下限，且
+  gateway+ssh 只接受必填远端 `127.0.0.1:<port>` authority（含端口范围门）。token
+  scrypt work gate 饱和产生 `auth_busy` 时仍验证独立 Cookie：有效密码会话继续成功，
+  Cookie 无效才保留 503，落实任一 principal 有效即成功。
+
+- **dsh HTTP 直连注册边界** —— canonical
+  `{kind:'dsh', transport:'http'}` 将显式 transport 维度贯穿到 instance-proxy
+  注册，允许用户配置的公网 `http(s)` origin；目标仍严格禁止鉴权头与
+  `/chamber/*` 能力。`{kind:'dsh', transport:'ssh'}` 与未提供 transport 的 legacy
+  注册继续强制 loopback，绝不把原 SSH/本地信任边界静默放宽。
+- **Gateway runtime JSON 请求体有界读取** —— `/chamber/runtime` 的 64 KiB
+  JSON reader 改为累计字节计数；一旦超限立即释放已保留 chunks，后续 `data`
+  事件 no-op，并保持先返回 413 再销毁请求。消除逐块 `reduce` 带来的 O(n²)
+  扫描及 poison chunk 后继续占用 CPU/内存的风险，补充恶意后续 chunk 回归。
+- **Gateway runtime 恢复与状态完整性** —— `restore-builtin` 不再直接删除选择元数据，
+  而是复用停机、快照、原子指针切换、全量探针及失败回滚/数据恢复事务，仅成功后清理
+  override/journal。registry 配置只有真实缺失时才回默认源，损坏/符号链接/硬链接会
+  隔离保留并响亮失败，写入原子化且安装期间禁止换源；离线版本列表保留全部有效缓存。
+  `/chamber/runtime/status` 以固定 identity 投影实际 env/override/current/builtin 来源、
+  failure/restore/pre-rollback、快照、进度与全分类磁盘统计；Desktop settings 与独立
+  `/chamber/` 管理页均提供完整动作和状态，managed dsh blocked/down 时恢复面仍可达。
+  builtin 上 staged selection 以持久 `selectedOnly` 区分合法空 pointer，活跃用户树丢
+  pointer 仍 fail closed；install writer single-flight 与 activation quarantine 分离，
+  下载期间现有 proxy/features 不下线，候选 ready 在探针裁决前不 attach；健康 env
+  override 不再误报 blocked。普通 pending 在 core/route/两套 UI 仅允许 restore-builtin。
+
+### 变更
+
+- **设计 17 重写（2026-09，连接模型 v2）** —— `docs/design/17-server-side-gateway.md`
+  全面重写：远程连接提升为一等设计面，四维正交模型（目标类型 dsh/gateway × 传输
+  ssh/http × 认证可空 token/密码 × 通道服务器侧槽位）；http 明文/无认证登记为用户
+  决策有界偏差（S21，客户端不前置校验，服务器为认证权威）；安全增强逐项评估决策
+  （S22 safeStorage 集成 / S23 SPKI 证书固定集成 / S24 轻量非秘密审计集成，mTLS
+  与每连接网段策略预留槽位）；原 design 01 编排规则不再作为本设计依据，本设计
+  自包含（17 §1）。
+- **连接模型 v2 迁移决策（17 §2.2/§9.1）** —— 来源 id 由 `ssh-<id>` 迁移为
+  `dsh-<id>` / `gateway-<id>`（`ssh-` 前缀保留 legacy 兼容映射，deep link 可用）；
+  旧 `kind:'ssh'` → `{kind:'dsh', transport:'ssh'}`、旧 `kind:'gateway'` →
+  `{transport:'http'}`；kind 决定目标语义（dsh 目标永不注入认证头/挂载
+  `/chamber/*`；gateway 目标可注入可空 token/密码）。外围文档同步：01 文档地图/
+  引用与移出项 S22/S24 有界例外注记、08/19 来源 id 枚举、11 版本包计数与 userData
+  保留清单、14 托盘「连接 N」口径与退出确认矛盾修复、16/20 legacy 标注。
+  **S22/S23/S24 与密码登录会话已在本版本落地**（见上方「新增」条目）；
+  剩余发布前实机门禁如实登记于 `docs/progress/STATUS.md` 设计 17 条目。
+- **发布通道与 Gateway 分发收口** —— stable 桌面构建使用 package 配置且只生成
+  `latest.yml` / `latest-mac.yml`；beta 使用独立
+  `packages/desktop/electron-builder.beta.yml` 且只生成 `beta.yml` /
+  `beta-mac.yml`，两条 feed 互不覆盖并有反向缺失断言。发布门仅接受 canonical
+  stable `X.Y.Z` 或 beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他 prerelease fail closed；
+  只有精确 `-beta.N` 应用按自身版本自动进入 beta。每次检查从有界 Releases API 仅选最高的规范 published
+  `vX.Y.Z-beta.N`，再切精确 tag Generic feed，发现失败即停止而不触发 stable
+  `latest*` fallback。正式 macOS 发布在任何
+  Release mutation 前检查五项签名/公证凭据，并在公开 finalize 前强制通过
+  Developer ID、stapler 与 Gatekeeper；只有 `dry_run` 允许 ad-hoc mac 构建。它即使
+  面对已配置的正式 secrets 也无条件清空签名/公证环境与 `GH_TOKEN`，不创建/修改
+  Release、不上传产物。Gateway 仅在 GitHub Release 发布经
+  clean-prefix 安装冒烟的 `.tgz` 与同名 `.tgz.sha256`；npm publish/dist-tag 延后。
+
+## [0.2.0-beta.2] - 2026-08-27
+
+### 新增
+
+- **Gateway 运行时版本管理服务化（设计 18 M5–M7）** —— `/chamber/runtime` 认证管理表面
+  （status / versions / select / apply / rollback / restore-builtin / retry-apply /
+  retry-restore / restart / registry，not-ready 门禁豁免）：启动事务（清理 → 快照 →
+  原子指针切换 → spawn 候选 → 全量激活探针）与两阶段回滚/恢复闭环；runtime-manager
+  （env → override → 内建锚解析链、intent journal、owner 抢占 fail-loud、并发互斥 409、
+  阻止但存活 / FATAL 状态投影）；restart 端点白名单（ready / degraded）+ 失败诚实
+  （resolve ≠ 成功：stopped / restart-exhausted 永不报 ok）。
+- **dsh 运行时核心抽取为共享纯 Node 包 `packages/dsh-runtime`** —— desktop 主进程与
+  gateway 服务器两个 owner 经真实 DI 接缝（StartupDeps / ApplyDeps / InstallerDeps /
+  ControllerDeps；`RuntimeHostAdapter` 仅为文档草图）适配；运行时状态与版本树
+  互不共享。
+- **settings 的 `dsh-runtime` 分节（design 18 §3.6）** —— local = 完整运行时管理、
+  gateway = 代理 `/chamber/runtime`、ssh = 版本只读；每个来源都有「重启 dsh」动作
+  （control-plane `restartLocal()` / `/chamber/runtime/restart` / `restart_service`
+  systemd IPC），无需重启 Electron 壳即刷新插件挂载。
+- **安装脚本受控锚** —— install-gateway.sh 将 dsh 内建锚安装到 gateway 受控目录
+  （`${BASE_DIR}/gateway/dsh-anchor`，`npm install --prefix` workspace 形态），不再
+  使用 npm 全局安装；运行期版本仍由 gateway 嵌入式 pnpm 经 `/chamber/runtime/select`
+  安装到 `<stateDir>/dsh-runtime/`。
+- **Gateway 打包随附 chamber host 包** —— 构建将 `dsh-host-client-graph` /
+  `dsh-chamber-host-git-worktree`（package.json + committed dist）复制进 gateway 包并
+  经 `hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` 注入控制面 seed；
+  托管 dsh 具备 chamber RPC，全量激活探针集可在服务器端通过（实机切换验证）。
+
+### 修复
+
+- **install-gateway.sh npm 全局锚路径语义** —— `verify_dsh` 期望 workspace 形态
+  （`<ws>/node_modules/@deepseek-ai/dsh`），全局分支与安装后传入的是 `npm root -g`
+  （本身即 node_modules 目录）导致安装后验证必失败、且锚位置错误；统一转换
+  `dirname(npmRoot)`（实机测试发现）。
+- **响应腿断连检测（main 6791f84 并入）** —— 请求体消费后 `IncomingMessage 'close'`
+  立即触发（无体 GET 更甚），按请求腿检测会误杀所有 GET/WS 转发与 SSE；改在响应腿
+  （`res 'close'` + `writableEnded` 守卫、WS 原始 socket、SSE 同理）。
+- **M3b 压缩头** —— 上游请求剥离 `accept-encoding`（代理永不协商压缩）；响应
+  `content-encoding` 白名单放行，浏览器正确解码。
+- **插件操作主进程确认（design 09 §4）** —— 本地/远端插件安装与移除、materialize
+  传输需主进程确认对话框；取消永不报告成功（`{ok:true, cancelled:true}`）。
+- **H2 生成中止健康探针 / killFailedSpawn 主机日志写入 / reaper 命令身份 /
+  fsync 原子写**（审计轮并入）。
+- **spawn pid 记录失败 fail-closed** —— 发布失败即回收子进程并抛
+  `dsh_spawn_non_retryable`（绝不换端口重试；与 main 侧可重试语义合并时定夺保留）。
+- **侧边栏 create/fork 收敛（无未分组闪现）**、**open-in 下拉图标 + 短应用名**。
+- **发布门禁修复（2026-09 beta.2 事故）** —— preload.cts 恢复
+  `ChamberInjectionState` 本地声明（L3 lockstep 守卫回归）；workflow action SHA
+  校验门禁（`release-preflight --actions-only`）+ 脚本路径修正；**共享核心 F4
+  修复**：`writeActivationIntent`/journal 回读接受 `builtin-anchor` 哨兵（否则带
+  override 的机器升级 shell 启动即崩溃）；测试硬编码版本号解耦。
+
+
+## [0.2.0-beta.1] - 2026-08-25
+
+### 新增
+
+- **认证服务端 Gateway（设计 17）** —— 新增可独立发布的
+  `@dsh-chamber/gateway`：托管 loopback dsh，经统一 HTTP/WS Host/Origin、强认证与
+  有界反代暴露官方前端/API；Desktop 新增 `gateway` transport、write-only token 和按
+  server 编排设置；Gateway 自带浏览器编排页、派生会话索引、审批/提问、schedule 与
+  受 workspace 权威约束的 Git worktree saga。CI/release 已覆盖 build、typecheck、测试
+  与 tgz 打包安装冒烟（npm 发布暂缓，2026-08）。
+- **dsh 运行时版本管理（设计 18）** —— 运行期安装/切换 dsh 运行时：registry origin
+  绑定 + SRI 校验 + 内嵌 pnpm `file:` 安装，探针门控切换与两阶段回滚/恢复闭环
+  （M0/M2/M4 done，M1/M3 partial：打包态实机验收待真实 `.app`）；数据安全缺口修复
+  ——journal-mismatch 归入 `selection-corrupt`、pre-rollback stash 恢复、
+  `incomplete` 恢复放行 `recover-metadata`。
+- **open-in 打开注册表（设计 20）** —— 原 VS Code 深链（设计 16）演进为统一打开面：
+  Finder/本地/远程 VS Code 经主进程 OpenInApp provider 注册表 + 六步 loud 执行管线打开；
+  插件包重命名为 `dsh-chamber-client-ui-open-in`，旧 vscode IPC 收敛删除。
+- **桌面通知（设计 19）** —— 会话完成/代理提问/审批请求推送原生通知（设置可选项）；
+  检测 = renderer 复用运行时事实通道边沿检测，呈现 = 主进程 Electron Notification +
+  点击打开会话；设置并入通用页「通知」控制组。
+- **侧边栏增强（design 06 §2.4/§3.1）** —— 来源级收拢（来源头折叠开关，收拢整来源
+  workspace 列表）+ server 拖拽排序（显示偏好，持久化于 `dsh-chamber.sidebar.v1`，
+  跨 ctx 实时联动）+ workspace 图标按身份着色（色相按 `(serverId, 家族种子)` 哈希派生
+  稳定 accent，worktree 与主检出共享家族色）。
+- **Electron 二进制惰性安装** —— 根 postinstall 默认不再下载 Electron 二进制（约 100MB）；
+  仅 `DSH_CHAMBER_ELECTRON=1`（或 `electron-dev` 首启自动补装）时下载；server 部署
+  （gateway/control-plane/CLI）安装不再携带桌面依赖。
 
 ### 修复
 
@@ -207,6 +424,39 @@
   `preload.cjs`（消除 3 个死文件进 asar）；`build.files` 排除 `dist/.vite/**`。
 - **死依赖清理** —— 移除控制面 `@simplewebauthn/server`（v1 认证面移除后的
   残留），锁文件与第三方声明同步。
+- **Gateway ESM bundle require shim** —— ws 静态 `require('events')` 在纯 ESM 产物中触发
+  "Dynamic require not supported"，派生会话索引/审批流无限重连、`/chamber/sessions` 恒空
+  （Linux + macOS 实机发现）；build.mjs banner 注入 `createRequire` 修复，构建冒烟测试锁定。
+- **schedule 的 `session.prompt` wire 形状** —— 旧 `{sessionId, prompt}` 载荷被 dsh
+  0.1.1-rc.2 拒绝（实机反推 schema：判别字段 `mode`）；改为
+  `{sessionId, mode:'queue', content:[{type:'text',text}]}` 并锁回归测试。
+- **审查加固轮（2026-08 全量审查）** —— schedule 业务拒绝终止 job（不再无限退避）；
+  git 脏工作树删除回退 ready + error 字段（可重试）；`removedSessionIds` 上限；请求体超限
+  销毁流；WS upgrade `auth_busy` → 503；JWT alg 显式校验；schedule 作业数/长度上限；
+  gateway 来源的 open-in 按钮 fail-closed（不再渲染死控件）；open-in/layout 客户端包补
+  测试（29 例）；askpass 代际退役语义（disconnect 保留在途 helper，移除才最终删除）；
+  exec epoch 防迟到投影污染；settings 文件校验纳入 notifications 子块；EPERM 降级等。
+
+### 安全
+
+- Gateway 拒绝 absolute/protocol-relative/backslash authority、伪造 forwarded identity、
+  弱凭据和匿名外部部署（匿名外部默认拒绝；`--no-auth` 是显式、带醒目告警的可信网络运维覆盖）；密码改变跨重启撤销旧 cookie，token 更新会关闭已建立流。凭据值仅作为
+  连接表单瞬时 write-only 输入；除此之外不由主进程返回/回填、不由 renderer 持久化，
+  也不进入日志、managed dsh 或 Git 环境。共享 proxy 采用真正的全进程 300 MiB 请求体预算
+  （未知/chunked 单请求 32 MiB）、backpressure 生命周期与 forwarding-header 清洗；登录 body、
+  dsh event 原始帧/队列和派生索引均有过滤前硬上限，Gateway state 全部 owner-only。
+- Git 补偿改为“歧义即保留并记录 recovery”：只允许 live workspace 派生的 canonical
+  主 checkout；Git 子进程清空继承的 `GIT_*`，create/delete 紧邻 mutation 二次验证 live
+  权威；unverified 记录不可删除，运行中/符号链接 cwd fail-closed，删除不 force、不删分支，
+  不允许 deleting 恢复记录删除被新 workspaceId 重占或在 workspace 消失后残存的路径；审批/提问只有 dsh
+  receipt 明确 accepted 才从 pending 移除。Feature flags 默认关闭并在服务端执行；scheduler
+  具备 timer 上限、single-flight、失败退避和取消/重连代际保护。
+- Release workflow 绑定 tag/checkout SHA，拒绝不可信版本 shell 注入、删除已发布 release、dry-run
+  写入与 npm channel 回退（npm 发布暂缓期间该步骤已注释，恢复时启用）；稳定版/预发布分别使用
+  `latest`/`beta`，正式构建不固定第三方 Electron mirror。已有 Gateway secret 读取前拒绝
+  symlink/非普通文件并收敛至 0600。
+- notify answer/approval 的 client-response 信封形状实机验证（未知 rpcId → `not-pending`
+  回执，失败形态显式 409 + pending 保留）。
 
 ### 变更
 

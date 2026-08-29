@@ -5,18 +5,21 @@ export interface OpenInApp {
   id: string
   /** Stable presentation family. Unknown families use a neutral app treatment. */
   displayKind: string
-  /** True when the app can open a REMOTE (ssh-<id>) source's workspace. */
+  /** True when the app can open a remote source reached over SSH. Target
+   * kind (`dsh` / `gateway`) is orthogonal to that transport capability. */
   remoteCapable: boolean
   /** True when the app is installed/available right now. */
   available: boolean
 }
 
 export interface OpenInSource {
-  /** Chamber view id (`local` | `ssh-<registry id>`). */
+  /** Chamber view id (`local` | `dsh-<id>` | `gateway-<id>` | legacy `ssh-<id>`). */
   sourceId: string
   /** Main-process instance id (`local` | raw registry id). */
   instanceId: string
   local: boolean
+  /** Exact per-entry transport; HTTP sources cannot use vscode-remote. */
+  transport: 'local' | 'ssh' | 'http'
 }
 
 export type OpenInResult = { ok: true } | { ok: false; error: string }
@@ -118,14 +121,22 @@ export function parseOpenInResult(value: unknown): OpenInResult | null {
   return null
 }
 
-/** Strict chamber view-id parser. In particular, `ssh-local` must not become
- * the privileged local instance after the renderer strips the view prefix. */
-export function parseOpenInSource(value: unknown): OpenInSource | null {
-  if (value === 'local') return { sourceId: 'local', instanceId: 'local', local: true }
-  if (typeof value !== 'string' || !value.startsWith('ssh-')) return null
-  const instanceId = value.slice(4)
+/** Strict chamber view-id + transport parser. Canonical dsh/gateway targets
+ * may each use ssh or http; the legacy `ssh-` source spelling is input-only.
+ * In particular, `ssh-local` must not become the privileged local instance
+ * after the renderer strips the view prefix. */
+export function parseOpenInSource(value: unknown, transport: unknown): OpenInSource | null {
+  if (value === 'local') {
+    return transport === 'local'
+      ? { sourceId: 'local', instanceId: 'local', local: true, transport: 'local' }
+      : null
+  }
+  if (typeof value !== 'string' || (transport !== 'ssh' && transport !== 'http')) return null
+  const prefix = ['dsh-', 'gateway-', 'ssh-'].find(candidate => value.startsWith(candidate))
+  if (prefix === undefined) return null
+  const instanceId = value.slice(prefix.length)
   if (!INSTANCE_ID.test(instanceId)) return null
-  return { sourceId: value, instanceId, local: false }
+  return { sourceId: value, instanceId, local: false, transport }
 }
 
 /** Validate the immutable boot-bound source proof before a header button is
@@ -152,5 +163,5 @@ export function buildOpenInLaunchRequest(
 /** Source-aware capability filter kept pure for deterministic client tests. */
 export function usableOpenInApps(apps: readonly OpenInApp[] | null, source: OpenInSource): OpenInApp[] {
   if (apps === null) return []
-  return apps.filter(app => app.available && (source.local || app.remoteCapable))
+  return apps.filter(app => app.available && (source.local || (source.transport === 'ssh' && app.remoteCapable)))
 }

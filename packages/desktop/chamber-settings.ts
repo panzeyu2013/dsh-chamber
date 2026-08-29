@@ -11,7 +11,7 @@
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
@@ -41,6 +41,10 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2, 2026-08 修订): confirm before quitting
    *  while the LOCAL dsh instance is running; remote tunnels never prompt. */
   quitConfirmation: boolean
+  /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
+   *  user-selected mirror/custom origin, validated as an https:// URL with
+   *  no userinfo (trust anchor — switching origin switches the trust anchor). */
+  registryOrigin: string
   /** Desktop notifications (design 19): 主进程裁决权威，渲染端只负责检测与组装。 */
   notifications: ChamberNotificationSettings
 }
@@ -62,6 +66,7 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
   launchAtLogin: false,
   keepAwake: false,
   quitConfirmation: true,
+  registryOrigin: 'https://registry.npmjs.org',
   notifications: {
     enabled: false,
     mode: 'hidden-only',
@@ -76,8 +81,28 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'launchAtLogin',
   'keepAwake',
   'quitConfirmation',
+  'registryOrigin',
   'notifications',
 ];
+
+/** Normalize a registry origin (design 18 M4): a valid https:// URL with no
+ *  userinfo, reduced to scheme://host (no path/query/hash, no trailing slash).
+ *  Returns null for anything else — the registry origin is a trust anchor, so
+ *  invalid input is never silently accepted. */
+function normalizeRegistryOrigin(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '') return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  if (url.username !== '' || url.password !== '') return null;
+  if (url.pathname !== '' && url.pathname !== '/') return null;
+  if (url.search !== '' || url.hash !== '') return null;
+  return url.origin;
+}
 
 const NOTIFICATION_SETTINGS_KEYS: ReadonlyArray<keyof ChamberNotificationSettings> = [
   'enabled',
@@ -112,6 +137,8 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   if (typeof record.launchAtLogin === 'boolean') base.launchAtLogin = record.launchAtLogin;
   if (typeof record.keepAwake === 'boolean') base.keepAwake = record.keepAwake;
   if (typeof record.quitConfirmation === 'boolean') base.quitConfirmation = record.quitConfirmation;
+  const origin = normalizeRegistryOrigin(record.registryOrigin);
+  if (origin !== null) base.registryOrigin = origin;
   if (record.notifications !== undefined) {
     base.notifications = normalizeNotificationSettings(record.notifications);
   }
@@ -119,9 +146,39 @@ export function normalizeSettings(input: unknown): ChamberSettings {
 }
 
 /** Whether the persisted file's key set is well-formed (unknown keys are a
- *  forward-compat concern, not corruption — tolerate them). */
+ *  forward-compat concern, not corruption — tolerate them). The nested
+ *  `notifications` sub-block is part of the file's SHAPE (review 2026-08):
+ *  a scalar/array/wrongly-typed sub-block is corruption, never a silent
+ *  fall-back to defaults — the same corrupt-preserve discipline as
+ *  registryOrigin (a wrongly-shaped trust-relevant value must not be
+ *  silently reinterpreted). */
 function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
-  return input !== null && typeof input === 'object' && !Array.isArray(input);
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return false;
+  const record = input as Record<string, unknown>;
+  if (record.windowCloseBehavior !== undefined
+    && record.windowCloseBehavior !== 'hide-to-tray'
+    && record.windowCloseBehavior !== 'quit') return false;
+  for (const key of ['launchAtLogin', 'keepAwake', 'quitConfirmation'] as const) {
+    if (record[key] !== undefined && typeof record[key] !== 'boolean') return false;
+  }
+  // Once persisted, an invalid registry trust anchor is corruption, not a
+  // request to silently switch back to the public default registry.
+  if (record.registryOrigin !== undefined && normalizeRegistryOrigin(record.registryOrigin) === null) return false;
+  // Nested notifications shape: must be an object with correctly-typed known
+  // fields (unknown nested keys stay a forward-compat tolerance, like the
+  // top level); an invalid `mode` is corruption — silently flipping a
+  // user's 'always' back to 'hidden-only' would change notification
+  // behavior without their consent.
+  if (record.notifications !== undefined) {
+    const notifications = record.notifications;
+    if (notifications === null || typeof notifications !== 'object' || Array.isArray(notifications)) return false;
+    const nested = notifications as Record<string, unknown>;
+    if (nested.mode !== undefined && nested.mode !== 'hidden-only' && nested.mode !== 'always') return false;
+    for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest'] as const) {
+      if (nested[key] !== undefined && typeof nested[key] !== 'boolean') return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -153,14 +210,20 @@ export function readSettingsFile(filePath: string): { settings: ChamberSettings;
 }
 
 /** Atomic write (tmp + fsync + rename), 0600 — mirrors the ssh-passwords
- *  store pattern (open/write/fsync/close; 2026 review added the fsync and
- *  the explicit chmod so a crash never leaves a partial or wider-permission
- *  settings file). */
+ *  store pattern (open/fchmod/write/fsync/close; the fchmod forces owner-only
+ *  permissions on a pre-existing wider tmp file — hard-crash residue — before
+ *  any bytes are written since the registry origin is a trust anchor, and
+ *  the fsync plus the explicit post-close chmod ensure a crash never leaves
+ *  a partial or wider-permission settings file). */
 export function writeSettingsFile(filePath: string, settings: ChamberSettings): void {
   const tmpPath = `${filePath}.tmp`;
   mkdirSync(dirname(filePath), { recursive: true });
   const fd = openSync(tmpPath, 'w', 0o600);
   try {
+    // open(..., mode) only applies the mode on creation; a pre-existing
+    // tmp file (hard-crash residue) may be wider, so force owner-only
+    // permissions before writing (the registry origin is a trust anchor).
+    fchmodSync(fd, 0o600);
     writeSync(fd, `${JSON.stringify(settings, null, 2)}\n`);
     fsyncSync(fd);
   } finally {
@@ -233,11 +296,15 @@ export function computeQuitRisk(input: {
   return { needsConfirm: reasons.length > 0, reasons };
 }
 
-/** Validate a renderer-supplied settings patch: known keys + types only. The
- *  notifications sub-object accepts a partial set of its known keys (unknown
- *  nested keys rejected); applySettingsPatch deep-merges it over the current
- *  value so a partial nested patch never drops the untouched switches. */
-export function validatePatch(patch: unknown): { ok: true; patch: Partial<ChamberSettings> } | { ok: false; error: string } {
+/** Validate a renderer-supplied settings patch: known keys + types only.
+ * Failures carry a stable machine-readable `code` for the renderer's known
+ * branches (e.g. 'invalid-registry-origin'); `error` is display text only.
+ * The notifications sub-object accepts a partial set of its known keys
+ * (unknown nested keys rejected); applySettingsPatch deep-merges it over the
+ * current value so a partial nested patch never drops the untouched switches. */
+export function validatePatch(
+  patch: unknown,
+): { ok: true; patch: Partial<ChamberSettings> } | { ok: false; error: string; code?: string } {
   if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
     return { ok: false, error: 'settings patch must be an object' };
   }
@@ -252,6 +319,12 @@ export function validatePatch(patch: unknown): { ok: true; patch: Partial<Chambe
         return { ok: false, error: 'windowCloseBehavior must be "hide-to-tray" or "quit"' };
       }
       result.windowCloseBehavior = record[key] as WindowCloseBehavior;
+    } else if (key === 'registryOrigin') {
+      const origin = normalizeRegistryOrigin(record[key]);
+      if (origin === null) {
+        return { ok: false, error: 'registryOrigin must be a valid https:// URL without credentials', code: 'invalid-registry-origin' };
+      }
+      result.registryOrigin = origin;
     } else if (key === 'notifications') {
       const validated = validateNotificationSettingsPatch(record[key]);
       if (!validated.ok) return validated;

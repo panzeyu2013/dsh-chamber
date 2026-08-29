@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -28,12 +28,14 @@ test('normalizeSettings: defaults for null / non-object', () => {
 });
 
 test('normalizeSettings: accepts valid fields, rejects bad values, ignores unknown keys', () => {
-  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, futureKey: 42 });
-  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, notifications: DEFAULT_CHAMBER_SETTINGS.notifications });
+  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, registryOrigin: 'https://registry.npmmirror.com', futureKey: 42 });
+  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, registryOrigin: 'https://registry.npmmirror.com', notifications: DEFAULT_CHAMBER_SETTINGS.notifications });
   // Bad enum / non-boolean values fall back to defaults silently (normalize is
   // the persistence read path; loud validation lives in validatePatch).
   const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1, quitConfirmation: 'yes' });
   assert.deepEqual(bad, DEFAULT_CHAMBER_SETTINGS);
+  assert.equal(normalizeSettings({ registryOrigin: 'https://registry.example/private' }).registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
+  assert.equal(normalizeSettings({ registryOrigin: 'https://registry.example/?token=x' }).registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
 });
 
 test('normalizeSettings: nested notifications — missing/invalid fields fall back to defaults', () => {
@@ -61,6 +63,7 @@ test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
     launchAtLogin: true,
     keepAwake: true,
     quitConfirmation: false,
+    registryOrigin: 'https://registry.npmjs.org',
     notifications: { enabled: true, mode: 'always' as const, onComplete: false, onAsk: true, onRequest: false },
   };
   writeSettingsFile(file, settings);
@@ -98,6 +101,62 @@ test('readSettingsFile: non-object JSON is corrupt', () => {
   const read = readSettingsFile(file);
   assert.ok(read.notice !== null);
   assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS);
+});
+
+test('readSettingsFile: invalid persisted registry trust anchor is preserved as corrupt', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-invalid-registry-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeFileSync(file, JSON.stringify({ registryOrigin: 'http://private.example/path' }));
+    const read = readSettingsFile(file);
+    assert.equal(read.settings.registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
+    assert.match(read.notice ?? '', /corrupt/);
+    assert.equal(existsSync(file), false);
+    assert.equal(existsSync(`${file}.corrupt`), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSettingsFile: malformed nested notifications block is preserved as corrupt (review 2026-08)', () => {
+  // The notifications sub-block is part of the file's SHAPE: a scalar, an
+  // array, or a wrongly-typed field must never be silently re-normalized to
+  // defaults (corrupt-preserve discipline, same as registryOrigin).
+  const malformed: unknown[] = [
+    { notifications: 'enabled' },
+    { notifications: ['enabled', true] },
+    { notifications: { enabled: true, mode: 'sometimes' } },
+    { notifications: { enabled: 'yes', mode: 'always' } },
+    { notifications: { enabled: true, mode: 'always', onComplete: 1 } },
+  ];
+  for (const [index, payload] of malformed.entries()) {
+    const dir = mkdtempSync(path.join(tmpdir(), `chamber-settings-bad-notifications-${index}-`));
+    const file = path.join(dir, 'chamber-settings.json');
+    try {
+      writeFileSync(file, JSON.stringify(payload));
+      const read = readSettingsFile(file);
+      assert.match(read.notice ?? '', /corrupt/, `notifications payload #${index} must be corrupt`);
+      assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS, `notifications payload #${index} falls back to defaults`);
+      assert.equal(existsSync(file), false, `notifications payload #${index} file moved away`);
+      assert.equal(existsSync(`${file}.corrupt`), true, `notifications payload #${index} preserved`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  // A well-formed notifications block stays valid (and unknown nested keys
+  // remain a forward-compat tolerance, like the top level).
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-good-notifications-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeFileSync(file, JSON.stringify({
+      notifications: { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false, futureKey: 'x' },
+    }));
+    const read = readSettingsFile(file);
+    assert.equal(read.notice, null, 'well-formed notifications block reads clean');
+    assert.deepEqual(read.settings.notifications, { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('computeSupported: launchAtLogin off on win32; closeToTray follows tray availability, always on darwin', () => {

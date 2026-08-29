@@ -31,11 +31,16 @@ export interface ChamberServerWorkspace {
 }
 
 export interface ChamberServerAggregate {
-  /** 'local' | 'ssh-<id>' */
+  /** 'local' | '<target-kind>-<id>' (`ssh-<id>` remains a legacy dsh id). */
   id: string
   /** Opaque authoritative lifecycle proof for this exact source incarnation. */
   sourceFingerprint: string
-  kind: 'local' | 'ssh'
+  /** Target semantics, independent from the transport mechanism (design 17 §2). */
+  kind: 'local' | 'dsh' | 'gateway'
+  /** How this target is reached. Local has no remote transport. */
+  transport: 'local' | 'ssh' | 'http'
+  /** Registry identity used by desktop IPC. Never derive it by slicing a source-id prefix. */
+  rawId?: string
   label: string
   /** Local: dsh ready; remote: tunnel phase ready. */
   connected: boolean
@@ -51,6 +56,8 @@ export interface ChamberServerAggregate {
   aggregateError?: string
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
+  /** Live host.describe version from this instance's own connection generation. */
+  dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
   updatedAt: number
@@ -105,6 +112,12 @@ export interface InstanceRuntimeReport {
   }>
 }
 
+/** Generation-scoped, read-only host facts from one mounted instance ctx. */
+export interface InstanceHostReport {
+  /** Exact non-empty host.describe.version; absent means honestly unknown. */
+  dshVersion?: string
+}
+
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
 type RefreshListener = (sourceId: string) => void
@@ -120,6 +133,11 @@ type SnapshotReportListener = (
   sourceFingerprint: string | undefined,
 ) => void
 type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void
+type HostReportListener = (
+  sourceId: string,
+  report: InstanceHostReport | undefined,
+  sourceFingerprint: string | undefined,
+) => void
 
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
@@ -128,6 +146,7 @@ const activateSourceListeners = new Set<SourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
+const hostReportListeners = new Set<HostReportListener>()
 let servers: ChamberServerAggregate[] = []
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
 const runtimeProducerTokens: Record<string, number> = {}
@@ -136,8 +155,12 @@ const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
 const snapshotProducerFingerprints: Record<string, string> = {}
 const pluginDiagnostics: Record<string, PluginGraphDiagnostic> = {}
+const hostReports: Record<string, InstanceHostReport> = {}
+const hostProducerTokens: Record<string, number> = {}
+const hostProducerFingerprints: Record<string, string> = {}
 let nextRuntimeProducerToken = 0
 let nextSnapshotProducerToken = 0
+let nextHostProducerToken = 0
 
 export const chamberBridge = {
   /** Latest published projection (non-authoritative; renderer-owned store). */
@@ -209,14 +232,19 @@ export const chamberBridge = {
   retireInstanceProducers(sourceId: string): void {
     const runtimeFingerprint = runtimeProducerFingerprints[sourceId]
     const snapshotFingerprint = snapshotProducerFingerprints[sourceId]
+    const hostFingerprint = hostProducerFingerprints[sourceId]
     delete runtimeProducerTokens[sourceId]
     delete snapshotProducerTokens[sourceId]
+    delete hostProducerTokens[sourceId]
     delete runtimeProducerFingerprints[sourceId]
     delete snapshotProducerFingerprints[sourceId]
+    delete hostProducerFingerprints[sourceId]
     delete runtimeReports[sourceId]
     delete instanceSnapshots[sourceId]
+    delete hostReports[sourceId]
     for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, runtimeFingerprint)
     for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, snapshotFingerprint)
+    for (const listener of [...hostReportListeners]) listener(sourceId, undefined, hostFingerprint)
   },
 
   /**
@@ -258,6 +286,58 @@ export const chamberBridge = {
     runtimeReportListeners.add(listener)
     return () => {
       runtimeReportListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Register the live host-description producer owned by one mounted ctx.
+   * The token prevents a late teardown from an old shell clearing a newer
+   * generation's version fact for the same source.
+   */
+  registerInstanceHostProducer(sourceId: string, sourceFingerprint: string): {
+    report: (report: InstanceHostReport | undefined) => void
+    clear: () => void
+  } {
+    const token = ++nextHostProducerToken
+    const previousFingerprint = hostProducerFingerprints[sourceId]
+    hostProducerTokens[sourceId] = token
+    hostProducerFingerprints[sourceId] = sourceFingerprint
+    if (hostReports[sourceId] !== undefined) {
+      delete hostReports[sourceId]
+      for (const listener of [...hostReportListeners]) listener(sourceId, undefined, previousFingerprint)
+    }
+    return {
+      report(report): void {
+        if (hostProducerTokens[sourceId] !== token) return
+        if (report === undefined) {
+          if (hostReports[sourceId] === undefined) return
+          delete hostReports[sourceId]
+        } else {
+          const previous = hostReports[sourceId]
+          if (previous?.dshVersion === report.dshVersion) return
+          hostReports[sourceId] = report
+        }
+        for (const listener of [...hostReportListeners]) listener(sourceId, report, sourceFingerprint)
+      },
+      clear(): void {
+        if (hostProducerTokens[sourceId] !== token) return
+        delete hostProducerTokens[sourceId]
+        delete hostProducerFingerprints[sourceId]
+        if (hostReports[sourceId] === undefined) return
+        delete hostReports[sourceId]
+        for (const listener of [...hostReportListeners]) listener(sourceId, undefined, sourceFingerprint)
+      },
+    }
+  },
+
+  /** App-layer subscription to generation-scoped host facts. */
+  onInstanceHost(listener: HostReportListener): () => void {
+    hostReportListeners.add(listener)
+    for (const [sourceId, report] of Object.entries(hostReports)) {
+      listener(sourceId, report, hostProducerFingerprints[sourceId])
+    }
+    return () => {
+      hostReportListeners.delete(listener)
     }
   },
 

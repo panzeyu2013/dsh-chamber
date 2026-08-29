@@ -1,0 +1,6 @@
+extends: ./electron-builder.base.cjs
+publish:
+  - provider: github
+    owner: panzeyu2013
+    repo: dsh-chamber
+    channel: beta

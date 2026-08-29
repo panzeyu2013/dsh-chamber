@@ -17,6 +17,9 @@
  * - 更新 (design 11, merged into General): current version +「检查更新」+
  *   low-key status (UpdateSection).
  *
+ * （design 18 §3.6：dsh 运行时块已自本视图迁出——per-server「dsh 运行时」
+ *  settings.section，见 runtime-section-plugin.ts。）
+ *
  * Every mutation goes through the main-process settings IPC (settings-store);
  * failures surface LOUDLY (never a silent fake success). The closeToTray gate
  * (dev without tray) disables the hide-to-tray option — hiding a window the
@@ -101,7 +104,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   }, [])
 
   /** 「发送测试通知」— bypasses the settings gates in the main process (design
-      17 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
+      19 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
       never a silent fake success. */
   const sendTestNotification = useCallback(() => {
     const surface = testNotifySurface()
@@ -132,6 +135,10 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // Notifications block (design 19 §3.4): design defaults while absent — never
   // a fake off (unknown/future keys filtered in notificationsOf).
   const notifications = notificationsOf(settings)
+
+  // The dsh runtime block moved to the per-server「dsh 运行时」settings.section
+  // (design 18 §3.6, 2026-09 修订): GeneralView keeps only the design-15
+  // control groups (startup/shutdown / runtime / update).
 
   return (
     <div className={css.generalSection}>

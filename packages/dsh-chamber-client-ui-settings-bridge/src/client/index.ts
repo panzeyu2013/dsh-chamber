@@ -21,6 +21,7 @@ import { en, zh, type SettingsBridgeKey } from '../locales.ts'
 
 export type { SettingsShellInjected, SettingsShellProps } from './SettingsShell.tsx'
 export type { SettingsBridgeKey } from '../locales.ts'
+export type { DshRuntimeSectionProps, DshRuntimeSource } from './DshRuntimeSection.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -65,4 +66,8 @@ export function apply(ctx: ClientContext): void {
     label: () => t('trigger'),
     inject: injected,
   }, SettingsShell))
+  // The per-server「dsh 运行时」settings.section is NOT registered here: the
+  // shell renders the SELECTED server's child-cordis-context ledger, so the
+  // section registers per session via createRuntimeSectionPlugin(instanceId)
+  // in bridge-context.ts (design 18 §3.6 修订 + design 05 §5).
 }

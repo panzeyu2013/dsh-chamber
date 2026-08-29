@@ -36,6 +36,12 @@ import * as BridgeRows from './bridge-rows/index.ts'
  * per-instance bridge client) and `isLoopback` (true, so settings scopes and
  * welcome onboarding persist to the TARGET host, never memory mode).
  */
+import { createRuntimeSectionPlugin } from './runtime-section-plugin.ts'
+import {
+  runtimeServerProjectionKey,
+  type RuntimeServerProjection,
+} from './runtime-source.ts'
+
 export interface FakeConnectionHandle {
   api: BridgeApiClient
   isLoopback: boolean
@@ -73,10 +79,12 @@ function buildRemoteStub(api: BridgeApiClient) {
 
 /** The rendered side of one bridged instance: the live child context and its service faces. */
 export interface BridgeSession {
-  /** The instance this session was assembled for ('local' or 'ssh-<id>'). */
+  /** The instance this session was assembled for ('local' or '<kind>-<id>'). */
   instanceId: string
   /** Opaque authoritative lifecycle proof captured when this session was assembled. */
   sourceFingerprint: string
+  /** Target/transport/version facts captured by the runtime section plugin. */
+  runtimeProjectionKey: string
   /** The independent child context (the rendering React tree must not call ctx methods outside the plugin fibers). */
   ctx: Context
   /** The child slot registry instance (read faces only: entries/entriesOfSlot/getVersion/subscribe/spec). */
@@ -186,10 +194,10 @@ async function waitForActive(fibers: readonly { state: number; await(): Promise<
  * inject service is satisfied (all services here provide synchronously, so
  * waiting for ACTIVE yields the fully-registered ledger); the bridge UI then
  * renders through `slots` version ticks.
- * @param instanceId - 'local' or 'ssh-<id>' (the /api/i/<id> prefix key).
- * @param sourceFingerprint - authoritative proof for this exact source incarnation.
+ * @param server - explicit target/transport projection plus the proxy id.
  */
-export async function mountBridgeSession(instanceId: string, sourceFingerprint: string): Promise<BridgeSession> {
+export async function mountBridgeSession(server: RuntimeServerProjection): Promise<BridgeSession> {
+  const instanceId = server.id
   const ctx = new Context()
   try {
     const api = getBridgeApiClient(instanceId)
@@ -211,9 +219,11 @@ export async function mountBridgeSession(instanceId: string, sourceFingerprint: 
     // — at settings-page mount, well after the boot settled — instead of
     // being statically imported into the boot first chunk. Same section, same
     // mount path; only the chunk timing changes.
+    const runtimePlugin = createRuntimeSectionPlugin(server)
     const plugins = [
       ...SETTINGS_PLUGINS,
       await import('@deepseek-ai/dsh-client-ui-agent-preset/client'),
+      ...(runtimePlugin === null ? [] : [runtimePlugin]),
     ] as readonly SettingsPlugin[]
     const fibers = [
       ctx.plugin(DECLARATION_PLUGIN),
@@ -224,7 +234,8 @@ export async function mountBridgeSession(instanceId: string, sourceFingerprint: 
     return {
       ctx,
       instanceId,
-      sourceFingerprint,
+      sourceFingerprint: server.sourceFingerprint,
+      runtimeProjectionKey: runtimeServerProjectionKey(server),
       slots: ctx.get('slots') as SlotRegistry,
       locale: ctx.get('locale') as LocaleFace | undefined,
       dispose: () => ctx.fiber.dispose(),

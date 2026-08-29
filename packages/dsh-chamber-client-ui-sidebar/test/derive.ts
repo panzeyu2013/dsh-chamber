@@ -14,6 +14,7 @@ import {
   BLANK_GHOST_GRACE_MS,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
+  dshVersionFromHostDescription,
   hashString,
   increasedForkTitle,
   instanceSnapshotSignature,
@@ -65,6 +66,16 @@ function workspace(workspaceId: string, title: string, sessionIds: string[] = []
 function snapshot(workspaces: WorkspaceRow[], sessions: SessionRow[]): InstanceSnapshot {
   return { workspaces, sessions, archivedSessionIds: [] }
 }
+
+test('host.describe version projection is exact and malformed values stay unknown', () => {
+  assert.equal(dshVersionFromHostDescription({ version: '0.2.0-beta.2' }), '0.2.0-beta.2')
+  assert.equal(dshVersionFromHostDescription(undefined), undefined)
+  assert.equal(dshVersionFromHostDescription({}), undefined)
+  assert.equal(dshVersionFromHostDescription({ version: '' }), undefined)
+  assert.equal(dshVersionFromHostDescription({ version: ' 1.2.3' }), undefined)
+  assert.equal(dshVersionFromHostDescription({ version: '1.2.3\nforged' }), undefined)
+  assert.equal(dshVersionFromHostDescription({ version: 'x'.repeat(129) }), undefined)
+})
 
 test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx rows', () => {
   const workspaceState = {
@@ -1156,7 +1167,8 @@ function server(id: string, overrides: Partial<ChamberServerAggregate> = {}): Ch
   return {
     id,
     sourceFingerprint: id === 'local' ? 'local' : 'a'.repeat(64),
-    kind: id === 'local' ? 'local' : 'ssh',
+    kind: id === 'local' ? 'local' : 'dsh',
+    transport: id === 'local' ? 'local' : 'ssh',
     label: id,
     connected: true,
     phase: 'ready',
@@ -1176,6 +1188,26 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
   assert.notEqual(
     serversProjectionSignature(a),
     serversProjectionSignature([server('local'), server('ssh-r1', { sourceFingerprint: 'b'.repeat(64) })]),
+  )
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1')]),
+    serversProjectionSignature([server('ssh-r1', { kind: 'gateway' })]),
+    'gateway remains a first-class kind in the shared aggregate contract',
+  )
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1')]),
+    serversProjectionSignature([server('ssh-r1', { transport: 'http' })]),
+    'transport is independent from target kind',
+  )
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1', { rawId: 'r1' })]),
+    serversProjectionSignature([server('ssh-r1', { rawId: 'other' })]),
+    'raw IPC identity is part of the bridge contract',
+  )
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1')]),
+    serversProjectionSignature([server('ssh-r1', { dshVersion: '1.2.3' })]),
+    'live host version reaches settings consumers',
   )
   // Session-level updatedAt IS part of the signature since the 2026-08
   // updated-mode alignment (updated = manual order + activity promotion): a

@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../src/json-store.ts'
@@ -42,6 +42,24 @@ test('persist is backup-first: a mutation leaves a valid main and a valid .bak',
   assert.deepEqual(backup, main)
   assert.ok((store.getStatus().lastPersistSucceededAt ?? 0) > 0)
   assert.equal(store.getStatus().recoveryState, null)
+})
+
+test('fileMode hardens legacy files and every persisted document artifact', async t => {
+  const dir = tempDir(t)
+  const path = join(dir, 'private.json')
+  writeFileSync(path, '{"revision":0,"items":[]}\n')
+  chmodSync(path, 0o644)
+  const store = createJsonStore({
+    filePath: path,
+    logger: silentLogger,
+    initial: { revision: 0, items: [] },
+    fileMode: 0o600,
+  })
+  store.load()
+  assert.equal(statSync(path).mode & 0o777, 0o600)
+  await store.mutate((doc: any) => ({ next: { ...doc, items: ['secret'] }, changed: true }))
+  assert.equal(statSync(path).mode & 0o777, 0o600)
+  assert.equal(statSync(`${path}.bak`).mode & 0o777, 0o600)
 })
 
 test('a failed mutation persist throws and rolls the in-memory document back', t => {

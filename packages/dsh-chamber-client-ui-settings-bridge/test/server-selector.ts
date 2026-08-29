@@ -11,13 +11,15 @@ import {
 const rows = [
   { id: 'local', label: '本地实例' },
   { id: 'ssh-alpha', label: 'Build Alpha' },
+  { id: 'gateway-prod', label: 'Gateway Prod' },
   { id: 'ssh-beta', label: '离线备机' },
 ]
 
 test('server selector filters by label or stable instance id without dropping offline rows', () => {
   assert.deepEqual(filterServerRows(rows, 'alpha').map(row => row.id), ['ssh-alpha'])
   assert.deepEqual(filterServerRows(rows, 'ssh-beta').map(row => row.id), ['ssh-beta'])
-  assert.equal(filterServerRows(rows, '').length, 3)
+  assert.deepEqual(filterServerRows(rows, 'gateway').map(row => row.id), ['gateway-prod'])
+  assert.equal(filterServerRows(rows, '').length, 4)
 })
 
 test('portal placement flips above near the viewport tail and clamps horizontally', () => {
@@ -40,7 +42,8 @@ test('portal placement shrinks to a tiny viewport instead of overflowing it', ()
 
 test('settings roster signature tracks rendered pluginId but ignores timestamp-only changes', () => {
   const base = {
-    id: 'ssh-alpha', kind: 'ssh' as const, label: 'Alpha', connected: true, phase: 'ready',
+    id: 'dsh-alpha', kind: 'dsh' as const, transport: 'ssh' as const, rawId: 'alpha',
+    label: 'Alpha', connected: true, phase: 'ready',
     sourceFingerprint: 'proof-a',
     pluginDiagnostic: { state: 'bundle-load-failed', message: 'load failed', pluginId: 'plugin-a' },
   }
@@ -56,7 +59,8 @@ test('settings roster signature tracks rendered pluginId but ignores timestamp-o
 
 test('settings roster signature cannot collide through separator-like user text', () => {
   const row = (id: string, label: string) => ({
-    id, sourceFingerprint: 'proof', kind: 'ssh' as const, label, connected: true, phase: 'ready',
+    id, sourceFingerprint: 'proof', kind: 'dsh' as const, transport: 'ssh' as const,
+    label, connected: true, phase: 'ready',
   })
   assert.notEqual(
     serverProjectionSignature([row('a', 'b\u0000ssh\nnext')]),
@@ -90,4 +94,32 @@ test('a late mount can commit only while its captured source proof is still curr
   assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-stable', 'proof-stable'), true)
   assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-replaced', 'proof-old'), false)
   assert.equal(sourceFingerprintIsCurrent(roster, 'ssh-deleted', 'proof-deleted'), false)
+})
+
+test('settings roster signature preserves target kind and transport as independent dimensions', () => {
+  const base = { id: 'gateway-prod', sourceFingerprint: 'proof', label: 'Prod', connected: true, phase: 'ready' }
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, kind: 'gateway', transport: 'http' }]),
+    serverProjectionSignature([{ ...base, kind: 'dsh', transport: 'http' }]),
+  )
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, kind: 'gateway', transport: 'http' }]),
+    serverProjectionSignature([{ ...base, kind: 'gateway', transport: 'ssh' }]),
+  )
+})
+
+test('settings roster signature tracks raw IPC identity and live dsh version', () => {
+  const base = {
+    id: 'dsh-prod', kind: 'dsh' as const, transport: 'ssh' as const,
+    sourceFingerprint: 'proof',
+    label: 'Prod', connected: true, phase: 'ready',
+  }
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, rawId: 'prod' }]),
+    serverProjectionSignature([{ ...base, rawId: 'prod-2' }]),
+  )
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, rawId: 'prod', dshVersion: '1.0.0' }]),
+    serverProjectionSignature([{ ...base, rawId: 'prod', dshVersion: '1.1.0' }]),
+  )
 })

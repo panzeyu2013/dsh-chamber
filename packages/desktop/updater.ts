@@ -29,6 +29,8 @@
 import { execFile } from 'node:child_process'
 import { createRequire } from 'node:module'
 import type { UpdateInfo } from 'electron-updater'
+import { sanitizeErrorText } from './sanitize-error.ts'
+export { sanitizeErrorText } from './sanitize-error.ts'
 
 // electron-updater's CJS main exposes `autoUpdater` through an
 // Object.defineProperty getter — cjs-module-lexer cannot detect it, so an ESM
@@ -72,7 +74,7 @@ export interface UpdateState {
   currentVersion: string
   /** Latest version on the configured channel; null = none known yet. */
   latestVersion: string | null
-  /** Feed channel (stable default; beta via DSH_CHAMBER_UPDATE_CHANNEL=beta). */
+  /** Feed channel (stable release, intrinsic `-beta.N`, or explicit dev beta opt-in). */
   channel: 'stable' | 'beta'
   /** Download progress percent (0–100) while downloading. */
   downloadPercent: number | null
@@ -158,6 +160,11 @@ export interface UpdateControllerDeps {
   autoUpdater?: AutoUpdaterLike
   /** `process.platform`; default: the real platform. */
   platform?: NodeJS.Platform
+  /** Resolve the exact GitHub release download base for beta checks. The
+   * default uses the bounded public releases-list API; tests inject this so
+   * no network is touched. A rejection fails closed before electron-updater
+   * can invoke its GitHub provider's unsafe latest-channel fallback. */
+  resolveBetaFeed?: () => Promise<string>
 }
 
 /** Controller surface wired into main.ts (IPC handlers) and started at boot. */
@@ -183,33 +190,98 @@ const CHECK_DELAY_MS = 15_000
 /** Periodic silent re-check. */
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
-function resolveChannel(): 'stable' | 'beta' {
-  return process.env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta' ? 'beta' : 'stable'
+function isBetaVersion(version: string): boolean {
+  return /^\d+\.\d+\.\d+-beta\.(0|[1-9]\d*)$/.test(version)
 }
 
-function releaseUrlFor(version: string): string {
+function resolveChannel(version: string): 'stable' | 'beta' {
+  // A packaged beta prerelease is intrinsically a beta installation. Requiring an
+  // environment override would make a real beta silently query stable.
+  return isBetaVersion(version) || process.env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta'
+    ? 'beta'
+    : 'stable'
+}
+
+type GithubRelease = { tag_name?: unknown; draft?: unknown; prerelease?: unknown }
+type BetaVersion = readonly [bigint, bigint, bigint, bigint]
+const BETA_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/
+
+function betaVersion(tag: unknown): BetaVersion | null {
+  if (typeof tag !== 'string' || tag.length > 128) return null
+  const match = BETA_TAG_PATTERN.exec(tag)
+  return match === null ? null : [BigInt(match[1]), BigInt(match[2]), BigInt(match[3]), BigInt(match[4])]
+}
+
+function compareBetaVersion(left: BetaVersion, right: BetaVersion): number {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] < right[index]) return -1
+    if (left[index] > right[index]) return 1
+  }
+  return 0
+}
+
+/** Select an exact prerelease asset base. The returned URL never contains a
+ * `latest` path and a malformed/draft/stable release can never become a feed. */
+export function betaReleaseDownloadBase(releases: unknown): string {
+  if (!Array.isArray(releases) || releases.length > 100) throw new Error('invalid GitHub releases response')
+  let selected: { tag: string; version: BetaVersion } | null = null
+  for (const candidate of releases as GithubRelease[]) {
+    if (candidate === null || typeof candidate !== 'object'
+      || candidate.draft !== false || candidate.prerelease !== true) continue
+    const version = betaVersion(candidate.tag_name)
+    if (version === null) continue
+    if (selected === null || compareBetaVersion(version, selected.version) > 0) {
+      selected = { tag: candidate.tag_name as string, version }
+    }
+  }
+  if (selected === null) throw new Error('no published beta release is available')
+  return `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${encodeURIComponent(selected.tag)}/`
+}
+
+/** Public GitHub discovery used only for beta. It deliberately queries the
+ * bounded releases collection, then switches electron-updater to a generic
+ * exact-tag feed; the GitHubProvider never gets a chance to fall back from
+ * beta.yml to latest.yml. */
+export async function resolveGithubBetaFeed(
+  request: typeof fetch = globalThis.fetch,
+  timeoutMs = 10_000,
+): Promise<string> {
+  if (typeof request !== 'function') throw new Error('beta update discovery is unavailable')
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), timeoutMs)
+  timer.unref?.()
+  try {
+    const response = await request(
+      `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=100`,
+      { headers: { Accept: 'application/vnd.github+json' }, signal: abort.signal },
+    )
+    if (!response.ok) throw new Error(`beta update discovery failed (HTTP ${response.status})`)
+    return betaReleaseDownloadBase(await response.json())
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function resolveRuntimeBetaFeed(): Promise<string> {
+  // Electron net.fetch inherits the app's proxy/session policy. Resolve it
+  // lazily so pure-Node tests with an injected resolver never load Electron.
+  const electron = require('electron') as typeof import('electron')
+  const request = typeof electron === 'object' && typeof electron.net?.fetch === 'function'
+    ? electron.net.fetch.bind(electron.net) as typeof fetch
+    : globalThis.fetch
+  return resolveGithubBetaFeed(request)
+}
+
+/** Build the release-page projection from the FEED's version string — feed
+ * data is untrusted input, so a version that is not semver-shaped yields
+ * null (no fabricated URL) instead of an openable link; the open action is
+ * additionally gated by isAllowedReleaseUrl. */
+function releaseUrlFor(version: string): string | null {
+  if (typeof version !== 'string' || version === '' || version.length > 128
+    || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(version)) {
+    return null
+  }
   return `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/tag/v${version}`
-}
-
-/**
- * Redact absolute paths (e.g. the updater cache dir, which electron-updater
- * embeds in some error messages) from the error text that rides the renderer
- * projection — the projection stays path-free (design 11 §7 non-secret
- * contract); the full detail stays in the main-process log. Covers Windows
- * drive paths and POSIX absolute paths rooted at any component (2026-08
- * review: broadened from the fixed root list — /opt, /usr/local, /Library,
- * /run, /root etc. all carry path material too). The POSIX branch refuses a
- * `/` preceded by `:`, `/`, OR a word char: that keeps a URL's `//host/...`
- * AND its path segments (`github.com/panzeyu2013/releases/...` — the
- * non-secret feed/release URL) intact, while real absolute-path roots
- * (preceded by whitespace, string start, or punctuation) are still redacted;
- * the Windows branch rejects `x://` (a scheme, e.g. `https://` — the drive
- * letter is followed by TWO slashes) so URLs survive it too.
- */
-export function sanitizeErrorText(message: string): string {
-  return message
-    .replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, '[path]')
-    .replace(/(?<![:/\w])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, '[path]')
 }
 
 /**
@@ -264,7 +336,8 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const app = deps?.app ?? getRealApp()
   const autoUpdater = deps?.autoUpdater ?? getRealAutoUpdater()
   const platform = deps?.platform ?? process.platform
-  const channel = resolveChannel()
+  const channel = resolveChannel(version)
+  const resolveBetaFeed = deps?.resolveBetaFeed ?? resolveRuntimeBetaFeed
 
   let state: UpdateState = {
     phase: 'idle',
@@ -297,13 +370,13 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // beta.yml and never find updates. Enable the Atom-feed channel lookup when
   // the running version is itself a prerelease (packaged beta builds) or the
   // env opt-in is set (dev).
-  autoUpdater.allowPrerelease = channel === 'beta' || /^\d+\.\d+\.\d+-[0-9A-Za-z.-]+/.test(version)
-  // Beta opt-in: only an explicit env override switches the channel. In the
-  // PACKAGED app the channel is baked into app-update.yml (electron-builder
-  // derives it from the version's semver prerelease tag: 0.2.0-beta.1 →
-  // beta.yml, 0.2.0 → latest.yml) and must NOT be clobbered by a runtime
-  // default. In dev there is no app-update.yml, so the feed is set explicitly
-  // (same provider/owner/repo the build uses) and dev checks are force-enabled.
+  autoUpdater.allowPrerelease = channel === 'beta'
+  // A packaged `-beta.N` build is pinned to beta from its own version; the env
+  // remains a dev/stable-build opt-in. Before every beta check runCheck below
+  // replaces the baked GitHub provider with an exact-tag GenericProvider so
+  // electron-updater cannot fall back from beta.yml to latest.yml. In dev the
+  // initial GitHub feed keeps the normal injected seam; the same exact beta
+  // replacement happens before the first network check.
   if (channel === 'beta') autoUpdater.channel = 'beta'
   if (!app.isPackaged) {
     autoUpdater.forceDevUpdateConfig = true
@@ -369,6 +442,18 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     checking = true
     try {
       setState({ phase: 'checking', error: null })
+      if (channel === 'beta') {
+        // electron-updater's GitHub provider deliberately falls back to
+        // latest.yml when a prerelease channel file is unavailable. Resolve a
+        // concrete beta tag first and use GenericProvider for this check so a
+        // missing beta feed fails closed and never emits a stable-feed query.
+        const betaFeed = await resolveBetaFeed()
+        autoUpdater.setFeedURL({ provider: 'generic', url: betaFeed, channel: 'beta' })
+        autoUpdater.channel = 'beta'
+        // Both channel and provider mutation may reset this in updater
+        // implementations; preserve the no-silent-downgrade invariant.
+        autoUpdater.allowDowngrade = false
+      }
       await autoUpdater.checkForUpdates()
     } catch (error) {
       // A CHECK failure (a 6h re-check after a previous `available`, or the

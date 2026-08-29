@@ -461,6 +461,244 @@
   }
 }
 
+/* ---- selected gateway orchestration (design 17 §8.5) ----
+   This is a chamber-owned, gateway-authoritative surface. It deliberately
+   uses plain settings vocabulary rather than borrowing official dsh section
+   slots: cards isolate independently fetched resources and retain stale data
+   beside an honest per-card error when one route is temporarily unavailable. */
+
+.gatewaySurface {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.gatewayTitleRow,
+.gatewayRowHead,
+.gatewayCardActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gatewayTitleRow {
+  align-items: flex-start;
+}
+
+.gatewayTitleRow h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.gatewayTitleRow p,
+.gatewayInteraction p,
+.gatewayCompactRow p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.gatewayCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.gatewayCard h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.gatewayButton,
+.gatewayPrimaryButton {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.gatewayButton {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+}
+
+.gatewayPrimaryButton {
+  border: none;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.gatewayButton:hover:not(:disabled),
+.gatewayButton:focus-visible:not(:disabled) {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.gatewayPrimaryButton:hover:not(:disabled),
+.gatewayPrimaryButton:focus-visible:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.gatewayButton:disabled,
+.gatewayPrimaryButton:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.gatewayError,
+.gatewayMuted {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.gatewayError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.gatewayMuted {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.gatewayToggles,
+.gatewayList,
+.gatewayChoices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gatewayToggles label,
+.gatewayChoice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.gatewayToggles input,
+.gatewayChoice input {
+  flex: none;
+  margin-top: 3px;
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.gatewayInteraction,
+.gatewayCompactRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.gatewayRowHead {
+  min-width: 0;
+  align-items: baseline;
+}
+
+.gatewayRowHead strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.gatewayRowHead span,
+.gatewayRowHead code,
+.gatewayCompactRow code,
+.gatewayCompactRow small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.gatewayQuestionGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 4px 0;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
+.gatewayQuestionGroup legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.gatewayQuestionText {
+  color: var(--dsw-alias-label-primary) !important;
+}
+
+.gatewayChoice > span {
+  display: flex;
+  flex-direction: column;
+}
+
+.gatewayChoice small {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.gatewayCustomAnswer {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.gatewayCustomAnswer input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+.gatewayCustomAnswer input:focus {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.gatewayPrompt {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--dsw-alias-label-primary) !important;
+}
+
 /* Visually-hidden text seat (close button accessible name). */
 .hiddenLabel {
   position: absolute;
@@ -629,10 +867,13 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* One phase status line: text flexes to the left, actions sit right. */
+/* One phase status line: text flexes to the left, actions sit right. Wraps so
+   a crowded action row (e.g. the runtime block's up-to-six capsules) never
+   overflows the settings column. */
 .updateStatusLine {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -717,4 +958,76 @@
    in the accessibility tree, which would make the live region inert). */
 .updateStatus {
   display: block;
+}
+
+/* ---- dsh runtime block (design 18 M4) ----
+   Grouped layout: status + live progress on top, version actions, then the
+   version source; quiet uppercase sub-captions reuse generalGroupTitle. */
+
+/* A control row that pairs a select with its inline action (install / test). */
+.runtimeSelectRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Live install progress: label above a slim track; determinate fill when the
+   registry declared content-length, sliding stripe otherwise. */
+.runtimeProgressBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.runtimeProgressLabel {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runtimeProgressTrack {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dsw-alias-border-l2);
+  overflow: hidden;
+}
+
+.runtimeProgressBar {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--dsw-alias-brand-primary);
+  transition: width .2s ease;
+}
+
+.runtimeProgressBarIndeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: 3px;
+  background: var(--dsw-alias-brand-primary);
+  animation: runtimeProgressSlide 1.1s ease-in-out infinite;
+}
+
+@keyframes runtimeProgressSlide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* Compact phase chip on the gateway runtime version row (design 18 §3.6
+   A.1 phase badge; the `.badge` vocabulary: pill, hairline border, 11px). */
+.runtimeBadge {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 18px;
+  padding: 1px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
 }

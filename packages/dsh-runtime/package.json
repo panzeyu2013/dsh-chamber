@@ -1,0 +1,26 @@
+{
+  "name": "@dsh-chamber/dsh-runtime",
+  "version": "0.2.0-beta.3",
+  "description": "Shared, host-agnostic dsh runtime version management core (design 18 §9.1): version trees / current pointer / override / snapshots / failures / activation journal, source-bound npm install via embedded pinned pnpm, the activation transaction and two-phase rollback/restore. Pure Node, no Electron/IPC; adapted by its two owners (desktop main / gateway server) through the StartupDeps/ApplyDeps/InstallerDeps DI seams — RuntimeHostAdapter remains a documented sketch.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "prepack": "node ./scripts/build.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

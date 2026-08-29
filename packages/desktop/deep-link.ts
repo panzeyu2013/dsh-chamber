@@ -41,11 +41,13 @@ export interface VscodeLaunchRequest {
 /**
  * Dependencies main.ts injects into runVscodeLaunch (design 16 §4). The
  * registry lookup returns the non-secret metadata the authority construction
- * needs; `kind` must be `'ssh'` (runVscodeLaunch re-checks it).
+ * needs; `transport` must be `'ssh'` (runVscodeLaunch re-checks it — the
+ * vscode-remote URL is an ssh-TRANSPORT feature, v2 semantics design 17 §2:
+ * the spec's kind is the TARGET type, the transport decides the mechanism).
  */
 export interface VscodeLaunchContext {
-  /** Registry lookup; null = the instance does not exist. `kind` must be 'ssh'. */
-  lookupInstance(id: string): { id: string; host: string; user: string | null; sshPort: number | null; kind: string } | null
+  /** Registry lookup; null = the instance does not exist. `transport` must be 'ssh'. */
+  lookupInstance(id: string): { id: string; host: string; user: string | null; sshPort: number | null; transport: string } | null
   /** VS Code availability (the main-process probe, see detectVscodeAvailability). */
   vscodeAvailable(): boolean
   /** Open a vscode:// URL (main-process shell.openExternal wrapper; loud failure). */
@@ -645,7 +647,7 @@ export function detectVscodeAvailability(
 /**
  * The single deep-link execution pipeline (design 16 §3.4) — shared verbatim
  * by the OS deep link and the renderer-button IPC: registry lookup (unknown
- * instance or non-ssh kind → loud error) → authority construction
+ * instance or non-ssh transport → loud error) → authority construction
  * (buildVscodeRemoteUrl) → availability re-check (defense in depth, §5.2) →
  * openVscodeUrl. Every failure is loud; there is no silent success path.
  */
@@ -676,8 +678,8 @@ async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLau
   if (instance === null) {
     return { ok: false, error: `instance not found: ${req.instanceId}` }
   }
-  if (instance.kind !== 'ssh') {
-    return { ok: false, error: `instance ${req.instanceId} is not an ssh instance (kind=${instance.kind})` }
+  if (instance.transport !== 'ssh') {
+    return { ok: false, error: `instance ${req.instanceId} is not an ssh transport instance (transport=${instance.transport})` }
   }
   const built = buildVscodeRemoteUrl(instance.host, instance.user, instance.sshPort, req.path)
   if (!built.ok) {

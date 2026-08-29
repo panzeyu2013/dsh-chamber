@@ -1,9 +1,12 @@
 # 08 · Git Worktree 独立插件
 
-> **状态：现行（v1 实现，2026-08-20）**。本文是对原
+> **状态：现行（v1 实现，Design 17 迁移期保留，2026-08-20）**。本文是对原
 > `docs/todo/08-todo-git-worktree-plugin.md` 的实施前审计与收敛。原稿的
 > “独立插件”边界保留，但 Git 执行从 Desktop/SSH 移到每个 dsh 实例内的
 > chamber host plugin；会话创建/打开和工作区注册仍只走 dsh 现有 wire。
+> Design 17 的 gateway Git offload 是待实机稳定的替代路线；在其通过 canonical
+> path、补偿 provenance、真 dsh/worktree 冒烟与回滚门禁前，本插件不得停止 seed、
+> 不得删包。两条路线的记录不互相冒充权威。
 
 ## 1. 审计结论
 
@@ -105,7 +108,8 @@ sidebar 不依赖 Git 类型；Git 插件用 slot inject 占位。窄栏 occupan
 
 插件模块内有一个页面级 singleton coordinator：
 
-- 订阅 neutral `chamberBridge` 获得 `local | ssh-<id>` 和 connected 事实；
+- 订阅 neutral `chamberBridge` 获得 `local | dsh-<id> | gateway-<id>`（`ssh-<id>`
+  为 v2 迁移前 legacy，17 §2.2/§9.1）和 connected 事实；
 - 每来源一个 in-flight promise，30s 轮询，新连接/动作后即时刷新；
 - 断连立即清该来源事实；迟到响应用 sequence 拒绝；
 - `repos` 与 path/repo 级 `errors` 同时保留，一个失败不抹掉其它完整实体；
@@ -243,7 +247,7 @@ fresh-preflight -> git-removing -> git-removed
 | 里程碑 | 纵向闭环 |
 |---|---|
 | M0 | 修正 workspace/session wrapper，定稿 host-in-instance 边界、幂等键与无归档删除 saga |
-| M1 | host snapshot + 远程/本地分发 + singleton 30s facts + `sidebar.git` 只读拓扑 |
+| M1 | host snapshot + 远程/本地分发 + singleton 30s facts + `sidebar.workspace.git` 只读拓扑（座位 2026-08 对齐轮后为 workspace 行内，独立面板座位 `sidebar.git` 已移除，见 §4） |
 | M2 | preview/create/workspace/session/open-intent 创建闭环，含丢响应重试和安全补偿 |
 | M3 | fresh guard + Git-first + workspace-delete retry 删除闭环，不归档、不删分支；force 仅经 `discardChanges` 显式授权（§6 修订） |
 | M4 | N-ctx/断连/局部失败/无 Git/打包回归与远程实机验收 |
@@ -431,11 +435,16 @@ typecheck（含根）、verify:i18n、build:host-git（dist 重建且与 src 字
 
 - **404 = 确定性 `git-host-not-loaded`**（git RPC 404，host 包缺失或未生效）：
   客户端判定为**确定性失败**——不建恢复（recovery 会永久死循环）、不重试，
-  文案指引"本地实例请重启桌面端；远程实例请在连接设置中重新下发 chamber
-  host 包并点击'重启生效'后重试"。该错误归属 connections 插件的 chamber
-  块（`gitWorktree` 双包探测 + pendingRestart），不进侧栏。
+  文案指引按来源区分重启路径：本地实例请重启桌面端；远程 ssh 实例请在连接设置
+  中重新下发 chamber host 包并点击「重启生效」（`restart_service` systemd IPC）
+  后重试；gateway 实例请经 `/chamber/runtime/restart`（事务化受控重启，刷新
+  插件挂载，design 17 §3 / design 18 §3.6）后重试。该错误归属 connections
+  插件的 chamber 块（`gitWorktree` 双包探测 + pendingRestart），不进侧栏。
 - **一键重启**：connections 插件的 chamber 块（PluginSyncModal）新增"重启
-  实例"按钮（`runServiceOp('restart_service')`）与 seed 写/补 patch 后的
+  实例"按钮（**按来源区分重启路径**：ssh 来源 `runServiceOp('restart_service')`
+  （systemd IPC）；gateway 来源 `/chamber/runtime/restart`（design 17 §3 /
+  design 18 §3.6，已落地）；本地来源走 control-plane
+  `restartLocal()`，design 18 §9.3）与 seed 写/补 patch 后的
   "重启生效"（pendingRestart）态；`ChamberInjectionState` 新增 `gitWorktree`
   探测（`probeRemoteChamber` 探 pkg+dist），`remoteNeedsSeed` 条件
   = hostGraph 未(installed&&patched) || 未装 gitWorktree。
