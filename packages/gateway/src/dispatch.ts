@@ -20,11 +20,13 @@ import {
   type Logger,
 } from '@dsh-chamber/control-plane'
 import type { AuthPrincipal, AuthProvider } from './auth.ts'
+import { SESSION_COOKIE } from './auth.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { FeatureHost } from './routes.ts'
 import type { RuntimeRoutes } from './runtime-routes.ts'
 import type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
 import { appendAuditEvent } from './audit.ts'
+import { LOGIN_PAGE_CSP, detectLoginLang, renderLoginPage, renderTokenOnlyPage, wantsHtmlLoginResponse } from './login-page.ts'
 
 function isPublicRequest(method: string | undefined, pathname: string): boolean {
   // HEAD is the no-body twin of GET; a monitoring HEAD /health must not be
@@ -54,7 +56,6 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
  * and already behind the auth gate. Every other directive stays identical.
  */
 const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
-const LOGIN_PAGE_CSP = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'unsafe-inline'"
 
 function json(res: ApiResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -80,18 +81,14 @@ function rejectWs(socket: { end(data: string): unknown }, status: number, messag
   )
 }
 
-/** The minimal gateway login page (design §5.1): the ONLY gateway-owned frontend
- * asset besides /chamber/*. POSTs the password to /auth/login. */
-const LOGIN_PAGE_HTML = `<!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dsh gateway</title>
-<form method="post" action="/auth/login" style="font-family:system-ui;max-width:20rem;margin:4rem auto">
-  <h1>dsh gateway</h1>
-  <label>Password <input type="password" name="password" autofocus style="width:100%;box-sizing:border-box"></label>
-  <button type="submit" style="margin-top:0.5rem">Sign in</button>
-</form>
-`
+/** Uniform response headers for every login-page HTML response (design 21 §6.2):
+ * the rendered page itself comes from login-page.ts; CSP is set separately. */
+const LOGIN_HTML_HEADERS = {
+  'content-type': 'text/html; charset=utf-8',
+  'cache-control': 'no-store',
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+} as const
 
 function codedError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code })
@@ -228,7 +225,11 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       }
       if (principal === null) {
         if (shouldRedirectToLogin(req, pathname, auth)) {
-          res.writeHead(302, { location: '/auth/login', 'cache-control': 'no-store' })
+          // A present-but-invalid session cookie means the visitor had a
+          // session that verification just failed (design 21 §6.3): point at
+          // the expired hint. No cookie (first visit) keeps the plain location.
+          const hadSession = (headerValue(req.headers, 'cookie') ?? '').split(';').some(part => part.trim().startsWith(`${SESSION_COOKIE}=`))
+          res.writeHead(302, { location: hadSession ? '/auth/login?expired=1' : '/auth/login', 'cache-control': 'no-store' })
           res.end()
           return true
         }
@@ -236,12 +237,27 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         return true
       }
     }
-    // 2. Auth login (public, design §5.1): POST verifies the password and sets
-    // the session cookie → 302 to `/`; GET serves the minimal login page.
+    // 2. Auth login (public, design §5.1 / 21): POST verifies the password and
+    // sets the session cookie → 302 to `/`; GET serves the rendered login page.
     if (pathname === '/auth/login') {
       res.setHeader('content-security-policy', LOGIN_PAGE_CSP)
+      const lang = detectLoginLang(headerValue(req.headers, 'accept-language'))
       if (auth.login === undefined) {
-        json(res, 404, { error: 'not_found', code: 'not_found' })
+        // Token-only / no-auth deployment: browsers get a minimal HTML
+        // explanation page (design 21 §5.3); API clients keep the JSON 404.
+        // GET/HEAD carries no content-type, so an HTML Accept alone selects
+        // the page (design 21 §10.3); POST still negotiates via the
+        // form-urlencoded + HTML rule (design 21 §6.1). The copy varies by
+        // auth kind: a `--no-auth` deployment has no token and must not claim
+        // one (honest posture, design 17 §13.1).
+        const acceptHtml = (headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')
+        if (wantsHtmlLoginResponse(req.headers)
+          || ((req.method === 'GET' || req.method === 'HEAD') && acceptHtml)) {
+          res.writeHead(404, LOGIN_HTML_HEADERS)
+          res.end(req.method === 'HEAD' ? undefined : renderTokenOnlyPage(lang, auth.kind === 'none' ? 'none' : 'token'))
+        } else {
+          json(res, 404, { error: 'not_found', code: 'not_found' })
+        }
         return true
       }
       if (req.method === 'POST' && auth.login !== undefined) {
@@ -274,8 +290,28 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
               detail: `${loginSource},code:${code ?? 'invalid_credentials'}`,
             })
           }
-          if (code === 'rate_limited') json(res, 429, { error: 'too many login attempts', code: 'rate_limited' })
-          else if (code === 'auth_busy') json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
+          const html = wantsHtmlLoginResponse(req.headers)
+          const retryAfterMs = (error as Error & { retryAfterMs?: number }).retryAfterMs
+          if (code === 'rate_limited') {
+            const retryAfterSec = Math.max(1, Math.ceil((retryAfterMs ?? 0) / 1000))
+            if (html) {
+              res.writeHead(429, { ...LOGIN_HTML_HEADERS, 'retry-after': String(retryAfterSec) })
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'rate_limited', retryAfterSec }))
+            } else {
+              // json() would overwrite retry-after via writeHead; set it first
+              // (setHeader values are merged by writeHead in the real server).
+              res.setHeader('retry-after', String(retryAfterSec))
+              json(res, 429, { error: 'too many login attempts', code: 'rate_limited' })
+            }
+          }
+          else if (code === 'auth_busy') {
+            if (html) {
+              res.writeHead(503, LOGIN_HTML_HEADERS)
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'busy' }))
+            } else {
+              json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
+            }
+          }
           else if (code === 'body_too_large') {
             json(res, 413, { error: 'request body too large', code })
             // The 413 is written; the oversized body may still be streaming.
@@ -283,12 +319,20 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
             // anonymous upload cannot pin the connection.
             req.destroy?.()
           } else if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
-          else json(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
+          else {
+            if (html) {
+              res.writeHead(401, LOGIN_HTML_HEADERS)
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'invalid' }))
+            } else {
+              json(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
+            }
+          }
         }
         return true
       }
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(req.method === 'HEAD' ? undefined : LOGIN_PAGE_HTML)
+      const expired = url.searchParams.get('expired') === '1'
+      res.writeHead(200, LOGIN_HTML_HEADERS)
+      res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null }))
       return true
     }
     // 3. Management routes → fall through to api.handle (prefix-match so

@@ -12,6 +12,25 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Changed
+
+- **Gateway login page aligned with the dsh design language** — the `/auth/login`
+  pre-auth page went from a bare minimal form to a self-contained dark card page
+  (a `--dsw-alias-*` token layer whose values match the `/chamber/` orchestration
+  page): password-manager input hygiene (`autocomplete="current-password"`,
+  `required`, `maxlength=1024`), en/zh copy selected by `Accept-Language` prefix
+  matching, and an inline SVG favicon (the login CSP gains `img-src data:`;
+  `script-src` stays absent). Login failures render same-status HTML error pages
+  for browser forms via content negotiation (401 wrong password / 429 rate limit
+  with `Retry-After` and the wait seconds / 503 busy), while API and desktop
+  clients keep the byte-identical JSON shape; plaintext HTTP shows an honest
+  warning banner and HTTPS shows an encrypted badge (the same `decision.secure`
+  fact as the conditional `Secure` cookie); expired sessions surface a
+  `/auth/login?expired=1` hint; token-only deployments serve an HTML 404
+  explanation to browsers and `--no-auth` deployments never claim a token.
+  Remains script-free, never echoes the password (S5), and leaves audit events
+  and the failure status-code matrix unchanged (design 17 §7.1/§7.3).
+
 ## [0.2.0-beta.3] - 2026-08-29
 
 ### Added

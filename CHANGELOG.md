@@ -27,6 +27,19 @@
   "shell 恰在 spawn 窗口内启动"的场景，耗尽后按既有契约静默降级（本次 boot
   无 extra 插件）；非 503 通道失败仍快速失败，预算只影响快速 503 路径。
 
+### 变更
+
+- **Gateway 登录页与 dsh 设计语言全面对齐** —— `/auth/login` 预认证页从最小裸表单
+  升级为自包含深色卡片页（`--dsw-alias-*` token 层取值与 `/chamber/` 编排页同源）：
+  密码管理器输入卫生（`autocomplete="current-password"`、`required`、
+  `maxlength=1024`）、en/zh 双语文案（`Accept-Language` 前缀匹配）、内联 SVG
+  favicon（登录页 CSP 增补 `img-src data:`，`script-src` 继续缺席）。登录失败按内容
+  协商为浏览器表单渲染同状态码 HTML 错误页（401 密码错误 / 429 限流附 `Retry-After`
+  与等待秒数 / 503 繁忙），API 与桌面客户端 JSON 形状逐字节不变；http 明文连接如实
+  显示警告横幅、HTTPS 显示加密徽标（与条件 `Secure` cookie 同源事实）；过期会话经
+  `/auth/login?expired=1` 提示；token-only 部署浏览器获得 404 HTML 说明页。保持无
+  脚本、密码永不回显（S5）、审计事件与失败状态码矩阵不变（design 17 §7.1/§7.3）。
+
 ## [0.2.0-beta.3] - 2026-08-29
 
 ### 新增
