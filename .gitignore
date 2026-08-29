@@ -38,9 +38,13 @@ audit.log
 ref-dsh
 ref-upstream
 
-# Harness workspace symlinks (point into the external dsh source checkout —
-# like ref-dsh/ref-upstream, these local links are never committed)
-/vendor/
+# Harness workspace symlinks (point into the pinned git submodule at
+# vendor/harness-checkout — like ref-dsh/ref-upstream, the links themselves are
+# never committed). The submodule gitlink IS committed, so it is excluded from
+# the /vendor/* ignore below; the submodule working tree stays out of the parent
+# repository's object store by gitlink semantics.
+/vendor/*
+!/vendor/harness-checkout/
 
 # Bundled dsh copy inside the desktop package (produced by bundle:dsh, external
 # repo content). Keep only its independently frozen dependency graph in Git;

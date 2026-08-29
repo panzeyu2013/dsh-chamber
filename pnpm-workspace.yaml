@@ -2,6 +2,15 @@ packages:
   - "packages/*"
   - "vendor/harness-packages/@deepseek-ai/*"
 
+# pnpm 11：非 auth settings 只认 pnpm-workspace.yaml（.npmrc 已无效）。
+# 关闭「pnpm run/exec 前隐式 install」：隐式 install 是非 frozen 的，会撞
+# preinstall 的 vendor 链接差量窗口、且极端情况下会把 pnpm-lock.yaml 改写成
+# 裁剪版（符号链接成员的 importer 记录剪枝），之后所有 frozen install 全挂。
+# 依赖变更请显式 `pnpm install`；CI 始终显式 frozen install，不依赖本配置。
+# 已知 pnpm#12019：嵌套 pnpm run 时本配置可能被覆盖失效——本地若见到
+# "Lockfile is up to date / 自动 install" 输出即失效信号，需显式 install。
+verifyDepsBeforeRun: false
+
 # pnpm 11 默认拦截依赖构建脚本；白名单放行本仓库安装树中的合法构建：
 # electron/electron-builder（二进制下载）、esbuild/@parcel/watcher（vite 依赖原生安装）。
 allowBuilds:
