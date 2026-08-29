@@ -25,11 +25,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           # The pinned harness source tree is a git submodule
-          # (vendor/harness-checkout, gitlink == harness.commit). Shallow
-          # checkout keeps the 240-package monorepo clone fast; the gitlink
-          # pins an exact commit, so depth 1 is sufficient for the build.
+          # (vendor/harness-checkout, gitlink == harness.commit). The gitlink
+          # pins an exact commit, so the submodule is materialized at that
+          # commit regardless of clone depth.
           submodules: true
-          shallow-submodules: true
       - name: Verify workflow action pins
         run: node scripts/verify-workflow-action-pins.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
