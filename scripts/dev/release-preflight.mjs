@@ -296,7 +296,21 @@ function checkGitStatus() {
   const c = check('git status clean + no untracked + empty stash')
   const porcelain = execFileSync('git', ['status', '--porcelain'], { cwd: REPO_ROOT, encoding: 'utf8' })
     .split('\n').map((l) => l.trim()).filter(Boolean)
-  const dirty = porcelain.filter((l) => l.slice(3).trim() !== SELF_PATH)
+  const dirty = porcelain.filter((l) => {
+    const path = l.slice(3).trim()
+    if (path === SELF_PATH) return false
+    // vendor/harness-checkout 是 git submodule：其内部未跟踪内容（ensure
+    // 建的 node_modules 解析 shim）是预期产物、不影响 gitlink。只有
+    // gitlink/HEAD 漂移（git diff --submodule 有输出）才算 dirty。
+    if (path === 'vendor/harness-checkout') {
+      try {
+        return execFileSync('git', ['diff', '--submodule=short', '--', 'vendor/harness-checkout'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim() !== ''
+      } catch {
+        return true // diff 判定失败时保守视为 dirty
+      }
+    }
+    return true
+  })
   if (dirty.length > 0) fail(c, `uncommitted/untracked changes:\n${dirty.map((l) => `    ${l}`).join('\n')}`)
   const stash = execFileSync('git', ['stash', 'list'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim()
   if (stash.length > 0) fail(c, `non-empty git stash:\n${stash}`)
