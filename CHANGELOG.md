@@ -12,6 +12,21 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **chamber shell 不再加载官方 dev-only `dsh-client-hmr` 条目** —— 该条目的
+  client fiber 无条件打开 `new EventSource('/plugins/events')`（实例 origin 相对
+  路径），在 chamber 页面（控制面 origin）会命中控制面 SPA fallback 返回的
+  index.html（`text/html`），每次 boot 与每次 EventSource 重连都触发
+  "MIME type is not text/event-stream" 中止报错刷屏；web profile 无可用 hmr
+  client channel（设计 09），现将其加入 `CHAMBER_COVERED_IDS`（page-own，无
+  factory）跳过加载。同类已知问题 `dsh-session-log-export`（chamber 视图
+  导出会话日志不可用，实例官方 UI 正常）经决策记录缓办，见 `STATUS.md`。
+- **宿主图 503 重试预算从 6 次扩到 10 次（2.5s → 4.5s 延迟和）** —— 实测
+  本地实例 spawn→ready 约 2.8–3.0s（控制面 host 日志），原预算无法覆盖
+  "shell 恰在 spawn 窗口内启动"的场景，耗尽后按既有契约静默降级（本次 boot
+  无 extra 插件）；非 503 通道失败仍快速失败，预算只影响快速 503 路径。
+
 ## [0.2.0-beta.3] - 2026-08-29
 
 ### 新增

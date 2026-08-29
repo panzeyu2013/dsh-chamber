@@ -16,6 +16,18 @@
 - **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径仍未形成与 Unix
   等价的运行时契约；dsh-runtime mutation 与 SSH askpass 密码认证保持只读/
   禁用门控。
+- **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷类，2026-08）**：
+  官方客户端 bundle 若绕过 patched connection carrier、以实例 origin 相对
+  路径直接请求（读 `location.origin` 或硬编码 `/…`），在 chamber 页面（控制面
+  origin）会打到控制面自己。已知实例：
+  - `@deepseek-ai/dsh-client-hmr`——`EventSource('/plugins/events')` 命中
+    控制面 SPA fallback 的 text/html，每次 boot/重连刷屏 MIME 中止报错；
+    已通过加入 `CHAMBER_COVERED_IDS`（page-own，无 factory）断链修复；
+  - `@deepseek-ai/dsh-session-log-export`——`HEAD /api/session.export` 打到
+    控制面 404 JSON，chamber 视图"导出会话日志"不可用（实例官方 UI 正常）；
+    **记录缓办**：用户决策不逐个临时 fork（版本漂移 + UI 重复 + AGENTS.md
+    可改源码边界扩张），待出现第二个同类特性时一次性建立 patched-copy
+    基础设施（共享 base-path helper）再统一处理。
 - **dsh 运行时版本管理（设计 18，M5–M7 已落地）**：剩余验证与实现缺口：
   - macOS 打包态实机：真实 `.app` 内共享 `packages/dsh-runtime`、内嵌 pnpm、
     koffi/dsh CLI 与完整激活/故障回退/数据恢复链；Linux server 同款端到端记录；
