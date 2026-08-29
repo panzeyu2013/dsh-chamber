@@ -128,7 +128,7 @@ function parseCookie(header: string | undefined): Record<string, string> {
   return out
 }
 
-const SESSION_COOKIE = 'dsh_gateway_session'
+export const SESSION_COOKIE = 'dsh_gateway_session'
 const SESSION_TTL_SECONDS = 12 * 3600 // 12h
 
 function validSessionExpiry(value: unknown, nowSeconds: number): value is number {
@@ -319,8 +319,9 @@ function createPasswordProvider(store: GatewayStore, plainPassword: string): Aut
       const key = rateKey(req)
       const check = rateLimit.consume(key)
       if (!check.allowed) {
-        const err = new Error(`too many login attempts; retry in ${Math.ceil(check.retryAfterMs / 1000)}s`) as Error & { code?: string }
+        const err = new Error(`too many login attempts; retry in ${Math.ceil(check.retryAfterMs / 1000)}s`) as Error & { code?: string; retryAfterMs?: number }
         err.code = 'rate_limited'
+        err.retryAfterMs = check.retryAfterMs
         throw err
       }
       const password = (body as { password?: unknown } | null | undefined)?.password

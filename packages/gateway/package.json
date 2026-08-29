@@ -25,7 +25,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node test/config.test.ts && node test/auth.test.ts && node test/gateway-proxy.test.ts && node test/request-policy.test.ts && node test/dispatch-composition.test.ts && node test/lifecycle.test.ts && node test/spawn-env.test.ts && node test/dsh-path.test.ts && node test/store-permissions.test.ts && node test/audit.test.ts && node test/body-limit.test.ts && node test/git-feature.test.ts && node test/index-boundary.test.ts && node test/feature-lifecycle.test.ts && node test/public-http.test.ts && node test/runtime-routes.test.ts && node test/build-smoke.test.ts",
+    "test": "node test/config.test.ts && node test/auth.test.ts && node test/gateway-proxy.test.ts && node test/request-policy.test.ts && node test/dispatch-composition.test.ts && node test/login-page.test.ts && node test/lifecycle.test.ts && node test/spawn-env.test.ts && node test/dsh-path.test.ts && node test/store-permissions.test.ts && node test/audit.test.ts && node test/body-limit.test.ts && node test/git-feature.test.ts && node test/index-boundary.test.ts && node test/feature-lifecycle.test.ts && node test/public-http.test.ts && node test/runtime-routes.test.ts && node test/build-smoke.test.ts",
     "prepack": "pnpm run build"
   },
   "license": "MIT",
