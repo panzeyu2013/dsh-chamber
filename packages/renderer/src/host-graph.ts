@@ -286,11 +286,16 @@ export interface CollectExtraRowsDeps {
    * still starting; the proxy answers 503 fast and the graph appears moments
    * later). Only the fast 503-null path retries — a hung fetch (30s timeout)
    * or other channel failure still fails fast, so the budget is bounded by the
-   * delay sum (~3s), never by per-attempt timeouts. Budget exhaustion keeps
-   * today's silent-degrade contract (no extra plugins for this boot).
+   * delay sum (~4.5s), never by per-attempt timeouts. Budget exhaustion keeps
+   * today's silent-degrade contract (no extra plugins for this boot). The
+   * 10-attempt default was widened from 6 (2026-08 review): the observed
+   * local spawn→ready window is ~3s (control-plane host logs), which the
+   * former 2.5s delay sum did not cover for a shell boot starting at spawn
+   * time — the extra attempts are pure sleep on the fast 503 path, so a
+   * genuinely failing channel (non-503) is unaffected.
    */
   retry?: {
-    /** Total fetch attempts including the first. Default 6. */
+    /** Total fetch attempts including the first. Default 10. */
     attempts?: number
     /** Delay between attempts. Default 500ms. */
     delayMs?: number
