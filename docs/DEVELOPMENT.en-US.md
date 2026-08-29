@@ -83,19 +83,15 @@ git clone <REPO-URL>
 cd dsh-chamber
 ```
 
-`vendor/harness-packages` is a **gitignored symlink directory** — one symlink per dsh package, named after the package, pointing at the [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) source tree. It is never committed and must exist **before** `pnpm install` (the workspace resolves unmodified dsh packages through it). `scripts/dev/ensure-harness-vendor.mjs` bootstraps it; on a fresh clone run it explicitly **before** `pnpm install`:
+`vendor/harness-packages` is a **gitignored symlink directory** — one symlink per dsh package, named after the package, pointing at the fixed-commit **git submodule** (`vendor/harness-checkout`; gitlink = upstream commit, **single source of truth with no fallbacks** — no env vars, no sibling checkout, no codeload download). It is never committed and must exist **before** `pnpm install` (the workspace resolves unmodified dsh packages through it). `scripts/dev/ensure-harness-vendor.mjs` bootstraps it: it hard-fails when submodule HEAD != `harness.commit`, rebuilds links idempotently (no-op when the link set is unchanged), and asserts the link set matches the lockfile's vendor importer records; `--check` validates without writing. On a fresh clone (after submodule materialization) run it explicitly **before** `pnpm install`:
 
 ```bash
+git submodule update --init   # materialize the submodule (CI: checkout submodules: true)
 node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 
-The script resolves the source tree in this order:
-
-1. `DSH_CHAMBER_HARNESS_ROOT` env var — use that checkout directly;
-2. `vendor/harness-checkout` — a previously downloaded managed snapshot (reused when its `.harness-pin` marker matches the pinned commit);
-3. sibling checkout `<repo>/../deepseek-harness` (zero-network local dev; warns when HEAD differs from the pin);
-4. otherwise download a snapshot from codeload at the pinned commit (pinned in `harness.commit`, overridable via `DSH_CHAMBER_HARNESS_COMMIT`).
+**Upgrading the harness pin goes only through** `node scripts/update-vendor.mjs <tag>` (atomic: fetch+verify tag → switch submodule → update `harness.commit` → rebuild links → regenerate lockfile → frozen verify); never bump the gitlink / `harness.commit` by hand. `pnpm-workspace.yaml` sets `verifyDepsBeforeRun: false`: `pnpm run` no longer auto-installs (guarding the lockfile from non-frozen rewrites) — run `pnpm install` explicitly after dependency changes; CI additionally asserts `git diff --exit-code -- pnpm-lock.yaml` after every frozen install.
 
 The root `.npmrc` is a gitignored local convenience config, so local development may opt into a binary mirror. Formal build configuration commits no third-party `electronDownload.mirror` and always uses Electron's official source, preventing one mirror from replacing both a binary and its checksum before formal signing.
 
@@ -178,8 +174,9 @@ docs/
   *.en-US.md                English mirrors of the root docs
 vendor/
   harness-packages/         @deepseek-ai/* symlink tree into the dsh source
-                            (bootstrapped by preinstall, pinned at harness.commit)
-  harness-checkout/         Managed dsh snapshot (download fallback, gitignored)
+                            inside the submodule (bootstrapped by preinstall,
+                            gitlink pinned at harness.commit)
+  harness-checkout/         dsh source git submodule (fixed commit, gitlink is the pin)
 ```
 
 ## 7. Scripts

@@ -9,7 +9,7 @@ Thank you for contributing! dsh-chamber is the local desktop **connection manage
 Environment setup (requirements, clone, vendor bootstrap, `pnpm install`, `bundle:dsh`), running, build/packaging, CI/releases, and repository layout live in the **development docs [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md)**. Quick start:
 
 ```bash
-git clone <REPO-URL>
+git clone <REPO-URL> --recurse-submodules
 cd dsh-chamber
 node scripts/dev/ensure-harness-vendor.mjs   # must run before pnpm install
 pnpm install

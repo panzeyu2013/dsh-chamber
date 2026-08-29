@@ -276,7 +276,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   141eb6fef8（dsh 0.1.0-rc.8），vendor 源物化为仓库内真实目录
   `vendor/harness-checkout`（pnpm 11 剪枝规避：符号链接指向仓库外源时重写锁文件
   会剪除 vendor importer 记录，仓库内真实目录则保留；`pnpm install
-  --frozen-lockfile` 已验证）。对齐内容：复合延迟族 +3 覆盖（ui-attachment /
+  --frozen-lockfile` 已验证）。**2026-09 submodule 化**：该目录改为固定 commit
+  的 git submodule（gitlink 即 pin，单一事实来源；升级走 `scripts/update-vendor.mjs
+  <tag>`），链接仍指向仓库内目录，剪枝规避与锁文件断言（ensure
+  `--check`）持续生效。对齐内容：复合延迟族 +3 覆盖（ui-attachment /
   ui-brand-official / ui-reference，chamber-entry.ts registerDeferred +
   chamber-covered.ts）；**ui-renderer 归 page-own**（renderer 移入
   dsh-client-ui-renderer 源，boot.ts 内核收编其 client half——与 modules 同款

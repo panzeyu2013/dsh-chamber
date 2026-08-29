@@ -7,8 +7,9 @@
 
 ## 0. 目标与基线
 
-- [ ] 确定目标版本与 commit：`git -C ../deepseek-harness ls-remote origin --tags`
-      或 `git fetch origin --tags` 后 `git tag -l | sort -V`。
+- [ ] 确定目标版本与 commit：`git ls-remote --tags https://github.com/deepseek-ai/deepseek-harness.git`
+      或 submodule 内 `git -C vendor/harness-checkout fetch origin --tags` 后
+      `git -C vendor/harness-checkout tag -l | sort -V`。
 - [ ] 记录当前 `harness.commit`（旧 pin）与目标 commit。
 - [ ] 检查工作区/stash：确认无未提交的迁移相关工作（发布 stash 等）。
 
@@ -22,13 +23,21 @@
 - [ ] fork 副本上游改动面：`packages/client/connection`、`packages/client/web` 的
       rc 间 diff——判断"冲突需合并" vs "干净采纳"。
 
-## 2. 四者 pin 一致性（统一到目标版本）
+## 2. 双线 pin 一致性（源码线 + 运行时线）
 
-- [ ] `harness.commit` → 目标 commit（注释头保留）。
-- [ ] 兄弟检出同步：`git -C ../deepseek-harness checkout <tag>`（消除潜伏回退源；
-      未跟踪文件不受影响）。
-- [ ] `bundle-dsh.mjs` `DEFAULT_DSH_VERSION` + `packages/desktop/vendor/dsh/package.json`
-      `"@deepseek-ai/dsh"` → 目标版本（先确认 npm 已发布）。
+> 2026-09 submodule 化后：**源码线**（构建期 vendor 树）由 git submodule
+> 固定 commit，升级唯一入口是 `scripts/update-vendor.mjs`；**运行时线**
+> （打包进桌面的 `@deepseek-ai/dsh` npm 包）维持原有四常量。
+
+- [ ] **源码线（submodule）**：`node scripts/update-vendor.mjs <tag>` 原子升级
+      （fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 →
+      重生成锁文件 → frozen 验证）；输出确认 commit 与 tag 远程解析一致。
+      禁止手工改 gitlink / `harness.commit`。
+- [ ] 源码线验证：`node scripts/dev/ensure-harness-vendor.mjs --check` 通过
+      （submodule HEAD == harness.commit，链接集合 == 锁文件 importer 集合）。
+- [ ] **运行时线**：`bundle-dsh.mjs` `DEFAULT_DSH_VERSION` +
+      `packages/desktop/vendor/dsh/package.json` `"@deepseek-ai/dsh"` → 目标版本
+      （先确认 npm 已发布）。
 - [ ] **CI 环境变量**：`.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`
       同步（此 env 仅存在于 release.yml，CI 不打包；若将来把打包 job 加回
       ci.yml，必须连同 ci.yml 一起同步）。
@@ -36,7 +45,7 @@
       `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.1-rc.2`）→ 目标版本（与 release.yml
       的 env 同步；脚本默认安装该版本，用户可交互覆盖）。
 - [ ] 重建 vendor 树：`node scripts/dev/ensure-harness-vendor.mjs` → 链接数 = 目标
-      版本包数（240 之类），确认无告警（HEAD==pin）。
+      版本包数（240 之类），无告警（submodule HEAD==pin）。
 
 ## 3. fork 副本 rebase（chamber 侧适配）
 
@@ -51,11 +60,14 @@
 
 ## 4. 锁文件（AGENTS.md 关键注意）
 
-- [ ] **带 vendor 树**运行 pnpm 生成（preinstall 会重建链接）。
+- [ ] 源码线升级时由 `scripts/update-vendor.mjs` 原子重生成（非 frozen install →
+      restore-lockfile-vendor-records.mjs 补回 → frozen 验证），**不要在锁文件
+      重生成前手工跑 ensure 的默认模式**（断言会因锁文件滞后而失败，属预期）。
 - [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/dev/restore-lockfile-vendor-records.mjs`
       补回；**新增 vendor 包**（如 dsh-authorization）若不在 HEAD 锁文件中需手工补齐
-      importer 记录（参照既有 vendor 记录格式）。
-- [ ] `pnpm install --frozen-lockfile` 通过；`grep -c "dsh-authorization" pnpm-lock.yaml` > 0。
+      importer 记录（参照既有 vendor 记录格式，零依赖成员为单行 `key: {}` 块）。
+- [ ] `pnpm install --frozen-lockfile` 通过；`node scripts/dev/ensure-harness-vendor.mjs --check`
+      通过；`git diff --exit-code -- pnpm-lock.yaml` 为空（漂移断言）。
 
 ## 5. 捆绑运行时
 

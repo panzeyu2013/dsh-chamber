@@ -272,6 +272,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Pinned harness source tree is a git submodule (gitlink ==
+          # harness.commit); shallow keeps the 240-package monorepo fast.
+          submodules: true
+          shallow-submodules: true
       - name: Verify workflow action pins
         run: node scripts/verify-workflow-action-pins.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
@@ -281,14 +286,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Cache pinned harness snapshot
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: vendor/harness-checkout
-          key: harness-${{ hashFiles('harness.commit') }}
-      - name: Bootstrap vendor tree
+      - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway + runtime)
         run: |
           pnpm run typecheck
@@ -350,6 +352,10 @@ jobs:
           # bound the tag to; a default-branch advance between jobs must not
           # pack/publish an unvalidated commit under a validated tag (S16).
           ref: ${{ github.sha }}
+          # Pinned harness source tree is a git submodule (gitlink ==
+          # harness.commit); shallow keeps the 240-package monorepo fast.
+          submodules: true
+          shallow-submodules: true
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -358,14 +364,11 @@ jobs:
           node-version: lts/*
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      - name: Cache pinned harness snapshot
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: vendor/harness-checkout
-          key: harness-${{ hashFiles('harness.commit') }}
-      - name: Bootstrap vendor tree
+      - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
       - name: Pack and smoke-test the installed gateway CLI
         run: |
           mkdir -p packages/gateway/release /tmp/dsh-gateway-install
@@ -413,6 +416,10 @@ jobs:
           # (S16): a branch advance between jobs must not ship an unvalidated
           # commit under a validated tag.
           ref: ${{ github.sha }}
+          # Pinned harness source tree is a git submodule (gitlink ==
+          # harness.commit); shallow keeps the 240-package monorepo fast.
+          submodules: true
+          shallow-submodules: true
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -420,14 +427,11 @@ jobs:
         with:
           node-version: lts/*
           cache: pnpm
-      - name: Cache pinned harness snapshot
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: vendor/harness-checkout
-          key: harness-${{ hashFiles('harness.commit') }}
-      - name: Bootstrap vendor tree
+      - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
 
       - name: Build and package macOS app (arm64)
         # electron-builder runs the afterPack hook
@@ -524,6 +528,10 @@ jobs:
           # (S16): a branch advance between jobs must not ship an unvalidated
           # commit under a validated tag.
           ref: ${{ github.sha }}
+          # Pinned harness source tree is a git submodule (gitlink ==
+          # harness.commit); shallow keeps the 240-package monorepo fast.
+          submodules: true
+          shallow-submodules: true
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -531,14 +539,11 @@ jobs:
         with:
           node-version: lts/*
           cache: pnpm
-      - name: Cache pinned harness snapshot
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: vendor/harness-checkout
-          key: harness-${{ hashFiles('harness.commit') }}
-      - name: Bootstrap vendor tree
+      - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
 
       - name: Build and package Windows app
         shell: bash

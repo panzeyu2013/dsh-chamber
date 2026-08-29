@@ -9,7 +9,7 @@
 环境搭建（要求、clone、vendor 引导、`pnpm install`、`bundle:dsh`）、运行、构建/打包、CI/发布与仓库结构见**开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**。快速入场：
 
 ```bash
-git clone <REPO-URL>
+git clone <REPO-URL> --recurse-submodules
 cd dsh-chamber
 node scripts/dev/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
 pnpm install

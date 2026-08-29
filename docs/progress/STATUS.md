@@ -43,6 +43,18 @@
 
 ## 部分完成（剩余验收）
 
+- **vendor 源码树 submodule 化（2026-09）**：`vendor/harness-checkout` 已从
+  多源回退（env/兄弟检出/codeload）迁移为固定 commit 的 git submodule——
+  gitlink 即 pin、`ensure-harness-vendor.mjs` 硬校验
+  submodule HEAD == `harness.commit` 并断言链接集合 == 锁文件 vendor importer
+  集合（`--check`）、幂等差量建链（集合未变零操作）、`verifyDepsBeforeRun:
+  false` 掐断隐式 install、CI 四处 checkout `submodules: true` + frozen 后
+  `git diff --exit-code -- pnpm-lock.yaml` 漂移断言、升级唯一入口
+  `scripts/update-vendor.mjs <tag>`（原子重生成锁文件）。本地已验证：frozen
+  install / 幂等 / --check / 漂移演练（详见迁移提交）。**剩余验收**：Windows
+  runner 上 submodule 物化 + junction 建链（`build-windows` 腿）、CI 真跑
+  （push 后 ci.yml 全绿）、release.yml 改动后的 `workflow_dispatch` dry_run
+  全链验证（release-checklist §7b 纪律）。
 - **桌面通知（设计 19）**：自动化主链已完成；剩余 macOS 系统通知权限/
   拒绝行为、点击打开、关窗/托盘/后台三形态与打包态实机验收。
 - **VS Code 深链 + open-in（设计 16/20）**：剩余 macOS 深链冷/热启动、打包态、

@@ -77,19 +77,15 @@ git clone <REPO-URL>
 cd dsh-chamber
 ```
 
-`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码树。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/dev/ensure-harness-vendor.mjs` 负责引导；全新克隆需在 `pnpm install` **之前**显式运行一次：
+`vendor/harness-packages` 是**被 gitignore 的符号链接目录**，每个 dsh 包一个符号链接——链接名即包名，指向固定 commit 的 **git submodule**（`vendor/harness-checkout`，gitlink = 上游 commit，**单一事实来源、无任何回退**：不读环境变量、不复用兄弟检出、不从 codeload 下载）。它永不提交，且必须在 `pnpm install` **之前**建立（`pnpm-workspace.yaml` 经它解析未修改的 dsh 包）。`scripts/dev/ensure-harness-vendor.mjs` 负责引导：硬校验 submodule HEAD == `harness.commit`（不一致即失败）、幂等差量建链（集合未变时零操作）、断言链接集合与锁文件 vendor importer 集合一致；`--check` 模式只校验不写盘。全新克隆（含 submodule 物化）后需在 `pnpm install` **之前**显式运行一次：
 
 ```bash
+git submodule update --init   # 物化 submodule（CI 由 checkout submodules: true 完成）
 node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 
-脚本按以下顺序解析源码树：
-
-1. `DSH_CHAMBER_HARNESS_ROOT` 环境变量——直接使用该检出；
-2. `vendor/harness-checkout`——先前下载的受管快照（`.harness-pin` marker 与固定提交一致时复用）；
-3. 兄弟检出 `<repo>/../deepseek-harness`（零网络本地开发；HEAD 与固定提交不一致时警告）；
-4. 否则从 codeload 按固定提交下载快照（固定于 `harness.commit`，可用 `DSH_CHAMBER_HARNESS_COMMIT` 覆盖）。
+**升级上游 pin 只能走** `node scripts/update-vendor.mjs <tag>`（原子流程：fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 → 重生成锁文件 → frozen 验证），不要手工改 gitlink / `harness.commit`。`pnpm-workspace.yaml` 已设 `verifyDepsBeforeRun: false`：pnpm run 不再隐式 install（防非 frozen install 改写锁文件），依赖变更请显式 `pnpm install`；CI 在 frozen install 后另有 `git diff --exit-code -- pnpm-lock.yaml` 漂移断言。
 
 根目录 `.npmrc` 是 gitignored 的本地便利配置，本地开发可自行把 Electron 二进制下载指向镜像；正式构建配置不提交第三方 `electronDownload.mirror`，始终使用 Electron 官方源，避免镜像同时替换二进制与校验表后被正式签名。
 
@@ -178,9 +174,9 @@ docs/
   checklists/               操作清单（发布 / dsh 升级 / 打包完整性）
   *.en-US.md                各根文档的英文镜像
 vendor/
-  harness-packages/         @deepseek-ai/* 符号链接树，指向 dsh 源码
-                            （preinstall 引导，固定于 harness.commit）
-  harness-checkout/         受管 dsh 快照（下载兜底，gitignored）
+  harness-packages/         @deepseek-ai/* 符号链接树，指向 submodule 内的 dsh 源码
+                            （preinstall 引导，gitlink 固定于 harness.commit）
+  harness-checkout/         dsh 源码 git submodule（固定 commit，gitlink 即 pin）
 ```
 
 ## 7. 脚本

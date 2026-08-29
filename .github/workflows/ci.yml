@@ -23,6 +23,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The pinned harness source tree is a git submodule
+          # (vendor/harness-checkout, gitlink == harness.commit). Shallow
+          # checkout keeps the 240-package monorepo clone fast; the gitlink
+          # pins an exact commit, so depth 1 is sufficient for the build.
+          submodules: true
+          shallow-submodules: true
       - name: Verify workflow action pins
         run: node scripts/verify-workflow-action-pins.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
@@ -35,16 +42,17 @@ jobs:
       # Bootstrap the vendor symlink tree BEFORE pnpm install: pnpm captures the
       # workspace snapshot before preinstall runs, so the links must already
       # exist for the install to resolve the full @deepseek-ai/* workspace.
-      # The managed snapshot (vendor/harness-checkout) is cached by pin; on a
-      # cache hit the bootstrap reuses it, on a miss it downloads from codeload.
-      - name: Cache pinned harness snapshot
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: vendor/harness-checkout
-          key: harness-${{ hashFiles('harness.commit') }}
-      - name: Bootstrap vendor tree
+      # The script verifies submodule HEAD == harness.commit (fail-closed on
+      # drift) and is idempotent (no-op when the link set is unchanged).
+      - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
+      # The lockfile is the deterministic contract between the committed
+      # workspace members and the resolution result; a non-frozen install
+      # must never silently rewrite it (pnpm 11 prunes symlinked-member
+      # importer records). Fail the run if it moved.
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway)
         run: |
           pnpm run typecheck

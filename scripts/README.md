@@ -12,7 +12,8 @@
 
 ## `scripts/dev/` —— 开发者 / 维护者 / 测试脚本
 
-- `ensure-harness-vendor.mjs`、`ensure-electron.mjs` —— 安装链（preinstall/postinstall 引导）
+- `ensure-harness-vendor.mjs`、`ensure-electron.mjs` —— 安装链（preinstall/postinstall 引导；
+  vendor 树由 submodule 单源引导：硬校验 pin + 幂等建链 + 锁文件集合断言，`--check` 只校验）
 - `verify-i18n.mjs`、`typecheck-client-web.mjs`、`release-semver.mjs`、
   `release-workflow-policy.test.mjs`、`gen-third-party-notices.mjs`、
   `restore-lockfile-vendor-records.mjs`、`test-shell-loader.mjs`、`test-shell-register.mjs`
@@ -20,3 +21,8 @@
 
 这些脚本面向仓库开发与发布流程（package.json hooks、CI、release workflow 引用），
 不在用户部署环境中执行。
+
+## `scripts/update-vendor.mjs` —— 上游 dsh 源码 pin 升级（submodule 原子流程）
+
+`node scripts/update-vendor.mjs <tag>`（tag 如 `dsh-v0.1.1-rc.2`）：fetch+校验 tag →
+切 submodule → 更新 `harness.commit` → 差量建链 → 原子重生成锁文件 → frozen 验证。
