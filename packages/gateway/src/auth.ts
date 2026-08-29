@@ -1,8 +1,9 @@
 /**
- * Gateway authentication (design 17 §5): the pluggable AuthProvider seam.
+ * Gateway authentication (design 17 §7; config hard gate §5.1): the pluggable
+ * AuthProvider seam.
  *
  *   - `none`    — loopback-only trust (S1 forbids it on a non-loopback bind).
- *   - `token`   — the shared bearer token (design 17 §5.2); only its salted
+ *   - `token`   — the shared bearer token (design 17 §7.2); only its salted
  *                 scrypt hash is persisted (`tokens.json`, 0600), never the
  *                 plaintext (S5).
  *   - `password`— scrypt password verify → HS256 JWT session cookie (12h),
@@ -10,13 +11,45 @@
  *                 (S12), login rate limit (S8), rotate-jwt-secret on revoke
  *                 (S13).
  *
+ * Phase 1 — runtime credential management: credentials are SERVER STATE, not
+ * deployment config. `createAuth` seeds the persisted store from config via
+ * `seedCredentialsFromConfig` (config-asserted only while the persisted source
+ * is `'config'`; `'runtime'` credentials are authoritative and config seeding
+ * never overwrites them, warn instead). The returned provider is a DYNAMIC
+ * facade whose effective kind is computed from the CURRENT persisted state per
+ * request; `verify`/`login`/`revoke` dispatch by that state, and
+ * `changePassword`/`changeToken` mutate it at runtime (persisted as
+ * `source:'runtime'`, jwt-secret rotated first on password changes — S13).
+ *
+ * Wire contracts (error codes are the dispatch contract):
+ *   - `changePassword(input, req)` / `changeToken(input, req)` resolve
+ *     `{changed:true, kind, source, removed?|token?}`; errors carry one of
+ *     `'bad_request' | 'invalid_credentials' | 'ambient_principal_rejected' |
+ *     'last_credential' | 'rate_limited' | 'auth_busy'`.
+ *   - Non-ambient proof: the request principal must be a bearer-token
+ *     principal (token self-proves) OR the current password must verify (only
+ *     while a password exists). A cookie-only principal without a valid
+ *     current password is rejected `'ambient_principal_rejected'`; a principal
+ *     with a wrong current password is rejected `'invalid_credentials'`
+ *     (through the shared login rate limiter → `'rate_limited'`).
+ *   - The facade ALWAYS exposes `login`; when no password is configured it
+ *     throws `code:'no_password'` (dispatch may surface 404/400 accordingly).
+ *
+ * Design note — cached presence vs fresh kind: `kind` is a getter that reads
+ * the persisted state fresh on every request. `verify` uses a CACHED
+ * password/token-presence snapshot (refreshed by every credential mutation)
+ * so the bearer wire-bounds check always precedes any persisted-hash read —
+ * malformed wire input must reach zero hash reads (regression locked by
+ * auth.test.ts). The facade is the sole credential mutator for its store, so
+ * the cache cannot go stale in production.
+ *
  * Secrets never reach logs/renderer/persistence in plaintext; failed auth logs
  * only the principal kind, never header values.
  */
 
-import { createHmac, scrypt, timingSafeEqual } from 'node:crypto'
-import type { GatewayStore } from './store.ts'
-import { hashCredential } from './store.ts'
+import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
+import type { CredentialSource, GatewayStore, GatewayStoreLogger } from './store.ts'
+import { hashCredential, verifyCredential } from './store.ts'
 import {
   MAX_GATEWAY_PASSWORD_CHARS,
   MAX_GATEWAY_TOKEN_CHARS,
@@ -50,6 +83,23 @@ export interface AuthProvider {
   login?(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }>
   /** Invalidate sessions/tokens (password change / device revocation). */
   revoke?(principal: AuthPrincipal): Promise<void>
+  /** Runtime password change (Phase 1; wire errors documented in the module
+   * docstring). `remove:true` deletes the password; otherwise `newPassword`
+   * must be 12–1024 characters. */
+  changePassword?(input: ChangePasswordInput, req: AuthRequest): Promise<ChangePasswordResult>
+  /** Runtime token change (Phase 1). `remove:true` deletes the token;
+   * otherwise `newToken` (optional, 32–4096 visible ASCII) or a CSPRNG
+   * generated value is set. The plaintext `token` is returned exactly once
+   * when a new value was set. */
+  changeToken?(input: ChangeTokenInput, req: AuthRequest): Promise<ChangeTokenResult>
+  /** Non-secret projection of the CURRENT persisted credentials (Phase 2, S5):
+   * per-dimension provenance and last-write time ONLY — the verifier/hash
+   * values never leave the store and never appear in the projection. `null`
+   * means the dimension currently has no credential. */
+  credentialProjection?(): {
+    password: { source: CredentialSource; updatedAt: number } | null
+    token: { source: CredentialSource; updatedAt: number } | null
+  }
 }
 
 export interface AuthConfig {
@@ -58,8 +108,47 @@ export interface AuthConfig {
   token?: string
 }
 
+export interface ChangePasswordInput {
+  newPassword?: string
+  remove?: boolean
+  currentPassword?: string
+}
+
+export interface ChangeTokenInput {
+  newToken?: string
+  remove?: boolean
+  currentPassword?: string
+}
+
+export interface ChangePasswordResult {
+  changed: true
+  kind: 'password'
+  /** Provenance of the now-effective credential: `'runtime'` for a normal
+   * change; `'config'` when a remove reverted to the deployment-config
+   * password (last-credential gate). */
+  source: CredentialSource
+  removed?: boolean
+}
+
+export interface ChangeTokenResult {
+  changed: true
+  kind: 'token'
+  source: CredentialSource
+  /** The plaintext token — returned exactly once when a new value was set
+   * (never on remove/revert). */
+  token?: string
+  removed?: boolean
+}
+
+/** Build a coded auth error (the `code` field is the wire contract). */
+function coded(code: string, message: string): Error & { code: string } {
+  const error = new Error(message) as Error & { code: string }
+  error.code = code
+  return error
+}
+
 // ---------------------------------------------------------------------------
-// JWT (HS256) — the 12h session credential (design §5.1; aligned with
+// JWT (HS256) — the 12h session credential (design §7.1; aligned with
 // OpenChamber ui-auth.js, no library dependency added).
 // ---------------------------------------------------------------------------
 
@@ -242,27 +331,81 @@ function verifyCredentialAsync(plain: string, stored: string | null): Promise<bo
   })
 }
 
+const SILENT_LOGGER = { log() {}, warn() {}, error() {} }
+
 // ---------------------------------------------------------------------------
-// Providers
+// Config seeding (source-aware)
 // ---------------------------------------------------------------------------
 
-function createNoneProvider(): AuthProvider {
-  return {
-    kind: 'none',
-    async verify(): Promise<AuthPrincipal> {
-      return { kind: 'none', id: 'anonymous', issuedAt: Date.now() }
-    },
+/**
+ * Seed the persisted credentials from deployment config (called by
+ * `createAuth`). The persisted `source` decides whether config is asserted:
+ *
+ *   password dimension (rotate-first on any write — S13):
+ *     1. config provides a password AND (nothing persisted OR source==='config')
+ *        → write v2 (source:'config'); rotate jwt-secret first when the value
+ *        changed, no-op when unchanged;
+ *     2. config provides a password AND source==='runtime' → ignore config,
+ *        warn loudly (with the runtime updatedAt + revert guidance);
+ *     3. config provides no password AND source==='config' → delete the
+ *        persisted verifier (rotate first);
+ *     4. config provides no password AND source==='runtime' → keep, no warn.
+ *
+ *   token dimension: identical rules, no jwt-secret rotation (a token has no
+ *   session-cookie association).
+ */
+export function seedCredentialsFromConfig(config: AuthConfig, store: GatewayStore, logger: GatewayStoreLogger = SILENT_LOGGER): void {
+  const configPassword = config.password !== undefined && config.password !== '' ? config.password : null
+  const configToken = config.token !== undefined && config.token !== '' ? config.token : null
+
+  const passwordRecord = store.getPasswordCredentialRecord()
+  if (configPassword !== null) {
+    if (passwordRecord === null || passwordRecord.source === 'config') {
+      const unchanged = passwordRecord !== null && verifyCredential(configPassword, passwordRecord.verifier)
+      if (!unchanged) {
+        store.rotateJwtSecret()
+        store.setPasswordCredential(hashCredential(configPassword), 'config')
+      }
+    } else {
+      logger.warn(
+        `gateway-auth: config password IGNORED — a runtime-set password is active `
+        + `(set ${new Date(passwordRecord.updatedAt).toISOString()}); revert it via the change API, `
+        + 'or remove the persisted credential and restart to restore the deployment-config password',
+      )
+    }
+  } else if (passwordRecord !== null && passwordRecord.source === 'config') {
+    store.rotateJwtSecret()
+    store.setPasswordCredential(null)
+  }
+
+  const tokenRecord = store.getTokenCredential()
+  if (configToken !== null) {
+    if (tokenRecord === null || tokenRecord.source === 'config') {
+      const unchanged = tokenRecord !== null && verifyCredential(configToken, tokenRecord.verifier)
+      if (!unchanged) store.setTokenHash(hashCredential(configToken), 'config')
+    } else {
+      logger.warn(
+        `gateway-auth: config token IGNORED — a runtime-set token is active `
+        + `(set ${new Date(tokenRecord.updatedAt).toISOString()}); revert it via the change API, `
+        + 'or remove the persisted credential and restart to restore the deployment-config token',
+      )
+    }
+  } else if (tokenRecord !== null && tokenRecord.source === 'config') {
+    store.setTokenHash(null)
   }
 }
 
-/** `token`: the shared bearer token (design 17 §5.2). Persisted only as a salted scrypt
- * hash (S5) — never the plaintext; the config/env plaintext is dropped at
- * creation. Verify is constant-time and scrypt-work-gated, like the password
- * path. (Migration: a legacy fixed-key HMAC hash fails verify and must be
- * re-provisioned.) */
-function createTokenProvider(store: GatewayStore, plainToken: string): AuthProvider {
-  const tokenHash = plainToken !== '' ? hashCredential(plainToken) : null
-  if (tokenHash !== null) store.setTokenHash(tokenHash)
+// ---------------------------------------------------------------------------
+// Leaf providers
+// ---------------------------------------------------------------------------
+
+/** `token` leaf: the shared bearer token (design 17 §7.2). Only the salted
+ * scrypt hash is ever persisted (S5); the plaintext is dropped at seeding.
+ * Verify is constant-time, scrypt-work-gated, and re-reads the CURRENT
+ * persisted hash on every request so runtime token changes take effect
+ * immediately. The wire bounds check runs BEFORE the persisted-hash read or
+ * any scrypt work (malformed input must reach zero hash reads). */
+function createTokenProvider(store: GatewayStore): AuthProvider {
   const verifyBounded = createPasswordWorkGate()
   return {
     kind: 'token',
@@ -288,20 +431,18 @@ function createTokenProvider(store: GatewayStore, plainToken: string): AuthProvi
   }
 }
 
-/** `password`: scrypt verify → HS256 JWT session cookie (S12), login rate
- * limit (S8), rotate-jwt-secret on revoke (S13). The password is only ever
- * held as a scrypt hash; the plaintext (config/env) is dropped at creation. */
-function createPasswordProvider(store: GatewayStore, plainPassword: string): AuthProvider {
-  const passwordHash = plainPassword !== '' ? hashCredential(plainPassword) : null
-  const rateLimit = createLoginRateLimiter()
-  const verifyBounded = createPasswordWorkGate()
-
-  function rateKey(req: AuthRequest): string {
-    return req.clientAddress ?? req.socketAddr
-  }
-
+/** `password` leaf: scrypt verify → HS256 JWT session cookie (S12), login
+ * rate limit (S8) and the bounded scrypt work gate — shared with the
+ * credential-change path so brute force on currentPassword costs the same as
+ * login. The verifier is re-read from the store on every login (never a
+ * closure over config) so runtime password changes take effect immediately. */
+function createPasswordProvider(
+  store: GatewayStore,
+  rateLimit: LoginRateLimiter,
+  verifyBounded: (task: () => Promise<boolean>) => Promise<boolean>,
+  rateKey: (req: AuthRequest) => string,
+): { verify(req: AuthRequest): Promise<AuthPrincipal | null>; login(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }> } {
   return {
-    kind: 'password',
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
       const cookie = parseCookie(headerValue(req.headers, 'cookie'))
       const session = cookie[SESSION_COOKIE]
@@ -324,8 +465,9 @@ function createPasswordProvider(store: GatewayStore, plainPassword: string): Aut
         throw err
       }
       const password = (body as { password?: unknown } | null | undefined)?.password
-      if (passwordHash === null || typeof password !== 'string'
-        || !(await verifyBounded(() => verifyCredentialAsync(password, passwordHash)))) {
+      const verifier = store.getPasswordCredential()
+      if (verifier === null || typeof password !== 'string'
+        || !(await verifyBounded(() => verifyCredentialAsync(password, verifier)))) {
         throw new Error('invalid password')
       }
       rateLimit.reset(key)
@@ -335,13 +477,253 @@ function createPasswordProvider(store: GatewayStore, plainPassword: string): Aut
         setCookie: `${SESSION_COOKIE}=${jwt}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_SECONDS}${req.secure === true ? '; Secure' : ''}`,
       }
     },
-    async revoke(): Promise<void> {
-      store.rotateJwtSecret()
-    },
   }
 }
 
-export function createAuth(config: AuthConfig, store: GatewayStore): AuthProvider {
+// ---------------------------------------------------------------------------
+// Dynamic facade
+// ---------------------------------------------------------------------------
+
+/** The dynamic AuthProvider facade (Phase 1): effective kind is derived from
+ * the CURRENT persisted credentials; verify/login/revoke dispatch by it, and
+ * changePassword/changeToken mutate it (serialized by a promise-chain mutex,
+ * last-writer-wins). See the module docstring for the presence-cache note. */
+function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): AuthProvider {
+  const rateLimit = createLoginRateLimiter()
+  const verifyBounded = createPasswordWorkGate()
+  function rateKey(req: AuthRequest): string {
+    // dispatch always passes decision.clientAddress as a string ('' when the
+    // boundary could not derive a client) — `??` would never fall back, so
+    // the empty string is handled explicitly (fall back to the socket peer).
+    const addr = req.clientAddress
+    return addr !== undefined && addr !== '' ? addr : req.socketAddr
+  }
+  const passwordLeaf = createPasswordProvider(store, rateLimit, verifyBounded, rateKey)
+  const tokenLeaf = createTokenProvider(store)
+
+  // Cached credential presence for verify dispatch (see module docstring):
+  // refreshed by every credential mutation so the bearer wire bounds check
+  // always precedes any persisted-hash read.
+  let hasPassword = store.getPasswordCredential() !== null
+  let hasToken = store.getTokenHash() !== null
+  function refreshCredentialState(): void {
+    hasPassword = store.getPasswordCredential() !== null
+    hasToken = store.getTokenHash() !== null
+  }
+
+  const configPassword = config.password !== undefined && config.password !== '' ? config.password : null
+  const configToken = config.token !== undefined && config.token !== '' ? config.token : null
+
+  // Serialize credential changes: concurrent changePassword/changeToken calls
+  // run strictly one after another (last-writer-wins, no interleaving).
+  let changeChain: Promise<unknown> = Promise.resolve()
+  function serialize<T>(task: () => Promise<T>): Promise<T> {
+    const run = changeChain.then(task, task)
+    changeChain = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  let provider: AuthProvider
+
+  /** Non-ambient proof gate shared by changePassword/changeToken: a bearer
+   * token principal self-proves; otherwise the current password must verify
+   * (bounded work gate + login rate limiter, same key as login). Any other
+   * principal kind (e.g. a future passkey leaf) is explicitly fail-closed —
+   * never an ambient proof. */
+  async function assertChangeProof(input: { currentPassword?: unknown }, req: AuthRequest): Promise<void> {
+    const currentPassword = input.currentPassword
+    const principal = await provider.verify(req)
+    if (principal !== null && principal.kind === 'token') return
+    if (principal !== null && principal.kind !== 'password') {
+      // Unknown/future principal kinds (passkey, …) are not ambient proof and
+      // carry no password session — fail closed rather than silently
+      // allowing a cookie-less mutation.
+      throw coded('invalid_credentials', 'this principal kind cannot change gateway credentials without the current password')
+    }
+    if (typeof currentPassword !== 'string') {
+      if (principal !== null) {
+        throw coded('ambient_principal_rejected', 'a cookie-only principal must supply the current password to change gateway credentials')
+      }
+      throw coded('invalid_credentials', 'changing gateway credentials requires a bearer-token principal or the current password')
+    }
+    const verifier = store.getPasswordCredential()
+    if (verifier === null) throw coded('invalid_credentials', 'no password is configured; the current password cannot be validated')
+    const key = rateKey(req)
+    const check = rateLimit.consume(key)
+    if (!check.allowed) {
+      throw coded('rate_limited', `too many attempts; retry in ${Math.ceil(check.retryAfterMs / 1000)}s`)
+    }
+    const ok = await verifyBounded(() => verifyCredentialAsync(currentPassword, verifier))
+    if (!ok) throw coded('invalid_credentials', 'current password is incorrect')
+    rateLimit.reset(key)
+  }
+
+  async function changePassword(input: ChangePasswordInput, req: AuthRequest): Promise<ChangePasswordResult> {
+    return serialize(async () => {
+      if (input === null || typeof input !== 'object') throw coded('bad_request', 'changePassword body must be an object')
+      const remove = input.remove === true
+      if (input.remove !== undefined && typeof input.remove !== 'boolean') throw coded('bad_request', 'remove must be a boolean')
+      if (input.currentPassword !== undefined && typeof input.currentPassword !== 'string') {
+        throw coded('bad_request', 'currentPassword must be a string')
+      }
+      // remove and a new value are mutually exclusive — never silently ignore
+      // a conflicting field (honest failure over silent surprise).
+      if (remove && input.newPassword !== undefined) {
+        throw coded('bad_request', 'newPassword must not be present with remove')
+      }
+      if (!remove) {
+        const newPassword = input.newPassword
+        if (typeof newPassword !== 'string'
+          || newPassword.length < MIN_GATEWAY_PASSWORD_CHARS || newPassword.length > MAX_GATEWAY_PASSWORD_CHARS) {
+          throw coded('bad_request', `new password must be ${MIN_GATEWAY_PASSWORD_CHARS}-${MAX_GATEWAY_PASSWORD_CHARS} characters`)
+        }
+      }
+
+      await assertChangeProof(input, req)
+
+      // Last-credential gate: removing the final credential is refused unless
+      // the deployment config provides a replacement (revert semantics).
+      let revertToConfig = false
+      if (remove) {
+        const tokenExists = store.getTokenHash() !== null
+        if (!tokenExists) {
+          if (configPassword !== null) revertToConfig = true
+          else throw coded('last_credential', 'refusing to remove the last gateway credential; configure a replacement first')
+        }
+      }
+
+      if (remove) {
+        // Rotate FIRST (S13): a failed persistence below leaves old cookies
+        // dead instead of accepting a mixed state (never both).
+        store.rotateJwtSecret()
+        store.setPasswordCredential(revertToConfig ? hashCredential(configPassword!) : null, 'config')
+      } else {
+        store.rotateJwtSecret()
+        store.setPasswordCredential(hashCredential(input.newPassword!), 'runtime')
+      }
+      refreshCredentialState()
+      return {
+        changed: true,
+        kind: 'password',
+        source: revertToConfig ? 'config' : 'runtime',
+        ...(remove ? { removed: true } : {}),
+      }
+    })
+  }
+
+  async function changeToken(input: ChangeTokenInput, req: AuthRequest): Promise<ChangeTokenResult> {
+    return serialize(async () => {
+      if (input === null || typeof input !== 'object') throw coded('bad_request', 'changeToken body must be an object')
+      const remove = input.remove === true
+      if (input.remove !== undefined && typeof input.remove !== 'boolean') throw coded('bad_request', 'remove must be a boolean')
+      if (input.currentPassword !== undefined && typeof input.currentPassword !== 'string') {
+        throw coded('bad_request', 'currentPassword must be a string')
+      }
+      // remove and a new value are mutually exclusive — never silently ignore
+      // a conflicting field (honest failure over silent surprise).
+      if (remove && input.newToken !== undefined) {
+        throw coded('bad_request', 'newToken must not be present with remove')
+      }
+      let tokenValue: string | null = null
+      if (!remove) {
+        if (typeof input.newToken === 'string' && input.newToken !== '') {
+          tokenValue = input.newToken
+        } else if (input.newToken !== undefined) {
+          throw coded('bad_request', 'newToken must be a non-empty string')
+        } else {
+          tokenValue = randomBytes(32).toString('base64url')
+        }
+        if (tokenValue.length < MIN_GATEWAY_TOKEN_CHARS || tokenValue.length > MAX_GATEWAY_TOKEN_CHARS
+          || !/^[\x20-\x7e]+$/.test(tokenValue)) {
+          throw coded('bad_request', `new token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
+        }
+      }
+
+      await assertChangeProof(input, req)
+
+      let revertToConfig = false
+      if (remove) {
+        const passwordExists = store.getPasswordCredential() !== null
+        if (!passwordExists) {
+          if (configToken !== null) revertToConfig = true
+          else throw coded('last_credential', 'refusing to remove the last gateway credential; configure a replacement first')
+        }
+      }
+
+      if (remove) {
+        store.setTokenHash(revertToConfig ? hashCredential(configToken!) : null, 'config')
+      } else {
+        store.setTokenHash(hashCredential(tokenValue!), 'runtime')
+      }
+      refreshCredentialState()
+      return {
+        changed: true,
+        kind: 'token',
+        source: revertToConfig ? 'config' : 'runtime',
+        ...(remove ? { removed: true } : { token: tokenValue! }),
+      }
+    })
+  }
+
+  provider = {
+    get kind(): string {
+      const hasPwd = store.getPasswordCredential() !== null
+      const hasTok = store.getTokenHash() !== null
+      return hasPwd && hasTok ? 'password+token' : hasPwd ? 'password' : hasTok ? 'token' : 'none'
+    },
+    async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
+      if (!hasPassword) {
+        // Token-only or none. The token leaf's wire bounds check always runs
+        // BEFORE any persisted-hash read; the cached hasToken flag decides
+        // "wrong/absent bearer on a token deployment" (null) vs "no-auth
+        // deployment" (anonymous) without touching the store for malformed
+        // input.
+        const tokenPrincipal = await tokenLeaf.verify(req)
+        if (tokenPrincipal !== null) return tokenPrincipal
+        return hasToken ? null : { kind: 'none', id: 'anonymous', issuedAt: Date.now() }
+      }
+      if (!hasToken) {
+        return passwordLeaf.verify(req)
+      }
+      // password+token OR-principal composition (design 17 §7.3): bearer
+      // first, cookie fallback; a saturated bearer gate is not a verdict —
+      // preserve auth_busy only when the cookie also cannot authenticate so
+      // overload is never disguised as an ordinary 401.
+      try {
+        return await tokenLeaf.verify(req) ?? await passwordLeaf.verify(req)
+      } catch (error) {
+        if ((error as Error & { code?: string }).code !== 'auth_busy') throw error
+        const cookiePrincipal = await passwordLeaf.verify(req)
+        if (cookiePrincipal !== null) return cookiePrincipal
+        throw error
+      }
+    },
+    async login(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }> {
+      // The facade ALWAYS exposes login; without a configured password it
+      // throws 'no_password' (documented contract with dispatch).
+      if (!hasPassword) throw coded('no_password', 'password login is not configured on this gateway')
+      return passwordLeaf.login(body, req)
+    },
+    async revoke(principal: AuthPrincipal): Promise<void> {
+      if (principal.kind === 'password') store.rotateJwtSecret()
+    },
+    changePassword,
+    changeToken,
+    // Phase 2 projection: strip the verifier/hash before anything leaves the
+    // provider — the wire contract is provenance + updatedAt only (S5).
+    credentialProjection() {
+      const passwordRecord = store.getPasswordCredentialRecord()
+      const tokenRecord = store.getTokenCredential()
+      return {
+        password: passwordRecord === null ? null : { source: passwordRecord.source, updatedAt: passwordRecord.updatedAt },
+        token: tokenRecord === null ? null : { source: tokenRecord.source, updatedAt: tokenRecord.updatedAt },
+      }
+    },
+  }
+  return provider
+}
+
+export function createAuth(config: AuthConfig, store: GatewayStore, logger: GatewayStoreLogger = SILENT_LOGGER): AuthProvider {
   const hasPassword = config.password !== undefined && config.password !== ''
   const hasToken = config.token !== undefined && config.token !== ''
   if (hasPassword && (config.password!.length < MIN_GATEWAY_PASSWORD_CHARS || config.password!.length > MAX_GATEWAY_PASSWORD_CHARS)) {
@@ -351,34 +733,6 @@ export function createAuth(config: AuthConfig, store: GatewayStore): AuthProvide
     || !/^[\x20-\x7e]+$/.test(config.token!))) {
     throw new TypeError(`gateway token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
   }
-  store.syncPasswordCredential(hasPassword ? config.password! : null)
-  if (!hasPassword && !hasToken) return createNoneProvider()
-  const password = hasPassword ? createPasswordProvider(store, config.password!) : null
-  const token = hasToken ? createTokenProvider(store, config.token!) : null
-  if (password === null) return token!
-  if (token === null) return password
-  return {
-    kind: 'password+token',
-    async verify(req): Promise<AuthPrincipal | null> {
-      // Authorization is explicit machine intent; check it before the ambient
-      // browser cookie so a valid bearer retains its token principal. A
-      // saturated scrypt gate is not an authentication verdict, though: the
-      // independently valid cookie principal must remain usable under bearer
-      // load. Preserve auth_busy only when the cookie also cannot authenticate
-      // so overload is never disguised as an ordinary 401.
-      try {
-        return await token.verify(req) ?? await password.verify(req)
-      } catch (error) {
-        if ((error as Error & { code?: string }).code !== 'auth_busy') throw error
-        const cookiePrincipal = await password.verify(req)
-        if (cookiePrincipal !== null) return cookiePrincipal
-        throw error
-      }
-    },
-    login: (body, req) => password.login!(body, req),
-    async revoke(principal): Promise<void> {
-      if (principal.kind === 'password') await password.revoke?.(principal)
-      else await token.revoke?.(principal)
-    },
-  }
+  seedCredentialsFromConfig(config, store, logger)
+  return createDynamicAuthProvider(config, store)
 }

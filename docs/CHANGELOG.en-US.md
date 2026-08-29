@@ -12,6 +12,39 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Added
+
+- **Gateway runtime credential management (design 17 §7.4)** — gateway
+  passwords/tokens became server state instead of deployment config:
+  `<stateDir>/password-credential` and `tokens.json` now use a v2 JSON envelope
+  (`{schemaVersion:2, source:'config'|'runtime', updatedAt, verifier|hash}`,
+  0600 atomic writes; legacy v1 files migrate on next write). Config seeding
+  (`seedCredentialsFromConfig`) asserts credentials only while unset or
+  `source='config'` (rotating `jwt-secret` first on change); `source='runtime'`
+  credentials are authoritative — config is ignored with a loud warning. New
+  runtime API behind the auth gate: `POST /auth/change-password`
+  (`{newPassword}` 12–1024 or `{remove:true}`), `POST /auth/change-token`
+  (`{newToken}` 32–4096 visible ASCII, `{}` server-generated, or
+  `{remove:true}`; plaintext returned exactly once), `GET /auth/credentials`
+  (non-secret projection, HEAD supported). Error codes map to
+  400/401/403/409/429/503/413. Non-ambient proof (S25): changes require a
+  bearer-token principal or the current password; cookie-only principals are
+  refused. Rotate-first on password changes; removing the last credential is
+  refused 409 unless config provides a replacement (revert). stateDir
+  exclusive lock `.gateway.lock` (O_EXCL-first + rename-claim takeover with
+  moved-content verification and post-create ownership verification —
+  provably no double-hold for two contenders, displaced owners fail closed;
+  pid-verified release, exit listener registered only after a successful
+  acquisition, `close()`/`reacquire()`); offline CLI `gateway auth
+  status|reset-password --new PASSWORD|clear` (status is lock-free read-only;
+  reset/clear refuse a running gateway with the structured `gateway_locked`
+  error); S24 audit events `credential_changed`/`credential_change_rejected`;
+  `/chamber/` Credentials panel (one-time 60s token reveal, config-reseed
+  notices); S25 invariant; full fix round (mutual-exclusion 400 for
+  `remove`+new value, verifier shape validation, `probe-error:<code>` audit
+  detail, `/auth/*` no login redirect, boot line prints the effective auth
+  kind). Desktop settings-bridge convenience reset remains deferred (STATUS).
+
 ## [0.2.0-beta.3] - 2026-08-29
 
 ### Added

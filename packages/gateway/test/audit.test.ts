@@ -30,8 +30,9 @@ function readEvents(file: string): Array<Record<string, string>> {
   return readFileSync(file, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, string>)
 }
 
-test('gateway audit appends JSONL events in order with the given fields', () => {
+test('gateway audit appends JSONL events in order with the given fields', t => {
   const dir = tmpDir('gateway-audit-append-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
   appendAuditEvent(file, { ts: '2026-01-01T00:00:00.000Z', event: 'login_success', kind: 'gateway', detail: 'client:203.0.113.8' })
   appendAuditEvent(file, { ts: '2026-01-01T00:00:01.000Z', event: 'login_invalid_credentials', kind: 'gateway' })
@@ -39,22 +40,22 @@ test('gateway audit appends JSONL events in order with the given fields', () => 
   assert.equal(events.length, 2)
   assert.deepEqual(events[0], { ts: '2026-01-01T00:00:00.000Z', event: 'login_success', kind: 'gateway', detail: 'client:203.0.113.8' })
   assert.deepEqual(events[1], { ts: '2026-01-01T00:00:01.000Z', event: 'login_invalid_credentials', kind: 'gateway' })
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('gateway audit files are 0600 and a loose legacy mode is tightened on append', () => {
+test('gateway audit files are 0600 and a loose legacy mode is tightened on append', t => {
   const dir = tmpDir('gateway-audit-mode-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
   appendAuditEvent(file, { ts: '2026-01-01T00:00:00.000Z', event: 'login_success' })
   assert.equal(statSync(file).mode & 0o777, 0o600)
   chmodSync(file, 0o644)
   appendAuditEvent(file, { ts: '2026-01-01T00:00:01.000Z', event: 'login_success' })
   assert.equal(statSync(file).mode & 0o777, 0o600)
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('gateway audit rotates to <file>.1 past the cap and deletes the old .1', () => {
+test('gateway audit rotates to <file>.1 past the cap and deletes the old .1', t => {
   const dir = tmpDir('gateway-audit-rotate-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
   const maxBytes = 120
   const small: AuditEvent = { ts: '2026-01-01T00:00:00.000Z', event: 'a' }
@@ -73,11 +74,11 @@ test('gateway audit rotates to <file>.1 past the cap and deletes the old .1', ()
   appendAuditEvent(file, big3, maxBytes)
   assert.deepEqual(readEvents(`${file}.1`), [big2], 'the old .1 was deleted and replaced by the rotated current file')
   assert.deepEqual(readEvents(file), [big3])
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('the gateway audit serializer is a fixed whitelist: credentials never reach disk (S24)', () => {
+test('the gateway audit serializer is a fixed whitelist: credentials never reach disk (S24)', t => {
   const dir = tmpDir('gateway-audit-secret-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
   const PASSWORD = 'correct horse battery staple'
   const COOKIE = 'dsh_gateway_session=eyJhbGciOiJIUzI1NiJ9.private'
@@ -94,10 +95,9 @@ test('the gateway audit serializer is a fixed whitelist: credentials never reach
   const raw = readFileSync(file, 'utf8')
   assert.equal(raw.includes(PASSWORD), false)
   assert.equal(raw.includes(COOKIE), false)
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('the exported gateway cap is 5 MiB per the design contract', () => {
+test('the exported gateway cap is 5 MiB per the design contract', t => {
   assert.equal(AUDIT_LOG_MAX_BYTES, 5 * 1024 * 1024)
 })
 
@@ -113,12 +113,43 @@ class FakeRequest extends EventEmitter {
   readonly url: string
   readonly socket: { remoteAddress: string; encrypted?: boolean }
   destroyed = false
+  // Mirrors Node's paused-mode IncomingMessage: body bytes emitted before a
+  // 'data' listener attaches are buffered (the dispatch middleware awaits
+  // auth before readBody() on the gated credential routes). Data replays when
+  // the first 'data' listener attaches; 'end' replays when an 'end' listener
+  // attaches — never inside the 'data' attach (the 'end' listener may not
+  // exist yet, and a bare EventEmitter would drop the event).
+  private pendingBody: Array<{ type: 'data'; chunk: Buffer } | { type: 'end' }> = []
   constructor(method: string, url: string, headers: Record<string, string>, remoteAddress = '203.0.113.8') {
     super()
     this.method = method
     this.url = url
     this.headers = headers
     this.socket = { remoteAddress }
+  }
+  override on(event: string | symbol, listener: (...args: any[]) => void): this {
+    super.on(event, listener)
+    if (event === 'data') {
+      for (const entry of this.pendingBody) {
+        if (entry.type === 'data') super.emit('data', entry.chunk)
+      }
+      this.pendingBody = this.pendingBody.filter(entry => entry.type !== 'data')
+    }
+    if (event === 'end') {
+      const endIndex = this.pendingBody.findIndex(entry => entry.type === 'end')
+      if (endIndex !== -1) {
+        this.pendingBody.splice(endIndex, 1)
+        super.emit('end')
+      }
+    }
+    return this
+  }
+  override emit(event: string | symbol, ...args: any[]): boolean {
+    if ((event === 'data' || event === 'end') && this.listenerCount('data') === 0) {
+      this.pendingBody.push(event === 'data' ? { type: 'data', chunk: args[0] as Buffer } : { type: 'end' })
+      return true
+    }
+    return super.emit(event, ...args)
   }
   destroy(): void { this.destroyed = true }
   async *[Symbol.asyncIterator](): AsyncIterableIterator<Buffer> {}
@@ -183,8 +214,29 @@ async function runLogin(
   return res
 }
 
-test('login success is audited as login_success without the password or cookie (S24)', async () => {
+async function runChange(
+  dispatch: ReturnType<typeof setup>['dispatch'],
+  path: '/auth/change-password' | '/auth/change-token',
+  body: string,
+): Promise<FakeResponse> {
+  const req = new FakeRequest('POST', path, {
+    host: 'gateway.example:3000',
+    'content-type': 'application/json',
+    authorization: 'Bearer secret',
+  })
+  const res = new FakeResponse()
+  const pending = dispatch.middleware(req as unknown as ApiRequest, res as unknown as ApiResponse, new URL(req.url, 'http://localhost'), {} as never)
+  queueMicrotask(() => {
+    req.emit('data', Buffer.from(body))
+    req.emit('end')
+  })
+  await pending
+  return res
+}
+
+test('login success is audited as login_success without the password or cookie (S24)', async t => {
   const dir = tmpDir('gateway-audit-login-ok-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
   const PASSWORD = 'correct horse battery staple'
   const COOKIE = 'dsh_gateway_session=eyJhbGciOiJIUzI1NiJ9.private'
@@ -210,11 +262,11 @@ test('login success is audited as login_success without the password or cookie (
   const raw = readFileSync(file, 'utf8')
   assert.equal(raw.includes(PASSWORD), false, 'the submitted password never enters the audit log')
   assert.equal(raw.includes(COOKIE.split('=')[1]), false, 'the session cookie never enters the audit log')
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('login failures are audited by classification: invalid_credentials / rate_limited / busy', async () => {
+test('login failures are audited by classification: invalid_credentials / rate_limited / busy', async t => {
   const dir = tmpDir('gateway-audit-login-fail-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
 
   const invalid: AuthProvider = {
@@ -262,11 +314,11 @@ test('login failures are audited by classification: invalid_credentials / rate_l
   assert.equal(events[1].detail, 'client:203.0.113.8,code:rate_limited')
   const raw = readFileSync(file, 'utf8')
   assert.equal(raw.includes('wrong-password'), false, 'the attempted password never enters the audit log')
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('no audit file configured → login still works and nothing is written', async () => {
+test('no audit file configured → login still works and nothing is written', async t => {
   const dir = tmpDir('gateway-audit-none-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
   const auth: AuthProvider = {
     kind: 'password',
@@ -285,5 +337,93 @@ test('no audit file configured → login still works and nothing is written', as
   const res = await runLogin(dispatch, 'correct-horse-battery')
   assert.equal(res.status, 302)
   assert.throws(() => statSync(file), /ENOENT/)
-  rmSync(dir, { recursive: true, force: true })
+})
+
+// ---------------------------------------------------------------------------
+// credential_changed / credential_change_rejected event shapes (Phase 2)
+// ---------------------------------------------------------------------------
+
+test('credential changes are audited as credential_changed with only non-secret detail (S24)', async t => {
+  const dir = tmpDir('gateway-audit-change-ok-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const NEW_PASSWORD = 'a-new-correct-password'
+  const auth: AuthProvider = {
+    kind: 'password+token',
+    async verify(req) {
+      return req.headers.authorization === 'Bearer secret'
+        ? { kind: 'token', id: 'x', issuedAt: 0 }
+        : null
+    },
+    async changePassword() {
+      return { changed: true, kind: 'password', source: 'runtime' }
+    },
+    async changeToken() {
+      return { changed: true, kind: 'token', source: 'runtime', removed: true }
+    },
+  }
+  const { dispatch } = setup(auth, file)
+  const setRes = await runChange(dispatch, '/auth/change-password', JSON.stringify({ newPassword: NEW_PASSWORD }))
+  assert.equal(setRes.status, 200)
+  const removeRes = await runChange(dispatch, '/auth/change-token', JSON.stringify({ remove: true }))
+  assert.equal(removeRes.status, 200)
+
+  const events = readEvents(file)
+  assert.equal(events.length, 2)
+  assert.equal(events[0].event, 'credential_changed')
+  assert.equal(events[0].kind, 'gateway')
+  assert.equal(events[0].detail, 'password,set,runtime,principal:token,client:203.0.113.8')
+  assert.equal(events[1].event, 'credential_changed')
+  assert.equal(events[1].detail, 'token,remove,runtime,principal:token,client:203.0.113.8')
+  // The serializer is a fixed whitelist: no extra fields, no secrets.
+  assert.deepEqual(Object.keys(events[0]).sort(), ['detail', 'event', 'kind', 'ts'])
+  const raw = readFileSync(file, 'utf8')
+  assert.equal(raw.includes(NEW_PASSWORD), false, 'the new password never enters the audit log')
+  assert.equal(raw.includes('secret'), false, 'the bearer token never enters the audit log')
+})
+
+test('credential change failures are audited as credential_change_rejected with the wire code', async t => {
+  const dir = tmpDir('gateway-audit-change-fail-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const cases: Array<{ path: '/auth/change-password' | '/auth/change-token'; code: string; status: number; detail: string }> = [
+    { path: '/auth/change-password', code: 'invalid_credentials', status: 401, detail: 'password,invalid_credentials,client:203.0.113.8' },
+    { path: '/auth/change-password', code: 'last_credential', status: 409, detail: 'password,last_credential,client:203.0.113.8' },
+    { path: '/auth/change-token', code: 'rate_limited', status: 429, detail: 'token,rate_limited,client:203.0.113.8' },
+  ]
+  let index = 0
+  const auth: AuthProvider = {
+    kind: 'password+token',
+    async verify(req) {
+      return req.headers.authorization === 'Bearer secret'
+        ? { kind: 'token', id: 'x', issuedAt: 0 }
+        : null
+    },
+    async changePassword() {
+      const { code } = cases[index]
+      const error = new Error(code) as Error & { code?: string }
+      error.code = code
+      throw error
+    },
+    async changeToken() {
+      const { code } = cases[index]
+      const error = new Error(code) as Error & { code?: string }
+      error.code = code
+      throw error
+    },
+  }
+  const { dispatch } = setup(auth, file)
+  for (const entry of cases) {
+    const body = entry.code === 'invalid_credentials'
+      ? JSON.stringify({ newPassword: 'x'.repeat(12), currentPassword: 'wrong' })
+      : JSON.stringify({ remove: true })
+    const res = await runChange(dispatch, entry.path, body)
+    assert.equal(res.status, entry.status, entry.code)
+    assert.equal(JSON.parse(res.body).code, entry.code)
+    index += 1
+  }
+  const events = readEvents(file)
+  assert.deepEqual(events.map(event => event.event), ['credential_change_rejected', 'credential_change_rejected', 'credential_change_rejected'])
+  assert.deepEqual(events.map(event => event.detail), cases.map(entry => entry.detail))
+  assert.deepEqual(events.map(event => event.kind), ['gateway', 'gateway', 'gateway'])
 })

@@ -32,7 +32,7 @@ import { createGatewayProxy, type GatewayProxy, type GatewayProxyDeps } from './
 import { createGatewayDispatch } from './dispatch.ts'
 import { createGatewayRequestPolicy } from './middleware.ts'
 import { createFeatureHost, type FeatureHost } from './routes.ts'
-import { createGatewayStore } from './store.ts'
+import { createGatewayStore, type GatewayStore } from './store.ts'
 import { createChannelRegistry } from './channels.ts'
 import { createGatewayRuntimeManager, type GatewayRuntimeManager } from './runtime-manager.ts'
 import { createRuntimeRoutes } from './runtime-routes.ts'
@@ -69,6 +69,9 @@ export interface GatewayHandle {
   readonly connectionState: string
   readonly localProcessAlive: boolean
   readonly instanceId: string
+  /** Effective auth kind AFTER config seeding (design 17 §7.4): reflects
+   * runtime-managed credentials, unlike the deployment-config kind. */
+  readonly authKind: string
 }
 
 /**
@@ -117,95 +120,121 @@ function validateMaterializedConfig(config: GatewayConfig): void {
 export function createGateway(options: GatewayOptions): GatewayHandle {
   validateMaterializedConfig(options.config)
   const logger = options.logger ?? console
-  // Loud, unmissable warning for the explicit S1 override (design 17 §3.1
-  // deviation): anonymous external exposure is operator-opted-in.
-  if (options.config.allowAnonymousExternal === true
-    && options.config.auth.kind === 'none'
-    && (options.config.plane.host !== '127.0.0.1'
-      || options.config.publicOrigin !== undefined
-      || options.config.trustedProxies.length > 0)) {
-    logger.warn(
-      'SECURITY WARNING: gateway is externally reachable with NO authentication '
-      + '(--no-auth). Any host that can reach this port has full, '
-      + 'unauthenticated access to the managed dsh instance and its orchestration '
-      + 'surface. This overrides design 17 S1 — use only on trusted networks.',
-    )
-  }
-  // The gateway store (design 17 §10) owns tokens/jwt-secret + the orchestration
-  // docs; auth needs it for the token hash + session secret (S5/S13).
-  const store = createGatewayStore(options.config.plane.stateDir, logger)
-  const auth = createAuth(options.config.auth, store)
-  const requestPolicy = createGatewayRequestPolicy(options.config)
   // Mutable holders: the dispatch middleware and feature host are wired into
   // createControlPlane BEFORE the plane/proxy exist (the proxy + feature host
   // need plane.getLocalDshPort()). They dereference lazily at request time.
   let plane: PlaneHandle | null = null
   let proxy: GatewayProxy | null = null
   let runtimeManager: GatewayRuntimeManager | null = null
-  const channels = createChannelRegistry()
-  const features = (options.deps?.createFeatures ?? createFeatureHost)({
-    logger,
-    getDshBaseUrl: () => {
-      const port = plane?.getLocalDshPort() ?? null
-      return port === null || !Number.isInteger(port) ? null : `http://127.0.0.1:${port}`
-    },
-    store,
-    channels,
-  })
-  // The runtime controller is gateway-owned and NOT ready-gated (design 18
-  // §9.3): it dereferences the manager lazily so dsh-down windows stay pollable.
-  const runtimeRoutes = createRuntimeRoutes(() => {
-    if (runtimeManager === null) throw new Error('gateway runtime manager not initialized')
-    return runtimeManager
-  }, logger)
-  // S24 lightweight non-secret audit projection (design 17 §13.4.4): JSONL
-  // append at <stateDir>/audit.log (0600, 5 MiB rotation) recording login
-  // results (success/invalid/rate-limited/busy) — never a password, cookie or
-  // session body. The file lives under the 0700 stateDir discipline (S15).
-  const auditFile = join(options.config.plane.stateDir, 'audit.log')
-  const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, () => runtimeRoutes, logger, requestPolicy, auditFile)
-  // Chamber host packages ship inside the gateway package (build.mjs copies
-  // them into host-packages/); the control-plane seeds them into the managed
-  // dsh profile so the full runtime activation probe set (which verifies
-  // their RPC domains) can pass — design 18 §9.3. A packaged gateway without
-  // them silently skips the seed and every switch probe-fails (2026-09
-  // real-machine finding).
-  const gatewayHostPackagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'host-packages')
-  const createdPlane = (options.deps?.createPlane ?? createControlPlane)({
-    host: options.config.plane.host,
-    port: options.config.plane.port,
-    stateDir: options.config.plane.stateDir,
-    // Static anchor for fakes/boot log; the live spawn path resolves per-spawn
-    // through the runtime manager (env → override → anchor, design 18 §9.3).
-    dshWorkspacePath: options.config.plane.dshWorkspacePath,
-    hostGraphPackageSourceDir: join(gatewayHostPackagesDir, 'dsh-host-client-graph'),
-    hostGitWorktreePackageSourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-host-git-worktree'),
-    getDshWorkspacePath: () => {
-      if (runtimeManager === null) return options.config.plane.dshWorkspacePath
-      if (runtimeManager.transactionWorkspace !== null) return runtimeManager.transactionWorkspace
-      return runtimeManager.resolveWorkspace().path
-    },
-    canStartLocal: () => {
-      if (runtimeManager === null) return { ok: true }
-      if (runtimeManager.activationInProgress() && !runtimeManager.internalSpawnActive()) {
-        return { ok: false, reason: 'dsh runtime activation in progress' }
+  let createdPlane!: PlaneHandle
+  let features!: FeatureHost
+  // The whole synchronous construction is one transaction: any failure after
+  // the store is created must release the stateDir exclusive lock (a leaked
+  // lock would block every later start on the same directory for the process
+  // lifetime). `store!` is safe past the try — every later use is reachable
+  // only after construction succeeded.
+  let store!: GatewayStore
+  let auth!: AuthProvider
+  try {
+    // The gateway store (design 17 §10) owns tokens/jwt-secret + the
+    // orchestration docs; auth needs it for the token hash + session secret
+    // (S5/S13).
+    store = createGatewayStore(options.config.plane.stateDir, logger)
+    // The seeding logger is the gateway logger: without it the loud
+    // config-ignored warnings for authoritative runtime credentials stay
+    // silent.
+    auth = createAuth(options.config.auth, store, logger)
+    // Loud, unmissable warning for the explicit S1 override (design 17 §3.1
+    // deviation): anonymous external exposure is operator-opted-in. The
+    // verdict is decided by the EFFECTIVE kind AFTER seeding (Phase 1/2): a
+    // persisted runtime credential (source 'runtime') makes the deployment
+    // authenticated even though config.auth.kind is 'none' — no warning then,
+    // only an informational line. The old pre-store check could not see that
+    // state.
+    if (options.config.allowAnonymousExternal === true
+      && (options.config.plane.host !== '127.0.0.1'
+        || options.config.publicOrigin !== undefined
+        || options.config.trustedProxies.length > 0)) {
+      if (auth.kind === 'none') {
+        logger.warn(
+          'SECURITY WARNING: gateway is externally reachable with NO authentication '
+          + '(--no-auth). Any host that can reach this port has full, '
+          + 'unauthenticated access to the managed dsh instance and its orchestration '
+          + 'surface. This overrides design 17 S1 — use only on trusted networks.',
+        )
+      } else if (options.config.auth.kind === 'none') {
+        logger.log('gateway: authentication is enabled by a runtime-managed credential (source: runtime)')
       }
-      return { ok: true }
-    },
-    canExposeLocal: () => runtimeManager === null || !runtimeManager.activationInProgress(),
-    ...(options.config.plane.dshPort === undefined ? {} : { dshPortBase: options.config.plane.dshPort }),
-    logger,
-    corsOrigins: options.config.corsOrigins,
-    corsEvaluator: requestPolicy.corsEvaluator,
-    middleware: dispatch.middleware,
-    upgradeMiddleware: dispatch.upgradeMiddleware,
-  })
-  plane = createdPlane
-  proxy = (options.deps?.createProxy ?? createGatewayProxy)({
-    logger,
-    getLocalDshPort: () => createdPlane.getLocalDshPort(),
-    getLocalState: () => createdPlane.connectionState,
-  })
+    }
+    const requestPolicy = createGatewayRequestPolicy(options.config)
+    const channels = createChannelRegistry()
+    features = (options.deps?.createFeatures ?? createFeatureHost)({
+      logger,
+      getDshBaseUrl: () => {
+        const port = plane?.getLocalDshPort() ?? null
+        return port === null || !Number.isInteger(port) ? null : `http://127.0.0.1:${port}`
+      },
+      store,
+      channels,
+    })
+    // The runtime controller is gateway-owned and NOT ready-gated (design 18
+    // §9.3): it dereferences the manager lazily so dsh-down windows stay pollable.
+    const runtimeRoutes = createRuntimeRoutes(() => {
+      if (runtimeManager === null) throw new Error('gateway runtime manager not initialized')
+      return runtimeManager
+    }, logger)
+    // S24 lightweight non-secret audit projection (design 17 §13.4.4): JSONL
+    // append at <stateDir>/audit.log (0600, 5 MiB rotation) recording login
+    // results (success/invalid/rate-limited/busy) — never a password, cookie or
+    // session body. The file lives under the 0700 stateDir discipline (S15).
+    const auditFile = join(options.config.plane.stateDir, 'audit.log')
+    const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, () => runtimeRoutes, logger, requestPolicy, auditFile)
+    // Chamber host packages ship inside the gateway package (build.mjs copies
+    // them into host-packages/); the control-plane seeds them into the managed
+    // dsh profile so the full runtime activation probe set (which verifies
+    // their RPC domains) can pass — design 18 §9.3. A packaged gateway without
+    // them silently skips the seed and every switch probe-fails (2026-09
+    // real-machine finding).
+    const gatewayHostPackagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'host-packages')
+    createdPlane = (options.deps?.createPlane ?? createControlPlane)({
+      host: options.config.plane.host,
+      port: options.config.plane.port,
+      stateDir: options.config.plane.stateDir,
+      // Static anchor for fakes/boot log; the live spawn path resolves per-spawn
+      // through the runtime manager (env → override → anchor, design 18 §9.3).
+      dshWorkspacePath: options.config.plane.dshWorkspacePath,
+      hostGraphPackageSourceDir: join(gatewayHostPackagesDir, 'dsh-host-client-graph'),
+      hostGitWorktreePackageSourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-host-git-worktree'),
+      getDshWorkspacePath: () => {
+        if (runtimeManager === null) return options.config.plane.dshWorkspacePath
+        if (runtimeManager.transactionWorkspace !== null) return runtimeManager.transactionWorkspace
+        return runtimeManager.resolveWorkspace().path
+      },
+      canStartLocal: () => {
+        if (runtimeManager === null) return { ok: true }
+        if (runtimeManager.activationInProgress() && !runtimeManager.internalSpawnActive()) {
+          return { ok: false, reason: 'dsh runtime activation in progress' }
+        }
+        return { ok: true }
+      },
+      canExposeLocal: () => runtimeManager === null || !runtimeManager.activationInProgress(),
+      ...(options.config.plane.dshPort === undefined ? {} : { dshPortBase: options.config.plane.dshPort }),
+      logger,
+      corsOrigins: options.config.corsOrigins,
+      corsEvaluator: requestPolicy.corsEvaluator,
+      middleware: dispatch.middleware,
+      upgradeMiddleware: dispatch.upgradeMiddleware,
+    })
+    plane = createdPlane
+    proxy = (options.deps?.createProxy ?? createGatewayProxy)({
+      logger,
+      getLocalDshPort: () => createdPlane.getLocalDshPort(),
+      getLocalState: () => createdPlane.connectionState,
+    })
+  } catch (error) {
+    store?.close()
+    throw error
+  }
   let started = false
   let startPromise: Promise<void> | null = null
   let unsubscribeLocalState: (() => void) | null = null
@@ -232,6 +261,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     if (startPromise !== null) return startPromise
     startPromise = (async () => {
       try {
+        // Design 17 §4.1: a failed start (or a stop) releases the stateDir
+        // exclusive lock; a retry must re-take it (fail-closed with a loud
+        // 'gateway_locked' error if another process grabbed the directory in
+        // between — M3 fix round).
+        store.reacquire()
         await createdPlane.start()
         // Runtime manager construction (single-owner guard + state root).
         runtimeManager = (options.deps?.createRuntimeManager ?? createGatewayRuntimeManager)({
@@ -280,6 +314,9 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         await runtimeManager?.dispose().catch(stopError => logger.warn(`gateway runtime disposal failed: ${String(stopError)}`))
         runtimeManager = null
         await createdPlane.stop().catch(stopError => logger.warn(`gateway startup rollback failed: ${String(stopError)}`))
+        // Release the stateDir exclusive lock on the rollback path so a retry
+        // (or another process) can take over the directory (Phase 1 close).
+        store.close()
         throw error
       }
     })().finally(() => { startPromise = null })
@@ -295,7 +332,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     await runtimeManager?.dispose().catch(stopError => logger.warn(`gateway runtime disposal failed: ${String(stopError)}`))
     proxy?.closeAllStreams()
     syncFeatures('stopped')
-    await createdPlane.stop()
+    try {
+      await createdPlane.stop()
+    } finally {
+      // Release the stateDir exclusive lock last, even if the plane stop
+      // failed (idempotent; Phase 1 close) — a locked directory would block
+      // every restart until the process exits.
+      store.close()
+    }
     started = false
   }
 
@@ -306,6 +350,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     get connectionState() { return createdPlane.connectionState },
     get localProcessAlive() { return createdPlane.localProcessAlive },
     get instanceId() { return createdPlane.instanceId },
+    get authKind() { return auth.kind },
   }
 }
 

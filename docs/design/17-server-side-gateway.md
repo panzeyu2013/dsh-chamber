@@ -179,7 +179,21 @@ gateway serve [--host 127.0.0.1|0.0.0.0] [--port 3000]
               [--public-origin https://gateway.example.com]
               [--trusted-proxy IP ...] [--cors-origin ORIGIN ...]
               [--no-auth]
+gateway auth status [--state-dir DIR]
+gateway auth reset-password --new PASSWORD [--state-dir DIR]
+gateway auth clear [--state-dir DIR]
 ```
+
+`gateway auth` 子命令在**停机态**管理持久化凭据（§7.4）：`status` 输出非秘密投影
+（password/token 是否配置、`source` 与最后写入时间，永不含值）——它是**无锁只读**
+命令，运行中的 gateway 也可正常读取；`reset-password --new PASSWORD` 以
+`source:'runtime'` 写入新密码并先旋转 `jwt-secret`（12–1024 字符）；`clear` 同时
+删除密码与 token，下次启动由部署配置重新播种（`--no-auth` 部署恢复匿名并打印 S1
+告警）。后两者取 stateDir 独占锁，**运行中的 gateway 会响亮拒绝**（结构化错误
+`gateway_locked` + 运行中 pid）并提示改用 Web UI（`/chamber/` 凭据面板）或
+`/auth/change-*` API；用法错误退出 2，运行失败（gateway 运行中/state 错误）退出 1。
+`serve` 的 boot 行打印的是**播种后的有效 auth kind**（§7.4）——runtime 凭据生效时
+不再误报 `auth=none`。
 
 兼容别名为 `dsh-chamber-gateway`。环境变量包括 `DSH_GATEWAY_HOST`、
 `DSH_GATEWAY_PORT`、`DSH_GATEWAY_STATE`、`DSH_GATEWAY_DSH_PATH`、
@@ -204,6 +218,20 @@ gateway serve [--host 127.0.0.1|0.0.0.0] [--port 3000]
 - trusted proxy 只接受精确 IP，不接受网段或主机名；
 - `--tls-cert/--tls-key` 即使成对提供也会 fail closed，因为内置 TLS 未实现
   （TLS 一律由用户自建的外部边界提供）。
+
+**凭据播种语义（Phase 1，§7.4/§12）**：启动时 `seedCredentialsFromConfig` 把部署
+配置（`--ui-password`/`--api-token` 或 `DSH_GATEWAY_*`）播种进持久化凭据。config
+凭据只在「无持久化」或「持久化 `source='config'`」时断言（值变化先旋转
+`jwt-secret`，未变化不写）；持久化 `source='runtime'` 的凭据**权威**——config 被
+忽略并响亮告警（含运行时更新时刻与回退指引），绝不静默覆盖。config 未提供且
+持久化为 config 来源时删除（先旋转），runtime 来源保留。因此「改配置→重启」流程
+在无 runtime 覆盖时行为与从前完全一致；`--no-auth` 部署若已存在 runtime 凭据则
+**有效形态已认证**——启动告警按播种后的有效 kind 判定（§7.4），不再误报匿名。
+
+**S1 门与 runtime 凭据的交互**：外部绑定（非 loopback / publicOrigin / trusted
+proxy）的 S1 硬门在**播种之前**按**部署配置**判定——持久化 runtime 凭据不满足该
+门，此类部署必须显式 `--no-auth` 才能启动（此时按播种后的有效 kind 判定告警：
+已认证则不打印匿名告警）。loopback 绑定下 runtime 凭据正常生效。
 
 推荐形态是 Gateway 监听 loopback，Caddy/Nginx 负责 HTTPS，并配置：
 
@@ -238,8 +266,11 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 
 | 路径 | 处理方 | 认证 |
 |---|---|---|
-| `GET /health` | control-plane health | 公开 |
-| `GET/HEAD/POST /auth/login` | Gateway 登录 | 公开；仅 password 形态存在 |
+| `GET/HEAD /health` | control-plane health | 公开 |
+| `GET/HEAD/POST /auth/login` | Gateway 登录 | 公开；仅 password 形态存在（token-only 部署 404） |
+| `POST /auth/change-password` | 运行时改密/删密码（§7.4） | 必须 |
+| `POST /auth/change-token` | 运行时轮换/删 token（§7.4） | 必须 |
+| `GET /auth/credentials` | 非秘密凭据投影（§7.4） | 必须 |
 | `/api/connections*`、`/api/host/*` | control-plane 管理 API | 必须 |
 | `/api/i/<source>/*` | 注册 transport 的实例代理 | 必须 |
 | 其余 `/api/*`、`/plugins/*`、`/`、dsh assets | 单目标 Gateway proxy | 必须 |
@@ -258,8 +289,8 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 - JWT 验签除签名外强制 `exp` 为 safe integer、严格晚于当前秒且不超过当前+12h；
   缺失/字符串/null/Infinity/小数/unsafe/过期/超窗均拒绝；
 - 登录页 CSP 只允许 self form 和 inline style，不开放脚本；
-- 持久化 salted credential verifier。进程重启时若密码增加、删除或改变，先旋转
-  `jwt-secret`，旧 cookie 立即失效。
+- 持久化 salted credential verifier。启动播种或运行时变更时，若密码增加、删除或
+  改变，先旋转 `jwt-secret`，旧 cookie 立即失效（运行时路径见 §7.4）。
 
 ### 7.2 Bearer token
 
@@ -275,8 +306,9 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 - 未认证 API/asset/WS 返回 401；
 - password 形态下，未认证的普通 HTML 文档导航跳转登录页；
 - Host 错误返回 421，Origin 错误返回 403；
-- 登录过载返回 503，限流返回 429；登录 body 上限为 16 KiB，超限返回 413、立即释放
-  已收字节并进入 drain-only；凭据和内部错误不进入日志或响应。
+- 登录过载返回 503，限流返回 429；登录 body 上限为 16 KiB，超限返回 413 并
+  **销毁请求 socket**（不排空、不继续消费，防止慢速匿名上传钉住连接；login 与
+  change 路由同纪律）；凭据和内部错误不进入日志或响应。
 
 桌面端对 401 的**可行动三态分类**（探针层，非秘密 detail）：
 
@@ -290,6 +322,89 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 另一项身份有效仍是成功，不能因“token 优先”或“密码优先”遮蔽可用的独立 principal。
 该 OR 契约也覆盖 token scrypt work gate 饱和：Bearer 校验返回 `auth_busy` 时仍先验证
 现有 Cookie；Cookie 有效即成功，否则才保留 503 `auth_busy`，不能把过载伪装成 401。
+
+### 7.4 运行时凭据管理（Phase 1–4）
+
+> Phase 锚点：Phase 1 = store/auth 核心（v2 信封 + 动态 facade + 播种 + stateDir
+> 锁）；Phase 2 = HTTP 面（三条路由 + 审计 + 告警/close/reacquire 接线）；Phase 3 =
+> `/chamber/` 凭据面板 + `gateway auth` CLI；Phase 4 = 文档与验收。desktop
+> settings-bridge 便捷重置为推迟项（见 STATUS）。
+
+凭据是**服务器状态**而非部署配置：`<stateDir>/password-credential` 与 `tokens.json`
+以 v2 JSON 信封持久化 `{schemaVersion:2, source:'config'|'runtime', updatedAt,
+verifier|hash}`（0600，§12）。legacy v1（密码裸 `scrypt$…` / token `{"hash":…}`）
+读为 `source:'config'`（updatedAt = 文件 mtime）并在下次写入迁移。动态 AuthProvider
+facade 的 `kind` 每请求按**当前持久化状态**计算（password / token / password+token /
+none），verify/login/revoke 按有效状态分派；`login` 恒存在，无密码时抛 `no_password`
+（dispatch 映射 404——登录路由仅 password 形态存在）。
+
+**播种规则**（启动时 `seedCredentialsFromConfig`；密码与 token 两个维度同规则，
+密码维度写入/删除前先旋转 `jwt-secret`，token 维度无 session-cookie 关联故不旋转）：
+
+| 配置提供 | 持久化状态 | 动作 |
+|---|---|---|
+| 有 | 无 / `source='config'` | 写入 v2（source='config'）；值未变化不写不旋转 |
+| 有 | `source='runtime'` | **忽略 config**，响亮告警（含运行时更新时刻与回退指引） |
+| 无 | `source='config'` | 删除（先旋转） |
+| 无 | `source='runtime'` | 保留，不告警 |
+
+**变更 API**（全部在认证门后，永不落入 dsh 反代；body 16 KiB 上限，超限 413 并
+销毁请求 socket；成功响应 `no-store`）：
+
+| 端点 | 语义 | 成功响应 |
+|---|---|---|
+| `POST /auth/change-password` | `{newPassword}`（12–1024）或 `{remove:true}`；可带 `currentPassword` | `{changed:true, kind:'password', source, removed?}` |
+| `POST /auth/change-token` | `{newToken}`（32–4096 visible ASCII）、`{}`（服务端 CSPRNG 生成）或 `{remove:true}` | `{changed:true, kind:'token', source, token?, removed?}` |
+| `GET /auth/credentials` | 非秘密投影（S5）；HEAD 为无体孪生 | `{password: {set, source, updatedAt}\|null, token: …}` |
+
+请求校验：`{remove:true}` 与 `newPassword`/`newToken` **互斥**（并存 → 400
+`bad_request`）；非字符串 `currentPassword` → 400；change 路由 body 以 JSON 为准
+（16 KiB 上限——极端 form-urlencoded 双 1024 非 ASCII 密码可能超限 413，面板与
+API 客户端一律用 JSON）。未认证的 HTML-accept 导航到 `/auth/*` 返回 401 JSON
+（不跳登录页）。
+
+新 token 明文在变更响应中**只返回一次**，此后任何面（含 `GET /auth/credentials`）
+都不再暴露；`/auth/login` 仅 password 形态存在，token-only 部署 404。
+
+错误码→HTTP（change 路由）：
+
+| code | HTTP | 说明 |
+|---|---|---|
+| `bad_request` | 400 | body 形状/长度/字符集非法 |
+| `invalid_credentials` | 401 | 无证明 principal 且未提供或错误 currentPassword |
+| `ambient_principal_rejected` | 403 | 仅 cookie principal 且未提供 currentPassword（S25） |
+| `last_credential` | 409 | 拒绝删除最后一个凭据（除非 config 提供替代 → revert） |
+| `rate_limited` | 429 | currentPassword 经共享登录限流器；连续错误尝试触发锁 |
+| `auth_busy` | 503 | scrypt work gate 饱和 |
+| `body_too_large` | 413 | 超 16 KiB；先回 413 再销毁 socket |
+| 其他 | 500 | `internal_error` |
+
+**非环境性证明（S25）**：凭据变更要求非环境性 principal——bearer-token principal
+自证，或 `currentPassword` 经共享登录限流器 + 有界 scrypt work gate 校验。仅
+cookie principal 且未带正确 currentPassword 拒绝 403；currentPassword 错误为 401
+（连续失败按登录限流 → 429）。因此匿名（`--no-auth`）部署无法经 API 种植/变更
+凭据——无既有凭据可证明。
+
+**last-credential 门 + config revert**：删除最后一个凭据（另一维度也不存在时）
+拒绝 409，除非部署配置提供替代——此时**回退**为 config 凭据（响应
+`source:'config'`，旧 cookie 因 rotate-first 已死）。S1 门不可在运行时削弱：
+none↔auth 双向转换仍仅部署期（config 播种 + 重启）；删除最后凭据只能停机态
+`gateway auth clear`。**config 管理维度的 remove 语义**：删除 config 来源维度
+（另一维仍在）成功，但**下次重启会被播种恢复**——面板对该情形如实提示
+「removed for now … re-seeded on the next restart」。
+
+**rotate-first（S13）**：密码变更先旋转 `jwt-secret` 再持久化——持久化失败也绝不
+留下「新 verifier + 旧 cookie」混合态；旧 cookie 在变更瞬间立即失效。
+
+**审计（S24）**：`credential_changed` / `credential_change_rejected`——detail 仅含
+维度、set/remove、source、变更前 principal kind（成功事件；probe 失败记为
+`probe-error:<code>`，绝不因审计拒绝请求）与客户端来源；拒绝事件 detail 含维度 +
+wire code + 客户端来源；任何值永不进入审计。
+
+**与 desktop 客户端的关系**：运行时凭据变更后旧 cookie/bearer 立即失效，desktop
+的 401 三态分类（§7.3）已覆盖「凭据被换」后的行为——重登/重输 token 后恢复；
+token 仅一次性返回意味着轮换方必须就地保存；`--no-auth` 部署不可经 API 种植凭据，
+删除最后凭据必须停机态 `gateway auth clear`。
 
 ## 8. 反代内核与资源边界
 
@@ -507,9 +622,17 @@ Gateway 自有 JSON API：
 
 浏览器可在 `/chamber/` 打开 Gateway 自有编排页；其中 runtime 块完整呈现版本/来源、
 选择与 apply/rollback/restore/retry/restart 动作、失败/快照/磁盘与 registry，且在 managed
-dsh blocked/down 时仍可轮询恢复。页面只使用同源 cookie/fetch，不接收
-或持久化 token。Desktop settings-bridge 仅对选中的 `gateway` server 显示固定编排入口
-与 dsh-runtime 代理分节（§3 装配规则），同样不接触 token。
+dsh blocked/down 时仍可轮询恢复。页面只使用同源 cookie/fetch，**不持久化** token
+（轮换明文仅一次性展示、复制或 60 秒后自动清空）。Desktop settings-bridge 仅对选中的
+`gateway` server 显示固定编排入口与 dsh-runtime 代理分节（§3 装配规则），同样不接触 token。
+
+编排页另含 **Credentials 面板**（Phase 3，驱动 §7.4 三个端点）：两行投影
+（password/token 的 `source`/`updatedAt`，来自 `GET /auth/credentials`，绝不含值）
++ 改密/删密码/轮换 token/删 token 动作。轮换后的 token 明文在只读 textarea
+**一次性展示**（成功复制后即清空，60 秒未复制自动清空；不落 localStorage、不进
+审计）；403 `ambient_principal_rejected`、409 `last_credential`、429 等错误按 wire
+code 映射为可读文案（「输入当前密码以变更凭据」「不能移除最后一个凭据——先配置
+替代」等）；删除 **config 管理**维度时如实提示「removed for now — 重启后重新播种」。
 
 ## 11. Git worktree 安全 saga
 
@@ -554,9 +677,10 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 ```text
 <stateDir>/
 ├─ gateway.json
-├─ tokens.json                 # salted token hash, 0600
+├─ tokens.json                 # v2 信封 {schemaVersion:2, source, updatedAt, hash}, 0600
 ├─ jwt-secret                  # 0600
-├─ password-credential         # salted verifier, 0600
+├─ password-credential         # v2 信封 {schemaVersion:2, source, updatedAt, verifier}, 0600
+├─ .gateway.lock               # 独占锁 JSON {pid, createdAt}, O_EXCL + 0600
 ├─ dsh-runtime/                # design 18 §9.3：版本树/current 指针/override/快照（0700）
 └─ gateway/
    ├─ settings.json
@@ -569,6 +693,36 @@ secret 文件每次加载和写入都收敛为 `0600`。已有 secret 先以 no-
 symlink 与非普通文件，再收紧权限并读取。JSON 文档经 `createJsonStore` 的 owner-only
 原子写路径持久化，写操作串行化，避免并发请求以旧 snapshot 覆盖新值。corrupt 主文件
 会先尝试 backup；双重损坏会响亮失败，不伪装成空配置。
+
+**凭据信封（v2，Phase 1）**：`password-credential` 与 `tokens.json` 均为
+`{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>, verifier|hash}`
+（0600 原子写，无 tmp 残留）；`source` 记录凭据来自部署播种还是运行时变更，播种
+策略见 §7.4。legacy v1（密码裸 `scrypt$salt$hash` 字符串、token `{"hash":…}`）读为
+`source:'config'`（updatedAt = 文件 mtime），下次写入自动迁移为 v2。v2 的
+verifier/hash 必须匹配 `scrypt$salt$hash` 规范形状
+（`/^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i`）——形状合法但内容垃圾的文件按 corrupt
+v2 处理（**每进程告警一次**，按未配置处理），杜绝「垃圾 verifier 静默废认证」。
+
+**stateDir 独占锁（`.gateway.lock`，Phase 1 + 修复轮）**：`createGatewayStore` 以
+**O_EXCL 优先**创建 `{"pid":…,"createdAt":…}`（0600，stateDir 0700 内）持有该目录：
+活 pid 的锁**响亮拒绝启动**（结构化错误 `gateway_locked` + 属主 pid）；死 pid 的
+陈旧锁以 **rename 认领 + 移动内容校验**接管：先 rename 到唯一 `.stale-*` 名（原子
+认领，仅一个竞争者成功，其余见 ENOENT 重试），再校验被移动的正是读到的陈旧锁；
+若移动了**新鲜锁**（读与 rename 之间另一竞争者完成了接管）则 rename 还原（覆盖
+间隙中第三方的新锁——先到者胜，被覆盖者的**创建后所有权终验**会检出位移并
+fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/inode 竞态）响亮失败
+（绝不销毁意外内容）；**可读但 pid 缺失/损坏**的锁文件按陈旧锁**接管并告警**
+（`owner pid unreadable`）——它最可能是崩溃进程的残缺残留，接管后目录仍被独占
+（fail-safe）。
+`releaseLock` 双重守卫：未实际持有不删，且 on-disk pid 必须仍是本进程才删（防级联
+删除后继者的锁）；**exit 监听器仅在获取成功后注册**——获取失败的进程退出时绝不
+删除活网关的锁。创建后**所有权终验**（回读 pid+createdAt 必须与刚写入一致）——
+被并发接管位移的获取者立即失败，绝不无锁运行。`GatewayStore.close()` 幂等释放，
+`reacquire()` 供 start() 重试路径重取（design 17 §4.1）；进程 exit 也 best-effort
+释放——同 stateDir 的重开必须先 close（测试与 `gateway auth` CLI 均依赖此语义）。
+已知残差（诚实声明）：三个进程同时接管同一陈旧锁时，第三个进程可能在还原间隙
+创建新锁并被覆盖——与所有 pidfile 锁相同，无内核 flock 时不可能数学消除；双进程
+场景（生产现实：systemd + 手动启动）由上述校验**证明地**闭合（双进程压力测试锁定）。
 
 **桌面凭据存储（`<userData>/gateway-secrets.json`，schema v3）**：
 
@@ -612,6 +766,7 @@ symlink 与非普通文件，再收紧权限并读取。JSON 文档经 `createJs
 | 诚实状态 | `insecureHttp`/凭据存在性进入非秘密投影；配置时安全姿态提示 + 卡片常驻徽标（`HTTP 明文`红标 / `无认证`灰标），配完不忘 |
 | 边界诚实 | 探针/反代失败显式（503/401/421/403 分类），错配的 no-auth 网关绝不伪装成 ready |
 | 不削弱既有门 | S12：普通 control-plane 仍 loopback-only 匿名；S1：服务器外部绑定仍默认要求凭据 |
+| 凭据变更纪律 | 运行时凭据变更要求非环境性证明（bearer principal 自证或 currentPassword 校验，S25）；拒绝删除最后一个凭据（409，除非 config 提供替代 → revert）；变更与拒绝均审计（S24），值永不进日志/审计/投影 |
 
 ### 13.2 用户自担（文档与 UI 注明，不拦截）
 
@@ -733,6 +888,12 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
 - control-plane 协议、存储、托管、管理 API、静态服务、实例代理测试
   （含 gateway http 直连注册、头注入 0..2、dsh 直连禁注入用例）；
 - Gateway config/auth/request-policy/dispatch/proxy/lifecycle/feature/真实 socket 测试；
+- Gateway 运行时凭据面（Phase 1–3 + 修复轮）：auth 运行时变更/播种四规则/legacy
+  迁移/stateDir 锁（活锁拒绝、陈旧锁 rename 接管、**失败获取不删活锁（子进程回归）**、
+  releaseLock pid 复验、close/reacquire）、S25 匿名禁种（单元 + wire）、并发 remove
+  串行化（永不双 null）、`{remove:true}`+新值互斥 400、`GET /auth/credentials` 投影
+  与 HEAD twin、`/auth/*` 不跳登录页、dispatch 凭据路由与审计事件、`gateway auth`
+  停机态 CLI；
 - dsh-runtime 共享核心 typecheck/测试；Gateway runtime 启动事务/路由权限测试与
   fake-registry acceptance（design 18 §9.5）；
 - Desktop 全量 transport/provider/secret/plugin/deep-link 测试
@@ -765,6 +926,9 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
    与认证行为（design 18 §9.5）；
 7. 可信网络形态实机：`--bind 0.0.0.0` 明文 HTTP 直连（带凭据 / `--no-auth`）、
    SSH 隧道回环直连、tailscale 直连——四种组合全链路 + 401/421/403 负例。
+8. 运行时凭据实机：生产 TLS 反代下浏览器/API 改密与 token 轮换（旧 cookie/bearer
+   立即失效、`GET /auth/credentials` 投影、409/403/429 负例），以及停机态
+   `gateway auth status` / `reset-password` / `clear` 的恢复链路。
 
 PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露无实现的 CLI flag。它们如需
 推进，必须作为独立设计与测试面进入 STATUS。
@@ -797,6 +961,7 @@ PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露
 | S22 | 桌面凭据（token/密码）经 safeStorage 加密落盘；不可用时回退 0600 明文并登记；仅表单瞬时 write-only 输入，永不返回/回填或持久化到 renderer，也不进注册表/日志 |
 | S23 | 证书固定（SPKI）为 https 直连可选门：peer 匹配前 desktop 登录/探针与 control-plane HTTP/WS 反代不得发送任何应用层字节；不匹配即 terminal/502，http 模式不得声称任何 TLS 保护 |
 | S24 | 审计日志只记非秘密事件（时间/来源/认证结果），绝不包含凭据、cookie 与会话正文 |
+| S25 | 运行时凭据变更需非环境性证明（bearer principal 自证或 currentPassword 校验，仅 cookie principal 拒绝 403）；运行时拒绝删除最后一个凭据（S1 不可在运行时削弱；none↔auth 双向转换仍仅部署期） |
 
 ## 18. 相关文档
 

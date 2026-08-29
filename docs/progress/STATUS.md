@@ -91,6 +91,16 @@
     网络形态的全链路及 401/421/403 负例。
   `session.list`→Git mutation 的 TOCTOU 目前由 realpath fail-closed、两次 live
   check 与 non-force 缩小；彻底消除仍需上游提供原子 session lease。
+  - **运行时凭据管理（design 17 §7.4）自动化已落地**：v2 凭据信封（config/runtime
+    source + 播种规则）、`/auth/change-password` `/auth/change-token`
+    `/auth/credentials`、stateDir 独占锁、`gateway auth` 停机态 CLI、
+    `/chamber/` 凭据面板与 S25 不变量。**全量修复轮（2026-09）已完成**：锁重写
+    （O_EXCL 优先 + rename 认领 + 移动内容校验 + 还原 + 创建后所有权终验（双进程
+    无双持）、exit 监听器仅获取成功后注册、releaseLock pid 复验、start() 重取
+    reacquire）、S25 匿名禁种与并发 remove 串行化等安全测试补齐、
+    `{remove:true}`+新值互斥 400、verifier 形状校验、`gateway auth status` 无锁只读
+    与 boot 行有效 kind 的文档同步；**剩余**：desktop settings-bridge 便捷重置
+    （Phase 4 推迟项）、真实 TLS 反代下改密/轮换/停机态 CLI 恢复的实机门禁。
 
 ## 设计未决（02 §5 / 04 §7）
 
