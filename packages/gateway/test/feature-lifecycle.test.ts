@@ -577,10 +577,15 @@ function fakeStore(options: {
       },
     },
     getTokenHash: () => null,
+    getTokenCredential: () => null,
     setTokenHash() {},
     getJwtSecret: () => 'x'.repeat(64),
     rotateJwtSecret: () => 'y'.repeat(64),
-    syncPasswordCredential() {},
+    getPasswordCredential: () => null,
+    getPasswordCredentialRecord: () => null,
+    setPasswordCredential() {},
+    close() {},
+    reacquire() {},
   } as GatewayStore
 }
 
@@ -604,6 +609,8 @@ test('worktree ownership survives gateway-store persistence and reload', async (
       }] },
       changed: true,
     }))
+    // The stateDir exclusive lock must be released before reopening (Phase 1).
+    store.close()
     const restarted = createGatewayStore(stateDir, logger)
     assert.equal(restarted.worktrees.load().items[0]?.ownership, 'unverified')
   } finally {
@@ -1330,8 +1337,16 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
     '/chamber/runtime/retry-apply', '/chamber/runtime/retry-restore',
     '/chamber/runtime/restart', '/chamber/runtime/registry',
   ]) assert.match(source, new RegExp(path.replaceAll('/', '\\/')))
-  assert.doesNotMatch(source, /\b(?:localStorage|sessionStorage|authorization|token)\b/i)
+  // Secret-blind (design 17 §10.4): the dashboard persists nothing (no web
+  // storage), never reads Authorization headers, and never injects secret
+  // values via innerHTML. The Phase 3 Credentials panel necessarily speaks of
+  // "token" (labels + /auth/change-token) and reveals a rotated token ONCE in
+  // a readonly textarea — the guard is about storage/header persistence and
+  // injection, not the literal word.
+  assert.doesNotMatch(source, /\b(?:localStorage|sessionStorage|authorization)\b/i)
   assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|document\.write/)
+  assert.match(source, /AUTH_PATHS\.changeToken/, 'the panel drives the runtime token change endpoint')
+  assert.match(source, /cred-token-value/, 'the panel reveals the rotated token in the readonly textarea')
   assert.match(source, /credentials: 'same-origin'/)
   assert.match(source, /method: 'PUT'/)
   assert.match(source, /outcome: 'allowed-once'/)

@@ -8,6 +8,7 @@ import { writeOverride } from '@dsh-chamber/dsh-runtime'
 import { createGateway } from '../src/index.ts'
 import type { GatewayConfig } from '../src/config.ts'
 import type { GatewayRuntimeManager, GatewayRuntimeManagerOptions } from '../src/runtime-manager.ts'
+import { createGatewayStore, hashCredential } from '../src/store.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 const gatewayPackageVersion = (JSON.parse(
@@ -543,12 +544,66 @@ test('the materialized S1 guard is overridable via allowAnonymousExternal', () =
 })
 
 test('the S1 override warns only for anonymous-external, never loopback-only or credential kinds', () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-warn-'))
   const warnings: string[] = []
   const capturing = { log() {}, warn: (...parts: unknown[]) => warnings.push(parts.join(' ')), error() {} }
   const build = (mutate: (c: ReturnType<typeof config>) => void) => {
+    // Phase 1: each build owns a fresh stateDir — createGatewayStore holds an
+    // exclusive .gateway.lock for the process lifetime, so reusing one dir
+    // across builds would fail the live-owner lock.
+    const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lifecycle-warn-'))
+    try {
+      const c = config(stateDir)
+      mutate(c)
+      createGateway({
+        config: c,
+        logger: capturing,
+        deps: {
+          createPlane: (() => ({})) as never,
+          createProxy: (() => ({})) as never,
+          createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
+        },
+      })
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  }
+  // anonymous external → warns exactly once
+  build(c => { c.plane.host = '0.0.0.0'; c.allowAnonymousExternal = true })
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /SECURITY WARNING/)
+  warnings.length = 0
+
+  // loopback + override → silent (not externally reachable)
+  build(c => { c.allowAnonymousExternal = true })
+  assert.equal(warnings.length, 0)
+
+  // password + override → silent (kind !== none)
+  build(c => { c.plane.host = '0.0.0.0'; c.auth = { kind: 'password', password: 'correct-horse-battery' }; c.allowAnonymousExternal = true })
+  assert.equal(warnings.length, 0)
+})
+
+test('--no-auth with a persisted runtime credential is authenticated in effect: no SECURITY WARNING (Phase 2)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-runtime-cred-'))
+  const warnings: string[] = []
+  const logs: string[] = []
+  const capturing = {
+    log: (message: unknown) => logs.push(String(message)),
+    warn: (message: unknown) => warnings.push(String(message)),
+    error() {},
+  }
+  try {
+    // Seed a runtime-managed password credential (source 'runtime'), then
+    // build a gateway whose config has NO credentials at all: the effective
+    // kind comes from the persisted store, so --no-auth is authenticated in
+    // effect and the S1 SECURITY WARNING must not fire.
+    {
+      const seedStore = createGatewayStore(stateDir, silentLogger)
+      seedStore.setPasswordCredential(hashCredential('runtime-correct-password'), 'runtime')
+      seedStore.close()
+    }
     const c = config(stateDir)
-    mutate(c)
+    c.plane.host = '0.0.0.0'
+    c.allowAnonymousExternal = true
     createGateway({
       config: c,
       logger: capturing,
@@ -558,21 +613,50 @@ test('the S1 override warns only for anonymous-external, never loopback-only or 
         createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
       },
     })
+    assert.equal(warnings.length, 0, 'a runtime credential makes the --no-auth deployment authenticated (no SECURITY WARNING)')
+    assert.equal(
+      logs.some(message => message.includes('authentication is enabled by a runtime-managed credential')),
+      true,
+      'an informational line reports the runtime-managed authentication',
+    )
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
   }
+})
+
+test('stop() releases the stateDir lock even when the plane stop fails', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-stop-lock-'))
   try {
-    // anonymous external → warns exactly once
-    build(c => { c.plane.host = '0.0.0.0'; c.allowAnonymousExternal = true })
-    assert.equal(warnings.length, 1)
-    assert.match(warnings[0], /SECURITY WARNING/)
-    warnings.length = 0
-
-    // loopback + override → silent (not externally reachable)
-    build(c => { c.allowAnonymousExternal = true })
-    assert.equal(warnings.length, 0)
-
-    // password + override → silent (kind !== none)
-    build(c => { c.plane.host = '0.0.0.0'; c.auth = { kind: 'password', password: 'correct-horse-battery' }; c.allowAnonymousExternal = true })
-    assert.equal(warnings.length, 0)
+    const gateway = createGateway({
+      config: config(stateDir),
+      logger: silentLogger,
+      deps: {
+        createPlane: (() => ({
+          async start() {},
+          async stop() { throw new Error('plane stop failed') },
+          get port() { return 3000 },
+          get connectionState() { return 'stopped' },
+          get localProcessAlive() { return false },
+          get localWritersQuiescent() { return true },
+          get localDshPort() { return null },
+          getLocalDshPort() { return null },
+          async startLocal() {},
+          async stopLocal() {},
+          async restartLocal() {},
+          onLocalStateChange() { return () => {} },
+          refreshLocalExposure() {},
+          registerInstanceTransport() {},
+          unregisterInstanceTransport() {},
+          instanceId: 'test',
+        })) as never,
+        createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
+        createFeatures: () => ({ async handle() { return true }, start() {}, stop() {} }),
+      },
+    })
+    await assert.rejects(() => gateway.stop(), /plane stop failed/)
+    // The exclusive lock must be released despite the failed plane stop.
+    const reopened = createGatewayStore(stateDir, silentLogger)
+    reopened.close()
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

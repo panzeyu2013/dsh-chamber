@@ -4,6 +4,12 @@
  * worktree offload (features/git.ts), the session index, approvals/questions,
  * scheduler, settings, notifications, and the browser dashboard.
  *
+ * The dashboard also carries a Credentials panel (Phase 3, design 17 §7) that
+ * drives the runtime credential endpoints (/auth/change-password,
+ * /auth/change-token, /auth/credentials). It never renders secret values: the
+ * rotated token is shown once in a readonly textarea (no innerHTML injection)
+ * and cleared after a successful copy.
+ *
  * Every route reads/writes gateway-owned state; the authoritative dsh facts
  * come from dsh `/api` through features/git.ts — the gateway never becomes
  * authoritative over host business (design 17 §10, chamber discipline).
@@ -788,6 +794,7 @@ const CHAMBER_APP_HTML = `<!doctype html>
     fieldset{display:flex;flex-direction:column;gap:.55rem;margin:0;padding:.75rem;border:1px solid #30363d;border-radius:.6rem}legend{padding:0 .3rem;font-weight:600}.toggle,.choice{display:flex;align-items:flex-start;gap:.5rem;font-size:.9rem}.choice small{display:block;margin-top:.15rem}.custom{display:flex;flex-direction:column;gap:.3rem;font-size:.8rem;color:#8b949e}.custom input{width:100%;padding:.45rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3}
     select,.text-input{min-height:2rem;padding:.35rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3;font:inherit}.runtime-controls{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-controls .actions{grid-column:1/-1}.runtime-registry{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.runtime-facts .item{padding:.6rem}
     .list{display:flex;flex-direction:column;gap:.6rem}.item{display:flex;flex-direction:column;gap:.35rem;padding:.75rem;border-radius:.55rem;background:#0d1117;overflow-wrap:anywhere}.item-head{display:flex;justify-content:space-between;gap:.75rem;align-items:baseline}.item-head strong{min-width:0}.meta,code{color:#8b949e;font-size:.75rem;overflow-wrap:anywhere;white-space:pre-wrap}.body{font-size:.86rem;white-space:pre-wrap;overflow-wrap:anywhere}.status{min-height:1.2rem;font-size:.8rem}.status.error,.error{color:#ff7b72}.empty{padding:.5rem 0;color:#8b949e;font-size:.85rem}
+    .token-reveal{display:flex;flex-direction:column;gap:.5rem}.token-reveal[hidden]{display:none}.token-reveal textarea{width:100%;min-height:6rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}
     @media(max-width:760px){header{align-items:flex-start}main{grid-template-columns:1fr}.wide{grid-column:auto}.header-actions{justify-content:flex-end}.runtime-controls,.runtime-registry,.runtime-facts{grid-template-columns:1fr}}
   </style>
 </head>
@@ -806,6 +813,39 @@ const CHAMBER_APP_HTML = `<!doctype html>
         <label class="toggle"><input id="setting-schedule" type="checkbox">Cross-session scheduling</label>
       </fieldset>
       <div class="actions"><button id="save-settings" class="primary" type="button" disabled>Save settings</button></div>
+    </section>
+    <section class="panel" aria-labelledby="credentials-title">
+      <h2 id="credentials-title">Credentials</h2>
+      <p id="credentials-status" class="status" role="status">Loading…</p>
+      <div class="list">
+        <div class="item">
+          <div class="item-head"><strong>Password</strong><span id="password-projection" class="meta">—</span></div>
+        </div>
+        <div class="item">
+          <div class="item-head"><strong>Token</strong><span id="token-projection" class="meta">—</span></div>
+        </div>
+      </div>
+      <fieldset>
+        <legend>Change password</legend>
+        <label class="custom"><span>Current password</span><input id="cred-current-password" class="text-input" type="password" autocomplete="current-password" spellcheck="false"></label>
+        <label class="custom"><span>New password (12–1024 characters)</span><input id="cred-new-password" class="text-input" type="password" autocomplete="new-password" spellcheck="false"></label>
+        <div class="actions">
+          <button id="cred-change-password" type="button">Change password</button>
+          <button id="cred-remove-password" class="danger" type="button">Remove password</button>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Token</legend>
+        <div class="actions">
+          <button id="cred-rotate-token" type="button">Rotate token</button>
+          <button id="cred-remove-token" class="danger" type="button">Remove token</button>
+        </div>
+        <div id="cred-token-reveal" class="token-reveal" hidden>
+          <p class="status error">Shown once — store it now.</p>
+          <textarea id="cred-token-value" rows="4" readonly spellcheck="false"></textarea>
+          <div class="actions"><button id="cred-copy-token" type="button">Copy</button></div>
+        </div>
+      </fieldset>
     </section>
     <section class="panel wide" aria-labelledby="runtime-title">
       <h2 id="runtime-title">dsh runtime</h2>
@@ -936,7 +976,13 @@ const CHAMBER_APP_JS = `(function () {
       if (!response.ok) {
         var detail = payload !== null && typeof payload === 'object' && !Array.isArray(payload) && typeof payload.error === 'string'
           ? ': ' + bounded(payload.error, 1000) : '';
-        throw new Error('Request failed (HTTP ' + response.status + ')' + detail);
+        var requestError = new Error('Request failed (HTTP ' + response.status + ')' + detail);
+        // The wire error code (e.g. 'last_credential', 'rate_limited') lets
+        // callers map 400/401/403/409/429/503 to readable messages.
+        requestError.code = payload !== null && typeof payload === 'object' && !Array.isArray(payload) && typeof payload.code === 'string'
+          ? payload.code : null;
+        requestError.httpStatus = response.status;
+        throw requestError;
       }
       return payload;
     } finally {
@@ -1282,6 +1328,160 @@ const CHAMBER_APP_JS = `(function () {
     } catch (error) { status('worktrees', error instanceof Error ? error.message : 'Worktrees unavailable', true); }
   }
 
+  var credentialSnapshot = { password: null, token: null };
+  var AUTH_PATHS = {
+    credentials: '/auth/credentials',
+    changePassword: '/auth/change-password',
+    changeToken: '/auth/change-token'
+  };
+  function credentialErrorText(error) {
+    var code = error && error.code;
+    switch (code) {
+      case 'bad_request': return 'Invalid input — check the entered values.';
+      case 'invalid_credentials': return 'The current password is missing or incorrect.';
+      case 'ambient_principal_rejected': return 'Enter the current password to change gateway credentials.';
+      case 'last_credential': return 'Cannot remove the last credential — configure a replacement first.';
+      case 'rate_limited': return 'Too many attempts — try again later.';
+      case 'auth_busy': return 'The authentication service is busy — try again shortly.';
+      case 'body_too_large': return 'Request too large.';
+      default: return error instanceof Error ? error.message : 'Credentials operation failed';
+    }
+  }
+  function credentialProjectionEntry(value, label) {
+    if (value === null || value === undefined) return null;
+    var record = ownRecord(value, label);
+    if (record.set !== true || (record.source !== 'config' && record.source !== 'runtime')
+      || typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)) throw new Error('Malformed credential projection response');
+    return { source: record.source, updatedAt: record.updatedAt };
+  }
+  function renderCredentials(value) {
+    var row = ownRecord(value, 'credentials');
+    var password = credentialProjectionEntry(row.password, 'credential projection');
+    var token = credentialProjectionEntry(row.token, 'credential projection');
+    credentialSnapshot = { password: password, token: token };
+    function projectionLine(entry) {
+      if (entry === null) return 'Not configured';
+      return 'Configured (source: ' + entry.source + ') · ' + new Date(entry.updatedAt).toLocaleString()
+        + (entry.source === 'runtime' ? ' (runtime-managed)' : '');
+    }
+    byId('password-projection').textContent = projectionLine(password);
+    byId('token-projection').textContent = projectionLine(token);
+  }
+  async function loadCredentials() {
+    status('credentials', 'Loading…', false);
+    try {
+      renderCredentials(await request(AUTH_PATHS.credentials));
+      status('credentials', 'Ready', false);
+    } catch (error) { status('credentials', error instanceof Error ? error.message : 'Credentials unavailable', true); }
+  }
+  var tokenRevealTimer = null;
+  function hideTokenReveal() {
+    if (tokenRevealTimer !== null) { clearTimeout(tokenRevealTimer); tokenRevealTimer = null; }
+    byId('cred-token-reveal').hidden = true;
+    byId('cred-token-value').value = '';
+  }
+  async function changePassword() {
+    var next = byId('cred-new-password').value;
+    if (next.length < 12) { status('credentials', 'New password must be at least 12 characters.', true); return; }
+    if (next.length > 1024) { status('credentials', 'New password must be at most 1024 characters.', true); return; }
+    // Pre-check the current password when one is configured (a cookie-only
+    // session must prove it; an empty submit would burn server rate-limit
+    // quota on the scrypt verify).
+    if (credentialSnapshot.password !== null && byId('cred-current-password').value.length === 0) {
+      status('credentials', 'Enter the current password to change the gateway password.', true);
+      return;
+    }
+    hideTokenReveal();
+    status('credentials', 'Changing password…', false);
+    try {
+      await request(AUTH_PATHS.changePassword, { method: 'POST', body: { currentPassword: byId('cred-current-password').value, newPassword: next } });
+      byId('cred-new-password').value = '';
+      await loadCredentials();
+      status('credentials', 'Password changed.', false);
+    } catch (error) { status('credentials', credentialErrorText(error), true); }
+  }
+  async function removePassword() {
+    if (credentialSnapshot.password === null) { status('credentials', 'No password is configured — nothing to remove.', true); return; }
+    if (!window.confirm('Remove the gateway password? The password login is invalidated immediately.')) return;
+    var current = byId('cred-current-password').value;
+    if (current.length === 0) { status('credentials', 'Enter the current password to remove the gateway password.', true); return; }
+    hideTokenReveal();
+    status('credentials', 'Removing password…', false);
+    try {
+      await request(AUTH_PATHS.changePassword, { method: 'POST', body: { remove: true, currentPassword: current } });
+      // A config-managed credential is re-seeded on the next restart — say
+      // so instead of implying a permanent removal (design 17 §7.4 seeding).
+      var wasConfigManaged = credentialSnapshot.password !== null && credentialSnapshot.password.source === 'config';
+      byId('cred-current-password').value = '';
+      await loadCredentials();
+      status('credentials', wasConfigManaged
+        ? 'Password removed for now — it is managed by deployment config and will be re-seeded on the next gateway restart.'
+        : 'Password removed.', false);
+    } catch (error) { status('credentials', credentialErrorText(error), true); }
+  }
+  async function rotateToken() {
+    if (credentialSnapshot.password !== null && byId('cred-current-password').value.length === 0) {
+      status('credentials', 'Enter the current password to rotate the token.', true);
+      return;
+    }
+    hideTokenReveal();
+    status('credentials', 'Rotating token…', false);
+    try {
+      // The change-token proof gate requires a non-ambient principal: a
+      // cookie-only browser session must supply the current password when a
+      // password is configured (otherwise 403 ambient_principal_rejected).
+      var result = ownRecord(await request(AUTH_PATHS.changeToken, { method: 'POST', body: { currentPassword: byId('cred-current-password').value } }), 'token change');
+      var token = typeof result.token === 'string' && result.token.length > 0 ? result.token : null;
+      if (token === null) throw new Error('Malformed token change response');
+      byId('cred-token-value').value = token;
+      byId('cred-token-reveal').hidden = false;
+      // Defense in depth: the one-time token also auto-clears after 60s even
+      // if the operator never copies it (the session cookie is the only
+      // ambient exposure; this shrinks that window).
+      if (tokenRevealTimer !== null) clearTimeout(tokenRevealTimer);
+      tokenRevealTimer = setTimeout(hideTokenReveal, 60000);
+      await loadCredentials();
+      status('credentials', 'Token rotated — shown once, store it now.', false);
+    } catch (error) { status('credentials', credentialErrorText(error), true); }
+  }
+  async function removeToken() {
+    if (credentialSnapshot.token === null) { status('credentials', 'No token is configured — nothing to remove.', true); return; }
+    if (credentialSnapshot.password === null) {
+      status('credentials', 'This gateway has no password; remove the token from a bearer-token client instead.', true);
+      return;
+    }
+    if (!window.confirm('Remove the gateway token? Authenticated API and desktop clients are disconnected immediately.')) return;
+    var current = byId('cred-current-password').value;
+    if (current.length === 0) { status('credentials', 'Enter the current password to remove the gateway token.', true); return; }
+    hideTokenReveal();
+    status('credentials', 'Removing token…', false);
+    try {
+      await request(AUTH_PATHS.changeToken, { method: 'POST', body: { remove: true, currentPassword: current } });
+      // A config-managed credential is re-seeded on the next restart — say
+      // so instead of implying a permanent removal (design 17 §7.4 seeding).
+      var wasConfigManaged = credentialSnapshot.token !== null && credentialSnapshot.token.source === 'config';
+      byId('cred-current-password').value = '';
+      await loadCredentials();
+      status('credentials', wasConfigManaged
+        ? 'Token removed for now — it is managed by deployment config and will be re-seeded on the next gateway restart.'
+        : 'Token removed.', false);
+    } catch (error) { status('credentials', credentialErrorText(error), true); }
+  }
+  function copyToken() {
+    var textarea = byId('cred-token-value');
+    if (textarea.value.length === 0) return;
+    textarea.focus();
+    textarea.select();
+    var copied = false;
+    try { copied = document.execCommand('copy'); } catch (_) { copied = false; }
+    if (copied) {
+      status('credentials', 'Token copied — cleared from this page.', false);
+      hideTokenReveal();
+    } else {
+      status('credentials', 'Copy failed — select the token text manually, then store it.', true);
+    }
+  }
+
   async function refreshLive() {
     if (liveRefreshRunning) return;
     liveRefreshRunning = true;
@@ -1307,8 +1507,13 @@ const CHAMBER_APP_JS = `(function () {
   byId('runtime-retry-restore').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.retryRestore, undefined, 'Restore retry'); });
   byId('runtime-restart').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.restart, undefined, 'dsh restart'); });
   byId('runtime-registry-save').addEventListener('click', function () { void saveRuntimeRegistry(); });
-  byId('refresh').addEventListener('click', function () { void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive()]); });
-  void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive()]);
+  byId('cred-change-password').addEventListener('click', function () { void changePassword(); });
+  byId('cred-remove-password').addEventListener('click', function () { void removePassword(); });
+  byId('cred-rotate-token').addEventListener('click', function () { void rotateToken(); });
+  byId('cred-remove-token').addEventListener('click', function () { void removeToken(); });
+  byId('cred-copy-token').addEventListener('click', copyToken);
+  byId('refresh').addEventListener('click', function () { void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive(), loadCredentials()]); });
+  void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive(), loadCredentials()]);
   setInterval(function () { void loadRuntimeStatus(); }, 3000);
   setInterval(function () { void refreshLive(); }, 10000);
 }());

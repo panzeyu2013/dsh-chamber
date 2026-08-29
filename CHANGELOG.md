@@ -12,6 +12,50 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **Gateway 运行时凭据管理（design 17 §7.4）** —— 凭据从部署配置升级为**服务器
+  状态**：`<stateDir>/password-credential` 与 `tokens.json` 升级 v2 JSON 信封
+  `{schemaVersion:2, source:'config'|'runtime', updatedAt, verifier|hash}`（0600
+  原子写；legacy v1 裸 `scrypt$…` / `{"hash":…}` 读为 `source:'config'` 并在下次
+  写入迁移）。**播种规则**（`seedCredentialsFromConfig`）：config 凭据只在无持久化
+  或 `source='config'` 时断言（值变化先旋转 jwt-secret），`source='runtime'` 凭据
+  权威、config 被忽略并响亮告警，config 未提供时按 source 删除或保留；动态 auth
+  facade 每请求按持久化状态计算有效 kind（`--no-auth` 部署存在 runtime 凭据时
+  按有效形态判定告警，不再误报匿名）。**运行时 API**（全部认证门后）：
+  `POST /auth/change-password`（`{newPassword}` 12–1024 或 `{remove:true}`）、
+  `POST /auth/change-token`（`{newToken}` 32–4096 visible ASCII、`{}` 服务端
+  CSPRNG 生成或 `{remove:true}`，明文仅一次性返回）、`GET /auth/credentials`
+  （非秘密投影 source/updatedAt，永不含值）；错误码→HTTP 映射
+  `bad_request` 400 / `invalid_credentials` 401 / `ambient_principal_rejected` 403 /
+  `last_credential` 409 / `rate_limited` 429 / `auth_busy` 503 / `body_too_large`
+  413（先回 413 再销毁 socket）。**非环境性证明（S25）**：凭据变更要求 bearer-token
+  principal 自证或 currentPassword 校验（共享登录限流器 + 有界 scrypt work gate），
+  仅 cookie principal 拒绝 403。**rotate-first**：密码变更先旋转 jwt-secret 再
+  持久化；删除最后一个凭据拒绝 409，除非 config 提供替代（revert 语义，
+  `source:'config'`）。**stateDir 独占锁** `.gateway.lock`（O_EXCL + pid：活锁
+  响亮拒绝 / 陈旧接管 / `close()` 幂等释放，进程 exit best-effort）。
+  **CLI** `gateway auth status` / `reset-password --new PASSWORD` / `clear`
+  （停机态；运行中响亮拒绝并提示 Web UI；reset 写 `source:'runtime'`；clear 后
+  下次启动按部署配置重新播种）。**审计（S24）** `credential_changed` /
+  `credential_change_rejected`（非秘密 detail，永不含值）。
+  **`/chamber/` 编排页 Credentials 面板**（投影行、改密/删密码/轮换 token 一次性
+  readonly 展示（60 秒自动清空）/删 token，403/409/429 等错误按 wire code 可读化；
+  config 管理维度的删除如实提示「重启后重新播种」）。新增不变量
+  **S25**（运行时凭据变更需非环境性证明；运行时拒绝删除最后一个凭据，none↔auth
+  双向转换仍仅部署期）。**全量修复轮**：stateDir 锁重写（O_EXCL 优先 +
+  rename 认领 + 移动内容校验接管陈旧锁（双进程场景证明地无双持；被移动的新鲜锁
+  rename 还原 + **创建后所有权终验**，被位移者 fail-closed）、releaseLock 双重守卫
+  （未持有不删 + on-disk pid 复验）、**exit 监听器仅获取成功后注册**（失败的
+  `gateway auth` 不再删除运行中网关的锁）、`reacquire()` 供 start() 重试路径重取）；
+  `{remove:true}` 与 `newPassword`/`newToken` 互斥（并存 400）；非字符串
+  `currentPassword` → 400；v2 verifier 形状校验（垃圾 verifier 按 corrupt 处理，
+  杜绝静默废认证）与 corrupt 告警去重（每进程一次）；`gateway auth status` 为无锁
+  只读（文档同步）；serve boot 行打印播种后有效 auth kind；`/auth/*` 未认证
+  HTML-accept 导航返回 401 JSON（不再跳登录页）；`GET /auth/credentials` 支持
+  HEAD；审计探测失败记为 `probe-error:<code>`；S25 匿名禁种、播种规则 3、并发
+  remove 串行化（永不双 null）等安全测试补齐。
+
 ### 修复
 
 - **chamber shell 不再加载官方 dev-only `dsh-client-hmr` 条目** —— 该条目的

@@ -7,7 +7,11 @@
  *
  * Routing (all under the auth gate except the two public paths):
  *   /health                  → fall through (management probe, public)
- *   /auth/login              → auth login (public)
+ *   /auth/login              → auth login (public; route exists only while a
+ *                              password is configured — design 17 §6)
+ *   /auth/change-password    → auth.changePassword (Phase 2, runtime credentials)
+ *   /auth/change-token       → auth.changeToken (Phase 2)
+ *   /auth/credentials        → auth.credentialProjection (Phase 2, non-secret)
  *   /api/connections, /api/host/*, /api/i/* → fall through (management)
  *   /chamber/runtime/*       → runtime controller (design 18 §9.3; NOT ready-gated)
  *   /chamber/*               → feature host (design 17 §8.5, fully implemented)
@@ -19,7 +23,7 @@ import {
   type ApiResponse,
   type Logger,
 } from '@dsh-chamber/control-plane'
-import type { AuthPrincipal, AuthProvider } from './auth.ts'
+import type { AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
 import { SESSION_COOKIE } from './auth.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { FeatureHost } from './routes.ts'
@@ -40,10 +44,12 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
   if (req.method !== 'GET' && req.method !== 'HEAD') return false
   if (!(headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')) return false
   // These prefixes are protocol/API surfaces even when a client happens to
-  // advertise HTML: /api, /plugins, and the /chamber/<subpath> JSON/SSE
-  // endpoints. Document navigations (/, /chamber, /chamber/) reach the form.
+  // advertise HTML: /api, /plugins, /auth (credential management is JSON),
+  // and the /chamber/<subpath> JSON/SSE endpoints. Document navigations
+  // (/, /chamber, /chamber/) reach the form.
   return pathname !== '/api' && !pathname.startsWith('/api/')
     && pathname !== '/plugins' && !pathname.startsWith('/plugins/')
+    && !pathname.startsWith('/auth/')
     && !(pathname.startsWith('/chamber/') && pathname !== '/chamber/')
 }
 
@@ -237,12 +243,17 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         return true
       }
     }
-    // 2. Auth login (public, design §5.1 / 21): POST verifies the password and
-    // sets the session cookie → 302 to `/`; GET serves the rendered login page.
+    // 2. Auth login (public, design 17 §5.1 / 21): POST verifies the password
+    // and sets the session cookie → 302 to `/`; GET serves the rendered login
+    // page. The route EXISTS only while a password is configured (design 17
+    // §6: "仅 password 形态存在") — the dynamic facade always exposes `login`
+    // (throwing `no_password` when no password is configured), so the
+    // effective `kind` getter decides: a token-only (or none) deployment
+    // answers 404 here.
     if (pathname === '/auth/login') {
       res.setHeader('content-security-policy', LOGIN_PAGE_CSP)
       const lang = detectLoginLang(headerValue(req.headers, 'accept-language'))
-      if (auth.login === undefined) {
+      if (auth.kind !== 'password' && auth.kind !== 'password+token') {
         // Token-only / no-auth deployment: browsers get a minimal HTML
         // explanation page (design 21 §5.3); API clients keep the JSON 404.
         // GET/HEAD carries no content-type, so an HTML Accept alone selects
@@ -260,7 +271,7 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         }
         return true
       }
-      if (req.method === 'POST' && auth.login !== undefined) {
+      if (req.method === 'POST') {
         // S24 (design 17 §13.4.4): the login branch audits ONLY the non-secret
         // auth RESULT — never the submitted password, never the session cookie
         // (setCookie stays out of the audit event by construction).
@@ -270,7 +281,7 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
           : `client:${loginReq.socketAddr}`
         try {
           const body = await readBody(req)
-          const { setCookie } = await auth.login(body, loginReq)
+          const { setCookie } = await auth.login!(body, loginReq)
           if (setCookie !== undefined) res.setHeader('set-cookie', setCookie)
           res.writeHead(302, { location: '/', 'cache-control': 'no-store' })
           res.end()
@@ -284,7 +295,7 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
               ts: new Date().toISOString(),
               event: code === 'rate_limited' ? 'login_rate_limited'
                 : code === 'auth_busy' ? 'login_busy'
-                : code === 'body_too_large' || code === 'bad_request' ? 'login_rejected'
+                : code === 'body_too_large' || code === 'bad_request' || code === 'no_password' ? 'login_rejected'
                 : 'login_invalid_credentials',
               kind: 'gateway',
               detail: `${loginSource},code:${code ?? 'invalid_credentials'}`,
@@ -292,7 +303,13 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
           }
           const html = wantsHtmlLoginResponse(req.headers)
           const retryAfterMs = (error as Error & { retryAfterMs?: number }).retryAfterMs
-          if (code === 'rate_limited') {
+          // `no_password` is the race-only fallback: the facade threw it
+          // between the kind check above and the login call (a concurrent
+          // credential removal). The route no longer exists — 404.
+          if (code === 'no_password') {
+            json(res, 404, { error: 'not_found', code: 'not_found' })
+          }
+          else if (code === 'rate_limited') {
             const retryAfterSec = Math.max(1, Math.ceil((retryAfterMs ?? 0) / 1000))
             if (html) {
               res.writeHead(429, { ...LOGIN_HTML_HEADERS, 'retry-after': String(retryAfterSec) })
@@ -333,6 +350,107 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       const expired = url.searchParams.get('expired') === '1'
       res.writeHead(200, LOGIN_HTML_HEADERS)
       res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null }))
+      return true
+    }
+    // 2.5 Runtime credential management (Phase 2, design 17 §7): the two
+    // change endpoints + the non-secret projection. All sit behind the auth
+    // gate (never public) and never fall through to the dsh proxy. Bodies are
+    // read with the same 16 KiB bound + 413-destroy discipline as login, then
+    // passed to the auth facade verbatim (the facade validates the shape).
+    if (pathname === '/auth/change-password' || pathname === '/auth/change-token') {
+      const dimension = pathname === '/auth/change-password' ? 'password' : 'token'
+      if (req.method !== 'POST') {
+        res.writeHead(405, { allow: 'POST', 'content-type': 'application/json', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ error: 'method not allowed', code: 'method_not_allowed' }))
+        return true
+      }
+      const changeReq = authRequest(req, decision)
+      const clientSource = changeReq.clientAddress !== undefined && changeReq.clientAddress !== ''
+        ? `client:${changeReq.clientAddress}`
+        : `client:${changeReq.socketAddr}`
+      try {
+        const body = await readBody(req)
+        // S24 (design 17 §13.4.4): the success audit records the pre-change
+        // principal KIND. changePassword/changeToken verify internally (for
+        // the proof gate); this probe exists only for the audit — it must
+        // never fail the change, so any probe error degrades the audit to a
+        // 'probe-error:<code>' marker (never 'unauthenticated', which would
+        // mislabel a busy verifier) instead of rejecting the request.
+        let principalKind = 'unauthenticated'
+        try {
+          const principal = await auth.verify(changeReq)
+          if (principal !== null) principalKind = principal.kind
+        } catch (probeError) {
+          const probeCode = (probeError as Error & { code?: string }).code
+          principalKind = `probe-error${probeCode !== undefined ? `:${probeCode}` : ''}`
+          logger.warn(`gateway dispatch: credential-change audit probe failed: ${String(probeError)}`)
+        }
+        // The change result may carry the plaintext token exactly once — it
+        // is written to the response body (no-store below) but never to the
+        // audit trail, which carries only the non-secret detail.
+        // The body shape is the facade's contract: it validates at runtime
+        // (bad_request on a non-object/out-of-bounds field), so the wire
+        // `unknown` is passed through as the documented input type.
+        const result = dimension === 'password'
+          ? await auth.changePassword!(body as ChangePasswordInput, changeReq)
+          : await auth.changeToken!(body as ChangeTokenInput, changeReq)
+        json(res, 200, result)
+        if (auditFile !== undefined && auditFile !== null) {
+          appendAuditEvent(auditFile, {
+            ts: new Date().toISOString(),
+            event: 'credential_changed',
+            kind: 'gateway',
+            detail: `${result.kind},${result.removed === true ? 'remove' : 'set'},${result.source},principal:${principalKind},${clientSource}`,
+          })
+        }
+      } catch (error) {
+        const code = (error as Error & { code?: string }).code
+        if (auditFile !== undefined && auditFile !== null) {
+          appendAuditEvent(auditFile, {
+            ts: new Date().toISOString(),
+            event: 'credential_change_rejected',
+            kind: 'gateway',
+            detail: `${dimension},${code ?? 'internal_error'},${clientSource}`,
+          })
+        }
+        if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
+        else if (code === 'invalid_credentials') json(res, 401, { error: 'invalid credentials', code })
+        else if (code === 'ambient_principal_rejected') json(res, 403, { error: 'an ambient session must supply the current password to change gateway credentials', code })
+        else if (code === 'last_credential') json(res, 409, { error: 'refusing to remove the last gateway credential; configure a replacement first', code })
+        else if (code === 'rate_limited') json(res, 429, { error: 'too many attempts; retry later', code })
+        else if (code === 'auth_busy') json(res, 503, { error: 'authentication service is busy', code })
+        else if (code === 'body_too_large') {
+          json(res, 413, { error: 'request body too large', code })
+          // Same 413 discipline as login: the oversized body may still be
+          // streaming, so destroy the request socket instead of draining it.
+          req.destroy?.()
+        } else {
+          json(res, 500, { error: 'internal error', code: 'internal_error' })
+        }
+      }
+      return true
+    }
+    if (pathname === '/auth/credentials') {
+      // HEAD is the no-body twin of GET, matching /health and /auth/login.
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'application/json', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ error: 'method not allowed', code: 'method_not_allowed' }))
+        return true
+      }
+      // Non-secret projection (S5): provenance + updatedAt only — the
+      // verifier/hash values never leave the auth provider.
+      const projection = auth.credentialProjection?.() ?? { password: null, token: null }
+      if (req.method === 'HEAD') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        res.end()
+        return true
+      }
+      json(res, 200, {
+        password: projection.password === null ? null
+          : { set: true, source: projection.password.source, updatedAt: projection.password.updatedAt },
+        token: projection.token === null ? null
+          : { set: true, source: projection.token.source, updatedAt: projection.token.updatedAt },
+      })
       return true
     }
     // 3. Management routes → fall through to api.handle (prefix-match so
