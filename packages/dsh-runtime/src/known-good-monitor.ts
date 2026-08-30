@@ -1,12 +1,12 @@
 /** Design 18 §3.4 sustained-health known-good promotion monitor. */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { join } from 'node:path'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import { markKnownGood, validateVersionTree } from './dsh-runtime-store.ts'
-
-const PRIVATE_DIR_MODE = 0o700
-const PRIVATE_FILE_MODE = 0o600
+import {
+  atomicWriteRuntimeFileNoFollow,
+  ensureRuntimeRootNoFollow,
+  readPrivateFileNoFollow,
+} from './private-fs.ts'
 
 export interface HealthPolicy {
   minUptimeMs: number
@@ -43,19 +43,30 @@ export function knownGoodCandidatesPath(baseDir: string): string {
 }
 
 function readCandidates(baseDir: string): Record<string, CandidateRecord> {
-  let raw: string
-  try { raw = readFileSync(knownGoodCandidatesPath(baseDir), 'utf8') } catch { return {} }
+  const read = readPrivateFileNoFollow(knownGoodCandidatesPath(baseDir), 256 * 1024)
+  if (read.kind === 'missing') return {}
+  if (read.kind === 'unsafe') throw new Error('known-good 候选元数据不安全，拒绝读取或覆盖')
   try {
-    const parsed: unknown = JSON.parse(raw)
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const parsed: unknown = JSON.parse(read.raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('known-good 候选元数据形状无效')
+    }
     const versions = (parsed as Record<string, unknown>).versions
-    if (versions === null || typeof versions !== 'object' || Array.isArray(versions)) return {}
+    if (versions === null || typeof versions !== 'object' || Array.isArray(versions)) {
+      throw new Error('known-good 候选版本表形状无效')
+    }
     const out: Record<string, CandidateRecord> = {}
     for (const [version, value] of Object.entries(versions as Record<string, unknown>)) {
-      if (!isSafeVersion(version) || value === null || typeof value !== 'object' || Array.isArray(value)) continue
+      if (!isSafeVersion(version) || value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('known-good 候选记录形状无效')
+      }
       const rec = value as Record<string, unknown>
-      if (typeof rec.firstProbePassAt !== 'number' || !Number.isFinite(rec.firstProbePassAt)) continue
-      if (typeof rec.bootCount !== 'number' || !Number.isInteger(rec.bootCount) || rec.bootCount < 0) continue
+      if (typeof rec.firstProbePassAt !== 'number' || !Number.isFinite(rec.firstProbePassAt)) {
+        throw new Error('known-good 候选首次探测时间无效')
+      }
+      if (typeof rec.bootCount !== 'number' || !Number.isInteger(rec.bootCount) || rec.bootCount < 0) {
+        throw new Error('known-good 候选启动计数无效')
+      }
       const hasV2Window = Object.prototype.hasOwnProperty.call(rec, 'healthWindowStartedAt')
         && Object.prototype.hasOwnProperty.call(rec, 'healthWindowResetAt')
       if (!hasV2Window) {
@@ -73,8 +84,12 @@ function readCandidates(baseDir: string): Record<string, CandidateRecord> {
       }
       const startedAt = rec.healthWindowStartedAt
       const resetAt = rec.healthWindowResetAt
-      if (startedAt !== null && (typeof startedAt !== 'number' || !Number.isFinite(startedAt))) continue
-      if (resetAt !== null && (typeof resetAt !== 'number' || !Number.isFinite(resetAt))) continue
+      if (startedAt !== null && (typeof startedAt !== 'number' || !Number.isFinite(startedAt))) {
+        throw new Error('known-good 候选健康窗口起点无效')
+      }
+      if (resetAt !== null && (typeof resetAt !== 'number' || !Number.isFinite(resetAt))) {
+        throw new Error('known-good 候选健康窗口重置时间无效')
+      }
       out[version] = {
         firstProbePassAt: rec.firstProbePassAt,
         bootCount: rec.bootCount,
@@ -83,31 +98,22 @@ function readCandidates(baseDir: string): Record<string, CandidateRecord> {
       }
     }
     return out
-  } catch {
-    return {}
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error('known-good 候选元数据 JSON 损坏')
+    throw error
   }
 }
 
 function writeCandidates(baseDir: string, versions: Record<string, CandidateRecord>): void {
   const filePath = knownGoodCandidatesPath(baseDir)
-  mkdirSync(dirname(filePath), { recursive: true, mode: PRIVATE_DIR_MODE })
-  chmodSync(dirname(filePath), PRIVATE_DIR_MODE)
-  const tmp = `${filePath}.tmp-${randomBytes(4).toString('hex')}`
-  try {
-    writeFileSync(tmp, `${JSON.stringify({ versions }, null, 2)}\n`, { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
-    chmodSync(tmp, PRIVATE_FILE_MODE)
-    renameSync(tmp, filePath)
-    chmodSync(filePath, PRIVATE_FILE_MODE)
-  } catch (error) {
-    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
-    throw error
-  }
+  atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify({ versions }, null, 2)}\n`)
 }
 
 /** A candidate must point at a fully valid local version tree. */
 export function recordProbePass(baseDir: string, version: string, nowMs = Date.now()): void {
   const safe = assertSafeVersion(version)
   if (!Number.isFinite(nowMs)) throw new Error('nowMs 必须是有限数')
+  ensureRuntimeRootNoFollow(baseDir)
   const valid = validateVersionTree(baseDir, safe)
   if (!valid.ok) throw new Error(`不能记录无效运行时为 known-good 候选：${valid.error}`)
   const versions = readCandidates(baseDir)
@@ -126,7 +132,8 @@ export function recordProbePass(baseDir: string, version: string, nowMs = Date.n
 /** Count a successful boot only for an existing, still-valid candidate. */
 export function noteBoot(baseDir: string, version: string, nowMs = Date.now()): void {
   if (!Number.isFinite(nowMs)) throw new Error('nowMs 必须是有限数')
-  if (!existsSync(knownGoodCandidatesPath(baseDir)) || !isSafeVersion(version)) return
+  if (!isSafeVersion(version)) return
+  ensureRuntimeRootNoFollow(baseDir)
   if (!validateVersionTree(baseDir, version).ok) return
   const versions = readCandidates(baseDir)
   const rec = versions[version]
@@ -150,8 +157,9 @@ export function noteBoot(baseDir: string, version: string, nowMs = Date.now()): 
  */
 export function resetCandidateHealthWindow(baseDir: string, nowMs = Date.now()): void {
   if (!Number.isFinite(nowMs)) throw new Error('nowMs 必须是有限数')
-  if (!existsSync(knownGoodCandidatesPath(baseDir))) return
+  ensureRuntimeRootNoFollow(baseDir)
   const versions = readCandidates(baseDir)
+  if (Object.keys(versions).length === 0) return
   for (const [version, rec] of Object.entries(versions)) {
     versions[version] = {
       ...rec,
@@ -166,8 +174,9 @@ export function resetCandidateHealthWindow(baseDir: string, nowMs = Date.now()):
 /** Remove a failed/abandoned candidate so it cannot later be promoted. */
 export function removeKnownGoodCandidate(baseDir: string, version: string): void {
   const safe = assertSafeVersion(version)
-  if (!existsSync(knownGoodCandidatesPath(baseDir))) return
+  ensureRuntimeRootNoFollow(baseDir)
   const versions = readCandidates(baseDir)
+  if (!Object.prototype.hasOwnProperty.call(versions, safe)) return
   delete versions[safe]
   writeCandidates(baseDir, versions)
 }
@@ -180,6 +189,7 @@ export function promoteDueCandidates(
   nowMs = Date.now(),
   policy: HealthPolicy = DEFAULT_HEALTH_POLICY,
 ): string[] {
+  ensureRuntimeRootNoFollow(baseDir)
   const versions = readCandidates(baseDir)
   const promoted: string[] = []
   const remaining: Record<string, CandidateRecord> = {}

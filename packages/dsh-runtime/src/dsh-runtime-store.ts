@@ -13,30 +13,26 @@
  */
 import {
   chmodSync,
-  closeSync,
-  constants,
   existsSync,
-  fchmodSync,
-  fstatSync,
   lstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { EXACT_SEMVER, assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+import {
+  atomicWriteRuntimeFileNoFollow,
+  ensureRuntimeRootNoFollow,
+  quarantineRuntimeFileNoFollow,
+  readPrivateFileNoFollow,
+  removeRuntimeFileNoFollow,
+} from './private-fs.ts'
 
-const PRIVATE_DIR_MODE = 0o700
-const PRIVATE_FILE_MODE = 0o600
 const MAX_CURRENT_POINTER_BYTES = 16 * 1024
 const MAX_OVERRIDE_BYTES = 64 * 1024
 const MAX_ACTIVATION_JOURNAL_BYTES = 128 * 1024
@@ -216,27 +212,9 @@ function runtimeDirPath(baseDir: string): string {
   return join(baseDir, 'dsh-runtime')
 }
 
-function ensurePrivateDirSync(dir: string): void {
-  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE })
-  chmodSync(dir, PRIVATE_DIR_MODE)
-}
-
 /** Atomic JSON write; fixed permissions also tighten an old permissive file. */
-function atomicWriteJson(filePath: string, payload: unknown): void {
-  const tmpPath = `${filePath}.tmp-${randomBytes(4).toString('hex')}`
-  ensurePrivateDirSync(dirname(filePath))
-  try {
-    writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: PRIVATE_FILE_MODE,
-    })
-    chmodSync(tmpPath, PRIVATE_FILE_MODE)
-    renameSync(tmpPath, filePath)
-    chmodSync(filePath, PRIVATE_FILE_MODE)
-  } catch (error) {
-    try { rmSync(tmpPath, { force: true }) } catch { /* best effort */ }
-    throw error
-  }
+function atomicWriteJson(baseDir: string, filePath: string, payload: unknown): void {
+  atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify(payload, null, 2)}\n`)
 }
 
 interface FileIdentity {
@@ -256,20 +234,6 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino
 }
 
-function sameFileSnapshot(
-  left: ReturnType<typeof fstatSync>,
-  right: ReturnType<typeof fstatSync>,
-): boolean {
-  return sameIdentity(left, right)
-    && left.isFile()
-    && right.isFile()
-    && left.nlink === 1
-    && right.nlink === 1
-    && left.size === right.size
-    && left.mtimeMs === right.mtimeMs
-    && left.ctimeMs === right.ctimeMs
-}
-
 /**
  * Read one authority leaf without ever following the leaf itself. The runtime
  * directory and leaf identities are checked around the operation, the file is
@@ -277,101 +241,7 @@ function sameFileSnapshot(
  * the already-verified descriptor rather than a path lookup.
  */
 function readAuthorityMetadata(filePath: string, maxBytes: number): AuthorityRead {
-  const parent = dirname(filePath)
-  let parentBefore: ReturnType<typeof lstatSync>
-  try {
-    parentBefore = lstatSync(parent)
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { kind: 'missing' }
-      : { kind: 'unsafe' }
-  }
-  if (parentBefore.isSymbolicLink() || !parentBefore.isDirectory()) return { kind: 'unsafe' }
-
-  let leafBefore: ReturnType<typeof lstatSync>
-  try {
-    leafBefore = lstatSync(filePath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'unsafe' }
-    try {
-      const parentAfter = lstatSync(parent)
-      return parentAfter.isDirectory()
-        && !parentAfter.isSymbolicLink()
-        && sameIdentity(parentBefore, parentAfter)
-        ? { kind: 'missing' }
-        : { kind: 'unsafe' }
-    } catch {
-      return { kind: 'unsafe' }
-    }
-  }
-  if (leafBefore.isSymbolicLink() || !leafBefore.isFile() || leafBefore.nlink !== 1) {
-    return { kind: 'unsafe' }
-  }
-  if (leafBefore.size < 0 || leafBefore.size > maxBytes) return { kind: 'unsafe' }
-
-  let fd: number | null = null
-  try {
-    fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
-    const opened = fstatSync(fd)
-    if (!opened.isFile() || opened.nlink !== 1 || !sameIdentity(leafBefore, opened)) {
-      return { kind: 'unsafe' }
-    }
-
-    const parentOpened = lstatSync(parent)
-    if (parentOpened.isSymbolicLink()
-      || !parentOpened.isDirectory()
-      || !sameIdentity(parentBefore, parentOpened)) {
-      return { kind: 'unsafe' }
-    }
-
-    // Tighten only the inode pinned by fd. A path chmod here would re-open the
-    // symlink/parent-swap race that this reader is intended to close.
-    fchmodSync(fd, PRIVATE_FILE_MODE)
-    const beforeRead = fstatSync(fd)
-    if (!beforeRead.isFile() || beforeRead.nlink !== 1 || beforeRead.size > maxBytes) {
-      return { kind: 'unsafe' }
-    }
-
-    const buffer = Buffer.allocUnsafe(maxBytes + 1)
-    let offset = 0
-    while (offset <= maxBytes) {
-      const count = readSync(fd, buffer, offset, maxBytes + 1 - offset, null)
-      if (count === 0) break
-      offset += count
-    }
-    if (offset > maxBytes || offset !== beforeRead.size) return { kind: 'unsafe' }
-
-    const afterRead = fstatSync(fd)
-    let leafAfter: ReturnType<typeof lstatSync>
-    let parentAfter: ReturnType<typeof lstatSync>
-    try {
-      leafAfter = lstatSync(filePath)
-      parentAfter = lstatSync(parent)
-    } catch {
-      return { kind: 'unsafe' }
-    }
-    if (!sameFileSnapshot(beforeRead, afterRead)
-      || leafAfter.isSymbolicLink()
-      || !leafAfter.isFile()
-      || leafAfter.nlink !== 1
-      || !sameIdentity(afterRead, leafAfter)
-      || parentAfter.isSymbolicLink()
-      || !parentAfter.isDirectory()
-      || !sameIdentity(parentBefore, parentAfter)) {
-      return { kind: 'unsafe' }
-    }
-    return {
-      kind: 'valid',
-      raw: buffer.subarray(0, offset).toString('utf8'),
-      identity: { dev: afterRead.dev, ino: afterRead.ino },
-    }
-  } catch {
-    return { kind: 'unsafe' }
-  } finally {
-    if (fd !== null) {
-      try { closeSync(fd) } catch { /* best effort */ }
-    }
-  }
+  return readPrivateFileNoFollow(filePath, maxBytes)
 }
 
 function hasCorruptOverrideSentinel(filePath: string): boolean {
@@ -392,51 +262,17 @@ function hasCorruptOverrideSentinel(filePath: string): boolean {
 
 /** Quarantine only the exact single-link inode that was safely read. Never
  * chmod the destination by path: the source fd was already tightened. */
-function preserveSafeCorruptAuthority(filePath: string, expected: FileIdentity): void {
-  try {
-    const parent = dirname(filePath)
-    const parentBefore = lstatSync(parent)
-    const sourceBefore = lstatSync(filePath)
-    if (parentBefore.isSymbolicLink() || !parentBefore.isDirectory()
-      || sourceBefore.isSymbolicLink() || !sourceBefore.isFile()
-      || sourceBefore.nlink !== 1 || !sameIdentity(sourceBefore, expected)) return
-    const preferred = `${filePath}.corrupt`
-    const dest = existsSync(preferred)
-      ? `${preferred}-${Date.now()}-${randomBytes(3).toString('hex')}`
-      : preferred
-    renameSync(filePath, dest)
-    const parentAfter = lstatSync(parent)
-    const destAfter = lstatSync(dest)
-    if (parentAfter.isSymbolicLink() || !parentAfter.isDirectory()
-      || !sameIdentity(parentBefore, parentAfter)
-      || destAfter.isSymbolicLink() || !destAfter.isFile()
-      || destAfter.nlink !== 1 || !sameIdentity(destAfter, expected)) {
-      console.error('[dsh-runtime-store] 损坏文件隔离后的身份复验失败')
-    }
-  } catch (error) {
-    console.error('[dsh-runtime-store] 保留损坏文件失败：', error)
-  }
-}
-
-/** Preserve invalid metadata without replacing an earlier corruption field. */
-function preserveCorrupt(filePath: string): void {
+function preserveSafeCorruptAuthority(baseDir: string, filePath: string, expected: FileIdentity): boolean {
   try {
     const preferred = `${filePath}.corrupt`
     const dest = existsSync(preferred)
       ? `${preferred}-${Date.now()}-${randomBytes(3).toString('hex')}`
       : preferred
-    renameSync(filePath, dest)
-    chmodSync(dest, PRIVATE_FILE_MODE)
+    quarantineRuntimeFileNoFollow(baseDir, filePath, dest, { expectedIdentity: expected })
+    return true
   } catch (error) {
     console.error('[dsh-runtime-store] 保留损坏文件失败：', error)
-  }
-}
-
-function readJson(filePath: string): unknown | null {
-  try {
-    return JSON.parse(readFileSync(filePath, 'utf8')) as unknown
-  } catch {
-    return null
+    return false
   }
 }
 
@@ -472,13 +308,13 @@ export function readCurrentPointer(baseDir: string): string | null {
 }
 
 export function writeCurrentPointer(baseDir: string, version: string): void {
-  atomicWriteJson(currentPointerPath(baseDir), { version: assertSafeVersion(version) })
+  atomicWriteJson(baseDir, currentPointerPath(baseDir), { version: assertSafeVersion(version) })
 }
 
 /** Explicitly fall back to the builtin chain. Historical override metadata is
  * untouched; callers decide separately whether this is reset or invalidation. */
 export function clearCurrentPointer(baseDir: string): void {
-  rmSync(currentPointerPath(baseDir), { force: true })
+  removeRuntimeFileNoFollow(baseDir, currentPointerPath(baseDir))
 }
 
 export function overridePath(baseDir: string): string {
@@ -554,12 +390,12 @@ export function readOverrideState(baseDir: string): OverrideState {
   try {
     parsed = JSON.parse(read.raw)
   } catch {
-    preserveSafeCorruptAuthority(filePath, read.identity)
+    preserveSafeCorruptAuthority(baseDir, filePath, read.identity)
     return { kind: 'corrupt' }
   }
   const record = parseOverrideRecord(parsed)
   if (record === null) {
-    preserveSafeCorruptAuthority(filePath, read.identity)
+    preserveSafeCorruptAuthority(baseDir, filePath, read.identity)
     return { kind: 'corrupt' }
   }
   return { kind: 'valid', record }
@@ -632,13 +468,13 @@ export function writeOverride(baseDir: string, record: OverrideRecord): void {
   ] as const) {
     if (record[field] !== undefined) payload[field] = record[field]
   }
-  atomicWriteJson(overridePath(baseDir), payload)
+  atomicWriteJson(baseDir, overridePath(baseDir), payload)
 }
 
 /** Explicit restore-builtin action. Invalidated history should be copied by the
  * caller first if it wants a separate audit log; this only removes override. */
 export function deleteOverride(baseDir: string): void {
-  rmSync(overridePath(baseDir), { force: true })
+  removeRuntimeFileNoFollow(baseDir, overridePath(baseDir))
 }
 
 export function activationJournalPath(baseDir: string): string {
@@ -808,7 +644,7 @@ export function readActivationJournalState(baseDir: string): ActivationJournalSt
 export function writeActivationJournal(baseDir: string, journal: ActivationJournal): void {
   const parsed = parseActivationJournal(journal)
   if (parsed === null) throw new Error('activation journal 形状无效')
-  atomicWriteJson(activationJournalPath(baseDir), parsed)
+  atomicWriteJson(baseDir, activationJournalPath(baseDir), parsed)
 }
 
 /** Create the controller-owned pending intent. An in-flight prepared journal
@@ -944,7 +780,7 @@ export function queueActivationIntent(
 }
 
 export function clearActivationJournal(baseDir: string): void {
-  rmSync(activationJournalPath(baseDir), { force: true })
+  removeRuntimeFileNoFollow(baseDir, activationJournalPath(baseDir))
 }
 
 export function listVersionTrees(baseDir: string): string[] {
@@ -1054,28 +890,41 @@ function explicitInstallsPath(baseDir: string): string {
   return join(runtimeDirPath(baseDir), 'explicit-installs.json')
 }
 
-type VersionTimestampMapState = { kind: 'missing' | 'corrupt' | 'valid'; versions: Record<string, string> }
+type VersionTimestampMapState =
+  | { kind: 'missing'; versions: Record<string, never> }
+  | { kind: 'corrupt'; versions: Record<string, never>; identity?: FileIdentity }
+  | { kind: 'valid'; versions: Record<string, string> }
 
 function readVersionTimestampMap(filePath: string): VersionTimestampMapState {
-  let raw: string
+  const read = readAuthorityMetadata(filePath, 256 * 1024)
+  if (read.kind === 'missing') return { kind: 'missing', versions: {} }
+  if (read.kind === 'unsafe') return { kind: 'corrupt', versions: {} }
   try {
-    raw = readFileSync(filePath, 'utf8')
-  } catch (error) {
-    return { kind: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'corrupt', versions: {} }
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'corrupt', versions: {} }
+    const parsed: unknown = JSON.parse(read.raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { kind: 'corrupt', versions: {}, identity: read.identity }
+    }
     const versions = (parsed as Record<string, unknown>).versions
-    if (versions === null || typeof versions !== 'object' || Array.isArray(versions)) return { kind: 'corrupt', versions: {} }
+    if (versions === null || typeof versions !== 'object' || Array.isArray(versions)) {
+      return { kind: 'corrupt', versions: {}, identity: read.identity }
+    }
     const out: Record<string, string> = {}
     for (const [version, timestamp] of Object.entries(versions as Record<string, unknown>)) {
-      if (!isSafeVersion(version) || typeof timestamp !== 'string' || Number.isNaN(Date.parse(timestamp))) return { kind: 'corrupt', versions: {} }
+      if (!isSafeVersion(version) || typeof timestamp !== 'string' || Number.isNaN(Date.parse(timestamp))) {
+        return { kind: 'corrupt', versions: {}, identity: read.identity }
+      }
       out[version] = timestamp
     }
     return { kind: 'valid', versions: out }
   } catch {
-    return { kind: 'corrupt', versions: {} }
+    return { kind: 'corrupt', versions: {}, identity: read.identity }
+  }
+}
+
+function quarantineCorruptTimestampMap(baseDir: string, filePath: string, state: VersionTimestampMapState): void {
+  if (state.kind !== 'corrupt') return
+  if (state.identity === undefined || !preserveSafeCorruptAuthority(baseDir, filePath, state.identity)) {
+    throw new Error(`runtime 版本保留元数据不安全，拒绝覆盖：${basename(filePath)}`)
   }
 }
 
@@ -1098,28 +947,30 @@ export function recordExplicitInstall(
   now = new Date(),
   platform = `${process.platform}-${process.arch}`,
 ): void {
+  ensureRuntimeRootNoFollow(baseDir)
   const safe = assertSafeVersion(version)
   const validation = validateVersionTree(baseDir, safe, platform)
   if (!validation.ok) throw new Error(`不能保留无效运行时安装：${validation.error}`)
   if (Number.isNaN(now.getTime())) throw new Error('显式安装时间戳无效')
   const filePath = explicitInstallsPath(baseDir)
   const state = readVersionTimestampMap(filePath)
-  if (state.kind === 'corrupt' && existsSync(filePath)) preserveCorrupt(filePath)
+  quarantineCorruptTimestampMap(baseDir, filePath, state)
   const versions = seedExplicitInstalls(baseDir, state)
   versions[safe] = now.toISOString()
-  atomicWriteJson(filePath, { versions })
+  atomicWriteJson(baseDir, filePath, { versions })
 }
 
 /** Explicit cleanup opt-out. The tree is not removed here; a later eviction
  * may remove it if no current/known-good/pending/failure protection remains. */
 export function forgetExplicitInstall(baseDir: string, version: string): void {
+  ensureRuntimeRootNoFollow(baseDir)
   const safe = assertSafeVersion(version)
   const filePath = explicitInstallsPath(baseDir)
   const state = readVersionTimestampMap(filePath)
-  if (state.kind === 'corrupt' && existsSync(filePath)) preserveCorrupt(filePath)
+  quarantineCorruptTimestampMap(baseDir, filePath, state)
   const versions = seedExplicitInstalls(baseDir, state)
   delete versions[safe]
-  atomicWriteJson(filePath, { versions })
+  atomicWriteJson(baseDir, filePath, { versions })
 }
 
 function isExplicitInstall(baseDir: string, version: string): boolean {
@@ -1155,26 +1006,28 @@ export function markKnownGood(
   now = new Date(),
   platform = `${process.platform}-${process.arch}`,
 ): void {
+  ensureRuntimeRootNoFollow(baseDir)
   const safe = assertSafeVersion(version)
   const validation = validateVersionTree(baseDir, safe, platform)
   if (!validation.ok) throw new Error(`不能标记无效运行时为 known-good：${validation.error}`)
   if (Number.isNaN(now.getTime())) throw new Error('known-good 时间戳无效')
   const filePath = knownGoodPath(baseDir)
   const state = readVersionTimestampMap(filePath)
-  if (state.kind === 'corrupt' && existsSync(filePath)) preserveCorrupt(filePath)
+  quarantineCorruptTimestampMap(baseDir, filePath, state)
   const versions = state.kind === 'valid' ? { ...state.versions } : {}
   versions[safe] = now.toISOString()
-  atomicWriteJson(filePath, { versions })
+  atomicWriteJson(baseDir, filePath, { versions })
 }
 
 export function forgetKnownGood(baseDir: string, version: string): void {
+  ensureRuntimeRootNoFollow(baseDir)
   const safe = assertSafeVersion(version)
   const filePath = knownGoodPath(baseDir)
   const state = readVersionTimestampMap(filePath)
   if (state.kind !== 'valid') return
   const versions = { ...state.versions }
   delete versions[safe]
-  atomicWriteJson(filePath, { versions })
+  atomicWriteJson(baseDir, filePath, { versions })
 }
 
 function failurePath(baseDir: string, version: string): string {
@@ -1209,26 +1062,48 @@ function parseFailureRecord(parsed: unknown, expectedVersion?: string): RuntimeF
   }
 }
 
-export function readRuntimeFailure(baseDir: string, version: string): RuntimeFailureRecord | null {
+type RuntimeFailureState =
+  | { kind: 'missing' | 'unsafe' }
+  | { kind: 'corrupt'; identity: FileIdentity }
+  | { kind: 'valid'; record: RuntimeFailureRecord }
+
+function readRuntimeFailureState(baseDir: string, version: string): RuntimeFailureState {
   const safe = assertSafeVersion(version)
   const filePath = failurePath(baseDir, safe)
-  let raw: string
-  try {
-    raw = readFileSync(filePath, 'utf8')
-  } catch {
+  const read = readAuthorityMetadata(filePath, 64 * 1024)
+  if (read.kind === 'missing' || read.kind === 'unsafe') return { kind: read.kind }
+  let parsed: unknown
+  try { parsed = JSON.parse(read.raw) } catch { parsed = null }
+  const record = parseFailureRecord(parsed, safe)
+  return record === null
+    ? { kind: 'corrupt', identity: read.identity }
+    : { kind: 'valid', record }
+}
+
+export function readRuntimeFailure(baseDir: string, version: string): RuntimeFailureRecord | null {
+  const safe = assertSafeVersion(version)
+  const state = readRuntimeFailureState(baseDir, safe)
+  if (state.kind === 'corrupt') {
+    preserveSafeCorruptAuthority(baseDir, failurePath(baseDir, safe), state.identity)
     return null
   }
-  let parsed: unknown
-  try { parsed = JSON.parse(raw) } catch { parsed = null }
-  const record = parseFailureRecord(parsed, safe)
-  if (record === null) preserveCorrupt(filePath)
-  return record
+  return state.kind === 'valid' ? state.record : null
 }
 
 export function recordRuntimeFailure(baseDir: string, input: RuntimeFailureInput, now = new Date()): RuntimeFailureRecord {
+  ensureRuntimeRootNoFollow(baseDir)
   const version = assertSafeVersion(input.version)
   if (!validFailurePhase(input.phase)) throw new Error('failure.phase 必须是安全的短横线标识符')
-  const previous = readRuntimeFailure(baseDir, version)
+  const filePath = failurePath(baseDir, version)
+  const previousState = readRuntimeFailureState(baseDir, version)
+  if (previousState.kind === 'unsafe') {
+    throw new Error(`runtime failure 元数据不安全，拒绝覆盖：${basename(filePath)}`)
+  }
+  if (previousState.kind === 'corrupt'
+    && !preserveSafeCorruptAuthority(baseDir, filePath, previousState.identity)) {
+    throw new Error(`runtime failure 损坏元数据无法安全隔离，拒绝覆盖：${basename(filePath)}`)
+  }
+  const previous = previousState.kind === 'valid' ? previousState.record : null
   const timestamp = now.toISOString()
   const record: RuntimeFailureRecord = {
     version,
@@ -1240,7 +1115,7 @@ export function recordRuntimeFailure(baseDir: string, input: RuntimeFailureInput
     restoreOutcome: input.restoreOutcome ?? null,
     snapshotName: input.snapshotPath ? basename(input.snapshotPath) : null,
   }
-  atomicWriteJson(failurePath(baseDir, version), record)
+  atomicWriteJson(baseDir, filePath, record)
   return record
 }
 
@@ -1327,7 +1202,7 @@ export function runtimeSnapshotRetentionState(baseDir: string): RuntimeSnapshotR
 }
 
 export function clearRuntimeFailure(baseDir: string, version: string): void {
-  rmSync(failurePath(baseDir, version), { force: true })
+  removeRuntimeFileNoFollow(baseDir, failurePath(baseDir, version))
 }
 
 function isKnownGoodProtected(baseDir: string, version: string): boolean {
@@ -1338,9 +1213,12 @@ function isKnownGoodProtected(baseDir: string, version: string): boolean {
 
 function isKnownGoodCandidateProtected(baseDir: string, version: string): boolean {
   const filePath = join(runtimeDirPath(baseDir), 'known-good-candidates.json')
-  const parsed = readJson(filePath)
-  if (parsed === null) return existsSync(filePath)
-  if (typeof parsed !== 'object' || Array.isArray(parsed)) return true
+  const read = readAuthorityMetadata(filePath, 256 * 1024)
+  if (read.kind === 'missing') return false
+  if (read.kind === 'unsafe') return true
+  let parsed: unknown
+  try { parsed = JSON.parse(read.raw) } catch { return true }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return true
   const versions = (parsed as Record<string, unknown>).versions
   if (versions === null || typeof versions !== 'object' || Array.isArray(versions)) return true
   return Object.prototype.hasOwnProperty.call(versions, version)
@@ -1408,6 +1286,7 @@ export function cleanupExplicitRuntimeVersion(
   baseDir: string,
   version: string,
 ): ExplicitRuntimeCleanupResult {
+  ensureRuntimeRootNoFollow(baseDir)
   const safe = assertSafeVersion(version)
   if (isProtectedVersion(baseDir, safe, { ignoreExplicitInstall: true })) {
     return { removed: false, retentionCleared: false, stillProtected: true }
@@ -1428,7 +1307,10 @@ function storePruneMarkerPath(baseDir: string): string {
 }
 
 export function readStorePruneRequest(baseDir: string): StorePruneRequest | null {
-  const parsed = readJson(storePruneMarkerPath(baseDir))
+  const read = readAuthorityMetadata(storePruneMarkerPath(baseDir), 64 * 1024)
+  if (read.kind !== 'valid') return null
+  let parsed: unknown
+  try { parsed = JSON.parse(read.raw) } catch { return null }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const rec = parsed as Record<string, unknown>
   if (typeof rec.requestedAt !== 'string' || !Array.isArray(rec.reasons) || !rec.reasons.every((v) => typeof v === 'string')) return null
@@ -1436,13 +1318,14 @@ export function readStorePruneRequest(baseDir: string): StorePruneRequest | null
 }
 
 export function markStorePruneNeeded(baseDir: string, reason: string): void {
+  ensureRuntimeRootNoFollow(baseDir)
   const previous = readStorePruneRequest(baseDir)
   const reasons = Array.from(new Set([...(previous?.reasons ?? []), reason])).slice(-20)
-  atomicWriteJson(storePruneMarkerPath(baseDir), { requestedAt: new Date().toISOString(), reasons })
+  atomicWriteJson(baseDir, storePruneMarkerPath(baseDir), { requestedAt: new Date().toISOString(), reasons })
 }
 
 export function clearStorePruneRequest(baseDir: string): void {
-  rmSync(storePruneMarkerPath(baseDir), { force: true })
+  removeRuntimeFileNoFollow(baseDir, storePruneMarkerPath(baseDir))
 }
 
 function versionTreeMtimeMs(baseDir: string, version: string): number {
@@ -1467,6 +1350,7 @@ function makeOwnedTreeWritable(treePath: string): void {
 }
 
 export function evictVersions(baseDir: string, keep = 3): string[] {
+  ensureRuntimeRootNoFollow(baseDir)
   if (!Number.isInteger(keep) || keep < 0) throw new Error('keep 必须是非负整数')
   const trees = listVersionTrees(baseDir)
   if (trees.length <= keep) return []
@@ -1512,6 +1396,7 @@ function readWorkStateMarker(workDir: string): 'preparing' | 'spawning' | 'spawn
 }
 
 export function cleanupStaleInstalls(baseDir: string): string[] {
+  ensureRuntimeRootNoFollow(baseDir)
   let entries
   try {
     entries = readdirSync(runtimeDirPath(baseDir), { withFileTypes: true })

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { open, type FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -22,6 +23,30 @@ const VALID_SRI = `sha512-${createHash('sha512').update(TARBALL).digest('base64'
 
 function makeBaseDir(): string {
   return mkdtempSync(path.join(tmpdir(), 'dsh-rt-installer-'))
+}
+
+type BufferWrite = (
+  this: FileHandle,
+  buffer: Uint8Array,
+  offset?: number | null,
+  length?: number | null,
+  position?: number | null,
+) => Promise<{ bytesWritten: number; buffer: Uint8Array }>
+
+async function withPatchedFileHandleWrite<T>(
+  replace: (original: BufferWrite) => BufferWrite,
+  run: () => Promise<T>,
+): Promise<T> {
+  const probe = await open(path.join(makeBaseDir(), 'write-prototype-probe'), 'wx', 0o600)
+  const prototype = Object.getPrototypeOf(probe) as { write: FileHandle['write'] }
+  await probe.close()
+  const original = prototype.write
+  prototype.write = replace(original as BufferWrite) as FileHandle['write']
+  try {
+    return await run()
+  } finally {
+    prototype.write = original
+  }
 }
 
 function makeExistingTree(baseDir: string, version: string, valid: boolean): string {
@@ -432,6 +457,56 @@ test('downloadVerifiedRegistryTarball: reports byte progress (declared and undec
   assert.equal(ticks2.at(-1)?.total, null)
 })
 
+test('downloadVerifiedRegistryTarball: retries short writes and advances SRI/progress by persisted bytes', async () => {
+  const dir = makeBaseDir()
+  const destination = path.join(dir, 'short-write.tgz')
+  const ticks: number[] = []
+  let writes = 0
+
+  await withPatchedFileHandleWrite((original) => async function (
+    buffer,
+    offset = 0,
+    length = buffer.byteLength - (offset ?? 0),
+    position = null,
+  ) {
+    const actualOffset = offset ?? 0
+    const actualLength = length ?? buffer.byteLength - actualOffset
+    writes += 1
+    return original.call(this, buffer, actualOffset, Math.min(5, actualLength), position)
+  }, async () => {
+    await downloadVerifiedRegistryTarball(resolution(), destination, {
+      signal: new AbortController().signal,
+      fetchImpl: async () => new Response(TARBALL, {
+        status: 200,
+        headers: { 'content-length': String(TARBALL.length) },
+      }),
+      onProgress: received => ticks.push(received),
+    })
+  })
+
+  assert.ok(writes > 1, 'the fixture must exercise a short-write retry')
+  assert.deepEqual(readFileSync(destination), TARBALL)
+  assert.deepEqual(ticks, Array.from(
+    { length: Math.ceil(TARBALL.length / 5) },
+    (_, index) => Math.min((index + 1) * 5, TARBALL.length),
+  ))
+})
+
+test('downloadVerifiedRegistryTarball: a zero-byte write fails and removes the partial tarball', async () => {
+  const destination = path.join(makeBaseDir(), 'zero-write.tgz')
+
+  await withPatchedFileHandleWrite(() => async function (buffer) {
+    return { bytesWritten: 0, buffer }
+  }, async () => {
+    await assert.rejects(downloadVerifiedRegistryTarball(resolution(), destination, {
+      signal: new AbortController().signal,
+      fetchImpl: async () => new Response(TARBALL, { status: 200 }),
+    }), /write made no progress/)
+  })
+
+  assert.equal(existsSync(destination), false)
+})
+
 test('RuntimeInstallerSupervisor: bounds output and reports the real child pid', async () => {
   const supervisor = new RuntimeInstallerSupervisor(128, 25)
   let childPid = 0
@@ -691,6 +766,66 @@ test('pruneRuntimeStore: uses the supervised embedded pnpm and private store pat
   assert.equal(runOpts.signal?.aborted, false)
 })
 
+test('pruneRuntimeStore: rejects a symlinked .npmrc without truncating its target or spawning pnpm', {
+  skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
+}, async () => {
+  const baseDir = makeBaseDir()
+  const runtimeDir = path.join(baseDir, 'dsh-runtime')
+  mkdirSync(runtimeDir, { recursive: true })
+  const outsideDir = mkdtempSync(path.join(tmpdir(), 'dsh-rt-installer-npmrc-outside-'))
+  const target = path.join(outsideDir, 'user-npmrc')
+  writeFileSync(target, 'registry=https://private.example/\n_authToken=DO_NOT_TRUNCATE\n', { mode: 0o644 })
+  chmodSync(target, 0o644)
+  const targetBefore = statSync(target)
+  const npmrc = path.join(runtimeDir, '.npmrc')
+  symlinkSync(target, npmrc)
+  let runCalls = 0
+
+  await assert.rejects(pruneRuntimeStore({
+    baseDir,
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: {
+      node: nodeFn,
+      run: async () => {
+        runCalls += 1
+        return { status: 0, stdout: '', stderr: '' }
+      },
+    },
+  }), /单链接普通文件/)
+
+  assert.equal(runCalls, 0)
+  assert.equal(lstatSync(npmrc).isSymbolicLink(), true)
+  assert.deepEqual(statSync(target), targetBefore)
+  assert.equal(readFileSync(target, 'utf8'), 'registry=https://private.example/\n_authToken=DO_NOT_TRUNCATE\n')
+})
+
+test('installRuntimeVersion: rejects a symlinked runtime root before download and leaves outside state untouched', {
+  skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
+}, async () => {
+  const baseDir = makeBaseDir()
+  const outsideRoot = mkdtempSync(path.join(tmpdir(), 'dsh-rt-installer-root-outside-'))
+  const sentinel = path.join(outsideRoot, 'sentinel')
+  writeFileSync(sentinel, 'outside-runtime-root', { mode: 0o644 })
+  const before = statSync(sentinel)
+  symlinkSync(outsideRoot, path.join(baseDir, 'dsh-runtime'))
+  let downloads = 0
+
+  await assert.rejects(installRuntimeVersion({
+    baseDir,
+    resolution: resolution(),
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: {
+      ...depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })),
+      download: async () => { downloads += 1 },
+    },
+  }), /不安全/)
+
+  assert.equal(downloads, 0)
+  assert.deepEqual(statSync(sentinel), before)
+  assert.equal(readFileSync(sentinel, 'utf8'), 'outside-runtime-root')
+  assert.deepEqual(readdirSync(outsideRoot), ['sentinel'])
+})
+
 test('pruneRuntimeStore: rejects failures without leaking registry URL secrets', async () => {
   const secret = 'DO_NOT_EXPOSE'
   const pathSecret = 'PATH_CAPABILITY'
@@ -861,4 +996,74 @@ test('createOperationDeadline refuses new operations with the writer-safety code
       return true
     },
   )
+})
+
+test('failed installer disposal stays poisoned, drains injected runners, and only a successful retry reopens entries', async () => {
+  const baseDir = makeBaseDir()
+  let notifyRunStarted!: () => void
+  const runStarted = new Promise<void>((resolve) => { notifyRunStarted = resolve })
+  let releaseRun!: () => void
+  const release = new Promise<void>((resolve) => { releaseRun = resolve })
+  const activePrune = pruneRuntimeStore({
+    baseDir,
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: depsWithRun(async () => {
+      notifyRunStarted()
+      await release
+      return { status: 0, stdout: '', stderr: '' }
+    }),
+  })
+  await runStarted
+
+  const proofFailure = Object.assign(new Error('injected writer proof failure'), {
+    code: 'ERR_DSH_WRITER_UNSAFE',
+  })
+  let disposalSettled = false
+  const firstDispose = disposeRuntimeInstaller({
+    beforeReset: () => { throw proofFailure },
+  })
+  void firstDispose.then(
+    () => { disposalSettled = true },
+    () => { disposalSettled = true },
+  )
+
+  await Promise.resolve()
+  assert.equal(disposalSettled, false, 'a failed disposal tail does not skip the active operation drain')
+  releaseRun()
+  await assert.rejects(activePrune, /runtime installer is shutting down/)
+  await assert.rejects(firstDispose, /injected writer proof failure/)
+
+  let poisonedRunCalled = false
+  await assert.rejects(
+    pruneRuntimeStore({
+      baseDir: makeBaseDir(),
+      pnpmEntry: '/pnpm/bin/pnpm.cjs',
+      deps: depsWithRun(async () => {
+        poisonedRunCalled = true
+        return { status: 0, stdout: '', stderr: '' }
+      }),
+    }),
+    (error: unknown) => {
+      assert.equal((error as Error & { code?: string }).code, 'ERR_DSH_WRITER_UNSAFE')
+      assert.match(error instanceof Error ? error.message : String(error), /quiescence is unproven/)
+      return true
+    },
+  )
+  assert.equal(poisonedRunCalled, false, 'the shared entry gate rejects injected runners too')
+
+  const retryA = disposeRuntimeInstaller()
+  const retryB = disposeRuntimeInstaller()
+  assert.equal(retryA, retryB, 'concurrent retry disposal calls share one proof')
+  await retryA
+
+  let reopenedRunCalled = false
+  await pruneRuntimeStore({
+    baseDir: makeBaseDir(),
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: depsWithRun(async () => {
+      reopenedRunCalled = true
+      return { status: 0, stdout: '', stderr: '' }
+    }),
+  })
+  assert.equal(reopenedRunCalled, true)
 })

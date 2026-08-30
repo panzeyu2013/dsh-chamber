@@ -25,6 +25,18 @@ test('sanitizeErrorText: URL scheme + //host survive (never swallowed)', () => {
   assert.equal(sanitizeErrorText('go to https://github.com now'), 'go to https://github.com now');
 });
 
+test('sanitizeErrorText: file URLs are local paths and never retain user directories', () => {
+  assert.equal(
+    sanitizeErrorText('load failed at file:///Users/alice/Library/Application%20Support/dsh/runtime.js'),
+    'load failed at [path]',
+  );
+  assert.equal(
+    sanitizeErrorText('load failed at file:///home/alice/.local/share/dsh/runtime.js'),
+    'load failed at [path]',
+  );
+  assert.equal(sanitizeErrorText('UNC file://server/share/alice/secret'), 'UNC [path]');
+});
+
 test('sanitizeErrorText: POSIX absolute paths redacted (any root component)', () => {
   assert.equal(
     sanitizeErrorText('update cache /Users/alice/Library/Caches/dsh-chamber/updater is full'),
