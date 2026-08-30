@@ -273,8 +273,24 @@ async function killAndConfirm(pid: number, deps: Required<ReaperDeps>): Promise<
   throw new Error(`process group ${pid} still alive after SIGTERM + SIGKILL`)
 }
 
-async function removeFile(file: string, expected: PrivateFileIdentity): Promise<void> {
+function assertRecordStillOwned(file: string, expected: PrivateFileIdentity, expectedValue: string): void {
+  // dev/ino normally identifies the ledger leaf, but a filesystem may reuse
+  // an inode after an unlink followed by an immediate replacement. Re-read
+  // the exact bytes as well as the identity so a successor record cannot be
+  // mistaken for the record we inspected earlier.
+  const current = readPrivateFileNoFollow(file, { maxBytes: 64 * 1024 })
+  if (current.value !== expectedValue
+    || current.identity.dev !== expected.dev
+    || current.identity.ino !== expected.ino) {
+    throw new Error(`private state leaf is unsafe or no longer owned: ${file}`)
+  }
+}
+
+async function removeFile(file: string, expected: PrivateFileIdentity, expectedValue: string): Promise<void> {
   try {
+    assertRecordStillOwned(file, expected, expectedValue)
+    // removePrivateFileNoFollow repeats the identity check at the namespace
+    // operation itself, closing the final check/remove gap it can cover.
     removePrivateFileNoFollow(file, expected)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -303,9 +319,11 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
   const label = name.slice(0, -5)
   let record: any
   let recordIdentity: PrivateFileIdentity | null = null
+  let recordValue: string | null = null
   try {
     const read = readPrivateFileNoFollow(file, { maxBytes: 64 * 1024 })
     recordIdentity = read.identity
+    recordValue = read.value
     record = JSON.parse(read.value)
   } catch (error) {
     if (name.startsWith('claim-')) {
@@ -330,7 +348,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
       log(`reaper: ${label} claim owner ${ownerPid} alive; kept`)
       return { status: 'kept' }
     }
-    await removeFile(file, recordIdentity!)
+    await removeFile(file, recordIdentity!, recordValue!)
     log(`reaper: ${label} claim owner ${String(ownerPid)} dead; claim removed`)
     return { status: 'removed' }
   }
@@ -351,10 +369,13 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
       log(`reaper: ${pid} leader dead but residual process group alive; record kept`)
       return { status: 'kept' }
     }
-    await removeFile(file, recordIdentity!)
+    await removeFile(file, recordIdentity!, recordValue!)
     log(`reaper: ${pid} dead; record removed`)
     return { status: 'removed' }
   }
+  // A new record can be published for a reused pid while this scan is in
+  // flight. Do not even inspect or signal the live process on stale evidence.
+  assertRecordStillOwned(file, recordIdentity!, recordValue!)
   const portNum = Number(record.port)
   const identity = deps.psIdentity(pid)
   const profile = typeof record.profile === 'string' && record.profile !== '' ? record.profile : null
@@ -387,8 +408,9 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     return { status: 'kept' }
   }
   log(`reaper: ${pid} orphan; SIGTERM`)
+  assertRecordStillOwned(file, recordIdentity!, recordValue!)
   await killAndConfirm(pid, deps)
-  await removeFile(file, recordIdentity!)
+  await removeFile(file, recordIdentity!, recordValue!)
   log(`reaper: ${pid} exited; record removed`)
   return { status: 'reclaimed' }
 }
