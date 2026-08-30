@@ -12,6 +12,8 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+## [0.2.0-beta.4] - 2026-08-30
+
 ### Added
 
 - **Gateway runtime credential management (design 17 §7.4)** — gateway
@@ -64,6 +66,17 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   silently degraded per the existing contract (no extra plugins this boot).
   Non-503 channel failures still fail fast; the budget only affects the
   fast-503 path.
+
+- **Control-plane reaper protects replaced ledgers** — before signaling or
+  deleting, the reaper revalidates the record's device/inode and exact bytes;
+  replacement, PID reuse, or a no-longer-matching record fails closed, avoiding
+  an accidental process kill or deletion of a newer record.
+
+- **Deterministic CI and release builds** — Gateway tests invoke the same build
+  script when a clean checkout lacks the ignored dist bundles; fake-registry
+  acceptance creates its secure user-data root first; third-party notices are
+  generated from the actually declared direct dependencies, so local hoisted
+  leftovers cannot pollute CI.
 
 ### Changed
 
