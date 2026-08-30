@@ -6,8 +6,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,6 +19,19 @@ const TOKEN = '0123456789abcdef0123456789abcdef'
 const PASSWORD = 'correct-horse-battery'
 const CLI = fileURLToPath(new URL('../src/cli.ts', import.meta.url))
 const DIST_CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url))
+const DIST_INDEX = fileURLToPath(new URL('../dist/index.js', import.meta.url))
+const BUILD = fileURLToPath(new URL('../scripts/build.mjs', import.meta.url))
+const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url))
+
+function ensureGatewayBuild(): void {
+  // The gateway test command intentionally runs before the CI build step. A
+  // clean checkout therefore has no ignored dist/ tree yet, but this test
+  // also covers the packaged CLI's --version contract. Build both bundle
+  // entrypoints on demand so the source test does not depend on a developer's
+  // previous local build.
+  if (existsSync(DIST_CLI) && existsSync(DIST_INDEX)) return
+  execFileSync(process.execPath, [BUILD], { cwd: PACKAGE_DIR, stdio: 'inherit' })
+}
 
 test('S1: a non-loopback bind without auth is a config error', () => {
   assert.throws(
@@ -143,6 +156,7 @@ test('gateway serve forwards --dsh-port into config validation', async t => {
 })
 
 test('gateway CLI exposes the installed package version for installer health proof', () => {
+  ensureGatewayBuild()
   const manifest = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { version: string }
   for (const entry of [CLI, DIST_CLI]) {
     const result = spawnSync(process.execPath, [entry, '--version'], { encoding: 'utf8', timeout: 10_000 })
