@@ -13,7 +13,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
+import { lstatSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runReaper } from '../src/reaper.ts'
@@ -89,6 +89,55 @@ test('reaper: identity mismatch keeps the record untouched', async t => {
   assert.ok(recordExists(dir, '4242.json'), 'identity mismatch must leave the record and process untouched')
   assert.equal(logs.some(line => line.includes('super-secret')), false, 'an unrelated argv must never enter logs')
   assert.deepEqual(logs, ['reaper: 4242 identity mismatch; record kept'])
+})
+
+test('reaper: a symlinked pid record is kept as unsafe evidence and never drives a signal', async t => {
+  if (process.platform === 'win32') t.skip('creating symlinks is privilege-dependent on Windows')
+  const dir = tempStateDir(t)
+  const victim = join(dir, 'record-victim.json')
+  writeFileSync(victim, JSON.stringify(spawnRecord))
+  const ledger = join(dir, 'managed-dsh', '4242.json')
+  symlinkSync(victim, ledger)
+  const signals: NodeJS.Signals[] = []
+
+  const result = await runReaper({
+    stateDir: dir,
+    deps: dshDeps({ signal: (_pid, signal) => { signals.push(signal); return true } }),
+  })
+
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.deepEqual(signals, [])
+  assert.equal(lstatSync(ledger).isSymbolicLink(), true)
+  assert.equal(readFileSync(victim, 'utf8'), JSON.stringify(spawnRecord))
+})
+
+test('reaper: record replacement after read is never deleted as the stale inode', async t => {
+  const dir = tempStateDir(t)
+  const ledger = join(dir, 'managed-dsh', '4242.json')
+  writeRecord(dir, '4242.json', spawnRecord)
+  const successor = { ...spawnRecord, ownerPid: process.pid, startedAt: 'successor' }
+  let replaced = false
+
+  const result = await runReaper({
+    stateDir: dir,
+    deps: dshDeps({
+      alive: pid => {
+        if (pid === 4242 && !replaced) {
+          replaced = true
+          rmSync(ledger)
+          writeFileSync(ledger, JSON.stringify(successor))
+        }
+        return false
+      },
+      managedTreeAlive: () => false,
+    }),
+  })
+
+  assert.equal(result.reclaimed, 0)
+  assert.equal(result.kept, 1)
+  assert.equal(result.errors.length, 1)
+  assert.match(result.errors[0], /no longer owned/)
+  assert.deepEqual(JSON.parse(readFileSync(ledger, 'utf8')), successor)
 })
 
 test('reaper: an unrelated bin.ts process with the same profile and port is never killed', async t => {

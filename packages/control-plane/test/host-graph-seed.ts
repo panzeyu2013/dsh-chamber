@@ -18,7 +18,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -102,6 +102,42 @@ test('buildPatchOverlay self-heals a drifted overlay back to the canonical conte
   writeFileSync(path, '- insert: []\n', { mode: 0o600 })
   buildPatchOverlay(dir)
   assert.equal(readFileSync(path, 'utf8'), EXPECTED_OVERLAY)
+})
+
+test('buildPatchOverlay rejects a symlinked state root without writing through it', t => {
+  const anchor = tempDir(t)
+  const outside = tempDir(t)
+  const stateDir = join(anchor, 'state')
+  try {
+    symlinkSync(outside, stateDir, 'dir')
+  } catch (error) {
+    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      t.skip('symbolic links are unavailable on this platform')
+      return
+    }
+    throw error
+  }
+  assert.throws(() => buildPatchOverlay(stateDir), /not a real directory/)
+  assert.equal(existsSync(join(outside, HOST_GRAPH_PATCH_FILENAME)), false)
+})
+
+test('buildPatchOverlay rejects a preplanted leaf symlink and leaves its target untouched', t => {
+  const dir = tempDir(t)
+  const path = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  const victim = join(dir, 'overlay-victim.yml')
+  const victimText = EXPECTED_OVERLAY
+  writeFileSync(victim, victimText)
+  try {
+    symlinkSync(victim, path, 'file')
+  } catch (error) {
+    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      t.skip('symbolic links are unavailable on this platform')
+      return
+    }
+    throw error
+  }
+  assert.throws(() => buildPatchOverlay(dir), /private state leaf is unsafe/)
+  assert.equal(readFileSync(victim, 'utf8'), victimText)
 })
 
 test('buildPatchOverlay renders exactly the available host package rows', t => {
@@ -244,6 +280,93 @@ test('ensureHostGraphPackage overwrites a drifted dist when the source content c
   assert.equal(readFileSync(join(seedTarget(dshHome), 'dist', 'index.js'), 'utf8'), 'export const v = 2\n')
 })
 
+test('ensureHostGraphPackage rejects a symlinked profile node_modules anchor without writing through it', t => {
+  const dshHome = tempDir(t)
+  const source = stageSource(t, 'export const safe = true\n')
+  const outside = tempDir(t)
+  const sentinel = join(outside, 'sentinel')
+  writeFileSync(sentinel, 'DO NOT TOUCH')
+  const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
+  mkdirSync(join(dshHome, 'profiles', 'web'), { recursive: true })
+  try {
+    symlinkSync(outside, modulesDir, 'dir')
+  } catch (error) {
+    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      t.skip('symbolic links are unavailable on this platform')
+      return
+    }
+    throw error
+  }
+  assert.throws(() => ensureHostGraphPackage(dshHome, source), /not a real directory/)
+  assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
+  assert.equal(existsSync(join(outside, '@dsh-chamber')), false)
+})
+
+test('ensureHostGraphPackage rejects a symlinked chamber scope without creating the package outside the profile', t => {
+  const dshHome = tempDir(t)
+  const source = stageSource(t, 'export const safe = true\n')
+  const outside = tempDir(t)
+  const sentinel = join(outside, 'sentinel')
+  writeFileSync(sentinel, 'DO NOT TOUCH')
+  const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
+  mkdirSync(modulesDir, { recursive: true })
+  try {
+    symlinkSync(outside, join(modulesDir, '@dsh-chamber'), 'dir')
+  } catch (error) {
+    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      t.skip('symbolic links are unavailable on this platform')
+      return
+    }
+    throw error
+  }
+  assert.throws(() => ensureHostGraphPackage(dshHome, source), /not a real directory/)
+  assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
+  assert.equal(existsSync(join(outside, 'dsh-host-client-graph')), false)
+})
+
+test('ensureHostGraphPackage rejects a symlinked chamber package directory without writing outside the profile', t => {
+  const dshHome = tempDir(t)
+  const source = stageSource(t, 'export const safe = true\n')
+  const outside = tempDir(t)
+  const sentinel = join(outside, 'sentinel')
+  writeFileSync(sentinel, 'DO NOT TOUCH')
+  const target = seedTarget(dshHome)
+  mkdirSync(join(dshHome, 'profiles', 'web', 'node_modules', '@dsh-chamber'), { recursive: true })
+  try {
+    symlinkSync(outside, target, 'dir')
+  } catch (error) {
+    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      t.skip('symbolic links are unavailable on this platform')
+      return
+    }
+    throw error
+  }
+  assert.throws(() => ensureHostGraphPackage(dshHome, source), /not a real directory/)
+  assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
+  assert.equal(existsSync(join(outside, 'package.json')), false)
+  assert.equal(existsSync(join(outside, 'dist', 'index.js')), false)
+})
+
+test('ensureHostGraphPackage retains the ordinary source boundary for a symlinked package source', t => {
+  const dshHome = tempDir(t)
+  const source = stageSource(t, 'export const linkedSource = true\n')
+  const sourceLink = join(tempDir(t), 'source-link')
+  try {
+    symlinkSync(source, sourceLink, 'dir')
+  } catch (error) {
+    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      t.skip('symbolic links are unavailable on this platform')
+      return
+    }
+    throw error
+  }
+  assert.equal(ensureHostGraphPackage(dshHome, sourceLink), true)
+  assert.equal(
+    readFileSync(join(seedTarget(dshHome), 'dist', 'index.js'), 'utf8'),
+    'export const linkedSource = true\n',
+  )
+})
+
 test('ensureHostGraphPackage returns false without touching the profile when the source package is absent', t => {
   const dshHome = tempDir(t)
   assert.equal(ensureHostGraphPackage(dshHome, join(dshHome, 'no-such-package')), false)
@@ -288,14 +411,6 @@ test('webProfileArgs injects --patch before the web app flags when a patch overl
 // createLocalConnection: the resolved patchPath reaches every spawn
 // ---------------------------------------------------------------------------
 
-function mockCatalog() {
-  const rows = new Map<string, any>()
-  return {
-    getConnection: (id: string | null) => rows.get(id ?? 'local') ?? null,
-    upsertConnection: (row: any) => { rows.set(row.connectionId, row) },
-  }
-}
-
 function mockSpawned(): SpawnedDsh {
   return { child: { on() {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
 }
@@ -312,7 +427,6 @@ test('createLocalConnection passes the resolved patchPath to the spawn fn', asyn
     stateDir: dir,
     dshHome: join(dir, 'dsh-home'),
     dshWorkspacePath: join(dir, 'dsh'),
-    catalog: mockCatalog(),
     logger: silentLogger,
     options: { patchPath: () => '/tmp/dsh-chamber-graph.patch.yml' },
     deps: {
@@ -369,7 +483,6 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
     stateDir: dir,
     dshHome: join(dir, 'dsh-home'),
     dshWorkspacePath: join(dir, 'dsh'),
-    catalog: mockCatalog(),
     logger: silentLogger,
     options: { patchPath: () => patchValue },
     deps: {

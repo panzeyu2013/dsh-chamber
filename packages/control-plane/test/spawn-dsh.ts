@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -100,6 +100,43 @@ test('writePidRecord persists the exact CLI entry used for reaper identity check
     const binary = '/opt/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
     writePidRecord(stateDir, 4242, DEFAULT_DSH_START_PORT, process.pid, { binary })
     assert.equal(readPidRecord(stateDir, 4242)?.binary, binary)
+    writeFileSync(join(stateDir, 'managed-dsh', '4243.json'), JSON.stringify({
+      ...readPidRecord(stateDir, 4242), pid: 9999, port: '../../outside',
+    }))
+    assert.equal(readPidRecord(stateDir, 4243), null, 'filename pid and bounded numeric port are runtime-validated')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('pid-ledger publication rejects symlinked roots/leaves without touching external targets', t => {
+  const stateDir = tempDir()
+  try {
+    const recordsDir = join(stateDir, 'managed-dsh')
+    const victim = join(stateDir, 'outside-record')
+    mkdirSync(recordsDir)
+    writeFileSync(victim, 'DO NOT TOUCH', { mode: 0o644 })
+    try {
+      symlinkSync(victim, join(recordsDir, '4242.json'), 'file')
+    } catch (error) {
+      if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        t.skip('symbolic links are unavailable on this platform')
+        return
+      }
+      throw error
+    }
+    assert.equal(readPidRecord(stateDir, 4242), null, 'pid-ledger reads never follow an unsafe leaf')
+    assert.throws(() => writePidRecord(stateDir, 4242, DEFAULT_DSH_START_PORT, process.pid), /single-link regular file/)
+    assert.equal(readFileSync(victim, 'utf8'), 'DO NOT TOUCH')
+    assert.equal(statSync(victim).mode & 0o777, 0o644)
+
+    rmSync(recordsDir, { recursive: true })
+    const externalDir = join(stateDir, 'outside-dir')
+    mkdirSync(externalDir, { mode: 0o755 })
+    symlinkSync(externalDir, recordsDir, 'dir')
+    assert.throws(() => writePidRecord(stateDir, 4243, DEFAULT_DSH_START_PORT, process.pid), /not a real directory/)
+    assert.deepEqual(readdirSync(externalDir), [])
+    assert.equal(statSync(externalDir).mode & 0o777, 0o755)
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -147,7 +184,7 @@ test('spawnDsh: a pid-record write failure still cleans the spawned child up (no
   // the process table for the entry path instead (2026 review).
   writeFakeDshEntry(dshWorkspacePath, 'setInterval(() => {}, 1000)\n')
   const entryPath = join(dshWorkspacePath, 'dsh')
-  // managed-dsh as a FILE → mkdirSync throws → writePidRecord throws → the
+  // managed-dsh as a FILE → private-directory validation throws → the
   // freshly spawned child must be cleaned up instead of leaking.
   writeFileSync(join(stateDir, 'managed-dsh'), 'occupied')
   try {

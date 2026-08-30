@@ -25,9 +25,8 @@
  *   stopped; spawn failures land on 'error' (fail-loud; start() respawns);
  * - graceful stop (design 02 §3.7): process-group SIGTERM → 1s → SIGKILL,
  *   pid record removed after confirmed exit, state back to stopped;
- * - the catalog row projection: status/dshPort/error ride the persisted
- *   connection row (design 03 §2.1: runtime facts are projections, the
- *   control plane is never authoritative over host business);
+ * - status/dshPort/error remain PlaneHandle memory projections and never
+ *   enter the durable catalog (design 03 §2.1);
  * - managed-host rolling logs (design 02 §3.8): lifecycle lines are written
  *   to the per-port rolling log so GET /api/host/logs has content even while
  *   the host itself is silent on stdio.
@@ -58,12 +57,6 @@ export interface SpawnedDsh {
   stop(): Promise<void>
 }
 
-/** The catalog face this adapter touches (the single local connection row). */
-export interface CatalogLike {
-  getConnection(connectionId: string | null): { connectionId: string; status?: string; dshPort?: number | null; error?: string } | null
-  upsertConnection(row: { connectionId: string; status?: string; dshPort?: number | null; error?: string }): unknown
-}
-
 /** Unary dsh call surface (the deps.call seam, narrowed to what this uses). */
 export type DescribeCapabilitiesFn = (
   baseUrl: string,
@@ -74,6 +67,7 @@ export type DescribeCapabilitiesFn = (
 export interface LocalConnectionDeps {
   spawnDsh?: (options: {
     stateDir: string
+    ownerInstanceId?: string
     dshHome: string
     dshWorkspacePath: string
     logger: Logger
@@ -110,6 +104,8 @@ export interface LocalConnectionOptions {
   /** First port attempted for the managed dsh host (design 17 §3 server
    *  deployments; absent = BASE_DHSPORT 17510). */
   dshPortBase?: number
+  /** Stable control-plane UUID carried by every managed-dsh ledger row. */
+  ownerInstanceId?: string
   /**
    * Re-read immediately before DSH_HOME seeding and immediately before the
    * process spawn. This is deliberately dynamic: runtime apply/restore can
@@ -126,14 +122,6 @@ export interface LocalConnectionOptions {
   patchPath?: string | (() => string | null)
 }
 
-/** The connection row returned by start(). */
-export interface ConnectionRow {
-  connectionId: string
-  status?: string
-  dshPort?: number | null
-  error?: string
-}
-
 /** The local connection adapter surface (the createLocalConnection return). */
 export interface LocalConnection {
   getState(): ConnectionState
@@ -146,7 +134,7 @@ export interface LocalConnection {
    * (state-string independent — the liveness fact for quit-risk decisions).
    */
   hasLiveProcess(): boolean
-  start(): Promise<ConnectionRow | null>
+  start(): Promise<void>
   stop(): Promise<void>
   /**
    * Transactional user-triggered dsh restart (design 18 §9.3): refresh
@@ -203,14 +191,14 @@ export const MAX_RESTARTS_IN_WINDOW = 5
 
 /**
  * Create the local connection adapter.
- * @param options - {stateDir, dshHome, dshWorkspacePath, catalog, logger,
+ * @param options - {stateDir, dshHome, dshWorkspacePath, logger,
  *   options? {failureThrottleMs?, healthIntervalMs?, healthProbeTimeoutMs?,
  *   healthResultCacheMs?, restartFailureThreshold?, restartBackoffFloorMs?,
  *   restartBackoffCeilMs?, restartWindowMs?, maxRestartsInWindow?},
  *   deps? {spawnDsh?, describeCapabilities?}} — the deps are injectable so
  *   unit tests can mock the wire.
  */
-export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, catalog, logger, options = {}, deps = {} }: {
+export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, logger, options = {}, deps = {} }: {
   stateDir: string
   dshHome: string
   /**
@@ -219,7 +207,6 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
    * for every initial spawn and automatic restart.
    */
   dshWorkspacePath: string | (() => string)
-  catalog: CatalogLike
   logger: Logger
   options?: LocalConnectionOptions
   deps?: LocalConnectionDeps
@@ -234,6 +221,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   const restartWindowMs = options.restartWindowMs ?? RESTART_WINDOW_MS
   const maxRestartsInWindow = options.maxRestartsInWindow ?? MAX_RESTARTS_IN_WINDOW
   const dshPortBase = options.dshPortBase
+  const ownerInstanceId = options.ownerInstanceId
   const spawnDshFn = (deps.spawnDsh ?? spawnDsh) as NonNullable<LocalConnectionDeps['spawnDsh']>
   const describeCapabilities = deps.describeCapabilities ?? describeCapabilitiesFn
 
@@ -288,7 +276,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   let dshPort: number | null = null
   let child: SpawnedDsh | null = null
   let stopping = false
-  let startPromise: Promise<ConnectionRow | null> | null = null
+  let startPromise: Promise<void> | null = null
   let consecutiveFailures = 0
   let lastFailureAt = 0
   /** The latest host.describe snapshot (health probe side effect). */
@@ -349,6 +337,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     try {
       return await spawnDshFn({
         ...options,
+        ...(ownerInstanceId === undefined ? {} : { ownerInstanceId }),
         ...(dshPortBase === undefined ? {} : { dshPortBase }),
         signal: controller.signal,
       })
@@ -390,28 +379,8 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     }
   }
 
-  /** Set machine state, persist the connection row, and log. */
+  /** Set the process-local machine state, then log and publish its live projection. */
   function setState(next: ConnectionState, nextError: string | null = null) {
-    const row = catalog.getConnection('local')
-    if (row !== null) {
-      row.status = next
-      row.dshPort = dshPort
-      // Explicit delete on null: JSON.stringify drops undefined keys, so
-      // keeping `error: undefined` in memory would diverge from the persisted
-      // shape (2026 round-3 review).
-      if (nextError !== null && nextError !== undefined) row.error = nextError
-      else delete row.error
-      // Runtime projections (status/dshPort/error) are persisted BEST-EFFORT
-      // (design 03 §2.1: runtime facts are projections, never authoritative):
-      // a disk failure must never block the in-memory state machine. The
-      // failure is loud in the log; the next transition re-attempts the write
-      // and self-heals the persisted projection.
-      try {
-        catalog.upsertConnection(row)
-      } catch (persistError) {
-        logger.error(`local connection: catalog persist failed (state still advances): ${String(persistError)}`)
-      }
-    }
     state = next
     error = nextError
     logger.log(`local connection → ${next}${nextError ? `: ${nextError}` : ''}`)
@@ -668,9 +637,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
     })().finally(() => {
       restartPromise = null
     }).catch((error: unknown) => {
-      // The only escape path is a synchronous setState/catalog write failure.
-      // Never let it reach an unhandled rejection — the desktop treats those
-      // as fatal (app.exit(1)); project the honest error state instead.
+      // Never let an unexpected restart-loop failure reach an unhandled
+      // rejection — the desktop treats those as fatal (app.exit(1)); project
+      // the honest process-local error state instead.
       try { setState('error', error instanceof Error ? error.message : String(error)) } catch { /* nothing left to write */ }
     })
     return restartPromise
@@ -702,14 +671,14 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
    * failure is terminal for this attempt: the machine lands on 'error'
    * (fail-loud) and start() rejects — the caller surfaces the honest error.
    */
-  async function startImpl(): Promise<ConnectionRow | null> {
+  async function startImpl(): Promise<void> {
     // A start racing an authoritative stop must fail loudly. Returning the
     // cancelled generation's single-flight promise would resolve with a row
     // while the connection actually lands on `stopped`.
     if (stopping) throw connectionBusy('local connection is stopping')
     if (startPromise !== null) return startPromise
     const ownedStart = (async () => {
-      if (state === 'ready') return catalog.getConnection('local')
+      if (state === 'ready') return
       epoch += 1
       // Abort any in-flight health probe from the previous generation: its
       // verdict must not land on this new lifecycle (2026 H2).
@@ -760,14 +729,14 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
         })
         if (stopping || epoch !== startEpoch) {
           await spawned.stop()
-          return catalog.getConnection('local')
+          return
         }
         child = spawned
         dshPort = spawned.port
         spawned.child.on('exit', onChildExit)
         setState('ready')
         startHealthTimer()
-        return catalog.getConnection('local')
+        return
       } catch (spawnError) {
         if (noteWriterQuiescenceUnknown(spawnError)) {
           setState('error', spawnError.message)
@@ -781,7 +750,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
           // A pre-spawn fence closure is different: no writer was acquired,
           // and the management caller must receive connection_busy rather
           // than a false successful start acknowledgement.
-          if (spawnAttempted) return catalog.getConnection('local')
+          if (spawnAttempted) return
           if (isConnectionBusy(spawnError)) throw spawnError
           throw connectionBusy('local start was invalidated by stop')
         }

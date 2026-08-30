@@ -69,6 +69,7 @@ import {
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
   convergeLocation,
+  createPendingUpgradeTracker,
   forwardHttp,
   forwardUpgrade,
   getProcessBufferedRequestBytes,
@@ -264,18 +265,19 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const transports = new Map<string, TransportRecord>()
   const counters: ProxyForwardCounters = { requests: 0, failures: 0, activeStreams: 0, bufferedRequestBytes: 0 }
   let activeHttpRequests = 0
-  let pendingUpgrades = 0
+  const pendingUpgrades = createPendingUpgradeTracker()
   /** Live spliced WS streams (downstream browser leg + upstream host leg),
    * tracked so control-plane stop() can force-close them: an upgraded socket
    * is removed from the HTTP server's connection tracking, so a lingering
    * half-open downlink (crashed host mid-reconnect) would otherwise hang
    * server.close() forever. */
   const liveStreams = new Set<ProxyLiveStream>()
-  /** In-flight HTTP/SSE and WS handshakes keyed by transport. Revocation must
+  /** In-flight HTTP/SSE keyed by transport. Pending WS ownership is kept by
+   * the shared pendingUpgrades tracker; established WS ownership lives on
+   * ProxyLiveStream. Revocation must
    * terminate traffic already authenticated with the old transport/token;
    * deleting only the routing-table row would leave those channels alive. */
   const liveHttpByTransport = new Map<string, Set<ProxyResponse>>()
-  const liveUpgradeByTransport = new Map<string, Set<ProxySocket>>()
 
   function connectionIdForInstance(id: string): string | null {
     if (id === 'local') return null
@@ -296,27 +298,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     res.once('error', release)
   }
 
-  function trackUpgrade(connectionId: string, socket: ProxySocket): void {
-    const sockets = liveUpgradeByTransport.get(connectionId) ?? new Set<ProxySocket>()
-    sockets.add(socket)
-    liveUpgradeByTransport.set(connectionId, sockets)
-    socket.on('close', () => {
-      sockets.delete(socket)
-      if (sockets.size === 0) liveUpgradeByTransport.delete(connectionId)
-    })
-  }
-
   function revokeTransportTraffic(connectionId: string): void {
     const responses = liveHttpByTransport.get(connectionId)
     liveHttpByTransport.delete(connectionId)
     for (const res of responses ?? []) {
       try { res.destroy() } catch { /* already closed */ }
     }
-    const sockets = liveUpgradeByTransport.get(connectionId)
-    liveUpgradeByTransport.delete(connectionId)
-    for (const socket of sockets ?? []) {
-      try { socket.destroy() } catch { /* already closed */ }
-    }
+    pendingUpgrades.closeAll(connectionId)
     for (const stream of [...liveStreams]) {
       if (stream.ownerId !== connectionId) continue
       try { stream.downstream.destroy() } catch { /* already closed */ }
@@ -448,7 +436,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       counters.requests += 1
-      if (counters.activeStreams >= maxConcurrentWsStreams || pendingUpgrades >= maxPendingWsHandshakes) {
+      if (counters.activeStreams >= maxConcurrentWsStreams || pendingUpgrades.size >= maxPendingWsHandshakes) {
         counters.failures += 1
         rejectUpgrade(socket, 503, 'resource_exhausted', 'too many active proxy streams', logger)
         return
@@ -459,15 +447,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         rejectUpgrade(socket, 503, 'instance_unavailable', 'no tunnel is available for this instance', logger)
         return
       }
-      pendingUpgrades += 1
       const connectionId = connectionIdForInstance(parsed.id)
-      if (connectionId !== null) trackUpgrade(connectionId, socket)
-      let released = false
-      const releaseHandshake = () => {
-        if (released) return
-        released = true
-        pendingUpgrades = Math.max(0, pendingUpgrades - 1)
-      }
+      const releaseHandshake = pendingUpgrades.acquire(socket, connectionId ?? undefined)
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
         await forwardUpgrade(req, socket, head, forwardTarget, releaseHandshake, logger, counters, {
@@ -660,7 +641,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         failures: counters.failures,
         activeStreams: counters.activeStreams,
         activeHttpRequests,
-        pendingUpgrades,
+        pendingUpgrades: pendingUpgrades.size,
         bufferedRequestBytes: counters.bufferedRequestBytes,
         transports: transports.size,
       }
@@ -669,6 +650,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     /** Force-close every spliced WS stream (control-plane stop / app quit):
      * destroys both legs exactly once via tearDown's guard. */
     closeAllStreams(): void {
+      pendingUpgrades.closeAll()
       for (const stream of [...liveStreams]) {
         try {
           stream.downstream.destroy()

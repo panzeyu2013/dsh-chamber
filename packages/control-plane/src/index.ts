@@ -31,7 +31,7 @@ import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createCatalog } from './catalog.ts'
 import { createLocalConnection } from './local-connection.ts'
 import type { LocalConnectionDeps } from './local-connection.ts'
@@ -43,6 +43,10 @@ import {
   type InstanceTransportRegistrationOptions,
 } from './instance-proxy.ts'
 import { ensureInstanceId } from './instance-id.ts'
+import {
+  createPrivateFileExclusiveNoFollow,
+  ensurePrivateDirectoryNoFollow,
+} from './private-file.ts'
 import { hostLogs } from './host-logs.ts'
 import { createStaticServing } from './static-serving.ts'
 import {
@@ -118,11 +122,14 @@ export function defaultDshWorkspacePath() {
  */
 export function seedDshHomeDefaults(dshHome: string): boolean {
   const documentPath = join(dshHome, 'settings.yaml')
-  if (existsSync(documentPath)) return false
+  ensurePrivateDirectoryNoFollow(dshHome, 0o700)
   try {
-    writeFileSync(documentPath, 'locale:\n  preference: zh\n', { flag: 'wx', mode: 0o600 })
+    createPrivateFileExclusiveNoFollow(documentPath, 'locale:\n  preference: zh\n', { mode: 0o600 })
     return true
   } catch (error) {
+    // O_EXCL refuses every existing leaf, including a symlink, without
+    // opening or modifying it. The dsh settings service owns existing
+    // documents, so seeding must not impose a new content/size/type policy.
     if ((error as { code?: unknown } | null)?.code === 'EEXIST') return false
     throw error
   }
@@ -326,16 +333,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const hostGraphArtifact = join(hostGraphPackageSourceDir, 'dist', 'index.js')
   const hostGitWorktreeArtifact = join(hostGitWorktreePackageSourceDir, 'dist', 'index.js')
 
-  // The state root must exist before any persisted module constructs.
-  mkdirSync(stateDir, { recursive: true })
-
+  // Establish the durable plane identity before any other persisted module
+  // can write. The helper creates a new state root as 0700, but preserves the
+  // mode of an existing caller-selected root.
+  const instanceId = ensureInstanceId(stateDir)
   const dshHome = join(stateDir, 'dsh-home')
   const catalog = createCatalog({ stateDir, logger })
   catalog.load()
-
-  // Control-plane instance identity (design 02 §2.5): a UUID persisted at
-  // <stateDir>/instance-id on first run; every spawn record carries it.
-  const instanceId = ensureInstanceId(stateDir)
 
   // Explicit-origin allowlist: the API's CORS decision reads it; v1 keeps
   // no other cross-origin control (loopback-only origins plus this list).
@@ -409,14 +413,17 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   }
 
   // The managed local connection adapter (design 02): spawn/health/reaper
-  // owner; readiness = TCP + host.describe inside spawn-dsh.
+  // owner; readiness = TCP + host.describe inside spawn-dsh. Runtime state is
+  // process-local and is merged with durable catalog metadata only at the
+  // management/wire projection below (design 03 §2.1).
   const local = createLocalConnection({
-    stateDir, dshHome, dshWorkspacePath: getDshWorkspacePath, catalog, logger,
+    stateDir, dshHome, dshWorkspacePath: getDshWorkspacePath, logger,
     // patchPath is a thunk resolved only behind the per-spawn fence. Re-read
     // it for starts and restarts so a profile-internal prune self-heals
     // without allowing a DSH_HOME write during runtime apply/restore.
     options: {
       ...(options.dshPortBase === undefined ? {} : { dshPortBase: options.dshPortBase }),
+      ownerInstanceId: instanceId,
       canSpawn: localStartGate,
       onWriterQuiescenceUnknown: (writerError) => {
         localWritersQuiescent = false
@@ -515,7 +522,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     }
     let row = catalog.getConnection('local')
     if (row === null) {
-      row = { connectionId: 'local', kind: 'local', status: 'starting', dshPort: null }
+      row = { connectionId: 'local', kind: 'local' }
       if (typeof label === 'string' && label !== '') row.label = label
       if (typeof accentColor === 'string' && accentColor !== '') row.accentColor = accentColor
       catalog.upsertConnection(row)
@@ -624,8 +631,6 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * streams strand stop(). Candidate failures do not own proxy streams. */
   async function closeHttpServer(srv: Server, closeProxyStreams: boolean): Promise<void> {
     if (closeProxyStreams) instanceProxy.closeAllStreams()
-    srv.closeAllConnections?.()
-    srv.closeIdleConnections?.()
     if (!srv.listening) return
     await new Promise<void>(resolveClose => {
       const force = setTimeout(resolveClose, 500)
@@ -634,6 +639,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         clearTimeout(force)
         resolveClose()
       })
+      // `close()` synchronously stops accepting new connections. Force-close
+      // only after that fence; Node documents the inverse order as racy because
+      // a new connection can arrive between closeAllConnections() and close().
+      srv.closeAllConnections?.()
+      srv.closeIdleConnections?.()
     })
   }
 
@@ -649,8 +659,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       let candidate: Server | null = null
       const pending = (async () => {
         try {
-          mkdirSync(join(stateDir, 'managed-dsh'), { recursive: true })
-          mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+          ensurePrivateDirectoryNoFollow(join(stateDir, 'managed-dsh'), 0o700)
+          ensurePrivateDirectoryNoFollow(dshHome, 0o700)
           // DSH_HOME writes stay behind the per-spawn runtime gate. At plane
           // startup only report unavailable optional packages; the spawn-time
           // patch thunk seeds them after the reaper has proved quiescence.
@@ -981,3 +991,18 @@ export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSur
 export * from './proxy-forward.ts'
 export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
 export type { JsonStore, JsonStoreDocument, JsonStoreMutator, JsonStoreOptions } from './json-store.ts'
+export {
+  atomicWritePrivateFileNoFollow,
+  createPrivateFileExclusiveNoFollow,
+  ensurePrivateDirectoryNoFollow,
+  readPrivateFileNoFollow,
+  removePrivateFileNoFollow,
+  syncPrivateDirectoryNoFollow,
+} from './private-file.ts'
+export type {
+  PrivateDirectoryOptions,
+  PrivateFileIdentity,
+  PrivateFileModeOptions,
+  PrivateFileRead,
+  PrivateFileReadOptions,
+} from './private-file.ts'

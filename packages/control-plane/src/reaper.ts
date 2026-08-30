@@ -21,9 +21,14 @@
  * liveness polling, wait timers) is injectable through `deps`.
  */
 
-import { readdir, readFile, readlink, unlink } from 'node:fs/promises'
+import { readdir, readFile, readlink } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { isAbsolute, join, normalize, sep } from 'node:path'
+import {
+  readPrivateFileNoFollow,
+  removePrivateFileNoFollow,
+  type PrivateFileIdentity,
+} from './private-file.ts'
 import type { Logger } from './types.ts'
 
 const TERM_WAIT_MS = 1500
@@ -268,9 +273,9 @@ async function killAndConfirm(pid: number, deps: Required<ReaperDeps>): Promise<
   throw new Error(`process group ${pid} still alive after SIGTERM + SIGKILL`)
 }
 
-async function removeFile(file: string): Promise<void> {
+async function removeFile(file: string, expected: PrivateFileIdentity): Promise<void> {
   try {
-    await unlink(file)
+    removePrivateFileNoFollow(file, expected)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
@@ -297,8 +302,11 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
   const file = join(dir, name)
   const label = name.slice(0, -5)
   let record: any
+  let recordIdentity: PrivateFileIdentity | null = null
   try {
-    record = JSON.parse(await readFile(file, 'utf8'))
+    const read = readPrivateFileNoFollow(file, { maxBytes: 64 * 1024 })
+    recordIdentity = read.identity
+    record = JSON.parse(read.value)
   } catch (error) {
     if (name.startsWith('claim-')) {
       // Corrupt claims are never deleted: a claim with a live owner must
@@ -322,7 +330,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
       log(`reaper: ${label} claim owner ${ownerPid} alive; kept`)
       return { status: 'kept' }
     }
-    await removeFile(file)
+    await removeFile(file, recordIdentity!)
     log(`reaper: ${label} claim owner ${String(ownerPid)} dead; claim removed`)
     return { status: 'removed' }
   }
@@ -343,7 +351,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
       log(`reaper: ${pid} leader dead but residual process group alive; record kept`)
       return { status: 'kept' }
     }
-    await removeFile(file)
+    await removeFile(file, recordIdentity!)
     log(`reaper: ${pid} dead; record removed`)
     return { status: 'removed' }
   }
@@ -380,7 +388,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
   }
   log(`reaper: ${pid} orphan; SIGTERM`)
   await killAndConfirm(pid, deps)
-  await removeFile(file)
+  await removeFile(file, recordIdentity!)
   log(`reaper: ${pid} exited; record removed`)
   return { status: 'reclaimed' }
 }

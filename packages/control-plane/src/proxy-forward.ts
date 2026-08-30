@@ -281,6 +281,47 @@ export interface ProxySocket {
   removeListener(event: string, listener: (...args: any[]) => void): unknown
 }
 
+/** Owner-side registry for downstream sockets whose upstream WebSocket
+ * handshake has not reached a terminal verdict yet. Node's HTTP server stops
+ * tracking a socket once the `upgrade` event fires, while `liveStreams` only
+ * receives it after the upstream answers 101; without this middle-state
+ * registry stop() has a gap where neither owner can revoke the socket. */
+export interface PendingUpgradeTracker {
+  readonly size: number
+  /** Acquire one handshake lease. The returned release is idempotent. */
+  acquire(socket: ProxySocket, ownerId?: string): () => void
+  /** Destroy every pending downstream. Its existing close listener aborts the
+   * corresponding upstream ClientRequest and releases the lease. With an
+   * ownerId, only handshakes authenticated through that transport are closed. */
+  closeAll(ownerId?: string): void
+}
+
+export function createPendingUpgradeTracker(): PendingUpgradeTracker {
+  const entries = new Set<{ socket: ProxySocket; ownerId?: string }>()
+  return {
+    get size(): number { return entries.size },
+    acquire(socket: ProxySocket, ownerId?: string): () => void {
+      const entry = { socket, ...(ownerId === undefined ? {} : { ownerId }) }
+      entries.add(entry)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        entries.delete(entry)
+      }
+    },
+    closeAll(ownerId?: string): void {
+      for (const entry of [...entries]) {
+        if (ownerId !== undefined && entry.ownerId !== ownerId) continue
+        // Delete eagerly so diagnostics and repeated stop() calls converge even
+        // for a minimal/faulty socket fake that never emits `close`.
+        entries.delete(entry)
+        try { entry.socket.destroy() } catch { /* already gone */ }
+      }
+    },
+  }
+}
+
 /** The injectable outbound request factory (defaults to node:http request). */
 export type HttpRequestFactory = typeof httpRequest
 
@@ -557,7 +598,17 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   // gateway transport target is `https://`, which node:http cannot send).
   const request = deps.httpRequest ?? (target.protocol === 'https:' ? httpsRequest : httpRequest)
   const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
-  const hasBody = !(method === 'GET' || method === 'HEAD')
+  const rawLength = Array.isArray(req.headers['content-length']) ? req.headers['content-length'][0] : req.headers['content-length']
+  const declared = rawLength === undefined ? NaN : Number(rawLength)
+  const methodUsuallyHasNoBody = method.toUpperCase() === 'GET' || method.toUpperCase() === 'HEAD'
+  // GET and HEAD do not normally carry a request body, but RFC framing still
+  // permits one. Once the client declares positive Content-Length or a
+  // Transfer-Encoding, silently discarding those bytes changes the request
+  // and can desynchronise application-level signatures. Keep the cheap
+  // no-body path only for genuinely unframed GET/HEAD requests.
+  const hasBody = !methodUsuallyHasNoBody
+    || (Number.isFinite(declared) && declared > 0)
+    || req.headers['transfer-encoding'] !== undefined
   let body: Buffer | null = null
   let bodyReservation = 0
   let bodyReservationReleased = false
@@ -568,8 +619,6 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     processBufferedRequestBytes = Math.max(0, processBufferedRequestBytes - bodyReservation)
   }
   if (hasBody) {
-    const rawLength = Array.isArray(req.headers['content-length']) ? req.headers['content-length'][0] : req.headers['content-length']
-    const declared = rawLength === undefined ? NaN : Number(rawLength)
     if (Number.isFinite(declared) && declared > MAX_REQUEST_BODY_BYTES) {
       counters.failures += 1
       releaseRequest()
