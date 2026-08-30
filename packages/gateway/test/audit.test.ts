@@ -10,7 +10,17 @@
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import {
+  chmodSync,
+  linkSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
@@ -28,6 +38,18 @@ const tmpDir = (prefix: string): string => mkdtempSync(join(tmpdir(), prefix))
 
 function readEvents(file: string): Array<Record<string, string>> {
   return readFileSync(file, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, string>)
+}
+
+function captureAuditFailure(operation: () => void): string[] {
+  const errors: string[] = []
+  const original = console.error
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(' ')) }
+  try {
+    operation()
+  } finally {
+    console.error = original
+  }
+  return errors
 }
 
 test('gateway audit appends JSONL events in order with the given fields', t => {
@@ -53,6 +75,49 @@ test('gateway audit files are 0600 and a loose legacy mode is tightened on appen
   assert.equal(statSync(file).mode & 0o777, 0o600)
 })
 
+test('gateway audit refuses an active symlink without changing its victim content or mode', t => {
+  const dir = tmpDir('gateway-audit-active-symlink-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const victim = join(dir, 'active-victim')
+  writeFileSync(victim, 'active victim sentinel\n', { mode: 0o640 })
+  chmodSync(victim, 0o640)
+  symlinkSync(victim, file)
+  const before = readFileSync(victim, 'utf8')
+  const beforeMode = statSync(victim).mode & 0o777
+
+  const errors = captureAuditFailure(() => {
+    appendAuditEvent(file, { ts: '2026-01-01T00:00:00.000Z', event: 'must_not_escape' })
+  })
+
+  assert.equal(errors.length, 1, 'unsafe audit evidence is loud but remains non-fatal')
+  assert.match(errors[0] ?? '', /append failed/)
+  assert.equal(readFileSync(victim, 'utf8'), before)
+  assert.equal(statSync(victim).mode & 0o777, beforeMode)
+  assert.equal(lstatSync(file).isSymbolicLink(), true, 'the unsafe leaf is preserved as evidence')
+})
+
+test('gateway audit refuses a multi-link active inode without modifying the other link', t => {
+  const dir = tmpDir('gateway-audit-active-hardlink-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const victim = join(dir, 'hardlink-victim')
+  writeFileSync(victim, 'hardlink victim sentinel\n', { mode: 0o640 })
+  chmodSync(victim, 0o640)
+  linkSync(victim, file)
+  const before = readFileSync(victim, 'utf8')
+  const beforeMode = statSync(victim).mode & 0o777
+
+  const errors = captureAuditFailure(() => {
+    appendAuditEvent(file, { ts: '2026-01-01T00:00:00.000Z', event: 'must_not_escape' })
+  })
+
+  assert.equal(errors.length, 1)
+  assert.equal(readFileSync(victim, 'utf8'), before)
+  assert.equal(statSync(victim).mode & 0o777, beforeMode)
+  assert.equal(statSync(victim).nlink, 2)
+})
+
 test('gateway audit rotates to <file>.1 past the cap and deletes the old .1', t => {
   const dir = tmpDir('gateway-audit-rotate-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -74,6 +139,34 @@ test('gateway audit rotates to <file>.1 past the cap and deletes the old .1', t 
   appendAuditEvent(file, big3, maxBytes)
   assert.deepEqual(readEvents(`${file}.1`), [big2], 'the old .1 was deleted and replaced by the rotated current file')
   assert.deepEqual(readEvents(file), [big3])
+})
+
+test('gateway audit refuses a pre-planted .1 symlink without rotating or changing its victim', t => {
+  const dir = tmpDir('gateway-audit-archive-symlink-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const archive = `${file}.1`
+  const victim = join(dir, 'archive-victim')
+  writeFileSync(file, 'active audit evidence\n', { mode: 0o640 })
+  chmodSync(file, 0o640)
+  writeFileSync(victim, 'archive victim sentinel\n', { mode: 0o640 })
+  chmodSync(victim, 0o640)
+  symlinkSync(victim, archive)
+  const activeBefore = readFileSync(file, 'utf8')
+  const activeMode = statSync(file).mode & 0o777
+  const victimBefore = readFileSync(victim, 'utf8')
+  const victimMode = statSync(victim).mode & 0o777
+
+  const errors = captureAuditFailure(() => {
+    appendAuditEvent(file, { ts: '2026-01-01T00:00:00.000Z', event: 'must_not_rotate' }, 1)
+  })
+
+  assert.equal(errors.length, 1, 'unsafe rotation evidence is loud but remains non-fatal')
+  assert.equal(readFileSync(file, 'utf8'), activeBefore, 'rotation aborted before touching the active file')
+  assert.equal(statSync(file).mode & 0o777, activeMode)
+  assert.equal(readFileSync(victim, 'utf8'), victimBefore)
+  assert.equal(statSync(victim).mode & 0o777, victimMode)
+  assert.equal(lstatSync(archive).isSymbolicLink(), true, 'the unsafe archive is preserved as evidence')
 })
 
 test('the gateway audit serializer is a fixed whitelist: credentials never reach disk (S24)', t => {

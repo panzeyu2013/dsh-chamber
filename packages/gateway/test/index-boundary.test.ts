@@ -89,6 +89,9 @@ test('session index drops unknown metadata, truncates display fields and skips m
           projections: { asOfSeq: 0, values: { title: 't'.repeat(5_000) } } },
         // Structurally malformed row: skipped with a warn, other rows survive.
         { sessionId: 42, updatedAt: 1, running: false, blank: true },
+        // A forward-incompatible nullable projection container is likewise a
+        // bad row, not a generation-ending TypeError.
+        { sessionId: 'null-projections', updatedAt: 1, running: false, blank: true, projections: null },
         // Healthy row: must load untouched.
         { sessionId: 'ok', updatedAt: 1, running: false, blank: true,
           projections: { asOfSeq: 0, values: {} } },
@@ -107,6 +110,7 @@ test('session index drops unknown metadata, truncates display fields and skips m
   assert.equal(index.get('long')?.title?.length, 4_096, 'overlong titles are truncated to the projection bound')
   assert.equal(index.get('long')?.cwd?.length, 32_768, 'overlong cwds are truncated to the projection bound')
   assert.equal(index.get(42 as never), undefined, 'malformed rows are skipped, not wedging the generation')
+  assert.equal(index.get('null-projections'), undefined, 'nullable projection rows are isolated')
   assert.equal(warnings.some(message => message.includes('skipping a malformed session.list row')), true)
   index.stop()
 })

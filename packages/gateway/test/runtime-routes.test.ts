@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { EventEmitter } from 'node:events'
@@ -17,9 +17,11 @@ import type { GatewayConfig } from '../src/config.ts'
 import { createGatewayRuntimeManager, readBuiltinVersion } from '../src/runtime-manager.ts'
 import {
   REQUIRED_ACTIVATION_PROBES,
+  listKnownGoodVersions,
   readActivationJournalState,
   readCurrentPointer,
   readOverride,
+  recordProbePass,
   recordRuntimeFailure,
   writeActivationIntent,
   writeActivationJournal,
@@ -136,6 +138,13 @@ async function waitForSettle(manager: { applyNowInFlight(): boolean }): Promise<
   for (let i = 0; i < 400 && manager.applyNowInFlight(); i += 1) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
+}
+
+async function waitForMutationSettle(manager: { mutationInProgress(): boolean }): Promise<void> {
+  for (let i = 0; i < 400 && manager.mutationInProgress(); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.equal(manager.mutationInProgress(), false, 'runtime mutation did not settle before the test deadline')
 }
 
 test('status is pollable while dsh is stopped (not ready-gated) and reports applying phase', async () => {
@@ -274,6 +283,53 @@ test('resolution falls back to the builtin anchor without env or pointer', () =>
   }
 })
 
+test('gateway runtime ownership fails closed when dsh-runtime root is a symlink', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-root-link-'))
+  const externalDir = mkdtempSync(join(tmpdir(), 'gw-rt-root-target-'))
+  try {
+    const gatewayConfig = config(stateDir)
+    const sentinel = join(externalDir, 'sentinel')
+    writeFileSync(sentinel, 'outside-state', { mode: 0o644 })
+    symlinkSync(externalDir, join(stateDir, 'dsh-runtime'), process.platform === 'win32' ? 'junction' : 'dir')
+
+    assert.throws(
+      () => createGatewayRuntimeManager({ config: gatewayConfig, plane: fakePlane(), logger: silentLogger }),
+      /不安全|unsafe/i,
+    )
+    assert.equal(readFileSync(sentinel, 'utf8'), 'outside-state')
+    assert.equal(statSync(sentinel).mode & 0o777, 0o644)
+    assert.ok(!existsSync(join(externalDir, 'owner.json')), 'owner guard never writes through the linked root')
+    assert.ok(!existsSync(join(externalDir, 'registry.json')), 'registry state never writes through the linked root')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+    rmSync(externalDir, { recursive: true, force: true })
+  }
+})
+
+test('gateway runtime ownership refuses an unsafe owner leaf without touching its target', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-link-'))
+  const externalDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-target-'))
+  try {
+    const gatewayConfig = config(stateDir)
+    const stateRoot = join(stateDir, 'dsh-runtime')
+    const externalOwner = join(externalDir, 'owner-target')
+    mkdirSync(stateRoot, { mode: 0o700 })
+    writeFileSync(externalOwner, JSON.stringify({ pid: 99_999_999 }), { mode: 0o644 })
+    symlinkSync(externalOwner, join(stateRoot, 'owner.json'), 'file')
+
+    assert.throws(
+      () => createGatewayRuntimeManager({ config: gatewayConfig, plane: fakePlane(), logger: silentLogger }),
+      /owner record is unsafe or unreadable/,
+    )
+    assert.equal(readFileSync(externalOwner, 'utf8'), JSON.stringify({ pid: 99_999_999 }))
+    assert.equal(statSync(externalOwner).mode & 0o777, 0o644)
+    assert.ok(lstatSync(join(stateRoot, 'owner.json')).isSymbolicLink(), 'unsafe owner evidence remains in place')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+    rmSync(externalDir, { recursive: true, force: true })
+  }
+})
+
 test('single-process guard: a live owner record from another pid fails loud', () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-'))
   try {
@@ -285,6 +341,121 @@ test('single-process guard: a live owner record from another pid fails loud', ()
     )
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('stale-owner takeover detects A-move/A-create/B-move and restores the exact fresh owner', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-interleave-'))
+  try {
+    const stateRoot = join(stateDir, 'dsh-runtime')
+    const owner = join(stateRoot, 'owner.json')
+    const displacedOld = join(stateRoot, 'owner.old-fixture')
+    mkdirSync(stateRoot, { recursive: true, mode: 0o700 })
+    writeFileSync(owner, `${JSON.stringify({ pid: 99_999_999, startedAt: 'old' })}\n`, { mode: 0o600 })
+    const freshPayload = `${JSON.stringify({ pid: process.pid, startedAt: 'fresh', token: 'a'.repeat(48) })}\n`
+
+    assert.throws(
+      () => createGatewayRuntimeManager({
+        config: config(stateDir),
+        plane: fakePlane(),
+        logger: silentLogger,
+        ownerTakeoverBeforeRename: () => {
+          // A has already read the stale owner. Just after B's final old-inode
+          // check, A wins the rename and publishes its fresh token; B's rename
+          // therefore moves A's fresh owner and must detect/restore it.
+          renameSync(owner, displacedOld)
+          writeFileSync(owner, freshPayload, { mode: 0o600 })
+        },
+      }),
+      /replaced the owner during stale takeover|could not be durably claimed/,
+    )
+    assert.equal(readFileSync(owner, 'utf8'), freshPayload,
+      'the losing takeover restores A\'s exact fresh token instead of entering or deleting it')
+    assert.ok(existsSync(displacedOld), 'the original dead-owner evidence remains available')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('constructor and scheduler cancellation failures release ownership safely', async () => {
+  const constructDir = mkdtempSync(join(tmpdir(), 'gw-rt-scheduler-construct-'))
+  try {
+    const abandonedTicks: Array<() => void> = []
+    assert.throws(() => createGatewayRuntimeManager({
+      config: config(constructDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      scheduleKnownGoodPromotion: callback => {
+        abandonedTicks.push(callback)
+        throw new Error('scheduler setup failed')
+      },
+    }), /scheduler setup failed/)
+    assert.equal(existsSync(join(constructDir, 'dsh-runtime', 'owner.json')), false,
+      'a constructor tail failure releases the exact acquired lease')
+    assert.equal(abandonedTicks.length, 1)
+    abandonedTicks[0]!()
+    assert.equal(existsSync(join(constructDir, 'dsh-runtime', 'owner.json')), false,
+      'a scheduler callback retained by a throwing adapter is permanently fenced')
+    const replacement = createGatewayRuntimeManager({ config: config(constructDir), plane: fakePlane(), logger: silentLogger })
+    await replacement.dispose()
+  } finally {
+    rmSync(constructDir, { recursive: true, force: true })
+  }
+
+  const cancelDir = mkdtempSync(join(tmpdir(), 'gw-rt-scheduler-cancel-'))
+  try {
+    const manager = createGatewayRuntimeManager({
+      config: config(cancelDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      scheduleKnownGoodPromotion: () => () => { throw new Error('scheduler cancel failed') },
+    })
+    await manager.dispose()
+    assert.equal(existsSync(join(cancelDir, 'dsh-runtime', 'owner.json')), false,
+      'a fenced stale callback cannot make cancellation failure skip writer drain/release')
+  } finally {
+    rmSync(cancelDir, { recursive: true, force: true })
+  }
+})
+
+test('Windows read-only projection never enters POSIX runtime-root writer primitives', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-win-readonly-'))
+  const external = mkdtempSync(join(tmpdir(), 'gw-rt-win-external-'))
+  try {
+    const gatewayConfig = config(stateDir)
+    const sentinel = join(external, 'sentinel')
+    writeFileSync(sentinel, 'untouched', { mode: 0o644 })
+    symlinkSync(external, join(stateDir, 'dsh-runtime'), process.platform === 'win32' ? 'junction' : 'dir')
+    let schedulerCalled = false
+    const manager = createGatewayRuntimeManager({
+      config: gatewayConfig,
+      plane: fakePlane(),
+      logger: silentLogger,
+      platform: 'win32',
+      scheduleKnownGoodPromotion: () => {
+        schedulerCalled = true
+        return () => {}
+      },
+    })
+    assert.equal(manager.stateRoot(), join(stateDir, 'dsh-runtime'))
+    assert.equal(manager.resolveWorkspace().source, 'builtin')
+    assert.deepEqual(await manager.startupTransaction(), { blockedReason: null })
+    const status = await manager.status()
+    assert.equal(status.platform, 'win32')
+    assert.equal(status.mutationsAllowed, false)
+    assert.equal(status.activeVersion, TEST_BUILTIN_VERSION)
+    assert.equal(manager.getRegistry().origin, 'https://registry.npmjs.org')
+    await assert.rejects(manager.setRegistry('https://registry.npmmirror.com'), (error: unknown) => (
+      (error as Error & { code?: string }).code === 'platform_read_only'
+    ))
+    assert.equal(schedulerCalled, false, 'the POSIX sustained-health writer is not scheduled on Windows')
+    assert.equal(readFileSync(sentinel, 'utf8'), 'untouched')
+    assert.equal(statSync(sentinel).mode & 0o777, 0o644)
+    assert.equal(existsSync(join(external, 'owner.json')), false)
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+    rmSync(external, { recursive: true, force: true })
   }
 })
 
@@ -1262,6 +1433,11 @@ test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-awar
     let quarantineActive = false
     let managerRef: { internalSpawnActive(): boolean } | null = null
     const order: string[] = []
+    let startCalls = 0
+    let recoveryEntered!: () => void
+    const recoveryStarted = new Promise<void>(resolve => { recoveryEntered = resolve })
+    let releaseRecovery!: () => void
+    const recoveryGate = new Promise<void>(resolve => { releaseRecovery = resolve })
     const plane = fakePlane({
       stopLocal: async () => { order.push('stop'); plane._state.connectionState = 'stopped' },
       startLocal: async () => {
@@ -1270,6 +1446,11 @@ test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-awar
         }
         order.push('start')
         plane._state.connectionState = 'ready'
+        startCalls += 1
+        if (startCalls === 2) {
+          recoveryEntered()
+          await recoveryGate
+        }
       },
     })
     plane._state.connectionState = 'ready'
@@ -1289,6 +1470,13 @@ test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-awar
     managerRef = manager
     const accepted = await manager.applyNow()
     assert.equal(accepted.accepted, true)
+    await recoveryStarted
+    const recovering = await manager.status()
+    assert.equal(recovering.phase, 'applying',
+      'the status remains applying after quarantine closes until the recovery/outcome tail settles')
+    assert.equal(recovering.connectionState, 'ready',
+      'a transient ready candidate cannot make the 202 poll report premature completion')
+    releaseRecovery()
     await waitForSettle(manager)
     assert.equal(manager.applyNowInFlight(), false)
     assert.ok(order.indexOf('quarantine:off') < order.lastIndexOf('start'),
@@ -1781,6 +1969,486 @@ test('manager.status() projects the live plane connectionState (ready/restarting
   }
 })
 
+test('gateway host state edges maintain and promote the full 24h + one-boot known-good window', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-known-good-host-'))
+  try {
+    let nowMs = 10_000
+    let promotionTick!: () => void
+    let schedulerCancelled = 0
+    makeValidTree(stateDir, '1.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    recordProbePass(stateDir, '1.0.0', nowMs)
+    const candidatesPath = join(stateDir, 'dsh-runtime', 'known-good-candidates.json')
+    const readCandidate = () => (JSON.parse(readFileSync(candidatesPath, 'utf8')) as {
+      versions: Record<string, { bootCount: number; healthWindowStartedAt: number | null }>
+    }).versions['1.0.0']
+    const plane = fakePlane({ localProcessAlive: true })
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      nowMs: () => nowMs,
+      scheduleKnownGoodPromotion: callback => {
+        promotionTick = callback
+        return () => { schedulerCancelled += 1 }
+      },
+    })
+
+    manager.observeLocalState('ready')
+    assert.equal(readCandidate().bootCount, 1, 'the first authoritative ready edge qualifies one boot')
+    assert.equal(typeof readCandidate().healthWindowStartedAt, 'number')
+    manager.observeLocalState('ready')
+    assert.equal(readCandidate().bootCount, 1, 'duplicate ready notifications do not inflate bootCount')
+
+    for (const unhealthy of ['degraded', 'restarting', 'error', 'stopped']) {
+      manager.observeLocalState(unhealthy)
+      assert.equal(readCandidate().bootCount, 0, `${unhealthy} invalidates the earlier boot qualification`)
+      assert.equal(readCandidate().healthWindowStartedAt, null, `${unhealthy} wall time cannot count as healthy uptime`)
+      nowMs += 1
+      manager.observeLocalState('ready')
+      assert.equal(readCandidate().bootCount, 1, `ready after ${unhealthy} opens one fresh qualified window`)
+    }
+
+    nowMs += 24 * 60 * 60 * 1_000
+    promotionTick()
+    assert.deepEqual(listKnownGoodVersions(stateDir), ['1.0.0'], 'the live hourly tick promotes at the exact 24h boundary')
+    assert.equal(readCandidate(), undefined, 'promotion consumes the candidate ledger entry')
+    await manager.dispose()
+    assert.equal(schedulerCancelled, 1, 'dispose cancels the sustained-health timer exactly once')
+
+    recordProbePass(stateDir, '1.0.0', nowMs)
+    const afterDisposeCandidate = readFileSync(candidatesPath, 'utf8')
+    promotionTick()
+    assert.equal(readFileSync(candidatesPath, 'utf8'), afterDisposeCandidate,
+      'even a stale queued callback cannot write after runtime ownership is released')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('activation-quarantine ready edges do not count a candidate boot', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-known-good-quarantine-'))
+  try {
+    const nowMs = 20_000
+    makeValidTree(stateDir, '1.0.0')
+    recordProbePass(stateDir, '1.0.0', nowMs)
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    const candidatesPath = join(stateDir, 'dsh-runtime', 'known-good-candidates.json')
+    const bootCount = () => (JSON.parse(readFileSync(candidatesPath, 'utf8')) as {
+      versions: Record<string, { bootCount: number }>
+    }).versions['1.0.0'].bootCount
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    plane.stopLocal = async () => { plane._state.connectionState = 'stopped' }
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    let manager!: ReturnType<typeof createGatewayRuntimeManager>
+    manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      nowMs: () => nowMs,
+      scheduleKnownGoodPromotion: () => () => {},
+      probeCandidate: async () => {
+        manager.observeLocalState('ready')
+        assert.equal(bootCount(), 0, 'candidate readiness inside quarantine is not an authoritative boot')
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+      },
+    })
+
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(bootCount(), 0, 'closing quarantine alone does not synthesize a ready edge')
+    manager.observeLocalState('ready')
+    assert.equal(bootCount(), 1, 'the first post-verdict authoritative ready edge counts exactly once')
+    manager.observeLocalState('ready')
+    assert.equal(bootCount(), 1)
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('authoritative restart-exhausted rolls an active override back exactly once with a durable pre-effect latch (F7)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeActivationIntent(stateDir, {
+      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
+      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+
+    let phase: 'initial-apply' | 'f7' | 'cleanup' = 'initial-apply'
+    let f7Stops = 0
+    let durableBeforeFirstEffect = false
+    let candidateRemovedBeforeFirstEffect = false
+    const candidatesPath = join(stateDir, 'dsh-runtime', 'known-good-candidates.json')
+    const candidateExists = (version: string): boolean => {
+      if (!existsSync(candidatesPath)) return false
+      const parsed = JSON.parse(readFileSync(candidatesPath, 'utf8')) as { versions?: Record<string, unknown> }
+      return parsed.versions?.[version] !== undefined
+    }
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    plane.stopLocal = async () => {
+      if (phase === 'f7') {
+        f7Stops += 1
+        if (f7Stops === 1) {
+          const journal = readActivationJournalState(stateDir)
+          durableBeforeFirstEffect = journal.kind === 'valid' && journal.journal.phase === 'rollback-needed'
+          candidateRemovedBeforeFirstEffect = !candidateExists('2.0.0')
+        }
+      }
+      plane._state.connectionState = 'stopped'
+    }
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      scheduleKnownGoodPromotion: () => () => {},
+      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+    })
+
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    const monitoring = readActivationJournalState(stateDir)
+    assert.equal(monitoring.kind, 'valid')
+    if (monitoring.kind === 'valid') assert.equal(monitoring.journal.phase, 'applied-monitoring')
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.equal(candidateExists('2.0.0'), true, 'the validated candidate starts in its monitoring window')
+
+    manager.observeLocalState('restart-exhausted')
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(manager.mutationInProgress(), false,
+      'a stale callback argument cannot trigger F7 while the authoritative plane state is ready')
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+
+    // Model data migrated by v2. F7 must restore the pre-v2 snapshot before
+    // exposing the old v1 runtime again.
+    writeFileSync(join(home, 'settings.json'), '{"source":"v2-migrated"}')
+    phase = 'f7'
+    plane.restartLocal = async () => {
+      plane._state.connectionState = 'restart-exhausted'
+      // Model the real control-plane callback synchronously, before the outer
+      // manager.restart() promise has reached its trackOperation() wrapper.
+      manager.observeLocalState('restart-exhausted')
+      manager.observeLocalState('restart-exhausted')
+    }
+    const failedRestart = manager.restart()
+    assert.equal(manager.mutationInProgress(), true, 'the repeated synchronous edge is covered by one armed writer latch')
+    await assert.rejects(failedRestart, /did not reach ready \(restart-exhausted\)/)
+    await waitForMutationSettle(manager)
+
+    assert.equal(f7Stops, 1, 'duplicate restart-exhausted edges execute one rollback transaction')
+    assert.equal(durableBeforeFirstEffect, true, 'rollback-needed is durable before the first host stop')
+    assert.equal(candidateRemovedBeforeFirstEffect, true, 'the failed candidate is removed before the first host stop')
+    assert.equal(readCurrentPointer(stateDir), '1.0.0')
+    assert.equal(readOverride(stateDir)?.resolvedVersion, '1.0.0')
+    assert.equal(readOverride(stateDir)?.lastOutcome, 'rolled-back')
+    assert.equal(candidateExists('2.0.0'), false)
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'safe terminal rollback consumes the F7 journal')
+    assert.match((await manager.status()).operationError ?? '', /automatically rolled back/)
+
+    // A later duplicate terminal notification cannot replay the transaction:
+    // the active version and durable monitoring journal no longer match v2.
+    plane._state.connectionState = 'restart-exhausted'
+    manager.observeLocalState('restart-exhausted')
+    await waitForMutationSettle(manager)
+    assert.equal(f7Stops, 1)
+
+    phase = 'cleanup'
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('gateway F7 keeps a failed fallback probe stopped behind a sticky exposure quarantine', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-probe-fail-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeActivationIntent(stateDir, {
+      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
+      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+
+    let phase: 'initial-apply' | 'f7' = 'initial-apply'
+    let starts = 0
+    let stops = 0
+    const releasedStates: string[] = []
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    plane.startLocal = async () => { starts += 1; plane._state.connectionState = 'ready' }
+    plane.stopLocal = async () => { stops += 1; plane._state.connectionState = 'stopped' }
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      scheduleKnownGoodPromotion: () => () => {},
+      onActivationQuarantineChange: active => {
+        if (!active) releasedStates.push(plane.connectionState)
+      },
+      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => (
+        phase === 'initial-apply'
+          ? { name, ok: true }
+          : { name, ok: false, error: 'injected fallback probe failure' }
+      )),
+    })
+
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.equal(manager.exposureQuarantined(), false)
+    releasedStates.length = 0
+
+    phase = 'f7'
+    plane._state.connectionState = 'restart-exhausted'
+    manager.observeLocalState('restart-exhausted')
+    await waitForMutationSettle(manager)
+
+    const status = await manager.status()
+    assert.equal(status.startupBlockedReason, 'swap-attempted')
+    assert.equal(plane.connectionState, 'stopped', 'probe-failed fallback is stopped before quarantine release')
+    assert.equal(manager.exposureQuarantined(), true, 'unsafe blocked verdict remains quarantined until recovery')
+    assert.deepEqual(releasedStates, ['stopped'], 'the open-edge callback never observes the failed probe as ready')
+    assert.ok(starts >= 3, 'candidate apply plus the failed known-good and builtin fallback probes ran')
+    assert.ok(stops >= 3, 'rollback stops and the final blocked-verdict stop all ran')
+
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('F7 journal persistence failure is fail-closed before candidate or host effects', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-journal-fail-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '2.0.0')
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
+      pending: null, swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    const monitoring: ActivationJournal = {
+      schemaVersion: 1,
+      phase: 'applied-monitoring',
+      targetVersion: '2.0.0',
+      targetIsBuiltin: false,
+      manualRollback: false,
+      intentKind: 'version-switch',
+      sourceVersion: '1.0.0',
+      sourceIsBuiltin: false,
+      sourceWasKnownGood: true,
+      knownGoodVersion: '1.0.0',
+      preSwapSnapshotName: '1.0.0-123',
+      manualDataSnapshotName: null,
+      preRollbackStashName: null,
+      rollbackTarget: null,
+      nextIntent: null,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    writeActivationJournal(stateDir, monitoring)
+    recordProbePass(stateDir, '2.0.0')
+
+    const journalPath = join(stateDir, 'dsh-runtime', 'activation-journal.json')
+    const candidatesPath = join(stateDir, 'dsh-runtime', 'known-good-candidates.json')
+    const candidatesBefore = readFileSync(candidatesPath, 'utf8')
+    let sabotageNextClockRead = true
+    let countStops = true
+    let stops = 0
+    const plane = fakePlane({
+      stopLocal: async () => { if (countStops) stops += 1 },
+    })
+    plane._state.connectionState = 'restart-exhausted'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      scheduleKnownGoodPromotion: () => () => {},
+      nowMs: () => {
+        // planRestartExhaustedRollback reads/validates the journal before its
+        // clock callback. Replace the authority only at that exact seam so
+        // the subsequent rollback-needed atomic write fails deterministically.
+        if (sabotageNextClockRead) {
+          sabotageNextClockRead = false
+          rmSync(journalPath)
+          mkdirSync(journalPath)
+        }
+        return Date.now()
+      },
+    })
+
+    manager.observeLocalState('restart-exhausted')
+    await waitForMutationSettle(manager)
+    assert.equal(stops, 0, 'a failed durable latch must not stop the host')
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    assert.equal(readFileSync(candidatesPath, 'utf8'), candidatesBefore,
+      'the failed candidate remains untouched when rollback-needed could not be persisted')
+    assert.equal(readActivationJournalState(stateDir).kind, 'corrupt')
+
+    countStops = false
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('restart-exhausted on builtin or env runtime never arms F7 or writes runtime selection state', async () => {
+  const builtinDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-builtin-'))
+  try {
+    let builtinStops = 0
+    const builtinPlane = fakePlane({ stopLocal: async () => { builtinStops += 1 } })
+    builtinPlane._state.connectionState = 'restart-exhausted'
+    const builtin = createGatewayRuntimeManager({
+      config: config(builtinDir), plane: builtinPlane, logger: silentLogger,
+      scheduleKnownGoodPromotion: () => () => {},
+    })
+    builtin.observeLocalState('restart-exhausted')
+    assert.equal(builtin.mutationInProgress(), false)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(readActivationJournalState(builtinDir).kind, 'missing')
+    assert.equal(builtinStops, 0)
+    await builtin.dispose()
+  } finally {
+    rmSync(builtinDir, { recursive: true, force: true })
+  }
+
+  const previous = process.env.DSH_GATEWAY_DSH_PATH
+  process.env.DSH_GATEWAY_DSH_PATH = '/tmp/gateway-f7-env-runtime'
+  const envDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-env-'))
+  try {
+    let envStops = 0
+    const envPlane = fakePlane({ stopLocal: async () => { envStops += 1 } })
+    envPlane._state.connectionState = 'restart-exhausted'
+    const env = createGatewayRuntimeManager({
+      config: config(envDir), plane: envPlane, logger: silentLogger,
+      scheduleKnownGoodPromotion: () => () => {},
+    })
+    env.observeLocalState('restart-exhausted')
+    assert.equal(env.mutationInProgress(), false)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(readActivationJournalState(envDir).kind, 'missing')
+    assert.equal(envStops, 0)
+    await env.dispose()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = previous
+    rmSync(envDir, { recursive: true, force: true })
+  }
+})
+
+test('dispose drains a persisted F7 rollback and final-stop fences its fallback probe before owner release', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-dispose-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeActivationIntent(stateDir, {
+      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
+      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+
+    let phase: 'initial-apply' | 'f7' = 'initial-apply'
+    let f7StopEntered!: () => void
+    const stopEntered = new Promise<void>(resolve => { f7StopEntered = resolve })
+    let releaseF7Stop!: () => void
+    const stopGate = new Promise<void>(resolve => { releaseF7Stop = resolve })
+    let firstF7Stop = true
+    let starts = 0
+    let stops = 0
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    plane.startLocal = async () => { starts += 1; plane._state.connectionState = 'ready' }
+    plane.stopLocal = async () => {
+      stops += 1
+      plane._state.connectionState = 'stopped'
+      if (phase === 'f7' && firstF7Stop) {
+        firstF7Stop = false
+        f7StopEntered()
+        await stopGate
+      }
+    }
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      scheduleKnownGoodPromotion: () => () => {},
+      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+    })
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    writeFileSync(join(home, 'settings.json'), '{"source":"v2-migrated"}')
+
+    const startsBeforeF7 = starts
+    phase = 'f7'
+    plane._state.connectionState = 'restart-exhausted'
+    manager.observeLocalState('restart-exhausted')
+    await stopEntered
+    const latched = readActivationJournalState(stateDir)
+    assert.equal(latched.kind, 'valid')
+    if (latched.kind === 'valid') assert.equal(latched.journal.phase, 'rollback-needed')
+    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    assert.ok(existsSync(ownerPath))
+
+    let disposeSettled = false
+    const disposal = manager.dispose().then(() => { disposeSettled = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(disposeSettled, false, 'dispose drains the tracked F7 writer instead of releasing ownership')
+    assert.ok(existsSync(ownerPath), 'owner remains while rollback can still write pointer/data/journal state')
+
+    releaseF7Stop()
+    await disposal
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the already-durable safety rollback is allowed to finish')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
+    assert.equal(starts, startsBeforeF7 + 1, 'only the shared fallback probe may start after disposal; the recovery tail is suppressed')
+    assert.equal(plane._state.connectionState, 'stopped', 'dispose final-stop fences the fallback probe before owner release')
+    assert.ok(stops >= 3, 'initial stop, disposal stop, and final quiescence stop all ran')
+    assert.ok(!existsSync(ownerPath))
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('a rejected plane.restartLocal() surfaces as status().operationError (sanitized)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-restart-fail-'))
   try {
@@ -1805,8 +2473,183 @@ test('dispose() reaps install children and removes the owner record', async () =
     const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
     assert.ok(existsSync(ownerPath))
     assert.equal(statSync(ownerPath).mode & 0o777, 0o600, 'owner record created via wx is owner-only')
+    const owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as { token?: unknown }
+    assert.equal(typeof owner.token, 'string')
+    assert.equal((owner.token as string).length, 48, 'owner release authority is a random exact token')
     await manager.dispose()
     assert.ok(!existsSync(join(stateDir, 'dsh-runtime', 'owner.json')), 'owner record dropped on dispose')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('a disposed manager cannot read/quarantine authority owned by its replacement', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-disposed-reader-'))
+  try {
+    const oldManager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    await oldManager.dispose()
+    const replacement = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const registry = join(stateDir, 'dsh-runtime', 'registry.json')
+    writeFileSync(registry, '{replacement-owned-broken-json', { mode: 0o644 })
+    chmodSync(registry, 0o644)
+
+    await assert.rejects(oldManager.status(), (error: unknown) => (
+      (error as Error & { code?: string }).code === 'runtime_disposed'
+    ))
+    assert.throws(() => oldManager.getRegistry(), (error: unknown) => (
+      (error as Error & { code?: string }).code === 'runtime_disposed'
+    ))
+    assert.throws(() => oldManager.resolveWorkspace(), (error: unknown) => (
+      (error as Error & { code?: string }).code === 'runtime_disposed'
+    ))
+    assert.equal(readFileSync(registry, 'utf8'), '{replacement-owned-broken-json')
+    assert.equal(statSync(registry).mode & 0o777, 0o644,
+      'the old object cannot chmod a new owner\'s authority while pretending to read')
+    assert.equal(readdirSync(join(stateDir, 'dsh-runtime')).some(name => name.startsWith('registry.json.corrupt-')), false,
+      'the old object cannot quarantine the new owner\'s authority')
+    await replacement.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('dispose() aborts and drains an apply-now probe before releasing runtime ownership', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-dispose-applynow-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+
+    let probeEntered!: () => void
+    const entered = new Promise<void>(resolve => { probeEntered = resolve })
+    let releaseProbe!: () => void
+    const probeGate = new Promise<void>(resolve => { releaseProbe = resolve })
+    let probeSignal: AbortSignal | undefined
+    let starts = 0
+    const quarantineEdges: boolean[] = []
+    const plane = fakePlane({
+      startLocal: async () => { starts += 1 },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      onActivationQuarantineChange: active => { quarantineEdges.push(active) },
+      probeCandidate: async ({ signal }) => {
+        probeSignal = signal
+        probeEntered()
+        await probeGate
+        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+      },
+    })
+    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    await manager.applyNow()
+    await entered
+
+    let disposeSettled = false
+    const disposal = manager.dispose().then(() => { disposeSettled = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(disposeSettled, false, 'dispose waits for the complete detached activation job')
+    assert.equal(manager.activationInProgress(), true, 'dispose immediately enters a sticky exposure quarantine')
+    assert.equal(probeSignal?.aborted, true, 'the manager lifecycle abort reaches the live candidate probe')
+    assert.ok(existsSync(ownerPath), 'owner.json remains while an activation writer can still settle')
+
+    releaseProbe()
+    await disposal
+    assert.equal(manager.activationInProgress(), true, 'a disposed manager can never reopen exposure')
+    assert.equal(quarantineEdges.includes(false), false,
+      'the rollback activation tail cannot publish an open edge after disposal begins')
+    assert.equal(starts, 1, 'dispose prevents the apply-now recovery tail from spawning after abort')
+    assert.ok(!existsSync(ownerPath), 'ownership is released only after the activation job and final stop settle')
+    const replacement = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    await replacement.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('dispose() drains the full select promise and forwards abort to registry metadata fetch', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-dispose-select-'))
+  try {
+    let fetchEntered!: () => void
+    const entered = new Promise<void>(resolve => { fetchEntered = resolve })
+    let releaseFetch!: () => void
+    const fetchGate = new Promise<void>(resolve => { releaseFetch = resolve })
+    let fetchSignal: AbortSignal | undefined
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      fetchMetadata: async (_name, options) => {
+        fetchSignal = options?.signal
+        fetchEntered()
+        await fetchGate
+        throw new Error('registry fetch released after disposal')
+      },
+    })
+    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    const selection = manager.select('2.0.0')
+    await entered
+    let disposeSettled = false
+    const disposal = manager.dispose().then(() => { disposeSettled = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(disposeSettled, false, 'the registry phase is part of the manager writer promise')
+    assert.equal(fetchSignal?.aborted, true)
+    assert.ok(existsSync(ownerPath))
+    releaseFetch()
+    await assert.rejects(selection, /released after disposal/)
+    await disposal
+    assert.ok(!existsSync(ownerPath))
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('dispose() retains runtime ownership when final process quiescence cannot be proved', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-dispose-unsafe-'))
+  try {
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane({ stopLocal: async () => { throw new Error('stop ownership unsafe') } }),
+      logger: silentLogger,
+    })
+    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    await assert.rejects(manager.dispose(), /writers could not be proven quiescent/)
+    assert.ok(existsSync(ownerPath), 'failed writer proof retains owner.json')
+    assert.throws(
+      () => createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger }),
+      /already owns/,
+      'a replacement manager cannot enter after unsafe disposal',
+    )
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('dispose() releases only its exact owner token and inode', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-owner-release-token-'))
+  try {
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')
+    rmSync(ownerPath)
+    const replacementPayload = `${JSON.stringify({
+      pid: process.pid,
+      startedAt: 'replacement',
+      token: 'b'.repeat(48),
+    })}\n`
+    writeFileSync(ownerPath, replacementPayload, { mode: 0o600 })
+    await assert.rejects(manager.dispose(), /owner token no longer matches/)
+    assert.equal(readFileSync(ownerPath, 'utf8'), replacementPayload,
+      'an old manager never unlinks a replacement lease')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

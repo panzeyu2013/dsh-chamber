@@ -44,7 +44,6 @@ export interface DeleteWorktreeInput {
   /** Persisted server-side value; never accepted from a delete request body. */
   repo: string
   path: string
-  branch: string
   /** Session minted by the create saga, when its response was unambiguous. */
   sessionId?: string
   /** Persisted `state:'deleting'` proves a prior authorized attempt reached

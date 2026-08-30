@@ -8,7 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGatewayStore, hashCredential, verifyCredential } from '../src/store.ts'
@@ -177,5 +177,17 @@ test('gateway auth status projects legacy v1 credential files as config-sourced'
     assert.match(text, /password: configured \(config, \d{4}-\d{2}-\d{2}T/)
     assert.match(text, /token: configured \(config, \d{4}-\d{2}-\d{2}T/)
     assert.equal(text.includes('scrypt'), false)
+  } finally { cleanup() }
+})
+
+test('gateway auth status rejects loose credential modes without tightening them', () => {
+  const { dir, cleanup } = tempDir()
+  try {
+    const passwordFile = join(dir, 'password-credential')
+    writeFileSync(passwordFile, hashCredential(OLD_PASSWORD), { mode: 0o600 })
+    chmodSync(passwordFile, 0o644)
+    const text = gatewayAuthStatus(dir)
+    assert.match(text, /password: not configured/)
+    assert.equal(statSync(passwordFile).mode & 0o777, 0o644)
   } finally { cleanup() }
 })

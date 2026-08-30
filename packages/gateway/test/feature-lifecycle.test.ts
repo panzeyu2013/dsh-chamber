@@ -398,7 +398,10 @@ test('a deterministic dsh rejection terminates a one-shot job and persists the r
   const scheduler = createScheduler({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
-    onJobsChanged: async jobs => { persisted.push(jobs) },
+    onJobRemoval: async intent => {
+      persisted.push(scheduler.list().filter(job => job !== intent.job))
+      intent.commit()
+    },
     callDsh: (async () => {
       calls += 1
       throw new RpcBusinessError({ code: 'session-not-found', message: 'target session deleted' })
@@ -429,6 +432,38 @@ test('a deterministic dsh rejection stops an interval job', async () => {
   await new Promise(resolve => setTimeout(resolve, 1_100))
   assert.equal(calls, 1, 'the interval cadence stops after a business rejection')
   scheduler.stop()
+})
+
+test('a business rejection that settles after scheduler stop cannot remove or persist either job kind', async () => {
+  for (const intervalMs of [null, 1_000] as const) {
+    let releasePrompt!: () => void
+    const promptGate = new Promise<void>(resolve => { releasePrompt = resolve })
+    let calls = 0
+    let persistedRemovals = 0
+    const scheduler = createScheduler({
+      getDshBaseUrl: () => 'http://127.0.0.1:12345',
+      logger,
+      onJobRemoval: async intent => {
+        persistedRemovals += 1
+        intent.commit()
+      },
+      callDsh: (async () => {
+        calls += 1
+        await promptGate
+        throw new RpcBusinessError({ code: 'session-not-found', message: 'late rejection' })
+      }) as any,
+    })
+    const job = scheduler.schedule({
+      delayMs: 0, intervalMs, targetSessionId: 's1', prompt: 'retain after detach',
+    })
+    scheduler.start()
+    await waitFor(() => calls === 1)
+    scheduler.stop()
+    releasePrompt()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    assert.equal(persistedRemovals, 0, `${intervalMs === null ? 'one-shot' : 'interval'} late verdict must not persist`)
+    assert.equal(scheduler.list()[0], job, `${intervalMs === null ? 'one-shot' : 'interval'} definition remains for reattach`)
+  }
 })
 
 test('a transport failure keeps the one-shot retry backoff and the job', async () => {
@@ -532,8 +567,9 @@ class FakeResponse extends EventEmitter {
 }
 
 function fakeStore(options: {
-  scheduleMutate?: () => Promise<void>
+  scheduleMutate?: (next: ScheduledJob[]) => Promise<void>
   settingsMutate?: (next: Record<string, unknown>) => Promise<void>
+  worktreesMutate?: (next: WorktreeStoreRecord[]) => Promise<void>
   settings?: GatewaySettingsDoc
   schedule?: Array<{
     id: string
@@ -548,25 +584,27 @@ function fakeStore(options: {
   let schedule = options.schedule ?? []
   let worktrees = options.worktrees ?? []
   return {
-    gateway: { load: () => ({ channels: [] }), get: () => ({ channels: [] }), mutate: async () => {} },
     worktrees: {
-      load: () => ({ items: worktrees }),
       get: () => ({ items: worktrees }),
-      mutate: async mutator => { worktrees = mutator({ items: worktrees }).next.items },
+      mutate: async mutator => {
+        const mutation = mutator({ items: worktrees })
+        if (mutation.changed) {
+          await options.worktreesMutate?.(mutation.next.items)
+          worktrees = mutation.next.items
+        }
+      },
     },
     schedule: {
-      load: () => ({ items: schedule }),
       get: () => ({ items: schedule }),
       mutate: async mutator => {
         const mutation = mutator({ items: schedule })
         if (mutation.changed) {
-          await options.scheduleMutate?.()
+          await options.scheduleMutate?.(mutation.next.items)
           schedule = mutation.next.items
         }
       },
     },
     settings: {
-      load: () => settings,
       get: () => settings,
       mutate: async mutator => {
         const mutation = mutator(settings)
@@ -612,7 +650,7 @@ test('worktree ownership survives gateway-store persistence and reload', async (
     // The stateDir exclusive lock must be released before reopening (Phase 1).
     store.close()
     const restarted = createGatewayStore(stateDir, logger)
-    assert.equal(restarted.worktrees.load().items[0]?.ownership, 'unverified')
+    assert.equal(restarted.worktrees.get().items[0]?.ownership, 'unverified')
   } finally {
     await rm(stateDir, { recursive: true, force: true })
   }
@@ -638,6 +676,177 @@ test('route does not acknowledge schedule mutation when persistence fails', asyn
   const getResponse = new FakeResponse()
   await host.handle(new FakeRequest('GET') as unknown as ApiRequest, getResponse as unknown as ApiResponse, '/chamber/schedule')
   assert.deepEqual(getResponse.json(), { items: [] })
+})
+
+test('delayMs=0 is armed only after persistence commits, and a failed admission never prompts', async () => {
+  function transport(onPrompt: () => void) {
+    return {
+      callDsh: (async (_base: string, method: string) => {
+        if (method === 'session.prompt') {
+          onPrompt()
+          return { rpcId: 'prompt', result: { ok: true, value: {} } }
+        }
+        return { rpcId: 'sessions', result: { ok: true, value: { items: [] } } }
+      }) as any,
+      openStream: async function *(
+        _base: string,
+        _path: string,
+        signal?: AbortSignal,
+        onOpen?: () => void,
+      ): AsyncGenerator<ServerRequest> {
+        onOpen?.()
+        if (!signal?.aborted) {
+          await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
+        }
+      },
+    }
+  }
+
+  let releaseCommit!: () => void
+  const commitGate = new Promise<void>(resolve => { releaseCommit = resolve })
+  let markCommitStarted!: () => void
+  const commitStarted = new Promise<void>(resolve => { markCommitStarted = resolve })
+  let durable = false
+  let committedPrompts = 0
+  const committedHost = createFeatureHost({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+      scheduleMutate: async () => {
+        markCommitStarted()
+        await commitGate
+        durable = true
+      },
+    }),
+    featureTransport: transport(() => {
+      assert.equal(durable, true, 'session.prompt cannot run before the admission is durable')
+      committedPrompts += 1
+    }),
+  })
+  committedHost.start()
+  const committedResponse = new FakeResponse()
+  const committedRequest = committedHost.handle(new FakeRequest('POST', {
+    delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'after commit',
+  }) as unknown as ApiRequest, committedResponse as unknown as ApiResponse, '/chamber/schedule')
+  await commitStarted
+  await new Promise(resolve => setTimeout(resolve, 25))
+  assert.equal(committedPrompts, 0)
+  assert.equal(committedResponse.status, 0, 'the request remains pending on its durable write')
+  releaseCommit()
+  await committedRequest
+  assert.equal(committedResponse.status, 200)
+  await waitFor(() => committedPrompts === 1)
+  committedHost.stop()
+
+  let releaseFailure!: () => void
+  const failureGate = new Promise<void>(resolve => { releaseFailure = resolve })
+  let markFailureStarted!: () => void
+  const failureStarted = new Promise<void>(resolve => { markFailureStarted = resolve })
+  let failedPrompts = 0
+  const failedHost = createFeatureHost({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+      scheduleMutate: async () => {
+        markFailureStarted()
+        await failureGate
+        throw new Error('disk full')
+      },
+    }),
+    featureTransport: transport(() => { failedPrompts += 1 }),
+  })
+  failedHost.start()
+  const failedResponse = new FakeResponse()
+  const failedRequest = failedHost.handle(new FakeRequest('POST', {
+    delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'must not run',
+  }) as unknown as ApiRequest, failedResponse as unknown as ApiResponse, '/chamber/schedule')
+  await failureStarted
+  await new Promise(resolve => setTimeout(resolve, 25))
+  assert.equal(failedPrompts, 0)
+  releaseFailure()
+  await failedRequest
+  assert.equal(failedResponse.status, 500)
+  assert.equal(failedResponse.json().code, 'persistence_failed')
+  await new Promise(resolve => setTimeout(resolve, 25))
+  assert.equal(failedPrompts, 0, 'a rejected durable admission leaves no armed timer')
+  failedHost.stop()
+})
+
+test('automatic schedule removal rebases its identity intent after a blocked persistence writer', async () => {
+  let releaseSettings!: () => void
+  const settingsGate = new Promise<void>(resolve => { releaseSettings = resolve })
+  let markSettingsStarted!: () => void
+  const settingsStarted = new Promise<void>(resolve => { markSettingsStarted = resolve })
+  const scheduleWrites: ScheduledJob[][] = []
+  let prompts = 0
+  const oldJob: ScheduledJob = {
+    id: 'old-job', delayMs: 0, intervalMs: null, targetSessionId: 's-old', prompt: 'old',
+  }
+  const host = createFeatureHost({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+      schedule: [oldJob],
+      settingsMutate: async () => {
+        markSettingsStarted()
+        await settingsGate
+      },
+      scheduleMutate: async next => { scheduleWrites.push([...next]) },
+    }),
+    featureTransport: {
+      callDsh: (async (_base: string, method: string) => {
+        if (method === 'session.prompt') {
+          prompts += 1
+          return { rpcId: 'old-prompt', result: { ok: true, value: {} } }
+        }
+        return { rpcId: 'sessions', result: { ok: true, value: { items: [] } } }
+      }) as any,
+      openStream: async function *(
+        _base: string,
+        _path: string,
+        signal?: AbortSignal,
+        onOpen?: () => void,
+      ): AsyncGenerator<ServerRequest> {
+        onOpen?.()
+        if (!signal?.aborted) {
+          await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
+        }
+      },
+    },
+  })
+
+  // Occupy the shared persistence tail before arming the restored job. Its
+  // completion then queues a removal intent, followed by a new POST.
+  const settingsResponse = new FakeResponse()
+  const settingsRequest = host.handle(new FakeRequest('PUT', { git: { enabled: true } }) as unknown as ApiRequest,
+    settingsResponse as unknown as ApiResponse, '/chamber/settings')
+  await settingsStarted
+  host.start()
+  await waitFor(() => prompts === 1)
+
+  const postResponse = new FakeResponse()
+  const postRequest = host.handle(new FakeRequest('POST', {
+    delayMs: 60_000, intervalMs: null, targetSessionId: 's-new', prompt: 'new',
+  }) as unknown as ApiRequest, postResponse as unknown as ApiResponse, '/chamber/schedule')
+  await new Promise(resolve => setTimeout(resolve, 10))
+  releaseSettings()
+  await Promise.all([settingsRequest, postRequest])
+
+  assert.equal(postResponse.status, 200)
+  const newJob = postResponse.json() as ScheduledJob
+  assert.deepEqual(scheduleWrites.map(items => items.map(job => job.id)), [[], [newJob.id]],
+    'the queued POST snapshots memory only after the old identity is durably removed and committed')
+  const listed = new FakeResponse()
+  await host.handle(new FakeRequest('GET') as unknown as ApiRequest,
+    listed as unknown as ApiResponse, '/chamber/schedule')
+  assert.deepEqual(listed.json().items.map((job: ScheduledJob) => job.id), [newJob.id])
+  host.stop()
 })
 
 test('route persistence is serialized across concurrent settings writes', async () => {
@@ -671,6 +880,61 @@ test('route persistence is serialized across concurrent settings writes', async 
   assert.equal(secondResponse.status, 200)
   assert.deepEqual(secondResponse.json().git, { enabled: true })
   assert.deepEqual(secondResponse.json().schedule, { enabled: true })
+})
+
+test('feature mutation quiescence fences admission, drains the full write, and reopens on start', async () => {
+  let markWriteStarted!: () => void
+  const writeStarted = new Promise<void>(resolve => { markWriteStarted = resolve })
+  let releaseWrite!: () => void
+  const writeGate = new Promise<void>(resolve => { releaseWrite = resolve })
+  let writes = 0
+  const host = createFeatureHost({
+    getDshBaseUrl: () => null,
+    logger,
+    channels,
+    store: fakeStore({
+      settingsMutate: async () => {
+        writes += 1
+        if (writes === 1) {
+          markWriteStarted()
+          await writeGate
+        }
+      },
+    }),
+  })
+  host.start()
+
+  const admittedResponse = new FakeResponse()
+  const admitted = host.handle(new FakeRequest('PUT', { git: { enabled: true } }) as unknown as ApiRequest,
+    admittedResponse as unknown as ApiResponse, '/chamber/settings')
+  await writeStarted
+
+  let drainSettled = false
+  const draining = host.quiesce().then(() => { drainSettled = true })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(drainSettled, false, 'quiescence waits for the complete admitted persistence transaction')
+
+  const fencedResponse = new FakeResponse()
+  await host.handle(new FakeRequest('PUT', { schedule: { enabled: true } }) as unknown as ApiRequest,
+    fencedResponse as unknown as ApiResponse, '/chamber/settings')
+  assert.equal(fencedResponse.status, 503)
+  assert.equal(fencedResponse.json().code, 'gateway_stopping')
+  assert.equal(writes, 1, 'a fenced mutation never reaches persistence')
+
+  releaseWrite()
+  await admitted
+  await draining
+  assert.equal(admittedResponse.status, 200)
+  assert.equal(drainSettled, true)
+
+  host.stop()
+  host.start()
+  const restartedResponse = new FakeResponse()
+  await host.handle(new FakeRequest('PUT', { schedule: { enabled: true } }) as unknown as ApiRequest,
+    restartedResponse as unknown as ApiResponse, '/chamber/settings')
+  assert.equal(restartedResponse.status, 200, 'the next start generation reopens mutation admission')
+  assert.equal(writes, 2)
+  host.stop()
 })
 
 test('settings PUT accepts only exact feature sections and preserves server-owned revision', async () => {
@@ -926,7 +1190,7 @@ test('schedule routes reject timer overflow and accept the exact Node timer boun
   host.stop()
 })
 
-test('schedule POST rejects oversized prompts and target session ids with invalid_input', async () => {
+test('schedule POST rejects empty or oversized prompts and target session ids with invalid_input', async () => {
   const host = createFeatureHost({
     getDshBaseUrl: () => null,
     logger,
@@ -936,6 +1200,8 @@ test('schedule POST rejects oversized prompts and target session ids with invali
     }),
   })
   for (const body of [
+    { delayMs: 0, intervalMs: null, targetSessionId: '', prompt: 'ok' },
+    { delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: '' },
     { delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'x'.repeat(10_001) },
     { delayMs: 0, intervalMs: null, targetSessionId: 's'.repeat(513), prompt: 'ok' },
   ]) {
@@ -950,6 +1216,48 @@ test('schedule POST rejects oversized prompts and target session ids with invali
     delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'x'.repeat(10_000),
   }) as unknown as ApiRequest, accepted as unknown as ApiResponse, '/chamber/schedule')
   assert.equal(accepted.status, 200)
+  host.stop()
+})
+
+test('persisted schedules with empty target session ids or prompts are isolated on restore', async () => {
+  const host = createFeatureHost({
+    getDshBaseUrl: () => null,
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+      schedule: [
+        { id: 'empty-target', delayMs: 60_000, intervalMs: null, targetSessionId: '', prompt: 'ok' },
+        { id: 'empty-prompt', delayMs: 60_000, intervalMs: null, targetSessionId: 's1', prompt: '' },
+        { id: 'valid', delayMs: 60_000, intervalMs: null, targetSessionId: 's1', prompt: 'ok' },
+      ],
+    }),
+  })
+  const response = new FakeResponse()
+  await host.handle(new FakeRequest('GET') as unknown as ApiRequest,
+    response as unknown as ApiResponse, '/chamber/schedule')
+  assert.deepEqual(response.json().items.map((item: ScheduledJob) => item.id), ['valid'])
+  host.stop()
+})
+
+test('persisted schedule recovery enforces the same total job cap as POST admission', async () => {
+  const jobs = Array.from({ length: 1_001 }, (_, i) => ({
+    id: `restored-${i}`, delayMs: 60_000, intervalMs: null, targetSessionId: 's1', prompt: 'p',
+  }))
+  const host = createFeatureHost({
+    getDshBaseUrl: () => null,
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+      schedule: jobs,
+    }),
+  })
+  const response = new FakeResponse()
+  await host.handle(new FakeRequest('GET') as unknown as ApiRequest,
+    response as unknown as ApiResponse, '/chamber/schedule')
+  assert.equal(response.json().items.length, 1_000)
+  assert.equal(response.json().items.at(-1).id, 'restored-999')
   host.stop()
 })
 
@@ -975,6 +1283,41 @@ test('schedule POST enforces the total job cap', async () => {
   host.stop()
 })
 
+test('concurrent schedule POSTs cannot exceed the total job cap', async () => {
+  const jobs = Array.from({ length: 999 }, (_, i) => ({
+    id: `job-${i}`, delayMs: 60_000, intervalMs: null, targetSessionId: 's1', prompt: 'p',
+  }))
+  const host = createFeatureHost({
+    getDshBaseUrl: () => null,
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, schedule: { enabled: true } },
+      schedule: jobs,
+    }),
+  })
+  const firstResponse = new FakeResponse()
+  const secondResponse = new FakeResponse()
+  const requestBody = {
+    delayMs: 60_000, intervalMs: null, targetSessionId: 's1', prompt: 'last slot',
+  }
+  await Promise.all([
+    host.handle(new FakeRequest('POST', requestBody) as unknown as ApiRequest,
+      firstResponse as unknown as ApiResponse, '/chamber/schedule'),
+    host.handle(new FakeRequest('POST', requestBody) as unknown as ApiRequest,
+      secondResponse as unknown as ApiResponse, '/chamber/schedule'),
+  ])
+
+  assert.deepEqual([firstResponse.status, secondResponse.status].sort(), [200, 400])
+  const rejected = firstResponse.status === 400 ? firstResponse : secondResponse
+  assert.equal(rejected.json().code, 'schedule_full')
+  const listed = new FakeResponse()
+  await host.handle(new FakeRequest('GET') as unknown as ApiRequest,
+    listed as unknown as ApiResponse, '/chamber/schedule')
+  assert.equal(listed.json().items.length, 1_000)
+  host.stop()
+})
+
 test('SSE lifetime follows response close, not request close', async () => {
   const enabled = { schemaVersion: 1, revision: 0, notifications: { enabled: true } }
   const host = createFeatureHost({ getDshBaseUrl: () => null, logger, channels, store: fakeStore({ settings: enabled }) })
@@ -984,8 +1327,9 @@ test('SSE lifetime follows response close, not request close', async () => {
   await host.handle(request as unknown as ApiRequest, response as unknown as ApiResponse, '/chamber/approvals')
   assert.equal(response.status, 200)
   request.emit('close')
+  assert.equal(response.endCalls, 0, 'request close does not unregister or end the streaming response')
   host.stop()
-  assert.equal(response.endCalls, 1, 'request close must not unregister a live SSE response')
+  assert.equal(response.endCalls, 1, 'feature-host stop closes the still-live SSE response exactly once')
 
   const secondHost = createFeatureHost({ getDshBaseUrl: () => null, logger, channels, store: fakeStore({ settings: enabled }) })
   const secondResponse = new FakeResponse()
@@ -1033,6 +1377,148 @@ test('DELETE rejects unverified/legacy ownership and client-controlled delete op
     response as unknown as ApiResponse, '/chamber/git/worktrees/ws-recovery')
   assert.equal(response.status, 400)
   assert.equal(response.json().code, 'delete_body_not_allowed')
+})
+
+test('concurrent worktree DELETE holds one exact lease across the complete retryable saga', async () => {
+  const fixture = await makeGitRepo('gateway-delete-lease-')
+  const target = join(fixture.root, 'feature-delete-lease')
+  execFileSync('git', ['-C', fixture.repo, 'worktree', 'add', '-b', 'feature/delete-lease', target], { stdio: 'ignore' })
+
+  let markDeletingPersistStarted!: () => void
+  const deletingPersistStarted = new Promise<void>(resolve => { markDeletingPersistStarted = resolve })
+  let releaseDeletingPersist!: () => void
+  const deletingPersistGate = new Promise<void>(resolve => { releaseDeletingPersist = resolve })
+  let markWorkspaceDeleteStarted!: () => void
+  const workspaceDeleteStarted = new Promise<void>(resolve => { markWorkspaceDeleteStarted = resolve })
+  let releaseWorkspaceDelete!: () => void
+  const workspaceDeleteGate = new Promise<void>(resolve => { releaseWorkspaceDelete = resolve })
+  let markFailurePersistStarted!: () => void
+  const failurePersistStarted = new Promise<void>(resolve => { markFailurePersistStarted = resolve })
+  let releaseFailurePersist!: () => void
+  const failurePersistGate = new Promise<void>(resolve => { releaseFailurePersist = resolve })
+  let markRemovalPersistStarted!: () => void
+  const removalPersistStarted = new Promise<void>(resolve => { markRemovalPersistStarted = resolve })
+  let releaseRemovalPersist!: () => void
+  const removalPersistGate = new Promise<void>(resolve => { releaseRemovalPersist = resolve })
+
+  let deletingPersistCalls = 0
+  let failurePersistCalls = 0
+  let removalPersistCalls = 0
+  let workspaceDeleteCalls = 0
+  let workspaceDeleted = false
+  const host = createFeatureHost({
+    getDshBaseUrl: () => 'http://127.0.0.1:12345',
+    logger,
+    channels,
+    store: fakeStore({
+      settings: { schemaVersion: 1, revision: 0, git: { enabled: true } },
+      worktrees: [{
+        id: 'ws-delete-lease', workspaceId: 'ws-delete-lease', repo: fixture.repo, path: target,
+        branch: 'feature/delete-lease', ownership: 'owned', state: 'ready', createdAt: 1,
+      }],
+      worktreesMutate: async next => {
+        const record = next.find(item => item.workspaceId === 'ws-delete-lease')
+        if (next.length === 0 && removalPersistCalls++ === 0) {
+          markRemovalPersistStarted()
+          await removalPersistGate
+        } else if (record?.state === 'deleting' && record.error === undefined && deletingPersistCalls++ === 0) {
+          markDeletingPersistStarted()
+          await deletingPersistGate
+        } else if (record?.state === 'deleting' && typeof record.error === 'string' && failurePersistCalls++ === 0) {
+          markFailurePersistStarted()
+          await failurePersistGate
+        }
+      },
+    }),
+  })
+
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (_url, init) => {
+    const request = JSON.parse(String(init?.body))
+    let result: unknown
+    if (request.method === 'workspace.list') {
+      result = { ok: true, value: { items: [
+        { workspaceId: 'ws-main', path: fixture.repo },
+        ...(workspaceDeleted ? [] : [{ workspaceId: 'ws-delete-lease', path: target }]),
+      ] } }
+    } else if (request.method === 'session.list') {
+      result = { ok: true, value: { items: [] } }
+    } else if (request.method === 'workspace.delete') {
+      workspaceDeleteCalls += 1
+      if (workspaceDeleteCalls === 1) {
+        markWorkspaceDeleteStarted()
+        await workspaceDeleteGate
+        result = { ok: false, error: { code: 'temporary', message: 'try again' } }
+      } else {
+        workspaceDeleted = true
+        result = { ok: true, value: { deleted: true } }
+      }
+    } else {
+      throw new Error(`unexpected ${request.method}`)
+    }
+    return new Response(JSON.stringify({
+      type: 'server-response',
+      rpcId: request.rpcId,
+      result,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof globalThis.fetch
+
+  const expectConflict = async (phase: string): Promise<void> => {
+    const response = new FakeResponse()
+    await host.handle(new FakeRequest('DELETE') as unknown as ApiRequest,
+      response as unknown as ApiResponse, '/chamber/git/worktrees/ws-delete-lease')
+    assert.equal(response.status, 409, phase)
+    assert.equal(response.json().code, 'worktree_delete_in_progress', phase)
+  }
+
+  let firstDelete: Promise<boolean> | undefined
+  let retryDelete: Promise<boolean> | undefined
+  try {
+    const firstResponse = new FakeResponse()
+    firstDelete = host.handle(new FakeRequest('DELETE') as unknown as ApiRequest,
+      firstResponse as unknown as ApiResponse, '/chamber/git/worktrees/ws-delete-lease')
+
+    await deletingPersistStarted
+    await expectConflict('the lease starts before the deleting intent commits')
+    releaseDeletingPersist()
+
+    await workspaceDeleteStarted
+    await expectConflict('the lease spans external workspace/Git mutations')
+    releaseWorkspaceDelete()
+
+    await failurePersistStarted
+    await expectConflict('the lease spans failure-outcome persistence')
+    releaseFailurePersist()
+    await firstDelete
+    assert.equal(firstResponse.status, 500)
+    assert.equal(firstResponse.json().code, 'workspace_delete_failed')
+    await assert.rejects(realpath(target), { code: 'ENOENT' })
+
+    const retryResponse = new FakeResponse()
+    retryDelete = host.handle(new FakeRequest('DELETE') as unknown as ApiRequest,
+      retryResponse as unknown as ApiResponse, '/chamber/git/worktrees/ws-delete-lease')
+    await removalPersistStarted
+    await expectConflict('the lease spans successful removal persistence')
+    releaseRemovalPersist()
+    await retryDelete
+    assert.equal(retryResponse.status, 200)
+    assert.deepEqual(retryResponse.json(), { deleted: true })
+    assert.equal(workspaceDeleteCalls, 2)
+
+    const afterRelease = new FakeResponse()
+    await host.handle(new FakeRequest('DELETE') as unknown as ApiRequest,
+      afterRelease as unknown as ApiResponse, '/chamber/git/worktrees/ws-delete-lease')
+    assert.equal(afterRelease.status, 404, 'the exact finally release cannot leak a completed lease')
+    assert.equal(afterRelease.json().code, 'not_found')
+  } finally {
+    releaseDeletingPersist()
+    releaseWorkspaceDelete()
+    releaseFailurePersist()
+    releaseRemovalPersist()
+    await Promise.allSettled([firstDelete, retryDelete].filter((value): value is Promise<boolean> => value !== undefined))
+    globalThis.fetch = originalFetch
+    await rm(fixture.root, { recursive: true, force: true })
+  }
 })
 
 test('dirty worktree delete failure rolls the record back to ready with the error and stays retryable', async () => {
@@ -1347,6 +1833,9 @@ test('browser orchestration assets are CSP-safe, secret-blind, and keep settings
   assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|document\.write/)
   assert.match(source, /AUTH_PATHS\.changeToken/, 'the panel drives the runtime token change endpoint')
   assert.match(source, /cred-token-value/, 'the panel reveals the rotated token in the readonly textarea')
+  assert.match(source, /result\.durability === 'unknown'/,
+    'a token published before a durability error is still shown once with an explicit storage warning')
+  assert.match(source, /disk durability could not be confirmed/)
   assert.match(source, /credentials: 'same-origin'/)
   assert.match(source, /method: 'PUT'/)
   assert.match(source, /outcome: 'allowed-once'/)

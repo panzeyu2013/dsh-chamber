@@ -8,21 +8,22 @@
  *                 plaintext (S5).
  *   - `password`— scrypt password verify → HS256 JWT session cookie (12h),
  *                 `Path=/; HttpOnly; SameSite=Strict; Secure(conditional)`
- *                 (S12), login rate limit (S8), rotate-jwt-secret on revoke
- *                 (S13).
+ *                 (S12), login rate limit (S8), and rotate-jwt-secret on
+ *                 password changes (S13).
  *
  * Phase 1 — runtime credential management: credentials are SERVER STATE, not
  * deployment config. `createAuth` seeds the persisted store from config via
  * `seedCredentialsFromConfig` (config-asserted only while the persisted source
  * is `'config'`; `'runtime'` credentials are authoritative and config seeding
  * never overwrites them, warn instead). The returned provider is a DYNAMIC
- * facade whose effective kind is computed from the CURRENT persisted state per
- * request; `verify`/`login`/`revoke` dispatch by that state, and
+ * facade whose effective kind and verification dispatch share one
+ * generation-bound credential-presence snapshot, and
  * `changePassword`/`changeToken` mutate it at runtime (persisted as
  * `source:'runtime'`, jwt-secret rotated first on password changes — S13).
  *
  * Wire contracts (error codes are the dispatch contract):
- *   - `changePassword(input, req)` / `changeToken(input, req)` resolve
+ *   - `changePassword(input, req, proof?)` / `changeToken(input, req, proof?)`
+ *     resolve
  *     `{changed:true, kind, source, removed?|token?}`; errors carry one of
  *     `'bad_request' | 'invalid_credentials' | 'ambient_principal_rejected' |
  *     'last_credential' | 'rate_limited' | 'auth_busy'`.
@@ -35,13 +36,13 @@
  *   - The facade ALWAYS exposes `login`; when no password is configured it
  *     throws `code:'no_password'` (dispatch may surface 404/400 accordingly).
  *
- * Design note — cached presence vs fresh kind: `kind` is a getter that reads
- * the persisted state fresh on every request. `verify` uses a CACHED
- * password/token-presence snapshot (refreshed by every credential mutation)
- * so the bearer wire-bounds check always precedes any persisted-hash read —
- * malformed wire input must reach zero hash reads (regression locked by
- * auth.test.ts). The facade is the sole credential mutator for its store, so
- * the cache cannot go stale in production.
+ * Design note — credential presence: `kind`, `verify`, and `login` use the
+ * same cached password/token-presence snapshot. It is initialized after
+ * config seeding, updated by every successful facade mutation, and reconciled
+ * after an ambiguous publish failure. The facade is the sole live mutator for
+ * its locked store; lock-free CLI status uses the separate projection reader.
+ * This keeps the bearer wire-bounds check ahead of persisted-hash reads and
+ * avoids a second disk-derived fact source that could disagree with verify.
  *
  * Secrets never reach logs/renderer/persistence in plaintext; failed auth logs
  * only the principal kind, never header values.
@@ -61,6 +62,18 @@ export interface AuthPrincipal {
   kind: 'password' | 'token' | 'passkey' | 'none'
   id: string
   issuedAt: number
+  /** Process-local credential generation captured by verify(). A principal
+   * may be admitted only while this still equals AuthProvider.generation;
+   * it is never serialized into a cookie or exposed as credential state. */
+  generation?: number
+}
+
+/** Opaque, process-local proof that a principal came from this provider's
+ * verify() at one credential generation. Runtime validation uses identity,
+ * not this public shape, so callers cannot forge one. */
+export interface AuthChangeProof {
+  readonly principal: AuthPrincipal
+  readonly generation: number
 }
 
 /** The request facts an AuthProvider reads (node:http-compatible). */
@@ -76,22 +89,27 @@ export interface AuthRequest {
 
 export interface AuthProvider {
   readonly kind: string
+  /** Monotonic process-local epoch. Every credential mutation attempt bumps
+   * it immediately before its first store side effect, fencing old proofs and
+   * streams even when publication succeeds but durability reporting fails. */
+  readonly generation?: number
   /** Extract + verify identity; null = unauthenticated. Never logs/replies credentials. */
   verify(req: AuthRequest): Promise<AuthPrincipal | null>
   /** Login endpoint (password/passkey providers only). `req` supplies the
    * rate-limit key (x-forwarded-for first hop / socketAddr). */
   login?(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }>
-  /** Invalidate sessions/tokens (password change / device revocation). */
-  revoke?(principal: AuthPrincipal): Promise<void>
+  /** Capture an unforgeable, generation-bound proof for a principal returned
+   * by this provider. Dispatch uses it to avoid repeating bearer scrypt. */
+  captureChangeProof?(principal: AuthPrincipal): AuthChangeProof | null
   /** Runtime password change (Phase 1; wire errors documented in the module
    * docstring). `remove:true` deletes the password; otherwise `newPassword`
    * must be 12–1024 characters. */
-  changePassword?(input: ChangePasswordInput, req: AuthRequest): Promise<ChangePasswordResult>
+  changePassword?(input: ChangePasswordInput, req: AuthRequest, proof?: AuthChangeProof): Promise<ChangePasswordResult>
   /** Runtime token change (Phase 1). `remove:true` deletes the token;
    * otherwise `newToken` (optional, 32–4096 visible ASCII) or a CSPRNG
    * generated value is set. The plaintext `token` is returned exactly once
    * when a new value was set. */
-  changeToken?(input: ChangeTokenInput, req: AuthRequest): Promise<ChangeTokenResult>
+  changeToken?(input: ChangeTokenInput, req: AuthRequest, proof?: AuthChangeProof): Promise<ChangeTokenResult>
   /** Non-secret projection of the CURRENT persisted credentials (Phase 2, S5):
    * per-dimension provenance and last-write time ONLY — the verifier/hash
    * values never leave the store and never appear in the projection. `null`
@@ -100,6 +118,12 @@ export interface AuthProvider {
     password: { source: CredentialSource; updatedAt: number } | null
     token: { source: CredentialSource; updatedAt: number } | null
   }
+}
+
+/** Narrow crypto seam used by deterministic race tests. Production callers
+ * omit it and use the bounded asynchronous scrypt verifier above. */
+export interface AuthDeps {
+  verifyCredentialAsync?: (plain: string, stored: string | null) => Promise<boolean>
 }
 
 export interface AuthConfig {
@@ -138,6 +162,10 @@ export interface ChangeTokenResult {
    * (never on remove/revert). */
   token?: string
   removed?: boolean
+  /** The intended verifier is online and was read back exactly, but the
+   * backing directory did not confirm crash durability. The token is still
+   * returned once so a generated rotation can never lock the operator out. */
+  durability?: 'unknown'
 }
 
 /** Build a coded auth error (the `code` field is the wire contract). */
@@ -405,7 +433,11 @@ export function seedCredentialsFromConfig(config: AuthConfig, store: GatewayStor
  * persisted hash on every request so runtime token changes take effect
  * immediately. The wire bounds check runs BEFORE the persisted-hash read or
  * any scrypt work (malformed input must reach zero hash reads). */
-function createTokenProvider(store: GatewayStore): AuthProvider {
+function createTokenProvider(
+  store: GatewayStore,
+  verifyAsync: (plain: string, stored: string | null) => Promise<boolean>,
+  generation: () => number,
+): AuthProvider {
   const verifyBounded = createPasswordWorkGate()
   return {
     kind: 'token',
@@ -422,11 +454,14 @@ function createTokenProvider(store: GatewayStore): AuthProvider {
         || value.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) return null
       const candidate = value.slice(prefix.length)
       if (!/^[\x20-\x7e]+$/.test(candidate)) return null
+      const admittedGeneration = generation()
       const stored = store.getTokenHash()
       if (stored === null) return null
-      const ok = await verifyBounded(() => verifyCredentialAsync(candidate, stored))
-      if (!ok) return null
-      return { kind: 'token', id: 'shared-token', issuedAt: Date.now() }
+      const ok = await verifyBounded(() => verifyAsync(candidate, stored))
+      // A verifier captured before a token rotation is not a live verdict,
+      // even when its deferred scrypt work eventually matches the old hash.
+      if (!ok || admittedGeneration !== generation()) return null
+      return { kind: 'token', id: 'shared-token', issuedAt: Date.now(), generation: admittedGeneration }
     },
   }
 }
@@ -441,9 +476,12 @@ function createPasswordProvider(
   rateLimit: LoginRateLimiter,
   verifyBounded: (task: () => Promise<boolean>) => Promise<boolean>,
   rateKey: (req: AuthRequest) => string,
+  verifyAsync: (plain: string, stored: string | null) => Promise<boolean>,
+  generation: () => number,
 ): { verify(req: AuthRequest): Promise<AuthPrincipal | null>; login(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }> } {
   return {
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
+      const admittedGeneration = generation()
       const cookie = parseCookie(headerValue(req.headers, 'cookie'))
       const session = cookie[SESSION_COOKIE]
       if (session === undefined) return null
@@ -454,7 +492,7 @@ function createPasswordProvider(
       if (!validSessionExpiry(exp, nowSeconds)) return null
       const sub = typeof payload.sub === 'string' ? payload.sub : 'user'
       const iat = typeof payload.iat === 'number' ? payload.iat * 1000 : Date.now()
-      return { kind: 'password', id: sub, issuedAt: iat }
+      return { kind: 'password', id: sub, issuedAt: iat, generation: admittedGeneration }
     },
     async login(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }> {
       const key = rateKey(req)
@@ -466,10 +504,17 @@ function createPasswordProvider(
         throw err
       }
       const password = (body as { password?: unknown } | null | undefined)?.password
+      const admittedGeneration = generation()
       const verifier = store.getPasswordCredential()
       if (verifier === null || typeof password !== 'string'
-        || !(await verifyBounded(() => verifyCredentialAsync(password, verifier)))) {
+        || !(await verifyBounded(() => verifyAsync(password, verifier)))) {
         throw new Error('invalid password')
+      }
+      // Never combine an old password verdict with the new jwt-secret. That
+      // would let a login begun before rotation mint a fresh post-rotation
+      // session after its deferred scrypt callback finally completes.
+      if (admittedGeneration !== generation()) {
+        throw coded('invalid_credentials', 'credentials changed while login was in progress')
       }
       rateLimit.reset(key)
       const now = Math.floor(Date.now() / 1000)
@@ -485,13 +530,22 @@ function createPasswordProvider(
 // Dynamic facade
 // ---------------------------------------------------------------------------
 
-/** The dynamic AuthProvider facade (Phase 1): effective kind is derived from
- * the CURRENT persisted credentials; verify/login/revoke dispatch by it, and
+/** The dynamic AuthProvider facade (Phase 1): effective kind and verify/login
+ * dispatch share the current generation-bound credential-presence snapshot;
  * changePassword/changeToken mutate it (serialized by a promise-chain mutex,
- * last-writer-wins). See the module docstring for the presence-cache note. */
-function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): AuthProvider {
+ * with stale pre-authentication proofs rejected between queued mutations).
+ * See the module docstring for the presence-cache note. */
+function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore, deps: AuthDeps = {}): AuthProvider {
   const rateLimit = createLoginRateLimiter()
   const verifyBounded = createPasswordWorkGate()
+  const verifyAsync = deps.verifyCredentialAsync ?? verifyCredentialAsync
+  let credentialGeneration = 0
+  const issuedPrincipals = new WeakSet<AuthPrincipal>()
+  const issuedChangeProofs = new WeakSet<AuthChangeProof>()
+  function issuePrincipal(principal: AuthPrincipal | null): AuthPrincipal | null {
+    if (principal !== null) issuedPrincipals.add(principal)
+    return principal
+  }
   function rateKey(req: AuthRequest): string {
     // dispatch always passes decision.clientAddress as a string ('' when the
     // boundary could not derive a client) — `??` would never fall back, so
@@ -499,24 +553,29 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
     const addr = req.clientAddress
     return addr !== undefined && addr !== '' ? addr : req.socketAddr
   }
-  const passwordLeaf = createPasswordProvider(store, rateLimit, verifyBounded, rateKey)
-  const tokenLeaf = createTokenProvider(store)
+  const passwordLeaf = createPasswordProvider(
+    store, rateLimit, verifyBounded, rateKey, verifyAsync, () => credentialGeneration,
+  )
+  const tokenLeaf = createTokenProvider(store, verifyAsync, () => credentialGeneration)
 
   // Cached credential presence for verify dispatch (see module docstring):
-  // refreshed by every credential mutation so the bearer wire bounds check
-  // always precedes any persisted-hash read.
+  // updated deterministically on success and reconciled from the affected
+  // file after a failed mutation, because rename may precede a failing parent
+  // fsync. The bearer wire bounds check therefore still precedes any
+  // persisted-hash read. Never refresh the unrelated credential dimension.
   let hasPassword = store.getPasswordCredential() !== null
   let hasToken = store.getTokenHash() !== null
-  function refreshCredentialState(): void {
-    hasPassword = store.getPasswordCredential() !== null
-    hasToken = store.getTokenHash() !== null
+  function reconcilePresence(read: () => string | null): boolean {
+    try { return read() !== null } catch { return true }
   }
 
   const configPassword = config.password !== undefined && config.password !== '' ? config.password : null
   const configToken = config.token !== undefined && config.token !== '' ? config.token : null
 
   // Serialize credential changes: concurrent changePassword/changeToken calls
-  // run strictly one after another (last-writer-wins, no interleaving).
+  // run strictly one after another. A proof captured before an earlier queued
+  // commit is generation-stale and fails closed rather than silently applying
+  // to the newer credential state.
   let changeChain: Promise<unknown> = Promise.resolve()
   function serialize<T>(task: () => Promise<T>): Promise<T> {
     const run = changeChain.then(task, task)
@@ -531,10 +590,27 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
    * (bounded work gate + login rate limiter, same key as login). Any other
    * principal kind (e.g. a future passkey leaf) is explicitly fail-closed —
    * never an ambient proof. */
-  async function assertChangeProof(input: { currentPassword?: unknown }, req: AuthRequest): Promise<void> {
+  async function assertChangeProof(
+    input: { currentPassword?: unknown },
+    req: AuthRequest,
+    proof?: AuthChangeProof,
+  ): Promise<void> {
     const currentPassword = input.currentPassword
-    const principal = await provider.verify(req)
-    if (principal !== null && principal.kind === 'token') return
+    let principal: AuthPrincipal | null
+    if (proof === undefined) {
+      // Safe direct-call fallback: callers that did not already authenticate
+      // through dispatch still perform the full verifier path here.
+      principal = await provider.verify(req)
+    } else {
+      if (!issuedChangeProofs.has(proof)
+        || proof.generation !== credentialGeneration
+        || proof.principal.generation !== credentialGeneration) {
+        throw coded('invalid_credentials', 'authenticated credential proof is stale or invalid')
+      }
+      principal = proof.principal
+    }
+    if (principal !== null && principal.kind === 'token'
+      && principal.generation === credentialGeneration) return
     if (principal !== null && principal.kind !== 'password') {
       // Unknown/future principal kinds (passkey, …) are not ambient proof and
       // carry no password session — fail closed rather than silently
@@ -554,12 +630,20 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
     if (!check.allowed) {
       throw coded('rate_limited', `too many attempts; retry in ${Math.ceil(check.retryAfterMs / 1000)}s`)
     }
-    const ok = await verifyBounded(() => verifyCredentialAsync(currentPassword, verifier))
+    const admittedGeneration = credentialGeneration
+    const ok = await verifyBounded(() => verifyAsync(currentPassword, verifier))
+    if (admittedGeneration !== credentialGeneration) {
+      throw coded('invalid_credentials', 'credentials changed while proof was in progress')
+    }
     if (!ok) throw coded('invalid_credentials', 'current password is incorrect')
     rateLimit.reset(key)
   }
 
-  async function changePassword(input: ChangePasswordInput, req: AuthRequest): Promise<ChangePasswordResult> {
+  async function changePassword(
+    input: ChangePasswordInput,
+    req: AuthRequest,
+    proof?: AuthChangeProof,
+  ): Promise<ChangePasswordResult> {
     return serialize(async () => {
       if (input === null || typeof input !== 'object') throw coded('bad_request', 'changePassword body must be an object')
       const remove = input.remove === true
@@ -580,7 +664,7 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
         }
       }
 
-      await assertChangeProof(input, req)
+      await assertChangeProof(input, req, proof)
 
       // Last-credential gate: removing the final credential is refused unless
       // the deployment config provides a replacement (revert semantics).
@@ -593,16 +677,28 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
         }
       }
 
-      if (remove) {
-        // Rotate FIRST (S13): a failed persistence below leaves old cookies
-        // dead instead of accepting a mixed state (never both).
+      // The generation fence precedes the first namespace mutation. An
+      // atomic writer can publish its rename and only then report a parent
+      // fsync failure; bumping after a successful return would incorrectly
+      // keep old streams/proofs current across that uncertain commit.
+      const nextVerifier = remove
+        ? (revertToConfig ? hashCredential(configPassword!) : null)
+        : hashCredential(input.newPassword!)
+      credentialGeneration += 1
+      try {
+        // Rotate FIRST (S13): a failed verifier-file persistence leaves old
+        // cookies dead instead of accepting a mixed state (never both).
         store.rotateJwtSecret()
-        store.setPasswordCredential(revertToConfig ? hashCredential(configPassword!) : null, 'config')
-      } else {
-        store.rotateJwtSecret()
-        store.setPasswordCredential(hashCredential(input.newPassword!), 'runtime')
+        store.setPasswordCredential(nextVerifier, remove && revertToConfig ? 'config' : 'runtime')
+      } catch (error) {
+        // Reconcile the presence cache with the online namespace: the
+        // credential rename may already have landed before fsync failed. If
+        // even that bounded read is unsafe, remain fail-closed as
+        // credential-present rather than accidentally admitting anonymous.
+        hasPassword = reconcilePresence(() => store.getPasswordCredential())
+        throw error
       }
-      refreshCredentialState()
+      hasPassword = remove ? revertToConfig : true
       return {
         changed: true,
         kind: 'password',
@@ -612,7 +708,11 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
     })
   }
 
-  async function changeToken(input: ChangeTokenInput, req: AuthRequest): Promise<ChangeTokenResult> {
+  async function changeToken(
+    input: ChangeTokenInput,
+    req: AuthRequest,
+    proof?: AuthChangeProof,
+  ): Promise<ChangeTokenResult> {
     return serialize(async () => {
       if (input === null || typeof input !== 'object') throw coded('bad_request', 'changeToken body must be an object')
       const remove = input.remove === true
@@ -640,7 +740,7 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
         }
       }
 
-      await assertChangeProof(input, req)
+      await assertChangeProof(input, req, proof)
 
       let revertToConfig = false
       if (remove) {
@@ -651,26 +751,49 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
         }
       }
 
-      if (remove) {
-        store.setTokenHash(revertToConfig ? hashCredential(configToken!) : null, 'config')
-      } else {
-        store.setTokenHash(hashCredential(tokenValue!), 'runtime')
+      // Fence before publication for the same rename-then-fsync ambiguity as
+      // password changes. A failed attempt may cause a conservative one-time
+      // reconnect even when no bytes landed, but can never preserve old
+      // authenticated streams after the token namespace actually changed.
+      const nextHash = remove
+        ? (revertToConfig ? hashCredential(configToken!) : null)
+        : hashCredential(tokenValue!)
+      credentialGeneration += 1
+      let durabilityUnknown = false
+      try {
+        store.setTokenHash(nextHash, remove && revertToConfig ? 'config' : 'runtime')
+      } catch (error) {
+        let publishedHash: string | null
+        try {
+          publishedHash = store.getTokenHash()
+          hasToken = publishedHash !== null
+        } catch {
+          hasToken = true
+          throw error
+        }
+        if (publishedHash !== nextHash) throw error
+        // Online publication is exact, but the setter still reported failure
+        // (the normal shape is rename succeeded, parent fsync failed). Treat
+        // the online credential as effective and return a generated token
+        // exactly once; otherwise a token-only gateway would become
+        // unrecoverable. The response marks crash durability as unknown.
+        durabilityUnknown = true
       }
-      refreshCredentialState()
+      hasToken = remove ? revertToConfig : true
       return {
         changed: true,
         kind: 'token',
         source: revertToConfig ? 'config' : 'runtime',
         ...(remove ? { removed: true } : { token: tokenValue! }),
+        ...(durabilityUnknown ? { durability: 'unknown' as const } : {}),
       }
     })
   }
 
   provider = {
+    get generation(): number { return credentialGeneration },
     get kind(): string {
-      const hasPwd = store.getPasswordCredential() !== null
-      const hasTok = store.getTokenHash() !== null
-      return hasPwd && hasTok ? 'password+token' : hasPwd ? 'password' : hasTok ? 'token' : 'none'
+      return hasPassword && hasToken ? 'password+token' : hasPassword ? 'password' : hasToken ? 'token' : 'none'
     },
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
       if (!hasPassword) {
@@ -680,22 +803,24 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
         // deployment" (anonymous) without touching the store for malformed
         // input.
         const tokenPrincipal = await tokenLeaf.verify(req)
-        if (tokenPrincipal !== null) return tokenPrincipal
-        return hasToken ? null : { kind: 'none', id: 'anonymous', issuedAt: Date.now() }
+        if (tokenPrincipal !== null) return issuePrincipal(tokenPrincipal)
+        return hasToken ? null : issuePrincipal({
+          kind: 'none', id: 'anonymous', issuedAt: Date.now(), generation: credentialGeneration,
+        })
       }
       if (!hasToken) {
-        return passwordLeaf.verify(req)
+        return issuePrincipal(await passwordLeaf.verify(req))
       }
       // password+token OR-principal composition (design 17 §7.3): bearer
       // first, cookie fallback; a saturated bearer gate is not a verdict —
       // preserve auth_busy only when the cookie also cannot authenticate so
       // overload is never disguised as an ordinary 401.
       try {
-        return await tokenLeaf.verify(req) ?? await passwordLeaf.verify(req)
+        return issuePrincipal(await tokenLeaf.verify(req) ?? await passwordLeaf.verify(req))
       } catch (error) {
         if ((error as Error & { code?: string }).code !== 'auth_busy') throw error
         const cookiePrincipal = await passwordLeaf.verify(req)
-        if (cookiePrincipal !== null) return cookiePrincipal
+        if (cookiePrincipal !== null) return issuePrincipal(cookiePrincipal)
         throw error
       }
     },
@@ -705,8 +830,11 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
       if (!hasPassword) throw coded('no_password', 'password login is not configured on this gateway')
       return passwordLeaf.login(body, req)
     },
-    async revoke(principal: AuthPrincipal): Promise<void> {
-      if (principal.kind === 'password') store.rotateJwtSecret()
+    captureChangeProof(principal: AuthPrincipal): AuthChangeProof | null {
+      if (!issuedPrincipals.has(principal) || principal.generation !== credentialGeneration) return null
+      const proof: AuthChangeProof = { principal, generation: credentialGeneration }
+      issuedChangeProofs.add(proof)
+      return proof
     },
     changePassword,
     changeToken,
@@ -724,7 +852,12 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore): Aut
   return provider
 }
 
-export function createAuth(config: AuthConfig, store: GatewayStore, logger: GatewayStoreLogger = SILENT_LOGGER): AuthProvider {
+export function createAuth(
+  config: AuthConfig,
+  store: GatewayStore,
+  logger: GatewayStoreLogger = SILENT_LOGGER,
+  deps: AuthDeps = {},
+): AuthProvider {
   const hasPassword = config.password !== undefined && config.password !== ''
   const hasToken = config.token !== undefined && config.token !== ''
   if (hasPassword && (config.password!.length < MIN_GATEWAY_PASSWORD_CHARS || config.password!.length > MAX_GATEWAY_PASSWORD_CHARS)) {
@@ -735,5 +868,5 @@ export function createAuth(config: AuthConfig, store: GatewayStore, logger: Gate
     throw new TypeError(`gateway token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
   }
   seedCredentialsFromConfig(config, store, logger)
-  return createDynamicAuthProvider(config, store)
+  return createDynamicAuthProvider(config, store, deps)
 }

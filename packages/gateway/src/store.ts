@@ -41,28 +41,23 @@
  * index is a derived cache (§8.2).
  */
 
-import { chmodSync, closeSync, constants as fsConstants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { closeSync, fchmodSync, fstatSync, fsyncSync, openSync, realpathSync, renameSync, writeSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, parse, resolve } from 'node:path'
 import { randomBytes, scryptSync } from 'node:crypto'
-import { createJsonStore, type JsonStore, type JsonStoreDocument } from '@dsh-chamber/control-plane'
+import {
+  atomicWritePrivateFileNoFollow,
+  createJsonStore,
+  ensurePrivateDirectoryNoFollow,
+  readPrivateFileNoFollow,
+  removePrivateFileNoFollow,
+  syncPrivateDirectoryNoFollow,
+  type JsonStore,
+  type JsonStoreDocument,
+  type PrivateFileIdentity,
+} from '@dsh-chamber/control-plane'
 
 export interface GatewayStoreLogger { log(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void }
-
-export interface DeviceRecord {
-  id: string
-  label: string
-  platform: string
-  tokenHash: string
-  createdAt: number
-  revokedAt?: number
-}
-
-export interface GatewayDocument {
-  schemaVersion?: number
-  revision?: number
-  channels: unknown[]
-  devices?: DeviceRecord[]
-}
 
 export interface WorktreeStoreRecord {
   id: string
@@ -119,14 +114,50 @@ export interface CredentialProjection {
   token: { set: true; source: CredentialSource; updatedAt: number } | null
 }
 
-/** A json-store-backed document accessor (load-once + mutate). The domain doc
- * shape `T` is the caller's business; the store layers its own `revision`/
- * `schemaVersion` onto it. */
-function docStore<T>(filePath: string, logger: GatewayStoreLogger, initial: T): { load(): T & { revision?: number }; get(): T & { revision?: number }; mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> } {
-  const store: JsonStore = createJsonStore({ filePath, logger, initial: initial as JsonStoreDocument, fileMode: 0o600 })
+interface DomainValidation<T> {
+  doc: T
+  droppedRows: number
+}
+
+type DomainValidator<T> = (value: unknown) => DomainValidation<T>
+
+/** A json-store-backed document accessor (load-once + mutate). JSON syntax is
+ * only the outer envelope: each gateway domain supplies a root validator so
+ * a syntactically-valid wrong document falls through to `.bak`. Invalid rows
+ * inside a valid collection root are isolated without reconstructing (and
+ * accidentally truncating) complete valid rows. */
+function docStore<T>(
+  filePath: string,
+  label: string,
+  logger: GatewayStoreLogger,
+  initial: T,
+  validate: DomainValidator<T>,
+): { get(): T & { revision?: number }; mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> } {
+  const store: JsonStore = createJsonStore({
+    filePath,
+    logger,
+    initial: initial as JsonStoreDocument,
+    fileMode: 0o600,
+    onLoadValidate(value) {
+      const validated = validate(value)
+      if (validated.droppedRows > 0) {
+        logger.warn(`gateway-store: ignored ${validated.droppedRows} invalid persisted ${label} row(s) in ${filePath}`)
+      }
+      // JsonStore's historical counters are catalog-domain-specific. Gateway
+      // reports its own honest row count above instead of misclassifying a
+      // worktree/schedule row as a connection or project.
+      return {
+        doc: validated.doc as unknown as JsonStoreDocument,
+        dropped: { connections: 0, projects: 0 },
+      }
+    },
+  })
   store.load()
+  const recovery = store.getStatus().recoveryState
+  if (recovery?.source === 'backup') {
+    logger.warn(`gateway-store: recovered ${label} document from ${filePath}.bak`)
+  }
   return {
-    load(): T & { revision?: number } { return store.getDoc() as T & { revision?: number } },
     get(): T & { revision?: number } { return store.getDoc() as T & { revision?: number } },
     async mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> {
       await store.mutate(doc => {
@@ -137,6 +168,137 @@ function docStore<T>(filePath: string, logger: GatewayStoreLogger, initial: T): 
   }
 }
 
+const WORKTREE_STATES = new Set(['creating', 'ready', 'deleting', 'failed'])
+const SAFE_PERSISTED_ID = /^[a-zA-Z0-9_-]+$/
+const MAX_PERSISTED_TIMER_DELAY_MS = 2_147_483_647
+const MAX_PERSISTED_SCHEDULE_TARGET_CHARS = 512
+const MAX_PERSISTED_SCHEDULE_PROMPT_CHARS = 10_000
+const MAX_PRIVATE_CREDENTIAL_BYTES = 16 * 1024
+
+function comparablePath(path: string): string {
+  const absolute = resolve(path)
+  let canonical = absolute
+  try { canonical = realpathSync.native(absolute) } catch { /* a new stateDir has no realpath yet */ }
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical
+}
+
+/** Reject ambient, broad filesystem roots before createGatewayStore performs
+ * any mkdir/chmod. Gateway state must always be an explicitly dedicated
+ * directory, never the filesystem root, the account home, or the system temp
+ * directory itself (children of those locations remain valid). */
+export function validateGatewayStateDirPath(stateDir: string): void {
+  const absolute = resolve(stateDir)
+  const candidateKeys = new Set([
+    process.platform === 'win32' ? absolute.toLowerCase() : absolute,
+    comparablePath(absolute),
+  ])
+  const forbidden: Array<[string, string]> = [
+    ['filesystem root', parse(absolute).root],
+    ['user home', homedir()],
+    ['system temp root', tmpdir()],
+  ]
+  for (const [label, path] of forbidden) {
+    const forbiddenAbsolute = resolve(path)
+    const forbiddenKeys = [
+      process.platform === 'win32' ? forbiddenAbsolute.toLowerCase() : forbiddenAbsolute,
+      comparablePath(forbiddenAbsolute),
+    ]
+    if (forbiddenKeys.some(key => candidateKeys.has(key))) {
+      throw new Error(`gateway stateDir must be a dedicated child directory; refusing ${label}`)
+    }
+  }
+}
+
+function documentRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} document root must be an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function validateDocumentMetadata(
+  doc: Record<string, unknown>,
+  label: string,
+  schema: 'required-v1' | 'optional-v1',
+): void {
+  if ((schema === 'required-v1' && doc.schemaVersion !== 1)
+    || (schema === 'optional-v1' && doc.schemaVersion !== undefined && doc.schemaVersion !== 1)) {
+    throw new Error(`${label} document has an unsupported schemaVersion`)
+  }
+  if (doc.revision !== undefined
+    && (typeof doc.revision !== 'number' || !Number.isInteger(doc.revision) || doc.revision < 0)) {
+    throw new Error(`${label} document has an invalid revision`)
+  }
+}
+
+function isWorktreeStoreRecord(value: unknown): value is WorktreeStoreRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as Record<string, unknown>
+  return typeof row.id === 'string' && SAFE_PERSISTED_ID.test(row.id)
+    && typeof row.workspaceId === 'string' && SAFE_PERSISTED_ID.test(row.workspaceId)
+    && (row.sessionId === undefined || (typeof row.sessionId === 'string' && row.sessionId !== ''))
+    && (row.repo === undefined || (typeof row.repo === 'string' && row.repo !== '' && !row.repo.includes('\0')))
+    && typeof row.path === 'string' && row.path !== '' && !row.path.includes('\0')
+    && typeof row.branch === 'string' && row.branch !== ''
+    && (row.ownership === undefined || row.ownership === 'owned' || row.ownership === 'unverified')
+    && typeof row.state === 'string' && WORKTREE_STATES.has(row.state)
+    && (row.error === undefined || typeof row.error === 'string')
+    && typeof row.createdAt === 'number' && Number.isFinite(row.createdAt) && row.createdAt >= 0
+}
+
+function validateWorktreesDocument(value: unknown): DomainValidation<{ items: WorktreeStoreRecord[] }> {
+  const doc = documentRecord(value, 'worktrees')
+  validateDocumentMetadata(doc, 'worktrees', 'optional-v1')
+  if (!Array.isArray(doc.items)) throw new Error('worktrees document items must be an array')
+  const items = doc.items.filter(isWorktreeStoreRecord)
+  return {
+    doc: { ...doc, items } as { items: WorktreeStoreRecord[] },
+    droppedRows: doc.items.length - items.length,
+  }
+}
+
+function isScheduleStoreRecord(value: unknown): value is ScheduleStoreRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const row = value as Record<string, unknown>
+  return typeof row.id === 'string' && SAFE_PERSISTED_ID.test(row.id)
+    && typeof row.delayMs === 'number' && Number.isFinite(row.delayMs)
+    && row.delayMs >= 0 && row.delayMs <= MAX_PERSISTED_TIMER_DELAY_MS
+    && (row.intervalMs === null || (typeof row.intervalMs === 'number' && Number.isFinite(row.intervalMs)
+      && row.intervalMs >= 1_000 && row.intervalMs <= MAX_PERSISTED_TIMER_DELAY_MS))
+    && typeof row.targetSessionId === 'string' && row.targetSessionId.length > 0
+    && row.targetSessionId.length <= MAX_PERSISTED_SCHEDULE_TARGET_CHARS
+    && typeof row.prompt === 'string' && row.prompt.length > 0
+    && row.prompt.length <= MAX_PERSISTED_SCHEDULE_PROMPT_CHARS
+}
+
+function validateScheduleDocument(value: unknown): DomainValidation<{ items: ScheduleStoreRecord[] }> {
+  const doc = documentRecord(value, 'schedule')
+  validateDocumentMetadata(doc, 'schedule', 'optional-v1')
+  if (!Array.isArray(doc.items)) throw new Error('schedule document items must be an array')
+  const items = doc.items.filter(isScheduleStoreRecord)
+  return {
+    doc: { ...doc, items } as { items: ScheduleStoreRecord[] },
+    droppedRows: doc.items.length - items.length,
+  }
+}
+
+function isFeatureSetting(value: unknown): value is { enabled: boolean } {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const section = value as Record<string, unknown>
+  return typeof section.enabled === 'boolean'
+}
+
+function validateSettingsDocument(value: unknown): DomainValidation<GatewaySettingsDoc> {
+  const doc = documentRecord(value, 'settings')
+  validateDocumentMetadata(doc, 'settings', 'required-v1')
+  for (const key of ['git', 'notifications', 'schedule'] as const) {
+    if (doc[key] !== undefined && !isFeatureSetting(doc[key])) {
+      throw new Error(`settings document has an invalid ${key} section`)
+    }
+  }
+  return { doc: doc as GatewaySettingsDoc, droppedRows: 0 }
+}
+
 /** Read a 0600 file, or null when absent (never a fake-empty on corrupt). */
 function readSecret(file: string): string | null {
   return readSecretFile(file).value
@@ -144,36 +306,24 @@ function readSecret(file: string): string | null {
 
 /** `readSecret` plus the stat mtime of the opened file (used to timestamp
  * legacy v1 credentials whose files carry no `updatedAt`). With
- * `tightenMode:false` the 0600 fchmod is skipped — used by the lock-free
- * read-only projection path (`gateway auth status` must never write to the
- * credential files, e.g. on read-only media). */
-function readSecretFile(file: string, tightenMode = true): { value: string | null; mtimeMs: number } {
-  let pathStat
+ * `migrateMode:false` skips the explicit legacy fchmod but still requires
+ * 0600 — the lock-free auth-status projection is genuinely read-only and a
+ * loose credential file is rejected rather than silently accepted. */
+function readSecretFile(file: string, migrateMode = true): { value: string | null; mtimeMs: number; identity: PrivateFileIdentity | null } {
   try {
-    pathStat = lstatSync(file)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { value: null, mtimeMs: 0 }
-    throw error
-  }
-  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
-    throw new Error(`gateway secret path must be a regular file: ${file}`)
-  }
-
-  // O_NOFOLLOW closes the lstat/open symlink race. Checking the opened inode
-  // additionally rejects a regular-file replacement between those calls.
-  const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
-  try {
-    const openedStat = fstatSync(fd)
-    if (!openedStat.isFile() || openedStat.dev !== pathStat.dev || openedStat.ino !== pathStat.ino) {
-      throw new Error(`gateway secret path changed while opening: ${file}`)
+    const read = readPrivateFileNoFollow(file, {
+      requiredMode: 0o600,
+      ...(migrateMode ? { tightenMode: 0o600 } : {}),
+      maxBytes: MAX_PRIVATE_CREDENTIAL_BYTES,
+    })
+    return {
+      value: read.value.trim() === '' ? null : read.value,
+      mtimeMs: read.mtimeMs,
+      identity: read.identity,
     }
-    // Tighten legacy or manually provisioned files before any secret bytes are
-    // read into process memory (skipped on the read-only projection path).
-    if (tightenMode) fchmodSync(fd, 0o600)
-    const text = readFileSync(fd, 'utf8')
-    return { value: text.trim() === '' ? null : text, mtimeMs: pathStat.mtimeMs }
-  } finally {
-    closeSync(fd)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { value: null, mtimeMs: 0, identity: null }
+    throw new Error(`gateway private file must be a regular file and remain stable: ${file}`, { cause: error })
   }
 }
 
@@ -202,9 +352,8 @@ function readProjectionRecord(file: string, field: 'verifier' | 'hash'): Credent
   let text: string | null
   let mtimeMs: number
   try {
-    // tightenMode:false — the projection is a READ-ONLY path (`gateway auth
-    // status` must never mutate the credential files, incl. on read-only
-    // media where fchmod would fail and misreport "not configured").
+    // migrateMode:false — the projection is a READ-ONLY path (`gateway auth
+    // status` never chmods; a non-0600 credential is rejected as unsafe).
     const result = readSecretFile(file, false)
     text = result.value
     mtimeMs = result.mtimeMs
@@ -239,35 +388,25 @@ function readProjectionRecord(file: string, field: 'verifier' | 'hash'): Credent
   return null
 }
 
-/** 0600 atomic write (tmp → fchmod 0600 → fsync → rename). */
+/** 0600 atomic write through a random exclusive no-follow temp + parent fsync. */
 function writeSecret(file: string, value: string): void {
-  mkdirSync(dirname(file), { recursive: true })
-  const tmp = `${file}.tmp`
-  try {
-    const fd = openSync(tmp, 'w', 0o600)
-    try {
-      fchmodSync(fd, 0o600)
-      writeSync(fd, value)
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    renameSync(tmp, file)
-  } catch (error) {
-    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
-    throw error
-  }
+  atomicWritePrivateFileNoFollow(file, value, { mode: 0o600 })
+}
+
+/** Delete one credential file. Absence is idempotent; every other failure
+ * must surface to the credential mutation so an API/CLI caller can never be
+ * told that a still-present credential was removed. */
+function removeSecret(file: string): void {
+  removePrivateFileNoFollow(file)
 }
 
 export interface GatewayStore {
-  /** gateway.json — channels/devices (devices post-MVP). */
-  gateway: { load(): GatewayDocument; get(): GatewayDocument; mutate(m: (d: GatewayDocument) => { next: GatewayDocument; changed: boolean }): Promise<void> }
   /** worktrees.json — the git offload records (§8.1). */
-  worktrees: { load(): { items: WorktreeStoreRecord[] }; get(): { items: WorktreeStoreRecord[] }; mutate(m: (d: { items: WorktreeStoreRecord[] }) => { next: { items: WorktreeStoreRecord[] }; changed: boolean }): Promise<void> }
+  worktrees: { get(): { items: WorktreeStoreRecord[] }; mutate(m: (d: { items: WorktreeStoreRecord[] }) => { next: { items: WorktreeStoreRecord[] }; changed: boolean }): Promise<void> }
   /** schedule.json — cron jobs (§8.4). */
-  schedule: { load(): { items: ScheduleStoreRecord[] }; get(): { items: ScheduleStoreRecord[] }; mutate(m: (d: { items: ScheduleStoreRecord[] }) => { next: { items: ScheduleStoreRecord[] }; changed: boolean }): Promise<void> }
+  schedule: { get(): { items: ScheduleStoreRecord[] }; mutate(m: (d: { items: ScheduleStoreRecord[] }) => { next: { items: ScheduleStoreRecord[] }; changed: boolean }): Promise<void> }
   /** settings.json — the /chamber/settings doc (§8.5). */
-  settings: { load(): GatewaySettingsDoc; get(): GatewaySettingsDoc; mutate(m: (d: GatewaySettingsDoc) => { next: GatewaySettingsDoc; changed: boolean }): Promise<void> }
+  settings: { get(): GatewaySettingsDoc; mutate(m: (d: GatewaySettingsDoc) => { next: GatewaySettingsDoc; changed: boolean }): Promise<void> }
   /** tokens.json (0600, hash only, S5): the current token verifier hash, or
    * null when no token is configured. Re-read from disk on every call so
    * runtime changes take effect immediately. */
@@ -340,11 +479,10 @@ export function verifyCredential(plain: string, stored: string | null): boolean 
 }
 
 export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger): GatewayStore {
+  validateGatewayStateDirPath(stateDir)
   const root = join(stateDir, 'gateway')
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-  chmodSync(stateDir, 0o700)
-  mkdirSync(root, { recursive: true, mode: 0o700 })
-  chmodSync(root, 0o700)
+  ensurePrivateDirectoryNoFollow(stateDir, 0o700, { existingMode: 'require' })
+  ensurePrivateDirectoryNoFollow(root, 0o700)
 
   // -------------------------------------------------------------------------
   // Exclusive stateDir lock (Phase 1, fix round). O_EXCL-first acquisition;
@@ -366,6 +504,19 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   // -------------------------------------------------------------------------
   const lockFile = join(stateDir, '.gateway.lock')
 
+  /** Locks are not credential documents: preserve empty/corrupt bytes so a
+   * dead pid-less lock can be claimed, never chmod while inspecting another
+   * owner, and cap the tiny pidfile to prevent an unbounded startup read. */
+  function readLockFile(file: string): { value: string; identity: PrivateFileIdentity } | null {
+    try {
+      const read = readPrivateFileNoFollow(file, { maxBytes: 4 * 1024 })
+      return { value: read.value, identity: read.identity }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+  }
+
   function isProcessAlive(pid: number): boolean {
     if (!Number.isInteger(pid) || pid <= 0) return false
     try {
@@ -386,6 +537,7 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   }
 
   let held = false
+  let heldOwner: { raw: string; identity: PrivateFileIdentity } | null = null
   let exitListenerRegistered = false
   function onProcessExit(): void {
     releaseLock()
@@ -401,13 +553,15 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
           throw new Error(`gateway state directory lock could not be created (${lockFile}): ${String(error)}`)
         }
         // EEXIST: inspect the existing lock before deciding takeover.
-        let existing: string | null
+        let existingRecord: NonNullable<ReturnType<typeof readLockFile>>
         try {
-          existing = readSecret(lockFile)
+          const found = readLockFile(lockFile)
+          if (found === null) continue
+          existingRecord = found
         } catch (readError) {
           throw new Error(`gateway state directory lock is not a readable regular file (${lockFile}): ${String(readError)}`)
         }
-        if (existing === null) continue // vanished; retry the create
+        const existing = existingRecord.value
         let pid: number | null = null
         try {
           const parsed = JSON.parse(existing) as { pid?: unknown }
@@ -432,47 +586,88 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
         const staleName = `${lockFile}.stale-${process.pid}-${randomBytes(4).toString('hex')}`
         try {
           renameSync(lockFile, staleName)
+          syncPrivateDirectoryNoFollow(stateDir)
         } catch (renameError) {
           if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') continue // another contender took it
           throw new Error(`gateway state directory lock takeover failed (${lockFile}): ${String(renameError)}`)
         }
-        let moved: string | null = null
+        let movedRecord: ReturnType<typeof readLockFile> = null
         try {
-          moved = readSecret(staleName)
-        } catch { moved = null }
-        if (moved !== existing) {
+          movedRecord = readLockFile(staleName)
+        } catch { movedRecord = null }
+        const movedIsExact = movedRecord?.value === existing
+          && movedRecord.identity.dev === existingRecord.identity.dev
+          && movedRecord.identity.ino === existingRecord.identity.ino
+        if (!movedIsExact) {
           // We moved a fresh lock (a live owner's) — restore it, then fail
           // loudly ourselves. The owner's final verification below confirms
           // its lock is back in place.
-          try { renameSync(staleName, lockFile) } catch { /* best effort */ }
+          try {
+            renameSync(staleName, lockFile)
+            syncPrivateDirectoryNoFollow(stateDir)
+          } catch { /* best effort */ }
           throw lockedError(`gateway state directory lock takeover race: another process acquired the lock concurrently (${lockFile})`)
         }
         logger.warn(`gateway-store: taking over a stale state lock at ${lockFile}${pid === null ? ' (owner pid unreadable)' : ` (owner pid ${pid} is not running)`}`)
-        try { rmSync(staleName, { force: true }) } catch { /* best effort */ }
+        try { removePrivateFileNoFollow(staleName, movedRecord?.identity ?? undefined) } catch { /* best effort */ }
         continue // retry the create
       }
       let writtenCreatedAt = 0
+      let createdIdentity: PrivateFileIdentity | null = null
+      let writeError: unknown = null
       try {
+        const created = fstatSync(fd)
+        if (!created.isFile() || created.nlink !== 1) throw new Error('new gateway lock is not a single-link regular file')
+        createdIdentity = { dev: created.dev, ino: created.ino }
         fchmodSync(fd, 0o600)
         writtenCreatedAt = Date.now()
-        writeSync(fd, `${JSON.stringify({ pid: process.pid, createdAt: writtenCreatedAt })}\n`)
+        const lockBytes = Buffer.from(`${JSON.stringify({ pid: process.pid, createdAt: writtenCreatedAt })}\n`)
+        let offset = 0
+        while (offset < lockBytes.length) {
+          const written = writeSync(fd, lockBytes, offset, lockBytes.length - offset)
+          if (written === 0) throw new Error('gateway state directory lock write made no progress')
+          offset += written
+        }
         fsyncSync(fd)
+      } catch (error) {
+        writeError = error
       } finally {
         closeSync(fd)
+      }
+      if (writeError !== null) {
+        if (createdIdentity !== null) {
+          try { removePrivateFileNoFollow(lockFile, createdIdentity) } catch { /* preserve ambiguous leaf */ }
+        }
+        throw writeError
+      }
+      try {
+        syncPrivateDirectoryNoFollow(stateDir)
+      } catch (error) {
+        // The caller must never observe a failed acquisition while a live-pid
+        // lock created by this attempt remains behind.
+        if (createdIdentity !== null) {
+          try { removePrivateFileNoFollow(lockFile, createdIdentity) } catch { /* preserve ambiguous leaf */ }
+        }
+        throw error
       }
       // FINAL ownership verification: a concurrent takeover may have displaced
       // our fresh lock between the create and here (its own verification
       // restores it or fails). Never run on a directory we do not actually
       // own — fail closed and let the caller retry.
-      let verify: string | null = null
+      let verify: ReturnType<typeof readLockFile> = null
       try {
-        verify = readSecret(lockFile)
+        verify = readLockFile(lockFile)
       } catch { verify = null }
       const expected = `${JSON.stringify({ pid: process.pid, createdAt: writtenCreatedAt })}\n`
-      if (verify !== expected) {
+      if (verify?.value !== expected || createdIdentity === null
+        || verify.identity.dev !== createdIdentity.dev || verify.identity.ino !== createdIdentity.ino) {
+        if (createdIdentity !== null) {
+          try { removePrivateFileNoFollow(lockFile, createdIdentity) } catch { /* never remove a successor */ }
+        }
         throw lockedError(`gateway state directory lock ownership lost during acquisition (${lockFile}); retry`)
       }
       held = true
+      heldOwner = { raw: expected, identity: createdIdentity }
       // Register the exit release ONLY now that we actually hold the lock: a
       // failed acquisition must never delete a live owner's lock on exit.
       if (!exitListenerRegistered) {
@@ -492,34 +687,40 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
     // mismatch we no longer hold the lock — clear `held` so a later
     // reacquire() re-takes it (fail-closed: the gateway must never keep
     // running on a directory it does not actually own).
-    let ownerPid: number | null = null
+    let owner: ReturnType<typeof readLockFile> = null
     try {
-      const existing = readSecret(lockFile)
-      if (existing !== null) {
-        const parsed = JSON.parse(existing) as { pid?: unknown }
-        ownerPid = typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) ? parsed.pid : null
-      }
-    } catch { ownerPid = null }
-    if (ownerPid !== process.pid) {
+      owner = readLockFile(lockFile)
+    } catch { owner = null }
+    const ownerToRelease = heldOwner
+    const stillExactOwner = ownerToRelease !== null
+      && owner?.value === ownerToRelease.raw
+      && owner.identity.dev === ownerToRelease.identity.dev
+      && owner.identity.ino === ownerToRelease.identity.ino
+    if (!stillExactOwner) {
       held = false
-      logger.warn(`gateway-store: refusing to remove state lock ${lockFile} (owner pid ${String(ownerPid)} != ${process.pid}); lock ownership released`)
+      heldOwner = null
+      logger.warn(`gateway-store: refusing to remove state lock ${lockFile} (owner token/identity changed); lock ownership released`)
       return
     }
-    try { rmSync(lockFile, { force: true }) } catch (error) {
+    try { removePrivateFileNoFollow(lockFile, ownerToRelease.identity) } catch (error) {
       // The on-disk lock is still ours — keep held=true so a later
       // reacquire() does not deadlock against our own live pid.
       logger.warn(`gateway-store: failed to remove state lock ${lockFile}: ${String(error)}; ownership retained`)
       return
     }
     held = false
+    heldOwner = null
   }
 
   function close(): void {
-    if (exitListenerRegistered) {
+    releaseLock()
+    // A failed precise unlink deliberately retains ownership. Keep the exit
+    // retry registered in that case; removing it first would turn a transient
+    // close failure into a guaranteed live-pid lock leak.
+    if (!held && exitListenerRegistered) {
       process.removeListener('exit', onProcessExit)
       exitListenerRegistered = false
     }
-    releaseLock()
   }
 
   /** Re-take the lock after a close() (the gateway start() retry path,
@@ -531,10 +732,30 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
 
   acquireLock()
 
-  const gateway = docStore<GatewayDocument>(join(stateDir, 'gateway.json'), logger, { schemaVersion: 1, revision: 0, channels: [] })
-  const worktrees = docStore<{ items: WorktreeStoreRecord[] }>(join(root, 'worktrees.json'), logger, { items: [] })
-  const schedule = docStore<{ items: ScheduleStoreRecord[] }>(join(root, 'schedule.json'), logger, { items: [] })
-  const settings = docStore<GatewaySettingsDoc>(join(root, 'settings.json'), logger, { schemaVersion: 1, revision: 0 })
+  // Loading a corrupt/unreadable JSON document is a loud construction
+  // failure, but it must not strand the already-acquired stateDir lock in this
+  // process. createGateway() cannot close a store whose assignment never
+  // completed, so this transaction owns its own rollback.
+  const documents = (() => {
+    try {
+      return {
+        worktrees: docStore<{ items: WorktreeStoreRecord[] }>(
+          join(root, 'worktrees.json'), 'worktrees', logger, { items: [] }, validateWorktreesDocument,
+        ),
+        schedule: docStore<{ items: ScheduleStoreRecord[] }>(
+          join(root, 'schedule.json'), 'schedule', logger, { items: [] }, validateScheduleDocument,
+        ),
+        settings: docStore<GatewaySettingsDoc>(
+          join(root, 'settings.json'), 'settings', logger,
+          { schemaVersion: 1, revision: 0 }, validateSettingsDocument,
+        ),
+      }
+    } catch (error) {
+      close()
+      throw error
+    }
+  })()
+  const { worktrees, schedule, settings } = documents
 
   const tokensFile = join(stateDir, 'tokens.json')
   const jwtSecretFile = join(stateDir, 'jwt-secret')
@@ -588,7 +809,7 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
 
   function setTokenHash(hash: string | null, source: CredentialSource = 'config'): void {
     if (hash === null) {
-      try { rmSync(tokensFile, { force: true }) } catch { /* best effort */ }
+      removeSecret(tokensFile)
       return
     }
     writeSecret(tokensFile, `${JSON.stringify({ schemaVersion: 2, source, updatedAt: Date.now(), hash })}\n`)
@@ -619,7 +840,7 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
 
   function setPasswordCredential(verifier: string | null, source: CredentialSource = 'config'): void {
     if (verifier === null) {
-      try { rmSync(passwordCredentialFile, { force: true }) } catch { /* best effort */ }
+      removeSecret(passwordCredentialFile)
       return
     }
     writeSecret(passwordCredentialFile, `${JSON.stringify({ schemaVersion: 2, source, updatedAt: Date.now(), verifier })}\n`)
@@ -640,7 +861,7 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   }
 
   return {
-    gateway, worktrees, schedule, settings,
+    worktrees, schedule, settings,
     getTokenHash, getTokenCredential: readTokenCredential, setTokenHash,
     getJwtSecret, rotateJwtSecret,
     getPasswordCredential, getPasswordCredentialRecord: readPasswordCredential, setPasswordCredential,

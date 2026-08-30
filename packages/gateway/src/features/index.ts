@@ -162,15 +162,18 @@ export function createSessionIndex(deps: {
       running?: unknown
       blank?: unknown
       cwd?: unknown
-      projections?: { asOfSeq?: unknown; values?: { title?: unknown; sessionListMetadata?: unknown } }
+      projections?: { asOfSeq?: unknown; values?: { title?: unknown; sessionListMetadata?: unknown } } | null
     } | null
     if (!boundedText(row?.sessionId, MAX_SESSION_ID_CHARS)
       || typeof row.running !== 'boolean' || typeof row.blank !== 'boolean'
       || (row.cwd !== undefined && typeof row.cwd !== 'string')) return null
-    const values = row.projections?.values
-    const asOfSeq = row.projections === undefined ? -1 : row.projections.asOfSeq
+    const projectionState = row.projections
+    if (projectionState !== undefined
+      && (projectionState === null || typeof projectionState !== 'object' || Array.isArray(projectionState))) return null
+    const values = projectionState?.values
+    const asOfSeq = projectionState === undefined ? -1 : projectionState.asOfSeq
     if (!Number.isInteger(asOfSeq) || (asOfSeq as number) < -1
-      || (row.projections !== undefined && (values === null || typeof values !== 'object'))) return null
+      || (projectionState !== undefined && (values === null || typeof values !== 'object' || Array.isArray(values)))) return null
     const title = values?.title
     const titleValue = title === undefined ? undefined : truncatedText(title, MAX_TITLE_CHARS)
     if (titleValue === null) return null

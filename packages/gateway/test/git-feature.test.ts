@@ -478,7 +478,7 @@ test('delete fails closed while a live session uses the canonical or symlinked w
   })
   const input = {
     dshBaseUrl: 'http://127.0.0.1:12345', workspaceId: 'ws-live', sessionId: 'session-record',
-    repo: fixture.repo, path: target, branch: 'feature/delete-live',
+    repo: fixture.repo, path: target,
   }
   try {
     await assert.rejects(deleteWorktree(input),
@@ -520,7 +520,7 @@ test('delete saga resumes workspace.delete after Git was already removed', async
   })
   const input = {
     dshBaseUrl: 'http://127.0.0.1:12345', workspaceId: 'ws-feature', repo: fixture.repo,
-    path: target, branch: 'feature/delete-resume',
+    path: target,
   }
   try {
     await assert.rejects(deleteWorktree(input),
@@ -551,7 +551,7 @@ test('delete resume refuses a surviving Git path after workspace authority disap
     await assert.rejects(
       deleteWorktree({
         dshBaseUrl: 'http://127.0.0.1:12345', workspaceId: 'ws-feature', repo: fixture.repo,
-        path: target, branch: 'feature/delete-committed', resumeAfterGitRemoval: true,
+        path: target, resumeAfterGitRemoval: true,
       }),
       (error: unknown) => error instanceof GitFeatureError && error.code === 'worktree_not_allowed',
     )
@@ -575,7 +575,7 @@ test('delete resume converges when both workspace authority and Git path are alr
   try {
     await deleteWorktree({
       dshBaseUrl: 'http://127.0.0.1:12345', workspaceId: 'ws-feature', repo: fixture.repo,
-      path: target, branch: 'feature/delete-converged', resumeAfterGitRemoval: true,
+      path: target, resumeAfterGitRemoval: true,
     })
   } finally {
     globalThis.fetch = originalFetch
@@ -619,7 +619,7 @@ test('delete revalidates main-checkout repository authority immediately before G
     await assert.rejects(
       deleteWorktree({
         dshBaseUrl: 'http://127.0.0.1:12345', workspaceId: 'ws-feature', repo: fixture.repo,
-        path: target, branch: 'feature/delete-repo-swap',
+        path: target,
       }),
       (error: unknown) => error instanceof GitFeatureError && error.code === 'repo_not_allowed',
     )
@@ -659,7 +659,7 @@ test('delete resume refuses a target reoccupied by another workspace id or alias
   })
   const input = {
     dshBaseUrl: 'http://127.0.0.1:12345', workspaceId: 'ws-old-owner', repo: fixture.repo,
-    path: target, branch: 'feature/delete-reoccupied', resumeAfterGitRemoval: true,
+    path: target, resumeAfterGitRemoval: true,
   }
   try {
     await assert.rejects(deleteWorktree(input),

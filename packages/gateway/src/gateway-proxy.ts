@@ -19,11 +19,13 @@ import {
   WS_PING_INTERVAL_MS,
   WS_PING_MISSES_BEFORE_TEARDOWN,
   WS_STREAM_PATHS,
+  createPendingUpgradeTracker,
   forwardHttp,
   forwardUpgrade,
   rejectUpgrade,
   writeError,
   type Logger,
+  type HttpRequestFactory,
   type ProxyForwardCounters,
   type ProxyForwardDeps,
   type ProxyRequest,
@@ -43,6 +45,9 @@ export interface GatewayProxyDeps {
    * restore-builtin the same way it covers apply-now. Defaults to open for
    * callers that do not compose a runtime manager. */
   canExposeLocal?: () => boolean
+  /** Narrow forwarding seams used by deterministic lifecycle tests. */
+  httpRequest?: HttpRequestFactory
+  upstreamTimeoutMs?: number
 }
 
 export interface GatewayProxyDiagnostics {
@@ -70,17 +75,22 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     bufferedRequestBytes: 0,
   }
   let activeHttpRequests = 0
-  let pendingUpgrades = 0
+  const pendingUpgrades = createPendingUpgradeTracker()
   const liveStreams = new Set<{ downstream: ProxySocket; upstream: Duplex }>()
+  // HTTP includes long-lived SSE. Keep the downstream response until the
+  // shared release callback fires so credential rotation can revoke requests
+  // that were authenticated only at entry, just like established WS splices.
+  const liveHttpRequests = new Set<{ request: ProxyRequest; response: ProxyResponse }>()
 
   const forwardDeps: ProxyForwardDeps = {
     id: 'local',
     logPrefix: 'gateway-proxy',
-    upstreamTimeoutMs: UPSTREAM_TIMEOUT_MS,
+    upstreamTimeoutMs: deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
     clientBodyIdleTimeoutMs: CLIENT_BODY_IDLE_TIMEOUT_MS,
     wsPingIntervalMs: WS_PING_INTERVAL_MS,
     wsPingMissesBeforeTeardown: WS_PING_MISSES_BEFORE_TEARDOWN,
     maxBufferedRequestBytes: MAX_BUFFERED_REQUEST_BYTES,
+    httpRequest: deps.httpRequest,
     liveStreams,
     // Root-mounted owner (design 17 §6): same-origin absolute redirects from
     // the managed dsh are stripped to their path so a `Location:
@@ -138,10 +148,13 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         return
       }
       activeHttpRequests += 1
+      const liveRequest = { request: req, response: res }
+      liveHttpRequests.add(liveRequest)
       let released = false
       const releaseRequest = (): void => {
         if (released) return
         released = true
+        liveHttpRequests.delete(liveRequest)
         activeHttpRequests = Math.max(0, activeHttpRequests - 1)
       }
       try {
@@ -175,7 +188,7 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         return
       }
       counters.requests += 1
-      if (counters.activeStreams >= MAX_CONCURRENT_WS_STREAMS || pendingUpgrades >= MAX_PENDING_WS_HANDSHAKES) {
+      if (counters.activeStreams >= MAX_CONCURRENT_WS_STREAMS || pendingUpgrades.size >= MAX_PENDING_WS_HANDSHAKES) {
         counters.failures += 1
         rejectUpgrade(socket, 503, 'resource_exhausted', 'too many active proxy streams', logger)
         return
@@ -194,13 +207,7 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         rejectUpgrade(socket, 400, 'invalid_request', 'absolute request targets are not allowed', logger)
         return
       }
-      pendingUpgrades += 1
-      let released = false
-      const releaseHandshake = (): void => {
-        if (released) return
-        released = true
-        pendingUpgrades = Math.max(0, pendingUpgrades - 1)
-      }
+      const releaseHandshake = pendingUpgrades.acquire(socket)
       try {
         await forwardUpgrade(req, socket, head, fullTarget, releaseHandshake, logger, counters, forwardDeps)
       } catch (error) {
@@ -217,12 +224,21 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         failures: counters.failures,
         activeStreams: counters.activeStreams,
         activeHttpRequests,
-        pendingUpgrades,
+        pendingUpgrades: pendingUpgrades.size,
         bufferedRequestBytes: counters.bufferedRequestBytes,
       }
     },
 
     closeAllStreams(): void {
+      pendingUpgrades.closeAll()
+      for (const { request, response } of [...liveHttpRequests]) {
+        // IncomingMessage.destroy() terminates a still-uploading body iterator;
+        // response.destroy() tears down an established downstream/SSE leg.
+        // The ProxyRequest interface is transport-minimal, hence the guarded
+        // cast for Node's concrete request method.
+        try { (request as ProxyRequest & { destroy?: () => unknown }).destroy?.() } catch { /* already gone */ }
+        try { response.destroy() } catch { /* already gone */ }
+      }
       for (const stream of [...liveStreams]) {
         try { stream.downstream.destroy() } catch { /* already gone */ }
         try { stream.upstream.destroy() } catch { /* already gone */ }
