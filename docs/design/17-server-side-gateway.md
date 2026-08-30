@@ -161,8 +161,13 @@ upgrade middleware 和 CORS evaluator 才能越过 loopback 构造门。
 6. 仅在 `ready` generation 启动索引、通知和 scheduler；
 7. 任一步失败都会停止已打开的 server，下一次 `start()` 可重试。
 
-停止时先回收 runtime install 子进程（design 18 §9.3），再关闭 Gateway 自有
-WS/feature consumers，最后停止 control-plane 与 managed dsh。
+停止时先同步关闭 feature 与 credential mutation admission，并撤销 dispatch 追踪的
+下游 HTTP/WS（未读完 body 的请求因此不会卡住 drain）；同时中止 runtime
+transaction/install。已经越过 admission 的 Git/settings/schedule saga 或凭据写入不
+强行打断，而是持有 stateDir lock 等待其完整 promise、审计尾与持久化 tail 收敛；
+feature、credential、runtime 三类 writer 都静止后才停止 control-plane、managed dsh
+并释放 `.gateway.lock`。启动失败回滚走同一屏障，绝不让旧 handler 在新 gateway
+取得锁后继续写；同一 handle 再次 `start()` 时才重新开放 admission。
 dsh 从 ready 离开时 feature host（**dsh 派生** consumers：index/notify/scheduler/git）
 立即 detach；scheduler 保留定义但清除 timer，下一代 ready 后重新 arm。**例外**：
 `/chamber/runtime` 是 gateway 自有 runtime 控制器（挂在 dispatch 面，不随 ready
@@ -186,7 +191,8 @@ gateway auth clear [--state-dir DIR]
 
 `gateway auth` 子命令在**停机态**管理持久化凭据（§7.4）：`status` 输出非秘密投影
 （password/token 是否配置、`source` 与最后写入时间，永不含值）——它是**无锁只读**
-命令，运行中的 gateway 也可正常读取；`reset-password --new PASSWORD` 以
+命令，运行中的 gateway 也可正常读取；只读路径验证既有凭据文件已经是 `0600`，
+权限过宽时按不安全/未配置投影且绝不以 `chmod` 修改文件；`reset-password --new PASSWORD` 以
 `source:'runtime'` 写入新密码并先旋转 `jwt-secret`（12–1024 字符）；`clear` 同时
 删除密码与 token，下次启动由部署配置重新播种（`--no-auth` 部署恢复匿名并打印 S1
 告警）。后两者取 stateDir 独占锁，**运行中的 gateway 会响亮拒绝**（结构化错误
@@ -335,7 +341,7 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 verifier|hash}`（0600，§12）。legacy v1（密码裸 `scrypt$…` / token `{"hash":…}`）
 读为 `source:'config'`（updatedAt = 文件 mtime）并在下次写入迁移。动态 AuthProvider
 facade 的 `kind` 每请求按**当前持久化状态**计算（password / token / password+token /
-none），verify/login/revoke 按有效状态分派；`login` 恒存在，无密码时抛 `no_password`
+none），verify/login 按有效状态分派；`login` 恒存在，无密码时抛 `no_password`
 （dispatch 映射 404——登录路由仅 password 形态存在）。
 
 **播种规则**（启动时 `seedCredentialsFromConfig`；密码与 token 两个维度同规则，
@@ -354,7 +360,7 @@ none），verify/login/revoke 按有效状态分派；`login` 恒存在，无密
 | 端点 | 语义 | 成功响应 |
 |---|---|---|
 | `POST /auth/change-password` | `{newPassword}`（12–1024）或 `{remove:true}`；可带 `currentPassword` | `{changed:true, kind:'password', source, removed?}` |
-| `POST /auth/change-token` | `{newToken}`（32–4096 visible ASCII）、`{}`（服务端 CSPRNG 生成）或 `{remove:true}` | `{changed:true, kind:'token', source, token?, removed?}` |
+| `POST /auth/change-token` | `{newToken}`（32–4096 visible ASCII）、`{}`（服务端 CSPRNG 生成）或 `{remove:true}` | `{changed:true, kind:'token', source, token?, removed?, durability?:'unknown'}` |
 | `GET /auth/credentials` | 非秘密投影（S5）；HEAD 为无体孪生 | `{password: {set, source, updatedAt}\|null, token: …}` |
 
 请求校验：`{remove:true}` 与 `newPassword`/`newToken` **互斥**（并存 → 400
@@ -364,7 +370,10 @@ API 客户端一律用 JSON）。未认证的 HTML-accept 导航到 `/auth/*` �
 （不跳登录页）。
 
 新 token 明文在变更响应中**只返回一次**，此后任何面（含 `GET /auth/credentials`）
-都不再暴露；`/auth/login` 仅 password 形态存在，token-only 部署 404。
+都不再暴露；`/auth/login` 仅 password 形态存在，token-only 部署 404。原子 rename
+已经发布、但父目录 fsync 报错时，Gateway 以稳定 exact-hash readback 判定在线 token
+确已生效：生成型 token 仍必须返回这一次明文，响应额外带 `durability:'unknown'`，
+提示崩溃持久性未获证明；无法 exact readback 时仍返回 500，绝不猜测提交成功。
 
 错误码→HTTP（change 路由）：
 
@@ -383,7 +392,10 @@ API 客户端一律用 JSON）。未认证的 HTML-accept 导航到 `/auth/*` �
 自证，或 `currentPassword` 经共享登录限流器 + 有界 scrypt work gate 校验。仅
 cookie principal 且未带正确 currentPassword 拒绝 403；currentPassword 错误为 401
 （连续失败按登录限流 → 429）。因此匿名（`--no-auth`）部署无法经 API 种植/变更
-凭据——无既有凭据可证明。
+凭据——无既有凭据可证明。dispatch 认证门将成功 principal 捕获为同 provider、同
+generation 的进程内 proof，凭据变更与审计直接复用它（bearer 每请求只做一次
+verifier）；排队期间跨 generation 的 proof 拒绝 401，绕过 dispatch 的内部直调未提供
+proof 时仍完整复验。
 
 **last-credential 门 + config revert**：删除最后一个凭据（另一维度也不存在时）
 拒绝 409，除非部署配置提供替代——此时**回退**为 config 凭据（响应
@@ -396,10 +408,24 @@ none↔auth 双向转换仍仅部署期（config 播种 + 重启）；删除最�
 **rotate-first（S13）**：密码变更先旋转 `jwt-secret` 再持久化——持久化失败也绝不
 留下「新 verifier + 旧 cookie」混合态；旧 cookie 在变更瞬间立即失效。
 
+dispatch 认证边界按 credential generation 统一追踪所有已认证 HTTP response 与 WS
+socket；generation 在首个凭据 store side effect **之前**提升，因此成功提交与
+「rename 已发布但 durability unknown」/密码 rotate-first 后续失败都会关闭旧
+generation 的全部长连接（management、instance fallthrough、gateway proxy、feature
+SSE），仅排除变更请求自身 response 以完整返回一次性 token 或错误。
+Gateway 停机则先关闭 credential mutation admission、销毁当前认证流，再等待已经进入
+的 change route 完整收敛（包括错误路径与审计 append）；stateDir owner 不会先于凭据
+writer 释放。
+proxy/feature 不再各自承担 credential-only 关闭回调；它们的 close primitive 只服务自身
+stop/lifecycle 清理，避免重复 teardown 与覆盖遗漏。
+
 **审计（S24）**：`credential_changed` / `credential_change_rejected`——detail 仅含
-维度、set/remove、source、变更前 principal kind（成功事件；probe 失败记为
-`probe-error:<code>`，绝不因审计拒绝请求）与客户端来源；拒绝事件 detail 含维度 +
-wire code + 客户端来源；任何值永不进入审计。
+维度、set/remove、source、认证门已经确认的变更前 principal kind（成功事件）与
+客户端来源；拒绝事件 detail 含维度 +
+wire code + 客户端来源；任何值永不进入审计。`audit.log` append/rotation 绑定
+single-link inode，O_NOFOLLOW/O_APPEND、完整写 + file fsync，archive 也在 rename 前
+验证 leaf identity 并在发布后 fsync parent；审计 I/O 失败仍非业务致命，但不允许
+跟随 active/archive symlink 或修改外部 victim。
 
 **与 desktop 客户端的关系**：运行时凭据变更后旧 cookie/bearer 立即失效，desktop
 的 401 三态分类（§7.3）已覆盖「凭据被换」后的行为——重登/重输 token 后恢复；
@@ -598,7 +624,9 @@ subscribed/title/sessionListMetadata；host 流只复制 added/status/removed。
 递归，不允许前一次 RPC 未结束时重叠触发。一次性 job 只有 dsh 调用和持久化删除都成功
 才消费；失败按 1–60 秒有界退避重试，不能复用 `delayMs=0` 形成热循环。timer callback
 同时校验 run generation、job identity 与 in-flight 状态，cancel/detach 后不能幽灵重建。
-Feature detach 只停 timer，不丢定义。
+新 job 先以未武装 identity admission 进入内存，同一持久化串行临界区写盘成功后才 arm
+（包括 `delayMs=0`）；自动删除以 identity mutation intent 在该临界区内对 current list
+重算并提交，旧 callback 不得覆盖更新 snapshot。Feature detach 只停 timer，不丢定义。
 
 ### 10.4 Settings 与界面
 
@@ -665,6 +693,9 @@ Git 在 Gateway OS 用户下执行，但客户端不能指定任意仓库执行�
   `workspace.delete`；旧 workspaceId 已消失但路径仍存在时硬拒，只有 workspace 与路径
   都消失才视为已收敛；workspace 删除未确认时不会继续删文件；
 - store 失败不会反向删除已经发布的 session/worktree。
+- 同一 `workspaceId` 的 DELETE 在读取记录前取得进程内 owner-token lease，并覆盖
+  deleting intent、Git/workspace mutation 与成功/失败 outcome 持久化；第二个请求在
+  任一阶段稳定返回 409，只有完整 saga settle 后才精确释放 lease。
 
 现有 host API 没有“检查 session + 删除 worktree”的原子 lease，因此两次 live check 只能
 把 TOCTOU 窗口压缩而不能数学上消除。发布前实机并发测试是强制门禁；长期根治需要 dsh
@@ -676,7 +707,6 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 
 ```text
 <stateDir>/
-├─ gateway.json
 ├─ tokens.json                 # v2 信封 {schemaVersion:2, source, updatedAt, hash}, 0600
 ├─ jwt-secret                  # 0600
 ├─ password-credential         # v2 信封 {schemaVersion:2, source, updatedAt, verifier}, 0600
@@ -688,11 +718,21 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
    └─ schedule.json
 ```
 
-`stateDir` 与 `gateway/` 目录每次启动都收敛为 `0700`；所有 JSON main/backup/tmp 与
-secret 文件每次加载和写入都收敛为 `0600`。已有 secret 先以 no-follow/inode 校验拒绝
-symlink 与非普通文件，再收紧权限并读取。JSON 文档经 `createJsonStore` 的 owner-only
-原子写路径持久化，写操作串行化，避免并发请求以旧 snapshot 覆盖新值。corrupt 主文件
-会先尝试 backup；双重损坏会响亮失败，不伪装成空配置。
+Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `stateDir`（其专用子目录
+仍合法）。POSIX 上，新建的专用 `stateDir` 与 `gateway/` 创建为 `0700`；既有
+`stateDir` 必须已是 `0700`，启动只验证而不替调用者 `chmod`，避免把宽泛共享目录静默
+收窄；gateway 自有子目录仍收敛为 `0700`。Windows 的 Node `chmod/stat.mode` 只能表达
+有限的只读属性，不能诚实证明 POSIX `0700`；该目录边界仅保留 real-dir/no-follow/identity
+校验并继承 OS ACL，既不伪报 `0700` 也不改 ACL（Windows 首版整体支持仍按 STATUS
+暂缓）。所有 JSON main/backup/tmp 与 secret 写入收敛为 `0600`；正常
+store 加载可显式迁移合法 legacy secret 到 `0600`，而 `gateway auth status` 只验证不
+改权限。secret 读取以 KiB 级上限约束，并先以 no-follow/inode 校验拒绝 symlink 与
+非普通文件。JSON 文档经 `createJsonStore` 的 owner-only 原子写路径持久化，写操作
+串行化，避免并发请求以旧 snapshot 覆盖新值。settings/worktrees/schedule 各自校验
+document root/schema/revision：错误主文档回退有效 backup；合法 collection 内的坏行
+单独隔离并告警，不能抹掉其他完整行。corrupt 主文件会先尝试 backup；双重损坏会响亮
+失败，不伪装成空配置。早期预留但从无生产消费者的 `gateway.json`/devices/channels
+文档已删除；旧文件仅忽略，不做破坏性清理，未来能力必须按真实领域 validator 重引入。
 
 **凭据信封（v2，Phase 1）**：`password-credential` 与 `tokens.json` 均为
 `{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>, verifier|hash}`
@@ -714,9 +754,10 @@ fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/
 （绝不销毁意外内容）；**可读但 pid 缺失/损坏**的锁文件按陈旧锁**接管并告警**
 （`owner pid unreadable`）——它最可能是崩溃进程的残缺残留，接管后目录仍被独占
 （fail-safe）。
-`releaseLock` 双重守卫：未实际持有不删，且 on-disk pid 必须仍是本进程才删（防级联
-删除后继者的锁）；**exit 监听器仅在获取成功后注册**——获取失败的进程退出时绝不
-删除活网关的锁。创建后**所有权终验**（回读 pid+createdAt 必须与刚写入一致）——
+`releaseLock` 双重守卫：未实际持有不删，且 on-disk 完整 bytes + inode identity 必须
+仍与本次获取一致才删（仅比较 pid 不足以区分同进程重取/后继者）；**exit 监听器仅在
+获取成功后注册**——获取失败的进程退出时绝不删除活网关的锁。创建后**所有权终验**
+（回读 pid+createdAt + inode 必须与刚写入一致）——
 被并发接管位移的获取者立即失败，绝不无锁运行。`GatewayStore.close()` 幂等释放，
 `reacquire()` 供 start() 重试路径重取（design 17 §4.1）；进程 exit 也 best-effort
 释放——同 stateDir 的重开必须先 close（测试与 `gateway auth` CLI 均依赖此语义）。
@@ -890,7 +931,7 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
 - Gateway config/auth/request-policy/dispatch/proxy/lifecycle/feature/真实 socket 测试；
 - Gateway 运行时凭据面（Phase 1–3 + 修复轮）：auth 运行时变更/播种四规则/legacy
   迁移/stateDir 锁（活锁拒绝、陈旧锁 rename 接管、**失败获取不删活锁（子进程回归）**、
-  releaseLock pid 复验、close/reacquire）、S25 匿名禁种（单元 + wire）、并发 remove
+  releaseLock bytes+inode 复验、close/reacquire）、S25 匿名禁种（单元 + wire）、并发 remove
   串行化（永不双 null）、`{remove:true}`+新值互斥 400、`GET /auth/credentials` 投影
   与 HEAD twin、`/auth/*` 不跳登录页、dispatch 凭据路由与审计事件、`gateway auth`
   停机态 CLI；
@@ -951,7 +992,7 @@ PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露
 | S12 | Gateway 不能削弱普通 control-plane 的 loopback-only 门 |
 | S13 | feature flag 是默认关闭的服务端能力门，禁用后停止后台 consumer/timer |
 | S14 | dsh raw event queue 与 session 索引净化 buffer 都有硬上限，绝不持久保留会话正文 |
-| S15 | Gateway state 目录与 JSON/secret 文件分别强制 0700/0600 |
+| S15 | POSIX：Gateway 新建 state 目录为 0700、既有 stateDir 只验证 0700（拒绝 broad root，绝不代 chmod）；Windows 目录保留继承 ACL 且只做 no-follow/identity；JSON/secret 为 0600，status 只读验证 |
 | S16 | release 必须 commit-bound、公开记录不可变；desktop stable/beta feed 独立，Gateway 本阶段只发布 GitHub tgz+SHA256、不得隐式发布 npm |
 | S17 | dsh runtime：无快照不切指针；切换/恢复中断由 durable journal/marker 幂等补完（design 18 §9.7） |
 | S18 | dsh runtime：探针全绿才宣布 applied 并开放代理；回退目标 = 切换前版本或最近 known-good，绝不两棵坏树间交替 |

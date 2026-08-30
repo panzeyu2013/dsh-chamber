@@ -100,11 +100,16 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 
 ### 5.2 结果投影（S2：零 schema 改动）
 - 窗口期：status().phase==='applying'（runtime-manager.ts:836，activationInProgress 驱动）+ connectionState 诚实降级 stopped/starting。
-- 成功：phase 离开 applying 且 connectionState∈{ready,degraded} 且 failure==null 且 startupBlockedReason==null。
+- 成功：phase 离开 applying 且 connectionState∈{ready,degraded}，并且本次会清零/重写的
+  `startupBlockedReason`/`operationError` 为空、`restoreOutcome∈{null,none,complete}`。
+  `failure` 是跨动作保留的最近失败诊断，不能把历史记录误判为本次 apply-now 失败。
 - 已更新 vs 已回退：activeVersion == selectedVersion → 更新成功；否则已回退。
-- 失败：failure / startupBlockedReason / operationError / restoreOutcome 投影，走既有终态。
+- 失败：startupBlockedReason / operationError / 非成功 restoreOutcome 投影，走既有终态；
+  `failure` 仅展示诊断，不单独决定 poll settle。
 - 可选增强：一行透传 override.lastOutcome。
-- settings-bridge 轮询端 `gateway-runtime-api.ts` 的 `pollRemoteRuntimeUntilSettled` 复用既有失败识别，按上述判定扩展。
+- settings-bridge 轮询端 `pollRemoteRuntimeUntilSettled` 强制调用者显式传
+  `select|apply-now` expectation：select 保留安装任务语义，apply-now 才执行上述 live
+  connection/恢复窗口判定；实例切换或组件卸载通过 AbortSignal 取消旧轮询。
 
 ### 5.3 gateway-proxy 激活感知（D3，必做）
 - `GatewayProxyDeps` 增 `canExposeLocal?: () => boolean`；`resolveTarget`（gateway-proxy.ts:87-94）与 `handleUpgrade`（:175-180）增加激活门：激活事务在途（candidate 已 spawn、探针未裁决）时返回 503 `instance_unavailable`。
@@ -112,7 +117,10 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 - 理由：探针只覆盖 host 侧、渲染侧兼容不在门控内（design 18 §3.4），未裁决候选不得服务在线用户；该修复同时覆盖启动路径与 restore-builtin 的既有同类暴露。
 
 ### 5.4 单进程与回收
-owner.json O_EXCL 单进程不变量（runtime-manager.ts:245-334）不受影响；stop() 回收顺序不变（index.ts:289-300）——apply-now 在途收到 stop → epoch bump 中止 spawn 所有权，持久 journal 留下中断相位 → 下次启动 blocked-but-alive + retry。
+owner.json no-follow O_EXCL + token/inode 单进程不变量不受影响；stop() 在等待 startup
+continuation 前先触发 manager lifecycle abort，并 drain apply-now/F7/install 等完整 writer
+promise 后才释放 owner/state lock——apply-now 在途收到 stop → journal 保留中断相位 →
+下次启动 blocked-but-alive + retry，旧 job 不得在新 owner 进入后继续写。
 
 ### 5.5 /chamber/ 浏览器页（§6.4 配套）
 `routes.ts` 的 /chamber/ 管理页同步实现 apply-now：runtime controls 区新增 `Apply now` 按钮（`runtime-apply-now`）与 `Applying… restarting` 窗口状态文案，经既有 `runtimeAction` 单飞 + 3s status 轮询；按钮禁用逻辑与相位/connectionState/env/read-only 门对应；硬编码英文、CSP 兼容（无内联事件），不属 i18n 面。

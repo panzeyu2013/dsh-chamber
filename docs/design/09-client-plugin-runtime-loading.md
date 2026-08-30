@@ -171,7 +171,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - **--patch seed（模块 B）**：`ensureHostGraphPackage(dshHome, sourceDir)` 把模块 A
   包（package.json + dist/index.js）幂等分发进
   `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/`（内容
-  hash 一致跳过、漂移覆盖、0600 原子写；源目录缺失 = 优雅跳过，不报错）；
+  hash 一致跳过、漂移覆盖；`web/node_modules`→scope→chamber package→dist 的每个
+  owned 最终目录逐级 no-follow 校验，target 以稳定有界 no-follow 读取、随机 O_EXCL
+  temp + file/parent fsync 原子写；源 package 仍是普通只读分发边界并允许打包 symlink；
+  源目录缺失 = 优雅跳过，不报错）；
   `buildPatchOverlay(stateDir)` 物化 `<stateDir>/dsh-chamber-graph.patch.yml`——
   loader patch 列表格式（`[{insert:[{id:'client-graph',
   name:'@dsh-chamber/dsh-host-client-graph'}]}]`，与 bundle 的 cordis.patch.yml /
@@ -182,6 +185,9 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   产物（dist/index.js）缺失时不注 overlay——命令行保持 v4 基础（一个插了行却
   解析不到的 overlay 会让宿主 boot 响亮失败，缺失模块 A 必须等价于"未发货"）。
   已运行的本地实例在下一次重启按官方插件集变更节奏生效。
+  同一 spawn gate 内的首次 `settings.yaml` 默认值也复用 owner-private O_EXCL writer：
+  `dsh-home` 最终目录必须真实，任何既有 settings leaf（包括用户自管 symlink）只视为
+  “已有配置”且绝不打开写入，不再用递归 mkdir + 普通 `writeFileSync` 穿越 owned root。
 - **CHAMBER_COVERED_IDS（模块 C 去重集）**：`packages/renderer/src/chamber-covered.ts`
   维护两个家族——① chamber 复合 bundle 静态注册的全部客户端插件包名
   （chamber-entry.ts import 清单：connection/typert/gateway/remotes/runtime/locale/
