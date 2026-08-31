@@ -307,6 +307,24 @@ test('request convergence strips framing and proxy headers, then emits the accep
   assert.equal(headers.trailer, undefined)
 })
 
+test('framed GET and HEAD request bodies are preserved instead of silently discarded', async () => {
+  const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
+
+  for (const method of ['GET', 'HEAD']) {
+    const response = fakeResponse()
+    await proxy.handleHttp(
+      fakeRequest('/api/i/local/api/framed', method, { 'content-length': '3' }, 'abc'),
+      response,
+    )
+  }
+
+  assert.equal(upstream.calls.length, 2)
+  for (const call of upstream.calls) {
+    assert.equal(call.body.join(''), 'abc')
+    assert.equal((call.options.headers as Record<string, string>)['content-length'], '3')
+  }
+})
+
 test('ssh-<id> mapping: registered transport baseUrl wins; unregistered answers 503', async () => {
   const { proxy, upstream } = makeProxy()
   proxy.registerTransport('ssh:srv1', 'http://127.0.0.1:22001')
@@ -1235,6 +1253,36 @@ test('upgrade: request close does not abort the handshake; downstream socket clo
   assert.equal(captured.signal?.aborted, false)
   ;(socket as unknown as EventEmitter).emit('close')
   assert.equal(captured.signal?.aborted, true)
+})
+
+test('transport revoke is owner-scoped and closeAllStreams aborts every remaining pending WebSocket handshake', async () => {
+  const upstream = fakeHttpRequest(() => undefined)
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: upstream.fn,
+    upstreamTimeoutMs: 5_000,
+  })
+  proxy.registerTransport('dsh:pending', 'http://127.0.0.1:19191')
+  const local = fakeSocket()
+  const remote = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux'), local, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/dsh-pending/api/events.host'), remote, Buffer.alloc(0))
+  assert.equal(proxy.getDiagnostics().pendingUpgrades, 2)
+
+  proxy.unregisterTransport('dsh:pending')
+  assert.equal(remote.closed, true)
+  assert.equal(local.closed, false, 'revoking one remote transport must not close the local handshake')
+  assert.equal((upstream.calls[1]?.options.signal as AbortSignal | undefined)?.aborted, true)
+  assert.equal((upstream.calls[0]?.options.signal as AbortSignal | undefined)?.aborted, false)
+  assert.equal(proxy.getDiagnostics().pendingUpgrades, 1)
+
+  proxy.closeAllStreams()
+
+  assert.equal(local.closed, true)
+  assert.equal((upstream.calls[0]?.options.signal as AbortSignal | undefined)?.aborted, true)
+  assert.equal(proxy.getDiagnostics().pendingUpgrades, 0)
 })
 
 // ---------------------------------------------------------------------------

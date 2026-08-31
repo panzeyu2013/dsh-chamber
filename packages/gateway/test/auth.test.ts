@@ -1,7 +1,7 @@
 /**
  * Gateway auth unit tests (design 17 §5/§7): token (hash-stored,
- * constant-time), none, the password provider (scrypt + JWT cookie + login +
- * revoke), and Phase 1 runtime credential changes (changePassword/changeToken:
+ * constant-time), none, the password provider (scrypt + JWT cookie + login),
+ * and Phase 1 runtime credential changes (changePassword/changeToken:
  * proofs, rotate-first, last-credential gate, revert, restart survival).
  * Run with `node packages/gateway/test/auth.test.ts`.
  */
@@ -13,7 +13,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAuth } from '../src/auth.ts'
-import { createGatewayStore, hashCredential, type GatewayStore } from '../src/store.ts'
+import { createGatewayStore, hashCredential, verifyCredential, type GatewayStore } from '../src/store.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 const TOKEN = '0123456789abcdef0123456789abcdef'
@@ -57,6 +57,16 @@ test('token provider accepts a matching bearer (hash-stored)', async () => {
     // The plaintext token is never persisted — only its salted scrypt hash.
     assert.notEqual(store.getTokenHash(), TOKEN)
     assert.match(store.getTokenHash() ?? '', /^scrypt\$[a-f0-9]+\$[a-f0-9]{64}$/i)
+  } finally { cleanup() }
+})
+
+test('auth kind shares the generation presence snapshot instead of re-reading disk', () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'password+token', password: PASSWORD, token: TOKEN }, store)
+    store.getPasswordCredential = () => { throw new Error('unexpected password disk read') }
+    store.getTokenHash = () => { throw new Error('unexpected token disk read') }
+    assert.equal(auth.kind, 'password+token')
   } finally { cleanup() }
 })
 
@@ -122,6 +132,203 @@ test('token provider accepts the exact 4096-character inbound maximum', async ()
   } finally { cleanup() }
 })
 
+test('a deferred old-token verification cannot authenticate after token rotation', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    let releaseOld!: () => void
+    const oldGate = new Promise<void>(resolve => { releaseOld = resolve })
+    let markStarted!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    let deferOldToken = true
+    const auth = createAuth(
+      { kind: 'password+token', password: PASSWORD, token: TOKEN },
+      store,
+      silentLogger,
+      {
+        verifyCredentialAsync: async (plain, stored) => {
+          if (plain === TOKEN && deferOldToken) {
+            deferOldToken = false
+            markStarted()
+            await oldGate
+          }
+          return stored !== null && verifyCredential(plain, stored)
+        },
+      },
+    )
+    const oldVerdict = auth.verify({
+      headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8',
+    })
+    await started
+    const nextToken = 'fedcba9876543210fedcba9876543210'
+    await auth.changeToken!({ newToken: nextToken, currentPassword: PASSWORD }, {
+      headers: {}, socketAddr: '203.0.113.8',
+    })
+    releaseOld()
+
+    assert.equal(await oldVerdict, null, 'the old scrypt result is fenced by the credential generation')
+    assert.equal((await auth.verify({
+      headers: { authorization: `Bearer ${nextToken}` }, socketAddr: '203.0.113.8',
+    }))?.kind, 'token')
+  } finally { cleanup() }
+})
+
+test('a deferred old-password login cannot sign a cookie with the post-rotation jwt secret', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    let releaseLogin!: () => void
+    const loginGate = new Promise<void>(resolve => { releaseLogin = resolve })
+    let markStarted!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    let deferOldPassword = true
+    const auth = createAuth(
+      { kind: 'password+token', password: PASSWORD, token: TOKEN },
+      store,
+      silentLogger,
+      {
+        verifyCredentialAsync: async (plain, stored) => {
+          if (plain === PASSWORD && deferOldPassword) {
+            deferOldPassword = false
+            markStarted()
+            await loginGate
+          }
+          return stored !== null && verifyCredential(plain, stored)
+        },
+      },
+    )
+    const staleLogin = auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8' })
+    await started
+    await auth.changePassword!({ newPassword: NEW_PASSWORD }, {
+      headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8',
+    })
+    releaseLogin()
+
+    await assert.rejects(
+      staleLogin,
+      (error: Error & { code?: string }) => error.code === 'invalid_credentials',
+      'an old password verdict must never mint a cookie using the new jwt-secret',
+    )
+    assert.ok((await auth.login!({ password: NEW_PASSWORD }, {
+      headers: {}, socketAddr: '203.0.113.8',
+    })).setCookie)
+  } finally { cleanup() }
+})
+
+test('a generated token published before fsync failure is returned once and fences old proofs', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
+    const login = await auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8' })
+    const cookie = login.setCookie!.split(';', 1)[0]
+    const principal = await auth.verify({ headers: { cookie }, socketAddr: '203.0.113.8' })
+    assert.ok(principal !== null)
+    const staleProof = auth.captureChangeProof!(principal)
+    assert.ok(staleProof !== null)
+
+    const originalSetTokenHash = store.setTokenHash.bind(store)
+    store.setTokenHash = (hash, source) => {
+      originalSetTokenHash(hash, source)
+      throw Object.assign(new Error('injected parent fsync failure'), { code: 'EIO' })
+    }
+    const beforeGeneration = auth.generation
+    const result = await auth.changeToken!({ currentPassword: PASSWORD }, {
+      headers: { cookie }, socketAddr: '203.0.113.8',
+    }, staleProof ?? undefined)
+
+    assert.equal(auth.generation, (beforeGeneration ?? 0) + 1)
+    assert.equal(result.durability, 'unknown')
+    assert.ok(typeof result.token === 'string' && result.token.length >= 32)
+    assert.equal((await auth.verify({
+      headers: { authorization: `Bearer ${result.token}` }, socketAddr: '203.0.113.8',
+    }))?.kind, 'token', 'the presence cache follows the token already published on disk')
+    store.setTokenHash = originalSetTokenHash
+    await assert.rejects(
+      () => auth.changeToken!({ newToken: 'another-post-publish-token-0123456789abcdef', currentPassword: PASSWORD }, {
+        headers: { cookie }, socketAddr: '203.0.113.8',
+      }, staleProof ?? undefined),
+      (error: Error & { code?: string }) => error.code === 'invalid_credentials',
+      'a proof captured before an uncertain commit is never reusable',
+    )
+  } finally { cleanup() }
+})
+
+test('a jwt-secret rename followed by fsync failure revokes the old cookie generation', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'password+token', password: PASSWORD, token: TOKEN }, store)
+    const login = await auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8' })
+    const cookie = login.setCookie!.split(';', 1)[0]
+    const originalRotate = store.rotateJwtSecret.bind(store)
+    store.rotateJwtSecret = () => {
+      const secret = originalRotate()
+      throw Object.assign(new Error('injected jwt parent fsync failure'), { code: 'EIO', secret })
+    }
+    const beforeGeneration = auth.generation
+    await assert.rejects(
+      () => auth.changePassword!({ newPassword: NEW_PASSWORD }, {
+        headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8',
+      }),
+      /injected jwt parent fsync failure/,
+    )
+
+    assert.equal(auth.generation, (beforeGeneration ?? 0) + 1)
+    assert.equal(await auth.verify({ headers: { cookie }, socketAddr: '203.0.113.8' }), null)
+    assert.ok((await auth.login!({ password: PASSWORD }, {
+      headers: {}, socketAddr: '203.0.113.8',
+    })).setCookie, 'the unchanged password verifier remains usable with the newly published secret')
+  } finally { cleanup() }
+})
+
+test('a password-credential rename followed by fsync failure reconciles password presence', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
+    const originalSetPassword = store.setPasswordCredential.bind(store)
+    store.setPasswordCredential = (verifier, source) => {
+      originalSetPassword(verifier, source)
+      throw Object.assign(new Error('injected password parent fsync failure'), { code: 'EIO' })
+    }
+    await assert.rejects(
+      () => auth.changePassword!({ newPassword: NEW_PASSWORD }, {
+        headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8',
+      }),
+      /injected password parent fsync failure/,
+    )
+
+    assert.equal(auth.kind, 'password+token')
+    assert.ok((await auth.login!({ password: NEW_PASSWORD }, {
+      headers: {}, socketAddr: '203.0.113.8',
+    })).setCookie, 'the password cache follows the credential already published on disk')
+  } finally { cleanup() }
+})
+
+test('credential change proofs are provider-issued and cannot cross a generation bump', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'password+token', password: PASSWORD, token: TOKEN }, store)
+    const req = { headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8' }
+    const principal = await auth.verify(req)
+    assert.ok(principal !== null)
+    const proof = auth.captureChangeProof?.(principal)
+    assert.ok(proof !== undefined && proof !== null)
+
+    await assert.rejects(
+      () => auth.changePassword!({ newPassword: NEW_PASSWORD }, req, {
+        principal: proof.principal,
+        generation: proof.generation,
+      }),
+      (error: Error & { code?: string }) => error.code === 'invalid_credentials',
+      'a lookalike object is not an issued proof capability',
+    )
+
+    await auth.changePassword!({ newPassword: NEW_PASSWORD }, req, proof)
+    await assert.rejects(
+      () => auth.changeToken!({ newToken: 'next-token-0123456789abcdef0123456789' }, req, proof),
+      (error: Error & { code?: string }) => error.code === 'invalid_credentials',
+      'a supplied stale proof fails closed instead of falling back to a fresh header verification',
+    )
+  } finally { cleanup() }
+})
+
 test('none provider always authenticates', async () => {
   const { store, cleanup } = tempStore()
   try {
@@ -150,21 +357,6 @@ test('password: login with a wrong password rejects', async () => {
   try {
     const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
     await assert.rejects(() => auth.login!({ password: 'wrong' }, { headers: {}, socketAddr: '127.0.0.1' }))
-  } finally { cleanup() }
-})
-
-test('password: revoke rotates the secret and invalidates the session', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
-    const result = await auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '127.0.0.1' })
-    const cookieValue = /dsh_gateway_session=([^;]+)/.exec(result.setCookie ?? '')?.[1]
-    assert.ok(cookieValue !== undefined)
-    const before = await auth.verify({ headers: { cookie: `dsh_gateway_session=${cookieValue}` }, socketAddr: '' })
-    assert.equal(before?.kind, 'password')
-    await auth.revoke!({ kind: 'password', id: 'user', issuedAt: Date.now() })
-    const after = await auth.verify({ headers: { cookie: `dsh_gateway_session=${cookieValue}` }, socketAddr: '' })
-    assert.equal(after, null)
   } finally { cleanup() }
 })
 
@@ -551,6 +743,31 @@ test('changeToken: a new token works, the old token dies, and the plaintext is r
     assert.deepEqual(result, { changed: true, kind: 'token', source: 'runtime', token: newToken })
     assert.equal((await auth.verify({ headers: { authorization: `Bearer ${newToken}` }, socketAddr: '203.0.113.8' }))?.kind, 'token')
     assert.equal(await auth.verify({ headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8' }), null)
+  } finally { cleanup() }
+})
+
+test('changeToken returns the committed one-time token without re-reading the unrelated password state', async () => {
+  const { store, cleanup } = tempStore()
+  try {
+    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
+    // Model an unrelated password-credential read failure that begins only
+    // after provider initialization. The token verifier/write path is healthy.
+    // A post-commit cache refresh used to throw here after the new hash and
+    // generation were already committed, losing the only plaintext response.
+    store.getPasswordCredential = () => { throw new Error('injected password read failure') }
+    const newToken = 'committed-token-0123456789abcdef0123456789'
+    const result = await auth.changeToken!({ newToken }, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+      socketAddr: '203.0.113.8',
+    })
+
+    assert.deepEqual(result, { changed: true, kind: 'token', source: 'runtime', token: newToken })
+    assert.equal((await auth.verify({
+      headers: { authorization: `Bearer ${newToken}` }, socketAddr: '203.0.113.8',
+    }))?.kind, 'token', 'the deterministic token-presence cache follows the committed write')
+    assert.equal(await auth.verify({
+      headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8',
+    }), null)
   } finally { cleanup() }
 })
 

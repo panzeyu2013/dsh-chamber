@@ -33,7 +33,39 @@ export interface GatewayRuntimeApiDeps {
   sleepMs?: (ms: number) => Promise<void>
   pollIntervalMs?: number
   timeoutMs?: number
+  signal?: AbortSignal
 }
+
+/** Instance-scoped request owners used by the gateway runtime section. Kept
+ * structural (rather than React-specific) so instance-switch cancellation is
+ * covered by the pure node test harness. */
+export interface RemoteRuntimeActivityOwners {
+  actionController: { current: AbortController | null }
+  actionInFlight: { current: boolean }
+  registryController: { current: AbortController | null }
+  registryInFlight: { current: boolean }
+}
+
+export function resetRemoteRuntimeActivityOwners(owners: RemoteRuntimeActivityOwners): {
+  actionBusy: false
+  registryBusy: false
+} {
+  owners.actionController.current?.abort()
+  owners.actionController.current = null
+  owners.actionInFlight.current = false
+  owners.registryController.current?.abort()
+  owners.registryController.current = null
+  owners.registryInFlight.current = false
+  return { actionBusy: false, registryBusy: false }
+}
+
+/** The two production callers have deliberately different terminal contracts:
+ * `select` only waits for the asynchronous install job, while `apply-now`
+ * must also observe the post-activation host recovery verdict from design 18
+ * addendum §5.2. Keeping the expectation explicit prevents persistent
+ * diagnostic history (`failure`) from turning an unrelated select into a
+ * false failure. */
+export type RemoteRuntimeSettleExpectation = 'select' | 'apply-now'
 
 export type RemoteRuntimePhase =
   | 'installing'
@@ -225,9 +257,10 @@ function parseProgress(value: unknown): RemoteRuntimeProgress | null {
   }
 }
 
-/** Enum field with a version-skew pass-through: an unknown value from a newer
- *  gateway is returned as-is (the status view treats unknown phases as idle)
- *  instead of failing the whole section. */
+/** Parse a safety-relevant status enum. Missing fields retain their explicit
+ * backward-compatible fallback, but a newer unknown value fails closed: an
+ * old client must not turn an unrecognised busy/recovery/source state into
+ * idle and enable mutations. */
 function enumOr<T extends string>(
   row: Record<string, unknown>,
   key: string,
@@ -238,9 +271,9 @@ function enumOr<T extends string>(
   const value = row[key]
   if (value === null || value === undefined) return fallback
   if (typeof value !== 'string') throw new Error(`Gateway returned malformed ${label}.${key}`)
-  // `allowed` is documented for the reader; unknown values pass through so a
-  // newer gateway's enum additions never fail the whole section.
-  void allowed
+  if (!allowed.includes(value as T)) {
+    throw new Error(`Gateway returned unsupported ${label}.${key}: ${value}`)
+  }
   return value as T
 }
 
@@ -375,7 +408,7 @@ function rejectionError(status: number, body: unknown): RemoteRuntimeApiError {
 async function request(
   fetchImpl: typeof fetch,
   url: string,
-  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown },
+  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; signal?: AbortSignal },
 ): Promise<{ status: number; body: unknown }> {
   let response: Response
   try {
@@ -388,6 +421,7 @@ async function request(
       ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
       cache: 'no-store',
       credentials: 'same-origin',
+      ...(init.signal !== undefined ? { signal: init.signal } : {}),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -411,12 +445,12 @@ function runtimePath(chamberInstanceId: string, suffix: string): string {
 
 export async function fetchRemoteRuntimeStatus(
   chamberInstanceId: string,
-  deps: { fetchImpl?: typeof fetch } = {},
+  deps: { fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<RemoteRuntimeStatus> {
   const { status, body } = await request(
     deps.fetchImpl ?? fetch,
     runtimePath(chamberInstanceId, 'status'),
-    { method: 'GET' },
+    { method: 'GET', ...(deps.signal !== undefined ? { signal: deps.signal } : {}) },
   )
   if (status === 200) return parseRemoteRuntimeStatus(body)
   throw classifiedError(status, body, 'runtime status')
@@ -424,12 +458,12 @@ export async function fetchRemoteRuntimeStatus(
 
 export async function fetchRemoteRuntimeVersions(
   chamberInstanceId: string,
-  deps: { fetchImpl?: typeof fetch } = {},
+  deps: { fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<RemoteVersions> {
   const { status, body } = await request(
     deps.fetchImpl ?? fetch,
     runtimePath(chamberInstanceId, 'versions'),
-    { method: 'GET' },
+    { method: 'GET', ...(deps.signal !== undefined ? { signal: deps.signal } : {}) },
   )
   if (status === 200) return parseRemoteVersions(body)
   throw classifiedError(status, body, 'runtime versions')
@@ -464,7 +498,7 @@ function actionSuffix(action: RemoteRuntimeAction): string {
 export async function remoteRuntimeAction(
   chamberInstanceId: string,
   action: RemoteRuntimeAction,
-  deps: { fetchImpl?: typeof fetch } = {},
+  deps: { fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<RemoteRuntimeActionResult> {
   const body = action.kind === 'select' || action.kind === 'rollback'
     ? { version: action.version }
@@ -472,7 +506,7 @@ export async function remoteRuntimeAction(
   const { status, body: payload } = await request(
     deps.fetchImpl ?? fetch,
     runtimePath(chamberInstanceId, actionSuffix(action)),
-    { method: 'POST', ...(body !== undefined ? { body } : {}) },
+    { method: 'POST', ...(body !== undefined ? { body } : {}), ...(deps.signal !== undefined ? { signal: deps.signal } : {}) },
   )
   if (status === 200 || status === 202) return { accepted: true, status }
   if (status === 409 || status === 400) throw rejectionError(status, payload)
@@ -482,12 +516,12 @@ export async function remoteRuntimeAction(
 export async function remoteRuntimeSetRegistry(
   chamberInstanceId: string,
   origin: string,
-  deps: { fetchImpl?: typeof fetch } = {},
+  deps: { fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<{ origin: string }> {
   const { status, body } = await request(
     deps.fetchImpl ?? fetch,
     runtimePath(chamberInstanceId, 'registry'),
-    { method: 'PUT', body: { origin } },
+    { method: 'PUT', body: { origin }, ...(deps.signal !== undefined ? { signal: deps.signal } : {}) },
   )
   if (status === 200) {
     const row = record(body, 'runtime registry')
@@ -547,7 +581,14 @@ export function remoteRuntimeActionGates(
       applyNowDisabled: true,
     }
   }
-  const taskBusy = clientBusy
+  // Defense in depth for callers constructing a status object without the
+  // wire parser: unknown future enums are never interpreted as an idle,
+  // mutable state.
+  const knownPhase = (REMOTE_PHASES as readonly string[]).includes(status.phase)
+  const knownSource = status.source === null || (REMOTE_SOURCES as readonly string[]).includes(status.source)
+  const knownRestart = status.restart === null || (REMOTE_RESTART as readonly string[]).includes(status.restart)
+  const unsupported = !knownPhase || !knownSource || !knownRestart
+  const taskBusy = clientBusy || unsupported
     || status.phase === 'installing'
     || status.phase === 'applying'
     || status.restart === 'running'
@@ -578,6 +619,17 @@ const BLOCKED_PHASES: ReadonlySet<RemoteRuntimePhase> = new Set([
 ])
 
 export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRuntimeStatusView {
+  const knownPhase = (REMOTE_PHASES as readonly string[]).includes(status.phase)
+  const knownSource = status.source === null || (REMOTE_SOURCES as readonly string[]).includes(status.source)
+  const knownRestart = status.restart === null || (REMOTE_RESTART as readonly string[]).includes(status.restart)
+  if (!knownPhase || !knownSource || !knownRestart) {
+    return {
+      kind: 'blocked',
+      titleKey: 'dshRuntimeRemoteStatusBlocked',
+      params: undefined,
+      detail: 'Gateway returned an unsupported runtime status; refresh or update this client before changing runtime state.',
+    }
+  }
   // Busy outranks everything: an in-flight apply/restart is the live state even
   // when a stale failure record lingers.
   if (status.phase === 'installing' || status.phase === 'applying' || status.restart === 'running') {
@@ -623,14 +675,26 @@ export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRunt
   return { kind: 'idle', titleKey: 'dshRuntimeRemoteStatusIdle', params: undefined, detail: null }
 }
 
-/** Poll `status` after a 202 action until the job settles — phase left
- *  'installing'/'applying' AND restart left 'running' — or fails/timeouts honestly.
- *  A terminal failure (restart failed / operationError set at settle) rejects
- *  with the server's copy; a timeout rejects with an honest timeout message.
- *  Interval/timeout are parameters (defaults 2s / 11min, matching the shared
- *  installer's 10-minute deadline plus a delivery margin). */
+/** Poll `status` after a 202 action until the requested job settles.
+ *
+ * `select` preserves the install contract: once the generic busy markers have
+ * cleared, only the action's operation/restart outcome can fail the poll.
+ * Historical activation diagnostics are deliberately ignored.
+ *
+ * `apply-now` follows design 18 addendum §5.2: leaving `applying` is not by
+ * itself success because the manager closes activation quarantine before its
+ * recovery `startLocal()` finishes. Success additionally requires a live
+ * ready/degraded connection and no current operation/startup block;
+ * half/incomplete (or an unknown non-success) restore outcome is terminal
+ * failure. Historical `failure` records are diagnostics, not the outcome of
+ * this accepted action. The poll keeps waiting through the honest
+ * stopped/starting recovery window.
+ *
+ * Interval/timeout are parameters (defaults 2s / 11min, matching the shared
+ * installer's 10-minute deadline plus a delivery margin). */
 export async function pollRemoteRuntimeUntilSettled(
   chamberInstanceId: string,
+  expectation: RemoteRuntimeSettleExpectation,
   deps: GatewayRuntimeApiDeps = {},
 ): Promise<RemoteRuntimeStatus> {
   const fetchImpl = deps.fetchImpl ?? fetch
@@ -638,18 +702,77 @@ export async function pollRemoteRuntimeUntilSettled(
   const pollIntervalMs = deps.pollIntervalMs ?? REMOTE_STATUS_POLL_INTERVAL_MS
   const timeoutMs = deps.timeoutMs ?? REMOTE_STATUS_POLL_TIMEOUT_MS
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const status = await fetchRemoteRuntimeStatus(chamberInstanceId, { fetchImpl })
-    if (status.phase !== 'installing' && status.phase !== 'applying' && status.restart !== 'running') {
-      if (status.restart === 'failed') {
-        throw new RemoteRuntimeApiError(`runtime action failed: ${status.operationError ?? 'unknown runtime failure'}`, 200)
-      }
-      if (status.operationError !== null && status.operationError !== '') {
-        throw new RemoteRuntimeApiError(`runtime action failed: ${status.operationError}`, 200)
-      }
-      return status
+  const controller = new AbortController()
+  let timedOut = false
+  const timeout = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, Math.max(0, timeoutMs))
+  const cancel = (): void => controller.abort()
+  if (deps.signal?.aborted === true) cancel()
+  else deps.signal?.addEventListener('abort', cancel, { once: true })
+
+  const wait = async (): Promise<void> => {
+    if (controller.signal.aborted) {
+      throw new RemoteRuntimeApiError('runtime action polling was cancelled', null, 'aborted')
     }
-    await sleep(pollIntervalMs)
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => reject(new RemoteRuntimeApiError('runtime action polling was cancelled', null, 'aborted'))
+      controller.signal.addEventListener('abort', onAbort, { once: true })
+      const finish = (): void => {
+        controller.signal.removeEventListener('abort', onAbort)
+      }
+      void sleep(pollIntervalMs).then(
+        () => { finish(); resolve() },
+        (error) => { finish(); reject(error) },
+      )
+    })
+  }
+
+  try {
+    while (Date.now() < deadline) {
+      const status = await fetchRemoteRuntimeStatus(chamberInstanceId, { fetchImpl, signal: controller.signal })
+      if (status.phase !== 'installing' && status.phase !== 'applying' && status.restart !== 'running') {
+        if (expectation === 'apply-now') {
+          const failure = status.startupBlockedReason !== null && status.startupBlockedReason !== ''
+            ? status.startupBlockedReason
+            : status.operationError !== null && status.operationError !== ''
+              ? status.operationError
+              : status.restoreOutcome !== null
+                && status.restoreOutcome !== 'none'
+                && status.restoreOutcome !== 'complete'
+                ? `runtime restore ended with ${status.restoreOutcome}`
+                : null
+          if (failure !== null) {
+            throw new RemoteRuntimeApiError(`runtime action failed: ${failure}`, 200)
+          }
+          if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
+            await wait()
+            continue
+          }
+          return status
+        }
+        if (status.restart === 'failed') {
+          throw new RemoteRuntimeApiError(`runtime action failed: ${status.operationError ?? 'unknown runtime failure'}`, 200)
+        }
+        if (status.operationError !== null && status.operationError !== '') {
+          throw new RemoteRuntimeApiError(`runtime action failed: ${status.operationError}`, 200)
+        }
+        return status
+      }
+      await wait()
+    }
+  } catch (error) {
+    if (timedOut) {
+      throw new RemoteRuntimeApiError('runtime action accepted but the gateway did not settle in time', null)
+    }
+    if (deps.signal?.aborted === true) {
+      throw new RemoteRuntimeApiError('runtime action polling was cancelled', null, 'aborted')
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+    deps.signal?.removeEventListener('abort', cancel)
   }
   throw new RemoteRuntimeApiError('runtime action accepted but the gateway did not settle in time', null)
 }

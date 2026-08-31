@@ -43,6 +43,7 @@ import {
   remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
   remoteRuntimeStatusView,
+  resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
   type RemoteVersions,
 } from './gateway-runtime-api.ts'
@@ -153,12 +154,41 @@ function GatewayRuntimeSection({
   const [selectedRemote, setSelectedRemote] = useState<string | null>(null)
   const selectionExplicit = useRef(false)
   const [actionBusy, setActionBusy] = useState(false)
+  const actionInFlight = useRef(false)
+  const actionController = useRef<AbortController | null>(null)
+  const componentActive = useRef(true)
   const lastPhaseRef = useRef<string | null>(null)
   const [registrySelection, setRegistrySelection] = useState(NPMJS)
   const [customOrigin, setCustomOrigin] = useState('')
   const [registryEditing, setRegistryEditing] = useState(false)
   const [registryError, setRegistryError] = useState<string | null>(null)
   const [registryBusy, setRegistryBusy] = useState(false)
+  const registryInFlight = useRef(false)
+  const registryController = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    const idle = resetRemoteRuntimeActivityOwners({
+      actionController,
+      actionInFlight,
+      registryController,
+      registryInFlight,
+    })
+    componentActive.current = true
+    // Cleanup clears controller ownership before the stale promise reaches its
+    // identity-fenced finally block. Reset the visible busy flags here for the
+    // newly selected instance; the old promise must never publish into it.
+    setActionBusy(idle.actionBusy)
+    setRegistryBusy(idle.registryBusy)
+    return () => {
+      componentActive.current = false
+      resetRemoteRuntimeActivityOwners({
+        actionController,
+        actionInFlight,
+        registryController,
+        registryInFlight,
+      })
+    }
+  }, [chamberInstanceId])
 
   // Remote status poll (design 18 §9.3 mounting discipline): the section stays
   // live through dsh-down windows. A transient fetch failure keeps the last
@@ -167,9 +197,10 @@ function GatewayRuntimeSection({
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    const controller = new AbortController()
     const tick = async (): Promise<void> => {
       try {
-        const status = await fetchRemoteRuntimeStatus(chamberInstanceId)
+        const status = await fetchRemoteRuntimeStatus(chamberInstanceId, { signal: controller.signal })
         if (!cancelled) {
           if ((lastPhaseRef.current === 'installing' || lastPhaseRef.current === 'applying')
             && status.phase !== 'installing' && status.phase !== 'applying') {
@@ -180,7 +211,7 @@ function GatewayRuntimeSection({
           setStatusError(null)
         }
       } catch (error) {
-        if (!cancelled) setStatusError(errorMessage(error))
+        if (!cancelled && !controller.signal.aborted) setStatusError(errorMessage(error))
       } finally {
         if (!cancelled) timer = setTimeout(() => { void tick() }, STATUS_POLL_MS)
       }
@@ -188,6 +219,7 @@ function GatewayRuntimeSection({
     void tick()
     return () => {
       cancelled = true
+      controller.abort()
       if (timer !== undefined) clearTimeout(timer)
     }
   }, [chamberInstanceId])
@@ -196,7 +228,8 @@ function GatewayRuntimeSection({
   // (versionsEpoch bumps on an install/apply→settled transition or after select).
   useEffect(() => {
     let cancelled = false
-    fetchRemoteRuntimeVersions(chamberInstanceId)
+    const controller = new AbortController()
+    fetchRemoteRuntimeVersions(chamberInstanceId, { signal: controller.signal })
       .then((versions) => {
         if (!cancelled) {
           setRemoteVersions(versions)
@@ -204,9 +237,9 @@ function GatewayRuntimeSection({
         }
       })
       .catch((error) => {
-        if (!cancelled) setVersionsError(errorMessage(error))
+        if (!cancelled && !controller.signal.aborted) setVersionsError(errorMessage(error))
       })
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
   }, [chamberInstanceId, versionsEpoch])
 
   // Descending semver order (newest first); entries that do not parse as
@@ -254,32 +287,44 @@ function GatewayRuntimeSection({
   const retryApplyDisabled = remoteGates.retryApplyDisabled
   const retryRestoreDisabled = remoteGates.retryRestoreDisabled
 
-  const runRemoteAction = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
+  const runRemoteAction = useCallback(async (task: (signal: AbortSignal) => Promise<unknown>): Promise<void> => {
+    // React state is not a synchronous mutex: two clicks in the same render
+    // can both observe actionBusy=false. Fence before the first await and keep
+    // one abort owner for instance switches/unmount.
+    if (actionInFlight.current) return
+    actionInFlight.current = true
+    const controller = new AbortController()
+    actionController.current = controller
     setActionBusy(true)
     setActionError(null)
     try {
-      await task()
+      await task(controller.signal)
     } catch (error) {
-      setActionError(errorMessage(error))
+      if (!controller.signal.aborted && componentActive.current) setActionError(errorMessage(error))
     } finally {
-      setActionBusy(false)
+      if (actionController.current === controller) {
+        actionController.current = null
+        actionInFlight.current = false
+        if (componentActive.current) setActionBusy(false)
+      }
     }
   }, [setActionError])
 
   const onApplySelected = useCallback(() => {
     if (chosenRemote === null || isActiveRemote || mutationDisabled) return
-    void runRemoteAction(async () => {
+    void runRemoteAction(async (signal) => {
       // select = async install job (202, progress via status).phase; after it
       // settles, apply() arms the next-startup switch — the gateway analog of
       // the local branch's「更新到 vY」install→pending flow (design 18 §3.6
       // 项 3 + §9.3 route table: select records the choice WITHOUT pending,
       // apply is the separate action that arms it).
-      const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'select', version: chosenRemote })
+      const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'select', version: chosenRemote }, { signal })
       if (result.status === 202) {
-        await pollRemoteRuntimeUntilSettled(chamberInstanceId)
+        const status = await pollRemoteRuntimeUntilSettled(chamberInstanceId, 'select', { signal })
+        if (!signal.aborted) setRemoteStatus(status)
       }
       if (chosenRemote !== remoteActive) {
-        await remoteRuntimeAction(chamberInstanceId, { kind: 'apply' })
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'apply' }, { signal })
       }
       // The install may have added a cached tree — refresh the selector.
       setVersionsEpoch((epoch) => epoch + 1)
@@ -288,32 +333,32 @@ function GatewayRuntimeSection({
 
   const onRollback = useCallback(() => {
     if (chosenRemote === null || isActiveRemote || mutationDisabled) return
-    void runRemoteAction(async () => {
+    void runRemoteAction(async (signal) => {
       // rollback arms the pending switch itself (pre-rollback stash + snapshot
       // semantics, design 18 §3.7/§9.3); the switch lands on the next gateway
       // restart.
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'rollback', version: chosenRemote })
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'rollback', version: chosenRemote }, { signal })
     })
   }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationDisabled, runRemoteAction])
 
   const onRestoreBuiltin = useCallback(() => {
     if (restoreBuiltinDisabled) return
-    void runRemoteAction(async () => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-builtin' })
+    void runRemoteAction(async (signal) => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-builtin' }, { signal })
     })
   }, [chamberInstanceId, restoreBuiltinDisabled, runRemoteAction])
 
   const onRetryApply = useCallback(() => {
     if (retryApplyDisabled) return
-    void runRemoteAction(async () => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-apply' })
+    void runRemoteAction(async (signal) => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-apply' }, { signal })
     })
   }, [chamberInstanceId, retryApplyDisabled, runRemoteAction])
 
   const onRetryRestore = useCallback(() => {
     if (retryRestoreDisabled) return
-    void runRemoteAction(async () => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-restore' })
+    void runRemoteAction(async (signal) => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-restore' }, { signal })
     })
   }, [chamberInstanceId, retryRestoreDisabled, runRemoteAction])
 
@@ -327,10 +372,11 @@ function GatewayRuntimeSection({
     if (remoteStatus === null || target === null || remoteGates.applyNowDisabled) return
     const message = `${t('dshRuntimeApplyNowConfirmTitle', { version: target })}\n\n${t('dshRuntimeApplyNowConfirmBody', { version: target })}`
     if (!window.confirm(message)) return
-    void runRemoteAction(async () => {
-      const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'apply-now' })
+    void runRemoteAction(async (signal) => {
+      const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'apply-now' }, { signal })
       if (result.status === 202) {
-        await pollRemoteRuntimeUntilSettled(chamberInstanceId)
+        const status = await pollRemoteRuntimeUntilSettled(chamberInstanceId, 'apply-now', { signal })
+        if (!signal.aborted) setRemoteStatus(status)
       }
       // The applied version may have changed the cached-tree list.
       setVersionsEpoch((epoch) => epoch + 1)
@@ -348,15 +394,23 @@ function GatewayRuntimeSection({
   }, [registryMode, registryOrigin])
 
   const onApplyRegistry = useCallback(async (origin: string): Promise<void> => {
+    if (registryInFlight.current) return
+    registryInFlight.current = true
+    const controller = new AbortController()
+    registryController.current = controller
     setRegistryBusy(true)
     setRegistryError(null)
     try {
-      await remoteRuntimeSetRegistry(chamberInstanceId, origin)
-      setRegistryEditing(false)
+      await remoteRuntimeSetRegistry(chamberInstanceId, origin, { signal: controller.signal })
+      if (!controller.signal.aborted && componentActive.current) setRegistryEditing(false)
     } catch (error) {
-      setRegistryError(errorMessage(error))
+      if (!controller.signal.aborted && componentActive.current) setRegistryError(errorMessage(error))
     } finally {
-      setRegistryBusy(false)
+      if (registryController.current === controller) {
+        registryController.current = null
+        registryInFlight.current = false
+        if (componentActive.current) setRegistryBusy(false)
+      }
     }
   }, [chamberInstanceId])
 

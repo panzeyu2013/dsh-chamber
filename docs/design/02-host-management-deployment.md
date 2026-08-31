@@ -95,8 +95,9 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
 每次重试必须同时更新 --port 与 --trusted-host（两者恒一致：127.0.0.1:<P>）
 ```
 
-- 与 v2 的"port 0 随机 + stdout 读端口"相比，固定端口的代价是占用冲突，
-  收益是确定性（`dshPort` 进 catalog、systemd/防火墙/隧道无需动态发现）。
+- 与 v2 的"port 0 随机 + stdout 读端口"相比，固定起点 + P+1 有界退让的代价是
+  占用冲突，收益是可预测范围（实际 `dshPort` 进入 pid ledger 与 live PlaneHandle
+  投影；不写 catalog），便于防火墙/隧道诊断。
 - **TOCTOU 说明**：spawn 前不做 `net.listen(0)` 预占（释放到绑定之间仍有
   竞态）；冲突一律以"就绪探测失败 → P+1"的后验方式处理，语义确定。
 - 就绪判定里"TCP 通但 describe 失败"正是端口被占的判据（§3.2）。
@@ -132,8 +133,12 @@ dsh 自身 wire / vendor 源码为权威），
 
 ### 2.5 instance-id 仲裁（多控制面实例并存）
 
-- 控制面首次运行在状态目录生成 `instance-id`（UUID）并持久化；所有 pid
-  记录携带 `ownerInstanceId`——多实例并存时的可读诊断基础。
+- 控制面首次运行以 no-follow `O_EXCL` 在状态目录生成 `instance-id`（规范 UUID、
+  `0600`），完整写入后依次 fsync 文件与父目录才返回；读取固定为小体积有界、
+  single-link 普通文件 + UUID 校验。并发首启中，loser 只对 winner 已公开但尚未写完的
+  空/部分 UUID 做有界重读，完整长度的非法值立即 fail-loud。控制面在构造 local
+  connection 时捕获这个稳定身份，所有后续 pid 记录直接携带同一
+  `ownerInstanceId`——不在 spawn 后重新 best-effort 读取可被替换的路径。
 - **各自 spawn 互不干扰**：每个实例从自己的起始端口（缺省同一起始端口，
   可配置偏移）拉起 → 固定端口 + P+1 重试天然错开；记录文件按 pid 隔离。
 - **reaper 不杀活人**：owner 仍存活（`process.kill(pid, 0)` 成功）的条目
@@ -238,8 +243,8 @@ starting ──① TCP connect 127.0.0.1:P（250ms 间隔轮询，总窗口 90s 
 ready
 ```
 
-- 就绪成功：`dshPort = P` 写入进程记录，并投影到 catalog 连接行
-  （status `ready`，03 §2.1）。
+- 就绪成功：`dshPort = P` 写入进程记录，并仅从当前 PlaneHandle 投影到 REST/SSE
+  （status `ready`，03 §2.1）；不把运行态写回共享 catalog。
 - 就绪失败（超时 / 进程退出 / 重试耗尽）：显式启动失败，附完整启动输出与
   `--dump-config` 建议（`dsh --profile web --dump-config` 检查组合树）。
 - `host.describe` 响应（version / cwd / attachedSessions …）仅用于就绪与
@@ -356,7 +361,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 5. 健康失败计数 N 清零（注意：与 restart 背压窗口 M 不同——design 18
    §9.3(5) 的 M 对每次重启（含成功）计数）；失败 → 指数退避（1s→60s，jitter）
 6. 窗口内（10min）重启次数 ≥ M（5）→ restart-exhausted：停止自动重启，
-   状态对 surface 暴露（catalog status），等待人工介入（POST /api/connections
+   状态由 live surface 暴露（不落 catalog），等待人工介入（POST /api/connections
    幂等启动或桌面设置页操作）；绝不无限重启循环
 7. **迟到的健康判定（2026 audit H2，契约）**：stop()/start() abort 在途健康
    探针（`generationSignal`）并等待其落定；任何在 `stopped`/`error` 态或
@@ -400,7 +405,10 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
   达到任一高水位即丢弃**最新**诊断条目（原控制面 logger 已持有该行），绝不
   反向暂停或阻塞宿主 pipe；未跨行数 cap 的批次只 append，跨 cap 的批次直接
   原子替换为尾部 ring（不先 append 再整文件重写）；`flush/close` 可等待调用前
-  已接纳条目落定；
+  已接纳条目落定。append 绑定 no-follow `O_APPEND` active inode，首次创建
+  O_EXCL 0600，完整写 + file fsync；compaction 使用随机同目录 O_EXCL temp、
+  identity 复验、rename + parent fsync。active leaf 被删/换即切新 generation 并
+  丢弃旧 ring，绝不穿越 symlink/硬链接或复活被移除 backing；
 - 读取面：`GET /api/host/logs`（04 §3.3，local-only）——桌面
   chamber-settings 插件展示"本地实例日志"；远程实例日志经
   `desktop_ssh_logs` IPC（03 §2.2）；

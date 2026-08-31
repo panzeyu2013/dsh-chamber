@@ -23,7 +23,18 @@ import type { TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import {
   hostLogs, readLogTail, logPathFor, createHostLogWriter,
   DEFAULT_LIMIT, MAX_LIMIT, MAX_LOG_LINES, MAX_PENDING_LOG_BYTES, MAX_PENDING_LOG_ENTRIES,
@@ -125,6 +136,26 @@ test('plain-text lines pass through with null metadata; \\r stripped', async t =
   const result = await readManagedLog(port)
   assert.deepEqual(result.lines[0], { ts: 't1', stream: 'stdout', line: 'json ok' })
   assert.deepEqual(result.lines[1], { ts: null, stream: null, line: 'plain text' })
+})
+
+test('read and diagnostics reject an active-log symlink without reading its victim', async t => {
+  if (process.platform === 'win32') t.skip('creating symlinks is privilege-dependent on Windows')
+  const stateDir = tempDir(t)
+  makeLogs(stateDir)
+  const port = 17521
+  const path = logPathFor(stateDir, port)
+  const victim = join(stateDir, 'read-victim')
+  writeFileSync(victim, 'TOP SECRET VICTIM\n', { mode: 0o640 })
+  const beforeMode = statSync(victim).mode & 0o777
+  symlinkSync(victim, path)
+  writePidRecord(stateDir, 4251, port, process.pid)
+
+  const logs = hostLogs({ stateDir, logger: silentLogger })
+  await assert.rejects(() => logs.readManagedLog(port), /single-link regular file/)
+  const diagnostics = await logs.listDiagnostics()
+  assert.equal(diagnostics.managed[0]?.logFile.exists, false)
+  assert.equal(readFileSync(victim, 'utf8'), 'TOP SECRET VICTIM\n')
+  assert.equal(statSync(victim).mode & 0o777, beforeMode)
 })
 
 /* ------------------------------------------------------------------ *
@@ -276,6 +307,15 @@ test('corrupt spawn records are skipped; a valid one resolves', async t => {
   makeLogs(stateDir)
   mkdirSync(join(stateDir, 'managed-dsh'), { recursive: true })
   writeFileSync(join(stateDir, 'managed-dsh', '999999.json'), 'not json at all')
+  writeFileSync(join(stateDir, 'managed-dsh', '999998.json'), JSON.stringify({
+    pid: 999998,
+    ownerPid: process.pid,
+    port: '../../read-victim',
+    binary: '/tmp/dsh',
+    profile: 'web',
+    source: 'spawn',
+    startedAt: '9999-01-01T00:00:00.000Z',
+  }))
   writePidRecord(stateDir, 4248, 17518, process.pid)
   writeJsonlLines(logPathFor(stateDir, 17518), 2)
 
@@ -304,8 +344,8 @@ test('listDiagnostics: lastSpawn is the newest record, logFile facts attached', 
   const stateDir = tempDir(t)
   makeLogs(stateDir)
   mkdirSync(join(stateDir, 'managed-dsh'), { recursive: true })
-  const older = { pid: 1001, ownerPid: 55, port: 17520, binary: 'dsh', profile: 'dsh-control', source: 'spawn', startedAt: '2026-08-13T07:00:00.000Z' }
-  const newer = { pid: 1002, ownerPid: 55, port: 17521, binary: 'dsh', profile: 'dsh-control', source: 'spawn', startedAt: '2026-08-14T07:00:00.000Z', ownerInstanceId: 'abc-123' }
+  const older = { pid: 1001, ownerPid: 55, port: 17520, binary: 'dsh', profile: 'web', source: 'spawn', startedAt: '2026-08-13T07:00:00.000Z' }
+  const newer = { pid: 1002, ownerPid: 55, port: 17521, binary: 'dsh', profile: 'web', source: 'spawn', startedAt: '2026-08-14T07:00:00.000Z', ownerInstanceId: 'abc-123' }
   writeFileSync(join(stateDir, 'managed-dsh', '1001.json'), `${JSON.stringify(older)}\n`)
   writeFileSync(join(stateDir, 'managed-dsh', '1002.json'), `${JSON.stringify(newer)}\n`)
   writeFileSync(join(stateDir, 'managed-dsh', 'claim-4097.json'), JSON.stringify({ port: 4097, kind: 'external' }))
@@ -382,6 +422,53 @@ test('writer→reader round-trip: ts is a non-null ISO string, lines/stream pres
   }
 })
 
+test('writer: an active-log symlink is rejected without changing its victim content or mode', async t => {
+  if (process.platform === 'win32') t.skip('creating symlinks is privilege-dependent on Windows')
+  const stateDir = tempDir(t)
+  const port = 17785
+  makeLogs(stateDir)
+  const victim = join(stateDir, 'active-victim.txt')
+  writeFileSync(victim, 'active victim must stay unchanged\n')
+  chmodSync(victim, 0o640)
+  const beforeMode = statSync(victim).mode & 0o777
+  const path = logPathFor(stateDir, port)
+  symlinkSync(victim, path)
+
+  const writer = createHostLogWriter(stateDir, port)
+  assert.equal(writer.write('must be dropped', 'stderr'), true)
+  await writer.close()
+
+  assert.equal(readFileSync(victim, 'utf8'), 'active victim must stay unchanged\n')
+  assert.equal(statSync(victim).mode & 0o777, beforeMode)
+  assert.equal(lstatSync(path).isSymbolicLink(), true, 'unsafe evidence is preserved')
+})
+
+test('writer: a pre-planted fixed compaction-temp symlink is ignored and its victim stays unchanged', async t => {
+  if (process.platform === 'win32') t.skip('creating symlinks is privilege-dependent on Windows')
+  const stateDir = tempDir(t)
+  const port = 17786
+  makeLogs(stateDir)
+  const path = logPathFor(stateDir, port)
+  writeJsonlLines(path, MAX_LOG_LINES, { prefix: 'before compact' })
+  const victim = join(stateDir, 'compact-victim.txt')
+  writeFileSync(victim, 'compact victim must stay unchanged\n')
+  chmodSync(victim, 0o640)
+  const beforeMode = statSync(victim).mode & 0o777
+  const plantedTemp = `${path}.compact.tmp`
+  symlinkSync(victim, plantedTemp)
+
+  const writer = createHostLogWriter(stateDir, port)
+  assert.equal(writer.write('after compact', 'stdout'), true)
+  await writer.close()
+
+  assert.equal(readFileSync(victim, 'utf8'), 'compact victim must stay unchanged\n')
+  assert.equal(statSync(victim).mode & 0o777, beforeMode)
+  assert.equal(lstatSync(plantedTemp).isSymbolicLink(), true, 'predictable attacker artifact is untouched')
+  const result = await hostLogs({ stateDir, logger: silentLogger }).readManagedLog(port, { limit: MAX_LOG_LINES })
+  assert.ok(result.lines.length <= MAX_LOG_LINES)
+  assert.equal(result.lines[result.lines.length - 1].line, 'after compact')
+})
+
 test('writer: a write landing on a removed dir is swallowed, not an uncaughtException; the next write recreates', async t => {
   const stateDir = tempDir(t)
   const port = 17779
@@ -427,9 +514,9 @@ test('writer: a removed backing file near the compaction threshold never resurre
   await writer.flush()
 
   // Lose the entire backing generation. The next write fails; the following
-  // write recreates the directory/file. The pre-fix writer retained its old
+  // write recreates the file. The pre-fix writer retained its old
   // ring and immediately compacted it over the new file, reviving 400 lines.
-  rmSync(join(stateDir, 'host-logs'), { recursive: true, force: true })
+  rmSync(logPathFor(stateDir, port))
   assert.equal(writer.write('lost while absent', 'stderr'), true)
   await writer.flush()
   assert.equal(writer.write('new generation', 'stdout'), true)

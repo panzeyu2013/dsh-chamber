@@ -5,12 +5,12 @@
  * local dsh instance — exactly one connection row with connectionId 'local'
  * (design 03 §2.1). Persisted at <stateDir>/catalog.json on top of
  * json-store.ts — the storage protocol from design 04 §6 / 03 §2.1:
- * synchronous write-through mutations, backup-first atomic writes (.bak →
- * .tmp+fsync → rename), a monotonic revision, an explicit recovery state, and
+ * synchronous write-through mutations, backup-first atomic writes (random
+ * O_EXCL temp + fsync + rename for .bak, then main), a monotonic revision, an explicit recovery state, and
  * "corrupt is never a fake-empty". (The store-level If-Match/409 protocol —
  * json-store mutateIfMatch — is no longer surfaced through the catalog row
- * APIs; the catalog mutates unconditionally, revision-protected by the
- * store's serialized write-through transactions.) A schemaVersion-less file
+ * APIs; the catalog mutates unconditionally, serialized only within this
+ * store instance.) A schemaVersion-less file
  * is treated as v1 and migrated in place to v2 at load, with the original v1
  * document preserved as the .bak (the backup-first protocol handles the
  * ordering).
@@ -19,18 +19,15 @@
  * frontend runtime owns session business and the desktop main process owns
  * the remote-instance registry. Rows whose kind is not 'local' are dropped
  * and counted at load (thin-shell era ssh rows never silently kept).
- * User-editable fields (label/accentColor) persist in the row; status and
- * dshPort are runtime projections written by the host-management layer
- * (03 §2.1: runtime facts are never authoritative in the file).
+ * Only user-editable fields (label/accentColor) persist in the row.
+ * status/dshPort/error are PlaneHandle runtime projections and never enter
+ * this document (03 §2.1). Legacy copies of those fields are ignored on load
+ * and disappear on the next durable catalog write.
  *
  * All row APIs stay synchronous and write-through: they return only after the
  * atomic disk commit succeeds; failure rolls the in-memory document back and
- * throws to the lifecycle/API caller. EXCEPTION (2026 audit M13): the runtime
- * projections status/dshPort/error are written by the host-management layer
- * BEST-EFFORT — local-connection setState catches a persist failure, logs it
- * loud and advances the in-memory machine regardless (runtime facts are
- * projections, never authoritative; the next transition re-attempts the
- * write). User-editable fields (label/accentColor) keep strict write-through.
+ * throws to the API caller. Runtime lifecycle transitions do not touch the
+ * catalog, so they cannot advance its revision or overwrite shared metadata.
  */
 
 import { join } from 'node:path'
@@ -53,20 +50,20 @@ export const CATALOG_BACKUP_FILE = 'catalog.json.bak'
 export const CATALOG_SCHEMA_VERSION = 2
 
 /**
- * One persisted connection row. The wire contract (03 §2.1): the fixed row
- * 'local' with user-editable label/accentColor and the runtime projections
- * status/dshPort/error. The row carries a permissive index signature so the
- * host-management layer can attach operational fields.
+ * One persisted connection row. The wire response adds live runtime fields
+ * separately; this type intentionally contains only durable catalog fields.
  */
 export interface CatalogConnectionRow {
   connectionId: string
   kind: string
-  status?: string
   label?: string
   accentColor?: string
-  dshPort?: number | null
-  error?: string
-  [key: string]: unknown
+}
+
+/** The only caller-editable durable fields (design 03 §2.1.1). */
+export interface CatalogEditableFields {
+  label?: string
+  accentColor?: string
 }
 
 /** The persisted catalog document (v2). */
@@ -102,7 +99,7 @@ export interface Catalog {
   upsertConnection(row: CatalogConnectionRow): CatalogConnectionRow
   updateConnectionFields(
     connectionId: string,
-    fields: Record<string, unknown>,
+    fields: CatalogEditableFields,
   ): UpdateConnectionFieldsResult
 }
 
@@ -129,6 +126,18 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isNonNegativeInteger(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+/** Canonical durable row. Runtime projections and legacy extension fields are
+ * deliberately omitted rather than copied into the JSON document. */
+function persistedConnectionRow(row: Record<string, unknown>): CatalogConnectionRow {
+  const persisted: CatalogConnectionRow = {
+    connectionId: row.connectionId as string,
+    kind: row.kind as string,
+  }
+  if (isNonEmptyString(row.label)) persisted.label = row.label
+  if (typeof row.accentColor === 'string') persisted.accentColor = row.accentColor
+  return persisted
 }
 
 /**
@@ -183,8 +192,10 @@ function validateAndMigrate(raw: RawCatalogDocument): JsonStoreValidateResult {
  * Entry-level validation with dropped counting. Invalid rows are dropped and
  * counted; the counters surface through the store's recovery state. Rows
  * whose kind is not 'local' are dropped (v4: the catalog never holds remote
- * instances). The legacy `projects` array is stripped — v4 has no project
- * table and the dsh frontend runtime owns session business.
+ * instances). Valid rows are narrowed to durable metadata, stripping legacy
+ * status/dshPort/error projections. The legacy `projects` array is stripped
+ * — v4 has no project table and the dsh frontend runtime owns session
+ * business.
  */
 function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
   const dropped: JsonStoreDroppedCounts = { connections: 0, projects: 0 }
@@ -200,7 +211,7 @@ function validateEntries(doc: RawCatalogDocument): CatalogValidateResult {
       continue
     }
     seenConnectionIds.add(row.connectionId)
-    connections.push(row)
+    connections.push(persistedConnectionRow(row))
   }
   const next: CatalogDocument = { ...doc, connections }
   delete next.projects
@@ -253,7 +264,7 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
    * the write-through transaction commits.
    */
   function upsertConnection(row: CatalogConnectionRow): CatalogConnectionRow {
-    const replacement = structuredClone(row)
+    const replacement = persistedConnectionRow(row as unknown as Record<string, unknown>)
     mutateDoc(doc => {
       const index = doc.connections.findIndex(candidate => candidate.connectionId === row.connectionId)
       const connections = [...doc.connections]
@@ -273,12 +284,19 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
    */
   function updateConnectionFields(
     connectionId: string,
-    fields: Record<string, unknown>,
+    fields: CatalogEditableFields,
   ): UpdateConnectionFieldsResult {
     if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) {
       const error = new Error('updateConnectionFields: fields must be an object') as Error & { code: string }
       error.code = 'catalog_invalid_input'
       throw error
+    }
+    for (const key of Object.keys(fields)) {
+      if (key !== 'label' && key !== 'accentColor') {
+        const error = new Error(`updateConnectionFields: unsupported persisted field ${key}`) as Error & { code: string }
+        error.code = 'catalog_invalid_input'
+        throw error
+      }
     }
     if (getConnection(connectionId) === null) return null
     let changed = false
@@ -286,7 +304,8 @@ export function createCatalog({ stateDir, logger }: CatalogOptions): Catalog {
       const index = doc.connections.findIndex(candidate => candidate.connectionId === connectionId)
       if (index === -1) return { next: doc, changed: false }
       const target = { ...doc.connections[index] }
-      for (const [key, value] of Object.entries(fields)) {
+      for (const key of Object.keys(fields) as Array<keyof CatalogEditableFields>) {
+        const value = fields[key]
         if (value === undefined) {
           if (key in target) {
             delete target[key]

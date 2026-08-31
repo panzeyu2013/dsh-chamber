@@ -41,7 +41,9 @@
   钥匙串尚未实现；现行 SSH 密码镜像仍是 endpoint-bound 0600 明文文件。
 - **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径仍未形成与 Unix
   等价的运行时契约；dsh-runtime mutation 与 SSH askpass 密码认证保持只读/
-  禁用门控。
+  禁用门控。Gateway owner-private 目录在 Windows 只验证 real-dir/no-follow/identity
+  并继承 OS ACL：Node 的 mode/chmod 无法诚实证明 POSIX 0700，不能把该让步写成
+  已有等价权限保障。
 - **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷类，2026-08）**：
   官方客户端 bundle 若绕过 patched connection carrier、以实例 origin 相对
   路径直接请求（读 `location.origin` 或硬编码 `/…`），在 chamber 页面（控制面
@@ -132,6 +134,8 @@
   - `/chamber/runtime` 在生产 TLS 下的 SSE/poll/auth，以及真实版本安装→探针→
     故障回退→DSH_HOME 恢复；
   - 真 Git 仓库的创建、歧义恢复、删除重试与并发 session 安全验证；
+  - Linux 真实 system/user service 与 foreground 安装升级：目标版本/新 boot identity
+    健康证明、restart 失败回滚、local/global artifact 回退及凭据/env anchor 保留；
   - `--bind 0.0.0.0` 带凭据/显式 `--no-auth`、SSH 隧道回环、tailscale 等可信
     网络形态的全链路及 401/421/403 负例。
   `session.list`→Git mutation 的 TOCTOU 目前由 realpath fail-closed、两次 live
@@ -141,10 +145,12 @@
     `/auth/credentials`、stateDir 独占锁、`gateway auth` 停机态 CLI、
     `/chamber/` 凭据面板与 S25 不变量。**全量修复轮（2026-09）已完成**：锁重写
     （O_EXCL 优先 + rename 认领 + 移动内容校验 + 还原 + 创建后所有权终验（双进程
-    无双持）、exit 监听器仅获取成功后注册、releaseLock pid 复验、start() 重取
+    无双持）、exit 监听器仅获取成功后注册、releaseLock bytes+inode 精确复验、start() 重取
     reacquire）、S25 匿名禁种与并发 remove 串行化等安全测试补齐、
     `{remove:true}`+新值互斥 400、verifier 形状校验、`gateway auth status` 无锁只读
-    与 boot 行有效 kind 的文档同步；**剩余**：desktop settings-bridge 便捷重置
+    与 boot 行有效 kind、rename 后 fsync 报错的 generation/readback/一次性 token
+    `durability:'unknown'` 语义，以及 stop/startup-rollback 对 credential/feature/runtime
+    writer 的统一 admission fence + drain（慢 body 被撤销，已入写操作持锁收敛）；**剩余**：desktop settings-bridge 便捷重置
     （Phase 4 推迟项）、真实 TLS 反代下改密/轮换/停机态 CLI 恢复的实机门禁。
 
 ## 设计未决（02 §5 / 04 §7）
@@ -155,6 +161,12 @@
   `127.0.0.1:<port>` 一致；未来引入自定义 Host 时须同步扩 trusted-host 集。
 - **多控制面 `$DSH_HOME` 冲突**：同 stateDir 共享 home 时会话 JSONL 可追加，
   settings 由 dsh 的 `settings-conflict` 仲裁；是否进一步隔离未决。
+- **多控制面 catalog metadata 无跨进程 CAS**：runtime status/dshPort/error 已完全移出
+  catalog，消除了高频 stale lifecycle 写回覆盖；但两个进程同 stateDir 并发修改
+  label/accentColor 仍是 last-writer-wins。可靠保持多 writer 需要 kernel-backed、
+  跨平台 lifetime/document lock + 锁内 reload + 字段 intent；若不引入该能力，则需正式
+  改 design 02 为“并发 plane 必须不同 stateDir”。普通 pidfile/mkdir stale lock 存在
+  三方 takeover 双持，不能作为修复。
 - **响应头白名单双处同步**：权威在 04 §4.3，仍建议把代码/文档表述进一步
   单源化。
 - **`__DSH_BOOT__` 随 dsh 版本漂移**：manifest 形状继续以 vendor

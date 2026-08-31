@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { shouldPromote, recordProbePass, noteBoot, promoteDueCandidates, removeKnownGoodCandidate, resetCandidateHealthWindow, knownGoodCandidatesPath, DEFAULT_HEALTH_POLICY } from '../src/known-good-monitor.ts';
@@ -156,4 +156,34 @@ test('candidate metadata is owner-only and a failed candidate can be removed', (
   removeKnownGoodCandidate(base, '0.2.0');
   const parsed = JSON.parse(readFileSync(knownGoodCandidatesPath(base), 'utf8')) as { versions: Record<string, unknown> };
   assert.deepEqual(parsed.versions, {});
+});
+
+test('candidate mutations fail closed on a symlinked authority leaf without touching its target', {
+  skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
+}, () => {
+  const base = mkdtempSync(join(tmpdir(), 'dsh-kg-'));
+  makeVersionTree(base, '0.2.0');
+  const outside = mkdtempSync(join(tmpdir(), 'dsh-kg-outside-'));
+  const target = join(outside, 'candidate-target.json');
+  const bytes = JSON.stringify({
+    versions: {
+      '0.2.0': {
+        firstProbePassAt: 1000,
+        bootCount: 1,
+        healthWindowStartedAt: 1000,
+        healthWindowResetAt: null,
+      },
+    },
+  });
+  writeFileSync(target, bytes, { mode: 0o644 });
+  chmodSync(target, 0o644);
+  const targetBefore = statSync(target);
+  const leaf = knownGoodCandidatesPath(base);
+  symlinkSync(target, leaf);
+
+  assert.throws(() => recordProbePass(base, '0.2.0', 2000), /不安全/);
+  assert.throws(() => resetCandidateHealthWindow(base, 2000), /不安全/);
+  assert.equal(lstatSync(leaf).isSymbolicLink(), true);
+  assert.deepEqual(statSync(target), targetBefore);
+  assert.equal(readFileSync(target, 'utf8'), bytes);
 });

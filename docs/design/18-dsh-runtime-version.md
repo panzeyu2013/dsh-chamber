@@ -738,11 +738,15 @@ work 目录）。权限纪律并入 design 17 §12（目录 0700、JSON/secret 0
 加载/写入复验；corrupt 元数据 → 隔离 + 响亮失败，复用 metadata-recovery
 语义）。磁盘治理随共享包带走，gateway 启动相位执行同一清理。**与 desktop 状态
 零交叉**——两个 owner 各自管理自己托管实例的运行时。**单进程不变量**：一个
-`stateDir` 同时只允许一个 gateway 进程（runtime 树/指针/快照无跨进程锁，
-与 design 02 §2.5 的控制面仲裁同理，但 dsh-runtime 目录不设仲裁器——由
-`owner.json` 以 `open(..., 'wx')` O_EXCL 排他创建守卫：并发 owner 得 EEXIST
-fail-loud、存活 pid 拒绝启动、死 pid（ESRCH）接管，关闭 read-check-write
-TOCTOU；违反部署纪律（如克隆 stateDir）仍是损坏风险）。
+`stateDir` 同时只允许一个 gateway 进程（runtime 树/指针/快照无跨进程锁）。
+`owner.json` 以 no-follow `O_EXCL` 发布 `{pid,startedAt,token}`，并对 bytes + inode
+做创建后终验；存活 pid 拒绝启动。死 pid（ESRCH）接管先把旧 owner rename 到唯一
+证据名，并校验移动内容/identity 恰是先前读取值，再 O_EXCL 创建随机新 token；任何
+替换、恢复或 durability 证明不完整都 fail-closed，release 也只按 token + inode 精确
+删除。manager dispose 先 abort 新入口并 fixed-point drain 完整 writer promise（含
+installer 后的 metadata tail、apply-now/F7/retry/restore/restart），最终停 host 后才
+删除 owner；disposed manager 的 status/registry 等入口直接拒绝，不能隔离或改写后继
+owner 的文件。违反部署纪律（如克隆 stateDir）仍是损坏风险。
 
 **解析链**（§3.5 已并入）：`DSH_GATEWAY_DSH_PATH`（env 恒最高）→ override
 （未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）。`--dsh-path` 从
@@ -780,8 +784,9 @@ const plane = createControlPlane({
 `startLocal()` spawn 候选（`canExposeLocal` 隔离）→ 全量只读探针 + ≤60s 窗口 +
 延迟裁决；通过 → 开放投影；失败 → 回退目标（切换前/最近 known-good）+ 快照
 恢复（两阶段 + 幂等补完）；快照失败 → 中止 + 可见标记（不自动每启重试）。
-无 pending 仅清理/补完。`stop()` 先回收 runtime install 子进程，再关 feature
-consumers，再停 plane。`spawnAndProbe`/`stopHost` = `plane.startLocal()`/
+无 pending 仅清理/补完。`stop()` 在等待 startupPromise 前即触发 lifecycle abort，
+随后 drain runtime writer 与 Gateway feature mutation barrier；只有两者静止并最终
+停 host/plane 后才释放 runtime owner 与外层 state lock。`spawnAndProbe`/`stopHost` = `plane.startLocal()`/
 `plane.stopLocal()`（既有 `PlaneHandle` seam）。探针清单同 §3.4 全量，共享包
 提供，gateway 零新探针。
 

@@ -52,10 +52,9 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { createConnection } from 'node:net'
 import { call, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
 import {
@@ -66,7 +65,14 @@ import {
   registerAuthCookie,
 } from './browser-auth-cookie.ts'
 import { createHostLogWriter } from './host-logs.ts'
+import {
+  atomicWritePrivateFileNoFollow,
+  ensurePrivateDirectoryNoFollow,
+  readPrivateFileNoFollow,
+  removePrivateFileNoFollow,
+} from './private-file.ts'
 import type { Logger } from './types.ts'
+import { ensureInstanceId, isValidInstanceId } from './instance-id.ts'
 
 /**
  * Default first port attempted for a managed local dsh host (the local
@@ -264,7 +270,7 @@ export interface PidRecord {
  */
 export function writePidRecord(stateDir: string, pid: number, port: number, ownerPid: number, extra: Record<string, unknown> = {}, entryPath?: string | null): void {
   const dir = join(stateDir, 'managed-dsh')
-  mkdirSync(dir, { recursive: true })
+  ensurePrivateDirectoryNoFollow(dir, 0o700)
   const binary = typeof extra.binary === 'string' && extra.binary !== '' ? extra.binary : 'dsh'
   const { binary: _binary, ...additional } = extra
   const record = {
@@ -287,18 +293,8 @@ export function writePidRecord(stateDir: string, pid: number, port: number, owne
 /** Remove the managed-dsh pid record of a child that has exited. */
 export function removePidRecord(stateDir: string, pid: number): void {
   try {
-    rmSync(join(stateDir, 'managed-dsh', `${pid}.json`))
-  } catch { /* already gone */ }
-}
-
-/** Best-effort control-plane instance id (<stateDir>/instance-id, design 02 §3.6.1). */
-function readInstanceId(stateDir: string): string | null {
-  try {
-    const value = readFileSync(join(stateDir, 'instance-id'), 'utf8').trim()
-    return value === '' ? null : value
-  } catch {
-    return null
-  }
+    removePrivateFileNoFollow(join(stateDir, 'managed-dsh', `${pid}.json`))
+  } catch { /* best effort: unsafe/unremovable evidence remains for the startup reaper */ }
 }
 
 /**
@@ -337,6 +333,7 @@ function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: str
 interface SpawnAttemptOptions {
   dshHome: string
   stateDir: string
+  ownerInstanceId: string
   dshWorkspacePath: string
   port: number
   logger: Logger
@@ -479,6 +476,7 @@ interface SpawnAttemptResult {
 async function spawnAttempt({
   dshHome,
   stateDir,
+  ownerInstanceId,
   dshWorkspacePath,
   port,
   logger,
@@ -606,13 +604,12 @@ async function spawnAttempt({
   // Unlike 'exit', 'close' fires only after both stdio pipes have closed, so
   // every data event is enqueued before the writer is retired.
   child.once('close', () => { void hostLog.close() })
-  const instanceId = readInstanceId(stateDir)
   try {
     // The entry token rides the ledger so the reaper can re-verify the live
     // process identity in BOTH layouts (installed bin.js path / dev source
     // script) — design 02 §3.4.2.
     pidRecordWriter(stateDir, pid, port, process.pid, {
-      ...(instanceId === null ? {} : { ownerInstanceId: instanceId }),
+      ownerInstanceId,
       binary: entry.binary,
     }, entry.binary)
   } catch (ledgerError) {
@@ -948,6 +945,9 @@ export async function terminateChild(child: ChildProcess, graceMs = TERMINATE_GR
 /** Options for spawnDsh. */
 export interface SpawnDshOptions {
   stateDir: string
+  /** Stable owner identity captured by createControlPlane. Direct callers may
+   * omit it; spawnDsh then safely resolves the durable stateDir identity. */
+  ownerInstanceId?: string
   dshHome: string
   dshWorkspacePath: string
   logger: Logger
@@ -982,6 +982,7 @@ export interface SpawnedHost {
  */
 export async function spawnDsh({
   stateDir,
+  ownerInstanceId,
   dshHome,
   dshWorkspacePath,
   logger,
@@ -995,6 +996,10 @@ export async function spawnDsh({
   const basePort = dshPortBase ?? BASE_DHSPORT
   if (!isDshPortBaseValid(basePort)) {
     throw new Error(`invalid dsh port base: ${String(basePort)}`)
+  }
+  const resolvedOwnerInstanceId = ownerInstanceId ?? ensureInstanceId(stateDir)
+  if (!isValidInstanceId(resolvedOwnerInstanceId)) {
+    throw new Error('spawn ownerInstanceId must be a UUID')
   }
   let lastError: unknown
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
@@ -1014,6 +1019,7 @@ export async function spawnDsh({
       const spawned = await spawnAttempt({
         dshHome,
         stateDir,
+        ownerInstanceId: resolvedOwnerInstanceId,
         dshWorkspacePath,
         port,
         logger,
@@ -1049,24 +1055,42 @@ export async function spawnDsh({
 
 /** Read a managed-dsh pid record; null when absent or corrupt. */
 export function readPidRecord(stateDir: string, pid: number): PidRecord | null {
+  if (!Number.isInteger(pid) || pid < 1) return null
   try {
-    return JSON.parse(readFileSync(join(stateDir, 'managed-dsh', `${pid}.json`), 'utf8')) as PidRecord
+    const read = readPrivateFileNoFollow(join(stateDir, 'managed-dsh', `${pid}.json`), { maxBytes: 64 * 1024 })
+    const value: unknown = JSON.parse(read.value)
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+    const row = value as Partial<PidRecord>
+    if (row.pid !== pid
+      || typeof row.ownerPid !== 'number' || !Number.isInteger(row.ownerPid) || row.ownerPid < 1
+      || typeof row.port !== 'number' || !Number.isInteger(row.port) || row.port < 1 || row.port > 65535
+      || typeof row.binary !== 'string' || row.binary === '' || row.binary.length > 4096
+      || row.profile !== 'web'
+      || typeof row.source !== 'string' || row.source === '' || row.source.length > 64
+      || typeof row.startedAt !== 'string' || row.startedAt === '' || row.startedAt.length > 128
+      || (row.entry !== undefined && (typeof row.entry !== 'string' || row.entry === '' || row.entry.length > 4096))
+      || (row.ownerInstanceId !== undefined
+        && (typeof row.ownerInstanceId !== 'string' || row.ownerInstanceId === '' || row.ownerInstanceId.length > 256))) {
+      return null
+    }
+    return {
+      pid,
+      ownerPid: row.ownerPid,
+      port: row.port,
+      binary: row.binary,
+      profile: 'web',
+      source: row.source,
+      startedAt: row.startedAt,
+      ...(row.entry === undefined ? {} : { entry: row.entry }),
+      ...(row.ownerInstanceId === undefined ? {} : { ownerInstanceId: row.ownerInstanceId }),
+    }
   } catch {
     return null
   }
 }
 
-/** Atomic JSON write (tmp + rename): catalog/pid durability without partial files. */
+/** Atomic owner-private JSON write: random O_EXCL temp + file fsync + rename
+ * + pinned parent fsync, with no-follow/identity checks throughout. */
 export function atomicWriteJson(path: string, value: unknown): void {
-  const tmp = `${path}.${randomUUID()}.tmp`
-  // fsync before the rename (2026 review): a crash between write and rename
-  // must not leave a zero-length/partial record at the final path.
-  const fd = openSync(tmp, 'w', 0o600)
-  try {
-    writeSync(fd, `${JSON.stringify(value, undefined, 2)}\n`)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-  renameSync(tmp, path)
+  atomicWritePrivateFileNoFollow(path, `${JSON.stringify(value, undefined, 2)}\n`, { mode: 0o600 })
 }

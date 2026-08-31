@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -51,6 +51,15 @@ import {
   writeOverride,
 } from '../src/dsh-runtime-store.ts';
 import type { ActivationJournal, OverrideRecord } from '../src/dsh-runtime-store.ts';
+import {
+  atomicWriteRuntimeFileNoFollow,
+  createPrivateDirectoryNoFollow,
+  createRuntimeFileExclusiveNoFollow,
+  ensurePrivateDirectoryNoFollow,
+  quarantineRuntimeFileNoFollow,
+  readPrivateFileNoFollow,
+  removeRuntimeFileNoFollow,
+} from '../src/private-fs.ts';
 
 const freshBase = (): string => mkdtempSync(path.join(tmpdir(), 'dsh-runtime-store-'));
 
@@ -101,6 +110,247 @@ function journalFixture(
     ...patch,
   };
 }
+
+test('private filesystem namespace commits fsync the pinned parent after mkdir/rename/create/unlink', () => {
+  const base = freshBase();
+  const runtimeDir = path.join(base, 'dsh-runtime');
+
+  let mkdirParentSyncs = 0;
+  createPrivateDirectoryNoFollow(runtimeDir, {
+    fsync(fd) {
+      const opened = fstatSync(fd);
+      const parent = statSync(base);
+      assert.equal(opened.isDirectory(), true);
+      assert.equal(opened.dev, parent.dev);
+      assert.equal(opened.ino, parent.ino, 'mkdir syncs the exact held parent inode');
+      assert.equal(existsSync(runtimeDir), true, 'mkdir is visible before parent fsync');
+      mkdirParentSyncs += 1;
+    },
+  });
+  assert.equal(mkdirParentSyncs, 1);
+
+  const atomicFile = path.join(runtimeDir, 'atomic.json');
+  const atomicEvents: string[] = [];
+  atomicWriteRuntimeFileNoFollow(base, atomicFile, 'atomic', {
+    fsync(fd) {
+      const opened = fstatSync(fd);
+      if (opened.isFile()) {
+        assert.equal(existsSync(atomicFile), false, 'temporary contents sync before publish');
+        atomicEvents.push('file-before-publish');
+        return;
+      }
+      assert.equal(opened.isDirectory(), true);
+      if (existsSync(atomicFile)) {
+        const parent = statSync(runtimeDir);
+        assert.equal(opened.dev, parent.dev);
+        assert.equal(opened.ino, parent.ino, 'rename syncs the exact destination parent inode');
+        atomicEvents.push('parent-after-publish');
+      } else {
+        atomicEvents.push('directory-before-publish');
+      }
+    },
+  });
+  assert.equal(readFileSync(atomicFile, 'utf8'), 'atomic');
+  assert.equal(atomicEvents.filter(event => event === 'file-before-publish').length, 1);
+  assert.equal(atomicEvents.at(-1), 'parent-after-publish');
+  assert.ok(atomicEvents.indexOf('file-before-publish') < atomicEvents.indexOf('parent-after-publish'));
+
+  const ownerFile = path.join(runtimeDir, 'owner.json');
+  const exclusiveEvents: string[] = [];
+  createRuntimeFileExclusiveNoFollow(base, ownerFile, 'owner', {
+    fsync(fd) {
+      const opened = fstatSync(fd);
+      if (opened.isFile()) {
+        assert.equal(existsSync(ownerFile), true);
+        assert.equal(readFileSync(ownerFile, 'utf8'), 'owner');
+        exclusiveEvents.push('file-after-create');
+        return;
+      }
+      assert.equal(opened.isDirectory(), true);
+      exclusiveEvents.push(existsSync(ownerFile) ? 'parent-after-create' : 'directory-before-create');
+    },
+  });
+  assert.equal(statSync(ownerFile).mode & 0o777, 0o600);
+  assert.equal(exclusiveEvents.filter(event => event === 'file-after-create').length, 1);
+  assert.equal(exclusiveEvents.at(-1), 'parent-after-create');
+  assert.ok(exclusiveEvents.indexOf('file-after-create') < exclusiveEvents.indexOf('parent-after-create'));
+  assert.throws(
+    () => createRuntimeFileExclusiveNoFollow(base, ownerFile, 'other', { fsync() {} }),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === 'EEXIST',
+    'the exclusive primitive preserves raw O_EXCL contention evidence',
+  );
+
+  let unlinkParentSyncs = 0;
+  removeRuntimeFileNoFollow(base, atomicFile, {
+    fsync(fd) {
+      const opened = fstatSync(fd);
+      const parent = statSync(runtimeDir);
+      assert.equal(opened.isDirectory(), true);
+      assert.equal(opened.dev, parent.dev);
+      assert.equal(opened.ino, parent.ino, 'unlink syncs the exact held parent inode');
+      assert.equal(existsSync(atomicFile), false, 'unlink is visible before parent fsync');
+      unlinkParentSyncs += 1;
+    },
+  });
+  assert.equal(unlinkParentSyncs, 1);
+  assert.equal(existsSync(atomicFile), false);
+});
+
+test('private filesystem never reports a namespace mutation successful when parent fsync fails', () => {
+  const base = freshBase();
+  const runtimeDir = path.join(base, 'dsh-runtime');
+  mkdirSync(runtimeDir, { mode: 0o700 });
+
+  const atomicFile = path.join(runtimeDir, 'atomic.json');
+  assert.throws(() => atomicWriteRuntimeFileNoFollow(base, atomicFile, 'published-before-error', {
+    fsync(fd) {
+      if (fstatSync(fd).isDirectory() && existsSync(atomicFile)) {
+        throw new Error('injected rename parent fsync failure');
+      }
+    },
+  }), /injected rename parent fsync failure/);
+  assert.equal(readFileSync(atomicFile, 'utf8'), 'published-before-error',
+    'the visible rename is retained as ambiguous evidence while the caller sees failure');
+
+  assert.throws(() => removeRuntimeFileNoFollow(base, atomicFile, {
+    fsync(fd) {
+      if (fstatSync(fd).isDirectory() && !existsSync(atomicFile)) {
+        throw new Error('injected unlink parent fsync failure');
+      }
+    },
+  }), /injected unlink parent fsync failure/);
+  assert.equal(existsSync(atomicFile), false, 'the caller sees failure even though unlink became visible');
+
+  const child = path.join(runtimeDir, 'fresh-child');
+  assert.throws(() => createPrivateDirectoryNoFollow(child, {
+    fsync(fd) {
+      assert.equal(fstatSync(fd).isDirectory(), true);
+      if (existsSync(child)) throw new Error('injected mkdir parent fsync failure');
+    },
+  }), /injected mkdir parent fsync failure/);
+  assert.equal(lstatSync(child).isDirectory(), true);
+  let retrySyncs = 0;
+  ensurePrivateDirectoryNoFollow(child, {
+    fsync(fd) {
+      assert.equal(fstatSync(fd).isDirectory(), true);
+      retrySyncs += 1;
+    },
+  });
+  assert.equal(retrySyncs, 1, 'EEXIST retry re-establishes the parent durability proof');
+
+  const ownerFile = path.join(runtimeDir, 'owner.json');
+  let exclusiveFileSynced = false;
+  assert.throws(() => createRuntimeFileExclusiveNoFollow(base, ownerFile, 'owner-before-error', {
+    fsync(fd) {
+      const opened = fstatSync(fd);
+      if (opened.isFile()) {
+        exclusiveFileSynced = true;
+      } else if (existsSync(ownerFile)) {
+        throw new Error('injected exclusive parent fsync failure');
+      }
+    },
+  }), /injected exclusive parent fsync failure/);
+  assert.equal(exclusiveFileSynced, true, 'exclusive payload is synced before its parent');
+  assert.equal(readFileSync(ownerFile, 'utf8'), 'owner-before-error');
+  assert.throws(
+    () => createRuntimeFileExclusiveNoFollow(base, ownerFile, 'second-owner', { fsync() {} }),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === 'EEXIST',
+    'ambiguous exclusive-create evidence remains fail-closed after fsync failure',
+  );
+});
+
+test('private filesystem reads a stable snapshot and avoids chmod side effects when modes already match', () => {
+  const base = freshBase();
+  const runtimeDir = path.join(base, 'dsh-runtime');
+  mkdirSync(runtimeDir, { mode: 0o700 });
+  const file = path.join(runtimeDir, 'stable.json');
+  writeFileSync(file, 'A'.repeat(256), { mode: 0o600 });
+  chmodSync(runtimeDir, 0o700);
+  chmodSync(file, 0o600);
+
+  const parentBefore = statSync(runtimeDir, { bigint: true }).ctimeNs;
+  const fileBefore = statSync(file, { bigint: true }).ctimeNs;
+  const stable = readPrivateFileNoFollow(file, 1024);
+  assert.equal(stable.kind, 'valid');
+  assert.equal(statSync(runtimeDir, { bigint: true }).ctimeNs, parentBefore,
+    'an already-private parent is not chmodded on read');
+  assert.equal(statSync(file, { bigint: true }).ctimeNs, fileBefore,
+    'an already-private file is not chmodded on read');
+
+  let firstRead = true;
+  const raced = readPrivateFileNoFollow(file, 1024, {
+    read(fd, buffer, offset, length, position) {
+      const count = readSync(fd, buffer, offset, length, position);
+      if (firstRead) {
+        firstRead = false;
+        writeFileSync(file, 'B'.repeat(256));
+        utimesSync(file, new Date('2000-01-01T00:00:00.000Z'), new Date('2000-01-01T00:00:00.000Z'));
+      }
+      return count;
+    },
+  });
+  assert.deepEqual(raced, { kind: 'unsafe' },
+    'same-inode/same-size mutation during the read is rejected as a torn snapshot');
+});
+
+test('private filesystem treats an absent remove as a side-effect-free no-op and durably quarantines evidence', () => {
+  const base = freshBase();
+  const runtimeDir = path.join(base, 'dsh-runtime');
+  mkdirSync(runtimeDir, { mode: 0o700 });
+
+  removeRuntimeFileNoFollow(base, path.join(runtimeDir, 'already-gone.json'), {
+    fsync() {
+      throw new Error('absent remove must not fsync');
+    },
+  });
+
+  const source = path.join(runtimeDir, 'override.json');
+  const evidence = `${source}.corrupt`;
+  writeFileSync(source, '{broken', { mode: 0o600 });
+  let quarantineParentSyncs = 0;
+  quarantineRuntimeFileNoFollow(base, source, evidence, {
+    fsync(fd) {
+      assert.equal(fstatSync(fd).isDirectory(), true);
+      assert.equal(existsSync(source), false);
+      assert.equal(readFileSync(evidence, 'utf8'), '{broken');
+      quarantineParentSyncs += 1;
+    },
+  });
+  assert.equal(quarantineParentSyncs, 1);
+  assert.equal(existsSync(source), false);
+  assert.equal(readFileSync(evidence, 'utf8'), '{broken');
+});
+
+test('private filesystem detects a replaced parent and never follows it during temporary-file cleanup', t => {
+  if (process.platform === 'win32') {
+    t.skip('directory symlink race fixture requires POSIX rename semantics');
+    return;
+  }
+  const base = freshBase();
+  const runtimeDir = path.join(base, 'dsh-runtime');
+  const displacedRuntimeDir = path.join(base, 'dsh-runtime-displaced');
+  const outsideDir = mkdtempSync(path.join(tmpdir(), 'dsh-runtime-cleanup-outside-'));
+  mkdirSync(runtimeDir, { mode: 0o700 });
+  const destination = path.join(runtimeDir, 'authority.json');
+  let tmpName: string | null = null;
+
+  assert.throws(() => atomicWriteRuntimeFileNoFollow(base, destination, 'private-temp', {
+    fsync(fd) {
+      if (!fstatSync(fd).isFile()) return;
+      tmpName = readdirSync(runtimeDir).find(name => name.startsWith('.authority.json.tmp-')) ?? null;
+      assert.notEqual(tmpName, null);
+      renameSync(runtimeDir, displacedRuntimeDir);
+      symlinkSync(outsideDir, runtimeDir, 'dir');
+      writeFileSync(path.join(outsideDir, tmpName!), 'outside-must-survive');
+    },
+  }), /身份复验失败/);
+
+  assert.notEqual(tmpName, null);
+  assert.equal(readFileSync(path.join(outsideDir, tmpName!), 'utf8'), 'outside-must-survive',
+    'error cleanup never traverses the replacement parent symlink');
+  assert.equal(readFileSync(path.join(displacedRuntimeDir, tmpName!), 'utf8'), 'private-temp',
+    'unproved cleanup retains the exact private temporary evidence fail-closed');
+});
 
 test('current 指针: 缺失 → null; 写读 round-trip; 切换指针', () => {
   const base = freshBase();
@@ -270,6 +520,58 @@ test('authority readers reject a symlinked runtime directory without touching ex
     assert.deepEqual(readFileSync(file), Buffer.from(bytes));
   }
   assert.equal(readdirSync(outsideDir).some(name => name.includes('.corrupt')), false);
+});
+
+test('all metadata mutations reject symlinked runtime roots and critical leaves without touching targets', t => {
+  if (process.platform === 'win32') {
+    t.skip('symlink creation requires platform privileges on Windows');
+    return;
+  }
+
+  const rootBase = freshBase();
+  const outsideRoot = mkdtempSync(path.join(tmpdir(), 'dsh-runtime-store-write-outside-'));
+  const outsideCurrent = path.join(outsideRoot, 'current');
+  writeFileSync(outsideCurrent, 'outside-root-sentinel', { mode: 0o644 });
+  chmodSync(outsideCurrent, 0o644);
+  symlinkSync(outsideRoot, path.join(rootBase, 'dsh-runtime'));
+  const rootBefore = statSync(outsideCurrent);
+
+  assert.throws(() => writeCurrentPointer(rootBase, '1.0.0'), /不安全/);
+  assert.throws(() => clearCurrentPointer(rootBase), /不安全|拒绝/);
+  assert.throws(() => recordRuntimeFailure(rootBase, {
+    version: '1.0.0', phase: 'probe', error: 'must not escape',
+  }), /不安全/);
+  assert.throws(() => cleanupStaleInstalls(rootBase), /不安全/);
+  const rootAfter = statSync(outsideCurrent);
+  assert.equal(rootAfter.mode, rootBefore.mode);
+  assert.equal(rootAfter.ctimeMs, rootBefore.ctimeMs);
+  assert.equal(readFileSync(outsideCurrent, 'utf8'), 'outside-root-sentinel');
+  assert.deepEqual(readdirSync(outsideRoot), ['current']);
+
+  const leafBase = freshBase();
+  const runtimeDir = path.join(leafBase, 'dsh-runtime');
+  mkdirSync(path.join(runtimeDir, 'failures'), { recursive: true });
+  const outsideLeafDir = mkdtempSync(path.join(tmpdir(), 'dsh-runtime-store-leaf-outside-'));
+  const pointerTarget = path.join(outsideLeafDir, 'pointer-target');
+  const failureTarget = path.join(outsideLeafDir, 'failure-target');
+  writeFileSync(pointerTarget, 'pointer-sentinel', { mode: 0o644 });
+  writeFileSync(failureTarget, 'failure-sentinel', { mode: 0o644 });
+  symlinkSync(pointerTarget, currentPointerPath(leafBase));
+  symlinkSync(failureTarget, path.join(runtimeDir, 'failures', '1.0.0.json'));
+  const pointerBefore = statSync(pointerTarget);
+  const failureBefore = statSync(failureTarget);
+
+  assert.throws(() => writeCurrentPointer(leafBase, '1.0.0'), /单链接普通文件/);
+  assert.throws(() => clearCurrentPointer(leafBase), /不安全|拒绝/);
+  assert.throws(() => recordRuntimeFailure(leafBase, {
+    version: '1.0.0', phase: 'probe', error: 'must not escape',
+  }), /不安全|拒绝/);
+  assert.equal(lstatSync(currentPointerPath(leafBase)).isSymbolicLink(), true);
+  assert.equal(lstatSync(path.join(runtimeDir, 'failures', '1.0.0.json')).isSymbolicLink(), true);
+  assert.deepEqual(statSync(pointerTarget), pointerBefore);
+  assert.deepEqual(statSync(failureTarget), failureBefore);
+  assert.equal(readFileSync(pointerTarget, 'utf8'), 'pointer-sentinel');
+  assert.equal(readFileSync(failureTarget, 'utf8'), 'failure-sentinel');
 });
 
 test('authority readers bound metadata reads and fail closed on oversized files', () => {

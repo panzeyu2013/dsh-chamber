@@ -12,7 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
@@ -486,16 +486,6 @@ test('malformed error branch degrades to unknown_rpc_code instead of dropping', 
 // local-connection (v4 host management): spawn/ready, health, restart, stop
 // ---------------------------------------------------------------------------
 
-function mockCatalog() {
-  const row: { connectionId: string; status?: string } = { connectionId: 'local' }
-  return {
-    getConnection: () => row,
-    upsertConnection: (next: { status?: string }) => {
-      if (next.status !== undefined) row.status = next.status
-    },
-  }
-}
-
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 
 function idleDshWorkspace(root: string): string {
@@ -535,15 +525,13 @@ test('start spawns and lands on ready; stop terminates and lands on stopped', as
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     deps: { spawnDsh: mockSpawn, describeCapabilities: describe.describeCapabilities },
   })
   assert.equal(connection.getState(), 'stopped')
-  const row = await connection.start()
+  await connection.start()
   assert.equal(connection.getState(), 'ready')
   assert.ok(connection.getDshPort() !== null)
-  assert.equal(row?.status, 'ready')
   // Idempotent: a second start does not spawn again.
   await connection.start()
   assert.equal(spawnCounter, 1)
@@ -557,7 +545,6 @@ test('a spawn failure is fail-loud: state lands on error and start() rejects', a
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     deps: {
       spawnDsh: async () => { throw new Error('port occupied after 5 attempts') },
@@ -581,7 +568,6 @@ test('a runtime gate closed after queueing is re-read before seed and spawn', as
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: {
       canSpawn: () => blocked ? { ok: false, reason: 'runtime restore in progress' } : { ok: true },
@@ -612,38 +598,12 @@ test('a runtime gate closed after queueing is re-read before seed and spawn', as
 })
 
 
-test('a catalog write failure never blocks the lifecycle state machine (M13)', async () => {
-  let spawns = 0
-  const connection = createLocalConnection({
-    stateDir: '/tmp/none',
-    dshHome: '/tmp/none',
-    dshWorkspacePath: '/tmp/none',
-    catalog: {
-      getConnection: () => ({ connectionId: 'local', status: 'stopped' }),
-      upsertConnection: () => { throw new Error('catalog disk unavailable') },
-    },
-    logger: quietLogger,
-    deps: {
-      spawnDsh: async () => { spawns += 1; return mockSpawn() },
-      describeCapabilities: mockDescribe().describeCapabilities,
-    },
-  })
-  // Runtime projections (status/dshPort/error) persist BEST-EFFORT: a disk
-  // failure is loud in the log but must never block the in-memory machine
-  // (2026 audit M13; previously this test asserted the write-through reject).
-  const row = await connection.start()
-  assert.equal(connection.getState(), 'ready', 'the machine advances despite the persist failure')
-  assert.equal(spawns, 1)
-  assert.equal(row?.connectionId, 'local')
-})
-
 test('health failures count into degraded; success resets; threshold triggers a restart', async () => {
   const describe = mockDescribe()
   const connection = createLocalConnection({
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 30, healthProbeTimeoutMs: 1000, restartFailureThreshold: 3, failureThrottleMs: 0 },
     deps: { spawnDsh: mockSpawn, describeCapabilities: describe.describeCapabilities },
@@ -692,7 +652,6 @@ test('a dead child skips counting and restarts immediately', async () => {
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0, restartWindowMs: 5000 },
     deps: { spawnDsh: spawns, describeCapabilities: describe.describeCapabilities },
@@ -731,7 +690,6 @@ test('stop waits for and reclaims an inside-spawn automatic restart', async () =
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -944,7 +902,6 @@ test('restart window exhaustion lands on restart-exhausted (manual start require
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: {
       healthIntervalMs: 20,
@@ -984,6 +941,28 @@ test('seedDshHomeDefaults writes a zh locale default once and never touches an e
     writeFileSync(join(custom, 'settings.yaml'), 'locale:\n  preference: en\n', { mode: 0o600 })
     assert.equal(seedDshHomeDefaults(custom), false)
     assert.equal(readFileSync(join(custom, 'settings.yaml'), 'utf8'), 'locale:\n  preference: en\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('seedDshHomeDefaults refuses a symlinked home and never writes through an existing settings leaf', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-chamber-seed-link-'))
+  try {
+    const outsideHome = join(root, 'outside-home')
+    const linkedHome = join(root, 'linked-home')
+    mkdirSync(outsideHome)
+    symlinkSync(outsideHome, linkedHome, 'dir')
+    assert.throws(() => seedDshHomeDefaults(linkedHome), /not a real directory/)
+    assert.equal(existsSync(join(outsideHome, 'settings.yaml')), false)
+
+    const realHome = join(root, 'real-home')
+    const victim = join(root, 'settings-victim')
+    mkdirSync(realHome)
+    writeFileSync(victim, 'DO-NOT-TOUCH', { mode: 0o600 })
+    symlinkSync(victim, join(realHome, 'settings.yaml'))
+    assert.equal(seedDshHomeDefaults(realHome), false)
+    assert.equal(readFileSync(victim, 'utf8'), 'DO-NOT-TOUCH')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

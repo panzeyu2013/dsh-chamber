@@ -1,11 +1,15 @@
 /**
- * Generate THIRD_PARTY_NOTICES.md from the installed node_modules trees
- * (root + per-workspace). Run after any dependency change:
+ * Generate THIRD_PARTY_NOTICES.md from the directly declared packages in the
+ * installed node_modules trees (root + per-workspace). Run after any
+ * dependency change:
  *   npm run gen:notices
  * Output is name-ordered; workspace packages (@dsh-chamber/*) are excluded.
+ * Reading manifests instead of every top-level directory keeps the result
+ * stable when a local pnpm install uses a hoisted layout or retains stale
+ * transitive entries.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -29,28 +33,23 @@ function record(pkgPath) {
   found.set(pkg.name, { version: pkg.version ?? 'unknown', license: licenseOf(pkg) })
 }
 
-function scan(dir) {
-  if (!existsSync(dir)) return
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue
-    // pnpm links installed packages into node_modules as symlinks — follow
-    // them, otherwise every package is skipped and the table comes out empty.
-    const isDir = entry.isDirectory() || entry.isSymbolicLink()
-    if (entry.name.startsWith('@')) {
-      const scoped = join(dir, entry.name)
-      if (!isDir) continue
-      for (const sub of readdirSync(scoped, { withFileTypes: true })) {
-        if (sub.isDirectory() || sub.isSymbolicLink()) record(join(scoped, sub.name, 'package.json'))
-      }
-      continue
-    }
-    if (isDir) record(join(dir, entry.name, 'package.json'))
-  }
+function scanDeclared(packageDir, nodeModulesDir) {
+  let pkg
+  try {
+    pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
+  } catch { return }
+  const names = new Set([
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.devDependencies ?? {}),
+    ...Object.keys(pkg.optionalDependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+  ])
+  for (const name of names) record(join(nodeModulesDir, name, 'package.json'))
 }
 
-scan(join(ROOT, 'node_modules'))
-scan(join(ROOT, 'packages/renderer/node_modules'))
-scan(join(ROOT, 'packages/desktop/node_modules'))
+scanDeclared(ROOT, join(ROOT, 'node_modules'))
+scanDeclared(join(ROOT, 'packages/renderer'), join(ROOT, 'packages/renderer/node_modules'))
+scanDeclared(join(ROOT, 'packages/desktop'), join(ROOT, 'packages/desktop/node_modules'))
 
 const rows = [...found.entries()]
   .sort(([a], [b]) => a.localeCompare(b))

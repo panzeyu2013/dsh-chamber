@@ -8,7 +8,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
-import type { ProxyRequest, ProxyResponse, ProxySocket } from '@dsh-chamber/control-plane'
+import { PassThrough } from 'node:stream'
+import type { HttpRequestFactory, ProxyRequest, ProxyResponse, ProxySocket } from '@dsh-chamber/control-plane'
 import { clearAuthCookie, registerAuthCookie } from '@dsh-chamber/control-plane'
 import { createGatewayProxy } from '../src/gateway-proxy.ts'
 
@@ -27,11 +28,12 @@ function fakeRequest(url: string, method = 'GET', body?: string): ProxyRequest {
   }) as unknown as ProxyRequest
 }
 
-function fakeResponse(): ProxyResponse & { status: number | null; body: string } {
+function fakeResponse(): ProxyResponse & { status: number | null; body: string; destroyed: boolean } {
   const emitter = new EventEmitter()
   const res = Object.assign(emitter, {
     status: null as number | null,
     body: '',
+    destroyed: false,
     headersSent: false,
     writeHead(status: number, headers?: Record<string, unknown>) {
       this.status = status
@@ -41,18 +43,23 @@ function fakeResponse(): ProxyResponse & { status: number | null; body: string }
     write(chunk: unknown) { this.body += String(chunk); return true },
     end(payload?: unknown) { if (payload !== undefined) this.body += String(payload); return undefined },
     setHeader() {},
-    destroy() {},
+    destroy() { this.destroyed = true },
   })
   return res as any
 }
 
-function fakeSocket(): ProxySocket & { written: string } {
+function fakeSocket(): ProxySocket & { written: string; destroyed: boolean } {
   const emitter = new EventEmitter()
   const socket = Object.assign(emitter, {
     written: '',
+    destroyed: false,
     write(data: unknown) { this.written += String(data); return true },
     end(data?: unknown) { if (data !== undefined) this.written += String(data); return undefined },
-    destroy() {},
+    destroy() {
+      if (this.destroyed) return
+      this.destroyed = true
+      emitter.emit('close')
+    },
     pipe(target: unknown) { return target },
   })
   return socket as any
@@ -168,4 +175,50 @@ test('canExposeLocal=true keeps the ready proxy behavior unchanged', async () =>
   await proxy.handleHttp(fakeRequest('/api/session/list'), res)
   assert.notEqual(res.status, 503)
   assert.notEqual(res.status, 400)
+})
+
+test('closeAllStreams revokes an authenticated HTTP request before its body finishes', async () => {
+  const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => 17510, getLocalState: () => 'ready' })
+  const req = Object.assign(new PassThrough(), {
+    url: '/api/session.create', method: 'POST', headers: { 'content-length': '1' },
+  }) as unknown as ProxyRequest & PassThrough
+  const res = fakeResponse()
+  const forwarding = proxy.handleHttp(req, res)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
+  proxy.closeAllStreams()
+  assert.equal(req.destroyed, true, 'a slow authenticated upload is aborted before it can reach dsh')
+  assert.equal(res.destroyed, true,
+    'credential rotation tears down active HTTP/SSE responses, not only upgraded WebSockets')
+  await forwarding
+})
+
+test('closeAllStreams aborts a WebSocket while its upstream handshake is pending', async () => {
+  let upstreamSignal: AbortSignal | null = null
+  const httpRequest = ((_url: URL, options: { signal: AbortSignal }) => {
+    upstreamSignal = options.signal
+    const request = new EventEmitter() as any
+    request.destroyed = false
+    request.write = () => true
+    request.end = () => {}
+    options.signal.addEventListener('abort', () => request.emit('error', Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true })
+    return request
+  }) as unknown as HttpRequestFactory
+  const proxy = createGatewayProxy({
+    logger: quietLogger,
+    getLocalDshPort: () => 17510,
+    getLocalState: () => 'ready',
+    httpRequest,
+    upstreamTimeoutMs: 5_000,
+  })
+  const socket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/events.mux'), socket, Buffer.alloc(0))
+  assert.equal(proxy.getDiagnostics().pendingUpgrades, 1)
+
+  proxy.closeAllStreams()
+
+  assert.equal(socket.destroyed, true)
+  assert.equal((upstreamSignal as AbortSignal | null)?.aborted, true,
+    'destroying the downstream aborts the pending upstream request')
+  assert.equal(proxy.getDiagnostics().pendingUpgrades, 0)
 })

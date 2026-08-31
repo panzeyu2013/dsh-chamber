@@ -11,10 +11,11 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT } from '../src/index.ts'
 import { createApi } from '../src/api.ts'
+import { CATALOG_FILE } from '../src/catalog.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } from '../src/spawn-dsh.ts'
@@ -124,6 +125,9 @@ test('health + connections: idempotent create, ready projection, no double spawn
     assert.equal(created.body.connection.status, 'ready')
     assert.equal(created.body.connection.dshPort, DEFAULT_DSH_START_PORT)
     assert.equal(created.body.spawned, true)
+    const catalogAfterCreate = JSON.parse(readFileSync(join(holder.stateDir, CATALOG_FILE), 'utf8'))
+    assert.deepEqual(catalogAfterCreate.connections, [{ connectionId: 'local', kind: 'local' }])
+    const catalogRevision = catalogAfterCreate.revision
 
     // Idempotent: a running instance never respawns.
     const again = await fetchJson(holder.base, '/api/connections', postJson({ kind: 'local' }))
@@ -131,6 +135,11 @@ test('health + connections: idempotent create, ready projection, no double spawn
     assert.equal(again.body.spawned, false)
     assert.equal(again.body.connection.dshPort, DEFAULT_DSH_START_PORT)
     assert.equal(holder.wire.spawns, 1)
+    assert.equal(
+      JSON.parse(readFileSync(join(holder.stateDir, CATALOG_FILE), 'utf8')).revision,
+      catalogRevision,
+      'idempotent live-state projection must not revise catalog.json',
+    )
 
     const read = await fetchJson(holder.base, '/api/connections')
     assert.equal(read.status, 200)

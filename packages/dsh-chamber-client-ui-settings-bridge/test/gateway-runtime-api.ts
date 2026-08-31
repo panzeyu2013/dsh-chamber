@@ -17,8 +17,28 @@ import {
   remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
   remoteRuntimeStatusView,
+  resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
 } from '../src/client/gateway-runtime-api.ts'
+
+test('instance switch aborts both request owners and returns visible idle flags', () => {
+  const action = new AbortController()
+  const registry = new AbortController()
+  const owners = {
+    actionController: { current: action as AbortController | null },
+    actionInFlight: { current: true },
+    registryController: { current: registry as AbortController | null },
+    registryInFlight: { current: true },
+  }
+  const idle = resetRemoteRuntimeActivityOwners(owners)
+  assert.equal(action.signal.aborted, true)
+  assert.equal(registry.signal.aborted, true)
+  assert.equal(owners.actionController.current, null)
+  assert.equal(owners.registryController.current, null)
+  assert.equal(owners.actionInFlight.current, false)
+  assert.equal(owners.registryInFlight.current, false)
+  assert.deepEqual(idle, { actionBusy: false, registryBusy: false })
+})
 
 function status(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {
   return {
@@ -116,6 +136,12 @@ test('remoteRuntimeStatusView maps the remote status to the four render kinds wi
   assert.deepEqual(remoteRuntimeStatusView(status()), {
     kind: 'idle', titleKey: 'dshRuntimeRemoteStatusIdle', params: undefined, detail: null,
   })
+  assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'future-phase' as never })), {
+    kind: 'blocked',
+    titleKey: 'dshRuntimeRemoteStatusBlocked',
+    params: undefined,
+    detail: 'Gateway returned an unsupported runtime status; refresh or update this client before changing runtime state.',
+  }, 'a direct caller cannot silently render an unknown future phase as idle')
   // Precedence: an in-flight apply outranks a stale failure record.
   assert.deepEqual(remoteRuntimeStatusView(status({ phase: 'applying', operationError: 'stale failure' })), {
     kind: 'busy', titleKey: 'dshRuntimeStatusApplyingNow', params: { version: '—' }, detail: null,
@@ -168,6 +194,14 @@ test('remote action gates lock pending/installing in step with the server and pr
     restartDisabled: true,
     applyNowDisabled: true,
   })
+  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'future-phase' as never })), {
+    mutationDisabled: true,
+    restoreBuiltinDisabled: true,
+    retryApplyDisabled: true,
+    retryRestoreDisabled: true,
+    restartDisabled: true,
+    applyNowDisabled: true,
+  }, 'a direct caller cannot enable actions for an unknown future phase')
   assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0' })), {
     mutationDisabled: true,
     restoreBuiltinDisabled: false,
@@ -383,7 +417,7 @@ test('pollRemoteRuntimeUntilSettled resolves when install/apply phase or restart
     calls += 1
     return statusResponse(status({ phase: calls === 1 ? 'applying' : 'idle', pending: '1.1.0' }))
   }) as unknown as typeof fetch
-  const settled = await pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: settling, pollIntervalMs: 0, timeoutMs: 5_000 })
+  const settled = await pollRemoteRuntimeUntilSettled('gateway-x', 'select', { fetchImpl: settling, pollIntervalMs: 0, timeoutMs: 5_000 })
   assert.equal(settled.phase, 'idle')
   assert.equal(calls, 2, 'polls until settled')
 
@@ -392,7 +426,7 @@ test('pollRemoteRuntimeUntilSettled resolves when install/apply phase or restart
     installCalls += 1
     return statusResponse(status({ phase: installCalls === 1 ? 'installing' : 'idle' }))
   }) as unknown as typeof fetch
-  await pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: installSettling, pollIntervalMs: 0, timeoutMs: 5_000 })
+  await pollRemoteRuntimeUntilSettled('gateway-x', 'select', { fetchImpl: installSettling, pollIntervalMs: 0, timeoutMs: 5_000 })
   assert.equal(installCalls, 2, 'the async select poll does not settle while phase is installing')
 
   // restart running → ok.
@@ -401,7 +435,7 @@ test('pollRemoteRuntimeUntilSettled resolves when install/apply phase or restart
     restartCalls += 1
     return statusResponse(status({ restart: restartCalls === 1 ? 'running' : 'ok' }))
   }) as unknown as typeof fetch
-  await pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: restartSettling, pollIntervalMs: 0, timeoutMs: 5_000 })
+  await pollRemoteRuntimeUntilSettled('gateway-x', 'select', { fetchImpl: restartSettling, pollIntervalMs: 0, timeoutMs: 5_000 })
   assert.equal(restartCalls, 2)
 
   // interval is a parameter: two polls spaced by the injected sleep.
@@ -411,7 +445,7 @@ test('pollRemoteRuntimeUntilSettled resolves when install/apply phase or restart
     return statusResponse(status({ phase: intervalCalls === 1 ? 'applying' : 'idle' }))
   }) as unknown as typeof fetch
   const sleeps: number[] = []
-  await pollRemoteRuntimeUntilSettled('gateway-x', {
+  await pollRemoteRuntimeUntilSettled('gateway-x', 'select', {
     fetchImpl: intervalSettling,
     sleepMs: async (ms) => { sleeps.push(ms) },
     pollIntervalMs: 250,
@@ -425,26 +459,134 @@ test('pollRemoteRuntimeUntilSettled reports terminal failure and timeout honestl
   // never settles → honest timeout (no fake success).
   const stuck = (async () => statusResponse(status({ phase: 'applying' }))) as unknown as typeof fetch
   await assert.rejects(
-    pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: stuck, pollIntervalMs: 0, timeoutMs: 10 }),
+    pollRemoteRuntimeUntilSettled('gateway-x', 'select', { fetchImpl: stuck, pollIntervalMs: 0, timeoutMs: 10 }),
     /did not settle in time/,
   )
+
+  // A single status fetch that never resolves must still obey the outer
+  // deadline; the poll passes an AbortSignal into fetch instead of hanging
+  // before it can re-check Date.now().
+  let abortObserved = false
+  const hungFetch = ((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      abortObserved = true
+      reject(new Error('aborted'))
+    }, { once: true })
+  })) as typeof fetch
+  await assert.rejects(
+    pollRemoteRuntimeUntilSettled('gateway-x', 'select', { fetchImpl: hungFetch, timeoutMs: 10 }),
+    /did not settle in time/,
+  )
+  assert.equal(abortObserved, true, 'deadline aborts an in-flight status fetch')
 
   // restart failed → terminal failure with the server's copy.
   const failed = (async () => statusResponse(status({ restart: 'failed', operationError: 'restart-exhausted' }))) as unknown as typeof fetch
   await assert.rejects(
-    pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: failed, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    pollRemoteRuntimeUntilSettled('gateway-x', 'select', { fetchImpl: failed, pollIntervalMs: 0, timeoutMs: 5_000 }),
     /runtime action failed: restart-exhausted/,
   )
 
   // select failure: a settled phase with operationError set is a failure, not success.
   const selectFailed = (async () => statusResponse(status({ operationError: 'install failed: ENOSPC' }))) as unknown as typeof fetch
   await assert.rejects(
-    pollRemoteRuntimeUntilSettled('gateway-x', { fetchImpl: selectFailed, pollIntervalMs: 0, timeoutMs: 5_000 }),
+    pollRemoteRuntimeUntilSettled('gateway-x', 'select', { fetchImpl: selectFailed, pollIntervalMs: 0, timeoutMs: 5_000 }),
     /runtime action failed: install failed: ENOSPC/,
   )
 })
 
-test('status parsing: documented contract, version-skew defaults, unknown enums pass through, malformed fails loud', () => {
+test('apply-now settle waits through post-activation recovery and requires a ready/degraded clean verdict', async () => {
+  let calls = 0
+  const recovering = (async () => {
+    calls += 1
+    return statusResponse(status({
+      phase: 'idle',
+      connectionState: calls === 1 ? 'starting' : 'ready',
+    }))
+  }) as unknown as typeof fetch
+  const settled = await pollRemoteRuntimeUntilSettled('gateway-x', 'apply-now', {
+    fetchImpl: recovering,
+    pollIntervalMs: 0,
+    timeoutMs: 5_000,
+  })
+  assert.equal(settled.connectionState, 'ready')
+  assert.equal(calls, 2, 'phase leaving applying does not settle before host recovery')
+
+  const degraded = (async () => statusResponse(status({
+    phase: 'idle',
+    connectionState: 'degraded',
+    restoreOutcome: 'complete',
+  }))) as unknown as typeof fetch
+  const degradedSettled = await pollRemoteRuntimeUntilSettled('gateway-x', 'apply-now', {
+    fetchImpl: degraded,
+    pollIntervalMs: 0,
+    timeoutMs: 5_000,
+  })
+  assert.equal(degradedSettled.connectionState, 'degraded', 'degraded is a live successful terminal state')
+})
+
+test('apply-now settle rejects current design-18 terminal failure projections without waiting for operationError', async () => {
+  const cases: Array<{ name: string; value: Partial<RemoteRuntimeStatus>; reason: RegExp }> = [
+    {
+      name: 'operation error',
+      value: { phase: 'idle', connectionState: 'error', operationError: 'candidate restart failed' },
+      reason: /runtime action failed: candidate restart failed/,
+    },
+    {
+      name: 'startup block',
+      value: { phase: 'snapshot-failed', connectionState: 'stopped', startupBlockedReason: 'snapshot-failed' },
+      reason: /runtime action failed: snapshot-failed/,
+    },
+    {
+      name: 'restore outcome',
+      value: { phase: 'idle', connectionState: 'stopped', restoreOutcome: 'incomplete' },
+      reason: /runtime action failed: runtime restore ended with incomplete/,
+    },
+  ]
+  for (const entry of cases) {
+    const fetchImpl = (async () => statusResponse(status({ operationError: null, ...entry.value }))) as unknown as typeof fetch
+    await assert.rejects(
+      pollRemoteRuntimeUntilSettled('gateway-x', 'apply-now', { fetchImpl, pollIntervalMs: 0, timeoutMs: 5_000 }),
+      entry.reason,
+      entry.name,
+    )
+  }
+})
+
+test('apply-now settle ignores historical failure records when the current outcome is live and clean', async () => {
+  const historical = (async () => statusResponse(status({
+    phase: 'idle',
+    connectionState: 'ready',
+    operationError: null,
+    startupBlockedReason: null,
+    restoreOutcome: 'complete',
+    failure: { version: '0.8.0', at: '2026-08-29T00:00:00.000Z', reason: 'historical probe failure' },
+  }))) as unknown as typeof fetch
+  const settled = await pollRemoteRuntimeUntilSettled('gateway-x', 'apply-now', {
+    fetchImpl: historical,
+    pollIntervalMs: 0,
+    timeoutMs: 5_000,
+  })
+  assert.equal(settled.connectionState, 'ready')
+  assert.equal(settled.failure?.reason, 'historical probe failure')
+})
+
+test('select settle ignores persistent activation history and keeps install-only semantics', async () => {
+  const historical = (async () => statusResponse(status({
+    phase: 'idle',
+    connectionState: 'stopped',
+    failure: { version: '0.8.0', at: '2026-08-29T00:00:00.000Z', reason: 'historical probe failure' },
+    restoreOutcome: 'incomplete',
+  }))) as unknown as typeof fetch
+  const settled = await pollRemoteRuntimeUntilSettled('gateway-x', 'select', {
+    fetchImpl: historical,
+    pollIntervalMs: 0,
+    timeoutMs: 5_000,
+  })
+  assert.equal(settled.phase, 'idle')
+  assert.equal(settled.failure?.reason, 'historical probe failure')
+})
+
+test('status parsing: documented contract, backward defaults, unknown safety enums fail closed', () => {
   const parsed = parseRemoteRuntimeStatus({
     kind: 'dsh-chamber-gateway-runtime',
     activeVersion: '1.0.0',
@@ -453,7 +595,7 @@ test('status parsing: documented contract, version-skew defaults, unknown enums 
     selectedVersion: '1.0.0',
     hasOverride: true,
     source: 'user-selected',
-    phase: 'future-phase', // a newer gateway's phase must not take the section down
+    phase: 'idle',
     startupBlockedReason: null,
     pending: '1.1.0',
     connectionState: 'starting',
@@ -482,7 +624,7 @@ test('status parsing: documented contract, version-skew defaults, unknown enums 
     diskLimitExceeded: false,
     progress: { stage: 'download', received: 50, total: 100 },
   })
-  assert.equal(parsed.phase, 'future-phase')
+  assert.equal(parsed.phase, 'idle')
   assert.equal(parsed.source, 'user-selected')
   assert.equal(parsed.mutationsAllowed, false)
   assert.equal(parsed.restart, 'ok')
@@ -504,6 +646,24 @@ test('status parsing: documented contract, version-skew defaults, unknown enums 
   })
   assert.equal(legacy.restart, null)
   assert.equal(legacy.mutationsAllowed, true)
+
+  const minimum = {
+    kind: 'dsh-chamber-gateway-runtime', activeVersion: '1.0.0', source: 'builtin-anchor', phase: 'idle',
+    startupBlockedReason: null, pending: null, connectionState: 'ready',
+    registry: 'r', platform: 'darwin', operationError: null,
+  }
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ ...minimum, phase: 'future-phase' }),
+    /unsupported runtime status\.phase: future-phase/,
+  )
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ ...minimum, source: 'future-source' }),
+    /unsupported runtime status\.source: future-source/,
+  )
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ ...minimum, restart: 'future-restart' }),
+    /unsupported runtime status\.restart: future-restart/,
+  )
 
   assert.throws(() => parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', activeVersion: 1 }), /malformed runtime status\.activeVersion/)
   assert.throws(() => parseRemoteRuntimeStatus({ activeVersion: '1.0.0' }), /malformed runtime status\.kind/)

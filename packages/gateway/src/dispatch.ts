@@ -22,8 +22,10 @@ import {
   type ApiRequest,
   type ApiResponse,
   type Logger,
+  type PlaneMiddlewareContext,
 } from '@dsh-chamber/control-plane'
-import type { AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
+import type { Duplex } from 'node:stream'
+import type { AuthChangeProof, AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
 import { SESSION_COOKIE } from './auth.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { FeatureHost } from './routes.ts'
@@ -152,12 +154,24 @@ function readBody(req: ApiRequest): Promise<unknown> {
       }
     })
     req.on('error', fail)
+    req.on('aborted', () => fail(codedError('request_aborted', 'request body aborted')))
+    req.on('close', () => {
+      if (!finished && (req as ApiRequest & { complete?: boolean }).complete !== true) {
+        fail(codedError('request_aborted', 'request body closed before completion'))
+      }
+    })
   })
 }
 
 export interface GatewayDispatch {
   middleware: NonNullable<import('@dsh-chamber/control-plane').ControlPlaneOptions['middleware']>
   upgradeMiddleware: NonNullable<import('@dsh-chamber/control-plane').ControlPlaneOptions['upgradeMiddleware']>
+  /** Re-open credential-mutation admission after a fully quiesced stop. */
+  resume(): void
+  /** Fence new credential mutations, close the authenticated traffic
+   * snapshot (which settles incomplete bodies), and drain every mutation that
+   * already crossed admission before gateway ownership can be released. */
+  quiesce(): Promise<void>
 }
 
 function authRequest(req: ApiRequest, decision: GatewayRequestDecision) {
@@ -169,9 +183,103 @@ function authRequest(req: ApiRequest, decision: GatewayRequestDecision) {
   }
 }
 
-export function createGatewayDispatch(auth: AuthProvider, getProxy: () => GatewayProxy, getFeatures: () => FeatureHost, getRuntime: () => RuntimeRoutes, logger: Logger, requestPolicy: GatewayRequestPolicy, auditFile?: string | null): GatewayDispatch {
-  const middleware: GatewayDispatch['middleware'] = async (req, res, url) => {
+export function createGatewayDispatch(
+  auth: AuthProvider,
+  getProxy: () => GatewayProxy,
+  getFeatures: () => FeatureHost,
+  getRuntime: () => RuntimeRoutes,
+  logger: Logger,
+  requestPolicy: GatewayRequestPolicy,
+  auditFile?: string | null,
+): GatewayDispatch {
+  // Every request/socket admitted by one credential generation stays tracked
+  // until its downstream leg ends. Rotation closes the old generation at the
+  // dispatch boundary, which covers gateway-proxy, feature SSE and the
+  // control-plane management/instance fallthrough uniformly without teaching
+  // those anonymous internals about authentication.
+  const authenticatedHttp = new Set<{ request: ApiRequest; response: ApiResponse }>()
+  const authenticatedSockets = new Set<Duplex>()
+  let credentialMutationsAccepted = true
+  const activeCredentialMutations = new Set<Promise<void>>()
+  function principalIsCurrent(principal: AuthPrincipal): boolean {
+    return auth.generation === undefined || principal.generation === auth.generation
+  }
+  function trackHttp(request: ApiRequest, response: ApiResponse): void {
+    const entry = { request, response }
+    authenticatedHttp.add(entry)
+    let released = false
+    const release = (): void => {
+      if (released) return
+      released = true
+      authenticatedHttp.delete(entry)
+    }
+    response.once('finish', release)
+    response.once('close', release)
+    response.once('error', release)
+  }
+  function trackSocket(socket: Duplex): void {
+    authenticatedSockets.add(socket)
+    const release = (): void => { authenticatedSockets.delete(socket) }
+    // Production sockets are Duplex/EventEmitter. Some no-listen boundary
+    // tests use the minimal `{destroy,end}` structural shape; tracking still
+    // revokes those, while lifecycle auto-release is attached when present.
+    const evented = socket as Duplex & { once?: (event: string, listener: () => void) => unknown }
+    evented.once?.('close', release)
+    evented.once?.('error', release)
+  }
+  function closeAuthenticatedTraffic(exceptResponse?: ApiResponse): void {
+    for (const entry of [...authenticatedHttp]) {
+      if (entry.response === exceptResponse) continue
+      authenticatedHttp.delete(entry)
+      try { entry.request.destroy?.() } catch { /* already closed */ }
+      try {
+        const response = entry.response as ApiResponse & { destroy?: () => unknown }
+        if (typeof response.destroy === 'function') response.destroy()
+        else response.end()
+      } catch { /* already closed */ }
+    }
+    for (const socket of [...authenticatedSockets]) {
+      authenticatedSockets.delete(socket)
+      try { socket.destroy() } catch { /* already closed */ }
+    }
+  }
+  function beginCredentialMutation(): (() => void) | null {
+    if (!credentialMutationsAccepted) return null
+    let settle!: () => void
+    const operation = new Promise<void>(resolve => { settle = resolve })
+    activeCredentialMutations.add(operation)
+    let settled = false
+    return (): void => {
+      if (settled) return
+      settled = true
+      activeCredentialMutations.delete(operation)
+      settle()
+    }
+  }
+  async function quiesce(): Promise<void> {
+    credentialMutationsAccepted = false
+    // Closing the snapshot comes after the synchronous admission fence. A
+    // pre-fence request still reading its body is forced into its finally;
+    // one already writing credentials remains tracked until its route tail
+    // (including generation revocation and audit append) has completed.
+    closeAuthenticatedTraffic()
+    while (activeCredentialMutations.size > 0) {
+      await Promise.allSettled([...activeCredentialMutations])
+    }
+  }
+  function rejectStaleHttp(res: ApiResponse, principal: AuthPrincipal | null): boolean {
+    if (principal === null || principalIsCurrent(principal)) return false
+    const state = res as ApiResponse & { destroyed?: boolean; writableEnded?: boolean }
+    if (state.destroyed !== true && state.writableEnded !== true) {
+      json(res, 401, { error: 'unauthorized', code: 'unauthorized' })
+    }
+    return true
+  }
+
+  const middleware: GatewayDispatch['middleware'] = async (req, res, url, ctx) => {
     const pathname = url.pathname
+    let authenticatedPrincipal: AuthPrincipal | null = null
+    let authenticatedChangeProof: AuthChangeProof | undefined
     // -1. One authority/origin boundary for every HTTP surface, including
     // public paths and OPTIONS. Its result also supplies sanitized auth facts.
     const decision = requestPolicy.evaluate(req)
@@ -242,6 +350,20 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         json(res, 401, { error: 'unauthorized', code: 'unauthorized' })
         return true
       }
+      // verify() can resolve in a later microtask than a credential mutation.
+      // Reject that stale verdict and register the downstream synchronously
+      // before any route-specific await creates another rotation window.
+      if (!principalIsCurrent(principal)) {
+        json(res, 401, { error: 'unauthorized', code: 'unauthorized' })
+        return true
+      }
+      authenticatedPrincipal = principal
+      // Capture synchronously at the admission boundary. The opaque proof is
+      // accepted only by the same provider and generation, so credential
+      // routes can reuse the bearer/password principal without another
+      // verifier pass after reading the body.
+      authenticatedChangeProof = auth.captureChangeProof?.(principal) ?? undefined
+      trackHttp(req, res)
     }
     // 2. Auth login (public, design 17 §5.1 / 21): POST verifies the password
     // and sets the session cookie → 302 to `/`; GET serves the rendered login
@@ -364,27 +486,22 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         res.end(JSON.stringify({ error: 'method not allowed', code: 'method_not_allowed' }))
         return true
       }
+      const finishCredentialMutation = beginCredentialMutation()
+      if (finishCredentialMutation === null) {
+        json(res, 503, { error: 'gateway is stopping', code: 'gateway_stopping' })
+        return true
+      }
       const changeReq = authRequest(req, decision)
       const clientSource = changeReq.clientAddress !== undefined && changeReq.clientAddress !== ''
         ? `client:${changeReq.clientAddress}`
         : `client:${changeReq.socketAddr}`
       try {
         const body = await readBody(req)
-        // S24 (design 17 §13.4.4): the success audit records the pre-change
-        // principal KIND. changePassword/changeToken verify internally (for
-        // the proof gate); this probe exists only for the audit — it must
-        // never fail the change, so any probe error degrades the audit to a
-        // 'probe-error:<code>' marker (never 'unauthenticated', which would
-        // mislabel a busy verifier) instead of rejecting the request.
-        let principalKind = 'unauthenticated'
-        try {
-          const principal = await auth.verify(changeReq)
-          if (principal !== null) principalKind = principal.kind
-        } catch (probeError) {
-          const probeCode = (probeError as Error & { code?: string }).code
-          principalKind = `probe-error${probeCode !== undefined ? `:${probeCode}` : ''}`
-          logger.warn(`gateway dispatch: credential-change audit probe failed: ${String(probeError)}`)
-        }
+        if (rejectStaleHttp(res, authenticatedPrincipal)) return true
+        // S24: the auth gate already established the pre-change principal.
+        // Reuse it for audit instead of doing another bearer scrypt solely to
+        // recover the same kind.
+        const principalKind = authenticatedPrincipal?.kind ?? 'unauthenticated'
         // The change result may carry the plaintext token exactly once — it
         // is written to the response body (no-store below) but never to the
         // audit trail, which carries only the non-secret detail.
@@ -392,8 +509,14 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         // (bad_request on a non-object/out-of-bounds field), so the wire
         // `unknown` is passed through as the documented input type.
         const result = dimension === 'password'
-          ? await auth.changePassword!(body as ChangePasswordInput, changeReq)
-          : await auth.changeToken!(body as ChangeTokenInput, changeReq)
+          ? await auth.changePassword!(body as ChangePasswordInput, changeReq, authenticatedChangeProof)
+          : await auth.changeToken!(body as ChangeTokenInput, changeReq, authenticatedChangeProof)
+        // The auth facade fences its generation before the first credential
+        // store side effect. Revoke every request/socket admitted by the old
+        // generation BEFORE acknowledging success, but explicitly spare this
+        // mutation's own response so its one-time token/200 can never be
+        // truncated (including online-published/durability-unknown results).
+        closeAuthenticatedTraffic(res)
         json(res, 200, result)
         if (auditFile !== undefined && auditFile !== null) {
           appendAuditEvent(auditFile, {
@@ -405,7 +528,14 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         }
       } catch (error) {
         const code = (error as Error & { code?: string }).code
-        if (auditFile !== undefined && auditFile !== null) {
+        // Password mutation rotates the jwt-secret first. If a later
+        // credential-file write fails, the route is rejected but auth state
+        // still changed; honor that generation transition and revoke every
+        // older downstream while preserving this error response.
+        if (authenticatedPrincipal !== null && !principalIsCurrent(authenticatedPrincipal)) {
+          closeAuthenticatedTraffic(res)
+        }
+        if (code !== 'request_aborted' && auditFile !== undefined && auditFile !== null) {
           appendAuditEvent(auditFile, {
             ts: new Date().toISOString(),
             event: 'credential_change_rejected',
@@ -413,7 +543,12 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
             detail: `${dimension},${code ?? 'internal_error'},${clientSource}`,
           })
         }
-        if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
+        if (code === 'request_aborted') {
+          // Gateway quiescence deliberately destroyed this downstream after
+          // fencing admission. The lifecycle barrier still waits for this
+          // finally, but there is no response or rejected-mutation audit to
+          // publish for a body that never reached the credential facade.
+        } else if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
         else if (code === 'invalid_credentials') json(res, 401, { error: 'invalid credentials', code })
         else if (code === 'ambient_principal_rejected') json(res, 403, { error: 'an ambient session must supply the current password to change gateway credentials', code })
         else if (code === 'last_credential') json(res, 409, { error: 'refusing to remove the last gateway credential; configure a replacement first', code })
@@ -427,10 +562,13 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
         } else {
           json(res, 500, { error: 'internal error', code: 'internal_error' })
         }
+      } finally {
+        finishCredentialMutation()
       }
       return true
     }
     if (pathname === '/auth/credentials') {
+      if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       // HEAD is the no-body twin of GET, matching /health and /auth/login.
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -455,12 +593,23 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     }
     // 3. Management routes → fall through to api.handle (prefix-match so
     // `/api/connections/local` PATCH/DELETE and `/api/host/*` all reach it).
-    if (pathname === '/health' || pathname.startsWith('/api/connections') || pathname.startsWith('/api/host/') || pathname.startsWith('/api/i/')) {
-      return false
+    if (pathname === '/health') return false
+    if (pathname.startsWith('/api/connections') || pathname.startsWith('/api/host/') || pathname.startsWith('/api/i/')) {
+      if (rejectStaleHttp(res, authenticatedPrincipal)) return true
+      // Claim authenticated management traffic when the real control-plane
+      // context is available. This invokes the authoritative API surface
+      // directly and removes the promise-resolution gap between a `false`
+      // middleware verdict and SSE/local-proxy registration. Narrow unit
+      // fakes may omit ctx.api and retain the historical fallthrough behavior.
+      const api = (ctx as Partial<PlaneMiddlewareContext>).api
+      if (api === undefined) return false
+      await api.handle(req, res)
+      return true
     }
     // /chamber (no trailing slash) → redirect to the dashboard's canonical URL
     // (otherwise it falls through to the dsh proxy and 404s).
     if (pathname === '/chamber') {
+      if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       res.writeHead(302, { location: '/chamber/', 'cache-control': 'no-store' })
       res.end()
       return true
@@ -471,12 +620,14 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     // Exact-prefix match only: /chamber/runtime and /chamber/runtime/<suffix>
     // belong to the controller; /chamber/runtimeevil must NOT be claimed.
     if (pathname === '/chamber/runtime' || pathname.startsWith('/chamber/runtime/')) {
+      if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       await getRuntime().handle(req, res, pathname)
       return true
     }
     // 4. Feature host (design 17 §8.5): /chamber/* is the gateway's own
     // orchestration surface (git worktrees, approvals, cron, settings).
     if (pathname.startsWith('/chamber/')) {
+      if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       await getFeatures().handle(req, res, pathname)
       return true
     }
@@ -484,6 +635,7 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     // Relax the shell's nonce CSP for the proxied dsh HTML (S14): the proxy
     // cannot backfill the nonce, so script-src must allow dsh's inline scripts.
     res.setHeader('content-security-policy', GATEWAY_PROXY_CSP)
+    if (rejectStaleHttp(res, authenticatedPrincipal)) return true
     try {
       await getProxy().handleHttp(req, res)
     } catch (error) {
@@ -494,7 +646,7 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
     return true
   }
 
-  const upgradeMiddleware: GatewayDispatch['upgradeMiddleware'] = async (req, socket, head) => {
+  const upgradeMiddleware: GatewayDispatch['upgradeMiddleware'] = async (req, socket, head, ctx) => {
     const rawTarget = req.url ?? '/'
     if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
       || rawTarget.includes('\\') || rawTarget.includes('#')) {
@@ -529,11 +681,24 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       rejectWs(socket, 401, 'unauthorized')
       return true
     }
+    if (!principalIsCurrent(principal)) {
+      rejectWs(socket, 401, 'unauthorized')
+      return true
+    }
+    // Register before route dispatch. A generation bump while an upstream
+    // handshake is pending destroys this downstream socket; the existing
+    // proxy close listener then aborts the upstream leg as well.
+    trackSocket(socket)
     // 2. The dsh Remote-stream mux path → origin fence + gateway-proxy. The
     // old events.mux/events.host downlinks were removed upstream (W3); the
     // 0.1.2 wire carries Typert Remote streams (session/control, session/follow,
     // workspace/follow, $events) over /api/remote.mux.
     if (pathname === '/api/remote.mux') {
+      if (!principalIsCurrent(principal)) {
+        rejectWs(socket, 401, 'unauthorized')
+        return true
+      }
+
       try {
         await getProxy().handleUpgrade(req, socket as never, head)
       } catch (error) {
@@ -542,9 +707,33 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       }
       return true
     }
-    // 3. Everything else → fall through (instance-proxy handles /api/i/*).
+    // 3. Instance streams use the authoritative control-plane proxy directly
+    // when its context is available, avoiding a post-middleware rotation gap.
+    if (pathname.startsWith('/api/i/')) {
+      if (!principalIsCurrent(principal)) {
+        rejectWs(socket, 401, 'unauthorized')
+        return true
+      }
+      const instanceProxy = (ctx as Partial<PlaneMiddlewareContext>).instanceProxy
+      if (instanceProxy !== undefined) {
+        try {
+          await instanceProxy.handleUpgrade(req as never, socket as never, head)
+        } catch (error) {
+          logger.warn(`gateway dispatch: instance upgrade failure: ${String(error)}`)
+          socket.destroy()
+        }
+        return true
+      }
+    }
+    // 4. Everything else → fall through (the default proxy rejects unknown
+    // paths; authenticated sockets remain generation-tracked until close).
     return false
   }
 
-  return { middleware, upgradeMiddleware }
+  return {
+    middleware,
+    upgradeMiddleware,
+    resume(): void { credentialMutationsAccepted = true },
+    quiesce,
+  }
 }

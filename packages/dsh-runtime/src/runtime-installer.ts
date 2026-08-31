@@ -14,7 +14,6 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -32,6 +31,13 @@ import { fetchRegistryResponse } from './registry-metadata.ts'
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { assertSafeVersion } from './version-safety.ts'
+import {
+  assertRuntimeRootNoFollow,
+  atomicWriteRuntimeFileNoFollow,
+  createPrivateDirectoryNoFollow,
+  ensureRuntimeRootNoFollow,
+  ensureRuntimeSubdirectoryNoFollow,
+} from './private-fs.ts'
 
 export const DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 export const INSTALL_TERMINATE_GRACE_MS = 1_000
@@ -291,7 +297,7 @@ function writeFailedScene(runtimeDir: string, version: string, stage: InstallFai
   const destination = failedScenePath(runtimeDir, version)
   const tmp = join(runtimeDir, `.${version}.failed-tmp-${randomBytes(4).toString('hex')}`)
   try {
-    mkdirSync(tmp, { mode: 0o700 })
+    createPrivateDirectoryNoFollow(tmp)
     const detail = sanitizeInstallerOutput(errorMessage(error), FAILED_ERROR_LIMIT)
     writeFileSync(join(tmp, 'failure.json'), `${JSON.stringify({
       schemaVersion: 1,
@@ -685,28 +691,70 @@ interface ActiveInstallerOperation {
 
 const activeInstallerOperations = new Set<ActiveInstallerOperation>()
 let runtimeInstallerDisposing = false
+let runtimeInstallerPoisoned = false
+let runtimeInstallerDisposePromise: Promise<void> | null = null
+
+/** Narrow lifecycle seam for deterministic failed-proof tests. Runtime hosts
+ * omit it and always dispose/reset the module-owned supervisor. */
+export interface RuntimeInstallerDisposalDeps {
+  /** Deterministic failure seam after the real supervisor and operation drain
+   * have succeeded but before reset. It can only make disposal stricter; it
+   * cannot replace or fake either writer proof. */
+  beforeReset?: () => void
+}
 
 /** Exported lifecycle hook; main's will-quit cleanup must await this. */
-export async function disposeRuntimeInstaller(): Promise<void> {
+export function disposeRuntimeInstaller(deps: RuntimeInstallerDisposalDeps = {}): Promise<void> {
+  if (runtimeInstallerDisposePromise !== null) return runtimeInstallerDisposePromise
   runtimeInstallerDisposing = true
-  const operations = [...activeInstallerOperations]
-  try {
-    for (const operation of operations) {
-      operation.controller.abort(new Error('runtime installer is shutting down'))
+  // Poison before any async boundary. A failed writer proof must survive this
+  // call and reject every later default OR injected runner until a subsequent
+  // disposal proves the complete operation set quiet and resets successfully.
+  runtimeInstallerPoisoned = true
+
+  const proof = (async () => {
+    const supervisorProof = Promise.allSettled([defaultSupervisor.dispose()])
+
+    // Existing operations can be at download, injected-runner, or default
+    // child phases. Abort and drain to a fixed point: a settling operation can
+    // finish registering its cleanup tail after the first snapshot.
+    while (activeInstallerOperations.size > 0) {
+      const operations = [...activeInstallerOperations]
+      for (const operation of operations) {
+        operation.controller.abort(new Error('runtime installer is shutting down'))
+      }
+      await Promise.allSettled(operations.map((operation) => operation.closed))
     }
-    await Promise.all([
-      defaultSupervisor.dispose(),
-      Promise.allSettled(operations.map((operation) => operation.closed)),
-    ])
+
+    // allSettled ordering is intentional: a supervisor proof failure must not
+    // skip the operation drain above, and no cleanup success may hide it.
+    const [supervisorResult] = await supervisorProof
+    if (supervisorResult.status === 'rejected') throw supervisorResult.reason
+
     // The host may legitimately restart the manager in the same process
     // (gateway stop → start). A disposal that PROVED writer quiescence
     // reopens the supervisor for later installs/prunes; a FAILED disposal
     // throws above and keeps the shutting-down latch, so an unproven writer
     // never gets concurrent work (review fix).
+    deps.beforeReset?.()
     defaultSupervisor.reset()
-  } finally {
-    runtimeInstallerDisposing = false
-  }
+    runtimeInstallerPoisoned = false
+  })()
+
+  runtimeInstallerDisposePromise = proof.then(
+    () => {
+      runtimeInstallerDisposing = false
+      runtimeInstallerDisposePromise = null
+    },
+    (error: unknown) => {
+      runtimeInstallerDisposing = false
+      runtimeInstallerDisposePromise = null
+      // runtimeInstallerPoisoned deliberately remains true. Only the success
+      // arm above can clear it after the reset proof.
+      throw error
+    },
+  )
+  return runtimeInstallerDisposePromise
 }
 
 function resolveInstallerNodeExecutable(): { file: string; args: string[]; env: Record<string, string> } {
@@ -773,12 +821,18 @@ export async function downloadVerifiedRegistryTarball(
     for await (const raw of response.body) {
       opts.signal.throwIfAborted()
       const chunk = Buffer.from(raw)
-      received += chunk.length
-      if (received > maxBytes) throw new Error(`registry tarball exceeds ${maxBytes} bytes`)
-      verifier.update(chunk)
-      await file.write(chunk)
-      // Byte progress for the design-18 M4 bar; the controller throttles.
-      opts.onProgress?.(received, total)
+      if (received + chunk.length > maxBytes) throw new Error(`registry tarball exceeds ${maxBytes} bytes`)
+      let offset = 0
+      while (offset < chunk.length) {
+        opts.signal.throwIfAborted()
+        const { bytesWritten } = await file.write(chunk, offset, chunk.length - offset, null)
+        if (bytesWritten === 0) throw new Error('registry tarball write made no progress')
+        verifier.update(chunk.subarray(offset, offset + bytesWritten))
+        offset += bytesWritten
+        received += bytesWritten
+        // Byte progress for the design-18 M4 bar; the controller throttles.
+        opts.onProgress?.(received, total)
+      }
     }
     opts.signal.throwIfAborted()
     verifier.assertMatch()
@@ -802,11 +856,13 @@ function createOperationDeadline(external: AbortSignal | undefined, timeoutMs: n
   signal: AbortSignal
   cleanup: () => void
 } {
-  if (runtimeInstallerDisposing) {
+  if (runtimeInstallerDisposing || runtimeInstallerPoisoned) {
     // Same classification as the supervisor's disposing guard (round-3 fix):
     // owners switching on ERR_DSH_WRITER_UNSAFE see one consistent code for
     // every 'shutting down' refusal.
-    throw writerUnsafeError('runtime installer is shutting down')
+    throw writerUnsafeError(runtimeInstallerDisposing
+      ? 'runtime installer is shutting down'
+      : 'runtime installer writer quiescence is unproven')
   }
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error(`invalid install timeout: ${timeoutMs}`)
   const controller = new AbortController()
@@ -853,8 +909,8 @@ export interface PruneRuntimeStoreOptions {
  * output, source-scrubbed environment and shell-managed empty userconfig.
  */
 export async function pruneRuntimeStore(opts: PruneRuntimeStoreOptions): Promise<void> {
+  const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir)
   const deadline = createOperationDeadline(opts.signal, opts.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS)
-  const runtimeDir = join(opts.baseDir, 'dsh-runtime')
   const storeDir = join(runtimeDir, '.pnpm-store')
   const installHome = join(runtimeDir, '.install-home')
   const xdgCacheDir = join(runtimeDir, '.xdg-cache')
@@ -862,10 +918,10 @@ export async function pruneRuntimeStore(opts: PruneRuntimeStoreOptions): Promise
   const nodeFn = opts.deps?.node ?? resolveInstallerNodeExecutable
   const runFn = opts.deps?.run ?? ((args, runOpts) => defaultSupervisor.run(args, runOpts))
   try {
-    mkdirSync(runtimeDir, { recursive: true, mode: 0o700 })
-    mkdirSync(installHome, { recursive: true, mode: 0o700 })
-    mkdirSync(xdgCacheDir, { recursive: true, mode: 0o700 })
-    writeFileSync(npmrc, '', { mode: 0o600 })
+    ensureRuntimeSubdirectoryNoFollow(opts.baseDir, '.pnpm-store')
+    ensureRuntimeSubdirectoryNoFollow(opts.baseDir, '.install-home')
+    ensureRuntimeSubdirectoryNoFollow(opts.baseDir, '.xdg-cache')
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, npmrc, '')
     const node = nodeFn()
     deadline.signal.throwIfAborted()
     const result = await runFn([
@@ -920,7 +976,7 @@ async function defaultSmoke(
 export async function installRuntimeVersion(opts: InstallOptions): Promise<InstallResult> {
   const resolution = assertInstallResolution(opts.resolution)
   const version = resolution.version
-  const runtimeDir = join(opts.baseDir, 'dsh-runtime')
+  const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir)
   const versionTreeDir = join(runtimeDir, version)
   if (existsSync(versionTreeDir) && existingRuntimeTreeIsValid(opts.baseDir, version)) {
     throw new Error(`dsh runtime ${version} is already installed and valid; refusing to overwrite it`)
@@ -935,6 +991,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
   let preserveWorkDir = false
 
   const restorePreviousTree = (renameFn: InstallerDeps['rename']): void => {
+    assertRuntimeRootNoFollow(opts.baseDir)
     if (workPublished && existsSync(versionTreeDir)) {
       removeOwnedTree(versionTreeDir)
       workPublished = false
@@ -970,10 +1027,10 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     // indistinguishable from a post-spawn scene and blocks startup forever.
     const statePath = join(workDir, 'state')
     const writeState = (value: 'preparing' | 'spawning' | 'spawned' | 'failed'): void => {
-      writeFileSync(statePath, `${value}\n`, { mode: 0o600 })
+      atomicWriteRuntimeFileNoFollow(opts.baseDir, statePath, `${value}\n`)
     }
     const noteChildPid = (pid: number): void => {
-      writeFileSync(pidPath, String(pid), { mode: 0o600 })
+      atomicWriteRuntimeFileNoFollow(opts.baseDir, pidPath, String(pid))
       // PID evidence is written BEFORE the marker flips to 'spawned' — the
       // marker alone never authorizes cleanup.
       writeState('spawned')
@@ -993,19 +1050,20 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
         throw error
       }
     }
-    mkdirSync(runtimeDir, { recursive: true, mode: 0o700 })
-    mkdirSync(workDir, { recursive: true, mode: 0o700 })
-    mkdirSync(installHome, { recursive: true, mode: 0o700 })
-    mkdirSync(xdgCacheDir, { recursive: true, mode: 0o700 })
-    writeFileSync(npmrc, '', { mode: 0o600 })
+    createPrivateDirectoryNoFollow(workDir)
+    ensureRuntimeSubdirectoryNoFollow(opts.baseDir, '.pnpm-store')
+    ensureRuntimeSubdirectoryNoFollow(opts.baseDir, '.pnpm-cache')
+    ensureRuntimeSubdirectoryNoFollow(opts.baseDir, '.install-home')
+    ensureRuntimeSubdirectoryNoFollow(opts.baseDir, '.xdg-cache')
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, npmrc, '')
     writeState('preparing')
-    writeFileSync(join(workDir, 'package.json'), `${JSON.stringify({
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'package.json'), `${JSON.stringify({
       name: 'dsh-runtime-install',
       version: '0.0.0',
       private: true,
       dependencies: { '@deepseek-ai/dsh': 'file:./dsh-runtime-package.tgz' },
     }, null, 2)}\n`)
-    writeFileSync(join(workDir, 'pnpm-workspace.yaml'), `minimumReleaseAge: 0\nallowBuilds:\n${ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`).join('\n')}\n`)
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'pnpm-workspace.yaml'), `minimumReleaseAge: 0\nallowBuilds:\n${ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`).join('\n')}\n`)
 
     const nodeWithSandbox = () => {
       const resolved = nodeFn()
@@ -1078,12 +1136,13 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       integrity: resolution.integrity,
       criticalFiles: computeCriticalDigests(workDir, version),
     }
-    writeFileSync(join(workDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 
     rmSync(pidPath, { force: true })
     deadline.signal.throwIfAborted()
     stage = 'publish'
     reportStage({ stage: 'publish' })
+    assertRuntimeRootNoFollow(opts.baseDir)
     // Re-check at the commit point: a concurrent installer may have published
     // after our early refusal check. Valid trees are never replaced or reused.
     if (existsSync(versionTreeDir)) {
@@ -1138,7 +1197,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
         try { restorePreviousTree(renameFn) } catch { /* backup remains durable for manual recovery */ }
       }
       try {
-        mkdirSync(runtimeDir, { recursive: true, mode: 0o700 })
+        assertRuntimeRootNoFollow(opts.baseDir)
         writeFailedScene(runtimeDir, version, stage, error)
       } catch { /* never mask the original install failure */ }
     }
@@ -1146,7 +1205,10 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
   } finally {
     deadline?.cleanup()
     if (!preserveWorkDir) {
-      try { removeOwnedTree(workDir) } catch { /* startup stale-work cleanup is the final fallback */ }
+      try {
+        assertRuntimeRootNoFollow(opts.baseDir)
+        removeOwnedTree(workDir)
+      } catch { /* startup stale-work cleanup is the final fallback */ }
     }
   }
 }

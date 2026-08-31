@@ -29,19 +29,25 @@
  * cadence, design 09 §3.2).
  *
  * Security: every path is derived from stateDir/dshHome (internal path
- * concatenation — no user input injection surface); all writes are atomic
- * (tmp + rename) with 0600 perms so no partial/cross-user-readable state can
- * be observed.
+ * concatenation — no user input injection surface); controlled target parents
+ * are real final directory components, target reads are stable/no-follow and
+ * bounded, and writes use the shared random-O_EXCL/no-follow + file/parent
+ * fsync publication primitive with 0600 perms. Source package reads retain
+ * their ordinary filesystem/packaged-resource boundary.
  */
 
-import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 // The loader `insert` row render/parse/conflict logic is single-sourced in
 // cordis-inserts.ts (A2 cross-package protocol single-sourcing) — shared with
 // the desktop remote seed (plugin-sync.ts); only the fail-loud message
 // wording stays here.
 import { hasExactInsert, insertConflict, renderCordisInserts } from './cordis-inserts.ts'
+import {
+  atomicWritePrivateFileNoFollow,
+  ensurePrivateDirectoryNoFollow,
+  readPrivateFileNoFollow,
+} from './private-file.ts'
 
 /** The patch overlay file under <stateDir> (design 09 §3.1 方案 A). */
 export const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
@@ -121,25 +127,37 @@ export function missingHostPackageInserts(
 
 /** Files seeded from each chamber host package (its complete runtime surface). */
 const HOST_PACKAGE_SEED_FILES = ['package.json', 'dist/index.js'] as const
+const MAX_SEED_TARGET_BYTES = 64 * 1024 * 1024
 
-/** Atomic text write (tmp + fsync + rename, 0600): no partial file on
- *  crash (2026 review added the fsync). */
-function atomicWrite(path: string, content: string | Uint8Array): void {
-  const tmp = `${path}.${randomUUID()}.tmp`
-  const fd = openSync(tmp, 'w', 0o600)
+/** Stable target read. Only true absence is a cache miss; unsafe, oversized,
+ * or concurrently replaced evidence fails loudly instead of being followed. */
+function readSeedTarget(path: string, maxBytes = MAX_SEED_TARGET_BYTES): string | null {
   try {
-    if (typeof content === 'string') writeSync(fd, content)
-    else writeSync(fd, Buffer.from(content))
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
+    return readPrivateFileNoFollow(path, { tightenMode: 0o600, maxBytes }).value
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
   }
-  renameSync(tmp, path)
 }
 
-/** sha256 hex of a file's bytes (the seed in-sync comparison). */
-function sha256(path: string): string {
-  return createHash('sha256').update(readFileSync(path)).digest('hex')
+/** Materialize the profile-owned resolution anchors one final component at a
+ * time. The official hoisted profile contract makes `web/node_modules` and
+ * its scope real directories (package entries beneath them may be pnpm
+ * links); this chamber package is a bare seed and owns its package/dist dirs.
+ * `profiles/web` remains an ordinary ancestor so established home/profile
+ * layouts can still place it through a symlink. */
+function ensureSeedTargetParent(dshHome: string, packageName: string, relative: typeof HOST_PACKAGE_SEED_FILES[number]): string {
+  const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
+  const scopeDir = join(modulesDir, '@dsh-chamber')
+  const packageDir = join(scopeDir, packageName.slice('@dsh-chamber/'.length))
+  const directoryOptions = { existingMode: 'preserve' as const }
+  ensurePrivateDirectoryNoFollow(modulesDir, 0o700, directoryOptions)
+  ensurePrivateDirectoryNoFollow(scopeDir, 0o700, directoryOptions)
+  ensurePrivateDirectoryNoFollow(packageDir, 0o700, directoryOptions)
+  if (relative === 'dist/index.js') {
+    ensurePrivateDirectoryNoFollow(join(packageDir, 'dist'), 0o700, directoryOptions)
+  }
+  return join(packageDir, relative)
 }
 
 /**
@@ -158,11 +176,9 @@ export function buildPatchOverlay(
 ): string {
   const path = join(stateDir, HOST_GRAPH_PATCH_FILENAME)
   const content = renderCordisInserts(inserts)
-  if (existsSync(path) && readFileSync(path, 'utf8') === content) {
-    return path
-  }
-  mkdirSync(stateDir, { recursive: true })
-  atomicWrite(path, content)
+  ensurePrivateDirectoryNoFollow(stateDir, 0o700, { existingMode: 'preserve' })
+  if (readSeedTarget(path) === content) return path
+  atomicWritePrivateFileNoFollow(path, content, { mode: 0o600 })
   return path
 }
 
@@ -200,22 +216,21 @@ export function ensureHostPackage(
   if (!/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(packageName)) {
     throw new Error(`host package seed: invalid chamber package name ${JSON.stringify(packageName)}`)
   }
-  const targetDir = join(dshHome, 'profiles', 'web', 'node_modules', packageName)
   let wrote = false
   for (const relative of HOST_PACKAGE_SEED_FILES) {
     const source = join(sourceDir, relative)
-    const target = join(targetDir, relative)
     if (!existsSync(source)) {
       throw new Error(`host package seed: ${source} missing in package ${sourceDir}`)
     }
-    // existsSync(target) + sha256(target) is a tiny TOCTOU window: an
-    // external deletion between the two reads throws ENOENT from sha256 —
-    // fail-loud by design (a seed target vanishing mid-check is a
-    // profile-internal pnpm race), the window is sub-millisecond, and the
-    // next spawn's re-seed (index.ts resolveHostGraphPatch) self-heals.
-    if (existsSync(target) && sha256(source) === sha256(target)) continue
-    mkdirSync(dirname(target), { recursive: true })
-    atomicWrite(target, readFileSync(source))
+    // Source packages can live in the development tree or a packaged resource
+    // virtual filesystem, so their established ordinary read boundary stays
+    // unchanged. The chamber-owned target parent, by contrast, must be a real
+    // final component; a pnpm operation may prune it, but may not redirect it.
+    const sourceBytes = readFileSync(source)
+    const target = ensureSeedTargetParent(dshHome, packageName, relative)
+    const current = readSeedTarget(target, Math.max(MAX_SEED_TARGET_BYTES, sourceBytes.length))
+    if (current !== null && sourceBytes.equals(Buffer.from(current))) continue
+    atomicWritePrivateFileNoFollow(target, sourceBytes, { mode: 0o600 })
     wrote = true
   }
   return wrote

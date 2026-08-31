@@ -62,7 +62,12 @@ class FakeRequest extends EventEmitter {
     }
     return super.emit(event, ...args)
   }
-  destroy(): void { this.destroyed = true }
+  destroy(): void {
+    if (this.destroyed) return
+    this.destroyed = true
+    this.emit('aborted')
+    this.emit('close')
+  }
   async *[Symbol.asyncIterator](): AsyncIterableIterator<Buffer> {}
 }
 
@@ -114,7 +119,11 @@ function setup(
 }
 
 /** Real-store auth facade on a temp stateDir (with an optional audit file). */
-function realAuth(options: { config: Parameters<typeof createAuth>[0]; auditFile?: boolean }): {
+function realAuth(options: {
+  config: Parameters<typeof createAuth>[0]
+  auditFile?: boolean
+  deps?: Parameters<typeof createAuth>[3]
+}): {
   auth: AuthProvider
   store: GatewayStore
   dir: string
@@ -123,7 +132,7 @@ function realAuth(options: { config: Parameters<typeof createAuth>[0]; auditFile
 } {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-dispatch-'))
   const store = createGatewayStore(dir, silentLogger)
-  const auth = createAuth(options.config, store)
+  const auth = createAuth(options.config, store, silentLogger, options.deps)
   const auditFile = join(dir, 'audit.log')
   return {
     auth,
@@ -153,9 +162,15 @@ async function runHttp(
   dispatch: ReturnType<typeof setup>['dispatch'],
   req: FakeRequest,
   body?: string,
+  ctx: Parameters<ReturnType<typeof setup>['dispatch']['middleware']>[3] = {} as never,
 ): Promise<FakeResponse> {
   const res = new FakeResponse()
-  const pending = dispatch.middleware(req as unknown as ApiRequest, res as unknown as ApiResponse, new URL(req.url, 'http://localhost'), {} as never)
+  const pending = dispatch.middleware(
+    req as unknown as ApiRequest,
+    res as unknown as ApiResponse,
+    new URL(req.url, 'http://localhost'),
+    ctx,
+  )
   queueMicrotask(() => {
     if (body !== undefined) req.emit('data', Buffer.from(body))
     req.emit('end')
@@ -379,6 +394,272 @@ test('WS upgrade maps a saturated verify work gate to 503 auth_busy like HTTP', 
   assert.equal(state.upgradeProxyCalls, 0, 'a busy verify never reaches the proxy')
 })
 
+test('credential rotation revokes every authenticated downstream while preserving its own 200 response', async () => {
+  let generation = 0
+  const auth: AuthProvider = {
+    get kind() { return 'password+token' },
+    get generation() { return generation },
+    async verify() {
+      return { kind: 'token', id: 'test', issuedAt: 0, generation }
+    },
+    async changeToken() {
+      generation += 1
+      return { changed: true, kind: 'token', source: 'runtime', token: 'new-token' }
+    },
+  }
+  const config = parseGatewayConfig({
+    host: '0.0.0.0',
+    port: 3000,
+    uiPassword: PASSWORD,
+    publicOrigin: 'http://gateway.example:3000',
+  }, '/tmp/gateway-dispatch-stream-state', '/tmp/dsh')
+  const policy = createGatewayRequestPolicy(config)
+  const proxy = {
+    async handleHttp(_req: unknown, res: FakeResponse) { res.writeHead(200) },
+    async handleUpgrade() {},
+    closeAllStreams() {},
+  }
+  const features = {
+    async handle(_req: unknown, res: FakeResponse) { res.writeHead(200); return true },
+    start() {},
+    stop() {},
+  }
+  const dispatch = createGatewayDispatch(
+    auth,
+    () => proxy as never,
+    () => features as never,
+    () => ({ async handle() { return false } }) as never,
+    silentLogger,
+    policy,
+  )
+  let managementCalls = 0
+  let instanceUpgradeCalls = 0
+  const ctx = {
+    api: {
+      async handle(_req: unknown, res: FakeResponse) {
+        managementCalls += 1
+        // Simulate both management SSE and a long-lived /api/i/local HTTP
+        // response: neither ends until credential rotation destroys it.
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+      },
+      getCorsHeaders() { return { allowed: true, headers: {} } },
+    },
+    instanceProxy: {
+      async handleUpgrade() { instanceUpgradeCalls += 1 },
+    },
+  } as never
+  const headers = { host: 'gateway.example:3000', authorization: `Bearer ${TOKEN}` }
+  const managementSse = await runHttp(
+    dispatch,
+    new FakeRequest('GET', '/api/host/health-events', headers),
+    undefined,
+    ctx,
+  )
+  const localHttp = await runHttp(
+    dispatch,
+    new FakeRequest('GET', '/api/i/local/api/slow', headers),
+    undefined,
+    ctx,
+  )
+  const gatewayHttp = await runHttp(dispatch, new FakeRequest('GET', '/', headers))
+  const featureSse = await runHttp(dispatch, new FakeRequest('GET', '/chamber/notifications', headers))
+
+  const socket = () => {
+    const result = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      end() {},
+      destroy() {
+        result.destroyed = true
+        result.emit('close')
+      },
+    })
+    return result
+  }
+  const localWs = socket()
+  await dispatch.upgradeMiddleware(
+    new FakeRequest('GET', '/api/i/local/api/events.mux', headers) as unknown as ApiRequest,
+    localWs as never,
+    Buffer.alloc(0),
+    ctx,
+  )
+  const gatewayWs = socket()
+  await dispatch.upgradeMiddleware(
+    new FakeRequest('GET', '/api/events.mux', headers) as unknown as ApiRequest,
+    gatewayWs as never,
+    Buffer.alloc(0),
+    ctx,
+  )
+
+  const mutation = await runHttp(
+    dispatch,
+    new FakeRequest('POST', '/auth/change-token', {
+      ...headers,
+      'content-type': 'application/json',
+    }),
+    JSON.stringify({ newToken: 'fedcba9876543210fedcba9876543210' }),
+    ctx,
+  )
+  assert.equal(mutation.status, 200)
+  assert.equal(mutation.destroyed, false, 'the credential mutation response is excluded from its own teardown')
+  for (const response of [managementSse, localHttp, gatewayHttp, featureSse]) {
+    assert.equal(response.destroyed, true)
+  }
+  assert.equal(localWs.destroyed, true)
+  assert.equal(gatewayWs.destroyed, true)
+  assert.equal(managementCalls, 2, 'management SSE and /api/i/local HTTP use the authoritative plane API')
+  assert.equal(instanceUpgradeCalls, 1, '/api/i/local WS uses the authoritative instance proxy')
+})
+
+test('a failed credential mutation that advanced generation still revokes old traffic and preserves its own 500', async () => {
+  let generation = 0
+  const auth: AuthProvider = {
+    get kind() { return 'token' },
+    get generation() { return generation },
+    async verify() {
+      return { kind: 'token', id: 'test', issuedAt: 0, generation }
+    },
+    async changeToken() {
+      // Model a credential rename that became visible online before parent
+      // directory fsync reported EIO. The API must report the failure, while
+      // the generation fence still invalidates every older downstream.
+      generation += 1
+      const error = new Error('durability unknown') as Error & { code?: string }
+      error.code = 'EIO'
+      throw error
+    },
+  }
+  const config = parseGatewayConfig({
+    host: '0.0.0.0',
+    port: 3000,
+    apiToken: TOKEN,
+    publicOrigin: 'http://gateway.example:3000',
+  }, '/tmp/gateway-dispatch-failed-stream-state', '/tmp/dsh')
+  const policy = createGatewayRequestPolicy(config)
+  const proxy = {
+    async handleHttp(_req: unknown, res: FakeResponse) { res.writeHead(200) },
+    async handleUpgrade() {},
+    closeAllStreams() {},
+  }
+  const dispatch = createGatewayDispatch(
+    auth,
+    () => proxy as never,
+    () => ({ async handle() { return false }, start() {}, stop() {} }) as never,
+    () => ({ async handle() { return false } }) as never,
+    silentLogger,
+    policy,
+  )
+  const headers = { host: 'gateway.example:3000', authorization: `Bearer ${TOKEN}` }
+  const held = await runHttp(dispatch, new FakeRequest('GET', '/', headers))
+
+  const mutation = await runHttp(
+    dispatch,
+    new FakeRequest('POST', '/auth/change-token', {
+      ...headers,
+      'content-type': 'application/json',
+    }),
+    JSON.stringify({ newToken: 'fedcba9876543210fedcba9876543210' }),
+  )
+
+  assert.equal(mutation.status, 500)
+  assert.equal(JSON.parse(mutation.body).code, 'internal_error')
+  assert.equal(mutation.destroyed, false, 'the rejected mutation response remains deliverable')
+  assert.equal(held.destroyed, true, 'traffic admitted by the old generation is revoked on the error path')
+})
+
+test('dispatch quiescence drains an admitted credential write, fences new writes, and resume reopens admission', async () => {
+  let releaseFirst!: () => void
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+  let firstStarted!: () => void
+  const started = new Promise<void>(resolve => { firstStarted = resolve })
+  let changeCalls = 0
+  const auth: AuthProvider = {
+    kind: 'token',
+    generation: 0,
+    async verify() { return { kind: 'token', id: 'test', issuedAt: 0, generation: 0 } },
+    async changeToken() {
+      changeCalls += 1
+      if (changeCalls === 1) {
+        firstStarted()
+        await firstGate
+      }
+      return { changed: true, kind: 'token', source: 'runtime', token: 'new-token' }
+    },
+  }
+  const { dispatch } = setup(auth)
+  const headers = {
+    host: 'gateway.example:3000',
+    authorization: `Bearer ${TOKEN}`,
+    'content-type': 'application/json',
+  }
+  const first = runHttp(
+    dispatch,
+    new FakeRequest('POST', '/auth/change-token', headers),
+    JSON.stringify({ newToken: 'fedcba9876543210fedcba9876543210' }),
+  )
+  await started
+
+  let quiesced = false
+  const drain = dispatch.quiesce().then(() => { quiesced = true })
+  await Promise.resolve()
+  assert.equal(quiesced, false, 'state ownership cannot release while the credential writer is pending')
+  releaseFirst()
+  await first
+  await drain
+
+  const fenced = await runHttp(
+    dispatch,
+    new FakeRequest('POST', '/auth/change-token', headers),
+    JSON.stringify({ newToken: 'abcdef0123456789abcdef0123456789' }),
+  )
+  assert.equal(fenced.status, 503)
+  assert.equal(JSON.parse(fenced.body).code, 'gateway_stopping')
+  assert.equal(changeCalls, 1)
+
+  dispatch.resume()
+  const resumed = await runHttp(
+    dispatch,
+    new FakeRequest('POST', '/auth/change-token', headers),
+    JSON.stringify({ newToken: 'abcdef0123456789abcdef0123456789' }),
+  )
+  assert.equal(resumed.status, 200)
+  assert.equal(changeCalls, 2)
+})
+
+test('dispatch quiescence aborts and drains a credential request whose body never completes', async () => {
+  let changeCalls = 0
+  const auth: AuthProvider = {
+    kind: 'token',
+    generation: 0,
+    async verify() { return { kind: 'token', id: 'test', issuedAt: 0, generation: 0 } },
+    async changeToken() {
+      changeCalls += 1
+      return { changed: true, kind: 'token', source: 'runtime', token: 'new-token' }
+    },
+  }
+  const { dispatch } = setup(auth)
+  const request = new FakeRequest('POST', '/auth/change-token', {
+    host: 'gateway.example:3000',
+    authorization: `Bearer ${TOKEN}`,
+    'content-type': 'application/json',
+  })
+  const response = new FakeResponse()
+  const route = dispatch.middleware(
+    request as unknown as ApiRequest,
+    response as unknown as ApiResponse,
+    new URL(request.url, 'http://localhost'),
+    {} as never,
+  )
+  await new Promise<void>(resolve => setImmediate(resolve))
+  await Promise.race([
+    dispatch.quiesce(),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('credential body drain timed out')), 1_000)),
+  ])
+  await route
+  assert.equal(request.destroyed, true)
+  assert.equal(response.destroyed, true)
+  assert.equal(changeCalls, 0, 'an incomplete body never reaches the credential facade')
+})
+
 test('/chamber/runtime requires auth end-to-end (S20): 401 unauthenticated, claimed after auth', async () => {
   const seen: string[] = []
   const runtime = () => ({
@@ -455,7 +736,6 @@ test('POST /auth/change-password: a bearer-token principal changes the password,
     assert.equal(res.status, 200)
     assert.deepEqual(JSON.parse(res.body), { changed: true, kind: 'password', source: 'runtime' })
     assert.equal(res.headers['cache-control'], 'no-store')
-
     // The jwt-secret was rotated FIRST: the old cookie is immediately dead.
     const oldCookie = await runHttp(state.dispatch, new FakeRequest('GET', '/', {
       host: 'gateway.example:3000',
@@ -1032,6 +1312,31 @@ test('POST /auth/change-token returns the new plaintext token exactly once and i
   } finally { cleanup() }
 })
 
+test('credential change reuses the generation-bound gate proof: one bearer verifier total', async () => {
+  let verifierCalls = 0
+  const state = realAuth({
+    config: { kind: 'token', token: TOKEN },
+    deps: {
+      verifyCredentialAsync: async plain => {
+        verifierCalls += 1
+        return plain === TOKEN
+      },
+    },
+  })
+  try {
+    const { dispatch } = setup(state.auth)
+    const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/change-token', {
+      host: 'gateway.example:3000',
+      'content-type': 'application/json',
+      authorization: `Bearer ${TOKEN}`,
+    }), JSON.stringify({ newToken: 'proof-reuse-token-0123456789abcdef' }))
+
+    assert.equal(res.status, 200)
+    assert.equal(verifierCalls, 1,
+      'dispatch auth, audit principal attribution, and the S25 proof share one authenticated verdict')
+  } finally { state.cleanup() }
+})
+
 test('GET /auth/credentials returns the non-secret projection without any secret value (S5)', async () => {
   const { auth, cleanup } = realAuth({ config: { kind: 'password+token', password: PASSWORD, token: TOKEN } })
   try {
@@ -1191,7 +1496,7 @@ test('unauthenticated HTML-accept requests to /auth/* answer 401 JSON, not a log
   } finally { cleanup() }
 })
 
-test('a failing audit probe records probe-error:<code> without rejecting the change (S24)', async () => {
+test('credential audit reuses the authenticated gate principal without a verifier probe (S24)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-probe-'))
   const auditFile = join(dir, 'audit.log')
   let verifyCalls = 0
@@ -1199,9 +1504,7 @@ test('a failing audit probe records probe-error:<code> without rejecting the cha
     kind: 'token',
     async verify() {
       verifyCalls += 1
-      // Only the audit PROBE (2nd verify: gate already passed) fails — a
-      // saturated work gate must not mislabel the audit as 'unauthenticated'.
-      if (verifyCalls === 2) throw Object.assign(new Error('password verifier is busy'), { code: 'auth_busy' })
+      if (verifyCalls > 1) throw new Error('credential route re-verified its authenticated principal')
       return { kind: 'token', id: 'shared-token', issuedAt: Date.now() }
     },
     async changeToken() {
@@ -1215,11 +1518,12 @@ test('a failing audit probe records probe-error:<code> without rejecting the cha
       authorization: 'Bearer token-value',
       'content-type': 'application/json',
     }), '{}')
-    assert.equal(res.status, 200, 'the change itself is never rejected by a probe failure')
+    assert.equal(res.status, 200)
+    assert.equal(verifyCalls, 1, 'the audit kind comes from the dispatch admission verdict')
     const events = readAudit(auditFile)
     assert.equal(events.length, 1)
     assert.equal(events[0].event, 'credential_changed')
-    assert.match(events[0].detail ?? '', /principal:probe-error:auth_busy/)
+    assert.match(events[0].detail ?? '', /principal:token/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

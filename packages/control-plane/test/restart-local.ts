@@ -31,16 +31,6 @@ import { createControlPlane } from '../src/index.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 
-function mockCatalog() {
-  const row: { connectionId: string; status?: string } = { connectionId: 'local' }
-  return {
-    getConnection: () => row,
-    upsertConnection: (next: { status?: string }) => {
-      if (next.status !== undefined) row.status = next.status
-    },
-  }
-}
-
 /** A describe mock: healthy by default; `state.healthy` toggles failures. */
 function mockDescribe() {
   const state = { healthy: true }
@@ -92,7 +82,6 @@ test('restartLocal merges into an in-flight automatic restart (single spawn, no 
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -144,7 +133,6 @@ test('an automatic restart trigger suspends while a user restart is in flight (s
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -188,7 +176,6 @@ test('a successful user restart clears the failure counter (degraded → ready)'
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 100, healthProbeTimeoutMs: 1000, restartFailureThreshold: 100, failureThrottleMs: 0 },
     deps: {
@@ -231,7 +218,6 @@ test('a second restartLocal during an in-flight restart shares the same promise'
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -272,7 +258,6 @@ test('a failed user restart counts into the shared restart-exhausted window', as
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: {
       healthIntervalMs: 0,
@@ -307,7 +292,6 @@ test('restartLocal rejects under a closed spawn gate without spawning', async ()
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { canSpawn: () => ({ ok: false, reason: 'applying dsh vY' }) },
     deps: {
@@ -340,7 +324,6 @@ test('restartLocal rejects during an in-progress stop; final state stays stopped
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     deps: {
       spawnDsh: async () => child,
@@ -378,7 +361,6 @@ test('stop() reclaims an in-flight user restart without leaking a process', asyn
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -458,7 +440,6 @@ test('restartLocal rejects while a start is in flight (no spawn, no backoff-wind
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -498,7 +479,6 @@ test('restartLocal rejects from error state (spawn failure) with the honest not-
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -518,7 +498,6 @@ test('restartLocal rejects again once the shared window is exhausted (honest rec
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0, maxRestartsInWindow: 2 },
     deps: {
@@ -547,7 +526,6 @@ test('restart resolves the workspace thunk afresh (restart uses the current acti
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: () => workspace,
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -572,7 +550,6 @@ test('restartLocal rejects from stopped (never started) without spawning a ghost
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -629,7 +606,6 @@ test('R3: a process-death exit during the stop() window is inert (no restart res
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
@@ -680,7 +656,6 @@ test('a closed canSpawn gate (applying window) rejects start() and restartLocal 
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: { canSpawn: () => ({ ok: false, reason: 'applying dsh vY' }) },
     deps: {
@@ -743,7 +718,6 @@ test('D2: the restart window counts only triggerRestart (start()/stop() never pu
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: {
       healthIntervalMs: 0,
@@ -814,7 +788,6 @@ test('D2: restart counts do not survive a stop()/start() cycle (stop clears the 
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
-    catalog: mockCatalog(),
     logger: quietLogger,
     options: {
       healthIntervalMs: 0,

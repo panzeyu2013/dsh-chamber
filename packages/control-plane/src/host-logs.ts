@@ -21,9 +21,11 @@
  * `truncated: true` instead of loading the whole file.
  */
 
-import { appendFile, mkdir, open, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import { constants, type Stats } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { readPidRecord } from './spawn-dsh.ts'
 import type { PidRecord } from './spawn-dsh.ts'
 import type { Logger } from './types.ts'
@@ -81,6 +83,129 @@ interface PendingLogEntry {
   bytes: number
 }
 
+interface FileIdentity {
+  dev: number
+  ino: number
+}
+
+interface SafeLeaf {
+  identity: FileIdentity
+  stat: Stats
+}
+
+interface PinnedDirectory {
+  path: string
+  identity: FileIdentity
+  handle: FileHandle | null
+}
+
+function identityOf(stat: Stats): FileIdentity {
+  return { dev: stat.dev, ino: stat.ino }
+}
+
+function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
+function noFollowFlag(): number {
+  return typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
+}
+
+function assertSafeLeaf(path: string, value: Stats): SafeLeaf {
+  if (value.isSymbolicLink() || !value.isFile() || value.nlink !== 1) {
+    throw new Error(`host log leaf is not a single-link regular file: ${path}`)
+  }
+  return { identity: identityOf(value), stat: value }
+}
+
+async function inspectLeaf(path: string): Promise<SafeLeaf | null> {
+  try {
+    return assertSafeLeaf(path, await lstat(path))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+async function inspectExpectedLeaf(path: string, expected: FileIdentity): Promise<SafeLeaf> {
+  const current = await inspectLeaf(path)
+  if (current === null || !sameIdentity(current.identity, expected)) {
+    throw new Error(`host log leaf identity changed: ${path}`)
+  }
+  return current
+}
+
+/** Pin the caller-owned final log directory where POSIX exposes a no-follow
+ * directory descriptor. On Windows, retain the same before/after path
+ * identity checks without pretending Node can portably fsync a directory. */
+async function pinDirectory(path: string): Promise<PinnedDirectory> {
+  const before = await lstat(path)
+  if (before.isSymbolicLink() || !before.isDirectory()) {
+    throw new Error(`host log parent is not a real directory: ${path}`)
+  }
+  const identity = identityOf(before)
+  if (
+    process.platform === 'win32'
+    || typeof constants.O_DIRECTORY !== 'number'
+    || typeof constants.O_NOFOLLOW !== 'number'
+  ) {
+    return { path, identity, handle: null }
+  }
+  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isDirectory() || !sameIdentity(identity, identityOf(opened))) {
+      throw new Error(`host log parent changed while opening: ${path}`)
+    }
+    return { path, identity, handle }
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
+async function verifyDirectory(pin: PinnedDirectory): Promise<void> {
+  const atPath = await lstat(pin.path)
+  if (
+    atPath.isSymbolicLink()
+    || !atPath.isDirectory()
+    || !sameIdentity(pin.identity, identityOf(atPath))
+  ) {
+    throw new Error(`host log parent identity changed: ${pin.path}`)
+  }
+  if (pin.handle !== null) {
+    const opened = await pin.handle.stat()
+    if (!opened.isDirectory() || !sameIdentity(pin.identity, identityOf(opened))) {
+      throw new Error(`host log parent descriptor changed: ${pin.path}`)
+    }
+  }
+}
+
+async function syncDirectory(pin: PinnedDirectory): Promise<void> {
+  await verifyDirectory(pin)
+  if (pin.handle !== null) await pin.handle.sync()
+  await verifyDirectory(pin)
+}
+
+async function closeDirectory(pin: PinnedDirectory): Promise<void> {
+  await pin.handle?.close()
+}
+
+async function writeAll(handle: FileHandle, value: string): Promise<void> {
+  const bytes = Buffer.from(value)
+  let offset = 0
+  while (offset < bytes.length) {
+    const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset)
+    if (bytesWritten === 0) throw new Error('host log write made no progress')
+    offset += bytesWritten
+  }
+}
+
+async function removeOwnedLeaf(path: string, expected: FileIdentity): Promise<void> {
+  const current = await inspectLeaf(path)
+  if (current !== null && sameIdentity(current.identity, expected)) await unlink(path)
+}
+
 /** One shared lane per backing path. spawn-dsh stdout/stderr and the local
  * lifecycle logger can both create handles for the same port; sharing the
  * queue AND ring is what makes compaction preserve both producers. */
@@ -94,6 +219,7 @@ class AsyncHostLogLane {
   #needsSetup = true
   #linesWritten = 0
   #ring: string[] = []
+  #activeIdentity: FileIdentity | null = null
   #pending: PendingLogEntry[] = []
   #pendingEntries = 0
   #pendingBytes = 0
@@ -113,22 +239,27 @@ class AsyncHostLogLane {
   #resetGeneration(): void {
     this.#ring = []
     this.#linesWritten = 0
+    this.#activeIdentity = null
     this.#needsSetup = true
   }
 
   /** Load only a bounded tail of an existing generation. A replacement
    * writer must count earlier lines toward the same on-disk cap, but startup
    * must not read an arbitrarily large legacy log into memory. */
-  async #hydrateGeneration(): Promise<void> {
-    let fd: FileHandle
-    try {
-      fd = await open(this.path, 'r')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      return
-    }
+  async #hydrateGeneration(parent: PinnedDirectory): Promise<void> {
+    await verifyDirectory(parent)
+    const before = await inspectLeaf(this.path)
+    if (before === null) return
+    const fd = await open(this.path, constants.O_RDONLY | noFollowFlag())
     try {
       const info = await fd.stat()
+      const opened = assertSafeLeaf(this.path, info)
+      if (!sameIdentity(before.identity, opened.identity)) {
+        throw new Error(`host log leaf changed while opening: ${this.path}`)
+      }
+      await inspectExpectedLeaf(this.path, opened.identity)
+      await verifyDirectory(parent)
+      this.#activeIdentity = opened.identity
       if (info.size === 0) return
       const bytes = Math.min(info.size, MAX_WHOLE_READ_BYTES)
       const buffer = Buffer.allocUnsafe(bytes)
@@ -145,6 +276,20 @@ class AsyncHostLogLane {
       // A partial tail proves the old generation exceeded our byte budget;
       // compact it on the next successful append without guessing its count.
       this.#linesWritten = info.size > bytes ? MAX_LOG_LINES : lines.length
+      const after = assertSafeLeaf(this.path, await fd.stat())
+      const atPath = await inspectExpectedLeaf(this.path, opened.identity)
+      await verifyDirectory(parent)
+      if (
+        !sameIdentity(opened.identity, after.identity)
+        || after.stat.size !== info.size
+        || after.stat.mtimeMs !== info.mtimeMs
+        || after.stat.ctimeMs !== info.ctimeMs
+        || atPath.stat.size !== after.stat.size
+        || atPath.stat.mtimeMs !== after.stat.mtimeMs
+        || atPath.stat.ctimeMs !== after.stat.ctimeMs
+      ) {
+        throw new Error(`host log leaf changed while hydrating: ${this.path}`)
+      }
     } finally {
       await fd.close()
     }
@@ -152,18 +297,108 @@ class AsyncHostLogLane {
 
   /** (Re)create the log directory; the next append then lands. */
   async #setup(): Promise<void> {
-    await mkdir(this.directory, { recursive: true })
-    await this.#hydrateGeneration()
-    this.#needsSetup = false
+    await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    const parent = await pinDirectory(this.directory)
+    try {
+      await this.#hydrateGeneration(parent)
+      this.#needsSetup = false
+    } finally {
+      await closeDirectory(parent)
+    }
+  }
+
+  /** Append to the exact active generation, or exclusively create the first
+   * generation. No bytes are dispatched before parent/leaf identity checks. */
+  async #append(value: string): Promise<void> {
+    const parent = await pinDirectory(this.directory)
+    const expected = this.#activeIdentity
+    const created = expected === null
+    let fd: FileHandle | null = null
+    try {
+      await verifyDirectory(parent)
+      if (expected !== null) await inspectExpectedLeaf(this.path, expected)
+      const flags = constants.O_WRONLY | constants.O_APPEND | noFollowFlag()
+        | (created ? constants.O_CREAT | constants.O_EXCL : 0)
+      fd = await open(this.path, flags, 0o600)
+      const opened = assertSafeLeaf(this.path, await fd.stat())
+      if (expected !== null && !sameIdentity(expected, opened.identity)) {
+        throw new Error(`host log leaf changed while opening for append: ${this.path}`)
+      }
+      await inspectExpectedLeaf(this.path, opened.identity)
+      await verifyDirectory(parent)
+      await writeAll(fd, value)
+      await fd.sync()
+      const after = assertSafeLeaf(this.path, await fd.stat())
+      if (!sameIdentity(opened.identity, after.identity)) {
+        throw new Error(`host log descriptor identity changed after append: ${this.path}`)
+      }
+      await inspectExpectedLeaf(this.path, opened.identity)
+      await verifyDirectory(parent)
+      if (created) await syncDirectory(parent)
+      this.#activeIdentity = opened.identity
+    } finally {
+      try {
+        await fd?.close()
+      } finally {
+        await closeDirectory(parent)
+      }
+    }
   }
 
   /** Atomically replace the backing generation with its retained tail. */
   async #compact(retained: string[]): Promise<void> {
-    const tmp = `${this.path}.compact.tmp`
-    // Ring entries already end with '\n' — join with '' (a '\n' join
-    // would double the separators and leave blank lines between entries).
-    await writeFile(tmp, retained.join(''))
-    await rename(tmp, this.path)
+    const expected = this.#activeIdentity
+    if (expected === null) throw new Error(`host log generation disappeared before compaction: ${this.path}`)
+    const parent = await pinDirectory(this.directory)
+    const tmp = join(
+      this.directory,
+      `.${basename(this.path)}.compact-${process.pid}-${randomBytes(8).toString('hex')}.tmp`,
+    )
+    let fd: FileHandle | null = null
+    let tempIdentity: FileIdentity | null = null
+    let published = false
+    try {
+      await verifyDirectory(parent)
+      await inspectExpectedLeaf(this.path, expected)
+      fd = await open(
+        tmp,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
+        0o600,
+      )
+      const opened = assertSafeLeaf(tmp, await fd.stat())
+      tempIdentity = opened.identity
+      await inspectExpectedLeaf(tmp, opened.identity)
+      await verifyDirectory(parent)
+      // Ring entries already end with '\n' — join with '' (a '\n' join
+      // would double the separators and leave blank lines between entries).
+      await writeAll(fd, retained.join(''))
+      await fd.sync()
+      const after = assertSafeLeaf(tmp, await fd.stat())
+      if (!sameIdentity(opened.identity, after.identity)) {
+        throw new Error(`host log temp descriptor changed before publish: ${tmp}`)
+      }
+      await fd.close()
+      fd = null
+      await inspectExpectedLeaf(tmp, opened.identity)
+      await inspectExpectedLeaf(this.path, expected)
+      await verifyDirectory(parent)
+      await rename(tmp, this.path)
+      published = true
+      await inspectExpectedLeaf(this.path, opened.identity)
+      await syncDirectory(parent)
+      this.#activeIdentity = opened.identity
+    } finally {
+      if (fd !== null) {
+        try { await fd.close() } catch { /* best effort */ }
+      }
+      if (!published && tempIdentity !== null) {
+        try {
+          await verifyDirectory(parent)
+          await removeOwnedLeaf(tmp, tempIdentity)
+        } catch { /* preserve unsafe/replaced residue as evidence */ }
+      }
+      await closeDirectory(parent)
+    }
   }
 
   /** Drain batches serially. append and compaction share this one lane, so no
@@ -187,7 +422,7 @@ class AsyncHostLogLane {
           this.#ring = retained
           this.#linesWritten = retained.length
         } else {
-          await appendFile(this.path, entries.join(''))
+          await this.#append(entries.join(''))
           // Mutate the compaction source only after persistence succeeds: a
           // swallowed write must never be resurrected by a later replacement.
           this.#ring.push(...entries)
@@ -344,7 +579,7 @@ async function listSpawnRecords(stateDir: string): Promise<PidRecord[]> {
     if (!Number.isInteger(pid) || pid < 1) continue // claim-*.json and junk
     const record = readPidRecord(stateDir, pid)
     if (record === null) continue
-    records.push(Object.assign({ pid }, record))
+    records.push(record)
   }
   records.sort((a, b) => {
     const ta = a.startedAt ?? ''
@@ -417,10 +652,31 @@ function parseLogLine(raw: string): LogLine | null {
  *   did not fit the tail window.
  */
 export async function readLogTail(path: string, { limit, offset }: { limit: number; offset: number }): Promise<{ lines: LogLine[]; truncated: boolean }> {
-  const fd = await open(path, 'r')
+  const parent = await pinDirectory(dirname(path))
+  let fd: FileHandle | null = null
   try {
+    await verifyDirectory(parent)
+    const before = await inspectLeaf(path)
+    if (before === null) {
+      throw Object.assign(new Error(`host log file is missing: ${path}`), { code: 'ENOENT' })
+    }
+    fd = await open(path, constants.O_RDONLY | noFollowFlag())
     const info = await fd.stat()
-    if (info.size === 0) return { lines: [], truncated: false }
+    const opened = assertSafeLeaf(path, info)
+    if (!sameIdentity(before.identity, opened.identity)) {
+      throw new Error(`host log leaf changed while opening for read: ${path}`)
+    }
+    await inspectExpectedLeaf(path, opened.identity)
+    await verifyDirectory(parent)
+    if (info.size === 0) {
+      const afterEmptyRead = assertSafeLeaf(path, await fd.stat())
+      await inspectExpectedLeaf(path, opened.identity)
+      await verifyDirectory(parent)
+      if (!sameIdentity(opened.identity, afterEmptyRead.identity)) {
+        throw new Error(`host log leaf changed during empty read: ${path}`)
+      }
+      return { lines: [], truncated: false }
+    }
     const needed = limit + offset
     let text
     if (info.size <= TAIL_READ_BYTES) {
@@ -452,9 +708,22 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
     // EVERYTHING (never "return all lines", which would violate the limit
     // and the skip semantics; 2026 round-3 review).
     if (offset > 0) lines = lines.length > offset ? lines.slice(0, lines.length - offset) : []
+    const after = assertSafeLeaf(path, await fd.stat())
+    await inspectExpectedLeaf(path, opened.identity)
+    await verifyDirectory(parent)
+    // Concurrent append is safe: every read above is bounded by the original
+    // size. Replacement/compaction or truncation is not — never return bytes
+    // from a generation the namespace no longer owns.
+    if (!sameIdentity(opened.identity, after.identity) || after.stat.size < info.size) {
+      throw new Error(`host log leaf changed during read: ${path}`)
+    }
     return { lines: lines.map(parseLogLine).filter((entry): entry is LogLine => entry !== null), truncated }
   } finally {
-    await fd.close()
+    try {
+      await fd?.close()
+    } finally {
+      await closeDirectory(parent)
+    }
   }
 }
 
@@ -560,8 +829,10 @@ export function hostLogs({ stateDir, logger }: { stateDir: string; logger?: Logg
     for (const record of records) {
       let logFile: LogFileFacts
       try {
-        const info = await stat(logPathFor(stateDir, record.port))
-        logFile = { exists: true, size: info.size, mtimeMs: info.mtimeMs }
+        const log = await inspectLeaf(logPathFor(stateDir, record.port))
+        logFile = log === null
+          ? { exists: false }
+          : { exists: true, size: log.stat.size, mtimeMs: log.stat.mtimeMs }
       } catch {
         logFile = { exists: false }
       }

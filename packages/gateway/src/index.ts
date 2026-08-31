@@ -128,6 +128,20 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   let runtimeManager: GatewayRuntimeManager | null = null
   let createdPlane!: PlaneHandle
   let features!: FeatureHost
+  let dispatch!: ReturnType<typeof createGatewayDispatch>
+  let started = false
+  let startPromise: Promise<void> | null = null
+  let stopPromise: Promise<void> | null = null
+  let lifecycleEpoch = 0
+  let stopping = false
+  let unsubscribeLocalState: (() => void) | null = null
+  let featuresAttached = false
+  const runtimeExposureQuarantined = (): boolean => {
+    if (runtimeManager === null) return false
+    // Keep narrow structural lifecycle fakes compatible while the production
+    // manager supplies the sticky post-verdict quarantine.
+    return runtimeManager.exposureQuarantined?.() ?? runtimeManager.activationInProgress()
+  }
   // The whole synchronous construction is one transaction: any failure after
   // the store is created must release the stateDir exclusive lock (a leaked
   // lock would block every later start on the same directory for the process
@@ -188,7 +202,15 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // results (success/invalid/rate-limited/busy) — never a password, cookie or
     // session body. The file lives under the 0700 stateDir discipline (S15).
     const auditFile = join(options.config.plane.stateDir, 'audit.log')
-    const dispatch = createGatewayDispatch(auth, () => proxy as GatewayProxy, () => features, () => runtimeRoutes, logger, requestPolicy, auditFile)
+    dispatch = createGatewayDispatch(
+      auth,
+      () => proxy as GatewayProxy,
+      () => features,
+      () => runtimeRoutes,
+      logger,
+      requestPolicy,
+      auditFile,
+    )
     // Chamber host packages ship inside the gateway package (build.mjs copies
     // them into host-packages/); the control-plane seeds them into the managed
     // dsh profile so the full runtime activation probe set (which verifies
@@ -211,13 +233,17 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         return runtimeManager.resolveWorkspace().path
       },
       canStartLocal: () => {
+        const internalSpawn = runtimeManager?.internalSpawnActive() ?? false
+        if (stopping && !internalSpawn) {
+          return { ok: false, reason: 'gateway is stopping' }
+        }
         if (runtimeManager === null) return { ok: true }
-        if (runtimeManager.activationInProgress() && !runtimeManager.internalSpawnActive()) {
-          return { ok: false, reason: 'dsh runtime activation in progress' }
+        if (runtimeExposureQuarantined() && !internalSpawn) {
+          return { ok: false, reason: 'dsh runtime exposure is quarantined' }
         }
         return { ok: true }
       },
-      canExposeLocal: () => runtimeManager === null || !runtimeManager.activationInProgress(),
+      canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
       ...(options.config.plane.dshPort === undefined ? {} : { dshPortBase: options.config.plane.dshPort }),
       logger,
       corsOrigins: options.config.corsOrigins,
@@ -233,23 +259,19 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       // D3/F4 (design 18 addendum §5.3): while an activation transaction is in
       // flight the candidate tree must not serve online users — the same
       // predicate the control plane uses for local exposure.
-      canExposeLocal: () => runtimeManager === null || !runtimeManager.activationInProgress(),
+      canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
     })
   } catch (error) {
     store?.close()
     throw error
   }
-  let started = false
-  let startPromise: Promise<void> | null = null
-  let unsubscribeLocalState: (() => void) | null = null
-  let featuresAttached = false
-
   function syncFeatures(status: string): void {
+    runtimeManager?.observeLocalState?.(status)
     // A candidate (and any rollback candidate) may emit ready before the
     // activation probe verdict. Keep every dsh-derived consumer detached for
     // the full quarantine window; the manager explicitly calls back after the
     // verdict so a consumed ready edge is never the only attach trigger.
-    if (status === 'ready' && !(runtimeManager?.activationInProgress() ?? false)) {
+    if (!stopping && status === 'ready' && !runtimeExposureQuarantined()) {
       if (featuresAttached) return
       features.start()
       featuresAttached = true
@@ -260,17 +282,28 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     featuresAttached = false
   }
 
+  function assertStartEpoch(epoch: number): void {
+    if (stopping || lifecycleEpoch !== epoch) {
+      throw Object.assign(new Error('gateway start cancelled by stop'), { code: 'gateway_start_cancelled' })
+    }
+  }
+
   async function start(): Promise<void> {
+    if (stopPromise !== null) await stopPromise
     if (started) return
     if (startPromise !== null) return startPromise
-    startPromise = (async () => {
+    stopping = false
+    const epoch = ++lifecycleEpoch
+    const operation = (async () => {
       try {
         // Design 17 §4.1: a failed start (or a stop) releases the stateDir
         // exclusive lock; a retry must re-take it (fail-closed with a loud
         // 'gateway_locked' error if another process grabbed the directory in
         // between — M3 fix round).
         store.reacquire()
+        dispatch.resume()
         await createdPlane.start()
+        assertStartEpoch(epoch)
         // Runtime manager construction (single-owner guard + state root).
         runtimeManager = (options.deps?.createRuntimeManager ?? createGatewayRuntimeManager)({
           config: options.config,
@@ -282,6 +315,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // first startLocal() — cleanup → eviction → restore completion →
         // (pending) snapshot → pointer switch → spawn candidate → probe gate.
         const startup = await runtimeManager.startupTransaction()
+        assertStartEpoch(epoch)
         if (startup.blockedReason !== null && FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)) {
           throw new Error(`gateway runtime startup blocked: ${startup.blockedReason}`)
         }
@@ -294,6 +328,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // ready-gated, so the recovery surface stays reachable).
         if (startup.blockedReason === 'swap-attempted' || startup.blockedReason === 'restore-half' || startup.blockedReason === 'restore-incomplete') {
           logger.error(`gateway runtime startup blocked: ${startup.blockedReason}; managed dsh left stopped — resume via POST /chamber/runtime/retry-apply|retry-restore`)
+          // Production startupTransaction already stops a probe-left process
+          // before releasing activation quarantine. Repeat the idempotent stop
+          // at the composition boundary so a future/custom manager cannot turn
+          // a blocked-but-ready verdict into public exposure.
+          await createdPlane.stopLocal()
+          assertStartEpoch(epoch)
           unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
           started = true
           return
@@ -308,43 +348,166 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // Gateway is a managed local-dsh deployment, not API-only: readiness is
         // part of successful startup.
         await createdPlane.startLocal()
+        assertStartEpoch(epoch)
         syncFeatures(createdPlane.connectionState)
         createdPlane.refreshLocalExposure()
         started = true
       } catch (error) {
+        // The HTTP server is opened before the runtime startup transaction.
+        // Fence and drain any feature mutation admitted during that window
+        // before releasing the gateway store lock on rollback.
+        const featureQuiescence = features.quiesce()
+        // Fence credential writers and break authenticated requests that are
+        // still waiting for body bytes. Mutations beyond that boundary remain
+        // tracked until their complete route tail has settled.
+        const dispatchQuiescence = dispatch.quiesce()
         syncFeatures('error')
         unsubscribeLocalState?.()
         unsubscribeLocalState = null
-        await runtimeManager?.dispose().catch(stopError => logger.warn(`gateway runtime disposal failed: ${String(stopError)}`))
-        runtimeManager = null
+        let runtimeDisposalError: unknown = null
+        try {
+          await runtimeManager?.dispose()
+        } catch (stopError) {
+          runtimeDisposalError = stopError
+          logger.warn(`gateway runtime disposal failed; stateDir lock retained: ${String(stopError)}`)
+        }
+        if (runtimeDisposalError === null) runtimeManager = null
+        let featureQuiescenceError: unknown = null
+        try {
+          await featureQuiescence
+        } catch (drainError) {
+          featureQuiescenceError = drainError
+          logger.warn(`gateway feature mutation drain failed; stateDir lock retained: ${String(drainError)}`)
+        }
+        let dispatchQuiescenceError: unknown = null
+        try {
+          await dispatchQuiescence
+        } catch (drainError) {
+          dispatchQuiescenceError = drainError
+          logger.warn(`gateway credential mutation drain failed; stateDir lock retained: ${String(drainError)}`)
+        }
         await createdPlane.stop().catch(stopError => logger.warn(`gateway startup rollback failed: ${String(stopError)}`))
         // Release the stateDir exclusive lock on the rollback path so a retry
         // (or another process) can take over the directory (Phase 1 close).
-        store.close()
+        // If runtime disposal could not prove every writer quiescent, retain
+        // the outer state lock and owner record: allowing another gateway to
+        // enter would turn a cleanup failure into concurrent state mutation.
+        if (runtimeDisposalError === null && featureQuiescenceError === null && dispatchQuiescenceError === null) store.close()
+        if (runtimeDisposalError !== null || featureQuiescenceError !== null || dispatchQuiescenceError !== null) {
+          throw new AggregateError(
+            [error, runtimeDisposalError, featureQuiescenceError, dispatchQuiescenceError].filter(reason => reason !== null),
+            'gateway startup rollback could not prove all state writers quiescent; stateDir lock retained',
+          )
+        }
         throw error
       }
-    })().finally(() => { startPromise = null })
+    })()
+    const tracked = operation.finally(() => {
+      if (startPromise === tracked) startPromise = null
+    })
+    startPromise = tracked
     return startPromise
   }
 
-  async function stop(): Promise<void> {
-    await startPromise?.catch(() => {})
+  function stop(): Promise<void> {
+    if (stopPromise !== null) return stopPromise
+    // Fence every continuation of the current start before invoking any
+    // asynchronous cleanup. The runtime manager's dispose() aborts an active
+    // startup transaction/probe; when the manager does not exist yet, an
+    // immediate plane.stop() interrupts a deferred listen instead.
+    stopping = true
+    lifecycleEpoch += 1
+    // Admission closes synchronously inside quiesce(), before any async
+    // teardown can release the state lock or stop the dsh dependency of an
+    // already-entered saga. Ordinary ready/activation detach still uses the
+    // non-awaiting features.stop() path and cannot deadlock on its own request.
+    const featureQuiescence = features.quiesce()
+    const dispatchQuiescence = dispatch.quiesce()
+    const pendingStart = startPromise
+    const managerAtStop = runtimeManager
     unsubscribeLocalState?.()
     unsubscribeLocalState = null
-    // Reap runtime install children first (design 18 §9.3 stop order), then the
-    // gateway's own WS splices + feature consumers, then the control plane.
-    await runtimeManager?.dispose().catch(stopError => logger.warn(`gateway runtime disposal failed: ${String(stopError)}`))
     proxy?.closeAllStreams()
     syncFeatures('stopped')
-    try {
-      await createdPlane.stop()
-    } finally {
-      // Release the stateDir exclusive lock last, even if the plane stop
-      // failed (idempotent; Phase 1 close) — a locked directory would block
-      // every restart until the process exits.
-      store.close()
-    }
-    started = false
+
+    // Start quiescing immediately instead of waiting for startPromise. A real
+    // manager makes this the lifecycle-abort + writer barrier. The async IIFE
+    // invokes dispose() synchronously up to its first await.
+    const runtimeDisposal = (async (): Promise<unknown> => {
+      try {
+        await managerAtStop?.dispose()
+        return null
+      } catch (stopError) {
+        logger.warn(`gateway runtime disposal failed; stateDir lock retained: ${String(stopError)}`)
+        return stopError
+      }
+    })()
+
+    // There is no runtime abort controller before manager construction. Ask
+    // the plane to interrupt a pending listen now; a final stop below remains
+    // the authoritative cleanup proof after the start continuation settles.
+    const listenInterruption = managerAtStop === null
+      ? createdPlane.stop().catch(error => {
+          logger.warn(`gateway plane start interruption failed: ${String(error)}`)
+        })
+      : Promise.resolve()
+
+    const operation = (async () => {
+      await pendingStart?.catch(() => {})
+      const runtimeDisposalError = await runtimeDisposal
+      await listenInterruption
+
+      let featureQuiescenceError: unknown = null
+      try {
+        await featureQuiescence
+      } catch (error) {
+        featureQuiescenceError = error
+        logger.warn(`gateway feature mutation drain failed; stateDir lock retained: ${String(error)}`)
+      }
+      let dispatchQuiescenceError: unknown = null
+      try {
+        await dispatchQuiescence
+      } catch (error) {
+        dispatchQuiescenceError = error
+        logger.warn(`gateway credential mutation drain failed; stateDir lock retained: ${String(error)}`)
+      }
+
+      // Streams/features were synchronously detached above, and runtime
+      // disposal plus the feature-mutation barrier have settled. Only then do
+      // we prove the complete control plane is stopped; no public exposure or
+      // gateway-document writer survives the drain window.
+      let planeStopError: unknown = null
+      try {
+        await createdPlane.stop()
+      } catch (error) {
+        planeStopError = error
+      }
+      started = false
+      if (runtimeDisposalError === null && runtimeManager === managerAtStop) runtimeManager = null
+      // A plane-listener failure alone does not imply a surviving runtime writer,
+      // so preserve the existing retryability rule for that case. A failed
+      // runtime writer proof is categorically different: never release the
+      // stateDir lock even though the outer plane has been asked to stop.
+      if (runtimeDisposalError === null && featureQuiescenceError === null && dispatchQuiescenceError === null) store.close()
+      const writerErrors = [runtimeDisposalError, featureQuiescenceError, dispatchQuiescenceError]
+        .filter((error): error is {} => error !== null)
+      if (writerErrors.length > 0 && planeStopError !== null) {
+        throw new AggregateError(
+          [...writerErrors, planeStopError],
+          'gateway stop failed and state writer ownership was retained',
+        )
+      }
+      if (writerErrors.length === 1) throw writerErrors[0]
+      if (writerErrors.length > 1) {
+        throw new AggregateError(writerErrors, 'gateway state writers could not be proven quiescent; ownership retained')
+      }
+      if (planeStopError !== null) throw planeStopError
+    })()
+    const tracked = operation.finally(() => {
+      if (stopPromise === tracked) stopPromise = null
+    })
+    stopPromise = tracked
+    return tracked
   }
 
   return {
@@ -375,7 +538,7 @@ export type { SessionIndex, SessionProjection } from './features/index.ts'
 export { createScheduler } from './features/schedule.ts'
 export type { Scheduler, ScheduledJob } from './features/schedule.ts'
 export { createGatewayStore, hashCredential, verifyCredential } from './store.ts'
-export type { GatewayStore, GatewayDocument, DeviceRecord, WorktreeStoreRecord, ScheduleStoreRecord, GatewaySettingsDoc } from './store.ts'
+export type { GatewayStore, WorktreeStoreRecord, ScheduleStoreRecord, GatewaySettingsDoc } from './store.ts'
 export { createChannelRegistry } from './channels.ts'
 export type { ChannelKind, ChannelHealth, ChannelProvider, ChannelInstance, ChannelRegistry, ChannelListEntry } from './channels.ts'
 export { createGatewayRequestPolicy, GATEWAY_VIEWPORT_META } from './middleware.ts'

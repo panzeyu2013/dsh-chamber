@@ -24,23 +24,17 @@
  * EEXIST instead of racing a read-check-write window.
  */
 import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
   readFileSync,
   readdirSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
 } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { createRequire as nodeCreateRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
 import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
 import {
   bindRuntimeInstallResolution,
+  assertRuntimeRootNoFollow,
+  atomicWriteRuntimeFileNoFollow,
   buildCachedVersionList,
   buildVersionList,
   canonicalRegistryOrigin,
@@ -49,9 +43,11 @@ import {
   clearActivationJournal,
   compareRuntimeVersions,
   completeInterruptedRestore,
+  createRuntimeFileExclusiveNoFollow,
   deleteOverride,
   downloadVerifiedRegistryTarball,
   evictVersions,
+  ensureRuntimeRootNoFollow,
   fetchRegistryMetadata,
   disposeRuntimeInstaller,
   installRuntimeVersion,
@@ -60,15 +56,23 @@ import {
   latestKnownGood,
   listKnownGoodVersions,
   listValidVersionTrees,
+  noteBoot,
+  planRestartExhaustedRollback,
+  promoteDueCandidates,
+  quarantineRuntimeFileNoFollow,
   prepareManualRollbackData,
   readActivationJournalState,
   readCurrentPointer,
   readCurrentPointerState,
   readOverride,
   readOverrideState,
+  readPrivateFileNoFollow,
   recordExplicitInstall,
   recordProbePass,
   recordRuntimeFailure,
+  removeKnownGoodCandidate,
+  removeRuntimeFileNoFollow,
+  resetCandidateHealthWindow,
   restoreSnapshot,
   resolveSnapshotName,
   runRuntimeActivationProbes,
@@ -93,6 +97,7 @@ import {
   type RuntimeStatusProjection,
   type RuntimeDiskSummary,
   type RuntimeInstallProgress,
+  type RuntimeFileIdentity,
   type StartupDeps,
 } from '@dsh-chamber/dsh-runtime'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
@@ -137,109 +142,77 @@ const GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
 export const GATEWAY_RUNTIME_STATUS_KIND = 'dsh-chamber-gateway-runtime' as const
 
 /** Gateway-owned registry source persistence (owner-only 0600; design 18 §9.3). */
-function registryFile(stateRoot: string): string {
-  return join(stateRoot, 'registry.json')
+function registryFile(baseDir: string): string {
+  return join(baseDir, 'dsh-runtime', 'registry.json')
 }
 
-function registryCorruptEvidence(stateRoot: string): string[] {
+function registryCorruptEvidence(baseDir: string): string[] {
+  const stateRoot = assertRuntimeRootNoFollow(baseDir)
   try {
-    return readdirSync(stateRoot)
+    const evidence = readdirSync(stateRoot)
       .filter(name => name.startsWith('registry.json.corrupt-'))
       .sort()
+    assertRuntimeRootNoFollow(baseDir)
+    return evidence
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
 }
 
-function quarantineCorruptRegistry(stateRoot: string, reason: string): never {
-  const file = registryFile(stateRoot)
-  let suffix = `${Date.now()}-${process.pid}`
-  let destination = `${file}.corrupt-${suffix}`
-  for (let attempt = 1; existsSync(destination); attempt += 1) {
-    suffix = `${Date.now()}-${process.pid}-${attempt}`
-    destination = `${file}.corrupt-${suffix}`
-  }
+function quarantineCorruptRegistry(
+  baseDir: string,
+  reason: string,
+  expectedIdentity?: RuntimeFileIdentity,
+): never {
+  const file = registryFile(baseDir)
+  const destination = `${file}.corrupt-${Date.now()}-${process.pid}-${randomBytes(6).toString('hex')}`
   try {
-    renameSync(file, destination)
-    // `registry.json` itself is untrusted authority input. A symlink or a
-    // multiply-linked file is preserved by renaming the directory entry, but
-    // must never be chmodded afterwards: chmod follows symlinks and a hard
-    // link would mutate an inode outside the runtime-owned evidence tree.
-    const quarantined = lstatSync(destination)
-    if (quarantined.isFile() && !quarantined.isSymbolicLink() && quarantined.nlink === 1) {
-      chmodSync(destination, 0o600)
-    }
+    quarantineRuntimeFileNoFollow(baseDir, file, destination, {
+      ...(expectedIdentity === undefined ? {} : { expectedIdentity }),
+    })
   } catch (error) {
     throw new Error(`gateway runtime registry configuration is corrupt (${reason}) and could not be quarantined: ${sanitizeErrorText(String(error))}`)
   }
   throw new Error(`gateway runtime registry configuration is corrupt (${reason}); original bytes preserved as ${basename(destination)}`)
 }
 
-function readRegistryOrigin(stateRoot: string): string {
-  const file = registryFile(stateRoot)
-  let info
-  try {
-    info = lstatSync(file)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    const evidence = registryCorruptEvidence(stateRoot)
+function readRegistryOrigin(baseDir: string): string {
+  assertRuntimeRootNoFollow(baseDir)
+  const file = registryFile(baseDir)
+  const read = readPrivateFileNoFollow(file, 16 * 1024)
+  if (read.kind === 'missing') {
+    const evidence = registryCorruptEvidence(baseDir)
     if (evidence.length > 0) {
       throw new Error(`gateway runtime registry configuration remains quarantined (${evidence.at(-1)}); set a valid registry origin to recover`)
     }
     return DEFAULT_REGISTRY_ORIGIN
   }
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-    return quarantineCorruptRegistry(stateRoot, 'not a single-link regular file')
-  }
-  if (info.size > 16 * 1024) return quarantineCorruptRegistry(stateRoot, 'file exceeds 16 KiB')
-  try { chmodSync(file, 0o600) } catch (error) {
-    throw new Error(`gateway runtime registry permissions could not be tightened: ${sanitizeErrorText(String(error))}`)
+  if (read.kind === 'unsafe') {
+    return quarantineCorruptRegistry(baseDir, 'not a bounded single-link regular file')
   }
   let parsed: unknown
   try {
-    parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
+    parsed = JSON.parse(read.raw) as unknown
   } catch {
-    return quarantineCorruptRegistry(stateRoot, 'invalid JSON')
+    return quarantineCorruptRegistry(baseDir, 'invalid JSON', read.identity)
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return quarantineCorruptRegistry(stateRoot, 'invalid document shape')
+    return quarantineCorruptRegistry(baseDir, 'invalid document shape', read.identity)
   }
   const origin = (parsed as Record<string, unknown>).origin
   if (typeof origin !== 'string' || canonicalRegistryOrigin(origin) !== origin) {
-    return quarantineCorruptRegistry(stateRoot, 'origin is missing or non-canonical')
+    return quarantineCorruptRegistry(baseDir, 'origin is missing or non-canonical', read.identity)
   }
   return origin
 }
 
-function writeRegistryOrigin(stateRoot: string, origin: string): void {
-  mkdirSync(stateRoot, { recursive: true, mode: 0o700 })
-  const file = registryFile(stateRoot)
-  let tmp = ''
-  let fd: number | null = null
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    tmp = `${file}.tmp-${process.pid}-${Date.now()}-${attempt}`
-    try {
-      fd = openSync(tmp, 'wx', 0o600)
-      break
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-  }
-  if (fd === null) throw new Error('could not create an exclusive gateway registry temporary file')
-  try {
-    writeFileSync(fd, `${JSON.stringify({ origin }, null, 2)}\n`)
-    closeSync(fd)
-    fd = null
-    renameSync(tmp, file)
-    chmodSync(file, 0o600)
-  } catch (error) {
-    if (fd !== null) {
-      try { closeSync(fd) } catch { /* already closed */ }
-    }
-    try { unlinkSync(tmp) } catch { /* no temporary residue */ }
-    throw error
-  }
+function writeRegistryOrigin(baseDir: string, origin: string): void {
+  atomicWriteRuntimeFileNoFollow(
+    baseDir,
+    registryFile(baseDir),
+    `${JSON.stringify({ origin }, null, 2)}\n`,
+  )
 }
 
 function ownerFile(stateRoot: string): string {
@@ -250,38 +223,77 @@ function ownerFile(stateRoot: string): string {
  * Fail-loud single-process guard (design 18 §9.3): one gateway per stateDir.
  * O_EXCL exclusive create closes the read-check-write TOCTOU — a concurrent
  * second owner gets EEXIST; a stale owner whose pid is dead is taken over.
- * A takeover that cannot rewrite the record fails loud; the renamed
- * `owner.json.stale` residue is benign — the next takeover's renameSync
- * atomically replaces it.
+ * A takeover that cannot prove the exact moved bytes and the exact fresh
+ * token fails loud. Unique stale evidence is benign and may remain after an
+ * ambiguous durability failure.
  */
 const processRuntimeOwnerLeases = new Set<string>()
 
-function assertSingleOwner(stateRoot: string): string {
+interface RuntimeOwnerLease {
+  leaseKey: string
+  file: string
+  token: string
+  payload: string
+  identity: RuntimeFileIdentity
+}
+
+function verifyFreshRuntimeOwner(file: string, payload: string): RuntimeFileIdentity {
+  const proof = readPrivateFileNoFollow(file, 16 * 1024, { tightenMode: false })
+  if (proof.kind !== 'valid' || proof.raw !== payload) {
+    throw new Error('gateway runtime owner final proof failed; refusing writer authority')
+  }
+  return proof.identity
+}
+
+function restoreMovedRuntimeOwner(file: string, stale: string, movedRaw: string, movedIdentity: RuntimeFileIdentity): void {
+  try {
+    const current = readPrivateFileNoFollow(file, 16 * 1024, { tightenMode: false })
+    if (current.kind !== 'missing') return
+    quarantineRuntimeFileNoFollow(dirname(dirname(file)), stale, file, { expectedIdentity: movedIdentity })
+    const restored = readPrivateFileNoFollow(file, 16 * 1024, { tightenMode: false })
+    if (restored.kind !== 'valid' || restored.raw !== movedRaw) {
+      throw new Error('restored owner bytes do not match')
+    }
+  } catch {
+    // Fail-closed: the contender never enters. Exact stale/fresh evidence is
+    // retained for the current owner or operator; an unproved restore must
+    // never overwrite a third contender.
+  }
+}
+
+function assertSingleOwner(baseDir: string, beforeStaleRename?: () => void): RuntimeOwnerLease {
+  const stateRoot = assertRuntimeRootNoFollow(baseDir)
   const leaseKey = resolve(stateRoot)
   if (processRuntimeOwnerLeases.has(leaseKey)) {
     throw new Error('this process already owns the gateway runtime stateDir; refusing a second manager')
   }
-  mkdirSync(stateRoot, { recursive: true, mode: 0o700 })
   const file = ownerFile(stateRoot)
-  const payload = `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`
+  const token = randomBytes(24).toString('hex')
+  const payload = `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), token })}\n`
   try {
-    const fd = openSync(file, 'wx', 0o600)
-    writeFileSync(fd, payload)
-    closeSync(fd)
+    createRuntimeFileExclusiveNoFollow(baseDir, file, payload)
+    const identity = verifyFreshRuntimeOwner(file, payload)
     processRuntimeOwnerLeases.add(leaseKey)
-    return leaseKey
+    return { leaseKey, file, token, payload, identity }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
   }
   // The on-disk record is also authoritative: a same-pid owner is rejected
   // below (covering duplicate loaded copies of this module), a live foreign
   // pid fails loud, and only a dead foreign pid (ESRCH) is taken over.
-  let previousPid: number | null = null
+  let previousPid: number
+  const ownerRead = readPrivateFileNoFollow(file, 16 * 1024)
+  if (ownerRead.kind !== 'valid') {
+    throw new Error('gateway runtime owner record is unsafe or unreadable; refusing to take over without a proven-dead pid')
+  }
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { pid?: unknown }
-    if (typeof parsed.pid === 'number') previousPid = parsed.pid
+    const parsed = JSON.parse(ownerRead.raw) as { pid?: unknown }
+    if (typeof parsed.pid !== 'number' || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0) {
+      throw new Error('invalid pid')
+    }
+    previousPid = parsed.pid
   } catch {
-    previousPid = null
+    throw new Error('gateway runtime owner record is corrupt; refusing to take over without a proven-dead pid')
   }
   if (previousPid === process.pid) {
     // The on-disk record is a second, independent guard. Reject even when a
@@ -290,35 +302,48 @@ function assertSingleOwner(stateRoot: string): string {
     // can unlink the other's owner record.
     throw new Error(`this process (pid ${process.pid}) already owns the gateway runtime stateDir; refusing a second manager`)
   }
-  if (previousPid !== null) {
-    try {
-      process.kill(previousPid, 0)
+  try {
+    process.kill(previousPid, 0)
+    throw new Error(`another gateway process (pid ${previousPid}) owns this stateDir; dsh-runtime has no cross-process lock — refusing to start`)
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('another gateway process')) throw error
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
       throw new Error(`another gateway process (pid ${previousPid}) owns this stateDir; dsh-runtime has no cross-process lock — refusing to start`)
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('another gateway process')) throw error
-      if ((error as NodeJS.ErrnoException).code === 'EPERM') {
-        throw new Error(`another gateway process (pid ${previousPid}) owns this stateDir; dsh-runtime has no cross-process lock — refusing to start`)
-      }
-      // ESRCH: previous owner is gone — take over below.
     }
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    // ESRCH: previous owner is gone — take over below.
   }
   // Atomic takeover: rename the stale record out of the way FIRST — whoever
   // renames wins, and a second taker's rename fails ENOENT (fail-loud) instead
   // of racing an unlink that could remove the winner's fresh file.
-  const stale = `${file}.stale`
+  const stale = `${file}.stale-${process.pid}-${randomBytes(8).toString('hex')}`
+  let movedIdentity: RuntimeFileIdentity
   try {
-    renameSync(file, stale)
+    movedIdentity = quarantineRuntimeFileNoFollow(baseDir, file, stale, {
+      expectedIdentity: ownerRead.identity,
+      ...(beforeStaleRename === undefined ? {} : { beforeRename: beforeStaleRename }),
+    })
   } catch (error) {
+    const displaced = readPrivateFileNoFollow(stale, 16 * 1024, { tightenMode: false })
+    if (displaced.kind === 'valid') {
+      restoreMovedRuntimeOwner(file, stale, displaced.raw, displaced.identity)
+    }
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error('another gateway process is starting concurrently against this stateDir; refusing to start')
     }
-    throw error
+    throw new Error(`gateway runtime stale owner could not be durably claimed: ${sanitizeErrorText(String(error))}`)
   }
+  const moved = readPrivateFileNoFollow(stale, 16 * 1024, { tightenMode: false })
+  if (moved.kind !== 'valid' || moved.raw !== ownerRead.raw
+    || moved.identity.dev !== movedIdentity.dev || moved.identity.ino !== movedIdentity.ino) {
+    if (moved.kind === 'valid') restoreMovedRuntimeOwner(file, stale, moved.raw, moved.identity)
+    throw new Error('another gateway process replaced the owner during stale takeover; refusing to start')
+  }
+
+  let freshIdentity: RuntimeFileIdentity
   try {
-    const fd = openSync(file, 'wx', 0o600)
-    writeFileSync(fd, payload)
-    closeSync(fd)
-    try { unlinkSync(stale) } catch { /* already gone */ }
+    createRuntimeFileExclusiveNoFollow(baseDir, file, payload)
+    freshIdentity = verifyFreshRuntimeOwner(file, payload)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new Error('another gateway process is starting concurrently against this stateDir; refusing to start')
@@ -329,8 +354,27 @@ function assertSingleOwner(stateRoot: string): string {
     // could then run against the same stateRoot).
     throw new Error(`gateway runtime owner record could not be rewritten: ${sanitizeErrorText(String(error))}`)
   }
+  try {
+    removeRuntimeFileNoFollow(baseDir, stale, { expectedIdentity: moved.identity })
+  } catch {
+    // Unique stale evidence is non-authoritative. Retain it when cleanup
+    // durability is ambiguous; fresh owner authority was already proven.
+  }
   processRuntimeOwnerLeases.add(leaseKey)
-  return leaseKey
+  return { leaseKey, file, token, payload, identity: freshIdentity }
+}
+
+function releaseSingleOwner(baseDir: string, lease: RuntimeOwnerLease): void {
+  const current = readPrivateFileNoFollow(lease.file, 16 * 1024, { tightenMode: false })
+  if (current.kind !== 'valid' || current.raw !== lease.payload) {
+    throw new Error('gateway runtime owner token no longer matches; refusing to release another owner')
+  }
+  let token: unknown
+  try { token = (JSON.parse(current.raw) as { token?: unknown }).token } catch { token = null }
+  if (token !== lease.token) {
+    throw new Error('gateway runtime owner token no longer matches; refusing to release another owner')
+  }
+  removeRuntimeFileNoFollow(baseDir, lease.file, { expectedIdentity: current.identity })
 }
 
 export interface ResolvedWorkspace {
@@ -386,7 +430,14 @@ export interface GatewayRuntimeManager {
    * quarantine the already-running dsh from proxy/feature exposure. */
   mutationInProgress(): boolean
   activationInProgress(): boolean
+  /** Sticky public-exposure fence. Unlike activationInProgress(), this remains
+   * true after an unsafe blocked verdict so recovery routes stay reachable
+   * without allowing the probe-failed runtime to serve users. */
+  exposureQuarantined(): boolean
   internalSpawnActive(): boolean
+  /** Feed authoritative local-host state edges into the sustained-health
+   * monitor. Candidate edges are ignored while activation is quarantined. */
+  observeLocalState(status: string): void
   listVersions(): Promise<unknown>
   select(version: string): Promise<{ accepted: boolean; version: string }>
   apply(): Promise<{ pending: boolean }>
@@ -431,11 +482,21 @@ export interface GatewayRuntimeManagerOptions {
     isBuiltin: boolean
     baseUrl: string
     dshHome: string
+    signal?: AbortSignal
   }) => Promise<ProbeResult[]>
   /** Registry fetch seam for deterministic offline/cache tests. */
   fetchMetadata?: typeof fetchRegistryMetadata
   /** Delayed-verdict seam; production keeps the shared two-second delay. */
   waitBeforeRetry?: StartupDeps['waitBeforeRetry']
+  /** Sustained-health clock/scheduler seams. Production uses wall clock plus
+   * an unref'ed hourly tick; tests can advance the full 24h policy exactly. */
+  nowMs?: () => number
+  scheduleKnownGoodPromotion?: (callback: () => void) => () => void
+  /** Platform adapter seam. Production omits this and uses process.platform;
+   * tests use it to prove Windows stays entirely outside POSIX writer paths. */
+  platform?: NodeJS.Platform
+  /** Deterministic stale-takeover race seam; production callers omit it. */
+  ownerTakeoverBeforeRename?: () => void
   /** Host composition hook: detach dsh-derived consumers as soon as an
    * activation quarantine opens, and explicitly resync them after the verdict.
    * Candidate ready edges can otherwise be consumed before the probe decides. */
@@ -447,22 +508,40 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   // baseDir feeds the shared core (which appends `dsh-runtime`); stateRoot is
   // that same directory, used for gateway-owned files and tree paths.
   const baseDir = config.plane.stateDir
-  const stateRoot = join(baseDir, 'dsh-runtime')
+  const platform = options.platform ?? process.platform
+  // Windows is an explicitly read-only projection. Do not even enter the
+  // POSIX O_NOFOLLOW/O_DIRECTORY writer primitives: Node does not expose
+  // equivalent open flags there and a read-only manager must still start.
+  const stateRoot = platform === 'win32'
+    ? join(baseDir, 'dsh-runtime')
+    : ensureRuntimeRootNoFollow(baseDir)
   const dshHome = join(baseDir, 'dsh-home')
   const anchor = config.plane.dshWorkspacePath
   const envPath = process.env.DSH_GATEWAY_DSH_PATH?.trim() || null
   const shellVersion = GATEWAY_PACKAGE_VERSION
   const builtinVersion = readBuiltinVersion(anchor)
+  const nowMs = options.nowMs ?? Date.now
 
-  const ownerLeaseKey = assertSingleOwner(stateRoot)
-  mkdirSync(stateRoot, { recursive: true, mode: 0o700 })
+  const ownerLease = platform === 'win32'
+    ? null
+    : assertSingleOwner(baseDir, options.ownerTakeoverBeforeRename)
 
   let internalSpawn = false
   let activationDepth = 0
   let installInFlight = false
-  /** Set by dispose(): an in-flight apply-now job must never resurrect the
-   * managed dsh after the gateway has been stopped (P2 review fix). */
+  /** Synchronous edge latch for Design 18 F7. It is armed before the
+   * detached rollback promise yields, so repeated restart-exhausted
+   * notifications cannot enqueue two writers. */
+  let restartExhaustedRollbackInFlight = false
+  /** Lifecycle writer barrier. Every public mutation is tracked through its
+   * complete promise (including post-installer metadata writes), while the
+   * abort signal reaches candidate probes/install children. dispose() retains
+   * owner.json until both sets are demonstrably quiescent. */
   let disposed = false
+  const lifecycleAbort = new AbortController()
+  const activeOperations = new Set<Promise<unknown>>()
+  let disposePromise: Promise<void> | null = null
+  let localHealthWindowOpen = false
   /** Last select/restart failure, surfaced in status (R7 review: async job
    *  failures must stay observable; cleared by the next successful action). */
   let operationError: string | null = null
@@ -526,7 +605,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   function endActivation(): void {
     if (activationDepth <= 0) throw new Error('gateway runtime activation gate underflow')
     activationDepth -= 1
-    if (activationDepth === 0) notifyActivationQuarantine(false)
+    // Disposal is a permanent quarantine for this manager. A rollback probe
+    // may honestly finish after the lifecycle abort, but its endActivation()
+    // must never publish a false "open" edge while the final stop proof is
+    // still pending (or after an unsafe disposal retained ownership).
+    if (activationDepth === 0 && !disposed) notifyActivationQuarantine(false)
   }
 
   function requireBuiltinVersion(): string {
@@ -543,6 +626,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * user-migrated DSH_HOME without a transaction. */
   function resolveWorkspace(): ResolvedWorkspace {
     if (envPath !== null) return { path: envPath, version: readBuiltinVersion(envPath), source: 'env' }
+    if (platform === 'win32') {
+      return { path: anchor, version: builtinVersion, source: 'builtin' }
+    }
     const pointerState = readCurrentPointerState(baseDir)
     const overrideState = readOverrideState(baseDir)
     if (pointerState.kind === 'corrupt') throw new Error('gateway runtime current pointer is corrupt')
@@ -584,7 +670,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return { path: anchor, version: builtinVersion, source: 'builtin' }
   }
 
-  async function spawnAndProbeCandidate(version: string, isBuiltin: boolean): Promise<ProbeResult[]> {
+  async function spawnAndProbeCandidate(version: string, isBuiltin: boolean, signal?: AbortSignal): Promise<ProbeResult[]> {
     const target = isBuiltin ? anchor : join(stateRoot, version)
     transactionWorkspace = target
     internalSpawn = true
@@ -594,10 +680,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       if (port === null || !Number.isInteger(port)) throw new Error('managed dsh did not reach readiness for runtime probes')
       const baseUrl = `http://127.0.0.1:${port}`
       return options.probeCandidate !== undefined
-        ? await options.probeCandidate({ version, isBuiltin, baseUrl, dshHome })
+        ? await options.probeCandidate({ version, isBuiltin, baseUrl, dshHome, signal })
         : await runRuntimeActivationProbes({
             baseUrl,
             dshHome,
+            signal,
             call: async (url, method, payload, opts) => {
               const response = await dshCall(url, method, payload, { signal: opts?.signal, timeoutMs: opts?.timeoutMs })
               return { result: response.result }
@@ -610,6 +697,14 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function activationFacts(): { sourceVersion: string | null; sourceIsBuiltin: boolean; sourceWasKnownGood: boolean; knownGoodVersion: string | null } {
+    if (platform === 'win32') {
+      return {
+        sourceVersion: builtinVersion,
+        sourceIsBuiltin: true,
+        sourceWasKnownGood: true,
+        knownGoodVersion: null,
+      }
+    }
     const pointer = readCurrentPointer(baseDir)
     const knownGood = listKnownGoodVersions(baseDir)
     const record = readOverride(baseDir)
@@ -661,7 +756,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           writeCurrentPointer(baseDir, version)
         }
       },
-      spawnAndProbe: (version, isBuiltin) => spawnAndProbeCandidate(version, isBuiltin),
+      spawnAndProbe: (version, isBuiltin, signal) => spawnAndProbeCandidate(version, isBuiltin, signal),
       stopHost: async () => { await plane.stopLocal() },
       restore: (snapshotPath) => restoreSnapshot(baseDir, dshHome, snapshotPath),
       recordProbePass: (version) => recordProbePass(baseDir, version),
@@ -672,7 +767,16 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
   let startupBlockReason: string | null = null
 
-  async function executeStartupTransaction(): Promise<Awaited<ReturnType<typeof runStartupPhase>>> {
+  async function executeStartupTransaction(signal: AbortSignal = lifecycleAbort.signal): Promise<Awaited<ReturnType<typeof runStartupPhase>>> {
+    // Persisted wall time is not uptime. Every startup/activation transaction
+    // closes the prior process-health window; the first authoritative ready
+    // edge after the verdict opens a new boot-qualified window.
+    try {
+      resetCandidateHealthWindow(baseDir, nowMs())
+      localHealthWindowOpen = false
+    } catch (error) {
+      logger.warn(`gateway runtime known-good health reset failed: ${sanitizeErrorText(String(error))}`)
+    }
     // F4 shell-upgrade fallback (design 18 §3.5): a durable invalidation
     // means the fallback verdict already committed; only a newly observed
     // shell-version mismatch starts the shell-invalidation transaction.
@@ -690,7 +794,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         writeOverride(baseDir, invalidate(record, `gateway shell updated to ${shellVersion}`))
       }
     }
-    const startup = await runStartupPhase(buildStartupDeps())
+    const startup = await runStartupPhase(buildStartupDeps(), signal)
     // The shared core reports `env-override` as a deliberate bypass marker so
     // persisted pending is not touched. For the gateway host this is a healthy
     // startup outcome: env is the highest-priority active runtime, not a block
@@ -703,11 +807,24 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (result.blockedReason !== null) {
       logger.error(`gateway runtime startup blocked: ${result.blockedReason}`)
     }
+    // A probe may leave its candidate/fallback process in `ready` even when
+    // the transaction's durable verdict is blocked. Stop it before the owning
+    // activation scope calls endActivation(); otherwise that open-quarantine
+    // callback can reattach features and the root proxy to a probe-failed
+    // runtime. snapshot-failed is the one safe exception: it is decided before
+    // pointer mutation and callers intentionally restart the unchanged source.
+    if (result.blockedReason !== null && result.blockedReason !== 'snapshot-failed') {
+      await plane.stopLocal()
+    }
     return result
   }
 
   async function startupTransaction(): Promise<{ blockedReason: string | null }> {
     assertMutationIdle()
+    if (platform === 'win32') {
+      startupBlockReason = null
+      return { blockedReason: null }
+    }
     beginActivation()
     try {
       return { blockedReason: (await executeStartupTransaction()).blockedReason }
@@ -721,15 +838,29 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   // ---------------------------------------------------------------------------
 
   function activationInProgress(): boolean {
-    return activationDepth > 0
+    // `disposed` is intentionally sticky: once lifecycle quiescence starts,
+    // this manager can never expose or start the managed runtime again. This
+    // also keeps exposure closed when a rollback probe ends before dispose()'s
+    // final stopLocal() barrier.
+    return disposed || activationDepth > 0
+  }
+
+  function exposureQuarantined(): boolean {
+    // Snapshot failure happens before the pointer is touched; callers may
+    // safely restart the unchanged source after the activation window closes.
+    // Every other startup block is an unresolved recovery/authority verdict
+    // and must remain quarantined until a retry transaction clears it.
+    return activationInProgress()
+      || (startupBlockReason !== null && startupBlockReason !== 'snapshot-failed')
   }
 
   function mutationInProgress(): boolean {
     return activationInProgress() || installInFlight || restartInFlight || applyNowInFlight
+      || restartExhaustedRollbackInFlight
   }
 
   function persistedPendingVersion(): string | null {
-    if (envPath !== null) return null
+    if (envPath !== null || platform === 'win32') return null
     const state = readOverrideState(baseDir)
     if (state.kind === 'corrupt') throw new Error('gateway runtime override metadata is corrupt')
     if (state.kind !== 'valid' || shouldInvalidate(state.record, shellVersion) || state.record.pending === null) return null
@@ -768,6 +899,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function assertMutationIdle(): void {
+    if (disposed) throw Object.assign(new Error('gateway runtime manager is disposing'), { code: 'runtime_disposed' })
     if (activationInProgress()) throw Object.assign(new Error('runtime activation in progress'), { code: 'runtime_busy' })
     if (installInFlight) throw Object.assign(new Error('a runtime install is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
     if (restartInFlight) throw Object.assign(new Error('a restart is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
@@ -775,13 +907,252 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // accepted (applyNowInFlight=true) — before that the fence only existed
     // via activationDepth, which is a timing coincidence, not a contract.
     if (applyNowInFlight) throw Object.assign(new Error('an apply-now transaction is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
+    if (restartExhaustedRollbackInFlight) {
+      throw Object.assign(new Error('an automatic restart-exhausted rollback is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
+    }
+  }
+
+  function assertManagerReadable(): void {
+    if (disposed) {
+      throw Object.assign(new Error('gateway runtime manager is disposed'), { code: 'runtime_disposed' })
+    }
   }
 
   function internalSpawnActive(): boolean {
     return internalSpawn
   }
 
+  /**
+   * Design 18 F7 is emitted by the control-plane restart loop, not by a
+   * runtime route. Arm a synchronous latch, then join the manager's existing
+   * writer epoch before re-reading every durable/host authority. The initial
+   * microtask is intentional: restartLocal() can synchronously publish its
+   * terminal edge before the public restart promise has reached
+   * trackOperation().
+   */
+  function scheduleRestartExhaustedRollback(): void {
+    if (disposed || platform === 'win32' || envPath !== null || restartExhaustedRollbackInFlight
+      || plane.connectionState !== 'restart-exhausted') return
+
+    // Fast-path non-triggering sources before arming the writer latch. The
+    // durable state is still re-read after joining prior operations below;
+    // this check only guarantees builtin/env restart exhaustion remains a
+    // pure host-lifecycle fact with no runtime mutation epoch at all.
+    try {
+      const observed = resolveWorkspace()
+      if (observed.source !== 'override' || observed.version === null) return
+    } catch (error) {
+      logger.warn(`gateway runtime restart-exhausted observation failed: ${sanitizeErrorText(String(error))}`)
+      return
+    }
+
+    restartExhaustedRollbackInFlight = true
+    let operation!: Promise<void>
+    let rollbackDurablyLatched = false
+    operation = (async () => {
+      await Promise.resolve()
+
+      // A settling writer may enqueue another tracked tail. Drain all OTHER
+      // operations to a fixed point while the F7 latch refuses new mutations;
+      // exclude this operation itself to avoid a self-wait deadlock.
+      while (true) {
+        const blockers = [...activeOperations].filter(candidate => candidate !== operation)
+        if (blockers.length === 0) break
+        await Promise.allSettled(blockers)
+      }
+
+      // Authority may have changed while an already-accepted writer settled.
+      // F7 is legal only for the still-active override at an authoritative
+      // restart-exhausted terminal state; builtin/env never mutate metadata.
+      if (disposed || lifecycleAbort.signal.aborted || envPath !== null
+        || plane.connectionState !== 'restart-exhausted') return
+      const active = resolveWorkspace()
+      if (active.source !== 'override' || active.version === null) return
+
+      const failedVersion = active.version
+      const plan = planRestartExhaustedRollback({
+        restartExhausted: true,
+        activeIsOverride: true,
+        failedVersion,
+        journalState: readActivationJournalState(baseDir),
+        now: () => new Date(nowMs()),
+      })
+      if (plan.status === 'not-triggered') return
+
+      if (plan.status === 'planned') {
+        // Exactly-once/crash-recovery latch: this durable rollback-needed
+        // record MUST precede candidate mutation, host stop, pointer switch,
+        // or DSH_HOME restore. Preserve a concurrently queued next intent so
+        // shared startup can re-arm it only after reaching a safe fallback.
+        writeActivationJournal(baseDir, {
+          ...plan.journal,
+          nextIntent: plan.deferredIntent,
+        })
+      }
+      // `already-in-recovery` is itself durable proof; `planned` reaches here
+      // only after the write above succeeded. The catch path must not stop a
+      // host if creating the F7 latch failed — the shared planner explicitly
+      // forbids every rollback side effect before durable rollback-needed.
+      rollbackDurablyLatched = true
+
+      restartOutcome = 'failed'
+      operationError = `dsh v${failedVersion} exhausted managed restarts; automatic rollback in progress`
+
+      let result: Awaited<ReturnType<typeof runStartupPhase>>
+      beginActivation()
+      try {
+        // A version that exhausted the authoritative host restart policy can
+        // no longer earn known-good promotion, even if the following restore
+        // itself needs an operator retry.
+        removeKnownGoodCandidate(baseDir, failedVersion)
+        result = await executeStartupTransaction(lifecycleAbort.signal)
+      } finally {
+        endActivation()
+        invalidateDiskCache()
+      }
+
+      if (result.applyOutcome === null) {
+        operationError = sanitizeRouteError(
+          `restart-exhausted rollback did not complete${result.blockedReason === null ? '' : `: ${result.blockedReason}`}`,
+        )
+        return
+      }
+
+      operationError = sanitizeRouteError(
+        result.applyOutcome.error
+          ?? (result.applyOutcome.status === 'rolled-back'
+            ? `dsh v${failedVersion} exhausted managed restarts and was automatically rolled back`
+            : `restart-exhausted rollback ended with ${result.applyOutcome.status}`),
+      )
+
+      // Candidate/fallback probes may leave a process alive, but the normal
+      // host/exposure lifecycle is re-synchronized only after quarantine has
+      // closed. A dispose that raced the probe permanently suppresses this
+      // recovery start; dispose's final stop is the ownership-release proof.
+      if (!disposed && result.blockedReason === null) {
+        await plane.startLocal()
+        if (!disposed) plane.refreshLocalExposure()
+      }
+    })().catch(async (error) => {
+      if (!disposed) {
+        operationError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
+        logger.error(`gateway runtime restart-exhausted rollback failed: ${sanitizeErrorText(String(error))}`)
+        if (rollbackDurablyLatched) {
+          try {
+            await plane.stopLocal()
+          } catch (stopError) {
+            logger.warn(`gateway runtime restart-exhausted stop failed: ${sanitizeErrorText(String(stopError))}`)
+          }
+        }
+      }
+    }).finally(() => {
+      restartExhaustedRollbackInFlight = false
+    })
+    trackOperation(operation)
+  }
+
+  function observeLocalState(status: string): void {
+    if (disposed || platform === 'win32' || activationInProgress()) return
+    if (status !== 'ready') {
+      if (localHealthWindowOpen) {
+        localHealthWindowOpen = false
+        try {
+          resetCandidateHealthWindow(baseDir, nowMs())
+        } catch (error) {
+          logger.warn(`gateway runtime known-good health reset failed: ${sanitizeErrorText(String(error))}`)
+        }
+      }
+      if (status === 'restart-exhausted') scheduleRestartExhaustedRollback()
+      return
+    }
+    if (localHealthWindowOpen) return
+    localHealthWindowOpen = true
+    try {
+      const active = resolveWorkspace()
+      if (active.source === 'override' && active.version !== null) {
+        noteBoot(baseDir, active.version, nowMs())
+        promoteDueCandidates(baseDir, nowMs())
+      }
+    } catch (error) {
+      logger.warn(`gateway runtime known-good boot observation failed: ${sanitizeErrorText(String(error))}`)
+    }
+  }
+
+  // Promotion is based on a live in-process interval, never elapsed offline
+  // wall time. observeLocalState closes the window on every unhealthy edge.
+  const runKnownGoodPromotion = () => {
+    if (disposed || platform === 'win32' || !localHealthWindowOpen || !plane.localProcessAlive) return
+    try {
+      promoteDueCandidates(baseDir, nowMs())
+    } catch (error) {
+      logger.warn(`gateway runtime known-good promotion failed: ${sanitizeErrorText(String(error))}`)
+    }
+  }
+  let cancelKnownGoodPromotion: () => void = () => {}
+  try {
+    if (platform !== 'win32') {
+      cancelKnownGoodPromotion = options.scheduleKnownGoodPromotion !== undefined
+        ? options.scheduleKnownGoodPromotion(runKnownGoodPromotion)
+        : (() => {
+            const timer = setInterval(runKnownGoodPromotion, 60 * 60 * 1_000)
+            timer.unref()
+            return () => { clearInterval(timer) }
+          })()
+    }
+  } catch (error) {
+    // A scheduler may retain the callback and then throw before returning its
+    // cancel handle. Permanently fence this abandoned closure before releasing
+    // owner authority; any later queued tick becomes a pure no-op.
+    disposed = true
+    lifecycleAbort.abort()
+    if (ownerLease !== null) {
+      try {
+        releaseSingleOwner(baseDir, ownerLease)
+        processRuntimeOwnerLeases.delete(ownerLease.leaseKey)
+      } catch (releaseError) {
+        throw new AggregateError([error, releaseError], 'gateway runtime construction failed and owner could not be released')
+      }
+    }
+    throw error
+  }
+
   async function status(): Promise<GatewayRuntimeStatus> {
+    assertManagerReadable()
+    if (platform === 'win32') {
+      const resolved = resolveWorkspace()
+      return {
+        kind: GATEWAY_RUNTIME_STATUS_KIND,
+        activeVersion: resolved.version,
+        builtinVersion,
+        currentVersion: null,
+        selectedVersion: null,
+        hasOverride: false,
+        source: resolved.source === 'env' ? 'env' : 'builtin-anchor',
+        phase: 'idle',
+        startupBlockedReason: null,
+        pending: null,
+        connectionState: plane.connectionState,
+        registry: DEFAULT_REGISTRY_ORIGIN,
+        registryError: null,
+        platform,
+        mutationsAllowed: false,
+        operationError,
+        restart: restartOutcome,
+        restoreOutcome: null,
+        snapshotCount: null,
+        latestSnapshotAt: null,
+        snapshotError: null,
+        restoreInProgress: null,
+        preRollbackCount: null,
+        preRollbackLatestName: null,
+        failure: null,
+        diskUsage: null,
+        diskError: null,
+        diskLimitBytes: GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+        diskLimitExceeded: null,
+        progress: null,
+      }
+    }
     const overrideState = readOverrideState(baseDir)
     const pointerState = readCurrentPointerState(baseDir)
     const override = overrideState.kind === 'valid' ? overrideState.record : null
@@ -796,7 +1167,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     let registry: string | null = null
     let registryError: string | null = null
     try {
-      registry = readRegistryOrigin(stateRoot)
+      registry = readRegistryOrigin(baseDir)
     } catch (error) {
       registryError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
     }
@@ -853,7 +1224,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           : resolved.source === 'env'
             ? 'env'
             : 'builtin-anchor',
-      phase: activationInProgress() ? 'applying'
+      // apply-now remains applying through its post-quarantine recovery and
+      // outcome-projection tail. activationDepth alone opens a false idle/ready
+      // poll window after the probe verdict but before startLocal/error state
+      // has settled.
+      phase: activationInProgress() || applyNowInFlight || restartExhaustedRollbackInFlight ? 'applying'
         : installInFlight ? 'installing'
         : startupBlockReason === 'snapshot-failed' ? 'snapshot-failed'
         : startupBlockReason === 'swap-attempted' ? 'swap-attempted'
@@ -867,8 +1242,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       connectionState: plane.connectionState,
       registry,
       registryError,
-      platform: process.platform,
-      mutationsAllowed: process.platform !== 'win32',
+      platform,
+      mutationsAllowed: true,
       operationError,
       // Last restart outcome (design 18 §9.3 review fix): 'running' from the
       // moment a restart is accepted until it settles; 'ok'/'failed' terminal.
@@ -895,12 +1270,16 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function listVersions(): Promise<unknown> {
-    const origin = readRegistryOrigin(stateRoot)
-    const cachedVersions = listValidVersionTrees(baseDir)
+    assertManagerReadable()
+    const origin = platform === 'win32' ? DEFAULT_REGISTRY_ORIGIN : readRegistryOrigin(baseDir)
+    const cachedVersions = platform === 'win32' ? [] : listValidVersionTrees(baseDir)
     let active: string | null = null
     try { active = resolveWorkspace().version } catch { /* status carries the loud selection error */ }
     try {
-      const meta = await (options.fetchMetadata ?? fetchRegistryMetadata)(DSH_PACKAGE_NAME, { origin })
+      const meta = await (options.fetchMetadata ?? fetchRegistryMetadata)(DSH_PACKAGE_NAME, {
+        origin,
+        signal: lifecycleAbort.signal,
+      })
       return {
         registryOrigin: meta.origin,
         versions: buildVersionList(meta, {
@@ -942,7 +1321,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function select(version: string): Promise<{ accepted: boolean; version: string }> {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
     assertNoPending()
@@ -1012,13 +1391,17 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           code: 'runtime_disk_limit',
         })
       }
-      const origin = readRegistryOrigin(stateRoot)
-      const meta = await (options.fetchMetadata ?? fetchRegistryMetadata)(DSH_PACKAGE_NAME, { origin })
+      const origin = readRegistryOrigin(baseDir)
+      const meta = await (options.fetchMetadata ?? fetchRegistryMetadata)(DSH_PACKAGE_NAME, {
+        origin,
+        signal: lifecycleAbort.signal,
+      })
       const resolution = bindRuntimeInstallResolution(meta, version, origin)
       const result = await installRuntimeVersion({
         baseDir,
         resolution,
         pnpmEntry: pnpmEntry(),
+        signal: lifecycleAbort.signal,
         onProgress: (progress) => { installProgress = progress.stage === 'done' ? null : progress },
         deps: {
           // Empty env: the installer applies its own scrub + HOME/XDG/
@@ -1071,7 +1454,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function apply(): Promise<{ pending: boolean }> {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
     assertNoPending()
@@ -1117,7 +1500,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function rollback(version: string): Promise<{ accepted: boolean }> {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
     assertNoPending()
@@ -1167,7 +1550,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function restoreBuiltin(): Promise<{ accepted: boolean }> {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
 
@@ -1186,7 +1569,6 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         manualRollback: false,
         intentKind: 'reset-builtin',
       })
-      startupBlockReason = null
       await plane.stopLocal()
       result = await executeStartupTransaction()
     } catch (error) {
@@ -1201,7 +1583,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // never spawns, so explicitly resume the untouched source after releasing
     // the activation gate. Hard recovery/metadata blocks intentionally stay
     // stopped and pollable.
-    if (result.blockedReason === null || result.blockedReason === 'snapshot-failed') {
+    if (!disposed && (result.blockedReason === null || result.blockedReason === 'snapshot-failed')) {
       try {
         await plane.startLocal()
         plane.refreshLocalExposure()
@@ -1287,7 +1669,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * Returns the resolved target version.
    */
   function applyNowPreflight(): string {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
 
@@ -1423,7 +1805,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // override/journal, so `target` needs no separate plumbing into it.
     const target = applyNowPreflight()
     applyNowInFlight = true
-    void (async () => {
+    const job = (async () => {
       // P0 (review fix): the recovery segment (startLocal + exposure resync)
       // and the F3 projection run AFTER endActivation() closes the quarantine
       // window — restoreBuiltin order (mirror restoreBuiltin :1180-1192). The
@@ -1442,7 +1824,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         beginActivation()
         try {
           await plane.stopLocal()
-          result = await executeStartupTransaction()
+          result = await executeStartupTransaction(lifecycleAbort.signal)
         } finally {
           endActivation()
           invalidateDiskCache()
@@ -1470,6 +1852,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         applyNowInFlight = false
       }
     })()
+    trackOperation(job)
     return { accepted: true }
   }
 
@@ -1482,7 +1865,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * the state stays honest (operationError set, connectionState not ready). */
   async function resumeAfterBlockedStartup(): Promise<{ blockedReason: string | null }> {
     const result = await startupTransaction()
-    if (result.blockedReason === null) {
+    if (!disposed && result.blockedReason === null) {
       try {
         await plane.startLocal()
         plane.refreshLocalExposure()
@@ -1495,7 +1878,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function retryApply(): Promise<{ accepted: boolean; blockedReason: string | null }> {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
     assertNoOrdinaryPending()
@@ -1516,7 +1899,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   async function retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }> {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
     assertNoOrdinaryPending()
@@ -1530,63 +1913,127 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function getRegistry(): { origin: string } {
-    return { origin: readRegistryOrigin(stateRoot) }
+    assertManagerReadable()
+    return { origin: platform === 'win32' ? DEFAULT_REGISTRY_ORIGIN : readRegistryOrigin(baseDir) }
   }
 
   async function setRegistry(origin: string): Promise<{ origin: string }> {
-    if (process.platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); registry mutation is disabled'), { code: 'env_override_active' })
     assertNoPending()
     const canonical = canonicalRegistryOrigin(origin)
     if (canonical === null) throw Object.assign(new Error('invalid registry origin'), { code: 'bad_registry_origin' })
-    writeRegistryOrigin(stateRoot, canonical)
+    writeRegistryOrigin(baseDir, canonical)
     return { origin: canonical }
   }
 
-  async function dispose(): Promise<void> {
-    // P2-5 (review fix): an in-flight apply-now job checks this right after the
-    // activation window closes and must not resurrect the managed dsh once the
-    // gateway is being stopped.
-    disposed = true
-    // Reap install children (design 17 §2.1 stop order / S17): a pnpm child
-    // left behind would make the next startup's cleanupStaleInstalls refuse
-    // to clean a live writer and block boot. The caller MUST await this —
-    // disposal only completes once the installer children are reaped.
-    try {
-      await disposeRuntimeInstaller()
-    } catch (error) {
-      logger.warn(`gateway runtime installer disposal failed: ${sanitizeErrorText(String(error))}`)
+  function trackOperation<T>(operation: Promise<T>): Promise<T> {
+    activeOperations.add(operation)
+    void operation.then(
+      () => { activeOperations.delete(operation) },
+      () => { activeOperations.delete(operation) },
+    )
+    return operation
+  }
+
+  async function drainOperations(): Promise<void> {
+    // A settling operation can enqueue its detached apply-now job before its
+    // own promise resolves, so drain to a fixed point rather than one snapshot.
+    while (activeOperations.size > 0) {
+      await Promise.allSettled([...activeOperations])
     }
-    try { unlinkSync(ownerFile(stateRoot)) } catch { /* no record */ }
-    processRuntimeOwnerLeases.delete(ownerLeaseKey)
+  }
+
+  function dispose(): Promise<void> {
+    if (disposePromise !== null) return disposePromise
+    disposed = true
+    notifyActivationQuarantine(true)
+    try {
+      cancelKnownGoodPromotion()
+    } catch (error) {
+      // The callback itself is fenced by `disposed`, so a scheduler adapter
+      // cancellation failure cannot retain runtime writer authority or skip
+      // the real abort/drain/final-stop proof.
+      logger.warn(`gateway runtime known-good scheduler cancellation failed: ${sanitizeErrorText(String(error))}`)
+    }
+    lifecycleAbort.abort()
+    disposePromise = (async () => {
+      // Epoch-fence any startLocal() that is currently waiting for readiness.
+      // A later rollback probe is allowed to finish honestly; the second stop
+      // below is the final process-quiescence proof.
+      try {
+        await plane.stopLocal()
+      } catch (error) {
+        logger.warn(`gateway runtime initial stop failed during disposal: ${sanitizeErrorText(String(error))}`)
+      }
+
+      let installerError: unknown = null
+      try {
+        await disposeRuntimeInstaller()
+      } catch (error) {
+        installerError = error
+        logger.warn(`gateway runtime installer disposal failed: ${sanitizeErrorText(String(error))}`)
+      }
+
+      await drainOperations()
+
+      // Abort can intentionally hand an already-started rollback probe a fresh
+      // signal. Stop once more after every writer settles so no recovery spawn
+      // survives ownership release.
+      let finalStopError: unknown = null
+      try {
+        await plane.stopLocal()
+      } catch (error) {
+        finalStopError = error
+      }
+
+      if (installerError !== null || finalStopError !== null) {
+        const reasons = [installerError, finalStopError].filter((error): error is {} => error !== null)
+        throw new AggregateError(reasons, 'gateway runtime writers could not be proven quiescent; owner retained')
+      }
+
+      if (ownerLease !== null) {
+        releaseSingleOwner(baseDir, ownerLease)
+        processRuntimeOwnerLeases.delete(ownerLease.leaseKey)
+      }
+    })()
+    return disposePromise
   }
 
   return {
     stateRoot: () => stateRoot,
-    resolveWorkspace,
+    resolveWorkspace: () => {
+      assertManagerReadable()
+      return resolveWorkspace()
+    },
     get transactionWorkspace() { return transactionWorkspace },
     set transactionWorkspace(value: string | null) { transactionWorkspace = value },
-    startupTransaction,
+    startupTransaction: () => trackOperation(startupTransaction()),
     status,
-    activationFacts,
+    activationFacts: () => {
+      assertManagerReadable()
+      return activationFacts()
+    },
     mutationInProgress,
     activationInProgress,
+    exposureQuarantined,
     internalSpawnActive,
+    observeLocalState,
     listVersions,
-    select,
-    apply,
+    select: (version) => trackOperation(select(version)),
+    apply: () => trackOperation(apply()),
     applyNow,
     applyNowPreflight,
-    rollback,
-    restoreBuiltin,
-    retryApply,
-    retryRestore,
-    restart,
+    rollback: (version) => trackOperation(rollback(version)),
+    restoreBuiltin: () => trackOperation(restoreBuiltin()),
+    retryApply: () => trackOperation(retryApply()),
+    retryRestore: () => trackOperation(retryRestore()),
+    restart: () => trackOperation(restart()),
     restartInFlight: () => restartInFlight,
     applyNowInFlight: () => applyNowInFlight,
     getRegistry,
-    setRegistry,
+    setRegistry: (origin) => trackOperation(setRegistry(origin)),
     dispose,
   }
 }

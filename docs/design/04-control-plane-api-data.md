@@ -259,14 +259,18 @@ interface WebBootGraph {
 
 | 载体 | 路径 | 内容 | 权威方 |
 |---|---|---|---|
-| JSON 单行 | `<stateDir>/catalog.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写） | `{schemaVersion: 2, revision, connections: [{connectionId, kind, status, dshPort, label, accentColor}]}`（status / dshPort 为运行态投影） | 控制面（03 §2.1） |
+| JSON 单行 | `<stateDir>/catalog.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写） | `{schemaVersion: 2, revision, connections: [{connectionId, kind, label, accentColor}]}`；status/dshPort/error 仅由当前 PlaneHandle 投影到 wire | 控制面（03 §2.1） |
 | JSON 注册表 | `<userData>/ssh-instances.json`（桌面主进程） | 远程实例 `{id, kind, transport, label, host, user, sshPort, remotePort, serviceName, remoteDshHome, insecureHttp, spkiPin}`（schema v2 以 03 §2.2 = 17 §9.1 为准；凭据不进注册表，`sshPasswordSet`/`tokenSet`/`passwordSet`/`secretStorage` 为主进程实时非秘密投影） | 桌面主进程（03 §2.2） |
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
-- **原子写协议**（catalog.json）：同步 write-through + `tmp + fsync +
-  rename`；成功后才发布内存状态，失败回滚并抛出
-  `json_store_persist_failed`，任何 catalog/API 调用都不得回报成功；损坏 →
-  回退备份并进入显式 recovery 态，绝不冒充空行（03 §2.1 同款）。
+- **原子写协议**（catalog.json）：同步 write-through + 随机 O_EXCL temp + file fsync +
+  rename + parent fsync；失败向调用者抛出。若 rename 后 parent fsync 报错，稳定 exact
+  readback 证明目标 revision 已在线时内存保留该 revision（但错误仍返回，durability
+  unknown）；未在线发布才回滚。损坏 → 回退备份并进入显式 recovery 态，主文件缺失
+  且 backup 损坏也 fail-loud，绝不覆盖证据或冒充空行（03 §2.1 同款）。
+- **owner 边界**：JsonStore 的 revision/rename 不是跨进程 CAS；本进程 mutation 串行，
+  多 control-plane 同 stateDir 的 metadata 并发仍按 03 §2.1 的 last-writer-wins 残差，
+  不下沉不可靠 stale pidfile lock 到通用 store。
 - **v2/v1 存储删除项**：`project-catalog.json`、`connection-profiles.json`、
   `project-session-bindings.json`、`jwt-secret`、`ui-passkeys.json` 及 SQLite
   的 sessions / interactions / goals / scheduled_tasks / session_folders /

@@ -14,6 +14,7 @@
  *   gateway auth clear [--state-dir DIR]
  */
 
+import { readFileSync } from 'node:fs'
 import { DEFAULT_STATE_DIR, defaultDshWorkspacePath, type Logger } from '@dsh-chamber/control-plane'
 import { GatewayConfigError, parseGatewayConfig } from './config.ts'
 import { findDshWorkspace, isDshWorkspace } from './dsh-path.ts'
@@ -51,6 +52,7 @@ Options:
   --no-auth
                       allow an externally-reachable bind with NO auth (S1 override;
                       prints a loud warning — trusted networks only)
+  -v, --version       show the installed gateway package version
   -h, --help          show this help
 
 TLS terminates at a reverse proxy. Configure --public-origin and one or more
@@ -110,13 +112,14 @@ interface ParsedArgs {
   // auth options
   subcommand?: 'status' | 'reset-password' | 'clear'
   newPassword?: string
+  version: boolean
   help: boolean
 }
 
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, help: false }
+  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, version: false, help: false }
   let positional = false // 'serve' seen
   let authMode = false
   let subcommandSeen = false
@@ -125,6 +128,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (arg === 'serve' && !authMode && !positional) { positional = true; continue }
     if (arg === 'auth' && !authMode && !positional) { authMode = true; args.command = 'auth'; continue }
     if (arg === '-h' || arg === '--help') { args.help = true; continue }
+    if (arg === '-v' || arg === '--version') { args.version = true; continue }
     if (authMode && !subcommandSeen) {
       if (arg === 'status' || arg === 'reset-password' || arg === 'clear') { args.subcommand = arg; subcommandSeen = true; continue }
       // Flags may precede the subcommand (same leniency as `serve`); anything
@@ -249,12 +253,29 @@ async function main(): Promise<number | null> {
     console.log(args.command === 'auth' ? AUTH_HELP : HELP)
     return 0
   }
+  if (args.version) {
+    if (args.command !== 'serve' || argv.length !== 1) {
+      logger.error('--version cannot be combined with another command or option')
+      return 2
+    }
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+    console.log(manifest.version)
+    return 0
+  }
   if (args.command === 'auth') {
     return await runAuth(args, logger)
   }
-  const configuredDshPath = args.dshPath ?? process.env.DSH_GATEWAY_DSH_PATH
-  if (configuredDshPath !== undefined && !isDshWorkspace(configuredDshPath)) {
-    logger.error(`dsh workspace has no supported CLI entry: ${configuredDshPath}`)
+  // design 18 §9.3: the env override is the highest-priority runtime source,
+  // so validate it independently even when --dsh-path supplies a valid
+  // builtin anchor. Otherwise a bad env override would survive CLI validation
+  // and fail only after the gateway begins its startup transaction.
+  const envDshPath = process.env.DSH_GATEWAY_DSH_PATH?.trim()
+  if (envDshPath !== undefined && envDshPath !== '' && !isDshWorkspace(envDshPath)) {
+    logger.error(`dsh workspace has no supported CLI entry: ${envDshPath}`)
+    return 2
+  }
+  if (args.dshPath !== undefined && !isDshWorkspace(args.dshPath)) {
+    logger.error(`dsh workspace has no supported CLI entry: ${args.dshPath}`)
     return 2
   }
   const stateDir = args.stateDir ?? process.env.DSH_GATEWAY_STATE ?? DEFAULT_STATE_DIR
@@ -263,7 +284,7 @@ async function main(): Promise<number | null> {
   // priority at resolve time). Compatibility: an env-only deployment stays
   // valid — the env path is validated above and doubles as the anchor.
   const anchorPath = args.dshPath ?? findDshWorkspace(defaultDshWorkspacePath())
-  const dshWorkspacePath = anchorPath ?? (configuredDshPath !== undefined ? configuredDshPath : null)
+  const dshWorkspacePath = anchorPath ?? (envDshPath !== undefined && envDshPath !== '' ? envDshPath : null)
   if (dshWorkspacePath === null) {
     logger.error('cannot locate dsh: install @deepseek-ai/dsh globally or pass --dsh-path/DSH_GATEWAY_DSH_PATH')
     return 2
@@ -273,6 +294,7 @@ async function main(): Promise<number | null> {
     config = parseGatewayConfig({
       host: args.host,
       port: args.port,
+      dshPort: args.dshPort,
       uiPassword: args.uiPassword,
       apiToken: args.apiToken,
       publicOrigin: args.publicOrigin,

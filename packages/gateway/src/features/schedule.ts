@@ -21,6 +21,13 @@ export interface ScheduledJob {
 export interface Scheduler {
   /** Arm all retained jobs (idempotent). */
   start(): void
+  /** Add a definition without arming it. The persistence owner must durably
+   * commit the returned identity before calling commit(). */
+  admit(job: Omit<ScheduledJob, 'id'>): ScheduledJob
+  /** Arm one admitted identity after its durable commit. */
+  commit(job: ScheduledJob): boolean
+  /** Convenience for in-process callers that do not need a durable admission
+   * transaction: admit and arm immediately. */
   schedule(job: Omit<ScheduledJob, 'id'>): ScheduledJob
   /** Restore an exact persisted identity without minting a replacement id. */
   restore(job: ScheduledJob): ScheduledJob
@@ -30,12 +37,28 @@ export interface Scheduler {
   stop(): void
 }
 
+export interface ScheduleRemovalIntent {
+  /** Exact in-memory identity being removed. An id reused by a newer job must
+   * survive this mutation. */
+  readonly job: ScheduledJob
+  /** Successful one-shots require a durable deletion; deterministic dsh
+   * rejections are terminal and commit memory removal even if persistence is
+   * unavailable. */
+  readonly persistence: 'required' | 'best-effort'
+  /** Commit the in-memory removal. The persistence owner calls this inside
+   * its serialization critical section, after the durable mutation (or in a
+   * best-effort finally block), so a queued writer cannot snapshot stale
+   * state between persistence and the memory commit. */
+  commit(): boolean
+}
+
 export function createScheduler(deps: {
   getDshBaseUrl(): string | null
   logger: Logger
   callDsh?: typeof call
-  /** Used for automatic one-shot removal. Failures are loud in the logger. */
-  onJobsChanged?: (jobs: ScheduledJob[]) => Promise<void>
+  /** Used for automatic one-shot removal. The owner applies this mutation
+   * intent against its current list inside the persistence serializer. */
+  onJobRemoval?: (intent: ScheduleRemovalIntent) => Promise<void>
 }): Scheduler {
   const jobs = new Map<string, ScheduledJob>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -52,6 +75,34 @@ export function createScheduler(deps: {
     return retryDelay(attempt)
   }
 
+  function commitRemoval(job: ScheduledJob): boolean {
+    if (jobs.get(job.id) !== job) return false
+    const timer = timers.get(job.id)
+    if (timer !== undefined) clearTimeout(timer)
+    timers.delete(job.id)
+    oneShotFailures.delete(job.id)
+    return jobs.delete(job.id)
+  }
+
+  async function removeJob(job: ScheduledJob, persistence: ScheduleRemovalIntent['persistence']): Promise<void> {
+    if (deps.onJobRemoval === undefined) {
+      commitRemoval(job)
+      return
+    }
+    const intent: ScheduleRemovalIntent = {
+      job,
+      persistence,
+      commit: () => commitRemoval(job),
+    }
+    await deps.onJobRemoval(intent)
+    // A required persistence callback must also commit the matching memory
+    // identity before releasing its serialization lock. Otherwise retry
+    // rather than falsely consuming a still-live one-shot.
+    if (persistence === 'required' && jobs.get(job.id) === job) {
+      throw new Error(`scheduler: persistence callback did not commit removal of ${job.id}`)
+    }
+  }
+
   /** A deterministic dsh business rejection (`result.ok === false` — target
    * session deleted, payload refused, …) can never succeed on retry. Remove
    * the job, persisting the removal best-effort, and clear its failure state.
@@ -61,13 +112,16 @@ export function createScheduler(deps: {
     deps.logger.error(
       `scheduler: job ${job.id} terminated after a deterministic dsh rejection (${error.code}: ${error.message})`,
     )
-    const remaining = [...jobs.values()].filter(current => current !== job)
     try {
-      await deps.onJobsChanged?.(remaining)
+      await removeJob(job, 'best-effort')
     } catch (persistError) {
       deps.logger.warn(`scheduler: failed to persist termination of ${job.id}: ${String(persistError)}`)
+    } finally {
+      // Production persistence commits this in its serialized finally block;
+      // retain the terminal behavior if a custom callback failed before doing
+      // so. Identity fencing protects a newer replacement.
+      commitRemoval(job)
     }
-    if (jobs.get(job.id) === job) jobs.delete(job.id)
   }
 
   async function fire(job: ScheduledJob): Promise<boolean> {
@@ -117,6 +171,10 @@ export function createScheduler(deps: {
         fired = await fire(job)
       } catch (error) {
         if (error instanceof RpcBusinessError) {
+          // stop()/detach or an identity replacement while session.prompt was
+          // in flight owns the late verdict. It must not delete/persist a job
+          // from the stopped generation.
+          if (!running || runGeneration !== fireGeneration || jobs.get(job.id) !== job) return
           await terminateJob(job, error)
           return
         }
@@ -138,7 +196,7 @@ export function createScheduler(deps: {
       }
       oneShotFailures.delete(job.id)
       try {
-        await deps.onJobsChanged?.([...jobs.values()].filter(current => current !== job))
+        await removeJob(job, 'required')
       } catch (error) {
         deps.logger.warn(`scheduler: failed to persist completion of ${job.id}: ${String(error)}`)
         if (running && runGeneration === fireGeneration && jobs.get(job.id) === job) {
@@ -146,10 +204,6 @@ export function createScheduler(deps: {
         }
         return
       }
-      // cancel() may have won while persistence was in flight. delete(key,
-      // identity) is emulated explicitly so an id reused by a newer generation
-      // is never consumed by this callback.
-      if (jobs.get(job.id) === job) jobs.delete(job.id)
     } finally {
       oneShotInFlight.delete(job.id)
       const current = jobs.get(job.id)
@@ -183,6 +237,10 @@ export function createScheduler(deps: {
         await fire(job)
       } catch (error) {
         if (error instanceof RpcBusinessError) {
+          // The business error belongs to the generation that issued the RPC.
+          // A stop/restart or replacement during the await keeps the retained
+          // definition and must not persist a late terminal removal.
+          if (!running || runGeneration !== fireGeneration || jobs.get(job.id) !== job) return
           // A deterministic rejection stops the interval: retrying the same
           // prompt at the fixed cadence can never succeed.
           await terminateJob(job, error)
@@ -219,15 +277,19 @@ export function createScheduler(deps: {
     scheduleTimer(job, job.delayMs, generation => { void fireInterval(job, generation) })
   }
 
-  function put(job: ScheduledJob): ScheduledJob {
+  function put(job: ScheduledJob, shouldArm = true): ScheduledJob {
     if (jobs.has(job.id)) throw new Error(`scheduler: duplicate job id ${job.id}`)
     if (!isTimerDelay(job.delayMs)
       || (job.intervalMs !== null && (!isTimerDelay(job.intervalMs) || job.intervalMs < 1_000))) {
       throw new RangeError(`scheduler: timer delay must be between 0 and ${MAX_TIMER_DELAY_MS}ms`)
     }
     jobs.set(job.id, job)
-    arm(job)
+    if (shouldArm) arm(job)
     return job
+  }
+
+  function createJob(input: Omit<ScheduledJob, 'id'>): ScheduledJob {
+    return { id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...input }
   }
 
   return {
@@ -237,8 +299,16 @@ export function createScheduler(deps: {
       running = true
       for (const job of jobs.values()) arm(job)
     },
+    admit(input: Omit<ScheduledJob, 'id'>): ScheduledJob {
+      return put(createJob(input), false)
+    },
+    commit(job: ScheduledJob): boolean {
+      if (jobs.get(job.id) !== job) return false
+      arm(job)
+      return true
+    },
     schedule(input: Omit<ScheduledJob, 'id'>): ScheduledJob {
-      return put({ id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...input })
+      return put(createJob(input))
     },
     restore(job: ScheduledJob): ScheduledJob {
       // A corrupted/duplicated persisted schedule (hand-edited schedule.json

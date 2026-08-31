@@ -63,8 +63,6 @@
     {
       "connectionId": "local",
       "kind": "local",
-      "status": "ready",        // PlaneHandle.connectionState 投影（05 §7.3）
-      "dshPort": 17510,         // 实际监听端口（就绪后写入）
       "label": "Local dsh",
       "accentColor": "#1a1a2e"
     }
@@ -74,13 +72,18 @@
 
 - **单行固定**：`local` 恒存在（不可删除；DELETE = 停止实例，§2.1.1）；
   无 kind 分支、无 projects 子表——"本地实例"就是唯一一行。
-- **status / dshPort 是投影**：status 派生自 PlaneHandle（02 §3.5 七态），
-  `dshPort` 在就绪后写入；控制面在文件里只持久化 `label / accentColor`
-  （用户可改项），运行态字段以内存 / PlaneHandle 为准（01 §5 原则 4：
-  宿主事实只服务、不背书）。
-- **原子写**：同步 write-through 事务 + `tmp + fsync + rename`；只有写盘成功
-  才发布新内存文档，失败回滚并向调用者抛错；损坏 → 大声失败（绝不冒充
+- **status / dshPort / error 只在 wire 投影**：由当前 PlaneHandle 内存状态派生，
+  从不写回 catalog；文件只持久化 `label / accentColor`（用户可改项）。legacy 行里的
+  运行态字段加载时剥离，避免第二个 control-plane 用 stale lifecycle 覆盖共享元数据
+  （01 §5 原则 4：宿主事实只服务、不背书）。
+- **原子写**：同步 write-through 事务 + 随机 O_EXCL temp + file/parent fsync + rename；
+  普通失败回滚并向调用者抛错；rename 已在线但 parent fsync 报错时以 exact readback
+  保留在线 revision、仍向调用者报告 durability unknown。损坏 → 大声失败（绝不冒充
   空行）并从备份恢复（04 §6 同一协议）。
+- **跨进程边界**：单个 JsonStore 只串行本进程事务，revision 不是文件系统 CAS。
+  共享同一 stateDir 的两个 control-plane 同时修改 label/accentColor 仍是 last-writer-wins；
+  高可靠多 writer 需要另行批准 kernel-backed 跨平台锁 + 锁内 reload/字段 intent，不能
+  用可陈旧 pidfile/mkdir lock 冒充。
 
 #### 2.1.1 CRUD 语义（管理面端点全表见 04 §3.2）
 

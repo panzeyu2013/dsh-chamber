@@ -71,6 +71,11 @@ export interface FeatureHost {
   start(): void
   /** Detach consumers and timers. Job definitions remain for reconnect. */
   stop(): void
+  /** Synchronously fence new POST/PUT/PATCH/DELETE requests, then resolve
+   * after every mutation that already entered has settled. This is separate
+   * from stop(): ready/activation detach must not await itself when a dsh
+   * state transition is published from inside an active saga. */
+  quiesce(): Promise<void>
 }
 
 /** POST /chamber/schedule admission bounds: one authenticated caller must not
@@ -88,33 +93,60 @@ function readJsonBody(req: ApiRequest): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
-    let failed = false
+    let settled = false
     const MAX = 1024 * 1024 // 1 MiB, ample for orchestration payloads
-    req.on('data', (chunk: Buffer) => {
-      if (failed) return
+
+    const cleanup = (): void => {
+      req.removeListener('data', onData)
+      req.removeListener('end', onEnd)
+      req.removeListener('error', onError)
+      req.removeListener('aborted', onAborted)
+      req.removeListener('close', onClose)
+    }
+    const fail = (error: unknown): void => {
+      if (settled) return
+      settled = true
+      chunks.length = 0
+      cleanup()
+      reject(error)
+    }
+    const onData = (chunk: Buffer): void => {
+      if (settled) return
       size += chunk.length
       if (size > MAX) {
-        failed = true
-        chunks.length = 0
-        reject(new GitFeatureError('body_too_large', 'request body exceeds 1 MiB'))
+        fail(new GitFeatureError('body_too_large', 'request body exceeds 1 MiB'))
         return
       }
       chunks.push(chunk)
-    })
-    req.on('end', () => {
-      if (failed) return
+    }
+    const onEnd = (): void => {
+      if (settled) return
       try {
-        resolve(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        const body = chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        settled = true
+        chunks.length = 0
+        cleanup()
+        resolve(body)
       } catch {
-        reject(new GitFeatureError('bad_request', 'request body is not valid JSON'))
+        fail(new GitFeatureError('bad_request', 'request body is not valid JSON'))
       }
-    })
-    req.on('error', error => {
-      if (failed) return
-      failed = true
-      chunks.length = 0
-      reject(error)
-    })
+    }
+    const onError = (): void => fail(new GitFeatureError('request_aborted', 'request body stream failed'))
+    const onAborted = (): void => fail(new GitFeatureError('request_aborted', 'request body was aborted'))
+    // IncomingMessage.destroy() is allowed to finish with only aborted/close
+    // and no error. Treat a pre-end close as terminal so shutdown cannot wait
+    // forever for a body whose authenticated socket was deliberately revoked.
+    const onClose = (): void => fail(new GitFeatureError('request_aborted', 'request body was closed'))
+
+    // Attach terminal listeners first. Some structural request adapters replay
+    // already-buffered data synchronously when the data listener is added;
+    // the guard prevents installing an orphan end listener if that replay
+    // already crossed the size limit and settled the reader.
+    req.on('error', onError)
+    req.on('aborted', onAborted)
+    req.on('close', onClose)
+    req.on('data', onData)
+    if (!settled) req.on('end', onEnd)
   })
 }
 
@@ -124,27 +156,36 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
     const v = headers[name]
     return typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined
   }
-  // Worktree records persist in gateway/worktrees.json (§10); a live lookup
-  // overlays the in-memory set (recovered on load) with the just-created row.
-  store.settings.load()
-  store.worktrees.load()
+  // Worktree records persist in gateway/worktrees.json (§10); the store is
+  // loaded once at construction and a live lookup overlays that recovered
+  // set with the just-created row.
   const worktrees = new Map<string, WorktreeRecord>(
     store.worktrees.get().items.map(r => [r.workspaceId, r] as const),
   )
+  // A delete is a multi-step saga (durable intent -> live revalidation/Git +
+  // host mutations -> durable outcome). Persistence serialization alone does
+  // not prevent two requests for the same workspace from both entering that
+  // external-mutation window, so acquire this identity lease synchronously,
+  // before even reading the in-memory record. The opaque owner makes release
+  // exact if this lifecycle is ever refactored to hand a workspace to a new
+  // request before an older finally block runs.
+  const worktreeDeleteLeases = new Map<string, symbol>()
 
   // Route mutations share one tail: each response observes its own durable
   // write, concurrent requests cannot overwrite a newer in-memory snapshot,
   // and a rejected write does not poison later writes.
   let persistenceTail: Promise<void> = Promise.resolve()
-  async function serializePersistence(operation: () => Promise<void>): Promise<void> {
+  let mutationsAccepted = true
+  const activeMutations = new Set<Promise<boolean>>()
+  async function serializePersistence<T>(operation: () => Promise<T>): Promise<T> {
     const run = persistenceTail.then(operation, operation)
-    persistenceTail = run.catch(() => {})
-    await run
+    persistenceTail = run.then(() => undefined, () => undefined)
+    return await run
   }
 
   async function persistWorktree(record: WorktreeRecord): Promise<void> {
     await serializePersistence(() => store.worktrees.mutate(doc => ({
-      next: { items: [...doc.items.filter(item => item.workspaceId !== record.workspaceId), record] },
+      next: { ...doc, items: [...doc.items.filter(item => item.workspaceId !== record.workspaceId), record] },
       changed: true,
     })))
     worktrees.set(record.workspaceId, record)
@@ -152,18 +193,14 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
 
   async function persistWorktreeRemoval(workspaceId: string): Promise<void> {
     await serializePersistence(() => store.worktrees.mutate(doc => ({
-      next: { items: doc.items.filter(item => item.workspaceId !== workspaceId) },
+      next: { ...doc, items: doc.items.filter(item => item.workspaceId !== workspaceId) },
       changed: doc.items.some(item => item.workspaceId === workspaceId),
     })))
     worktrees.delete(workspaceId)
   }
 
   function writeScheduleItems(items: ScheduleStoreRecord[]): Promise<void> {
-    return store.schedule.mutate(() => ({ next: { items }, changed: true }))
-  }
-
-  async function persistScheduleItems(items: ScheduleStoreRecord[]): Promise<void> {
-    await serializePersistence(() => writeScheduleItems(items))
+    return store.schedule.mutate(doc => ({ next: { ...doc, items }, changed: true }))
   }
 
   function requireDsh(): string {
@@ -232,7 +269,29 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
     getDshBaseUrl,
     logger,
     ...(deps.featureTransport?.callDsh === undefined ? {} : { callDsh: deps.featureTransport.callDsh }),
-    onJobsChanged: jobs => persistScheduleItems(jobs),
+    onJobRemoval: intent => serializePersistence(async () => {
+      // Re-evaluate the intent against the current identities only after this
+      // operation owns the persistence tail. A callback that waited behind a
+      // newer POST must preserve that job, and an id-reused replacement must
+      // never be removed with the older generation.
+      const persistCurrentRemoval = () => writeScheduleItems(
+        scheduler.list().filter(current => current !== intent.job),
+      )
+      if (intent.persistence === 'best-effort') {
+        try {
+          await persistCurrentRemoval()
+        } finally {
+          // Deterministic dsh rejection is terminal even if the disk write
+          // failed; commit before the serializer admits the next snapshot.
+          intent.commit()
+        }
+        return
+      }
+      await persistCurrentRemoval()
+      // Successful one-shots are consumed only after the durable deletion,
+      // still inside the same serialization critical section.
+      intent.commit()
+    }),
   })
   const sessionIndex = createSessionIndex({
     getDshBaseUrl,
@@ -245,10 +304,20 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
 
   // Restore exact ids; definitions are armed only by FeatureHost.start(), and
   // survive a dsh detach/reattach cycle.
-  store.schedule.load()
   for (const job of store.schedule.get().items) {
-    if (isStoredSchedule(job)) scheduler.restore(job)
-    else logger.warn(`feature-host: ignored invalid persisted schedule ${String(job?.id)}`)
+    if (!isStoredSchedule(job)) {
+      logger.warn(`feature-host: ignored invalid persisted schedule ${String(job?.id)}`)
+      continue
+    }
+    // The admission cap is also a recovery cap. A hand-edited or older
+    // oversized document must not arm unbounded timers at startup; retain the
+    // first bounded set and leave the durable document untouched until the
+    // next explicit schedule mutation.
+    if (scheduler.list().length >= MAX_SCHEDULED_JOBS) {
+      logger.warn(`feature-host: ignored persisted schedule ${job.id} beyond the ${MAX_SCHEDULED_JOBS}-job cap`)
+      continue
+    }
+    scheduler.restore(job)
   }
 
   type FeatureFlags = { git: boolean; notifications: boolean; schedule: boolean }
@@ -293,7 +362,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
     }
   }
 
-  async function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
+  async function handleRoute(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
     // /chamber/git/worktrees
     if (pathname === '/chamber/git/worktrees' || pathname === '/chamber/git/worktrees/') {
       if (!featureEnabled('git')) return featureDisabled(res)
@@ -354,69 +423,84 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
     if (worktreeMatch !== null && req.method === 'DELETE') {
       if (!featureEnabled('git')) return featureDisabled(res)
       const workspaceId = worktreeMatch[1]
-      const record = worktrees.get(workspaceId)
-      if (record === undefined) {
-        json(res, 404, { error: 'not_found', code: 'not_found' })
+      const deleteLease = Symbol(workspaceId)
+      if (worktreeDeleteLeases.has(workspaceId)) {
+        json(res, 409, {
+          error: 'worktree deletion is already in progress',
+          code: 'worktree_delete_in_progress',
+        })
         return true
       }
-      // True once the saga has persisted state:'deleting'; only then may a
-      // failure rewrite the record (rollback / error retention).
-      let deletingPersisted = false
-      let deleting: WorktreeRecord | undefined
+      worktreeDeleteLeases.set(workspaceId, deleteLease)
       try {
-        const body = await readJsonBody(req)
-        if (body === null || typeof body !== 'object' || Array.isArray(body)
-          || Object.keys(body as Record<string, unknown>).length !== 0) {
-          json(res, 400, { error: 'delete_body_not_allowed', code: 'delete_body_not_allowed' })
+        const record = worktrees.get(workspaceId)
+        if (record === undefined) {
+          json(res, 404, { error: 'not_found', code: 'not_found' })
           return true
         }
-        if (typeof record.repo !== 'string' || record.repo === '') {
-          throw new GitFeatureError('unsafe_legacy_record', 'worktree record predates server-derived repository authority')
-        }
-        if (record.ownership !== 'owned') {
-          throw new GitFeatureError(
-            'unsafe_recovery_record',
-            'worktree ownership is not verified; explicit reconciliation is required before deletion',
-          )
-        }
-        const resumeAfterGitRemoval = record.state === 'deleting'
-        deleting = { ...record, state: 'deleting' }
-        await persistWorktree(deleting)
-        deletingPersisted = true
-        await deleteWorktree({
-          dshBaseUrl: requireDsh(),
-          workspaceId: record.workspaceId,
-          repo: record.repo,
-          path: record.path,
-          branch: record.branch,
-          ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
-          ...(resumeAfterGitRemoval ? { resumeAfterGitRemoval: true } : {}),
-        })
-        await persistWorktreeRemoval(workspaceId)
-        json(res, 200, { deleted: true })
-      } catch (error) {
-        if (deletingPersisted && deleting !== undefined) {
-          const message = error instanceof Error ? error.message : String(error)
-          try {
-            if (error instanceof GitFeatureError && error.code === 'git_worktree_remove_failed') {
-              // `git worktree remove` refused (e.g. uncommitted changes): the
-              // worktree still exists, so roll the record back to a retryable
-              // 'ready' state with the reason recorded — never leave it stuck
-              // in 'deleting' with no diagnostics. A later DELETE may retry.
-              await persistWorktree({ ...deleting, state: 'ready', error: message })
-            } else {
-              // Any other saga failure (live session, transport, the
-              // workspace/delete leg after Git was already removed): record
-              // the reason on the retained 'deleting' row so the resume path
-              // (which skips Git removal) can finish the saga on the next
-              // DELETE instead of being stuck with an empty error field.
-              await persistWorktree({ ...deleting, error: message })
-            }
-          } catch (persistError) {
-            logger.warn(`feature-host: failed to persist worktree delete outcome: ${String(persistError)}`)
+
+        // True once the saga has persisted state:'deleting'; only then may a
+        // failure rewrite the record (rollback / error retention).
+        let deletingPersisted = false
+        let deleting: WorktreeRecord | undefined
+        try {
+          const body = await readJsonBody(req)
+          if (body === null || typeof body !== 'object' || Array.isArray(body)
+            || Object.keys(body as Record<string, unknown>).length !== 0) {
+            json(res, 400, { error: 'delete_body_not_allowed', code: 'delete_body_not_allowed' })
+            return true
           }
+          if (typeof record.repo !== 'string' || record.repo === '') {
+            throw new GitFeatureError('unsafe_legacy_record', 'worktree record predates server-derived repository authority')
+          }
+          if (record.ownership !== 'owned') {
+            throw new GitFeatureError(
+              'unsafe_recovery_record',
+              'worktree ownership is not verified; explicit reconciliation is required before deletion',
+            )
+          }
+          const resumeAfterGitRemoval = record.state === 'deleting'
+          deleting = { ...record, state: 'deleting' }
+          await persistWorktree(deleting)
+          deletingPersisted = true
+          await deleteWorktree({
+            dshBaseUrl: requireDsh(),
+            workspaceId: record.workspaceId,
+            repo: record.repo,
+            path: record.path,
+            ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
+            ...(resumeAfterGitRemoval ? { resumeAfterGitRemoval: true } : {}),
+          })
+          await persistWorktreeRemoval(workspaceId)
+          json(res, 200, { deleted: true })
+        } catch (error) {
+          if (deletingPersisted && deleting !== undefined) {
+            const message = error instanceof Error ? error.message : String(error)
+            try {
+              if (error instanceof GitFeatureError && error.code === 'git_worktree_remove_failed') {
+                // `git worktree remove` refused (e.g. uncommitted changes): the
+                // worktree still exists, so roll the record back to a retryable
+                // 'ready' state with the reason recorded — never leave it stuck
+                // in 'deleting' with no diagnostics. A later DELETE may retry.
+                await persistWorktree({ ...deleting, state: 'ready', error: message })
+              } else {
+                // Any other saga failure (live session, transport, the
+                // workspace.delete leg after Git was already removed): record
+                // the reason on the retained 'deleting' row so the resume path
+                // (which skips Git removal) can finish the saga on the next
+                // DELETE instead of being stuck with an empty error field.
+                await persistWorktree({ ...deleting, error: message })
+              }
+            } catch (persistError) {
+              logger.warn(`feature-host: failed to persist worktree delete outcome: ${String(persistError)}`)
+            }
+          }
+          featureError(res, req, error, logger)
         }
-        featureError(res, req, error, logger)
+      } finally {
+        if (worktreeDeleteLeases.get(workspaceId) === deleteLease) {
+          worktreeDeleteLeases.delete(workspaceId)
+        }
       }
       return true
     }
@@ -509,43 +593,46 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
           // accumulate unbounded definitions or huge persisted strings.
           if (typeof delayMs !== 'number' || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > MAX_TIMER_DELAY_MS
             || typeof body.targetSessionId !== 'string'
+            || body.targetSessionId.length === 0
             || body.targetSessionId.length > MAX_SCHEDULE_TARGET_SESSION_ID_CHARS
-            || typeof body.prompt !== 'string' || body.prompt.length > MAX_SCHEDULE_PROMPT_CHARS
+            || typeof body.prompt !== 'string' || body.prompt.length === 0 || body.prompt.length > MAX_SCHEDULE_PROMPT_CHARS
             || !validIntervalShape
             || (intervalMs !== null && (!Number.isFinite(intervalMs) || intervalMs < 1000 || intervalMs > MAX_TIMER_DELAY_MS))) {
             json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
             return true
           }
-          // Bound the total retained job count (each job is persisted and
-          // re-armed across restarts).
-          if (scheduler.list().length >= MAX_SCHEDULED_JOBS) {
-            json(res, 400, { error: 'schedule_full', code: 'schedule_full' })
-            return true
-          }
-          let job: ReturnType<typeof scheduler.schedule> | undefined
-          await serializePersistence(async () => {
-            // schedule() only throws on a duplicate id / invalid delay, both
+          const job = await serializePersistence(async () => {
+            // Keep the capacity decision in the same critical section as the
+            // in-memory mutation and durable write. Otherwise two requests
+            // arriving at 999 jobs can both observe spare capacity and persist
+            // 1,001 retained definitions.
+            if (scheduler.list().length >= MAX_SCHEDULED_JOBS) {
+              return null
+            }
+            // admit() only throws on a duplicate id / invalid delay, both
             // excluded by the validation above; assign it BEFORE the
             // persistence try so that catch can never reference an unassigned
             // job (review finding: empty `job` in the catch → TypeError → 500).
-            const scheduled = scheduler.schedule({
+            const scheduled = scheduler.admit({
               delayMs,
               intervalMs,
               targetSessionId: body.targetSessionId as string,
               prompt: body.prompt as string,
             })
-            job = scheduled
             try {
               await writeScheduleItems(scheduler.list())
+              // delayMs=0 must not dispatch session.prompt until the exact
+              // admitted definition is durable. commit() identity-checks and
+              // arms it before this serialized operation releases.
+              scheduler.commit(scheduled)
             } catch (persistError) {
               scheduler.cancel(scheduled.id)
               throw new GitFeatureError('persistence_failed', `failed to persist schedule: ${String(persistError)}`)
             }
+            return scheduled
           })
-          if (job === undefined) {
-            // Unreachable in practice: an exception inside serializePersistence
-            // rejects above. Defensive explicit 500 instead of a null deref.
-            json(res, 500, { error: 'internal', code: 'internal' })
+          if (job === null) {
+            json(res, 400, { error: 'schedule_full', code: 'schedule_full' })
             return true
           }
           json(res, 200, job)
@@ -678,9 +765,44 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
     return true
   }
 
+  function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
+    const mutating = req.method === 'POST' || req.method === 'PUT'
+      || req.method === 'PATCH' || req.method === 'DELETE'
+    if (!mutating) return handleRoute(req, res, pathname)
+    if (!mutationsAccepted) {
+      json(res, 503, { error: 'gateway is stopping', code: 'gateway_stopping' })
+      return Promise.resolve(true)
+    }
+
+    // handleRoute is async, so the promise is obtained and registered in the
+    // same JS turn in which admission was checked. quiesce() closes admission
+    // synchronously; after that point the set can only shrink.
+    const operation = handleRoute(req, res, pathname)
+    activeMutations.add(operation)
+    void operation.then(
+      () => { activeMutations.delete(operation) },
+      () => { activeMutations.delete(operation) },
+    )
+    return operation
+  }
+
+  async function quiesce(): Promise<void> {
+    mutationsAccepted = false
+    // stop() is deliberately not called here. The gateway invokes this fence
+    // before its existing synchronous detach sequence; keeping the APIs
+    // separate also prevents a ready/activation stop published from inside a
+    // mutation from awaiting that same mutation. The tail covers a background
+    // removal that had already entered the shared persistence serializer.
+    while (activeMutations.size > 0) {
+      await Promise.allSettled([...activeMutations])
+    }
+    await persistenceTail
+  }
+
   return {
     handle,
     start(): void {
+      mutationsAccepted = true
       if (hostStarted) return
       hostStarted = true
       sessionIndex.start()
@@ -694,6 +816,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
       sessionIndex.stop()
       scheduler.stop()
     },
+    quiesce,
   }
 }
 
@@ -704,7 +827,9 @@ function isStoredSchedule(value: ScheduleStoreRecord): boolean {
     && (value.intervalMs === null || (typeof value.intervalMs === 'number' && Number.isFinite(value.intervalMs)
       && value.intervalMs >= 1_000 && value.intervalMs <= MAX_TIMER_DELAY_MS))
     && typeof value.targetSessionId === 'string' && value.targetSessionId !== ''
-    && typeof value.prompt === 'string'
+    && value.targetSessionId.length <= MAX_SCHEDULE_TARGET_SESSION_ID_CHARS
+    && typeof value.prompt === 'string' && value.prompt !== ''
+    && value.prompt.length <= MAX_SCHEDULE_PROMPT_CHARS
 }
 
 interface SettingsPatch {
@@ -1426,6 +1551,7 @@ const CHAMBER_APP_JS = `(function () {
       var result = ownRecord(await request(AUTH_PATHS.changeToken, { method: 'POST', body: { currentPassword: byId('cred-current-password').value } }), 'token change');
       var token = typeof result.token === 'string' && result.token.length > 0 ? result.token : null;
       if (token === null) throw new Error('Malformed token change response');
+      var durabilityUnknown = result.durability === 'unknown';
       byId('cred-token-value').value = token;
       byId('cred-token-reveal').hidden = false;
       // Defense in depth: the one-time token also auto-clears after 60s even
@@ -1434,7 +1560,9 @@ const CHAMBER_APP_JS = `(function () {
       if (tokenRevealTimer !== null) clearTimeout(tokenRevealTimer);
       tokenRevealTimer = setTimeout(hideTokenReveal, 60000);
       await loadCredentials();
-      status('credentials', 'Token rotated — shown once, store it now.', false);
+      status('credentials', durabilityUnknown
+        ? 'Token rotated and shown once, but disk durability could not be confirmed — save it now and rotate again after checking storage.'
+        : 'Token rotated — shown once, store it now.', durabilityUnknown);
     } catch (error) { status('credentials', credentialErrorText(error), true); }
   }
   async function removeToken() {
@@ -1573,6 +1701,10 @@ function featureDisabled(res: ApiResponse): true {
 }
 
 function featureError(res: ApiResponse, req: ApiRequest, error: unknown, logger: Logger): void {
+  // The client/socket is already gone. In particular, gateway shutdown uses
+  // this path to release a mutation that had not crossed its body boundary;
+  // there is no response left to write and this is not an operational fault.
+  if ((error as { code?: unknown })?.code === 'request_aborted') return
   // Upstream-unavailable (managed dsh not ready): explicit 503, never a
   // misleading 500 internal (S4). Shared by the notifier and git feature.
   if ((error as { code?: unknown })?.code === 'instance_unavailable') {

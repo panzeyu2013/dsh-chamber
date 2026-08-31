@@ -143,6 +143,7 @@ async function close(server, sockets) {
 async function main() {
   const tempRoot = mkdtempSync(path.join(tmpdir(), 'dsh-runtime-fake-registry-'))
   const baseDir = path.join(tempRoot, 'user-data')
+  mkdirSync(baseDir, { mode: 0o700 })
   const sockets = new Set()
   let origin = ''
   let fixture

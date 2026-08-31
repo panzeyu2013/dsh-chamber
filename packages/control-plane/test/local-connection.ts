@@ -1,9 +1,8 @@
 /**
- * Local-connection lifecycle race tests (2026 audit H2/M13): a health-probe
+ * Local-connection lifecycle race tests (2026 audit H2): a health-probe
  * verdict landing during/after stop() must never resurrect the connection,
- * a spawn failure landing after stop() must never flip stopped → error, and
- * a catalog persist failure must never block the in-memory state machine.
- * Pure-Node: injectable spawnDsh/describeCapabilities/catalog, no real dsh.
+ * and a spawn failure landing after stop() must never flip stopped → error.
+ * Pure-Node: injectable spawnDsh/describeCapabilities, no real dsh.
  */
 
 import { test } from 'node:test'
@@ -12,9 +11,10 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createLocalConnection } from '../src/local-connection.ts'
+import { CATALOG_FILE, createCatalog } from '../src/catalog.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import { logPathFor } from '../src/host-logs.ts'
-import type { CatalogLike, DescribeCapabilitiesFn, SpawnedDsh } from '../src/local-connection.ts'
+import type { DescribeCapabilitiesFn, SpawnedDsh } from '../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -32,14 +32,38 @@ async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<vo
 
 const tick = (ms = 0): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
-function fakeCatalog(): CatalogLike {
-  return {
-    getConnection: () => ({ connectionId: 'local' }),
-    upsertConnection: () => {},
-  }
-}
-
 const healthyDescribe: DescribeCapabilitiesFn = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
+
+test('local connection carries one captured control-plane UUID into the spawn owner', async () => {
+  const stateDir = tempDir()
+  const ownerInstanceId = '55555555-5555-4555-8555-555555555555'
+  let observedOwner: string | undefined
+  const local = createLocalConnection({
+    stateDir,
+    dshHome: join(stateDir, 'home'),
+    dshWorkspacePath: join(stateDir, 'ws'),
+    logger: silentLogger,
+    options: { ownerInstanceId },
+    deps: {
+      spawnDsh: async options => {
+        observedOwner = options.ownerInstanceId
+        return {
+          child: { on: () => {}, exitCode: null, signalCode: null },
+          port: DEFAULT_DSH_START_PORT,
+          stop: async () => {},
+        }
+      },
+      describeCapabilities: healthyDescribe,
+    },
+  })
+  try {
+    await local.start()
+    assert.equal(observedOwner, ownerInstanceId)
+  } finally {
+    await local.stop().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
 
 test('H2: a health-probe failure landing during stop() never resurrects the connection', async () => {
   const stateDir = tempDir()
@@ -63,7 +87,6 @@ test('H2: a health-probe failure landing during stop() never resurrects the conn
     stateDir,
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
-    catalog: fakeCatalog(),
     logger: silentLogger,
     options: { healthIntervalMs: 25, healthProbeTimeoutMs: 500, healthResultCacheMs: 0 },
     deps: { spawnDsh, describeCapabilities },
@@ -101,7 +124,6 @@ test('H2: stop waits for a late spawn failure and must not publish error', async
     stateDir,
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
-    catalog: fakeCatalog(),
     logger: silentLogger,
     deps: { spawnDsh, describeCapabilities: healthyDescribe },
   })
@@ -115,9 +137,8 @@ test('H2: stop waits for a late spawn failure and must not publish error', async
     rejectSpawn!(new Error('spawn failed (disk full)'))
     await stopPromise
     assert.equal(local.getState(), 'stopped')
-    const row = await startPromise
+    await startPromise
     assert.equal(local.getState(), 'stopped', 'the late spawn failure must not flip the state to error')
-    assert.equal(row?.connectionId, 'local')
   } finally {
     await local.stop().catch(() => {})
     rmSync(stateDir, { recursive: true, force: true })
@@ -145,7 +166,6 @@ test('start → stop → start releases the cancelled first spawn and launches a
     stateDir,
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
-    catalog: fakeCatalog(),
     logger: silentLogger,
     deps: { spawnDsh, describeCapabilities: healthyDescribe },
   })
@@ -190,7 +210,6 @@ test('stop waits for a non-cooperative old spawn to resolve and clean up its own
     stateDir,
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
-    catalog: fakeCatalog(),
     logger: silentLogger,
     deps: { spawnDsh, describeCapabilities: healthyDescribe },
   })
@@ -236,7 +255,6 @@ test('stop writes exactly one stopped lifecycle line to the managed-host log', a
     stateDir,
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
-    catalog: fakeCatalog(),
     logger: { log: line => { logged.push(String(line)) }, warn() {}, error() {} },
     deps: { spawnDsh, describeCapabilities: healthyDescribe },
   })
@@ -259,36 +277,72 @@ test('stop writes exactly one stopped lifecycle line to the managed-host log', a
   }
 })
 
-test('M13: a catalog persist failure never blocks the state machine', async () => {
+test('two local PlaneHandles keep independent runtime state without revising shared catalog metadata', async () => {
   const stateDir = tempDir()
-  let persistFailures = 0
-  const failingCatalog: CatalogLike = {
-    getConnection: () => ({ connectionId: 'local' }),
-    upsertConnection: () => {
-      persistFailures += 1
-      throw new Error('disk full')
-    },
-  }
-  const spawnDsh = async (): Promise<SpawnedDsh> => {
-    return { child: { on: () => {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
-  }
-  const local = createLocalConnection({
+  const catalog = createCatalog({ stateDir, logger: silentLogger })
+  catalog.load()
+  catalog.upsertConnection({
+    connectionId: 'local',
+    kind: 'local',
+    label: 'Shared local dsh',
+    accentColor: '#123456',
+  })
+  const catalogPath = join(stateDir, CATALOG_FILE)
+  const before = readFileSync(catalogPath, 'utf8')
+
+  const localA = createLocalConnection({
     stateDir,
     dshHome: join(stateDir, 'home'),
-    dshWorkspacePath: join(stateDir, 'ws'),
-    catalog: failingCatalog,
+    dshWorkspacePath: join(stateDir, 'ws-a'),
     logger: silentLogger,
-    deps: { spawnDsh, describeCapabilities: healthyDescribe },
+    options: { healthIntervalMs: 0 },
+    deps: {
+      spawnDsh: async () => ({
+        child: { on: () => {}, exitCode: null },
+        port: DEFAULT_DSH_START_PORT,
+        stop: async () => {},
+      }),
+      describeCapabilities: healthyDescribe,
+    },
+  })
+  const localB = createLocalConnection({
+    stateDir,
+    dshHome: join(stateDir, 'home'),
+    dshWorkspacePath: join(stateDir, 'ws-b'),
+    logger: silentLogger,
+    options: { healthIntervalMs: 0 },
+    deps: {
+      spawnDsh: async () => ({
+        child: { on: () => {}, exitCode: null },
+        port: DEFAULT_DSH_START_PORT + 1,
+        stop: async () => {},
+      }),
+      describeCapabilities: healthyDescribe,
+    },
   })
   try {
-    const row = await local.start()
-    assert.equal(local.getState(), 'ready', 'the state machine advances despite the persist failure')
-    assert.equal(row?.connectionId, 'local')
-    assert.ok(persistFailures >= 2, 'persist failures happened and were swallowed (starting + ready)')
-    await local.stop()
-    assert.equal(local.getState(), 'stopped')
+    await localA.start()
+    await localB.start()
+    assert.equal(localA.getState(), 'ready')
+    assert.equal(localB.getState(), 'ready')
+    assert.equal(localA.getDshPort(), DEFAULT_DSH_START_PORT)
+    assert.equal(localB.getDshPort(), DEFAULT_DSH_START_PORT + 1)
+
+    await localA.stop()
+    assert.equal(localA.getState(), 'stopped')
+    assert.equal(localB.getState(), 'ready', 'one plane transition must not overwrite another plane state')
+    assert.equal(readFileSync(catalogPath, 'utf8'), before, 'runtime transitions must not write catalog.json')
+    assert.deepEqual(catalog.getConnection('local'), {
+      connectionId: 'local',
+      kind: 'local',
+      label: 'Shared local dsh',
+      accentColor: '#123456',
+    })
+    assert.equal(JSON.parse(before).revision, 1)
   } finally {
-    await local.stop().catch(() => {})
+    await localA.stop().catch(() => {})
+    await localB.stop().catch(() => {})
+    assert.equal(readFileSync(catalogPath, 'utf8'), before)
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
