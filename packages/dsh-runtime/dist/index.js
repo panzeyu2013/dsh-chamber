@@ -120,12 +120,10 @@ var init_prune_runtime = __esm({
 
 // src/activation-gate.ts
 var REQUIRED_ACTIVATION_PROBES = [
-  "host.describe",
-  "commands.execute",
-  "session.list",
-  "workspace.list",
+  "commands/execute",
+  "session/list",
   "clientGraph/graph",
-  "settings.describe",
+  "settings/describe",
   "gitWorktree/previewCreate",
   "data.settings",
   "data.sessions"
@@ -5862,11 +5860,6 @@ function sessionItems(value) {
   if (!Array.isArray(items) || !items.every((item) => item !== null && typeof item === "object" && !Array.isArray(item))) return null;
   return items;
 }
-function workspaceItems(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  const items = value.items;
-  return Array.isArray(items) && items.every((item) => item !== null && typeof item === "object" && !Array.isArray(item)) ? items : null;
-}
 function objectValue(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -5909,7 +5902,6 @@ async function runRuntimeActivationProbes(opts) {
     return raceWithSignal(operation, rpcSignal).finally(() => clearTimeout(timer));
   };
   let sessionsValue;
-  let workspacesValue;
   let settingsRpcOk = false;
   const probe = async (name, method, payload, accept) => {
     try {
@@ -5923,29 +5915,19 @@ async function runRuntimeActivationProbes(opts) {
       return { name, ok: false, error: resultError(error) };
     }
   };
-  const [host, sessions, workspaces, graph, settings, git] = await Promise.all([
-    probe("host.describe", "host.describe", {}, objectValue),
+  const [sessions, graph, settings, git] = await Promise.all([
     (async () => {
       try {
-        const response = await call("session.list", {});
+        const response = await call("session/list", { args: { _request: {} } });
         sessionsValue = response.result?.value;
-        return sessionItems(sessionsValue) === null ? { name: "session.list", ok: false, error: "malformed session list" } : { name: "session.list", ok: true };
+        return sessionItems(sessionsValue) === null ? { name: "session/list", ok: false, error: "malformed session list" } : { name: "session/list", ok: true };
       } catch (error) {
-        return { name: "session.list", ok: false, error: resultError(error) };
-      }
-    })(),
-    (async () => {
-      try {
-        const response = await call("workspace.list", {});
-        workspacesValue = response.result?.value;
-        return workspaceItems(workspacesValue) === null ? { name: "workspace.list", ok: false, error: "malformed workspace list" } : { name: "workspace.list", ok: true };
-      } catch (error) {
-        return { name: "workspace.list", ok: false, error: resultError(error) };
+        return { name: "session/list", ok: false, error: resultError(error) };
       }
     })(),
     probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue),
     (async () => {
-      const outcome = await probe("settings.describe", "settings.describe", {}, settingsValue);
+      const outcome = await probe("settings/describe", "settings/describe", { args: {} }, settingsValue);
       settingsRpcOk = outcome.ok;
       return outcome;
     })(),
@@ -5968,10 +5950,10 @@ async function runRuntimeActivationProbes(opts) {
         images: []
       }
     });
-    commands = { name: "commands.execute", ok: false, error: "missing-session command probe unexpectedly executed" };
+    commands = { name: "commands/execute", ok: false, error: "missing-session command probe unexpectedly executed" };
   } catch (error) {
     const code = typeof error === "object" && error !== null ? error.code : void 0;
-    commands = code === "session-not-found" ? { name: "commands.execute", ok: true } : { name: "commands.execute", ok: false, error: resultError(error) };
+    commands = code === "session-not-found" ? { name: "commands/execute", ok: true } : { name: "commands/execute", ok: false, error: resultError(error) };
   }
   let dataSettings;
   try {
@@ -5981,12 +5963,10 @@ async function runRuntimeActivationProbes(opts) {
   } catch (error) {
     dataSettings = { name: "data.settings", ok: false, error: resultError(error) };
   }
-  const dataSessions = sessionItems(sessionsValue) !== null && workspaceItems(workspacesValue) !== null ? { name: "data.sessions", ok: true } : { name: "data.sessions", ok: false, error: "session/workspace data is unreadable" };
+  const dataSessions = sessionItems(sessionsValue) !== null ? { name: "data.sessions", ok: true } : { name: "data.sessions", ok: false, error: "session data is unreadable" };
   const byName = /* @__PURE__ */ new Map([
-    [host.name, host],
     [commands.name, commands],
     [sessions.name, sessions],
-    [workspaces.name, workspaces],
     [graph.name, graph],
     [settings.name, settings],
     [git.name, git],

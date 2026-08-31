@@ -1,6 +1,15 @@
 /**
  * Design 18 activation probes. This module owns the real, read-only probe
  * list while keeping the control-plane wire injectable for hermetic tests.
+ *
+ * Wire baseline: upstream dsh-v0.1.2-alpha.1. All unary endpoints moved from
+ * dot to slash (`session.list` → `session/list`, `settings.describe` →
+ * `settings/describe`) and typert remotes require `payload.args`; `host.describe`
+ * was deleted (its host-capability role is served by the `session/list` probe)
+ * and `workspace.list` became the `workspace/follow` stream (unary incompatible,
+ * so the workspace-shape probe was removed; `data.sessions` validates the
+ * session list only). `commands/execute` keeps the `{agentId, line, images}`
+ * wire and its `session-not-found` lookup miss (audit W11).
  */
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
@@ -156,14 +165,6 @@ function sessionItems(value: unknown): Array<Record<string, unknown>> | null {
   return items as Array<Record<string, unknown>>
 }
 
-function workspaceItems(value: unknown): unknown[] | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const items = (value as Record<string, unknown>).items
-  return Array.isArray(items) && items.every(item => (
-    item !== null && typeof item === 'object' && !Array.isArray(item)
-  )) ? items : null
-}
-
 function objectValue(value: unknown): boolean {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -216,7 +217,6 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   }
 
   let sessionsValue: unknown
-  let workspacesValue: unknown
   let settingsRpcOk = false
 
   const probe = async (
@@ -237,33 +237,24 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     }
   }
 
-  const [host, sessions, workspaces, graph, settings, git] = await Promise.all([
-    probe('host.describe', 'host.describe', {}, objectValue),
+  const [sessions, graph, settings, git] = await Promise.all([
+    // host.describe was deleted upstream (dsh-v0.1.2-alpha.1); the surviving
+    // session/list read-only unary doubles as the host-capability probe
+    // proving the installed dsh answers the business wire.
     (async () => {
       try {
-        const response = await call('session.list', {})
+        const response = await call('session/list', { args: { _request: {} } })
         sessionsValue = response.result?.value
         return sessionItems(sessionsValue) === null
-          ? { name: 'session.list', ok: false, error: 'malformed session list' }
-          : { name: 'session.list', ok: true }
+          ? { name: 'session/list', ok: false, error: 'malformed session list' }
+          : { name: 'session/list', ok: true }
       } catch (error) {
-        return { name: 'session.list', ok: false, error: resultError(error) }
-      }
-    })(),
-    (async () => {
-      try {
-        const response = await call('workspace.list', {})
-        workspacesValue = response.result?.value
-        return workspaceItems(workspacesValue) === null
-          ? { name: 'workspace.list', ok: false, error: 'malformed workspace list' }
-          : { name: 'workspace.list', ok: true }
-      } catch (error) {
-        return { name: 'workspace.list', ok: false, error: resultError(error) }
+        return { name: 'session/list', ok: false, error: resultError(error) }
       }
     })(),
     probe('clientGraph/graph', 'clientGraph/graph', { args: {} }, graphValue),
     (async () => {
-      const outcome = await probe('settings.describe', 'settings.describe', {}, settingsValue)
+      const outcome = await probe('settings/describe', 'settings/describe', { args: {} }, settingsValue)
       settingsRpcOk = outcome.ok
       return outcome
     })(),
@@ -284,6 +275,9 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // resume it before CommandRuntime sees even a syntax-miss line. A fixed
     // nonexistent identity must fail at the read-only persistence lookup with
     // session-not-found, before Agent publication or command/run appends.
+    // dsh-v0.1.2-alpha.1 keeps execute(agent: Agent, line, images, signal): the
+    // Agent parameter is a typert lookup wired as `agentId` (session-controller
+    // resolveAgent) whose cold miss still surfaces session-not-found.
     await call('commands/execute', {
       args: {
         agentId: COMMAND_MISSING_SESSION,
@@ -291,7 +285,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         images: [],
       },
     })
-    commands = { name: 'commands.execute', ok: false, error: 'missing-session command probe unexpectedly executed' }
+    commands = { name: 'commands/execute', ok: false, error: 'missing-session command probe unexpectedly executed' }
   } catch (error) {
     const code = typeof error === 'object' && error !== null
       ? (error as { code?: unknown }).code
@@ -299,8 +293,8 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // The exact domain miss proves the execute Remote decoded its Agent
     // argument while guaranteeing CommandRuntime itself was never entered.
     commands = code === 'session-not-found'
-      ? { name: 'commands.execute', ok: true }
-      : { name: 'commands.execute', ok: false, error: resultError(error) }
+      ? { name: 'commands/execute', ok: true }
+      : { name: 'commands/execute', ok: false, error: resultError(error) }
   }
 
   let dataSettings: ProbeResult
@@ -313,15 +307,12 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   }
 
   const dataSessions: ProbeResult = sessionItems(sessionsValue) !== null
-    && workspaceItems(workspacesValue) !== null
     ? { name: 'data.sessions', ok: true }
-    : { name: 'data.sessions', ok: false, error: 'session/workspace data is unreadable' }
+    : { name: 'data.sessions', ok: false, error: 'session data is unreadable' }
 
   const byName = new Map<string, ProbeResult>([
-    [host.name, host],
     [commands.name, commands],
     [sessions.name, sessions],
-    [workspaces.name, workspaces],
     [graph.name, graph],
     [settings.name, settings],
     [git.name, git],

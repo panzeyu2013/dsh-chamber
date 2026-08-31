@@ -34,11 +34,9 @@ function fixture(): Fixture {
 }
 
 function successfulValue(method: string): unknown {
-  if (method === 'host.describe') return { version: '1.2.3', attachedSessions: 1 }
-  if (method === 'session.list') return { items: [{ sessionId: 's1' }] }
-  if (method === 'workspace.list') return { items: [] }
+  if (method === 'session/list') return { items: [{ sessionId: 's1' }] }
   if (method === 'clientGraph/graph') return { rev: 1, entries: [] }
-  if (method === 'settings.describe') return { writable: true, namespaces: [] }
+  if (method === 'settings/describe') return { writable: true, namespaces: [] }
   if (method === 'gitWorktree/previewCreate') {
     return { ok: false, error: { code: 'invalid-input', message: 'input.sourceWorkspaceId is required' } }
   }
@@ -79,6 +77,8 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
         images: [],
       },
     })
+    assert.deepEqual(fx.calls.find(entry => entry.method === 'session/list')?.payload, { args: { _request: {} } })
+    assert.deepEqual(fx.calls.find(entry => entry.method === 'settings/describe')?.payload, { args: {} })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'clientGraph/graph')?.payload, { args: {} })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'gitWorktree/previewCreate')?.payload, { args: { input: {} } })
   } finally {
@@ -96,16 +96,15 @@ test('malformed lists and unreadable settings fail explicit data probes', async 
         error.code = 'session-not-found'
         throw error
       }
-      if (method === 'session.list' || method === 'workspace.list') return { result: { value: {} } }
+      if (method === 'session/list') return { result: { value: {} } }
       return { result: { value: successfulValue(method) } }
     }
     const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call })
     const failed = new Set(results.filter(result => !result.ok).map(result => result.name))
-    assert.ok(failed.has('session.list'))
-    assert.ok(failed.has('workspace.list'))
+    assert.ok(failed.has('session/list'))
     assert.ok(failed.has('data.settings'))
     assert.ok(failed.has('data.sessions'))
-    assert.equal(results.find(result => result.name === 'commands.execute')?.ok, true)
+    assert.equal(results.find(result => result.name === 'commands/execute')?.ok, true)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
@@ -126,7 +125,7 @@ test('commands and git probes accept only their statically side-effect-free miss
     const results = await runRuntimeActivationProbes({
       baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call,
     })
-    assert.equal(results.find(result => result.name === 'commands.execute')?.ok, false)
+    assert.equal(results.find(result => result.name === 'commands/execute')?.ok, false)
     assert.equal(results.find(result => result.name === 'gitWorktree/previewCreate')?.ok, false)
 
     const wrongBusinessCode: RuntimeProbeCall = async (_base, method) => {
@@ -140,7 +139,7 @@ test('commands and git probes accept only their statically side-effect-free miss
     const wrongCodeResults = await runRuntimeActivationProbes({
       baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: wrongBusinessCode,
     })
-    assert.equal(wrongCodeResults.find(result => result.name === 'commands.execute')?.ok, false)
+    assert.equal(wrongCodeResults.find(result => result.name === 'commands/execute')?.ok, false)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
@@ -198,8 +197,8 @@ test('probe layer enforces per-RPC and whole-window timeouts when call ignores i
     })
     assert.ok(Date.now() - startedAt < 500, 'ignored AbortSignal must not hang the runner')
     for (const name of [
-      'host.describe', 'commands.execute', 'session.list', 'workspace.list',
-      'clientGraph/graph', 'settings.describe', 'gitWorktree/previewCreate',
+      'commands/execute', 'session/list',
+      'clientGraph/graph', 'settings/describe', 'gitWorktree/previewCreate',
     ]) {
       assert.equal(results.find(result => result.name === name)?.ok, false, name)
     }
@@ -235,7 +234,7 @@ test('settings errors are path-redacted and projected error text is bounded', as
   try {
     rmSync(fx.settingsPath)
     const call: RuntimeProbeCall = async (_base, method) => {
-      if (method === 'host.describe') {
+      if (method === 'session/list') {
         throw new Error(`failed at '${fx.root}/Secret Folder/${'x'.repeat(4_000)}'`)
       }
       return { result: { value: successfulValue(method) } }
@@ -243,7 +242,7 @@ test('settings errors are path-redacted and projected error text is bounded', as
     const results = await runRuntimeActivationProbes({
       baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call,
     })
-    const hostError = results.find(result => result.name === 'host.describe')?.error ?? ''
+    const hostError = results.find(result => result.name === 'session/list')?.error ?? ''
     const settingsError = results.find(result => result.name === 'data.settings')?.error ?? ''
     assert.ok(hostError.length <= 2_000)
     assert.equal(hostError.includes(fx.root), false)

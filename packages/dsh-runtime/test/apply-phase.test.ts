@@ -51,7 +51,7 @@ function makeDeps(rec: Rec, probes: () => ProbeResult[], restoreOutcome: 'comple
 
 function pass(): ProbeResult[] { return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })); }
 function fail(): ProbeResult[] {
-  return pass().map(probe => probe.name === 'host.describe' ? { ...probe, ok: false } : probe);
+  return pass().map(probe => probe.name === 'session/list' ? { ...probe, ok: false } : probe);
 }
 
 function durableJournal(

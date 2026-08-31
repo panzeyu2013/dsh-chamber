@@ -1,9 +1,9 @@
 /**
  * dsh 运行时激活门控裁决（design 18 §3.4）——纯逻辑、无 electron、无副作用
- * （M3）。探针列表本身（host.describe / commands.execute 冒烟 / session 只读
- * list / graph 通道 / host settings RPC / git-worktree 只读 / 数据可读性探测）
- * 由 host 侧执行并汇成 `ProbeResult[]`；本模块只做裁决，不 spawn、不 fetch、
- * 不读盘：
+ * （M3）。探针列表本身（commands/execute 冒烟 / session 只读 list（兼作 host
+ * 能力探测；host.describe 已在上游 dsh-v0.1.2-alpha.1 删除）/ graph 通道 /
+ * settings RPC / git-worktree 只读 / 数据可读性探测）由 host 侧执行并汇成
+ * `ProbeResult[]`；本模块只做裁决，不 spawn、不 fetch、不读盘：
  *
  *   1. `decideVerdict`    —— 探针裁决（pass / observe / fail），含「有界窗口 +
  *                           延迟裁决」语义（§3.4 探测窗口与裁决）；
@@ -22,14 +22,18 @@
  * The activation contract is deliberately closed. An empty/partial probe
  * list must never become a vacuous success when a caller forgets to wire one
  * of the Design 18 compatibility checks.
+ *
+ * Upstream dsh-v0.1.2-alpha.1 wire (audit W1/W2/W11/W12): all unary methods
+ * moved to slash endpoints, `host.describe` was deleted and `workspace.list`
+ * became the `workspace/follow` stream, so the probe set keeps only surviving
+ * read-only unaries — `session/list` doubles as the host-capability probe.
+ * Probe names mirror the wire endpoints (slash form).
  */
 export const REQUIRED_ACTIVATION_PROBES = [
-  'host.describe',
-  'commands.execute',
-  'session.list',
-  'workspace.list',
+  'commands/execute',
+  'session/list',
   'clientGraph/graph',
-  'settings.describe',
+  'settings/describe',
   'gitWorktree/previewCreate',
   'data.settings',
   'data.sessions',
@@ -37,7 +41,7 @@ export const REQUIRED_ACTIVATION_PROBES = [
 
 /** 单条探针结果（host 侧执行汇总；name 用于完整性校验、日志与定位）。 */
 export interface ProbeResult {
-  /** 探针名（如 'host.describe' / 'commands.execute' / 'session-list' …）。 */
+  /** 探针名（如 'commands/execute' / 'session/list' / 'data.sessions' …）。 */
   name: string;
   /** 探针是否通过；false 时建议附 error 说明失败原因（脱敏，design 18 §6）。 */
   ok: boolean;

@@ -33,18 +33,18 @@ test('decideVerdict: 全部探针 ok → pass（含多探针；error 字段不�
 test('decideVerdict: 空或不完整探针列表绝不空真', () => {
   assert.equal(decideVerdict([], { elapsedMs: 0 }), 'observe');
   assert.equal(decideVerdict([], { elapsedMs: 0, observedOnce: true }), 'fail');
-  assert.equal(decideVerdict([ok('host.describe')], { elapsedMs: 0 }), 'observe');
+  assert.equal(decideVerdict([ok('commands/execute')], { elapsedMs: 0 }), 'observe');
 });
 
 test('decideVerdict: 窗口内首次失败 → observe（超时不立即判失败，给慢迁移二次确认窗口）', () => {
-  const probes = withFailure('commands.execute');
+  const probes = withFailure('commands/execute');
   assert.equal(decideVerdict(probes, { elapsedMs: 5_000 }), 'observe');
   // 窗口边界内（elapsed === windowMs）仍 observe
   assert.equal(decideVerdict(probes, { elapsedMs: DEFAULT_PROBE_WINDOW_MS }), 'observe');
 });
 
 test('decideVerdict: 窗口外首次失败 → observe（§3.4 超时不立即判失败，慢迁移二次确认）', () => {
-  const probes = withFailure('session.list');
+  const probes = withFailure('session/list');
   assert.equal(decideVerdict(probes, { elapsedMs: DEFAULT_PROBE_WINDOW_MS + 1 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 120_000 }), 'observe');
 });
@@ -67,7 +67,7 @@ test('decideVerdict: windowMs 是硬上限，超窗成功也需二次观察', ()
 });
 
 test('decideVerdict: 混合探针（部分 ok 部分 fail）按任一 fail 裁决', () => {
-  const probes = withFailure('settings.describe');
+  const probes = withFailure('settings/describe');
   assert.equal(decideVerdict(probes, { elapsedMs: 3_000 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 90_000 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 3_000, observedOnce: true }), 'fail');
@@ -75,7 +75,7 @@ test('decideVerdict: 混合探针（部分 ok 部分 fail）按任一 fail 裁�
 
 test('decideVerdict: duplicate or unexpected names fail closed', () => {
   const duplicate = allOk();
-  duplicate[duplicate.length - 1] = ok('host.describe');
+  duplicate[duplicate.length - 1] = ok('commands/execute');
   assert.equal(decideVerdict(duplicate, { elapsedMs: 1 }), 'observe');
   assert.equal(decideVerdict(duplicate, { elapsedMs: 1, observedOnce: true }), 'fail');
 });

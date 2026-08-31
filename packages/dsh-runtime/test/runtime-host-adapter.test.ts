@@ -37,7 +37,7 @@ test('FakeHostAdapter records spawn calls and honors injectable probes + platfor
   const adapter = new FakeHostAdapter({ mutationsAllowed: false })
   assert.deepEqual(adapter.platformGate(), { mutationsAllowed: false, reason: 'windows-read-only' })
 
-  adapter.setProbeResults([{ name: 'host.describe', ok: false, error: 'boom' }])
+  adapter.setProbeResults([{ name: 'session/list', ok: false, error: 'boom' }])
   const probes = await adapter.spawnAndProbe('2.0.0', true)
   assert.equal(probes.length, 1)
   assert.equal(probes[0]!.ok, false)
