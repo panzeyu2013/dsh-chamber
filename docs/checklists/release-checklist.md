@@ -8,12 +8,12 @@
 
 ```
 本地:  §0 内容确认 → §1.5 preflight（机械门禁）→ §2 changelog/i18n
-       → §3 全量炮组（精确发布提交）→ §4 构建 → §5 健康 → §7a commit+tag
+       → §3 全量测试套件（精确发布提交）→ §4 构建 → §5 健康 → §7a commit+tag
 CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 tag push → finalize
 ```
 
 **核心原则**：机械项一律脚本化（preflight）；
-炮组绑定精确发布提交；**新增/修改的发布基础设施（workflow/脚本路径/action SHA）
+测试套件绑定精确发布提交；**新增/修改的发布基础设施（workflow/脚本路径/action SHA）
 必须先被 dry-run 验证**；push 前重跑 preflight。
 
 ## 0. 版本与内容确认
@@ -44,7 +44,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] `node scripts/dev/release-preflight.mjs <版本>` 全绿（版本统一性含 fork 副本与
       安装脚本 dsh 常量、changelog 中英对等、verify:i18n、**全部 workflow action SHA
       可解析上游**（`--offline` 跳过网络）、冲突标记、git 干净、frozen install、
-      test:release-workflow；最后提示 §3 全量炮组须在**精确发布提交**上跑）。
+      test:release-workflow；最后提示 §3 全量测试套件须在**精确发布提交**上跑）。
 - [ ] 网络受限时 `--offline` 至少通过非网络检查；CI 的 test job 已内置
       `--actions-only` 门禁（tag/PR 每次运行都会校验 action SHA）。
 
@@ -60,7 +60,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 
 ## 3. 测试与类型检查（AGENTS.md 清单）
 
-- [ ] **全量炮组在精确发布提交（`git rev-parse HEAD`）上运行**——上一提交的记录
+- [ ] **全量测试套件在精确发布提交（`git rev-parse HEAD`）上运行**——上一提交的记录
       不算数。
 - [ ] `pnpm run test:control-plane`（以根脚本为唯一清单，含生命周期、reaper、RPC/cordis 等门）。
 - [ ] `pnpm run test:runtime` + `typecheck:runtime`。
