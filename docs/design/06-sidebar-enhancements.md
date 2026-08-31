@@ -195,7 +195,7 @@
   （stored 序优先、未知 id 按 wire 序追加——官方 `reconciledSessionOrder`/
   `orderedUngrouped` 移植），`test/derive.ts` 补用例。
 
-### 2.4 来源级收拢 + 来源显示序（2026-09，todo/server-drag-sort.md 方案 1）
+### 2.4 来源级收拢 + 来源显示序（2026-09，方案 1）
 
 - **来源级收拢（server 折叠）**：来源头左侧新增折叠开关（与 workspace 头
   同款槽位：常态 **MONITOR 电脑字形**（2026-10 用户反馈：原 folder 字形与
@@ -243,7 +243,7 @@
     sourceFolded?: Record<sourceId, boolean>,
     serverOrder?: string[] }
   ```
-- **sourceFolded / serverOrder（2026-09，todo/server-drag-sort.md 方案 1）**：
+- **sourceFolded / serverOrder（2026-09，方案 1）**：
   来源级收拢 + 来源显示序（见 §2.4）。均为可选字段——旧数据无字段即视为
   全展开 / 投影序，v 保持 1 不重播种；裁剪规则同 orderBy（本会话见过、
   现已消失的来源才裁）。

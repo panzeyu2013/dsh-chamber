@@ -33,7 +33,7 @@
 
 
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游
-  wire 根治）；实现未排期。设计见 `docs/todo/12-todo-archived-sessions.md`。
+  wire 根治）；实现未排期。设计见 `docs/progress/todo/12-todo-archived-sessions.md`。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化
   透传、host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游
   解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。

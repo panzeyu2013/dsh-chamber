@@ -322,7 +322,7 @@ interface WorkspaceDragState {
 }
 
 /**
- * In-flight server-group drag (2026-09, docs/todo/server-drag-sort.md —
+ * In-flight server-group drag (2026-09, 06 §2.4 —
  * option 1): the dragged source id plus the current insert marker. The whole
  * server list is ONE account (no cross-source gating needed — every section
  * is a valid target; the dragged server's own section no-ops in the commit).
@@ -529,7 +529,7 @@ export function SidebarRoot({
     })
   }
 
-  // chamber (2026-09, docs/todo/server-drag-sort.md): server-level fold —
+  // chamber (2026-09, 06 §2.4): server-level fold —
   // collapses the source's ENTIRE workspace list (all workspace groups
   // hidden). Deliberately a SEPARATE preference from per-workspace `folded`:
   // collapsing the server must NOT fold each workspace's conversations, so
@@ -554,7 +554,7 @@ export function SidebarRoot({
     })
   }
 
-  // chamber (2026-09, docs/todo/server-drag-sort.md — option 1): the server
+  // chamber (2026-09, 06 §2.4 — option 1): the server
   // groups render in the user's persisted display order when one exists
   // (local view preference only — the App's N-ctx residency/prewarm order
   // and the instance registry are untouched; navigation is id-keyed). The
@@ -773,7 +773,7 @@ export function SidebarRoot({
   // sourceId matching the hovered group's source.
   const [sessionDrag, setSessionDrag] = useState<SessionDragState | null>(null)
   const [workspaceDrag, setWorkspaceDrag] = useState<WorkspaceDragState | null>(null)
-  // chamber (2026-09, docs/todo/server-drag-sort.md): server-group drag state
+  // chamber (2026-09, 06 §2.4): server-group drag state
   // (display-order preference only — commit writes view-prefs, no wire).
   const [serverDrag, setServerDrag] = useState<ServerDragState | null>(null)
   const sessionDropCommitted = useRef(false)
@@ -793,7 +793,7 @@ export function SidebarRoot({
   const dragPressOnButtonRef = useRef(false)
   useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null || serverDrag !== null)
 
-  // 2026-10 review (F2, docs/todo/server-drag-sort.md): while a SERVER drag
+  // 2026-10 review (F2, 06 §2.4): while a SERVER drag
   // is active, a pointer outside every source section clears the insert
   // marker — releasing outside the list cancels instead of committing the
   // last hovered marker. Session/workspace drags KEEP the §2.2 semantics
@@ -1305,7 +1305,7 @@ export function SidebarRoot({
     })
   }
 
-  // chamber (2026-09, docs/todo/server-drag-sort.md — option 1): server-group
+  // chamber (2026-09, 06 §2.4 — option 1): server-group
   // drag commit. Pure DISPLAY preference — persists the new order into the
   // shared `serverOrder` view pref (cross-ctx live sync), NO wire, NO
   // App-layer N-ctx/registry change (navigation is id-keyed, never
@@ -1511,7 +1511,7 @@ export function SidebarRoot({
               // its current-session highlight; the other sources' last-opened
               // sessions stay unhighlighted (one global selection marker).
               const currentId = server.id === chamberInstanceId ? server.runtime?.current : undefined
-              // chamber (2026-09, docs/todo/server-drag-sort.md): server-level
+              // chamber (2026-09, 06 §2.4): server-level
               // fold — hides the ENTIRE workspace list below the header. The
               // per-workspace conversation folds are NOT touched (see
               // toggleSourceFold), so expanding restores every workspace with
@@ -1657,7 +1657,7 @@ export function SidebarRoot({
                 key={server.id}
                 className={clsx(
                   cc.sourceGroup,
-                  // chamber (2026-09, docs/todo/server-drag-sort.md): the
+                  // chamber (2026-09, 06 §2.4): the
                   // server-group drag marker lives on the SECTION boundary
                   // (before = above the header, after = below the whole
                   // group) — mirroring the workspace-group marker.
@@ -1705,7 +1705,7 @@ export function SidebarRoot({
                   role={server.id === chamberInstanceId ? undefined : 'button'}
                   tabIndex={server.id === chamberInstanceId ? undefined : 0}
                   aria-label={server.id === chamberInstanceId ? undefined : t('list.activate')}
-                  // chamber (2026-09, docs/todo/server-drag-sort.md — option
+                  // chamber (2026-09, 06 §2.4 — option
                   // 1): the source header is the drag handle for the
                   // server-group display-order drag. The same trailing-click
                   // suppression as the workspace header: a drop ending over
@@ -1779,7 +1779,7 @@ export function SidebarRoot({
                     }
                   }}
                 >
-                  {/* chamber (2026-09, docs/todo/server-drag-sort.md; glyph
+                  {/* chamber (2026-09, 06 §2.4; glyph
                       swapped 2026-10 user feedback): the server-level fold
                       toggle — a MONITOR glyph at rest (server = machine, NOT
                       the workspace folder glyph — the shared folder reads as
@@ -1955,7 +1955,7 @@ export function SidebarRoot({
                     )}
                   </span>
                 </header>
-                {/* chamber (2026-09, docs/todo/server-drag-sort.md): the
+                {/* chamber (2026-09, 06 §2.4): the
                     server-level fold hides EVERYTHING below the header —
                     search capsule, source-scope git alert and the workspace
                     list (search results included). The search state itself is

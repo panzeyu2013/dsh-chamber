@@ -79,14 +79,14 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 05 | [05-connection-manager.md](05-connection-manager.md) | 现行（表面/架构，v1 权威） | 多来源会话统一导航、侧边栏插件、桥接层、N-ctx、控制面/桌面契约（§7）、安全不变量（§8） |
 | 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（已实现，2026-08） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道 |
 | 07 | [07-models-params.md](07-models-params.md) | 推迟（设计定稿，待上游解锁） | 模型额外参数 + 默认推理等级：链路事实、上游阻塞点、更新复查清单、实现蓝本 |
-| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（v1 实现，2026-08-20 自 docs/todo/ 移入） | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 安全创建/无归档删除 saga |
-| 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行（已实现，2026-08 方案 A；自 docs/todo/ 移入） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 信任边界/分期 |
-| 10 | [../todo/10-todo-event-driven-aggregation.md](../todo/10-todo-event-driven-aggregation.md) | 已实现（2026-08；历史设计记录仍在 todo/） | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）+ 05 §3 契约修订；不改上游 dsh |
-| 11 | [11-auto-update.md](11-auto-update.md) | 现行（已实现，2026-08；自 docs/todo/ 移入） | 桌面端更新提示（dsh-chamber 自身，无弹窗、低打扰）：settings chamber 全局「更新」部分 + 静默检查、用户确认后下载、退出时安装（win/mac 一致，mac 安装腿需 Developer ID）、beta → stable 通道 |
-| 12 | [../todo/12-todo-archived-sessions.md](../todo/12-todo-archived-sessions.md) | todo（设计待评审，实现未排期；2026-08） | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） |
+| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（v1 实现，2026-08-20 自 todo 记录移入） | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 安全创建/无归档删除 saga |
+| 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行（已实现，2026-08 方案 A；自 todo 记录移入） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 信任边界/分期 |
+| 10 | —（契约并入 [05](05-connection-manager.md) §2.3/§3） | 已实现（2026-08） | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）+ 05 §3 契约修订；不改上游 dsh |
+| 11 | [11-auto-update.md](11-auto-update.md) | 现行（已实现，2026-08；自 todo 记录移入） | 桌面端更新提示（dsh-chamber 自身，无弹窗、低打扰）：settings chamber 全局「更新」部分 + 静默检查、用户确认后下载、退出时安装（win/mac 一致，mac 安装腿需 Developer ID）、beta → stable 通道 |
+| 12 | [../progress/todo/12-todo-archived-sessions.md](../progress/todo/12-todo-archived-sessions.md) | todo（设计待评审，实现未排期；2026-08） | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） |
 | 13 | [13-remote-plugin-management.md](13-remote-plugin-management.md) | 现行（已实现，2026-08；M1–M4 落地） | 远程实例插件管理：一键应用本地插件清单 + 可视化添加（provider exec 通道 + spec 白名单 + remoteDshHome 远端路径基准） |
-| 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
-| 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 docs/todo/ 移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
+| 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 todo 记录移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
+| 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 todo 记录移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code OS 深链基线：`dsh-chamber://` 快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；应用内按钮/IPC 已演进为设计 17 的 open-in 面，无 host 插件/seed |
 | 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 现行（连接模型 v2 与 S21–S24 已实现，2026-09；实机门禁见 STATUS） | 独立启动的认证默认 server 形态（`--no-auth` 为显式可信网络例外）：单本地 dsh 公网接入、Desktop `gateway` target 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only；连接模型 v2（四维正交 + S21–S24） |
 | 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md) | 现行（共享核心、desktop/gateway 管理面与恢复事务已实现；打包/实机证据见 STATUS） | dsh 运行时版本管理：source-bound 安装、per-server 设置段、探针门控激活/回退、快照/失败现场与磁盘治理；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位 + S17–S20） |

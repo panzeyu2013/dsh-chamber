@@ -6,7 +6,7 @@ dsh-chamber is primarily the local desktop **connection manager** for dsh: the l
 
 Design 17 adds a second, explicitly invoked **server deployment shape** in `packages/gateway`. It composes the same local-host manager behind an authenticated-by-default public request boundary; the explicit, loudly warned `--no-auth` override is a bounded trusted-network exception and never a silent fallback. Gateway is never auto-started or imported by the anonymous desktop control plane. Gateway-only orchestration may keep derived session summaries/control notifications, a cross-session scheduler, and same-OS-user Git worktree records, but it never consumes session content or becomes authoritative for dsh facts. This is a bounded product-shape exception, not permission to move those domains into `packages/control-plane` or the desktop renderer.
 
-This file contains only always-on repository rules and routing. Detailed design lives in `docs/design/`, progress in `docs/progress/`, and unimplemented feature ideas in `docs/todo/`.
+This file contains only always-on repository rules and routing. Detailed design lives in `docs/design/`, progress in `docs/progress/`, and unimplemented feature ideas in `docs/progress/todo/`.
 
 ## Instruction Order
 

@@ -1,6 +1,6 @@
 # 11 · 桌面端更新提示（settings 低调展示，无弹窗）与通道灰度（现行：已实现，2026-08）
 
-> **状态：现行（已实现，2026-08）**——原 todo 设计（2026-08 自 `docs/todo/` 移入，
+> **状态：现行（已实现，2026-08）**——原 todo 设计（2026-08 自 todo 记录移入，
 > 原文件已删除）已按 M1–M3 落地：**M1** 主进程 `packages/desktop/updater.ts`
 > （`electron-updater` github provider，`autoDownload=false`、`autoInstallOnAppQuit`、
 > 状态机、静默失败日志）
@@ -336,7 +336,7 @@
 
 ## 10. 关联文档
 
-- `01-overview.md` §3 文档地图（本文档编号 11，2026-08 自 `docs/todo/` 移入）；
+- `01-overview.md` §3 文档地图（本文档编号 11，2026-08 自 todo 记录移入）；
   `docs/progress/STATUS.md`（本文档由「未完成 / 待执行」移入「已实现」记录）。
 - 涉及面：`packages/desktop`（`main.ts`、`preload.cts`、`updater.ts`、
   `package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳

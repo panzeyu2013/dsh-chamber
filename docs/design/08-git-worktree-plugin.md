@@ -1,7 +1,7 @@
 # 08 · Git Worktree 独立插件
 
 > **状态：现行（v1 实现，Design 17 迁移期保留，2026-08-20）**。本文是对原
-> `docs/todo/08-todo-git-worktree-plugin.md` 的实施前审计与收敛。原稿的
+> 原 todo 记录（`08-todo-git-worktree-plugin.md`）的实施前审计与收敛。原稿的
 > “独立插件”边界保留，但 Git 执行从 Desktop/SSH 移到每个 dsh 实例内的
 > chamber host plugin；会话创建/打开和工作区注册仍只走 dsh 现有 wire。
 > Design 17 的 gateway Git offload 是待实机稳定的替代路线；在其通过 canonical

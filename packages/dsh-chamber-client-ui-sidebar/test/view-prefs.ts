@@ -587,7 +587,7 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
   assert.equal(getViewPrefs().sidebarWidth, 340)
 })
 
-// ---- sourceFolded / serverOrder (2026-09, docs/todo/server-drag-sort.md; v stays 1) ----
+// ---- sourceFolded / serverOrder (2026-09, 06 §2.4; v stays 1) ----
 
 test('sourceFolded round-trips and sanitizes booleans leniently, absent stays absent', () => {
   const storage = new MemoryStorage()

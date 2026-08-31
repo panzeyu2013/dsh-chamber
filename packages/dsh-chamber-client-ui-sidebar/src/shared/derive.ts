@@ -304,7 +304,7 @@ export function reconciledSessionOrder(stored: readonly string[], wireIds: reado
 }
 
 /**
- * Source display order (2026-09, docs/todo/server-drag-sort.md — option 1):
+ * Source display order (2026-09, 06 §2.4 — option 1):
  * the sidebar's server groups render in the user's stored order when one
  * exists — ids known to the projection come in stored order first, then the
  * remaining projection ids in projection order (a newly added source appears
@@ -336,7 +336,7 @@ export function orderServersForDisplay(
 }
 
 /**
- * Server-group drop order math (2026-09, docs/todo/server-drag-sort.md —
+ * Server-group drop order math (2026-09, 06 §2.4 —
  * option 1): the display order that results from inserting
  * `draggedSourceId` at `over`'s boundary of the CURRENT rendered order.
  * `null` = NO-OP — the drop leaves the order unchanged and the caller skips

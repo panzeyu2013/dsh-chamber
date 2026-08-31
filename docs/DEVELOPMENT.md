@@ -172,9 +172,8 @@ packages/
                             实例内 Git worktree host Remote（权威校验 + 受限 Git）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
-  todo/                     未实现功能想法（每条一个文件；已实现的历史设计记录
-                            保留于此，见 todo/README.md）
   progress/                 STATUS.md——唯一进度总览（只记未完成/部分完成项）
+  progress/todo/            未实现功能想法（每条一个文件；只保留未完成项）
   checklists/               操作清单（发布 / dsh 升级 / 打包完整性）
   *.en-US.md                各根文档的英文镜像
 vendor/

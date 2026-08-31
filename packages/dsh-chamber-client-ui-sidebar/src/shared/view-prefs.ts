@@ -58,7 +58,7 @@ export interface ChamberSidebarViewPrefs {
    */
   sessionUpdatedAtByAccount?: Record<string, Record<string, number>>
   /**
-   * Source-level fold (2026-09, server-drag-sort): key = sourceId, value =
+   * Source-level fold (2026-09, 06 §2.4): key = sourceId, value =
    * the source's workspace LIST is collapsed (every workspace group hidden).
    * Deliberately SEPARATE from `folded` — collapsing a server must NOT touch
    * each workspace's own conversation fold state (explicit user rule), so
@@ -68,7 +68,7 @@ export interface ChamberSidebarViewPrefs {
    */
   sourceFolded?: Record<string, boolean>
   /**
-   * Source display order (2026-09, docs/todo/server-drag-sort.md — option 1):
+   * Source display order (2026-09, 06 §2.4 — option 1):
    * sourceIds in the user's sidebar order. DISPLAY-ONLY view preference —
    * the App's N-ctx residency/prewarm order and the instance registry are
    * untouched (navigation is id-keyed, never order-keyed). OPTIONAL —

@@ -246,7 +246,7 @@
   pointer-events: none;
 }
 
-/* chamber (2026-09, docs/todo/server-drag-sort.md): server-group drag insert
+/* chamber (2026-09, 06 §2.4): server-group drag insert
    markers — the same 2px-rule vocabulary as the workspace groups, on the
    SECTION boundary: before = above the header, after = below the whole group
    (the section wraps header + workspace list, so the after boundary is the
@@ -662,7 +662,7 @@
   transform: rotate(0deg);
 }
 
-/* chamber (2026-09, docs/todo/server-drag-sort.md; glyph 2026-10 user
+/* chamber (2026-09, 06 §2.4; glyph 2026-10 user
    feedback): SOURCE-level fold toggle (collapses the server's whole
    workspace list) — workspace-parity swap: a MONITOR glyph at rest (server =
    machine; the workspace FOLDER glyph would read as another workspace), the
