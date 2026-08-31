@@ -801,7 +801,7 @@ test('operation capacity evicts the oldest safe pre-admission record instead of 
         workspaceId: `missing-${index}`,
         expected,
       }),
-      error => error instanceof GitWorktreeError && error.code === 'workspace-not-found',
+      error => error instanceof GitWorktreeError && error.code === 'workspace/not-found',
     )
     advanceTime(1)
   }
@@ -811,7 +811,7 @@ test('operation capacity evicts the oldest safe pre-admission record instead of 
       workspaceId: 'reused-after-eviction',
       expected,
     }),
-    error => error instanceof GitWorktreeError && error.code === 'workspace-not-found',
+    error => error instanceof GitWorktreeError && error.code === 'workspace/not-found',
   )
 })
 

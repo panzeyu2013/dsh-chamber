@@ -443,20 +443,20 @@ test('force removal echoes discardChanges into every recovery for byte-identical
   }
 })
 
-test('workspace-delete recovery treats workspace-not-found as an idempotent committed delete', async () => {
-  const notFound = Object.assign(new Error('gone'), { code: 'workspace-not-found' })
+test('workspace-delete recovery treats workspace/not-found as an idempotent committed delete', async () => {
+  const notFound = Object.assign(new Error('gone'), { code: 'workspace/not-found' })
   const calls: string[] = []
   assert.equal(await runWorkspaceDeleteRecovery(
     async () => { calls.push('verify'); return removeResult },
     async () => { calls.push('delete'); throw notFound },
-    error => (error as { code?: string }).code === 'workspace-not-found',
+    error => (error as { code?: string }).code === 'workspace/not-found',
   ), 'already-deleted')
   assert.deepEqual(calls, ['verify', 'delete'])
   await assert.rejects(
     runWorkspaceDeleteRecovery(
       async () => removeResult,
       async () => { throw Object.assign(new Error('offline'), { code: 'transport' }) },
-      error => (error as { code?: string }).code === 'workspace-not-found',
+      error => (error as { code?: string }).code === 'workspace/not-found',
     ),
     /offline/,
   )
@@ -509,7 +509,7 @@ test('adopt-only session failure retains session-create recovery with the same p
   await assert.rejects(
     runAdoptSessionSaga({
       workspaceCreate: async path => { calls.push('workspace'); return { workspaceId: 'ws-2', path, created: false } },
-      sessionCreate: async () => { calls.push('session'); throw Object.assign(new Error('busy'), { code: 'agent-busy' }) },
+      sessionCreate: async () => { calls.push('session'); throw Object.assign(new Error('busy'), { code: 'session/agent-busy' }) },
     }, '/existing-wt', 'session-fixed'),
     (error: unknown) => {
       assert.ok(error instanceof GitSagaError)

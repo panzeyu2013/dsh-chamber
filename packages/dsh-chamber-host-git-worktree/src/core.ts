@@ -2394,7 +2394,7 @@ export class GitWorktreeCore {
 
   private workspace(state: SourceSnapshot, id: string): WorkspaceFact {
     const workspace = state.workspaces.find(candidate => candidate.workspaceId === id)
-    if (workspace === undefined) fail('workspace-not-found', `workspace '${id}' does not exist`)
+    if (workspace === undefined) fail('workspace/not-found', `workspace '${id}' does not exist`)
     return workspace
   }
 

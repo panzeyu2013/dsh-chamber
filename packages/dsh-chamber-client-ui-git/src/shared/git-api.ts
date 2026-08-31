@@ -52,7 +52,7 @@ export function isDeterministicGitRejection(error: unknown): boolean {
     case 'invalid-input':
     case 'unsafe-path':
     case 'expected-mismatch':
-    case 'workspace-not-found':
+    case 'workspace/not-found':
     case 'worktree-not-found':
     case 'main-worktree':
     case 'worktree-locked':

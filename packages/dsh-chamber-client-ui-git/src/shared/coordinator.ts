@@ -771,7 +771,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
             ...(recovery.discardChanges === true ? { discardChanges: true } : {}),
           }, recovery.path),
           () => deleteWorkspace(getInstanceClient(sourceId), recovery.workspaceId),
-          error => error instanceof InstanceRpcError && error.code === 'workspace-not-found',
+          error => error instanceof InstanceRpcError && error.code === 'workspace/not-found',
         )
       }
       setRecovery(sourceId, undefined)

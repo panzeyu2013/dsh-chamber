@@ -1705,7 +1705,7 @@ var GitWorktreeCore = class {
   }
   workspace(state, id) {
     const workspace = state.workspaces.find((candidate) => candidate.workspaceId === id);
-    if (workspace === void 0) fail("workspace-not-found", `workspace '${id}' does not exist`);
+    if (workspace === void 0) fail("workspace/not-found", `workspace '${id}' does not exist`);
     return workspace;
   }
   assertNoRunningSessions(workspace, running) {
