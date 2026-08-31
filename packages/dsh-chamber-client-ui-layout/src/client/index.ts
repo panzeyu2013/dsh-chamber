@@ -12,13 +12,19 @@
  * imports switched to the vendor deep source subpaths
  * (`@deepseek-ai/dsh-client-ui-layout/src/client/…` — resolved to source by
  * the renderer's deepseekSource plugin) and the store to THIS fork's
- * `stores.ts` (shared + persisted sidebar width). Everything else — the SlotMap
- * merges, SidebarOwnerProps, LayoutController/ILayout, `inject: ['slots',
- * 'theme']`, registration order and priority — is unchanged, so the official
- * bundle must never load (a second 'root' registration at priority 0 would
- * throw the one-declarer rule; see chamber-covered.ts).
+ * `stores.ts` (shared + persisted sidebar width). Everything else mirrors the
+ * upstream dsh-v0.1.2-alpha.1 client index — `inject: ['slots', 'theme',
+ * 'locale']` and `register({ ..., locale: 'common' })` (the vendor AppFrame
+ * consumes the locale service's PropsLocale<'common'>/DocumentTitle face),
+ * the SlotMap merges, SidebarOwnerProps, LayoutController/ILayout,
+ * registration order and priority — so the official bundle must never load
+ * (a second 'root' registration at priority 0 would throw the one-declarer
+ * rule; see chamber-covered.ts).
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { PanelActions } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
@@ -116,7 +122,7 @@ export interface ConvOwnerProps {}
 export interface DetailsOwnerProps {}
 
 /** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
-export const inject = ['slots', 'theme']
+export const inject = ['slots', 'theme', 'locale']
 
 /**
  * Client plugin body: provide ctx.layout, then one register() call — AppFrame
@@ -130,6 +136,7 @@ export function apply(ctx: ClientContext): void {
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',
+      locale: 'common',
       children: {
         'sidebar': { kind: 'single', scope: 'root' },
         'conversation': { kind: 'single', scope: 'session-maybe' },

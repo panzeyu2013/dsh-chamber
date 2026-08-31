@@ -26,7 +26,7 @@ import type {
   ActionsDecl,
   EngineStoreHandle,
   EngineStoreInstance,
-} from '@deepseek-ai/dsh-client-runtime/client'
+} from '@deepseek-ai/dsh-client-store'
 import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 
 /**

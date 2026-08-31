@@ -24,20 +24,14 @@
  */
 
 declare module '@deepseek-ai/cordis' {
-  /** Loose minimal shape (the fork consumes ctx through the runtime's ClientContext face). */
-  interface Context {
-    [key: string]: any
-  }
-}
-
-declare module '@deepseek-ai/dsh-client-runtime/client' {
   /**
-   * Root context of a booted dsh shell (loose structural face — enough shape
-   * for the vendor-copied client index to typecheck verbatim: ctx.effect /
-   * ctx.reflect.provide / ctx.slots.register / ctx.on / ctx.theme; anything
-   * else falls through the index signature).
+   * Loose minimal shape (the fork consumes ctx through the cordis Context
+   * face; index.ts augments it with ctx.layout). The structured members
+   * mirror the face the deleted runtime ClientContext provided so the
+   * vendor-copied client index typechecks verbatim; anything else falls
+   * through the index signature.
    */
-  export type ClientContext = {
+  interface Context {
     effect(fn: () => (() => void) | void, label?: string): void
     reflect: { provide(name: string, value: unknown): () => void }
     slots: { register(options: any, component: any): () => void }
@@ -45,9 +39,18 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
     theme: { getTheme(): any }
     [key: string]: any
   }
-  /** Store action declaration table (mirrors ui-slots' ActionsDecl). */
+}
+
+declare module '@deepseek-ai/dsh-client-store' {
+  /**
+   * Store contract + engine faces (mirrors `@deepseek-ai/dsh-client-store`
+   * src/contract.ts + src/index.ts — the engine-extended handle/instance
+   * subtypes the fork's stores.ts / store-core.ts consume). Names and
+   * signatures are preserved from the deleted runtime face.
+   */
+  /** Store action declaration table (mirrors the store contract's ActionsDecl). */
   export type ActionsDecl<T> = Record<string, (draft: T, ...params: any[]) => void>
-  /** The engine-backed store instance (loose mirror of the runtime contract/store.ts face). */
+  /** The engine-backed store instance (loose mirror of the store engine's EngineStoreInstance). */
   export interface EngineStoreInstance<T, A extends ActionsDecl<T>> {
     readonly actions: {
       [K in keyof A]: A[K] extends (draft: T, ...params: infer P) => void ? (...params: P) => void : never
@@ -73,6 +76,12 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
     decl: { init: () => T; persist?: string; actions: A & ActionsDecl<T> },
   ): EngineStoreHandle<T, A>
 }
+
+declare module '@deepseek-ai/dsh-client-locale/client'
+
+declare module '@deepseek-ai/dsh-client-ui-renderer/client'
+
+declare module '@deepseek-ai/dsh-client-ui-session/client'
 
 declare module '@deepseek-ai/dsh-client-ui-theme/client'
 
