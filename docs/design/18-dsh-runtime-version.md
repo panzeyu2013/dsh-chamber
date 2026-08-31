@@ -28,10 +28,10 @@
 >    文档草图，非宿主实际 seam）；核心裁决逻辑零分叉。gateway
 >    侧存储根 `<stateDir>/dsh-runtime`、解析链 `DSH_GATEWAY_DSH_PATH` → override
 >    → `--dsh-path` 内建锚、`/chamber/runtime` 管理面——细节见 §9。
-> 10. **设置落点 per-server 化（§3.6，2026-09 用户拍板，已实现）**：dsh 运行时设置
->     从「通用」视图迁出，成为每个服务器自己的设置段（agent 预设之后，
->     `settings.section` id `dsh-runtime`）；local/gateway/ssh 三种来源行为
->     按 §3.6 分支。
+> 10. **设置落点 per-server 化（§3.6，2026-09 用户拍板，已实现；dsh 直连不挂载
+>     修订）**：dsh 运行时设置从「通用」视图迁出，成为每个服务器自己的设置段
+>     （agent 预设之后，`settings.section` id `dsh-runtime`）；local/gateway 两种
+>     来源行为按 §3.6 分支，dsh 直连（ssh/http）不挂载。
 >
 > 平台范围（2026-08 审查明确）：**macOS/Linux 是运行时安装、切换与数据恢复的
 > 管理契约目标**；Windows 会投影版本与状态，但安装、选择、切换、清理等 mutation
@@ -253,13 +253,14 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - **快照失败的中止态（R3-3 UX-P1-F4）**：快照失败 → 中止本次 + **置「快照失败」
   标记（settings 可见 + [重试应用] / [恢复内建] 动作），不再自动每启重试**——
   磁盘持续不足时用户有明确出口，不反复延迟 spawn。
-- settings 落点（2026-09 用户拍板，per-server 化）：dsh 运行时不再是 chamber
-  全局「通用」设置，而是**服务器相关配置**——在每个选中服务器自己的设置段列表
-  里、**agent 预设（agent-presets）之后**新增「dsh 运行时」段（与 connections
-  段同款的 `settings.section` 注册模式，05 §5；本地实例 = 完整管理面，gateway
-  服务器 = 经反代触达该 gateway 的 `/chamber/runtime` 面，§9.3；ssh 服务器 =
-  版本只读说明行 + 经 systemd 的重启动作，远端运行时版本随 systemd 部署、
-  不在本设计 mutation 范围）。内容：
+- settings 落点（2026-09 用户拍板，per-server 化；dsh 直连不挂载修订）：dsh
+  运行时不再是 chamber 全局「通用」设置，而是**服务器相关配置**——在每个选中
+  服务器自己的设置段列表里、**agent 预设（agent-presets）之后**新增「dsh
+  运行时」段（与 connections 段同款的 `settings.section` 注册模式，05 §5；
+  本地实例 = 完整管理面，gateway 服务器 = 经反代触达该 gateway 的
+  `/chamber/runtime` 面，§9.3；**dsh 本体（ssh/http）直连 = 不挂载**——远端
+  运行时由 systemd 部署、无 chamber 运行时管理面，远端重启经 connections 卡
+  的服务操作触达）。内容：
   当前版本行（内建 vA / 用户选择 vB / env 标记）+ 版本选择器（registry 版本
   列表，默认推荐 `dist-tags.latest`，当前版本置顶，兼容基线以下版本带提示，
   **离线时含缓存版本**——自由回滚的 UI 基础）+ 动作（更新到 vY / 回滚到 vZ /
@@ -325,13 +326,12 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    互斥；applying 期间禁用（同「应用 dsh vY…」门控）；执行期间状态行
    「重启 dsh…」→「已重启」（就绪探测通过）/ 诚实失败文案（附 host-logs
    入口）。失败不回滚、不改指针——重启前后运行同一棵激活树，仅进程级刷新。
-   per-server 分支：local = 控制面新增事务接口 `restartLocal()`（与健康状态机
+   per-server 分支：local = 控制面事务接口 `restartLocal()`（与健康状态机
    重启单飞行串行化，**不用** `stopLocal()`+`startLocal()` 裸组合——会与
    健康"进程死亡即重启"分支交错，§9.3）；gateway = `POST /chamber/runtime/restart`
-   （202 + status 轮询/SSE，§9.3）；ssh = 既有 `restart_service` systemd IPC
-   （03 §2.2）重启远端 dsh——设计 13 的"远端插件重启后加载新 row"同路径；
-   远端重启窗口内隧道 phase 保持 `ready`（隧道未断）、实例反代对目标连接
-   拒绝返回显式 503（诚实失败，03 §3），会话/侧边栏短时错误属预期。
+   （202 + status 轮询/SSE，§9.3）。远端重启窗口内隧道 phase 保持 `ready`
+   （隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，03 §3），
+   会话/侧边栏短时错误属预期。
    Electron 壳无需重启：插件
    挂载在每次 dsh 进程 boot 时重新确定，不是 Electron 会话级事实（02 §2.6）。
 
@@ -360,14 +360,10 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
     管理面：版本选择器、状态/失败、快照、更新/回滚/恢复内建、registry 与
     restart 均经认证反代代理；剩余仅为 STATUS 登记的组件级与实机验收门禁
     （§9.5），不再以缩减视图作为产品契约；
-  - **ssh**：版本只读——显示远端 dsh 版本行（实例面可得时）与「运行时由远端
-    systemd 部署管理」说明，无版本 mutation 控件（远端运行时版本随 systemd，
-    设计 13/18 口径）；**唯一动作 `[重启远端 dsh]`** = 既有 `restart_service`
-    systemd IPC（03 §2.2）——刷新远端插件挂载（设计 13 §3 重启后加载新 row
-    同路径），同样二次确认 + 状态行；
-  - **dsh（http 直连）**：**不挂载**——无管理面、无 ssh 通道、无 `/chamber`
-    面（design 17 §3 能力差异表），该来源设置段不渲染 dsh-runtime 分节、
-    无任何版本/重启动作。
+  - **dsh（ssh/http 直连）**：**不挂载**——远端运行时由 systemd 部署、无
+    chamber 运行时管理面、无 `/chamber` 通道（design 17 §3 能力差异表），
+    该来源设置段不渲染 dsh-runtime 分节、无任何版本/重启动作；远端重启经
+    connections 卡的服务操作（`restart_service`，03 §2.2）触达。
 - `DshRuntimeSection` 内部行序（自上而下，与上列显示规格一一对应）：
   ```
   .runtimeSection（官方 settings-section 词汇：列向 gap 8px）
@@ -879,7 +875,7 @@ npm registry（§6 已并入）；spawn 的 dsh 子进程与控制面保持零�
 |---|---|---|
 | M5 共享核心 | §9.1 抽取 + fake host adapter 测试夹具 + desktop 适配装配 | 共享包测试经纯 Node fake adapter 全绿；desktop 绑定层回归全绿；共享包 typecheck/test |
 | M6 gateway 接线 | §9.3 解析链 + 控制面接线（含 `restartLocal()` 事务接口）+ 启动事务（先无管理面，env/锚可切换） | lifecycle 测试（启动顺序/失败回滚/stop 回收/restart 与健康重启单飞行交错）；CLI 契约测试 |
-| M7 管理面 | §9.3 `/chamber/runtime`（不随 ready detach 的 runtime 控制器）+ `/chamber/` 页面块 + §3.6 per-server 段（local/gateway/ssh 分支） | 路由权限测试（含 restart 202/poll、applying 409、dsh 停机窗口 status 可轮询）；settings-bridge 回归；**fake-registry acceptance 的 gateway 形态移植与 ssh `restart_service` 回归为剩余门禁（STATUS 登记）** |
+| M7 管理面 | §9.3 `/chamber/runtime`（不随 ready detach 的 runtime 控制器）+ `/chamber/` 页面块 + §3.6 per-server 段（local/gateway 分支；dsh 直连不挂载） | 路由权限测试（含 restart 202/poll、applying 409、dsh 停机窗口 status 可轮询）；settings-bridge 回归；**fake-registry acceptance 的 gateway 形态移植与 ssh `restart_service` 回归为剩余门禁（STATUS 登记）** |
 
 验收门禁：自动化（共享包/gateway typecheck+test；desktop 全量回归；
 `build:gateway` + pack/install smoke 含 pnpm 依赖；frozen lockfile；i18n）；

@@ -9,7 +9,6 @@ import {
   deriveRuntimeSource,
   runtimeSectionIntentionallyAbsent,
   runtimeServerProjectionKey,
-  runtimeSshHostId,
 } from '../src/client/runtime-source.ts'
 import { pollGatewayReady } from '../src/client/gateway-runtime-poll.ts'
 import {
@@ -221,23 +220,16 @@ test('per-server source derivation uses target kind × transport, not id prefixe
   assert.equal(deriveRuntimeSource({ id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'local' }), 'local')
   assert.equal(deriveRuntimeSource({ id: 'gateway-inst-7', sourceFingerprint: 'proof:inst-7', kind: 'gateway', transport: 'http', rawId: 'inst-7' }), 'gateway')
   assert.equal(deriveRuntimeSource({ id: 'gateway-tunnel', sourceFingerprint: 'proof:tunnel', kind: 'gateway', transport: 'ssh', rawId: 'tunnel' }), 'gateway')
-  assert.equal(deriveRuntimeSource({ id: 'ssh-inst-3', sourceFingerprint: 'proof:inst-3', kind: 'dsh', transport: 'ssh', rawId: 'inst-3' }), 'ssh')
-  assert.equal(deriveRuntimeSource({ id: 'dsh-inst-9', sourceFingerprint: 'proof:inst-9', kind: 'dsh', transport: 'ssh', rawId: 'inst-9' }), 'ssh')
-  const direct = { id: 'dsh-direct', sourceFingerprint: 'proof:direct', kind: 'dsh' as const, transport: 'http' as const, rawId: 'direct' }
-  assert.equal(deriveRuntimeSource(direct), null)
-  assert.equal(runtimeSectionIntentionallyAbsent(direct), true)
+  // Direct dsh targets (ssh or http) have no chamber runtime management
+  // surface: no section, intentionally absent (design 18 §3.6).
+  for (const transport of ['ssh', 'http'] as const) {
+    const direct = { id: `dsh-${transport}`, sourceFingerprint: `proof:${transport}`, kind: 'dsh' as const, transport, rawId: 'direct' }
+    assert.equal(deriveRuntimeSource(direct), null)
+    assert.equal(runtimeSectionIntentionallyAbsent(direct), true)
+  }
   assert.equal(deriveRuntimeSource({ id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'ssh' }), null)
   assert.equal(runtimeSectionIntentionallyAbsent({ id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'ssh' }), false)
   assert.equal(deriveRuntimeSource(undefined), null)
-})
-
-test('ssh restart host id uses explicit raw identity with exact canonical/legacy fallback', () => {
-  assert.equal(runtimeSshHostId({ id: 'dsh-east', sourceFingerprint: 'proof:east', kind: 'dsh', transport: 'ssh', rawId: 'east' }), 'east')
-  assert.equal(runtimeSshHostId({ id: 'ssh-legacy', sourceFingerprint: 'proof:legacy', kind: 'dsh', transport: 'ssh', rawId: 'legacy' }), 'legacy')
-  assert.equal(runtimeSshHostId({ id: 'dsh-east', sourceFingerprint: 'proof:east', kind: 'dsh', transport: 'ssh' }), 'east')
-  assert.equal(runtimeSshHostId({ id: 'ssh-legacy', sourceFingerprint: 'proof:legacy', kind: 'dsh', transport: 'ssh' }), 'legacy')
-  assert.equal(runtimeSshHostId({ id: 'dsh-east', sourceFingerprint: 'proof:east', kind: 'dsh', transport: 'ssh', rawId: 'west' }), null)
-  assert.equal(runtimeSshHostId({ id: 'gateway-east', sourceFingerprint: 'proof:east', kind: 'gateway', transport: 'ssh', rawId: 'east' }), null)
 })
 
 test('runtime projection identity tracks transport, raw host id and live version', () => {
