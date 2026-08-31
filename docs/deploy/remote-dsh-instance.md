@@ -11,7 +11,7 @@
 
 远程服务器只需在 loopback 上运行 dsh 的 API 面 web profile——那里无需 web 前端：UI 来自本地复用的前端，经 `/api/i/dsh-<id>/*` 同源反代访问（这里采用 SSH transport）。
 
-1. **环境要求** — 装有 systemd 的 Linux、Node.js 24+、运行 chamber 桌面的机器对该服务器的 SSH 访问（密钥认证：桌面传输运行时经 SSH 通道驱动 `systemctl`）。
+1. **环境要求** — 装有 systemd 的 Linux、Node.js 22+、运行 chamber 桌面的机器对该服务器的 SSH 访问（密钥认证：桌面传输运行时经 SSH 通道驱动 `systemctl`）。
 2. **安装 dsh**（官方发行）：
 
    ```bash
@@ -50,7 +50,7 @@
    # dsh 是 node 脚本（shebang 为 `#!/usr/bin/env node`），而 systemd 默认
    # PATH 不含 nvm 的 node → 服务会以 status=127 崩溃重启（日志：
    # "/usr/bin/env: 'node': No such file or directory"）。将 <NODE_BIN> 换成
-   # 上面 `which node` 的目录（如 /home/<你的用户名>/.nvm/versions/node/v24.20.0/bin）。
+   # 上面 `which node` 的目录（如 /home/<你的用户名>/.nvm/versions/node/v22.22.3/bin）。
    # 注意：Environment= 是整行字面赋值、完全覆盖旧值，没有"追加到已有 PATH"
    # 的语法，ExecStart 内也不做变量展开——必须写全绝对路径。
    Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -152,7 +152,7 @@
 
 The remote server only needs the dsh API-side web profile on loopback — no web frontend there: the UI comes from the locally reused frontend through the `/api/i/dsh-<id>/*` same-origin proxy (using the SSH transport in this setup).
 
-1. **Requirements** — a systemd Linux host, Node.js 24+, and SSH access from the machine running the chamber desktop (key auth: the desktop transport runtime drives `systemctl` over the SSH channel).
+1. **Requirements** — a systemd Linux host, Node.js 22+, and SSH access from the machine running the chamber desktop (key auth: the desktop transport runtime drives `systemctl` over the SSH channel).
 2. **Install dsh** (official release):
 
    ```bash
@@ -190,7 +190,7 @@ The remote server only needs the dsh API-side web profile on loopback — no web
    # dsh is a node script (shebang `#!/usr/bin/env node`), and systemd's default
    # PATH has no nvm node → the service crash-loops with status=127 (log:
    # "/usr/bin/env: 'node': No such file or directory"). Replace <NODE_BIN> with
-   # the `which node` dir above (e.g. /home/<YOUR_USERNAME>/.nvm/versions/node/v24.20.0/bin).
+   # the `which node` dir above (e.g. /home/<YOUR_USERNAME>/.nvm/versions/node/v22.22.3/bin).
    # Note: Environment= is a whole-line literal assignment that fully replaces
    # the old value — there is no "append to existing PATH" syntax, and no
    # variable expansion inside ExecStart — write full absolute paths.

@@ -438,7 +438,7 @@ validate_gateway_version() {
 
 # 拉取 GitHub Releases 全部可用版本（最新在前，最多 100 个）写入 RELEASE_LIST：
 #   每行 <版本>|<预发布:0/1>|<有gateway资产:0/1>|<发布日期>，仅收录 canonical SemVer。
-# 用 node 解析（preflight 已保证 node ≥24；脚本 read_systemd_env_value 已有同款先例），
+# 用 node 解析（preflight 已保证 node ≥22；脚本 read_systemd_env_value 已有同款先例），
 # 对 GitHub 的美化（多行缩进）与压缩 JSON 都健壮——旧 sed 按 '},{' 切分对美化 JSON
 # 完全不生效（release 之间实际是 '},  {' 带缩进），曾导致 beta 通道实际取到"文档里
 # 第一个 tag"即最新任意 release，而不是真正的预发布。成功且非空返回 0；网络失败或
@@ -733,6 +733,10 @@ publish_staged_file() {
 # 配置落盘（该文件由 bash source，故使用 bash 自己的 %q 语法）。
 write_config() {
   mkdir -p "$GATEWAY_DIR"
+  # 私有 state 根：gateway 的 createGatewayStore 对已存在的根目录要求严格
+  # 0700（fail-closed，绝不静默放宽）——installer 必须把自身 mkdir -p 按
+  # umask 留下的目录一并收紧，否则旧安装（0755 根）升级后会启动崩溃循环。
+  chmod 700 "$BASE_DIR" 2>/dev/null || true
   chmod 700 "$GATEWAY_DIR" 2>/dev/null || true
   umask 077
   local tmp
@@ -767,6 +771,7 @@ write_config() {
 # 仅 --purge 删除。
 write_env() {
   mkdir -p "$GATEWAY_DIR"
+  chmod 700 "$BASE_DIR" 2>/dev/null || true
   umask 077
   local tmp
   tmp=$(mktemp "${ENV_FILE}.tmp.XXXXXX") || return 1
@@ -2245,14 +2250,16 @@ fi
 # 前置检查:node 是 gateway 运行依赖;curl 仅在线下载需要(离线包可跳过)。
 # 检查放在参数解析后、进入向导前,让小白第一时间看到缺什么而不是装到一半才失败。
 preflight() {
-  have node || die "缺少 node(≥24):gateway 运行依赖 node,请先安装(https://nodejs.org)"
-  # 文案声称 ≥24 就必须真的查版本：低版本 node 会在源码树 dsh 路径的
+  have node || die "缺少 node(≥22):gateway 运行依赖 node,请先安装(https://nodejs.org)"
+  # 文案声称 ≥22 就必须真的查版本：node 18/20 会在源码树 dsh 路径的
   # `node --import tsx/esm` 或 gateway 本体处中途失败，报错要前置且诚实。
+  # 运行时下限与工具链（CI/开发统一 24）分离：产物为 esbuild node22 语法
+  # 目标，node 22（maintenance LTS，至 2027-04）仍在官方支持期内。
   local node_ver node_major
   node_ver=$(node --version 2>/dev/null || true)
   node_major=$(printf '%s' "$node_ver" | sed 's/^v\([0-9][0-9]*\).*/\1/' || true)
-  [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 24 ]] \
-    || die "node 版本过低：${node_ver:-未知}，需要 ≥24（https://nodejs.org）"
+  [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 22 ]] \
+    || die "node 版本过低：${node_ver:-未知}，需要 ≥22（https://nodejs.org）"
   if [[ -z "$OFFLINE_TGZ" ]]; then
     have curl || die "缺少 curl:下载安装包需要 curl(离线包模式可用 --tgz 跳过)"
   fi
