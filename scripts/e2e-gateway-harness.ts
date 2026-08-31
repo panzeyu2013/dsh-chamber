@@ -15,7 +15,7 @@
  *   gw-ssh     gateway+ssh tunnel + token     → ready (+ systemd exec)
  *   dsh-http   dsh+http direct (user tunnel)  → ready
  *   spki       gateway+https+SPKI pin (relay) → ready; wrong pin → terminal
- *   proxy      control-plane proxy path       → host.describe + /chamber/runtime
+ *   proxy      control-plane proxy path       → session/list probe + /chamber/runtime
  *
  * Env:
  *   E2E_HOST (default 192.168.110.172), E2E_USER (root)
@@ -184,22 +184,22 @@ async function scenarioProxy(): Promise<void> {
     const base = `http://127.0.0.1:${plane.port}`
     // gateway transport through the per-instance proxy with Bearer injection
     plane.registerInstanceTransport('gateway:e2ep', `http://${HOST}:30801`, { authorization: `Bearer ${TOKEN}` })
-    const describe = await fetch(`${base}/api/i/gateway-e2ep/api/host.describe`, {
+    const describe = await fetch(`${base}/api/i/gateway-e2ep/api/session/list`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId: 'e2e', method: 'host.describe', payload: {} }),
+      body: JSON.stringify({ type: 'client-request', rpcId: 'e2e', method: 'session/list', payload: { args: { _request: {} } } }),
     })
     const body = await describe.text()
-    record('proxy: gateway host.describe w/ Bearer', describe.status === 200 && /server-response/.test(body), `status=${describe.status} ${body.slice(0, 80)}`)
+    record('proxy: gateway session/list w/ Bearer', describe.status === 200 && /server-response/.test(body), `status=${describe.status} ${body.slice(0, 80)}`)
     const runtime = await fetch(`${base}/api/i/gateway-e2ep/chamber/runtime/status`, { headers: { accept: 'application/json' } })
     record('proxy: /chamber/runtime/status via proxy', runtime.status === 200, `status=${runtime.status}`)
-    const unauth = await fetch(`${base}/api/i/gateway-e2ep/api/host.describe`, {
+    const unauth = await fetch(`${base}/api/i/gateway-e2ep/api/session/list`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId: 'e2e2', method: 'host.describe', payload: {} }),
+      body: JSON.stringify({ type: 'client-request', rpcId: 'e2e2', method: 'session/list', payload: { args: { _request: {} } } }),
     })
     // unregistered transport → explicit 503 (proxy honesty)
-    const missing = await fetch(`${base}/api/i/gateway-nope/api/host.describe`, { method: 'POST' })
+    const missing = await fetch(`${base}/api/i/gateway-nope/api/session/list`, { method: 'POST' })
     record('proxy: unregistered transport → 503', missing.status === 503, `status=${missing.status}`)
   } finally {
     await plane.stop()

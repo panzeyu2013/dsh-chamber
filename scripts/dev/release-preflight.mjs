@@ -12,7 +12,7 @@
  *
  * 用法：
  *   node scripts/dev/release-preflight.mjs <version> [--fork-version <v>]
- *       默认 fork 副本基线 0.1.1-rc.2。--fork-version 可覆盖。
+ *       默认 fork 副本基线 0.1.2-alpha.1。--fork-version 可覆盖。
  *   node scripts/dev/release-preflight.mjs --actions-only   # CI 模式：只验
  *       证 .github/workflows/*.yml 的 action SHA（网络解析），其余跳过。
  *   node scripts/dev/release-preflight.mjs <version> --versions-only
@@ -64,7 +64,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const VERSION = positional[0]
-const FORK_VERSION = flags.forkVersion ?? '0.1.1-rc.2'
+const FORK_VERSION = flags.forkVersion ?? '0.1.2-alpha.1'
 
 // ---------------------------------------------------------------------------
 // 检查器（fail-fast：任一失败即退出 1，消息指明修复方向）
@@ -122,6 +122,31 @@ function checkVersionUniformity() {
 
   if (mismatches.length > 0) fail(c, mismatches.join('; '))
   ok(c, `${VERSION} across root+${packageCount} packages; fork copies @ ${FORK_VERSION}; installer dsh constant in sync`)
+}
+
+/**
+ * (a2) 双线一致性硬门禁（review-round3 P1-1）：源码线（harness pin / fork 副本
+ * 基线 = FORK_VERSION）与运行时线（打包进桌面的 @deepseek-ai/dsh，从
+ * packages/desktop/vendor/dsh/pnpm-lock.yaml 读取）必须同代。升级上游源码
+ * 后若 npm 尚未发布对应 @deepseek-ai/dsh，运行时线滞后 —— 迁移后的探针/wire
+ * 全部是 0.1.2 斜杠面，旧 host 不提供斜杠方法：本地实例 spawn 探针必败、
+ * 远端连接判「非 dsh」、gateway features 全灭。本检查把该互斥窗口变成发布
+ * 硬失败：先发布 @deepseek-ai/dsh@<FORK_VERSION>，再 `bundle:dsh -- --force
+ * --refresh-lockfile` 与 release.yml env / install-gateway.sh 同步后，门禁放行。
+ */
+function checkRuntimeSourceLine() {
+  const c = check('runtime dsh line matches the fork/source baseline (dual-line consistency)')
+  const runtimeLock = readFileSync(join(REPO_ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml'), 'utf8')
+  const match = /@deepseek-ai\/dsh@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(runtimeLock)
+  if (match === null) {
+    fail(c, 'packages/desktop/vendor/dsh/pnpm-lock.yaml carries no @deepseek-ai/dsh version (bundle:dsh --refresh-lockfile first)')
+  }
+  if (match[1] !== FORK_VERSION) {
+    fail(c, `runtime dsh=${match[1]} != fork/source baseline=${FORK_VERSION} — 双线互斥窗口：` +
+      `源码线已是 ${FORK_VERSION} wire，旧 host 不提供斜杠方法（本地 spawn 探针必败/远端判非 dsh/gateway features 全灭）。` +
+      `先 npm publish @deepseek-ai/dsh@${FORK_VERSION}，再 bundle:dsh -- --force --refresh-lockfile + release.yml env + install-gateway.sh 同步`)
+  }
+  ok(c, `runtime dsh ${match[1]} == source baseline ${FORK_VERSION}`)
 }
 
 /** (b) changelog：两份 CHANGELOG 均有 `## [<version>]` 节（release.yml 提取
@@ -404,6 +429,7 @@ async function runPreflight() {
   }
   const ran = []
   checkVersionUniformity(); ran.push('version uniformity')
+  checkRuntimeSourceLine(); ran.push('dual-line consistency')
   checkChangelog(); ran.push('changelog')
   checkI18n(); ran.push('i18n')
   if (flags.offline) {
@@ -440,6 +466,7 @@ function runVersionsOnly() {
     process.exit(1)
   }
   checkVersionUniformity()
+  checkRuntimeSourceLine()
 }
 
 if (IS_MAIN) {
