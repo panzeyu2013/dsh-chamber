@@ -12,7 +12,7 @@
  *
  * 用法：
  *   node scripts/dev/release-preflight.mjs <version> [--fork-version <v>]
- *       默认 fork 副本基线 0.1.2-alpha.1。--fork-version 可覆盖。
+ *       默认 fork 副本基线 0.1.2-alpha.2。--fork-version 可覆盖。
  *   node scripts/dev/release-preflight.mjs --actions-only   # CI 模式：只验
  *       证 .github/workflows/*.yml 的 action SHA（网络解析），其余跳过。
  *   node scripts/dev/release-preflight.mjs <version> --versions-only
@@ -64,7 +64,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const VERSION = positional[0]
-const FORK_VERSION = flags.forkVersion ?? '0.1.2-alpha.1'
+const FORK_VERSION = flags.forkVersion ?? '0.1.2-alpha.2'
 
 // ---------------------------------------------------------------------------
 // 检查器（fail-fast：任一失败即退出 1，消息指明修复方向）

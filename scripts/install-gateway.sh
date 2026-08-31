@@ -36,7 +36,7 @@ set -euo pipefail
 # DSH_CHAMBER_DSH_VERSION 是「内建/回退锚」默认版本（design 18 §9）：运行期
 # 可经 /chamber/runtime 切换，此常量仅决定本脚本安装的锚版本。
 # ---------------------------------------------------------------------------
-DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.1.1-rc.2}"
+DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.1.2-alpha.2}"
 GITHUB_REPO="${DSH_CHAMBER_GITHUB_REPO:-panzeyu2013/dsh-chamber}"
 BASE_DIR="${DSH_CHAMBER_BASE_DIR:-$HOME/.dsh-chamber}"
 GATEWAY_DIR="${BASE_DIR}/gateway"
