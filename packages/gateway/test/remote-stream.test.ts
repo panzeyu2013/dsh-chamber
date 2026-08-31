@@ -34,6 +34,26 @@ async function withServer(handler: (socket: WebSocket) => void): Promise<{ baseU
   }
 }
 
+test('openRemoteStream fails loud when the consumer overruns the frame budget', async () => {
+  // check-finala P2-1: the bounded frame queue (256 frames) must surface as a
+  // stream error, never accumulate unbounded memory.
+  const { baseUrl, close } = await withServer(socket => {
+    socket.on('message', data => {
+      const frame = JSON.parse(String(data)) as { streamId?: unknown }
+      for (let i = 0; i < 300; i += 1) {
+        socket.send(JSON.stringify({ type: 'item', streamId: frame.streamId, value: { n: i } }))
+      }
+    })
+  })
+  try {
+    await assert.rejects(async () => {
+      for await (const value of openRemoteStream(baseUrl, 'session/control', { args: {} })) void value
+    }, /consumer overrun/)
+  } finally {
+    await close()
+  }
+})
+
 test('openRemoteStream carries the 0.1.2 browser-auth cookie in the mux handshake', async () => {
   // review-round4 P1 / round5 coverage: the gateway's own mux client must
   // present the spawn-minted cookie — the 0.1.2 stream gate 401s without it.
@@ -100,13 +120,13 @@ test('openRemoteStream sends the open frame and yields item values', async () =>
 test('openRemoteStream surfaces a host error frame and terminates on end', async () => {
   const { baseUrl, close } = await withServer(socket => {
     socket.on('message', () => {
-      socket.send(JSON.stringify({ type: 'error', streamId: 's1', error: { code: 'arguments-invalid', message: 'bad args', details: {} } }))
+      socket.send(JSON.stringify({ type: 'error', streamId: 's1', error: { code: 'gateway/arguments-invalid', message: 'bad args', details: {} } }))
     })
   })
   try {
     await assert.rejects(async () => {
       for await (const value of openRemoteStream(baseUrl, 'session/control', { args: {} })) void value
-    }, /arguments-invalid: bad args/)
+    }, /gateway\/arguments-invalid: bad args/)
   } finally {
     await close()
   }
