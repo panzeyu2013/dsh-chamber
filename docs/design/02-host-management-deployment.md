@@ -462,7 +462,7 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-目录归属与无 root 形态（2026-08 重审，与 README「服务器端部署」一致）：
+目录归属与无 root 形态（2026-08 重审；完整单元示例见 docs/deploy/remote-dsh-instance.md，与 README「服务器端部署」一致）：
 
 - **归属不变量**：dsh 默认把 home 放在运行账号自己的家目录（`~/.dsh`，
   即 `${DSH_HOME:-$HOME/.dsh}`）——**无需设置 `DSH_HOME`**，也不再有
@@ -486,7 +486,7 @@ WantedBy=multi-user.target
   option 解析——控制面不直连远程进程，只经隧道消费其 API 面；
 - **停止**：`systemctl stop` → SIGTERM → dsh profile-boot 优雅退出（exit 0）；
 - **崩溃**：`Restart=on-failure` + `RestartSec=3` 拉起；用户侧单元示例与
-  README「服务器端部署」一节一致。常见崩溃原因：systemd 默认 PATH 不含 nvm
+  docs/deploy/remote-dsh-instance.md 及 README「服务器端部署」一节一致。常见崩溃原因：systemd 默认 PATH 不含 nvm
   node → `status=127`（`/usr/bin/env: 'node': No such file or directory`），
   须显式 `Environment=PATH=<node-bin-dir>:/usr/local/sbin:...`（整行字面赋值，
   无追加语法、无变量展开）；

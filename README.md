@@ -70,153 +70,30 @@ gateway 仍监听 loopback，由 Nginx/Caddy 终止 TLS；Desktop 默认 HTTPS�
 仅作为可信网络的有界选择并持续显示明文风险。
 
 **安装（一键脚本）**——从 GitHub release 拉取安装包（npm 未发布也能装），
-交互式确认配置（默认：gateway 监听 **30801**、托管 dsh 监听 **30800**，均可改）：
+8 步交互向导（每个选项都有说明与校验，默认：仅本机访问、local 安装到
+`~/.dsh-chamber`、gateway 监听 **30801**、托管 dsh 监听 **30800**，均可改）：
 
 ```bash
 curl -fsSL -o install-gateway.sh \
   https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/main/scripts/install-gateway.sh
-bash install-gateway.sh          # 交互向导（回车接受默认值，可逐项修改）
+bash install-gateway.sh          # 交互向导（q 退出 / ESC 或 back 返回上一步）
 ```
 
-脚本自动完成：dsh 探测/安装（已有则复用）→ 下载 + sha256 校验 → npm 全局安装
-→ 凭据写入 0600 env → systemd 单元（root）/ 前台（非 root）→ 健康检查；
-管理命令 `install-gateway.sh status|logs|update|uninstall`。
+脚本自动完成：dsh 探测/安装（已有则复用或提示接管）→ 下载 + sha256 校验 →
+local 安装（默认；gateway 自管 dsh 版本，运行期可在 `/chamber/runtime` 切换）
+→ 凭据写入 0600 env（外部形态；双重输入 + 回车后显示字符计数）→ systemd 单元（root；非 root 默认 systemctl --user，无 systemd 自动前台）→ 健康检查；完成后可选把 `~/.dsh-chamber/bin` 加入 PATH；
+管理命令 `install-gateway.sh status|logs|restart|update|uninstall`。
 公网接入：反代将 HTTPS 转到 `127.0.0.1:30801` 并配置 `--origin` 与
-`--trusted-proxy`（详见 [docs/deploy-gateway.md](docs/deploy-gateway.md)）。
+`--trusted-proxy`（详见 [docs/deploy/deploy-gateway.md](docs/deploy/deploy-gateway.md)）。
 Desktop 接入：「设置 → 连接」选择 Gateway + HTTP transport，填反代地址，并按需配置
 共享 token 和/或登录密码（默认 HTTPS；明文 HTTP 必须显式选择）。
 
 ### 远程 dsh 实例（systemd）
 
-远程服务器只需在 loopback 上运行 dsh 的 API 面 web profile——那里无需 web 前端：UI 来自本地复用的前端，经 `/api/i/dsh-<id>/*` 同源反代访问（这里采用 SSH transport）。
-
-1. **环境要求** — 装有 systemd 的 Linux、Node.js 22+、运行 chamber 桌面的机器对该服务器的 SSH 访问（密钥认证：桌面传输运行时经 SSH 通道驱动 `systemctl`）。
-2. **安装 dsh**（官方发行）：
-
-   ```bash
-   npm install -g @deepseek-ai/dsh
-   dsh --version
-   which dsh   # 记下安装路径（npm 全局，不在 /usr/bin）供下方 ExecStart 使用
-   which node  # 记下 node bin 目录（nvm 托管，systemd 的 PATH 里没有）供下方 PATH 行使用
-   ```
-
-3. **用 systemd 持久化** — 两种形态任选，dsh 都以非 root 用户身份运行，
-   所有文件都落在该用户自己的家目录。dsh 默认 `$HOME/.dsh`，因此完全
-   不需要设置 DSH_HOME。
-
-   **形态 A —— 系统单元（推荐）。** 创建 `/etc/systemd/system/dsh.service`
-   （root 只在安装单元时用一次）：
-
-   ```ini
-   [Unit]
-   Description=dsh web profile (remote instance)
-   After=network.target
-
-   [Service]
-   Type=simple
-   # 以你 SSH 登录的用户身份运行 dsh（把 <你的用户名> 换成实际账号）。
-   # dsh 会把所有文件写到该用户自己的家目录（默认 ~/.dsh）——不需要
-   # mkdir/chown，也不会有 root 属主文件。web profile 仅在 loopback 提供
-   # dsh API + 前端。--port 与 --trusted-host 恒一致（127.0.0.1:<P>）：
-   # 浏览器信任栅栏只认 chamber 隧道转发来的 Host 头（`dsh web` 是
-   # `--profile web` 的硬别名，两者等价）。将 <DSH_PATH> 换成上面
-   # `which dsh` 的路径 —— npm 全局安装位于用户的 npm prefix 下
-   # （如 /usr/local/bin/dsh），不是 /usr/bin。
-   User=<你的用户名>
-   ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
-   Restart=on-failure
-   RestartSec=3
-   # dsh 是 node 脚本（shebang 为 `#!/usr/bin/env node`），而 systemd 默认
-   # PATH 不含 nvm 的 node → 服务会以 status=127 崩溃重启（日志：
-   # "/usr/bin/env: 'node': No such file or directory"）。将 <NODE_BIN> 换成
-   # 上面 `which node` 的目录（如 /home/<你的用户名>/.nvm/versions/node/v22.22.3/bin）。
-   # 注意：Environment= 是整行字面赋值、完全覆盖旧值，没有"追加到已有 PATH"
-   # 的语法，ExecStart 内也不做变量展开——必须写全绝对路径。
-   Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-   Environment=DSH_TELEMETRY_DISABLED=1
-   Environment=DSH_PERMISSION_MODE=workspace-write
-   NoNewPrivileges=true
-   PrivateTmp=true
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now dsh
-   sudo systemctl status dsh
-   ```
-
-   **形态 B —— 用户单元（完全无需 root）。** 服务器上没有 root（或不想
-   申请）时，systemd 用户单元同样能持久化 dsh。创建
-   `~/.config/systemd/user/dsh.service`——单元形状相同，只是没有
-   `User=` 行（以你自己身份运行），`WantedBy=default.target`：
-
-   ```ini
-   [Unit]
-   Description=dsh web profile (remote instance)
-   After=network.target
-
-   [Service]
-   Type=simple
-   ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
-   Restart=on-failure
-   RestartSec=3
-   Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-   Environment=DSH_TELEMETRY_DISABLED=1
-   Environment=DSH_PERMISSION_MODE=workspace-write
-   NoNewPrivileges=true
-   PrivateTmp=true
-
-   [Install]
-   WantedBy=default.target
-   ```
-
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable --now dsh
-   systemctl --user status dsh
-   # 登出后与开机后仍然存活——一次性操作，需要 root（或 polkit 授权）：
-   sudo loginctl enable-linger <你的用户名>
-   ```
-
-   创建和管理 `--user` 单元不需要 root；但**没有 linger 时**，用户管理器
-   （连同你的服务）会在登出时停止。`loginctl enable-linger` 让它在开机时
-   启动、登出后继续运行。
-
-   **归属规则。** dsh 把所有文件写到单元运行用户自己的家目录（默认
-   `~/.dsh`）——该用户只需要有真实的家目录即可。不需要 mkdir、不需要
-   chown，"root 写的文件我的用户读不了"的问题根本不会出现。运行账号三选一：
-
-   - **你的登录用户**（形态 A）：`User=<你的用户名>`，家目录本就是你的。
-   - **专用服务账号**（更安全）：建号时带上家目录——
-     `sudo useradd --system --create-home dsh`（注意：`useradd --system`
-     默认**不创建**家目录，必须加 `--create-home`）——然后设
-     `User=dsh` / `Group=dsh`，dsh 使用该账号自己的 `~/.dsh`。
-   - **root**：可行但**不推荐**——dsh 会写到 `/root/.dsh`，归 root 所有，
-     你的用户不可读。
-
-   **形态 B 的注意点**：chamber 桌面的 systemd 起停按钮驱动的是**系统**
-   管理器（`systemctl ...` 不带 `--user`，设计 02 §3.9），看不到用户单元——
-   请在服务器上改用 `systemctl --user` 管理。隧道/连接本身不受影响
-   （linger 保证实例常驻）。若希望桌面按钮可用，请用形态 A。
-
-   若服务崩溃重启，先看日志（`journalctl -u dsh`；用户单元用
-   `journalctl --user -u dsh`）：`status=127` + `/usr/bin/env: 'node': No
-   such file or directory` 说明上面的 PATH 行没包含实际的 node bin 目录。
-
-   `--host 127.0.0.1`（loopback 绑定）是刻意为之：chamber 桌面经自身 SSH
-   隧道访问实例，不额外暴露攻击面。只有想从其他机器直接访问 30800（绕过
-   chamber 隧道）时才需改成 `--host 0.0.0.0`——且必须配套真实鉴权（v1
-   实例是匿名的），或改用反向代理前置。
-
-4. **从 chamber 桌面接入** — 在连接设置页选择目标 `dsh|gateway` 与传输
-   `ssh|http`（四组合均支持），填写目标端点；SSH 可配 user/SSH 端口/systemd
-   服务与可选密码，Gateway 可独立配置 token 和/或 Unicode 登录密码，HTTPS 可选
-   SPKI pin。SSH 形态由桌面接管 `ssh -N -L` 与按需 systemd；HTTP 形态由主进程
-   直连，renderer 始终只见同源反代。单元形态遵循设计 02 §3.9，完整契约见
-   03 §2.2 / 17 §9。
+远程服务器上的 dsh 实例可用 **systemd** 持久化（系统单元或 user 单元，以
+非 root 用户运行，文件落在该用户自己的家目录）。完整单元配置、SSH
+transport 说明与排障见 [docs/deploy/remote-dsh-instance.md](docs/deploy/remote-dsh-instance.md)；
+服务器端部署统一入口见 [docs/deploy/deploy-gateway.md](docs/deploy/deploy-gateway.md)。
 
 ## 安全
 
@@ -276,6 +153,7 @@ Desktop 接入：「设置 → 连接」选择 Gateway + HTTP transport，填反
 | [docs/design/05-connection-manager.md](docs/design/05-connection-manager.md) | 表面/架构契约（v1） |
 | [docs/progress/STATUS.md](docs/progress/STATUS.md) | 完成状态、剩余偏差与验证记录 |
 | [docs/README.en-US.md](docs/README.en-US.md) | English README |
+| [docs/deploy/remote-dsh-instance.md](docs/deploy/remote-dsh-instance.md) | 远程 dsh 实例的 systemd 持久化完整说明 |
 
 ## 相关项目
 

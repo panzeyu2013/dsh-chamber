@@ -5,11 +5,11 @@
 ## `scripts/` —— 用户 / 运维面脚本
 
 - `install-gateway.sh` —— dsh-chamber Gateway 一键安装器（设计 17 服务器部署）：
-  交互向导 + 非交互模式，install / update / status / logs / uninstall 子命令。
+  交互向导 + 非交互模式，install / update / restart / status / logs / uninstall 子命令。
 - `README.md` —— 本目录约定（非脚本）。
 
 用户脚本以"从 GitHub 拉取即可运行、零仓库依赖"为原则（尽量只依赖 bash/curl/node），
-文档入口见 `docs/deploy-gateway.md`。
+文档入口见 `docs/deploy/deploy-gateway.md`。
 
 ## `scripts/dev/` —— 开发者 / 维护者 / 测试脚本
 

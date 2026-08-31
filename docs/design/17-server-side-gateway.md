@@ -252,7 +252,7 @@ proxy）的 S1 硬门在**播种之前**按**部署配置**判定——持久化
 
 `install-gateway.sh` 一键安装器（design 17 部署 + design 18 运行时管理）覆盖上述
 形态：交互向导确认 bind/凭据/服务形态，`--no-auth` 有二次确认步骤；提供
-install/update/status/logs/uninstall 子命令与 `--purge`。
+install/update/restart/status/logs/uninstall 子命令与 `--purge`。
 
 ## 6. 单一公网请求策略
 

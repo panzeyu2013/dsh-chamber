@@ -18,6 +18,22 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   live under `scripts/dev/` (including `update-vendor.mjs`, new path
   `node scripts/dev/update-vendor.mjs <tag>`); `scripts/` keeps only the
   user-facing `install-gateway.sh` and the directory convention README.
+- **`install-gateway.sh` full rework** — 8-stage interactive wizard (welcome
+  page + version channel / access mode / credentials / ports / service mode /
+  dsh runtime / location / preview confirm; `q` quits, ESC or `back` goes back,
+  every step explained with validation loops, non-interactive `-y` uses all
+  defaults); **local install by default** (the gateway owns dsh versions,
+  switchable at runtime via `/chamber/runtime`); new `restart` subcommand;
+  double-entry credentials with character count, empty = auto-generate shown
+  once on the completion page (TTY only; non-TTY points to the 0600 file);
+  `--no-auth` requires an interactive YES confirmation; npm mirror three-way
+  choice (CN mirror default); take-over suggestion for pre-existing dsh;
+  idempotent PATH setup and script self-copy; preflight (node/curl) and flag
+  value validation (ports/bind/origin/proxy/credential lengths/channel).
+- **Deployment docs relocation** — `docs/deploy-gateway.md` moved into the new
+  `docs/deploy/` directory; the README "Remote dsh instance (systemd)" section
+  extracted to `docs/deploy/remote-dsh-instance.md` with a short note and link
+  left in the README; all references updated.
 
 ### Fixed
 

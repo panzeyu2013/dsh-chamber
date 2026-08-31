@@ -77,157 +77,28 @@ authenticated boundary. In production, keep it on loopback and terminate TLS
 at Nginx/Caddy. Desktop defaults to HTTPS; explicit plaintext HTTP is a bounded
 trusted-network choice with a persistent risk indicator.
 
-**Install (one-shot script)** — pulls the package from GitHub Releases (works before npm publishing), with an interactive wizard (defaults: gateway listens on **30801**, managed dsh on **30800**; both editable):
+**Install (one-shot script)** — pulls the package from GitHub Releases (works before npm publishing), with an 8-step interactive wizard (every option explained and validated; defaults: loopback-only access, local install under `~/.dsh-chamber`, gateway listens on **30801**, managed dsh on **30800**; all editable):
 
 ```bash
 curl -fsSL -o install-gateway.sh \
   https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/main/scripts/install-gateway.sh
-bash install-gateway.sh          # interactive wizard (Enter = default, type to change)
+bash install-gateway.sh          # interactive wizard (q quits / ESC or back goes back)
 ```
 
-The script auto-detects/installs dsh (reuses an existing one), downloads the tgz + sha256 check, npm-global install, writes credentials to a 0600 env file, sets up systemd (root) / foreground (non-root), and health-checks; management: `install-gateway.sh status|logs|update|uninstall`.
+The script auto-detects/installs dsh (reuses an existing one or offers to take it over), downloads the tgz + sha256 check, local install (default; the gateway owns dsh versions, switchable at runtime via `/chamber/runtime`), writes credentials to a 0600 env file (external mode; double entry with the character count shown after each entry), sets up systemd (root; non-root defaults to `systemctl --user`, auto-foreground without systemd), and health-checks; afterwards it offers to add `~/.dsh-chamber/bin` to PATH; management: `install-gateway.sh status|logs|restart|update|uninstall`.
 Public access: reverse-proxy HTTPS to `127.0.0.1:30801` and configure `--origin` /
-`--trusted-proxy` (see [docs/deploy-gateway.md](docs/deploy-gateway.md)). Desktop:
+`--trusted-proxy` (see [deploy/deploy-gateway.md](deploy/deploy-gateway.md)). Desktop:
 Settings → Connections → Gateway + HTTP transport, enter the proxy address,
 and optionally configure the shared token and/or login password (HTTPS by
 default; plaintext HTTP requires an explicit choice).
 
 ### Remote dsh instance (systemd)
 
-The remote server only needs the dsh API-side web profile on loopback — no web frontend there: the UI comes from the locally reused frontend through the `/api/i/dsh-<id>/*` same-origin proxy (using the SSH transport in this setup).
-
-1. **Requirements** — a systemd Linux host, Node.js 22+, and SSH access from the machine running the chamber desktop (key auth: the desktop transport runtime drives `systemctl` over the SSH channel).
-2. **Install dsh** (official release):
-
-   ```bash
-   npm install -g @deepseek-ai/dsh
-   dsh --version
-   which dsh   # note the install path (npm global, not /usr/bin) for ExecStart below
-   which node  # note the node bin dir (nvm-managed, absent from systemd's PATH) for the PATH line below
-   ```
-
-3. **Persist with systemd** — either form below runs dsh as a non-root user, with all files landing in that user's own home. dsh defaults to `$HOME/.dsh`, so no DSH_HOME is needed.
-
-   **Form A — system unit (recommended).** Create `/etc/systemd/system/dsh.service`
-   (root is only needed once, to install the unit):
-
-   ```ini
-   [Unit]
-   Description=dsh web profile (remote instance)
-   After=network.target
-
-   [Service]
-   Type=simple
-   # Run dsh as your SSH login user (replace <YOUR_USERNAME> with the real account).
-   # dsh writes everything to that user's own home (default ~/.dsh) — no
-   # mkdir/chown needed, no root-owned files. The web profile serves the dsh
-   # API + frontend on loopback only. --port and --trusted-host always match
-   # (127.0.0.1:<P>): the browser trust fence only accepts the Host header
-   # forwarded by the chamber tunnel (`dsh web` is a hard alias of
-   # `--profile web`; the two are equivalent). Replace <DSH_PATH> with the
-   # `which dsh` path above — npm global installs live under the user's npm
-   # prefix (e.g. /usr/local/bin/dsh), not /usr/bin.
-   User=<YOUR_USERNAME>
-   ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
-   Restart=on-failure
-   RestartSec=3
-   # dsh is a node script (shebang `#!/usr/bin/env node`), and systemd's default
-   # PATH has no nvm node → the service crash-loops with status=127 (log:
-   # "/usr/bin/env: 'node': No such file or directory"). Replace <NODE_BIN> with
-   # the `which node` dir above (e.g. /home/<YOUR_USERNAME>/.nvm/versions/node/v22.22.3/bin).
-   # Note: Environment= is a whole-line literal assignment that fully replaces
-   # the old value — there is no "append to existing PATH" syntax, and no
-   # variable expansion inside ExecStart — write full absolute paths.
-   Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-   Environment=DSH_TELEMETRY_DISABLED=1
-   Environment=DSH_PERMISSION_MODE=workspace-write
-   NoNewPrivileges=true
-   PrivateTmp=true
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now dsh
-   sudo systemctl status dsh
-   ```
-
-   **Form B — user unit (no root at all).** When the server has no root (or you
-   don't want to ask), a systemd user unit persists dsh just as well. Create
-   `~/.config/systemd/user/dsh.service` — the unit shape is the same, just no
-   `User=` line (runs as yourself) and `WantedBy=default.target`:
-
-   ```ini
-   [Unit]
-   Description=dsh web profile (remote instance)
-   After=network.target
-
-   [Service]
-   Type=simple
-   ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
-   Restart=on-failure
-   RestartSec=3
-   Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-   Environment=DSH_TELEMETRY_DISABLED=1
-   Environment=DSH_PERMISSION_MODE=workspace-write
-   NoNewPrivileges=true
-   PrivateTmp=true
-
-   [Install]
-   WantedBy=default.target
-   ```
-
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable --now dsh
-   systemctl --user status dsh
-   # Survives logout and boot — one-time step, needs root (or polkit):
-   sudo loginctl enable-linger <YOUR_USERNAME>
-   ```
-
-   Creating and managing `--user` units needs no root; but **without linger**,
-   the user manager (and your service) stops at logout. `loginctl enable-linger`
-   makes it start at boot and survive logout.
-
-   **Ownership rules.** dsh writes all files to the unit's running user's own
-   home (default `~/.dsh`) — the user just needs a real home directory. No
-   mkdir, no chown, and the "root wrote files my user can't read" problem never
-   arises. Pick one of three accounts:
-
-   - **Your login user** (Form A): `User=<YOUR_USERNAME>`, the home is already yours.
-   - **A dedicated service account** (more secure): create it with a home —
-     `sudo useradd --system --create-home dsh` (note: `useradd --system` does
-     **not** create a home by default; `--create-home` is required) — then set
-     `User=dsh` / `Group=dsh`; dsh uses that account's own `~/.dsh`.
-   - **root**: possible but **not recommended** — dsh writes to `/root/.dsh`,
-     owned by root and unreadable by your user.
-
-   **Form B caveat**: the chamber desktop's systemd start/stop buttons drive the
-   **system** manager (`systemctl ...` without `--user`, design 02 §3.9) and
-   cannot see user units — manage them on the server with `systemctl --user`
-   instead. Tunnels/connections are unaffected (linger keeps the instance
-   resident). Use Form A if you want the desktop buttons to work.
-
-   If the service crash-restarts, check the logs first (`journalctl -u dsh`;
-   user units: `journalctl --user -u dsh`): `status=127` +
-   `/usr/bin/env: 'node': No such file or directory` means the PATH line above
-   doesn't include the actual node bin dir.
-
-   `--host 127.0.0.1` (loopback binding) is deliberate: the chamber desktop
-   reaches the instance through its own SSH tunnel, adding no extra attack
-   surface. Only change it to `--host 0.0.0.0` to reach port 30800 from other
-   machines (bypassing the chamber tunnel) — and then you must pair it with
-   real auth (v1 instances are anonymous) or put a reverse proxy in front.
-
-4. **Attach from the chamber desktop** — choose a `dsh|gateway` target and an
-   `ssh|http` transport (all four combinations ship), then enter its endpoint.
-   SSH may carry user/port/systemd metadata and an optional password; Gateway
-   independently accepts a token and/or Unicode login password, with optional
-   SPKI pinning for HTTPS. Desktop owns SSH tunnels and on-demand systemd;
-   main connects HTTP directly while the renderer still sees only same-origin
-   proxying. See designs 03 §2.2 and 17 §9.
+A dsh instance on a remote server can be persisted with **systemd** (system
+or user unit, running as a non-root user with all files in that user's own
+home). Full unit configuration, SSH transport notes and troubleshooting:
+[deploy/remote-dsh-instance.md](deploy/remote-dsh-instance.md); the server-side
+deployment entry point is [deploy/deploy-gateway.md](deploy/deploy-gateway.md).
 
 ## Security
 
@@ -273,6 +144,7 @@ The remote server only needs the dsh API-side web profile on loopback — no web
 | [design/05-connection-manager.md](design/05-connection-manager.md) | Surface/architecture contract (v1) |
 | [progress/STATUS.md](progress/STATUS.md) | Completion status, remaining deviations & validation record |
 | [README.md](../README.md) | 中文 README |
+| [deploy/remote-dsh-instance.md](deploy/remote-dsh-instance.md) | Remote dsh instance persistence with systemd (full guide) |
 
 ## Related projects
 

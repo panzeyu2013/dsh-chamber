@@ -17,6 +17,17 @@
 - **scripts/ 目录重组** —— 开发者/维护者/测试脚本全部归入 `scripts/dev/`（含
   `update-vendor.mjs`，新路径 `node scripts/dev/update-vendor.mjs <tag>`）；
   `scripts/` 仅保留用户面脚本 `install-gateway.sh` 与目录约定 README。
+- **install-gateway.sh 全面重构** —— 8 阶段交互向导（欢迎页 + 版本通道/访问方式/
+  登录凭据/端口/服务方式/dsh 运行时/安装位置/预览确认；q 退出、ESC 或 back 返回，
+  每步有白话说明与校验循环、非交互 `-y` 全默认）；默认 **local 安装**
+  （gateway 自管 dsh 版本，运行期 `/chamber/runtime` 切换）；新增 `restart`
+  子命令；凭据双重输入 + 字符计数 + 留空自动生成并在完成页一次性显示（仅 TTY，
+  非 TTY 指引 0600 文件）；`--no-auth` 交互模式需 YES 二次确认；npm 镜像三选
+  （国内镜像默认）；本机已有 dsh 的接管建议；完成后 PATH 幂等写入与脚本自复制；
+  前置检查（node/curl）与 flag 值校验（端口/bind/origin/proxy/凭据长度/通道）。
+- **部署文档迁移** —— `docs/deploy-gateway.md` 移入新目录 `docs/deploy/`；
+  README「远程 dsh 实例（systemd）」长章节提取为 `docs/deploy/remote-dsh-instance.md`
+  并在 README 保留简短说明与链接；全部引用路径同步。
 
 ### 修复
 
