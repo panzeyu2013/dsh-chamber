@@ -30,7 +30,8 @@
  *   ssh exec failure (explicit error, never "inactive"), anything else =
  *   inactive — a failed exec must never masquerade as a stopped service.
  * - Endpoint identity verification (verifyUp): a `dsh` target must answer the
- *   host.describe wire handshake; a `gateway` target must answer its
+ *   session/list unary handshake (slash-path wire, upstream 0.1.2-alpha.1 —
+ *   host.describe is deleted there); a `gateway` target must answer its
  *   authenticated, gateway-owned `/chamber/runtime/status` identity, which
  *   deliberately stays available while managed dsh is blocked/down. An
  *   unrelated service never presents as a fake connection.
@@ -242,7 +243,7 @@ export const SERVER_ALIVE_COUNT_MAX = 3
 export const VERIFY_UP_TIMEOUT_MS = 5_000
 
 /** Response-body cap of the dsh identity probe (an oversized answer is not
- * a host.describe reply; bounded memory on a misbehaving endpoint). */
+ * a session/list reply; bounded memory on a misbehaving endpoint). */
 export const VERIFY_UP_MAX_BODY_BYTES = 1024 * 1024
 
 /** Timeout of the one-shot client-graph liveness probe (probeClientGraphLive). */
@@ -252,80 +253,70 @@ export const CLIENT_GRAPH_PROBE_TIMEOUT_MS = 5_000
  *  is not a graph RPC envelope; bounded memory on a misbehaving endpoint). */
 export const CLIENT_GRAPH_PROBE_MAX_BODY_BYTES = 1024 * 1024
 
-/** Timeout of the secondary dsh-signature probe (GET /api/events.mux). */
+/** Timeout of the secondary dsh-signature probe (POST /api/session/list). */
 export const VERIFY_UP_SIGNATURE_TIMEOUT_MS = 2_000
 
 /**
- * Secondary dsh-signature probe: GET /api/events.mux and classify by the
- * answer — the dsh connection plugin answers 426 + Upgrade: websocket
- * (documented dsh-client-connection contract); an older dsh without that
- * arm falls through to the apiProxy SSE arm and answers 200
- * text/event-stream. Either answer is positive dsh evidence: a destination
- * that fails the host.describe handshake but carries one of these
- * signatures IS a dsh instance with an incompatible/old version — the
- * caller can then tell the user to upgrade instead of claiming "not dsh".
- * Anything else (404, garbage, no answer) is no signature.
+ * Secondary dsh-signature probe: re-answer the session/list unary handshake
+ * (POST /api/session/list with the standard client-request envelope — the
+ * same slash-path identity wire as verifyDshEndpoint; upstream 0.1.2-alpha.1
+ * deleted host.describe and the events.mux/events.host arms, so a valid
+ * session/list answer is the only remaining positive dsh wire evidence) and
+ * classify by the answer. A matching server-response envelope with
+ * result.ok === true is positive dsh evidence: a destination that failed the
+ * primary identity probe but answers the re-probe IS a dsh instance that
+ * answered the handshake inconsistently — the caller can then tell the user
+ * the destination is dsh instead of claiming "not dsh". Anything else (404,
+ * garbage, wrong envelope, no answer) is no signature. An old-version dsh is
+ * no longer distinguishable from a non-dsh web server by design: that
+ * required the deleted legacy wire paths, so the generic message is honest.
  */
 export function probeDshSignature(
   endpoint: { host: string; port: number },
   timeoutMs = VERIFY_UP_SIGNATURE_TIMEOUT_MS,
-): Promise<'connection-plugin' | 'sse' | 'none'> {
-  return new Promise(resolve => {
-    let settled = false
-    const done = (signature: 'connection-plugin' | 'sse' | 'none') => {
-      if (settled) return
-      settled = true
-      // The response head is all we need — a 200 SSE signature is an
-      // open-ended stream that must not be kept connected past the probe
-      // (a destroyed request's late 'error' is consumed by the handler
-      // below; the settled guard makes it a no-op).
-      req.destroy()
-      resolve(signature)
-    }
-    const req = httpRequest(`http://${endpoint.host}:${endpoint.port}/api/events.mux`, {
-      method: 'GET',
-      timeout: timeoutMs,
-    }, res => {
-      // A premature close after our destroy must never escape as an
-      // uncaught error (main-process safety discipline).
-      res.on('error', () => {})
-      const contentType = String(res.headers['content-type'] ?? '').toLowerCase()
-      const upgrade = String(res.headers.upgrade ?? '').toLowerCase()
-      res.resume()
-      if (res.statusCode === 426 && upgrade === 'websocket') done('connection-plugin')
-      else if (res.statusCode === 200 && contentType.startsWith('text/event-stream')) done('sse')
-      else done('none')
-    })
-    req.on('timeout', () => {
-      req.destroy()
-      done('none')
-    })
-    req.on('error', () => done('none'))
-    req.end()
+): Promise<'dsh' | 'none'> {
+  const url = `http://${endpoint.host}:${endpoint.port}/api/session/list`
+  const rpcId = mintRpcId()
+  return postClientRequest({
+    url,
+    // The session/list unary is a Typert Remote on the 0.1.2 wire: the
+    // payload is the `{args}` form ({_request:{}} = no typed args), the same
+    // probe payload the control-plane readiness uses (spawn-dsh).
+    envelope: buildClientRequest(rpcId, 'session/list', { args: { _request: {} } }),
+    timeoutMs,
+    maxBodyBytes: VERIFY_UP_MAX_BODY_BYTES,
+  }).then(outcome => {
+    if (outcome.timeout || outcome.status === null || outcome.status !== 200 || outcome.oversized) return 'none'
+    const parsed = parseServerResponse(outcome.body, rpcId)
+    return parsed.kind === 'ok' && parsed.envelope.result.ok === true ? 'dsh' : 'none'
   })
 }
 
 /**
  * One-shot dsh identity probe (design 03 §2.2 / 05 §7.6): POST
- * /api/host.describe with the standard client-request envelope and require
+ * /api/session/list with the standard client-request envelope and require
  * a valid server-response echo with result.ok === true — the same wire
  * handshake the control plane's local readiness uses (02 §3.2: "TCP 通但
  * describe 失败 = 端口被无关服务占用") and dsh's own connection client
- * performs on attach. A port that merely accepts TCP — a non-dsh service
- * on the remote dsh port — answers differently and is rejected, so the
- * runtime never presents a fake connection as ready. The envelope is built
+ * performs on attach. The method is the slash-path session/list of the
+ * upstream 0.1.2-alpha.1 wire (host.describe is deleted there). The envelope
+ * is built
  * and validated by the shared rpc-envelope module (single-sourced in
  * control-plane, consumed through control-plane-module.ts — the packaged
  * app loads the compiled control-plane bundle, dev runs the workspace
- * source).
+ * source). A port that merely accepts TCP — a non-dsh service on the remote
+ * dsh port — answers differently and is rejected, so the runtime never
+ * presents a fake connection as ready.
  *
  * Failure classification (honest, never guessed): when the handshake fails
  * at the HTTP level, a secondary dsh-signature probe (probeDshSignature)
- * decides between "the destination IS dsh but too old/incompatible — tell
- * the user to upgrade" (positive signature: the 426 connection-plugin arm
- * or the apiProxy SSE arm) and the generic "not a dsh instance". A dsh so
- * old that it carries NEITHER signature is indistinguishable from a
- * non-dsh web server by design — the generic message stays.
+ * re-answers session/list to decide between "the destination IS dsh but
+ * answered the identity probe inconsistently — tell the user to check or
+ * upgrade" (positive signature: a valid session/list server-response) and
+ * the generic "not a dsh instance". The legacy 426/SSE events.mux signature
+ * arms are gone from the wire, so an old-version dsh that fails the
+ * slash-path handshake is indistinguishable from a non-dsh web server by
+ * design — the generic message stays.
  *
  * Retry classification: a destination that ANSWERED the probe (any HTTP
  * answer, wrong-shaped body) carries `terminal: true` — retrying cannot
@@ -343,13 +334,16 @@ export async function verifyDshEndpoint(
   maxBodyBytes = VERIFY_UP_MAX_BODY_BYTES,
 ): Promise<TransportVerifyResult> {
   // Bracketed IPv6 literals already carry their brackets in the URL.
-  const url = `http://${endpoint.host}:${endpoint.port}/api/host.describe`
+  const url = `http://${endpoint.host}:${endpoint.port}/api/session/list`
   const deadline = Date.now() + timeoutMs
   const remaining = () => Math.max(1, deadline - Date.now())
   const rpcId = mintRpcId()
   const outcome = await postClientRequest({
     url,
-    envelope: buildClientRequest(rpcId, 'host.describe', {}),
+    // The session/list unary is a Typert Remote on the 0.1.2 wire: the
+    // payload is the `{args}` form ({_request:{}} = no typed args), the same
+    // probe payload the control-plane readiness uses (spawn-dsh).
+    envelope: buildClientRequest(rpcId, 'session/list', { args: { _request: {} } }),
     timeoutMs,
     maxBodyBytes,
   })
@@ -360,12 +354,22 @@ export async function verifyDshEndpoint(
     return { ok: false, detail: 'the destination did not answer the dsh identity probe' }
   }
   // A non-200 answer (404 from a non-dsh web server or from an older dsh
-  // that does not register host.describe, 403, 5xx, …): classify with the
-  // dsh-signature probe before choosing the message.
+  // that does not register the slash-path session/list method, 403, 5xx, …):
+  // classify with the dsh-signature probe before choosing the message.
   if (outcome.status !== 200) {
+    // 0.1.2 browser-auth gate (review-round3c P0): the web-profile host
+    // answers 401 without the signed cookie; the launch token is
+    // process-memory random and printed only on the REMOTE console, so it is
+    // unrecoverable over the tunnel — fail loud with the honest reason
+    // instead of misclassifying the instance as "not a dsh". The signature
+    // probe is gated the same way, so it cannot discriminate (round5): the
+    // message hedges the non-dsh 401 case.
+    if (outcome.status === 401) {
+      return { ok: false, detail: 'the destination answered HTTP 401 — a 0.1.2 browser-auth-gated dsh (its launch token is unrecoverable over SSH; remote attach is blocked until upstream exposes a token retrieval mechanism) or a non-dsh server', terminal: true }
+    }
     const signature = await probeDshSignature(endpoint, Math.min(VERIFY_UP_SIGNATURE_TIMEOUT_MS, remaining()))
     if (signature !== 'none') {
-      return { ok: false, detail: 'the destination is a dsh instance, but its version does not answer the host.describe handshake — upgrade the remote dsh', terminal: true }
+      return { ok: false, detail: 'the destination is a dsh instance, but it did not answer the dsh identity probe — check or upgrade the remote dsh', terminal: true }
     }
     return { ok: false, detail: `the destination answered HTTP ${outcome.status ?? '?'} to the dsh identity probe — it does not appear to be a dsh instance`, terminal: true }
   }

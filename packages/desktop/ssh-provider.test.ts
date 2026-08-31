@@ -30,6 +30,7 @@ import {
   purgeSshAuth,
   getSshPassword,
   probeDshSignature,
+  verifyDshEndpoint,
   resolveWriteTarget,
   setSshPassword,
   sshPasswordSupported,
@@ -1259,18 +1260,33 @@ test('run: private material in stderr is redacted from the failure detail', asyn
 
 // ---------------------------------------------------------------------------
 // probeDshSignature: the dsh-signature classification over a REAL loopback
-// HTTP server (426+upgrade / 200+SSE / anything else / timeout / refused).
+// HTTP server (valid session/list envelope / wrong envelope / 404 / timeout /
+// refused).
 // ---------------------------------------------------------------------------
 
-test('probeDshSignature classifies the dsh connection-plugin and SSE signatures', async () => {
+test('probeDshSignature classifies the dsh session/list signature', async () => {
   const behaviors: Array<(req: any, res: any) => void> = [
-    // 426 + Upgrade: websocket — the connection-plugin signature.
-    (req, res) => { res.writeHead(426, { upgrade: 'websocket', connection: 'Upgrade' }); res.end() },
-    // 200 + text/event-stream — the SSE signature.
+    // A valid server-response envelope echoing the session/list request →
+    // positive dsh signature (the only remaining dsh wire evidence on
+    // upstream 0.1.2-alpha.1 — the events.mux arms are gone).
     (req, res) => {
-      res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write('data: {"ok":true}\n\n')
-      setTimeout(() => res.end(), 50)
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += String(chunk) })
+      req.on('end', () => {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } }))
+      })
+    },
+    // A server-response envelope with result.ok !== true: NOT a dsh signature.
+    (req, res) => {
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += String(chunk) })
+      req.on('end', () => {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'forbidden' } } }))
+      })
     },
     // 200 with another content type: NOT a dsh signature.
     (req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html></html>') },
@@ -1286,14 +1302,35 @@ test('probeDshSignature classifies the dsh connection-plugin and SSE signatures'
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
-    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'connection-plugin')
-    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'sse')
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'dsh')
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
 })
+
+test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — terminal with the honest reason', async () => {
+  // review-round3c P0: a 0.1.2 web-profile host answers 401 without the
+  // signed cookie; the launch token is unrecoverable over the tunnel, so the
+  // probe must fail loud with the auth-required reason (never "not a dsh").
+  // The session/list probe AND the signature probe both hit the 401 gate; a
+  // bare 401 from a NON-dsh server keeps the neutral message (round4 P2).
+  const server = createServer((req, res) => { res.writeHead(401); res.end('unauthorized') })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    const result = await verifyDshEndpoint({ host: '127.0.0.1', port })
+    assert.equal(result.ok, false)
+    assert.equal(result.terminal, true)
+    // The signature probe is gated the same way → the hedged 401 message.
+    assert.match(result.detail ?? '', /answered HTTP 401/)
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
 
 test('probeDshSignature answers none on connection failure and timeout', async () => {
   // A refused port (server closed): the probe must resolve 'none', never
@@ -1327,7 +1364,9 @@ function gatewaySshSpec(id: string): TransportInstanceSpec {
   return { id, label: 'h', kind: 'gateway', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 30801, serviceName: null, remoteDshHome: null, insecureHttp: false }
 }
 
-/** A loopback server answering the host.describe envelope (echoing rpcId). */
+/** A loopback server that collects the request body and delegates to a
+ * handler (probe handlers echo the client-request rpcId in their
+ * server-response / gateway-status bodies). */
 function describeServer(handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, body: string) => void) {
   return createServer((req, res) => {
     let body = ''

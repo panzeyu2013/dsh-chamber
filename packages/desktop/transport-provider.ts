@@ -421,7 +421,7 @@ export interface TransportProvider {
   redactOutput?(text: string): string
   /**
    * Optional one-shot endpoint identity verification (dsh: the destination
-   * answers the host.describe wire handshake). The runtime calls it once
+   * answers the session/list wire handshake). The runtime calls it once
    * after the transport probe reports the endpoint up and BEFORE the phase
    * may become ready: a port that merely accepts TCP is not proof of a dsh
    * instance, and a non-dsh service on the destination port must never

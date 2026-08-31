@@ -804,7 +804,8 @@ export function gatewaySecretStorageMode(): 'safeStorage' | 'plaintext' {
 
 /** Direct http(s) dsh identity probe. Unlike a gateway target, a dsh target
  * owns no /chamber surface and never receives authentication headers; its
- * authoritative identity remains the host.describe RPC handshake. */
+ * authoritative identity remains the session/list RPC handshake (slash-path
+ * wire, upstream 0.1.2-alpha.1 — host.describe is deleted there). */
 function verifyDirectDshEndpoint(
   spec: TransportInstanceSpec,
   timeoutMs = GATEWAY_VERIFY_TIMEOUT_MS,
@@ -812,7 +813,7 @@ function verifyDirectDshEndpoint(
 ): Promise<TransportVerifyResult> {
   return new Promise(resolve => {
     const request = spec.insecureHttp ? httpRequest : httpsRequest
-    const url = `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}/api/host.describe`
+    const url = `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}/api/session/list`
     const rpcId = randomUUID()
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -831,6 +832,15 @@ function verifyDirectDshEndpoint(
       if (res.statusCode !== 200) {
         const code = res.statusCode ?? 0
         res.resume()
+        // 0.1.2 browser-auth gate (review-round4 P2): a 401 answer is the
+        // web-profile host's signed-cookie gate — the launch token is
+        // unrecoverable remotely, fail loud with the honest reason (the
+        // signature probe is gated the same way, so it cannot discriminate;
+        // the message hedges the non-dsh 401 case, round5).
+        if (code === 401) {
+          done(false, 'the destination answered HTTP 401 — a 0.1.2 browser-auth-gated dsh (its launch token is unrecoverable remotely; attach is blocked until upstream exposes a token retrieval mechanism) or a non-dsh server', true)
+          return
+        }
         done(false, `the destination answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe`, gatewayHttpFailureIsTerminal(code))
         return
       }
@@ -863,7 +873,9 @@ function verifyDirectDshEndpoint(
     timer = setTimeout(() => done(false, `the destination did not answer the dsh identity probe within ${timeoutMs}ms`), timeoutMs)
     timer.unref?.()
     req.on('error', () => done(false, 'the destination did not answer the dsh identity probe'))
-    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'host.describe', payload: {} }))
+    // session/list is a Typert Remote on the 0.1.2 wire: {args} payload form
+    // ({_request:{}} = no typed args), same as the control-plane readiness.
+    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: { _request: {} } } }))
   })
 }
 
@@ -872,7 +884,7 @@ function verifyDirectDshEndpoint(
 // gateway transport is serviceable when its authenticated, gateway-owned
 // runtime controller answers — independently of the managed dsh lifecycle.
 // This distinction keeps /chamber/runtime reachable for recovery while dsh is
-// blocked/down. A plain dsh target still uses host.describe in ssh-provider.
+// blocked/down. A plain dsh target still uses the session/list handshake in ssh-provider.
 // ---------------------------------------------------------------------------
 
 export const GATEWAY_RUNTIME_IDENTITY = 'dsh-chamber-gateway-runtime'
@@ -1256,7 +1268,8 @@ export const gatewayProvider: TransportProvider = {
 
   /** Identity verification: a gateway target must answer the authenticated
    * gateway-owned runtime status identity, which remains available while its
-   * managed dsh is blocked/down; a plain dsh target must answer host.describe.
+   * managed dsh is blocked/down; a plain dsh target must answer the
+   * session/list handshake.
    * A missing
    * token is NOT a pre-flight refusal (design 17 §2.3): the probe is sent
    * WITHOUT an Authorization header and the gateway's own answer is

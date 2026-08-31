@@ -15,7 +15,7 @@
  *   a child process and local loopback port) or direct-endpoint mode;
  *   readiness = the
  *   local port accepts a TCP connection AND the provider's endpoint identity
- *   verification passes — verifyUp, e.g. the ssh provider's host.describe
+ *   verification passes — verifyUp, e.g. the ssh provider's session/list
  *   handshake, so a non-dsh service on the destination port never presents
  *   as ready).
  * - Phase machine: idle → connecting → ready ⇄ degraded → error, with

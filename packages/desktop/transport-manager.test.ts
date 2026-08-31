@@ -12,7 +12,7 @@
  * serviceActive projection, auth-failure semantics), line-buffered stderr
  * redaction, per-child guards, provider environment injection, and endpoint
  * identity verification (a port that merely accepts TCP is never
- * ready; a real dsh host.describe handshake is required — covered against
+ * ready; a real dsh session/list handshake is required — covered against
  * real loopback HTTP servers).
  */
 
@@ -1073,16 +1073,16 @@ test('a throwing identity verification is contained: warn, never ready, bounded 
 
 test('a real dsh wire handshake through the tunnel destination is required for ready', async t => {
   const dir = tempDir(t)
-  // A server that answers /api/host.describe like a real dsh host: the
+  // A server that answers /api/session/list like a real dsh host: the
   // client-request envelope is echoed as a valid server-response.
   const server = createServer((req, res) => {
-    if (req.method === 'POST' && req.url === '/api/host.describe') {
+    if (req.method === 'POST' && req.url === '/api/session/list') {
       let body = ''
       req.on('data', chunk => { body += String(chunk) })
       req.on('end', () => {
         let envelope: { type?: unknown; rpcId?: unknown; method?: unknown } | null = null
         try { envelope = JSON.parse(body) } catch { envelope = null }
-        if (envelope?.type === 'client-request' && envelope.method === 'host.describe' && typeof envelope.rpcId === 'string') {
+        if (envelope?.type === 'client-request' && envelope.method === 'session/list' && typeof envelope.rpcId === 'string') {
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } }))
         } else {
@@ -1180,65 +1180,44 @@ test('verifyDshEndpoint rejects a wrong-shaped 200 answer and times out on a sil
   }
 })
 
-test('verifyDshEndpoint flags an old-dsh destination (apiProxy SSE signature) for upgrade', async t => {
-  // host.describe → 404 (an older dsh that does not register the method),
-  // but GET /api/events.mux answers 200 text/event-stream — the apiProxy
-  // SSE arm: positive dsh evidence, so the detail tells the user to
-  // upgrade instead of claiming "not dsh". The SSE stream stays OPEN
-  // (real old-dsh SSE arms never end): the probe must still release its
-  // connection after reading the response head.
-  const oldDsh = createServer((req, res) => {
-    if (req.method === 'GET' && req.url === '/api/events.mux') {
-      res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write(': ping\n\n')
+test('verifyDshEndpoint flags an inconsistent dsh destination (positive session/list signature)', async t => {
+  // The first session/list call (the identity probe) answers 404, but the
+  // re-probe (the dsh-signature check) answers a valid server-response
+  // envelope: positive dsh evidence, so the detail tells the user the
+  // destination IS dsh instead of claiming "not dsh". The legacy 426/SSE
+  // events.mux signature arms are gone from the 0.1.2-alpha.1 wire, so the
+  // signature is the current handshake itself, re-answered.
+  let calls = 0
+  const inconsistentDsh = createServer((req, res) => {
+    calls++
+    if (req.method === 'POST' && req.url === '/api/session/list' && calls > 1) {
+      let body = ''
+      req.on('data', chunk => { body += String(chunk) })
+      req.on('end', () => {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } }))
+      })
     } else {
       res.writeHead(404)
       res.end()
     }
   })
-  await new Promise<void>(resolve => oldDsh.listen(0, '127.0.0.1', resolve))
-  const oldDshPort = (oldDsh.address() as AddressInfo).port
-  const stale = await verifyDshEndpoint({ host: '127.0.0.1', port: oldDshPort })
+  await new Promise<void>(resolve => inconsistentDsh.listen(0, '127.0.0.1', resolve))
+  const inconsistentDshPort = (inconsistentDsh.address() as AddressInfo).port
+  t.after(() => { inconsistentDsh.close() })
+  const stale = await verifyDshEndpoint({ host: '127.0.0.1', port: inconsistentDshPort })
   assert.equal(stale.ok, false)
   if (!stale.ok) {
-    assert.match(stale.detail ?? '', /upgrade the remote dsh/, 'old-dsh destinations get the upgrade hint')
-    assert.equal(stale.terminal, true, 'an incompatible dsh version is deterministic: retrying cannot change it')
-  }
-  // The probe must have closed its SSE connection: server.close() then
-  // completes instead of waiting on a leaked open stream.
-  await new Promise<void>((resolve, reject) => {
-    const guard = setTimeout(() => reject(new Error('probe connection leaked (server close hung)')), 500)
-    oldDsh.close(() => { clearTimeout(guard); resolve() })
-  })
-})
-
-test('verifyDshEndpoint flags a connection-plugin dsh (426 signature) for upgrade', async t => {
-  // The connection plugin's documented 426 arm: positive dsh evidence even
-  // though the host.describe handshake fails.
-  const pluginDsh = createServer((req, res) => {
-    if (req.method === 'GET' && req.url === '/api/events.mux') {
-      res.writeHead(426, { connection: 'Upgrade', upgrade: 'websocket' })
-      res.end()
-    } else {
-      res.writeHead(404)
-      res.end()
-    }
-  })
-  await new Promise<void>(resolve => pluginDsh.listen(0, '127.0.0.1', resolve))
-  const pluginDshPort = (pluginDsh.address() as AddressInfo).port
-  t.after(() => { pluginDsh.close() })
-  const stale = await verifyDshEndpoint({ host: '127.0.0.1', port: pluginDshPort })
-  assert.equal(stale.ok, false)
-  if (!stale.ok) {
-    assert.match(stale.detail ?? '', /upgrade the remote dsh/)
-    assert.equal(stale.terminal, true, 'an incompatible dsh version is deterministic: retrying cannot change it')
+    assert.match(stale.detail ?? '', /is a dsh instance/, 'a positive dsh signature wins over the generic not-dsh message')
+    assert.equal(stale.terminal, true, 'a destination that ANSWERED the signature probe is deterministic: retrying cannot change the answer')
   }
 })
 
 test('verifyDshEndpoint keeps the generic message when no dsh signature exists', async t => {
-  // 404 on host.describe AND 404 on events.mux: indistinguishable from a
-  // plain web server — honesty over guessing, the version claim must not
-  // be made without positive dsh evidence.
+  // 404 on session/list (the identity probe) AND 404 on the signature
+  // re-probe: indistinguishable from a plain web server — honesty over
+  // guessing, the dsh claim must not be made without positive evidence.
   const plain = createServer((_req, res) => { res.writeHead(404); res.end() })
   await new Promise<void>(resolve => plain.listen(0, '127.0.0.1', resolve))
   const plainPort = (plain.address() as AddressInfo).port
@@ -1247,7 +1226,7 @@ test('verifyDshEndpoint keeps the generic message when no dsh signature exists',
   assert.equal(result.ok, false)
   if (!result.ok) {
     assert.match(result.detail ?? '', /does not appear to be a dsh/)
-    assert.ok(!(result.detail ?? '').includes('upgrade the remote dsh'), 'no positive dsh evidence → no version claim')
+    assert.ok(!(result.detail ?? '').includes('is a dsh instance'), 'no positive dsh evidence → no dsh claim')
     assert.equal(result.terminal, true, 'an HTTP answer that is not a dsh handshake is deterministic: retrying cannot change it')
   }
 })

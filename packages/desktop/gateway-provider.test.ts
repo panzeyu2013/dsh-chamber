@@ -880,7 +880,9 @@ test('verifyUp: a dsh-kind target never carries auth, even with a stored token (
     assert.equal(sawAuthorization, undefined, 'a dsh target never injects the Authorization header')
     if (!result.ok) {
       assert.equal(result.terminal, true)
-      assert.match(result.detail ?? '', /dsh identity probe/)
+      // The 401 answer is the 0.1.2 browser-auth gate — the hedged message
+      // names it (round5: the signature probe is gated too).
+      assert.match(result.detail ?? '', /401/)
     }
   } finally {
     setGatewayToken('dsh-auth-probe', null)

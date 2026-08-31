@@ -97,7 +97,7 @@ test('computeCordisPatchUpdate embeds the shared render bytes verbatim (the fold
 
 test('the desktop-consumed client-request envelope is byte-identical to control-plane (A2)', () => {
   const rpcId = 'test-rpc-id'
-  const method = 'host.describe'
+  const method = 'session/list'
   const payload = { args: {} }
   const desktop = desktopBuildClientRequest(rpcId, method, payload)
   const plane = planeBuildClientRequest(rpcId, method, payload)
@@ -105,6 +105,6 @@ test('the desktop-consumed client-request envelope is byte-identical to control-
   // Pin the wire bytes (JSON.stringify key order is the wire order).
   assert.equal(
     JSON.stringify(desktop),
-    '{"type":"client-request","rpcId":"test-rpc-id","method":"host.describe","payload":{"args":{}}}',
+    '{"type":"client-request","rpcId":"test-rpc-id","method":"session/list","payload":{"args":{}}}',
   )
 })
