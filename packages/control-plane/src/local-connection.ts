@@ -296,9 +296,8 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   let consecutiveFailures = 0
   let lastFailureAt = 0
   /** The latest session/list probe snapshot (health probe side effect). The
-   *  old host.describe capability facts are gone upstream (dsh 0.1.2-alpha.1),
-   *  so this surface no longer carries version/capability data — see
-   *  getHostDescribe below. */
+   *  old host.describe capability facts are gone upstream (dsh 0.1.2-alpha.2),
+   *  so this surface no longer carries version/capability data. */
   /** Bumped on start()/stop() so stale restart loops abort (see triggerRestart). */
   let epoch = 0
   /** Generation abort for the in-flight health probe: stop()/start() abort it

@@ -41,8 +41,8 @@
  *  so every instance — local and remote alike — uses the same in-app
  *  directory dialog (design 05 §4; the OS chooser is never surfaced to
  *  chamber users). Only directory-picker-auto reads SSH_CONNECTION in the
- *  dsh source (verified against the pinned harness commit cd5ef814… / dsh
- *  0.1.2-alpha.1, where directory-picker-auto still reads it); `bundle/web-app` also probes SSH_CONNECTION/SSH_TTY via `launchedThroughSsh` (browser auto-open suppression — pre-existing at rc.8, harmless for chamber's own window), so the pin has no
+ *  dsh source (verified against the pinned harness commit 0a53fb55… / dsh
+ *  0.1.2-alpha.2, where directory-picker-auto still reads it); `bundle/web-app` also probes SSH_CONNECTION/SSH_TTY via `launchedThroughSsh` (browser auto-open suppression — pre-existing at rc.8, harmless for chamber's own window), so the pin has no
  *  other effect.
  *  A pid
  *  record per design 02 §3.4.1 (pid/ownerPid/ownerInstanceId/port/binary/
@@ -803,7 +803,7 @@ async function spawnAttempt({
   // Best-effort browse-capability probe (design 05 §4): the in-app directory
   // dialog needs the host to serve `browse`. A native-capability host — a
   // dsh version predating the SSH_CONNECTION resolver arm, or a deployment
-  // that overrides the spawn env — answers `directory-picker-unavailable`:
+  // that overrides the spawn env — answers `directory-picker/unavailable`:
   // loud in the log instead of a silent dialog failure. Never fails the
   // spawn (the host is otherwise healthy); other failures are ignored.
   try {
@@ -818,7 +818,7 @@ async function spawnAttempt({
       removePidRecord(stateDir, pid)
       throw new Error(`dsh spawn attempt on port ${port} failed: spawn aborted`)
     }
-    if (probeError instanceof RpcBusinessError && probeError.code === 'directory-picker-unavailable') {
+    if (probeError instanceof RpcBusinessError && probeError.code === 'directory-picker/unavailable') {
       logger.warn(
         `[dsh:${port}] host serves the native directory picker — the in-app directory dialog (design 05 §4) will fail; `
         + 'expected when the dsh version predates the SSH_CONNECTION resolver arm or the spawn env was overridden',
