@@ -444,7 +444,7 @@ Environment=DSH_PERMISSION_MODE=workspace-write
 # 目录选择交互 pin（与本地 spawn 同款，05 §4）：directory-picker-auto 在
 # SSH 启动标记下解析 browse——远程实例恒以应用内目录对话框服务。不带此
 # 行的远程 darwin/win32 或有显示会话的 linux 宿主会解析 native，此时
-# host.listDirectory 返回 directory-picker-unavailable、新建工作区对话框
+# host.listDirectory 返回 directory-picker/unavailable、新建工作区对话框
 # 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。
 Environment=SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0
 NoNewPrivileges=true

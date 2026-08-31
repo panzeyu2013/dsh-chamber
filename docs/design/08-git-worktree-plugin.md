@@ -189,7 +189,7 @@ fresh-preflight -> git-removing -> git-removed
   恢复项。首次及每次重试 registry delete 前，都先重放 host remove 终态验证：目标仍
   不存在，且 workspace 已不存在或仍为同 path/同 membership、没有 running agent；
   目标重现或 registry 身份漂移一律 conflict，绝不继续 delete。通过后才把
-  `workspace-not-found` 视为前次 delete 已提交；不反向重建 Git 工作树，也不隐藏会话。
+  `workspace/not-found` 视为前次 delete 已提交；不反向重建 Git 工作树，也不隐藏会话。
 - v1 不删分支。特别是不使用 `branch -D`（删除对话框的「同时删除本地分支」
   是 §11.3 的显式用户授权例外，与 `discardChanges` 无关）。
 

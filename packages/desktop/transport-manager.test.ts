@@ -1324,7 +1324,7 @@ test('probeGitWorktreeLive classifies the running instance: live / not-live / un
     req.on('data', chunk => { body += chunk })
     req.on('end', () => {
       const envelope = JSON.parse(body) as { rpcId?: unknown }
-      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'internal' } } }))
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'gateway/internal' } } }))
     })
   })
   await new Promise<void>(resolve => stale.listen(0, '127.0.0.1', resolve))

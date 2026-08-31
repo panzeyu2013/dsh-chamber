@@ -13,9 +13,11 @@
 「代码适配完成 + pin 已升 + 锁文件稳定 + 全量 typecheck/测试/构建/i18n 绿」。
 
 **范围外(明确不做,记录待办)**:
-- **运行时线**:`@deepseek-ai/dsh@0.1.2-alpha.1` **未发布**(npm latest/next=0.1.1-rc.2)→
-  bundle-dsh / install-gateway.sh / release.yml env / `packages/desktop/vendor/dsh/pnpm-lock.yaml`
-  全部**保持 0.1.1-rc.2**;npm 发布后按 checklist §2/§5 补齐(待办条目)。
+- **运行时线(2026 fix-sa4 已闭环)**:原阻塞为 `@deepseek-ai/dsh@0.1.2-alpha.1` **未发布**
+  (npm latest/next=0.1.1-rc.2)→ bundle-dsh / install-gateway.sh / release.yml env /
+  `packages/desktop/vendor/dsh/pnpm-lock.yaml` 保持 0.1.1-rc.2;上游改发
+  `@deepseek-ai/dsh@0.1.2-alpha.2`(npm 已发布)后,上述四处已**全部同步 0.1.2-alpha.2**,
+  双线一致性门禁(checkRuntimeSourceLine)放行。
 - **设计 07 功能落地**(D4):#3 已解锁但本次不实现,仅更新文档/STATUS。
 - 提交/发布流程:本迁移产出留在工作树,提交与发布按 checklist 由维护者执行。
 
@@ -179,6 +181,8 @@
 - `packages/dsh-client-connection/package.json:4`、`packages/dsh-client-web/package.json:4` version → 0.1.2-alpha.1;
 - `scripts/dev/release-preflight.mjs:15,67` FORK_VERSION 默认 → 0.1.2-alpha.1;
 - **不动**:release.yml env / install-gateway.sh / bundle-dsh 兜底(运行时线,等 npm)。
+  *(fix-sa4 已闭环:npm 发布 0.1.2-alpha.2 后,release.yml env / install-gateway.sh /
+  bundle-dsh 兜底 / vendor/dsh 锁文件已同步为 0.1.2-alpha.2,双线门禁放行。)*
 - 验证:`test:release-workflow` + `release-preflight --versions-only`(以新 FORK_VERSION)。
 
 ### M12 pin bump 与锁文件(WP12,P0)
@@ -284,6 +288,7 @@ STATUS.md 迁移基线记录;control 流帧解码单元测试 2 项(3-B P1-1);
    session-controller agent.ts:146-149 的 agent lookup provider 对缺失会话**抛出** `TypertLookupFailure(found.error)`(resolve 路径 catch ApiSessionNotFound → `{error:{code:'session-not-found'}}`,agent.ts:203),
    网关 index.ts:1004 `error instanceof TypertLookupFailure → return error.failure as ConnectionRpcError` 将其**解包为域错误**——客户端收到的正是 session-not-found;
    `lookup-not-found` 分支(index.ts:865-873)只适用于**返回 undefined** 的 provider,不适用本端点。探针语义与单测均正确(round-1 审查深挖同一链后亦确认)。登记此证据防止后续审查重复误报。
+⑮ 0.1.2-alpha.2 升级注记(round1/2 检查):P1-1 两个 git 追踪 dist 已重建同步(runtime-probes/host-git 新错误码);P1-2 提交时与 gitlink+harness.commit 同批;P1-3(round2c)bridge-context stub remote 补 `$host:{home:undefined,isLoopback:true}`(alpha.2 设置插件 apply 期解引用,否则设置壳打开失败)——修复已合入,但 **mountBridgeSession 全链测试不可行**(cordis 为源码树无 lib,node 测试无法解析裸导入),盲区登记:需 build 后实机/浏览器面验证设置壳打开;2-A P2(web fork 空 PRELOADED_CLIENT_EXTERNALS 删除、api-gateway exports 惰性子路径、fork tsconfig erasableSyntaxOnly:false 覆盖)与 2-B P2(typecheck-api-gateway.mjs 日志标签已修、aggregate-store 注释已修、release-checklist 示例版本已修)均已处理或为既有登记决策。
 ⑭ round9a 注记:reaper 回收孤儿 host 不清 cookie(死进程 cookie 残留,进程退出即消,无安全影响);spawn 行缓冲未终止行不 flush(日志观感,对脱敏反而安全);AUTH_COOKIES 注册表无界 Map(键=本地实例数,量级可忽略)——均为非功能性观察。
 ⑬ round9c 注记:AUTH_BOOTSTRAP_WAIT_MS=15s 对慢冷启动偏紧(URL 行晚于 15s 则 loud-fail,有界可重试——鲁棒性观察,非缺陷);exchangeLaunchToken 单 Set-Cookie 假设(上游现恰单 cookie,不触发);host-graph 测试夹具已全部对齐 0.1.2 combo 形(`/plugins/??<id>&rev=`);帧字节记账已改 UTF-8 字节口径。
 ⑫ round8b 注记:remote-stream 帧字节记账已改为逐帧尺寸精确记账(round8b P2-1);protocol.ts 的 openEventStream 死测试面保留(deprecated 函数行为钉住,无生产调用);测试 mock cookie 名为虚构字面(browser-auth 而非 dsh-auth-<sha256>,注册表存整对、名称不参与逻辑,round8b P2-2);spawn-dsh 测试 finally 硬编码默认端口(测试隔离性注记,round8b P2-2);session-index 投影帧 title:null 不覆盖旧值(≤10s 轮询纠正,round8b P2-3);

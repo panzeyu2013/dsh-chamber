@@ -6,14 +6,14 @@
 
 ## 未完成 / 待执行
 
-> **dsh 基线升级 0.1.1-rc.2 → 0.1.2-alpha.1（2026，迁移完成，双线互斥窗口开放）**：
-> 源码线已整体切到 dsh-v0.1.2-alpha.1（harness.commit=cd5ef814、vendor 259 链接、
-> fork 副本/插件/探针/gateway 全部迁移，14 typecheck + 16 测试 + build:renderer + verify:i18n 绿，
-> 详见 docs/tmp-dsh-upgrade-audit.md 与 docs/tmp-dsh-v012-migration-plan.md）。
-> **双线互斥窗口（release-preflight 硬门禁）**：运行时线仍为 @deepseek-ai/dsh@0.1.1-rc.2
-> （npm 未发布 0.1.2-alpha.1）——旧 host 不提供斜杠 wire，本地实例 spawn 探针必败、
-> 远端判「非 dsh」、gateway features 全灭；先 npm publish @deepseek-ai/dsh@0.1.2-alpha.1，
-> 再 bundle:dsh --refresh-lockfile + release.yml env + install-gateway.sh 同步后方可发布。
+> **dsh 基线升级 0.1.1-rc.2 → 0.1.2-alpha.1 → 0.1.2-alpha.2（2026，迁移完成，双线已同步）**：
+> 源码线已整体切到 dsh-v0.1.2-alpha.2（harness.commit=0a53fb55、fork 副本基线 0.1.2-alpha.2，
+> 插件/探针/gateway 均已迁移，详见 docs/tmp-dsh-upgrade-audit.md 与
+> docs/tmp-dsh-v012-migration-plan.md）。
+> **双线一致性（release-preflight 硬门禁）已放行**：运行时线已同步 @deepseek-ai/dsh@0.1.2-alpha.2
+> （npm 已发布）——release.yml env / install-gateway.sh / bundle-dsh 兜底 /
+> packages/desktop/vendor/dsh/pnpm-lock.yaml 全部同代，`release-preflight --versions-only`
+> 的双线一致性检查不再报 runtime != baseline。
 > **BrowserAuth 适配（0.1.2 新增门禁）**：本地实例经控制面 spawn 时捕获 `dsh web:` 启动行
 > launch token（进程内存随机数，行缓冲整行脱敏后进日志）→ `GET /?token=` 交换出签名 cookie
 > （仅存控制面进程内存）→ 自动注入 call()/桌面实例代理 HTTP+WS/gateway 代理 HTTP+WS/gateway mux WS；

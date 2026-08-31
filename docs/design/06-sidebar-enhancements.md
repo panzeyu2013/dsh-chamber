@@ -91,7 +91,7 @@
 
 - `workspace.insertSessionBefore { workspaceId, sessionId, beforeSessionId? }`
   → 完整新 `WorkspaceView`；**省略 anchor = 追加到末尾**（null 非法，
-  须 omit key）；校验成员资格（`workspace-move-invalid`/`workspace-not-found`）；
+  须 omit key）；校验成员资格（`workspace-move-invalid`/`workspace/not-found`）；
   位置未变/自身为 anchor → 无写入。写入后 `workspace.list` 即新序。
 - `workspace.insertBefore { workspaceId, beforeWorkspaceId? }` → 完整显示序
   `workspaceIds[]`；省略 anchor = 追加末尾。

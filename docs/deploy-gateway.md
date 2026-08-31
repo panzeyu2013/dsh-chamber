@@ -26,7 +26,7 @@ cd dsh-chamber && bash scripts/install-gateway.sh
 | 安装方式 | npm 全局（`gateway` 进 PATH） |
 | 安装位置 | `~/.dsh-chamber/`（root 与非 root 一致） |
 | 服务形态 | root + systemd；非 root + `systemctl --user`；无 systemd 自动前台 |
-| dsh 版本 | 与发布绑定的 `DSH_CHAMBER_DSH_VERSION`（当前 0.1.1-rc.2，可改） |
+| dsh 版本 | 与发布绑定的 `DSH_CHAMBER_DSH_VERSION`（当前 0.1.2-alpha.2，可改） |
 | npm 镜像 | 跟随 `npm config get registry`（可交互覆盖） |
 
 ## 2. 安装流程（脚本自动完成）
