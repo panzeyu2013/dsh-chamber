@@ -131,5 +131,10 @@ bash install-gateway.sh install -y \
   make/g++/python3（常见平台走 prebuild 可免）；安装日志会显式报错。
 - **端口冲突**：向导探测占用并建议下一空闲口；两端口必须互异。
 - **升级后不可用**：`update` 健康检查失败自动回滚到旧版本并保留现场日志。
+- **启动即崩：`private directory must already have mode 0700: ~/.dsh-chamber`**
+  （systemd 无限重启）：网关对已存在的私有 state 根目录要求严格 0700（fail-closed，
+  绝不静默放宽）；旧安装用默认 umask 建出的 0755 根目录会触发。修复：
+  `chmod 700 ~/.dsh-chamber && systemctl restart dsh-chamber-gateway`
+  （新版安装器已自动收紧该目录，此条仅用于旧安装升级现场）。
 - **root 与非 root**：文件统一落在 `~/.dsh-chamber`；root 仅用于 systemd 与
   npm 全局；非 root 自动用 `systemctl --user` 或前台。
