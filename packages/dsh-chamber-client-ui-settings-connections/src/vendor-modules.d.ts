@@ -58,13 +58,17 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   export interface LocaleNamespaceMap {}
 }
 
-declare module '@deepseek-ai/dsh-client-ui-settings/client' {}
-
-declare module '@deepseek-ai/dsh-client-locale/client' {}
-
-declare module '@deepseek-ai/dsh-client-runtime/client' {
-  export interface ClientContext {
-    effect(fn: () => void | (() => void), label?: string): void
+declare module '@deepseek-ai/cordis' {
+  export class Context {
+    plugin(plugin: unknown, ...args: unknown[]): unknown
+    inject(deps: string[], callback: (ctx: Context) => void): unknown
+    provide<T>(name: string, value: T): void
+    get<T = any>(name: string): T
+    effect(fn: () => void | (() => void) | Promise<void | (() => void)>, label?: string): () => void
+    on<K extends string>(name: K, fn: (...args: any[]) => void): () => void
+    emit(name: string, ...args: unknown[]): void
+    fiber: { dispose(): Promise<void> }
+    /** Service merges the mounted client plugins augment onto Context (chamber's loose face). */
     locale: {
       register(namespace: string, dictionaries: Record<string, Record<string, string>>): void
       bind(namespace: string): (key: string) => string
@@ -75,3 +79,7 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
     }
   }
 }
+
+declare module '@deepseek-ai/dsh-client-ui-settings/client' {}
+
+declare module '@deepseek-ai/dsh-client-locale/client' {}
