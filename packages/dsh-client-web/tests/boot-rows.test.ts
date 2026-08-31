@@ -11,12 +11,12 @@ import assert from 'node:assert/strict'
 import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from '../src/boot-rows.ts'
 
 test('rows: kernel entries lead, manifest follows minus the two, extras last', () => {
-  const manifest = ['@deepseek-ai/dsh-client-modules', '@deepseek-ai/dsh-client-runtime', '@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-tool']
+  const manifest = ['@deepseek-ai/dsh-client-modules', '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-tool']
   const extras = ['@third-party/plugin-a', '@third-party/plugin-b']
   assert.deepEqual(composeBootRows(manifest, extras), [
     MODULES_ID,
     UI_RENDERER_ID,
-    '@deepseek-ai/dsh-client-runtime',
+    '@deepseek-ai/dsh-client-store',
     '@deepseek-ai/dsh-client-ui-tool',
     '@third-party/plugin-a',
     '@third-party/plugin-b',

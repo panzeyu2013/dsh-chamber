@@ -25,12 +25,12 @@
  * real UI through the uiRenderer service.
  *
  * Entry creation waits for the whole immediately tier: materialization runs
- * synchronous cross-package require edges (e.g. locale → runtime/client) that
- * fiber inject waiting cannot protect — a bundle's factory must be
- * registered before any dependent entry materializes. Per-row prefetch
- * failures still resolve silently (the create-side import reloads and
- * owns the loud failure), so the barrier never turns one bad bundle into a
- * boot-wide fail-fast.
+ * synchronous cross-package require edges (e.g. client stores →
+ * @deepseek-ai/dsh-client-store) that fiber inject waiting cannot protect — a
+ * bundle's factory must be registered before any dependent entry materializes.
+ * Per-row prefetch failures still resolve silently (the create-side import
+ * reloads and owns the loud failure), so the barrier never turns one bad
+ * bundle into a boot-wide fail-fast.
  *
  * Composition lives in the host graph; the shell makes zero composition
  * decisions. The renderer is a client-plugin row in the official graph; the
@@ -217,7 +217,8 @@ export class AppWebEntry {
    *
    * Public read handle on the settled runtime context: the chamber shell
    * dispatches per-instance session opens through `ctx.sessions` (the
-   * dsh-client-runtime ISessions face) after boot settlement. The handle is
+   * @deepseek-ai/dsh-api-session-controller ISessions face) after boot
+   * settlement. The handle is
    * `undefined` once dispose() ran (the ctx is torn down) — callers must
    * guard with `?.` (shell.ts dispatchOpen does).
    */

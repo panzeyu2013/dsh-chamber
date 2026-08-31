@@ -13,12 +13,17 @@
  * host boot graph can emit as a plugin row — seed resolves before factories
  * in the module system, so a seed word that is also a row materializes the
  * static namespace as a loader entry and the boot fails ("invalid plugin").
+ *
+ * v0.1.2-alpha.1 alignment: the platform set gains the store engine word
+ * `@deepseek-ai/dsh-client-store` (see platform.ts); the static import below
+ * keeps the satisfies pin's two sides in lockstep.
  */
 import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as Cordis from '@deepseek-ai/cordis'
+import * as ClientStore from '@deepseek-ai/dsh-client-store'
 import * as UiSlots from '@deepseek-ai/dsh-client-ui-slots'
 import * as UiPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PlatformModule } from './platform.ts'
@@ -37,6 +42,7 @@ export function getStaticModules(): Record<string, unknown> {
     'react-dom': ReactDom,
     'react-dom/client': ReactDomClient,
     '@deepseek-ai/cordis': Cordis,
+    '@deepseek-ai/dsh-client-store': ClientStore,
     '@deepseek-ai/dsh-client-ui-slots': UiSlots,
     '@deepseek-ai/dsh-client-ui-primitives': UiPrimitives,
   } satisfies Record<PlatformModule, unknown>

@@ -14,6 +14,7 @@ const FIXTURE_SPECIFIERS = new Set([
   '@deepseek-ai/cordis',
   '@deepseek-ai/cordis-plugin-loader',
   '@deepseek-ai/dsh-client-modules/client',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-renderer/client',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',

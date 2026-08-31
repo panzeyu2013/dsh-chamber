@@ -20,11 +20,17 @@
  * crashes every chamber boot against an rc.8 backend (2026-08 regression).
  * `dsh-client-web-react` / `dsh-client-schema-form` went with it for the same
  * structural reason (a future dsh must not turn a shell word into a row).
+ *
+ * v0.1.2-alpha.1 alignment: the upstream platform set adds the store engine
+ * word `@deepseek-ai/dsh-client-store` (the shared observable/store engine the
+ * client ui-* packages import), adopted here in the same position. The store
+ * is a shell-shared singleton like cordis — never a host-graph row.
  */
 
 /** The module specifiers the shell shares into the frozen module table. */
 export const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
 ] as const

@@ -3,7 +3,7 @@
   "compilerOptions": {
     "paths": {
       "@deepseek-ai/dsh-client-modules/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/index.ts"],
-      "@deepseek-ai/dsh-client-runtime/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-runtime/src/client/index.ts"],
+      "@deepseek-ai/dsh-client-store": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-store/src/index.ts"],
       "@deepseek-ai/dsh-client-ui-renderer/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-renderer/src/client/index.ts"],
       "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"]
     }
