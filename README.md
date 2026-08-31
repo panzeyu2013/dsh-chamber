@@ -74,7 +74,7 @@ gateway 仍监听 loopback，由 Nginx/Caddy 终止 TLS；Desktop 默认 HTTPS�
 
 ```bash
 curl -fsSL -o install-gateway.sh \
-  https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/dev/scripts/install-gateway.sh
+  https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/main/scripts/install-gateway.sh
 bash install-gateway.sh          # 交互向导（回车接受默认值，可逐项修改）
 ```
 

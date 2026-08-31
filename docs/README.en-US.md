@@ -81,7 +81,7 @@ trusted-network choice with a persistent risk indicator.
 
 ```bash
 curl -fsSL -o install-gateway.sh \
-  https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/dev/scripts/install-gateway.sh
+  https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/main/scripts/install-gateway.sh
 bash install-gateway.sh          # interactive wizard (Enter = default, type to change)
 ```
 

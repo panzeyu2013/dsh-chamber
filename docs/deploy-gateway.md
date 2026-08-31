@@ -8,7 +8,7 @@
 ```bash
 # 方式 A：从仓库获取脚本（推荐，可审计）
 curl -fsSL -o install-gateway.sh \
-  https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/dev/scripts/install-gateway.sh
+  https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/main/scripts/install-gateway.sh
 bash install-gateway.sh
 
 # 方式 B：克隆仓库后本地执行
