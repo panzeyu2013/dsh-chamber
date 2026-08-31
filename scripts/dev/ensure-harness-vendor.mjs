@@ -46,7 +46,10 @@ const PIN_FILE = join(REPO_ROOT, 'harness.commit')
 const LOCKFILE = join(REPO_ROOT, 'pnpm-lock.yaml')
 
 /** chamber 拷贝包（可改的 dsh 源码，解析到 packages/ 下的副本，见 AGENTS.md）。 */
-const EXCLUDED = new Set(['dsh-client-connection', 'dsh-client-web'])
+// dsh-api-gateway：chamber 副本（packages/dsh-api-gateway），上游 api-gateway 的
+// client 半 + per-entry base-path 补丁（WP3/M3，决策 D1 方案 A）——推流 WebSocket
+// 必须落到 `<basePath>/api/remote.mux`，vendor 原包无法打该补丁。
+const EXCLUDED = new Set(['dsh-client-connection', 'dsh-client-web', 'dsh-api-gateway'])
 
 const MIN_LINKS = 100
 
