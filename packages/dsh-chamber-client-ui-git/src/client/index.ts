@@ -1,5 +1,5 @@
 /** Chamber Git worktree client plugin: the per-workspace sidebar occupant. */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { gitCoordinator } from '../shared/coordinator.ts'
