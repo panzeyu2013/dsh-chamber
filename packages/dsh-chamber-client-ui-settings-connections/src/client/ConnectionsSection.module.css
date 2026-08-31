@@ -142,12 +142,17 @@
 .cardHead {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
+/* A gateway card can carry four nowrap pills at once (kind + phase + HTTP
+   明文 + 无认证/SPKI); at the grid floor (268px) they would overflow the
+   card, so the head wraps. The name keeps a readable floor instead of being
+   crushed to a sliver while the pills fill the first line. */
 .cardName {
   flex: 1;
-  min-width: 0;
+  min-width: 96px;
   font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
@@ -171,6 +176,7 @@
 .cardMeta {
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 10px;
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
