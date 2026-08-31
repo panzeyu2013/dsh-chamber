@@ -5916,6 +5916,9 @@ async function runRuntimeActivationProbes(opts) {
     }
   };
   const [sessions, graph, settings, git] = await Promise.all([
+    // host.describe was deleted upstream (dsh-v0.1.2-alpha.1); the surviving
+    // session/list read-only unary doubles as the host-capability probe
+    // proving the installed dsh answers the business wire.
     (async () => {
       try {
         const response = await call("session/list", { args: { _request: {} } });
@@ -5953,7 +5956,7 @@ async function runRuntimeActivationProbes(opts) {
     commands = { name: "commands/execute", ok: false, error: "missing-session command probe unexpectedly executed" };
   } catch (error) {
     const code = typeof error === "object" && error !== null ? error.code : void 0;
-    commands = code === "session-not-found" ? { name: "commands/execute", ok: true } : { name: "commands/execute", ok: false, error: resultError(error) };
+    commands = code === "session/not-found" ? { name: "commands/execute", ok: true } : { name: "commands/execute", ok: false, error: resultError(error) };
   }
   let dataSettings;
   try {

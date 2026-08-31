@@ -9,7 +9,7 @@
  * and `workspace.list` became the `workspace/follow` stream (unary incompatible,
  * so the workspace-shape probe was removed; `data.sessions` validates the
  * session list only). `commands/execute` keeps the `{agentId, line, images}`
- * wire and its `session-not-found` lookup miss (audit W11).
+ * wire and its `session/not-found` lookup miss (audit W11).
  */
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
@@ -274,10 +274,10 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // Never address a real persisted session: Typert's Agent lookup may cold-
     // resume it before CommandRuntime sees even a syntax-miss line. A fixed
     // nonexistent identity must fail at the read-only persistence lookup with
-    // session-not-found, before Agent publication or command/run appends.
+    // session/not-found, before Agent publication or command/run appends.
     // dsh-v0.1.2-alpha.1 keeps execute(agent: Agent, line, images, signal): the
     // Agent parameter is a typert lookup wired as `agentId` (session-controller
-    // resolveAgent) whose cold miss still surfaces session-not-found.
+    // resolveAgent) whose cold miss still surfaces session/not-found.
     await call('commands/execute', {
       args: {
         agentId: COMMAND_MISSING_SESSION,
@@ -292,7 +292,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
       : undefined
     // The exact domain miss proves the execute Remote decoded its Agent
     // argument while guaranteeing CommandRuntime itself was never entered.
-    commands = code === 'session-not-found'
+    commands = code === 'session/not-found'
       ? { name: 'commands/execute', ok: true }
       : { name: 'commands/execute', ok: false, error: resultError(error) }
   }

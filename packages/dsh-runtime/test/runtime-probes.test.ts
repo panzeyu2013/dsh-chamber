@@ -50,7 +50,7 @@ function successfulCall(fx: Fixture): RuntimeProbeCall {
     assert.equal(options?.signal?.aborted, false)
     if (method === 'commands/execute') {
       const error = new Error('missing probe session') as Error & { code: string }
-      error.code = 'session-not-found'
+      error.code = 'session/not-found'
       throw error
     }
     return { result: { value: successfulValue(method) } }
@@ -93,7 +93,7 @@ test('malformed lists and unreadable settings fail explicit data probes', async 
     const call: RuntimeProbeCall = async (_base, method) => {
       if (method === 'commands/execute') {
         const error = new Error('missing') as Error & { code: string }
-        error.code = 'session-not-found'
+        error.code = 'session/not-found'
         throw error
       }
       if (method === 'session/list') return { result: { value: {} } }
