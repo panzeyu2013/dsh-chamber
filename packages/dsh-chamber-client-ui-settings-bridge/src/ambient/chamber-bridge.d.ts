@@ -47,7 +47,8 @@ export interface ChamberServerAggregate {
       runningSubagents?: number
     }>
   }
-  /** Live host.describe version; absent means unknown/not mounted. */
+  /** Live dsh version (0.1.2: host.describe was deleted; the local instance
+   *  version comes from the desktop bridge, remote stays hidden). */
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: {

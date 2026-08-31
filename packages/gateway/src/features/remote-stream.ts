@@ -190,7 +190,7 @@ export async function *openRemoteStream(
         return
       }
       if (message.type === 'item') {
-        bufferedStreamBytes += text.length
+        bufferedStreamBytes += Buffer.byteLength(text, 'utf8')
         if (frames.length >= MAX_BUFFERED_STREAM_FRAMES || bufferedStreamBytes > MAX_BUFFERED_STREAM_BYTES) {
           socketError = new Error(`remote stream ${endpoint}: consumer overrun (${MAX_BUFFERED_STREAM_FRAMES} frames / ${MAX_BUFFERED_STREAM_BYTES} bytes)`)
           settle()
