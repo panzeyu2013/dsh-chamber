@@ -24,6 +24,7 @@ import {
   DEFAULT_DSH_START_PORT,
   MAX_CHILD_OUTPUT_CHUNK_BYTES,
 } from '../src/spawn-dsh.ts'
+import { authCookieFor, clearAuthCookie } from '../src/browser-auth-cookie.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -166,17 +167,17 @@ test('spawnDsh: a pid-record write failure still cleans the spawned child up (no
   }
 })
 
-test('spawnDsh: abort during the post-TCP host.describe wait kills the detached attempt promptly', async () => {
+test('spawnDsh: abort during the post-TCP session/list wait kills the detached attempt promptly', async () => {
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   const listeningMarker = join(stateDir, 'listening')
-  const describeMarker = join(stateDir, 'describe-requested')
+  const describeMarker = join(stateDir, 'probe-requested')
   const entryPath = writeFakeDshEntry(dshWorkspacePath, [
     "const { writeFileSync } = require('node:fs')",
     "const { createServer } = require('node:http')",
     "const args = process.argv.slice(2)",
     "const port = Number(args[args.indexOf('--port') + 1])",
-    "createServer((req) => { if (req.url === '/api/host.describe') writeFileSync(" + JSON.stringify(describeMarker) + ", 'yes') }).listen(port, '127.0.0.1', () => writeFileSync(" + JSON.stringify(listeningMarker) + ", 'yes'))",
+    "createServer((req) => { if (req.url === '/api/session/list') writeFileSync(" + JSON.stringify(describeMarker) + ", 'yes') }).listen(port, '127.0.0.1', () => writeFileSync(" + JSON.stringify(listeningMarker) + ", 'yes'))",
     '',
   ].join('\n'))
   const controller = new AbortController()
@@ -200,6 +201,250 @@ test('spawnDsh: abort during the post-TCP host.describe wait kills the detached 
     await waitForNoEntryProcess(entryPath, 3000)
   } finally {
     controller.abort()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the probe passes with it', async () => {
+  // review-round3c P0: the web profile prints `dsh web: <url>?token=<t>` at
+  // readiness; the spawn performs the token exchange and injects the cookie
+  // into the session/list probe (the fake host 401s without it).
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const entryPath = writeFakeDshEntry(dshWorkspacePath, [
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-1')",
+    "createServer((req, res) => {",
+    "  if (req.url === '/?token=launch-1') {",
+    "    res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
+    "    res.end(); return",
+    "  }",
+    "  if (req.url === '/api/session/list') {",
+    "    if ((req.headers.cookie || '').includes('browser-auth=sess')) {",
+    "      let body = ''",
+    "      req.on('data', c => { body += c })",
+    "      req.on('end', () => {",
+    "        const rpcId = JSON.parse(body).rpcId",
+    "        res.writeHead(200, { 'content-type': 'application/json' })",
+    "        res.end(JSON.stringify({ type: 'server-response', rpcId: rpcId, result: { ok: true, value: { items: [] } } }))",
+    "      })",
+    "      return",
+    "    }",
+    "    res.writeHead(401); res.end('unauthorized'); return",
+    "  }",
+    "  res.writeHead(404); res.end()",
+    "}).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    const spawned = await spawnDsh({
+      stateDir,
+      dshHome: join(stateDir, 'home'),
+      dshWorkspacePath,
+      logger: silentLogger,
+      signal: controller.signal,
+    })
+    assert.equal(spawned.port > 0, true)
+    const cookie = authCookieFor(`http://127.0.0.1:${spawned.port}`)
+    assert.equal(cookie, 'browser-auth=sess')
+    // The SpawnAttemptResult child must be reaped by the caller.
+    spawned.child.kill()
+    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+  } finally {
+    controller.abort()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: a gated host with no launch token fails loud with the browser-auth error', async () => {
+  // review-round5a P2-2 / P3: the host 401s (0.1.2 gate) but never prints the
+  // `dsh web:` token line — the bootstrap cannot mint a cookie, and the probe
+  // must fail loud with the explicit browser-auth reason (never the generic
+  // 90s-window error).
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const entryPath = writeFakeDshEntry(dshWorkspacePath, [
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    "createServer((req, res) => { if (req.url === '/api/session/list') { res.writeHead(401); res.end('unauthorized'); return } res.writeHead(404); res.end() }).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    await assert.rejects(
+      () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
+      /browser-auth cookie, but the bootstrap failed/,
+    )
+  } finally {
+    controller.abort()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: a readiness line split across chunks is still fully redacted and usable', async () => {
+  // review-round7a P2-4: the token URL line may arrive in several stdio
+  // chunks — the scanner must wait for the complete line and the forward
+  // must redact across the split (no truncated-token mint, no partial leak).
+  const logged: string[] = []
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const entryPath = writeFakeDshEntry(dshWorkspacePath, [
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    // Three small writes: the URL line is fragmented mid-token.
+    "process.stdout.write('dsh web: http://127.0.0.1:' + port + '/?to')",
+    "process.stdout.write('ken=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)\\n')",
+    "createServer((req, res) => {",
+    "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
+    "  if (req.url === '/api/session/list') {",
+    "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: { items: [] } } })) })",
+    "    return",
+    "  }",
+    "  res.writeHead(404); res.end()",
+    "}).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    let spawned: Awaited<ReturnType<typeof spawnDsh>>
+    try {
+      spawned = await spawnDsh({
+        stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, signal: controller.signal, authBootstrapWaitMs: 200,
+        logger: { log(line) { logged.push(String(line)) }, warn(line) { logged.push('WARN:' + String(line)) }, error(line) { logged.push('ERR:' + String(line)) } },
+      })
+    } catch (error) {
+      throw new Error(`spawn failed; logged: ${JSON.stringify(logged.slice(0, 10))}; cause: ${String(error)}`)
+    }
+    // The full token was reconstructed across the split → cookie minted.
+    assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), 'browser-auth=sess')
+    const logLines = logged.join('\n')
+    assert.equal(logLines.includes('launch-secret'), false)
+    assert.equal(/token=[^\s]*launch-secret/.test(logLines), false)
+    spawned.child.kill()
+    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+  } finally {
+    controller.abort()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: the launch token never reaches the control-plane log or host-log', async () => {
+  // review-round6b P2-2: the readiness line (with token AND the LAN variant)
+  // must be redacted in every log surface.
+  const logged: string[] = []
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const entryPath = writeFakeDshEntry(dshWorkspacePath, [
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)')",
+    "createServer((req, res) => {",
+    "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
+    "  if (req.url === '/api/session/list') {",
+    "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: { items: [] } } })) })",
+    "    return",
+    "  }",
+    "  res.writeHead(404); res.end()",
+    "}).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    const spawned = await spawnDsh({
+      stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, signal: controller.signal, authBootstrapWaitMs: 200,
+      logger: { log(line) { logged.push(String(line)) }, warn() {}, error() {} },
+    })
+    const logLines = logged.join('\n')
+    // The token VALUE must never reach the log (the redacted marker
+    // `token=***` legitimately contains the key name, never the value).
+    assert.equal(logLines.includes('launch-secret'), false, 'the token value must not reach the control-plane log')
+    assert.equal(/token=[^\s]*launch-secret/.test(logLines), false)
+    assert.equal(logLines.includes('***'), true, 'the redacted form is visible')
+    // host-logs JSONL: same guarantee on the persisted ring.
+    const hostLogDir = join(stateDir, 'host-logs')
+    const files = existsSync(hostLogDir) ? readdirSync(hostLogDir).filter(f => f.endsWith('.log')) : []
+    assert.equal(files.length > 0, true)
+    const persisted = readFileSync(join(hostLogDir, files[0]), 'utf8')
+    assert.equal(persisted.includes('launch-secret'), false)
+    assert.equal(/token=[^\s]*launch-secret/.test(persisted), false)
+    spawned.child.kill()
+    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+  } finally {
+    controller.abort()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: a token line with a failed exchange fails loud with the browser-auth error', async () => {
+  // review-round6a P2-4: the URL line arrives but the exchange is refused —
+  // the bootstrap failure must surface in the probe's explicit error.
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const entryPath = writeFakeDshEntry(dshWorkspacePath, [
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-1')",
+    "createServer((req, res) => {",
+    "  if (req.url === '/?token=launch-1') { res.writeHead(401); res.end('unauthorized'); return }",
+    "  if (req.url === '/api/session/list') { res.writeHead(401); res.end('unauthorized'); return }",
+    "  res.writeHead(404); res.end()",
+    "}).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    await assert.rejects(
+      () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
+      /browser-auth cookie, but the bootstrap failed/,
+    )
+  } finally {
+    controller.abort()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: an old host printing a URL without a token spawns without a cookie', async () => {
+  // review-round5a: rc.2 hosts print the URL line without a token and answer
+  // the probe without auth — the bootstrap yields no cookie and the spawn
+  // proceeds unchanged.
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const entryPath = writeFakeDshEntry(dshWorkspacePath, [
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    "console.log('dsh web: http://127.0.0.1:' + port)",
+    "createServer((req, res) => {",
+    "  if (req.url === '/api/session/list') {",
+    "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: { items: [] } } })) })",
+    "    return",
+    "  }",
+    "  res.writeHead(404); res.end()",
+    "}).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    const spawned = await spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 })
+    assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), undefined)
+    spawned.child.kill()
+    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+  } finally {
+    controller.abort()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
   }
 })

@@ -1,9 +1,9 @@
 /**
  * M1 acceptance self-tests for the protocol-layer additions that survive the
  * v4 refactor:
- *   - describeCapabilities: generation-scoped host.describe snapshot cache
- *     (hit/force/refetch, generation abort invalidation, in-flight abort,
- *     no caching of failures);
+ *   - describeCapabilities: generation-scoped session/list probe snapshot
+ *     cache (hit/force/refetch, generation abort invalidation, in-flight
+ *     abort, no caching of failures);
  *   - the unary default 30s timeout policy (control).
  * Run directly: node packages/control-plane/test/m1-dsh-client.ts
  * Also run via the root test:control-plane script (pnpm run test:control-plane)
@@ -19,6 +19,7 @@ import {
   RpcTransportError,
 } from '../src/dsh-client.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
+import { clearAuthCookie, registerAuthCookie } from '../src/browser-auth-cookie.ts'
 
 const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
@@ -86,9 +87,9 @@ function hangingOnSignal(entry: FetchEntry): Promise<Response> {
   })
 }
 
-/** A successful host.describe value. */
+/** A successful session/list value. */
 function describeValue() {
-  return { version: '1.2.3', cwd: '/root', attachedSessions: 2, canOpenPath: false }
+  return { items: [{ sessionId: 's1' }] }
 }
 
 /** Echo the client-request rpcId and serve the given result. */
@@ -111,11 +112,29 @@ async function withFetchHandler(handler: FetchHandler, fn: (recorder: FetchRecor
 // unary timeout policy (control) + describeCapabilities snapshot cache
 // ---------------------------------------------------------------------------
 
+test('unary injects the 0.1.2 browser-auth cookie for a bootstrapped instance', async () => {
+  // review-round3c P0: after the spawn-time token exchange, every direct
+  // probe/unary call for the instance carries the minted cookie.
+  const host = uniqueHost()
+  clearAuthCookie(host)
+  try {
+    await withFetchHandler(echoResult({ ok: true, value: { items: [] } }), async recorder => {
+      await call(host, 'session/list', { args: { _request: {} } })
+      assert.equal(recorder.calls[0].init.headers.cookie, undefined)
+      registerAuthCookie(host, 'browser-auth=session-value')
+      await call(host, 'session/list', { args: { _request: {} } })
+      assert.equal(recorder.calls[1].init.headers.cookie, 'browser-auth=session-value')
+    })
+  } finally {
+    clearAuthCookie(host)
+  }
+})
+
 test('unary keeps the default 30s timer', async () => {
   const probe = timerProbe()
   const recorder = fetchRecorder(hangingOnSignal)
   const caller = new AbortController()
-  const attempt = call(HOST, 'host.describe', {}, { signal: caller.signal })
+  const attempt = call(HOST, 'session/list', { args: { _request: {} } }, { signal: caller.signal })
   try {
     await new Promise(resolve => setImmediate(resolve))
     assert.deepEqual(probe.delays, [30000])
@@ -135,9 +154,10 @@ test('describeCapabilities caches per generation; force and new generations refe
     const generation = new AbortController()
     const first = await describeCapabilities(host, { generationSignal: generation.signal })
     assert.equal(recorder.calls.length, 1)
-    assert.equal(new URL(recorder.calls[0].url).pathname, '/api/host.describe')
-    assert.deepEqual(recorder.calls[0].body.payload, {})
-    assert.equal(first.value.version, '1.2.3')
+    assert.equal(new URL(recorder.calls[0].url).pathname, '/api/session/list')
+    assert.deepEqual(recorder.calls[0].body.payload, { args: { _request: {} } })
+    const firstItems = (first.value as { items: Array<{ sessionId: string }> }).items
+    assert.equal(firstItems[0].sessionId, 's1')
     assert.equal(typeof first.cachedAt, 'number')
 
     const hit = await describeCapabilities(host, { generationSignal: generation.signal })

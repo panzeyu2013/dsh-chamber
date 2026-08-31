@@ -20,6 +20,7 @@ const TEST_DIR = join(ROOT, 'packages', 'control-plane', 'test')
 const FILES = [
   'protocol.ts',
   'storage.ts',
+  'browser-auth-cookie.ts',
   'm1-dsh-client.ts',
   'host-logs.ts',
   'manager-api.ts',

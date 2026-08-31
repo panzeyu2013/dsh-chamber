@@ -1,8 +1,11 @@
 /**
  * dsh wire protocol layer. The desktop control-plane uses only the unary
  * client and generation-scoped capability cache. The separately invoked
- * authenticated gateway additionally consumes the narrow respond/downstream
- * carrier primitives; orchestration remains gateway-owned.
+ * authenticated gateway consumes the 0.1.2 remote-stream mux carrier
+ * (packages/gateway/src/features/remote-stream.ts) — the legacy
+ * respond/openEventStream exports below are deprecated and have no
+ * production callers (dsh-v0.1.2-alpha.1 deleted the client-response and
+ * events.mux wires).
  *
  * Invariants:
  * - rpcId is minted by the initiator (this client) on every unary call and
@@ -13,9 +16,10 @@
  *   failures.
  * - respond: POST /api/respond, body {type:'client-response', rpcId, result};
  *   the response body is an RpcReceipt, idempotent (not-pending on late/duplicate).
- * - downstream: /api/events.mux and /api/events.host are downlink-only
- *   WebSockets carrying one JSON ServerRequest full form per text message;
- *   ordinary GET receives 426 and there is no network SSE fallback.
+ * - downstream: /api/remote.mux is the Typert Remote stream WebSocket (the
+ *   old /api/events.mux and /api/events.host downlinks were deleted upstream
+ *   in dsh 0.1.2-alpha.1); ordinary GET receives 426 and there is no network
+ *   SSE fallback.
  * - every unary/respond call carries a 30s timeout (DEFAULT_TIMEOUT_MS) merged
  *   with the caller's AbortSignal and the connection generation's signal
  *   (generationSignal); `timeoutMs: null` opts out of the timer entirely
@@ -23,8 +27,9 @@
  * - every client-request converges on the rpcId pending table (settle-once):
  *   the `settled` flag + first-writer-wins make response arrival vs timeout
  *   vs caller abort settle each entry exactly once.
- * - capability snapshots (host.describe) are generation-scoped: the cache
- *   entry dies with its generation's signal; invalidation emits no events.
+ * - capability snapshots (the session/list probe) are generation-scoped: the
+ *   cache entry dies with its generation's signal; invalidation emits no
+ *   events.
  */
 
 // The wire envelope is single-sourced in rpc-envelope.ts (A2 cross-package
@@ -33,6 +38,7 @@
 // fetch-carrier orchestration (pending table / settle-once / signal
 // composition) stays here.
 import { buildClientRequest, mintRpcId, parseServerResponse } from './rpc-envelope.ts'
+import { authCookieFor } from './browser-auth-cookie.ts'
 import type { RawData } from 'ws'
 
 export { mintRpcId } from './rpc-envelope.ts'
@@ -80,7 +86,7 @@ export interface ClientResponse {
   result: unknown
 }
 
-/** A server-request frame from /api/events.mux or /api/events.host. */
+/** A server-request frame from the /api/remote.mux stream. */
 export interface ServerRequest {
   type: 'server-request'
   rpcId: string
@@ -364,7 +370,9 @@ function composeSignals({ signal, generationSignal, timeoutMs, controller }: Com
  * One unary call: register on the pending table, POST the client-request
  * envelope, validate the echo, and settle the entry.
  * @param baseUrl - origin of the dsh host, e.g. http://127.0.0.1:17510.
- * @param method - the wire path segment, e.g. 'session.list' (POST /api/<method>).
+ * @param method - the wire path segment, e.g. 'session/list' (POST
+ *   /api/<method>). dsh 0.1.2-alpha.1 requires slash-separated endpoints
+ *   (the old dot paths 404).
  * @param payload - the business payload (schema-validated host-side).
  * @param options - {signal?} caller cancellation; {timeoutMs?} override the
  *   default 30s policy (null = caller-signal-only, no timer);
@@ -410,9 +418,12 @@ export async function call(
 
   let response: Response
   try {
+    const authCookie = authCookieFor(baseUrl)
     response = await fetch(new URL(`/api/${method}`, baseUrl), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: authCookie === undefined
+        ? { 'content-type': 'application/json' }
+        : { 'content-type': 'application/json', cookie: authCookie },
       // The client-request envelope is single-sourced in rpc-envelope.ts;
       // JSON.stringify preserves the canonical key order.
       body: JSON.stringify(buildClientRequest(rpcId, method, payload)),
@@ -474,6 +485,12 @@ export async function call(
 
 /**
  * Answer an answerable server-request (approval/question): POST /api/respond.
+ * @deprecated 0.1.2 wire: `POST /api/respond` (client-response envelope) was deleted
+ * upstream (dsh-v0.1.2-alpha.1) — the answerable surface is now the `$events/result`
+ * Remote (see packages/gateway/src/features/remote-stream.ts). Kept only for
+ * legacy callers; no production caller remains (review-round3d P2). It does
+ * NOT inject the browser-auth cookie (review-round9c P2-3): a legacy caller
+ * on the 0.1.2 wire would 401 — acceptable for a dead surface.
  * @param baseUrl - origin of the dsh host.
  * @param message - the ClientResponse full form; rpcId echoes the server-request, never minted.
  * @param options - {signal?} caller cancellation; {timeoutMs?} null = caller-signal-only;
@@ -553,7 +570,9 @@ export async function respond(
  * posture). The stream ends when the server closes it or the caller's signal
  * aborts.
  * @param baseUrl - origin of the dsh host (http://127.0.0.1:<port>).
- * @param path - '/api/events.mux' or '/api/events.host'.
+ * @param path - '/api/remote.mux' (the Typert Remote stream mux; the old
+ *   '/api/events.mux' / '/api/events.host' downlinks were deleted upstream
+ *   in dsh 0.1.2-alpha.1).
  * @param signal - the stream's AbortSignal; aborts the socket and ends iteration.
  * @param onOpen - optional barrier callback fired only after the WebSocket
  *   upgrade has completed and message listeners are installed.
@@ -561,6 +580,10 @@ export async function respond(
  *   limits for one raw frame and the pre-parse queue.
  * @returns an async generator of ServerRequest full forms.
  */
+/** @deprecated 0.1.2 wire: the events.mux/events.host downlink WS was deleted
+ * upstream (dsh-v0.1.2-alpha.1) — live faces ride the `/api/remote.mux` Remote
+ * stream mux (open frame handshake; see packages/gateway/src/features/remote-stream.ts).
+ * Kept only for legacy callers; no production caller remains (review-round3d P2). */
 export async function *openEventStream(
   baseUrl: string,
   path: string,
@@ -755,13 +778,15 @@ interface CapabilityEntry {
 }
 
 /**
- * Generation-scoped host.describe snapshot cache. An entry is valid only
- * while the generation that fetched it is alive: its AbortSignal's abort
- * removes the entry, so a snapshot never outlives its generation (a fresh
- * generation always refetches). `force: true` bypasses the cache; transport
- * failures are never cached. Emits no events — the coordinator wires onReady
- * publication and generation invalidation upstream. Cache entries are keyed
- * by baseUrl (one client per host).
+ * Generation-scoped session/list probe snapshot cache (the host.describe
+ * capability endpoint was deleted upstream in dsh 0.1.2-alpha.1, so the
+ * connection-generation probe is now the session/list unary). An entry is
+ * valid only while the generation that fetched it is alive: its AbortSignal's
+ * abort removes the entry, so a snapshot never outlives its generation (a
+ * fresh generation always refetches). `force: true` bypasses the cache;
+ * transport failures are never cached. Emits no events — the coordinator
+ * wires onReady publication and generation invalidation upstream. Cache
+ * entries are keyed by baseUrl (one client per host).
  */
 const capabilityCache = new Map<string, CapabilityEntry>()
 
@@ -773,20 +798,20 @@ export interface DescribeCapabilitiesOptions {
   timeoutMs?: number | null
 }
 
-/** The served host.describe snapshot (treat the value as immutable). */
+/** The served session/list probe snapshot (treat the value as immutable). */
 export interface CapabilitySnapshot {
   value: Record<string, unknown>
   cachedAt: number
 }
 
 /**
- * Fetch the host.describe snapshot once per connection generation and serve
- * subsequent callers from the cache.
+ * Fetch the session/list probe snapshot once per connection generation and
+ * serve subsequent callers from the cache.
  * @param baseUrl - origin of the dsh host, e.g. http://127.0.0.1:17510.
  * @param options - {generationSignal?} the connection generation's
  *   AbortSignal: the cache hit is only valid for the same generation object,
  *   and its abort clears the entry; {force?} bypass the cache and refetch.
- * @returns {value, cachedAt} — the host.describe value object (treat as
+ * @returns {value, cachedAt} — the session/list value object (treat as
  *   immutable) and the fetch timestamp in ms.
  * @throws RpcBusinessError for the result.error branch; RpcTransportError
  *   (connection_offline when the generation is already dead, protocol_violation
@@ -802,16 +827,16 @@ export async function describeCapabilities(
       stale._unlisten?.()
       capabilityCache.delete(baseUrl)
     }
-    throw new RpcTransportError('dsh host.describe: connection is offline', 0, 'connection_offline')
+    throw new RpcTransportError('dsh session/list: connection is offline', 0, 'connection_offline')
   }
   const cached = capabilityCache.get(baseUrl)
   if (!force && cached !== undefined && cached.generationSignal === generationSignal) {
     return { value: cached.value, cachedAt: cached.cachedAt }
   }
-  const { result } = await call(baseUrl, 'host.describe', {}, { generationSignal, timeoutMs })
+  const { result } = await call(baseUrl, 'session/list', { args: { _request: {} } }, { generationSignal, timeoutMs })
   const value = result.value
   if (typeof value !== 'object' || value === null) {
-    throw new RpcTransportError('dsh host.describe: malformed value slot', 0, 'protocol_violation')
+    throw new RpcTransportError('dsh session/list: malformed value slot', 0, 'protocol_violation')
   }
   cached?._unlisten?.()
   const entry: CapabilityEntry = {

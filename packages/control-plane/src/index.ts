@@ -409,7 +409,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   }
 
   // The managed local connection adapter (design 02): spawn/health/reaper
-  // owner; readiness = TCP + host.describe inside spawn-dsh.
+  // owner; readiness = TCP + session/list probe inside spawn-dsh.
   const local = createLocalConnection({
     stateDir, dshHome, dshWorkspacePath: getDshWorkspacePath, catalog, logger,
     // patchPath is a thunk resolved only behind the per-spawn fence. Re-read
@@ -979,5 +979,6 @@ export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSur
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
 // rewrite + WS splice + limits/errors without forking.
 export * from './proxy-forward.ts'
+export * from './browser-auth-cookie.ts'
 export { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from './json-store.ts'
 export type { JsonStore, JsonStoreDocument, JsonStoreMutator, JsonStoreOptions } from './json-store.ts'

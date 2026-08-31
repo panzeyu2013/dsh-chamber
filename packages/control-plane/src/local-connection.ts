@@ -9,8 +9,10 @@
  * process-level facts:
  *
  * - spawn via spawn-dsh.ts (web profile, fixed port + P+1 retry, pid record);
- * - readiness = the spawn's TCP + host.describe handshake (spawn-dsh owns it);
- * - health monitoring (design 02 §3.5): a periodic host.describe probe (30s
+ * - readiness = the spawn's TCP + session/list probe (spawn-dsh owns it;
+ *   the old host.describe readiness handshake was deleted upstream in dsh
+ *   0.1.2-alpha.1);
+ * - health monitoring (design 02 §3.5): a periodic session/list probe (30s
  *   default, 5s unary timeout, single-flight with a 750ms result cache)
  *   shares one failure counter with the transport triggers (child exit,
  *   probe failures). Failures 1..N-1 land on degraded; the Nth failure
@@ -38,6 +40,7 @@
  */
 
 import { isWriterQuiescenceUnknown, spawnDsh } from './spawn-dsh.ts'
+import { clearAuthCookie } from './browser-auth-cookie.ts'
 import { describeCapabilities as describeCapabilitiesFn } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
 import type { Logger } from './types.ts'
@@ -140,7 +143,8 @@ export interface LocalConnection {
   getDshPort(): number | null
   getError(): string | null
   getConsecutiveFailures(): number
-  getHostDescribe(): any
+  /** 0.1.2 wire: session/list snapshot (host.describe was deleted upstream). */
+
   /**
    * Whether a real dsh process is currently alive under this connection
    * (state-string independent — the liveness fact for quit-risk decisions).
@@ -291,8 +295,10 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
   let startPromise: Promise<ConnectionRow | null> | null = null
   let consecutiveFailures = 0
   let lastFailureAt = 0
-  /** The latest host.describe snapshot (health probe side effect). */
-  let lastDescribe: { value: any; cachedAt?: number } | null = null
+  /** The latest session/list probe snapshot (health probe side effect). The
+   *  old host.describe capability facts are gone upstream (dsh 0.1.2-alpha.1),
+   *  so this surface no longer carries version/capability data — see
+   *  getHostDescribe below. */
   /** Bumped on start()/stop() so stale restart loops abort (see triggerRestart). */
   let epoch = 0
   /** Generation abort for the in-flight health probe: stop()/start() abort it
@@ -498,15 +504,13 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
       return
     }
     try {
-      const described = await describeCapabilities(`http://127.0.0.1:${dshPort}`, {
+      await describeCapabilities(`http://127.0.0.1:${dshPort}`, {
         force: true,
         timeoutMs: healthProbeTimeoutMs,
         // The current generation's abort: stop()/start() abort in-flight
         // probes so a late verdict cannot outlive the transition (2026 H2).
         generationSignal: healthGeneration.signal,
       })
-      const value = described?.value
-      if (value !== undefined) lastDescribe = { value, cachedAt: described.cachedAt }
       healthResultCache = { at: Date.now(), ok: true }
       onHealthSuccess()
     } catch (probeError) {
@@ -604,7 +608,11 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
             }
             child = null
           }
+          const exhaustedPort = dshPort
           dshPort = null
+          // The child is gone — the browser-auth cookie must not linger
+          // (review-round8c P2; a later manual start re-mints).
+          if (exhaustedPort !== null) clearAuthCookie(`http://127.0.0.1:${exhaustedPort}`)
           setState('restart-exhausted', `restarted ${restartTimes.length} times within ${restartWindowMs}ms; automatic restarting stopped, manual start() required`)
           return
         }
@@ -846,11 +854,14 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
       return consecutiveFailures
     },
 
-    /** The latest host.describe snapshot from the health probe; null before the first success. */
-    getHostDescribe(): any {
-      return lastDescribe?.value ?? null
-    },
-
+    /**
+     * The latest session/list probe snapshot from the health probe; null
+     * before the first success. NOTE (dsh 0.1.2-alpha.1 migration, D2): the
+     * host.describe capability endpoint was deleted upstream and the probe is
+     * now session/list, so this value is a session list — no host
+     * version/cwd/capability facts are available from this surface anymore
+     * (the version-chip fact source moved to the runtime version, design 18).
+     */
     /**
      * Start (or restart) the connection: terminate a stale child, spawn a
      * fresh dsh web profile, and land on ready. Idempotent while already
@@ -910,13 +921,16 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, cat
           if (child !== null && child.child.exitCode === null) {
             await child.stop()
           }
+          const stoppedPort = dshPort
           child = null
           dshPort = null
           restartTimes.length = 0
           // A failed verdict cached right before stop must not replay after a
           // later start and re-count a failure the new lifecycle never had.
           healthResultCache = null
-          lastDescribe = null
+          // The browser-auth cookie is process-memory only; drop it with the
+          // instance (a later start re-mints from the fresh launch token).
+          if (stoppedPort !== null) clearAuthCookie(`http://127.0.0.1:${stoppedPort}`)
           // setState writes the final line through the existing per-port
           // writer even though dshPort is now null; close it immediately after.
           setState('stopped', null)

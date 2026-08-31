@@ -5,9 +5,11 @@
  *
  * ## Why
  *
- * `events.mux` / `events.host` are downlink-only WebSockets with no heartbeat
+ * `/api/remote.mux` is the Typert Remote stream WebSocket with no heartbeat
  * on either side: the dsh host never pings, and its ws server closes (1008)
- * any client message, so the browser cannot probe the connection itself.
+ * only INVALID client frames (binary frames 1003; malformed JSON 1008 —
+ * `cancel` frames are accepted), so the browser cannot probe the connection
+ * itself with arbitrary traffic.
  * After an OS sleep/wake the BROWSER leg of the splice can silently die
  * (half-open TCP) without any 'error'/'close' firing — the proxy would hold
  * the stream open forever while the browser's pump stays "connected" but

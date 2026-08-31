@@ -2,8 +2,9 @@
  * The dsh RPC wire envelope — single source of truth for the unary
  * fetch-carrier envelope shape (A2 cross-package protocol single-sourcing).
  *
- * The dsh unary contract (mirror of @deepseek-ai/dsh-host-apiproxy/src/fetch/
- * client.ts): a client-request `{type:'client-request', rpcId, method,
+ * The dsh unary contract (mirror of @deepseek-ai/dsh-api-session-controller
+ * src/client/contract — dsh-host-apiproxy was deleted upstream in
+ * dsh-v0.1.2-alpha.1): a client-request `{type:'client-request', rpcId, method,
  * payload}` is POSTed to `/api/<method>` (content-type application/json) and
  * the host answers with a server-response `{type:'server-response', rpcId,
  * result}` whose `result.ok` boolean selects the value/error branch.
@@ -11,7 +12,7 @@
  * Three implementations previously re-derived this shape:
  *   - control-plane dsh-client.ts `call()` (fetch carrier);
  *   - desktop ssh-provider.ts `verifyDshEndpoint` (node:http carrier,
- *     host.describe identity handshake);
+ *     unary identity probe);
  *   - desktop ssh-provider.ts `probeRemoteMethod` (node:http carrier, Remote
  *     liveness probes).
  * This module owns the shared primitives; the consumers keep their own
@@ -21,8 +22,8 @@
  * Invariants:
  * - rpcId is minted by the initiator on every unary call and echoes back in
  *   the server-response; a mismatch is a protocol violation.
- * - `payload` is passed through verbatim (the host.describe handshake sends
- *   `{}`, Remote calls send `{args}` — both are caller decisions).
+ * - `payload` is passed through verbatim (a plain unary probe sends `{}`,
+ *   Remote calls send `{args}` — both are caller decisions).
  * - parseServerResponse NEVER guesses: a body that is not a matching
  *   server-response, or whose result slot is not an object, is classified
  *   explicitly (no-envelope / malformed-result) so every caller keeps its

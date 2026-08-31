@@ -22,7 +22,7 @@
  *
  * Port strategy: fixed base DEFAULT_DSH_START_PORT (17510), one attempt per
  * port; a failed attempt (process exit, or no TCP listener within 90s, or a
- * failed host.describe probe) advances port+1 and respawns, at most 5 attempts.
+ * failed session/list probe) advances port+1 and respawns, at most 5 attempts.
  * Spawn uses detached=true (own process group, design 02 §3.5.5: the host
  * survives a control-plane crash and the orphan reaper reclaims it, §3.4.2);
  * stdout/stderr are forwarded to the control-plane log and the per-port
@@ -37,12 +37,12 @@
  *  web profile whose directory-picker-auto (host/directory-picker-auto)
  *  resolves `browse` only when an SSH-launch marker is present (or the bind
  *  is non-loopback). The pin makes the managed host always serve the
- *  in-app `browse` interaction (host.listDirectory / host.createDirectory)
+ *  in-app `browse` interaction (directoryPicker.list / directoryPicker.createDirectory)
  *  so every instance — local and remote alike — uses the same in-app
  *  directory dialog (design 05 §4; the OS chooser is never surfaced to
  *  chamber users). Only directory-picker-auto reads SSH_CONNECTION in the
- *  dsh source (verified against the pinned harness commit b150a551… / dsh
- *  0.1.1-rc.2, where directory-picker-auto still reads it); `bundle/web-app` also probes SSH_CONNECTION/SSH_TTY via `launchedThroughSsh` (browser auto-open suppression — pre-existing at rc.8, harmless for chamber's own window), so the pin has no
+ *  dsh source (verified against the pinned harness commit cd5ef814… / dsh
+ *  0.1.2-alpha.1, where directory-picker-auto still reads it); `bundle/web-app` also probes SSH_CONNECTION/SSH_TTY via `launchedThroughSsh` (browser auto-open suppression — pre-existing at rc.8, harmless for chamber's own window), so the pin has no
  *  other effect.
  *  A pid
  *  record per design 02 §3.4.1 (pid/ownerPid/ownerInstanceId/port/binary/
@@ -57,7 +57,14 @@ import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createConnection } from 'node:net'
-import { call, RpcBusinessError } from './dsh-client.ts'
+import { call, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+import {
+  clearAuthCookie,
+  exchangeLaunchToken,
+  extractLaunchToken,
+  parseDshWebUrlLine,
+  registerAuthCookie,
+} from './browser-auth-cookie.ts'
 import { createHostLogWriter } from './host-logs.ts'
 import type { Logger } from './types.ts'
 
@@ -110,6 +117,7 @@ export const MAX_SPAWN_ATTEMPTS = 5
 
 /** How long a spawned host gets to open its TCP listener. */
 export const LISTEN_WAIT_MS = 90_000
+const AUTH_BOOTSTRAP_WAIT_MS = 15_000 // 0.1.2 browser-auth: bounded wait for the `dsh web:` launch-token line (printUrl defaults true).
 
 /** Bound every loopback connect attempt so startup and shutdown cannot hang
  * behind a socket that neither connects nor errors (for example, a local
@@ -321,9 +329,10 @@ function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: str
 
 /**
  * One spawn attempt: launch the child with the web-profile flags for `port`
- * and wait for readiness (TCP listener, then a successful host.describe
- * probe). The child is the dsh process itself — spawned directly, never via
- * a pnpm wrapper, so there is no grandchild to orphan when we terminate.
+ * and wait for readiness (TCP listener, then a successful session/list
+ * probe — host.describe was deleted upstream in dsh 0.1.2-alpha.1). The
+ * child is the dsh process itself — spawned directly, never via a pnpm
+ * wrapper, so there is no grandchild to orphan when we terminate.
  */
 interface SpawnAttemptOptions {
   dshHome: string
@@ -336,6 +345,9 @@ interface SpawnAttemptOptions {
   /** First port attempted (default BASE_DHSPORT). Server gateway deployments
    *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
   dshPortBase?: number
+  /** Bounded wait for the `dsh web:` launch-token line (default
+   *  AUTH_BOOTSTRAP_WAIT_MS). Test seam — the retry cycle multiplies it. */
+  authBootstrapWaitMs?: number
   signal?: AbortSignal
   pidRecordWriter: typeof writePidRecord
   terminateChildFn: (child: ChildProcess) => Promise<void>
@@ -474,11 +486,15 @@ async function spawnAttempt({
   signal,
   pidRecordWriter,
   terminateChildFn,
+  authBootstrapWaitMs,
 }: SpawnAttemptOptions): Promise<SpawnAttemptResult> {
   // The caller performs an async port preflight. stop() may abort while that
   // await is in flight, so re-check at the actual spawn boundary as well.
   if (signal?.aborted) throw new Error('spawn aborted')
   const baseUrl = `http://127.0.0.1:${port}`
+  // A fresh spawn carries a fresh process launch token — any cookie from a
+  // previous spawn on this port is invalid and must not leak into the probe.
+  clearAuthCookie(baseUrl)
   const log = (line: string) => logger.log(`[dsh:${port}] ${line}`)
   // Per-port rolling log (design 02 §3.8 / host-logs.ts): stdout/stderr go
   // to the control-plane log AND to <stateDir>/host-logs/<port>.log (JSONL)
@@ -496,8 +512,8 @@ async function spawnAttempt({
     // so the app binary runs the CLI as a plain node process.
     // SSH_CONNECTION is the browse-interaction pin (see the module header):
     // the host's directory-picker-auto resolves `browse` under an
-    // SSH-launch marker, so the managed host serves host.listDirectory /
-    // host.createDirectory — one in-app dialog for every instance.
+    // SSH-launch marker, so the managed host serves directoryPicker.list /
+    // directoryPicker.createDirectory — one in-app dialog for every instance.
     env: sanitizeManagedDshEnv({
       ...process.env,
       ...nodeExec.env,
@@ -523,11 +539,68 @@ async function spawnAttempt({
     child.kill('SIGKILL')
     throw new Error(`dsh spawn on port ${port} produced no pid`)
   }
+  // Line-buffered forward path: the readiness line may be split across stdio
+  // chunks — redaction must see the COMPLETE line, never per-chunk fragments
+  // (review-round6a). The token query values are the only redacted content.
+  let forwardLineTail = ''
   const forwardChildOutput = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
-    const line = formatChildOutputChunk(chunk)
-    log(line)
-    hostLog.write(line, stream)
+    // RAW bytes, not the trimmed formatter: the trailing newline must
+    // survive so line splitting works (trimEnd swallowed it and left every
+    // line stuck in the tail). The scanner has the same raw-bytes rule.
+    const text = chunk.toString('utf8')
+    const redact = (line: string) => line.replace(/([?&]token=)[^&\s)]+/g, '$1***')
+    const segments = (forwardLineTail + text).split('\n')
+    // Bound the incomplete-line tail (review-round7b P2-2): a child that
+    // never emits newlines must not grow the buffer without limit — the
+    // module's own 64KiB chunk bound applies.
+    forwardLineTail = (segments.pop() ?? '').slice(-MAX_CHILD_OUTPUT_CHUNK_BYTES)
+    for (const segment of segments) {
+      const safeLine = redact(segment)
+      log(safeLine)
+      hostLog.write(safeLine, stream)
+    }
   }
+  // 0.1.2 browser-auth bootstrap (review-round3c P0): the web profile prints
+  // `dsh web: <url>?token=<launchToken>` at Loader settlement (printUrl
+  // defaults true); the launch token is process-memory random, so this stdout
+  // line is the ONLY recoverable carrier. rc.2 hosts print the URL without a
+  // token — the bootstrap then yields no cookie and old-wire operation is
+  // unchanged. The cookie itself never leaves this process's memory.
+  // Object property (never CFA-narrowed): the executor assigns it inside the
+  // promise, the bootstrap finally reads it — TS control-flow analysis would
+  // narrow a plain `let` to its initializer at the later read.
+  const dshWebScanner: { cleanup: (() => void) | null } = { cleanup: null }
+  const dshWebUrlPromise = new Promise<string | null>(resolve => {
+    let stdoutTail = ''
+    const onStdout = (chunk: Buffer) => {
+      // RAW bytes, never the log formatter: formatChildOutputChunk trims the
+      // chunk end, which would swallow the space before `(LAN: …)` at a chunk
+      // boundary and corrupt the token query (review-round5a P2-3).
+      stdoutTail = (stdoutTail + chunk.toString('utf8')).slice(-8_192)
+      // Match only COMPLETE lines (review-round7b P2-1): the readiness line
+      // always ends with a newline; a chunk-split URL must never mint a
+      // truncated token from a partial line.
+      if (stdoutTail.includes('\n')) {
+        const url = parseDshWebUrlLine(stdoutTail)
+        if (url !== undefined) {
+          cleanup()
+          resolve(url)
+        }
+      }
+    }
+    const onStdoutEnd = () => {
+      cleanup()
+      resolve(null)
+    }
+    const cleanup = () => {
+      child.stdout.off('data', onStdout)
+      child.stdout.off('end', onStdoutEnd)
+      dshWebScanner.cleanup = null
+    }
+    dshWebScanner.cleanup = cleanup
+    child.stdout.on('data', onStdout)
+    child.stdout.on('end', onStdoutEnd)
+  })
   child.stdout.on('data', chunk => forwardChildOutput(chunk, 'stdout'))
   child.stderr.on('data', chunk => forwardChildOutput(chunk, 'stderr'))
   // Unlike 'exit', 'close' fires only after both stdio pipes have closed, so
@@ -632,9 +705,59 @@ async function spawnAttempt({
     removePidRecord(stateDir, pid)
     throw new Error(`dsh spawn attempt on port ${port} failed: ${outcome} before TCP listen`)
   }
+  // 0.1.2 browser-auth bootstrap (review-round3c P0) — CONCURRENT, never
+  // delaying the probe: wait for the `dsh web:` URL line, exchange the launch
+  // token for the session cookie and register it for this baseUrl. The probe
+  // loop runs immediately; a 401 answer (the new-wire gate) awaits this
+  // promise. Old hosts (no token in the line / no line) resolve null and the
+  // probe proceeds without a cookie — pre-0.1.2 hosts never gate.
+  // Resolution: 'minted' | failure message. A gated host (401) with no
+  // minted cookie is unrecoverable — the probe loop throws the explicit
+  // browser-auth error instead of grinding to the 90s window.
+  const authBootstrapPromise = (async (): Promise<'minted' | string> => {
+    const bootstrapController = new AbortController()
+    const bootstrapTimer = setTimeout(() => bootstrapController.abort(), authBootstrapWaitMs ?? AUTH_BOOTSTRAP_WAIT_MS)
+    const onSpawnAbort = () => bootstrapController.abort()
+    if (signal?.aborted) bootstrapController.abort()
+    else signal?.addEventListener('abort', onSpawnAbort, { once: true })
+    const onChildExit = () => bootstrapController.abort()
+    child.once('exit', onChildExit)
+    try {
+      const webUrl = await Promise.race([
+        dshWebUrlPromise,
+        new Promise<string | null>(resolve => {
+          bootstrapController.signal.addEventListener('abort', () => resolve(null), { once: true })
+        }),
+      ])
+      const token = webUrl === null ? undefined : extractLaunchToken(webUrl)
+      if (token === undefined) {
+        if (webUrl !== null) log('host prints a web URL without a launch token — pre-0.1.2 wire (or token suppressed), no auth cookie needed')
+        return 'no launch token in the readiness line (pre-0.1.2 host or token suppressed)'
+      }
+      const cookie = await exchangeLaunchToken(baseUrl, token, bootstrapController.signal)
+      if (cookie !== null) {
+        registerAuthCookie(baseUrl, cookie)
+        log('browser-auth cookie minted (0.1.2 wire)')
+        return 'minted'
+      }
+      return 'the host did not mint a session cookie'
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    } finally {
+      clearTimeout(bootstrapTimer)
+      signal?.removeEventListener('abort', onSpawnAbort)
+      child.off('exit', onChildExit)
+      bootstrapController.abort()
+      // The URL line arrives once (or never); the scanner listeners must not
+      // ride the whole instance lifetime (review-round4a P2).
+      dshWebScanner.cleanup?.()
+    }
+  })()
   // The TCP listener comes up before the connection plugin's /api routes are
-  // mounted; describe can 404 briefly. Retry the probe until it succeeds or
-  // the listen window expires.
+  // mounted; a unary probe can 404 briefly. Retry until it succeeds or the
+  // listen window expires. host.describe was deleted upstream (dsh
+  // 0.1.2-alpha.1), so readiness is probed with the session/list unary
+  // (POST /api/session/list, Remote payload {args:{_request:{}}}).
   const controller = new AbortController()
   const onGenerationAbort = () => controller.abort()
   if (signal?.aborted) controller.abort()
@@ -648,22 +771,31 @@ async function spawnAttempt({
         throw lastProbeError ?? new Error('probe window expired')
       }
       try {
-        await call(baseUrl, 'host.describe', {}, { signal: controller.signal })
+        await call(baseUrl, 'session/list', { args: { _request: {} } }, { signal: controller.signal })
         break
       } catch (probeError) {
         if (child.exitCode !== null || child.signalCode !== null) {
           throw new Error(`dsh spawn attempt on port ${port} failed: child exited: ${String(probeError)}`)
         }
         if (controller.signal.aborted) throw probeError
+        if (probeError instanceof RpcTransportError && probeError.status === 401) {
+          const authOutcome = await authBootstrapPromise
+          if (authOutcome !== 'minted') {
+            logger.warn(`[dsh:${port}] browser-auth bootstrap failed (${authOutcome}); the session/list probe will 401 on the 0.1.2 wire`)
+            throw new Error(`dsh spawn attempt on port ${port} failed: instance requires the 0.1.2 browser-auth cookie, but the bootstrap failed (${authOutcome})`)
+          }
+          // Cookie minted — fall through and retry the probe with it.
+        }
         lastProbeError = probeError
         await waitForRetry(500, controller.signal)
       }
     }
   } catch (error) {
-    await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed during host.describe`)
+    clearAuthCookie(baseUrl)
+    await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed during session/list probe`)
     // Preserve the ledger when termination cannot prove group quiescence.
     removePidRecord(stateDir, pid)
-    throw new Error(`dsh spawn attempt on port ${port} failed: host.describe: ${String(error)}`)
+    throw new Error(`dsh spawn attempt on port ${port} failed: session/list: ${String(error)}`)
   } finally {
     clearTimeout(probeTimer)
     signal?.removeEventListener('abort', onGenerationAbort)
@@ -675,7 +807,11 @@ async function spawnAttempt({
   // loud in the log instead of a silent dialog failure. Never fails the
   // spawn (the host is otherwise healthy); other failures are ignored.
   try {
-    await call(baseUrl, 'host.listDirectory', {}, { timeoutMs: 10_000, signal })
+    // directoryPicker.list(path?, signal) is a Typert Remote (namespace
+    // `directoryPicker`); the minimal `{args:{}}` payload probes the browse
+    // capability (the host lists the home directory with the empty path —
+    // the result is discarded; only the availability verdict matters).
+    await call(baseUrl, 'directoryPicker/list', { args: {} }, { timeoutMs: 10_000, signal })
   } catch (probeError) {
     if (signal?.aborted) {
       await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} aborted during browse probe`)
@@ -820,6 +956,9 @@ export interface SpawnDshOptions {
   /** First port attempted (default BASE_DHSPORT). Server gateway deployments
    *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
   dshPortBase?: number
+  /** Bounded wait for the `dsh web:` launch-token line (default
+   *  AUTH_BOOTSTRAP_WAIT_MS). Test seam — the retry cycle multiplies it. */
+  authBootstrapWaitMs?: number
   signal?: AbortSignal
   /** Injectable ledger writer for deterministic lifecycle-failure tests. */
   pidRecordWriter?: typeof writePidRecord
@@ -849,6 +988,7 @@ export async function spawnDsh({
   patchPath,
   signal,
   dshPortBase,
+  authBootstrapWaitMs,
   pidRecordWriter = writePidRecord,
   terminateChildFn = terminateChild,
 }: SpawnDshOptions): Promise<SpawnedHost> {
@@ -881,10 +1021,13 @@ export async function spawnDsh({
         signal,
         pidRecordWriter,
         terminateChildFn,
+        authBootstrapWaitMs,
       })
       return {
         ...spawned,
         stop: async () => {
+          // The browser-auth cookie dies with the child (review-round8c P2).
+          clearAuthCookie(spawned.baseUrl)
           await terminateAndProveQuiet(spawned.child, terminateChildFn, 'managed host stop failed')
           const pid = spawned.child.pid
           // terminateChild rejects on residual group liveness, so a failed
