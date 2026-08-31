@@ -2246,6 +2246,13 @@ fi
 # 检查放在参数解析后、进入向导前,让小白第一时间看到缺什么而不是装到一半才失败。
 preflight() {
   have node || die "缺少 node(≥22):gateway 运行依赖 node,请先安装(https://nodejs.org)"
+  # 文案声称 ≥22 就必须真的查版本：node 18/20 会在源码树 dsh 路径的
+  # `node --import tsx/esm` 或 gateway 本体处中途失败，报错要前置且诚实。
+  local node_ver node_major
+  node_ver=$(node --version 2>/dev/null || true)
+  node_major=$(printf '%s' "$node_ver" | sed 's/^v\([0-9][0-9]*\).*/\1/' || true)
+  [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 22 ]] \
+    || die "node 版本过低：${node_ver:-未知}，需要 ≥22（https://nodejs.org）"
   if [[ -z "$OFFLINE_TGZ" ]]; then
     have curl || die "缺少 curl:下载安装包需要 curl(离线包模式可用 --tgz 跳过)"
   fi
