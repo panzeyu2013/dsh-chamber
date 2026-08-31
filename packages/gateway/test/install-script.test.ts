@@ -205,7 +205,13 @@ SERVICE_MODE=foreground
 UI_PASSWORD="$PAYLOAD"
 API_TOKEN="$TOKEN"
 write_config
-write_env
+# write_env 现在拒绝含换行的值（EnvironmentFile 单行条目纪律，与
+# systemd_quote_arg 一致）。本用例模拟"换行豁免时期写入的遗留 env 文件"，
+# 故按 systemd_env_assignment 的转义规则（先反斜杠后引号）直接构造文件，
+# 继续验证数据式解析器对遗留多行值的处理与不可执行性。
+printf 'DSH_GATEWAY_PASSWORD="%s"\n' "$ESCAPED_PAYLOAD" > "$ENV_FILE"
+printf 'DSH_GATEWAY_TOKEN="%s"\n' "$TOKEN" >> "$ENV_FILE"
+printf 'DSH_GATEWAY_DSH_PATH="/tmp/env anchor"\n' >> "$ENV_FILE"
 # Model a pre-migration install whose foreground-only values exist solely in
 # EnvironmentFile. load_conf must decode those assignments as data.
 # (No "sed -i": its suffix-argument spelling differs between BSD and GNU sed —
@@ -224,7 +230,7 @@ health_wait() { return 0; }
 start_foreground
 wait
 cat "$BASE_DIR/run/gateway.log"
-`, { PAYLOAD: payload, TOKEN: token })
+`, { PAYLOAD: payload, TOKEN: token, ESCAPED_PAYLOAD: payload.replace(/\\/g, "\\\\").replace(/"/g, "\\\"") })
     assert.match(output, /PASSWORD</)
     assert.ok(output.includes(payload), 'credential bytes survive the data-only EnvironmentFile parser')
     assert.ok(output.includes(`TOKEN<${token}>`), 'an assignment-looking line inside the password cannot replace the real token')
