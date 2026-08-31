@@ -96,7 +96,7 @@ test('registerTransport accepts dsh+http direct while dsh+ssh stays loopback-onl
   // Direct mode may therefore use a non-loopback origin, but never gains the
   // gateway target's credential/header capabilities.
   proxy.registerTransport('dsh:direct', 'https://dsh.example.com:8443', undefined, { transport: 'http' })
-  await proxy.handleHttp(fakeRequest('/api/i/dsh-direct/api/host.describe'), fakeResponse())
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-direct/api/session/list'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
   assert.equal(headers.host, 'dsh.example.com:8443')
@@ -210,7 +210,7 @@ test('gateway transport injects 0..2 bounded whitelist headers (Authorization/Co
 test('validated Authorization is injected at forward time without changing authority', async () => {
   const { proxy, upstream } = makeGatewayProxy()
   proxy.registerTransport('gateway:server-1', 'https://gateway.example.com:8443', { Authorization: AUTHORIZATION })
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-server-1/api/session.list'), fakeResponse())
+  await proxy.handleHttp(fakeRequest('/api/i/gateway-server-1/api/session/list'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
   assert.equal(headers.authorization, AUTHORIZATION)
@@ -224,7 +224,7 @@ test('Authorization + Cookie both ride the forward, and a 0-header gateway injec
     authorization: AUTHORIZATION,
     cookie: 'dsh_gateway_session=abc.def',
   })
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-both/api/session.list'), fakeResponse())
+  await proxy.handleHttp(fakeRequest('/api/i/gateway-both/api/session/list'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
   assert.equal(headers.authorization, AUTHORIZATION)
@@ -232,7 +232,7 @@ test('Authorization + Cookie both ride the forward, and a 0-header gateway injec
 
   // A credential-less gateway target injects neither header.
   proxy.registerTransport('gateway:anon', 'http://gw.internal:8080')
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-anon/api/session.list'), fakeResponse())
+  await proxy.handleHttp(fakeRequest('/api/i/gateway-anon/api/session/list'), fakeResponse())
   const anonHeaders = upstream.calls[1].options.headers as Record<string, string>
   assert.equal(anonHeaders.authorization, undefined)
   assert.equal(anonHeaders.cookie, undefined)
@@ -242,7 +242,7 @@ test('an ssh-tunneled gateway transport overrides the upstream Host with the rem
   const { proxy, upstream } = makeGatewayProxy()
   // Tunnel shape: loopback baseUrl + the REMOTE loopback-listener authority.
   proxy.registerTransport('gateway:tunnel', 'http://127.0.0.1:43123', { authorization: AUTHORIZATION }, { transport: 'ssh', authority: '127.0.0.1:30801' })
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-tunnel/api/host.describe'), fakeResponse())
+  await proxy.handleHttp(fakeRequest('/api/i/gateway-tunnel/api/session/list'), fakeResponse())
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
   assert.equal(headers.host, '127.0.0.1:30801', 'the remote loopback authority rides the Host header')

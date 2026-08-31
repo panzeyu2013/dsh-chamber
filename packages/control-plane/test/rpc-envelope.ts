@@ -30,13 +30,13 @@ test('mintRpcId returns distinct UUIDs (the initiator mints every rpcId)', () =>
 })
 
 test('buildClientRequest produces the exact client-request wire shape with canonical key order', () => {
-  const envelope = buildClientRequest('rpc-1', 'host.describe', {})
-  assert.deepEqual(envelope, { type: 'client-request', rpcId: 'rpc-1', method: 'host.describe', payload: {} })
+  const envelope = buildClientRequest('rpc-1', 'session/list', {})
+  assert.deepEqual(envelope, { type: 'client-request', rpcId: 'rpc-1', method: 'session/list', payload: {} })
   // JSON.stringify key order is the wire order — pin it so a reorder (which
   // would still be valid YAML/JSON) cannot silently change the wire bytes.
   assert.equal(
     JSON.stringify(envelope),
-    '{"type":"client-request","rpcId":"rpc-1","method":"host.describe","payload":{}}',
+    '{"type":"client-request","rpcId":"rpc-1","method":"session/list","payload":{}}',
   )
   // The Remote-probe shape (`payload: { args }`) passes through verbatim.
   assert.deepEqual(
@@ -110,8 +110,8 @@ test('postClientRequest POSTs the envelope verbatim and parses a 200 JSON answer
   })
   const { port, close } = await listen(server)
   try {
-    const envelope = buildClientRequest('rpc-1', 'host.describe', {})
-    const outcome = await postClientRequest({ url: `http://127.0.0.1:${port}/api/host.describe`, envelope, timeoutMs: 2000, maxBodyBytes: 1024 })
+    const envelope = buildClientRequest('rpc-1', 'session/list', {})
+    const outcome = await postClientRequest({ url: `http://127.0.0.1:${port}/api/session/list`, envelope, timeoutMs: 2000, maxBodyBytes: 1024 })
     assert.equal(outcome.status, 200)
     assert.equal(outcome.timeout, false)
     assert.equal(outcome.oversized, false)
@@ -131,8 +131,8 @@ test('postClientRequest collapses a garbage 200 body to body null', async () => 
   const { port, close } = await listen(server)
   try {
     const outcome = await postClientRequest({
-      url: `http://127.0.0.1:${port}/api/host.describe`,
-      envelope: buildClientRequest('rpc-1', 'host.describe', {}),
+      url: `http://127.0.0.1:${port}/api/session/list`,
+      envelope: buildClientRequest('rpc-1', 'session/list', {}),
       timeoutMs: 2000,
       maxBodyBytes: 1024,
     })
@@ -148,8 +148,8 @@ test('postClientRequest resolves a non-200 answer with its status and no body', 
   const { port, close } = await listen(server)
   try {
     const outcome = await postClientRequest({
-      url: `http://127.0.0.1:${port}/api/host.describe`,
-      envelope: buildClientRequest('rpc-1', 'host.describe', {}),
+      url: `http://127.0.0.1:${port}/api/session/list`,
+      envelope: buildClientRequest('rpc-1', 'session/list', {}),
       timeoutMs: 2000,
       maxBodyBytes: 1024,
     })
@@ -167,8 +167,8 @@ test('postClientRequest enforces the TOTAL deadline on a silent endpoint', async
   try {
     const started = Date.now()
     const outcome = await postClientRequest({
-      url: `http://127.0.0.1:${port}/api/host.describe`,
-      envelope: buildClientRequest('rpc-1', 'host.describe', {}),
+      url: `http://127.0.0.1:${port}/api/session/list`,
+      envelope: buildClientRequest('rpc-1', 'session/list', {}),
       timeoutMs: 80,
       maxBodyBytes: 1024,
     })
@@ -188,8 +188,8 @@ test('postClientRequest caps the 200 body at maxBodyBytes', async () => {
   const { port, close } = await listen(server)
   try {
     const outcome = await postClientRequest({
-      url: `http://127.0.0.1:${port}/api/host.describe`,
-      envelope: buildClientRequest('rpc-1', 'host.describe', {}),
+      url: `http://127.0.0.1:${port}/api/session/list`,
+      envelope: buildClientRequest('rpc-1', 'session/list', {}),
       timeoutMs: 2000,
       maxBodyBytes: 1024,
     })
@@ -206,8 +206,8 @@ test('postClientRequest reports a connection failure as no-answer (status null, 
   const { port, close } = await listen(probe)
   await close()
   const outcome = await postClientRequest({
-    url: `http://127.0.0.1:${port}/api/host.describe`,
-    envelope: buildClientRequest('rpc-1', 'host.describe', {}),
+    url: `http://127.0.0.1:${port}/api/session/list`,
+    envelope: buildClientRequest('rpc-1', 'session/list', {}),
     timeoutMs: 2000,
     maxBodyBytes: 1024,
   })

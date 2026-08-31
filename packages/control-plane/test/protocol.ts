@@ -140,7 +140,7 @@ test('call echoes the minted rpcId and resolves the narrow form', async () => {
     return jsonResponse({ type: 'server-response', rpcId: sent.rpcId, result: { ok: true, value: { items: [] } } })
   }
   try {
-    const response = await call(HOST, 'session.list', {})
+    const response = await call(HOST, 'session/list', {})
     assert.equal(response.rpcId, sent.rpcId)
     assert.deepEqual(response.result.value, { items: [] })
     assert.equal(pendingStats().size, 0)
@@ -156,7 +156,7 @@ test('call rejects an oversized runtime envelope under a fixed byte cap', async 
     headers: { 'content-type': 'application/json' },
   })
   try {
-    await assert.rejects(call(HOST, 'host.describe', {}), error =>
+    await assert.rejects(call(HOST, 'session/list', {}), error =>
       error instanceof RpcTransportError
       && error.code === 'response_too_large'
       && error.status === 200)
@@ -175,7 +175,7 @@ test('pending settle-once: timeout wins a race against a late response', async (
     late.promise.then(body => resolve(jsonResponse(body)))
   })
   try {
-    const attempt = call(HOST, 'session.list', {}, { timeoutMs: 30 })
+    const attempt = call(HOST, 'session/list', {}, { timeoutMs: 30 })
     await assert.rejects(attempt, error =>
       error instanceof RpcTransportError && error.code === 'request_timeout' && error.status === 0)
     // The response arrives after the timeout: the entry is already settled,
@@ -196,7 +196,7 @@ test('timeoutMs: null disables the timer (caller-signal-only policy)', async () 
   globalThis.fetch = hangingFetch(() => started.resolve())
   try {
     const caller = new AbortController()
-    const attempt = call(HOST, 'host.pickDirectory', {}, { signal: caller.signal, timeoutMs: null })
+    const attempt = call(HOST, 'directoryPicker/pick', {}, { signal: caller.signal, timeoutMs: null })
     await started.promise
     caller.abort()
     await assert.rejects(attempt, error =>
@@ -215,7 +215,7 @@ test('rpcId echo mismatch is a protocol violation', async () => {
     result: { ok: true, value: {} },
   })
   try {
-    await assert.rejects(call(HOST, 'session.list', {}), error =>
+    await assert.rejects(call(HOST, 'session/list', {}), error =>
       error instanceof RpcTransportError && error.code === 'protocol_violation' && error.status === 200)
     assert.equal(pendingStats().size, 0)
   } finally {
@@ -230,7 +230,7 @@ test('generation abort settles the in-flight unary with connection_offline', asy
   const settledBefore = pendingStats().settled
   globalThis.fetch = hangingFetch(() => started.resolve())
   try {
-    const attempt = call(HOST, 'session.prompt', { sessionId: 's1' }, {
+    const attempt = call(HOST, 'session/prompt', { sessionId: 's1' }, {
       generationSignal: generation.signal,
       timeoutMs: null,
     })
@@ -261,7 +261,7 @@ test('generation abort during response-body read is not misclassified as a proto
     return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
   }
   try {
-    const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
+    const attempt = call(HOST, 'session/list', {}, { generationSignal: generation.signal, timeoutMs: null })
     await bodyStarted.promise
     generation.abort()
     await assert.rejects(attempt, error =>
@@ -289,7 +289,7 @@ test('a body completing after generation abort is never accepted as a live respo
     return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
   }
   try {
-    const attempt = call(HOST, 'host.describe', {}, { generationSignal: generation.signal, timeoutMs: null })
+    const attempt = call(HOST, 'session/list', {}, { generationSignal: generation.signal, timeoutMs: null })
     await bodyStarted.promise
     generation.abort()
     bodyController.enqueue(new TextEncoder().encode(JSON.stringify({
@@ -330,7 +330,7 @@ test('event-stream open barrier waits for the real WebSocket upgrade', async () 
   let opened = false
   const iterator = openEventStream(
     `http://127.0.0.1:${address.port}`,
-    '/api/events.mux',
+    '/api/remote.mux',
     abort.signal,
     () => { opened = true },
   )
@@ -355,7 +355,7 @@ test('event-stream single-frame maxPayload fails closed with an explicit transpo
   const connected = nextEventStreamClient(harness.wss)
   const iterator = openEventStream(
     harness.baseUrl,
-    '/api/events.mux',
+    '/api/remote.mux',
     undefined,
     undefined,
     { maxPayloadBytes: 64 },
@@ -384,7 +384,7 @@ test('event-stream raw queue frame-count overflow clears data and terminates the
   const opened = deferred<void>()
   const iterator = openEventStream(
     harness.baseUrl,
-    '/api/events.host',
+    '/api/remote.mux',
     undefined,
     () => opened.resolve(),
     { maxPayloadBytes: 1_024, maxQueueBytes: 1_024, maxQueueFrames: 2 },
@@ -423,7 +423,7 @@ test('event-stream raw queue byte overflow clears data and terminates the stream
   const queueByteLimit = queuedFrameBytes * 2 - 1
   const iterator = openEventStream(
     harness.baseUrl,
-    '/api/events.mux',
+    '/api/remote.mux',
     undefined,
     () => opened.resolve(),
     { maxPayloadBytes: 1_024, maxQueueBytes: queueByteLimit, maxQueueFrames: 8 },
@@ -457,7 +457,7 @@ test('unknown business error code passes through code/message/details verbatim',
     error: { code: 'model-42-discontinued', message: 'newer host error', details: { model: 'm-42', hint: 'select another' } },
   })
   try {
-    await assert.rejects(call(HOST, 'session.prompt', { sessionId: 's1' }), error => {
+    await assert.rejects(call(HOST, 'session/prompt', { sessionId: 's1' }), error => {
       assert.ok(error instanceof RpcBusinessError)
       assert.equal(error.code, 'model-42-discontinued')
       assert.equal(error.message, 'newer host error')
@@ -475,7 +475,7 @@ test('malformed error branch degrades to unknown_rpc_code instead of dropping', 
   const originalFetch = globalThis.fetch
   globalThis.fetch = echoFetch({ ok: false, error: 'not-an-object' })
   try {
-    await assert.rejects(call(HOST, 'session.list', {}), error =>
+    await assert.rejects(call(HOST, 'session/list', {}), error =>
       error instanceof RpcBusinessError && error.code === 'unknown_rpc_code')
   } finally {
     globalThis.fetch = originalFetch

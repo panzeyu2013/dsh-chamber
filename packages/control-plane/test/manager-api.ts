@@ -80,7 +80,7 @@ function rawUpgrade(port: number, origin: string): Promise<string> {
     socket.setEncoding('utf8')
     socket.on('connect', () => {
       socket.write(
-        'GET /api/i/local/api/events.mux HTTP/1.1\r\n'
+        'GET /api/i/local/api/remote.mux HTTP/1.1\r\n'
         + `Host: 127.0.0.1:${port}\r\n`
         + `Origin: ${origin}\r\n`
         + 'Connection: Upgrade\r\n'
@@ -166,7 +166,7 @@ test('candidate quarantine hides ready/port until the activation verdict opens e
     const health = await fetchJson(base, '/health')
     assert.equal(health.body.dsh.status, 'starting')
     assert.equal(health.body.dsh.port, 0)
-    const proxyResponse = await fetchJson(base, '/api/i/local/api/session.list')
+    const proxyResponse = await fetchJson(base, '/api/i/local/api/session/list')
     assert.equal(proxyResponse.status, 503)
     assert.equal(proxyResponse.body.code, 'instance_unavailable')
     // The 'local' host-log alias is the same internal fact: quarantined reads
