@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo",
+    "erasableSyntaxOnly": false,
+    "paths": {
+      "@deepseek-ai/dsh-client-connection/client": ["../dsh-client-connection/src/client/index.ts"],
+      "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"]
+    }
+  },
+  "include": [],
+  "files": [
+    "src/client/index.ts",
+    "src/client/journal-stream.ts",
+    "src/client/remote-events.ts",
+    "src/client/remote-stream.ts",
+    "src/client/snapshot-stream.ts",
+    "src/client/stream-client.ts",
+    "src/stream-protocol.ts"
+  ]
+}

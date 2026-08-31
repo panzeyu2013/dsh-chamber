@@ -1,0 +1,61 @@
+{
+  "extends": "./tsconfig.check-base.json",
+  "compilerOptions": {
+    "paths": {
+      "@deepseek-ai/dsh-commands/brand": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/brand.ts"
+      ],
+      "@deepseek-ai/dsh-commands/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/types.ts"
+      ],
+      "@deepseek-ai/dsh-credentials/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-credentials/src/types.ts"
+      ],
+      "@deepseek-ai/dsh-host-directory-picker/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-host-directory-picker/src/types.ts"
+      ],
+      "@deepseek-ai/dsh-llm/brand": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/brand.ts"
+      ],
+      "@deepseek-ai/dsh-llm/message": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/message.ts"
+      ],
+      "@deepseek-ai/dsh-llm/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/types.ts"
+      ],
+      "@deepseek-ai/dsh-session/chunk-rows": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-session/src/chunk-rows.ts"
+      ],
+      "@deepseek-ai/dsh-session/surface": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-session/src/surface.ts"
+      ],
+      "@deepseek-ai/dsh-session/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-session/src/types.ts"
+      ],
+      "@deepseek-ai/dsh-settings/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-settings/src/types.ts"
+      ],
+      "@deepseek-ai/dsh-tool-todo/client": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-tool-todo/src/client.ts"
+      ],
+      "@deepseek-ai/dsh-tools/presentation": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-tools/src/presentation.ts"
+      ],
+      "@deepseek-ai/dsh-client-connection/client": [
+        "../dsh-client-connection/src/client/index.ts"
+      ],
+      "@deepseek-ai/*": [
+        "../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"
+      ]
+    }
+  },
+  "files": [
+    "src/client/index.ts",
+    "src/client/journal-stream.ts",
+    "src/client/remote-events.ts",
+    "src/client/remote-stream.ts",
+    "src/client/snapshot-stream.ts",
+    "src/client/stream-client.ts",
+    "src/stream-protocol.ts"
+  ]
+}
