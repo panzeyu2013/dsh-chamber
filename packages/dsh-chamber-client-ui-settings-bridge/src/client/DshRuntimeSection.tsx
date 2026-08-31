@@ -1,12 +1,14 @@
 /**
- * Per-server dsh runtime section (design 18 §3.6, 2026-09 per-server 修订):
- * registered as `settings.section` id `dsh-runtime` (order 31, right after
- * agent-presets) in every instance context. Local = full management surface;
- * gateway = full per-server segment proxied through `/chamber/runtime`
+ * Per-server dsh runtime section (design 18 §3.6, 2026-09 per-server 修订 +
+ * dsh 直连不挂载修订): registered as `settings.section` id `dsh-runtime`
+ * (order 31, right after agent-presets) for every source with a chamber
+ * runtime management surface: local = full management surface; gateway =
+ * full per-server segment proxied through `/chamber/runtime`
  * (status/versions/select/apply/rollback/restore-builtin/retry-apply/
- * retry-restore/registry/restart, design 18 §9.3 + design 17 §3); ssh =
- * live host.describe version (read-only) + `restart_service` systemd restart.
- * Every mounted source gets the「重启 dsh」
+ * retry-restore/registry/restart, design 18 §9.3 + design 17 §3). Direct dsh
+ * targets (ssh or http) mount no section — the remote runtime is
+ * systemd-deployed and no management surface exists. Every mounted source
+ * gets the「重启 dsh」
  * action (design 18 §3.6 项 8) to refresh mounted plugins.
  *
  * Runtime facts and mutations remain main-process/gateway-authoritative. The
@@ -104,12 +106,8 @@ export interface DshRuntimeSectionProps {
   t: RuntimeTranslate
   /** Source kind derived from the instance context's canonical chamber id. */
   instanceSource?: DshRuntimeSource
-  /** The canonical per-instance id (local | ssh-<id> | gateway-<id>). */
+  /** The canonical per-instance id (local | gateway-<id>). */
   chamberInstanceId?: string
-  /** Raw desktop registry id for the dsh/ssh systemd IPC branch. */
-  sshHostId?: string
-  /** Generation-scoped host.describe.version; absent renders unknown. */
-  remoteDshVersion?: string
 }
 
 /**
@@ -118,8 +116,8 @@ export interface DshRuntimeSectionProps {
  * same-origin `/api/i/gateway-<id>/chamber/runtime/*` proxy — the gateway's
  * own status is the authority, the desktop never touches the token. The
  * restart action (design 18 §3.6 项 8) stays the shared transactional flow
- * (POST /restart 202 + pollGatewayReady) owned by the parent so the local/ssh
- * branches keep identical semantics.
+ * (POST /restart 202 + pollGatewayReady) owned by the parent so the local and
+ * gateway branches keep identical semantics.
  *
  * Remote status is polled every ~3s (the /chamber/runtime controller stays
  * mounted while dsh is down — applying/restart windows keep progress
@@ -805,8 +803,6 @@ export function DshRuntimeSection({
   t,
   instanceSource = 'local',
   chamberInstanceId,
-  sshHostId,
-  remoteDshVersion,
 }: DshRuntimeSectionProps) {
   const state = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
   const settingsStatus = useSyncExternalStore(subscribeSettings, getSettingsStatus)
@@ -900,7 +896,7 @@ export function DshRuntimeSection({
 
   // 重启 dsh（design 18 §3.6 项 8）：受控进程重启刷新插件挂载；指针/版本树
   // 不动。local = 事务化 control-plane restartLocal()；gateway = 该 server 的
-  // /chamber/runtime/restart（202 + status 轮询）；ssh = restart_service systemd。
+  // /chamber/runtime/restart（202 + status 轮询）。
   const canRestartDsh = runtimeRestartAllowed(state)
   const onRestartDsh = useCallback(async (): Promise<void> => {
     if (restartingRef.current) return
@@ -937,13 +933,6 @@ export function DshRuntimeSection({
           const pollController = new AbortController()
           restartPollAbort.current = pollController
           await pollGatewayReady(chamberInstanceId, pollController.signal)
-        } else if (instanceSource === 'ssh' && sshHostId !== undefined) {
-          const desktopSsh = window.dshChamber?.desktopSsh
-          if (desktopSsh === undefined) throw new Error('desktop ssh surface unavailable')
-          const result = await desktopSsh.restart_service(sshHostId)
-          if (result !== null && typeof result === 'object' && 'error' in result) {
-            throw new Error(String((result as { error: unknown }).error))
-          }
         } else {
           // Defensive (review fix): a source/id mismatch must never fall
           // through to the success note for a restart that cannot run.
@@ -957,7 +946,7 @@ export function DshRuntimeSection({
         setRestarting(false)
       }
     }
-  }, [t, instanceSource, chamberInstanceId, sshHostId])
+  }, [t, instanceSource, chamberInstanceId])
 
   const onInstall = useCallback(() => {
     if (runtime === null || chosen === null || isActive || envGated || !actions.has('install')) return
@@ -1166,9 +1155,8 @@ export function DshRuntimeSection({
     }
   }, [progress, progressPercent, phase, t])
 
-  // Remote sources (design 18 §3.6 分支): gateway = full per-server segment
-  // proxied through /chamber/runtime (§9.3); ssh = version read-only +
-  // restart-service action.
+  // Remote source (design 18 §3.6): gateway = full per-server segment
+  // proxied through /chamber/runtime (§9.3).
   if (instanceSource === 'gateway') {
     if (chamberInstanceId === undefined) {
       // Defensive: never render the management surface without a canonical
@@ -1193,31 +1181,6 @@ export function DshRuntimeSection({
         actionError={actionError}
         setActionError={setActionError}
       />
-    )
-  }
-  if (instanceSource === 'ssh') {
-    return (
-      <div className={css.generalGroup}>
-        <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
-        <div className={css.updateVersionRow}>
-          <p className={css.updateRow}>
-            {t('dshRuntimeRemoteVersion')}: {remoteDshVersion ?? t('dshRuntimeVersionUnknown')}
-          </p>
-        </div>
-        <p className={css.generalHint}>{t('dshRuntimeRemoteSshNote')}</p>
-        <div className={css.updateStatusLine}>
-          <button
-            type="button"
-            className={css.updateButton}
-            onClick={() => { void onRestartDsh() }}
-            disabled={restarting || sshHostId === undefined}
-          >
-            {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartRemoteAction')}
-          </button>
-        </div>
-        {restartNote !== null && <p className={css.generalHint} role="status">{restartNote}</p>}
-        {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
-      </div>
     )
   }
 

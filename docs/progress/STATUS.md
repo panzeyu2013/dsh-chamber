@@ -59,14 +59,16 @@
 - **dsh 运行时版本管理（设计 18，M5–M7 已落地）**：剩余验证与实现缺口：
   - macOS 打包态实机：真实 `.app` 内共享 `packages/dsh-runtime`、内嵌 pnpm、
     koffi/dsh CLI 与完整激活/故障回退/数据恢复链；Linux server 同款端到端记录；
-  - Gateway restart 窗口的前端重连，以及 SSH `restart_service` systemd IPC
-    端到端回归；
+  - Gateway restart 窗口的前端重连，以及 connections 的 SSH `restart_service`
+    systemd IPC 端到端回归（settings 的 dsh-runtime 段已移除 ssh 分支）；
   - `restartLocal()` 在真实 1s SIGTERM→SIGKILL grace 窗口与健康计时器交错的覆盖；
-  - settings-bridge 的 gateway/ssh React 组件级交互（切换取消、失败链、hostId
-    截取）仍主要由纯函数/API 客户端测试代证；
+  - settings-bridge 的 gateway React 组件级交互（切换取消、失败链）仍主要由
+    纯函数/API 客户端测试代证；
   - 该机 ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`；当前失败投影诚实且
     可重试，系统化并发缓解未排期。
-  契约见 `docs/design/18-dsh-runtime-version.md` §3.6/§9。
+  契约见 `docs/design/18-dsh-runtime-version.md` §3.6/§9。2026-09 修订：settings
+  「dsh 运行时」段仅 local/gateway 挂载——dsh 本体（ssh/http）直连不挂载（原
+  ssh 只读版本 + systemd 重启分支已移除，远端重启经 connections 卡服务操作触达）。
 - **apply-now 立即应用（18 增补，2026-03）**：pending 相位新增用户触发的
   「立即应用」（复用既有激活事务与 restartLocal 停机窗口，零新终态、零新崩溃
   窗口）。契约见 `docs/design/18-addendum-apply-now.md`。**剩余验收（§9.2
