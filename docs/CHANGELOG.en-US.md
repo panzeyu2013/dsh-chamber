@@ -12,6 +12,13 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Changed
+
+- **`scripts/` layout reorganization** — all developer/maintainer/test scripts now
+  live under `scripts/dev/` (including `update-vendor.mjs`, new path
+  `node scripts/dev/update-vendor.mjs <tag>`); `scripts/` keeps only the
+  user-facing `install-gateway.sh` and the directory convention README.
+
 ## [0.2.0-beta.4] - 2026-08-30
 
 ### Added

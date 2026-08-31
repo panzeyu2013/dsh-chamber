@@ -26,10 +26,10 @@
 ## 2. 双线 pin 一致性（源码线 + 运行时线）
 
 > 2026-09 submodule 化后：**源码线**（构建期 vendor 树）由 git submodule
-> 固定 commit，升级唯一入口是 `scripts/update-vendor.mjs`；**运行时线**
+> 固定 commit，升级唯一入口是 `scripts/dev/update-vendor.mjs`；**运行时线**
 > （打包进桌面的 `@deepseek-ai/dsh` npm 包）维持原有四常量。
 
-- [ ] **源码线（submodule）**：`node scripts/update-vendor.mjs <tag>` 原子升级
+- [ ] **源码线（submodule）**：`node scripts/dev/update-vendor.mjs <tag>` 原子升级
       （fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 →
       重生成锁文件 → frozen 验证）；输出确认 commit 与 tag 远程解析一致。
       禁止手工改 gitlink / `harness.commit`。
@@ -60,7 +60,7 @@
 
 ## 4. 锁文件（AGENTS.md 关键注意）
 
-- [ ] 源码线升级时由 `scripts/update-vendor.mjs` 原子重生成（非 frozen install →
+- [ ] 源码线升级时由 `scripts/dev/update-vendor.mjs` 原子重生成（非 frozen install →
       restore-lockfile-vendor-records.mjs 补回 → frozen 验证），**不要在锁文件
       重生成前手工跑 ensure 的默认模式**（断言会因锁文件滞后而失败，属预期）。
 - [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/dev/restore-lockfile-vendor-records.mjs`

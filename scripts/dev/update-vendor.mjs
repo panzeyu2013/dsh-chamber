@@ -2,7 +2,7 @@
 /**
  * update-vendor.mjs — 原子升级 dsh 源码 pin（submodule 化后的唯一升级入口）。
  *
- * 用法：node scripts/update-vendor.mjs <tag>      # tag 如 dsh-v0.1.1-rc.2
+ * 用法：node scripts/dev/update-vendor.mjs <tag>      # tag 如 dsh-v0.1.1-rc.2
  *
  * 流程（vendor/.vendor-update.lock 目录锁防并发；任一步失败即中止并打印
  * 恢复指引，不产生静默半提交状态）：
@@ -33,7 +33,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
-const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(REPO_ROOT, 'vendor', 'harness-checkout')
 const PIN_FILE = join(REPO_ROOT, 'harness.commit')
 const LOCKFILE = join(REPO_ROOT, 'pnpm-lock.yaml')

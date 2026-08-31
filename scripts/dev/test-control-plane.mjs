@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)))
+const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const TEST_DIR = join(ROOT, 'packages', 'control-plane', 'test')
 
 /** AGENTS.md Validation — the authoritative control-plane unit-test set. */

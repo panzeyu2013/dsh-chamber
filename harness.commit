@@ -4,7 +4,7 @@
 # scripts/dev/ensure-harness-vendor.mjs, which HARD-FAILS when the submodule
 # HEAD differs from this pin (single source of truth: the submodule; this file
 # is the independent declaration that --check enforces equality against).
-# Upgrade ONLY via `node scripts/update-vendor.mjs <tag>` — never by hand.
+# Upgrade ONLY via `node scripts/dev/update-vendor.mjs <tag>` — never by hand.
 # Keep in sync with pnpm-lock.yaml: bumping without regenerating the lockfile
 # makes `pnpm install --frozen-lockfile` fail (intended reproducibility guard).
 0a53fb55bea101816fa226bb964ae2bed71c343b

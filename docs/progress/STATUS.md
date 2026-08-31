@@ -97,7 +97,7 @@
   集合（`--check`）、幂等差量建链（集合未变零操作）、`verifyDepsBeforeRun:
   false` 掐断隐式 install、CI 五处 checkout `submodules: true` + frozen 后
   `git diff --exit-code -- pnpm-lock.yaml` 漂移断言、升级唯一入口
-  `scripts/update-vendor.mjs <tag>`（原子重生成锁文件）。本地已验证：frozen
+  `scripts/dev/update-vendor.mjs <tag>`（原子重生成锁文件）。本地已验证：frozen
   install / 幂等 / --check / 漂移演练（详见迁移提交）。**剩余验收**：Windows
   runner 上 submodule 物化 + junction 建链（`build-windows` 腿）、CI 真跑
   （push 后 ci.yml 全绿）、release.yml 改动后的 `workflow_dispatch` dry_run

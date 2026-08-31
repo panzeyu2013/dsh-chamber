@@ -1,5 +1,5 @@
 /**
- * Chamber-owned static gate for `packages/dsh-api-gateway`.
+ * Chamber-owned static gate for `packages/dsh-client-connection`.
  *
  * The pinned dsh workspace is source-only, so resolving this copied package's
  * real imports necessarily pulls vendor source into each TypeScript program.
@@ -15,14 +15,14 @@ import { spawnSync } from 'node:child_process'
 import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(fileURLToPath(new URL('../', import.meta.url)))
+const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const TSC = join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
-const OWNED_ROOT = join(ROOT, 'packages', 'dsh-api-gateway')
+const OWNED_ROOT = join(ROOT, 'packages', 'dsh-client-connection')
 const VENDOR_ROOTS = [
   join(ROOT, 'vendor', 'harness-checkout'),
   join(ROOT, 'vendor', 'harness-packages'),
 ]
-const PROJECTS = ['client']
+const PROJECTS = ['client', 'host']
 const DIAGNOSTIC = /^(.*)\(\d+,\d+\): error TS\d+:/
 const GLOBAL_DIAGNOSTIC = /^error TS\d+:/
 
@@ -43,7 +43,7 @@ for (const role of PROJECTS) {
     encoding: 'utf8',
   })
   if (result.error !== undefined || result.signal !== null) {
-    console.error(result.error ?? `typecheck:api-gateway ${role} terminated by ${String(result.signal)}`)
+    console.error(result.error ?? `typecheck:connection ${role} terminated by ${String(result.signal)}`)
     failed = true
     continue
   }
@@ -84,7 +84,7 @@ for (const role of PROJECTS) {
       console.error(lines.filter(Boolean).join('\n'))
     }
     console.error(
-      `typecheck:api-gateway ${role} FAILED — ${String(owned.length)} owned, `
+      `typecheck:connection ${role} FAILED — ${String(owned.length)} owned, `
       + `${String(unexpected.length)} unexpected diagnostic(s), `
       + `${String(infrastructure.length)} compiler output line(s)`,
     )
@@ -93,7 +93,7 @@ for (const role of PROJECTS) {
   }
 
   console.log(
-    `typecheck:api-gateway ${role} OK (owned files clean; `
+    `typecheck:connection ${role} OK (owned files clean; `
     + `${String(vendor.length)} vendor-source diagnostic(s) filtered)`,
   )
 }

@@ -4,7 +4,7 @@
  * --bind 0.0.0.0 plaintext direct / SSH-tunnel loopback / --no-auth combos +
  * auth negatives). Re-run after any gateway/transport change:
  *
- *   node scripts/e2e-gateway-harness.ts [scenario...]
+ *   node scripts/dev/e2e-gateway-harness.ts [scenario...]
  *
  * Scenarios (subset selected via argv or env):
  *   token      gateway+http+token            → ready

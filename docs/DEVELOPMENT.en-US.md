@@ -96,7 +96,7 @@ node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 
-**Upgrading the harness pin goes only through** `node scripts/update-vendor.mjs <tag>` (atomic: fetch+verify tag → switch submodule → update `harness.commit` → rebuild links → regenerate lockfile → frozen verify); never bump the gitlink / `harness.commit` by hand. `pnpm-workspace.yaml` sets `verifyDepsBeforeRun: false`: `pnpm run` no longer auto-installs (guarding the lockfile from non-frozen rewrites) — run `pnpm install` explicitly after dependency changes; CI additionally asserts `git diff --exit-code -- pnpm-lock.yaml` after every frozen install.
+**Upgrading the harness pin goes only through** `node scripts/dev/update-vendor.mjs <tag>` (atomic: fetch+verify tag → switch submodule → update `harness.commit` → rebuild links → regenerate lockfile → frozen verify); never bump the gitlink / `harness.commit` by hand. `pnpm-workspace.yaml` sets `verifyDepsBeforeRun: false`: `pnpm run` no longer auto-installs (guarding the lockfile from non-frozen rewrites) — run `pnpm install` explicitly after dependency changes; CI additionally asserts `git diff --exit-code -- pnpm-lock.yaml` after every frozen install.
 
 The root `.npmrc` is a gitignored local convenience config, so local development may opt into a binary mirror. Formal build configuration commits no third-party `electronDownload.mirror` and always uses Electron's official source, preventing one mirror from replacing both a binary and its checksum before formal signing.
 

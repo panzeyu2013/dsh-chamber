@@ -12,6 +12,12 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **scripts/ 目录重组** —— 开发者/维护者/测试脚本全部归入 `scripts/dev/`（含
+  `update-vendor.mjs`，新路径 `node scripts/dev/update-vendor.mjs <tag>`）；
+  `scripts/` 仅保留用户面脚本 `install-gateway.sh` 与目录约定 README。
+
 ## [0.2.0-beta.4] - 2026-08-30
 
 ### 新增

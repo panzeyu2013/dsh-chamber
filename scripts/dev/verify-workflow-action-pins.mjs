@@ -13,7 +13,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = resolve(fileURLToPath(new URL('../', import.meta.url)))
+const root = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const workflowDir = resolve(root, '.github/workflows')
 const workflows = readdirSync(workflowDir)
   .filter(name => /\.ya?ml$/.test(name))

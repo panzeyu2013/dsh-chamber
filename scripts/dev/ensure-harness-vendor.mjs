@@ -30,7 +30,7 @@
  *   --check —— 只校验不写盘：submodule pin、链接集合与目标集合一致、链接
  *     目标 realpath 指向 submodule。供 CI verify / 本地诊断。
  *
- * pin 升级：运行 `node scripts/update-vendor.mjs <tag>`（原子流程：切
+ * pin 升级：运行 `node scripts/dev/update-vendor.mjs <tag>`（原子流程：切
  * submodule → 更新 harness.commit → 差量建链 → 锁文件重生成 → frozen 验证）。
  */
 
@@ -98,13 +98,13 @@ function verifyPin() {
   }
   if (head !== pin) {
     throw new Error(`submodule HEAD=${head.slice(0, 12)} != harness.commit pin=${pin.slice(0, 12)} — 禁止从漂移检出建链;` +
-      ` pin 升级请走 node scripts/update-vendor.mjs <tag>`)
+      ` pin 升级请走 node scripts/dev/update-vendor.mjs <tag>`)
   }
   // gitlink（index 里的 160000 条目）与声明 pin 一致：把"手改 harness.commit
   // 而 gitlink 未动"的洞从 CI（checkout 物化后硬失败）提前到本地。
   const gitlink = gitLinkCommit()
   if (gitlink !== null && gitlink !== pin) {
-    throw new Error(`submodule gitlink=${gitlink.slice(0, 12)} != harness.commit pin=${pin.slice(0, 12)} — 请用 node scripts/update-vendor.mjs <tag> 升级（gitlink 与 pin 同批提交）`)
+    throw new Error(`submodule gitlink=${gitlink.slice(0, 12)} != harness.commit pin=${pin.slice(0, 12)} — 请用 node scripts/dev/update-vendor.mjs <tag> 升级（gitlink 与 pin 同批提交）`)
   }
   return pin
 }
@@ -224,7 +224,7 @@ function assertLockfileMatches(packages) {
   const stale = [...recorded].filter((s) => !linked.has(s))
   if (missing.length > 0 || stale.length > 0) {
     const hint = '运行 node scripts/dev/restore-lockfile-vendor-records.mjs 补回 importer 记录，' +
-      '或走 node scripts/update-vendor.mjs <tag> 原子重生成锁文件'
+      '或走 node scripts/dev/update-vendor.mjs <tag> 原子重生成锁文件'
     throw new Error(`链接集合与 pnpm-lock.yaml importer 集合不一致（${hint}）` +
       `${missing.length > 0 ? `\n  链接有、锁文件缺(${missing.length}): ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ' …' : ''}` : ''}` +
       `${stale.length > 0 ? `\n  锁文件有、链接缺(${stale.length}): ${stale.slice(0, 5).join(', ')}${stale.length > 5 ? ' …' : ''}` : ''}`)

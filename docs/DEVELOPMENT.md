@@ -89,7 +89,7 @@ node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 
-**升级上游 pin 只能走** `node scripts/update-vendor.mjs <tag>`（原子流程：fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 → 重生成锁文件 → frozen 验证），不要手工改 gitlink / `harness.commit`。`pnpm-workspace.yaml` 已设 `verifyDepsBeforeRun: false`：pnpm run 不再隐式 install（防非 frozen install 改写锁文件），依赖变更请显式 `pnpm install`；CI 在 frozen install 后另有 `git diff --exit-code -- pnpm-lock.yaml` 漂移断言。
+**升级上游 pin 只能走** `node scripts/dev/update-vendor.mjs <tag>`（原子流程：fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 → 重生成锁文件 → frozen 验证），不要手工改 gitlink / `harness.commit`。`pnpm-workspace.yaml` 已设 `verifyDepsBeforeRun: false`：pnpm run 不再隐式 install（防非 frozen install 改写锁文件），依赖变更请显式 `pnpm install`；CI 在 frozen install 后另有 `git diff --exit-code -- pnpm-lock.yaml` 漂移断言。
 
 根目录 `.npmrc` 是 gitignored 的本地便利配置，本地开发可自行把 Electron 二进制下载指向镜像；正式构建配置不提交第三方 `electronDownload.mirror`，始终使用 Electron 官方源，避免镜像同时替换二进制与校验表后被正式签名。
 
