@@ -3,7 +3,7 @@
  *
  * The single same-origin entry point for every dsh instance the frontend
  * reaches (05 §1): HTTP passthrough (any method, no whitelist), WS upgrade
- * (events.mux / events.host downlinks) and SSE passthrough. Path mapping:
+ * (the /api/remote.mux Typert Remote stream) and SSE passthrough. Path mapping:
  *
  *   /api/i/local/*       → the managed local web profile (baseUrl derived
  *                          from the local connection's dshPort)
@@ -55,6 +55,7 @@
  * pre-split instance-proxy.
  */
 
+import { authCookieFor } from './browser-auth-cookie.ts'
 import {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
   MAX_BUFFERED_REQUEST_BYTES,
@@ -200,7 +201,12 @@ export function parseInstancePath(raw: string): InstancePath | null {
   if (parts.length < 3 || parts[0] !== 'api' || parts[1] !== 'i') return null
   const id = parts[2]
   if (parseInstanceId(id) === null) return null
-  const rest = parts.length === 3 ? '/' : `/${parts.slice(3).join('/')}`
+  // Preserve the trailing slash (review-round7b P1-1): 0.1.2 extra-bundle
+  // URLs are `/plugins/??…` — the upstream serveBundle keys by the EXACT
+  // `pathname+search`, and `new URL()` keeps `/plugins/` distinct from
+  // `/plugins`. Without the slash every extra preload 404s and boot fails.
+  const trailingSlash = pathname.endsWith('/') && parts.length > 3 ? '/' : ''
+  const rest = parts.length === 3 ? '/' : `/${parts.slice(3).join('/')}${trailingSlash}`
   return { id, rest, search }
 }
 
@@ -411,12 +417,22 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
+        // 0.1.2 browser-auth cookie (review-round3c P0): the control plane's
+        // spawn-time token exchange mints a session cookie for the local
+        // instance; inject it into proxied requests. Registered transport
+        // extraHeaders (gateway/ssh sessions) never coexist with a local
+        // spawn cookie — when both exist the local browser-auth cookie wins
+        // (the local instance is the only registry entry).
+        const authCookie = authCookieFor(target.baseUrl)
+        const extraHeaders = authCookie === undefined
+          ? target.headers
+          : { ...(target.headers ?? {}), cookie: authCookie }
         await forwardHttp(req, res, forwardTarget, releaseRequest, logger, counters, {
           ...forwardDeps,
           id: parsed.id,
           responseBasePath: `/api/i/${parsed.id}`,
           ...(connectionId === null ? {} : { streamOwner: connectionId }),
-        }, target.headers, target.tls, target.authority)
+        }, extraHeaders, target.tls, target.authority)
       } catch (error) {
         releaseRequest()
         counters.failures += 1
@@ -428,9 +444,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
 
     /**
      * WS upgrade handler (registered on the server 'upgrade' event): the
-     * same instance resolution as HTTP; only the two downlink stream paths
-     * are forwarded (events.mux / events.host), everything else is an
-     * explicit 404.
+     * same instance resolution as HTTP; only the /api/remote.mux stream path
+     * is forwarded (the old events.mux / events.host downlinks were deleted
+     * upstream in dsh 0.1.2-alpha.1), everything else is an explicit 404.
      */
     async handleUpgrade(req: ProxyRequest, socket: ProxySocket, head: Buffer): Promise<void> {
       let parsed: InstancePath | null = null
@@ -470,11 +486,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
+        // 0.1.2 browser-auth cookie on the mux upgrade (review-round3c P0) —
+        // the remote.mux stream gate authenticates the same way as unary.
+        const authCookie = authCookieFor(target.baseUrl)
+        const extraHeaders = authCookie === undefined
+          ? target.headers
+          : { ...(target.headers ?? {}), cookie: authCookie }
         await forwardUpgrade(req, socket, head, forwardTarget, releaseHandshake, logger, counters, {
           ...forwardDeps,
           id: parsed.id,
           ...(connectionId === null ? {} : { streamOwner: connectionId }),
-        }, target.headers, target.tls, target.authority)
+        }, extraHeaders, target.tls, target.authority)
       } catch (error) {
         releaseHandshake()
         counters.failures += 1

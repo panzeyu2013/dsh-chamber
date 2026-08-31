@@ -22,6 +22,7 @@ import {
   getProcessBufferedRequestBytes,
 } from '../src/instance-proxy.ts'
 import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
+import { clearAuthCookie, registerAuthCookie } from '../src/browser-auth-cookie.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { InstanceProxy, ProxyRequest, ProxyResponse, ProxySocket } from '../src/instance-proxy.ts'
 
@@ -190,17 +191,17 @@ function makeProxy(options: { state?: string; port?: number | null } = {}) {
 // ---------------------------------------------------------------------------
 
 test('parseInstancePath maps local, dsh-<id>, legacy ssh-<id> and gateway-<id> and strips the prefix', () => {
-  assert.deepEqual(parseInstancePath('/api/i/local/api/session.list'), { id: 'local', rest: '/api/session.list', search: '' })
-  assert.deepEqual(parseInstancePath('/api/i/dsh-srv-7/api/session.list'), { id: 'dsh-srv-7', rest: '/api/session.list', search: '' })
-  assert.deepEqual(parseInstancePath('/api/i/ssh-srv-7/api/events.host?x=1'), { id: 'ssh-srv-7', rest: '/api/events.host', search: '?x=1' })
-  assert.deepEqual(parseInstancePath('/api/i/gateway-gw-1/api/session.list'), { id: 'gateway-gw-1', rest: '/api/session.list', search: '' })
+  assert.deepEqual(parseInstancePath('/api/i/local/api/session/list'), { id: 'local', rest: '/api/session/list', search: '' })
+  assert.deepEqual(parseInstancePath('/api/i/dsh-srv-7/api/session/list'), { id: 'dsh-srv-7', rest: '/api/session/list', search: '' })
+  assert.deepEqual(parseInstancePath('/api/i/ssh-srv-7/api/remote.mux?x=1'), { id: 'ssh-srv-7', rest: '/api/remote.mux', search: '?x=1' })
+  assert.deepEqual(parseInstancePath('/api/i/gateway-gw-1/api/session/list'), { id: 'gateway-gw-1', rest: '/api/session/list', search: '' })
   assert.deepEqual(parseInstancePath('/api/i/local'), { id: 'local', rest: '/', search: '' })
   assert.equal(parseInstancePath('/api/i/ssh-/x'), null)
   assert.equal(parseInstancePath(`/api/i/ssh-${'x'.repeat(65)}/x`), null)
   assert.equal(parseInstancePath('/api/i/dsh-/x'), null)
   assert.equal(parseInstancePath(`/api/i/dsh-${'x'.repeat(65)}/x`), null)
-  assert.equal(parseInstancePath('/api/i/other/api/session.list'), null)
-  assert.equal(parseInstancePath('/api/projects/p1/runtime/api/session.list'), null)
+  assert.equal(parseInstancePath('/api/i/other/api/session/list'), null)
+  assert.equal(parseInstancePath('/api/projects/p1/runtime/api/session/list'), null)
   assert.equal(parseInstancePath('/api/i'), null)
 })
 
@@ -218,22 +219,55 @@ test('parseInstanceId: dsh-<id> and gateway-<id> map to their kinds; ssh-<id> is
 // Path mapping: local + ssh-<id>
 // ---------------------------------------------------------------------------
 
+test('0.1.2 combo URLs keep their trailing slash through parseInstancePath', async () => {
+  // review-round7b P1-1: extra-bundle URLs are `/plugins/??<id>/client.js&rev=…`
+  // — the upstream serveBundle keys by the EXACT pathname+search, so a lost
+  // trailing slash 404s every extra preload (boot failure on the new wire).
+  const parsed = parseInstancePath('/api/i/local/plugins/??abc/client.js&rev=1')
+  assert.ok(parsed !== null)
+  assert.equal(parsed.rest, '/plugins/')
+  assert.equal(parsed.search, '??abc/client.js&rev=1')
+  // The no-trailing-slash shape is unchanged.
+  const plain = parseInstancePath('/api/i/local/api/session/list')
+  assert.equal(plain?.rest, '/api/session/list')
+})
+
+test('local mapping forwards the 0.1.2 browser-auth cookie when bootstrapped', async () => {
+  // review-round3c P0: the renderer's unary + mux calls reach the instance
+  // through the proxy, which injects the spawn-minted cookie.
+  const host = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
+  const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
+  try {
+    registerAuthCookie(host, 'browser-auth=session-value')
+    const res = fakeResponse()
+    await proxy.handleHttp(
+      fakeRequest('/api/i/local/api/session/list', 'POST', { 'content-type': 'application/json' }, '{"rpcId":"r1","method":"session/list"}'),
+      res,
+    )
+    assert.equal(res.status, 200)
+    const call = upstream.calls[0]
+    assert.equal((call.options.headers as Record<string, string>).cookie, 'browser-auth=session-value')
+  } finally {
+    clearAuthCookie(host)
+  }
+})
+
 test('local mapping: prefix stripped, forwarded to the derived baseUrl with the instance Host', async () => {
   const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
   const res = fakeResponse()
   await proxy.handleHttp(
-    fakeRequest('/api/i/local/api/session.list?foo=bar', 'POST', { 'content-type': 'application/json' }, '{"rpcId":"r1","method":"session.list"}'),
+    fakeRequest('/api/i/local/api/session/list?foo=bar', 'POST', { 'content-type': 'application/json' }, '{"rpcId":"r1","method":"session/list"}'),
     res,
   )
   assert.equal(res.status, 200)
   assert.equal(upstream.calls.length, 1)
   const call = upstream.calls[0]
   assert.equal(call.url.origin, `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
-  assert.equal(call.url.pathname, '/api/session.list')
+  assert.equal(call.url.pathname, '/api/session/list')
   assert.equal(call.url.search, '?foo=bar')
   assert.equal(call.options.method, 'POST')
   assert.equal((call.options.headers as Record<string, string>).host, `127.0.0.1:${DEFAULT_DSH_START_PORT}`)
-  assert.equal(call.body.join(''), '{"rpcId":"r1","method":"session.list"}')
+  assert.equal(call.body.join(''), '{"rpcId":"r1","method":"session/list"}')
 })
 
 test('request convergence strips framing and proxy headers, then emits the accepted body length', async () => {
@@ -277,15 +311,15 @@ test('ssh-<id> mapping: registered transport baseUrl wins; unregistered answers 
   const { proxy, upstream } = makeProxy()
   proxy.registerTransport('ssh:srv1', 'http://127.0.0.1:22001')
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/ssh-srv1/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-srv1/api/session/list', 'GET'), res)
   assert.equal(res.status, 200)
   assert.equal(upstream.calls.length, 1)
   assert.equal(upstream.calls[0].url.origin, 'http://127.0.0.1:22001')
-  assert.equal(upstream.calls[0].url.pathname, '/api/session.list')
+  assert.equal(upstream.calls[0].url.pathname, '/api/session/list')
 
   // Unregistered ssh id → explicit 503 instance_unavailable (proxy honesty).
   const missing = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/ssh-ghost/api/session.list', 'GET'), missing)
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-ghost/api/session/list', 'GET'), missing)
   assert.equal(missing.status, 503)
   assert.equal(JSON.parse(missing.body).code, 'instance_unavailable')
   assert.equal(upstream.calls.length, 1)
@@ -293,7 +327,7 @@ test('ssh-<id> mapping: registered transport baseUrl wins; unregistered answers 
   // Unregister → the tunnel is gone, the instance becomes unavailable.
   proxy.unregisterTransport('ssh:srv1')
   const gone = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/ssh-srv1/api/session.list', 'GET'), gone)
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-srv1/api/session/list', 'GET'), gone)
   assert.equal(gone.status, 503)
   assert.equal(JSON.parse(gone.body).code, 'instance_unavailable')
 })
@@ -303,23 +337,23 @@ test('dsh-<id> mapping: the dsh kind resolves via dsh:<id>, legacy ssh-<id> via 
   // dsh kind under its canonical source-id spelling.
   proxy.registerTransport('dsh:box1', 'http://127.0.0.1:22011')
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/dsh-box1/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-box1/api/session/list', 'GET'), res)
   assert.equal(res.status, 200)
   assert.equal(upstream.calls.length, 1)
   assert.equal(upstream.calls[0].url.origin, 'http://127.0.0.1:22011')
-  assert.equal(upstream.calls[0].url.pathname, '/api/session.list')
+  assert.equal(upstream.calls[0].url.pathname, '/api/session/list')
   // The same dsh target registered under the legacy ssh:<id> spelling is
   // still reachable through the legacy ssh-<id> source id (design 17 §2.2).
   proxy.registerTransport('ssh:box1', 'http://127.0.0.1:22012')
   const legacy = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/ssh-box1/api/session.list', 'GET'), legacy)
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-box1/api/session/list', 'GET'), legacy)
   assert.equal(legacy.status, 200)
   assert.equal(upstream.calls[1].url.origin, 'http://127.0.0.1:22012')
   // The two spellings are distinct registrations; unregistering the dsh one
   // leaves the legacy spelling live.
   proxy.unregisterTransport('dsh:box1')
   const missing = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/dsh-box1/api/session.list', 'GET'), missing)
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-box1/api/session/list', 'GET'), missing)
   assert.equal(missing.status, 503)
 })
 
@@ -366,12 +400,12 @@ test('gateway http direct origin: registered and forwarded with its injected hea
     cookie: 'dsh_gateway_session=abc.def',
   })
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-gw-http/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/gateway-gw-http/api/session/list', 'GET'), res)
   assert.equal(res.status, 200)
   assert.equal(upstream.calls.length, 1)
   const call = upstream.calls[0]
   assert.equal(call.url.origin, 'http://gw.internal:8080')
-  assert.equal(call.url.pathname, '/api/session.list')
+  assert.equal(call.url.pathname, '/api/session/list')
   const headers = call.options.headers as Record<string, string>
   assert.equal(headers.authorization, GATEWAY_AUTHORIZATION)
   assert.equal(headers.cookie, 'dsh_gateway_session=abc.def')
@@ -384,7 +418,7 @@ test('gateway 0-header registration forwards without any injected credential', a
   // whatever the server enforces (design 17 §2.3 — no upfront rejection).
   proxy.registerTransport('gateway:anon', 'https://gw.example.com')
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-anon/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/gateway-anon/api/session/list', 'GET'), res)
   assert.equal(res.status, 200)
   const headers = upstream.calls[0].options.headers as Record<string, string>
   assert.equal(headers.authorization, undefined)
@@ -392,7 +426,7 @@ test('gateway 0-header registration forwards without any injected credential', a
 })
 
 test('gateway WS upgrade: the sanctioned Cookie rides the handshake too', async () => {
-  const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/events.')
+  const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')
     ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
     : undefined)
   const proxy = createInstanceProxy({
@@ -403,14 +437,38 @@ test('gateway WS upgrade: the sanctioned Cookie rides the handshake too', async 
   })
   proxy.registerTransport('gateway:gws', 'https://gw.example.com', { cookie: 'dsh_gateway_session=abc.def' })
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/gateway-gws/api/events.host', 'GET'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/gateway-gws/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.equal(upstream.calls.length, 1)
   const headers = upstream.calls[0].options.headers as Record<string, string>
   assert.equal(headers.cookie, 'dsh_gateway_session=abc.def')
 })
 
+test('local WS upgrade carries the 0.1.2 browser-auth cookie when bootstrapped', async () => {
+  // review-round4 P1/P2: the mux upgrade to the LOCAL instance must ride the
+  // spawn-minted cookie — the 0.1.2 stream gate 401s without it.
+  const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')
+    ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
+    : undefined)
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: upstream.fn,
+  })
+  try {
+    registerAuthCookie('http://127.0.0.1:17510', 'browser-auth=sess')
+    const socket = fakeSocket()
+    await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
+    assert.equal(upstream.calls.length, 1)
+    const headers = upstream.calls[0].options.headers as Record<string, string>
+    assert.equal(headers.cookie, 'browser-auth=sess')
+  } finally {
+    clearAuthCookie('http://127.0.0.1:17510')
+  }
+})
+
 test('transport replacement and unregister revoke already-open HTTP/SSE and WS channels', async () => {
-  const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/events.')
+  const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')
     ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
     : { response: { status: 200, headers: { 'content-type': 'text/event-stream' }, body: null } })
   const proxy = createInstanceProxy({
@@ -422,9 +480,9 @@ test('transport replacement and unregister revoke already-open HTTP/SSE and WS c
   proxy.registerTransport('ssh:rotating', 'http://127.0.0.1:22001')
 
   const oldSse = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session.list'), oldSse)
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session/list'), oldSse)
   const oldWs = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/ssh-rotating/api/events.mux'), oldWs, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/ssh-rotating/api/remote.mux'), oldWs, Buffer.alloc(0))
   assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
   assert.equal(proxy.getDiagnostics().activeStreams, 1)
 
@@ -435,21 +493,21 @@ test('transport replacement and unregister revoke already-open HTTP/SSE and WS c
   assert.equal(proxy.getDiagnostics().activeStreams, 0)
 
   const newSse = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session.list'), newSse)
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session/list'), newSse)
   assert.equal(upstream.calls.at(-1)?.url.origin, 'http://127.0.0.1:22002')
   proxy.unregisterTransport('ssh:rotating')
   assert.equal(newSse.destroyed, true, 'unregister closes an existing long HTTP/SSE response')
   assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
 
   const gone = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session.list'), gone)
+  await proxy.handleHttp(fakeRequest('/api/i/ssh-rotating/api/session/list'), gone)
   assert.equal(gone.status, 503)
 })
 
 test('local instance not ready → explicit 503, never a silent empty success', async () => {
   const { proxy, upstream } = makeProxy({ state: 'starting', port: null })
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, 503)
   assert.equal(JSON.parse(res.body).code, 'instance_unavailable')
   assert.equal(upstream.calls.length, 0)
@@ -458,7 +516,7 @@ test('local instance not ready → explicit 503, never a silent empty success', 
 test('unknown id answers 404 instance_not_found', async () => {
   const { proxy, upstream } = makeProxy()
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/foo/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/foo/api/session/list', 'GET'), res)
   assert.equal(res.status, 404)
   assert.equal(JSON.parse(res.body).code, 'instance_not_found')
   assert.equal(upstream.calls.length, 0)
@@ -496,7 +554,7 @@ test('response header convergence preserves representation metadata and rewrites
   })
   const res = fakeResponse()
   res._corsHeaders = { 'access-control-allow-origin': 'https://client.example', vary: 'Origin' }
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, 200)
   assert.deepEqual(Object.keys(res.headers).sort(), [
     'access-control-allow-origin',
@@ -537,7 +595,7 @@ test('convergeLocation: undefined passthrough, root mount strips origin, prefixe
 test('http: accept-encoding is stripped upstream — the proxy never negotiates compression (M3b)', async () => {
   const { proxy, upstream } = makeProxy()
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET', { 'accept-encoding': 'gzip, br' }), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET', { 'accept-encoding': 'gzip, br' }), res)
   const headers = upstream.calls[0].options.headers as Record<string, string>
   assert.equal(headers['accept-encoding'], undefined, 'the upstream must receive identity')
   assert.equal(res.status, 200)
@@ -554,7 +612,7 @@ test('http: a content-encoding upstream header rides through so the browser deco
     httpRequest: upstream.fn,
   })
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, 200)
   assert.equal(res.headers['content-encoding'], 'gzip', 'the compression label must never be dropped')
 })
@@ -563,7 +621,7 @@ test('request body over the 300MiB cap answers 413 body_too_large', async () => 
   const { proxy, upstream } = makeProxy()
   const res = fakeResponse()
   await proxy.handleHttp(
-    fakeRequest('/api/i/local/api/session.list', 'POST', { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) }, 'x'),
+    fakeRequest('/api/i/local/api/session/list', 'POST', { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) }, 'x'),
     res,
   )
   assert.equal(res.status, 413)
@@ -583,13 +641,13 @@ test('local activation quarantine rejects HTTP and WebSocket before either reach
     httpRequest: upstream.fn,
   })
   const response = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'POST', {}, '{}'), response)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'POST', {}, '{}'), response)
   assert.equal(response.status, 503)
   assert.equal(JSON.parse(response.body).code, 'instance_unavailable')
 
   const socket = fakeSocket()
   await proxy.handleUpgrade(
-    fakeRequest('/api/i/local/api/events.mux', 'GET', { upgrade: 'websocket', 'sec-websocket-key': 'k' }),
+    fakeRequest('/api/i/local/api/remote.mux', 'GET', { upgrade: 'websocket', 'sec-websocket-key': 'k' }),
     socket,
     Buffer.alloc(0),
   )
@@ -606,7 +664,7 @@ test('upstream connect failure answers 502 upstream_failed (masked)', async () =
     httpRequest: upstream.fn,
   })
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, 502)
   assert.equal(JSON.parse(res.body).code, 'upstream_failed')
   // Masked: the upstream host:port never rides the wire.
@@ -617,11 +675,11 @@ test('upstream connect failure answers 502 upstream_failed (masked)', async () =
 // WS upgrade: stream-path recognition + forward shape
 // ---------------------------------------------------------------------------
 
-test('upgrade: only the two downlink stream paths forward; others answer 404', async () => {
+test('upgrade: only the remote.mux stream path forwards; other WS paths answer 404', async () => {
   const { proxy, upstream } = makeProxy()
   const muxSocket = fakeSocket()
   await proxy.handleUpgrade(
-    fakeRequest('/api/i/local/api/events.mux', 'GET', { upgrade: 'websocket', 'sec-websocket-key': 'k' }),
+    fakeRequest('/api/i/local/api/remote.mux', 'GET', { upgrade: 'websocket', 'sec-websocket-key': 'k' }),
     muxSocket,
     Buffer.alloc(0),
   )
@@ -631,18 +689,21 @@ test('upgrade: only the two downlink stream paths forward; others answer 404', a
   // upgrade handshake itself and rejects ws: URLs (real-runtime regression:
   // ERR_INVALID_PROTOCOL on every forwarded WS upgrade).
   assert.equal(call.url.protocol, 'http:')
-  assert.equal(call.url.pathname, '/api/events.mux')
+  assert.equal(call.url.pathname, '/api/remote.mux')
   assert.equal((call.options.headers as Record<string, string>).upgrade, 'websocket')
   assert.equal((call.options.headers as Record<string, string>).host, `127.0.0.1:${DEFAULT_DSH_START_PORT}`)
 
   proxy.registerTransport('ssh:rem', 'http://127.0.0.1:22003')
   const hostSocket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/ssh-rem/api/events.host', 'GET'), hostSocket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/ssh-rem/api/remote.mux', 'GET'), hostSocket, Buffer.alloc(0))
   assert.equal(upstream.calls.length, 2)
-  assert.equal(upstream.calls[1].url.pathname, '/api/events.host')
+  assert.equal(upstream.calls[1].url.pathname, '/api/remote.mux')
 
+  // The deleted upstream downlinks (events.mux / events.host, dsh
+  // 0.1.2-alpha.1) are now "other" paths: the proxy gate answers 404 instead
+  // of forwarding a doomed upgrade.
   const other = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.other', 'GET'), other, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), other, Buffer.alloc(0))
   assert.match(other.written, /404/)
   assert.ok(other.closed)
   assert.equal(upstream.calls.length, 2)
@@ -651,7 +712,7 @@ test('upgrade: only the two downlink stream paths forward; others answer 404', a
 test('upgrade: a 503 instance resolution rejects the socket explicitly', async () => {
   const { proxy, upstream } = makeProxy({ state: 'stopped', port: null })
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /503 Service Unavailable/)
   assert.match(socket.written, /instance_unavailable/)
   assert.ok(socket.closed)
@@ -673,7 +734,7 @@ test('upgrade: a non-101 upstream reply rejects explicitly (no unhandled stream)
     httpRequest: upstream.fn,
   })
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /502 Bad Gateway/)
   assert.match(socket.written, /upstream_failed/)
   assert.ok(socket.closed)
@@ -691,7 +752,7 @@ test('upgrade: an upstream connect failure rejects 502 upstream_failed (matches 
     httpRequest: upstream.fn,
   })
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /502 Bad Gateway/)
   assert.match(socket.written, /upstream_failed/)
   assert.ok(socket.closed)
@@ -733,7 +794,7 @@ test('upgrade splice: an error on the upstream end tears both down exactly once'
     httpRequest: factory.fn,
   })
   const down = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), down, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
   assert.ok(up !== null)
   assert.equal(proxy.getDiagnostics().activeStreams, 1)
@@ -759,7 +820,7 @@ test('upgrade splice: an error on the downstream end tears both down exactly onc
     httpRequest: factory.fn,
   })
   const down = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), down, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
   assert.ok(up !== null)
   assert.equal(proxy.getDiagnostics().activeStreams, 1)
@@ -798,7 +859,7 @@ test('http stream: a client response error aborts the upstream, never uncaught',
     httpRequest: fn,
   })
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(captured.signal?.aborted, false)
   // The client connection died mid-stream (app exit): res.write becomes
   // writeAfterFIN — the 'error' must be consumed and abort the upstream.
@@ -810,7 +871,7 @@ test('diagnostics: plain counters, no sensitive data', async () => {
   const { proxy } = makeProxy()
   proxy.registerTransport('ssh:srv2', 'http://127.0.0.1:22002')
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   const diag = proxy.getDiagnostics()
   assert.equal(diag.requests, 1)
   assert.equal(diag.failures, 0)
@@ -880,7 +941,7 @@ test('upgrade response forwards only WebSocket handshake headers', async () => {
     httpRequest: upstream.fn,
   })
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /sec-websocket-accept: accepted/i)
   assert.doesNotMatch(socket.written, /set-cookie|x-upstream-secret/i)
 })
@@ -901,7 +962,7 @@ test('http: an upstream that never answers headers → explicit 504 upstream_tim
     upstreamTimeoutMs: 40,
   })
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, null) // not answered synchronously — the timeout decides
   await sleep(80)
   assert.equal(res.status, 504)
@@ -915,7 +976,7 @@ test('http: an upstream that never answers headers → explicit 504 upstream_tim
 test('http: a responding upstream stays unaffected by the timeout guard', async () => {
   const { proxy } = makeProxy()
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), res)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   await sleep(80)
   assert.equal(res.status, 200) // fast upstream: timeout guard cleared, no 504
 })
@@ -937,7 +998,7 @@ test('http: IncomingMessage close after parsing does not abort a live upstream r
     httpRequest: fn,
     upstreamTimeoutMs: 200,
   })
-  const request = fakeRequest('/api/i/local/api/session.list', 'GET')
+  const request = fakeRequest('/api/i/local/api/session/list', 'GET')
   const response = fakeResponse()
   await proxy.handleHttp(request, response)
   ;(request as unknown as EventEmitter).emit('close')
@@ -977,7 +1038,7 @@ test('http: unfinished downstream response close aborts upstream and clears time
     upstreamTimeoutMs: 30,
   })
   const response = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), response)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), response)
   ;(response as unknown as EventEmitter).emit('close')
   assert.equal(captured.signal?.aborted, true)
   assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
@@ -996,10 +1057,10 @@ test('http: concurrent request budget rejects excess work before opening another
     upstreamTimeoutMs: 30,
   })
   const first = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), first)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), first)
   assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
   const second = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/local/api/session.list', 'GET'), second)
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), second)
   assert.equal(second.status, 503)
   assert.match(second.body, /resource_exhausted/)
   assert.equal(upstream.calls.length, 1)
@@ -1144,7 +1205,7 @@ test('upgrade: a WebSocket handshake that never completes → explicit 504 on th
     upstreamTimeoutMs: 40,
   })
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux'), socket, Buffer.alloc(0))
   await sleep(80)
   assert.ok(socket.closed)
   assert.ok(socket.written.includes('504'), `socket got: ${socket.written}`)
@@ -1167,7 +1228,7 @@ test('upgrade: request close does not abort the handshake; downstream socket clo
     httpRequest: fn,
     upstreamTimeoutMs: 200,
   })
-  const request = fakeRequest('/api/i/local/api/events.mux')
+  const request = fakeRequest('/api/i/local/api/remote.mux')
   const socket = fakeSocket()
   await proxy.handleUpgrade(request, socket, Buffer.alloc(0))
   ;(request as unknown as EventEmitter).emit('close')
@@ -1233,7 +1294,7 @@ test('heartbeat: pings the browser only and keeps a ponging stream alive', async
     wsPingMissesBeforeTeardown: 1,
   })
   const down = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), down, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
   assert.ok(up !== null)
   assert.equal(proxy.getDiagnostics().activeStreams, 1)
@@ -1271,7 +1332,7 @@ test('heartbeat: missed pongs tear the splice down so the browser reconnects', a
     wsPingMissesBeforeTeardown: 1,
   })
   const down = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.host', 'GET'), down, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
   assert.ok(up !== null)
   assert.equal(proxy.getDiagnostics().activeStreams, 1)
@@ -1293,7 +1354,7 @@ test('heartbeat: teardown by other means stops the heartbeat (no stray pings aft
     wsPingMissesBeforeTeardown: 1,
   })
   const down = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux', 'GET'), down, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
   assert.ok(up !== null)
   const pingsBefore = down.writtenBuffers.filter(chunk => chunk.length >= 2 && chunk[0] === 0x89).length
@@ -1443,7 +1504,7 @@ test('real Node streams: WS upgrade handshake is not aborted by req close', asyn
       const req = httpRequest({
         host: '127.0.0.1',
         port: (server!.address() as AddressInfo).port,
-        path: '/api/i/local/api/events.mux',
+        path: '/api/i/local/api/remote.mux',
         headers: {
           connection: 'upgrade',
           upgrade: 'websocket',
@@ -1622,7 +1683,7 @@ test('gateway https forward with SPKI pin: match forwards, mismatch is an explic
     proxy.registerTransport('gateway:pinned', `https://127.0.0.1:${port}`, undefined, { tls: { spkiPin: PIN_A } })
     const okRes = fakeResponse()
     const okDone = new Promise<void>(resolve => (okRes as unknown as EventEmitter).once('finish', () => resolve()))
-    await proxy.handleHttp(fakeRequest('/api/i/gateway-pinned/api/session.list', 'GET'), okRes)
+    await proxy.handleHttp(fakeRequest('/api/i/gateway-pinned/api/session/list', 'GET'), okRes)
     await okDone
     assert.equal(okRes.status, 200)
     assert.equal(handlerCalls, 1)
@@ -1645,7 +1706,7 @@ test('gateway https forward with SPKI pin: match forwards, mismatch is an explic
     let badFinishes = 0
     ;(badRes as unknown as EventEmitter).on('finish', () => { badFinishes += 1 })
     const badDone = new Promise<void>(resolve => (badRes as unknown as EventEmitter).once('finish', () => resolve()))
-    await proxy.handleHttp(fakeRequest('/api/i/gateway-pinned/api/session.list', 'POST', {
+    await proxy.handleHttp(fakeRequest('/api/i/gateway-pinned/api/session/list', 'POST', {
       'content-type': 'application/json',
       'content-length': String(Buffer.byteLength(businessBody)),
     }, businessBody), badRes)
@@ -1674,7 +1735,7 @@ test('gateway https forward with SPKI pin: match forwards, mismatch is an explic
     proxy.registerTransport('gateway:plain', `https://127.0.0.1:${port}`)
     const plainRes = fakeResponse()
     const plainDone = new Promise<void>(resolve => (plainRes as unknown as EventEmitter).once('finish', () => resolve()))
-    await proxy.handleHttp(fakeRequest('/api/i/gateway-plain/api/session.list', 'GET'), plainRes)
+    await proxy.handleHttp(fakeRequest('/api/i/gateway-plain/api/session/list', 'GET'), plainRes)
     await plainDone
     assert.equal(plainRes.status, 502)
     assert.equal(JSON.parse(plainRes.body).code, 'upstream_failed')
@@ -1729,7 +1790,7 @@ test('gateway WS upgrade with SPKI pin: match upgrades, mismatch rejects with 50
     // Pin match → the upgrade handshake rides through.
     proxy.registerTransport('gateway:pinned-ws', `https://127.0.0.1:${port}`, undefined, { tls: { spkiPin: PIN_A } })
     const okSocket = fakeSocket()
-    await proxy.handleUpgrade(fakeRequest('/api/i/gateway-pinned-ws/api/events.mux', 'GET', wsHeaders), okSocket, Buffer.alloc(0))
+    await proxy.handleUpgrade(fakeRequest('/api/i/gateway-pinned-ws/api/remote.mux', 'GET', wsHeaders), okSocket, Buffer.alloc(0))
     await waitForWrite(okSocket)
     assert.match(okSocket.written, /101/)
     assert.equal(upgradeCalls, 1)
@@ -1745,7 +1806,7 @@ test('gateway WS upgrade with SPKI pin: match upgrades, mismatch rejects with 50
       cookie: 'dsh_gateway_session=must-not-reach-the-wrong-peer',
     }, { tls: { spkiPin: PIN_B } })
     const badSocket = fakeSocket()
-    await proxy.handleUpgrade(fakeRequest('/api/i/gateway-pinned-ws/api/events.mux', 'GET', wsHeaders), badSocket, Buffer.alloc(0))
+    await proxy.handleUpgrade(fakeRequest('/api/i/gateway-pinned-ws/api/remote.mux', 'GET', wsHeaders), badSocket, Buffer.alloc(0))
     await waitForWrite(badSocket)
     await sleep(20)
     assert.match(badSocket.written, /502/)

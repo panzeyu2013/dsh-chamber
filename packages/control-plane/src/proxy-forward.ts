@@ -28,7 +28,7 @@ import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
 import { startWsHeartbeat } from './ws-heartbeat.ts'
 
-/** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
+/** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.2-alpha.1 300MiB request cap / 200MiB image admission). */
 export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ export function attachSpkiPinVerifier(req: ClientRequest, pin: string, dispatch:
   })
 }
 
-/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.1-rc.2 300MiB request cap / 200MiB image admission). */
+/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.2-alpha.1 300MiB request cap / 200MiB image admission). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
 /** Shared memory budget plus per-proxy concurrency defaults. The byte budget
@@ -192,8 +192,11 @@ export const RESPONSE_HEADER_WHITELIST = new Set([
   'x-ratelimit-reset',
 ])
 
-/** WS downlink paths forwarded to the instance (03 §3.1 / 05 §3.1). */
-export const WS_STREAM_PATHS = new Set(['/api/events.mux', '/api/events.host'])
+/** WS stream path forwarded to the instance (03 §3.1 / 05 §3.1): the Typert
+ * Remote stream mux. The old /api/events.mux and /api/events.host downlinks
+ * were deleted upstream (dsh 0.1.2-alpha.1), so the set now admits exactly
+ * /api/remote.mux. */
+export const WS_STREAM_PATHS = new Set(['/api/remote.mux'])
 
 /** Hop-by-hop and credential headers never forwarded upstream. */
 export const STRIPPED_REQUEST_HEADERS = new Set([
@@ -851,7 +854,9 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   else dispatchRequest()
 }
 
-/** Forward a WS upgrade to a fully-resolved target (events.mux / events.host).
+/** Forward a WS upgrade to a fully-resolved target (the /api/remote.mux
+ * stream mux; the old events.mux / events.host downlinks were deleted
+ * upstream in dsh 0.1.2-alpha.1).
  * `tls` carries the optional gateway SPKI pin (S23) — when set and the target
  * is https, the pin gates the handshake connection exactly like forwardHttp;
  * a mismatch surfaces as an upstream 'error' → 502 upstream_failed. */
