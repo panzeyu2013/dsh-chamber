@@ -6,6 +6,32 @@
 
 ## 未完成 / 待执行
 
+> **dsh 基线升级 0.1.1-rc.2 → 0.1.2-alpha.1（2026，迁移完成，双线互斥窗口开放）**：
+> 源码线已整体切到 dsh-v0.1.2-alpha.1（harness.commit=cd5ef814、vendor 259 链接、
+> fork 副本/插件/探针/gateway 全部迁移，14 typecheck + 16 测试 + build:renderer + verify:i18n 绿，
+> 详见 docs/tmp-dsh-upgrade-audit.md 与 docs/tmp-dsh-v012-migration-plan.md）。
+> **双线互斥窗口（release-preflight 硬门禁）**：运行时线仍为 @deepseek-ai/dsh@0.1.1-rc.2
+> （npm 未发布 0.1.2-alpha.1）——旧 host 不提供斜杠 wire，本地实例 spawn 探针必败、
+> 远端判「非 dsh」、gateway features 全灭；先 npm publish @deepseek-ai/dsh@0.1.2-alpha.1，
+> 再 bundle:dsh --refresh-lockfile + release.yml env + install-gateway.sh 同步后方可发布。
+> **BrowserAuth 适配（0.1.2 新增门禁）**：本地实例经控制面 spawn 时捕获 `dsh web:` 启动行
+> launch token（进程内存随机数，行缓冲整行脱敏后进日志）→ `GET /?token=` 交换出签名 cookie
+> （仅存控制面进程内存）→ 自动注入 call()/桌面实例代理 HTTP+WS/gateway 代理 HTTP+WS/gateway mux WS；
+> 失败/停止清 cookie；旧 host（rc.2 无门禁）无 token 行时按旧 wire 直接工作。
+> 已知降级（已记录）：
+> - **远端/直连 0.1.2 dsh 附加被硬阻断**（launch token 为远端进程内存随机数、隧道不可恢复；verify 探针 401 诚实分类；上游提供 token 检索机制前保持阻断）；
+> - gateway 会话索引健康路径=控制流+轮询、降级路径=纯轮询（控制流断连自动重连）；
+> - approval/提问通知经 $events 流 + $events/result 应答（answer-driven 解析）；
+> - workspace/follow 未接线：工作区由 session/list cwd 事实派生（workspaceId 不派生、无会话 workspace fail-closed）；
+> - 版本芯片：本地实例已接线（desktop 桥运行时版本），远端实例隐藏（D2 兜底）；
+> - cookie Max-Age=30 天无会话中重换：过期后约 10 分钟健康失败窗口触发重启换新（自愈，后续排期「cookie 过期即重交换」）；
+> - 索引 per-key seq 水位线已删除：轮询快照可短暂覆盖更新的流投影（≤10s 自愈）；
+> - remote-stream 接收面帧校验宽松于上游 exactKeys（接受未知键，前向兼容容差）；
+> - settings-bridge agentPresets/select 以合成 `{agentId:'',agentPreset}` 发出（typert wire 将 Agent 参数投影为 agentId 键）：一旦被调必响亮失败（当前无调用点，潜伏面）；
+> - 端口碰撞理论面：本地实例同端口 cookie 覆盖（实际不可达，登记不修）；
+> - 设计 07 §3 #3（agent-default-model 回显）已解锁、实现另行排期。
+
+
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游
   wire 根治）；实现未排期。设计见 `docs/todo/12-todo-archived-sessions.md`。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化
