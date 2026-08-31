@@ -92,8 +92,10 @@ import InstanceView from './components/InstanceView.tsx'
 const AGGREGATE_FALLBACK_POLL_MS = 30_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
-/** First-screen retry: a transient workspace.list failure is retried quickly
- *  (bounded), instead of waiting out the 30s staleness watchdog. */
+/** First-screen retry: a transient aggregate snapshot failure (0.1.2 wire:
+ * workspace.list was deleted upstream — the snapshot derives from
+ * session/list cwd facts) is retried quickly (bounded), instead of waiting
+ * out the 30s staleness watchdog. */
 const AGGREGATE_RETRY_MS = 3_000
 const AGGREGATE_RETRY_LIMIT = 5
 const MAX_PREWARMED_REMOTE_VIEWS = 3
@@ -916,8 +918,9 @@ export default function App() {
       // 尽快翻转（否则错误行要挂到下一个健康轮询才被 not-connected 替换）。
       if (isInstanceUnavailable(err)) void refreshHealth()
       // 首屏加速：一次瞬时失败不等到 30s 兜底轮询——限次快速重试（工作区
-      // 单元冷启动期间 workspace.list 可能短暂 503/超时；git 快照先到会让
-      // 未注册块抢在 workspace 列表前渲染，2026-08 用户反馈）。
+      // 单元冷启动期间快照获取可能短暂 503/超时；git 快照先到会让未注册块
+      // 抢在工作区列表前渲染，2026-08 用户反馈；0.1.2 起快照派生自
+      // session/list cwd 事实，workspace.list 已删）。
       scheduleRetry()
     }
   }, [clearAggregateRetry, refreshHealth])
@@ -1002,8 +1005,9 @@ export default function App() {
         }
         return changed ? next : prev
       })
-      // host.describe is generation-scoped too: a disconnected source must
-      // not retain a version from the previous connection generation.
+      // Host facts are generation-scoped too: a disconnected source must
+      // not retain a version from the previous connection generation
+      // (0.1.2: the local instance's version comes from the desktop bridge).
       setHostFacts(prev => {
         let changed = false
         const next = { ...prev }
@@ -1900,7 +1904,23 @@ export default function App() {
     })
   }, [])
 
-  /** Live host.describe projection from each mounted instance ctx. */
+  /**
+   * D2 (review-round3d P1-1): the local instance's dsh version is the desktop's
+   * active runtime version (IPC INFO bridge — the control-plane fact
+   * projection). Remote (ssh/http) instances stay hidden until a remote
+   * version probe is wired (D2 fallback; STATUS.md records the pending item).
+   */
+  useEffect(() => {
+    const version = window.dshChamber?.dshVersion ?? undefined
+    if (version === undefined) return
+    setHostFacts(prev => {
+      const existing = prev[LOCAL_INSTANCE_ID]
+      if (existing?.dshVersion === version) return prev
+      return { ...prev, [LOCAL_INSTANCE_ID]: { ...(existing ?? {}), dshVersion: version } }
+    })
+  }, [])
+
+  /** Live per-instance host facts from the desktop/control-plane projection. */
   useEffect(() => {
     return chamberBridge.onInstanceHost((sourceId, report, sourceFingerprint) => {
       if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return

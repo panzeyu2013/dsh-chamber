@@ -6,9 +6,13 @@ import {
 } from './host-graph.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 
+// 0.1.2 wire shape: extra-bundle URLs are `/plugins/??<id>&rev=…` combos
+// (review-round9c P2-1) — the old `/plugins/<id>/client.js?rev=` shape 404s
+// on the new wire, so the fixture and the main-path assertions must pin the
+// combo form.
 const row = (id: string, over: Partial<HostGraphRow> = {}): HostGraphRow => ({
   id,
-  url: `/plugins/${id}/client.js?rev=abc123`,
+  url: `/plugins/??${id}&rev=abc123`,
   rev: 'abc123',
   ...over,
 })
@@ -38,14 +42,14 @@ const envelope = (entries: unknown) => ({
 
 test('fetchHostGraph: success resolves the entries, carrying optional fields', async () => {
   const stub = stubFetch(200, envelope([
-    row('@scope/pkg-a', { inject: ['@deepseek-ai/dsh-client-runtime'], immediately: true }),
+    row('@scope/pkg-a', { inject: ['@deepseek-ai/dsh-client-store'], immediately: true }),
     row('@deepseek-ai/dsh-client-hmr'),
   ]))
   try {
     const rows = await fetchHostGraph('/api/i/local')
     assert.deepEqual(rows, [
-      { id: '@scope/pkg-a', url: '/plugins/@scope/pkg-a/client.js?rev=abc123', rev: 'abc123', inject: ['@deepseek-ai/dsh-client-runtime'], immediately: true },
-      { id: '@deepseek-ai/dsh-client-hmr', url: '/plugins/@deepseek-ai/dsh-client-hmr/client.js?rev=abc123', rev: 'abc123' },
+      { id: '@scope/pkg-a', url: '/plugins/??@scope/pkg-a&rev=abc123', rev: 'abc123', inject: ['@deepseek-ai/dsh-client-store'], immediately: true },
+      { id: '@deepseek-ai/dsh-client-hmr', url: '/plugins/??@deepseek-ai/dsh-client-hmr&rev=abc123', rev: 'abc123' },
     ])
   } finally {
     stub.restore()
@@ -253,14 +257,14 @@ test('fetchHostGraph: malformed envelope/rows throw loud (never silently merged)
 })
 
 test('dedupeHostEntries: drops covered ids, keeps extras, preserves optional fields', () => {
-  const covered = ['@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-runtime']
+  const covered = ['@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-ui-session']
   const entries = [
     row('@deepseek-ai/dsh-client-ui-sidebar'),
-    row('@deepseek-ai/dsh-client-runtime'),
+    row('@deepseek-ai/dsh-client-ui-session'),
     row('@scope/user-plugin', { immediately: true }),
   ]
   assert.deepEqual(dedupeHostEntries(entries, covered), [
-    { id: '@scope/user-plugin', url: '/plugins/@scope/user-plugin/client.js?rev=abc123', rev: 'abc123', immediately: true },
+    { id: '@scope/user-plugin', url: '/plugins/??@scope/user-plugin&rev=abc123', rev: 'abc123', immediately: true },
   ])
 })
 
@@ -278,7 +282,13 @@ test('toExtraRows: injects the per-instance base path into root-relative urls an
   ]
   const out: ExtraModuleRow[] = toExtraRows(rows, '/api/i/ssh-42')
   assert.deepEqual(out, [
-    { id: '@scope/pkg', url: '/api/i/ssh-42/plugins/@scope/pkg/client.js?rev=abc123', rev: 'abc123' },
+    {
+      id: '@scope/pkg',
+      url: '/api/i/ssh-42/plugins/??@scope/pkg&rev=abc123',
+      initialUrl: '/api/i/ssh-42/plugins/??@scope/pkg&rev=abc123',
+      rev: 'abc123',
+      inject: [],
+    },
   ])
 })
 
@@ -292,7 +302,13 @@ test('dedupe + toExtraRows compose into the shell merge (covered rows never leak
   const covered = ['@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-modules', '@deepseek-ai/dsh-client-ui-conversation']
   const extras = toExtraRows(dedupeHostEntries(entries, covered), '/api/i/local')
   assert.deepEqual(extras, [
-    { id: '@deepseek-ai/dsh-client-ui-cordis', url: '/api/i/local/plugins/@deepseek-ai/dsh-client-ui-cordis/client.js?rev=abc123', rev: 'abc123' },
+    {
+      id: '@deepseek-ai/dsh-client-ui-cordis',
+      url: '/api/i/local/plugins/??@deepseek-ai/dsh-client-ui-cordis&rev=abc123',
+      initialUrl: '/api/i/local/plugins/??@deepseek-ai/dsh-client-ui-cordis&rev=abc123',
+      rev: 'abc123',
+      inject: [],
+    },
   ])
 })
 
@@ -400,12 +416,12 @@ test('collectExtraRows: keeps non-covered rows and preloads each once (real cove
   try {
     const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async url => { loaded.push(url) } })
     assert.deepEqual(rows, [
-      { id: '@scope/p1', url: '/api/i/local/plugins/@scope/p1/client.js?rev=abc123', rev: 'abc123' },
-      { id: '@scope/p2', url: '/api/i/local/plugins/@scope/p2/client.js?rev=abc123', rev: 'abc123' },
+      { id: '@scope/p1', url: '/api/i/local/plugins/??@scope/p1&rev=abc123', initialUrl: '/api/i/local/plugins/??@scope/p1&rev=abc123', rev: 'abc123', inject: [] },
+      { id: '@scope/p2', url: '/api/i/local/plugins/??@scope/p2&rev=abc123', initialUrl: '/api/i/local/plugins/??@scope/p2&rev=abc123', rev: 'abc123', inject: [] },
     ])
     assert.deepEqual(loaded.sort(), [
-      '/api/i/local/plugins/@scope/p1/client.js?rev=abc123',
-      '/api/i/local/plugins/@scope/p2/client.js?rev=abc123',
+      '/api/i/local/plugins/??@scope/p1&rev=abc123',
+      '/api/i/local/plugins/??@scope/p2&rev=abc123',
     ])
   } finally {
     stub.restore()
@@ -424,7 +440,7 @@ test('collectExtraRows: a failing bundle load rejects loud (never degrades)', as
       }, reportDiagnostic: (_sourceId, next) => { diagnostic = next } }),
       /bundle .* exploded/,
     )
-    assert.deepEqual(loaded, ['/api/i/local/plugins/@scope/bad-plugin/client.js?rev=abc123'])
+    assert.deepEqual(loaded, ['/api/i/local/plugins/??@scope/bad-plugin&rev=abc123'])
     assert.equal(diagnostic?.state, 'bundle-load-failed')
   } finally {
     stub.restore()
@@ -468,7 +484,13 @@ test('collectExtraRows: a failed preload is NOT marked — a retry re-triggers t
     // Retry boot: not permanently marked → the loader runs again and succeeds.
     const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
     assert.equal(calls, 2)
-    assert.deepEqual(rows, [{ id: '@scope/retry-plugin', url: '/api/i/local/plugins/@scope/retry-plugin/client.js?rev=abc123', rev: 'abc123' }])
+    assert.deepEqual(rows, [{
+      id: '@scope/retry-plugin',
+      url: '/api/i/local/plugins/??@scope/retry-plugin&rev=abc123',
+      initialUrl: '/api/i/local/plugins/??@scope/retry-plugin&rev=abc123',
+      rev: 'abc123',
+      inject: [],
+    }])
     // Third boot: marked after the success → the loader is not re-triggered.
     await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
     assert.equal(calls, 2)
@@ -496,7 +518,13 @@ test('collectExtraRows: same id at a different rev reuses the loaded factory and
       loadModuleBundle: async url => { loaded.push(url) },
       reportDiagnostic: (_sourceId, next) => { diagnostic = next },
     })
-    assert.deepEqual(rows, [{ id: '@scope/rev-plugin', url: '/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revB', rev: 'revB' }])
+    assert.deepEqual(rows, [{
+      id: '@scope/rev-plugin',
+      url: '/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revB',
+      initialUrl: '/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revB',
+      rev: 'revB',
+      inject: [],
+    }])
     assert.deepEqual(loaded, ['/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revA'])
     assert.equal(diagnostic?.state, 'restart-required')
   } finally {
@@ -511,6 +539,53 @@ test('collectExtraRows: a duplicate id within one graph preloads once', async ()
     const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async url => { loaded.push(url) } })
     assert.equal(loaded.length, 1)
     assert.equal(rows.length, 2) // both rows still surface as extras (union)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: rows sharing one combo url preload that combo exactly once (dsh-v0.1.2-alpha.1)', async () => {
+  // Combo endpoints: one script URL registers EVERY id its query names, so
+  // multiple graph rows can share a url. Each unique combo url must execute
+  // once — a second execution would re-register the same factories into the
+  // shared module table (duplicate-registration sink).
+  const comboUrl = '/plugins/??@scope/combo-a/client.js,@scope/combo-b/client.js&rev=combo1'
+  const stub = stubFetch(200, envelope([
+    row('@scope/combo-a', { url: comboUrl, rev: 'combo1' }),
+    row('@scope/combo-b', { url: comboUrl, rev: 'combo1' }),
+  ]))
+  const loaded: string[] = []
+  try {
+    const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async url => { loaded.push(url) } })
+    assert.equal(loaded.length, 1)
+    assert.equal(loaded[0], '/api/i/local/plugins/??@scope/combo-a/client.js,@scope/combo-b/client.js&rev=combo1')
+    assert.equal(rows.length, 2)
+    assert.deepEqual(rows.map(r => r.id), ['@scope/combo-a', '@scope/combo-b'])
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: a shared combo url failure fails every row and clears the whole combo for retry', async () => {
+  const comboUrl = '/plugins/??@scope/combo-fail-a/client.js,@scope/combo-fail-b/client.js&rev=combo-fail'
+  const stub = stubFetch(200, envelope([
+    row('@scope/combo-fail-a', { url: comboUrl, rev: 'combo-fail' }),
+    row('@scope/combo-fail-b', { url: comboUrl, rev: 'combo-fail' }),
+  ]))
+  let calls = 0
+  const loadModuleBundle = async (): Promise<void> => {
+    calls += 1
+    if (calls === 1) throw new Error('combo exploded')
+  }
+  try {
+    await assert.rejects(
+      collectExtraRows('local', '/api/i/local', { loadModuleBundle }),
+      /combo exploded/,
+    )
+    assert.equal(calls, 1)
+    // The whole combo was cleared: a retry re-preloads the one script.
+    await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
+    assert.equal(calls, 2)
   } finally {
     stub.restore()
   }

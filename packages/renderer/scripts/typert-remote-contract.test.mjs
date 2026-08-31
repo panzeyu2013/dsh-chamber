@@ -9,14 +9,22 @@ const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek
 test('rc.8 dsh-api-remotes assembly and renderer generation stay in lockstep', () => {
   const source = readFileSync(`${VENDOR}dsh-api-remotes/src/client/index.ts`, 'utf8')
   const packages = remotePackagesFromAssembly(source)
+  // dsh-v0.1.2-alpha.1 assembly: api-remotes' client now value-imports the
+  // settings/session/workspace controllers' /remote faces (P2-10); the old
+  // dsh-file-reference row is gone from the assembly.
   assert.deepEqual(packages, [
+    '@deepseek-ai/dsh-agent-presets',
     '@deepseek-ai/dsh-commands',
+    '@deepseek-ai/dsh-api-settings-controller',
     '@deepseek-ai/dsh-goal',
+    '@deepseek-ai/dsh-llm',
     '@deepseek-ai/dsh-cordis-host-runner',
-    '@deepseek-ai/dsh-file-reference',
     '@deepseek-ai/dsh-host-plugin-inventory',
     '@deepseek-ai/dsh-message-feedback',
     '@deepseek-ai/dsh-session-reference',
+    '@deepseek-ai/dsh-subagent',
+    '@deepseek-ai/dsh-api-session-controller',
+    '@deepseek-ai/dsh-api-workspace-controller',
   ])
   for (const packageName of packages) {
     const shortName = packageName.slice('@deepseek-ai/'.length)

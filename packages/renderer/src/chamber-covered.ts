@@ -7,10 +7,13 @@
  *
  * - every client plugin package the chamber composite bundle registers
  *   (chamber-entry.ts import list — one entry per package name): the
- *   first-screen families via static import, the rc.8 deferred families
- *   (ui-attachment / ui-brand-official / ui-reference) via the
- *   registerDeferred dynamic imports. Loading any such row again from the
- *   host graph would register the same plugin twice on one cordis ctx
+ *   first-screen families via static import (including the dsh-v0.1.2-alpha.1
+ *   provider group that replaced dsh-client-runtime: the platform store word
+ *   `@deepseek-ai/dsh-client-store`, the api session/workspace controllers,
+ *   and the ui-session / ui-chat / ui-approval conversation families), the
+ *   rc.8 deferred families (ui-attachment / ui-brand-official / ui-reference)
+ *   via the registerDeferred dynamic imports. Loading any such row again from
+ *   the host graph would register the same plugin twice on one cordis ctx
  *   (cordis rejects the duplicate provide / slot), so these rows must be
  *   skipped, never loaded;
  * - page-own rows that must never arrive as graph extras:
@@ -42,6 +45,15 @@
  * chamber-entry.ts, never a registered client plugin, and the host graph
  * cannot carry a row for it.
  *
+ * dsh-v0.1.2-alpha.1 (decision D6): `@deepseek-ai/dsh-client-ui-cordis` (the
+ * new debug-surface roster row) is intentionally absent too — the chamber
+ * composite does not register it and never will; "no such plugin" is
+ * behaviorally identical to "plugin absent" (the official row is an opt-in
+ * debugger face), so it is absent from the chamber covered/factories tables;
+ * the host-graph row still preloads through the same extra-rows mechanism as
+ * any other roster entry — one extra combo preload at most, never a
+ * duplicate registration (review-round7b P2-5 wording).
+ *
  * This constant lives in its own module (re-exported by chamber-entry.ts) on
  * purpose: shell.ts must import it without pulling chamber-entry.ts's
  * top-level module-table handoff into the main chunk.
@@ -53,7 +65,18 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-remotes',
-  '@deepseek-ai/dsh-client-runtime',
+  // dsh-v0.1.2-alpha.1 provider group (replaces dsh-client-runtime, which no
+  // longer exists): the platform store word (a PLATFORM_MODULES seed —
+  // every client bundle that value-imports the store engine emits a
+  // `require("@deepseek-ai/dsh-client-store")` edge), the two api
+  // controllers (ctx.sessions / ctx.workspaces), and the three conversation
+  // families the web roster added (ui-session root source, ui-chat chat
+  // nodes, ui-approval approval surface). All six are composite-covered:
+  // loading any of them again from a host graph would double-register on
+  // one ctx (or split the store engine version).
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-api-session-controller',
+  '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-theme',
   '@dsh-chamber/dsh-client-ui-layout',
@@ -82,6 +105,11 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-workflow-run',
   '@deepseek-ai/dsh-client-ui-agent-preset',
   '@deepseek-ai/dsh-client-ui-deliverables',
+  // ── dsh-v0.1.2-alpha.1 conversation families (decision D6: into the
+  // ── composite; first-screen static imports, chamber-entry.ts):
+  '@deepseek-ai/dsh-client-ui-session',
+  '@deepseek-ai/dsh-client-ui-chat',
+  '@deepseek-ai/dsh-client-ui-approval',
   // Directory picking: the composite pins the `browse` interaction (the host
   // pins the same per spawn — chamber-entry.ts import comment), so the
   // picker-auto-mounted browse row is composite-covered too.
@@ -145,7 +173,13 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-typert-registry',
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-remotes',
-  '@deepseek-ai/dsh-client-runtime',
+  // dsh-v0.1.2-alpha.1 provider group (replaces dsh-client-runtime): the
+  // store is a platform word (module-table seed — registered factory, no
+  // ctx.plugin: it is not a cordis plugin); the controllers and the three
+  // conversation families are first-screen plugins (chamber-entry.ts).
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-api-session-controller',
+  '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-theme',
   '@dsh-chamber/dsh-client-ui-layout',
@@ -166,6 +200,11 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-input-trigger',
   '@deepseek-ai/dsh-client-ui-workspace',
   '@deepseek-ai/dsh-client-ui-model-selection',
+  // dsh-v0.1.2-alpha.1 conversation families (decision D6: first-screen, so
+  // their factories must be registered before any loader entry materializes).
+  '@deepseek-ai/dsh-client-ui-session',
+  '@deepseek-ai/dsh-client-ui-chat',
+  '@deepseek-ai/dsh-client-ui-approval',
   '@deepseek-ai/dsh-client-ui-directory-picker-browse',
   '@dsh-chamber/dsh-client-ui-settings-connections',
   '@dsh-chamber/dsh-client-ui-settings-bridge',

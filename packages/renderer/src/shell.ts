@@ -558,8 +558,9 @@ function rejectPendingOpens(instanceId: string, message: string): void {
 
 /**
  * Dispatch one open through one EXACT settled holder/runtime context
- * (ctx.sessions — the ISessions face of dsh-client-runtime, see boot.ts
- * runtimeCtx). The runtime validates the id against its own list, so wait
+ * (ctx.sessions — the ISessions face of @deepseek-ai/dsh-api-session-controller/client,
+ * the dsh-v0.1.2-alpha.1 home of the sessions service; see boot.ts runtimeCtx).
+ * The runtime validates the id against its own list, so wait
  * until the session surfaces there before calling open. Every retry and the
  * final sessions.open gate re-check holder identity; teardown/replacement
  * cancels the holder-owned poller immediately and clears its timer.

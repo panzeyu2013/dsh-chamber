@@ -41,13 +41,14 @@ function rejectStandaloneServe() {
  * @deepseek-ai/* workspace resolution to SOURCE (mirrors apps/web's alias
  * list, extended to every package the chamber bundle imports). The vendor
  * tree (`vendor/harness-packages/@deepseek-ai`) is a read-only directory of
- * symlinks into the external dsh checkout; the three chamber-copied packages
- * (connection, web, the self-built ui-sidebar — the only dsh source we may
- * modify) resolve to our copies. Subpaths map onto the source tree by
- * convention (`<pkg>/client` → `src/client/index.ts`, …); dsh-host-apiproxy's
- * export map diverges (./client → src/fetch/client.ts, ./api/* → src/api/*.ts)
- * and is special-cased. The chamber sidebar plugin resolves through the
- * resolve.alias table (`@dsh-chamber/*` row).
+ * symlinks into the external dsh checkout; the chamber-copied packages
+ * (connection, web, api-gateway — the only dsh source we may modify) resolve
+ * to our copies. Subpaths map onto the source tree by convention
+ * (`<pkg>/client` → `src/client/index.ts`, …). Every other @deepseek-ai/*
+ * package — including the dsh-v0.1.2-alpha.1 provider group
+ * (dsh-client-store, api-session-controller, api-workspace-controller,
+ * ui-session, ui-chat, ui-approval) — resolves through the generic vendor
+ * fallback below.
  */
 /**
  * Bare (non-workspace) npm specifiers imported from vendor source: node
@@ -88,7 +89,12 @@ function deepseekSource() {
       const sub = slash === -1 ? '' : rest.slice(slash + 1)
       const pick = (...cands) => cands.find((c) => c !== undefined && existsSync(c))
       const real = (p) => realpathSync(p)
-      if (name === 'dsh-client-connection' || name === 'dsh-client-web') {
+      if (name === 'dsh-client-connection' || name === 'dsh-client-web' || name === 'dsh-api-gateway') {
+        // The chamber-copied packages (connection, web, and the dsh-v0.1.2-alpha.1
+        // api-gateway fork with the per-entry base-path patch) resolve to OUR
+        // copies, shadowing the vendor package of the same name. Same source
+        // layout for all three: `index.ts` at the package root, `client/` for
+        // the /client subpath.
         const base = new URL(`../${name}/src/`, import.meta.url)
         return pick(
           sub === '' ? fileURLToPath(new URL('index.ts', base)) : undefined,
@@ -113,12 +119,6 @@ function deepseekSource() {
         return hit === undefined ? undefined : real(hit)
       }
       if (sub === '') return pickReal(`${srcdir}index.ts`)
-      if (name === 'dsh-host-apiproxy') {
-        if (sub === 'client') return pickReal(`${srcdir}fetch/client.ts`)
-        if (sub === 'api') return pickReal(`${srcdir}api/index.ts`)
-        if (sub.startsWith('api/')) return pickReal(`${srcdir}${sub}.ts`)
-        return undefined
-      }
       // Vendor `./src/*` deep subpaths (the canonical export-map form the
       // chamber ui-layout fork imports, e.g.
       // `@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx`): the

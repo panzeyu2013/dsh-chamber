@@ -20,7 +20,13 @@ declare module '@deepseek-ai/cordis' {
     emit(...args: any[]): unknown
     get(...args: any[]): unknown
     provide(...args: any[]): unknown
-    /** chamber v1: per-instance sessions runtime face (loose mirror of dsh-client-runtime ISessions). */
+    /**
+     * chamber v1: per-instance sessions runtime face (loose mirror of ISessions
+     * from @deepseek-ai/dsh-api-session-controller/client — the dsh-v0.1.2-alpha.1
+     * home of ctx.sessions; the old dsh-client-runtime face is gone). The
+     * `list.byId` / `open` surface shell.ts's dispatchOpen relies on is
+     * preserved by the new ISessions contract.
+     */
     sessions: {
       open(id: string): void
       list: { getSnapshot(): { byId?: Record<string, unknown> } }
@@ -40,10 +46,14 @@ declare module '@deepseek-ai/dsh-client-web' {
   /**
    * chamber patch (05 §3.6 / design 09): mirror of boot.ts AppWebEntryOptions —
    * per-instance extra host-graph client-plugin rows (bundles pre-loaded by
-   * the chamber shell; ids only merged into the boot rows here).
+   * the chamber shell; ids only merged into the boot rows here). dsh-v0.1.2-alpha.1
+   * BootModuleRow alignment: the required `initialUrl` (the preloaded combo
+   * url — the chamber merge preloads each entry's own combo, so it equals the
+   * row url) and `inject` (empty — the composite covers the whole official
+   * shell, extras have no inject edges to arrive).
    */
   export interface AppWebEntryOptions extends BootSeams {
-    extraRows?: { id: string; url: string; rev: string }[]
+    extraRows?: { id: string; url: string; initialUrl: string; rev: string; inject: string[] }[]
     /** Per-entry context initializer; called before loader/plugin materialization. */
     configureContext?: (ctx: Context) => void
   }
@@ -68,7 +78,15 @@ declare module '@deepseek-ai/dsh-client-web' {
 }
 
 declare module '@deepseek-ai/dsh-client-connection/client'
-declare module '@deepseek-ai/dsh-client-runtime/client'
+// dsh-v0.1.2-alpha.1 provider group (dsh-client-runtime deleted): the store is
+// a plain module (the platform store word — imported BARE, no /client
+// subpath; registered as a module-table covered factory by chamber-entry, not
+// a cordis plugin), the api controllers (ctx.sessions / ctx.workspaces) and
+// the ui-session / ui-chat / ui-approval conversation families are first-screen
+// plugins (chamber-entry.ts import list + COVERED_FACTORIES).
+declare module '@deepseek-ai/dsh-client-store'
+declare module '@deepseek-ai/dsh-api-session-controller/client'
+declare module '@deepseek-ai/dsh-api-workspace-controller/client'
 declare module '@deepseek-ai/dsh-client-locale/client'
 declare module '@deepseek-ai/dsh-client-modules/client'
 declare module '@deepseek-ai/dsh-typert-registry/client'
@@ -76,6 +94,7 @@ declare module '@deepseek-ai/dsh-api-gateway/client'
 declare module '@deepseek-ai/dsh-api-remotes/client'
 
 declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
+declare module '@deepseek-ai/dsh-client-ui-approval/client'
 // rc.8 deferred-family client entries (design 09 §4; chamber-entry.ts
 // registerDeferred dynamic imports): attachment (composer + message-image
 // slot fills), brand-official (official brand occupants — gated on the
@@ -83,6 +102,10 @@ declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
 // unified `@` input-trigger source).
 declare module '@deepseek-ai/dsh-client-ui-attachment/client'
 declare module '@deepseek-ai/dsh-client-ui-brand-official/client'
+// dsh-v0.1.2-alpha.1 first-screen conversation families (decision D6): ui-chat
+// owns the conversation.view + chat-node rendering, ui-session the sessions
+// root source + scope adapter (chamber-entry.ts static imports).
+declare module '@deepseek-ai/dsh-client-ui-chat/client'
 declare module '@deepseek-ai/dsh-client-ui-commands/client'
 declare module '@deepseek-ai/dsh-client-ui-conversation/client'
 declare module '@deepseek-ai/dsh-client-ui-deliverables/client'
@@ -105,6 +128,7 @@ declare module '@deepseek-ai/dsh-client-ui-settings-general/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-models/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client'
+declare module '@deepseek-ai/dsh-client-ui-session/client'
 declare module '@deepseek-ai/dsh-client-ui-sidebar/client'
 declare module '@deepseek-ai/dsh-client-ui-skill/client'
 declare module '@deepseek-ai/dsh-client-ui-subagent/client'

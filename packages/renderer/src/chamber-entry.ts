@@ -4,13 +4,16 @@
  *
  * The control plane serves this bundle as the only boot-graph plugin: one
  * cordis entry whose apply registers the whole dsh client assembly — the
- * wire root (connection, with the chamber base-path parameterization), the
+ * wire root (connection, with the chamber base-path parameterization, and
+ * the api-gateway fork, which carries the same per-entry base path), the
  * typert registry + generated Remote gateway, the mounted Remote namespaces,
- * the runtime object layer (sessions/workspaces/slots), locale, and every
- * ui-* plugin — so each per-instance boot gets a complete dsh shell
- * (independent cordis ctx, full ui-* tree) with zero dsh graph composition
- * machinery. Registration order is irrelevant: cordis fibers wait on their
- * inject sets. The bundle self-registers through the module-table handoff
+ * the object layer (dsh-v0.1.2-alpha.1: sessions via the api session
+ * controller, workspaces via the api workspace controller, slots via the
+ * kernel-adopted ui-renderer row), locale, and every ui-* plugin — so each
+ * per-instance boot gets a complete dsh shell (independent cordis ctx, full
+ * ui-* tree) with zero dsh graph composition machinery. Registration order
+ * is irrelevant: cordis fibers wait on their inject sets. The bundle
+ * self-registers through the module-table handoff
  * (`window.__ModuleLoader__.load`), factory-form, matching the wire contract
  * of dsh-client-modules' parseBootManifest / ClientModuleSystem.
  *
@@ -44,11 +47,11 @@
  * blocking dependency).
  *
  * The split is safe ONLY because no first-screen family requires a deferred
- * service at its apply root (verified against the inject lists): the deferred
- * set (jobs, goal, skill, tool, trajectory, workflow-run, deliverables,
- * subagent, message-feedback, plan, user-questions, agent-preset,
- * permission-presets, and the rc.8 alignment trio attachment, brand-official,
- * reference) all inject first-screen services
+ * service at its apply root (verified against the vendor inject lists): the
+ * deferred set (jobs, goal, skill, tool, trajectory, workflow-run,
+ * deliverables, subagent, message-feedback, plan, user-questions,
+ * agent-preset, permission-presets, and the rc.8 alignment trio attachment,
+ * brand-official, reference) all inject first-screen services
  * (connection/sessions/slots/locale/remote/…). Two families that WOULD have
  * violated the invariant are kept FIRST-SCREEN by construction (2026-08
  * review fix — the vendor `inject` list is the authority, and it carries the
@@ -65,12 +68,27 @@
  * (skill/subagent also inject `inputTriggers`, but they are themselves
  * deferred, so that edge is deferred→deferred and harmless.)
  *
+ * dsh-v0.1.2-alpha.1 first-screen additions (decision D6): the api session /
+ * workspace controllers, ui-session, ui-chat and ui-approval are FIRST-SCREEN
+ * by the same rule — ui-conversation / ui-workspace / ui-sidebar / ui-layout
+ * (first-screen) graph-inject the controllers and ui-session (dsh.client
+ * inject lists), and ui-chat owns the conversation message rendering (the
+ * conversation view is first-screen content, not feature UI). Their own
+ * injects are all first-screen or kernel-adopted (sessions ← api-session
+ * controller, workspaces ← api-workspace controller, uiSession ← ui-session,
+ * uiConversation ← ui-conversation, slots ← the kernel-adopted ui-renderer
+ * row, remote / remote.* ← the api-gateway client + api-remotes' generated
+ * namespace mounts), so the split invariant still holds. The api-remotes
+ * apply is ASYNC (it mounts every generated Remote contribution through
+ * `ctx.remote.$mount`) — registered first-screen, never awaited by the entry
+ * root, the controllers' fibers wait on the mounted `remote.*` namespaces.
+ *
  * Maintenance: when adding a ui-* family, decide first-screen (synchronous
- * static import — hero, composer, settings shell, navigation) vs deferred
- * (feature UI only reachable after the first paint); BEFORE deferring a
- * family, grep the vendor `inject` lists for any first-screen family that
- * root-injects one of its services — such a family must stay first-screen.
- * Keep `chamber-covered.ts` in lockstep either way.
+ * static import — hero, composer, settings shell, navigation, conversation
+ * rendering) vs deferred (feature UI only reachable after the first paint);
+ * BEFORE deferring a family, grep the vendor `inject` lists for any
+ * first-screen family that root-injects one of its services — such a family
+ * must stay first-screen. Keep `chamber-covered.ts` in lockstep either way.
  *
  * ## Module-table factories for the covered set (design 09 union table)
  *
@@ -80,12 +98,15 @@
  * registered factories — and the official graph answers each edge with the
  * target package's own row-factory. The chamber merge DROPS the covered rows
  * (the composite replaces their bundles), so their factories must be
- * registered here or a covered require edge misses: the documented snapshot-
- * store exemption (`RUNTIME_STORE_EXEMPTION`, upstream tsdown.client.ts) makes
- * every client bundle that value-imports the store engine emit
- * `require("@deepseek-ai/dsh-client-runtime/client")` — runtime is
- * composite-covered, and the default web profile's `dsh-session-log-export`
- * row (an extra row the composite does not cover) is exactly such a bundle.
+ * registered here or a covered require edge misses: the new client purity
+ * gate (upstream tsdown.client.ts) externalizes the platform modules
+ * (`PLATFORM_MODULES` — `@deepseek-ai/dsh-client-store` among them), so every
+ * client bundle that value-imports the store engine emits
+ * `require("@deepseek-ai/dsh-client-store")` — the store word is
+ * composite-covered (and the default web profile's `dsh-session-log-export`
+ * row, an extra row the composite does not cover, is exactly such a bundle;
+ * the chamber shell seed may already answer the word, the registered factory
+ * below is the composite-side fallback for the same require edge).
  * The covered-factory registration below (one per statically-imported
  * first-screen family, at bundle execution — before any loader entry
  * materializes) completes the union table. The map↔list lockstep is enforced
@@ -117,7 +138,16 @@ import * as ConnectionPlugin from '@deepseek-ai/dsh-client-connection/client'
 import * as TypertRegistry from '@deepseek-ai/dsh-typert-registry/client'
 import * as ApiGateway from '@deepseek-ai/dsh-api-gateway/client'
 import * as ApiRemotes from '@deepseek-ai/dsh-api-remotes/client'
-import * as Runtime from '@deepseek-ai/dsh-client-runtime/client'
+// dsh-v0.1.2-alpha.1 provider group (dsh-client-runtime no longer exists):
+// the platform store word (module-table seed — a plain module, NOT a cordis
+// plugin: registered as a covered factory below, never ctx.plugin'd) plus the
+// two api controllers (ctx.sessions / ctx.workspaces). All first-screen: the
+// ui-conversation / ui-workspace / ui-sidebar first-screen families
+// graph-inject the controllers (dsh.client.inject), so deferring them would
+// defer the whole shell.
+import * as Store from '@deepseek-ai/dsh-client-store'
+import * as ApiSessionController from '@deepseek-ai/dsh-api-session-controller/client'
+import * as ApiWorkspaceController from '@deepseek-ai/dsh-api-workspace-controller/client'
 import * as Locale from '@deepseek-ai/dsh-client-locale/client'
 import * as UiTheme from '@deepseek-ai/dsh-client-ui-theme/client'
 // chamber (design 06): the chamber-owned ui-layout fork replaces the official
@@ -135,6 +165,17 @@ import * as UiSettingsModels from '@deepseek-ai/dsh-client-ui-settings-models/cl
 import * as UiSettingsPlugins from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import * as UiSettingsPluginInventory from '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
 import * as UiConversation from '@deepseek-ai/dsh-client-ui-conversation/client'
+// dsh-v0.1.2-alpha.1 conversation families (decision D6: into the composite,
+// FIRST-SCREEN): ui-session installs the sessions root source + scope adapter
+// (ui-workspace / ui-layout / ui-conversation / ui-sidebar all graph-inject
+// it), ui-chat owns the conversation.view + chat-node rendering (the message
+// list IS first-screen content — deferring it would blank the conversation
+// page until the deferred chunk arrives), ui-approval owns the composer
+// approval surface. ui-cordis (the new debug face) is deliberately NOT
+// registered — see chamber-covered.ts.
+import * as UiSession from '@deepseek-ai/dsh-client-ui-session/client'
+import * as UiChat from '@deepseek-ai/dsh-client-ui-chat/client'
+import * as UiApproval from '@deepseek-ai/dsh-client-ui-approval/client'
 // commands + input-trigger are FIRST-SCREEN (2026-08 review fix, see module
 // header): ui-model-selection's ROOT inject list carries `commandUi`
 // (vendor src/client/index.ts:100), provided only by ui-commands — so the
@@ -344,9 +385,21 @@ export function apply(ctx: Context): void {
   }
   ctx.plugin(ConnectionPlugin, { basePath: chamberBasePath })
   ctx.plugin(TypertRegistry)
-  ctx.plugin(ApiGateway)
+  // dsh-v0.1.2-alpha.1: the chamber api-gateway fork (packages/dsh-api-gateway)
+  // carries the same per-entry base-path parameterization as the connection
+  // fork — its remote stream / RPC carriers prefix the instance proxy path,
+  // so the config is bound here, never read from a page-global knob.
+  ctx.plugin(ApiGateway, { basePath: chamberBasePath })
   ctx.plugin(ApiRemotes)
-  ctx.plugin(Runtime)
+  // Provider group (dsh-client-runtime dissolved): the store is a platform
+  // word (covered factory only, no plugin); the api controllers provide
+  // ctx.sessions / ctx.workspaces; ui-session / ui-chat / ui-approval are the
+  // conversation families (see the import comments). ApiRemotes' async apply
+  // mounts the generated Remote namespaces (`remote.session` etc.) that the
+  // controllers' inject lists require — cordis fibers wait on the inject
+  // sets, so registration order carries no activation semantics.
+  ctx.plugin(ApiSessionController)
+  ctx.plugin(ApiWorkspaceController)
   ctx.plugin(Locale)
   ctx.plugin(UiTheme)
   ctx.plugin(UiLayout)
@@ -366,6 +419,11 @@ export function apply(ctx: Context): void {
   ctx.plugin(UiInputTrigger)
   ctx.plugin(UiWorkspace)
   ctx.plugin(UiModelSelection)
+  // dsh-v0.1.2-alpha.1 conversation families (first-screen; see the import
+  // comments above).
+  ctx.plugin(UiSession)
+  ctx.plugin(UiChat)
+  ctx.plugin(UiApproval)
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
@@ -437,7 +495,16 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-typert-registry', coveredFactory(TypertRegistry)],
   ['@deepseek-ai/dsh-api-gateway', coveredFactory(ApiGateway)],
   ['@deepseek-ai/dsh-api-remotes', coveredFactory(ApiRemotes)],
-  ['@deepseek-ai/dsh-client-runtime', coveredFactory(Runtime)],
+  // dsh-v0.1.2-alpha.1 provider group: the store is the platform word every
+  // client bundle that value-imports the store engine requires (the new
+  // tsdown.client.ts PLATFORM_MODULES externalizes `@deepseek-ai/dsh-client-store`
+  // — the chamber shell seed provides it too, and this registered factory is
+  // the composite-side fallback for the same require edge; seed wins, factory
+  // is inert-but-harmless). The controllers + conversation families are
+  // first-screen plugins, factories mirror their namespaces like the rest.
+  ['@deepseek-ai/dsh-client-store', coveredFactory(Store)],
+  ['@deepseek-ai/dsh-api-session-controller', coveredFactory(ApiSessionController)],
+  ['@deepseek-ai/dsh-api-workspace-controller', coveredFactory(ApiWorkspaceController)],
   ['@deepseek-ai/dsh-client-locale', coveredFactory(Locale)],
   ['@deepseek-ai/dsh-client-ui-theme', coveredFactory(UiTheme)],
   ['@dsh-chamber/dsh-client-ui-layout', coveredFactory(UiLayout)],
@@ -454,6 +521,9 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-input-trigger', coveredFactory(UiInputTrigger)],
   ['@deepseek-ai/dsh-client-ui-workspace', coveredFactory(UiWorkspace)],
   ['@deepseek-ai/dsh-client-ui-model-selection', coveredFactory(UiModelSelection)],
+  ['@deepseek-ai/dsh-client-ui-session', coveredFactory(UiSession)],
+  ['@deepseek-ai/dsh-client-ui-chat', coveredFactory(UiChat)],
+  ['@deepseek-ai/dsh-client-ui-approval', coveredFactory(UiApproval)],
   ['@deepseek-ai/dsh-client-ui-directory-picker-browse', coveredFactory(UiDirectoryPickerBrowse)],
   ['@dsh-chamber/dsh-client-ui-settings-connections', coveredFactory(UiSettingsConnections)],
   ['@dsh-chamber/dsh-client-ui-settings-bridge', coveredFactory(UiSettingsBridge)],

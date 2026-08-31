@@ -6,9 +6,22 @@
  * The boot graph carries ONE plugin row: the chamber composite bundle
  * (`chamber` input → dist/assets/chamber-<hash>.js), which self-registers as
  * `@dsh-chamber/app` through `window.__ModuleLoader__.load` (factory form).
- * The wire shape matches dsh-client-modules' parseBootManifest contract:
+ * The wire shape matches dsh-client-modules' parseBootManifest contract
+ * (dsh-v0.1.2-alpha.1, packages/client/modules/src/client/manifest.ts):
  *
- *   { rev, entries: [{ id, url, rev, immediately }] }
+ *   {
+ *     rev,
+ *     entries: [{ id, url, rev, immediately?, inject? }],
+ *     batches: [{ phase: 'bootstrap'|'application', url, rev, entries: [id, …] }],
+ *   }
+ *
+ * The rc.8+ parser HARD-requires `batches` (missing → boot failure): every
+ * entry must belong to exactly one batch (else "belongs to no initial-load
+ * batch"), each batch url/rev must be strings with a non-empty entry list,
+ * and duplicate entry ids are rejected. This manifest therefore carries one
+ * `bootstrap` batch whose url/rev/entries all name the chamber bundle — the
+ * parsed `BootModuleRow` view then gets `initialUrl = batch.url` (= the
+ * bundle url) and `inject = []` (the composite provides every service).
  *
  * revs are sha1 content hashes shortened to 12 hex (the dsh convention).
  * The control plane serves this file at /manifest.json and injects it into
@@ -96,10 +109,33 @@ const entries = [{
   url: bundleUrl,
   rev: bundleRev,
   immediately: true,
+  // The composite provides every service the dsh shell needs (chamber-entry
+  // inject: []) — an empty inject list is the honest graph edge, and the new
+  // parser normalizes an absent field the same way.
+  inject: [],
+}]
+/**
+ * The chamber bundle is its own single bootstrap batch: `phase: 'bootstrap'`
+ * makes the boot kernel execute it as the parser-blocking first script (the
+ * factory registers before anything materializes), `entries` names the one
+ * id, and url/rev duplicate the entry row — the parsed BootModuleRow's
+ * `initialUrl` (batch url) then equals the row url, which is exactly the
+ * single address the vite chunk graph references (see the bundleUrl comment
+ * above). The parse-time "belongs to no initial-load batch" and duplicate-id
+ * hard failures are structurally impossible for this one-row graph.
+ */
+const batches = [{
+  phase: 'bootstrap',
+  url: bundleUrl,
+  rev: bundleRev,
+  entries: [CHAMBER_ID],
 }]
 const graph = {
-  rev: shortHash(JSON.stringify(entries)),
+  // Consistency anchor over the WHOLE graph (entries + batches — the same
+  // content the upstream host hashes; see client-modules compose()).
+  rev: shortHash(JSON.stringify({ entries, batches })),
   entries,
+  batches,
 }
 
 writeFileSync(OUT_MANIFEST, `${JSON.stringify(graph, null, 2)}\n`)

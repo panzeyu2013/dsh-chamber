@@ -37,14 +37,19 @@ import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-cha
 export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
 
 /** One composed client entry row of the host boot graph (mirror of WebBootEntry).
- *  rc.8 adds `external?: string[]` to WebBootEntry; this mirror deliberately
- *  omits it — the chamber merge preloads every kept row wholesale (the shared
- *  module-table factory branch covers cross-row require edges, boot.ts), so
- *  the field carries no meaning here and is dropped at parse (line ~151). */
+ *  rc.8+ (dsh-v0.1.2-alpha.1) adds `external?: string[]` to WebBootEntry and
+ *  moves bundle urls to the combo endpoint form (`/plugins/??<id>/client.js&rev=…`);
+ *  this mirror deliberately omits `external` — the chamber merge preloads every
+ *  kept row wholesale (the shared module-table factory branch covers cross-row
+ *  require edges, boot.ts), so the field carries no meaning here and is dropped
+ *  at parse (fetchHostGraph, line ~186). The url form is the single-id combo
+ *  (each row's own script); the graph's multi-id combo BATCHES are ignored by
+ *  the chamber merge (host-graph fetch reads `entries` only, see the fetch
+ *  comment). */
 export interface HostGraphRow {
   /** Entry name == package name (module-table key). */
   id: string
-  /** Bundle endpoint, '/plugins/<id>/client.js?rev=<rev>' (host-root-relative). */
+  /** Bundle endpoint, '/plugins/??<id>/client.js&rev=<rev>' (host-root-relative). */
   url: string
   /** Bundle content hash (cache-busting consistency anchor). */
   rev: string
@@ -54,11 +59,17 @@ export interface HostGraphRow {
   immediately?: boolean
 }
 
-/** One extra module row handed to the boot kernel (shape = BootModuleRow). */
+/** One extra module row handed to the boot kernel (shape = BootModuleRow
+ *  minus `external`): dsh-v0.1.2-alpha.1 BootModuleRow requires `initialUrl`
+ *  (the initial-load combo endpoint — the chamber preloads each entry's own
+ *  combo, so it equals `url`) and `inject` (the chamber extras carry no
+ *  package inject edges — the composite covers the whole official shell). */
 export interface ExtraModuleRow {
   id: string
   url: string
+  initialUrl: string
   rev: string
+  inject: string[]
 }
 
 /** The fetch-carrier wire envelope (as consumed by bridge-api.ts). */
@@ -200,8 +211,12 @@ export function dedupeHostEntries(entries: readonly HostGraphRow[], covered: rea
 /**
  * Turn kept rows into module-table rows for the boot kernel, injecting the
  * per-instance proxy prefix into root-relative bundle urls
- * ('/plugins/<id>/client.js?rev=…' → '<basePath>/plugins/<id>/client.js?rev=…')
- * so the script element fetches same-origin through the instance proxy.
+ * ('/plugins/??<id>/client.js&rev=…' → '<basePath>/plugins/??<id>/client.js&rev=…')
+ * so the script element fetches same-origin through the instance proxy. The
+ * combo syntax (`??<id>/client.js,<id2>/client.js&rev=…`) travels inside the
+ * url unchanged — the first `?` begins the query string, which the host's
+ * /plugins combo handler decodes; the instance proxy is a transparent
+ * path+query passthrough (P2-13 runtime verification item).
  * Non-root-relative urls (protocol-relative '//', absolute http(s)/blob/data:,
  * or relative) are dropped: a poisoned host graph must never steer the
  * module-script loader to an external origin.
@@ -217,26 +232,51 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
       console.warn(`[host-graph] dropping non-root-relative bundle url for ${row.id}`)
       continue
     }
-    out.push({ id: row.id, url: `${basePath}${row.url}`, rev: row.rev })
+    const url = `${basePath}${row.url}`
+    out.push({
+      id: row.id,
+      url,
+      // initialUrl == url: the chamber merge preloads each entry's own combo
+      // (the graph's multi-id batches are ignored), so the row's initial-load
+      // endpoint IS the preloaded script — the boot kernel's arrive() finds
+      // the factory already registered and does not re-fetch.
+      initialUrl: url,
+      rev: row.rev,
+      // The composite covers the whole official shell; kept extras are
+      // standalone rows with no package inject edges to arrive first.
+      inject: [],
+    })
   }
   return out
 }
 
 /**
- * Extra host-graph bundles already preloaded for this page, keyed by entry id
- * (page-level, shared across instances — the shell boot queue is serialized,
- * but the Map keeps the once-only rule explicit and records the loaded rev
- * parallel path). The shared module table refuses a duplicate factory
- * registration (the `__ModuleLoader__.load` sink throws on a repeat —
- * system.ts), so one id must never execute its bundle twice on a page.
+ * Extra host-graph bundles already preloaded for this page, keyed by BUNDLE
+ * URL (page-level, shared across instances — the shell boot queue is
+ * serialized, but the Maps keep the once-only rule explicit and record the
+ * loaded rev parallel path). The shared module table refuses a duplicate
+ * factory registration (the `__ModuleLoader__.load` sink throws on a repeat —
+ * system.ts), so one script URL must never execute twice on a page.
+ *
+ * dsh-v0.1.2-alpha.1: bundle urls are combo endpoints (`/plugins/??…&rev=…`).
+ * A combo script registers EVERY id its query names, so multiple graph rows
+ * can share one url — the preload is therefore keyed by URL (each combo
+ * loads once, registering all its rows' factories), and a second table
+ * records which combo registered each id, so a LATER instance carrying the
+ * same id at a NEWER rev cannot re-execute a second factory for it
+ * (duplicate-registration sink) — that case reuses the loaded factory and
+ * reports restart-required instead. A row that reappears at the same rev is
+ * already covered by the shared load, whatever instance proxy its url was
+ * fetched through (the module table is page-level).
  *
  * The in-flight promise is published BEFORE the load (so concurrent/duplicate
  * ids await the same execution instead of merely observing a premature
- * "loaded" mark). Ordinary load failures are deleted and remain retryable. A
- * DOM-script timeout is different: its tagged rejection remains a tombstone
- * while the original element can still execute. The loader exposes that
- * element's eventual result: a late load converts the entry to success; a
- * late error deletes it so a later boot may retry safely.
+ * "loaded" mark). Ordinary load failures delete the url record AND the id
+ * records it owned, so a retry re-preloads; a DOM-script timeout is
+ * different: its tagged rejection remains a tombstone while the original
+ * element can still execute. The loader exposes that element's eventual
+ * result: a late load converts the entry to success; a late error deletes it
+ * so a later boot may retry safely.
  * A failed preload must not otherwise be treated
  * as done — the module system does NOT re-fetch extra bundles on its own (an
  * extra row has no boot-graph row; a later system.ts import() would throw
@@ -244,16 +284,29 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  * of the page lifetime. A failed load instead fails THIS instance's boot loud
  * (design 09 §4 fail-loud) and a retry boot re-preloads the bundle.
  *
- * Keyed by id — first-rev-wins (union-table model, design 09 §3.2). A later
- * instance carrying another rev reuses the loaded factory but gets an explicit
- * restart-required diagnostic.
+ * First-load-wins (union-table model, design 09 §3.2): the combo that first
+ * executed a factory owns the id forever; a later instance carrying the id at
+ * a newer rev (a rebuilt plugin → different script) reuses the loaded factory
+ * but gets an explicit restart-required diagnostic.
  */
-interface PreloadedExtraBundle {
-  rev: string
+interface PreloadedCombo {
+  /** The ids whose factories this combo script registers (failure rollback set). */
+  ids: Set<string>
   load: Promise<void>
 }
 
-const preloadedExtraBundles = new Map<string, PreloadedExtraBundle>()
+const preloadedCombos = new Map<string, PreloadedCombo>()
+
+/** The combo record whose script registered one id's factory, plus the row
+ *  rev it was seen at (restart-conflict + failure rollback). The combo
+ *  reference is held (not a promise snapshot) so a late-success conversion of
+ *  the shared load is observed by later boots. */
+interface PreloadedIdRecord {
+  rev: string
+  combo: PreloadedCombo
+}
+
+const preloadedIds = new Map<string, PreloadedIdRecord>()
 
 /** A module element can still execute after its request-level timeout. The
  * explicit type keeps that one exceptional lifecycle distinct from ordinary
@@ -331,7 +384,7 @@ export async function collectExtraRows(
   deps: CollectExtraRowsDeps,
 ): Promise<ExtraModuleRow[]> {
   const retry = {
-    attempts: deps.retry?.attempts ?? 6,
+    attempts: deps.retry?.attempts ?? 10,
     delayMs: deps.retry?.delayMs ?? 500,
     sleep: deps.retry?.sleep ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms))),
   }
@@ -365,40 +418,80 @@ export async function collectExtraRows(
   const rows = toExtraRows(dedupeHostEntries(entries, CHAMBER_COVERED_IDS), basePath)
   let restartConflict: ExtraModuleRow | undefined
   await Promise.all(rows.map(async (row) => {
-    let loaded = preloadedExtraBundles.get(row.id)
-    if (loaded !== undefined) {
-      if (loaded.rev !== row.rev) restartConflict ??= row
-    } else {
+    // A script already executed a factory for this id (the id's combo record
+    // is published at preload). A DIFFERENT rev (the combo query carries the
+    // rev, so a newer plugin revision means a different script) cannot swap
+    // the loaded factory without a restart: re-executing a second bundle for
+    // the same id would hit the duplicate-registration sink. Reuse the loaded
+    // factory and report restart-required; the merged row still surfaces.
+    // NOTE: the shared module table is PAGE-level, so the id's factory — and
+    // the original load — is shared across every instance; the per-instance
+    // basePath prefix in `row.url` must NOT be treated as a different script
+    // (same id + same rev = same factory, whatever instance proxy it was
+    // fetched through).
+    const owned = preloadedIds.get(row.id)
+    if (owned !== undefined) {
+      if (owned.rev !== row.rev) {
+        restartConflict ??= row
+        return
+      }
+      // Await the ORIGINAL load (read live off the combo record): a
+      // still-pending or tombstoned load must fail THIS boot loud too, and a
+      // late-success conversion of the shared load is observed by later boots.
+      try {
+        await owned.combo.load
+      } catch (error) {
+        reportDiagnostic(instanceId, 'bundle-load-failed', {
+          pluginId: row.id,
+          message: error instanceof Error ? error.message : String(error),
+        }, deps.reportDiagnostic)
+        throw error
+      }
+      return
+    }
+    let combo = preloadedCombos.get(row.url)
+    if (combo === undefined) {
       // Promise.resolve().then also normalizes a synchronously throwing test /
       // alternate loader into the same shared rejected promise.
-      loaded = {
-        rev: row.rev,
+      combo = {
+        ids: new Set(),
         load: Promise.resolve().then(() => deps.loadModuleBundle(row.url)),
       }
-      preloadedExtraBundles.set(row.id, loaded)
+      preloadedCombos.set(row.url, combo)
     }
+    // Publish the ownership BEFORE the load (a concurrent row for the same
+    // id must await the shared execution, never start its own) and fold this
+    // id into the combo's rollback set. The url-level map is what dedupes a
+    // multi-id combo: rows sharing one url await ONE load (each combo script
+    // registers every id its query names).
+    combo.ids.add(row.id)
+    preloadedIds.set(row.id, { rev: row.rev, combo })
     try {
-      await loaded.load
+      await combo.load
     } catch (error) {
       // 预加载失败不永久标记（见 Map 注释：模块系统不会自取 extra bundle，
       // 永久标记会把该插件在本页面永久卡死）——删除标记后重抛，本次 boot
-      // 响亮失败，重试 boot 会重新预加载。
-      // Only the owner still installed in the map may clear it. This guards a
-      // retry installed after a rejection from being deleted by a later catch
-      // in another waiter of the old promise.
+      // 响亮失败，重试 boot 会重新预加载。The combo record is the owner: a
+      // retry installs a NEW record for the same url, so a later catch in
+      // another waiter of the old promise must not clear the new one.
       const bundleOutcome = error instanceof BundleLoadTimeoutError ? error.bundleOutcome : null
-      if (bundleOutcome === null && preloadedExtraBundles.get(row.id) === loaded) {
-        preloadedExtraBundles.delete(row.id)
-      } else if (bundleOutcome !== null) {
+      const clearCombo = (): void => {
+        if (preloadedCombos.get(row.url) !== combo) return
+        preloadedCombos.delete(row.url)
+        for (const id of combo.ids) {
+          if (preloadedIds.get(id)?.combo === combo) preloadedIds.delete(id)
+        }
+      }
+      if (bundleOutcome === null) {
+        clearCombo()
+      } else {
         void bundleOutcome.then(
           succeeded => {
-            if (preloadedExtraBundles.get(row.id) !== loaded) return
-            if (succeeded) loaded.load = Promise.resolve()
-            else preloadedExtraBundles.delete(row.id)
+            if (preloadedCombos.get(row.url) !== combo) return
+            if (succeeded) combo.load = Promise.resolve()
+            else clearCombo()
           },
-          () => {
-            if (preloadedExtraBundles.get(row.id) === loaded) preloadedExtraBundles.delete(row.id)
-          },
+          () => { clearCombo() },
         )
       }
       reportDiagnostic(instanceId, 'bundle-load-failed', {

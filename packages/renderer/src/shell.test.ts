@@ -106,12 +106,12 @@ test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a 
   const restoreFetch = stubUnavailableGraph()
   const restoreWindow = stubWindow()
   __testResetDisposed()
-  __testSetBootError('client-modules: require("@deepseek-ai/dsh-client-runtime/client") missed the module table')
+  __testSetBootError('client-modules: require("@deepseek-ai/dsh-client-store") missed the module table')
   __testSetRunError(undefined)
   try {
     const state = await bootInstanceShell('ssh-test-fail-1', '/api/i/ssh-test-fail-1', {} as HTMLElement, () => {})
     assert.equal(state.booted, false)
-    assert.equal(state.error, 'client-modules: require("@deepseek-ai/dsh-client-runtime/client") missed the module table')
+    assert.equal(state.error, 'client-modules: require("@deepseek-ai/dsh-client-store") missed the module table')
     // The failed entry was disposed: a retry re-boots the container cleanly
     // (no duplicate React root / zombie ctx).
     assert.equal(__testDisposedCount(), 1)
