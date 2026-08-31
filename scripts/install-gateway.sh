@@ -31,7 +31,7 @@
 #         --no-auth --local --foreground --purge
 #
 # 交互向导（小白主线 8 步，每步有说明与校验循环，q 退出 / ESC/back 返回上一步）：
-#   1 版本通道（稳定/beta/精确/离线） → 2 访问方式（本机/反代/直连/高级）
+#   1 版本通道（稳定/beta/精确列出全部可用版本/离线） → 2 访问方式（本机/反代/直连/高级）
 #   → 3 登录凭据（外部形态：密码/Token/两者/--no-auth 需 YES 确认；
 #     密码与 Token 双重输入 + 实时字符计数 + 长度校验，留空自动生成并显示一次）
 #   → 4 端口（对外 + dsh 内部） → 5 服务方式 → 6 dsh 运行时（版本/镜像/接管）
@@ -65,6 +65,7 @@ NONINTERACTIVE=0
 VERSION=""
 CHANNEL="stable"
 OFFLINE_TGZ=""
+RELEASE_LIST=""    # fetch_available_versions 输出：<版本>|<预发布:0/1>|<有gateway资产:0/1>|<日期>，最新在前
 GATEWAY_PORT=""
 DSH_PORT=""
 BIND_HOST=""
@@ -165,6 +166,12 @@ valid_semver() {
   [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || {
     printf '\033[1;31m✗ 版本必须是 canonical SemVer（如 0.1.5 或 0.2.0-beta.4）\033[0m\n'; return 1
   }
+}
+# 同 valid_semver，但先剥掉可选的 v 前缀（与交互帮助文本"可带 v 前缀"及
+# CLI --version 的 v 前缀语义一致）。dsh 版本输入（stage6）仍用不带 v 的
+# valid_semver——dsh 版本树按精确 semver 落盘，v 前缀会污染路径。
+valid_semver_v() {
+  valid_semver "${1#v}"
 }
 valid_bind() {
   [[ "$1" == "127.0.0.1" || "$1" == "0.0.0.0" ]] || {
@@ -429,6 +436,106 @@ validate_gateway_version() {
     || die "gateway 版本必须是 canonical SemVer：$version"
 }
 
+# 拉取 GitHub Releases 全部可用版本（最新在前，最多 100 个）写入 RELEASE_LIST：
+#   每行 <版本>|<预发布:0/1>|<有gateway资产:0/1>|<发布日期>，仅收录 canonical SemVer。
+# 用 node 解析（preflight 已保证 node ≥22；脚本 read_systemd_env_value 已有同款先例），
+# 对 GitHub 的美化（多行缩进）与压缩 JSON 都健壮——旧 sed 按 '},{' 切分对美化 JSON
+# 完全不生效（release 之间实际是 '},  {' 带缩进），曾导致 beta 通道实际取到"文档里
+# 第一个 tag"即最新任意 release，而不是真正的预发布。成功且非空返回 0；网络失败或
+# 无合法版本返回 1（调用方决定报错或回退手动输入）。
+fetch_available_versions() {
+  local json
+  json=$(github_api "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100") || return 1
+  RELEASE_LIST=$(printf '%s' "$json" | node -e '
+let s = ""
+process.stdin.on("data", d => { s += d })
+process.stdin.on("end", () => {
+  const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/
+  try {
+    const rels = JSON.parse(s)
+    const out = []
+    for (const r of rels) {
+      const tag = String(r.tag_name || "").replace(/^v/, "")
+      if (!SEMVER.test(tag)) continue
+      const asset = (r.assets || []).some(a => a.name === "dsh-chamber-gateway-" + tag + ".tgz")
+      const date = String(r.published_at || "").slice(0, 10)
+      out.push([tag, r.prerelease ? 1 : 0, asset ? 1 : 0, date].join("|"))
+    }
+    process.stdout.write(out.join("\n"))
+  } catch (_) { /* 非 JSON 响应（限流页等）：空输出，调用方回退 */ }
+})
+') || return 1
+  if [[ -n "$RELEASE_LIST" ]]; then return 0; fi
+  return 1
+}
+
+print_version_list() {
+  printf '\033[1m可用版本（GitHub Releases，最新在前；最多 100 个）\033[0m\n'
+  local n=0 tag pre asset date flag note
+  while IFS='|' read -r tag pre asset date; do
+    n=$((n + 1))
+    flag="稳定"; note=""
+    [[ "$pre" == "1" ]] && flag="预发布"
+    [[ "$asset" == "1" ]] || note="（无 gateway 资产）"
+    printf '  %2d) %-18s %s %s %s\n' "$n" "$tag" "$flag" "$date" "$note"
+  done <<< "$RELEASE_LIST"
+}
+
+# 精确版本选择器：先列出全部可用版本（含预发布/资产标记），输入序号直接选，
+# 或手动输入版本号（可带 v 前缀，自动去除）。q 退出；ESC/back 返回上一步；
+# 回车重新展示列表。列表获取失败时回退纯文本输入（离线/限流场景仍可用）。
+# 注意：内部局部变量用 val 而不用 v——调用方（stage1）的变量名就是 v，
+# assign_var 按名 printf -v 赋值时会撞上同名局部变量导致外层拿不到值。
+pick_version() {
+  local var="$1" val=""
+  if ! interactive; then
+    if ! ask_text val "请输入精确版本" \
+      "版本号需是 canonical SemVer，可带 v 前缀（如 0.1.5 / v0.1.5）。" "" valid_semver_v; then return 1; fi
+    assign_var "$var" "${val#v}"
+    return 0
+  fi
+  if ! fetch_available_versions; then
+    warn "无法获取版本列表（GitHub Releases API 不可达），请手动输入版本号"
+    if ! ask_text val "请输入精确版本" \
+      "版本号需是 canonical SemVer，可带 v 前缀（如 0.1.5 / v0.1.5）。" "" valid_semver_v; then return 1; fi
+    assign_var "$var" "${val#v}"
+    return 0
+  fi
+  print_version_list
+  while true; do
+    printf '输入序号选择，或直接输入版本号（q 退出，ESC/back 返回上一步）: '
+    local input=""
+    if ! IFS= read -r input; then
+      die "已退出（EOF）——未做任何修改，可随时重新运行"
+    fi
+    case "${input:-}" in
+      q) die "已退出（q）——未做任何修改，可随时重新运行" ;;
+    esac
+    if [[ -z "$input" ]]; then
+      print_version_list    # 回车：重新展示列表
+      continue
+    fi
+    if [[ "$input" == $'\e' || "$input" == "back" ]]; then return 1; fi
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+      val=$(printf '%s\n' "$RELEASE_LIST" | awk -F'|' -v n="$input" 'NR==n {print $1; exit}' || true)
+      if [[ -n "$val" ]]; then
+        valid_semver "$val" || { val=""; continue; }
+        assign_var "$var" "$val"
+        return 0
+      fi
+      printf '\033[1;31m✗ 无效序号：%s（1-%s）\033[0m\n' \
+        "$input" "$(printf '%s\n' "$RELEASE_LIST" | wc -l | tr -d ' ')"
+      continue
+    fi
+    val="${input#v}"
+    if valid_semver "$val"; then
+      assign_var "$var" "$val"
+      return 0
+    fi
+    # valid_semver 已打印红字原因，继续重问
+  done
+}
+
 resolve_version() {
   if [[ -n "$OFFLINE_TGZ" ]]; then
     VERSION="local"
@@ -440,11 +547,15 @@ resolve_version() {
     return 0
   fi
   if [[ "$CHANNEL" == "beta" ]]; then
-    # 最新预发布
-    local json
-    json=$(github_api "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=10") \
-      || die "无法访问 GitHub Releases API（可设 HTTPS_PROXY 代理）"
-    VERSION=$(printf '%s' "$json" | tr -d '\n' | sed 's/},{/}\n{/g' | grep '"prerelease": *true' | head -1 | grep -o '"tag_name": *"v[^"]*"' | sed 's/.*"v\([^"]*\)".*/\1/' || true)
+    # 最新预发布：从完整版本列表中取第一个 prerelease（优先带 gateway 资产）。
+    # 旧实现按 '},{' 切分 JSON 对 GitHub 美化输出无效，实际取到"文档里第一个 tag"
+    # 即最新任意 release；一旦最新发布是稳定版就会静默装错版本。
+    fetch_available_versions || die "无法访问 GitHub Releases API（可设 HTTPS_PROXY 代理）"
+    VERSION=$(printf '%s\n' "$RELEASE_LIST" | awk -F'|' '$2==1 && $3==1 {print $1; exit}' || true)
+    if [[ -z "$VERSION" ]]; then
+      # 回退：仍接受无 gateway 资产的预发布（下载阶段会诚实报资产缺失）
+      VERSION=$(printf '%s\n' "$RELEASE_LIST" | awk -F'|' '$2==1 {print $1; exit}' || true)
+    fi
     [[ -n "$VERSION" ]] || die "未找到 beta 预发布版本（prerelease）"
   else
     local json
@@ -1137,7 +1248,7 @@ stage1_version() {
   local choice
   if ! ask_choice choice \
     "gateway 安装包来自 GitHub Releases（下载后 sha256 校验）。选择安装通道：" \
-    $'稳定版：最新正式发布（推荐）。\nbeta：预发布版本，尝鲜新功能，可能有变动。\n精确版本：指定版本号（如 0.1.5）。\n离线包：使用已下载的 .tgz 文件（无需网络）。' \
+    $'稳定版：最新正式发布（推荐）。\nbeta：预发布版本，尝鲜新功能，可能有变动。\n精确版本：列出所有可用版本供选择，或手动输入（如 0.1.5）。\n离线包：使用已下载的 .tgz 文件（无需网络）。' \
     "a" "a) 最新稳定版|stable" "b) 最新 beta 版|beta" "c) 精确版本|exact" "d) 离线包 .tgz|offline"; then
     return 1
   fi
@@ -1146,10 +1257,10 @@ stage1_version() {
     beta) CHANNEL="beta" ;;
     exact)
       local v=""
-      if ! ask_text v "请输入精确版本" "版本号需是 canonical SemVer，可带 v 前缀（如 0.1.5 / v0.1.5）。" "" valid_semver; then
+      if ! pick_version v; then
         return 1
       fi
-      VERSION="${v#v}"
+      VERSION="$v"
       ;;
     offline)
       local f=""

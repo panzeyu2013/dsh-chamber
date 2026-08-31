@@ -18,13 +18,15 @@ cd dsh-chamber && bash scripts/install-gateway.sh
 
 向导为「欢迎页 + 8 步配置」（版本通道 → 访问方式 → 登录凭据 → 端口 → 服务方式 → dsh 运行时 →
 安装位置 → 预览确认），**每步都有白话说明**，输入非法会红字提示重问，`q` 退出、`ESC` 或 `back`
-返回上一步；执行前有完整预览（含主要落盘路径与访问地址）。安装完成后询问是否把
+返回上一步；**「精确版本」会先列出 GitHub Releases 上全部可用版本**（稳定/预发布标记、
+发布日期、gateway 资产标记），输入序号即可选中，也可直接输入版本号（可带 `v` 前缀）；
+执行前有完整预览（含主要落盘路径与访问地址）。安装完成后询问是否把
 `~/.dsh-chamber/bin` 加入 PATH（幂等写入 `~/.bashrc` / `~/.zshrc`），并把脚本自身
 复制到该目录供后续管理。默认值：
 
 | 项 | 默认 |
 |---|---|
-| 安装通道 | 最新稳定版（可交互选 beta / 精确版本 / 离线包） |
+| 安装通道 | 最新稳定版（可交互选 beta / 精确版本：列出全部可用版本供选择或手动输入 / 离线包） |
 | 访问方式 | 仅本机（127.0.0.1，免凭据；可交互选反向代理 / 直连 / 高级） |
 | 登录凭据 | 外部形态必须设置：密码（默认）/ Token / 两者；`--no-auth` 交互模式下需输入 YES 二次确认（-y 时 flag 本身即显式放行） |
 | 对外端口 | **30801**（dsh 内部端口 **30800** 一并说明，可改） |
@@ -40,8 +42,8 @@ cd dsh-chamber && bash scripts/install-gateway.sh
    到受控锚目录 `~/.dsh-chamber/gateway/dsh-anchor`（镜像按所选源）。**dsh 未
    就绪不装 gateway**。
 2. **下载 gateway**：解析 GitHub release 资产（latest 稳定 / `--channel beta`
-   预发布 / `--version` 精确 pin）→ 下载 tgz + **`.sha256` 校验**（校验失败
-   即中止）。
+   预发布 / `--version` 精确 pin；交互「精确版本」先列出全部可用版本供选择）→
+   下载 tgz + **`.sha256` 校验**（校验失败即中止）。
 3. **安装**：local（默认，`~/.dsh-chamber/gateway/versions/<v>` + `current` 指针，
    旧版保留可回滚）或 npm 全局（`--local` 之外的选择）。
 4. **配置落盘**：`~/.dsh-chamber/gateway/gateway.conf`（生效配置与凭据，**0600**）+ `gateway.env`
