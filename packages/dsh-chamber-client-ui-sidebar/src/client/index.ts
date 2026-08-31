@@ -1,15 +1,18 @@
 /** Registers the chamber sidebar shell (design 05 §2) into the layout-owned slot. */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { indexSubagentDescendants } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ObservableSnapshot, SessionListState, WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
+// Type-only: pulls the SlotRegistry service merge (ctx.slots).
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import { indexSubagentDescendants } from '../shared/subagent-lineage.ts'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { en, zh, type SidebarKey } from './locales.ts'
 import { chamberBridge, isValidProducerSourceFingerprint } from '../shared/aggregate-store.ts'
 import {
-  dshVersionFromHostDescription,
   instanceSnapshotSignature,
   projectInstanceSnapshot,
   projectRuntimeFacts,
@@ -32,7 +35,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'sidebar'
 
 /** Services required by the sidebar plugin. */
-export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'locale', 'connection']
+export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiWorkspace', 'locale']
 
 /**
  * Registers the sidebar shell and its service callbacks. The hole
@@ -45,11 +48,16 @@ export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'locale', 'c
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: sidebar dictionaries')
 
+  // chamber (v0.1.2-alpha.1): `workspaces.startSession` moved to the
+  // ui-workspace cross-Controller navigation service (official sidebar shape).
+  const workspaceNavigation = ctx.get('uiWorkspace') as unknown as {
+    startSession(workspaceId?: Parameters<SidebarRootInjected['startSession']>[0]): void
+  }
   const injectProps = (): SidebarRootInjected => ({
-    // The shell's New Session button rides the runtime's shared action
+    // The shell's New Session button rides the Workspace UI's shared action
     // (current Session Workspace, then recent Workspace) — of THIS ctx, so it
     // always acts on the current source.
-    startSession: (workspaceId) => { ctx.workspaces.startSession(workspaceId) },
+    startSession: (workspaceId) => { workspaceNavigation.startSession(workspaceId) },
     toggleSidebar: () => { ctx.layout.toggleSidebar() },
     // chamber patch (05 §4): the renderer shell installs this immutable
     // per-entry fact before any plugin materializes.
@@ -112,18 +120,9 @@ export function apply(ctx: ClientContext): void {
     if (typeof chamberInstanceId !== 'string'
       || !isValidProducerSourceFingerprint(chamberInstanceId, chamberSourceFingerprint)) return () => {}
     const sessionsList = (ctx.sessions as unknown as { list: ObservableSnapshot<SessionListState> }).list
-    const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceListState> }).list
+    const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceSnapshot> }).list
     const runtimeProducer = chamberBridge.registerInstanceRuntimeProducer(chamberInstanceId, chamberSourceFingerprint)
     const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(chamberInstanceId, chamberSourceFingerprint)
-    const hostProducer = chamberBridge.registerInstanceHostProducer(chamberInstanceId, chamberSourceFingerprint)
-    const hostDescription = (ctx as unknown as {
-      connection: {
-        hostDescription: {
-          getSnapshot(): unknown
-          subscribe(listener: () => void): () => void
-        }
-      }
-    }).connection.hostDescription
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
@@ -158,24 +157,22 @@ export function apply(ctx: ClientContext): void {
       runtimeProducer.report(projectRuntimeFacts(snapshot, subagentRunning))
       queueSnapshot()
     }
-    const syncHost = (): void => {
-      const dshVersion = dshVersionFromHostDescription(hostDescription.getSnapshot())
-      hostProducer.report(dshVersion === undefined ? undefined : { dshVersion })
-    }
+    // v0.1.2-alpha.1: the host-description producer is REMOVED — the
+    // connection handle no longer exposes `hostDescription` (host.describe
+    // deleted upstream), so the sidebar stops producing dshVersion facts.
+    // The version chip is hidden until the D2 wiring lands (control-plane
+    // `dsh --version` facts projected through the chamber bridge, P1-7);
+    // the aggregate-store host channel stays as that placeholder.
     sync()
-    syncHost()
     queueSnapshot()
     const unsubscribeSessions = sessionsList.subscribe(sync)
     const unsubscribeWorkspaces = workspacesList.subscribe(queueSnapshot)
-    const unsubscribeHost = hostDescription.subscribe(syncHost)
     return () => {
       disposed = true
       unsubscribeSessions()
       unsubscribeWorkspaces()
-      unsubscribeHost()
       snapshotProducer.clear()
       runtimeProducer.clear()
-      hostProducer.clear()
     }
   }, 'dsh-chamber: sidebar runtime facts report')
 }

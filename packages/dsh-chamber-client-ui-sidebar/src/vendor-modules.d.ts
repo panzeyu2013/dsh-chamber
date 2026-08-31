@@ -14,7 +14,7 @@
  */
 
 declare module '@deepseek-ai/cordis' {
-  /** Loose minimal shape (the sidebar consumes ctx through the runtime's ClientContext face). */
+  /** Loose minimal shape (the sidebar consumes ctx through the cordis Context face). */
   export class Context {
     [key: string]: any
   }
@@ -25,42 +25,85 @@ declare module '@deepseek-ai/dsh-invariants' {
   export type InvariantInstaller = (ctx: any) => void | Promise<void>
 }
 
-declare module '@deepseek-ai/dsh-client-connection/client' {
-  /** The unary wire client base (instance-api.ts subclasses and overrides doFetch). */
-  export class AbstractApiClient {
-    [key: string]: any
-    protected doFetch(input: URL, init?: RequestInit): Promise<Response>
+declare module '@deepseek-ai/dsh-client-store' {
+  /** Minimal observable snapshot source (contract.ts; the mounted ctx store faces). */
+  export interface ObservableSnapshot<T> {
+    getSnapshot(): T
+    subscribe(listener: () => void): () => void
   }
-  /** Wire search page bound (dsh-host-apiproxy session-search.ts re-export, design 06 §1.1). */
+  export type SnapshotSelectorHook<T> = <S>(sel: (s: T) => S, eq?: (a: S, b: S) => boolean) => S
+}
+
+declare module '@deepseek-ai/dsh-api-session-controller/client' {
+  /** Session list row (client store SessionSummary face). */
+  export interface SessionSummary {
+    id: string
+    title?: string
+    displayTitle: string
+    cwd?: string
+    parentId?: string
+    origin?: 'subagent'
+    running: boolean
+    completed?: boolean
+    blank: boolean
+    updatedAt: number
+    projectionValues?: Readonly<Record<string, unknown>>
+  }
+  /** Session list store snapshot (client `ctx.sessions.list`). */
+  export interface SessionListState {
+    ids: readonly string[]
+    byId: Readonly<Record<string, SessionSummary>>
+    current?: string
+    phase: 'pending' | 'ready'
+  }
+  /** Wire search-result page bound (SidebarRoot search copy). */
   export const SESSION_SEARCH_RESULT_LIMIT: number
 }
 
-declare module '@deepseek-ai/dsh-client-runtime/client' {
+declare module '@deepseek-ai/dsh-api-workspace-controller/client' {
+  /** Workspace id brand (slots contract). */
+  export type WorkspaceId = string
+  /** One durable Workspace projected for browser consumers. */
+  export interface WorkspaceView {
+    workspaceId: WorkspaceId
+    path: string
+    title: string
+    sessionIds: readonly string[]
+    createdAt: string
+    updatedAt: string
+  }
+  /** Client Workspace list snapshot (`ctx.workspaces.list`; no `baselinesReady` upstream). */
+  export interface WorkspaceSnapshot {
+    items: readonly WorkspaceView[]
+    archivedSessionIds: readonly string[]
+    state: 'idle' | 'loading' | 'error'
+    phase: 'pending' | 'ready'
+    error: unknown
+  }
+  /** Structured workspace-create failure (P2-18 check; unused by the sidebar, declared for the seam). */
+  export class WorkspaceCreateError extends Error {
+    readonly rpcError: unknown
+  }
+}
+
+declare module '@deepseek-ai/dsh-client-ui-workspace/src/client/navigation.ts' {
   /** Browse-capability business error (DirectoryBrowser renders rpcError.message). */
   export class DirectoryBrowseError extends Error {
     constructor(rpcError: { code: string; message: string; details?: unknown })
     readonly rpcError: { code: string; message: string; details?: unknown }
   }
-  /** Root context of a booted dsh shell (loose face). */
-  export type ClientContext = any
-  /** Snapshot store (runtime facts report, 06 §4). */
-  export type ObservableSnapshot<T> = {
-    getSnapshot(): T
-    subscribe(listener: () => void): () => void
-  }
-  /** Session list state (runtime facts report). */
-  export type SessionListState = any
-  /** Workspace list state (complete snapshot projection). */
-  export type WorkspaceListState = any
-  /** Workspace id brand (slots contract). */
-  export type WorkspaceId = string
-  /** Vendor subagent-lineage aggregation (06 §4.5, running-subagent ring). */
+}
+
+declare module '@deepseek-ai/dsh-client-ui-workspace/src/client/subagent-lineage.ts' {
+  /** Descendant counts for one possible parent Session. */
   export interface SubagentDescendantSummary {
     count: number
     runningCount: number
   }
+  /** Vendor subagent-lineage aggregation (06 §4.5, running-subagent ring). */
   export function indexSubagentDescendants(
     summaries: Readonly<Record<string, {
+      id: string
       origin?: 'subagent'
       parentId?: string
       running?: boolean
@@ -72,6 +115,8 @@ declare module '@deepseek-ai/dsh-client-locale/client' {
   /** Locale-bound translation function. */
   export type Translate = (key: string, params?: Record<string, string | number>) => string
 }
+
+declare module '@deepseek-ai/dsh-client-ui-renderer/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   import type { ReactNode } from 'react'

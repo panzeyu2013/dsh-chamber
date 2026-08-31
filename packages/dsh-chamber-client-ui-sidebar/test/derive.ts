@@ -14,7 +14,6 @@ import {
   BLANK_GHOST_GRACE_MS,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
-  dshVersionFromHostDescription,
   hashString,
   increasedForkTitle,
   instanceSnapshotSignature,
@@ -67,21 +66,10 @@ function snapshot(workspaces: WorkspaceRow[], sessions: SessionRow[]): InstanceS
   return { workspaces, sessions, archivedSessionIds: [] }
 }
 
-test('host.describe version projection is exact and malformed values stay unknown', () => {
-  assert.equal(dshVersionFromHostDescription({ version: '0.2.0-beta.2' }), '0.2.0-beta.2')
-  assert.equal(dshVersionFromHostDescription(undefined), undefined)
-  assert.equal(dshVersionFromHostDescription({}), undefined)
-  assert.equal(dshVersionFromHostDescription({ version: '' }), undefined)
-  assert.equal(dshVersionFromHostDescription({ version: ' 1.2.3' }), undefined)
-  assert.equal(dshVersionFromHostDescription({ version: '1.2.3\nforged' }), undefined)
-  assert.equal(dshVersionFromHostDescription({ version: 'x'.repeat(129) }), undefined)
-})
-
 test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx rows', () => {
   const workspaceState = {
     items: [workspace('w1', 'Work', ['s1', 'sub'])],
     archivedSessionIds: ['old'],
-    baselinesReady: true,
     state: 'idle',
     phase: 'ready',
   }
@@ -98,9 +86,11 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
     archivedSessionIds: ['old'],
   })
-  assert.equal(projectInstanceSnapshot({ ...workspaceState, baselinesReady: false }, sessionState), undefined)
+  // v0.1.2-alpha.1: the upstream `baselinesReady` field was removed — the
+  // workspace completeness check is `state === 'idle'` + `phase === 'ready'`.
   assert.equal(projectInstanceSnapshot({ ...workspaceState, state: 'loading' }, sessionState), undefined)
   assert.equal(projectInstanceSnapshot({ ...workspaceState, state: 'error' }, sessionState), undefined)
+  assert.equal(projectInstanceSnapshot({ ...workspaceState, phase: 'pending' }, sessionState), undefined)
   assert.equal(projectInstanceSnapshot(workspaceState, { ...sessionState, phase: 'pending' }), undefined)
 
   // Upstream phases are sticky across reconnect, and the workspace store's
@@ -828,8 +818,8 @@ test('projectRuntimeFacts passes current through and emits every session with it
     current: 's1',
     byId: {
       s1: { running: true, completed: true },
-      s2: { running: false, pendingInteraction: 'approval' },
-      s3: { running: true, pendingInteraction: 'question' },
+      s2: { running: false },
+      s3: { running: true },
       s4: { running: false },
     },
   })
@@ -837,25 +827,21 @@ test('projectRuntimeFacts passes current through and emits every session with it
     current: 's1',
     sessions: {
       s1: { running: true, completed: true },
-      s2: { running: false, pending: 'approval' },
-      s3: { running: true, pending: 'question' },
+      s2: { running: false },
+      s3: { running: true },
       s4: { running: false },
     },
   })
 })
 
-test('projectRuntimeFacts maps every pendingInteraction kind and keeps completed alongside pending', () => {
+test('projectRuntimeFacts keeps completed alongside running (pending source removed upstream in 0.1.2)', () => {
   const report = projectRuntimeFacts({
     byId: {
-      a: { running: false, pendingInteraction: 'plan-review' },
-      b: { running: false, pendingInteraction: 'question' },
-      c: { running: true, completed: true, pendingInteraction: 'approval' },
+      c: { running: true, completed: true },
     },
   })
   assert.deepEqual(report.sessions, {
-    a: { running: false, pending: 'plan-review' },
-    b: { running: false, pending: 'question' },
-    c: { running: true, completed: true, pending: 'approval' },
+    c: { running: true, completed: true },
   })
   assert.equal(report.current, undefined)
 })
@@ -871,7 +857,7 @@ test('projectRuntimeFacts drops subagent-origin rows (no notification edge / no 
     byId: {
       s1: { running: true },
       sub1: { running: true, origin: 'subagent' },
-      sub2: { running: false, completed: true, origin: 'subagent', pendingInteraction: 'question' },
+      sub2: { running: false, completed: true, origin: 'subagent' },
       s2: { running: false, completed: true },
     },
   })
@@ -927,12 +913,12 @@ test('projectRuntimeFacts omits runningSubagents without the lineage map or for 
   assert.deepEqual(noMap.sessions.a, { running: false })
   const zero = projectRuntimeFacts({ byId: { a: { running: false } } }, new Map([['a', 0]]))
   assert.deepEqual(zero.sessions.a, { running: false })
-  // The count coexists with the sparse completed/pending extras.
+  // The count coexists with the sparse completed extra (pending is gone in 0.1.2).
   const combined = projectRuntimeFacts(
-    { byId: { a: { running: false, completed: true, pendingInteraction: 'approval' } } },
+    { byId: { a: { running: false, completed: true } } },
     new Map([['a', 3]]),
   )
-  assert.deepEqual(combined.sessions.a, { running: false, completed: true, pending: 'approval', runningSubagents: 3 })
+  assert.deepEqual(combined.sessions.a, { running: false, completed: true, runningSubagents: 3 })
 })
 
 // ---- mergeRuntimeFacts (the App's deriveServers runtime union, 06 §4.2) ----

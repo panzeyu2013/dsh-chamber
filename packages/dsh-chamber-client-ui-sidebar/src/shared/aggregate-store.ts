@@ -56,7 +56,14 @@ export interface ChamberServerAggregate {
   aggregateError?: string
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
-  /** Live host.describe version from this instance's own connection generation. */
+  /**
+   * dsh version chip fact. D2-PENDING (v0.1.2-alpha.1): the old producer
+   * source — the connection handshake's host.describe — was deleted upstream,
+   * so the sidebar plugin no longer reports host facts and the chip renders
+   * hidden until the D2 wiring lands (control-plane `dsh --version` facts
+   * projected through the chamber bridge, plan-review P1-7). The
+   * registerInstanceHostProducer channel below stays as that placeholder.
+   */
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
@@ -112,9 +119,16 @@ export interface InstanceRuntimeReport {
   }>
 }
 
-/** Generation-scoped, read-only host facts from one mounted instance ctx. */
+/**
+ * Generation-scoped, read-only host facts from one mounted instance ctx.
+ * D2-PENDING (v0.1.2-alpha.1): the sidebar no longer produces these — the
+ * host-description source was deleted upstream — and the renderer version chip
+ * stays hidden until the D2 wiring (control-plane `dsh --version` facts)
+ * lands. The channel type is kept so the App-layer consumption surface
+ * (`onInstanceHost`) does not churn twice.
+ */
 export interface InstanceHostReport {
-  /** Exact non-empty host.describe.version; absent means honestly unknown. */
+  /** Exact non-empty dsh version; absent means honestly unknown. */
   dshVersion?: string
 }
 
@@ -290,9 +304,13 @@ export const chamberBridge = {
   },
 
   /**
-   * Register the live host-description producer owned by one mounted ctx.
-   * The token prevents a late teardown from an old shell clearing a newer
-   * generation's version fact for the same source.
+   * Register the live host-facts producer owned by one mounted ctx.
+   * D2-PENDING (v0.1.2-alpha.1): NO producer registers anymore — the old
+   * host-description data source was deleted upstream, so the renderer's
+   * version chip is hidden until the D2 wiring lands (plan-review P1-7).
+   * The channel is retained as that placeholder (and for the App layer's
+   * `onInstanceHost` consumer); the token prevents a late teardown from an
+   * old shell clearing a newer generation's facts for the same source.
    */
   registerInstanceHostProducer(sourceId: string, sourceFingerprint: string): {
     report: (report: InstanceHostReport | undefined) => void

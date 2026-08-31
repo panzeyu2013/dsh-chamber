@@ -52,7 +52,8 @@
  * source (05 §4; every managed host serves the browse capability) — through
  * the source-header `+`.
  * When a connected source's snapshot fetch failed, its error text replaces
- * the workspace list instead of pretending there are no workspaces (an
+ * the derived workspace list (0.1.2: grouped from session/list cwd facts)
+ * instead of pretending there are no workspaces (an
  * active search query keeps its results visible above that error).
  * Disconnected sources render the header (the status dot/spinner always
  * shows the phase kind — no status text, the raw transport reason never
@@ -105,7 +106,7 @@
  */
 import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import clsx from 'clsx'
-import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-client-connection/client'
+import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
   BrandWordmark, FishLogo, HoverCard, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14,
   IconChevronRightOutline14, IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16, IconLoadingOutline16,
@@ -157,9 +158,10 @@ const COLLAPSE_SETTLE_MS = 150
 const SCROLLBAR_LINGER_MS = 2000
 
 /**
- * Wire search-result page bound — SESSION_SEARCH_RESULT_LIMIT comes from the
- * wire re-export (dsh-host-apiproxy session-search.ts, design 06 §1.1); only
- * the hasMore copy renders it; the wire caps the actual page.
+ * Wire search-result page bound — SESSION_SEARCH_RESULT_LIMIT comes from
+ * @deepseek-ai/dsh-api-session-controller/client (0.1.2 home; dsh-host-apiproxy
+ * was deleted upstream, dsh-v0.1.2-alpha.1); only the hasMore copy renders it;
+ * the wire caps the actual page.
  */
 
 /** Stable per-source accent: deterministic hue hash of the source id (05 §2). */
@@ -1070,9 +1072,10 @@ export function SidebarRoot({
   )
 
   // Add-workspace directory browser (05 §4, unified in-app dialog): the
-  // dialog drives the browsing source's own unary client (host.listDirectory
-  // / host.createDirectory — the browse capability every managed host
-  // serves). The browse calls are useCallback-stabilized: the vendor dialog
+  // dialog drives the browsing source's own unary client (directoryPicker.list
+  // / directoryPicker.createDirectory — the browse capability every managed
+  // host serves, v0.1.2-alpha.1 namespace). The browse calls are
+  // useCallback-stabilized: the vendor dialog
   // resets its whole navigation on every change of its `navigate` closure,
   // and this shell re-renders on chamberBridge publishes (status/snapshot
   // pushes + fallback refreshes), so an inline arrow would wipe the user's
@@ -2444,6 +2447,8 @@ export function SidebarRoot({
                               ) : (
                                 <HoverCard
                                   anchor={workspaceHeader}
+                                  copyLabel={t('action.copy')}
+                                  copiedLabel={t('hover.copied')}
                                   content={(
                                     <div className={cc.hoverContent}>
                                       <div className={cc.hoverTitle}>{workspace.title}</div>

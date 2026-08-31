@@ -452,7 +452,11 @@ export function projectRuntimeFacts(
     byId?: Record<string, {
       running?: boolean
       completed?: boolean
-      pendingInteraction?: 'approval' | 'plan-review' | 'question'
+      // dsh-v0.1.2-alpha.1: SessionSummary no longer carries pendingInteraction
+      // (removed upstream; the new pending face lives in ui-conversation slot
+      // props, which the chamber sidebar does not consume). The pending
+      // notification edge (design 19) is therefore degraded until a new
+      // authoritative source is wired — see review-round1 P1-3.
       origin?: 'subagent'
     }>
   },
@@ -473,7 +477,8 @@ export function projectRuntimeFacts(
       running: facts?.running === true,
     }
     if (facts?.completed === true) row.completed = true
-    if (facts?.pendingInteraction !== undefined) row.pending = facts.pendingInteraction
+    // 0.1.2 pendingInteraction removed upstream — row.pending stays undefined
+    // (the notification edge keeps its type for the future source).
     const runningSubagents = subagentRunning?.get(id) ?? 0
     if (runningSubagents > 0) row.runningSubagents = runningSubagents
     sessions[id] = row
@@ -501,9 +506,9 @@ export function projectInstanceSnapshot(
       updatedAt: string
     }[]
     archivedSessionIds?: readonly string[]
-    baselinesReady?: boolean
     state?: string
     phase?: string
+    error?: unknown
   },
   sessions: {
     ids?: readonly string[]
@@ -521,7 +526,8 @@ export function projectInstanceSnapshot(
   },
 ): InstanceSnapshot | undefined {
   // Both arrival phases are sticky after their first success in the upstream
-  // runtime. The workspace store also projects its pull-activity `state`
+  // runtime (dsh-v0.1.2-alpha.1 `WorkspaceSnapshot` / `SessionListState`).
+  // The workspace store also projects its pull-activity `state`
   // (loading/error during a reconnect, while `phase` stays ready), so a
   // loading/error workspace withdraws here — clearing the producer's content
   // signature so an identical recovered baseline is emitted again instead of
@@ -529,7 +535,9 @@ export function projectInstanceSnapshot(
   // arrival lifecycle): `SessionListState` has no `state` axis, and its
   // baseline refreshes together with the workspace baseline on reconnect, so
   // the workspace `state` check is the single completeness authority there.
-  if (workspaces.baselinesReady !== true || workspaces.state !== 'idle'
+  // The upstream `baselinesReady` field was removed in v0.1.2-alpha.1 — the
+  // arrival check is `state === 'idle'` + both phases `ready` only.
+  if (workspaces.state !== 'idle'
     || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
   const byId = sessions.byId ?? {}
   return {
@@ -640,19 +648,6 @@ export function instanceSnapshotSignature(
  */
 export function runningRingVisible(channelRunning: boolean | undefined, polledRunning: boolean | undefined): boolean {
   return polledRunning === true
-}
-
-/**
- * Project the live connection handshake's host.describe version without
- * guessing. Malformed, empty, control-character or implausibly large values
- * become `undefined`, which every consumer renders as an honest “unknown”.
- */
-export function dshVersionFromHostDescription(description: unknown): string | undefined {
-  if (description === null || typeof description !== 'object') return undefined
-  const version = (description as { version?: unknown }).version
-  if (typeof version !== 'string' || version === '' || version.length > 128) return undefined
-  if (version !== version.trim() || /[\u0000-\u001f\u007f]/.test(version)) return undefined
-  return version
 }
 
 /**
@@ -1112,9 +1107,9 @@ export function mergeSearchResults(
 
 /**
  * Fork-child title increment (P1-4). VERBATIM port of the official dsh client
- * runtime's `increasedForkTitle` (vendor
- * dsh-client-runtime/src/client/sessions/service.ts L184-194): the wire
- * `session.fork` accepts only `{ sessionId, atSeq? }` — the official
+ * runtime's `increasedForkTitle` (upstream
+ * dsh-api-session-controller/src/client/sessions/service.ts): the wire
+ * `session/fork` accepts only `{ sessionId, atSeq? }` — the official
  * `increaseTitle` flag is a client-side convenience (fork succeeds, then the
  * child is renamed) — so the chamber implements the same increment itself:
  * a trailing half-width or full-width parenthesized number increments
