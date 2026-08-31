@@ -10,6 +10,32 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Fixed
+
+- **Gateway state root permission contract: fail-closed `require 0700` → auto-tighten + owner check** —
+  `createGatewayStore` no longer refuses to start when a pre-existing state root
+  is not exactly 0700 (legacy installs created a 0755 root under the default
+  umask, which crash-looped under systemd). The root is now tightened to 0700
+  via a pinned no-follow descriptor; a new owner-uid check fails closed on
+  foreign-owned directories (a root service must never adopt another user's
+  directory and then read/execute its content as install input), and the mode
+  is re-verified after fchmod to keep fail-closed on filesystems that silently
+  ignore chmod (2026-09 user decision).
+- **install-gateway.sh private layout converges to 0700** — the script now sets
+  `umask 077` globally and `ensure_private_layout()` creates/verifies
+  BASE_DIR/gateway/versions/dsh-anchor/bin/run as 0700 across install, update
+  and foreground restart flows, closing the early 0755 window on
+  BASE_DIR/GATEWAY_DIR.
+- **systemd unit `EnvironmentFile=` unquoted** — the directive does not support
+  quoting; the old template emitted a quoted path that was looked up literally
+  and silently failed to load (service started with an empty environment /
+  defaults). The raw path is now written.
+- **control-plane recursive mkdir uses explicit 0700** — `ensurePrivateDirectoryNoFollow`
+  and `createJsonStore` now pass `mode: 0o700` when creating ancestor
+  directories (defensive).
+
 ## [0.2.0] - 2026-08-31
 
 > **First stable release** — aggregates the full 0.2.0-beta.1 → beta.4 line

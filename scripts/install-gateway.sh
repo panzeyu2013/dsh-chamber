@@ -29,6 +29,8 @@
 #         --gateway-port N --dsh-port N --dsh-path DIR --skip-dsh
 #         --origin URL --trusted-proxy IP --ui-password P --api-token T
 #         --no-auth --local --foreground --purge
+#         --service-user USER 以专用系统用户运行 gateway（unit 加 User=，
+#           chown 全部数据目录；仅 root + systemd 服务形态可用）
 #
 # 交互向导（小白主线 8 步，每步有说明与校验循环，q 退出 / ESC/back 返回上一步）：
 #   1 版本通道（稳定/beta/精确列出全部可用版本/离线） → 2 访问方式（本机/反代/直连/高级）
@@ -40,7 +42,10 @@
 # ~/.zshrc），并把本脚本自身复制到 ${BASE_DIR}/bin/ 供后续管理调用。
 # ============================================================================
 set -euo pipefail
-
+# 私有契约基线：本脚本创建的一切目录/文件默认 0700/0600（0700 目录内的
+# 文件即便显式 chmod +x 也只有 owner 可见）。需要对外可读/可执行的产物
+# （systemd unit 0644、bin 启动器）由各自的显式 chmod 覆盖。
+umask 077
 # ---------------------------------------------------------------------------
 # 常量（发布 checklist 锁定：dsh 版本变更必须同步这里与 release.yml）
 # DSH_CHAMBER_DSH_VERSION 是「内建/回退锚」默认版本（design 18 §9）：运行期
@@ -730,15 +735,75 @@ publish_staged_file() {
   mv_T "$staged" "$target" || { rm -f "$staged"; return 1; }
 }
 
+# ---------------------------------------------------------------------------
+# 私有布局
+# ---------------------------------------------------------------------------
+# BASE_DIR 必须是一个专用绝对路径：相对路径/含 systemd specifier(%) 或 glob
+# 字符的路径会让 unit 的 EnvironmentFile/ExecStart 指令被 systemd 静默丢弃
+# （与 EnvironmentFile 引号事故同型的无声故障）；把 BASE_DIR 指向 $HOME、
+# /tmp、/ 等宽泛根则会被 ensure_private_layout 整体 chmod 700 破坏——gateway
+# 侧对 stateDir 有 validateGatewayStateDirPath 同款纪律，安装器必须一致。
+validate_base_dir() {
+  [[ "$BASE_DIR" == /* ]] \
+    || die "BASE_DIR 必须是绝对路径：$BASE_DIR（可用 DSH_CHAMBER_BASE_DIR 指定）"
+  case "$BASE_DIR" in
+    *%*|*'*'*|*'?'*|*'['*|*']'*) die "BASE_DIR 不能包含 % * ? [ ]（systemd specifier/glob 字符）：$BASE_DIR" ;;
+  esac
+  local base_canon home_canon tmp_canon
+  if [[ -d "$BASE_DIR" ]]; then
+    base_canon=$(cd "$BASE_DIR" && pwd -P) || true
+  else
+    base_canon="$(cd "$(dirname "$BASE_DIR")" 2>/dev/null && pwd -P)/$(basename "$BASE_DIR")"
+  fi
+  home_canon=$(cd "$HOME" 2>/dev/null && pwd -P) || true
+  tmp_canon=$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P) || true
+  [[ -n "$base_canon" && "$base_canon" != "/" && "$base_canon" != "$home_canon" && "$base_canon" != "$tmp_canon" ]] \
+    || die "BASE_DIR 必须是专用子目录，不能是文件系统根/用户 HOME/系统临时目录：$BASE_DIR"
+}
+
+# 一次性创建 gateway 全部自有目录并收敛 0700：BASE_DIR（state 根）、
+# GATEWAY_DIR、VERSIONS_DIR、dsh-anchor、LOCAL_BIN_DIR、run。全局 umask 077
+# 已保证新建目录天然 0700，此处 chmod 是对「目录先于本函数以松散 umask
+# 存在」的第二道保险（也覆盖 update/restart 等不重走向导的流程），并消除
+# npm install --prefix / mkdir -p 早期把 BASE_DIR/GATEWAY_DIR 建成 0755 的窗口期。
+ensure_private_layout() {
+  validate_base_dir
+  local dir
+  for dir in "$BASE_DIR" "$GATEWAY_DIR" "$VERSIONS_DIR" "${GATEWAY_DIR}/dsh-anchor" "$LOCAL_BIN_DIR" "${BASE_DIR}/run"; do
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+  done
+}
+
+# --service-user：以专用系统用户运行 gateway（systemd 系统服务形态）。
+# 校验：仅 systemd 服务形态；必须 root（写 /etc/systemd/system + 移交属主）；
+# 用户名必须满足 systemd User= 的字符集；用户必须已存在（安装器不负责建号，
+# 避免未授权提权面——建号命令见部署文档）。
+validate_service_user() {
+  [[ -n "$SERVICE_USER" ]] || return 0
+  [[ "$SERVICE_MODE" == "systemd" ]] \
+    || die "--service-user 仅支持 systemd 系统服务形态（当前 SERVICE_MODE=$SERVICE_MODE）"
+  [[ "$EUID" == "0" ]] || die "--service-user 需要 root 执行（写系统 unit + 移交数据属主）"
+  have systemctl || die "--service-user 需要 systemd（未检测到 systemctl）"
+  [[ "$SERVICE_USER" =~ ^[a-zA-Z0-9_.][a-zA-Z0-9_.-]*$ ]] \
+    || die "非法服务用户名（仅限 [A-Za-z0-9_.-]）：$SERVICE_USER"
+  id -u "$SERVICE_USER" >/dev/null 2>&1 \
+    || die "服务用户不存在：$SERVICE_USER（请先创建：useradd -m -r -s /usr/sbin/nologin $SERVICE_USER）"
+}
+
+# 把 BASE_DIR 全部数据移交给服务用户（unit 已有 User=，服务以其身份读写
+# gateway.env/配置/版本树/state；root 仍可管理）。幂等，install/update 两线
+# 都在重启服务前调用。
+apply_service_user_ownership() {
+  [[ -n "$SERVICE_USER" ]] || return 0
+  log "移交数据目录属主给 $SERVICE_USER …"
+  chown -R "$SERVICE_USER" "$BASE_DIR" || die "chown -R $SERVICE_USER $BASE_DIR 失败"
+}
+
 # 配置落盘（该文件由 bash source，故使用 bash 自己的 %q 语法）。
 write_config() {
-  mkdir -p "$GATEWAY_DIR"
-  # 私有 state 根：gateway 的 createGatewayStore 对已存在的根目录要求严格
-  # 0700（fail-closed，绝不静默放宽）——installer 必须把自身 mkdir -p 按
-  # umask 留下的目录一并收紧，否则旧安装（0755 根）升级后会启动崩溃循环。
-  chmod 700 "$BASE_DIR" 2>/dev/null || true
-  chmod 700 "$GATEWAY_DIR" 2>/dev/null || true
-  umask 077
+  # 私有布局统一收敛（幂等；全局 umask 077 之外的显式保险）。
+  ensure_private_layout
   local tmp
   tmp=$(mktemp "${CONF_FILE}.tmp.XXXXXX")
   if ! {
@@ -751,6 +816,7 @@ write_config() {
     printf 'PUBLIC_ORIGIN=%q\n' "$PUBLIC_ORIGIN"
     printf 'TRUSTED_PROXY=%q\n' "$TRUSTED_PROXY"
     printf 'SERVICE_MODE=%q\n' "$SERVICE_MODE"
+    printf 'SERVICE_USER=%q\n' "${SERVICE_USER:-}"
     printf 'DSH_WS=%q\n' "$DSH_WS"
     printf 'NO_AUTH=%q\n' "$NO_AUTH"
     # foreground 不读取/执行 systemd EnvironmentFile；把其重启所需的
@@ -770,9 +836,7 @@ write_config() {
 # dsh-home/（会话数据），gateway 启动相位收敛为 0700；普通 uninstall 保留，
 # 仅 --purge 删除。
 write_env() {
-  mkdir -p "$GATEWAY_DIR"
-  chmod 700 "$BASE_DIR" 2>/dev/null || true
-  umask 077
+  ensure_private_layout
   local tmp
   tmp=$(mktemp "${ENV_FILE}.tmp.XXXXXX") || return 1
   if ! {
@@ -825,7 +889,11 @@ systemd_env_assignment() {
   fi
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
-  value="${value//\$/\\\$}"
+  # `$` 不转义：env 文件里的 `$` 在任何 systemd 版本都无特殊含义；v247+ 的
+  # reader 虽把 `\$` 解回 `$`，但原样 `$` 读回仍是 `$`；而 ≤v246 双引号内只
+  # 解 `\"`，转义 `\$` 反而让含 `$` 的凭据带上反斜杠（静默认证失败）。不转义
+  # 在所有版本 round-trip 一致。（含 `\` 的凭据在 ≤v246 仍会带反斜杠——仅
+  # 影响 2021 年前的发行版，v247+ 正确。）
   printf '%s="%s"\n' "$name" "$value"
 }
 
@@ -992,7 +1060,14 @@ After=network.target
 
 [Service]
 Type=simple
-EnvironmentFile=$(systemd_quote_arg "$ENV_FILE")
+# 以专用系统用户运行（--service-user；validate_service_user 已保证该用户
+# 存在且为 systemd 系统服务形态；数据目录由 apply_service_user_ownership
+# 移交属主）。systemd 会按 passwd 为用户设置 HOME/LOGNAME/USER。
+${SERVICE_USER:+User=${SERVICE_USER}}
+# systemd 的 EnvironmentFile= 指令**不支持引号**（与 ExecStart= 不同）：带引号的
+# 路径会被按字面（含引号字符）查找，文件加载静默失败、服务以空环境启动——
+# 曾导致配置全不生效（gateway 以纯默认 127.0.0.1:3000/auth=none 启动）。
+EnvironmentFile=$ENV_FILE
 ExecStart=$(systemd_exec_start "$exec_path")
 Restart=on-failure
 RestartSec=3
@@ -1157,7 +1232,7 @@ start_foreground() {
   local exec_path
   exec_path=$(gateway_exec) || return 1
   log "前台模式启动：$exec_path serve（nohup + pid 文件）"
-  mkdir -p "${BASE_DIR}/run"
+  ensure_private_layout
   local out="${BASE_DIR}/run/gateway.log"
   local -a args=(serve)
   if [[ -n "$DSH_WS" && "$ENV_ANCHOR" != "1" ]]; then
@@ -1661,6 +1736,10 @@ do_install() {
     fi
   fi
 
+  # 0) 私有布局：全部自有目录先以 0700 就位（消除 npm/mkdir 的 0755 窗口期）
+  ensure_private_layout
+  validate_service_user
+
   # 1) dsh 内建锚（探测 → 安装 → 验证；激活版本运行期经 /chamber/runtime 切换）
   if [[ -z "$DSH_WS" && "$SKIP_DSH" != "1" ]]; then
     install_dsh "${DSH_VER:-$DSH_CHAMBER_DSH_VERSION}"
@@ -1714,8 +1793,8 @@ EOF
   # 4) 配置落盘
   write_config
   write_env
-
-  # 5) 服务
+  # 5) 服务（--service-user：属主先移交，unit 带 User= 启动后即可读写）
+  apply_service_user_ownership
   local previous_identity
   previous_identity=$(launch_identity || true)
   if [[ "$SERVICE_MODE" == "foreground" ]] || ! have systemctl; then
@@ -2032,10 +2111,13 @@ cmd_restart() {
 }
 
 cmd_update() {
+  # 私有布局与 install 一致收敛 0700（update 不重走向导，单独补齐）。
+  ensure_private_layout
   # Preserve the caller's requested target before gateway.conf restores the
   # installed VERSION. An explicit --version must not silently become latest.
   local requested_version="$VERSION"
   load_conf
+  validate_service_user
   log "当前版本：$VERSION"
   local old_version="$VERSION"
   if [[ -n "$OFFLINE_TGZ" ]]; then
@@ -2111,6 +2193,9 @@ cmd_update() {
     else
       write_unit || failure_reason="systemd unit 写入/daemon-reload/enable 失败"
       if [[ -z "$failure_reason" ]]; then
+        apply_service_user_ownership
+      fi
+      if [[ -z "$failure_reason" ]]; then
         restart_service || failure_reason="systemd restart 失败"
       fi
       if [[ -z "$failure_reason" ]] && ! health_wait "$GATEWAY_PORT" 30 "$target_version" "$old_identity"; then
@@ -2122,6 +2207,7 @@ cmd_update() {
   if [[ -z "$failure_reason" ]]; then
     VERSION="$target_version"
     write_config || failure_reason="提交安装配置失败"
+    apply_service_user_ownership
   fi
 
   if [[ -n "$failure_reason" ]]; then
@@ -2142,6 +2228,7 @@ cmd_update() {
       start_foreground "$rollback_expected_version" "$rollback_previous" || rollback_ok=0
     else
       write_unit || rollback_ok=0
+      apply_service_user_ownership || rollback_ok=0
       restart_service || rollback_ok=0
       health_wait "$GATEWAY_PORT" 20 "$rollback_expected_version" "$rollback_previous" || rollback_ok=0
     fi
@@ -2235,6 +2322,7 @@ while [[ $# -gt 0 ]]; do
     --api-token) API_TOKEN="${2:?--api-token 需要值}"; FLAG_CRED=1; shift 2 ;;
     --no-auth) NO_AUTH=1; FLAG_CRED=1; shift ;;
     --local) INSTALL_METHOD="local"; FLAG_INSTALL=1; shift ;;
+    --service-user) SERVICE_USER="${2:?--service-user 需要值}"; shift 2 ;;
     --foreground) SERVICE_MODE="foreground"; shift ;;
     --skip-dsh) SKIP_DSH=1; shift ;;
     --purge) PURGE=1; shift ;;

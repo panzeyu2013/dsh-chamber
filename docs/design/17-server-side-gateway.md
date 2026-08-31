@@ -723,8 +723,10 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 
 Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `stateDir`（其专用子目录
 仍合法）。POSIX 上，新建的专用 `stateDir` 与 `gateway/` 创建为 `0700`；既有
-`stateDir` 必须已是 `0700`，启动只验证而不替调用者 `chmod`，避免把宽泛共享目录静默
-收窄；gateway 自有子目录仍收敛为 `0700`。Windows 的 Node `chmod/stat.mode` 只能表达
+`stateDir` 在启动时经 pinned no-follow 描述符收紧到 `0700`（2026-09 用户决策：
+自动收紧替代 fail-closed `require`——旧布局升级的 0755 根目录不再崩溃循环，
+且绝不碰 broad root）；gateway 自有子目录同样收敛为 `0700`。Windows 的 Node
+`chmod/stat.mode` 只能表达
 有限的只读属性，不能诚实证明 POSIX `0700`；该目录边界仅保留 real-dir/no-follow/identity
 校验并继承 OS ACL，既不伪报 `0700` 也不改 ACL（Windows 首版整体支持仍按 STATUS
 暂缓）。所有 JSON main/backup/tmp 与 secret 写入收敛为 `0600`；正常
@@ -995,7 +997,7 @@ PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露
 | S12 | Gateway 不能削弱普通 control-plane 的 loopback-only 门 |
 | S13 | feature flag 是默认关闭的服务端能力门，禁用后停止后台 consumer/timer |
 | S14 | dsh raw event queue 与 session 索引净化 buffer 都有硬上限，绝不持久保留会话正文 |
-| S15 | POSIX：Gateway 新建 state 目录为 0700、既有 stateDir 只验证 0700（拒绝 broad root，绝不代 chmod）；Windows 目录保留继承 ACL 且只做 no-follow/identity；JSON/secret 为 0600，status 只读验证 |
+| S15 | POSIX：Gateway 新建 state 目录为 0700、既有 stateDir 经 pinned no-follow 描述符收紧为 0700（拒绝 broad root；2026-09 起自动收紧替代 fail-closed `require`）；Windows 目录保留继承 ACL 且只做 no-follow/identity；JSON/secret 为 0600，status 只读验证 |
 | S16 | release 必须 commit-bound、公开记录不可变；desktop stable/beta feed 独立，Gateway 本阶段只发布 GitHub tgz+SHA256、不得隐式发布 npm |
 | S17 | dsh runtime：无快照不切指针；切换/恢复中断由 durable journal/marker 幂等补完（design 18 §9.7） |
 | S18 | dsh runtime：探针全绿才宣布 applied 并开放代理；回退目标 = 切换前版本或最近 known-good，绝不两棵坏树间交替 |

@@ -179,6 +179,11 @@
 - **`--no-auth` 是醒目的可信网络有界例外**：Gateway 外部部署默认必须认证；
   只有服务器显式传 `--no-auth` 才可覆盖，启动器二次确认并打印安全告警。它不是
   静默 fallback，也不授权普通匿名 control-plane 绑定公网。
+- **Gateway state 根目录自动收紧（2026-09 用户决策）**：`createGatewayStore`
+  对既有 `stateDir` 由 fail-closed `require 0700`（启动崩溃循环）改为经 pinned
+  no-follow 描述符自动收紧到 `0700`，并新增属主 uid 校验（异主 fail-closed）；
+  broad root 拒绝与 Windows 继承 ACL 让步不变（17 §17 S15）。安装器同步以
+  0700 创建 `~/.dsh-chamber` 全部自有目录。
 - **safeStorage 的诚实回退**：Gateway token/密码优先 safeStorage；OS 加密不可用
   时按用户决策回退 target-bound 0600 明文文件并在非秘密投影/UI 中如实显示，
   不把 plaintext 冒充密文。SSH 密码仍采用 endpoint-bound 0600 明文镜像。

@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn as spawnChild } from 'node:child_process'
-import fs, { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import fs, { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,7 +19,7 @@ import { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError 
 import { createCatalog, CATALOG_BACKUP_FILE, CATALOG_FILE } from '../src/catalog.ts'
 import type { CatalogConnectionRow } from '../src/catalog.ts'
 import { ensureInstanceId } from '../src/instance-id.ts'
-import { readPrivateFileNoFollow } from '../src/private-file.ts'
+import { ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from '../src/private-file.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -507,4 +507,60 @@ test('updateConnectionFields edits only label/accentColor and rejects runtime pr
   const reopened = createCatalog({ stateDir: dir, logger: silentLogger })
   reopened.load()
   assert.equal(reopened.getConnection('local')!.accentColor, '#1a1a2e')
+})
+
+test('json-store creates missing parent directories at 0700', async t => {
+  const dir = tempDir(t)
+  const path = join(dir, 'nested', 'doc.json')
+  const store = createJsonStore({
+    filePath: path,
+    logger: silentLogger,
+    initial: { revision: 0, items: [] },
+    fileMode: 0o600,
+  })
+  store.load()
+  await store.mutate((doc: any) => ({ next: { ...doc, items: ['x'] }, changed: true }))
+  assert.equal(statSync(join(dir, 'nested')).mode & 0o777, 0o700, 'missing parent chain must be created 0700')
+  assert.equal(statSync(path).mode & 0o777, 0o600)
+  assert.equal(statSync(`${path}.bak`).mode & 0o777, 0o600)
+})
+
+test('private-directory primitive converges fresh/loose dirs and honors require/preserve', t => {
+  const dir = tempDir(t)
+  const fresh = join(dir, 'fresh')
+  ensurePrivateDirectoryNoFollow(fresh)
+  assert.equal(statSync(fresh).mode & 0o777, 0o700, 'fresh directory is created 0700')
+
+  const loose = join(dir, 'loose')
+  mkdirSync(loose, { mode: 0o755 })
+  ensurePrivateDirectoryNoFollow(loose)
+  assert.equal(statSync(loose).mode & 0o777, 0o700, 'a loose pre-existing directory is tightened by default')
+
+  const required = join(dir, 'required')
+  mkdirSync(required, { mode: 0o755 })
+  assert.throws(
+    () => ensurePrivateDirectoryNoFollow(required, 0o700, { existingMode: 'require' }),
+    /must already have mode 0700/,
+  )
+  assert.equal(statSync(required).mode & 0o777, 0o755, 'require refuses without touching the loose directory')
+
+  const preserved = join(dir, 'preserved')
+  mkdirSync(preserved, { mode: 0o755 })
+  ensurePrivateDirectoryNoFollow(preserved, 0o700, { existingMode: 'preserve' })
+  assert.equal(statSync(preserved).mode & 0o777, 0o755, 'preserve leaves an existing loose directory untouched')
+
+  const target = join(dir, 'symlink-target')
+  const link = join(dir, 'symlink-leaf')
+  mkdirSync(target, { mode: 0o755 })
+  try {
+    symlinkSync(target, link, 'dir')
+  } catch (error) {
+    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+      t.skip('symbolic links are unavailable on this platform')
+      return
+    }
+    throw error
+  }
+  assert.throws(() => ensurePrivateDirectoryNoFollow(link), /not a real directory/)
+  assert.equal(statSync(target).mode & 0o777, 0o755, 'a symlinked leaf is refused without touching its target')
 })

@@ -9,6 +9,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -151,6 +152,38 @@ printf 'UNIT-VICTIM<%s>\n' "$(cat "$BASE_DIR/unit-victim")"
   assert.match(output, /unit-refused/)
   assert.match(output, /UNIT-VICTIM<unit-victim>/)
   assert.doesNotMatch(output, /systemctl-called/)
+})
+
+test('systemd unit EnvironmentFile line is unquoted (systemd does not support quoting there)', () => {
+  // systemd's EnvironmentFile= directive takes the path verbatim: quotes are
+  // treated as literal characters and the file silently fails to load. The
+  // unit template must emit the raw path (ExecStart= is the only place where
+  // quoting is legal).
+  const output = runLibrary(`
+BASE_DIR="$(mktemp -d)"
+GATEWAY_DIR="$BASE_DIR/gateway"
+ENV_FILE="$GATEWAY_DIR/gateway.env"
+mkdir -p "$GATEWAY_DIR"
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+DSH_WS=""
+ENV_ANCHOR=0
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+NO_AUTH=0
+UI_PASSWORD=""
+API_TOKEN=""
+SERVICE_MODE=user
+XDG_CONFIG_HOME="$BASE_DIR/xdg"
+gateway_exec() { printf '/tmp/gateway'; }
+systemctl() { return 0; }
+write_unit
+if grep -q '^EnvironmentFile='"$ENV_FILE"'$' "$XDG_CONFIG_HOME/systemd/user/dsh-chamber-gateway.service"; then printf 'envfile-unquoted\n'; fi
+if grep -q 'EnvironmentFile="/' "$XDG_CONFIG_HOME/systemd/user/dsh-chamber-gateway.service"; then printf 'envfile-quoted\n'; fi
+`)
+  assert.match(output, /envfile-unquoted/)
+  assert.doesNotMatch(output, /envfile-quoted/)
 })
 
 test('foreground launch preserves each dsh path and auth argument as one argv entry', () => {
@@ -548,5 +581,27 @@ cmd_update
     assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=1\.0\.0$/m)
   } finally {
     rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('private layout dirs converge to 0700 even when created under a loose umask', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gateway-installer-layout-'))
+  try {
+    const base = join(dir, 'base')
+    const harness = join(dir, 'harness.sh')
+    // 全局 umask 077 之外的第二道保险：即使调用方以松散 umask（022）创建，
+    // ensure_private_layout 也必须把全部自有目录收敛到 0700。
+    writeFileSync(harness, `${library}\numask 0022\nensure_private_layout\nprintf 'layout-ok\\n'\n`, { mode: 0o700 })
+    const result = spawnSync('bash', [harness], {
+      encoding: 'utf8',
+      env: { ...process.env, DSH_CHAMBER_BASE_DIR: base },
+    })
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+    assert.match(result.stdout, /layout-ok/)
+    for (const sub of ['', 'gateway', 'gateway/versions', 'gateway/dsh-anchor', 'bin', 'run']) {
+      assert.equal(statSync(join(base, sub)).mode & 0o777, 0o700, join(base, sub))
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

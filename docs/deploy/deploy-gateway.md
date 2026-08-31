@@ -33,7 +33,7 @@ cd dsh-chamber && bash scripts/install-gateway.sh
 | 安装方式 | **local**（`~/.dsh-chamber`，gateway 自管程序与 dsh 版本；可改 npm 全局） |
 | 服务形态 | root + systemd；非 root + `systemctl --user`；无 systemd 自动前台 |
 | dsh 版本 | 与发布绑定的 `DSH_CHAMBER_DSH_VERSION`（当前 0.1.2-alpha.2，可改；运行期可在 `/chamber/runtime` 切换） |
-| npm 镜像 | 国内镜像 registry.npmmirror.com（可交互选官方源 / 跟随系统） |
+| npm 镜像 | 国内镜像 registry.npmmirror.com（可交互选官方源 / 跟随系统）。**仅用于 dsh 内建锚安装**；运行期 `/chamber/runtime` 的版本安装源是独立的（默认 npmjs，安装器不随此选择播种，可在运行期设置页改） |
 
 ## 2. 安装流程（脚本自动完成）
 
@@ -48,7 +48,10 @@ cd dsh-chamber && bash scripts/install-gateway.sh
    旧版保留可回滚）或 npm 全局（`--local` 之外的选择）。
 4. **配置落盘**：`~/.dsh-chamber/gateway/gateway.conf`（生效配置与凭据，**0600**）+ `gateway.env`
    （凭据，**0600**，systemd 单元经 `EnvironmentFile` 引用）。凭据不进 argv/历史。
-5. **服务**：systemd 单元（root，`enable --now`）或前台（nohup + pid 文件）。
+5. **服务**：root + systemd 单元（`enable --now`）；非 root 自动 `systemctl --user`
+   用户态服务（登出会停止，常驻请 `loginctl enable-linger <用户>`）；无 systemd
+   自动前台（nohup + pid 文件）。可选 `--service-user <专用用户>` 以非 root
+   身份运行系统服务（见 §8 常见问题）。
 6. **健康检查**：`/health` 轮询至 ready；失败则中止并报错，可重试（仅 `update` 有失败自动回滚）。
 
 ## 3. 端口模型
@@ -131,10 +134,39 @@ bash install-gateway.sh install -y \
   make/g++/python3（常见平台走 prebuild 可免）；安装日志会显式报错。
 - **端口冲突**：向导探测占用并建议下一空闲口；两端口必须互异。
 - **升级后不可用**：`update` 健康检查失败自动回滚到旧版本并保留现场日志。
+- **配置不生效（服务按二进制内置默认 127.0.0.1:3000 / auth=none 启动，而不是
+  安装时配置的端口/绑定/凭据）**：注意 3000 是 gateway 二进制的内置默认端口，
+  安装器通过 env 注入 30801——若出现 3000 说明环境没加载。最常见原因：旧版
+  安装器生成的 unit 里 `EnvironmentFile="/path/gateway.env"` 带引号——systemd
+  的 `EnvironmentFile=` 不支持引号（`ExecStart=` 才支持），带引号路径加载静默
+  失败（journal 有 warning，服务照常启动），服务以空环境运行。修复（root
+  安装；非 root 用户态服务把路径换成 `~/.config/systemd/user/…` 并把
+  `systemctl` 换成 `systemctl --user`）：
+
+  ```bash
+  sed -i 's|^EnvironmentFile="\(.*\)"$|EnvironmentFile=\1|' /etc/systemd/system/dsh-chamber-gateway.service
+  systemctl daemon-reload && systemctl restart dsh-chamber-gateway
+  journalctl -u dsh-chamber-gateway -n 5   # 应显示 bind 0.0.0.0:30801 auth=password+token
+  ```
+
+  或重跑新版安装器（已修复模板）。两点提醒：① `~/.dsh-chamber/bin/install-gateway.sh`
+  若是旧版自拷贝，下次 `update` 会重新写入带引号 unit（修复被静默回退）——
+  请一并更新脚本副本；② env 生效后 `DSH_GATEWAY_STATE` 才会加载，state 目录从
+  bug 窗口期的默认 `~/.dsh-chamber` 切回 `~/.dsh-chamber/gateway/data`——窗口期
+  产生的凭据/会话/运行时不会自动迁移（旧字节保留，新实例看不到）。
+- **`--no-auth` 何时生效**：仅当服务没有任何凭据（密码/Token）时才有意义；若
+  env/argv 同时给了凭据，`--no-auth` 是惰性的（凭据为准，boot 行打印真实生效
+  的 auth 类型）。外部绑定（0.0.0.0）+ 无凭据 + `--no-auth` = 匿名公网暴露，
+  仅限可信网络。
 - **启动即崩：`private directory must already have mode 0700: ~/.dsh-chamber`**
-  （systemd 无限重启）：网关对已存在的私有 state 根目录要求严格 0700（fail-closed，
-  绝不静默放宽）；旧安装用默认 umask 建出的 0755 根目录会触发。修复：
-  `chmod 700 ~/.dsh-chamber && systemctl restart dsh-chamber-gateway`
-  （新版安装器已自动收紧该目录，此条仅用于旧安装升级现场）。
+  （systemd 无限重启）：旧版网关对已存在的私有 state 根目录要求严格 0700
+  （fail-closed），旧安装用默认 umask 建出的 0755 根目录会触发。修复：
+  `chmod 700 ~/.dsh-chamber && systemctl restart dsh-chamber-gateway`。
+  较新版本启动时自动把既有根目录收紧到 0700（含属主校验，异主目录仍会
+  fail-closed），无需手动 chmod；安装器也会直接以 0700 创建该目录及全部
+  自有子目录。**升级请走 `install-gateway.sh update`**（会把旧布局一并收敛，
+  不要手动替换二进制）。
 - **root 与非 root**：文件统一落在 `~/.dsh-chamber`；root 仅用于 systemd 与
-  npm 全局；非 root 自动用 `systemctl --user` 或前台。
+  npm 全局；非 root 自动用 `systemctl --user` 或前台。注意 npm 全局安装形态
+  下，安装器以 owner-only（0700/0600）创建全局树与 `gateway` 命令——多用户
+  机器上其他用户无法执行，符合单用户部署定位。

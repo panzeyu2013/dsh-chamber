@@ -50,7 +50,9 @@ export interface PrivateDirectoryOptions {
    * or preserve an existing non-secret root without mutating it. Newly
    * created directories converge to `mode` on POSIX. Windows exposes only a
    * limited read-only attribute through chmod/stat, so directory modes there
-   * are left to inherited OS ACLs after identity/no-follow verification. */
+   * are left to inherited OS ACLs after identity/no-follow verification.
+   * `require` is legacy (fail-closed exact mode): since the 2026-09 gateway
+   * auto-tighten decision no production caller uses it. */
   existingMode?: 'tighten' | 'require' | 'preserve'
 }
 
@@ -151,7 +153,7 @@ export function ensurePrivateDirectoryNoFollow(
   mode = 0o700,
   options: PrivateDirectoryOptions = {},
 ): void {
-  mkdirSync(dirname(path), { recursive: true })
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   let created = false
   try {
     mkdirSync(path, { recursive: false, mode })
@@ -162,17 +164,36 @@ export function ensurePrivateDirectoryNoFollow(
   const pin = pinParent(path)
   try {
     const opened = pin.fd === null ? null : fstatSync(pin.fd)
-    const currentMode = (opened ?? pin.before).mode & 0o777
+    const existing = opened ?? pin.before
+    const currentMode = existing.mode & 0o777
     const existingMode = options.existingMode ?? 'tighten'
     const posixModeSemantics = process.platform !== 'win32'
+    // Owner fail-closed: a pre-existing directory the current user does not
+    // own must never be adopted. Root could chmod a foreign loose directory
+    // into "compliance" and then read/execute its content as install input
+    // (design 18 runtime trees); a non-root fchmod would instead fail with a
+    // cryptic EPERM crash loop. Both directions fail loudly here.
+    const effectiveUid = process.geteuid?.() ?? -1
+    if (posixModeSemantics && !created && existingMode !== 'preserve' && existing.uid !== effectiveUid) {
+      throw new Error(`private state directory is not owned by the current user (uid ${existing.uid}): ${path}`)
+    }
     if (posixModeSemantics && !created && existingMode === 'require' && currentMode !== mode) {
       throw new Error(
         `private directory must already have mode ${mode.toString(8).padStart(4, '0')}: ${path}`,
       )
     }
     if (posixModeSemantics && currentMode !== mode && (created || existingMode === 'tighten')) {
-      if (pin.fd !== null) fchmodSync(pin.fd, mode)
-      else throw new Error(`cannot safely tighten private directory mode: ${path}`)
+      if (pin.fd !== null) {
+        fchmodSync(pin.fd, mode)
+        // Mode re-verification: filesystems that silently ignore chmod
+        // (vfat/exfat/CIFS/FUSE) must not let a "tightened" directory stay
+        // loose while the gateway believes it is 0700.
+        if (!created && (fstatSync(pin.fd).mode & 0o777) !== mode) {
+          throw new Error(`cannot tighten private directory mode (filesystem ignored chmod): ${path}`)
+        }
+      } else {
+        throw new Error(`cannot safely tighten private directory mode: ${path}`)
+      }
     }
     verifyParent(pin)
   } finally {

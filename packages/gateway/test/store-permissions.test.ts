@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { parse, resolve, join } from 'node:path'
 import { createGatewayStore, hashCredential, readCredentialProjection, validateGatewayStateDirPath } from '../src/store.ts'
@@ -59,16 +59,64 @@ test('gateway creates a new dedicated stateDir as 0700 on POSIX', { skip: proces
   store.close()
 })
 
-test('gateway rejects a loose existing stateDir without changing its mode on POSIX', { skip: process.platform === 'win32' }, t => {
+test('gateway tightens a loose existing stateDir to 0700 on POSIX', { skip: process.platform === 'win32' }, t => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-loose-state-'))
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
   chmodSync(stateDir, 0o755)
+  const warnings: string[] = []
+  const store = createGatewayStore(stateDir, { log() {}, warn: (message: unknown) => warnings.push(String(message)), error() {} })
+  assert.equal(mode(stateDir), 0o700)
+  assert.equal(mode(join(stateDir, 'gateway')), 0o700)
+  assert.equal(warnings.some(message => message.includes('tightening to 0700')), true, 'a loose root must be announced once')
+  // Tightening must leave the store fully usable: credentials and the lock
+  // stay 0600, values round-trip, and a later reopen succeeds.
+  store.setPasswordCredential(hashCredential('a sufficiently long private password'))
+  store.getJwtSecret()
+  assert.equal(mode(join(stateDir, 'password-credential')), 0o600)
+  assert.equal(mode(join(stateDir, 'jwt-secret')), 0o600)
+  assert.equal(mode(join(stateDir, '.gateway.lock')), 0o600)
+  assert.notEqual(store.getPasswordCredential(), null)
+  store.close()
+  const reopened = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
+  assert.equal(mode(stateDir), 0o700)
+  reopened.close()
+})
+
+test('gateway tightens a loose pre-existing gateway/ subdirectory to 0700 on POSIX', { skip: process.platform === 'win32' }, t => {
+  // The stateDir is already 0700 but the gateway/ child predates the store as
+  // a loose 0755 directory (the layout an old installer left behind). This is
+  // the regression guard for the root call site: reverting it to
+  // existingMode:'require' would NOT be caught by the stateDir-only test
+  // above (there the child is freshly created).
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-loose-root-'))
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
+  const root = join(stateDir, 'gateway')
+  mkdirSync(root, { mode: 0o755 })
+  writeFileSync(join(root, 'worktrees.json'), '{"items":[]}\n', { mode: 0o600 })
+  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
+  assert.equal(mode(stateDir), 0o700)
+  assert.equal(mode(root), 0o700)
+  assert.deepEqual(store.worktrees.get(), { items: [] }, 'pre-existing documents remain readable after tightening')
+  store.close()
+  const reopened = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
+  reopened.close()
+})
+
+test('gateway refuses a stateDir owned by another user on POSIX', { skip: process.platform === 'win32' || process.getuid?.() !== 0 }, t => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-foreign-state-'))
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
+  chmodSync(stateDir, 0o755)
+  try {
+    chownSync(stateDir, 65534, 65534)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') t.skip('chown unavailable')
+    throw error
+  }
   assert.throws(
     () => createGatewayStore(stateDir, { log() {}, warn() {}, error() {} }),
-    /must already have mode 0700/,
+    /not owned by the current user/,
   )
-  assert.equal(mode(stateDir), 0o755)
-  assert.equal(existsSync(join(stateDir, 'gateway')), false, 'validation happens before child creation')
+  assert.equal(mode(stateDir), 0o755, 'a foreign-owned root must not be touched')
 })
 
 test('gateway preserves an existing Windows stateDir ACL/mode projection', { skip: process.platform !== 'win32' }, t => {

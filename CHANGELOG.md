@@ -10,6 +10,26 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 修复
+
+- **Gateway state 根目录权限契约：fail-closed `require 0700` → 自动收紧 + 属主校验** ——
+  `createGatewayStore` 对已存在的 state 根不再因非 0700 直接拒绝启动（旧安装以默认
+  umask 建出的 0755 根目录会导致 systemd 无限重启崩溃循环），改为经 pinned
+  no-follow 描述符自动收紧到 0700；同时新增属主 uid 校验（异主目录 fail-closed，
+  杜绝 root 服务把凭据/运行时写进他人目录后被投毒安装输入），fchmod 后复核 mode
+  以在静默忽略 chmod 的文件系统上保持 fail-closed（2026-09 用户决策）。
+- **install-gateway.sh 私有布局收敛 0700** —— 脚本入口统一 `umask 077`，新增
+  `ensure_private_layout()` 把 BASE_DIR/gateway/versions/dsh-anchor/bin/run 全部
+  收敛 0700（覆盖 install/update/前台 restart 三流程），消除安装早期 BASE_DIR/
+  GATEWAY_DIR 的 0755 窗口期。
+- **systemd unit `EnvironmentFile=` 去引号** —— 该指令不支持引号，旧模板产出的
+  带引号路径会按字面查找、环境文件静默不加载（服务以空环境/默认值启动）；现按
+  字面路径写入。
+- **control-plane 递归 mkdir 显式 0700** —— `ensurePrivateDirectoryNoFollow` 与
+  `createJsonStore` 的祖先目录创建显式 `mode: 0o700`（防御性）。
+
 ## [0.2.0] - 2026-08-31
 
 > **首个稳定版**——聚合 0.2.0-beta.1 → beta.4 的全部迭代（桌面连接管理器 + 认证

@@ -41,7 +41,7 @@
  * index is a derived cache (§8.2).
  */
 
-import { closeSync, fchmodSync, fstatSync, fsyncSync, openSync, realpathSync, renameSync, writeSync } from 'node:fs'
+import { closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, realpathSync, renameSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, parse, resolve } from 'node:path'
 import { randomBytes, scryptSync } from 'node:crypto'
@@ -481,7 +481,22 @@ export function verifyCredential(plain: string, stored: string | null): boolean 
 export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger): GatewayStore {
   validateGatewayStateDirPath(stateDir)
   const root = join(stateDir, 'gateway')
-  ensurePrivateDirectoryNoFollow(stateDir, 0o700, { existingMode: 'require' })
+  // State root converges to 0700 on POSIX: freshly created directories are
+  // created 0700; a pre-existing directory is tightened to 0700 via its pinned
+  // no-follow descriptor (user decision 2026-09: auto-tighten instead of
+  // fail-closed 'require' — installers/upgrades from older layouts must not
+  // crash-loop on a legacy 0755 root). broad-root rejection is unchanged.
+  // A loose pre-existing root is worth one loud warning (once per process):
+  // silent permission mutation confuses operators auditing who changed modes.
+  try {
+    const stat = lstatSync(stateDir)
+    if (stat.isDirectory() && (stat.mode & 0o777) !== 0o700) {
+      warnOnce('state-root-tighten', `gateway state root ${stateDir} exists with mode ${(stat.mode & 0o777).toString(8)}; tightening to 0700`, logger)
+    }
+  } catch {
+    // ENOENT: the store creates it 0700 below.
+  }
+  ensurePrivateDirectoryNoFollow(stateDir, 0o700)
   ensurePrivateDirectoryNoFollow(root, 0o700)
 
   // -------------------------------------------------------------------------

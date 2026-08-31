@@ -289,7 +289,7 @@ export function createJsonStore({
   function persistSync(doc: JsonStoreDocument, options: JsonStorePersistOptions = {}): void {
     let text: string | null = null
     try {
-      mkdirSync(dirname(filePath), { recursive: true })
+      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
       text = `${JSON.stringify(doc, undefined, 2)}\n`
       const backupText = options.backupDoc === undefined
         ? text
