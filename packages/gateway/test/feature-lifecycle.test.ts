@@ -56,153 +56,81 @@ async function makeGitRepo(prefix: string): Promise<{ root: string; repo: string
   return { root, repo }
 }
 
-test('session index waits for readiness, rebuilds session.list baseline, and reconnects streams', async () => {
+test('session index waits for readiness, rebuilds its session/list baseline, and reconnects after a failure', async () => {
   let baseUrl: string | null = null
-  let baselineCalls = 0
-  let muxCalls = 0
-  let hostCalls = 0
-  let releaseFirst!: () => void
-  const firstGenerationEnd = new Promise<void>(resolve => { releaseFirst = resolve })
+  let listCalls = 0
   const index = createSessionIndex({
     getDshBaseUrl: () => baseUrl,
     logger,
     reconnectDelayMs: 5,
-    callDsh: (async () => {
-      baselineCalls += 1
+    pollIntervalMs: 5,
+    callDsh: (async (_base: string, method: string, payload?: unknown) => {
+      listCalls += 1
+      // One transient poll failure must not consume the index: the generation
+      // clears and reconnects, then installs a fresh baseline.
+      if (listCalls === 2) throw new Error('transient failure')
       return {
-        rpcId: `baseline-${baselineCalls}`,
+        rpcId: `baseline-${listCalls}`,
         result: {
           ok: true,
           value: { items: [{
             sessionId: 'session-baseline', updatedAt: 10, running: false, blank: true, cwd: '/repo',
-            projections: { asOfSeq: 0, values: { title: 'Baseline' } },
+            projections: { asOfSeq: 0, values: { title: `Title ${listCalls}` } },
           }] },
         },
       }
     }) as any,
-    openStream: async function *(_base, path, signal, onOpen): AsyncGenerator<ServerRequest> {
-      const callNumber = path.endsWith('mux') ? ++muxCalls : ++hostCalls
-      onOpen?.()
-      if (path.endsWith('mux')) {
-        yield {
-          type: 'server-request', rpcId: `mux-${callNumber}`, method: 'session/projection',
-          payload: { sessionId: 'session-baseline', key: 'title', value: `Live ${callNumber}`, seq: callNumber },
-        }
-      } else {
-        yield {
-          type: 'server-request', rpcId: `host-${callNumber}`, method: 'host/session-status',
-          payload: { sessionId: 'session-baseline', running: true },
-        }
-      }
-      if (callNumber === 1) await firstGenerationEnd
-      else if (!signal?.aborted) await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
-    },
   })
 
   index.start()
   index.start()
   await new Promise(resolve => setTimeout(resolve, 15))
-  assert.equal(baselineCalls, 0)
+  assert.equal(listCalls, 0)
   baseUrl = 'http://127.0.0.1:12345'
-  await waitFor(() => index.get('session-baseline')?.title === 'Live 1')
+  await waitFor(() => index.get('session-baseline')?.title === 'Title 1')
   assert.deepEqual(index.get('session-baseline'), {
-    sessionId: 'session-baseline', title: 'Live 1', running: true, blank: false, cwd: '/repo', updatedAt: 10,
+    sessionId: 'session-baseline', title: 'Title 1', running: false, blank: true, cwd: '/repo', updatedAt: 10,
   })
-  releaseFirst()
-  await waitFor(() => baselineCalls >= 2 && index.get('session-baseline')?.title === 'Live 2')
-  assert.equal(muxCalls >= 2, true)
-  assert.equal(hostCalls >= 2, true)
+  await waitFor(() => index.get('session-baseline')?.title === 'Title 3')
   index.stop()
   index.stop()
   assert.deepEqual(index.list(), [])
 })
 
-test('session index open barrier has a watchdog: a hung upgrade cannot wedge the generation forever', async () => {
-  let baseUrl: string | null = null
-  let baselineCalls = 0
-  let attempts = 0
-  const index = createSessionIndex({
-    getDshBaseUrl: () => baseUrl,
-    logger,
-    reconnectDelayMs: 5,
-    barrierOpenTimeoutMs: 60,
-    callDsh: (async () => {
-      baselineCalls += 1
-      return {
-        rpcId: `baseline-${baselineCalls}`,
-        result: {
-          ok: true,
-          value: { items: [{
-            sessionId: 'session-recovered', updatedAt: 10, running: false, blank: true, cwd: '/repo',
-            projections: { asOfSeq: 0, values: { title: 'Recovered' } },
-          }] },
-        },
-      }
-    }) as any,
-    openStream: async function *(_base, path, signal, onOpen): AsyncGenerator<ServerRequest> {
-      attempts += 1
-      if (attempts <= 2) {
-        // The upstream accepts the connection but NEVER completes the WS
-        // upgrade (no onOpen, no frames). Without the barrier watchdog this
-        // generation would buffer forever and /chamber/sessions stay empty.
-        await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
-        return
-      }
-      onOpen?.()
-      if (path.endsWith('mux')) {
-        yield {
-          type: 'server-request', rpcId: 'mux-recovered', method: 'session/projection',
-          payload: { sessionId: 'session-recovered', key: 'title', value: 'Live', seq: 1 },
-        }
-      }
-      await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
-    },
-  })
-  index.start()
-  baseUrl = 'http://127.0.0.1:12345'
-  await waitFor(() => index.get('session-recovered')?.title === 'Live', 3_000)
-  assert.ok(attempts >= 3, `the generation recovered through reconnect (attempts=${attempts})`)
-  index.stop()
-})
-
-test('session index buffers host changes after WS-ready and replays them over the list baseline', async () => {
-  let releaseBaseline!: () => void
-  const baselineGate = new Promise<void>(resolve => { releaseBaseline = resolve })
+test('session index atomically replaces the projection: sessions absent from the latest baseline disappear', async () => {
+  let releaseFirst!: () => void
+  const firstBaselineGate = new Promise<void>(resolve => { releaseFirst = resolve })
   let baselineStarted = false
-  let bufferedHostFrame = false
+  let listCalls = 0
   const index = createSessionIndex({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
     reconnectDelayMs: 5,
-    callDsh: (async () => {
-      baselineStarted = true
-      await baselineGate
-      return {
-        rpcId: 'baseline-race',
-        result: { ok: true, value: { items: [{
-          sessionId: 'session-race', updatedAt: 50, running: false, blank: true, cwd: '/race',
-          projections: { asOfSeq: -1, values: {} },
-        }] } },
-      }
-    }) as any,
-    openStream: async function *(_base, path, signal, onOpen): AsyncGenerator<ServerRequest> {
-      onOpen?.()
-      if (path.endsWith('host')) {
-        bufferedHostFrame = true
-        yield {
-          type: 'server-request', rpcId: 'host-race', method: 'host/session-status',
-          payload: { sessionId: 'session-race', running: true },
+    pollIntervalMs: 5,
+    callDsh: (async (_base: string, method: string, payload?: unknown) => {
+      listCalls += 1
+      if (listCalls === 1) {
+        baselineStarted = true
+        await firstBaselineGate
+        return {
+          rpcId: 'baseline-race',
+          result: { ok: true, value: { items: [{
+            sessionId: 'session-race', updatedAt: 50, running: false, blank: true, cwd: '/race',
+            projections: { asOfSeq: -1, values: {} },
+          }] } },
         }
       }
-      if (!signal?.aborted) await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
-    },
+      // The next baseline drops session-race (removed upstream): the map is
+      // replaced wholesale — no stale session may survive a newer baseline.
+      return { rpcId: `list-${listCalls}`, result: { ok: true, value: { items: [] } } }
+    }) as any,
   })
   index.start()
-  await waitFor(() => baselineStarted && bufferedHostFrame)
+  await waitFor(() => baselineStarted)
   assert.deepEqual(index.list(), [], 'no partial pre-baseline state is published')
-  releaseBaseline()
-  await waitFor(() => index.get('session-race')?.running === true)
-  assert.equal(index.get('session-race')?.blank, false)
+  releaseFirst()
+  await waitFor(() => index.get('session-race') !== undefined)
+  await waitFor(() => index.list().length === 0)
   index.stop()
 })
 
@@ -214,13 +142,16 @@ test('approval notifier survives initial null readiness and reconnects after str
     getDshBaseUrl: () => baseUrl,
     logger,
     reconnectDelayMs: 5,
-    onApproval: request => approvals.push(request.rpcId),
+    onApproval: request => approvals.push(request.approvalId),
     onQuestion() {},
-    openStream: async function *(): AsyncGenerator<ServerRequest> {
+    openRemoteStream: async function *(): AsyncGenerator<unknown> {
       streamCalls += 1
+      // 0.1.2 $events stream: ready frame binds the clientId, waterfall
+      // frames carry the answerable approval/request.
+      yield { type: 'ready', clientId: `client-${streamCalls}`, host: { home: '/home' } }
       yield {
-        type: 'server-request', rpcId: `approval-rpc-${streamCalls}`, method: 'approval/requested',
-        payload: { sessionId: 's1', approvalId: `a${streamCalls}`, toolName: 'shell' },
+        type: 'waterfall', event: 'approval/request', eventId: `a${streamCalls}`,
+        agentId: 's1', request: { toolName: 'shell' },
       }
     },
   })
@@ -234,64 +165,66 @@ test('approval notifier survives initial null readiness and reconnects after str
   notifier.stop()
 })
 
-test('approval notifier emits valid RpcResult responses and rejects negative receipts', async () => {
-  const sent: Array<{ rpcId?: string; result: any }> = []
+test('approval notifier emits $events/result RPCs and rejects negative receipts', async () => {
+  const sent: Array<{ method: string; payload: any }> = []
   let accepted = false
   const notifier = createApprovalNotifier({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
     onApproval() {},
     onQuestion() {},
-    respondDsh: (async (_base: string, message: { rpcId?: string; result: any }) => {
-      sent.push(message)
-      return accepted ? { accepted: true } : { accepted: false, reason: 'bad-response' }
+    callDsh: (async (_base: string, method: string, payload: unknown) => {
+      sent.push({ method, payload })
+      return accepted
+        ? { rpcId: 'r', result: { ok: true, value: undefined } }
+        : { rpcId: 'r', result: { ok: false, error: { code: 'unknown-event', message: 'bad-response' } } }
     }) as any,
   })
-  const approval = { sessionId: 's1', approvalId: 'a1', rpcId: 'approval-rpc', toolName: 'shell' }
+  const approval = { sessionId: 's1', approvalId: 'a1', clientId: 'client-1', toolName: 'shell' }
   await assert.rejects(notifier.answerApproval(approval, 'allowed-once'),
-    (error: unknown) => error instanceof AnswerRejectedError && error.reason === 'bad-response')
+    (error: unknown) => error instanceof AnswerRejectedError)
   assert.deepEqual(sent[0], {
-    rpcId: 'approval-rpc',
-    result: { ok: true, value: { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' } },
+    method: '$events/result',
+    payload: { args: { clientId: 'client-1', eventId: 'a1', outcome: { kind: 'result', value: 'allowed-once' } } },
   })
 
   await assert.rejects(notifier.answerQuestion({
-    sessionId: 's1', rpcId: 'question-rpc', questions: [],
+    sessionId: 's1', questionId: 'q1', clientId: 'client-1', questions: [],
   }, { answers: [] }), (error: unknown) => error instanceof AnswerRejectedError)
-  assert.equal(sent[1]?.result.ok, true)
+  assert.equal(sent[1]?.payload.args.eventId, 'q1')
   accepted = true
-  await notifier.answerQuestion({ sessionId: 's1', rpcId: 'question-rpc', questions: [] }, { answers: [] })
+  await notifier.answerQuestion({ sessionId: 's1', questionId: 'q1', clientId: 'client-1', questions: [] }, { answers: [] })
 })
 
-test('notify answer RPC shapes are locked for approval and question answers', async () => {
-  // Regression guard: the answer path is the single dsh respond RPC (the
-  // ClientResponse envelope {rpcId, result}); the rpcId echoes the
-  // server-request and the result carries the answerable payload. Lock the
-  // exact shapes so a future refactor cannot silently drift them.
-  const sent: Array<{ rpcId?: string; result: any }> = []
+test('notify $events/result RPC shapes are locked for approval and question answers', async () => {
+  // Regression guard: the answer path is the single 0.1.2 $events/result RPC
+  // ({args:{clientId,eventId,outcome}} — the args keys are the Remote event
+  // result fields; the outcome value is the waterfall answer). Lock the exact
+  // shapes so a future refactor cannot silently drift them.
+  const sent: Array<{ method: string; payload: any }> = []
   const notifier = createApprovalNotifier({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
     onApproval() {},
     onQuestion() {},
-    respondDsh: (async (_base: string, message: { rpcId?: string; result: any }) => {
-      sent.push(message)
-      return { accepted: true }
+    callDsh: (async (_base: string, method: string, payload: unknown) => {
+      sent.push({ method, payload })
+      return { rpcId: 'r', result: { ok: true, value: undefined } }
     }) as any,
   })
   await notifier.answerApproval(
-    { sessionId: 's1', approvalId: 'a1', rpcId: 'approval-rpc', toolName: 'shell' },
+    { sessionId: 's1', approvalId: 'a1', clientId: 'client-1', toolName: 'shell' },
     'allowed-once',
   )
   assert.deepEqual(sent[0], {
-    rpcId: 'approval-rpc',
-    result: { ok: true, value: { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' } },
+    method: '$events/result',
+    payload: { args: { clientId: 'client-1', eventId: 'a1', outcome: { kind: 'result', value: 'allowed-once' } } },
   })
   const answer = { answers: [{ id: 'q1', selected: ['a'] }] }
-  await notifier.answerQuestion({ sessionId: 's1', rpcId: 'question-rpc', questions: [] }, answer)
+  await notifier.answerQuestion({ sessionId: 's1', questionId: 'q1', clientId: 'client-1', questions: [] }, answer)
   assert.deepEqual(sent[1], {
-    rpcId: 'question-rpc',
-    result: { ok: true, value: { sessionId: 's1', answer } },
+    method: '$events/result',
+    payload: { args: { clientId: 'client-1', eventId: 'q1', outcome: { kind: 'result', value: answer } } },
   })
 })
 
@@ -361,17 +294,22 @@ test('scheduler interval prompts are single-flight', async () => {
   scheduler.stop()
 })
 
-test('scheduler fires session.prompt with the dsh 0.1.1-rc.2 wire shape (mode+content)', async () => {
+test('scheduler fires session/prompt with the dsh 0.1.2-alpha.1 wire shape (requestId+mode+content)', async () => {
   // Live finding: the old {sessionId, prompt} payload was rejected by the
-  // real wire ("invalid payload for session.prompt") — every scheduled
+  // real wire ("invalid payload for session/prompt") — every scheduled
   // prompt failed validation. The accepted shape is
-  // {sessionId, mode:'queue', content:[{type:'text',text}]}.
-  const sent: Array<{ method: string; sessionId: string; mode: string; content: unknown }> = []
+  // {args:{request:{requestId, sessionId, mode:'queue', content:[{type:'text',text}]}}}
+  // (the args keys are the @Remote parameter names; requestId is client-minted
+  // and echoed on SessionQueuedItem.rpcId).
+  const sent: Array<{ method: string; sessionId: string; requestId?: string; mode: string; content: unknown }> = []
   const scheduler = createScheduler({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
     callDsh: (async (_base: string, method: string, payload: unknown) => {
-      sent.push({ method, ...(payload as { sessionId: string; mode: string; content: unknown }) })
+      // 0.1.2 TypertGatewayService wire: the payload must be the exact
+      // `{args:{request:{...}}}` shape keyed by the @Remote parameter name.
+      const request = (payload as { args: { request: { sessionId: string; requestId?: string; mode: string; content: unknown } } }).args.request
+      sent.push({ method, ...request })
       return { rpcId: 'prompt-1', result: { ok: true, value: {} } }
     }) as any,
   })
@@ -379,19 +317,18 @@ test('scheduler fires session.prompt with the dsh 0.1.1-rc.2 wire shape (mode+co
   scheduler.start()
   await waitFor(() => sent.length === 1)
   scheduler.stop()
-  assert.equal(sent[0]?.method, 'session.prompt', 'the scheduled prompt targets session.prompt')
-  assert.deepEqual(sent[0], {
-    method: 'session.prompt',
-    sessionId: 's1',
-    mode: 'queue',
-    content: [{ type: 'text', text: 'continue' }],
-  })
+  assert.equal(sent[0]?.method, 'session/prompt', 'the scheduled prompt targets session/prompt')
+  assert.equal(typeof sent[0]?.requestId, 'string', 'session/prompt carries a client-minted requestId')
+  assert.ok((sent[0]?.requestId ?? '').length > 0, 'the requestId is non-empty')
+  assert.equal(sent[0]?.sessionId, 's1')
+  assert.equal(sent[0]?.mode, 'queue')
+  assert.deepEqual(sent[0]?.content, [{ type: 'text', text: 'continue' }])
 })
 
 test('a deterministic dsh rejection terminates a one-shot job and persists the removal', async () => {
   // RpcBusinessError (result.ok === false: target session deleted, payload
   // refused, …) can never succeed on retry — backing off would spin
-  // session.prompt forever. The job must be removed and the removal
+  // session/prompt forever. The job must be removed and the removal
   // persisted, unlike transient carrier failures (next test).
   let calls = 0
   const persisted: Array<ScheduledJob[]> = []
@@ -771,23 +708,27 @@ test('persisted feature settings apply on start and runtime PUT attaches or deta
   let muxStarts = 0
   let streamAborts = 0
   let prompts = 0
+  let listCalls = 0
   const transport = {
     reconnectDelayMs: 5,
     callDsh: (async (_base: string, method: string) => {
-      if (method === 'session.prompt') {
+      if (method === 'session/prompt') {
         prompts += 1
         return { rpcId: `prompt-${prompts}`, result: { ok: true, value: {} } }
       }
+      if (method === 'session/list') listCalls += 1
       return { rpcId: 'session-list', result: { ok: true, value: { items: [] } } }
     }) as any,
-    openStream: async function *(
+    openRemoteStream: async function *(
       _base: string,
-      path: string,
+      endpoint: string,
+      payload: unknown,
       signal?: AbortSignal,
-      onOpen?: () => void,
-    ): AsyncGenerator<ServerRequest> {
-      if (path.endsWith('mux')) muxStarts += 1
-      onOpen?.()
+    ): AsyncGenerator<unknown> {
+      // The notifier opens the $events stream; the session index opens the
+      // session/control stream. Both hang until aborted (feature detach
+      // counts the abort).
+      muxStarts += 1
       if (!signal?.aborted) {
         await new Promise<void>(resolve => signal?.addEventListener('abort', () => {
           streamAborts += 1
@@ -816,7 +757,10 @@ test('persisted feature settings apply on start and runtime PUT attaches or deta
     featureTransport: transport,
   })
   restarted.start()
-  await waitFor(() => muxStarts >= 2 && prompts === 1)
+  // muxStarts === 2: the session index opens the session/control stream AND
+  // the approval notifier opens the $events stream (0.1.2 wire); the
+  // persisted schedule fires once.
+  await waitFor(() => muxStarts === 2 && prompts === 1 && listCalls >= 1)
   for (const path of ['/chamber/git/worktrees', '/chamber/schedule', '/chamber/approvals']) {
     const response = new FakeResponse()
     await restarted.handle(new FakeRequest('GET') as unknown as ApiRequest,
@@ -828,6 +772,7 @@ test('persisted feature settings apply on start and runtime PUT attaches or deta
   muxStarts = 0
   streamAborts = 0
   prompts = 0
+  listCalls = 0
   const host = createFeatureHost({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
@@ -836,13 +781,15 @@ test('persisted feature settings apply on start and runtime PUT attaches or deta
     featureTransport: transport,
   })
   host.start()
+  // All flags off: the session index still starts (it opens the
+  // session/control stream), the notifier does not attach.
   await waitFor(() => muxStarts === 1)
 
   const enableNotifications = new FakeResponse()
   await host.handle(new FakeRequest('PUT', { notifications: { enabled: true } }) as unknown as ApiRequest,
     enableNotifications as unknown as ApiResponse, '/chamber/settings')
   assert.equal(enableNotifications.status, 200)
-  await waitFor(() => muxStarts >= 2)
+  await waitFor(() => muxStarts === 2)
 
   const liveNotifications = new FakeResponse()
   await host.handle(new FakeRequest('GET') as unknown as ApiRequest,
@@ -1046,16 +993,16 @@ test('dirty worktree delete failure rolls the record back to ready with the erro
   await writeFile(join(target, 'dirty.txt'), 'uncommitted change\n')
   const originalFetch = globalThis.fetch
   let sessionListCalls = 0
+  // 0.1.2 wire: session/list (slash) cwds are both the derived workspace-path
+  // source and the session-liveness source. The main workspace and the dirty
+  // worktree each carry a non-running session.
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
-      return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        { workspaceId: 'ws-dirty', path: target },
-      ] } }
-    }
-    if (method === 'session.list') {
+    if (method === 'session/list') {
       sessionListCalls += 1
-      return { ok: true, value: { items: [] } }
+      return { ok: true, value: { items: [
+        { sessionId: 's-main', running: false, cwd: fixture.repo },
+        { sessionId: 's-dirty', running: false, cwd: target },
+      ] } }
     }
     throw new Error(`unexpected ${method}`)
   })
@@ -1083,7 +1030,9 @@ test('dirty worktree delete failure rolls the record back to ready with the erro
       first as unknown as ApiResponse, '/chamber/git/worktrees/ws-dirty')
     assert.equal(first.status, 500)
     assert.equal(first.json().code, 'git_worktree_remove_failed')
-    assert.equal(sessionListCalls, 1, 'the saga reached the live-session guard before git removal')
+    // session/list (slash) serves the workspace-fact derivation (initial +
+    // mutation-adjacent recheck) and the live-session guard before git removal.
+    assert.equal(sessionListCalls, 3, 'the saga reached the live-session guard before git removal')
     let record = (await listWorktrees())[0]
     assert.equal(record?.state, 'ready', 'a dirty-tree failure must not stay stuck in deleting')
     assert.ok(typeof record?.error === 'string' && record.error !== '', 'the failure reason is recorded')
@@ -1094,7 +1043,7 @@ test('dirty worktree delete failure rolls the record back to ready with the erro
       second as unknown as ApiResponse, '/chamber/git/worktrees/ws-dirty')
     assert.equal(second.status, 500, 'the second DELETE is still initiated')
     assert.equal(second.json().code, 'git_worktree_remove_failed')
-    assert.ok(sessionListCalls >= 2, 'the retry re-entered the delete saga')
+    assert.ok(sessionListCalls >= 5, 'the retry re-entered the delete saga')
     record = (await listWorktrees())[0]
     assert.equal(record?.state, 'ready')
     assert.ok(typeof record?.error === 'string' && record.error !== '')
@@ -1105,10 +1054,8 @@ test('dirty worktree delete failure rolls the record back to ready with the erro
 })
 
 test('pending interactions dedupe, rejected receipts stay pending, and resolved/reset reach SSE clients', async () => {
-  let releaseResolved!: () => void
-  const resolvedGate = new Promise<void>(resolve => { releaseResolved = resolve })
   let accepted = false
-  const responses: any[] = []
+  const responses: Array<{ method: string; payload: any }> = []
   const host = createFeatureHost({
     getDshBaseUrl: () => 'http://127.0.0.1:12345',
     logger,
@@ -1118,40 +1065,31 @@ test('pending interactions dedupe, rejected receipts stay pending, and resolved/
     }),
     featureTransport: {
       reconnectDelayMs: 5,
-      callDsh: (async () => ({
-        rpcId: 'session-list', result: { ok: true, value: { items: [] } },
-      })) as any,
-      respondDsh: (async (_base: string, message: { rpcId?: string; result: any }) => {
-        responses.push(message)
-        return accepted ? { accepted: true } : { accepted: false, reason: 'bad-response' }
+      callDsh: (async (_base: string, method: string, payload: unknown) => {
+        if (method === '$events/result') {
+          responses.push({ method, payload })
+          return accepted
+            ? { rpcId: 'r', result: { ok: true, value: undefined } }
+            : { rpcId: 'r', result: { ok: false, error: { code: 'unknown-event', message: 'bad-response' } } }
+        }
+        return { rpcId: 'session-list', result: { ok: true, value: { items: [] } } }
       }) as any,
-      openStream: async function *(_base, path, signal, onOpen): AsyncGenerator<ServerRequest> {
-        onOpen?.()
-        if (path.endsWith('mux')) {
-          const requested: ServerRequest[] = [
-            {
-              type: 'server-request', rpcId: 'approval-rpc', method: 'approval/requested',
-              payload: { sessionId: 's1', approvalId: 'a1', toolName: 'shell' },
-            },
-            {
-              type: 'server-request', rpcId: 'question-rpc', method: 'question/requested',
-              payload: { sessionId: 's1', questions: [] },
-            },
-          ]
-          for (const frame of [...requested, ...requested]) yield frame
-          await resolvedGate
-          yield {
-            type: 'server-request', rpcId: 'approval-resolved', method: 'approval/resolved',
-            payload: { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' },
-          }
-          yield {
-            type: 'server-request', rpcId: 'question-resolved', method: 'question/resolved',
-            payload: { sessionId: 's1', questionRpcId: 'question-rpc', outcome: 'answered' },
-          }
-        }
-        if (!signal?.aborted) {
-          await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
-        }
+      openRemoteStream: async function *(): AsyncGenerator<unknown> {
+        // 0.1.2 $events stream: one ready frame, then the answerable
+        // waterfalls (replayed twice — dedupe must keep one pending row each).
+        yield { type: 'ready', clientId: 'client-1', host: { home: '/home' } }
+        const requested: unknown[] = [
+          {
+            type: 'waterfall', event: 'approval/request', eventId: 'a1', agentId: 's1',
+            request: { toolName: 'shell' },
+          },
+          {
+            type: 'waterfall', event: 'user-questions/request', eventId: 'q1', agentId: 's1',
+            request: { sessionId: 's1', questions: [] },
+          },
+        ]
+        for (const frame of [...requested, ...requested]) yield frame
+        await new Promise<void>(resolve => undefined)
       },
     },
   })
@@ -1168,19 +1106,19 @@ test('pending interactions dedupe, rejected receipts stay pending, and resolved/
     return response.json().items
   }
   await waitFor(() => sse.chunks.join('').includes('event: question'))
-  assert.equal((await getPending()).length, 2, 'replayed duplicate rpcIds are deduplicated')
+  assert.equal((await getPending()).length, 2, 'replayed duplicate eventIds are deduplicated')
   assert.equal(sse.chunks.join('').includes('event: pending-reset'), true)
 
   const malformed = new FakeResponse()
   await host.handle(new FakeRequest('POST', {
-    rpcId: 'question-rpc', answer: { answers: [{ id: '', selected: [] }] },
+    id: 'q1', answer: { answers: [{ id: '', selected: [] }] },
   }) as unknown as ApiRequest, malformed as unknown as ApiResponse, '/chamber/approvals')
   assert.equal(malformed.status, 400)
   assert.equal(responses.length, 0, 'malformed answers do not reach dsh')
 
   for (const body of [
-    { rpcId: 'approval-rpc', outcome: 'allowed-once' },
-    { rpcId: 'question-rpc', answer: { answers: [] } },
+    { id: 'a1', outcome: 'allowed-once' },
+    { id: 'q1', answer: { answers: [] } },
   ]) {
     const rejected = new FakeResponse()
     await host.handle(new FakeRequest('POST', body) as unknown as ApiRequest,
@@ -1193,13 +1131,16 @@ test('pending interactions dedupe, rejected receipts stay pending, and resolved/
   accepted = true
   const answered = new FakeResponse()
   await host.handle(new FakeRequest('POST', {
-    rpcId: 'question-rpc', answer: { answers: [] },
+    id: 'q1', answer: { answers: [] },
   }) as unknown as ApiRequest, answered as unknown as ApiResponse, '/chamber/approvals')
   assert.equal(answered.status, 200)
-  assert.equal(responses.at(-1)?.result.ok, true)
+  assert.equal(responses.at(-1)?.payload.args.eventId, 'q1')
+  // 0.1.2 wire: resolution is answer-driven — the row clears immediately.
   assert.equal((await getPending()).length, 1)
 
-  releaseResolved()
+  await host.handle(new FakeRequest('POST', {
+    id: 'a1', outcome: 'allowed-once',
+  }) as unknown as ApiRequest, new FakeResponse() as unknown as ApiResponse, '/chamber/approvals')
   await waitFor(() => sse.chunks.join('').includes('event: approval-resolved'))
   assert.deepEqual(await getPending(), [])
   assert.equal(sse.chunks.join('').includes('event: question-resolved'), true)
@@ -1239,20 +1180,20 @@ test('answering a pending interaction while dsh is not ready answers 503 and kee
     }),
     featureTransport: {
       reconnectDelayMs: 5,
-      callDsh: (async () => ({
-        rpcId: 'session-list', result: { ok: true, value: { items: [] } },
-      })) as any,
-      respondDsh: (async (_base: string, message: { rpcId?: string; result: any }) => {
-        responses.push(message)
-        return { accepted: true }
+      callDsh: (async (_base: string, method: string, payload: unknown) => {
+        if (method === '$events/result') responses.push({ method, payload })
+        return { rpcId: 'r', result: { ok: true, value: undefined } }
       }) as any,
-      openStream: async function *(_base, path, signal, onOpen): AsyncGenerator<ServerRequest> {
-        onOpen?.()
-        if (path.endsWith('mux')) {
-          yield {
-            type: 'server-request', rpcId: 'approval-rpc', method: 'approval/requested',
-            payload: { sessionId: 's1', approvalId: 'a1', toolName: 'shell' },
-          }
+      openRemoteStream: async function *(
+        _base: string,
+        endpoint: string,
+        payload: unknown,
+        signal?: AbortSignal,
+      ): AsyncGenerator<unknown> {
+        yield { type: 'ready', clientId: 'client-1', host: { home: '/home' } }
+        yield {
+          type: 'waterfall', event: 'approval/request', eventId: 'a1', agentId: 's1',
+          request: { toolName: 'shell' },
         }
         if (!signal?.aborted) {
           await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
@@ -1277,7 +1218,7 @@ test('answering a pending interaction while dsh is not ready answers 503 and kee
   baseUrl = null
   const unanswered = new FakeResponse()
   await host.handle(new FakeRequest('POST', {
-    rpcId: 'approval-rpc', outcome: 'allowed-once',
+    id: 'a1', outcome: 'allowed-once',
   }) as unknown as ApiRequest, unanswered as unknown as ApiResponse, '/chamber/approvals')
   assert.equal(unanswered.status, 503)
   assert.equal(unanswered.json().code, 'instance_unavailable')
@@ -1292,12 +1233,11 @@ test('approval notifier rejects answers with a coded instance_unavailable error 
     logger,
     onApproval() {},
     onQuestion() {},
-    respondDsh: (async () => ({ accepted: true })) as any,
   })
-  const approval = { sessionId: 's1', approvalId: 'a1', rpcId: 'approval-rpc', toolName: 'shell' }
+  const approval = { sessionId: 's1', approvalId: 'a1', clientId: 'client-1', toolName: 'shell' }
   await assert.rejects(notifier.answerApproval(approval, 'allowed-once'),
     (error: unknown) => (error as { code?: string })?.code === 'instance_unavailable')
-  await assert.rejects(notifier.answerQuestion({ sessionId: 's1', rpcId: 'q', questions: [] }, { answers: [] }),
+  await assert.rejects(notifier.answerQuestion({ sessionId: 's1', questionId: 'q', clientId: 'client-1', questions: [] }, { answers: [] }),
     (error: unknown) => (error as { code?: string })?.code === 'instance_unavailable')
 })
 

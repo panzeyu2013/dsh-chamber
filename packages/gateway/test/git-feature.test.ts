@@ -178,9 +178,11 @@ test('create rejects repositories and targets outside live workspace authority',
   const first = await makeRepo('gateway-authority-a-')
   const second = await makeRepo('gateway-authority-b-')
   const originalFetch = globalThis.fetch
+  // 0.1.2 wire: workspace facts are derived from session/list (slash) cwds
+  // (workspace.list removed); the live main workspace has a session at first.repo.
   globalThis.fetch = rpcFetch(method => {
-    assert.equal(method, 'workspace.list')
-    return { ok: true, value: { items: [{ workspaceId: 'ws-main', path: first.repo }] } }
+    assert.equal(method, 'session/list')
+    return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: first.repo }] } }
   })
   try {
     await assert.rejects(createWorktree({
@@ -224,15 +226,15 @@ test('create revalidates repo and target workspace authority immediately before 
       const target = join(fixture.root, scenario.name)
       let listCalls = 0
       globalThis.fetch = rpcFetch(method => {
-        assert.equal(method, 'workspace.list')
+        assert.equal(method, 'session/list')
         listCalls += 1
         if (listCalls === 1) {
-          return { ok: true, value: { items: [{ workspaceId: 'ws-main', path: fixture.repo }] } }
+          return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: fixture.repo }] } }
         }
         if (scenario.name === 'repo-lost') return { ok: true, value: { items: [] } }
         return { ok: true, value: { items: [
-          { workspaceId: 'ws-main', path: fixture.repo },
-          { workspaceId: 'ws-new-owner', path: target },
+          { sessionId: 's-main', running: false, cwd: fixture.repo },
+          { sessionId: 's-new-owner', running: false, cwd: target },
         ] } }
       })
       await assert.rejects(createWorktree({
@@ -256,28 +258,24 @@ test('session failure compensates only a correlated workspace created by this ca
   const originalFetch = globalThis.fetch
   let workspaceCreated = false
   let workspaceDeleteCalls = 0
-  let liveWorkspacePath: string | null = null
   let target = join(fixture.root, 'feature-reused')
+  // 0.1.2 wire: session/list (slash) cwds are the derived workspace-path
+  // source. The main workspace carries a session; the pre-existing/owned
+  // worktree workspace stays SESSIONLESS (a live session at the target would
+  // trip assertNoSessionAtPath — the removal path requires the target free of
+  // sessions, matching the old "empty session projection" requirement).
   globalThis.fetch = rpcFetch((method, payload) => {
-    if (method === 'workspace.list') {
-      return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        ...(liveWorkspacePath === null ? [] : [{ workspaceId: 'ws-feature', path: liveWorkspacePath }]),
-      ] } }
+    if (method === 'session/list') {
+      return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: fixture.repo }] } }
     }
-    if (method === 'workspace.create') {
-      liveWorkspacePath = payload.path
-      return { ok: true, value: { workspace: { workspaceId: 'ws-feature', path: payload.path }, created: workspaceCreated } }
+    if (method === 'workspace/create') {
+      return { ok: true, value: { workspace: { workspaceId: 'ws-feature', path: payload.args.request.path }, created: workspaceCreated } }
     }
-    if (method === 'session.create') {
+    if (method === 'session/create') {
       return { ok: false, error: { code: 'session-failed', message: 'synthetic failure' } }
     }
-    if (method === 'session.list') {
-      return { ok: true, value: { items: [] } }
-    }
-    if (method === 'workspace.delete') {
+    if (method === 'workspace/delete') {
       workspaceDeleteCalls += 1
-      liveWorkspacePath = null
       return { ok: true, value: { deleted: true } }
     }
     throw new Error(`unexpected ${method}`)
@@ -311,21 +309,24 @@ test('session compensation preserves a path reoccupied after workspace deletion'
   const originalFetch = globalThis.fetch
   let listCalls = 0
   globalThis.fetch = rpcFetch((method, payload) => {
-    if (method === 'workspace.list') {
+    if (method === 'session/list') {
       listCalls += 1
       return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        ...(listCalls > 2 ? [{ workspaceId: 'ws-new-owner', path: target }] : []),
+        { sessionId: 's-main', running: false, cwd: fixture.repo },
+        // The reoccupying session appears only AFTER the owned workspace was
+        // deleted (listCalls 1-3 are the two authority proofs + the pre-
+        // compensation no-session guard); the compensation's post-delete
+        // liveness guard then fails closed on it.
+        ...(listCalls >= 4 ? [{ sessionId: 's-new-owner', running: false, cwd: target }] : []),
       ] } }
     }
-    if (method === 'workspace.create') {
-      return { ok: true, value: { workspace: { workspaceId: 'ws-owned', path: payload.path }, created: true } }
+    if (method === 'workspace/create') {
+      return { ok: true, value: { workspace: { workspaceId: 'ws-owned', path: payload.args.request.path }, created: true } }
     }
-    if (method === 'session.create') {
+    if (method === 'session/create') {
       return { ok: false, error: { code: 'session-failed', message: 'synthetic failure' } }
     }
-    if (method === 'session.list') return { ok: true, value: { items: [] } }
-    if (method === 'workspace.delete') return { ok: true, value: { deleted: true } }
+    if (method === 'workspace/delete') return { ok: true, value: { deleted: true } }
     throw new Error(`unexpected ${method}`)
   })
   try {
@@ -349,18 +350,15 @@ test('ambiguous workspace.create failure persists an unverified recovery and pre
   const fixture = await makeRepo('gateway-ambiguous-')
   const target = join(fixture.root, 'feature-ambiguous')
   const originalFetch = globalThis.fetch
-  let listCalls = 0
+  // The workspace.create transport failure is commit-ambiguous; on the 0.1.2
+  // wire the possibly-committed workspace id is no longer recoverable
+  // (workspace.list removed → workspace/follow stream TODO), so the unverified
+  // recovery row is identified by its canonical path instead.
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
-      listCalls += 1
-      return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        // Calls 1-2 are the initial and mutation-adjacent authority proofs;
-        // only the post-error reconciliation observes the possibly committed row.
-        ...(listCalls > 2 ? [{ workspaceId: 'ws-ambiguous', path: target }] : []),
-      ] } }
+    if (method === 'session/list') {
+      return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: fixture.repo }] } }
     }
-    if (method === 'workspace.create') {
+    if (method === 'workspace/create') {
       throw new TypeError('response lost after possible commit')
     }
     throw new Error(`unexpected ${method}`)
@@ -370,7 +368,7 @@ test('ambiguous workspace.create failure persists an unverified recovery and pre
       dshBaseUrl: 'http://127.0.0.1:12345', repo: fixture.repo, branch: 'feature/ambiguous', newPath: target,
     }), (error: unknown) => error instanceof GitFeatureError
       && error.code === 'workspace_create_ambiguous'
-      && error.recovery?.workspaceId === 'ws-ambiguous'
+      && error.recovery?.path === target
       && error.recovery.ownership === 'unverified')
     assert.equal(await realpath(target), target)
   } finally {
@@ -379,20 +377,20 @@ test('ambiguous workspace.create failure persists an unverified recovery and pre
   }
 })
 
-test('ambiguous session.create preserves the owned workspace and Git path for recovery', async () => {
+test('ambiguous session/create preserves the owned workspace and Git path for recovery', async () => {
   const fixture = await makeRepo('gateway-session-ambiguous-')
   const target = join(fixture.root, 'feature-session-ambiguous')
   const originalFetch = globalThis.fetch
   let workspaceDeleteCalls = 0
   globalThis.fetch = rpcFetch((method, payload) => {
-    if (method === 'workspace.list') {
-      return { ok: true, value: { items: [{ workspaceId: 'ws-main', path: fixture.repo }] } }
+    if (method === 'session/list') {
+      return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: fixture.repo }] } }
     }
-    if (method === 'workspace.create') {
-      return { ok: true, value: { workspace: { workspaceId: 'ws-session-ambiguous', path: payload.path }, created: true } }
+    if (method === 'workspace/create') {
+      return { ok: true, value: { workspace: { workspaceId: 'ws-session-ambiguous', path: payload.args.request.path }, created: true } }
     }
-    if (method === 'session.create') throw new TypeError('response lost after possible commit')
-    if (method === 'workspace.delete') {
+    if (method === 'session/create') throw new TypeError('response lost after possible commit')
+    if (method === 'workspace/delete') {
       workspaceDeleteCalls += 1
       return { ok: true, value: { deleted: true } }
     }
@@ -422,17 +420,16 @@ test('session business failure does not remove Git when workspace.delete is not 
   const target = join(fixture.root, 'feature-session-delete-fail')
   const originalFetch = globalThis.fetch
   globalThis.fetch = rpcFetch((method, payload) => {
-    if (method === 'workspace.list') {
-      return { ok: true, value: { items: [{ workspaceId: 'ws-main', path: fixture.repo }] } }
+    if (method === 'session/list') {
+      return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: fixture.repo }] } }
     }
-    if (method === 'workspace.create') {
-      return { ok: true, value: { workspace: { workspaceId: 'ws-delete-fail', path: payload.path }, created: true } }
+    if (method === 'workspace/create') {
+      return { ok: true, value: { workspace: { workspaceId: 'ws-delete-fail', path: payload.args.request.path }, created: true } }
     }
-    if (method === 'session.create') {
+    if (method === 'session/create') {
       return { ok: false, error: { code: 'session-failed', message: 'synthetic failure' } }
     }
-    if (method === 'session.list') return { ok: true, value: { items: [] } }
-    if (method === 'workspace.delete') {
+    if (method === 'workspace/delete') {
       return { ok: false, error: { code: 'temporary', message: 'not committed' } }
     }
     throw new Error(`unexpected ${method}`)
@@ -451,26 +448,26 @@ test('session business failure does not remove Git when workspace.delete is not 
   }
 })
 
-test('delete fails closed while a live session uses the canonical or symlinked worktree path', async () => {
+test('delete fails closed while a live session uses the canonical worktree path', async () => {
   const fixture = await makeRepo('gateway-delete-live-')
   const target = join(fixture.root, 'feature-delete-live')
-  const alias = join(fixture.root, 'feature-delete-alias')
   execFileSync('git', ['-C', fixture.repo, 'worktree', 'add', '-b', 'feature/delete-live', target], { stdio: 'ignore' })
-  await symlink(target, alias)
   const originalFetch = globalThis.fetch
   let running = true
   let deleteCalls = 0
+  // 0.1.2 wire: session/list (slash) cwds are the derived workspace-path
+  // source AND the session-liveness source. The worktree's own session lives
+  // at `target`; while running, delete fails closed with worktree_in_use (the
+  // symlink-alias variant of this guard is covered by the reoccupied-alias
+  // delete test below).
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
+    if (method === 'session/list') {
       return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        { workspaceId: 'ws-live', path: target },
+        { sessionId: 's-main', running: false, cwd: fixture.repo },
+        { sessionId: 'session-live', running, cwd: target },
       ] } }
     }
-    if (method === 'session.list') {
-      return { ok: true, value: { items: [{ sessionId: 'session-live', running, cwd: alias }] } }
-    }
-    if (method === 'workspace.delete') {
+    if (method === 'workspace/delete') {
       deleteCalls += 1
       return { ok: true, value: { deleted: true } }
     }
@@ -503,19 +500,18 @@ test('delete saga resumes workspace.delete after Git was already removed', async
   const originalFetch = globalThis.fetch
   let deleteCalls = 0
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
+    if (method === 'session/list') {
       return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        { workspaceId: 'ws-feature', path: target },
+        { sessionId: 's-main', running: false, cwd: fixture.repo },
+        { sessionId: 's-feature', running: false, cwd: target },
       ] } }
     }
-    if (method === 'workspace.delete') {
+    if (method === 'workspace/delete') {
       deleteCalls += 1
       return deleteCalls === 1
         ? { ok: false, error: { code: 'temporary', message: 'try again' } }
         : { ok: true, value: { deleted: true } }
     }
-    if (method === 'session.list') return { ok: true, value: { items: [] } }
     throw new Error(`unexpected ${method}`)
   })
   const input = {
@@ -540,12 +536,14 @@ test('delete resume refuses a surviving Git path after workspace authority disap
   const target = join(fixture.root, 'feature-delete-committed')
   execFileSync('git', ['-C', fixture.repo, 'worktree', 'add', '-b', 'feature/delete-committed', target], { stdio: 'ignore' })
   const originalFetch = globalThis.fetch
+  // The ws-feature workspace is gone: no session addresses target, so the
+  // derived path set has only the main workspace. The surviving Git path has
+  // no workspace authority → the resume refuses to remove it.
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
-      return { ok: true, value: { items: [{ workspaceId: 'ws-main', path: fixture.repo }] } }
+    if (method === 'session/list') {
+      return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: fixture.repo }] } }
     }
-    if (method === 'session.list') return { ok: true, value: { items: [] } }
-    throw new Error(`workspace.delete must not replay after its committed row disappeared: ${method}`)
+    throw new Error(`workspace/delete must not replay after its committed row disappeared: ${method}`)
   })
   try {
     await assert.rejects(
@@ -566,9 +564,11 @@ test('delete resume converges when both workspace authority and Git path are alr
   const fixture = await makeRepo('gateway-delete-converged-')
   const target = join(fixture.root, 'feature-delete-converged')
   const originalFetch = globalThis.fetch
+  // Only the session/list (slash) workspace-fact derivation is expected; a
+  // fully converged delete must not replay any other RPC.
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
-      return { ok: true, value: { items: [{ workspaceId: 'ws-main', path: fixture.repo }] } }
+    if (method === 'session/list') {
+      return { ok: true, value: { items: [{ sessionId: 's-main', running: false, cwd: fixture.repo }] } }
     }
     throw new Error(`fully converged delete must not replay an RPC: ${method}`)
   })
@@ -601,18 +601,17 @@ test('delete revalidates main-checkout repository authority immediately before G
   const originalFetch = globalThis.fetch
   let listCalls = 0
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
+    if (method === 'session/list') {
       listCalls += 1
       if (listCalls === 2) {
         renameSync(fixture.repo, oldRepo)
         renameSync(replacement, fixture.repo)
       }
       return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        { workspaceId: 'ws-feature', path: target },
+        { sessionId: 's-main', running: false, cwd: fixture.repo },
+        { sessionId: 's-feature', running: false, cwd: target },
       ] } }
     }
-    if (method === 'session.list') return { ok: true, value: { items: [] } }
     throw new Error(`unexpected ${method}`)
   })
   try {
@@ -630,28 +629,28 @@ test('delete revalidates main-checkout repository authority immediately before G
   }
 })
 
-test('delete resume refuses a target reoccupied by another workspace id or alias', async () => {
+test('delete resume fails closed when the owned path is unprovable or aliased by another live workspace', async () => {
   const fixture = await makeRepo('gateway-delete-reoccupied-')
   const target = join(fixture.root, 'feature-delete-reoccupied')
   const alias = join(fixture.root, 'feature-delete-reoccupied-alias')
   execFileSync('git', ['-C', fixture.repo, 'worktree', 'add', '-b', 'feature/delete-reoccupied', target], { stdio: 'ignore' })
   await symlink(target, alias)
   const originalFetch = globalThis.fetch
-  let occupyingPath = target
-  let sessionCalls = 0
+  let occupyingPath: string | null = null
   let deleteCalls = 0
+  // 0.1.2 wire tradeoff (WP9): workspace facts are path-level (derived from
+  // session/list cwds), so the old "reoccupied by ANOTHER workspace ID"
+  // variant is not expressible — the owned path IS input.path. The fail-closed
+  // substitutes are: (A) the owned path unprovable as a live workspace, and
+  // (B) a different live workspace path aliasing the target (symlink).
   globalThis.fetch = rpcFetch(method => {
-    if (method === 'workspace.list') {
+    if (method === 'session/list') {
       return { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        { workspaceId: 'ws-new-owner', path: occupyingPath },
+        { sessionId: 's-main', running: false, cwd: fixture.repo },
+        ...(occupyingPath === null ? [] : [{ sessionId: 's-new-owner', running: false, cwd: occupyingPath }]),
       ] } }
     }
-    if (method === 'session.list') {
-      sessionCalls += 1
-      return { ok: true, value: { items: [] } }
-    }
-    if (method === 'workspace.delete') {
+    if (method === 'workspace/delete') {
       deleteCalls += 1
       return { ok: true, value: { deleted: true } }
     }
@@ -662,15 +661,18 @@ test('delete resume refuses a target reoccupied by another workspace id or alias
     path: target, branch: 'feature/delete-reoccupied', resumeAfterGitRemoval: true,
   }
   try {
+    // (A) The owned path is not a live workspace (no session addresses it):
+    // the surviving Git path has no workspace authority and must not be removed.
     await assert.rejects(deleteWorktree(input),
       (error: unknown) => error instanceof GitFeatureError && error.code === 'worktree_not_allowed')
     assert.equal(await realpath(target), target)
 
+    // (B) A different live workspace path aliases the target via a symlink:
+    // the reoccupation guard fails closed before any mutation.
     occupyingPath = alias
     await assert.rejects(deleteWorktree(input),
       (error: unknown) => error instanceof GitFeatureError && error.code === 'worktree_not_allowed')
     assert.equal(await realpath(target), target)
-    assert.equal(sessionCalls, 0)
     assert.equal(deleteCalls, 0)
   } finally {
     globalThis.fetch = originalFetch

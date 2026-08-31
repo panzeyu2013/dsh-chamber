@@ -3,8 +3,21 @@
  *
  * The bearer of a gateway credential is not implicitly allowed to run Git in
  * an arbitrary directory. Every mutation is correlated with the live
- * `workspace.list` projection, then reduced to a canonical main-workspace
- * path and one direct sibling target.
+ * workspace projection, then reduced to a canonical main-workspace path and
+ * one direct sibling target.
+ *
+ * dsh 0.1.2 wire note: the unary `workspace.list` RPC was REMOVED upstream
+ * (replaced by the `workspace/follow` Remote stream over `/api/remote.mux`).
+ * The Remote-stream client is not available in this package yet (the mux open
+ * handshake `{type:'open',streamId,endpoint,payload}` cannot be sent by the
+ * control-plane `openEventStream` carrier and the upstream stream-protocol
+ * frame shapes are unverified against the real wire), so workspace PATH facts
+ * are derived from `session/list` (slash): every live session's cwd is a live
+ * workspace path. Sessionless workspaces are unprovable and FAIL CLOSED, and
+ * workspaceId correlation is never derived — ids come from `workspace/create`
+ * responses and the gateway's own persisted records (see `deleteWorktree`).
+ * The residual id-rebinding gap and the `workspace/follow` TODO are recorded
+ * in the WP9 migration's unresolved issues.
  */
 
 import { spawn } from 'node:child_process'
@@ -15,7 +28,9 @@ import { RpcBusinessError, RpcTransportError, call } from '@dsh-chamber/control-
 
 export interface CreateWorktreeInput {
   dshBaseUrl: string
-  /** Must equal a canonical path returned by the live workspace.list call. */
+  /** Must equal a canonical path of a live dsh workspace. On the 0.1.2 wire
+   * workspace membership is derived from `session/list` (slash) cwds (the
+   * unary `workspace.list` was removed); sessionless workspaces fail closed. */
   repo: string
   branch: string
   /** Must be a previously absent direct sibling of repo. */
@@ -191,50 +206,58 @@ function tail(text: string, max = 1024): string {
   return text.length > max ? `…${text.slice(-max)}` : text
 }
 
-interface WorkspaceFact { workspaceId: string; path: string }
+/** Path-level live workspace facts. workspaceId correlation is intentionally
+ * absent: on the 0.1.2 wire there is no unary workspace list, so ids are never
+ * derived — they come from `workspace/create` responses and the gateway's own
+ * persisted records. */
+interface WorkspaceFact { path: string }
 interface WorkspaceCreateFact { workspaceId: string; path: string; created: boolean }
 interface SessionFact { sessionId: string; running: boolean; cwd?: string }
 
-/** Decode the actual workspace.create wire shape and correlate its path. */
+/** Decode the actual workspace/create wire shape and correlate its path. */
 export function decodeWorkspaceCreateValue(value: unknown, requestedPath: string): WorkspaceCreateFact {
   const row = value as { workspace?: { workspaceId?: unknown; path?: unknown }; created?: unknown } | null
   const workspaceId = row?.workspace?.workspaceId
   const path = row?.workspace?.path
   if (typeof workspaceId !== 'string' || workspaceId === '') {
-    throw new GitFeatureError('workspace_create_failed', 'workspace.create returned no workspace id')
+    throw new GitFeatureError('workspace_create_failed', 'workspace/create returned no workspace id')
   }
   if (typeof path !== 'string' || path !== requestedPath) {
-    throw new GitFeatureError('workspace_create_failed', 'workspace.create returned a different workspace path')
+    throw new GitFeatureError('workspace_create_failed', 'workspace/create returned a different workspace path')
   }
   if (typeof row?.created !== 'boolean') {
-    throw new GitFeatureError('workspace_create_failed', 'workspace.create returned no created ownership flag')
+    throw new GitFeatureError('workspace_create_failed', 'workspace/create returned no created ownership flag')
   }
   return { workspaceId, path, created: row.created }
 }
 
-function decodeWorkspaceListValue(value: unknown): WorkspaceFact[] {
+/** Decode live workspace PATH facts from `session/list` (slash) rows: every
+ * live session's cwd is a live workspace path. cwd-less rows and sessionless
+ * workspaces are unprovable and excluded — callers must fail closed on them.
+ * The old `workspace.list` wire is gone (→ `workspace/follow` stream, TODO);
+ * this derivation is the fail-closed unary substitute (WP9 unresolved issue). */
+function decodeWorkspacePathValue(value: unknown): WorkspaceFact[] {
   const items = (value as { items?: unknown } | null)?.items
   if (!Array.isArray(items)) {
-    throw new GitFeatureError('workspace_list_failed', 'workspace.list returned no items array')
+    throw new GitFeatureError('workspace_list_failed', 'session/list returned no items array')
   }
   const facts: WorkspaceFact[] = []
   for (const item of items) {
-    const row = item as { workspaceId?: unknown; path?: unknown } | null
-    if (typeof row?.workspaceId !== 'string' || row.workspaceId === '' || typeof row.path !== 'string' || row.path === '') {
-      throw new GitFeatureError('workspace_list_failed', 'workspace.list returned a malformed workspace row')
+    const row = item as { cwd?: unknown } | null
+    const cwd = row?.cwd
+    if (typeof cwd !== 'string' || cwd === '') continue
+    if (!isAbsolute(cwd) || resolve(cwd) !== cwd || cwd.includes('\0')) {
+      throw new GitFeatureError('workspace_list_failed', 'session/list returned a non-canonical workspace path')
     }
-    if (!isAbsolute(row.path) || resolve(row.path) !== row.path || row.path.includes('\0')) {
-      throw new GitFeatureError('workspace_list_failed', 'workspace.list returned a non-canonical path')
-    }
-    facts.push({ workspaceId: row.workspaceId, path: resolve(row.path) })
+    facts.push({ path: resolve(cwd) })
   }
   return facts
 }
 
-async function listWorkspaces(dshBaseUrl: string): Promise<WorkspaceFact[]> {
+async function listWorkspacePaths(dshBaseUrl: string): Promise<WorkspaceFact[]> {
   try {
-    const { result } = await call(dshBaseUrl, 'workspace.list', {})
-    return decodeWorkspaceListValue(result.value)
+    const { result } = await call(dshBaseUrl, 'session/list', { args: { _request: {} } })
+    return decodeWorkspacePathValue(result.value)
   } catch (error) {
     if (error instanceof GitFeatureError) throw error
     throw rpcError('workspace_list_failed', error)
@@ -242,17 +265,18 @@ async function listWorkspaces(dshBaseUrl: string): Promise<WorkspaceFact[]> {
 }
 
 /** A persisted saga id cannot authorize a path after another live workspace
- * has taken that path (or an alias/descendant of it). Check both the registry
- * string and the current filesystem identity: the latter closes the symlink
+ * has taken that path (or an alias/descendant of it). Check both the derived
+ * path set and the current filesystem identity: the latter closes the symlink
  * alias variant without treating an unrelated missing workspace as proof of
- * ownership. */
+ * ownership. Workspace facts are path-level (no ids on the 0.1.2 wire), so
+ * the owned workspace is excluded by its canonical PATH rather than an id. */
 async function assertNoWorkspacePathReoccupation(
   workspaces: WorkspaceFact[],
   path: string,
-  ownedWorkspaceId?: string,
+  ownedPath?: string,
 ): Promise<void> {
   for (const candidate of workspaces) {
-    if (ownedWorkspaceId !== undefined && candidate.workspaceId === ownedWorkspaceId) continue
+    if (ownedPath !== undefined && candidate.path === ownedPath) continue
     if (isAtOrBelow(path, candidate.path)) {
       throw new GitFeatureError('worktree_not_allowed', 'worktree path is owned by a different live workspace')
     }
@@ -272,12 +296,12 @@ async function assertNoWorkspacePathReoccupation(
 
 function decodeSessionListValue(value: unknown): SessionFact[] {
   const items = (value as { items?: unknown } | null)?.items
-  if (!Array.isArray(items)) throw new GitFeatureError('session_list_failed', 'session.list returned no items array')
+  if (!Array.isArray(items)) throw new GitFeatureError('session_list_failed', 'session/list returned no items array')
   return items.map(item => {
     const row = item as { sessionId?: unknown; running?: unknown; cwd?: unknown } | null
     if (typeof row?.sessionId !== 'string' || row.sessionId === '' || typeof row.running !== 'boolean'
       || (row.cwd !== undefined && (typeof row.cwd !== 'string' || !isAbsolute(row.cwd) || resolve(row.cwd) !== row.cwd))) {
-      throw new GitFeatureError('session_list_failed', 'session.list returned a malformed session row')
+      throw new GitFeatureError('session_list_failed', 'session/list returned a malformed session row')
     }
     return {
       sessionId: row.sessionId,
@@ -289,7 +313,7 @@ function decodeSessionListValue(value: unknown): SessionFact[] {
 
 async function listSessions(dshBaseUrl: string): Promise<SessionFact[]> {
   try {
-    const { result } = await call(dshBaseUrl, 'session.list', {})
+    const { result } = await call(dshBaseUrl, 'session/list', { args: { _request: {} } })
     return decodeSessionListValue(result.value)
   } catch (error) {
     if (error instanceof GitFeatureError) throw error
@@ -435,17 +459,19 @@ async function resolveGitRemovalAuthority(
   dshBaseUrl: string,
   repoInput: string,
   path: string,
-  allowedWorkspaceId?: string,
+  ownedPath?: string,
 ): Promise<string> {
-  const workspaces = await listWorkspaces(dshBaseUrl)
+  const workspaces = await listWorkspacePaths(dshBaseUrl)
   const repo = await resolveMainRepoAuthority(repoInput, workspaces)
-  await assertNoWorkspacePathReoccupation(workspaces, path, allowedWorkspaceId)
-  if (allowedWorkspaceId !== undefined) {
-    const owner = workspaces.find(workspace => workspace.workspaceId === allowedWorkspaceId)
-    if (owner === undefined || owner.path !== path) {
-      throw new GitFeatureError('worktree_not_allowed', 'expected workspace ownership changed before Git removal')
-    }
-  }
+  await assertNoWorkspacePathReoccupation(workspaces, path, ownedPath)
+  // NOTE (0.1.2 wire, WP9 tradeoff): the old id↔path registry re-verification
+  // ("the workspace row with id X still owns path") is not expressible with
+  // path-level session-derived facts, and a session-liveness proof conflicts
+  // with the removal path (removal requires the target to be session-free,
+  // which makes it unprovable as a live workspace). Fail-closed substitutes:
+  // the reoccupation check above (no OTHER live workspace path at/below/
+  // aliasing the target) plus the caller's assertNoSessionAtPath live guard.
+  // The workspace/follow stream client is the TODO restoration.
   return repo
 }
 
@@ -485,11 +511,11 @@ async function compensateCreatedWorktree(
   // created:true + correlated path + successful git-add are the ownership
   // proofs. Without all three, compensation must not delete anything.
   if (!workspace.created || workspace.path !== path) return { workspaceDeleted: false, gitRemoved: false }
-  const { result } = await dsh('workspace.delete', { workspaceId: workspace.workspaceId })
+  const { result } = await dsh('workspace/delete', { args: { request: { workspaceId: workspace.workspaceId } } })
   if ((result.value as { deleted?: unknown } | null)?.deleted !== true) {
     return { workspaceDeleted: false, gitRemoved: false }
   }
-  // workspace.delete and Git removal are separate authorities. Re-check after
+  // workspace/delete and Git removal are separate authorities. Re-check after
   // the first mutation so a session or workspace that appeared meanwhile
   // retains its path, and re-prove that the repository itself was not swapped.
   await assertNoSessionAtPath(dshBaseUrl, path)
@@ -542,14 +568,14 @@ function unverifiedRecoveryRecord(
 export async function createWorktree(input: CreateWorktreeInput): Promise<WorktreeRecord> {
   const createdAt = Date.now()
   const dsh = (method: string, payload: unknown) => call(input.dshBaseUrl, method, payload)
-  const workspaces = await listWorkspaces(input.dshBaseUrl)
+  const workspaces = await listWorkspacePaths(input.dshBaseUrl)
   const authority = await resolveCreateAuthority(input, workspaces)
 
   // The initial authority proof performs filesystem/Git inspection and can
   // race workspace removal or target registration. Rebuild the complete proof
   // immediately before the first mutation; a stale snapshot must never grant
   // `git worktree add` authority.
-  const mutationWorkspaces = await listWorkspaces(input.dshBaseUrl)
+  const mutationWorkspaces = await listWorkspacePaths(input.dshBaseUrl)
   const mutationAuthority = await resolveCreateAuthority(input, mutationWorkspaces)
   await assertNoWorkspacePathReoccupation(mutationWorkspaces, mutationAuthority.newPath)
   if (mutationAuthority.repo !== authority.repo || mutationAuthority.newPath !== authority.newPath) {
@@ -563,7 +589,7 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
 
   let workspace: WorkspaceCreateFact
   try {
-    const { result } = await dsh('workspace.create', { path: authority.newPath })
+    const { result } = await dsh('workspace/create', { args: { request: { path: authority.newPath } } })
     workspace = decodeWorkspaceCreateValue(result.value, authority.newPath)
   } catch (error) {
     if (error instanceof RpcBusinessError) {
@@ -582,32 +608,28 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
         if (cleanupError instanceof GitFeatureError && cleanupError.code === 'workspace_create_failed') throw cleanupError
         throw new GitFeatureError(
           'workspace_create_failed',
-          `workspace.create failed and safe Git compensation did not complete: ${String(cleanupError)}`,
-          unverifiedRecoveryRecord(createdAt, authority, input.branch, 'workspace.create Git compensation did not complete'),
+          `workspace/create failed and safe Git compensation did not complete: ${String(cleanupError)}`,
+          unverifiedRecoveryRecord(createdAt, authority, input.branch, 'workspace/create Git compensation did not complete'),
         )
       }
       throw new GitFeatureError(
         'workspace_create_failed',
-        'workspace.create failed and Git retained the worktree',
-        unverifiedRecoveryRecord(createdAt, authority, input.branch, 'workspace.create Git compensation did not complete'),
+        'workspace/create failed and Git retained the worktree',
+        unverifiedRecoveryRecord(createdAt, authority, input.branch, 'workspace/create Git compensation did not complete'),
       )
     }
-    // A transport/protocol failure may have committed. Re-query only to give
-    // operators a useful id; the result remains unverified and can never drive
-    // DELETE automatically.
-    let recoveredWorkspaceId: string | undefined
-    try {
-      const recovered = (await listWorkspaces(input.dshBaseUrl)).find(item => item.path === authority.newPath)
-      if (recovered !== undefined) recoveredWorkspaceId = recovered.workspaceId
-    } catch { /* carrier is already suspect */ }
+    // A transport/protocol failure may have committed. The workspace registry
+    // id is no longer recoverable (workspace.list removed → workspace/follow
+    // stream TODO), so the result stays unverified with a synthetic record id
+    // and can never drive DELETE automatically; operators locate the row by
+    // its canonical path.
     const recovery = unverifiedRecoveryRecord(
       createdAt,
       authority,
       input.branch,
-      'workspace.create outcome is ambiguous',
-      recoveredWorkspaceId,
+      'workspace/create outcome is ambiguous',
     )
-    throw new GitFeatureError('workspace_create_ambiguous', 'workspace.create outcome is ambiguous; resources were retained', recovery)
+    throw new GitFeatureError('workspace_create_ambiguous', 'workspace/create outcome is ambiguous; resources were retained', recovery)
   }
   if (!workspace.created) {
     // A pre-existing workspace row is not owned by this operation. Adopting it
@@ -622,7 +644,7 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
         input.dshBaseUrl,
         authority.repo,
         authority.newPath,
-        workspace.workspaceId,
+        authority.newPath, // owned workspace path (path-level facts on the 0.1.2 wire)
       )
       const removed = await runGit(['-C', mutationRepo, 'worktree', 'remove', authority.newPath], mutationRepo)
       if (removed.code === 0) {
@@ -645,13 +667,15 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
 
   let sessionId: string
   try {
-    const { result } = await dsh('session.create', {
-      workspaceId: workspace.workspaceId,
-      ...(input.agentPreset !== undefined ? { agentPreset: input.agentPreset } : {}),
+    const { result } = await dsh('session/create', {
+      args: { request: {
+        workspaceId: workspace.workspaceId,
+        ...(input.agentPreset !== undefined ? { agentPreset: input.agentPreset } : {}),
+      } },
     })
     const value = result.value as { sessionId?: unknown } | null
     if (typeof value?.sessionId !== 'string' || value.sessionId === '') {
-      throw new GitFeatureError('session_create_failed', 'session.create returned no session id')
+      throw new GitFeatureError('session_create_failed', 'session/create returned no session id')
     }
     sessionId = value.sessionId
   } catch (error) {
@@ -706,7 +730,7 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
         )
       }
     }
-    throw new GitFeatureError('session_create_ambiguous', 'session.create outcome is ambiguous; resources were retained', recovery)
+    throw new GitFeatureError('session_create_ambiguous', 'session/create outcome is ambiguous; resources were retained', recovery)
   }
 
   return {
@@ -724,18 +748,21 @@ export async function createWorktree(input: CreateWorktreeInput): Promise<Worktr
 
 export async function deleteWorktree(input: DeleteWorktreeInput): Promise<void> {
   const dsh = (method: string, payload: unknown) => call(input.dshBaseUrl, method, payload)
-  const workspaces = await listWorkspaces(input.dshBaseUrl)
+  // Workspace facts are path-level on the 0.1.2 wire (derived from live
+  // session/list cwds; workspace.list removed → workspace/follow stream TODO).
+  // The workspaceId used for workspace/delete is the gateway's OWN persisted
+  // record id — never derived. Residual: the old id↔path registry re-check
+  // (row with input.workspaceId still owns input.path) cannot be re-verified;
+  // a live path proof is the fail-closed substitute (unresolved issue, WP9).
+  const workspaces = await listWorkspacePaths(input.dshBaseUrl)
   const repo = await resolveMainRepoAuthority(input.repo, workspaces)
   if (!isAbsolute(input.path) || resolve(input.path) !== input.path || input.path.includes('\0')
     || dirname(input.path) !== dirname(repo) || input.path === repo) {
     throw new GitFeatureError('worktree_not_allowed', 'worktree is outside the repository sibling root')
   }
-  await assertNoWorkspacePathReoccupation(workspaces, input.path, input.workspaceId)
-  let workspace = workspaces.find(candidate => candidate.workspaceId === input.workspaceId)
-  if (workspace !== undefined && workspace.path !== input.path) {
-    throw new GitFeatureError('worktree_not_allowed', 'worktree is not the authoritative workspace record')
-  }
-  if (workspace === undefined && input.resumeAfterGitRemoval !== true) {
+  await assertNoWorkspacePathReoccupation(workspaces, input.path, input.path)
+  const workspaceLive = workspaces.some(candidate => candidate.path === input.path)
+  if (!workspaceLive && input.resumeAfterGitRemoval !== true) {
     throw new GitFeatureError('worktree_not_allowed', 'worktree workspace is no longer registered')
   }
 
@@ -743,33 +770,29 @@ export async function deleteWorktree(input: DeleteWorktreeInput): Promise<void> 
   if (pathState === 'missing' && input.resumeAfterGitRemoval !== true) {
     throw new GitFeatureError('worktree_not_allowed', 'worktree path disappeared before the delete saga began')
   }
-  // A missing workspace id can only be treated as a committed delete after
-  // the Git path is also gone. If the path survived, it may have been rebuilt
-  // outside this saga and the stale record has no authority to remove it.
-  if (pathState === 'present' && workspace === undefined) {
+  // A missing workspace liveness can only be treated as a committed delete
+  // after the Git path is also gone. If the path survived, it may have been
+  // rebuilt outside this saga and the stale record has no authority to remove
+  // it.
+  if (pathState === 'present' && !workspaceLive) {
     throw new GitFeatureError('worktree_not_allowed', 'worktree path survived after its workspace authority disappeared')
   }
   if (pathState === 'present') {
     // Keep the fail-closed live check immediately adjacent to the mutation.
     await assertNoRunningSession(input.dshBaseUrl, input.path, input.sessionId)
-    const mutationWorkspaces = await listWorkspaces(input.dshBaseUrl)
+    const mutationWorkspaces = await listWorkspacePaths(input.dshBaseUrl)
     const mutationRepo = await resolveMainRepoAuthority(input.repo, mutationWorkspaces)
-    await assertNoWorkspacePathReoccupation(mutationWorkspaces, input.path, input.workspaceId)
-    const mutationWorkspace = mutationWorkspaces.find(candidate => candidate.workspaceId === input.workspaceId)
-    if (mutationWorkspace !== undefined && mutationWorkspace.path !== input.path) {
-      throw new GitFeatureError('worktree_not_allowed', 'worktree ownership changed before deletion')
-    }
-    if (mutationWorkspace === undefined) {
+    await assertNoWorkspacePathReoccupation(mutationWorkspaces, input.path, input.path)
+    if (!mutationWorkspaces.some(candidate => candidate.path === input.path)) {
       throw new GitFeatureError('worktree_not_allowed', 'worktree workspace disappeared before deletion')
     }
-    workspace = mutationWorkspace
     const removed = await runGit(['-C', mutationRepo, 'worktree', 'remove', input.path], mutationRepo)
     if (removed.code !== 0) {
       throw new GitFeatureError('git_worktree_remove_failed', `git worktree remove failed: ${tail(removed.stderr)}`)
     }
   }
 
-  if (workspace !== undefined) {
+  if (workspaceLive) {
     // Re-check after Git removal. This narrows the host's check/mutation gap
     // and blocks workspace deletion if a session became running meanwhile.
     // The public dsh API exposes no atomic session lease/guard, so these live
@@ -777,9 +800,9 @@ export async function deleteWorktree(input: DeleteWorktreeInput): Promise<void> 
     // removal and fail-closed rechecks are the minimum safe model here.
     await assertNoRunningSession(input.dshBaseUrl, input.path, input.sessionId)
     try {
-      const { result } = await dsh('workspace.delete', { workspaceId: input.workspaceId })
+      const { result } = await dsh('workspace/delete', { args: { request: { workspaceId: input.workspaceId } } })
       if ((result.value as { deleted?: unknown } | null)?.deleted !== true) {
-        throw new GitFeatureError('workspace_delete_failed', 'workspace.delete did not confirm deletion')
+        throw new GitFeatureError('workspace_delete_failed', 'workspace/delete did not confirm deletion')
       }
     } catch (error) {
       throw rpcError('workspace_delete_failed', error)

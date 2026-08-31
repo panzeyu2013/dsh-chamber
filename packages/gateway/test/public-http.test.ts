@@ -137,7 +137,7 @@ test('public Host health/preflight pass while an unknown authority is rejected',
     assert.match(duplicateHttp, /"code":"bad_request"/)
 
     const duplicateWs = await rawRequest(plane.port!, [
-      'GET /api/i/missing/api/events.mux HTTP/1.1',
+      'GET /api/i/missing/api/remote.mux HTTP/1.1',
       'Host: gateway.example:3000',
       'Origin: http://gateway.example:3000',
       'Connection: Upgrade',

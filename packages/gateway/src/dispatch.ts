@@ -529,8 +529,11 @@ export function createGatewayDispatch(auth: AuthProvider, getProxy: () => Gatewa
       rejectWs(socket, 401, 'unauthorized')
       return true
     }
-    // 2. The two dsh downlink stream paths → origin fence + gateway-proxy.
-    if (pathname === '/api/events.mux' || pathname === '/api/events.host') {
+    // 2. The dsh Remote-stream mux path → origin fence + gateway-proxy. The
+    // old events.mux/events.host downlinks were removed upstream (W3); the
+    // 0.1.2 wire carries Typert Remote streams (session/control, session/follow,
+    // workspace/follow, $events) over /api/remote.mux.
+    if (pathname === '/api/remote.mux') {
       try {
         await getProxy().handleUpgrade(req, socket as never, head)
       } catch (error) {

@@ -30,11 +30,13 @@
   },
   "license": "MIT",
   "dependencies": {
-    "pnpm": "11.21.0"
+    "pnpm": "11.21.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@dsh-chamber/control-plane": "workspace:^",
     "@dsh-chamber/dsh-runtime": "workspace:^",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "@types/ws": "^8.18.1"
   }
 }

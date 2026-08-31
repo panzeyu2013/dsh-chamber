@@ -17,11 +17,9 @@
 
 import {
   call,
-  respond,
   type ApiRequest,
   type ApiResponse,
   type Logger,
-  type ServerRequest,
 } from '@dsh-chamber/control-plane'
 import {
   GitFeatureError,
@@ -51,14 +49,17 @@ export interface FeatureHostDeps {
   /** Narrow test/runtime seams shared by the index and notifier. */
   featureTransport?: {
     callDsh?: typeof call
-    respondDsh?: typeof respond
-    openStream?: (
+    openRemoteStream?: (
       baseUrl: string,
-      path: string,
+      endpoint: string,
+      payload: unknown,
       signal?: AbortSignal,
-      onOpen?: () => void,
-    ) => AsyncIterable<ServerRequest>
+    ) => AsyncIterable<unknown>
     reconnectDelayMs?: number
+    /** Session-index poll cadence (default 10s) — the row refresh that runs
+     * alongside the live session/control stream (degraded path: polling
+     * only). */
+    pollIntervalMs?: number
   }
 }
 
@@ -200,28 +201,25 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
   const notifier = createApprovalNotifier({
     getDshBaseUrl,
     logger,
-    ...(deps.featureTransport?.openStream === undefined ? {} : { openStream: deps.featureTransport.openStream }),
-    ...(deps.featureTransport?.respondDsh === undefined ? {} : { respondDsh: deps.featureTransport.respondDsh }),
+    ...(deps.featureTransport?.openRemoteStream === undefined ? {} : { openRemoteStream: deps.featureTransport.openRemoteStream }),
+    ...(deps.featureTransport?.callDsh === undefined ? {} : { callDsh: deps.featureTransport.callDsh }),
     ...(deps.featureTransport?.reconnectDelayMs === undefined ? {} : { reconnectDelayMs: deps.featureTransport.reconnectDelayMs }),
     onApproval: req => {
-      pendingApprovals.set(req.rpcId, req)
+      pendingApprovals.set(req.approvalId, req)
       broadcastSse('approval', req)
     },
     onQuestion: req => {
-      pendingQuestions.set(req.rpcId, req)
+      pendingQuestions.set(req.questionId, req)
       broadcastSse('question', req)
     },
     onApprovalResolved: (sessionId, approvalId) => {
-      for (const [rpcId, request] of pendingApprovals) {
-        if (request.sessionId === sessionId && request.approvalId === approvalId) {
-          pendingApprovals.delete(rpcId)
-          broadcastSse('approval-resolved', { rpcId, sessionId, approvalId })
-        }
+      if (pendingApprovals.delete(approvalId)) {
+        broadcastSse('approval-resolved', { approvalId, sessionId })
       }
     },
-    onQuestionResolved: questionRpcId => {
-      if (pendingQuestions.delete(questionRpcId)) {
-        broadcastSse('question-resolved', { rpcId: questionRpcId })
+    onQuestionResolved: questionId => {
+      if (pendingQuestions.delete(questionId)) {
+        broadcastSse('question-resolved', { questionId })
       }
     },
     onGenerationStart: () => {
@@ -240,8 +238,9 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
     getDshBaseUrl,
     logger,
     ...(deps.featureTransport?.callDsh === undefined ? {} : { callDsh: deps.featureTransport.callDsh }),
-    ...(deps.featureTransport?.openStream === undefined ? {} : { openStream: deps.featureTransport.openStream }),
+    ...(deps.featureTransport?.openRemoteStream === undefined ? {} : { openRemoteStream: deps.featureTransport.openRemoteStream }),
     ...(deps.featureTransport?.reconnectDelayMs === undefined ? {} : { reconnectDelayMs: deps.featureTransport.reconnectDelayMs }),
+    ...(deps.featureTransport?.pollIntervalMs === undefined ? {} : { pollIntervalMs: deps.featureTransport.pollIntervalMs }),
   })
 
   // Restore exact ids; definitions are armed only by FeatureHost.start(), and
@@ -407,7 +406,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
               await persistWorktree({ ...deleting, state: 'ready', error: message })
             } else {
               // Any other saga failure (live session, transport, the
-              // workspace.delete leg after Git was already removed): record
+              // workspace/delete leg after Git was already removed): record
               // the reason on the retained 'deleting' row so the resume path
               // (which skips Git removal) can finish the saga on the next
               // DELETE instead of being stuck with an empty error field.
@@ -451,25 +450,19 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
       }
       if (req.method === 'POST') {
         try {
-          const body = await readJsonBody(req) as { rpcId?: unknown; outcome?: unknown; answer?: unknown }
-          const rpcId = typeof body.rpcId === 'string' ? body.rpcId : null
-          const approval = rpcId === null ? undefined : pendingApprovals.get(rpcId)
-          const question = rpcId === null ? undefined : pendingQuestions.get(rpcId)
+          const body = await readJsonBody(req) as { id?: unknown; outcome?: unknown; answer?: unknown }
+          const id = typeof body.id === 'string' ? body.id : null
+          const approval = id === null ? undefined : pendingApprovals.get(id)
+          const question = id === null ? undefined : pendingQuestions.get(id)
           if (approval !== undefined && (body.outcome === 'allowed-once' || body.outcome === 'rejected')) {
+            // answerApproval resolves the row + broadcasts approval-resolved
+            // via onApprovalResolved (single emission — review-round3 P2-2).
             await notifier.answerApproval(approval, body.outcome)
-            pendingApprovals.delete(approval.rpcId)
-            broadcastSse('approval-resolved', {
-              rpcId: approval.rpcId,
-              sessionId: approval.sessionId,
-              approvalId: approval.approvalId,
-            })
             json(res, 200, { answered: true, kind: 'approval' })
             return true
           }
           if (question !== undefined && isQuestionAnswer(body.answer)) {
             await notifier.answerQuestion(question, body.answer)
-            pendingQuestions.delete(question.rpcId)
-            broadcastSse('question-resolved', { rpcId: question.rpcId })
             json(res, 200, { answered: true, kind: 'question' })
             return true
           }
@@ -511,7 +504,7 @@ export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
           const intervalMs = typeof body.intervalMs === 'number' ? body.intervalMs : null
           // delayMs must be a finite non-negative number; intervalMs (when
           // present) a finite number ≥ 1s — a zero/negative/NaN interval would
-          // otherwise busy-loop session.prompt (review M6). prompt and
+          // otherwise busy-loop session/prompt (review M6). prompt and
           // targetSessionId are bounded so one authenticated caller cannot
           // accumulate unbounded definitions or huge persisted strings.
           if (typeof delayMs !== 'number' || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > MAX_TIMER_DELAY_MS
@@ -1252,13 +1245,13 @@ const CHAMBER_APP_JS = `(function () {
     var actions = element('div', undefined, 'actions');
     var reject = element('button', 'Reject', 'danger'); reject.type = 'button';
     var allow = element('button', 'Allow once', 'primary'); allow.type = 'button';
-    var rpcId = requiredText(row, 'rpcId', 'approval');
-    reject.addEventListener('click', function () { void submitInteraction(card, { rpcId: rpcId, outcome: 'rejected' }); });
-    allow.addEventListener('click', function () { void submitInteraction(card, { rpcId: rpcId, outcome: 'allowed-once' }); });
+    var approvalId = requiredText(row, 'approvalId', 'approval');
+    reject.addEventListener('click', function () { void submitInteraction(card, { id: approvalId, outcome: 'rejected' }); });
+    allow.addEventListener('click', function () { void submitInteraction(card, { id: approvalId, outcome: 'allowed-once' }); });
     actions.append(reject, allow); card.appendChild(actions); return card;
   }
   function renderQuestion(row) {
-    var rpcId = requiredText(row, 'rpcId', 'question');
+    var questionId = requiredText(row, 'questionId', 'question');
     var card = itemShell('Question', requiredText(row, 'sessionId', 'question'));
     if (!Array.isArray(row.questions)) throw new Error('Malformed question response');
     var questions = row.questions.map(normalizeQuestion);
@@ -1270,7 +1263,7 @@ const CHAMBER_APP_JS = `(function () {
       var inputs = [];
       question.options.forEach(function (option) {
         var label = element('label', undefined, 'choice');
-        var input = document.createElement('input'); input.type = question.multiSelect ? 'checkbox' : 'radio'; input.name = 'q-' + rpcId + '-' + question.id; input.value = option.label;
+        var input = document.createElement('input'); input.type = question.multiSelect ? 'checkbox' : 'radio'; input.name = 'q-' + questionId + '-' + question.id; input.value = option.label;
         var text = element('span', option.label); if (option.description) text.appendChild(element('small', option.description));
         label.append(input, text); fieldset.appendChild(label); inputs.push(input);
       });
@@ -1284,7 +1277,7 @@ const CHAMBER_APP_JS = `(function () {
         var answer = { id: state.id, selected: state.inputs.filter(function (input) { return input.checked; }).map(function (input) { return input.value; }) };
         var custom = state.custom.value.trim(); if (custom) answer.custom = custom; return answer;
       });
-      void submitInteraction(card, { rpcId: rpcId, answer: { answers: answers } });
+      void submitInteraction(card, { id: questionId, answer: { answers: answers } });
     });
     card.appendChild(submit); return card;
   }

@@ -7,14 +7,24 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { createServer } from 'node:http'
 import type { ProxyRequest, ProxyResponse, ProxySocket } from '@dsh-chamber/control-plane'
+import { clearAuthCookie, registerAuthCookie } from '@dsh-chamber/control-plane'
 import { createGatewayProxy } from '../src/gateway-proxy.ts'
 
 const quietLogger = { log() {}, warn() {}, error() {} }
 
-function fakeRequest(url: string, method = 'GET'): ProxyRequest {
+function fakeRequest(url: string, method = 'GET', body?: string): ProxyRequest {
   const emitter = new EventEmitter()
-  return Object.assign(emitter, { url, method, headers: {} }) as unknown as ProxyRequest
+  const chunks = body === undefined ? [] : [Buffer.from(body)]
+  return Object.assign(emitter, {
+    url,
+    method,
+    headers: {},
+    async * [Symbol.asyncIterator]() {
+      for (const chunk of chunks) yield chunk
+    },
+  }) as unknown as ProxyRequest
 }
 
 function fakeResponse(): ProxyResponse & { status: number | null; body: string } {
@@ -65,12 +75,42 @@ test('SSRF: a protocol-relative request target is rejected with 400', async () =
 test('SSRF: a backslash authority request target is rejected for HTTP and WebSocket', async () => {
   const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => 17510, getLocalState: () => 'ready' })
   const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/\\evil.example/api/session.list'), res)
+  await proxy.handleHttp(fakeRequest('/\\evil.example/api/session/list'), res)
   assert.equal(res.status, 400)
 
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/\\evil.example/api/events.mux'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/\\evil.example/api/remote.mux'), socket, Buffer.alloc(0))
   assert.match(socket.written, /400/)
+})
+
+test('HTTP forward carries the 0.1.2 browser-auth cookie for the managed dsh', async () => {
+  // review-round4 P1 / round5 coverage: the gateway's own proxy must inject
+  // the spawn-minted cookie — a real upstream records what it received.
+  const seen: string[] = []
+  const server = createServer((req, res) => {
+    seen.push(String(req.headers.cookie ?? ''))
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{}')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  const base = `http://127.0.0.1:${port}`
+  try {
+    registerAuthCookie(base, 'browser-auth=sess')
+    const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => port, getLocalState: () => 'ready' })
+    const res = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/session/list', 'POST'), res)
+    // The forward dispatches asynchronously — wait for the upstream hit.
+    const deadline = Date.now() + 3_000
+    while (seen.length === 0) {
+      if (Date.now() >= deadline) throw new Error('upstream never received the forward')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(seen[0], 'browser-auth=sess')
+  } finally {
+    clearAuthCookie(base)
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
 })
 
 test('an origin-form request target is accepted (no 400 before forwarding)', async () => {
@@ -79,7 +119,7 @@ test('an origin-form request target is accepted (no 400 before forwarding)', asy
   // dsh is "ready" but the real upstream (127.0.0.1:17510) is not listening —
   // the request must NOT be rejected as a bad target (it should reach the
   // upstream setup and fail later as 502/503, not 400).
-  await proxy.handleHttp(fakeRequest('/api/session.list'), res)
+  await proxy.handleHttp(fakeRequest('/api/session/list'), res)
   assert.notEqual(res.status, 400)
 })
 
@@ -109,7 +149,7 @@ test('activation window: canExposeLocal=false refuses HTTP and WS upgrade with 5
   assert.equal(res.status, 503)
   assert.match(res.body, /instance_unavailable/)
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/events.mux'), socket, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/remote.mux'), socket, Buffer.alloc(0))
   assert.match(socket.written, /503/)
   assert.match(socket.written, /instance_unavailable/)
 })
@@ -125,7 +165,7 @@ test('canExposeLocal=true keeps the ready proxy behavior unchanged', async () =>
   // dsh is "ready" but the real upstream (127.0.0.1:17510) is not listening —
   // the request must NOT be rejected by the activation gate (it should reach
   // the upstream setup and fail later as 502/503, not a target rejection).
-  await proxy.handleHttp(fakeRequest('/api/session.list'), res)
+  await proxy.handleHttp(fakeRequest('/api/session/list'), res)
   assert.notEqual(res.status, 503)
   assert.notEqual(res.status, 400)
 })

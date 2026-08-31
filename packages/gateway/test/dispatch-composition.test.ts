@@ -281,7 +281,7 @@ test('a forbidden external origin is rejected before auth or dsh proxying', asyn
   let verifyCalls = 0
   const auth: AuthProvider = { kind: 'token', async verify() { verifyCalls += 1; return { kind: 'token', id: 'x', issuedAt: 0 } } }
   const state = setup(auth)
-  const res = await runHttp(state.dispatch, new FakeRequest('POST', '/api/session.create', {
+  const res = await runHttp(state.dispatch, new FakeRequest('POST', '/api/session/create', {
     host: 'gateway.example:3000',
     origin: 'http://attacker.example',
   }))
@@ -302,14 +302,14 @@ test('WS applies the same Host policy before auth and proxies an allowed authent
   const state = setup(auth)
   let rejection = ''
   const badSocket = { end(value: string) { rejection = value }, destroy() {} }
-  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/api/events.mux', {
+  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/api/remote.mux', {
     host: '192.168.1.10:3000',
   }) as unknown as ApiRequest, badSocket as never, Buffer.alloc(0), {} as never)
   assert.match(rejection, /421 Misdirected Request/)
   assert.equal(verifyCalls, 0)
 
   const goodSocket = { end() {}, destroy() {} }
-  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/api/events.mux', {
+  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/api/remote.mux', {
     host: 'gateway.example:3000',
     origin: 'http://gateway.example:3000',
     authorization: 'Bearer secret',
@@ -327,7 +327,7 @@ test('WS rejects backslash authority request targets before routing or auth', as
   const state = setup(auth)
   let rejection = ''
   const socket = { end(value: string) { rejection = value }, destroy() {} }
-  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/\\\\attacker.example/api/events.mux', {
+  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/\\\\attacker.example/api/remote.mux', {
     host: 'gateway.example:3000',
     authorization: 'Bearer secret',
   }) as unknown as ApiRequest, socket as never, Buffer.alloc(0), {} as never)
@@ -370,7 +370,7 @@ test('WS upgrade maps a saturated verify work gate to 503 auth_busy like HTTP', 
   const state = setup(auth)
   let rejection = ''
   const socket = { end(value: string) { rejection = value }, destroy() {} }
-  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/api/events.mux', {
+  await state.dispatch.upgradeMiddleware(new FakeRequest('GET', '/api/remote.mux', {
     host: 'gateway.example:3000',
     authorization: 'Bearer whatever',
   }) as unknown as ApiRequest, socket as never, Buffer.alloc(0), {} as never)

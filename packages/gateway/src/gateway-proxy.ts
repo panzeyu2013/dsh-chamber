@@ -29,6 +29,7 @@ import {
   type ProxyRequest,
   type ProxyResponse,
   type ProxySocket,
+  authCookieFor,
 } from '@dsh-chamber/control-plane'
 
 export interface GatewayProxyDeps {
@@ -145,7 +146,12 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         activeHttpRequests = Math.max(0, activeHttpRequests - 1)
       }
       try {
-        await forwardHttp(req, res, fullTarget, releaseRequest, logger, counters, forwardDeps)
+        // 0.1.2 browser-auth cookie (review-round4 P1): the gateway's own
+        // local-dsh proxy must pass the spawn-minted cookie exactly like the
+        // desktop instance proxy, or every /api forward 401s on the new wire.
+        const authCookie = authCookieFor(fullTarget.origin)
+        const extraHeaders = authCookie === undefined ? undefined : { cookie: authCookie }
+        await forwardHttp(req, res, fullTarget, releaseRequest, logger, counters, forwardDeps, extraHeaders)
       } catch (error) {
         releaseRequest()
         counters.failures += 1
@@ -168,7 +174,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         rejectUpgrade(socket, 400, 'invalid_request', 'absolute request targets are not allowed', logger)
         return
       }
-      // Only the two dsh downlink stream paths upgrade (design 03 §3.1).
+      // Only the 0.1.2 Remote stream mux path upgrades (the events.mux /
+      // events.host downlinks were deleted upstream, dsh-v0.1.2-alpha.1).
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
       if (!WS_STREAM_PATHS.has(pathname)) {
         rejectUpgrade(socket, 404, 'instance_not_found', 'unknown WebSocket path', logger)
@@ -202,7 +209,9 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         pendingUpgrades = Math.max(0, pendingUpgrades - 1)
       }
       try {
-        await forwardUpgrade(req, socket, head, fullTarget, releaseHandshake, logger, counters, forwardDeps)
+        const authCookie = authCookieFor(fullTarget.origin)
+        const extraHeaders = authCookie === undefined ? undefined : { cookie: authCookie }
+        await forwardUpgrade(req, socket, head, fullTarget, releaseHandshake, logger, counters, forwardDeps, extraHeaders)
       } catch (error) {
         releaseHandshake()
         counters.failures += 1

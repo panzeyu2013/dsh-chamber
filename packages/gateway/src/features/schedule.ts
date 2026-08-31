@@ -1,5 +1,6 @@
 /** Gateway cross-session scheduler, distinct from dsh's session-local schedule. */
 
+import { randomUUID } from 'node:crypto'
 import { RpcBusinessError, call, type Logger } from '@dsh-chamber/control-plane'
 
 /** Node clamps larger delays to 1ms, which would turn a far-future job into
@@ -76,15 +77,21 @@ export function createScheduler(deps: {
       return false
     }
     try {
-      // dsh 0.1.1-rc.2 wire: session.prompt payload = {sessionId, mode:
-      // 'queue'|'steer', content: MessagePart[]} — the old {sessionId,
-      // prompt} shape was rejected with "invalid payload for session.prompt"
-      // and every scheduled prompt failed validation (live finding, Linux +
-      // macOS, verified against the real wire).
-      await callDsh(baseUrl, 'session.prompt', {
-        sessionId: job.targetSessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: job.prompt }],
+      // dsh 0.1.2-alpha.1 wire: session/prompt payload = {requestId,
+      // sessionId, mode: 'queue'|'steer', content: MessagePart[]} — the old
+      // 0.1.1-rc.2 {sessionId, mode, content} shape (without requestId) was
+      // rejected with "invalid payload for session/prompt" and every scheduled
+      // prompt failed validation (live finding, Linux + macOS, verified
+      // against the real wire). requestId is client-minted, persisted in the
+      // user message and echoed back on SessionQueuedItem.rpcId; the response
+      // `command?` slot was removed (the chamber scheduler never consumed it).
+      await callDsh(baseUrl, 'session/prompt', {
+        args: { request: {
+          requestId: randomUUID(),
+          sessionId: job.targetSessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text: job.prompt }],
+        } },
       })
       return true
     } catch (error) {
@@ -124,7 +131,7 @@ export function createScheduler(deps: {
       if (!fired) {
         // A readiness gap or transient RPC error must not consume a persisted
         // one-shot. Use a dedicated bounded backoff: reusing delayMs would make
-        // a delayMs=0 job spin session.prompt at timer speed forever.
+        // a delayMs=0 job spin session/prompt at timer speed forever.
         retryMs = nextOneShotRetryDelay(job.id)
         return
       }
@@ -193,7 +200,7 @@ export function createScheduler(deps: {
         return
       }
       // Fixed-delay recursion, rather than setInterval, guarantees that a
-      // slow session.prompt cannot overlap the next invocation.
+      // slow session/prompt cannot overlap the next invocation.
       scheduleTimer(current, current.intervalMs, generation => { void fireInterval(current, generation) })
     }
   }
