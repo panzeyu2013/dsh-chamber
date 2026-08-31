@@ -1267,8 +1267,10 @@ test('transport revoke is owner-scoped and closeAllStreams aborts every remainin
   proxy.registerTransport('dsh:pending', 'http://127.0.0.1:19191')
   const local = fakeSocket()
   const remote = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/events.mux'), local, Buffer.alloc(0))
-  await proxy.handleUpgrade(fakeRequest('/api/i/dsh-pending/api/events.host'), remote, Buffer.alloc(0))
+  // 0.1.2 wire: the mux is the only stream path (events.mux/events.host
+  // were deleted upstream) — both pending handshakes ride /api/remote.mux.
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux'), local, Buffer.alloc(0))
+  await proxy.handleUpgrade(fakeRequest('/api/i/dsh-pending/api/remote.mux'), remote, Buffer.alloc(0))
   assert.equal(proxy.getDiagnostics().pendingUpgrades, 2)
 
   proxy.unregisterTransport('dsh:pending')

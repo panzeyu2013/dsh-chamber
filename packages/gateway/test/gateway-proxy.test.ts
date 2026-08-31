@@ -212,7 +212,9 @@ test('closeAllStreams aborts a WebSocket while its upstream handshake is pending
     upstreamTimeoutMs: 5_000,
   })
   const socket = fakeSocket()
-  await proxy.handleUpgrade(fakeRequest('/api/events.mux'), socket, Buffer.alloc(0))
+  // 0.1.2 wire: the mux is the only stream path (events.mux/events.host
+  // were deleted upstream).
+  await proxy.handleUpgrade(fakeRequest('/api/remote.mux'), socket, Buffer.alloc(0))
   assert.equal(proxy.getDiagnostics().pendingUpgrades, 1)
 
   proxy.closeAllStreams()

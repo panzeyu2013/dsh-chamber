@@ -208,7 +208,7 @@ write_config
 write_env
 # Model a pre-migration install whose foreground-only values exist solely in
 # EnvironmentFile. load_conf must decode those assignments as data.
-sed -i '/^ENV_ANCHOR=/d;/^UI_PASSWORD=/d;/^API_TOKEN=/d' "$CONF_FILE"
+sed -i '' '/^ENV_ANCHOR=/d;/^UI_PASSWORD=/d;/^API_TOKEN=/d' "$CONF_FILE"
 UI_PASSWORD=""
 API_TOKEN=""
 DSH_WS=""

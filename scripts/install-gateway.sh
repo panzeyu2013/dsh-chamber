@@ -252,7 +252,7 @@ download_verify() {
     die "sha256 校验失败：下载包与 release 资产不一致，已中止（现场保留于 $tmp 之外）"
   }
   mkdir -p "$dest_dir"
-  mv -Tf "$tmp/$tgz" "$dest_dir/$tgz" || {
+  mv_T "$tmp/$tgz" "$dest_dir/$tgz" || {
     rm -rf "$tmp"
     die "无法原子发布已校验资产：$dest_dir/$tgz"
   }
@@ -340,9 +340,26 @@ install_dsh() {
 # 配置落盘
 # ---------------------------------------------------------------------------
 
+# GNU `mv -T` emulation for macOS (BSD mv has no -T): replace the target
+# entry itself, never move INTO it. An existing directory target is moved
+# aside first (best-effort, rolled back on failure); a regular file or
+# symlink target is removed then replaced — never followed.
+mv_T() {
+  local src="$1" dst="$2"
+  if [[ -d "$dst" && ! -L "$dst" ]]; then
+    local aside="$dst.mv-t.$$.${RANDOM}"
+    if ! mv "$dst" "$aside"; then return 1; fi
+    if ! mv "$src" "$dst"; then mv "$aside" "$dst"; return 1; fi
+    rm -rf "$aside"
+    return 0
+  fi
+  [[ -e "$dst" || -L "$dst" ]] && rm -f "$dst"
+  mv "$src" "$dst"
+}
+
 # Publish a fully-written sibling with one rename. Refuse a pre-planted
 # symlink/non-regular leaf loudly; even if the leaf races after this check,
-# `mv -T` replaces that directory entry and never follows it to a victim.
+# `mv_T` replaces that directory entry and never follows it to a victim.
 publish_staged_file() {
   local staged="$1" target="$2" mode="$3"
   if [[ -L "$target" || ( -e "$target" && ! -f "$target" ) ]]; then
@@ -351,7 +368,7 @@ publish_staged_file() {
     return 1
   fi
   chmod "$mode" "$staged" || { rm -f "$staged"; return 1; }
-  mv -Tf "$staged" "$target" || { rm -f "$staged"; return 1; }
+  mv_T "$staged" "$target" || { rm -f "$staged"; return 1; }
 }
 
 # 配置落盘（该文件由 bash source，故使用 bash 自己的 %q 语法）。
@@ -490,7 +507,7 @@ stage_local_version() {
     rm -rf "$stage"
     return 1
   fi
-  if ! mv -T "$stage" "$target"; then
+  if ! mv_T "$stage" "$target"; then
     rm -rf "$stage"
     return 1
   fi
@@ -508,7 +525,7 @@ switch_local_current() {
   local next="$GATEWAY_DIR/.current.$$.${RANDOM}"
   [[ ! -e "$next" && ! -L "$next" ]] || return 1
   ln -s "$target" "$next" || return 1
-  if ! mv -Tf "$next" "$GATEWAY_DIR/current"; then
+  if ! mv_T "$next" "$GATEWAY_DIR/current"; then
     rm -f "$next"
     return 1
   fi

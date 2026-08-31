@@ -619,19 +619,18 @@ test('delayMs=0 is armed only after persistence commits, and a failed admission 
   function transport(onPrompt: () => void) {
     return {
       callDsh: (async (_base: string, method: string) => {
-        if (method === 'session.prompt') {
+        if (method === 'session/prompt') {
           onPrompt()
           return { rpcId: 'prompt', result: { ok: true, value: {} } }
         }
         return { rpcId: 'sessions', result: { ok: true, value: { items: [] } } }
       }) as any,
-      openStream: async function *(
+      openRemoteStream: async function *(
         _base: string,
-        _path: string,
+        _endpoint: string,
+        _payload: unknown,
         signal?: AbortSignal,
-        onOpen?: () => void,
       ): AsyncGenerator<ServerRequest> {
-        onOpen?.()
         if (!signal?.aborted) {
           await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
         }
@@ -738,19 +737,18 @@ test('automatic schedule removal rebases its identity intent after a blocked per
     }),
     featureTransport: {
       callDsh: (async (_base: string, method: string) => {
-        if (method === 'session.prompt') {
+        if (method === 'session/prompt') {
           prompts += 1
           return { rpcId: 'old-prompt', result: { ok: true, value: {} } }
         }
         return { rpcId: 'sessions', result: { ok: true, value: { items: [] } } }
       }) as any,
-      openStream: async function *(
+      openRemoteStream: async function *(
         _base: string,
-        _path: string,
+        _endpoint: string,
+        _payload: unknown,
         signal?: AbortSignal,
-        onOpen?: () => void,
       ): AsyncGenerator<ServerRequest> {
-        onOpen?.()
         if (!signal?.aborted) {
           await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }))
         }
@@ -1383,14 +1381,14 @@ test('concurrent worktree DELETE holds one exact lease across the complete retry
   globalThis.fetch = (async (_url, init) => {
     const request = JSON.parse(String(init?.body))
     let result: unknown
-    if (request.method === 'workspace.list') {
+    // 0.1.2 wire: workspace facts derive from session/list cwds (workspace.list
+    // was deleted upstream) and deletes ride workspace/delete.
+    if (request.method === 'session/list') {
       result = { ok: true, value: { items: [
-        { workspaceId: 'ws-main', path: fixture.repo },
-        ...(workspaceDeleted ? [] : [{ workspaceId: 'ws-delete-lease', path: target }]),
+        { sessionId: 's-main', cwd: fixture.repo, running: false },
+        ...(workspaceDeleted ? [] : [{ sessionId: 's-delete-lease', cwd: target, running: false }]),
       ] } }
-    } else if (request.method === 'session.list') {
-      result = { ok: true, value: { items: [] } }
-    } else if (request.method === 'workspace.delete') {
+    } else if (request.method === 'workspace/delete') {
       workspaceDeleteCalls += 1
       if (workspaceDeleteCalls === 1) {
         markWorkspaceDeleteStarted()
