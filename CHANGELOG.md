@@ -10,7 +10,11 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.2.0] - 2026-08-31
+
+> **首个稳定版**——聚合 0.2.0-beta.1 → beta.4 的全部迭代（桌面连接管理器 + 认证
+> Gateway（design 17）+ dsh 运行时版本管理（design 18），完整演进记录见下方各
+> beta 节）与以下收尾变更：
 
 ### 变更
 

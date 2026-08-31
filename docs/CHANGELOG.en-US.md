@@ -10,7 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.0] - 2026-08-31
+
+> **First stable release** — aggregates the full 0.2.0-beta.1 → beta.4 line
+> (desktop connection manager + authenticated Gateway (design 17) + dsh
+> runtime version management (design 18); the complete evolution is recorded
+> in the per-beta sections below) plus the closing changes:
 
 ### Changed
 

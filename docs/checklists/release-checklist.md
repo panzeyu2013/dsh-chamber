@@ -72,8 +72,9 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`、
       `test:open-in`、`test:cli`
 - [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/connection/host-graph/host-git`
-- [ ] **旧版本号残留扫描**：`grep -rn "<上一发布版本>" packages/*/test* packages/*/*.test.ts`
-      为空（测试硬编码旧 shellVersion 会在 bump 后误触发 F4 壳升级路径）。
+- [ ] **旧版本号残留扫描**：`grep -rn "<上一发布版本>" packages/*/test* packages/*/*.test.ts packages/*/scripts/*.test.mjs`
+      为空（测试硬编码旧 shellVersion 会在 bump 后误触发 F4 壳升级路径；`after-pack-adhoc-sign.test.mjs`
+      的版本钉曾因未纳入扫描在 0.2.0 失配）。
 
 ## 4. 构建
 
