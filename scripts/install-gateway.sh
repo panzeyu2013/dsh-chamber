@@ -943,6 +943,22 @@ unit_wanted_by() {
   esac
 }
 
+# 目录属主 uid（跟随符号链接）。必须**先试 GNU stat 的 -c**：GNU/Linux 的
+# `stat -f` 是"文件系统状态"模式，若先试 BSD 语法 `stat -f '%u'`，GNU stat
+# 会把 %u 当文件操作数报错（stderr 被 2>/dev/null 吞掉），同时把目录所在文件
+# 系统的完整列表打进 stdout，使捕获值变成多行垃圾——曾导致 /etc/systemd/system
+# 的 owner 被误判为不可信、systemd 单元写入失败。BSD stat 不认 -c，会立即报错
+# 退出（无 stdout 污染），自然落入 -f 分支。
+dir_owner_uid() {
+  local dir="$1" out
+  if out=$(stat -Lc '%u' "$dir" 2>/dev/null); then
+    printf '%s' "$out"
+    return 0
+  fi
+  out=$(stat -L -f '%u' "$dir" 2>/dev/null) || return 1
+  printf '%s' "$out"
+}
+
 write_unit() {
   local unit_name="dsh-chamber-gateway.service"
   local exec_path
@@ -956,7 +972,7 @@ write_unit() {
   fi
   local unit_dir owner expected_owner
   unit_dir=$(dirname "$unit_file")
-  owner=$(stat -L -f '%u' "$unit_dir" 2>/dev/null || stat -Lc '%u' "$unit_dir" 2>/dev/null) || return 1
+  owner=$(dir_owner_uid "$unit_dir") || return 1
   expected_owner="$EUID"
   [[ "$SERVICE_MODE" != "systemd" ]] || expected_owner=0
   if [[ "$owner" != "$expected_owner" ]]; then
