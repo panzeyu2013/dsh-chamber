@@ -1,7 +1,7 @@
 # dsh-chamber（中文说明）
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-brightgreen)]()
+[![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-brightgreen)]()
 
 **dsh（DeepSeek Harness）的桌面连接管理器**：一个原生桌面应用，把本机与多台服务器上的 dsh 实例统一收进同一个窗口——本地打开即用，远程一键接入。
 

@@ -70,7 +70,7 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 
 ### 2.1 Requirements
 
-- Node.js 22+ (LTS recommended; sources are TypeScript run natively via Node type stripping, see `.nvmrc`)
+- Node.js 24+ (LTS recommended; sources are TypeScript run natively via Node type stripping, see `.nvmrc`)
 - pnpm ≥ 11 (package manager; lockfile `pnpm-lock.yaml`)
 - git
 - macOS (needed for `dist:desktop:mac` dmg/zip packaging)

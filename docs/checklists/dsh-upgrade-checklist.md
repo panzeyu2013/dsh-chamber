@@ -3,7 +3,7 @@
 > 面向维护者：把 chamber 依赖的上游 dsh（deepseek-harness）从当前基线升级到目标
 > 版本（tag 形如 `dsh-v0.1.1-rc.2`）。核心约束（AGENTS.md）：**只改 chamber 侧，
 > 不动 dsh 内容**（vendor/submodule 源码零修改）。命令前先
-> `export PATH="$HOME/.nvm/versions/node/v22.22.3/bin:$PATH"`。
+> `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`。
 
 ## 0. 目标与基线
 

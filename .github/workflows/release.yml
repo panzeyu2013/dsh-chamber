@@ -284,7 +284,7 @@ jobs:
           version: 11.21.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
@@ -360,7 +360,7 @@ jobs:
           version: 11.21.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: lts/*
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - name: Bootstrap vendor tree (verify pin + ensure links)
@@ -423,7 +423,7 @@ jobs:
           version: 11.21.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: lts/*
+          node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
@@ -534,7 +534,7 @@ jobs:
           version: 11.21.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: lts/*
+          node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs

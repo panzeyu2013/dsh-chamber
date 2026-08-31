@@ -2,7 +2,7 @@
 
 > 面向发布者：按序执行，任何 ❌ 都阻断发布。依据：`.github/workflows/release.yml`、
 > `docs/DEVELOPMENT.md` §5、AGENTS.md 验证清单。命令前先
-> `export PATH="$HOME/.nvm/versions/node/v22.22.3/bin:$PATH"`（node v22 / pnpm 11.21）。
+> `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`（node v24 / pnpm 11.21）。
 
 ## 发布流程总览
 

@@ -1,7 +1,7 @@
 # dsh-chamber
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
-[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-brightgreen)]()
+[![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-brightgreen)]()
 
 **The desktop connection manager for [dsh](https://github.com/deepseek-ai/deepseek-harness) (DeepSeek Harness)**: a native desktop app that brings dsh instances on this machine and on any number of servers into a single window — local works out of the box, remote connects in one step.
 

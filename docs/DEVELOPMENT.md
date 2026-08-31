@@ -64,7 +64,7 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 
 ### 2.1 要求
 
-- Node.js 22+（推荐 LTS；源码为 TypeScript，经 Node 原生类型擦除直接运行，见 `.nvmrc`）
+- Node.js 24+（推荐 LTS；源码为 TypeScript，经 Node 原生类型擦除直接运行，见 `.nvmrc`）
 - pnpm ≥ 11（包管理器；锁文件 `pnpm-lock.yaml`）
 - git
 - macOS（`dist:desktop:mac` 打包 dmg/zip 需要）
