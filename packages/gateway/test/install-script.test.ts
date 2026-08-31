@@ -186,6 +186,40 @@ if grep -q 'EnvironmentFile="/' "$XDG_CONFIG_HOME/systemd/user/dsh-chamber-gatew
   assert.doesNotMatch(output, /envfile-quoted/)
 })
 
+test('--service-user renders User= in the unit and is refused outside systemd mode', () => {
+  const output = runLibrary(`
+BASE_DIR="$(mktemp -d)"
+GATEWAY_DIR="$BASE_DIR/gateway"
+ENV_FILE="$GATEWAY_DIR/gateway.env"
+mkdir -p "$GATEWAY_DIR"
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+DSH_WS=""
+ENV_ANCHOR=0
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+NO_AUTH=0
+UI_PASSWORD=""
+API_TOKEN=""
+SERVICE_MODE=user
+SERVICE_USER=dsh-chamber
+XDG_CONFIG_HOME="$BASE_DIR/xdg"
+gateway_exec() { printf '/tmp/gateway'; }
+systemctl() { return 0; }
+write_unit
+cat "$XDG_CONFIG_HOME/systemd/user/dsh-chamber-gateway.service"
+`)
+  assert.match(output, /^User=dsh-chamber$/m, 'SERVICE_USER must render as a User= line in the unit')
+  const refused = runLibraryResult(`
+SERVICE_MODE=foreground
+SERVICE_USER=dsh-chamber
+validate_service_user
+`)
+  assert.notEqual(refused.status, 0, '--service-user must be refused outside the systemd service shape')
+  assert.match(`${refused.stderr}${refused.stdout}`, /仅支持 systemd 系统服务形态/)
+})
+
 test('foreground launch preserves each dsh path and auth argument as one argv entry', () => {
   const output = runLibrary(`
 BASE_DIR="$(mktemp -d)"

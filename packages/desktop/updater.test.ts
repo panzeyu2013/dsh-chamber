@@ -211,11 +211,11 @@ test('beta discovery uses only the bounded releases-list API', async () => {
 test('beta check switches to an exact generic beta feed and never offers the GitHub latest fallback', async () => {
   let resolutions = 0
   const { fake, controller } = makeController({
-    version: '0.2.0-beta.3',
+    version: '0.2.0-beta.4',
     deps: {
       resolveBetaFeed: async () => {
         resolutions += 1
-        return 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.4/'
+        return 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.5/'
       },
     },
   })
@@ -224,7 +224,7 @@ test('beta check switches to an exact generic beta feed and never offers the Git
   assert.equal(fake.checkCalls, 1)
   assert.deepEqual(fake.feedUrl, {
     provider: 'generic',
-    url: 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.4/',
+    url: 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.5/',
     channel: 'beta',
   })
   assert.equal(fake.channel, 'beta')

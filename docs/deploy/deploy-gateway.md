@@ -170,3 +170,19 @@ bash install-gateway.sh install -y \
   npm 全局；非 root 自动用 `systemctl --user` 或前台。注意 npm 全局安装形态
   下，安装器以 owner-only（0700/0600）创建全局树与 `gateway` 命令——多用户
   机器上其他用户无法执行，符合单用户部署定位。
+- **以专用系统用户运行（`--service-user <用户>`）**：gateway 及其 spawn 的
+  dsh/Git 全部以该用户运行（数据仍由 gateway 控制在 `~/.dsh-chamber` 布局，
+  dsh 的 `DSH_HOME` 在 state 目录下，不依赖该用户 home）。用法（root +
+  systemd 服务形态）：
+
+  ```bash
+  useradd -m -r -s /usr/sbin/nologin dsh-chamber        # 一次性建号
+  bash install-gateway.sh install --service-user dsh-chamber   # 其余选项照常
+  ```
+
+  安装器会：unit 加 `User=dsh-chamber`、把 `~/.dsh-chamber` 全部数据属主移交
+  该用户（`chown -R`）、该配置写入 `gateway.conf`（`update` 时保持）。注意：
+  ① 用户必须**预先存在**（安装器不建号）；② 手工改 unit 加 `User=` 会被下次
+  `update` 重写丢失，请用 `--service-user` 或直接编辑 `gateway.conf` 的
+  `SERVICE_USER=`；③ 切换运行用户后 `~/.dsh-chamber` 属主必须匹配，否则
+  gateway 启动时对异主目录 fail-closed。

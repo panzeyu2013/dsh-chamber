@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-client-ui-layout",
   "description": "Minimal chamber-owned fork of the official @deepseek-ai/dsh-client-ui-layout shell plugin (design 06): replaces ONLY the layout STORE so the sidebar width preference is shared across every N-ctx shell boot and persisted across restarts. The frame itself (AppFrame, service, theme presenter, columns) is imported from the vendor source via deep subpaths — the fork never re-implements the shell.",
-  "version": "0.2.0",
+  "version": "0.2.0-beta.5",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

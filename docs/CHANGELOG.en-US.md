@@ -10,7 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.0-beta.5] - 2026-09-01
+
+> Aggregates the full 0.2.0-beta.1 → beta.4 line
+> (desktop connection manager + authenticated Gateway (design 17) + dsh
+> runtime version management (design 18); the complete evolution is recorded
+> in the per-beta sections below) plus the closing changes:
 
 ### Fixed
 
@@ -35,13 +40,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 - **control-plane recursive mkdir uses explicit 0700** — `ensurePrivateDirectoryNoFollow`
   and `createJsonStore` now pass `mode: 0o700` when creating ancestor
   directories (defensive).
-
-## [0.2.0] - 2026-08-31
-
-> **First stable release** — aggregates the full 0.2.0-beta.1 → beta.4 line
-> (desktop connection manager + authenticated Gateway (design 17) + dsh
-> runtime version management (design 18); the complete evolution is recorded
-> in the per-beta sections below) plus the closing changes:
+- **install-gateway.sh hardening and regression tests** — BASE_DIR dedicated-path
+  validation (rejects relative paths / `% * ? [ ]` / filesystem root / HOME /
+  temp roots), environment values no longer escape `$` (systemd ≤v246
+  compatibility), and regression tests for the unit template and the 0700 layout.
+- **Gateway `--service-user`** — run the gateway as a dedicated system user
+  (unit `User=` plus data-directory ownership handover; root + systemd shape).
 
 ### Changed
 

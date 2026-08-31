@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/control-plane",
-  "version": "0.2.0",
+  "version": "0.2.0-beta.5",
   "description": "Control plane for dsh-chamber: manages a local dsh host (web profile spawn/health/logs), per-instance reverse proxy and static frontend serving",
   "type": "module",
   "main": "./src/index.ts",

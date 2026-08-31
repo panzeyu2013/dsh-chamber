@@ -10,7 +10,11 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.2.0-beta.5] - 2026-09-01
+
+> 聚合 0.2.0-beta.1 → beta.4 的全部迭代（桌面连接管理器 + 认证
+> Gateway（design 17）+ dsh 运行时版本管理（design 18），完整演进记录见下方各
+> beta 节）与以下收尾变更：
 
 ### 修复
 
@@ -29,12 +33,11 @@
   字面路径写入。
 - **control-plane 递归 mkdir 显式 0700** —— `ensurePrivateDirectoryNoFollow` 与
   `createJsonStore` 的祖先目录创建显式 `mode: 0o700`（防御性）。
-
-## [0.2.0] - 2026-08-31
-
-> **首个稳定版**——聚合 0.2.0-beta.1 → beta.4 的全部迭代（桌面连接管理器 + 认证
-> Gateway（design 17）+ dsh 运行时版本管理（design 18），完整演进记录见下方各
-> beta 节）与以下收尾变更：
+- **install-gateway.sh 收紧自检与回归测试** —— BASE_DIR 专用目录校验（拒绝
+  相对路径 / `% * ? [ ]` / 文件系统根 / HOME / 临时目录），环境文件值不再转义
+  `$`（systemd ≤v246 兼容），unit 模板与 0700 布局的回归测试补齐。
+- **Gateway `--service-user`** —— 以专用系统用户运行 gateway（unit `User=` +
+  数据目录属主移交，root + systemd 形态）。
 
 ### 变更
 
