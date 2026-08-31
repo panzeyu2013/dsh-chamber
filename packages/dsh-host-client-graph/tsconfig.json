@@ -41,7 +41,17 @@
       // no runtime surface): that puts it in the pnpm virtual store at the
       // stable path below (version pinned by the lockfile, 1.1.0), so the
       // mapping exists after any `pnpm install`.
-      "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"]
+      "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"],
+      // dsh-host-webserver (0.1.2-alpha.2) imports `compression` and
+      // `negotiator`; like @standard-schema/spec above, pnpm cannot resolve
+      // them from the symlinked vendor checkout after a fresh install (the
+      // per-package node_modules symlinks are computed from the logical
+      // symlink depth but physically created inside the checkout, so the
+      // registry-dep links land broken). Both modules ship no types — map
+      // them to their @types packages in the virtual store (versions pinned
+      // by the lockfile), types-only, same as the @standard-schema/spec seam.
+      "compression": ["../../node_modules/.pnpm/@types+compression@1.8.1/node_modules/@types/compression"],
+      "negotiator": ["../../node_modules/.pnpm/@types+negotiator@0.6.5/node_modules/@types/negotiator"]
     }
   },
   "include": ["src/**/*.ts"]

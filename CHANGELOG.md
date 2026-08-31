@@ -18,6 +18,15 @@
   `update-vendor.mjs`，新路径 `node scripts/dev/update-vendor.mjs <tag>`）；
   `scripts/` 仅保留用户面脚本 `install-gateway.sh` 与目录约定 README。
 
+### 修复
+
+- **CI：host-graph typecheck 在全新安装下解析不到 `compression`/`negotiator`** ——
+  pnpm 对符号链接型 vendor workspace 成员的注册表依赖按逻辑路径计算相对深度、
+  却把 node_modules 实体建在 checkout 内（链接断），上游 `dsh-host-webserver`
+  （0.1.2-alpha.2）新增的这两个导入在 fresh install 后无法解析；按
+  `@standard-schema/spec` 先例在 host-graph tsconfig `paths` 中映射到 @types 包
+  （类型专用，无运行面）。
+
 ## [0.2.0-beta.4] - 2026-08-30
 
 ### 新增

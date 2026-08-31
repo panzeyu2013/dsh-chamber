@@ -19,6 +19,16 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   `node scripts/dev/update-vendor.mjs <tag>`); `scripts/` keeps only the
   user-facing `install-gateway.sh` and the directory convention README.
 
+### Fixed
+
+- **CI: host-graph typecheck could not resolve `compression`/`negotiator` on a
+  fresh install** — pnpm links registry deps of symlinked vendor workspace
+  members with a depth computed from the logical path while physically creating
+  them inside the checkout (broken links); the imports are new in upstream
+  `dsh-host-webserver` (0.1.2-alpha.2). Map them to their @types packages in the
+  host-graph tsconfig `paths`, following the `@standard-schema/spec` seam
+  (types-only, no runtime surface).
+
 ## [0.2.0-beta.4] - 2026-08-30
 
 ### Added

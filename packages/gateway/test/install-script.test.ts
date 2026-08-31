@@ -208,7 +208,10 @@ write_config
 write_env
 # Model a pre-migration install whose foreground-only values exist solely in
 # EnvironmentFile. load_conf must decode those assignments as data.
-sed -i '' '/^ENV_ANCHOR=/d;/^UI_PASSWORD=/d;/^API_TOKEN=/d' "$CONF_FILE"
+# (No "sed -i": its suffix-argument spelling differs between BSD and GNU sed —
+# "-i ''" breaks under GNU, where the empty string becomes the script and the
+# expression a filename. Redirect + mv is portable across both.)
+sed -e '/^ENV_ANCHOR=/d;/^UI_PASSWORD=/d;/^API_TOKEN=/d' "$CONF_FILE" > "$CONF_FILE.tmp" && mv "$CONF_FILE.tmp" "$CONF_FILE"
 UI_PASSWORD=""
 API_TOKEN=""
 DSH_WS=""
