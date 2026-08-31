@@ -207,3 +207,18 @@
   CLI 不携带 Electron。
 - **dev 实例隔离**：dev 使用独立 `packages/desktop/.dev-user-data` 与默认控制面
   端口 17520，可与打包版的 userData/17500 共存。
+
+### 0.1.2 迁移已知偏差登记(源自 docs/tmp-dsh-v012-migration-plan.md §7.5-§7.6,临时文档移除后留存)
+
+- ① workspace 面退化:fetchInstanceSnapshot workspaces:[]、git cwd 派生、follow TODO(fail-closed)
+- ② fork 副本 exports lib/ 约定
+- ③ 双线门禁刻意必红(源码 0.1.2 vs 运行时 rc.2 窗口,现已在 0.1.2-alpha.2 放行)
+- ④ D2 版本芯片远端隐藏(本地实例走桌面桥)
+- ⑤ answer-driven pending 清理(0.1.2 $events/result 语义)
+- ⑥ cookie 30 天死窗(~10 分钟自愈,排期重交换)
+- ⑦ seq 水位删除(≤10s 自愈)
+- ⑧ remote-stream 接收面宽松 exactKeys(前向兼容)
+- ⑨ agentPresets/select agentId:'' 潜伏面
+- ⑩ 端口碰撞理论面
+- ⑪ commands/execute 探针期望码 session/not-found(上游链证据,round8a 驳斥)
+- ⑫-⑮ 0.1.2-alpha.2 升级注记:dist 重建同步、$host stub(bridge-context)、记账 UTF-8 口径、mountBridgeSession 全链测试盲区(需实机浏览器冒烟)
