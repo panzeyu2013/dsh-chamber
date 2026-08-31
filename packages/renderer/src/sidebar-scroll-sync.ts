@@ -19,20 +19,34 @@
  *   the ARMING shell renders it — anchoring on it would make the incoming
  *   shell retry to the 8s deadline with a stale scroll.
  * - `restoreSidebarScroll` applies that anchor to the INCOMING shell's
- *   container (bounded retry until the container mounts — the incoming shell
- *   may still be booting, or the sidebar may be collapsed to the rail which
- *   unmounts the list and re-creates it on expand — and, for a cold-booted
- *   shell, until the anchored row itself renders): position the anchored row
- *   at the same screen offset, or copy the raw scrollTop when the row never
- *   appears by the deadline. It never applies while the incoming shell is
- *   still `content-visibility:hidden` (checkVisibility gate — the first
- *   attempt runs inside the view-transition apply callback, before the view
- *   flips visible, and Chromium then reports stale/degenerate rects), and a
- *   newer call supersedes an in-flight chain via a generation counter (rapid
- *   A→B→A→B switches must not run several bounded retry chains concurrently).
- *   Either way the same session rows land at the same screen position as
- *   before the switch (a one-row layout difference — e.g. the
- *   active-source-only blank "New Session" row — is absorbed by the anchor).
+ *   container in TWO phases (bounded retry until the container mounts — the
+ *   incoming shell may still be booting, or the sidebar may be collapsed to
+ *   the rail which unmounts the list and re-creates it on expand — and, for
+ *   a cold-booted shell, until the anchored row itself renders):
+ *   - PARK (immediate, every attempt, before any visibility gate): copy the
+ *     raw `anchor.scrollTop` onto the container. The raw scroll needs no
+ *     rects (only scrollHeight/clientHeight for clamping — a forced layout,
+ *     valid in any visibility state), so it is safe while the incoming shell
+ *     is still hidden — and it is what makes the reveal flicker-free:
+ *     a settled shell's first attempt runs inside the view-transition apply
+ *     callback, so the transition's new-state snapshot already captures the
+ *     parked position (the incoming sidebar never paints at its own
+ *     stale/zero scrollTop — "whole sidebar resets to the top, then jumps");
+ *     a cold-booted shell's container mounts while the shell is still hidden
+ *     under the skeleton, and the frame-tight retry (rAF while the container
+ *     is missing) parks it within a frame of mounting, so the skeleton→
+ *     content reveal starts at the anchored position.
+ *   - REFINE (once visible): the row-anchored computation needs trustworthy
+ *     rects, so it stays gated on checkVisibility (the first attempt runs
+ *     before the view flips visible and Chromium then reports
+ *     stale/degenerate rects); it positions the anchored row at the same
+ *     screen offset — absorbing a one-row layout difference (e.g. the
+ *     active-source-only blank "New Session" row) — or copies the raw
+ *     scrollTop when the row never appears by the deadline.
+ *   A newer call supersedes an in-flight chain via a generation counter
+ *   (rapid A→B→A→B switches must not run several bounded retry chains
+ *   concurrently). Either way the same session rows land at the same screen
+ *   position as before the switch.
  *
  * Dependency-free, DOM-only, no React import.
  */
@@ -52,7 +66,7 @@ export interface SidebarScrollAnchor {
 const INSTANCE_VIEW_SELECTOR = '.instance-view'
 const SCROLL_CONTAINER_SELECTOR = '[data-chamber-sidebar-scroll]'
 const ROW_SELECTOR = '[data-chamber-row]'
-/** Retry cadence while waiting for the incoming shell's container or anchored row to mount. */
+/** Timer fallback cadence when rAF is unavailable or the document is hidden. */
 const RETRY_MS = 80
 
 function findInstanceView(instanceId: string): HTMLElement | null {
@@ -127,50 +141,89 @@ let restoreGeneration = 0
 
 /**
  * Restore the captured anchor on the INCOMING shell's sidebar container.
- * Retries every ~80ms until the container mounts (shell still booting, or
+ * Two-phase apply (see the module doc):
+ *
+ * - PARK — every attempt first copies the raw `anchor.scrollTop` onto the
+ *   container, BEFORE any visibility gate. The raw scroll needs no rects
+ *   (only scrollHeight/clientHeight for clamping — a forced layout, valid
+ *   in any visibility state), so it is safe while the incoming shell is
+ *   still hidden. This is what makes the reveal flicker-free: for a settled
+ *   shell the first attempt runs inside the view-transition apply callback,
+ *   so the transition's new-state snapshot already captures the parked
+ *   position; for a cold-booted shell the container mounts while the shell
+ *   is still hidden under the skeleton and the rAF-tight retry parks it
+ *   within a frame of mounting.
+ * - REFINE — the row-anchored computation needs trustworthy rects, so it
+ *   stays gated on checkVisibility (the first attempt can run before the
+ *   view flips visible; Chromium then reports stale/degenerate rects). It
+ *   positions the anchored row at the same screen offset, or copies the raw
+ *   scrollTop at the deadline when the row never appears.
+ *
+ * Retry cadence is phase-split: frame-tight (rAF) only while the container
+ * is missing, so the first park after a cold-booted sidebar mounts lands
+ * within a frame; once the container exists the timer cadence applies —
+ * re-parks self-correct as content grows, and the REFINE must measure
+ * settled content (a switch re-publishes the projection — e.g. the
+ * active-source-only blank "New Session" row drops out — and the incoming
+ * sidebar re-renders that change in its own root; rects read before that
+ * re-render lands would stick one row off, since the chain applies once and
+ * stops). Hidden documents fall back to the timer (rAF stops).
+ *
+ * The retry chain runs until the container mounts (shell still booting, or
  * sidebar collapsed to rail and re-expanding — a fresh element), and — when
  * the anchor row is not rendered yet (a cold-booted shell's sidebar mounts
- * before its server's rows land in the shared projection) — keeps retrying
- * until the row appears, bounded by `timeoutMs`. One-shot success: once the
- * row is found (or the deadline forces the raw-scrollTop fallback) the
- * position is applied and retrying stops. Gives up silently after `timeoutMs`
- * if the container never mounts. A newer call supersedes this chain (the
- * generation counter above); an attempt never applies while the incoming
- * shell is still `content-visibility:hidden` (checkVisibility gate — the
- * first attempt runs inside the view-transition apply callback, before the
- * view flips visible).
+ * before its server's rows land in the shared projection) — until the row
+ * appears, bounded by `timeoutMs`. One-shot success: once the row is found
+ * (or the deadline forces the raw-scrollTop fallback) the position is
+ * applied and retrying stops. Gives up silently after `timeoutMs` if the
+ * container never mounts. A newer call supersedes this chain (the
+ * generation counter above).
  */
 export function restoreSidebarScroll(instanceId: string, anchor: SidebarScrollAnchor, timeoutMs = 8000): void {
   const generation = ++restoreGeneration
   const deadline = Date.now() + timeoutMs
+  // Frame-tight retry ONLY while the container is missing: the first park
+  // after the sidebar mounts must land within a frame (a cold-booted shell's
+  // container mounts while still hidden under the skeleton), so the
+  // skeleton→content reveal cannot beat it. The timer fallback covers hidden
+  // documents (rAF stops) and old environments.
+  const rafRetry = (): void => {
+    if (typeof requestAnimationFrame === 'function' && document.visibilityState !== 'hidden') {
+      requestAnimationFrame(attempt)
+    } else {
+      window.setTimeout(attempt, RETRY_MS)
+    }
+  }
+  // Timer cadence once the container exists: re-parks as content grows only
+  // need to self-correct, and the rect-based REFINE must measure against
+  // SETTLED content — a switch triggers a projection re-publish (e.g. the
+  // active-source-only blank "New Session" row drops out), and the incoming
+  // sidebar re-renders that change in its own root; rects read before that
+  // re-render lands would compute a target one row off and stick (the chain
+  // applies once and stops). The old pre-flicker-fix code also refined at
+  // this cadence, so the sub-row correction timing is unchanged.
+  const timerRetry = (): void => {
+    window.setTimeout(attempt, RETRY_MS)
+  }
   const attempt = (): void => {
     // A newer restoreSidebarScroll superseded this chain — stop entirely.
     if (generation !== restoreGeneration) return
     const expired = Date.now() > deadline
     const container = findScrollContainer(instanceId)
     if (container === null) {
-      if (!expired) window.setTimeout(attempt, RETRY_MS)
+      if (!expired) rafRetry()
       return
     }
-    // chamber (third-wave review, R2-5#3): the first restore attempt can run
-    // while the incoming shell is still content-visibility:hidden — the App
-    // calls restoreSidebarScroll inside the view-transition apply callback
-    // and the view flips visible only after it returns — so Chromium can
-    // report stale/degenerate rects and the one-shot apply lands at a wrong
-    // position (a settled prewarmed shell already has its rows in the DOM, so
-    // the retry finds them immediately and applies once with bad geometry).
-    // Gate the apply on checkVisibility (present in Electron 43 / Chromium
-    // 140; typeof-guarded for safety) and keep rescheduling while hidden,
-    // bounded by the existing deadline. At the deadline the raw-scrollTop
-    // fallback still covers the terminal case — no rect is trustworthy in the
-    // hidden state, so only the anchor's raw scroll is applied.
+    const maxScroll = (): number => container.scrollHeight - container.clientHeight
+    // PARK phase: raw scroll, no rects — safe in any visibility state. This
+    // runs synchronously on the first attempt (inside the view-transition
+    // apply callback for a settled shell), so the incoming shell's first
+    // painted frame is already at the anchored position.
+    container.scrollTop = Math.max(0, Math.min(anchor.scrollTop, maxScroll()))
+    // REFINE phase: rect-based; only trustworthy once the shell is actually
+    // rendered (see the checkVisibility gate notes above).
     if (typeof container.checkVisibility === 'function' && container.checkVisibility() === false) {
-      if (!expired) {
-        window.setTimeout(attempt, RETRY_MS)
-      } else {
-        const maxScroll = container.scrollHeight - container.clientHeight
-        container.scrollTop = Math.max(0, Math.min(anchor.scrollTop, maxScroll))
-      }
+      if (!expired) timerRetry()
       return
     }
     let target = anchor.scrollTop
@@ -186,16 +239,14 @@ export function restoreSidebarScroll(instanceId: string, anchor: SidebarScrollAn
         // outgoing's scrollTop, positioned by the anchor row.
         target = rowRect.top - containerRect.top + container.scrollTop - anchor.offset
       } else if (!expired) {
-        // Container mounted but the anchored row is not rendered yet: apply
-        // nothing now — falling back to the raw scrollTop would freeze the
-        // position wrong once the rows land. Keep retrying; only copy the raw
-        // scrollTop at the deadline.
-        window.setTimeout(attempt, RETRY_MS)
+        // Container mounted but the anchored row is not rendered yet: the
+        // park above already holds the position; keep retrying — only copy
+        // the raw scrollTop refinement at the deadline.
+        timerRetry()
         return
       }
     }
-    const maxScroll = container.scrollHeight - container.clientHeight
-    container.scrollTop = Math.max(0, Math.min(target, maxScroll))
+    container.scrollTop = Math.max(0, Math.min(target, maxScroll()))
   }
   attempt()
 }

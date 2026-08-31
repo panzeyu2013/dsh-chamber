@@ -1407,10 +1407,13 @@ export default function App() {
     // chamber (2026-08 scroll sync): anchor the outgoing shell's sidebar
     // scroll BEFORE the switch; the incoming shell's stale scrollTop would
     // otherwise make the whole sidebar jump (each N-ctx shell owns its own
-    // .chamberList scrollTop). restoreSidebarScroll runs after the apply —
-    // it retries until the incoming shell's container mounts (booting /
-    // collapsed-to-rail) and anchors the same rows at the same screen
-    // position (sidebar-scroll-sync.ts).
+    // .chamberList scrollTop). restoreSidebarScroll runs inside the apply —
+    // its PARK phase synchronously copies the raw scroll onto the incoming
+    // container before the transition's new-state snapshot, so the incoming
+    // sidebar never reveals at its own stale/zero position; the row-anchored
+    // REFINE then corrects sub-row content deltas once the shell is visible
+    // (booting / collapsed-to-rail shells are covered by the retry chain,
+    // sidebar-scroll-sync.ts).
     const scrollAnchor = captureSidebarScrollAnchor(activeViewRef.current)
     pendingViewRef.current = viewId
     runViewTransition(() => {

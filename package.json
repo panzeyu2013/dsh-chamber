@@ -62,7 +62,7 @@
     "test:client-web": "node packages/dsh-client-web/tests/boot-tolerance.test.ts && node packages/dsh-client-web/tests/boot-rows.test.ts && node --import ./scripts/test-client-web-register.mjs packages/dsh-client-web/tests/configure-context.test.ts",
     "test:git": "pnpm --filter @dsh-chamber/dsh-client-ui-git run test",
     "test:host-git": "pnpm --filter @dsh-chamber/dsh-host-git-worktree run test",
-    "test:renderer-shell": "node packages/renderer/scripts/typert-remote-contract.test.mjs && node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/deep-link-activation.test.ts && node packages/renderer/src/aggregate-refresh.test.ts && node packages/renderer/src/notification-edges.test.ts && node packages/renderer/src/host-graph.test.ts && node --import ./scripts/dev/test-shell-register.mjs packages/renderer/src/shell.test.ts",
+    "test:renderer-shell": "node packages/renderer/scripts/typert-remote-contract.test.mjs && node packages/renderer/src/pending-open-queue.test.ts && node packages/renderer/src/deep-link-activation.test.ts && node packages/renderer/src/aggregate-refresh.test.ts && node packages/renderer/src/notification-edges.test.ts && node packages/renderer/src/host-graph.test.ts && node packages/renderer/src/sidebar-scroll-sync.test.ts && node --import ./scripts/dev/test-shell-register.mjs packages/renderer/src/shell.test.ts",
     "test:connection": "node packages/dsh-client-connection/test/api-path.test.ts && node packages/dsh-client-connection/test/carrier-assembly.test.ts && node packages/dsh-client-connection/test/liveness-triggers.test.ts",
     "test:cli": "node packages/cli/test/follow-filter.test.ts",
     "test:gateway": "pnpm --filter @dsh-chamber/gateway run test",
