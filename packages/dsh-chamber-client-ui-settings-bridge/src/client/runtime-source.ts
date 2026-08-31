@@ -14,7 +14,7 @@ export interface RuntimeServerProjection {
   transport: 'local' | 'ssh' | 'http'
   /** Raw desktop registry id. Required for remote rows in the v2 producer. */
   rawId?: string
-  /** Live host.describe.version; absent means honestly unknown. */
+  /** Live dsh 实例版本 (0.1.2 起由运行时管理面提供;host.describe 已删); absent means honestly unknown. */
   dshVersion?: string
 }
 

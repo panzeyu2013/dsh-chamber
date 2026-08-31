@@ -7,7 +7,7 @@
  * so the state machine is unit-testable without the dsh runtime.
  */
 
-import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SettingsNamespaceView, SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SnapshotStore } from './snapshot-store.ts'
 import { createSnapshotStore } from './snapshot-store.ts'
@@ -26,22 +26,26 @@ export interface PermissionSettingsState {
   revision: number
 }
 
-/** The settings wire face the controller needs (shape mirror of IApiClient.settings). */
+/**
+ * The settings wire face the controller needs (the Typert RemoteResult shape
+ * of `remote.settings.describe/mutate`, dsh-v0.1.2-alpha.1: positional args,
+ * `{ok,value|error}` envelope — no `result` wrapper).
+ */
 export interface PermissionSettingsApi {
   settings: {
-    describe(payload?: Record<string, unknown>): Promise<{
-      result: {
-        ok: boolean
-        value?: { namespaces: readonly SettingsNamespaceView[]; writable: boolean }
-        error?: { message?: string }
-      }
+    describe(): Promise<{
+      ok: boolean
+      value?: { namespaces: readonly SettingsNamespaceView[]; writable: boolean }
+      error?: { message?: string }
     }>
-    mutate(payload: Record<string, unknown>): Promise<{
-      result: {
-        ok: boolean
-        value?: SettingsNamespaceView
-        error?: { message?: string }
-      }
+    mutate(
+      ns: string,
+      ops: readonly SettingsPathOpView[],
+      expectedRevision?: number,
+    ): Promise<{
+      ok: boolean
+      value?: SettingsNamespaceView
+      error?: { message?: string }
     }>
   }
 }
@@ -88,10 +92,10 @@ export class PermissionPresetSettingsController {
       state.error = null
     })
     try {
-      const response = await this.api.settings.describe({})
-      if (!response.result.ok) throw new Error(response.result.error?.message ?? 'describe failed')
+      const response = await this.api.settings.describe()
+      if (!response.ok) throw new Error(response.error?.message ?? 'describe failed')
       if (generation !== this.generation) return
-      const view = response.result.value?.namespaces.find(entry => entry.ns === PERMISSION_SETTINGS_NS)
+      const view = response.value?.namespaces.find(entry => entry.ns === PERMISSION_SETTINGS_NS)
       if (view === undefined) {
         this.view = undefined
         this.store.update((state) => {
@@ -102,7 +106,7 @@ export class PermissionPresetSettingsController {
         })
         return
       }
-      this.accept(view, response.result.value?.writable ?? false)
+      this.accept(view, response.value?.writable ?? false)
     } catch (error) {
       if (generation !== this.generation) return
       this.fail(error)
@@ -124,14 +128,14 @@ export class PermissionPresetSettingsController {
       draft.error = null
     })
     try {
-      const response = await this.api.settings.mutate({
-        ns: PERMISSION_SETTINGS_NS,
-        ops: [{ op: 'set', path: ['defaultPreset'], value: preset }],
-        expectedRevision: view.revision,
-      })
+      const response = await this.api.settings.mutate(
+        PERMISSION_SETTINGS_NS,
+        [{ op: 'set', path: ['defaultPreset'], value: preset }],
+        view.revision,
+      )
       if (generation !== this.generation) return
-      if (!response.result.ok) throw new Error(response.result.error?.message ?? 'mutate failed')
-      this.accept(response.result.value as SettingsNamespaceView, true)
+      if (!response.ok) throw new Error(response.error?.message ?? 'mutate failed')
+      this.accept(response.value as SettingsNamespaceView, true)
     } catch (error) {
       if (generation !== this.generation) return
       this.fail(error)

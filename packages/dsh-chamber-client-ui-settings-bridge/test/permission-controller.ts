@@ -48,15 +48,15 @@ const DECODE: PermissionViewDecoder = (view) => ({
 type DescribeResult = Awaited<ReturnType<PermissionSettingsApi['settings']['describe']>>
 type MutateResult = Awaited<ReturnType<PermissionSettingsApi['settings']['mutate']>>
 
-/** Controllable fake settings wire face. */
+/** Controllable fake settings wire face (dsh-v0.1.2-alpha.1 RemoteResult shape). */
 class FakeApi implements PermissionSettingsApi {
   settings: PermissionSettingsApi['settings'] = {
-    describe: async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }),
-    mutate: async () => ({ result: { ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'safe' } }) } }),
+    describe: async () => ({ ok: true, value: { namespaces: [VIEW()], writable: true } }),
+    mutate: async () => ({ ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'safe' } }) }),
   }
 
   describeQueue: Array<() => Promise<DescribeResult>> = []
-  mutateQueue: Array<(payload: Record<string, unknown>) => Promise<MutateResult>> = []
+  mutateQueue: Array<(ns: string, ops: readonly { op: string; path: readonly string[]; value?: unknown }[], expectedRevision?: number) => Promise<MutateResult>> = []
 
   constructor() {
     this.settings = {
@@ -69,7 +69,7 @@ class FakeApi implements PermissionSettingsApi {
     this.describeQueue.push(handler)
   }
 
-  mutateOnce(handler: (payload: Record<string, unknown>) => Promise<MutateResult>): void {
+  mutateOnce(handler: (ns: string, ops: readonly { op: string; path: readonly string[]; value?: unknown }[], expectedRevision?: number) => Promise<MutateResult>): void {
     this.mutateQueue.push(handler)
   }
 
@@ -81,10 +81,10 @@ class FakeApi implements PermissionSettingsApi {
         if (next === undefined) throw new Error('unexpected describe call')
         return next()
       },
-      mutate: async (payload) => {
+      mutate: async (ns, ops, expectedRevision) => {
         const next = this.mutateQueue.shift()
         if (next === undefined) throw new Error('unexpected mutate call')
-        return next(payload)
+        return next(ns, ops, expectedRevision)
       },
     }
   }
@@ -96,7 +96,7 @@ function snapshot(controller: PermissionPresetSettingsController): PermissionSet
 
 test('load resolves the namespace into ready options', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW()], writable: true } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
@@ -109,7 +109,7 @@ test('load resolves the namespace into ready options', async () => {
 
 test('missing namespace publishes unavailable', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [], writable: true } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [], writable: true } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
@@ -119,7 +119,7 @@ test('missing namespace publishes unavailable', async () => {
 
 test('describe failure publishes error', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: false, error: { message: 'boom' } } }))
+  api.describeOnce(async () => ({ ok: false, error: { message: 'boom' } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
@@ -129,7 +129,7 @@ test('describe failure publishes error', async () => {
 
 test('decode rejection publishes error', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW()], writable: true } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, () => {
     throw new Error('no defaultPreset in schema')
@@ -141,14 +141,12 @@ test('decode rejection publishes error', async () => {
 
 test('select writes the preset with the descriptor revision and accepts the response', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
-  api.mutateOnce(async (payload) => {
-    assert.deepEqual(payload, {
-      ns: 'permission',
-      ops: [{ op: 'set', path: ['defaultPreset'], value: 'danger-full-access' }],
-      expectedRevision: 7,
-    })
-    return { result: { ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'danger-full-access' } }) } }
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW()], writable: true } }))
+  api.mutateOnce(async (ns, ops, expectedRevision) => {
+    assert.equal(ns, 'permission')
+    assert.deepEqual(ops, [{ op: 'set', path: ['defaultPreset'], value: 'danger-full-access' }])
+    assert.equal(expectedRevision, 7)
+    return { ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'danger-full-access' } }) }
   })
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
@@ -161,7 +159,7 @@ test('select writes the preset with the descriptor revision and accepts the resp
 
 test('select is blocked while unwritable', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: false } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW()], writable: false } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
@@ -172,7 +170,7 @@ test('select is blocked while unwritable', async () => {
 
 test('select is blocked without a resolved view', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [], writable: true } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [], writable: true } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
@@ -183,8 +181,8 @@ test('select is blocked without a resolved view', async () => {
 
 test('select failure publishes error', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
-  api.mutateOnce(async () => ({ result: { ok: false, error: { message: 'revision conflict' } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW()], writable: true } }))
+  api.mutateOnce(async () => ({ ok: false, error: { message: 'revision conflict' } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
@@ -195,10 +193,10 @@ test('select failure publishes error', async () => {
 
 test('select publishes a saving intermediate status until the write settles', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW()], writable: true } }))
   let release: (() => void) | undefined
   api.mutateOnce(() => new Promise((resolve) => {
-    release = () => resolve({ result: { ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'safe' } }) } })
+    release = () => resolve({ ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'safe' } }) })
   }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
@@ -213,12 +211,12 @@ test('select publishes a saving intermediate status until the write settles', as
 
 test('a stale select response never publishes (latest write wins)', async () => {
   const api = new FakeApi()
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW()], writable: true } }))
   let releaseFirst: (() => void) | undefined
   api.mutateOnce(() => new Promise((resolve) => {
-    releaseFirst = () => resolve({ result: { ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'safe' } }) } })
+    releaseFirst = () => resolve({ ok: true, value: VIEW({ revision: 8, value: { defaultPreset: 'safe' } }) })
   }))
-  api.mutateOnce(async () => ({ result: { ok: true, value: VIEW({ revision: 9, value: { defaultPreset: 'danger-full-access' } }) } }))
+  api.mutateOnce(async () => ({ ok: true, value: VIEW({ revision: 9, value: { defaultPreset: 'danger-full-access' } }) }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   await controller.load()
@@ -236,9 +234,9 @@ test('a stale load response never publishes (latest request wins)', async () => 
   const api = new FakeApi()
   let release: (() => void) | undefined
   api.describeOnce(() => new Promise((resolve) => {
-    release = () => resolve({ result: { ok: true, value: { namespaces: [VIEW({ revision: 1 })], writable: true } } })
+    release = () => resolve({ ok: true, value: { namespaces: [VIEW({ revision: 1 })], writable: true } })
   }))
-  api.describeOnce(async () => ({ result: { ok: true, value: { namespaces: [VIEW({ revision: 2 })], writable: true } } }))
+  api.describeOnce(async () => ({ ok: true, value: { namespaces: [VIEW({ revision: 2 })], writable: true } }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)
   const first = controller.load()
@@ -254,7 +252,7 @@ test('dispose stops in-flight responses from publishing', async () => {
   const api = new FakeApi()
   let release: (() => void) | undefined
   api.describeOnce(() => new Promise((resolve) => {
-    release = () => resolve({ result: { ok: true, value: { namespaces: [VIEW()], writable: true } } })
+    release = () => resolve({ ok: true, value: { namespaces: [VIEW()], writable: true } })
   }))
   api.install()
   const controller = new PermissionPresetSettingsController(api, DECODE, SCHEMA)

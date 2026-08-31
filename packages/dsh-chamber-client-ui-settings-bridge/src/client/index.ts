@@ -9,7 +9,7 @@
  * entry — no chamber-side persistence, no new control-plane API; every
  * configuration fact stays on the target host.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the slot registry face (ctx.slots) and the sidebar seat

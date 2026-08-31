@@ -1,13 +1,15 @@
 /**
- * Per-instance unary RPC client for the settings bridge (the wire protocol of
- * dsh-host-apiproxy's fetch carrier, as consumed by the official settings
- * plugins' controllers): POST `{base}/api/<method>` with a client-request
- * envelope. Responses resolve to the FULL wire envelope `{rpcId, result}`
- * exactly like the official IApiClient (`fetch/client.ts`): controllers read
- * `response.result.ok / .value / .error` themselves and do NOT expect
- * business failures to throw. Only TRANSPORT failures throw here (network,
- * non-2xx, the proxy's explicit `instance_unavailable` 503) — the official
- * client throws for those too.
+ * Per-instance unary RPC client for the settings bridge — the Typert Remote
+ * wire protocol of dsh-v0.1.2-alpha.1 (the `ctx.remote.*` namespaces the
+ * official settings plugins consume): POST `{base}/api/<namespace>/<method>`
+ * with a client-request envelope whose payload is exactly one `{args}` field
+ * (the host method's positional parameter names), answered by a
+ * server-response envelope whose result is the `RemoteResult` union
+ * `{ok:true,value}` | `{ok:false,error:{code,message,details}}`. Controllers
+ * read `response.ok / .value / .error` themselves and do NOT expect business
+ * failures to throw. Only TRANSPORT failures throw here (network, non-2xx,
+ * the proxy's explicit `instance_unavailable` 503) — the official client
+ * throws for those too.
  *
  * The base path is the chamber per-instance proxy prefix (`/api/i/<id>`), so
  * every call lands on the TARGET instance's host — the control plane
@@ -15,17 +17,16 @@
  * the bridge package keeps the loose-ambient typecheck pattern of the
  * connections package.
  */
-export interface BridgeRpcResult {
-  ok: boolean
-  value?: unknown
-  error?: { code?: string; message?: string }
+export interface BridgeRpcFailure {
+  code: string
+  message: string
+  details?: object
 }
 
-/** The resolved wire envelope (shape mirror of the official RpcResponse). */
-export interface BridgeRpcResponse {
-  rpcId: string
-  result: BridgeRpcResult
-}
+/** The `RemoteResult` union every bridged Remote method resolves to. */
+export type BridgeRpcResult<T = unknown> =
+  | { ok: true; value: T }
+  | { ok: false; error: BridgeRpcFailure }
 
 /** One transport failure, folded with an honest prefix (proxy honesty, design 03 §3.3). */
 function wrapWireError(error: unknown): Error {
@@ -41,7 +42,7 @@ export class BridgeApiClient {
     this.basePath = basePath
   }
 
-  private async call(method: string, payload: Record<string, unknown> = {}): Promise<BridgeRpcResponse> {
+  private async call(method: string, args: Record<string, unknown>): Promise<BridgeRpcResult> {
     // Bounded unary (official DEFAULT_TIMEOUT_MS): the control-plane proxy
     // forwards without an upstream timeout, so a silently hung host would
     // otherwise leave the settings page loading forever — fail loud instead.
@@ -53,7 +54,12 @@ export class BridgeApiClient {
       response = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method, payload }),
+        body: JSON.stringify({
+          type: 'client-request',
+          rpcId: crypto.randomUUID(),
+          method,
+          payload: { args },
+        }),
         signal: AbortSignal.timeout(30000),
       })
     } catch (error) {
@@ -73,54 +79,124 @@ export class BridgeApiClient {
     if (!response.ok) {
       throw wrapWireError(new Error(`HTTP ${response.status}`))
     }
-    const envelope = await response.json()
-    return envelope as BridgeRpcResponse
-  }
-
-  /** Settings namespace face (describe/update/mutate — the official controllers' set). */
-  readonly settings = {
-    describe: (payload: Record<string, unknown> = {}) => this.call('settings.describe', payload),
-    update: (payload: Record<string, unknown>) => this.call('settings.update', payload),
-    mutate: (payload: Record<string, unknown>) => this.call('settings.mutate', payload),
-    openDocument: (payload: Record<string, unknown>) => this.call('settings.openDocument', payload),
-  }
-
-  /** Credential face (structural describe; key plaintext crosses only inside set). */
-  readonly credentials = {
-    describe: (payload: Record<string, unknown>) => this.call('credentials.describe', payload),
-    set: (payload: Record<string, unknown>) => this.call('credentials.set', payload),
-    unset: (payload: Record<string, unknown>) => this.call('credentials.unset', payload),
-  }
-
-  /** LLM provider/model directory face. */
-  readonly llm = {
-    providers: (payload: Record<string, unknown> = {}) => this.call('llm.providers', payload),
-    models: (payload: Record<string, unknown>) => this.call('llm.models', payload),
-    discoverModels: (payload: Record<string, unknown>) => this.call('llm.discoverModels', payload),
+    return parseRemoteResult(await response.json())
   }
 
   /**
-   * Agent-preset roster face — the OFFICIAL controllers call `api.agentPresets`
-   * (plural, the IApiClient member name); the wire method ids stay the
-   * singular `agentPreset.*` (rpc-map).
+   * Settings namespace face — the exact `remote.settings` method set the
+   * official settings plugins consume (`SettingsRemote`):
+   * describe/update/replace/mutate plus the two native openers. `undefined`
+   * `expectedRevision`/`name` are omitted from the wire args (the generated
+   * client skips undefined parameters).
+   */
+  readonly settings = {
+    describe: () => this.call('settings/describe', {}),
+    update: (ns: string, patch: Record<string, unknown>, expectedRevision?: number) =>
+      this.call('settings/update', {
+        ns,
+        patch,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    replace: (ns: string, section: Record<string, unknown>, expectedRevision?: number) =>
+      this.call('settings/replace', {
+        ns,
+        section,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    mutate: (
+      ns: string,
+      ops: readonly { op: string; path: readonly string[]; value?: unknown }[],
+      expectedRevision?: number,
+    ) =>
+      this.call('settings/mutate', {
+        ns,
+        ops,
+        ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      }),
+    openSettingsDocument: () => this.call('settings/openSettingsDocument', {}),
+    openAgentPresetDirectory: (agentPreset: string) =>
+      this.call('settings/openAgentPresetDirectory', { agentPreset }),
+    canOpenAgentPresetDirectory: () => this.call('settings/canOpenAgentPresetDirectory', {}),
+  }
+
+  /** Credential namespace face (structural describe; key plaintext crosses only inside set). */
+  readonly credentials = {
+    describe: (refs: readonly string[]) => this.call('credentials/describe', { refs }),
+    set: (ref: string, value: string) => this.call('credentials/set', { ref, value }),
+    unset: (ref: string) => this.call('credentials/unset', { ref }),
+  }
+
+  /** LLM provider/model directory face (the official models section's directory). */
+  readonly llm = {
+    listProviders: () => this.call('llm/listProviders', {}),
+    listConfigurableProviders: () => this.call('llm/listConfigurableProviders', {}),
+    discoverModels: (settingsNs: string, request: Record<string, unknown>) =>
+      this.call('llm/discoverModels', { settingsNs, request }),
+  }
+
+  /**
+   * Agent-preset roster face — the new `agentPresets` namespace: `list`
+   * (roster + authoring capability), `read`, `copy`, `deletePreset`, and
+   * `select`. Upstream `select(agent: Agent, agentPreset: string)` — the
+   * typert wire projects the Agent parameter as the `agentId` lookup key
+   * (the seat's session identity string), so the args are exactly
+   * `{agentId, agentPreset}` (review-round7a P2-1; the round-3 fix guessed
+   * `{agent:{id:''}}`, which the generated descriptor disproves). The
+   * bridged child context has no session identity, so `agentId` is sent
+   * empty — the host lookup fails loudly if the seat fiber ever reaches it
+   * (it does not activate here).
    */
   readonly agentPresets = {
-    list: (payload: Record<string, unknown> = {}) => this.call('agentPreset.list', payload),
-    select: (payload: Record<string, unknown>) => this.call('agentPreset.select', payload),
-    read: (payload: Record<string, unknown>) => this.call('agentPreset.read', payload),
-    copy: (payload: Record<string, unknown>) => this.call('agentPreset.copy', payload),
-    openDocument: (payload: Record<string, unknown>) => this.call('agentPreset.openDocument', payload),
-    remove: (payload: Record<string, unknown>) => this.call('agentPreset.remove', payload),
+    list: () => this.call('agentPresets/list', {}),
+    read: (agentPreset: string) => this.call('agentPresets/read', { agentPreset }),
+    copy: (from: string, id: string, name?: string) =>
+      this.call('agentPresets/copy', {
+        from,
+        id,
+        ...(name === undefined ? {} : { name }),
+      }),
+    deletePreset: (id: string) => this.call('agentPresets/deletePreset', { id }),
+    select: (agentPreset: string) => this.call('agentPresets/select', { agentId: '', agentPreset }),
   }
 
-  /**
-   * Host plugin inventory (the plugin-inventory settings tab's read face).
-   * Typert Remote wire: endpoint `namespace/method` and a payload of exactly
-   * one `{args}` field (verified against the live host).
-   */
-  readonly pluginInventory = {
-    list: (payload: Record<string, unknown> = {}) => this.call('pluginInventory/list', { args: payload }),
+  /** Session catalog read face (the plugins section's model-catalog card). */
+  readonly session = {
+    modelCatalog: () => this.call('session/modelCatalog', {}),
   }
+
+  /** Host plugin inventory (the plugin-inventory settings tab's read face). */
+  readonly pluginInventory = {
+    list: () => this.call('pluginInventory/list', {}),
+  }
+}
+
+/** Validate the server-response envelope and project its `result` (mirror of the official parseConnectionResponse). */
+function parseRemoteResult(value: unknown): BridgeRpcResult {
+  if (!isRecord(value) || value.type !== 'server-response' || typeof value.rpcId !== 'string') {
+    throw new TypeError('bridge: invalid server-response envelope')
+  }
+  const result = value.result
+  if (!isRecord(result)) throw new TypeError('bridge: invalid server-response result')
+  if (result.ok === true) return { ok: true, value: result.value }
+  if (result.ok !== false || !isRecord(result.error)) {
+    throw new TypeError('bridge: invalid server-response result')
+  }
+  const error = result.error
+  if (typeof error.code !== 'string' || typeof error.message !== 'string') {
+    throw new TypeError('bridge: invalid server-response failure')
+  }
+  return {
+    ok: false,
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(isRecord(error.details) ? { details: error.details } : {}),
+    },
+  }
+}
+
+function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const clients = new Map<string, BridgeApiClient>()

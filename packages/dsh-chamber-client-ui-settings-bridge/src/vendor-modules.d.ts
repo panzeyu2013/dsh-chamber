@@ -17,14 +17,7 @@ declare module '@deepseek-ai/cordis' {
     on<K extends string>(name: K, fn: (...args: any[]) => void): () => void
     emit(name: string, ...args: unknown[]): void
     fiber: { dispose(): Promise<void> }
-  }
-}
-
-declare module '@deepseek-ai/dsh-client-runtime/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  import type { LocaleFace, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
-  export interface ClientContext extends Context {
-    effect(fn: () => void | (() => void), label?: string): void
+    /** Service merges the mounted client plugins augment onto Context (chamber's loose face). */
     locale: {
       register(namespace: string, dictionaries: Record<string, Record<string, string>>): void
       bind(namespace: string): (key: string) => string
@@ -45,6 +38,12 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
       }
     }
   }
+}
+
+declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
+  import type { Context } from '@deepseek-ai/cordis'
+  import type { LocaleFace, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
+  /** Slot registry service (moved here from the dissolved dsh-client-runtime). */
   export class SlotRegistry {
     constructor(ctx: Context)
     register(options: Record<string, unknown>, component: unknown): () => void
@@ -56,6 +55,22 @@ declare module '@deepseek-ai/dsh-client-runtime/client' {
     spec(key: string): { kind: string; scope: string } | undefined
     installLocale(face: LocaleFace): void
   }
+  export interface RootOwnerProps {}
+}
+
+declare module '@deepseek-ai/dsh-client-store' {
+  /** Observable snapshot-store contract (dsh-client-runtime's store primitives successor). */
+  export interface SnapshotStore<T> {
+    getSnapshot(): T
+    subscribe(listener: () => void): () => void
+    set(state: T): void
+    update(recipe: (draft: T) => void): void
+  }
+  export function createSnapshotStore<T>(initial: T): SnapshotStore<T>
+  export type ObservableSnapshot<T> = SnapshotStore<T>
+  export interface EngineStoreHandle {}
+  export type DefineStore = unknown
+  export function defineStore(...args: unknown[]): unknown
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -106,15 +121,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 declare module '@deepseek-ai/dsh-client-locale/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
 }
 
 declare module '@deepseek-ai/dsh-client-ui-theme/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
 }
 
 declare module '@deepseek-ai/dsh-client-ui-renderer/src/client/bind' {
@@ -123,9 +138,10 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/src/client/bind' {
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
+  import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
   /** Live schemastery node (introspection face this package consumes). */
   export interface SchemaNode {
     type: string
@@ -138,40 +154,61 @@ declare module '@deepseek-ai/dsh-client-ui-settings/client' {
     rehydrate(serialized: unknown): SchemaNode
     nodeAtPath(root: unknown, path: readonly string[]): SchemaNode | undefined
   }
+  /** Settings-namespace scope contracts (settings-contract.ts, dsh-v0.1.2-alpha.1). */
+  export interface SettingsScopeSnapshot<T> {
+    status: 'loading' | 'ready' | 'unavailable'
+    value: T | undefined
+    base: unknown
+    user: unknown
+    revision: number | undefined
+    writable: boolean
+    mode: 'host' | 'memory'
+  }
+  export interface SettingsScopeSpec<T> {
+    namespace: string
+    decode?: (section: unknown) => T | undefined
+  }
+  export interface SettingsScope<T> {
+    getSnapshot(): SettingsScopeSnapshot<T>
+    subscribe(listener: () => void): () => void
+    mutate(ops: readonly SettingsPathOpView[], expectedRevision?: number): Promise<void>
+    set(field: string, value: unknown): Promise<void>
+    unset(field: string): Promise<void>
+  }
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings-general/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings-models/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
 }
 
 declare module '@deepseek-ai/dsh-client-ui-agent-preset/client' {
-  import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+  import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
-  export function apply(ctx: ClientContext): void
+  export function apply(ctx: Context): void
 }
 
 declare module '@deepseek-ai/dsh-api-remotes/client' {
-  /** Wire view of one registered settings namespace (a settings.describe row). */
+  /** Wire view of one registered settings namespace (a settings/describe row). */
   export interface SettingsNamespaceView {
     /** Namespace key (`permission`, `ui-conversation`, …). */
     ns: string
@@ -189,6 +226,35 @@ declare module '@deepseek-ai/dsh-api-remotes/client' {
     secrets: readonly { path: readonly string[]; set: boolean }[]
     /** Monotonic revision of the raw user section this view was read at. */
     revision: number
+  }
+  /** One path-addressed edit carried by a remote settings write (dsh-v0.1.2-alpha.1). */
+  export type SettingsPathOpView =
+    | { op: 'set'; path: string[]; value: unknown }
+    | { op: 'unset'; path: string[] }
+  /** The full `settings/describe` answer. */
+  export interface SettingsDescribeValue {
+    writable: boolean
+    hasDocument: boolean
+    namespaces: readonly SettingsNamespaceView[]
+  }
+}
+
+declare module '@deepseek-ai/dsh-api-session-controller/client' {
+  /** Session-list state (moved here from the dissolved dsh-client-runtime). */
+  export interface SessionListState {}
+  export interface SessionSummary {
+    id: string
+    title: string
+    updatedAt: number
+  }
+}
+
+declare module '@deepseek-ai/dsh-api-workspace-controller/client' {
+  /** Workspace identity (moved here from the dissolved dsh-client-runtime). */
+  export type WorkspaceId = string & { readonly __workspace?: never }
+  export interface WorkspaceView {
+    id: WorkspaceId
+    path: string
   }
 }
 
@@ -239,10 +305,12 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     dense?: boolean
     compact?: boolean
   }): ReactNode
+  /** RiskConfirmation: `closeLabel` became REQUIRED in dsh-v0.1.2-alpha.1 (forwards to Modal). */
   export function RiskConfirmation(props: {
     open: boolean
     title: string
     description: string
+    closeLabel: string
     acknowledgeLabel: string
     cancelLabel: string
     confirmLabel: string

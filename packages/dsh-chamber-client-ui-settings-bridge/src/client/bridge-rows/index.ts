@@ -14,7 +14,7 @@
  * parity, so a future real remote gains push invalidation for free.
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { conversationZh, conversationEn, permissionZh, permissionEn } from './locales.ts'
 import { BusyEnterPolicy, CONVERSATION_SETTINGS_NAMESPACE } from './enter-row-controller.ts'
 import type { BusyEnterBehavior } from './enter-row-controller.ts'

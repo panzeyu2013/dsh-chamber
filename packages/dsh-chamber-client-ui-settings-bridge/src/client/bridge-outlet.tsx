@@ -21,7 +21,7 @@ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-ui-renderer/src/cl
 import type {
   HostObservable, LocaleFace, RenderOpts, SnapshotSelectorHook, StoredEntry, StoreInstanceLike, Translate,
 } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 
 /** Type-erased component props share (mirror of the official render boundary). */
 type InjectedProps = Record<string, unknown>

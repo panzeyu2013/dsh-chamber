@@ -17,9 +17,9 @@
  * registrations, and settings-scope subscriptions).
  */
 import { Context } from '@deepseek-ai/cordis'
-import { SlotRegistry, type ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { LocaleFace, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
-import { getBridgeApiClient, type BridgeApiClient, type BridgeRpcResult } from './bridge-api.ts'
+import { getBridgeApiClient, type BridgeApiClient } from './bridge-api.ts'
 
 import * as UiSettings from '@deepseek-ai/dsh-client-ui-settings/client'
 import * as UiSettingsGeneral from '@deepseek-ai/dsh-client-ui-settings-general/client'
@@ -45,18 +45,24 @@ import {
 export interface FakeConnectionHandle {
   api: BridgeApiClient
   isLoopback: boolean
-  hostDescription: null
   rpc: Record<string, never>
   start: () => { stop(): void }
 }
 
-/** The plugin-inventory remote face (Typert Remote result shape — the official tab reads result.ok / result.error / result.value). */
-function pluginInventoryFace(api: BridgeApiClient) {
+/**
+ * The Typert Remote namespaces the bridged official settings plugins consume,
+ * all backed by the per-instance bridge client. Every method returns the
+ * `RemoteResult` union (`{ok:true,value}` / `{ok:false,error}`) exactly as
+ * the generated client would.
+ */
+function remoteFaces(api: BridgeApiClient) {
   return {
-    list: async (): Promise<BridgeRpcResult> => {
-      const envelope = await api.pluginInventory.list()
-      return envelope.result
-    },
+    settings: api.settings,
+    credentials: api.credentials,
+    llm: api.llm,
+    agentPresets: api.agentPresets,
+    session: api.session,
+    pluginInventory: api.pluginInventory,
   }
 }
 
@@ -73,7 +79,7 @@ function buildRemoteStub(api: BridgeApiClient) {
       return () => {}
     },
     $dispatch(_event: unknown, _args: unknown[]): void {},
-    pluginInventory: pluginInventoryFace(api),
+    ...remoteFaces(api),
   }
 }
 
@@ -96,7 +102,7 @@ export interface BridgeSession {
 }
 
 /** One official settings plugin row (inject + apply pair from the package's client half). */
-type SettingsPlugin = { inject: readonly string[]; apply(ctx: ClientContext): void }
+type SettingsPlugin = { inject: readonly string[]; apply(ctx: Context): void }
 
 /** The official settings plugin subset the child context mounts. */
 const SETTINGS_PLUGINS: readonly SettingsPlugin[] = [
@@ -125,7 +131,7 @@ const SETTINGS_PLUGINS: readonly SettingsPlugin[] = [
  */
 const DECLARATION_PLUGIN: SettingsPlugin = {
   inject: ['slots'],
-  apply(ctx: ClientContext): void {
+  apply(ctx: Context): void {
     const inert = (): null => null
     ctx.slots.register({
       name: 'root',
@@ -204,16 +210,24 @@ export async function mountBridgeSession(server: RuntimeServerProjection): Promi
     const connection: FakeConnectionHandle = {
       api,
       isLoopback: true,
-      hostDescription: null,
       rpc: {},
       start: () => ({ stop() {} }),
     }
     ctx.provide('connection', connection)
+    // The stub `remote` carries every namespace the mounted official plugins'
+    // injects wait on (`remote.settings`, `remote.credentials`, `remote.llm`,
+    // `remote.agentPresets`, `remote.session`, `remote.pluginInventory`) — the
+    // official api-gateway provides each via $mount accessors; the stub
+    // provides them as direct cordis services (property + service name, the
+    // same pair the old pluginInventory face used). Without them the settings
+    // chain can never satisfy its inject and the 5s mount gate fails loud.
     ctx.provide('remote', buildRemoteStub(api))
-    // The `remote.pluginInventory` cordis service name the plugin-inventory
-    // plugin's inject waits on (the official api-gateway provides it via
-    // $mount; the stub provides it directly).
-    ctx.provide('remote.pluginInventory', pluginInventoryFace(api))
+    ctx.provide('remote.settings', api.settings)
+    ctx.provide('remote.credentials', api.credentials)
+    ctx.provide('remote.llm', api.llm)
+    ctx.provide('remote.agentPresets', api.agentPresets)
+    ctx.provide('remote.session', api.session)
+    ctx.provide('remote.pluginInventory', api.pluginInventory)
     // The agent-preset settings section is not first-screen (LCP/perf pass,
     // P4): its bundle is a lazy vite chunk of the chamber build, fetched here
     // — at settings-page mount, well after the boot settled — instead of

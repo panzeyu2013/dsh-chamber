@@ -10,7 +10,7 @@
  * so the source branch is derived from capability facts rather than an id
  * prefix and is never captured from another server.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { DshRuntimeSection } from './DshRuntimeSection.tsx'
 import {
