@@ -2,58 +2,63 @@
  * Pure construction policy for the browser connection plugin.
  *
  * This leaf deliberately owns no transport implementation imports: production
- * injects `WebApiClient` (the shared HTTP + WebSocket carrier) and
- * `createWebConnectionRpc`, while node:test can pin that the SAME resolved
- * per-entry base path reaches both without loading the source-only vendor
- * graph. Keeping the decision here also prevents a future fixture/transport
- * refactor from silently dropping the prefix from only one carrier.
+ * injects `createWebConnectionRpc` (the generic RPC carrier), while node:test
+ * can pin that the SAME resolved per-entry base path reaches it without
+ * loading the source-only vendor graph. Keeping the decision here also
+ * prevents a future fixture/transport refactor from silently dropping the
+ * prefix from the carrier.
+ *
+ * Rebased for upstream v0.1.2-alpha.1: the WebApiClient/IApiClient half is
+ * gone (the upstream API-client surface was deleted with the downlinks), so
+ * the assembly now owns the generic RPC carrier only — plus the worker-local
+ * stream opener when the page-owned transport provides one. The module shape
+ * (resolve one prefix, fan it into every carrier) and the export names are
+ * unchanged.
  */
 import { resolveInstanceBasePath } from '../api-path.ts'
+import type { RpcFetch, RpcStreamOpen } from './rpc.ts'
 
 /** Optional page-owned physical transport (worker preview upstream seam). */
-export interface CarrierTransport<ApiClient, RpcFetch> {
-  createApiClient(): ApiClient
+export interface CarrierTransport {
   fetch: RpcFetch
+  openStream?: RpcStreamOpen
 }
 
-/** Fixture carrier: the fixture API object also owns its generic RPC face. */
-export type FixtureCarrier<ApiClient, Rpc> = ApiClient & { readonly rpc: Rpc }
+/** Fixture carrier: the fixture API also owns its generic RPC face. */
+export type FixtureCarrier<Rpc> = Rpc
 
 /** Factories supplied by the browser plugin's production implementation. */
-export interface ConnectionCarrierFactories<ApiClient, Rpc, RpcFetch> {
-  /** Construct the one carrier used by both unary HTTP and event WebSockets. */
-  createHttpAndWebSocketApi(options: { basePath: string }): ApiClient
+export interface ConnectionCarrierFactories<Rpc> {
   /** Construct the generic RPC carrier over the same per-entry prefix. */
-  createRpc(options: { basePath: string; doFetch?: RpcFetch }): Rpc
+  createRpc(options: { basePath: string; doFetch?: RpcFetch; openStream?: RpcStreamOpen }): Rpc
 }
 
 /** Complete set of carriers installed into `ctx.connection`. */
-export interface ConnectionCarrierAssembly<ApiClient, Rpc> {
+export interface ConnectionCarrierAssembly<Rpc> {
   readonly basePath: string
-  readonly api: ApiClient
   readonly rpc: Rpc
 }
 
 /**
- * Resolve one immutable per-entry prefix and fan it out to every web carrier.
+ * Resolve one immutable per-entry prefix and fan it out to the RPC carrier.
  *
  * Fixture and page-owned transports retain their upstream precedence. Even
- * when a page-owned transport replaces the HTTP/WS API half, the generic RPC
- * factory still receives the same basePath plus that transport's fetch hook.
+ * when a page-owned transport replaces the fetch/stream halves, the generic
+ * RPC factory still receives the same basePath plus that transport's hooks.
  */
-export function assembleConnectionCarriers<ApiClient, Rpc, RpcFetch>(
+export function assembleConnectionCarriers<Rpc>(
   explicitBasePath: string | undefined,
-  fixture: FixtureCarrier<ApiClient, Rpc> | undefined,
-  transport: CarrierTransport<ApiClient, RpcFetch> | undefined,
-  factories: ConnectionCarrierFactories<ApiClient, Rpc, RpcFetch>,
-): ConnectionCarrierAssembly<ApiClient, Rpc> {
+  fixtureRpc: Rpc | undefined,
+  transport: CarrierTransport | undefined,
+  factories: ConnectionCarrierFactories<Rpc>,
+): ConnectionCarrierAssembly<Rpc> {
   const basePath = resolveInstanceBasePath(explicitBasePath)
-  const api = fixture
-    ?? transport?.createApiClient()
-    ?? factories.createHttpAndWebSocketApi({ basePath })
-  const rpc = fixture?.rpc ?? factories.createRpc({
+  const rpc = fixtureRpc ?? factories.createRpc({
     basePath,
-    ...(transport === undefined ? {} : { doFetch: transport.fetch }),
+    ...(transport === undefined ? {} : {
+      doFetch: transport.fetch,
+      ...(transport.openStream === undefined ? {} : { openStream: transport.openStream }),
+    }),
   })
-  return { basePath, api, rpc }
+  return { basePath, rpc }
 }

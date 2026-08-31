@@ -5,18 +5,16 @@
  *
  * ## Why
  *
- * The two event downlinks (`events.mux` / `events.host`) are downlink-only
- * WebSockets with no heartbeat on either side: the host never pings, and the
- * host's ws server closes (1008) any client message, so the browser can never
- * probe liveness itself. After an OS sleep/wake or a network change the
- * socket can silently die (half-open TCP, flushed loopback state) WITHOUT ever
- * firing close/error — the pump then stays "connected" forever while receiving
- * nothing. The session UI freezes on its last known state (a stuck
+ * The push carrier (currently the api-gateway `/api/remote.mux` WebSocket;
+ * previously the `events.mux` / `events.host` downlinks) has no client-side
+ * heartbeat: after an OS sleep/wake or a network change the socket can
+ * silently die (half-open TCP, flushed loopback state) WITHOUT ever firing
+ * close/error — the generation loop then stays "connected" forever while
+ * receiving nothing. The session UI freezes on its last known state (a stuck
  * "Deep diving..." row) although the backend keeps processing and the message
- * POST (a fresh HTTP connection) succeeds. A restart is the recovery: fresh
- * streams re-run the readiness handshake, the host replays baselines and the
- * runtime re-syncs session state from `sessions.list` (the stuck running bit
- * converges).
+ * POST (a fresh HTTP connection) succeeds. A restart is the recovery: a fresh
+ * generation re-runs the readiness handshake, the host replays baselines and
+ * the runtime re-syncs session state (the stuck running bit converges).
  *
  * The chamber shell already restarts on OS wake (`dsh-chamber:system-resume`,
  * design 14 D4). This module adds the fallbacks that cover wake/network cases

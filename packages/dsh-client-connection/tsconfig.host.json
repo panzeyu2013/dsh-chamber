@@ -6,9 +6,6 @@
     "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo",
     "erasableSyntaxOnly": false,
     "paths": {
-      "@deepseek-ai/dsh-host-apiproxy/api/*": ["../../vendor/harness-packages/@deepseek-ai/dsh-host-apiproxy/src/api/*.ts"],
-      "@deepseek-ai/dsh-host-apiproxy/api": ["../../vendor/harness-packages/@deepseek-ai/dsh-host-apiproxy/src/api/index.ts"],
-      "@deepseek-ai/dsh-host-apiproxy/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-host-apiproxy/src/fetch/client.ts"],
       "@deepseek-ai/dsh-commands/brand": ["../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/brand.ts"],
       "@deepseek-ai/dsh-commands/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/types.ts"],
       "@deepseek-ai/dsh-llm/brand": ["../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/brand.ts"],
@@ -24,12 +21,13 @@
   "files": [
     "src/api-path.ts",
     "src/api-request-trust.ts",
+    "src/browser-auth.ts",
     "src/http-bridge.ts",
     "src/index.ts",
     "src/invariant.ts",
     "src/loopback-hostname.ts",
     "src/rpc-host.ts",
-    "src/rpc.ts",
-    "src/websocket-downlink.ts"
+    "src/rpc-schema.ts",
+    "src/rpc.ts"
   ]
 }

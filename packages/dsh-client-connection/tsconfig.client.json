@@ -6,16 +6,18 @@
     "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo",
     "erasableSyntaxOnly": false,
     "paths": {
-      "@deepseek-ai/dsh-host-apiproxy/api/*": ["../../vendor/harness-packages/@deepseek-ai/dsh-host-apiproxy/src/api/*.ts"],
-      "@deepseek-ai/dsh-host-apiproxy/api": ["../../vendor/harness-packages/@deepseek-ai/dsh-host-apiproxy/src/api/index.ts"],
-      "@deepseek-ai/dsh-host-apiproxy/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-host-apiproxy/src/fetch/client.ts"],
       "@deepseek-ai/dsh-commands/brand": ["../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/brand.ts"],
       "@deepseek-ai/dsh-commands/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/types.ts"],
+      "@deepseek-ai/dsh-credentials/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-credentials/src/types.ts"],
+      "@deepseek-ai/dsh-host-directory-picker/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-host-directory-picker/src/types.ts"],
       "@deepseek-ai/dsh-llm/brand": ["../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/brand.ts"],
       "@deepseek-ai/dsh-llm/message": ["../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/message.ts"],
       "@deepseek-ai/dsh-llm/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/types.ts"],
+      "@deepseek-ai/dsh-session/chunk-rows": ["../../vendor/harness-packages/@deepseek-ai/dsh-session/src/chunk-rows.ts"],
       "@deepseek-ai/dsh-session/surface": ["../../vendor/harness-packages/@deepseek-ai/dsh-session/src/surface.ts"],
       "@deepseek-ai/dsh-session/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-session/src/types.ts"],
+      "@deepseek-ai/dsh-settings/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-settings/src/types.ts"],
+      "@deepseek-ai/dsh-tool-todo/client": ["../../vendor/harness-packages/@deepseek-ai/dsh-tool-todo/src/client.ts"],
       "@deepseek-ai/dsh-tools/presentation": ["../../vendor/harness-packages/@deepseek-ai/dsh-tools/src/presentation.ts"],
       "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"]
     }
@@ -31,7 +33,6 @@
     "src/client/liveness-triggers.ts",
     "src/client/random-uuid.ts",
     "src/client/rpc.ts",
-    "src/client/web-api-client.ts",
     "src/loopback-hostname.ts",
     "src/rpc.ts"
   ]

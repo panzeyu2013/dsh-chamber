@@ -1,23 +1,23 @@
 /**
  * Behavior gate for the ConnectionPlugin construction seam (design 05 §4/§6).
- * The production plugin supplies WebApiClient as the single HTTP + WebSocket
- * carrier factory and createWebConnectionRpc as the generic RPC factory; this
- * test pins that its explicit per-entry config reaches BOTH constructors.
+ * The production plugin supplies createWebConnectionRpc as the generic RPC
+ * factory; this test pins that its explicit per-entry config reaches the
+ * constructor (and that a page-owned transport's fetch/stream hooks ride
+ * along). Rebased for upstream v0.1.2: the HTTP/WS API-carrier half no longer
+ * exists — the assembly owns the generic RPC carrier only.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { assembleConnectionCarriers } from '../src/client/carrier-assembly.ts'
 
-test('carrier assembly: explicit ConnectionPlugin basePath reaches HTTP/WS and generic RPC', () => {
+test('carrier assembly: explicit ConnectionPlugin basePath reaches the generic RPC factory', () => {
   const previousWindow = (globalThis as { window?: unknown }).window
   ;(globalThis as Record<string, unknown>).window = {
     // The explicit per-entry value must win over the legacy page-global fallback.
     __DSH_BASE_PATH__: '/api/i/ssh-wrong',
   }
-  const httpAndWebSocketApi = { kind: 'web-api' }
   const genericRpc = { kind: 'rpc' }
-  const apiOptions: unknown[] = []
   const rpcOptions: unknown[] = []
   try {
     const assembly = assembleConnectionCarriers(
@@ -25,10 +25,6 @@ test('carrier assembly: explicit ConnectionPlugin basePath reaches HTTP/WS and g
       undefined,
       undefined,
       {
-        createHttpAndWebSocketApi(options) {
-          apiOptions.push(options)
-          return httpAndWebSocketApi
-        },
         createRpc(options) {
           rpcOptions.push(options)
           return genericRpc
@@ -37,9 +33,7 @@ test('carrier assembly: explicit ConnectionPlugin basePath reaches HTTP/WS and g
     )
 
     assert.equal(assembly.basePath, '/api/i/ssh-right')
-    assert.equal(assembly.api, httpAndWebSocketApi)
     assert.equal(assembly.rpc, genericRpc)
-    assert.deepEqual(apiOptions, [{ basePath: '/api/i/ssh-right' }])
     assert.deepEqual(rpcOptions, [{ basePath: '/api/i/ssh-right' }])
   } finally {
     if (previousWindow === undefined) delete (globalThis as Record<string, unknown>).window
@@ -47,23 +41,18 @@ test('carrier assembly: explicit ConnectionPlugin basePath reaches HTTP/WS and g
   }
 })
 
-test('carrier assembly: page transport replaces HTTP/WS but preserves basePath for generic RPC', () => {
-  const transportApi = { kind: 'transport-api' }
+test('carrier assembly: page transport preserves basePath and fans fetch/openStream into the RPC factory', () => {
   const transportFetch = () => Promise.resolve(new Response())
-  let webApiCalls = 0
+  const openStream = () => async function* stream() { yield undefined }()
   const rpcOptions: unknown[] = []
   const assembly = assembleConnectionCarriers(
     '/api/i/local',
     undefined,
     {
-      createApiClient: () => transportApi,
       fetch: transportFetch,
+      openStream,
     },
     {
-      createHttpAndWebSocketApi() {
-        webApiCalls += 1
-        return { kind: 'unexpected-web-api' }
-      },
       createRpc(options) {
         rpcOptions.push(options)
         return { kind: 'rpc' }
@@ -71,24 +60,37 @@ test('carrier assembly: page transport replaces HTTP/WS but preserves basePath f
     },
   )
 
-  assert.equal(assembly.api, transportApi)
-  assert.equal(webApiCalls, 0)
+  assert.equal(assembly.basePath, '/api/i/local')
+  assert.deepEqual(rpcOptions, [{ basePath: '/api/i/local', doFetch: transportFetch, openStream }])
+})
+
+test('carrier assembly: a page transport without a stream opener passes only the fetch hook', () => {
+  const transportFetch = () => Promise.resolve(new Response())
+  const rpcOptions: unknown[] = []
+  const assembly = assembleConnectionCarriers(
+    '/api/i/local',
+    undefined,
+    { fetch: transportFetch },
+    {
+      createRpc(options) {
+        rpcOptions.push(options)
+        return { kind: 'rpc' }
+      },
+    },
+  )
+
+  assert.equal(assembly.basePath, '/api/i/local')
   assert.deepEqual(rpcOptions, [{ basePath: '/api/i/local', doFetch: transportFetch }])
 })
 
-test('carrier assembly: fixture owns both halves and no web constructor runs', () => {
+test('carrier assembly: fixture owns the RPC half and no web constructor runs', () => {
   const fixtureRpc = { kind: 'fixture-rpc' }
-  const fixture = { kind: 'fixture-api', rpc: fixtureRpc }
   let factoryCalls = 0
   const assembly = assembleConnectionCarriers(
     '/api/i/local',
-    fixture,
+    fixtureRpc,
     undefined,
     {
-      createHttpAndWebSocketApi() {
-        factoryCalls += 1
-        return { kind: 'unexpected-api' }
-      },
       createRpc() {
         factoryCalls += 1
         return { kind: 'unexpected-rpc' }
@@ -96,7 +98,7 @@ test('carrier assembly: fixture owns both halves and no web constructor runs', (
     },
   )
 
-  assert.equal(assembly.api, fixture)
+  assert.equal(assembly.basePath, '/api/i/local')
   assert.equal(assembly.rpc, fixtureRpc)
   assert.equal(factoryCalls, 0)
 })

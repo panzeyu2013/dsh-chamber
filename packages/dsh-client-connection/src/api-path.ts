@@ -1,28 +1,27 @@
 /**
  * The /api URL prefix — single source for both halves of the web transport.
- * The node half registers this prefix on the web server; both halves share the
- * event paths below for the browser WebSocket downlinks.
+ * The node half registers this prefix on the web server.
  *
  * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
  *
  * This is one of the only dsh source files modified by chamber: the browser
- * half learns a per-instance base path so every RPC/WS path lands under the
+ * half learns a per-instance base path so every RPC path lands under the
  * control-plane's same-origin per-instance proxy prefix (`/api/i/<id>`), which
  * strips the prefix and forwards the remainder to the instance's own `/api`
  * tree (design 03 §3.1). The default is empty (stock behaviour: paths carry
  * `/api` as authored below). An explicit argument (used by chamber's private
  * per-entry Context) is authoritative; `window.__DSH_BASE_PATH__` remains a
  * compatibility fallback for other embedders.
+ *
+ * Rebased for upstream v0.1.2-alpha.1: the two WebSocket-downlink path
+ * constants were deleted upstream together with the `events.mux`/`events.host`
+ * downlinks; the push carrier now lives in `@deepseek-ai/dsh-api-gateway`'s
+ * `/api/remote.mux` stream (vendor-owned, see the design-05 base-path
+ * migration decision). Only the per-entry prefix helpers remain chamber-owned.
  */
 
 /** Route prefix owning every api request (`/api` and `/api/<anything>`). */
 export const API_PATH = '/api'
-
-/** Browser mux-frame WebSocket pathname. */
-export const MUX_EVENTS_PATH = `${API_PATH}/events.mux`
-
-/** Browser host-frame WebSocket pathname. */
-export const HOST_EVENTS_PATH = `${API_PATH}/events.host`
 
 declare global {
   interface Window {
