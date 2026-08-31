@@ -294,7 +294,7 @@ test('scheduler interval prompts are single-flight', async () => {
   scheduler.stop()
 })
 
-test('scheduler fires session/prompt with the dsh 0.1.2-alpha.1 wire shape (requestId+mode+content)', async () => {
+test('scheduler fires session/prompt with the dsh 0.1.2-alpha.2 wire shape (requestId+mode+content)', async () => {
   // Live finding: the old {sessionId, prompt} payload was rejected by the
   // real wire ("invalid payload for session/prompt") — every scheduled
   // prompt failed validation. The accepted shape is
@@ -338,7 +338,7 @@ test('a deterministic dsh rejection terminates a one-shot job and persists the r
     onJobsChanged: async jobs => { persisted.push(jobs) },
     callDsh: (async () => {
       calls += 1
-      throw new RpcBusinessError({ code: 'session-not-found', message: 'target session deleted' })
+      throw new RpcBusinessError({ code: 'session/not-found', message: 'target session deleted' })
     }) as any,
   })
   scheduler.schedule({ delayMs: 0, intervalMs: null, targetSessionId: 's1', prompt: 'no retry' })

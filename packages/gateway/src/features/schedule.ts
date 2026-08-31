@@ -82,7 +82,8 @@ export function createScheduler(deps: {
       // 0.1.1-rc.2 {sessionId, mode, content} shape (without requestId) was
       // rejected with "invalid payload for session/prompt" and every scheduled
       // prompt failed validation (live finding, Linux + macOS, verified
-      // against the real wire). requestId is client-minted, persisted in the
+      // against the real wire; unchanged through 0.1.2-alpha.2). requestId is
+      // client-minted, persisted in the
       // user message and echoed back on SessionQueuedItem.rpcId; the response
       // `command?` slot was removed (the chamber scheduler never consumed it).
       await callDsh(baseUrl, 'session/prompt', {

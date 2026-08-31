@@ -45,14 +45,22 @@
  * chamber-entry.ts, never a registered client plugin, and the host graph
  * cannot carry a row for it.
  *
- * dsh-v0.1.2-alpha.1 (decision D6): `@deepseek-ai/dsh-client-ui-cordis` (the
- * new debug-surface roster row) is intentionally absent too — the chamber
+ * dsh-v0.1.2-alpha.2 (decision D6): `@deepseek-ai/dsh-client-ui-cordis` (the
+ * debug-surface roster row) is intentionally absent too — the chamber
  * composite does not register it and never will; "no such plugin" is
  * behaviorally identical to "plugin absent" (the official row is an opt-in
  * debugger face), so it is absent from the chamber covered/factories tables;
  * the host-graph row still preloads through the same extra-rows mechanism as
  * any other roster entry — one extra combo preload at most, never a
  * duplicate registration (review-round7b P2-5 wording).
+ *
+ * dsh-v0.1.2-alpha.2 roster rows without explicit coverage decisions:
+ * `@deepseek-ai/dsh-client-ui-schedule` (new in alpha.2; the official row is
+ * disabled and the modules loader skips disabled rows, so it never reaches
+ * the host graph) and `@deepseek-ai/dsh-cordis-client-runner` (an active
+ * official row the chamber composite leaves to the extra-rows preload, like
+ * every non-covered active row) — both documented, no explicit exclusion
+ * needed (check-round1b P2-1/P2-2).
  *
  * This constant lives in its own module (re-exported by chamber-entry.ts) on
  * purpose: shell.ts must import it without pulling chamber-entry.ts's

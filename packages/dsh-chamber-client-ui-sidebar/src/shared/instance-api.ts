@@ -336,6 +336,9 @@ export async function createHostDirectory(client: InstanceApiClient, path: strin
   if (result.ok !== true) throw new DirectoryBrowseError(result.error)
   const created = String(result.value ?? '')
   if (created === '') {
+    // Chamber-local synthetic code (display-level; no upstream wire code
+    // exists for "host returned no created path"). Not part of the 0.1.2
+    // namespace vocabulary — consumers match it only via DirectoryBrowseError.
     throw new DirectoryBrowseError({
       code: 'directory-create-failed',
       message: '宿主未返回新建目录路径',

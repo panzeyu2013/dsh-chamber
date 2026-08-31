@@ -48,8 +48,9 @@ export interface ChamberServerAggregate {
   phase: string
   workspaces: ChamberServerWorkspace[]
   /** True when the per-instance aggregate snapshot has actually landed
-   *  (workspace.list + sessions.list) — git-derived rows must not render
-   *  before the workspace list itself (2026-08 user report). Absent on
+   *  (sessions; 0.1.2: workspace.list was deleted upstream and workspace
+   *  groups derive from session cwd facts) — git-derived rows must not
+   *  render before the aggregate itself (2026-08 user report). Absent on
    *  older producers = not ready. */
   aggregateReady?: boolean
   /** Snapshot-fetch error text from the last per-instance pull; absent = ok/not-connected. */

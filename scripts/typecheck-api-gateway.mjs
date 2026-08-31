@@ -43,7 +43,7 @@ for (const role of PROJECTS) {
     encoding: 'utf8',
   })
   if (result.error !== undefined || result.signal !== null) {
-    console.error(result.error ?? `typecheck:connection ${role} terminated by ${String(result.signal)}`)
+    console.error(result.error ?? `typecheck:api-gateway ${role} terminated by ${String(result.signal)}`)
     failed = true
     continue
   }
@@ -84,7 +84,7 @@ for (const role of PROJECTS) {
       console.error(lines.filter(Boolean).join('\n'))
     }
     console.error(
-      `typecheck:connection ${role} FAILED — ${String(owned.length)} owned, `
+      `typecheck:api-gateway ${role} FAILED — ${String(owned.length)} owned, `
       + `${String(unexpected.length)} unexpected diagnostic(s), `
       + `${String(infrastructure.length)} compiler output line(s)`,
     )
@@ -93,7 +93,7 @@ for (const role of PROJECTS) {
   }
 
   console.log(
-    `typecheck:connection ${role} OK (owned files clean; `
+    `typecheck:api-gateway ${role} OK (owned files clean; `
     + `${String(vendor.length)} vendor-source diagnostic(s) filtered)`,
   )
 }
