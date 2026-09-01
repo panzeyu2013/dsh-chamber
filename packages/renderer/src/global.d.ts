@@ -139,6 +139,18 @@ export interface SshStatusProjection {
   retryAttempt: number
   requiresUserAction: boolean
   /**
+   * Class of the terminal failure behind `requiresUserAction === true`
+   * (null otherwise): 'auth' = transport/credential-level (SSH auth, host
+   * key, spawn) — the user must fix SSH credentials; 'endpoint' =
+   * instance-level terminal probe failure — the transport reached the
+   * destination and the destination answered at the protocol level, but the
+   * answer rejected the connection (not a compatible dsh — wrong version /
+   * breaking change / non-dsh service on the port — or an instance-level
+   * auth rejection such as gateway 401/403). The SSH tunnel itself is fine
+   * and the UI must never show an SSH auth hint for it (2026-08 fix).
+   */
+  userActionKind: 'auth' | 'endpoint' | null
+  /**
    * Last known systemd activation state; null = no serviceName configured
    * for the instance, or isActive/start/stop has not run yet (on-demand
    * writes only — no polling).

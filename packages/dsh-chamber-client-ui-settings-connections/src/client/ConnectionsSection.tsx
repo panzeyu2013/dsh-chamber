@@ -46,6 +46,7 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
+import { actionHintKey } from './action-hint.ts'
 import {
   changeDraftEndpointUrl,
   changeDraftKind,
@@ -1172,6 +1173,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 // over a tunnel both exec systemctl over ssh); http direct
                 // endpoints have no service channel.
                 const serviceConfigured = spec.transport === 'ssh' && spec.serviceName !== null
+                // 终态失败提示按类别选择（action-hint.ts）：endpoint 类意味着
+                // SSH 隧道本身正常、问题在远端 dsh 实例——绝不展示 SSH 认证失败
+                // 提示（误导性信息修复）。
+                const hintKey = actionHintKey(spec, status, phase)
                 return (
                   <li key={spec.id} className={css.card}>
                     <div className={css.cardHead}>
@@ -1223,11 +1228,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       )
                       : null}
                     {status?.logSummary !== '' ? <p className={css.hint}>{status?.logSummary}</p> : null}
-                    {status?.requiresUserAction === true && (phase === 'error' || phase === 'degraded')
-                      ? <p className={css.hint}>{t(spec.kind === 'gateway'
-                          ? 'gatewayAuthActionHint'
-                          : spec.transport === 'http' ? 'directActionHint' : 'authActionHint')}</p>
-                      : null}
+                    {hintKey !== null ? <p className={css.hint}>{t(hintKey)}</p> : null}
                     {opError[spec.id] !== undefined ? <p className={css.error} role="alert">{opError[spec.id]}</p> : null}
                     <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]} t={t} />
                     <Button

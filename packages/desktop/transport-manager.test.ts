@@ -474,6 +474,7 @@ test('same-id re-add starts with fresh status, service projection, and logs', as
     remotePort: 3080,
     retryAttempt: 0,
     requiresUserAction: false,
+    userActionKind: null,
     serviceActive: null,
     remoteDshHome: null,
     logSummary: '',
@@ -1020,6 +1021,7 @@ test('a terminal failure never arms the slow re-probe', async t => {
   children[0].stderrWrite('Permission denied (publickey).\n')
   await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'terminal auth error')
   assert.equal(manager.status('s1')!.requiresUserAction, true)
+  assert.equal(manager.status('s1')!.userActionKind, 'auth', 'an SSH auth failure is transport-level, not an endpoint failure')
   await sleep(60) // well past slowRetryMs — no probe may fire for a terminal failure
   assert.equal(spawnCalls.length, 1, 'no auto-retry after a terminal failure')
 })
@@ -1033,6 +1035,7 @@ test('an endpoint that accepts TCP but fails the identity verification is never 
   await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'error after verification failures')
   assert.equal(manager.readyUrl('s1'), null, 'a non-dsh endpoint never registers a transport')
   assert.equal(manager.status('s1')!.requiresUserAction, false)
+  assert.equal(manager.status('s1')!.userActionKind, null, 'a transient verification failure carries no terminal class')
   assert.equal(manager.status('s1')!.retryAttempt, 3)
   assert.ok(manager.logs('s1').some(entry => entry.message.includes('the destination is not a dsh instance')), 'the reason lands in the ring buffer')
   assert.ok(manager.status('s1')!.logSummary.includes('max retry attempts exceeded'), 'the projection carries the reason')
@@ -1053,6 +1056,7 @@ test('a DETERMINISTIC verification failure (terminal) lands on error immediately
   await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'error on the FIRST terminal verification failure')
   assert.equal(manager.readyUrl('s1'), null, 'a deterministic non-dsh endpoint never registers a transport')
   assert.equal(manager.status('s1')!.requiresUserAction, true, 'the user must fix the destination (config/port/version)')
+  assert.equal(manager.status('s1')!.userActionKind, 'endpoint', 'a deterministic verification failure is INSTANCE-level — the UI must not suggest fixing SSH credentials')
   assert.equal(manager.status('s1')!.retryAttempt, 0, 'no reconnect cycle started')
   await sleep(80)
   assert.equal(spawnCalls.length, 1, 'exactly one attempt: terminal verification failures are never retried')
@@ -2074,7 +2078,7 @@ test('credential updates reconnect live transports and restore the old transport
   const events: string[] = []
   let status: TransportStatusProjection | null = {
     kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'ready', localPort: 1234, sshPort: 22, remotePort: 17500,
-    retryAttempt: 0, requiresUserAction: false, serviceActive: null,
+    retryAttempt: 0, requiresUserAction: false, userActionKind: null, serviceActive: null,
     remoteDshHome: null, logSummary: '',
   }
   // The ssh PASSWORD is an SSH-TRANSPORT credential (design 17 §2): only a

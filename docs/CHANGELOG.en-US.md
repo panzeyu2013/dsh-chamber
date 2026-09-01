@@ -14,6 +14,18 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Changed
 
+- **Connection failures now distinguish SSH-transport errors from dsh-instance
+  probe failures** — the status projection gains `userActionKind`
+  (`'auth' | 'endpoint' | null`) classifying the terminal failure behind
+  `requiresUserAction`: auth/host-key/spawn failures are transport-level (the
+  connections card keeps the fix-your-SSH-credentials hint), while a
+  deterministic identity-probe failure (the destination ANSWERED the probe
+  but is not a compatible dsh — outdated version / breaking change / a
+  non-dsh service on the port) is instance-level — the SSH tunnel itself is
+  fine, so the card no longer shows the misleading "authentication failed:
+  check the host key…" hint and instead tells the user to check the
+  port/version or upgrade the remote dsh. The terminal/no-auto-retry
+  semantics are unchanged (design 03 §2.2).
 - **dsh baseline upgrade 0.1.2-alpha.2 → 0.1.2-alpha.3** — both lines moved
   together: the build-time source pin (`harness.commit` / submodule gitlink =
   `dd6322d6`) and the bundled runtime (`@deepseek-ai/dsh@0.1.2-alpha.3`).

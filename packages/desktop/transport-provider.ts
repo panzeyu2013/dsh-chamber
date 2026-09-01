@@ -195,6 +195,24 @@ export interface TransportStatusProjection {
   retryAttempt: number
   requiresUserAction: boolean
   /**
+   * Class of the terminal failure behind `requiresUserAction === true`, so
+   * the UI never conflates the two very different repair surfaces
+   * (2026-08 UI misdirection fix):
+   * - 'auth' — transport/credential-level terminal failure (SSH auth, host
+   *   key, spawn): the TRANSPORT itself is broken; the user must fix
+   *   credentials/host key.
+   * - 'endpoint' — instance-level terminal probe failure: the transport
+   *   reached the destination and the destination ANSWERED at the protocol
+   *   level, but the answer rejected the connection — not a compatible dsh
+   *   (wrong version / breaking change / a non-dsh service on the port),
+   *   or an instance-level auth rejection (gateway 401/403). The transport
+   *   (SSH tunnel / HTTP endpoint) is FINE, the remote instance is the
+   *   problem; an SSH auth hint would be a lie.
+   * null whenever requiresUserAction is false (transient failures, provider
+   * exceptions, slow-re-probe error states).
+   */
+  userActionKind: 'auth' | 'endpoint' | null
+  /**
    * Last known remote-service activation state (ssh: systemd); null = no
    * serviceName configured, or start/stop/is-active has not run yet
    * (on-demand writes only — no polling).

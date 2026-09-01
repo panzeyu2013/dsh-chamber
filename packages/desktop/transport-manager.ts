@@ -29,6 +29,10 @@
  *   spawn failure, and DETERMINISTIC endpoint verification failures — a
  *   destination that answered the identity probe but proved not to be a
  *   compatible dsh: never auto-retried, retrying could not change the answer).
+ *   The projected userActionKind discriminates the terminal class ('auth' =
+ *   transport/credential-level vs 'endpoint' = instance-level probe failure),
+ *   so the UI never tells the user to fix SSH credentials when the tunnel
+ *   itself was fine and the remote dsh instance is the problem (2026-08 fix).
  * - Provider exec channel (ssh: remote systemd, ssh-provider.ts) — loud,
  *   never auto-retried, never writes the tunnel's terminal classification.
  * - Per-instance ring-buffer logs (~200 lines), non-secret status
@@ -39,7 +43,8 @@
  * (http://127.0.0.1:<localPort> or a provider endpoint) NEVER leaves this
  * module raw. status() projects {kind, transport, insecureHttp, phase,
  * localPort, sshPort, remotePort, remoteDshHome, retryAttempt,
- * requiresUserAction, serviceActive, logSummary} only — the renderer builds
+ * requiresUserAction, userActionKind, serviceActive, logSummary} only — the
+ * renderer builds
  * webview URLs from localPort alone. No
  * credential material ever rides the command line (provider-owned) and
  * stderr is redacted by the provider before it enters the ring buffer.
@@ -362,6 +367,12 @@ interface InstanceState {
   authFailed: boolean
   retryAttempt: number
   requiresUserAction: boolean
+  /** Class of the terminal failure behind requiresUserAction ('auth' =
+   * transport/credential-level, 'endpoint' = instance-level terminal probe
+   * failure — the transport reached the destination and the answer
+   * rejected the connection); null otherwise. Projected for the UI so an
+   * endpoint failure never masquerades as an SSH auth failure (2026-08 fix). */
+  userActionKind: 'auth' | 'endpoint' | null
   serviceActive: boolean | null
   logSummary: string
   reconnectTimer: ReturnType<typeof setTimeout> | null
@@ -552,6 +563,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         authFailed: false,
         retryAttempt: 0,
         requiresUserAction: false,
+        userActionKind: null,
         serviceActive: null,
         logSummary: '',
         reconnectTimer: null,
@@ -678,12 +690,20 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * configuration/auth failures set requiresUserAction; provider exceptions
    * are terminal for this attempt but remain an internal failure, never a
    * false instruction that the user must repair their connection settings.
+   *
+   * `userActionKind` discriminates the terminal class for the UI (projected
+   * as TransportStatusProjection.userActionKind): 'auth' = transport/
+   * credential-level (SSH auth, host key, spawn), 'endpoint' = instance-level
+   * terminal probe failure (the destination ANSWERED at the protocol level
+   * but rejected the connection — the SSH tunnel itself is fine, so the UI
+   * must never suggest fixing SSH credentials). Defaults to 'auth'.
    */
   function failTerminal(
     id: string,
     state: InstanceState,
     message: string,
     requiresUserAction = true,
+    userActionKind: 'auth' | 'endpoint' | null = 'auth',
   ) {
     if (!isCurrentState(id, state)) return
     if (state.phase === 'error') return
@@ -700,6 +720,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.localPort = null
     state.retryAttempt = 0
     state.requiresUserAction = requiresUserAction
+    state.userActionKind = requiresUserAction ? userActionKind : null
     transition(id, 'error', message, state)
     appendLogInternal(state, 'error', message)
   }
@@ -836,6 +857,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.childExited = false
     state.authFailed = false
     state.requiresUserAction = false
+    state.userActionKind = null
     // This invocation IS the transport attempt (connect or the scheduled
     // reconnect): bump the epoch so any in-flight invocation of a previous
     // attempt (disconnect → reconnect restarts, spec-edit restarts) aborts
@@ -1083,8 +1105,11 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
               // error immediately instead of burning the bounded reconnect
               // cycle (and its UI flicker) on a failure that will repeat.
               // Only transient failures (connection error, timeout) enter
-              // the reconnect path.
-              if (verification.terminal === true) return failTerminal(id, state, reason)
+              // the reconnect path. The failure is INSTANCE-level, not
+              // transport-level: the tunnel/endpoint transport worked and
+              // reached the destination — the UI must show an endpoint
+              // hint, never an SSH auth failure (2026-08 fix).
+              if (verification.terminal === true) return failTerminal(id, state, reason, true, 'endpoint')
               return scheduleReconnect(id, state, reason)
             }
           }
@@ -1524,6 +1549,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.localPort = null
     state.retryAttempt = 0
     state.requiresUserAction = false
+    state.userActionKind = null
     transition(id, 'idle', 'disconnected', state)
     appendLogInternal(state, 'info', 'disconnected')
   }
@@ -1548,6 +1574,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       remotePort: spec.remotePort,
       retryAttempt: state.retryAttempt,
       requiresUserAction: state.requiresUserAction,
+      userActionKind: state.userActionKind,
       serviceActive: state.serviceActive,
       remoteDshHome: spec.remoteDshHome,
       logSummary: state.logSummary,
