@@ -171,10 +171,13 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-chamber: mobile drawer scroll lock')
 
-  // ---- Escape closes the open drawer (drawer open only) ----
+  // ---- Escape closes the open drawer (touch tier only — the PC-leak
+  // invariant applies to JS too: a desktop browser must keep the official
+  // behavior, where Escape closes the settings dialog, never the sidebar) ----
   ctx.effect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
+      if (!layoutSource.getNarrow()) return
       if (!layoutSource.getCollapsed()) ctx.layout.toggleSidebar()
     }
     document.addEventListener('keydown', onKeyDown, true)

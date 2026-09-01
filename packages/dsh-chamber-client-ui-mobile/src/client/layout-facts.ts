@@ -98,7 +98,19 @@ export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
     notify()
   }
   attach()
-  const bodyObserver = new MutationObserver(attach)
+  // Structural guard (S3): only childList mutations that ADD a root-slot or
+  // frame candidate can change the frame identity — deep content mutations
+  // (chat streaming, typing) must not re-query the document per batch.
+  const isStructuralTarget = (node: Node): boolean =>
+    node instanceof Element
+    && (node.matches('[data-slot="root"]')
+      || node.parentElement?.matches('[data-slot="root"]') === true)
+  const bodyObserver = new MutationObserver(mutations => {
+    if (mutations.some(mutation => mutation.type === 'childList'
+      && Array.from(mutation.addedNodes).some(node => isStructuralTarget(node)))) {
+      attach()
+    }
+  })
   bodyObserver.observe(document.body, { childList: true, subtree: true })
   const onTierChange = (): void => notify()
   tier.addEventListener('change', onTierChange)
