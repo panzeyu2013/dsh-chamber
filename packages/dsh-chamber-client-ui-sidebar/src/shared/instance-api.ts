@@ -35,6 +35,15 @@ export interface WorkspaceRow {
   sessionIds: string[]
   createdAt: string
   updatedAt: string
+  /**
+   * True ONLY for the fallback's cwd-derived groups (workspaceId
+   * `__cwd__:<path>`). Such rows are display-only: they carry no host
+   * workspace identity, so every workspace-scoped mutation (session.create,
+   * workspace.rename/delete/insertBefore/insertSessionBefore) on them fails
+   * fail-closed with `workspace/not-found` on the host. The sidebar must
+   * disable those affordances for synthetic rows (ungrouped-bucket parity).
+   */
+  synthetic?: boolean
 }
 
 /** One session row (SessionSummary wire shape; title rides projections.values.title). */
@@ -402,7 +411,10 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
   // sessions by canonical cwd; groups are ordered by their newest session
   // (the official bootstrap ordering), titles are cwd basenames. The
   // synthetic id is namespaced (`__cwd__:` — never collides with the
-  // UNGROUPED_WORKSPACE_ID bucket or real registered ids).
+  // UNGROUPED_WORKSPACE_ID bucket or real registered ids) and every row is
+  // marked `synthetic: true` — DISPLAY-ONLY: the host does not know these
+  // ids, so the sidebar must disable all workspace-scoped mutations on them
+  // (new session / rename / delete / drag, 2026-11 fix).
   const byCwd = new Map<string, { workspaceId: string; sessions: SessionRow[]; newestAt: number }>()
   for (const session of sessions) {
     if (session.origin === 'subagent' || session.cwd === undefined) continue
@@ -427,6 +439,7 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
       sessionIds: group.sessions.map(session => session.sessionId),
       createdAt: '',
       updatedAt: '',
+      synthetic: true,
     }))
   return { workspaces, sessions, archivedSessionIds: [] }
 }

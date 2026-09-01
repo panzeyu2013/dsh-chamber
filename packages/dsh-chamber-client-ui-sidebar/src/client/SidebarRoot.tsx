@@ -656,7 +656,8 @@ export function SidebarRoot({
         const server = serversById.get(sourceId)
         const wireIds = server === undefined
           ? undefined
-          : server.workspaces.filter(workspace => workspace.ungrouped !== true).map(workspace => workspace.id)
+          : server.workspaces.filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
+            .map(workspace => workspace.id)
         const orderEqual = wireIds !== undefined
           && wireIds.length === override.length
           && wireIds.every((id, index) => override[index] === id)
@@ -1222,7 +1223,10 @@ export function SidebarRoot({
     if (workspaceDropCommitted.current) return
     workspaceDropCommitted.current = true
     setWorkspaceDrag(null)
-    const realWorkspaces = server.workspaces.filter(workspace => workspace.ungrouped !== true)
+    // Synthetic cwd-derived groups (`__cwd__:` ids) have no host workspace
+    // identity: they are neither draggable nor a drop target (2026-11 fix).
+    const realWorkspaces = server.workspaces.filter(workspace =>
+      workspace.ungrouped !== true && workspace.synthetic !== true)
     const targetIndex = realWorkspaces.findIndex(workspace => workspace.id === over.id)
     if (targetIndex === -1) return
     const anchor = over.half === 'before' ? over.id : realWorkspaces[targetIndex + 1]?.id
@@ -1553,8 +1557,11 @@ export function SidebarRoot({
               })()
               // The first insertion boundary of the workspace list draws a
               // top indicator while the marker on the first real group is
-              // suppressed (official list-top drop treatment).
-              const firstReal = server.workspaces.find(workspace => workspace.ungrouped !== true)
+              // suppressed (official list-top drop treatment). Synthetic
+              // cwd-derived groups are never drop targets, so they never
+              // qualify as the "first real" boundary either (2026-11 fix).
+              const firstReal = server.workspaces.find(workspace =>
+                workspace.ungrouped !== true && workspace.synthetic !== true)
               const workspaceDropAtListStart = firstReal !== undefined
                 && workspaceDrag !== null
                 && workspaceDrag.sourceId === server.id
@@ -1589,7 +1596,7 @@ export function SidebarRoot({
                 return insertIndex > groupEnd + 1
               }
               const workspaceDragMarker = (workspace: ChamberServerWorkspace): 'before' | 'after' | null => {
-                if (workspace.ungrouped === true || workspaceDrag === null
+                if (workspace.ungrouped === true || workspace.synthetic === true || workspaceDrag === null
                   || workspaceDrag.sourceId !== server.id || workspaceDrag.over === null) return null
                 if (workspaceDrag.over.id !== workspace.id) return null
                 if (workspaceDropAtListStart && workspace.id === firstReal?.id) return null
@@ -2174,7 +2181,7 @@ export function SidebarRoot({
                               data-chamber-row={workspaceKey}
                               role="treeitem"
                               aria-expanded={!folded}
-                              draggable={workspace.ungrouped !== true}
+                              draggable={workspace.ungrouped !== true && workspace.synthetic !== true}
                               // P2-5 (2026-08 client review): the git occupant
                               // (create/remove buttons) cannot reach the
                               // plugin's suppressClickRef, so the whole header
@@ -2189,7 +2196,8 @@ export function SidebarRoot({
                               }}
                               onDoubleClick={(event) => {
                                 if (suppressClickRef.current) return
-                                if (menuOpen[workspaceKey] === true || workspace.ungrouped === true) return
+                                if (menuOpen[workspaceKey] === true || workspace.ungrouped === true
+                                  || workspace.synthetic === true) return
                                 // Derived (worktree) workspaces have no rename
                                 // (OpenChamber parity — kebab removed too).
                                 if (getWorkspaceGitFlag(server.id, workspace.id)?.isWorktree === true) return
@@ -2201,7 +2209,7 @@ export function SidebarRoot({
                                   value: workspace.title,
                                 })
                               }}
-                              onPointerDown={workspace.ungrouped === true
+                              onPointerDown={workspace.ungrouped === true || workspace.synthetic === true
                                 ? undefined
                                 : (event) => {
                                   // F3 (review 2026-10): same press-target
@@ -2213,7 +2221,7 @@ export function SidebarRoot({
                                   // not swallow its click).
                                   dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
                                 }}
-                              onDragStart={workspace.ungrouped === true
+                              onDragStart={workspace.ungrouped === true || workspace.synthetic === true
                                 ? undefined
                                 : (event) => {
                                   // F3: abort drags that began on a button —
@@ -2305,7 +2313,7 @@ export function SidebarRoot({
                               {visibleSessionCount > 0 && (
                                 <span className={cc.workspaceCount}>{visibleSessionCount}</span>
                               )}
-                              {workspace.ungrouped !== true && (
+                              {workspace.ungrouped !== true && workspace.synthetic !== true && (
                                 // chamber (08 §11): the per-workspace Git
                                 // occupant lives INSIDE the workspace header
                                 // row (OpenChamber-style: the worktree/branch
@@ -2317,7 +2325,7 @@ export function SidebarRoot({
                                   hookContext: { sourceId: server.id, workspaceId: workspace.id },
                                 })
                               )}
-                              {!workspace.ungrouped && (
+                              {!workspace.ungrouped && !workspace.synthetic && (
                                 <span
                                   className={clsx(cc.rowActions, menuOpen[workspaceKey] === true && cc.rowActionsVisible)}
                                   onClick={(event) => {
@@ -2413,7 +2421,8 @@ export function SidebarRoot({
                                 marker === 'after' && cc.dropAfter,
                               )}
                               role="group"
-                              onDragOver={workspace.ungrouped === true || workspaceDrag === null
+                              onDragOver={workspace.ungrouped === true || workspace.synthetic === true
+                                || workspaceDrag === null
                                 || workspaceDrag.sourceId !== server.id
                                 ? undefined
                                 : (event) => {
@@ -2433,7 +2442,8 @@ export function SidebarRoot({
                                     return { ...current, over: { id: workspace.id, half } }
                                   })
                                 }}
-                              onDrop={workspace.ungrouped === true || workspaceDrag === null
+                              onDrop={workspace.ungrouped === true || workspace.synthetic === true
+                                || workspaceDrag === null
                                 || workspaceDrag.sourceId !== server.id
                                 ? undefined
                                 : (event) => {
@@ -2520,8 +2530,13 @@ export function SidebarRoot({
                                     data-session-id={session.id}
                                     data-chamber-row={sessionKey}
                                     data-chamber-ghost={ghost ? '' : undefined}
-                                    draggable={!ghost}
-                                    onDragStart={ghost
+                                    // Synthetic cwd-derived groups are
+                                    // display-only: session rows inside them
+                                    // neither drag nor accept drops (2026-11
+                                    // fix — a wire commit would fail
+                                    // workspace/not-found on the host).
+                                    draggable={!ghost && workspace.synthetic !== true}
+                                    onDragStart={ghost || workspace.synthetic === true
                                       ? undefined
                                       : (event) => {
                                         event.dataTransfer.effectAllowed = 'move'

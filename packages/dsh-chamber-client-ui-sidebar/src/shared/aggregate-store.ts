@@ -27,6 +27,13 @@ export interface ChamberServerWorkspace {
   title: string
   /** True only for the synthetic trailing ungrouped bucket. */
   ungrouped?: boolean
+  /**
+   * True only for the fallback's cwd-derived groups (`__cwd__:` ids,
+   * fetchInstanceSnapshot). Display-only: the host does not know these ids,
+   * so the sidebar must disable every workspace-scoped mutation on them
+   * (ungrouped-bucket parity, 2026-11 fix).
+   */
+  synthetic?: boolean
   sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
 }
 

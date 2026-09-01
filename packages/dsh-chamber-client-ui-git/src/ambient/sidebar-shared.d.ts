@@ -7,6 +7,7 @@ export interface ChamberServerWorkspace {
   id: string
   title: string
   ungrouped?: boolean
+  synthetic?: boolean
   sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
 }
 

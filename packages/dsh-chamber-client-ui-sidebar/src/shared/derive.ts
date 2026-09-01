@@ -681,6 +681,7 @@ export function instanceSnapshotSignature(
       createdAt: w.createdAt,
       updatedAt: w.updatedAt,
       s: w.sessionIds,
+      y: w.synthetic === true,
     })),
     s: snapshot.sessions.map(row => ({
       id: row.sessionId,
@@ -815,6 +816,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
         id: w.id,
         title: w.title,
         ungrouped: w.ungrouped === true,
+        // Render-relevant since 2026-11: synthetic rows disable their
+        // mutation affordances in the sidebar.
+        synthetic: w.synthetic === true,
         sessions: w.sessions.map(x => ({
           id: x.id,
           title: x.title,
@@ -1244,7 +1248,14 @@ export function deriveServerWorkspaces(
         ...(session.blank ? { blank: true } : {}),
       })
     }
-    workspaces.push({ id: workspace.workspaceId, title: workspace.title, sessions })
+    workspaces.push({
+      id: workspace.workspaceId,
+      title: workspace.title,
+      sessions,
+      // Display-only cwd-derived fallback groups (`__cwd__:` ids) keep their
+      // marker so the sidebar can disable their mutation affordances.
+      ...(workspace.synthetic === true ? { synthetic: true as const } : {}),
+    })
   }
   const forkCandidates = new Set<string>()
   const stray = snapshot.sessions.filter(session => {

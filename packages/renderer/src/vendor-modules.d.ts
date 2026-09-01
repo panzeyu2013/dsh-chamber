@@ -264,6 +264,8 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     sessionIds: string[]
     createdAt: string
     updatedAt: string
+    /** True only for the fallback's display-only cwd-derived groups. */
+    synthetic?: boolean
   }
   export interface SessionRow {
     sessionId: string
@@ -330,6 +332,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     id: string
     title: string
     ungrouped?: boolean
+    synthetic?: boolean
     sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
   }
   export interface InstanceRuntimeReport {

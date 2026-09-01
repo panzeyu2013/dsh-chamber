@@ -192,6 +192,24 @@ test('blank sessions are hidden from workspaces and from the ungrouped bucket wh
   assert.equal(result[0].ungrouped, undefined)
 })
 
+test('deriveServerWorkspaces passes the synthetic marker through for cwd-derived fallback groups', () => {
+  // fetchInstanceSnapshot marks its `__cwd__:` groups synthetic: true so the
+  // sidebar can disable their host-scoped mutations (2026-11 fix). The
+  // derive layer must keep the marker; real rows never carry it.
+  const syntheticRow: WorkspaceRow = {
+    ...workspace('__cwd__:/work/a', 'a', ['s1']),
+    synthetic: true,
+  }
+  const result = deriveServerWorkspaces(
+    snapshot([syntheticRow, workspace('w1', 'Work', ['s2'])], [session('s1', 1), session('s2', 2)]),
+    'srv-a',
+    '',
+  )
+  assert.equal(result[0].synthetic, true)
+  assert.equal(result[1].synthetic, undefined)
+  assert.equal(result[0].ungrouped, undefined)
+})
+
 test('a blank session surfaces while it is the current session (official !blank || current rule)', () => {
   const result = deriveServerWorkspaces(
     snapshot(
