@@ -1,6 +1,9 @@
 # Third-party notices
 
-The compiled Gateway distribution bundles the `ws` WebSocket library.
+The compiled Gateway distribution bundles the `ws` WebSocket library and a
+full copy of the pinned `pnpm` package (bundled into `dist/pnpm` at build
+time — the installer's local path runs the runtime installer with it and
+never installs gateway dependencies; see design 18 §9.2).
 
 ## ws
 
@@ -27,3 +30,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## pnpm
+
+Copyright (c) 2015-2023 Zoltan Kochan and other contributors
+
+Licensed under the MIT License. The full license text and the complete
+third-party notices of the pnpm distribution ship inside the bundled package
+at `dist/pnpm/LICENSE` in the published tarball (and at
+`node_modules/pnpm/LICENSE` in the source tree).

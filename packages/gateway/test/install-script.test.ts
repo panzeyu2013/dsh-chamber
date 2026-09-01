@@ -490,15 +490,37 @@ tar() {
   while [[ $# -gt 0 ]]; do
     if [[ "$1" == "-C" ]]; then destination="$2"; shift 2; else shift; fi
   done
-  mkdir -p "$destination/dist"
+  mkdir -p "$destination/dist/pnpm/bin"
   printf '%s\\n' '{"name":"@dsh-chamber/gateway","version":"2.0.0"}' > "$destination/package.json"
   printf '%s\\n' '#!/usr/bin/env node' > "$destination/dist/cli.js"
+  printf '%s\\n' '#!/usr/bin/env node' > "$destination/dist/pnpm/bin/pnpm.cjs"
 }
 stage_local_version /fixture.tgz 2.0.0
 switch_local_current "$VERSIONS_DIR/2.0.0"
 printf '%s\\n' "$(readlink "$GATEWAY_DIR/current")"
 `)
   assert.equal(output.trimEnd().split('\n').at(-1)?.endsWith('/gateway/versions/2.0.0'), true)
+})
+
+test('local staging refuses an artifact without the bundled pnpm (dist/pnpm/bin/pnpm.cjs)', () => {
+  const output = runLibrary(`
+BASE_DIR="$(mktemp -d)"
+GATEWAY_DIR="$BASE_DIR/gateway"
+VERSIONS_DIR="$GATEWAY_DIR/versions"
+tar() {
+  local destination=""
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-C" ]]; then destination="$2"; shift 2; else shift; fi
+  done
+  mkdir -p "$destination/dist"
+  printf '%s\\n' '{"name":"@dsh-chamber/gateway","version":"2.0.0"}' > "$destination/package.json"
+  printf '%s\\n' '#!/usr/bin/env node' > "$destination/dist/cli.js"
+}
+if stage_local_version /fixture.tgz 2.0.0; then printf 'missing-pnpm-accepted\\n'; else printf 'missing-pnpm-refused\\n'; fi
+printf 'staged=%s\\n' "$([[ -e "$VERSIONS_DIR/2.0.0" ]] && printf yes || printf no)"
+`)
+  assert.match(output, /missing-pnpm-refused/)
+  assert.match(output, /staged=no/)
 })
 
 test('health proof rejects an old listener identity and requires the target package version', () => {

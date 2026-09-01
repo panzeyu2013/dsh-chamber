@@ -715,7 +715,7 @@ interface RuntimeHostAdapter {
   envOverridePath(): string | null  // DSH_CHAMBER_DSH_PATH / DSH_GATEWAY_DSH_PATH
   shellVersion(): string         // app version / gateway 包版本（override 失效基准）
   nodeExecutable(): { cmd: string; args: string[]; env: Record<string, string> }
-  pnpmBin(): string              // desktop extraResources 副本 / gateway 依赖 resolve（§9.2）
+  pnpmBin(): string              // desktop extraResources 副本 / gateway bundled dist/pnpm 优先、node_modules resolve 回退（§9.2）
   spawnAndProbe(version: string, isBuiltin: boolean, signal?: AbortSignal): Promise<ProbeResult[]>
   stopHost(): Promise<void>
   restartHost(): Promise<void>   // 事务重启：plane.restartLocal()（§9.3）
@@ -733,6 +733,16 @@ interface RuntimeHostAdapter {
   pack 后 npm 安装会把 pnpm 装入依赖树（解压 ~37MB，运行前不删 artifacts——
   与 extraResources 裁剪版不同，属已知取舍）；pack/install smoke 必须覆盖
   "依赖安装成功 + `gateway --help`"；
+- **2026-11 修订（installer local 形态的打包内嵌）**：`install-gateway.sh` 的
+  local（默认）安装路径**只解包 tarball、从不安装 gateway 依赖**（与 global 的
+  `npm install -g` 不同），因此运行期 pnpm 必须随包携带：`scripts/build.mjs`
+  构建时把 `node_modules/pnpm` **解引用复制**进 `dist/pnpm`（isolated linker 下
+  是符号链接，必须 dereference；版本守卫动态对照 `dependencies.pnpm`，失败即
+  build 失败）；`pnpmEntry()` 优先取 `dist/pnpm/bin/pnpm.cjs`（`fileURLToPath`
+  定位），回退 `require.resolve('pnpm')`（dev/npm 安装形态）；tarball 增大约
+  ~7–8MB（gzip）。安装器 `stage_local_version` 对缺 `dist/pnpm/bin/pnpm.cjs`
+  的资产 fail-fast 拒绝；release.yml smoke 增加 tarball 成员断言与「裸解包
+  （无 npm install）直接 `node dist/pnpm/bin/pnpm.cjs --version`」；
 - 备选（不推荐）：`--pnpm-path` 注入 + PATH 探测——版本漂移违背内嵌定案。
 
 ### 9.3 gateway 宿主

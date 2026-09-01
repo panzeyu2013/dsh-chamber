@@ -8,7 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -39,4 +39,36 @@ test('gateway dist bundle carries the createRequire banner and imports without a
   const module = await import(pathToFileURL(distIndex).href)
   assert.equal(typeof module.createGateway, 'function')
   assert.equal(typeof module.createScheduler, 'function')
+})
+
+test('dist bundles the pinned pnpm the installer local path relies on (design 18 §9.2 D1)', async () => {
+  // dist/ is gitignored: build on demand so the smoke test works from a
+  // clean checkout (same as the banner test above).
+  const pnpmBin = join(packageDir, 'dist', 'pnpm', 'bin', 'pnpm.cjs')
+  if (!existsSync(pnpmBin)) {
+    execFileSync(process.execPath, ['scripts/build.mjs'], { cwd: packageDir, stdio: 'ignore' })
+  }
+  assert.ok(existsSync(pnpmBin), 'scripts/build.mjs must copy the pinned pnpm into dist/pnpm')
+  // Dynamic assertion: the bundled pnpm version must equal the gateway
+  // manifest's dependencies.pnpm (build.mjs enforces the same guard at build
+  // time; re-asserting here keeps a stale dist from slipping through the
+  // smoke). The alternative (hardcoding 11.21.0) would drift from
+  // package.json, which is the single source of truth.
+  const manifest = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8')) as {
+    dependencies: { pnpm: string }
+  }
+  const bundled = JSON.parse(await readFile(join(packageDir, 'dist', 'pnpm', 'package.json'), 'utf8')) as {
+    name: string
+    version: string
+  }
+  assert.equal(bundled.name, 'pnpm')
+  assert.equal(bundled.version, manifest.dependencies.pnpm,
+    'bundled pnpm version must match the gateway dependencies.pnpm pin')
+  // And the bundled pnpm must actually run from the unpacked tree shape —
+  // that is exactly how the installer local path spawns it (plain `node
+  // pnpm.cjs`, no npm-installed dependency tree).
+  const run = spawnSync(process.execPath, [pnpmBin, '--version'], { cwd: packageDir, encoding: 'utf8' })
+  assert.equal(run.status, 0, `node dist/pnpm/bin/pnpm.cjs --version failed: ${run.stderr}`)
+  assert.ok(run.stdout.includes(manifest.dependencies.pnpm),
+    `--version output ${JSON.stringify(run.stdout)} must report the pinned version`)
 })
