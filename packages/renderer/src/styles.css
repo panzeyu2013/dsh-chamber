@@ -337,18 +337,16 @@ body {
   color: var(--text);
 }
 
-/* ---------- 会话行渲染挂起（2026-08 perf pass，缓解长会话 INP） ----------
-   目标：vendor 会话流的每一行（ChatNodeSeat 的 .flowItem，携带稳定的
-   data-chat-flow-key 属性；行内是工具结果/代码块等高成本子树）。
-   content-visibility:auto 让视口外的行跳过 style/layout/paint；auto 关键字
-   记录每行最近一次实际渲染尺寸、fallback 为 320px 估算，避免滚动条长度与
-   底部跟随大幅跳动。仅缓解渲染成本——不减少 DOM 数量与内存（那是上游
-   虚拟化的职责）。若实测底部跟随/滚动锚定有回归，优先调整估算值或缩小
-   选择器范围（如只命中 tool 结果行），规则本身是纯 CSS、可随时回退。 */
-[data-chat-flow-key] {
-  content-visibility: auto;
-  /* Chromium <106 不支持 `auto <length>`（Electron 43 不可达）：固定值兜底，
-     避免仅第一条生效时跳过行高度为 0 导致 scrollHeight 塌缩。 */
-  contain-intrinsic-size: 320px;
-  contain-intrinsic-size: auto 320px;
-}
+/* ---------- 会话行渲染挂起（2026-08 perf pass，已回退） ----------
+   曾在 [data-chat-flow-key]（vendor ChatView 的 .flowItem 行）上使用
+   content-visibility:auto + contain-intrinsic-size:auto 320px 缓解长会话
+   INP。实证回退（真实 Electron 43.4.0 复现）：从未渲染或内容变更后的
+   视口外行按 320px 兜底估算几何，破坏 vendor ChatView 所有读真实布局的
+   几何消费者——轮次导航 rail 跳转落点偏差数千 px、scrollHeight 低估
+   ~31%（长会话底部跟随/回到底部/位置恢复/active mark 连带失效），且 auto
+   记忆尺寸在流式内容变化或会话切换后被丢弃，估算无法自愈。恢复正确性
+   优先：整条规则删除（纯 CSS，零 DOM 影响）。若未来仍需缓解 INP，只能把
+   content-visibility 收窄到行内自包含的重子树（工具结果卡片、代码块，配
+   contain-intrinsic-size: auto <兜底>），且必须回归验证 rail 跳转与底部
+   跟随；行本身（被测量几何的列表项）永远不能挂估算规则。上游引入行
+   虚拟化才是根治方向。 */
