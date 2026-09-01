@@ -233,6 +233,40 @@ printf 'ok\\n'
   assert.match(output, /ok/, 'unset SERVICE_USER must be a no-op, not an unbound-variable error')
 })
 
+test('download_verify RETURN trap must not re-fire with tmp unset in the caller', () => {
+  // Regression: on some bash versions (3.2 and several 4.x/5.x) a RETURN trap
+  // set inside a function is not cleared when that function returns — it
+  // migrates up the call stack and fires again at each enclosing function's
+  // return. download_verify's `trap 'rm -rf "$tmp"' RETURN` therefore fired a
+  // second time at do_install's return, after $tmp (a download_verify local)
+  // was already destroyed: under `set -u` the install died with
+  // 'line <do_install def>: tmp: unbound variable' right after the completion
+  // messages. The trap body must self-disarm and guard `${tmp:-}` so a stale
+  // firing is a no-op instead of a crash.
+  const output = runLibrary(`
+BASE_DIR="$(mktemp -d)"
+GATEWAY_DIR="$BASE_DIR/gateway"
+mkdir -p "$GATEWAY_DIR"
+curl() {
+  local out=""
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-o" ]]; then out="$2"; shift 2; else shift; fi
+  done
+  [[ -n "$out" ]] && printf 'fake-artifact\\n' > "$out"
+}
+sha256sum() { return 0; }
+VERSION=9.9.9
+flow() {
+  download_verify "$GATEWAY_DIR"
+  printf 'flow-return-ok\\n'
+}
+flow
+printf 'done\\n'
+`)
+  assert.match(output, /flow-return-ok/, 'caller functions must survive their return without a set -u crash')
+  assert.match(output, /done/)
+})
+
 test('suggest_port splits its locals so $base is bound before $p reads it', () => {
   // Regression: `local base="$1" p="$base"` expands $base before the local
   // assignment takes effect — under `set -u` the wizard crashed with

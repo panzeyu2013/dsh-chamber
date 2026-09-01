@@ -587,7 +587,14 @@ download_verify() {
   local dest_dir="$1"
   local tmp tgz sha_file
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' RETURN
+  # RETURN trap 在部分 bash（3.2 及若干 4.x/5.x）上不会随函数返回被清除：
+  # 首次在 download_verify 返回时触发（tmp 仍有效）后，还会随调用栈上移，
+  # 在外层函数（如 do_install）返回时再次触发——此时 $tmp 已随局部作用域
+  # 销毁，set -u 下直接 'tmp: unbound variable' 崩溃（实机复现：安装完成页
+  # 全部输出之后报 line 1733: tmp: unbound variable，安装已完成但脚本以
+  # 错误退出）。处理：触发时先自解除（trap - RETURN），并仅在 tmp 仍有效
+  # 时才清理——陈旧触发变成无害空操作，任何 bash 版本行为一致。
+  trap 'trap - RETURN; if [[ -n "${tmp:-}" ]]; then rm -rf "$tmp"; fi' RETURN
   # release 的 .sha256 条目名与资产同名 dsh-chamber-gateway-<ver>.tgz：
   # 下载目标必须与条目一致，sha256sum -c 才能命中（否则必然 fail）。
   tgz="dsh-chamber-gateway-${VERSION}.tgz"
