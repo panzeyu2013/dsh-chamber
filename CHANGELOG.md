@@ -10,7 +10,10 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.2.0-beta.6] - 2026-09-01
+
+> Gateway 编排面剥离（用户拍板）+ 种子注册表桌面同步 + dsh 基线升级
+> 0.1.2-alpha.3，以及 SSH 传输/实例探测区分与插件诊断降噪等收尾变更：
 
 ### 变更
 

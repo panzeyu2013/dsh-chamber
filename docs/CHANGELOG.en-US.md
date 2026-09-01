@@ -10,7 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.0-beta.6] - 2026-09-01
+
+> The gateway orchestration surface is stripped (user decision) + the seed
+> registry with desktop sync + the dsh baseline upgrade to 0.1.2-alpha.3,
+> plus closing fixes distinguishing SSH transport from instance probe
+> failures and reducing plugin-diagnostic noise:
 
 ### Changed
 
