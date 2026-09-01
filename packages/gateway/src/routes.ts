@@ -975,13 +975,14 @@ const CHAMBER_APP_HTML = `<!doctype html>
         <div class="actions">
           <button id="runtime-apply" type="button" disabled>Apply on next start</button>
           <button id="runtime-apply-now" type="button" disabled>Apply now</button>
-          <button id="runtime-rollback" type="button" disabled>Rollback</button>
+          <button id="runtime-rollback" type="button" disabled title="Rollback switches to an older installed version">Rollback</button>
           <button id="runtime-restore" type="button" disabled>Restore builtin</button>
           <button id="runtime-retry-apply" type="button" disabled>Retry apply</button>
           <button id="runtime-retry-restore" type="button" disabled>Retry restore</button>
           <button id="runtime-restart" type="button" disabled>Restart dsh</button>
         </div>
       </div>
+      <p class="subtle">Switch: select a version, then Apply on next start (installs if needed); Rollback is for installed older versions.</p>
       <p id="runtime-versions-status" class="status" role="status"></p>
       <div class="runtime-registry">
         <label class="custom"><span>Registry origin</span><input id="runtime-registry" class="text-input" type="url" autocomplete="off" spellcheck="false" disabled></label>
@@ -1015,6 +1016,9 @@ const CHAMBER_APP_JS = `(function () {
   var runtimeActionRunning = false;
   var runtimeSelectionTouched = false;
   var runtimeSnapshot = null;
+  // version -> cached flag, refreshed by loadRuntimeVersions (the rollback
+  // gate needs the installed-tree info the status projection does not carry).
+  var runtimeCachedVersions = {};
   var RUNTIME_PATHS = {
     status: '/chamber/runtime/status',
     versions: '/chamber/runtime/versions',
@@ -1134,6 +1138,63 @@ const CHAMBER_APP_JS = `(function () {
 
   function runtimeVersion() { return byId('runtime-version').value || null; }
 
+  // SemVer 2.0 precedence for the version dropdown (build metadata ignored;
+  // unparseable strings compare equal and keep their stable sort position at
+  // the tail — the same policy as the settings-bridge selector). Written
+  // regex-free: this is an inline script template, backslash escapes would be
+  // consumed by the template literal.
+  function semverNumericCompare(a, b) {
+    if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+    return a === b ? 0 : (a < b ? -1 : 1);
+  }
+  function semverIsDigits(s) {
+    if (s.length === 0) return false;
+    for (var i = 0; i < s.length; i += 1) {
+      var c = s.charCodeAt(i);
+      if (c < 48 || c > 57) return false;
+    }
+    return true;
+  }
+  function semverParse(value) {
+    var plus = value.indexOf('+');
+    if (plus !== -1) value = value.slice(0, plus);
+    var dash = value.indexOf('-');
+    var core = (dash === -1 ? value : value.slice(0, dash)).split('.');
+    if (core.length !== 3) return null;
+    var nums = [];
+    for (var i = 0; i < 3; i += 1) {
+      var part = core[i];
+      if (!semverIsDigits(part)) return null;
+      if (part.length > 1 && part.charCodeAt(0) === 48) return null; // leading zero
+      nums.push(part);
+    }
+    return { core: nums, prerelease: dash === -1 ? [] : value.slice(dash + 1).split('.') };
+  }
+  function semverCompare(a, b) {
+    var left = semverParse(a), right = semverParse(b);
+    if (left === null || right === null) return 0;
+    for (var i = 0; i < 3; i += 1) {
+      var c = semverNumericCompare(left.core[i], right.core[i]);
+      if (c !== 0) return c;
+    }
+    var lp = left.prerelease, rp = right.prerelease;
+    if (lp.length === 0 || rp.length === 0) {
+      if (lp.length === rp.length) return 0;
+      return lp.length === 0 ? 1 : -1;
+    }
+    var common = Math.min(lp.length, rp.length);
+    for (var j = 0; j < common; j += 1) {
+      var x = lp[j], y = rp[j];
+      if (x === y) continue;
+      var xn = semverIsDigits(x), yn = semverIsDigits(y);
+      if (xn && yn) return semverNumericCompare(x, y);
+      if (xn !== yn) return xn ? -1 : 1;
+      return x < y ? -1 : 1;
+    }
+    if (lp.length === rp.length) return 0;
+    return lp.length < rp.length ? -1 : 1;
+  }
+
   function setRuntimeControls() {
     var row = runtimeSnapshot;
     var selected = runtimeVersion();
@@ -1160,7 +1221,21 @@ const CHAMBER_APP_JS = `(function () {
       || (row.connectionState !== 'ready' && row.connectionState !== 'degraded');
     var applyNowAvailable = row !== null && (row.phase === 'pending' || (row.selectedVersion != null && row.selectedVersion !== row.activeVersion));
     byId('runtime-apply-now').disabled = applyNowBlocked || !applyNowAvailable;
-    byId('runtime-rollback').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
+    // Rollback is direction-gated: only a downgrade to an already-installed
+    // (cached) version may use the rollback route — the server refuses an
+    // upgrade-direction rollback (invalid_target 409), so the UI disables it
+    // up front instead of surfacing a 409. The gate mirrors the server's
+    // guard: it compares against activeVersion, which IS the effective active
+    // version (current pointer ?? builtin anchor — the server's rollback
+    // guard and apply()/apply-now manualRollback formula use the same
+    // effective version, so a builtin-active downgrade stays enabled and is
+    // accepted). Upgrade flows use Install / select + Apply on next start,
+    // which installs the target as needed.
+    var rollbackTarget = row !== null && selected !== null
+      && row.activeVersion !== null && selected !== row.activeVersion
+      && semverCompare(selected, row.activeVersion) === -1
+      && runtimeCachedVersions[selected] === true;
+    byId('runtime-rollback').disabled = mutationBlocked || !rollbackTarget;
     // Design 18 pending terminal gate: restore-builtin is the sole escape.
     // It remains disabled for live install/apply/restart and env/read-only.
     byId('runtime-restore').disabled = baseMutationBlocked || row.hasOverride !== true;
@@ -1236,14 +1311,26 @@ const CHAMBER_APP_JS = `(function () {
     try {
       var payload = ownRecord(await request(RUNTIME_PATHS.versions), 'runtime versions');
       if (!Array.isArray(payload.versions)) throw new Error('Malformed runtime versions response');
+      var rows = payload.versions.map(function (value) {
+        var row = ownRecord(value, 'runtime version');
+        return { version: requiredText(row, 'version', 'runtime version'), cached: row.cached === true };
+      });
+      // Pure semver descending order, mirroring the settings-bridge selector
+      // (design 18 §3.6 A.2 decision 11: no 'latest' recommendation badge —
+      // the data flag is still projected, just not displayed). The active
+      // version is identified by the 'current' marker, not by pinning.
+      rows.sort(function (a, b) { return semverCompare(b.version, a.version); });
+      runtimeCachedVersions = {};
+      rows.forEach(function (row) { runtimeCachedVersions[row.version] = row.cached; });
       var select = byId('runtime-version');
       var previous = runtimeSelectionTouched ? select.value : '';
+      var active = runtimeSnapshot ? runtimeSnapshot.activeVersion : null;
       var fragment = document.createDocumentFragment();
-      payload.versions.forEach(function (value) {
-        var row = ownRecord(value, 'runtime version');
-        var version = requiredText(row, 'version', 'runtime version');
-        var option = document.createElement('option'); option.value = version;
-        option.textContent = 'v' + version + (row.latest === true ? ' · latest' : '') + (row.cached === true ? ' · cached' : '');
+      rows.forEach(function (row) {
+        var option = document.createElement('option'); option.value = row.version;
+        option.textContent = 'v' + row.version
+          + (active !== null && row.version === active ? ' · current' : '')
+          + (row.cached ? ' · cached' : '');
         fragment.appendChild(option);
       });
       select.replaceChildren(fragment);
