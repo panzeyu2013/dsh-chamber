@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-api-gateway",
   "description": "chamber fork (WP3/M3) of the upstream api-gateway CLIENT half (Typert Remote stream/event carriers) with the per-entry base-path patch: the /api/remote.mux WebSocket lands under the control-plane per-instance proxy prefix (basePath=/api/i/<id>). Host-only deps (dsh-host-webserver; stream-server.ts / index.ts not copied) are intentionally dropped from peer/dev sets; exports map mirrors upstream incl. inert ./invariant and ./types subpaths (their sources are host/aux files, not copied).",
-  "version": "0.1.2-alpha.2",
+  "version": "0.1.2-alpha.3",
   "publishConfig": {
     "access": "public"
   },

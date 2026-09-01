@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-web",
   "description": "Web shell kernel: AppWebEntry (module system holding + seed table + two-stage boot + framework-free boot page + rc.2 uiRenderer mount), consumed by the apps/web vite entry",
-  "version": "0.1.2-alpha.2",
+  "version": "0.1.2-alpha.3",
   "publishConfig": {
     "access": "public"
   },
