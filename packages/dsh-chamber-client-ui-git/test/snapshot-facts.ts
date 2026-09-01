@@ -84,6 +84,13 @@ test('safe-remove guard covers main/registration/live/current/fs safety and allo
   assert.equal(removeBlockReason(worktree({ dirty: true })), 'dirty')
   assert.equal(removeBlockReason(worktree({ dirty: null })), 'status-unknown')
   assert.equal(removeBlockReason(worktree({ branch: null })), undefined)
+  // Fail-closed (2026-09): the runtime channel is absent — the current
+  // session is UNKNOWN, so a worktree accounting sessions must block removal.
+  assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), undefined, false, false), 'runtime-unknown')
+  assert.equal(removeBlockReason(worktree({ sessionIds: [] }), undefined, false, false), undefined)
+  // A known blank current still does not block (blankness is only lenient
+  // when the channel is present).
+  assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's', true, false), 'runtime-unknown')
 })
 
 test('session targeting requires a healthy worktree', () => {

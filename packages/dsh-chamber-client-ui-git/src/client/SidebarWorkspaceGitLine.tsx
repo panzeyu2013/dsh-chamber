@@ -76,6 +76,7 @@ function busyLabel(kind: GitBusyKind, t: SidebarWorkspaceGitInjected['t']): stri
 function blockLabel(reason: ReturnType<typeof removeBlockReason>, t: SidebarWorkspaceGitInjected['t']): string | undefined {
   if (reason === 'running') return t('runningBlocked')
   if (reason === 'current') return t('currentBlocked')
+  if (reason === 'runtime-unknown') return t('runtimeUnknownBlocked')
   if (reason === 'locked') return t('lockedBlocked')
   if (reason === 'unhealthy') return t('unhealthyBlocked')
   if (reason === 'dirty') return t('dirtyBlocked')
@@ -92,14 +93,19 @@ export function SidebarWorkspaceGitLine({
   const [removeTarget, setRemoveTarget] = useState<RemoveViewTarget | null>(null)
 
   // The current session is per-SOURCE (this occupant renders inside every
-  // source's workspace groups, not only the current instance's).
-  const currentSessionId = useSyncExternalStore(
+  // source's workspace groups, not only the current instance's). The runtime
+  // channel object doubles as the fail-closed presence flag: when it is
+  // absent (withdrawn while the shell reconnects/reloads), the current
+  // session is UNKNOWN, not "none" — removeBlockReason blocks accordingly.
+  const runtime = useSyncExternalStore(
     chamberBridge.subscribe,
     () => context === undefined
       ? undefined
-      : chamberBridge.getServers().find(server => server.id === context.sourceId)?.runtime?.current,
+      : chamberBridge.getServers().find(server => server.id === context.sourceId)?.runtime,
     () => undefined,
   )
+  const currentSessionId = runtime?.current
+  const runtimeKnown = runtime !== undefined
 
   if (!wide || context === undefined) return null
   const source = gitCoordinator.getSource(context.sourceId)
@@ -231,7 +237,7 @@ export function SidebarWorkspaceGitLine({
   const primary = rows[0]!.worktree
   const busy = source.busy !== undefined
   const actionLocked = busy || source.recovery !== undefined
-  const blocked = removeBlockReason(primary, currentSessionId, currentSessionIsBlank(context.sourceId, currentSessionId))
+  const blocked = removeBlockReason(primary, currentSessionId, currentSessionIsBlank(context.sourceId, currentSessionId), runtimeKnown)
   // Only worktree workspaces (not the repo's main checkout) can be removed as
   // worktrees; the sidebar's own workspace kebab handles plain deletion.
   const canOfferRemove = !primary.isMain && primary.workspaceId !== null

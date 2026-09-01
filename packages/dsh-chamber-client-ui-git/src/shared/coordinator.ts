@@ -613,12 +613,19 @@ export async function removeWorktree(
     }
     const found = findWorktree(fresh.snapshot, target.repoId, target.worktreeId)
     if (found === undefined) throw new Error('工作树已不存在；请刷新后重试')
-    const current = chamberBridge.getServers().find(server => server.id === sourceId)?.runtime?.current
-    const blocked = removeBlockReason(found.worktree, current, currentSessionIsBlank(sourceId, current))
+    const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
+    const current = server?.runtime?.current
+    const blocked = removeBlockReason(
+      found.worktree,
+      current,
+      currentSessionIsBlank(sourceId, current),
+      server?.runtime !== undefined,
+    )
     if (blocked === 'main') throw new Error('主工作树不能删除')
     if (blocked === 'unregistered') throw new Error('该工作树未关联 dsh workspace，不能从此处删除')
     if (blocked === 'running') throw new Error('该工作树仍有运行中的会话')
     if (blocked === 'current') throw new Error('该工作树包含当前正在查看的会话')
+    if (blocked === 'runtime-unknown') throw new Error('无法确认当前会话状态（来源重连中），暂不能删除，请稍后重试')
     if (blocked === 'locked') throw new Error('已锁定的工作树不能删除')
     if (blocked === 'unhealthy') throw new Error('工作树不可用（目录缺失/无效/非 Git 仓库），不能删除')
     // Dirty is NOT an automatic throw here: the dialog collects an explicit

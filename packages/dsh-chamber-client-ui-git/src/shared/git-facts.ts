@@ -66,17 +66,28 @@ export type RemoveBlockReason =
   | 'unregistered'
   | 'running'
   | 'current'
+  | 'runtime-unknown'
   | 'locked'
   | 'unhealthy'
   | 'dirty'
   | 'status-unknown'
   | undefined
 
-/** Safe-remove guard: both fresh running facts and the aggregate current id block removal. */
+/**
+ * Safe-remove guard: both fresh running facts and the aggregate current id
+ * block removal. `runtimeKnown` is the fail-closed half (2026-09 scan): the
+ * per-source `runtime` channel (which carries `current`) withdraws while its
+ * shell reconnects/reloads — treating the resulting `undefined` current as
+ * "not current" would silently open the removal of a worktree holding the
+ * very session the user is viewing. When the runtime channel is absent AND
+ * the worktree accounts sessions, removal is blocked ('runtime-unknown')
+ * until the channel returns.
+ */
 export function removeBlockReason(
   worktree: GitWorktreeInfo,
   currentSessionId?: string,
   currentSessionBlank = false,
+  runtimeKnown = true,
 ): RemoveBlockReason {
   if (worktree.isMain) return 'main'
   if (worktree.workspaceId === null) return 'unregistered'
@@ -85,6 +96,10 @@ export function removeBlockReason(
   // protecting, so it must not block removal (2026-08 user report: clicking
   // "new session" on a worktree and removing it before typing).
   if (currentSessionId !== undefined && !currentSessionBlank && worktree.sessionIds.includes(currentSessionId)) return 'current'
+  // Fail-closed: the runtime channel is absent (withdrawn/not-yet-ready), so
+  // we cannot rule the current session out of this worktree. Blank-current
+  // leniency cannot apply — blankness is unknown too.
+  if (!runtimeKnown && worktree.sessionIds.length > 0) return 'runtime-unknown'
   if (worktree.locked) return 'locked'
   if (worktree.status !== 'ready') return 'unhealthy'
   if (worktree.dirty === true) return 'dirty'
