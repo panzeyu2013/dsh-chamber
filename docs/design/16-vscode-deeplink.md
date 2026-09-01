@@ -249,8 +249,10 @@ detectVscodeAvailability(platform): { available: boolean }
 - 槽是 session 作用域：组件直接收到**本头部所属的 `sessionId`** 与框架全局
   `useWorkspaces` 选择器钩子（同一 store，侧边栏归组同源），**不再直接读 ctx 的
   sessions/workspaces**（inject 声明保持 `['slots','locale']`）；
-- 按钮 CSS：行内 32×32 图标按钮（透明底、hover 主题 tint、focus 环），与头部工具行
-  对齐；aria-label / tooltip / 键盘可聚焦保持；
+- 按钮 CSS：行内 32×32 图标按钮，**样式与 vendor "Session log" pill 同款复用**
+  （`1px solid var(--dsw-alias-border-l2)` 描边、`border-radius: 18px`、透明底、
+  hover 主题 tint、focus 环），与头部工具行对齐；aria-label / tooltip /
+  键盘可聚焦保持；
 - **行内排序（用户要求 2026-08）**：条目注册带 `order: -1`——utilities 行按 `order`
   升序排列（默认 0），因此 vscode 按钮排在 "Session log"（order 0）**左侧**，
   session-log 保持在最右侧；

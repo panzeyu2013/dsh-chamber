@@ -3,9 +3,11 @@
    utilities slot, so this is a plain INLINE icon button in the header's
    right-aligned utilities row (beside the vendor "Session log" pill) — no
    absolute positioning: the header's own flow layout orders it and no
-   frame-level anchor can collide with the header content. Size matches the
-   row height (32px) and mirrors the vendor header-action affordance
-   (transparent base, subtle hover tint, explicit focus ring). */
+   frame-level anchor can collide with the header content. The pill is the
+   vendor "Session log" header action's own affordance reused verbatim
+   (HeaderAction.module.css: 32px row height, 1px --dsw-alias-border-l2
+   hairline, 18px radius, transparent base, hover tint, focus ring), so the
+   two adjacent controls read as one row of matching pills. */
 
 /* The two-button group (main icon button + chevron) reads as one control. */
 .group {
@@ -21,14 +23,25 @@
   width: 32px;
   height: 32px;
   padding: 0;
-  border: none;
-  border-radius: 16px;
+  /* The vendor "Session log" pill's border/radius values, reused verbatim —
+     the hairline outline keeps the icon button visible on the white header
+     (transparent base) exactly like its native neighbour. */
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 18px;
   background: transparent;
   /* The official VS Code logo carries its own brand fill; hover feedback is
      the background tint + a subtle brightness lift on the mark. */
   cursor: pointer;
   outline: none;
   flex: none;
+}
+
+/* In the two-button group the main icon button and the chevron read as one
+   pill: the button drops its right border so the chevron's left border is
+   the single hairline divider between them. */
+.group .button {
+  border-radius: 18px 0 0 18px;
+  border-right: none;
 }
 
 .button:hover,
@@ -79,7 +92,9 @@
 }
 
 /* Chevron dropdown trigger (only when ≥2 apps are usable): a 16px chevron
-   inside the same pill, with a hairline divider on its leading edge. */
+   inside the same pill, with the full pill border — its left edge doubles as
+   the hairline divider against the main icon button (which drops its right
+   border inside the group). */
 .chevron {
   display: inline-flex;
   align-items: center;
@@ -87,9 +102,8 @@
   width: 20px;
   height: 32px;
   padding: 0;
-  border: none;
-  border-left: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 0 16px 16px 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 0 18px 18px 0;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
