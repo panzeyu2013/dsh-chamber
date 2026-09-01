@@ -221,7 +221,18 @@
 
 ### 0.1.2 迁移已知偏差登记(源自 docs/tmp-dsh-v012-migration-plan.md §7.5-§7.6,临时文档移除后留存)
 
-- ① workspace 面退化:fetchInstanceSnapshot workspaces:[]、git cwd 派生、follow TODO(fail-closed)
+- ① workspace 面退化（2026-09 修复落地）：兜底 `fetchInstanceSnapshot` 已按
+  session/cwd 派生工作区（原 `workspaces:[]` 全未分组）；mounted 撤回窗口内
+  App 保留最后推送视图（不再退 sessions-only 兜底，撤回的签名失效机制原样
+  保留以保证重连后 baseline 重发）——全未分组、归档会话冒出、30s 轮询状态
+  滞后三症状同根（mounted 撤回→sessions-only 兜底：无分组 +
+  `archivedSessionIds:[]` 无 wire 源 + 状态轮询），一并修复。剩余降级：
+  兜底视图的归档过滤无 wire 源（归档集合仅存在于 workspace follow baseline），
+  仅影响首次 baseline 前窗口与未挂载来源；投影级 cwd 成员合成仅覆盖
+  canonical-cwd 索引不全导致的空 sessionIds（符号链接拼写如 macOS /tmp 可能
+  不匹配，落未分组桶为诚实兜底）；git 工作树删除新增 runtime 通道缺席
+  fail-closed（'runtime-unknown'）；通知边沿在 runtime 通道撤回窗口内保留 prev
+  记忆补发完成事件（窄窗口内手动停止会误报完成，已记录）。
 - ② fork 副本 exports lib/ 约定
 - ③ 双线门禁刻意必红(源码 0.1.2 vs 运行时 rc.2 窗口,现已在 0.1.2-alpha.2 放行)
 - ④ D2 版本芯片远端隐藏(本地实例走桌面桥)

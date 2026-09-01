@@ -42,6 +42,16 @@ assertSingletonModule('derive')
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
 export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 
+/**
+ * One-shot diagnostic flag for the cwd-membership wire-degradation fallback
+ * (projectInstanceSnapshot): the degenerate cross-section repeats on every
+ * store notification while the host canonical-cwd index stays incomplete, so
+ * the console warning fires once per page lifetime. Module-level mutable, in
+ * the same sanctioned class as the grace maps below (assertSingletonModule
+ * guarantees one instance across bundles).
+ */
+let warnedCwdMembershipFallback = false
+
 /** Wire search query schema clamp (design 06 §1.1): at most 500 UTF-16 code units. */
 export const SEARCH_QUERY_MAX_CODE_UNITS = 500
 
@@ -490,10 +500,13 @@ export function projectRuntimeFacts(
 
 /**
  * Project the two already-live ctx stores into the same chamber snapshot shape
- * as the unary fallback. `undefined` means that either reconnect baseline is
+ * as the unary fallback. `undefined` means either reconnect baseline is
  * incomplete; callers must invalidate the push snapshot and let the bounded
- * fallback pull take over. Subagent rows are deliberately excluded because
- * chamber navigation never renders them.
+ * fallback pull take over (the renderer App keeps the last pushed view
+ * through the withdrawal window — 2026-09 fix — so the sessions-only
+ * fallback never replaces a mounted source's groups/archive/state). Subagent
+ * rows are deliberately excluded because chamber navigation never renders
+ * them.
  */
 export function projectInstanceSnapshot(
   workspaces: {
@@ -531,24 +544,73 @@ export function projectInstanceSnapshot(
   // (loading/error during a reconnect, while `phase` stays ready), so a
   // loading/error workspace withdraws here — clearing the producer's content
   // signature so an identical recovered baseline is emitted again instead of
-  // being suppressed forever. The session store projects only `phase` (the
-  // arrival lifecycle): `SessionListState` has no `state` axis, and its
-  // baseline refreshes together with the workspace baseline on reconnect, so
-  // the workspace `state` check is the single completeness authority there.
+  // being suppressed forever (2026-09 review: the withdrawal is REQUIRED —
+  // dropping it would let the signature gate suppress the post-reconnect
+  // rebaseline, leaving the renderer on the not-connected/unary view the
+  // ready-edge refresh installed; the renderer App keeps the last pushed
+  // view through the withdrawal window instead of falling back). The session
+  // store projects only `phase` (the arrival lifecycle): `SessionListState`
+  // has no `state` axis, and its baseline refreshes together with the
+  // workspace baseline on reconnect, so the workspace `state` check is the
+  // single completeness authority there.
   // The upstream `baselinesReady` field was removed in v0.1.2-alpha.1 — the
   // arrival check is `state === 'idle'` + both phases `ready` only.
   if (workspaces.state !== 'idle'
     || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
   const byId = sessions.byId ?? {}
+  // Wire-degradation defense (2026-09, M1): the host projects
+  // `WorkspaceView.sessionIds` through a canonical-cwd header index built at
+  // registry init (dsh-workspace entity getter + index); when that index is
+  // incomplete (legacy headers without cwd, cwd not resolving), the baseline
+  // carries workspace rows with EMPTY sessionIds while sessions exist — the
+  // sidebar would sink every session into the ungrouped bucket. Detect the
+  // degenerate cross-section (ready + non-empty items + non-empty sessions +
+  // zero accounted members + at least one session whose cwd matches a
+  // workspace path) and synthesize membership from the session cwd facts,
+  // keeping the store's workspace identity/order/title. The cwd-match guard
+  // keeps genuinely-empty workspaces untouched (no false positives).
+  const items = (workspaces.items ?? []).map(item => ({
+    workspaceId: String(item.workspaceId),
+    path: item.path,
+    title: item.title,
+    sessionIds: item.sessionIds.map(String),
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  }))
+  const zeroAccounted = items.length > 0 && items.every(item => item.sessionIds.length === 0)
+  const cwdRows = (sessions.ids ?? []).flatMap(id => {
+    const row = byId[id]
+    return row !== undefined && row.origin !== 'subagent' && typeof row.cwd === 'string'
+      ? [{ id: String(row.id), cwd: row.cwd }]
+      : []
+  })
+  // Canonical-path equality is not available client-side (no fs.realpath in
+  // the browser): compare with trailing separators normalized only.
+  // Symlinked spellings (e.g. macOS /tmp → /private/tmp) can still miss —
+  // documented limitation; unmatched sessions stay in the ungrouped bucket,
+  // which remains the honest fallback.
+  const pathKey = (value: string): string => value.replace(/[\\/]+$/, '')
+  if (zeroAccounted && (sessions.ids ?? []).length > 0 && cwdRows.length > 0
+    && items.some(item => cwdRows.some(row => pathKey(row.cwd) === pathKey(item.path)))) {
+    // ONE diagnostic warning per page lifetime (module-level flag, same
+    // pattern as the grace maps below): the degenerate cross-section repeats
+    // on every store notification while the host index stays incomplete, and
+    // the console must not flood.
+    if (!warnedCwdMembershipFallback) {
+      warnedCwdMembershipFallback = true
+      console.warn(
+        '[chamber] workspace baseline carries zero session membership while sessions exist — '
+        + 'synthesizing membership from session cwd facts (host canonical-cwd index incomplete?)',
+      )
+    }
+    const pathToItem = new Map(items.map(item => [pathKey(item.path), item]))
+    for (const row of cwdRows) {
+      const item = pathToItem.get(pathKey(row.cwd))
+      if (item !== undefined) item.sessionIds.push(row.id)
+    }
+  }
   return {
-    workspaces: (workspaces.items ?? []).map(item => ({
-      workspaceId: String(item.workspaceId),
-      path: item.path,
-      title: item.title,
-      sessionIds: item.sessionIds.map(String),
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
-    })),
+    workspaces: items,
     sessions: (sessions.ids ?? []).flatMap(id => {
       const row = byId[id]
       if (row === undefined || row.origin === 'subagent') return []

@@ -357,10 +357,21 @@ function titleOf(summary: any): string | undefined {
  * session/list unary pull (the bounded fallback for unmounted sources).
  * v0.1.2-alpha.1: the unary `workspace.list` was DELETED upstream (W11 — the
  * new workspace face is the `workspace/follow` stream, which a unary HTTP
- * client cannot open), so this fallback carries sessions only; the workspace
- * grouping for unmounted sources is a D-item pending the renderer M5 wiring,
- * while the mounted-ctx store path (projectInstanceSnapshot in client/index.ts)
- * remains the authoritative workspace source.
+ * client cannot open), so the fallback derives workspace groups from each
+ * session's `cwd` fact instead (STATUS.md D-item, 2026-09): one synthetic
+ * workspace row per canonical cwd, titled by basename — the same
+ * cwd-derived grouping semantics the official ui-workspace search leg uses
+ * (tree.ts workspaceLabel), and a strict subset of what the authoritative
+ * mounted-ctx store path (projectInstanceSnapshot in client/index.ts)
+ * carries.
+ *
+ * KNOWN DEGRADATION (documented): `archivedSessionIds` has NO unary wire
+ * source — the archive set exists only on the workspace follow baseline —
+ * so the fallback returns an empty archive set and archived sessions
+ * resurface in the list. This is acceptable only while the fallback serves
+ * genuinely unmounted sources or the pre-baseline window; the mounted path
+ * (which carries the archive set) must never be replaced by this fallback
+ * once it has pushed (renderer App withdrawal rule, 2026-09 fix).
  */
 export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<InstanceSnapshot> {
   let sessionResult: UnaryResult<{ items?: readonly unknown[] }>
@@ -373,21 +384,59 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
   if (ssError !== null) throw ssError
 
   const summaries = ((sessionResult.ok ? sessionResult.value?.items : undefined) ?? []) as any[]
-  const sessions: SessionRow[] = summaries.map((summary: any) => {
+  const sessions: SessionRow[] = summaries.flatMap((summary: any) => {
+    if (summary?.origin === 'subagent') return []
     const row: SessionRow = {
       sessionId: String(summary.sessionId),
       running: summary.running === true,
       blank: summary.blank === true,
     }
     if (typeof summary.updatedAt === 'number') row.updatedAt = summary.updatedAt
-    if (summary.origin === 'subagent') row.origin = 'subagent'
     const title = titleOf(summary)
     if (title !== undefined) row.title = title
     if (typeof summary.cwd === 'string' && summary.cwd !== '') row.cwd = summary.cwd
     if (typeof summary.parentSessionId === 'string') row.parentSessionId = summary.parentSessionId
-    return row
+    return [row]
   })
-  return { workspaces: [], sessions, archivedSessionIds: [] }
+  // cwd-derived workspace groups (2026-09, STATUS.md D-item): group visible
+  // sessions by canonical cwd; groups are ordered by their newest session
+  // (the official bootstrap ordering), titles are cwd basenames. The
+  // synthetic id is namespaced (`__cwd__:` — never collides with the
+  // UNGROUPED_WORKSPACE_ID bucket or real registered ids).
+  const byCwd = new Map<string, { workspaceId: string; sessions: SessionRow[]; newestAt: number }>()
+  for (const session of sessions) {
+    if (session.origin === 'subagent' || session.cwd === undefined) continue
+    let group = byCwd.get(session.cwd)
+    if (group === undefined) {
+      group = {
+        workspaceId: `__cwd__:${session.cwd}`,
+        sessions: [],
+        newestAt: 0,
+      }
+      byCwd.set(session.cwd, group)
+    }
+    group.sessions.push(session)
+    group.newestAt = Math.max(group.newestAt, session.updatedAt ?? 0)
+  }
+  const workspaces: WorkspaceRow[] = [...byCwd.values()]
+    .sort((left, right) => right.newestAt - left.newestAt)
+    .map(group => ({
+      workspaceId: group.workspaceId,
+      path: group.workspaceId.slice('__cwd__:'.length),
+      title: basenameOf(group.workspaceId.slice('__cwd__:'.length)),
+      sessionIds: group.sessions.map(session => session.sessionId),
+      createdAt: '',
+      updatedAt: '',
+    }))
+  return { workspaces, sessions, archivedSessionIds: [] }
+}
+
+/** Trailing path segment ('' for root); the cwd-derived group title. */
+function basenameOf(cwd: string): string {
+  const trimmed = cwd.replace(/[\\/]+$/, '')
+  const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  const base = separator === -1 ? trimmed : trimmed.slice(separator + 1)
+  return base === '' ? cwd : base
 }
 
 async function callAndThrow(client: InstanceApiClient, call: () => Promise<UnaryResult<any>>): Promise<UnaryResult<any>> {

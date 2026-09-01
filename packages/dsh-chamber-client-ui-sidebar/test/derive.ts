@@ -88,6 +88,10 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
   })
   // v0.1.2-alpha.1: the upstream `baselinesReady` field was removed — the
   // workspace completeness check is `state === 'idle'` + `phase === 'ready'`.
+  // The withdrawal on `state` deviation is REQUIRED (2026-09 review): it
+  // clears the producer's content signature so an identical recovered
+  // baseline re-emits after reconnect; the renderer App keeps the last pushed
+  // view through the withdrawal window instead of falling back.
   assert.equal(projectInstanceSnapshot({ ...workspaceState, state: 'loading' }, sessionState), undefined)
   assert.equal(projectInstanceSnapshot({ ...workspaceState, state: 'error' }, sessionState), undefined)
   assert.equal(projectInstanceSnapshot({ ...workspaceState, phase: 'pending' }, sessionState), undefined)
@@ -107,6 +111,71 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
     archivedSessionIds: ['old'],
   })
+})
+
+test('projectInstanceSnapshot synthesizes workspace membership from cwd facts when the baseline sessionIds are degenerate', () => {
+  // M1 wire-degradation defense (2026-09): the host's canonical-cwd header
+  // index can be incomplete at init, so the follow baseline carries workspace
+  // rows with EMPTY sessionIds while sessions exist. When every workspace is
+  // empty AND at least one session's cwd matches a workspace path, membership
+  // is synthesized from the session cwd facts (store identity/order/title
+  // preserved).
+  const workspaceState = {
+    items: [workspace('w1', 'Work', []), workspace('w2', 'Other', [])],
+    archivedSessionIds: [],
+    state: 'idle',
+    phase: 'ready',
+  }
+  const sessionState = {
+    ids: ['s1', 's2', 's3'],
+    phase: 'ready',
+    byId: {
+      s1: { id: 's1', title: 'One', cwd: '/w1', running: false, blank: false },
+      s2: { id: 's2', title: 'Two', cwd: '/w1', running: false, blank: false },
+      s3: { id: 's3', title: 'Three', cwd: '/nowhere', running: false, blank: false },
+    },
+  }
+  const projected = projectInstanceSnapshot(workspaceState, sessionState)
+  assert.deepEqual(projected?.workspaces[0].sessionIds, ['s1', 's2'])
+  assert.deepEqual(projected?.workspaces[1].sessionIds, [])
+  // Sessions with no matching workspace stay ungrouped by the derive layer.
+  assert.deepEqual(projected?.sessions.map(row => row.sessionId), ['s1', 's2', 's3'])
+})
+
+test('projectInstanceSnapshot does NOT synthesize membership when cwd facts do not match any workspace path', () => {
+  // Genuinely-empty workspaces must stay empty: no cwd row matches a
+  // workspace path, so the degenerate cross-section guard does not fire.
+  const workspaceState = {
+    items: [workspace('w1', 'Work', [])],
+    archivedSessionIds: [],
+    state: 'idle',
+    phase: 'ready',
+  }
+  const sessionState = {
+    ids: ['s1'],
+    phase: 'ready',
+    byId: { s1: { id: 's1', title: 'One', cwd: '/elsewhere', running: false, blank: false } },
+  }
+  const projected = projectInstanceSnapshot(workspaceState, sessionState)
+  assert.deepEqual(projected?.workspaces[0].sessionIds, [])
+})
+
+test('projectInstanceSnapshot cwd synthesis normalizes trailing separators on both sides', () => {
+  // The session cwd may carry a trailing slash while the workspace path is
+  // stored canonical without one — both sides normalize before matching.
+  const workspaceState = {
+    items: [workspace('w1', 'Work', [])],
+    archivedSessionIds: [],
+    state: 'idle',
+    phase: 'ready',
+  }
+  const sessionState = {
+    ids: ['s1'],
+    phase: 'ready',
+    byId: { s1: { id: 's1', title: 'One', cwd: '/w1/', running: false, blank: false } },
+  }
+  const projected = projectInstanceSnapshot(workspaceState, sessionState)
+  assert.deepEqual(projected?.workspaces[0].sessionIds, ['s1'])
 })
 
 test('blank sessions are hidden from workspaces and from the ungrouped bucket when not current', () => {
