@@ -34,7 +34,15 @@
   桌面），包未落地前为警告跳过的 stub 条目，接口已留好。
 - **修订号显示移除** —— 编排面剥离后 settings 文档与修订号显示随之消失；
   计数器语义保留于 json-store 协议层（加载校验与 If-Match 原语不变）。
-
+- **移动端 Web 访问面设计定稿（design 17 §18）** —— 将 §16.2 远期项「PWA 安装、
+  离线缓存和 UA 移动轻面」转正为独立设计面（2026-09 提出；2026-12 随编排面剥离
+  修订）：chamber 自研移动适配客户端插件（窄屏布局/触控/PWA，机制以社区调研为
+  参照——挂载零成本、data-attribute 打标、抽屉 containing-block 陷阱、SW
+  per-instance 化等），gateway 只承担 UA 路由开关（默认关闭，仅体验分流、非安全
+  边界）与 PWA 资产挂载，保持流式透传无 HTML 改写；先行形态 = 内网/可信网络。
+  契约：§3 装配矩阵 + §10 项 2 移动例外——`dsh-chamber-client-ui-mobile` 唯一
+  随 gateway 发行物打包 seed（链路无桌面，不参与 `/chamber/plugins` 桌面同步）。
+  分期与验收门禁见 §18.6/§18.7；已注册进 STATUS。
 - **连接失败提示区分「SSH 传输错误」与「dsh 实例探测失败」** —— 状态投影新增
   `userActionKind`（`'auth' | 'endpoint' | null`）区分 `requiresUserAction`
   终态的类别：认证/主机密钥/spawn 失败是**传输层**问题（连接设置页保留「请检查

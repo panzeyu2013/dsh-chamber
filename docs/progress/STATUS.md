@@ -158,6 +158,28 @@
   `GH_TOKEN`，且不创建/修改 Release、不上传产物。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收
   （行出现延迟、状态图标延迟、位置跳动三类症状）。
+- **移动端 Web 访问面（design 17 §18，2026-09 提出 / 2026-12 随编排面剥离修订）**：
+  **P1 实现已落地（2026-12）**：`packages/dsh-chamber-client-ui-mobile`（移动适配
+  插件本体——触屏档抽屉化布局/44px 触控/safe-area/设置全屏/弹层限宽/输入行单行、
+  回车换行与 editability 恢复行为层、layoutFacts 双源驱动的抽屉滚动锁（gateway 官方 ui-layout 回退属性观察，§18.4 项 3 部署例外）、shell.overlay
+  汉堡+backdrop；零代码复制、按 v0.1.2-alpha.3 基线重写；typecheck/20 测试/
+  构建全绿）+ `dsh-chamber-client-ui-layout` fork 订阅面（`ctx.layoutFacts`：
+  getLayoutSnapshot/subscribeLayout，回归全绿）+ gateway 接线（build.mjs
+  host-packages 拷贝、seedFiles 含 lib/client.js、UA 分流开关默认关闭——
+  `--mobile-ua-redirect`/`--mobile-entry`，9 个 UA 用例 + 4 个 config 用例全绿，
+  test:gateway 350/347 pass）。
+  **P1.5 已完成（2026-12）**：IME 恢复完整五层（程序化 focus 丢弃循环/
+  editability 翻转/pointerup 手势 refocus/visualViewport 键盘判定/键盘钉住）、
+  composer 30s busy 自愈、共享 layout source（滚动锁/Esc 单实例）、
+  职责区分显式化（§18.2 管理面 vs 适配面矩阵——认证/凭据/会话边界/UA 分流/
+  登录流转为 gateway 独占，插件零认证引用已 grep 验证）。
+  **剩余**：实机门禁（§18.6：真机抽检——触控目标比例/抽屉开合/弹层不出屏/
+  键盘遮挡/安全区）；P2（PWA 安装 + SW 壳离线，per-instance scope，尊重官方
+  "不完整离线"立场）；P3（公网认证流转正式化、Web Push）。先行形态 =
+  内网/可信网络（`--no-auth` 显式可信网络或 tailscale）。契约：§3 装配矩阵 +
+  §10 项 2 的移动例外——`dsh-chamber-client-ui-mobile` 是唯一随 gateway
+  发行物打包 seed 的 chamber 客户端插件（链路无桌面，不参与 `/chamber/plugins`
+  桌面同步）。
 - **认证服务端 Gateway（设计 17）**：自动化与打包面已完成，剩余发布前实机门禁：
   - 生产 TLS 反代的 Host/Origin/XFF/Secure-cookie、HTTP/WS 一致策略与 SPKI pin
     正/负例；真实 dsh 的 `/api/remote.mux` 断线恢复和插件 bundle；
