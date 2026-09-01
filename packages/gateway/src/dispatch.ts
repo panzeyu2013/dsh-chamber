@@ -15,6 +15,7 @@
  *   /api/connections, /api/host/*, /api/i/* → fall through (management)
  *   /chamber/runtime/*       → runtime controller (design 18 §9.3; NOT ready-gated)
  *   /chamber/*               → chamber surface (design 17 §8.5, 2026-12 strip)
+ *   / (mobile UA, opt-in)    → 302 to mobileEntryPath (design 17 §18 shunting)
  *   /plugins/*, /, /api/*(rest) → gateway-proxy → dsh
  */
 
@@ -27,6 +28,7 @@ import {
 import type { Duplex } from 'node:stream'
 import type { AuthChangeProof, AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
 import { SESSION_COOKIE } from './auth.ts'
+import { DEFAULT_MOBILE_ENTRY_PATH } from './config.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { ChamberSurface } from './routes.ts'
 import type { RuntimeRoutes } from './runtime-routes.ts'
@@ -40,6 +42,11 @@ function isPublicRequest(method: string | undefined, pathname: string): boolean 
   if (pathname === '/health') return method === 'GET' || method === 'HEAD'
   return pathname === '/auth/login' && (method === 'GET' || method === 'HEAD' || method === 'POST')
 }
+
+/** Mobile-UA sniffing for the experience shunting (design 17 §18). Deliberately
+ * broad and forgeable — this is routing sugar only, never a security boundary
+ * (the auth gate stays the only boundary, S1/S2). */
+const MOBILE_UA_PATTERN = /Mobile|Android|iPhone|iPad|iPod/i
 
 function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProvider): boolean {
   if (auth.kind !== 'password' && auth.kind !== 'password+token') return false
@@ -191,6 +198,10 @@ export function createGatewayDispatch(
   logger: Logger,
   requestPolicy: GatewayRequestPolicy,
   auditFile?: string | null,
+  /** Design 17 §18 UA experience shunting; default OFF. */
+  mobileUaRedirect = false,
+  /** Origin-form redirect target (validated at config time). */
+  mobileEntryPath = DEFAULT_MOBILE_ENTRY_PATH,
 ): GatewayDispatch {
   // Every request/socket admitted by one credential generation stays tracked
   // until its downstream leg ends. Rotation closes the old generation at the
@@ -632,6 +643,21 @@ export function createGatewayDispatch(
     if (pathname.startsWith('/chamber/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       await getFeatures().handle(req, res, pathname)
+      return true
+    }
+    // 4.5 Mobile UA experience shunting (design 17 §18; default off): an
+    // authenticated mobile-browser GET/HEAD of the root is a 302 to the
+    // mobile entry instead of the desktop frontend. UA sniffing is forgeable
+    // and carries NO security semantics — the shunting sits AFTER the auth
+    // gate (and after the /chamber surface claims) and keeps the fallthrough's
+    // staleness guard, so it can never bypass or weaken the gate.
+    if (mobileUaRedirect === true
+      && (req.method === 'GET' || req.method === 'HEAD')
+      && pathname === '/'
+      && MOBILE_UA_PATTERN.test(headerValue(req.headers, 'user-agent') ?? '')) {
+      if (rejectStaleHttp(res, authenticatedPrincipal)) return true
+      res.writeHead(302, { location: mobileEntryPath, 'cache-control': 'no-store' })
+      res.end()
       return true
     }
     // 5. Everything else (/api/* rest, /plugins/*, / and assets) → gateway-proxy.

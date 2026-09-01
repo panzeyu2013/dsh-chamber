@@ -14,6 +14,9 @@ export const MIN_GATEWAY_PASSWORD_CHARS = 12
 export const MAX_GATEWAY_PASSWORD_CHARS = 1024
 export const MIN_GATEWAY_TOKEN_CHARS = 32
 export const MAX_GATEWAY_TOKEN_CHARS = 4096
+/** Default target of the mobile UA experience shunting (design 17 §18): the
+ * chamber surface's mobile entry placeholder. */
+export const DEFAULT_MOBILE_ENTRY_PATH = '/chamber/mobile.html'
 
 export interface GatewayConfig {
   plane: {
@@ -47,6 +50,14 @@ export interface GatewayConfig {
    * with NO authentication. Default false — the S1 exposure guard stays hard.
    * The CLI surfaces this as --no-auth. */
   allowAnonymousExternal?: boolean
+  /** UA experience shunting (design 17 §18; default OFF): an authenticated
+   * mobile-browser GET/HEAD of `/` answers 302 → mobileEntryPath instead of
+   * the desktop frontend. UA sniffing is forgeable and carries NO security
+   * semantics — the auth gate stays the only boundary (S1/S2). */
+  mobileUaRedirect?: boolean
+  /** Origin-form target of the mobile UA redirect (default
+   * '/chamber/mobile.html' — validated, never absolute, never `/`). */
+  mobileEntryPath?: string
 }
 
 /** Raw config input (CLI flags already resolved by the CLI entry; env fallback
@@ -65,6 +76,8 @@ export interface GatewayConfigInput {
   publicOrigin?: string
   trustedProxies?: string[]
   allowAnonymousExternal?: boolean
+  mobileUaRedirect?: boolean
+  mobileEntryPath?: string
 }
 
 /** Configuration error (surfaced as exit 2 by the CLI). */
@@ -81,6 +94,28 @@ function firstEnv(...names: string[]): string | undefined {
     if (value !== undefined && value !== '') return value
   }
   return undefined
+}
+
+/** Lenient-but-loud env boolean (used for DSH_GATEWAY_MOBILE_UA_REDIRECT): an
+ * unrecognized value is a configuration error, never a silent default. */
+function envBoolean(name: string): boolean | undefined {
+  const raw = firstEnv(name)
+  if (raw === undefined) return undefined
+  const value = raw.trim().toLowerCase()
+  if (value === '1' || value === 'true') return true
+  if (value === '0' || value === 'false') return false
+  throw new GatewayConfigError(`${name} must be a boolean (1/true or 0/false), got ${JSON.stringify(raw)}`)
+}
+
+/** Origin-form path validation shared by parseGatewayConfig and the
+ * materialized-config guard (design 17 §18): a same-origin target only —
+ * starts with '/', no '//' prefix, no backslash, and never the bare root
+ * (which would loop the shunting back onto itself). */
+export function normalizeMobileEntryPath(value: string): string {
+  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || value === '/') {
+    throw new GatewayConfigError(`mobile entry path must be an origin-form path (starts with '/', no '//' prefix, no backslash, and not '/'), got ${JSON.stringify(value)}`)
+  }
+  return value
 }
 
 function canonicalOrigin(value: string, label: string): string {
@@ -176,6 +211,11 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   const corsOrigins = [...new Set((input.corsOrigins ?? []).map(canonicalCorsOrigin))]
   const trustedProxies = trustedProxyList(input.trustedProxies)
   const allowAnonymousExternal = input.allowAnonymousExternal === true
+  // Design 17 §18 UA shunting (default OFF): the entry path is validated even
+  // when the redirect stays disabled, so a mistyped --mobile-entry cannot
+  // silently surface later as a misdirecting 302 once the flag is flipped.
+  const mobileUaRedirect = input.mobileUaRedirect ?? envBoolean('DSH_GATEWAY_MOBILE_UA_REDIRECT') ?? false
+  const mobileEntryPath = normalizeMobileEntryPath(input.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
   // S1 (design 17 §11): exposure is a semantic deployment fact, not just the
   // socket bind. A loopback listener behind an explicitly configured public
   // origin or trusted reverse proxy is still public and therefore needs auth.
@@ -204,5 +244,7 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(tlsCert !== undefined && tlsKey !== undefined ? { tls: { cert: tlsCert, key: tlsKey } } : {}),
     allowAnonymousExternal,
+    mobileUaRedirect,
+    mobileEntryPath,
   }
 }

@@ -227,3 +227,57 @@ test('weak browser and bearer credentials are rejected before exposure', () => {
   assert.throws(() => parseGatewayConfig({ uiPassword: 'short' }, STATE, DSH), /12-1024/)
   assert.throws(() => parseGatewayConfig({ apiToken: 'predictable' }, STATE, DSH), /32-4096/)
 })
+
+test('mobile UA shunting defaults off with the chamber mobile entry path', () => {
+  const config = parseGatewayConfig({}, STATE, DSH)
+  assert.equal(config.mobileUaRedirect, false)
+  assert.equal(config.mobileEntryPath, '/chamber/mobile.html')
+  const enabled = parseGatewayConfig({ mobileUaRedirect: true }, STATE, DSH)
+  assert.equal(enabled.mobileUaRedirect, true)
+  assert.equal(enabled.mobileEntryPath, '/chamber/mobile.html')
+  const custom = parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: '/m' }, STATE, DSH)
+  assert.equal(custom.mobileEntryPath, '/m')
+})
+
+test('mobile entry path must be a safe origin-form path', () => {
+  for (const bad of ['https://evil.example/x', '//evil.example/x', 'a', '/a\\b', '/', '']) {
+    assert.throws(() => parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: bad }, STATE, DSH),
+      GatewayConfigError, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
+  }
+  // Valid origin-form paths (with and without the shunting enabled) pass.
+  assert.equal(parseGatewayConfig({ mobileEntryPath: '/x' }, STATE, DSH).mobileEntryPath, '/x')
+  assert.equal(parseGatewayConfig({ mobileEntryPath: '/a/b.html' }, STATE, DSH).mobileEntryPath, '/a/b.html')
+})
+
+test('DSH_GATEWAY_MOBILE_UA_REDIRECT env is boolified; garbage is a config error', () => {
+  const previous = process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT
+  try {
+    process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT = '1'
+    assert.equal(parseGatewayConfig({}, STATE, DSH).mobileUaRedirect, true)
+    process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT = 'true'
+    assert.equal(parseGatewayConfig({}, STATE, DSH).mobileUaRedirect, true)
+    process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT = '0'
+    assert.equal(parseGatewayConfig({}, STATE, DSH).mobileUaRedirect, false)
+    process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT = 'banana'
+    assert.throws(() => parseGatewayConfig({}, STATE, DSH), GatewayConfigError)
+    // An explicit input wins over the env.
+    process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT = '1'
+    assert.equal(parseGatewayConfig({ mobileUaRedirect: false }, STATE, DSH).mobileUaRedirect, false)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT
+    else process.env.DSH_GATEWAY_MOBILE_UA_REDIRECT = previous
+  }
+})
+
+test('gateway serve surfaces a bad --mobile-entry as exit 2 (flags parse end-to-end)', t => {
+  const root = mkdtempSync(join(tmpdir(), 'gateway-cli-mobile-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const anchor = join(root, 'anchor')
+  mkdirSync(join(anchor, 'apps', 'cli', 'src'), { recursive: true })
+  writeFileSync(join(anchor, 'apps', 'cli', 'src', 'bin.ts'), '')
+  const result = spawnSync(process.execPath,
+    [CLI, 'serve', '--dsh-path', anchor, '--mobile-ua-redirect', '--mobile-entry', '//evil.example/x'],
+    { encoding: 'utf8', timeout: 10_000 })
+  assert.equal(result.status, 2, result.stderr)
+  assert.match(result.stderr, /mobile entry path must be an origin-form path/)
+})

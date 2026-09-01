@@ -49,6 +49,11 @@ Options:
                       reject unknown Host with 421)
   --trusted-proxy IP exact reverse-proxy peer allowed to supply X-Forwarded-* (repeatable)
   --cors-origin O     extra allowed origin (repeatable)
+  --mobile-ua-redirect
+                      redirect an authenticated mobile-browser GET/HEAD of / to
+                      --mobile-entry (design 17 §18 UA shunting; default off)
+  --mobile-entry PATH origin-form target of the mobile UA redirect
+                      (default /chamber/mobile.html)
   --no-auth
                       allow an externally-reachable bind with NO auth (S1 override;
                       prints a loud warning — trusted networks only)
@@ -109,6 +114,8 @@ interface ParsedArgs {
   trustedProxies: string[]
   corsOrigins: string[]
   allowAnonymousExternal: boolean
+  mobileUaRedirect: boolean
+  mobileEntryPath?: string
   // auth options
   subcommand?: 'status' | 'reset-password' | 'clear'
   newPassword?: string
@@ -119,7 +126,7 @@ interface ParsedArgs {
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, version: false, help: false }
+  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, mobileUaRedirect: false, version: false, help: false }
   let positional = false // 'serve' seen
   let authMode = false
   let subcommandSeen = false
@@ -174,6 +181,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--public-origin': args.publicOrigin = takeValue(); break
       case '--trusted-proxy': args.trustedProxies.push(takeValue()); break
       case '--cors-origin': args.corsOrigins.push(takeValue()); break
+      case '--mobile-ua-redirect':
+        if (inlineValue !== undefined) throw new UsageError('--mobile-ua-redirect takes no value')
+        args.mobileUaRedirect = true
+        break
+      case '--mobile-entry': args.mobileEntryPath = takeValue(); break
       case '--no-auth':
         if (inlineValue !== undefined) throw new UsageError('--no-auth takes no value')
         args.allowAnonymousExternal = true
@@ -301,6 +313,8 @@ async function main(): Promise<number | null> {
       trustedProxies: args.trustedProxies.length === 0 ? undefined : args.trustedProxies,
       corsOrigins: args.corsOrigins,
       allowAnonymousExternal: args.allowAnonymousExternal,
+      mobileUaRedirect: args.mobileUaRedirect,
+      mobileEntryPath: args.mobileEntryPath,
     }, stateDir, dshWorkspacePath)
   } catch (error) {
     if (error instanceof GatewayConfigError) {
