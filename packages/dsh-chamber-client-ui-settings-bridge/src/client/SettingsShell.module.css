@@ -815,9 +815,10 @@
 
 /* ---- 通用 section 横向化布局 (2026-11) ----
    行范式统一为「文字在左、控件在右」：短开关组用双列卡片网格
-   (.generalGrid + .generalCard)，单选对用一行分段胶囊
-   (.generalSegmented)，通知事件开关用一行迷你卡片 (.generalEventGrid)。
-   窄面板自动降列（auto-fit），控件形态仍为原生 checkbox/radio。 */
+   (.generalGrid + .generalCard)，单选对用一行滑块式分段控件
+   (SegmentedControl，2026-11 滑块化)，通知事件开关用一行迷你卡片
+   (.generalEventGrid)。窄面板自动降列（auto-fit），控件形态仍为原生
+   checkbox/radio（滑块是纯装饰层）。 */
 
 /* 双列紧凑卡片网格（短开关组：启动与关闭 / 运行）。min() 下限让极窄窗口
    单列时能收缩到列宽而非撑破（panel overflow:hidden 会裁切）。 */
@@ -873,70 +874,10 @@
   cursor: default;
 }
 
-/* 分段单选（关闭窗口时 / 通知时机）：一行两个胶囊，选中段浮起。 */
-.generalSegmented {
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
-  background: var(--dsw-alias-bg-layer-2);
-}
-
-.generalSegment {
-  position: relative;
-  cursor: pointer;
-}
-
-.generalSegment input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.generalSegment span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 26px;
-  padding: 0 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
-  white-space: nowrap;
-  transition: background .16s, color .16s;
-}
-
-.generalSegment:hover span {
-  color: var(--dsw-alias-label-primary);
-}
-
-.generalSegment input:checked + span {
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-label-primary);
-  font-weight: 500;
-}
-
-.generalSegment input:disabled + span {
-  opacity: .5;
-}
-
-/* 禁用胶囊：绝对定位覆盖整粒的 input 自身 cursor 优先于 span，必须显式
-   收回手型（span 的 cursor:default 收不到悬停）。 */
-.generalSegment input:disabled {
-  cursor: default;
-}
-
-.generalSegment input:focus-visible + span {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: 1px;
-}
+/* 分段单选（关闭窗口时 / 通知时机）已迁移为滑块式共享组件
+   SegmentedControl（见 SegmentedControl.tsx / SegmentedControl.module.css，
+   2026-11）：轨道内品牌色滑块滑向选中项、选中文字反白，列宽按内容
+   自适应。 */
 
 /* 全宽行（通知组主开关 / 通知时机）：文字左、控件右。flex-wrap 让极窄
    窗口下控件换行而非被 panel 裁切。 */

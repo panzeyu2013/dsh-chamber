@@ -7,11 +7,11 @@
  * Layout (2026-11 横向化修订): the row paradigm is unified to「text left,
  * control right」— short toggle groups (启动与关闭 / 运行) become a two-column
  * card grid (.generalGrid + .generalCard), the two radio pairs (关闭窗口时 /
- * 通知时机) become one-line segmented controls (.generalSegmented), and the
- * three notification-event toggles share one line of mini cards
- * (.generalEventGrid). Every control stays a native checkbox/radio with the
- * accent-color token (no custom widgets); narrow panels auto-collapse the
- * columns via auto-fit.
+ * 通知时机) become slider-style segmented controls (SegmentedControl, 2026-11
+ * 滑块化: brand thumb + 反白选中文字), and the three notification-event
+ * toggles share one line of mini cards (.generalEventGrid). Every control
+ * stays a native checkbox/radio underneath (no custom widgets); narrow panels
+ * auto-collapse the columns via auto-fit.
  *
  * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
@@ -40,6 +40,7 @@ import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
 import { notificationsOf, notificationsPatch } from './notifications-settings.ts'
+import { SegmentedControl } from './SegmentedControl.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
 import css from './SettingsShell.module.css'
 
@@ -115,13 +116,12 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   const status = useSyncExternalStore(subscribeSettings, getSettingsStatus)
   const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  // Per-instance radio group name + labelledby (useId): N-ctx shells mount one
-  // settings panel each in the SAME document — a static name would make panels
-  // share a radio group; useId keeps the group scoped to this component.
-  const closeBehaviorGroup = useId()
+  // Per-instance labelledby (useId): N-ctx shells mount one settings panel
+  // each in the SAME document — a static id would alias across panels. The
+  // radio group name itself is generated inside SegmentedControl (also useId,
+  // same scoping reason).
   const closeBehaviorLabel = useId()
-  // Same scoping for the notifications-mode radio group.
-  const notifyModeGroup = useId()
+  // Same scoping for the notifications-mode field label.
   const notifyModeLabel = useId()
   const [notifyBusy, setNotifyBusy] = useState(false)
   const [notifyResult, setNotifyResult] = useState<'sent' | 'failed' | null>(null)
@@ -181,8 +181,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         <h3 className={css.generalGroupTitle}>{t('generalGroupLifecycle')}</h3>
 
         <div className={css.generalGrid}>
-          {/* 关闭窗口时: 分段单选，一行两个选项；无托盘时禁用并改提示文案。
-              hint 随选中值切换（选中「退出应用」时不再描述后台运行）。 */}
+          {/* 关闭窗口时: 滑块式分段单选（SegmentedControl），一行两个选项；
+              无托盘时禁用「隐藏到托盘」并改提示文案。hint 随选中值切换（选中
+              「退出应用」时不再描述后台运行）。 */}
           <div className={css.generalCard}>
             <div className={css.generalCardText}>
               <span className={css.generalFieldLabel} id={closeBehaviorLabel}>{t('generalCloseBehavior')}</span>
@@ -194,28 +195,20 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
                     : t('generalCloseBehaviorDesc')}
               </p>
             </div>
-            <div className={css.generalSegmented} role="group" aria-labelledby={closeBehaviorLabel}>
-              <label className={css.generalSegment}>
-                <input
-                  type="radio"
-                  name={closeBehaviorGroup}
-                  checked={settings?.windowCloseBehavior === 'hide-to-tray'}
-                  disabled={!hydrated || supported?.closeToTray === false || busy}
-                  onChange={() => save({ windowCloseBehavior: 'hide-to-tray' })}
-                />
-                <span>{t('generalCloseBehaviorHide')}</span>
-              </label>
-              <label className={css.generalSegment}>
-                <input
-                  type="radio"
-                  name={closeBehaviorGroup}
-                  checked={settings?.windowCloseBehavior === 'quit'}
-                  disabled={!hydrated || busy}
-                  onChange={() => save({ windowCloseBehavior: 'quit' })}
-                />
-                <span>{t('generalCloseBehaviorQuit')}</span>
-              </label>
-            </div>
+            <SegmentedControl
+              ariaLabelledBy={closeBehaviorLabel}
+              disabled={busy}
+              value={settings?.windowCloseBehavior ?? null}
+              onChange={(next) => save({ windowCloseBehavior: next })}
+              options={[
+                {
+                  value: 'hide-to-tray',
+                  label: t('generalCloseBehaviorHide'),
+                  disabled: !hydrated || supported?.closeToTray === false,
+                },
+                { value: 'quit', label: t('generalCloseBehaviorQuit'), disabled: !hydrated },
+              ]}
+            />
           </div>
 
           <ToggleCard
@@ -283,28 +276,16 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             <span className={css.generalFieldLabel} id={notifyModeLabel}>{t('generalNotificationsMode')}</span>
             <p className={css.generalHint}>{t('generalNotificationsModeDesc')}</p>
           </div>
-          <div className={css.generalSegmented} role="group" aria-labelledby={notifyModeLabel}>
-            <label className={css.generalSegment}>
-              <input
-                type="radio"
-                name={notifyModeGroup}
-                checked={notifications.mode !== 'always'}
-                disabled={!hydrated || busy}
-                onChange={() => save(notificationsPatch({ mode: 'hidden-only' }))}
-              />
-              <span>{t('generalNotificationsModeHidden')}</span>
-            </label>
-            <label className={css.generalSegment}>
-              <input
-                type="radio"
-                name={notifyModeGroup}
-                checked={notifications.mode === 'always'}
-                disabled={!hydrated || busy}
-                onChange={() => save(notificationsPatch({ mode: 'always' }))}
-              />
-              <span>{t('generalNotificationsModeAlways')}</span>
-            </label>
-          </div>
+          <SegmentedControl
+            ariaLabelledBy={notifyModeLabel}
+            disabled={busy}
+            value={notifications.mode === 'always' ? 'always' : 'hidden-only'}
+            onChange={(next) => save(notificationsPatch({ mode: next }))}
+            options={[
+              { value: 'hidden-only', label: t('generalNotificationsModeHidden'), disabled: !hydrated },
+              { value: 'always', label: t('generalNotificationsModeAlways'), disabled: !hydrated },
+            ]}
+          />
         </div>
 
         <div className={css.generalEventGrid}>
