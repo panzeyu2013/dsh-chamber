@@ -46,6 +46,8 @@ import type {
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
+import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
+import type { PluginDiagnostic } from './plugin-diagnostic.ts'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 import { actionHintKey } from './action-hint.ts'
 import {
@@ -80,17 +82,7 @@ export interface ConnectionsSectionInjected {
   /** Bound translate over the section's own dictionary namespace. */
   t: (key: SettingsConnectionsKey) => string
 }
-/**
- * Client-plugin runtime-loading diagnostic for one instance (design 09),
- * projected from the renderer chamberBridge aggregate. The connections page
- * owns this display — it is a chamber runtime fact, not an official dsh
- * plugin-setting fact.
- */
-export interface PluginDiagnostic {
-  state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required' | 'instance-version-conflict'
-  message?: string
-  pluginId?: string
-}
+export type { PluginDiagnostic } from './plugin-diagnostic.ts'
 
 /** Full component props. */
 export type ConnectionsSectionProps =
@@ -171,41 +163,6 @@ function phaseKey(phase: SshPhase | undefined): SettingsConnectionsKey {
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString()
-}
-
-/** Localized text for a client-plugin diagnostic state (design 09). */
-function pluginDiagnosticText(state: PluginDiagnostic['state'], t: (key: SettingsConnectionsKey) => string): string {
-  switch (state) {
-    case 'ok': return t('pluginDiagnosticOk')
-    case 'not-injected': return t('pluginDiagnosticNotInjected')
-    case 'graph-unreachable': return t('pluginDiagnosticGraphUnreachable')
-    case 'bundle-load-failed': return t('pluginDiagnosticBundleFailed')
-    case 'instance-version-conflict': return t('pluginDiagnosticInstanceVersionConflict')
-    default: return t('pluginDiagnosticRestartRequired')
-  }
-}
-
-/**
- * One instance's client-plugin runtime diagnostic line. The diagnostic is a
- * chamber-owned fact (design 09) surfaced on the chamber-global connections
- * page — never on top of the official dsh「插件」settings section.
- */
-function PluginDiagnosticLine({ diagnostic, t }: {
-  diagnostic: PluginDiagnostic | undefined
-  t: (key: SettingsConnectionsKey) => string
-}): ReactNode {
-  if (diagnostic === undefined) return null
-  const problem = diagnostic.state !== 'ok'
-  return (
-    <p
-      className={clsx(css.pluginDiagnostic, problem ? css.pluginDiagnosticProblem : css.pluginDiagnosticOk)}
-      role="status"
-    >
-      <strong>{t('pluginDiagnosticLabel')}：{pluginDiagnosticText(diagnostic.state, t)}</strong>
-      {diagnostic.pluginId !== undefined && <span>{diagnostic.pluginId}</span>}
-      {diagnostic.message !== undefined && <span>{diagnostic.message}</span>}
-    </p>
-  )
 }
 
 /**
@@ -1840,6 +1797,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         ? <PluginSyncModal
             t={t}
             spec={pluginFor === 'local' ? null : pluginFor}
+            diagnostic={pluginDiagnostics?.[pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`]}
             onClose={() => { setPluginFor(null) }}
           />
         : null}

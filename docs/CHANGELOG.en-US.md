@@ -14,6 +14,29 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Changed
 
+- **The desktop "Gateway orchestration" settings section is removed entirely
+  (2026-12, user decision)** — the settings-bridge no longer mounts the
+  gateway orchestration nav entry or `GatewayOrchestrationView` (feature
+  toggles, pending approvals/questions, session/schedule/worktree projections
+  and the revision display are all gone). Pending approvals/questions are
+  already surfaced per session by the existing sidebar fact channel (amber
+  dot + waiting classification; open the session to answer), so the settings
+  page was a second parallel UI (against design 01 P1/P2); the gateway's own
+  session/schedule/worktree projections and feature switches belong to the
+  gateway's own `/chamber/` operations surface.
+- **Gateway orchestration features are enabled by default (2026-12, user
+  decision)** — Git worktree orchestration, notifications and cross-session
+  scheduling switched from "off by default, switches are execution gates" to
+  "on by default": a missing/`true` `enabled` means on, only a persisted
+  explicit `enabled:false` disables (ops kill-switch). The gateway already
+  requires authentication by default and `--no-auth` is an explicit
+  trusted-network exception. Legacy documents upgrade seamlessly: a
+  section-less `settings.json` is treated as fully enabled.
+- **The gateway dashboard no longer shows the settings revision number** —
+  the revision is the json-store protocol's internal write counter (its
+  load-time validation and If-Match primitive remain); displaying it carried
+  no actionable information.
+
 - **Connection failures now distinguish SSH-transport errors from dsh-instance
   probe failures** — the status projection gains `userActionKind`
   (`'auth' | 'endpoint' | null`) classifying the terminal failure behind
@@ -41,6 +64,13 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   automatically. The upstream `dsh-client-ui-primitives` markdown rendering
   rework (viewport-gated highlighting, 32-line stream groups, stream→settled
   DOM retention) is behavioral only and has no chamber usage points.
+- **Client-plugin diagnostic noise reduction (connections page)** — the
+  `instance-version-conflict` state (plugin versions differ between
+  instances) drops from a red problem line with the full long message to a
+  neutral informational marker (cards show the state only, no plugin id or
+  reason); the full detail (state + plugin id + reason) moves to the top of
+  each instance's plugin-management dialog. The diagnostic pure helpers
+  (state → text/tone) are extracted into a testable module with unit tests.
 
 ## [0.2.0-beta.5] - 2026-09-01
 

@@ -68,11 +68,6 @@
     **记录缓办**：用户决策不逐个临时 fork（版本漂移 + UI 重复 + AGENTS.md
     可改源码边界扩张），待出现第二个同类特性时一次性建立 patched-copy
     基础设施（共享 base-path helper）再统一处理。
-  - 插件诊断状态联合（`PluginGraphDiagnosticState`，design 09 §3.5）2026-11
-    扩展：新增 `instance-version-conflict`——同 id 异 rev 且首次认领者是**另一
-    实例**（本地与 gateway 实例运行时版本/插件版本漂移）时上报该状态（任何重启
-    无法切换，须对齐实例版本）；同实例异 rev（重建插件）保持 `restart-required`；
-    跨实例同 rev 复用无诊断。settings-bridge ambient 镜像已同步。
 - **dsh 运行时版本管理（设计 18，M5–M7 已落地）**：剩余验证与实现缺口：
   - macOS 打包态实机：真实 `.app` 内共享 `packages/dsh-runtime`、内嵌 pnpm、
     koffi/dsh CLI 与完整激活/故障回退/数据恢复链；Linux server 同款端到端记录；
@@ -176,6 +171,15 @@
     健康证明、restart 失败回滚、local/global artifact 回退及凭据/env anchor 保留；
   - `--bind 0.0.0.0` 带凭据/显式 `--no-auth`、SSH 隧道回环、tailscale 等可信
     网络形态的全链路及 401/421/403 负例。
+  - **2026-12 修订（用户拍板，桌面网关编排分区移除）**：settings-bridge 不再挂载
+    「网关编排」入口与 `GatewayOrchestrationView`（git/notifications/schedule
+    开关、待处理审批/提问、会话/调度/worktree 投影、修订号显示全部移除）——
+    审批/提问由侧边栏既有事实通道按会话呈现（与本地/ssh 实例同一通道），
+    网关自有投影与功能开关归网关自有 `/chamber/` 运维面；三个编排能力改为
+    **默认开启**（`enabled !== false`，显式 false 才关闭，kill-switch 语义）；
+    `/chamber/` 仪表盘不再展示 settings 文档修订号（json-store 内部计数器，
+    保留存储层校验与 If-Match 原语）。契约见 design 17 §3/§10.4/§10.5 与
+    design 01 §4。
   `session.list`→Git mutation 的 TOCTOU 目前由 realpath fail-closed、两次 live
   check 与 non-force 缩小；彻底消除仍需上游提供原子 session lease。
   - **运行时凭据管理（design 17 §7.4）自动化已落地**：v2 凭据信封（config/runtime

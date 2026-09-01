@@ -258,9 +258,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   `graph-unreachable`，额外 bundle 加载失败 `bundle-load-failed`，同 id 异 rev
   `restart-required`（同实例重建的插件），跨实例版本漂移
   `instance-version-conflict`（异 rev 且异 owner 实例，见 §3.5 修订——任何重启
-  都无法切换，须对齐两个实例的 dsh 运行时版本）。来源标题只显示异常标记，设置的
-  Plugins 页显示状态、插件 id
-  与原因。诊断发布还必须同时命中 boot 的 current generation 与未取消阈值；同 id
+  都无法切换，须对齐两个实例的 dsh 运行时版本）。来源标题只显示异常标记；状态、
+  插件 id 与原因显示在**每实例的插件管理弹窗**（连接设置页，设计 13 §6）——
+  官方 dsh「插件」settings section 是 host inventory，不承载 chamber 自有诊断。
+  诊断发布还必须同时命中 boot 的 current generation 与未取消阈值；同 id
   retry 已开始后，旧 graph Promise 的迟到成功/失败都没有发布权。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
@@ -338,7 +339,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   `build-host-graph-package.mjs` 产出、electron-builder `files` 含 `dist/**/*`，
   开发态走 repo 源码树。
 - **遗留 3（已完成，2026-08）**：图通道失败、bundle 失败与版本冲突均有 UI 诊断；
-  来源标题显示异常标记，Plugins 设置页显示五态与详细原因。
+  来源标题显示异常标记，每实例插件管理弹窗显示六态与详细原因（状态、插件 id 与
+  原因；`instance-version-conflict` 为信息态，中性色展示）。
 - **插件生态成熟度**：当前 dsh 生态的第三方 `dsh.client` 包尚少，本方案是
   "机制先备"。
 - **与 05 契约的关系：已修订（2026-08，本文定稿同批）**——05 §2/§6 与 04 §5 的

@@ -125,6 +125,9 @@
   （本地实例即 chamber 页面，boot 自身证明图通道）。
 - 注入结果写入实例环形缓冲日志（transport-manager `appendLog`，连接设置页
   远端日志面板可见）。
+- 弹窗顶部承载客户端插件运行时加载诊断详情（design 09 §3.5：状态 + 插件 id +
+  原因；`instance-version-conflict` 为中性信息态）——实例卡片只保留状态标记，
+  弹窗是 chamber 诊断的详情面。
 - Git worktree 客户端是 renderer 复合 entry 的首屏 covered package；它不复用
   host-graph 的 installed 投影冒充自身状态，而是按来源调用 `gitWorktree`
   Remote。缺包或尚未重启生效时保留明确的来源错误；ready-time 注入日志说明

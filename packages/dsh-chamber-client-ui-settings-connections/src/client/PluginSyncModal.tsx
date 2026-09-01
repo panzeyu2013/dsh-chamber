@@ -24,6 +24,7 @@ import {
   type PluginDiff, type PluginRow, type PluginRowKind,
 } from './plugin-diff.ts'
 import { PluginAddView } from './PluginAddView.tsx'
+import { pluginDiagnosticText, pluginDiagnosticTone, type PluginDiagnostic } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
 
 type PluginPhase = 'loading' | 'error' | 'ready' | 'applying' | 'done'
@@ -71,11 +72,15 @@ function isActionable(kind: PluginRowKind): boolean {
  * The plugin management modal.
  * @param props.t - bound translate.
  * @param props.spec - remote instance spec, or null for the local instance.
+ * @param props.diagnostic - this instance's client-plugin runtime diagnostic
+ *   (design 09 §3.5): the modal is the detail surface — status, plugin id and
+ *   reason — that instance cards deliberately keep short.
  * @param props.onClose - close (ignored while applying, §5.7).
  */
-export function PluginSyncModal({ t, spec, onClose }: {
+export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
   t: (key: SettingsConnectionsKey) => string
   spec: SshInstanceSpec | null
+  diagnostic?: PluginDiagnostic | undefined
   onClose: () => void
 }): ReactNode {
   const isRemote = spec !== null
@@ -444,6 +449,22 @@ export function PluginSyncModal({ t, spec, onClose }: {
         contentClassName={css.dialogContent}
         footer={footer}
       >
+        {diagnostic !== undefined && diagnostic.state !== 'ok'
+          ? (
+            <p
+              className={clsx(
+                css.pluginDiagnostic,
+                css.pluginDiagnosticDetail,
+                pluginDiagnosticTone(diagnostic.state) === 'problem' ? css.pluginDiagnosticProblem : css.pluginDiagnosticInfo,
+              )}
+              role="status"
+            >
+              <strong>{t('pluginDiagnosticLabel')}：{pluginDiagnosticText(diagnostic.state, t)}</strong>
+              {diagnostic.pluginId !== undefined && <span>{diagnostic.pluginId}</span>}
+              {diagnostic.message !== undefined && <span>{diagnostic.message}</span>}
+            </p>
+          )
+          : null}
         <div className={css.pluginTabs}>
           {(isRemote ? (['sync', 'add'] as const) : (['list', 'add'] as const)).map(id => (
             <button

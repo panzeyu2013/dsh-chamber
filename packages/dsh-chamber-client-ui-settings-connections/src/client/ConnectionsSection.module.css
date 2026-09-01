@@ -398,9 +398,11 @@
 }
 
 /* Client-plugin runtime diagnostic (design 09): a quiet per-instance status
-   line in the connection cards — green = loaded ok, red = a load problem.
-   This is a chamber runtime fact, surfaced here rather than on the official
-   dsh「插件」settings section. */
+   line in the connection cards — green = loaded ok, red = a load problem,
+   neutral = informational (instance-version-conflict: the page reuses
+   another instance's plugin revision; the full detail lives in the plugin
+   dialog). This is a chamber runtime fact, surfaced here rather than on the
+   official dsh「插件」settings section. */
 .pluginDiagnostic {
   margin: 0;
   display: flex;
@@ -421,6 +423,15 @@
 
 .pluginDiagnosticProblem {
   color: var(--dsw-alias-state-error-primary);
+}
+
+.pluginDiagnosticInfo {
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Diagnostic detail block inside the plugin dialog (above the tabs). */
+.pluginDiagnosticDetail {
+  margin: 0 0 10px;
 }
 
 /* ---- log blocks (host logs + per-instance ring buffer) ---- */

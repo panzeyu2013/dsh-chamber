@@ -14,6 +14,20 @@
 
 ### 变更
 
+- **桌面「网关编排」设置分区整体移除（2026-12 用户拍板）** —— settings-bridge
+  不再挂载网关编排导航与 `GatewayOrchestrationView`（功能开关、待处理审批/提问、
+  会话/调度/worktree 投影、修订号显示全部移除）。审批/提问本就由侧边栏既有
+  事实通道按会话呈现（琥珀点 + 等待分类，点入会话作答），设置页里的跨会话
+  平行呈现是第二套 UI（违反 design 01 P1/P2）；网关自有的会话/调度/worktree
+  投影与功能开关归网关自有 `/chamber/` 运维面管理。
+- **Gateway 编排能力默认开启（2026-12 用户拍板）** —— git worktree 编排、
+  通知、跨会话调度从「默认关闭、开关是执行门」改为「默认开启」：`enabled`
+  缺失/true 均视为开启，仅持久化的显式 `enabled:false` 关闭（运维
+  kill-switch）。网关本身已默认强制认证，`--no-auth` 是显式信任网络例外。
+  兼容旧文档：无 section 的 legacy settings.json 升级后同样默认开启。
+- **Gateway 仪表盘不再展示 settings 修订号** —— 修订号是 json-store 协议的
+  内部写入计数器（存储层校验与 If-Match 原语保留），界面上无信息量。
+
 - **连接失败提示区分「SSH 传输错误」与「dsh 实例探测失败」** —— 状态投影新增
   `userActionKind`（`'auth' | 'endpoint' | null`）区分 `requiresUserAction`
   终态的类别：认证/主机密钥/spawn 失败是**传输层**问题（连接设置页保留「请检查
@@ -34,6 +48,10 @@
   `dsh-session-turn-outline` 自动纳入。上游 `dsh-client-ui-primitives`
   markdown 渲染重构（视口懒高亮、代码块 32 行分组、流式→settled DOM 保留）
   为行为性变化，chamber 无直接使用点。
+- **客户端插件诊断降噪（连接设置页）** —— `instance-version-conflict`（实例间
+  插件版本不同）从红色问题样式+完整长消息降为中性信息态短标记（卡片只显示状态，
+  不再显示插件 id 与原因），完整详情（状态 + 插件 id + 原因）移到每实例的插件
+  管理弹窗顶部；诊断纯函数（状态 → 文案/色调）抽出为可测模块并补齐单元测试。
 
 ## [0.2.0-beta.5] - 2026-09-01
 
