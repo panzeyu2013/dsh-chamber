@@ -651,6 +651,15 @@ Gateway 自有 JSON API：
 提示。禁用能力的所有读写路由稳定返回 `403 feature_disabled`。Settings PUT 必须先
 完成 owner-only 持久化，再在同一串行临界区即时 attach/detach。
 
+**Desktop 连接卡的 gateway 主机日志**（2026-11 接线）：gateway 自己的控制面复用
+control-plane 管理面（dispatch 在 dsh 代理 fallthrough 之前认领 `/api/host/*`，
+§8 反代内核），因此桌面 connections 设置页对 `kind==='gateway'` 的主机提供
+「主机日志」入口，经实例代理取 `GET /api/i/gateway-<id>/api/host/logs`
+（`limit`/`offset` 参数、`{port, lines, truncated}` 响应形状与本地卡完全一致，
+主进程注入 sanctioned Authorization/Cookie，renderer 不持 token）；内容为
+gateway 进程 + 托管 dsh spawn 的滚动日志（gateway stateDir）。会话内容日志
+仍属宿主前端域，控制面不消费（AGENTS.md 边界），不在此面暴露。
+
 浏览器可在 `/chamber/` 打开 Gateway 自有编排页；其中 runtime 块完整呈现版本/来源、
 选择与 apply/rollback/restore/retry/restart 动作、失败/快照/磁盘与 registry，且在 managed
 dsh blocked/down 时仍可轮询恢复。页面只使用同源 cookie/fetch，**不持久化** token
