@@ -90,6 +90,21 @@
   态即内建版本），列表 = 当前版本置顶 + 纯 semver 降序（`dist-tags.latest`
   不再钉位/推荐），内建行加「内建」后缀，不再显示「推荐」与「可能无法启动」
   后缀；`latest`/`belowBaseline` 数据标记仍投影、仅不展示。
+  2026-11 修订（gateway 测试轮修复）：
+  - `/chamber/runtime/rollback` 增加**方向守卫**：仅接受严格旧于「有效激活
+    版本」（current 指针 ?? 内建锚，与 desktop `activeVersion()` 同公式）的
+    已安装目标，否则 `409 invalid_target`（无指针且无内建版本时一并拒绝）；
+    `apply()`/`apply-now` 的 manualRollback 公式同步改为有效版本——builtin
+    活跃时的降级保持数据恢复语义（与旧 rollback 行为一致，不再静默收窄）；
+  - settings-bridge gateway 区段合并为单一方向感知按钮（升级「更新到 vX」/
+    降级「切换到 vX」，select+apply；「仅下次启动」独立按钮与「回滚到」按钮
+    移除，语义保留于 hint 与 apply 方向公式）；desktop 本地区段同步改用
+    「切换到」文案（`dshRuntimeActionRollback` key 移除）；
+  - `/chamber/` 仪表盘版本列表改纯 semver 降序 + 「· current」标记，移除
+    「· latest」徽标（与决策 11 一致）；Rollback 按钮仅「降级且已缓存」启用；
+  - gateway 打包形态：`dist/pnpm` 内嵌（build.mjs 解引用复制 + 动态版本
+    守卫），installer local 路径依赖它、缺失即拒绝发布（tarball 成员断言 +
+    裸解包 smoke 进 release.yml）。
 - **apply-now 立即应用（18 增补，2026-03）**：pending 相位新增用户触发的
   「立即应用」（复用既有激活事务与 restartLocal 停机窗口，零新终态、零新崩溃
   窗口）。契约见 `docs/design/18-addendum-apply-now.md`。**剩余验收（§9.2

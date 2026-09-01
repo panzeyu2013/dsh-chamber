@@ -674,6 +674,34 @@ dsh blocked/down 时仍可轮询恢复。页面只使用同源 cookie/fetch，**
 code 映射为可读文案（「输入当前密码以变更凭据」「不能移除最后一个凭据——先配置
 替代」等）；删除 **config 管理**维度时如实提示「removed for now — 重启后重新播种」。
 
+### 10.5 浏览器直连的能力边界
+
+浏览器直接访问 gateway 根路径 `/`（经认证入口的同源页面）得到的是**托管 dsh
+实例自身的官方前端**：`/`、`/plugins/*`、`/api/*` 经 gateway-proxy 反代到
+托管 dsh 实例（§8 反代内核），浏览器侧不加载任何 chamber 代码。**chamber
+自研插件不在其中**：chamber 插件（sidebar/layout/settings-bridge/git/open-in
+等）只随桌面复合 bundle 分发，不注入 gateway 托管的前端。因此浏览器直连
+没有 chamber 的「连接管理 / 设置壳 / 侧边栏」等扩展面，只有官方前端本体。
+
+- **官方设置页在非 loopback 主机名下不可用**（上游既定行为，gateway 不绕过）：
+  官方 `dsh-client-ui-settings` 以 `ctx.remote.$host.isLoopback` 决定持久化
+  模式——`isLoopback=false`（经公网主机名访问）→ `persistence='memory'`
+  → 设置 scope 终态 `unavailable`，页面呈现「settings are unavailable in
+  this browser」一类不可用态；仅当页面经 `127.0.0.1` / `localhost` 访问
+  （`isLoopback=true`）时设置面可用并持久化到宿主。浏览器直连本就不是
+  chamber 设置面的目标通道（桌面 settings-bridge 经实例反代触达
+  `/chamber/runtime`，§10.4/design 18 §9.3），故不依赖该门。
+- **`/chamber/` 编排仪表盘**是浏览器侧的编排面（§10.4）：同源 cookie 会话、
+  功能开关、会话/审批/调度/worktree 投影与 dsh 运行时管理（版本 / 选择 /
+  apply / rollback / restore / retry / restart / registry）。它是 gateway
+  自有的编排入口，与托管前端并列，不依赖 chamber 桌面插件，且**不随 ready
+  detach**（dsh 停机窗口可轮询恢复）。
+- **token-only 部署浏览器无法登录 `/chamber/`**：仪表盘只用同源 cookie
+  （`/auth/login` 密码会话），不消费 bearer token（token 只作为桌面客户端的
+  `Authorization` 头，§7.2）。仅配置 token 而未配置密码的部署，浏览器直连
+  `/chamber/` 没有可用的认证路径——编排面面向桌面客户端与（配置了密码的）
+  浏览器管理员。
+
 ## 11. Git worktree 安全 saga
 
 Git 在 Gateway OS 用户下执行，但客户端不能指定任意仓库执行：
