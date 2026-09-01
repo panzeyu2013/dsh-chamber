@@ -1029,7 +1029,8 @@ PWA 安装、离线缓存和 UA 移动轻面已由 §18 转正为独立设计面
   - 真实用户路径（创建工作区）在 28px 触控目标上难以完成；
   - 官方 index.html 已自带 viewport meta（middleware.ts 注记属实）——问题
     不在缺 viewport，而在**布局与交互范式本身是桌面形态**。
-- **社区现状（调研结论）**：GitHub 生态已有四类移动端方案（详见 §18.4），最成熟
+- **社区现状（调研结论）**：GitHub 生态已有多种移动端方案（详见 §18.4，五仓库
+  四形态），最成熟
   的形态是 **dsh 客户端插件**（`dsh-ui-mobile` / `dsh-client-ui-mobile-adapt` /
   `dsh-mobile-shell` / `dsh-web-ui-mobile`），全部以窄屏 media query + CSS
   覆盖 + 组件重排实现，桌面宽度下与官方布局完全一致；网关形态（`dsh-pocket`
@@ -1127,7 +1128,10 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 >    形态（tsdown/内联 CSS 等）；
 > 2. **N-ctx 多实例**：所有 document 级 effect 按实例根作用域化
 >    （`[data-shell-overlay]` 的 parentElement），generation 隔离——社区插件
->    的单实例全局监听不可照搬；
+>    的单实例全局监听不可照搬。**P1 实现边界（2026-12 记录）**：打标/样式按实例根
+>    作用域化；行为层 effect（IME/回车换行/自愈/Esc）为 document 级单实例设计——
+>    gateway 部署单 shell 下成立，未来多 shell renderer 挂载时必须作用域化
+>    （代码注释已标注）；
 > 3. **layout store 驱动**：chamber 的 `dsh-chamber-client-ui-layout` 已持有
 >    `narrow`/`narrowExpanded`（镜像官方 SIDEBAR_AUTO_COLLAPSE），移动插件
 >    **直接订阅 layout store** 驱动窄屏态与抽屉，不做社区通用的
@@ -1182,8 +1186,10 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
   （mobile-adapt 弃 transform 用 left 位移；mobile-shell 用合成器动画且故意
   不写 will-change）。**chamber 的 ui-layout fork 若把设置对话框移出侧边栏
   portal 可根除**——这是 fork 路线优于外部插件的直接收益；
-- **弹层限宽**：`max-width: calc(100vw - 16px)`（菜单/面板/卡片统一）；
-- **设置面板全屏**：`fixed inset:0` + 导航横向滚动 + 内容纵向滚动；结构识别
+- **弹层限宽**：`max-width: calc(100vw - 24px)`（菜单/面板/卡片统一；实现取
+  24px 留更宽余量）；
+- **设置面板全屏**：`fixed inset:0` + 内容纵向滚动 + safe-area 补边（P1 实现
+  nav 未做横向滚动——官方 nav 条目窄屏可接受，需补时追加 `overflow-x` 规则）；结构识别
   （`[aria-modal]` + nav 首子元素）打标是外部插件的妥协，chamber 在 fork 内
   直接打标；
 - **输入工具行单行**：`flex-wrap: nowrap` + 触发器限宽 112px + 字号 12px；
@@ -1191,7 +1197,10 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
   `100dvh`/`dvh` + `theme-color` 跟随主题 + `interactive-widget=resizes-content`；
   `touch-action` 需给 textarea 恢复 `auto`（否则吞光标）；
 - **轨迹详情**：移动端改底部悬浮卡（`bottom` 抬到输入区上方，`min(52vh,460px)`），
-  或新增 Status 标签页承载统计（mobile-shell 思路）。
+  或新增 Status 标签页承载统计（mobile-shell 思路）。**P1 实现采用第三种形态——
+  右侧覆盖层**：`data-details-collapsed` 移除时 details 列 `position:fixed; right:0`
+  覆盖会话区（保持官方 DOM 零改动、`transform:none` 防 containing-block），取舍：
+  零重写、与抽屉同机制、官方轨迹面板原样可用。
 
 **18.4.4 行为层（移动端复杂度的真正核心）**
 
@@ -1202,7 +1211,10 @@ focus 丢弃循环、readOnly 翻转 blur、pointerup 手势内 refocus、visual
 Promise 链（返回 `originalSink()` 否则输入框永久卡死，社区 v0.1.6 实际踩坑）、
 `:has()` 在手机上每 DOM 变更重算是切标签卡顿源（MutationObserver + microtask
 合并替代）。**chamber 的 dsh-client-web fork 是这些行为补丁的合法落点**
-（现有 fork 补丁面已含 boot/context 类改动）。
+（现有 fork 补丁面已含 boot/context 类改动）。P1.5 已按五层落地 IME 恢复（程序化
+focus 丢弃循环 / editability 翻转 / pointerup 手势 refocus / visualViewport 键盘判定
+/ 键盘钉住）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
+`packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`）。
 
 **18.4.5 官方机制确认与 PWA**
 
@@ -1276,7 +1288,10 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 - 插件注入信任：chamber 插件 seed 沿用 design 09 既有信任模型（仅 chamber 自有
   包、fail-loud、版本对齐），移动插件不引入第三方运行时依赖；
 - SW/缓存纪律：Service Worker 不得缓存认证后响应/凭据；离线能力仅限壳资源与
-  公开资产，会话内容离线另议（分期）；
+  公开资产，会话内容离线另议（分期）；**secure-context 约束（2026-12 决策）**：
+  SW 只能在 HTTPS 或 localhost 注册——先行形态（内网/可信网络明文 HTTP、SSH
+  隧道）下 P2 的 SW/离线不可用；P2 仅覆盖 HTTPS 形态（公网 TLS 反代或 tailscale
+  HTTPS），内网 http 形态无离线能力（与官方「不完整离线」立场一致，不制造假离线）；
 - 公网形态：`--no-auth` 只存在于显式可信网络形态（S21），移动访问不改变该门。
 
 ### 18.6 验收门禁
@@ -1304,6 +1319,8 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 - `04-control-plane-api-data.md`：管理 API、静态服务和数据边界；
 - `05-connection-manager.md`：Desktop transport 与 N-ctx（kind/transport 扩展面）；
 - `08-git-worktree-plugin.md`：迁移期保留的实例内 Git 路线；
+- `09-client-plugin-runtime-loading.md`：chamber 插件 seed/挂载机制（§18 移动插件注入路径）；
+- `19-notifications.md`：桌面原生通知投影（§18 P3 Web Push 触发侧的参考面）；
 - `18-dsh-runtime-version.md`：dsh 运行时版本管理的权威行为契约；§3.6 = per-server
   设置分节（local/gateway/ssh 三态挂载差异）、§9 = gateway 宿主实现设计；
 - `docs/progress/STATUS.md`：当前验证证据和剩余实机门禁。

@@ -162,12 +162,12 @@
   **P1 实现已落地（2026-12）**：`packages/dsh-chamber-client-ui-mobile`（移动适配
   插件本体——触屏档抽屉化布局/44px 触控/safe-area/设置全屏/弹层限宽/输入行单行、
   回车换行与 editability 恢复行为层、layoutFacts 双源驱动的抽屉滚动锁（gateway 官方 ui-layout 回退属性观察，§18.4 项 3 部署例外）、shell.overlay
-  汉堡+backdrop；零代码复制、按 v0.1.2-alpha.3 基线重写；typecheck/20 测试/
+  汉堡+backdrop；零代码复制、按 v0.1.2-alpha.3 基线重写；typecheck/21 测试/
   构建全绿）+ `dsh-chamber-client-ui-layout` fork 订阅面（`ctx.layoutFacts`：
   getLayoutSnapshot/subscribeLayout，回归全绿）+ gateway 接线（build.mjs
   host-packages 拷贝、seedFiles 含 lib/client.js、UA 分流开关默认关闭——
   `--mobile-ua-redirect`/`--mobile-entry`，9 个 UA 用例 + 4 个 config 用例全绿，
-  test:gateway 350/347 pass）。
+  test:gateway 全绿（fail 0，含 9 UA + 4 config + build 产物断言））
   **P1.5 已完成（2026-12）**：IME 恢复完整五层（程序化 focus 丢弃循环/
   editability 翻转/pointerup 手势 refocus/visualViewport 键盘判定/键盘钉住）、
   composer 30s busy 自愈、共享 layout source（滚动锁/Esc 单实例）、
