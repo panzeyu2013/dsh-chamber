@@ -14,8 +14,9 @@
 
 .title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  /* 2026-11: unified with the other chamber sections (通用 16px/500). */
+  font-size: 16px;
+  font-weight: 500;
 }
 
 .intro {
@@ -56,6 +57,23 @@
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
   transition: border-color .16s, background .16s;
+}
+
+/* 2026-11 横向化: name/status/meta 在左，操作按钮在右（不再纵向堆叠、
+   右半空白）。窄卡时操作行自动换行到下一行。 */
+.localHeadRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.localHeadText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .localHead {
@@ -317,10 +335,23 @@
 }
 
 /* The dashed add entry, after the card grid: it reads as a place a host
-   will appear, not a command. */
+   will appear, not a command. 2026-11: rendered as the LAST GRID CELL
+   (same card size) when the roster is non-empty; standalone full-width
+   below the empty state otherwise. */
+.creatorCell {
+  display: flex;
+}
+
+/* In the grid the button fills its (stretched) cell so the dashed entry reads
+   as a card-shaped placeholder; standalone (empty roster) it stays 44px. */
+.creatorCell .creatorButton {
+  height: 100%;
+  min-height: 44px;
+}
+
 .creatorButton {
   box-sizing: border-box;
-  align-self: stretch;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -519,10 +550,35 @@
   background: var(--dsw-alias-interactive-bg-hover-danger);
 }
 
+/* 2026-11 两列化: short fields pair side by side; long fields (URL,
+   credentials, config picker, warnings) span both columns via .spanAll. */
 .dialogFields {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  align-items: start;
+}
+
+.dialogFields > * {
+  min-width: 0;
+}
+
+.spanAll {
+  grid-column: 1 / -1;
+}
+
+/* Lets a fragment wrapper's children participate in the OUTER grid as items
+   (GatewayAuthFields: token + password pair side by side, hint spans all). */
+.spanContents {
+  display: contents;
+}
+
+/* display:contents children are grid items but NOT direct children of
+   .dialogFields, so the `> *` min-width guard does not reach them — without
+   this, the credential inputs keep min-width:auto and could overflow their
+   column in a very narrow window. */
+.spanContents > * {
+  min-width: 0;
 }
 
 .field {

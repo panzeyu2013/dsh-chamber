@@ -292,7 +292,7 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
         />
         {fieldErrors.gatewayPassword === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayPassword}</span>}
       </label>
-      <span className={css.dim}>{hint}</span>
+      <span className={clsx(css.dim, css.spanAll)}>{hint}</span>
     </>
   )
 }
@@ -1008,6 +1008,15 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const dshVersion = runtimeState?.active
     ?? (typeof window !== 'undefined' ? (window.dshChamber?.dshVersion ?? null) : null)
 
+  /** 虚线添加入口（2026-11）：有卡片时作为网格的最后一个单元格，与卡片
+   *  同宽；空名单时独立通栏显示。 */
+  const creatorButton = (
+    <button type="button" className={css.creatorButton} onClick={openAdd}>
+      <IconPlusOutline16 size={14} />
+      {t('addHost')}
+    </button>
+  )
+
   return (
     <div className={css.section}>
       <h2 className={css.title}>{t('nav')}</h2>
@@ -1026,19 +1035,60 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       <section className={css.group}>
         <h3 className={css.groupHead}>{t('localTitle')}</h3>
         <div className={css.localCard}>
-          <div className={css.localHead}>
-            <span className={css.localName}>{t('localTitle')}</span>
-            <span className={clsx(
-              css.badge,
-              dsh?.status === 'error' || dsh?.status === 'degraded' ? css.badgeBad : healthy ? css.badgeOk : undefined,
-            )}>
-              {t(localStatusKey(dsh?.status ?? ''))}
-            </span>
-          </div>
-          <div className={css.localMeta}>
-            <span>{t('localPort')}：<span className={css.mono}>{dsh?.port ?? '—'}</span></span>
-            {connection?.label !== undefined && connection.label !== '' ? <span>{connection.label}</span> : null}
-            {dshVersion != null && dshVersion !== '' ? <span className={css.mono}>dsh v{dshVersion}</span> : null}
+          {/* 2026-11 横向化: 名称+状态+meta 在左，操作在右。 */}
+          <div className={css.localHeadRow}>
+            <div className={css.localHeadText}>
+              <div className={css.localHead}>
+                <span className={css.localName}>{t('localTitle')}</span>
+                <span className={clsx(
+                  css.badge,
+                  dsh?.status === 'error' || dsh?.status === 'degraded' ? css.badgeBad : healthy ? css.badgeOk : undefined,
+                )}>
+                  {t(localStatusKey(dsh?.status ?? ''))}
+                </span>
+              </div>
+              <div className={css.localMeta}>
+                <span>{t('localPort')}：<span className={css.mono}>{dsh?.port ?? '—'}</span></span>
+                {connection?.label !== undefined && connection.label !== '' ? <span>{connection.label}</span> : null}
+                {dshVersion != null && dshVersion !== '' ? <span className={css.mono}>dsh v{dshVersion}</span> : null}
+              </div>
+            </div>
+            <div className={css.localActions}>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={healthy || starting || localBusy || stopping || runtimeStartBlocked}
+                onClick={() => { void startLocal() }}
+              >
+                {t('localStart')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!healthy || localBusy || stopping}
+                onClick={() => { setStopConfirm(true) }}
+              >
+                {t('localStop')}
+              </Button>
+              <button
+                type="button"
+                className={css.iconButton}
+                data-tip={t('pluginsOpen')}
+                aria-label={t('pluginsOpen')}
+                onClick={() => { setPluginFor('local') }}
+              >
+                <IconChecklistOutline14 />
+              </button>
+              <button
+                type="button"
+                className={css.iconButton}
+                data-tip={t('localRefresh')}
+                aria-label={t('localRefresh')}
+                onClick={() => { void loadLocal() }}
+              >
+                <IconRefreshOutline16 />
+              </button>
+            </div>
           </div>
           {dsh?.error != null && dsh.error !== '' ? <p className={css.error}>{dsh.error}</p> : null}
           {localError !== null ? <p className={css.error} role="alert">{localError}</p> : null}
@@ -1050,43 +1100,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 ? <p className={css.hint}>{runtimeState.runtimeBlockedReason ?? t('localRuntimeBlocked')}</p>
                 : null}
           <PluginDiagnosticLine diagnostic={pluginDiagnostics?.['local']} t={t} />
-          <div className={css.localActions}>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={healthy || starting || localBusy || stopping || runtimeStartBlocked}
-              onClick={() => { void startLocal() }}
-            >
-              {t('localStart')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!healthy || localBusy || stopping}
-              onClick={() => { setStopConfirm(true) }}
-            >
-              {t('localStop')}
-            </Button>
-            <span className={css.footSpacer} />
-            <button
-              type="button"
-              className={css.iconButton}
-              data-tip={t('pluginsOpen')}
-              aria-label={t('pluginsOpen')}
-              onClick={() => { setPluginFor('local') }}
-            >
-              <IconChecklistOutline14 />
-            </button>
-            <button
-              type="button"
-              className={css.iconButton}
-              data-tip={t('localRefresh')}
-              aria-label={t('localRefresh')}
-              onClick={() => { void loadLocal() }}
-            >
-              <IconRefreshOutline16 />
-            </button>
-          </div>
           <div className={css.logArea}>
             <div className={css.logHead}>
               <button
@@ -1135,9 +1148,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         <h3 className={css.groupHead}>{t('remoteTitle')}</h3>
         {rosterError !== null ? <p className={css.error} role="alert">{rosterError}</p> : null}
         {instances.length === 0
-          ? (rosterLoading
-            ? <p className={css.dim}>{t('loading')}</p>
-            : <p className={css.dim}>{t('hostsEmpty')}</p>)
+          ? (
+            <>
+              {rosterLoading
+                ? <p className={css.dim}>{t('loading')}</p>
+                : <p className={css.dim}>{t('hostsEmpty')}</p>}
+              {creatorButton}
+            </>
+          )
           : (
             <ul className={css.cards}>
               {instances.map(spec => {
@@ -1310,12 +1328,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                   </li>
                 )
               })}
+              {/* 虚线添加入口：网格的最后一个单元格（与卡片同宽）。 */}
+              <li className={css.creatorCell}>{creatorButton}</li>
             </ul>
           )}
-        <button type="button" className={css.creatorButton} onClick={openAdd}>
-          <IconPlusOutline16 size={14} />
-          {t('addHost')}
-        </button>
       </section>
 
       <Modal
@@ -1366,7 +1382,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 const reentry = credentialReentryEdit(editing, draft)
                 return reentry.sshPassword || reentry.gatewayToken || reentry.gatewayPassword
               })()
-                ? <p className={css.warnHint} role="alert">{t('targetChangedHint')}</p>
+                ? <p className={clsx(css.warnHint, css.spanAll)} role="alert">{t('targetChangedHint')}</p>
                 : null}
               <label className={css.field}>
                 <span className={css.fieldLabel}>{t('kindLabel')}</span>
@@ -1409,7 +1425,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               </label>
               {editing === 'new' && draft.transport === 'ssh'
                 ? (
-                  <div className={css.configPicker}>
+                  <div className={clsx(css.configPicker, css.spanAll)}>
                     <div className={css.configHead}>
                       <span className={css.fieldLabel}>{t('configTitle')}</span>
                       <button
@@ -1480,7 +1496,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               {transportFormSchema(draft.transport).fieldGroup === 'url'
                 ? (
                   <>
-                    <label className={css.field}>
+                    <label className={clsx(css.field, css.spanAll)}>
                       <span className={css.fieldLabel}>{t('fieldDirectUrl')}</span>
                       <input
                         className={css.input}
@@ -1500,12 +1516,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     </label>
                     {spkiPinEligible(draft)
                       ? (
-                        <GatewaySpkiField
-                          draft={draft}
-                          fieldError={fieldErrors.spkiPin}
-                          onChange={spkiPin => { setDraft({ ...draft, spkiPin }) }}
-                          t={t}
-                        />
+                        <div className={css.spanAll}>
+                          <GatewaySpkiField
+                            draft={draft}
+                            fieldError={fieldErrors.spkiPin}
+                            onChange={spkiPin => { setDraft({ ...draft, spkiPin }) }}
+                            t={t}
+                          />
+                        </div>
                       )
                       : null}
                     {/* Gateway authentication is target-owned and works over
@@ -1513,16 +1531,18 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         SPKI surface. */}
                     {draft.kind === 'gateway'
                       ? (
-                        <GatewayAuthFields
-                          draft={draft}
-                          onChange={patch => { setDraft(prev => (prev === null ? prev : { ...prev, ...patch })) }}
-                          fieldErrors={fieldErrors}
-                          editing={editing}
-                          targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
-                          onClearToken={() => { void clearGatewayToken() }}
-                          onClearPassword={() => { void clearGatewayPassword() }}
-                          t={t}
-                        />
+                        <div className={css.spanContents}>
+                          <GatewayAuthFields
+                            draft={draft}
+                            onChange={patch => { setDraft(prev => (prev === null ? prev : { ...prev, ...patch })) }}
+                            fieldErrors={fieldErrors}
+                            editing={editing}
+                            targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
+                            onClearToken={() => { void clearGatewayToken() }}
+                            onClearPassword={() => { void clearGatewayPassword() }}
+                            t={t}
+                          />
+                        </div>
                       )
                       : null}
                   </>
@@ -1554,7 +1574,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     {/* SSH transport authentication is independent of target
                         authentication. gateway+ssh therefore renders this
                         field AND the GatewayAuthFields below. */}
-                    <label className={css.field}>
+                    <label className={clsx(css.field, css.spanAll)}>
                       <span className={css.fieldLabelRow}>
                         <span className={css.fieldLabel}>{t('fieldPassword')}</span>
                         {editing !== null && editing !== 'new' && editing.transport === 'ssh'
@@ -1583,16 +1603,18 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     </label>
                     {draft.kind === 'gateway'
                       ? (
-                        <GatewayAuthFields
-                          draft={draft}
-                          onChange={patch => { setDraft(prev => (prev === null ? prev : { ...prev, ...patch })) }}
-                          fieldErrors={fieldErrors}
-                          editing={editing}
-                          targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
-                          onClearToken={() => { void clearGatewayToken() }}
-                          onClearPassword={() => { void clearGatewayPassword() }}
-                          t={t}
-                        />
+                        <div className={css.spanContents}>
+                          <GatewayAuthFields
+                            draft={draft}
+                            onChange={patch => { setDraft(prev => (prev === null ? prev : { ...prev, ...patch })) }}
+                            fieldErrors={fieldErrors}
+                            editing={editing}
+                            targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
+                            onClearToken={() => { void clearGatewayToken() }}
+                            onClearPassword={() => { void clearGatewayPassword() }}
+                            t={t}
+                          />
+                        </div>
                       )
                       : null}
                     <label className={css.field}>
@@ -1645,7 +1667,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     </label>
                   </>
                 )}
-              {formError === null ? null : <p className={css.error} role="alert">{formError}</p>}
+              {formError === null ? null : <p className={clsx(css.error, css.spanAll)} role="alert">{formError}</p>}
             </div>
           )}
       </Modal>

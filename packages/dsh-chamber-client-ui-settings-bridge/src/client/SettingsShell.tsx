@@ -381,6 +381,21 @@ function SettingsPanel({
   // server-section id that left the ledger falls back to the first row.
   const gatewayAvailable = selected?.kind === 'gateway'
   const active = resolveActiveSection(activeId, rows, gatewayAvailable)
+  // Header context (2026-11): the active section label on the left; the
+  // selected server name sits under it ONLY for server-owned content (the
+  // chamber-global 连接/通用 pages are server-independent — implying a server
+  // there would mislead). Fills the header that used to sit empty for remote
+  // and unavailable states.
+  const headerTitle = active === CONNECTIONS_SECTION_ID
+    ? t('connectionsNav')
+    : active === GENERAL_SECTION_ID
+      ? t('generalNav')
+      : active === GATEWAY_SECTION_ID
+        ? t('gatewayNav')
+        : rows.find(row => row.id === active)?.label ?? t('title')
+  const headerSub = active !== CONNECTIONS_SECTION_ID && active !== GENERAL_SECTION_ID
+    ? selected?.label ?? ''
+    : ''
   // Per-source client-plugin runtime diagnostics, keyed by source id
   // ('local' | '<kind>-<id>'), handed to the chamber-global connections surface.
   // The diagnostic is a chamber-owned fact (design 09) and belongs in the
@@ -456,6 +471,10 @@ function SettingsPanel({
         </nav>
         <div className={css.content}>
           <div className={css.header}>
+            <div className={css.headerText}>
+              <span className={css.headerTitle}>{headerTitle}</span>
+              {headerSub !== '' && <span className={css.headerSub}>{headerSub}</span>}
+            </div>
             <div className={css.actions}>
               {/* The official open-document action ("打开配置文件") is a
                   HOST-MACHINE file operation (native opener): it renders for

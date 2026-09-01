@@ -4,6 +4,15 @@
  * style control groups (group headings + flat rows), styled with the settings
  * panel's design language (`--dsw-alias-*` tokens).
  *
+ * Layout (2026-11 横向化修订): the row paradigm is unified to「text left,
+ * control right」— short toggle groups (启动与关闭 / 运行) become a two-column
+ * card grid (.generalGrid + .generalCard), the two radio pairs (关闭窗口时 /
+ * 通知时机) become one-line segmented controls (.generalSegmented), and the
+ * three notification-event toggles share one line of mini cards
+ * (.generalEventGrid). Every control stays a native checkbox/radio with the
+ * accent-color token (no custom widgets); narrow panels auto-collapse the
+ * columns via auto-fit.
+ *
  * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
  * - 启动与关闭: 关闭窗口行为 (windowCloseBehavior: hide-to-tray / quit);
@@ -26,6 +35,7 @@
  * user could not recover would strand the app.
  */
 import { useCallback, useId, useState, useSyncExternalStore } from 'react'
+import clsx from 'clsx'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
@@ -36,36 +46,59 @@ import css from './SettingsShell.module.css'
 /** The shell's bound translate (params supported). */
 type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
-/**
- * One checkbox-style toggle row (OpenChamber SettingsCheckboxRow pattern): a
- * native checkbox (accent-color token, no custom widget), the label beside it;
- * disabled with a hint when a platform gate denies the capability.
- */
-function ToggleRow({
-  label, checked, disabled, onChange, busy, t,
+/** One checkbox toggle in a card (grid): title + hint left, native checkbox
+ *  right; the WHOLE card is the label so the hit target is the card. */
+function ToggleCard({
+  label, hint, checked, disabled, onChange, busy,
+}: {
+  label: string
+  hint: string
+  checked: boolean
+  disabled?: boolean
+  onChange: (next: boolean) => void
+  busy: boolean
+}) {
+  return (
+    <label className={clsx(css.generalCard, disabled === true ? css.generalDisabled : undefined)}>
+      <div className={css.generalCardHead}>
+        <div className={css.generalCardText}>
+          <span className={css.generalFieldLabel}>{label}</span>
+          <p className={css.generalHint}>{hint}</p>
+        </div>
+        <input
+          type="checkbox"
+          className={css.generalCardCheck}
+          checked={checked}
+          disabled={disabled === true || busy}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+      </div>
+    </label>
+  )
+}
+
+/** One notification-event mini toggle (one line of three): short title left,
+ *  checkbox right. Disabled (un-hydrated skeleton) dims like ToggleCard. */
+function ToggleEvent({
+  label, checked, disabled, onChange, busy,
 }: {
   label: string
   checked: boolean
   disabled?: boolean
   onChange: (next: boolean) => void
   busy: boolean
-  t: GeneralTranslate
 }) {
   return (
-    <div className={css.generalRow}>
-      <label className={`${css.generalToggle} ${disabled === true ? css.generalDisabled : ''}`}>
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={disabled === true || busy}
-          onChange={(event) => onChange(event.target.checked)}
-        />
-        <span>{label}</span>
-      </label>
-      {disabled === true && t !== undefined && (
-        <p className={css.generalHint}>{t('generalUnavailable')}</p>
-      )}
-    </div>
+    <label className={clsx(css.generalEventCard, disabled === true ? css.generalDisabled : undefined)}>
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        className={css.generalCardCheck}
+        checked={checked}
+        disabled={disabled === true || busy}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
   )
 }
 
@@ -104,8 +137,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   }, [])
 
   /** 「发送测试通知」— bypasses the settings gates in the main process (design
-      19 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
-      never a silent fake success. */
+       19 §3.3: kind 'test' skips the enabled/kind/mode checks). Inline feedback,
+       never a silent fake success. */
   const sendTestNotification = useCallback(() => {
     const surface = testNotifySurface()
     if (surface === null) return
@@ -147,68 +180,80 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupLifecycle')}</h3>
 
-        <div className={css.generalRow}>
-          <span className={css.generalFieldLabel} id={closeBehaviorLabel}>{t('generalCloseBehavior')}</span>
-          <div className={css.generalOptions} role="group" aria-labelledby={closeBehaviorLabel}>
-            <label className={`${css.generalOption} ${supported?.closeToTray === false ? css.generalDisabled : ''}`}>
-              <input
-                type="radio"
-                name={closeBehaviorGroup}
-                checked={settings?.windowCloseBehavior === 'hide-to-tray'}
-                disabled={!hydrated || supported?.closeToTray === false || busy}
-                onChange={() => save({ windowCloseBehavior: 'hide-to-tray' })}
-              />
-              <span>{t('generalCloseBehaviorHide')}</span>
-            </label>
-            <label className={css.generalOption}>
-              <input
-                type="radio"
-                name={closeBehaviorGroup}
-                checked={settings?.windowCloseBehavior === 'quit'}
-                disabled={!hydrated || busy}
-                onChange={() => save({ windowCloseBehavior: 'quit' })}
-              />
-              <span>{t('generalCloseBehaviorQuit')}</span>
-            </label>
+        <div className={css.generalGrid}>
+          {/* 关闭窗口时: 分段单选，一行两个选项；无托盘时禁用并改提示文案。
+              hint 随选中值切换（选中「退出应用」时不再描述后台运行）。 */}
+          <div className={css.generalCard}>
+            <div className={css.generalCardText}>
+              <span className={css.generalFieldLabel} id={closeBehaviorLabel}>{t('generalCloseBehavior')}</span>
+              <p className={css.generalHint}>
+                {supported?.closeToTray === false
+                  ? t('generalCloseBehaviorUnavailable')
+                  : settings?.windowCloseBehavior === 'quit'
+                    ? t('generalCloseBehaviorQuitDesc')
+                    : t('generalCloseBehaviorDesc')}
+              </p>
+            </div>
+            <div className={css.generalSegmented} role="group" aria-labelledby={closeBehaviorLabel}>
+              <label className={css.generalSegment}>
+                <input
+                  type="radio"
+                  name={closeBehaviorGroup}
+                  checked={settings?.windowCloseBehavior === 'hide-to-tray'}
+                  disabled={!hydrated || supported?.closeToTray === false || busy}
+                  onChange={() => save({ windowCloseBehavior: 'hide-to-tray' })}
+                />
+                <span>{t('generalCloseBehaviorHide')}</span>
+              </label>
+              <label className={css.generalSegment}>
+                <input
+                  type="radio"
+                  name={closeBehaviorGroup}
+                  checked={settings?.windowCloseBehavior === 'quit'}
+                  disabled={!hydrated || busy}
+                  onChange={() => save({ windowCloseBehavior: 'quit' })}
+                />
+                <span>{t('generalCloseBehaviorQuit')}</span>
+              </label>
+            </div>
           </div>
-          {supported?.closeToTray === false && (
-            <p className={css.generalHint}>{t('generalCloseBehaviorUnavailable')}</p>
-          )}
-        </div>
 
-        <ToggleRow
-          t={t}
-          label={t('generalLaunchAtLogin')}
-          checked={settings?.launchAtLogin === true}
-          disabled={!hydrated || supported?.launchAtLogin === false}
-          busy={busy}
-          onChange={(next) => save({ launchAtLogin: next })}
-        />
+          <ToggleCard
+            label={t('generalLaunchAtLogin')}
+            hint={supported?.launchAtLogin === false ? t('generalUnavailable') : t('generalLaunchAtLoginDesc')}
+            checked={settings?.launchAtLogin === true}
+            disabled={!hydrated || supported?.launchAtLogin === false}
+            busy={busy}
+            onChange={(next) => save({ launchAtLogin: next })}
+          />
+        </div>
       </div>
 
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupRuntime')}</h3>
 
-        <ToggleRow
-          t={t}
-          label={t('generalKeepAwake')}
-          checked={settings?.keepAwake === true}
-          disabled={!hydrated}
-          busy={busy}
-          onChange={(next) => save({ keepAwake: next })}
-        />
+        <div className={css.generalGrid}>
+          <ToggleCard
+            label={t('generalKeepAwake')}
+            hint={t('generalKeepAwakeDesc')}
+            checked={settings?.keepAwake === true}
+            disabled={!hydrated}
+            busy={busy}
+            onChange={(next) => save({ keepAwake: next })}
+          />
 
-        {/* 退出确认（2026-08 修订）：可设置开关；仅本地实例运行中时确认，
-            远程连接不影响关闭；更新已下载时豁免。未水合时按默认值 true
-            渲染（`!== false`），与「绝不假 off」的占位纪律一致。 */}
-        <ToggleRow
-          t={t}
-          label={t('generalQuitConfirm')}
-          checked={settings?.quitConfirmation !== false}
-          disabled={!hydrated}
-          busy={busy}
-          onChange={(next) => save({ quitConfirmation: next })}
-        />
+          {/* 退出确认（2026-08 修订）：可设置开关；仅本地实例运行中时确认，
+              远程连接不影响关闭；更新已下载时豁免。未水合时按默认值 true
+              渲染（`!== false`），与「绝不假 off」的占位纪律一致。 */}
+          <ToggleCard
+            label={t('generalQuitConfirm')}
+            hint={t('generalQuitConfirmDesc')}
+            checked={settings?.quitConfirmation !== false}
+            disabled={!hydrated}
+            busy={busy}
+            onChange={(next) => save({ quitConfirmation: next })}
+          />
+        </div>
       </div>
 
       {/* 通知 (design 19, merged into General — no new nav entry): 主开关 +
@@ -218,19 +263,28 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupNotifications')}</h3>
 
-        <ToggleRow
-          t={t}
-          label={t('generalNotificationsEnabled')}
-          checked={notifications.enabled === true}
-          disabled={!hydrated}
-          busy={busy}
-          onChange={(next) => save(notificationsPatch({ enabled: next }))}
-        />
+        {/* 主开关: 整行即 label（可访问名称 + 整行可点）；未水合骨架态整行
+            变淡，与 ToggleCard 的占位纪律一致。 */}
+        <label className={clsx(css.generalLine, !hydrated && css.generalDisabled)}>
+          <div className={css.generalCardText}>
+            <span className={css.generalFieldLabel}>{t('generalNotificationsEnabled')}</span>
+          </div>
+          <input
+            type="checkbox"
+            className={css.generalCardCheck}
+            checked={notifications.enabled === true}
+            disabled={!hydrated || busy}
+            onChange={(event) => save(notificationsPatch({ enabled: event.target.checked }))}
+          />
+        </label>
 
-        <div className={css.generalRow}>
-          <span className={css.generalFieldLabel} id={notifyModeLabel}>{t('generalNotificationsMode')}</span>
-          <div className={css.generalOptions} role="group" aria-labelledby={notifyModeLabel}>
-            <label className={css.generalOption}>
+        <div className={css.generalLine}>
+          <div className={css.generalCardText}>
+            <span className={css.generalFieldLabel} id={notifyModeLabel}>{t('generalNotificationsMode')}</span>
+            <p className={css.generalHint}>{t('generalNotificationsModeDesc')}</p>
+          </div>
+          <div className={css.generalSegmented} role="group" aria-labelledby={notifyModeLabel}>
+            <label className={css.generalSegment}>
               <input
                 type="radio"
                 name={notifyModeGroup}
@@ -240,7 +294,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
               />
               <span>{t('generalNotificationsModeHidden')}</span>
             </label>
-            <label className={css.generalOption}>
+            <label className={css.generalSegment}>
               <input
                 type="radio"
                 name={notifyModeGroup}
@@ -253,34 +307,31 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           </div>
         </div>
 
-        <ToggleRow
-          t={t}
-          label={t('generalNotifyOnComplete')}
-          checked={notifications.onComplete !== false}
-          disabled={!hydrated}
-          busy={busy}
-          onChange={(next) => save(notificationsPatch({ onComplete: next }))}
-        />
+        <div className={css.generalEventGrid}>
+          <ToggleEvent
+            label={t('generalNotifyOnComplete')}
+            checked={notifications.onComplete !== false}
+            disabled={!hydrated}
+            busy={busy}
+            onChange={(next) => save(notificationsPatch({ onComplete: next }))}
+          />
+          <ToggleEvent
+            label={t('generalNotifyOnAsk')}
+            checked={notifications.onAsk !== false}
+            disabled={!hydrated}
+            busy={busy}
+            onChange={(next) => save(notificationsPatch({ onAsk: next }))}
+          />
+          <ToggleEvent
+            label={t('generalNotifyOnRequest')}
+            checked={notifications.onRequest !== false}
+            disabled={!hydrated}
+            busy={busy}
+            onChange={(next) => save(notificationsPatch({ onRequest: next }))}
+          />
+        </div>
 
-        <ToggleRow
-          t={t}
-          label={t('generalNotifyOnAsk')}
-          checked={notifications.onAsk !== false}
-          disabled={!hydrated}
-          busy={busy}
-          onChange={(next) => save(notificationsPatch({ onAsk: next }))}
-        />
-
-        <ToggleRow
-          t={t}
-          label={t('generalNotifyOnRequest')}
-          checked={notifications.onRequest !== false}
-          disabled={!hydrated}
-          busy={busy}
-          onChange={(next) => save(notificationsPatch({ onRequest: next }))}
-        />
-
-        <div className={css.generalRow}>
+        <div className={css.generalTestRow}>
           <button
             type="button"
             className={css.updateButton}
