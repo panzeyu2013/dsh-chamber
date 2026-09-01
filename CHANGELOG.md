@@ -10,6 +10,23 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 变更
+
+- **dsh 基线升级 0.1.2-alpha.2 → 0.1.2-alpha.3** —— 构建期源码
+  （`harness.commit` / submodule gitlink = `dd6322d6`）与捆绑运行时
+  （`@deepseek-ai/dsh@0.1.2-alpha.3`）双线同步：in-repo fork 副本基线
+  0.1.2-alpha.3——`dsh-client-connection` 重放上游 tolerate-stalled-hosts
+  两 hunk（就绪握手超时只 warn 不再取消 generation，慢后端不再被误判为
+  断网；chamber 的 loopEpoch/liveness 补丁不受影响），`dsh-client-web` 与
+  `dsh-api-gateway` 为纯版本号同步（上游两包 a3 无源码变更）。上游 a3 移除
+  SQLite 会话持久化后端（`dsh-session-persistence-sqlite`）与
+  `dsh-agent-spine-demo`，锁文件孤儿 importer 记录已清理；新增 vendor 包
+  `dsh-session-turn-outline` 自动纳入。上游 `dsh-client-ui-primitives`
+  markdown 渲染重构（视口懒高亮、代码块 32 行分组、流式→settled DOM 保留）
+  为行为性变化，chamber 无直接使用点。
+
 ## [0.2.0-beta.5] - 2026-09-01
 
 > 聚合 0.2.0-beta.1 → beta.4 的全部迭代（桌面连接管理器 + 认证

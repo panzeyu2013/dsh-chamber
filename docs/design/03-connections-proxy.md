@@ -277,7 +277,7 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 - **响应头白名单**（收敛上游头，防 hop-by-hop / 凭据泄露）：完整列表见
   **04 §4.3**（WS upgrade 101 所需头除外）。
 - **体积上限**：带可信 `Content-Length` 的请求体 ≤ 300MiB；未知长度/chunked 请求体
-  ≤ 32MiB（避免 chunks + concat 的双份峰值）；响应体 ≤ 300MiB（与上游 dsh 0.1.2-alpha.2
+  ≤ 32MiB（避免 chunks + concat 的双份峰值）；响应体 ≤ 300MiB（与上游 dsh 0.1.2-alpha.3
   的 300MiB 请求体上限 / 200MiB 图片准入对齐：200MiB 图片 base64 膨胀
   ~267.7MiB 后仍留余量；沿用 v2 runtime-proxy 语义；超限 → 413 / 取消上游
   流，显式而非截断静默）；请求体分片空闲超过

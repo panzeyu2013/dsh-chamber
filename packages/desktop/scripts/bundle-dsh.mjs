@@ -18,7 +18,7 @@ import { ALLOW_BUILDS } from '../allow-builds.mjs';
  *   - 默认固定为经验证的精确版本（构建永不解析浮动 tag/range）
  *   - 此版本只属于桌面应用内嵌的本地 runtime，不要求远程 dsh 同版本；
  *     远程实例独立升级，只在连接时做协议能力兼容检查
- *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（如 0.1.2-alpha.2）
+ *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（如 0.1.2-alpha.3）
  *     用于显式升级验证；`latest`、range 与 URL 一律拒绝
  *   - 封装完成后 vendor/dsh/package.json 记录实际解析到的精确版本
  *     （dependencies["@deepseek-ai/dsh"]），可复现重建；--force 刷新当前 pin。
@@ -77,7 +77,7 @@ function lockfileDshVersion() {
     const match = /@deepseek-ai\/dsh@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(text);
     if (match !== null) return match[1];
   } catch { /* fall through to the pin */ }
-  return '0.1.2-alpha.2';
+  return '0.1.2-alpha.3';
 }
 const DEFAULT_DSH_VERSION = lockfileDshVersion();
 const BUNDLE_PNPM_VERSION = '11.21.0';

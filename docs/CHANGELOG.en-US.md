@@ -10,6 +10,26 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Changed
+
+- **dsh baseline upgrade 0.1.2-alpha.2 → 0.1.2-alpha.3** — both lines moved
+  together: the build-time source pin (`harness.commit` / submodule gitlink =
+  `dd6322d6`) and the bundled runtime (`@deepseek-ai/dsh@0.1.2-alpha.3`).
+  In-repo fork copies rebased to 0.1.2-alpha.3: `dsh-client-connection`
+  replays upstream's tolerate-stalled-hosts hunks (the readiness-handshake
+  timeout now warns instead of cancelling the generation, so a slow backend
+  is no longer misread as a network drop; the chamber loopEpoch/liveness
+  patches are unaffected), while `dsh-client-web` and `dsh-api-gateway` are
+  version-only syncs (no upstream source changes in a3). Upstream a3 removes
+  the SQLite session persistence backend (`dsh-session-persistence-sqlite`)
+  and `dsh-agent-spine-demo`; orphan lockfile importer records were cleaned;
+  the new vendor package `dsh-session-turn-outline` is picked up
+  automatically. The upstream `dsh-client-ui-primitives` markdown rendering
+  rework (viewport-gated highlighting, 32-line stream groups, stream→settled
+  DOM retention) is behavioral only and has no chamber usage points.
+
 ## [0.2.0-beta.5] - 2026-09-01
 
 > Aggregates the full 0.2.0-beta.1 → beta.4 line
