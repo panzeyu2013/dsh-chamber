@@ -570,7 +570,13 @@ export default function App() {
       return changed ? next : prev
     })
     for (const id of Object.keys(snapshotSourcesRef.current)) {
-      if (!servers.some(server => server.id === id)) delete snapshotSourcesRef.current[id]
+      if (!servers.some(server => server.id === id)) {
+        delete snapshotSourcesRef.current[id]
+        // Keep recency in lockstep: a same-id re-add must start as
+        // never-pushed (first-boot window falls back) rather than inheriting
+        // the removed source's last-push timestamp.
+        delete snapshotAtRef.current[id]
+      }
     }
     setPluginDiagnostics(prev => {
       const next = { ...prev }
@@ -1845,9 +1851,15 @@ export default function App() {
 
   /**
    * Mounted source ctxs publish the same complete snapshot shape as the unary
-   * fallback. A push invalidates any older in-flight pull before committing;
-   * an incomplete/reconnecting producer withdraws its snapshot and the
-   * immediate fallback reevaluation above takes over.
+   * fallback. A push invalidates any older in-flight pull before committing.
+   * A withdrawal (`undefined`) means the source's arrival baselines have not
+   * landed (first boot window); a source that ALREADY pushed once keeps its
+   * mounted marker and last aggregate — dropping them would hand the source
+   * to the sessions-only unary fallback (no workspace groups, no archive
+   * filter — the archive set exists only on the workspace baseline — and 30s
+   * polled state), the all-ungrouped + archived-resurfacing + stale-state
+   * regression (2026-09 fix). The staleness watchdog still bounds a
+   * silently-dead producer channel via the retained snapshotAt recency.
    */
   useEffect(() => {
     return chamberBridge.onInstanceSnapshot((
@@ -1861,14 +1873,20 @@ export default function App() {
       aggregatePollSeqRef.current[sourceId] = (aggregatePollSeqRef.current[sourceId] ?? 0) + 1
       aggregateRequestOwnersRef.current!.retire([sourceId])
       if (snapshot === undefined) {
-        delete snapshotSourcesRef.current[sourceId]
-        delete snapshotAtRef.current[sourceId]
+        // Withdraw ONLY a source that never pushed (nothing to keep); a
+        // source with a last push keeps its mounted marker and recency so
+        // planAggregateRefreshes never re-enables the unary fallback for it.
+        if (snapshotAtRef.current[sourceId] === undefined) {
+          delete snapshotSourcesRef.current[sourceId]
+          delete snapshotAtRef.current[sourceId]
+        }
       } else {
         snapshotSourcesRef.current[sourceId] = true
         snapshotAtRef.current[sourceId] = Date.now()
       }
       setSnapshotSources(prev => {
         if (snapshot === undefined) {
+          if (snapshotAtRef.current[sourceId] !== undefined) return prev
           if (prev[sourceId] === undefined) return prev
           const next = { ...prev }
           delete next[sourceId]
@@ -1966,9 +1984,16 @@ export default function App() {
         return { ...prev, [sourceId]: report }
       })
       if (report === undefined) {
-        // shell 卸载（来源移除）：清掉该来源的边沿记忆与蓝点。
+        // 通道撤回（shell 重连/重 boot 窗口，来源移除的 clear 已被上方的
+        // liveServerIds/指纹检查挡掉，不会到达这里）：清掉 UI 蓝点边沿
+        // （视图已卸载），但保留通知边沿的 prev 记忆——恢复后的首份上报
+        // 借此补发撤回窗口内完成的会话（detectNotificationEdges 的
+        // completedEdge「断连期间完成」兜底语义，2026-09 scan fix；删掉
+        // 记忆会让恢复后的首报退化为「只播种」，窗口内的完成通知永久丢失）。
+        // 已知边界（窄窗口，接受）：窗口内被手动停止的会话会在恢复首报
+        // 上触发 runningEdge（running true→false）误报「完成」——wire 只有
+        // running 位，无法区分手动停止与完成，且窗口仅持续到重连完成。
         delete prevRunningRef.current[sourceId]
-        delete prevRuntimeFactsRef.current[sourceId]
         delete notifiedCompleteRef.current[sourceId]
         setCompletedBySource(prev => {
           if (prev[sourceId] === undefined) return prev
