@@ -11,12 +11,15 @@
  * controls (SegmentedControl: OFFICIAL business-blue thumb + inverted
  * selected text), the notification master toggle as the official switch
  * (36x20 track + round thumb, native checkbox with role=switch underneath),
- * and the three notification-event toggles share one line of mini cards
- * (.generalEventGrid). The notifications SUB-SETTINGS (通知时机 / 事件开关 /
+ * and the three notification-event toggles share one line of borderless
+ * rows (.generalEventRow). The notifications SUB-SETTINGS (通知时机 / 事件开关 /
  * 测试通知) stay COLLAPSED while the master switch is off — they unfold in a
- * transparent container (.generalNotifyBody) only while notifications are
- * enabled (the configuration itself is unchanged, just hidden). Every
- * control stays a native checkbox/radio underneath (no custom widgets).
+ * single bordered card (.generalNotifyCard) only while notifications are
+ * enabled (the configuration itself is unchanged, just hidden). The master
+ * switch itself is a BORDERLESS disclosure row (.generalSwitchRow) — the
+ * sub-settings card is the group's only border, so the whole group carries
+ * one card instead of five. Every control stays a native checkbox/radio
+ * underneath (no custom widgets).
  *
  * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
@@ -88,8 +91,9 @@ function ToggleCard({
   )
 }
 
-/** One notification-event mini toggle (one line of three): short title left,
- *  checkbox right. Disabled (un-hydrated skeleton) dims like ToggleCard. */
+/** One notification-event toggle (one line of three): short title left,
+ *  checkbox right. Disabled (un-hydrated skeleton) dims like ToggleCard.
+ *  Borderless row — the enclosing .generalNotifyCard is the only border. */
 function ToggleEvent({
   label, checked, disabled, onChange,
 }: {
@@ -99,7 +103,7 @@ function ToggleEvent({
   onChange: (next: boolean) => void
 }) {
   return (
-    <label className={clsx(css.generalEventCard, disabled === true ? css.generalDisabled : undefined)}>
+    <label className={clsx(css.generalEventRow, disabled === true ? css.generalDisabled : undefined)}>
       <span>{label}</span>
       <input
         type="checkbox"
@@ -264,14 +268,17 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       {/* 通知 (design 19, merged into General — no new nav entry): 主开关 +
           启用后才展开的子设置（通知时机 hidden-only / always + 事件开关
           complete / ask / request +「发送测试通知」）。主开关关闭时子设置
-          收起（不全部展开）——配置项仍在，启用后按原始布局展开显示。 */}
+          收起（不全部展开）——配置项仍在，启用后按原始布局展开显示。
+          2026-12 边框修订：主开关是无边框披露行（.generalSwitchRow），
+          子设置整体收入唯一一张卡片（.generalNotifyCard），内部行不再
+          自带边框——通知组从五层边框降到一层。 */}
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupNotifications')}</h3>
 
         {/* 主开关: 官方 switch（原生 checkbox + role=switch），整行即 label
             （可访问名称 + 整行可点）；未水合骨架态整行变淡。aria-controls
-            指向展开的子设置。 */}
-        <label className={clsx(css.generalLine, !hydrated && css.generalDisabled)}>
+            指向展开的子设置卡。 */}
+        <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsEnabled')}</span>
           </div>
@@ -293,8 +300,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         </label>
 
         {notifications.enabled === true && (
-          <div id={notifyBodyId} className={css.generalNotifyBody}>
-            <div className={css.generalLine}>
+          <div id={notifyBodyId} className={css.generalNotifyCard}>
+            <div className={css.generalLinePlain}>
               <div className={css.generalCardText}>
                 <span className={css.generalFieldLabel} id={notifyModeLabel}>{t('generalNotificationsMode')}</span>
                 <p className={css.generalHint}>{t('generalNotificationsModeDesc')}</p>

@@ -19,7 +19,7 @@
  * they are never placed in the registry or returned by IPC.
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
@@ -219,7 +219,7 @@ function PluginDiagnosticLine({ diagnostic, t }: {
  * button is the wipe path for plain edits. Rendered once for every gateway
  * transport (http direct and ssh tunnel).
  */
-function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChanged, onClearToken, onClearPassword, t }: {
+function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChanged, onClearToken, onClearPassword, tokenFieldId, passwordFieldId, t }: {
   draft: HostDraft
   onChange: (patch: Partial<HostDraft>) => void
   fieldErrors: Partial<Record<keyof HostDraft, string>>
@@ -228,6 +228,10 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
   targetChanged: boolean
   onClearToken: () => void
   onClearPassword: () => void
+  /** Per-instance input ids (useId): the dialog can render in N-ctx panels in
+   *  the same document — static ids would alias across panels. */
+  tokenFieldId: string
+  passwordFieldId: string
   t: (key: SettingsConnectionsKey) => string
 }): ReactNode {
   // Stored credentials never return to the renderer — clearing goes straight
@@ -241,9 +245,12 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
       : t('gatewayCredentialsHintEdit')
   return (
     <>
-      <label className={css.field}>
+      {/* 2026-12 复审（HTML 规范）：label 不得含 labeled control 之外的
+          labelable 元素——「清除」按钮与输入框同处 label 会污染输入框的
+          可访问名称。外层改 div，字段名改 label htmlFor 关联。 */}
+      <div className={css.field}>
         <span className={css.fieldLabelRow}>
-          <span className={css.fieldLabel}>{t('fieldGatewayToken')}</span>
+          <label className={css.fieldLabel} htmlFor={tokenFieldId}>{t('fieldGatewayToken')}</label>
           {canClear
             ? (
               <button
@@ -257,6 +264,7 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
             : null}
         </span>
         <input
+          id={tokenFieldId}
           className={css.input}
           type="password"
           value={draft.gatewayToken}
@@ -267,10 +275,10 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
           onChange={event => { onChange({ gatewayToken: event.target.value }) }}
         />
         {fieldErrors.gatewayToken === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayToken}</span>}
-      </label>
-      <label className={css.field}>
+      </div>
+      <div className={css.field}>
         <span className={css.fieldLabelRow}>
-          <span className={css.fieldLabel}>{t('fieldGatewayPassword')}</span>
+          <label className={css.fieldLabel} htmlFor={passwordFieldId}>{t('fieldGatewayPassword')}</label>
           {canClear
             ? (
               <button
@@ -284,6 +292,7 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
             : null}
         </span>
         <input
+          id={passwordFieldId}
           className={css.input}
           type="password"
           value={draft.gatewayPassword}
@@ -294,7 +303,7 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
           onChange={event => { onChange({ gatewayPassword: event.target.value }) }}
         />
         {fieldErrors.gatewayPassword === undefined ? null : <span className={css.error} role="alert">{fieldErrors.gatewayPassword}</span>}
-      </label>
+      </div>
       <span className={clsx(css.dim, css.spanAll)}>{hint}</span>
     </>
   )
@@ -303,16 +312,18 @@ function GatewayAuthFields({ draft, onChange, fieldErrors, editing, targetChange
 /** Optional S23 certificate pin. Unlike credentials this is non-secret
  * registry metadata, so edit prefill and ordinary input binding are required
  * to preserve it. The caller renders this only for gateway+http+https. */
-function GatewaySpkiField({ draft, onChange, fieldError, t }: {
+function GatewaySpkiField({ draft, onChange, fieldError, fieldId, t }: {
   draft: HostDraft
   onChange: (spkiPin: string) => void
   fieldError: string | undefined
+  /** Per-instance input id (useId), same N-ctx scoping as GatewayAuthFields. */
+  fieldId: string
   t: (key: SettingsConnectionsKey) => string
 }): ReactNode {
   return (
-    <label className={css.field}>
+    <div className={css.field}>
       <span className={css.fieldLabelRow}>
-        <span className={css.fieldLabel}>{t('fieldSpkiPin')}</span>
+        <label className={css.fieldLabel} htmlFor={fieldId}>{t('fieldSpkiPin')}</label>
         {draft.spkiPin === ''
           ? null
           : (
@@ -326,6 +337,7 @@ function GatewaySpkiField({ draft, onChange, fieldError, t }: {
           )}
       </span>
       <input
+        id={fieldId}
         className={css.input}
         value={draft.spkiPin}
         maxLength={64}
@@ -337,7 +349,7 @@ function GatewaySpkiField({ draft, onChange, fieldError, t }: {
       />
       {fieldError === undefined ? null : <span className={css.error} role="alert">{fieldError}</span>}
       <span className={css.dim}>{t('spkiPinHint')}</span>
-    </label>
+    </div>
   )
 }
 
@@ -348,6 +360,13 @@ function GatewaySpkiField({ draft, onChange, fieldError, t }: {
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const { t, pluginDiagnostics } = props
+  // Per-instance input ids (useId): the dialog renders inside N-ctx panels in
+  // the SAME document — static ids would alias across panels. One id per
+  // credential/pin field; the transport branches render one set at a time.
+  const gatewayTokenFieldId = useId()
+  const gatewayPasswordFieldId = useId()
+  const spkiFieldId = useId()
+  const sshPasswordFieldId = useId()
   const runtimeState = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
   const runtimeSurfacePresent = currentRuntimeSurface() !== null
   // Fail closed while the desktop runtime bridge hydrates; once hydrated,
@@ -1226,32 +1245,44 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 return (
                   <li key={spec.id} className={css.card}>
                     <div className={css.cardHead}>
-                      <span className={css.cardName} title={spec.label}>{spec.label}</span>
-                      <span className={css.kindBadge}>{spec.kind === 'gateway' ? t('kindGateway') : t('kindDsh')}</span>
-                      <span className={clsx(
-                        css.badge,
-                        (phase === 'error' || phase === 'degraded') && css.badgeBad,
-                        phase === 'ready' && css.badgeOk,
-                      )}>
-                        {t(phaseKey(phase))}
-                      </span>
-                      {/* 诚实状态 (design 17 §13.1): the plaintext and no-auth
-                          postures stay visible on the card after configuring.
-                          「无认证」 only when NEITHER gateway credential is
-                          stored — the passwordSet projection is the
-                          authoritative SshInstanceSpec member (design 17
-                          §9.1, desktop gateway-secrets task). */}
-                      {spec.insecureHttp
-                        ? <span className={clsx(css.badge, css.badgeBad)}>{t('badgeHttpPlaintext')}</span>
-                        : null}
-                      {spec.kind === 'gateway' && spec.tokenSet === false
-                        && spec.passwordSet === false
-                        ? <span className={css.badge}>{t('badgeNoAuth')}</span>
-                        : null}
-                      {spec.kind === 'gateway' && spec.transport === 'http'
-                        && !spec.insecureHttp && spec.spkiPin !== undefined
-                        ? <span className={clsx(css.badge, css.badgeOk)}>{t('badgeSpkiPinned')}</span>
-                        : null}
+                      {/* 2026-12 两行化：身份行（名称 + 类型）与徽标行（状态 +
+                          安全姿态）分开——单行 flex-wrap 在 268px 网格底线处
+                          换行不可预测，名称会被挤压成省略号。 */}
+                      <div className={css.cardHeadIdentity}>
+                        <span className={css.cardName} title={spec.label}>{spec.label}</span>
+                        <span className={css.kindBadge}>{spec.kind === 'gateway' ? t('kindGateway') : t('kindDsh')}</span>
+                      </div>
+                      <div className={css.cardHeadBadges}>
+                        <span className={clsx(
+                          css.badge,
+                          (phase === 'error' || phase === 'degraded') && css.badgeBad,
+                          phase === 'ready' && css.badgeOk,
+                        )}>
+                          {t(phaseKey(phase))}
+                        </span>
+                        {/* 诚实状态 (design 17 §13.1): the plaintext and no-auth
+                            postures stay visible on the card after configuring.
+                            「无认证」 only when NEITHER gateway credential is
+                            stored — the passwordSet projection is the
+                            authoritative SshInstanceSpec member (design 17
+                            §9.1, desktop gateway-secrets task).
+                            2026-12 配色修订：姿态徽标统一为「描边 + 彩色文字」
+                            家族（.badgeWarn / .badgeSuccess），与状态徽标的
+                            填充区分——同类姿态同族同色，不再按主观严重度分层；
+                            顺序按维度：传输层（HTTP 明文）→ 认证层（无认证）
+                            → 信任层（SPKI 已固定）。 */}
+                        {spec.insecureHttp
+                          ? <span className={clsx(css.badge, css.badgeWarn)}>{t('badgeHttpPlaintext')}</span>
+                          : null}
+                        {spec.kind === 'gateway' && spec.tokenSet === false
+                          && spec.passwordSet === false
+                          ? <span className={clsx(css.badge, css.badgeWarn)}>{t('badgeNoAuth')}</span>
+                          : null}
+                        {spec.kind === 'gateway' && spec.transport === 'http'
+                          && !spec.insecureHttp && spec.spkiPin !== undefined
+                          ? <span className={clsx(css.badge, css.badgeSuccess)}>{t('badgeSpkiPinned')}</span>
+                          : null}
+                      </div>
                     </div>
                     <div className={css.cardMeta}>
                       <code className={css.cardHost}>{spec.transport === 'http'
@@ -1447,42 +1478,49 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 : null}
               <label className={css.field}>
                 <span className={css.fieldLabel}>{t('kindLabel')}</span>
-                <select
-                  className={css.input}
-                  value={draft.kind}
-                  onChange={event => {
-                    // Target and transport are independent dimensions. The
-                    // pure helper preserves the selected transport, adjusts
-                    // only still-defaulted ports, and clears transient values
-                    // that belong to the old target.
-                    setDraft(changeDraftKind(draft, event.target.value as TransportKind))
-                    setFieldErrors({})
-                    setFormError(null)
-                  }}
-                >
-                  <option value="dsh">{t('kindDsh')}</option>
-                  <option value="gateway">{t('kindGateway')}</option>
-                </select>
+                {/* 统一下拉箭头（2026-12）：与设置壳/运行时段同一图标词汇。 */}
+                <span className={css.selectWrap}>
+                  <select
+                    className={clsx(css.input, css.selectArrow)}
+                    value={draft.kind}
+                    onChange={event => {
+                      // Target and transport are independent dimensions. The
+                      // pure helper preserves the selected transport, adjusts
+                      // only still-defaulted ports, and clears transient values
+                      // that belong to the old target.
+                      setDraft(changeDraftKind(draft, event.target.value as TransportKind))
+                      setFieldErrors({})
+                      setFormError(null)
+                    }}
+                  >
+                    <option value="dsh">{t('kindDsh')}</option>
+                    <option value="gateway">{t('kindGateway')}</option>
+                  </select>
+                  <IconChevronDownOutline14 className={css.selectChevron} aria-hidden="true" />
+                </span>
               </label>
               <label className={css.field}>
                 <span className={css.fieldLabel}>{t('transportLabel')}</span>
-                <select
-                  className={css.input}
-                  value={draft.transport}
-                  onChange={event => {
-                    setDraft(changeDraftTransport(draft, event.target.value as TransportMethod))
-                    setFieldErrors({})
-                    setFormError(null)
-                  }}
-                >
-                  {TRANSPORT_FORM_OPTIONS
-                    .filter(schema => schema.targetKinds.includes(draft.kind))
-                    .map(schema => (
-                      <option key={schema.method} value={schema.method}>
-                        {t(schema.method === 'ssh' ? 'transportSsh' : 'transportHttp')}
-                      </option>
-                    ))}
-                </select>
+                <span className={css.selectWrap}>
+                  <select
+                    className={clsx(css.input, css.selectArrow)}
+                    value={draft.transport}
+                    onChange={event => {
+                      setDraft(changeDraftTransport(draft, event.target.value as TransportMethod))
+                      setFieldErrors({})
+                      setFormError(null)
+                    }}
+                  >
+                    {TRANSPORT_FORM_OPTIONS
+                      .filter(schema => schema.targetKinds.includes(draft.kind))
+                      .map(schema => (
+                        <option key={schema.method} value={schema.method}>
+                          {t(schema.method === 'ssh' ? 'transportSsh' : 'transportHttp')}
+                        </option>
+                      ))}
+                  </select>
+                  <IconChevronDownOutline14 className={css.selectChevron} aria-hidden="true" />
+                </span>
               </label>
               {editing === 'new' && draft.transport === 'ssh'
                 ? (
@@ -1581,6 +1619,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           <GatewaySpkiField
                             draft={draft}
                             fieldError={fieldErrors.spkiPin}
+                            fieldId={spkiFieldId}
                             onChange={spkiPin => { setDraft({ ...draft, spkiPin }) }}
                             t={t}
                           />
@@ -1601,6 +1640,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                             targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
                             onClearToken={() => { void clearGatewayToken() }}
                             onClearPassword={() => { void clearGatewayPassword() }}
+                            tokenFieldId={gatewayTokenFieldId}
+                            passwordFieldId={gatewayPasswordFieldId}
                             t={t}
                           />
                         </div>
@@ -1634,10 +1675,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     </label>
                     {/* SSH transport authentication is independent of target
                         authentication. gateway+ssh therefore renders this
-                        field AND the GatewayAuthFields below. */}
-                    <label className={clsx(css.field, css.spanAll)}>
+                        field AND the GatewayAuthFields below.
+                        2026-12 复审（HTML 规范）：清除按钮与输入框同处
+                        label 会污染输入框可访问名称——外层改 div。 */}
+                    <div className={clsx(css.field, css.spanAll)}>
                       <span className={css.fieldLabelRow}>
-                        <span className={css.fieldLabel}>{t('fieldPassword')}</span>
+                        <label className={css.fieldLabel} htmlFor={sshPasswordFieldId}>{t('fieldPassword')}</label>
                         {editing !== null && editing !== 'new' && editing.transport === 'ssh'
                           ? (
                             <button
@@ -1651,6 +1694,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           : null}
                       </span>
                       <input
+                        id={sshPasswordFieldId}
                         className={css.input}
                         type="password"
                         value={draft.password}
@@ -1661,7 +1705,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       />
                       {fieldErrors.password === undefined ? null : <span className={css.error} role="alert">{fieldErrors.password}</span>}
                       <span className={css.dim}>{t('passwordHint')}</span>
-                    </label>
+                    </div>
                     {draft.kind === 'gateway'
                       ? (
                         <div className={css.spanContents}>
@@ -1673,6 +1717,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                             targetChanged={credentialReentryEdit(editing, draft).gatewayToken || credentialReentryEdit(editing, draft).gatewayPassword}
                             onClearToken={() => { void clearGatewayToken() }}
                             onClearPassword={() => { void clearGatewayPassword() }}
+                            tokenFieldId={gatewayTokenFieldId}
+                            passwordFieldId={gatewayPasswordFieldId}
                             t={t}
                           />
                         </div>

@@ -299,6 +299,11 @@ interface ChamberSettings {
   - i18n zh/en（`locales.ts` 扩展；配对由 `typecheck:settings-bridge` 的
     `Record<keyof typeof zh, string>` 编译期强制）。
 
+**UI 修订注（2026-12，纯展示层）**：通知组边框收敛——主开关改为无边框披露行
+（`.generalSwitchRow`），启用后展开的子设置（通知时机 / 事件开关 ×3 / 测试按钮）
+整体收入唯一一张卡片（`.generalNotifyCard`），内部行不再自带边框（`.generalLinePlain`
+/ `.generalEventRow`）；通知组从五层边框降到一层。开关关闭时子设置仍整体收起。
+
 ### 3.5 覆盖边界与诚实性
 
 - **仅已挂载来源**可检测 ask/request（实时 mux 事实只在 ctx 内存在）；未挂载且

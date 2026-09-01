@@ -207,7 +207,8 @@
 
 .dropdownArrow {
   flex: none;
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -795,6 +796,14 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 组内块分栏（2026-12，dsh 运行时段三块：当前状态 / 版本操作 / 版本源）：
+   与通用页组间分隔同词汇——border-l2 发丝线 + 12px 上内距；块间距由所在
+   group 的 10px gap 提供，线与上一块内容之间视觉居中。 */
+.generalGroupTitleBlock {
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding-top: 12px;
+}
+
 /* One setting row (checkbox/toggle or a labeled field): label + hint. */
 .generalRow {
   display: flex;
@@ -883,43 +892,58 @@
    （见 SegmentedControl.tsx / SegmentedControl.module.css）：轨道内蓝色
    滑块滑向选中项、选中文字反白。列宽按内容自适应。 */
 
-/* 全宽行（通知组主开关 / 通知时机）：文字左、控件右。flex-wrap 让极窄
-   窗口下控件换行而非被 panel 裁切。 */
-.generalLine {
+/* 通知主开关行（披露头，2026-12 边框修订）：无边框无底色——它只是子设置卡
+   的展开开关，不再是独立卡片。行布局与 .generalLine 相同（文字左、控件右；
+   flex-wrap 让极窄窗口下控件换行而非被 panel 裁切）。2026-12 复审：水平
+   14px 内距与子设置卡（.generalNotifyCard padding 12px 14px）对齐，行高
+   抬到 ~32px 与事件行同节奏；hover 填充给出「可点」暗示。 */
+.generalSwitchRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
   min-width: 0;
-  padding: 10px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-3);
+  padding: 5px 14px;
+  border-radius: 10px;
+  transition: background .16s;
 }
 
-/* 通知事件开关：一行三个迷你卡片（窄面板自动降列；min() 下限同
-   .generalGrid 防窄窗溢出）。 */
+.generalSwitchRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* 子设置卡内的普通行（通知时机）：与 .generalSwitchRow 相同行布局，无边框
+   无底色无内边距——外层 .generalNotifyCard 已提供边界。 */
+.generalLinePlain {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 通知事件开关：卡内一行三个（窄面板自动降列；min() 下限同
+   .generalGrid 防窄窗溢出）。行本身无边框无底色（.generalNotifyCard
+   是唯一边界），保留垂直内距维持点按区域。 */
 .generalEventGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 8px;
 }
 
-.generalEventCard {
+.generalEventRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
-  background: var(--dsw-alias-bg-layer-3);
+  padding: 6px 0;
   cursor: pointer;
 }
 
-.generalEventCard span {
+.generalEventRow span {
   min-width: 0;
   font-size: 13px;
   line-height: 20px;
@@ -934,12 +958,18 @@
   gap: 10px;
 }
 
-/* 启用通知后展开的子设置容器：透明（无边框无底色，不增加卡片负担）——
-   只做归组与挂载淡入；内部沿用原始布局（generalLine 卡 / 事件迷你卡）。 */
-.generalNotifyBody {
+/* 启用通知后展开的子设置容器（2026-12 边框修订）：通知组唯一的外边框卡片
+   （border-l2 + layer-3 + r12，与既有 .generalLine 卡同词汇）——主开关是
+   无边框披露行，内部行（通知时机 / 事件开关 / 测试按钮）不再自带边框。
+   挂载淡入保留。 */
+.generalNotifyCard {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
   animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
@@ -1204,12 +1234,14 @@
 }
 
 /* Compact phase chip on the gateway runtime version row (design 18 §3.6
-   A.1 phase badge; the `.badge` vocabulary: pill, hairline border, 11px). */
+   A.1 phase badge; the `.badge` vocabulary: pill, hairline border, 11px).
+   2026-12 复审：margin-left 取代版本文字与徽标之间的 `{' '}` 文本节点。 */
 .runtimeBadge {
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
   height: 18px;
+  margin-left: 8px;
   padding: 1px 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
@@ -1220,7 +1252,9 @@
 
 /* Form-shaped select/input for the runtime section (2026-11): a boxed field
    with border + background, deliberately DISTINCT from the capsule buttons
-   (.updateButton) so a dropdown is recognizable as an input. */
+   (.updateButton) so a dropdown is recognizable as an input.
+   2026-12 有意不统一：字段字号 12px vs 服务器下拉 13px/600——服务器下拉是
+   导航选择器（强调选中项），运行时字段是紧凑表单行；只统一箭头词汇。 */
 .runtimeField {
   box-sizing: border-box;
   height: 28px;
@@ -1242,4 +1276,42 @@
 .runtimeField:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ---- 统一下拉箭头（2026-12）----
+   Chamber 的 select 一律 appearance:none + 官方 IconChevronDownOutline14
+   （与 bridge-rows 的 Menu 下拉同图标词汇）；箭头右缘 inset 与文字左缘
+   （.runtimeField padding 10px）对称，pointer-events:none 保证点击落在
+   select 本体。仅作用于 select 修饰类——.runtimeField 同时用于 URL 输入框，
+   不能带箭头样式。 */
+
+.runtimeSelectWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.runtimeSelect {
+  appearance: none;
+  -webkit-appearance: none;
+  /* 右内距 32px：chevron 占 [10, 24)px，文字↔箭头净间隙 8px，与服务器
+     下拉（flex gap 8px）同节奏（2026-12 复审）。max-width 兜底超长版本
+     串，保证版本行动行在 564px 列宽下单行。 */
+  padding-right: 32px;
+  max-width: min(240px, 100%);
+  cursor: pointer;
+}
+
+.runtimeSelectChevron {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  display: inline-flex;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runtimeSelect:disabled + .runtimeSelectChevron {
+  opacity: 0.5;
 }
