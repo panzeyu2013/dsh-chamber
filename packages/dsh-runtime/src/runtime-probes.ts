@@ -15,7 +15,7 @@ import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
-import { REQUIRED_ACTIVATION_PROBES, type ProbeResult } from './activation-gate.ts'
+import { REQUIRED_ACTIVATION_PROBES, PROBE_NAMES_WITHOUT_HOST_DOMAINS, type ProbeResult } from './activation-gate.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export interface RuntimeProbeRpcOptions {
@@ -39,6 +39,15 @@ export interface RuntimeProbeOptions {
   windowMs?: number
   /** Per-RPC cap so one endpoint cannot consume the entire window. */
   rpcTimeoutMs?: number
+  /**
+   * 2026-12 shape-awareness: whether the spawned dsh is expected to carry the
+   * chamber host packages (clientGraph/graph + gitWorktree/previewCreate
+   * domains). The desktop shape always verifies them; the gateway shape only
+   * when a desktop has synced its host packages into the seed cache — a fresh
+   * gateway with no synced cache hosts a plain dsh whose activation must pass
+   * without the chamber domains. Default true.
+   */
+  hostDomains?: boolean
 }
 
 export const SETTINGS_FILE_MAX_BYTES = 16 * 1024 * 1024
@@ -237,6 +246,11 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     }
   }
 
+  // 2026-12 shape-awareness: the gateway shape skips the chamber host domains
+  // when no desktop has synced its host packages into the seed cache yet.
+  // hostDomains=false runs NO chamber-domain probe (no synthetic rows): the
+  // entries are absent from the returned set and from the byName map below.
+  const hostDomains = opts.hostDomains !== false
   const [sessions, graph, settings, git] = await Promise.all([
     // host.describe was deleted upstream (dsh-v0.1.2-alpha.1); the surviving
     // session/list read-only unary doubles as the host-capability probe
@@ -252,7 +266,9 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         return { name: 'session/list', ok: false, error: resultError(error) }
       }
     })(),
-    probe('clientGraph/graph', 'clientGraph/graph', { args: {} }, graphValue),
+    hostDomains
+      ? probe('clientGraph/graph', 'clientGraph/graph', { args: {} }, graphValue)
+      : Promise.resolve(null),
     (async () => {
       const outcome = await probe('settings/describe', 'settings/describe', { args: {} }, settingsValue)
       settingsRpcOk = outcome.ok
@@ -261,12 +277,14 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // Empty input is rejected by domain validation before any git process or
     // repository scan. Require that exact business miss; a success value would
     // no longer prove the request stayed on the side-effect-free path.
-    probe(
-      'gitWorktree/previewCreate',
-      'gitWorktree/previewCreate',
-      { args: { input: {} } },
-      expectedGitValidationMiss,
-    ),
+    hostDomains
+      ? probe(
+        'gitWorktree/previewCreate',
+        'gitWorktree/previewCreate',
+        { args: { input: {} } },
+        expectedGitValidationMiss,
+      )
+      : Promise.resolve(null),
   ])
 
   let commands: ProbeResult
@@ -310,15 +328,23 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     ? { name: 'data.sessions', ok: true }
     : { name: 'data.sessions', ok: false, error: 'session data is unreadable' }
 
-  const byName = new Map<string, ProbeResult>([
-    [commands.name, commands],
-    [sessions.name, sessions],
-    [graph.name, graph],
-    [settings.name, settings],
-    [git.name, git],
-    [dataSettings.name, dataSettings],
-    [dataSessions.name, dataSessions],
-  ])
+  const byName = new Map<string, ProbeResult>()
+  byName.set(commands.name, commands)
+  byName.set(sessions.name, sessions)
+  if (hostDomains) {
+    if (graph === null || git === null) throw new Error('internal: chamber host-domain probes did not run')
+    byName.set(graph.name, graph)
+    byName.set(git.name, git)
+  }
+  byName.set(settings.name, settings)
+  byName.set(dataSettings.name, dataSettings)
+  byName.set(dataSessions.name, dataSessions)
   // Return in the contract order, making exact-set drift visible in tests.
-  return REQUIRED_ACTIVATION_PROBES.map(name => byName.get(name) ?? ({ name, ok: false, error: 'probe not wired' }))
+  // hostDomains=false (gateway shape without a synced seed cache) returns the
+  // reduced set — the caller's probeExpectedNames must match (see
+  // activation-gate PROBE_NAMES_WITHOUT_HOST_DOMAINS).
+  const expected = hostDomains
+    ? REQUIRED_ACTIVATION_PROBES
+    : PROBE_NAMES_WITHOUT_HOST_DOMAINS
+  return expected.map(name => byName.get(name) ?? ({ name, ok: false, error: 'probe not wired' }))
 }

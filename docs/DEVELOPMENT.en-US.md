@@ -53,7 +53,7 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 | `packages/renderer` | Self-built dsh frontend (source reuse): entry build, pure-dsh first-screen bridge host, N-ctx orchestration, boot manifest |
 | `packages/desktop` | Electron shell: single frame, orthogonal target/transport providers, ready-time remote host-package seed, instance registry, IPC, runtime management, and native edge capabilities |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
-| `packages/gateway` | Standalone authenticated server shape (Design 17): mandatory-auth public boundary, one local dsh proxy, and derived orchestration |
+| `packages/gateway` | Standalone authenticated server shape (Design 17): mandatory-auth public boundary, one local dsh proxy, and runtime management / credential panel / seed registry |
 | `packages/dsh-runtime` | Pure-Node dsh version-tree, install, activation, probe, and two-phase rollback core shared by desktop and Gateway while each host owns separate state |
 | `packages/dsh-client-connection` | In-repo copy of the official connection client + base-path patch |
 | `packages/dsh-client-web` | In-repo copy of the official web shell + boot.ts N-ctx module-table sharing seam |
@@ -154,7 +154,7 @@ packages/
   renderer/                 Self-built dsh frontend (source reuse + bridge host + N-ctx)
   desktop/                  Electron shell: single frame, orthogonal target/transport providers, instance registry, IPC
   cli/                      CLI thin shell
-  gateway/                  Standalone authenticated server shape + one local dsh + derived orchestration
+  gateway/                  Standalone authenticated server shape + one local dsh + runtime management / credential panel / seed registry
   dsh-runtime/              Pure-Node dsh runtime-management core shared by desktop and Gateway
   dsh-client-connection/    Modified dsh source #1 (base-path patch)
   dsh-client-web/           Modified dsh source #2 (boot.tsx N-ctx seam)

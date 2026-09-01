@@ -93,6 +93,7 @@ function setup(
   auth: AuthProvider,
   runtime: () => { handle(req: unknown, res: FakeResponse, pathname: string): Promise<boolean> } = () => ({ async handle() { return false } }),
   auditFile?: string,
+  surface?: () => { handle(req: unknown, res: FakeResponse, pathname: string): Promise<boolean> },
 ) {
   const config = parseGatewayConfig({
     host: '0.0.0.0',
@@ -109,7 +110,7 @@ function setup(
     async handleUpgrade() { upgradeProxyCalls += 1 },
     closeAllStreams() {},
   }
-  const features = {
+  const features = surface !== undefined ? surface() : {
     async handle(_req: unknown, res: FakeResponse) { res.writeHead(200); res.end('feature'); return true },
     start() {},
     stop() {},
@@ -688,6 +689,38 @@ test('/chamber/runtime requires auth end-to-end (S20): 401 unauthenticated, clai
   }))
   assert.equal(ok.status, 200)
   assert.deepEqual(seen, ['/chamber/runtime/status'])
+})
+
+test('/chamber/plugins requires auth end-to-end (S20): 401 unauthenticated, claimed after auth', async () => {
+  const seen: string[] = []
+  const surface = () => ({
+    async handle(_req: unknown, res: FakeResponse, pathname: string) {
+      seen.push(pathname)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":true}')
+      return true
+    },
+  })
+  const auth: AuthProvider = {
+    kind: 'token',
+    async verify(req) {
+      return req.headers.authorization === 'Bearer secret'
+        ? { kind: 'token', id: 'test', issuedAt: 0 }
+        : null
+    },
+  }
+  const { dispatch } = setup(auth, undefined, undefined, surface)
+  // The plugin-sync seed cache rides the same mandatory auth gate as every
+  // other /chamber writer — an unauthenticated GET must never reach it.
+  const denied = await runHttp(dispatch, new FakeRequest('GET', '/chamber/plugins', { host: 'gateway.example:3000' }))
+  assert.equal(denied.status, 401)
+  assert.deepEqual(seen, [])
+  const ok = await runHttp(dispatch, new FakeRequest('GET', '/chamber/plugins', {
+    host: 'gateway.example:3000',
+    authorization: 'Bearer secret',
+  }))
+  assert.equal(ok.status, 200)
+  assert.deepEqual(seen, ['/chamber/plugins'])
 })
 
 // ---------------------------------------------------------------------------

@@ -106,7 +106,7 @@ One logical change per commit; keep diffs focused. Commits bundling unrelated ch
 ## Scope Discipline
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is **attached or served, never re-implemented**.
-- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** in any form. The only ratified bounded exceptions are Design 08's in-instance Git worktree plugin, Design 17's standalone Gateway orchestration, Design 18's shared dsh runtime-management core, Design 19's Electron-native notification edge projection, and Design 20's trusted open-in edge capability. None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
+- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** in any form. The only ratified bounded exceptions are Design 08's in-instance Git worktree plugin, Design 17's separately invoked gateway (shell + host duties + seed registry only), Design 18's shared dsh runtime-management core, Design 19's Electron-native notification edge projection, and Design 20's trusted open-in edge capability. None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
 - For any new domain feature proposal, first ask: does dsh native, the plugin ecosystem, or the host web frontend already cover it? If yes → don't build it.
 
 ## Pull Requests

@@ -14,7 +14,7 @@
  *   /auth/credentials        → auth.credentialProjection (Phase 2, non-secret)
  *   /api/connections, /api/host/*, /api/i/* → fall through (management)
  *   /chamber/runtime/*       → runtime controller (design 18 §9.3; NOT ready-gated)
- *   /chamber/*               → feature host (design 17 §8.5, fully implemented)
+ *   /chamber/*               → chamber surface (design 17 §8.5, 2026-12 strip)
  *   /plugins/*, /, /api/*(rest) → gateway-proxy → dsh
  */
 
@@ -28,7 +28,7 @@ import type { Duplex } from 'node:stream'
 import type { AuthChangeProof, AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
 import { SESSION_COOKIE } from './auth.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
-import type { FeatureHost } from './routes.ts'
+import type { ChamberSurface } from './routes.ts'
 import type { RuntimeRoutes } from './runtime-routes.ts'
 import type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
 import { appendAuditEvent } from './audit.ts'
@@ -186,7 +186,7 @@ function authRequest(req: ApiRequest, decision: GatewayRequestDecision) {
 export function createGatewayDispatch(
   auth: AuthProvider,
   getProxy: () => GatewayProxy,
-  getFeatures: () => FeatureHost,
+  getFeatures: () => ChamberSurface,
   getRuntime: () => RuntimeRoutes,
   logger: Logger,
   requestPolicy: GatewayRequestPolicy,
@@ -194,9 +194,9 @@ export function createGatewayDispatch(
 ): GatewayDispatch {
   // Every request/socket admitted by one credential generation stays tracked
   // until its downstream leg ends. Rotation closes the old generation at the
-  // dispatch boundary, which covers gateway-proxy, feature SSE and the
-  // control-plane management/instance fallthrough uniformly without teaching
-  // those anonymous internals about authentication.
+  // dispatch boundary, which covers gateway-proxy, the chamber surface and
+  // the control-plane management/instance fallthrough uniformly without
+  // teaching those anonymous internals about authentication.
   const authenticatedHttp = new Set<{ request: ApiRequest; response: ApiResponse }>()
   const authenticatedSockets = new Set<Duplex>()
   let credentialMutationsAccepted = true
@@ -615,7 +615,7 @@ export function createGatewayDispatch(
       return true
     }
     // 3.5 Runtime controller (design 18 §9.3): /chamber/runtime/* is claimed
-    // here, BEFORE the ready-gated feature host — the runtime surface manages
+    // here, BEFORE the chamber surface — the runtime surface manages
     // dsh itself and must stay pollable while dsh is down (restart/applying).
     // Exact-prefix match only: /chamber/runtime and /chamber/runtime/<suffix>
     // belong to the controller; /chamber/runtimeevil must NOT be claimed.
@@ -624,8 +624,11 @@ export function createGatewayDispatch(
       await getRuntime().handle(req, res, pathname)
       return true
     }
-    // 4. Feature host (design 17 §8.5): /chamber/* is the gateway's own
-    // orchestration surface (git worktrees, approvals, cron, settings).
+    // 4. Chamber surface (design 17 §8.5, 2026-12 strip): /chamber/* is the
+    // gateway's own operations surface — channels projection + browser
+    // dashboard assets only (feature settings, approvals, schedule, worktree
+    // records were removed with the orchestration strip). Read-only: no
+    // readiness coupling.
     if (pathname.startsWith('/chamber/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       await getFeatures().handle(req, res, pathname)

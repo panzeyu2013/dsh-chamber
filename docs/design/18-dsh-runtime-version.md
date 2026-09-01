@@ -162,15 +162,25 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 
 ### 3.4 激活门控与回退（自由选择模型的唯一安全网，R3-1 P2-4/P2-8/P2-12）
 
-换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**）：
+换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
+与上游 0.1.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES`，slash 端点）：
 
-- `host.describe`；`commands.execute` 以固定不存在 session 调用并精确期待
-  `session/not-found`，只验证 wire 解码且不进入 CommandRuntime；session/workspace
-  **只读 list**（绝不 create）；graph 通道 `clientGraph/graph`；host settings
-  只读 RPC `settings.describe`；`gitWorktree/previewCreate` 以空输入精确期待
-  `invalid-input`，在 Git 进程/仓库扫描前停止；**带既有 `$DSH_HOME` profile 数据
-  boot + 数据
-  可读性探测**（settings.yaml 可解析、会话列表可读）。
+- `commands/execute` 以固定不存在 session 调用并精确期待 `session/not-found`，
+  只验证 wire 解码且不进入 CommandRuntime；`session/list` **只读 list**（绝不
+  create）；graph 通道 `clientGraph/graph`；host settings 只读 RPC
+  `settings/describe`；`gitWorktree/previewCreate` 以空输入精确期待
+  `invalid-input`，在 Git 进程/仓库扫描前停止；`data.settings`/`data.sessions`
+  **带既有 `$DSH_HOME` profile 数据 boot + 数据可读性探测**（settings.yaml 可
+  解析、会话列表可读）。`host.describe` 与 `workspace.list` 已随上游删除，不在
+  探针集内；`clientGraph/graph` 与 `gitWorktree/previewCreate` 两域在
+  `hostDomains=false` 形态（2026-12，见下）跳过。
+- **探针形态化（2026-12，design 17 §10）**：`clientGraph/graph` 与
+  `gitWorktree/previewCreate` 两个 chamber 宿主域只在「种子缓存就绪」时验证——
+  gateway 的宿主包由连接的桌面经 `/chamber/plugins` 同步（Phase 3），缓存缺包时
+  托管 dsh 是纯 dsh，探针以 `hostDomains=false` 运行并返回缩减结果集，激活裁决的
+  期望集同步切换为 `PROBE_NAMES_WITHOUT_HOST_DOMAINS`（`probeExpectedNames`）；
+  桌面形态恒为全域验证。desktop-synced 源缺失 ≠ 版本不可用——激活照常通过，
+  宿主层在下次桌面同步 + 受控重启后补上。
 - **探测窗口与裁决**：默认 ≤60s 超时；超时**不立即判失败**——进入「继续观察 +
   延迟裁决」（给慢迁移二次确认窗口），再失败才回退。
 - **回退目标（统一口径，R3-1 P2-4）**：**自动回退目标 = 切换前版本（若其曾探针
@@ -339,7 +349,7 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    per-server 分支：local = 控制面事务接口 `restartLocal()`（与健康状态机
    重启单飞行串行化，**不用** `stopLocal()`+`startLocal()` 裸组合——会与
    健康"进程死亡即重启"分支交错，§9.3）；gateway = `POST /chamber/runtime/restart`
-   （202 + status 轮询/SSE，§9.3）。远端重启窗口内隧道 phase 保持 `ready`
+   （202 + status 轮询，§9.3）。远端重启窗口内隧道 phase 保持 `ready`
    （隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，03 §3），
    会话/侧边栏短时错误属预期。
    Electron 壳无需重启：插件
@@ -689,7 +699,7 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
 ## 9. 服务端化与共享核心（gateway 宿主 + desktop 迁移）
 
 > 状态：**已实现（M5–M7 落地，2026-09；剩余实机门禁见 STATUS）**。本节把本设计的运行时管理能力扩展到
-> gateway 服务端形态（修订 design 17 §2.1/§4/§8.4/§10/§11/§12/§13，S17–S20），
+> gateway 服务端形态（修订 design 17 §2.1/§4/§8/§10/§11/§12/§13，S17–S20），
 > 并把实现核心从 desktop 主进程抽取为共享包。关键代码事实（已核对）：
 > control-plane 已有运行时切换 seam `getDshWorkspacePath()` / `canStartLocal()` /
 > `canExposeLocal()`（`packages/control-plane/src/index.ts:129-137`，desktop
@@ -742,7 +752,7 @@ interface RuntimeHostAdapter {
   stopHost(): Promise<void>
   restartHost(): Promise<void>   // 事务重启：plane.restartLocal()（§9.3）
   registerInstallChild(child: ChildProcess): void  // desktop will-quit / gateway stop() 回收
-  notify(snapshot: RuntimeStatusProjection): void  // desktop IPC / gateway SSE/poll
+  notify(snapshot: RuntimeStatusProjection): void  // desktop IPC / gateway status 轮询
   platformGate(): { mutationsAllowed: boolean; reason?: string }  // Windows 只读
 }
 ```
@@ -823,8 +833,9 @@ const plane = createControlPlane({
 延迟裁决；通过 → 开放投影；失败 → 回退目标（切换前/最近 known-good）+ 快照
 恢复（两阶段 + 幂等补完）；快照失败 → 中止 + 可见标记（不自动每启重试）。
 无 pending 仅清理/补完。`stop()` 在等待 startupPromise 前即触发 lifecycle abort，
-随后 drain runtime writer 与 Gateway feature mutation barrier；只有两者静止并最终
-停 host/plane 后才释放 runtime owner 与外层 state lock。`spawnAndProbe`/`stopHost` = `plane.startLocal()`/
+随后 drain runtime writer（2026-12 剥离后 chamber 面除同步插件同步 put 外只读，
+Gateway feature mutation barrier 已不存在）；writer 静止并最终停 host/plane 后才
+释放 runtime owner 与外层 state lock。`spawnAndProbe`/`stopHost` = `plane.startLocal()`/
 `plane.stopLocal()`（既有 `PlaneHandle` seam）。探针清单同 §3.4 全量，共享包
 提供，gateway 零新探针。
 
@@ -845,22 +856,22 @@ desktop 与 gateway 均经 control-plane 的 `PlaneHandle.restartLocal()`（§9.
 共享同一原语（`RuntimeHostAdapter.restartHost()` 仅为 §9.1 草图口径）。HTTP
 语义：`POST /chamber/runtime/restart` 返回 **202**（接受即返回，不阻塞等
 ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/status` 轮询
-或 SSE 推送；installing/applying/pending/已有 restart 在途时 409。
+或 status 轮询；installing/applying/pending/已有 restart 在途时 409。
 
 **管理面 `/chamber/runtime`（gateway 自有 runtime 控制器，认证后，design 17
-§4/§8.4 已登记）**：
+§4/§10 已登记）**：
 
 | 路由 | 语义 |
 |---|---|
 | `GET /chamber/runtime/status` | 固定身份 `kind:'dsh-chamber-gateway-runtime'` + 实际生效版本/来源 tag（内建锚/用户选择/env）+ 状态机态 + pending + operation/restart + 失败记录（脱敏）+ restore/pre-rollback + 快照 + 安装进度 + 全分类磁盘统计 |
 | `GET /chamber/runtime/versions` | registry metadata（简略 packument）+ 全部有效缓存版本；离线仍返回缓存，当前 builtin 只标 active、不误标 cached |
-| `POST /chamber/runtime/select` | 绑定源/版本/tarball/SRI → 下载+SRI → pnpm `file:` install → prune → 冒烟 → 只读原子发布（异步 job，进度经 SSE/poll） |
+| `POST /chamber/runtime/select` | 绑定源/版本/tarball/SRI → 下载+SRI → pnpm `file:` install → prune → 冒烟 → 只读原子发布（异步 job，进度经 status 轮询） |
 | `POST /chamber/runtime/apply` | 置 pending（下次 gateway 重启应用） |
 | `POST /chamber/runtime/rollback` | 手动回滚（pre-rollback 暂存 + 快照语义同 §3.7） |
 | `POST /chamber/runtime/restore-builtin` | 写 `reset-builtin` intent 后执行与版本切换相同的数据安全事务：停机 → 快照 → 原子清指针 → 内建锚全量探针；失败切回旧指针并恢复快照，只有成功才删除 override/journal。snapshot-failed 恢复未改动来源，其余硬恢复阻塞保持 dsh 停机且管理面可轮询 |
 | `POST /chamber/runtime/retry-apply` | 恢复被中断的指针切换（swap-attempted）或快照失败（snapshot-failed）：清标志 → 重跑启动事务 → 干净时拉起 dsh（desktop retry-apply 对齐） |
 | `POST /chamber/runtime/retry-restore` | 从持久 journal 继续被中断的快照恢复（restore-half/restore-incomplete）：重跑启动事务续作 |
-| `POST /chamber/runtime/restart` | 受控重启 gateway 托管的 dsh 进程（§3.6 项 8：刷新插件挂载；指针不动、无快照/探针；`syncFeatures` 随 ready 变化 detach/attach）；202 接受、结果经 status().restart（running/ok/failed）+ operationError 轮询，resolve ≠ success |
+| `POST /chamber/runtime/restart` | 受控重启 gateway 托管的 dsh 进程（§3.6 项 8：刷新插件挂载；指针不动、无快照/探针；ready 过渡订阅仅把权威状态转发给 runtime 管理器——2026-12 剥离后无 feature 面可 detach/attach）；202 接受、结果经 status().restart（running/ok/failed）+ operationError 轮询，resolve ≠ success |
 | `GET/PUT /chamber/runtime/registry` | registry 源设置（owner-only 0600；URL 白名单校验同 §6；仅文件真实缺失时回默认 npmjs；损坏/符号链接/硬链接隔离保留并响亮失败；原子写，激活/安装期间禁止换源） |
 
 普通 `phase:'pending'` 是 core + route + 两套 UI 的一致终态门：除
@@ -879,16 +890,16 @@ Gateway runtime。**blocked 启动保持存活（2026-09 评审落地）**：启
 投影原因，恢复面为 `retry-apply`/`retry-restore`（镜像 desktop
 blocked-but-alive 语义）；元数据损坏（journal/current/override corrupt、
 journal-mismatch）仍是 FATAL，拒启保护 DSH_HOME。**挂载点纪律（不随 ready
-detach）**：runtime 面**不是** ready 门控的 feature host 一部分——feature
-host（session index / approvals / notify / scheduler / git）在 dsh 离开 ready
-时 detach，但 runtime 管理面管理的是 dsh
-本身，**必须全程可轮询**（重启/applying 期间 UI 要靠它拿进度）。实现 = 挂在
-gateway dispatch 面的自有 runtime 控制器（与 auth/dispatch 同级），dsh 派生
+detach）**：runtime 面是挂在 gateway dispatch 面的自有 runtime 控制器（与
+auth/dispatch 同级）——2026-12 剥离后没有 feature host（session index /
+approvals / notify / scheduler / git 均已删除），ready 过渡订阅只把权威状态
+转发给 runtime 管理器（`syncFeatures` 仅 `observeLocalState`），无 feature 面
+可 detach/attach。runtime 管理面管理的是 dsh
+本身，**必须全程可轮询**（重启/applying 期间 UI 要靠它拿进度）；dsh 派生
 字段（如 `connectionState`）在停机窗口诚实降级为 `stopped/starting`，绝不
 伪装。**restart 语义（§3.6 项 8）**：事务接口见上；指针不动、无快照/探针；
 每次 spawn 前 chamber host 包 seed thunk 重新求值、dsh boot 重读插件清单 →
-插件挂载刷新；`syncFeatures` 随 ready 过渡 detach/attach **dsh 派生** feature
-面（runtime 控制器不 detach）。安全：全部认证后；
+插件挂载刷新。安全：全部认证后；
 token/password 不进 runtime 日志；registry 配置损坏不得静默改用 npmjs（信任锚
 只能由用户显式修复），离线版本列表仍保留所有通过树校验的缓存版本；install 子进程
 env scrubbing + `NPM_CONFIG_USERCONFIG` 空文件 + 显式 `--registry`（§4 源钉死
@@ -922,7 +933,7 @@ npm registry（§6 已并入）；spawn 的 dsh 子进程与控制面保持零�
 验收门禁：自动化（共享包/gateway typecheck+test；desktop 全量回归；
 `build:gateway` + pack/install smoke 含 pnpm 依赖；frozen lockfile；i18n）；
 实机（服务端安装候选 → 重启 gateway → 探针 → 故障注入回退 → DSH_HOME 数据
-恢复（Linux server 记录）；生产 TLS 反代下 `/chamber/runtime` SSE/poll 与认证
+恢复（Linux server 记录）；生产 TLS 反代下 `/chamber/runtime` status 轮询与认证
 行为）；Windows 只读口径沿用。
 
 ### 9.6 打包与依赖决策（D2/D3）

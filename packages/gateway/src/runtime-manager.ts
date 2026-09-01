@@ -33,6 +33,7 @@ import { createRequire as nodeCreateRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
+import { hasSyncedHostSeed } from './plugins.ts'
 import {
   bindRuntimeInstallResolution,
   assertRuntimeRootNoFollow,
@@ -70,6 +71,7 @@ import {
   readOverrideState,
   readPrivateFileNoFollow,
   recordExplicitInstall,
+  PROBE_NAMES_WITHOUT_HOST_DOMAINS,
   recordProbePass,
   recordRuntimeFailure,
   removeKnownGoodCandidate,
@@ -683,7 +685,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return { path: anchor, version: builtinVersion, source: 'builtin' }
   }
 
-  async function spawnAndProbeCandidate(version: string, isBuiltin: boolean, signal?: AbortSignal): Promise<ProbeResult[]> {
+  async function spawnAndProbeCandidate(version: string, isBuiltin: boolean, hostDomains: boolean, signal?: AbortSignal): Promise<ProbeResult[]> {
     const target = isBuiltin ? anchor : join(stateRoot, version)
     transactionWorkspace = target
     internalSpawn = true
@@ -698,6 +700,14 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             baseUrl,
             dshHome,
             signal,
+            // 2026-12 Phase 3 shape gate: a gateway whose seed cache holds no
+            // synced chamber host packages hosts a plain dsh — the activation
+            // probe skips the chamber host domains until a desktop syncs.
+            // The shape is snapshot ONCE per startup transaction (see
+            // buildStartupDeps): probe set and verdict-expected set must
+            // always agree, or an exact-set drift would spuriously fail a
+            // healthy activation.
+            hostDomains,
             call: async (url, method, payload, opts) => {
               const response = await dshCall(url, method, payload, { signal: opts?.signal, timeoutMs: opts?.timeoutMs })
               return { result: response.result }
@@ -734,6 +744,14 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function buildStartupDeps(): StartupDeps {
+    // 2026-12 Phase 3 shape gate: the probe shape is snapshot ONCE per
+    // startup transaction. A desktop sync landing mid-transaction must not
+    // flip one side (hostDomains) while the verdict expects the other set
+    // (probeExpectedNames) — exact-set drift would spuriously fail/roll back
+    // a healthy activation. The next transaction re-evaluates the cache, so
+    // a mid-transaction sync applies on the following activation (bounded,
+    // fail-closed false negative).
+    const hostSeedSynced = hasSyncedHostSeed(config.plane.stateDir)
     return {
       cleanupStaleInstalls: () => cleanupStaleInstalls(baseDir),
       evict: () => evictVersions(baseDir),
@@ -769,7 +787,8 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           writeCurrentPointer(baseDir, version)
         }
       },
-      spawnAndProbe: (version, isBuiltin, signal) => spawnAndProbeCandidate(version, isBuiltin, signal),
+      spawnAndProbe: (version, isBuiltin, signal) => spawnAndProbeCandidate(version, isBuiltin, hostSeedSynced, signal),
+      probeExpectedNames: hostSeedSynced ? undefined : PROBE_NAMES_WITHOUT_HOST_DOMAINS,
       stopHost: async () => { await plane.stopLocal() },
       restore: (snapshotPath) => restoreSnapshot(baseDir, dshHome, snapshotPath),
       recordProbePass: (version) => recordProbePass(baseDir, version),

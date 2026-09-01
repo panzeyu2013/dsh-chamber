@@ -27,12 +27,6 @@ test('gateway state directories and every persisted document are owner-only', as
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
   const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
 
-  await store.worktrees.mutate(() => ({ next: { items: [] }, changed: true }))
-  await store.schedule.mutate(() => ({
-    next: { items: [{ id: 'job', delayMs: 1_000, intervalMs: null, targetSessionId: 's1', prompt: 'private prompt' }] },
-    changed: true,
-  }))
-  await store.settings.mutate(doc => ({ next: { ...doc, git: { enabled: true } }, changed: true }))
   store.setTokenHash('hash-only')
   store.getJwtSecret()
   store.setPasswordCredential(hashCredential('a sufficiently long private password'))
@@ -43,9 +37,6 @@ test('gateway state directories and every persisted document are owner-only', as
   }
   for (const file of [
     'tokens.json', 'jwt-secret', 'password-credential', '.gateway.lock',
-    'gateway/worktrees.json', 'gateway/worktrees.json.bak',
-    'gateway/schedule.json', 'gateway/schedule.json.bak',
-    'gateway/settings.json', 'gateway/settings.json.bak',
   ]) assert.equal(mode(join(stateDir, file)), 0o600, file)
   store.close()
 })
@@ -92,11 +83,11 @@ test('gateway tightens a loose pre-existing gateway/ subdirectory to 0700 on POS
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
   const root = join(stateDir, 'gateway')
   mkdirSync(root, { mode: 0o755 })
-  writeFileSync(join(root, 'worktrees.json'), '{"items":[]}\n', { mode: 0o600 })
+  writeFileSync(join(root, 'tokens.json'), '{"schemaVersion":2,"source":"config","updatedAt":1,"hash":"scrypt$x"}\n', { mode: 0o600 })
   const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
   assert.equal(mode(stateDir), 0o700)
   assert.equal(mode(root), 0o700)
-  assert.deepEqual(store.worktrees.get(), { items: [] }, 'pre-existing documents remain readable after tightening')
+  assert.equal(mode(join(root, 'tokens.json')), 0o600, 'pre-existing credential files keep their mode after tightening')
   store.close()
   const reopened = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
   reopened.close()
@@ -134,116 +125,8 @@ test('gateway rejects exact broad filesystem roots', () => {
   }
 })
 
-test('domain-invalid JSON main documents recover from valid backups', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-domain-backup-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const root = join(stateDir, 'gateway')
-  mkdirSync(root)
 
-  const worktree = {
-    id: 'ws-recovered', workspaceId: 'ws-recovered', sessionId: 'session-recovered',
-    repo: '/srv/repo', path: '/srv/recovered', branch: 'feature/recovered',
-    ownership: 'owned', state: 'ready', createdAt: 123,
-  }
-  const scheduled = {
-    id: 'job-recovered', delayMs: 1_000, intervalMs: null,
-    targetSessionId: 'session-recovered', prompt: 'continue',
-  }
-  writeFileSync(join(root, 'worktrees.json'), '{}\n', { mode: 0o600 })
-  writeFileSync(join(root, 'worktrees.json.bak'), `${JSON.stringify({ items: [worktree] })}\n`, { mode: 0o600 })
-  writeFileSync(join(root, 'schedule.json'), `${JSON.stringify({ schemaVersion: 99, items: [] })}\n`, { mode: 0o600 })
-  writeFileSync(join(root, 'schedule.json.bak'), `${JSON.stringify({ items: [scheduled] })}\n`, { mode: 0o600 })
-  writeFileSync(join(root, 'settings.json'), '{}\n', { mode: 0o600 })
-  writeFileSync(join(root, 'settings.json.bak'), `${JSON.stringify({
-    schemaVersion: 1, revision: 4, git: { enabled: true },
-  })}\n`, { mode: 0o600 })
 
-  const warnings: string[] = []
-  const store = createGatewayStore(stateDir, {
-    log() {}, warn: (message: unknown) => warnings.push(String(message)), error() {},
-  })
-  assert.deepEqual(store.worktrees.get().items, [worktree])
-  assert.deepEqual(store.schedule.get().items, [scheduled])
-  assert.deepEqual(store.settings.get(), { schemaVersion: 1, revision: 4, git: { enabled: true } })
-  assert.equal(warnings.filter(message => message.includes('recovered') && message.includes('.bak')).length, 3)
-  assert.deepEqual(readJson(join(root, 'worktrees.json')), {}, 'backup recovery must not rewrite the invalid main')
-  store.close()
-})
-
-test('invalid collection rows are isolated without truncating complete valid rows or falling back', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-domain-row-isolation-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const root = join(stateDir, 'gateway')
-  mkdirSync(root)
-
-  const completeWorktree = {
-    id: 'ws-current', workspaceId: 'ws-current', sessionId: 'session-current',
-    repo: '/srv/repo', path: '/srv/current', branch: 'feature/current', ownership: 'owned',
-    state: 'deleting', error: 'retryable failure', createdAt: 456,
-    futureMetadata: { retained: true },
-  }
-  const backupWorktree = {
-    id: 'ws-old', workspaceId: 'ws-old', path: '/srv/old', branch: 'feature/old',
-    ownership: 'owned', state: 'ready', createdAt: 1,
-  }
-  writeFileSync(join(root, 'worktrees.json'), `${JSON.stringify({
-    items: [completeWorktree, { id: 42, workspaceId: 'broken' }],
-  })}\n`, { mode: 0o600 })
-  writeFileSync(join(root, 'worktrees.json.bak'), `${JSON.stringify({ items: [backupWorktree] })}\n`, { mode: 0o600 })
-
-  const completeSchedule = {
-    id: 'job-current', delayMs: 2_000, intervalMs: 5_000,
-    targetSessionId: 'session-current', prompt: 'continue safely',
-    futureMetadata: { retained: true },
-  }
-  const backupSchedule = {
-    id: 'job-old', delayMs: 1_000, intervalMs: null,
-    targetSessionId: 'session-old', prompt: 'old',
-  }
-  writeFileSync(join(root, 'schedule.json'), `${JSON.stringify({
-    items: [completeSchedule, { id: 'job-broken', delayMs: -1 }],
-  })}\n`, { mode: 0o600 })
-  writeFileSync(join(root, 'schedule.json.bak'), `${JSON.stringify({ items: [backupSchedule] })}\n`, { mode: 0o600 })
-
-  const warnings: string[] = []
-  const store = createGatewayStore(stateDir, {
-    log() {}, warn: (message: unknown) => warnings.push(String(message)), error() {},
-  })
-  assert.deepEqual(store.worktrees.get().items, [completeWorktree],
-    'a bad row is dropped without reconstructing or truncating its complete sibling')
-  assert.deepEqual(store.schedule.get().items, [completeSchedule],
-    'a bad row is dropped without replacing valid main rows with an older backup')
-  assert.equal(warnings.some(message => message.includes('1 invalid persisted worktrees row')), true)
-  assert.equal(warnings.some(message => message.includes('1 invalid persisted schedule row')), true)
-  assert.equal(warnings.some(message => message.includes('recovered worktrees document')), false)
-  assert.equal(warnings.some(message => message.includes('recovered schedule document')), false)
-  store.close()
-})
-
-test('known-schema documents preserve unknown future root and settings-section fields', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-domain-forward-compatible-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const root = join(stateDir, 'gateway')
-  mkdirSync(root)
-  writeFileSync(join(root, 'worktrees.json'), `${JSON.stringify({
-    schemaVersion: 1,
-    items: [],
-    futureRoot: { retained: true },
-  })}\n`, { mode: 0o600 })
-  writeFileSync(join(root, 'settings.json'), `${JSON.stringify({
-    schemaVersion: 1,
-    revision: 2,
-    git: { enabled: true, futureOption: 'retain-me' },
-    futureSection: { enabled: false },
-  })}\n`, { mode: 0o600 })
-
-  const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  assert.deepEqual((store.worktrees.get() as unknown as { futureRoot: unknown }).futureRoot, { retained: true })
-  const settings = store.settings.get() as unknown as Record<string, unknown>
-  assert.deepEqual(settings.git, { enabled: true, futureOption: 'retain-me' })
-  assert.deepEqual(settings.futureSection, { enabled: false })
-  store.close()
-})
 
 test('pre-existing JWT and password verifier files are tightened before reading', t => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-private-store-existing-'))
@@ -429,24 +312,6 @@ test('stateDir exclusive lock is acquired on open and released by close', t => {
   assert.equal(existsSync(lockFile), false)
   store.close() // close is idempotent
   assert.equal(existsSync(lockFile), false)
-})
-
-test('document initialization failure releases the already-acquired stateDir lock', t => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-lock-init-failure-'))
-  t.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  mkdirSync(join(stateDir, 'gateway'))
-  const corruptPath = join(stateDir, 'gateway', 'worktrees.json')
-  mkdirSync(corruptPath)
-
-  assert.throws(
-    () => createGatewayStore(stateDir, { log() {}, warn() {}, error() {} }),
-    /is corrupt and no valid backup/,
-  )
-  assert.equal(existsSync(join(stateDir, '.gateway.lock')), false, 'failed construction must release its lock')
-
-  rmSync(corruptPath, { recursive: true })
-  const reopened = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
-  reopened.close()
 })
 
 test('credential deletion is idempotent only for absence and propagates real filesystem failures', t => {

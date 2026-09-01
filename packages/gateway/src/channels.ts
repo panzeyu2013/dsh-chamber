@@ -1,5 +1,5 @@
 /**
- * Channel registry (design 17 §7): the type surface for gateway-managed
+ * Channel registry (design 17 §2.4): the type surface for gateway-managed
  * tunnels (frp/tailscale/zerotier — a FUTURE abstraction). `direct` (bind
  * 0.0.0.0) and `ssh` (the desktop's own ssh-provider) are NOT channels and
  * never enter ChannelKind. MVP ships NO provider: `channels[]` is always

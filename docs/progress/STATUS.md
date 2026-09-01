@@ -32,12 +32,12 @@
 > 失败/停止清 cookie；旧 host（rc.2 无门禁）无 token 行时按旧 wire 直接工作。
 > 已知降级（已记录）：
 > - **远端/直连 0.1.2 dsh 附加被硬阻断**（launch token 为远端进程内存随机数、隧道不可恢复；verify 探针 401 诚实分类；上游提供 token 检索机制前保持阻断）；
-> - gateway 会话索引健康路径=控制流+轮询、降级路径=纯轮询（控制流断连自动重连）；
+> - gateway 会话索引健康路径=控制流+轮询、降级路径=纯轮询（控制流断连自动重连）——**2026-12 已随编排面剥离删除**；
 > - approval/提问通知经 $events 流 + $events/result 应答（answer-driven 解析）；
 > - workspace/follow 未接线：工作区由 session/list cwd 事实派生（workspaceId 不派生、无会话 workspace fail-closed）；
 > - 版本芯片：本地实例已接线（desktop 桥运行时版本），远端实例隐藏（D2 兜底）；
 > - cookie Max-Age=30 天无会话中重换：过期后约 10 分钟健康失败窗口触发重启换新（自愈，后续排期「cookie 过期即重交换」）；
-> - 索引 per-key seq 水位线已删除：轮询快照可短暂覆盖更新的流投影（≤10s 自愈）；
+> - 索引 per-key seq 水位线已删除：轮询快照可短暂覆盖更新的流投影（≤10s 自愈）——**2026-12 已随编排面剥离删除**；
 > - remote-stream 接收面帧校验宽松于上游 exactKeys（接受未知键，前向兼容容差）；
 > - settings-bridge agentPresets/select 以合成 `{agentId:'',agentPreset}` 发出（typert wire 将 Agent 参数投影为 agentId 键）：一旦被调必响亮失败（当前无调用点，潜伏面）；
 > - 端口碰撞理论面：本地实例同端口 cookie 覆盖（实际不可达，登记不修）；
@@ -160,28 +160,42 @@
   （行出现延迟、状态图标延迟、位置跳动三类症状）。
 - **认证服务端 Gateway（设计 17）**：自动化与打包面已完成，剩余发布前实机门禁：
   - 生产 TLS 反代的 Host/Origin/XFF/Secure-cookie、HTTP/WS 一致策略与 SPKI pin
-    正/负例；真实 dsh 的 events.mux/events.host 断线恢复和插件 bundle；
+    正/负例；真实 dsh 的 `/api/remote.mux` 断线恢复和插件 bundle；
   - 打包 Desktop 的三种代表形态（HTTPS+凭据、HTTP+凭据、显式可信网络
     `--no-auth`），重启后 safeStorage 解密/密码重登、凭据变更撤销 live stream、
     N-ctx 与完整 gateway runtime 管理面；
   - `/chamber/runtime` 在生产 TLS 下的 SSE/poll/auth，以及真实版本安装→探针→
     故障回退→DSH_HOME 恢复；
-  - 真 Git 仓库的创建、歧义恢复、删除重试与并发 session 安全验证；
   - Linux 真实 system/user service 与 foreground 安装升级：目标版本/新 boot identity
     健康证明、restart 失败回滚、local/global artifact 回退及凭据/env anchor 保留；
   - `--bind 0.0.0.0` 带凭据/显式 `--no-auth`、SSH 隧道回环、tailscale 等可信
     网络形态的全链路及 401/421/403 负例。
-  - **2026-12 修订（用户拍板，桌面网关编排分区移除）**：settings-bridge 不再挂载
-    「网关编排」入口与 `GatewayOrchestrationView`（git/notifications/schedule
-    开关、待处理审批/提问、会话/调度/worktree 投影、修订号显示全部移除）——
-    审批/提问由侧边栏既有事实通道按会话呈现（与本地/ssh 实例同一通道），
-    网关自有投影与功能开关归网关自有 `/chamber/` 运维面；三个编排能力改为
-    **默认开启**（`enabled !== false`，显式 false 才关闭，kill-switch 语义）；
-    `/chamber/` 仪表盘不再展示 settings 文档修订号（json-store 内部计数器，
-    保留存储层校验与 If-Match 原语）。契约见 design 17 §3/§10.4/§10.5 与
-    design 01 §4。
-  `session.list`→Git mutation 的 TOCTOU 目前由 realpath fail-closed、两次 live
-  check 与 non-force 缩小；彻底消除仍需上游提供原子 session lease。
+  - **2026-12 修订（用户拍板，gateway 编排面整体剥离 + 种子注册表）**：
+    - 桌面 settings-bridge「网关编排」分区移除（`GatewayOrchestrationView` 与
+      API 客户端删除）——审批/提问由侧边栏既有事实通道按会话呈现，与本地/ssh
+      实例同一通道；
+    - gateway 编排面整体剥离：`/chamber/approvals`、`/chamber/notifications`、
+      `/chamber/schedule`、`/chamber/sessions`、`/chamber/git/worktrees`、
+      `/chamber/settings` 与 `features/` 五文件（git/notify/schedule/index 四模块
+      + remote-stream 客户端）全部删除——审批 dsh 原生（官方前端承担）、调度 dsh
+      没有定时能力（gateway 不添加）、worktree 归 design 08 实例内插件、索引/开关
+      随删；仪表盘缩为 Credentials + Runtime；`store.ts` 的 worktrees/schedule/
+      settings 三文档域移除（只留凭据 + 锁）；
+    - 种子注册表（control-plane `SeedEntry`：kind/source/seedFiles/probeDomains）：
+      两个 chamber 宿主包（client-graph、git-worktree）改为**桌面同步**
+      （`PUT /chamber/plugins` → `<stateDir>/chamber-plugins/`，包名白名单 +
+      大小上限 + manifest 校验，原子 0600 写入；桌面主进程在 gateway ready 注册
+      后幂等同步，有变更时请求受控重启）——托管 dsh 的宿主包版本锁定连接桌面，
+      双发布线漂移消除；`dsh-chamber-client-ui-mobile` 为唯一**打包例外**
+      （移动访问绑定 gateway、链路无桌面），包未落地前为警告跳过的 stub 条目；
+    - design 18 激活探针**形态化**：`hostDomains=false` + `probeExpectedNames`
+      （`PROBE_NAMES_WITHOUT_HOST_DOMAINS`）——缓存缺包时托管 dsh 是纯 dsh，
+      探针跳过 chamber 宿主域；缓存就绪后恢复全域验证；
+    - gateway 发行物不再携带 host 两包（build.mjs 复制清单只剩 mobile 槽位）；
+      `--no-auth` 例外与认证门不变。契约见 design 17 §3/§10、design 18 §3.4/§9.3、
+      design 01 §4、AGENTS.md。
+  2026-12：上述 `session.list`→Git mutation 的 TOCTOU 描述随服务器侧 saga 一并
+  删除；实例内插件的对应竞态见设计 08 的 M4 验收（「并发 session 删除竞态」）。
   - **运行时凭据管理（design 17 §7.4）自动化已落地**：v2 凭据信封（config/runtime
     source + 播种规则）、`/auth/change-password` `/auth/change-token`
     `/auth/credentials`、stateDir 独占锁、`gateway auth` 停机态 CLI、

@@ -41,7 +41,8 @@ import { canonicalizeTransportInstanceInput, type TransportInstanceInput, type T
 import { deleteConnectionTransaction, saveConnectionTransaction, validateDeleteOnlyReplacement, type ConnectionCredentialMutations } from './connection-save.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, getSshPassword, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
-import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from './gateway-provider.ts';
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, syncGatewayChamberPlugins } from './gateway-provider.ts';
+import type { LocalChamberHostPackage } from './gateway-provider.ts';
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection } from './gateway-session.ts';
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
 import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
@@ -2132,6 +2133,53 @@ if (!gotTheLock) {
         }
       })();
     };
+    // 2026-12 Phase 3: desktop-synced chamber host packages. The local copies
+    // (dev source tree / packaged dist) are the same sources the local
+    // control-plane seed uses; the sync uploads them into the gateway seed
+    // cache after every gateway ready registration.
+    const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
+      const graphDir = app.isPackaged
+        ? path.join(pkgDir, 'dist', 'host-graph-package')
+        : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
+      const gitDir = app.isPackaged
+        ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
+        : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
+      return [
+        { name: '@dsh-chamber/dsh-host-client-graph', packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
+        { name: '@dsh-chamber/dsh-host-git-worktree', packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
+      ];
+    };
+    const syncGatewayChamberPluginsFor = (id: string, url: string, headers: Record<string, string>, spkiPin: string | null): void => {
+      const instance = sm.listInstances().find(candidate => candidate.id === id);
+      if (instance === undefined || instance.kind !== 'gateway') return;
+      const packages: LocalChamberHostPackage[] = [];
+      for (const source of localChamberHostPackageSources()) {
+        try {
+          packages.push({
+            name: source.name,
+            packageJson: readFileSync(source.packageJsonPath, 'utf8'),
+            distIndex: readFileSync(source.distIndexPath, 'utf8'),
+          });
+        } catch {
+          // Not built/bundled in this runtime — nothing to sync for this entry.
+        }
+      }
+      void syncGatewayChamberPlugins({
+        // Sync through the REGISTERED transport origin (the ready URL): for
+        // an ssh tunnel that is the loopback endpoint the user verified,
+        // never the (usually unreachable) remote host:port. The tunnel
+        // authority override presents the remote gateway in the Host header
+        // so the gateway's request policy (authority port == listen port)
+        // accepts the request — the same discipline the control-plane proxy
+        // registration above uses.
+        origin: url,
+        authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
+        headers,
+        spkiPin,
+        packages,
+        logger: { warn: message => console.warn(message), log: message => console.log(message) },
+      });
+    };
     sm.onStatusChanged((id, status) => {
       // S24 audit (design 17 §13.4.4): record non-secret phase TRANSITIONS
       // only (connecting/ready/error, incl. the requiresUserAction terminal
@@ -2248,6 +2296,17 @@ if (!gotTheLock) {
                   ...(tunnelAuthority === undefined ? {} : { authority: tunnelAuthority }),
                 },
               );
+              // 2026-12 Phase 3: desktop-synced chamber host packages — after
+              // every gateway ready registration, best-effort sync the local
+              // host packages into the gateway seed cache (idempotent: only
+              // version mismatches re-upload, and the upload asks the gateway
+              // for a controlled dsh restart so the running profile picks
+              // them up). The gateway no longer ships its own copies, so the
+              // managed dsh keeps its chamber host layer version-locked to
+              // this desktop. Mobile access is NOT covered here: the mobile
+              // plugin ships inside the gateway distribution instead (its
+              // access chain has no desktop).
+              syncGatewayChamberPluginsFor(id, url, headers, spkiPin ?? null);
             } else {
               cp.registerInstanceTransport(`${status.kind}:${id}`, url, undefined, {
                 transport: proxyTransport(status.transport),

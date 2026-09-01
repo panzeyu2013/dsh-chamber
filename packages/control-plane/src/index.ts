@@ -51,12 +51,11 @@ import { hostLogs } from './host-logs.ts'
 import { createStaticServing } from './static-serving.ts'
 import {
   buildPatchOverlay,
-  ensureHostPackage,
+  ensureSeedPackage,
   missingHostPackageInserts,
   HOST_GIT_WORKTREE_INSERT,
-  HOST_GIT_WORKTREE_PACKAGE_NAME,
   HOST_GRAPH_INSERT,
-  HOST_GRAPH_PACKAGE_NAME,
+  type SeedEntry,
 } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
@@ -183,6 +182,16 @@ export interface ControlPlaneOptions {
    * artifact gate and profile seed lifecycle as hostGraphPackageSourceDir.
    */
   hostGitWorktreePackageSourceDir?: string
+  /**
+   * Seed registry (2026-12 interface): additional chamber seed entries beyond
+   * the two host packages — the seam for browser-side chamber client plugins
+   * in hosted frontends (e.g. the gateway mobile slot). Every entry rides the
+   * same built-artifact gate, profile seed lifecycle and `--patch` overlay as
+   * the host packages; kind 'client' entries carry no probe coupling. A null/
+   * absent sourceDir is a warned stub skip (the mobile package ships on the
+   * mobile branch), never an error.
+   */
+  extraSeedEntries?: readonly SeedEntry[]
   /**
    * Optional request middleware (design 17 §2.1 改动③): runs after the
    * security headers + CSP + URL parse and BEFORE the default dispatch. A
@@ -320,18 +329,46 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const hostGraphPackageSourceDir = options.hostGraphPackageSourceDir ?? DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR
   const hostGitWorktreePackageSourceDir = options.hostGitWorktreePackageSourceDir
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
+  // Seed registry (2026-12): the two legacy host packages plus any extra
+  // entries (client-plugin slots like the gateway mobile stub). An extra
+  // entry that re-declares a base package's id WINS over the base entry
+  // (last-writer-wins by loader id): the gateway passes the two host packages
+  // as desktop-synced extra entries, so once its seed cache is populated the
+  // synced copies replace the packaged defaults — the base rows exist only to
+  // preserve the legacy desktop shape (no extraSeedEntries → no shadowing).
+  const seedEntries = (): SeedEntry[] => {
+    const byId = new Map<string, SeedEntry>()
+    for (const entry of [
+      {
+        insert: HOST_GRAPH_INSERT,
+        kind: 'host' as const,
+        source: 'packaged' as const,
+        sourceDir: hostGraphPackageSourceDir,
+        probeDomains: ['clientGraph/graph'],
+      },
+      {
+        insert: HOST_GIT_WORKTREE_INSERT,
+        kind: 'host' as const,
+        source: 'packaged' as const,
+        sourceDir: hostGitWorktreePackageSourceDir,
+        probeDomains: ['gitWorktree/previewCreate'],
+      },
+      ...(options.extraSeedEntries ?? []),
+    ]) {
+      byId.set(entry.insert.id, entry)
+    }
+    return [...byId.values()]
+  }
   // The seed gate is the BUILT artifact (dist/index.js), not the package
   // directory: the dir exists in any checkout of this repo, while the esbuild
   // output is the shipped artifact — committed via the .gitignore negation
-  // (design 09 §3.5), so a fresh clone HAS it and absence here means module A
+  // (design 09 §3.5), so a fresh clone HAS it and absence here means the entry
   // is not built/bundled in this runtime (packaged desktop without the bundle).
   // MISSING is skipped gracefully (v4 base command line, no overlay); a
   // PRESENT-but-damaged artifact is NOT skipped — it is seeded and the host
   // boot fails loud if the overlay row cannot resolve (shipped-but-broken
-  // module A is a packaging bug: fail-loud on purpose; ensureHostGraphPackage
+  // entries are a packaging bug: fail-loud on purpose; ensureSeedPackage
   // throws on a missing declared file rather than silently skipping).
-  const hostGraphArtifact = join(hostGraphPackageSourceDir, 'dist', 'index.js')
-  const hostGitWorktreeArtifact = join(hostGitWorktreePackageSourceDir, 'dist', 'index.js')
 
   // Establish the durable plane identity before any other persisted module
   // can write. The helper creates a new state root as 0700, but preserves the
@@ -370,22 +407,28 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * failure (a broken shipped module A is a packaging bug, never silent).
    */
   function resolveHostGraphPatch(): string | null {
-    const available = [
-      {
-        label: 'host-graph',
-        sourceDir: hostGraphPackageSourceDir,
-        artifact: hostGraphArtifact,
-        insert: HOST_GRAPH_INSERT,
-        packageName: HOST_GRAPH_PACKAGE_NAME,
-      },
-      {
-        label: 'git-worktree',
-        sourceDir: hostGitWorktreePackageSourceDir,
-        artifact: hostGitWorktreeArtifact,
-        insert: HOST_GIT_WORKTREE_INSERT,
-        packageName: HOST_GIT_WORKTREE_PACKAGE_NAME,
-      },
-    ].filter(entry => existsSync(entry.artifact))
+    // An extra entry with no packaged source is warned, never fatal — but the
+    // wording distinguishes a true stub (packaged entry whose package has not
+    // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
+    // merely awaiting its first sync (an expected pre-sync state, logged once
+    // per spawn as informational). The two legacy dirs keep their documented
+    // silent-skip behavior.
+    for (const entry of options.extraSeedEntries ?? []) {
+      if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
+        const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
+        if (entry.source === 'desktop-synced') logger.log(`${message} (awaiting the first desktop sync)`)
+        else logger.warn(`${message} (stub: package not shipped in this runtime)`)
+      }
+    }
+    const available = seedEntries()
+      .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
+      .map(entry => ({
+        label: entry.insert.id,
+        sourceDir: entry.sourceDir as string,
+        seedFiles: entry.seedFiles,
+        insert: entry.insert,
+        packageName: entry.insert.name,
+      }))
 
     if (available.length === 0) return null
     // Preflight every declared package before writing any of them. A damaged
@@ -393,7 +436,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     for (const entry of available) {
       const manifest = join(entry.sourceDir, 'package.json')
       if (!existsSync(manifest)) {
-        throw new Error(`${entry.label}: built host package is missing ${manifest}`)
+        throw new Error(`${entry.label}: built seed package is missing ${manifest}`)
       }
     }
     // Loader identities are global across the profile patch and this
@@ -405,7 +448,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       available.map(entry => entry.insert),
     )
     for (const entry of available) {
-      if (ensureHostPackage(dshHome, entry.packageName, entry.sourceDir)) {
+      if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
         logger.log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
       }
     }
@@ -665,11 +708,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           // DSH_HOME writes stay behind the per-spawn runtime gate. At plane
           // startup only report unavailable optional packages; the spawn-time
           // patch thunk seeds them after the reaper has proved quiescence.
-          if (!existsSync(hostGraphArtifact)) {
-            logger.log(`host-graph: host package build artifact ${hostGraphArtifact} not present; seed skipped (module A not built)`)
-          }
-          if (!existsSync(hostGitWorktreeArtifact)) {
-            logger.log(`git-worktree: host package build artifact ${hostGitWorktreeArtifact} not present; seed skipped (package not built)`)
+          for (const entry of seedEntries()) {
+            const artifact = join(entry.sourceDir ?? '', 'dist', 'index.js')
+            if (!existsSync(artifact)) {
+              logger.log(`seed '${entry.insert.id}': build artifact ${artifact} not present; seed skipped (${entry.insert.name} not built)`)
+            }
           }
           if (webDistDir !== undefined) {
             try {

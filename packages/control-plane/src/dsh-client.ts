@@ -1,11 +1,11 @@
 /**
  * dsh wire protocol layer. The desktop control-plane uses only the unary
  * client and generation-scoped capability cache. The separately invoked
- * authenticated gateway consumes the 0.1.2 remote-stream mux carrier
- * (packages/gateway/src/features/remote-stream.ts) — the legacy
+ * authenticated gateway proxies the same unary/stream wires; the legacy
  * respond/openEventStream exports below are deprecated and have no
  * production callers (dsh-v0.1.2-alpha.1 deleted the client-response and
- * events.mux wires).
+ * events.mux wires; the gateway's 0.1.2 remote-stream mux client was removed
+ * with the 2026-12 orchestration strip).
  *
  * Invariants:
  * - rpcId is minted by the initiator (this client) on every unary call and
@@ -487,7 +487,7 @@ export async function call(
  * Answer an answerable server-request (approval/question): POST /api/respond.
  * @deprecated 0.1.2 wire: `POST /api/respond` (client-response envelope) was deleted
  * upstream (dsh-v0.1.2-alpha.1) — the answerable surface is now the `$events/result`
- * Remote (see packages/gateway/src/features/remote-stream.ts). Kept only for
+ * Remote over `/api/remote.mux`. Kept only for
  * legacy callers; no production caller remains (review-round3d P2). It does
  * NOT inject the browser-auth cookie (review-round9c P2-3): a legacy caller
  * on the 0.1.2 wire would 401 — acceptable for a dead surface.
@@ -582,7 +582,7 @@ export async function respond(
  */
 /** @deprecated 0.1.2 wire: the events.mux/events.host downlink WS was deleted
  * upstream (dsh-v0.1.2-alpha.1) — live faces ride the `/api/remote.mux` Remote
- * stream mux (open frame handshake; see packages/gateway/src/features/remote-stream.ts).
+ * stream mux (open frame handshake).
  * Kept only for legacy callers; no production caller remains (review-round3d P2). */
 export async function *openEventStream(
   baseUrl: string,

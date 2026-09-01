@@ -14,9 +14,15 @@ the ledger and its `settings.*` children declarations remain valid.
   **per-instance child cordis context** (fake connection + the official
   settings plugin subset) and renders the target instance's official
   settings sections — the bridge only proxies the existing
-  settings/credentials/llm RPC surface.
-- A fixed chamber-global **Connections** nav entry renders the
-  settings-connections section from the chamber packages.
+  settings/credentials/llm RPC surface; a selected gateway server
+  additionally mounts the per-server "dsh runtime" section (design 18
+  §3.6/§9.3, proxying `/chamber/runtime` — version select/apply/rollback/
+  restart).
+- Fixed chamber-global **Connections** and **General** nav entries: the
+  connections page renders the settings-connections section from the chamber
+  packages; the general page renders chamber-global runtime settings (design
+  14 D7/15 — quit confirmation / launch at login / keep awake + the design 11
+  update status).
 - Config facts stay on the target host: no chamber-side persistence, no new
   control-plane API.
 

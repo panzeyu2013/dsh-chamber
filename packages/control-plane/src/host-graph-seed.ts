@@ -37,7 +37,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 // The loader `insert` row render/parse/conflict logic is single-sourced in
 // cordis-inserts.ts (A2 cross-package protocol single-sourcing) — shared with
 // the desktop remote seed (plugin-sync.ts); only the fail-loud message
@@ -76,6 +76,52 @@ export const HOST_GRAPH_INSERT: HostPackageInsert = {
 export const HOST_GIT_WORKTREE_INSERT: HostPackageInsert = {
   id: HOST_GIT_WORKTREE_INSERT_ID,
   name: HOST_GIT_WORKTREE_PACKAGE_NAME,
+}
+
+/**
+ * Seed registry (2026-12 interface): one seedable chamber package/plugin
+ * entry. The loader overlay row itself is identical for every entry (cordis
+ * `insert` id/name — see cordis-inserts.ts); `kind`/`source` are metadata
+ * that drive the seed file set and the future source resolution only.
+ *
+ * Consumers:
+ * - desktop control plane: the two host packages (base entries, legacy
+ *   `hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` options);
+ * - gateway: the same two host packages plus `extraSeedEntries` — the mobile
+ *   slot (`@dsh-chamber/dsh-client-ui-mobile`, kind 'client') is a stub whose
+ *   packaged source dir ships on the mobile branch; until then an absent
+ *   sourceDir is a warned skip, never an error.
+ */
+export type SeedEntryKind = 'host' | 'client'
+
+/** Where a seed entry's bytes come from. 'packaged' = the owner's own dist
+ *  (desktop app resources / gateway host-packages). 'desktop-synced' = a
+ *  cache directory under the state root populated by a connecting desktop
+ *  (the gateway pass-through seam; no owner resolves it yet — Phase 3). */
+export type SeedSource = 'packaged' | 'desktop-synced'
+
+export interface SeedEntry {
+  /** The loader overlay row (the only wire-relevant part). */
+  insert: HostPackageInsert
+  /** Loader target nature: 'host' packages resolve inside the dsh process
+   *  and may back activation-probe domains; 'client' plugins load in the web
+   *  frontend (e.g. the gateway-hosted browser UI). */
+  kind: SeedEntryKind
+  source: SeedSource
+  /** Packaged source directory (package.json + seedFiles). null or absent →
+   *  skipped with the caller's warn (a stub entry whose package is not yet
+   *  shipped — e.g. the gateway mobile slot). */
+  sourceDir: string | null
+  /** Seed file set; defaults to the host base (package.json + dist/index.js).
+   *  Client plugins may extend (css/assets) when their package lands. */
+  seedFiles?: readonly string[]
+  /** Activation-probe domains this entry backs (kind 'host' only). Documented
+   *  metadata: the dsh-runtime probe seam does NOT consume this registry —
+   *  it re-derives presence from the seed cache filesystem
+   *  (`hasSyncedHostSeed` in packages/gateway/src/plugins.ts, hardcoding the
+   *  same two syncable packages), so this list must stay in sync with the
+   *  probe set (`HOST_DOMAIN_PROBE_NAMES` in packages/dsh-runtime). */
+  probeDomains?: readonly string[]
 }
 
 /**
@@ -146,7 +192,7 @@ function readSeedTarget(path: string, maxBytes = MAX_SEED_TARGET_BYTES): string 
  * links); this chamber package is a bare seed and owns its package/dist dirs.
  * `profiles/web` remains an ordinary ancestor so established home/profile
  * layouts can still place it through a symlink. */
-function ensureSeedTargetParent(dshHome: string, packageName: string, relative: typeof HOST_PACKAGE_SEED_FILES[number]): string {
+function ensureSeedTargetParent(dshHome: string, packageName: string, relative: string): string {
   const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
   const scopeDir = join(modulesDir, '@dsh-chamber')
   const packageDir = join(scopeDir, packageName.slice('@dsh-chamber/'.length))
@@ -154,8 +200,11 @@ function ensureSeedTargetParent(dshHome: string, packageName: string, relative: 
   ensurePrivateDirectoryNoFollow(modulesDir, 0o700, directoryOptions)
   ensurePrivateDirectoryNoFollow(scopeDir, 0o700, directoryOptions)
   ensurePrivateDirectoryNoFollow(packageDir, 0o700, directoryOptions)
-  if (relative === 'dist/index.js') {
-    ensurePrivateDirectoryNoFollow(join(packageDir, 'dist'), 0o700, directoryOptions)
+  // Any declared seed file beyond the package root (dist/, css/, …) gets its
+  // own final-component parent — a real directory, never a symlink.
+  const targetDir = dirname(join(packageDir, relative))
+  if (targetDir !== packageDir) {
+    ensurePrivateDirectoryNoFollow(targetDir, 0o700, directoryOptions)
   }
   return join(packageDir, relative)
 }
@@ -183,44 +232,59 @@ export function buildPatchOverlay(
 }
 
 /**
- * Distribute module A's host package into the managed local profile so the
- * spawned host can resolve the client-graph row the overlay inserts.
- * Copies package.json + dist/index.js to
- * <dshHome>/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/.
+ * Distribute one seed entry into the managed local profile so the spawned
+ * host can resolve the overlay row. Copies each declared seed file
+ * (package.json + dist/index.js by default) to
+ * <dshHome>/profiles/web/node_modules/@dsh-chamber/<name>/.
  *
  * Idempotent per file: an existing target whose bytes hash identically to the
  * source is skipped; a missing or drifted target is rewritten atomically with
  * 0600 perms. Returns whether any file was written.
  *
- * Failure semantics: an absent sourceDir is NOT an error — module A may not
- * be built or bundled in this runtime (e.g. the packaged desktop), so the
+ * Failure semantics: an absent sourceDir is NOT an error — the entry may not
+ * be built or bundled in this runtime (e.g. the packaged desktop, or the
+ * gateway mobile stub whose package ships on the mobile branch), so the
  * caller decides how to surface the skip. A source that exists but is missing
  * a declared file, or a copy that fails, throws (fail-loud: a shipped-but-
- * broken module A is a packaging bug, never a silent skip). Note the caller's
- * gate (index.ts) is the BUILT artifact dist/index.js only: a source that
- * passes that gate but is missing another declared file — e.g. package.json
+ * broken entry is a packaging bug, never a silent skip). Note the caller's
+ * gate is the BUILT artifact dist/index.js only: a source that passes that
+ * gate but is missing another declared file — e.g. package.json
  * present-dist-but-no-manifest — is exactly the shipped-but-broken case and
  * the throw is intentional: the plane surfaces it as a start/spawn error
  * (fail-loud) instead of booting a host whose --patch row cannot resolve.
  * @param dshHome - the managed dsh home (the spawned host's $DSH_HOME).
- * @param sourceDir - module A's package directory (package.json + dist/index.js).
+ * @param packageName - the chamber package name (`@dsh-chamber/…`).
+ * @param sourceDir - the entry's packaged source directory.
+ * @param seedFiles - per-entry seed file set (defaults to the host base).
  * @returns true when at least one file was written, false when already in
  *   sync or the source package is absent.
  */
-export function ensureHostPackage(
+export function ensureSeedPackage(
   dshHome: string,
   packageName: string,
-  sourceDir: string,
+  sourceDir: string | null,
+  seedFiles?: readonly string[],
 ): boolean {
-  if (!existsSync(sourceDir)) return false
+  if (sourceDir === null || !existsSync(sourceDir)) return false
   if (!/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(packageName)) {
-    throw new Error(`host package seed: invalid chamber package name ${JSON.stringify(packageName)}`)
+    throw new Error(`chamber seed: invalid chamber package name ${JSON.stringify(packageName)}`)
+  }
+  const files = seedFiles ?? HOST_PACKAGE_SEED_FILES
+  if (files.length === 0) {
+    throw new Error('chamber seed: seedFiles must not be empty (an empty set would seed nothing yet emit an overlay row)')
   }
   let wrote = false
-  for (const relative of HOST_PACKAGE_SEED_FILES) {
+  for (const relative of files) {
+    // Seed file paths are caller-trusted (the control plane / gateway are the
+    // only producers), but a malformed entry must fail loud instead of
+    // escaping the package dir or silently seeding nothing.
+    if (typeof relative !== 'string' || relative === '' || relative.startsWith('/') || relative.includes('\\')
+      || relative.split('/').includes('..') || relative.split('/').includes('.')) {
+      throw new Error(`chamber seed: invalid seed file path ${JSON.stringify(relative)}`)
+    }
     const source = join(sourceDir, relative)
     if (!existsSync(source)) {
-      throw new Error(`host package seed: ${source} missing in package ${sourceDir}`)
+      throw new Error(`chamber seed: ${source} missing in package ${sourceDir}`)
     }
     // Source packages can live in the development tree or a packaged resource
     // virtual filesystem, so their established ordinary read boundary stays
@@ -234,6 +298,15 @@ export function ensureHostPackage(
     wrote = true
   }
   return wrote
+}
+
+/** Backwards-compatible host-package wrapper (legacy callers/tests). */
+export function ensureHostPackage(
+  dshHome: string,
+  packageName: string,
+  sourceDir: string,
+): boolean {
+  return ensureSeedPackage(dshHome, packageName, sourceDir)
 }
 
 /** Backwards-compatible module-A wrapper retained for existing callers/tests. */

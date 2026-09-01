@@ -128,6 +128,12 @@ var REQUIRED_ACTIVATION_PROBES = [
   "data.settings",
   "data.sessions"
 ];
+var HOST_DOMAIN_PROBE_NAMES = [
+  "clientGraph/graph",
+  "gitWorktree/previewCreate"
+];
+var HOST_DOMAIN_PROBE_NAME_SET = new Set(HOST_DOMAIN_PROBE_NAMES);
+var PROBE_NAMES_WITHOUT_HOST_DOMAINS = REQUIRED_ACTIVATION_PROBES.filter((name) => !HOST_DOMAIN_PROBE_NAME_SET.has(name));
 var DEFAULT_PROBE_WINDOW_MS = 6e4;
 function decideVerdict(probes, opts) {
   const expected = opts.expectedNames ?? REQUIRED_ACTIVATION_PROBES;
@@ -358,7 +364,8 @@ async function delayedVerdict(opts) {
   const probeTarget = () => opts.deps.probe(opts.pendingVersion, opts.targetIsBuiltin === true, opts.signal);
   let verdict = decideVerdict(await safeProbe(probeTarget), {
     elapsedMs: nowMs() - firstStartedAt,
-    observedOnce: false
+    observedOnce: false,
+    ...opts.deps.probeExpectedNames === void 0 ? {} : { expectedNames: opts.deps.probeExpectedNames }
   });
   if (verdict === "observe") {
     const wait = opts.deps.waitBeforeRetry ?? ((delayMs) => new Promise((resolve3) => setTimeout(resolve3, delayMs)));
@@ -366,7 +373,8 @@ async function delayedVerdict(opts) {
     const secondStartedAt = nowMs();
     verdict = decideVerdict(await safeProbe(probeTarget), {
       elapsedMs: nowMs() - secondStartedAt,
-      observedOnce: true
+      observedOnce: true,
+      ...opts.deps.probeExpectedNames === void 0 ? {} : { expectedNames: opts.deps.probeExpectedNames }
     });
   }
   return verdict === "pass" ? "pass" : "fail";
@@ -526,7 +534,7 @@ async function continueRollback(opts, initial) {
     const fallbackVersion = journal.rollbackTarget ?? opts.builtinVersion;
     const fallbackVerdict = decideVerdict(
       await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal))),
-      { elapsedMs: 0, observedOnce: true }
+      { elapsedMs: 0, observedOnce: true, ...deps.probeExpectedNames === void 0 ? {} : { expectedNames: deps.probeExpectedNames } }
     );
     if (fallbackVerdict === "pass") {
       return makeOutcome({
@@ -597,7 +605,7 @@ async function continueRollback(opts, initial) {
     }
     const builtinVerdict = decideVerdict(
       await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal))),
-      { elapsedMs: 0, observedOnce: true }
+      { elapsedMs: 0, observedOnce: true, ...deps.probeExpectedNames === void 0 ? {} : { expectedNames: deps.probeExpectedNames } }
     );
     return makeOutcome({
       status: "failed",
@@ -6324,6 +6332,7 @@ async function runRuntimeActivationProbes(opts) {
       return { name, ok: false, error: resultError(error) };
     }
   };
+  const hostDomains = opts.hostDomains !== false;
   const [sessions, graph, settings, git] = await Promise.all([
     // host.describe was deleted upstream (dsh-v0.1.2-alpha.1); the surviving
     // session/list read-only unary doubles as the host-capability probe
@@ -6337,7 +6346,7 @@ async function runRuntimeActivationProbes(opts) {
         return { name: "session/list", ok: false, error: resultError(error) };
       }
     })(),
-    probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue),
+    hostDomains ? probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue) : Promise.resolve(null),
     (async () => {
       const outcome = await probe("settings/describe", "settings/describe", { args: {} }, settingsValue);
       settingsRpcOk = outcome.ok;
@@ -6346,12 +6355,12 @@ async function runRuntimeActivationProbes(opts) {
     // Empty input is rejected by domain validation before any git process or
     // repository scan. Require that exact business miss; a success value would
     // no longer prove the request stayed on the side-effect-free path.
-    probe(
+    hostDomains ? probe(
       "gitWorktree/previewCreate",
       "gitWorktree/previewCreate",
       { args: { input: {} } },
       expectedGitValidationMiss
-    )
+    ) : Promise.resolve(null)
   ]);
   let commands;
   try {
@@ -6376,16 +6385,19 @@ async function runRuntimeActivationProbes(opts) {
     dataSettings = { name: "data.settings", ok: false, error: resultError(error) };
   }
   const dataSessions = sessionItems(sessionsValue) !== null ? { name: "data.sessions", ok: true } : { name: "data.sessions", ok: false, error: "session data is unreadable" };
-  const byName = /* @__PURE__ */ new Map([
-    [commands.name, commands],
-    [sessions.name, sessions],
-    [graph.name, graph],
-    [settings.name, settings],
-    [git.name, git],
-    [dataSettings.name, dataSettings],
-    [dataSessions.name, dataSessions]
-  ]);
-  return REQUIRED_ACTIVATION_PROBES.map((name) => byName.get(name) ?? { name, ok: false, error: "probe not wired" });
+  const byName = /* @__PURE__ */ new Map();
+  byName.set(commands.name, commands);
+  byName.set(sessions.name, sessions);
+  if (hostDomains) {
+    if (graph === null || git === null) throw new Error("internal: chamber host-domain probes did not run");
+    byName.set(graph.name, graph);
+    byName.set(git.name, git);
+  }
+  byName.set(settings.name, settings);
+  byName.set(dataSettings.name, dataSettings);
+  byName.set(dataSessions.name, dataSessions);
+  const expected = hostDomains ? REQUIRED_ACTIVATION_PROBES : PROBE_NAMES_WITHOUT_HOST_DOMAINS;
+  return expected.map((name) => byName.get(name) ?? { name, ok: false, error: "probe not wired" });
 }
 
 // src/runtime-startup.ts
@@ -6646,6 +6658,7 @@ async function runStartupPhase(deps, signal) {
       validateTarget: deps.validateTarget,
       switchPointer: deps.switchPointer,
       probe: deps.spawnAndProbe,
+      probeExpectedNames: deps.probeExpectedNames,
       stopHost: deps.stopHost,
       restore: deps.restore,
       recordProbePass: deps.recordProbePass,
@@ -6795,6 +6808,7 @@ async function runDelayedRollback(deps, monitoring, signal) {
       validateTarget: deps.validateTarget,
       switchPointer: deps.switchPointer,
       probe: deps.spawnAndProbe,
+      probeExpectedNames: deps.probeExpectedNames,
       stopHost: deps.stopHost,
       restore: deps.restore,
       recordProbePass: deps.recordProbePass,
@@ -7021,11 +7035,13 @@ export {
   DEFAULT_REGISTRY_TIMEOUT_MS,
   DEFAULT_TARBALL_MAX_BYTES,
   EXACT_SEMVER,
+  HOST_DOMAIN_PROBE_NAMES,
   INSTALL_OUTPUT_LIMIT_BYTES,
   INSTALL_TERMINATE_GRACE_MS,
   NPMIRROR_CDN_ORIGIN,
   PRIVATE_RUNTIME_DIR_MODE,
   PRIVATE_RUNTIME_FILE_MODE,
+  PROBE_NAMES_WITHOUT_HOST_DOMAINS,
   PRUNE_DIR_NAMES,
   PRUNE_FILE_PATTERNS,
   REQUIRED_ACTIVATION_PROBES,

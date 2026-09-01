@@ -14,28 +14,38 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Changed
 
-- **The desktop "Gateway orchestration" settings section is removed entirely
-  (2026-12, user decision)** — the settings-bridge no longer mounts the
-  gateway orchestration nav entry or `GatewayOrchestrationView` (feature
-  toggles, pending approvals/questions, session/schedule/worktree projections
-  and the revision display are all gone). Pending approvals/questions are
-  already surfaced per session by the existing sidebar fact channel (amber
-  dot + waiting classification; open the session to answer), so the settings
-  page was a second parallel UI (against design 01 P1/P2); the gateway's own
-  session/schedule/worktree projections and feature switches belong to the
-  gateway's own `/chamber/` operations surface.
-- **Gateway orchestration features are enabled by default (2026-12, user
-  decision)** — Git worktree orchestration, notifications and cross-session
-  scheduling switched from "off by default, switches are execution gates" to
-  "on by default": a missing/`true` `enabled` means on, only a persisted
-  explicit `enabled:false` disables (ops kill-switch). The gateway already
-  requires authentication by default and `--no-auth` is an explicit
-  trusted-network exception. Legacy documents upgrade seamlessly: a
-  section-less `settings.json` is treated as fully enabled.
-- **The gateway dashboard no longer shows the settings revision number** —
-  the revision is the json-store protocol's internal write counter (its
-  load-time validation and If-Match primitive remain); displaying it carried
-  no actionable information.
+- **The gateway orchestration surface is stripped entirely and the desktop
+  "Gateway orchestration" settings section is removed (2026-12, user
+  decision)** — approvals/questions return to native dsh (the existing
+  sidebar fact channel surfaces them per session, amber dot + waiting
+  classification, the same channel as local/SSH instances); the cross-session
+  scheduler is gone (dsh has no timer capability and the gateway does not add
+  one); the session index, server-side Git worktree records, feature switches
+  and the feature host are all deleted — the six orchestration routes
+  (`/chamber/approvals|notifications|schedule|sessions|git/worktrees|settings`)
+  and the five `features/` files (git/notify/schedule/index modules + the
+  remote-stream client) no longer exist, the dashboard shrinks to
+  Credentials + dsh runtime, and `store.ts` keeps credentials and the lock
+  only. The settings-bridge "Gateway orchestration" section (and its API
+  client) is removed with it.
+- **Seed registry with desktop sync (2026-12, Phase 3)** — the two chamber
+  host packages (`dsh-host-client-graph`, `dsh-host-git-worktree`) no
+  longer ship inside the gateway distribution: a connecting desktop uploads
+  its own copies through the authenticated `PUT /chamber/plugins`; the
+  gateway validates (package-name whitelist, size bounds, manifest
+  name/version) and caches them under `<stateDir>/chamber-plugins/`, and the
+  control-plane seed registry injects them into the managed dsh profile at
+  every spawn — the managed dsh's host layer is version-locked to the
+  connecting desktop, eliminating the dual-release-line drift; the activation
+  probe is shape-aware (`hostDomains`/`probeExpectedNames`: chamber host
+  domains are skipped until a sync exists).
+  `dsh-chamber-client-ui-mobile` is the single packaged exception (mobile
+  access is bound to the gateway and has no desktop in the chain); until its
+  package lands it is a warned stub entry with the interface ready.
+- **The settings revision display is gone** — the settings document and its
+  revision display disappear with the orchestration strip; the counter
+  semantics stay in the json-store protocol layer (load-time validation and
+  the If-Match primitive are unchanged).
 
 - **Connection failures now distinguish SSH-transport errors from dsh-instance
   probe failures** — the status projection gains `userActionKind`
@@ -222,7 +232,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 - **Gateway login page aligned with the dsh design language** — the `/auth/login`
   pre-auth page went from a bare minimal form to a self-contained dark card page
-  (a `--dsw-alias-*` token layer whose values match the `/chamber/` orchestration
+  (a `--dsw-alias-*` token layer whose values match the `/chamber/` management
   page): password-manager input hygiene (`autocomplete="current-password"`,
   `required`, `maxlength=1024`), en/zh copy selected by `Accept-Language` prefix
   matching, and an inline SVG favicon (the login CSP gains `img-src data:`;

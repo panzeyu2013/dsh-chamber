@@ -1,100 +1,65 @@
 /**
- * Feature-host routes (design 17 §8.5): the gateway's own orchestration
- * surface `/chamber/*`, all behind the auth gate (dispatch.ts). Wires the git
- * worktree offload (features/git.ts), the session index, approvals/questions,
- * scheduler, settings, notifications, and the browser dashboard.
+ * Gateway chamber surface (design 17 §8.5, 2026-12 收窄): the gateway-owned
+ * `/chamber/*` routes behind the auth gate (dispatch.ts). After the 2026-12
+ * orchestration strip (approvals/notifications, cross-session schedule,
+ * session index, git worktree records, feature settings all removed — dsh
+ * native or design 08 covers them), this surface keeps only:
  *
- * The dashboard also carries a Credentials panel (Phase 3, design 17 §7) that
- * drives the runtime credential endpoints (/auth/change-password,
- * /auth/change-token, /auth/credentials). It never renders secret values: the
- * rotated token is shown once in a readonly textarea (no innerHTML injection)
- * and cleared after a successful copy.
+ *   - `/chamber/channels`        — channel registry projection (MVP empty);
+ *   - `/chamber/` + assets       — the browser dashboard (Credentials +
+ *                                  dsh runtime management only);
+ *   - `/chamber/runtime/*`       — the runtime controller (design 18 §9.3,
+ *                                  dispatched separately in dispatch.ts).
+ *
+ * The dashboard also carries a Credentials panel (design 17 §7) that drives
+ * the runtime credential endpoints (/auth/change-password, /auth/change-token,
+ * /auth/credentials). It never renders secret values: the rotated token is
+ * shown once in a readonly textarea (no innerHTML injection) and cleared after
+ * a successful copy.
  *
  * Every route reads/writes gateway-owned state; the authoritative dsh facts
- * come from dsh `/api` through features/git.ts — the gateway never becomes
- * authoritative over host business (design 17 §10, chamber discipline).
+ * stay on dsh — the gateway never becomes authoritative over host business
+ * (design 17 §10, chamber discipline).
  */
 
 import {
-  call,
   type ApiRequest,
   type ApiResponse,
   type Logger,
 } from '@dsh-chamber/control-plane'
-import {
-  GitFeatureError,
-  createWorktree,
-  deleteWorktree,
-  type WorktreeRecord,
-} from './features/git.ts'
-import {
-  AnswerRejectedError,
-  createApprovalNotifier,
-  type ApprovalRequest,
-  type QuestionRequest,
-} from './features/notify.ts'
-import { MAX_TIMER_DELAY_MS, createScheduler } from './features/schedule.ts'
-import { createSessionIndex } from './features/index.ts'
 import type { ChannelRegistry } from './channels.ts'
-import type { GatewayStore, ScheduleStoreRecord, WorktreeStoreRecord } from './store.ts'
+import type { ChamberPlugins } from './plugins.ts'
 
-export interface FeatureHostDeps {
-  /** The managed local dsh loopback origin (http://127.0.0.1:<port>); null when not ready. */
-  getDshBaseUrl(): string | null
+export interface ChamberSurfaceDeps {
   logger: Logger
-  /** The gateway persistence layer (design 17 §10). */
-  store: GatewayStore
-  /** The channel registry (design 17 §7; MVP empty). */
+  /** The channel registry (design 17 §2.4; MVP empty). */
   channels: ChannelRegistry
-  /** Narrow test/runtime seams shared by the index and notifier. */
-  featureTransport?: {
-    callDsh?: typeof call
-    openRemoteStream?: (
-      baseUrl: string,
-      endpoint: string,
-      payload: unknown,
-      signal?: AbortSignal,
-    ) => AsyncIterable<unknown>
-    reconnectDelayMs?: number
-    /** Session-index poll cadence (default 10s) — the row refresh that runs
-     * alongside the live session/control stream (degraded path: polling
-     * only). */
-    pollIntervalMs?: number
-  }
+  /** The desktop-synced host-package seed cache (2026-12 Phase 3). */
+  plugins: ChamberPlugins
 }
 
-export interface FeatureHost {
+export interface ChamberSurface {
   /** Handle a `/chamber/*` request. Returns true when the path was claimed
    * (including a 404 for an unknown /chamber route). */
   handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean>
-  /** Attach background consumers/timers. Safe before readiness and idempotent. */
-  start(): void
-  /** Detach consumers and timers. Job definitions remain for reconnect. */
-  stop(): void
-  /** Synchronously fence new POST/PUT/PATCH/DELETE requests, then resolve
-   * after every mutation that already entered has settled. This is separate
-   * from stop(): ready/activation detach must not await itself when a dsh
-   * state transition is published from inside an active saga. */
-  quiesce(): Promise<void>
 }
-
-/** POST /chamber/schedule admission bounds: one authenticated caller must not
- * accumulate unbounded persisted job definitions or huge prompt strings. */
-const MAX_SCHEDULED_JOBS = 1_000
-const MAX_SCHEDULE_PROMPT_CHARS = 10_000
-const MAX_SCHEDULE_TARGET_SESSION_ID_CHARS = 512 // mirrors the session index bound
 
 function json(res: ApiResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
 }
 
-function readJsonBody(req: ApiRequest): Promise<unknown> {
+/** Bounded JSON body reader for the plugin-sync upload (2026-12 Phase 3).
+ * Cap: 8 MiB — two host packages, each up to 4 MiB artifact + manifest, as
+ * JSON strings. An oversized body is answered 413 and the request socket is
+ * destroyed instead of drained (a slow authenticated upload must not pin the
+ * connection). */
+function readUploadJsonBody(req: ApiRequest): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
     let settled = false
-    const MAX = 1024 * 1024 // 1 MiB, ample for orchestration payloads
+    const MAX = 8 * 1024 * 1024
 
     const cleanup = (): void => {
       req.removeListener('data', onData)
@@ -114,7 +79,7 @@ function readJsonBody(req: ApiRequest): Promise<unknown> {
       if (settled) return
       size += chunk.length
       if (size > MAX) {
-        fail(new GitFeatureError('body_too_large', 'request body exceeds 1 MiB'))
+        fail(Object.assign(new Error('request body exceeds 8 MiB'), { code: 'body_too_large' }))
         return
       }
       chunks.push(chunk)
@@ -128,771 +93,28 @@ function readJsonBody(req: ApiRequest): Promise<unknown> {
         cleanup()
         resolve(body)
       } catch {
-        fail(new GitFeatureError('bad_request', 'request body is not valid JSON'))
+        fail(Object.assign(new Error('request body is not valid JSON'), { code: 'bad_request' }))
       }
     }
-    const onError = (): void => fail(new GitFeatureError('request_aborted', 'request body stream failed'))
-    const onAborted = (): void => fail(new GitFeatureError('request_aborted', 'request body was aborted'))
-    // IncomingMessage.destroy() is allowed to finish with only aborted/close
-    // and no error. Treat a pre-end close as terminal so shutdown cannot wait
-    // forever for a body whose authenticated socket was deliberately revoked.
-    const onClose = (): void => fail(new GitFeatureError('request_aborted', 'request body was closed'))
+    const onError = (): void => fail(Object.assign(new Error('request body stream failed'), { code: 'request_aborted' }))
+    const onAborted = (): void => fail(Object.assign(new Error('request body was aborted'), { code: 'request_aborted' }))
+    const onClose = (): void => fail(Object.assign(new Error('request body was closed'), { code: 'request_aborted' }))
 
-    // Attach terminal listeners first. Some structural request adapters replay
-    // already-buffered data synchronously when the data listener is added;
-    // the guard prevents installing an orphan end listener if that replay
-    // already crossed the size limit and settled the reader.
+    req.on('data', onData)
+    req.on('end', onEnd)
     req.on('error', onError)
     req.on('aborted', onAborted)
     req.on('close', onClose)
-    req.on('data', onData)
-    if (!settled) req.on('end', onEnd)
-  })
-}
-
-export function createFeatureHost(deps: FeatureHostDeps): FeatureHost {
-  const { getDshBaseUrl, logger, store, channels } = deps
-  function headerValue(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
-    const v = headers[name]
-    return typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined
-  }
-  // Worktree records persist in gateway/worktrees.json (§10); the store is
-  // loaded once at construction and a live lookup overlays that recovered
-  // set with the just-created row.
-  const worktrees = new Map<string, WorktreeRecord>(
-    store.worktrees.get().items.map(r => [r.workspaceId, r] as const),
-  )
-  // A delete is a multi-step saga (durable intent -> live revalidation/Git +
-  // host mutations -> durable outcome). Persistence serialization alone does
-  // not prevent two requests for the same workspace from both entering that
-  // external-mutation window, so acquire this identity lease synchronously,
-  // before even reading the in-memory record. The opaque owner makes release
-  // exact if this lifecycle is ever refactored to hand a workspace to a new
-  // request before an older finally block runs.
-  const worktreeDeleteLeases = new Map<string, symbol>()
-
-  // Route mutations share one tail: each response observes its own durable
-  // write, concurrent requests cannot overwrite a newer in-memory snapshot,
-  // and a rejected write does not poison later writes.
-  let persistenceTail: Promise<void> = Promise.resolve()
-  let mutationsAccepted = true
-  const activeMutations = new Set<Promise<boolean>>()
-  async function serializePersistence<T>(operation: () => Promise<T>): Promise<T> {
-    const run = persistenceTail.then(operation, operation)
-    persistenceTail = run.then(() => undefined, () => undefined)
-    return await run
-  }
-
-  async function persistWorktree(record: WorktreeRecord): Promise<void> {
-    await serializePersistence(() => store.worktrees.mutate(doc => ({
-      next: { ...doc, items: [...doc.items.filter(item => item.workspaceId !== record.workspaceId), record] },
-      changed: true,
-    })))
-    worktrees.set(record.workspaceId, record)
-  }
-
-  async function persistWorktreeRemoval(workspaceId: string): Promise<void> {
-    await serializePersistence(() => store.worktrees.mutate(doc => ({
-      next: { ...doc, items: doc.items.filter(item => item.workspaceId !== workspaceId) },
-      changed: doc.items.some(item => item.workspaceId === workspaceId),
-    })))
-    worktrees.delete(workspaceId)
-  }
-
-  function writeScheduleItems(items: ScheduleStoreRecord[]): Promise<void> {
-    return store.schedule.mutate(doc => ({ next: { ...doc, items }, changed: true }))
-  }
-
-  function requireDsh(): string {
-    const baseUrl = getDshBaseUrl()
-    if (baseUrl === null) throw new GitFeatureError('instance_unavailable', 'the local dsh instance is not ready')
-    return baseUrl
-  }
-
-  // Approval/notification + cron + session-index (design 17 §8.3/§8.4/§8.2).
-  // The notifier + index start lazily here; they no-op until dsh is ready.
-  const pendingApprovals = new Map<string, ApprovalRequest>()
-  const pendingQuestions = new Map<string, QuestionRequest>()
-  // SSE clients for /chamber/notifications + /chamber/approvals (EventSource).
-  const sseClients = new Set<ApiResponse>()
-  function attachSse(client: ApiResponse): void {
-    sseClients.add(client)
-    const remove = () => sseClients.delete(client)
-    client.on('close', remove)
-    client.on('error', remove)
-  }
-  function writeSse(client: ApiResponse, frame: string): boolean {
-    try {
-      if (client.write(frame)) return true
-    } catch { /* close below */ }
-    sseClients.delete(client)
-    try { client.end() } catch { /* already closed */ }
-    return false
-  }
-  function broadcastSse(event: string, data: unknown): void {
-    const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
-    for (const client of [...sseClients]) {
-      writeSse(client, frame)
-    }
-  }
-  const notifier = createApprovalNotifier({
-    getDshBaseUrl,
-    logger,
-    ...(deps.featureTransport?.openRemoteStream === undefined ? {} : { openRemoteStream: deps.featureTransport.openRemoteStream }),
-    ...(deps.featureTransport?.callDsh === undefined ? {} : { callDsh: deps.featureTransport.callDsh }),
-    ...(deps.featureTransport?.reconnectDelayMs === undefined ? {} : { reconnectDelayMs: deps.featureTransport.reconnectDelayMs }),
-    onApproval: req => {
-      pendingApprovals.set(req.approvalId, req)
-      broadcastSse('approval', req)
-    },
-    onQuestion: req => {
-      pendingQuestions.set(req.questionId, req)
-      broadcastSse('question', req)
-    },
-    onApprovalResolved: (sessionId, approvalId) => {
-      if (pendingApprovals.delete(approvalId)) {
-        broadcastSse('approval-resolved', { approvalId, sessionId })
-      }
-    },
-    onQuestionResolved: questionId => {
-      if (pendingQuestions.delete(questionId)) {
-        broadcastSse('question-resolved', { questionId })
-      }
-    },
-    onGenerationStart: () => {
-      pendingApprovals.clear()
-      pendingQuestions.clear()
-      broadcastSse('pending-reset', {})
-    },
-  })
-  const scheduler = createScheduler({
-    getDshBaseUrl,
-    logger,
-    ...(deps.featureTransport?.callDsh === undefined ? {} : { callDsh: deps.featureTransport.callDsh }),
-    onJobRemoval: intent => serializePersistence(async () => {
-      // Re-evaluate the intent against the current identities only after this
-      // operation owns the persistence tail. A callback that waited behind a
-      // newer POST must preserve that job, and an id-reused replacement must
-      // never be removed with the older generation.
-      const persistCurrentRemoval = () => writeScheduleItems(
-        scheduler.list().filter(current => current !== intent.job),
-      )
-      if (intent.persistence === 'best-effort') {
-        try {
-          await persistCurrentRemoval()
-        } finally {
-          // Deterministic dsh rejection is terminal even if the disk write
-          // failed; commit before the serializer admits the next snapshot.
-          intent.commit()
-        }
-        return
-      }
-      await persistCurrentRemoval()
-      // Successful one-shots are consumed only after the durable deletion,
-      // still inside the same serialization critical section.
-      intent.commit()
-    }),
-  })
-  const sessionIndex = createSessionIndex({
-    getDshBaseUrl,
-    logger,
-    ...(deps.featureTransport?.callDsh === undefined ? {} : { callDsh: deps.featureTransport.callDsh }),
-    ...(deps.featureTransport?.openRemoteStream === undefined ? {} : { openRemoteStream: deps.featureTransport.openRemoteStream }),
-    ...(deps.featureTransport?.reconnectDelayMs === undefined ? {} : { reconnectDelayMs: deps.featureTransport.reconnectDelayMs }),
-    ...(deps.featureTransport?.pollIntervalMs === undefined ? {} : { pollIntervalMs: deps.featureTransport.pollIntervalMs }),
-  })
-
-  // Restore exact ids; definitions are armed only by FeatureHost.start(), and
-  // survive a dsh detach/reattach cycle.
-  for (const job of store.schedule.get().items) {
-    if (!isStoredSchedule(job)) {
-      logger.warn(`feature-host: ignored invalid persisted schedule ${String(job?.id)}`)
-      continue
-    }
-    // The admission cap is also a recovery cap. A hand-edited or older
-    // oversized document must not arm unbounded timers at startup; retain the
-    // first bounded set and leave the durable document untouched until the
-    // next explicit schedule mutation.
-    if (scheduler.list().length >= MAX_SCHEDULED_JOBS) {
-      logger.warn(`feature-host: ignored persisted schedule ${job.id} beyond the ${MAX_SCHEDULED_JOBS}-job cap`)
-      continue
-    }
-    scheduler.restore(job)
-  }
-
-  type FeatureFlags = { git: boolean; notifications: boolean; schedule: boolean }
-  const readFeatureFlags = (): FeatureFlags => {
-    const settings = store.settings.get()
-    return {
-      git: settings.git?.enabled === true,
-      notifications: settings.notifications?.enabled === true,
-      schedule: settings.schedule?.enabled === true,
-    }
-  }
-  const featureEnabled = (feature: keyof FeatureFlags): boolean => readFeatureFlags()[feature]
-  let hostStarted = false
-
-  function detachNotifications(): void {
-    notifier.stop()
-    if (pendingApprovals.size > 0 || pendingQuestions.size > 0 || sseClients.size > 0) {
-      broadcastSse('pending-reset', {})
-    }
-    pendingApprovals.clear()
-    pendingQuestions.clear()
-    for (const client of [...sseClients]) {
-      try { client.end() } catch { /* already closed */ }
-    }
-    sseClients.clear()
-  }
-
-  function applyFeatureFlags(previous: FeatureFlags, next: FeatureFlags): void {
-    if (previous.notifications !== next.notifications) {
-      if (next.notifications) {
-        if (hostStarted) notifier.start()
-      } else {
-        detachNotifications()
-      }
-    }
-    if (previous.schedule !== next.schedule) {
-      if (next.schedule) {
-        if (hostStarted) scheduler.start()
-      } else {
-        scheduler.stop()
-      }
-    }
-  }
-
-  async function handleRoute(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
-    // /chamber/git/worktrees
-    if (pathname === '/chamber/git/worktrees' || pathname === '/chamber/git/worktrees/') {
-      if (!featureEnabled('git')) return featureDisabled(res)
-      if (req.method === 'GET') {
-        json(res, 200, { items: [...worktrees.values()] })
-        return true
-      }
-      if (req.method === 'POST') {
-        try {
-          const body = await readJsonBody(req) as { repo?: unknown; branch?: unknown; newPath?: unknown; agentPreset?: unknown }
-          // repo/newPath must be absolute filesystem paths; branch must be a
-          // safe git ref (no leading '-', no shell/option metacharacters) —
-          // a token holder must not drive `git` against arbitrary repos/args.
-          if (!isSafeAbsolutePath(body.repo) || !isSafeBranch(body.branch) || !isSafeAbsolutePath(body.newPath)) {
-            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
-            return true
-          }
-          let record: WorktreeRecord
-          try {
-            record = await createWorktree({
-              dshBaseUrl: requireDsh(),
-              repo: body.repo,
-              branch: body.branch,
-              newPath: body.newPath,
-              ...(typeof body.agentPreset === 'string' ? { agentPreset: body.agentPreset } : {}),
-            })
-          } catch (createError) {
-            if (createError instanceof GitFeatureError && createError.recovery !== undefined) {
-              try {
-                await persistWorktree(createError.recovery)
-              } catch (persistError) {
-                worktrees.set(createError.recovery.workspaceId, createError.recovery)
-                logger.warn(`feature-host: failed to persist recovery record: ${String(persistError)}`)
-              }
-            }
-            throw createError
-          }
-          try {
-            await persistWorktree(record)
-          } catch (persistError) {
-            // The session is already published. A storage failure cannot
-            // authorize deleting user work; retain an in-memory recovery row.
-            worktrees.set(record.workspaceId, record)
-            throw new GitFeatureError('persistence_failed', `failed to persist worktree: ${String(persistError)}`)
-          }
-          json(res, 200, record)
-        } catch (error) {
-          featureError(res, req, error, logger)
-        }
-        return true
-      }
-      json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-      return true
-    }
-
-    // /chamber/git/worktrees/<workspaceId> (DELETE)
-    const worktreeMatch = /^\/chamber\/git\/worktrees\/([a-zA-Z0-9_-]+)$/.exec(pathname)
-    if (worktreeMatch !== null && req.method === 'DELETE') {
-      if (!featureEnabled('git')) return featureDisabled(res)
-      const workspaceId = worktreeMatch[1]
-      const deleteLease = Symbol(workspaceId)
-      if (worktreeDeleteLeases.has(workspaceId)) {
-        json(res, 409, {
-          error: 'worktree deletion is already in progress',
-          code: 'worktree_delete_in_progress',
-        })
-        return true
-      }
-      worktreeDeleteLeases.set(workspaceId, deleteLease)
-      try {
-        const record = worktrees.get(workspaceId)
-        if (record === undefined) {
-          json(res, 404, { error: 'not_found', code: 'not_found' })
-          return true
-        }
-
-        // True once the saga has persisted state:'deleting'; only then may a
-        // failure rewrite the record (rollback / error retention).
-        let deletingPersisted = false
-        let deleting: WorktreeRecord | undefined
-        try {
-          const body = await readJsonBody(req)
-          if (body === null || typeof body !== 'object' || Array.isArray(body)
-            || Object.keys(body as Record<string, unknown>).length !== 0) {
-            json(res, 400, { error: 'delete_body_not_allowed', code: 'delete_body_not_allowed' })
-            return true
-          }
-          if (typeof record.repo !== 'string' || record.repo === '') {
-            throw new GitFeatureError('unsafe_legacy_record', 'worktree record predates server-derived repository authority')
-          }
-          if (record.ownership !== 'owned') {
-            throw new GitFeatureError(
-              'unsafe_recovery_record',
-              'worktree ownership is not verified; explicit reconciliation is required before deletion',
-            )
-          }
-          const resumeAfterGitRemoval = record.state === 'deleting'
-          deleting = { ...record, state: 'deleting' }
-          await persistWorktree(deleting)
-          deletingPersisted = true
-          await deleteWorktree({
-            dshBaseUrl: requireDsh(),
-            workspaceId: record.workspaceId,
-            repo: record.repo,
-            path: record.path,
-            ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
-            ...(resumeAfterGitRemoval ? { resumeAfterGitRemoval: true } : {}),
-          })
-          await persistWorktreeRemoval(workspaceId)
-          json(res, 200, { deleted: true })
-        } catch (error) {
-          if (deletingPersisted && deleting !== undefined) {
-            const message = error instanceof Error ? error.message : String(error)
-            try {
-              if (error instanceof GitFeatureError && error.code === 'git_worktree_remove_failed') {
-                // `git worktree remove` refused (e.g. uncommitted changes): the
-                // worktree still exists, so roll the record back to a retryable
-                // 'ready' state with the reason recorded — never leave it stuck
-                // in 'deleting' with no diagnostics. A later DELETE may retry.
-                await persistWorktree({ ...deleting, state: 'ready', error: message })
-              } else {
-                // Any other saga failure (live session, transport, the
-                // workspace.delete leg after Git was already removed): record
-                // the reason on the retained 'deleting' row so the resume path
-                // (which skips Git removal) can finish the saga on the next
-                // DELETE instead of being stuck with an empty error field.
-                await persistWorktree({ ...deleting, error: message })
-              }
-            } catch (persistError) {
-              logger.warn(`feature-host: failed to persist worktree delete outcome: ${String(persistError)}`)
-            }
-          }
-          featureError(res, req, error, logger)
-        }
-      } finally {
-        if (worktreeDeleteLeases.get(workspaceId) === deleteLease) {
-          worktreeDeleteLeases.delete(workspaceId)
-        }
-      }
-      return true
-    }
-
-    // /chamber/approvals: GET (JSON poll | SSE when Accept: text/event-stream),
-    // POST answer.
-    if (pathname === '/chamber/approvals') {
-      if (!featureEnabled('notifications')) return featureDisabled(res)
-      if (req.method === 'GET') {
-        const accept = headerValue(req.headers, 'accept') ?? ''
-        if (accept.includes('text/event-stream')) {
-          // SSE mode (design 17 §8.5): replay the pending queue, then push.
-          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })
-          if (!writeSse(res, 'retry: 3000\n\n')) return true
-          for (const a of pendingApprovals.values()) {
-            if (!writeSse(res, `event: approval\ndata: ${JSON.stringify(a)}\n\n`)) return true
-          }
-          for (const question of pendingQuestions.values()) {
-            if (!writeSse(res, `event: question\ndata: ${JSON.stringify(question)}\n\n`)) return true
-          }
-          attachSse(res)
-          return true
-        }
-        json(res, 200, {
-          items: [
-            ...[...pendingApprovals.values()].map(request => ({ kind: 'approval', ...request })),
-            ...[...pendingQuestions.values()].map(request => ({ kind: 'question', ...request })),
-          ],
-        })
-        return true
-      }
-      if (req.method === 'POST') {
-        try {
-          const body = await readJsonBody(req) as { id?: unknown; outcome?: unknown; answer?: unknown }
-          const id = typeof body.id === 'string' ? body.id : null
-          const approval = id === null ? undefined : pendingApprovals.get(id)
-          const question = id === null ? undefined : pendingQuestions.get(id)
-          if (approval !== undefined && (body.outcome === 'allowed-once' || body.outcome === 'rejected')) {
-            // answerApproval resolves the row + broadcasts approval-resolved
-            // via onApprovalResolved (single emission — review-round3 P2-2).
-            await notifier.answerApproval(approval, body.outcome)
-            json(res, 200, { answered: true, kind: 'approval' })
-            return true
-          }
-          if (question !== undefined && isQuestionAnswer(body.answer)) {
-            await notifier.answerQuestion(question, body.answer)
-            json(res, 200, { answered: true, kind: 'question' })
-            return true
-          }
-          {
-            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
-            return true
-          }
-        } catch (error) {
-          featureError(res, req, error, logger)
-        }
-        return true
-      }
-      json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-      return true
-    }
-
-    // /chamber/sessions: the derived session-index projection.
-    if (pathname === '/chamber/sessions') {
-      if (req.method !== 'GET') {
-        json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-        return true
-      }
-      json(res, 200, { items: sessionIndex.list() })
-      return true
-    }
-
-    // /chamber/schedule: GET list, POST schedule, DELETE /:id cancel.
-    if (pathname === '/chamber/schedule') {
-      if (!featureEnabled('schedule')) return featureDisabled(res)
-      if (req.method === 'GET') {
-        json(res, 200, { items: scheduler.list() })
-        return true
-      }
-      if (req.method === 'POST') {
-        try {
-          const body = await readJsonBody(req) as { delayMs?: unknown; intervalMs?: unknown; targetSessionId?: unknown; prompt?: unknown }
-          const delayMs = body.delayMs
-          const validIntervalShape = body.intervalMs === undefined || body.intervalMs === null || typeof body.intervalMs === 'number'
-          const intervalMs = typeof body.intervalMs === 'number' ? body.intervalMs : null
-          // delayMs must be a finite non-negative number; intervalMs (when
-          // present) a finite number ≥ 1s — a zero/negative/NaN interval would
-          // otherwise busy-loop session/prompt (review M6). prompt and
-          // targetSessionId are bounded so one authenticated caller cannot
-          // accumulate unbounded definitions or huge persisted strings.
-          if (typeof delayMs !== 'number' || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > MAX_TIMER_DELAY_MS
-            || typeof body.targetSessionId !== 'string'
-            || body.targetSessionId.length === 0
-            || body.targetSessionId.length > MAX_SCHEDULE_TARGET_SESSION_ID_CHARS
-            || typeof body.prompt !== 'string' || body.prompt.length === 0 || body.prompt.length > MAX_SCHEDULE_PROMPT_CHARS
-            || !validIntervalShape
-            || (intervalMs !== null && (!Number.isFinite(intervalMs) || intervalMs < 1000 || intervalMs > MAX_TIMER_DELAY_MS))) {
-            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
-            return true
-          }
-          const job = await serializePersistence(async () => {
-            // Keep the capacity decision in the same critical section as the
-            // in-memory mutation and durable write. Otherwise two requests
-            // arriving at 999 jobs can both observe spare capacity and persist
-            // 1,001 retained definitions.
-            if (scheduler.list().length >= MAX_SCHEDULED_JOBS) {
-              return null
-            }
-            // admit() only throws on a duplicate id / invalid delay, both
-            // excluded by the validation above; assign it BEFORE the
-            // persistence try so that catch can never reference an unassigned
-            // job (review finding: empty `job` in the catch → TypeError → 500).
-            const scheduled = scheduler.admit({
-              delayMs,
-              intervalMs,
-              targetSessionId: body.targetSessionId as string,
-              prompt: body.prompt as string,
-            })
-            try {
-              await writeScheduleItems(scheduler.list())
-              // delayMs=0 must not dispatch session.prompt until the exact
-              // admitted definition is durable. commit() identity-checks and
-              // arms it before this serialized operation releases.
-              scheduler.commit(scheduled)
-            } catch (persistError) {
-              scheduler.cancel(scheduled.id)
-              throw new GitFeatureError('persistence_failed', `failed to persist schedule: ${String(persistError)}`)
-            }
-            return scheduled
-          })
-          if (job === null) {
-            json(res, 400, { error: 'schedule_full', code: 'schedule_full' })
-            return true
-          }
-          json(res, 200, job)
-        } catch (error) {
-          featureError(res, req, error, logger)
-        }
-        return true
-      }
-      json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-      return true
-    }
-    const scheduleMatch = /^\/chamber\/schedule\/([a-zA-Z0-9_-]+)$/.exec(pathname)
-    if (scheduleMatch !== null && req.method === 'DELETE') {
-      if (!featureEnabled('schedule')) return featureDisabled(res)
-      try {
-        const id = scheduleMatch[1]
-        let exists = false
-        await serializePersistence(async () => {
-          exists = scheduler.list().some(job => job.id === id)
-          if (!exists) return
-          await writeScheduleItems(scheduler.list().filter(job => job.id !== id))
-          scheduler.cancel(id)
-        })
-        json(res, 200, { cancelled: exists })
-      } catch (error) {
-        featureError(res, req, error, logger)
-      }
-      return true
-    }
-
-    // /chamber/channels: the channel registry projection (§7; MVP empty).
-    if (pathname === '/chamber/channels') {
-      if (req.method !== 'GET') {
-        json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-        return true
-      }
-      json(res, 200, { items: channels.list() })
-      return true
-    }
-
-    // /chamber/settings: the gateway's own orchestration settings (§8.5/§10).
-    if (pathname === '/chamber/settings' || pathname === '/chamber/settings/') {
-      if (req.method === 'GET') {
-        json(res, 200, store.settings.get())
-        return true
-      }
-      if (req.method === 'PUT') {
-        try {
-          const body = await readJsonBody(req)
-          const patch = decodeSettingsPatch(body)
-          if (patch === null) {
-            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
-            return true
-          }
-          await serializePersistence(async () => {
-            const previous = readFeatureFlags()
-            await store.settings.mutate(current => {
-              const changed = (patch.git !== undefined && patch.git.enabled !== current.git?.enabled)
-                || (patch.notifications !== undefined && patch.notifications.enabled !== current.notifications?.enabled)
-                || (patch.schedule !== undefined && patch.schedule.enabled !== current.schedule?.enabled)
-              return { next: { ...current, ...patch }, changed }
-            })
-            applyFeatureFlags(previous, readFeatureFlags())
-          })
-          json(res, 200, store.settings.get())
-        } catch (error) {
-          featureError(res, req, error, logger)
-        }
-        return true
-      }
-      json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-      return true
-    }
-
-    // /chamber/notifications: SSE push of approval/question events (§8.5/§8.3).
-    if (pathname === '/chamber/notifications') {
-      if (!featureEnabled('notifications')) return featureDisabled(res)
-      if (req.method !== 'GET') {
-        json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-        return true
-      }
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })
-      if (!writeSse(res, 'retry: 3000\n\n')) return true
-      attachSse(res)
-      return true
-    }
-
-    // Gateway-owned browser orchestration surface (design 17 D6 / §8.5).
-    // It is already behind dispatch.ts's mandatory auth gate. The document
-    // uses an external same-origin script so the control-plane CSP can keep
-    // inline script closed; neither asset accepts credentials in its URL.
-    if (pathname === '/chamber/') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'text/html; charset=utf-8', CHAMBER_APP_HTML, req.method === 'HEAD', {
-        'content-security-policy': CHAMBER_APP_CSP,
-      })
-      return true
-    }
-    if (pathname === '/chamber/app.js') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'application/javascript; charset=utf-8', CHAMBER_APP_JS, req.method === 'HEAD')
-      return true
-    }
-
-    // P4 static assets (design 17 §8.5/§9): PWA manifest + SW registration +
-    // mobile light surface + the (empty) service worker.
-    if (pathname === '/chamber/manifest.webmanifest') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'application/manifest+json', MANIFEST_WEBMANIFEST, req.method === 'HEAD')
-      return true
-    }
-    if (pathname === '/chamber/sw-register.js') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'application/javascript', SW_REGISTER_JS, req.method === 'HEAD')
-      return true
-    }
-    if (pathname === '/chamber/sw.js') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'application/javascript', '/* dsh gateway service worker (empty) */\n', req.method === 'HEAD')
-      return true
-    }
-    if (pathname === '/chamber/mobile.html') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'text/html; charset=utf-8', MOBILE_HTML, req.method === 'HEAD')
-      return true
-    }
-
-    // Unknown /chamber/* → 404 (claimed, so the default dispatch does not run).
-    json(res, 404, { error: 'not_found', code: 'not_found' })
-    return true
-  }
-
-  function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
-    const mutating = req.method === 'POST' || req.method === 'PUT'
-      || req.method === 'PATCH' || req.method === 'DELETE'
-    if (!mutating) return handleRoute(req, res, pathname)
-    if (!mutationsAccepted) {
-      json(res, 503, { error: 'gateway is stopping', code: 'gateway_stopping' })
-      return Promise.resolve(true)
-    }
-
-    // handleRoute is async, so the promise is obtained and registered in the
-    // same JS turn in which admission was checked. quiesce() closes admission
-    // synchronously; after that point the set can only shrink.
-    const operation = handleRoute(req, res, pathname)
-    activeMutations.add(operation)
-    void operation.then(
-      () => { activeMutations.delete(operation) },
-      () => { activeMutations.delete(operation) },
-    )
-    return operation
-  }
-
-  async function quiesce(): Promise<void> {
-    mutationsAccepted = false
-    // stop() is deliberately not called here. The gateway invokes this fence
-    // before its existing synchronous detach sequence; keeping the APIs
-    // separate also prevents a ready/activation stop published from inside a
-    // mutation from awaiting that same mutation. The tail covers a background
-    // removal that had already entered the shared persistence serializer.
-    while (activeMutations.size > 0) {
-      await Promise.allSettled([...activeMutations])
-    }
-    await persistenceTail
-  }
-
-  return {
-    handle,
-    start(): void {
-      mutationsAccepted = true
-      if (hostStarted) return
-      hostStarted = true
-      sessionIndex.start()
-      const flags = readFeatureFlags()
-      if (flags.notifications) notifier.start()
-      if (flags.schedule) scheduler.start()
-    },
-    stop(): void {
-      hostStarted = false
-      detachNotifications()
-      sessionIndex.stop()
-      scheduler.stop()
-    },
-    quiesce,
-  }
-}
-
-function isStoredSchedule(value: ScheduleStoreRecord): boolean {
-  return typeof value?.id === 'string' && /^[a-zA-Z0-9_-]+$/.test(value.id)
-    && typeof value.delayMs === 'number' && Number.isFinite(value.delayMs)
-    && value.delayMs >= 0 && value.delayMs <= MAX_TIMER_DELAY_MS
-    && (value.intervalMs === null || (typeof value.intervalMs === 'number' && Number.isFinite(value.intervalMs)
-      && value.intervalMs >= 1_000 && value.intervalMs <= MAX_TIMER_DELAY_MS))
-    && typeof value.targetSessionId === 'string' && value.targetSessionId !== ''
-    && value.targetSessionId.length <= MAX_SCHEDULE_TARGET_SESSION_ID_CHARS
-    && typeof value.prompt === 'string' && value.prompt !== ''
-    && value.prompt.length <= MAX_SCHEDULE_PROMPT_CHARS
-}
-
-interface SettingsPatch {
-  git?: { enabled: boolean }
-  notifications?: { enabled: boolean }
-  schedule?: { enabled: boolean }
-}
-
-/** Decode the complete public settings write vocabulary. Store-owned
- * schemaVersion/revision and unknown future namespaces are never writable
- * through this endpoint. */
-function decodeSettingsPatch(value: unknown): SettingsPatch | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const body = value as Record<string, unknown>
-  const patch: SettingsPatch = {}
-  for (const key of Object.keys(body)) {
-    if (key !== 'git' && key !== 'notifications' && key !== 'schedule') return null
-    const section = body[key]
-    if (section === null || typeof section !== 'object' || Array.isArray(section)) return null
-    const fields = Object.keys(section as Record<string, unknown>)
-    if (fields.length !== 1 || fields[0] !== 'enabled') return null
-    const enabled = (section as { enabled?: unknown }).enabled
-    if (typeof enabled !== 'boolean') return null
-    if (key === 'git') patch.git = { enabled }
-    else if (key === 'notifications') patch.notifications = { enabled }
-    else patch.schedule = { enabled }
-  }
-  return patch
-}
-
-/** Absolute-filesystem-path check: no relative form, no option injection, no
- * NUL (the git argv boundaries). */
-function isSafeAbsolutePath(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('/') && !value.includes('\0')
-}
-
-/** Branch name: no leading '-' (git option injection), restricted charset. */
-function isSafeBranch(value: unknown): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= 128
-    && !value.startsWith('-') && /^[a-zA-Z0-9._/-]+$/.test(value)
-}
-
-/** Cheap route-boundary validation for the public question response shape.
- * The dsh host remains authoritative and validates ids/options against the
- * exact pending question before returning an accepted receipt. */
-function isQuestionAnswer(value: unknown): value is {
-  answers: Array<{ id: string; selected: string[]; custom?: string }>
-} {
-  if (value === null || typeof value !== 'object' || !Array.isArray((value as { answers?: unknown }).answers)) return false
-  return (value as { answers: unknown[] }).answers.every(item => {
-    if (item === null || typeof item !== 'object') return false
-    const row = item as { id?: unknown; selected?: unknown; custom?: unknown }
-    return typeof row.id === 'string' && row.id !== ''
-      && Array.isArray(row.selected) && row.selected.every(option => typeof option === 'string')
-      && new Set(row.selected).size === row.selected.length
-      && (row.custom === undefined || (typeof row.custom === 'string' && row.custom.trim() !== ''))
   })
 }
 
 // ---------------------------------------------------------------------------
-// Gateway-owned browser assets (design 17 D6 / §8.5/§9). The full dsh frontend
-// remains proxied at `/`; `/chamber/` is a deliberately small orchestration
-// control surface backed only by gateway-owned routes.
+// Gateway-owned browser assets (design 17 D6 / §10/§9). The full dsh frontend
+// remains proxied at `/`; `/chamber/` is a deliberately small operations
+// surface backed only by gateway-owned routes. 2026-12: the dashboard keeps
+// Credentials + dsh runtime management only (feature settings, approvals,
+// sessions, schedule and worktree blocks were removed with the orchestration
+// strip).
 // ---------------------------------------------------------------------------
 
 const CHAMBER_APP_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'"
@@ -902,7 +124,7 @@ const CHAMBER_APP_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>dsh gateway orchestration</title>
+  <title>dsh gateway</title>
   <style>
     :root{color-scheme:dark;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:#0b0f14;color:#e6edf3}
     *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#0b0f14}header{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem max(1rem,calc((100vw - 74rem)/2));border-bottom:1px solid #30363d;background:rgba(11,15,20,.96)}
@@ -918,20 +140,10 @@ const CHAMBER_APP_HTML = `<!doctype html>
 </head>
 <body>
   <header>
-    <div><h1>dsh gateway</h1><p class="subtle">Authenticated orchestration</p></div>
+    <div><h1>dsh gateway</h1><p class="subtle">Authenticated operations</p></div>
     <div class="header-actions"><a class="button" href="/">Open dsh</a><button id="refresh" type="button">Refresh</button></div>
   </header>
   <main>
-    <section class="panel" aria-labelledby="settings-title">
-      <h2 id="settings-title">Feature settings</h2>
-      <p id="settings-status" class="status" role="status">Loading…</p>
-      <fieldset id="settings-fields" disabled>
-        <label class="toggle"><input id="setting-git" type="checkbox">Git worktree orchestration</label>
-        <label class="toggle"><input id="setting-notifications" type="checkbox">Notifications</label>
-        <label class="toggle"><input id="setting-schedule" type="checkbox">Cross-session scheduling</label>
-      </fieldset>
-      <div class="actions"><button id="save-settings" class="primary" type="button" disabled>Save settings</button></div>
-    </section>
     <section class="panel" aria-labelledby="credentials-title">
       <h2 id="credentials-title">Credentials</h2>
       <p id="credentials-status" class="status" role="status">Loading…</p>
@@ -990,18 +202,6 @@ const CHAMBER_APP_HTML = `<!doctype html>
       </div>
       <p id="runtime-action-status" class="status" role="status"></p>
     </section>
-    <section class="panel" aria-labelledby="sessions-title">
-      <h2 id="sessions-title">Sessions</h2><p id="sessions-status" class="status" role="status">Loading…</p><div id="sessions" class="list"></div>
-    </section>
-    <section class="panel wide" aria-labelledby="approvals-title">
-      <h2 id="approvals-title">Pending approvals and questions</h2><p id="approvals-status" class="status" role="status">Loading…</p><div id="approvals" class="list"></div>
-    </section>
-    <section class="panel" aria-labelledby="schedule-title">
-      <h2 id="schedule-title">Schedule</h2><p id="schedule-status" class="status" role="status">Loading…</p><div id="schedule" class="list"></div>
-    </section>
-    <section class="panel" aria-labelledby="worktrees-title">
-      <h2 id="worktrees-title">Worktrees</h2><p id="worktrees-status" class="status" role="status">Loading…</p><div id="worktrees" class="list"></div>
-    </section>
   </main>
   <script defer src="/chamber/app.js"></script>
 </body>
@@ -1010,8 +210,6 @@ const CHAMBER_APP_HTML = `<!doctype html>
 
 const CHAMBER_APP_JS = `(function () {
   'use strict';
-  var MAX_ROWS = 200;
-  var liveRefreshRunning = false;
   var runtimeRefreshRunning = false;
   var runtimeActionRunning = false;
   var runtimeSelectionTouched = false;
@@ -1036,11 +234,6 @@ const CHAMBER_APP_JS = `(function () {
   function ownRecord(value, label) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Malformed ' + label + ' response');
     return value;
-  }
-  function ownItems(value, label) {
-    var rows = ownRecord(value, label).items;
-    if (!Array.isArray(rows)) throw new Error('Malformed ' + label + ' response');
-    return rows;
   }
   function requiredText(row, key, label) {
     if (typeof row[key] !== 'string' || row[key].length === 0) throw new Error('Malformed ' + label + ' response');
@@ -1070,14 +263,6 @@ const CHAMBER_APP_JS = `(function () {
     var node = byId(name + '-status');
     node.textContent = text;
     node.className = failed ? 'status error' : 'status';
-  }
-  function renderList(name, rows, render, emptyText) {
-    var root = byId(name);
-    var fragment = document.createDocumentFragment();
-    rows.slice(0, MAX_ROWS).forEach(function (row) { fragment.appendChild(render(row)); });
-    if (rows.length === 0) fragment.appendChild(element('p', emptyText, 'empty'));
-    if (rows.length > MAX_ROWS) fragment.appendChild(element('p', String(rows.length - MAX_ROWS) + ' more rows not shown', 'empty'));
-    root.replaceChildren(fragment);
   }
   async function request(path, options) {
     var input = options || {};
@@ -1370,169 +555,6 @@ const CHAMBER_APP_JS = `(function () {
     finally { runtimeRefreshRunning = false; }
   }
 
-  function applySettings(value) {
-    var row = ownRecord(value, 'settings');
-    function enabled(key) {
-      var group = row[key];
-      return group !== null && typeof group === 'object' && !Array.isArray(group) && group.enabled === true;
-    }
-    byId('setting-git').checked = enabled('git');
-    byId('setting-notifications').checked = enabled('notifications');
-    byId('setting-schedule').checked = enabled('schedule');
-    byId('settings-fields').disabled = false;
-    byId('save-settings').disabled = false;
-    status('settings', typeof row.revision === 'number' ? 'Revision ' + row.revision : 'Ready', false);
-  }
-  async function loadSettings() {
-    status('settings', 'Loading…', false);
-    try { applySettings(await request('/chamber/settings')); }
-    catch (error) { status('settings', error instanceof Error ? error.message : 'Settings unavailable', true); }
-  }
-  async function saveSettings() {
-    var button = byId('save-settings');
-    button.disabled = true;
-    status('settings', 'Saving…', false);
-    try {
-      applySettings(await request('/chamber/settings', { method: 'PUT', body: {
-        git: { enabled: byId('setting-git').checked === true },
-        notifications: { enabled: byId('setting-notifications').checked === true },
-        schedule: { enabled: byId('setting-schedule').checked === true }
-      } }));
-    } catch (error) {
-      status('settings', error instanceof Error ? error.message : 'Save failed', true);
-      button.disabled = false;
-    }
-  }
-
-  async function loadSessions() {
-    try {
-      var rows = ownItems(await request('/chamber/sessions'), 'sessions').map(function (value) {
-        var row = ownRecord(value, 'session');
-        if (typeof row.running !== 'boolean' || typeof row.blank !== 'boolean' || typeof row.updatedAt !== 'number') throw new Error('Malformed session response');
-        return { sessionId: requiredText(row, 'sessionId', 'session'), title: optionalText(row, 'title', 'session'), cwd: optionalText(row, 'cwd', 'session'), running: row.running, updatedAt: row.updatedAt };
-      });
-      renderList('sessions', rows, function (row) {
-        var item = itemShell(row.title || row.sessionId, row.running ? 'running' : 'stopped');
-        if (row.title) appendMeta(item, row.sessionId);
-        appendMeta(item, row.cwd);
-        if (Number.isFinite(row.updatedAt)) item.appendChild(element('small', new Date(row.updatedAt).toLocaleString()));
-        return item;
-      }, 'No sessions.');
-      status('sessions', String(rows.length) + ' session(s)', false);
-    } catch (error) { status('sessions', error instanceof Error ? error.message : 'Sessions unavailable', true); }
-  }
-
-  function setCardBusy(card, busy) {
-    card.querySelectorAll('button,input').forEach(function (control) { control.disabled = busy; });
-  }
-  async function submitInteraction(card, body) {
-    var localStatus = element('p', 'Submitting…', 'status');
-    card.appendChild(localStatus);
-    setCardBusy(card, true);
-    try {
-      await request('/chamber/approvals', { method: 'POST', body: body });
-      await loadApprovals();
-    } catch (error) {
-      localStatus.textContent = error instanceof Error ? error.message : 'Answer failed';
-      localStatus.className = 'status error';
-      setCardBusy(card, false);
-    }
-  }
-  function normalizeQuestion(value) {
-    var row = ownRecord(value, 'question');
-    // options is optional in the dsh schema (custom-answer-only questions omit
-    // it); normalize to [] so the panel renders a custom-answer fieldset.
-    var options = Array.isArray(row.options)
-      ? row.options.map(function (value) {
-          var option = ownRecord(value, 'question option');
-          return { label: requiredText(option, 'label', 'question option'), description: optionalText(option, 'description', 'question option') };
-        })
-      : [];
-    return { id: requiredText(row, 'id', 'question'), header: optionalText(row, 'header', 'question'), question: requiredText(row, 'question', 'question'), detail: optionalText(row, 'detail', 'question'), multiSelect: row.multiSelect === true, options: options };
-  }
-  function renderApproval(row) {
-    var card = itemShell('Approval: ' + requiredText(row, 'toolName', 'approval'), requiredText(row, 'sessionId', 'approval'));
-    var reason = optionalText(row, 'reason', 'approval');
-    if (reason) card.appendChild(element('p', reason, 'body'));
-    var actions = element('div', undefined, 'actions');
-    var reject = element('button', 'Reject', 'danger'); reject.type = 'button';
-    var allow = element('button', 'Allow once', 'primary'); allow.type = 'button';
-    var approvalId = requiredText(row, 'approvalId', 'approval');
-    reject.addEventListener('click', function () { void submitInteraction(card, { id: approvalId, outcome: 'rejected' }); });
-    allow.addEventListener('click', function () { void submitInteraction(card, { id: approvalId, outcome: 'allowed-once' }); });
-    actions.append(reject, allow); card.appendChild(actions); return card;
-  }
-  function renderQuestion(row) {
-    var questionId = requiredText(row, 'questionId', 'question');
-    var card = itemShell('Question', requiredText(row, 'sessionId', 'question'));
-    if (!Array.isArray(row.questions)) throw new Error('Malformed question response');
-    var questions = row.questions.map(normalizeQuestion);
-    var states = questions.map(function (question) {
-      var fieldset = element('fieldset');
-      fieldset.appendChild(element('legend', question.header || question.question));
-      if (question.header) fieldset.appendChild(element('p', question.question, 'body'));
-      if (question.detail) fieldset.appendChild(element('p', question.detail, 'subtle'));
-      var inputs = [];
-      question.options.forEach(function (option) {
-        var label = element('label', undefined, 'choice');
-        var input = document.createElement('input'); input.type = question.multiSelect ? 'checkbox' : 'radio'; input.name = 'q-' + questionId + '-' + question.id; input.value = option.label;
-        var text = element('span', option.label); if (option.description) text.appendChild(element('small', option.description));
-        label.append(input, text); fieldset.appendChild(label); inputs.push(input);
-      });
-      var customLabel = element('label', undefined, 'custom'); customLabel.appendChild(element('span', 'Additional answer (optional)'));
-      var custom = document.createElement('input'); custom.type = 'text'; customLabel.appendChild(custom); fieldset.appendChild(customLabel); card.appendChild(fieldset);
-      return { id: question.id, inputs: inputs, custom: custom };
-    });
-    var submit = element('button', 'Submit answer', 'primary'); submit.type = 'button';
-    submit.addEventListener('click', function () {
-      var answers = states.map(function (state) {
-        var answer = { id: state.id, selected: state.inputs.filter(function (input) { return input.checked; }).map(function (input) { return input.value; }) };
-        var custom = state.custom.value.trim(); if (custom) answer.custom = custom; return answer;
-      });
-      void submitInteraction(card, { id: questionId, answer: { answers: answers } });
-    });
-    card.appendChild(submit); return card;
-  }
-  async function loadApprovals() {
-    try {
-      var rows = ownItems(await request('/chamber/approvals'), 'approvals').map(function (value) {
-        var row = ownRecord(value, 'interaction');
-        if (row.kind !== 'approval' && row.kind !== 'question') throw new Error('Malformed interaction response');
-        return row;
-      });
-      renderList('approvals', rows, function (row) { return row.kind === 'approval' ? renderApproval(row) : renderQuestion(row); }, 'No pending interactions.');
-      status('approvals', String(rows.length) + ' pending', false);
-    } catch (error) { status('approvals', error instanceof Error ? error.message : 'Interactions unavailable', true); }
-  }
-
-  async function loadSchedule() {
-    try {
-      var rows = ownItems(await request('/chamber/schedule'), 'schedule').map(function (value) {
-        var row = ownRecord(value, 'scheduled job');
-        if (typeof row.delayMs !== 'number' || (row.intervalMs !== null && typeof row.intervalMs !== 'number')) throw new Error('Malformed schedule response');
-        return { id: requiredText(row, 'id', 'scheduled job'), target: requiredText(row, 'targetSessionId', 'scheduled job'), prompt: requiredText(row, 'prompt', 'scheduled job'), delayMs: row.delayMs, intervalMs: row.intervalMs };
-      });
-      renderList('schedule', rows, function (row) {
-        var item = itemShell(row.target, row.intervalMs === null ? 'once' : 'repeats');
-        item.appendChild(element('p', row.prompt, 'body')); appendMeta(item, 'delay ' + row.delayMs + 'ms' + (row.intervalMs === null ? '' : ' · interval ' + row.intervalMs + 'ms')); return item;
-      }, 'No scheduled jobs.');
-      status('schedule', String(rows.length) + ' job(s)', false);
-    } catch (error) { status('schedule', error instanceof Error ? error.message : 'Schedule unavailable', true); }
-  }
-
-  async function loadWorktrees() {
-    try {
-      var rows = ownItems(await request('/chamber/git/worktrees'), 'worktrees').map(function (value) {
-        var row = ownRecord(value, 'worktree');
-        return { workspaceId: requiredText(row, 'workspaceId', 'worktree'), branch: requiredText(row, 'branch', 'worktree'), path: requiredText(row, 'path', 'worktree'), state: requiredText(row, 'state', 'worktree'), sessionId: optionalText(row, 'sessionId', 'worktree'), error: optionalText(row, 'error', 'worktree') };
-      });
-      renderList('worktrees', rows, function (row) {
-        var item = itemShell(row.branch, row.state); appendMeta(item, row.path); appendMeta(item, row.sessionId ? 'session ' + row.sessionId : undefined); if (row.error) item.appendChild(element('p', row.error, 'error')); return item;
-      }, 'No worktree records.');
-      status('worktrees', String(rows.length) + ' worktree(s)', false);
-    } catch (error) { status('worktrees', error instanceof Error ? error.message : 'Worktrees unavailable', true); }
-  }
-
   var credentialSnapshot = { password: null, token: null };
   var AUTH_PATHS = {
     credentials: '/auth/credentials',
@@ -1690,13 +712,6 @@ const CHAMBER_APP_JS = `(function () {
     }
   }
 
-  async function refreshLive() {
-    if (liveRefreshRunning) return;
-    liveRefreshRunning = true;
-    try { await Promise.allSettled([loadSessions(), loadApprovals(), loadSchedule(), loadWorktrees()]); }
-    finally { liveRefreshRunning = false; }
-  }
-  byId('save-settings').addEventListener('click', function () { void saveSettings(); });
   byId('runtime-version').addEventListener('change', function () { runtimeSelectionTouched = true; setRuntimeControls(); });
   byId('runtime-registry').addEventListener('input', setRuntimeControls);
   byId('runtime-select').addEventListener('click', function () {
@@ -1720,10 +735,9 @@ const CHAMBER_APP_JS = `(function () {
   byId('cred-rotate-token').addEventListener('click', function () { void rotateToken(); });
   byId('cred-remove-token').addEventListener('click', function () { void removeToken(); });
   byId('cred-copy-token').addEventListener('click', copyToken);
-  byId('refresh').addEventListener('click', function () { void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive(), loadCredentials()]); });
-  void Promise.allSettled([loadSettings(), refreshRuntime(), refreshLive(), loadCredentials()]);
+  byId('refresh').addEventListener('click', function () { void Promise.allSettled([refreshRuntime(), loadCredentials()]); });
+  void Promise.allSettled([refreshRuntime(), loadCredentials()]);
   setInterval(function () { void loadRuntimeStatus(); }, 3000);
-  setInterval(function () { void refreshLive(); }, 10000);
 }());
 `
 
@@ -1782,45 +796,138 @@ function methodNotAllowed(res: ApiResponse): true {
   return true
 }
 
-function featureDisabled(res: ApiResponse): true {
-  json(res, 403, { error: 'feature_disabled', code: 'feature_disabled' })
-  return true
-}
-
-function featureError(res: ApiResponse, req: ApiRequest, error: unknown, logger: Logger): void {
-  // The client/socket is already gone. In particular, gateway shutdown uses
-  // this path to release a mutation that had not crossed its body boundary;
-  // there is no response left to write and this is not an operational fault.
-  if ((error as { code?: unknown })?.code === 'request_aborted') return
-  // Upstream-unavailable (managed dsh not ready): explicit 503, never a
-  // misleading 500 internal (S4). Shared by the notifier and git feature.
-  if ((error as { code?: unknown })?.code === 'instance_unavailable') {
-    json(res, 503, { error: 'instance_unavailable', code: 'instance_unavailable' })
-    return
-  }
-  if (error instanceof AnswerRejectedError) {
-    json(res, 409, { error: error.message, code: error.code, reason: error.reason })
-    return
-  }
-  if (error instanceof GitFeatureError) {
-    const status = error.code === 'instance_unavailable' ? 503
-      : error.code === 'bad_request' || error.code === 'body_too_large' || error.code === 'invalid_input'
-        || error.code === 'invalid_target' ? 400
-        : error.code === 'target_exists' || error.code === 'unsafe_legacy_record'
-          || error.code === 'unsafe_recovery_record' || error.code === 'worktree_in_use' ? 409
-          : error.code === 'session_list_failed' || error.code === 'session_liveness_unknown' ? 503
-          : error.code === 'repo_not_allowed' || error.code === 'worktree_not_allowed' ? 403
-        : error.code === 'not_found' ? 404
-          : 500
-    json(res, status, { error: error.message, code: error.code })
-    if (error.code === 'body_too_large') {
-      // The 400 is already written. The oversized body may still be streaming
-      // — destroy the request socket instead of draining it, so a slow
-      // authenticated upload cannot pin the connection.
-      req.destroy?.()
+/**
+ * The gateway's own `/chamber/*` surface (design 17 §8.5, 2026-12 scope):
+ * channels projection + plugin-sync seed cache + browser dashboard assets.
+ * Every route is read-only (GET/HEAD) except PUT /chamber/plugins — a
+ * synchronous, atomic cache write that completes before its route tail
+ * settles (the credential-mutation drain tracks the credential/runtime
+ * writers; the plugin sync has no async tail, so no mutation admission fence
+ * is needed — the 2026-12 orchestration strip removed the last async
+ * /chamber writers (schedule/worktree/settings)).
+ */
+export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
+  const { channels, logger } = deps
+  async function handleRoute(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
+    // /chamber/channels: the channel registry projection (§7; MVP empty).
+    if (pathname === '/chamber/channels') {
+      if (req.method !== 'GET') {
+        json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
+        return true
+      }
+      json(res, 200, { items: channels.list() })
+      return true
     }
-    return
+
+    // /chamber/plugins (2026-12 Phase 3): the desktop-synced host-package
+    // seed cache. GET = non-secret projection (name + version); PUT = upload
+    // one syncable host package (validated + atomically cached; the next dsh
+    // spawn re-seeds from the cache, and the syncing desktop triggers the
+    // controlled /chamber/runtime/restart to refresh the running profile).
+    if (pathname === '/chamber/plugins' || pathname === '/chamber/plugins/') {
+      if (req.method === 'GET') {
+        json(res, 200, { items: deps.plugins.list() })
+        return true
+      }
+      if (req.method === 'PUT') {
+        try {
+          const body = (await readUploadJsonBody(req)) as { name?: unknown; files?: unknown }
+          const name = typeof body?.name === 'string' ? body.name : null
+          if (name === null || body?.files === null || typeof body?.files !== 'object' || Array.isArray(body.files)) {
+            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
+            return true
+          }
+          const files = body.files as Record<string, unknown>
+          const packageJson = typeof files['package.json'] === 'string' ? files['package.json'] : null
+          const distIndex = typeof files['dist/index.js'] === 'string' ? files['dist/index.js'] : null
+          if (packageJson === null || distIndex === null) {
+            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
+            return true
+          }
+          const outcome = await deps.plugins.put(name, { 'package.json': packageJson, 'dist/index.js': distIndex })
+          json(res, 200, { ok: true, changed: outcome.changed })
+        } catch (error) {
+          const code = (error as { code?: unknown })?.code
+          if (code === 'body_too_large') {
+            json(res, 413, { error: 'body_too_large', code: 'body_too_large' })
+            req.destroy?.()
+            return true
+          }
+          if (code === 'bad_request') {
+            json(res, 400, { error: 'bad_request', code: 'bad_request' })
+            return true
+          }
+          if (code === 'request_aborted') return true
+          if (code === 'invalid_input') {
+            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
+            return true
+          }
+          // Any other throw is a persistence failure (fs write, permissions,
+          // disk full …) — the client must be able to distinguish "your input
+          // was bad" from "the gateway could not write" (proxy honesty).
+          logger.warn(`chamber-plugins: persistence failure: ${String(error)}`)
+          json(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
+          return true
+        }
+        return true
+      }
+      json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
+      return true
+    }
+
+    // Gateway-owned browser operations surface (design 17 D6 / §10).
+    // It is already behind dispatch.ts's mandatory auth gate. The document
+    // uses an external same-origin script so the control-plane CSP can keep
+    // inline script closed; neither asset accepts credentials in its URL.
+    if (pathname === '/chamber/') {
+      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
+      serveAsset(res, 'text/html; charset=utf-8', CHAMBER_APP_HTML, req.method === 'HEAD', {
+        'content-security-policy': CHAMBER_APP_CSP,
+      })
+      return true
+    }
+    if (pathname === '/chamber/app.js') {
+      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
+      serveAsset(res, 'application/javascript; charset=utf-8', CHAMBER_APP_JS, req.method === 'HEAD')
+      return true
+    }
+
+    // P4 static assets (design 17 §10/§9): PWA manifest + SW registration +
+    // mobile light surface + the (empty) service worker.
+    if (pathname === '/chamber/manifest.webmanifest') {
+      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
+      serveAsset(res, 'application/manifest+json', MANIFEST_WEBMANIFEST, req.method === 'HEAD')
+      return true
+    }
+    if (pathname === '/chamber/sw-register.js') {
+      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
+      serveAsset(res, 'application/javascript', SW_REGISTER_JS, req.method === 'HEAD')
+      return true
+    }
+    if (pathname === '/chamber/sw.js') {
+      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
+      serveAsset(res, 'application/javascript', '/* dsh gateway service worker (empty) */\n', req.method === 'HEAD')
+      return true
+    }
+    if (pathname === '/chamber/mobile.html') {
+      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
+      serveAsset(res, 'text/html; charset=utf-8', MOBILE_HTML, req.method === 'HEAD')
+      return true
+    }
+
+    // Unknown /chamber/* → 404 (claimed, so the default dispatch does not run).
+    json(res, 404, { error: 'not_found', code: 'not_found' })
+    return true
   }
-  logger.warn(`feature-host: ${String(error)}`)
-  json(res, 500, { error: 'internal', code: 'internal' })
+
+  // Everything on this surface is read-only; a stale-but-authenticated
+  // request can still read. No mutation admission fence exists (2026-12).
+  void logger
+  void channels
+
+  return {
+    async handle(req, res, pathname): Promise<boolean> {
+      return handleRoute(req, res, pathname)
+    },
+  }
 }

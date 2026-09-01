@@ -16,8 +16,8 @@
 1. 托管一份始终监听 loopback 的本地 dsh；
 2. 在认证、Host/Origin 和资源边界后反代 dsh 官方 Web 前端与 `/api`；
 3. 允许 Desktop 以 gateway 连接（http 或 https、可空认证）接入该入口；
-4. 在独立的 `/chamber/*` 面提供有限的服务端编排（dsh 运行时管理、索引、通知、
-   调度、Git worktree）。
+4. 在独立的 `/chamber/*` 面提供受限运维面：dsh 运行时管理（design 18 §9.3）、
+   凭据面板、插件同步种子缓存与通道投影（2026-12 编排面剥离后仅剩这些）。
 
 它不是普通 control-plane 的公网开关。普通 Desktop control-plane 仍保持 loopback-only、
 匿名、只负责连接管理与同源反代。Gateway 的网络能力只在 `packages/gateway` 被显式
@@ -97,13 +97,13 @@ kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/c
 - `ChannelRegistry`（`packages/gateway/src/channels.ts`）已定型：
   `ChannelKind = 'frp' | 'tailscale' | 'zerotier' | (string & {})`，
   `ChannelProvider { start/stop/resolveEndpoint/probe }`；MVP 零实装，
-  `/chamber/channels` 恒空、活性永远来自 live probe（S9）；
+  `/chamber/channels` 恒空、活性永远来自 live probe（design 17 §4.2 / AGENTS.md 正确性不变量）；
 - **发现流槽位**（未来）：桌面可经认证的 `/chamber/channels` 列出通道、请求启动并
   解析端点，自动填充连接表单——接口已定义，本期不实装。
 
 ## 3. 能力差异与设置挂载（gateway vs dsh 直连）
 
-**依赖 gateway 的功能（dsh 运行时管理、编排、通知/审批）只能经 gateway 连接触达；
+**依赖 gateway 的功能（dsh 运行时管理、凭据面板、插件同步）只能经 gateway 连接触达；
 直连 dsh（无论 ssh 隧道还是 http 直连）物理上不存在 `/chamber/*` 面，无法挂载。**
 settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显示不同分区：
 
@@ -111,16 +111,22 @@ settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显
 |---|---|---|---|
 | dsh-runtime 设置分节（design 18 §3.6） | 挂载，**版本只读**投影 | **不挂载**（无管理面、无 ssh 通道、无 `/chamber`） | 挂载，**代理 `/chamber/runtime`** 全功能（status/versions/select/apply/rollback/restore-builtin/registry/restart） |
 | 重启 dsh 动作 | `restart_service`（systemd IPC） | 无 | `/chamber/runtime/restart`（事务化受控重启，刷新插件挂载） |
-| 网关编排入口（settings-bridge 导航） | 不挂载 | 不挂载 | 挂载：git/notifications/schedule 功能开关、待处理审批/提问、channel 投影、修订号 |
-| 通知与审批转发 | 无 | 无 | 有（`/chamber/notifications`、`/chamber/approvals`，poll/SSE） |
-| 派生会话摘要（sidebar 分组） | 无（会话业务由 dsh 前端直接呈现） | 无 | 有（索引经事件流重建，绝不消费会话正文） |
-| 跨会话调度 | 无 | 无 | 有（`/chamber/schedule`，默认关闭） |
-| Git worktree 编排 | 无（design 08 实例内插件为迁移期并行路线） | 无 | 有（`/chamber/git/worktrees`，默认关闭） |
+| 网关编排入口（settings-bridge 导航） | 不挂载 | 不挂载 | **2026-12 修订（用户拍板）**：不挂载——桌面设置不重放网关编排，审批/提问经侧边栏既有事实通道呈现 |
+| 通知与审批转发 | 无（dsh 原生审批，前端承担） | 无（同左） | **无（2026-12 剥离**——聚合视图是重复呈现，官方前端已覆盖审批全流程） |
+| 派生会话摘要 | 无（会话业务由 dsh 前端直接呈现） | 无 | **无（2026-12 剥离**——索引随 feature host 移除） |
+| 跨会话调度 | 无 | 无 | **无（2026-12 剥离**——dsh 没有定时能力，gateway 不添加） |
+| Git worktree 编排 | 有（design 08 实例内插件） | 有（同左） | **无服务器侧记录（2026-12 剥离**；侧边栏走 design 08 实例内插件——托管 dsh 由网关 seed chamber 宿主包，本地/gateway 同一通道） |
+| chamber 宿主包 seed（client-graph / git-worktree） | 远程 seed（design 13 插件同步） | 远程 seed（同左） | **桌面同步（2026-12 Phase 3**：`PUT /chamber/plugins` 上传 → 缓存 `<stateDir>/chamber-plugins/` → 每次 spawn 经控制面 seed 注入托管 profile；版本跟随连接的桌面） |
+| 移动适配插件（`dsh-chamber-client-ui-mobile`） | 不适用 | 不适用 | **打包 seed（例外**：移动访问绑定 gateway、无桌面在场，插件随 gateway 发行物分发） |
 
-装配规则（design 17 契约）：**gateway 连接** → 额外挂载上述全部 gateway 能力分区，
-路径由 canonical `gateway-<id>` 派生为 `/api/i/gateway-<id>/chamber/*`（同源代理，
-token 永不出主进程）；**dsh 直连** → 只挂 dsh 自身能力，任何 `/chamber/*` 请求
-必须稳定返回 404/403 且不伪装。各资源独立失败，单一路由错误不抹掉其他已加载数据。
+装配规则（design 17 契约）：**gateway 连接** → 仅挂载 dsh-runtime 代理分节
+（design 18 §3.6/§9.3：`/chamber/runtime`，路径由 canonical `gateway-<id>` 派生为
+`/api/i/gateway-<id>/chamber/*` 同源代理，token 永不出主进程）；**2026-12 修订
+（用户拍板）**：编排分区（git/notifications/schedule 功能开关、待处理审批/提问、
+会话/调度/worktree 投影）不再挂载到桌面设置——审批/提问经侧边栏既有事实通道
+呈现；网关自有的编排面整体剥离（§10），仅保留 runtime 控制器、凭据
+面板与插件同步。**dsh 直连** → 只挂 dsh 自身能力，任何 `/chamber/*` 请求必须
+稳定返回 404/403 且不伪装。各资源独立失败，单一路由错误不抹掉其他已加载数据。
 
 ## 4. 组合架构与生命周期
 
@@ -129,7 +135,7 @@ Browser / Desktop
         │ HTTPS/HTTP（用户自建：TLS 反代 / tailscale / SSH 隧道 / frp）
         ▼
 Gateway request policy ── auth ── fixed route dispatch
-        │                         ├─ /chamber/* → feature host
+        │                         ├─ /chamber/* → gateway 自有面（channels/plugins/runtime/仪表盘）
         │                         ├─ management → control-plane API
         │                         └─ dsh UI/API/WS → gateway proxy
         ▼
@@ -158,18 +164,19 @@ upgrade middleware 和 CORS evaluator 才能越过 loopback 构造门。
    → 原子切指针 → 经 `startLocal()` spawn 候选（`canExposeLocal` 隔离）→
    全量只读探针 + ≤60s 窗口 + 延迟裁决；无 pending 时仅清理/补完；
 5. 探针裁决通过后等待 dsh `ready`；
-6. 仅在 `ready` generation 启动索引、通知和 scheduler；
+6. 无 feature host 可启动：ready 过渡订阅仅把权威状态转发给 runtime 管理器
+   （`syncFeatures`，design 18 §9.3）；
 7. 任一步失败都会停止已打开的 server，下一次 `start()` 可重试。
 
-停止时先同步关闭 feature 与 credential mutation admission，并撤销 dispatch 追踪的
-下游 HTTP/WS（未读完 body 的请求因此不会卡住 drain）；同时中止 runtime
-transaction/install。已经越过 admission 的 Git/settings/schedule saga 或凭据写入不
-强行打断，而是持有 stateDir lock 等待其完整 promise、审计尾与持久化 tail 收敛；
-feature、credential、runtime 三类 writer 都静止后才停止 control-plane、managed dsh
-并释放 `.gateway.lock`。启动失败回滚走同一屏障，绝不让旧 handler 在新 gateway
-取得锁后继续写；同一 handle 再次 `start()` 时才重新开放 admission。
-dsh 从 ready 离开时 feature host（**dsh 派生** consumers：index/notify/scheduler/git）
-立即 detach；scheduler 保留定义但清除 timer，下一代 ready 后重新 arm。**例外**：
+停止时先同步关闭 credential mutation admission（feature host 已不存在），并撤销
+dispatch 追踪的下游 HTTP/WS（未读完 body 的请求因此不会卡住 drain）；同时中止
+runtime transaction/install。已经越过 admission 的凭据写入不强行打断，而是持有
+stateDir lock 等待其完整 promise、审计尾与持久化 tail 收敛；credential、runtime
+两类 writer（插件同步缓存是同步 put，随请求收敛）都静止后才停止 control-plane、
+managed dsh 并释放 `.gateway.lock`。启动失败回滚走同一屏障，绝不让旧 handler 在
+新 gateway 取得锁后继续写；同一 handle 再次 `start()` 时才重新开放 admission。
+2026-12 剥离后没有 feature host：不存在 index/notify/scheduler/git 派生
+consumers，ready 过渡订阅只把权威状态转发给 runtime 管理器。**例外**：
 `/chamber/runtime` 是 gateway 自有 runtime 控制器（挂在 dispatch 面，不随 ready
 detach）——dsh 停机/重启/applying 窗口内必须持续可轮询进度（design 18 §9.3）。
 
@@ -283,9 +290,9 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 | `/api/connections*`、`/api/host/*` | control-plane 管理 API | 必须 |
 | `/api/i/<source>/*` | 注册 transport 的实例代理 | 必须 |
 | 其余 `/api/*`、`/plugins/*`、`/`、dsh assets | 单目标 Gateway proxy | 必须 |
-| `/chamber/*` | Gateway 编排/API/页面 | 必须 |
+| `/chamber/*` | Gateway 运维/API/页面 | 必须 |
 | `/chamber/runtime*` | Gateway runtime 控制器（design 18 §9.3；不随 ready detach） | 必须 |
-| `/api/events.mux`、`/api/events.host` upgrade | 单目标 Gateway proxy | 必须且同一 Host/Origin 策略 |
+| `/api/remote.mux` upgrade | 单目标 Gateway proxy（0.1.2 wire；旧 events.mux/events.host 下行已随上游删除） | 必须且同一 Host/Origin 策略 |
 
 ## 7. 认证与凭据生命周期
 
@@ -414,12 +421,12 @@ none↔auth 双向转换仍仅部署期（config 播种 + 重启）；删除最�
 dispatch 认证边界按 credential generation 统一追踪所有已认证 HTTP response 与 WS
 socket；generation 在首个凭据 store side effect **之前**提升，因此成功提交与
 「rename 已发布但 durability unknown」/密码 rotate-first 后续失败都会关闭旧
-generation 的全部长连接（management、instance fallthrough、gateway proxy、feature
-SSE），仅排除变更请求自身 response 以完整返回一次性 token 或错误。
+generation 的全部长连接（management、instance fallthrough、gateway proxy），
+仅排除变更请求自身 response 以完整返回一次性 token 或错误。
 Gateway 停机则先关闭 credential mutation admission、销毁当前认证流，再等待已经进入
 的 change route 完整收敛（包括错误路径与审计 append）；stateDir owner 不会先于凭据
 writer 释放。
-proxy/feature 不再各自承担 credential-only 关闭回调；它们的 close primitive 只服务自身
+proxy 不再承担 credential-only 关闭回调；其 close primitive 只服务自身
 stop/lifecycle 清理，避免重复 teardown 与覆盖遗漏。
 
 **审计（S24）**：`credential_changed` / `credential_change_rejected`——detail 仅含
@@ -458,13 +465,9 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 | 每个 proxy HTTP 并发 | 64 |
 | 每个 proxy WS streams | 64 |
 | pending WS handshakes | 16 |
-| dsh event 单帧原始 payload | 8 MiB |
-| 每条 dsh event 预解析队列 | 16 MiB 且最多 256 帧 |
 
 已声明 body 预分配单一 buffer，避免 chunks + `Buffer.concat` 的双倍峰值；进程预算在
-上游完成消费或流被撤销前不提前释放。事件流上限发生在 JSON/正文过滤之前；任一上限
-超出都会清空 raw queue、终止该 generation 并由索引/notifier 重连，不能以快速或超大
-session/event 绕过净化后的 baseline buffer。
+上游完成消费或流被撤销前不提前释放。
 
 ## 9. Desktop 远程 transport（连接模型落地）
 
@@ -518,7 +521,7 @@ session/event 绕过净化后的 baseline buffer。
 
 ```
 ssh-tunnel.ts       共享：隧道 argv、askpass、systemd exec、stderr 分类/脱敏
-endpoint-verify.ts  dsh：host.describe；gateway：认证后 runtime status identity
+endpoint-verify.ts  dsh：session/list（host.describe 已随上游 0.1.2 删除）；gateway：认证后 runtime status identity
 providers: { ssh: sshTransport, http: httpTransport }    // 按 transport 注册
 ```
 
@@ -526,14 +529,14 @@ providers: { ssh: sshTransport, http: httpTransport }    // 按 transport 注册
 
 | kind | transport | verifyUp |
 |---|---|---|
-| dsh | ssh | 隧道端点 host.describe，无认证头 |
-| dsh | http | 直连端点 host.describe，无认证头（用户自建穿透） |
+| dsh | ssh | 隧道端点 session/list RPC，无认证头 |
+| dsh | http | 直连端点 session/list RPC，无认证头（用户自建穿透） |
 | gateway | ssh | `GET /chamber/runtime/status` + 精确 `kind:'dsh-chamber-gateway-runtime'`，可选 0..2 认证头 |
 | gateway | http | 同上（直连 http(s)）；托管 dsh blocked/down 时 gateway 仍可 serviceable |
 
-Gateway 身份判据刻意不再依赖 managed dsh `host.describe`：runtime controller 不随
+Gateway 身份判据刻意不再依赖 managed dsh 的 `session/list`：runtime controller 不随
 dsh ready detach，因此 blocked/applying/restart 窗口仍可注册反代、打开恢复动作；
-dsh 目标仍严格使用 `host.describe`，两层健康不得混为一个 ready 位。
+dsh 目标仍严格使用 `session/list` RPC，两层健康不得混为一个 ready 位。
 
 **gateway 密码会话 ownership**：`gateway-session.ts` 的 key 由三部分共同构成：网络
 origin、HTTP `Host` authority、稳定的 connection-target scope。scope = connection id +
@@ -592,64 +595,45 @@ connection-target scope 所有的目标；
 重登有界（一次 + 429 退避），不成为爆破放大器（服务器侧已有 scrypt work gate +
 登录限流）；session cookie 为 HttpOnly，桌面仅作代理转发头，renderer 永不可见。
 
-## 10. Gateway 编排面
+## 10. Gateway 编排面（2026-12 收窄）
 
-### 10.1 会话索引
+> **2026-12 修订（用户拍板）——编排面整体剥离**：审批/提问（dsh 原生，官方前端
+> 承担）、跨会话调度（dsh 没有定时能力，gateway 不添加）、会话索引（唯一消费者
+> 是仪表盘）、Git worktree 服务器侧记录（侧边栏走 design 08 实例内插件，托管 dsh
+> 由种子机制注入宿主包）、功能开关（`/chamber/settings`）与 feature host 全部移除。
+> 本节的 10.1（会话索引）/10.2（审批/提问/通知）/10.3（Schedule）/10.4（Settings）
+> 旧内容随实现删除。剩余编排面只有三件事：
 
-索引只包含 `sessionId/title/metadata/running/blank/cwd/updatedAt`。每一 generation：
+**1. `/chamber/channels`**：通道注册表只读投影（§7；MVP 空实现）。
 
-1. 同时打开 `events.mux` 和 `events.host`；
-2. 等到两个 WebSocket upgrade 完成、listener 已安装的真实 ready barrier；
-3. 缓冲此后的流帧；
-4. 获取权威 `session.list` baseline；
-5. 按 seq/generation 规则重放缓冲帧；
-6. 任一流死亡即清空投影，再重连，绝不跨代暴露旧 `running:true`。
+**2. `/chamber/plugins`（桌面同步的宿主包种子缓存，Phase 3）**：两个 chamber
+宿主包（`dsh-host-client-graph`、`dsh-host-git-worktree`）不再随 gateway 发行物
+分发——连接的桌面经 `PUT /chamber/plugins` 上传自己的副本（包名白名单 + 文件
+大小上限 + `package.json` 名称/版本校验，原子 0600 写入 `<stateDir>/
+chamber-plugins/<scope 剥离 slug>/`（如 `chamber-plugins/dsh-host-client-graph`，
+不落全限定包名），`GET /chamber/plugins` 返回非秘密投影（name +
+version）。每次 spawn 时控制面种子注册表从缓存注入托管 profile，因此：
 
-索引忽略 `session/event` 正文和审批/提问帧。mux 只复制经过长度与形状校验的
-subscribed/title/sessionListMetadata；host 流只复制 added/status/removed。baseline
-窗口最多保留 4096 个已经净化的控制帧，超限会放弃整代并重连，正文与未知字段不会
-进入缓冲区。
+- **版本语义**：托管 dsh 的宿主包 = 最后一次同步的桌面版本（多桌面不同版本 =
+  后同步者覆盖，`instance-version-conflict` 诊断继续兜底）；双发布线漂移从根上
+  消除；
+- **激活探针形态化**（design 18 §9.3）：缓存缺包（fresh gateway 未同步）时托管
+  dsh 是纯 dsh，探针跳过 `clientGraph/graph` + `gitWorktree/previewCreate` 两域
+  （`hostDomains=false` + 缩减期望集）；缓存就绪后探针恢复全域验证；
+- **首连时序**：桌面 ready 注册后自动同步（幂等），有变更时请求
+  `/chamber/runtime/restart` 让运行中的托管 dsh 刷新挂载（失败仅告警，下次自然
+  spawn 自动补上）；
+- **移动例外**：`dsh-chamber-client-ui-mobile` 不参与同步——移动访问绑定
+  gateway（链路无桌面），插件随 gateway 发行物打包 seed（§3 装配矩阵）。
 
-### 10.2 审批、提问和通知
-
-`/chamber/approvals` 提供 JSON poll、SSE 和 POST answer。pending 以 request `rpcId`
-去重；`approval/resolved`、`question/resolved` 与 generation reset 会向所有 SSE 客户端
-广播撤回，避免多设备残留 stale row。
-
-回答必须检查 dsh 的 `RpcReceipt.accepted`。`accepted:false` 返回 409，并保留 pending
-供重试；只有确认 accepted 才删除。approval 只允许 `allowed-once | rejected`，question
-使用严格的结构化 answers 形状。
-
-### 10.3 Schedule
-
-`/chamber/schedule` 存储跨会话 job，并调用已有 `session.prompt`。delay/interval 都不
-能超过 Node/libuv 的 `2^31-1` 毫秒上限；interval 采用 single-flight 的 fixed-delay
-递归，不允许前一次 RPC 未结束时重叠触发。一次性 job 只有 dsh 调用和持久化删除都成功
-才消费；失败按 1–60 秒有界退避重试，不能复用 `delayMs=0` 形成热循环。timer callback
-同时校验 run generation、job identity 与 in-flight 状态，cancel/detach 后不能幽灵重建。
-新 job 先以未武装 identity admission 进入内存，同一持久化串行临界区写盘成功后才 arm
-（包括 `delayMs=0`）；自动删除以 identity mutation intent 在该临界区内对 current list
-重算并提交，旧 callback 不得覆盖更新 snapshot。Feature detach 只停 timer，不丢定义。
-
-### 10.4 Settings 与界面
-
-Gateway 自有 JSON API：
-
-- `/chamber/settings`：GET/PUT 已知编排设置；
-- `/chamber/sessions`、`/chamber/channels`：只读投影；
-- `/chamber/approvals`、`/chamber/notifications`：poll/SSE/answer；
-- `/chamber/schedule`：list/create/delete；
-- `/chamber/git/worktrees`：list/create/delete；
-- `/chamber/runtime`：dsh 运行时版本管理（design 18 §9.3）——
-  `status`/`versions` 投影、`select`/`apply`/`rollback`/`restore-builtin`/
-  `retry-apply`/`retry-restore`/`restart` 动作、`registry` 源设置（owner-only
-  0600）；`restart` = 事务化受控重启托管 dsh 刷新插件挂载（design 18 §3.6
-  项 8/§9.3：202 + status 轮询/SSE，指针不动、无快照/探针）；该面挂在 dispatch
-  的 runtime 控制器上、**不随 ready detach**（dsh 停机窗口可轮询进度）。
-
-`git`、`notifications`、`schedule` 三个能力默认关闭；开关是服务端执行门而不是 UI
-提示。禁用能力的所有读写路由稳定返回 `403 feature_disabled`。Settings PUT 必须先
-完成 owner-only 持久化，再在同一串行临界区即时 attach/detach。
+**3. `/chamber/runtime` + `/chamber/` 仪表盘**：dsh 运行时版本管理（design 18
+§9.3）——`status`/`versions` 投影、`select`/`apply`/`rollback`/`restore-builtin`/
+`retry-apply`/`retry-restore`/`restart` 动作、`registry` 源设置（owner-only
+0600）；`restart` = 事务化受控重启托管 dsh 刷新插件挂载（design 18 §3.6 项
+8/§9.3：202 + status 轮询，指针不动、无快照/探针）；该面挂在 dispatch 的
+runtime 控制器上、**不随 ready detach**（dsh 停机窗口可轮询进度）。仪表盘 =
+**Credentials 面板 + Runtime 块**（settings/approvals/sessions/schedule/worktrees
+区块随编排面删除）。
 
 **Desktop 连接卡的 gateway 主机日志**（2026-11 接线）：gateway 自己的控制面复用
 control-plane 管理面（dispatch 在 dsh 代理 fallthrough 之前认领 `/api/host/*`，
@@ -660,13 +644,17 @@ control-plane 管理面（dispatch 在 dsh 代理 fallthrough 之前认领 `/api
 gateway 进程 + 托管 dsh spawn 的滚动日志（gateway stateDir）。会话内容日志
 仍属宿主前端域，控制面不消费（AGENTS.md 边界），不在此面暴露。
 
-浏览器可在 `/chamber/` 打开 Gateway 自有编排页；其中 runtime 块完整呈现版本/来源、
+浏览器可在 `/chamber/` 打开 Gateway 自有运维页；其中 runtime 块完整呈现版本/来源、
 选择与 apply/rollback/restore/retry/restart 动作、失败/快照/磁盘与 registry，且在 managed
 dsh blocked/down 时仍可轮询恢复。页面只使用同源 cookie/fetch，**不持久化** token
-（轮换明文仅一次性展示、复制或 60 秒后自动清空）。Desktop settings-bridge 仅对选中的
-`gateway` server 显示固定编排入口与 dsh-runtime 代理分节（§3 装配规则），同样不接触 token。
+（轮换明文仅一次性展示、复制或 60 秒后自动清空）。**2026-12 修订（用户拍板）**：
+桌面 settings-bridge 不再挂载网关编排分区（§3 装配规则）——待处理审批/提问由
+侧边栏既有事实通道按会话呈现（琥珀点 + 等待分类，点入会话作答，与本地/ssh
+实例同一通道）；桌面仅保留 dsh-runtime 代理分节（design 18 §9.3），同样不接触
+token。仪表盘不再展示 settings 文档修订号（json-store 内部写入计数器，无运维
+信息量）。
 
-编排页另含 **Credentials 面板**（Phase 3，驱动 §7.4 三个端点）：两行投影
+Credentials 面板（驱动 §7.4 三个端点）：两行投影
 （password/token 的 `source`/`updatedAt`，来自 `GET /auth/credentials`，绝不含值）
 + 改密/删密码/轮换 token/删 token 动作。轮换后的 token 明文在只读 textarea
 **一次性展示**（成功复制后即清空，60 秒未复制自动清空；不落 localStorage、不进
@@ -690,56 +678,34 @@ code 映射为可读文案（「输入当前密码以变更凭据」「不能移
   this browser」一类不可用态；仅当页面经 `127.0.0.1` / `localhost` 访问
   （`isLoopback=true`）时设置面可用并持久化到宿主。浏览器直连本就不是
   chamber 设置面的目标通道（桌面 settings-bridge 经实例反代触达
-  `/chamber/runtime`，§10.4/design 18 §9.3），故不依赖该门。
-- **`/chamber/` 编排仪表盘**是浏览器侧的编排面（§10.4）：同源 cookie 会话、
-  功能开关、会话/审批/调度/worktree 投影与 dsh 运行时管理（版本 / 选择 /
-  apply / rollback / restore / retry / restart / registry）。它是 gateway
-  自有的编排入口，与托管前端并列，不依赖 chamber 桌面插件，且**不随 ready
-  detach**（dsh 停机窗口可轮询恢复）。
+  `/chamber/runtime`，§10 项 3/design 18 §9.3），故不依赖该门。
+- **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、
+  Credentials 面板与 dsh 运行时管理（版本 / 选择 / apply / rollback / restore /
+  retry / restart / registry）。它是 gateway 自有的运维入口，与托管前端并列，
+  不依赖 chamber 桌面插件，且**不随 ready detach**（dsh 停机窗口可轮询恢复）。
+  **2026-12 修订（用户拍板）**：编排投影与功能开关已随编排面整体剥离（§10）——
+  仪表盘只剩凭据与 runtime 两块；桌面用户经侧边栏处理审批/提问（前端 runtime
+  通道），网关不再承载调度/worktree/会话投影等编排状态。
 - **token-only 部署浏览器无法登录 `/chamber/`**：仪表盘只用同源 cookie
   （`/auth/login` 密码会话），不消费 bearer token（token 只作为桌面客户端的
   `Authorization` 头，§7.2）。仅配置 token 而未配置密码的部署，浏览器直连
-  `/chamber/` 没有可用的认证路径——编排面面向桌面客户端与（配置了密码的）
-  浏览器管理员。
+  `/chamber/` 没有可用的认证路径——仪表盘面向（配置了密码的）浏览器管理员；
+  桌面客户端仅经 settings-bridge 的 dsh-runtime 代理分节触达
+  `/chamber/runtime`（§10 项 3/design 18 §9.3），不依赖该门。**后果（2026-12
+  修订（用户拍板）后显式化）**：调度、worktree、settings 等编排域已整体删除，
+  相关路由（`PUT /chamber/settings`、`POST/DELETE /chamber/schedule`、
+  `DELETE /chamber/git/worktrees/…`）不复存在、一律 404——token-only 部署对
+  这些域**没有任何管理 API 或 UI**；存活的 `/chamber/*` 面只有通道投影
+  （`GET /chamber/channels`）、插件同步缓存（`GET/PUT /chamber/plugins`）、
+  runtime 控制器（`/chamber/runtime/*`）与仪表盘静态资源。
 
-## 11. Git worktree 安全 saga
+## 11. Git worktree 安全 saga（2026-12 移除）
 
-Git 在 Gateway OS 用户下执行，但客户端不能指定任意仓库执行：
-
-1. 调 `workspace.list` 获取 live workspace 权威；
-2. `repo` 必须 realpath 为某个 live workspace 的 canonical 主 checkout，不接受 linked worktree；
-3. `newPath` 必须是该 checkout 同层、尚不存在的路径；branch 通过严格 ref 字符白名单；
-4. Git 子进程有并发、输出和 timeout 上限，环境剥离 Gateway secrets 与全部继承的
-   `GIT_*` 覆盖变量，只显式重建安全的 Git 环境；
-5. `git worktree add` 后调用 `workspace.create`，解码
-   `value.workspace.workspaceId + created`；再调用 `session.create`；
-6. 只有每一步的归属与提交状态确定时才允许补偿。
-
-网络/协议失败可能发生在服务端已提交之后。遇到 `workspace.create` 或 `session.create`
-的歧义结果时，Gateway 保留 Git 路径并写 recovery；绝不猜测失败后强删。
-`created:false` 不会删除既有 workspace，`ownership:'unverified'` 的记录禁止 DELETE，
-必须人工 reconcile。
-
-删除契约：
-
-- 只接受持久化且 `ownership:'owned'` 的记录；DELETE body 必须为空；
-- canonical path、主 checkout、锁定和运行中 session 都会硬拒；session cwd 比较前
-  realpath，解析失败 fail closed；Git mutation 前后都重查 live session；
-- 不 archive session、不使用 `--force`、不删除 branch；
-- create/delete 在紧邻任何 Git mutation 前都重取并完整重验 live workspace；同一路径、
-  其子路径或 realpath/symlink alias 被不同 workspaceId 重占时硬拒，旧 deleting 记录
-  不能授权删除新主体；
-- 先持久化 `state:'deleting'`，再执行可恢复 saga；Git 路径已不存在时只重试
-  `workspace.delete`；旧 workspaceId 已消失但路径仍存在时硬拒，只有 workspace 与路径
-  都消失才视为已收敛；workspace 删除未确认时不会继续删文件；
-- store 失败不会反向删除已经发布的 session/worktree。
-- 同一 `workspaceId` 的 DELETE 在读取记录前取得进程内 owner-token lease，并覆盖
-  deleting intent、Git/workspace mutation 与成功/失败 outcome 持久化；第二个请求在
-  任一阶段稳定返回 409，只有完整 saga settle 后才精确释放 lease。
-
-现有 host API 没有“检查 session + 删除 worktree”的原子 lease，因此两次 live check 只能
-把 TOCTOU 窗口压缩而不能数学上消除。发布前实机并发测试是强制门禁；长期根治需要 dsh
-host 提供原子 guard/lease。
+服务器侧 Git worktree saga 随 2026-12 编排面剥离整体删除（旧内容：server 侧
+`workspace.list`/`workspace.create`/`session.create` 补偿与删除 lease、两次 live
+check 的 TOCTOU 压缩等）。Git worktree 由 **design 08 的实例内插件**承担——侧边栏
+经同一通道触达本地/托管 dsh（托管 dsh 的宿主包由种子机制注入），其安全契约、
+删除竞态与 M4 实机验收见 design 08 与 STATUS.md。
 
 ## 12. 持久化与恢复
 
@@ -751,30 +717,29 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 ├─ jwt-secret                  # 0600
 ├─ password-credential         # v2 信封 {schemaVersion:2, source, updatedAt, verifier}, 0600
 ├─ .gateway.lock               # 独占锁 JSON {pid, createdAt}, O_EXCL + 0600
-├─ dsh-runtime/                # design 18 §9.3：版本树/current 指针/override/快照（0700）
-└─ gateway/
-   ├─ settings.json
-   ├─ worktrees.json
-   └─ schedule.json
+└─ dsh-runtime/                # design 18 §9.3：版本树/current 指针/override/快照（0700）
 ```
 
+> 2026-12 剥离后 store 只拥有凭据（tokens.json / password-credential）与
+> `.gateway.lock`；`gateway/settings.json`、`gateway/worktrees.json`、
+> `gateway/schedule.json` 三文档随编排面删除。
+
 Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `stateDir`（其专用子目录
-仍合法）。POSIX 上，新建的专用 `stateDir` 与 `gateway/` 创建为 `0700`；既有
+仍合法）。POSIX 上，新建的专用 `stateDir` 创建为 `0700`；既有
 `stateDir` 在启动时经 pinned no-follow 描述符收紧到 `0700`（2026-09 用户决策：
 自动收紧替代 fail-closed `require`——旧布局升级的 0755 根目录不再崩溃循环，
-且绝不碰 broad root）；gateway 自有子目录同样收敛为 `0700`。Windows 的 Node
+且绝不碰 broad root）；`dsh-runtime/` 子目录同样收敛为 `0700`。Windows 的 Node
 `chmod/stat.mode` 只能表达
 有限的只读属性，不能诚实证明 POSIX `0700`；该目录边界仅保留 real-dir/no-follow/identity
 校验并继承 OS ACL，既不伪报 `0700` 也不改 ACL（Windows 首版整体支持仍按 STATUS
 暂缓）。所有 JSON main/backup/tmp 与 secret 写入收敛为 `0600`；正常
 store 加载可显式迁移合法 legacy secret 到 `0600`，而 `gateway auth status` 只验证不
 改权限。secret 读取以 KiB 级上限约束，并先以 no-follow/inode 校验拒绝 symlink 与
-非普通文件。JSON 文档经 `createJsonStore` 的 owner-only 原子写路径持久化，写操作
-串行化，避免并发请求以旧 snapshot 覆盖新值。settings/worktrees/schedule 各自校验
-document root/schema/revision：错误主文档回退有效 backup；合法 collection 内的坏行
-单独隔离并告警，不能抹掉其他完整行。corrupt 主文件会先尝试 backup；双重损坏会响亮
-失败，不伪装成空配置。早期预留但从无生产消费者的 `gateway.json`/devices/channels
-文档已删除；旧文件仅忽略，不做破坏性清理，未来能力必须按真实领域 validator 重引入。
+非普通文件。凭据 JSON 文档经 `createJsonStore` 的 owner-only 原子写路径持久化，写
+操作串行化，避免并发请求以旧 snapshot 覆盖新值（2026-12 剥离后经此路径的只有凭据
+文档与锁）。corrupt 主文件会先尝试 backup；双重损坏会响亮失败，不伪装成空配置。
+早期预留但从无生产消费者的 `gateway.json`/devices/channels 文档已删除；旧文件仅
+忽略，不做破坏性清理，未来能力必须按真实领域 validator 重引入。
 
 **凭据信封（v2，Phase 1）**：`password-credential` 与 `tokens.json` 均为
 `{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>, verifier|hash}`
@@ -970,7 +935,7 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
 - root、Gateway、所有 chamber client/host 包 typecheck；
 - control-plane 协议、存储、托管、管理 API、静态服务、实例代理测试
   （含 gateway http 直连注册、头注入 0..2、dsh 直连禁注入用例）；
-- Gateway config/auth/request-policy/dispatch/proxy/lifecycle/feature/真实 socket 测试；
+- Gateway config/auth/request-policy/dispatch/proxy/lifecycle/chamber-surface/真实 socket 测试；
 - Gateway 运行时凭据面（Phase 1–3 + 修复轮）：auth 运行时变更/播种四规则/legacy
   迁移/stateDir 锁（活锁拒绝、陈旧锁 rename 接管、**失败获取不删活锁（子进程回归）**、
   releaseLock bytes+inode 复验、close/reacquire）、S25 匿名禁种（单元 + wire）、并发 remove
@@ -991,7 +956,7 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
 
 自动化全绿仍不能替代以下实机证据：
 
-1. 安装的真实 dsh：Gateway 启动等待 ready，登录后 `/`、普通 `/api`、events.mux/host
+1. 安装的真实 dsh：Gateway 启动等待 ready，登录后 `/`、普通 `/api`、`/api/remote.mux`
    HTTP/WS、插件 bundle 与 `/chamber/` 全部可用；
 2. 生产型 TLS 反代：publicOrigin、Host、Origin、XFF、Secure cookie、WebSocket
    upgrade、未认证/错误 authority 行为逐项验证；SPKI pin 正/负例；
@@ -1000,16 +965,14 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
    N-ctx 与 Gateway settings 页面（dsh-runtime 分节挂载差异验证：gateway 完整管理面
    （版本选择/状态/快照/更新/回滚/恢复内建/registry/restart 与轮询）/ dsh ssh
    版本只读 / dsh http 直连不挂载）；
-4. 真 Git 仓库：创建/歧义恢复/删除重试、dirty/locked/主 checkout、运行中 session 与
-   并发启动 session 的安全验证；
-5. macOS 发布产物完成 Developer ID 签名/公证/安装；Windows 未签名产物验证安装与
+4. macOS 发布产物完成 Developer ID 签名/公证/安装；Windows 未签名产物验证安装与
    SmartScreen 已知提示（首版不把 Authenticode 当完成条件）；
-6. 服务端 dsh runtime 实机：安装候选版本 → 重启 Gateway → 探针 → 故障注入回退 →
-   `<stateDir>/dsh-home` 数据恢复；生产 TLS 反代下 `/chamber/runtime` 的 SSE/poll
+5. 服务端 dsh runtime 实机：安装候选版本 → 重启 Gateway → 探针 → 故障注入回退 →
+   `<stateDir>/dsh-home` 数据恢复；生产 TLS 反代下 `/chamber/runtime` 的 status 轮询
    与认证行为（design 18 §9.5）；
-7. 可信网络形态实机：`--bind 0.0.0.0` 明文 HTTP 直连（带凭据 / `--no-auth`）、
+6. 可信网络形态实机：`--bind 0.0.0.0` 明文 HTTP 直连（带凭据 / `--no-auth`）、
    SSH 隧道回环直连、tailscale 直连——四种组合全链路 + 401/421/403 负例。
-8. 运行时凭据实机：生产 TLS 反代下浏览器/API 改密与 token 轮换（旧 cookie/bearer
+7. 运行时凭据实机：生产 TLS 反代下浏览器/API 改密与 token 轮换（旧 cookie/bearer
    立即失效、`GET /auth/credentials` 投影、409/403/429 负例），以及停机态
    `gateway auth status` / `reset-password` / `clear` 的恢复链路。
 
@@ -1028,12 +991,12 @@ PWA 安装、离线缓存和 UA 移动轻面不属于本轮验收；不再暴露
 | S6 | token/密码变更会撤销旧 cookie 或 live streams |
 | S7 | transport id 只查注册表，不能拼接成 URL |
 | S8 | 全进程 body 预算真实共享，backpressure 期间不提前释放 |
-| S9 | 派生 session/pending 状态不跨 stream generation |
-| S10 | Git 只作用于 dsh live workspace 派生的 canonical 路径 |
-| S11 | 不确定的 Git 提交/归属永远选择保留与 recovery，不选择破坏性补偿 |
+| S9 | **2026-12 修订（用户拍板）**：会话索引已随编排面整体剥离（§10），本不变量空置（原：派生 session/pending 状态不跨 stream generation） |
+| S10 | **2026-12 修订（用户拍板）**：服务器侧 Git worktree saga 已删除（§11），作用域移至 design 08 实例内插件（原：Git 只作用于 dsh live workspace 派生的 canonical 路径） |
+| S11 | **2026-12 修订（用户拍板）**：同 S10——保留与 recovery 语义由 design 08 实例内插件承担（原：不确定的 Git 提交/归属永远选择保留与 recovery，不选择破坏性补偿） |
 | S12 | Gateway 不能削弱普通 control-plane 的 loopback-only 门 |
-| S13 | feature flag 是默认关闭的服务端能力门，禁用后停止后台 consumer/timer |
-| S14 | dsh raw event queue 与 session 索引净化 buffer 都有硬上限，绝不持久保留会话正文 |
+| S13 | **2026-12 修订（用户拍板）**：编排功能与 feature flag 已随编排面整体剥离（§10）——调度/worktree/审批聚合不再存在，开关机制随之移除 |
+| S14 | dsh 会话正文永不进入 gateway 持久层；编排面剥离后连控制帧投影也不再保留（2026-12） |
 | S15 | POSIX：Gateway 新建 state 目录为 0700、既有 stateDir 经 pinned no-follow 描述符收紧为 0700（拒绝 broad root；2026-09 起自动收紧替代 fail-closed `require`）；Windows 目录保留继承 ACL 且只做 no-follow/identity；JSON/secret 为 0600，status 只读验证 |
 | S16 | release 必须 commit-bound、公开记录不可变；desktop stable/beta feed 独立，Gateway 本阶段只发布 GitHub tgz+SHA256、不得隐式发布 npm |
 | S17 | dsh runtime：无快照不切指针；切换/恢复中断由 durable journal/marker 幂等补完（design 18 §9.7） |

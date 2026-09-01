@@ -43,19 +43,19 @@ if (!existsSync(indexOut) || !existsSync(cliOut)) {
 }
 chmodSync(cliOut, 0o755)
 
-// Ship the chamber host packages (module A / git worktree) inside the gateway
-// package: the control-plane seeds them into the managed dsh profile
-// (ensureHostPackage: package.json + dist/index.js) and the full runtime
-// activation probe set verifies their RPC domains — without them the probe
-// gate can never pass on a gateway-managed dsh (2026-09 real-machine test
-// finding: npm-global install resolved REPO_ROOT to the global node_modules
-// and silently skipped the seed). The dist artifacts are committed (gitignore
-// negation, same as dsh-runtime), so a clean checkout carries them.
+// Ship the packaged chamber seed entries inside the gateway package
+// (2026-12): the two host packages (dsh-host-client-graph / git-worktree) are
+// now DESKTOP-SYNCED (PUT /chamber/plugins → chamber-plugins cache) and no
+// longer ship here; only packaged entries ride this directory. Today that is
+// the mobile client-plugin slot (dsh-chamber-client-ui-mobile, kind 'client'):
+// mobile access is bound to the gateway and has no desktop in the chain, so
+// its seed MUST ship inside this package — the package lands on the mobile
+// branch; until then the entry is a warned stub skip in the control-plane
+// seed orchestration and this loop copies nothing.
 const hostPackagesOut = join(packageDir, 'host-packages')
 rmSync(hostPackagesOut, { recursive: true, force: true })
 const HOST_PACKAGES = [
-  { name: 'dsh-host-client-graph', source: join(packageDir, '..', 'dsh-host-client-graph') },
-  { name: 'dsh-chamber-host-git-worktree', source: join(packageDir, '..', 'dsh-chamber-host-git-worktree') },
+  // { name: 'dsh-chamber-client-ui-mobile', source: join(packageDir, '..', 'dsh-chamber-client-ui-mobile') },
 ]
 for (const { name, source } of HOST_PACKAGES) {
   const out = join(hostPackagesOut, name)
@@ -63,7 +63,7 @@ for (const { name, source } of HOST_PACKAGES) {
   cpSync(join(source, 'package.json'), join(out, 'package.json'))
   cpSync(join(source, 'dist', 'index.js'), join(out, 'dist', 'index.js'))
 }
-console.log(`[build-gateway] host packages -> ${hostPackagesOut}`)
+console.log(`[build-gateway] packaged seed entries -> ${hostPackagesOut}`)
 
 // Bundle the pinned pnpm next to the esbuild outputs (design 18 §9.2 D1).
 // The installer's local (default) path unpacks the gateway tarball and NEVER

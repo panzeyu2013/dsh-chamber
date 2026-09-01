@@ -159,7 +159,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
 
   async function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
     // Exact-prefix boundary: /chamber/runtime and /chamber/runtime/<suffix>
-    // only; /chamber/runtimeevil falls through to the feature host.
+    // only; /chamber/runtimeevil falls through to the chamber surface.
     if (pathname !== '/chamber/runtime' && !pathname.startsWith('/chamber/runtime/')) return false
     const m = manager()
     const suffix = pathname.slice('/chamber/runtime'.length) || '/'

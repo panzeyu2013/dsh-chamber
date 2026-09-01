@@ -47,7 +47,7 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 | `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主、N-ctx 编排、启动图清单 |
 | `packages/desktop` | Electron 壳：单 frame、正交目标/传输 provider、远端 ready-time host 包分发、实例注册表、IPC、运行时管理与原生边缘能力 |
 | `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
-| `packages/gateway` | 独立认证 server 形态（design 17）：强制认证公网边界 + 单本地 dsh 反代 + 派生编排 |
+| `packages/gateway` | 独立认证 server 形态（design 17）：强制认证公网边界 + 单本地 dsh 反代 + 运行时管理/凭据面板/种子注册表 |
 | `packages/dsh-runtime` | desktop/gateway 共用的纯 Node dsh 版本树、安装、激活、探针与两阶段回滚核心；状态仍由两个宿主各自拥有 |
 | `packages/dsh-client-connection` | 官方连接客户端仓库内拷贝 + base 路径补丁 |
 | `packages/dsh-client-web` | 官方 web shell 仓库内拷贝 + boot.ts N-ctx 模块表共享 seam |
@@ -153,7 +153,7 @@ packages/
   renderer/                 自建 dsh 前端（源码复用 + 桥接宿主 + N-ctx）
   desktop/                  Electron 壳：单 frame、正交目标/传输 providers、实例注册表、IPC
   cli/                      CLI 薄壳
-  gateway/                  独立认证 server 形态 + 单本地 dsh + 派生编排
+  gateway/                  独立认证 server 形态 + 单本地 dsh + 运行时管理/凭据面板/种子注册表
   dsh-runtime/              desktop/gateway 共用的纯 Node dsh 运行时管理核心
   dsh-client-connection/    被修改的 dsh 源码 #1（base 路径补丁）
   dsh-client-web/           被修改的 dsh 源码 #2（boot.tsx N-ctx seam）

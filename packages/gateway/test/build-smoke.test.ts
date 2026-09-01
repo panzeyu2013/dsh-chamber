@@ -1,9 +1,9 @@
 /**
  * Build-level smoke test (design 17 §9.4 regression): the gateway esbuild
- * bundle must carry the createRequire banner and import without the
- * "Dynamic require of 'events' is not supported" failure that previously
- * wedged the derived session index / approval streams (live finding, Linux +
- * macOS — ws's static `require('events')` inside its __commonJS wrapper).
+ * bundle must carry the createRequire banner and import cleanly. 2026-12: the
+ * ws-based session-index / approval-stream transports were removed with the
+ * orchestration strip, so the bundle no longer contains ws — the banner stays
+ * as belt-and-braces for any remaining bundled CJS dep with static requires.
  */
 
 import { test } from 'node:test'
@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const packageDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const distIndex = join(packageDir, 'dist', 'index.js')
 
-test('gateway dist bundle carries the createRequire banner and imports without a Dynamic require error', async () => {
+test('gateway dist bundle carries the createRequire banner and imports cleanly', async () => {
   // dist/ is gitignored: build on demand so the smoke test works from a
   // clean checkout (the build is a fast esbuild step).
   if (!existsSync(distIndex)) {
@@ -25,20 +25,18 @@ test('gateway dist bundle carries the createRequire banner and imports without a
   }
   const source = await readFile(distIndex, 'utf8')
   // The banner (scripts/build.mjs) installs a module-scoped require shim so
-  // the bundled CJS deps' static requires resolve node builtins normally.
+  // any bundled CJS dep's static requires resolve node builtins normally.
   assert.match(source, /import \{ createRequire \} from 'node:module';/, 'the createRequire banner import is present')
   assert.match(source, /const require = createRequire\(import\.meta\.url\);/, 'the banner require shim is installed')
-  // ws's `require("events")` must sit inside its __commonJS wrapper (the
-  // transport of the session index and approval streams).
-  const eventsRequire = source.indexOf('__require("events")')
-  assert.ok(eventsRequire !== -1, 'ws requires node:events inside its commonjs wrapper')
-  assert.ok(source.slice(Math.max(0, eventsRequire - 500), eventsRequire).includes('ws/lib/websocket.js'),
-    'the events require belongs to the ws websocket module')
+  // 2026-12: the ws transports are gone with the orchestration strip — the
+  // bundle must NOT carry ws's static require("events") any more.
+  assert.equal(source.includes('ws/lib/websocket.js'), false, 'the ws websocket transport is no longer bundled')
   // And the bundle must import cleanly (no "Dynamic require") and expose the
   // public API surface the control plane consumes.
   const module = await import(pathToFileURL(distIndex).href)
   assert.equal(typeof module.createGateway, 'function')
-  assert.equal(typeof module.createScheduler, 'function')
+  assert.equal(typeof module.createChamberSurface, 'function')
+  assert.equal(typeof module.createGatewayStore, 'function')
 })
 
 test('dist bundles the pinned pnpm the installer local path relies on (design 18 §9.2 D1)', async () => {

@@ -11,9 +11,12 @@ chamber 自研**设置壳**插件（2026-08 设计讨论）：以低于官方 Se
 
 - 服务器下拉选择；面板为选中实例挂载**每实例子 cordis 上下文**（fake
   connection + 官方设置插件子集），渲染目标实例的官方设置分区——桥仅代理
-  既有的 settings/credentials/llm RPC 面。
-- 固定的 chamber 全局「连接」导航入口渲染 chamber 包的
-  settings-connections 分区。
+  既有的 settings/credentials/llm RPC 面；选中 gateway 服务器时额外挂载
+  per-server「dsh 运行时」设置段（design 18 §3.6/§9.3，代理
+  `/chamber/runtime`，版本选择/应用/回滚/重启）。
+- 固定的 chamber 全局「连接」「通用」导航入口：连接页渲染 chamber 包的
+  settings-connections 分区；通用页渲染 chamber 全局运行设置（design 14
+  D7/15，退出确认/自启/防休眠 + design 11 更新状态）。
 - 配置事实留在目标宿主：无 chamber 侧持久化、无新控制面 API。
 
 ## keyed 插槽与全量隔离（2026-08）

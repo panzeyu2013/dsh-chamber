@@ -14,19 +14,26 @@
 
 ### 变更
 
-- **桌面「网关编排」设置分区整体移除（2026-12 用户拍板）** —— settings-bridge
-  不再挂载网关编排导航与 `GatewayOrchestrationView`（功能开关、待处理审批/提问、
-  会话/调度/worktree 投影、修订号显示全部移除）。审批/提问本就由侧边栏既有
-  事实通道按会话呈现（琥珀点 + 等待分类，点入会话作答），设置页里的跨会话
-  平行呈现是第二套 UI（违反 design 01 P1/P2）；网关自有的会话/调度/worktree
-  投影与功能开关归网关自有 `/chamber/` 运维面管理。
-- **Gateway 编排能力默认开启（2026-12 用户拍板）** —— git worktree 编排、
-  通知、跨会话调度从「默认关闭、开关是执行门」改为「默认开启」：`enabled`
-  缺失/true 均视为开启，仅持久化的显式 `enabled:false` 关闭（运维
-  kill-switch）。网关本身已默认强制认证，`--no-auth` 是显式信任网络例外。
-  兼容旧文档：无 section 的 legacy settings.json 升级后同样默认开启。
-- **Gateway 仪表盘不再展示 settings 修订号** —— 修订号是 json-store 协议的
-  内部写入计数器（存储层校验与 If-Match 原语保留），界面上无信息量。
+- **Gateway 编排面整体剥离 + 桌面「网关编排」分区移除（2026-12 用户拍板）** ——
+  审批/提问回归 dsh 原生（侧边栏既有事实通道按会话呈现，琥珀点 + 等待分类，
+  与本地/ssh 实例同一通道）；跨会话调度移除（dsh 没有定时能力，gateway 不添加）；
+  会话索引、服务器侧 Git worktree 记录、功能开关与 feature host 全部删除——
+  `/chamber/approvals|notifications|schedule|sessions|git/worktrees|settings` 六个
+  编排路由与 `features/` 五文件（git/notify/schedule/index 四模块 + remote-stream
+  客户端）不复存在，仪表盘缩为 Credentials + dsh runtime
+  两块，`store.ts` 只保留凭据与锁。桌面 settings-bridge 的「网关编排」分区随之
+  移除（`GatewayOrchestrationView` 与 API 客户端删除）。
+- **种子注册表与桌面同步（2026-12 Phase 3）** —— 两个 chamber 宿主包
+  （`dsh-host-client-graph`、`dsh-host-git-worktree`）不再随 gateway
+  发行物分发：连接的桌面经认证的 `PUT /chamber/plugins` 上传自己的副本，
+  gateway 校验（包名白名单 + 大小上限 + manifest 名称/版本）后缓存到
+  `<stateDir>/chamber-plugins/`，每次 spawn 经控制面种子注册表注入托管 profile——
+  托管 dsh 的宿主包版本锁定连接的桌面，双发布线漂移从根上消除；激活探针形态化
+  （缓存缺包时跳过 chamber 宿主域，`hostDomains`/`probeExpectedNames`）。
+  `dsh-chamber-client-ui-mobile` 为唯一打包例外（移动访问绑定 gateway、链路无
+  桌面），包未落地前为警告跳过的 stub 条目，接口已留好。
+- **修订号显示移除** —— 编排面剥离后 settings 文档与修订号显示随之消失；
+  计数器语义保留于 json-store 协议层（加载校验与 If-Match 原语不变）。
 
 - **连接失败提示区分「SSH 传输错误」与「dsh 实例探测失败」** —— 状态投影新增
   `userActionKind`（`'auth' | 'endpoint' | null`）区分 `requiresUserAction`
@@ -187,7 +194,7 @@
   零新崩溃窗口。见 `docs/design/18-addendum-apply-now.md`。
 
 - **Gateway 登录页与 dsh 设计语言全面对齐** —— `/auth/login` 预认证页从最小裸表单
-  升级为自包含深色卡片页（`--dsw-alias-*` token 层取值与 `/chamber/` 编排页同源）：
+  升级为自包含深色卡片页（`--dsw-alias-*` token 层取值与 `/chamber/` 管理页同源）：
   密码管理器输入卫生（`autocomplete="current-password"`、`required`、
   `maxlength=1024`）、en/zh 双语文案（`Accept-Language` 前缀匹配）、内联 SVG
   favicon（登录页 CSP 增补 `img-src data:`，`script-src` 继续缺席）。登录失败按内容

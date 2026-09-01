@@ -3,7 +3,7 @@
  *
  * createGateway assembles: the control-plane core (local dsh hosting +
  * management REST + per-instance proxy), the pluggable auth provider (§5),
- * the single-target gateway-proxy (§6), and the feature host (§8). The auth
+ * the single-target gateway-proxy (§6), and the chamber surface (§10). The auth
  * gate + dispatch + upgradeMiddleware are mounted on the HTTP surface via the
  * control-plane's middleware hooks (design 17 §2.1 改动③ / §4).
  */
@@ -31,7 +31,8 @@ import { createAuth, type AuthProvider, type AuthPrincipal } from './auth.ts'
 import { createGatewayProxy, type GatewayProxy, type GatewayProxyDeps } from './gateway-proxy.ts'
 import { createGatewayDispatch } from './dispatch.ts'
 import { createGatewayRequestPolicy } from './middleware.ts'
-import { createFeatureHost, type FeatureHost } from './routes.ts'
+import { createChamberSurface, type ChamberSurface } from './routes.ts'
+import { createChamberPlugins, syncedSourceDir } from './plugins.ts'
 import { createGatewayStore, type GatewayStore } from './store.ts'
 import { createChannelRegistry } from './channels.ts'
 import { createGatewayRuntimeManager, type GatewayRuntimeManager } from './runtime-manager.ts'
@@ -57,7 +58,7 @@ export interface GatewayOptions {
   deps?: {
     createPlane?: typeof createControlPlane
     createProxy?: typeof createGatewayProxy
-    createFeatures?: (options: Parameters<typeof createFeatureHost>[0]) => FeatureHost
+    createChamberSurface?: (options: Parameters<typeof createChamberSurface>[0]) => ChamberSurface
     createRuntimeManager?: typeof createGatewayRuntimeManager
   }
 }
@@ -120,14 +121,14 @@ function validateMaterializedConfig(config: GatewayConfig): void {
 export function createGateway(options: GatewayOptions): GatewayHandle {
   validateMaterializedConfig(options.config)
   const logger = options.logger ?? console
-  // Mutable holders: the dispatch middleware and feature host are wired into
-  // createControlPlane BEFORE the plane/proxy exist (the proxy + feature host
-  // need plane.getLocalDshPort()). They dereference lazily at request time.
+  // Mutable holders: the dispatch middleware and chamber surface are wired
+  // into createControlPlane BEFORE the plane/proxy exist (the proxy + chamber
+  // surface need plane.getLocalDshPort()). They dereference lazily at request time.
   let plane: PlaneHandle | null = null
   let proxy: GatewayProxy | null = null
   let runtimeManager: GatewayRuntimeManager | null = null
   let createdPlane!: PlaneHandle
-  let features!: FeatureHost
+  let chamberSurface!: ChamberSurface
   let dispatch!: ReturnType<typeof createGatewayDispatch>
   let started = false
   let startPromise: Promise<void> | null = null
@@ -135,7 +136,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   let lifecycleEpoch = 0
   let stopping = false
   let unsubscribeLocalState: (() => void) | null = null
-  let featuresAttached = false
   const runtimeExposureQuarantined = (): boolean => {
     if (runtimeManager === null) return false
     // Keep narrow structural lifecycle fakes compatible while the production
@@ -150,8 +150,9 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   let store!: GatewayStore
   let auth!: AuthProvider
   try {
-    // The gateway store (design 17 §10) owns tokens/jwt-secret + the
-    // orchestration docs; auth needs it for the token hash + session secret
+    // The gateway store (design 17 §10) owns tokens/jwt-secret (the
+    // orchestration docs were removed with the 2026-12 strip); auth needs it
+    // for the token hash + session secret
     // (S5/S13).
     store = createGatewayStore(options.config.plane.stateDir, logger)
     // The seeding logger is the gateway logger: without it the loud
@@ -173,8 +174,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         logger.warn(
           'SECURITY WARNING: gateway is externally reachable with NO authentication '
           + '(--no-auth). Any host that can reach this port has full, '
-          + 'unauthenticated access to the managed dsh instance and its orchestration '
-          + 'surface. This overrides design 17 S1 — use only on trusted networks.',
+          + 'unauthenticated access to the managed dsh instance and its /chamber/ '
+          + 'management surface. This overrides design 17 S1 — use only on trusted networks.',
         )
       } else if (options.config.auth.kind === 'none') {
         logger.log('gateway: authentication is enabled by a runtime-managed credential (source: runtime)')
@@ -182,14 +183,18 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     }
     const requestPolicy = createGatewayRequestPolicy(options.config)
     const channels = createChannelRegistry()
-    features = (options.deps?.createFeatures ?? createFeatureHost)({
+    // Desktop-synced host-package seed cache (2026-12 Phase 3): the two
+    // chamber host packages come from a connecting desktop's upload; the
+    // mobile client-plugin slot stays packaged in the gateway distribution.
+    const plugins = createChamberPlugins(options.config.plane.stateDir, logger)
+    // The chamber surface (2026-12 strip): channels projection + browser
+    // dashboard assets + plugin-sync cache — no feature host, no readiness
+    // coupling. The runtime controller below is the gateway's only other
+    // /chamber writer surface besides credentials (auth.ts).
+    chamberSurface = (options.deps?.createChamberSurface ?? createChamberSurface)({
       logger,
-      getDshBaseUrl: () => {
-        const port = plane?.getLocalDshPort() ?? null
-        return port === null || !Number.isInteger(port) ? null : `http://127.0.0.1:${port}`
-      },
-      store,
       channels,
+      plugins,
     })
     // The runtime controller is gateway-owned and NOT ready-gated (design 18
     // §9.3): it dereferences the manager lazily so dsh-down windows stay pollable.
@@ -205,18 +210,25 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     dispatch = createGatewayDispatch(
       auth,
       () => proxy as GatewayProxy,
-      () => features,
+      () => chamberSurface,
       () => runtimeRoutes,
       logger,
       requestPolicy,
       auditFile,
     )
-    // Chamber host packages ship inside the gateway package (build.mjs copies
-    // them into host-packages/); the control-plane seeds them into the managed
-    // dsh profile so the full runtime activation probe set (which verifies
-    // their RPC domains) can pass — design 18 §9.3. A packaged gateway without
-    // them silently skips the seed and every switch probe-fails (2026-09
-    // real-machine finding).
+    // Chamber seed registry (2026-12): the two host packages are DESKTOP-
+    // SYNCED — the control-plane seeds them into the managed dsh profile from
+    // the chamber-plugins cache, which a connecting desktop populates through
+    // PUT /chamber/plugins (Phase 3). Until the first sync the cache is
+    // empty, the seed skips both entries, and the activation probe runs
+    // without the chamber host domains (runtime-manager hostDomains). The
+    // mobile slot (@dsh-chamber/dsh-client-ui-mobile, kind 'client') stays
+    // PACKAGED: mobile access is bound to the gateway (no desktop in the
+    // chain), so its seed MUST ship inside this package — the package lands
+    // on the mobile branch; until then the absent source dir is a warned stub
+    // skip in the control-plane seed orchestration. Runtime version switches
+    // follow automatically: the overlay + seed re-run at every spawn (design
+    // 18 §9.3), so a switched/rolled-back instance carries the entries.
     const gatewayHostPackagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'host-packages')
     createdPlane = (options.deps?.createPlane ?? createControlPlane)({
       host: options.config.plane.host,
@@ -225,8 +237,28 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       // Static anchor for fakes/boot log; the live spawn path resolves per-spawn
       // through the runtime manager (env → override → anchor, design 18 §9.3).
       dshWorkspacePath: options.config.plane.dshWorkspacePath,
-      hostGraphPackageSourceDir: join(gatewayHostPackagesDir, 'dsh-host-client-graph'),
-      hostGitWorktreePackageSourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-host-git-worktree'),
+      extraSeedEntries: [
+        {
+          insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
+          kind: 'host',
+          source: 'desktop-synced',
+          sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-host-client-graph'),
+          probeDomains: ['clientGraph/graph'],
+        },
+        {
+          insert: { id: 'git-worktree', name: '@dsh-chamber/dsh-host-git-worktree' },
+          kind: 'host',
+          source: 'desktop-synced',
+          sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-host-git-worktree'),
+          probeDomains: ['gitWorktree/previewCreate'],
+        },
+        {
+          insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+          kind: 'client',
+          source: 'packaged',
+          sourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-client-ui-mobile'),
+        },
+      ],
       getDshWorkspacePath: () => {
         if (runtimeManager === null) return options.config.plane.dshWorkspacePath
         if (runtimeManager.transactionWorkspace !== null) return runtimeManager.transactionWorkspace
@@ -266,20 +298,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     throw error
   }
   function syncFeatures(status: string): void {
+    // 2026-12 strip: the chamber surface is read-only and has no readiness
+    // coupling — the ready-transition subscription now only forwards the
+    // authoritative state to the runtime manager (design 18 §9.3).
     runtimeManager?.observeLocalState?.(status)
-    // A candidate (and any rollback candidate) may emit ready before the
-    // activation probe verdict. Keep every dsh-derived consumer detached for
-    // the full quarantine window; the manager explicitly calls back after the
-    // verdict so a consumed ready edge is never the only attach trigger.
-    if (!stopping && status === 'ready' && !runtimeExposureQuarantined()) {
-      if (featuresAttached) return
-      features.start()
-      featuresAttached = true
-      return
-    }
-    if (!featuresAttached) return
-    features.stop()
-    featuresAttached = false
   }
 
   function assertStartEpoch(epoch: number): void {
@@ -354,12 +376,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         started = true
       } catch (error) {
         // The HTTP server is opened before the runtime startup transaction.
-        // Fence and drain any feature mutation admitted during that window
-        // before releasing the gateway store lock on rollback.
-        const featureQuiescence = features.quiesce()
         // Fence credential writers and break authenticated requests that are
         // still waiting for body bytes. Mutations beyond that boundary remain
-        // tracked until their complete route tail has settled.
+        // tracked until their complete route tail has settled. (Since the
+        // 2026-12 orchestration strip the only other /chamber writer is the
+        // synchronous plugin-sync cache put, which completes before its route
+        // tail settles — no drain entry needed.)
         const dispatchQuiescence = dispatch.quiesce()
         syncFeatures('error')
         unsubscribeLocalState?.()
@@ -372,13 +394,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           logger.warn(`gateway runtime disposal failed; stateDir lock retained: ${String(stopError)}`)
         }
         if (runtimeDisposalError === null) runtimeManager = null
-        let featureQuiescenceError: unknown = null
-        try {
-          await featureQuiescence
-        } catch (drainError) {
-          featureQuiescenceError = drainError
-          logger.warn(`gateway feature mutation drain failed; stateDir lock retained: ${String(drainError)}`)
-        }
         let dispatchQuiescenceError: unknown = null
         try {
           await dispatchQuiescence
@@ -392,10 +407,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // If runtime disposal could not prove every writer quiescent, retain
         // the outer state lock and owner record: allowing another gateway to
         // enter would turn a cleanup failure into concurrent state mutation.
-        if (runtimeDisposalError === null && featureQuiescenceError === null && dispatchQuiescenceError === null) store.close()
-        if (runtimeDisposalError !== null || featureQuiescenceError !== null || dispatchQuiescenceError !== null) {
+        if (runtimeDisposalError === null && dispatchQuiescenceError === null) store.close()
+        if (runtimeDisposalError !== null || dispatchQuiescenceError !== null) {
           throw new AggregateError(
-            [error, runtimeDisposalError, featureQuiescenceError, dispatchQuiescenceError].filter(reason => reason !== null),
+            [error, runtimeDisposalError, dispatchQuiescenceError].filter(reason => reason !== null),
             'gateway startup rollback could not prove all state writers quiescent; stateDir lock retained',
           )
         }
@@ -419,9 +434,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     lifecycleEpoch += 1
     // Admission closes synchronously inside quiesce(), before any async
     // teardown can release the state lock or stop the dsh dependency of an
-    // already-entered saga. Ordinary ready/activation detach still uses the
-    // non-awaiting features.stop() path and cannot deadlock on its own request.
-    const featureQuiescence = features.quiesce()
+    // already-entered saga. (Since the 2026-12 orchestration strip the
+    // credential/runtime writers remain behind the dispatch fence, plus the
+    // synchronous plugin-sync cache put — the drain tracks the credential/
+    // runtime writers; the plugin put is synchronous and completes before
+    // quiesce observes it.)
     const dispatchQuiescence = dispatch.quiesce()
     const pendingStart = startPromise
     const managerAtStop = runtimeManager
@@ -457,13 +474,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       const runtimeDisposalError = await runtimeDisposal
       await listenInterruption
 
-      let featureQuiescenceError: unknown = null
-      try {
-        await featureQuiescence
-      } catch (error) {
-        featureQuiescenceError = error
-        logger.warn(`gateway feature mutation drain failed; stateDir lock retained: ${String(error)}`)
-      }
       let dispatchQuiescenceError: unknown = null
       try {
         await dispatchQuiescence
@@ -472,9 +482,9 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         logger.warn(`gateway credential mutation drain failed; stateDir lock retained: ${String(error)}`)
       }
 
-      // Streams/features were synchronously detached above, and runtime
-      // disposal plus the feature-mutation barrier have settled. Only then do
-      // we prove the complete control plane is stopped; no public exposure or
+      // Streams were synchronously detached above, and runtime disposal plus
+      // the credential-mutation barrier have settled. Only then do we prove
+      // the complete control plane is stopped; no public exposure or
       // gateway-document writer survives the drain window.
       let planeStopError: unknown = null
       try {
@@ -488,8 +498,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       // so preserve the existing retryability rule for that case. A failed
       // runtime writer proof is categorically different: never release the
       // stateDir lock even though the outer plane has been asked to stop.
-      if (runtimeDisposalError === null && featureQuiescenceError === null && dispatchQuiescenceError === null) store.close()
-      const writerErrors = [runtimeDisposalError, featureQuiescenceError, dispatchQuiescenceError]
+      if (runtimeDisposalError === null && dispatchQuiescenceError === null) store.close()
+      const writerErrors = [runtimeDisposalError, dispatchQuiescenceError]
         .filter((error): error is {} => error !== null)
       if (writerErrors.length > 0 && planeStopError !== null) {
         throw new AggregateError(
@@ -527,18 +537,10 @@ export { createAuth } from './auth.ts'
 export type { AuthProvider, AuthPrincipal } from './auth.ts'
 export { createGatewayProxy } from './gateway-proxy.ts'
 export type { GatewayProxy, GatewayProxyDeps } from './gateway-proxy.ts'
-export { createFeatureHost } from './routes.ts'
-export type { FeatureHost, FeatureHostDeps } from './routes.ts'
-export { createWorktree, deleteWorktree, GitFeatureError } from './features/git.ts'
-export type { CreateWorktreeInput, DeleteWorktreeInput, WorktreeRecord } from './features/git.ts'
-export { createApprovalNotifier } from './features/notify.ts'
-export type { ApprovalNotifier, ApprovalRequest, QuestionRequest } from './features/notify.ts'
-export { createSessionIndex } from './features/index.ts'
-export type { SessionIndex, SessionProjection } from './features/index.ts'
-export { createScheduler } from './features/schedule.ts'
-export type { Scheduler, ScheduledJob } from './features/schedule.ts'
+export { createChamberSurface } from './routes.ts'
+export type { ChamberSurface, ChamberSurfaceDeps } from './routes.ts'
 export { createGatewayStore, hashCredential, verifyCredential } from './store.ts'
-export type { GatewayStore, WorktreeStoreRecord, ScheduleStoreRecord, GatewaySettingsDoc } from './store.ts'
+export type { GatewayStore } from './store.ts'
 export { createChannelRegistry } from './channels.ts'
 export type { ChannelKind, ChannelHealth, ChannelProvider, ChannelInstance, ChannelRegistry, ChannelListEntry } from './channels.ts'
 export { createGatewayRequestPolicy, GATEWAY_VIEWPORT_META } from './middleware.ts'

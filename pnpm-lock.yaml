@@ -476,9 +476,6 @@ importers:
       pnpm:
         specifier: 11.21.0
         version: 11.21.0
-      ws:
-        specifier: ^8.21.0
-        version: 8.21.3
     devDependencies:
       '@dsh-chamber/control-plane':
         specifier: workspace:^
@@ -486,9 +483,6 @@ importers:
       '@dsh-chamber/dsh-runtime':
         specifier: workspace:^
         version: link:../dsh-runtime
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2

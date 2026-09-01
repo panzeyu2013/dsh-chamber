@@ -18,13 +18,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildPatchOverlay,
   ensureHostPackage,
   ensureHostGraphPackage,
+  ensureSeedPackage,
   missingHostPackageInserts,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GIT_WORKTREE_PACKAGE_NAME,
@@ -653,6 +654,81 @@ test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js i
   }
 })
 
+test('createControlPlane.startLocal() merges extra seed entries (client plugin) into the overlay and seeds them', async t => {
+  // 2026-12 seed registry: an extra kind 'client' entry rides the same
+  // artifact gate, profile seed and overlay as the host packages — the
+  // gateway mobile slot's mechanism (the loader row is id/name only; kind is
+  // metadata).
+  const dir = tempDir(t)
+  const graphSource = stageSource(t, 'export const graph = 1\n')
+  const mobileSource = tempDir(t)
+  mkdirSync(join(mobileSource, 'dist'), { recursive: true })
+  writeFileSync(join(mobileSource, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-client-ui-mobile', version: '0.0.0', main: 'dist/index.js' }) + '\n')
+  writeFileSync(join(mobileSource, 'dist', 'index.js'), 'export const mobile = 1\n')
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: graphSource,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    extraSeedEntries: [{
+      insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+      kind: 'client',
+      source: 'packaged',
+      sourceDir: mobileSource,
+    }],
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    const overlay = readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8')
+    assert.match(overlay, /- id: mobile/)
+    assert.match(overlay, /name: '@dsh-chamber\/dsh-client-ui-mobile'/)
+    assert.equal(
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', '@dsh-chamber', 'dsh-client-ui-mobile', 'dist', 'index.js'), 'utf8'),
+      'export const mobile = 1\n',
+    )
+  } finally {
+    await plane.stop()
+  }
+})
+
+test('createControlPlane.startLocal() skips an absent extra seed entry (stub) with a warn and no overlay row', async t => {
+  // 2026-12 seed registry: the gateway mobile slot ships on the mobile branch;
+  // until then an absent packaged source is a warned stub skip — the rest of
+  // the seed (host packages) proceeds untouched, never a failure.
+  const dir = tempDir(t)
+  const source = stageSource(t, 'export const graph = 1\n')
+  const warns: string[] = []
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: source,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    extraSeedEntries: [{
+      insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+      kind: 'client',
+      source: 'packaged',
+      sourceDir: join(dir, 'no-mobile-package'),
+    }],
+    logger: { log() {}, warn: (message: unknown) => { warns.push(String(message)) }, error() {} },
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    assert.equal(readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8'), EXPECTED_OVERLAY,
+      'the absent stub row must not enter the overlay')
+    assert.ok(warns.some(message => message.includes('mobile') && message.includes('stub')),
+      'the absent stub entry is warned as a skipped stub')
+  } finally {
+    await plane.stop()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // ensureHostGraphPackage: fail-loud on a source missing a declared file
 // ---------------------------------------------------------------------------
@@ -671,4 +747,103 @@ test('ensureHostGraphPackage throws when the source exists but a declared file i
   const manifestOnly = tempDir(t)
   writeFileSync(join(manifestOnly, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME, version: '0.0.0', main: 'dist/index.js' }) + '\n')
   assert.throws(() => ensureHostGraphPackage(dshHome, manifestOnly), /missing in package/)
+})
+
+// ---------------------------------------------------------------------------
+// ensureSeedPackage: seedFiles override, deep target dirs, validation
+// ---------------------------------------------------------------------------
+
+test('ensureSeedPackage seeds a custom seedFiles set with arbitrary-depth real target dirs', t => {
+  const dshHome = tempDir(t)
+  const source = tempDir(t)
+  mkdirSync(join(source, 'dist'), { recursive: true })
+  mkdirSync(join(source, 'assets', 'css'), { recursive: true })
+  writeFileSync(join(source, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME, version: '0.0.0', main: 'dist/index.js' }) + '\n')
+  writeFileSync(join(source, 'dist', 'index.js'), 'export const v = 1\n')
+  writeFileSync(join(source, 'assets', 'css', 'app.css'), 'body { color: red }\n')
+  // Root file + dist + an arbitrary-depth asset — every non-root component
+  // gets its own final-component parent (a real directory, never a symlink).
+  assert.equal(
+    ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['package.json', 'dist/index.js', 'assets/css/app.css']),
+    true,
+  )
+  const target = join(dshHome, 'profiles', 'web', 'node_modules', HOST_GRAPH_PACKAGE_NAME)
+  assert.equal(readFileSync(join(target, 'package.json'), 'utf8'), readFileSync(join(source, 'package.json'), 'utf8'))
+  assert.equal(readFileSync(join(target, 'assets', 'css', 'app.css'), 'utf8'), 'body { color: red }\n')
+  assert.equal(statSync(join(target, 'assets', 'css')).isDirectory(), true, 'the deep asset dir is a real directory')
+  assert.equal(statSync(join(target, 'dist')).isDirectory(), true)
+  // Root files create no extra directories — the package root holds exactly
+  // the declared entries.
+  assert.deepEqual(readdirSync(target).sort(), ['assets', 'dist', 'package.json'])
+  // Idempotent second pass: no rewrite.
+  assert.equal(
+    ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['package.json', 'dist/index.js', 'assets/css/app.css']),
+    false,
+  )
+})
+
+test('ensureSeedPackage returns false for a null sourceDir without touching the profile', t => {
+  const dshHome = tempDir(t)
+  assert.equal(ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, null), false)
+  assert.equal(existsSync(join(dshHome, 'profiles', 'web', 'node_modules', '@dsh-chamber')), false)
+})
+
+test('ensureSeedPackage rejects malformed seedFiles entries fail-loud', t => {
+  const dshHome = tempDir(t)
+  const source = tempDir(t)
+  mkdirSync(join(source, 'dist'), { recursive: true })
+  writeFileSync(join(source, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME, version: '0.0.0', main: 'dist/index.js' }) + '\n')
+  writeFileSync(join(source, 'dist', 'index.js'), 'export const v = 1\n')
+  // An empty set would seed nothing yet emit an overlay row — refused.
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, []), /must not be empty/)
+  // Path traversal and absolute paths must never escape the package dir.
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['../package.json']), /invalid seed file path/)
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['/etc/passwd']), /invalid seed file path/)
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['']), /invalid seed file path/)
+  assert.equal(existsSync(join(dshHome, 'profiles', 'web', 'node_modules', '@dsh-chamber')), false)
+})
+
+test('createControlPlane.startLocal() lets an extra seed entry shadow the base host package (no duplicate rows)', async t => {
+  // 2026-12 regression: the gateway re-declares the two host packages as
+  // desktop-synced extra entries. When the synced cache exists, the extra
+  // entry must REPLACE the legacy base entry — never produce two overlay
+  // rows with the same loader identity (renderCordisInserts would throw
+  // 'duplicate overlay row' and the managed dsh could never spawn).
+  const dir = tempDir(t)
+  const baseSource = stageSource(t, 'export const base = 1\n')
+  const syncedSource = tempDir(t)
+  mkdirSync(join(syncedSource, 'dist'), { recursive: true })
+  writeFileSync(join(syncedSource, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME, version: '9.9.9', main: 'dist/index.js' }) + '\n')
+  writeFileSync(join(syncedSource, 'dist', 'index.js'), 'export const synced = 1\n')
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: baseSource,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    extraSeedEntries: [{
+      insert: HOST_GRAPH_INSERT,
+      kind: 'host',
+      source: 'desktop-synced',
+      sourceDir: syncedSource,
+      probeDomains: ['clientGraph/graph'],
+    }],
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    const overlay = readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8')
+    // Exactly ONE row for the client-graph identity.
+    assert.equal((overlay.match(/- id: client-graph/g) ?? []).length, 1, 'the shadowing extra entry must not duplicate the loader row')
+    // The synced source wins: its bytes land in the profile, not the base's.
+    const seeded = readFileSync(
+      join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GRAPH_PACKAGE_NAME, 'dist', 'index.js'),
+      'utf8',
+    )
+    assert.equal(seeded, 'export const synced = 1\n')
+  } finally {
+    await plane.stop()
+  }
 })

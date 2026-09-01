@@ -57,7 +57,9 @@ import {
   setGatewayPassword,
   setGatewayToken,
   setInstanceSecrets,
+  syncGatewayChamberPlugins,
 } from './gateway-provider.ts'
+import type { LocalChamberHostPackage } from './gateway-provider.ts'
 import type { SecretCryptoAdapter, GatewaySessionProviderHooks } from './gateway-provider.ts'
 import type { GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
 import { createGatewaySessionManager } from './gateway-session.ts'
@@ -1474,4 +1476,290 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
     mgr.dispose()
     await server.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// Desktop-synced chamber host packages (design 17 §9.3, 2026-12 Phase 3)
+// ---------------------------------------------------------------------------
+
+const GRAPH_PACKAGE: LocalChamberHostPackage = {
+  name: '@dsh-chamber/dsh-host-client-graph',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph', version: '1.2.3' }),
+  distIndex: 'export const graph = 1\n',
+}
+const GIT_PACKAGE: LocalChamberHostPackage = {
+  name: '@dsh-chamber/dsh-host-git-worktree',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' }),
+  distIndex: 'export const git = 1\n',
+}
+
+function syncLog(): { warns: string[]; logs: string[]; logger: { warn(m: string): void; log(m: string): void } } {
+  const warns: string[] = []
+  const logs: string[] = []
+  return {
+    warns,
+    logs,
+    logger: { warn: (message: string) => warns.push(message), log: (message: string) => logs.push(message) },
+  }
+}
+
+function startSyncHttpServer(
+  handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void,
+): Promise<{ port: number; close(): Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer(handler)
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address() as AddressInfo
+      resolve({
+        port: address.port,
+        close: () => new Promise<void>((res, rej) => server.close(err => (err ? rej(err) : res()))),
+      })
+    })
+  })
+}
+
+test('syncGatewayChamberPlugins: happy path uploads only the changed package and requests the controlled restart', async () => {
+  const seen: Array<{ method: string; url: string; body?: unknown }> = []
+  const server = await startSyncHttpServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
+    req.on('end', () => {
+      seen.push({ method: req.method ?? '', url: req.url ?? '', ...(body === '' ? {} : { body: JSON.parse(body) }) })
+      if (req.url === '/chamber/plugins' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({
+          items: [
+            { name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' },
+            { name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' },
+          ],
+        }))
+        return
+      }
+      if (req.url === '/chamber/plugins' && req.method === 'PUT') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, changed: true }))
+        return
+      }
+      if (req.url === '/chamber/runtime/restart' && req.method === 'POST') {
+        res.writeHead(202)
+        res.end()
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+  })
+  try {
+    const { warns, logs, logger } = syncLog()
+    const result = await syncGatewayChamberPlugins({
+      origin: `http://127.0.0.1:${server.port}`,
+      headers: { authorization: 'Bearer test-token' },
+      spkiPin: null,
+      packages: [GRAPH_PACKAGE, GIT_PACKAGE],
+      logger,
+    })
+    assert.equal(result.uploaded, true)
+    assert.equal(result.skipped, false)
+    assert.deepEqual(seen.map(entry => `${entry.method} ${entry.url}`), [
+      'GET /chamber/plugins',
+      'PUT /chamber/plugins',
+      'POST /chamber/runtime/restart',
+    ])
+    // Only the version-mismatched package is uploaded, with the exact body.
+    const put = seen.find(entry => entry.method === 'PUT')
+    assert.ok(put !== undefined)
+    assert.equal((put.body as { name: string }).name, '@dsh-chamber/dsh-host-client-graph')
+    assert.deepEqual((put.body as { files: Record<string, string> }).files, {
+      'package.json': GRAPH_PACKAGE.packageJson,
+      'dist/index.js': GRAPH_PACKAGE.distIndex,
+    })
+    assert.deepEqual(warns, [])
+    assert.ok(logs.some(line => line.includes('uploaded @dsh-chamber/dsh-host-client-graph')))
+  } finally {
+    await server.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: version-identical packages skip the upload (idempotent)', async () => {
+  const requests: string[] = []
+  const server = await startSyncHttpServer((req, res) => {
+    requests.push(`${req.method ?? ''} ${req.url ?? ''}`)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({
+      items: [
+        { name: '@dsh-chamber/dsh-host-client-graph', version: '1.2.3' },
+        { name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' },
+      ],
+    }))
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: `http://127.0.0.1:${server.port}`,
+      headers: { authorization: 'Bearer test-token' },
+      spkiPin: null,
+      packages: [GRAPH_PACKAGE, GIT_PACKAGE],
+      logger: syncLog().logger,
+    })
+    assert.equal(result.uploaded, false)
+    assert.equal(result.skipped, false)
+    assert.deepEqual(requests, ['GET /chamber/plugins'])
+  } finally {
+    await server.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: a byte-identical PUT answer (changed:false) asks no restart', async () => {
+  const requests: string[] = []
+  const server = await startSyncHttpServer((req, res) => {
+    requests.push(`${req.method ?? ''} ${req.url ?? ''}`)
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ items: [{ name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' }] }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, changed: false }))
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: `http://127.0.0.1:${server.port}`,
+      headers: { authorization: 'Bearer test-token' },
+      spkiPin: null,
+      packages: [GRAPH_PACKAGE],
+      logger: syncLog().logger,
+    })
+    assert.equal(result.uploaded, false, 'a byte-identical upload must not trigger the controlled restart')
+    assert.deepEqual(requests, ['GET /chamber/plugins', 'PUT /chamber/plugins'])
+  } finally {
+    await server.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: a --no-auth gateway (empty headers) still receives the sync', async () => {
+  const seenAuth: string[] = []
+  const server = await startSyncHttpServer((req, res) => {
+    seenAuth.push(req.headers.authorization ?? '(none)')
+    if (req.method === 'PUT') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, changed: true }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ items: [] }))
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: `http://127.0.0.1:${server.port}`,
+      headers: {},
+      spkiPin: null,
+      packages: [GRAPH_PACKAGE],
+      logger: syncLog().logger,
+    })
+    assert.equal(result.uploaded, true, 'a headerless --no-auth deployment must still receive the sync')
+    assert.deepEqual(seenAuth, ['(none)', '(none)', '(none)'], 'no Authorization header is invented for the headerless shape')
+  } finally {
+    await server.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: an ssh-tunnel origin presents the remote authority as the Host header', async () => {
+  const seenHosts: string[] = []
+  const server = await startSyncHttpServer((req, res) => {
+    seenHosts.push(req.headers.host ?? '(none)')
+    if (req.method === 'PUT') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, changed: true }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ items: [] }))
+  })
+  try {
+    await syncGatewayChamberPlugins({
+      origin: `http://127.0.0.1:${server.port}`,
+      authority: 'gateway.example:443',
+      headers: { authorization: 'Bearer test-token' },
+      spkiPin: null,
+      packages: [GRAPH_PACKAGE],
+      logger: syncLog().logger,
+    })
+    assert.deepEqual(seenHosts, ['gateway.example:443', 'gateway.example:443', 'gateway.example:443'])
+  } finally {
+    await server.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: non-2xx answers and a down gateway resolve with a warn, never reject', async () => {
+  const authServer = await startSyncHttpServer((_req, res) => {
+    res.writeHead(401)
+    res.end()
+  })
+  try {
+    const first = syncLog()
+    const denied = await syncGatewayChamberPlugins({
+      origin: `http://127.0.0.1:${authServer.port}`,
+      headers: { authorization: 'Bearer bad' },
+      spkiPin: null,
+      packages: [GRAPH_PACKAGE],
+      logger: first.logger,
+    })
+    assert.equal(denied.uploaded, false)
+    assert.equal(denied.skipped, false)
+    assert.ok(first.warns.some(line => line.includes('HTTP 401')), 'a refused projection warns with the status')
+  } finally {
+    await authServer.close()
+  }
+
+  // Gateway down: the connect error is contained — resolves, never rejects.
+  const closed = await startSyncHttpServer((_req, res) => { res.writeHead(200); res.end() })
+  const deadPort = closed.port
+  await closed.close()
+  const second = syncLog()
+  const result = await syncGatewayChamberPlugins({
+    origin: `http://127.0.0.1:${deadPort}`,
+    headers: { authorization: 'Bearer test-token' },
+    spkiPin: null,
+    packages: [GRAPH_PACKAGE],
+    logger: second.logger,
+    timeoutMs: 500,
+  })
+  assert.equal(result.uploaded, false)
+  assert.equal(result.skipped, false)
+  assert.ok(second.warns.length > 0, 'a down gateway warns and resolves')
+})
+
+test('syncGatewayChamberPlugins: an SPKI-pinned https gateway is checked before any application bytes', async () => {
+  let receivedRequests = 0
+  const server = await startHttpsProbeServer(KEY_A, CERT_A, (_req, res) => {
+    receivedRequests += 1
+    res.writeHead(200)
+    res.end('{}')
+  })
+  try {
+    const { warns, logger } = syncLog()
+    const result = await syncGatewayChamberPlugins({
+      origin: `https://127.0.0.1:${server.port}`,
+      headers: { authorization: 'Bearer test-token' },
+      spkiPin: PIN_B,
+      packages: [GRAPH_PACKAGE],
+      logger,
+    })
+    assert.equal(result.uploaded, false)
+    assert.equal(receivedRequests, 0, 'a wrong-key peer receives zero application bytes')
+    assert.ok(warns.length > 0, 'the pin mismatch warns and resolves')
+  } finally {
+    await server.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: an empty package list is a best-effort skip', async () => {
+  const result = await syncGatewayChamberPlugins({
+    origin: 'http://127.0.0.1:1',
+    headers: { authorization: 'Bearer x' },
+    spkiPin: null,
+    packages: [],
+    logger: syncLog().logger,
+  })
+  assert.deepEqual(result, { uploaded: false, skipped: true })
 })

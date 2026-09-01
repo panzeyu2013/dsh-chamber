@@ -1,9 +1,8 @@
 /**
  * Gateway persistence (design 17 §12): the gateway's OWN state, physically
- * separate from dsh's $DSH_HOME. All JSON docs go through control-plane
- * `createJsonStore` (backup-first + revision + recovery); secrets (token hash,
- * jwt-secret, password verifier) go through a 0600 atomic-file discipline
- * (never plaintext in a store doc, S5/S8/S15).
+ * separate from dsh's $DSH_HOME. Credentials (token hash, jwt-secret,
+ * password verifier) go through a 0600 atomic-file discipline (never
+ * plaintext in a store doc, S5/S8/S15).
  *
  * Credential model (Phase 1 — runtime credential management):
  *
@@ -36,9 +35,9 @@
  *    `reacquire()` re-takes the lock after a close (gateway start() retry
  *    path). All same-stateDir reopen tests must `close()` before reopening.
  *
- * The gateway is never authoritative over dsh facts: the worktrees/schedule/
- * index docs are the gateway's own orchestration records, and the session
- * index is a derived cache (§8.2).
+ * 2026-12 strip: the orchestration records (worktrees/schedule/settings
+ * documents and the feature host) were removed — the store now owns
+ * credentials and the lock only, and is never authoritative over dsh facts.
  */
 
 import { closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, realpathSync, renameSync, writeSync } from 'node:fs'
@@ -47,49 +46,14 @@ import { join, parse, resolve } from 'node:path'
 import { randomBytes, scryptSync } from 'node:crypto'
 import {
   atomicWritePrivateFileNoFollow,
-  createJsonStore,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
   removePrivateFileNoFollow,
   syncPrivateDirectoryNoFollow,
-  type JsonStore,
-  type JsonStoreDocument,
   type PrivateFileIdentity,
 } from '@dsh-chamber/control-plane'
 
 export interface GatewayStoreLogger { log(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void }
-
-export interface WorktreeStoreRecord {
-  id: string
-  workspaceId: string
-  sessionId?: string
-  /** Canonical main-workspace repository; server-derived at create time. */
-  repo?: string
-  path: string
-  branch: string
-  /** Only `owned` rows may authorize deletion. Missing legacy values and
-   * `unverified` transport-ambiguity rows are observability-only. */
-  ownership?: 'owned' | 'unverified'
-  state: 'creating' | 'ready' | 'deleting' | 'failed'
-  error?: string
-  createdAt: number
-}
-
-export interface ScheduleStoreRecord {
-  id: string
-  delayMs: number
-  intervalMs: number | null
-  targetSessionId: string
-  prompt: string
-}
-
-export interface GatewaySettingsDoc {
-  schemaVersion?: number
-  revision?: number
-  git?: { enabled: boolean }
-  notifications?: { enabled: boolean }
-  schedule?: { enabled: boolean }
-}
 
 /** Where the current credential came from: deployment-config seeding vs a
  * runtime API change. `config`-sourced credentials are re-asserted (or
@@ -114,65 +78,7 @@ export interface CredentialProjection {
   token: { set: true; source: CredentialSource; updatedAt: number } | null
 }
 
-interface DomainValidation<T> {
-  doc: T
-  droppedRows: number
-}
 
-type DomainValidator<T> = (value: unknown) => DomainValidation<T>
-
-/** A json-store-backed document accessor (load-once + mutate). JSON syntax is
- * only the outer envelope: each gateway domain supplies a root validator so
- * a syntactically-valid wrong document falls through to `.bak`. Invalid rows
- * inside a valid collection root are isolated without reconstructing (and
- * accidentally truncating) complete valid rows. */
-function docStore<T>(
-  filePath: string,
-  label: string,
-  logger: GatewayStoreLogger,
-  initial: T,
-  validate: DomainValidator<T>,
-): { get(): T & { revision?: number }; mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> } {
-  const store: JsonStore = createJsonStore({
-    filePath,
-    logger,
-    initial: initial as JsonStoreDocument,
-    fileMode: 0o600,
-    onLoadValidate(value) {
-      const validated = validate(value)
-      if (validated.droppedRows > 0) {
-        logger.warn(`gateway-store: ignored ${validated.droppedRows} invalid persisted ${label} row(s) in ${filePath}`)
-      }
-      // JsonStore's historical counters are catalog-domain-specific. Gateway
-      // reports its own honest row count above instead of misclassifying a
-      // worktree/schedule row as a connection or project.
-      return {
-        doc: validated.doc as unknown as JsonStoreDocument,
-        dropped: { connections: 0, projects: 0 },
-      }
-    },
-  })
-  store.load()
-  const recovery = store.getStatus().recoveryState
-  if (recovery?.source === 'backup') {
-    logger.warn(`gateway-store: recovered ${label} document from ${filePath}.bak`)
-  }
-  return {
-    get(): T & { revision?: number } { return store.getDoc() as T & { revision?: number } },
-    async mutate(mutator: (doc: T) => { next: T; changed: boolean }): Promise<void> {
-      await store.mutate(doc => {
-        const { next, changed } = mutator(doc as unknown as T)
-        return { next: next as unknown as JsonStoreDocument, changed }
-      })
-    },
-  }
-}
-
-const WORKTREE_STATES = new Set(['creating', 'ready', 'deleting', 'failed'])
-const SAFE_PERSISTED_ID = /^[a-zA-Z0-9_-]+$/
-const MAX_PERSISTED_TIMER_DELAY_MS = 2_147_483_647
-const MAX_PERSISTED_SCHEDULE_TARGET_CHARS = 512
-const MAX_PERSISTED_SCHEDULE_PROMPT_CHARS = 10_000
 const MAX_PRIVATE_CREDENTIAL_BYTES = 16 * 1024
 
 function comparablePath(path: string): string {
@@ -209,95 +115,6 @@ export function validateGatewayStateDirPath(stateDir: string): void {
   }
 }
 
-function documentRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${label} document root must be an object`)
-  }
-  return value as Record<string, unknown>
-}
-
-function validateDocumentMetadata(
-  doc: Record<string, unknown>,
-  label: string,
-  schema: 'required-v1' | 'optional-v1',
-): void {
-  if ((schema === 'required-v1' && doc.schemaVersion !== 1)
-    || (schema === 'optional-v1' && doc.schemaVersion !== undefined && doc.schemaVersion !== 1)) {
-    throw new Error(`${label} document has an unsupported schemaVersion`)
-  }
-  if (doc.revision !== undefined
-    && (typeof doc.revision !== 'number' || !Number.isInteger(doc.revision) || doc.revision < 0)) {
-    throw new Error(`${label} document has an invalid revision`)
-  }
-}
-
-function isWorktreeStoreRecord(value: unknown): value is WorktreeStoreRecord {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
-  const row = value as Record<string, unknown>
-  return typeof row.id === 'string' && SAFE_PERSISTED_ID.test(row.id)
-    && typeof row.workspaceId === 'string' && SAFE_PERSISTED_ID.test(row.workspaceId)
-    && (row.sessionId === undefined || (typeof row.sessionId === 'string' && row.sessionId !== ''))
-    && (row.repo === undefined || (typeof row.repo === 'string' && row.repo !== '' && !row.repo.includes('\0')))
-    && typeof row.path === 'string' && row.path !== '' && !row.path.includes('\0')
-    && typeof row.branch === 'string' && row.branch !== ''
-    && (row.ownership === undefined || row.ownership === 'owned' || row.ownership === 'unverified')
-    && typeof row.state === 'string' && WORKTREE_STATES.has(row.state)
-    && (row.error === undefined || typeof row.error === 'string')
-    && typeof row.createdAt === 'number' && Number.isFinite(row.createdAt) && row.createdAt >= 0
-}
-
-function validateWorktreesDocument(value: unknown): DomainValidation<{ items: WorktreeStoreRecord[] }> {
-  const doc = documentRecord(value, 'worktrees')
-  validateDocumentMetadata(doc, 'worktrees', 'optional-v1')
-  if (!Array.isArray(doc.items)) throw new Error('worktrees document items must be an array')
-  const items = doc.items.filter(isWorktreeStoreRecord)
-  return {
-    doc: { ...doc, items } as { items: WorktreeStoreRecord[] },
-    droppedRows: doc.items.length - items.length,
-  }
-}
-
-function isScheduleStoreRecord(value: unknown): value is ScheduleStoreRecord {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
-  const row = value as Record<string, unknown>
-  return typeof row.id === 'string' && SAFE_PERSISTED_ID.test(row.id)
-    && typeof row.delayMs === 'number' && Number.isFinite(row.delayMs)
-    && row.delayMs >= 0 && row.delayMs <= MAX_PERSISTED_TIMER_DELAY_MS
-    && (row.intervalMs === null || (typeof row.intervalMs === 'number' && Number.isFinite(row.intervalMs)
-      && row.intervalMs >= 1_000 && row.intervalMs <= MAX_PERSISTED_TIMER_DELAY_MS))
-    && typeof row.targetSessionId === 'string' && row.targetSessionId.length > 0
-    && row.targetSessionId.length <= MAX_PERSISTED_SCHEDULE_TARGET_CHARS
-    && typeof row.prompt === 'string' && row.prompt.length > 0
-    && row.prompt.length <= MAX_PERSISTED_SCHEDULE_PROMPT_CHARS
-}
-
-function validateScheduleDocument(value: unknown): DomainValidation<{ items: ScheduleStoreRecord[] }> {
-  const doc = documentRecord(value, 'schedule')
-  validateDocumentMetadata(doc, 'schedule', 'optional-v1')
-  if (!Array.isArray(doc.items)) throw new Error('schedule document items must be an array')
-  const items = doc.items.filter(isScheduleStoreRecord)
-  return {
-    doc: { ...doc, items } as { items: ScheduleStoreRecord[] },
-    droppedRows: doc.items.length - items.length,
-  }
-}
-
-function isFeatureSetting(value: unknown): value is { enabled: boolean } {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
-  const section = value as Record<string, unknown>
-  return typeof section.enabled === 'boolean'
-}
-
-function validateSettingsDocument(value: unknown): DomainValidation<GatewaySettingsDoc> {
-  const doc = documentRecord(value, 'settings')
-  validateDocumentMetadata(doc, 'settings', 'required-v1')
-  for (const key of ['git', 'notifications', 'schedule'] as const) {
-    if (doc[key] !== undefined && !isFeatureSetting(doc[key])) {
-      throw new Error(`settings document has an invalid ${key} section`)
-    }
-  }
-  return { doc: doc as GatewaySettingsDoc, droppedRows: 0 }
-}
 
 /** Read a 0600 file, or null when absent (never a fake-empty on corrupt). */
 function readSecret(file: string): string | null {
@@ -401,12 +218,6 @@ function removeSecret(file: string): void {
 }
 
 export interface GatewayStore {
-  /** worktrees.json — the git offload records (§8.1). */
-  worktrees: { get(): { items: WorktreeStoreRecord[] }; mutate(m: (d: { items: WorktreeStoreRecord[] }) => { next: { items: WorktreeStoreRecord[] }; changed: boolean }): Promise<void> }
-  /** schedule.json — cron jobs (§8.4). */
-  schedule: { get(): { items: ScheduleStoreRecord[] }; mutate(m: (d: { items: ScheduleStoreRecord[] }) => { next: { items: ScheduleStoreRecord[] }; changed: boolean }): Promise<void> }
-  /** settings.json — the /chamber/settings doc (§8.5). */
-  settings: { get(): GatewaySettingsDoc; mutate(m: (d: GatewaySettingsDoc) => { next: GatewaySettingsDoc; changed: boolean }): Promise<void> }
   /** tokens.json (0600, hash only, S5): the current token verifier hash, or
    * null when no token is configured. Re-read from disk on every call so
    * runtime changes take effect immediately. */
@@ -747,30 +558,8 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
 
   acquireLock()
 
-  // Loading a corrupt/unreadable JSON document is a loud construction
-  // failure, but it must not strand the already-acquired stateDir lock in this
-  // process. createGateway() cannot close a store whose assignment never
-  // completed, so this transaction owns its own rollback.
-  const documents = (() => {
-    try {
-      return {
-        worktrees: docStore<{ items: WorktreeStoreRecord[] }>(
-          join(root, 'worktrees.json'), 'worktrees', logger, { items: [] }, validateWorktreesDocument,
-        ),
-        schedule: docStore<{ items: ScheduleStoreRecord[] }>(
-          join(root, 'schedule.json'), 'schedule', logger, { items: [] }, validateScheduleDocument,
-        ),
-        settings: docStore<GatewaySettingsDoc>(
-          join(root, 'settings.json'), 'settings', logger,
-          { schemaVersion: 1, revision: 0 }, validateSettingsDocument,
-        ),
-      }
-    } catch (error) {
-      close()
-      throw error
-    }
-  })()
-  const { worktrees, schedule, settings } = documents
+  // 2026-12 strip: the orchestration documents (worktrees/schedule/settings)
+  // were removed with the feature host — the store now owns credentials only.
 
   const tokensFile = join(stateDir, 'tokens.json')
   const jwtSecretFile = join(stateDir, 'jwt-secret')
@@ -876,7 +665,6 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   }
 
   return {
-    worktrees, schedule, settings,
     getTokenHash, getTokenCredential: readTokenCredential, setTokenHash,
     getJwtSecret, rotateJwtSecret,
     getPasswordCredential, getPasswordCredentialRecord: readPasswordCredential, setPasswordCredential,

@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { REQUIRED_ACTIVATION_PROBES } from '../src/activation-gate.ts'
+import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES } from '../src/activation-gate.ts'
 import {
   SETTINGS_FILE_MAX_BYTES,
   runRuntimeActivationProbes,
@@ -81,6 +81,31 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
     assert.deepEqual(fx.calls.find(entry => entry.method === 'settings/describe')?.payload, { args: {} })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'clientGraph/graph')?.payload, { args: {} })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'gitWorktree/previewCreate')?.payload, { args: { input: {} } })
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('hostDomains=false returns the reduced set and never invokes the chamber host domains (2026-12 shape)', async () => {
+  const fx = fixture()
+  try {
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call: successfulCall(fx),
+      windowMs: 1_000,
+      rpcTimeoutMs: 100,
+      hostDomains: false,
+    })
+    // Exactly the reduced set, in contract order — no synthetic rows.
+    assert.deepEqual(results.map(result => result.name), [...PROBE_NAMES_WITHOUT_HOST_DOMAINS])
+    assert.ok(results.every(result => result.ok))
+    // The chamber host domains must never be invoked in this shape.
+    assert.equal(fx.calls.some(entry => entry.method === 'clientGraph/graph'), false)
+    assert.equal(fx.calls.some(entry => entry.method === 'gitWorktree/previewCreate'), false)
+    // The rest of the closed set still runs.
+    assert.ok(fx.calls.some(entry => entry.method === 'session/list'))
+    assert.ok(fx.calls.some(entry => entry.method === 'settings/describe'))
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }

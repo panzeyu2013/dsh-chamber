@@ -15,7 +15,9 @@ import { createRequire } from 'node:module'
 import type { ApiRequest, ApiResponse, Logger, PlaneHandle } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from '../src/config.ts'
 import { createGatewayRuntimeManager, readBuiltinVersion } from '../src/runtime-manager.ts'
+import { createChamberPlugins, hasSyncedHostSeed } from '../src/plugins.ts'
 import {
+  PROBE_NAMES_WITHOUT_HOST_DOMAINS,
   REQUIRED_ACTIVATION_PROBES,
   clearActivationJournal,
   listKnownGoodVersions,
@@ -146,6 +148,13 @@ async function waitForMutationSettle(manager: { mutationInProgress(): boolean })
     await new Promise(resolve => setTimeout(resolve, 5))
   }
   assert.equal(manager.mutationInProgress(), false, 'runtime mutation did not settle before the test deadline')
+}
+
+/** 2026-12 Phase 3 shape gate: the manager expects the full probe set only
+ * when the seed cache holds synced chamber host packages; test stateDirs have
+ * no cache, so the reduced set matches. */
+function probeResultsFor(stateDir: string): readonly string[] {
+  return hasSyncedHostSeed(stateDir) ? REQUIRED_ACTIVATION_PROBES : PROBE_NAMES_WITHOUT_HOST_DOMAINS
 }
 
 test('status is pollable while dsh is stopped (not ready-gated) and reports applying phase', async () => {
@@ -757,7 +766,7 @@ test('ordinary pending is a core+route terminal gate: apply-now is allowed (202,
       config: config(stateDir),
       plane,
       logger: silentLogger,
-      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
     })
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     assert.equal((await manager.status()).phase, 'pending')
@@ -1023,7 +1032,7 @@ test('applyNowInFlight fences every other runtime mutation at the manager level 
       config: config(stateDir),
       plane,
       logger: silentLogger,
-      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
     })
     await manager.applyNow()
     assert.equal(manager.applyNowInFlight(), true)
@@ -1071,7 +1080,7 @@ test('applyNow F2 arm mirrors the apply() manualRollback formula: a staged downg
       config: config(stateDir),
       plane,
       logger: silentLogger,
-      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
     })
     const accepted = await manager.applyNow()
     assert.equal(accepted.accepted, true)
@@ -1121,7 +1130,7 @@ test('apply-now 202: the window polls as applying with connectionState stopped, 
       config: config(stateDir),
       plane,
       logger: silentLogger,
-      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
     })
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     assert.equal((await manager.status()).phase, 'pending')
@@ -1182,7 +1191,7 @@ test('restoreBuiltin runs the full shared activation transaction before deleting
       logger: silentLogger,
       probeCandidate: async ({ isBuiltin }) => {
         order.push(`probe:${isBuiltin ? 'builtin' : 'override'}`)
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
       },
       onActivationQuarantineChange: (active) => { order.push(`quarantine:${active ? 'on' : 'off'}`) },
     })
@@ -1228,7 +1237,7 @@ test('restoreBuiltin preserves the override and rolls data back when the builtin
       waitBeforeRetry: async () => {},
       probeCandidate: async ({ isBuiltin }) => {
         probed.push(isBuiltin ? 'builtin' : 'override')
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: !isBuiltin, ...(!isBuiltin ? {} : { error: 'rejected' }) }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: !isBuiltin, ...(!isBuiltin ? {} : { error: 'rejected' }) }))
       },
     })
     await assert.rejects(manager.restoreBuiltin(), /previous runtime and data were restored/)
@@ -1270,7 +1279,7 @@ test('applyNow runs the version-switch activation transaction in stop → transa
       logger: silentLogger,
       probeCandidate: async () => {
         order.push('probe:override')
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
       },
       onActivationQuarantineChange: (active) => { order.push(`quarantine:${active ? 'on' : 'off'}`) },
     })
@@ -1309,6 +1318,86 @@ test('applyNow runs the version-switch activation transaction in stop → transa
   }
 })
 
+test('2026-12 shape gate: a synced seed cache flips the activation to the FULL probe set — and drift fails closed', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-shape-'))
+  try {
+    // Seed BOTH host packages into the gateway seed cache, exactly as a
+    // connecting desktop would (PUT /chamber/plugins → chamber-plugins cache).
+    // The probe shape gate (hasSyncedHostSeed) must now expect the full
+    // 7-name set — this is the flow that makes a fresh gateway pick the
+    // chamber host layer up after the first desktop sync.
+    const plugins = createChamberPlugins(stateDir, silentLogger)
+    for (const name of ['@dsh-chamber/dsh-host-client-graph', '@dsh-chamber/dsh-host-git-worktree']) {
+      await plugins.put(name, {
+        'package.json': JSON.stringify({ name, version: '1.0.0' }),
+        'dist/index.js': 'export const ok = 1\n',
+      })
+    }
+    assert.equal(hasSyncedHostSeed(stateDir), true, 'the populated cache must flip the shape gate')
+    assert.deepEqual(probeResultsFor(stateDir), [...REQUIRED_ACTIVATION_PROBES],
+      'the synced shape expects the FULL probe set, chamber host domains included')
+
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false, selectedOnly: true,
+    })
+
+    // Full-set candidate (the synced shape) → activation PASSES.
+    const passingPlane = fakePlane()
+    passingPlane._state.connectionState = 'ready'
+    const passing = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: passingPlane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    await passing.applyNow()
+    await waitForSettle(passing)
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'full-set activation passes once the cache is synced')
+    assert.equal((await passing.status()).operationError, null)
+    await passing.dispose()
+
+    // Drift: the probe returns the REDUCED set while the verdict expects the
+    // FULL set (a mid-transaction cache flip or a desynced shape gate) — the
+    // activation must FAIL CLOSED, never pass on a partial probe set.
+    clearActivationJournal(stateDir)
+    makeValidTree(stateDir, '2.0.0')
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
+      pending: null, swapAttempted: false, lastOutcome: 'applied', selectedOnly: true,
+    })
+    const driftingPlane = fakePlane()
+    driftingPlane._state.connectionState = 'ready'
+    const drifting = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: driftingPlane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      probeCandidate: async ({ isBuiltin }) => {
+        return [...PROBE_NAMES_WITHOUT_HOST_DOMAINS].map(name => ({ name, ok: !isBuiltin, ...(!isBuiltin ? {} : { error: 'rejected' }) }))
+      },
+    })
+    await drifting.applyNow()
+    await waitForSettle(drifting)
+    // The drift poisons EVERY verdict in the transaction: the candidate fails
+    // the exact-set check, and the fallback/builtin verification probes fail
+    // the same way — the activation ends 'failed' with the pointer cleared
+    // (fail-closed), never a partial 'pass' on a reduced probe set.
+    assert.equal(readOverride(stateDir)?.lastOutcome, 'failed',
+      'the reduced-set drift must fail the activation (fallback verification included)')
+    assert.equal(readCurrentPointer(stateDir), null, 'the drift-failed activation clears the pointer (builtin fallback)')
+    assert.notEqual((await drifting.status()).operationError, null, 'the drift failure projects into the operationError')
+    await drifting.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('applyNow with only a staged selection (selectedOnly, no pending) arms the pending switch journal-first (F2)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-f2-'))
   try {
@@ -1334,7 +1423,7 @@ test('applyNow with only a staged selection (selectedOnly, no pending) arms the 
       logger: silentLogger,
       probeCandidate: async () => {
         order.push('probe')
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
       },
     })
     const accepted = await manager.applyNow()
@@ -1461,7 +1550,7 @@ test('applyNow recovery startLocal runs OUTSIDE the activation window (gate-awar
       logger: silentLogger,
       probeCandidate: async () => {
         order.push('probe:override')
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
       },
       onActivationQuarantineChange: (active) => {
         order.push(`quarantine:${active ? 'on' : 'off'}`)
@@ -1751,7 +1840,7 @@ test('applyNow rolled-back runs the rolled-back version and projects operationEr
       waitBeforeRetry: async () => {},
       probeCandidate: async ({ version }) => {
         probed.push(version)
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: version === '1.0.0', ...(version === '1.0.0' ? {} : { error: 'candidate rejected' }) }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: version === '1.0.0', ...(version === '1.0.0' ? {} : { error: 'candidate rejected' }) }))
       },
     })
     const accepted = await manager.applyNow()
@@ -2062,7 +2151,7 @@ test('activation-quarantine ready edges do not count a candidate boot', async ()
       probeCandidate: async () => {
         manager.observeLocalState('ready')
         assert.equal(bootCount(), 0, 'candidate readiness inside quarantine is not an authoritative boot')
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
       },
     })
 
@@ -2126,7 +2215,7 @@ test('authoritative restart-exhausted rolls an active override back exactly once
       logger: silentLogger,
       waitBeforeRetry: async () => {},
       scheduleKnownGoodPromotion: () => () => {},
-      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
     })
 
     await manager.applyNow()
@@ -2219,7 +2308,7 @@ test('gateway F7 keeps a failed fallback probe stopped behind a sticky exposure 
       onActivationQuarantineChange: active => {
         if (!active) releasedStates.push(plane.connectionState)
       },
-      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => (
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => (
         phase === 'initial-apply'
           ? { name, ok: true }
           : { name, ok: false, error: 'injected fallback probe failure' }
@@ -2413,7 +2502,7 @@ test('dispose drains a persisted F7 rollback and final-stop fences its fallback 
       logger: silentLogger,
       waitBeforeRetry: async () => {},
       scheduleKnownGoodPromotion: () => () => {},
-      probeCandidate: async () => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true })),
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
     })
     await manager.applyNow()
     await waitForSettle(manager)
@@ -2549,7 +2638,7 @@ test('dispose() aborts and drains an apply-now probe before releasing runtime ow
         probeSignal = signal
         probeEntered()
         await probeGate
-        return REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
+        return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
       },
     })
     const ownerPath = join(stateDir, 'dsh-runtime', 'owner.json')

@@ -31,6 +31,10 @@ export interface ApplyDeps {
    * already-aborted signal (see `rollbackProbeSignal`).
    */
   probe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
+  /** 2026-12 shape-awareness: the exact probe-name set the verdict expects.
+   * Defaults to REQUIRED_ACTIVATION_PROBES; the gateway shape (no synced
+   * chamber host seed) passes PROBE_NAMES_WITHOUT_HOST_DOMAINS. */
+  probeExpectedNames?: readonly string[]
   restore: (snapshotPath: string) => Promise<'complete' | 'half' | 'incomplete'>
   stopHost: () => Promise<void>
   waitBeforeRetry?: (delayMs: number) => Promise<void>
@@ -312,6 +316,7 @@ async function delayedVerdict(opts: ApplyOptions): Promise<'pass' | 'fail'> {
   let verdict = decideVerdict(await safeProbe(probeTarget), {
     elapsedMs: nowMs() - firstStartedAt,
     observedOnce: false,
+    ...(opts.deps.probeExpectedNames === undefined ? {} : { expectedNames: opts.deps.probeExpectedNames }),
   })
   if (verdict === 'observe') {
     const wait = opts.deps.waitBeforeRetry ?? (delayMs => new Promise<void>(resolve => setTimeout(resolve, delayMs)))
@@ -322,6 +327,7 @@ async function delayedVerdict(opts: ApplyOptions): Promise<'pass' | 'fail'> {
     verdict = decideVerdict(await safeProbe(probeTarget), {
       elapsedMs: nowMs() - secondStartedAt,
       observedOnce: true,
+      ...(opts.deps.probeExpectedNames === undefined ? {} : { expectedNames: opts.deps.probeExpectedNames }),
     })
   }
   return verdict === 'pass' ? 'pass' : 'fail'
@@ -446,7 +452,7 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
     const fallbackVersion = journal.rollbackTarget ?? opts.builtinVersion
     const fallbackVerdict = decideVerdict(
       await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal))),
-      { elapsedMs: 0, observedOnce: true },
+      { elapsedMs: 0, observedOnce: true, ...(deps.probeExpectedNames === undefined ? {} : { expectedNames: deps.probeExpectedNames }) },
     )
     if (fallbackVerdict === 'pass') {
       return makeOutcome({
@@ -492,7 +498,7 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
     }
     const builtinVerdict = decideVerdict(
       await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal))),
-      { elapsedMs: 0, observedOnce: true },
+      { elapsedMs: 0, observedOnce: true, ...(deps.probeExpectedNames === undefined ? {} : { expectedNames: deps.probeExpectedNames }) },
     )
     return makeOutcome({
       status: 'failed', snapshotPath: preSwapPath, restoreOutcome: 'complete', swapAttempted: true,

@@ -39,6 +39,27 @@ export const REQUIRED_ACTIVATION_PROBES = [
   'data.sessions',
 ] as const;
 
+/** The chamber host domains (clientGraph/graph + gitWorktree/previewCreate).
+ * 2026-12 shape-awareness: the gateway shape only verifies them once a
+ * connecting desktop has synced its host packages into the seed cache — a
+ * fresh gateway hosts a plain dsh whose activation must pass without them. */
+export const HOST_DOMAIN_PROBE_NAMES = [
+  'clientGraph/graph',
+  'gitWorktree/previewCreate',
+] as const;
+
+// Typed subtraction: the filter keeps the literal-typed tuple elements, so a
+// typo'd domain name in HOST_DOMAIN_PROBE_NAMES fails to subtract and is
+// caught by the reduced-set exact-match checks instead of silently passing.
+type RequiredProbeName = typeof REQUIRED_ACTIVATION_PROBES[number]
+type HostDomainProbeName = typeof HOST_DOMAIN_PROBE_NAMES[number]
+const HOST_DOMAIN_PROBE_NAME_SET = new Set<string>(HOST_DOMAIN_PROBE_NAMES)
+
+/** The reduced probe-name set for a shape that does not carry chamber host
+ * domains (gateway without a synced seed cache). */
+export const PROBE_NAMES_WITHOUT_HOST_DOMAINS: readonly Exclude<RequiredProbeName, HostDomainProbeName>[] =
+  REQUIRED_ACTIVATION_PROBES.filter(name => !HOST_DOMAIN_PROBE_NAME_SET.has(name)) as readonly Exclude<RequiredProbeName, HostDomainProbeName>[];
+
 /** 单条探针结果（host 侧执行汇总；name 用于完整性校验、日志与定位）。 */
 export interface ProbeResult {
   /** 探针名（如 'commands/execute' / 'session/list' / 'data.sessions' …）。 */

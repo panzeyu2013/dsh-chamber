@@ -107,8 +107,8 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
 | walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）** | 宿主原生覆盖，控制面只接入/服务 |
-| 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime |
-| git/GitHub | **插件化 + gateway 迁移期双轨** | design 08 仍是实例内权威实现；design 17 可在同一 OS 用户下做 server 编排，达到稳定/实机门禁前不得退役插件 |
+| 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。**2026-12 修订（用户拍板）**：gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步、mobile 打包例外，design 17 §10） |
+| git/GitHub | **插件化** | design 08 实例内插件是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；gateway 服务器侧 worktree 记录已随编排面剥离（2026-12） |
 
 > **有界例外**：design 08 的插件与 design 17 的独立 gateway 是两个显式边界。
 > `packages/control-plane` 本身仍不建立 Git/会话索引、不运行 Git、不认证；Desktop

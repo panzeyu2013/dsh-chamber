@@ -1312,3 +1312,201 @@ export const gatewayProvider: TransportProvider = {
     return { log: '', terminalAuth: false, enoent: false }
   },
 }
+
+// ---------------------------------------------------------------------------
+// Desktop-synced chamber host packages (design 17 §9.3, 2026-12 Phase 3):
+// the gateway no longer ships the two chamber host packages; a connecting
+// desktop uploads its own copies through the authenticated
+// `PUT /chamber/plugins` surface. The sync is best-effort and idempotent —
+// the client skips packages whose version already matches the gateway's
+// projection, the gateway answers 200 {changed:false} for byte-identical
+// uploads (no restart asked), and it fires after every gateway transport
+// ready registration. When anything was actually changed the desktop asks
+// the gateway to restart its managed dsh (design 18 controlled restart) so
+// the running profile picks the packages up; a failed restart only warns
+// (the next natural spawn re-seeds anyway). Version-lock semantics: a
+// rebuilt package must bump its version to re-sync (pre-release iteration
+// included). The sync rides the REGISTERED transport origin (tunnel loopback
+// for ssh), with the tunnel authority override for the Host header.
+// ---------------------------------------------------------------------------
+
+/** One local chamber host package ready to sync (main-process files). */
+export interface LocalChamberHostPackage {
+  name: string
+  packageJson: string
+  distIndex: string
+}
+
+export interface GatewayPluginSyncResult {
+  /** True when at least one package was uploaded (a dsh restart was asked). */
+  uploaded: boolean
+  /** True when the sync was skipped (no local packages to sync). */
+  skipped: boolean
+}
+
+/** Bounded JSON request to a gateway endpoint with the S23 pin discipline. */
+function gatewayJsonRequest(
+  url: string,
+  options: {
+    method: 'GET' | 'PUT' | 'POST'
+    headers: Record<string, string>
+    body?: unknown
+    insecure: boolean
+    spkiPin: string | null
+    timeoutMs: number
+  },
+): Promise<{ status: number; payload: unknown }> {
+  return new Promise((resolve, reject) => {
+    const request = options.insecure ? httpRequest : httpsRequest
+    const req = request(url, {
+      method: options.method,
+      headers: {
+        accept: 'application/json',
+        ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...options.headers,
+      },
+      ...(options.insecure || options.spkiPin === null ? {} : { rejectUnauthorized: false, agent: false }),
+    }, res => {
+      const chunks: Buffer[] = []
+      let size = 0
+      res.on('data', chunk => {
+        size += chunk.length
+        if (size > 8 * 1024 * 1024) {
+          res.destroy()
+          reject(new Error('gateway plugin sync response exceeds the size bound'))
+          return
+        }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        let payload: unknown
+        try {
+          payload = chunks.length === 0 ? null : JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        } catch {
+          payload = null
+        }
+        resolve({ status: res.statusCode ?? 0, payload })
+      })
+      res.on('error', error => reject(error))
+    })
+    req.on('error', error => reject(error))
+    const timer = setTimeout(() => {
+      req.destroy(new Error('gateway plugin sync timed out'))
+    }, options.timeoutMs)
+    timer.unref?.()
+    req.on('close', () => clearTimeout(timer))
+    const dispatch = (): void => {
+      if (options.body === undefined) req.end()
+      else req.end(JSON.stringify(options.body))
+    }
+    if (options.spkiPin === null || options.insecure) dispatch()
+    else attachSpkiPinVerifier(req, options.spkiPin, dispatch)
+  })
+}
+
+/** Sync the local chamber host packages into the gateway seed cache. */
+export async function syncGatewayChamberPlugins(options: {
+  /** Registered transport origin (the ready URL). For an ssh tunnel this is
+   * the loopback endpoint the user actually verified — never the remote
+   * host:port, which is typically unreachable from the desktop. */
+  origin: string
+  /** Tunnel Host-header override: the REMOTE gateway authority. The gateway's
+   * request policy requires the authority port to equal its listen port,
+   * which the tunnel's local port never satisfies. Undefined for direct
+   * http(s) targets. */
+  authority?: string
+  /** Registration auth headers (Authorization/Cookie) — main-process only.
+   * May be EMPTY: a `--no-auth` deployment registers headerless and the sync
+   * must still run (an auth-requiring gateway answers 401 → warn). */
+  headers: Record<string, string>
+  spkiPin: string | null
+  packages: LocalChamberHostPackage[]
+  logger: { warn(message: string): void; log(message: string): void }
+  timeoutMs?: number
+}): Promise<GatewayPluginSyncResult> {
+  const timeoutMs = options.timeoutMs ?? 10_000
+  if (options.packages.length === 0) return { uploaded: false, skipped: true }
+  const origin = options.origin
+  const insecure = !origin.startsWith('https://')
+  const requestHeaders = { ...options.headers }
+  // Tunnel Host override (design 17 §9.3): CONNECT to the loopback tunnel
+  // endpoint but present the REMOTE gateway authority in the Host header —
+  // the gateway's request policy requires the authority port to equal its
+  // listen port, which the tunnel's local port can never satisfy.
+  if (options.authority !== undefined) requestHeaders.host = options.authority
+
+  try {
+    const status = await gatewayJsonRequest(`${origin}/chamber/plugins`, {
+      method: 'GET',
+      headers: requestHeaders,
+      insecure,
+      spkiPin: options.spkiPin,
+      timeoutMs,
+    })
+    if (status.status !== 200) {
+      options.logger.warn(`[dsh-chamber] gateway plugin sync: status projection failed (HTTP ${status.status}); skipped`)
+      return { uploaded: false, skipped: false }
+    }
+    const rows = (status.payload as { items?: Array<{ name?: unknown; version?: unknown }> })?.items ?? []
+    const cached = new Map(rows
+      .filter(row => typeof row?.name === 'string' && typeof row?.version === 'string')
+      .map(row => [row.name as string, row.version as string]))
+
+    let uploaded = false
+    for (const pkg of options.packages) {
+      let localVersion: string | null = null
+      try {
+        const parsed = JSON.parse(pkg.packageJson) as { version?: unknown }
+        localVersion = typeof parsed?.version === 'string' ? parsed.version : null
+      } catch {
+        options.logger.warn(`[dsh-chamber] gateway plugin sync: local ${pkg.name} package.json is unreadable; skipped`)
+        continue
+      }
+      if (localVersion === null) {
+        options.logger.warn(`[dsh-chamber] gateway plugin sync: local ${pkg.name} package.json has no string version; skipped`)
+        continue
+      }
+      if (cached.get(pkg.name) === localVersion) continue
+      const put = await gatewayJsonRequest(`${origin}/chamber/plugins`, {
+        method: 'PUT',
+        headers: requestHeaders,
+        body: { name: pkg.name, files: { 'package.json': pkg.packageJson, 'dist/index.js': pkg.distIndex } },
+        insecure,
+        spkiPin: options.spkiPin,
+        timeoutMs,
+      })
+      if (put.status !== 200) {
+        options.logger.warn(`[dsh-chamber] gateway plugin sync: uploading ${pkg.name} failed (HTTP ${put.status}); the managed dsh keeps running without it`)
+        continue
+      }
+      // Byte-identical upload (same version, same bytes) → nothing to apply;
+      // only an actual cache change warrants the controlled restart.
+      if ((put.payload as { changed?: unknown })?.changed !== true) continue
+      uploaded = true
+      options.logger.log(`[dsh-chamber] gateway plugin sync: uploaded ${pkg.name} v${localVersion}`)
+    }
+    if (uploaded) {
+      // The running profile picks the seeded packages up only on the next
+      // spawn — ask for the controlled restart; a failure only warns (the
+      // next natural spawn re-seeds from the cache anyway).
+      try {
+        const restart = await gatewayJsonRequest(`${origin}/chamber/runtime/restart`, {
+          method: 'POST',
+          headers: requestHeaders,
+          insecure,
+          spkiPin: options.spkiPin,
+          timeoutMs,
+        })
+        if (restart.status !== 202 && restart.status !== 200) {
+          options.logger.warn(`[dsh-chamber] gateway plugin sync: dsh restart after upload returned HTTP ${restart.status}; packages apply on the next natural spawn`)
+        }
+      } catch (error) {
+        options.logger.warn(`[dsh-chamber] gateway plugin sync: dsh restart after upload failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    return { uploaded, skipped: false }
+  } catch (error) {
+    options.logger.warn(`[dsh-chamber] gateway plugin sync failed: ${error instanceof Error ? error.message : String(error)}`)
+    return { uploaded: false, skipped: false }
+  }
+}

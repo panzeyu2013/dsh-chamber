@@ -29,10 +29,8 @@ import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsBridgeKey } from '../locales.ts'
 import { ConnectionsSection } from '@dsh-chamber/dsh-client-ui-settings-connections/section'
 import { GeneralView } from './GeneralView.tsx'
-import { GatewayOrchestrationView } from './GatewayOrchestrationView.tsx'
 import {
   CONNECTIONS_SECTION_ID,
-  GATEWAY_SECTION_ID,
   GENERAL_SECTION_ID,
   resolveActiveSection,
   type SectionNavRow,
@@ -384,8 +382,7 @@ function SettingsPanel({
   )
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
-  const gatewayAvailable = selected?.kind === 'gateway'
-  const active = resolveActiveSection(activeId, rows, gatewayAvailable)
+  const active = resolveActiveSection(activeId, rows)
   // Header context (2026-11): the active section label on the left; the
   // selected server name sits under it ONLY for server-owned content (the
   // chamber-global 连接/通用 pages are server-independent — implying a server
@@ -395,9 +392,7 @@ function SettingsPanel({
     ? t('connectionsNav')
     : active === GENERAL_SECTION_ID
       ? t('generalNav')
-      : active === GATEWAY_SECTION_ID
-        ? t('gatewayNav')
-        : rows.find(row => row.id === active)?.label ?? t('title')
+      : rows.find(row => row.id === active)?.label ?? t('title')
   const headerSub = active !== CONNECTIONS_SECTION_ID && active !== GENERAL_SECTION_ID
     ? selected?.label ?? ''
     : ''
@@ -437,18 +432,6 @@ function SettingsPanel({
                 <span className={css.navLabel}>{row.label}</span>
               </button>
             ))}
-            {gatewayAvailable && (
-              <button
-                key={GATEWAY_SECTION_ID}
-                type="button"
-                className={clsx(css.navCell, active === GATEWAY_SECTION_ID && css.active)}
-                aria-current={active === GATEWAY_SECTION_ID ? 'true' : undefined}
-                onClick={() => onSelectSection(GATEWAY_SECTION_ID)}
-              >
-                <IconDataOutline16 className={css.navIcon} size={16} />
-                <span className={css.navLabel}>{t('gatewayNav')}</span>
-              </button>
-            )}
           </div>
           <div className={css.navDivider} />
           <div className={css.navList}>
@@ -521,23 +504,6 @@ function SettingsPanel({
                  independent of the selected server. The update status (design
                  11) lives inside this section too. */
               <GeneralView t={t} />
-            ) : active === GATEWAY_SECTION_ID ? (
-              selectedId === undefined || selected === undefined ? (
-                <p className={css.placeholder}>{t('noServers')}</p>
-              ) : !selected.connected ? (
-                <div className={css.unavailableView}>
-                  <p className={css.placeholder}>{t('targetUnavailable')}</p>
-                  <button type="button" className={css.inlineAction} onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}>
-                    {t('manageConnections')}
-                  </button>
-                </div>
-              ) : (
-                /* This is the gateway's own authenticated orchestration API,
-                   not an official dsh settings child-context slot. The view
-                   derives a same-origin path from the canonical source id;
-                   its bearer token stays in Desktop main. */
-                <GatewayOrchestrationView key={selectedId} sourceId={selectedId} t={t} />
-              )
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (

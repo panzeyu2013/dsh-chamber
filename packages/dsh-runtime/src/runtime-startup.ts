@@ -60,6 +60,8 @@ export interface StartupDeps {
    * verification probes null an already-aborted one).
    */
   spawnAndProbe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
+  /** 2026-12 shape-awareness: forwarded to apply-phase (see ApplyDeps). */
+  probeExpectedNames?: readonly string[]
   stopHost: () => Promise<void>
   restore: (snapshotPath: string) => Promise<'complete' | 'half' | 'incomplete'>
   recordProbePass: (version: string) => void
@@ -454,6 +456,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
       validateTarget: deps.validateTarget,
       switchPointer: deps.switchPointer,
       probe: deps.spawnAndProbe,
+      probeExpectedNames: deps.probeExpectedNames,
       stopHost: deps.stopHost,
       restore: deps.restore,
       recordProbePass: deps.recordProbePass,
@@ -659,6 +662,7 @@ export async function runDelayedRollback(
       validateTarget: deps.validateTarget,
       switchPointer: deps.switchPointer,
       probe: deps.spawnAndProbe,
+      probeExpectedNames: deps.probeExpectedNames,
       stopHost: deps.stopHost,
       restore: deps.restore,
       recordProbePass: deps.recordProbePass,

@@ -103,5 +103,5 @@ export async function gatewayAuthClear(stateDir: string, logger: GatewayAuthLogg
   }
   logger.log('credentials cleared: password-credential and tokens.json removed')
   logger.log('the next start re-seeds credentials from deployment config (--ui-password/--api-token or DSH_GATEWAY_*)')
-  logger.warn('if this gateway was deployed with --no-auth, it will be externally reachable with NO authentication after the next start — any host that can reach the port has full access to the managed dsh and its orchestration surface')
+  logger.warn('if this gateway was deployed with --no-auth, it will be externally reachable with NO authentication after the next start — any host that can reach the port has full access to the managed dsh and its /chamber/ management surface')
 }
