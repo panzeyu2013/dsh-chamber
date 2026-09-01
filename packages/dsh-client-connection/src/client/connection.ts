@@ -31,6 +31,12 @@ export interface ConnectionGeneration {
  * ConnectionState 'connected' | 'disconnected' | 'connecting') landed
  * upstream; the chamber tunables/guards below are re-applied on the new
  * class unchanged.
+ *
+ * Rebased for upstream v0.1.2-alpha.3 (tolerate stalled hosts): the
+ * readiness-handshake timeout no longer cancels the generation — a slow
+ * Host only logs a warning and the handshake keeps waiting (source
+ * settlement / controller cancellation remain the abort paths); the chamber
+ * loopEpoch guard below is unaffected.
  */
 export interface ConnectionConfig {
   /** First-retry backoff cap in ms (jittered: actual delay is cap/2..cap). */
@@ -326,8 +332,7 @@ export class ConnectionController {
           this.callSink(() => { this.sinks.onConnected?.(host) })
         }
       } catch {
-        // Transport failure: treat as generation failure, then enter the shared retry path.
-        if (!ac.signal.aborted) ac.abort()
+        // Source settlement and controller cancellation already abort the generation.
       }
 
       await failed
@@ -356,12 +361,12 @@ export class ConnectionController {
   }
 }
 
-/** Await source readiness without letting a stalled carrier wedge startup forever. */
+/** Await source readiness while reporting, but not cancelling, a slow Host. */
 function waitForReady<T>(ready: Promise<T>, timeoutMs: number, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false
     const timeout = setTimeout(() => {
-      finish({ error: new Error(`connection generation was not ready within ${String(timeoutMs)}ms`) })
+      console.warn(`[connection] generation is still not ready after ${String(timeoutMs)}ms`)
     }, timeoutMs)
     const aborted = (): void => {
       finish({ error: new Error('connection generation aborted', { cause: signal.reason }) })
