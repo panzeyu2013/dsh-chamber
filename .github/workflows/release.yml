@@ -383,7 +383,12 @@ jobs:
           set -euo pipefail
           TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
           test -n "$TGZ"
-          tar -tzf "$TGZ" | grep -q 'package/dist/pnpm/bin/pnpm.cjs'
+          # No grep -q here: under `set -o pipefail` on GNU tar (Linux
+          # runner), grep -q exits at the first match, closes the pipe early
+          # and tar dies with "stdout: write error" (exit 2) — a false
+          # failure on a HEALTHY tarball. Read the whole listing and
+          # discard output instead; a missing entry still fails (grep 1).
+          tar -tzf "$TGZ" | grep 'package/dist/pnpm/bin/pnpm.cjs' >/dev/null
       - name: Smoke the bundled pnpm from a bare unpack (installer local shape, no npm install)
         run: |
           set -euo pipefail
