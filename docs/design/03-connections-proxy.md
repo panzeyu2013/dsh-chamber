@@ -184,7 +184,11 @@
   **绝不呈现已连接**（假连接修复）。**确定性失败免重试**：目标**应答了**
   探测但证明不是（兼容的）目标（HTTP 非 200 / 错误信封 / 版本过老）→
   验证结果带 `terminal` 标记，第一次失败即落 error 终态（重试无法改变
-  应答）；仅连接错误/超时等瞬时失败走重连。
+  应答）；仅连接错误/超时等瞬时失败走重连。**UI 类别区分（2026 修复）**：
+  终态投影的 `userActionKind` 区分失败类别——`'auth'`（传输层认证/主机
+  密钥/spawn）提示修复 SSH 凭据；`'endpoint'`（实例层确定性探测失败——
+  隧道本身正常、问题在远端 dsh 实例，如破坏性变更/版本不兼容）展示
+  「请检查或升级远端 dsh」，绝不展示 SSH 认证失败提示。
 - **SPKI pin 的 pre-write 门**：gateway+HTTPS 配置 pin 时，桌面登录/探针与控制面
   HTTP/WS 反代都必须在 TLS `secureConnect` 后先匹配 peer SPKI，匹配前不调用请求
   `write/end`、不发送 HTTP/WS handshake/header/credential/body 等任何应用层字节；
