@@ -22,7 +22,7 @@ import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
-  IconAgentPresetOutline16, IconCloseOutline16, IconDataOutline16, IconLinkOutline16,
+  IconAgentPresetOutline16, IconChevronDownOutline14, IconCloseOutline16, IconDataOutline16, IconLinkOutline16,
   IconLoadingOutline16, IconPersonalizationOutline16, IconSettingsOutline14, IconSettingsOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -265,7 +265,12 @@ function ServerDropdown({
       >
         <span className={clsx(css.dot, selected?.connected === true ? css.dotOk : css.dotErr)} />
         <span className={css.dropdownValue}>{selected?.label ?? t('noServers')}</span>
-        <span className={css.dropdownArrow} aria-hidden="true">▾</span>
+        {/* 统一下拉箭头（2026-12）：与运行时 select / 连接表单下拉同一图标
+            词汇（IconChevronDownOutline14）；右缘 inset 由 trigger 的
+            padding 决定（10px），与文字左缘对称。 */}
+        <span className={css.dropdownArrow} aria-hidden="true">
+          <IconChevronDownOutline14 />
+        </span>
       </button>
       {open && servers.length > 0 ? (createPortal(
         <div

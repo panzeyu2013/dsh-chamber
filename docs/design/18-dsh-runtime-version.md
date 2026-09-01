@@ -345,6 +345,28 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    Electron 壳无需重启：插件
    挂载在每次 dsh 进程 boot 时重新确定，不是 Electron 会话级事实（02 §2.6）。
 
+**UI 修订注（2026-12，纯展示层，不动状态机/动作矩阵；2026-12 复审修订措辞）**：
+- 当前版本行删除来源 tag 括号（「（内建）/（用户选择）/（env）」）——来源信息
+  由下拉选项的「· 内建」标记与 env 提示行承载；
+- 「更新到/切换到 vX」仅在所选版本 ≠ **当前激活版本**时显示（与当前激活一致时是
+  必然 no-op）；相位门控期间（downloading/installing/applying 等）按钮保留显示但
+  禁用（忙碌副本「正在安装…」+ 进度条），local/gateway 两分支同口径；「恢复内建」
+  仅在激活 ≠ 内建版本时显示（保留 pending/applying/snapshot-failed 逃生口相位，
+  active/bundled 未知时保守显示）；「重启 dsh」移入版本选择行（暂态不可用时禁用
+  而非隐藏）；「清理版本」移入下方恢复行动行，保证版本选择主行（select + 更新到 +
+  重启）任何 locale 下单行成立；
+- 「数据快照」改为带标签行 + 说明，移入「当前状态」块（标签与状态事实同级 12px，
+  未水合时不渲染）；
+- 段内三块（当前状态 / 版本操作 / 版本源）以发丝线分隔；「版本源」块标题与字段
+  标签去重（select 以 aria-label 命名）；
+- chamber 下拉箭头统一为 `IconChevronDownOutline14`（appearance:none + 自定义
+  chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）；
+- **有意保留**（偏离声明确认）：磁盘占用行留在「版本源」块末尾作段落脚注（不移入
+  当前状态块，避免状态块过载）；下拉文本字号不强统一（服务器下拉 13px/600 为导航
+  选择器强调，运行时/表单字段 12px/400 为紧凑行——仅统一箭头词汇，本节下方样式
+  规格中旧的 `.dropdownTrigger` 13px 描述以 2026-11 表单化改造的实现为准：
+  `.runtimeField` radius 8px / bg layer-1 / 12px）。
+
 **B. connections 本地实例卡片**：加一行/chip「dsh v0.1.2」，读同一 resolve 结果，
 与 settings 块同源一致（M0 接线）。
 

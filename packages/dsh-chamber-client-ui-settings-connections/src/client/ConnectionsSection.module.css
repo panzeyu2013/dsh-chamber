@@ -131,6 +131,19 @@
   color: var(--dsw-alias-bg-layer-3);
 }
 
+/* 安全姿态徽标（2026-12 配色修订）：描边 + 彩色文字，无填充——与状态
+   徽标（badgeOk/badgeBad 填充）分层；同类姿态（HTTP 明文 / 无认证）统一
+   warn 家族，正面姿态（SPKI 已固定）用 success 家族。 */
+.badgeWarn {
+  border-color: var(--dsw-alias-state-warn-primary);
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.badgeSuccess {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-state-success-primary);
+}
+
 /* ---- remote host cards ---- */
 
 .cards {
@@ -157,17 +170,31 @@
   border-color: var(--dsw-alias-label-dimmed);
 }
 
+/* 2026-12 两行化: 身份行（名称 + 类型徽标）与徽标行（状态 + 安全姿态）
+   上下排布——单行 flex-wrap 在 268px 网格底线处换行不可预测，名称会被
+   挤压成省略号。 */
 .cardHead {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cardHeadIdentity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cardHeadBadges {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
-/* A gateway card can carry four nowrap pills at once (kind + phase + HTTP
-   明文 + 无认证/SPKI); at the grid floor (268px) they would overflow the
-   card, so the head wraps. The name keeps a readable floor instead of being
-   crushed to a sliver while the pills fill the first line. */
+/* The name keeps a readable floor instead of being crushed to a sliver while
+   the pills fill the first line. */
 .cardName {
   flex: 1;
   min-width: 96px;
@@ -649,6 +676,35 @@
 .input:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ---- 统一下拉箭头（2026-12）----
+   与设置壳/运行时段同一图标词汇（IconChevronDownOutline14）；箭头右缘
+   inset 跟随 .input 的水平内距（12px），与文字左缘对称。 */
+
+.selectWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.selectArrow {
+  appearance: none;
+  -webkit-appearance: none;
+  /* 右内距 32px：chevron 占 [12, 26)px，文字↔箭头净间隙 6px（2026-12
+     复审，与运行时 select 的 8px 同节奏）。 */
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+.selectChevron {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  display: inline-flex;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 /* ---- ~/.ssh/config discovery picker (add-host form) ---- */

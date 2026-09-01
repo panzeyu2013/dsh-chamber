@@ -18,7 +18,9 @@
  * own `/chamber/runtime` projection through the same-origin instance proxy
  * (no token ever leaves the main process, design 17 §7.2/§12).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import clsx from 'clsx'
+import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsBridgeKey } from '../locales.ts'
 import {
   compareSemver,
@@ -144,6 +146,9 @@ function GatewayRuntimeSection({
   setActionError: (error: string | null) => void
 }) {
   const STATUS_POLL_MS = 3_000
+  // Per-instance labelledby ids (useId): N-ctx shells mount one settings panel
+  // each in the SAME document — a static id would alias across panels.
+  const selectVersionId = useId()
   const [remoteStatus, setRemoteStatus] = useState<RemoteRuntimeStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [remoteVersions, setRemoteVersions] = useState<RemoteVersions | null>(null)
@@ -427,6 +432,25 @@ function GatewayRuntimeSection({
   const canRetryRestoreRemote = remoteStatus !== null
     && remoteStatus.phase === 'restore-blocked'
 
+  // 「恢复内建」可见性（2026-12 修订）：版本一致（active == builtin）时恢复
+  // 是 no-op，按钮不显示；pending/applying/snapshot-failed 是持久化事务的
+  // 逃生口（可能 active == builtin 但 reset 仍有意——中止待应用切换），保留。
+  // active/builtin 任一未知时保守显示（无法判断一致性，宁显不藏）。
+  // 注：gateway server 的 restore-builtin 路由本身不检查 hasOverride（恢复
+  // 相位显式放行），此处要求 hasOverride 是 UI 侧保守对称——常态下
+  // hasOverride === false ⟺ active === builtin，仅异常态可能触及，与 local
+  // 侧 main 的 hasOverride !== true 一律拒绝同口径。
+  const remoteResetEscapeHatch = remoteStatus !== null
+    && (remoteStatus.phase === 'pending'
+      || remoteStatus.phase === 'applying'
+      || remoteStatus.phase === 'snapshot-failed')
+  const restoreBuiltinVisible = remoteStatus !== null
+    && remoteStatus.hasOverride
+    && (remoteResetEscapeHatch
+      || remoteStatus.activeVersion === null
+      || remoteStatus.builtinVersion === null
+      || remoteStatus.activeVersion !== remoteStatus.builtinVersion)
+
   const view = remoteStatus === null ? null : remoteRuntimeStatusView(remoteStatus)
   const phaseBadgeKey = remoteStatus === null
     ? null
@@ -436,21 +460,13 @@ function GatewayRuntimeSection({
         ? 'dshRuntimeRemotePhasePending'
         : remoteStatus.phase === 'applying'
           ? 'dshRuntimeRemotePhaseApplying'
-      : remoteStatus.phase === 'snapshot-failed'
-        ? 'dshRuntimeRemotePhaseSnapshotFailed'
-        : remoteStatus.phase === 'swap-attempted'
-          ? 'dshRuntimeRemotePhaseSwapAttempted'
-          : remoteStatus.phase === 'restore-blocked'
-            ? 'dshRuntimeRemotePhaseRestoreBlocked'
-            : 'dshRuntimeRemotePhaseIdle'
-  const sourceTag = remoteStatus === null || remoteStatus.source === null
-    ? null
-    : remoteStatus.source === 'env'
-      ? t('dshRuntimeEnvTag')
-      : remoteStatus.source === 'user-selected'
-        ? t('dshRuntimeUserTag')
-        : t('dshRuntimeRemoteAnchorTag')
-
+          : remoteStatus.phase === 'snapshot-failed'
+            ? 'dshRuntimeRemotePhaseSnapshotFailed'
+            : remoteStatus.phase === 'swap-attempted'
+              ? 'dshRuntimeRemotePhaseSwapAttempted'
+              : remoteStatus.phase === 'restore-blocked'
+                ? 'dshRuntimeRemotePhaseRestoreBlocked'
+                : 'dshRuntimeRemotePhaseIdle'
   const statusText = useMemo(() => {
     if (view === null) return null
     const title = t(view.titleKey, view.params)
@@ -500,18 +516,20 @@ function GatewayRuntimeSection({
 
   const remoteRestartDisabled = remoteGates.restartDisabled
 
-  const restartActions = (
+  // 重启 dsh（2026-12 布局修订）：按钮移入版本选择行（与 select 同一行高
+  // 基线）；加载/不可达分支仍单独展示。反馈行（note/error）跟随按钮位置。
+  const restartButton = (
+    <button
+      type="button"
+      className={css.updateButton}
+      onClick={() => { void onRestartDsh() }}
+      disabled={remoteRestartDisabled}
+    >
+      {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
+    </button>
+  )
+  const restartFeedback = (
     <>
-      <div className={css.updateStatusLine}>
-        <button
-          type="button"
-          className={css.updateButton}
-          onClick={() => { void onRestartDsh() }}
-          disabled={remoteRestartDisabled}
-        >
-          {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
-        </button>
-      </div>
       {restartNote !== null && <p className={css.generalHint} role="status">{restartNote}</p>}
       {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
     </>
@@ -529,7 +547,8 @@ function GatewayRuntimeSection({
         ) : (
           <p className={css.generalHint} role="status">{t('dshRuntimeRemoteLoading')}</p>
         )}
-        {restartActions}
+        {restartButton}
+        {restartFeedback}
       </div>
     )
   }
@@ -543,8 +562,6 @@ function GatewayRuntimeSection({
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>
           {t('updateCurrentVersion', { version: remoteStatus.activeVersion ?? t('dshRuntimeVersionUnknown') })}
-          {sourceTag !== null ? `（${sourceTag}）` : ''}
-          {' '}
           {/* A FATAL metadata block projects phase idle while
               startupBlockedReason is set — an idle badge next to a blocked
               status line would be contradictory, so suppress it there. */}
@@ -572,6 +589,19 @@ function GatewayRuntimeSection({
         && remoteStatus.activeVersion !== remoteStatus.builtinVersion && (
         <p className={css.generalHint}>{t('dshRuntimeBundledRow')} v{remoteStatus.builtinVersion}</p>
       )}
+      {/* 数据快照（2026-12 修订：带标签行 + 说明，置于当前状态组——与
+          「随应用内建」等状态事实归组，用户不再需要猜测它标注什么。
+          2026-12 复审：标签降级为与状态事实同级的 12px hint，避免块内
+          层级倒挂。 */}
+      {remoteSnapshotText !== null && (
+        <>
+          <div className={css.updateVersionRow}>
+            <span className={css.generalHint}>{t('dshRuntimeSnapshotLabel')}</span>
+            <span className={css.generalHint}>{remoteSnapshotText}</span>
+          </div>
+          <p className={css.generalHint}>{t('dshRuntimeSnapshotHint')}</p>
+        </>
+      )}
 
       {statusError !== null && <p className={css.generalHint} role="status">{statusError}</p>}
       {remoteStatus.connectionState !== null && remoteStatus.connectionState !== 'ready' && (
@@ -583,7 +613,6 @@ function GatewayRuntimeSection({
       {remoteStatus.pending !== null && remoteStatus.phase !== 'applying' && (
         <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: remoteStatus.pending })}</p>
       )}
-      {remoteSnapshotText !== null && <p className={css.generalHint}>{remoteSnapshotText}</p>}
       {/* Failure rows stay honest and separate when the status line does not
           already carry them (a failed view renders operationError in its
           title; a blocked view renders startupBlockedReason in its detail). */}
@@ -596,47 +625,61 @@ function GatewayRuntimeSection({
         <p className={css.generalError} role="alert">{remoteStatus.startupBlockedReason}</p>
       )}
 
-      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupActions')}</h4>
+      <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupActions')}</h4>
 
-      <label className={css.generalRow}>
-        <span className={css.generalFieldLabel}>{t('dshRuntimeSelectVersion')}</span>
+      <div className={css.generalRow}>
+        <label className={css.generalFieldLabel} htmlFor={selectVersionId}>{t('dshRuntimeSelectVersion')}</label>
         <div className={css.runtimeSelectRow}>
-          <select
-            className={css.runtimeField}
-            value={chosenRemote ?? ''}
-            disabled={mutationDisabled}
-            onChange={(event) => {
-              selectionExplicit.current = true
-              setSelectedRemote(event.target.value)
-            }}
-          >
-            {sortedVersions.length === 0
-              ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
-              : sortedVersions.map((entry) => (
-                <option key={entry.version} value={entry.version}>
-                  v{entry.version}
-                  {entry.version === remoteActive ? ` · ${t('current')}` : ''}
-                  {entry.version === remoteStatus?.builtinVersion ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
-                  {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
-                </option>
-              ))}
-          </select>
-          <button
-            type="button"
-            className={css.updatePrimaryButton}
-            onClick={() => { void onApplySelected() }}
-            disabled={mutationDisabled || isActiveRemote || chosenRemote === null}
-          >
-            {actionBusy
-              ? t('dshRuntimeRemoteApplying')
-              : `${gatewayDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosenRemote ?? '—'}`}
-          </button>
+          <span className={css.runtimeSelectWrap}>
+            <select
+              id={selectVersionId}
+              className={clsx(css.runtimeField, css.runtimeSelect)}
+              value={chosenRemote ?? ''}
+              disabled={mutationDisabled}
+              onChange={(event) => {
+                selectionExplicit.current = true
+                setSelectedRemote(event.target.value)
+              }}
+            >
+              {sortedVersions.length === 0
+                ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
+                : sortedVersions.map((entry) => (
+                  <option key={entry.version} value={entry.version}>
+                    v{entry.version}
+                    {entry.version === remoteActive ? ` · ${t('current')}` : ''}
+                    {entry.version === remoteStatus?.builtinVersion ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
+                    {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
+                  </option>
+                ))}
+            </select>
+            <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+          </span>
+          {/* 更新/切换到 vX 仅在选择版本 ≠ 当前版本时显示（2026-12 修订：
+              与当前版本一致时按钮是必然 no-op，不常驻）。忙碌期间选中版本
+              仍 ≠ 当前版本，按钮保持可见（带「正在应用…」文案）仅禁用。 */}
+          {!isActiveRemote && chosenRemote !== null && (
+            <button
+              type="button"
+              className={css.updatePrimaryButton}
+              onClick={() => { void onApplySelected() }}
+              disabled={mutationDisabled}
+            >
+              {actionBusy
+                ? t('dshRuntimeRemoteApplying')
+                : `${gatewayDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosenRemote}`}
+            </button>
+          )}
+          {restartButton}
         </div>
-      </label>
+        {restartFeedback}
+      </div>
 
       {/* The merged primary action installs (if needed) and arms the switch —
-          the next-launch semantics the button label no longer spells out. */}
-      <p className={css.generalHint}>{t('dshRuntimeApplyNextLaunchHint')}</p>
+          the next-launch semantics the button label no longer spells out.
+          2026-12 复审：hint 随按钮可见性渲染（按钮隐藏时无对象）。 */}
+      {!isActiveRemote && chosenRemote !== null && (
+        <p className={css.generalHint}>{t('dshRuntimeApplyNextLaunchHint')}</p>
+      )}
 
       {versionsError !== null && (
         <p className={css.generalError} role="alert">
@@ -654,19 +697,21 @@ function GatewayRuntimeSection({
             type="button"
             className={css.updatePrimaryButton}
             onClick={() => { void onApplyNowRemote() }}
-            disabled={remoteGates.applyNowDisabled}
           >
             {t('dshRuntimeApplyNowAction')}
           </button>
         )}
-        <button
-          type="button"
-          className={css.updateButton}
-          onClick={() => { void onRestoreBuiltin() }}
-          disabled={restoreBuiltinDisabled || !remoteStatus.hasOverride}
-        >
-          {t('dshRuntimeResetBuiltin')}
-        </button>
+        {/* 恢复内建仅在与内建版本不一致（或逃生口相位）时显示（2026-12 修订）。 */}
+        {restoreBuiltinVisible && (
+          <button
+            type="button"
+            className={css.updateButton}
+            onClick={() => { void onRestoreBuiltin() }}
+            disabled={restoreBuiltinDisabled}
+          >
+            {t('dshRuntimeResetBuiltin')}
+          </button>
+        )}
         {canRetryApplyRemote && (
           <button type="button" className={css.updateButton} onClick={() => { void onRetryApply() }} disabled={retryApplyDisabled}>
             {t('dshRuntimeRetryApply')}
@@ -679,8 +724,6 @@ function GatewayRuntimeSection({
         )}
       </div>
 
-      {restartActions}
-
       {remoteStatus.failure !== null && (
         <p className={css.generalError} role="alert">
           {t('dshRuntimeFailureRecord', {
@@ -691,30 +734,38 @@ function GatewayRuntimeSection({
         </p>
       )}
 
-      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupSource')}</h4>
+      <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupSource')}</h4>
 
-      <label className={css.generalRow}>
-        <span className={css.generalFieldLabel}>{t('dshRuntimeRegistryLabel')}</span>
+      {/* 2026-12 修订：h4 块标题即「版本源」，内联字段标签删除（select 用
+          aria-label 保持可访问名称）；外层 label 改为 div——select 与按钮
+          不可同处一个 label（HTML 规范：labeled control 之外不得含其他
+          labelable 元素，按钮点击会触发 label 隐式激活转发）。 */}
+      <div className={css.generalRow}>
         {registryEditing ? (
           <div className={css.runtimeSelectRow}>
-            <select
-              className={css.runtimeField}
-              value={registrySelection}
-              disabled={mutationDisabled}
-              onChange={(event) => {
-                const value = event.target.value
-                setRegistrySelection(value)
-                if (value !== CUSTOM_REGISTRY) setCustomOrigin('')
-              }}
-            >
-              <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
-              <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
-              <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
-            </select>
+            <span className={css.runtimeSelectWrap}>
+              <select
+                className={clsx(css.runtimeField, css.runtimeSelect)}
+                aria-label={t('dshRuntimeRegistryLabel')}
+                value={registrySelection}
+                disabled={mutationDisabled}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setRegistrySelection(value)
+                  if (value !== CUSTOM_REGISTRY) setCustomOrigin('')
+                }}
+              >
+                <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
+                <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
+                <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
+              </select>
+              <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+            </span>
             {registrySelection === CUSTOM_REGISTRY && (
               <input
                 type="url"
                 className={css.runtimeField}
+                aria-label={t('dshRuntimeRegistryCustomLabel')}
                 value={customOrigin}
                 placeholder="https://registry.example.com"
                 disabled={mutationDisabled}
@@ -758,12 +809,13 @@ function GatewayRuntimeSection({
             </button>
           </div>
         )}
-      </label>
+      </div>
 
       {registryError !== null && <p className={css.generalError} role="alert">{registryError}</p>}
       {remoteStatus.registryError !== null && (
         <p className={css.generalError} role="alert">{remoteStatus.registryError}</p>
       )}
+      {/* 磁盘占用（2026-12 有意保留）：段落脚注，同 local 分支口径。 */}
       {remoteStatus.diskUsage !== null && (
         <p className={css.generalHint}>
           {t('dshRuntimeDiskSummary', {
@@ -805,6 +857,10 @@ export function DshRuntimeSection({
   instanceSource = 'local',
   chamberInstanceId,
 }: DshRuntimeSectionProps) {
+  // Per-instance labelledby ids (useId): N-ctx shells mount one settings panel
+  // each in the SAME document — a static id would alias across panels.
+  const selectVersionId = useId()
+  const registryCustomId = useId()
   const state = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
   const settingsStatus = useSyncExternalStore(subscribeSettings, getSettingsStatus)
   const [busy, setBusy] = useState(false)
@@ -884,13 +940,6 @@ export function DshRuntimeSection({
     && !isActive
     && (state?.explicitlyInstalledVersions ?? []).includes(chosen)
   const selectionDirection = runtimeSelectionDirection(chosen, active)
-  const sourceTag = active === null
-    ? null
-    : source === 'env'
-      ? t('dshRuntimeEnvTag')
-      : source === 'user'
-        ? t('dshRuntimeUserTag')
-        : t('dshRuntimeBuiltinTag')
 
   const runRuntimeAction = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
@@ -1119,6 +1168,13 @@ export function DshRuntimeSection({
   const canSelect = actions.has('select-version')
   const canInstall = actions.has('install')
   const canReset = actions.has('reset-builtin')
+  // 「恢复内建」可见性（2026-12 修订）：版本一致（active == bundled）时恢复
+  // 是 no-op，按钮不显示；pending/applying/snapshot-failed 是持久化事务的
+  // 逃生口（可能 active == bundled 但 reset 仍有意——中止待应用切换），保留。
+  // active/bundled 任一未知时保守显示（无法判断一致性，宁显不藏）。
+  const resetEscapeHatch = phase === 'pending' || phase === 'applying' || phase === 'snapshot-failed'
+  const canResetVisible = canReset
+    && (resetEscapeHatch || active === null || bundled === null || active !== bundled)
   // Immediate-apply (design 18 addendum §6.1): visible only in the pending
   // phase; env/runtimeBlocked/managementSupported gates are already folded
   // into the action set by runtimeAllowedActions.
@@ -1205,7 +1261,6 @@ export function DshRuntimeSection({
           {t('updateCurrentVersion', {
             version: active === null ? t('dshRuntimeVersionUnknown') : active,
           })}
-          {active !== null && sourceTag !== null ? `（${sourceTag}）` : ''}
         </p>
       </div>
       <div className={css.updateStatus} aria-live="polite">
@@ -1224,6 +1279,19 @@ export function DshRuntimeSection({
       )}
       {active !== null && bundled !== null && active !== bundled && (
         <p className={css.generalHint}>{t('dshRuntimeBundledRow')} v{bundled}</p>
+      )}
+      {/* 数据快照（2026-12 修订：带标签行 + 说明，置于当前状态组——与
+          「随应用内建」等状态事实归组，用户不再需要猜测它标注什么。
+          2026-12 复审：标签降级为与状态事实同级的 12px hint（不再用
+          14px/500 字段词汇，避免块内层级倒挂）；未水合时不渲染。 */}
+      {hydrated && (
+        <>
+          <div className={css.updateVersionRow}>
+            <span className={css.generalHint}>{t('dshRuntimeSnapshotLabel')}</span>
+            <span className={css.generalHint}>{snapshotText}</span>
+          </div>
+          <p className={css.generalHint}>{t('dshRuntimeSnapshotHint')}</p>
+        </>
       )}
       {envGated && <p className={css.generalHint}>{t('dshRuntimeEnvHint')}</p>}
       {managementGated && state?.managementUnsupportedReason != null && (
@@ -1267,54 +1335,77 @@ export function DshRuntimeSection({
         </p>
       )}
 
-      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupActions')}</h4>
+      <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupActions')}</h4>
 
-      <label className={css.generalRow}>
-        <span className={css.generalFieldLabel}>{t('dshRuntimeSelectVersion')}</span>
+      {/* 2026-12 修订：外层 label 改为 div——select 与按钮不可同处一个 label
+          （HTML 规范：labeled control 之外不得含其他 labelable 元素，按钮
+          点击会触发 label 隐式激活转发到 select）；label 经 htmlFor 关联。
+          重启 dsh 按钮移入本行（与 select 同一 28px 行高基线）。 */}
+      <div className={css.generalRow}>
+        <label className={css.generalFieldLabel} htmlFor={selectVersionId}>{t('dshRuntimeSelectVersion')}</label>
         <div className={css.runtimeSelectRow}>
-          <select
-            className={css.runtimeField}
-            value={chosen ?? ''}
-            disabled={mutationDisabled || !canSelect}
-            onChange={(event) => {
-              selectionExplicit.current = true
-              setSelected(event.target.value)
-            }}
-          >
-            {versions.length === 0
-              ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
-              : versions.map((entry: RuntimeVersionEntry) => (
-                <option key={entry.version} value={entry.version}>
-                  v{entry.version}
-                  {entry.version === active ? ` · ${t('current')}` : ''}
-                  {entry.version === bundled ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
-                  {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
-                </option>
-              ))}
-          </select>
-          {canInstall && (
+          <span className={css.runtimeSelectWrap}>
+            <select
+              id={selectVersionId}
+              className={clsx(css.runtimeField, css.runtimeSelect)}
+              value={chosen ?? ''}
+              disabled={mutationDisabled || !canSelect}
+              onChange={(event) => {
+                selectionExplicit.current = true
+                setSelected(event.target.value)
+              }}
+            >
+              {versions.length === 0
+                ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
+                : versions.map((entry: RuntimeVersionEntry) => (
+                  <option key={entry.version} value={entry.version}>
+                    v{entry.version}
+                    {entry.version === active ? ` · ${t('current')}` : ''}
+                    {entry.version === bundled ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
+                    {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
+                  </option>
+                ))}
+            </select>
+            <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+          </span>
+          {/* 更新/切换到 vX 仅在选择版本 ≠ 当前版本时显示（2026-12 修订：
+              与当前版本一致时按钮是必然 no-op，不常驻）。相位门控期间
+              （downloading/installing/applying 等）canInstall 从动作集消失
+              ——按钮保留显示但禁用（与 gateway 分支对齐），忙碌副本「正在
+              安装…」与进度条共同呈现操作中状态。 */}
+          {!isActive && chosen !== null && (
             <button
               type="button"
               className={css.updatePrimaryButton}
               onClick={onInstall}
-              disabled={mutationDisabled || isActive || chosen === null}
+              disabled={mutationDisabled || !canInstall}
             >
               {/* Unified direction-aware copy (2026-11 review): the downgrade
                   action is a version SWITCH like any other — 切换到/更新到,
                   never 回滚到 (the data-restore semantics are decided
                   server-side by the direction formula, not by the label). */}
-              {selectionDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v{chosen ?? '—'}
+              {busy && (phase === 'downloading' || phase === 'installing')
+                ? t('dshRuntimeInstalling')
+                : `${selectionDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosen}`}
             </button>
           )}
-          {canCleanup && chosen !== null && (
-            <button type="button" className={css.updateButton} onClick={onCleanupVersion} disabled={mutationDisabled}>
-              {t('dshRuntimeCleanupVersion')} v{chosen}
-            </button>
-          )}
+          {/* 重启 dsh（design 18 §3.6 项 8）：暂态不可用（busy/pending/
+              applying 等）时禁用而非隐藏——重启能力本身常驻可见。 */}
+          <button
+            type="button"
+            className={css.updateButton}
+            onClick={() => { void onRestartDsh() }}
+            disabled={restarting || !canRestartDsh}
+          >
+            {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
+          </button>
         </div>
-      </label>
+        {restartNote !== null && (
+          <p className={css.generalHint} role="status">{restartNote}</p>
+        )}
+        {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
+      </div>
 
-      <p className={css.generalHint}>{snapshotText}</p>
       {/* Pending = the apply-now window (design 18 addendum §6.1): the main
           [立即应用 v{version}] action plus the hint that the alternative is
           next launch; [恢复内建] stays in the recovery row below. */}
@@ -1337,21 +1428,10 @@ export function DshRuntimeSection({
         <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: pending })}</p>
       )}
 
-      <div className={css.updateStatusLine}>
-        <button
-          type="button"
-          className={css.updateButton}
-          onClick={() => { void onRestartDsh() }}
-          disabled={restarting || !canRestartDsh}
-        >
-          {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
-        </button>
-      </div>
-      {restartNote !== null && (
-        <p className={css.generalHint} role="status">{restartNote}</p>
-      )}
-
-      {(canRetryApply || canRetryRestore || canRestorePreRollback || canRecoverMetadata || canReset) && (
+      {/* 恢复/清理行动行（2026-12 修订）：清理版本从版本选择主行移入此处
+          ——主行保持 select + 更新到 + 重启 三件套，任何 locale 单行成立；
+          清理是低频动作，与「恢复内建」同排语义连贯。 */}
+      {(canRetryApply || canRetryRestore || canRestorePreRollback || canRecoverMetadata || canResetVisible || canCleanup) && (
         <div className={css.updateStatusLine}>
           {canRetryApply && (
             <button type="button" className={css.updateButton} onClick={onRetryApply} disabled={mutationDisabled}>
@@ -1378,9 +1458,15 @@ export function DshRuntimeSection({
               {t('dshRuntimeRecoverMetadata')}
             </button>
           )}
-          {canReset && (
+          {/* 恢复内建仅在与内建版本不一致（或逃生口相位）时显示（2026-12 修订）。 */}
+          {canResetVisible && (
             <button type="button" className={css.updateButton} onClick={onReset} disabled={mutationDisabled}>
               {t('dshRuntimeResetBuiltin')}
+            </button>
+          )}
+          {canCleanup && chosen !== null && (
+            <button type="button" className={css.updateButton} onClick={onCleanupVersion} disabled={mutationDisabled}>
+              {t('dshRuntimeCleanupVersion')} v{chosen}
             </button>
           )}
         </div>
@@ -1395,40 +1481,45 @@ export function DshRuntimeSection({
           })}
         </p>
       )}
-      {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
 
-      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupSource')}</h4>
+      <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupSource')}</h4>
 
-      <label className={css.generalRow}>
-        <span className={css.generalFieldLabel}>{t('dshRuntimeRegistryLabel')}</span>
+      {/* 2026-12 修订：h4 块标题即「版本源」，内联字段标签删除（select 用
+          aria-label 保持可访问名称）；外层 label 改为 div——select 与按钮
+          不可同处一个 label（HTML 规范，见版本操作行注释）。 */}
+      <div className={css.generalRow}>
         <div className={css.runtimeSelectRow}>
-          <select
-            className={css.runtimeField}
-            value={registrySelection}
-            disabled={registryDisabled}
-            onChange={(event) => {
-              const value = event.target.value
-              setRegistrySelection(value)
-              if (value !== CUSTOM_REGISTRY) {
-                void onApplyRegistry(value, false).then((result) => {
-                  // Any failed/declined apply reverts the dropdown: it must
-                  // never claim an origin that was not applied. The error text
-                  // (originError) stays visible; a custom origin is handled by
-                  // its own input below and keeps its editable value.
-                  if (!result.ok) setRegistrySelection(registryMode)
-                })
-              }
-            }}
-          >
-            <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
-            <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
-            <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
-          </select>
+          <span className={css.runtimeSelectWrap}>
+            <select
+              className={clsx(css.runtimeField, css.runtimeSelect)}
+              aria-label={t('dshRuntimeRegistryLabel')}
+              value={registrySelection}
+              disabled={registryDisabled}
+              onChange={(event) => {
+                const value = event.target.value
+                setRegistrySelection(value)
+                if (value !== CUSTOM_REGISTRY) {
+                  void onApplyRegistry(value, false).then((result) => {
+                    // Any failed/declined apply reverts the dropdown: it must
+                    // never claim an origin that was not applied. The error text
+                    // (originError) stays visible; a custom origin is handled by
+                    // its own input below and keeps its editable value.
+                    if (!result.ok) setRegistrySelection(registryMode)
+                  })
+                }
+              }}
+            >
+              <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
+              <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
+              <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
+            </select>
+            <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+          </span>
           {canCheck && (
             <button
               type="button"
               className={css.updateButton}
-              disabled={!canCheck || testingRegistry || busy}
+              disabled={testingRegistry || busy}
               onClick={() => { void onTestRegistry() }}
             >
               {testingRegistry ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
@@ -1440,12 +1531,13 @@ export function DshRuntimeSection({
           {' '}
           {t('dshRuntimeRegistryCurrent', { origin: registryOrigin })}
         </span>
-      </label>
+      </div>
 
       {registrySelection === CUSTOM_REGISTRY && (
-        <label className={css.generalRow}>
-          <span className={css.generalFieldLabel}>{t('dshRuntimeRegistryCustomLabel')}</span>
+        <div className={css.generalRow}>
+          <label className={css.generalFieldLabel} htmlFor={registryCustomId}>{t('dshRuntimeRegistryCustomLabel')}</label>
           <input
+            id={registryCustomId}
             type="url"
             className={css.runtimeField}
             value={customOrigin}
@@ -1467,12 +1559,15 @@ export function DshRuntimeSection({
             {applyingRegistry ? t('dshRuntimeRegistryApplying') : t('dshRuntimeRegistryApply')}
           </button>
           {originError !== null && <p className={css.generalError} role="alert">{originError}</p>}
-        </label>
+        </div>
       )}
 
       {registryError !== null && <p className={css.generalError} role="alert">{registryError}</p>}
       {registryReachable && <p className={css.generalHint} role="status">{t('dshRuntimeRegistryReachable')}</p>}
 
+      {/* 磁盘占用（2026-12 有意保留）：作为段落脚注留在版本源块末尾，不
+          移入当前状态组——状态组已含版本/快照/环境事实，再叠加存储统计
+          会过载；脚注位置读取顺序自然。 */}
       {state?.diskUsage != null && (
         <p className={css.generalHint}>
           {t('dshRuntimeDiskSummary', {
