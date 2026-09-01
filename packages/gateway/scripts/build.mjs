@@ -52,14 +52,17 @@ chmodSync(cliOut, 0o755)
 // the chain, so its seed MUST ship inside this package. Every entry carries
 // package.json + dist/index.js; a client plugin additionally declares
 // extraFiles — the browser half the host ClientModuleRegistry serves at
-// /plugins/<pkg>/client.js (lib/client.js + devtools source map).
+// /plugins/<pkg>/client.js (lib/client.js + devtools source map), plus
+// lib/index.js: the package `main`/exports["."] target, which the cordis
+// loader resolves when it imports the overlay row by package name (P0:
+// omitting it makes the managed dsh boot fail with ERR_MODULE_NOT_FOUND).
 const hostPackagesOut = join(packageDir, 'host-packages')
 rmSync(hostPackagesOut, { recursive: true, force: true })
 const HOST_PACKAGES = [
   {
     name: 'dsh-chamber-client-ui-mobile',
     source: join(packageDir, '..', 'dsh-chamber-client-ui-mobile'),
-    extraFiles: ['lib/client.js', 'lib/client.js.map'],
+    extraFiles: ['lib/index.js', 'lib/client.js', 'lib/client.js.map'],
   },
 ]
 for (const { name, source, extraFiles = [] } of HOST_PACKAGES) {

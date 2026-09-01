@@ -272,7 +272,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           kind: 'client',
           source: 'packaged',
           sourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-client-ui-mobile'),
-          seedFiles: ['package.json', 'dist/index.js', 'lib/client.js', 'lib/client.js.map'],
+          seedFiles: ['package.json', 'dist/index.js', 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
         },
       ],
       getDshWorkspacePath: () => {
