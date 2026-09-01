@@ -421,7 +421,11 @@ port_free() {
 }
 
 suggest_port() {
-  local base="$1" p="$base"
+  # 两个 local 必须分开：同语句 `local base="$1" p="$base"` 里 `$base` 在
+  # 赋值生效前展开——set -u 下直接 unbound variable 崩溃（或静默取到外层
+  # 陈旧值）。与 SERVICE_USER 事故同类的 set -u 隐患。
+  local base="$1"
+  local p="$base"
   while ! port_free 127.0.0.1 "$p"; do
     (( p >= 65535 )) && { warn "端口 $base-65535 全部被占用，无法建议空闲端口"; printf '%s' "$base"; return 1; }
     p=$((p + 1))

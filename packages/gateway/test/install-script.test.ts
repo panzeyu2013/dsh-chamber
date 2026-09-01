@@ -233,6 +233,18 @@ printf 'ok\\n'
   assert.match(output, /ok/, 'unset SERVICE_USER must be a no-op, not an unbound-variable error')
 })
 
+test('suggest_port splits its locals so $base is bound before $p reads it', () => {
+  // Regression: `local base="$1" p="$base"` expands $base before the local
+  // assignment takes effect — under `set -u` the wizard crashed with
+  // 'base: unbound variable' on ANY occupied default port (same bug class as
+  // the SERVICE_USER unbound). Both locals must be separate statements.
+  const output = runLibrary(`
+p=$(suggest_port "$DEFAULT_GATEWAY_PORT")
+printf 'suggested=%s\\n' "$p"
+`)
+  assert.match(output, /^suggested=[0-9]+$/m, 'suggest_port must return a numeric port without a set -u crash')
+})
+
 test('foreground launch preserves each dsh path and auth argument as one argv entry', () => {
   const output = runLibrary(`
 BASE_DIR="$(mktemp -d)"
