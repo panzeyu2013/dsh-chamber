@@ -81,6 +81,7 @@ API_TOKEN=""
 NO_AUTH=0
 INSTALL_METHOD=""               # global | local（向导默认 local；空 = 未定）
 SERVICE_MODE="auto"             # systemd | user | foreground
+SERVICE_USER=""                 # --service-user：专用系统用户（空 = 以安装用户运行）
 SKIP_DSH=0
 DSH_FOUND=""
 DSH_WS=""
@@ -780,7 +781,7 @@ ensure_private_layout() {
 # 用户名必须满足 systemd User= 的字符集；用户必须已存在（安装器不负责建号，
 # 避免未授权提权面——建号命令见部署文档）。
 validate_service_user() {
-  [[ -n "$SERVICE_USER" ]] || return 0
+  [[ -n "${SERVICE_USER:-}" ]] || return 0
   [[ "$SERVICE_MODE" == "systemd" ]] \
     || die "--service-user 仅支持 systemd 系统服务形态（当前 SERVICE_MODE=$SERVICE_MODE）"
   [[ "$EUID" == "0" ]] || die "--service-user 需要 root 执行（写系统 unit + 移交数据属主）"
@@ -795,7 +796,7 @@ validate_service_user() {
 # gateway.env/配置/版本树/state；root 仍可管理）。幂等，install/update 两线
 # 都在重启服务前调用。
 apply_service_user_ownership() {
-  [[ -n "$SERVICE_USER" ]] || return 0
+  [[ -n "${SERVICE_USER:-}" ]] || return 0
   log "移交数据目录属主给 $SERVICE_USER …"
   chown -R "$SERVICE_USER" "$BASE_DIR" || die "chown -R $SERVICE_USER $BASE_DIR 失败"
 }

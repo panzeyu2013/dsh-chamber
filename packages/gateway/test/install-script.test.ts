@@ -220,6 +220,19 @@ validate_service_user
   assert.match(`${refused.stderr}${refused.stdout}`, /仅支持 systemd 系统服务形态/)
 })
 
+test('validate_service_user and ownership tolerate an unset SERVICE_USER (install path)', () => {
+  // Regression: the install flow (do_install step 0) calls validate_service_user
+  // BEFORE gateway.conf is loaded, so SERVICE_USER is never assigned there.
+  // Under `set -u` a bare $SERVICE_USER was an unbound-variable death.
+  const output = runLibrary(`
+unset SERVICE_USER
+validate_service_user
+apply_service_user_ownership
+printf 'ok\\n'
+`)
+  assert.match(output, /ok/, 'unset SERVICE_USER must be a no-op, not an unbound-variable error')
+})
+
 test('foreground launch preserves each dsh path and auth argument as one argv entry', () => {
   const output = runLibrary(`
 BASE_DIR="$(mktemp -d)"
