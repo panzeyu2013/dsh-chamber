@@ -1366,7 +1366,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             <Button variant="outline" disabled={saving} onClick={closeForm}>
               {t('cancel')}
             </Button>
-            <Button disabled={saving} onClick={() => { void saveDraft() }}>
+            <Button variant="outline" disabled={saving} onClick={() => { void saveDraft() }}>
               {saving ? t('saving') : t('save')}
             </Button>
           </>
