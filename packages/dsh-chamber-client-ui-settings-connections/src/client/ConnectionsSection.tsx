@@ -48,6 +48,7 @@ import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse 
 import { PluginSyncModal } from './PluginSyncModal.tsx'
 import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
 import type { PluginDiagnostic } from './plugin-diagnostic.ts'
+import { PluginInventoryView } from './plugin-inventory-view.tsx'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 import { actionHintKey } from './action-hint.ts'
 import {
@@ -382,8 +383,13 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [gatewayHostLogs, setGatewayHostLogs] = useState<HostLogsResponse | null>(null)
   const [gatewayHostLogsError, setGatewayHostLogsError] = useState<string | null>(null)
   const [gatewayHostLogsBusy, setGatewayHostLogsBusy] = useState(false)
-  /** 插件管理对话框：'local' = 本地实例，否则为远程主机 spec。 */
+  /** 插件管理对话框：'local' = 本地实例，否则为远程主机 spec。SSH 通道的
+   *  dsh 目标走 PluginSyncModal（desktopSsh 表面）；gateway（任意传输）与
+   *  http 直连目标没有 SSH exec 通道，走 PluginInventoryView（经实例
+   *  代理读宿主 pluginInventory Remote；chamber 内建组件由桌面主进程经
+   *  gateway /chamber/plugins 通道自动同步）。 */
   const [pluginFor, setPluginFor] = useState<SshInstanceSpec | 'local' | null>(null)
+  const [inventoryFor, setInventoryFor] = useState<SshInstanceSpec | null>(null)
 
   const clearOpError = useCallback((id: string): void => {
     setOpError(prev => {
@@ -1288,20 +1294,23 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       </Button>
                     )}
                     <div className={css.cardFoot}>
-                      {spec.transport === 'ssh'
-                        ? (
-                          <button
-                            type="button"
-                            className={css.iconButton}
-                            disabled={specBusy}
-                            data-tip={t('pluginsOpen')}
-                            aria-label={`${t('pluginsOpen')}: ${spec.label}`}
-                            onClick={() => { setPluginFor(spec) }}
-                          >
-                            <IconChecklistOutline14 />
-                          </button>
-                        )
-                        : null}
+                      {/* 插件入口对每个连接渲染：SSH 通道的 dsh 目标打开
+                          同步对话框（desktopSsh 插件表面）；gateway 与 http
+                          直连目标没有该表面，打开只读插件清单（经实例代理读
+                          宿主 pluginInventory，design 17 §9.3）。 */}
+                      <button
+                        type="button"
+                        className={css.iconButton}
+                        disabled={specBusy}
+                        data-tip={t('pluginsOpen')}
+                        aria-label={`${t('pluginsOpen')}: ${spec.label}`}
+                        onClick={() => {
+                          if (spec.transport === 'ssh' && spec.kind === 'dsh') setPluginFor(spec)
+                          else setInventoryFor(spec)
+                        }}
+                      >
+                        <IconChecklistOutline14 />
+                      </button>
                       <span className={css.footSpacer} />
                       {spec.transport === 'ssh'
                         ? (
@@ -1845,6 +1854,16 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             spec={pluginFor === 'local' ? null : pluginFor}
             diagnostic={pluginDiagnostics?.[pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`]}
             onClose={() => { setPluginFor(null) }}
+          />
+        : null}
+
+      {inventoryFor !== null
+        ? <PluginInventoryView
+            t={t}
+            sourceId={`${inventoryFor.kind}-${inventoryFor.id}`}
+            label={inventoryFor.label}
+            diagnostic={pluginDiagnostics?.[`${inventoryFor.kind}-${inventoryFor.id}`]}
+            onClose={() => { setInventoryFor(null) }}
           />
         : null}
     </div>

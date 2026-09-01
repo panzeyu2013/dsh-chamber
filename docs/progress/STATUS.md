@@ -194,6 +194,19 @@
     - gateway 发行物不再携带 host 两包（build.mjs 复制清单只剩 mobile 槽位）；
       `--no-auth` 例外与认证门不变。契约见 design 17 §3/§10、design 18 §3.4/§9.3、
       design 01 §4、AGENTS.md。
+    - **连接页插件面（design 05 §5）**：gateway（两种传输）与 dsh+http 直连目标
+      没有 SSH exec 通道（desktop `findRemoteTarget` 拒绝 `kind !== 'dsh'`），
+      connections 卡片新增**插件清单视图**——**参照 SSH 同步对话框的
+      chamber 内建组件行式**：本地侧读桌面自身 profile 清单（同 `localPluginList`
+      IPC），远端侧经实例代理 `/api/i/<sourceId>/api/pluginInventory/list` 读托管
+      实例宿主自己的 Live Loader 状态（chamber 两包注入状态 + 第三方已装载插件，
+      无阶段徽标/预设组合细节）。**gateway 的管理通道不是缺失而是不同**：
+      chamber 内建组件由桌面主进程经 gateway 自己的 `PUT /chamber/plugins`
+      通道在每次 ready 注册时自动同步（版本匹配跳过、变更请求受控重启），
+      本视图是这条闭环的只读读面；第三方插件装/卸无 gateway 面（种子白名单是
+      有界通道），在服务器侧 dsh 进行。全链路
+      （桌面代理 → gateway auth/dispatch → gateway 代理 + spawn 浏览器 cookie
+      → 托管宿主）由 gateway `plugin-inventory-proxy.test.ts` 回归锁定。
   2026-12：上述 `session.list`→Git mutation 的 TOCTOU 描述随服务器侧 saga 一并
   删除；实例内插件的对应竞态见设计 08 的 M4 验收（「并发 session 删除竞态」）。
   - **运行时凭据管理（design 17 §7.4）自动化已落地**：v2 凭据信封（config/runtime

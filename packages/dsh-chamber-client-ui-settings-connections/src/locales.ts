@@ -235,6 +235,11 @@ export const zh = {
   pluginsLocalRemoveDescription: '将从本地 dsh 实例卸载该插件及其依赖；如需恢复请重新添加。',
   pluginsMaterializeNoDir: '无法解析本地目录（渲染层无法确定该路径的绝对位置）——请改用「添加 → 从文件夹导入」。',
   pluginsRestartUnconfigured: '未配置 systemd 服务，无法自动重启；插件已安装，将在下次重启后生效。',
+  inventoryError: '无法读取插件清单',
+  inventoryNoThirdParty: '没有第三方插件',
+  chamberRemoteFailed: '远端：已注入（加载失败）',
+  pluginPhaseFailed: '加载失败',
+  pluginDisabled: '已停用',
 } satisfies Record<string, string>
 
 /** The connections section namespace key union. */
@@ -475,4 +480,9 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsLocalRemoveDescription: 'The plugin and its dependencies are uninstalled from the local dsh instance; re-add it to restore.',
   pluginsMaterializeNoDir: 'Cannot resolve a local directory for this path (the renderer cannot determine its absolute location) — use Add → Import from folder instead.',
   pluginsRestartUnconfigured: 'No systemd service is configured, so no automatic restart; the plugin is installed and takes effect on the next restart.',
+  inventoryError: 'Could not read the plugin list',
+  inventoryNoThirdParty: 'No third-party plugins',
+  chamberRemoteFailed: 'Remote: injected (failed to load)',
+  pluginPhaseFailed: 'Failed',
+  pluginDisabled: 'Disabled',
 }
