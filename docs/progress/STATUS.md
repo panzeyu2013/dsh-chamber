@@ -14,6 +14,18 @@
 > （npm 已发布）——release.yml env / install-gateway.sh / bundle-dsh 兜底 /
 > packages/desktop/vendor/dsh/pnpm-lock.yaml 全部同代，`release-preflight --versions-only`
 > 的双线一致性检查不再报 runtime != baseline。
+> **dsh 基线升级 0.1.2-alpha.2 → 0.1.2-alpha.3（2026，迁移完成，双线已同步）**：
+> 源码线已切到 dsh-v0.1.2-alpha.3（harness.commit=dd6322d6、262 vendor 链接与锁文件 importer
+> 集合一致）；fork 副本基线 0.1.2-alpha.3——connection fork 重放上游 tolerate-stalled-hosts
+> 两 hunk（就绪超时只 warn 不取消 generation，chamber loopEpoch 补丁不受影响），
+> client-web / api-gateway fork 为纯版本号同步（上游该两包 a3 无源码变更）；上游 a3 删除
+> dsh-session-persistence-sqlite / dsh-agent-spine-demo，锁文件已清理孤儿 importer 记录
+> （restore 脚本只增不减的边界场景，手工删除）；新增 vendor 包 dsh-session-turn-outline
+> 随 update-vendor.mjs 自动纳入。运行时线已同步 @deepseek-ai/dsh@0.1.2-alpha.3
+> （bundle:dsh 封装 + bin.js --version 冒烟通过）——release.yml env / install-gateway.sh /
+> bundle-dsh 兜底已同代。验证：typecheck（根）+ build:renderer + typecheck:connection/
+> client-web + test:connection/client-web/renderer-shell/control-plane 全绿；
+> 上游 ui-primitives 视口懒高亮/32 行分组为行为性变化，chamber 无直接使用点。
 > **BrowserAuth 适配（0.1.2 新增门禁）**：本地实例经控制面 spawn 时捕获 `dsh web:` 启动行
 > launch token（进程内存随机数，行缓冲整行脱敏后进日志）→ `GET /?token=` 交换出签名 cookie
 > （仅存控制面进程内存）→ 自动注入 call()/桌面实例代理 HTTP+WS/gateway 代理 HTTP+WS/gateway mux WS；
