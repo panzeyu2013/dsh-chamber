@@ -23,6 +23,13 @@ build/
 # `pnpm run build:dsh-runtime` after any packages/dsh-runtime/src change.
 !packages/dsh-runtime/dist/
 !packages/dsh-runtime/dist/index.js
+# The mobile client plugin's host/client-half artifacts are the same
+# committed-seed pattern (design 17 §18.3): the gateway build copies
+# package.json + dist/index.js + lib/client.js(+.map) + lib/index.js into
+# host-packages/ for the seed registry, so a clean checkout must carry
+# them. Regenerate via `pnpm --filter @dsh-chamber/dsh-client-ui-mobile run build`.
+!packages/dsh-chamber-client-ui-mobile/dist/
+!packages/dsh-chamber-client-ui-mobile/dist/index.js
 
 # Local runtime state (control-plane data, audit log, dsh host state)
 data/
