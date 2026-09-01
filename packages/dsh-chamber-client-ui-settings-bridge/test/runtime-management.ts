@@ -379,15 +379,22 @@ test('unsupported platform is read-only except for mandatory interrupted restore
   )
 })
 
-test('version selection prefers latest initially and preserves an explicit choice', () => {
+test('version selection preselects the active version, then bundled, and preserves an explicit choice', () => {
   const versions = [
     { version: '1.0.0', latest: false, cached: true, belowBaseline: false },
     { version: '1.2.0', latest: true, cached: false, belowBaseline: false },
     { version: '0.9.0', latest: false, cached: true, belowBaseline: true },
   ]
-  assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', '1.0.0'), '1.2.0')
-  assert.equal(preferredRuntimeVersion('0.9.0', versions, '1.2.0', '1.0.0'), '0.9.0')
-  assert.equal(preferredRuntimeVersion('gone', versions, '1.2.0', '1.0.0'), '1.2.0')
+  // Active wins over the registry recommendation: the dropdown reflects what is
+  // running, never an older dist-tags.latest (2026-10 user decision).
+  assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', '1.0.0'), '1.0.0')
+  assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', '1.0.0', '0.9.0'), '1.0.0')
+  // No active version yet: the bundled version is the safe default over latest.
+  assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', null, '0.9.0'), '0.9.0')
+  assert.equal(preferredRuntimeVersion(null, versions, '1.2.0', null, null), '1.2.0')
+  // Explicit choice preserved; a stale explicit choice falls back to active.
+  assert.equal(preferredRuntimeVersion('0.9.0', versions, '1.2.0', '1.0.0', '0.9.0'), '0.9.0')
+  assert.equal(preferredRuntimeVersion('gone', versions, '1.2.0', '1.0.0', '0.9.0'), '1.0.0')
   assert.equal(preferredRuntimeVersion(null, versions, null, '1.0.0'), '1.0.0')
   assert.equal(preferredRuntimeVersion(null, versions, null, null), '1.0.0')
 })

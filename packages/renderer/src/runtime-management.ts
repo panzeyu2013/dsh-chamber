@@ -479,19 +479,27 @@ export function isSemverGreater(a: string, b: string): boolean {
 }
 
 /**
- * Preserve a still-valid explicit user choice. Before the user chooses, prefer
- * the registry recommendation, then the active version, then the first entry.
+ * Preserve a still-valid explicit user choice. Before the user chooses, the
+ * picker preselects the ACTIVE version — the dropdown always reflects what is
+ * actually running, and the action button arms only after the user changes the
+ * selection (2026-10 user decision, refined: the default state has no override,
+ * so the active version IS the bundled one — "default follows the built-in").
+ * When no active version exists yet, the bundled (built-in) version is the
+ * safe default over the registry recommendation. The registry recommendation
+ * is the last fallback before the list order.
  */
 export function preferredRuntimeVersion(
   current: string | null,
   versions: readonly RuntimeVersionEntry[],
   latest: string | null,
   active: string | null,
+  bundled: string | null = null,
 ): string | null {
   const available = new Set(versions.map((entry) => entry.version))
   if (current !== null && available.has(current)) return current
-  if (latest !== null && available.has(latest)) return latest
   if (active !== null && available.has(active)) return active
+  if (bundled !== null && available.has(bundled)) return bundled
+  if (latest !== null && available.has(latest)) return latest
   return versions[0]?.version ?? null
 }
 

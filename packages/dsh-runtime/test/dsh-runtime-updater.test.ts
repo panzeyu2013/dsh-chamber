@@ -114,20 +114,22 @@ test('buildVersionList: active 版本置顶且去重（只出现一次）', () =
   assert.equal(entries.filter((e) => e.version === '1.0.0').length, 1, 'active 去重');
 });
 
-test('buildVersionList: dist-tags.latest（推荐）紧随 active 置顶第二位（§3.6 A.2 字面排序）', () => {
-  // latest ≠ active：latest 必须位于第二位，即使降序排序会把别的版本放前面。
-  const meta = makeMeta(['0.9.0', '1.0.0', '1.1.0', '2.0.0'], '2.0.0');
-  const entries = buildVersionList(meta, { active: '1.1.0', cachedVersions: [], compatibilityBaseline: null });
+test('buildVersionList: 列表 = active 置顶 + 纯 semver 降序；latest 只留标记、不再钉位（决策 11）', () => {
+  // npm dist-tags.latest 可能是低于内建基线的旧版本（2026-10 用户场景：latest=rc.2
+  // < 内建 alpha.2）：不得把 latest 钉到第二位，否则无标签解释的乱序。
+  const meta = makeMeta(['0.9.0', '1.0.0', '1.1.0', '2.0.0-rc.1', '2.0.0'], '1.0.0');
+  const entries = buildVersionList(meta, { active: '2.0.0-rc.1', cachedVersions: [], compatibilityBaseline: null });
   assert.deepEqual(
     entries.map((e) => e.version),
-    ['1.1.0', '2.0.0', '1.0.0', '0.9.0'],
-    'active 置顶，latest(2.0.0) 第二位，其余降序',
+    ['2.0.0-rc.1', '2.0.0', '1.1.0', '1.0.0', '0.9.0'],
+    'active 置顶，其余纯降序（latest=1.0.0 不钉位）',
   );
-  assert.equal(entries[1].version, '2.0.0', '推荐版本应在第二位');
-  assert.equal(entries[1].latest, true, '推荐版本带 latest 标记');
+  assert.equal(entries.find((e) => e.version === '1.0.0')?.latest, true, 'latest 标记仍在对应条目上');
 
-  // latest === active：置顶条目本身即推荐，不重复出现。
-  const activeIsLatest = buildVersionList(meta, { active: '2.0.0', cachedVersions: [], compatibilityBaseline: null });
+  // latest === active：置顶条目本身即 latest，不重复出现。
+  const activeIsLatest = buildVersionList(makeMeta(['0.9.0', '1.0.0', '1.1.0', '2.0.0'], '2.0.0'), {
+    active: '2.0.0', cachedVersions: [], compatibilityBaseline: null,
+  });
   assert.deepEqual(
     activeIsLatest.map((e) => e.version),
     ['2.0.0', '1.1.0', '1.0.0', '0.9.0'],
@@ -135,7 +137,7 @@ test('buildVersionList: dist-tags.latest（推荐）紧随 active 置顶第二�
   );
   assert.equal(activeIsLatest.filter((e) => e.latest).length, 1);
 
-  // latest 不可列出（无 tarball / 被 yank）：不置顶第二位，按降序回落。
+  // latest 不可列出（无 tarball / 被 yank）：不出现。
   const yanked = {
     latest: '3.0.0',
     versions: ['1.0.0', '2.0.0'],

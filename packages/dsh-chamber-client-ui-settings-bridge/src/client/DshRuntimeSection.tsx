@@ -254,8 +254,10 @@ function GatewayRuntimeSection({
   )
 
   // Preserve an explicit choice across status pushes / version re-pulls;
-  // before the user chooses, the recommendation wins, then the active version
-  // (same policy as the local branch's preferredRuntimeVersion).
+  // before the user chooses, the active version wins (in the default no-override
+  // state the active version IS the builtin anchor), then the builtin anchor,
+  // then the recommendation (same policy as the local branch's
+  // preferredRuntimeVersion).
   useEffect(() => {
     if (remoteStatus === null) return
     setSelectedRemote((current) => {
@@ -263,7 +265,13 @@ function GatewayRuntimeSection({
         && current !== null
         && sortedVersions.some(entry => entry.version === current)
       if (!stillExplicit) selectionExplicit.current = false
-      return preferredRuntimeVersion(stillExplicit ? current : null, sortedVersions, latestTag, remoteActive)
+      return preferredRuntimeVersion(
+        stillExplicit ? current : null,
+        sortedVersions,
+        latestTag,
+        remoteActive,
+        remoteStatus.builtinVersion,
+      )
     })
   }, [remoteStatus, sortedVersions, latestTag, remoteActive])
 
@@ -272,6 +280,7 @@ function GatewayRuntimeSection({
     sortedVersions,
     latestTag,
     remoteActive,
+    remoteStatus?.builtinVersion ?? null,
   )
   const isActiveRemote = chosenRemote !== null && chosenRemote === remoteActive
 
@@ -610,9 +619,8 @@ function GatewayRuntimeSection({
                 <option key={entry.version} value={entry.version}>
                   v{entry.version}
                   {entry.version === remoteActive ? ` · ${t('current')}` : ''}
-                  {entry.latest ? ` · ${t('dshRuntimeLatestTag')}` : ''}
+                  {entry.version === remoteStatus?.builtinVersion ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
                   {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
-                  {entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
                 </option>
               ))}
           </select>
@@ -851,7 +859,9 @@ export function DshRuntimeSection({
   }, [registryMode, registryOrigin])
 
   // Preserve an explicit choice across pushes. Before the user chooses, the
-  // registry recommendation wins over the active/list-order fallbacks.
+  // picker preselects the active version (the default no-override state's
+  // active version IS the bundled one — "default follows the built-in"); the
+  // bundled version is the safe default only when no active version exists.
   useEffect(() => {
     if (!hydrated) return
     setSelected((current) => {
@@ -859,15 +869,22 @@ export function DshRuntimeSection({
         && current !== null
         && versions.some((entry) => entry.version === current)
       if (!currentStillExplicit) selectionExplicit.current = false
-      return preferredRuntimeVersion(currentStillExplicit ? current : null, versions, state?.latest ?? null, active)
+      return preferredRuntimeVersion(
+        currentStillExplicit ? current : null,
+        versions,
+        state?.latest ?? null,
+        active,
+        bundled,
+      )
     })
-  }, [active, hydrated, state?.latest, versions])
+  }, [active, bundled, hydrated, state?.latest, versions])
 
   const chosen = preferredRuntimeVersion(
     selectionExplicit.current ? selected : null,
     versions,
     state?.latest ?? null,
     active,
+    bundled,
   )
   const isActive = chosen !== null && chosen === active
   const cleanupEligible = chosen !== null
@@ -1277,9 +1294,8 @@ export function DshRuntimeSection({
                 <option key={entry.version} value={entry.version}>
                   v{entry.version}
                   {entry.version === active ? ` · ${t('current')}` : ''}
-                  {entry.latest ? ` · ${t('dshRuntimeLatestTag')}` : ''}
+                  {entry.version === bundled ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
                   {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
-                  {entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
                 </option>
               ))}
           </select>

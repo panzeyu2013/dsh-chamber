@@ -69,6 +69,10 @@
   契约见 `docs/design/18-dsh-runtime-version.md` §3.6/§9。2026-09 修订：settings
   「dsh 运行时」段仅 local/gateway 挂载——dsh 本体（ssh/http）直连不挂载（原
   ssh 只读版本 + systemd 重启分支已移除，远端重启经 connections 卡服务操作触达）。
+  2026-10 修订（决策 11）：版本选择器默认选中**当前激活版本**（默认无 override
+  态即内建版本），列表 = 当前版本置顶 + 纯 semver 降序（`dist-tags.latest`
+  不再钉位/推荐），内建行加「内建」后缀，不再显示「推荐」与「可能无法启动」
+  后缀；`latest`/`belowBaseline` 数据标记仍投影、仅不展示。
 - **apply-now 立即应用（18 增补，2026-03）**：pending 相位新增用户触发的
   「立即应用」（复用既有激活事务与 restartLocal 停机窗口，零新终态、零新崩溃
   窗口）。契约见 `docs/design/18-addendum-apply-now.md`。**剩余验收（§9.2
