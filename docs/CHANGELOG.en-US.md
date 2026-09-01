@@ -87,6 +87,27 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   each instance's plugin-management dialog. The diagnostic pure helpers
   (state → text/tone) are extracted into a testable module with unit tests.
 
+### Added
+
+- **Plugin inventory view for gateway / http-direct connections** — gateway
+  targets (both transports) and dsh+http direct endpoints have no SSH exec
+  plugin surface (the desktop `findRemoteTarget` refuses `kind !== 'dsh'`,
+  design 17 §9.3), so their connection cards now open a **read-only plugin
+  inventory view**: the local side reads the desktop's own profile manifest
+  (the same `localPluginList` IPC the SSH dialog reads), the remote side
+  reads the managed instance's live Loader state through the per-instance
+  proxy (`/api/i/<sourceId>/api/pluginInventory/list` — chamber host
+  injection state + loaded third-party plugins; `@deepseek-ai/*` and the two
+  chamber host packages are never third-party rows). The view is the
+  read-only read side of the desktop→gateway `/chamber/plugins` auto-sync
+  loop (the desktop main process syncs the chamber host packages at every
+  ready registration — version-match skip, controlled restart on change);
+  third-party plugin install/manage stays server-side. Strict envelope
+  validation and a bounded timeout: read failures fail loud with a retry,
+  never a silent empty list; the full chain (desktop proxy → gateway
+  auth/dispatch → gateway proxy + spawn browser cookie → managed host) is
+  locked by a gateway regression test.
+
 ## [0.2.0-beta.5] - 2026-09-01
 
 > Aggregates the full 0.2.0-beta.1 → beta.4 line

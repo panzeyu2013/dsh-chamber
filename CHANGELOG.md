@@ -63,6 +63,21 @@
   不再显示插件 id 与原因），完整详情（状态 + 插件 id + 原因）移到每实例的插件
   管理弹窗顶部；诊断纯函数（状态 → 文案/色调）抽出为可测模块并补齐单元测试。
 
+### 新增
+
+- **连接页插件清单视图（gateway / http 直连目标）** —— gateway（两种传输）与
+  dsh+http 直连目标没有 SSH exec 插件面（desktop `findRemoteTarget` 拒绝
+  `kind !== 'dsh'`，设计 17 §9.3），连接卡片对这类目标新增**只读插件清单视图**：
+  本地侧读桌面自身 profile 清单（同一 `localPluginList` IPC，与 SSH 同步对话框
+  同源），远端侧经实例代理 `/api/i/<sourceId>/api/pluginInventory/list` 读托管
+  实例宿主自己的 Live Loader 状态（chamber 两包注入状态 + 已装载第三方插件；
+  `@deepseek-ai/*` 与 chamber 两宿主包不计第三方）。该视图是桌面→gateway
+  `/chamber/plugins` 自动同步闭环的只读读面（chamber 内建组件由桌面主进程在
+  每次 ready 注册时同步，版本匹配跳过、变更请求受控重启）；第三方插件装/卸
+  仍在服务器侧 dsh 进行。严格信封校验 + 有界超时：读取失败响亮报错、可重试，
+  绝不静默空列表；全链路（桌面代理 → gateway auth/dispatch → gateway 代理 +
+  spawn 浏览器 cookie → 托管宿主）由 gateway 回归测试锁定。
+
 ## [0.2.0-beta.5] - 2026-09-01
 
 > 聚合 0.2.0-beta.1 → beta.4 的全部迭代（桌面连接管理器 + 认证
