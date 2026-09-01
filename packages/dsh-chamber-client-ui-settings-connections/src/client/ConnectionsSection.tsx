@@ -85,7 +85,7 @@ export interface ConnectionsSectionInjected {
  * plugin-setting fact.
  */
 export interface PluginDiagnostic {
-  state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
+  state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required' | 'instance-version-conflict'
   message?: string
   pluginId?: string
 }
@@ -178,6 +178,7 @@ function pluginDiagnosticText(state: PluginDiagnostic['state'], t: (key: Setting
     case 'not-injected': return t('pluginDiagnosticNotInjected')
     case 'graph-unreachable': return t('pluginDiagnosticGraphUnreachable')
     case 'bundle-load-failed': return t('pluginDiagnosticBundleFailed')
+    case 'instance-version-conflict': return t('pluginDiagnosticInstanceVersionConflict')
     default: return t('pluginDiagnosticRestartRequired')
   }
 }

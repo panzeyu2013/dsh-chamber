@@ -68,6 +68,11 @@
     **记录缓办**：用户决策不逐个临时 fork（版本漂移 + UI 重复 + AGENTS.md
     可改源码边界扩张），待出现第二个同类特性时一次性建立 patched-copy
     基础设施（共享 base-path helper）再统一处理。
+  - 插件诊断状态联合（`PluginGraphDiagnosticState`，design 09 §3.5）2026-11
+    扩展：新增 `instance-version-conflict`——同 id 异 rev 且首次认领者是**另一
+    实例**（本地与 gateway 实例运行时版本/插件版本漂移）时上报该状态（任何重启
+    无法切换，须对齐实例版本）；同实例异 rev（重建插件）保持 `restart-required`；
+    跨实例同 rev 复用无诊断。settings-bridge ambient 镜像已同步。
 - **dsh 运行时版本管理（设计 18，M5–M7 已落地）**：剩余验证与实现缺口：
   - macOS 打包态实机：真实 `.app` 内共享 `packages/dsh-runtime`、内嵌 pnpm、
     koffi/dsh CLI 与完整激活/故障回退/数据恢复链；Linux server 同款端到端记录；

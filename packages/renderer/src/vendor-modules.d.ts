@@ -344,7 +344,7 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
   export interface InstanceHostReport {
     dshVersion?: string
   }
-  export type PluginGraphDiagnosticState = 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
+  export type PluginGraphDiagnosticState = 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required' | 'instance-version-conflict'
   export interface PluginGraphDiagnostic {
     state: PluginGraphDiagnosticState
     message?: string

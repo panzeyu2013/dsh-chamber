@@ -77,6 +77,11 @@ export type PluginGraphDiagnosticState =
   | 'graph-unreachable'
   | 'bundle-load-failed'
   | 'restart-required'
+  /** Cross-instance dsh runtime version drift (design 09 §3.5): the same
+   *  plugin id was first claimed on this page by a DIFFERENT instance at
+   *  another rev — no app restart can switch it, the instances' dsh runtime
+   *  versions must be aligned instead. */
+  | 'instance-version-conflict'
 
 export interface PluginGraphDiagnostic {
   state: PluginGraphDiagnosticState

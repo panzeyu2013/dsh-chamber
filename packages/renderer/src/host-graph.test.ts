@@ -447,7 +447,7 @@ test('collectExtraRows: a failing bundle load rejects loud (never degrades)', as
   }
 })
 
-test('collectExtraRows: a cross-instance plugin revision conflict requires restart', async () => {
+test('collectExtraRows: a cross-instance plugin revision conflict reports instance-version-conflict (version drift, not a restart)', async () => {
   const id = '@scope/revision-conflict-test'
   let stub = stubFetch(200, envelope([row(id, { rev: 'rev-one' })]))
   try {
@@ -457,13 +457,111 @@ test('collectExtraRows: a cross-instance plugin revision conflict requires resta
   }
   stub = stubFetch(200, envelope([row(id, { rev: 'rev-two' })]))
   try {
-    let diagnostic: { state: string; pluginId?: string } | undefined
+    let diagnostic: { state: string; pluginId?: string; message?: string } | undefined
     await collectExtraRows('revision-source-two', '/api/i/ssh-two', {
       loadModuleBundle: async () => {},
       reportDiagnostic: (_sourceId, next) => { diagnostic = next },
     })
-    assert.equal(diagnostic?.state, 'restart-required')
+    // A DIFFERENT instance owns the id at another rev: no app restart can
+    // switch the loaded factory — the honest diagnostic names the owner
+    // instance and the drift instead of the misleading restart-required copy.
+    assert.equal(diagnostic?.state, 'instance-version-conflict')
     assert.equal(diagnostic?.pluginId, id)
+    assert.match(diagnostic?.message ?? '', /实例间 .*插件版本不同/)
+    assert.match(diagnostic?.message ?? '', /已使用实例 revision-source-one 先加载的版本/)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: same id across instances at the SAME rev reuses without any conflict', async () => {
+  const id = '@scope/cross-instance-same-rev'
+  let stub = stubFetch(200, envelope([row(id, { rev: 'rev-one' })]))
+  try {
+    await collectExtraRows('same-rev-source-one', '/api/i/one', { loadModuleBundle: async () => {} })
+  } finally {
+    stub.restore()
+  }
+  stub = stubFetch(200, envelope([row(id, { rev: 'rev-one' })]))
+  try {
+    let diagnostic: { state: string } | undefined
+    const rows = await collectExtraRows('same-rev-source-two', '/api/i/two', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
+    // Same id + same rev = the same factory, whatever instance proxy it was
+    // fetched through (module table is page-level): reuse, no conflict.
+    assert.equal(rows.length, 1)
+    assert.equal(diagnostic?.state, 'ok')
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: versionConflict outranks restartConflict within one boot', async () => {
+  const driftId = '@scope/dual-drift'
+  const rebuiltId = '@scope/dual-rebuilt'
+  // Boot 1: a DIFFERENT instance ('dual-other') claims driftId.
+  let stub = stubFetch(200, envelope([row(driftId, { rev: 'drift-one' })]))
+  try {
+    await collectExtraRows('dual-other', '/api/i/other', { loadModuleBundle: async () => {} })
+  } finally {
+    stub.restore()
+  }
+  // Boot 2: 'dual-owner' claims rebuiltId.
+  stub = stubFetch(200, envelope([row(rebuiltId, { rev: 'rebuild-one' })]))
+  try {
+    await collectExtraRows('dual-owner', '/api/i/one', { loadModuleBundle: async () => {} })
+  } finally {
+    stub.restore()
+  }
+  // Boot 3 (dual-owner): driftId at a new rev (owner dual-other → version
+  // conflict) AND rebuiltId at a new rev (owner dual-owner itself → restart
+  // conflict) in the same boot.
+  stub = stubFetch(200, envelope([
+    row(driftId, { rev: 'drift-two' }),
+    row(rebuiltId, { rev: 'rebuild-two' }),
+  ]))
+  try {
+    let diagnostic: { state: string; pluginId?: string } | undefined
+    await collectExtraRows('dual-owner', '/api/i/one', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
+    // One boot reports one diagnostic; the cross-instance drift (unfixable by
+    // any restart) outranks the same-instance rebuild (fixable by restart).
+    assert.equal(diagnostic?.state, 'instance-version-conflict')
+    assert.equal(diagnostic?.pluginId, driftId)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: a failed owner preload rolls the id back so ANOTHER instance re-claims and owns it', async () => {
+  const id = '@scope/owner-transfer'
+  let stub = stubFetch(200, envelope([row(id, { rev: 'rev-one' })]))
+  try {
+    // Owner A claims the id but its bundle load fails → clearCombo removes
+    // the id record (owner included) and the boot fails loud.
+    await assert.rejects(
+      collectExtraRows('owner-a', '/api/i/a', { loadModuleBundle: async () => { throw new Error('bundle exploded') } }),
+      /bundle exploded/,
+    )
+  } finally {
+    stub.restore()
+  }
+  // Instance B (a different source) re-preloads the same id at a new rev:
+  // the rollback cleared A's ownership, so B claims it as the owner — no
+  // conflict diagnostic, the merged row surfaces.
+  stub = stubFetch(200, envelope([row(id, { rev: 'rev-two' })]))
+  try {
+    let diagnostic: { state: string } | undefined
+    const rows = await collectExtraRows('owner-b', '/api/i/b', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
+    assert.equal(rows.length, 1)
+    assert.equal(diagnostic?.state, 'ok', 'after A failed, B owns the id: no version-conflict')
   } finally {
     stub.restore()
   }
@@ -499,7 +597,7 @@ test('collectExtraRows: a failed preload is NOT marked — a retry re-triggers t
   }
 })
 
-test('collectExtraRows: same id at a different rev reuses the loaded factory and reports restart-required', async () => {
+test('collectExtraRows: SAME instance id at a different rev reuses the loaded factory and reports restart-required', async () => {
   // Boot 1 preloads revA.
   const stubA = stubFetch(200, envelope([row('@scope/rev-plugin', { rev: 'revA', url: '/plugins/@scope/rev-plugin/client.js?rev=revA' })]))
   const loaded: string[] = []
