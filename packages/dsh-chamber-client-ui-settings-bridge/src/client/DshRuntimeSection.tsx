@@ -283,6 +283,13 @@ function GatewayRuntimeSection({
     remoteStatus?.builtinVersion ?? null,
   )
   const isActiveRemote = chosenRemote !== null && chosenRemote === remoteActive
+  // Direction-aware merged primary action (design 18 §3.6 项 3, gateway
+  // branch): a single button covers both directions — select+apply arms the
+  // next-launch switch and the server's apply route computes the manualRollback
+  // semantics itself for a downgrade target (runtime-manager apply), so the
+  // gateway UI no longer fires the separate rollback route. A null active
+  // version is an install/forward action, never a rollback.
+  const gatewayDirection = runtimeSelectionDirection(chosenRemote, remoteActive)
 
   const envGatedRemote = remoteStatus?.source === 'env'
   // Pure mirror of the server fences: pending permits only restore-builtin;
@@ -337,16 +344,6 @@ function GatewayRuntimeSection({
       setVersionsEpoch((epoch) => epoch + 1)
     })
   }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationDisabled, remoteActive, runRemoteAction])
-
-  const onRollback = useCallback(() => {
-    if (chosenRemote === null || isActiveRemote || mutationDisabled) return
-    void runRemoteAction(async (signal) => {
-      // rollback arms the pending switch itself (pre-rollback stash + snapshot
-      // semantics, design 18 §3.7/§9.3); the switch lands on the next gateway
-      // restart.
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'rollback', version: chosenRemote }, { signal })
-    })
-  }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationDisabled, runRemoteAction])
 
   const onRestoreBuiltin = useCallback(() => {
     if (restoreBuiltinDisabled) return
@@ -630,10 +627,16 @@ function GatewayRuntimeSection({
             onClick={() => { void onApplySelected() }}
             disabled={mutationDisabled || isActiveRemote || chosenRemote === null}
           >
-            {actionBusy ? t('dshRuntimeRemoteApplying') : t('dshRuntimeApplyNextLaunchOnly')}
+            {actionBusy
+              ? t('dshRuntimeRemoteApplying')
+              : `${gatewayDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosenRemote ?? '—'}`}
           </button>
         </div>
       </label>
+
+      {/* The merged primary action installs (if needed) and arms the switch —
+          the next-launch semantics the button label no longer spells out. */}
+      <p className={css.generalHint}>{t('dshRuntimeApplyNextLaunchHint')}</p>
 
       {versionsError !== null && (
         <p className={css.generalError} role="alert">
@@ -654,16 +657,6 @@ function GatewayRuntimeSection({
             disabled={remoteGates.applyNowDisabled}
           >
             {t('dshRuntimeApplyNowAction')}
-          </button>
-        )}
-        {!isActiveRemote && chosenRemote !== null && (
-          <button
-            type="button"
-            className={css.updateButton}
-            onClick={() => { void onRollback() }}
-            disabled={mutationDisabled}
-          >
-            {t('dshRuntimeActionRollback')} v{chosenRemote}
           </button>
         )}
         <button
@@ -1306,7 +1299,11 @@ export function DshRuntimeSection({
               onClick={onInstall}
               disabled={mutationDisabled || isActive || chosen === null}
             >
-              {selectionDirection === 'rollback' ? t('dshRuntimeActionRollback') : t('dshRuntimeActionUpdate')} v{chosen ?? '—'}
+              {/* Unified direction-aware copy (2026-11 review): the downgrade
+                  action is a version SWITCH like any other — 切换到/更新到,
+                  never 回滚到 (the data-restore semantics are decided
+                  server-side by the direction formula, not by the label). */}
+              {selectionDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v{chosen ?? '—'}
             </button>
           )}
           {canCleanup && chosen !== null && (

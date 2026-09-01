@@ -121,6 +121,13 @@ export interface GatewayWorktree {
   createdAt: number
 }
 
+/**
+ * Injected fetch contract: the implementation MUST be invoked as a plain
+ * function (`fetchImpl(url, init)`), never as a method of this api instance
+ * (`this.fetchImpl(...)`). WebIDL-branded fetch (browser/Blink) rejects any
+ * non-Window receiver with "Illegal invocation"; the plain-call receiver is
+ * `undefined`, which the binding accepts. See `request()`.
+ */
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -323,7 +330,11 @@ export class GatewayOrchestrationApi {
     const hasBody = init.body !== undefined
     let response: Response
     try {
-      response = await this.fetchImpl(`${this.basePath}${path}`, {
+      // Call the injected fetch as a plain function, never as a member of this
+      // api instance: WebIDL-branded fetch (browser/Blink) rejects any
+      // non-Window receiver with "Illegal invocation".
+      const fetchImpl = this.fetchImpl
+      response = await fetchImpl(`${this.basePath}${path}`, {
         method: init.method ?? 'GET',
         headers: {
           accept: 'application/json',

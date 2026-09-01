@@ -17,6 +17,7 @@ import type { GatewayConfig } from '../src/config.ts'
 import { createGatewayRuntimeManager, readBuiltinVersion } from '../src/runtime-manager.ts'
 import {
   REQUIRED_ACTIVATION_PROBES,
+  clearActivationJournal,
   listKnownGoodVersions,
   readActivationJournalState,
   readCurrentPointer,
@@ -2860,6 +2861,9 @@ test('rollback pending cannot be silently superseded by re-select/apply', async 
   try {
     makeValidTree(stateDir, '1.0.0')
     makeValidTree(stateDir, '2.0.0')
+    // v2 active, rollback to installed v1 = a real downgrade (the rollback
+    // direction guard refuses calls without an active pointer).
+    writeCurrentPointer(stateDir, '2.0.0')
     const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
     // Rollback to 1.0.0 writes an intent journal targeting 1.0.0.
     await manager.rollback('1.0.0')
@@ -2921,6 +2925,140 @@ test('real manager: retry-apply/retry-restore refuse without a matching blocked 
     assert.equal(snapshotRetry.accepted, true)
     assert.equal(snapshotRetry.blockedReason, null)
     await assert.rejects(manager.retryApply(), /no interrupted apply to retry/)
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('rollback direction guard: only an installed version OLDER than the active runtime is accepted (fail-loud otherwise)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-rollback-direction-'))
+  try {
+    // The fixture anchor exposes builtin v0.9.0 (TEST_BUILTIN_VERSION), so the
+    // EFFECTIVE active version is pointer ?? builtin — the same formula the
+    // guard, apply() and applyNowPreflight() use (desktop activeVersion()
+    // parity): a builtin-active downgrade to an installed tree is a real
+    // manual rollback and stays accepted.
+    makeValidTree(stateDir, '0.8.0')
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    makeValidTree(stateDir, '3.0.0')
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const directionRefusal = (error: unknown): boolean =>
+      (error as { code?: string }).code === 'invalid_target'
+      && /not older than the active runtime/.test((error as Error).message)
+
+    // Builtin authority (no pointer, effective active v0.9.0): trees NEWER
+    // than the builtin are refusals (select+apply is the switch path); an
+    // installed tree OLDER than the builtin is a genuine downgrade and is
+    // accepted with full manualRollback semantics.
+    await assert.rejects(manager.rollback('1.0.0'), directionRefusal,
+      'a target newer than the builtin-active runtime is not a rollback')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'a refused rollback writes no journal')
+    assert.equal(readOverride(stateDir), null, 'a refused rollback arms no override')
+    const builtinDowngrade = await manager.rollback('0.8.0')
+    assert.equal(builtinDowngrade.accepted, true)
+    let journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.manualRollback, true,
+        'a builtin-active downgrade keeps the data-restore semantics (effective-version formula)')
+      assert.equal(journal.journal.targetVersion, '0.8.0')
+    }
+    assert.equal(readOverride(stateDir)?.pending, '0.8.0')
+    // Reset the armed pending before the pointer cases below.
+    clearActivationJournal(stateDir)
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion,
+      chosenVersion: null,
+      resolvedVersion: null,
+      pending: null,
+      swapAttempted: false,
+    })
+
+    // Active v2 (pointer): same-as-active and newer installed targets are
+    // refusals; older targets (including older than the builtin) are accepted.
+    writeCurrentPointer(stateDir, '2.0.0')
+    await assert.rejects(manager.rollback('2.0.0'), directionRefusal, 'rollback to the active version is a no-op, not a rollback')
+    await assert.rejects(manager.rollback('3.0.0'), directionRefusal,
+      'an upgrade-direction rollback must be refused (select+apply is the upgrade path)')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'refused upgrades still write no journal')
+
+    // Active v2, installed v1: a genuine downgrade is accepted and armed as a
+    // manualRollback, exactly like apply()'s formula.
+    const accepted = await manager.rollback('1.0.0')
+    assert.equal(accepted.accepted, true)
+    journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.manualRollback, true)
+      assert.equal(journal.journal.targetVersion, '1.0.0')
+      assert.equal(journal.journal.intentKind, 'version-switch')
+    }
+    assert.equal(readOverride(stateDir)?.pending, '1.0.0')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('apply() journals manualRollback for staged downgrades (pointer and builtin-active cases)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-apply-downgrade-'))
+  try {
+    makeValidTree(stateDir, '0.8.0')
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    makeValidTree(stateDir, '3.0.0')
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const reset = (): void => {
+      clearActivationJournal(stateDir)
+      writeOverride(stateDir, {
+        shellVersion: gatewayPackageVersion,
+        chosenVersion: null,
+        resolvedVersion: null,
+        pending: null,
+        swapAttempted: false,
+      })
+    }
+
+    // Builtin authority (no pointer, effective active v0.9.0): a staged
+    // downgrade to 0.8.0 arms a manualRollback intent on apply().
+    await manager.select('0.8.0')
+    let result = await manager.apply()
+    assert.equal(result.pending, true)
+    let journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.manualRollback, true, 'builtin-active staged downgrade keeps data-restore semantics')
+      assert.equal(journal.journal.targetVersion, '0.8.0')
+    }
+    assert.equal(readOverride(stateDir)?.pending, '0.8.0')
+    reset()
+
+    // Pointer v2 active: a staged downgrade to 1.0.0 arms manualRollback.
+    writeCurrentPointer(stateDir, '2.0.0')
+    await manager.select('1.0.0')
+    result = await manager.apply()
+    assert.equal(result.pending, true)
+    journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.manualRollback, true, 'pointer-active staged downgrade arms a manual rollback')
+      assert.equal(journal.journal.targetVersion, '1.0.0')
+    }
+    assert.equal(readOverride(stateDir)?.pending, '1.0.0')
+    reset()
+
+    // Pointer v2 active: a staged UPGRADE to 3.0.0 is a plain switch
+    // (manualRollback=false — data-restore semantics are downgrade-only).
+    await manager.select('3.0.0')
+    result = await manager.apply()
+    assert.equal(result.pending, true)
+    journal = readActivationJournalState(stateDir)
+    assert.equal(journal.kind, 'valid')
+    if (journal.kind === 'valid') {
+      assert.equal(journal.journal.manualRollback, false, 'an upgrade never arms data-restore semantics')
+      assert.equal(journal.journal.targetVersion, '3.0.0')
+    }
+    assert.equal(readOverride(stateDir)?.pending, '3.0.0')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

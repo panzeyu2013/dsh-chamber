@@ -24,12 +24,14 @@
  * EEXIST instead of racing a read-check-write window.
  */
 import {
+  existsSync,
   readFileSync,
   readdirSync,
 } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { createRequire as nodeCreateRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
 import {
   bindRuntimeInstallResolution,
@@ -576,11 +578,22 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   const pnpmEntry = (): string => {
-    // pnpm is a real runtime dependency of @dsh-chamber/gateway; resolve from
-    // the gateway package root (pnpm itself has no install scripts). NOTE:
-    // pnpm's package.json `exports` hides `./bin/pnpm.cjs` (subpath not
-    // exported — ERR_PACKAGE_PATH_NOT_EXPORTED), so resolve the package entry
-    // (…/pnpm/package.json) and join the bin path by hand.
+    // Bundled shape first (design 18 §9.2 D1): the installer's local
+    // (default) path unpacks the gateway tarball and NEVER installs gateway
+    // dependencies, so `gatewayRequire.resolve('pnpm')` below cannot hit a
+    // real node_modules tree there. scripts/build.mjs copies the pinned pnpm
+    // into dist/pnpm (dereferenced); prefer it whenever the build carried it
+    // (desktop parity: extraResources). NOTE: dist/pnpm sits next to this
+    // bundled module, so derive the path with fileURLToPath — path.dirname
+    // over a file:// URL would mangle the path.
+    const bundledPnpm = join(dirname(fileURLToPath(import.meta.url)), 'pnpm', 'bin', 'pnpm.cjs')
+    if (existsSync(bundledPnpm)) return bundledPnpm
+    // Dev / npm-installed shape: pnpm is a real runtime dependency of
+    // @dsh-chamber/gateway; resolve from the gateway package root (pnpm itself
+    // has no install scripts). NOTE: pnpm's package.json `exports` hides
+    // `./bin/pnpm.cjs` (subpath not exported — ERR_PACKAGE_PATH_NOT_EXPORTED),
+    // so resolve the package entry (…/pnpm/package.json) and join the bin path
+    // by hand.
     return join(dirname(gatewayRequire.resolve('pnpm')), 'bin', 'pnpm.cjs')
   }
 
@@ -1472,7 +1485,12 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // FATAL-block the next boot on journal-mismatch. writeActivationIntent
     // replaces intent-phase journals and queues onto applied-monitoring ones
     // (desktop parity); an in-flight transaction refuses honestly (409).
-    const current = currentPointerVersion()
+    // The downgrade formula uses the EFFECTIVE active version (pointer ??
+    // builtin anchor), exactly like the desktop controller's activeVersion():
+    // a builtin-active downgrade is still a real data rollback (manualRollback
+    // arms the pre-rollback stash + target-data restore, design 18 §3.7), not
+    // a plain switch. The raw pointer would silently narrow that semantic.
+    const current = currentPointerVersion() ?? builtinVersion
     try {
       writeActivationIntent(baseDir, {
         targetVersion: record.chosenVersion,
@@ -1507,6 +1525,27 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
     if (!listValidVersionTrees(baseDir).includes(version)) {
       throw Object.assign(new Error(`no valid version tree for ${version}`), { code: 'invalid_target' })
+    }
+    // Direction guard (fail-loud): rollback is the DOWNGRADE path only — a
+    // same-as-active or newer target is select+apply's job, and accepting it
+    // here would journal a manualRollback intent with upgrade semantics (the
+    // UI regression this guard closes: the API/dashboard misusing rollback for
+    // an upgrade). The comparison uses the EFFECTIVE active version (pointer
+    // ?? builtin anchor), the same formula as apply()/applyNowPreflight() and
+    // the desktop controller's activeVersion(): a builtin-active downgrade to
+    // an installed tree is a legitimate manual rollback (data restore, design
+    // 18 §3.7) and stays accepted. `current === null` (no pointer AND no
+    // readable builtin version — a broken anchor) is refused: there is no
+    // active version to be older than, and switching to an installed tree is
+    // a plain select+apply.
+    const current = currentPointerVersion() ?? builtinVersion
+    if (current === null || compareRuntimeVersions(version, current) !== -1) {
+      throw Object.assign(
+        new Error(current === null
+          ? 'rollback requires an active installed runtime version to roll back from; use select+apply to switch'
+          : `rollback target is not older than the active runtime (v${current}); use select+apply to switch to a newer version`),
+        { code: 'invalid_target' },
+      )
     }
     // Manual rollback (design 18 §3.7): journal a manualRollback intent and
     // arm the pending switch — the startup transaction's prepareManualRollback
@@ -1727,7 +1766,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // applied-monitoring journal WITH nextIntent needs no special case: its
     // nextIntent arms a pending that differs from current, so target !==
     // current above and the transaction proceeds naturally.
-    const current = currentPointerVersion()
+    // Effective active version (pointer ?? builtin anchor) — same formula as
+    // apply()/rollback() and the desktop controller: a builtin-active staged
+    // downgrade arms a real manualRollback below, not a plain switch.
+    const current = currentPointerVersion() ?? builtinVersion
     if (target === current) {
       const journal = readActivationJournalState(baseDir)
       if (journal.kind === 'missing'

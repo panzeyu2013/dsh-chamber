@@ -2654,14 +2654,6 @@ function buildVersionList(meta, opts) {
   }
   for (const version of cached) candidates.add(version);
   const rest = [...candidates].filter((v) => !emitted.has(v)).sort(semverCompareDesc);
-  if (meta.latest !== null && EXACT_SEMVER.test(meta.latest) && !emitted.has(meta.latest)) {
-    const latestIndex = rest.indexOf(meta.latest);
-    if (latestIndex !== -1) {
-      entries.push(makeEntry(meta.latest));
-      emitted.add(meta.latest);
-      rest.splice(latestIndex, 1);
-    }
-  }
   for (const v of rest) {
     if (emitted.has(v)) continue;
     emitted.add(v);

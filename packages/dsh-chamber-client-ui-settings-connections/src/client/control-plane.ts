@@ -1,6 +1,8 @@
 /**
  * Control-plane REST client for the connections section (design 04 §3 /
- * 05 §7.2): /health, /api/connections (the single local row), /api/host/logs.
+ * 05 §7.2): /health, /api/connections (the single local row), /api/host/logs
+ * — plus the per-instance-proxy gateway host-logs endpoint (design 17 §9.3:
+ * /api/i/gateway-<id>/api/host/logs, same control-plane host-logs shape).
  *
  * The REST transport + wire shapes are the SINGLE shared copy in the chamber
  * sidebar package (shared/control-plane-client.ts — B2 convergence): both
@@ -69,6 +71,23 @@ export const cp = {
     if (typeof limit === 'number' && Number.isFinite(limit)) params.push(`limit=${limit}`)
     if (typeof offset === 'number' && Number.isFinite(offset)) params.push(`offset=${offset}`)
     return request(params.length === 0 ? '/api/host/logs' : `/api/host/logs?${params.join('&')}`)
+  },
+
+  /** GET /api/i/gateway-<id>/api/host/logs?limit=&offset= → the GATEWAY's own
+   *  control-plane host logs (design 17 §9.3 / 03 §3): the desktop control
+   *  plane strips the /api/i/gateway-<id> prefix and forwards /api/host/logs
+   *  to the gateway (injecting its sanctioned Authorization/Cookie headers at
+   *  forward time — the renderer never holds the token); the gateway's
+   *  dispatch claims /api/host/* for its OWN api.handle, so the response is
+   *  the same control-plane host-logs shape ({port, lines, truncated}) the
+   *  local card parses — the managed dsh spawn logs of the gateway's
+   *  stateDir. */
+  gatewayHostLogs: (id: string, limit?: number, offset?: number): Promise<HostLogsResponse> => {
+    const params: string[] = []
+    if (typeof limit === 'number' && Number.isFinite(limit)) params.push(`limit=${limit}`)
+    if (typeof offset === 'number' && Number.isFinite(offset)) params.push(`offset=${offset}`)
+    const query = params.length === 0 ? '' : `?${params.join('&')}`
+    return request(`/api/i/gateway-${id}/api/host/logs${query}`)
   },
 }
 

@@ -265,7 +265,9 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  * records which combo registered each id, so a LATER instance carrying the
  * same id at a NEWER rev cannot re-execute a second factory for it
  * (duplicate-registration sink) — that case reuses the loaded factory and
- * reports restart-required instead. A row that reappears at the same rev is
+ * reports the honest diagnostic (restart-required for a rebuilt plugin on
+ * the owning instance, instance-version-conflict for cross-instance dsh
+ * runtime version drift — see below). A row that reappears at the same rev is
  * already covered by the shared load, whatever instance proxy its url was
  * fetched through (the module table is page-level).
  *
@@ -287,7 +289,13 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  * First-load-wins (union-table model, design 09 §3.2): the combo that first
  * executed a factory owns the id forever; a later instance carrying the id at
  * a newer rev (a rebuilt plugin → different script) reuses the loaded factory
- * but gets an explicit restart-required diagnostic.
+ * but gets an explicit diagnostic. The diagnostic distinguishes WHO owns the
+ * id: the same instance at a newer rev (a rebuilt plugin, fixed by a restart
+ * of that instance) reports restart-required; a DIFFERENT instance at a
+ * newer rev (cross-instance dsh runtime version drift — the two hosts serve
+ * the same plugin from different dsh runtimes) cannot be fixed by any
+ * restart and reports instance-version-conflict instead (honest copy over
+ * the misleading "restart the app to switch").
  */
 interface PreloadedCombo {
   /** The ids whose factories this combo script registers (failure rollback set). */
@@ -298,12 +306,18 @@ interface PreloadedCombo {
 const preloadedCombos = new Map<string, PreloadedCombo>()
 
 /** The combo record whose script registered one id's factory, plus the row
- *  rev it was seen at (restart-conflict + failure rollback). The combo
- *  reference is held (not a promise snapshot) so a late-success conversion of
- *  the shared load is observed by later boots. */
+ *  rev it was seen at (restart-conflict + failure rollback) and the instance
+ *  that first claimed the id on this page (ownerSourceId — the first-load-
+ *  wins owner; a LATER instance at a different rev is a cross-instance dsh
+ *  runtime version drift when the owner is a different instance, vs. a
+ *  restart-fixable rebuilt plugin when the owner is this same instance). The
+ *  combo reference is held (not a promise snapshot) so a late-success
+ *  conversion of the shared load is observed by later boots. */
 interface PreloadedIdRecord {
   rev: string
   combo: PreloadedCombo
+  /** Instance id that first claimed this id on this page (page-level map). */
+  ownerSourceId: string
 }
 
 const preloadedIds = new Map<string, PreloadedIdRecord>()
@@ -417,22 +431,31 @@ export async function collectExtraRows(
   if (entries === null) return []
   const rows = toExtraRows(dedupeHostEntries(entries, CHAMBER_COVERED_IDS), basePath)
   let restartConflict: ExtraModuleRow | undefined
+  let versionConflict: ExtraModuleRow | undefined
   await Promise.all(rows.map(async (row) => {
     // A script already executed a factory for this id (the id's combo record
     // is published at preload). A DIFFERENT rev (the combo query carries the
     // rev, so a newer plugin revision means a different script) cannot swap
     // the loaded factory without a restart: re-executing a second bundle for
     // the same id would hit the duplicate-registration sink. Reuse the loaded
-    // factory and report restart-required; the merged row still surfaces.
+    // factory and report the honest diagnostic; the merged row still surfaces.
     // NOTE: the shared module table is PAGE-level, so the id's factory — and
     // the original load — is shared across every instance; the per-instance
     // basePath prefix in `row.url` must NOT be treated as a different script
     // (same id + same rev = same factory, whatever instance proxy it was
     // fetched through).
+    // The diagnostic distinguishes the owner (design 09 §3.5): a rebuilt
+    // plugin on THIS same instance (ownerSourceId === instanceId) is fixed by
+    // restarting that instance → restart-required; a DIFFERENT instance
+    // serving the same plugin from another dsh runtime version is a
+    // cross-instance version drift that no restart can fix →
+    // instance-version-conflict (restarting the app would only re-run the
+    // same first-load-wins claim).
     const owned = preloadedIds.get(row.id)
     if (owned !== undefined) {
       if (owned.rev !== row.rev) {
-        restartConflict ??= row
+        if (owned.ownerSourceId !== instanceId) versionConflict ??= row
+        else restartConflict ??= row
         return
       }
       // Await the ORIGINAL load (read live off the combo record): a
@@ -465,7 +488,7 @@ export async function collectExtraRows(
     // multi-id combo: rows sharing one url await ONE load (each combo script
     // registers every id its query names).
     combo.ids.add(row.id)
-    preloadedIds.set(row.id, { rev: row.rev, combo })
+    preloadedIds.set(row.id, { rev: row.rev, combo, ownerSourceId: instanceId })
     try {
       await combo.load
     } catch (error) {
@@ -501,7 +524,21 @@ export async function collectExtraRows(
       throw error
     }
   }))
-  if (restartConflict !== undefined) {
+  if (versionConflict !== undefined) {
+    // Cross-instance plugin version drift (design 09 §3.5): a different
+    // instance first claimed this id at another rev — the page keeps the
+    // first-load-wins factory, and NO restart of the app can switch it
+    // (the same first-load-wins claim would re-run). The honest copy names
+    // the actual fix: align the two instances' dsh runtimes (or their
+    // installed plugin versions — the rev is a bundle content hash, so
+    // either source can produce the drift), after which the plugin revs
+    // match and the diagnostic disappears.
+    const ownerSourceId = preloadedIds.get(versionConflict.id)?.ownerSourceId ?? '—'
+    reportDiagnostic(instanceId, 'instance-version-conflict', {
+      pluginId: versionConflict.id,
+      message: `实例间 ${versionConflict.id} 插件版本不同：已使用实例 ${ownerSourceId} 先加载的版本；对齐两个实例的 dsh 运行时（或插件）版本后可切换`,
+    }, deps.reportDiagnostic)
+  } else if (restartConflict !== undefined) {
     reportDiagnostic(instanceId, 'restart-required', {
       pluginId: restartConflict.id,
       message: `页面已加载 ${restartConflict.id} 的另一版本，重启应用后才能切换`,

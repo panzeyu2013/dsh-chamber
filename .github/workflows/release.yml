@@ -374,6 +374,25 @@ jobs:
           pnpm --filter @dsh-chamber/gateway pack --pack-destination packages/gateway/release
           npm install --ignore-scripts --prefix /tmp/dsh-gateway-install packages/gateway/release/*.tgz
           /tmp/dsh-gateway-install/node_modules/.bin/gateway --help
+      - name: Assert the packed gateway tarball carries the bundled pnpm
+        # The installer local (default) path unpacks the tarball and never
+        # installs gateway dependencies — dist/pnpm IS the runtime pnpm there
+        # (design 18 §9.2 D1; scripts/build.mjs bundles it). A pack missing it
+        # would boot with "Cannot find module 'pnpm'" on every local install.
+        run: |
+          set -euo pipefail
+          TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
+          test -n "$TGZ"
+          tar -tzf "$TGZ" | grep -q 'package/dist/pnpm/bin/pnpm.cjs'
+      - name: Smoke the bundled pnpm from a bare unpack (installer local shape, no npm install)
+        run: |
+          set -euo pipefail
+          TGZ=$(find packages/gateway/release -maxdepth 1 -type f -name '*.tgz' -print -quit)
+          test -n "$TGZ"
+          rm -rf /tmp/dsh-gateway-bare
+          mkdir -p /tmp/dsh-gateway-bare
+          tar --strip-components=1 -xzf "$TGZ" -C /tmp/dsh-gateway-bare
+          node /tmp/dsh-gateway-bare/dist/pnpm/bin/pnpm.cjs --version
       - name: Write gateway package sha256 (installer verification asset)
         run: |
           set -euo pipefail

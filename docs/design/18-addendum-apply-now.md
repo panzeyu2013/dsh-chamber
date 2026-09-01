@@ -10,7 +10,7 @@
 
 | # | 决策 | 结论 |
 |---|---|---|
-| D1 | 保留「仅下次启动」路径 | 双动作并存。desktop 天然单按钮（install 即置 pending，pending 行内新增主按钮 [立即应用]）；gateway 双动作（[仅下次启动] 置 pending + [立即应用]，运维窗口语义） |
+| D1 | 保留「仅下次启动」路径 | 双动作并存。desktop 天然单按钮（install 即置 pending，pending 行内新增主按钮 [立即应用]）；gateway 双动作（[仅下次启动] 置 pending + [立即应用]，运维窗口语义）。**2026-11 修订**：gateway 设置区段合并为单一方向感知按钮（更新到/切换到 vX，select+apply），「仅下次启动」语义由按钮下 hint 保留；pending 期 [立即应用] 不变 |
 | D2 | apply-now 候选 respawn 不计共享 restart 背压窗口（M=5/10min） | 不计入（候选 spawn 走 plane.startLocal()/startImpl，非 restartLocal；`restartTimes` 只在 `triggerRestart` 累计、`stop()`/`start()` 清空——机制已证实，由测试钉死）。回退落内建后的 crash-loop 走既有 restart-exhausted 语义（F7 仅 `state.source==='user'` 触发） |
 | D3 | 探针窗口内 gateway 单目标 proxy 转发到候选 | **修复（必做）**：gateway-proxy.ts `resolveTarget`/`handleUpgrade` 增加激活感知门（`canExposeLocal` 谓词，与 instance-proxy.ts:344 对齐）。该暴露在启动路径与 restore-builtin 同样存在，修复一并覆盖，零增量成本 |
 | D4 | 是否需要 runtime SSE | MVP 不做，维持 status 轮询（~3s）；SSE 登记为可选增强 |
@@ -147,11 +147,11 @@ promise 后才释放 owner/state lock——apply-now 在途收到 stop → journ
 - 二次确认对话框（desktop 原生 `confirmRuntimeMutation`；gateway settings-bridge 走 UI `window.confirm`，浏览器页为服务端动作无确认）：
   - zh 标题：立即切换到 v{version}？正文：dsh 将立即重启并切换到 v{version}（约 30–90 秒）。进行中的会话会中断，你的数据不受影响；若切换失败，dsh 会自动回滚并保留现场。确认/取消：立即应用并重启 / 取消。
   - en：Switch to v{version} now? / dsh will restart immediately and switch to v{version} (about 30–90 seconds). In-progress sessions will be interrupted; your data is unaffected. If the switch fails, dsh rolls back automatically and retains the recovery state. / Apply and restart / Cancel.
-- 按钮/hint：pending 主按钮「立即应用 v{version} / Apply now v{version}」；pending hint 注明「切换将在下次启动生效；如需立即生效，点击『立即应用』（dsh 会短暂重启，约 30–90 秒）」；applying 窗口状态行「应用 dsh v{version}… 正在重启 / Applying dsh v{version}… restarting」；gateway 现有 [应用] 改名「仅下次启动 / Next launch only」。
+- 按钮/hint：pending 主按钮「立即应用 v{version} / Apply now v{version}」；pending hint 注明「切换将在下次启动生效；如需立即生效，点击『立即应用』（dsh 会短暂重启，约 30–90 秒）」；applying 窗口状态行「应用 dsh v{version}… 正在重启 / Applying dsh v{version}… restarting」。**2026-11 修订（方向感知合并按钮）**：gateway 设置区段的「仅下次启动」按钮已与独立「回滚到」按钮合并为单一方向感知主按钮——升级「更新到 vX / Update to vX」、降级「切换到 vX / Switch to vX」（`dshRuntimeActionUpdate`/`dshRuntimeActionSwitch`），执行 select+apply（apply 服务端按方向计算 manualRollback，与 desktop install 同构）；按钮下 hint（`dshRuntimeApplyNextLaunchHint`）保留「下次启动生效」语义。desktop 本地区段同步采用 更新到/切换到 文案。
 - 口径：30–90 秒取就绪窗口；诚实注明探针可能延长（≤60s + 延迟裁决）。
 
 ### 6.4 i18n 新增 key（命名空间 dsh-chamber.settings.bridge，locales.ts：zh 为 key 集源、en 为 Record<keyof typeof zh>）
-dshRuntimeApplyNowAction / dshRuntimeApplyNowActionWithVersion / dshRuntimeApplyNowConfirmTitle / dshRuntimeApplyNowConfirmBody / dshRuntimeApplyNowConfirmAction / dshRuntimeApplyNowHint / dshRuntimeStatusApplyingNow / dshRuntimeApplyNextLaunchOnly（8 个）。注：`dshRuntimeApplyNowConfirmAction` 由 desktop 原生对话框以硬编码中文交付（main 进程无 i18n，与全部既有原生对话框一致），i18n key 保留为契约占位。/chamber/ 浏览器页（§5.5）硬编码英文，不属 i18n 面。
+dshRuntimeApplyNowAction / dshRuntimeApplyNowActionWithVersion / dshRuntimeApplyNowConfirmTitle / dshRuntimeApplyNowConfirmBody / dshRuntimeApplyNowConfirmAction / dshRuntimeApplyNowHint / dshRuntimeStatusApplyingNow（7 个；`dshRuntimeApplyNextLaunchOnly` 已于 2026-11 随合并按钮移除，替代为方向感知文案 `dshRuntimeActionUpdate`/`dshRuntimeActionSwitch` + hint key `dshRuntimeApplyNextLaunchHint`）。注：`dshRuntimeApplyNowConfirmAction` 由 desktop 原生对话框以硬编码中文交付（main 进程无 i18n，与全部既有原生对话框一致），i18n key 保留为契约占位。/chamber/ 浏览器页（§5.5）硬编码英文，不属 i18n 面。
 
 ## 7. 风险登记
 | # | 风险 | 概率 | 影响 | 缓解 |

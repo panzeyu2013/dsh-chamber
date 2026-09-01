@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { chmodSync, cpSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -64,3 +64,39 @@ for (const { name, source } of HOST_PACKAGES) {
   cpSync(join(source, 'dist', 'index.js'), join(out, 'dist', 'index.js'))
 }
 console.log(`[build-gateway] host packages -> ${hostPackagesOut}`)
+
+// Bundle the pinned pnpm next to the esbuild outputs (design 18 §9.2 D1).
+// The installer's local (default) path unpacks the gateway tarball and NEVER
+// installs gateway dependencies (stage_local_version: bare tar
+// --strip-components=1; the launcher execs `node current/dist/cli.js`), so at
+// runtime `pnpmEntry()` cannot resolve pnpm from a node_modules tree there —
+// this bundled copy IS the dependency. Desktop parity: packages/desktop ships
+// the same pinned pnpm via extraResources (package.json files +
+// bundle-dsh.mjs BUNDLE_PNPM_VERSION).
+// pnpm's isolated linker stores node_modules/pnpm as a symlink into
+// .pnpm/pnpm@<version>/node_modules/pnpm, so the copy MUST dereference: a
+// link-as-link copy would ship a dangling symlink and the installer's very
+// first pnpm spawn would fail.
+const pnpmSource = join(packageDir, 'node_modules', 'pnpm')
+const pnpmOut = join(outDir, 'pnpm')
+if (!existsSync(pnpmSource)) {
+  throw new Error(`gateway build cannot bundle pnpm: ${pnpmSource} is missing (run pnpm install first)`)
+}
+cpSync(realpathSync(pnpmSource), pnpmOut, { recursive: true, dereference: true })
+const gatewayPkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
+const bundledPnpm = JSON.parse(readFileSync(join(pnpmOut, 'package.json'), 'utf8'))
+// Version guard reads dependencies.pnpm from the gateway manifest at build
+// time (single source of truth — desktop's BUNDLE_PNPM_VERSION hardcodes the
+// same 11.21.0 pin): a package.json bump without a matching installed tree
+// fails loud here instead of silently shipping a mismatched pair.
+if (bundledPnpm.name !== 'pnpm' || bundledPnpm.version !== gatewayPkg.dependencies?.pnpm) {
+  throw new Error(
+    `gateway build pnpm mismatch: bundled ${bundledPnpm.name ?? '?'}@${bundledPnpm.version ?? '?'}, ` +
+      `expected pnpm@${gatewayPkg.dependencies?.pnpm ?? '?'} (package.json dependencies.pnpm)`,
+  )
+}
+const bundledPnpmBin = join(pnpmOut, 'bin', 'pnpm.cjs')
+if (!existsSync(bundledPnpmBin)) {
+  throw new Error(`gateway build pnpm bundle is missing its entry: ${bundledPnpmBin}`)
+}
+console.log(`[build-gateway] bundled pnpm@${bundledPnpm.version} -> ${pnpmOut}`)

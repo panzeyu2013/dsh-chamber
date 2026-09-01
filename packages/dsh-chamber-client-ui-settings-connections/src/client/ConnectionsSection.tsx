@@ -27,6 +27,7 @@ import {
   IconChecklistOutline14,
   IconChevronDownOutline14,
   IconCloseOutline16,
+  IconDataOutline16,
   IconEditOutline16,
   IconLinkOutline16,
   IconPlayOutline16,
@@ -86,7 +87,7 @@ export interface ConnectionsSectionInjected {
  * plugin-setting fact.
  */
 export interface PluginDiagnostic {
-  state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required'
+  state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required' | 'instance-version-conflict'
   message?: string
   pluginId?: string
 }
@@ -179,6 +180,7 @@ function pluginDiagnosticText(state: PluginDiagnostic['state'], t: (key: Setting
     case 'not-injected': return t('pluginDiagnosticNotInjected')
     case 'graph-unreachable': return t('pluginDiagnosticGraphUnreachable')
     case 'bundle-load-failed': return t('pluginDiagnosticBundleFailed')
+    case 'instance-version-conflict': return t('pluginDiagnosticInstanceVersionConflict')
     default: return t('pluginDiagnosticRestartRequired')
   }
 }
@@ -387,6 +389,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [bridgeUp, setBridgeUp] = useState<boolean>(() => ssh() !== null)
   // Which instance the logs modal is currently loading (stale-response guard).
   const logsTargetRef = useRef<string | null>(null)
+  // Same guard for the gateway host-logs modal (independent of the ring-buffer modal).
+  const gatewayLogsTargetRef = useRef<string | null>(null)
   // Whether the remote roster is mid-load (first paint / refresh).
   const [rosterLoading, setRosterLoading] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<SshInstanceSpec | null>(null)
@@ -396,6 +400,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [remoteLogsError, setRemoteLogsError] = useState<string | null>(null)
   const [logsBusy, setLogsBusy] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
+  // Gateway 主机日志 Modal（design 17 §9.3）：经实例代理读 gateway 自身
+  // 控制面的 /api/host/logs（与本地卡同款 {port, lines, truncated} 形状）。
+  const [gatewayLogsFor, setGatewayLogsFor] = useState<SshInstanceSpec | null>(null)
+  const [gatewayHostLogs, setGatewayHostLogs] = useState<HostLogsResponse | null>(null)
+  const [gatewayHostLogsError, setGatewayHostLogsError] = useState<string | null>(null)
+  const [gatewayHostLogsBusy, setGatewayHostLogsBusy] = useState(false)
   /** 插件管理对话框：'local' = 本地实例，否则为远程主机 spec。 */
   const [pluginFor, setPluginFor] = useState<SshInstanceSpec | 'local' | null>(null)
 
@@ -601,6 +611,42 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setLogsBusy(false)
     }
   }, [logsFor])
+
+  /** Gateway 主机日志（design 17 §9.3）：经实例代理读 gateway 自身控制面
+   *  /api/host/logs；响应形状与本地卡一致，直接复用 HostLogsResponse 渲染。 */
+  const openGatewayHostLogs = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
+    gatewayLogsTargetRef.current = spec.id
+    setGatewayLogsFor(spec)
+    setGatewayHostLogs(null)
+    setGatewayHostLogsError(null)
+    setGatewayHostLogsBusy(true)
+    try {
+      const loaded = await cp.gatewayHostLogs(spec.id, HOST_LOG_LIMIT, 0)
+      if (gatewayLogsTargetRef.current !== spec.id) return
+      setGatewayHostLogs(loaded)
+    } catch (err) {
+      if (gatewayLogsTargetRef.current !== spec.id) return
+      setGatewayHostLogsError(errorMessage(err))
+    } finally {
+      setGatewayHostLogsBusy(false)
+    }
+  }, [])
+
+  const refreshGatewayHostLogs = useCallback(async (): Promise<void> => {
+    if (gatewayLogsFor === null) return
+    setGatewayHostLogsBusy(true)
+    try {
+      const loaded = await cp.gatewayHostLogs(gatewayLogsFor.id, HOST_LOG_LIMIT, 0)
+      if (gatewayLogsTargetRef.current !== gatewayLogsFor.id) return
+      setGatewayHostLogs(loaded)
+      setGatewayHostLogsError(null)
+    } catch (err) {
+      if (gatewayLogsTargetRef.current !== gatewayLogsFor.id) return
+      setGatewayHostLogsError(errorMessage(err))
+    } finally {
+      setGatewayHostLogsBusy(false)
+    }
+  }, [gatewayLogsFor])
 
   const removeInstance = useCallback(async (): Promise<void> => {
     const bridge = ssh()
@@ -1295,6 +1341,20 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           </>
                         )
                         : null}
+                      {spec.kind === 'gateway'
+                        ? (
+                          <button
+                            type="button"
+                            className={css.iconButton}
+                            disabled={specBusy}
+                            data-tip={t('hostLogs')}
+                            aria-label={`${t('hostLogs')}: ${spec.label}`}
+                            onClick={() => { void openGatewayHostLogs(spec) }}
+                          >
+                            <IconDataOutline16 />
+                          </button>
+                        )
+                        : null}
                       <button
                         type="button"
                         className={css.iconButton}
@@ -1736,6 +1796,44 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 ))}
               </div>
             )}
+      </Modal>
+
+      <Modal
+        open={gatewayLogsFor !== null}
+        onClose={() => { gatewayLogsTargetRef.current = null; setGatewayLogsFor(null) }}
+        title={gatewayLogsFor === null ? '' : `${t('hostLogs')} · ${gatewayLogsFor.label}`}
+        closeLabel={t('close')}
+        className={css.dialog}
+        footer={(
+          <>
+            <Button variant="ghost" icon={<IconRefreshOutline16 />} disabled={gatewayHostLogsBusy} onClick={() => { void refreshGatewayHostLogs() }}>
+              {t('logsRefresh')}
+            </Button>
+            {/* Footer close clears the stale-guard ref exactly like onClose —
+                a late gatewayHostLogs response must never repaint a closed
+                modal (review symmetry fix). */}
+            <Button variant="outline" onClick={() => { gatewayLogsTargetRef.current = null; setGatewayLogsFor(null) }}>
+              {t('close')}
+            </Button>
+          </>
+        )}
+      >
+        {gatewayHostLogsError !== null
+          ? <p className={css.error} role="alert">{gatewayHostLogsError}</p>
+          : gatewayHostLogs === null
+            ? <p className={css.dim}>{gatewayHostLogsBusy ? t('loading') : t('logsEmpty')}</p>
+            : gatewayHostLogs.lines.length === 0
+              ? <p className={css.dim}>{t('logsEmpty')}</p>
+              : (
+                <div className={css.logBox}>
+                  {gatewayHostLogs.lines.map((entry, index) => (
+                    <div key={index} className={css.logLine}>
+                      <span className={css.logTs}>{formatTime(entry.ts)}</span>
+                      <span className={clsx(css.logText, entry.stream === 'stderr' && css.logStderr)}>{entry.line}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
       </Modal>
 
       {pluginFor !== null

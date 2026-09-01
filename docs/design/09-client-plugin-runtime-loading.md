@@ -210,6 +210,13 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   先保留临时 tombstone 并观察明确的 `BundleLoadTimeoutError.bundleOutcome`：迟到 load
   收敛为成功，迟到 error 才删除并允许重试，绝不并发执行同 id 第二份 bundle；同 id
   异 rev 先到先得并上报 `restart-required`，用户不再面对静默版本复用）。
+   **跨实例版本漂移（2026-11 修订）**：同 id 异 rev 且首次认领该 id 的是
+   **另一个实例**（如本地实例与 gateway 实例挂载同一插件、两个宿主运行在
+   不同 dsh 运行时版本）→ 改报 `instance-version-conflict`——任何重启都
+   无法切换（页级 first-load-wins 会原样重演），如实提示「对齐两个实例的
+   dsh 运行时版本后可切换」；同实例异 rev（重建的插件）保持
+   `restart-required`。跨实例**同 rev** 依旧复用、无诊断（模块表页级共享，
+   同 id 同 rev = 同一 factory）。
 - **同包 N-ctx 生命周期 seam（05 §4，2026-08-28）**：`AppWebEntryOptions`
   另有同步 `configureContext(ctx)`，在 Context 构造后、任何 await/plugin
   materialization 前执行；`dispose()` 返回 Promise 并等待 root fiber teardown，
@@ -249,7 +256,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   预加载层，传输/缺失才是损坏信号；boot 内核层对额外行只区分 materialize/apply）。
   诊断状态统一为：成功 `ok`，host gateway 未注入 `not-injected`，图通道失败
   `graph-unreachable`，额外 bundle 加载失败 `bundle-load-failed`，同 id 异 rev
-  `restart-required`。来源标题只显示异常标记，设置的 Plugins 页显示状态、插件 id
+  `restart-required`（同实例重建的插件），跨实例版本漂移
+  `instance-version-conflict`（异 rev 且异 owner 实例，见 §3.5 修订——任何重启
+  都无法切换，须对齐两个实例的 dsh 运行时版本）。来源标题只显示异常标记，设置的
+  Plugins 页显示状态、插件 id
   与原因。诊断发布还必须同时命中 boot 的 current generation 与未取消阈值；同 id
   retry 已开始后，旧 graph Promise 的迟到成功/失败都没有发布权。
 

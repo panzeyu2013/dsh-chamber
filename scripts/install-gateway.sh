@@ -962,6 +962,15 @@ stage_local_version() {
     fi
     warn "tar 安全标志不可用（--no-same-owner/--no-absolute-names），已降级为普通解包"
   fi
+  # local 路径「解包即用」从不安装 gateway 依赖（与 global 的 npm install -g
+  # 不同），运行期 pnpm 只能来自包内 dist/pnpm 副本（scripts/build.mjs 构建时
+  # 打入，design 18 §9.2 D1）。缺失时启动即报 Cannot find module 'pnpm'，
+  # 在解包阶段就显式拒绝，而不是等 `gateway current` 启动才炸。
+  if [[ ! -f "$stage/dist/pnpm/bin/pnpm.cjs" ]]; then
+    warn "gateway 资产缺少内嵌 pnpm（dist/pnpm/bin/pnpm.cjs），local 安装无法运行，拒绝发布"
+    rm -rf "$stage"
+    return 1
+  fi
   local artifact_version
   artifact_version=$(gateway_tree_version "$stage" || true)
   if [[ -z "$artifact_version" || ( "$version" != "local" && "$artifact_version" != "$version" ) ]]; then
