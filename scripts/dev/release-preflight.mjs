@@ -384,19 +384,7 @@ function printFullBatteryNotice() {
   ran on eb7c22a; preload.cts changed before 0e3e8d9 → the L3
   ipc-surface-mirror lockstep test broke and only CI caught it).
 
-  node packages/control-plane/test/protocol.ts
-  node packages/control-plane/test/storage.ts
-  node packages/control-plane/test/m1-dsh-client.ts
-  node packages/control-plane/test/host-logs.ts
-  node packages/control-plane/test/manager-api.ts
-  node packages/control-plane/test/local-connection.ts
-  node packages/control-plane/test/spawn-dsh.ts
-  node packages/control-plane/test/instance-proxy.ts
-  node packages/control-plane/test/gateway-transport.test.ts
-  node packages/control-plane/test/ws-frames.ts
-  node packages/control-plane/test/static-serving.ts
-  node packages/control-plane/test/host-graph-seed.ts
-  node packages/control-plane/test/restart-local.ts
+  pnpm run test:control-plane
   pnpm run test:runtime && pnpm run test:gateway && pnpm run test:desktop
   pnpm run test:renderer-shell && pnpm run test:git && pnpm run test:host-git
   pnpm run test:sidebar && pnpm run test:settings-bridge

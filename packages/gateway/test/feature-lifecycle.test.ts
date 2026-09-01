@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { createChamberPlugins, SYNCED_ARTIFACT_MAX_BYTES, SYNCED_PACKAGE_MAX_BYTES } from '../src/plugins.ts'
 import { createChamberSurface } from '../src/routes.ts'
+import { FakeRequest, FakeResponse } from './utils.ts'
 
 const logger = {
   log() {},
@@ -34,39 +35,6 @@ const channels = {
   list: () => [],
 }
 
-class FakeRequest extends EventEmitter {
-  method: string
-  headers: Record<string, string | string[] | undefined> = {}
-  url = '/'
-  constructor(method: string) {
-    super()
-    this.method = method
-  }
-}
-
-class FakeResponse extends EventEmitter {
-  status = 0
-  headers: Record<string, string> = {}
-  chunks: string[] = []
-  endCalls = 0
-  writeHead(status: number, headers: Record<string, string>): this {
-    this.status = status
-    this.headers = headers
-    return this
-  }
-  write(chunk: string): boolean {
-    this.chunks.push(String(chunk))
-    return true
-  }
-  end(chunk?: string): void {
-    this.endCalls += 1
-    if (chunk !== undefined) this.chunks.push(String(chunk))
-    this.emit('finish')
-  }
-  json(): any { return JSON.parse(this.chunks.join('')) }
-}
-
-/** Streaming PUT request fake: body bytes arrive on the microtask queue. */
 class UploadRequest extends EventEmitter {
   method = 'PUT'
   headers: Record<string, string | string[] | undefined> = {}
@@ -300,12 +268,6 @@ test('chamber plugins upload maps persistence failures to a coded 500, not 400',
     },
   }
   const host = createChamberSurface({ logger, channels, plugins: failing })
-  class UploadRequest extends EventEmitter {
-    method = 'PUT'
-    headers: Record<string, string | string[] | undefined> = {}
-    destroyed = false
-    destroy(): void { this.destroyed = true }
-  }
   const response = new FakeResponse()
   const request = new UploadRequest()
   const pending = host.handle(request as unknown as ApiRequest, response as unknown as ApiResponse, '/chamber/plugins')

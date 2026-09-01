@@ -32,7 +32,7 @@ import {
 const MAIN = '/repos/project'
 const COMMON = '/repos/project/.git'
 const LINKED = '/repos/feature'
-/** worktreeRootFor key: `<basename>-<sha256(commonDir) 8 hex>`. */
+/** worktreeRootFor key: `<basename>-<sha256(commonDir) 12 hex>`. */
 const WORKTREES_KEY = `project-${createHash('sha256').update(COMMON).digest('hex').slice(0, 12)}`
 const MAIN_HEAD = '1111111111111111111111111111111111111111'
 const FEATURE_HEAD = '2222222222222222222222222222222222222222'
@@ -309,6 +309,16 @@ class FakeRepository {
   private leaveMutation(): void {
     this.activeMutations -= 1
   }
+}
+
+/** Bounded poll: the git timeout timer is unref'ed, so a plain sleep raced
+ * CI stalls; wait on the observable side effect instead. */
+async function waitFor(predicate: () => boolean, what: string, timeoutMs = 2_000): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.fail(`${what} did not become true within ${timeoutMs}ms`)
 }
 
 function setup(options: { linked?: boolean; operationCapacity?: number } = {}) {
@@ -1815,8 +1825,7 @@ test('local runner times out, kills the child and only settles after close', asy
     () => { settled = true },
     () => { settled = true },
   )
-  await new Promise(resolve => setTimeout(resolve, 30))
-  assert.equal(child.killed, true)
+  await waitFor(() => child.killed === true, 'the 5ms git timeout killed the child')
   assert.equal(settled, false)
   child.emit('close', null)
   await assert.rejects(

@@ -398,7 +398,7 @@ test('password: crafted signed sessions require an integral finite exp inside th
 })
 
 test('password: changing configuration across restart invalidates old cookies', async () => {
-  const { dir, store, open, cleanup } = tempStore()
+  const { store, open, cleanup } = tempStore()
   try {
     const first = createAuth({ kind: 'password', password: PASSWORD }, store)
     const login = await first.login!({ password: PASSWORD }, { headers: {}, socketAddr: '127.0.0.1' })
@@ -646,7 +646,7 @@ test('changePassword: removing the last credential reverts to the deployment-con
 })
 
 test('changePassword: removing the last credential without a config replacement is refused', async () => {
-  const { dir, store, open, cleanup } = tempStore()
+  const { store, open, cleanup } = tempStore()
   try {
     // Build a runtime password with NO config-provided password: the config
     // seeds one first, the runtime change replaces it, then a restart with a
@@ -673,7 +673,7 @@ test('changePassword: removing the last credential without a config replacement 
 })
 
 test('runtime credentials survive a restart: config seeding is ignored with a loud warning', async () => {
-  const { dir, store, open, cleanup } = tempStore()
+  const { store, open, cleanup } = tempStore()
   const warns: string[] = []
   try {
     const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
@@ -812,7 +812,7 @@ test('changeToken: removing the token while a password remains succeeds', async 
 })
 
 test('changeToken: removing the last credential without a config replacement is refused', async () => {
-  const { dir, store, open, cleanup } = tempStore()
+  const { store, open, cleanup } = tempStore()
   try {
     const first = createAuth({ kind: 'token', token: TOKEN }, store)
     const runtimeToken = 'new-token-0123456789abcdef0123456789'
@@ -836,7 +836,7 @@ test('changeToken: removing the last credential without a config replacement is 
 })
 
 test('changeToken: a runtime token survives a restart while the config token is ignored with a warning', async () => {
-  const { dir, store, open, cleanup } = tempStore()
+  const { store, open, cleanup } = tempStore()
   const warns: string[] = []
   try {
     const auth = createAuth({ kind: 'token', token: TOKEN }, store)

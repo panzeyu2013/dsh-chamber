@@ -12,82 +12,12 @@ import { parseGatewayConfig } from '../src/config.ts'
 import { createGatewayDispatch } from '../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../src/middleware.ts'
 import { createGatewayStore, hashCredential, type GatewayStore } from '../src/store.ts'
+import { FakeRequest, FakeResponse } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 const PASSWORD = 'correct-horse-battery'
 const NEW_PASSWORD = 'a-new-correct-password'
 const TOKEN = '0123456789abcdef0123456789abcdef'
-
-class FakeRequest extends EventEmitter {
-  readonly headers: Record<string, string>
-  readonly method: string
-  readonly url: string
-  readonly socket: { remoteAddress: string; encrypted?: boolean }
-  destroyed = false
-  // Mirrors Node's paused-mode IncomingMessage: body bytes emitted before a
-  // 'data' listener attaches are buffered (the dispatch middleware awaits
-  // auth before readBody() on the gated credential routes). Data replays when
-  // the first 'data' listener attaches; 'end' replays when an 'end' listener
-  // attaches — never inside the 'data' attach (the 'end' listener may not
-  // exist yet, and a bare EventEmitter would drop the event).
-  private pendingBody: Array<{ type: 'data'; chunk: Buffer } | { type: 'end' }> = []
-  constructor(method: string, url: string, headers: Record<string, string>, remoteAddress = '203.0.113.8') {
-    super()
-    this.method = method
-    this.url = url
-    this.headers = headers
-    this.socket = { remoteAddress }
-  }
-  override on(event: string | symbol, listener: (...args: any[]) => void): this {
-    super.on(event, listener)
-    if (event === 'data') {
-      for (const entry of this.pendingBody) {
-        if (entry.type === 'data') super.emit('data', entry.chunk)
-      }
-      this.pendingBody = this.pendingBody.filter(entry => entry.type !== 'data')
-    }
-    if (event === 'end') {
-      const endIndex = this.pendingBody.findIndex(entry => entry.type === 'end')
-      if (endIndex !== -1) {
-        this.pendingBody.splice(endIndex, 1)
-        super.emit('end')
-      }
-    }
-    return this
-  }
-  override emit(event: string | symbol, ...args: any[]): boolean {
-    if ((event === 'data' || event === 'end') && this.listenerCount('data') === 0) {
-      this.pendingBody.push(event === 'data' ? { type: 'data', chunk: args[0] as Buffer } : { type: 'end' })
-      return true
-    }
-    return super.emit(event, ...args)
-  }
-  destroy(): void {
-    if (this.destroyed) return
-    this.destroyed = true
-    this.emit('aborted')
-    this.emit('close')
-  }
-  async *[Symbol.asyncIterator](): AsyncIterableIterator<Buffer> {}
-}
-
-class FakeResponse extends EventEmitter {
-  status = 0
-  headersSent = false
-  headers: Record<string, unknown> = {}
-  body = ''
-  destroyed = false
-  _corsHeaders?: Record<string, string>
-  setHeader(name: string, value: unknown): void { this.headers[name.toLowerCase()] = value }
-  writeHead(status: number, headers: Record<string, unknown> = {}): void {
-    this.status = status
-    this.headersSent = true
-    for (const [name, value] of Object.entries(headers)) this.setHeader(name, value)
-  }
-  write(chunk: unknown): boolean { this.body += String(chunk); return true }
-  end(chunk?: unknown): void { if (chunk !== undefined) this.body += String(chunk) }
-  destroy(): void { this.destroyed = true }
-}
 
 function setup(
   auth: AuthProvider,
@@ -651,11 +581,19 @@ test('dispatch quiescence aborts and drains a credential request whose body neve
     {} as never,
   )
   await new Promise<void>(resolve => setImmediate(resolve))
-  await Promise.race([
-    dispatch.quiesce(),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('credential body drain timed out')), 1_000)),
-  ])
-  await route
+  // Bounded drain guard: a regression that leaves quiesce() or the route
+  // pending must fail THIS test (1s) instead of hanging the whole suite; the
+  // timer is always cleared so the guard never fires after the test settles.
+  let guardTimer: NodeJS.Timeout | undefined
+  const guard = new Promise<never>((_, reject) => {
+    guardTimer = setTimeout(() => reject(new Error('credential body drain timed out')), 1_000)
+  })
+  try {
+    await Promise.race([dispatch.quiesce(), guard])
+    await Promise.race([route, guard])
+  } finally {
+    clearTimeout(guardTimer)
+  }
   assert.equal(request.destroyed, true)
   assert.equal(response.destroyed, true)
   assert.equal(changeCalls, 0, 'an incomplete body never reaches the credential facade')
@@ -1493,7 +1431,7 @@ test('S25 wire: an anonymous (kind none) deployment cannot plant credentials via
 })
 
 test('HEAD /auth/credentials is the no-body twin of GET', async () => {
-  const { auth, store, cleanup } = realAuth({ config: { kind: 'password', password: PASSWORD } })
+  const { auth, cleanup } = realAuth({ config: { kind: 'password', password: PASSWORD } })
   try {
     const cookie = await loginCookie(auth, PASSWORD)
     const { dispatch } = setup(auth)

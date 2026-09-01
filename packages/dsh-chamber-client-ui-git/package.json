@@ -26,7 +26,7 @@
     }
   },
   "scripts": {
-    "test": "node test/git-api.ts && node test/snapshot-facts.ts && node test/saga.ts && node test/slot-contract.ts && node test/visibility-gate.ts"
+    "test": "node test/git-api.test.ts && node test/snapshot-facts.test.ts && node test/saga.test.ts && node test/slot-contract.test.ts && node test/visibility-gate.test.ts"
   },
   "license": "MIT",
   "dependencies": {

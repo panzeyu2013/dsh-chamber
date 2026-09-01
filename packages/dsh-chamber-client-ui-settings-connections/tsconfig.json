@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "rootDir": "src",
+    "rootDir": ".",
     "outDir": "lib/types",
     "paths": {
       "@dsh-chamber/dsh-client-ui-sidebar/shared": [
@@ -10,6 +10,7 @@
     }
   },
   "include": [
-    "src"
+    "src",
+    "test"
   ]
 }

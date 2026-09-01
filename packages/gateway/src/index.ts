@@ -27,8 +27,8 @@ import {
   type GatewayConfig,
   type GatewayConfigInput,
 } from './config.ts'
-import { createAuth, type AuthProvider, type AuthPrincipal } from './auth.ts'
-import { createGatewayProxy, type GatewayProxy, type GatewayProxyDeps } from './gateway-proxy.ts'
+import { createAuth, type AuthProvider } from './auth.ts'
+import { createGatewayProxy, type GatewayProxy } from './gateway-proxy.ts'
 import { createGatewayDispatch } from './dispatch.ts'
 import { createGatewayRequestPolicy } from './middleware.ts'
 import { createChamberSurface, type ChamberSurface } from './routes.ts'
@@ -123,8 +123,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   const logger = options.logger ?? console
   // Mutable holders: the dispatch middleware and chamber surface are wired
   // into createControlPlane BEFORE the plane/proxy exist (the proxy + chamber
-  // surface need plane.getLocalDshPort()). They dereference lazily at request time.
-  let plane: PlaneHandle | null = null
+  // surface need createdPlane.getLocalDshPort()). They dereference lazily at request time.
   let proxy: GatewayProxy | null = null
   let runtimeManager: GatewayRuntimeManager | null = null
   let createdPlane!: PlaneHandle
@@ -283,7 +282,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       middleware: dispatch.middleware,
       upgradeMiddleware: dispatch.upgradeMiddleware,
     })
-    plane = createdPlane
     proxy = (options.deps?.createProxy ?? createGatewayProxy)({
       logger,
       getLocalDshPort: () => createdPlane.getLocalDshPort(),

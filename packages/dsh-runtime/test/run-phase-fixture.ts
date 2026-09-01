@@ -20,7 +20,7 @@
  */
 import { FakeHostAdapter } from './fake-adapter.ts'
 import type { ProbeResult } from '../src/activation-gate.ts'
-import type { ApplyDeps } from '../src/apply-phase.ts'
+import type { ApplyDeps, ManualRollbackPreparation } from '../src/apply-phase.ts'
 import type {
   ActivationJournal,
   ActivationJournalState,
@@ -31,6 +31,7 @@ import { runStartupPhase, type StartupDeps, type StartupResult } from '../src/ru
 export type RunPhaseEvent =
   | { kind: 'stop' }
   | { kind: 'snapshot'; version: string }
+  | { kind: 'prepare-manual'; version: string }
   | { kind: 'switch'; version: string | null }
   | { kind: 'probe'; version: string; isBuiltin: boolean }
   | { kind: 'restore'; snapshot: string }
@@ -54,6 +55,10 @@ export interface RunPhaseFixtureOptions {
   probeResults?: ProbeResult[]
   snapshotThrows?: boolean
   restoreOutcome?: 'complete' | 'half' | 'incomplete'
+  /** Make stopHost throw (failed-stop preserves pointer/data tests). */
+  stopHostThrows?: boolean
+  /** prepareManualRollback result (manual-rollback journaling tests). */
+  manualRollbackPaths?: ManualRollbackPreparation
   /** Simulate process death at the named side effect (capture + throw once). */
   crashAfter?: RunPhaseCrashPoint
 }
@@ -69,6 +74,10 @@ export class RunPhaseFixture {
   readonly builtinVersion: string
   /** Mutable so a test can clear a durable snapshot-failed gate and retry. */
   snapshotThrows: boolean
+  /** Every journal write, in order (phase-transition assertions). */
+  readonly journalWrites: ActivationJournal[] = []
+  /** Failure evidence recorded through the StartupDeps.recordFailure seam. */
+  readonly failureRecords: Array<{ version: string; phase: string; error: string }> = []
 
   snapshotCalls = 0
   switchCalls = 0
@@ -83,16 +92,22 @@ export class RunPhaseFixture {
   private probeOverride: ((version: string, isBuiltin: boolean) => Promise<ProbeResult[]>) | null = null
   private crashFired = false
   private crashedState: RunPhaseState | null = null
+  private readonly stopHostThrows: boolean
+  private readonly manualRollbackPaths: ManualRollbackPreparation
 
   constructor(options: RunPhaseFixtureOptions = {}) {
     this.shellVersion = options.shellVersion ?? '0.1.4'
     this.builtinVersion = options.builtinVersion ?? DEFAULT_BUILTIN
-    this.pointer = options.pointer ?? '0.1.0'
+    // `!== undefined` (not `??`): a builtin source runs with pointer === null,
+    // and fromState() replays a crash captured at a null pointer faithfully.
+    this.pointer = options.pointer !== undefined ? options.pointer : '0.1.0'
     this.override = options.override ?? null
     this.journal = options.journal ?? { kind: 'missing' }
     this.snapshotThrows = options.snapshotThrows ?? false
     this.restoreOutcome = options.restoreOutcome ?? 'complete'
     this.crashAfter = options.crashAfter
+    this.stopHostThrows = options.stopHostThrows ?? false
+    this.manualRollbackPaths = options.manualRollbackPaths ?? { snapshotPath: null, stashPath: null }
     this.adapter = new FakeHostAdapter({ probeResults: options.probeResults, nowMs: 0 })
   }
 
@@ -163,6 +178,7 @@ export class RunPhaseFixture {
         : { kind: 'valid', version: fixture.pointer },
       readActivationJournal: () => fixture.journal,
       writeActivationJournal: value => {
+        fixture.journalWrites.push(value)
         fixture.journal = { kind: 'valid', journal: value }
         // "Crash after snapshot": the pre-swap snapshot is only durable once
         // the prepared journal records its basename, so the crash fires right
@@ -185,7 +201,10 @@ export class RunPhaseFixture {
         return `/snap/${version}-pre-swap`
       },
       resolveSnapshotName: async name => `/snap/${name}`,
-      prepareManualRollback: async () => ({ snapshotPath: null, stashPath: null }),
+      prepareManualRollback: async version => {
+        fixture.events.push({ kind: 'prepare-manual', version })
+        return fixture.manualRollbackPaths
+      },
       validateTarget: () => ({ ok: true }),
       switchPointer: version => {
         fixture.switchCalls += 1
@@ -203,6 +222,7 @@ export class RunPhaseFixture {
         return result
       },
       stopHost: async () => {
+        if (fixture.stopHostThrows) throw new Error('still alive')
         fixture.events.push({ kind: 'stop' })
         await fixture.adapter.stopHost()
         fixture.crash('stop')
@@ -216,7 +236,7 @@ export class RunPhaseFixture {
         fixture.knownGoodCalls.push(version)
         fixture.events.push({ kind: 'known-good', version })
       },
-      recordFailure: () => {},
+      recordFailure: input => { fixture.failureRecords.push(input) },
       waitBeforeRetry: async () => {},
     }
   }

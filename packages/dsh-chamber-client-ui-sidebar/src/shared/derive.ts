@@ -24,7 +24,7 @@
  * grace maps, and tests inject `now` so the grace behavior is fully
  * unit-tested.
  *
- * No React, no DOM — plain-node unit-testable (see test/derive.ts).
+ * No React, no DOM — plain-node unit-testable (see test/derive.test.ts).
  */
 import type { InstanceSnapshot, SearchRow } from './instance-api.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
@@ -709,7 +709,7 @@ export function instanceSnapshotSignature(
  * snapshot from their ctx store on the same host-frame event; unmounted or
  * reconnecting sources use the bounded unary fallback.
  */
-export function runningRingVisible(channelRunning: boolean | undefined, polledRunning: boolean | undefined): boolean {
+export function runningRingVisible(_channelRunning: boolean | undefined, polledRunning: boolean | undefined): boolean {
   return polledRunning === true
 }
 

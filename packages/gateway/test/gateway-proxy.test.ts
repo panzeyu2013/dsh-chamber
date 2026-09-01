@@ -35,7 +35,7 @@ function fakeResponse(): ProxyResponse & { status: number | null; body: string; 
     body: '',
     destroyed: false,
     headersSent: false,
-    writeHead(status: number, headers?: Record<string, unknown>) {
+    writeHead(status: number, _headers?: Record<string, unknown>) {
       this.status = status
       this.headersSent = true
       return undefined

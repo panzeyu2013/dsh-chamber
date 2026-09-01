@@ -58,5 +58,8 @@
     "lib/index.js",
     "lib/client.js",
     "lib/types/**/*.d.ts"
-  ]
+  ],
+  "scripts": {
+    "test": "node test/plugin-diagnostic.test.ts && node test/plugin-inventory.test.ts && node test/action-hint.test.ts && node test/plugin-diff.test.ts && node test/connection-form.test.ts && node test/save-host.test.ts && node test/host-validation.test.ts && node test/control-plane.test.ts"
+  }
 }

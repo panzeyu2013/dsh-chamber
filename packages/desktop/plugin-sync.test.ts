@@ -44,7 +44,6 @@ import {
   ReadyPhaseEdges,
   reapStaleLocalPluginWriters,
   resolveLocalMaterializeDirectory,
-  resetApplyInFlight,
   scopeExecToOwnership,
   runWithFinalOwnership,
   seedRemoteChamberHostPackages,
@@ -55,6 +54,22 @@ import {
 import type { ChamberHostPackageSeed, ExecFn, ExecResult, StatusFn, RemoteSpec } from './plugin-sync.ts'
 import type { TransportRunPayload } from './transport-provider.ts'
 import { NotificationSourceIncarnations } from './notifications.ts'
+
+/** Bounded wait for pid to be reaped (kill(pid, 0) → ESRCH): the descendant
+ * of a killed leader is a zombie until init reaps it — a single-shot ESRCH
+ * assertion flaked under CI pauses. */
+async function waitForEsrch(pid: number, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+      throw error
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  assert.fail(`${what} (pid ${pid}) still alive after the reaping window`)
+}
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'dsh-plugin-sync-'))
@@ -554,7 +569,7 @@ test('remotePluginList: chamber probe ssh failure is loud, never a silent "not i
   assert.ok(result.ok)
   if (result.ok) {
     assert.equal(result.manifest.chamber.ok, false)
-    assert.ok(result.manifest.chamber.ok === false && /host-graph probe failed/.test(result.manifest.chamber.error))
+    assert.match(result.manifest.chamber.error, /host-graph probe failed/)
   }
 })
 
@@ -886,8 +901,7 @@ test('applyPlugins: restart===false defers and skips the ready recheck', async (
   assert.ok(!actions.includes('restart'))
 })
 
-test('applyPlugins: single-flight refuses a concurrent apply for the same instance', async () => {
-  resetApplyInFlight()
+test('applyPlugins: single-flight refuses a concurrent apply for the same instance', async t => {
   const pending: Array<(r: ExecResult) => void> = []
   let auto = false
   const exec: ExecFn = () => {
@@ -898,14 +912,17 @@ test('applyPlugins: single-flight refuses a concurrent apply for the same instan
   const first = applyPlugins(exec, readyStatus, spec, { add: ['x@1.0.0'], remove: [] })
   const second = await applyPlugins(exec, readyStatus, spec, { add: ['y@1.0.0'], remove: [] })
   assert.deepEqual(second, { ok: false, error: 'apply in progress' })
-  auto = true
-  for (const resolve of pending) resolve(ok())
-  await first
-  resetApplyInFlight()
+  // Natural single-flight cleanup — even on a mid-test failure, completing
+  // the held apply lets the production finally-block release the guard
+  // (no production test backdoor; state never leaks into later tests).
+  t.after(async () => {
+    auto = true
+    for (const resolve of pending) resolve(ok())
+    await Promise.allSettled([first])
+  })
 })
 
-test('applyPlugins: a changed operational owner is not blocked by the reusable id', async () => {
-  resetApplyInFlight()
+test('applyPlugins: a changed operational owner is not blocked by the reusable id', async t => {
   const pending: Array<(r: ExecResult) => void> = []
   let auto = false
   const exec: ExecFn = () => auto
@@ -920,10 +937,13 @@ test('applyPlugins: a changed operational owner is not blocked by the reusable i
     await applyPlugins(exec, readyStatus, spec, { add: ['duplicate@1.0.0'], remove: [] }, { ownershipKey: 'host-b' }),
     { ok: false, error: 'apply in progress' },
   )
-  auto = true
-  for (const resolve of pending) resolve(ok())
-  await Promise.all([oldApply, newApply])
-  resetApplyInFlight()
+  // Natural single-flight cleanup (see the single-flight test): completing
+  // the held applies releases the guard through the production finally.
+  t.after(async () => {
+    auto = true
+    for (const resolve of pending) resolve(ok())
+    await Promise.allSettled([oldApply, newApply])
+  })
 })
 
 // ============================================================================
@@ -1712,7 +1732,7 @@ test('local plugin writer reaper kills a daemonized descendant after its group l
     const result = await reapStaleLocalPluginWriters(home)
     assert.deepEqual(result, { ok: true, reaped: true })
     assert.equal(existsSync(localPluginWriterLedgerPath(home)), false)
-    assert.throws(() => process.kill(descendantPid, 0), /ESRCH/)
+    await waitForEsrch(descendantPid, 'reaped descendant')
   } finally {
     try { process.kill(-leader.pid!, 'SIGKILL') } catch { /* already reaped */ }
     rmSync(root, { recursive: true, force: true })

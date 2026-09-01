@@ -3,7 +3,7 @@
  * as a PURE module: every runtime dependency (the store engine, the vendor
  * column geometry, the sidebar view-prefs store) arrives through an injected
  * `LayoutStoreEnvironment`, so the whole decision surface is testable under
- * plain node (`test/layout-store.ts`) without the vendor packages (their
+ * plain node (`test/layout-store.test.ts`) without the vendor packages (their
  * source-only tree ships no built `lib/` for node to import). The production
  * wiring lives in `stores.ts` — it builds the default environment from the
  * real modules and re-exports `createLayoutStore`, keeping the registration

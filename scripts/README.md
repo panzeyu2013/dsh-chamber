@@ -19,12 +19,13 @@
   `node scripts/dev/update-vendor.mjs <tag>`（tag 如 `dsh-v0.1.1-rc.2`）：fetch+校验 tag →
   切 submodule → 更新 `harness.commit` → 差量建链 → 原子重生成锁文件 → frozen 验证。
 - `verify-i18n.mjs`、`typecheck-client-web.mjs`、`typecheck-connection.mjs`、
-  `typecheck-api-gateway.mjs`、`verify-workflow-action-pins.mjs`、`test-control-plane.mjs`、
+  `typecheck-api-gateway.mjs`、`verify-workflow-action-pins.mjs`、
   `test-client-web-loader.mjs`、`test-client-web-register.mjs`、`e2e-gateway-harness.ts`、
   `release-semver.mjs`、`release-workflow-policy.test.mjs`、`release-preflight.mjs`、
   `gen-third-party-notices.mjs`、`restore-lockfile-vendor-records.mjs`、
   `test-shell-loader.mjs`、`test-shell-register.mjs`
-  —— 校验 / 发布 / 测试工具
+  —— 校验 / 发布 / 测试工具（control-plane 的测试 runner 已下沉到
+  `packages/control-plane/scripts/test.mjs`）
 
 这些脚本面向仓库开发与发布流程（package.json hooks、CI、release workflow 引用），
 不在用户部署环境中执行。

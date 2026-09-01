@@ -137,7 +137,7 @@ import {
   clearSourceBookkeeping, getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
 } from '../shared/view-prefs.ts'
 import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
-import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags, type RepoGitLayout } from '../shared/workspace-git-flags.ts'
+import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags } from '../shared/workspace-git-flags.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
@@ -1045,7 +1045,7 @@ export function SidebarRoot({
     })
   }
 
-  const renameForm = (sourceId: string, kind: RenameTarget['kind'], id: string, placeholder: string, nested = false) => (
+  const renameForm = (_sourceId: string, _kind: RenameTarget['kind'], _id: string, placeholder: string, nested = false) => (
     <form
       className={clsx(cc.inlineForm, nested && cc.sessionNested)}
       onClick={(event) => {
@@ -2117,7 +2117,7 @@ export function SidebarRoot({
                           <span className={cc.listTopDropIndicator} aria-hidden="true" />
                         )}
                         {(() => {
-                          return orderedWorkspaces.map((workspace, index) => {
+                          return orderedWorkspaces.map(workspace => {
                           const workspaceKey = `${server.id}/${workspace.id}`
                           const folded = viewPrefs.folded[workspaceKey] === true
                           // chamber (08 §11): derived (worktree) workspaces

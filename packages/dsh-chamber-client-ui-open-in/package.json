@@ -26,7 +26,7 @@
     }
   },
   "scripts": {
-    "test": "node test/capabilities.ts && node test/coordinator.ts && node test/menu-navigation.ts && node test/open-in-gates.ts"
+    "test": "node test/capabilities.test.ts && node test/coordinator.test.ts && node test/menu-navigation.test.ts && node test/open-in-gates.test.ts"
   },
   "license": "MIT",
   "peerDependencies": {

@@ -1414,13 +1414,19 @@ test('the jittered delay is applied to the reconnect timer, not only logged', as
   await waitFor(() => manager.status('s1')!.phase === 'ready')
   setProbe(false)
   const exitAt = Date.now()
+  // Reference timer with the same jittered delay, started before the exit:
+  // a CI stall inflates BOTH timers equally, so the reconnect gap must track
+  // the reference — a raw 1000ms backoff would lag it by ~250ms no matter
+  // how the loop is stalled (an absolute <990ms cap flaked under pauses).
+  let refDelta = 0
+  const refTimer = setTimeout(() => { refDelta = Date.now() - exitAt }, 750)
   children[0].simulateExit(0)
   await waitFor(() => spawnCalls.length === 2, 3000, 'jittered reconnect spawn')
+  clearTimeout(refTimer)
   const gap = spawnTimes[1] - exitAt
-  // jittered 750ms vs raw 1000ms: the gap must be the jittered value (timers
-  // never fire early; the < 990ms cap rejects a raw-backoff wiring).
+  assert.ok(refDelta > 0, 'the 750ms reference timer fired before the reconnect spawn')
   assert.ok(gap >= 700, `reconnect fires no earlier than the jittered delay: ${gap}ms`)
-  assert.ok(gap < 990, `reconnect fires before the raw backoff: ${gap}ms`)
+  assert.ok(gap <= refDelta + 50, `reconnect fires with the jittered delay, not the raw backoff (gap ${gap}ms vs reference ${refDelta}ms)`)
 })
 
 test("a replaced tunnel's late stderr can never poison the fresh attempt", async t => {
@@ -1513,7 +1519,7 @@ test('unterminated transport output is bounded, dropped, and resumes at the next
 })
 
 test('disconnect stops the process (SIGTERM) and lands on idle', async t => {
-  const { manager, children, spawnCalls, setProbe } = makeManager(t)
+  const { manager, children, setProbe } = makeManager(t)
   setProbe(true)
   manager.connect('s1')
   await waitFor(() => manager.status('s1')!.phase === 'ready')
@@ -1986,7 +1992,7 @@ test('an auth phrase on the final newline-less stderr line is flushed before exi
 })
 
 test('a SIGTERM-ignoring child gets its SIGKILL escalation after the disconnect grace', async t => {
-  const { manager, children, spawnCalls, setProbe } = makeManager(t, { options: { disconnectGraceMs: 60 } })
+  const { manager, children, setProbe } = makeManager(t, { options: { disconnectGraceMs: 60 } })
   setProbe(true)
   manager.connect('s1')
   await waitFor(() => manager.status('s1')!.phase === 'ready')

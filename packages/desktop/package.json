@@ -11,7 +11,8 @@
     "build:preload": "node scripts/build-preload.mjs",
     "dist": "node ./node_modules/electron-builder/cli.js",
     "dist:mac": "node ./node_modules/electron-builder/cli.js --mac",
-    "dist:win": "node ./node_modules/electron-builder/cli.js --win --x64"
+    "dist:win": "node ./node_modules/electron-builder/cli.js --win --x64",
+    "test": "node transport-manager.test.ts && node transport-target.test.ts && node credential-binding.test.ts && node connection-save.test.ts && node ssh-provider.test.ts && node ssh-config.test.ts && node gateway-provider.test.ts && node gateway-session.test.ts && node audit-log.test.ts && node runtime-lockstep.test.ts && node renderer-trust.test.ts && node plugin-sync.test.ts && node cross-package-contract.test.ts && node ipc-surface-mirror.test.ts && node chamber-settings.test.ts && node notifications.test.ts && node deep-link.test.ts && node open-in.test.ts && node updater.test.ts && node scripts/bundle-swap.test.mjs && node scripts/after-pack-adhoc-sign.test.mjs && node dsh-runtime-controller.test.ts && node apply-now-gate.test.ts"
   },
   "dependencies": {
     "@dsh-chamber/control-plane": "workspace:^",

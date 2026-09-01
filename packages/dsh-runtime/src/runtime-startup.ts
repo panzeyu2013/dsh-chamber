@@ -146,7 +146,7 @@ function normalizedIntent(input: ActivationJournalIntent): ActivationJournalInte
   }
 }
 
-function convertMonitoringToIntent(journal: ActivationJournal, intent: ActivationJournalIntent): ActivationJournal {
+function convertMonitoringToIntent(_journal: ActivationJournal, intent: ActivationJournalIntent): ActivationJournal {
   return {
     schemaVersion: 1,
     phase: 'intent',
