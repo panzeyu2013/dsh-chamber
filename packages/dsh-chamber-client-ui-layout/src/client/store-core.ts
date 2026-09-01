@@ -96,6 +96,39 @@ interface LayoutStoreRuntime {
   writeTimer: ReturnType<typeof setTimeout> | undefined
 }
 
+/**
+ * CHAMBER FORK (design 17 §18 — mobile surface): per-environment observers
+ * notified when a layout store INSTANCE is minted. The framework instantiates
+ * the root store lazily (first AppFrame render), so a cross-plugin consumer
+ * (the mobile adaptation plugin) cannot read a snapshot synchronously in its
+ * own apply(); it subscribes here instead and receives every live instance.
+ * `instance.subscribe(listener)` then yields per-instance snapshot-change
+ * notifications; `instance.getSnapshot()` yields the current LayoutState.
+ * Observers are per-environment (production: the one module instance shared
+ * by every boot) so multi-boot N-ctx shells each deliver their own instance;
+ * consumers must scope by their own ctx/instance root (design 17 §18.4 项 2).
+ */
+export type LayoutInstanceObserver = (instance: LayoutInstance) => void
+
+const instanceObservers = new WeakMap<LayoutStoreEnvironment, Set<LayoutInstanceObserver>>()
+
+/** Register a per-environment observer (production: every boot's store). */
+export function onLayoutInstance(env: LayoutStoreEnvironment, observer: LayoutInstanceObserver): () => void {
+  let set = instanceObservers.get(env)
+  if (set === undefined) {
+    set = new Set()
+    instanceObservers.set(env, set)
+  }
+  set.add(observer)
+  return () => { set.delete(observer) }
+}
+
+function notifyInstanceObservers(env: LayoutStoreEnvironment, instance: LayoutInstance): void {
+  const set = instanceObservers.get(env)
+  if (set === undefined) return
+  for (const observer of set) observer(instance)
+}
+
 /** Trailing debounce for the persistence write (drag → ONE updateViewPrefs). */
 export const SIDEBAR_WRITE_DEBOUNCE_MS = 150
 
@@ -185,6 +218,7 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
   /** One listener fans out through weak references to the env's live stores. */
   const trackLayoutInstance = (instance: LayoutInstance): void => {
     runtime.instances.add(new WeakRef(instance))
+    notifyInstanceObservers(env, instance)
     if (runtime.subscriptionInstalled) return
     runtime.subscriptionInstalled = true
     viewPrefs.subscribeViewPrefs(() => {

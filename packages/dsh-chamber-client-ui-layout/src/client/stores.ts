@@ -30,7 +30,9 @@ import {
 import { getViewPrefs, subscribeViewPrefs, updateViewPrefs } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import {
   createLayoutStore as createStore,
+  onLayoutInstance,
   type LayoutActions,
+  type LayoutInstanceObserver,
   type LayoutState,
   type LayoutStoreEnvironment,
 } from './store-core.ts'
@@ -60,4 +62,15 @@ export function createLayoutStore(
   env: LayoutStoreEnvironment = defaultEnvironment,
 ): EngineStoreHandle<LayoutState, LayoutActions> {
   return createStore(env)
+}
+
+/**
+ * CHAMBER FORK (design 17 §18 — mobile surface): subscribe to every live
+ * layout store instance (production environment). The mobile adaptation
+ * plugin consumes this through the `layoutFacts` service (client/index.ts)
+ * to drive narrow-screen state and the drawer without DOM attribute
+ * observation. Returns an unsubscribe function.
+ */
+export function subscribeLayoutInstances(observer: LayoutInstanceObserver): () => void {
+  return onLayoutInstance(defaultEnvironment, observer)
 }
