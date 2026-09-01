@@ -4,14 +4,19 @@
  * style control groups (group headings + flat rows), styled with the settings
  * panel's design language (`--dsw-alias-*` tokens).
  *
- * Layout (2026-11 横向化修订): the row paradigm is unified to「text left,
- * control right」— short toggle groups (启动与关闭 / 运行) become a two-column
- * card grid (.generalGrid + .generalCard), the two radio pairs (关闭窗口时 /
- * 通知时机) become slider-style segmented controls (SegmentedControl, 2026-11
- * 滑块化: brand thumb + 反白选中文字), and the three notification-event
- * toggles share one line of mini cards (.generalEventGrid). Every control
- * stays a native checkbox/radio underneath (no custom widgets); narrow panels
- * auto-collapse the columns via auto-fit.
+ * Layout: compact cards —「text left/top, control right/bottom」. Short
+ * toggle groups (启动与关闭 / 运行) are a two-column card grid
+ * (.generalGrid + .generalCard, auto-fit collapses on narrow panels), the
+ * two radio pairs (关闭窗口时 / 通知时机) render as slider-style segmented
+ * controls (SegmentedControl: OFFICIAL business-blue thumb + inverted
+ * selected text), the notification master toggle as the official switch
+ * (36x20 track + round thumb, native checkbox with role=switch underneath),
+ * and the three notification-event toggles share one line of mini cards
+ * (.generalEventGrid). The notifications SUB-SETTINGS (通知时机 / 事件开关 /
+ * 测试通知) stay COLLAPSED while the master switch is off — they unfold in a
+ * transparent container (.generalNotifyBody) only while notifications are
+ * enabled (the configuration itself is unchanged, just hidden). Every
+ * control stays a native checkbox/radio underneath (no custom widgets).
  *
  * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
@@ -20,21 +25,24 @@
  * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
  *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
  *   never prompt; update-downloaded exempt);
- * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 通知
- *   时机 (hidden-only / always) + 事件开关 (complete / ask / request) +
- *   「发送测试通知」;
+ * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 启用后
+ *   展开的子设置 (通知时机 hidden-only / always + 事件开关 complete / ask /
+ *   request + 「发送测试通知」);
  * - 更新 (design 11, merged into General): current version +「检查更新」+
  *   low-key status (UpdateSection).
  *
  * （design 18 §3.6：dsh 运行时块已自本视图迁出——per-server「dsh 运行时」
  *  settings.section，见 runtime-section-plugin.ts。）
  *
- * Every mutation goes through the main-process settings IPC (settings-store);
- * failures surface LOUDLY (never a silent fake success). The closeToTray gate
+ * Every mutation goes through the main-process settings IPC (settings-store),
+ * which overlays the patch OPTIMISTICALLY — the control reflects the click in
+ * the same frame and never flashes a disabled/dimmed state while the IPC
+ * round-trip is in flight (闪烁修复); failures surface LOUDLY (never a
+ * silent fake success) and roll the overlay back. The closeToTray gate
  * (dev without tray) disables the hide-to-tray option — hiding a window the
  * user could not recover would strand the app.
  */
-import { useCallback, useId, useState, useSyncExternalStore } from 'react'
+import { useCallback, useId, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/settings-bridge.d.ts'
@@ -48,16 +56,18 @@ import css from './SettingsShell.module.css'
 type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
 /** One checkbox toggle in a card (grid): title + hint left, native checkbox
- *  right; the WHOLE card is the label so the hit target is the card. */
+ *  right; the WHOLE card is the label so the hit target is the card. Saves
+ *  are optimistic (settings-store): the checkbox reflects the click in the
+ *  same frame — no disabled/dimmed flash while the IPC round-trip is in
+ *  flight. */
 function ToggleCard({
-  label, hint, checked, disabled, onChange, busy,
+  label, hint, checked, disabled, onChange,
 }: {
   label: string
   hint: string
   checked: boolean
   disabled?: boolean
   onChange: (next: boolean) => void
-  busy: boolean
 }) {
   return (
     <label className={clsx(css.generalCard, disabled === true ? css.generalDisabled : undefined)}>
@@ -70,7 +80,7 @@ function ToggleCard({
           type="checkbox"
           className={css.generalCardCheck}
           checked={checked}
-          disabled={disabled === true || busy}
+          disabled={disabled === true}
           onChange={(event) => onChange(event.target.checked)}
         />
       </div>
@@ -81,13 +91,12 @@ function ToggleCard({
 /** One notification-event mini toggle (one line of three): short title left,
  *  checkbox right. Disabled (un-hydrated skeleton) dims like ToggleCard. */
 function ToggleEvent({
-  label, checked, disabled, onChange, busy,
+  label, checked, disabled, onChange,
 }: {
   label: string
   checked: boolean
   disabled?: boolean
   onChange: (next: boolean) => void
-  busy: boolean
 }) {
   return (
     <label className={clsx(css.generalEventCard, disabled === true ? css.generalDisabled : undefined)}>
@@ -96,7 +105,7 @@ function ToggleEvent({
         type="checkbox"
         className={css.generalCardCheck}
         checked={checked}
-        disabled={disabled === true || busy}
+        disabled={disabled === true}
         onChange={(event) => onChange(event.target.checked)}
       />
     </label>
@@ -114,7 +123,6 @@ function testNotifySurface(): NotificationSurface | null {
 /** The section content (rendered inside the settings options column). */
 export function GeneralView({ t }: { t: GeneralTranslate }) {
   const status = useSyncExternalStore(subscribeSettings, getSettingsStatus)
-  const [busy, setBusy] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   // Per-instance labelledby (useId): N-ctx shells mount one settings panel
   // each in the SAME document — a static id would alias across panels. The
@@ -123,17 +131,25 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   const closeBehaviorLabel = useId()
   // Same scoping for the notifications-mode field label.
   const notifyModeLabel = useId()
+  // Same scoping for the unfolded notifications sub-settings (the master
+  // switch's aria-controls target).
+  const notifyBodyId = useId()
   const [notifyBusy, setNotifyBusy] = useState(false)
   const [notifyResult, setNotifyResult] = useState<'sent' | 'failed' | null>(null)
 
+  // Serial save queue: settings-store overlays each patch optimistically (the
+  // control reflects the click immediately — no busy/disabled flash), so the
+  // queue only has to keep rapid successive saves from overlapping at the
+  // bridge; the main process applies them in order (atomic write + sequential
+  // IPC handling), and the store's save sequence lets a newer overlay win.
+  const saveQueue = useRef<Promise<void>>(Promise.resolve())
   const save = useCallback((patch: Parameters<typeof applySettingsPatch>[0]) => {
-    setBusy(true)
     setSaveError(null)
-    void applySettingsPatch(patch)
+    saveQueue.current = saveQueue.current
+      .then(() => applySettingsPatch(patch))
       .then((result) => {
         if (!result.ok) setSaveError(result.error)
       })
-      .finally(() => setBusy(false))
   }, [])
 
   /** 「发送测试通知」— bypasses the settings gates in the main process (design
@@ -197,7 +213,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             </div>
             <SegmentedControl
               ariaLabelledBy={closeBehaviorLabel}
-              disabled={busy}
               value={settings?.windowCloseBehavior ?? null}
               onChange={(next) => save({ windowCloseBehavior: next })}
               options={[
@@ -216,7 +231,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             hint={supported?.launchAtLogin === false ? t('generalUnavailable') : t('generalLaunchAtLoginDesc')}
             checked={settings?.launchAtLogin === true}
             disabled={!hydrated || supported?.launchAtLogin === false}
-            busy={busy}
             onChange={(next) => save({ launchAtLogin: next })}
           />
         </div>
@@ -231,7 +245,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             hint={t('generalKeepAwakeDesc')}
             checked={settings?.keepAwake === true}
             disabled={!hydrated}
-            busy={busy}
             onChange={(next) => save({ keepAwake: next })}
           />
 
@@ -243,93 +256,101 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             hint={t('generalQuitConfirmDesc')}
             checked={settings?.quitConfirmation !== false}
             disabled={!hydrated}
-            busy={busy}
             onChange={(next) => save({ quitConfirmation: next })}
           />
         </div>
       </div>
 
       {/* 通知 (design 19, merged into General — no new nav entry): 主开关 +
-          通知时机 (hidden-only / always) + 事件开关 (complete / ask / request)
-          +「发送测试通知」。事件开关在主开关关闭时仍可预配置（OpenChamber
-          语义——保持可交互，不加说明）。 */}
+          启用后才展开的子设置（通知时机 hidden-only / always + 事件开关
+          complete / ask / request +「发送测试通知」）。主开关关闭时子设置
+          收起（不全部展开）——配置项仍在，启用后按原始布局展开显示。 */}
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupNotifications')}</h3>
 
-        {/* 主开关: 整行即 label（可访问名称 + 整行可点）；未水合骨架态整行
-            变淡，与 ToggleCard 的占位纪律一致。 */}
+        {/* 主开关: 官方 switch（原生 checkbox + role=switch），整行即 label
+            （可访问名称 + 整行可点）；未水合骨架态整行变淡。aria-controls
+            指向展开的子设置。 */}
         <label className={clsx(css.generalLine, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsEnabled')}</span>
           </div>
-          <input
-            type="checkbox"
-            className={css.generalCardCheck}
-            checked={notifications.enabled === true}
-            disabled={!hydrated || busy}
-            onChange={(event) => save(notificationsPatch({ enabled: event.target.checked }))}
-          />
+          <span className={css.generalSwitchBox}>
+            <input
+              type="checkbox"
+              role="switch"
+              className={css.generalSwitchInput}
+              checked={notifications.enabled === true}
+              disabled={!hydrated}
+              aria-expanded={notifications.enabled === true}
+              aria-controls={notifications.enabled === true ? notifyBodyId : undefined}
+              onChange={(event) => save(notificationsPatch({ enabled: event.target.checked }))}
+            />
+            <span className={css.generalSwitch} aria-hidden="true">
+              <span className={css.generalSwitchThumb} />
+            </span>
+          </span>
         </label>
 
-        <div className={css.generalLine}>
-          <div className={css.generalCardText}>
-            <span className={css.generalFieldLabel} id={notifyModeLabel}>{t('generalNotificationsMode')}</span>
-            <p className={css.generalHint}>{t('generalNotificationsModeDesc')}</p>
+        {notifications.enabled === true && (
+          <div id={notifyBodyId} className={css.generalNotifyBody}>
+            <div className={css.generalLine}>
+              <div className={css.generalCardText}>
+                <span className={css.generalFieldLabel} id={notifyModeLabel}>{t('generalNotificationsMode')}</span>
+                <p className={css.generalHint}>{t('generalNotificationsModeDesc')}</p>
+              </div>
+              <SegmentedControl
+                ariaLabelledBy={notifyModeLabel}
+                value={notifications.mode === 'always' ? 'always' : 'hidden-only'}
+                onChange={(next) => save(notificationsPatch({ mode: next }))}
+                options={[
+                  { value: 'hidden-only', label: t('generalNotificationsModeHidden'), disabled: !hydrated },
+                  { value: 'always', label: t('generalNotificationsModeAlways'), disabled: !hydrated },
+                ]}
+              />
+            </div>
+
+            <div className={css.generalEventGrid}>
+              <ToggleEvent
+                label={t('generalNotifyOnComplete')}
+                checked={notifications.onComplete !== false}
+                disabled={!hydrated}
+                onChange={(next) => save(notificationsPatch({ onComplete: next }))}
+              />
+              <ToggleEvent
+                label={t('generalNotifyOnAsk')}
+                checked={notifications.onAsk !== false}
+                disabled={!hydrated}
+                onChange={(next) => save(notificationsPatch({ onAsk: next }))}
+              />
+              <ToggleEvent
+                label={t('generalNotifyOnRequest')}
+                checked={notifications.onRequest !== false}
+                disabled={!hydrated}
+                onChange={(next) => save(notificationsPatch({ onRequest: next }))}
+              />
+            </div>
+
+            <div className={css.generalTestRow}>
+              <button
+                type="button"
+                className={css.updateButton}
+                onClick={sendTestNotification}
+                disabled={testNotifySurface() === null || notifyBusy}
+              >
+                {t('generalNotificationsTest')}
+              </button>
+              {notifyResult !== null && (
+                <p
+                  className={notifyResult === 'sent' ? css.generalNotifyOk : css.generalError}
+                  aria-live="polite"
+                >
+                  {notifyResult === 'sent' ? t('generalNotificationsTestSent') : t('generalNotificationsTestFailed')}
+                </p>
+              )}
+            </div>
           </div>
-          <SegmentedControl
-            ariaLabelledBy={notifyModeLabel}
-            disabled={busy}
-            value={notifications.mode === 'always' ? 'always' : 'hidden-only'}
-            onChange={(next) => save(notificationsPatch({ mode: next }))}
-            options={[
-              { value: 'hidden-only', label: t('generalNotificationsModeHidden'), disabled: !hydrated },
-              { value: 'always', label: t('generalNotificationsModeAlways'), disabled: !hydrated },
-            ]}
-          />
-        </div>
-
-        <div className={css.generalEventGrid}>
-          <ToggleEvent
-            label={t('generalNotifyOnComplete')}
-            checked={notifications.onComplete !== false}
-            disabled={!hydrated}
-            busy={busy}
-            onChange={(next) => save(notificationsPatch({ onComplete: next }))}
-          />
-          <ToggleEvent
-            label={t('generalNotifyOnAsk')}
-            checked={notifications.onAsk !== false}
-            disabled={!hydrated}
-            busy={busy}
-            onChange={(next) => save(notificationsPatch({ onAsk: next }))}
-          />
-          <ToggleEvent
-            label={t('generalNotifyOnRequest')}
-            checked={notifications.onRequest !== false}
-            disabled={!hydrated}
-            busy={busy}
-            onChange={(next) => save(notificationsPatch({ onRequest: next }))}
-          />
-        </div>
-
-        <div className={css.generalTestRow}>
-          <button
-            type="button"
-            className={css.updateButton}
-            onClick={sendTestNotification}
-            disabled={testNotifySurface() === null || notifyBusy}
-          >
-            {t('generalNotificationsTest')}
-          </button>
-          {notifyResult !== null && (
-            <p
-              className={notifyResult === 'sent' ? css.generalNotifyOk : css.generalError}
-              aria-live="polite"
-            >
-              {notifyResult === 'sent' ? t('generalNotificationsTestSent') : t('generalNotificationsTestFailed')}
-            </p>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Chamber-global update status (design 11): merged into the General

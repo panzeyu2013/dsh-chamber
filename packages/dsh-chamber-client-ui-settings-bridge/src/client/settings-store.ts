@@ -13,6 +13,16 @@
  * asynchronously (≤~500ms) so hydration retries briefly and re-arms on the
  * next subscriber; the bridge subscription is a PERMANENT ipcRenderer
  * listener for the page's lifetime (assumes one module instance per page).
+ *
+ * OPTIMISTIC SAVE (闪烁修复, 2026-12): applySettingsPatch overlays its patch
+ * on the snapshot IMMEDIATELY (the control reflects the click in the same
+ * frame — no disabled/dimmed flash while the IPC round-trip is in flight),
+ * then settles on the authoritative result: the NEWEST save's success
+ * replaces the snapshot, a FAILED patch is dropped from the overlay (the
+ * control snaps back + the caller shows the error). In-flight patches are
+ * merged in order, and a monotonic save sequence keeps an OLDER save's late
+ * result from flashing an intermediate value over a newer overlay (rapid
+ * successive toggles never flicker).
  */
 import type { ChamberSettings, ChamberSettingsStatus, SettingsSurface } from '../ambient/settings-bridge.d.ts'
 
@@ -28,6 +38,51 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null
  * imminently, capped at 2s so a late bridge or a one-shot query failure can
  * never strand the section permanently disabled. */
 let retryDelayMs = 100
+
+// ---- optimistic save overlay ----
+/** In-flight patches, merged IN ORDER over the authoritative snapshot. A
+ *  patch is removed when its save FAILS (the main process never applied it);
+ *  settled successes stay until the NEWEST save settles (its authoritative
+ *  result contains every earlier applied patch — see saveSeq). */
+let optimisticPatches: Array<{ seq: number; patch: Partial<ChamberSettings> }> = []
+/** Cached merged snapshot: getSettingsStatus must return a STABLE reference
+ *  between notifies (useSyncExternalStore compares getSnapshot results), so
+ *  the merged object is rebuilt only when current or the patch list changes. */
+let optimisticStatus: ChamberSettingsStatus | null = null
+/** Monotonic save sequence: only the LATEST save's settle clears the overlay
+ *  list and replaces the snapshot; an older save's result (already pushed by
+ *  the main process) never flashes an intermediate value. */
+let saveSeq = 0
+
+/** Deep-merge a partial patch over a settings object (notifications is a
+ *  nested block — a partial patch must never drop sibling keys). */
+function mergeSettings(base: ChamberSettings, patch: Partial<ChamberSettings>): ChamberSettings {
+  return {
+    ...base,
+    ...patch,
+    notifications: patch.notifications !== undefined
+      ? { ...base.notifications, ...patch.notifications }
+      : base.notifications,
+  }
+}
+
+/** Rebuild the cached optimistic snapshot (no-op when no overlay is active). */
+function recomputeOptimistic(): void {
+  if (optimisticPatches.length === 0 || current === null) {
+    optimisticStatus = null
+    return
+  }
+  let merged = current.settings
+  for (const entry of optimisticPatches) merged = mergeSettings(merged, entry.patch)
+  optimisticStatus = { ...current, settings: merged }
+}
+
+/** Drop one in-flight patch (a failed save) and rebuild the overlay. */
+function dropOptimistic(seq: number): void {
+  optimisticPatches = optimisticPatches.filter(entry => entry.seq !== seq)
+  recomputeOptimistic()
+  notify()
+}
 
 function notify(): void {
   for (const listener of listeners) listener()
@@ -60,6 +115,10 @@ function attachBridge(api: SettingsSurface): void {
   bridgeSubscribed = true
   bridgeUnsubscribe = api.onChanged((status) => {
     current = status
+    // The authoritative value may arrive while an optimistic overlay is
+    // still in flight (the main process pushes BEFORE the invoke reply) —
+    // rebuild the merged snapshot so the overlay stays visible.
+    recomputeOptimistic()
     notify()
   })
   void api.get()
@@ -68,6 +127,7 @@ function attachBridge(api: SettingsSurface): void {
       // when no push has landed yet.
       if (current === null) {
         current = status
+        recomputeOptimistic()
         notify()
       }
     })
@@ -111,7 +171,8 @@ hydrate()
 
 /** Stable snapshot (null = bridge absent / not hydrated yet). PURE — no side effects. */
 export function getSettingsStatus(): ChamberSettingsStatus | null {
-  return current
+  if (current === null) return null
+  return optimisticPatches.length > 0 && optimisticStatus !== null ? optimisticStatus : current
 }
 
 export function subscribeSettings(listener: () => void): () => void {
@@ -123,23 +184,50 @@ export function subscribeSettings(listener: () => void): () => void {
 }
 
 /**
- * Apply a settings patch (design 14 D7): the main process validates,
- * applies side effects (keep-awake / login autostart), persists, and pushes.
- * Loud {error} on failure — never a silent fake success. The returned status
- * (or the pushed update) refreshes the local snapshot.
+ * Apply a settings patch (design 14 D7): OPTIMISTIC — the patch overlays the
+ * snapshot immediately (controls reflect the click in the same frame; no
+ * disabled/dimmed flash during the IPC round-trip), then the main process
+ * validates, applies side effects (keep-awake / login autostart), persists,
+ * and pushes. Loud {error} on failure — never a silent fake success; a failed
+ * patch is dropped from the overlay (the control snaps back to the
+ * authoritative value). Out-of-order results: only the LATEST save's settle
+ * clears the overlay list and replaces the snapshot — a rapid second toggle
+ * never flashes the first save's intermediate value.
  */
 export async function applySettingsPatch(
   patch: Partial<ChamberSettings>,
 ): Promise<{ ok: true; status: ChamberSettingsStatus } | { ok: false; error: string; code?: string }> {
+  const seq = ++saveSeq
+  optimisticPatches = [...optimisticPatches, { seq, patch }]
+  recomputeOptimistic()
+  notify()
   const api = bridgeSettings()
-  if (api === null) return { ok: false, error: 'settings bridge unavailable' }
+  if (api === null) {
+    dropOptimistic(seq)
+    return { ok: false, error: 'settings bridge unavailable' }
+  }
   try {
     const result = await api.set(patch)
-    if ('error' in result) return { ok: false, error: result.error, code: result.code }
+    if (seq !== saveSeq) {
+      // An OLDER save settling: its authoritative value already landed via
+      // the main-process push (the newest save's settle will replace the
+      // snapshot) — keep the patch in the overlay, never flash an
+      // intermediate value.
+      return { ok: true, status: getSettingsStatus() as ChamberSettingsStatus }
+    }
+    // The NEWEST save settles: every earlier in-flight patch was applied by
+    // the main process in order, so the result is final for all of them.
+    optimisticPatches = []
+    recomputeOptimistic()
+    if ('error' in result) {
+      notify()
+      return { ok: false, error: result.error, code: result.code }
+    }
     current = result
     notify()
     return { ok: true, status: result }
   } catch (error) {
+    dropOptimistic(seq)
     return { ok: false, error: String(error) }
   }
 }

@@ -19,20 +19,24 @@ export interface SegmentedControlProps<T extends string = string> {
   className?: string
 }
 
+// TRACK_PADDING 必须与 SegmentedControl.module.css 中 .segmented 的 padding
+// 保持一致（测量出的 left/width 直接对接轨道坐标）。
 const TRACK_PADDING = 2
 const SEGMENT_GAP = 2
-// 上述常量必须与 SegmentedControl.module.css 中 .segmented 的 padding/gap
-// 保持一致（测量出的 left/width 直接对接轨道坐标）。
 
 /**
- * 滑块式分段单选（chamber 设置通用，2026-11）：轨道内一枚品牌色滑块滑向
- * 选中项，选中文字反白（label-primary-foreground），未选中灰字。
+ * 滑块式分段单选（chamber 设置通用）：轨道内蓝色滑块滑向选中项，选中
+ * 文字反白（label-primary-foreground），未选中灰字。
  *
- * 视觉语言参考官方 switch（dsh-client-ui-settings-plugins 的
- * SubagentModelSelectionCard：选中轨道 brand-primary、thumb
- * label-primary-foreground、transition transform）。与官方不同的是这里
- * 保留原生 radio 语义（每个选项一个 input[type=radio]，键盘方向键切换），
- * 滑块是 aria-hidden 的纯装饰层。
+ * 选中色为官方业务蓝（--dsw-alias-state-business-primary，浅色
+ * deepseek-500 / 深色 deepseek-400）——dsh 主题的 brand-primary 是中性
+ * 黑/白，不适合做选中填充；反白文字在浅色为白、深色为近黑，两主题下与
+ * 蓝色填充的对比度都达标。视觉语言参考官方 switch
+ * （SubagentModelSelectionCard）与发送按钮（InputBar .primary：
+ * info-fill 蓝底 + 白字形）。
+ *
+ * 与官方不同的是这里保留原生 radio 语义（每个选项一个 input[type=radio]，
+ * 键盘方向键切换），滑块是 aria-hidden 的纯装饰层。
  *
  * 列宽按内容自适应（flex，各选项 max-content），因此滑块位置/宽度由
  * layout 测量得出——等宽列会让长文案溢出（如「隐藏到托盘」对「退出应用」）。
