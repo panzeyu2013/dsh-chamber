@@ -127,3 +127,20 @@ test('gateway orchestration fails loud on proxy status and malformed rows', asyn
     Response.json({ items: [{ sessionId: 's-1', running: true }] }))
   await assert.rejects(() => malformed.sessions(), /malformed session.blank/)
 })
+
+test('gateway orchestration calls the injected fetch as a plain function, never as an api method', async () => {
+  // WebIDL-branded fetch (browser/Blink) rejects any non-Window receiver with
+  // "Illegal invocation". A plain (non-arrow) function fake records the
+  // receiver the api passes: a class method body is always strict-mode code,
+  // so a plain call yields `undefined` — never the api instance, or the real
+  // gateway fetch would throw.
+  let receiver: unknown = 'unset'
+  function fakeFetch(this: unknown, input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    receiver = this
+    return Promise.resolve(Response.json({ items: [{ sessionId: 's-1', running: true, blank: false, updatedAt: 1 }] }))
+  }
+
+  const api = new GatewayOrchestrationApi('gateway-prod', fakeFetch)
+  assert.deepEqual(await api.sessions(), [{ sessionId: 's-1', running: true, blank: false, updatedAt: 1 }])
+  assert.equal(receiver, undefined)
+})
