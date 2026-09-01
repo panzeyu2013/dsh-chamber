@@ -605,7 +605,7 @@ function GatewayRuntimeSection({
         <span className={css.generalFieldLabel}>{t('dshRuntimeSelectVersion')}</span>
         <div className={css.runtimeSelectRow}>
           <select
-            className={css.updateButton}
+            className={css.runtimeField}
             value={chosenRemote ?? ''}
             disabled={mutationDisabled}
             onChange={(event) => {
@@ -705,7 +705,7 @@ function GatewayRuntimeSection({
         {registryEditing ? (
           <div className={css.runtimeSelectRow}>
             <select
-              className={css.updateButton}
+              className={css.runtimeField}
               value={registrySelection}
               disabled={mutationDisabled}
               onChange={(event) => {
@@ -721,7 +721,7 @@ function GatewayRuntimeSection({
             {registrySelection === CUSTOM_REGISTRY && (
               <input
                 type="url"
-                className={css.updateButton}
+                className={css.runtimeField}
                 value={customOrigin}
                 placeholder="https://registry.example.com"
                 disabled={mutationDisabled}
@@ -1280,7 +1280,7 @@ export function DshRuntimeSection({
         <span className={css.generalFieldLabel}>{t('dshRuntimeSelectVersion')}</span>
         <div className={css.runtimeSelectRow}>
           <select
-            className={css.updateButton}
+            className={css.runtimeField}
             value={chosen ?? ''}
             disabled={mutationDisabled || !canSelect}
             onChange={(event) => {
@@ -1406,7 +1406,7 @@ export function DshRuntimeSection({
         <span className={css.generalFieldLabel}>{t('dshRuntimeRegistryLabel')}</span>
         <div className={css.runtimeSelectRow}>
           <select
-            className={css.updateButton}
+            className={css.runtimeField}
             value={registrySelection}
             disabled={registryDisabled}
             onChange={(event) => {
@@ -1450,7 +1450,7 @@ export function DshRuntimeSection({
           <span className={css.generalFieldLabel}>{t('dshRuntimeRegistryCustomLabel')}</span>
           <input
             type="url"
-            className={css.updateButton}
+            className={css.runtimeField}
             value={customOrigin}
             placeholder="https://registry.example.com"
             disabled={registryDisabled}
