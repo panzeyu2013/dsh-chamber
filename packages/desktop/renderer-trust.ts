@@ -32,6 +32,29 @@ export function isTrustedRendererUrl(url: string, controlPlaneOrigin: string): b
 }
 
 /**
+ * 可交给 OS 默认处理器打开的外链（setWindowOpenHandler / will-navigate 等
+ * 入口共用）：严格按 scheme 白名单放行 http(s)（默认浏览器）与 mailto
+ * （邮件客户端），其他协议（file:/javascript:/data:/自定义 scheme）与解析
+ * 失败一律拒绝。http(s) 且给出 controlPlaneOrigin 时，同源目标不算外链
+ * ——在浏览器里打开控制面只会得到无 preload 的重复壳，保持拒绝；mailto:
+ * 无 origin 概念，恒为外链。只做 scheme + 同源判定——任意外部 http(s)
+ * 站点都可能出现在助手消息的引用链接里，无法也不应前缀白名单。
+ */
+export function isExternalLinkUrl(url: string, controlPlaneOrigin?: string): boolean {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'mailto:') return parsed.href !== 'mailto:'
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    if (controlPlaneOrigin !== undefined) {
+      return parsed.origin !== new URL(controlPlaneOrigin).origin
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * IPC is accepted only from the current main window's main frame and fixed
  * chamber shell document. Checking the origin alone is insufficient: a child,
  * stale WebContents, or /api/i/* remote document could otherwise reuse it.

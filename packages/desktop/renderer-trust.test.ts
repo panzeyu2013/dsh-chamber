@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createTrustedIpc, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts'
+import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts'
 import type { IpcSenderLike } from './renderer-trust.ts'
 
 const origin = 'http://127.0.0.1:17500'
@@ -17,6 +17,37 @@ test('renderer URL trust is the exact shell document, not the whole control-plan
   assert.equal(isTrustedRendererUrl('https://evil.example/', origin), false)
   assert.equal(isTrustedRendererUrl('file:///tmp/index.html', origin), false)
   assert.equal(isTrustedRendererUrl('not a url', origin), false)
+})
+
+test('external-link allowlist is external http(s) and mailto by scheme and origin', () => {
+  // Same-origin http(s) targets are not external: opening the control plane in
+  // the OS browser would only produce a preload-less duplicate shell.
+  assert.equal(isExternalLinkUrl('https://example.com/a?b=c#d', origin), true)
+  assert.equal(isExternalLinkUrl('http://example.com/', origin), true)
+  assert.equal(isExternalLinkUrl('http://127.0.0.1:17501/', origin), true)
+  assert.equal(isExternalLinkUrl('http://127.0.0.1:17500/some/path', origin), false)
+  assert.equal(isExternalLinkUrl('http://127.0.0.1:17500/', origin), false)
+  assert.equal(isExternalLinkUrl('mailto:user@example.com', origin), true)
+  assert.equal(isExternalLinkUrl('MAILTO:user@example.com', origin), true)
+  assert.equal(isExternalLinkUrl('mailto:', origin), false)
+  assert.equal(isExternalLinkUrl('mailto:?subject=x', origin), true)
+  assert.equal(isExternalLinkUrl('HTTPS://EXAMPLE.COM/', origin), true)
+  // WHATWG URL parsing trims surrounding whitespace; padding cannot smuggle a scheme.
+  assert.equal(isExternalLinkUrl('  https://example.com/  ', origin), true)
+  assert.equal(isExternalLinkUrl('file:///etc/passwd', origin), false)
+  assert.equal(isExternalLinkUrl('javascript:alert(1)', origin), false)
+  assert.equal(isExternalLinkUrl('data:text/html,<b>hi</b>', origin), false)
+  assert.equal(isExternalLinkUrl('chrome://settings', origin), false)
+  assert.equal(isExternalLinkUrl('vscode://file/~/x', origin), false)
+  assert.equal(isExternalLinkUrl('ssh://host', origin), false)
+  assert.equal(isExternalLinkUrl('tel:+8612345678', origin), false)
+  assert.equal(isExternalLinkUrl('', origin), false)
+  assert.equal(isExternalLinkUrl('not a url', origin), false)
+  assert.equal(isExternalLinkUrl('example.com/path', origin), false)
+  assert.equal(isExternalLinkUrl('http://', origin), false)
+  assert.equal(isExternalLinkUrl('//evil.com', origin), false)
+  // Without a control-plane origin the predicate is scheme-only.
+  assert.equal(isExternalLinkUrl('http://127.0.0.1:17500/some/path'), true)
 })
 
 test('IPC trust requires the current webContents main frame and trusted URL', () => {
@@ -104,4 +135,11 @@ test('renderer ACK deliveries project and preload-validates the captured lifecyc
   assert.match(preload, /const REMOTE_SOURCE_FINGERPRINT_PATTERN = \/\^\[a-f0-9\]\{64\}\$\//)
   assert.match(preload, /validSourceFingerprint\(intent\.instanceId, intent\.sourceFingerprint\)/)
   assert.match(preload, /validSourceFingerprint\(sourceId as string, req\.sourceFingerprint\)/)
+})
+
+test('window-open and navigation fences share the external-link allowlist', () => {
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  assert.match(main, /setWindowOpenHandler\(\(\{ url \}\) => \{[\s\S]*?isExternalLinkUrl\(url, rendererOrigin\)[\s\S]*?return \{ action: 'deny' \};/)
+  assert.match(main, /will-navigate', \(event, url\) => \{[\s\S]*?handleUntrustedNavigation\(event, url, rendererOrigin\)/)
+  assert.match(main, /will-redirect', \(event, url\) => \{[\s\S]*?handleUntrustedNavigation\(event, url, rendererOrigin\)/)
 })

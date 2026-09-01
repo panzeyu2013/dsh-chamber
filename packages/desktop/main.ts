@@ -48,7 +48,7 @@ import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
 import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts';
 import type { GatewayRegistrationAuthProof, GatewaySessionManager, GatewaySessionOrigin } from './gateway-session.ts';
 import { discoverSshConfigHosts } from './ssh-config.ts';
-import { createTrustedIpc, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { call, createControlPlane } from './control-plane-module.ts';
 import {
   attemptDeepLinkProtocolRegistration,
@@ -1115,6 +1115,58 @@ function installRendererRecovery(win: BrowserWindow): void {
   });
 }
 
+// 外链打开速率限制（防脚本 spam 反复弹浏览器标签；用户手动点击远低于该
+// 阈值）：10s 窗口内最多 8 次，超限进入 30s 冷却（log-and-drop）。
+const OPEN_EXTERNAL_BUDGET = 8;
+const OPEN_EXTERNAL_WINDOW_MS = 10_000;
+const OPEN_EXTERNAL_COOLDOWN_MS = 30_000;
+const externalOpenTimes: number[] = [];
+let externalOpenCooldownUntil = 0;
+
+/**
+ * 打开外链的统一入口（setWindowOpenHandler / handleUntrustedNavigation
+ * 共用）：以解析后的规范化 href 交给 shell.openExternal（避免 raw 字符串
+ * 里 Chromium 已剥离而 OS 层未剥离的空白/换行差异），失败 loud 记录，绝不
+ * 抛出；超速率预算时静默丢弃并冷却。
+ */
+function openExternally(url: string): void {
+  let normalized: string;
+  try {
+    normalized = new URL(url).href;
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  if (now < externalOpenCooldownUntil) return;
+  const recent = externalOpenTimes.filter((t) => now - t < OPEN_EXTERNAL_WINDOW_MS);
+  if (recent.length >= OPEN_EXTERNAL_BUDGET) {
+    externalOpenCooldownUntil = now + OPEN_EXTERNAL_COOLDOWN_MS;
+    console.warn('[dsh-chamber] 外部链接打开过于频繁，30s 内暂停（疑似脚本 spam）');
+    return;
+  }
+  externalOpenTimes.length = 0;
+  externalOpenTimes.push(...recent, now);
+  void shell.openExternal(normalized).catch((error) => {
+    console.error('[dsh-chamber] 打开外部链接失败：', describeUnknownError(error));
+  });
+}
+
+/**
+ * 非可信导航统一处理（will-navigate / will-redirect 共用，与
+ * setWindowOpenHandler 同款 scheme + 同源白名单）：非 shell 文档的导航一律
+ * preventDefault；目标是外链（外部 http(s)/mailto）时再转交系统默认处理器。
+ * 必须有这一步——vendor markdown 只给 http(s) 链接加 target=_blank（其余
+ * 协议如 mailto: 不带 target，点击走导航事件而不是窗口打开事件），缺它
+ * mailto: 链接仍是死链。
+ */
+function handleUntrustedNavigation(event: { preventDefault(): void }, url: string, rendererOrigin: string): void {
+  if (isTrustedRendererUrl(url, rendererOrigin)) return;
+  event.preventDefault();
+  if (isExternalLinkUrl(url, rendererOrigin)) {
+    openExternally(url);
+  }
+}
+
 /**
  * 创建主窗口（单 frame，控制面 origin）。启动期与 activate 重建共用：
  * fatalOnLoadFailure=true（启动期）时加载失败 = 大声失败 + 退出；重建路径
@@ -1161,14 +1213,25 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     event.preventDefault();
   });
   // The preload exposes host-impacting IPC. Keep it confined to the exact
-  // control-plane document: deny popups and cancel cross-origin navigation
-  // or redirects before another page can receive the same preload bridge.
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // control-plane document: never open a popup or a new WebContents (a new
+  // window would inherit the preload bridge), and cancel cross-origin
+  // navigation or redirects before another page can receive the same preload.
+  // Vendor markdown/tool-card links render as <a target="_blank">; instead of
+  // a dead click, hand genuinely external http(s)/mailto targets (different
+  // origin from the control plane) to the OS default handler while always
+  // denying the window itself. Same-origin targets, file:/custom schemes and
+  // parse failures stay denied.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isExternalLinkUrl(url, rendererOrigin)) {
+      openExternally(url);
+    }
+    return { action: 'deny' };
+  });
   win.webContents.on('will-navigate', (event, url) => {
-    if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
+    handleUntrustedNavigation(event, url, rendererOrigin);
   });
   win.webContents.on('will-redirect', (event, url) => {
-    if (!isTrustedRendererUrl(url, rendererOrigin)) event.preventDefault();
+    handleUntrustedNavigation(event, url, rendererOrigin);
   });
   installRendererRecovery(win);
   // 通知点击的重建竞态兜底（design 19 §3.3）：点击时窗口若在重建/加载中，打开
@@ -4679,10 +4742,20 @@ if (!gotTheLock) {
     // Deny Web permission requests by default: Electron default-grants these to
     // same-origin content, and the control plane also serves proxied remote-instance
     // content under /api/i/<id>/* (same origin). Keep one benign exception —
-    // clipboard-sanitized-write (navigator.clipboard copy) — which carries no
-    // read/privacy risk; clipboard-read and media/geolocation/notifications stay
-    // denied.
-    session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    // clipboard-sanitized-write, which is exactly what navigator.clipboard.writeText()
+    // requests in Blink (clipboard_promise.cc: writeText performs a permission
+    // REQUEST, not a check; Electron routes it to the session's request handler,
+    // so a deny here silently breaks every copy button while permissions.query
+    // still reports granted). The check handler below is only consulted for
+    // navigator.permissions.query() and must mirror the same allowlist so the
+    // query result is honest. The grant is per-session: every same-origin frame
+    // incl. proxied remote-instance HTML can write sanitized text/HTML
+    // (write-only, no custom formats, Blink still requires document focus for
+    // writes) — the same pastejacking surface the official dsh web app has in
+    // a normal browser, accepted. clipboard-read, custom-format writes and
+    // media/geolocation/notifications/etc. stay denied.
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
+      callback(permission === 'clipboard-sanitized-write'));
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
 
     // 启动期创建主窗口：加载失败 = 大声失败 + 退出（createMainWindow 内）；
