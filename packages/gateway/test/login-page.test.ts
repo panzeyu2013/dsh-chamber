@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import {
   LOGIN_PAGE_CSP,
   detectLoginLang,
+  renderBoundaryErrorPage,
   renderLoginPage,
   renderTokenOnlyPage,
   wantsHtmlLoginResponse,
@@ -32,7 +33,7 @@ test('renderLoginPage renders the pristine en form with full input hygiene', () 
   assert.match(html, /autocorrect="off"/)
   assert.match(html, /\bautofocus\b/)
   // The token layer is self-declared in the page's own <style>.
-  assert.match(html, /--dsw-alias-bg-base:\s*#0b0f14/)
+  assert.match(html, /--dsw-alias-bg-base:\s*#151517/)
   // Inline SVG favicon — the one `img-src data:` consumer.
   assert.match(html, /data:image\/svg\+xml/)
   // No-script invariant (C1): the page carries zero script elements.
@@ -242,4 +243,121 @@ test('LOGIN_PAGE_CSP allows only self forms and data images — never scripts', 
   assert.match(LOGIN_PAGE_CSP, /form-action 'self'/)
   assert.match(LOGIN_PAGE_CSP, /img-src data:/)
   assert.doesNotMatch(LOGIN_PAGE_CSP, /script-src/)
+})
+
+test('the token layer declares the dark palette plus a prefers-color-scheme light override', () => {
+  // The page follows the browser display mode: the dark values stay the
+  // default fallback, the light palette ships under the media query.
+  const html = renderLoginPage({ lang: 'en', secure: true })
+  assert.match(html, /--dsw-alias-bg-base:\s*#151517/, 'the dark base stays the no-media-query default')
+  assert.match(html, /@media \(prefers-color-scheme:\s*light\)/)
+  assert.match(html, /--dsw-alias-bg-base:\s*#f9fafb/, 'a light base is declared under the media query')
+  // The dsh-blue brand ramp replaces the earlier green palette (2026-09 restyle).
+  assert.match(html, /--dsw-alias-button-primary-fill:\s*#679efe/, 'dark primary is the dsh deepseek blue')
+  assert.doesNotMatch(html, /#238636|#2ea043|#1f883d/, 'no green palette values remain')
+  assert.match(html, /color-scheme:\s*dark/)
+  assert.match(html, /color-scheme:\s*light/, 'native form widgets follow the light mode too')
+})
+
+test('the rendered card carries a brand mark and the secure badge stays visible', () => {
+  const html = renderLoginPage({ lang: 'en', secure: true })
+  assert.match(html, /class="brand"/)
+  assert.match(html, /class="mark"/)
+  assert.match(html, /data:image\/svg\+xml/)
+})
+
+test('renderBoundaryErrorPage renders a no-script, value-free explanation page (en)', () => {
+  const html = renderBoundaryErrorPage({
+    lang: 'en',
+    status: 403,
+    code: 'origin_forbidden',
+    reasonKind: 'origin_mismatch',
+    origin: 'http://192.168.1.20:30801',
+    authority: 'http://192.168.1.10:30801',
+  })
+  assert.match(html, /<html lang="en">/)
+  assert.ok(html.includes('Access denied'))
+  assert.ok(html.includes('same-origin browser requests'))
+  assert.ok(html.includes('http://192.168.1.20:30801'))
+  assert.ok(html.includes('HTTP 403'))
+  assert.ok(html.includes('origin_forbidden'))
+  assert.ok(html.includes('--cors-origin'), 'the fix hint mentions the allow-list flag')
+  // Same no-script/value invariants as the login page (shared CSP + hygiene).
+  assert.doesNotMatch(html, /<script/i)
+  assert.doesNotMatch(html, /value="/)
+  assert.doesNotMatch(html, /<form/i)
+  assert.ok(!html.includes('>密码<'), 'en page: no credential copy')
+  assert.ok(!html.includes('password</'), 'en page never labels a credential input')
+})
+
+test('renderBoundaryErrorPage renders the zh copy', () => {
+  const html = renderBoundaryErrorPage({
+    lang: 'zh',
+    status: 421,
+    code: 'misdirected_request',
+    reasonKind: 'host_rejected',
+    host: '203.0.113.9:30801',
+  })
+  assert.match(html, /<html lang="zh">/)
+  assert.ok(html.includes('访问被拒绝'))
+  assert.ok(html.includes('不是本网关服务的地址'))
+  assert.ok(html.includes('203.0.113.9:30801'))
+  assert.ok(html.includes('HTTP 421'))
+})
+
+test('every boundary reason kind renders a page with its explanation (en)', () => {
+  const cases: Array<{ kind: Parameters<typeof renderBoundaryErrorPage>[0]['reasonKind']; marker: string }> = [
+    { kind: 'malformed_headers', marker: 'malformed or duplicated' },
+    { kind: 'host_rejected', marker: 'is not an address this gateway serves' },
+    { kind: 'origin_invalid', marker: 'not a valid browser origin' },
+    { kind: 'origin_mismatch', marker: 'same-origin browser requests' },
+    { kind: 'cross_site_no_origin', marker: 'no Origin header' },
+  ]
+  for (const { kind, marker } of cases) {
+    const html = renderBoundaryErrorPage({
+      lang: 'en',
+      status: kind === 'malformed_headers' ? 400 : kind === 'host_rejected' ? 421 : 403,
+      code: kind === 'malformed_headers' ? 'bad_request' : kind === 'host_rejected' ? 'misdirected_request' : 'origin_forbidden',
+      reasonKind: kind,
+      ...(kind === 'host_rejected' ? { host: '203.0.113.9:3000' } : {}),
+      ...(kind === 'origin_invalid' ? { origin: 'null' } : {}),
+      ...(kind === 'origin_mismatch' ? { origin: 'http://a.example', authority: 'http://b.example' } : {}),
+    })
+    assert.ok(html.includes(marker), `${kind} must explain itself`)
+    assert.doesNotMatch(html, /<script/i)
+    assert.doesNotMatch(html, /value="/)
+  }
+})
+
+test('the host_rejected copy adapts when no Host value is available', () => {
+  const none = renderBoundaryErrorPage({ lang: 'en', status: 421, code: 'misdirected_request', reasonKind: 'host_rejected' })
+  assert.ok(none.includes('did not carry a Host header'))
+})
+
+test('echoed request values are HTML-escaped, never markup', () => {
+  const hostile = 'http://evil.example/<img src=x onerror=alert(1)>&"\u0027'
+  const html = renderBoundaryErrorPage({
+    lang: 'en',
+    status: 403,
+    code: 'origin_forbidden',
+    reasonKind: 'origin_invalid',
+    origin: hostile,
+  })
+  assert.ok(!html.includes('<img src=x'), 'a hostile value must not reach the output as markup')
+  assert.ok(html.includes('&lt;img'))
+  assert.ok(html.includes('&amp;'), 'ampersands are escaped')
+  assert.ok(html.includes('&quot;') && html.includes('&#39;'), 'quotes are escaped')
+})
+
+test('over-long echoed values are capped for the page', () => {
+  const long = 'http://evil.example/' + 'x'.repeat(500)
+  const html = renderBoundaryErrorPage({
+    lang: 'en',
+    status: 403,
+    code: 'origin_forbidden',
+    reasonKind: 'origin_invalid',
+    origin: long,
+  })
+  assert.ok(!html.includes('x'.repeat(500)))
+  assert.ok(html.includes('…'))
 })

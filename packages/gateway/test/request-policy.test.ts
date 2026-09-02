@@ -202,3 +202,28 @@ test('a cross-site request without Origin is rejected via sec-fetch-site', () =>
   const absent = boundary.evaluate(request({ host: 'gateway.example:3000' }, '203.0.113.8'))
   assert.equal(absent.allowed, true)
 })
+
+test('every rejection carries the failing-check reason for diagnostics; allowances never do', () => {
+  const boundary = policy({ host: '0.0.0.0', port: 3000, publicOrigin: 'http://gateway.example:3000' })
+  const mismatch = boundary.evaluate(request({ host: 'gateway.example:3000', origin: 'http://evil.example' }, '203.0.113.8'))
+  assert.deepEqual(mismatch.reason, { kind: 'origin_mismatch', origin: 'http://evil.example', authority: 'http://gateway.example:3000' })
+  const opaque = boundary.evaluate(request({ host: 'gateway.example:3000', origin: 'null' }, '203.0.113.8'))
+  assert.deepEqual(opaque.reason, { kind: 'origin_invalid', origin: 'null' })
+  const crossSite = boundary.evaluate(request({ host: 'gateway.example:3000', 'sec-fetch-site': 'cross-site' }, '203.0.113.8'))
+  assert.deepEqual(crossSite.reason, { kind: 'cross_site_no_origin' })
+  const duplicateAuth = boundary.evaluate(request(
+    { host: 'gateway.example:3000', authorization: 'Bearer x' },
+    '203.0.113.8',
+    ['Host', 'gateway.example:3000', 'Authorization', 'Bearer x', 'Authorization', 'Bearer y'],
+  ))
+  assert.deepEqual(duplicateAuth.reason, { kind: 'malformed_headers' })
+  // A public peer cannot use a public authority: the host value is echoed.
+  const rejectedAuthority = boundary.evaluate(request({ host: '203.0.113.9:3000' }, '203.0.113.8'))
+  assert.deepEqual(rejectedAuthority.reason, { kind: 'host_rejected', host: '203.0.113.9:3000' })
+  // Missing Host → host_rejected without a value (nothing to echo).
+  const missing = boundary.evaluate(request({}, '203.0.113.8'))
+  assert.deepEqual(missing.reason, { kind: 'host_rejected' })
+  // Allowed decisions never carry a reason.
+  const allowed = boundary.evaluate(request({ host: 'gateway.example:3000' }, '203.0.113.8'))
+  assert.equal(allowed.reason, undefined)
+})

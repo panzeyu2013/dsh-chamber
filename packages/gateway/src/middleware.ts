@@ -18,6 +18,17 @@ import { isIP } from 'node:net'
 import type { ApiCorsEvaluator, ApiRequest } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from './config.ts'
 
+/** Non-secret facts about WHY a request failed the public boundary. Only the
+ * request's own values (Host/Origin) are ever echoed — never configuration
+ * beyond what the copy itself states. Consumed by dispatch.ts for the JSON
+ * `detail` and the HTML boundary error page. */
+export type GatewayRejectionReason =
+  | { kind: 'malformed_headers' }
+  | { kind: 'host_rejected'; host?: string }
+  | { kind: 'origin_invalid'; origin: string }
+  | { kind: 'origin_mismatch'; origin: string; authority: string }
+  | { kind: 'cross_site_no_origin' }
+
 export interface GatewayRequestDecision {
   allowed: boolean
   /** Malformed raw headers are 400; Host/authority failures are 421;
@@ -28,6 +39,9 @@ export interface GatewayRequestDecision {
   /** Boundary-derived facts consumed by auth. Never read XFF again downstream. */
   clientAddress: string
   secure: boolean
+  /** Present exactly when `allowed` is false: the failing check, for the
+   * dispatch layer's diagnostics. */
+  reason?: GatewayRejectionReason
 }
 
 export interface GatewayRequestPolicy {
@@ -141,13 +155,13 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
     // IncomingMessage.rawHeaders is present on every real HTTP and upgrade
     // request; structural test doubles without it remain supported.
     if (hasDuplicateRawHeader(req, 'authorization')) {
-      return { allowed: false, status: 400, code: 'bad_request', headers: {}, clientAddress: '', secure: false }
+      return { allowed: false, status: 400, code: 'bad_request', headers: {}, clientAddress: '', secure: false, reason: { kind: 'malformed_headers' } }
     }
     if (hasDuplicateRawHeader(req, 'host')
       || (trustedProxy && (hasDuplicateRawHeader(req, 'x-forwarded-host')
         || hasDuplicateRawHeader(req, 'x-forwarded-proto')
         || hasDuplicateRawHeader(req, 'x-forwarded-for')))) {
-      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false }
+      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false, reason: { kind: 'host_rejected' } }
     }
     const forwardedHost = trustedProxy ? headerValue(req.headers, 'x-forwarded-host') : undefined
     const forwardedProto = trustedProxy ? headerValue(req.headers, 'x-forwarded-proto') : undefined
@@ -155,13 +169,13 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
     if ((forwardedHost !== undefined && forwardedHost.includes(','))
       || (forwardedProto !== undefined && forwardedProto.includes(','))
       || (forwardedFor !== undefined && (forwardedFor.includes(',') || normalizeIp(forwardedFor) === ''))) {
-      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false }
+      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false, reason: { kind: 'host_rejected' } }
     }
 
     const socketSecure = req.socket?.encrypted === true
     const protocol: 'http:' | 'https:' = socketSecure || forwardedProto?.toLowerCase() === 'https' ? 'https:' : 'http:'
     if (forwardedProto !== undefined && forwardedProto !== 'http' && forwardedProto !== 'https') {
-      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false }
+      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false, reason: { kind: 'host_rejected' } }
     }
     const rawHost = forwardedHost ?? headerValue(req.headers, 'host')
     const authority = parseAuthority(protocol, rawHost)
@@ -170,7 +184,7 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
     // client identity. Missing XFF is unknown, not loopback/private fallback.
     const clientAddress = trustedProxy ? forwardedClient : peerAddress
     if (authority === null) {
-      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress, secure: protocol === 'https:' }
+      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress, secure: protocol === 'https:', reason: { kind: 'host_rejected', ...(rawHost !== undefined && rawHost !== '' ? { host: rawHost } : {}) } }
     }
 
     let requestOrigin: string | null = null
@@ -197,19 +211,24 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
       }
     }
     if (requestOrigin === null) {
-      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress, secure: protocol === 'https:' }
+      return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress, secure: protocol === 'https:', reason: { kind: 'host_rejected', host: authority.host } }
     }
 
     const originHeader = headerValue(req.headers, 'origin')
     const origin = canonicalOrigin(originHeader)
     if (originHeader !== undefined && (origin === null || (origin !== requestOrigin && !allowedOrigins.has(origin)))) {
-      return { allowed: false, status: 403, code: 'origin_forbidden', headers: {}, clientAddress, secure: protocol === 'https:' }
+      return {
+        allowed: false, status: 403, code: 'origin_forbidden', headers: {}, clientAddress, secure: protocol === 'https:',
+        reason: origin === null
+          ? { kind: 'origin_invalid', origin: originHeader }
+          : { kind: 'origin_mismatch', origin, authority: requestOrigin },
+      }
     }
     // A cross-site browser request without an Origin must not use a navigation
     // or media load to bypass the Origin check. Explicitly allowlisted CORS
     // calls carry Origin and were handled above.
     if (originHeader === undefined && headerValue(req.headers, 'sec-fetch-site') === 'cross-site') {
-      return { allowed: false, status: 403, code: 'origin_forbidden', headers: {}, clientAddress, secure: protocol === 'https:' }
+      return { allowed: false, status: 403, code: 'origin_forbidden', headers: {}, clientAddress, secure: protocol === 'https:', reason: { kind: 'cross_site_no_origin' } }
     }
     const headers: Record<string, string> = origin === null ? {} : {
       'access-control-allow-origin': origin,

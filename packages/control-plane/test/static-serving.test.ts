@@ -230,7 +230,10 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'unsafe-eval'/)
     assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'nonce-[A-Za-z0-9+/=]+'/)
     assert.equal(html.headers['cross-origin-opener-policy'], 'same-origin')
-    assert.equal(html.headers['referrer-policy'], 'no-referrer')
+    // same-origin (not no-referrer): no-referrer makes modern browsers send
+    // Origin: null on same-origin form POSTs, which the origin fences reject
+    // fail-closed (live finding 2026-09, see CONTROL_PLANE_SECURITY_HEADERS).
+    assert.equal(html.headers['referrer-policy'], 'same-origin')
     assert.equal(html.headers['x-content-type-options'], 'nosniff')
     assert.equal(html.headers['x-frame-options'], 'DENY')
 
