@@ -28,7 +28,7 @@ import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
 import { startWsHeartbeat } from './ws-heartbeat.ts'
 
-/** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.2-alpha.1 300MiB request cap / 200MiB image admission). */
+/** Request body cap (design 03 §3.4, same as the v2 runtime proxy; aligned with the upstream dsh 0.1.2-alpha.4 300MiB request cap / 200MiB image admission). */
 export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ export function attachSpkiPinVerifier(req: ClientRequest, pin: string, dispatch:
   })
 }
 
-/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.2-alpha.1 300MiB request cap / 200MiB image admission). */
+/** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.2-alpha.4 300MiB request cap / 200MiB image admission). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
 /** Shared memory budget plus per-proxy concurrency defaults. The byte budget

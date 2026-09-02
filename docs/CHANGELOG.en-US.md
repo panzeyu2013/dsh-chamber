@@ -12,6 +12,43 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ## [Unreleased]
 
+### Changed
+
+- **dsh baseline upgrade 0.1.2-alpha.3 → 0.1.2-alpha.4** — build-time source
+  (`harness.commit` / submodule gitlink = `4e84901e`, 261 vendor links,
+  `ensure-harness-vendor --check` passes) and the bundled runtime
+  (`@deepseek-ai/dsh@0.1.2-alpha.4`, published on npm) synced on both lines:
+  the in-repo fork copies move to the 0.1.2-alpha.4 baseline — the
+  `dsh-client-connection` fork replays the upstream fixture.ts changes
+  (`SessionSeq`-branded seqs plus a local `FixtureSessionWireHeader` replacing
+  the removed `SessionHeader`, the wire-side projection of the upstream
+  `refactor(session)!`); the four chamber patch files
+  (api-path/connection/index/rpc) have zero overlap with the upstream diff;
+  the `dsh-client-web` fork adopts the upstream `corner-shape: round`
+  boot-page.module.css line (smooth-corners) and mirrors the empty
+  `PRELOADED_CLIENT_EXTERNALS` constant; `dsh-api-gateway` is a pure version
+  sync. The `*/invariant.ts` companion entries in all three forks are removed
+  with the upstream a4 package-level deletion (dead code on the chamber side,
+  no consumers), and the residual `@deepseek-ai/dsh-invariants` dependencies
+  are dropped from their package.json files as well (lockfile regenerated and
+  frozen-verified; the legitimate dependencies of other chamber packages on
+  that package are unaffected). Upstream a4 removes `dsh-tool-subagent-report` and renames
+  `dsh-code-runtime-python` → `dsh-experimental-code-runtime-python` — the two
+  orphan importer records resurrected by the add-only lockfile restore script
+  were removed manually (same precedent as a3). The upstream
+  `refactor(session)!` (event seqs vs log offsets,
+  `SessionHeader.seedLength` → `isSeeded`) is breaking but has no chamber
+  impact: the browser wire stays v0 explicitly via the upstream
+  `SessionWireHeader` translation layer (`seedLength` + plain-number seqs
+  unchanged), and no chamber code reads session.jsonl or instantiates
+  `Session`; the only touch surface (connection fork fixture) is adapted.
+  The remaining upstream churn (ui-chat/ui-conversation perf refactors,
+  keyedHooks injection seam, tsconfig.base.json invariant-alias consolidation,
+  plugin-inventory invariant removal) is additive or has no chamber consumer.
+  Validation: full typecheck + all test suites
+  (control-plane/desktop/gateway/cli/runtime/six plugins/renderer-shell/both
+  forks) + `build:renderer` + `verify:i18n` all green; the host-package dist
+  rebuild is byte-identical to HEAD.
 ### Fixed
 
 - **Archived sessions/workspaces no longer resurface in the sidebar after

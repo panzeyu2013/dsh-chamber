@@ -42,7 +42,7 @@
       // stable path below (version pinned by the lockfile, 1.1.0), so the
       // mapping exists after any `pnpm install`.
       "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"],
-      // dsh-host-webserver (0.1.2-alpha.3) imports `compression` and
+      // dsh-host-webserver (0.1.2-alpha.4) imports `compression` and
       // `negotiator`; like @standard-schema/spec above, pnpm cannot resolve
       // them from the symlinked vendor checkout after a fresh install (the
       // per-package node_modules symlinks are computed from the logical

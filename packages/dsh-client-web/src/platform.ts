@@ -35,5 +35,9 @@ export const PLATFORM_MODULES = [
   '@deepseek-ai/dsh-client-ui-primitives',
 ] as const
 
+/** Client-bundle specifiers whose factories the parser preloads before the shell starts. */
+export const PRELOADED_CLIENT_EXTERNALS = [
+] as const
+
 /** One platform module specifier (a seed-table key). */
 export type PlatformModule = (typeof PLATFORM_MODULES)[number]

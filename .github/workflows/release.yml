@@ -62,7 +62,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DSH_CHAMBER_DSH_VERSION: 0.1.2-alpha.3
+  DSH_CHAMBER_DSH_VERSION: 0.1.2-alpha.4
 
 jobs:
   create-release:
@@ -319,6 +319,7 @@ jobs:
           pnpm run typecheck:settings-bridge
           pnpm run typecheck:client-web
           pnpm run typecheck:connection
+          pnpm run typecheck:api-gateway
           pnpm run typecheck:open-in
           pnpm run typecheck:mobile
           pnpm run test:sidebar
