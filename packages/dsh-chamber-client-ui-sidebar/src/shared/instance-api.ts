@@ -576,7 +576,7 @@ export interface CreateWorkspaceResult {
 
 export async function createWorkspace(client: InstanceApiClient, path: string): Promise<CreateWorkspaceResult> {
   const result = await callAndThrow(client, () => client.workspace.create({ path }))
-  return decodeWorkspaceCreateValue(result.ok ? result.value : undefined, path)
+  return decodeWorkspaceCreateValue(result.ok ? result.value : undefined)
 }
 
 export async function renameWorkspace(client: InstanceApiClient, workspaceId: string, title: string): Promise<void> {

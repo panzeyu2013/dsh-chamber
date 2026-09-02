@@ -1817,14 +1817,13 @@ export function SidebarRoot({
                     <IconMonitorOutline16 size={15} className={cc.sourceFoldGlyph} />
                   </button>
                   <span className={cc.sourceLabel}>{server.label}</span>
-                  {server.pluginDiagnostic !== undefined && server.pluginDiagnostic.state !== 'ok' && (
-                    <span
-                      className={cc.pluginDiagnosticBadge}
-                      title={t('status.pluginsAbnormal')}
-                      aria-label={t('status.pluginsAbnormal')}
-                      role="status"
-                    >!</span>
-                  )}
+                  {/* chamber: the source-header plugin diagnostic marker was
+                      REMOVED per user decision (2026-09): the plugin runtime
+                      diagnostic (states + plugin id + reason) is surfaced ONLY
+                      on the connections page / per-instance plugin dialog
+                      (design 09 §3.5 detail surface) — the sidebar never
+                      renders an exclamation for plugin-graph conditions,
+                      informational or abnormal. */}
                   {/* chamber: connection status as a dot/spinner — the phase
                       text is never rendered, only carried on hover/aria. */}
                   <span

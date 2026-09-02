@@ -68,14 +68,22 @@ function assertCreateCorrelation(
   ) throw new Error('gitWorktree/create 返回值与原预览不匹配')
 }
 
+/** Structural correlation of a workspace.create response. NOTE: the returned
+ *  `path` is NOT compared against the requested path — the workspace registry
+ *  canonicalizes every path through `fs.realpath` (dsh-workspace paths.ts),
+ *  while the caller's path may be a lexical spelling (e.g. the git host's
+ *  targetPath under a symlinked $DSH_HOME, or a browser-picked directory).
+ *  The host guarantees the returned entity IS the workspace at the requested
+ *  path (resolveByPath || create), and the official client never compares —
+ *  the same tolerance as the sidebar's decodeWorkspaceCreateValue (2026-09).
+ *  Validation stays structural: non-empty workspaceId plus the created
+ *  boolean. */
 function assertWorkspaceCorrelation(
   workspace: { workspaceId: string; path: string; created: boolean },
-  expectedPath: string,
 ): void {
   if (
     typeof workspace.workspaceId !== 'string'
     || workspace.workspaceId === ''
-    || workspace.path !== expectedPath
     || typeof workspace.created !== 'boolean'
   ) throw new Error('workspace.create 返回值与请求不匹配')
 }
@@ -122,7 +130,7 @@ export async function runCreateSaga(
   let workspace: { workspaceId: string; path: string; created: boolean }
   try {
     workspace = await deps.workspaceCreate(created.path)
-    assertWorkspaceCorrelation(workspace, created.path)
+    assertWorkspaceCorrelation(workspace)
   } catch (workspaceError) {
     if (!created.rollbackAuthorized) {
       throw new GitSagaError(workspaceError, {
@@ -206,7 +214,7 @@ export async function runRollbackRecovery(
   let workspace: { workspaceId: string; path: string; created: boolean }
   try {
     workspace = await deps.workspaceCreate(recovery.path)
-    assertWorkspaceCorrelation(workspace, recovery.path)
+    assertWorkspaceCorrelation(workspace)
   } catch (workspaceError) {
     throw new GitSagaError(workspaceError, { ...recovery, message: errorText(workspaceError) }, true)
   }
@@ -237,7 +245,7 @@ export async function runWorkspaceAdoptRecovery(
   let workspace: { workspaceId: string; path: string; created: boolean }
   try {
     workspace = await deps.workspaceCreate(recovery.path)
-    assertWorkspaceCorrelation(workspace, recovery.path)
+    assertWorkspaceCorrelation(workspace)
   } catch (workspaceError) {
     throw new GitSagaError(workspaceError, { ...recovery, message: errorText(workspaceError) }, true)
   }
@@ -274,7 +282,7 @@ export async function runAdoptSessionSaga(
   let workspace: { workspaceId: string; path: string; created: boolean }
   try {
     workspace = await deps.workspaceCreate(path)
-    assertWorkspaceCorrelation(workspace, path)
+    assertWorkspaceCorrelation(workspace)
   } catch (workspaceError) {
     throw new GitSagaError(workspaceError, {
       kind: 'session-adopt',

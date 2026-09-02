@@ -6,8 +6,21 @@ export interface DecodedWorkspaceCreate {
   created: boolean
 }
 
-/** Correlate workspace.create before a lifecycle saga consumes ownership facts. */
-export function decodeWorkspaceCreateValue(value: any, requestedPath: string): DecodedWorkspaceCreate {
+/**
+ * Correlate workspace.create before a lifecycle saga consumes ownership facts.
+ *
+ * NOTE (2026): the returned `path` is the host's CANONICAL path — the
+ * workspace registry canonicalizes every path through `fs.realpath`
+ * (`dsh-workspace` paths.ts), while the browser-side directory picker hands
+ * string-joined paths that may traverse symlinks (e.g. a picked directory
+ * under a symlinked parent). The OFFICIAL client never compares the returned
+ * path, and an exact-equality check here made every symlinked pick fail with
+ * a false `invalid-response` although the host DID create the workspace —
+ * and the retry stayed hard-blocked (the reused existing workspace keeps
+ * returning its canonical path). Structural validation only: the returned
+ * row must carry a non-empty workspace id and path plus the created boolean.
+ */
+export function decodeWorkspaceCreateValue(value: any): DecodedWorkspaceCreate {
   const workspaceId = value?.workspace?.workspaceId
   const workspacePath = value?.workspace?.path
   if (typeof workspaceId !== 'string' || workspaceId === '') {
@@ -15,12 +28,6 @@ export function decodeWorkspaceCreateValue(value: any, requestedPath: string): D
   }
   if (typeof workspacePath !== 'string' || workspacePath === '') {
     throw new InstanceRpcError('invalid-response', 'workspace.create 未返回 workspace path')
-  }
-  if (workspacePath !== requestedPath) {
-    throw new InstanceRpcError('invalid-response', 'workspace.create 返回了不同的 workspace path', {
-      expectedPath: requestedPath,
-      actualPath: workspacePath,
-    })
   }
   if (typeof value?.created !== 'boolean') {
     throw new InstanceRpcError('invalid-response', 'workspace.create 未返回 created 布尔值')

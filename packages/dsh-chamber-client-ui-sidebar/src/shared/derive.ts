@@ -806,6 +806,13 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       phase: server.phase,
       dshVersion: server.dshVersion ?? null,
       aggregateError: server.aggregateError ?? null,
+      // pluginDiagnostic STAYS in the publish gate even though the sidebar no
+      // longer renders it (badge removed 2026-09, user decision): the
+      // settings-bridge consumes the SAME chamberBridge publish channel and
+      // derives the connections page's pluginDiagnostics from it
+      // (SettingsShell → ConnectionsSection), so a diagnostic-only flip must
+      // still re-publish or the connections surface goes stale. Removing this
+      // block would regress that surface.
       pluginDiagnostic: server.pluginDiagnostic === undefined ? null : {
         state: server.pluginDiagnostic.state,
         message: server.pluginDiagnostic.message ?? null,

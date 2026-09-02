@@ -524,11 +524,27 @@ test('adopt-only session failure retains session-create recovery with the same p
   assert.deepEqual(calls, ['workspace', 'session'])
 })
 
-test('adopt-only correlation mismatch never calls session', async () => {
+test('adopt-only tolerates a canonicalized workspace path (host fs.realpath) and still commits the session', async () => {
+  const calls: string[] = []
+  // The registry canonicalizes every path through fs.realpath while the caller
+  // may pass a lexical spelling (symlinked $DSH_HOME) — the returned path may
+  // legitimately differ, and the adopt must proceed with the returned
+  // workspace (structural correlation only, official-client parity).
+  const result = await runAdoptSessionSaga({
+    workspaceCreate: async () => { calls.push('workspace'); return { workspaceId: 'ws-2', path: '/real/target', created: false } },
+    sessionCreate: async (workspaceId, sessionId) => { calls.push(`session:${workspaceId}:${sessionId}`); return sessionId },
+  }, '/link/target', 'session-fixed')
+  assert.deepEqual(calls, ['workspace', 'session:ws-2:session-fixed'])
+  assert.equal(result.workspaceId, 'ws-2')
+  assert.equal(result.path, '/real/target')
+  assert.equal(result.sessionId, 'session-fixed')
+})
+
+test('adopt-only structural correlation failure (missing workspace id) never calls session', async () => {
   const calls: string[] = []
   await assert.rejects(
     runAdoptSessionSaga({
-      workspaceCreate: async () => { calls.push('workspace'); return { workspaceId: 'ws-2', path: '/OTHER-PATH', created: false } },
+      workspaceCreate: async () => { calls.push('workspace'); return { workspaceId: '', path: '/existing-wt', created: false } },
       sessionCreate: async () => { calls.push('session'); return 'session-fixed' },
     }, '/existing-wt', 'session-fixed'),
     /不匹配/,
