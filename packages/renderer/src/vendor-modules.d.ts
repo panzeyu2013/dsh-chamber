@@ -344,9 +344,6 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
       runningSubagents?: number
     }>
   }
-  export interface InstanceHostReport {
-    dshVersion?: string
-  }
   export type PluginGraphDiagnosticState = 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required' | 'instance-version-conflict'
   export interface PluginGraphDiagnostic {
     state: PluginGraphDiagnosticState
@@ -503,15 +500,6 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
     onInstanceSnapshot(listener: (
       sourceId: string,
       snapshot: InstanceSnapshot | undefined,
-      sourceFingerprint: string | undefined,
-    ) => void): () => void
-    registerInstanceHostProducer(sourceId: string, sourceFingerprint: string): {
-      report(report: InstanceHostReport | undefined): void
-      clear(): void
-    }
-    onInstanceHost(listener: (
-      sourceId: string,
-      report: InstanceHostReport | undefined,
       sourceFingerprint: string | undefined,
     ) => void): () => void
     reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void

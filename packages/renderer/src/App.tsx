@@ -37,7 +37,6 @@ import {
   serversProjectionSignature,
   type ChamberServerAggregate,
   type InstanceAggregate,
-  type InstanceHostReport,
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
@@ -175,13 +174,20 @@ function collectReadySourceIds(
  * 只在对应聚合 state==='ok' 时派生（否则空数组，不显示陈旧数据）；拉取
  * 失败时把错误文本带上 aggregateError（UI 区分「拉取失败」与「无工作区」）。
  */
+
+/** Per-source dsh version fact. D2: the LOCAL instance comes from the desktop
+ *  bridge (`window.dshChamber.dshVersion`); remote instances stay absent
+ *  until a remote version probe is wired (the old in-ctx host-producer
+ *  channel was removed — host.describe was deleted upstream). */
+type HostFacts = { dshVersion?: string }
+
 function deriveServers(
   health: HealthResponse | null,
   connections: ConnectionSummary[] | null,
   remoteInstances: SshInstanceSpec[],
   remoteStatus: Record<string, SshStatusProjection>,
   aggregates: Record<string, InstanceAggregate>,
-  hostFacts: Record<string, InstanceHostReport | undefined>,
+  hostFacts: Record<string, HostFacts | undefined>,
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>,
   completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
@@ -426,7 +432,7 @@ export default function App() {
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
-  const [hostFacts, setHostFacts] = useState<Record<string, InstanceHostReport | undefined>>({})
+  const [hostFacts, setHostFacts] = useState<Record<string, HostFacts | undefined>>({})
   // chamber (06 §4.1, 2026-08)：App 自持的「完成未读」蓝点（completedBySource）
   // 与边沿记忆（prevRunningRef）。蓝点不依赖各来源 shell 的 selected——后台
   // 来源的陈旧 selected 会让 vendor 提醒错误压制「完成但未读」——而是由 App
@@ -1961,6 +1967,9 @@ export default function App() {
    * active runtime version (IPC INFO bridge — the control-plane fact
    * projection). Remote (ssh/http) instances stay hidden until a remote
    * version probe is wired (D2 fallback; STATUS.md records the pending item).
+   * The old in-ctx host-producer channel (registerInstanceHostProducer /
+   * onInstanceHost) was removed entirely — host.describe was deleted upstream
+   * and no producer ever registered again (2026-09 cleanup).
    */
   useEffect(() => {
     const version = window.dshChamber?.dshVersion ?? undefined
@@ -1969,25 +1978,6 @@ export default function App() {
       const existing = prev[LOCAL_INSTANCE_ID]
       if (existing?.dshVersion === version) return prev
       return { ...prev, [LOCAL_INSTANCE_ID]: { ...(existing ?? {}), dshVersion: version } }
-    })
-  }, [])
-
-  /** Live per-instance host facts from the desktop/control-plane projection. */
-  useEffect(() => {
-    return chamberBridge.onInstanceHost((sourceId, report, sourceFingerprint) => {
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
-      if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
-      setHostFacts(prev => {
-        if (report === undefined) {
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        }
-        if (prev[sourceId]?.dshVersion === report.dshVersion) return prev
-        return { ...prev, [sourceId]: report }
-      })
     })
   }, [])
 

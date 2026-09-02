@@ -176,10 +176,11 @@ export function apply(ctx: ClientContext): void {
     }
     // v0.1.2-alpha.1: the host-description producer is REMOVED — the
     // connection handle no longer exposes `hostDescription` (host.describe
-    // deleted upstream), so the sidebar stops producing dshVersion facts.
-    // The version chip is hidden until the D2 wiring lands (control-plane
-    // `dsh --version` facts projected through the chamber bridge, P1-7);
-    // the aggregate-store host channel stays as that placeholder.
+    // deleted upstream). The chamberBridge host channel was removed entirely
+    // (2026-09 cleanup): the LOCAL instance's dsh version flows from the
+    // desktop bridge (`window.dshChamber.dshVersion` → renderer hostFacts);
+    // remote versions stay hidden until the D2 wiring lands (control-plane
+    // `dsh --version` facts, P1-7).
     sync()
     queueSnapshot()
     const unsubscribeSessions = sessionsList.subscribe(sync)

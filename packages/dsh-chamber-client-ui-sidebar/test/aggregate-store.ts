@@ -110,25 +110,3 @@ test('event-side retirement rejects old reports before a replacement producer re
   unsubscribeRuntime()
   unsubscribeSnapshot()
 })
-test('host producers replay live version, clear unknown, dedupe and ignore old generations', () => {
-  const events: string[] = []
-  const first = chamberBridge.registerInstanceHostProducer('host-source', firstProof)
-  first.report({ dshVersion: '1.0.0' })
-  const unsubscribe = chamberBridge.onInstanceHost((sourceId, report) => {
-    if (sourceId === 'host-source') events.push(report?.dshVersion ?? 'unknown')
-  })
-  assert.deepEqual(events, ['1.0.0'])
-
-  first.report({ dshVersion: '1.0.0' })
-  assert.deepEqual(events, ['1.0.0'], 'identical host facts are deduplicated')
-
-  const second = chamberBridge.registerInstanceHostProducer('host-source', secondProof)
-  second.report({ dshVersion: '2.0.0' })
-  first.clear()
-  assert.deepEqual(events, ['1.0.0', 'unknown', '2.0.0'])
-
-  second.report(undefined)
-  second.clear()
-  assert.deepEqual(events, ['1.0.0', 'unknown', '2.0.0', 'unknown'])
-  unsubscribe()
-})

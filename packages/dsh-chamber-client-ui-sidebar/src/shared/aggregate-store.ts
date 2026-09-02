@@ -65,12 +65,13 @@ export interface ChamberServerAggregate {
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
   /**
-   * dsh version chip fact. D2-PENDING (v0.1.2-alpha.1): the old producer
-   * source — the connection handshake's host.describe — was deleted upstream,
-   * so the sidebar plugin no longer reports host facts and the chip renders
-   * hidden until the D2 wiring lands (control-plane `dsh --version` facts
-   * projected through the chamber bridge, plan-review P1-7). The
-   * registerInstanceHostProducer channel below stays as that placeholder.
+   * dsh version fact. D2-PENDING (0.1.2-alpha.1): the old producer source —
+   * the connection handshake's host.describe — was deleted upstream, so the
+   * in-ctx host-producer channel was removed entirely (2026-09 cleanup). The
+   * LOCAL instance's version now flows straight from the desktop bridge
+   * (`window.dshChamber.dshVersion` → App hostFacts); remote instances stay
+   * unknown until the D2 wiring lands (control-plane `dsh --version` facts
+   * projected through the chamber bridge, plan-review P1-7).
    */
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
@@ -132,19 +133,6 @@ export interface InstanceRuntimeReport {
   }>
 }
 
-/**
- * Generation-scoped, read-only host facts from one mounted instance ctx.
- * D2-PENDING (v0.1.2-alpha.1): the sidebar no longer produces these — the
- * host-description source was deleted upstream — and the renderer version chip
- * stays hidden until the D2 wiring (control-plane `dsh --version` facts)
- * lands. The channel type is kept so the App-layer consumption surface
- * (`onInstanceHost`) does not churn twice.
- */
-export interface InstanceHostReport {
-  /** Exact non-empty dsh version; absent means honestly unknown. */
-  dshVersion?: string
-}
-
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
 type RefreshListener = (sourceId: string) => void
@@ -160,11 +148,6 @@ type SnapshotReportListener = (
   sourceFingerprint: string | undefined,
 ) => void
 type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void
-type HostReportListener = (
-  sourceId: string,
-  report: InstanceHostReport | undefined,
-  sourceFingerprint: string | undefined,
-) => void
 
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
@@ -173,7 +156,6 @@ const activateSourceListeners = new Set<SourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
-const hostReportListeners = new Set<HostReportListener>()
 let servers: ChamberServerAggregate[] = []
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
 const runtimeProducerTokens: Record<string, number> = {}
@@ -182,12 +164,8 @@ const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
 const snapshotProducerFingerprints: Record<string, string> = {}
 const pluginDiagnostics: Record<string, PluginGraphDiagnostic> = {}
-const hostReports: Record<string, InstanceHostReport> = {}
-const hostProducerTokens: Record<string, number> = {}
-const hostProducerFingerprints: Record<string, string> = {}
 let nextRuntimeProducerToken = 0
 let nextSnapshotProducerToken = 0
-let nextHostProducerToken = 0
 
 export const chamberBridge = {
   /** Latest published projection (non-authoritative; renderer-owned store). */
@@ -259,19 +237,14 @@ export const chamberBridge = {
   retireInstanceProducers(sourceId: string): void {
     const runtimeFingerprint = runtimeProducerFingerprints[sourceId]
     const snapshotFingerprint = snapshotProducerFingerprints[sourceId]
-    const hostFingerprint = hostProducerFingerprints[sourceId]
     delete runtimeProducerTokens[sourceId]
     delete snapshotProducerTokens[sourceId]
-    delete hostProducerTokens[sourceId]
     delete runtimeProducerFingerprints[sourceId]
     delete snapshotProducerFingerprints[sourceId]
-    delete hostProducerFingerprints[sourceId]
     delete runtimeReports[sourceId]
     delete instanceSnapshots[sourceId]
-    delete hostReports[sourceId]
     for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, runtimeFingerprint)
     for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, snapshotFingerprint)
-    for (const listener of [...hostReportListeners]) listener(sourceId, undefined, hostFingerprint)
   },
 
   /**
@@ -313,62 +286,6 @@ export const chamberBridge = {
     runtimeReportListeners.add(listener)
     return () => {
       runtimeReportListeners.delete(listener)
-    }
-  },
-
-  /**
-   * Register the live host-facts producer owned by one mounted ctx.
-   * D2-PENDING (v0.1.2-alpha.1): NO producer registers anymore — the old
-   * host-description data source was deleted upstream, so the renderer's
-   * version chip is hidden until the D2 wiring lands (plan-review P1-7).
-   * The channel is retained as that placeholder (and for the App layer's
-   * `onInstanceHost` consumer); the token prevents a late teardown from an
-   * old shell clearing a newer generation's facts for the same source.
-   */
-  registerInstanceHostProducer(sourceId: string, sourceFingerprint: string): {
-    report: (report: InstanceHostReport | undefined) => void
-    clear: () => void
-  } {
-    const token = ++nextHostProducerToken
-    const previousFingerprint = hostProducerFingerprints[sourceId]
-    hostProducerTokens[sourceId] = token
-    hostProducerFingerprints[sourceId] = sourceFingerprint
-    if (hostReports[sourceId] !== undefined) {
-      delete hostReports[sourceId]
-      for (const listener of [...hostReportListeners]) listener(sourceId, undefined, previousFingerprint)
-    }
-    return {
-      report(report): void {
-        if (hostProducerTokens[sourceId] !== token) return
-        if (report === undefined) {
-          if (hostReports[sourceId] === undefined) return
-          delete hostReports[sourceId]
-        } else {
-          const previous = hostReports[sourceId]
-          if (previous?.dshVersion === report.dshVersion) return
-          hostReports[sourceId] = report
-        }
-        for (const listener of [...hostReportListeners]) listener(sourceId, report, sourceFingerprint)
-      },
-      clear(): void {
-        if (hostProducerTokens[sourceId] !== token) return
-        delete hostProducerTokens[sourceId]
-        delete hostProducerFingerprints[sourceId]
-        if (hostReports[sourceId] === undefined) return
-        delete hostReports[sourceId]
-        for (const listener of [...hostReportListeners]) listener(sourceId, undefined, sourceFingerprint)
-      },
-    }
-  },
-
-  /** App-layer subscription to generation-scoped host facts. */
-  onInstanceHost(listener: HostReportListener): () => void {
-    hostReportListeners.add(listener)
-    for (const [sourceId, report] of Object.entries(hostReports)) {
-      listener(sourceId, report, hostProducerFingerprints[sourceId])
-    }
-    return () => {
-      hostReportListeners.delete(listener)
     }
   },
 
