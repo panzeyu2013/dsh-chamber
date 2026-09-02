@@ -4,6 +4,10 @@
 > 持久化（系统单元或 user 单元，以非 root 用户运行，所有文件落在该用户
 > 自己的家目录）。服务器端部署统一入口另见
 > [deploy-gateway.md](deploy-gateway.md)。
+>
+> **改用 Gateway？** 直连实例的历史数据**不会自动跟随**托管实例——安装
+> gateway 后按 [deploy-gateway.md §3](deploy-gateway.md) 做一次停机态数据
+> 迁移，旧会话 / 工作区即可无缝延续。
 
 ---
 
@@ -147,6 +151,11 @@
 > the recommended way to persist it (system or user unit, running as a non-root
 > user with all files in that user's own home). The server-side deployment
 > entry point is [deploy-gateway.md](deploy-gateway.md).
+>
+> **Switching to the Gateway?** Existing data does **not** follow the managed
+> instance automatically — after installing the gateway, run the one-time
+> quiescent migration in [deploy-gateway.md §3](deploy-gateway.md) so your
+> sessions/workspaces carry over seamlessly.
 
 ## Remote dsh instance (systemd)
 

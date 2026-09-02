@@ -69,6 +69,8 @@ After installation:
 
 Without a gateway, persist the server's dsh instance directly with **systemd** (system or user unit, running as a non-root user), and the desktop app connects over an SSH tunnel. Full configuration and troubleshooting: [deploy/remote-dsh-instance.md](deploy/remote-dsh-instance.md).
 
+Already running such a direct instance and switching to the Gateway? Existing data does not follow automatically — after installing the gateway, run the one-time migration in [deploy-gateway.md §3 "Migrating from a direct dsh instance to the Gateway"](deploy/deploy-gateway.md) so your sessions/workspaces carry over seamlessly.
+
 ### 4 · Add a remote host
 
 In Settings → Connections, select a target (`dsh` / `gateway`) and a transport (`ssh` / `http`) in any of the four combinations: the app sets up the SSH tunnel itself and can manage remote systemd; HTTP(S) is connected directly by the main process (HTTPS by default, with a persistent risk warning for explicit plaintext HTTP).

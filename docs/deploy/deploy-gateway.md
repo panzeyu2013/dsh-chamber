@@ -51,10 +51,98 @@ cd dsh-chamber && bash scripts/install-gateway.sh
 5. **服务**：root + systemd 单元（`enable --now`）；非 root 自动 `systemctl --user`
    用户态服务（登出会停止，常驻请 `loginctl enable-linger <用户>`）；无 systemd
    自动前台（nohup + pid 文件）。可选 `--service-user <专用用户>` 以非 root
-   身份运行系统服务（见 §8 常见问题）。
+   身份运行系统服务（见 §9 常见问题）。
 6. **健康检查**：`/health` 轮询至 ready；失败则中止并报错，可重试（仅 `update` 有失败自动回滚）。
 
-## 3. 端口模型
+## 3. 从直连 dsh 迁移到 Gateway（无缝延续旧数据）
+
+> **适用场景**：此前按 [remote-dsh-instance.md](remote-dsh-instance.md) 用
+> systemd **直连**部署过 dsh（数据在单元运行账号的 `~/.dsh`），现在同一台
+> 服务器改由 Gateway 托管，希望旧会话 / 工作区 / 设置无缝延续。
+
+**先明确两件事，避免误以为数据丢失：**
+
+1. Gateway 托管的 dsh 是**全新实例**，数据目录固定为 `<stateDir>/dsh-home`
+   （默认 `~/.dsh-chamber/gateway/data/dsh-home`），与直连实例的数据目录
+   （单元运行账号的 `~/.dsh`）是**两套互不相干的目录**；
+2. 安装向导第 1 步的「接管」**只接管 dsh 程序**（版本锚/workspace），
+   **从不读取或迁移旧数据**——装好 Gateway 直接打开，旧数据不会出现
+   （旧字节原样保留，并未丢失）。
+
+无缝延续 = 安装完成后做一次**停机态数据迁移**（一次性，约一分钟）。整个迁移在数据静止（两个实例都已停止）时进行：
+
+1. **停旧直连实例**（数据静止；也避免与托管实例双跑、争 30800 端口）：
+   - 形态 A（系统单元）：
+     `sudo systemctl stop dsh && sudo systemctl disable dsh`
+   - 形态 B（用户单元）：
+     `systemctl --user stop dsh && systemctl --user disable dsh`
+   - 确认已停止（`systemctl status dsh` / `systemctl --user status dsh` 显示
+     inactive）再继续。
+
+2. **停 Gateway**——安装器默认已把服务 enable 并启动（含健康检查），装完即在运行：
+   - `sudo systemctl stop dsh-chamber-gateway`
+   - 非 root 用户态安装：`systemctl --user stop dsh-chamber-gateway`
+
+3. **把旧数据拷入托管 home**（按安装形态二选一；源目录保留作回退，确认后删除）：
+
+   **root + systemd 系统服务（默认形态）**——在 root shell（`sudo -i`）里执行，
+   `~` 即 root 的 home：
+
+   ```bash
+   # <旧账号> = 旧实例单元运行账号（形态 A 通常 = 你的登录账号）；
+   # 旧实例显式设过 DSH_HOME 时，把 /home/<旧账号>/.dsh 换成那个路径
+   mkdir -p ~/.dsh-chamber/gateway/data/dsh-home
+   cp -a /home/<旧账号>/.dsh/. ~/.dsh-chamber/gateway/data/dsh-home/
+   chown -R root:root ~/.dsh-chamber/gateway/data/dsh-home   # cp -a 保留旧属主，统一移交
+   ```
+
+   以 `--service-user <用户>` 运行时，把最后一行换成
+   `chown -R <该用户> ~/.dsh-chamber/gateway/data/dsh-home`——**属主必须移交**：
+   托管 home 顶层与 gateway 自有目录都做属主校验，异主目录会 fail-closed。
+   目录权限无需手工处理（dsh-home 顶层在每次 spawn 时按 0700 收敛，内容不动）。
+
+   **非 root 用户态服务**——以安装账号执行（无 sudo）：
+
+   ```bash
+   mkdir -p ~/.dsh-chamber/gateway/data/dsh-home
+   cp -a ~/.dsh/. ~/.dsh-chamber/gateway/data/dsh-home/      # 旧实例也以该账号运行时
+   ```
+
+   旧实例数据在别的账号或别的机器上时，先把旧 `~/.dsh` 取到本机
+   （`rsync`/`scp`）再按上述命令拷入。state 目录默认如上；改过
+   `DSH_GATEWAY_STATE` 的部署以
+   `grep DSH_GATEWAY_STATE ~/.dsh-chamber/gateway/gateway.env` 为准。
+
+4. **启动并验证**：
+
+   ```bash
+   sudo systemctl start dsh-chamber-gateway      # 或 systemctl --user start dsh-chamber-gateway
+   ```
+
+   等 `/health` ready 后打开实例：旧会话 / 工作区 / 设置应已可见。
+
+**版本提示（通常无需处理）**：托管 dsh 与旧实例同属 chamber 当前发布版本时
+数据直接可读；若两者差异较大且出现读不了/异常，先启动 Gateway，在
+`/chamber/runtime` 把托管版本切到与旧实例一致（需该版本在 registry 或缓存中
+可用；选择后重启生效——切换前会自动快照保护已迁移数据）。数据格式的跨版本
+兼容迁移责任属 dsh 官方（design 18 §3.7 诚实边界）。
+
+**确认无误后的收尾**：旧单元已在上文停用并 disable；确认新实例数据正常后，
+删除旧数据目录（`sudo rm -rf /home/<旧账号>/.dsh`；非 root 形态去掉 sudo），
+并在桌面「设置 → 连接」删除旧的 `dsh + ssh` 来源、改用 Gateway 来源。想彻底
+移除旧单元文件，再执行 `sudo rm /etc/systemd/system/dsh.service && sudo
+systemctl daemon-reload`（形态 B：`rm ~/.config/systemd/user/dsh.service`；
+按你的实际单元名调整）。
+
+**不要做**：
+
+- **不要把 `DSH_GATEWAY_STATE` 指到旧 `~/.dsh`** 让托管实例直接读旧目录——
+  托管 home 必须由 Gateway 独占（快照 / 回滚 / 权限收敛纪律的前提），直读
+  外部目录不在支持面内；
+- 旧单元仍在运行时不要拷贝（数据可能正在被写）；迁移完成前不要让旧单元与
+  Gateway 同时常驻写数据。
+
+## 4. 端口模型
 
 | 端口 | 含义 | 默认 | 配置 |
 |---|---|---|---|
@@ -64,7 +152,7 @@ cd dsh-chamber && bash scripts/install-gateway.sh
 交互向导在安装前探测占用并建议空闲端口、强制互斥；`--gateway-port/--dsh-port` 直给时仅校验合法性。本地桌面形态（dsh-chamber 桌面应用）不受
 影响：spawn-dsh 基口默认仍 17510。
 
-## 4. 公网接入（TLS 反代）
+## 5. 公网接入（TLS 反代）
 
 Gateway 不内置 TLS（传入 TLS 配置会 fail closed）。生产形态：
 
@@ -88,7 +176,7 @@ gateway.example.com {
 （S1）：安装时自动生成并写入 0600 env，或 `--ui-password/--api-token` 显式
 提供。`--no-auth` 是显式危险开关（二次确认 + 启动警告），仅限可信网络。
 
-## 5. 管理命令
+## 6. 管理命令
 
 | 命令 | 行为 |
 |---|---|
@@ -100,7 +188,7 @@ gateway.example.com {
 
 已有安装时直接运行脚本会重走完整向导（预览页会提示"检测到已有安装，将原地复用数据并覆盖配置"）；日常管理用子命令（status/logs/restart/update/uninstall）。
 
-## 6. 非交互 / CI
+## 7. 非交互 / CI
 
 - `--skip-dsh`：不自动安装 dsh（已有受控锚时自动复用；否则需 `--dsh-path` 或 `DSH_GATEWAY_DSH_PATH`）。
 - `-y uninstall` 免二次确认（`--purge` 仅 uninstall 有效）。
@@ -116,7 +204,7 @@ bash install-gateway.sh install -y \
 `-y/--yes`：全部使用默认值 + 命令行 flag（flag 优先于默认、可被交互覆盖）。
 非 TTY（管道/CI）自动进入非交互，不会挂起等待输入。
 
-## 7. 离线安装
+## 8. 离线安装
 
 - `update` 在离线模式（`--tgz`）下拒绝执行。
 
@@ -126,7 +214,7 @@ bash install-gateway.sh install -y \
   --dsh-path /opt/dsh-ws   # 已有 dsh workspace；无则需本地 npm 缓存
 ```
 
-## 8. 常见问题
+## 9. 常见问题
 
 - **下载失败**：确认网络可达 github.com（可设 `HTTPS_PROXY` 代理）；稳定通道
   若无 gateway 资产（v0.2.0 之前），用 `--channel beta`。

@@ -69,6 +69,8 @@ bash install-gateway.sh
 
 不装 gateway 时，可直接把服务器上的 dsh 实例用 **systemd** 持久化（系统单元或 user 单元，以非 root 用户运行），桌面端经 SSH 隧道接入。完整配置与排障见 [docs/deploy/remote-dsh-instance.md](docs/deploy/remote-dsh-instance.md)。
 
+已有该直连实例、想改用 Gateway？旧数据不会自动跟随，安装 Gateway 后按 [deploy-gateway.md §3「从直连 dsh 迁移到 Gateway」](docs/deploy/deploy-gateway.md) 做一次数据迁移，即可无缝延续。
+
 ### 4 · 添加远程主机
 
 「设置 → 连接」按目标（`dsh` / `gateway`）× 传输（`ssh` / `http`）四组合接入：SSH 由应用自动建立隧道并可管理远端 systemd；HTTP(S) 由主进程直连（默认 HTTPS，显式选择 HTTP 会常驻风险提示）。
