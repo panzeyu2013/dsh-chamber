@@ -154,7 +154,7 @@ test('beta builder config inherits the complete stable package config and change
   const { getConfig } = builderRequire('app-builder-lib/out/util/config/config.js');
   const resolved = await getConfig(projectDir, 'electron-builder.beta.yml', null);
 
-  assert.equal(manifest.version, '0.2.0-beta.6');
+  assert.equal(manifest.version, '0.2.0-beta.7');
   assert.equal(resolved.appId, manifest.build.appId);
   assert.equal(resolved.productName, manifest.build.productName);
   assert.equal(resolved.afterPack, manifest.build.afterPack);

@@ -10,7 +10,11 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.2.0-beta.7] - 2026-09-02
+
+> dsh 基线升级 0.1.2-alpha.4（fork 副本对齐、smooth-corners 全圆配对补漏）、
+> 侧边栏 0.1.2 迁移回归修复（已归档会话复活、pending 指示、通知边沿撤回窗口）
+> 与死通道清理的收尾：
 
 ### 变更
 

@@ -10,7 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.0-beta.7] - 2026-09-02
+
+> The dsh baseline upgrade to 0.1.2-alpha.4 (fork-copy alignment, the
+> smooth-corners full-round pairing sweep), the sidebar 0.1.2-migration
+> regression fixes (archived-session revival, pending indicators,
+> notification-edge withdrawal window) and dead-channel cleanup:
 
 ### Changed
 
