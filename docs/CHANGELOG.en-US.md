@@ -51,6 +51,80 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **A revoked remote gateway session no longer presents as "connected" for hours (ready-state re-verification)** —
+  previously, when the remote gateway password changed (jwt-secret rotation)/restarted, or a direct-http target died,
+  the desktop transport phase stayed `ready` until the pre-expiry refresh timer (scheduled against the cached 12h TTL):
+  the sidebar dot stayed green while every instance API answered 401/502, with no automatic recovery or explicit error
+  (the audit trail shows exactly these "green dot + 401 flood" windows). Fix: every READY transport now re-runs its
+  provider `verifyUp` identity probe on a 60s cadence (a transport-manager-internal heartbeat; `transition()` is the
+  single lifecycle anchor — armed on ready, cancelled on leaving ready). Gateway password targets reuse the existing
+  `verifyGatewayPasswordSession` flow — cached-cookie probe → 401 → invalidate → ONE automatic re-login with the
+  stored password — so a merely-revoked session self-heals unnoticed (the proxy registration is then re-applied on auth-header fingerprint change, so healthy traffic is never needlessly revoked); a refused re-login lands on
+  `error:requires_user_action` (red dot + connections-page guidance); transient failures take the existing bounded
+  reconnect / slow re-probe path. Clicking a source or opening a session (the renderer `selectView` single point)
+  triggers one immediate probe over the new `desktop_ssh_reverify` IPC (10s quiet window + single-flight), converging
+  failure detection to one probe round-trip. Zero gateway/remote changes — the probe reuses the existing
+  `/chamber/runtime/status` and password-session endpoints.
+
+- **install-gateway.sh wizard input & offline-path fixes (PTY-verified,
+  2026-09)** — the input layer was rewritten as ESC-aware byte reads: a bare
+  ESC now goes back one step immediately (previously it was only delivered
+  after Enter, so the documented promise was broken); Enter / backspace
+  (full UTF-8 sequences) / Ctrl-D / arrow-key sequences (absorbed, no
+  accidental back-navigation) semantics were aligned on macOS bash 3.2 and
+  Linux, and hidden input (password/token) supports ESC-back too. Offline
+  package path input now re-asks in place with a validator (`~`/`~/`
+  expansion + `.tgz` + existence; the literal `~` used to mis-report "file
+  does not exist" and the error bounced back to the channel menu, losing
+  the input), and auto-detects candidate packages in the current dir /
+  Desktop / Downloads as the Enter default. `--tgz` supports `~/` expansion
+  and fails fast in preflight (previously after the dsh anchor install).
+  Interactivity polish: spinners for network steps (version list / download
+  / checksum), default-option markers in choice lists (value-style defaults are
+  normalized back to letters for display), separators on stage/welcome/completion
+  pages and a reworked key help block. ESC on the final preview confirmation now
+  goes back to step 7 instead of exiting; the completion page shows a red NO_AUTH
+  warning and a "no credentials needed" line for non-interactive installs that
+  never saw the preview; status no longer dumps the raw /health body; npm
+  installs pass --no-audit/--no-fund.
+- **install-gateway.sh update transaction & --service-user fixes (F1-F13
+  group)** — `--service-user` installs no longer chown gateway.conf/
+  gateway.env to the service user (root management commands were locked out
+  by the `-O` check); `apply_service_user_ownership` returns a status
+  instead of dying, so update success/rollback paths keep transactional
+  semantics; update reuses verified existing version trees (updating to a
+  previously installed version no longer dies) and supports offline package
+  updates for local installs (`update --tgz`: content fingerprints decide —
+  identical content is an idempotent no-op, same-version packages with
+  different content (rebuilt fixes / test loops) are allowed to replace,
+  old tree kept aside for rollback; re-running `install --tgz` over an
+  existing local install reuses on identical content and replaces otherwise); the "already latest"
+  short-circuit now runs after pointer/tree identity verification; targets
+  below the current version (silent beta→stable downgrades) require an
+  explicit confirmation and are refused non-interactively; the pointer-swap
+  ↔ config-commit window is protected by an INT/TERM trap that restores the
+  pointer; rollback no longer rewrites the unit (content is version-
+  independent); restart pre-checks the launcher and pointer tree, and status
+  shows pointer/conf divergence; install/update mutual exclusion lock, cached
+  tgz cleanup and version-tree pruning (keep the newest 4 release trees);
+  offline packages are strongly verified when a sibling `.sha256` exists and
+  extraction rejects out-of-tree/absolute symlink members; BASE_DIR rejects
+  whitespace and quotes.
+- **install-gateway.sh argument parsing & uninstall cleanup** — value
+  options missing/empty (`--bind`, `--version=` etc.) fail fast; the
+  subcommand × option matrix warns (not silently ignores) install-only
+  options on status/restart/logs/uninstall/update; `--help --purge` shows
+  usage; the wizard no longer dies mid-way losing all answers (noauth YES
+  failure goes back a step, `--skip-dsh` without an anchor fails in
+  preflight, and `--no-auth` without `-y` requires YES even on non-TTY
+  input); piped input can cancel install (same semantics as uninstall);
+  the preview honestly shows credentials overriding `--no-auth`; re-entered
+  stages remember the previous choice (access mode / credential kind /
+  install location); IPv4 lists compare in decimal (leading zeros no longer
+  misjudged) and tolerate spaces after commas; the stable channel parser
+  tolerates tags without the `v` prefix; uninstall removes the self-copied
+  script and `--purge` removes the installer-written PATH line; q/back are
+  case-insensitive and Ctrl-D semantics are unified.
 - **Browser logins to the gateway always 403'd with `origin_forbidden`
   (live finding, 2026-09)** — the login page (and its 401/429/503
   re-renders, the token-only page and the boundary diagnostic page) and

@@ -37,6 +37,49 @@
 
 ### 修复
 
+- **远端 gateway 会话被服务端吊销后不再长期呈现"已连接"（ready 态周期再验证）** ——
+  此前远端改密（gateway 轮换 jwt-secret）/重启或 http 直连目标掉线时，desktop 传输
+  相位在预过期刷新定时器（按缓存 12h TTL）触发前一直保持 `ready`：侧边栏绿点不变、
+  所有实例 API 持续 401/502、无任何自动恢复或明确报错（审计可见"绿点 + 401 洪流"
+  窗口）。修复：每个 READY 传输以 60s 周期经 provider `verifyUp` 重跑身份探测
+  （transport-manager 内建心跳，`transition()` 为唯一生命周期锚点——进 ready 武装、
+  离开 ready 取消）；gateway 密码目标复用 `verifyGatewayPasswordSession` 的"缓存
+  Cookie 探测 → 401 → 失效 → 用存储密码单次自动重登"流——仅被吊销的会话无感自愈，
+  会话轮换后代理注册按认证头指纹差异自动重注册（健康流量不无谓撤销）；重登被拒落 `error:requires_user_action`（红点 + 连接页指引），瞬态失败走既有有界
+  重连/慢速重探。用户点击来源或打开会话（renderer `selectView` 单点）经新增
+  `desktop_ssh_reverify` IPC 立即触发一次探测（10s 静默窗 + 单飞），把失效检测
+  收敛到一次探测 RTT。零 gateway/远端改动——探测复用既有 `/chamber/runtime/status`
+  与密码会话端点。
+
+- **install-gateway.sh 安装向导交互与离线路径修复（PTY 实测，2026-09）** ——
+  输入层重写为 ESC 感知逐字节读取：裸 ESC 即时返回上一步（此前需回车才送达，
+  帮助文案承诺失效）；回车/退格（完整 UTF-8 序列）/Ctrl-D/方向键序列（吸收不误触
+  返回）语义在 macOS bash 3.2 与 Linux 实测对齐，隐藏输入（密码/Token）同样支持
+  ESC 返回；离线包路径输入改为带校验器的原地重问（`~`/`~/` 展开 + `.tgz` + 存在性，
+  此前 `~` 字面不展开误报"文件不存在"且错误后弹回通道菜单丢失输入），并自动探测
+  当前目录/Desktop/Downloads 候选包作回车默认；`--tgz` 支持 `~/` 展开并在 preflight
+  快速失败（此前 dsh 锚安装之后才报错）。交互美化：网络操作（版本列表/下载/校验和）
+  增加 spinner、选项列表标记默认项（选项值默认同样归一为字母显示）、阶段/欢迎/完成页分隔线与操作说明重排；预览确认页 ESC 返回上一步（与其余步骤一致，不再直接退出）；完成页补 NO_AUTH 红字警示与"无需凭据"说明行（非交互安装用户看不到预览页，完成页是唯一警示面）；status 不再倾倒 /health 响应体；npm 安装加 --no-audit/--no-fund。
+- **install-gateway.sh update 事务与 --service-user 修复（F1-F13 组）** ——
+  `--service-user` 安装不再把 gateway.conf/gateway.env 移交服务用户（root 管理命令
+  不再被 `-O` 校验锁死）；`apply_service_user_ownership` 失败返回状态而非 die，update
+  成功/回滚路径纳入事务处理；update 支持"验证后复用既有版本树"（更新到曾安装版本
+  不再必死）与 local 安装的离线包更新（`update --tgz`：内容指纹一致→幂等跳过，同版本但内容不同（重打包修复/测试循环）→允许替换，旧树退避回滚；`install --tgz` 重跑既有 local 安装同样按内容一致复用/不同替换）；
+  "已是最新"短路移到指针/树身份校验之后；目标版本低于当前（beta→stable 静默降级）
+  需显式确认，非交互拒绝；指针切换↔配置提交窗口加 INT/TERM 复原防护；回滚不再重写
+  unit（内容与版本无关）；restart 前校验 launcher 与指针树、status 展示树/配置分叉；
+  install/update 互斥锁 + 缓存 tgz 清理与版本树裁剪（保留最近 4 个 release 树）；
+  离线包同目录 `.sha256` 存在时强制校验、解包拒绝越界/外部符号链接成员；BASE_DIR
+  拒绝空白与引号。
+- **install-gateway.sh 参数解析与卸载清理** —— 值选项缺值/空值（`--bind`、
+  `--version=` 等）快速失败；子命令×选项矩阵：仅 install 的选项在
+  status/restart/logs/uninstall/update 下警告而非静默忽略；`--help --purge` 正常显示
+  用法；向导内不再中途 die 丢全部答案（noauth YES 失败回上一步、`--skip-dsh` 缺锚
+  在 preflight 前置拒绝、非 TTY 未加 `-y` 的 `--no-auth` 同样要求 YES）；管道输入可
+  取消 install（与 uninstall 语义一致）；预览页如实显示凭据覆盖 `--no-auth` 的部署；
+  阶段重入记忆已选值（访问方式/凭据 kind/安装位置）；IPv4 列表按十进制比较（前导零
+  不再误判）并容忍逗号后空格；stable 通道解析容忍无 `v` 前缀的 tag；卸载移除自复制
+  脚本，`--purge` 移除安装器写入的 PATH 行；q/back 大小写不敏感、Ctrl-D 语义统一。
 - **浏览器登录 gateway 必然 403 `origin_forbidden`（实机定位，2026-09）** —— 登录页
   （及其 401/429/503 重渲染、token-only 页、边界诊断页）与整个控制面响应统一携带
   `Referrer-Policy: no-referrer`；按 fetch 规范 "append a request Origin header"
