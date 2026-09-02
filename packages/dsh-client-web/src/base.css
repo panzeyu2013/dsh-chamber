@@ -1,7 +1,11 @@
-/* Shell-owned global base: full-height mount plus the theme token sheets.
- * The five ui-theme sheets are the sole token source (--dsw-*); the shell
- * links them here so tokens exist before any plugin CSS lands. scrollbar.css
- * follows design-platform.css because it reads that sheet's tokens. */
+/* ## chamber patch (dsh-chamber shell, dsh rc.8 baseline alignment):
+ * chamber-owned global base — deliberate divergence from upstream base.css
+ * (shell-linked ui-theme token sheets below); kept fork-side, never re-synced
+ * from upstream.
+ * Full-height mount plus the theme token sheets. The five ui-theme sheets are
+ * the sole token source (--dsw-*); the shell links them here so tokens exist
+ * before any plugin CSS lands. scrollbar.css follows design-platform.css
+ * because it reads that sheet's tokens. */
 @import '@deepseek-ai/dsh-client-ui-theme/styles/base.css';
 @import '@deepseek-ai/dsh-client-ui-theme/styles/design-platform.css';
 @import '@deepseek-ai/dsh-client-ui-theme/styles/scrollbar.css';

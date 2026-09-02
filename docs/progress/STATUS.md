@@ -21,6 +21,14 @@
 
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游
   wire 根治）；实现未排期。设计见 `docs/progress/todo/12-todo-archived-sessions.md`。
+- **gateway 连接插件能力对齐（A/B/C，2026-12 用户提出）**：gateway 连接缺
+  ssh+dsh 的第三方插件「添加/同步」（design 17 §3/§10 收窄的副作用）、connections
+  页缺 gateway 受控重启入口、日志/主机日志按钮不可区分。B（连接日志/网关主机日志
+  改名 + 图标去重）与 C（gateway 卡 + 插件面板「重启 dsh」，经实例代理
+  `/chamber/runtime/restart` + status 轮询）已定稿待实现；A（gateway 第三方插件
+  管理面：`/chamber/plugins/installed|install|remove` 契约草案 + 互斥/零出网/
+  主进程确认纪律）待拍板分期。设计评审稿见
+  `docs/progress/todo/gateway-plugin-parity.md`。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化
   透传、host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游
   解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。
@@ -118,7 +126,7 @@
   登录流转为 gateway 独占，插件零认证引用已 grep 验证）。
   **剩余**：实机门禁（§18.6：真机抽检——触控目标比例/抽屉开合/弹层不出屏/
   键盘遮挡/安全区）；P2（PWA 安装 + SW 壳离线，per-instance scope，尊重官方
-  "不完整离线"立场）；P3（公网认证流转正式化、Web Push）。先行形态 =
+  "不完整离线"立场）；**0.1.2-alpha.4 DOM 锚点重审计**（锚点出处现记录为 alpha.3/harness.commit=dd6322d6；上游 a4 重构了 ui-chat/ui-conversation——按新基线复验 AppFrame/sidebar/composer 锚点后刷新出处记录）；P3（公网认证流转正式化、Web Push）。先行形态 =
   内网/可信网络（`--no-auth` 显式可信网络或 tailscale）。契约：§3 装配矩阵 +
   §10 项 2 的移动例外——`dsh-chamber-client-ui-mobile` 是唯一随 gateway
   发行物打包 seed 的 chamber 客户端插件（链路无桌面，不参与 `/chamber/plugins`
