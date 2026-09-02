@@ -921,7 +921,7 @@ test('projectRuntimeFacts passes current through and emits every session with it
   })
 })
 
-test('projectRuntimeFacts keeps completed alongside running (pending source removed upstream in 0.1.2)', () => {
+test('projectRuntimeFacts keeps completed alongside running', () => {
   const report = projectRuntimeFacts({
     byId: {
       c: { running: true, completed: true },
@@ -931,6 +931,61 @@ test('projectRuntimeFacts keeps completed alongside running (pending source remo
     c: { running: true, completed: true },
   })
   assert.equal(report.current, undefined)
+})
+
+test('projectRuntimeFacts projects pending from the ui-session registry (official visiblePendingKind mirror)', () => {
+  const report = projectRuntimeFacts(
+    {
+      byId: {
+        a: { running: true },
+        b: { running: false },
+        c: { running: false },
+        d: { running: true },
+        e: { running: false },
+        f: { running: false },
+      },
+    },
+    undefined,
+    new Map([
+      ['a', { key: 'k1', kind: 'approval', sessionId: 'a' }],
+      ['b', { key: 'k2', kind: 'plan-review', sessionId: 'b' }],
+      ['c', { key: 'k3', kind: 'question', sessionId: 'c' }],
+      ['d', { key: 'k4', kind: 'unknown-future-kind', sessionId: 'd' }],
+      ['missing-row', { key: 'k5', kind: 'approval', sessionId: 'missing-row' }],
+    ]),
+  )
+  // 三个已知 kind 投影为 pending；未知 kind 恒 undefined（未来上游 kind 不得
+  // 漏进 UI，与官方 visiblePendingKind 一致）；不在 byId 的会话不产生行。
+  assert.deepEqual(report.sessions, {
+    a: { running: true, pending: 'approval' },
+    b: { running: false, pending: 'plan-review' },
+    c: { running: false, pending: 'question' },
+    d: { running: true },
+    e: { running: false },
+    f: { running: false },
+  })
+})
+
+test('projectRuntimeFacts keeps pending alongside completed and subagent rows stay excluded', () => {
+  const report = projectRuntimeFacts(
+    {
+      current: 's1',
+      byId: {
+        s1: { running: true, completed: true },
+        sub1: { running: false, origin: 'subagent' },
+      },
+    },
+    undefined,
+    new Map([
+      ['s1', { key: 'k1', kind: 'question', sessionId: 's1' }],
+      // 子代理的 pending 不得进入事实报告（通知边沿防刷屏同规）。
+      ['sub1', { key: 'k2', kind: 'approval', sessionId: 'sub1' }],
+    ]),
+  )
+  assert.deepEqual(report.sessions, {
+    s1: { running: true, completed: true, pending: 'question' },
+  })
+  assert.equal(report.current, 's1')
 })
 
 test('projectRuntimeFacts returns empty sessions for an empty snapshot', () => {
@@ -1183,6 +1238,21 @@ test('runtimeReportSignature distinguishes undefined, content, running bits and 
   assert.notEqual(
     runtimeReportSignature({ sessions: { p: { running: false } } }),
     runtimeReportSignature({ sessions: { p: { running: false, runningSubagents: 2 } } }),
+  )
+  // Pending kinds drive the amber badges and the design-19 ask/request edges —
+  // a pending change MUST re-sign (also with includeRunning=false, the
+  // projection-signature mode).
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { p: { running: false } } }),
+    runtimeReportSignature({ sessions: { p: { running: false, pending: 'approval' } } }),
+  )
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { p: { pending: 'approval' } } }, undefined, false),
+    runtimeReportSignature({ sessions: { p: { pending: 'question' } } }, undefined, false),
+  )
+  assert.equal(
+    runtimeReportSignature({ sessions: { p: { pending: 'approval' } } }, undefined, false),
+    runtimeReportSignature({ sessions: { p: { pending: 'approval' } } }, undefined, false),
   )
 })
 

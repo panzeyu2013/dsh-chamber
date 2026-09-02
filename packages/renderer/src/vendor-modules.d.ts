@@ -389,10 +389,11 @@ declare module '@dsh-chamber/dsh-client-ui-sidebar/shared' {
       byId?: Record<string, {
         running?: boolean
         completed?: boolean
-        pendingInteraction?: 'approval' | 'plan-review' | 'question'
+        origin?: 'subagent'
       }>
     },
     subagentRunning?: ReadonlyMap<string, number>,
+    pendingInteractions?: ReadonlyMap<string, { kind?: string }>,
   ): InstanceRuntimeReport
   export function reconcileCompletedFacts(params: {
     sessions: Record<string, { running?: boolean }>

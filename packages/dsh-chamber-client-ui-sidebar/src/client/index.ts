@@ -35,7 +35,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'sidebar'
 
 /** Services required by the sidebar plugin. */
-export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiWorkspace', 'locale']
+export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale']
 
 /**
  * Registers the sidebar shell and its service callbacks. The hole
@@ -123,6 +123,23 @@ export function apply(ctx: ClientContext): void {
     const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceSnapshot> }).list
     const runtimeProducer = chamberBridge.registerInstanceRuntimeProducer(chamberInstanceId, chamberSourceFingerprint)
     const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(chamberInstanceId, chamberSourceFingerprint)
+    // 2026-09 beta 回归修复：pending（审批/提问/plan-review）的权威 0.1.2 源是
+    // 官方 ui-session 的 pending-interaction 注册表（官方 ui-workspace 侧边栏
+    // 同一来源，经 useSessionPendingInteraction 消费；上游在 0.1.2 移除了
+    // SessionSummary.pendingInteraction）。chamber 插件经 uiSession 服务直接
+    // 订阅该注册表，把每会话 pending 状态并入运行时事实通道——侧边栏琥珀点/
+    // 等待分类与 design-19 的 ask/request 通知边沿由此恢复（此前恒为 undefined）。
+    // Loose 面（vendor-modules.d.ts）：仅消费 getSnapshot/subscribe 观察面。
+    // 真实不变量：ui-session 是 chamber 复合 boot 的 first-screen 服务（与
+    // ui-approval/ui-chat 同族），每个 chamber boot 必然存在；此处访问必然
+    // 可用。指纹守卫前置是防御纵深——非 chamber boot（无 chamberInstanceId）
+    // 在访问前已返回，且避免了守卫分支前的任何服务读取。
+    const pendingInteractions = (ctx.uiSession as unknown as {
+      pendingInteractions: {
+        getSnapshot(): ReadonlyMap<string, { kind?: string }>
+        subscribe(listener: () => void): () => void
+      }
+    }).pendingInteractions
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
@@ -154,7 +171,7 @@ export function apply(ctx: ClientContext): void {
       for (const [parentId, summary] of indexSubagentDescendants(snapshot.byId)) {
         if (summary.runningCount > 0) subagentRunning.set(parentId, summary.runningCount)
       }
-      runtimeProducer.report(projectRuntimeFacts(snapshot, subagentRunning))
+      runtimeProducer.report(projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot()))
       queueSnapshot()
     }
     // v0.1.2-alpha.1: the host-description producer is REMOVED — the
@@ -167,10 +184,14 @@ export function apply(ctx: ClientContext): void {
     queueSnapshot()
     const unsubscribeSessions = sessionsList.subscribe(sync)
     const unsubscribeWorkspaces = workspacesList.subscribe(queueSnapshot)
+    // pending 注册表变化只影响运行时事实（琥珀点/通知边沿），不影响分组快照；
+    // sync() 里 queueSnapshot 有签名去重兜底，重复触发无副作用。
+    const unsubscribePending = pendingInteractions.subscribe(sync)
     return () => {
       disposed = true
       unsubscribeSessions()
       unsubscribeWorkspaces()
+      unsubscribePending()
       snapshotProducer.clear()
       runtimeProducer.clear()
     }

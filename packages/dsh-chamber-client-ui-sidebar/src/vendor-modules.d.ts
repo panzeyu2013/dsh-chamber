@@ -134,6 +134,21 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 declare module '@deepseek-ai/dsh-client-ui-layout/client'
 
+declare module '@deepseek-ai/dsh-client-ui-session/client' {
+  /** Loose pending-interaction face (SessionPendingInteractionBase mirror; the
+   *  official ui-workspace consumes the same registry via
+   *  useSessionPendingInteraction). The sidebar reads only the observable
+   *  pending map; the publish side stays ui-approval/ui-questions-owned. */
+  export interface SessionPendingInteractionBase {
+    readonly key: string
+    /** Presentation discriminator: 'approval' | 'plan-review' | 'question' (unknown kinds stay invisible). */
+    readonly kind: string
+    readonly sessionId: string
+  }
+  /** Per-session effective pending interaction (precedence already resolved by the registry). */
+  export type SessionPendingInteractionSnapshot = ReadonlyMap<string, SessionPendingInteractionBase>
+}
+
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
   import type { ReactElement, ReactNode } from 'react'
   /** Sidebar shell icons/components (loose face). */

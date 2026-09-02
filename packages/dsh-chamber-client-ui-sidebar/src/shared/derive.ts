@@ -455,6 +455,18 @@ export function reconcileCompletedFacts(params: {
  * plugin reuses the vendor's `indexSubagentDescendants` verbatim so the
  * aggregation semantics never drift. The loose snapshot param avoids
  * importing runtime store types.
+ *
+ * `pendingInteractions` (the per-session pending map of the official
+ * ui-session registry — the same authoritative source the official
+ * ui-workspace tree consumes via `useSessionPendingInteraction`) is injected
+ * by the plugin as a LOOSE ReadonlyMap: dsh-v0.1.2-alpha.1 removed
+ * `SessionSummary.pendingInteraction` upstream (the new pending face is the
+ * ui-session registry fed by the `approval/request` / `user-questions/request`
+ * remote-event waterfalls), so the chamber sidebar's pending dots and the
+ * design-19 ask/request notification edges lost their source (2026-09 beta
+ * regression, review-round1 P1-3) until the plugin wired this registry.
+ * The kind mapping mirrors the official `visiblePendingKind` verbatim so the
+ * sidebar presentation can never drift from the official tree.
  */
 export function projectRuntimeFacts(
   snapshot: {
@@ -462,15 +474,11 @@ export function projectRuntimeFacts(
     byId?: Record<string, {
       running?: boolean
       completed?: boolean
-      // dsh-v0.1.2-alpha.1: SessionSummary no longer carries pendingInteraction
-      // (removed upstream; the new pending face lives in ui-conversation slot
-      // props, which the chamber sidebar does not consume). The pending
-      // notification edge (design 19) is therefore degraded until a new
-      // authoritative source is wired — see review-round1 P1-3.
       origin?: 'subagent'
     }>
   },
   subagentRunning?: ReadonlyMap<string, number>,
+  pendingInteractions?: ReadonlyMap<string, { kind?: string }>,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
@@ -487,8 +495,10 @@ export function projectRuntimeFacts(
       running: facts?.running === true,
     }
     if (facts?.completed === true) row.completed = true
-    // 0.1.2 pendingInteraction removed upstream — row.pending stays undefined
-    // (the notification edge keeps its type for the future source).
+    // pending rides the official ui-session registry (see header doc); unknown
+    // kinds stay undefined so a future upstream kind cannot leak into the UI.
+    const pending = pendingKindOf(pendingInteractions?.get(id)?.kind)
+    if (pending !== undefined) row.pending = pending
     const runningSubagents = subagentRunning?.get(id) ?? 0
     if (runningSubagents > 0) row.runningSubagents = runningSubagents
     sessions[id] = row
@@ -496,6 +506,19 @@ export function projectRuntimeFacts(
   const report: InstanceRuntimeReport = { sessions }
   if (snapshot.current !== undefined) report.current = snapshot.current
   return report
+}
+
+/** Official `visiblePendingKind` mirror (ui-workspace tree.ts): the three
+ *  presentation kinds chamber renders, anything else stays invisible. */
+function pendingKindOf(kind: string | undefined): 'approval' | 'plan-review' | 'question' | undefined {
+  switch (kind) {
+    case 'approval':
+    case 'plan-review':
+    case 'question':
+      return kind
+    default:
+      return undefined
+  }
 }
 
 /**

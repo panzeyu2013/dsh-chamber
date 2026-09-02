@@ -132,6 +132,10 @@ place of the official ui-sidebar (which stays untouched in
   interactions render distinguishable icon badges (question `?`, plan-review
   checklist, approval warning triangle — priority over the live
   running-subagent ring, the completed dots, then the polled running pulse);
+  the pending map is the official ui-session pending-interactions registry
+  (the same authoritative source the official ui-workspace tree consumes via
+  `useSessionPendingInteraction`; 0.1.2 removed
+  `SessionSummary.pendingInteraction`, wired 2026-09);
   each source's own ctx reports its
   `sessions.list` projection (including the vendor lineage index's running
   subagent count per parent) through the generation-safe producer returned by

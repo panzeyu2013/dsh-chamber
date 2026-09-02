@@ -105,7 +105,10 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   窗口不会抹掉远程偏好）。
 - **运行时事实状态指示**（待交互 = 可辨识图标徽标——问号 `?`/清单/警示
   三角，优先级高于实时子 agent 运行环、已完成圆点与轮询运行脉冲）走
-  运行时事实通道：每个来源自己的 ctx 把 `sessions.list` 投影（含 vendor
+  运行时事实通道：pending 映射取自官方 ui-session pending-interactions
+  注册表（与官方 ui-workspace 树经 `useSessionPendingInteraction` 消费的
+  同一权威源；0.1.2 移除 `SessionSummary.pendingInteraction` 后于 2026-09
+  接线）；每个来源自己的 ctx 把 `sessions.list` 投影（含 vendor
   血缘索引的每父会话运行中子 agent 计数）经
   `chamberBridge.registerInstanceRuntimeProducer(sourceId, sourceFingerprint)` 返回的
   generation-safe producer 上报，App 层合并进
