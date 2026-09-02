@@ -92,7 +92,6 @@ import {
   writeCurrentPointer,
   writeOverride,
   type ActivationIntentKind,
-  type ActivationJournal,
   type ActivationJournalState,
   type CurrentPointerState,
   type OverrideRecord,
@@ -1864,7 +1863,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // staged; the transaction body below relies on that persisted pending —
     // runStartupPhase derives effectivePending === targetVersion from the
     // override/journal, so `target` needs no separate plumbing into it.
-    const target = applyNowPreflight()
+    // `target` is intentionally not bound: the preflight arms the persisted
+    // pending (F2) and the transaction derives the target from override/journal.
+    applyNowPreflight()
     applyNowInFlight = true
     const job = (async () => {
       // P0 (review fix): the recovery segment (startLocal + exposure resync)

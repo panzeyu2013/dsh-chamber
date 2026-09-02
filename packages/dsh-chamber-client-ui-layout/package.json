@@ -28,7 +28,8 @@
   },
   "scripts": {
     "bundle": "tsdown",
-    "watch": "tsdown --watch"
+    "watch": "tsdown --watch",
+    "test": "node test/layout-store.test.ts"
   },
   "license": "MIT",
   "peerDependencies": {

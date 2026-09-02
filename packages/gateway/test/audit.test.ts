@@ -7,7 +7,6 @@
  * the audit trail.
  */
 
-import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
@@ -29,6 +28,7 @@ import { appendAuditEvent, AUDIT_LOG_MAX_BYTES, type AuditEvent } from '../src/a
 import { parseGatewayConfig } from '../src/config.ts'
 import { createGatewayDispatch } from '../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../src/middleware.ts'
+import { FakeRequest, FakeResponse } from './utils.ts'
 
 // ---------------------------------------------------------------------------
 // appendAuditEvent unit surface
@@ -190,7 +190,7 @@ test('the gateway audit serializer is a fixed whitelist: credentials never reach
   assert.equal(raw.includes(COOKIE), false)
 })
 
-test('the exported gateway cap is 5 MiB per the design contract', t => {
+test('the exported gateway cap is 5 MiB per the design contract', _t => {
   assert.equal(AUDIT_LOG_MAX_BYTES, 5 * 1024 * 1024)
 })
 
@@ -199,72 +199,6 @@ test('the exported gateway cap is 5 MiB per the design contract', t => {
 // ---------------------------------------------------------------------------
 
 const silentLogger = { log() {}, warn() {}, error() {} }
-
-class FakeRequest extends EventEmitter {
-  readonly headers: Record<string, string>
-  readonly method: string
-  readonly url: string
-  readonly socket: { remoteAddress: string; encrypted?: boolean }
-  destroyed = false
-  // Mirrors Node's paused-mode IncomingMessage: body bytes emitted before a
-  // 'data' listener attaches are buffered (the dispatch middleware awaits
-  // auth before readBody() on the gated credential routes). Data replays when
-  // the first 'data' listener attaches; 'end' replays when an 'end' listener
-  // attaches — never inside the 'data' attach (the 'end' listener may not
-  // exist yet, and a bare EventEmitter would drop the event).
-  private pendingBody: Array<{ type: 'data'; chunk: Buffer } | { type: 'end' }> = []
-  constructor(method: string, url: string, headers: Record<string, string>, remoteAddress = '203.0.113.8') {
-    super()
-    this.method = method
-    this.url = url
-    this.headers = headers
-    this.socket = { remoteAddress }
-  }
-  override on(event: string | symbol, listener: (...args: any[]) => void): this {
-    super.on(event, listener)
-    if (event === 'data') {
-      for (const entry of this.pendingBody) {
-        if (entry.type === 'data') super.emit('data', entry.chunk)
-      }
-      this.pendingBody = this.pendingBody.filter(entry => entry.type !== 'data')
-    }
-    if (event === 'end') {
-      const endIndex = this.pendingBody.findIndex(entry => entry.type === 'end')
-      if (endIndex !== -1) {
-        this.pendingBody.splice(endIndex, 1)
-        super.emit('end')
-      }
-    }
-    return this
-  }
-  override emit(event: string | symbol, ...args: any[]): boolean {
-    if ((event === 'data' || event === 'end') && this.listenerCount('data') === 0) {
-      this.pendingBody.push(event === 'data' ? { type: 'data', chunk: args[0] as Buffer } : { type: 'end' })
-      return true
-    }
-    return super.emit(event, ...args)
-  }
-  destroy(): void { this.destroyed = true }
-  async *[Symbol.asyncIterator](): AsyncIterableIterator<Buffer> {}
-}
-
-class FakeResponse extends EventEmitter {
-  status = 0
-  headersSent = false
-  headers: Record<string, unknown> = {}
-  body = ''
-  destroyed = false
-  _corsHeaders?: Record<string, string>
-  setHeader(name: string, value: unknown): void { this.headers[name.toLowerCase()] = value }
-  writeHead(status: number, headers: Record<string, unknown> = {}): void {
-    this.status = status
-    this.headersSent = true
-    for (const [name, value] of Object.entries(headers)) this.setHeader(name, value)
-  }
-  write(chunk: unknown): boolean { this.body += String(chunk); return true }
-  end(chunk?: unknown): void { if (chunk !== undefined) this.body += String(chunk) }
-  destroy(): void { this.destroyed = true }
-}
 
 function setup(auth: AuthProvider, auditFile: string) {
   const config = parseGatewayConfig({

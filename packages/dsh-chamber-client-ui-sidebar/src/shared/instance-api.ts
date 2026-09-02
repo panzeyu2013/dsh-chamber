@@ -452,7 +452,7 @@ function basenameOf(cwd: string): string {
   return base === '' ? cwd : base
 }
 
-async function callAndThrow(client: InstanceApiClient, call: () => Promise<UnaryResult<any>>): Promise<UnaryResult<any>> {
+async function callAndThrow(_client: InstanceApiClient, call: () => Promise<UnaryResult<any>>): Promise<UnaryResult<any>> {
   let result: UnaryResult<any>
   try {
     result = await call()

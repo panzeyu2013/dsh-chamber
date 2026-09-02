@@ -14,15 +14,17 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
   "include": [
     "packages/control-plane/src/**/*.ts",
     "packages/control-plane/test/**/*.ts",
     "packages/cli/src/**/*.ts",
+    "packages/cli/test/**/*.ts",
     "packages/renderer/src/**/*.ts",
     "packages/renderer/src/**/*.tsx",
+    "packages/renderer/test/**/*.ts",
     "packages/desktop/*.ts",
     "packages/desktop/*.cts",
     "packages/gateway/src/**/*.ts",

@@ -378,8 +378,8 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
   }
 })
 
-test('password-store load tightens a broad mode before reading owner-bound secrets', () => {
-  if (process.platform === 'win32') return
+test('password-store load tightens a broad mode before reading owner-bound secrets', t => {
+  if (process.platform === 'win32') { t.skip('POSIX permission contract'); return }
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
   try {
@@ -419,8 +419,8 @@ test('schema v1 passwords are preserved but loudly retired because they have no 
   }
 })
 
-test('password-store load refuses symlinks instead of following them', () => {
-  if (process.platform === 'win32') return
+test('password-store load refuses symlinks instead of following them', t => {
+  if (process.platform === 'win32') { t.skip('POSIX permission contract'); return }
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const target = join(dir, 'target.json')
   const file = join(dir, 'ssh-passwords.json')
@@ -850,6 +850,17 @@ class FakeRunChild extends EventEmitter implements SpawnedProcess {
 }
 
 /** Minimal TransportExecDeps driving the provider's `run` channel. */
+/** Bounded poll for observable side effects (the timeout timer is unref'ed;
+ * racing it with a fixed keep-alive flaked under CI stalls). */
+async function waitFor(predicate: () => boolean, what: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.fail(`${what} did not become true within ${timeoutMs}ms`)
+}
+
 function runDeps(spawnFn: TransportExecDeps['spawnFn']): TransportExecDeps {
   const projection: TransportStatusProjection = {
     kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'idle', localPort: null, sshPort: null, remotePort: 3080,
@@ -884,10 +895,11 @@ test('a run timeout resolves without releasing askpass before the real child exi
     const resultPromise = sshProvider.exec!(runSpec, 'run', deps, {
       op: 'exec', command: 'printf', argv: ['%s', '$HOME'],
     })
-    // Production timeout timers are intentionally unref'ed. Keep the test
-    // process alive long enough to observe that timeout-resolved state.
-    const keepAlive = setTimeout(() => {}, 1_000)
-    const result = await resultPromise.finally(() => clearTimeout(keepAlive))
+    // Production timeout timers are intentionally unref'ed: wait on the
+    // observable side effect (SIGTERM) instead of racing a fixed keep-alive
+    // against CI stalls.
+    await waitFor(() => child.killCalls.includes('SIGTERM'), 'the 5ms timeout sent SIGTERM')
+    const result = await resultPromise
     assert.equal(result.ok, false)
     if (!result.ok) assert.match(result.error, /timed out/)
     assert.ok(child.killCalls.includes('SIGTERM'), 'timeout asks the real child to terminate')
@@ -1289,9 +1301,9 @@ test('probeDshSignature classifies the dsh session/list signature', async () => 
       })
     },
     // 200 with another content type: NOT a dsh signature.
-    (req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html></html>') },
+    (_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html></html>') },
     // 404: no signature.
-    (req, res) => { res.writeHead(404); res.end('nope') },
+    (_req, res) => { res.writeHead(404); res.end('nope') },
   ]
   let call = 0
   const server = createServer((req, res) => {
@@ -1317,7 +1329,7 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
   // probe must fail loud with the auth-required reason (never "not a dsh").
   // The session/list probe AND the signature probe both hit the 401 gate; a
   // bare 401 from a NON-dsh server keeps the neutral message (round4 P2).
-  const server = createServer((req, res) => { res.writeHead(401); res.end('unauthorized') })
+  const server = createServer((_req, res) => { res.writeHead(401); res.end('unauthorized') })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
   try {
@@ -1380,7 +1392,7 @@ test('ssh provider verifyUp: a gateway target with a stored token probes WITH an
   setGatewayToken('gw-auth', TOKEN)
   try {
     let seenAuth: string | null = null
-    const server = describeServer((req, res, body) => {
+    const server = describeServer((req, res, _body) => {
       seenAuth = req.headers.authorization ?? null
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
@@ -1425,7 +1437,7 @@ test('ssh provider verifyUp: a gateway target WITHOUT a token probes with NO hea
 test('ssh provider verifyUp: a rejected token answers 401 terminal with the token message', async () => {
   setGatewayToken('gw-bad', 'z'.repeat(32))
   try {
-    const server = describeServer((req, res) => {
+    const server = describeServer((_req, res) => {
       res.writeHead(401)
       res.end('unauthorized')
     })
@@ -1477,7 +1489,7 @@ test('ssh provider verifyUp: a dsh target NEVER carries an auth header, even whe
 })
 
 test('verifyGatewayEndpointViaTunnel classifies a 403 origin/Host policy rejection as terminal', async () => {
-  const server = describeServer((req, res) => {
+  const server = describeServer((_req, res) => {
     res.writeHead(403)
     res.end('forbidden')
   })
@@ -1526,7 +1538,7 @@ test('ssh provider verifyUp: a password-configured gateway-over-ssh target (no t
     invalidate: () => {},
   }
   configureGatewaySessionProvider(completeTestGatewaySessionHooks(hooks))
-  const server = tunnelGatewayServer((req, res, body) => {
+  const server = tunnelGatewayServer((req, res, _body) => {
     seen.cookie = req.headers.cookie
     seen.authorization = req.headers.authorization
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -1603,7 +1615,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 with the session cookie invalida
 
 test('ssh provider verifyUp: a tunnel-probe 401 self-heals through the one automatic re-login — the fresh session probes ok (design 17 §9.3)', async () => {
   let probes = 0
-  const server = tunnelGatewayServer((req, res, body) => {
+  const server = tunnelGatewayServer((_req, res, _body) => {
     probes += 1
     if (probes === 1) {
       res.writeHead(401)
@@ -1720,7 +1732,8 @@ test('ssh provider verifyUp: without session hooks a password-configured gateway
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-inert-1'), { host: '127.0.0.1', port })
     assert.equal(seen.cookie, undefined, 'no hooks → the tunnel probe carries no Cookie')
     assert.equal(seen.authorization, undefined, 'no hooks → the tunnel probe carries no Authorization')
-    if (!result.ok) assert.match(result.detail ?? '', /requires authentication/)
+    assert.equal(result.ok, false, 'the password-gated tunnel endpoint must reject the probe')
+    assert.match(result.detail ?? '', /requires authentication/)
   } finally {
     setGatewayPassword('gw-tunnel-inert-1', null)
     configureGatewaySessionProvider({})
@@ -1729,7 +1742,7 @@ test('ssh provider verifyUp: without session hooks a password-configured gateway
 })
 
 test('verifyGatewayEndpointViaTunnel: a 401 with a session Cookie is classified as the password being refused, never as a token problem', async () => {
-  const server = tunnelGatewayServer((req, res) => {
+  const server = tunnelGatewayServer((_req, res) => {
     res.writeHead(401)
     res.end('unauthorized')
   })
@@ -1739,17 +1752,17 @@ test('verifyGatewayEndpointViaTunnel: a 401 with a session Cookie is classified 
     // Cookie-carrying probe: password-refused message (design 17 §7.3 密码被拒).
     const withCookie = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null, undefined, undefined, SESSION_COOKIE)
     assert.equal(withCookie.ok, false)
-    if (!withCookie.ok) {
-      assert.equal(withCookie.terminal, true)
-      assert.equal(withCookie.statusCode, 401, 'the raw status rides the result for the session flow')
-      assert.match(withCookie.detail ?? '', /rejected the password authentication \(401\) — re-enter the password/)
-    }
+    assert.equal(withCookie.terminal, true)
+    assert.equal(withCookie.statusCode, 401, 'the raw status rides the result for the session flow')
+    assert.match(withCookie.detail ?? '', /rejected the password authentication \(401\) — re-enter the password/)
     // Cookie-less, token-less probe: "configure the shared token or password".
     const noCredential = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null)
-    if (!noCredential.ok) assert.match(noCredential.detail ?? '', /requires authentication \(401\) — configure the shared token/)
+    assert.equal(noCredential.ok, false)
+    assert.match(noCredential.detail ?? '', /requires authentication \(401\) — configure the shared token/)
     // Token-carrying probe: "check the shared token".
     const withToken = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, 'z'.repeat(32))
-    if (!withToken.ok) assert.match(withToken.detail ?? '', /rejected the token \(401\) — check the shared token/)
+    assert.equal(withToken.ok, false)
+    assert.match(withToken.detail ?? '', /rejected the token \(401\) — check the shared token/)
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
@@ -1758,7 +1771,7 @@ test('verifyGatewayEndpointViaTunnel: a 401 with a session Cookie is classified 
 test('ssh provider verifyUp: a gateway-over-ssh probe presents the remote loopback authority, never the SSH hostname/alias (design 17 §9.3)', async () => {
   setGatewayToken('gw-host', null)
   let seenHost: string | null = null
-  const server = describeServer((req, res, body) => {
+  const server = describeServer((req, res, _body) => {
     seenHost = req.headers.host ?? null
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))

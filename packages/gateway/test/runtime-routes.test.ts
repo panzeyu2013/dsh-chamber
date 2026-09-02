@@ -33,6 +33,7 @@ import {
   type ActivationJournal,
 } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes, sanitizeRouteError, type RuntimeRoutes } from '../src/runtime-routes.ts'
+import { FakeRequest, FakeResponse } from './utils.ts'
 
 const silentLogger: Logger = { log() {}, warn() {}, error() {} }
 
@@ -91,46 +92,18 @@ function fakePlane(overrides: Partial<PlaneHandle> = {}): PlaneHandle & { _state
 // ---------------------------------------------------------------------------
 // Controller route matrix (fake manager; no plane needed)
 // ---------------------------------------------------------------------------
-class FakeRequest extends EventEmitter implements Partial<ApiRequest> {
-  method: string
-  url: string
-  headers: Record<string, string | string[] | undefined>
-  _body?: string
-  _destroyed = false
-  socket = { remoteAddress: '127.0.0.1' }
-  constructor(method: string = 'GET', url = '/chamber/runtime/status', headers: Record<string, string | string[] | undefined> = {}, body?: string) {
-    super()
-    this.method = method
-    this.url = url
-    this.headers = headers
-    this._body = body
-    if (body !== undefined) {
-      setImmediate(() => {
-        this.emit('data', Buffer.from(body))
-        this.emit('end')
-      })
-    } else {
-      setImmediate(() => this.emit('end'))
-    }
-  }
-  destroy() { this._destroyed = true; return this }
-  get destroyed() { return this._destroyed }
-}
-
-class FakeResponse {
-  statusCode = 200
-  headers: Record<string, string> = {}
-  body = ''
-  writeHead(status: number, headers?: Record<string, string>) { this.statusCode = status; if (headers) Object.assign(this.headers, headers) }
-  setHeader(name: string, value: string) { this.headers[name] = value }
-  end(data?: string) { this.body = data ?? '' }
-}
-
 async function runRoute(routes: RuntimeRoutes, method: string, path: string, body?: string): Promise<{ status: number; json: unknown }> {
-  const req = new FakeRequest(method, path, { authorization: 'Bearer x' }, body) as unknown as ApiRequest
+  const fakeReq = new FakeRequest(method, path, { authorization: 'Bearer x' })
+  const req = fakeReq as unknown as ApiRequest
   const fakeRes = new FakeResponse()
   const res = fakeRes as unknown as ApiResponse
-  const claimed = await routes.handle(req, res, path)
+  // Start the handler first: readJsonBody attaches its stream listeners
+  // synchronously, and the paused-mode FakeRequest buffers bytes emitted
+  // before a listener attaches — so this ordering is safe either way.
+  const pending = routes.handle(req, res, path)
+  if (body !== undefined) fakeReq.emit('data', Buffer.from(body))
+  fakeReq.emit('end')
+  const claimed = await pending
   assert.equal(claimed, true, `${method} ${path} must be claimed`)
   return { status: fakeRes.statusCode, json: fakeRes.body === '' ? null : JSON.parse(fakeRes.body) }
 }
@@ -3165,9 +3138,13 @@ test('connection_busy maps to 409; oversized bodies release input, write 413, th
 
   // Oversized body: the 413 response must be WRITTEN first, then the request
   // socket destroyed (dispatch.ts ordering; destroy-first drops the response).
-  const req = new FakeRequest('POST', '/chamber/runtime/select', { authorization: 'Bearer x' }, JSON.stringify({ version: 'x'.repeat(70 * 1024) })) as unknown as ApiRequest
+  const fakeReq = new FakeRequest('POST', '/chamber/runtime/select', { authorization: 'Bearer x' })
+  const req = fakeReq as unknown as ApiRequest
   const fakeRes = new FakeResponse()
-  const claimed = await routes.handle(req, fakeRes as unknown as ApiResponse, '/chamber/runtime/select')
+  const pending = routes.handle(req, fakeRes as unknown as ApiResponse, '/chamber/runtime/select')
+  fakeReq.emit('data', Buffer.from(JSON.stringify({ version: 'x'.repeat(70 * 1024) })))
+  fakeReq.emit('end')
+  const claimed = await pending
   assert.equal(claimed, true)
   assert.equal(fakeRes.statusCode, 413)
   assert.ok((fakeRes.body ?? '').includes('body too large'))

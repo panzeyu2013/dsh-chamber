@@ -11,7 +11,7 @@
  * node (DOM), but the tolerance POLICY is the load-bearing contract of
  * the rc.8 regression fix — so the rules live here, fully self-contained
  * (zero runtime imports), and are unit-tested under plain node by
- * `packages/dsh-client-web/tests/boot-tolerance.test.ts` (node:test, run via
+ * `packages/dsh-client-web/test/boot-tolerance.test.ts` (node:test, run via
  * `pnpm run test:client-web`).
  *
  * The rules mirror the pre-extraction behavior EXACTLY (including the

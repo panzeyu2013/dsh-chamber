@@ -27,7 +27,6 @@
  */
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session, shell } from 'electron';
-import type { IpcMainInvokeEvent } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -105,7 +104,7 @@ import {
   writeCurrentPointer,
   writeOverride,
 } from './dsh-runtime-store.ts';
-import type { ActivationJournal, ActivationJournalState } from './dsh-runtime-store.ts';
+import type { ActivationJournalState } from './dsh-runtime-store.ts';
 import {
   cleanupSnapshotArtifacts,
   completeInterruptedRestore,
@@ -153,10 +152,6 @@ import {
   ExactOwnershipRegistry,
   describeLocalPluginAddConfirmation,
   describeLocalPluginRemoveConfirmation,
-  describeMaterializeConfirmation,
-  describePluginApplyConfirmation,
-  describeSeedConfirmation,
-  disposeLocalPluginChildren,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
@@ -617,7 +612,12 @@ let updateController: { state(): { phase: string; installBlockedReason: string |
 // dsh runtime version controller (design 18 M2): module-level ref so the
 // settings「dsh 运行时」block's install/check/reset always reach the same
 // instance; state pushes go to the (single) main window.
-let runtimeController: DshRuntimeController | null = null;
+// Keep-alive binding: the controller is created per session and pushes
+// state itself; this module-level ref is intentionally write-only (it keeps
+// the instance alive across IPC handler closures). `void` marks the intent
+// for noUnusedLocals.
+let runtimeController: DshRuntimeController | null = null
+void runtimeController
 // Runtime lifecycle gate. Renderer REST starts and desktop pre-starts share
 // the same control-plane guard; only the startup transaction may temporarily
 // open the internal path while applying/restoring.

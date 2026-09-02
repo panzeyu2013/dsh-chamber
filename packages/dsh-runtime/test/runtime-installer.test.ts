@@ -21,6 +21,21 @@ const VERSION = '0.1.1-rc.2'
 const TARBALL = Buffer.from('controlled top-level dsh tarball fixture')
 const VALID_SRI = `sha512-${createHash('sha512').update(TARBALL).digest('base64')}`
 
+/** Bounded wait for pid to be reaped (kill(pid, 0) → ESRCH); zombie reaping
+ * is async, so a single-shot ESRCH assertion flaked under CI pauses. */
+async function waitForEsrch(pid: number, what: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+      throw error
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  assert.fail(`${what} (pid ${pid}) still alive after the reaping window`)
+}
+
 function makeBaseDir(): string {
   return mkdtempSync(path.join(tmpdir(), 'dsh-rt-installer-'))
 }
@@ -620,7 +635,7 @@ test('RuntimeInstallerSupervisor: dispose waits for a stubborn descendant after 
   await supervisor.dispose()
   const result = await running
   assert.equal(result.status, 0)
-  assert.throws(() => process.kill(descendantPid, 0), /ESRCH/)
+  await waitForEsrch(descendantPid, 'disposed descendant')
   assert.equal(supervisor.activeCount, 0)
 })
 

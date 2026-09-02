@@ -880,12 +880,11 @@ test('verifyUp: a dsh-kind target never carries auth, even with a stored token (
     assert.ok(spec !== null)
     const result = await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port })
     assert.equal(sawAuthorization, undefined, 'a dsh target never injects the Authorization header')
-    if (!result.ok) {
-      assert.equal(result.terminal, true)
-      // The 401 answer is the 0.1.2 browser-auth gate — the hedged message
-      // names it (round5: the signature probe is gated too).
-      assert.match(result.detail ?? '', /401/)
-    }
+    assert.equal(result.ok, false, 'the 0.1.2 browser-auth 401 gate must reject the probe')
+    assert.equal(result.terminal, true)
+    // The 401 answer is the 0.1.2 browser-auth gate — the hedged message
+    // names it (round5: the signature probe is gated too).
+    assert.match(result.detail ?? '', /401/)
   } finally {
     setGatewayToken('dsh-auth-probe', null)
     await server.close()
@@ -1005,7 +1004,7 @@ test('verifyUp: a probe 401 self-heals through the one automatic re-login — th
   // the re-probe with the 200 envelope — the stored password is still valid,
   // so the single re-login recovers without any terminal state.
   let probes = 0
-  const server = await startHttpProbeServer((req, res) => {
+  const server = await startHttpProbeServer((_req, res) => {
     probes += 1
     if (probes === 1) {
       res.writeHead(401)
@@ -1074,10 +1073,12 @@ test('verifyUp: token and password are independent — with both configured the 
 
 test('verifyUp: a refused password login still falls back to a valid configured Bearer', async () => {
   let probes = 0
+  let sawAuthorization: string | undefined
+  let sawCookie: string | undefined
   const server = await startHttpProbeServer((req, res) => {
     probes += 1
-    assert.equal(req.headers.authorization, `Bearer ${TOKEN}`)
-    assert.equal(req.headers.cookie, undefined)
+    sawAuthorization = req.headers.authorization
+    sawCookie = req.headers.cookie
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
@@ -1091,6 +1092,8 @@ test('verifyUp: a refused password login still falls back to a valid configured 
     const spec = httpSpec('pw-bearer-fallback', server.port)
     assert.ok(spec !== null)
     assert.deepEqual(await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port }), { ok: true })
+    assert.equal(sawAuthorization, `Bearer ${TOKEN}`, 'the bearer fallback probe carries the token')
+    assert.equal(sawCookie, undefined, 'no cookie leaks into the bearer fallback probe')
     assert.equal(probes, 1, 'one bearer-only fallback probe is sufficient')
   } finally {
     setGatewayToken('pw-bearer-fallback', null)
@@ -1157,7 +1160,8 @@ test('verifyUp: without session hooks a password-configured target probes WITHOU
     const result = await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port })
     assert.equal(seen.cookie, undefined, 'no hooks → the probe carries no Cookie')
     assert.equal(seen.authorization, undefined, 'no hooks → the probe carries no Authorization')
-    if (!result.ok) assert.match(result.detail ?? '', /requires authentication/)
+    assert.equal(result.ok, false, 'the password-gated endpoint must reject the probe')
+    assert.match(result.detail ?? '', /requires authentication/)
   } finally {
     setGatewayPassword('pw-inert-1', null)
     configureGatewaySessionProvider({})
@@ -1260,35 +1264,6 @@ cRF/0Zrf8vWmuLvIEHUECDS9FhhK06Ck53MtH4ylUHk1/GYWgxx4fJO5rn5ICGld
 GEh/5hgbSIerocTVqopN2wRAwKk6sDi8Mj357LsqBXjOxiG9wM7/970q7HG2wPMD
 It601afsP0WIHRkByyugcKQsBIIEPg9XdCP54SymB1Kxa8g9OWzJWNPyCdlg
 -----END CERTIFICATE-----
-`
-const KEY_B = `-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC+yJViJO6WyHF3
-k1Qmt6YbPTdQWUDKrgILIH4PMl8KsiIqEj7xdivuj4sMT+4Km4q/r1Sw8AXL5UoV
-zpkocc+j+9eAG5rIXgQMMl/xs+7sjqHkaNr9GeNhxXtyNqli7R8MBkdlBYBB6R6F
-Cj4X7eqVuneRvNmCcTnxNFLYEmA41BRcIh3cwS3qXqOheyje/ql1BGWzntJu77Fg
-dPi6FN95EGsi07v6UFDHdEoPo3TVwHM69jCob0aRErepdK8r3s3jartnMAps5Lg+
-pnTB0vDvFgyaGj3MWDoBZQCWrIlp0XMNMkGbfZ3zbIq0rSqoB03TuYmXcWPNF59B
-aVheI2brAgMBAAECggEAMckKInhcwoBAC+IoXYojEIyi+Jax77IE2n56JuEQKCxf
-+faU8lHSGQjgUjAxgBci1+6a/SlFefW1pYcqNIGum65GiCmr9ImEKOKkYuB/gr+d
-w4sRSmcNDSCJnD5jaWtTZMHms5gB5jE9Q55uobP2OWhVd3R+limR4z2yOKxi67EI
-2eQaaTP3/SqvVDhhmu+kMtJT8oOHAE0CzAkvEPRuKD7RcwxZaljoQWM/zxSvRHjF
-3/IwiBXHZ64ojqi4O7HnH2eAwHiVE02KFodlmzAUzrqG/NgiL36T28126A3jppKf
-qCgzO2Z0+FOShJ3hqxZsSdfVxW4Mf6s24H7+71ZFMQKBgQDhXuNyBoeIuKbhxIrJ
-qBl7dGzFGKmZ8ZaX529s0mKhK28zg7MhDvHOxt/N4RiCtZlAtOt3NtDB8/WpwfUu
-eWVH6eBzkPEpnscevcN5b18HbrM+qfCJjk70fxCCzR7JVZfaVVGTzbgqxpy9FW6D
-7r9hG0fdLhOvtghPOHMXjpajZwKBgQDYtlZZAjp3OOw7MDNvinapVwugLG9BWpb+
-sUaGg576ASdIxy/8gcXf8X+pBiYjp9yOgyq4kk6Pq0Ayr5WsZoUY3G5YmkKB50Ed
-f8lh+IYN+9w8v4bbE9eVhxmutpdOEW/H6zk2/FwIWC8NqBm0F29FyDgywSWhcWMZ
-2f23XD2R3QKBgEjNsWXdbB0joW1fY4I/VnQGKTkGfYtoesB5mAoscIYmFNcsXUp5
-nG2y2wuUAqn+5hH8H/Cz+X4eRCbhrEWmG6y+ha5vjShnzWVF4gaxjp5FCYxds4GM
-Qj9DaN8ISkC58MMsOp0noK3Y2TtP2BKwpoxFFtMBloR1pnuI/c0HV+xTAoGANB7W
-cZ3Zleb42dtj44W3uE6ZGzLUpzE0c5kLTzrEt3gjjJtrbR2BC7U3cN1rutOadiQR
-2EZH4sHbNNWJ9+bISAxr9Z9UM4382S1sr8Vn6GEUvP+LXZFOHkZZ5O1BQqNq8Pgf
-0JutPsyGtJAjbm7ccjoPWhWeCVAN95+4J6tlm3kCgYEAtet+51ynPITuZwXsBEIT
-k14owVhtAlOs2E9X3fbITS2NkLLiC8aI/u7Qt1BUDU34T4gaN9pWklMFpmBBaPIz
-sKoBoeGJLhSYzeEhk8YY9bytL/O7+VuEZSh4fXB919d/BnVGVXeskFA5HsPWuO06
-ZAYG8n54lJkz1ZZE2rHpN3Y=
------END PRIVATE KEY-----
 `
 /** The hex sha256 of CERT_B's SPKI DER — a real other-key pin for mismatches. */
 const PIN_B = '087ee792a02c84ba6e994244a28449d7ece7ab6cd86b8d4c0c50dafa887d3478'

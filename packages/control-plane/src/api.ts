@@ -238,7 +238,6 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
  * @returns {handle(req, res), getCorsHeaders(req)}.
  */
 export function createApi(deps: ApiDeps) {
-  const { logger } = deps
   const corsOrigins = Array.isArray(deps.corsOrigins) ? deps.corsOrigins : []
   const corsEvaluator = deps.corsEvaluator
   let activeHealthEventStreams = 0

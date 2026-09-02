@@ -976,11 +976,6 @@ export interface ApplyActions {
 /** In-flight apply guards (single-flight per instance, design 13 §4.5 ⑥). */
 const applyInFlight = new Set<string>()
 
-/** Test-only reset of the in-flight guard. */
-export function resetApplyInFlight(): void {
-  applyInFlight.clear()
-}
-
 const VERIFY_READY_TIMEOUT_MS = 30_000
 const VERIFY_READY_INTERVAL_MS = 250
 

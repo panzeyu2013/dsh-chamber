@@ -41,7 +41,6 @@ test('isSupportedIntegrity: rejects empty, non-string, and malformed encodings',
 })
 
 test('parse: strongest algorithm wins; a weaker matching digest cannot rescue a stronger mismatch', () => {
-  const strong = sha512(PAYLOAD)
   const weakCorrect = sha256(PAYLOAD)
   const strongWrong = sha512(new TextEncoder().encode('tampered bytes'))
   // Both tokens present, strong digest wrong → must NOT match even though the

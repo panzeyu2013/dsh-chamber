@@ -1261,7 +1261,7 @@ export default function App() {
     // 早于本监听注册，窗口重建路径的事件不能丢）。
     const notifications = window.dshChamber?.notifications
     const unsubscribeNotifications = notifications?.onOpen((open) => {
-      const { sourceId, sessionId } = open
+      const { sourceId } = open
       const classification = classifyRosterGatedSource(
         sourceId,
         remoteRosterSettledRef.current,
@@ -2151,7 +2151,7 @@ export default function App() {
   // 一次失败，避免闪烁），否则陈旧 health 会永远掩盖中途失联。ticker 只在该
   // 条件下运行，正常态零开销。
   const HEALTH_ERROR_GRACE_MS = 10_000
-  const [healthErrorTick, setHealthErrorTick] = useState(0)
+  const [, setHealthErrorTick] = useState(0)
   useEffect(() => {
     if (healthError === null || healthErrorAt === null) return
     const timer = setInterval(() => setHealthErrorTick(tick => tick + 1), 1000)

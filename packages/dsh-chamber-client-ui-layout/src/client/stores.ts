@@ -20,7 +20,7 @@
  *
  * THIS FILE is the production WIRING (the default injected environment); the
  * factory logic itself lives in `store-core.ts` as a pure, dependency-
- * injected module so `test/layout-store.ts` can run it under plain node.
+ * injected module so `test/layout-store.test.ts` can run it under plain node.
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import {

@@ -419,7 +419,7 @@ export function writeOverride(baseDir: string, record: OverrideRecord): void {
   if (typeof record.shellVersion !== 'string' || !isSafeVersion(record.shellVersion)) {
     throw new Error(`override.shellVersion 必须是精确 semver，收到 ${JSON.stringify(record.shellVersion)}`)
   }
-  for (const [field, version] of [
+  for (const [, version] of [
     ['chosenVersion', record.chosenVersion],
     ['resolvedVersion', record.resolvedVersion],
     ['pending', record.pending],

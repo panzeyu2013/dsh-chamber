@@ -1298,7 +1298,7 @@ test('session refresh: the full cycle against a REAL session manager and gateway
     tlsPinFor: () => null,
     authorityFor: () => undefined,
     scopeFor: () => 'test:gw-1',
-    register: (id, url, headers, tls, authority) => registered.push({ url, headers, authority }),
+    register: (_id, url, headers, _tls, authority) => registered.push({ url, headers, authority }),
     reconnect: () => assert.fail('the happy path never needs the recovery reconnect'),
     warn: () => assert.fail('no warning expected on the happy path'),
     schedule: (fn, delayMs) => { scheduled.push({ fn, delayMs }); return scheduled.length },

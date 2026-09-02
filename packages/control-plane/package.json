@@ -10,6 +10,9 @@
   "bin": {
     "dsh-chamber-control-plane": "./src/standalone.ts"
   },
+  "scripts": {
+    "test": "node ./scripts/test.mjs"
+  },
   "license": "MIT",
   "dependencies": {
     "ws": "^8.18.0"

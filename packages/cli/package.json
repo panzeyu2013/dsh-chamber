@@ -6,6 +6,9 @@
   "bin": {
     "dsh-chamber": "./src/index.ts"
   },
+  "scripts": {
+    "test": "node test/follow-filter.test.ts"
+  },
   "license": "MIT",
   "dependencies": {
     "@dsh-chamber/control-plane": "workspace:^"

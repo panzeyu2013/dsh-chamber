@@ -6,7 +6,7 @@
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const FIXTURE_URL = pathToFileURL(fileURLToPath(new URL(
-  '../../packages/dsh-client-web/tests/fixtures/boot-runtime.mjs',
+  '../../packages/dsh-client-web/test/fixtures/boot-runtime.mjs',
   import.meta.url,
 ))).href
 

@@ -26,7 +26,7 @@
  * graph) and the job flow testable with a fake fetcher.
  */
 import type { SearchRow } from './instance-api.ts'
-import { chamberBridge, type ChamberServerAggregate } from './aggregate-store.ts'
+import { chamberBridge } from './aggregate-store.ts'
 import { sanitizeSearchQuery } from './derive.ts'
 import { assertSingletonModule } from './singleton.ts'
 
