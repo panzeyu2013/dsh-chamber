@@ -10,6 +10,41 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 修复
+
+- **侧边栏已归档会话/工作区"复活"（beta 0.2.0 回归）** —— staleness watchdog
+  把空闲 >30s 的健康已挂载实例误判为"推送通道死亡"，用 unary 兜底**整体替换**
+  聚合；0.1.2 wire 删除 `workspace.list`（W11）后兜底的 `archivedSessionIds`
+  恒为空（已登记 KNOWN DEGRADATION），全部已归档会话连同 cwd 合成工作区重新
+  出现；发消息/刷新会话后 mounted 推送覆盖恢复，再空闲 30s 又复发。修复：
+  unary 兜底提交改 merge 语义（`commitAggregatePull`）——已推送源保留工作组/
+  归档集/state（兑现 derive 文档"sessions-only fallback never replaces
+  groups/archive/state"契约），兜底仅刷新 sessions（running 位/新会话）；
+  拉取失败不再置空已推送源（`commitAggregateFailure`）。变更拉取语义保留
+  2026-10 create/fork 延迟修复（interim 帧不得掩盖最终态）：merge 提交使
+  晚到的变更拉取无法再覆盖归档集/分组——"归档动作后 unary 拉取把刚归档
+  会话重新放出来"的次生窗口一并消除；对 mounted 源的分组加速能力让位于
+  推送通道（健康推送下无感，推送死亡期间新会话落未分组桶、恢复自愈）。
+- **侧边栏提问/审批 pending 指示恢复（beta 0.2.0 回归）** —— 0.1.2 上游删除
+  `SessionSummary.pendingInteraction` 后，chamber 运行时事实通道的 pending 恒为
+  undefined，侧边栏琥珀点/等待分类与 design-19 的 ask/request 原生通知边沿
+  一并失效。修复：侧边栏插件改接官方 ui-session pending-interactions 注册表
+  （`approval/request` / `user-questions/request` 事件瀑布的客户端投影，与官方
+  ui-workspace 同一来源），`projectRuntimeFacts` 按官方 `visiblePendingKind`
+  语义投影（未知 kind 恒不呈现）。
+- **移除已死的 hostProducer 通道（2026-09 清理）** —— 0.1.2 删除
+  `host.describe` 后，chamberBridge 的 `registerInstanceHostProducer` /
+  `onInstanceHost` 通道无任何生产者注册、纯惰性占位。已整体移除（含
+  aggregate-store 状态/监听器、renderer 消费、两侧 vendor-modules 声明与
+  aggregate-store 测试）；本地实例版本现经桌面桥直读
+  （`window.dshChamber.dshVersion` → App hostFacts），远端版本 D2 待办不变。
+- **通知边沿撤回窗口误报修复（2026-09 清理）** —— runtime 通道撤回时同步
+  清除通知边沿的 prev 记忆：恢复后的首份上报为纯播种，不再补发撤回窗口内
+  「完成」事件——消除「窗口内手动停止会话误报完成」；代价是窗口内真实完成
+  不再补发通知（与蓝点机的撤回语义一致，会话完成状态在 UI 中可见）。
+
 ## [0.2.0-beta.6] - 2026-09-01
 
 > Gateway 编排面剥离（用户拍板）+ 种子注册表桌面同步 + dsh 基线升级

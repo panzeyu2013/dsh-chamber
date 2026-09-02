@@ -10,6 +10,52 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Fixed
+
+- **Archived sessions/workspaces no longer resurface in the sidebar after
+  idle time (beta 0.2.0 regression)** — the staleness watchdog misjudged
+  healthy-but-idle mounted instances as having a dead push channel and
+  replaced the aggregate with the unary fallback wholesale; since the 0.1.2
+  wire deleted `workspace.list` (W11), the fallback's `archivedSessionIds` is
+  always empty (registered KNOWN DEGRADATION), so every archived session
+  reappeared together with cwd-derived synthetic workspace groups until the
+  next push, then again 30s later. Fix: the unary commit is now a merge
+  (`commitAggregatePull`) — a source that already pushed keeps its
+  groups/archive/state (honoring the documented "sessions-only fallback never
+  replaces groups/archive/state" contract) and the fallback contributes only
+  live session rows (running bits, new sessions); pull failures no longer
+  blank a pushed source (`commitAggregateFailure`). The 2026-10 mutation-pull
+  semantics stay intact (interim frames must not mask the final state); the
+  late mutation pull can no longer overwrite groups/archive, which also
+  closes the "archiving a session makes it reappear" window.
+- **Sidebar pending indicators (question/permission requests) restored (beta
+  0.2.0 regression)** — after 0.1.2 removed `SessionSummary.pendingInteraction`
+  upstream, the chamber runtime-facts channel's pending was always undefined,
+  silently disabling the amber badges/waiting classification and the design-19
+  ask/request native-notification edges. Fix: the sidebar plugin now reads the
+  official ui-session pending-interactions registry (the same authoritative
+  source the official ui-workspace consumes via `useSessionPendingInteraction`),
+  and `projectRuntimeFacts` projects the kind with official
+  `visiblePendingKind` semantics (unknown kinds never render).
+- **Dead host-producer channel removed (2026-09 cleanup)** — after 0.1.2
+  deleted `host.describe`, the chamberBridge `registerInstanceHostProducer` /
+  `onInstanceHost` channel had no producers left and was pure placeholder.
+  Removed entirely (aggregate-store state/listeners, renderer consumer, both
+  vendor-modules declarations and the aggregate-store test); the LOCAL
+  instance's version already flows from the desktop bridge
+  (`window.dshChamber.dshVersion` → App hostFacts), remote versions stay
+  pending the D2 wiring.
+- **Notification edges seed after a runtime withdrawal (2026-09 cleanup)** —
+  the withdrawal branch kept the notification-edge prev memory to re-issue
+  completions that landed during the reconnect window, but the wire carries
+  only the running bit, so a session manually stopped during the window fired
+  a false "completed" notification on recovery. The prev memory is now cleared
+  on withdrawal: the first report after recovery is a pure seed (consistent
+  with the blue-dot machine); completions inside the narrow window are no
+  longer re-notified (the completed state stays visible in the UI).
+
 ## [0.2.0-beta.6] - 2026-09-01
 
 > The gateway orchestration surface is stripped (user decision) + the seed
