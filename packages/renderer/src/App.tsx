@@ -64,6 +64,8 @@ import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
   AggregateRefreshQueue,
+  commitAggregateFailure,
+  commitAggregatePull,
   invalidateRemovedAggregateSources,
   isSnapshotStale,
   planAggregateRefreshes,
@@ -901,13 +903,22 @@ export default function App() {
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
       // 是权威失败事实，不能因"看起来没变"而吞掉）。
+      // 2026-09 beta 回归修复：已推送过的 mounted 源由 commitAggregatePull 保留
+      // 其工作区分组/归档集/state，兜底只贡献 sessions——否则 watchdog 的 30s
+      // 空闲重拉会用空归档集替换聚合，全部已归档会话重新出现（archived-
+      // resurfacing）。签名比较针对合并结果：合并后内容与当前一致时依旧不换对象。
       setAggregates(prev => {
         const current = prev[instanceId]
+        const next = commitAggregatePull(
+          current,
+          snapshot,
+          snapshotSourcesRef.current[instanceId] === true,
+        )
         if (current !== undefined && current.state === 'ok'
-          && instanceSnapshotSignature(current) === instanceSnapshotSignature(snapshot)) {
+          && instanceSnapshotSignature(current) === instanceSnapshotSignature(next)) {
           return prev
         }
-        return { ...prev, [instanceId]: { state: 'ok', ...snapshot, error: null } }
+        return { ...prev, [instanceId]: next }
       })
     } catch (err) {
       if (!stillOwnsSource()) return
@@ -918,7 +929,27 @@ export default function App() {
         return
       }
       if (!stillCurrent()) return
-      setAggregates(prev => ({ ...prev, [instanceId]: emptyAggregate('error', errorMessage(err)) }))
+      // 2026-09 beta 回归修复：已推送过的 mounted 源保留其最后聚合——unary 探针
+      // 失败说明不了推送通道，置空/置 error 只会隐藏权威推送状态（与 withdrawal
+      // 窗口保留最后视图同规）。未推送源维持原 error 态与快速重试。
+      // 已知取舍：若推送通道与 unary 探针同时死亡，视图静默冻结在最后推送状态
+      // （watchdog 每 30s 重探一次，503 仍触发 refreshHealth 翻转连接判定）——
+      // 无错误行可看，但比展示劣化/空态诚实；与官方前端同依赖的恢复路径
+      // （liveness 触发/整页刷新）一致。
+      const failureAggregate = commitAggregateFailure(
+        snapshotSourcesRef.current[instanceId] === true,
+        errorMessage(err),
+      )
+      if (failureAggregate === null) {
+        // 503 仍是权威"未就绪"信号：立即刷新使连接判定尽快翻转。
+        if (isInstanceUnavailable(err)) void refreshHealth()
+        clearAggregateRetry(instanceId)
+        // 卫生：mounted 失败不再走 scheduleRetry，未推送期残留的失败计数
+        // 一并清掉（成功路径与 roster 移除也会清，这里提前清无副作用）。
+        delete aggregateFailuresRef.current[instanceId]
+        return
+      }
+      setAggregates(prev => ({ ...prev, [instanceId]: failureAggregate }))
       // 反代 503 = 权威"未就绪"信号（03 §3.3）：本地 /health 可能还停留在
       // 旧 ready（最多一个健康轮询周期的陈旧窗口），立即刷新使连接判定
       // 尽快翻转（否则错误行要挂到下一个健康轮询才被 not-connected 替换）。

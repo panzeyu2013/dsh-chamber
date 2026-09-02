@@ -1,3 +1,5 @@
+import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+
 /**
  * Decide which ready sources need an authoritative unary aggregate refresh.
  *
@@ -7,6 +9,85 @@
  * deliberately replaced the old aggregate with `not-connected`. One pull per
  * connection generation restores the aggregate without reintroducing a timer.
  */
+
+/**
+ * Commit one unary aggregate pull over the current per-source aggregate.
+ *
+ * The unary fallback cannot express workspace identity or the archive set
+ * (0.1.2 wire: `workspace.list` was deleted upstream — the archive set exists
+ * only on the workspace follow baseline, so `fetchInstanceSnapshot` returns
+ * an EMPTY archive set plus cwd-derived synthetic groups). A source whose
+ * mounted producer already pushed must therefore keep its pushed
+ * groups/archive/state — the fallback contributes only its live session rows
+ * (running bits, new sessions), exactly the documented "sessions-only
+ * fallback never replaces a mounted source's groups/archive/state" contract
+ * (derive.ts projectInstanceSnapshot doc). Without this, the staleness
+ * watchdog's 30s re-pull of a healthy-but-idle mounted source replaced the
+ * aggregate with the degraded fallback: every archived session resurfaced
+ * together with synthetic workspace groups (beta 0.2.0 regression —
+ * "archived-resurfacing", the exact regression the 2026-09 withdrawal rule
+ * was meant to prevent). Never-pushed / unmounted sources keep the full
+ * fallback commit (pre-baseline window and unmounted sources are the
+ * documented KNOWN DEGRADATION scope).
+ *
+ * The merge applies only when the current aggregate's workspaces are REAL
+ * (a mounted push never produces synthetic rows — only the fallback does).
+ * ANY synthetic row means the last commit itself came from the fallback
+ * (e.g. the not-connected → ready-edge full commit landed while the
+ * post-restart follow baseline never arrived): freezing that degraded view
+ * would keep cwd groups and new sessions stale, so such currents continue to
+ * receive full commits (sessions AND cwd groups keep refreshing) until a real
+ * push replaces them. An EMPTY workspace set is a legitimate mounted state
+ * (fresh instance — everything renders ungrouped) and is never treated as
+ * synthetic.
+ *
+ * Third reachable degraded state (documented, not fixable via unary): a
+ * mounted source whose ctx stores never withdrew (transport flipped
+ * not-connected → ready while the stores stayed idle+ready) lands a full
+ * fallback commit on the ready edge (current.state !== 'ok' → full commit);
+ * the `some` guard then keeps it on full commits until the next real push —
+ * archived sessions resurface until the next CONTENT-CHANGE push (a healthy
+ * but quiet channel suppresses the reconnect rebaseline via signature
+ * dedupe, so the window does not close on channel recovery alone; a
+ * permanently silent channel keeps it — the sessions-only contract's
+ * inherent bound).
+ */
+export function commitAggregatePull(
+  current: InstanceAggregate | undefined,
+  fallback: InstanceSnapshot,
+  mounted: boolean,
+): InstanceAggregate {
+  const currentIsFallbackDerived = current !== undefined && current.state === 'ok'
+    && current.workspaces.length > 0
+    && current.workspaces.some(workspace => workspace.synthetic === true)
+  if (mounted && current !== undefined && current.state === 'ok' && !currentIsFallbackDerived) {
+    return {
+      state: 'ok',
+      workspaces: current.workspaces,
+      sessions: fallback.sessions,
+      archivedSessionIds: current.archivedSessionIds,
+      error: null,
+    }
+  }
+  return { state: 'ok', ...fallback, error: null }
+}
+
+/**
+ * Decide the failure commit for one unary aggregate pull.
+ *
+ * A mounted source that already pushed keeps its last aggregate through pull
+ * failures — the unary probe says nothing about the push channel, and
+ * replacing authoritative pushed state with an error row would blank/hide it
+ * (2026-09 beta regression fix; the same keep-last-view rule as the
+ * withdrawal window). Returns `null` to signal "keep the current aggregate"
+ * (the caller still runs the 503 health refresh and retry bookkeeping).
+ * Never-pushed / unmounted sources keep the error state (first-boot error
+ * surface, bounded quick retries).
+ */
+export function commitAggregateFailure(mounted: boolean, errorText: string): InstanceAggregate | null {
+  if (mounted) return null
+  return { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: errorText }
+}
 export function planAggregateRefreshes(
   readySourceIds: readonly string[],
   previouslyReady: ReadonlySet<string>,

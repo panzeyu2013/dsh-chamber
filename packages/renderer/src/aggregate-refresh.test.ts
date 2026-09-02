@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   AggregateRefreshQueue,
+  commitAggregateFailure,
+  commitAggregatePull,
   invalidateRemovedAggregateSources,
   isSnapshotStale,
   planAggregateRefreshes,
@@ -19,6 +21,150 @@ import {
   sourceIdForInstance,
   sourceIdForRawInstance,
 } from './transport-source.ts'
+import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+
+// ---- commitAggregatePull (2026-09 beta regression: archived-resurfacing) ----
+
+const mountedAggregate: InstanceAggregate = {
+  state: 'ok',
+  workspaces: [{
+    workspaceId: 'w-real',
+    path: '/real',
+    title: 'Real',
+    sessionIds: ['s1'],
+    createdAt: 't0',
+    updatedAt: 't1',
+  }],
+  sessions: [{ sessionId: 's1', running: true, blank: false }],
+  archivedSessionIds: ['archived-1', 'archived-2'],
+  error: null,
+}
+
+const fallbackSnapshot: InstanceSnapshot = {
+  workspaces: [{ workspaceId: '__cwd__:/real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: '', updatedAt: '', synthetic: true }],
+  sessions: [{ sessionId: 's1', running: false, blank: false }, { sessionId: 'archived-1', running: false, blank: false }],
+  archivedSessionIds: [],
+}
+
+test('commitAggregatePull: a mounted pushed source keeps groups/archive/state; only sessions come from the fallback', () => {
+  const committed = commitAggregatePull(mountedAggregate, fallbackSnapshot, true)
+  assert.equal(committed.state, 'ok')
+  assert.equal(committed.error, null)
+  // Workspace identity and the archive set stay authoritative (mounted push).
+  assert.deepEqual(committed.workspaces, mountedAggregate.workspaces)
+  assert.deepEqual(committed.archivedSessionIds, mountedAggregate.archivedSessionIds)
+  // Live session rows (running bits, new sessions) come from the unary pull.
+  assert.deepEqual(committed.sessions, fallbackSnapshot.sessions)
+})
+
+test('commitAggregatePull: never-pushed / unmounted sources keep the full degraded fallback commit', () => {
+  const committed = commitAggregatePull(undefined, fallbackSnapshot, false)
+  assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
+  assert.deepEqual(committed.archivedSessionIds, [])
+})
+
+test('commitAggregatePull: a mounted source without an ok aggregate falls back to the full commit (not-connected/error are authoritative states)', () => {
+  const notConnected: InstanceAggregate = { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }
+  const committed = commitAggregatePull(notConnected, fallbackSnapshot, true)
+  assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
+})
+
+test('commitAggregatePull: mounted × error-state current and mounted × never-committed (undefined) both take the full commit', () => {
+  const errorState: InstanceAggregate = {
+    state: 'error',
+    workspaces: [],
+    sessions: [],
+    archivedSessionIds: [],
+    error: 'transient',
+  }
+  assert.deepEqual(commitAggregatePull(errorState, fallbackSnapshot, true), { state: 'ok', ...fallbackSnapshot, error: null })
+  assert.deepEqual(commitAggregatePull(undefined, fallbackSnapshot, true), { state: 'ok', ...fallbackSnapshot, error: null })
+})
+
+test('commitAggregatePull: an all-synthetic current (last commit came from the fallback) keeps receiving full commits — never freezes the degraded view', () => {
+  const syntheticCurrent: InstanceAggregate = {
+    state: 'ok',
+    workspaces: [{ workspaceId: '__cwd__:/real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: '', updatedAt: '', synthetic: true }],
+    sessions: [{ sessionId: 's1', running: false, blank: false }],
+    archivedSessionIds: [],
+    error: null,
+  }
+  const committed = commitAggregatePull(syntheticCurrent, fallbackSnapshot, true)
+  assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
+})
+
+test('commitAggregatePull: ANY synthetic row marks the current as fallback-derived (mixed sets — unreachable by construction — stay on full commits)', () => {
+  const mixedCurrent: InstanceAggregate = {
+    state: 'ok',
+    workspaces: [
+      { workspaceId: 'w-real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: 't0', updatedAt: 't1' },
+      { workspaceId: '__cwd__:/other', path: '/other', title: 'Other', sessionIds: ['s2'], createdAt: '', updatedAt: '', synthetic: true },
+    ],
+    sessions: [{ sessionId: 's1', running: true, blank: false }, { sessionId: 's2', running: false, blank: false }],
+    archivedSessionIds: ['archived-1'],
+    error: null,
+  }
+  const committed = commitAggregatePull(mixedCurrent, fallbackSnapshot, true)
+  assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
+})
+
+test('commitAggregateFailure: a mounted pushed source keeps its last aggregate (null = keep; 503 health refresh stays caller-owned)', () => {
+  assert.equal(commitAggregateFailure(true, 'boom'), null)
+})
+
+test('commitAggregateFailure: never-pushed / unmounted sources get the error aggregate (first-boot error surface)', () => {
+  assert.deepEqual(commitAggregateFailure(false, 'boom'), {
+    state: 'error',
+    workspaces: [],
+    sessions: [],
+    archivedSessionIds: [],
+    error: 'boom',
+  })
+})
+
+test('commitAggregatePull: an empty workspace set is a legitimate mounted state and is never treated as synthetic', () => {
+  const emptyWorkspaces: InstanceAggregate = {
+    state: 'ok',
+    workspaces: [],
+    sessions: [{ sessionId: 's1', running: true, blank: false }],
+    archivedSessionIds: ['archived-1'],
+    error: null,
+  }
+  const committed = commitAggregatePull(emptyWorkspaces, fallbackSnapshot, true)
+  assert.deepEqual(committed.workspaces, [])
+  assert.deepEqual(committed.archivedSessionIds, ['archived-1'])
+})
+
+test('commitAggregatePull: identical sessions keep the aggregate identity stable (watchdog re-pulls cause no churn)', () => {
+  const current: InstanceAggregate = {
+    state: 'ok',
+    workspaces: mountedAggregate.workspaces,
+    sessions: [{ sessionId: 's1', running: true, blank: false }],
+    archivedSessionIds: mountedAggregate.archivedSessionIds,
+    error: null,
+  }
+  const fallbackWithSameSessions: InstanceSnapshot = {
+    ...fallbackSnapshot,
+    sessions: [{ sessionId: 's1', running: true, blank: false }],
+  }
+  const merged = commitAggregatePull(current, fallbackWithSameSessions, true)
+  // The merged object is byte-identical to the current aggregate, so the
+  // App's instanceSnapshotSignature dedupe keeps the same state object —
+  // an idle watchdog re-pull never re-renders the sidebar.
+  assert.deepEqual(merged, current)
+})
+
+test('watchdog × mounted-source invariant: a ready source with a complete producer is never re-pulled, and even if pulled the commit never degrades groups/archive', () => {
+  // Edge path: mounted + previously ready → no unary pull at all.
+  const plan = planAggregateRefreshes(['local'], new Set(['local']), { local: true })
+  assert.deepEqual(plan.refreshSourceIds, [])
+  // Watchdog path (recency-driven, App.tsx): the pull DOES run, but the
+  // commit preserves the mounted groups/archive — the archived-resurfacing
+  // regression is impossible end to end.
+  const committed = commitAggregatePull(mountedAggregate, fallbackSnapshot, true)
+  assert.deepEqual(committed.archivedSessionIds, mountedAggregate.archivedSessionIds)
+  assert.deepEqual(committed.workspaces, mountedAggregate.workspaces)
+})
 
 test('a stable ready source with a complete producer needs no unary refresh', () => {
   const plan = planAggregateRefreshes(['local'], new Set(['local']), { local: true })
