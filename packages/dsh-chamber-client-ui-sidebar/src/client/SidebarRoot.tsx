@@ -914,6 +914,19 @@ export function SidebarRoot({
       setSortMenuOpen(null)
     }
   }, [servers, sortMenuOpen, searchState])
+  // chamber (行内重命名): a rename armed on a row that leaves the projection
+  // (workspace deleted by another ctx, source snapshot dropped / disconnect,
+  // …) must not stay armed invisibly — it would re-materialize the stale
+  // form (with its typed text) when the id reappears. Mirrors the sort-menu
+  // cleanup above: drop the target once its row no longer exists.
+  useEffect(() => {
+    if (renaming === null) return
+    const server = servers.find(candidate => candidate.id === renaming.sourceId)
+    const alive = server !== undefined && (renaming.kind === 'workspace'
+      ? server.workspaces.some(workspace => workspace.id === renaming.id)
+      : server.workspaces.some(workspace => workspace.sessions.some(session => session.id === renaming.id)))
+    if (!alive) setRenaming(null)
+  }, [servers, renaming])
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
 
@@ -1045,9 +1058,20 @@ export function SidebarRoot({
     })
   }
 
-  const renameForm = (_sourceId: string, _kind: RenameTarget['kind'], _id: string, placeholder: string, nested = false) => (
+  // The rename edit UI, rendered in place at the renamed entity:
+  // 'sessionRow' swaps a session row's slot (row replaced by the form,
+  // indented at the session level); 'workspaceHeader' embeds the form
+  // INSIDE the workspace header row where the title/orphan-badge/count/git
+  // occupant/hover actions used to sit (行内编辑 — no extra list row
+  // appears; the header keeps its fold toggle/gutter). Enter commits;
+  // Escape cancels from anywhere inside the form; 取消 always cancels.
+  const renameForm = (placeholder: string, mode: 'sessionRow' | 'workspaceHeader') => (
     <form
-      className={clsx(cc.inlineForm, nested && cc.sessionNested)}
+      className={clsx(
+        cc.inlineForm,
+        mode === 'sessionRow' && cc.sessionNested,
+        mode === 'workspaceHeader' && cc.workspaceInlineForm,
+      )}
       onClick={(event) => {
         // chamber (third-wave review, W1#3): stopPropagation also stops the
         // native event, so the document-level pending-click canceller never
@@ -1058,14 +1082,24 @@ export function SidebarRoot({
         clearPendingClick()
       }}
       onSubmit={(event) => { event.preventDefault(); commitRename() }}
+      // Escape cancels wherever the focus sits inside the form (input, or
+      // the save/cancel buttons) — not only while the input is focused.
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return
+        event.preventDefault()
+        setRenaming(null)
+      }}
     >
       <input
         className={cc.inlineInput}
         autoFocus
+        // The treeitem label (title span) is swapped out while editing, so
+        // the input itself carries the rename action as its accessible name
+        // (both the session-row and the workspace-header form share this).
+        aria-label={t('action.rename')}
         placeholder={placeholder}
         value={renaming?.value ?? ''}
         onChange={(event) => setRenaming((prev) => prev === null ? prev : { ...prev, value: event.target.value })}
-        onKeyDown={(event) => { if (event.key === 'Escape') setRenaming(null) }}
       />
       <button type="submit" className={cc.actionButton}>{t('action.save')}</button>
       <button type="button" className={cc.actionButton} onClick={() => setRenaming(null)}>{t('action.cancel')}</button>
@@ -2119,6 +2153,17 @@ export function SidebarRoot({
                           return orderedWorkspaces.map(workspace => {
                           const workspaceKey = `${server.id}/${workspace.id}`
                           const folded = viewPrefs.folded[workspaceKey] === true
+                          // chamber: while THIS workspace's inline rename is
+                          // active, the header row itself hosts the edit form
+                          // (title -> input in place, no added list row). The
+                          // flag gates every structural decision below: form
+                          // embedding, drag-off, double-click re-entry guard,
+                          // HoverCard off while typing, and the
+                          // .workspaceRenaming class (height relax + glyph
+                          // hover-swap suppression).
+                          const renamingThisWorkspace = renaming !== null
+                            && renaming.sourceId === server.id
+                            && renaming.kind === 'workspace' && renaming.id === workspace.id
                           // chamber (08 §11): derived (worktree) workspaces
                           // drop the kebab/rename — OpenChamber worktree
                           // groups keep only delete + new-session. The flag
@@ -2163,14 +2208,17 @@ export function SidebarRoot({
                           // chamber (06): the workspace header row (hoisted
                           // so real workspaces wrap it in a HoverCard; the
                           // ungrouped bucket has no backing workspace, hence no
-                          // card). Double click enters inline rename (the
-                          // ungrouped bucket has no rename; a click on the inner
+                          // card). Double click enters inline rename — the edit
+                          // form then embeds INSIDE this row, replacing the
+                          // trailing content (title/orphan badge/count/git
+                          // occupant/hover actions; the ungrouped
+                          // bucket has no rename; a click on the inner
                           // buttons never triggers it). Single clicks need no
                           // delay — the header itself is not clickable (fold
                           // lives on the chevron button).
                           const workspaceHeader = (
                             <div
-                              className={clsx(cc.workspaceHeader)}
+                              className={clsx(cc.workspaceHeader, renamingThisWorkspace && cc.workspaceRenaming)}
                               // chamber (2026-09): per-workspace icon accent —
                               // deterministic, selection-independent (the
                               // current-session row carries its own official
@@ -2180,7 +2228,8 @@ export function SidebarRoot({
                               data-chamber-row={workspaceKey}
                               role="treeitem"
                               aria-expanded={!folded}
-                              draggable={workspace.ungrouped !== true && workspace.synthetic !== true}
+                              draggable={!renamingThisWorkspace
+                                && workspace.ungrouped !== true && workspace.synthetic !== true}
                               // P2-5 (2026-08 client review): the git occupant
                               // (create/remove buttons) cannot reach the
                               // plugin's suppressClickRef, so the whole header
@@ -2195,6 +2244,11 @@ export function SidebarRoot({
                               }}
                               onDoubleClick={(event) => {
                                 if (suppressClickRef.current) return
+                                // While this workspace's rename is already
+                                // active a second double click must not re-arm
+                                // from the stale title (that would wipe the
+                                // text being typed).
+                                if (renamingThisWorkspace) return
                                 if (menuOpen[workspaceKey] === true || workspace.ungrouped === true
                                   || workspace.synthetic === true) return
                                 // Derived (worktree) workspaces have no rename
@@ -2290,122 +2344,135 @@ export function SidebarRoot({
                                   <IconFolderOpenOutline16 size={14} className={cc.foldFolder} />
                                 )}
                               </button>
-                              <span className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}>
-                                {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
-                              </span>
-                              {getWorkspaceGitFlag(server.id, workspace.id)?.orphaned === true && (
-                                // Plan A: the workspace's path no longer exists
-                                // (externally deleted worktree left a ghost).
-                                // The badge doubles as the cleanup entry — an
-                                // orphaned WORKTREE keeps its worktree row
-                                // (no kebab), so the badge click opens the
-                                // dedicated delete confirm (review 2026-08).
-                                <button
-                                  type="button"
-                                  className={cc.orphanBadge}
-                                  title={t('confirm.deleteOrphan', { title: workspace.title })}
-                                  onClick={() => onDeleteWorkspace(server, workspace.id, workspace.title)}
-                                >
-                                  {t('list.orphaned')}
-                                </button>
-                              )}
-                              {visibleSessionCount > 0 && (
-                                <span className={cc.workspaceCount}>{visibleSessionCount}</span>
-                              )}
-                              {workspace.ungrouped !== true && workspace.synthetic !== true && (
-                                // chamber (08 §11): the per-workspace Git
-                                // occupant lives INSIDE the workspace header
-                                // row (OpenChamber-style: the worktree/branch
-                                // surface is the row itself, not a separate
-                                // line). It renders the worktree-workspace's
-                                // branch chip plus the create/delete actions;
-                                // non-git workspaces get an empty mount.
-                                renderWorkspaceGit('sidebar.workspace.git', { wide }, {
-                                  hookContext: { sourceId: server.id, workspaceId: workspace.id },
-                                })
-                              )}
-                              {!workspace.ungrouped && !workspace.synthetic && (
-                                <span
-                                  className={clsx(cc.rowActions, menuOpen[workspaceKey] === true && cc.rowActionsVisible)}
-                                  onClick={(event) => {
-                                    // INVARIANT (pending-click.ts header): any
-                                    // control that stops propagation MUST clear
-                                    // the pending itself (2026-08 review fix) —
-                                    // stopPropagation stops the native event, so
-                                    // the document-level listener never sees it,
-                                    // and a surviving pending would make a later
-                                    // click on the same session spuriously enter
-                                    // rename.
-                                    event.stopPropagation()
-                                    clearPendingClick()
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    className={cc.actionIcon}
-                                    aria-label={t('action.newSession')}
-                                    title={t('action.newSession')}
-                                    onClick={() => {
-                                      if (suppressClickRef.current) return
-                                      clearPendingClick()
-                                      onNewSession(server, workspace.id)
-                                    }}
-                                  >
-                                    <IconPlusOutline16 size={14} />
-                                  </button>
-                                  {!isWorktree && (
-                                  <Menu
-                                    compact
-                                    portal
-                                    align="end"
-                                    open={menuOpen[workspaceKey] === true}
-                                    onClose={() => closeMenu(workspaceKey)}
-                                    onSelect={(id: string) => {
-                                      closeMenu(workspaceKey)
-                                      if (id === 'rename') {
-                                        setRenaming({
-                                          sourceId: server.id,
-                                          kind: 'workspace',
-                                          id: workspace.id,
-                                          value: workspace.title,
-                                        })
-                                      } else if (id === 'delete') {
-                                        onDeleteWorkspace(server, workspace.id, workspace.title)
-                                      }
-                                    }}
-                                    items={[
-                                      {
-                                        id: 'rename',
-                                        label: t('action.rename'),
-                                        icon: <IconEditOutline16 size={14} />,
-                                      },
-                                      {
-                                        id: 'delete',
-                                        label: t('action.delete'),
-                                        danger: true,
-                                        icon: <IconTrashOutline16 size={14} />,
-                                      },
-                                    ]}
-                                    anchor={(
+                              {renamingThisWorkspace ? (
+                                // In-place rename: the edit form replaces the
+                                // header's trailing content (title / orphan
+                                // badge / count / git occupant / hover
+                                // actions) INSIDE the header row — the fold
+                                // toggle + gutter stay, so the row keeps its
+                                // identity and position and no extra input
+                                // row is appended below it.
+                                renameForm(workspace.title, 'workspaceHeader')
+                              ) : (
+                                <>
+                                  <span className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}>
+                                    {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
+                                  </span>
+                                  {getWorkspaceGitFlag(server.id, workspace.id)?.orphaned === true && (
+                                    // Plan A: the workspace's path no longer exists
+                                    // (externally deleted worktree left a ghost).
+                                    // The badge doubles as the cleanup entry — an
+                                    // orphaned WORKTREE keeps its worktree row
+                                    // (no kebab), so the badge click opens the
+                                    // dedicated delete confirm (review 2026-08).
+                                    <button
+                                      type="button"
+                                      className={cc.orphanBadge}
+                                      title={t('confirm.deleteOrphan', { title: workspace.title })}
+                                      onClick={() => onDeleteWorkspace(server, workspace.id, workspace.title)}
+                                    >
+                                      {t('list.orphaned')}
+                                    </button>
+                                  )}
+                                  {visibleSessionCount > 0 && (
+                                    <span className={cc.workspaceCount}>{visibleSessionCount}</span>
+                                  )}
+                                  {workspace.ungrouped !== true && workspace.synthetic !== true && (
+                                    // chamber (08 §11): the per-workspace Git
+                                    // occupant lives INSIDE the workspace header
+                                    // row (OpenChamber-style: the worktree/branch
+                                    // surface is the row itself, not a separate
+                                    // line). It renders the worktree-workspace's
+                                    // branch chip plus the create/delete actions;
+                                    // non-git workspaces get an empty mount.
+                                    renderWorkspaceGit('sidebar.workspace.git', { wide }, {
+                                      hookContext: { sourceId: server.id, workspaceId: workspace.id },
+                                    })
+                                  )}
+                                  {!workspace.ungrouped && !workspace.synthetic && (
+                                    <span
+                                      className={clsx(cc.rowActions, menuOpen[workspaceKey] === true && cc.rowActionsVisible)}
+                                      onClick={(event) => {
+                                        // INVARIANT (pending-click.ts header): any
+                                        // control that stops propagation MUST clear
+                                        // the pending itself (2026-08 review fix) —
+                                        // stopPropagation stops the native event, so
+                                        // the document-level listener never sees it,
+                                        // and a surviving pending would make a later
+                                        // click on the same session spuriously enter
+                                        // rename.
+                                        event.stopPropagation()
+                                        clearPendingClick()
+                                      }}
+                                    >
                                       <button
                                         type="button"
                                         className={cc.actionIcon}
-                                        aria-label={t('action.menu')}
-                                        aria-haspopup="menu"
-                                        aria-expanded={menuOpen[workspaceKey] === true}
-                                        onClick={(event) => {
-                                          event.stopPropagation()
+                                        aria-label={t('action.newSession')}
+                                        title={t('action.newSession')}
+                                        onClick={() => {
                                           if (suppressClickRef.current) return
                                           clearPendingClick()
-                                          toggleMenu(workspaceKey)
+                                          onNewSession(server, workspace.id)
                                         }}
                                       >
-                                        <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
+                                        <IconPlusOutline16 size={14} />
                                       </button>
-                                    )}
-                                  />
+                                      {!isWorktree && (
+                                      <Menu
+                                        compact
+                                        portal
+                                        align="end"
+                                        open={menuOpen[workspaceKey] === true}
+                                        onClose={() => closeMenu(workspaceKey)}
+                                        onSelect={(id: string) => {
+                                          closeMenu(workspaceKey)
+                                          if (id === 'rename') {
+                                            setRenaming({
+                                              sourceId: server.id,
+                                              kind: 'workspace',
+                                              id: workspace.id,
+                                              value: workspace.title,
+                                            })
+                                          } else if (id === 'delete') {
+                                            onDeleteWorkspace(server, workspace.id, workspace.title)
+                                          }
+                                        }}
+                                        items={[
+                                          {
+                                            id: 'rename',
+                                            label: t('action.rename'),
+                                            icon: <IconEditOutline16 size={14} />,
+                                          },
+                                          {
+                                            id: 'delete',
+                                            label: t('action.delete'),
+                                            danger: true,
+                                            icon: <IconTrashOutline16 size={14} />,
+                                          },
+                                        ]}
+                                        anchor={(
+                                          <button
+                                            type="button"
+                                            className={cc.actionIcon}
+                                            aria-label={t('action.menu')}
+                                            aria-haspopup="menu"
+                                            aria-expanded={menuOpen[workspaceKey] === true}
+                                            onClick={(event) => {
+                                              event.stopPropagation()
+                                              if (suppressClickRef.current) return
+                                              clearPendingClick()
+                                              toggleMenu(workspaceKey)
+                                            }}
+                                          >
+                                            <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
+                                          </button>
+                                        )}
+                                      />
+                                      )}
+                                    </span>
                                   )}
-                                </span>
+                                </>
                               )}
                             </div>
                             )
@@ -2466,20 +2533,25 @@ export function SidebarRoot({
                                       )}
                                     </div>
                                   )}
-                                  disabled={menuOpen[workspaceKey] === true || workspaceDrag !== null || sessionDrag !== null || serverDrag !== null}
+                                  disabled={menuOpen[workspaceKey] === true || renamingThisWorkspace
+                                    || workspaceDrag !== null || sessionDrag !== null || serverDrag !== null}
                                 />
                               )}
+                            {/* Workspace-scoped failures are hoisted OUT of the
+                                fold gate (both lines): a new-session/rename/
+                                delete/drag failure must surface even while the
+                                group is folded — rename (dblclick or kebab),
+                                delete (kebab/orphan badge), workspace drags
+                                and the header `+` are all reachable from a
+                                folded header. */}
+                            {workspaceError !== undefined && (
+                              <div className={cc.rowError} role="alert">{workspaceError}</div>
+                            )}
+                            {rowErrors[`${server.id}/workspace-drag/${workspace.id}`] !== undefined && (
+                              <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/workspace-drag/${workspace.id}`]}</div>
+                            )}
                             {!folded && (
                             <>
-                              {renaming !== null && renaming.sourceId === server.id
-                                && renaming.kind === 'workspace' && renaming.id === workspace.id
-                                && renameForm(server.id, 'workspace', workspace.id, workspace.title)}
-                              {workspaceError !== undefined && (
-                                <div className={cc.rowError} role="alert">{workspaceError}</div>
-                              )}
-                              {rowErrors[`${server.id}/workspace-drag/${workspace.id}`] !== undefined && (
-                                <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/workspace-drag/${workspace.id}`]}</div>
-                              )}
                               {sessions.map((session) => {
                                 const sessionKey = `${server.id}/session/${session.id}`
                                 const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
@@ -2728,7 +2800,7 @@ export function SidebarRoot({
                                 <Fragment key={session.id}>
                                   {renaming !== null && renaming.sourceId === server.id
                                   && renaming.kind === 'session' && renaming.id === session.id ? (
-                                    renameForm(server.id, 'session', session.id, session.title, true)
+                                    renameForm(session.title, 'sessionRow')
                                   ) : (
                                     <HoverCard
                                       anchor={sessionRow}

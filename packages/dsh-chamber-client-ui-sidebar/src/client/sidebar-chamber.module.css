@@ -947,6 +947,9 @@
 }
 
 .actionButton {
+  /* flex: none — the rename-form buttons must never be squeezed by the
+     flex row before the input starves (extreme narrow sidebars). */
+  flex: none;
   border: none;
   padding: 2px 4px;
   border-radius: 4px;
@@ -998,6 +1001,52 @@
    shorthand/margin for session-level UI. */
 .sessionNested {
   padding-left: 26px;
+}
+
+/* Workspace in-place rename (行内重命名): the edit form embeds INSIDE the
+   workspace header row, in the slot of the trailing content (title / orphan
+   badge / count / git occupant / hover actions) it replaces. As a header
+   flex child it must fill like the title did — flex: 1 plus min-width: 0
+   ALLOWS shrinking below the input's intrinsic width (the same truncate/
+   scroll behavior .workspaceTitle has) — and drop the standalone form's own
+   padding: the header row already supplies the gutters. */
+.workspaceInlineForm {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+}
+
+/* While the workspace header hosts the rename input, its FIXED 26px height
+   is relaxed (an input is taller than the 18px title line): padding and
+   margins are kept, so the row only grows for the duration of the edit and
+   nothing is clipped or overlaps the neighbors. Consequence to be aware of:
+   entering/leaving the edit reflows everything below by ±6px (32px vs
+   26px) — a one-time, one-directional shift per transition (the fixed
+   heights exist to prevent HOVER-driven flicker, which cannot engage here:
+   the row content is static for the whole edit). */
+.workspaceRenaming {
+  height: auto;
+}
+
+/* While editing in place, the fold-glyph hover/focus swap is suppressed —
+   the row is in edit mode, so the chevron affordance must not displace the
+   folder glyph under the pointer or the focused input. Same specificity as
+   the .workspaceHeader:hover/:focus-within rules above, declared later so
+   they win. Only the FOLDER variant is needed: in the flags-resolved steady
+   state rename can never arm on a derived (worktree) workspace (no kebab
+   rename / dblclick gate), so a renaming header always carries
+   .foldToggleFolder. Before a source's git flags resolve (isWorktree still
+   unknown) the gates do not yet exclude a worktree row — pre-existing
+   arming-window caveat; a mid-edit flag flip would only mean the glyph
+   hover swap is not suppressed for the rest of that edit (cosmetic). */
+.workspaceRenaming:hover .foldToggleFolder .foldChevron,
+.workspaceRenaming:focus-within .foldToggleFolder .foldChevron {
+  display: none;
+}
+
+.workspaceRenaming:hover .foldToggleFolder .foldFolder,
+.workspaceRenaming:focus-within .foldToggleFolder .foldFolder {
+  display: inline-flex;
 }
 
 /* Region error boundary fallback (05 §2): an unexpected render error shows

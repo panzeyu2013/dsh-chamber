@@ -161,6 +161,15 @@
   跨 N-ctx shell 共享——跨来源双击时可见 shell 在两次点击之间切换，
   逐树 ref 会看不到第一次点击）；误判的双击只造成幂等重开、绝不误入
   重命名；kebab 菜单 rename 保留为 a11y 兜底；外部点击取消 pending。
+  **行内形态（2026-12 修订）**：workspace 的重命名编辑框**嵌入 workspace
+  表头行本身**——标题/orphan 徽标/计数/git occupant/悬停动作原位替换为
+  输入框 + 保存/取消，行首折叠钮与图标槽保留（行身份与位置不变，
+  **不**在表头下方追加输入行，列表不因进入编辑而插入新行；编辑期行高
+  放宽（进入/退出编辑时下方内容 ±6px 一次性位移）、折叠字形 hover 切换
+  抑制、悬停卡片禁用）；因此**折叠态 workspace 的 kebab
+  重命名同样可见**（编辑框随表头渲染，不依赖展开），rename/delete/拖拽
+  失败的 inline 错误行也不受折叠门控。会话行重命名保持整行替换为编辑行
+  （行槽原位 swap，行内缩进同会话行）。
   **2026-08 review 修订**：
   - **任何 stopPropagation 控件必须自己 clearPendingClick**（折叠/新建/
     kebab/归档 + 来源头排序/加工作区/搜索）——React 的 stopPropagation
@@ -572,8 +581,11 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 - **悬停卡片（2026-08）**：workspace 头与真实会话行悬停显示官方
   `HoverCard` 移植卡片——workspace 卡 = 标题 + 会话数（投影无
   path/createdAt 故省略）；会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制
-  标题按钮（blank 行不显示时间）。disabled = 菜单打开或拖拽中
-  （`menuOpen`/`sessionDrag`/`workspaceDrag` 任一成立即禁用）。
+  标题按钮（blank 行不显示时间）。disabled = 菜单打开、拖拽中或行内重命名
+  进行中（`menuOpen`/`sessionDrag`/`workspaceDrag`/`serverDrag`/
+  `renamingThisWorkspace` 任一成立即禁用——编辑期卡片不盖住行内输入框；
+  该枚举描述 workspace 头卡片，会话行卡片在被重命名表单整行替换时不渲染，
+  无需额外禁用条件）。
 - **a11y（2026-08）**：来源分组 `role="group"`、列表 `role="tree"`、
   workspace 头 `role="treeitem"` + `aria-expanded`、会话行 `role="treeitem"`
   + `aria-selected`、搜索结果行 `button` + `role="treeitem"`；来源头
