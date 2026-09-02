@@ -583,6 +583,23 @@ ssh-config alias/DNS 名，绝不能拿来触发 gateway Host policy 421。隧�
 - **刷新失败→有界重连走 verifyUp**：预过期重登失败（网络/429/503）保持旧注册
   （旧 cookie 到期前仍有效）并在过期时刻重试；已过期后仍失败则如实告警，残余
   窗口交给断开→重连路径（verifyUp 用存储密码重登），绝不静默。
+- **ready 态周期再验证 + 用户意图即时探测（2026-09，transport-manager）**：
+  预过期刷新只覆盖"缓存 TTL 到期"，**服务端提前吊销**（远端改密轮换
+  jwt-secret、gateway 重启、auth:none→要认证）与 **http 直连/隧道后实例死亡**
+  在刷新定时器触发前会长期呈现为 ready（绿点 + 401/502 洪流，无任何自动恢复）。
+  因此每个 READY 传输以 `READY_VERIFY_INTERVAL_MS`（60s）周期重跑 provider
+  `verifyUp`（与连接期同一条身份探测缝）：gateway 密码目标经
+  `verifyGatewayPasswordSession` 的"缓存 Cookie 探测 → 401 → 失效 → 用存储密码
+  单次自动重登"流，仅被吊销的会话**无感自愈**（会话轮换后经 `onVerified`
+  按注册认证头指纹差异重注册代理——`registerInstanceTransport` 会撤销在途流量，
+  故健康注册绝不无谓重注册，只有 Cookie 真变化才替换）；重登仍被拒 → 终态
+  `error:requires_user_action`（红点 + 连接页「重新输入密码」）；瞬态失败 →
+  复用隧道掉线同款 `scheduleReconnect`（degraded → 有界重试 → error + 慢速重探）。
+  生命周期锚点 = transport-manager `transition()`：进 ready 武装、离开 ready
+  取消，无独立 arm/disarm 面；单飞 + epoch 围栏，探测结果不跨代提交。
+  用户点击来源头/打开会话（renderer `selectView` 单点）经
+  `desktop_ssh_reverify` 立即触发一次探测（`READY_VERIFY_MIN_INTERVAL_MS` 10s
+  静默窗 + 单飞防叠），把"正要操作的实例"的失效检测延迟收敛到一次探测 RTT。
 - **SPKI pre-write 门**：gateway+HTTPS 配置 pin 时，desktop 登录与 verifyUp 探针、
   control-plane HTTP/WS 反代均先在 TLS `secureConnect` 匹配 peer SPKI，再调用请求
   `write/end` 或发送 upgrade handshake；匹配前不发送 header、Bearer/Cookie、密码 body

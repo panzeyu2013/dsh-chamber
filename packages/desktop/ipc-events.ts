@@ -52,6 +52,9 @@ export const IPC_CHANNELS = {
   SSH_CONNECT: 'desktop_ssh_connect',
   SSH_DISCONNECT: 'desktop_ssh_disconnect',
   SSH_STATUS: 'desktop_ssh_status',
+  /** On-demand ready-state re-verification (user activation of a source/
+   *  session): main runs one identity probe for a READY transport. */
+  SSH_REVERIFY: 'desktop_ssh_reverify',
   SSH_LOGS: 'desktop_ssh_logs',
   SSH_LOGS_CLEAR: 'desktop_ssh_logs_clear',
   SSH_START_SERVICE: 'desktop_ssh_start_service',

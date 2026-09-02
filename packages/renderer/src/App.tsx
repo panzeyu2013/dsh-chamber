@@ -1424,6 +1424,29 @@ export default function App() {
     })
   }, [])
 
+  /**
+   * 用户意图即时再验证（ready-state heartbeat 的即时加速）：点击/打开一个
+   * 远程来源 = 「现在就想要这个 server」。与 ensureRemoteConnected 互补——
+   * 非 ready 的 error/degraded 来源走隧道重连（connecting 已在途、idle 手动
+   * 断开不触碰）；**ready 但会话/远端已死**（远端改密吊销 gateway 会话、远端
+   * 进程掉线等，transport 相位不变、心跳要等最多一个周期）由主进程 reverify
+   * 立即探测一次：终端失败（401 重登被拒等）相位翻 error（红点 + 连接页错误
+   * 指引），瞬态失败走有界重连。fire-and-forget：权威状态以相位推送为准；
+   * reverify 对非 ready/静默窗内的调用是主进程侧 no-op，故重复点击无副作用。
+   */
+  const probeRemoteReady = useCallback((viewId: string) => {
+    if (viewId === LOCAL_INSTANCE_ID) return
+    const ssh = window.dshChamber?.desktopSsh
+    if (ssh === undefined || ssh.reverify === undefined) return
+    const rawId = rawInstanceIdFromSourceId(viewId)
+    if (rawId === null) return
+    void ssh.reverify(rawId).catch(() => {
+      // 探测失败保持现状：权威状态仍由 onStatusChanged 推送/轮询兜底；
+      // 但失败本身值得留痕（IPC/主进程侧异常，非实例状态）。
+      console.warn(`[renderer] ready-state reverify ${rawId} failed`)
+    })
+  }, [])
+
   /** 视图切换（设计 05 §4）：经 View Transition 包装（view-transition.ts）——
    * 旧视图静态快照保持到新视图渲染就绪，随后短 crossfade；reveal 重排期间
    * 无黑帧；prefers-reduced-motion/不支持时降级即时切换。未就绪目标视图
@@ -1435,6 +1458,9 @@ export default function App() {
    * boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。local 常驻。
    */
   const selectView = useCallback((viewId: string) => {
+    // 用户点击 = 意图使用该来源：ready 但会话/远端已死的来源立即探测一次
+    //（heartbeat 的即时加速；fire-and-forget，见 probeRemoteReady）。
+    probeRemoteReady(viewId)
     // 用户点击 = 意图使用该来源：error/degraded 隧道立即再试（慢速重探的
     // 即时加速；idle 手动断开不触碰——见 ensureRemoteConnected）。
     ensureRemoteConnected(viewId)
@@ -1479,7 +1505,7 @@ export default function App() {
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
     })
-  }, [ensureRemoteConnected])
+  }, [ensureRemoteConnected, probeRemoteReady])
 
   /** Replay the one cold-start remote activation only after the first
    * authoritative instances_get result committed the same roster generation.
@@ -2208,9 +2234,11 @@ export default function App() {
             <button
               className="btn primary"
               onClick={() => {
-                // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试
-                // （与 selectView 同语义——boot 失败若由隧道故障引起，不重连
+                // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试，
+                // ready 但会话/远端已死的来源立即探测一次（与 selectView
+                // 同语义——boot 失败若由隧道故障或死会话引起，不重连/不探测
                 // 则重试只会再次失败）。
+                probeRemoteReady(activeView)
                 ensureRemoteConnected(activeView)
                 setRetryTokens(prev => ({ ...prev, [activeView]: (prev[activeView] ?? 0) + 1 }))
               }}

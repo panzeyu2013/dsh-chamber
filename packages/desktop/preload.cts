@@ -83,6 +83,10 @@ export interface DesktopSshSurface {
   connect(id: string): Promise<SshStatusProjection | null>
   disconnect(id: string): Promise<SshStatusProjection | null>
   status(id: string): Promise<SshStatusProjection | null>
+  /** On-demand ready-state re-verification (user activation of a source/
+   *  session): main runs one identity probe for a READY transport and
+   *  returns the fresh status projection. */
+  reverify(id: string): Promise<SshStatusProjection | null>
   logs(id: string): Promise<SshLogEntry[]>
   logs_clear(id: string): Promise<boolean>
   start_service(id: string): Promise<SshExecIpcResult>
@@ -456,6 +460,7 @@ function desktopSshApi(): DesktopSshSurface {
     connect: id => ipcRenderer.invoke('desktop_ssh_connect', { id }),
     disconnect: id => ipcRenderer.invoke('desktop_ssh_disconnect', { id }),
     status: id => ipcRenderer.invoke('desktop_ssh_status', { id }),
+    reverify: id => ipcRenderer.invoke('desktop_ssh_reverify', { id }),
     logs: id => ipcRenderer.invoke('desktop_ssh_logs', { id }),
     logs_clear: id => ipcRenderer.invoke('desktop_ssh_logs_clear', { id }),
     start_service: id => ipcRenderer.invoke('desktop_ssh_start_service', { id }),

@@ -312,6 +312,10 @@ export interface DesktopSshSurface {
   connect(id: string): Promise<SshStatusProjection | null>
   disconnect(id: string): Promise<SshStatusProjection | null>
   status(id: string): Promise<SshStatusProjection | null>
+  /** On-demand ready-state re-verification (user activation of a source/
+   *  session): main runs one identity probe for a READY transport and
+   *  returns the fresh status projection. */
+  reverify(id: string): Promise<SshStatusProjection | null>
   logs(id: string): Promise<SshLogEntry[]>
   logs_clear(id: string): Promise<boolean>
   start_service(id: string): Promise<SshExecIpcResult>

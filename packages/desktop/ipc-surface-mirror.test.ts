@@ -169,7 +169,7 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
     'is_active', 'local_plugin_add', 'local_plugin_add_file', 'local_plugin_list',
     'local_plugin_remove', 'logs', 'logs_clear', 'npm_search', 'onInstancesChanged',
     'onStatusChanged', 'plugin_apply', 'plugin_list', 'plugin_materialize_add',
-    'plugin_materialize_add_pick', 'restart_service', 'seed_host_graph',
+    'plugin_materialize_add_pick', 'restart_service', 'reverify', 'seed_host_graph',
     'save_connection', 'set_gateway_password', 'set_gateway_token', 'set_password', 'start_service',
     'status', 'stop_service',
   ].sort()
