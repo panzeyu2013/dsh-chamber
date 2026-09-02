@@ -319,6 +319,7 @@ jobs:
           pnpm run typecheck:settings-bridge
           pnpm run typecheck:client-web
           pnpm run typecheck:connection
+          pnpm run typecheck:api-gateway
           pnpm run typecheck:open-in
           pnpm run test:sidebar
           pnpm run test:layout

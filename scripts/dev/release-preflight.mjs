@@ -406,7 +406,8 @@ function printFullBatteryNotice() {
   pnpm run typecheck:sidebar && pnpm run typecheck:layout
   pnpm run typecheck:connections && pnpm run typecheck:settings-bridge
   pnpm run typecheck:git && pnpm run typecheck:open-in
-  pnpm run typecheck:client-web && pnpm run typecheck:host-graph
+  pnpm run typecheck:client-web && pnpm run typecheck:connection
+  pnpm run typecheck:api-gateway && pnpm run typecheck:host-graph
   pnpm run typecheck:host-git && pnpm run typecheck:gateway
 ────────────────────────────────────────────────────────────────`)
 }
