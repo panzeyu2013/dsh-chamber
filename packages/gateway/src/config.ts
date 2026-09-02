@@ -110,10 +110,27 @@ function envBoolean(name: string): boolean | undefined {
 /** Origin-form path validation shared by parseGatewayConfig and the
  * materialized-config guard (design 17 §18): a same-origin target only —
  * starts with '/', no '//' prefix, no backslash, and never the bare root
- * (which would loop the shunting back onto itself). */
+ * (which would loop the shunting back onto itself). Control characters are
+ * rejected outright (Node's writeHead would 500 per request on them), and
+ * literal dot-segments that URL-normalize back to '/' are rejected too (a
+ * `Location: /..` would be normalized by browsers to '/' and re-enter the
+ * shunting loop). */
 export function normalizeMobileEntryPath(value: string): string {
   if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || value === '/') {
     throw new GatewayConfigError(`mobile entry path must be an origin-form path (starts with '/', no '//' prefix, no backslash, and not '/'), got ${JSON.stringify(value)}`)
+  }
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    throw new GatewayConfigError(`mobile entry path must contain no control characters, got ${JSON.stringify(value)}`)
+  }
+  let normalized = value
+  try {
+    normalized = new URL(value, 'http://chamber.invalid').pathname
+  } catch {
+    // Unreachable for origin-form input; fail closed on any parser surprise.
+    throw new GatewayConfigError(`mobile entry path cannot be parsed, got ${JSON.stringify(value)}`)
+  }
+  if (normalized === '/') {
+    throw new GatewayConfigError(`mobile entry path must not normalize to the root (shunting loop), got ${JSON.stringify(value)}`)
   }
   return value
 }

@@ -23,7 +23,7 @@
     "build:host-git": "pnpm --filter @dsh-chamber/dsh-host-git-worktree run build",
     "build:host-packages": "pnpm run build:host-graph && pnpm run build:host-git",
     "build:dsh-runtime": "pnpm --filter @dsh-chamber/dsh-runtime run build",
-    "build:gateway": "pnpm run build:dsh-runtime && pnpm --filter @dsh-chamber/gateway run build",
+    "build:gateway": "pnpm --filter @dsh-chamber/dsh-client-ui-mobile run build && pnpm run build:dsh-runtime && pnpm --filter @dsh-chamber/gateway run build",
     "build:desktop": "pnpm run build:host-packages && pnpm run build:renderer && pnpm --filter @dsh-chamber/desktop run build:control-plane && pnpm --filter @dsh-chamber/dsh-runtime run build && pnpm --filter @dsh-chamber/desktop run build:host-graph-package && pnpm --filter @dsh-chamber/desktop run build:preload && pnpm --filter @dsh-chamber/desktop run bundle:dsh",
     "dist:desktop": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist",
     "dist:desktop:mac": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:mac",

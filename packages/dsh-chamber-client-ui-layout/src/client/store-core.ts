@@ -3,11 +3,14 @@
  * as a PURE module: every runtime dependency (the store engine, the vendor
  * column geometry, the sidebar view-prefs store) arrives through an injected
  * `LayoutStoreEnvironment`, so the whole decision surface is testable under
- * plain node (`test/layout-store.test.ts`) without the vendor packages (their
- * source-only tree ships no built `lib/` for node to import). The production
- * wiring lives in `stores.ts` — it builds the default environment from the
- * real modules and re-exports `createLayoutStore`, keeping the registration
- * face (`client/index.ts` → `store: createLayoutStore`) unchanged.
+ * plain node (`test/layout-store.test.ts`) without the vendor ENGINE/store
+ * packages (their source-only tree ships no built `lib/` for node to import).
+ * The one vendor dependency the tests DO import directly is the pure
+ * `columns.ts` geometry module, used as the real injected face to lock the
+ * clamp ranges against the upstream constants. The production wiring lives in
+ * `stores.ts` — it builds the default environment from the real modules and
+ * re-exports `createLayoutStore`, keeping the registration face
+ * (`client/index.ts` → `store: createLayoutStore`) unchanged.
  *
  * Behavior notes (identical to the pre-injection fork):
  * - the sidebar preference is seeded from — and every drag written back to —
@@ -126,7 +129,20 @@ export function onLayoutInstance(env: LayoutStoreEnvironment, observer: LayoutIn
 function notifyInstanceObservers(env: LayoutStoreEnvironment, instance: LayoutInstance): void {
   const set = instanceObservers.get(env)
   if (set === undefined) return
-  for (const observer of set) observer(instance)
+  // One throwing observer must not starve the rest (mirrors the vendor
+  // engine's per-listener guard) and must never escape into the store
+  // instantiation path (trackLayoutInstance runs inside the patched
+  // handle.create — an uncaught throw there would fail the AppFrame render
+  // and, landing before subscriptionInstalled, permanently skip the
+  // once-per-env viewPrefs subscription).
+  for (const observer of set) {
+    try {
+      observer(instance)
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn('[layout] layout-instance observer threw', error)
+    }
+  }
 }
 
 /** Trailing debounce for the persistence write (drag → ONE updateViewPrefs). */

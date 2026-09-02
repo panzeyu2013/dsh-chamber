@@ -650,10 +650,15 @@ export function createGatewayDispatch(
     // mobile entry instead of the desktop frontend. UA sniffing is forgeable
     // and carries NO security semantics — the shunting sits AFTER the auth
     // gate (and after the /chamber surface claims) and keeps the fallthrough's
-    // staleness guard, so it can never bypass or weaken the gate.
+    // staleness guard, so it can never bypass or weaken the gate. The
+    // `?desktop=1` escape hatch is the mobile entry page's own way out of the
+    // loop: the P4 placeholder's "Open the full dsh frontend" link points at
+    // it, so a shunted mobile user can always reach the plugin-adapted
+    // frontend instead of being bounced back to the placeholder.
     if (mobileUaRedirect === true
       && (req.method === 'GET' || req.method === 'HEAD')
       && pathname === '/'
+      && url.searchParams.get('desktop') === null
       && MOBILE_UA_PATTERN.test(headerValue(req.headers, 'user-agent') ?? '')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       res.writeHead(302, { location: mobileEntryPath, 'cache-control': 'no-store' })

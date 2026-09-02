@@ -53,6 +53,17 @@ export type { LayoutState } from './store-core.ts'
  * change. State is the store preference set; render geometry (concession
  * chain, session gating) is NOT included — consumers derive the collapsed
  * flag themselves: `collapsed = narrow ? !narrowExpanded : sidebar === 0`.
+ *
+ * SINGLE-INSTANCE SEMANTICS (read before consuming): the service tracks the
+ * LATEST live store instance per environment, and the environment is shared
+ * by every boot of an N-ctx shell — there is no per-boot instance scoping on
+ * this face (design 17 §18.4 项 2 defers it to the consumer's own root).
+ * With several live shells, getLayoutSnapshot() therefore reflects the most
+ * recently minted instance, and a shell whose instance was released reads
+ * the closed default until the next mint. Today's only consumer (the mobile
+ * plugin) runs in the single-instance gateway deployment, where the face is
+ * exact; a future multi-shell renderer mount must scope by its own instance
+ * root before relying on these facts.
  */
 export interface LayoutFacts {
   getLayoutSnapshot(): LayoutState
@@ -189,6 +200,12 @@ export function apply(ctx: ClientContext): void {
       instance.subscribe(notifyLayout)
       notifyLayout()
     })
+    // ORDER CONTRACT (do not reorder): the layoutFacts provide() and this
+    // instance subscription must both run BEFORE slots.register — the
+    // framework instantiates the store only on the first AppFrame render,
+    // which happens after apply() completes, so a consumer subscribed here
+    // can never miss the first mint. The mobile plugin's tier-1 detection
+    // relies on the same ordering via its hard 'layout' inject.
     const disposeRegistration = ctx.slots.register({
       name: 'root',
       locale: 'common',

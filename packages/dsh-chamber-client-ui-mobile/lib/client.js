@@ -411,13 +411,31 @@ function installEnterToNewline() {
     event.preventDefault();
     event.stopPropagation();
     const ok = document.execCommand("insertLineBreak");
-    if (!ok) document.execCommand("insertText", false, "\n");
+    if (!ok) {
+      const fallbackOk = document.execCommand("insertText", false, "\n");
+      if (!fallbackOk && !insertLineBreakManually()) {
+        console.warn("[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)");
+      }
+    }
   };
   document.addEventListener("keydown", onKeyDown, true);
   return () => {
     document.removeEventListener("keydown", onKeyDown, true);
     detachComposing();
   };
+}
+function insertLineBreakManually() {
+  const selection = document.getSelection();
+  if (selection === null || selection.rangeCount === 0) return false;
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const br = document.createElement("br");
+  range.insertNode(br);
+  range.setStartAfter(br);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
 }
 function installEditabilityRecovery(root = document) {
   let lastEditable = true;
@@ -743,11 +761,9 @@ function apply(ctx) {
     };
   }, "dsh-chamber: mobile assets");
   ctx.effect(() => {
-    const stamped = /* @__PURE__ */ new WeakSet();
     const stamp = () => {
       for (const root of document.querySelectorAll(ROOT_SLOT_SELECTOR)) {
-        const frame = stampFrame(root);
-        if (frame !== null && !stamped.has(frame)) stamped.add(frame);
+        stampFrame(root);
       }
     };
     const isStructuralTarget = (target) => target instanceof Element && (target.matches(ROOT_SLOT_SELECTOR) || target.matches("[data-mobile-frame]") || target.matches("[data-mobile-role]") || target.parentElement?.matches(ROOT_SLOT_SELECTOR) === true || target.parentElement?.matches("[data-mobile-frame]") === true);

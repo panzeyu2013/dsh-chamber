@@ -6,7 +6,6 @@
  * claims non-root paths or non-GET/HEAD methods.
  */
 
-import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
@@ -14,57 +13,28 @@ import type { AuthProvider } from '../src/auth.ts'
 import { DEFAULT_MOBILE_ENTRY_PATH, parseGatewayConfig } from '../src/config.ts'
 import { createGatewayDispatch } from '../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../src/middleware.ts'
+import { FakeRequest, FakeResponse } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 const PASSWORD = 'correct-horse-battery'
 const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36'
 const DESKTOP_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36'
 
-class FakeRequest extends EventEmitter {
-  readonly headers: Record<string, string>
-  readonly method: string
-  readonly url: string
-  readonly socket: { remoteAddress: string; encrypted?: boolean }
-  destroyed = false
-  constructor(method: string, url: string, headers: Record<string, string>, remoteAddress = '203.0.113.8') {
-    super()
-    this.method = method
-    this.url = url
-    this.headers = headers
-    this.socket = { remoteAddress }
-  }
-  destroy(): void {
-    if (this.destroyed) return
-    this.destroyed = true
-    this.emit('aborted')
-    this.emit('close')
-  }
-  async *[Symbol.asyncIterator](): AsyncIterableIterator<Buffer> {}
-}
-
-class FakeResponse extends EventEmitter {
-  status = 0
-  headersSent = false
-  headers: Record<string, unknown> = {}
-  body = ''
-  destroyed = false
-  _corsHeaders?: Record<string, string>
-  setHeader(name: string, value: unknown): void { this.headers[name.toLowerCase()] = value }
-  writeHead(status: number, headers: Record<string, unknown> = {}): void {
-    this.status = status
-    this.headersSent = true
-    for (const [name, value] of Object.entries(headers)) this.setHeader(name, value)
-  }
-  write(chunk: unknown): boolean { this.body += String(chunk); return true }
-  end(chunk?: unknown): void { if (chunk !== undefined) this.body += String(chunk) }
-  destroy(): void { this.destroyed = true }
-}
-
 /** Authenticated token principal (generation-less fake → always current). */
 const PRINCIPAL = { kind: 'token' as const, id: 'test', issuedAt: 0 }
 
 function authenticatedAuth(): AuthProvider {
   return { kind: 'token', async verify() { return PRINCIPAL } }
+}
+
+/** A provider whose verify() answers with a STALE generation (rotation
+ * already advanced past the admitted proof). */
+function staleGenerationAuth(): AuthProvider {
+  return {
+    kind: 'token',
+    generation: 2,
+    async verify() { return { ...PRINCIPAL, generation: 1 } },
+  }
 }
 
 function deniedAuth(): AuthProvider {
@@ -221,5 +191,44 @@ test('the login flow wins: mobile UA GET /auth/login still serves the login page
   }))
   assert.equal(res.status, 200)
   assert.match(String(res.headers['content-type']), /text\/html/)
+  assert.equal(s.httpProxyCalls, 0)
+})
+
+test('enabled: the ?desktop=1 escape hatch bypasses the shunting (mobile entry exit)', async () => {
+  // The P4 mobile placeholder's "Open the full dsh frontend" link points at
+  // /?desktop=1 — without the bypass the mobile UA would be bounced right
+  // back into the shunting loop.
+  const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true })
+  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/?desktop=1', {
+    host: 'gateway.example:3000',
+    'user-agent': MOBILE_UA,
+  }))
+  assert.equal(res.status, 200)
+  assert.equal(res.body, 'proxied')
+  assert.equal(res.headers.location, undefined)
+  assert.equal(s.httpProxyCalls, 1)
+})
+
+test('enabled: a stale principal (rotated generation) is rejected before the shunting answers', async () => {
+  const s = setup({ auth: staleGenerationAuth(), mobileUaRedirect: true })
+  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
+    host: 'gateway.example:3000',
+    'user-agent': MOBILE_UA,
+  }))
+  assert.equal(res.status, 401)
+  assert.equal(res.headers.location, undefined, 'no shunting 302 may answer for a revoked principal')
+  assert.equal(s.httpProxyCalls, 0)
+})
+
+test('a forged mobile UA with an API Accept header still gets the 401 JSON shape, never a redirect', async () => {
+  const s = setup({ auth: deniedAuth(), mobileUaRedirect: true })
+  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
+    host: 'gateway.example:3000',
+    'user-agent': MOBILE_UA,
+    accept: 'application/json',
+  }))
+  assert.equal(res.status, 401)
+  assert.equal(JSON.parse(res.body).code, 'unauthorized')
+  assert.equal(res.headers.location, undefined)
   assert.equal(s.httpProxyCalls, 0)
 })

@@ -107,11 +107,11 @@ export function apply(ctx: ClientContext): void {
   // root slot / frame / column candidate can affect the stamping — chat
   // streaming and typing commit thousands of deep childList batches.
   ctx.effect(() => {
-    const stamped = new WeakSet<object>()
+    // stampFrame is idempotent (setAttribute on stable anchors), so repeated
+    // stamps on remounts are harmless and need no dedup bookkeeping.
     const stamp = (): void => {
       for (const root of document.querySelectorAll(ROOT_SLOT_SELECTOR)) {
-        const frame = stampFrame(root)
-        if (frame !== null && !stamped.has(frame)) stamped.add(frame)
+        stampFrame(root)
       }
     }
     const isStructuralTarget = (target: Node): boolean =>

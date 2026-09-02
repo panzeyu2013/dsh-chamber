@@ -313,7 +313,11 @@ async function main(): Promise<number | null> {
       trustedProxies: args.trustedProxies.length === 0 ? undefined : args.trustedProxies,
       corsOrigins: args.corsOrigins,
       allowAnonymousExternal: args.allowAnonymousExternal,
-      mobileUaRedirect: args.mobileUaRedirect,
+      // `=== true ? true : undefined`: an absent flag must NOT pin the
+      // option to false, or the DSH_GATEWAY_MOBILE_UA_REDIRECT env fallback
+      // in parseGatewayConfig would be unreachable from the CLI (the same
+      // undefined-pass-through pattern every other env-backed option uses).
+      mobileUaRedirect: args.mobileUaRedirect === true ? true : undefined,
       mobileEntryPath: args.mobileEntryPath,
     }, stateDir, dshWorkspacePath)
   } catch (error) {

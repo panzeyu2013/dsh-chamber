@@ -90,13 +90,50 @@ export function installEnterToNewline(): () => void {
     // insertLineBreak — fall back to insertText('\n') so Enter never
     // silently dies on the primary mobile platform (P2-1).
     const ok = document.execCommand('insertLineBreak')
-    if (!ok) document.execCommand('insertText', false, '\n')
+    if (!ok) {
+      const fallbackOk = document.execCommand('insertText', false, '\n')
+      // Last-resort manual DOM insertion: an engine where BOTH execCommand
+      // forms fail on the contenteditable must still produce a line break —
+      // a swallowed Enter (no newline, no send, no log) is the exact P2-1
+      // failure mode this layer exists to prevent.
+      if (!fallbackOk && !insertLineBreakManually()) {
+        // Keep the event consumed either way: falling back to the official
+        // Enter=send convention mid-composition would SEND the message
+        // (Lexical ignores defaultPrevented, but the command fires on the
+        // untouched event only when propagation was not stopped — we
+        // already stopped it, so the keystroke is inert). Surface the
+        // failure loudly for real-device triage instead of failing silently.
+        // eslint-disable-next-line no-console
+        console.warn('[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)')
+      }
+    }
   }
   document.addEventListener('keydown', onKeyDown, true)
   return () => {
     document.removeEventListener('keydown', onKeyDown, true)
     detachComposing()
   }
+}
+
+/**
+ * Manual contenteditable line-break insertion (Selection/Range, no
+ * execCommand): collapses the current selection and inserts a <br> — the
+ * standard contenteditable newline representation Lexical normalizes. Pure
+ * DOM fallback for engines where both execCommand forms fail; returns false
+ * only when there is no usable selection at all.
+ */
+function insertLineBreakManually(): boolean {
+  const selection = document.getSelection()
+  if (selection === null || selection.rangeCount === 0) return false
+  const range = selection.getRangeAt(0)
+  range.deleteContents()
+  const br = document.createElement('br')
+  range.insertNode(br)
+  range.setStartAfter(br)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+  return true
 }
 
 /**

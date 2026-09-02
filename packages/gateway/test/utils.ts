@@ -2,8 +2,9 @@
  * Shared gateway test fakes — the canonical stand-ins for Node's
  * IncomingMessage / ServerResponse used by the dispatch-harness tests
  * (audit.test.ts, dispatch-composition.test.ts, runtime-routes.test.ts,
- * feature-lifecycle.test.ts). Single source of truth for the request/response
- * surface the gateway middleware drives; do not re-declare these locally.
+ * feature-lifecycle.test.ts, mobile-ua-redirect.test.ts). Single source of
+ * truth for the request/response surface the gateway middleware drives; do
+ * not re-declare these locally.
  *
  * Body bytes are always emitted manually by the caller (`req.emit('data'|'end',
  * ...)`) — the paused-mode buffer replays bytes emitted before a 'data'

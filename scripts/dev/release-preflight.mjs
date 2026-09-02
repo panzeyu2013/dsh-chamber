@@ -387,13 +387,14 @@ function printFullBatteryNotice() {
   pnpm run test:control-plane
   pnpm run test:runtime && pnpm run test:gateway && pnpm run test:desktop
   pnpm run test:renderer-shell && pnpm run test:git && pnpm run test:host-git
-  pnpm run test:sidebar && pnpm run test:settings-bridge
-  pnpm run test:connections && pnpm run test:client-web
-  pnpm run test:connection && pnpm run test:cli
+  pnpm run test:sidebar && pnpm run test:layout
+  pnpm run test:settings-bridge && pnpm run test:connections
+  pnpm run test:client-web && pnpm run test:connection
+  pnpm run test:open-in && pnpm run test:mobile && pnpm run test:cli
   pnpm run typecheck && pnpm run typecheck:runtime
   pnpm run typecheck:sidebar && pnpm run typecheck:layout
   pnpm run typecheck:connections && pnpm run typecheck:settings-bridge
-  pnpm run typecheck:git && pnpm run typecheck:open-in
+  pnpm run typecheck:git && pnpm run typecheck:open-in && pnpm run typecheck:mobile
   pnpm run typecheck:client-web && pnpm run typecheck:host-graph
   pnpm run typecheck:host-git && pnpm run typecheck:gateway
 ────────────────────────────────────────────────────────────────`)

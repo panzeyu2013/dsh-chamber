@@ -77,7 +77,7 @@ jobs:
         run: pnpm run test:gateway
       - name: Renderer shell unit tests
         run: pnpm run test:renderer-shell
-      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / connection / open-in)
+      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / connection / open-in / mobile)
         run: |
           pnpm run typecheck:sidebar
           pnpm run typecheck:git
@@ -87,7 +87,8 @@ jobs:
           pnpm run typecheck:client-web
           pnpm run typecheck:connection
           pnpm run typecheck:open-in
-      - name: Client and host plugin unit tests (sidebar / git / settings-bridge / connections / client-web / connection / open-in)
+          pnpm run typecheck:mobile
+      - name: Client and host plugin unit tests (sidebar / layout / git / settings-bridge / connections / client-web / connection / open-in / mobile)
         run: |
           pnpm run test:sidebar
           pnpm run test:layout
@@ -98,6 +99,7 @@ jobs:
           pnpm run test:client-web
           pnpm run test:connection
           pnpm run test:open-in
+          pnpm run test:mobile
           pnpm run test:cli
       # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
       # dsh runtime — normal here, since only

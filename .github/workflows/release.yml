@@ -320,6 +320,7 @@ jobs:
           pnpm run typecheck:client-web
           pnpm run typecheck:connection
           pnpm run typecheck:open-in
+          pnpm run typecheck:mobile
           pnpm run test:sidebar
           pnpm run test:layout
           pnpm run test:git
@@ -329,6 +330,7 @@ jobs:
           pnpm run test:client-web
           pnpm run test:connection
           pnpm run test:open-in
+          pnpm run test:mobile
           pnpm run test:cli
       - name: Renderer + host package builds
         run: |

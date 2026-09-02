@@ -244,9 +244,18 @@ test('mobile entry path must be a safe origin-form path', () => {
     assert.throws(() => parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: bad }, STATE, DSH),
       GatewayConfigError, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
   }
+  // Control characters would make writeHead fail per request (and the
+  // "safe origin-form" claim would be hollow); literal dot-segments that
+  // URL-normalize back to '/' would re-enter the shunting loop.
+  for (const bad of ['/\r\nX-Evil: 1', '/a\u0000b', '/..', '/a/..', '/./..', '/a/../..']) {
+    assert.throws(() => parseGatewayConfig({ mobileUaRedirect: true, mobileEntryPath: bad }, STATE, DSH),
+      GatewayConfigError, `mobileEntryPath ${JSON.stringify(bad)} must be rejected`)
+  }
   // Valid origin-form paths (with and without the shunting enabled) pass.
   assert.equal(parseGatewayConfig({ mobileEntryPath: '/x' }, STATE, DSH).mobileEntryPath, '/x')
   assert.equal(parseGatewayConfig({ mobileEntryPath: '/a/b.html' }, STATE, DSH).mobileEntryPath, '/a/b.html')
+  // Dot segments that normalize to a NON-root path stay acceptable.
+  assert.equal(parseGatewayConfig({ mobileEntryPath: '/./x' }, STATE, DSH).mobileEntryPath, '/./x')
 })
 
 test('DSH_GATEWAY_MOBILE_UA_REDIRECT env is boolified; garbage is a config error', () => {

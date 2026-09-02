@@ -766,7 +766,9 @@ const MOBILE_HTML = `<!doctype html>
 <main style="text-align:center;padding:2rem">
   <h1>dsh gateway</h1>
   <p>Mobile light surface (design 17 §9, P4).</p>
-  <p><a href="/" style="color:#58a6ff">Open the full dsh frontend →</a></p>
+  <!-- The ?desktop=1 escape hatch is the shunting loop exit (dispatch.ts
+       4.5): without it a mobile UA would be redirected right back here. -->
+  <p><a href="/?desktop=1" style="color:#58a6ff">Open the full dsh frontend →</a></p>
 </main>
 `
 
