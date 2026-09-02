@@ -92,6 +92,23 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   on withdrawal: the first report after recovery is a pure seed (consistent
   with the blue-dot machine); completions inside the narrow window are no
   longer re-notified (the completed state stays visible in the UI).
+- **Full-round radii pair `corner-shape: round` (0.1.2-alpha.4 regression)** —
+  upstream alpha.4's ui-theme injects a global superellipse corner-shape
+  stylesheet inside `@supports (corner-shape: superellipse(1.5))` covering
+  `*` and `*::before/::after`; every effectively full-round radius (50%,
+  100%, or a pill far above the box) must pair `corner-shape: round` in its
+  owning rule to stay circular. The baseline alignment paired only the fork's
+  boot-page spinner (3cbcb65); all chamber-owned sheets were missed — under
+  Electron 43.4 (corner-shape supported) the sidebar server status dot / rail
+  dots / completed dot / round icon buttons, the settings-shell rail trigger /
+  server-dropdown dots / switch thumbs / runtime badge, the connections status
+  and kind badges / plugin pills, the git unregistered pill and the instance
+  skeleton spinner rendered as squircles. Fix: add the pairing to all 15
+  full-round rules across the six chamber-owned stylesheets per the upstream
+  `isFullRound` rule; engines without corner-shape are unaffected (the
+  declarations are inert outside the support guard). Verified: full unit
+  battery + all 15 typechecks + build:renderer + build:desktop green, zero
+  unpaired full-round rules in the built dist.
 
 ## [0.2.0-beta.6] - 2026-09-01
 

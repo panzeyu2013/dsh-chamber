@@ -69,6 +69,19 @@
   清除通知边沿的 prev 记忆：恢复后的首份上报为纯播种，不再补发撤回窗口内
   「完成」事件——消除「窗口内手动停止会话误报完成」；代价是窗口内真实完成
   不再补发通知（与蓝点机的撤回语义一致，会话完成状态在 UI 中可见）。
+- **全圆半径配对 `corner-shape: round`（0.1.2-alpha.4 基线回归）** ——
+  上游 alpha.4 的 ui-theme 在 `@supports (corner-shape: superellipse(1.5))`
+  内注入覆盖 `*` 与 `*::before/::after` 的全局 superellipse 圆角，所有
+  有效全圆半径（50%/100%、或远超盒子的药丸半径）必须在所属规则里显式配对
+  `corner-shape: round` 才能保持正圆；基线升级只给 fork 的 boot-page
+  spinner 补了配对（3cbcb65），chamber 自有样式表全部漏配——Electron 43.4
+  支持 corner-shape，侧边栏服务器状态点/rail 点/已完成点/圆形图标按钮、
+  设置壳 rail 触发器/服务器下拉状态点/开关拇指/运行时徽标、连接页状态与
+  类型徽标/插件药丸、Git 未注册状态药丸与实例骨架转圈全部渲染成 squircle
+  （圆角方形）。修复：按上游 `isFullRound` 判定给 6 个 chamber 样式表共
+  15 条全圆规则补配对；不支持 corner-shape 的引擎无感知（规则仅在支持
+  守卫内生效）。验证：全量单测 + 15 项 typecheck + build:renderer +
+  build:desktop 全绿，产物 dist 全圆规则 0 未配对。
 
 ## [0.2.0-beta.6] - 2026-09-01
 
