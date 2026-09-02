@@ -79,8 +79,8 @@ function buildRemoteStub(api: BridgeApiClient) {
       return () => {}
     },
     $dispatch(_event: unknown, _args: unknown[]): void {},
-    // 0.1.2-alpha.3: the official settings plugins dereference
-    // ctx.remote.$host.isLoopback during apply (ui-settings index.ts:58) —
+    // 0.1.2-alpha.4 (verified against a3 too): the official settings plugins dereference
+    // ctx.remote.$host.isLoopback during apply (ui-settings client/index.ts:58) —
     // the bridged child context is a local-instance face, so the loopback
     // fact is fixed true and home stays undefined (no ready frame is ever
     // consumed here) (check-round2c P1).

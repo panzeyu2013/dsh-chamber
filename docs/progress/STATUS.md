@@ -6,10 +6,30 @@
 
 ## 未完成 / 待执行
 
+> **dsh 基线升级 0.1.2-alpha.3 → 0.1.2-alpha.4（2026，迁移完成，双线已同步）**：
+> 源码线已切到 dsh-v0.1.2-alpha.4（harness.commit=4e84901e、261 vendor 链接与锁文件 importer
+> 集合一致，ensure-harness-vendor --check 通过）；fork 副本基线 0.1.2-alpha.4——
+> connection fork 仅 fixture.ts 需重基（SessionSeq 品牌 + FixtureSessionWireHeader 取代
+> SessionHeader，上游 `refactor(session)!` 的 wire 侧投影；chamber 四个补丁文件零冲突），
+> client-web fork 采纳 boot-page.module.css `corner-shape: round`（smooth-corners）+ 镜像
+> 上游 platform.ts 空 PRELOADED_CLIENT_EXTERNALS；api-gateway fork 纯版本号同步；三个副本
+> 的 `*/invariant.ts` 伴生入口随上游 a4 删除（上游包级删除，chamber 副本死代码同步清理），
+> 副本 package.json 残留的 `@deepseek-ai/dsh-invariants` 依赖一并移除（锁文件重生成 + frozen
+> 验证；侧栏等其他 chamber 包对该包的合法依赖不受影响）。
+> 上游 a4 删除 dsh-tool-subagent-report、dsh-code-runtime-python 改名
+> dsh-experimental-code-runtime-python——锁文件 restore 脚本（只增不减）残留的 2 条孤儿
+> importer 记录已手工删除（同 a3 先例）。`refactor(session)!`（event seqs vs log offsets、
+> SessionHeader.seedLength→isSeeded）对 chamber 无直接影响：wire 由上游 SessionWireHeader
+> 翻译层显式保持 v0（seedLength + number seq 不变），chamber 全仓无 session.jsonl 直读/Session
+> 实例化。运行时线已同步 @deepseek-ai/dsh@0.1.2-alpha.4（npm 已发布；bundle:dsh --refresh-lockfile
+> 封装 + bin.js --version 冒烟通过）——release.yml env / install-gateway.sh / bundle-dsh 兜底 /
+> release-preflight fork 基线已同代。验证：typecheck 全量（根+插件+host+gateway+runtime）、
+> test:control-plane/desktop/gateway/cli/runtime/sidebar/settings-bridge/connections/git/
+> host-git/open-in/renderer-shell/client-web/connection 全绿、build:renderer 成功、
+> verify:i18n 无 DRIFTED；host 包 dist 重建与 HEAD 逐字节一致（上游依赖零改动）。
 > **dsh 基线升级 0.1.1-rc.2 → 0.1.2-alpha.1 → 0.1.2-alpha.2（2026，迁移完成，双线已同步）**：
 > 源码线已整体切到 dsh-v0.1.2-alpha.2（harness.commit=0a53fb55、fork 副本基线 0.1.2-alpha.2，
-> 插件/探针/gateway 均已迁移，详见 docs/tmp-dsh-upgrade-audit.md 与
-> docs/tmp-dsh-v012-migration-plan.md）。
+> 插件/探针/gateway 均已迁移；当时的迁移审计/计划临时文档已移除，见下方 0.1.2 偏差登记）。
 > **双线一致性（release-preflight 硬门禁）已放行**：运行时线已同步 @deepseek-ai/dsh@0.1.2-alpha.2
 > （npm 已发布）——release.yml env / install-gateway.sh / bundle-dsh 兜底 /
 > packages/desktop/vendor/dsh/pnpm-lock.yaml 全部同代，`release-preflight --versions-only`

@@ -10,6 +10,34 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 变更
+
+- **dsh 基线升级 0.1.2-alpha.3 → 0.1.2-alpha.4** —— 构建期源码
+  （`harness.commit` / submodule gitlink = `4e84901e`，261 vendor 链接，`ensure-harness-vendor
+  --check` 通过）与捆绑运行时（`@deepseek-ai/dsh@0.1.2-alpha.4`，npm 已发布）双线同步：
+  in-repo fork 副本基线 0.1.2-alpha.4——`dsh-client-connection` 重放上游 fixture.ts
+  （`SessionSeq` 品牌化 seq + 本地 `FixtureSessionWireHeader` 取代已删除的
+  `SessionHeader`，上游 `refactor(session)!` 的 wire 侧投影），chamber 四个补丁文件
+  （api-path/connection/index/rpc）与上游改动零冲突；`dsh-client-web` 采纳上游
+  boot-page.module.css `corner-shape: round`（smooth-corners 视觉）并镜像
+  `PRELOADED_CLIENT_EXTERNALS` 空常量；`dsh-api-gateway` 纯版本号同步。三个副本的
+  `*/invariant.ts` 伴生入口随上游 a4 包级删除同步清理（chamber 侧死代码，无消费者），
+  package.json 中残留的 `@deepseek-ai/dsh-invariants` 依赖一并移除（锁文件重生成 +
+  frozen 验证通过；chamber 侧栏插件等其他包对该包的合法依赖不受影响）。
+  上游 a4 删除 `dsh-tool-subagent-report`、`dsh-code-runtime-python` 改名
+  `dsh-experimental-code-runtime-python`——锁文件 restore 脚本（只增不减）残留的 2 条
+  孤儿 importer 记录已手工清理（同 a3 先例）。上游 `refactor(session)!`（event seqs vs
+  log offsets、`SessionHeader.seedLength` → `isSeeded`）为破坏性变更但对 chamber 无
+  影响：浏览器 wire 由上游 `SessionWireHeader` 翻译层显式保持 v0（`seedLength` +
+  普通 number seq 不变），chamber 全仓无 session.jsonl 直读 / Session 实例化，唯一
+  触碰面（connection fork fixture）已适配。其余上游改动（ui-chat/ui-conversation
+  性能重构、keyedHooks 注入缝、tsconfig.base.json invariant 别名收敛、插件清单仅删
+  invariant 伴生）均为增量或 chamber 无消费点。验证：typecheck 全量 + 全部测试套
+  （control-plane/desktop/gateway/cli/runtime/六插件/renderer-shell/两副本）+ 
+  build:renderer + verify:i18n 全绿；host 包 dist 重建与 HEAD 逐字节一致。
+
 ## [0.2.0-beta.6] - 2026-09-01
 
 > Gateway 编排面剥离（用户拍板）+ 种子注册表桌面同步 + dsh 基线升级

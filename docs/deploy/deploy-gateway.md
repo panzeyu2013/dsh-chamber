@@ -32,7 +32,7 @@ cd dsh-chamber && bash scripts/install-gateway.sh
 | 对外端口 | **30801**（dsh 内部端口 **30800** 一并说明，可改） |
 | 安装方式 | **local**（`~/.dsh-chamber`，gateway 自管程序与 dsh 版本；可改 npm 全局） |
 | 服务形态 | root + systemd；非 root + `systemctl --user`；无 systemd 自动前台 |
-| dsh 版本 | 与发布绑定的 `DSH_CHAMBER_DSH_VERSION`（当前 0.1.2-alpha.3，可改；运行期可在 `/chamber/runtime` 切换） |
+| dsh 版本 | 与发布绑定的 `DSH_CHAMBER_DSH_VERSION`（当前 0.1.2-alpha.4，可改；运行期可在 `/chamber/runtime` 切换） |
 | npm 镜像 | 国内镜像 registry.npmmirror.com（可交互选官方源 / 跟随系统）。**仅用于 dsh 内建锚安装**；运行期 `/chamber/runtime` 的版本安装源是独立的（默认 npmjs，安装器不随此选择播种，可在运行期设置页改） |
 
 ## 2. 安装流程（脚本自动完成）
