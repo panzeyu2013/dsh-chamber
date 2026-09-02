@@ -74,8 +74,12 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** The outward face only; the concrete service stays inside this plugin. */
     layout: import('@deepseek-ai/dsh-client-ui-layout/src/client/service.ts').ILayout
-    /** Design 17 §18 mobile surface: layout facts for cross-plugin consumers. */
-    layoutFacts: LayoutFacts
+    /** Design 17 §18 mobile surface: layout facts for cross-plugin consumers.
+     * OPTIONAL on purpose: the service exists only in the chamber fork —
+     * deployments running the official ui-layout (gateway-hosted instances)
+     * do not provide it, so consumers must probe (and cannot declare it in
+     * `inject`, which would hard-fail the boot there). */
+    layoutFacts?: LayoutFacts
   }
 }
 
@@ -178,7 +182,16 @@ export function apply(ctx: ClientContext): void {
       : instance.getSnapshot()
   }
   const notifyLayout = (): void => {
-    for (const listener of listeners) listener()
+    // Per-listener isolation, mirroring the store-core observer guard and
+    // the sidebar view-prefs precedent: one throwing consumer must not
+    // starve its siblings on every subsequent notification.
+    for (const listener of listeners) {
+      try {
+        listener()
+      } catch (error) {
+        console.error('[dsh-chamber] layoutFacts subscriber threw:', error)
+      }
+    }
   }
   const layoutFacts: LayoutFacts = {
     getLayoutSnapshot: () => currentLayoutSnapshot(),

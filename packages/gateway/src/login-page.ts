@@ -28,6 +28,12 @@ export interface LoginPageOptions {
   secure: boolean
   error?: 'invalid' | 'rate_limited' | 'busy' | 'expired' | null
   retryAfterSec?: number // whole seconds, already ceiling'd; only meaningful when error === 'rate_limited'
+  /** The mobile-UA shunting escape (design 17 §18): true when the visitor
+   * arrived via /?desktop=1, carried through the login round-trip so the
+   * post-login redirect lands back on the desktop entry instead of being
+   * shunted again. Boolean marker only — no free-form return path (no
+   * open-redirect surface). */
+  desktop?: boolean
 }
 
 /** Login-page CSP (design 21 §7.2): `img-src data:` is the only sanctioned
@@ -194,7 +200,10 @@ function errorBannerCopy(opts: LoginPageOptions, copy: LoginPageCopy): string {
 function loginForm(opts: LoginPageOptions, copy: LoginPageCopy): string {
   const showError = opts.error === 'invalid' || opts.error === 'rate_limited' || opts.error === 'busy'
   const invalidAttrs = showError ? ' aria-invalid="true" aria-describedby="login-error"' : ''
-  return '<form method="post" action="/auth/login">\n'
+  // The action carries the desktop marker when present: the POST URL's query
+  // is what the dispatch success handler reads to redirect back to /?desktop=1.
+  const action = opts.desktop === true ? '/auth/login?desktop=1' : '/auth/login'
+  return '<form method="post" action="' + action + '">\n'
     + '  <label class="field" for="password">' + copy.passwordLabel + '</label>\n'
     + '  <input id="password" name="password" type="password" autocomplete="current-password"'
     + ' required maxlength="1024" autocapitalize="off" spellcheck="false" autocorrect="off"'

@@ -139,8 +139,7 @@ function notifyInstanceObservers(env: LayoutStoreEnvironment, instance: LayoutIn
     try {
       observer(instance)
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.warn('[layout] layout-instance observer threw', error)
+      console.error('[dsh-chamber] layout-instance observer threw:', error)
     }
   }
 }
@@ -236,7 +235,8 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
     runtime.instances.add(new WeakRef(instance))
     notifyInstanceObservers(env, instance)
     if (runtime.subscriptionInstalled) return
-    runtime.subscriptionInstalled = true
+    // Subscribe BEFORE arming the flag: a throwing subscribe would otherwise
+    // leave the flag set and permanently skip the once-per-env adoption.
     viewPrefs.subscribeViewPrefs(() => {
       queueMicrotask(() => {
         const width = viewPrefs.getViewPrefs().sidebarWidth
@@ -253,6 +253,7 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
         }
       })
     })
+    runtime.subscriptionInstalled = true
   }
 
   const handle = defineStore({

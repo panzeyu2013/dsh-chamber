@@ -361,3 +361,22 @@ test('onLayoutInstance deduplicates the same observer; per-env isolation', () =>
   assert.equal(a, 1, 'deduped in envA')
   assert.equal(b, 1, 'envB independent')
 })
+
+test('a throwing observer neither breaks handle.create() nor starves sibling observers', () => {
+  // Regression lock for the per-observer isolation in notifyInstanceObservers:
+  // without the guard, the throw would propagate out of the patched
+  // handle.create (failing the AppFrame render) and — landing before the
+  // once-per-env viewPrefs subscription is armed — permanently skip the
+  // cross-shell adoption.
+  const { env } = makeEnv()
+  let healthyCalls = 0
+  const throwing = (): void => { throw new Error('observer bug') }
+  onLayoutInstance(env, throwing)
+  onLayoutInstance(env, () => { healthyCalls += 1 })
+  const handle = createLayoutStore(env)
+  assert.doesNotThrow(() => handle.create(), 'a throwing observer must not fail the store instantiation')
+  assert.equal(healthyCalls, 1, 'the sibling observer still received the mint')
+  // The second mint keeps working too (the viewPrefs subscription was armed).
+  assert.doesNotThrow(() => handle.create())
+  assert.equal(healthyCalls, 2)
+})

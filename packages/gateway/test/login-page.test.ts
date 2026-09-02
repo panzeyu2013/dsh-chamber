@@ -49,6 +49,21 @@ test('renderLoginPage renders the zh form with lang="zh" and the zh copy', () =>
   assert.ok(html.includes('>登录</button>'))
 })
 
+test('the desktop marker points the form action at /auth/login?desktop=1', () => {
+  // Design 17 §18 login round-trip: a visitor that arrived via /?desktop=1
+  // must POST back with the marker so the success redirect lands on the
+  // desktop entry instead of being shunted to the placeholder again.
+  const plain = renderLoginPage({ lang: 'en', secure: true })
+  assert.match(plain, /action="\/auth\/login"/)
+  assert.doesNotMatch(plain, /action="\/auth\/login\?desktop=1"/)
+  const desktop = renderLoginPage({ lang: 'en', secure: true, desktop: true })
+  assert.match(desktop, /action="\/auth\/login\?desktop=1"/)
+  assert.match(desktop, /name="password"/, 'the form fields are unchanged')
+  // Error re-renders keep the marker too (the failed POST came in with it).
+  const desktopError = renderLoginPage({ lang: 'en', secure: true, error: 'invalid', desktop: true })
+  assert.match(desktopError, /action="\/auth\/login\?desktop=1"/)
+})
+
 test('invalid errors render the banner and mark the input (en)', () => {
   const html = renderLoginPage({ lang: 'en', secure: true, error: 'invalid' })
   assert.ok(html.includes('Incorrect password.'))

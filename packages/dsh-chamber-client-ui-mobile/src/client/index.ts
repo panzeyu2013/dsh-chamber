@@ -57,17 +57,27 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     const disposers: Array<() => void> = []
 
-    const meta = document.querySelector('meta[name="viewport"]')
-    if (meta instanceof HTMLMetaElement) {
-      const content = meta.content
-      const missing = VIEWPORT_TOKENS.filter(token => !content.includes(token))
-      if (missing.length > 0) meta.content = [content, ...missing].filter(Boolean).join(', ')
-    } else {
-      const created = document.createElement('meta')
-      created.name = 'viewport'
-      created.content = `width=device-width, initial-scale=1, ${VIEWPORT_TOKENS.join(', ')}`
-      document.head.appendChild(created)
-      disposers.push(() => created.remove())
+    // Viewport tokens are touch-tier concerns only (interactive-widget for
+    // the Android keyboard, viewport-fit for iOS safe areas): a desktop
+    // browser on the gateway must keep the official viewport byte-identical
+    // (the PC-leak invariant applies to the meta surface too).
+    const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
+    if (touchTier.matches) {
+      const meta = document.querySelector('meta[name="viewport"]')
+      if (meta instanceof HTMLMetaElement) {
+        const content = meta.content
+        const missing = VIEWPORT_TOKENS.filter(token => !content.includes(token))
+        if (missing.length > 0) {
+          meta.content = [content, ...missing].filter(Boolean).join(', ')
+          disposers.push(() => { meta.content = content })
+        }
+      } else {
+        const created = document.createElement('meta')
+        created.name = 'viewport'
+        created.content = `width=device-width, initial-scale=1, ${VIEWPORT_TOKENS.join(', ')}`
+        document.head.appendChild(created)
+        disposers.push(() => created.remove())
+      }
     }
 
     if (document.querySelector(`style[data-plugin="${PLUGIN_STYLE_TAG}"]`) === null) {
@@ -178,6 +188,12 @@ export function apply(ctx: ClientContext): void {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       if (!layoutSource.getNarrow()) return
+      // A modal dialog (official settings opens inside the sidebar DOM, so
+      // drawer + dialog coexist) owns Escape: closing the drawer underneath
+      // an open modal would double-close on one keypress (the dialog's own
+      // handler fires right after ours). Yield to the modal.
+      const modalOpen = document.querySelector('[role="dialog"][aria-modal="true"]') !== null
+      if (modalOpen) return
       if (!layoutSource.getCollapsed()) ctx.layout.toggleSidebar()
     }
     document.addEventListener('keydown', onKeyDown, true)

@@ -354,7 +354,11 @@ export function createGatewayDispatch(
           // session that verification just failed (design 21 §6.3): point at
           // the expired hint. No cookie (first visit) keeps the plain location.
           const hadSession = (headerValue(req.headers, 'cookie') ?? '').split(';').some(part => part.trim().startsWith(`${SESSION_COOKIE}=`))
-          res.writeHead(302, { location: hadSession ? '/auth/login?expired=1' : '/auth/login', 'cache-control': 'no-store' })
+          // Carry the mobile-shunting escape marker (design 17 §18) into the
+          // login round-trip so the post-login redirect lands back on the
+          // desktop entry instead of being shunted to the placeholder again.
+          const desktopMarker = url.searchParams.has('desktop') ? (hadSession ? '&desktop=1' : '?desktop=1') : ''
+          res.writeHead(302, { location: `${hadSession ? '/auth/login?expired=1' : '/auth/login'}${desktopMarker}`, 'cache-control': 'no-store' })
           res.end()
           return true
         }
@@ -386,6 +390,10 @@ export function createGatewayDispatch(
     if (pathname === '/auth/login') {
       res.setHeader('content-security-policy', LOGIN_PAGE_CSP)
       const lang = detectLoginLang(headerValue(req.headers, 'accept-language'))
+      // Mobile-shunting escape marker (design 17 §18): carried through the
+      // login page renders so error re-renders keep the form action pointed
+      // at /auth/login?desktop=1 and the success redirect lands on /?desktop=1.
+      const loginDesktop = url.searchParams.has('desktop')
       if (auth.kind !== 'password' && auth.kind !== 'password+token') {
         // Token-only / no-auth deployment: browsers get a minimal HTML
         // explanation page (design 21 §5.3); API clients keep the JSON 404.
@@ -416,7 +424,10 @@ export function createGatewayDispatch(
           const body = await readBody(req)
           const { setCookie } = await auth.login!(body, loginReq)
           if (setCookie !== undefined) res.setHeader('set-cookie', setCookie)
-          res.writeHead(302, { location: '/', 'cache-control': 'no-store' })
+          // The form action carries ?desktop=1 when the visitor arrived via
+          // the mobile-shunting escape (design 17 §18): land back on the
+          // desktop entry, not on '/' which would be shunted again.
+          res.writeHead(302, { location: loginDesktop ? '/?desktop=1' : '/', 'cache-control': 'no-store' })
           res.end()
           if (auditFile !== undefined && auditFile !== null) {
             appendAuditEvent(auditFile, { ts: new Date().toISOString(), event: 'login_success', kind: 'gateway', detail: loginSource })
@@ -446,7 +457,7 @@ export function createGatewayDispatch(
             const retryAfterSec = Math.max(1, Math.ceil((retryAfterMs ?? 0) / 1000))
             if (html) {
               res.writeHead(429, { ...LOGIN_HTML_HEADERS, 'retry-after': String(retryAfterSec) })
-              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'rate_limited', retryAfterSec }))
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'rate_limited', retryAfterSec, desktop: loginDesktop }))
             } else {
               // json() would overwrite retry-after via writeHead; set it first
               // (setHeader values are merged by writeHead in the real server).
@@ -457,7 +468,7 @@ export function createGatewayDispatch(
           else if (code === 'auth_busy') {
             if (html) {
               res.writeHead(503, LOGIN_HTML_HEADERS)
-              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'busy' }))
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'busy', desktop: loginDesktop }))
             } else {
               json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
             }
@@ -472,7 +483,7 @@ export function createGatewayDispatch(
           else {
             if (html) {
               res.writeHead(401, LOGIN_HTML_HEADERS)
-              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'invalid' }))
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'invalid', desktop: loginDesktop }))
             } else {
               json(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
             }
@@ -482,7 +493,7 @@ export function createGatewayDispatch(
       }
       const expired = url.searchParams.get('expired') === '1'
       res.writeHead(200, LOGIN_HTML_HEADERS)
-      res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null }))
+      res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null, desktop: loginDesktop }))
       return true
     }
     // 2.5 Runtime credential management (Phase 2, design 17 §7): the two
@@ -650,11 +661,15 @@ export function createGatewayDispatch(
     // mobile entry instead of the desktop frontend. UA sniffing is forgeable
     // and carries NO security semantics — the shunting sits AFTER the auth
     // gate (and after the /chamber surface claims) and keeps the fallthrough's
-    // staleness guard, so it can never bypass or weaken the gate. The
-    // `?desktop=1` escape hatch is the mobile entry page's own way out of the
-    // loop: the P4 placeholder's "Open the full dsh frontend" link points at
-    // it, so a shunted mobile user can always reach the plugin-adapted
-    // frontend instead of being bounced back to the placeholder.
+    // staleness guard, so it can never bypass or weaken the gate. Unlike
+    // shouldRedirectToLogin, the shunting deliberately ignores Accept (it is
+    // routing sugar for a UA string, not a document-vs-API negotiation): an
+    // authenticated API client with a mobile UA is 302'd too — that is what
+    // the ?desktop=1 escape hatch below is for. The `?desktop=1` escape hatch
+    // is the mobile entry page's own way out of the loop: the P4
+    // placeholder's "Open the full dsh frontend" link points at it, so a
+    // shunted mobile user can always reach the plugin-adapted frontend
+    // instead of being bounced back to the placeholder.
     if (mobileUaRedirect === true
       && (req.method === 'GET' || req.method === 'HEAD')
       && pathname === '/'

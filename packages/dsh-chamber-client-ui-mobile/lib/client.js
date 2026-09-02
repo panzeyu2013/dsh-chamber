@@ -403,18 +403,25 @@ function createComposingGuard() {
 function installEnterToNewline() {
   const composing = createComposingGuard();
   const detachComposing = composing.attach();
+  let warnedOnce = false;
   const onKeyDown = (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+    if (event.repeat) return;
     if (composing.isComposingNow()) return;
     if (!isComposerInput(event.target)) return;
     if (hasHighlightedMenuOpen()) return;
     event.preventDefault();
     event.stopPropagation();
+    const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null;
+    const fingerprint = composerFingerprint(input);
     const ok = document.execCommand("insertLineBreak");
     if (!ok) {
       const fallbackOk = document.execCommand("insertText", false, "\n");
-      if (!fallbackOk && !insertLineBreakManually()) {
-        console.warn("[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)");
+      if (!fallbackOk && fingerprint === composerFingerprint(input) && !insertLineBreakManually(input)) {
+        if (!warnedOnce) {
+          warnedOnce = true;
+          console.warn("[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)");
+        }
       }
     }
   };
@@ -424,18 +431,28 @@ function installEnterToNewline() {
     detachComposing();
   };
 }
-function insertLineBreakManually() {
+function composerFingerprint(input) {
+  if (input === null) return "";
+  return `${input.childNodes.length}:${input.textContent ?? ""}`;
+}
+function insertLineBreakManually(input) {
+  if (input === null || !(input instanceof HTMLElement) || input.contentEditable !== "true") return false;
   const selection = document.getSelection();
   if (selection === null || selection.rangeCount === 0) return false;
   const range = selection.getRangeAt(0);
-  range.deleteContents();
-  const br = document.createElement("br");
-  range.insertNode(br);
-  range.setStartAfter(br);
-  range.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  return true;
+  if (!input.contains(range.commonAncestorContainer)) return false;
+  if (!range.collapsed) return false;
+  try {
+    const br = document.createElement("br");
+    range.insertNode(br);
+    range.setStartAfter(br);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function installEditabilityRecovery(root = document) {
   let lastEditable = true;
@@ -722,17 +739,25 @@ function apply(ctx) {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), "dsh-chamber: mobile dictionaries");
   ctx.effect(() => {
     const disposers = [];
-    const meta = document.querySelector('meta[name="viewport"]');
-    if (meta instanceof HTMLMetaElement) {
-      const content = meta.content;
-      const missing = VIEWPORT_TOKENS.filter((token) => !content.includes(token));
-      if (missing.length > 0) meta.content = [content, ...missing].filter(Boolean).join(", ");
-    } else {
-      const created = document.createElement("meta");
-      created.name = "viewport";
-      created.content = `width=device-width, initial-scale=1, ${VIEWPORT_TOKENS.join(", ")}`;
-      document.head.appendChild(created);
-      disposers.push(() => created.remove());
+    const touchTier = window.matchMedia(TOUCH_TIER_QUERY);
+    if (touchTier.matches) {
+      const meta = document.querySelector('meta[name="viewport"]');
+      if (meta instanceof HTMLMetaElement) {
+        const content = meta.content;
+        const missing = VIEWPORT_TOKENS.filter((token) => !content.includes(token));
+        if (missing.length > 0) {
+          meta.content = [content, ...missing].filter(Boolean).join(", ");
+          disposers.push(() => {
+            meta.content = content;
+          });
+        }
+      } else {
+        const created = document.createElement("meta");
+        created.name = "viewport";
+        created.content = `width=device-width, initial-scale=1, ${VIEWPORT_TOKENS.join(", ")}`;
+        document.head.appendChild(created);
+        disposers.push(() => created.remove());
+      }
     }
     if (document.querySelector(`style[data-plugin="${PLUGIN_STYLE_TAG}"]`) === null) {
       const style = document.createElement("style");
@@ -805,6 +830,8 @@ function apply(ctx) {
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
       if (!layoutSource.getNarrow()) return;
+      const modalOpen = document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      if (modalOpen) return;
       if (!layoutSource.getCollapsed()) ctx.layout.toggleSidebar();
     };
     document.addEventListener("keydown", onKeyDown, true);

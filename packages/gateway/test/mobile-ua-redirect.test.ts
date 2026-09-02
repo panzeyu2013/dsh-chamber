@@ -232,3 +232,34 @@ test('a forged mobile UA with an API Accept header still gets the 401 JSON shape
   assert.equal(res.headers.location, undefined)
   assert.equal(s.httpProxyCalls, 0)
 })
+
+test('the desktop escape survives the login round-trip (unauthenticated /?desktop=1 → login → /?desktop=1)', async () => {
+  // A mobile visitor on the placeholder clicks "Open the full dsh frontend"
+  // (/ ?desktop=1) while unauthenticated: the redirect to the login page must
+  // carry the marker, and the POST (form action /auth/login?desktop=1) must
+  // land back on /?desktop=1 — not on '/' which would be shunted again.
+  const s = setup({ auth: deniedAuth(), mobileUaRedirect: true })
+  const pre = await runHttp(s.dispatch, new FakeRequest('GET', '/?desktop=1', {
+    host: 'gateway.example:3000',
+    'user-agent': MOBILE_UA,
+    accept: 'text/html',
+  }))
+  assert.equal(pre.status, 302)
+  assert.equal(pre.headers.location, '/auth/login?desktop=1')
+  assert.equal(s.httpProxyCalls, 0)
+
+  const postReq = new FakeRequest('POST', '/auth/login?desktop=1', {
+    host: 'gateway.example:3000',
+    'user-agent': MOBILE_UA,
+    accept: 'text/html',
+    'content-type': 'application/x-www-form-urlencoded',
+  })
+  // Paused-mode body (test/utils.ts): emitted before the dispatch middleware
+  // attaches its 'data' listener, replayed when readBody() subscribes.
+  postReq.emit('data', Buffer.from(`password=${encodeURIComponent(PASSWORD)}`))
+  postReq.emit('end')
+  const post = await runHttp(s.dispatch, postReq)
+  assert.equal(post.status, 302)
+  assert.equal(post.headers.location, '/?desktop=1', 'the marker must survive the login round-trip')
+  assert.equal(s.httpProxyCalls, 0)
+})

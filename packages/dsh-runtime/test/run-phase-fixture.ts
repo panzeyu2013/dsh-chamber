@@ -268,7 +268,13 @@ export class RunPhaseFixture {
     this.crashedState = this.currentState()
     // applyPendingVersion never throws (its wrapper converts any error into a
     // failed outcome), so this sentinel only aborts the transaction and leaves
-    // the durable state frozen at the crash point.
+    // the durable state frozen at the crash point — EXCEPT at the 'probe'
+    // point: there the throw happens inside spawnAndProbe, which apply-phase
+    // wraps in safeProbe, so the crash surfaces as one failing probe result
+    // → 'observe' verdict → same-run re-probe (the default adapter passes) →
+    // the transaction COMMITS within this run. Tests must therefore never
+    // assert the first run's outcome for crashAfter 'probe' — only the
+    // replayed fromState() run, whose durable state is frozen correctly.
     throw new Error('apply-now fixture simulated process death')
   }
 }

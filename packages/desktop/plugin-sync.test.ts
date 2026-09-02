@@ -910,16 +910,17 @@ test('applyPlugins: single-flight refuses a concurrent apply for the same instan
   }
   const spec: RemoteSpec = { id: 's1', remoteDshHome: null }
   const first = applyPlugins(exec, readyStatus, spec, { add: ['x@1.0.0'], remove: [] })
-  const second = await applyPlugins(exec, readyStatus, spec, { add: ['y@1.0.0'], remove: [] })
-  assert.deepEqual(second, { ok: false, error: 'apply in progress' })
-  // Natural single-flight cleanup — even on a mid-test failure, completing
-  // the held apply lets the production finally-block release the guard
-  // (no production test backdoor; state never leaks into later tests).
+  // Natural single-flight cleanup, registered BEFORE any assertion: even on
+  // a mid-test failure, completing the held apply lets the production
+  // finally-block release the guard (no production test backdoor; state
+  // never leaks into later tests).
   t.after(async () => {
     auto = true
     for (const resolve of pending) resolve(ok())
     await Promise.allSettled([first])
   })
+  const second = await applyPlugins(exec, readyStatus, spec, { add: ['y@1.0.0'], remove: [] })
+  assert.deepEqual(second, { ok: false, error: 'apply in progress' })
 })
 
 test('applyPlugins: a changed operational owner is not blocked by the reusable id', async t => {
@@ -931,19 +932,19 @@ test('applyPlugins: a changed operational owner is not blocked by the reusable i
   const spec: RemoteSpec = { id: 'same', remoteDshHome: null }
   const oldApply = applyPlugins(exec, readyStatus, spec, { add: ['old@1.0.0'], remove: [] }, { ownershipKey: 'host-a' })
   const newApply = applyPlugins(exec, readyStatus, spec, { add: ['new@1.0.0'], remove: [] }, { ownershipKey: 'host-b' })
+  // Natural single-flight cleanup (see the single-flight test), registered
+  // before the assertions so a mid-test failure still releases the guard.
+  t.after(async () => {
+    auto = true
+    for (const resolve of pending) resolve(ok())
+    await Promise.allSettled([oldApply, newApply])
+  })
   await Promise.resolve()
   assert.equal(pending.length, 2, 'replacement owner starts immediately')
   assert.deepEqual(
     await applyPlugins(exec, readyStatus, spec, { add: ['duplicate@1.0.0'], remove: [] }, { ownershipKey: 'host-b' }),
     { ok: false, error: 'apply in progress' },
   )
-  // Natural single-flight cleanup (see the single-flight test): completing
-  // the held applies releases the guard through the production finally.
-  t.after(async () => {
-    auto = true
-    for (const resolve of pending) resolve(ok())
-    await Promise.allSettled([oldApply, newApply])
-  })
 })
 
 // ============================================================================

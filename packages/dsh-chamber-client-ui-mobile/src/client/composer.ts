@@ -75,8 +75,10 @@ function createComposingGuard(): { isComposingNow(): boolean; attach(): () => vo
 export function installEnterToNewline(): () => void {
   const composing = createComposingGuard()
   const detachComposing = composing.attach()
+  let warnedOnce = false
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
+    if (event.repeat) return
     if (composing.isComposingNow()) return
     if (!isComposerInput(event.target)) return
     // A highlighted menu option must keep the official Enter arbitration
@@ -89,22 +91,31 @@ export function installEnterToNewline(): () => void {
     // own input pipeline. WebKit (iOS Safari) does NOT support
     // insertLineBreak — fall back to insertText('\n') so Enter never
     // silently dies on the primary mobile platform (P2-1).
+    //
+    // execCommand's boolean result only promises "supported and enabled",
+    // NOT that the edit happened — engines are documented to return false
+    // after actually inserting (and true without inserting). So before
+    // touching the DOM we fingerprint the composer content; the manual
+    // fallback runs ONLY when both commands failed AND the content is
+    // byte-identical to the fingerprint (a false-negative command that
+    // already inserted must never be double-inserted).
+    const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null
+    const fingerprint = composerFingerprint(input)
     const ok = document.execCommand('insertLineBreak')
     if (!ok) {
       const fallbackOk = document.execCommand('insertText', false, '\n')
-      // Last-resort manual DOM insertion: an engine where BOTH execCommand
-      // forms fail on the contenteditable must still produce a line break —
-      // a swallowed Enter (no newline, no send, no log) is the exact P2-1
-      // failure mode this layer exists to prevent.
-      if (!fallbackOk && !insertLineBreakManually()) {
+      if (!fallbackOk && fingerprint === composerFingerprint(input) && !insertLineBreakManually(input)) {
         // Keep the event consumed either way: falling back to the official
         // Enter=send convention mid-composition would SEND the message
         // (Lexical ignores defaultPrevented, but the command fires on the
         // untouched event only when propagation was not stopped — we
         // already stopped it, so the keystroke is inert). Surface the
-        // failure loudly for real-device triage instead of failing silently.
-        // eslint-disable-next-line no-console
-        console.warn('[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)')
+        // failure loudly for real-device triage instead of failing
+        // silently — once per session, never per keystroke.
+        if (!warnedOnce) {
+          warnedOnce = true
+          console.warn('[dsh-chamber.mobile] composer line-break insertion failed (execCommand + DOM fallback)')
+        }
       }
     }
   }
@@ -115,25 +126,48 @@ export function installEnterToNewline(): () => void {
   }
 }
 
+/** Cheap content fingerprint of the composer (text + node count): used to
+ * tell whether an execCommand that returned false actually inserted. */
+function composerFingerprint(input: Element | null): string {
+  if (input === null) return ''
+  return `${input.childNodes.length}:${input.textContent ?? ''}`
+}
+
 /**
  * Manual contenteditable line-break insertion (Selection/Range, no
  * execCommand): collapses the current selection and inserts a <br> — the
- * standard contenteditable newline representation Lexical normalizes. Pure
- * DOM fallback for engines where both execCommand forms fail; returns false
- * only when there is no usable selection at all.
+ * standard contenteditable newline representation. Pure DOM fallback for
+ * engines where both execCommand forms fail without inserting; returns false
+ * when there is no usable selection, when the selection is not inside the
+ * composer, when the composer is not editable, or when the DOM insertion
+ * throws. NOTE (Lexical caveat): this path bypasses the editor's input
+ * pipeline — the <br> is reconciled back into the model by Lexical's root
+ * observer, but input-event-driven editor logic and the undo stack do not
+ * see the change. It is a best-effort last resort only.
  */
-function insertLineBreakManually(): boolean {
+function insertLineBreakManually(input: Element | null): boolean {
+  if (input === null || !(input instanceof HTMLElement) || input.contentEditable !== 'true') return false
   const selection = document.getSelection()
   if (selection === null || selection.rangeCount === 0) return false
   const range = selection.getRangeAt(0)
-  range.deleteContents()
-  const br = document.createElement('br')
-  range.insertNode(br)
-  range.setStartAfter(br)
-  range.collapse(true)
-  selection.removeAllRanges()
-  selection.addRange(range)
-  return true
+  // Containment guard: focus and selection can diverge (e.g. after menu
+  // interaction) — never mutate outside the composer.
+  if (!input.contains(range.commonAncestorContainer)) return false
+  // Folding-selection only: a non-collapsed range would delete model text
+  // that Lexical does not read back from the DOM (it would "resurrect" on
+  // the next render).
+  if (!range.collapsed) return false
+  try {
+    const br = document.createElement('br')
+    range.insertNode(br)
+    range.setStartAfter(br)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
