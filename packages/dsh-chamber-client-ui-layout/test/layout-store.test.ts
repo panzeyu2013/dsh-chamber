@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 import {
   createLayoutStore,
   SIDEBAR_WRITE_DEBOUNCE_MS,
+  type LayoutStoreEnvironment,
 } from '../src/client/store-core.ts'
 import {
   clampWidth,
@@ -104,11 +105,16 @@ function makeViewPrefs(initial?: { sidebarWidth?: number }) {
 /** One injectable environment per test (fresh runtime state, no leakage). */
 function makeEnv(initial?: { sidebarWidth?: number }) {
   const viewPrefs = makeViewPrefs(initial)
+  // The fake engine is intentionally a minimal structural stand-in for the
+  // real store engine (per-create fresh init, draft-mutator update,
+  // subscribe/getSnapshot). The cast marks that boundary: it is not a full
+  // EngineStoreHandle implementation, only the surface this store's factory
+  // exercises.
   const env = {
     defineStore: fakeEngine,
     columns: { clampWidth, SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX, DETAILS_DEFAULT, DETAILS_MIN, DETAILS_MAX },
     viewPrefs,
-  }
+  } as LayoutStoreEnvironment
   return { env, viewPrefs }
 }
 
