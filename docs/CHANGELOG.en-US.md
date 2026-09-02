@@ -10,6 +10,66 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Changed
+
+- **Gateway login pages restyled to the dsh-blue design language and follow
+  the browser display mode** — the `/auth/login` pre-auth page and the
+  token-only page move from the GitHub-dark/green styling to the palette
+  sampled from the official `@deepseek-ai/dsh-client-ui-theme` (bluish
+  neutral ramp + deepseek-blue brand ramp + amber/red/green semantic ramps;
+  the primary action is a dsh-blue chip: dark `#679efe` with dark text,
+  light `#4176e6` with white text; the brand mark/favicon become blue
+  gradient tiles). A full light palette is declared on top of the dark
+  token layer (`@media (prefers-color-scheme: light)`, incl. the
+  `color-scheme` flip and dual `theme-color` metas) so the page follows the
+  browser display mode. Component visuals were re-laid out (brand header
+  with mark, card shadow/radius, input autofill theming, focus rings,
+  `prefers-reduced-motion`, mobile viewport and narrow-height handling).
+  Still no scripts (C1), passwords/values are never echoed (S5), and the
+  en/zh copy tables and the status-code matrix are unchanged.
+
+- **Gateway request-boundary rejections now render a localized diagnostic
+  page for browsers** — when an HTTP request is rejected at the request
+  boundary (400 malformed_headers / 403 origin_forbidden with the
+  origin_invalid, origin_mismatch and cross_site_no_origin reasons /
+  421 host_rejected), browser document requests (GET/HEAD/POST)
+  advertising an HTML Accept receive an HTML explanation page with the
+  same status and CSP: it states why the request was rejected, echoes the
+  request's own Host/Origin values (HTML-escaped and truncated) and lists
+  fix tips (check the address against the installer output; behind a
+  reverse proxy start with `--public-origin` + `--trusted-proxy` and make
+  the proxy forward the original Host/X-Forwarded-* headers; automated
+  cross-site callers need an explicit `--cors-origin` entry; open
+  cross-site no-Origin navigations directly in the address bar). API/JSON
+  clients keep the original `{error, code}` shape plus an additive
+  non-secret `detail` field (non-browser clients advertising text/html
+  also get the HTML page — the status code never changes); WS rejections
+  and the request-policy verdicts themselves are unchanged (fail-closed
+  semantics, the 400/403/421 status matrix, per-request caching).
+
+### Fixed
+
+- **Browser logins to the gateway always 403'd with `origin_forbidden`
+  (live finding, 2026-09)** — the login page (and its 401/429/503
+  re-renders, the token-only page and the boundary diagnostic page) and
+  every control-plane response carried `Referrer-Policy: no-referrer`;
+  under the fetch spec's "append a request Origin header" algorithm
+  (introduced 2019; Chromium and WebKit r259036/2020 onwards are
+  compliant; Chrome 151 is the reproduction), compliant browsers serialize
+  the Origin of same-origin form submissions as `null` (fetch/WS are
+  unaffected and curl sends no Origin — so only real browsers hit it, on
+  any listen address, since no-referrer was introduced). The gateway
+  request policy rejects opaque origins fail-closed (S3 family), so the
+  login POST was refused with 403 and a full-window JSON body. Fix: the
+  referrer policy on login HTML responses and in
+  `CONTROL_PLANE_SECURITY_HEADERS` becomes `same-origin` (these pages make
+  no cross-site outbound document requests, so third parties still never
+  see a Referer under the same-origin policy and the privacy intent is
+  unchanged; form Origins behave normally again). Regression locked by
+  login HTML header assertions and the static-serving header assertion.
+
 ## [0.2.0-beta.7] - 2026-09-02
 
 > The dsh baseline upgrade to 0.1.2-alpha.4 (fork-copy alignment, the
