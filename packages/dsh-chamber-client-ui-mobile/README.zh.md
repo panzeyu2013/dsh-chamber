@@ -26,7 +26,10 @@ pnpm run test:mobile
 
 ## 锚点基线
 
-官方 dsh **v0.1.2-alpha.3**（harness.commit=dd6322d6）DOM 实测（CDP 审计，
-2026-12）：`data-sidebar-collapsed` 折叠=存在/展开=移除；composer 为
+官方 dsh **v0.1.2-alpha.4** DOM 实测（CDP 审计；ui-layout AppFrame 与 alpha.3
+pin 逐字节一致，alpha.4 锚点审计，harness pin 4e84901e）：`data-sidebar-collapsed`
+折叠=存在/展开=移除；composer 为
 Lexical `[data-composer-input]`（无 textarea）；设置对话框渲染在侧边栏 DOM 内（无 body portal），
 抽屉打开态必须用 `transform: none`（identity transform 仍是 containing block）。
+details 列壳自首帧常驻、其 `[data-slot=details]` 出口按会话门控——出口挂载时打标
+重触发（markup.ts `isStructuralTarget`）。

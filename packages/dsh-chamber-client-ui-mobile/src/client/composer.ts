@@ -1,6 +1,6 @@
 /**
  * Composer behavior layer (design 17 §18.4.4): enter-to-newline and a
- * minimal editability recovery. Anchored on the empirical 0.1.2-alpha.3
+ * minimal editability recovery. Anchored on the empirical 0.1.2-alpha.4
  * composer DOM: `div[contenteditable="true"][role="textbox"]
  * [data-composer-input][data-lexical-editor]` — a Lexical editor, NO
  * textarea. Editability has ONE writer in the official component: it flips
