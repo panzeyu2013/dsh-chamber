@@ -252,8 +252,9 @@
   读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入
   更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用
   `release-preflight.mjs --versions-only` 数据驱动扫描器**：根 + 全部 14 个
-  `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；两个 fork 副本
-  （`@deepseek-ai/dsh-client-connection` / `dsh-client-web`）必须保持上游基线版本
+  `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；三个 fork 副本
+  （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` /
+  `dsh-api-gateway`）必须保持上游基线版本
   0.1.2-alpha.4，不随 chamber 发版移动。发布 checklist §1/§1.5 与该硬门同口径。
   vendored dsh 源为 0.1.2-alpha.4——插件版本只在 chamber 侧参与 workspace 解析，
   从不与 dsh 源逐位对齐，也从不参与任何比较/展示。

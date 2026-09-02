@@ -118,7 +118,7 @@
   登录流转为 gateway 独占，插件零认证引用已 grep 验证）。
   **剩余**：实机门禁（§18.6：真机抽检——触控目标比例/抽屉开合/弹层不出屏/
   键盘遮挡/安全区）；P2（PWA 安装 + SW 壳离线，per-instance scope，尊重官方
-  "不完整离线"立场）；P3（公网认证流转正式化、Web Push）。先行形态 =
+  "不完整离线"立场）；**0.1.2-alpha.4 DOM 锚点重审计**（锚点出处现记录为 alpha.3/harness.commit=dd6322d6；上游 a4 重构了 ui-chat/ui-conversation——按新基线复验 AppFrame/sidebar/composer 锚点后刷新出处记录）；P3（公网认证流转正式化、Web Push）。先行形态 =
   内网/可信网络（`--no-auth` 显式可信网络或 tailscale）。契约：§3 装配矩阵 +
   §10 项 2 的移动例外——`dsh-chamber-client-ui-mobile` 是唯一随 gateway
   发行物打包 seed 的 chamber 客户端插件（链路无桌面，不参与 `/chamber/plugins`
