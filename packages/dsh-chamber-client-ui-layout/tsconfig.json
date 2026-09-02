@@ -1,6 +1,11 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    // The layout-store tests run the REAL vendor column geometry (columns.ts)
+    // as the injected env face, so the compile root must span the repo-level
+    // vendor source tree, not just this package. tsc only type-checks here
+    // (root noEmit + tsdown bundles); outDir is a declaration mirror.
+    "rootDir": "../..",
     "outDir": "lib/types",
     "paths": {
       "@dsh-chamber/dsh-client-ui-sidebar/shared": [
