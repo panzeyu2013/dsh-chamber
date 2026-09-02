@@ -1536,7 +1536,7 @@ function writeOverride(baseDir, record) {
   if (typeof record.shellVersion !== "string" || !isSafeVersion(record.shellVersion)) {
     throw new Error(`override.shellVersion \u5FC5\u987B\u662F\u7CBE\u786E semver\uFF0C\u6536\u5230 ${JSON.stringify(record.shellVersion)}`);
   }
-  for (const [field, version] of [
+  for (const [, version] of [
     ["chosenVersion", record.chosenVersion],
     ["resolvedVersion", record.resolvedVersion],
     ["pending", record.pending]
@@ -6424,7 +6424,7 @@ function normalizedIntent(input) {
     intentKind: input.intentKind
   };
 }
-function convertMonitoringToIntent(journal, intent) {
+function convertMonitoringToIntent(_journal, intent) {
   return {
     schemaVersion: 1,
     phase: "intent",
