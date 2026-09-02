@@ -620,7 +620,12 @@ function createLayoutFactSource(ctx) {
     notify();
   };
   attach();
-  const bodyObserver = new MutationObserver(attach);
+  const isStructuralTarget = (node) => node instanceof Element && (node.matches('[data-slot="root"]') || node.parentElement?.matches('[data-slot="root"]') === true);
+  const bodyObserver = new MutationObserver((mutations) => {
+    if (mutations.some((mutation) => mutation.type === "childList" && Array.from(mutation.addedNodes).some((node) => isStructuralTarget(node)))) {
+      attach();
+    }
+  });
   bodyObserver.observe(document.body, { childList: true, subtree: true });
   const onTierChange = () => notify();
   tier.addEventListener("change", onTierChange);
@@ -783,6 +788,7 @@ function apply(ctx) {
   ctx.effect(() => {
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
+      if (!layoutSource.getNarrow()) return;
       if (!layoutSource.getCollapsed()) ctx.layout.toggleSidebar();
     };
     document.addEventListener("keydown", onKeyDown, true);
