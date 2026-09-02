@@ -701,8 +701,11 @@ instanceId}` +
   `unsafe-inline`；`script-src` 开放 `unsafe-eval`——官方 dsh module loader
   （vendored `@deepseek-ai/loader`）对 boot manifest `__jsExpr` 配置求值依赖
   `new Function(…eval…)`，缺它渲染层主包在模块求值期即抛 EvalError、静态骨架
-  永不进入 React，2026-08-20 实机排查）、`nosniff`、`DENY` frame、no-referrer
-  与 COOP 安全头。
+  永不进入 React，2026-08-20 实机排查）、`nosniff`、`DENY` frame、COOP 安全头。
+  Referrer policy 用 `same-origin` 而非 no-referrer（2026-09 实机定位：no-referrer
+  下现代浏览器把同源表单提交的 Origin 序列化为 null，被本机来源门禁
+  fail-closed 拒掉——登录/运维表单自锁；这些页面无跨站出站文档请求，同源策略
+  对第三方同样不外泄 Referer，隐私意图不变）。
 - **gateway 凭据（design 17 v2 连接模型例外，同款 write-only 纪律）**：settings 表单
   可瞬时收集 gateway token/密码并经受信 IPC（新增/更新走
   `desktop_ssh_save_connection`，单项 setter 只清除，§7.4）转发主进程；主进程仅内存持有 +

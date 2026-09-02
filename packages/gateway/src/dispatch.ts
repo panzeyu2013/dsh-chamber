@@ -32,9 +32,9 @@ import { DEFAULT_MOBILE_ENTRY_PATH } from './config.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { ChamberSurface } from './routes.ts'
 import type { RuntimeRoutes } from './runtime-routes.ts'
-import type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
+import type { GatewayRejectionReason, GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
 import { appendAuditEvent } from './audit.ts'
-import { LOGIN_PAGE_CSP, detectLoginLang, renderLoginPage, renderTokenOnlyPage, wantsHtmlLoginResponse } from './login-page.ts'
+import { LOGIN_PAGE_CSP, detectLoginLang, renderBoundaryErrorPage, renderLoginPage, renderTokenOnlyPage, wantsHtmlLoginResponse } from './login-page.ts'
 
 function isPublicRequest(method: string | undefined, pathname: string): boolean {
   // HEAD is the no-body twin of GET; a monitoring HEAD /health must not be
@@ -82,6 +82,68 @@ function headerValue(headers: Record<string, string | string[] | undefined>, nam
   return typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined
 }
 
+/** A browser *document* rejection (GET/HEAD/POST advertising HTML) is
+ * answered with the rendered boundary error page instead of a bare JSON body
+ * the browser would show as raw text. JSON/API clients — including the
+ * desktop main process — never advertise text/html for these and keep the
+ * JSON shape (plus the additive `detail`). */
+function wantsHtmlBoundaryPage(req: ApiRequest): boolean {
+  const method = req.method ?? 'GET'
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') return false
+  return (headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')
+}
+
+/** Non-secret, English one-line detail appended to the JSON boundary errors
+ * (the HTML page carries the full localized explanation). Values are
+ * JSON.stringify-quoted, never logged. */
+function rejectionDetail(reason: GatewayRejectionReason): string {
+  switch (reason.kind) {
+    case 'malformed_headers': return 'malformed or duplicate request headers were rejected'
+    case 'host_rejected': return reason.host === undefined
+      ? 'the request carried no Host authority accepted by this gateway'
+      : `request Host ${JSON.stringify(reason.host)} is not an accepted gateway authority`
+    case 'origin_invalid': return `Origin ${JSON.stringify(reason.origin)} is not a valid browser origin`
+    case 'origin_mismatch': return `Origin ${JSON.stringify(reason.origin)} does not match the gateway authority ${JSON.stringify(reason.authority)}`
+    case 'cross_site_no_origin': return 'a cross-site request without an Origin header was rejected'
+  }
+}
+
+/** Send the request-policy rejection response. Browsers navigating documents
+ * get the styled HTML error page (same status, no-script CSP, localized);
+ * all other clients keep the JSON shape with the additive `detail`. */
+function sendBoundaryRejection(res: ApiResponse, req: ApiRequest, decision: GatewayRequestDecision): void {
+  if (decision.allowed) return // internal contract: only called on rejections
+  // The decision type keeps `code: 'ok' | …` for allowed requests; a rejected
+  // decision is never 'ok', narrowed explicitly here for the render options.
+  const code: 'bad_request' | 'misdirected_request' | 'origin_forbidden' =
+    decision.code === 'bad_request' ? 'bad_request'
+      : decision.code === 'misdirected_request' ? 'misdirected_request'
+        : 'origin_forbidden'
+  const message = code === 'bad_request' ? 'malformed request headers'
+    : code === 'misdirected_request' ? 'misdirected request'
+      : 'request origin is not allowed'
+  const reason = decision.reason
+  if (wantsHtmlBoundaryPage(req) && reason !== undefined) {
+    res.setHeader('content-security-policy', LOGIN_PAGE_CSP)
+    res.writeHead(decision.status, LOGIN_HTML_HEADERS)
+    res.end(req.method === 'HEAD' ? undefined : renderBoundaryErrorPage({
+      lang: detectLoginLang(headerValue(req.headers, 'accept-language')),
+      status: decision.status,
+      code,
+      reasonKind: reason.kind,
+      ...(reason.kind === 'host_rejected' && reason.host !== undefined ? { host: reason.host } : {}),
+      ...(reason.kind === 'origin_invalid' ? { origin: reason.origin } : {}),
+      ...(reason.kind === 'origin_mismatch' ? { origin: reason.origin, authority: reason.authority } : {}),
+    }))
+    return
+  }
+  json(res, decision.status, {
+    error: message,
+    code: decision.code,
+    ...(reason === undefined ? {} : { detail: rejectionDetail(reason) }),
+  })
+}
+
 function rejectWs(socket: { end(data: string): unknown }, status: number, message: string, code?: string): void {
   const reason = status === 400 ? 'Bad Request'
     : status === 401 ? 'Unauthorized'
@@ -97,11 +159,24 @@ function rejectWs(socket: { end(data: string): unknown }, status: number, messag
 }
 
 /** Uniform response headers for every login-page HTML response (design 21 §6.2):
- * the rendered page itself comes from login-page.ts; CSP is set separately. */
+ * the rendered page itself comes from login-page.ts; CSP is set separately.
+ *
+ * `referrer-policy` must NOT be `no-referrer` here (live finding 2026-09,
+ * reproduced on Chrome 151): the fetch spec "append a request Origin header"
+ * algorithm (2019; implemented by Chromium and WebKit r259036/2020 — Safari —
+ * and still current) serializes the Origin of a non-CORS form submission as
+ * `null` when the document's referrer policy is no-referrer. The gateway's
+ * own request policy fails opaque origins closed (S3 family), so the login
+ * POST would be answered 403 origin_forbidden — the login page would be
+ * unusable in every compliant browser since no-referrer was added, while
+ * curl (no Origin) sailed through. `same-origin` keeps
+ * the original privacy intent — this page has no cross-site outbound
+ * requests (CSP default-src 'none'), so nothing ever leaks a referer to a
+ * third party — while letting the browser send its true Origin. */
 const LOGIN_HTML_HEADERS = {
   'content-type': 'text/html; charset=utf-8',
   'cache-control': 'no-store',
-  'referrer-policy': 'no-referrer',
+  'referrer-policy': 'same-origin',
   'x-content-type-options': 'nosniff',
 } as const
 
@@ -295,12 +370,7 @@ export function createGatewayDispatch(
     // public paths and OPTIONS. Its result also supplies sanitized auth facts.
     const decision = requestPolicy.evaluate(req)
     if (!decision.allowed) {
-      json(res, decision.status, {
-        error: decision.code === 'bad_request' ? 'malformed request headers'
-          : decision.code === 'misdirected_request' ? 'misdirected request'
-            : 'request origin is not allowed',
-        code: decision.code,
-      })
+      sendBoundaryRejection(res, req, decision)
       return true
     }
     res._corsHeaders = decision.headers

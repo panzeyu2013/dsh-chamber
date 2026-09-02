@@ -10,6 +10,46 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 变更
+
+- **Gateway 登录页改为 dsh 蓝设计语言并跟随浏览器显示模式** —— `/auth/login`
+  预认证页与 token-only 说明页从 GitHub 暗色/绿色样式迁移到官方
+  `@deepseek-ai/dsh-client-ui-theme` 采样色板（bluish 中性阶 + deepseek 蓝品牌阶 +
+  amber/red/green 语义阶；主按钮为 dsh 蓝 chip：深色 `#679efe` + 深字、浅色
+  `#4176e6` + 白字；品牌 mark/favicon 同步改蓝色渐变方块）；在深色 token 层之上
+  声明完整浅色 palette（`@media (prefers-color-scheme: light)`，含 `color-scheme`
+  翻转与双 `theme-color` meta），浏览器显示模式自动切换。组件视觉同步重排（品牌
+  mark 头部、卡片阴影与圆角、输入框 autofill 主题、聚焦环、`prefers-reduced-motion`、
+  移动视口与窄高适配）。无脚本（C1）、密码/值永不回显（S5）、en/zh 文案表与状态码
+  矩阵不变。
+- **Gateway 请求边界拒绝面向浏览器渲染本地化诊断页** —— HTTP 请求在请求边界被拒
+  （400 malformed_headers / 403 origin_forbidden 的 origin_invalid、origin_mismatch、
+  cross_site_no_origin 三类原因 / 421 host_rejected）时，广告 HTML Accept 的浏览器
+  文档请求（GET/HEAD/POST）收到同状态码、同 CSP 的 HTML 解释页：说明被拒原因、
+  回显请求自身的 Host/Origin 值（HTML 转义 + 截断），并附修复提示（地址与安装输出
+  一致；反代需 `--public-origin` + `--trusted-proxy` 并转发原始 Host/X-Forwarded-*；
+  跨站调用方需 `--cors-origin`；跨站无 Origin 导航请直接地址栏打开）。API/JSON
+  客户端保持原 `{error, code}` 形状并新增非秘密 `detail` 字段（广告 `text/html`
+  的非浏览器客户端同样收到 HTML——状态码不变）；WS 拒绝与请求策略判定本身零改动
+  （fail-closed 语义、400/403/421 状态码矩阵、逐请求缓存均不变）。
+
+### 修复
+
+- **浏览器登录 gateway 必然 403 `origin_forbidden`（实机定位，2026-09）** —— 登录页
+  （及其 401/429/503 重渲染、token-only 页、边界诊断页）与整个控制面响应统一携带
+  `Referrer-Policy: no-referrer`；按 fetch 规范 "append a request Origin header"
+  算法（2019 引入；Chromium 与 WebKit r259036/2020 起合规，Chrome 151 为实测
+  版本），该策略下同源表单提交的 `Origin` 被序列化为 `null`（fetch/WS 不受影响，
+  curl 无 Origin 也不受影响——因此只有真实浏览器中招，且与监听地址/内网访问
+  无关，缺陷自 no-referrer 引入起即存在）。网关请求策略对
+  opaque origin fail-closed（S3 族），登录 POST 即被拒为 403、整窗 JSON。修复：
+  登录页 HTML 响应与控制面 `CONTROL_PLANE_SECURITY_HEADERS` 的 referrer policy 改
+  为 `same-origin`（这些页面无跨站出站文档请求，同源策略下第三方同样拿不到
+  Referer，隐私意图不变；表单 Origin 恢复正常）。回归锁定：登录 HTML 头断言 +
+  static-serving 头断言。
+
 ## [0.2.0-beta.7] - 2026-09-02
 
 > dsh 基线升级 0.1.2-alpha.4（fork 副本对齐、smooth-corners 全圆配对补漏）、

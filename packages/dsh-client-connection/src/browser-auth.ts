@@ -256,6 +256,13 @@ export class BrowserAuth {
         res.writeHead(303, {
           'cache-control': 'no-store',
           'location': '/',
+          // chamber note: no-referrer here is deliberate and HARMLESS — this is
+          // a 303 redirect response, never an HTML document with a form. The
+          // referrer policy that matters for form submissions is the one on
+          // the FINAL document response (the chamber shell uses same-origin
+          // there; see CONTROL_PLANE_SECURITY_HEADERS — no-referrer would make
+          // compliant browsers serialize same-origin form POSTs' Origin as
+          // null, which the origin fences reject fail-closed).
           'referrer-policy': 'no-referrer',
           'set-cookie': sessionCookie(
             cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
@@ -268,6 +275,7 @@ export class BrowserAuth {
         res.writeHead(303, {
           'cache-control': 'no-store',
           'location': '/',
+          // chamber note: same rationale as above — 303 redirect, no document/form.
           'referrer-policy': 'no-referrer',
         })
         res.end()
