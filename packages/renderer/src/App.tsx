@@ -2006,15 +2006,15 @@ export default function App() {
       })
       if (report === undefined) {
         // 通道撤回（shell 重连/重 boot 窗口，来源移除的 clear 已被上方的
-        // liveServerIds/指纹检查挡掉，不会到达这里）：清掉 UI 蓝点边沿
-        // （视图已卸载），但保留通知边沿的 prev 记忆——恢复后的首份上报
-        // 借此补发撤回窗口内完成的会话（detectNotificationEdges 的
-        // completedEdge「断连期间完成」兜底语义，2026-09 scan fix；删掉
-        // 记忆会让恢复后的首报退化为「只播种」，窗口内的完成通知永久丢失）。
-        // 已知边界（窄窗口，接受）：窗口内被手动停止的会话会在恢复首报
-        // 上触发 runningEdge（running true→false）误报「完成」——wire 只有
-        // running 位，无法区分手动停止与完成，且窗口仅持续到重连完成。
+        // liveServerIds/指纹检查挡掉，不会到达这里）：清掉 UI 蓝点边沿与
+        // 通知边沿的 prev 记忆——恢复后的首份上报是纯播种（prev undefined
+        // 只记不发），与蓝点机的撤回语义一致（2026-09 清理：此前保留 prev
+        // 记忆以补发撤回窗口内完成的会话，但 wire 只有 running 位、无法区分
+        // 手动停止与完成，窗口内被手动停止的会话会在恢复首报上误报
+        // 「完成」；删除记忆后窗口内的完成通知不再补发——窗口仅持续到重连
+        // 完成，且会话完成状态在 UI 中可见）。
         delete prevRunningRef.current[sourceId]
+        delete prevRuntimeFactsRef.current[sourceId]
         delete notifiedCompleteRef.current[sourceId]
         setCompletedBySource(prev => {
           if (prev[sourceId] === undefined) return prev
