@@ -15,6 +15,7 @@ import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   createLayoutStore,
+  onLayoutInstance,
   SIDEBAR_WRITE_DEBOUNCE_MS,
   type LayoutStoreEnvironment,
 } from '../src/client/store-core.ts'
@@ -328,4 +329,35 @@ test('details actions clamp into the vendor range; open/close write default/0', 
   assert.equal(instance.getSnapshot().details, DETAILS_MIN)
   instance.actions.closeDetails()
   assert.equal(instance.getSnapshot().details, 0)
+})
+
+// ---- layout instance observers (design 17 §18 layoutFacts subscription
+// face) ----
+
+test('onLayoutInstance fires on every minted instance; unsubscribe stops it', () => {
+  const { env } = makeEnv()
+  const seen: string[] = []
+  const unsubscribe = onLayoutInstance(env, instance => { seen.push(String(instance.getSnapshot().sidebar)) })
+  const handle = createLayoutStore(env)
+  handle.create()
+  handle.create()
+  assert.equal(seen.length, 2, 'both mints observed')
+  unsubscribe()
+  handle.create()
+  assert.equal(seen.length, 2, 'no notification after unsubscribe')
+})
+
+test('onLayoutInstance deduplicates the same observer; per-env isolation', () => {
+  const { env: envA } = makeEnv()
+  const { env: envB } = makeEnv()
+  let a = 0
+  let b = 0
+  const observer = () => { a += 1 }
+  onLayoutInstance(envA, observer)
+  onLayoutInstance(envA, observer) // duplicate registration is a no-op
+  onLayoutInstance(envB, () => { b += 1 })
+  createLayoutStore(envA).create()
+  createLayoutStore(envB).create()
+  assert.equal(a, 1, 'deduped in envA')
+  assert.equal(b, 1, 'envB independent')
 })

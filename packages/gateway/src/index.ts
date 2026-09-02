@@ -18,11 +18,13 @@ import {
   type PlaneHandle,
 } from '@dsh-chamber/control-plane'
 import {
+  DEFAULT_MOBILE_ENTRY_PATH,
   GatewayConfigError,
   MAX_GATEWAY_PASSWORD_CHARS,
   MAX_GATEWAY_TOKEN_CHARS,
   MIN_GATEWAY_PASSWORD_CHARS,
   MIN_GATEWAY_TOKEN_CHARS,
+  normalizeMobileEntryPath,
   parseGatewayConfig,
   type GatewayConfig,
   type GatewayConfigInput,
@@ -115,6 +117,12 @@ function validateMaterializedConfig(config: GatewayConfig): void {
   }
   if (config.tls !== undefined) {
     throw new GatewayConfigError('materialized TLS config is not implemented; terminate TLS at a trusted reverse proxy')
+  }
+  // A forged mobile entry could turn the UA shunting into an open redirect
+  // (absolute URL) or a self-loop ('/') — the same origin-form guard the
+  // parser applies, for programmatic constructors.
+  if (config.mobileUaRedirect === true) {
+    normalizeMobileEntryPath(config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
   }
 }
 
@@ -214,6 +222,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       logger,
       requestPolicy,
       auditFile,
+      // Design 17 §18 UA shunting (default off; the entry path is always
+      // validated/materialized by parseGatewayConfig).
+      options.config.mobileUaRedirect === true,
+      options.config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH,
     )
     // Chamber seed registry (2026-12): the two host packages are DESKTOP-
     // SYNCED — the control-plane seeds them into the managed dsh profile from
@@ -223,11 +235,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // without the chamber host domains (runtime-manager hostDomains). The
     // mobile slot (@dsh-chamber/dsh-client-ui-mobile, kind 'client') stays
     // PACKAGED: mobile access is bound to the gateway (no desktop in the
-    // chain), so its seed MUST ship inside this package — the package lands
-    // on the mobile branch; until then the absent source dir is a warned stub
-    // skip in the control-plane seed orchestration. Runtime version switches
-    // follow automatically: the overlay + seed re-run at every spawn (design
-    // 18 §9.3), so a switched/rolled-back instance carries the entries.
+    // chain), so its seed MUST ship inside this package (design 17 §18) — the
+    // gateway build copies package.json + dist/index.js + lib/client.js(+.map)
+    // into host-packages/. The client half is served by the host
+    // ClientModuleRegistry at /plugins/<pkg>/client.js (exports["./client"]),
+    // so the seed extends the default file set with lib/client.js. Runtime
+    // version switches follow automatically: the overlay + seed re-run at
+    // every spawn (design 18 §9.3), so a switched/rolled-back instance
+    // carries the entries.
     const gatewayHostPackagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'host-packages')
     createdPlane = (options.deps?.createPlane ?? createControlPlane)({
       host: options.config.plane.host,
@@ -256,6 +271,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           kind: 'client',
           source: 'packaged',
           sourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-client-ui-mobile'),
+          seedFiles: ['package.json', 'dist/index.js', 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
         },
       ],
       getDshWorkspacePath: () => {

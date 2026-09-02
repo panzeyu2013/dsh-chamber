@@ -47,21 +47,33 @@ chmodSync(cliOut, 0o755)
 // (2026-12): the two host packages (dsh-host-client-graph / git-worktree) are
 // now DESKTOP-SYNCED (PUT /chamber/plugins → chamber-plugins cache) and no
 // longer ship here; only packaged entries ride this directory. Today that is
-// the mobile client-plugin slot (dsh-chamber-client-ui-mobile, kind 'client'):
-// mobile access is bound to the gateway and has no desktop in the chain, so
-// its seed MUST ship inside this package — the package lands on the mobile
-// branch; until then the entry is a warned stub skip in the control-plane
-// seed orchestration and this loop copies nothing.
+// the mobile client-plugin slot (dsh-chamber-client-ui-mobile, kind 'client',
+// design 17 §18): mobile access is bound to the gateway and has no desktop in
+// the chain, so its seed MUST ship inside this package. Every entry carries
+// package.json + dist/index.js; a client plugin additionally declares
+// extraFiles — the browser half the host ClientModuleRegistry serves at
+// /plugins/<pkg>/client.js (lib/client.js + devtools source map), plus
+// lib/index.js: the package `main`/exports["."] target, which the cordis
+// loader resolves when it imports the overlay row by package name (P0:
+// omitting it makes the managed dsh boot fail with ERR_MODULE_NOT_FOUND).
 const hostPackagesOut = join(packageDir, 'host-packages')
 rmSync(hostPackagesOut, { recursive: true, force: true })
 const HOST_PACKAGES = [
-  // { name: 'dsh-chamber-client-ui-mobile', source: join(packageDir, '..', 'dsh-chamber-client-ui-mobile') },
+  {
+    name: 'dsh-chamber-client-ui-mobile',
+    source: join(packageDir, '..', 'dsh-chamber-client-ui-mobile'),
+    extraFiles: ['lib/index.js', 'lib/client.js', 'lib/client.js.map'],
+  },
 ]
-for (const { name, source } of HOST_PACKAGES) {
+for (const { name, source, extraFiles = [] } of HOST_PACKAGES) {
   const out = join(hostPackagesOut, name)
   mkdirSync(join(out, 'dist'), { recursive: true })
   cpSync(join(source, 'package.json'), join(out, 'package.json'))
   cpSync(join(source, 'dist', 'index.js'), join(out, 'dist', 'index.js'))
+  for (const file of extraFiles) {
+    mkdirSync(dirname(join(out, file)), { recursive: true })
+    cpSync(join(source, file), join(out, file))
+  }
 }
 console.log(`[build-gateway] packaged seed entries -> ${hostPackagesOut}`)
 

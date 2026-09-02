@@ -97,7 +97,20 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   revision display disappear with the orchestration strip; the counter
   semantics stay in the json-store protocol layer (load-time validation and
   the If-Match primitive are unchanged).
-
+- **Mobile web surface design finalized (design 17 §18)** — the §16.2 far-term
+  item ("PWA install, offline cache, UA mobile light surface") is promoted to
+  a first-class design surface (raised 2026-09; revised 2026-12 with the
+  orchestration strip): a chamber-built mobile adaptation client plugin
+  (narrow-viewport layout/touch/PWA, mechanisms referenced from community
+  research — zero-cost mounting, data-attribute stamping, the drawer
+  containing-block trap, per-instance service workers), while the gateway
+  only gains an optional UA routing toggle (default off, UX-only, never a
+  security boundary) and PWA asset mounting — streaming passthrough stays
+  untouched (no HTML rewriting). LAN/trusted-network first. Contract: the
+  §3 assembly matrix + §10 item 2 mobile exception —
+  `dsh-chamber-client-ui-mobile` is the single packaged seed
+  (no desktop in the chain, not part of the `/chamber/plugins` desktop sync).
+  Phasing and gates in §18.6/§18.7; registered in STATUS.
 - **Connection failures now distinguish SSH-transport errors from dsh-instance
   probe failures** — the status projection gains `userActionKind`
   (`'auth' | 'endpoint' | null`) classifying the terminal failure behind

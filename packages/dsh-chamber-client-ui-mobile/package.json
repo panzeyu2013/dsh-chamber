@@ -1,0 +1,40 @@
+{
+  "name": "@dsh-chamber/dsh-client-ui-mobile",
+  "description": "Chamber mobile adaptation plugin for the dsh web shell (design 17 §18): narrow-viewport layout/touch adaptation for the official frontend, seeded into the gateway-hosted instance as the single packaged client-plugin exception.",
+  "version": "0.2.0-beta.5",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
+    "./client": "./lib/client.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node test/breakpoints.ts && node test/drawer-state.ts && node test/markup.ts && node test/composer.ts"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-client-locale": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-layout": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
+    "esbuild": "^0.25.0",
+    "react": "^19.0.0"
+  }
+}

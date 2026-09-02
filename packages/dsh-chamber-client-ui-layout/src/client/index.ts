@@ -28,7 +28,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { PanelActions } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
-import { createLayoutStore } from './stores.ts'
+import { createLayoutStore, subscribeLayoutInstances } from './stores.ts'
+import type { LayoutInstance, LayoutState } from './store-core.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
 
@@ -39,11 +40,31 @@ import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/the
 // against; the frame components and the store factory are package-internal.
 export { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 export type { ILayout } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
+export type { LayoutState } from './store-core.ts'
+
+/**
+ * CHAMBER FORK (design 17 §18 — mobile surface): the layout FACTS face —
+ * snapshot + subscription for cross-plugin consumers (the mobile adaptation
+ * plugin), provided per-ctx as `ctx.layoutFacts`. The store instance is
+ * minted lazily by the framework (first AppFrame render), so the facts are
+ * delivered through per-instance observers rather than a synchronous getter
+ * in apply(); `subscribeLayout` fires once with the current snapshot on
+ * subscribe (the engine notifies on change only), then on every snapshot
+ * change. State is the store preference set; render geometry (concession
+ * chain, session gating) is NOT included — consumers derive the collapsed
+ * flag themselves: `collapsed = narrow ? !narrowExpanded : sidebar === 0`.
+ */
+export interface LayoutFacts {
+  getLayoutSnapshot(): LayoutState
+  subscribeLayout(listener: () => void): () => void
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** The outward face only; the concrete service stays inside this plugin. */
     layout: import('@deepseek-ai/dsh-client-ui-layout/src/client/service.ts').ILayout
+    /** Design 17 §18 mobile surface: layout facts for cross-plugin consumers. */
+    layoutFacts: LayoutFacts
   }
 }
 
@@ -132,8 +153,42 @@ export const inject = ['slots', 'theme', 'locale']
  */
 export function apply(ctx: ClientContext): void {
   const layout = new LayoutController()
+  // CHAMBER FORK (design 17 §18 — mobile surface): the layoutFacts service.
+  // Tracks the LATEST live store instance via weak reference (instances are
+  // minted lazily by the framework on first AppFrame render) and fans out
+  // per-instance snapshot changes. Per-ctx: one service per boot, scoped by
+  // the ctx lifecycle — generation isolation is the ctx's own.
+  let currentLayoutRef: WeakRef<LayoutInstance> | null = null
+  const listeners = new Set<() => void>()
+  const currentLayoutSnapshot = (): LayoutState => {
+    const instance = currentLayoutRef?.deref()
+    return instance === undefined
+      ? { sidebar: 0, details: 0, narrow: false, narrowExpanded: false }
+      : instance.getSnapshot()
+  }
+  const notifyLayout = (): void => {
+    for (const listener of listeners) listener()
+  }
+  const layoutFacts: LayoutFacts = {
+    getLayoutSnapshot: () => currentLayoutSnapshot(),
+    subscribeLayout: listener => {
+      listeners.add(listener)
+      listener()
+      return () => { listeners.delete(listener) }
+    },
+  }
   ctx.effect(() => {
     const disposeService = ctx.reflect.provide('layout', layout)
+    const disposeFacts = ctx.reflect.provide('layoutFacts', layoutFacts)
+    // Subscribe to every live store instance (production env): adopt the
+    // latest instance (weak ref) and fan out its snapshot changes. Released
+    // instances are weak-tracked; their per-instance subscriber entries die
+    // with the engine instances themselves.
+    const disposeInstances = subscribeLayoutInstances(instance => {
+      currentLayoutRef = new WeakRef(instance)
+      instance.subscribe(notifyLayout)
+      notifyLayout()
+    })
     const disposeRegistration = ctx.slots.register({
       name: 'root',
       locale: 'common',
@@ -156,8 +211,10 @@ export function apply(ctx: ClientContext): void {
     }, AppFrame)
     return () => {
       disposeRegistration()
+      disposeInstances()
       // provide()'s disposer settles asynchronously; teardown is synchronous fire-and-forget.
       void disposeService()
+      void disposeFacts()
     }
   }, 'ui-layout: service + root registration')
 
