@@ -10,6 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Changed
+
+- **dsh baseline upgraded to 0.1.2-alpha.5** — both the build-time source line (submodule pin) and the bundled runtime (`@deepseek-ai/dsh`) advance to dsh-v0.1.2-alpha.5; upstream's changes relative to 0.1.2-alpha.4 are all host-side storage (session-projection-cache/storage cross-version read compatibility: `session_projcache` v5 declares `compatibleVersions` [3,4] and corrupt records are salvaged via `backup-and-skip`, fixing app-start failures and missing session-list titles when upgrading from 0.1.1-rc.2 / 0.1.2-alpha.3); the client/wire/protocol surface is untouched — the in-repo fork copies (connection/web/api-gateway) need no code replay and only sync their version markers; DOM anchors and wire contracts need no re-audit (verified by diff).
+
 ## [0.2.0] - 2026-09-02
 
 > v0.2.0 is the first stable release of the 0.2 line (graduated after seven beta rounds since v0.2.0-beta.1 on 2026-08-25; the dsh baseline settles on 0.1.2-alpha.4). This section summarizes the features and changes of the 0.2 line against v0.1.5 (the previous stable); minor in-process fixes are omitted — the per-beta details live in the historical beta release notes on GitHub Releases.

@@ -6,6 +6,14 @@
 
 ## 未完成 / 待执行
 
+> **2026-09 dsh 基线对齐记录（0.1.2-alpha.5，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
+> 源码线 pin → dsh-v0.1.2-alpha.5（db6bdc3576，`update-vendor.mjs` 原子升级，tag 与远程一致；
+> 锁文件重生成后 frozen 稳定、零 diff——本轮上游仅全仓 package.json 版本 bump 与 host 侧存储增量）。
+> fork 副本（connection/web/api-gateway）零源码重放（上游 a5 无 client/api 源码改动），版本标记
+> 同步 alpha.5；运行时线四常量同代（bundle 锁文件 / bundle-dsh 兜底 / release.yml env /
+> install-gateway.sh 锚，`bin.js --version` 冒烟 = 0.1.2-alpha.5）。a4→a5 零 client/ui/wire 改动
+> → DOM 锚点审计基线（a4，双 pin）与 wire 契约复核结论直接继承；回归测试套件见 alpha5 分支提交说明。
+
 **0.1.2 线已知降级（仍有效）**：
 - **远端/直连 0.1.2 dsh 附加被硬阻断**（launch token 为远端进程内存随机数、隧道不可恢复；verify 探针 401 诚实分类；上游提供 token 检索机制前保持阻断）。
 - **版本芯片**：本地实例已接线（desktop 桥运行时版本），远端实例隐藏（D2 兜底）。

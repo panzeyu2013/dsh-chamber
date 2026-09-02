@@ -10,6 +10,12 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 变更
+
+- **dsh 基线升级至 0.1.2-alpha.5** —— 构建期源码（submodule pin）与捆绑运行时（`@deepseek-ai/dsh`）双线同步至 dsh-v0.1.2-alpha.5；本轮上游相对 0.1.2-alpha.4 的改动全部在 host 侧存储面（session-projection-cache/storage 跨版本读兼容：`session_projcache` v5 声明 `compatibleVersions` [3,4]、损坏记录 `backup-and-skip` salvage，修复从 0.1.1-rc.2 / 0.1.2-alpha.3 升级时的启动失败与会话列表标题丢失），客户端/wire/协议面零改动——in-repo fork 副本（connection/web/api-gateway）零源码重放、仅版本标记同步，DOM 锚点与 wire 契约无需重审计（diff 复核）。
+
 ## [0.2.0] - 2026-09-02
 
 > v0.2.0 是 0.2 主线的首个正式版（2026-08-25 v0.2.0-beta.1 起经七轮 beta 验证转正，dsh 基线最终定格 0.1.2-alpha.4）。本节以 v0.1.5（上一正式版）为比较基线，汇总 0.2 线的功能与变更；开发过程中的小修复从略，每轮 beta 的完整明细见 GitHub Releases 的历史 beta 发布说明。
