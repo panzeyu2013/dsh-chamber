@@ -10,7 +10,15 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.0] - 2026-09-02
+
+> v0.2.0 is the first stable release of the 0.2 line (graduated after seven
+> beta rounds since v0.2.0-beta.1 on 2026-08-25; the full 0.1.5 → 0.2.0 delta
+> lives in the beta.1…beta.7 sections below). This section is the delta over
+> v0.2.0-beta.7 — the gateway access-control surface (dsh-blue login pages and
+> boundary diagnostic pages, ready-state re-verification of revoked sessions,
+> the live browser-login 403 finding), the install-gateway.sh input-layer/
+> offline/transaction rewrite, and the sidebar/mobile regression fixes:
 
 ### Changed
 
@@ -143,6 +151,37 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   see a Referer under the same-origin policy and the privacy intent is
   unchanged; form Origins behave normally again). Regression locked by
   login HTML header assertions and the static-serving header assertion.
+
+- **Sidebar rename of a folded workspace is no longer a silent no-op (v0.2.0
+  window)** — workspace rename used to append an extra input row below the
+  workspace header, and the form only rendered while the group was expanded:
+  renaming a folded workspace did nothing, its failure hidden by the fold
+  gate. The edit form now embeds INSIDE the workspace header row (the fold
+  toggle + gutter stay; title/orphan badge/count/git occupant/hover actions
+  are replaced by the input + save/cancel for the edit duration); no row is
+  appended — only the ±6px edit-height relaxation on enter/exit. Because the
+  form lives in the header (rendered regardless of fold state), kebab rename
+  on a folded workspace is visible and workspace-scoped failures
+  (new/rename/delete/drag) surface even while the group is folded. While
+  editing, the header is non-draggable, double-click re-entry is guarded
+  against stale-title wipes, the HoverCard is disabled and the fold-glyph
+  hover swap is suppressed; an armed rename is cleared once its row leaves
+  the projection (deletion/disconnect). Session-row rename is unchanged.
+- **Mobile: session-gated slot outlets mounting into the resident column
+  shell are re-stamped (alpha.4 anchor-audit follow-up, 2026-09)** — the
+  official AppFrame renders the details column shell from first paint while
+  its `[data-slot="details"]` outlet is session-gated and only mounts once a
+  session activates; the stamp observer predicate only matched root/frame
+  direct children, so an outlet mounting inside the resident shell never
+  re-triggered stamping (latent: no reachable official openDetails path
+  today; visually equivalent stamped or not while always closed). Fix:
+  (a) the `isStructuralTarget` predicate gains the frame-grandchild branch —
+  an outlet mounting into the resident column shell re-stamps immediately,
+  with the predicate/batch decision extracted as pure functions plus
+  boot-shell/late-mount regression cases; (b) a frame attribute-observer
+  second path re-stamps on `data-sidebar-collapsed` / `data-details-collapsed`
+  changes. The wiring is only verifiable on a real device — cheap insurance
+  against future upstream details wiring.
 
 ## [0.2.0-beta.7] - 2026-09-02
 

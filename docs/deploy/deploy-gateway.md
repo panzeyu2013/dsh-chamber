@@ -204,9 +204,9 @@ bash install-gateway.sh install -y \
 `-y/--yes`：全部使用默认值 + 命令行 flag（flag 优先于默认、可被交互覆盖）。
 非 TTY（管道/CI）自动进入非交互，不会挂起等待输入。
 
-## 8. 离线安装
+## 8. 离线安装（--tgz）
 
-- `update` 在离线模式（`--tgz`）下拒绝执行。
+离线包（GitHub Release 的 `dsh-chamber-gateway-<v>.tgz`）用于无外网/内网环境：
 
 ```bash
 bash install-gateway.sh install -y \
@@ -214,10 +214,19 @@ bash install-gateway.sh install -y \
   --dsh-path /opt/dsh-ws   # 已有 dsh workspace；无则需本地 npm 缓存
 ```
 
+- 离线安装即 `VERSION=local` 的 local 形态（版本树归档于 `versions/local`，
+  内容指纹记录）。
+- **离线更新**：`update --tgz <同形态包>`（仅支持 local 安装的 local 版本；
+  其它形态请走在线通道或先 uninstall）：内容指纹一致 → 幂等跳过；同版本但
+  内容不同（重打包修复/测试循环）→ 允许替换（旧树退避保留，失败自动回滚）；
+  重跑 `install --tgz` 语义相同。降级等目标低于当前版本仍需显式确认。
+- 包同目录存在 `.sha256` 时强制校验；解包拒绝越界路径、绝对路径与外部符号
+  链接成员。
+
 ## 9. 常见问题
 
-- **下载失败**：确认网络可达 github.com（可设 `HTTPS_PROXY` 代理）；稳定通道
-  若无 gateway 资产（v0.2.0 之前），用 `--channel beta`。
+- **下载失败**：确认网络可达 github.com（可设 `HTTPS_PROXY` 代理）；正式版走
+  稳定通道，预览/测试版用 `--channel beta`。
 - **dsh 安装构建失败**：koffi/node-pty 等原生模块 postinstall 需要
   make/g++/python3（常见平台走 prebuild 可免）；安装日志会显式报错。
 - **端口冲突**：向导探测占用并建议下一空闲口；两端口必须互异。
@@ -259,18 +268,25 @@ bash install-gateway.sh install -y \
   下，安装器以 owner-only（0700/0600）创建全局树与 `gateway` 命令——多用户
   机器上其他用户无法执行，符合单用户部署定位。
 - **以专用系统用户运行（`--service-user <用户>`）**：gateway 及其 spawn 的
-  dsh/Git 全部以该用户运行（数据仍由 gateway 控制在 `~/.dsh-chamber` 布局，
-  dsh 的 `DSH_HOME` 在 state 目录下，不依赖该用户 home）。用法（root +
-  systemd 服务形态）：
+  dsh/Git 全部以该用户运行（数据仍由 gateway 控制在 `$BASE_DIR` 布局，dsh 的
+  `DSH_HOME` 在 state 目录下，不依赖该用户 home）。用法（root + systemd
+  服务形态）：
 
   ```bash
   useradd -m -r -s /usr/sbin/nologin dsh-chamber        # 一次性建号
-  bash install-gateway.sh install --service-user dsh-chamber   # 其余选项照常
+  DSH_CHAMBER_BASE_DIR=/var/lib/dsh-chamber \
+    bash install-gateway.sh install --service-user dsh-chamber   # 其余选项照常
   ```
 
-  安装器会：unit 加 `User=dsh-chamber`、把 `~/.dsh-chamber` 全部数据属主移交
-  该用户（`chown -R`）、该配置写入 `gateway.conf`（`update` 时保持）。注意：
-  ① 用户必须**预先存在**（安装器不建号）；② 手工改 unit 加 `User=` 会被下次
-  `update` 重写丢失，请用 `--service-user` 或直接编辑 `gateway.conf` 的
-  `SERVICE_USER=`；③ 切换运行用户后 `~/.dsh-chamber` 属主必须匹配，否则
-  gateway 启动时对异主目录 fail-closed。
+  `BASE_DIR` 必须在 root 家目录之外（服务用户无法穿越 `/root` 家目录，安装器
+  在 preflight 即拒绝）——用 `DSH_CHAMBER_BASE_DIR=/var/lib/dsh-chamber` 等
+  可达位置。安装器会：unit 加 `User=dsh-chamber`、把
+  `gateway/data`（`DSH_GATEWAY_STATE`：dsh-runtime/ 版本树与 dsh-home/ 会话
+  数据）、`gateway/dsh-anchor` 与 `run/` 属主移交该用户，版本树与启动器放开
+  traverse/读/执行（`a+rX`）；`gateway.conf`/`gateway.env` 保持 root 0600
+  （root 管理命令与 systemd 读取需要，服务用户无需读凭据），`SERVICE_USER=`
+  写入 `gateway.conf`（`update` 时保持）。注意：① 用户必须**预先存在**
+  （安装器不建号）；② 手工改 unit 加 `User=` 会被下次 `update` 重写丢失，请
+  用 `--service-user` 或直接编辑 `gateway.conf` 的 `SERVICE_USER=`；③ 切换
+  运行用户后 `$BASE_DIR` 下移交目录的属主必须匹配，否则 gateway 启动时对异主
+  目录 fail-closed。

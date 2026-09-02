@@ -10,6 +10,7 @@ import {
   readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,11 +24,19 @@ const mainOffset = source.indexOf(mainMarker)
 assert.notEqual(mainOffset, -1, 'installer main marker must remain discoverable')
 const library = source.slice(0, mainOffset)
 
+// The installer library registers `trap on_exit_cleanup EXIT` at top level:
+// under the fail-closed guard, a clean rc=0 end only counts as success when
+// the flow reached the EXITED_OK=1 marker (the real main sets it right before
+// its final `exit`). Unit harnesses have no dispatcher, so the epilogue marks
+// their natural end — mid-body crashes (die/set -u/expansion errors) abort
+// before it and still fail closed through the trap.
+const LIB_EPILOGUE = '\nEXITED_OK=1\n'
+
 function runLibrary(body: string, env: Record<string, string> = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-installer-test-'))
   const harness = join(dir, 'harness.sh')
   try {
-    writeFileSync(harness, `${library}\n${body}\n`, { mode: 0o700 })
+    writeFileSync(harness, `${library}\n${body}${LIB_EPILOGUE}`, { mode: 0o700 })
     const result = spawnSync('bash', [harness], {
       encoding: 'utf8',
       env: {
@@ -50,7 +59,7 @@ function runLibraryResult(body: string, env: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-installer-test-'))
   const harness = join(dir, 'harness.sh')
   try {
-    writeFileSync(harness, `${library}\n${body}\n`, { mode: 0o700 })
+    writeFileSync(harness, `${library}\n${body}${LIB_EPILOGUE}`, { mode: 0o700 })
     return spawnSync('bash', [harness], {
       encoding: 'utf8',
       env: {
@@ -75,7 +84,7 @@ test('interactive/default assignment keeps shell metacharacters as data', () => 
   const output = runLibrary(`
 NONINTERACTIVE=1
 PROMPT_INJECTED=safe
-prompt TEST_VALUE label "$PAYLOAD"
+ask_text TEST_VALUE label "" "$PAYLOAD"
 printf '%s\\n%s\\n' "$PROMPT_INJECTED" "$TEST_VALUE"
 `, { PAYLOAD: payload })
   assert.deepEqual(output.trimEnd().split('\n'), ['safe', payload])
@@ -599,6 +608,7 @@ health_wait() { return 0; }
 cmd_update
 `, { DSH_CHAMBER_BASE_DIR: base })
     assert.equal(result.status, 1, `${result.stdout}${result.stderr}`)
+    assert.match(`${result.stdout}${result.stderr}`, /升级失败，已回滚到/, 'rollback must die loudly, not end rc=0 (trap-independent)')
     assert.equal(readFileSync(join(base, 'resolved-input'), 'utf8').trim(), 'v2.0.0')
     assert.equal(readlinkSync(current), oldTree, 'rollback restores the exact old current target')
     assert.equal(existsSync(join(versionsDir, '2.0.0')), false, 'unreferenced failed target is removed after pointer rollback')
@@ -647,6 +657,7 @@ start_foreground() { STARTS=$((STARTS + 1)); printf '%s:%s\\n' "$STARTS" "$1" >>
 cmd_update
 `, { DSH_CHAMBER_BASE_DIR: base })
     assert.equal(result.status, 1, `${result.stdout}${result.stderr}`)
+    assert.match(`${result.stdout}${result.stderr}`, /升级失败，已回滚到/, 'rollback must die loudly, not end rc=0 (trap-independent)')
     assert.equal(readlinkSync(current), oldTree)
     assert.deepEqual(readFileSync(join(base, 'starts'), 'utf8').trimEnd().split('\n'), ['1:2.0.0', '2:1.0.0'])
     assert.equal(existsSync(join(base, 'gateway', 'versions', '2.0.0')), false)
@@ -689,6 +700,7 @@ health_wait() { return 0; }
 cmd_update
 `, { DSH_CHAMBER_BASE_DIR: base })
     assert.equal(result.status, 1, `${result.stdout}${result.stderr}`)
+    assert.match(`${result.stdout}${result.stderr}`, /升级失败，已回滚到/, 'rollback must die loudly, not end rc=0 (trap-independent)')
     assert.deepEqual(readFileSync(join(base, 'npm-artifacts'), 'utf8').trimEnd().split('\n'), [
       join(gatewayDir, 'dsh-chamber-gateway-2.0.0.tgz'),
       join(gatewayDir, 'dsh-chamber-gateway-1.0.0.tgz'),
@@ -706,7 +718,7 @@ test('private layout dirs converge to 0700 even when created under a loose umask
     const harness = join(dir, 'harness.sh')
     // 全局 umask 077 之外的第二道保险：即使调用方以松散 umask（022）创建，
     // ensure_private_layout 也必须把全部自有目录收敛到 0700。
-    writeFileSync(harness, `${library}\numask 0022\nensure_private_layout\nprintf 'layout-ok\\n'\n`, { mode: 0o700 })
+    writeFileSync(harness, `${library}\numask 0022\nensure_private_layout\nprintf 'layout-ok\\n'${LIB_EPILOGUE}`, { mode: 0o700 })
     const result = spawnSync('bash', [harness], {
       encoding: 'utf8',
       env: { ...process.env, DSH_CHAMBER_BASE_DIR: base },
@@ -718,5 +730,90 @@ test('private layout dirs converge to 0700 even when created under a loose umask
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('library EXIT-trap contract: clean ends fail closed without the EXITED_OK marker', () => {
+  // 9297eac registers `trap on_exit_cleanup EXIT` at library top level:
+  // rc=0 ends only count as success with EXITED_OK=1 (the real main sets it
+  // before its final exit); expansion-class crashes reach the trap with $?
+  // masked to 0, so the marker is the discriminator. This pins the raw
+  // semantics so harness changes can never silently mask real failures.
+  const dir = mkdtempSync(join(tmpdir(), 'gateway-installer-trap-'))
+  try {
+    const harness = join(dir, 'harness.sh')
+    const run = (tail: string) => {
+      writeFileSync(harness, `${library}\nprintf 'body-ran\\n'\n${tail}`, { mode: 0o700 })
+      return spawnSync('bash', [harness], { encoding: 'utf8' })
+    }
+    const clean = run('')
+    assert.equal(clean.status, 1, 'a clean rc=0 end without EXITED_OK=1 must fail closed through the trap')
+    assert.match(clean.stdout, /body-ran/)
+    const marked = run('EXITED_OK=1\n')
+    assert.equal(marked.status, 0, 'EXITED_OK=1 marks the natural end as success')
+    const coded = run('exit 3\n')
+    assert.equal(coded.status, 3, 'a non-zero rc is preserved through the trap')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('real installer exit wiring: --help exits 0, missing option values die in parse', () => {
+  // No test exercised the real script's exit-code wiring (usage EXITED_OK
+  // path, parse-level die) — only library-slice harnesses. Parse failures
+  // die before any BASE_DIR/wizard mutation, so they are safe to run here.
+  const help = spawnSync('bash', [installer, '--help'], { encoding: 'utf8' })
+  assert.equal(help.status, 0, `${help.stdout}${help.stderr}`)
+  assert.match(help.stdout, /install-gateway\.sh/)
+  const missing = spawnSync('bash', [installer, 'install', '--version'], { encoding: 'utf8' })
+  assert.equal(missing.status, 1, 'a value option without a value must fail fast in parse')
+  assert.match(`${missing.stdout}${missing.stderr}`, /需要值/)
+})
+
+test('overlay install rollback restores the old pointer/conf and restarts the old deployment', () => {
+  // Regression (S1/S4): restore_overlay_install parsed the old conf with a
+  // quoted-value regex while write_config emits %q bare tokens — old_mode/
+  // old_ver were always empty (no restart) — and the pointer snapshot was
+  // taken AFTER switch_local_current (rollback restored the NEW tree).
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-overlay-rollback-'))
+  try {
+    const gatewayDir = join(base, 'gateway')
+    const versionsDir = join(gatewayDir, 'versions')
+    const oldTree = join(versionsDir, '1.0.0')
+    writeGatewayTree(oldTree, '1.0.0')
+    // A real previous install: conf on disk (VERSION=1.0.0, foreground) and
+    // gateway/current -> the old tree.
+    writeFileSync(join(gatewayDir, 'gateway.conf'), [
+      '# fixture conf',
+      'VERSION=1.0.0',
+      'INSTALL_METHOD=local',
+      'GATEWAY_PORT=30801',
+      'DSH_PORT=30800',
+      'BIND_HOST=127.0.0.1',
+      'SERVICE_MODE=foreground',
+      'NO_AUTH=1',
+      '',
+    ].join('\n'))
+    symlinkSync(oldTree, join(gatewayDir, 'current'))
+    const result = runLibraryResult(`
+SKIP_DSH=1
+INSTALL_METHOD=local
+VERSION=2.0.0
+SERVICE_MODE=foreground
+download_verify() { mkdir -p "$1"; : > "$1/dsh-chamber-gateway-\${VERSION}.tgz"; }
+stage_local_version() { mkdir -p "$VERSIONS_DIR/$2/dist/pnpm/bin"; printf '%s\\n' '{"name":"@dsh-chamber/gateway","version":"'$2'"}' > "$VERSIONS_DIR/$2/package.json"; printf '%s\\n' '#!/usr/bin/env node' > "$VERSIONS_DIR/$2/dist/cli.js"; : > "$VERSIONS_DIR/$2/dist/pnpm/bin/pnpm.cjs"; }
+write_config() { return 1; }
+start_foreground() { printf '%s:%s\\n' "\${1:-}" "\${2:-}" >> "$BASE_DIR/restarts"; return 0; }
+health_wait() { return 0; }
+do_install
+`, { DSH_CHAMBER_BASE_DIR: base })
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`)
+    assert.match(`${result.stdout}${result.stderr}`, /安装配置写入失败/)
+    assert.equal(readlinkSync(join(gatewayDir, 'current')), oldTree, 'rollback must restore the OLD pointer target')
+    assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=1\.0\.0$/m, 'rollback must restore the old conf')
+    const restarts = readFileSync(join(base, 'restarts'), 'utf8').trimEnd().split('\n')
+    assert.deepEqual(restarts, ['1.0.0:'], 'restore must restart the old deployment with the old version (S1 old_ver parse)')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
   }
 })

@@ -18,9 +18,6 @@
 
 *Main user interface — a single window with the dsh-native sidebar listing every source's sessions/workspaces, and the pure-dsh shell of the active instance.*
 
-> [!WARNING]
-> **Public beta (v0.2.0-beta.x)** — the protocol and API are still evolving and may introduce breaking changes.
-
 > 中文版: [README.md](../README.md) · Development: [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md) · Design entry: [design/01-overview.md](design/01-overview.md) · Progress: [progress/STATUS.md](progress/STATUS.md)
 
 ## Quick start

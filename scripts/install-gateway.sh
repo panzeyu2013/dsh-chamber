@@ -2069,8 +2069,8 @@ stage4_ports() {
   local conf_gw="" conf_dsh="" conf_ports=0
   # 重装时沿用既有配置端口(不因旧实例占端口而擅自改端口;D2 会先停旧实例)
   if [[ -f "$CONF_FILE" ]]; then
-    conf_gw=$(sed -nE "s/^GATEWAY_PORT='([0-9]+)'$/\1/p" "$CONF_FILE" | head -1)
-    conf_dsh=$(sed -nE "s/^DSH_PORT='([0-9]+)'$/\1/p" "$CONF_FILE" | head -1)
+    conf_gw=$(sed -nE "s/^GATEWAY_PORT='?([0-9]+)'?\$/\1/p" "$CONF_FILE" | head -1)
+    conf_dsh=$(sed -nE "s/^DSH_PORT='?([0-9]+)'?\$/\1/p" "$CONF_FILE" | head -1)
     if [[ -n "$conf_gw" || -n "$conf_dsh" ]]; then
       conf_ports=1
       if [[ -n "$conf_gw" ]]; then def_gw="$conf_gw"; log "沿用既有配置 gateway 端口 $def_gw"; fi
@@ -2371,10 +2371,36 @@ do_install() {
     tgz_src="$GATEWAY_DIR/dsh-chamber-gateway-${VERSION}.tgz"
   fi
 
+  # 2.5) 覆盖安装快照：在 3) 的任何树/npm 变更之前读取（S3/S4：失败回滚必须
+  # 还原真正的旧指针/旧身份/旧配置——指针切换后再读只会拿到新树）。
+  local previous_identity="" old_conf_txt="" old_env_txt="" old_cur="" old_mode="" old_ver="" had_old=0
+  previous_identity=$(launch_identity || true)
+  if [[ -f "$CONF_FILE" ]]; then
+    had_old=1
+    old_conf_txt=$(cat "$CONF_FILE" 2>/dev/null || true)
+    # conf 由 %q 写出（简单值不带引号）；兼容历史带引号格式（S1）。
+    old_mode=$(printf '%s' "$old_conf_txt" | sed -nE "s/^SERVICE_MODE='?([A-Za-z_][A-Za-z0-9_]*)'?\$/\1/p" | head -1)
+    old_ver=$(printf '%s' "$old_conf_txt" | sed -nE "s/^VERSION='?([^#[:space:]']+)'?\$/\1/p" | head -1)
+  fi
+  [[ -f "$ENV_FILE" ]] && old_env_txt=$(cat "$ENV_FILE" 2>/dev/null || true)
+  [[ -L "$GATEWAY_DIR/current" ]] && old_cur=$(readlink "$GATEWAY_DIR/current" 2>/dev/null || true)
+
   # 3) 安装方式
   if [[ "$INSTALL_METHOD" == "global" ]]; then
     have npm || die "npm 不可用（npm 全局安装需要 npm）"
     log "npm 全局安装 gateway v${VERSION} …"
+    # S3:全局 npm 原地变更前先保全精确的旧版回滚资产(镜像 cmd_update 事务语义)。
+    # local 标记(离线包)无在线资产可重取,无法构造可靠回滚 → 拒绝无回滚覆盖。
+    if [[ "$had_old" == "1" && -n "$old_ver" ]]; then
+      [[ "$old_ver" != "local" ]] || die "既有安装为 local（离线包）形态，npm 全局覆盖无法构造可靠回滚；请改用 local 安装或先 uninstall"
+      local saved_ver="$VERSION"
+      VERSION="$old_ver"
+      if ! download_verify "$GATEWAY_DIR"; then
+        VERSION="$saved_ver"
+        die "旧版回滚资产（v${old_ver}）拉取/校验失败，拒绝无回滚的全局覆盖"
+      fi
+      VERSION="$saved_ver"
+    fi
     npm install -g --no-audit --no-fund "$tgz_src"
     rm -f "$LOCAL_BIN_DIR/gateway" 2>/dev/null || true    # 清遗留 local 启动器,防 PATH 遮蔽(D-M2)
     have gateway || die "npm 全局安装后 gateway 不在 PATH"
@@ -2444,24 +2470,13 @@ EOF
     chmod +x "$LOCAL_BIN_DIR/gateway"
   fi
 
-  # 4) 覆盖安装快照:先停旧形态服务,失败即可中止(旧部署未动)
-  local previous_identity old_conf_txt="" old_env_txt="" old_cur="" old_mode="" old_ver="" had_old=0
-  previous_identity=$(launch_identity || true)
-  if [[ -f "$CONF_FILE" ]]; then
-    had_old=1
-    old_conf_txt=$(cat "$CONF_FILE" 2>/dev/null || true)
-    old_mode=$(printf '%s' "$old_conf_txt" | sed -nE "s/^SERVICE_MODE='([^']*)'$/\1/p" | head -1)
-    old_ver=$(printf '%s' "$old_conf_txt" | sed -nE "s/^VERSION='([^']*)'$/\1/p" | head -1)
-  fi
-  [[ -f "$ENV_FILE" ]] && old_env_txt=$(cat "$ENV_FILE" 2>/dev/null || true)
-  [[ -L "$GATEWAY_DIR/current" ]] && old_cur=$(readlink "$GATEWAY_DIR/current" 2>/dev/null || true)
-  # D2:跨形态覆盖安装先收拾旧形态残留(旧 systemd unit/旧前台进程)
+  # 4) D2:跨形态覆盖安装先收拾旧形态残留(旧 systemd unit/旧前台进程;快照已于 2.5 读取)
   if have systemctl; then
     systemctl stop dsh-chamber-gateway.service 2>/dev/null || true
     systemctl disable dsh-chamber-gateway.service 2>/dev/null || true
   fi
   if [[ -f "$(foreground_record_file)" ]]; then
-    stop_foreground || die "已有 foreground pid 身份不可验证，拒绝覆盖/终止其他进程（旧部署未改动）"
+    stop_foreground || die "已有 foreground pid 身份不可验证，拒绝终止可能无关的进程（覆盖已中止：旧配置未写入、进程未停；local 树/指针或 global npm 变更未回滚，请人工核对 ${VERSIONS_DIR}/current 与 ${BASE_DIR}/run/gateway.pid 后重试）"
   fi
   # 5) 回滚助手:还原退避树+旧 conf/env/指针,尽力重启旧部署(D-M1)
   local restore_prev=0
@@ -2483,6 +2498,10 @@ EOF
     fi
     if [[ "$INSTALL_METHOD" == "local" && -n "$old_cur" ]]; then
       switch_local_current "$old_cur" >/dev/null 2>&1 || true
+    elif [[ "$INSTALL_METHOD" == "global" && -n "${old_ver:-}" && "$old_ver" != "local" ]]; then
+      # S3:回滚 npm 全局树到步骤 3 保全的旧版资产(镜像 cmd_update 回滚)。
+      npm install -g --no-audit --no-fund "$GATEWAY_DIR/dsh-chamber-gateway-${old_ver}.tgz" >/dev/null 2>&1 \
+        || warn "旧版全局资产（v${old_ver}）恢复失败，请手工执行：npm install -g --no-audit --no-fund ${GATEWAY_DIR}/dsh-chamber-gateway-${old_ver}.tgz"
     fi
     local om="${old_mode:-}"
     if [[ -n "$om" && "$om" != "foreground" ]] && have systemctl; then
@@ -3174,6 +3193,10 @@ cmd_uninstall() {
     # 损坏 conf 无法得知服务形态:systemd 两形态尽力停(忽略失败,后续删文件)
     systemctl disable --now dsh-chamber-gateway 2>/dev/null || true
     systemctl --user disable --now dsh-chamber-gateway 2>/dev/null || true
+    # S5:形态未知时两处 unit 文件一并删除(--purge 强清;disable 只停不删,
+    # 旁路下没有后续 rm 分支会执行,陈旧 unit 会令同路径重装/update 误判)。
+    rm -f /etc/systemd/system/dsh-chamber-gateway.service 2>/dev/null || true
+    rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/dsh-chamber-gateway.service" 2>/dev/null || true
   fi
   if [[ "$SERVICE_MODE" == "foreground" ]]; then
     if [[ -f "$(foreground_record_file)" ]]; then

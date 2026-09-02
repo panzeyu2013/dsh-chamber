@@ -27,7 +27,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 
 ## 1. 版本断言（release.yml create-release 会硬校验）
 
-- [ ] 根 `package.json` + 全部 `@dsh-chamber/*` 包（当前 14 个）version = 目标版本
+- [ ] 根 `package.json` + 全部 `@dsh-chamber/*` 包（当前 15 个）version = 目标版本
       （数据驱动，见 §1.5；release.yml 复用同一 preflight 扫描器硬断言根 +
       全部非 fork chamber 包，新增包自动纳入）。
 - [ ] fork 副本例外：`@deepseek-ai/dsh-client-connection` / `dsh-client-web` /

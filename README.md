@@ -18,9 +18,6 @@
 
 *用户主界面——单窗口，dsh 原生侧边栏平等列出各来源（本地 + 远程实例）的 session/workspace，主区为活动实例的纯 dsh shell。*
 
-> [!WARNING]
-> **公开 Beta（v0.2.0-beta.x）**——协议与 API 仍在迭代，可能存在破坏性变更。
-
 > English: [docs/README.en-US.md](docs/README.en-US.md) · 开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · 设计入口 [docs/design/01-overview.md](docs/design/01-overview.md) · 进度 [docs/progress/STATUS.md](docs/progress/STATUS.md)
 
 ## 快速开始
