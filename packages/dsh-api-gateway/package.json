@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-api-gateway",
-  "description": "chamber fork (WP3/M3) of the upstream api-gateway CLIENT half (Typert Remote stream/event carriers) with the per-entry base-path patch: the /api/remote.mux WebSocket lands under the control-plane per-instance proxy prefix (basePath=/api/i/<id>). Host-only deps (dsh-host-webserver; stream-server.ts / index.ts not copied) are intentionally dropped from peer/dev sets; exports map mirrors upstream incl. inert ./invariant and ./types subpaths (their sources are host/aux files, not copied).",
-  "version": "0.1.2-alpha.3",
+  "description": "chamber fork (WP3/M3) of the upstream api-gateway CLIENT half (Typert Remote stream/event carriers) with the per-entry base-path patch: the /api/remote.mux WebSocket lands under the control-plane per-instance proxy prefix (basePath=/api/i/<id>). Host-only deps (dsh-host-webserver; stream-server.ts / index.ts not copied) are intentionally dropped from peer/dev sets; exports map mirrors upstream incl. the inert ./types subpath (its source is a host/aux file, not copied; upstream a4 dropped the ./invariant companion — mirrored).",
+  "version": "0.1.2-alpha.4",
   "publishConfig": {
     "access": "public"
   },
@@ -17,10 +17,6 @@
     ".": {
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
-    },
-    "./invariant": {
-      "types": "./lib/types/invariant.d.ts",
-      "default": "./lib/invariant.js"
     },
     "./client": {
       "types": "./lib/types/client/index.d.ts",
@@ -45,7 +41,6 @@
   },
   "files": [
     "lib/index.js",
-    "lib/invariant.js",
     "lib/client.js",
     "lib/types/**/*.js",
     "lib/types/**/*.d.ts"
@@ -61,7 +56,6 @@
   "peerDependencies": {
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
-    "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-typert-registry": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-util-crypto": "workspace:^"
@@ -69,7 +63,6 @@
   "devDependencies": {
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
-    "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-typert-registry": "workspace:^",
     "@deepseek-ai/dsh-util-crypto": "workspace:^",
     "@types/ws": "^8.18.1",
