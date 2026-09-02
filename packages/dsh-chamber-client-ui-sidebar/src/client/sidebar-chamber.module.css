@@ -322,6 +322,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  corner-shape: round;
   background: var(--dsw-static-deepseek-450);
 }
 
@@ -456,6 +457,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  corner-shape: round;
   background: var(--dsw-alias-label-caption);
 }
 
@@ -1037,6 +1039,7 @@
   padding: 0 6px;
   border: 0;
   border-radius: 999px;
+  corner-shape: round;
   background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
   color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-primary));
   cursor: pointer;
@@ -1080,6 +1083,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  corner-shape: round;
   background: var(--dsw-alias-label-secondary);
 }
 

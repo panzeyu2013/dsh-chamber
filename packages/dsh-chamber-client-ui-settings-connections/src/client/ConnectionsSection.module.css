@@ -110,6 +110,7 @@
 
 .badge {
   border-radius: 999px;
+  corner-shape: round;
   padding: 1px 8px;
   font-size: 11px;
   line-height: 17px;
@@ -210,6 +211,7 @@
   flex: none;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
+  corner-shape: round;
   padding: 1px 7px;
   font-size: 10px;
   line-height: 16px;
@@ -909,6 +911,7 @@
   appearance: none;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
+  corner-shape: round;
   background: none;
   padding: 1px 8px;
   font: inherit;
@@ -1024,6 +1027,7 @@
 
 .pluginKindBadge {
   border-radius: 999px;
+  corner-shape: round;
   padding: 0 7px;
   font-size: 11px;
   line-height: 17px;
